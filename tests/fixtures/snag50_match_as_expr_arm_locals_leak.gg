@@ -1,0 +1,119 @@
+# Snag #49 — outer-match scrutinee `v` reads as its zero-init default
+# inside an inner-match arm, when a SIBLING (un-taken) inner arm
+# declares a local that borrows `&v`. The borrow in the dead arm
+# seems to influence the drop / zero of `v` along the live path.
+#
+# Trigger surface (all conditions required to reproduce):
+#
+#   1. Enum has at least one non-Copy variant (e.g. `StringV(String)`),
+#      making the enum non-Copy.
+#   2. Function parameter `v` of that enum type.
+#   3. Outer `match v: case <Variant>(_): ...` (wildcard binding).
+#   4. Inside the outer arm: call a `throws` function and bind its
+#      return value via match-on-Result. (Same `throws` shape that
+#      surfaced #46 / #48 — likely related.)
+#   5. Inner match on the returned value, with TWO or more case arms.
+#   6. The un-taken sibling arm declares a local that borrows the
+#      outer scrutinee: `<Type> c = clone_fn(&v)`.
+#   7. The taken arm reads `v` (e.g. via a function that takes
+#      `JsValue` by value).
+#
+# Each one of {non-Copy variant, throws-fn call, sibling-arm `&v`
+# borrow, more-than-one arm} is required. Removing any one makes
+# the bug disappear:
+#   - Drop StringV(String) from the enum → bug gone.
+#   - Replace throws fn with a literal → bug gone.
+#   - Remove the unused arm's `clone_v(&v)` → bug gone.
+#   - Collapse to a single-arm inner match → bug gone.
+#
+# Workaround in the project: bind a clone of `v` to a local BEFORE
+# the inner match, then use the clone in the live arm. See
+# `src/eval.gg::stringify_thrown` for the original site.
+#
+# Same family as snags #46 / #48 (a value somewhere is lowered as
+# the type's zero-init default at a read site). #46 fired at a
+# constructor-style position; #48 fired at a match-as-expression
+# extraction; #49 fires at the outer-match scrutinee variable when
+# a sibling inner-arm borrows it.
+#
+# Compiler: /workspace/gorget/target/debug/gg
+# Run:      gg run snag49.gg
+#
+# Expected output:
+#   inside Function arm: v=object
+#   (expected: inside Function arm: v=object)
+#
+# Actual output:
+#   inside Function arm: v=undefined          ← BUG
+#   (expected: inside Function arm: v=object)
+#
+# Original site that surfaced this: src/eval.gg's `stringify_thrown`
+# (the formatter for uncaught throws at script level). The visible
+# JavaScript-level symptom is every uncaught Test262Error printing
+# as "Test262Error: undefined" regardless of the actual message,
+# because the Error's `toString` is called with `this=undefined`
+# instead of `this=the-error-object`.
+
+public struct MyException:
+    int code
+
+public enum JsValue:
+    Undefined
+    StringV(String)       # non-Copy variant — required for the bug
+    ObjectV(int)
+    Function(int)
+    NativeFn(int)
+
+# A `throws` function that doesn't actually throw. Mirror of the
+# project's `member_lookup`.
+JsValue lookup_throws(JsValue base) throws MyException:
+    return JsValue.Function(99)
+
+# A function that borrows JsValue and returns a fresh copy. Mirror
+# of the project's `clone_value`.
+JsValue clone_v(JsValue &v):
+    match v:
+        case JsValue.ObjectV(id):
+            return JsValue.ObjectV(id)
+        else:
+            return JsValue.Undefined
+
+String typeof_v(JsValue v):
+    match v:
+        case JsValue.Undefined:
+            return "undefined"
+        case JsValue.StringV(_):
+            return "string"
+        case JsValue.ObjectV(_):
+            return "object"
+        case JsValue.Function(_):
+            return "function"
+        case JsValue.NativeFn(_):
+            return "nativefn"
+
+void demo(JsValue v):
+    match v:
+        case JsValue.ObjectV(_):
+            JsValue ts = match lookup_throws(v):
+                case Ok(x):
+                    x
+                case Error(_):
+                    JsValue.Undefined
+            match ts:
+                case JsValue.NativeFn(_):
+                    # This arm is NOT taken (ts is Function, not
+                    # NativeFn) — but the &v borrow here is the
+                    # trigger. Comment it out and the bug disappears.
+                    JsValue c = clone_v(&v)
+                    pass
+                case JsValue.Function(_):
+                    # `v` should still be ObjectV here.
+                    print(f"  inside Function arm: v={typeof_v(v)}")
+                else:
+                    pass
+        else:
+            pass
+
+void main():
+    demo(JsValue.ObjectV(42))
+    print("(expected: inside Function arm: v=object)")

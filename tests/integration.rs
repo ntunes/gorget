@@ -3329,6 +3329,41 @@ fn snag49d_throws_while_cond() {
 }
 
 #[test]
+fn snag50_match_as_expr_arm_locals_leak() {
+    // Snag #50 — outer-match scrutinee `v` reads as the type's zero-init
+    // default inside an inner-match arm when a SIBLING (un-taken) inner
+    // arm declares a local that borrows the outer scrutinee
+    // (`<T> c = clone_v(&v)`). The borrow in the dead arm triggers
+    // `cow_before_mutation` on `v`, which materializes a fresh owned
+    // clone and rebinds the name `v` in `func_state.locals`. Without
+    // per-arm save/restore of `func_state.locals`, the rebind leaks
+    // into the LIVE arm body — `typeof_v(v)` resolves `v` to the dead
+    // arm's materialized local (which was never initialized along the
+    // taken path) and reads back as `JsValue.Undefined` (tag=0).
+    //
+    // Same family as Snag #48 (auto-prop boundary) and Snag #41 (drop-
+    // flag leak) — all three are state-leak-across-match-arms bugs in
+    // the match-as-expression lowering. The sibling `lower_match_stmt`
+    // (statement-match path in `src/ir/lowering/stmts/patterns.rs`)
+    // already did per-arm `save_locals` / `restore_locals`. The
+    // expression-match paths `lower_match_expr` and
+    // `lower_match_stmt_as_expr` (`src/ir/lowering/exprs/mod.rs`) did
+    // NOT — until this fix. The trailing-match-as-block-tail shape
+    // (which is what this fixture exercises — `match ts:` is the LAST
+    // statement of the outer arm's body block) routes through
+    // `lower_match_stmt_as_expr`, so the bug surfaced in real code
+    // (gorget-js `eval.gg::stringify_thrown`).
+    //
+    // Original site: src/eval.gg's uncaught-throw formatter. The
+    // observable JavaScript symptom was every uncaught Test262Error
+    // printing as "Test262Error: undefined" because `this` inside
+    // `toString` was Undefined instead of the Error object.
+    let expected = "  inside Function arm: v=object\n\
+(expected: inside Function arm: v=object)";
+    run_gg("snag50_match_as_expr_arm_locals_leak.gg", expected);
+}
+
+#[test]
 fn snag41_match_scrutinee_consume() {
     // Snag #41: match-scrutinee staging emitted a value-typed Borrow
     // (`[Bw] _scrut = copy _src`) for non-Copy non-collection scrutinees,

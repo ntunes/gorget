@@ -2666,6 +2666,23 @@ fn lower_match_expr(
         builder.branch(cond, arm_body_bb, next_test_bb);
 
         builder.switch_to(arm_body_bb);
+        // Snag #50: save/restore per-arm name→local bindings. CoW
+        // materialization inside one arm body (e.g. `&v` triggering
+        // `cow_before_mutation` on a bare-param Ptr) rebinds the name in
+        // `func_state.locals` to a fresh owned local. Without the snapshot,
+        // the rebind leaks into the SIBLING arm's body — a subsequent
+        // `v`-reference resolves to the dead arm's materialized clone,
+        // which was never initialized along the live path, and reads back
+        // as the type's zero-init default.
+        //
+        // We only snapshot the NAME map (`func_state.locals`) — the full
+        // `save_locals` path also rewinds `builder.locals[i].ownership`,
+        // which would clobber the `set_owned(result_local)` the
+        // `assign_match_arm_to_result` helper performs (Snag #31's
+        // invariant — `result_local`'s Owned tag must survive the arm
+        // boundary so the merge-bb's downstream `[Mv] user_var = copy
+        // result_local` passes the AssignIntoOwnedSlot validator).
+        let saved_arm_locals = ctx.func_state.locals.clone();
         super::stmts::emit_pattern_bindings(ctx, builder, &arm.pattern, scrut_local, scrut_type);
         let arm_val = lower_expr(ctx, builder, &arm.body);
         if !builder.is_terminated() {
@@ -2685,6 +2702,7 @@ fn lower_match_expr(
             assign_match_arm_to_result(ctx, builder, result_local, arm_val, arm.body.span);
             builder.jump(merge_bb);
         }
+        ctx.func_state.locals = saved_arm_locals;
 
         if next_test_bb != merge_bb {
             builder.switch_to(next_test_bb);
@@ -2692,6 +2710,7 @@ fn lower_match_expr(
     }
 
     if let Some(else_expr) = else_arm {
+        let saved_else_locals = ctx.func_state.locals.clone();
         let else_val = lower_expr(ctx, builder, else_expr);
         if !builder.is_terminated() {
             if !result_type_refined {
@@ -2703,6 +2722,7 @@ fn lower_match_expr(
             assign_match_arm_to_result(ctx, builder, result_local, else_val, else_expr.span);
             builder.jump(merge_bb);
         }
+        ctx.func_state.locals = saved_else_locals;
     }
 
     builder.switch_to(merge_bb);
@@ -3291,6 +3311,11 @@ fn lower_match_stmt_as_expr(
         builder.branch(cond, arm_body_bb, next_test_bb);
 
         builder.switch_to(arm_body_bb);
+        // Snag #50: per-arm name→local snapshot — see `lower_match_expr`
+        // for the full rationale (snapshot the name map only, not the
+        // builder.locals ownership state, so `assign_match_arm_to_result`'s
+        // `set_owned(result_local)` survives the arm boundary).
+        let saved_arm_locals = ctx.func_state.locals.clone();
         super::stmts::emit_pattern_bindings(ctx, builder, &arm.pattern, scrut_local, scrut_type);
         let arm_val = lower_expr(ctx, builder, &arm.body);
         // Don't overwrite return/break/continue terminators with jump
@@ -3311,6 +3336,7 @@ fn lower_match_stmt_as_expr(
             assign_match_arm_to_result(ctx, builder, result_local, arm_val, arm.body.span);
             builder.jump(merge_bb);
         }
+        ctx.func_state.locals = saved_arm_locals;
 
         if next_test_bb != merge_bb {
             builder.switch_to(next_test_bb);
@@ -3318,6 +3344,7 @@ fn lower_match_stmt_as_expr(
     }
 
     if let Some(else_block) = else_arm {
+        let saved_else_locals = ctx.func_state.locals.clone();
         let else_val = lower_block_expr(ctx, builder, else_block);
         if !builder.is_terminated() {
             if !result_type_refined {
@@ -3333,6 +3360,7 @@ fn lower_match_stmt_as_expr(
             assign_match_arm_to_result(ctx, builder, result_local, else_val, span);
             builder.jump(merge_bb);
         }
+        ctx.func_state.locals = saved_else_locals;
     } else if !concrete_arms.is_empty() {
         // No else arm. After the loop, builder.current_block is the last
         // arm's body block (because next_test_bb == merge_bb for the last
