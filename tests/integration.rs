@@ -20709,3 +20709,21 @@ fn dict_values_lazy_resource() {
         "14",
     );
 }
+
+#[test]
+fn static_init_imported() {
+    // Cross-module global initialiser for stdlib-imported statics:
+    // `lib/std/math.gg`'s `public float INFINITY = _math_infinity()` runs
+    // its extern-call initialiser at module-init time. Previously the
+    // INFINITY/NAN values were hardcoded in `module_constants` because
+    // the StaticDecl-lowering path returned `GlobalInit::Zeroed` for
+    // primitive-typed statics with an extern-call body. The fix routes
+    // primitive-typed statics through `GlobalInit::Extern` so the C
+    // backend emits `__lir_g0 = gorget_math_infinity()` in main()'s
+    // init prologue.
+    run_gg(
+        "static_init_imported.gg",
+        "inf
+true",
+    );
+}

@@ -1745,6 +1745,14 @@ pub(super) fn emit_runtime_modules(out: &mut String, module: &LirModule, _struct
             }
         }
     }
+    // Globals' Extern initialisers also call into the runtime at module-init
+    // (e.g., `gorget_math_infinity` from `lib/std/math.gg`'s INFINITY). Include
+    // their names so the conditional runtime modules are pulled in.
+    for g in &module.globals {
+        if let LirGlobalInit::Extern { name, .. } = &g.init {
+            all_call_names.push(name.as_str());
+        }
+    }
     let has = |pred: &dyn Fn(&str) -> bool| all_call_names.iter().any(|n| pred(n));
 
     // Also check struct names for monomorphized types that need specific runtimes.
@@ -1995,6 +2003,7 @@ pub(super) fn emit_runtime_modules(out: &mut String, module: &LirModule, _struct
         || n.starts_with("gorget_tan") || n.starts_with("gorget_log")
         || n.starts_with("gorget_exp") || n.starts_with("gorget_atan2")
         || n.starts_with("gorget_fmod") || n == "gorget_min" || n == "gorget_max"
+        || n.starts_with("gorget_math_")
         || n.starts_with("GORGET_PI") || n.starts_with("GORGET_E")
         || n.starts_with("GORGET_TAU") || n.starts_with("GORGET_INF")
         || n.starts_with("GORGET_NAN")) {

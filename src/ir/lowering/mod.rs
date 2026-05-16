@@ -489,19 +489,9 @@ pub fn lower_module(
     // outside comments and dropped; if needed they belong on a typed
     // stdlib module.
     //
-    // INFINITY / NAN are kept here as a temporary holdout. Their stdlib
-    // shape is `public float INFINITY = _math_infinity()` — runtime-init
-    // statics, not consts — and the import-side global initialiser does
-    // NOT execute today (`mod.rs:1196` skips zero-length-span StaticDecls
-    // from stdlib imports, leaving `__lir_g0 = {0}` at module load).
-    // Removing the hardcoded entries here while that bug remains makes
-    // `INFINITY` read as 0. Filed as a follow-up TODO; once cross-module
-    // global initialisers run, INFINITY / NAN drop out of here too.
-    {
-        use crate::ir::instructions::Constant;
-        ctx.module_constants.insert("INFINITY".into(), Constant::F64(f64::INFINITY));
-        ctx.module_constants.insert("NAN".into(), Constant::F64(f64::NAN));
-    }
+    // INFINITY / NAN: defined as runtime-init statics in lib/std/math.gg
+    // (`public float INFINITY = _math_infinity()`). Lowered through the
+    // normal cross-module global-init path — no auto-injection here.
     // Scan for module-level const and meta declarations
     for item in &ast_module.items {
         if let Item::ConstDecl(const_def) = &item.node {
@@ -1157,14 +1147,8 @@ pub fn lower_module(
     register_runtime_method_sigs(&mut ctx);
 
     // Pre-register module-level static variables so functions can reference them.
-    // Skip stdlib StaticDecl items (identified by dummy spans — start == end == 0);
-    // those are handled by the C backend as well-known names (stderr, stdout, etc.).
     for item in &ast_module.items {
         if let Item::StaticDecl(decl) = &item.node {
-            // Stdlib items use Span::dummy() { start: 0, end: 0 } — skip them.
-            if decl.span.start == decl.span.end {
-                continue;
-            }
             ctx.global_names.insert(decl.name.node.clone());
             // Store the type name for type inference on GlobalRef operands.
             // For generic types like Mutex[int] store "Mutex__int64_t" (not just "Mutex")
@@ -1201,12 +1185,10 @@ pub fn lower_module(
     }
 
     // Lower module-level static declarations → Globals.
-    // Skip stdlib StaticDecl items (dummy spans) — handled by C backend as well-known names.
     // Skip duplicate globals (same name from different modules merged into one AST).
     let mut seen_globals: rustc_hash::FxHashSet<String> = rustc_hash::FxHashSet::default();
     for item in &ast_module.items {
         if let Item::StaticDecl(decl) = &item.node {
-            if decl.span.start == decl.span.end { continue; }
             if !seen_globals.insert(decl.name.node.clone()) { continue; }
             lower_static_decl(&mut ctx, &mut module, decl);
         }
@@ -2256,13 +2238,17 @@ fn lower_static_decl(
     let type_id = ctx.type_mapper.map_ast_type_mut(&decl.type_.node, &mut ctx.type_registry);
     let name = decl.name.node.clone();
 
-    let init = eval_static_init(&decl.type_.node, &decl.value.node);
+    let init = eval_static_init(&decl.type_.node, &decl.value.node, &ctx.extern_bindings);
     module.globals.push(Global { name, type_id, init });
 }
 
 /// Evaluate a static initializer expression into a GlobalInit value.
 /// Supports constructor calls for sync primitives that require heap allocation.
-fn eval_static_init(ty: &crate::parser::ast::Type, expr: &crate::parser::ast::Expr) -> crate::ir::GlobalInit {
+fn eval_static_init(
+    ty: &crate::parser::ast::Type,
+    expr: &crate::parser::ast::Expr,
+    extern_bindings: &rustc_hash::FxHashMap<String, String>,
+) -> crate::ir::GlobalInit {
     use crate::ir::{GlobalInit, GlobalInitArg};
     use crate::parser::ast::Expr;
 
@@ -2294,6 +2280,36 @@ fn eval_static_init(ty: &crate::parser::ast::Type, expr: &crate::parser::ast::Ex
             }
         }
         _ => {} // Fall through to Named type handling below
+    }
+
+    // Primitive-typed static initialised by an extern call —
+    // `public float INFINITY = _math_infinity()` in `lib/std/math.gg` and
+    // its kin. The Gorget callee name resolves through the extern-bindings
+    // registry to the runtime C symbol (`_math_infinity` →
+    // `gorget_math_infinity`); the C backend emits the call at the
+    // module-init prologue. Args must be literal-only — anything richer
+    // belongs in `main()`'s init slot, not a global initialiser.
+    if matches!(ty, crate::parser::ast::Type::Primitive(_)) {
+        if let Expr::Call { callee, args, .. } = expr {
+            if let Expr::Identifier(gname) = &callee.node {
+                if let Some(c_symbol) = extern_bindings.get(gname.as_str()) {
+                    let mut arg_inits = Vec::with_capacity(args.len());
+                    let mut all_literal = true;
+                    for a in args {
+                        match literal_to_global_init_arg(&a.node.value.node) {
+                            Some(arg) => arg_inits.push(arg),
+                            None => { all_literal = false; break; }
+                        }
+                    }
+                    if all_literal {
+                        return GlobalInit::Extern {
+                            name: c_symbol.clone(),
+                            args: arg_inits,
+                        };
+                    }
+                }
+            }
+        }
     }
 
     // Extract the type name (ignoring generic args) for dispatch

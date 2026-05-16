@@ -1,0 +1,7 @@
+from std.math import INFINITY, NAN
+
+void main():
+    float x = INFINITY
+    print(x)
+    float y = NAN
+    print(y != y)
