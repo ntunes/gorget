@@ -1460,11 +1460,24 @@ fn try_profile(
         print!(" }}");
     }
     println!(" }},");
-    println!("    \"lir_opt\": {{ \"dead_functions\": {}, \"dead_globals\": {}, \"dead_instructions\": {}, \"constants_folded\": {}, \"copies_propagated\": {}, \"algebraic_simplified\": {}, \"cse_eliminated\": {} }}",
+    print!("    \"lir_opt\": {{ \"dead_functions\": {}, \"dead_globals\": {}, \"dead_instructions\": {}, \"constants_folded\": {}, \"copies_propagated\": {}, \"algebraic_simplified\": {}, \"cse_eliminated\": {}",
         lir_opt_stats.dead_functions_eliminated, lir_opt_stats.dead_globals_eliminated,
         lir_opt_stats.dead_instructions_eliminated, lir_opt_stats.constants_folded,
         lir_opt_stats.copies_propagated, lir_opt_stats.algebraic_simplified,
         lir_opt_stats.cse_eliminated);
+    if !lir_opt_stats.pass_times.is_empty() {
+        // Sort descending by time so the dominant pass shows first.
+        let mut entries: Vec<(&&'static str, &std::time::Duration)> =
+            lir_opt_stats.pass_times.iter().collect();
+        entries.sort_by(|a, b| b.1.cmp(a.1));
+        print!(", \"pass_times_ms\": {{ ");
+        for (i, (name, dur)) in entries.iter().enumerate() {
+            if i > 0 { print!(", "); }
+            print!("\"{name}\": {:.3}", dur.as_secs_f64() * 1000.0);
+        }
+        print!(" }}");
+    }
+    println!(" }}");
     println!("  }}");
     println!("}}");
     Ok(())

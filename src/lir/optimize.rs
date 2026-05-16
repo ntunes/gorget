@@ -3,7 +3,8 @@
 //! All references are explicit in LIR, making optimization straightforward.
 
 use super::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
 
 /// Statistics from optimization passes.
 #[derive(Debug, Default)]
@@ -25,34 +26,71 @@ pub struct OptStats {
     pub drop_flags_inserted: usize,
     /// `MoveSlot` annotations consumed and removed (V4).
     pub move_slots_removed: usize,
+    /// Per-pass cumulative wall-clock time, summed across all fixpoint iterations
+    /// and all functions for per-function passes; one entry per module-level pass.
+    /// Surfaced in `gg profile` JSON so we can see which pass dominates the
+    /// `lir_optimize` phase without instrumenting individual call sites.
+    pub pass_times: HashMap<&'static str, Duration>,
+}
+
+impl OptStats {
+    #[inline]
+    fn time<R>(&mut self, name: &'static str, f: impl FnOnce() -> R) -> R {
+        let t = Instant::now();
+        let r = f();
+        *self.pass_times.entry(name).or_default() += t.elapsed();
+        r
+    }
 }
 
 /// Run all optimization passes on an LIR module.
 pub fn optimize_module(module: &mut LirModule) -> OptStats {
     let mut stats = OptStats::default();
-    stats.dead_functions_eliminated = eliminate_dead_functions(module);
-    stats.dead_globals_eliminated = eliminate_dead_globals(module);
+    stats.dead_functions_eliminated = stats.time("eliminate_dead_functions", || {
+        eliminate_dead_functions(module)
+    });
+    stats.dead_globals_eliminated = stats.time("eliminate_dead_globals", || {
+        eliminate_dead_globals(module)
+    });
+    // Snapshot per-pass total before the per-function loop so overhead can be
+    // computed by subtraction without underflow risk.
+    let pre_loop_sum: Duration = stats.pass_times.values().copied().sum();
+    let t = Instant::now();
     for func in &mut module.functions {
         optimize_function(func, &mut stats);
     }
+    let loop_elapsed = t.elapsed();
+    let post_loop_sum: Duration = stats.pass_times.values().copied().sum();
+    let inner_pass_time = post_loop_sum.saturating_sub(pre_loop_sum);
+    // Overhead = total per-function-loop wall time minus time attributed to
+    // inner passes. Captures the for-iteration cost (function dispatch,
+    // progress accounting, the fixpoint convergence check itself).
+    *stats.pass_times.entry("fixpoint_loop_overhead").or_default() +=
+        loop_elapsed.saturating_sub(inner_pass_time);
     // Validate the post-DCE/fold/CSE shape before drop-elaboration so any
     // shape regression introduced by the inner fixed-point loop surfaces
     // attributed to the optimizer rather than to drop_elab. Tier E §8.3.
-    super::validate::assert_module_valid(module, "optimize-fixpoint");
+    stats.time("validate_post_fixpoint", || {
+        super::validate::assert_module_valid(module, "optimize-fixpoint");
+    });
     // Drop elaboration (V1–V4).
     // Runs after the main optimization loop so DCE has already cleaned up the LIR.
-    let elab = super::drop_elab::elaborate_drops(module);
+    let elab = stats.time("drop_elaboration", || super::drop_elab::elaborate_drops(module));
     stats.drops_elaborated = elab.guards_eliminated;
     stats.memsets_removed = elab.memsets_removed;
     stats.drop_flags_inserted = elab.flags_inserted;
     stats.move_slots_removed = elab.move_slots_removed;
-    super::validate::assert_module_valid(module, "drop-elaboration");
+    stats.time("validate_post_drop_elab", || {
+        super::validate::assert_module_valid(module, "drop-elaboration");
+    });
     // Follow-up DCE to remove orphaned SlotAddr/IConst values left by deleted guards
     // and Memsets.
     if elab.total() > 0 || elab.flags_inserted > 0 {
+        let t = Instant::now();
         for func in &mut module.functions {
             stats.dead_instructions_eliminated += eliminate_dead_code(func);
         }
+        *stats.pass_times.entry("post_elab_dce").or_default() += t.elapsed();
     }
     stats
 }
@@ -71,16 +109,16 @@ fn optimize_function(func: &mut LirFunction, stats: &mut OptStats) {
     // progress. Tier E §8.4 of unified-resource-model.md.
     const MAX_ITERS: usize = 32;
     for _ in 0..MAX_ITERS {
-        let folded = fold_constants(func);
-        let algebraic = simplify_algebraic(func);
-        let cse = eliminate_common_subexpressions(func);
-        let branches = fold_constant_branches(func);
-        let dead_blocks = eliminate_dead_blocks(func);
+        let folded = stats.time("fold_constants", || fold_constants(func));
+        let algebraic = stats.time("simplify_algebraic", || simplify_algebraic(func));
+        let cse = stats.time("cse", || eliminate_common_subexpressions(func));
+        let branches = stats.time("fold_constant_branches", || fold_constant_branches(func));
+        let dead_blocks = stats.time("eliminate_dead_blocks", || eliminate_dead_blocks(func));
         let blocks_before_merge = func.blocks.len();
-        merge_linear_blocks(func);
+        stats.time("merge_linear_blocks", || merge_linear_blocks(func));
         let merged = blocks_before_merge.saturating_sub(func.blocks.len());
-        let dead_insts = eliminate_dead_code(func);
-        let copies = propagate_copies(func);
+        let dead_insts = stats.time("eliminate_dead_code", || eliminate_dead_code(func));
+        let copies = stats.time("propagate_copies", || propagate_copies(func));
         stats.constants_folded += folded;
         stats.algebraic_simplified += algebraic;
         stats.cse_eliminated += cse;
