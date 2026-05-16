@@ -21,6 +21,17 @@
   **Fixture.** `tests/fixtures/snag51_closure_block_tail_value.gg` — 9 cases covering int / String / non-Copy-enum tails via both match and if, plus elif-chain and a control single-stmt case. Wired as `snag51_closure_block_tail_value` in `tests/integration.rs`.
 
   **Files.** `src/ir/lowering/exprs/mod.rs` (factor out `lower_stmt_as_tail_value`, fix `build_if_chain_expr` sizing + clone-discipline via `assign_match_arm_to_result`), `src/ir/lowering/closures.rs` (route closure body through shared helper, mirror tail-value inference, drop polluted `expected_type` capture, add MethodCall→enum-variant inference), `tests/fixtures/snag51_closure_block_tail_value.gg` (new), `tests/integration.rs` (+~30 lines).
+- [2026-05-16] **`drop_elab` SlotStates switched from `HashMap<SlotId, InitState>` to dense `Vec<InitState>` — 18-21× speedup, 64% off total compile on Lowerer.** After per-pass timing in `OptStats` (commit `8a4d7623`) revealed `drop_elaboration` consuming 92-98% of `lir_optimize` wall time across self-host driver workloads, the suspect was the hashmap dataflow state cloned per block-visit in `forward_dataflow`'s worklist + once more in `elaborate_block`. `InitState` is a 3-variant enum (1 byte with `#[repr(u8)]`), slot counts run 20-100, so the storage shape was pure constant-factor cost — `HashMap` allocator/hasher dance vs `Vec<u8>` memcpy.
+  **Change.** `type SlotStates = HashMap<SlotId, InitState>` → `Vec<InitState>` indexed by `SlotId.0 as usize`. Pre-sized once per function to `func.slots.len()` (slot count is stable through phases 1+2; phase 3's `add_slot` only adds AFTER dataflow has finished and only writes to the pre-captured `bb0_in_state` Vec, never re-runs dataflow). `meet_states` becomes a linear scan over two byte slices (auto-vectorizable; equality is `Vec::eq`). `Option<SlotStates>` retained at the outer layer to keep "unreachable block / no predecessor processed yet" Top semantics 1:1. New `slot_state(&SlotStates, SlotId) -> InitState` helper preserves the `MaybeInitialized` fallback for out-of-bounds reads (matches prior `HashMap::get(...).unwrap_or(MaybeInitialized)`).
+  **Measurement** (3-run median, release):
+
+  | Workload | Before drop_elab | After drop_elab | Speedup | Total compile |
+  |---|---:|---:|---:|---:|
+  | self_host_typechecker driver | 253 ms | 14 ms | 18× | 591 ms → 212 ms (−64%) |
+  | self_host_lowerer driver | 2751 ms | 130 ms | 21× | 3647 ms → 956 ms (−74%) |
+
+  **Validation.** `cargo build --release` clean; `cargo test --lib` 1050/1050 pass; `self_host_bootstrap_fixed_point` pass (270s); smoke set (`drop_ ownership_ resource_ closure_ collection_`) 69/69 pass; full integration 1117 pass + 1 pre-existing unrelated failure (`fstring_cross_module_callee`, fixture from commit `d1cae03d` not in this branch's lineage; verified failing identically on stashed baseline).
+  Files: `src/lir/drop_elab.rs` (+62/−32 lines, well within the 150-LOC budget the task spec called out).
 
 - [2026-05-16] **Self-host: lowerer reads typechecker-inferred method-call return types via `gmod.tc_types.expr_types` side-table (Gap #2 Phase 3).** Closes the explicit-targs half of gap #2: `iter_lazy_adapters.gg` (uses `.take_while[bool(int)]`, `.drop_while[bool(int)]`, `.filter_map[…]`, `.inspect[…]`) and `iter_chain_past_one_step.gg` now emit zero diagnostics in stage-1 output (previously 4 and ≥1 respectively). The remaining 5 iter-family fixtures with diagnostics are composite generics with Tuple type args — they need discovery extension to `EMethodCall.targs`, filed as a follow-on TODO.
 

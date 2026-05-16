@@ -23,6 +23,7 @@ use super::{BlockId, DropGuardKind, Inst, LirFunction, LirModule, SlotId, ValueI
 
 /// Per-slot initialization state at a program point.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
 enum InitState {
     /// The slot holds a live resource value on every predecessor path.
     Initialized,
@@ -43,7 +44,27 @@ impl InitState {
     }
 }
 
-type SlotStates = HashMap<SlotId, InitState>;
+/// Dense per-slot initialization state, indexed by `SlotId.0 as usize`.
+///
+/// Replaces an earlier `HashMap<SlotId, InitState>`: drop elaboration clones the
+/// state per block-visit during the worklist dataflow and again per block in
+/// `elaborate_block`. With `InitState` at 1 byte and typical slot counts of
+/// 20-100, a dense `Vec` is a memcpy of a few dozen bytes vs hashmap allocator
+/// churn. The lattice semantics are unchanged — bounds checks at every read
+/// site default to `MaybeInitialized` (safe), matching the prior `.get(...).
+/// unwrap_or(MaybeInitialized)` shape.
+type SlotStates = Vec<InitState>;
+
+/// Read a slot's state from a dense `SlotStates` vector, defaulting to
+/// `MaybeInitialized` for out-of-bounds indices (same safety behaviour as the
+/// previous `HashMap::get(...).copied().unwrap_or(MaybeInitialized)`).
+#[inline]
+fn slot_state(states: &SlotStates, slot: SlotId) -> InitState {
+    states
+        .get(slot.0 as usize)
+        .copied()
+        .unwrap_or(InitState::MaybeInitialized)
+}
 
 // ── Helper: value → slot map ─────────────────────────────────────────────────
 
@@ -93,16 +114,13 @@ fn forward_dataflow(
     // bb0 entry: params are Initialized (caller-supplied); slot 0 (return
     // local) and slots beyond the parameter range start Uninitialized.
     let num_params = func.params.len();
-    let bb0_init: SlotStates = (0..func.slots.len() as u32)
-        .map(|i| {
-            let s = SlotId(i);
-            let is_param = (i as usize) >= 1 && (i as usize) <= num_params;
-            (
-                s,
-                if is_param { InitState::Initialized } else { InitState::Uninitialized },
-            )
-        })
-        .collect();
+    let n_slots = func.slots.len();
+    let mut bb0_init: SlotStates = vec![InitState::Uninitialized; n_slots];
+    for i in 1..=num_params {
+        if i < n_slots {
+            bb0_init[i] = InitState::Initialized;
+        }
+    }
 
     // Non-entry blocks start as "no information yet" (`None`), which is the
     // lattice Top: meeting Top with any predecessor's out-state adopts that
@@ -112,7 +130,7 @@ fn forward_dataflow(
     // into `MaybeInitialized` (because `meet(Init, Uninit) = Maybe`), which
     // over-flagged definitely-dead slots.
     let mut in_states: Vec<Option<SlotStates>> = vec![None; n];
-    let mut out_states: Vec<SlotStates> = vec![HashMap::new(); n];
+    let mut out_states: Vec<SlotStates> = vec![Vec::new(); n];
     in_states[0] = Some(bb0_init);
 
     // Worklist starts with only the entry block; successors get queued as
@@ -141,7 +159,7 @@ fn forward_dataflow(
                 // otherwise do an element-wise lattice meet.
                 let new_in = match &in_states[si] {
                     None => out.clone(),
-                    Some(prev) => meet_states(&out, prev, func.slots.len()),
+                    Some(prev) => meet_states(&out, prev, n_slots),
                 };
                 if Some(&new_in) != in_states[si].as_ref() {
                     in_states[si] = Some(new_in);
@@ -152,8 +170,8 @@ fn forward_dataflow(
     }
 
     // Unreachable blocks keep an empty in-state (safe default — guard
-    // elaboration's `unwrap_or(MaybeInitialized)` will not eliminate
-    // anything for slots without entries).
+    // elaboration's `unwrap_or(MaybeInitialized)` via `slot_state` will not
+    // eliminate anything for slots without entries).
     in_states.into_iter().map(|s| s.unwrap_or_default()).collect()
 }
 
@@ -172,6 +190,11 @@ fn compute_transfer(
 }
 
 /// Apply the effect of a single instruction on the running slot states.
+///
+/// Writes are bounds-checked against `state.len()` — slot indices beyond the
+/// pre-sized vector silently drop their update (matches prior HashMap
+/// behaviour where an out-of-range slot simply wasn't in the map; the safe
+/// default at every read site is `MaybeInitialized`).
 #[inline]
 fn apply_inst_effect(
     inst: &Inst,
@@ -181,34 +204,44 @@ fn apply_inst_effect(
     match inst {
         // Writing to a slot → definitely initialized.
         Inst::SlotStore { slot, .. } | Inst::ClosurePack { slot, .. } => {
-            state.insert(*slot, InitState::Initialized);
+            let idx = slot.0 as usize;
+            if let Some(cell) = state.get_mut(idx) {
+                *cell = InitState::Initialized;
+            }
         }
         // MoveSlot annotation → definitely uninitialized (V4).
         Inst::MoveSlot { slot } => {
-            state.insert(*slot, InitState::Uninitialized);
+            let idx = slot.0 as usize;
+            if let Some(cell) = state.get_mut(idx) {
+                *cell = InitState::Uninitialized;
+            }
         }
         // memset-to-zero of a slot address → definitely uninitialized.
         // Only projected MoveZero (field-level moves) still emits Memset.
         Inst::Memset { ptr, .. } => {
             if let Some(&slot) = val_to_slot.get(ptr) {
-                state.insert(slot, InitState::Uninitialized);
+                let idx = slot.0 as usize;
+                if let Some(cell) = state.get_mut(idx) {
+                    *cell = InitState::Uninitialized;
+                }
             }
         }
         _ => {}
     }
 }
 
-/// Join two slot-state maps (one entry per slot).  Both inputs are expected
+/// Join two slot-state vectors (one entry per slot).  Both inputs are expected
 /// to carry concrete information — the `None`/Top case is handled at the
-/// call site in `forward_dataflow`. For slots absent in a map we assume
-/// `MaybeInitialized` (safe default — don't eliminate unknown drops).
+/// call site in `forward_dataflow`. For slots beyond either input's length we
+/// assume `MaybeInitialized` (safe default — don't eliminate unknown drops);
+/// in practice both vectors are pre-sized to `n_slots`, so the slow path is
+/// only taken if the caller is wrong about pre-sizing.
 fn meet_states(a: &SlotStates, b: &SlotStates, n_slots: usize) -> SlotStates {
-    let mut result = HashMap::with_capacity(n_slots);
-    for i in 0..n_slots as u32 {
-        let sid = SlotId(i);
-        let a_s = a.get(&sid).copied().unwrap_or(InitState::MaybeInitialized);
-        let b_s = b.get(&sid).copied().unwrap_or(InitState::MaybeInitialized);
-        result.insert(sid, InitState::meet(a_s, b_s));
+    let mut result = Vec::with_capacity(n_slots);
+    for i in 0..n_slots {
+        let a_s = a.get(i).copied().unwrap_or(InitState::MaybeInitialized);
+        let b_s = b.get(i).copied().unwrap_or(InitState::MaybeInitialized);
+        result.push(InitState::meet(a_s, b_s));
     }
     result
 }
@@ -291,10 +324,7 @@ fn elaborate_block(
                     // `find_matching_close` panics on orphan opens — no need to
                     // re-check the result against `insts.len()`.
                     let close_idx = find_matching_close(insts, i);
-                    let state = current_state
-                        .get(&slot)
-                        .copied()
-                        .unwrap_or(InitState::MaybeInitialized);
+                    let state = slot_state(&current_state, slot);
 
                     match state {
                         InitState::Uninitialized => {
@@ -438,7 +468,7 @@ fn insert_drop_flags(
         for slot in &sorted_slots {
             let flag_slot = slot_to_flag[slot];
             let initial = matches!(
-                bb0_in_state.get(slot).copied().unwrap_or(InitState::MaybeInitialized),
+                slot_state(bb0_in_state, *slot),
                 InitState::Initialized
             );
             let v_init = func.next_value();
