@@ -6326,6 +6326,44 @@ static inline void gorget_map_iter_value(const void* m, int64_t idx, void* out) 
     }
 }
 
+// ── Dict/Set drain (consuming iteration) ──────────────────────
+// Move K (and V for Dict) out of the bucket at physical index
+// `phys_idx` and tombstone-mark the slot. Caller takes ownership;
+// no key_drop / val_drop is called here. The map's normal drop
+// path (`gorget_map_free`) checks `states[i] == 1` and skips
+// tombstones, so no double-free for drained entries.
+//
+// Returns 1 if a value was extracted (slot was occupied), 0 if the
+// slot was empty or already tombstoned. Drainable callers can use
+// the return to skip empty slots without a separate state lookup.
+//
+// `m` is `const void*` to match Gorget's `Ref[Dict[K, V]]` /
+// `Ref[Set[T]]` extern-parameter convention (mirrors
+// `gorget_map_iter_key` which has the same shape and likewise
+// writes through the const pointer). The function casts to a
+// non-const GorgetMap pointer internally to flip `states[idx]`
+// and tweak `count` / `tombstones`. Drain reuses the same `order`
+// array as the iter accessors for insertion-order traversal.
+static inline int64_t gorget_map_drain_entry(const void* m, int64_t phys_idx, void* out_key, void* out_val) {
+    GorgetMap* mm = (GorgetMap*)m;  // cast away const — see comment above
+    size_t idx = (size_t)phys_idx;
+    if (mm->states[idx] != 1) return 0;  // already drained or never occupied
+    memcpy(out_key, (const char*)mm->keys + idx * mm->key_size, mm->key_size);
+    if (mm->val_size > 0 && mm->values && out_val) {
+        memcpy(out_val, (const char*)mm->values + idx * mm->val_size, mm->val_size);
+    }
+    mm->states[idx] = 2;  // tombstone
+    if (mm->count > 0) mm->count--;
+    mm->tombstones++;
+    return 1;
+}
+
+// Set drain — thin alias for `gorget_map_drain_entry` with NULL
+// value-out. GorgetSet == GorgetMap with val_size==0.
+static inline int64_t gorget_set_drain_entry(const void* s, int64_t phys_idx, void* out_key) {
+    return gorget_map_drain_entry(s, phys_idx, out_key, NULL);
+}
+
 "#;
 
 /// GorgetSet — thin wrapper over GorgetMap.

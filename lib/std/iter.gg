@@ -54,6 +54,20 @@ extern "Gorget":
     extern int __set_iter_order[T](Ref[Set[T]] s, int idx) = "gorget_map_iter_order"
     extern void __set_iter_key[T](Ref[Set[T]] s, int idx, T &out) = "gorget_map_iter_key"
 
+    # Drain accessors — same `order` walk as `_iter_*`, but mutate the
+    # bucket to tombstone the slot. The map's normal drop sees state==2
+    # and skips: no double-free for entries moved out by drain.
+    # Returns 1 if a value was extracted, 0 if the slot was empty
+    # (already drained or never occupied — order arrays preserve
+    # historical inserts but not subsequent remove()s).
+    #
+    # `Ref[…]` (not `… &`) matches the iter accessor convention; the
+    # runtime helpers cast away const internally to flip `states[idx]`
+    # and tweak `count` / `tombstones`. Same pattern as
+    # `gorget_map_iter_key` writing through the map's `key_clone` hook.
+    extern int __dict_drain_entry[K, V](Ref[Dict[K, V]] m, int phys_idx, K &out_key, V &out_val) = "gorget_map_drain_entry"
+    extern int __set_drain_entry[T](Ref[Set[T]] s, int phys_idx, T &out_key) = "gorget_set_drain_entry"
+
 # ── Iterator[T] trait ─────────────────────────────────────────
 #
 # User-space trait declaration. Carries the required `next(&self)`
@@ -321,8 +335,9 @@ trait Iterable[T]:
 # yielded by move instead of by borrow.
 #
 # `Vector[T]` ships an O(n) reverse + pop impl. `Set[T]` / `Dict[K,
-# V]` drain implementations defer until a `gorget_map_drain_entry`
-# runtime helper lands.
+# V]` drain via `gorget_map_drain_entry` — moves K/V out of the
+# bucket and tombstone-marks the slot so the source's drop doesn't
+# double-free.
 trait Drainable[T]:
     Iterator[T] drain(!self)
 
@@ -866,3 +881,115 @@ equip [K, V] Dict[K, V] with Iterable[(K, V)]:
     DictIter[K, V] iter(&self):
         return DictIter[K, V](self, 0)
 
+# ── Lazy key / value projections ──────────────────────────────
+#
+# `DictKeysIter[K, V]` and `DictValuesIter[K, V]` walk the same
+# bucket array as `DictIter`, yielding only the K (or V) component.
+# Exposed as `d.keys_iter()` / `d.values_iter()` — the eager
+# `Dict.keys()` / `Dict.values()` builtins still return
+# `Vector[K]` / `Vector[V]` for callers that need the materialised
+# collection. Migrating the eager forms to lazy returns is a
+# breaking change for `Vector[K] ks = d.keys()` usage (see
+# `tests/fixtures/*.gg` ~19 sites); deferred.
+#
+# Both projections borrow the source via `Ref[Dict[K, V]]` —
+# identical plumbing to `DictIter`. The yielded K / V is cloned
+# through the map's `key_clone` / `val_clone` hooks so callers
+# may freely drop the element without disturbing the source.
+
+struct DictKeysIter[K, V]:
+    Ref[Dict[K, V]] source
+    int cursor
+
+equip [K, V] DictKeysIter[K, V] with Iterator[K]:
+    Option[K] next(&self):
+        int n = __dict_iter_order_len[K, V](self.source)
+        if self.cursor >= n:
+            return None
+        int phys = __dict_iter_order[K, V](self.source, self.cursor)
+        K k = K.default()
+        __dict_iter_key[K, V](self.source, phys, &k)
+        self.cursor = self.cursor + 1
+        return Some(!k)
+
+struct DictValuesIter[K, V]:
+    Ref[Dict[K, V]] source
+    int cursor
+
+equip [K, V] DictValuesIter[K, V] with Iterator[V]:
+    Option[V] next(&self):
+        int n = __dict_iter_order_len[K, V](self.source)
+        if self.cursor >= n:
+            return None
+        int phys = __dict_iter_order[K, V](self.source, self.cursor)
+        V v = V.default()
+        __dict_iter_value[K, V](self.source, phys, &v)
+        self.cursor = self.cursor + 1
+        return Some(!v)
+
+equip [K, V] Dict[K, V]:
+    DictKeysIter[K, V] keys_iter(&self):
+        return DictKeysIter[K, V](self, 0)
+
+    DictValuesIter[K, V] values_iter(&self):
+        return DictValuesIter[K, V](self, 0)
+
+# ── Drainable[T] for Set and Dict ─────────────────────────────
+#
+# Set / Dict drain via `gorget_map_drain_entry`: walks the
+# insertion-order array, moves K (and V for Dict) out of each
+# bucket, tombstone-marks the slot. The source map is owned by
+# the Drain struct — its drop sees `states[i]==2` for drained
+# slots and skips them, so no double-free. Un-drained entries
+# (caller broke out of the iterator early) drop normally via
+# `gorget_map_free`.
+#
+# Iteration order matches `iter()`: the same `order` array walks
+# entries in insertion order. The drain primitive's `m` parameter
+# is declared `Ref[Dict[K, V]]` / `Ref[Set[T]]` — matching the
+# iter accessor convention — and the C runtime casts away const
+# internally to flip the bucket state (same trick as
+# `gorget_map_iter_key` writing through the map's key_clone hook).
+# Reads of `self.source` auto-borrow the owned source field at
+# every extern arg position.
+
+struct SetDrain[T]:
+    Set[T] source
+    int cursor
+
+equip [T] SetDrain[T] with Iterator[T]:
+    Option[T] next(&self):
+        int n = __set_iter_order_len[T](self.source)
+        while self.cursor < n:
+            int phys = __set_iter_order[T](self.source, self.cursor)
+            self.cursor = self.cursor + 1
+            T out = T.default()
+            int drained = __set_drain_entry[T](self.source, phys, &out)
+            if drained == 1:
+                return Some(!out)
+        return None
+
+equip [T] Set[T] with Drainable[T]:
+    SetDrain[T] drain(!self):
+        return SetDrain[T](!self, 0)
+
+struct DictDrain[K, V]:
+    Dict[K, V] source
+    int cursor
+
+equip [K, V] DictDrain[K, V] with Iterator[(K, V)]:
+    Option[(K, V)] next(&self):
+        int n = __dict_iter_order_len[K, V](self.source)
+        while self.cursor < n:
+            int phys = __dict_iter_order[K, V](self.source, self.cursor)
+            self.cursor = self.cursor + 1
+            K k = K.default()
+            V v = V.default()
+            int drained = __dict_drain_entry[K, V](self.source, phys, &k, &v)
+            if drained == 1:
+                return Some((!k, !v))
+        return None
+
+equip [K, V] Dict[K, V] with Drainable[(K, V)]:
+    DictDrain[K, V] drain(!self):
+        return DictDrain[K, V](!self, 0)

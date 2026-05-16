@@ -689,6 +689,9 @@ pub(super) fn collection_void_param_indices(name: &str) -> &'static [usize] {
         "gorget_heap_push" => &[1],
         // Dict/Set iteration output-parameter: arg 2 is void* out buffer
         "gorget_map_iter_key" | "gorget_map_iter_value" => &[2],
+        // Dict/Set drain: args 2/3 are void* out buffers (K then V)
+        "gorget_map_drain_entry" => &[2, 3],
+        "gorget_set_drain_entry" => &[2],
         // Concurrency: mutex_new(size, void*), shared_new(size, void*)
         "gorget_mutex_new" | "gorget_shared_new" | "gorget_rwlock_new" => &[1],
         // channel_send(ch, void*), guard_set(guard, void*, size)

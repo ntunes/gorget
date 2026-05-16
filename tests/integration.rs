@@ -2593,6 +2593,46 @@ fn stdlib_iter_drain() {
 }
 
 #[test]
+fn dict_drain_basic() {
+    run_gg(
+        "dict_drain_basic.gg",
+        "100\n1000\n3",
+    );
+}
+
+#[test]
+fn set_drain_basic() {
+    run_gg(
+        "set_drain_basic.gg",
+        "32",
+    );
+}
+
+#[test]
+fn set_drain_resource() {
+    run_gg(
+        "set_drain_resource.gg",
+        "alpha\nbeta\ngamma",
+    );
+}
+
+#[test]
+fn dict_keys_lazy() {
+    run_gg(
+        "dict_keys_lazy.gg",
+        "60\n3\n2",
+    );
+}
+
+#[test]
+fn dict_values_lazy() {
+    run_gg(
+        "dict_values_lazy.gg",
+        "100\n2",
+    );
+}
+
+#[test]
 fn stdlib_iter_terminals() {
     run_gg(
         "stdlib_iter_terminals.gg",

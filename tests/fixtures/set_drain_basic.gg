@@ -1,0 +1,18 @@
+# `Drainable[T]` for `Set[T]` — `s.drain()` consumes the set and
+# yields owned elements in insertion order.
+
+from std.iter import SetDrain
+
+int main():
+    Set[int] s = Set[int]()
+    s.add(5)
+    s.add(7)
+    s.add(9)
+    s.add(11)
+
+    int total = 0
+    for x in s.drain():
+        total = total + x
+    print(total)                                    # 32
+
+    return 0

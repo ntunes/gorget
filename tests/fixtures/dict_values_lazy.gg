@@ -1,0 +1,26 @@
+# Lazy `DictValuesIter[K, V]` — `d.values_iter()` walks the Dict's
+# bucket array in place yielding only the V component. No
+# materialised `Vector[V]` allocation.
+#
+# Uses Dict[int, int] to dodge the pre-existing DictIter Tier 2a
+# violation on resource-typed K/V (see dict_keys_lazy.gg).
+
+from std.iter import DictValuesIter
+
+int main():
+    Dict[int, int] d = Dict[int, int]()
+    d.put(1, 10)
+    d.put(2, 20)
+    d.put(3, 30)
+    d.put(4, 40)
+
+    int sum = 0
+    for v in d.values_iter():
+        sum = sum + v
+    print(sum)                                      # 100
+
+    # Adapter chain via the Iterator surface.
+    int evens = d.values_iter().filter((int v): v % 4 == 0).count()
+    print(evens)                                    # 2
+
+    return 0

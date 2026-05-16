@@ -1,0 +1,23 @@
+# `Drainable[T]` for `Set[T]` with resource elements — String. Drain
+# moves each owned String into the iterator; the source set's drop
+# sees tombstoned slots and skips them (no double-free).
+
+from std.iter import SetDrain
+
+int main():
+    Set[String] s = Set[String]()
+    s.add("alpha")
+    s.add("beta")
+    s.add("gamma")
+
+    # Drain into a Vector preserving insertion order.
+    Vector[String] out = Vector[String]()
+    for x in s.drain():
+        out.push(x)
+
+    int i = 0
+    while i < out.len():
+        print(out.get(i).unwrap())
+        i = i + 1
+
+    return 0

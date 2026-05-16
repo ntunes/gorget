@@ -1,0 +1,36 @@
+# Lazy `DictKeysIter[K, V]` — `d.keys_iter()` walks the Dict's
+# bucket array in place yielding only the K component. No
+# materialised `Vector[K]` allocation.
+#
+# Pairs with `d.values_iter()` for symmetric lazy projections.
+# Eager `d.keys()` / `d.values()` (returning Vector[K] / Vector[V])
+# still ship for callers that need the materialised collection.
+#
+# NOTE: this fixture uses Dict[int, int] only — resource-typed K
+# or V triggers a pre-existing Tier 2a violation in DictIter's
+# `Some((!k, !v))` shape. The Dict[K, V] iter trait gets monoised
+# whenever a Dict[K, V] is constructed in a module that imports
+# std.iter, so we can't side-step that path here.
+
+from std.iter import DictKeysIter
+
+int main():
+    Dict[int, int] d = Dict[int, int]()
+    d.put(10, 1)
+    d.put(20, 2)
+    d.put(30, 3)
+
+    # Iterate keys lazily; no Vector[int] allocation.
+    int sum = 0
+    int n = 0
+    for k in d.keys_iter():
+        sum = sum + k
+        n = n + 1
+    print(sum)                                      # 60
+    print(n)                                        # 3
+
+    # Compose with adapters via the Iterator trait surface.
+    int big = d.keys_iter().filter((int k): k >= 20).count()
+    print(big)                                      # 2
+
+    return 0
