@@ -161,6 +161,22 @@ pub(super) fn lower_call_arg(
                 } else {
                     UNIT_TYPE
                 };
+                // Gorget-js snag #1: when the inner expression already yields a
+                // pointer (e.g. `&xs.get(i).unwrap()` where unwrap returns
+                // Ptr(T)), `&value` is the borrow itself, not the address of
+                // the temp slot holding it. Without this check we emit
+                // `_21 = borrow_mut _20` producing `*mut *JsVal` — callee then
+                // reads the pointer's bits as the payload (zeros for
+                // page-aligned addresses). Mirrors `is_already_ptr` in the
+                // standalone `Expr::MutableBorrow` handler (exprs/mod.rs:362).
+                if place.projections.is_empty()
+                    && matches!(
+                        ctx.type_registry.get(local_type),
+                        Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_))
+                    )
+                {
+                    return FunctionBuilder::copy(place.local);
+                }
                 let ptr_type = ctx.register_mut_ptr_type(local_type);
                 let dst = builder.add_local(ptr_type, None);
                 builder.emit_borrow_mut(dst, place.clone());

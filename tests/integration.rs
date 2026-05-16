@@ -20730,3 +20730,30 @@ fn static_init_imported() {
 true",
     );
 }
+
+// ─── Gorget-js snag #1: `&` of `.unwrap()` temporary in while loop ───
+//
+// `clone_v(&xs.get(i).unwrap())` inside a `while` loop body silently
+// produced an empty payload. `.unwrap()` returns Ptr(T) (a collection
+// borrow); the call-arg's `&` then emitted `borrow_mut <local: *T>`
+// — wrapping the pointer in another pointer (*mut *T) so the callee
+// read pointer bits as the payload.
+//
+// Fix at `lower_call_arg` (src/ir/lowering/exprs/calls.rs:152): mirror
+// the `is_already_ptr` check from the standalone `Expr::MutableBorrow`
+// handler — when the inner operand is already a Ptr/MutPtr local with
+// no projections, forward the pointer directly instead of taking its
+// address.
+
+#[test]
+fn gorget_js_snag_1_unwrap_borrow_in_loop() {
+    run_gg(
+        "gorget_js_snag_1_unwrap_borrow_in_loop.gg",
+        "--- Pattern A (clone via &.unwrap() temporary) ---
+out_a[0]: StringV(first)
+out_a[1]: StringV(second)
+--- Pattern B (clone via named local) ---
+out_b[0]: StringV(first)
+out_b[1]: StringV(second)",
+    );
+}

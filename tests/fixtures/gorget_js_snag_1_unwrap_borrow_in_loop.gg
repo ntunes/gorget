@@ -1,0 +1,55 @@
+# Gorget-js snag #1: `&xs.get(i).unwrap()` in a while loop.
+#
+# Repro: `clone_v(&xs.get(i).unwrap())` inside a `while` loop body — the
+# `.unwrap()` returns `Ptr(T)` (a borrow into the collection element). Taking
+# `&` of that pointer at a call-arg site used to emit
+# `borrow_mut <local: *T>` → producing `*mut *T`, so the callee read pointer
+# bits as the payload (zeros at the low byte → empty StringV).
+#
+# Fix: when the call-arg's inner operand is already a Ptr/MutPtr local with no
+# projections, forward the pointer directly. Mirrors the same check already
+# present in the standalone `Expr::MutableBorrow` handler.
+
+from std.collections import Vector
+
+public enum JsVal:
+    StringV(String)
+    NumberV(int)
+
+public JsVal clone_v(JsVal &v):
+    match v:
+        case JsVal.StringV(s):
+            return JsVal.StringV(s + "")
+        case JsVal.NumberV(n):
+            return JsVal.NumberV(n)
+
+void show(String tag, JsVal v):
+    match v:
+        case JsVal.StringV(s): print(f"{tag}: StringV({s})")
+        case JsVal.NumberV(n): print(f"{tag}: NumberV({n})")
+
+int main():
+    Vector[JsVal] xs = Vector[JsVal]()
+    xs.push(JsVal.StringV("first"))
+    xs.push(JsVal.StringV("second"))
+
+    Vector[JsVal] out_a = Vector[JsVal]()
+    int i = 0
+    while i < xs.len():
+        out_a.push(clone_v(&xs.get(i).unwrap()))
+        i = i + 1
+
+    Vector[JsVal] out_b = Vector[JsVal]()
+    int j = 0
+    while j < xs.len():
+        JsVal local = xs.get(j).unwrap()
+        out_b.push(clone_v(&local))
+        j = j + 1
+
+    print("--- Pattern A (clone via &.unwrap() temporary) ---")
+    show("out_a[0]", out_a.get(0).unwrap())
+    show("out_a[1]", out_a.get(1).unwrap())
+    print("--- Pattern B (clone via named local) ---")
+    show("out_b[0]", out_b.get(0).unwrap())
+    show("out_b[1]", out_b.get(1).unwrap())
+    return 0
