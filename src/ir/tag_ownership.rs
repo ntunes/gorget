@@ -243,6 +243,22 @@ fn infer_func(
                         decisions.push((*dst, LocalOwnership::Owned));
                     }
                 }
+                // Gorget-arena snag #1: `expr as T` where T is a droppable
+                // resource (e.g. `"x" as String`, `n as String`,
+                // `other_string as String`) lowers in the backend to a
+                // fresh allocation: `gorget_str_from_cstr` for literal /
+                // ptr sources, `gorget_int_to_str`/`gorget_float_to_str`/
+                // `gorget_bool_to_str` for scalar sources, and
+                // `gorget_string_clone` for same-type String→String.
+                // Every branch produces an owned value — but the Cast
+                // instruction itself wasn't tagged, so the dst stayed
+                // Untracked and the very next `s = s + …` re-assign tripped
+                // the AssignIntoOwnedSlot validator. Tag structurally; the
+                // `apply_decision` `needs_drop` gate filters out scalar
+                // casts (int→float, etc.) that don't allocate.
+                Instruction::Cast { dst, .. } => {
+                    decisions.push((*dst, LocalOwnership::Owned));
+                }
                 // Tier 2a Phase 3: `Inst::Assign { dst, value: Constant::Str }`
                 // for a resource-typed dst materialises a fresh heap
                 // allocation at codegen (`String out = ""` → `_out = const ""`

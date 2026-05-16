@@ -1,0 +1,23 @@
+# Regression pin for Gorget-arena snag #1: `String s = expr as String`
+# followed by `s = s + ...` panicked at IR lowering with
+#   Tier 2a consume-site violation: ... AssignIntoOwnedSlot(dst:
+#   GorgetString) — untracked source consumed (ownership not decided).
+#
+# Two writer-site bugs combined to surface this:
+#   (a) `src/ir/tag_ownership.rs` didn't tag `Instruction::Cast` dsts as
+#       Owned, so a Cast-produced GorgetString stayed Untracked and the
+#       very next bare-assign Move tripped the AssignIntoOwnedSlot
+#       validator.
+#   (b) `src/lir/lower/insts.rs`'s Cast handler didn't recognise
+#       `Constant::Str` as a string source (its `Constant`-arm only
+#       covered scalar literals), so a `"literal" as String` fell into
+#       the `gorget_int_to_str` fallback and cc rejected the
+#       `Str → int64_t` mismatch.
+#
+# Both fixed at the writer per CLAUDE.md "Debugging heuristic — fix
+# complexity as a signal of wrong layer".
+
+void main():
+    String s = "x" as String
+    s = s + "y"
+    print(s)

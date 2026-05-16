@@ -3442,6 +3442,31 @@ fn snag31_match_arm_move_into_owned() {
 }
 
 #[test]
+fn arena_snag_1_as_string_owned() {
+    // Gorget-arena snag #1: `String s = "x" as String` followed by
+    // `s = s + "y"` panicked at IR lowering with a Tier 2a
+    // AssignIntoOwnedSlot consume-site violation (untracked source).
+    //
+    // Two writer-site oversights combined:
+    //   (a) `src/ir/tag_ownership.rs` didn't tag `Instruction::Cast`
+    //       dsts as Owned — every cast result stayed Untracked, so the
+    //       follow-on `s = s + ...` bare-assign Move tripped the
+    //       validator.
+    //   (b) `src/lir/lower/insts.rs`'s Cast handler didn't recognise a
+    //       `Constant::Str` source — the Constant-arm only listed
+    //       scalar literals — so `"literal" as String` fell into the
+    //       `gorget_int_to_str` fallback and cc rejected the
+    //       `Str → int64_t` mismatch.
+    //
+    // Both fixed at the writer per CLAUDE.md "Debugging heuristic —
+    // fix complexity as a signal of wrong layer".
+    run_gg(
+        "arena_snag_1_as_string_owned.gg",
+        "xy",
+    );
+}
+
+#[test]
 fn snag30_field_alias_in_match_arm() {
     // Snag #30: pattern-match aliasing of a non-Copy struct field in a
     // match arm (`String _pname = catch_clause.param`), followed by a

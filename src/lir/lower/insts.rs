@@ -262,6 +262,23 @@ impl<'a> FuncLowering<'a> {
                     let is_str_source = src_gir_ty.map_or(false, |t| {
                         matches!(self.map_type(&t), LirType::Struct(sid) if Some(sid) == str_sid)
                     });
+                    // Gorget-arena snag #1: `"literal" as String` —
+                    // `infer_operand_type` types a `Constant::Str` as
+                    // GorgetString, but the LIR-level Cast input is
+                    // produced by `Inst::StrLit` (a `Str` struct value,
+                    // not a pointer), and the `src_gir_ty` lookup for a
+                    // `Constant::Str` falls through to `None` because
+                    // the Constant arm above doesn't list it. Result:
+                    // all three flags were false and the cast routed to
+                    // the `gorget_int_to_str` fallback, then cc choked
+                    // on the `Str → int64_t` mismatch. Treat
+                    // `Constant::Str` like any other GorgetString source:
+                    // route through `gorget_string_clone`, which the
+                    // `is_str_source` branch handles by taking the
+                    // address of the Str slot — exactly what the literal
+                    // produces.
+                    let is_str_literal = matches!(value, Operand::Constant(Constant::Str(_)));
+                    let is_str_source = is_str_source || is_str_literal;
 
                     if is_ptr {
                         // Ptr source (const char*) → GorgetString: wrap directly with gorget_str_from_cstr.
