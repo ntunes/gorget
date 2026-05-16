@@ -39,7 +39,7 @@ ShapeResolution not_found_shape():
     return ShapeResolution(false, MethodSigShape(empty_names, empty_params, TPrimitive("")))
 
 TraitRegistry new_trait_registry():
-    return TraitRegistry(Vector[TraitInfo](), Vector[EquipInfo]())
+    return TraitRegistry(Vector[TraitInfo](), Vector[EquipInfo](), Dict[int, Vector[int]](), Dict[int, Vector[int]]())
 
 # ── Helpers: parallel-Vector lookup ──────────────────────────
 
@@ -261,6 +261,37 @@ void collect_equip(EquipBlock eq, int equip_scope, ScopeTable &scopes, TypeTable
         trait_args.push(targ.ty)
     EquipInfo info = EquipInfo(self_tid, self_name, trait_def_id, trait_name, method_names, method_def_ids, method_sigs, shape_names, shape_shapes, eq.target.ty, eq.type_params, via_name, trait_args, method_return_types_ast)
     registry.impls.push(info)
+    int new_idx = registry.impls.len() - 1
+    # Maintain the self_type → impl-indices index. Inherent vs trait
+    # impls live in disjoint Dicts so `resolve_method_full` can take the
+    # correct precedence path without re-scanning. Mirrors Rust's
+    # `inherent_impls` (the trait_impls index is self-host-specific —
+    # see types.gg for the rationale). The `get().push()` chain on a
+    # nested Vector is known to drop mutations on this codebase (see
+    # `feedback_nested_vector_get_set.md`), so we rebuild the inner
+    # Vector + put it back — same pattern as lir_ssa.gg's target_slots.
+    if trait_def_id == NO_DEF:
+        if registry.inherent_impls.contains(self_tid):
+            Vector[int] old_indices = registry.inherent_impls.get(self_tid).unwrap()
+            Vector[int] new_indices = Vector[int]()
+            for oi in old_indices:
+                new_indices.push(oi)
+            new_indices.push(new_idx)
+            registry.inherent_impls.put(self_tid, !new_indices)
+        else:
+            Vector[int] new_indices = [new_idx]
+            registry.inherent_impls.put(self_tid, !new_indices)
+    else:
+        if registry.trait_impls.contains(self_tid):
+            Vector[int] old_indices = registry.trait_impls.get(self_tid).unwrap()
+            Vector[int] new_indices = Vector[int]()
+            for oi in old_indices:
+                new_indices.push(oi)
+            new_indices.push(new_idx)
+            registry.trait_impls.put(self_tid, !new_indices)
+        else:
+            Vector[int] new_indices = [new_idx]
+            registry.trait_impls.put(self_tid, !new_indices)
     scopes.set_current(saved)
 
 # ── Built-in trait registration ──────────────────────────────
@@ -609,16 +640,35 @@ MethodResolution resolve_method_for_generic_receiver(TraitRegistry registry, Str
     return not_found_resolution()
 
 MethodResolution resolve_method_full(TraitRegistry registry, int type_id, String method, ScopeTable scopes, TypeTable &types):
-    for impl in registry.impls:
-        if impl.self_type == type_id and impl.trait_def_id == NO_DEF:
+    # Phase 1: inherent impls for this type via the typed index.
+    # Rust's `inherent_impls.get(&type_id)` equivalent — visits only
+    # the impls whose `self_type` matches, skipping the full linear
+    # scan over `registry.impls`.
+    if registry.inherent_impls.contains(type_id):
+        Vector[int] indices = registry.inherent_impls.get(type_id).unwrap()
+        for idx_impl in indices:
+            EquipInfo impl = registry.impls.get(idx_impl).unwrap()
             if find_method_index(impl.method_names, method) is Some(idx):
                 return MethodResolution(true, impl.method_sigs.get(idx).unwrap(), impl.method_def_ids.get(idx).unwrap())
-    for impl in registry.impls:
-        if impl.self_type == type_id and impl.trait_def_id != NO_DEF:
+    # Phase 2: trait-override impls for this type. Self-host extends
+    # Rust's `inherent_impls` design with a parallel `trait_impls`
+    # index keyed only on self_type (Rust's trait_impls uses a richer
+    # composite key for duplicate-impl validation, which the self-host
+    # typechecker doesn't perform — so the simpler key suffices here).
+    if registry.trait_impls.contains(type_id):
+        Vector[int] indices = registry.trait_impls.get(type_id).unwrap()
+        for idx_impl in indices:
+            EquipInfo impl = registry.impls.get(idx_impl).unwrap()
             if find_method_index(impl.method_names, method) is Some(idx):
                 return MethodResolution(true, impl.method_sigs.get(idx).unwrap(), impl.method_def_ids.get(idx).unwrap())
-    for impl in registry.impls:
-        if impl.self_type == type_id and impl.trait_def_id != NO_DEF:
+    # Phase 3: trait default-method fallback. Same per-self_type
+    # subset as phase 2, but consults the implemented trait's
+    # TraitInfo for a default body when the impl itself doesn't
+    # override the method.
+    if registry.trait_impls.contains(type_id):
+        Vector[int] indices = registry.trait_impls.get(type_id).unwrap()
+        for idx_impl in indices:
+            EquipInfo impl = registry.impls.get(idx_impl).unwrap()
             for tinfo in registry.traits:
                 if tinfo.def_id == impl.trait_def_id:
                     if find_method_index(tinfo.method_names, method) is Some(midx):

@@ -104,6 +104,18 @@ struct EquipInfo:
 struct TraitRegistry:
     Vector[TraitInfo] traits
     Vector[EquipInfo] impls
+    # Index: self_type → indices into `impls` for inherent impls
+    # (trait_def_id == NO_DEF). Maintained by `collect_equip`. Used by
+    # `resolve_method_full` to skip linear scan over the full impls
+    # vector. Mirrors Rust's `inherent_impls: FxHashMap<TypeId, Vec<usize>>`.
+    Dict[int, Vector[int]] inherent_impls
+    # Index: self_type → indices into `impls` for trait impls (any
+    # trait_def_id != NO_DEF). Used by phases 2 and 3 of
+    # `resolve_method_full`. Mirrors Rust's `trait_impls`, but keyed on
+    # self_type only (the trait+args composite key isn't needed for
+    # method resolution — only for duplicate-impl validation, which the
+    # self-host typechecker doesn't perform).
+    Dict[int, Vector[int]] trait_impls
 
 struct MethodResolution:
     bool found
@@ -179,7 +191,7 @@ equip TypeTable:
         types.push(RTError())
         # 8: never
         types.push(RTNever())
-        TraitRegistry empty_reg = TraitRegistry(Vector[TraitInfo](), Vector[EquipInfo]())
+        TraitRegistry empty_reg = TraitRegistry(Vector[TraitInfo](), Vector[EquipInfo](), Dict[int, Vector[int]](), Dict[int, Vector[int]]())
         Dict[int, int] empty_expr_types = Dict[int, int]()
         return TypeTable(types, Dict[int, int](), 0, 1, 2, 3, 4, 5, 6, 7, 8, -1, Dict[String, int](), 0, 0, Dict[String, String](), 1, empty_reg, Dict[int, bool](), -1, empty_expr_types)
 
