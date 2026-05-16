@@ -1,4 +1,5 @@
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::time::{Duration, Instant};
 
 use crate::parser::ast::*;
 use crate::span::{Span, Spanned};
@@ -532,18 +533,25 @@ pub fn check_module(
     method_resolutions: &FxHashMap<usize, DefId>,
     errors: &mut Vec<SemanticError>,
     warn_const: bool,
-) -> (FxHashMap<DefId, super::SharedStrategy>, Vec<super::errors::SemanticWarning>, super::purity::PurityByName, FxHashMap<DefId, Vec<DefId>>) {
+) -> (FxHashMap<DefId, super::SharedStrategy>, Vec<super::errors::SemanticWarning>, super::purity::PurityByName, FxHashMap<DefId, Vec<DefId>>, FxHashMap<&'static str, Duration>) {
+    let mut pt: FxHashMap<&'static str, Duration> = FxHashMap::default();
+    macro_rules! time { ($name:expr, $e:expr) => {{
+        let t = Instant::now();
+        let r = $e;
+        *pt.entry($name).or_default() += t.elapsed();
+        r
+    }} }
     // Phase 4: compute which structs have reference-type fields
-    let ref_type_structs = compute_ref_type_structs(module, scopes);
-    let struct_field_ref_flags = compute_struct_field_ref_flags(module, scopes, &ref_type_structs);
-    let struct_field_mut_ref_flags = compute_struct_field_mut_ref_flags(module, scopes, &ref_type_structs);
+    let ref_type_structs = time!("compute_ref_type_structs", compute_ref_type_structs(module, scopes));
+    let struct_field_ref_flags = time!("compute_struct_field_ref_flags", compute_struct_field_ref_flags(module, scopes, &ref_type_structs));
+    let struct_field_mut_ref_flags = time!("compute_struct_field_mut_ref_flags", compute_struct_field_mut_ref_flags(module, scopes, &ref_type_structs));
 
     // Pass 5a: compute return_borrows_from for each function
-    compute_all_return_borrows(module, scopes, types, resolution_map, function_info, &ref_type_structs);
+    time!("compute_all_return_borrows", compute_all_return_borrows(module, scopes, types, resolution_map, function_info, &ref_type_structs));
 
     // Pass 5b½: Purity inference — lightweight AST walk (moved before borrow check
     // so purity info is available for yield-point detection in `with` blocks).
-    let purity_by_name = infer_purity(module, scopes, resolution_map);
+    let purity_by_name = time!("infer_purity", infer_purity(module, scopes, resolution_map));
 
     // Pass 5b: full borrow check with origin tracking
     let mut checker = BorrowChecker::new(
@@ -555,7 +563,7 @@ pub fn check_module(
     );
     checker.warn_const = warn_const;
 
-    check_items_recursive(&mut checker, &module.items);
+    time!("check_items_recursive", check_items_recursive(&mut checker, &module.items));
 
     // Final CFA pass: assign default strategies for shared vars not yet decided.
     // - If a shared var is spawned AND locally written → upgrade to ArcMutex
@@ -588,38 +596,32 @@ pub fn check_module(
     }
 
     // Phase 4: Unused import detection
-    // Collect imported DefIds from the AST, then check if they appear as
-    // either a value in `resolution_map` (expression-position uses — Identifier,
-    // Path, etc.) or as the resolved def of a Type annotation (function param
-    // types, variable type annotations, return types, struct/enum field types,
-    // generic args, etc.). The resolver only walks expressions; type annotations
-    // never insert into `resolution_map`. Without the type-walk, an import used
-    // ONLY as a type annotation would falsely warn — snag #7 from the
-    // JS-interpreter porting feedback (2026-05-05).
-    let mut used_def_ids: FxHashSet<DefId> = resolution_map.values().copied().collect();
-    collect_used_type_def_ids(&module.items, scopes, &mut used_def_ids);
-    let mut imported_defs: Vec<(DefId, String, Span)> = Vec::new();
-    collect_imported_defs(&module.items, scopes, &mut imported_defs);
-    for (def_id, name, span) in &imported_defs {
-        if !used_def_ids.contains(def_id) && !name.starts_with('_') {
-            warnings.push(super::errors::SemanticWarning {
-                kind: super::errors::SemanticWarningKind::UnusedImport {
-                    name: name.clone(),
-                },
-                span: *span,
-            });
+    time!("unused_imports", {
+        let mut used_def_ids: FxHashSet<DefId> = resolution_map.values().copied().collect();
+        collect_used_type_def_ids(&module.items, scopes, &mut used_def_ids);
+        let mut imported_defs: Vec<(DefId, String, Span)> = Vec::new();
+        collect_imported_defs(&module.items, scopes, &mut imported_defs);
+        for (def_id, name, span) in &imported_defs {
+            if !used_def_ids.contains(def_id) && !name.starts_with('_') {
+                warnings.push(super::errors::SemanticWarning {
+                    kind: super::errors::SemanticWarningKind::UnusedImport {
+                        name: name.clone(),
+                    },
+                    span: *span,
+                });
+            }
         }
-    }
+    });
 
     // Phase 8: Private-in-public signature detection
-    check_private_in_public(&module.items, scopes, &mut checker.errors);
+    time!("check_private_in_public", check_private_in_public(&module.items, scopes, &mut checker.errors));
 
     warnings.extend(checker.stale_warnings);
     errors.extend(checker.errors);
     let shared_out = checker.shared_out;
     let borrow_deps = checker.borrow_deps;
 
-    (shared_out, warnings, purity_by_name, borrow_deps)
+    (shared_out, warnings, purity_by_name, borrow_deps, pt)
 }
 
 fn check_items_recursive(checker: &mut BorrowChecker, items: &[Spanned<Item>]) {

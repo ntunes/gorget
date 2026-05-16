@@ -13,6 +13,7 @@ pub mod typecheck;
 pub mod types;
 
 use rustc_hash::FxHashMap;
+use std::time::{Duration, Instant};
 
 use crate::parser::ast::{Item, Module};
 use crate::span::Span;
@@ -64,6 +65,23 @@ pub struct AnalysisResult {
     /// Borrow dependencies: borrower DefId → Vec<source DefId>.
     /// Used by the drop elaborator to order drops correctly.
     pub borrow_deps: rustc_hash::FxHashMap<DefId, Vec<DefId>>,
+    /// Per-sub-pass cumulative wall-clock time. Empty unless instrumentation
+    /// was enabled (via `analyze_with_stats` or surfaced through `gg profile`).
+    /// Mirrors the LIR `OptStats::pass_times` pattern so the dominant sub-pass
+    /// shows up in `gg profile` JSON without per-call-site instrumentation.
+    pub pass_times: FxHashMap<&'static str, Duration>,
+}
+
+#[inline]
+fn time_pass<R>(
+    pass_times: &mut FxHashMap<&'static str, Duration>,
+    name: &'static str,
+    f: impl FnOnce() -> R,
+) -> R {
+    let t = Instant::now();
+    let r = f();
+    *pass_times.entry(name).or_default() += t.elapsed();
+    r
 }
 
 /// Run all semantic analysis passes on a parsed module.
@@ -83,12 +101,17 @@ pub fn analyze_with_source_dir(
     let mut scopes = ScopeTable::new();
     let mut types = TypeTable::new();
     let mut errors = Vec::new();
+    let mut pass_times: FxHashMap<&'static str, Duration> = FxHashMap::default();
 
     // Pass 0: Evaluate and substitute meta constants
-    errors.extend(meta::evaluate_meta_consts_with_source_dir(module, features, source_dir));
+    time_pass(&mut pass_times, "meta_consts", || {
+        errors.extend(meta::evaluate_meta_consts_with_source_dir(module, features, source_dir));
+    });
 
     // Expand @derive(...) attributes into equip blocks
-    let derive_records = derive::expand_derives(module, &mut errors);
+    let derive_records = time_pass(&mut pass_times, "expand_derives", || {
+        derive::expand_derives(module, &mut errors)
+    });
 
     // Validate directives
     for item in &module.items {
@@ -174,7 +197,9 @@ pub fn analyze_with_source_dir(
             }
         }
     }
+    let _vt_start = Instant::now();
     validate_attributes(&module.items, &mut errors);
+    *pass_times.entry("validate_directives").or_default() += _vt_start.elapsed();
 
     // Validate test blocks
     {
@@ -206,109 +231,109 @@ pub fn analyze_with_source_dir(
     }
 
     // Pass 1: Collect top-level definitions
-    let mut resolve_ctx = resolve::collect_top_level(module, &mut scopes, &mut types, &mut errors);
+    let mut resolve_ctx = time_pass(&mut pass_times, "collect_top_level", || {
+        resolve::collect_top_level(module, &mut scopes, &mut types, &mut errors)
+    });
 
     // Pass 1.5: Rewrite import-alias names back to their source names.
     // `from X import Y as Z` is handled mostly in resolution (rebinding the
     // placeholder), but the IR backend lowers identifiers by surface name —
     // so we have to physically rename `Z → Y` in the AST before body resolution.
     // No-op when no aliases were declared.
-    rewrite::rewrite_import_aliases(module, &resolve_ctx.import_aliases);
+    time_pass(&mut pass_times, "rewrite_import_aliases", || {
+        rewrite::rewrite_import_aliases(module, &resolve_ctx.import_aliases);
+    });
 
     // Pass 2: Resolve names in all bodies
-    let mut resolution_map = resolve::resolve_bodies(module, &mut scopes, &mut types, &mut errors, &mut resolve_ctx.function_info, &mut resolve_ctx.function_body_scopes, &resolve_ctx.file_module_scopes);
+    let mut resolution_map = time_pass(&mut pass_times, "resolve_bodies", || {
+        resolve::resolve_bodies(module, &mut scopes, &mut types, &mut errors, &mut resolve_ctx.function_info, &mut resolve_ctx.function_body_scopes, &resolve_ctx.file_module_scopes)
+    });
     // Merge any resolutions collected during pass 1
     resolution_map.extend(resolve_ctx.resolution_map);
 
     // Pass 2.5: Rewrite struct constructor calls to StructLiteral nodes.
     // After resolution we know which identifiers refer to structs, so we can
     // convert Call { callee: Identifier("Foo"), .. } → StructLiteral { name: "Foo", .. }.
-    let rewrite_errors = rewrite::rewrite_struct_calls(module, &resolution_map, &scopes);
-    for (kind, span) in rewrite_errors {
-        errors.push(SemanticError { kind, span });
-    }
+    time_pass(&mut pass_times, "rewrite_struct_calls", || {
+        let rewrite_errors = rewrite::rewrite_struct_calls(module, &resolution_map, &scopes);
+        for (kind, span) in rewrite_errors {
+            errors.push(SemanticError { kind, span });
+        }
+    });
 
-    // Pass 2.6: LHS-type-driven `.collect()` target selection. Walks
-    // VarDecls whose declared type is `Set[T]` and rewrites an inner
-    // `.collect()` call to `.to_set()` so typecheck + IR lowering
-    // dispatch the Set-targeted `Iterator[T]::to_set(&self)` trait
-    // default instead of the Vector-targeted `.collect()`. Lets callers
-    // write `Set[int] s = v.iter().filter(p).collect()` without a
-    // turbofish or explicit `.to_set()` spelling. Purely AST-level —
-    // no type inference needed since the declared type is at the
-    // syntactic position.
-    typecheck::apply_collect_target_rewrites(module);
+    // Pass 2.6: LHS-type-driven `.collect()` target selection.
+    time_pass(&mut pass_times, "apply_collect_target_rewrites", || {
+        typecheck::apply_collect_target_rewrites(module);
+    });
 
     // Pass 3: Build trait/impl registry
-    let trait_registry =
-        traits::build_registry(module, &scopes, &mut types, &resolution_map, &mut errors);
+    let trait_registry = time_pass(&mut pass_times, "build_trait_registry", || {
+        traits::build_registry(module, &scopes, &mut types, &resolution_map, &mut errors)
+    });
 
     // Pass 3.5: Validate @derive field types against trait requirements
-    derive::validate_derive_field_traits(&derive_records, &trait_registry, &mut errors);
+    time_pass(&mut pass_times, "validate_derive_field_traits", || {
+        derive::validate_derive_field_traits(&derive_records, &trait_registry, &mut errors);
+    });
 
     // Populate struct/enum field types on DefInfo BEFORE typecheck.
-    // typecheck's Expr::FieldAccess inference reads field_types to
-    // return the actual field type — without this, field access types
-    // as <error> and downstream Keyword→int (and similar enum→int)
-    // calls slip through silently. See populate_def_field_types
-    // header for details.
-    populate_def_field_types(module, &mut scopes, &mut types);
+    time_pass(&mut pass_times, "populate_def_field_types", || {
+        populate_def_field_types(module, &mut scopes, &mut types);
+    });
 
-    // Pass 3.6: Detect unbounded recursive types BEFORE typecheck. A struct/
-    // enum whose field/variant graph cycles by value (no `Box[T]` /
-    // `Vector[T]` / other heap indirection on any edge of the cycle) has
-    // infinite size. Without this check, codegen recurses unboundedly while
-    // laying the type out and stack-overflows. Run after
-    // `populate_def_field_types` so field/variant TypeIds are available;
-    // run before typecheck so it can rely on bounded types.
-    cycle_check::check_recursive_type_cycles(module, &scopes, &types, &mut errors);
+    // Pass 3.6: Detect unbounded recursive types BEFORE typecheck.
+    time_pass(&mut pass_times, "cycle_check", || {
+        cycle_check::check_recursive_type_cycles(module, &scopes, &types, &mut errors);
+    });
 
     // Pass 4: Type check everything
-    let (expr_types, method_resolutions, inferred_method_targs, inferred_call_targs) = typecheck::check_module(
-        module,
-        &mut scopes,
-        &mut types,
-        &trait_registry,
-        &resolution_map,
-        &resolve_ctx.function_info,
-        &resolve_ctx.enum_variants,
-        &resolve_ctx.struct_fields,
-        &resolve_ctx.function_body_scopes,
-        &resolve_ctx.struct_generic_bounds,
-        &mut errors,
-    );
+    let (expr_types, method_resolutions, inferred_method_targs, inferred_call_targs) = time_pass(&mut pass_times, "typecheck_module", || {
+        typecheck::check_module(
+            module,
+            &mut scopes,
+            &mut types,
+            &trait_registry,
+            &resolution_map,
+            &resolve_ctx.function_info,
+            &resolve_ctx.enum_variants,
+            &resolve_ctx.struct_fields,
+            &resolve_ctx.function_body_scopes,
+            &resolve_ctx.struct_generic_bounds,
+            &mut errors,
+        )
+    });
 
     // Pass 4.5: Sync typecheck-inferred method-generic args into the AST.
-    // Typecheck records `v.my_map(double)` → `[int, int(int)]` in a side-
-    // table (method-level inference — shape 1/2/3); this walk mutates the
-    // matching MethodCall nodes' `generic_args` from None to Some(inferred)
-    // so the downstream generic-collector + IR lowering see them just like
-    // explicit `[T1, T2]` args. See docs/internals/method-level-inference.md.
-    if !inferred_method_targs.is_empty() {
-        typecheck::apply_inferred_method_targs(module, &inferred_method_targs);
-    }
-    // Pass 4.5b: Same sync but for *generic free-function* calls — patches
-    // `Expr::Call.generic_args` from typecheck's per-call-site
-    // fresh-instantiation. Without this, IR-lowering's monomorphisation has
-    // no concrete targs to mangle a symbol from and link-fails with
-    // `undefined reference to <fn>`.
-    if !inferred_call_targs.is_empty() {
-        typecheck::apply_inferred_call_targs(module, &inferred_call_targs);
-    }
+    time_pass(&mut pass_times, "apply_inferred_targs", || {
+        if !inferred_method_targs.is_empty() {
+            typecheck::apply_inferred_method_targs(module, &inferred_method_targs);
+        }
+        if !inferred_call_targs.is_empty() {
+            typecheck::apply_inferred_call_targs(module, &inferred_call_targs);
+        }
+    });
 
     // Pass 5: Borrow checking (two sub-passes: 5a computes return_borrows_from, 5b does full check)
-    let (shared_bindings, warnings, fn_purity, borrow_deps) = safety::check_module(
-        module,
-        &scopes,
-        &types,
-        &resolution_map,
-        &mut resolve_ctx.function_info,
-        &resolve_ctx.function_body_scopes,
-        &expr_types,
-        &method_resolutions,
-        &mut errors,
-        warn_const,
-    );
+    let (shared_bindings, warnings, fn_purity, borrow_deps, safety_pt) = time_pass(&mut pass_times, "safety_check_module", || {
+        safety::check_module(
+            module,
+            &scopes,
+            &types,
+            &resolution_map,
+            &mut resolve_ctx.function_info,
+            &resolve_ctx.function_body_scopes,
+            &expr_types,
+            &method_resolutions,
+            &mut errors,
+            warn_const,
+        )
+    });
+    // Merge fine-grained safety sub-pass timings under prefixed keys so they
+    // appear alongside the top-level pass_times in profile JSON.
+    for (k, v) in safety_pt {
+        let prefixed: &'static str = Box::leak(format!("safety::{}", k).into_boxed_str());
+        *pass_times.entry(prefixed).or_default() += v;
+    }
 
     AnalysisResult {
         scopes,
@@ -326,6 +351,7 @@ pub fn analyze_with_source_dir(
         warnings,
         fn_purity,
         borrow_deps,
+        pass_times,
     }
 }
 

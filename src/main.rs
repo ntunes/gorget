@@ -1427,7 +1427,20 @@ fn try_profile(
     println!("  \"phases\": {{");
     println!("    \"parse\": {{ \"duration_ms\": {:.3} }},", parse_ms);
     println!("    \"load_imports\": {{ \"duration_ms\": {:.3} }},", load_imports_ms);
-    println!("    \"semantic\": {{ \"duration_ms\": {:.3} }},", semantic_ms);
+    // Semantic phase: also surface per-sub-pass timing so hotspots are visible.
+    print!("    \"semantic\": {{ \"duration_ms\": {:.3}", semantic_ms);
+    if !result.pass_times.is_empty() {
+        let mut entries: Vec<(&&'static str, &std::time::Duration)> =
+            result.pass_times.iter().collect();
+        entries.sort_by(|a, b| b.1.cmp(a.1));
+        print!(", \"pass_times_ms\": {{ ");
+        for (i, (name, dur)) in entries.iter().enumerate() {
+            if i > 0 { print!(", "); }
+            print!("\"{name}\": {:.3}", dur.as_secs_f64() * 1000.0);
+        }
+        print!(" }}");
+    }
+    println!(" }},");
     println!("    \"gir_lower\": {{ \"duration_ms\": {:.3} }},", gir_lower_ms);
     println!("    \"gir_optimize\": {{ \"duration_ms\": {:.3} }},", gir_optimize_ms);
     println!("    \"lir_lower\": {{ \"duration_ms\": {:.3} }},", lir_lower_ms);
