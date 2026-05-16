@@ -476,7 +476,12 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                             if scopes.lookup("Option") is Some(option_def):
                                 Vector[int] opt_args = Vector[int]()
                                 opt_args.push(prim_id)
-                                return types.add_type(RTGeneric(option_def, opt_args))
+                                int parse_ret = types.add_type(RTGeneric(option_def, opt_args))
+                                # Mirror Rust typecheck.rs:4481 — record the
+                                # Option[T] return type for the static
+                                # `<prim>.parse(...)` call at its outer span.
+                                types.expr_types.put(span_start, parse_ret)
+                                return parse_ret
                     else:
                         pass
             # .pop() / .remove() on Vector[T] → Option[T]
@@ -618,6 +623,11 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                     case RTGeneric(def_id, type_args):
                         DefInfo d = scopes.get_def(def_id)
                         if (d.name == "Task" or d.name == "Future") and type_args.len() >= 1:
+                            # Mirror Rust typecheck.rs:2026 — record the
+                            # inner expression's Task/Future TypeId so the
+                            # lowerer can recover the awaited generic shape
+                            # without re-inferring.
+                            types.expr_types.put((*inner).span.start, await_inner_type)
                             return get_int_at(type_args, 0)
                     else:
                         pass
@@ -628,6 +638,19 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             # and wrap the operand's inferred type.
             int sp_inner_type = infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, ctx)
             if sp_inner_type >= 0:
+                # Mirror Rust typecheck.rs:2049 — when the spawned inner
+                # is itself a Future[T] (typed call to an async fn), record
+                # the Future TypeId at the inner span so the lowerer can
+                # see the operand as Future-shaped before the Task wrap.
+                if sp_inner_type < types.types.len():
+                    ResolvedType sp_rt = get_rtype_at(types.types, sp_inner_type)
+                    match sp_rt:
+                        case RTGeneric(def_id, type_args):
+                            DefInfo d = scopes.get_def(def_id)
+                            if d.name == "Future" and type_args.len() == 1:
+                                types.expr_types.put((*inner).span.start, sp_inner_type)
+                        else:
+                            pass
                 if scopes.lookup("Task") is Some(task_def):
                     Vector[int] task_args = Vector[int]()
                     task_args.push(sp_inner_type)
