@@ -450,6 +450,7 @@ fn try_build_ir(
                 gorget::ir::ImplicitCloneReason::PatternExtraction => "pattern extraction",
                 gorget::ir::ImplicitCloneReason::ConsumingArg => "consuming argument",
                 gorget::ir::ImplicitCloneReason::CallArg => "call argument",
+                gorget::ir::ImplicitCloneReason::BorrowedExternReturn => "borrowed extern return",
             };
             entries.push((file, line, col, warn.type_name.clone(), reason));
         }

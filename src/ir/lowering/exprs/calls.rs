@@ -1336,7 +1336,42 @@ pub(super) fn lower_call(
             Operand::Constant(Constant::Unit)
         } else {
             let dst = ctx.call_tracked(builder, &call_name, lowered_args, ret_type);
-            FunctionBuilder::copy(dst)
+            // `extern borrowed T f(...)` — the callee returned a non-owning
+            // alias into FFI-owned storage. Materialize an independent owned
+            // copy at the call boundary so the caller's slot survives
+            // subsequent FFI state mutations that may invalidate the buffer
+            // (e.g. SDL_GetError, errno-style accessors, libc strerror).
+            //
+            // Mirrors the by-value-resource branch of `ensure_owned_at_boundary`:
+            // unregister the borrowed alias from drop tracking (its buffer
+            // belongs to the FFI; we must not free it), clone via the type's
+            // owned-clone routine, then register and set_owned on the clone.
+            //
+            // Keyed by the resolved C symbol (`call_name`) — the lowering
+            // pass at `mod.rs` inserts BOTH the Gorget name and the C symbol
+            // into `fn_returns_borrowed`, so either lookup hits.
+            if ctx.fn_returns_borrowed.contains(call_name.as_str()) {
+                if let Some(clone_fn) = ctx.clone_fn_for_ptr(ret_type) {
+                    ctx.drops.unregister(dst);
+                    ctx.warn_implicit_clone(
+                        callee.span,
+                        ret_type,
+                        crate::ir::ImplicitCloneReason::BorrowedExternReturn,
+                    );
+                    let cloned = builder.call(
+                        &clone_fn,
+                        vec![FunctionBuilder::copy(dst)],
+                        ret_type,
+                    );
+                    ctx.drops.register_local(cloned, ret_type, &ctx.type_registry);
+                    ctx.set_owned(builder, cloned);
+                    FunctionBuilder::copy(cloned)
+                } else {
+                    FunctionBuilder::copy(dst)
+                }
+            } else {
+                FunctionBuilder::copy(dst)
+            }
         };
 
         // MoveZero Move-ownership args.  The LIR's emit_post_call_zeros handles

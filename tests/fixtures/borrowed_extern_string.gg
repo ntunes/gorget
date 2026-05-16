@@ -1,0 +1,31 @@
+# `extern borrowed String` — the FFI returns a non-owning alias. The
+# compiler must auto-clone at the call boundary so the caller's slot
+# is an independently-owned buffer (drop-safe, mutation-survivable).
+#
+# Hook: `_test_borrowed_empty` binds to `gorget_str_empty`, a real
+# runtime fn that returns a Str view onto a static empty buffer. The
+# returned alias is harmless to clone (no heap copy needed), but the
+# clone-insertion logic still runs end-to-end:
+#   1. `call_tracked` registers the result for drop (raw alias).
+#   2. The `fn_returns_borrowed` post-call hook unregisters that and
+#      clones via `gorget_string_clone` into an owned local.
+#   3. The owned local participates in normal scope-exit drops.
+#
+# Without the auto-clone, the caller's slot would shallow-alias the
+# FFI buffer; subsequent FFI calls could invalidate it before the
+# caller reads. With the clone, the caller's slot is independently
+# owned regardless of what the FFI does next.
+#
+# This fixture confirms the clone path compiles, links, runs, and
+# the scope-exit drop doesn't crash (the clone IS a real
+# `gorget_string_clone` of the empty-Str sentinel).
+
+extern "C":
+    extern borrowed String _test_borrowed_empty() = "gorget_str_empty"
+
+void main():
+    String a = _test_borrowed_empty()
+    String b = _test_borrowed_empty()
+    print(f"len(a)={len(a)}")
+    print(f"len(b)={len(b)}")
+    print("done")

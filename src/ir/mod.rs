@@ -179,6 +179,11 @@ pub enum ImplicitCloneReason {
     ConsumingArg,
     /// Borrowed reference passed as argument to a function call
     CallArg,
+    /// Result of an `extern borrowed T f(...)` call — the FFI returned a
+    /// non-owning alias. The compiler clones at the call boundary so the
+    /// caller's slot survives subsequent FFI state mutations that may
+    /// invalidate the borrowed buffer.
+    BorrowedExternReturn,
 }
 
 impl std::fmt::Display for ImplicitCloneReason {
@@ -194,6 +199,7 @@ impl std::fmt::Display for ImplicitCloneReason {
             Self::PatternExtraction => write!(f, "pattern extracts resource field from borrowed scrutinee"),
             Self::ConsumingArg => write!(f, "consuming operation requires owned data"),
             Self::CallArg => write!(f, "borrowed reference cloned at call boundary"),
+            Self::BorrowedExternReturn => write!(f, "extern returns borrowed alias — cloned to caller-owned"),
         }
     }
 }

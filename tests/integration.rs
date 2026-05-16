@@ -3833,13 +3833,30 @@ true
 
 #[test]
 fn extern_borrowed() {
-    // Parser+AST acceptance test for `extern borrowed T f(...)`. The
-    // auto-clone consumer is a TODO; for now this fixture exercises the
-    // new qualifier with a primitive return type (no pointer involved),
-    // so the runtime behaviour matches a bare `extern int` declaration.
+    // Parser+AST acceptance test for `extern borrowed T f(...)`. For
+    // primitive return types the auto-clone is a no-op (no
+    // `clone_fn_for_ptr`), so this fixture verifies the parser+AST
+    // surface compiles and links without disrupting bare-`extern int`
+    // runtime behaviour.
     run_gg("extern_borrowed.gg", "\
 42
 10");
+}
+
+#[test]
+fn borrowed_extern_string() {
+    // `extern borrowed String` — verifies the call-site auto-clone fires
+    // when a borrowed-returning extern's result feeds a String binding.
+    // Binds to `gorget_str_empty` (returns the empty Str sentinel) so the
+    // post-call `gorget_string_clone` runs end-to-end against a real
+    // runtime fn. The clone normalises the borrowed alias into an owned
+    // local that scope-exit can drop without UAFing the static buffer.
+    // See `--show-clones` on this fixture for "borrowed extern return"
+    // entries at both call sites.
+    run_gg("borrowed_extern_string.gg", "\
+len(a)=0
+len(b)=0
+done");
 }
 
 #[test]
