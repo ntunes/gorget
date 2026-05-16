@@ -1198,6 +1198,41 @@ pub struct Block {
     pub terminator_span: Option<crate::span::Span>,
 }
 
+// ── Block helpers (stack-traces stage 1c) ───────────────────────────────────
+//
+// Span-aware mutation helpers. Every mutation of `insts` must also touch
+// `span_map` to preserve the `span_map.len() == insts.len()` invariant
+// Stage 1b's writer code establishes. Use these helpers in preference to
+// direct `block.insts.push(...)` so the parallel array stays in lockstep.
+impl Block {
+    /// Append an instruction with an explicit span (Stage 1b writers).
+    pub fn push_inst(&mut self, inst: Inst, span: Option<crate::span::Span>) {
+        self.insts.push(inst);
+        self.span_map.push(span);
+    }
+
+    /// Append an instruction with no source span (synthetic instructions
+    /// inserted by LIR-internal passes: SSA placeholders, drop scaffolding,
+    /// BIR expansion artefacts that don't correspond to a single GIR site).
+    pub fn push_synthetic(&mut self, inst: Inst) {
+        self.insts.push(inst);
+        self.span_map.push(None);
+    }
+
+    /// Insert at `idx`, also inserting `span` into `span_map` at the same
+    /// position. Use this for synthetic prepends (zero-init, drop-flag
+    /// init) where `span` is typically `None`.
+    pub fn insert_inst(
+        &mut self,
+        idx: usize,
+        inst: Inst,
+        span: Option<crate::span::Span>,
+    ) {
+        self.insts.insert(idx, inst);
+        self.span_map.insert(idx, span);
+    }
+}
+
 // ── Slots ───────────────────────────────────────────────────────────────────
 
 /// A named memory slot — the pre-SSA representation of a local variable.

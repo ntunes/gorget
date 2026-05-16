@@ -156,10 +156,18 @@ impl<'a> SsaBuilder<'a> {
     fn process_block(&mut self, bb: BlockId) {
         let block = &self.func.blocks[bb.0 as usize];
         let insts = block.insts.clone(); // clone to allow mutation
+        // Parallel-clone span_map; pre-1b blocks may have an empty span_map,
+        // in which case we treat every slot as `None` to keep the invariant.
+        let spans: Vec<Option<crate::span::Span>> = if block.span_map.len() == insts.len() {
+            block.span_map.clone()
+        } else {
+            vec![None; insts.len()]
+        };
 
         let mut new_insts = Vec::with_capacity(insts.len());
+        let mut new_spans: Vec<Option<crate::span::Span>> = Vec::with_capacity(insts.len());
 
-        for inst in &insts {
+        for (i, inst) in insts.iter().enumerate() {
             match inst {
                 Inst::SlotStore { slot, value, .. } if self.promotable.contains(slot) => {
                     // Resolve through substitution chain so current_def always
@@ -185,11 +193,19 @@ impl<'a> SsaBuilder<'a> {
                     // For non-promoted instructions, check if they store to a promoted slot
                     // (they shouldn't, but be safe).
                     new_insts.push(other.clone());
+                    new_spans.push(spans.get(i).copied().flatten());
                 }
             }
         }
 
+        // Note: `read_variable` may insert a zero-init at index 0 of this
+        // block during the loop above. The original code overwrites that
+        // by assigning `new_insts` here — we preserve the same semantics
+        // (any inserted instructions on `bb` itself are discarded by the
+        // assignment). Span_map is rebuilt in parallel so the invariant
+        // holds.
         self.func.blocks[bb.0 as usize].insts = new_insts;
+        self.func.blocks[bb.0 as usize].span_map = new_spans;
     }
 
     /// Chase value_subst chain to find the canonical (non-eliminated) value.
@@ -227,7 +243,7 @@ impl<'a> SsaBuilder<'a> {
                 LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef => Inst::NullPtr { dst: val },
                 _ => Inst::IConst { dst: val, ty: ty.clone(), value: 0 },
             };
-            self.func.blocks[bb.0 as usize].insts.insert(0, zero_inst);
+            self.func.blocks[bb.0 as usize].insert_inst(0, zero_inst, None);
             self.current_def.insert((bb, slot), val);
             val
         } else if preds.len() == 1 {
@@ -348,8 +364,7 @@ impl<'a> SsaBuilder<'a> {
                             let v = self.func.next_value();
                             let ty = self.func.slots[slot.0 as usize].ty.clone();
                             self.func.blocks[pred_bb.0 as usize]
-                                .insts
-                                .push(Inst::IConst { dst: v, ty, value: 0 });
+                                .push_synthetic(Inst::IConst { dst: v, ty, value: 0 });
                             v
                         })
                 }).collect();
@@ -378,8 +393,11 @@ impl<'a> SsaBuilder<'a> {
             // Entry block — undefined, use zero.
             let val = self.func.next_value();
             let ty = self.func.slots[slot.0 as usize].ty.clone();
-            self.func.blocks[bb.0 as usize].insts.insert(0,
-                Inst::IConst { dst: val, ty, value: 0 });
+            self.func.blocks[bb.0 as usize].insert_inst(
+                0,
+                Inst::IConst { dst: val, ty, value: 0 },
+                None,
+            );
             self.current_def.insert((bb, slot), val);
             return val;
         }

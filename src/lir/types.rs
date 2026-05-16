@@ -705,7 +705,10 @@ pub fn wire_collection_bridges(module: &mut LirModule) {
         kb.cmp(&ka)
     });
     for (fi, bi, idx, inst) in to_insert {
-        module.functions[fi].blocks[bi].insts.insert(idx, inst);
+        // SetCollectionBridge is a typed-derived synthesis (no source
+        // span); keep the parallel-array invariant by inserting a `None`
+        // span at the same index.
+        module.functions[fi].blocks[bi].insert_inst(idx, inst, None);
     }
 }
 

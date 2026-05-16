@@ -104,10 +104,27 @@ fn expand_func(
     let mut bb_idx = 0;
     while bb_idx < func.blocks.len() {
         let old = std::mem::take(&mut func.blocks[bb_idx].insts);
+        let old_spans_taken = std::mem::take(&mut func.blocks[bb_idx].span_map);
+        // Reconcile if upstream emitter didn't yet write parallel spans.
+        let old_spans: Vec<Option<crate::span::Span>> =
+            if old_spans_taken.len() == old.len() {
+                old_spans_taken
+            } else {
+                vec![None; old.len()]
+            };
         let mut new_insts: Vec<Inst> = Vec::with_capacity(old.len());
+        // Parallel span vec — grown in lockstep with `new_insts`. For
+        // 1-to-N source-to-target expansions inside the match below, all
+        // N target insts inherit the source inst's span (set after each
+        // arm by replicating `current_src_span` over the count added).
+        let mut new_spans: Vec<Option<crate::span::Span>> =
+            Vec::with_capacity(old.len());
         let mut iter = old.into_iter();
+        let mut spans_iter = old_spans.into_iter();
         let mut hof_split = false;
         while let Some(inst) = iter.next() {
+            let current_src_span = spans_iter.next().flatten();
+            let pre_push_len = new_insts.len();
             match inst {
                 Inst::SizeOf { dst, ty } => {
                     let value = c_sizeof_lir_type(&ty, structs) as i64;
@@ -397,11 +414,21 @@ fn expand_func(
                         | HofOp::SetFilter => {
                             // Capture the tail of the block; it moves to done_bb.
                             let remaining: Vec<Inst> = iter.by_ref().collect();
+                            // Parallel-capture the tail spans so done_bb's
+                            // span_map stays in sync. spans_iter is fed in
+                            // lockstep with `iter` so collecting both here
+                            // preserves alignment.
+                            let remaining_spans: Vec<Option<crate::span::Span>> =
+                                spans_iter.by_ref().collect();
                             let orig_term = std::mem::replace(
                                 &mut func.blocks[bb_idx].terminator,
                                 Term::Unreachable,
                             );
+                            let orig_term_span = std::mem::take(
+                                &mut func.blocks[bb_idx].terminator_span,
+                            );
                             func.blocks[bb_idx].insts = std::mem::take(&mut new_insts);
+                            func.blocks[bb_idx].span_map = std::mem::take(&mut new_spans);
                             match hof_op {
                                 HofOp::Each => expand_each(
                                     func,
@@ -413,7 +440,9 @@ fn expand_func(
                                     closure,
                                     closure_arg_abis,
                                     remaining,
+                                    remaining_spans,
                                     orig_term,
+                                    orig_term_span,
                                 ),
                                 HofOp::Any | HofOp::All => expand_any_all(
                                     func,
@@ -427,7 +456,9 @@ fn expand_func(
                                     closure_arg_abis,
                                     dst.expect("any/all must carry a dst ValueId"),
                                     remaining,
+                                    remaining_spans,
                                     orig_term,
+                                    orig_term_span,
                                 ),
                                 HofOp::Fold => expand_fold(
                                     func,
@@ -442,7 +473,9 @@ fn expand_func(
                                     init.expect("fold must carry an init ValueId"),
                                     dst.expect("fold must carry a dst ValueId"),
                                     remaining,
+                                    remaining_spans,
                                     orig_term,
+                                    orig_term_span,
                                 ),
                                 HofOp::Reduce => expand_reduce(
                                     func,
@@ -456,7 +489,9 @@ fn expand_func(
                                     closure_ret_ty,
                                     dst.expect("reduce must carry a dst ValueId"),
                                     remaining,
+                                    remaining_spans,
                                     orig_term,
+                                    orig_term_span,
                                 ),
                                 HofOp::Count => expand_count(
                                     func,
@@ -469,7 +504,9 @@ fn expand_func(
                                     closure_arg_abis,
                                     dst.expect("count must carry a dst ValueId"),
                                     remaining,
+                                    remaining_spans,
                                     orig_term,
+                                    orig_term_span,
                                 ),
                                 HofOp::FindIndex => expand_find_index(
                                     func,
@@ -482,7 +519,9 @@ fn expand_func(
                                     closure_arg_abis,
                                     dst.expect("find_index must carry a dst ValueId"),
                                     remaining,
+                                    remaining_spans,
                                     orig_term,
+                                    orig_term_span,
                                 ),
                                 HofOp::Filter => expand_filter(
                                     func,
@@ -495,7 +534,9 @@ fn expand_func(
                                     closure_arg_abis,
                                     dst.expect("filter must carry a dst ValueId"),
                                     remaining,
+                                    remaining_spans,
                                     orig_term,
+                                    orig_term_span,
                                 ),
                                 HofOp::Map => expand_map(
                                     func,
@@ -509,7 +550,9 @@ fn expand_func(
                                     closure_ret_ty,
                                     dst.expect("map must carry a dst ValueId"),
                                     remaining,
+                                    remaining_spans,
                                     orig_term,
+                                    orig_term_span,
                                 ),
                                 HofOp::FlatMap => expand_flat_map(
                                     func,
@@ -523,7 +566,9 @@ fn expand_func(
                                     closure_ret_ty,
                                     dst.expect("flat_map must carry a dst ValueId"),
                                     remaining,
+                                    remaining_spans,
                                     orig_term,
+                                    orig_term_span,
                                 ),
                                 HofOp::DictEach => {
                                     // For Dict, `element_ty` carries K and
@@ -543,7 +588,9 @@ fn expand_func(
                                         closure,
                                         closure_arg_abis,
                                         remaining,
+                                        remaining_spans,
                                         orig_term,
+                                        orig_term_span,
                                     );
                                 }
                                 HofOp::DictFold => {
@@ -564,7 +611,9 @@ fn expand_func(
                                         init.expect("DictFold must carry init"),
                                         dst.expect("DictFold must carry dst"),
                                         remaining,
+                                        remaining_spans,
                                         orig_term,
+                                        orig_term_span,
                                     );
                                 }
                                 HofOp::SetEach => {
@@ -586,7 +635,9 @@ fn expand_func(
                                         closure_arg_abis,
                                         is_ordered,
                                         remaining,
+                                        remaining_spans,
                                         orig_term,
+                                        orig_term_span,
                                     );
                                 }
                                 HofOp::SetFold => {
@@ -608,7 +659,9 @@ fn expand_func(
                                         dst.expect("SetFold must carry dst"),
                                         is_ordered,
                                         remaining,
+                                        remaining_spans,
                                         orig_term,
+                                        orig_term_span,
                                     );
                                 }
                                 HofOp::SetAny | HofOp::SetAll => {
@@ -629,7 +682,9 @@ fn expand_func(
                                         dst.expect("SetAny/All must carry dst"),
                                         is_ordered,
                                         remaining,
+                                        remaining_spans,
                                         orig_term,
+                                        orig_term_span,
                                     );
                                 }
                                 HofOp::SetFilter => {
@@ -649,7 +704,9 @@ fn expand_func(
                                         dst.expect("SetFilter must carry dst"),
                                         is_ordered,
                                         remaining,
+                                        remaining_spans,
                                         orig_term,
+                                        orig_term_span,
                                     );
                                 }
                                 HofOp::DictAny | HofOp::DictAll => {
@@ -669,7 +726,9 @@ fn expand_func(
                                         closure_arg_abis,
                                         dst.expect("DictAny/All must carry dst"),
                                         remaining,
+                                        remaining_spans,
                                         orig_term,
+                                        orig_term_span,
                                     );
                                 }
                                 HofOp::DictFilter => {
@@ -688,7 +747,9 @@ fn expand_func(
                                         closure_arg_abis,
                                         dst.expect("DictFilter must carry dst"),
                                         remaining,
+                                        remaining_spans,
                                         orig_term,
+                                        orig_term_span,
                                     );
                                 }
                                 HofOp::Find => {
@@ -727,7 +788,9 @@ fn expand_func(
                                         option_sid,
                                         d,
                                         remaining,
+                                        remaining_spans,
                                         orig_term,
+                                        orig_term_span,
                                     );
                                 }
                                 _ => unreachable!(),
@@ -814,9 +877,22 @@ fn expand_func(
                 }
                 other => new_insts.push(other),
             }
+            // Pad `new_spans` to match the number of insts the arm just
+            // appended to `new_insts`, all inheriting the source inst's
+            // span. For 1-to-N expansions every emitted inst points back
+            // at the originating source — the right default for trace
+            // attribution. The HOF arm transfers ownership of `new_insts`
+            // to the source block mid-iteration; the matching transfer
+            // for `new_spans` happens there and resets `pre_push_len`
+            // before this padding fires.
+            let added = new_insts.len().saturating_sub(pre_push_len);
+            for _ in 0..added {
+                new_spans.push(current_src_span);
+            }
         }
         if !hof_split {
             func.blocks[bb_idx].insts = new_insts;
+            func.blocks[bb_idx].span_map = new_spans;
         }
         bb_idx += 1;
     }
@@ -901,8 +977,7 @@ fn emit_hof_loop_scaffold(
     let start = start_counter.unwrap_or_else(|| {
         let z = alloc_value(next);
         func.block_mut(BlockId(current_bb as u32))
-            .insts
-            .push(Inst::IConst {
+            .push_synthetic(Inst::IConst {
                 dst: z,
                 ty: LirType::I64,
                 value: 0,
@@ -919,20 +994,20 @@ fn emit_hof_loop_scaffold(
 
     // check_bb: load GorgetArray.len and compare.
     let lenp = alloc_value(next);
-    func.block_mut(check_bb).insts.push(Inst::FieldPtr {
+    func.block_mut(check_bb).push_synthetic(Inst::FieldPtr {
         dst: lenp,
         base: coll,
         struct_id: gorget_array_sid,
         field: 2, // GorgetArray.len
     });
     let len = alloc_value(next);
-    func.block_mut(check_bb).insts.push(Inst::Load {
+    func.block_mut(check_bb).push_synthetic(Inst::Load {
         dst: len,
         ptr: lenp,
         ty: LirType::I64,
     });
     let cond = alloc_value(next);
-    func.block_mut(check_bb).insts.push(Inst::Cmp {
+    func.block_mut(check_bb).push_synthetic(Inst::Cmp {
         dst: cond,
         op: CmpOp::Lt,
         lhs: i_val,
@@ -942,21 +1017,21 @@ fn emit_hof_loop_scaffold(
 
     // body_bb: get data ptr and element ptr.
     let datap_ptr = alloc_value(next);
-    func.block_mut(body_bb).insts.push(Inst::FieldPtr {
+    func.block_mut(body_bb).push_synthetic(Inst::FieldPtr {
         dst: datap_ptr,
         base: coll,
         struct_id: gorget_array_sid,
         field: 0, // GorgetArray.data
     });
     let datap = alloc_value(next);
-    func.block_mut(body_bb).insts.push(Inst::Load {
+    func.block_mut(body_bb).push_synthetic(Inst::Load {
         dst: datap,
         ptr: datap_ptr,
         ty: LirType::Ptr,
     });
     let elem_size = c_sizeof_lir_type(element_ty, structs) as u32;
     let elemp = alloc_value(next);
-    func.block_mut(body_bb).insts.push(Inst::ElemPtr {
+    func.block_mut(body_bb).push_synthetic(Inst::ElemPtr {
         dst: elemp,
         base: datap,
         index: i_val,
@@ -975,7 +1050,7 @@ fn emit_hof_loop_scaffold(
         elemp
     } else {
         let e = alloc_value(next);
-        func.block_mut(body_bb).insts.push(Inst::Load {
+        func.block_mut(body_bb).push_synthetic(Inst::Load {
             dst: e,
             ptr: elemp,
             ty: element_ty.clone(),
@@ -991,12 +1066,12 @@ fn emit_hof_loop_scaffold(
     // Precompute next_i = i + 1.
     let next_i = alloc_value(next);
     let one = alloc_value(next);
-    func.block_mut(body_bb).insts.push(Inst::IConst {
+    func.block_mut(body_bb).push_synthetic(Inst::IConst {
         dst: one,
         ty: LirType::I64,
         value: 1,
     });
-    func.block_mut(body_bb).insts.push(Inst::Add {
+    func.block_mut(body_bb).push_synthetic(Inst::Add {
         dst: next_i,
         ty: LirType::I64,
         lhs: i_val,
@@ -1045,7 +1120,9 @@ fn expand_each(
     closure: ValueId,
     closure_arg_abis: Vec<crate::ir::abi::AbiKind>,
     remaining: Vec<Inst>,
+    remaining_spans: Vec<Option<crate::span::Span>>,
     orig_term: Term,
+    orig_term_span: Option<crate::span::Span>,
 ) {
     let elem_abi_hint = closure_arg_abis.first().copied();
     let ctx = emit_hof_loop_scaffold(
@@ -1061,7 +1138,7 @@ fn expand_each(
     );
 
     // body_bb: CallClosure(closure, [elem]) returning Void.
-    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+    func.block_mut(ctx.body_bb).push_synthetic(Inst::CallClosure {
         dst: None,
         kind: crate::lir::ClosureDispatchKind::EscapedClosure,
         closure,
@@ -1084,8 +1161,19 @@ fn expand_each(
         Term::Jump(ctx.check_bb, vec![ctx.next_i]);
 
     // done_bb: move the tail of the original block here.
-    func.block_mut(ctx.done_bb).insts = remaining;
-    func.block_mut(ctx.done_bb).terminator = orig_term;
+    let done = ctx.done_bb;
+    let pre_len = func.block(done).insts.len();
+    let pre_spans_len = func.block(done).span_map.len();
+    func.block_mut(done).insts = remaining;
+    // Synthetic scaffold insts already pushed into done_bb (e.g. a
+    // SlotLoad of the result) keep their existing `None` spans; tail
+    // insts inherit the spans we captured from the original block.
+    let mut combined_spans: Vec<Option<crate::span::Span>> =
+        if pre_spans_len == pre_len { func.block(done).span_map.clone() } else { vec![None; pre_len] };
+    combined_spans.extend(remaining_spans);
+    func.block_mut(done).span_map = combined_spans;
+    func.block_mut(done).terminator = orig_term;
+    func.block_mut(done).terminator_span = orig_term_span;
 }
 
 /// Expand `HofExpand { hof_op: Any | All, dst, … }` into an explicit loop
@@ -1113,7 +1201,9 @@ fn expand_any_all(
     closure_arg_abis: Vec<crate::ir::abi::AbiKind>,
     dst: ValueId,
     remaining: Vec<Inst>,
+    remaining_spans: Vec<Option<crate::span::Span>>,
     orig_term: Term,
+    orig_term_span: Option<crate::span::Span>,
 ) {
     let is_any = matches!(op, HofOp::Any);
     // Resolve the dst's declared type. value_types is populated after SSA
@@ -1140,7 +1230,7 @@ fn expand_any_all(
 
     // body_bb: CallClosure(closure, [elem]) returning Bool.
     let pred = alloc_value(next);
-    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+    func.block_mut(ctx.body_bb).push_synthetic(Inst::CallClosure {
         dst: Some(pred),
         kind: crate::lir::ClosureDispatchKind::EscapedClosure,
         closure,
@@ -1172,9 +1262,19 @@ fn expand_any_all(
     let cont_bb = func.add_block();
 
     // done_bb(result: dst_ty): <remaining> <orig_term>
-    func.block_mut(ctx.done_bb).params.push((dst, dst_ty.clone()));
-    func.block_mut(ctx.done_bb).insts = remaining;
-    func.block_mut(ctx.done_bb).terminator = orig_term;
+    let done = ctx.done_bb;
+    let pre_len = func.block(done).insts.len();
+    let pre_spans_len = func.block(done).span_map.len();
+    func.block_mut(done).params.push((dst, dst_ty.clone()));
+    func.block_mut(done).insts = remaining;
+    // Synthetic scaffold insts already pushed into done_bb keep their
+    // existing `None` spans; tail insts inherit the captured source spans.
+    let mut combined_spans: Vec<Option<crate::span::Span>> =
+        if pre_spans_len == pre_len { func.block(done).span_map.clone() } else { vec![None; pre_len] };
+    combined_spans.extend(remaining_spans);
+    func.block_mut(done).span_map = combined_spans;
+    func.block_mut(done).terminator = orig_term;
+    func.block_mut(done).terminator_span = orig_term_span;
 
     // Synthesize the "early" constant. We park it in the current block
     // so both branches that reach done_bb can read the same ValueId.
@@ -1188,10 +1288,10 @@ fn expand_any_all(
     // `fall` at the top of check_bb (before the Cmp).
     // The scaffold already ran, so we insert into the back of the blocks
     // (before their terminators which are still unset).
-    func.block_mut(ctx.body_bb).insts.push(const_inst(early, early_value));
+    func.block_mut(ctx.body_bb).push_synthetic(const_inst(early, early_value));
     // check_bb already has insts (FieldPtr, Load, Cmp). Append `fall`
     // before we set its terminator.
-    func.block_mut(ctx.check_bb).insts.push(const_inst(fall, fall_value));
+    func.block_mut(ctx.check_bb).push_synthetic(const_inst(fall, fall_value));
 
     // check_bb: cond ? body_bb : done_bb(fall)
     func.block_mut(ctx.check_bb).terminator = Term::Branch {
@@ -1254,7 +1354,9 @@ fn expand_fold(
     init: ValueId,
     dst: ValueId,
     remaining: Vec<Inst>,
+    remaining_spans: Vec<Option<crate::span::Span>>,
     orig_term: Term,
+    orig_term_span: Option<crate::span::Span>,
 ) {
     // For fold, closure signature is (acc, elem). Acc is at index 0, elem
     // at index 1 in `closure_arg_abis`.
@@ -1287,7 +1389,7 @@ fn expand_fold(
         // `while bb_idx < ...` outer loop advances to process new blocks,
         // we invoke the expansion directly via the canonical op.
         let p = alloc_value(next);
-        func.block_mut(ctx.body_bb).insts.push(Inst::AddressOf {
+        func.block_mut(ctx.body_bb).push_synthetic(Inst::AddressOf {
             dst: p,
             value: acc_val,
             ty: closure_ret_ty.clone(),
@@ -1304,7 +1406,7 @@ fn expand_fold(
 
     // body_bb: CallClosure(closure, [acc, elem]) → new_acc.
     let new_acc = alloc_value(next);
-    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+    func.block_mut(ctx.body_bb).push_synthetic(Inst::CallClosure {
         dst: Some(new_acc),
         kind: crate::lir::ClosureDispatchKind::EscapedClosure,
         closure,
@@ -1328,8 +1430,19 @@ fn expand_fold(
 
     // done_bb(result = dst): remaining + orig_term.
     func.block_mut(ctx.done_bb).params.push((dst, closure_ret_ty));
-    func.block_mut(ctx.done_bb).insts = remaining;
-    func.block_mut(ctx.done_bb).terminator = orig_term;
+    let done = ctx.done_bb;
+    let pre_len = func.block(done).insts.len();
+    let pre_spans_len = func.block(done).span_map.len();
+    func.block_mut(done).insts = remaining;
+    // Synthetic scaffold insts already pushed into done_bb (e.g. a
+    // SlotLoad of the result) keep their existing `None` spans; tail
+    // insts inherit the spans we captured from the original block.
+    let mut combined_spans: Vec<Option<crate::span::Span>> =
+        if pre_spans_len == pre_len { func.block(done).span_map.clone() } else { vec![None; pre_len] };
+    combined_spans.extend(remaining_spans);
+    func.block_mut(done).span_map = combined_spans;
+    func.block_mut(done).terminator = orig_term;
+    func.block_mut(done).terminator_span = orig_term_span;
 }
 
 /// Expand `HofExpand { hof_op: Reduce, dst, … }` — like `fold` but the
@@ -1353,7 +1466,9 @@ fn expand_reduce(
     closure_ret_ty: LirType,
     dst: ValueId,
     remaining: Vec<Inst>,
+    remaining_spans: Vec<Option<crate::span::Span>>,
     orig_term: Term,
+    orig_term_span: Option<crate::span::Span>,
 ) {
     let gorget_array_sid =
         lookup_struct_id(structs, "GorgetArray").unwrap_or(StructId(0));
@@ -1364,8 +1479,7 @@ fn expand_reduce(
     //   i0 = 1_i64
     let datap_ptr = alloc_value(next);
     func.block_mut(BlockId(current_bb as u32))
-        .insts
-        .push(Inst::FieldPtr {
+        .push_synthetic(Inst::FieldPtr {
             dst: datap_ptr,
             base: coll,
             struct_id: gorget_array_sid,
@@ -1373,8 +1487,7 @@ fn expand_reduce(
         });
     let datap = alloc_value(next);
     func.block_mut(BlockId(current_bb as u32))
-        .insts
-        .push(Inst::Load {
+        .push_synthetic(Inst::Load {
             dst: datap,
             ptr: datap_ptr,
             ty: LirType::Ptr,
@@ -1382,16 +1495,14 @@ fn expand_reduce(
     let elem_size = c_sizeof_lir_type(&element_ty, structs) as u32;
     let zero_i64 = alloc_value(next);
     func.block_mut(BlockId(current_bb as u32))
-        .insts
-        .push(Inst::IConst {
+        .push_synthetic(Inst::IConst {
             dst: zero_i64,
             ty: LirType::I64,
             value: 0,
         });
     let first_ptr = alloc_value(next);
     func.block_mut(BlockId(current_bb as u32))
-        .insts
-        .push(Inst::ElemPtr {
+        .push_synthetic(Inst::ElemPtr {
             dst: first_ptr,
             base: datap,
             index: zero_i64,
@@ -1399,16 +1510,14 @@ fn expand_reduce(
         });
     let first_elem = alloc_value(next);
     func.block_mut(BlockId(current_bb as u32))
-        .insts
-        .push(Inst::Load {
+        .push_synthetic(Inst::Load {
             dst: first_elem,
             ptr: first_ptr,
             ty: element_ty.clone(),
         });
     let one_i64 = alloc_value(next);
     func.block_mut(BlockId(current_bb as u32))
-        .insts
-        .push(Inst::IConst {
+        .push_synthetic(Inst::IConst {
             dst: one_i64,
             ty: LirType::I64,
             value: 1,
@@ -1439,7 +1548,7 @@ fn expand_reduce(
     };
     let acc_arg = if acc_by_ptr {
         let p = alloc_value(next);
-        func.block_mut(ctx.body_bb).insts.push(Inst::AddressOf {
+        func.block_mut(ctx.body_bb).push_synthetic(Inst::AddressOf {
             dst: p,
             value: acc_val,
             ty: closure_ret_ty.clone(),
@@ -1455,7 +1564,7 @@ fn expand_reduce(
     };
 
     let new_acc = alloc_value(next);
-    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+    func.block_mut(ctx.body_bb).push_synthetic(Inst::CallClosure {
         dst: Some(new_acc),
         kind: crate::lir::ClosureDispatchKind::EscapedClosure,
         closure,
@@ -1474,8 +1583,19 @@ fn expand_reduce(
     func.block_mut(ctx.body_bb).terminator =
         Term::Jump(ctx.check_bb, vec![ctx.next_i, new_acc]);
     func.block_mut(ctx.done_bb).params.push((dst, closure_ret_ty));
-    func.block_mut(ctx.done_bb).insts = remaining;
-    func.block_mut(ctx.done_bb).terminator = orig_term;
+    let done = ctx.done_bb;
+    let pre_len = func.block(done).insts.len();
+    let pre_spans_len = func.block(done).span_map.len();
+    func.block_mut(done).insts = remaining;
+    // Synthetic scaffold insts already pushed into done_bb (e.g. a
+    // SlotLoad of the result) keep their existing `None` spans; tail
+    // insts inherit the spans we captured from the original block.
+    let mut combined_spans: Vec<Option<crate::span::Span>> =
+        if pre_spans_len == pre_len { func.block(done).span_map.clone() } else { vec![None; pre_len] };
+    combined_spans.extend(remaining_spans);
+    func.block_mut(done).span_map = combined_spans;
+    func.block_mut(done).terminator = orig_term;
+    func.block_mut(done).terminator_span = orig_term_span;
 }
 
 /// Expand `HofExpand { hof_op: Count, dst, … }` — count elements for
@@ -1497,15 +1617,16 @@ fn expand_count(
     closure_arg_abis: Vec<crate::ir::abi::AbiKind>,
     dst: ValueId,
     remaining: Vec<Inst>,
+    remaining_spans: Vec<Option<crate::span::Span>>,
     orig_term: Term,
+    orig_term_span: Option<crate::span::Span>,
 ) {
     let elem_abi_hint = closure_arg_abis.first().copied();
 
     // Accumulator init = 0_i64. Park the constant in current_bb.
     let zero = alloc_value(next);
     func.block_mut(BlockId(current_bb as u32))
-        .insts
-        .push(Inst::IConst {
+        .push_synthetic(Inst::IConst {
             dst: zero,
             ty: LirType::I64,
             value: 0,
@@ -1526,7 +1647,7 @@ fn expand_count(
 
     // body_bb: CallClosure(closure, [elem]) → pred: Bool.
     let pred = alloc_value(next);
-    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+    func.block_mut(ctx.body_bb).push_synthetic(Inst::CallClosure {
         dst: Some(pred),
         kind: crate::lir::ClosureDispatchKind::EscapedClosure,
         closure,
@@ -1536,14 +1657,14 @@ fn expand_count(
     });
     // inc = (i64) pred.
     let inc = alloc_value(next);
-    func.block_mut(ctx.body_bb).insts.push(Inst::IntCast {
+    func.block_mut(ctx.body_bb).push_synthetic(Inst::IntCast {
         dst: inc,
         value: pred,
         to: LirType::I64,
     });
     // cnt_new = cnt + inc.
     let cnt_new = alloc_value(next);
-    func.block_mut(ctx.body_bb).insts.push(Inst::Add {
+    func.block_mut(ctx.body_bb).push_synthetic(Inst::Add {
         dst: cnt_new,
         ty: LirType::I64,
         lhs: cnt_val,
@@ -1564,8 +1685,19 @@ fn expand_count(
         Term::Jump(ctx.check_bb, vec![ctx.next_i, cnt_new]);
     // done_bb: param = dst.
     func.block_mut(ctx.done_bb).params.push((dst, LirType::I64));
-    func.block_mut(ctx.done_bb).insts = remaining;
-    func.block_mut(ctx.done_bb).terminator = orig_term;
+    let done = ctx.done_bb;
+    let pre_len = func.block(done).insts.len();
+    let pre_spans_len = func.block(done).span_map.len();
+    func.block_mut(done).insts = remaining;
+    // Synthetic scaffold insts already pushed into done_bb (e.g. a
+    // SlotLoad of the result) keep their existing `None` spans; tail
+    // insts inherit the spans we captured from the original block.
+    let mut combined_spans: Vec<Option<crate::span::Span>> =
+        if pre_spans_len == pre_len { func.block(done).span_map.clone() } else { vec![None; pre_len] };
+    combined_spans.extend(remaining_spans);
+    func.block_mut(done).span_map = combined_spans;
+    func.block_mut(done).terminator = orig_term;
+    func.block_mut(done).terminator_span = orig_term_span;
 }
 
 /// Expand `HofExpand { hof_op: FindIndex, dst, … }` — returns the index of
@@ -1586,7 +1718,9 @@ fn expand_find_index(
     closure_arg_abis: Vec<crate::ir::abi::AbiKind>,
     dst: ValueId,
     remaining: Vec<Inst>,
+    remaining_spans: Vec<Option<crate::span::Span>>,
     orig_term: Term,
+    orig_term_span: Option<crate::span::Span>,
 ) {
     let elem_abi_hint = closure_arg_abis.first().copied();
     let ctx = emit_hof_loop_scaffold(
@@ -1603,7 +1737,7 @@ fn expand_find_index(
 
     // body_bb: CallClosure(closure, [elem]) → pred: Bool.
     let pred = alloc_value(next);
-    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+    func.block_mut(ctx.body_bb).push_synthetic(Inst::CallClosure {
         dst: Some(pred),
         kind: crate::lir::ClosureDispatchKind::EscapedClosure,
         closure,
@@ -1614,7 +1748,7 @@ fn expand_find_index(
 
     // Sentinel `-1` produced in check_bb (taken on exhaustion).
     let neg_one = alloc_value(next);
-    func.block_mut(ctx.check_bb).insts.push(Inst::IConst {
+    func.block_mut(ctx.check_bb).push_synthetic(Inst::IConst {
         dst: neg_one,
         ty: LirType::I64,
         value: -1,
@@ -1645,8 +1779,19 @@ fn expand_find_index(
 
     // done_bb(result: i64): remaining + orig_term.
     func.block_mut(ctx.done_bb).params.push((dst, LirType::I64));
-    func.block_mut(ctx.done_bb).insts = remaining;
-    func.block_mut(ctx.done_bb).terminator = orig_term;
+    let done = ctx.done_bb;
+    let pre_len = func.block(done).insts.len();
+    let pre_spans_len = func.block(done).span_map.len();
+    func.block_mut(done).insts = remaining;
+    // Synthetic scaffold insts already pushed into done_bb (e.g. a
+    // SlotLoad of the result) keep their existing `None` spans; tail
+    // insts inherit the spans we captured from the original block.
+    let mut combined_spans: Vec<Option<crate::span::Span>> =
+        if pre_spans_len == pre_len { func.block(done).span_map.clone() } else { vec![None; pre_len] };
+    combined_spans.extend(remaining_spans);
+    func.block_mut(done).span_map = combined_spans;
+    func.block_mut(done).terminator = orig_term;
+    func.block_mut(done).terminator_span = orig_term_span;
 }
 
 /// Expand `HofExpand { hof_op: Find, dst, … }` — returns `Some(elem)` for
@@ -1674,7 +1819,9 @@ fn expand_find(
     option_sid: StructId,
     dst: ValueId,
     remaining: Vec<Inst>,
+    remaining_spans: Vec<Option<crate::span::Span>>,
     orig_term: Term,
+    orig_term_span: Option<crate::span::Span>,
 ) {
     // Allocate the Option[T] result slot.
     let option_ty = LirType::Struct(option_sid);
@@ -1685,24 +1832,24 @@ fn expand_find(
     // rather than Inst::EnumInit — the BIR pass won't re-scan current_bb
     // for canonical ops after this point.
     let out_addr = alloc_value(next);
-    func.block_mut(cur).insts.push(Inst::SlotAddr {
+    func.block_mut(cur).push_synthetic(Inst::SlotAddr {
         dst: out_addr,
         slot: option_slot,
     });
     let tag_ptr0 = alloc_value(next);
-    func.block_mut(cur).insts.push(Inst::FieldPtr {
+    func.block_mut(cur).push_synthetic(Inst::FieldPtr {
         dst: tag_ptr0,
         base: out_addr,
         struct_id: option_sid,
         field: 0,
     });
     let none_tag = alloc_value(next);
-    func.block_mut(cur).insts.push(Inst::IConst {
+    func.block_mut(cur).push_synthetic(Inst::IConst {
         dst: none_tag,
         ty: LirType::I32,
         value: 1, // None
     });
-    func.block_mut(cur).insts.push(Inst::Store {
+    func.block_mut(cur).push_synthetic(Inst::Store {
         ptr: tag_ptr0,
         value: none_tag,
     });
@@ -1722,7 +1869,7 @@ fn expand_find(
 
     // body_bb: CallClosure(closure, [elem]) → pred: Bool.
     let pred = alloc_value(next);
-    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+    func.block_mut(ctx.body_bb).push_synthetic(Inst::CallClosure {
         dst: Some(pred),
         kind: crate::lir::ClosureDispatchKind::EscapedClosure,
         closure,
@@ -1758,24 +1905,24 @@ fn expand_find(
     // the struct bytes, only the pointer. This is why find was
     // scalar-only before.
     let tag_ptr1 = alloc_value(next);
-    func.block_mut(found_bb).insts.push(Inst::FieldPtr {
+    func.block_mut(found_bb).push_synthetic(Inst::FieldPtr {
         dst: tag_ptr1,
         base: out_addr,
         struct_id: option_sid,
         field: 0,
     });
     let some_tag = alloc_value(next);
-    func.block_mut(found_bb).insts.push(Inst::IConst {
+    func.block_mut(found_bb).push_synthetic(Inst::IConst {
         dst: some_tag,
         ty: LirType::I32,
         value: 0, // Some
     });
-    func.block_mut(found_bb).insts.push(Inst::Store {
+    func.block_mut(found_bb).push_synthetic(Inst::Store {
         ptr: tag_ptr1,
         value: some_tag,
     });
     let pay_ptr = alloc_value(next);
-    func.block_mut(found_bb).insts.push(Inst::FieldPtr {
+    func.block_mut(found_bb).push_synthetic(Inst::FieldPtr {
         dst: pay_ptr,
         base: out_addr,
         struct_id: option_sid,
@@ -1784,18 +1931,18 @@ fn expand_find(
     if element_ty.is_aggregate() {
         let size = c_sizeof_lir_type(&element_ty, structs) as i64;
         let size_val = alloc_value(next);
-        func.block_mut(found_bb).insts.push(Inst::IConst {
+        func.block_mut(found_bb).push_synthetic(Inst::IConst {
             dst: size_val,
             ty: LirType::I64,
             value: size,
         });
-        func.block_mut(found_bb).insts.push(Inst::Memcpy {
+        func.block_mut(found_bb).push_synthetic(Inst::Memcpy {
             dst_ptr: pay_ptr,
             src_ptr: ctx.elem_ptr,
             size: size_val,
         });
     } else {
-        func.block_mut(found_bb).insts.push(Inst::Store {
+        func.block_mut(found_bb).push_synthetic(Inst::Store {
             ptr: pay_ptr,
             value: ctx.elem_arg,
         });
@@ -1806,15 +1953,36 @@ fn expand_find(
     func.block_mut(cont_bb).terminator = Term::Jump(ctx.check_bb, vec![ctx.next_i]);
 
     // done_bb: SlotLoad the option result into dst.
-    func.block_mut(ctx.done_bb).insts.push(Inst::SlotLoad {
+    func.block_mut(ctx.done_bb).push_synthetic(Inst::SlotLoad {
         dst,
         slot: option_slot,
         ty: option_ty,
     });
-    func.block_mut(ctx.done_bb)
-        .insts
-        .extend(remaining);
+    func.block_mut(ctx.done_bb).insts.extend(remaining);
+    // Mirror the extend on `span_map` so the parallel-array invariant
+    // holds — `done_bb` already has spans for synthetic scaffold insts
+    // pushed by this expander; appending `remaining_spans` aligns the
+    // tail with the corresponding `remaining` insts.
+    {
+        let done = ctx.done_bb;
+        let new_len = func.block(done).insts.len();
+        if func.block(done).span_map.len() < new_len {
+            // Pre-extend span_map to a clean parallel state if it had
+            // drifted, then extend with remaining_spans.
+            let cur_len = func.block(done).span_map.len();
+            let scaffold_len = new_len - remaining_spans.len();
+            if cur_len < scaffold_len {
+                func.block_mut(done)
+                    .span_map
+                    .resize(scaffold_len, None);
+            }
+            func.block_mut(done).span_map.extend(remaining_spans);
+        } else {
+            func.block_mut(done).span_map.extend(remaining_spans);
+        }
+    }
     func.block_mut(ctx.done_bb).terminator = orig_term;
+    func.block_mut(ctx.done_bb).terminator_span = orig_term_span;
 }
 
 /// Expand `HofExpand { hof_op: Filter, dst, … }` — build a fresh
@@ -1838,7 +2006,9 @@ fn expand_filter(
     closure_arg_abis: Vec<crate::ir::abi::AbiKind>,
     dst: ValueId,
     remaining: Vec<Inst>,
+    remaining_spans: Vec<Option<crate::span::Span>>,
     orig_term: Term,
+    orig_term_span: Option<crate::span::Span>,
 ) {
     let garray_sid = lookup_struct_id(structs, "GorgetArray").unwrap_or(StructId(0));
     let garray_ty = LirType::Struct(garray_sid);
@@ -1848,19 +2018,19 @@ fn expand_filter(
     let result_slot = func.add_slot(garray_ty.clone(), None);
     let elem_size_val = alloc_value(next);
     let elem_size = c_sizeof_lir_type(&element_ty, structs) as i64;
-    func.block_mut(cur).insts.push(Inst::IConst {
+    func.block_mut(cur).push_synthetic(Inst::IConst {
         dst: elem_size_val,
         ty: LirType::I64,
         value: elem_size,
     });
     let arr_val = alloc_value(next);
-    func.block_mut(cur).insts.push(Inst::CallExtern {
+    func.block_mut(cur).push_synthetic(Inst::CallExtern {
         dst: Some(arr_val),
         name: "gorget_array_new".to_string(),
         args: vec![elem_size_val],
         arg_abis: vec![crate::ir::abi::AbiKind::Scalar],
     });
-    func.block_mut(cur).insts.push(Inst::SlotStore {
+    func.block_mut(cur).push_synthetic(Inst::SlotStore {
         slot: result_slot,
         value: arr_val,
         is_move: true,
@@ -1881,7 +2051,7 @@ fn expand_filter(
 
     // body_bb: CallClosure(closure, [elem]) → pred: Bool.
     let pred = alloc_value(next);
-    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+    func.block_mut(ctx.body_bb).push_synthetic(Inst::CallClosure {
         dst: Some(pred),
         kind: crate::lir::ClosureDispatchKind::EscapedClosure,
         closure,
@@ -1912,11 +2082,11 @@ fn expand_filter(
 
     // push_bb: push elem_ptr into the result array.
     let result_addr = alloc_value(next);
-    func.block_mut(push_bb).insts.push(Inst::SlotAddr {
+    func.block_mut(push_bb).push_synthetic(Inst::SlotAddr {
         dst: result_addr,
         slot: result_slot,
     });
-    func.block_mut(push_bb).insts.push(Inst::CallExtern {
+    func.block_mut(push_bb).push_synthetic(Inst::CallExtern {
         dst: None,
         name: "gorget_array_push".to_string(),
         args: vec![result_addr, ctx.elem_ptr],
@@ -1931,13 +2101,36 @@ fn expand_filter(
     func.block_mut(cont_bb).terminator = Term::Jump(ctx.check_bb, vec![ctx.next_i]);
 
     // done_bb: SlotLoad the result array into dst + remaining + orig_term.
-    func.block_mut(ctx.done_bb).insts.push(Inst::SlotLoad {
+    func.block_mut(ctx.done_bb).push_synthetic(Inst::SlotLoad {
         dst,
         slot: result_slot,
         ty: garray_ty,
     });
     func.block_mut(ctx.done_bb).insts.extend(remaining);
+    // Mirror the extend on `span_map` so the parallel-array invariant
+    // holds — `done_bb` already has spans for synthetic scaffold insts
+    // pushed by this expander; appending `remaining_spans` aligns the
+    // tail with the corresponding `remaining` insts.
+    {
+        let done = ctx.done_bb;
+        let new_len = func.block(done).insts.len();
+        if func.block(done).span_map.len() < new_len {
+            // Pre-extend span_map to a clean parallel state if it had
+            // drifted, then extend with remaining_spans.
+            let cur_len = func.block(done).span_map.len();
+            let scaffold_len = new_len - remaining_spans.len();
+            if cur_len < scaffold_len {
+                func.block_mut(done)
+                    .span_map
+                    .resize(scaffold_len, None);
+            }
+            func.block_mut(done).span_map.extend(remaining_spans);
+        } else {
+            func.block_mut(done).span_map.extend(remaining_spans);
+        }
+    }
     func.block_mut(ctx.done_bb).terminator = orig_term;
+    func.block_mut(ctx.done_bb).terminator_span = orig_term_span;
 }
 
 /// Expand `HofExpand { hof_op: Map, dst, … }` — build a fresh
@@ -1969,7 +2162,9 @@ fn expand_map(
     closure_ret_ty: LirType,
     dst: ValueId,
     remaining: Vec<Inst>,
+    remaining_spans: Vec<Option<crate::span::Span>>,
     orig_term: Term,
+    orig_term_span: Option<crate::span::Span>,
 ) {
     let garray_sid = lookup_struct_id(structs, "GorgetArray").unwrap_or(StructId(0));
     let garray_ty = LirType::Struct(garray_sid);
@@ -1980,19 +2175,19 @@ fn expand_map(
     let result_slot = func.add_slot(garray_ty.clone(), None);
     let ret_sz = c_sizeof_lir_type(&closure_ret_ty, structs) as i64;
     let ret_sz_val = alloc_value(next);
-    func.block_mut(cur).insts.push(Inst::IConst {
+    func.block_mut(cur).push_synthetic(Inst::IConst {
         dst: ret_sz_val,
         ty: LirType::I64,
         value: ret_sz,
     });
     let arr_val = alloc_value(next);
-    func.block_mut(cur).insts.push(Inst::CallExtern {
+    func.block_mut(cur).push_synthetic(Inst::CallExtern {
         dst: Some(arr_val),
         name: "gorget_array_new".to_string(),
         args: vec![ret_sz_val],
         arg_abis: vec![crate::ir::abi::AbiKind::Scalar],
     });
-    func.block_mut(cur).insts.push(Inst::SlotStore {
+    func.block_mut(cur).push_synthetic(Inst::SlotStore {
         slot: result_slot,
         value: arr_val,
         is_move: true,
@@ -2013,7 +2208,7 @@ fn expand_map(
 
     // body_bb: call closure → new_elem; AddressOf new_elem; push.
     let new_elem = alloc_value(next);
-    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+    func.block_mut(ctx.body_bb).push_synthetic(Inst::CallClosure {
         dst: Some(new_elem),
         kind: crate::lir::ClosureDispatchKind::EscapedClosure,
         closure,
@@ -2022,17 +2217,17 @@ fn expand_map(
         ret_ty: closure_ret_ty.clone(),
     });
     let new_elem_ptr = alloc_value(next);
-    func.block_mut(ctx.body_bb).insts.push(Inst::AddressOf {
+    func.block_mut(ctx.body_bb).push_synthetic(Inst::AddressOf {
         dst: new_elem_ptr,
         value: new_elem,
         ty: closure_ret_ty,
     });
     let result_addr = alloc_value(next);
-    func.block_mut(ctx.body_bb).insts.push(Inst::SlotAddr {
+    func.block_mut(ctx.body_bb).push_synthetic(Inst::SlotAddr {
         dst: result_addr,
         slot: result_slot,
     });
-    func.block_mut(ctx.body_bb).insts.push(Inst::CallExtern {
+    func.block_mut(ctx.body_bb).push_synthetic(Inst::CallExtern {
         dst: None,
         name: "gorget_array_push".to_string(),
         args: vec![result_addr, new_elem_ptr],
@@ -2055,13 +2250,36 @@ fn expand_map(
         Term::Jump(ctx.check_bb, vec![ctx.next_i]);
 
     // done_bb: SlotLoad result into dst + remaining + orig_term.
-    func.block_mut(ctx.done_bb).insts.push(Inst::SlotLoad {
+    func.block_mut(ctx.done_bb).push_synthetic(Inst::SlotLoad {
         dst,
         slot: result_slot,
         ty: garray_ty,
     });
     func.block_mut(ctx.done_bb).insts.extend(remaining);
+    // Mirror the extend on `span_map` so the parallel-array invariant
+    // holds — `done_bb` already has spans for synthetic scaffold insts
+    // pushed by this expander; appending `remaining_spans` aligns the
+    // tail with the corresponding `remaining` insts.
+    {
+        let done = ctx.done_bb;
+        let new_len = func.block(done).insts.len();
+        if func.block(done).span_map.len() < new_len {
+            // Pre-extend span_map to a clean parallel state if it had
+            // drifted, then extend with remaining_spans.
+            let cur_len = func.block(done).span_map.len();
+            let scaffold_len = new_len - remaining_spans.len();
+            if cur_len < scaffold_len {
+                func.block_mut(done)
+                    .span_map
+                    .resize(scaffold_len, None);
+            }
+            func.block_mut(done).span_map.extend(remaining_spans);
+        } else {
+            func.block_mut(done).span_map.extend(remaining_spans);
+        }
+    }
     func.block_mut(ctx.done_bb).terminator = orig_term;
+    func.block_mut(ctx.done_bb).terminator_span = orig_term_span;
 }
 
 /// Expand `HofExpand { hof_op: FlatMap, dst, … }` — build a
@@ -2088,7 +2306,9 @@ fn expand_flat_map(
     closure_ret_ty: LirType,
     dst: ValueId,
     remaining: Vec<Inst>,
+    remaining_spans: Vec<Option<crate::span::Span>>,
     orig_term: Term,
+    orig_term_span: Option<crate::span::Span>,
 ) {
     let garray_sid = lookup_struct_id(structs, "GorgetArray").unwrap_or(StructId(0));
     let garray_ty = LirType::Struct(garray_sid);
@@ -2100,19 +2320,19 @@ fn expand_flat_map(
     let result_slot = func.add_slot(garray_ty.clone(), None);
     let elem_size_val = alloc_value(next);
     let elem_size = c_sizeof_lir_type(&element_ty, structs) as i64;
-    func.block_mut(cur).insts.push(Inst::IConst {
+    func.block_mut(cur).push_synthetic(Inst::IConst {
         dst: elem_size_val,
         ty: LirType::I64,
         value: elem_size,
     });
     let arr_val = alloc_value(next);
-    func.block_mut(cur).insts.push(Inst::CallExtern {
+    func.block_mut(cur).push_synthetic(Inst::CallExtern {
         dst: Some(arr_val),
         name: "gorget_array_new".to_string(),
         args: vec![elem_size_val],
         arg_abis: vec![crate::ir::abi::AbiKind::Scalar],
     });
-    func.block_mut(cur).insts.push(Inst::SlotStore {
+    func.block_mut(cur).push_synthetic(Inst::SlotStore {
         slot: result_slot,
         value: arr_val,
         is_move: true,
@@ -2134,7 +2354,7 @@ fn expand_flat_map(
     // body_bb: sub = closure(elem); AddressOf(sub) → sub_ptr;
     //          gorget_array_extend(result_addr, sub_ptr).
     let sub_vec = alloc_value(next);
-    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+    func.block_mut(ctx.body_bb).push_synthetic(Inst::CallClosure {
         dst: Some(sub_vec),
         kind: crate::lir::ClosureDispatchKind::EscapedClosure,
         closure,
@@ -2143,17 +2363,17 @@ fn expand_flat_map(
         ret_ty: closure_ret_ty.clone(),
     });
     let sub_ptr = alloc_value(next);
-    func.block_mut(ctx.body_bb).insts.push(Inst::AddressOf {
+    func.block_mut(ctx.body_bb).push_synthetic(Inst::AddressOf {
         dst: sub_ptr,
         value: sub_vec,
         ty: closure_ret_ty,
     });
     let result_addr = alloc_value(next);
-    func.block_mut(ctx.body_bb).insts.push(Inst::SlotAddr {
+    func.block_mut(ctx.body_bb).push_synthetic(Inst::SlotAddr {
         dst: result_addr,
         slot: result_slot,
     });
-    func.block_mut(ctx.body_bb).insts.push(Inst::CallExtern {
+    func.block_mut(ctx.body_bb).push_synthetic(Inst::CallExtern {
         dst: None,
         name: "gorget_array_extend".to_string(),
         args: vec![result_addr, sub_ptr],
@@ -2176,13 +2396,36 @@ fn expand_flat_map(
         Term::Jump(ctx.check_bb, vec![ctx.next_i]);
 
     // done_bb: SlotLoad result into dst + remaining + orig_term.
-    func.block_mut(ctx.done_bb).insts.push(Inst::SlotLoad {
+    func.block_mut(ctx.done_bb).push_synthetic(Inst::SlotLoad {
         dst,
         slot: result_slot,
         ty: garray_ty,
     });
     func.block_mut(ctx.done_bb).insts.extend(remaining);
+    // Mirror the extend on `span_map` so the parallel-array invariant
+    // holds — `done_bb` already has spans for synthetic scaffold insts
+    // pushed by this expander; appending `remaining_spans` aligns the
+    // tail with the corresponding `remaining` insts.
+    {
+        let done = ctx.done_bb;
+        let new_len = func.block(done).insts.len();
+        if func.block(done).span_map.len() < new_len {
+            // Pre-extend span_map to a clean parallel state if it had
+            // drifted, then extend with remaining_spans.
+            let cur_len = func.block(done).span_map.len();
+            let scaffold_len = new_len - remaining_spans.len();
+            if cur_len < scaffold_len {
+                func.block_mut(done)
+                    .span_map
+                    .resize(scaffold_len, None);
+            }
+            func.block_mut(done).span_map.extend(remaining_spans);
+        } else {
+            func.block_mut(done).span_map.extend(remaining_spans);
+        }
+    }
     func.block_mut(ctx.done_bb).terminator = orig_term;
+    func.block_mut(ctx.done_bb).terminator_span = orig_term_span;
 }
 
 /// Scaffold for Dict (`GorgetMap`) HOF loops.
@@ -2289,8 +2532,7 @@ fn emit_dict_hof_loop_scaffold(
     // Entry: jmp check_bb(0, init0, init1, ...)
     let zero = alloc_value(next);
     func.block_mut(BlockId(current_bb as u32))
-        .insts
-        .push(Inst::IConst {
+        .push_synthetic(Inst::IConst {
             dst: zero,
             ty: LirType::I64,
             value: 0,
@@ -2305,20 +2547,20 @@ fn emit_dict_hof_loop_scaffold(
 
     // check_bb: cap load + bounds.
     let cap_ptr = alloc_value(next);
-    func.block_mut(check_bb).insts.push(Inst::FieldPtr {
+    func.block_mut(check_bb).push_synthetic(Inst::FieldPtr {
         dst: cap_ptr,
         base: coll,
         struct_id: gmap_sid,
         field: 1, // GorgetMap.cap
     });
     let cap = alloc_value(next);
-    func.block_mut(check_bb).insts.push(Inst::Load {
+    func.block_mut(check_bb).push_synthetic(Inst::Load {
         dst: cap,
         ptr: cap_ptr,
         ty: LirType::I64,
     });
     let cap_cond = alloc_value(next);
-    func.block_mut(check_bb).insts.push(Inst::Cmp {
+    func.block_mut(check_bb).push_synthetic(Inst::Cmp {
         dst: cap_cond,
         op: CmpOp::Lt,
         lhs: i_val,
@@ -2329,39 +2571,39 @@ fn emit_dict_hof_loop_scaffold(
 
     // state_bb: read states[i], check == 1.
     let states_ptr_field = alloc_value(next);
-    func.block_mut(state_bb).insts.push(Inst::FieldPtr {
+    func.block_mut(state_bb).push_synthetic(Inst::FieldPtr {
         dst: states_ptr_field,
         base: coll,
         struct_id: gmap_sid,
         field: 3, // GorgetMap.states
     });
     let states_ptr = alloc_value(next);
-    func.block_mut(state_bb).insts.push(Inst::Load {
+    func.block_mut(state_bb).push_synthetic(Inst::Load {
         dst: states_ptr,
         ptr: states_ptr_field,
         ty: LirType::Ptr,
     });
     let state_i_ptr = alloc_value(next);
-    func.block_mut(state_bb).insts.push(Inst::ElemPtr {
+    func.block_mut(state_bb).push_synthetic(Inst::ElemPtr {
         dst: state_i_ptr,
         base: states_ptr,
         index: i_val,
         elem_size: 1, // U8 state byte
     });
     let state_val = alloc_value(next);
-    func.block_mut(state_bb).insts.push(Inst::Load {
+    func.block_mut(state_bb).push_synthetic(Inst::Load {
         dst: state_val,
         ptr: state_i_ptr,
         ty: LirType::U8,
     });
     let one_u8 = alloc_value(next);
-    func.block_mut(state_bb).insts.push(Inst::IConst {
+    func.block_mut(state_bb).push_synthetic(Inst::IConst {
         dst: one_u8,
         ty: LirType::U8,
         value: 1,
     });
     let occupied = alloc_value(next);
-    func.block_mut(state_bb).insts.push(Inst::Cmp {
+    func.block_mut(state_bb).push_synthetic(Inst::Cmp {
         dst: occupied,
         op: CmpOp::Eq,
         lhs: state_val,
@@ -2381,42 +2623,42 @@ fn emit_dict_hof_loop_scaffold(
 
     // body_bb: key + val load/pointer.
     let keys_field = alloc_value(next);
-    func.block_mut(body_bb).insts.push(Inst::FieldPtr {
+    func.block_mut(body_bb).push_synthetic(Inst::FieldPtr {
         dst: keys_field,
         base: coll,
         struct_id: gmap_sid,
         field: 0,
     });
     let keys_ptr = alloc_value(next);
-    func.block_mut(body_bb).insts.push(Inst::Load {
+    func.block_mut(body_bb).push_synthetic(Inst::Load {
         dst: keys_ptr,
         ptr: keys_field,
         ty: LirType::Ptr,
     });
     let key_size = c_sizeof_lir_type(key_ty, structs) as u32;
     let key_ptr = alloc_value(next);
-    func.block_mut(body_bb).insts.push(Inst::ElemPtr {
+    func.block_mut(body_bb).push_synthetic(Inst::ElemPtr {
         dst: key_ptr,
         base: keys_ptr,
         index: i_val,
         elem_size: key_size,
     });
     let vals_field = alloc_value(next);
-    func.block_mut(body_bb).insts.push(Inst::FieldPtr {
+    func.block_mut(body_bb).push_synthetic(Inst::FieldPtr {
         dst: vals_field,
         base: coll,
         struct_id: gmap_sid,
         field: 2,
     });
     let vals_ptr = alloc_value(next);
-    func.block_mut(body_bb).insts.push(Inst::Load {
+    func.block_mut(body_bb).push_synthetic(Inst::Load {
         dst: vals_ptr,
         ptr: vals_field,
         ty: LirType::Ptr,
     });
     let val_size = c_sizeof_lir_type(val_ty, structs) as u32;
     let val_ptr = alloc_value(next);
-    func.block_mut(body_bb).insts.push(Inst::ElemPtr {
+    func.block_mut(body_bb).push_synthetic(Inst::ElemPtr {
         dst: val_ptr,
         base: vals_ptr,
         index: i_val,
@@ -2433,7 +2675,7 @@ fn emit_dict_hof_loop_scaffold(
         key_ptr
     } else {
         let k = alloc_value(next);
-        func.block_mut(body_bb).insts.push(Inst::Load {
+        func.block_mut(body_bb).push_synthetic(Inst::Load {
             dst: k,
             ptr: key_ptr,
             ty: key_ty.clone(),
@@ -2455,7 +2697,7 @@ fn emit_dict_hof_loop_scaffold(
         val_ptr
     } else {
         let v = alloc_value(next);
-        func.block_mut(body_bb).insts.push(Inst::Load {
+        func.block_mut(body_bb).push_synthetic(Inst::Load {
             dst: v,
             ptr: val_ptr,
             ty: val_ty.clone(),
@@ -2480,12 +2722,12 @@ fn emit_dict_hof_loop_scaffold(
     // reference `i_val` directly.
     let next_i = alloc_value(next);
     let one_i64 = alloc_value(next);
-    func.block_mut(advance_bb).insts.push(Inst::IConst {
+    func.block_mut(advance_bb).push_synthetic(Inst::IConst {
         dst: one_i64,
         ty: LirType::I64,
         value: 1,
     });
-    func.block_mut(advance_bb).insts.push(Inst::Add {
+    func.block_mut(advance_bb).push_synthetic(Inst::Add {
         dst: next_i,
         ty: LirType::I64,
         lhs: i_val,
@@ -2530,7 +2772,9 @@ fn expand_dict_each(
     closure: ValueId,
     closure_arg_abis: Vec<crate::ir::abi::AbiKind>,
     remaining: Vec<Inst>,
+    remaining_spans: Vec<Option<crate::span::Span>>,
     orig_term: Term,
+    orig_term_span: Option<crate::span::Span>,
 ) {
     let key_abi_hint = closure_arg_abis.first().copied();
     let val_abi_hint = closure_arg_abis.get(1).copied();
@@ -2556,7 +2800,7 @@ fn expand_dict_each(
         else_args: vec![],
     };
     // body_bb: CallClosure(closure, [key, val]) → void, then jump to advance.
-    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+    func.block_mut(ctx.body_bb).push_synthetic(Inst::CallClosure {
         dst: None,
         kind: crate::lir::ClosureDispatchKind::EscapedClosure,
         closure,
@@ -2569,8 +2813,19 @@ fn expand_dict_each(
     // advance_bb terminator is set by the scaffold (Jump(check_bb, [next_i]));
     // no extras to forward for `each`.
     // done_bb: remaining + orig_term.
-    func.block_mut(ctx.done_bb).insts = remaining;
-    func.block_mut(ctx.done_bb).terminator = orig_term;
+    let done = ctx.done_bb;
+    let pre_len = func.block(done).insts.len();
+    let pre_spans_len = func.block(done).span_map.len();
+    func.block_mut(done).insts = remaining;
+    // Synthetic scaffold insts already pushed into done_bb (e.g. a
+    // SlotLoad of the result) keep their existing `None` spans; tail
+    // insts inherit the spans we captured from the original block.
+    let mut combined_spans: Vec<Option<crate::span::Span>> =
+        if pre_spans_len == pre_len { func.block(done).span_map.clone() } else { vec![None; pre_len] };
+    combined_spans.extend(remaining_spans);
+    func.block_mut(done).span_map = combined_spans;
+    func.block_mut(done).terminator = orig_term;
+    func.block_mut(done).terminator_span = orig_term_span;
 }
 
 /// Expand `HofExpand { hof_op: DictFold, init, dst }` — thread a
@@ -2591,7 +2846,9 @@ fn expand_dict_fold(
     init: ValueId,
     dst: ValueId,
     remaining: Vec<Inst>,
+    remaining_spans: Vec<Option<crate::span::Span>>,
     orig_term: Term,
+    orig_term_span: Option<crate::span::Span>,
 ) {
     // closure signature: (acc, K, V). closure_arg_abis = [acc_abi, key_abi, val_abi].
     let acc_abi_hint = closure_arg_abis.first().copied();
@@ -2620,7 +2877,7 @@ fn expand_dict_fold(
     };
     let acc_arg = if acc_by_ptr {
         let p = alloc_value(next);
-        func.block_mut(ctx.body_bb).insts.push(Inst::AddressOf {
+        func.block_mut(ctx.body_bb).push_synthetic(Inst::AddressOf {
             dst: p,
             value: acc_val,
             ty: closure_ret_ty.clone(),
@@ -2647,7 +2904,7 @@ fn expand_dict_fold(
     // advance_bb(new_acc) — advance_bb's block param receives the
     // updated accumulator and forwards it to check_bb.
     let new_acc = alloc_value(next);
-    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+    func.block_mut(ctx.body_bb).push_synthetic(Inst::CallClosure {
         dst: Some(new_acc),
         kind: crate::lir::ClosureDispatchKind::EscapedClosure,
         closure,
@@ -2661,8 +2918,19 @@ fn expand_dict_fold(
     // block-param extras back to check_bb).
     // done_bb: dst param = acc carried out.
     func.block_mut(ctx.done_bb).params.push((dst, closure_ret_ty));
-    func.block_mut(ctx.done_bb).insts = remaining;
-    func.block_mut(ctx.done_bb).terminator = orig_term;
+    let done = ctx.done_bb;
+    let pre_len = func.block(done).insts.len();
+    let pre_spans_len = func.block(done).span_map.len();
+    func.block_mut(done).insts = remaining;
+    // Synthetic scaffold insts already pushed into done_bb (e.g. a
+    // SlotLoad of the result) keep their existing `None` spans; tail
+    // insts inherit the spans we captured from the original block.
+    let mut combined_spans: Vec<Option<crate::span::Span>> =
+        if pre_spans_len == pre_len { func.block(done).span_map.clone() } else { vec![None; pre_len] };
+    combined_spans.extend(remaining_spans);
+    func.block_mut(done).span_map = combined_spans;
+    func.block_mut(done).terminator = orig_term;
+    func.block_mut(done).terminator_span = orig_term_span;
 }
 
 /// Expand `HofExpand { hof_op: DictAny | DictAll, dst }` — early-exit
@@ -2683,7 +2951,9 @@ fn expand_dict_any_all(
     closure_arg_abis: Vec<crate::ir::abi::AbiKind>,
     dst: ValueId,
     remaining: Vec<Inst>,
+    remaining_spans: Vec<Option<crate::span::Span>>,
     orig_term: Term,
+    orig_term_span: Option<crate::span::Span>,
 ) {
     let is_any = matches!(op, HofOp::DictAny);
     let dst_ty = func
@@ -2729,18 +2999,26 @@ fn expand_dict_any_all(
     // `early` parks in body_bb (after the CallClosure, its only user);
     // `fall` parks in check_bb (the exhaustion branch reads it).
     func.block_mut(ctx.body_bb)
-        .insts
-        .push(const_inst(early, early_value));
+        .push_synthetic(const_inst(early, early_value));
     func.block_mut(ctx.check_bb)
-        .insts
-        .push(const_inst(fall, fall_value));
+        .push_synthetic(const_inst(fall, fall_value));
 
     // done_bb(result: dst_ty)
     func.block_mut(ctx.done_bb)
         .params
         .push((dst, dst_ty.clone()));
-    func.block_mut(ctx.done_bb).insts = remaining;
-    func.block_mut(ctx.done_bb).terminator = orig_term;
+    {
+        let done = ctx.done_bb;
+        let pre_len = func.block(done).insts.len();
+        let pre_spans_len = func.block(done).span_map.len();
+        func.block_mut(done).insts = remaining;
+        let mut combined_spans: Vec<Option<crate::span::Span>> =
+            if pre_spans_len == pre_len { func.block(done).span_map.clone() } else { vec![None; pre_len] };
+        combined_spans.extend(remaining_spans);
+        func.block_mut(done).span_map = combined_spans;
+        func.block_mut(done).terminator = orig_term;
+        func.block_mut(done).terminator_span = orig_term_span;
+    }
 
     // check_bb: cond ? state_bb : done_bb(fall).
     func.block_mut(ctx.check_bb).terminator = Term::Branch {
@@ -2753,7 +3031,7 @@ fn expand_dict_any_all(
 
     // body_bb: CallClosure(closure, [key, val]) → pred.
     let pred = alloc_value(next);
-    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+    func.block_mut(ctx.body_bb).push_synthetic(Inst::CallClosure {
         dst: Some(pred),
         kind: crate::lir::ClosureDispatchKind::EscapedClosure,
         closure,
@@ -2802,7 +3080,9 @@ fn expand_dict_filter(
     closure_arg_abis: Vec<crate::ir::abi::AbiKind>,
     dst: ValueId,
     remaining: Vec<Inst>,
+    remaining_spans: Vec<Option<crate::span::Span>>,
     orig_term: Term,
+    orig_term_span: Option<crate::span::Span>,
 ) {
     let gmap_sid = lookup_struct_id(structs, "GorgetMap").unwrap_or(StructId(0));
     let gmap_ty = LirType::Struct(gmap_sid);
@@ -2811,13 +3091,13 @@ fn expand_dict_filter(
     // current_bb: allocate result slot + init via gorget_map_new_like(coll).
     let result_slot = func.add_slot(gmap_ty.clone(), None);
     let map_val = alloc_value(next);
-    func.block_mut(cur).insts.push(Inst::CallExtern {
+    func.block_mut(cur).push_synthetic(Inst::CallExtern {
         dst: Some(map_val),
         name: "gorget_map_new_like".to_string(),
         args: vec![coll],
         arg_abis: vec![crate::ir::abi::AbiKind::Ptr],
     });
-    func.block_mut(cur).insts.push(Inst::SlotStore {
+    func.block_mut(cur).push_synthetic(Inst::SlotStore {
         slot: result_slot,
         value: map_val,
         is_move: true,
@@ -2840,7 +3120,7 @@ fn expand_dict_filter(
 
     // body_bb: call closure(key, val) → pred.
     let pred = alloc_value(next);
-    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+    func.block_mut(ctx.body_bb).push_synthetic(Inst::CallClosure {
         dst: Some(pred),
         kind: crate::lir::ClosureDispatchKind::EscapedClosure,
         closure,
@@ -2870,11 +3150,11 @@ fn expand_dict_filter(
 
     // push_bb: gorget_map_put_cloned(&result, key_ptr, val_ptr).
     let result_addr = alloc_value(next);
-    func.block_mut(push_bb).insts.push(Inst::SlotAddr {
+    func.block_mut(push_bb).push_synthetic(Inst::SlotAddr {
         dst: result_addr,
         slot: result_slot,
     });
-    func.block_mut(push_bb).insts.push(Inst::CallExtern {
+    func.block_mut(push_bb).push_synthetic(Inst::CallExtern {
         dst: None,
         name: "gorget_map_put_cloned".to_string(),
         args: vec![result_addr, ctx.key_ptr, ctx.val_ptr],
@@ -2887,13 +3167,36 @@ fn expand_dict_filter(
     func.block_mut(push_bb).terminator = Term::Jump(ctx.advance_bb, vec![]);
 
     // done_bb: SlotLoad the result map into dst + remaining + orig_term.
-    func.block_mut(ctx.done_bb).insts.push(Inst::SlotLoad {
+    func.block_mut(ctx.done_bb).push_synthetic(Inst::SlotLoad {
         dst,
         slot: result_slot,
         ty: gmap_ty,
     });
     func.block_mut(ctx.done_bb).insts.extend(remaining);
+    // Mirror the extend on `span_map` so the parallel-array invariant
+    // holds — `done_bb` already has spans for synthetic scaffold insts
+    // pushed by this expander; appending `remaining_spans` aligns the
+    // tail with the corresponding `remaining` insts.
+    {
+        let done = ctx.done_bb;
+        let new_len = func.block(done).insts.len();
+        if func.block(done).span_map.len() < new_len {
+            // Pre-extend span_map to a clean parallel state if it had
+            // drifted, then extend with remaining_spans.
+            let cur_len = func.block(done).span_map.len();
+            let scaffold_len = new_len - remaining_spans.len();
+            if cur_len < scaffold_len {
+                func.block_mut(done)
+                    .span_map
+                    .resize(scaffold_len, None);
+            }
+            func.block_mut(done).span_map.extend(remaining_spans);
+        } else {
+            func.block_mut(done).span_map.extend(remaining_spans);
+        }
+    }
     func.block_mut(ctx.done_bb).terminator = orig_term;
+    func.block_mut(ctx.done_bb).terminator_span = orig_term_span;
 }
 
 /// Scaffold for Set (`GorgetSet` — a GorgetMap with no val array)
@@ -2968,8 +3271,7 @@ fn emit_set_hof_loop_scaffold(
     // Entry: jmp check_bb(0, init0, init1, ...)
     let zero = alloc_value(next);
     func.block_mut(BlockId(current_bb as u32))
-        .insts
-        .push(Inst::IConst {
+        .push_synthetic(Inst::IConst {
             dst: zero,
             ty: LirType::I64,
             value: 0,
@@ -2985,20 +3287,20 @@ fn emit_set_hof_loop_scaffold(
     // check_bb: load bound (order_len for ordered, cap for unordered).
     let bound_field_idx: u32 = if is_ordered { 9 } else { 1 }; // order_len | cap
     let bound_ptr = alloc_value(next);
-    func.block_mut(check_bb).insts.push(Inst::FieldPtr {
+    func.block_mut(check_bb).push_synthetic(Inst::FieldPtr {
         dst: bound_ptr,
         base: coll,
         struct_id: gmap_sid,
         field: bound_field_idx,
     });
     let bound = alloc_value(next);
-    func.block_mut(check_bb).insts.push(Inst::Load {
+    func.block_mut(check_bb).push_synthetic(Inst::Load {
         dst: bound,
         ptr: bound_ptr,
         ty: LirType::I64,
     });
     let cap_cond = alloc_value(next);
-    func.block_mut(check_bb).insts.push(Inst::Cmp {
+    func.block_mut(check_bb).push_synthetic(Inst::Cmp {
         dst: cap_cond,
         op: CmpOp::Lt,
         lhs: counter_val,
@@ -3010,27 +3312,27 @@ fn emit_set_hof_loop_scaffold(
     let i_val = if is_ordered {
         // i = load(order + j * 8)
         let order_field = alloc_value(next);
-        func.block_mut(state_bb).insts.push(Inst::FieldPtr {
+        func.block_mut(state_bb).push_synthetic(Inst::FieldPtr {
             dst: order_field,
             base: coll,
             struct_id: gmap_sid,
             field: 8, // order
         });
         let order_ptr = alloc_value(next);
-        func.block_mut(state_bb).insts.push(Inst::Load {
+        func.block_mut(state_bb).push_synthetic(Inst::Load {
             dst: order_ptr,
             ptr: order_field,
             ty: LirType::Ptr,
         });
         let order_j_ptr = alloc_value(next);
-        func.block_mut(state_bb).insts.push(Inst::ElemPtr {
+        func.block_mut(state_bb).push_synthetic(Inst::ElemPtr {
             dst: order_j_ptr,
             base: order_ptr,
             index: counter_val,
             elem_size: 8, // size_t
         });
         let i = alloc_value(next);
-        func.block_mut(state_bb).insts.push(Inst::Load {
+        func.block_mut(state_bb).push_synthetic(Inst::Load {
             dst: i,
             ptr: order_j_ptr,
             ty: LirType::I64,
@@ -3041,39 +3343,39 @@ fn emit_set_hof_loop_scaffold(
     };
 
     let states_field = alloc_value(next);
-    func.block_mut(state_bb).insts.push(Inst::FieldPtr {
+    func.block_mut(state_bb).push_synthetic(Inst::FieldPtr {
         dst: states_field,
         base: coll,
         struct_id: gmap_sid,
         field: 3,
     });
     let states_ptr = alloc_value(next);
-    func.block_mut(state_bb).insts.push(Inst::Load {
+    func.block_mut(state_bb).push_synthetic(Inst::Load {
         dst: states_ptr,
         ptr: states_field,
         ty: LirType::Ptr,
     });
     let state_i_ptr = alloc_value(next);
-    func.block_mut(state_bb).insts.push(Inst::ElemPtr {
+    func.block_mut(state_bb).push_synthetic(Inst::ElemPtr {
         dst: state_i_ptr,
         base: states_ptr,
         index: i_val,
         elem_size: 1,
     });
     let state_val = alloc_value(next);
-    func.block_mut(state_bb).insts.push(Inst::Load {
+    func.block_mut(state_bb).push_synthetic(Inst::Load {
         dst: state_val,
         ptr: state_i_ptr,
         ty: LirType::U8,
     });
     let one_u8 = alloc_value(next);
-    func.block_mut(state_bb).insts.push(Inst::IConst {
+    func.block_mut(state_bb).push_synthetic(Inst::IConst {
         dst: one_u8,
         ty: LirType::U8,
         value: 1,
     });
     let occupied = alloc_value(next);
-    func.block_mut(state_bb).insts.push(Inst::Cmp {
+    func.block_mut(state_bb).push_synthetic(Inst::Cmp {
         dst: occupied,
         op: CmpOp::Eq,
         lhs: state_val,
@@ -3090,21 +3392,21 @@ fn emit_set_hof_loop_scaffold(
 
     // body_bb: keys[i] load.
     let keys_field = alloc_value(next);
-    func.block_mut(body_bb).insts.push(Inst::FieldPtr {
+    func.block_mut(body_bb).push_synthetic(Inst::FieldPtr {
         dst: keys_field,
         base: coll,
         struct_id: gmap_sid,
         field: 0,
     });
     let keys_ptr = alloc_value(next);
-    func.block_mut(body_bb).insts.push(Inst::Load {
+    func.block_mut(body_bb).push_synthetic(Inst::Load {
         dst: keys_ptr,
         ptr: keys_field,
         ty: LirType::Ptr,
     });
     let key_size = c_sizeof_lir_type(elem_ty, structs) as u32;
     let elem_ptr = alloc_value(next);
-    func.block_mut(body_bb).insts.push(Inst::ElemPtr {
+    func.block_mut(body_bb).push_synthetic(Inst::ElemPtr {
         dst: elem_ptr,
         base: keys_ptr,
         index: i_val,
@@ -3121,7 +3423,7 @@ fn emit_set_hof_loop_scaffold(
         elem_ptr
     } else {
         let e = alloc_value(next);
-        func.block_mut(body_bb).insts.push(Inst::Load {
+        func.block_mut(body_bb).push_synthetic(Inst::Load {
             dst: e,
             ptr: elem_ptr,
             ty: elem_ty.clone(),
@@ -3137,12 +3439,12 @@ fn emit_set_hof_loop_scaffold(
     // advance_bb: next_counter = counter + 1, Jump back to check_bb.
     let next_counter = alloc_value(next);
     let one_i64 = alloc_value(next);
-    func.block_mut(advance_bb).insts.push(Inst::IConst {
+    func.block_mut(advance_bb).push_synthetic(Inst::IConst {
         dst: one_i64,
         ty: LirType::I64,
         value: 1,
     });
-    func.block_mut(advance_bb).insts.push(Inst::Add {
+    func.block_mut(advance_bb).push_synthetic(Inst::Add {
         dst: next_counter,
         ty: LirType::I64,
         lhs: counter_val,
@@ -3184,7 +3486,9 @@ fn expand_set_each(
     closure_arg_abis: Vec<crate::ir::abi::AbiKind>,
     is_ordered: bool,
     remaining: Vec<Inst>,
+    remaining_spans: Vec<Option<crate::span::Span>>,
     orig_term: Term,
+    orig_term_span: Option<crate::span::Span>,
 ) {
     let elem_abi_hint = closure_arg_abis.first().copied();
     let ctx = emit_set_hof_loop_scaffold(
@@ -3206,7 +3510,7 @@ fn expand_set_each(
         else_block: ctx.done_bb,
         else_args: vec![],
     };
-    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+    func.block_mut(ctx.body_bb).push_synthetic(Inst::CallClosure {
         dst: None,
         kind: crate::lir::ClosureDispatchKind::EscapedClosure,
         closure,
@@ -3215,8 +3519,19 @@ fn expand_set_each(
         ret_ty: LirType::Void,
     });
     func.block_mut(ctx.body_bb).terminator = Term::Jump(ctx.advance_bb, vec![]);
-    func.block_mut(ctx.done_bb).insts = remaining;
-    func.block_mut(ctx.done_bb).terminator = orig_term;
+    let done = ctx.done_bb;
+    let pre_len = func.block(done).insts.len();
+    let pre_spans_len = func.block(done).span_map.len();
+    func.block_mut(done).insts = remaining;
+    // Synthetic scaffold insts already pushed into done_bb (e.g. a
+    // SlotLoad of the result) keep their existing `None` spans; tail
+    // insts inherit the spans we captured from the original block.
+    let mut combined_spans: Vec<Option<crate::span::Span>> =
+        if pre_spans_len == pre_len { func.block(done).span_map.clone() } else { vec![None; pre_len] };
+    combined_spans.extend(remaining_spans);
+    func.block_mut(done).span_map = combined_spans;
+    func.block_mut(done).terminator = orig_term;
+    func.block_mut(done).terminator_span = orig_term_span;
 }
 
 /// Expand `HofExpand { hof_op: SetFold, init, dst }` — thread a
@@ -3237,7 +3552,9 @@ fn expand_set_fold(
     dst: ValueId,
     is_ordered: bool,
     remaining: Vec<Inst>,
+    remaining_spans: Vec<Option<crate::span::Span>>,
     orig_term: Term,
+    orig_term_span: Option<crate::span::Span>,
 ) {
     // closure signature: (acc, elem). arg_abis = [acc_abi, elem_abi].
     let acc_abi_hint = closure_arg_abis.first().copied();
@@ -3263,7 +3580,7 @@ fn expand_set_fold(
     };
     let acc_arg = if acc_by_ptr {
         let p = alloc_value(next);
-        func.block_mut(ctx.body_bb).insts.push(Inst::AddressOf {
+        func.block_mut(ctx.body_bb).push_synthetic(Inst::AddressOf {
             dst: p,
             value: acc_val,
             ty: closure_ret_ty.clone(),
@@ -3286,7 +3603,7 @@ fn expand_set_fold(
         else_args: vec![acc_val],
     };
     let new_acc = alloc_value(next);
-    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+    func.block_mut(ctx.body_bb).push_synthetic(Inst::CallClosure {
         dst: Some(new_acc),
         kind: crate::lir::ClosureDispatchKind::EscapedClosure,
         closure,
@@ -3297,8 +3614,19 @@ fn expand_set_fold(
     func.block_mut(ctx.body_bb).terminator =
         Term::Jump(ctx.advance_bb, vec![new_acc]);
     func.block_mut(ctx.done_bb).params.push((dst, closure_ret_ty));
-    func.block_mut(ctx.done_bb).insts = remaining;
-    func.block_mut(ctx.done_bb).terminator = orig_term;
+    let done = ctx.done_bb;
+    let pre_len = func.block(done).insts.len();
+    let pre_spans_len = func.block(done).span_map.len();
+    func.block_mut(done).insts = remaining;
+    // Synthetic scaffold insts already pushed into done_bb (e.g. a
+    // SlotLoad of the result) keep their existing `None` spans; tail
+    // insts inherit the spans we captured from the original block.
+    let mut combined_spans: Vec<Option<crate::span::Span>> =
+        if pre_spans_len == pre_len { func.block(done).span_map.clone() } else { vec![None; pre_len] };
+    combined_spans.extend(remaining_spans);
+    func.block_mut(done).span_map = combined_spans;
+    func.block_mut(done).terminator = orig_term;
+    func.block_mut(done).terminator_span = orig_term_span;
 }
 
 /// Expand `HofExpand { hof_op: SetAny | SetAll, dst }` — early-exit
@@ -3317,7 +3645,9 @@ fn expand_set_any_all(
     dst: ValueId,
     is_ordered: bool,
     remaining: Vec<Inst>,
+    remaining_spans: Vec<Option<crate::span::Span>>,
     orig_term: Term,
+    orig_term_span: Option<crate::span::Span>,
 ) {
     let is_any = matches!(op, HofOp::SetAny);
     let dst_ty = func
@@ -3355,17 +3685,25 @@ fn expand_set_any_all(
         },
     };
     func.block_mut(ctx.body_bb)
-        .insts
-        .push(const_inst(early, early_value));
+        .push_synthetic(const_inst(early, early_value));
     func.block_mut(ctx.check_bb)
-        .insts
-        .push(const_inst(fall, fall_value));
+        .push_synthetic(const_inst(fall, fall_value));
 
     func.block_mut(ctx.done_bb)
         .params
         .push((dst, dst_ty.clone()));
-    func.block_mut(ctx.done_bb).insts = remaining;
-    func.block_mut(ctx.done_bb).terminator = orig_term;
+    {
+        let done = ctx.done_bb;
+        let pre_len = func.block(done).insts.len();
+        let pre_spans_len = func.block(done).span_map.len();
+        func.block_mut(done).insts = remaining;
+        let mut combined_spans: Vec<Option<crate::span::Span>> =
+            if pre_spans_len == pre_len { func.block(done).span_map.clone() } else { vec![None; pre_len] };
+        combined_spans.extend(remaining_spans);
+        func.block_mut(done).span_map = combined_spans;
+        func.block_mut(done).terminator = orig_term;
+        func.block_mut(done).terminator_span = orig_term_span;
+    }
 
     func.block_mut(ctx.check_bb).terminator = Term::Branch {
         cond: ctx.cap_cond,
@@ -3376,7 +3714,7 @@ fn expand_set_any_all(
     };
 
     let pred = alloc_value(next);
-    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+    func.block_mut(ctx.body_bb).push_synthetic(Inst::CallClosure {
         dst: Some(pred),
         kind: crate::lir::ClosureDispatchKind::EscapedClosure,
         closure,
@@ -3422,7 +3760,9 @@ fn expand_set_filter(
     dst: ValueId,
     is_ordered: bool,
     remaining: Vec<Inst>,
+    remaining_spans: Vec<Option<crate::span::Span>>,
     orig_term: Term,
+    orig_term_span: Option<crate::span::Span>,
 ) {
     let gset_sid = lookup_struct_id(structs, "GorgetSet")
         .or_else(|| lookup_struct_id(structs, "GorgetMap"))
@@ -3433,13 +3773,13 @@ fn expand_set_filter(
     // current_bb: allocate result slot + init via gorget_set_new_like(coll).
     let result_slot = func.add_slot(gset_ty.clone(), None);
     let set_val = alloc_value(next);
-    func.block_mut(cur).insts.push(Inst::CallExtern {
+    func.block_mut(cur).push_synthetic(Inst::CallExtern {
         dst: Some(set_val),
         name: "gorget_set_new_like".to_string(),
         args: vec![coll],
         arg_abis: vec![crate::ir::abi::AbiKind::Ptr],
     });
-    func.block_mut(cur).insts.push(Inst::SlotStore {
+    func.block_mut(cur).push_synthetic(Inst::SlotStore {
         slot: result_slot,
         value: set_val,
         is_move: true,
@@ -3460,7 +3800,7 @@ fn expand_set_filter(
 
     // body_bb: call closure(elem) → pred.
     let pred = alloc_value(next);
-    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+    func.block_mut(ctx.body_bb).push_synthetic(Inst::CallClosure {
         dst: Some(pred),
         kind: crate::lir::ClosureDispatchKind::EscapedClosure,
         closure,
@@ -3490,13 +3830,13 @@ fn expand_set_filter(
 
     // push_bb: gorget_map_put_cloned(&result, elem_ptr, NULL).
     let result_addr = alloc_value(next);
-    func.block_mut(push_bb).insts.push(Inst::SlotAddr {
+    func.block_mut(push_bb).push_synthetic(Inst::SlotAddr {
         dst: result_addr,
         slot: result_slot,
     });
     let null_val = alloc_value(next);
-    func.block_mut(push_bb).insts.push(Inst::NullPtr { dst: null_val });
-    func.block_mut(push_bb).insts.push(Inst::CallExtern {
+    func.block_mut(push_bb).push_synthetic(Inst::NullPtr { dst: null_val });
+    func.block_mut(push_bb).push_synthetic(Inst::CallExtern {
         dst: None,
         name: "gorget_map_put_cloned".to_string(),
         args: vec![result_addr, ctx.elem_ptr, null_val],
@@ -3509,13 +3849,36 @@ fn expand_set_filter(
     func.block_mut(push_bb).terminator = Term::Jump(ctx.advance_bb, vec![]);
 
     // done_bb: SlotLoad the result set into dst + remaining + orig_term.
-    func.block_mut(ctx.done_bb).insts.push(Inst::SlotLoad {
+    func.block_mut(ctx.done_bb).push_synthetic(Inst::SlotLoad {
         dst,
         slot: result_slot,
         ty: gset_ty,
     });
     func.block_mut(ctx.done_bb).insts.extend(remaining);
+    // Mirror the extend on `span_map` so the parallel-array invariant
+    // holds — `done_bb` already has spans for synthetic scaffold insts
+    // pushed by this expander; appending `remaining_spans` aligns the
+    // tail with the corresponding `remaining` insts.
+    {
+        let done = ctx.done_bb;
+        let new_len = func.block(done).insts.len();
+        if func.block(done).span_map.len() < new_len {
+            // Pre-extend span_map to a clean parallel state if it had
+            // drifted, then extend with remaining_spans.
+            let cur_len = func.block(done).span_map.len();
+            let scaffold_len = new_len - remaining_spans.len();
+            if cur_len < scaffold_len {
+                func.block_mut(done)
+                    .span_map
+                    .resize(scaffold_len, None);
+            }
+            func.block_mut(done).span_map.extend(remaining_spans);
+        } else {
+            func.block_mut(done).span_map.extend(remaining_spans);
+        }
+    }
     func.block_mut(ctx.done_bb).terminator = orig_term;
+    func.block_mut(ctx.done_bb).terminator_span = orig_term_span;
 }
 
 fn lookup_struct_id(structs: &[StructDef], name: &str) -> Option<StructId> {
@@ -3608,10 +3971,10 @@ mod tests {
         let value = func.next_value();
         let dst = func.next_value();
         let bb = BlockId(0);
-        func.block_mut(bb).insts.push(Inst::IConst {
+        func.block_mut(bb).push_synthetic(Inst::IConst {
             dst: value, ty: LirType::I64, value: 42,
         });
-        func.block_mut(bb).insts.push(Inst::AddressOf {
+        func.block_mut(bb).push_synthetic(Inst::AddressOf {
             dst,
             value,
             ty: LirType::I64,
@@ -3636,10 +3999,10 @@ mod tests {
         let value = func.next_value();
         let dst = func.next_value();
         let bb = BlockId(0);
-        func.block_mut(bb).insts.push(Inst::IConst {
+        func.block_mut(bb).push_synthetic(Inst::IConst {
             dst: value, ty: LirType::I64, value: 42,
         });
-        func.block_mut(bb).insts.push(Inst::BoxAlloc {
+        func.block_mut(bb).push_synthetic(Inst::BoxAlloc {
             dst,
             inner_ty: LirType::I64,
             value,
@@ -3661,7 +4024,7 @@ mod tests {
         let mut func = empty_func();
         let value = func.next_value();
         let dst = func.next_value();
-        func.block_mut(BlockId(0)).insts.push(Inst::AddressOf {
+        func.block_mut(BlockId(0)).push_synthetic(Inst::AddressOf {
             dst,
             value,
             ty: LirType::I64,
@@ -3678,7 +4041,7 @@ mod tests {
         let mut func = empty_func();
         let value = func.next_value();
         let dst = func.next_value();
-        func.block_mut(BlockId(0)).insts.push(Inst::BoxAlloc {
+        func.block_mut(BlockId(0)).push_synthetic(Inst::BoxAlloc {
             dst,
             inner_ty: LirType::I64,
             value,

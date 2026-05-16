@@ -503,23 +503,45 @@ pub fn eliminate_dead_code(func: &mut LirFunction) -> usize {
 
     let mut eliminated = 0;
     for block in &mut func.blocks {
-        block.insts.retain(|inst| {
-            // Keep instructions with side effects.
-            if has_side_effects(inst) {
-                return true;
-            }
-            // Keep instructions whose results are used.
-            if let Some(dst) = inst.dst() {
-                if (dst.0 as usize) < val_count && use_count[dst.0 as usize] > 0 {
+        // Build a keep mask, then filter `insts` + `span_map` in lockstep
+        // so the parallel-array invariant survives.
+        let keep: Vec<bool> = block
+            .insts
+            .iter()
+            .map(|inst| {
+                if has_side_effects(inst) {
                     return true;
                 }
-                // Dead — result unused.
-                eliminated += 1;
-                false
+                if let Some(dst) = inst.dst() {
+                    if (dst.0 as usize) < val_count && use_count[dst.0 as usize] > 0 {
+                        return true;
+                    }
+                    false
+                } else {
+                    true
+                }
+            })
+            .collect();
+        let had_parallel_spans = block.span_map.len() == block.insts.len();
+        let old_insts = std::mem::take(&mut block.insts);
+        let old_spans = std::mem::take(&mut block.span_map);
+        let mut new_insts: Vec<Inst> = Vec::with_capacity(old_insts.len());
+        let mut new_spans: Vec<Option<crate::span::Span>> =
+            Vec::with_capacity(old_insts.len());
+        for (i, inst) in old_insts.into_iter().enumerate() {
+            if keep[i] {
+                new_insts.push(inst);
+                new_spans.push(if had_parallel_spans {
+                    old_spans.get(i).copied().flatten()
+                } else {
+                    None
+                });
             } else {
-                true // No dst means side-effect (already handled above)
+                eliminated += 1;
             }
-        });
+        }
+        block.insts = new_insts;
+        block.span_map = new_spans;
     }
 
     eliminated
@@ -1240,10 +1262,34 @@ pub fn merge_linear_blocks(func: &mut LirFunction) {
             };
             if let Some(t) = target {
                 // Merge: append target's instructions and take its terminator.
+                // Carry both `span_map` and `terminator_span` across the
+                // merge so the parallel-array invariant + terminator
+                // attribution survive the block coalesce.
                 let target_insts = std::mem::take(&mut func.blocks[t].insts);
-                let target_term = std::mem::replace(&mut func.blocks[t].terminator, Term::Unreachable);
+                let target_spans = std::mem::take(&mut func.blocks[t].span_map);
+                let target_term = std::mem::replace(
+                    &mut func.blocks[t].terminator,
+                    Term::Unreachable,
+                );
+                let target_term_span =
+                    std::mem::take(&mut func.blocks[t].terminator_span);
+                // Reconcile target spans if they were out of sync (pre-1b
+                // emitters): pad with `None` to keep parallel-arrays valid.
+                let target_spans_padded: Vec<Option<crate::span::Span>> =
+                    if target_spans.len() == target_insts.len() {
+                        target_spans
+                    } else {
+                        vec![None; target_insts.len()]
+                    };
+                // Same reconciliation for the source block.
+                if func.blocks[i].span_map.len() != func.blocks[i].insts.len() {
+                    func.blocks[i].span_map =
+                        vec![None; func.blocks[i].insts.len()];
+                }
                 func.blocks[i].insts.extend(target_insts);
+                func.blocks[i].span_map.extend(target_spans_padded);
                 func.blocks[i].terminator = target_term;
+                func.blocks[i].terminator_span = target_term_span;
                 pred_count[t] = 0; // mark as dead
                 changed = true;
             }

@@ -361,14 +361,25 @@ fn elaborate_block(
     }
 
     let eliminated = to_delete.len();
-    // Sweep: retain instructions NOT in the deletion set.
-    let mut new_insts = Vec::with_capacity(insts.len() - eliminated);
+    // Sweep: retain instructions NOT in the deletion set. Mirror the same
+    // index filter on `span_map` so the parallel-array invariant holds.
+    let mut new_insts = Vec::with_capacity(block.insts.len() - eliminated);
+    let mut new_spans: Vec<Option<crate::span::Span>> =
+        Vec::with_capacity(block.span_map.len().saturating_sub(eliminated));
+    let old_spans = std::mem::take(&mut block.span_map);
+    let had_parallel_spans = old_spans.len() == block.insts.len();
     for (idx, inst) in block.insts.drain(..).enumerate() {
         if !to_delete.contains(&idx) {
             new_insts.push(inst);
+            new_spans.push(if had_parallel_spans {
+                old_spans.get(idx).copied().flatten()
+            } else {
+                None
+            });
         }
     }
     block.insts = new_insts;
+    block.span_map = new_spans;
     eliminated
 }
 
@@ -390,16 +401,40 @@ fn remove_companion_memsets(
     let mut removed = 0;
     for block in &mut func.blocks {
         let before = block.insts.len();
-        block.insts.retain(|inst| {
-            if let Inst::Memset { ptr, .. } = inst {
-                if let Some(&slot) = val_to_slot.get(ptr) {
-                    if deleted_slots.contains(&slot) {
-                        return false; // remove this companion Memset
+        // Filter `insts` + `span_map` in lockstep so the parallel-array
+        // invariant survives. Build a "keep" mask first, then apply.
+        let keep: Vec<bool> = block
+            .insts
+            .iter()
+            .map(|inst| {
+                if let Inst::Memset { ptr, .. } = inst {
+                    if let Some(&slot) = val_to_slot.get(ptr) {
+                        if deleted_slots.contains(&slot) {
+                            return false;
+                        }
                     }
                 }
+                true
+            })
+            .collect();
+        let had_parallel_spans = block.span_map.len() == block.insts.len();
+        let mut new_insts = Vec::with_capacity(block.insts.len());
+        let mut new_spans: Vec<Option<crate::span::Span>> =
+            Vec::with_capacity(block.span_map.len());
+        let old_insts = std::mem::take(&mut block.insts);
+        let old_spans = std::mem::take(&mut block.span_map);
+        for (i, inst) in old_insts.into_iter().enumerate() {
+            if keep[i] {
+                new_insts.push(inst);
+                new_spans.push(if had_parallel_spans {
+                    old_spans.get(i).copied().flatten()
+                } else {
+                    None
+                });
             }
-            true
-        });
+        }
+        block.insts = new_insts;
+        block.span_map = new_spans;
         removed += before - block.insts.len();
     }
     removed
@@ -476,9 +511,22 @@ fn insert_drop_flags(
             inits.push(Inst::SlotStore { slot: flag_slot, value: v_init, is_move: false });
         }
         // Prepend to bb0 so the flags are initialized before any other code.
+        // Mirror the prepend on `span_map` so the parallel-array invariant
+        // holds — synthetic drop-flag inits carry no source span.
+        let n_inits = inits.len();
         let mut combined = inits;
         combined.append(&mut func.blocks[0].insts);
         func.blocks[0].insts = combined;
+        let bb0 = &mut func.blocks[0];
+        if bb0.span_map.len() + n_inits == bb0.insts.len() {
+            let mut combined_spans: Vec<Option<crate::span::Span>> =
+                vec![None; n_inits];
+            combined_spans.append(&mut bb0.span_map);
+            bb0.span_map = combined_spans;
+        } else {
+            // Pre-1b or out-of-sync span_map: re-seed parallel-empty.
+            bb0.span_map = vec![None; bb0.insts.len()];
+        }
     }
 
     // 3. Instrument flag transitions:
@@ -499,8 +547,17 @@ fn insert_drop_flags(
     let flag_slots: HashSet<SlotId> = slot_to_flag.values().copied().collect();
     for bi in 0..func.blocks.len() {
         let old_insts = std::mem::take(&mut func.blocks[bi].insts);
+        let old_spans = std::mem::take(&mut func.blocks[bi].span_map);
+        let had_parallel_spans = old_spans.len() == old_insts.len();
         let mut new_insts: Vec<Inst> = Vec::with_capacity(old_insts.len());
-        for inst in old_insts {
+        let mut new_spans: Vec<Option<crate::span::Span>> =
+            Vec::with_capacity(old_insts.len());
+        for (i, inst) in old_insts.into_iter().enumerate() {
+            let src_span = if had_parallel_spans {
+                old_spans.get(i).copied().flatten()
+            } else {
+                None
+            };
             let (flag_slot, new_flag_value) = match &inst {
                 // SlotStore to a flagged user slot → flag := true (init / re-init).
                 // Skip stores to flag slots themselves (we emit those here).
@@ -521,13 +578,20 @@ fn insert_drop_flags(
                 _ => (None, false),
             };
             new_insts.push(inst);
+            new_spans.push(src_span);
             if let Some(fs) = flag_slot {
                 let v = func.next_value();
+                // Synthetic flag-tracking writes inherit the triggering
+                // instruction's span — they're emitted "for" that store
+                // and any trace-time attribution should point there.
                 new_insts.push(Inst::BoolConst { dst: v, value: new_flag_value });
+                new_spans.push(src_span);
                 new_insts.push(Inst::SlotStore { slot: fs, value: v, is_move: false });
+                new_spans.push(src_span);
             }
         }
         func.blocks[bi].insts = new_insts;
+        func.blocks[bi].span_map = new_spans;
     }
 
     // 4. Replace guard-open / guard-close sequences.
@@ -537,33 +601,47 @@ fn insert_drop_flags(
     let mut replaced = 0;
     for bi in 0..func.blocks.len() {
         let old_insts = std::mem::take(&mut func.blocks[bi].insts);
+        let old_spans = std::mem::take(&mut func.blocks[bi].span_map);
+        let had_parallel_spans = old_spans.len() == old_insts.len();
         let mut new_insts: Vec<Inst> = Vec::with_capacity(old_insts.len());
+        let mut new_spans: Vec<Option<crate::span::Span>> =
+            Vec::with_capacity(old_insts.len());
         // Depth counters for nesting: replaced opens vs. passthrough opens.
         let mut flag_depth: usize = 0;
         let mut passthrough_depth: usize = 0;
-        for inst in old_insts {
+        for (i, inst) in old_insts.into_iter().enumerate() {
+            let src_span = if had_parallel_spans {
+                old_spans.get(i).copied().flatten()
+            } else {
+                None
+            };
             match &inst {
                 Inst::DropGuardOpen { kind: DropGuardKind::NonZero { .. }, value } => {
                     if let Some(&flag_slot) = val_to_slot.get(value)
                         .and_then(|s| slot_to_flag.get(s))
                     {
                         // Load the bool flag and emit a flag-based guard open.
+                        // Both replacement insts inherit the original guard's
+                        // span — they're 1:1 stand-ins for it.
                         let v_flag = func.next_value();
                         new_insts.push(Inst::SlotLoad {
                             dst: v_flag,
                             slot: flag_slot,
                             ty: super::LirType::Bool,
                         });
+                        new_spans.push(src_span);
                         new_insts.push(Inst::DropGuardOpen {
                             kind: DropGuardKind::Bool,
                             value: v_flag,
                         });
+                        new_spans.push(src_span);
                         flag_depth += 1;
                         replaced += 1;
                     } else {
                         // Unknown slot — keep the original guard.
                         passthrough_depth += 1;
                         new_insts.push(inst);
+                        new_spans.push(src_span);
                     }
                 }
                 Inst::DropGuardClose => {
@@ -571,19 +649,26 @@ fn insert_drop_flags(
                         // Matches a replaced open — emit flag close.
                         flag_depth -= 1;
                         new_insts.push(Inst::DropGuardClose);
+                        new_spans.push(src_span);
                     } else if passthrough_depth > 0 {
                         // Matches a passthrough open — keep original close.
                         passthrough_depth -= 1;
                         new_insts.push(inst);
+                        new_spans.push(src_span);
                     } else {
                         // Orphan close — keep as-is (shouldn't happen).
                         new_insts.push(inst);
+                        new_spans.push(src_span);
                     }
                 }
-                _ => new_insts.push(inst),
+                _ => {
+                    new_insts.push(inst);
+                    new_spans.push(src_span);
+                }
             }
         }
         func.blocks[bi].insts = new_insts;
+        func.blocks[bi].span_map = new_spans;
     }
 
     replaced
@@ -654,10 +739,28 @@ pub fn elaborate_drops(module: &mut LirModule) -> ElabStats {
             insert_drop_flags(func, &val_to_slot, &maybe_init_slots, &bb0_in_state);
 
         // Phase 4: remove consumed MoveSlot annotations.  They served as dataflow
-        // signals for phases 1-3 and have no runtime effect.
+        // signals for phases 1-3 and have no runtime effect. Filter `insts`
+        // and `span_map` in lockstep.
         for block in &mut func.blocks {
             let before = block.insts.len();
-            block.insts.retain(|inst| !matches!(inst, Inst::MoveSlot { .. }));
+            let had_parallel_spans = block.span_map.len() == block.insts.len();
+            let old_insts = std::mem::take(&mut block.insts);
+            let old_spans = std::mem::take(&mut block.span_map);
+            let mut new_insts: Vec<Inst> = Vec::with_capacity(old_insts.len());
+            let mut new_spans: Vec<Option<crate::span::Span>> =
+                Vec::with_capacity(old_insts.len());
+            for (i, inst) in old_insts.into_iter().enumerate() {
+                if !matches!(inst, Inst::MoveSlot { .. }) {
+                    new_insts.push(inst);
+                    new_spans.push(if had_parallel_spans {
+                        old_spans.get(i).copied().flatten()
+                    } else {
+                        None
+                    });
+                }
+            }
+            block.insts = new_insts;
+            block.span_map = new_spans;
             stats.move_slots_removed += before - block.insts.len();
         }
     }
