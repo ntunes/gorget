@@ -252,6 +252,11 @@ pub struct Module {
     /// Per-function return ABI kind: fn_name → AbiKind.
     /// Populated from extern block ABI string + return type during pre-scan.
     pub fn_return_abis: rustc_hash::FxHashMap<String, abi::AbiKind>,
+    /// Per-sub-pass cumulative wall-clock time for the GIR lowering phase,
+    /// surfaced through `gg profile` so the next dominant hot spot inside
+    /// `gir_lower` is visible without instrumenting individual sites.
+    /// Populated only by `lower_module`; unused by codegen/optimization.
+    pub gir_lower_pass_times: std::collections::HashMap<&'static str, std::time::Duration>,
     /// Set of extern function names whose return value is `borrowed` —
     /// a non-owned pointer (e.g. SDL_GetError's internal buffer) that the
     /// caller must clone before treating as owned. Populated from
@@ -328,6 +333,7 @@ impl Module {
             fn_extern_abi_kinds: rustc_hash::FxHashMap::default(),
             yield_point_fns: rustc_hash::FxHashSet::default(),
             fn_return_abis: rustc_hash::FxHashMap::default(),
+            gir_lower_pass_times: std::collections::HashMap::new(),
             fn_returns_borrowed: rustc_hash::FxHashSet::default(),
             heap_alloc_consumer_externs: rustc_hash::FxHashSet::default(),
             consume_externs: rustc_hash::FxHashSet::default(),

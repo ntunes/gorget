@@ -1441,7 +1441,19 @@ fn try_profile(
         print!(" }}");
     }
     println!(" }},");
-    println!("    \"gir_lower\": {{ \"duration_ms\": {:.3} }},", gir_lower_ms);
+    print!("    \"gir_lower\": {{ \"duration_ms\": {:.3}", gir_lower_ms);
+    if !gir_module.gir_lower_pass_times.is_empty() {
+        let mut entries: Vec<(&&'static str, &std::time::Duration)> =
+            gir_module.gir_lower_pass_times.iter().collect();
+        entries.sort_by(|a, b| b.1.cmp(a.1));
+        print!(", \"pass_times_ms\": {{ ");
+        for (i, (name, dur)) in entries.iter().enumerate() {
+            if i > 0 { print!(", "); }
+            print!("\"{name}\": {:.3}", dur.as_secs_f64() * 1000.0);
+        }
+        print!(" }}");
+    }
+    println!(" }},");
     println!("    \"gir_optimize\": {{ \"duration_ms\": {:.3} }},", gir_optimize_ms);
     println!("    \"lir_lower\": {{ \"duration_ms\": {:.3} }},", lir_lower_ms);
     println!("    \"lir_ssa\": {{ \"duration_ms\": {:.3} }},", lir_ssa_ms);

@@ -15,10 +15,26 @@ use crate::ir::{ExternDecl, Module};
 use crate::parser::ast::{self, FunctionBody, Item};
 use crate::semantic::AnalysisResult;
 
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
+
 use context::LoweringContext;
 use functions::lower_function;
 use generics::GenericCollector;
 use types::TypeMapper;
+
+/// Local timing helper for per-sub-pass instrumentation in `lower_module`.
+/// Wraps an inline block so callers don't have to manage two `Instant`s
+/// across borrow boundaries (the lowering body interleaves `&mut module`
+/// and `&mut ctx` everywhere).
+macro_rules! time_pass {
+    ($map:expr, $name:literal, $body:block) => {{
+        let __t = std::time::Instant::now();
+        let __r = $body;
+        *$map.entry($name).or_insert_with(std::time::Duration::default) += __t.elapsed();
+        __r
+    }};
+}
 
 /// Options controlling the GIR lowering pass, typically sourced from CLI flags.
 #[derive(Debug, Default, Clone)]
@@ -64,6 +80,8 @@ pub fn lower_module(
     options: &LoweringOptions,
 ) -> Module {
     let mut module = Module::new();
+    let mut pass_times: HashMap<&'static str, Duration> = HashMap::new();
+    let __lower_module_t0 = Instant::now();
 
     // Phase 5: pre-compute module function name manglings BEFORE flattening so we
     // retain the module path information.  Maps func_name.span.start → mangled C name
@@ -71,6 +89,7 @@ pub fn lower_module(
     // name has the form  `seg1__seg2___func_name`  (module segments joined by `__`,
     // then `___` separator, then the Gorget function name).  This prevents C linker
     // collisions when multiple file-based modules define the same function name.
+    let __pass_t = Instant::now();
     let module_fn_manglings: rustc_hash::FxHashMap<usize, String> = {
         fn collect(
             path: &[String],
@@ -129,7 +148,9 @@ pub fn lower_module(
     // and in any helper functions that receive `ast_module` as a parameter.
     let flat_module = ast::Module { items: flat_module_items, span: ast_module.span };
     let ast_module = &flat_module;
+    *pass_times.entry("flatten_and_manglings").or_default() += __pass_t.elapsed();
 
+    let __pass_t = Instant::now();
     // Create type mapper
     let mut type_mapper = TypeMapper::new(&mut module.type_registry);
 
@@ -348,6 +369,9 @@ pub fn lower_module(
         type_mapper.register_named("GorgetRange".to_string(), range_type_id);
     }
 
+    *pass_times.entry("prescan_types").or_default() += __pass_t.elapsed();
+
+    let __pass_t = Instant::now();
     // P2.3: Generic monomorphization — collect templates, discover usages, monomorphize
     let mut generic_collector = GenericCollector::new();
     generic_collector.collect_templates(ast_module);
@@ -451,7 +475,9 @@ pub fn lower_module(
         param_abis: vec![],
         returns_borrowed: false,
     });
+    *pass_times.entry("monomorphize").or_default() += __pass_t.elapsed();
 
+    let __pass_t = Instant::now();
     // Move type_registry into LoweringContext for the lowering phase
     let type_registry = std::mem::take(&mut module.type_registry);
     let mut ctx = LoweringContext::new(analysis, type_mapper, type_registry);
@@ -521,11 +547,17 @@ pub fn lower_module(
         }
     }
 
+    *pass_times.entry("setup_ctx_and_directives").or_default() += __pass_t.elapsed();
+
+    let __pass_t = Instant::now();
     // P2.5: Register VTable and TraitObj types for all trait definitions
     let trait_info = traits::register_trait_types(&mut ctx, ast_module);
 
     // Populate struct field info cache (includes monomorphized + vtable/trait obj types)
     ctx.populate_struct_fields();
+    *pass_times.entry("register_trait_types").or_default() += __pass_t.elapsed();
+
+    let __pass_t = Instant::now();
 
     // Pre-scan: register enum variant → (enum_name, variant_name) mappings
     for item in &ast_module.items {
@@ -559,6 +591,9 @@ pub fn lower_module(
         }
     }
 
+    *pass_times.entry("prescan_enum_variants").or_default() += __pass_t.elapsed();
+
+    let __pass_t = Instant::now();
     // Pre-scan: build fn_sigs map for all non-generic functions
     for item in &ast_module.items {
         if let Item::Function(func) = &item.node {
@@ -839,6 +874,9 @@ pub fn lower_module(
         }
     }
 
+    *pass_times.entry("prescan_fn_sigs").or_default() += __pass_t.elapsed();
+
+    let __pass_t = Instant::now();
     // Build call_resolved_names: for each entry in resolution_map that points to a
     // module-mangled function, record call_span → mangled_name.  This lets call lowering
     // pick the correct target when multiple modules define the same bare function name.
@@ -1146,6 +1184,9 @@ pub fn lower_module(
     // Register runtime built-in method signatures (Str, uint8_t, primitive statics)
     register_runtime_method_sigs(&mut ctx);
 
+    *pass_times.entry("register_mono_and_trait_sigs").or_default() += __pass_t.elapsed();
+
+    let __pass_t = Instant::now();
     // Pre-register module-level static variables so functions can reference them.
     for item in &ast_module.items {
         if let Item::StaticDecl(decl) = &item.node {
@@ -1194,6 +1235,9 @@ pub fn lower_module(
         }
     }
 
+    *pass_times.entry("lower_globals").or_default() += __pass_t.elapsed();
+
+    let __pass_t = Instant::now();
     // Lower all non-generic functions
     for item in &ast_module.items {
         if let Item::Function(func) = &item.node {
@@ -1212,6 +1256,9 @@ pub fn lower_module(
         }
     }
 
+    *pass_times.entry("lower_functions").or_default() += __pass_t.elapsed();
+
+    let __pass_t = Instant::now();
     // Lower monomorphized generic function instances
     for (base_name, type_args, mangled_name) in generic_collector.function_instances() {
         if let Some(template) = generic_collector.get_fn_template(base_name) {
@@ -1228,6 +1275,9 @@ pub fn lower_module(
         }
     }
 
+    *pass_times.entry("lower_generic_functions").or_default() += __pass_t.elapsed();
+
+    let __pass_t = Instant::now();
     // Lower non-generic equip blocks as functions
     for item in &ast_module.items {
         if let Item::Equip(equip) = &item.node {
@@ -1257,6 +1307,9 @@ pub fn lower_module(
         }
     }
 
+    *pass_times.entry("lower_equip_methods").or_default() += __pass_t.elapsed();
+
+    let __pass_t = Instant::now();
     // Lower monomorphized equip method instances
     for (base_name, type_args, mangled_type_name) in generic_collector.equip_instances() {
         if let Some(equip_blocks) = generic_collector.get_equip_templates(base_name) {
@@ -1274,6 +1327,9 @@ pub fn lower_module(
         }
     }
 
+    *pass_times.entry("lower_generic_equip_methods").or_default() += __pass_t.elapsed();
+
+    let __pass_t = Instant::now();
     // Lower per-call-site method instances (method-level-generic equip methods).
     // Each MethodInstance captures the equip + method + concrete type args, and
     // lowers to a free-function-shaped symbol that the MethodCall dispatch path
@@ -1331,6 +1387,9 @@ pub fn lower_module(
         }
     }
 
+    *pass_times.entry("lower_method_instances").or_default() += __pass_t.elapsed();
+
+    let __pass_t = Instant::now();
     // Lower test items: each test becomes a void function, then generate test runner main.
     // In test_mode (gg test), run even when a main() exists — the C backend will skip it.
     let has_tests = ast_module.items.iter().any(|item| matches!(&item.node, Item::Test(_)));
@@ -1346,13 +1405,18 @@ pub fn lower_module(
         module.runtime.is_test_module = true;
     }
 
+    *pass_times.entry("lower_tests_benches").or_default() += __pass_t.elapsed();
+
+    let __pass_t = Instant::now();
     // P2.5: Lower trait equip methods and emit vtable globals
     traits::lower_trait_equip_methods(&mut ctx, &mut module, &trait_info, ast_module);
     traits::emit_vtable_globals(&mut module, &trait_info, ast_module);
 
     // Lower trait equip blocks with unregistered traits (From, Default, Equatable, etc.)
     traits::lower_unregistered_trait_equip_methods(&mut ctx, &mut module, &trait_info, ast_module);
+    *pass_times.entry("lower_traits").or_default() += __pass_t.elapsed();
 
+    let __pass_t = Instant::now();
     // P2.4: Emit lifted closure call functions
     let closures = std::mem::take(&mut ctx.closures);
     for lifted in &closures.lifted {
@@ -1364,7 +1428,9 @@ pub fn lower_module(
     for func in std::mem::take(&mut ctx.spawn.wrapper_fns) {
         module.functions.push(func);
     }
+    *pass_times.entry("lower_closures_spawn_wrappers").or_default() += __pass_t.elapsed();
 
+    let __pass_t = Instant::now();
     // P2.4c: Process deferred shared-async variants via GIR-to-GIR transform.
     // Source functions are already lowered into module.functions at this point.
     // Collect inner spawn rewrites for processing after all variants are generated.
@@ -1471,6 +1537,9 @@ pub fn lower_module(
         }
     }
 
+    *pass_times.entry("shared_async_transform").or_default() += __pass_t.elapsed();
+
+    let __pass_t = Instant::now();
     // Move type_registry back to module for validation
     module.type_registry = std::mem::take(&mut ctx.type_registry);
 
@@ -1483,6 +1552,7 @@ pub fn lower_module(
     // This handles runtime functions (gorget_throw, gorget_array_new, etc.)
     // without needing to enumerate each one manually.
     auto_register_externs(&mut module);
+    *pass_times.entry("auto_register_externs").or_default() += __pass_t.elapsed();
 
     // Tier 1c — TypeDef metadata coherence at registration. Promoted
     // to fatal 2026-05-11 after the carve-out removal landed and the
@@ -1491,7 +1561,7 @@ pub fn lower_module(
     // restrictive than its fields/variants demand halts the build.
     //
     // See `docs/internals/structural-guards.md` §Tier 1c.
-    {
+    time_pass!(pass_times, "validate_type_metadata_coherence", {
         let warnings = crate::ir::validate::validate_type_metadata_coherence(&module);
         if !warnings.is_empty() {
             eprintln!("[type-metadata-coherence] {} violation(s):", warnings.len());
@@ -1506,8 +1576,9 @@ pub fn lower_module(
                 warnings.first().map(|w| w.to_string()).unwrap_or_default(),
             );
         }
-    }
+    });
 
+    let __pass_t = Instant::now();
     // Validate the resulting module
     let errors = crate::ir::validate::validate(&module);
     if !errors.is_empty() {
@@ -1529,6 +1600,7 @@ pub fn lower_module(
             panic!("GIR module failed validation ({} errors)", fatal.len());
         }
     }
+    *pass_times.entry("validate_module").or_default() += __pass_t.elapsed();
 
     // Phase C, Stage C4: resource-move validator promoted from warning
     // to fatal invariant. Stages C1-C3 + §6.8 cleared all violations
@@ -1537,7 +1609,7 @@ pub fn lower_module(
     // the build instead of leaking past the validator. The
     // GG_VALIDATE_RESOURCE_MOVES env gate is removed; the check is
     // unconditional in default builds and CI.
-    {
+    time_pass!(pass_times, "validate_resource_moves", {
         let warnings = crate::ir::validate::validate_resource_moves(&module);
         if !warnings.is_empty() {
             eprintln!("[resource-moves] {} violation(s):", warnings.len());
@@ -1546,14 +1618,14 @@ pub fn lower_module(
             }
             panic!("GIR module failed resource-move validation ({} violation(s))", warnings.len());
         }
-    }
+    });
 
     // Phase C extension promoted: `Call/CallExtern` resource args.
     // 2026-05-04 sweep: 0 violations across 1056 fixtures, so the
     // class is fatal. Any future lowering that passes a resource by
     // shallow-copy at a `ByValue`/`GorgetString` ABI position halts
     // the build instead of leaking past the validator.
-    {
+    time_pass!(pass_times, "validate_resource_call_args", {
         let arg_warnings = crate::ir::validate::validate_resource_call_args(&module);
         if !arg_warnings.is_empty() {
             eprintln!("[resource-call-args] {} violation(s):", arg_warnings.len());
@@ -1562,10 +1634,10 @@ pub fn lower_module(
             }
             panic!("GIR module failed resource call-arg validation ({} violation(s))", arg_warnings.len());
         }
-    }
+    });
 
     // Phase C extension promoted: `IndexLoad` of resource element.
-    {
+    time_pass!(pass_times, "validate_resource_index_reads", {
         let index_warnings = crate::ir::validate::validate_resource_index_reads(&module);
         if !index_warnings.is_empty() {
             eprintln!("[resource-index-reads] {} violation(s):", index_warnings.len());
@@ -1574,10 +1646,10 @@ pub fn lower_module(
             }
             panic!("GIR module failed resource index-read validation ({} violation(s))", index_warnings.len());
         }
-    }
+    });
 
     // Phase C extension promoted: `EnumFieldLoad` of resource payload.
-    {
+    time_pass!(pass_times, "validate_resource_enum_reads", {
         let enum_warnings = crate::ir::validate::validate_resource_enum_reads(&module);
         if !enum_warnings.is_empty() {
             eprintln!("[resource-enum-reads] {} violation(s):", enum_warnings.len());
@@ -1586,7 +1658,7 @@ pub fn lower_module(
             }
             panic!("GIR module failed resource enum-read validation ({} violation(s))", enum_warnings.len());
         }
-    }
+    });
 
     // Phase C extension promoted: `FieldLoad` of resource field.
     // 2026-05-06 sweep: 0 violations across 1066 fixtures after the
@@ -1595,7 +1667,7 @@ pub fn lower_module(
     // closure-arg extraction, Pattern::Tuple destructure (owned vs
     // borrowed), Expr::TupleFieldAccess, and the validator's
     // FieldLoad-then-MoveZero peek for the !self consuming-self idiom.
-    {
+    time_pass!(pass_times, "validate_resource_field_reads", {
         let field_warnings = crate::ir::validate::validate_resource_field_reads(&module);
         if !field_warnings.is_empty() {
             eprintln!("[resource-field-reads] {} violation(s):", field_warnings.len());
@@ -1604,7 +1676,7 @@ pub fn lower_module(
             }
             panic!("GIR module failed resource field-read validation ({} violation(s))", field_warnings.len());
         }
-    }
+    });
 
     // Phase C extension: opt-in residual logger.
     // All four read-site classes (Call/CallExtern args, IndexLoad,
@@ -1657,7 +1729,7 @@ pub fn lower_module(
     // source must be followed by a `MoveZero` of the source in the same
     // basic block before any subsequent `Drop` / `DropIfAlive` of the
     // source — snag #19 / #23 lock-in.
-    {
+    time_pass!(pass_times, "validate_move_follow_through", {
         let mft_warnings = crate::ir::validate::validate_move_follow_through(&module);
         if !mft_warnings.is_empty() {
             eprintln!("[move-follow-through] {} violation(s):", mft_warnings.len());
@@ -1666,7 +1738,7 @@ pub fn lower_module(
             }
             panic!("GIR module failed move-follow-through validation ({} violation(s))", mft_warnings.len());
         }
-    }
+    });
 
     // Tier 2c — drop-tracking pre-rebind correctness (snag #23 class lock).
     // Every call to a heap-allocating consumer (currently `__gorget_box_alloc_<T>`)
@@ -1691,7 +1763,7 @@ pub fn lower_module(
     // suppressing the panic — mirrors `GG_VALIDATE_CONSUME_SITES` /
     // `GG_VALIDATE_MOVE_FOLLOW_THROUGH`.
     module.heap_alloc_consumer_externs = std::mem::take(&mut ctx.heap_alloc_consumer_externs);
-    {
+    time_pass!(pass_times, "validate_drop_pre_rebind_and_null_to_opt", {
         let dpr_warnings = crate::ir::validate::validate_drop_pre_rebind(&module);
         if !dpr_warnings.is_empty() {
             // Optional structured log for investigation. Sweep-of-record
@@ -1757,7 +1829,7 @@ pub fn lower_module(
                     Snag #32 family — writer must route through `coerce_null_to_option_none`.",
                    null_to_opt.len());
         }
-    }
+    });
 
     // Tier 2a Phase 2A — post-lowering ownership inference.
     //
@@ -1788,7 +1860,9 @@ pub fn lower_module(
     // CoW alias propagation) are preserved.
     //
     // See `src/ir/tag_ownership.rs` for the rules + the rationale.
-    crate::ir::tag_ownership::infer_fresh_owned(&mut module);
+    time_pass!(pass_times, "tag_ownership_infer_fresh_owned", {
+        crate::ir::tag_ownership::infer_fresh_owned(&mut module);
+    });
 
     // Populate Module::consume_externs. Two sources:
     //   (1) Direct registrations from writer sites (lower_dict_literal etc.)
@@ -1803,7 +1877,7 @@ pub fn lower_module(
     // allowlists miss. See `Module::consume_externs` doc for full rationale.
     // Must run BEFORE `validate_consume_sites` so the classifier sees the
     // registry.
-    {
+    time_pass!(pass_times, "populate_consume_externs", {
         use crate::parser::ast::Ownership;
         module.consume_externs = std::mem::take(&mut ctx.consume_externs);
         for (name, ownerships) in &ctx.fn_param_ownerships {
@@ -1811,7 +1885,7 @@ pub fn lower_module(
                 module.consume_externs.insert(name.clone());
             }
         }
-    }
+    });
 
     // Tier 2a: consume-site discipline (CoW write-side) — FATAL.
     // Promoted from env-gated warning (Phase 1) to unconditional fatal
@@ -1828,7 +1902,7 @@ pub fn lower_module(
     // report (class counts, sample violations) without suppressing the panic.
     //
     // See `docs/internals/structural-guards.md` Tier 2a for the full spec.
-    {
+    time_pass!(pass_times, "validate_consume_sites", {
         let warnings = crate::ir::validate::validate_consume_sites(&module);
         // Tier 2a Phase 3 promoted (2026-05-10): all classes — including
         // `AssignIntoOwnedSlot` (Snag #28's plain `Inst::Assign` shape) —
@@ -1925,9 +1999,10 @@ pub fn lower_module(
                 );
             }
         }
-    }
+    });
 
 
+    let __pass_t = Instant::now();
     // Propagate directive flags to module
     module.runtime.overflow_wrap = ctx.overflow_wrap;
     module.runtime.scheduler_mode = ctx.spawn.scheduler_mode;
@@ -1959,6 +2034,15 @@ pub fn lower_module(
 
     // Transfer runtime callees table for LIR backend
     module.runtime_callees = ctx.runtime_callees;
+    *pass_times.entry("runtime_metadata_and_thread").or_default() += __pass_t.elapsed();
+
+    let lower_total = __lower_module_t0.elapsed();
+    let inner_sum: Duration = pass_times.values().copied().sum();
+    // Residual = the bits between named phases that escape any time_pass!()
+    // attribution. Lets the surfaced report sum to wall time without obscuring
+    // which sub-pass dominates.
+    *pass_times.entry("unaccounted").or_default() += lower_total.saturating_sub(inner_sum);
+    module.gir_lower_pass_times = pass_times;
 
     module
 }
