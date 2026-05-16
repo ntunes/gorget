@@ -88,21 +88,20 @@ int infer_closure_return_type(Stmt s, Dict[String, int] param_types, ScopeTable 
 
 # ── Expression type inference ──────────────────────────────────
 #
-# Per-expression typed metadata. `infer_expr_type` is the public entry;
-# it delegates to `infer_expr_type_impl` and records the resolved type
-# into `types.expr_types` keyed by the expression's span.start. The
-# lowerer reads from this side-table instead of reconstructing types
-# from scratch (Layering rule 3 — one source of truth per axis).
-# Subsequent calls for the same span overwrite (last computation wins),
-# which matches Rust's late-binding inference behavior.
+# Per-expression typed metadata is recorded into `types.expr_types`
+# (`Span.start → ResolvedType id`) at sites the lowerer needs to
+# query later — the architectural single-source-of-truth for
+# expression types (Layering rule 3). The recording is targeted
+# rather than uniform across all expressions: a global wrapper that
+# recorded every recursive call cost ~100s on self-host's own source
+# (≈1M expression nodes, each Dict.put non-trivial). Today the only
+# downstream consumer is `lower_expr`'s EMethodCall path, which
+# queries by the call's outer span; targeted recording at the
+# EMethodCall arm in `infer_expr_type` covers that without paying
+# the across-the-board recursive cost. Extend the recording to other
+# Expr variants as the lowerer grows new query sites.
 
 int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, ResolveContext ctx):
-    int result = infer_expr_type_impl(sexpr, scopes, &types, ctx)
-    if result >= 0:
-        types.expr_types.put(sexpr.span.start, result)
-    return result
-
-int infer_expr_type_impl(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, ResolveContext ctx):
     Expr e = sexpr.expr
     int span_start = sexpr.span.start
 
@@ -351,6 +350,12 @@ int infer_expr_type_impl(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types,
                             else:
                                 pass
                     if reg_ret >= 0 and reg_ret != types.error_id and reg_ret != types.void_id:
+                        # Record into the per-expression side-table so the
+                        # lowerer can query the resolved return type for
+                        # method-generic calls it can't reconstruct from
+                        # fn_sigs (Gap #2 Phase 1 — single source of truth
+                        # for method-generic return types).
+                        types.expr_types.put(span_start, reg_ret)
                         return reg_ret
             # Infer return type from well-known methods
             if method_name == "len" or method_name == "count":

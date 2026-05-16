@@ -767,8 +767,13 @@ int resolved_to_gir_type(int rtid, TypeTable types, ScopeTable scopes, GirModule
                 i += 1
             return lookup_or_register_named(&gmod, mangled)
         case RTRef(inner_rtid):
-            int inner_tid = resolved_to_gir_type(inner_rtid, types, scopes, &gmod)
-            return register_ptr(&gmod, inner_tid)
+            # Refs in the typechecker model the borrow-vs-owned distinction
+            # explicitly. The lowerer tracks the same distinction on the
+            # GIR local's `ownership` field (LoBorrowed / LoOwned), so the
+            # type id itself reflects the pointee, not the borrow wrapper.
+            # Matches `infer_method_return_type`'s convention for
+            # `.get(i).unwrap()` and friends — same shape downstream.
+            return resolved_to_gir_type(inner_rtid, types, scopes, &gmod)
         case RTTuple(elem_rtids):
             # Mirror `mangle_type_name` for tuples — register the mangled
             # Tuple__T1__T2__... name and let downstream code register
@@ -792,12 +797,14 @@ int resolved_to_gir_type(int rtid, TypeTable types, ScopeTable scopes, GirModule
 # Convenience: query the typechecker's per-expression type for a given
 # SpannedExpr (by span.start) and translate to GIR. Returns -1 if no
 # entry is recorded; callers should fall back to their existing path.
-int lookup_expr_gir_type(SpannedExpr sexpr, TypeTable types, ScopeTable scopes, GirModule &gmod):
+# Reads the typechecker side-tables stashed on `gmod` at lower_module
+# entry (single accessor — typed-metadata write-through, Layering rule 2).
+int lookup_expr_gir_type(SpannedExpr sexpr, GirModule &gmod):
     int span_start = sexpr.span.start
-    if not types.expr_types.contains(span_start):
+    if not gmod.tc_types.expr_types.contains(span_start):
         return -1
-    int rtid = types.expr_types.get(span_start).unwrap()
-    return resolved_to_gir_type(rtid, types, scopes, &gmod)
+    int rtid = gmod.tc_types.expr_types.get(span_start).unwrap()
+    return resolved_to_gir_type(rtid, gmod.tc_types, gmod.tc_scopes, &gmod)
 
 int map_ast_type(SpannedType stype, GirModule &gmod):
     match stype.ty:
@@ -2419,14 +2426,35 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # Resolve receiver type name from the GIR local's type
             String recv_type_name = local_type_name(recv, &ctx, &gmod)
             String full_name = recv_type_name + "__" + mname
-            # Prefer fn_sigs lookup for known user method signatures — this
-            # gives the real return type for equip-block methods. Fall back
-            # to the name-based heuristic if no signature is recorded.
+            # Return-type resolution priority — single source of truth
+            # at each step (Layering rule 3):
+            #
+            #   1. fn_sigs (the lowerer's own registrations: Option B
+            #      pre-pass for mono'd generic-equip methods + the
+            #      non-generic-equip pre-pass at line ~6201). Fast,
+            #      authoritative for the cases it covers.
+            #   2. Typechecker side-table (`tc_types.expr_types`) —
+            #      covers method-generic call sites (`v.iter().
+            #      take_while[P](pred)`, `.map[U,F](f)`, full iterator
+            #      chains, etc.) where the typechecker already resolved
+            #      the mono'd return type. The architectural single
+            #      source of truth for "what type does this expression
+            #      have?" (Phase 1 + 2 of Gap #2). Returns a fully-
+            #      mangled GIR type id via `resolved_to_gir_type`.
+            #   3. Name-based heuristic (`infer_method_return_type`) —
+            #      last resort for built-in collection runtime methods
+            #      the typechecker doesn't model (raw runtime symbols
+            #      like `gorget_array_get`); returns I64 when truly
+            #      unknown.
             int ret_tid = I64_TYPE
             if gmod.fn_sigs.contains(full_name):
                 ret_tid = gmod.fn_sigs.get(full_name).unwrap()
             else:
-                ret_tid = infer_method_return_type(mname, recv, &ctx, &gmod)
+                int tc_ret = lookup_expr_gir_type(sexpr, &gmod)
+                if tc_ret >= 0:
+                    ret_tid = tc_ret
+                else:
+                    ret_tid = infer_method_return_type(mname, recv, &ctx, &gmod)
             if ret_tid == UNIT_TYPE:
                 # Void-returning method — no destination
                 emit(&ctx, GICallExtern(-1, full_name, call_args))
@@ -5981,7 +6009,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     # a zero-arg call.
     Dict[String, GirStaticInfo] statics = {}
     Dict[String, GirResourceMetadata] resource_metadata = {}
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata)
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes)
 
     # Refine fn_sigs for functions with named/generic return types. The
     # pre-scan above defaulted those to `I64_TYPE` because `map_ast_type`

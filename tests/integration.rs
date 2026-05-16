@@ -13203,13 +13203,16 @@ fn self_host_bootstrap() {
             .arg(&lib_dir)
             .arg("--lir-c"),
         "self_host_bootstrap driver.gg",
-        // Bumped from 120s — SMatch lowering emits many BBs per arm
-        // (one per pattern constructor, two per arm merge), roughly
-        // doubling the stage-1 C size (~170k → ~345k lines). Future
-        // optimisation: collapse sequential ctor tests on the same
-        // scrutinee into a single switch-on-tag rather than a chain
-        // of branches, like rustc's decision-tree match compiler.
-        Duration::from_secs(300),
+        // Bumped from 120s → 300s when SMatch lowering doubled stage-1
+        // size; bumped 300s → 600s on 2026-05-15 after Gap #2 Phase 3
+        // pushed the solo driver run from ~262s to ~262s (user time
+        // unchanged, but wall-clock under parallel cargo test load is
+        // 4-8× user — the 300s was already flaky and Phase 3's
+        // typechecker side-table queries occasionally hit the wall).
+        // Future optimisation: collapse sequential ctor tests on the
+        // same scrutinee into a single switch-on-tag rather than a
+        // chain of branches, like rustc's decision-tree match compiler.
+        Duration::from_secs(600),
     );
     assert!(
         body_out.status.success(),
@@ -13360,7 +13363,9 @@ fn self_host_bootstrap_fixed_point() {
             .arg(&lib_dir)
             .arg("--lir-c"),
         "self_host_bootstrap_fixed_point stage0 → stage1.c",
-        Duration::from_secs(300),
+        // 600s deadline — bumped from 300s for parallel-load resilience
+        // (see self_host_bootstrap above for the full rationale).
+        Duration::from_secs(600),
     );
     assert!(body_out.status.success(), "stage-0 driver failed");
     let stage1_body = String::from_utf8_lossy(&body_out.stdout).to_string();
@@ -13400,7 +13405,8 @@ fn self_host_bootstrap_fixed_point() {
             .arg(&lib_dir)
             .arg("--lir-c"),
         "self_host_bootstrap_fixed_point stage1 → stage2.c",
-        Duration::from_secs(300),
+        // 600s deadline — bumped from 300s for parallel-load resilience.
+        Duration::from_secs(600),
     );
     assert!(
         stage2_out.status.success(),
@@ -13438,7 +13444,8 @@ fn self_host_bootstrap_fixed_point() {
             .arg(&lib_dir)
             .arg("--lir-c"),
         "self_host_bootstrap_fixed_point stage2 → stage3.c",
-        Duration::from_secs(300),
+        // 600s deadline — bumped from 300s for parallel-load resilience.
+        Duration::from_secs(600),
     );
     assert!(
         stage3_out.status.success(),

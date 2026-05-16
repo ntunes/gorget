@@ -1,8 +1,10 @@
 # GIR (Gorget Intermediate Representation) data structures.
 # Mirrors the Rust types in src/ir/ for self-hosted IR lowering.
 
-from std.collections import Vector
+from std.collections import Vector, Dict
 from std.conv import int_to_str
+from types import TypeTable
+from scope import ScopeTable
 
 # ── Pre-allocated primitive type IDs ───────────────────────
 
@@ -278,6 +280,16 @@ struct GirModule:
     # registration; consumed by lir_lower / lower in place of
     # `name.starts_with("Vector__")` and friends.
     Dict[String, GirResourceMetadata] resource_metadata
+    # Typechecker side-tables — set once at lower_module start so
+    # downstream passes that hold `&gmod` can query per-expression
+    # resolved types without threading two extra args through every
+    # signature. `tc_types.expr_types` (per-expression
+    # `Span.start → type_id`) is the architectural single-source-of-
+    # truth for expression types (Layering rule 3); the read accessor
+    # is `lookup_expr_gir_type(sexpr, &gmod)`. lir_lower / lir_codegen
+    # don't consult these — they're a within-lower-module convenience.
+    TypeTable tc_types
+    ScopeTable tc_scopes
 
 # ── Helpers ──────────────────────────────────────────────
 
