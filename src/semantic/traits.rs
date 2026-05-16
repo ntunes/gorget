@@ -118,6 +118,12 @@ pub struct TraitRegistry {
     pub impls: Vec<EquipInfo>,
     /// type -> indices into impls for inherent impls
     pub inherent_impls: FxHashMap<TypeId, Vec<usize>>,
+    /// type -> indices into impls for trait impls (any trait, any args).
+    /// Used by `resolve_method`/`resolve_method_shape` to skip the
+    /// per-call linear scan over every impl in the module — they now
+    /// visit only the impls whose `self_type` matches the receiver.
+    /// Source of truth remains `impls`; this is a pure lookup index.
+    pub trait_impls_by_type: FxHashMap<TypeId, Vec<usize>>,
     /// (trait DefId, type TypeId, trait type args) -> index into impls
     /// The Vec<TypeId> holds the resolved trait generic arguments (empty for non-generic traits).
     /// This allows multiple impls of the same parameterized trait (e.g. `From[int]` and `From[str]`).
@@ -130,6 +136,7 @@ impl TraitRegistry {
             traits: FxHashMap::default(),
             impls: Vec::new(),
             inherent_impls: FxHashMap::default(),
+            trait_impls_by_type: FxHashMap::default(),
             trait_impls: FxHashMap::default(),
         }
     }
@@ -149,31 +156,25 @@ impl TraitRegistry {
             }
         }
 
-        // Check trait impls
-        for impl_info in &self.impls {
-            if impl_info.self_type == type_id && impl_info.trait_.is_some() {
+        // Check trait impls (then default fallback) using the
+        // self-type → impl-indices index — avoids per-call linear scan.
+        if let Some(impl_indices) = self.trait_impls_by_type.get(&type_id) {
+            for &idx in impl_indices {
+                let impl_info = &self.impls[idx];
                 if let Some((def_id, sig)) = impl_info.methods.get(method) {
                     return Some((def_id, sig));
                 }
             }
-        }
-
-        // Trait default-method fallback: a type that equips trait T but
-        // doesn't override `m` still inherits `m` from T's default body
-        // (e.g. `take(n)` on Iterator[T]). Walk the trait impls for this
-        // type and consult each implemented trait's TraitInfo for a default.
-        for impl_info in &self.impls {
-            if impl_info.self_type != type_id { continue; }
-            let trait_def_id = match impl_info.trait_ {
-                Some(id) => id,
-                None => continue,
-            };
-            if let Some(trait_info) = self.traits.get(&trait_def_id) {
-                let has_default = trait_info.has_default_body
-                    .get(method).copied().unwrap_or(false);
-                if has_default {
-                    if let Some(sig) = trait_info.methods.get(method) {
-                        return Some((&trait_info.def_id, sig));
+            for &idx in impl_indices {
+                let impl_info = &self.impls[idx];
+                let Some(trait_def_id) = impl_info.trait_ else { continue };
+                if let Some(trait_info) = self.traits.get(&trait_def_id) {
+                    let has_default = trait_info.has_default_body
+                        .get(method).copied().unwrap_or(false);
+                    if has_default {
+                        if let Some(sig) = trait_info.methods.get(method) {
+                            return Some((&trait_info.def_id, sig));
+                        }
                     }
                 }
             }
@@ -199,21 +200,21 @@ impl TraitRegistry {
                 }
             }
         }
-        // Check trait impls (overrides)
-        for impl_info in &self.impls {
-            if impl_info.self_type == type_id && impl_info.trait_.is_some() {
-                if let Some(shape) = impl_info.method_shapes.get(method) {
+        // Trait impls (overrides) + default-method fallback via the
+        // self-type index — same shape as `resolve_method`.
+        if let Some(impl_indices) = self.trait_impls_by_type.get(&type_id) {
+            for &idx in impl_indices {
+                if let Some(shape) = self.impls[idx].method_shapes.get(method) {
                     return Some(shape);
                 }
             }
-        }
-        // Fallback: trait default-method shape
-        for impl_info in &self.impls {
-            if impl_info.self_type != type_id { continue; }
-            let trait_def_id = match impl_info.trait_ { Some(id) => id, None => continue };
-            if let Some(trait_info) = self.traits.get(&trait_def_id) {
-                if let Some(shape) = trait_info.method_shapes.get(method) {
-                    return Some(shape);
+            for &idx in impl_indices {
+                let impl_info = &self.impls[idx];
+                let Some(trait_def_id) = impl_info.trait_ else { continue };
+                if let Some(trait_info) = self.traits.get(&trait_def_id) {
+                    if let Some(shape) = trait_info.method_shapes.get(method) {
+                        return Some(shape);
+                    }
                 }
             }
         }
@@ -1080,6 +1081,11 @@ fn process_impl(
 
     if let Some(trait_id) = trait_def_id {
         registry.trait_impls.insert((trait_id, self_type_id, trait_arg_type_ids), impl_idx);
+        registry
+            .trait_impls_by_type
+            .entry(self_type_id)
+            .or_default()
+            .push(impl_idx);
     } else {
         // Multiple inherent `equip T:` blocks are fine — they just
         // accumulate methods on T. What's NOT fine is two different
