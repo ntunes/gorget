@@ -568,7 +568,66 @@ pub fn compute_value_types(func: &mut LirFunction, module: &LirModule) {
         }
     }
 
+    apply_callextern_slotstore_override(func, module, &mut vt);
+
     func.value_types = vt;
+}
+
+/// CallExtern→SlotStore slot-type override.
+///
+/// When a `CallExtern` result is immediately stored into a slot whose type is
+/// more specific than the extern's declared return type (e.g. extern returns
+/// `void*` / `int64_t` but the GIR-typed slot is `Option[int]` / `GorgetArray`),
+/// prefer the slot type. The slot type comes from GIR via SSA construction and
+/// is authoritative; the extern's declared C return type is generic.
+///
+/// Excludes the case where the current inferred type is `Ptr` and the slot's
+/// raw type is `GorgetString` (Struct or PtrTo): in that path the consumer
+/// (`SlotStore`) wraps the pointer with `gorget_str_from_literal`, so the
+/// value-side type must stay `Ptr`. Also skips `Ptr`/`Void` slot types —
+/// they are no more specific than the inferred type.
+///
+/// Layering rule 4 (resolve-once write-through): this used to live as a fixup
+/// in the C backend (`backend/c_lir/mod.rs`), now consolidated upstream so
+/// `func.value_types` is the single source of truth.
+fn apply_callextern_slotstore_override(
+    func: &LirFunction,
+    module: &LirModule,
+    vt: &mut [Option<LirType>],
+) {
+    let n = vt.len();
+    let str_struct_id: Option<StructId> = module.structs.iter().enumerate()
+        .find(|(_, s)| s.name == "GorgetString")
+        .map(|(i, _)| StructId(i as u32));
+    let is_str_raw = |ty: &LirType| -> bool {
+        match (ty, str_struct_id) {
+            (LirType::Struct(sid), Some(s)) => *sid == s,
+            (LirType::PtrTo(sid), Some(s)) => *sid == s,
+            _ => false,
+        }
+    };
+    let normed = |ty: LirType| -> LirType {
+        if matches!(ty, LirType::PtrTo(_)) { LirType::Ptr } else { ty }
+    };
+    for block in &func.blocks {
+        let insts = &block.insts;
+        for (i, inst) in insts.iter().enumerate() {
+            let Inst::CallExtern { dst: Some(d), .. } = inst else { continue; };
+            let Some(Inst::SlotStore { slot, value, .. }) = insts.get(i + 1) else { continue; };
+            if *value != *d { continue; }
+            let raw_slot_ty = func.slots[slot.0 as usize].ty.clone();
+            let slot_ty = normed(raw_slot_ty.clone());
+            if matches!(slot_ty, LirType::Ptr | LirType::Void) { continue; }
+            let didx = d.0 as usize;
+            if didx >= n { continue; }
+            let current = vt[didx].as_ref();
+            let is_ptr_to_str = matches!(current, Some(LirType::Ptr)) && is_str_raw(&raw_slot_ty);
+            if is_ptr_to_str { continue; }
+            if current != Some(&slot_ty) {
+                vt[didx] = Some(slot_ty);
+            }
+        }
+    }
 }
 
 /// Compute value types for all functions in a module.
@@ -911,6 +970,8 @@ pub fn compute_function_value_types_at(module: &mut LirModule, i: usize) {
             }
         }
     }
+
+    apply_callextern_slotstore_override(&module.functions[i], module, &mut vt);
 
     module.functions[i].value_types = vt;
 }

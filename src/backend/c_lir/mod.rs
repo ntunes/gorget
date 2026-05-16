@@ -1055,12 +1055,12 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     // by `compute_module_value_types` / `compute_module_pointee_types` in
     // `src/lir/types.rs`) are the source of truth. The C backend seeds its
     // local `val_types` / `ptr_pointee` from those shared tables and then
-    // layers backend-specific fixups on top — CallExtern→SlotStore mismatch,
-    // guard accessor inference from consumers, cross-type combinator,
-    // consumer-driven back-propagation, InlineC→SlotStore. The fixups
-    // don't contradict the shared info; they refine it where the shared
-    // pass returns `None` (polymorphic combinators) or where the value's
-    // declared type doesn't match the C ABI the consumer expects.
+    // layers backend-specific fixups on top — guard accessor inference
+    // from consumers, cross-type combinator, consumer-driven back-propagation,
+    // InlineC→SlotStore. The fixups don't contradict the shared info; they
+    // refine it where the shared pass returns `None` (polymorphic combinators)
+    // or where the value's declared type doesn't match the C ABI the
+    // consumer expects.
     let mut val_types: Vec<Option<LirType>> = vec![None; max_val as usize];
     let mut ptr_pointee: Vec<Option<LirType>> = vec![None; max_val as usize];
     // Propagate pointee types through Ptr-typed slots (SlotStore → SlotLoad).
@@ -1417,38 +1417,10 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
         }
     }
 
-    // Fix val_types for CallExtern→SlotStore type mismatches. The extern
-    // declaration's return type may be a scalar/Ptr (e.g. void*, int64_t),
-    // but the GIR intended a richer type (e.g. Option[int], GorgetArray).
-    // When the slot type disagrees with the inferred value type and the slot
-    // type is not Ptr/Void, prefer the slot type — it comes from the GIR and
-    // is more precise than the C runtime's generic signature.
-    //
-    // Exception: when the current type is Ptr and the slot is Str/GorgetString,
-    // keep Ptr — the SlotStore handler wraps the pointer with gorget_str_from_literal.
-    // Also skip cstr-returning functions which produce raw pointers handled at store time.
-    for block in &func.blocks {
-        let insts = &block.insts;
-        for (i, inst) in insts.iter().enumerate() {
-            if let Inst::CallExtern { dst: Some(d), .. } = inst {
-                if let Some(Inst::SlotStore { slot, value, .. }) = insts.get(i + 1) {
-                    if *value == *d {
-                        let slot_ty = norm(func.slots[slot.0 as usize].ty.clone());
-                        if !matches!(slot_ty, LirType::Ptr | LirType::Void) {
-                            let current = val_types[d.0 as usize].as_ref();
-                            let is_ptr_to_str = matches!(current, Some(LirType::Ptr)) && {
-                                let raw_slot_ty = &func.slots[slot.0 as usize].ty;
-                                is_str_struct(raw_slot_ty, module) || is_str_ptr(raw_slot_ty, module)
-                            };
-                            if !is_ptr_to_str && current != Some(&slot_ty) {
-                                val_types[d.0 as usize] = Some(slot_ty);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // CallExtern→SlotStore slot-type override moved upstream to
+    // `src/lir/types.rs::apply_callextern_slotstore_override`. The shared
+    // `func.value_types` seed at the top of this function already reflects
+    // it (layering rule 4: resolve once, write through).
 
     // Fix val_types for guard/shared accessor results.
     // gorget_guard_get / gorget_shared_get_ptr return void* but the actual
