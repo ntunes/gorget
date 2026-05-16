@@ -77,6 +77,19 @@ impl<'a> EmitContext<'a> {
             _ => None,
         }
     }
+
+    /// Typed accessor: is this value from `Inst::FuncAddr` (adapter-wrapped
+    /// function address — a pointer to a closure-pack struct {fn_ptr, env})?
+    /// Distinguishes from `Inst::NamedFuncAddr` (a bare function pointer
+    /// scalar). The C backend's Store routing branches on this — adapter-
+    /// wrapped form needs `memcpy(dst, src, sizeof(GorgetClosure))` (the
+    /// source is a pointer to the 16-byte closure pack), bare named form
+    /// needs `memcpy(dst, &src, sizeof(src))` (the source is a function
+    /// pointer scalar).
+    #[inline]
+    pub fn is_func_addr(&self, v: ValueId) -> bool {
+        matches!(self.origin(v), Some(ValueOrigin::FuncAddr(_)))
+    }
 }
 
 /// Names of structs provided by the Gorget C runtime — these should NOT
@@ -2294,24 +2307,30 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
             if is_str_lit {
                 // String literal → store the static Str pointer directly.
                 write!(out, "*(Str*)({}) = {};", v(*ptr), v(*value)).unwrap();
-            } else if matches!(val_ty, Some(LirType::FuncRef)) {
-                // FuncRef: a function pointer stored as a pointer-sized scalar.
-                // Distinct from the `Ptr` branch below, which assumes the source
-                // value is an aggregate REFERENCE (so it does memcpy through
-                // the pointee). For a function address there's no pointee
+            } else if matches!(val_ty, Some(LirType::FuncRef)) && !ctx.is_func_addr(*value) {
+                // FuncRef from `Inst::NamedFuncAddr` — a bare function pointer
+                // scalar (8 bytes). The Ptr branch below assumes the source is
+                // an aggregate REFERENCE (so it does memcpy through the pointee
+                // type). For a bare named function address there's no pointee
                 // struct, only the pointer-sized address — take the address of
                 // the value to write the bytes into the destination slot.
                 //
-                // Before this branch existed, `Inst::FuncAddr`/`Inst::NamedFuncAddr`
-                // values were typed `None` by the C backend's local pass (it
-                // had no case for them), so they fell through to the struct-by-
-                // value branch below. Once `func.value_types` (the shared LIR
-                // type table) became the seed and started tagging these as
-                // `FuncRef`, the Ptr branch grabbed them and emitted
-                // `memcpy(p, val, sizeof(*(val)))` — UB for `void*` source.
-                // The fix is here, not at the writer site.
+                // Before this branch existed, `Inst::NamedFuncAddr` values were
+                // typed `None` by the C backend's local pass (it had no case
+                // for them), so they fell through to the struct-by-value branch
+                // below. Once `func.value_types` (the shared LIR type table)
+                // became the seed and started tagging these as `FuncRef`, the
+                // Ptr branch grabbed them and emitted `memcpy(p, val, sizeof(*(val)))`
+                // — UB for `void*` source. The fix is here, not at the writer.
+                //
+                // Distinction from `Inst::FuncAddr` (handled by the Ptr branch
+                // below): FuncAddr produces a pointer TO a closure-pack struct
+                // ({fn_ptr, env}, 16 bytes — see Inst::FuncAddr emission in
+                // emit_inst, line ~1960), so its Store needs memcpy through
+                // the pointee (16 bytes). The `is_func_addr` typed accessor
+                // (Phase D6 ValueOrigin) cleanly distinguishes the two cases.
                 write!(out, "memcpy({p}, &{val}, sizeof({val}));", p = v(*ptr), val = v(*value)).unwrap();
-            } else if matches!(val_ty, Some(LirType::Ptr)) {
+            } else if matches!(val_ty, Some(LirType::Ptr) | Some(LirType::FuncRef)) {
                 // Source is a pointer-shaped value (raw Ptr, or Tier E §8.6 FuncRef
                 // which lowers identically at this layer) — either an aggregate
                 // reference (memcpy) or a raw pointer value (direct store).
