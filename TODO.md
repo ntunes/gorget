@@ -110,7 +110,41 @@
   - **Stack traces:** today `gorget: integer overflow` (and similar runtime panics) report no source location. The IR carries spans through the GIR→LIR→C pipeline; the C backend can emit `#line` directives at each LIR-block boundary OR embed a per-panic-site `__FILE__:__LINE__` string that the runtime prints alongside the panic message.
   - **`caller_location` (gorget-js critique 2026-05-13, new item #2):** internal helpers (e.g. gorget-js's `member_lookup(&realm, base, "length", 0, 0)`) take `line, col` params to forward to the panic site for any throwing operation they wrap. The 0, 0 literal passes when the source isn't handy are noisy and write-only. A `#[track_caller]`-like attribute (Rust analogue) or implicit `caller_location()` builtin would let the helper inherit the actual call site without threading the params through.
   Same plumbing solves both: GIR carries the call-site span on every CallExtern/Call; LIR forwards it as a typed sidecar; backend writes it as the C source location at panic-emitting sites. The `caller_location()` builtin reads from the same typed sidecar at the topmost user frame.
-  Felt-value enormous — the agent flagged stack traces as a real debugging blocker. Estimate: a week, mostly plumbing the existing span data through the backend's panic-site emission. [added: 2026-05-12, from gorget-js critique; expanded 2026-05-13 with caller_location use case]
+
+  **Scoping discovery (2026-05-16, agent run).** Took a focused look at what's actually needed for v1 (single-frame source location only, no caller_location, no multi-frame). The "spans flow through the pipeline" claim above is **half right**: GIR carries spans correctly (per-`Instruction` via `BasicBlock.span_map` in `src/ir/mod.rs:669`, written by `Builder::emit` at `src/ir/builder.rs:145`). However, **LIR drops them entirely** — `Block` in `src/lir/mod.rs:1185` has no span field. The GIR→LIR lowering in `src/lir/lower/` never reads `gir_block.span_map`, and the C backend (`src/backend/c_lir/`) emits panic code with no source-location data available.
+
+  **Panic-emit inventory** (compiler-side, in `src/backend/c_lir/`):
+  - `mod.rs:2016` — `Inst::Add` overflow trap (`Overflow::Trap` + signed int)
+  - `mod.rs:2026` — `Inst::Sub` overflow trap
+  - `mod.rs:2036` — `Inst::Mul` overflow trap
+  - `mod.rs:2061-2062` — `Inst::Div` (div-by-zero + signed INT_MIN/-1 overflow)
+  - `mod.rs:2641` — `Inst::BoundsCheck` (raw index OOB)
+  - `mod.rs:2649` — `Inst::DivCheck` (raw div-by-zero)
+  - `mod.rs:2654` — `Inst::Trap { msg }` (explicit trap with literal message)
+  - `emit_hof.rs:155` — `unwrap_error on Ok` (Result.unwrap_err on Ok variant)
+  - `emit_types.rs:246` — `unwrap_err on Ok` (generated function body for `__unwrap_err`)
+
+  Plus a much larger surface of **runtime-side panics** inside `src/backend/c/c_runtime.rs` (~50+ sites: `gorget_array_index_oob`, channel-closed sends, allocation failures, `bytes_*` OOB checks, str index/slice OOB, `gorget_panic("integer overflow")` for `__builtin_*_overflow` runtime helpers at lines 5042/5047/5052). These can't get spans the same way — they're called from generated code where the spans would need to be plumbed as call args at every call site.
+
+  **Required plumbing** (minimum viable scope estimate):
+  1. **LIR carries spans.** Add `span_map: Vec<Option<Span>>` to `lir::Block` (mirror GIR's shape) + `terminator_span`. Validator update to enforce length parity (mirror `ir/validate.rs:216-221`).
+  2. **GIR→LIR lowering pushes spans.** Every `block.insts.push(...)` in `src/lir/lower/` (~50 sites) must also push the corresponding GIR span. Helper struct or `push_inst(inst, span)` accessor to enforce.
+  3. **LIR mutation passes preserve spans.** ~29 mutation sites in `src/lir/{ssa,drop_elab,optimize,types,split_edges}.rs` + `src/bir/lower.rs:404` — `retain`/`drain`/`insert`/`std::mem::take` patterns each need parallel span-list updates. Highest-risk surface area; one missed site = wrong-line panic message.
+  4. **File-info plumbing to backend.** Backend currently consumes only `LirModule` (via `Backend::generate(&BirModule)` in `c_lir/mod.rs:2943`). To convert `Span { start, end }` (byte offsets) to `file:line:col`, the backend needs `Vec<FileInfo>` (or equivalent) — same data `main.rs:75` builds for `ErrorReporter`. Either thread it onto `LirModule` (clean, layering-rule-3 single-source) or pass alongside via `Backend::generate(module, &file_infos)` signature change.
+  5. **Panic-helper signatures grow loc params.** Option A: `gorget_panic("file.gg", 42, 15, "integer overflow")` — generated callsite carries literal triple. Option B: thread-local sidecar set before each call. Affects every panic helper in c_runtime.rs (~10 helpers) + the inline `fprintf(stderr, ...); exit(1)` sequences in c_lir's emit. Option A wins on simplicity (no TLS), loses on per-call code size.
+  6. **Runtime format change.** `gorget: panic: %s\n` → `%s:%d:%d: %s\n` (with `<unknown>:0:0:` fallback when loc is missing — must handle the synthetic-instruction case).
+  7. **Fixture expected-output updates.** Search `gorget: integer overflow`, `gorget: panic:`, `index out of bounds`, `unwrap on None`, etc. across `tests/fixtures/` + `tests/integration.rs`. Estimate 15-30 fixtures need expected updates.
+  8. **New fixtures.** `panic_location_overflow.gg`, `panic_location_unwrap.gg`, `panic_location_oob.gg` + matching `run_gg_panic`-style assertion.
+
+  **Estimate**: 300-500 LOC plumbing across LIR + passes + backend + runtime; 20-30 fixture touch-ups; 3-5 day focused effort. The "single line" decision-at-each-mutation-site discipline is the main risk vector — every pass that takes `std::mem::take(&mut block.insts)` then rebuilds must do the same to `block.span_map`. Suggest pairing with `validate_module` enforcement (debug-only, like the existing `validate_box_inner_type` check) to catch span-map / inst-vec length drift early.
+
+  **Out of scope for v1** (file as separate TODOs after stack-traces ships):
+  - `caller_location()` builtin (helper inherits caller's span) — needs frame-walking discipline at GIR call lowering.
+  - Multi-frame stack walking — DWARF / libunwind plumbing.
+  - Async / spawned-task panic locations — the spawn-context construction doesn't currently carry the spawning call's span.
+  - Runtime-side panics (array OOB inside `gorget_array_get`, channel-closed `gorget_chan_send`, etc.) — would need per-callsite literal-triple args threaded through every runtime function that can panic; much larger surface than compiler-side panics.
+
+  Felt-value enormous — flagged as a real debugging blocker. The agent attempt that scoped this confirmed the GIR-spans / no-LIR-spans gap; the next attempt should land the plumbing first (LIR `span_map` + GIR→LIR push + pass preservation + file-info to backend) before tackling the panic-message format change, since the format change is trivial once the data is reachable. [added: 2026-05-12, from gorget-js critique; expanded 2026-05-13 with caller_location use case; rescoped 2026-05-16 with concrete plumbing inventory after exploratory agent run]
 
 - **`--trace-cow` flag: dump the CoW analyzer's clone-insertion decisions.** Diagnostic gap. "CoW: r mutated while o holds an element — clone is inserted automatically" appears at dozens of sites; the agent had no way to inspect which clone, of what type, at what cost. The IR-lowering's clone-insertion decisions are concentrated in a handful of sites (`ensure_owned_at_boundary`, `clone_fn_for_ptr`, `coerce_null_to_option_none`, etc.); instrumenting them to emit `(span, reason, type, size_bytes, runtime_fn)` tuples is straightforward, then `--trace-cow=cow.log` dumps the table. Closes the "trust the analyzer" adoption-confidence gap. Estimate: medium, ~3-5 days. [added: 2026-05-12, from gorget-js critique]
 
