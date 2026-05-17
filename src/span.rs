@@ -34,18 +34,25 @@ impl Span {
 /// line within `source` (always starting with `0`). It enables O(log n)
 /// line lookup via binary search instead of a linear walk over source bytes
 /// on every panic-emit at codegen time. Populated by `FileInfo::new`.
+///
+/// `filename_c_escaped` is the C-string-escaped form of `filename`, used by
+/// the C/LLVM backends to embed the filename into runtime panic messages.
+/// Pre-computed at construction so the codegen hot path doesn't re-escape
+/// the same filename on every panic-emit site (was ~5ms per 100k insts on
+/// self_host_lowerer).
 #[derive(Debug, Clone)]
 pub struct FileInfo {
     pub filename: String,
     pub source: String,
     pub base_offset: usize,
     pub line_starts: Vec<usize>,
+    pub filename_c_escaped: String,
 }
 
 impl FileInfo {
     /// Construct a `FileInfo`, precomputing the `line_starts` index for O(log n)
-    /// offset→(line, col) lookup. Walks the source once at construction; every
-    /// subsequent `offset_to_location` call binary-searches the index.
+    /// offset→(line, col) lookup AND the C-string-escaped filename for codegen-
+    /// time panic-message interpolation. Walks the source once at construction.
     pub fn new(filename: String, source: String, base_offset: usize) -> Self {
         let mut line_starts: Vec<usize> = Vec::with_capacity(source.len() / 40 + 1);
         line_starts.push(0);
@@ -54,8 +61,41 @@ impl FileInfo {
                 line_starts.push(i + 1);
             }
         }
-        Self { filename, source, base_offset, line_starts }
+        let filename_c_escaped = escape_for_c_string(&filename);
+        Self { filename, source, base_offset, line_starts, filename_c_escaped }
     }
+}
+
+/// Escape a string for a C string literal. Mirrors
+/// `src/backend/c_lir/helpers.rs::escape_c_string`. Lives here so
+/// `FileInfo::new` can pre-bake the result without pulling the backend
+/// into the dep graph of the IR/semantic layers.
+fn escape_for_c_string(s: &str) -> String {
+    use std::fmt::Write;
+    let mut out = String::with_capacity(s.len() + 8);
+    let chars: Vec<char> = s.chars().collect();
+    for (ci, &c) in chars.iter().enumerate() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\0' => out.push_str("\\0"),
+            c if c.is_ascii_graphic() || c == ' ' => out.push(c),
+            c => {
+                for byte in c.to_string().as_bytes() {
+                    write!(out, "\\x{byte:02x}").unwrap();
+                }
+                if let Some(&next) = chars.get(ci + 1) {
+                    if next.is_ascii_hexdigit() {
+                        out.push_str("\" \"");
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Map a global byte offset to `(filename, line, column)` (1-based).
@@ -68,6 +108,19 @@ pub fn offset_to_location<'a>(
     file_infos: &'a [FileInfo],
     byte_offset: usize,
 ) -> Option<(&'a str, u32, u32)> {
+    offset_to_location_full(file_infos, byte_offset).map(|(fi, line, col)| {
+        (fi.filename.as_str(), line, col)
+    })
+}
+
+/// Like `offset_to_location` but returns the matching `FileInfo` directly so
+/// callers can access pre-baked fields (e.g. `filename_c_escaped`) without
+/// re-running the lookup. Used by codegen panic-loc resolution to avoid
+/// re-escaping the same filename per inst.
+pub fn offset_to_location_full<'a>(
+    file_infos: &'a [FileInfo],
+    byte_offset: usize,
+) -> Option<(&'a FileInfo, u32, u32)> {
     let mut best: Option<&'a FileInfo> = None;
     for fi in file_infos {
         if byte_offset >= fi.base_offset && byte_offset <= fi.base_offset + fi.source.len() {
@@ -90,7 +143,7 @@ pub fn offset_to_location<'a>(
     let line_start = fi.line_starts[line_idx];
     let line = (line_idx as u32) + 1;
     let col = (local.saturating_sub(line_start) as u32) + 1;
-    Some((fi.filename.as_str(), line, col))
+    Some((fi, line, col))
 }
 
 /// A value annotated with its source location.

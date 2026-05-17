@@ -361,25 +361,28 @@ fn elaborate_block(
     }
 
     let eliminated = to_delete.len();
-    // Sweep: retain instructions NOT in the deletion set. Mirror the same
-    // index filter on `span_map` so the parallel-array invariant holds.
-    let mut new_insts = Vec::with_capacity(block.insts.len() - eliminated);
-    let mut new_spans: Vec<Option<crate::span::Span>> =
-        Vec::with_capacity(block.span_map.len().saturating_sub(eliminated));
-    let old_spans = std::mem::take(&mut block.span_map);
-    let had_parallel_spans = old_spans.len() == block.insts.len();
-    for (idx, inst) in block.insts.drain(..).enumerate() {
-        if !to_delete.contains(&idx) {
-            new_insts.push(inst);
-            new_spans.push(if had_parallel_spans {
-                old_spans.get(idx).copied().flatten()
-            } else {
-                None
-            });
-        }
+    // Sweep: retain instructions NOT in the deletion set. Use `Vec::retain`
+    // in lockstep on `insts` and `span_map` via a tracking index — both
+    // walks visit their owning vec in order, so the same source index
+    // lines up 1:1. Avoids allocating a fresh pair of vecs each call.
+    let had_parallel_spans = block.span_map.len() == block.insts.len();
+    let mut idx = 0usize;
+    block.insts.retain(|_| {
+        let keep = !to_delete.contains(&idx);
+        idx += 1;
+        keep
+    });
+    if had_parallel_spans {
+        let mut idx = 0usize;
+        block.span_map.retain(|_| {
+            let keep = !to_delete.contains(&idx);
+            idx += 1;
+            keep
+        });
+    } else {
+        // Out-of-sync span_map (pre-1b path): reseed to parallel-empty.
+        block.span_map = vec![None; block.insts.len()];
     }
-    block.insts = new_insts;
-    block.span_map = new_spans;
     eliminated
 }
 
@@ -400,9 +403,11 @@ fn remove_companion_memsets(
     }
     let mut removed = 0;
     for block in &mut func.blocks {
-        let before = block.insts.len();
-        // Filter `insts` + `span_map` in lockstep so the parallel-array
-        // invariant survives. Build a "keep" mask first, then apply.
+        // Build a keep mask in-place; if no Memset is dead we skip the
+        // mutation step entirely. When deletions are needed, use
+        // `Vec::retain` so we drop dead insts in-place rather than
+        // allocating a fresh pair of vecs each call.
+        let mut dead_in_block = 0usize;
         let keep: Vec<bool> = block
             .insts
             .iter()
@@ -410,6 +415,7 @@ fn remove_companion_memsets(
                 if let Inst::Memset { ptr, .. } = inst {
                     if let Some(&slot) = val_to_slot.get(ptr) {
                         if deleted_slots.contains(&slot) {
+                            dead_in_block += 1;
                             return false;
                         }
                     }
@@ -417,25 +423,27 @@ fn remove_companion_memsets(
                 true
             })
             .collect();
-        let had_parallel_spans = block.span_map.len() == block.insts.len();
-        let mut new_insts = Vec::with_capacity(block.insts.len());
-        let mut new_spans: Vec<Option<crate::span::Span>> =
-            Vec::with_capacity(block.span_map.len());
-        let old_insts = std::mem::take(&mut block.insts);
-        let old_spans = std::mem::take(&mut block.span_map);
-        for (i, inst) in old_insts.into_iter().enumerate() {
-            if keep[i] {
-                new_insts.push(inst);
-                new_spans.push(if had_parallel_spans {
-                    old_spans.get(i).copied().flatten()
-                } else {
-                    None
-                });
-            }
+        if dead_in_block == 0 {
+            continue;
         }
-        block.insts = new_insts;
-        block.span_map = new_spans;
-        removed += before - block.insts.len();
+        removed += dead_in_block;
+        let had_parallel_spans = block.span_map.len() == block.insts.len();
+        let mut idx = 0usize;
+        block.insts.retain(|_| {
+            let k = keep[idx];
+            idx += 1;
+            k
+        });
+        if had_parallel_spans {
+            let mut idx = 0usize;
+            block.span_map.retain(|_| {
+                let k = keep[idx];
+                idx += 1;
+                k
+            });
+        } else {
+            block.span_map = vec![None; block.insts.len()];
+        }
     }
     removed
 }
@@ -739,29 +747,45 @@ pub fn elaborate_drops(module: &mut LirModule) -> ElabStats {
             insert_drop_flags(func, &val_to_slot, &maybe_init_slots, &bb0_in_state);
 
         // Phase 4: remove consumed MoveSlot annotations.  They served as dataflow
-        // signals for phases 1-3 and have no runtime effect. Filter `insts`
-        // and `span_map` in lockstep.
+        // signals for phases 1-3 and have no runtime effect. Build a `keep`
+        // mask in-place and skip the block entirely when none are found; for
+        // blocks with MoveSlots, use `Vec::retain` lockstep on insts +
+        // span_map. Avoids two vec allocations per block per function.
         for block in &mut func.blocks {
-            let before = block.insts.len();
-            let had_parallel_spans = block.span_map.len() == block.insts.len();
-            let old_insts = std::mem::take(&mut block.insts);
-            let old_spans = std::mem::take(&mut block.span_map);
-            let mut new_insts: Vec<Inst> = Vec::with_capacity(old_insts.len());
-            let mut new_spans: Vec<Option<crate::span::Span>> =
-                Vec::with_capacity(old_insts.len());
-            for (i, inst) in old_insts.into_iter().enumerate() {
-                if !matches!(inst, Inst::MoveSlot { .. }) {
-                    new_insts.push(inst);
-                    new_spans.push(if had_parallel_spans {
-                        old_spans.get(i).copied().flatten()
+            let mut dead = 0usize;
+            let keep: Vec<bool> = block
+                .insts
+                .iter()
+                .map(|inst| {
+                    if matches!(inst, Inst::MoveSlot { .. }) {
+                        dead += 1;
+                        false
                     } else {
-                        None
-                    });
-                }
+                        true
+                    }
+                })
+                .collect();
+            if dead == 0 {
+                continue;
             }
-            block.insts = new_insts;
-            block.span_map = new_spans;
-            stats.move_slots_removed += before - block.insts.len();
+            stats.move_slots_removed += dead;
+            let had_parallel_spans = block.span_map.len() == block.insts.len();
+            let mut idx = 0usize;
+            block.insts.retain(|_| {
+                let k = keep[idx];
+                idx += 1;
+                k
+            });
+            if had_parallel_spans {
+                let mut idx = 0usize;
+                block.span_map.retain(|_| {
+                    let k = keep[idx];
+                    idx += 1;
+                    k
+                });
+            } else {
+                block.span_map = vec![None; block.insts.len()];
+            }
         }
     }
     stats

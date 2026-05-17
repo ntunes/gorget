@@ -503,8 +503,13 @@ pub fn eliminate_dead_code(func: &mut LirFunction) -> usize {
 
     let mut eliminated = 0;
     for block in &mut func.blocks {
-        // Build a keep mask, then filter `insts` + `span_map` in lockstep
-        // so the parallel-array invariant survives.
+        // Build a keep mask in-place; if no dead inst is found we skip the
+        // mutation step entirely (the fixpoint loop fires this pass many
+        // times — the no-op case dominates after the first iteration).
+        // When deletions are needed, use `Vec::retain` so we drop dead
+        // insts in-place rather than allocating a fresh pair of vecs each
+        // call.
+        let mut dead_in_block = 0usize;
         let keep: Vec<bool> = block
             .insts
             .iter()
@@ -516,32 +521,39 @@ pub fn eliminate_dead_code(func: &mut LirFunction) -> usize {
                     if (dst.0 as usize) < val_count && use_count[dst.0 as usize] > 0 {
                         return true;
                     }
+                    dead_in_block += 1;
                     false
                 } else {
                     true
                 }
             })
             .collect();
-        let had_parallel_spans = block.span_map.len() == block.insts.len();
-        let old_insts = std::mem::take(&mut block.insts);
-        let old_spans = std::mem::take(&mut block.span_map);
-        let mut new_insts: Vec<Inst> = Vec::with_capacity(old_insts.len());
-        let mut new_spans: Vec<Option<crate::span::Span>> =
-            Vec::with_capacity(old_insts.len());
-        for (i, inst) in old_insts.into_iter().enumerate() {
-            if keep[i] {
-                new_insts.push(inst);
-                new_spans.push(if had_parallel_spans {
-                    old_spans.get(i).copied().flatten()
-                } else {
-                    None
-                });
-            } else {
-                eliminated += 1;
-            }
+        if dead_in_block == 0 {
+            continue; // nothing to remove — leave insts/span_map untouched
         }
-        block.insts = new_insts;
-        block.span_map = new_spans;
+        eliminated += dead_in_block;
+        // In-place retain on both `insts` and `span_map`, lockstep-indexed
+        // via a tracking counter inside each closure. Both walks visit
+        // their owning vec in order, so the same `keep[i]` indexes line up
+        // 1:1 — no allocation, no `mem::take`.
+        let had_parallel_spans = block.span_map.len() == block.insts.len();
+        let mut idx = 0usize;
+        block.insts.retain(|_| {
+            let k = keep[idx];
+            idx += 1;
+            k
+        });
+        if had_parallel_spans {
+            let mut idx = 0usize;
+            block.span_map.retain(|_| {
+                let k = keep[idx];
+                idx += 1;
+                k
+            });
+        } else {
+            // Out-of-sync span_map (pre-1b path): reseed to parallel-empty.
+            block.span_map = vec![None; block.insts.len()];
+        }
     }
 
     eliminated

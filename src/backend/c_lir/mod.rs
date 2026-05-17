@@ -98,13 +98,19 @@ impl<'a> EmitContext<'a> {
 /// info) returns the conventional <unknown>:0:0 fallback. The filename
 /// is C-string-escaped so callers can interpolate it directly into a
 /// generated `fprintf(stderr, "%s:%d:%d: ...\n", ...)`.
+///
+/// `FileInfo::filename_c_escaped` is pre-baked at FileInfo construction
+/// (see span.rs), so this is a clone of a small String + a binary-search
+/// for the line, not a re-escape of the filename per call. Was the
+/// dominant codegen regression after stack-traces v1 (~17ms on
+/// self_host_lowerer) before that pre-baking landed.
 pub(crate) fn resolve_panic_loc(
     span: Option<crate::span::Span>,
     file_infos: &[crate::span::FileInfo],
 ) -> (String, u32, u32) {
     if let Some(s) = span {
-        if let Some((file, line, col)) = crate::span::offset_to_location(file_infos, s.start) {
-            return (escape_c_string(file), line, col);
+        if let Some((fi, line, col)) = crate::span::offset_to_location_full(file_infos, s.start) {
+            return (fi.filename_c_escaped.clone(), line, col);
         }
     }
     ("<unknown>".to_string(), 0, 0)
