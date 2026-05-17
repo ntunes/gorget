@@ -118,7 +118,15 @@ pub struct TypeTable {
     pub cstr_id: TypeId,
     pub error_id: TypeId,
     pub never_id: TypeId,
+    /// O(1) lookup table indexed by `PrimitiveType as usize`. Populated in
+    /// `new()` so `primitive_id` never falls back to a linear scan, even for
+    /// the rare sized numeric variants (Int8..Uint64, Float32/64).
+    primitive_ids: [TypeId; PRIMITIVE_TYPE_COUNT],
 }
+
+/// Number of variants in `PrimitiveType`. Must equal `PrimitiveType` variant
+/// count; the `primitive_id` lookup table is sized exactly to this.
+const PRIMITIVE_TYPE_COUNT: usize = 17;
 
 impl TypeTable {
     pub fn new() -> Self {
@@ -151,6 +159,34 @@ impl TypeTable {
         let never_id = TypeId(types.len() as u32);
         types.push(ResolvedType::Never);
 
+        // Pre-allocate the remaining sized-numeric primitives so
+        // `primitive_id` is a direct array lookup on every variant.
+        // Order doesn't matter — the lookup table is keyed by variant.
+        let mut primitive_ids = [TypeId(0); PRIMITIVE_TYPE_COUNT];
+        primitive_ids[PrimitiveType::Bool as usize] = bool_id;
+        primitive_ids[PrimitiveType::Int as usize] = int_id;
+        primitive_ids[PrimitiveType::Float as usize] = float_id;
+        primitive_ids[PrimitiveType::CStr as usize] = cstr_id;
+        primitive_ids[PrimitiveType::StringType as usize] = owned_string_id;
+        primitive_ids[PrimitiveType::Void as usize] = void_id;
+        for prim in [
+            PrimitiveType::Int8,
+            PrimitiveType::Int16,
+            PrimitiveType::Int32,
+            PrimitiveType::Int64,
+            PrimitiveType::Uint,
+            PrimitiveType::Uint8,
+            PrimitiveType::Uint16,
+            PrimitiveType::Uint32,
+            PrimitiveType::Uint64,
+            PrimitiveType::Float32,
+            PrimitiveType::Float64,
+        ] {
+            let id = TypeId(types.len() as u32);
+            types.push(ResolvedType::Primitive(prim));
+            primitive_ids[prim as usize] = id;
+        }
+
         Self {
             types,
             defined_cache: FxHashMap::default(),
@@ -164,6 +200,7 @@ impl TypeTable {
             cstr_id,
             error_id,
             never_id,
+            primitive_ids,
         }
     }
 
@@ -206,27 +243,10 @@ impl TypeTable {
         tid
     }
 
-    /// Get the TypeId for a primitive type.
+    /// Get the TypeId for a primitive type. O(1) array lookup; every
+    /// variant is pre-allocated in `new()`.
     pub fn primitive_id(&mut self, prim: PrimitiveType) -> TypeId {
-        match prim {
-            PrimitiveType::Bool => self.bool_id,
-            PrimitiveType::Int => self.int_id,
-            PrimitiveType::Float => self.float_id,
-            PrimitiveType::CStr => self.cstr_id,
-            PrimitiveType::StringType => self.owned_string_id,
-            PrimitiveType::Void => self.void_id,
-            other => {
-                // Other numeric variants - insert or find
-                let ty = ResolvedType::Primitive(other);
-                // Linear scan is fine for the small number of primitive types
-                for (i, t) in self.types.iter().enumerate() {
-                    if *t == ty {
-                        return TypeId(i as u32);
-                    }
-                }
-                self.insert(ty)
-            }
-        }
+        self.primitive_ids[prim as usize]
     }
 
     /// Create a fresh type variable for inference.

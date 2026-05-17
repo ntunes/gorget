@@ -124,6 +124,17 @@ pub struct TraitRegistry {
     /// visit only the impls whose `self_type` matches the receiver.
     /// Source of truth remains `impls`; this is a pure lookup index.
     pub trait_impls_by_type: FxHashMap<TypeId, Vec<usize>>,
+    /// `self_type_name` -> indices into impls. Parallel to
+    /// `trait_impls_by_type`, but keyed by the impl's *name* so the
+    /// name-based fallback paths (cross-module equip blocks where TypeIds
+    /// don't match, and `meta if implements(T, Trait)`) skip the per-call
+    /// linear scan over every impl. Different key, same shape.
+    ///
+    /// Layering note: this is name-keyed because the underlying data
+    /// (`self_type_name: String`) is already name-keyed at the source —
+    /// we are not introducing a new name-matching axis, only indexing an
+    /// existing one.
+    pub impls_by_name: FxHashMap<String, Vec<usize>>,
     /// (trait DefId, type TypeId, trait type args) -> index into impls
     /// The Vec<TypeId> holds the resolved trait generic arguments (empty for non-generic traits).
     /// This allows multiple impls of the same parameterized trait (e.g. `From[int]` and `From[str]`).
@@ -137,6 +148,7 @@ impl TraitRegistry {
             impls: Vec::new(),
             inherent_impls: FxHashMap::default(),
             trait_impls_by_type: FxHashMap::default(),
+            impls_by_name: FxHashMap::default(),
             trait_impls: FxHashMap::default(),
         }
     }
@@ -156,26 +168,35 @@ impl TraitRegistry {
             }
         }
 
-        // Check trait impls (then default fallback) using the
-        // self-type → impl-indices index — avoids per-call linear scan.
+        // Trait impls + default fallback: single pass over the impl
+        // indices for this type. An override (impl-supplied method) wins
+        // immediately; otherwise remember the first impl whose trait has
+        // a default body for `method` and return that on fallthrough.
         if let Some(impl_indices) = self.trait_impls_by_type.get(&type_id) {
+            let mut default_hit: Option<&TraitInfo> = None;
             for &idx in impl_indices {
                 let impl_info = &self.impls[idx];
                 if let Some((def_id, sig)) = impl_info.methods.get(method) {
                     return Some((def_id, sig));
                 }
-            }
-            for &idx in impl_indices {
-                let impl_info = &self.impls[idx];
-                let Some(trait_def_id) = impl_info.trait_ else { continue };
-                if let Some(trait_info) = self.traits.get(&trait_def_id) {
-                    let has_default = trait_info.has_default_body
-                        .get(method).copied().unwrap_or(false);
-                    if has_default {
-                        if let Some(sig) = trait_info.methods.get(method) {
-                            return Some((&trait_info.def_id, sig));
+                if default_hit.is_none() {
+                    if let Some(trait_def_id) = impl_info.trait_ {
+                        if let Some(trait_info) = self.traits.get(&trait_def_id) {
+                            let has_default = trait_info
+                                .has_default_body
+                                .get(method)
+                                .copied()
+                                .unwrap_or(false);
+                            if has_default && trait_info.methods.contains_key(method) {
+                                default_hit = Some(trait_info);
+                            }
                         }
                     }
+                }
+            }
+            if let Some(trait_info) = default_hit {
+                if let Some(sig) = trait_info.methods.get(method) {
+                    return Some((&trait_info.def_id, sig));
                 }
             }
         }
@@ -283,32 +304,37 @@ impl TraitRegistry {
 
     /// Check if a type (by name) has any impl registered.
     pub fn has_any_impl_by_name(&self, type_name: &str) -> bool {
-        self.impls.iter().any(|impl_info| impl_info.self_type_name == type_name)
+        self.impls_by_name
+            .get(type_name)
+            .is_some_and(|v| !v.is_empty())
     }
 
     /// Check if a type has ONLY inherent impls (no trait impls, no via delegation).
     /// Types with trait impls may have default or via-forwarded methods that aren't
     /// in the equip's methods map, so we can't reliably detect missing methods.
     pub fn has_inherent_only_impls(&self, type_name: &str) -> bool {
+        let Some(indices) = self.impls_by_name.get(type_name) else {
+            return false;
+        };
         let mut has_inherent = false;
-        for impl_info in &self.impls {
-            if impl_info.self_type_name == type_name {
-                if impl_info.trait_.is_some() || impl_info.via_field.is_some() {
-                    return false; // has trait impl or via delegation
-                }
-                has_inherent = true;
+        for &idx in indices {
+            let impl_info = &self.impls[idx];
+            if impl_info.trait_.is_some() || impl_info.via_field.is_some() {
+                return false; // has trait impl or via delegation
             }
+            has_inherent = true;
         }
         has_inherent
     }
 
     /// Check if a type (by name) has an implementation for a trait (by name).
     pub fn has_trait_impl_by_name(&self, type_name: &str, trait_name: &str) -> bool {
-        if self.impls.iter().any(|impl_info| {
-            impl_info.self_type_name == type_name
-                && impl_info.trait_name.as_deref() == Some(trait_name)
-        }) {
-            return true;
+        if let Some(indices) = self.impls_by_name.get(type_name) {
+            if indices.iter().any(|&idx| {
+                self.impls[idx].trait_name.as_deref() == Some(trait_name)
+            }) {
+                return true;
+            }
         }
         // Intrinsic satisfaction: numeric primitives satisfy numeric traits.
         if is_numeric_primitive(type_name) && is_numeric_trait(trait_name) {
@@ -328,11 +354,12 @@ impl TraitRegistry {
     /// Get the trait's generic AST type args for a specific trait impl on a type (by name).
     /// Returns the first matching impl's trait_generic_args.
     pub fn trait_generic_args_by_name(&self, type_name: &str, trait_name: &str) -> &[Type] {
-        for impl_info in &self.impls {
-            if impl_info.self_type_name == type_name
-                && impl_info.trait_name.as_deref() == Some(trait_name)
-            {
-                return &impl_info.trait_generic_args;
+        if let Some(indices) = self.impls_by_name.get(type_name) {
+            for &idx in indices {
+                let impl_info = &self.impls[idx];
+                if impl_info.trait_name.as_deref() == Some(trait_name) {
+                    return &impl_info.trait_generic_args;
+                }
             }
         }
         &[]
@@ -362,9 +389,11 @@ impl TraitRegistry {
 
     /// Check if a type (by name) has a specific method in any equip block.
     pub fn has_method_for_type(&self, type_name: &str, method_name: &str) -> bool {
-        self.impls.iter().any(|impl_info| {
-            impl_info.self_type_name == type_name
-                && impl_info.methods.contains_key(method_name)
+        let Some(indices) = self.impls_by_name.get(type_name) else {
+            return false;
+        };
+        indices.iter().any(|&idx| {
+            self.impls[idx].methods.contains_key(method_name)
         })
     }
 }
@@ -1078,6 +1107,14 @@ fn process_impl(
         self_type_ast: impl_block.type_.node.clone(),
         impl_generic_params,
     });
+
+    // Mirror `trait_impls_by_type` but keyed by self-type name. Drives
+    // the name-keyed fallback methods (`has_any_impl_by_name`, etc.).
+    registry
+        .impls_by_name
+        .entry(self_type_name.clone())
+        .or_default()
+        .push(impl_idx);
 
     if let Some(trait_id) = trait_def_id {
         registry.trait_impls.insert((trait_id, self_type_id, trait_arg_type_ids), impl_idx);
