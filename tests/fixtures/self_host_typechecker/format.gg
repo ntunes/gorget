@@ -20,7 +20,9 @@ String format_float_decimal(float f):
         return s
     # For values that are exactly integers, convert via int
     # This handles the common case: 1e+06, 3.14159e+06, etc.
-    float a = abs(f)
+    float a = f
+    if a < 0.0:
+        a = 0.0 - a
     if a == floor(a) and a < 1000000000000000.0:
         int iv = 0
         if f >= 0.0:

@@ -1537,7 +1537,8 @@ equip Parser:
         # couldn't write `case Foo(x, byte, z):` with `byte` as a
         # middle binding. Surfaced 2026-05-10 by Phase A.4's lift port.
         match self.peek().lex_token:
-            case TkKeyword(kw):
+            case TkKeyword(_):
+                int kw = self.peek_kw()
                 String tk_name = type_keyword_name(kw)
                 if tk_name != "":
                     self.advance()
