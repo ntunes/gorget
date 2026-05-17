@@ -1040,10 +1040,10 @@ equip Parser:
     # Without this gating, `print(v[0])` fires a spurious "expected
     # type" because `parse_type_args` calls `parse_type` on `0`, which
     # falls through to the error path and pushes a diagnostic that the
-    # `self.pos = saved` restore never undoes. (A naive
-    # `truncate-by-pop` rollback was tried first but trips a separate
-    # double-free bug — `gorget_array_pop` on a resource-typed element
-    # vector doesn't transfer ownership cleanly.)
+    # `self.pos = saved` restore never undoes. The speculation_depth
+    # gate is a meaningful semantic distinction (speculative parse vs.
+    # real parse) — a `truncate-by-pop` rollback would also work but
+    # this shape is clearer.
     void enter_speculation(&self):
         self.speculation_depth = self.speculation_depth + 1
 
