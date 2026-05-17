@@ -4,11 +4,12 @@
 from std.collections import Vector
 from lexer import lex_tokenize, SpannedToken, Token, Keyword, StringLiteral, StringSegment
 from ast import Module, Item, Stmt, Expr, Type, Pattern, Span, SpannedExpr, SpannedType, SpannedPattern, FunctionDef, StructDef, EnumDef, EnumVariant, TraitDef, EquipBlock, MatchArm, ElseBranch, Param, ImportStmt
-from parser import Parser, parse_source
+from parser import Parser, parse_source, ParseResult
 from format import format_module
 
 void test_parse(String label, String source):
-    Module m = parse_source(source)
+    ParseResult result = parse_source(source)
+    Module m = result.module
     String out = format_module(m)
     print(label)
     print(out)

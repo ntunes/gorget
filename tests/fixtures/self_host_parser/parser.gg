@@ -986,6 +986,12 @@ struct Parser:
     int pos
     Vector[Diagnostic] diagnostics
     int call_arg_depth
+    # Speculation depth — bumped at each speculative-call site, restored
+    # before the position rollback. While > 0, parse_type's fallback
+    # path suppresses the "expected type" diagnostic push. Mirrors the
+    # Rust parser's Result-flowing design where speculation failure
+    # propagates Err without ever pushing to the parser's error stream.
+    int speculation_depth
 
 # ── Parser methods ───────────────────────────────────────────
 
@@ -1015,6 +1021,34 @@ equip Parser:
     Span current_span(self):
         SpannedToken t = self.peek()
         return Span(t.lex_start, t.lex_end)
+
+    # Speculation entry/exit helpers. The Rust parser disambiguates
+    # `name[...]` as generic-call-vs-index by speculating with a
+    # Result-returning `parse_generic_type_args`; failure propagates
+    # `Err` and is dropped by `try_parse(... .ok()? ...)` — diagnostics
+    # are NEVER pushed on speculation failure because errors flow
+    # through Result, not the parser's error stream.
+    #
+    # The self-host parser doesn't have Result, so diagnostics get
+    # pushed to the typed `Vector[Diagnostic]` field. The equivalent
+    # contract is: bump `speculation_depth` around the speculative
+    # call, and inside `parse_type`'s fallback path, gate the push on
+    # `speculation_depth == 0`. Mirrors `try_parse`'s atomic
+    # save/restore — only failures that survive past the speculation
+    # boundary surface as diagnostics.
+    #
+    # Without this gating, `print(v[0])` fires a spurious "expected
+    # type" because `parse_type_args` calls `parse_type` on `0`, which
+    # falls through to the error path and pushes a diagnostic that the
+    # `self.pos = saved` restore never undoes. (A naive
+    # `truncate-by-pop` rollback was tried first but trips a separate
+    # double-free bug — `gorget_array_pop` on a resource-typed element
+    # vector doesn't transfer ownership cleanly.)
+    void enter_speculation(&self):
+        self.speculation_depth = self.speculation_depth + 1
+
+    void exit_speculation(&self):
+        self.speculation_depth = self.speculation_depth - 1
 
     int peek_tag(self):
         return token_tag(self.peek().lex_token)
@@ -1184,11 +1218,15 @@ equip Parser:
                 # N source bytes after the move into TPrimitive.
             if self.check_tok(TOK_LPAREN):
                 int saved = self.pos
+                self.enter_speculation()
                 SpannedType ret_ty = self.mk_type(TPrimitive(type_keyword_name(kw)), start)
                 SpannedType fn_ty = self.parse_function_type(ret_ty, start)
                 # Accept if followed by a name, closing bracket, comma, newline, colon, or EOF (in type context)
                 if self.check_tok(TOK_IDENT) or self.check_tok(TOK_RBRACKET) or self.check_tok(TOK_COMMA) or self.check_tok(TOK_RPAREN) or self.check_tok(TOK_BANG) or self.check_tok(TOK_AMP) or self.check_tok(TOK_NEWLINE) or self.check_tok(TOK_COLON) or self.at_end():
+                    self.exit_speculation()
                     return fn_ty
+                # Restore — wasn't a function type.
+                self.exit_speculation()
                 self.pos = saved
             return self.mk_type(TPrimitive(type_keyword_name(kw)), start)
 
@@ -1255,25 +1293,40 @@ equip Parser:
                 # Check for function type: NamedType[T](params)
                 if self.check_tok(TOK_LPAREN):
                     int saved = self.pos
+                    self.enter_speculation()
                     SpannedType fn_ty = self.parse_function_type(named_ty, start)
                     # Only accept if followed by closing bracket/paren/comma/newline/colon (inside type context)
                     if self.check_tok(TOK_RBRACKET) or self.check_tok(TOK_COMMA) or self.check_tok(TOK_RPAREN) or self.check_tok(TOK_NEWLINE) or self.check_tok(TOK_COLON) or self.at_end():
+                        self.exit_speculation()
                         return fn_ty
+                    # Restore — wasn't a function type.
+                    self.exit_speculation()
                     self.pos = saved
                 return named_ty
             # Check for function type: Name(params) — only in contexts where followed by ) ] , or name
             if self.check_tok(TOK_LPAREN):
                 int saved = self.pos
+                self.enter_speculation()
                 SpannedType named_ty = self.mk_type(TNamed(name, Vector[SpannedType]()), start)
                 SpannedType fn_ty = self.parse_function_type(named_ty, start)
                 # Accept if followed by name (var/param name) or closing context
                 if self.check_tok(TOK_IDENT) or self.check_tok(TOK_RBRACKET) or self.check_tok(TOK_COMMA) or self.check_tok(TOK_RPAREN) or self.check_tok(TOK_BANG) or self.check_tok(TOK_AMP) or self.check_tok(TOK_NEWLINE) or self.check_tok(TOK_COLON) or self.at_end():
+                    self.exit_speculation()
                     return fn_ty
+                # Restore — wasn't a function type.
+                self.exit_speculation()
                 self.pos = saved
             return self.mk_type(TNamed(name, Vector[SpannedType]()), start)
 
-        # Fallback: error
-        self.diagnostics.push(Diagnostic.error(self.current_span(), DkParseError(), "expected type"))
+        # Fallback: error. Gate the diagnostic push on
+        # `speculation_depth == 0` so speculative callers (postfix
+        # `expr[...]` generic-call-vs-index disambiguation, method-level
+        # turbofish, `Option[int](...)` generic constructor, function-
+        # type vs primitive disambiguation) don't pollute the typed
+        # diagnostic stream when their speculation fails. See
+        # `enter_speculation` doc-comment.
+        if self.speculation_depth == 0:
+            self.diagnostics.push(Diagnostic.error(self.current_span(), DkParseError(), "expected type"))
         self.advance()
         return self.mk_type(TPrimitive("void"), start)
 
@@ -1563,14 +1616,19 @@ equip Parser:
                 String ident_name = expr_ident_name(lhs.expr)
                 if ident_name != "":
                     int saved = self.pos
+                    self.enter_speculation()
                     Vector[SpannedType] targs = self.parse_type_args()
                     if self.check_tok(TOK_LPAREN):
                         # Generic constructor: Name[T](args)
                         Vector[SpannedExpr] call_args = self.parse_call_args()
+                        self.exit_speculation()
 
                         lhs = SpannedExpr(ECall(Box(lhs), call_args, targs), Span(bp_start, self.peek().lex_start))
                         continue
-                    # Not a generic constructor — restore and parse as index
+                    # Not a generic constructor — restore and parse as index.
+                    # Failed speculation is silent — mirrors Rust's
+                    # `try_parse(... .ok()?)`.
+                    self.exit_speculation()
                     self.pos = saved
                 self.advance()
                 SpannedExpr idx = self.parse_expr()
@@ -1766,11 +1824,14 @@ equip Parser:
             # fires and the type-args vanish from the format output.
             if self.check_tok(TOK_LBRACKET):
                 int saved = self.pos
+                self.enter_speculation()
                 Vector[SpannedType] mtargs = self.parse_type_args()
                 if self.check_tok(TOK_LPAREN):
                     Vector[SpannedExpr] call_args = self.parse_call_args()
+                    self.exit_speculation()
                     return SpannedExpr(EMethodCall(Box(lhs), name, call_args, mtargs), Span(start, self.peek().lex_start))
                 # Restore — wasn't a method-level turbofish.
+                self.exit_speculation()
                 self.pos = saved
             if self.check_tok(TOK_LPAREN):
                 Vector[SpannedExpr] call_args = self.parse_call_args()
@@ -2266,10 +2327,14 @@ equip Parser:
             if self.check_tok(TOK_LBRACKET):
                 # Generic constructor: Option[int]()
                 int saved = self.pos
+                self.enter_speculation()
                 Vector[SpannedType] targs = self.parse_type_args()
                 if self.check_tok(TOK_LPAREN):
                     Vector[SpannedExpr] call_args = self.parse_call_args()
+                    self.exit_speculation()
                     return SpannedExpr(ECall(Box(callee), call_args, targs), Span(start, self.peek().lex_start))
+                # Restore — wasn't a generic constructor.
+                self.exit_speculation()
                 self.pos = saved
             if self.check_tok(TOK_LPAREN):
                 Vector[SpannedExpr] call_args = self.parse_call_args()
@@ -3630,11 +3695,18 @@ equip Parser:
 
 # ── Public API ───────────────────────────────────────────────
 
-# Parse `source` and append any diagnostics gathered to `out_diagnostics`.
-# Parse errors don't abort — they get recorded and the parser does a
-# best-effort recovery so downstream stages can still run on a partial
-# AST. Comparison drivers / CLIs use this entry point.
-Module parse_source_into(String source, Vector[Diagnostic] &out_diagnostics):
+# Result of parsing: AST module plus any diagnostics gathered along the
+# way. Parse errors don't abort — they get recorded and the parser does
+# a best-effort recovery so downstream stages can still run on a partial
+# AST. Mirrors the resolver's `ResolveContext` shape (one struct carrying
+# both the staged output and the typed diagnostics stream).
+struct ParseResult:
+    Module module
+    Vector[Diagnostic] diagnostics
+
+# Parse `source` and return both the AST module and the collected
+# diagnostics. Comparison drivers / CLIs use this entry point.
+ParseResult parse_source(String source):
     Vector[SpannedToken] all_tokens = lex_tokenize(source)
     # Strip comment tokens from the stream — the Rust parser does this at init.
     # Without stripping, comments between structural tokens (COLON NEWLINE INDENT)
@@ -3647,17 +3719,6 @@ Module parse_source_into(String source, Vector[Diagnostic] &out_diagnostics):
         if tag != TOK_COMMENT and tag != TOK_DOCCOMMENT:
             tokens.push(tok)
         ti = ti + 1
-    Parser p = Parser(tokens, 0, Vector[Diagnostic](), 0)
+    Parser p = Parser(tokens, 0, Vector[Diagnostic](), 0, 0)
     Module m = p.parse_module()
-    int di = 0
-    while di < p.diagnostics.len():
-        Diagnostic d = p.diagnostics.get(di).unwrap()
-        out_diagnostics.push(d.clone())
-        di = di + 1
-    return m
-
-# Convenience: parse and discard diagnostics. Existing callers stay on
-# this entry point until they need diagnostic visibility.
-Module parse_source(String source):
-    Vector[Diagnostic] discarded = Vector[Diagnostic]()
-    return parse_source_into(source, &discarded)
+    return ParseResult(m, p.diagnostics)
