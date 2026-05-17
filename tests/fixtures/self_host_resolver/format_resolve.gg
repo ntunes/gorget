@@ -11,6 +11,7 @@ from std.conv import int_to_str
 from scope import ScopeTable, DefInfo, DefKind, ScopeKind, Scope
 from scope import get_def_at, get_scope_at
 from resolve import ResolveContext
+from diagnostic import Diagnostic, format_diagnostic
 
 # ── DefKind to string ───────────────────────────────────────
 
@@ -102,17 +103,58 @@ String format_resolution_map(Dict[int, int] res_map):
         i = i + 1
     return join_lines(lines)
 
+# ── Format diagnostics ──────────────────────────────────────
+#
+# Diagnostics are sorted by span start so output is deterministic for
+# comparison testing. Each diagnostic renders to one `DIAG ` line; the
+# integration normalizer ignores those (it only checks DEF / RES) so
+# adding diagnostics doesn't perturb the existing comparison contract.
+
+String format_diagnostics(Vector[Diagnostic] diags):
+    if diags.len() == 0:
+        return ""
+    Vector[int] order = Vector[int]()
+    int i = 0
+    while i < diags.len():
+        order.push(i)
+        i = i + 1
+    # Sort indices by the span start of the underlying diagnostic.
+    int oi = 1
+    while oi < order.len():
+        int key = order.get(oi).unwrap()
+        int key_start = diags.get(key).unwrap().span.start
+        int oj = oi - 1
+        while oj >= 0:
+            int other = order.get(oj).unwrap()
+            if diags.get(other).unwrap().span.start <= key_start:
+                break
+            order.set(oj + 1, other)
+            oj = oj - 1
+        order.set(oj + 1, key)
+        oi = oi + 1
+    Vector[String] lines = Vector[String]()
+    int k = 0
+    while k < order.len():
+        int idx = order.get(k).unwrap()
+        Diagnostic d = diags.get(idx).unwrap()
+        lines.push(format_diagnostic(d))
+        k = k + 1
+    return join_lines(lines)
+
 # ── Format all ──────────────────────────────────────────────
 
 String format_all(ScopeTable scopes, ResolveContext ctx):
     String defs = format_definitions(scopes)
     String scope_str = format_scopes(scopes)
     String res = format_resolution_map(ctx.resolution_map)
+    String diags = format_diagnostics(ctx.diagnostics)
     String result = defs
     if scope_str != "":
         result = result + "\n" + scope_str
     if res != "":
         result = result + "\n" + res
+    if diags != "":
+        result = result + "\n" + diags
     return result
 
 # ── Helpers ─────────────────────────────────────────────────

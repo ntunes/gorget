@@ -1,0 +1,100 @@
+# Typed diagnostic record produced by the resolution / type-checking
+# / lowering / validation passes.
+#
+# Replaces the free-form `Vector[String] errors` accumulator pattern.
+# Span / severity / category are first-class fields rather than baked
+# into the message text, so consumers (drivers, CLIs, IDEs) can filter,
+# group, render, and emit JSON without re-parsing strings.
+#
+# POC scope (2026-05-17): only the resolver populates Diagnostics
+# today. Other stages (typechecker, lowerer, parser, lexer) still use
+# `Vector[String] errors` — see TODO.md for the follow-up sweep.
+
+from std.collections import Vector
+from std.conv import int_to_str
+from ast import Span
+
+# ── Severity ────────────────────────────────────────────────
+
+enum Severity:
+    SevError
+    SevWarning
+    SevSuggestion  # for lints / hints
+
+# ── Diagnostic category ─────────────────────────────────────
+#
+# One variant per category currently emitted by a stage on the
+# accumulator. As new sites get migrated, new variants land here.
+# Today only the resolver populates the kinds tagged below.
+
+enum DiagKind:
+    # Resolver kinds (active)
+    DkUndefinedName        # EIdentifier / EStructLiteral lookup miss
+    DkDuplicateDefinition  # `define` rejected — name already bound
+
+    # Reserved for future migrators (kept so the type doesn't churn
+    # when typechecker / lowerer / parser sites migrate). Not yet
+    # emitted by any stage.
+    DkNotAType
+    DkTypeMismatch
+    DkParseError
+    DkUnreachable
+
+# ── Diagnostic ──────────────────────────────────────────────
+
+struct Diagnostic:
+    Span span
+    Severity sev
+    DiagKind kind
+    String message
+
+# ── Constructors ────────────────────────────────────────────
+#
+# Prefer the helpers (`Diagnostic.error(...)` etc.) over inline
+# struct literals so call sites read like prose and we have one
+# place to evolve the shape.
+
+equip Diagnostic:
+
+    Diagnostic error(Span span, DiagKind kind, String message):
+        return Diagnostic(span, SevError(), kind, message)
+
+    Diagnostic warn(Span span, DiagKind kind, String message):
+        return Diagnostic(span, SevWarning(), kind, message)
+
+    Diagnostic suggest(Span span, DiagKind kind, String message):
+        return Diagnostic(span, SevSuggestion(), kind, message)
+
+# ── Rendering ───────────────────────────────────────────────
+
+String severity_str(Severity sev):
+    match sev:
+        case SevError():
+            return "error"
+        case SevWarning():
+            return "warning"
+        case SevSuggestion():
+            return "suggestion"
+
+String diag_kind_str(DiagKind kind):
+    match kind:
+        case DkUndefinedName():
+            return "undefined-name"
+        case DkDuplicateDefinition():
+            return "duplicate-definition"
+        case DkNotAType():
+            return "not-a-type"
+        case DkTypeMismatch():
+            return "type-mismatch"
+        case DkParseError():
+            return "parse-error"
+        case DkUnreachable():
+            return "unreachable"
+
+# Canonical one-line rendering used by the resolver comparison test
+# driver. Format: `DIAG <severity> <kind> <span_start>:<span_end> <message>`.
+# Keeping a `DIAG ` prefix means the integration normalizer can keep
+# the existing DEF/RES line-tag discipline; new lines slot in without
+# disturbing the comparison.
+String format_diagnostic(Diagnostic d):
+    return "DIAG " + severity_str(d.sev) + " " + diag_kind_str(d.kind) + " " + int_to_str(d.span.start) + ":" + int_to_str(d.span.end) + " " + d.message
