@@ -20917,3 +20917,37 @@ fn empty_literal_struct_field() {
         "Alice\nBob\nCarol",
     );
 }
+
+// ─── Gorget-js snag #5: `\u` escape silently corrupted source ────────
+//
+// Before the fix, `"A"` lexed as the 5-byte string `"u0041"` —
+// the `\u` arm wasn't in the escape grammar, so it hit the "unknown
+// escape" fallback that dropped the backslash and pushed a lex error
+// that was never propagated. Fix: add `\uXXXX` (4-hex BMP shorthand,
+// JS/Rust/Java shape) to the escape grammar in `src/lexer/mod.rs`.
+// The pre-existing `\u{...}` open-form already worked.
+
+#[test]
+fn gorget_js_snag_5_unicode_escape() {
+    run_gg(
+        "gorget_js_snag_5_unicode_escape.gg",
+        "1\nA\n2\né\n3\n中\n4\n😀\n1",
+    );
+}
+
+// ─── Gorget-js snag #6: codepoint_to_str(0) returned empty string ────
+//
+// Before the fix, `gorget_codepoint_to_utf8` wrote `{byte, '\0'}` into
+// a heap buffer and went through `gorget_string_adopt`, which uses
+// `strlen` to derive length. For codepoint 0 the first byte is NUL,
+// so strlen returned 0 and the result was the empty string. Fix:
+// encode into a small stack buffer with an EXPLICIT length from the
+// UTF-8 encoder and copy via `str_alloc_copy(buf, len, alloc)`.
+
+#[test]
+fn gorget_js_snag_6_codepoint_to_str_zero() {
+    run_gg(
+        "gorget_js_snag_6_codepoint_to_str_zero.gg",
+        "1\n0\n1\n1\n1\nA\n3\n中\n4\n😀",
+    );
+}

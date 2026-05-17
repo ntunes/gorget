@@ -1,0 +1,34 @@
+# Gorget-js snag #5: \u escape silently corrupted the source.
+#
+# Before the fix, "\u0041" lexed as the 5-byte string "u0041" — the
+# backslash was dropped, `u` fell through as a literal byte, and the 4
+# hex digits passed through unchanged. The \u arm was not in the escape
+# grammar at all; it hit the "unknown escape" fallback that pushed a
+# (silently dropped) lex error and used `u as char`.
+#
+# Fix: add \uXXXX (4-hex BMP shorthand, JS/Rust/Java shape) to the
+# escape grammar in src/lexer/mod.rs. The pre-existing \u{...} open-form
+# already worked.
+
+int main():
+    # \u0041 → ASCII A (1-byte UTF-8)
+    String a = "\u0041"
+    # \u00e9 → é (2-byte UTF-8)
+    String b = "\u00e9"
+    # \u4e2d → 中 (3-byte UTF-8)
+    String c = "\u4e2d"
+    # \u{1f600} → grinning face emoji (4-byte UTF-8, supplementary plane)
+    String d = "\u{1f600}"
+    # \u0000 → null byte (1-byte UTF-8). byte_len reports 1 even though
+    # the buffer contains an embedded NUL — see also snag #6.
+    String e = "\u0000"
+    print(a.byte_len())
+    print(a)
+    print(b.byte_len())
+    print(b)
+    print(c.byte_len())
+    print(c)
+    print(d.byte_len())
+    print(d)
+    print(e.byte_len())
+    return 0

@@ -7102,37 +7102,37 @@ static inline Str gorget_char_to_str(char c) {
 }
 
 static inline Str gorget_codepoint_to_utf8(int64_t cp) {
-    char* out;
+    // Encode into a small stack buffer with an EXPLICIT length, then
+    // copy via str_alloc_copy. Going through gorget_string_adopt would
+    // use strlen() to derive the length, which truncates at the first
+    // NUL byte — wrong for U+0000 (returns empty) and any codepoint
+    // whose UTF-8 form contains an embedded NUL (none exist for valid
+    // codepoints, but U+0000 is the obvious case).
+    char buf[4];
+    size_t len;
     if (cp < 0 || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
-        out = (char*)GORGET_ALLOC(4);
-        out[0] = (char)0xEF; out[1] = (char)0xBF; out[2] = (char)0xBD;
-        out[3] = '\0';
-        return gorget_string_adopt(out);
-    }
-    if (cp <= 0x7F) {
-        out = (char*)GORGET_ALLOC(2);
-        out[0] = (char)cp;
-        out[1] = '\0';
+        buf[0] = (char)0xEF; buf[1] = (char)0xBF; buf[2] = (char)0xBD;
+        len = 3;
+    } else if (cp <= 0x7F) {
+        buf[0] = (char)cp;
+        len = 1;
     } else if (cp <= 0x7FF) {
-        out = (char*)GORGET_ALLOC(3);
-        out[0] = (char)(0xC0 | (cp >> 6));
-        out[1] = (char)(0x80 | (cp & 0x3F));
-        out[2] = '\0';
+        buf[0] = (char)(0xC0 | (cp >> 6));
+        buf[1] = (char)(0x80 | (cp & 0x3F));
+        len = 2;
     } else if (cp <= 0xFFFF) {
-        out = (char*)GORGET_ALLOC(4);
-        out[0] = (char)(0xE0 | (cp >> 12));
-        out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
-        out[2] = (char)(0x80 | (cp & 0x3F));
-        out[3] = '\0';
+        buf[0] = (char)(0xE0 | (cp >> 12));
+        buf[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        buf[2] = (char)(0x80 | (cp & 0x3F));
+        len = 3;
     } else {
-        out = (char*)GORGET_ALLOC(5);
-        out[0] = (char)(0xF0 | (cp >> 18));
-        out[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
-        out[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
-        out[3] = (char)(0x80 | (cp & 0x3F));
-        out[4] = '\0';
+        buf[0] = (char)(0xF0 | (cp >> 18));
+        buf[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+        buf[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        buf[3] = (char)(0x80 | (cp & 0x3F));
+        len = 4;
     }
-    return gorget_string_adopt(out);
+    return str_alloc_copy(buf, len, __gorget_current_alloc);
 }
 
 

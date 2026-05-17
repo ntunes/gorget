@@ -513,6 +513,48 @@ impl<'src> Lexer<'src> {
                         '\u{FFFD}'
                     })
             }
+            // \uXXXX — 4-hex-digit BMP codepoint (JS/Rust/Java shape).
+            // Supplementary planes (codepoints > U+FFFF) require \u{...} form;
+            // surrogate-pair encoding via \uD8xx\uDCxx is not supported.
+            b'u' => {
+                *i += 1; // skip u
+                let hex_start = *i;
+                let hex_end = (*i + 4).min(bytes.len());
+                let mut all_hex = true;
+                let mut count = 0;
+                while *i < hex_end && bytes[*i].is_ascii_hexdigit() {
+                    *i += 1;
+                    count += 1;
+                }
+                if count != 4 {
+                    all_hex = false;
+                }
+                if !all_hex {
+                    self.errors.push(LexError {
+                        kind: LexErrorKind::InvalidEscapeSequence(
+                            "\\u requires 4 hex digits (e.g. \\u0041) or \\u{...} form"
+                                .to_string(),
+                        ),
+                        span: self.span(backslash_pos, *i),
+                    });
+                    '\u{FFFD}'
+                } else {
+                    let hex = &self.source[hex_start..*i];
+                    u32::from_str_radix(hex, 16)
+                        .ok()
+                        .and_then(char::from_u32)
+                        .unwrap_or_else(|| {
+                            // Lone surrogate (U+D800..U+DFFF) — invalid in UTF-8.
+                            self.errors.push(LexError {
+                                kind: LexErrorKind::InvalidEscapeSequence(
+                                    format!("\\u{hex} (lone surrogate not allowed)"),
+                                ),
+                                span: self.span(backslash_pos, *i),
+                            });
+                            '\u{FFFD}'
+                        })
+                }
+            }
             other => {
                 self.errors.push(LexError {
                     kind: LexErrorKind::InvalidEscapeSequence(

@@ -1,0 +1,34 @@
+# Gorget-js snag #6: codepoint_to_str(0) returned an empty string.
+#
+# Before the fix, gorget_codepoint_to_utf8 in src/backend/c/c_runtime.rs
+# wrote `{byte, '\0'}` into a heap buffer and called
+# gorget_string_adopt(buf), which derives length via strlen(). For
+# codepoint 0 the very first byte is NUL → strlen returns 0 → the
+# function returned GORGET_EMPTY_STR. Same trap would catch any
+# codepoint whose UTF-8 form contained an embedded NUL (none do for
+# valid scalars, but U+0000 is the obvious case).
+#
+# Fix: encode into a small stack buffer with an EXPLICIT length, then
+# copy via str_alloc_copy(buf, len, alloc). The length now flows from
+# the encoder (1/2/3/4 bytes depending on codepoint range), never from
+# a null-terminator search.
+
+from std.conv import codepoint_to_str
+
+int main():
+    String s0 = codepoint_to_str(0)
+    String s1 = codepoint_to_str(1)
+    String sA = codepoint_to_str(0x41)
+    String sBMP = codepoint_to_str(0x4e2d)
+    String sEmoji = codepoint_to_str(0x1f600)
+    print(s0.byte_len())
+    print(s0.byte_at(0))
+    print(s1.byte_len())
+    print(s1.byte_at(0))
+    print(sA.byte_len())
+    print(sA)
+    print(sBMP.byte_len())
+    print(sBMP)
+    print(sEmoji.byte_len())
+    print(sEmoji)
+    return 0
