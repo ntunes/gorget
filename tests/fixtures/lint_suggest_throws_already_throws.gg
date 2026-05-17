@@ -1,0 +1,20 @@
+# Negative case: both functions are already declared `throws String` and use
+# auto-propagation. The lint must NOT fire — the refactor it suggests is
+# already done.
+
+int parse_int(String s) throws String:
+    if s == "42":
+        return 42
+    throw f"bad: {s}"
+
+int add_one(String s) throws String:
+    int n = parse_int(s)
+    return n + 1
+
+void main():
+    auto r = add_one("42")
+    match r:
+        case Ok(v):
+            print(f"got {v}")
+        case Error(e):
+            print(f"err: {e}")

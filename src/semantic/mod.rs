@@ -3,6 +3,7 @@ pub mod cycle_check;
 pub mod derive;
 pub mod errors;
 pub mod ids;
+pub mod lint_suggest_throws;
 pub mod meta;
 pub mod purity;
 pub mod resolve;
@@ -313,8 +314,27 @@ pub fn analyze_with_source_dir(
         }
     });
 
+    // Pass 4.6: `lint:suggest_throws` — flag functions returning Result[T, E]
+    // (not throws) that contain `T x = match expr: case Ok(v): v;
+    // case Error(e): return Error(e)` patterns. The match-Result rethrow
+    // shape is what `throws E` + auto-prop is designed to replace. See
+    // `src/semantic/lint_suggest_throws.rs` for detection criteria.
+    // Must run after typecheck (consumes `expr_types`).
+    let mut lint_warnings: Vec<SemanticWarning> = Vec::new();
+    time_pass(&mut pass_times, "lint_suggest_throws", || {
+        lint_suggest_throws::check_module(
+            module,
+            &scopes,
+            &mut types,
+            &resolution_map,
+            &resolve_ctx.enum_variants,
+            &expr_types,
+            &mut lint_warnings,
+        );
+    });
+
     // Pass 5: Borrow checking (two sub-passes: 5a computes return_borrows_from, 5b does full check)
-    let (shared_bindings, warnings, fn_purity, borrow_deps, safety_pt) = time_pass(&mut pass_times, "safety_check_module", || {
+    let (shared_bindings, mut warnings, fn_purity, borrow_deps, safety_pt) = time_pass(&mut pass_times, "safety_check_module", || {
         safety::check_module(
             module,
             &scopes,
@@ -334,6 +354,9 @@ pub fn analyze_with_source_dir(
         let prefixed: &'static str = Box::leak(format!("safety::{}", k).into_boxed_str());
         *pass_times.entry(prefixed).or_default() += v;
     }
+    // Append `lint:suggest_throws` warnings after the safety pass so they're
+    // surfaced through the same reporting path.
+    warnings.extend(lint_warnings);
 
     AnalysisResult {
         scopes,

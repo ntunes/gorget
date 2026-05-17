@@ -1,0 +1,17 @@
+Result[int, String] parse_int(String s):
+    if s == "42":
+        return Ok(42)
+    return Error(f"bad: {s}")
+
+Result[int, String] add_one(String s):
+    int n = match parse_int(s):
+        case Ok(v): v
+        case Error(e): return Error(e)
+    return Ok(n + 1)
+
+void main():
+    match add_one("42"):
+        case Ok(v):
+            print(f"got {v}")
+        case Error(e):
+            print(f"err: {e}")

@@ -5101,6 +5101,98 @@ fn check_gg_fails(fixture: &str, expected_stderr: &str) {
     );
 }
 
+/// `gg check` must succeed AND stderr must contain `expected_stderr`.
+/// Used for diagnostic tests where the program is well-formed but the
+/// compiler should emit a non-fatal warning (e.g. `lint:suggest_throws`).
+fn check_gg_warns(fixture: &str, expected_stderr: &str) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
+
+    assert!(
+        fixture_path.exists(),
+        "Fixture not found: {}",
+        fixture_path.display()
+    );
+
+    let output = build_with_timeout(
+        gg_command("check").arg(&fixture_path),
+        fixture,
+    );
+
+    assert!(
+        output.status.success(),
+        "Expected `gg check` to succeed for {fixture}, but it failed.\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(expected_stderr),
+        "Expected stderr to contain '{expected_stderr}' for {fixture}, got:\n{stderr}",
+    );
+}
+
+/// `gg check` must succeed AND stderr must NOT contain `forbidden_stderr`.
+/// Used to verify that a diagnostic is correctly suppressed.
+fn check_gg_silent_for(fixture: &str, forbidden_stderr: &str) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
+
+    assert!(
+        fixture_path.exists(),
+        "Fixture not found: {}",
+        fixture_path.display()
+    );
+
+    let output = build_with_timeout(
+        gg_command("check").arg(&fixture_path),
+        fixture,
+    );
+
+    assert!(
+        output.status.success(),
+        "Expected `gg check` to succeed for {fixture}, but it failed.\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains(forbidden_stderr),
+        "Expected stderr to NOT contain '{forbidden_stderr}' for {fixture}, got:\n{stderr}",
+    );
+}
+
+#[test]
+fn lint_suggest_throws_basic() {
+    // Positive case — the lint fires once for `add_one`.
+    check_gg_warns(
+        "lint_suggest_throws_basic.gg",
+        "function `add_one` contains 1 match-unwrap-or-rethrow pattern",
+    );
+    // Code still runs correctly.
+    run_gg("lint_suggest_throws_basic.gg", "got 43");
+}
+
+#[test]
+fn lint_suggest_throws_negative_nonresult() {
+    // Negative case — enclosing fn returns `int`, lint must NOT fire.
+    check_gg_silent_for(
+        "lint_suggest_throws_negative_nonresult.gg",
+        "match-unwrap-or-rethrow",
+    );
+    run_gg("lint_suggest_throws_negative_nonresult.gg", "43\n0");
+}
+
+#[test]
+fn lint_suggest_throws_already_throws() {
+    // Negative case — fn already declared `throws`, lint must NOT fire.
+    check_gg_silent_for(
+        "lint_suggest_throws_already_throws.gg",
+        "match-unwrap-or-rethrow",
+    );
+    run_gg("lint_suggest_throws_already_throws.gg", "got 43");
+}
+
 
 #[test]
 fn const_assign_error() {

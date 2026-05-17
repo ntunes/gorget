@@ -91,6 +91,17 @@ pub enum SemanticWarningKind {
     /// Collection mutated while an implicit CoW borrow (from .get/.unwrap/index) is alive.
     /// The CoW system handles correctness, but the pattern may be confusing.
     CowBorrowMutation { source: String, borrow: String },
+    /// A function returning `Result[T, E]` contains one or more bindings of the
+    /// `T x = match expr: case Ok(v): v; case Error(e): return Error(e)` shape.
+    /// Declaring the function `throws E` would let `T x = expr` auto-propagate the
+    /// error and remove the boilerplate. Emitted by the `suggest_throws` lint —
+    /// one per function regardless of how many sites match.
+    SuggestThrowsRefactor {
+        fn_name: String,
+        error_type: String,
+        /// Number of match-unwrap-or-rethrow sites detected inside this function.
+        occurrence_count: usize,
+    },
 }
 
 impl std::fmt::Display for SemanticWarning {
@@ -141,6 +152,17 @@ impl std::fmt::Display for SemanticWarning {
             }
             SemanticWarningKind::CowBorrowMutation { source, borrow } => {
                 write!(f, "`{source}` mutated while `{borrow}` holds an element — clone is inserted automatically")
+            }
+            SemanticWarningKind::SuggestThrowsRefactor { fn_name, error_type, occurrence_count } => {
+                let sites = if *occurrence_count == 1 {
+                    "1 match-unwrap-or-rethrow pattern".to_string()
+                } else {
+                    format!("{occurrence_count} match-unwrap-or-rethrow patterns")
+                };
+                write!(
+                    f,
+                    "function `{fn_name}` contains {sites}; declare it `throws {error_type}` and write `T x = expr` to auto-propagate (see docs/language-reference.md `throws`)"
+                )
             }
         }
     }

@@ -1,0 +1,18 @@
+# Negative case: same match-unwrap-or-rethrow shape but the enclosing
+# function returns `int`, not `Result[T, E]`. The lint must NOT fire here —
+# converting to `throws E` would be a non-local refactor.
+
+Result[int, String] parse_int(String s):
+    if s == "42":
+        return Ok(42)
+    return Error(s)
+
+int safe_parse(String s):
+    int n = match parse_int(s):
+        case Ok(v): v
+        case Error(e): return 0
+    return n + 1
+
+void main():
+    print(f"{safe_parse('42')}")
+    print(f"{safe_parse('abc')}")

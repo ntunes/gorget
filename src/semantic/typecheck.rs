@@ -2115,6 +2115,10 @@ impl<'a> TypeChecker<'a> {
                 else_arm,
             } => {
                 let scrutinee_type = self.infer_expr(scrutinee);
+                // Record the scrutinee's typed shape so downstream passes
+                // (e.g. `lint:suggest_throws`) can recognize Result[T, E]
+                // scrutinees without re-running inference.
+                self.expr_types.insert(scrutinee.span, scrutinee_type);
                 let mut result_type = self.fresh_type_var();
 
                 for arm in arms {
@@ -2968,6 +2972,10 @@ impl<'a> TypeChecker<'a> {
                 else_arm,
             } => {
                 let scrutinee_type = self.infer_expr(scrutinee);
+                // Record the scrutinee's typed shape so downstream passes
+                // (e.g. `lint:suggest_throws`) can recognize Result[T, E]
+                // scrutinees without re-running inference.
+                self.expr_types.insert(scrutinee.span, scrutinee_type);
                 let mut first_arm_type = None;
                 for arm in arms.iter().filter_map(|i| i.arm()) {
                     self.assign_pattern_types(&arm.pattern, scrutinee_type);
