@@ -3489,6 +3489,24 @@ equip Parser:
             self.skip_trivia()
             if self.check_tok(TOK_DEDENT):
                 break
+            # Associated type alias: `type Name [: Bound (& Bound)*]? [= Default]?`
+            # Mirrors Rust's parse_associated_type (src/parser/mod.rs:1155). We
+            # consume the tokens but do not model the assoc type in TraitDef yet
+            # — the resolver/typechecker pipelines don't need it, and the only
+            # fixture using this shape (sigil_type_args.gg) mismatches earlier
+            # on `int !` sigil rendering anyway. The point is to silence the
+            # spurious "expected type" diagnostic the fallback would emit.
+            if self.check_kw(KW_TYPE):
+                self.advance()
+                self.advance()
+                if self.match_tok(TOK_COLON):
+                    SpannedType first_bound = self.parse_type()
+                    while self.match_tok(TOK_AMP):
+                        SpannedType next_bound = self.parse_type()
+                if self.match_tok(TOK_EQ):
+                    SpannedType default_ty = self.parse_type()
+                self.skip_newlines()
+                continue
             # Skip 'async' modifier before method def
             if self.check_kw(KW_ASYNC):
                 self.advance()
