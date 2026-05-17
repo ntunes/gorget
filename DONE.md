@@ -1,5 +1,22 @@
 # DONE
 
+- [2026-05-17] **perf(lir,backend): retire integration-sweep regression from stack-traces v1 (~46× codegen speedup on LW).** Profile-driven hotspot hunt confirmed the suspect from the stack-traces v1 TODO: `resolve_panic_loc` was called *per LIR instruction* during C emission, doing a linear walk over `file_infos` plus a linear walk over the file's source bytes counting `\n` for every call. On `self_host_lowerer/driver.gg`: 197,119 LIR instructions × ~30 KB source × ~30 files compounded to **6075 ms of codegen** (91% of total compile time), up from ~136 ms pre-regression — a clean +6 s regression on a single heavy fixture. Multiplied across ~600 fixtures the integration sweep paid roughly the +8 min the TODO documented.
+
+  **Two cheap wins, shipped together (~100 LOC across three files):**
+  1. **`FileInfo::line_starts`** precomputed at construction (`src/span.rs`). One pass over each file's source at load (~one `Vec<usize>` push per `\n`), then `offset_to_location` binary-searches via `partition_point` instead of a per-call linear walk. O(log n) per lookup, asymptotic win on large files.
+  2. **`inst_needs_loc` predicate** in `src/backend/c_lir/mod.rs`. The emit loop now skips `resolve_panic_loc` entirely for the 60–70% of instructions that don't emit any inline panic site. Only overflow-checked arithmetic (`Add`/`Sub`/`Mul` with `Overflow::Trap` on signed-int types), integer `Div`/`Rem`/`Mod` (zero / signed-overflow guards), `Shl`/`Shr` (shift-count guards), `BoundsCheck`, `DivCheck`, `Trap`, and `CallExtern` (conservatively included for `gorget_panic` + `unwrap_err` combinator) resolve a loc. Predicate is one typed match — no name matching on instruction names, no sidecar registry, no shape heuristics.
+
+  **Measured speedup on `self_host_lowerer/driver.gg`** (median of 5 release-profile runs):
+  - codegen: 6075 ms → **108 ms (~56×)**
+  - total compile: 6687 ms → **706 ms (~9.5×)**
+  - `hello.gg` (small workload sanity check): no regression — codegen stays sub-1 ms.
+
+  **Estimated saving on full integration sweep**: ~5–8 minutes off the 20-min current → back to roughly the historical 12-min baseline. The bigger codegen savings on LW-class fixtures (~6 s each) compound across the ~10 self-host comparison tests and similar self-host workloads; smaller fixtures save proportionally less but every panic_loc skipped is a `String::clone()` + linear scan avoided.
+
+  **Verification.** Release `cargo build` clean (zero warnings), `cargo test --lib` 1058/1058 green, `cargo test --test integration -- panic_location overflow bounds_check numeric_division panic_builtin test_should_panic coroutine_result_combinators` 14/14 green (proves every `loc`-using inst variant — overflow trap, bounds, div-by-zero, compiler-`gorget_panic`, HOF `unwrap_err`, etc. — still emits a correct `file:line:col` panic message), and `lowerer_comparison` integration test passes (105 s). Parent agent runs the full sweep.
+
+  **Surprises:** the suspect from the TODO was right. The TODO had three candidate wins (1: gate `Block::push_inst` on `span: None`; 2: line-starts; 3: per-block emit-time loc cache). The profile said #1 wasn't the dominant cost — push_inst overhead is amortised inside other phases and didn't show up as a top-N regression target. #2 was a clean win at the function level. #3 wasn't needed because the predicate gate sidestepped the cache: if 95%+ of instructions never look at the loc, caching what you don't compute is free. Ships only #2 + a sharper version of #3 (skip vs cache); skips #1.
+
 - [2026-05-17] **Stack traces on runtime panics v1 shipped.** Runtime panics now print `path/file.gg:LINE:COL: <msg>` instead of the location-less `gorget: <msg>`. Six commits on `gorget-1`:
   - `833ead88` lir(keystone): add `span_map: Vec<Option<Span>>` + `terminator_span: Option<Span>` to `lir::Block` (Stage 1a — 10 LOC, default-init at the sole construction site)
   - `a0343dbe` lir(writer): fill `span_map` at GIR→LIR push sites (Stage 1b — 327 `push_inst` sites, 23 terminator sites, debug-assert in `lower_module` enforces `span_map.len() == insts.len()`)

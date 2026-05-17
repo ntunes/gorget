@@ -23,11 +23,7 @@ type FileInfo = (String, String, usize);
 fn to_lir_file_infos(file_infos: &[FileInfo]) -> Vec<gorget::span::FileInfo> {
     file_infos
         .iter()
-        .map(|(name, src, off)| gorget::span::FileInfo {
-            filename: name.clone(),
-            source: src.clone(),
-            base_offset: *off,
-        })
+        .map(|(name, src, off)| gorget::span::FileInfo::new(name.clone(), src.clone(), *off))
         .collect()
 }
 

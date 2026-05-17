@@ -110,6 +110,40 @@ pub(crate) fn resolve_panic_loc(
     ("<unknown>".to_string(), 0, 0)
 }
 
+/// Whether an instruction's C emission needs a resolved `(file, line, col)`
+/// triple for inline panic messages. Must stay in lockstep with the match
+/// arms in `emit_inst` that read `loc.*` — adding a new panic emit site
+/// without updating this predicate will silently emit `<unknown>:0:0`.
+///
+/// `CallExtern` is conservatively included: two name-driven branches inside
+/// `emit_call_extern` / `emit_hof::try_emit_option_result_combinator` emit
+/// `file:line:col` strings (`gorget_panic` + the `unwrap_err` combinator).
+/// Gating those by name here would re-do the runtime-symbol routing the
+/// emit sites already own (CLAUDE.md "name matching" exception lives at
+/// the C-emit boundary, not in this predicate); the cost is a small set
+/// of unnecessary resolutions on plain CallExterns.
+fn inst_needs_loc(inst: &Inst) -> bool {
+    use crate::lir::{Inst, LirType, Overflow};
+    match inst {
+        Inst::Add { overflow, ty, .. }
+        | Inst::Sub { overflow, ty, .. }
+        | Inst::Mul { overflow, ty, .. } => {
+            *overflow == Overflow::Trap
+                && matches!(ty, LirType::I64 | LirType::I32 | LirType::I16 | LirType::I8)
+        }
+        // Div / Rem / Mod emit divide-by-zero + signed-overflow guards on
+        // integer types; the float paths fall through to plain `/` / fmod()
+        // with no panic site (IEEE-754 semantics).
+        Inst::Div { ty, .. } | Inst::Rem { ty, .. } | Inst::Mod { ty, .. } => {
+            !matches!(ty, LirType::F32 | LirType::F64)
+        }
+        Inst::Shl { .. } | Inst::Shr { .. } => true,
+        Inst::BoundsCheck { .. } | Inst::DivCheck { .. } | Inst::Trap { .. } => true,
+        Inst::CallExtern { .. } => true,
+        _ => false,
+    }
+}
+
 /// Names of structs provided by the Gorget C runtime — these should NOT
 /// be re-defined by the LIR backend.
 const RUNTIME_STRUCTS: &[&str] = &[
@@ -1763,6 +1797,13 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
         string_lit_map,
     };
 
+    // Sentinel passed to `emit_inst` when an instruction's predicate
+    // says it doesn't need a resolved (file, line, col) triple — the
+    // match arms in `emit_inst` for such instructions never read these
+    // fields. Allocated once per function rather than per block /
+    // per instruction.
+    let unresolved_loc = ("<unknown>".to_string(), 0u32, 0u32);
+
     // Blocks
     for block in &func.blocks {
         writeln!(out, "__bb{}:", block.id.0).unwrap();
@@ -1782,12 +1823,21 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
             writeln!(out, "    __v{} = __bp{};", vid.0, vid.0).unwrap();
         }
 
-        // Instructions
+        // Instructions. `resolve_panic_loc` allocates a filename String and
+        // binary-searches line_starts; gated by `inst_needs_loc` because
+        // eager per-inst resolution was the dominant codegen regression
+        // after stack-traces v1 (~6 s on self_host_lowerer).
         for (idx, inst) in block.insts.iter().enumerate() {
-            let span = block.span_map.get(idx).copied().flatten();
-            let loc = resolve_panic_loc(span, &module.file_infos);
+            let loc_storage;
+            let loc: &(String, u32, u32) = if inst_needs_loc(inst) {
+                let span = block.span_map.get(idx).copied().flatten();
+                loc_storage = resolve_panic_loc(span, &module.file_infos);
+                &loc_storage
+            } else {
+                &unresolved_loc
+            };
             write!(out, "    ").unwrap();
-            emit_inst(out, inst, &ectx, &loc);
+            emit_inst(out, inst, &ectx, loc);
             writeln!(out).unwrap();
 
             // In test functions, register droppable user-named slots on the cleanup stack
