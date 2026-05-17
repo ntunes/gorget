@@ -180,8 +180,12 @@ pub fn eliminate_dead_functions(module: &mut LirModule) -> usize {
     original - module.functions.len()
 }
 
-fn find_live_functions(module: &LirModule) -> HashSet<FuncId> {
-    let mut live = HashSet::new();
+fn find_live_functions(module: &LirModule) -> rustc_hash::FxHashSet<FuncId> {
+    // FxHashSet over FuncId (u32-newtype) — the transitive-closure walk does
+    // an `insert`/`contains` per function reference across every inst of every
+    // live function; stdlib SipHash is wasted overhead on integer keys.
+    // Same FxHashMap playbook as propagate_copies (commit 469d7942).
+    let mut live: rustc_hash::FxHashSet<FuncId> = rustc_hash::FxHashSet::default();
     let mut worklist: Vec<FuncId> = Vec::new();
 
     // Roots: main, __test*, __suite_*, __Closure_N__call, and spawned functions.
@@ -408,7 +412,11 @@ pub fn eliminate_dead_globals(module: &mut LirModule) -> usize {
         return 0;
     }
 
-    let mut referenced: HashSet<GlobalId> = HashSet::new();
+    // FxHashSet over GlobalId (u32-newtype). Same playbook as propagate_copies
+    // (commit 469d7942): one insert per `Inst::GlobalAddr` across every inst of
+    // every function, then `contains` once per global at retain time. Integer
+    // keys + hot scan == stdlib SipHash is wasted work.
+    let mut referenced: rustc_hash::FxHashSet<GlobalId> = rustc_hash::FxHashSet::default();
     for func in &module.functions {
         for block in &func.blocks {
             for inst in &block.insts {
@@ -1011,7 +1019,7 @@ fn identity(dst: ValueId, ty: LirType, src: ValueId) -> Inst {
 /// If `v1 = Add(a, b)` and later `v2 = Add(a, b)` with the same operands,
 /// replace v2's definition with a copy of v1. Returns count eliminated.
 fn eliminate_common_subexpressions(func: &mut LirFunction) -> usize {
-    use std::collections::HashMap;
+    use rustc_hash::FxHashMap;
 
     /// Key for CSE: instruction kind + operands (without dst).
     #[derive(Hash, Eq, PartialEq, Clone)]
@@ -1025,7 +1033,11 @@ fn eliminate_common_subexpressions(func: &mut LirFunction) -> usize {
     let mut eliminated = 0;
 
     for block in &mut func.blocks {
-        let mut seen: HashMap<CseKey, ValueId> = HashMap::new();
+        // FxHashMap: same playbook as the 2026-05-17 `propagate_copies` swap
+        // (commit 469d7942). Stdlib HashMap's SipHash is cryptographic and
+        // wasted on compiler-internal integer-keyed maps; FxHashMap is
+        // measurably faster on the per-block-per-fixpoint allocation here.
+        let mut seen: FxHashMap<CseKey, ValueId> = FxHashMap::default();
         let mut replacements: Vec<(usize, ValueId, ValueId)> = Vec::new(); // (index, old_dst, existing_val)
 
         for (i, inst) in block.insts.iter().enumerate() {
