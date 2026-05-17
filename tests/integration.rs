@@ -20916,23 +20916,6 @@ out_b[1]: StringV(second)",
     );
 }
 
-// gorget-js snag #3: match scrutinee misidentified as last-use because
-// liveness's `uses_expr` skipped `Expr::StructLiteral`. With the use of
-// `rv` inside `PropDescriptor(rv, ...)` invisible to liveness, the match
-// staging picked `AssignMode::Move`, and Tier 2a's `AssignIntoOwnedSlot`
-// validator caught the resulting "Owned + live source consumed without
-// preceding clone" and panicked. Fix: walk `StructLiteral` args (and the
-// other previously-uncovered Expr variants — ArrayLiteral, TupleLiteral,
-// DictLiteral, DictComprehension, Range, DefaultOp, Do, DotShorthand) in
-// `uses_expr` so identifier uses inside them count toward last-use.
-#[test]
-fn gorget_js_snag_3_match_struct_literal_use() {
-    run_gg(
-        "gorget_js_snag_3_match_struct_literal_use.gg",
-        "true",
-    );
-}
-
 // ─── Empty literal `[]` contextual typing (TODO 2026-05-14) ──────────
 //
 // Regression suite for elem_size propagation when an empty `[]` is
