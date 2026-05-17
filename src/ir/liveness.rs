@@ -23,15 +23,94 @@
 //! Iterate to fixpoint. Block sizes are small (~10–100 instructions) and
 //! function CFGs are small, so an O(N²) worklist is plenty.
 //!
+//! **Storage:** the live-sets use a dense [`LocalBitSet`] (one bit per
+//! local ID) rather than `FxHashSet<u32>`. Local IDs are dense 0..N within
+//! a function — typically a few dozen to a few hundred per function — so a
+//! bitset is both smaller in memory and dramatically faster for the bulk
+//! `union` / `clone` / `equality` operations that dominate fixpoint
+//! iteration. See the 2026-05-17 perf commit for measurements.
+//!
 //! See `docs/internals/structural-guards.md` Tier 2a for the broader
 //! consume-site discipline this enables, and the `validate` module's
 //! `ConsumeSite` walker for the consumer.
 
-use rustc_hash::{FxHashMap, FxHashSet};
-
 use super::instructions::{Instruction, Operand, Place, Projection, Terminator};
 use super::types::{BlockId, LocalId};
 use super::Function;
+
+/// Dense bitset over local IDs (0..N).
+///
+/// Local IDs are dense within a function, so a bitset gives O(1)
+/// insert/remove/contains and O(N/64) bulk ops (clone, equality, union,
+/// difference) — substantially faster than `FxHashSet<u32>` for the
+/// hot path of backward-dataflow liveness, where every fixpoint
+/// iteration clones and unions per-block IN-sets across the CFG.
+#[derive(Clone, Default, Debug, PartialEq, Eq)]
+struct LocalBitSet {
+    /// Each word stores 64 bit-flags. `bits[i] & (1 << (id % 64))` is set
+    /// iff the local with ID `i*64 + (id % 64)` is in the set.
+    bits: Vec<u64>,
+}
+
+impl LocalBitSet {
+    /// New empty set sized for `n_locals` local IDs (rounded up to the
+    /// next multiple of 64).
+    #[inline]
+    fn with_capacity(n_locals: usize) -> Self {
+        let words = n_locals.div_ceil(64).max(1);
+        Self { bits: vec![0u64; words] }
+    }
+
+    /// Ensure capacity to hold a bit for `id`. Used when growing on
+    /// insert (some locals can appear in operand streams above the
+    /// nominal `func.locals.len()` cap during construction — keep the
+    /// API forgiving rather than asserting).
+    #[inline]
+    fn ensure(&mut self, id: u32) {
+        let word = (id as usize) / 64;
+        if word >= self.bits.len() {
+            self.bits.resize(word + 1, 0);
+        }
+    }
+
+    #[inline]
+    fn insert(&mut self, id: u32) {
+        self.ensure(id);
+        let word = (id as usize) / 64;
+        let bit = id & 63;
+        self.bits[word] |= 1u64 << bit;
+    }
+
+    #[inline]
+    fn remove(&mut self, id: u32) {
+        let word = (id as usize) / 64;
+        if word < self.bits.len() {
+            let bit = id & 63;
+            self.bits[word] &= !(1u64 << bit);
+        }
+    }
+
+    #[inline]
+    fn contains(&self, id: u32) -> bool {
+        let word = (id as usize) / 64;
+        if word >= self.bits.len() {
+            return false;
+        }
+        let bit = id & 63;
+        (self.bits[word] & (1u64 << bit)) != 0
+    }
+
+    /// `self |= other`. Grows `self` if `other` is larger.
+    #[inline]
+    fn union_with(&mut self, other: &Self) {
+        if other.bits.len() > self.bits.len() {
+            self.bits.resize(other.bits.len(), 0);
+        }
+        for (s, o) in self.bits.iter_mut().zip(other.bits.iter()) {
+            *s |= *o;
+        }
+    }
+}
 
 /// Backward-dataflow liveness for a single function.
 ///
@@ -43,7 +122,7 @@ pub struct Liveness {
     /// At index `inst_count` of each inner Vec we store the live set after the
     /// terminator (== OUT[B] — useful for callers asking "live after the last
     /// instruction" without special-casing terminator-only blocks).
-    live_after: Vec<Vec<FxHashSet<u32>>>,
+    live_after: Vec<Vec<LocalBitSet>>,
 }
 
 impl Liveness {
@@ -57,16 +136,21 @@ impl Liveness {
             return Self { live_after: Vec::new() };
         }
 
+        // Bitset width follows `func.locals.len()`; on the rare occasion
+        // an operand references a higher id (transient lowering artifact),
+        // `LocalBitSet::insert` auto-grows.
+        let n_locals = func.locals.len();
+
         // Per-block USES (read before def in the block) and DEFS (locals
         // defined anywhere in the block, including the terminator). Standard
         // gen/kill formulation; computed once per block, reused each fixpoint
         // iteration.
-        let mut uses: Vec<FxHashSet<u32>> = vec![FxHashSet::default(); n_blocks];
-        let mut defs: Vec<FxHashSet<u32>> = vec![FxHashSet::default(); n_blocks];
-        for (bi, bb) in func.blocks.iter().enumerate() {
-            let (u, d) = compute_block_use_def(bb);
-            uses[bi] = u;
-            defs[bi] = d;
+        let mut uses: Vec<LocalBitSet> = Vec::with_capacity(n_blocks);
+        let mut defs: Vec<LocalBitSet> = Vec::with_capacity(n_blocks);
+        for bb in func.blocks.iter() {
+            let (u, d) = compute_block_use_def(bb, n_locals);
+            uses.push(u);
+            defs.push(d);
         }
 
         // Precompute successors per block (cheap, simplifies the IN/OUT loop).
@@ -79,24 +163,39 @@ impl Liveness {
 
         // IN[B] sets, indexed by block. OUT[B] = union of IN[succ].
         // Iterate to fixpoint.
-        let mut in_sets: Vec<FxHashSet<u32>> = vec![FxHashSet::default(); n_blocks];
+        let mut in_sets: Vec<LocalBitSet> =
+            (0..n_blocks).map(|_| LocalBitSet::with_capacity(n_locals)).collect();
+        // Reusable scratch buffer for new_in computation — avoids per-iteration
+        // allocations in the dataflow loop.
+        let mut new_in = LocalBitSet::with_capacity(n_locals);
         loop {
             let mut changed = false;
             // Reverse order tends to converge faster for forward CFGs but
             // the worklist semantics are the same; this is plenty fast.
             for bi in (0..n_blocks).rev() {
-                let mut out_b: FxHashSet<u32> = FxHashSet::default();
+                // Build new_in = (∪ in_sets[s] for s in succs[bi]) \ defs[bi] ∪ uses[bi]
+                // Reuse the scratch buffer: clear, fill, compare.
+                for w in new_in.bits.iter_mut() { *w = 0; }
                 for &s in &succs[bi] {
-                    out_b.extend(in_sets[s].iter().copied());
+                    new_in.union_with(&in_sets[s]);
                 }
-                // IN[B] = (OUT[B] - DEFS[B]) ∪ USES[B]
-                let mut new_in = out_b.clone();
-                for d in &defs[bi] {
-                    new_in.remove(d);
+                // Subtract defs (per-word AND-NOT), then OR in uses (per-word OR).
+                // Both ops are intrinsically O(words); no growth needed since
+                // all three operands share the same n_locals capacity.
+                let dwords = defs[bi].bits.len();
+                let uwords = uses[bi].bits.len();
+                if new_in.bits.len() < dwords.max(uwords) {
+                    new_in.bits.resize(dwords.max(uwords), 0);
                 }
-                new_in.extend(uses[bi].iter().copied());
+                for (i, w) in new_in.bits.iter_mut().enumerate() {
+                    let dw = defs[bi].bits.get(i).copied().unwrap_or(0);
+                    *w &= !dw;
+                    let uw = uses[bi].bits.get(i).copied().unwrap_or(0);
+                    *w |= uw;
+                }
                 if new_in != in_sets[bi] {
-                    in_sets[bi] = new_in;
+                    in_sets[bi].bits.clear();
+                    in_sets[bi].bits.extend_from_slice(&new_in.bits);
                     changed = true;
                 }
             }
@@ -110,32 +209,33 @@ impl Liveness {
         //     live_after[b][k] = (live_after[b][k+1] - defs(inst k)) ∪ uses(inst k_next?)
         //   No — clearer: define live_before(inst) = (live_after(inst) - defs(inst)) ∪ uses(inst).
         //   Then live_after of the previous instruction = live_before(this inst).
-        let mut live_after: Vec<Vec<FxHashSet<u32>>> = Vec::with_capacity(n_blocks);
+        let mut live_after: Vec<Vec<LocalBitSet>> = Vec::with_capacity(n_blocks);
+        let mut inst_defs_scratch: Vec<u32> = Vec::new();
+        let mut inst_reads_scratch: Vec<u32> = Vec::new();
         for bi in 0..n_blocks {
             let bb = &func.blocks[bi];
             let n_inst = bb.instructions.len();
             // OUT[B] for the terminator slot.
-            let mut out_b: FxHashSet<u32> = FxHashSet::default();
+            let mut out_b = LocalBitSet::with_capacity(n_locals);
             for &s in &succs[bi] {
-                out_b.extend(in_sets[s].iter().copied());
+                out_b.union_with(&in_sets[s]);
             }
             // The terminator itself reads operands (e.g. `Return(value)`,
             // `Branch.cond`). Those reads are live BEFORE the terminator —
             // i.e., live AFTER the last instruction. So we compute
             // live_after(inst[n_inst-1]) = (out_b - term_defs) ∪ term_uses.
-            let term_uses = match &bb.terminator {
-                Some(t) => collect_terminator_reads(t),
-                None => FxHashSet::default(),
-            };
             // Terminators don't define locals (Invoke's dst is on the
             // normal-edge entry point, which is treated as a use for
             // simplicity — see [collect_terminator_reads]; we don't
             // remove anything here).
             let mut after_last = out_b.clone();
-            after_last.extend(term_uses);
+            if let Some(t) = &bb.terminator {
+                collect_terminator_reads_into(t, &mut after_last);
+            }
 
             // Build per-instruction live_after backward. Vec length = n_inst+1.
-            let mut per_inst: Vec<FxHashSet<u32>> = vec![FxHashSet::default(); n_inst + 1];
+            let mut per_inst: Vec<LocalBitSet> =
+                (0..=n_inst).map(|_| LocalBitSet::with_capacity(n_locals)).collect();
             // The "after the terminator" slot = OUT[B] (no additions —
             // term uses are already covered by `after_last` for the last
             // instruction, and OUT[B] is what survives leaving the block).
@@ -148,10 +248,16 @@ impl Liveness {
                 per_inst[k] = current.clone();
                 let inst = &bb.instructions[k];
                 // live_before(inst k) = (live_after(k) - defs(k)) ∪ uses(k).
-                for d in collect_inst_defs(inst) {
-                    current.remove(&d);
+                inst_defs_scratch.clear();
+                collect_inst_defs_into(inst, &mut inst_defs_scratch);
+                for d in &inst_defs_scratch {
+                    current.remove(*d);
                 }
-                current.extend(collect_inst_reads(inst));
+                inst_reads_scratch.clear();
+                collect_inst_reads_into(inst, &mut inst_reads_scratch);
+                for r in &inst_reads_scratch {
+                    current.insert(*r);
+                }
             }
             live_after.push(per_inst);
         }
@@ -171,7 +277,7 @@ impl Liveness {
         if bi >= self.live_after.len() { return false; }
         let per_inst = &self.live_after[bi];
         if inst_index >= per_inst.len() { return false; }
-        per_inst[inst_index].contains(&local.0)
+        per_inst[inst_index].contains(local.0)
     }
 }
 
@@ -179,8 +285,7 @@ impl Liveness {
 /// after `_x = ...` the previous live-set for `_x` is rewritten by this
 /// new definition; uses inside the same instruction's RHS are read first
 /// (we add them in `collect_inst_reads`).
-fn collect_inst_defs(inst: &Instruction) -> Vec<u32> {
-    let mut defs = Vec::new();
+fn collect_inst_defs_into(inst: &Instruction, defs: &mut Vec<u32>) {
     match inst {
         Instruction::Assign { dst, .. } => {
             // Only bare-local assigns kill the local. Projection writes
@@ -228,11 +333,10 @@ fn collect_inst_defs(inst: &Instruction) -> Vec<u32> {
         // No definition: side-effects only, projections, drops.
         _ => {}
     }
-    defs
 }
 
 /// Locals read by an instruction. Mirrors [`super::validate::collect_read_locals_for_validate`]
-/// but returns a typed iterator suitable for FxHashSet construction.
+/// but writes into a reusable `Vec<u32>` to avoid per-call allocation.
 ///
 /// Specifically:
 /// - Operand reads contribute the operand's place local plus any Index
@@ -245,8 +349,7 @@ fn collect_inst_defs(inst: &Instruction) -> Vec<u32> {
 /// - MoveZero is *not* counted as a read. It's a def that zeroes the
 ///   source; treating it as a read would defeat the purpose (every
 ///   move would mark its source as live-before).
-fn collect_inst_reads(inst: &Instruction) -> Vec<u32> {
-    let mut reads = Vec::new();
+fn collect_inst_reads_into(inst: &Instruction, reads: &mut Vec<u32>) {
     let push_op = |reads: &mut Vec<u32>, op: &Operand| {
         if let Operand::Copy(p) | Operand::Move(p) = op {
             reads.push(p.local.0);
@@ -266,63 +369,63 @@ fn collect_inst_reads(inst: &Instruction) -> Vec<u32> {
         Instruction::Assign { dst, value, .. } => {
             // Projection writes read the dst place (computing the address).
             if !dst.projections.is_empty() {
-                push_place(&mut reads, dst);
+                push_place(reads, dst);
             }
-            push_op(&mut reads, value);
+            push_op(reads, value);
         }
         Instruction::BinOp { lhs, rhs, .. } | Instruction::Cmp { lhs, rhs, .. } => {
-            push_op(&mut reads, lhs);
-            push_op(&mut reads, rhs);
+            push_op(reads, lhs);
+            push_op(reads, rhs);
         }
         Instruction::UnOp { operand, .. }
         | Instruction::Cast { value: operand, .. }
         | Instruction::BitCast { value: operand, .. }
         | Instruction::PtrCast { value: operand, .. }
         | Instruction::TagOf { operand, .. } => {
-            push_op(&mut reads, operand);
+            push_op(reads, operand);
         }
         Instruction::FieldLoad { base, .. } | Instruction::EnumFieldLoad { base, .. } => {
-            push_place(&mut reads, base);
+            push_place(reads, base);
         }
         Instruction::IndexLoad { base, index, .. } => {
-            push_place(&mut reads, base);
-            push_op(&mut reads, index);
+            push_place(reads, base);
+            push_op(reads, index);
         }
         Instruction::Call { args, .. } | Instruction::CallExtern { args, .. } => {
-            for a in args { push_op(&mut reads, a); }
+            for a in args { push_op(reads, a); }
         }
         Instruction::CallIndirect { callee, args, .. } => {
-            push_op(&mut reads, callee);
-            for a in args { push_op(&mut reads, a); }
+            push_op(reads, callee);
+            for a in args { push_op(reads, a); }
         }
         Instruction::StructInit { fields, .. } | Instruction::EnumInit { fields, .. } => {
-            for f in fields { push_op(&mut reads, f); }
+            for f in fields { push_op(reads, f); }
         }
         Instruction::TupleInit { elements, .. } => {
-            for e in elements { push_op(&mut reads, e); }
+            for e in elements { push_op(reads, e); }
         }
         Instruction::Borrow { place, .. } | Instruction::BorrowMut { place, .. } => {
-            push_place(&mut reads, place);
+            push_place(reads, place);
         }
-        Instruction::HeapAlloc { allocator, .. } => { push_op(&mut reads, allocator); }
+        Instruction::HeapAlloc { allocator, .. } => { push_op(reads, allocator); }
         Instruction::HeapAllocArray { count, allocator, .. } => {
-            push_op(&mut reads, count);
-            push_op(&mut reads, allocator);
+            push_op(reads, count);
+            push_op(reads, allocator);
         }
         Instruction::Dealloc { ptr, allocator } => {
-            push_op(&mut reads, ptr);
-            push_op(&mut reads, allocator);
+            push_op(reads, ptr);
+            push_op(reads, allocator);
         }
         Instruction::LoadRef { src, .. } => {
-            push_place(&mut reads, src);
+            push_place(reads, src);
         }
         Instruction::StoreRef { dst, value } => {
             // StoreRef writes through dst — read the address, read the value.
-            push_place(&mut reads, dst);
-            push_op(&mut reads, value);
+            push_place(reads, dst);
+            push_op(reads, value);
         }
-        Instruction::PushAllocator { allocator } => { push_op(&mut reads, allocator); }
-        Instruction::GlobalAssign { value, .. } => { push_op(&mut reads, value); }
+        Instruction::PushAllocator { allocator } => { push_op(reads, allocator); }
+        Instruction::GlobalAssign { value, .. } => { push_op(reads, value); }
         // Drops / MoveZero / no-ops contribute nothing — see the
         // doc-comment for the rationale.
         Instruction::Drop { .. } | Instruction::DropIfAlive { .. }
@@ -330,7 +433,6 @@ fn collect_inst_reads(inst: &Instruction) -> Vec<u32> {
         | Instruction::PopAllocator | Instruction::Nop
         | Instruction::InlineC { .. } | Instruction::LoadThreadLocal { .. } => {}
     }
-    reads
 }
 
 /// Per-block USE / DEF sets for the dataflow.
@@ -338,61 +440,73 @@ fn collect_inst_reads(inst: &Instruction) -> Vec<u32> {
 /// Standard formulation:
 /// - USE[B] = locals read in B before any definition of them in B.
 /// - DEF[B] = locals defined anywhere in B.
-fn compute_block_use_def(bb: &super::BasicBlock) -> (FxHashSet<u32>, FxHashSet<u32>) {
-    let mut use_set: FxHashSet<u32> = FxHashSet::default();
-    let mut def_set: FxHashSet<u32> = FxHashSet::default();
+fn compute_block_use_def(bb: &super::BasicBlock, n_locals: usize) -> (LocalBitSet, LocalBitSet) {
+    let mut use_set = LocalBitSet::with_capacity(n_locals);
+    let mut def_set = LocalBitSet::with_capacity(n_locals);
+    let mut reads_scratch: Vec<u32> = Vec::new();
+    let mut defs_scratch: Vec<u32> = Vec::new();
     for inst in &bb.instructions {
         // Reads are USE only if not yet DEFined in this block.
-        for r in collect_inst_reads(inst) {
-            if !def_set.contains(&r) {
-                use_set.insert(r);
+        reads_scratch.clear();
+        collect_inst_reads_into(inst, &mut reads_scratch);
+        for r in &reads_scratch {
+            if !def_set.contains(*r) {
+                use_set.insert(*r);
             }
         }
-        for d in collect_inst_defs(inst) {
-            def_set.insert(d);
+        defs_scratch.clear();
+        collect_inst_defs_into(inst, &mut defs_scratch);
+        for d in &defs_scratch {
+            def_set.insert(*d);
         }
     }
     // Terminator reads are USEs (after all instructions). If a terminator
     // operand reads a local and that local was DEFed in the block, the
     // read is satisfied locally — don't add to USE. Otherwise add.
     if let Some(t) = &bb.terminator {
-        for r in collect_terminator_reads(t) {
-            if !def_set.contains(&r) {
-                use_set.insert(r);
-            }
+        let mut term_reads = LocalBitSet::with_capacity(n_locals);
+        collect_terminator_reads_into(t, &mut term_reads);
+        // use_set |= (term_reads & !def_set)
+        let need = term_reads.bits.len().max(def_set.bits.len());
+        if use_set.bits.len() < need {
+            use_set.bits.resize(need, 0);
+        }
+        for (i, w) in use_set.bits.iter_mut().enumerate() {
+            let tw = term_reads.bits.get(i).copied().unwrap_or(0);
+            let dw = def_set.bits.get(i).copied().unwrap_or(0);
+            *w |= tw & !dw;
         }
     }
     (use_set, def_set)
 }
 
-/// Locals read by a terminator. `Invoke` is treated as reading args; its
-/// `dst` is a definition that activates only on the `normal` edge — for
-/// liveness purposes we keep it simple and treat the value as defined at
-/// the start of the `normal` block (in practice every callsite is the
-/// last instruction, and the Invoke's dst flows into the block via Phi-like
-/// mechanisms today). The conservative answer (don't kill `dst` here) is
-/// safe: we may report a value as live one block later than necessary,
-/// which never produces a false consume-site violation.
-fn collect_terminator_reads(t: &Terminator) -> FxHashSet<u32> {
-    let mut s: FxHashSet<u32> = FxHashSet::default();
-    let push_op = |s: &mut FxHashSet<u32>, op: &Operand| {
+/// Locals read by a terminator, written directly into a [`LocalBitSet`].
+/// `Invoke` is treated as reading args; its `dst` is a definition that
+/// activates only on the `normal` edge — for liveness purposes we keep it
+/// simple and treat the value as defined at the start of the `normal`
+/// block (in practice every callsite is the last instruction, and the
+/// Invoke's dst flows into the block via Phi-like mechanisms today). The
+/// conservative answer (don't kill `dst` here) is safe: we may report a
+/// value as live one block later than necessary, which never produces a
+/// false consume-site violation.
+fn collect_terminator_reads_into(t: &Terminator, set: &mut LocalBitSet) {
+    let push_op = |set: &mut LocalBitSet, op: &Operand| {
         if let Operand::Copy(p) | Operand::Move(p) = op {
-            s.insert(p.local.0);
+            set.insert(p.local.0);
             for proj in &p.projections {
-                if let Projection::Index(id) = proj { s.insert(id.0); }
+                if let Projection::Index(id) = proj { set.insert(id.0); }
             }
         }
     };
     match t {
-        Terminator::Return(v) => push_op(&mut s, v),
-        Terminator::Branch { cond, .. } => push_op(&mut s, cond),
-        Terminator::Switch { value, .. } => push_op(&mut s, value),
+        Terminator::Return(v) => push_op(set, v),
+        Terminator::Branch { cond, .. } => push_op(set, cond),
+        Terminator::Switch { value, .. } => push_op(set, value),
         Terminator::Invoke { args, .. } => {
-            for a in args { push_op(&mut s, a); }
+            for a in args { push_op(set, a); }
         }
         Terminator::Jump(_) | Terminator::Unreachable => {}
     }
-    s
 }
 
 /// Successor blocks of a terminator. `Unreachable` has none; `Return` has
@@ -414,12 +528,6 @@ fn terminator_successors(t: &Terminator) -> Vec<usize> {
         Terminator::Return(_) | Terminator::Unreachable => Vec::new(),
     }
 }
-
-// Suppress unused import warnings — keep the explicit FxHashMap import
-// for symmetry with the validate module's usage; future incremental
-// liveness queries will reuse the type.
-#[allow(dead_code)]
-fn _force_use() -> FxHashMap<u32, u32> { FxHashMap::default() }
 
 #[cfg(test)]
 mod tests {
@@ -767,5 +875,25 @@ mod tests {
         };
         let live = Liveness::compute(&func);
         assert!(!live.is_live_after(LocalId(0), BlockId(0), 0));
+    }
+
+    /// Bitset bulk-op smoke test: ensures `union_with` grows correctly
+    /// when the right operand is larger than self, and that high-id
+    /// inserts auto-grow via `ensure`.
+    #[test]
+    fn bitset_grows() {
+        let mut a = LocalBitSet::with_capacity(64);
+        let mut b = LocalBitSet::with_capacity(200);
+        b.insert(150);
+        b.insert(199);
+        a.union_with(&b);
+        assert!(a.contains(150));
+        assert!(a.contains(199));
+        assert!(!a.contains(151));
+        a.insert(500);
+        assert!(a.contains(500));
+        a.remove(150);
+        assert!(!a.contains(150));
+        assert!(a.contains(199));
     }
 }
