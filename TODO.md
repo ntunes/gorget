@@ -1,52 +1,106 @@
 # TODO
 
-## Profile snapshot 2026-05-16
+## Profile snapshot 2026-05-17
 
-**Status after 2026-05-17 cleanup batch**: 4 of 5 top-candidates shipped — codegen perf win (`962ae144`, Agent 1, ~56× LW codegen), `gir_lower` instrumentation (`3dfc9916`, Agent A), `propagate_copies` FxHashMap (`469d7942`, Agent 5, ~20%), `load_imports` rayon parallelization (`107ab8dc`, Agent 4, ~31%). Plus the unrelated parallel wins: `validate_resource_*` walks collapsed into one (`4b529742`, Agent 3, ~75% on that family) and LLVM backend stack-traces parity (`f1d54193`, Agent 2). Remaining actionable from this snapshot: **`lir_ssa`** (#5, structural, deferred) and **`meta_consts`** (honorable mention, no investigation yet). A fresh snapshot post-batch would be a better baseline than reusing this one for the next round.
+Fresh `gg profile` snapshot taken on `gorget-1` HEAD (e052606e) after the post-2026-05-17 batch (validate_resource walks collapsed `4b529742`, semantic self-type index `e4e1f6a3`, GIR Liveness bitset `79499789`, propagate_copies FxHashMap `469d7942`, loader rayon `107ab8dc`, TypeTable primitive_ids `615a3d0b`, LIR cse/find_live_functions/eliminate_dead_globals FxHashMap `5c38ee14`, stack-traces v1 regression closed `01f91844`, LIR codegen perf rewrite `962ae144`). Profile output medianed over 5 runs per workload. Goal: identify the **next** dominant phase outside the known/handled zones (drop_elab, semantic name-index, safety borrow-state-reset, and the just-shipped batch).
 
-Fresh `gg profile` snapshot taken on `gorget-1` HEAD (a35ea90d) after the recent LW 3818ms→600ms wins. Goal: identify the **next** dominant phase **outside** the known/handled zones (drop_elab, semantic name-index, safety borrow-state-reset).
+**Workloads profiled** (release build, median-of-5):
 
-**Workloads profiled** (release build):
-
-| Fixture                                             | total_ms | LIR insts | C lines |
+| Workload                                            | total_ms | LIR insts | C lines |
 |-----------------------------------------------------|---------:|----------:|--------:|
-| `hello.gg` (baseline, 2 LOC)                        |    24.0  |         4 |   2 610 |
-| `generic_nested_collections.gg` (15 LOC)            |    21.7  |       112 |   2 846 |
-| `yaml_parse.gg` (453 LOC, single file)              |    38.8  |    18 417 |  44 923 |
-| `httpserver_router_extended.gg` (75 LOC + imports)  |    66.7  |    20 258 |  27 153 |
-| `self_host_typechecker/driver.gg` (~12k aggregate)  |   254.1  |    76 784 | 196 154 |
-| `self_host_lowerer/driver.gg` (~30k aggregate)      |   798.0  |   197 119 | 540 202 |
+| `self_host_typechecker/driver.gg` (~12k aggregate)  |   152.0  |    75 262 | 193 988 |
+| `self_host_lowerer/driver.gg` (~30k aggregate)      |   550.8  |   194 828 | 536 943 |
+| `self_host_resolver/driver.gg` (subst. for arena)   |    75.3  |    37 241 |  99 212 |
+| `self_host_parser/driver.gg` (subst. for gorget-js) |    68.9  |    36 857 |  94 987 |
 
-The self-host lowerer dominates and is the right magnifying glass for the next round.
+**Note on substitutions:** `target/gorget-arena/src/main.gg` and `target/gorget-js/src/main.gg` were both located but **fail `gg check`** today — arena fails with 9 `expected VFS, found String` errors at `file_exists(...)` call sites (`std.fs::file_exists` signature is `cstr` but call sites pass `String`; this is an arena bug independent of perf work, separate from gorget-arena snag #1 in TODO). JS fails with 2 `expected String, found RuntimeException` errors in `eval.gg`. Both halt before reaching the heavy phases, so they produce no useful profile data. Substituted with `self_host_resolver/driver.gg` and `self_host_parser/driver.gg` per the user's fall-back instruction. Worth flagging: arena/js used to be canonical perf-target real-world code, and being unable to profile them is a regression in the *test surface*, not the compiler — a 10-minute fix on each project would restore that signal.
 
-**Phase breakdown on `self_host_lowerer/driver.gg` (798ms)** — sorted by absolute time, with KNOWN/HANDLED rows annotated:
+**Lowerer dropped 798ms → 550.8ms (−31%) since 2026-05-16.** Per-phase deltas vs the prior snapshot (median):
+
+| Phase             | 2026-05-16 | 2026-05-17 | Δ      | Wins explaining the drop |
+|-------------------|-----------:|-----------:|-------:|---|
+| `lir_optimize`    |     226.3  |     177.2  | −21.7% | `propagate_copies` 18.6→10.5, `cse` 5.0→2.7, `eliminate_dead_globals` and tail wins (`469d7942`, `5c38ee14`) |
+| `gir_lower`       |     155.2  |     108.7  | −30.0% | now has per-pass timing (`3dfc9916`); no specific writer-side win, likely cache/codegen-of-rustc + smaller-input drift |
+| `codegen` (c_lir) |     136.3  |      84.5  | −38.0% | LIR codegen perf rewrite (`962ae144`) |
+| `semantic`        |      86.5  |      48.1  | −44.4% | `validate_resource_*` collapse (`4b529742`), self-type index (`e4e1f6a3`), primitive_ids (`615a3d0b`) |
+| `load_imports`    |      67.1  |      24.8  | −63.0% | rayon parallelization (`107ab8dc`) |
+| `lir_ssa`         |      44.2  |      37.0  | −16.3% | secondary effect of FxHashMap swaps; structural cost unchanged |
+| `lir_lower`       |      30.9  |      27.3  | −11.7% | minor |
+| `gir_optimize`    |      27.0  |      22.6  | −16.3% | GIR Liveness bitset (`79499789`) |
+
+**Zero regressions.** Every phase moved down. The biggest absolute drop is in `codegen` (51.8ms, the `962ae144` win) and `semantic` (38.4ms, the batch).
+
+**Phase breakdown on `self_host_lowerer/driver.gg` (550.8ms, median-of-5)** — sorted by absolute time, with KNOWN/HANDLED rows annotated:
 
 | Phase                              | ms     | % total | Notes |
 |------------------------------------|-------:|--------:|---|
-| `lir_optimize` (total)             | 226.3  | 28.4%   | of which `drop_elaboration` 141.4 (KNOWN), `propagate_copies` 18.6, `eliminate_dead_code` 13.3, `post_elab_dce` 5.9, `fold_constants` 5.0, `cse` 5.0, `eliminate_dead_functions` 5.0, `merge_linear_blocks` 3.0, `simplify_algebraic` 2.7, rest <2ms |
-| `gir_lower`                        | 155.2  | 19.4%   | Monolithic — **no sub-pass timing today** |
-| `codegen` (c_lir)                  | 136.3  | 17.1%   | C string assembly + serialization |
-| `semantic` (total)                 |  86.5  | 10.8%   | of which `meta_consts` 33.4, `typecheck_module` 23.1, `safety_check_module` 19.5 (KNOWN — borrow-state-reset), `safety::check_items_recursive` 16.4 (KNOWN), `resolve_bodies` 5.5, `collect_top_level` 3.0, rest <2ms |
-| `load_imports`                     |  67.1  |  8.4%   | File I/O + parse for each imported module |
-| `lir_ssa`                          |  44.2  |  5.5%   | Critical-edge split + SSA construction (dominators, phi insertion, renaming) |
-| `lir_lower`                        |  30.9  |  3.9%   | GIR → LIR translation |
-| `gir_optimize`                     |  27.0  |  3.4%   | dead_drop / nop_elim / dead_block / dead_store passes |
+| `lir_optimize` (total)             | 177.2  | 32.2%   | of which `drop_elaboration` 117.1 (KNOWN), `eliminate_dead_code` 11.2, `propagate_copies` 10.5, `post_elab_dce` 4.7, `fold_constants` 3.6, `eliminate_dead_functions` 3.0, `cse` 2.7, `merge_linear_blocks` 2.5, `simplify_algebraic` 2.3, `eliminate_dead_blocks` 1.3, `fold_constant_branches` 1.2, `eliminate_dead_globals` 1.1, rest <0.3ms |
+| `gir_lower`                        | 108.7  | 19.7%   | of which `lower_functions` 61.0, `validate_consume_sites` 15.2, `lower_equip_methods` 9.0, `monomorphize` 4.9, `validate_module` 3.8, `flatten_and_manglings` 3.4, `tag_ownership_infer_fresh_owned` 1.5, `validate_resource_sites_all` 1.5 (post-collapse, KNOWN), `auto_register_externs` 1.4, `validate_drop_pre_rebind_and_null_to_opt` 1.2, rest <1ms |
+| `codegen` (c_lir)                  |  84.5  | 15.3%   | C string assembly + serialization. Down 38% from prior snapshot. Still scales with C line count (537k lines). |
+| `semantic` (total)                 |  48.1  |  8.7%   | of which `safety_check_module` 14.8 (KNOWN), `typecheck_module` 14.2, `meta_consts` 13.8, `safety::check_items_recursive` 13.0 (KNOWN), `resolve_bodies` 3.1, `collect_top_level` 0.8, `safety::infer_purity` 0.8, `safety::unused_imports` 0.7, rest <0.7ms |
+| `lir_ssa`                          |  37.0  |  6.7%   | Critical-edge split + SSA construction (dominators, phi insertion, renaming) |
+| `lir_lower`                        |  27.3  |  5.0%   | GIR → LIR translation |
+| `load_imports`                     |  24.8  |  4.5%   | rayon-parallel file I/O + parse (`107ab8dc` already shipped) |
+| `gir_optimize`                     |  22.6  |  4.1%   | dead_drop / nop_elim / dead_block / dead_store passes |
+| `parse`                            |   0.6  |  0.1%   | entry-file lex+parse only (imports counted in `load_imports`) |
 
-**Top-5 cheap-win candidates (excluding drop_elab, semantic name-index, safety borrow-state):**
+**Cross-workload phase distribution** (% of total per workload, helps spot per-workload vs. universal costs):
 
-1. **`codegen` (136ms on lowerer, 37ms on typechecker, 7.5ms on http_router) — `src/backend/c_lir/`. CHEAP-WIN likely.** C emission scales with C line count (540k lines on lowerer). Almost certainly dominated by `String::push_str`, `format!`, and small-buffer growth. Cheap wins: pre-sized output buffer (peak is ~5MB of C — one `with_capacity(8 << 20)` saves dozens of reallocations), `write!` to a `Vec<u8>` instead of intermediate `format!()` returns, hoist any per-instruction `HashMap` lookups out of the hot path. Caveat: `src/backend/` is in the other-agents zone — flagged for that agent's next pass, not for direct work here. [priority: high, ~1-3 day investigation]
+| Phase            | typechecker | lowerer | resolver | parser |
+|------------------|------------:|--------:|---------:|-------:|
+| `lir_optimize`   |       19.4% |   32.2% |    13.9% |  15.2% |
+| `gir_lower`      |       22.1% |   19.7% |    25.0% |  23.4% |
+| `codegen`        |       14.9% |   15.3% |    13.3% |  14.4% |
+| `semantic`       |       11.7% |    8.7% |    14.1% |  13.2% |
+| `lir_lower`      |        7.7% |    5.0% |     7.6% |   7.5% |
+| `lir_ssa`        |        7.4% |    6.7% |     6.6% |   6.5% |
+| `gir_optimize`   |        5.2% |    4.1% |     5.2% |   5.2% |
+| `load_imports`   |        7.4% |    4.5% |    10.4% |  10.6% |
 
-2. **`gir_lower` (155ms, no breakdown) — `src/ir/lowering/`. MEDIUM, profile-blind today.** This is the second-largest phase but ships as a single number. First action is **instrument the phase** — split into monomorphization, drop-insertion, closure synthesis, type lowering. Without sub-pass timing the cheap-win surface is invisible. `src/ir/lowering/` is in the other-agents zone — coordinate the instrumentation patch. [priority: high — unblocks targeted optimization, ~half day to add timings]
+**Cross-workload observations:**
 
-3. **`lir_optimize` non-drop-elab tail (~85ms) — `src/lir/optimize.rs`. CHEAP-WIN.** Confirmed: `propagate_copies` (18.6ms) uses default `std::collections::HashMap` (lines 1306/1343/1344/1396/1502/1529 grep-confirmed SipHash). A drop-in `rustc_hash::FxHashMap` swap is the canonical 2-5× hashing win and should shave several ms on lowerer. Similar audit needed for `cse` (uses `HashMap<CseKey, ValueId>` at line 994 — already a candidate). Each of the 11 fixpoint sub-passes also walks every block + every inst; a one-pass merge of `eliminate_dead_code` + `post_elab_dce` + `propagate_copies` (they all touch the same data) is worth scoping. `src/lir/` is in the other-agents zone. [priority: medium, FxHashMap swap is literally a `use` change + type aliases, ~1 hour]
+1. **`gir_lower` is universal-heavy** (~20-25% on every workload) — the most consistently large phase across all four. **This makes it the highest-leverage optimization target by hit rate.**
+2. **`lir_optimize` scales worse-than-linearly with code size** — 32% on lowerer vs 14-19% on the others. Drop_elab dominates at the high end; the rest of `lir_optimize` is closer to flat.
+3. **`load_imports` matters more on small targets** — 10% on resolver/parser, 4% on lowerer (rayon's already extracted the parallel slack on the big one). Future wins here are tail.
+4. **`semantic` is consistent ~10-14%** across all workloads except lowerer (where it's diluted to 8.7%). Hot sub-passes are the same everywhere: typecheck/meta_consts/safety.
+5. **`codegen` is ~15% everywhere** — flat % across sizes, confirms it scales linearly with output. The remaining 84ms on lowerer is the next-largest pure-IO phase; 56× win in `962ae144` was real but there's still tail.
 
-4. **`load_imports` (67ms on lowerer, 39ms on typechecker, 19ms on http_router) — `src/loader.rs` (NOT in any forbidden zone). CHEAP-WIN.** Scales linearly with import count; serial today. Two independent wins: (a) `rayon::par_iter` the per-import file-read + parse — embarrassingly parallel and parses are CPU-bound at ~1-5ms each, ~3-4× speedup on multi-file drivers; (b) inspect for redundant re-reads of the same path (transitive imports). On self_host_lowerer (~30 imports) this could drop 67ms → ~20ms. **This is the only top-5 candidate in a non-forbidden zone — best fit for the next direct-edit agent.** [priority: medium-high, ~half day]
+**Top-5 cheap-win candidates (excluding drop_elab, semantic name-index, safety borrow-state, and the items shipped in the 2026-05-17 batch):**
 
-5. **`lir_ssa` (44ms on lowerer, 13ms on typechecker) — `src/lir/ssa.rs`. MEDIUM, likely structural.** SSA construction is dominator-tree + phi-insertion + renaming. Standard Cytron-style implementations are O(n α(n)); the cost is mostly intrinsic to the work. Cheap-win surface: check whether `Bitset` / `IndexVec` are used for dominator frontiers vs `HashSet<BlockId>`, and whether the renaming walk allocates per-block scratch maps. If using stdlib HashMaps anywhere, FxHashMap swap. Otherwise structural. `src/lir/` is in the other-agents zone. [priority: medium]
+1. **`gir_lower::lower_functions` (61.0ms on lowerer, 11.7ms on typechecker, 4.0ms on resolver) — `src/ir/lowering/`. NEW #1 BY ABSOLUTE TIME OUTSIDE KNOWN ZONES.** This is the per-AST-function lowering loop in `src/ir/lowering/mod.rs:1242-1257`, calling `lower_function()` per item. Sub-passes inside this loop currently aren't broken down further — drilling in is step 1. Likely sub-cost drivers, in decreasing probability: (a) expression lowering — `src/ir/lowering/exprs/mod.rs` is 4331 LOC, the bulk of the work; (b) statement lowering — `stmts/mod.rs` 3436 LOC plus assigns/for_loops/patterns; (c) the per-function `Context` setup and tear-down. Cheap-win shapes: (i) profile-instrument `lower_function` into "exprs / stmts / setup / drops" sub-phases (mirrors what we did for `gir_lower`); (ii) audit hot-path HashMaps in `context.rs` (3330 LOC, lots of per-function scratch state — grep for stdlib `HashMap` and swap to FxHashMap); (iii) look for the `O(N²)` smell in span/scope walking. [priority: HIGH — single largest non-KNOWN sub-phase, ~2-3 days to instrument-and-profile-fix]
 
-**Honorable mention — `meta_consts` (33.4ms in semantic, lowerer):** `src/semantic/meta.rs:440 evaluate_meta_consts`. This is the single largest semantic sub-pass outside the known-handled set. Hypothesis: re-evaluates the same `meta` constants each module load (no memoization). `src/semantic/` is in the other-agents zone, but worth flagging — a 30%+ reduction here would clip ~10ms off any non-trivial build.
+2. **`gir_lower::validate_consume_sites` (15.2ms on lowerer, 4.6ms on typechecker) — `src/ir/lowering/` (location TBD).** Second-largest gir_lower sub-pass after `lower_functions`. Likely walks every GIR function looking for ownership consume sites and checking owner/move invariants. Cheap-win surface: if it walks insts and queries a name-keyed map for each, a one-pass merge with `validate_resource_sites_all` (1.5ms, post-`4b529742` collapse) or `validate_drop_pre_rebind_and_null_to_opt` (1.2ms) could shave 4-5ms via shared walks. FxHashMap swap if it uses stdlib HashMaps internally. [priority: medium, ~half day]
 
-**Where I'd point the next optimization agent:** `load_imports` parallelization is the standout — it's a 67ms phase on the worst-case workload, it's in a non-forbidden zone (`src/loader.rs`), the win is mechanical (wrap the existing per-import loop in `rayon::par_iter`), there are no layering-discipline traps, and the speedup is bounded only by the host's core count and the slowest single-file parse. Estimated 40-50ms saved on `self_host_lowerer/driver.gg` alone (~6% off total compile), with proportional wins on every multi-file fixture. The FxHashMap swap in `lir/optimize.rs::propagate_copies` is the smallest-touch alternative (1-hour patch, a few ms shaved) and pairs well as a warmup. [filed 2026-05-16]
+3. **`codegen` tail (84.5ms on lowerer, post-`962ae144`) — `src/backend/c_lir/`. STILL THE #3 PHASE BY ABSOLUTE TIME.** Output buffer is pre-sized to 256KB but actual output is ~5MB on lowerer (`src/backend/c_lir/mod.rs:408`); bumping `with_capacity(if include_runtime { 8 << 20 } else { 64 << 10 })` saves a dozen reallocations. Several `std::collections::HashMap` instances in the per-function emit path (`mod.rs:258`, `779`, `1567`, `1664`, `1780`, `helpers.rs` throughout) — swap to FxHashMap, all keys are integer-newtypes or short strings. Also `helpers.rs:131-178` has per-emit `name.starts_with("Dict__")`/`starts_with("HashMap__")` dispatching that's a Layering-discipline-rule-violation symptom; a typed `CollectionKind` on the type registry would eliminate string-prefix dispatch and the associated allocations. **Note: `src/backend/c_lir/` was the zone of the `962ae144` rewrite — coordinate with whoever's hot there next so we don't step on a redesign in flight.** [priority: medium, ~1 day for capacity+FxHashMap; the string-prefix dispatch cleanup is a layering-discipline fix worth its own commit]
+
+4. **`semantic::meta_consts` (13.8ms on lowerer, 5.3ms on typechecker, 3.1ms on resolver, 2.6ms on parser) — `src/semantic/meta.rs:440 evaluate_meta_consts`. STILL UN-INVESTIGATED.** Carryover from the 2026-05-16 honorable mention. Universal (every workload hits it), grows linearly with module size. Same hypothesis as last time: re-evaluation of identical `meta` constants without memoization. The fact that resolver and parser hit ~3ms each suggests the cost is in per-module meta-constant walks, not specific to lowerer-scale code. A simple `FxHashMap<MetaConstId, Value>` memo across the module would likely halve this. [priority: medium, ~half day, well-scoped]
+
+5. **`gir_lower::lower_equip_methods` (9.0ms on lowerer, 9.0ms on typechecker, 8.2ms on resolver, 7.2ms on parser) — `src/ir/lowering/`. NEAR-CONSTANT ACROSS WORKLOADS — SMELLS LIKE FIXED-COST WORK PER METHOD-WITH-EQUIP.** Notable: this phase barely scales with input size. Suggests either (a) a big chunk of work that's per-equip-block independent of the function bodies (signature registration?), or (b) a hot-path inefficiency that's masked by the equip count being similar across these self-host fixtures. Worth profiling for an O(equips × something) loop. If (a), check whether per-equip work duplicates per-method scaffolding that could hoist out. [priority: medium-low, investigation-first, ~half day to identify the cost source]
+
+**Honorable mentions (slow, but structural — no cheap win expected):**
+
+- **`drop_elaboration` 117.1ms on lowerer (KNOWN/HANDLED zone).** Still the single largest sub-phase by 4×. Any future big win on lowerer compile time has to attack this. `src/lir/drop_elab.rs` uses stdlib HashMap/HashSet heavily (`val_to_slot`, `deleted_slots`, `maybe_init_slots` — all keyed by u32 newtypes), but the work itself is intrinsically per-instruction per-fixpoint-iteration, so FxHashMap alone would only buy a few ms. The real lever is fewer fixpoint iterations or smarter init-state tracking. Out-of-scope for cheap-wins; treat as the next round's *structural* work.
+- **`lir_ssa` 37.0ms on lowerer (carryover from 2026-05-16, still structural).** Standard Cytron-style construction. The 2026-05-16 audit covered this — re-validate that ssa.rs internal scratch maps use FxHashMap/Bitset/IndexVec, but don't expect more than 3-5ms.
+- **`lir_lower` 27.3ms on lowerer.** Quiet middle of the pack, no specific hotspot visible. GIR→LIR translation; intrinsic per-instruction work.
+
+**Cross-workload comparison (universal vs per-workload costs):**
+
+| Cost                                | Universal? | Notes |
+|-------------------------------------|------------|---|
+| `gir_lower::lower_functions`        | YES        | top sub-pass on all 4 workloads (lowerer especially, but proportional everywhere) |
+| `drop_elaboration`                  | YES        | KNOWN — biggest absolute, every workload |
+| `gir_lower::lower_equip_methods`    | YES, flat  | unusually constant across sizes — suggests fixed per-equip cost |
+| `semantic::meta_consts`             | YES        | every workload, linear-ish |
+| `lir_optimize` non-drop tail        | YES        | proportional across workloads |
+| `load_imports`                      | partial    | already-parallelized, dominates small targets only |
+| `gir_lower::validate_consume_sites` | scales     | bigger on lowerer (15ms) than typechecker (5ms) |
+| `codegen`                           | YES        | flat % of total (~15%), scales linearly with C lines |
+
+**Where I'd point the next optimization agent:** **`gir_lower::lower_functions`** is the new #1. It's the largest single sub-phase outside the KNOWN/HANDLED zone (61ms on lowerer, 12ms on typechecker), it's universal (every workload), and it's currently profile-blind below the phase level — so step 1 is **instrument it further** (mirror the `gir_lower` instrumentation pattern from `3dfc9916`: add sub-pass timing for "exprs / stmts / setup / drops" within `lower_function`). Once the dominant sub-sub-pass is named, the cheap-win lever follows — most likely an FxHashMap swap in `src/ir/lowering/context.rs` (3330 LOC of per-function scratch state) or an O(N²) span/scope walk in `exprs/mod.rs`. Realistic expected win: 15-25ms on lowerer (~5% off total compile), proportional on every workload because this scales with function count. The follow-on (instrumented sub-pass identified, FxHashMap swap or merge of validation walks) is then a second 1-day session.
+
+The smaller-but-mechanical alternative is **`semantic::meta_consts` memoization** — 13.8ms on lowerer, ~50% likely halvable with a `FxHashMap<MetaConstId, Value>` memo. Well-scoped, half a day, lower risk, every-workload win. Good "second agent" task or warmup.
+
+**Out of scope for this round:** `drop_elaboration` (KNOWN, structural), the `gorget-arena`/`gorget-js` brokenness (not a compiler perf issue), `lir_ssa` (structural — already audited 2026-05-16). [filed 2026-05-17]
 
 ## High
 
