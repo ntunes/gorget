@@ -1867,6 +1867,17 @@ fn modules_import_shadow() {
     run_gg_dir("modules_import_shadow", "main.gg", "ok\n42\ndone");
 }
 
+// Regression: equip method must not overwrite a same-named extern's
+// signature during `register_function_signature`. Before the fix at
+// typecheck.rs:5099, `equip VFS: bool file_exists(self, String)` in
+// vfs.gg silently clobbered `std.fs::file_exists(cstr) -> bool`,
+// breaking every `file_exists(path)` call site in gorget-arena with
+// "expected VFS, found String".
+#[test]
+fn equip_method_no_shadow_extern() {
+    run_gg_dir("equip_method_no_shadow_extern", "main.gg", "missing\n0");
+}
+
 #[test]
 fn self_host_lexer() {
     run_gg_dir(

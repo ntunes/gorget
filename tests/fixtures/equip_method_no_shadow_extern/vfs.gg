@@ -1,0 +1,16 @@
+# Regression: an equip method whose name collides with an extern in
+# another module must NOT overwrite the extern's signature during
+# `register_function_signature`.
+#
+# Before the fix at typecheck.rs:5099, the equip method's signature
+# `(self: VFS, name: String) -> bool` was written into the extern's
+# DefInfo.type_id because `scopes.lookup("file_exists")` returned the
+# extern (visible at root via export_non_private) when the equip block
+# wasn't on the scope stack.
+
+struct VFS:
+    int dummy
+
+equip VFS:
+    bool file_exists(self, String name):
+        return false

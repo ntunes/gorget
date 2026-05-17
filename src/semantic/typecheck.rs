@@ -5096,13 +5096,20 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
-        let def_id = match self.scopes.lookup(&func.name.node) {
+        // Look up the def by (name, span) — unambiguous. The previous
+        // implementation tried `scopes.lookup(name)` first and fell back to
+        // span lookup for equip methods, but `lookup` walks the parent
+        // chain by name and can find a SAME-NAMED def from another scope
+        // (e.g. a free function or extern) when the equip block isn't
+        // currently on the scope stack. The wrong def would then have its
+        // `type_id` overwritten with the equip method's `(Self, args) ->
+        // ret` signature, silently corrupting callers of the unrelated
+        // free function (gorget-arena: `equip VFS: bool file_exists(self,
+        // String)` clobbered `std.fs::file_exists(cstr) -> bool` whenever
+        // both were in scope).
+        let def_id = match self.scopes.lookup_def_by_span(&func.name.node, func.name.span) {
             Some(id) => id,
-            // Equip method defs live in child scopes — fall back to span lookup
-            None => match self.scopes.lookup_def_by_span(&func.name.node, func.name.span) {
-                Some(id) => id,
-                None => return,
-            },
+            None => return,
         };
 
         // Only process Function defs

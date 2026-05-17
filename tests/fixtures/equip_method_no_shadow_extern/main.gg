@@ -1,0 +1,14 @@
+from vfs import VFS
+
+extern "C":
+    extern bool file_exists(cstr path) = "gorget_file_exists"
+
+void main():
+    String path = "this-path-must-not-exist-anywhere-12345"
+    if file_exists(path):
+        print("found")
+    else:
+        print("missing")
+    # Touch VFS so the import isn't unused.
+    VFS v = VFS(0)
+    print(v.dummy)

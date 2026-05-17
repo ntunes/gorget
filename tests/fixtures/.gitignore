@@ -13,6 +13,8 @@
 !fstring_cross_module/**
 !imported_call_arg_type_check/
 !imported_call_arg_type_check/**
+!equip_method_no_shadow_extern/
+!equip_method_no_shadow_extern/**
 !security/
 !security/*.gg
 !security/*.expected
