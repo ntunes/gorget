@@ -1007,6 +1007,101 @@ pub fn validate_resource_moves(module: &Module) -> Vec<ResourceMoveWarning> {
     warnings
 }
 
+/// Findings of [`validate_resource_sites_all`], partitioned by class so
+/// `lower_module` can emit class-specific diagnostics with identical
+/// labels to the legacy split-walk path. Each bucket carries the same
+/// `ResourceMoveWarning` values that the per-class entry points would
+/// have returned individually.
+///
+/// Caller is expected to inspect each bucket independently — the buckets
+/// were historically five separate fatal gates (`resource-moves`,
+/// `resource-call-args`, `resource-index-reads`, `resource-enum-reads`,
+/// `resource-field-reads`) and we preserve that fan-out.
+#[derive(Debug, Default, Clone)]
+pub struct ResourceSiteFindings {
+    /// `Assign { mode: Copy }` shallow-resource sites
+    /// (`ResourceMoveWarningKind::ShallowCopyOfResource`).
+    pub assign: Vec<ResourceMoveWarning>,
+    /// `Call` / `CallExtern` resource args at `ByValue`-shaped positions
+    /// (`ShallowCopyOfResourceArg`).
+    pub call_args: Vec<ResourceMoveWarning>,
+    /// `IndexLoad` with non-Borrow mode on a resource element
+    /// (`ShallowReadOfResourceElement`).
+    pub index_reads: Vec<ResourceMoveWarning>,
+    /// `EnumFieldLoad` of a resource payload without auto-zero
+    /// (`ShallowCopyOfEnumPayload`).
+    pub enum_reads: Vec<ResourceMoveWarning>,
+    /// `FieldLoad` of a resource field without the consuming-self idiom
+    /// (`ShallowCopyOfResourceField`).
+    pub field_reads: Vec<ResourceMoveWarning>,
+}
+
+impl ResourceSiteFindings {
+    /// `true` iff every bucket is empty.
+    pub fn is_empty(&self) -> bool {
+        self.assign.is_empty()
+            && self.call_args.is_empty()
+            && self.index_reads.is_empty()
+            && self.enum_reads.is_empty()
+            && self.field_reads.is_empty()
+    }
+}
+
+/// Unified resource-site validator. Performs a SINGLE walk per function
+/// covering the five legacy entry points:
+///   * [`validate_resource_moves`] (Assign-class)
+///   * [`validate_resource_call_args`]
+///   * [`validate_resource_index_reads`]
+///   * [`validate_resource_enum_reads`]
+///   * [`validate_resource_field_reads`]
+///
+/// All five share the unified [`validate_read`] rule and produce
+/// `ResourceMoveWarning` values; the only thing that differs is the
+/// per-instruction *extractor*. Pre-D5 collapse `lower_module` ran each
+/// validator as its own `for func in module.functions { ... }` loop —
+/// five back-to-back walks doing essentially identical work, ~30% of
+/// the `gir_lower` phase on the LW workload. This collapse drops it
+/// to one walk and partitions the warnings into the same five buckets
+/// so the existing class-specific fatal diagnostics stay byte-identical.
+pub fn validate_resource_sites_all(module: &Module) -> ResourceSiteFindings {
+    let mut findings = ResourceSiteFindings::default();
+    let registry = &module.type_registry;
+    for func in &module.functions {
+        // Assign-class extractor (own loop because `assign_read_site`'s
+        // shape doesn't fit `for_each_read_site`'s match arms — it
+        // peeks at the dst's projections and the source's ownership tag
+        // rather than the instruction discriminant alone). Sharing the
+        // outer per-function loop is the win; the body is identical to
+        // [`validate_resource_moves`].
+        for (b, bb) in func.blocks.iter().enumerate() {
+            for (i, inst) in bb.instructions.iter().enumerate() {
+                if let Some(site) = assign_read_site(func, registry, inst, b, i) {
+                    if let Some(w) = validate_read(site, registry) {
+                        findings.assign.push(w);
+                    }
+                }
+            }
+        }
+        // Read-site classes (FieldLoad / IndexLoad / EnumFieldLoad /
+        // Call*-ByValue arg). One walk; per-class dispatch on the
+        // warning's discriminant — cheaper than re-walking four times
+        // with class filters.
+        for_each_read_site(func, module, |site| {
+            let class_bucket = match &site.class {
+                ReadSiteClass::Assign { .. } => return, // emitted above
+                ReadSiteClass::FieldLoad { .. } => &mut findings.field_reads,
+                ReadSiteClass::IndexLoad { .. } => &mut findings.index_reads,
+                ReadSiteClass::EnumFieldLoad { .. } => &mut findings.enum_reads,
+                ReadSiteClass::CallArg { .. } => &mut findings.call_args,
+            };
+            if let Some(w) = validate_read(site, registry) {
+                class_bucket.push(w);
+            }
+        });
+    }
+    findings
+}
+
 /// Extract the conceptual ReadSite for an `Assign { mode: Copy }`
 /// instruction, applying the per-Assign skips before returning. Returns
 /// `None` when the assign is out-of-scope for the validator (any of the

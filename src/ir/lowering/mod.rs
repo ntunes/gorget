@@ -1602,79 +1602,59 @@ pub fn lower_module(
     }
     *pass_times.entry("validate_module").or_default() += __pass_t.elapsed();
 
-    // Phase C, Stage C4: resource-move validator promoted from warning
-    // to fatal invariant. Stages C1-C3 + §6.8 cleared all violations
-    // across the 1100-fixture sweep; the fail-fast contract here means
-    // any new lowering bug producing a shallow copy of a resource halts
-    // the build instead of leaking past the validator. The
-    // GG_VALIDATE_RESOURCE_MOVES env gate is removed; the check is
-    // unconditional in default builds and CI.
-    time_pass!(pass_times, "validate_resource_moves", {
-        let warnings = crate::ir::validate::validate_resource_moves(&module);
-        if !warnings.is_empty() {
-            eprintln!("[resource-moves] {} violation(s):", warnings.len());
-            for w in &warnings {
+    // Phase C, Stage C4 + extensions: resource-site validators
+    // (Assign / Call/CallExtern args / IndexLoad / EnumFieldLoad /
+    // FieldLoad). All five share the unified `validate_read` rule and
+    // produce `ResourceMoveWarning`; pre-D5 collapse they were five
+    // back-to-back full-module walks (~30% of `gir_lower` on LW).
+    //
+    // The consolidated walker in `validate_resource_sites_all` performs
+    // ONE walk per function and partitions warnings into class buckets
+    // so the existing fatal diagnostics — including class-specific
+    // labels and per-class violation counts — stay byte-identical with
+    // the legacy split path. See `docs/internals/structural-guards.md`
+    // §Phase C / §6.4 for the contract.
+    time_pass!(pass_times, "validate_resource_sites_all", {
+        let findings = crate::ir::validate::validate_resource_sites_all(&module);
+        // Each class is its own fatal gate (was its own `time_pass!`
+        // block pre-collapse). Order matters for byte-identical
+        // diagnostic output: emit in the original five-block order so
+        // a panic message at any earlier class matches the legacy
+        // behaviour exactly.
+        if !findings.assign.is_empty() {
+            eprintln!("[resource-moves] {} violation(s):", findings.assign.len());
+            for w in &findings.assign {
                 eprintln!("  {}", w);
             }
-            panic!("GIR module failed resource-move validation ({} violation(s))", warnings.len());
+            panic!("GIR module failed resource-move validation ({} violation(s))", findings.assign.len());
         }
-    });
-
-    // Phase C extension promoted: `Call/CallExtern` resource args.
-    // 2026-05-04 sweep: 0 violations across 1056 fixtures, so the
-    // class is fatal. Any future lowering that passes a resource by
-    // shallow-copy at a `ByValue`/`GorgetString` ABI position halts
-    // the build instead of leaking past the validator.
-    time_pass!(pass_times, "validate_resource_call_args", {
-        let arg_warnings = crate::ir::validate::validate_resource_call_args(&module);
-        if !arg_warnings.is_empty() {
-            eprintln!("[resource-call-args] {} violation(s):", arg_warnings.len());
-            for w in &arg_warnings {
+        if !findings.call_args.is_empty() {
+            eprintln!("[resource-call-args] {} violation(s):", findings.call_args.len());
+            for w in &findings.call_args {
                 eprintln!("  {}", w);
             }
-            panic!("GIR module failed resource call-arg validation ({} violation(s))", arg_warnings.len());
+            panic!("GIR module failed resource call-arg validation ({} violation(s))", findings.call_args.len());
         }
-    });
-
-    // Phase C extension promoted: `IndexLoad` of resource element.
-    time_pass!(pass_times, "validate_resource_index_reads", {
-        let index_warnings = crate::ir::validate::validate_resource_index_reads(&module);
-        if !index_warnings.is_empty() {
-            eprintln!("[resource-index-reads] {} violation(s):", index_warnings.len());
-            for w in &index_warnings {
+        if !findings.index_reads.is_empty() {
+            eprintln!("[resource-index-reads] {} violation(s):", findings.index_reads.len());
+            for w in &findings.index_reads {
                 eprintln!("  {}", w);
             }
-            panic!("GIR module failed resource index-read validation ({} violation(s))", index_warnings.len());
+            panic!("GIR module failed resource index-read validation ({} violation(s))", findings.index_reads.len());
         }
-    });
-
-    // Phase C extension promoted: `EnumFieldLoad` of resource payload.
-    time_pass!(pass_times, "validate_resource_enum_reads", {
-        let enum_warnings = crate::ir::validate::validate_resource_enum_reads(&module);
-        if !enum_warnings.is_empty() {
-            eprintln!("[resource-enum-reads] {} violation(s):", enum_warnings.len());
-            for w in &enum_warnings {
+        if !findings.enum_reads.is_empty() {
+            eprintln!("[resource-enum-reads] {} violation(s):", findings.enum_reads.len());
+            for w in &findings.enum_reads {
                 eprintln!("  {}", w);
             }
-            panic!("GIR module failed resource enum-read validation ({} violation(s))", enum_warnings.len());
+            panic!("GIR module failed resource enum-read validation ({} violation(s))", findings.enum_reads.len());
         }
-    });
-
-    // Phase C extension promoted: `FieldLoad` of resource field.
-    // 2026-05-06 sweep: 0 violations across 1066 fixtures after the
-    // FieldLoad migration covering lower_field_access (drop the
-    // `base_is_ptr &&` guard), closure ByValue capture loads, spawn
-    // closure-arg extraction, Pattern::Tuple destructure (owned vs
-    // borrowed), Expr::TupleFieldAccess, and the validator's
-    // FieldLoad-then-MoveZero peek for the !self consuming-self idiom.
-    time_pass!(pass_times, "validate_resource_field_reads", {
-        let field_warnings = crate::ir::validate::validate_resource_field_reads(&module);
-        if !field_warnings.is_empty() {
-            eprintln!("[resource-field-reads] {} violation(s):", field_warnings.len());
-            for w in &field_warnings {
+        if !findings.field_reads.is_empty() {
+            eprintln!("[resource-field-reads] {} violation(s):", findings.field_reads.len());
+            for w in &findings.field_reads {
                 eprintln!("  {}", w);
             }
-            panic!("GIR module failed resource field-read validation ({} violation(s))", field_warnings.len());
+            panic!("GIR module failed resource field-read validation ({} violation(s))", findings.field_reads.len());
         }
     });
 
