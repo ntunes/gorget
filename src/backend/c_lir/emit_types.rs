@@ -926,6 +926,27 @@ fn emit_option_field_clones(
 /// another struct, the parent's drop emits a call to `{Name}__drop`. This
 /// function generates the actual `{Name}__drop` function body.
 pub(super) fn emit_recursive_struct_drops(out: &mut String, module: &LirModule, sn: &HashMap<u32, String>) {
+    // Forward-declare every recursive-struct drop fn before emitting any body.
+    // LIR-struct iteration order is not a topological order over the drop-call
+    // graph: a parent struct `A { B field }` whose `A__drop` calls `B__drop`
+    // may be emitted before `B`. Without forward decls, the C compiler errors
+    // on the call to the not-yet-declared `B__drop`. The prelude makes the
+    // emission-order question moot.
+    for (idx, sdef) in module.structs.iter().enumerate() {
+        let type_name = &sdef.name;
+        if !module.recursive_drop_structs.contains_key(type_name.as_str()) {
+            continue;
+        }
+        let drop_fn_name = format!("{type_name}__drop");
+        // Skip if a user-defined drop already exists (it'll have its own decl)
+        if module.functions.iter().any(|f| f.name == drop_fn_name) {
+            continue;
+        }
+        let _ = idx;
+        writeln!(out, "static inline void {drop_fn_name}(void* __p);").unwrap();
+    }
+    writeln!(out).unwrap();
+
     for (idx, sdef) in module.structs.iter().enumerate() {
         let type_name = &sdef.name;
 
@@ -968,6 +989,24 @@ pub(super) fn emit_recursive_struct_drops(out: &mut String, module: &LirModule, 
 /// Called from collection reads (IndexLoad, Option unwrap) so extracted elements
 /// don't share resource field buffers with the collection.
 pub(super) fn emit_recursive_struct_clones(out: &mut String, module: &LirModule, sn: &HashMap<u32, String>) {
+    // Forward-declare every recursive-struct clone fn before any body, for the
+    // same topological reason as `emit_recursive_struct_drops`. A parent's
+    // clone body may call a child's clone before the child is declared if
+    // LIR struct iteration order isn't a topo order over the field-clone graph.
+    for (idx, sdef) in module.structs.iter().enumerate() {
+        let type_name = &sdef.name;
+        if !module.recursive_drop_structs.contains_key(type_name.as_str()) {
+            continue;
+        }
+        let clone_fn_name = format!("{type_name}__clone");
+        if module.functions.iter().any(|f| f.name == clone_fn_name) {
+            continue;
+        }
+        let c_name = sn.get(&(idx as u32)).cloned().unwrap_or_else(|| type_name.clone());
+        writeln!(out, "{c_name} {clone_fn_name}(void* __p);").unwrap();
+    }
+    writeln!(out).unwrap();
+
     for (idx, sdef) in module.structs.iter().enumerate() {
         let type_name = &sdef.name;
 
