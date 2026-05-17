@@ -16,6 +16,21 @@ use gorget::resolver;
 /// File info for multi-file error reporting: (display_name, source, base_offset).
 type FileInfo = (String, String, usize);
 
+/// Convert main.rs's (filename, source, base_offset) tuples into the typed
+/// `span::FileInfo` carried by `LirModule.file_infos`. Used at every LIR
+/// construction site so the C backend can resolve panic-site spans to
+/// `(file, line, col)` (stack-traces phase 2).
+fn to_lir_file_infos(file_infos: &[FileInfo]) -> Vec<gorget::span::FileInfo> {
+    file_infos
+        .iter()
+        .map(|(name, src, off)| gorget::span::FileInfo {
+            filename: name.clone(),
+            source: src.clone(),
+            base_offset: *off,
+        })
+        .collect()
+}
+
 /// Load imported modules and merge them into a single module.
 /// Returns `(merged_module, file_infos)` where file_infos maps each module's
 /// source to its filename and byte offset for accurate cross-file diagnostics.
@@ -507,6 +522,7 @@ fn try_build_ir(
     if emit_lir {
         let pre_ssa = std::env::var("LIR_PRE_SSA").is_ok();
         let mut lir_module = gorget::lir::lower::lower_module(&gir_module);
+        lir_module.file_infos = to_lir_file_infos(&file_infos);
         if pre_ssa {
             print!("{}", gorget::lir::display::dump_module(&lir_module));
             let input_path = Path::new(filename);
@@ -561,6 +577,7 @@ fn try_build_ir(
     // Dump C code generated from LIR if requested
     if emit_c_lir {
         let mut lir_module = gorget::lir::lower::lower_module(&gir_module);
+        lir_module.file_infos = to_lir_file_infos(&file_infos);
         // Tier E §8.2: critical-edge split before SSA construction.
         gorget::lir::split_edges::split_critical_edges_module(&mut lir_module);
         gorget::lir::validate::assert_module_valid(&lir_module, "lir-lowering");
@@ -605,6 +622,7 @@ fn try_build_ir(
         let mut lir_module = gorget::lir::lower::lower_module(&gir_module);
         lir_module.target = target.to_string();
         lir_module.clone_stats = clone_stats;
+        lir_module.file_infos = to_lir_file_infos(&file_infos);
         // Tier E §8.2: critical-edge split before SSA construction.
         gorget::lir::split_edges::split_critical_edges_module(&mut lir_module);
         gorget::lir::validate::assert_module_valid(&lir_module, "lir-lowering");
@@ -1333,7 +1351,7 @@ fn try_profile(
 
     // Phase 2: Load imports
     let t = Instant::now();
-    let (mut module, _file_infos) = load_imports(filename, source, module, dep_paths);
+    let (mut module, file_infos) = load_imports(filename, source, module, dep_paths);
     let load_imports_ms = t.elapsed().as_secs_f64() * 1000.0;
 
     // Phase 3: Semantic analysis
@@ -1343,7 +1361,7 @@ fn try_profile(
     let semantic_ms = t.elapsed().as_secs_f64() * 1000.0;
 
     if !result.errors.is_empty() {
-        let reporter = ErrorReporter::new_multi(_file_infos.clone());
+        let reporter = ErrorReporter::new_multi(file_infos.clone());
         for err in &result.errors {
             reporter.report_semantic_error(err);
         }
@@ -1364,6 +1382,7 @@ fn try_profile(
     // Phase 6: LIR lowering
     let t = Instant::now();
     let mut lir_module = gorget::lir::lower::lower_module(&gir_module);
+    lir_module.file_infos = to_lir_file_infos(&file_infos);
     let lir_lower_ms = t.elapsed().as_secs_f64() * 1000.0;
 
     // Phase 7: SSA construction (with pre-pass critical-edge splitting; §8.2)

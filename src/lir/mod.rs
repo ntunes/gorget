@@ -1669,6 +1669,13 @@ pub struct LirModule {
     /// to the underlying runtime StructDef without re-deriving the mapping
     /// from name prefixes. Read via `LirModule::struct_def_by_name`.
     pub struct_aliases: HashMap<String, StructId>,
+    /// Per-module source info for byte-offset → `(file, line, col)` lookup.
+    /// Set by the driver (`main.rs`) after lowering; read by the C backend
+    /// at panic-emit sites to attach source locations to runtime panics
+    /// (stack-traces phase 2). Empty when no file info is available (test
+    /// drivers, IR-text round-trips); panic sites then fall back to
+    /// `<unknown>:0:0:`.
+    pub file_infos: Vec<crate::span::FileInfo>,
 }
 
 /// Specification for a generated `Type__drop` function.
@@ -1712,6 +1719,7 @@ impl LirModule {
             target: "native".to_string(),
             clone_stats: false,
             struct_aliases: HashMap::new(),
+            file_infos: Vec::new(),
         }
     }
 
