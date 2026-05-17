@@ -3,6 +3,8 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use rayon::prelude::*;
+
 use crate::errors::ParseError;
 use crate::parser::ast::{
     Block, CallArg, Expr, FunctionBody, FunctionDef, ImportStmt, Item, MetaIf, Module,
@@ -638,10 +640,9 @@ impl ModuleLoader {
             self.load_recursive(&base_dir, &iter_segments, &mut results)?;
         }
 
-        // Recursively load each import
-        for (segments, _span) in imports {
-            self.load_recursive(&base_dir, &segments, &mut results)?;
-        }
+        // Recursively load each import (parallelised at the read+parse step;
+        // see `load_imports_batch` for the order-preserving design).
+        self.load_imports_batch(&base_dir, &imports, &mut results)?;
 
         self.load_stack.pop();
         Ok(results)
@@ -689,9 +690,7 @@ impl ModuleLoader {
                 // Recurse into this module's imports FIRST (post-order) so that
                 // dependency structs appear before the structs that use them.
                 let imports = extract_imports(&module);
-                for (segs, _span) in imports {
-                    self.load_recursive(base_dir, &segs, results)?;
-                }
+                self.load_imports_batch(base_dir, &imports, results)?;
                 results.push((virtual_path.clone(), segments.to_vec(), source.to_string(), module, offset));
 
                 self.load_stack.pop();
@@ -699,50 +698,9 @@ impl ModuleLoader {
             }
         }
 
-        // Try local filesystem first (relative to importing file's directory)
-        let file_path = resolve_import_path(base_dir, segments);
-
-        // If the local file doesn't exist, try the entry file's base directory
-        // as a fallback. This supports cross-directory imports in multi-file
-        // projects (e.g. renderer/backend.gg importing from client/view.gg).
-        let file_path = if !file_path.exists() {
-            if let Some(entry_dir) = &self.entry_base_dir {
-                let entry_path = resolve_import_path(entry_dir, segments);
-                if entry_path.exists() {
-                    entry_path
-                } else {
-                    file_path
-                }
-            } else {
-                file_path
-            }
-        } else {
-            file_path
-        };
-
-        // If the file still doesn't exist, try package dependencies.
-        // The first segment of the import is the package name (e.g. `import mylib`
-        // or `from mylib import foo`).
-        let file_path = if !file_path.exists() {
-            if let Some(dep_dir) = segments.first().and_then(|name| self.dep_paths.get(name.as_str())) {
-                if segments.len() == 1 {
-                    // `import mylib` → look for `<dep_dir>/<mylib>.gg`
-                    let pkg_file = dep_dir.join(format!("{}.gg", segments[0]));
-                    if pkg_file.exists() {
-                        pkg_file
-                    } else {
-                        file_path
-                    }
-                } else {
-                    // `from mylib.sub import X` → resolve sub-path within dep dir
-                    resolve_import_path(dep_dir, &segments[1..])
-                }
-            } else {
-                file_path
-            }
-        } else {
-            file_path
-        };
+        // Resolve the filesystem path for this import (local dir → entry dir
+        // fallback → package deps).
+        let file_path = self.resolve_segments_to_path(base_dir, segments);
 
         let canonical = file_path.canonicalize().map_err(|e| LoadError::Io {
             path: file_path.clone(),
@@ -789,12 +747,238 @@ impl ModuleLoader {
         let imports = extract_imports(&module);
         let this_dir = canonical.parent().unwrap().to_path_buf();
 
-        for (segs, _span) in imports {
-            self.load_recursive(&this_dir, &segs, results)?;
-        }
+        self.load_imports_batch(&this_dir, &imports, results)?;
         results.push((canonical.clone(), segments.to_vec(), source, module, module_base_offset));
 
         self.load_stack.pop();
+        Ok(())
+    }
+
+    /// Resolve a dotted import (`segments`) to a filesystem path, trying the
+    /// importing file's directory, then the entry file's base directory, then
+    /// the package-dependency map. Returns the first path that exists, or
+    /// (when none exist) the local-dir candidate so the caller surfaces the
+    /// canonical IO error pointing at the expected location.
+    fn resolve_segments_to_path(&self, base_dir: &Path, segments: &[String]) -> PathBuf {
+        // Try local filesystem first (relative to importing file's directory)
+        let file_path = resolve_import_path(base_dir, segments);
+
+        // If the local file doesn't exist, try the entry file's base directory
+        // as a fallback. This supports cross-directory imports in multi-file
+        // projects (e.g. renderer/backend.gg importing from client/view.gg).
+        let file_path = if !file_path.exists() {
+            if let Some(entry_dir) = &self.entry_base_dir {
+                let entry_path = resolve_import_path(entry_dir, segments);
+                if entry_path.exists() {
+                    entry_path
+                } else {
+                    file_path
+                }
+            } else {
+                file_path
+            }
+        } else {
+            file_path
+        };
+
+        // If the file still doesn't exist, try package dependencies.
+        // The first segment of the import is the package name (e.g. `import mylib`
+        // or `from mylib import foo`).
+        if !file_path.exists() {
+            if let Some(dep_dir) = segments.first().and_then(|name| self.dep_paths.get(name.as_str())) {
+                if segments.len() == 1 {
+                    // `import mylib` → look for `<dep_dir>/<mylib>.gg`
+                    let pkg_file = dep_dir.join(format!("{}.gg", segments[0]));
+                    if pkg_file.exists() {
+                        pkg_file
+                    } else {
+                        file_path
+                    }
+                } else {
+                    // `from mylib.sub import X` → resolve sub-path within dep dir
+                    resolve_import_path(dep_dir, &segments[1..])
+                }
+            } else {
+                file_path
+            }
+        } else {
+            file_path
+        }
+    }
+
+    /// Load a batch of sibling imports, parallelising the file-read + parse
+    /// step across siblings (the per-file work is CPU-bound at ~1-5ms each on
+    /// large fixtures and dominates `load_imports` time on self-host fixtures
+    /// — see `TODO.md` Profile snapshot 2026-05-16).
+    ///
+    /// The traversal order — and therefore the assigned `next_offset` chain —
+    /// is preserved: paths are resolved + filtered for cycles/duplicates
+    /// serially; reads + parses happen in parallel; offsets are assigned in
+    /// the original sibling order; per-child recursion runs serially so each
+    /// child's subtree appears in `results` post-order before the next
+    /// sibling.
+    ///
+    /// Built-in modules (`std.*` / `gg.*`) and already-loaded paths fall back
+    /// to the serial `load_recursive` path — they're cheap (synthetic
+    /// builtins do no parse) and the dedup interlocks with the parallel
+    /// batch are easier to reason about as fall-throughs than as a special
+    /// case in the planner.
+    fn load_imports_batch(
+        &mut self,
+        base_dir: &Path,
+        imports: &[(Vec<String>, Span)],
+        results: &mut Vec<(PathBuf, Vec<String>, String, Module, usize)>,
+    ) -> Result<(), LoadError> {
+        // Planning pass (serial): for each sibling decide whether it is
+        // batchable (plain filesystem import, not yet loaded, not on the
+        // cycle stack, not a duplicate within this batch). Builtins and
+        // already-loaded entries are handled by the serial fallback after.
+        enum Plan {
+            Fallback(Vec<String>),
+            Batched,
+        }
+        let mut plans: Vec<Plan> = Vec::with_capacity(imports.len());
+        let mut batch_inputs: Vec<(PathBuf, PathBuf, Vec<String>)> = Vec::new();
+
+        for (segments, _span) in imports {
+            // Builtins go through the serial path — synthetic builtins skip
+            // parsing entirely, and file-backed builtins are rare enough to
+            // not justify the planning gymnastics.
+            if crate::stdlib::is_builtin_module(segments) {
+                plans.push(Plan::Fallback(segments.clone()));
+                continue;
+            }
+
+            let file_path = self.resolve_segments_to_path(base_dir, segments);
+            // canonicalize may fail (missing file etc.); defer to the serial
+            // path so the error surfaces with full diagnostic context.
+            let canonical = match file_path.canonicalize() {
+                Ok(c) => c,
+                Err(_) => {
+                    plans.push(Plan::Fallback(segments.clone()));
+                    continue;
+                }
+            };
+
+            // Already loaded → nothing to do; drop the plan entry entirely.
+            // (Also covers duplicate imports within this same batch — the
+            // first occurrence inserts into `self.loaded` below, so the
+            // second iteration's contains-check returns true.)
+            if self.loaded.contains(&canonical) {
+                continue;
+            }
+            // Cycle detection: import cycle through an ancestor on the load
+            // stack. Fall back so the serial walker produces the canonical
+            // cycle error.
+            if self.load_stack.contains(&canonical) {
+                plans.push(Plan::Fallback(segments.clone()));
+                continue;
+            }
+
+            // Claim the canonical in `self.loaded` immediately so descendants
+            // recursed from earlier siblings' subtrees (and any in-batch
+            // duplicate imports) see it as already loaded and don't re-batch
+            // it. The actual results entry is pushed later in plan order so
+            // post-order remains stable.
+            self.loaded.insert(canonical.clone());
+            batch_inputs.push((file_path, canonical, segments.clone()));
+            plans.push(Plan::Batched);
+        }
+
+        // Step 1: parallel reads — each task returns the source for its slot
+        // (or an IO error). Reads are independent and have no shared state.
+        let read_results: Vec<Result<String, LoadError>> = batch_inputs
+            .par_iter()
+            .map(|(file_path, _canon, _segs)| {
+                fs::read_to_string(file_path).map_err(|e| LoadError::Io {
+                    path: file_path.clone(),
+                    error: e,
+                })
+            })
+            .collect();
+
+        // Bail on the first read error (matches serial behaviour: first
+        // failing sibling stops the load).
+        let mut sources: Vec<String> = Vec::with_capacity(read_results.len());
+        for (r, (file_path, _canon, _segs)) in read_results.into_iter().zip(batch_inputs.iter()) {
+            sources.push(r.map_err(|e| match e {
+                LoadError::Io { error, .. } => LoadError::Io {
+                    path: file_path.clone(),
+                    error,
+                },
+                other => other,
+            })?);
+        }
+
+        // Step 2: assign offsets in sibling order — this is the
+        // contract `next_offset` carries to downstream span-routing.
+        // Offsets must be computed serially because each module's offset
+        // depends on the previous module's source length.
+        let mut offsets: Vec<usize> = Vec::with_capacity(sources.len());
+        for src in &sources {
+            offsets.push(self.next_offset);
+            self.next_offset = self.next_offset + src.len() + 1;
+        }
+
+        // Step 3: parallel parse — each (source, offset) pair is independent;
+        // spans are baked in via `Parser::new_with_offset`, so per-task
+        // parses don't see each other's state.
+        let parsed: Vec<(Module, Vec<ParseError>)> = sources
+            .par_iter()
+            .zip(offsets.par_iter())
+            .map(|(source, offset)| {
+                let mut parser = Parser::new_with_offset(source, *offset);
+                let module = parser.parse_module();
+                (module, parser.errors)
+            })
+            .collect();
+
+        // Step 4: serial post-processing — merge results into the loader's
+        // bookkeeping (loaded set, load_stack, results) in order, recursing
+        // into each batched child's imports between its arrival and the next
+        // sibling so post-order ordering matches the pre-parallel walk.
+        let mut batched_iter = batch_inputs
+            .into_iter()
+            .zip(sources.into_iter())
+            .zip(offsets.into_iter())
+            .zip(parsed.into_iter());
+        for plan in plans.into_iter() {
+            match plan {
+                Plan::Fallback(segs) => {
+                    self.load_recursive(base_dir, &segs, results)?;
+                }
+                Plan::Batched => {
+                    let (((file_meta, source), module_base_offset), parse_res) =
+                        batched_iter.next().expect("plan/batch index mismatch");
+                    let (file_path, canonical, segments) = file_meta;
+                    let (module, parse_errors) = parse_res;
+
+                    if !parse_errors.is_empty() {
+                        return Err(LoadError::Parse {
+                            path: file_path,
+                            errors: parse_errors,
+                            source,
+                        });
+                    }
+
+                    // (canonical already inserted into `self.loaded` at
+                    // planning time so descendants see it as loaded.)
+                    self.load_stack.push(canonical.clone());
+
+                    // Recurse into this child's own imports before pushing
+                    // the child into `results` — preserves post-order so
+                    // dependency structs land before the structs that use
+                    // them.
+                    let child_imports = extract_imports(&module);
+                    let this_dir = canonical.parent().unwrap().to_path_buf();
+                    self.load_imports_batch(&this_dir, &child_imports, results)?;
+
+                    results.push((canonical.clone(), segments, source, module, module_base_offset));
+                    self.load_stack.pop();
+                }
+            }
+        }
+
         Ok(())
     }
 }
