@@ -4,6 +4,7 @@
 from std.collections import Vector
 from lexer import lex_tokenize, SpannedToken, Token, Keyword, StringLiteral, StringKind, StringSegment
 from ast import Module, Item, Stmt, Expr, Type, Pattern, Span, SpannedExpr, SpannedType, SpannedPattern, FunctionDef, StructDef, EnumDef, EnumVariant, TraitDef, EquipBlock, MatchArm, ElseBranch, Param, ImportStmt
+from diagnostic import Diagnostic, DiagKind, DkParseError
 
 # ── Token tag constants ──────────────────────────────────────
 
@@ -983,7 +984,7 @@ String expr_ident_name(Expr e):
 struct Parser:
     Vector[SpannedToken] tokens
     int pos
-    Vector[String] errors
+    Vector[Diagnostic] diagnostics
     int call_arg_depth
 
 # ── Parser methods ───────────────────────────────────────────
@@ -1044,11 +1045,11 @@ equip Parser:
 
     void expect_tok(&self, int tag, String msg):
         if not self.match_tok(tag):
-            self.errors.push(msg)
+            self.diagnostics.push(Diagnostic.error(self.current_span(), DkParseError(), msg))
 
     void expect_kw(&self, int kw, String msg):
         if not self.match_kw(kw):
-            self.errors.push(msg)
+            self.diagnostics.push(Diagnostic.error(self.current_span(), DkParseError(), msg))
 
     # Extract a name from a token that may be an identifier or a keyword used as a name
     String extract_name(&self, SpannedToken tok):
@@ -1272,7 +1273,7 @@ equip Parser:
             return self.mk_type(TNamed(name, Vector[SpannedType]()), start)
 
         # Fallback: error
-        self.errors.push("expected type")
+        self.diagnostics.push(Diagnostic.error(self.current_span(), DkParseError(), "expected type"))
         self.advance()
         return self.mk_type(TPrimitive("void"), start)
 
@@ -1528,7 +1529,7 @@ equip Parser:
             else:
                 pass
 
-        self.errors.push("expected pattern")
+        self.diagnostics.push(Diagnostic.error(self.current_span(), DkParseError(), "expected pattern"))
         self.advance()
         return self.mk_pat(PWildcard(), start)
 
@@ -1789,7 +1790,7 @@ equip Parser:
             elif val == 3:
                 field_name = "3"
             return SpannedExpr(EFieldAccess(Box(lhs), field_name), Span(start, self.peek().lex_start))
-        self.errors.push("expected field name after '.'")
+        self.diagnostics.push(Diagnostic.error(self.current_span(), DkParseError(), "expected field name after '.'"))
         return lhs
 
     Vector[SpannedExpr] parse_call_args(&self):
@@ -2282,7 +2283,7 @@ equip Parser:
             return SpannedExpr(EIdentifier(name), Span(name_tok.lex_start, name_tok.lex_end))
 
         # Fallback
-        self.errors.push("expected expression")
+        self.diagnostics.push(Diagnostic.error(self.current_span(), DkParseError(), "expected expression"))
         SpannedToken err_tok = self.advance()
         return SpannedExpr(EIntLiteral(0), Span(err_tok.lex_start, err_tok.lex_end))
 
@@ -2340,7 +2341,7 @@ equip Parser:
                 SpannedPattern wild = SpannedPattern(PWildcard(), Span(start, start))
                 arms.push(MatchArm(wild, None, else_body))
             else:
-                self.errors.push("expected 'case' or 'else' in match")
+                self.diagnostics.push(Diagnostic.error(self.current_span(), DkParseError(), "expected 'case' or 'else' in match"))
                 self.advance()
         self.match_tok(TOK_DEDENT)
         return SpannedExpr(EMatch(Box(subject), arms), Span(start, self.peek().lex_start))
@@ -2766,7 +2767,7 @@ equip Parser:
                 SpannedPattern wild = SpannedPattern(PWildcard(), Span(start, start))
                 arms.push(MatchArm(wild, None, else_body))
             else:
-                self.errors.push("expected 'case' or 'else' in match")
+                self.diagnostics.push(Diagnostic.error(self.current_span(), DkParseError(), "expected 'case' or 'else' in match"))
                 self.advance()
         self.match_tok(TOK_DEDENT)
         return SMatch(subject, arms)
@@ -3629,7 +3630,11 @@ equip Parser:
 
 # ── Public API ───────────────────────────────────────────────
 
-Module parse_source(String source):
+# Parse `source` and append any diagnostics gathered to `out_diagnostics`.
+# Parse errors don't abort — they get recorded and the parser does a
+# best-effort recovery so downstream stages can still run on a partial
+# AST. Comparison drivers / CLIs use this entry point.
+Module parse_source_into(String source, Vector[Diagnostic] &out_diagnostics):
     Vector[SpannedToken] all_tokens = lex_tokenize(source)
     # Strip comment tokens from the stream — the Rust parser does this at init.
     # Without stripping, comments between structural tokens (COLON NEWLINE INDENT)
@@ -3642,6 +3647,17 @@ Module parse_source(String source):
         if tag != TOK_COMMENT and tag != TOK_DOCCOMMENT:
             tokens.push(tok)
         ti = ti + 1
-    Parser p = Parser(tokens, 0, Vector[String](), 0)
+    Parser p = Parser(tokens, 0, Vector[Diagnostic](), 0)
     Module m = p.parse_module()
+    int di = 0
+    while di < p.diagnostics.len():
+        Diagnostic d = p.diagnostics.get(di).unwrap()
+        out_diagnostics.push(d.clone())
+        di = di + 1
     return m
+
+# Convenience: parse and discard diagnostics. Existing callers stay on
+# this entry point until they need diagnostic visibility.
+Module parse_source(String source):
+    Vector[Diagnostic] discarded = Vector[Diagnostic]()
+    return parse_source_into(source, &discarded)

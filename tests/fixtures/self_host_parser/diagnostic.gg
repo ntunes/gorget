@@ -1,0 +1,106 @@
+# Typed diagnostic record produced by the resolution / type-checking
+# / lowering / validation passes.
+#
+# Replaces the free-form `Vector[String] errors` accumulator pattern.
+# Span / severity / category are first-class fields rather than baked
+# into the message text, so consumers (drivers, CLIs, IDEs) can filter,
+# group, render, and emit JSON without re-parsing strings.
+#
+# Parser migration (2026-05-17): the parser populates `DkParseError`
+# diagnostics at the 8 historical error sites that previously wrote
+# free-form strings to `Vector[String] errors`. The shape mirrors the
+# resolver POC (`self_host_resolver/diagnostic.gg`) — kept per-stage
+# while the cross-directory shared-module strategy is settled.
+
+from std.collections import Vector
+from std.conv import int_to_str
+from ast import Span
+
+# ── Severity ────────────────────────────────────────────────
+
+enum Severity:
+    SevError
+    SevWarning
+    SevSuggestion  # for lints / hints
+
+# ── Diagnostic category ─────────────────────────────────────
+#
+# One variant per category currently emitted by a stage on the
+# accumulator. As new sites get migrated, new variants land here.
+# The parser populates `DkParseError` exclusively today; the other
+# variants are reserved for upcoming typechecker / lowerer / lexer
+# migrations.
+
+enum DiagKind:
+    # Resolver kinds
+    DkUndefinedName        # EIdentifier / EStructLiteral lookup miss
+    DkDuplicateDefinition  # `define` rejected — name already bound
+
+    # Parser kinds (active in this stage)
+    DkParseError           # expect_tok / expect_kw / expected-* sites
+
+    # Reserved for future migrators (kept so the type doesn't churn
+    # when typechecker / lowerer / lexer sites migrate).
+    DkNotAType
+    DkTypeMismatch
+    DkUnreachable
+
+# ── Diagnostic ──────────────────────────────────────────────
+
+struct Diagnostic:
+    Span span
+    Severity sev
+    DiagKind kind
+    String message
+
+# ── Constructors ────────────────────────────────────────────
+#
+# Prefer the helpers (`Diagnostic.error(...)` etc.) over inline
+# struct literals so call sites read like prose and we have one
+# place to evolve the shape.
+
+equip Diagnostic:
+
+    Diagnostic error(Span span, DiagKind kind, String message):
+        return Diagnostic(span, SevError(), kind, message)
+
+    Diagnostic warn(Span span, DiagKind kind, String message):
+        return Diagnostic(span, SevWarning(), kind, message)
+
+    Diagnostic suggest(Span span, DiagKind kind, String message):
+        return Diagnostic(span, SevSuggestion(), kind, message)
+
+# ── Rendering ───────────────────────────────────────────────
+
+String severity_str(Severity sev):
+    match sev:
+        case SevError():
+            return "error"
+        case SevWarning():
+            return "warning"
+        case SevSuggestion():
+            return "suggestion"
+
+String diag_kind_str(DiagKind kind):
+    match kind:
+        case DkUndefinedName():
+            return "undefined-name"
+        case DkDuplicateDefinition():
+            return "duplicate-definition"
+        case DkParseError():
+            return "parse-error"
+        case DkNotAType():
+            return "not-a-type"
+        case DkTypeMismatch():
+            return "type-mismatch"
+        case DkUnreachable():
+            return "unreachable"
+
+# Canonical one-line rendering used by the comparison test driver.
+# Format: `DIAG <severity> <kind> <span_start>:<span_end> <message>`.
+# Keeping a `DIAG ` prefix means an integration normalizer can filter
+# on tag prefixes when needed; here parser_comparison is line-by-line,
+# so DIAG lines surface only for fixtures that currently mismatch
+# (clean parses emit no diagnostics).
+String format_diagnostic(Diagnostic d):
+    return "DIAG " + severity_str(d.sev) + " " + diag_kind_str(d.kind) + " " + int_to_str(d.span.start) + ":" + int_to_str(d.span.end) + " " + d.message
