@@ -1,0 +1,18 @@
+# Regression for gorget-js snag #2: a concrete-vs-concrete call-arg
+# type mismatch in code reached through an `Item::Module` wrapper
+# (i.e. an imported file) must surface as a hard error, not be silently
+# swallowed by the imported-module error-truncate in
+# `check_items_recursive_tc`.
+#
+# The mismatch lives in `impl.gg` (`unwrap_tagged(float_arg)`), which is
+# imported and therefore processed under the truncate path. Before the
+# fix, the call silently compiled and the function returned junk
+# (the float's bit pattern reinterpreted as an enum tag). After the fix,
+# the hard-error path in `Expr::Call`'s arg unify pushes a TypeMismatch
+# into `hard_errors`, which the truncate re-appends.
+
+from impl import silent_call_bug
+
+void main():
+    int x = silent_call_bug()
+    print(f"{x}")

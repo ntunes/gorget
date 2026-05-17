@@ -1,0 +1,15 @@
+# Imported module that defines a function with a nominal-typed
+# parameter. Used by impl.gg via a deeper-imports chain to exercise
+# the concrete-vs-concrete call-arg type check at the
+# imported-module-AND-imported-module boundary.
+
+public enum Tagged:
+    A(int)
+    B
+
+public int unwrap_tagged(Tagged t):
+    match t:
+        case Tagged.A(n):
+            return n
+        case Tagged.B:
+            return 0

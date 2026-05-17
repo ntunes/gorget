@@ -392,6 +392,13 @@ struct TypeChecker<'a> {
     enum_variants: &'a FxHashMap<DefId, EnumVariantInfo>,
     struct_fields: &'a FxHashMap<DefId, StructFieldInfo>,
     errors: Vec<SemanticError>,
+    /// Errors that must survive the imported-module truncate at
+    /// `check_items_recursive_tc`. Used for hard, concrete-vs-concrete
+    /// type mismatches at call-argument sites in imported user modules
+    /// — see gorget-js snag #2 (silent `to_uint32(float_arg)` in a
+    /// 6000-line eval.gg, hidden by the blanket truncate). Merged into
+    /// `errors` at end-of-check.
+    hard_errors: Vec<SemanticError>,
     /// Substitution map: type variable ID -> resolved type ID.
     substitutions: FxHashMap<u32, TypeId>,
     next_type_var: u32,
@@ -469,6 +476,7 @@ impl<'a> TypeChecker<'a> {
             enum_variants,
             struct_fields,
             errors: Vec::new(),
+            hard_errors: Vec::new(),
             substitutions: FxHashMap::default(),
             next_type_var: 0,
             current_return_type: None,
@@ -498,6 +506,37 @@ impl<'a> TypeChecker<'a> {
 
     fn error(&mut self, kind: SemanticErrorKind, span: Span) {
         self.errors.push(SemanticError { kind, span });
+    }
+
+    /// Returns true when a TypeId is fully concrete: no Vars (resolved or
+    /// otherwise), no error_id, no never_id. Used to gate `hard_type_mismatch`
+    /// emission — non-concrete types may still be unified successfully or
+    /// represent foreign-scope inference holes, so we only mark a mismatch
+    /// "hard" when both sides are firmly known.
+    fn is_fully_concrete(&self, t: TypeId) -> bool {
+        let r = self.resolve_type(t);
+        if r == self.types.error_id || r == self.types.never_id {
+            return false;
+        }
+        match self.types.get(r) {
+            ResolvedType::Var(_) => false,
+            ResolvedType::Generic(_, args) => {
+                let args = args.clone();
+                args.iter().all(|&a| self.is_fully_concrete(a))
+            }
+            ResolvedType::Tuple(elems) => {
+                let elems = elems.clone();
+                elems.iter().all(|&e| self.is_fully_concrete(e))
+            }
+            ResolvedType::Array(elem, _)
+            | ResolvedType::Slice(elem)
+            | ResolvedType::Ref(elem)
+            | ResolvedType::Owned(elem) => {
+                let elem = *elem;
+                self.is_fully_concrete(elem)
+            }
+            _ => true,
+        }
     }
 
     /// Look up a definition in the resolution map, guarding against cross-module
@@ -1322,7 +1361,37 @@ impl<'a> TypeChecker<'a> {
                                 if !self.is_auto_propagation_compatible(param_type, arg_type)
                                     && !self.is_result_capture_compatible(param_type, arg_type)
                                 {
+                                    // Gorget-js snag #2: when unify produces a
+                                    // TypeMismatch AND both param and arg types
+                                    // are fully concrete (no Vars, no error_id,
+                                    // no Never), mark the resulting mismatch as
+                                    // "hard" so it survives the imported-module
+                                    // truncate in `check_items_recursive_tc`.
+                                    // This is the boundary where a user passes
+                                    // a wrong-typed value into an imported
+                                    // function; the truncate exists to swallow
+                                    // library-foreign-scope false positives
+                                    // (auto-prop holes, unresolved generic Vs),
+                                    // but a concrete-vs-concrete call-arg
+                                    // mismatch survived through `unify`'s full
+                                    // coercion ladder (cstr↔String, Ref↔T,
+                                    // Owned↔T) is never a foreign-scope
+                                    // artifact.
+                                    let pre_err_count = self.errors.len();
                                     self.unify(param_type, arg_type, arg.span);
+                                    if self.errors.len() > pre_err_count
+                                        && self.is_fully_concrete(param_type)
+                                        && self.is_fully_concrete(arg_type)
+                                    {
+                                        // Mirror the just-pushed error into
+                                        // hard_errors so the truncate path
+                                        // re-appends it. The same error stays
+                                        // in `errors` for the main display
+                                        // pipeline.
+                                        if let Some(err) = self.errors.last().cloned() {
+                                            self.hard_errors.push(err);
+                                        }
+                                    }
                                 }
                                 self.validate_closure_arg_kind(param_type, &arg.node.value);
                             }
@@ -5866,9 +5935,24 @@ fn check_items_recursive_tc(checker: &mut TypeChecker, items: &[Spanned<Item>]) 
                 // Type-check imported module code to populate expr_types/method_resolutions
                 // but discard any type errors — library code may have false positives
                 // in a foreign scope context.
+                //
+                // EXCEPTION: hard errors (concrete-vs-concrete call-arg type mismatches
+                // pushed via `hard_type_mismatch`) survive the truncate. They get emitted
+                // into both `errors` and `hard_errors`; here we truncate `errors` back to
+                // the pre-recursion count, then re-append the hard errors that were
+                // generated during the recursion. This catches the snag #2 shape (silent
+                // `to_uint32(float_arg)` in a 6000-line eval.gg) without re-surfacing the
+                // foreign-scope false positives (byte-literal int_id mismatches, auto-prop
+                // holes with unbound Vars) that motivated the original truncate.
                 let error_count = checker.errors.len();
+                let hard_count = checker.hard_errors.len();
                 check_items_recursive_tc(checker, inner);
                 checker.errors.truncate(error_count);
+                if checker.hard_errors.len() > hard_count {
+                    // Re-append the hard errors generated inside this module.
+                    let new_hard: Vec<_> = checker.hard_errors[hard_count..].to_vec();
+                    checker.errors.extend(new_hard);
+                }
             }
             Item::Function(f) => {
                 checker.check_function(f);

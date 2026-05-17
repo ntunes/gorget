@@ -1,0 +1,13 @@
+# This file is itself imported by main.gg, so its body runs through
+# the `Item::Module` truncate path in `check_items_recursive_tc`.
+# The wrong-typed `unwrap_tagged(raw)` here is the gorget-js snag #2
+# shape — pre-fix it silently compiled. Post-fix the hard-error path
+# in `Expr::Call`'s arg unify pushes a TypeMismatch into `hard_errors`,
+# which survives the truncate.
+
+from lib import Tagged, unwrap_tagged
+
+public int silent_call_bug():
+    float raw = 1.5
+    int x = unwrap_tagged(raw)
+    return x

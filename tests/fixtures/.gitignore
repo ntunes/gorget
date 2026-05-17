@@ -11,6 +11,8 @@
 !modules_pkg*/**
 !fstring_cross_module/
 !fstring_cross_module/**
+!imported_call_arg_type_check/
+!imported_call_arg_type_check/**
 !security/
 !security/*.gg
 !security/*.expected

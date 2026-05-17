@@ -1793,6 +1793,20 @@ fn modules_basic() {
     run_gg_dir("modules_basic", "main.gg", "5");
 }
 
+/// Regression for gorget-js snag #2: a concrete-vs-concrete type mismatch
+/// at a call-arg site inside an imported module must surface as an error,
+/// not be silently swallowed by the imported-module truncate in
+/// `check_items_recursive_tc`. Pre-fix, the same shape silently compiled
+/// in a 6000-line eval.gg (float passed where JsValue was expected) and
+/// produced a binary that returned junk at runtime.
+#[test]
+fn imported_call_arg_type_check_errors() {
+    check_gg_fails(
+        "imported_call_arg_type_check/main.gg",
+        "type mismatch: expected `Tagged`, found `float`",
+    );
+}
+
 #[test]
 fn modules_nested() {
     run_gg_dir("modules_nested", "main.gg", "hello world");
