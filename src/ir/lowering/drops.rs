@@ -266,6 +266,28 @@ impl DropElaborator {
         }
     }
 
+    /// Clear the "maybe moved" flag on a local — typically called after a
+    /// reassignment (`[Mv] _x = copy ...`) that gives the slot a fresh,
+    /// owning value. Without this, a prior consume site (e.g. `vec.push(x)`
+    /// in an earlier branch) leaves `maybe_moved=true` on the slot even
+    /// though the slot has since been re-bound to a live value; downstream
+    /// consume-site staging then treats the live local as already-moved
+    /// and skips the required post-consume `move_zero`, causing a double
+    /// free when the unconditional scope-exit `drop_if_alive` sees the
+    /// non-null slot. Surfaced when AST-level last-use analysis began
+    /// recognising `StructLiteral` arg identifiers as last uses (gorget-js
+    /// snag #3, 2026-05-17).
+    pub fn clear_moved(&mut self, local: LocalId) {
+        for scope in self.scopes.iter_mut().rev() {
+            for entry in &mut scope.entries {
+                if entry.local == local {
+                    entry.maybe_moved = false;
+                    return;
+                }
+            }
+        }
+    }
+
     /// Snapshot all `maybe_moved` flags across every live scope.
     ///
     /// Used by branch lowerings (`lower_if`, `lower_match`, etc.) to restore the

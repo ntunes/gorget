@@ -292,7 +292,13 @@ fn uses_expr(
                 uses_expr(&a.node.value.node, a.node.value.span.start, live, lu);
             }
         }
-        _ => {} // Literals, type names, Path, MetaOp*, It, StructLiteral, etc.
+        // Struct constructors `Foo(args)` — every arg is a real use.
+        Expr::StructLiteral { args, .. } => {
+            for a in args.iter().rev() {
+                uses_expr(&a.node, a.span.start, live, lu);
+            }
+        }
+        _ => {} // Literals, type names, Path, MetaOp*, It, etc.
     }
 }
 

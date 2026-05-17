@@ -20917,19 +20917,19 @@ out_b[1]: StringV(second)",
 }
 
 // gorget-js snag #3: match scrutinee misidentified as last-use because
-// liveness's `uses_expr` skipped `Expr::StructLiteral`. The original
-// 9-variant fix (commit 2fddacdc, reverted as cc8dd42f) broke 4
-// self-host bootstrap tests with stage-0 memory corruption. Bisect
-// (2026-05-17) isolated StructLiteral as the lone culprit — the other
-// 7 variants (Array/TupleLiteral, DictLiteral, DictComprehension,
-// Range, DefaultOp, Do, DotShorthand) ship safely. StructLiteral alone
-// triggers `malloc_consolidate(): unaligned fastbin chunk detected`
-// in the stage-0 driver; root cause is not yet understood. The user-
-// land workaround (`clone_value(&rv)`) still keeps gorget-js compiling.
-// Fixture marked `#[ignore]` until the StructLiteral-specific memory
-// corruption is diagnosed. See TODO.md "Gorget-js snag #3".
+// liveness's `uses_expr` skipped `Expr::StructLiteral` (commit 0872feeb
+// shipped the other 7 safe variants; this fixture was left `#[ignore]`).
+// Root cause turned out to be one layer up: when an outer reassignment
+// re-bound a previously-moved slot (`vec.push(x); … ; x = new`), the
+// `lower_assign` path forgot to clear the slot's stale `maybe_moved`
+// flag in `drops`. Downstream `move_zero_consumed_args` then read
+// `is_moved == true` for the still-live slot and skipped the required
+// post-consume `move_zero`, leaving the unconditional scope-exit
+// `drop_if_alive` to free data the consumer now also owned (UAF). Fix
+// in `src/ir/lowering/stmts/assigns.rs`: call `ctx.drops.clear_moved`
+// right after the Move/Copy assign emits, mirroring the existing
+// ownership-state propagation. See TODO.md (closed 2026-05-17).
 #[test]
-#[ignore]
 fn gorget_js_snag_3_match_struct_literal_use() {
     run_gg(
         "gorget_js_snag_3_match_struct_literal_use.gg",

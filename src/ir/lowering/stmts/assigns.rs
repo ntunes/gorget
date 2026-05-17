@@ -349,6 +349,20 @@ pub(super) fn lower_assign(
 
                     builder.assign_mode(assign_mode, Place::local(local_id), operand.clone());
 
+                    // The reassignment gives `local_id` a fresh owning value
+                    // (Move or Copy of a live source). Clear any stale
+                    // `maybe_moved` flag set by a *prior* consume of this slot
+                    // (e.g. `vec.push(local_id)` earlier in a branch that
+                    // already MoveZero'd the slot before this re-bind). Without
+                    // this reset, downstream consume-site staging sees
+                    // `is_moved(local_id) == true` and skips the required
+                    // post-consume `move_zero`, leaving the unconditional
+                    // scope-exit `drop_if_alive` to free data the consumer now
+                    // also owns. Mirrors the `set_owned` propagation below —
+                    // ownership state and drop-flag state must agree on
+                    // "slot has a live value here". (gorget-js snag #3)
+                    ctx.drops.clear_moved(local_id);
+
                     // Mark source as moved + emit GIR-level move-zero.
                     if assign_mode == AssignMode::Move {
                         if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
