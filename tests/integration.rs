@@ -20916,6 +20916,27 @@ out_b[1]: StringV(second)",
     );
 }
 
+// gorget-js snag #3: match scrutinee misidentified as last-use because
+// liveness's `uses_expr` skipped `Expr::StructLiteral`. The original
+// 9-variant fix (commit 2fddacdc, reverted as cc8dd42f) broke 4
+// self-host bootstrap tests with stage-0 memory corruption. Bisect
+// (2026-05-17) isolated StructLiteral as the lone culprit — the other
+// 7 variants (Array/TupleLiteral, DictLiteral, DictComprehension,
+// Range, DefaultOp, Do, DotShorthand) ship safely. StructLiteral alone
+// triggers `malloc_consolidate(): unaligned fastbin chunk detected`
+// in the stage-0 driver; root cause is not yet understood. The user-
+// land workaround (`clone_value(&rv)`) still keeps gorget-js compiling.
+// Fixture marked `#[ignore]` until the StructLiteral-specific memory
+// corruption is diagnosed. See TODO.md "Gorget-js snag #3".
+#[test]
+#[ignore]
+fn gorget_js_snag_3_match_struct_literal_use() {
+    run_gg(
+        "gorget_js_snag_3_match_struct_literal_use.gg",
+        "true",
+    );
+}
+
 // ─── Empty literal `[]` contextual typing (TODO 2026-05-14) ──────────
 //
 // Regression suite for elem_size propagation when an empty `[]` is

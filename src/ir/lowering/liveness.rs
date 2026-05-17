@@ -255,7 +255,44 @@ fn uses_expr(
                 uses_expr(&interp.node, interp.span.start, live, lu);
             }
         }
-        _ => {} // Literals, type names, etc.
+        // Container literals — every element is a real use.
+        Expr::ArrayLiteral(elems) | Expr::TupleLiteral(elems) => {
+            for e in elems.iter().rev() {
+                uses_expr(&e.node, e.span.start, live, lu);
+            }
+        }
+        Expr::DictLiteral(pairs) => {
+            for (k, v) in pairs.iter().rev() {
+                uses_expr(&v.node, v.span.start, live, lu);
+                uses_expr(&k.node, k.span.start, live, lu);
+            }
+        }
+        Expr::DictComprehension { key, value, variables, iterable, condition } => {
+            if let Some(c) = condition { uses_expr(&c.node, c.span.start, live, lu); }
+            uses_expr(&value.node, value.span.start, live, lu);
+            uses_expr(&key.node, key.span.start, live, lu);
+            for v in variables { live.remove(&v.node); }
+            uses_expr(&iterable.node, iterable.span.start, live, lu);
+        }
+        Expr::Range { start, end, .. } => {
+            if let Some(e) = end { uses_expr(&e.node, e.span.start, live, lu); }
+            if let Some(s) = start { uses_expr(&s.node, s.span.start, live, lu); }
+        }
+        Expr::DefaultOp { lhs, rhs } => {
+            uses_expr(&rhs.node, rhs.span.start, live, lu);
+            uses_expr(&lhs.node, lhs.span.start, live, lu);
+        }
+        Expr::Do { body } => {
+            walk_block(&body.stmts, live, lu);
+        }
+        // `Foo.bar(args)` shorthand — args are real uses. Variant tag is
+        // a name path, not an identifier use.
+        Expr::DotShorthand { args, .. } => {
+            for a in args.iter().rev() {
+                uses_expr(&a.node.value.node, a.node.value.span.start, live, lu);
+            }
+        }
+        _ => {} // Literals, type names, Path, MetaOp*, It, StructLiteral, etc.
     }
 }
 

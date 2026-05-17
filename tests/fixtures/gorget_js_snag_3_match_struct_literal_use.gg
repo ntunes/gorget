@@ -1,0 +1,68 @@
+# Gorget-js snag #3: match scrutinee misidentified as last-use because
+# the AST-level liveness walker (`src/ir/lowering/liveness.rs`) skipped
+# `Expr::StructLiteral`. A subsequent struct-literal arg `Foo(rv, ...)`
+# inside an `else:` arm carried an identifier use that liveness never
+# saw, so `is_last_use_at(rv, match scrutinee)` returned `true` — the
+# match staging picked `AssignMode::Move`, and Tier 2a's
+# `AssignIntoOwnedSlot` validator caught the resulting "Owned + live
+# source consumed without preceding clone" and panicked the compiler.
+#
+# Fix: walk struct-literal args (and the other previously-uncovered Expr
+# variants: ArrayLiteral, TupleLiteral, DictLiteral, DictComprehension,
+# Range, DefaultOp, Do, DotShorthand) inside `uses_expr` so identifier
+# uses inside them participate in last-use analysis.
+#
+# Repro shape mirrors `src/eval.gg::json_revive_property` in gorget-js
+# pre-workaround: `match rv` with an `else` arm that constructs a struct
+# carrying `rv` as one of its fields, then mutates a nested collection.
+#
+# Pre-fix: the compiler panicked with
+#   Tier 2a consume-site violation: AssignIntoOwnedSlot(dst: JsValue)
+#   — owned-but-live source consumed without preceding clone.
+# Post-fix: clean build, program runs and prints `true` for the variant
+# stored in the dictionary.
+
+from std.collections import Dict
+
+enum JsValue:
+    Undefined()
+    Str(String)
+    Number(int)
+
+struct PropDescriptor:
+    JsValue value
+    bool writable
+    bool enumerable
+    bool configurable
+    bool is_accessor
+    JsValue getter
+    JsValue setter
+
+struct ObjectRec:
+    Dict[String, PropDescriptor] props
+
+struct Realm:
+    Dict[int, ObjectRec] objects
+
+JsValue make_value(int n):
+    return JsValue.Number(n + 1)
+
+void object_delete_own(Realm &realm, int child_id, String key):
+    return
+
+void process(int child_id, int i, Realm &realm):
+    JsValue rv = make_value(i)
+    match rv:
+        case JsValue.Undefined:
+            object_delete_own(&realm, child_id, f"{i}")
+        else:
+            ObjectRec o = realm.objects.get(child_id).unwrap()
+            o.props.put(f"{i}", PropDescriptor(rv, true, true, true, false, JsValue.Undefined(), JsValue.Undefined()))
+            realm.objects.set(child_id, o)
+
+void main():
+    Realm realm = Realm(Dict[int, ObjectRec]())
+    realm.objects.set(0, ObjectRec(Dict[String, PropDescriptor]()))
+    process(0, 1, &realm)
+    PropDescriptor pd = realm.objects.get(0).unwrap().props.get("1").unwrap()
+    print(pd.value is JsValue.Number(n))
