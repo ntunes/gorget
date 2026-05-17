@@ -1349,8 +1349,8 @@ pub fn propagate_copies(func: &mut LirFunction) -> usize {
 
     // Collect predecessor info: for each block, what values are passed as jump args.
     // Map: (target_block, param_index) → set of argument ValueIds.
-    let mut param_sources: std::collections::HashMap<(u32, usize), HashSet<ValueId>> =
-        std::collections::HashMap::new();
+    let mut param_sources: rustc_hash::FxHashMap<(u32, usize), HashSet<ValueId>> =
+        rustc_hash::FxHashMap::default();
 
     for block in &func.blocks {
         let collect_args = |target: BlockId, args: &[ValueId]| {
@@ -1386,9 +1386,9 @@ pub fn propagate_copies(func: &mut LirFunction) -> usize {
 
     // Find trivial params: all predecessors pass the same value.
     // Track both the substitution map and which (block, param_index) to remove.
-    let mut subst: std::collections::HashMap<ValueId, ValueId> = std::collections::HashMap::new();
-    let mut removed_params: std::collections::HashMap<u32, HashSet<usize>> =
-        std::collections::HashMap::new();
+    let mut subst: rustc_hash::FxHashMap<ValueId, ValueId> = rustc_hash::FxHashMap::default();
+    let mut removed_params: rustc_hash::FxHashMap<u32, HashSet<usize>> =
+        rustc_hash::FxHashMap::default();
 
     for block in &func.blocks {
         for (param_idx, (param_vid, _)) in block.params.iter().enumerate() {
@@ -1439,7 +1439,7 @@ pub fn propagate_copies(func: &mut LirFunction) -> usize {
 }
 
 /// Substitute ValueIds in an instruction's operands.
-fn subst_inst_uses(inst: &mut Inst, subst: &std::collections::HashMap<ValueId, ValueId>) {
+fn subst_inst_uses(inst: &mut Inst, subst: &rustc_hash::FxHashMap<ValueId, ValueId>) {
     // Apply substitution to all used values.
     let mut uses = inst.uses();
     let mut any_changed = false;
@@ -1545,7 +1545,7 @@ fn subst_inst_uses(inst: &mut Inst, subst: &std::collections::HashMap<ValueId, V
 }
 
 /// Substitute ValueIds in a terminator's operands.
-fn subst_term_uses(term: &mut Term, subst: &std::collections::HashMap<ValueId, ValueId>) {
+fn subst_term_uses(term: &mut Term, subst: &rustc_hash::FxHashMap<ValueId, ValueId>) {
     let s = |v: &mut ValueId| {
         if let Some(&replacement) = subst.get(v) {
             *v = replacement;
@@ -1572,7 +1572,7 @@ fn subst_term_uses(term: &mut Term, subst: &std::collections::HashMap<ValueId, V
 /// Remove jump args at indices corresponding to removed block params.
 fn remove_jump_args_for_removed_params(
     term: &mut Term,
-    removed: &std::collections::HashMap<u32, HashSet<usize>>,
+    removed: &rustc_hash::FxHashMap<u32, HashSet<usize>>,
 ) {
     let filter_args = |target: BlockId, args: &mut Vec<ValueId>| {
         if let Some(indices) = removed.get(&target.0) {
