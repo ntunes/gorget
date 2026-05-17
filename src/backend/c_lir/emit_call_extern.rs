@@ -10,6 +10,7 @@ pub(super) fn emit_call_extern(
     args: &[ValueId],
     arg_abis: &[crate::ir::abi::AbiKind],
     ctx: &super::EmitContext,
+    loc: &(String, u32, u32),
 ) {
     let func = ctx.func;
     let module = ctx.module;
@@ -40,6 +41,31 @@ pub(super) fn emit_call_extern(
             // for Str→I64) before BIR lowering, so the backend branch is
             // dead when a destination is assigned. The rare dst=None case
             // has no observable effect on a pure cast.)
+
+            // Route compiler-emit `gorget_panic` through `gorget_panic_at` so
+            // the runtime message carries `file:line:col`. Runtime-internal
+            // callers keep the 1-arg `gorget_panic` (wrapper degrades to
+            // `<unknown>:0:0`) until per-runtime-fn span plumbing lands.
+            if name == "gorget_panic" && args.len() == 1 {
+                let a = args[0];
+                let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
+                let is_str_lit = ctx.is_str_lit(a);
+                let is_gs_struct = matches!(arg_ty, Some(LirType::Struct(sid))
+                    if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetString" || s.name == "Str"));
+                let msg_expr = if is_str_lit {
+                    format!("(const char*){}.data", v(a))
+                } else if is_gs_struct {
+                    format!("(const char*){}.data", v(a))
+                } else if matches!(arg_ty, Some(LirType::Ptr)) {
+                    // Pointer to Str struct (typical case from the CStr ABI marshalling).
+                    format!("(const char*)((Str*){})->data", v(a))
+                } else {
+                    format!("(const char*){}", v(a))
+                };
+                write!(out, "gorget_panic_at(\"{f}\", {ln}, {cl}, {msg_expr});",
+                    f = loc.0, ln = loc.1, cl = loc.2).unwrap();
+                return;
+            }
 
             // ── Inline string codepoint helpers (synthetic GIR functions) ──
             if name == "gorget_utf8_codepoint_len_at" && args.len() == 2 {
@@ -76,7 +102,7 @@ pub(super) fn emit_call_extern(
             // map, filter, and_then, or_else (and friends) are inlined per call site
             // in `emit_hof::try_emit_option_result_combinator`. Lifted out for
             // readability — see that module's docstring for the full list.
-            if super::emit_hof::try_emit_option_result_combinator(out, dst, name, args, ctx) {
+            if super::emit_hof::try_emit_option_result_combinator(out, dst, name, args, ctx, loc) {
                 return;
             }
             // ── Newtype constructors ────────────────────────────

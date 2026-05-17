@@ -4899,6 +4899,40 @@ fn overflow_wrap() {
 }
 
 #[test]
+fn panic_location_overflow() {
+    // Phase 3 stack-traces: panic message must carry `file:line:col`
+    // for compiler-emitted overflow trap. The fixture overflows on line 3
+    // (the `x + 1` expression — column matches the source location threaded
+    // through the LIR span_map by stages 1b/1c).
+    let fixture = "panic_location_overflow.gg";
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
+    let stem = fixture_path.file_stem().unwrap().to_str().unwrap();
+    let dir = fixture_path.parent().unwrap();
+    let c_path = dir.join(format!("{stem}.c"));
+    let exe_path = dir.join(stem);
+
+    let build = build_with_timeout(gg_command("build").arg(&fixture_path), fixture);
+    assert!(
+        build.status.success(),
+        "Build failed for {fixture}:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr),
+    );
+
+    let run = run_with_timeout(&mut Command::new(&exe_path), fixture);
+    assert!(!run.status.success(), "Expected panic but binary succeeded for {fixture}");
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        stderr.contains("panic_location_overflow.gg:3:") && stderr.contains(": integer overflow"),
+        "Stderr mismatch for {fixture}:\nExpected `panic_location_overflow.gg:3:...: integer overflow`\nGot: {stderr}",
+    );
+
+    let _ = std::fs::remove_file(&c_path);
+    let _ = std::fs::remove_file(&exe_path);
+}
+
+#[test]
 fn string_format() {
     run_gg(
         "string_format.gg",

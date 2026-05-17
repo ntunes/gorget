@@ -93,6 +93,23 @@ impl<'a> EmitContext<'a> {
     }
 }
 
+/// Resolve a span to the panic-site (file, line, col) triple emitted into
+/// runtime panic messages. None (synthetic instruction or absent file
+/// info) returns the conventional <unknown>:0:0 fallback. The filename
+/// is C-string-escaped so callers can interpolate it directly into a
+/// generated `fprintf(stderr, "%s:%d:%d: ...\n", ...)`.
+pub(crate) fn resolve_panic_loc(
+    span: Option<crate::span::Span>,
+    file_infos: &[crate::span::FileInfo],
+) -> (String, u32, u32) {
+    if let Some(s) = span {
+        if let Some((file, line, col)) = crate::span::offset_to_location(file_infos, s.start) {
+            return (escape_c_string(file), line, col);
+        }
+    }
+    ("<unknown>".to_string(), 0, 0)
+}
+
 /// Names of structs provided by the Gorget C runtime — these should NOT
 /// be re-defined by the LIR backend.
 const RUNTIME_STRUCTS: &[&str] = &[
@@ -1766,9 +1783,11 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
         }
 
         // Instructions
-        for inst in &block.insts {
+        for (idx, inst) in block.insts.iter().enumerate() {
+            let span = block.span_map.get(idx).copied().flatten();
+            let loc = resolve_panic_loc(span, &module.file_infos);
             write!(out, "    ").unwrap();
-            emit_inst(out, inst, &ectx);
+            emit_inst(out, inst, &ectx, &loc);
             writeln!(out).unwrap();
 
             // In test functions, register droppable user-named slots on the cleanup stack
@@ -1812,7 +1831,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     writeln!(out, "}}").unwrap();
 }
 
-fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
+fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext, loc: &(String, u32, u32)) {
     let func = ctx.func;
     let module = ctx.module;
     let sn = ctx.sn;
@@ -2013,8 +2032,8 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
         Inst::Add { dst, ty, lhs, rhs, overflow } => {
             if *overflow == Overflow::Trap && matches!(ty, LirType::I64 | LirType::I32 | LirType::I16 | LirType::I8) {
                 let ct = c_type_named(ty, sn);
-                write!(out, "if (__builtin_add_overflow(({ct}){l}, ({ct}){r}, &{d})) {{ fprintf(stderr, \"gorget: integer overflow\\n\"); exit(1); }}",
-                    d = v(*dst), l = v(*lhs), r = v(*rhs)).unwrap();
+                write!(out, "if (__builtin_add_overflow(({ct}){l}, ({ct}){r}, &{d})) {{ fprintf(stderr, \"{f}:{ln}:{cl}: integer overflow\\n\"); exit(1); }}",
+                    d = v(*dst), l = v(*lhs), r = v(*rhs), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
             } else {
                 let ct = c_type_named(ty, sn);
                 write!(out, "{d} = ({ct}){l} + ({ct}){r};", d = v(*dst), l = v(*lhs), r = v(*rhs)).unwrap();
@@ -2023,8 +2042,8 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
         Inst::Sub { dst, ty, lhs, rhs, overflow } => {
             if *overflow == Overflow::Trap && matches!(ty, LirType::I64 | LirType::I32 | LirType::I16 | LirType::I8) {
                 let ct = c_type_named(ty, sn);
-                write!(out, "if (__builtin_sub_overflow(({ct}){l}, ({ct}){r}, &{d})) {{ fprintf(stderr, \"gorget: integer overflow\\n\"); exit(1); }}",
-                    d = v(*dst), l = v(*lhs), r = v(*rhs)).unwrap();
+                write!(out, "if (__builtin_sub_overflow(({ct}){l}, ({ct}){r}, &{d})) {{ fprintf(stderr, \"{f}:{ln}:{cl}: integer overflow\\n\"); exit(1); }}",
+                    d = v(*dst), l = v(*lhs), r = v(*rhs), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
             } else {
                 let ct = c_type_named(ty, sn);
                 write!(out, "{d} = ({ct}){l} - ({ct}){r};", d = v(*dst), l = v(*lhs), r = v(*rhs)).unwrap();
@@ -2033,8 +2052,8 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
         Inst::Mul { dst, ty, lhs, rhs, overflow } => {
             if *overflow == Overflow::Trap && matches!(ty, LirType::I64 | LirType::I32 | LirType::I16 | LirType::I8) {
                 let ct = c_type_named(ty, sn);
-                write!(out, "if (__builtin_mul_overflow(({ct}){l}, ({ct}){r}, &{d})) {{ fprintf(stderr, \"gorget: integer overflow\\n\"); exit(1); }}",
-                    d = v(*dst), l = v(*lhs), r = v(*rhs)).unwrap();
+                write!(out, "if (__builtin_mul_overflow(({ct}){l}, ({ct}){r}, &{d})) {{ fprintf(stderr, \"{f}:{ln}:{cl}: integer overflow\\n\"); exit(1); }}",
+                    d = v(*dst), l = v(*lhs), r = v(*rhs), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
             } else {
                 let ct = c_type_named(ty, sn);
                 write!(out, "{d} = ({ct}){l} * ({ct}){r};", d = v(*dst), l = v(*lhs), r = v(*rhs)).unwrap();
@@ -2058,14 +2077,14 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
                     _ => unreachable!(),
                 };
                 write!(out,
-                    "if (({ct}){r} == 0) {{ fprintf(stderr, \"gorget: division by zero\\n\"); exit(1); }} \
-                     if (({ct}){l} == {tmin} && ({ct}){r} == -1) {{ fprintf(stderr, \"gorget: integer overflow\\n\"); exit(1); }} \
+                    "if (({ct}){r} == 0) {{ fprintf(stderr, \"{f}:{ln}:{cl}: division by zero\\n\"); exit(1); }} \
+                     if (({ct}){l} == {tmin} && ({ct}){r} == -1) {{ fprintf(stderr, \"{f}:{ln}:{cl}: integer overflow\\n\"); exit(1); }} \
                      {d} = ({ct}){l} / ({ct}){r};",
-                    d = v(*dst), l = v(*lhs), r = v(*rhs)).unwrap();
+                    d = v(*dst), l = v(*lhs), r = v(*rhs), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
             } else if matches!(ty, LirType::U64 | LirType::U32 | LirType::U16 | LirType::U8) {
                 let ct = c_type_named(ty, sn);
-                write!(out, "if (({ct}){r} == 0) {{ fprintf(stderr, \"gorget: division by zero\\n\"); exit(1); }} {d} = ({ct}){l} / ({ct}){r};",
-                    d = v(*dst), l = v(*lhs), r = v(*rhs)).unwrap();
+                write!(out, "if (({ct}){r} == 0) {{ fprintf(stderr, \"{f}:{ln}:{cl}: division by zero\\n\"); exit(1); }} {d} = ({ct}){l} / ({ct}){r};",
+                    d = v(*dst), l = v(*lhs), r = v(*rhs), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
             } else {
                 write!(out, "{} = {} / {};", v(*dst), v(*lhs), v(*rhs)).unwrap();
             }
@@ -2085,14 +2104,14 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
                     _ => unreachable!(),
                 };
                 write!(out,
-                    "if (({ct}){r} == 0) {{ fprintf(stderr, \"gorget: division by zero\\n\"); exit(1); }} \
+                    "if (({ct}){r} == 0) {{ fprintf(stderr, \"{f}:{ln}:{cl}: division by zero\\n\"); exit(1); }} \
                      if (({ct}){l} == {tmin} && ({ct}){r} == -1) {{ {d} = 0; }} else \
                      {{ {d} = ({ct}){l} % ({ct}){r}; }}",
-                    d = v(*dst), l = v(*lhs), r = v(*rhs)).unwrap();
+                    d = v(*dst), l = v(*lhs), r = v(*rhs), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
             } else {
                 let ct = c_type_named(ty, sn);
-                write!(out, "if (({ct}){r} == 0) {{ fprintf(stderr, \"gorget: division by zero\\n\"); exit(1); }} {d} = ({ct}){l} % ({ct}){r};",
-                    d = v(*dst), l = v(*lhs), r = v(*rhs)).unwrap();
+                write!(out, "if (({ct}){r} == 0) {{ fprintf(stderr, \"{f}:{ln}:{cl}: division by zero\\n\"); exit(1); }} {d} = ({ct}){l} % ({ct}){r};",
+                    d = v(*dst), l = v(*lhs), r = v(*rhs), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
             }
         }
         Inst::Mod { dst, ty, lhs, rhs, .. } => {
@@ -2118,17 +2137,17 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
                 };
                 write!(
                     out,
-                    "if ({r} == 0) {{ fprintf(stderr, \"gorget: division by zero\\n\"); exit(1); }} \
+                    "if ({r} == 0) {{ fprintf(stderr, \"{f}:{ln}:{cl}: division by zero\\n\"); exit(1); }} \
                      if (({ct}){l} == {tmin} && ({ct}){r} == -1) {{ {d} = 0; }} else \
                      {{ typeof({l}) __t = {l} % {r}; {d} = __t + (__t != 0 && (__t ^ {r}) < 0 ? {r} : 0); }}",
-                    d = v(*dst), l = v(*lhs), r = v(*rhs)
+                    d = v(*dst), l = v(*lhs), r = v(*rhs), f = loc.0, ln = loc.1, cl = loc.2
                 ).unwrap();
             } else {
                 // Unsigned path — no TYPE_MIN issue.
                 write!(
                     out,
-                    "if ({r} == 0) {{ fprintf(stderr, \"gorget: division by zero\\n\"); exit(1); }} {{ typeof({l}) __t = {l} % {r}; {d} = __t + (__t != 0 && (__t ^ {r}) < 0 ? {r} : 0); }}",
-                    d = v(*dst), l = v(*lhs), r = v(*rhs)
+                    "if ({r} == 0) {{ fprintf(stderr, \"{f}:{ln}:{cl}: division by zero\\n\"); exit(1); }} {{ typeof({l}) __t = {l} % {r}; {d} = __t + (__t != 0 && (__t ^ {r}) < 0 ? {r} : 0); }}",
+                    d = v(*dst), l = v(*lhs), r = v(*rhs), f = loc.0, ln = loc.1, cl = loc.2
                 ).unwrap();
             }
         }
@@ -2164,15 +2183,15 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
                 LirType::I8  | LirType::U8  => "uint8_t",
                 _ => ct.as_str(),
             };
-            write!(out, "if ((uint64_t){r} >= (uint64_t)(sizeof({ct}) * 8)) {{ fprintf(stderr, \"gorget: shift out of range\\n\"); exit(1); }} {d} = ({ct})(({uct}){l} << {r});",
-                d = v(*dst), l = v(*lhs), r = v(*rhs)).unwrap();
+            write!(out, "if ((uint64_t){r} >= (uint64_t)(sizeof({ct}) * 8)) {{ fprintf(stderr, \"{f}:{ln}:{cl}: shift out of range\\n\"); exit(1); }} {d} = ({ct})(({uct}){l} << {r});",
+                d = v(*dst), l = v(*lhs), r = v(*rhs), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
         }
         Inst::Shr { dst, ty, lhs, rhs } => {
             // C `>>` on signed negatives is implementation-defined (arithmetic shift on
             // every real target), so only the shift-count needs guarding.
             let ct = c_type_named(ty, sn);
-            write!(out, "if ((uint64_t){r} >= (uint64_t)(sizeof({ct}) * 8)) {{ fprintf(stderr, \"gorget: shift out of range\\n\"); exit(1); }} {d} = ({ct}){l} >> {r};",
-                d = v(*dst), l = v(*lhs), r = v(*rhs)).unwrap();
+            write!(out, "if ((uint64_t){r} >= (uint64_t)(sizeof({ct}) * 8)) {{ fprintf(stderr, \"{f}:{ln}:{cl}: shift out of range\\n\"); exit(1); }} {d} = ({ct}){l} >> {r};",
+                d = v(*dst), l = v(*lhs), r = v(*rhs), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
         }
 
         // Comparison & logic (purely scalar — string comparisons are lowered
@@ -2489,7 +2508,7 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
             write!(out, ");").unwrap();
         }
         Inst::CallExtern { dst, name, args, arg_abis, .. } => {
-            emit_call_extern::emit_call_extern(out, dst, name, args, arg_abis, ctx);
+            emit_call_extern::emit_call_extern(out, dst, name, args, arg_abis, ctx, loc);
         }
         Inst::CallRuntime { dst, callee, args, arg_abis, .. } => {
             // BIR lowering normally rewrites CallRuntime → CallExtern (see
@@ -2497,7 +2516,7 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
             // debug emit path (`Backend::emit_function`) which bypasses BIR.
             // Both backends carry an equivalent fallback.
             let name = callee.c_name().to_string();
-            emit_call_extern::emit_call_extern(out, dst, &name, args, arg_abis, ctx);
+            emit_call_extern::emit_call_extern(out, dst, &name, args, arg_abis, ctx, loc);
         }
         Inst::CollectionCtor { .. } => {
             // CollectionCtor is a canonical-op; BIR lowering expands it into
@@ -2638,20 +2657,23 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
         Inst::BoundsCheck { index, len } => {
             write!(
                 out,
-                "if ((uint64_t){} >= (uint64_t){}) {{ fprintf(stderr, \"index out of bounds\\n\"); abort(); }}",
+                "if ((uint64_t){} >= (uint64_t){}) {{ fprintf(stderr, \"{f}:{ln}:{cl}: index out of bounds\\n\"); abort(); }}",
                 v(*index),
-                v(*len)
+                v(*len),
+                f = loc.0, ln = loc.1, cl = loc.2
             ).unwrap();
         }
         Inst::DivCheck { divisor } => {
             write!(
                 out,
-                "if ({} == 0) {{ fprintf(stderr, \"division by zero\\n\"); abort(); }}",
-                v(*divisor)
+                "if ({} == 0) {{ fprintf(stderr, \"{f}:{ln}:{cl}: division by zero\\n\"); abort(); }}",
+                v(*divisor),
+                f = loc.0, ln = loc.1, cl = loc.2
             ).unwrap();
         }
         Inst::Trap { msg } => {
-            write!(out, "fprintf(stderr, \"{}\"); abort();", escape_c_string(msg)).unwrap();
+            write!(out, "fprintf(stderr, \"{f}:{ln}:{cl}: {}\"); abort();", escape_c_string(msg),
+                f = loc.0, ln = loc.1, cl = loc.2).unwrap();
         }
 
         // Printf

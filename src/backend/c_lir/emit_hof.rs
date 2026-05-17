@@ -25,6 +25,7 @@ pub(super) fn try_emit_option_result_combinator(
     name: &str,
     args: &[ValueId],
     ctx: &super::EmitContext,
+    loc: &(String, u32, u32),
 ) -> bool {
     let module = ctx.module;
     let sn = ctx.sn;
@@ -152,9 +153,9 @@ pub(super) fn try_emit_option_result_combinator(
                 }
                 "unwrap_err" | "unwrap_error" => {
                     write!(out, "{} = ({{ {src_ty} __om_src = *({src_ty}*){opt_ptr}; \
-                        if (__om_src.tag != 1) {{ fprintf(stderr, \"unwrap_error on Ok\\n\"); abort(); }} \
+                        if (__om_src.tag != 1) {{ fprintf(stderr, \"{f}:{ln}:{cl}: unwrap_error on Ok\\n\"); abort(); }} \
                         __om_src.{err_f}; }});",
-                        v(*d)).unwrap();
+                        v(*d), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
                 }
                 "map_err" => {
                     // map_err may change the error type (cross-type error mapping)

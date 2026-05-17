@@ -243,7 +243,7 @@ pub(super) fn emit_option_result_combinator_helpers(out: &mut String, module: &L
                 writeln!(out, "    if (__src.tag == 1) {{").unwrap();
                 writeln!(out, "        return __src.{err_field};").unwrap();
                 writeln!(out, "    }}").unwrap();
-                writeln!(out, "    fprintf(stderr, \"unwrap_err on Ok\\n\"); abort();").unwrap();
+                writeln!(out, "    fprintf(stderr, \"<unknown>:0:0: unwrap_err on Ok\\n\"); abort();").unwrap();
                 writeln!(out, "}}").unwrap();
             }
             "map_err" => {

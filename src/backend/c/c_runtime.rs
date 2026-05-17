@@ -1754,8 +1754,9 @@ static inline const char* gorget_str_concat(const char* a, const char* b) {
 }
 
 // ── Str view functions ──────────────────────────────────────
-// Forward declaration — defined in the panic handler section.
+// Forward declarations — defined in the panic handler section.
 static void gorget_panic(const char* msg);
+static void gorget_panic_at(const char* file, int line, int col, const char* msg);
 
 // Build a Str from a literal C string. Allocation helper used by the C
 // backend when a string value must be materialized at runtime from a raw
@@ -3049,9 +3050,12 @@ __attribute__((constructor)) static void __gorget_register_clone_stats(void) {
 /// Normal panic handler — exits the process.
 pub const PANIC_NORMAL: &str = r#"
 // ── Panic helper ─────────────────────────────────────────────
-static inline void gorget_panic(const char* msg) {
-    fprintf(stderr, "gorget: panic: %s\n", msg);
+static inline void gorget_panic_at(const char* file, int line, int col, const char* msg) {
+    fprintf(stderr, "%s:%d:%d: %s\n", file, line, col, msg);
     exit(1);
+}
+static inline void gorget_panic(const char* msg) {
+    gorget_panic_at("<unknown>", 0, 0, msg);
 }
 "#;
 
@@ -3084,15 +3088,18 @@ static volatile int __gorget_in_test = 0;
 // while the test function's stack frame is still valid.
 static volatile int __gorget_test_cleanup_mark = 0;
 
-static inline void gorget_panic(const char* msg) {
+static inline void gorget_panic_at(const char* file, int line, int col, const char* msg) {
     if (__gorget_in_test) {
         __gorget_test_fail_msg = msg;
         // Run test-body cleanup while stack frame is still valid (locals not yet abandoned).
         __gorget_cleanup_run(__gorget_test_cleanup_mark);
         longjmp(__gorget_test_jmp, 1);
     }
-    fprintf(stderr, "gorget: panic: %s\n", msg);
+    fprintf(stderr, "%s:%d:%d: %s\n", file, line, col, msg);
     exit(1);
+}
+static inline void gorget_panic(const char* msg) {
+    gorget_panic_at("<unknown>", 0, 0, msg);
 }
 
 // ── Timeout support (SIGALRM + setitimer) ────────────────────
