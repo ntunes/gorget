@@ -18182,6 +18182,16 @@ fn vector_struct_loop() {
 }
 
 #[test]
+fn vector_pop_resource_element_no_double_free() {
+    // Regression sentinel for `Vector[T].pop()` on resource-typed T.
+    // See fixture for the truncate-by-pop rollback shape this locks in.
+    run_gg(
+        "vector_pop_resource_element_no_double_free.gg",
+        "charlie\nbravo\nalpha\ndone",
+    );
+}
+
+#[test]
 fn string_concat_loop_fn() {
     run_gg("string_concat_loop_fn.gg", "ababab\none, two, three\n");
 }
