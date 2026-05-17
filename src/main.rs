@@ -376,6 +376,60 @@ fn parse_features(args: &[String]) -> Vec<String> {
     features
 }
 
+/// Bitset of selected `--clones[=MODE]` modes. The unified clone-diagnostic
+/// flag superseded `--show-clones` (→ `sites`) and `--clone-stats` (→ `stats`);
+/// the legacy spellings remain as aliases. `all` is shorthand for `verbose,stats`.
+#[derive(Debug, Clone, Copy, Default)]
+struct CloneDiagModes {
+    /// Compact compile-time report: file:line:col  type  reason.
+    sites: bool,
+    /// Compile-time report with size_bytes + runtime_fn columns. Subsumes the
+    /// historical `--trace-cow` plan (no separate flag was ever shipped).
+    verbose: bool,
+    /// Runtime instrumentation: atexit handler emitting `[clone-stats] …`.
+    /// Aggregate counters today; per-CloneId breakdown is future work.
+    stats: bool,
+}
+
+/// Parse `--clones[=MODE[,MODE…]]`, plus the legacy aliases `--show-clones`
+/// (→ `sites`) and `--clone-stats` (→ `stats`). Recognised modes are
+/// `sites`, `verbose`, `stats`, `all`. Returns `Err(msg)` on unknown modes.
+fn parse_clone_modes(args: &[String]) -> Result<CloneDiagModes, String> {
+    let mut modes = CloneDiagModes::default();
+
+    // Legacy spellings — translate at parse time so existing CI keeps working.
+    if args.iter().any(|a| a == "--show-clones") {
+        modes.sites = true;
+    }
+    if args.iter().any(|a| a == "--clone-stats") {
+        modes.stats = true;
+    }
+
+    for a in args {
+        let body = if a == "--clones" {
+            // Bare flag → default to `sites`.
+            "sites"
+        } else if let Some(v) = a.strip_prefix("--clones=") {
+            v
+        } else {
+            continue;
+        };
+        for tok in body.split(',') {
+            match tok.trim() {
+                "" => continue,
+                "sites" => modes.sites = true,
+                "verbose" => modes.verbose = true,
+                "stats" => modes.stats = true,
+                "all" => { modes.verbose = true; modes.stats = true; }
+                other => return Err(format!(
+                    "Unknown --clones mode '{other}'. Valid modes: sites, verbose, stats, all"
+                )),
+            }
+        }
+    }
+    Ok(modes)
+}
+
 /// Build a .gg source file: parse → analyze → GIR → LIR → C → binary.
 fn try_build_ir(
     filename: &str,
@@ -390,6 +444,7 @@ fn try_build_ir(
     emit_lir: bool,
     emit_c_lir: bool,
     show_clones: bool,
+    clones_verbose: bool,
     clone_stats: bool,
     backend_name: &str,
     target: &str,
@@ -440,11 +495,24 @@ fn try_build_ir(
     // Lower AST to GIR
     let mut gir_module = gorget::ir::lowering::lower_module(&module, &result, &options);
 
-    // Display clone report only when --show-clones is passed
+    // Display clone report when `--clones=sites` / `--clones=verbose` (or
+    // legacy `--show-clones`) is passed. Both modes consume the same
+    // ImplicitCloneWarning vector; `verbose` adds size_bytes + runtime_fn
+    // columns. One source of truth, mode-selected rendering.
     if show_clones {
         let reporter = ErrorReporter::new_multi(file_infos.clone());
         let mut shown = std::collections::HashSet::new();
-        let mut entries: Vec<(String, usize, usize, String, &str)> = Vec::new();
+        struct CloneEntry<'a> {
+            file: String,
+            line: usize,
+            col: usize,
+            id: u32,
+            type_name: String,
+            reason: &'a str,
+            size_bytes: usize,
+            runtime_fn: String,
+        }
+        let mut entries: Vec<CloneEntry> = Vec::new();
         for warn in &gir_module.implicit_clone_warnings {
             if !shown.insert(warn.span.start) {
                 continue;
@@ -463,12 +531,37 @@ fn try_build_ir(
                 gorget::ir::ImplicitCloneReason::CallArg => "call argument",
                 gorget::ir::ImplicitCloneReason::BorrowedExternReturn => "borrowed extern return",
             };
-            entries.push((file, line, col, warn.type_name.clone(), reason));
+            entries.push(CloneEntry {
+                file, line, col,
+                id: warn.id.0,
+                type_name: warn.type_name.clone(),
+                reason,
+                size_bytes: warn.size_bytes,
+                runtime_fn: warn.runtime_fn.clone(),
+            });
         }
-        entries.sort_by(|a, b| a.1.cmp(&b.1).then(a.2.cmp(&b.2)));
-        eprintln!("\n=== Clone Report ({} implicit clone{}) ===", entries.len(), if entries.len() == 1 { "" } else { "s" });
-        for (file, line, col, type_name, reason) in &entries {
-            eprintln!("  {file}:{line}:{col}  {type_name:<16} {reason}");
+        entries.sort_by(|a, b| a.line.cmp(&b.line).then(a.col.cmp(&b.col)));
+        let n = entries.len();
+        let header = if clones_verbose { "Clone Report (verbose)" } else { "Clone Report" };
+        eprintln!("\n=== {header} ({n} implicit clone{}) ===", if n == 1 { "" } else { "s" });
+        if clones_verbose {
+            // file:line:col  id   type             reason                            size  runtime_fn
+            for e in &entries {
+                let size_str = if e.size_bytes == 0 { String::from("-") } else { e.size_bytes.to_string() };
+                let rt = if e.runtime_fn.is_empty() { "-" } else { e.runtime_fn.as_str() };
+                eprintln!(
+                    "  {file}:{line}:{col}  #{id:<4} {type_name:<16} {reason:<32} {size:>4}  {rt}",
+                    file = e.file, line = e.line, col = e.col,
+                    id = e.id, type_name = e.type_name, reason = e.reason,
+                    size = size_str, rt = rt,
+                );
+            }
+        } else {
+            for e in &entries {
+                eprintln!("  {file}:{line}:{col}  {type_name:<16} {reason}",
+                    file = e.file, line = e.line, col = e.col,
+                    type_name = e.type_name, reason = e.reason);
+            }
         }
         eprintln!();
     }
@@ -1790,7 +1883,7 @@ fn run_tui() {
                 continue;
             }
             let gg_path_str = gg_path.display().to_string();
-            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false, false, false, false, "c-lir", "native") {
+            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false, false, false, false, false, "c-lir", "native") {
                 Err(e) => {
                     eprintln!("{e}");
                 }
@@ -1826,7 +1919,7 @@ fn run_tui() {
                 continue;
             }
             let gg_path_str = gg_path.display().to_string();
-            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false, false, false, false, "c-lir", "native") {
+            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false, false, false, false, false, "c-lir", "native") {
                 Err(e) => {
                     eprintln!("{e}");
                 }
@@ -2240,8 +2333,13 @@ fn main() {
         println!("  --emit-gir              Dump GIR (intermediate representation) to stdout instead of compiling");
         println!("  --emit-lir              Dump LIR (low-level SSA IR) to stdout instead of compiling");
         println!("  --emit-c-lir            Dump C code generated from LIR to stdout");
-        println!("  --show-clones           Print report of all implicit clones during compilation");
-        println!("  --clone-stats           Emit `[clone-stats] ...` line at program exit (runtime counters)");
+        println!("  --clones[=MODE,…]       Clone diagnostics. Modes: sites (default), verbose, stats, all");
+        println!("                          sites: file:line:col + type + reason");
+        println!("                          verbose: + size_bytes + runtime_fn (subsumes the old --trace-cow plan)");
+        println!("                          stats: runtime `[clone-stats]` atexit line");
+        println!("                          all: alias for verbose,stats");
+        println!("  --show-clones           Alias for --clones=sites (legacy)");
+        println!("  --clone-stats           Alias for --clones=stats  (legacy)");
         println!();
         println!("Targets:");
         println!("  --target native                 Default — build for the host OS with full runtime");
@@ -2300,8 +2398,14 @@ fn main() {
             sanitize, scheduler_mode: parse_scheduler(&args),
             ..Default::default()
         };
-        let clone_stats = args.iter().any(|a| a == "--clone-stats");
-        let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, false, clone_stats, "c-lir", "native")
+        let clone_modes = parse_clone_modes(&args).unwrap_or_else(|e| {
+            eprintln!("{e}");
+            process::exit(1);
+        });
+        let show_clones = clone_modes.sites || clone_modes.verbose;
+        let clones_verbose = clone_modes.verbose;
+        let clone_stats = clone_modes.stats;
+        let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, show_clones, clones_verbose, clone_stats, "c-lir", "native")
             .unwrap_or_else(|e| { eprintln!("{e}"); process::exit(1); });
         let status = Command::new(&exe_path)
             .status()
@@ -2435,8 +2539,13 @@ fn main() {
         .unwrap_or("c-lir");
     let shared_mode = args.iter().any(|a| a == "--shared");
     let show_borrows = args.iter().any(|a| a == "--show-borrows");
-    let show_clones = args.iter().any(|a| a == "--show-clones");
-    let clone_stats = args.iter().any(|a| a == "--clone-stats");
+    let clone_modes = parse_clone_modes(&args).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        process::exit(1);
+    });
+    let show_clones = clone_modes.sites || clone_modes.verbose;
+    let clones_verbose = clone_modes.verbose;
+    let clone_stats = clone_modes.stats;
     let warn_const = args.iter().any(|a| a == "--warn-const");
     let target = args.iter()
         .position(|a| a == "--target")
@@ -2751,7 +2860,7 @@ fn main() {
                     sanitize, scheduler_mode,
                     ..Default::default()
                 };
-                let result = try_build_ir(filename, &source, dep_paths, None, None, Some(shared_path), &features, lowering_opts, emit_gir, emit_lir, emit_c_lir, show_clones, clone_stats, backend_name, target);
+                let result = try_build_ir(filename, &source, dep_paths, None, None, Some(shared_path), &features, lowering_opts, emit_gir, emit_lir, emit_c_lir, show_clones, clones_verbose, clone_stats, backend_name, target);
                 match result {
                     Ok(p) => if !emit_gir && !emit_lir && !emit_c_lir { println!("Built shared library: {}", p.display()); }
                     Err(e) => {
@@ -2781,7 +2890,7 @@ fn main() {
                     sanitize,
                     ..Default::default()
                 };
-                let result = try_build_ir(filename, &source, dep_paths, None, shared_output_path.as_deref(), None, &features, lowering_opts, emit_gir, emit_lir, emit_c_lir, show_clones, clone_stats, backend_name, target);
+                let result = try_build_ir(filename, &source, dep_paths, None, shared_output_path.as_deref(), None, &features, lowering_opts, emit_gir, emit_lir, emit_c_lir, show_clones, clones_verbose, clone_stats, backend_name, target);
                 match result {
                     Ok(p) => if !emit_gir && !emit_lir && !emit_c_lir { println!("Built: {}", p.display()); }
                     Err(e) => {
@@ -2848,7 +2957,7 @@ fn main() {
                 sanitize, scheduler_mode,
                 ..Default::default()
             };
-            let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, false, clone_stats, "c-lir", "native");
+            let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, show_clones, clones_verbose, clone_stats, "c-lir", "native");
             match result {
                 Ok(exe_path) => {
                     // Forward positional args that appear AFTER the script filename
@@ -3099,7 +3208,7 @@ fn main() {
                 sanitize, scheduler_mode,
                 ..Default::default()
             };
-            let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, false, false, "c-lir", "native")
+            let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, false, false, false, "c-lir", "native")
                 .unwrap_or_else(|e| {
                     eprintln!("{e}");
                     process::exit(1);

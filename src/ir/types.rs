@@ -13,6 +13,22 @@ pub struct LocalId(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BlockId(pub u32);
 
+/// Stable per-clone-site identifier. Allocated monotonically at GIR-lowering
+/// time at every `LoweringContext::warn_implicit_clone` call. Stable within
+/// a single build; deterministic in emission order. Becomes the join key
+/// between the compile-time `--clones=sites` map and the (future) runtime
+/// per-site counter table — `(site → span/type/reason/runtime_fn/size)`
+/// joined to `(site → execution count)` answers the real perf question:
+/// which clones are expensive (size × frequency)?
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CloneId(pub u32);
+
+impl fmt::Display for CloneId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "C{}", self.0)
+    }
+}
+
 impl fmt::Display for TypeId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "TypeId({})", self.0)

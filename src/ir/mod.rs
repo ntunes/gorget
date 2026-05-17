@@ -132,15 +132,35 @@ pub struct RuntimeFeatures {
 }
 
 /// Warning emitted when the compiler auto-clones a resource type.
-/// Makes hidden allocations visible — future `--show-clones` will use this.
+/// Drives the unified `--clones[=MODE]` diagnostic. `sites` consumes
+/// (span, type_name, reason); `verbose` adds `size_bytes` + `runtime_fn`;
+/// `stats` (future per-id wiring) joins on `id` to compute the real
+/// (size × frequency) perf cost per clone site.
 #[derive(Debug, Clone)]
 pub struct ImplicitCloneWarning {
+    /// Stable identifier for this clone site. Monotonically allocated at
+    /// emission time; deterministic within a build. Future runtime
+    /// instrumentation will index a per-site counter array by this id.
+    pub id: crate::ir::types::CloneId,
     /// Source span of the expression that triggers the clone.
     pub span: crate::span::Span,
     /// Human-readable type name being cloned.
     pub type_name: String,
     /// What triggered the clone.
     pub reason: ImplicitCloneReason,
+    /// Approximate byte cost of the clone (handle size for resource types;
+    /// 0 when not computable at warning-emit time). Resource-type handles
+    /// are 24–128 bytes; the payload they own is reflected in `runtime_fn`
+    /// rather than measured here, because element/recursive counts are not
+    /// known statically.
+    pub size_bytes: usize,
+    /// Runtime function the compiler will call to perform the clone
+    /// (`gorget_array_clone`, `gorget_map_clone`, `<UserStruct>__clone`,
+    /// …). Empty when the boundary clone elides to a value copy or the
+    /// dispatch is ambiguous at this site. Sourced from
+    /// `LoweringContext::clone_fn_for_ptr` — the same typed metadata the
+    /// lowering uses to emit the call; no name-matching at consumers.
+    pub runtime_fn: String,
 }
 
 /// Suggestion to pass an argument with `!` (move) instead of by borrow,

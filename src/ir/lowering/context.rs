@@ -328,6 +328,11 @@ pub struct LoweringContext<'a> {
     pub sentinel_to_option_methods: rustc_hash::FxHashSet<String>,
     /// Accumulated implicit clone warnings during lowering.
     pub implicit_clone_warnings: Vec<crate::ir::ImplicitCloneWarning>,
+    /// Monotonic allocator for `CloneId` — bumped once per `warn_implicit_clone`
+    /// call so every warning gets a stable per-build identifier. The next-id
+    /// scheme is intentionally simple (u32 counter, no recycling); deterministic
+    /// within a build.
+    pub next_clone_id: u32,
     /// Suggestions to pass arguments with `!` (move) for last-use optimization.
     pub move_suggestions: Vec<crate::ir::MoveSuggestion>,
     /// Functions that clone a bare-param at a return/ownership boundary.
@@ -440,6 +445,7 @@ impl<'a> LoweringContext<'a> {
             trivial_getter_methods: rustc_hash::FxHashSet::default(),
             sentinel_to_option_methods: rustc_hash::FxHashSet::default(),
             implicit_clone_warnings: Vec::new(),
+            next_clone_id: 0,
             move_suggestions: Vec::new(),
             fn_consumed_params: FxHashMap::default(),
             runtime_callees: FxHashMap::default(),
@@ -726,6 +732,14 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Emit an implicit clone warning for a resource type being auto-cloned.
+    ///
+    /// The clone-emit site already knows the type being cloned; this is the
+    /// one chokepoint where the four diagnostic fields are populated:
+    /// `id` from a monotonic counter, `type_name` demangled from the registry,
+    /// `runtime_fn` from `clone_fn_for_ptr` (same typed metadata the lowering
+    /// uses to emit the call — no name-matching), and `size_bytes` from a
+    /// handle-size table keyed on the runtime function (which already encodes
+    /// the type's storage category).
     pub fn warn_implicit_clone(
         &mut self,
         span: crate::span::Span,
@@ -735,10 +749,27 @@ impl<'a> LoweringContext<'a> {
         let type_name = self.type_registry.type_name(type_id)
             .map(|n| demangle_type_name(&n))
             .unwrap_or_else(|| "unknown".to_string());
+        // The clone-emit dispatch routes through `clone_fn_for_ptr` — call it
+        // here so the diagnostic carries the *same* runtime function name the
+        // lowering actually emits. Strips the leading `&` indirection when the
+        // type_id is itself a Ptr/MutPtr (the warning is conceptually about
+        // the pointee being cloned).
+        let inner = match self.type_registry.get(type_id) {
+            Some(crate::ir::types::GirType::Ptr(t)) => *t,
+            Some(crate::ir::types::GirType::MutPtr(t)) => *t,
+            _ => type_id,
+        };
+        let runtime_fn = self.clone_fn_for_ptr(inner).unwrap_or_default();
+        let size_bytes = clone_handle_size_for_runtime_fn(&runtime_fn);
+        let id = crate::ir::types::CloneId(self.next_clone_id);
+        self.next_clone_id = self.next_clone_id.wrapping_add(1);
         self.implicit_clone_warnings.push(crate::ir::ImplicitCloneWarning {
+            id,
             span,
             type_name,
             reason,
+            size_bytes,
+            runtime_fn,
         });
     }
 
@@ -762,6 +793,36 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
+}
+
+/// Approximate handle size in bytes for the runtime clone function, used by
+/// the `--clones=verbose` diagnostic to give users a sense of how much each
+/// site copies. These are the cloned *handles* — the payload is reflected
+/// in the runtime function name rather than measured here (a `gorget_array_clone`
+/// can be cheap for an empty vector or expensive for a vector of strings;
+/// the dynamic cost shows up in the `stats` mode's per-id counter, future work).
+///
+/// Sizes track the typedefs in `src/backend/c/c_runtime.rs` (see lines ~234ff).
+/// The map is keyed on runtime fn name rather than type because the runtime fn
+/// already encodes the storage category (Array vs Map vs String, etc.); per
+/// the layering doctrine, we read the typed dispatch metadata, not pattern-match
+/// on type_name.
+pub(crate) fn clone_handle_size_for_runtime_fn(runtime_fn: &str) -> usize {
+    match runtime_fn {
+        // GorgetArray = {data, cap, len, elem_size, alloc, elem_drop, elem_clone, elem_materialize} = 8 ptrs
+        "gorget_array_clone" => 64,
+        // GorgetMap (= GorgetSet) = 18 fields, mostly 8-byte ptrs/sizes
+        "gorget_map_clone" | "gorget_set_clone" => 144,
+        // GorgetString = {data, cap, len, alloc} = 32
+        "gorget_string_clone_to_owned" | "gorget_string_cow_materialize" => 32,
+        // GorgetClosure = {fn, env} = 16
+        "gorget_closure_clone" => 16,
+        // Box, Shared, Weak, Channel — small ref-counted handle; let runtime_fn empty fall through to 0.
+        "" => 0,
+        // User struct/enum `__clone` — handle size is unknown without a TypeRegistry lookup;
+        // fall back to 0 (caller's verbose output renders this as a dash).
+        _ => 0,
+    }
 }
 
 /// Convert an internal mangled type name to user-friendly Gorget syntax.
