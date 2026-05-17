@@ -6715,6 +6715,24 @@ twenty",
     );
 }
 
+// gorget-js snag #4: alias-rebind around an empty Dict was clobbering the
+// "ordered" discriminator (gorget_map_clone skipped allocating dst.order
+// when src->order_len == 0), so subsequent puts on the clone fell into the
+// unordered-HashMap branch and keys() iterated in hash bucket order.
+#[test]
+fn dict_alias_rebind_order() {
+    run_gg(
+        "dict_alias_rebind_order.gg",
+        "\
+a
+b
+c
+thirty
+ten
+twenty",
+    );
+}
+
 #[test]
 fn dict_get_or_put() {
     run_gg(

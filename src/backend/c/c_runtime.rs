@@ -6174,9 +6174,16 @@ static inline GorgetMap gorget_map_clone(const GorgetMap* src) {
         dst.cap = src->cap;
         dst.count = src->count;
         dst.tombstones = src->tombstones;
-        if (src->order && src->order_len > 0) {
+        // Preserve "ordered Dict" status even when src is empty (order_len == 0).
+        // gorget_dict_new allocates `order` up front so put() takes the ordered
+        // branch; cloning must propagate that, otherwise the clone silently
+        // degrades to an unordered HashMap and subsequent puts iterate in hash
+        // bucket order instead of insertion order. (gorget-js snag #4.)
+        if (src->order) {
             dst.order = a->alloc(a->ctx, src->cap * sizeof(size_t));
-            memcpy(dst.order, src->order, src->order_len * sizeof(size_t));
+            if (src->order_len > 0) {
+                memcpy(dst.order, src->order, src->order_len * sizeof(size_t));
+            }
             dst.order_len = src->order_len;
         }
         // Deep-clone resource-type values so the copy is independent.

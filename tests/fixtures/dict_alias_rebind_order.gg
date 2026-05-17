@@ -1,0 +1,49 @@
+from std.collections import Dict, Vector
+
+# Regression for gorget-js snag #4: Dict iteration order must survive
+# the get-mutate-set "alias-rebind" pattern. Each `tmp = d` triggers
+# gorget_map_clone; the clone must preserve the "ordered Dict" status
+# (order != NULL) even when the source is empty, otherwise the cloned
+# dict silently degrades to an unordered HashMap and subsequent puts
+# iterate in hash bucket order instead of insertion order.
+int main():
+    Dict[String, int] d = Dict[String, int]()
+
+    Dict[String, int] tmp = d
+    tmp.put("a", 1)
+    d = tmp
+
+    Dict[String, int] tmp2 = d
+    tmp2.put("b", 2)
+    d = tmp2
+
+    Dict[String, int] tmp3 = d
+    tmp3.put("c", 3)
+    d = tmp3
+
+    Vector[String] ks = d.keys()
+    int j = 0
+    while j < ks.len():
+        print(ks.get(j).unwrap())
+        j = j + 1
+
+    # Same shape, non-String keys: ensure the fix isn't accidentally
+    # specific to string-keyed dicts.
+    Dict[int, String] labels = Dict[int, String]()
+    Dict[int, String] lt = labels
+    lt.put(30, "thirty")
+    labels = lt
+    Dict[int, String] lt2 = labels
+    lt2.put(10, "ten")
+    labels = lt2
+    Dict[int, String] lt3 = labels
+    lt3.put(20, "twenty")
+    labels = lt3
+
+    Vector[int] ki = labels.keys()
+    int kj = 0
+    while kj < ki.len():
+        print(labels.get(ki.get(kj).unwrap()).unwrap())
+        kj = kj + 1
+
+    return 0
