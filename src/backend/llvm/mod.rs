@@ -469,6 +469,31 @@ fn llvm_escape_string(s: &str) -> String {
     out
 }
 
+/// Resolve a span to the panic-site (file, line, col) triple emitted into
+/// runtime panic messages. None (synthetic instruction or absent file
+/// info) returns the conventional `<unknown>:0:0` fallback. The filename
+/// is returned raw — the LLVM-side caller may either bake it into a
+/// pre-formatted message string (escaped via `llvm_escape_string` at the
+/// interning site) or pass it as an argument to `@gorget_panic_at` via a
+/// dedicated `@.str.N` global.
+///
+/// Mirrors `src/backend/c_lir/mod.rs::resolve_panic_loc`. The C-side
+/// version pre-applies `escape_c_string` since its callers interpolate
+/// directly into emitted C source; the LLVM backend escapes lazily so
+/// the same filename can flow through both the baked-message and
+/// runtime-arg paths without double-escaping.
+fn resolve_panic_loc(
+    span: Option<crate::span::Span>,
+    file_infos: &[crate::span::FileInfo],
+) -> (String, u32, u32) {
+    if let Some(s) = span {
+        if let Some((file, line, col)) = crate::span::offset_to_location(file_infos, s.start) {
+            return (file.to_string(), line, col);
+        }
+    }
+    ("<unknown>".to_string(), 0, 0)
+}
+
 
 
 // ── Struct Names ───────────────────────────────────────────────────────────
@@ -780,27 +805,13 @@ pub fn generate_llvm_ir(module: &LirModule) -> String {
                 if let Inst::Printf { fmt, .. } | Inst::Fprintf { fmt, .. } = inst {
                     str_globals.intern(fmt);
                 }
-                if let Inst::Trap { msg, .. } = inst {
-                    str_globals.intern(msg);
-                }
-                if let Inst::BoundsCheck { .. } = inst {
-                    str_globals.intern("index out of bounds: index %lld, len %lld\n");
-                }
-                if let Inst::DivCheck { .. } = inst {
-                    str_globals.intern("division by zero\n");
-                }
-                if let Inst::Div { ty, .. } | Inst::Rem { ty, .. } = inst {
-                    if ty.is_integer() {
-                        str_globals.intern("gorget: division by zero\n");
-                    }
-                }
-                if let Inst::Add { overflow: Overflow::Trap, ty, .. }
-                    | Inst::Sub { overflow: Overflow::Trap, ty, .. }
-                    | Inst::Mul { overflow: Overflow::Trap, ty, .. } = inst {
-                    if ty.is_integer() {
-                        str_globals.intern("gorget: integer overflow\n");
-                    }
-                }
+                // Trap / BoundsCheck / DivCheck / overflow arms used to
+                // pre-intern shared `gorget: <msg>` constants here; the
+                // panic-location pass (stack-traces phase 3) bakes the
+                // per-site `file:line:col:` prefix into each message, so
+                // the strings differ per call site and are interned lazily
+                // in `emit_inst` instead. Late-added globals are emitted
+                // after the function bodies — see `pre_intern_count` below.
             }
         }
     }
@@ -1116,7 +1127,7 @@ fn emit_globals(out: &mut String, module: &LirModule, snames: &HashMap<u32, Stri
 /// Names that are declared as libc builtins — skip if they also appear in module externs.
 const LIBC_BUILTINS: &[&str] = &[
     "printf", "fprintf", "abort", "memset", "memcpy", "exit", "malloc", "free", "realloc", "calloc",
-    "gorget_panic", "gorget_init_args",
+    "gorget_panic", "gorget_panic_at", "gorget_init_args",
     // Printf-like functions — we call them with (ptr, ...) signature, skip extern declaration
     "gorget_string_format", "gorget_string_format_alloc", "fprintf_stderr",
     // gorget_bool_to_str — declared with sret in libc section
@@ -1139,6 +1150,12 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     writeln!(out, "declare ptr @memcpy(ptr, ptr, i64)").unwrap();
     writeln!(out, "declare void @gorget_init_args(i32, ptr)").unwrap();
     writeln!(out, "declare void @gorget_panic(ptr)").unwrap();
+    // `gorget_panic_at(file, line, col, msg)` is the location-aware panic
+    // entry point. Compiler-emit `gorget_panic` call sites are rewritten
+    // to `gorget_panic_at` in the CallExtern handler so the runtime
+    // message carries `file:line:col`. Mirrors the C-backend declaration
+    // at `src/backend/c/c_runtime.rs` (PANIC_NORMAL / test variant).
+    writeln!(out, "declare void @gorget_panic_at(ptr, i32, i32, ptr)").unwrap();
     // Trace runtime — declared unconditionally; the linker drops unused
     // declares. Provides the envelope emitters used at function entry,
     // block entry/exit, and branch/return points when `directive trace`
@@ -2681,8 +2698,14 @@ fn emit_function(
         let mut trap_counter = 0u32;
         let mut current_label = format!("bb{bid}");
         let mut df_stack: Vec<u32> = Vec::new(); // drop flag open/close nesting
-        for inst in &block.insts {
-            emit_inst(out, inst, func, module, snames, str_globals, &val_types, bid, &mut trap_counter, &mut current_label, &mut df_stack);
+        for (inst_idx, inst) in block.insts.iter().enumerate() {
+            // Resolve panic location per-instruction. Synthetic instructions
+            // (no span entry) and missing file infos fall back to
+            // `<unknown>:0:0`. Mirrors the C backend's pattern at
+            // src/backend/c_lir/mod.rs `resolve_panic_loc`.
+            let span = block.span_map.get(inst_idx).copied().flatten();
+            let loc = resolve_panic_loc(span, &module.file_infos);
+            emit_inst(out, inst, func, module, snames, str_globals, &val_types, bid, &mut trap_counter, &mut current_label, &mut df_stack, &loc);
 
         }
 
@@ -2781,6 +2804,7 @@ fn emit_inst(
     trap_counter: &mut u32,
     current_label: &mut String,
     df_stack: &mut Vec<u32>,
+    loc: &(String, u32, u32),
 ) {
     // BIR lowering normally rewrites CallRuntime → CallExtern. Per-function
     // debug emit (`Backend::emit_function`) bypasses BIR and may hand us a
@@ -3043,7 +3067,7 @@ fn emit_inst(
         Inst::Add { dst, ty, lhs, rhs, overflow } => {
             let lty = llvm_type(ty);
             if *overflow == Overflow::Trap && ty.is_integer() {
-                emit_overflow_check(out, "add", dst, lhs, rhs, ty, snames, block_id, trap_counter, current_label, str_globals, val_types);
+                emit_overflow_check(out, "add", dst, lhs, rhs, ty, snames, block_id, trap_counter, current_label, str_globals, val_types, loc);
             } else if ty.is_float() {
                 writeln!(out, "  %v{} = fadd {lty} %v{}, %v{}", dst.0, lhs.0, rhs.0).unwrap();
             } else {
@@ -3053,7 +3077,7 @@ fn emit_inst(
         Inst::Sub { dst, ty, lhs, rhs, overflow } => {
             let lty = llvm_type(ty);
             if *overflow == Overflow::Trap && ty.is_integer() {
-                emit_overflow_check(out, "sub", dst, lhs, rhs, ty, snames, block_id, trap_counter, current_label, str_globals, val_types);
+                emit_overflow_check(out, "sub", dst, lhs, rhs, ty, snames, block_id, trap_counter, current_label, str_globals, val_types, loc);
             } else if ty.is_float() {
                 writeln!(out, "  %v{} = fsub {lty} %v{}, %v{}", dst.0, lhs.0, rhs.0).unwrap();
             } else {
@@ -3063,7 +3087,7 @@ fn emit_inst(
         Inst::Mul { dst, ty, lhs, rhs, overflow } => {
             let lty = llvm_type(ty);
             if *overflow == Overflow::Trap && ty.is_integer() {
-                emit_overflow_check(out, "mul", dst, lhs, rhs, ty, snames, block_id, trap_counter, current_label, str_globals, val_types);
+                emit_overflow_check(out, "mul", dst, lhs, rhs, ty, snames, block_id, trap_counter, current_label, str_globals, val_types, loc);
             } else if ty.is_float() {
                 writeln!(out, "  %v{} = fmul {lty} %v{}, %v{}", dst.0, lhs.0, rhs.0).unwrap();
             } else {
@@ -3084,7 +3108,8 @@ fn emit_inst(
                 writeln!(out, "  %{cmp} = icmp eq {lty} %v{}, 0", rhs.0).unwrap();
                 writeln!(out, "  br i1 %{cmp}, label %{trap_label}, label %{ok_label}").unwrap();
                 writeln!(out, "{trap_label}:").unwrap();
-                let panic_msg_idx = str_globals.get_index("gorget: division by zero\n");
+                let panic_msg = format!("{}:{}:{}: division by zero\n", loc.0, loc.1, loc.2);
+                let panic_msg_idx = str_globals.intern(&panic_msg);
                 let stderr_name = format!("divz.{block_id}.{uid}.stderr");
                 writeln!(out, "  %{stderr_name} = load ptr, ptr @stderr").unwrap();
                 writeln!(out, "  call i32 (ptr, ptr, ...) @fprintf(ptr %{stderr_name}, ptr @.str.{panic_msg_idx})").unwrap();
@@ -3110,7 +3135,8 @@ fn emit_inst(
                 writeln!(out, "  %{cmp} = icmp eq {lty} %v{}, 0", rhs.0).unwrap();
                 writeln!(out, "  br i1 %{cmp}, label %{trap_label}, label %{ok_label}").unwrap();
                 writeln!(out, "{trap_label}:").unwrap();
-                let rem_panic_idx = str_globals.get_index("gorget: division by zero\n");
+                let rem_panic = format!("{}:{}:{}: division by zero\n", loc.0, loc.1, loc.2);
+                let rem_panic_idx = str_globals.intern(&rem_panic);
                 let stderr_name = format!("remz.{block_id}.{uid}.stderr");
                 writeln!(out, "  %{stderr_name} = load ptr, ptr @stderr").unwrap();
                 writeln!(out, "  call i32 (ptr, ptr, ...) @fprintf(ptr %{stderr_name}, ptr @.str.{rem_panic_idx})").unwrap();
@@ -3636,6 +3662,41 @@ fn emit_inst(
             // ── Drop guards are now Inst::DropGuardOpen/Close (not CallExtern) ──
 
             // ── Closure dispatch is now Inst::CallClosure (not CallExtern) ──
+
+            // ── Panic with source location ──────────────────────────
+            // Compiler-emit `gorget_panic(msg)` is rewritten to
+            // `gorget_panic_at(file, line, col, msg)` so the runtime
+            // message carries the call site location. The arg (Str by
+            // value or ptr to Str struct) is converted to `const char*`
+            // via `gorget_str_to_cstr`, matching the C backend's path in
+            // `src/backend/c_lir/emit_call_extern.rs`. Runtime-internal
+            // panics keep the 1-arg `gorget_panic` (the runtime wrapper
+            // degrades to `<unknown>:0:0`) until per-runtime-fn span
+            // plumbing lands in a later phase.
+            if name == "gorget_panic" && args.len() == 1 {
+                let a = args[0];
+                let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
+                let is_str_struct = matches!(arg_ty,
+                    Some(LirType::PtrTo(sid)) | Some(LirType::Struct(sid))
+                    if snames.get(&sid.0).map_or(false, |n| n == "GorgetString" || n == "Str"));
+                // Intern the file path as a string global; line/col are i32 constants.
+                let file_idx = str_globals.intern(&loc.0);
+                let msg_arg = if is_str_struct {
+                    // GorgetString → const char* via gorget_str_to_cstr.
+                    let uid = *trap_counter;
+                    *trap_counter += 1;
+                    let cstr_name = format!("gp.{block_id}.{uid}.cstr");
+                    let str_attr_call = gorget_string_byval_attr(snames);
+                    writeln!(out, "  %{cstr_name} = call ptr @gorget_str_to_cstr(ptr {str_attr_call}%v{})", a.0).unwrap();
+                    format!("%{cstr_name}")
+                } else {
+                    // Already an opaque pointer (e.g. const char* literal).
+                    format!("%v{}", a.0)
+                };
+                writeln!(out, "  call void @gorget_panic_at(ptr @.str.{file_idx}, i32 {}, i32 {}, ptr {msg_arg})",
+                    loc.1, loc.2).unwrap();
+                return;
+            }
 
             // ── Newtype constructors ──────────────────────────────
             // If the extern name matches a struct name with exactly 1 field,
@@ -5976,7 +6037,10 @@ fn emit_inst(
             writeln!(out, "  %{cmp_name} = icmp uge i64 %v{}, %v{}", index.0, len.0).unwrap();
             writeln!(out, "  br i1 %{cmp_name}, label %{trap_label}, label %{ok_label}").unwrap();
             writeln!(out, "{trap_label}:").unwrap();
-            let fmt_idx = str_globals.get_index("index out of bounds: index %lld, len %lld\n");
+            // Bake the panic location prefix into the fprintf format. The
+            // index/len ints are still passed at runtime.
+            let bc_fmt = format!("{}:{}:{}: index out of bounds: index %lld, len %lld\n", loc.0, loc.1, loc.2);
+            let fmt_idx = str_globals.intern(&bc_fmt);
             let se = format!("bc.{block_id}.{trap_id}.stderr");
             writeln!(out, "  %{se} = load ptr, ptr @stderr").unwrap();
             writeln!(out, "  call i32 (ptr, ptr, ...) @fprintf(ptr %{se}, ptr @.str.{fmt_idx}, i64 %v{}, i64 %v{})", index.0, len.0).unwrap();
@@ -5994,7 +6058,8 @@ fn emit_inst(
             writeln!(out, "  %{cmp_name} = icmp eq i64 %v{}, 0", divisor.0).unwrap();
             writeln!(out, "  br i1 %{cmp_name}, label %{trap_label}, label %{ok_label}").unwrap();
             writeln!(out, "{trap_label}:").unwrap();
-            let fmt_idx = str_globals.get_index("division by zero\n");
+            let dc_fmt = format!("{}:{}:{}: division by zero\n", loc.0, loc.1, loc.2);
+            let fmt_idx = str_globals.intern(&dc_fmt);
             let se = format!("dc.{block_id}.{trap_id}.stderr");
             writeln!(out, "  %{se} = load ptr, ptr @stderr").unwrap();
             writeln!(out, "  call i32 (ptr, ptr, ...) @fprintf(ptr %{se}, ptr @.str.{fmt_idx})").unwrap();
@@ -6004,7 +6069,11 @@ fn emit_inst(
             *current_label = ok_label;
         }
         Inst::Trap { msg } => {
-            let fmt_idx = str_globals.get_index(msg);
+            // Bake `file:line:col:` prefix in front of the trap message.
+            // Synthetic instructions and missing file infos fall back to
+            // `<unknown>:0:0` via `resolve_panic_loc`.
+            let trap_msg = format!("{}:{}:{}: {}", loc.0, loc.1, loc.2, msg);
+            let fmt_idx = str_globals.intern(&trap_msg);
             let se = format!("trap.{block_id}.stderr");
             writeln!(out, "  %{se} = load ptr, ptr @stderr").unwrap();
             writeln!(out, "  call i32 (ptr, ptr, ...) @fprintf(ptr %{se}, ptr @.str.{fmt_idx})").unwrap();
@@ -6351,8 +6420,9 @@ fn emit_overflow_check(
     block_id: u32,
     trap_counter: &mut u32,
     current_label: &mut String,
-    str_globals: &StrGlobals,
+    str_globals: &mut StrGlobals,
     val_types: &[Option<LirType>],
+    loc: &(String, u32, u32),
 ) {
     let lty = llvm_type(ty);
     let bits = int_bits(ty);
@@ -6396,10 +6466,14 @@ fn emit_overflow_check(
     writeln!(out, "  %{flag} = extractvalue {{ {lty}, i1 }} %{result}, 1").unwrap();
     writeln!(out, "  br i1 %{flag}, label %{trap_label}, label %{ok_label}").unwrap();
     writeln!(out, "{trap_label}:").unwrap();
-    // Match C backend: fprintf(stderr, "gorget: integer overflow\n"); exit(1);
+    // Match C backend: emit `file:line:col: integer overflow\n`. The full
+    // message string is built at codegen time per panic site and interned
+    // — late-added globals are emitted after the function body (see
+    // `pre_intern_count` handling in `generate_llvm_ir`).
     let ov_se = format!("ov.{block_id}.{trap_id}.stderr");
     writeln!(out, "  %{ov_se} = load ptr, ptr @stderr").unwrap();
-    let ov_msg_idx = str_globals.get_index("gorget: integer overflow\n");
+    let ov_msg = format!("{}:{}:{}: integer overflow\n", loc.0, loc.1, loc.2);
+    let ov_msg_idx = str_globals.intern(&ov_msg);
     writeln!(out, "  call i32 (ptr, ptr, ...) @fprintf(ptr %{ov_se}, ptr @.str.{ov_msg_idx})").unwrap();
     writeln!(out, "  call void @exit(i32 1)").unwrap();
     writeln!(out, "  unreachable").unwrap();
