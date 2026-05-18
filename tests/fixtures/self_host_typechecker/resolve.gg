@@ -42,6 +42,15 @@ struct ResolveContext:
     # `types.error_id`. Drained to stderr by the comparison driver so
     # stdout stays byte-stable for type_comparison.
     Vector[Diagnostic] diagnostics
+    # Control-flow context tracked across `type_check_stmt` walks.
+    # Mirrors Rust typecheck.rs's `loop_depth` / `current_function_throws`
+    # / `current_function_present` — needed to detect break/continue
+    # outside a loop, throw in a non-throwing function, and return at
+    # module scope. Saved/restored around closure-body walks (closures
+    # have their own throws/loop context).
+    int loop_depth
+    bool current_function_throws
+    bool in_function_body
 
 # ── Built-in check ──────────────────────────────────────────
 
@@ -93,7 +102,7 @@ bool is_builtin(String name):
 # ═══════════════════════════════════════════════════════════
 
 ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable &types):
-    ResolveContext ctx = ResolveContext(Dict[int, int](), Dict[String, int](), Vector[String](), Vector[int](), Vector[Diagnostic]())
+    ResolveContext ctx = ResolveContext(Dict[int, int](), Dict[String, int](), Vector[String](), Vector[int](), Vector[Diagnostic](), 0, false, false)
 
     # Register built-in core traits
     Vector[String] trait_names = Vector[String]()

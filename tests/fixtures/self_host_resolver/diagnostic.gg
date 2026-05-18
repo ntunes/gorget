@@ -40,6 +40,7 @@ enum DiagKind:
     DkTypeMismatch
     DkParseError
     DkLexError
+    DkControlFlow
     DkUnreachable
 
 # ── Diagnostic ──────────────────────────────────────────────
@@ -92,6 +93,8 @@ String diag_kind_str(DiagKind kind):
             return "parse-error"
         case DkLexError():
             return "lex-error"
+        case DkControlFlow():
+            return "control-flow"
         case DkUnreachable():
             return "unreachable"
 

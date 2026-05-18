@@ -24,7 +24,7 @@ from types import RTCallableTrait, RTMutCallableTrait, RTConsumeCallableTrait, R
 from resolve import ResolveContext
 from infer import infer_expr_type, infer_closure_return_type
 from traits import build_trait_registry, resolve_method_full, resolve_method_by_name, MethodResolution
-from diagnostic import Diagnostic, DkTypeMismatch
+from diagnostic import Diagnostic, DkTypeMismatch, DkControlFlow
 
 # ── Fallback def lookup by name ──────────────────────────────
 # Scans all definitions for a matching name (and optionally DkFunction kind).
@@ -371,7 +371,21 @@ void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes,
     if body_scope_opt is None and ctx.function_body_scopes.contains(func.name):
         body_scope_opt = Some(ctx.function_body_scopes.get(func.name).unwrap())
     if body_scope_opt is Some(body_scope):
+        # Save/restore the control-flow context across the body walk.
+        # Entering a function resets `loop_depth` (no enclosing loop
+        # carries through a fn boundary) and updates `current_function_throws`
+        # / `in_function_body` based on this fn's signature. Mirrors the
+        # Rust typechecker's per-function context save in `check_function`.
+        int saved_loop_depth = ctx.loop_depth
+        bool saved_throws = ctx.current_function_throws
+        bool saved_in_fn = ctx.in_function_body
+        ctx.loop_depth = 0
+        ctx.current_function_throws = func.throws_type.is_some()
+        ctx.in_function_body = true
         type_check_stmts(func.body, body_scope, &scopes, &types, &ctx)
+        ctx.loop_depth = saved_loop_depth
+        ctx.current_function_throws = saved_throws
+        ctx.in_function_body = saved_in_fn
 
 # ── Pattern type assignment ────────────────────────────────
 # Recursively assigns types to pattern bindings based on a scrutinee type.
@@ -639,8 +653,19 @@ void walk_expr_closures_with_type(SpannedExpr sexpr, int expected_type, int scop
                     if scopes.lookup_in_subtree_untyped(scope_id, p.param_name) is Some(param_def):
                         int binding_type_id = demote_generic_param_to_var(p_type_id, scopes, &types)
                         scopes.set_def_type(param_def, binding_type_id)
-            # Walk closure body for VarDecls and nested closures
+            # Walk closure body for VarDecls and nested closures. Save and
+            # reset control-flow context: a closure has its own throws/loop
+            # scope; outer-scope `break`/`continue`/`throw` must not pass
+            # through the closure boundary. `in_function_body` stays true
+            # (a closure IS a function-shaped body). The throws flag and
+            # loop depth reset to match a fresh function entry.
+            int saved_loop_depth = ctx.loop_depth
+            bool saved_throws = ctx.current_function_throws
+            ctx.loop_depth = 0
+            ctx.current_function_throws = false
             type_check_stmts(body, scope_id, &scopes, &types, &ctx)
+            ctx.loop_depth = saved_loop_depth
+            ctx.current_function_throws = saved_throws
         else:
             walk_expr_closures_inner(sexpr, scope_id, &scopes, &types, &ctx)
 
@@ -732,6 +757,21 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
         case EBinaryOp(left, op, right):
             walk_expr_closures(*left, scope_id, &scopes, &types, &ctx)
             walk_expr_closures(*right, scope_id, &scopes, &types, &ctx)
+
+        case EAwait(inner):
+            # DoubleAwait — `await await x` is a syntactic mistake. The
+            # second await operates on T (already unwrapped from Task[T]),
+            # virtually always a bug. Mirrors src/semantic/typecheck.rs:2075
+            # (SemanticErrorKind::DoubleAwait). Driven from the walk pass
+            # rather than infer.gg's EAwait case so it fires reliably at
+            # both VarDecl init AND return-position uses (infer is only
+            # driven on the former; the latter currently only walks).
+            match (*inner).expr:
+                case EAwait(_):
+                    ctx.diagnostics.push(Diagnostic.error(sexpr.span, DkControlFlow(), "`await` applied twice — the inner expression is already awaited"))
+                else:
+                    pass
+            walk_expr_closures(*inner, scope_id, &scopes, &types, &ctx)
 
         case EBlock(body_stmts):
             type_check_stmts(body_stmts, scope_id, &scopes, &types, &ctx)
@@ -993,15 +1033,21 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
             if not is_enumerate:
                 if extract_element_type(iter_type, scopes, types) is Some(elem_type):
                     assign_pattern_types(pat, elem_type, scope_id, &scopes, &types)
+            ctx.loop_depth = ctx.loop_depth + 1
             type_check_stmts(body, scope_id, &scopes, &types, &ctx)
+            ctx.loop_depth = ctx.loop_depth - 1
 
         case SWhile(cond, body):
             if has_is_patterns(cond.expr):
                 assign_is_condition_types(cond, scope_id, &scopes, &types, &ctx)
+            ctx.loop_depth = ctx.loop_depth + 1
             type_check_stmts(body, scope_id, &scopes, &types, &ctx)
+            ctx.loop_depth = ctx.loop_depth - 1
 
         case SLoop(body):
+            ctx.loop_depth = ctx.loop_depth + 1
             type_check_stmts(body, scope_id, &scopes, &types, &ctx)
+            ctx.loop_depth = ctx.loop_depth - 1
 
         case SMatch(expr, arms):
             # Infer scrutinee type and assign to pattern bindings
@@ -1032,8 +1078,48 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
             walk_expr_closures(value, scope_id, &scopes, &types, &ctx)
 
         case SReturn(opt_expr):
+            # ReturnOutsideFunction — `return` at module scope. Mirrors
+            # src/semantic/typecheck.rs:2833 (SemanticErrorKind::ReturnOutsideFunction).
+            # `Stmt` carries no span of its own; if there's a payload we use
+            # its span, otherwise a zero span (module-scope returns are rare
+            # and span-less is fine for the DIAG line).
+            if not ctx.in_function_body:
+                Span ret_span = Span(0, 0)
+                if opt_expr is Some(rsp):
+                    ret_span = rsp.span
+                ctx.diagnostics.push(Diagnostic.error(ret_span, DkControlFlow(), "`return` outside of a function"))
             if opt_expr is Some(sexpr):
                 walk_expr_closures(sexpr, scope_id, &scopes, &types, &ctx)
+
+        case SBreak(opt_expr):
+            # BreakOutsideLoop — mirrors src/semantic/typecheck.rs:2875
+            # (SemanticErrorKind::BreakOutsideLoop). `loop_depth` is bumped
+            # at SFor/SWhile/SLoop entry, reset at function entry, and
+            # save/restored across closures.
+            if ctx.loop_depth == 0:
+                Span br_span = Span(0, 0)
+                if opt_expr is Some(bsp):
+                    br_span = bsp.span
+                ctx.diagnostics.push(Diagnostic.error(br_span, DkControlFlow(), "`break` outside of a loop"))
+            if opt_expr is Some(bexpr):
+                walk_expr_closures(bexpr, scope_id, &scopes, &types, &ctx)
+
+        case SContinue():
+            # ContinueOutsideLoop — mirrors src/semantic/typecheck.rs:2898
+            # (SemanticErrorKind::ContinueOutsideLoop). SContinue carries no
+            # span; the diagnostic uses a zero span. Self-host's AST collapses
+            # statement spans onto containers (the enclosing fn/block), so
+            # this matches the resolution offered for other span-less stmts.
+            if ctx.loop_depth == 0:
+                ctx.diagnostics.push(Diagnostic.error(Span(0, 0), DkControlFlow(), "`continue` outside of a loop"))
+
+        case SThrow(expr):
+            # ThrowInNonThrowingFunction — mirrors src/semantic/typecheck.rs:2866
+            # (SemanticErrorKind::ThrowInNonThrowingFunction). The enclosing
+            # function must declare `throws T` for `throw` to be valid.
+            if not ctx.current_function_throws:
+                ctx.diagnostics.push(Diagnostic.error(expr.span, DkControlFlow(), "`throw` in a function that does not declare `throws`"))
+            walk_expr_closures(expr, scope_id, &scopes, &types, &ctx)
 
         case SSelect(arms):
             for arm in arms:

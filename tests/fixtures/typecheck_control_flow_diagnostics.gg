@@ -1,0 +1,36 @@
+# Negative fixture exercising the typechecker's control-flow checks.
+#
+# Ports of 4 Rust `self.error(...)` sites in src/semantic/typecheck.rs:
+#   - BreakOutsideLoop       (typecheck.rs:2875)
+#   - ContinueOutsideLoop    (typecheck.rs:2898)
+#   - ThrowInNonThrowingFunction (typecheck.rs:2866)
+#   - DoubleAwait            (typecheck.rs:2075)
+#
+# These checks were absent from the self-host typechecker before
+# 2026-05-18 — the migration commit `6fedd333` shipped the typed
+# `Diagnostic` plumbing; this commit's batch ports the first 5
+# corresponding check sites (the 5th is ReturnOutsideFunction, which
+# the parser rejects upfront so it's harder to exercise directly).
+#
+# Diagnostics route to stderr; type_comparison reads only stdout, so
+# this fixture round-trips as a normal type-line comparison without
+# carrying its DIAG lines into the matched/mismatched accounting.
+
+void break_outside_loop():
+    break
+
+void continue_outside_loop():
+    continue
+
+void throw_in_nonthrowing():
+    throw 42
+
+async int task_inner():
+    return 42
+
+async int double_await():
+    auto v = await await task_inner()
+    return v
+
+int main():
+    return 0

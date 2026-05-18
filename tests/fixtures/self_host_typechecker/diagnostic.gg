@@ -51,6 +51,7 @@ enum DiagKind:
     # Typechecker kinds (active in this stage)
     DkNotAType             # used a non-type identifier in a type position
     DkTypeMismatch         # expected vs actual type disagreement
+    DkControlFlow          # break/continue/return/throw in invalid context
 
     # Reserved for future migrators (kept so the type doesn't churn
     # when lowerer sites migrate).
@@ -106,6 +107,8 @@ String diag_kind_str(DiagKind kind):
             return "not-a-type"
         case DkTypeMismatch():
             return "type-mismatch"
+        case DkControlFlow():
+            return "control-flow"
         case DkUnreachable():
             return "unreachable"
 

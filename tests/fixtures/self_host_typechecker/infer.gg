@@ -20,6 +20,7 @@ from types import RTTuple, RTArray, RTSlice, RTError, RTNever, RTRef
 from types import ast_type_to_resolved
 from types import FunctionSig, MethodSigShape, MethodResolution, ShapeResolution, EquipInfo
 from resolve import ResolveContext
+from diagnostic import Diagnostic, DkControlFlow
 from traits import resolve_method_by_name, resolve_method_shape
 from traits import resolve_method_full, resolve_method_for_generic_receiver
 from traits import infer_method_targs, substitute_return_type, type_name_of
@@ -615,6 +616,13 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             return types.bool_id
 
         case EAwait(inner):
+            # DoubleAwait detection lives in typecheck.gg's walk_expr_closures
+            # EAwait case — that path is the only one that visits *every*
+            # EAwait exactly once (this `infer_expr_type` recursion is driven
+            # by VarDecl init + return-expression walks; pushing the diag
+            # here as well would double-fire on VarDecl paths). Mirrors
+            # src/semantic/typecheck.rs:2075 (SemanticErrorKind::DoubleAwait).
+            #
             # await on Task[T] / Future[T] yields T.
             int await_inner_type = infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, &ctx)
             if await_inner_type >= 0 and await_inner_type < types.types.len():
