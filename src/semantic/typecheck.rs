@@ -3710,7 +3710,22 @@ impl<'a> TypeChecker<'a> {
                 let arg_ty = self.infer_expr(&arg.node.value);
                 self.decl_type_hint = prev_hint;
                 if let Some(ftid) = field_tid {
-                    if !self.is_collection_assignment(ftid, arg_ty) {
+                    // Snag #46 ↔ #8 reconciliation: a `throws`-fn call in
+                    // constructor-arg position returns `Result[T, E]`, but
+                    // the enclosing throws-context can auto-propagate the
+                    // error and unwrap to `T` (this is the language-level
+                    // throws-sugar that snag #46 originally fixed at the
+                    // IR-lowering boundary). The snag #8 strict check
+                    // (this branch) must respect the same carve-out the
+                    // call-arg / var-decl / return sites already use —
+                    // otherwise it false-positives at every auto-prop
+                    // constructor-arg site. Mirror the existing pattern
+                    // at line ~1361: skip `unify` when auto-prop or
+                    // Result-capture is satisfied.
+                    if !self.is_collection_assignment(ftid, arg_ty)
+                        && !self.is_auto_propagation_compatible(ftid, arg_ty)
+                        && !self.is_result_capture_compatible(ftid, arg_ty)
+                    {
                         self.unify(ftid, arg_ty, arg.span);
                     }
                 }
@@ -3801,7 +3816,17 @@ impl<'a> TypeChecker<'a> {
             let arg_ty = self.infer_expr(&arg.node.value);
             self.decl_type_hint = prev_hint;
             if let Some(ftid) = field_tid {
-                if !self.is_collection_assignment(ftid, arg_ty) {
+                // Snag #46 ↔ #8 reconciliation: see analog at the
+                // non-generic branch above. A `throws`-fn call in a
+                // generic variant's payload position
+                // (`Some(throws_call())`, user-generic `Outer.A(call())`)
+                // returns `Result[T, E]`; auto-prop in a propagating
+                // context unwraps it to `T`. Skip `unify` when auto-prop
+                // or Result-capture covers the apparent mismatch.
+                if !self.is_collection_assignment(ftid, arg_ty)
+                    && !self.is_auto_propagation_compatible(ftid, arg_ty)
+                    && !self.is_result_capture_compatible(ftid, arg_ty)
+                {
                     self.unify(ftid, arg_ty, arg.span);
                 }
             }
