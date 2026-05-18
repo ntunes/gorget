@@ -89,10 +89,39 @@ Fresh `gg profile` snapshot taken on `gorget-1` HEAD (e052606e) after the post-2
 
    **Remaining cheap-win at this site (deferred)**:
    - (i) drop the residual `format!("@mut:{}", path)` allocations in `is_source_mut_unsafe_at` — could use a stack-allocated buffer (the marker is short, bounded by typical path lengths) or a single `String` reused across the loop. Expected: 1-2ms shave on body cost.
-   - (ii) `body::lower_block` at 41ms is now the dominant sub-pass and is the structural work — won't yield to one-line FxHashMap swaps; will require a `src/ir/lowering/exprs/mod.rs` (4331 LOC) and `stmts/mod.rs` (3436 LOC) tour. That's the next round's structural target.
-   - (iii) `body::meta_expand` at 3.4ms is `block.clone()` + tree walk. The clone could be elided for blocks that have no `meta for` / `meta if` to expand — quick scan check before the clone. Expected: 2-3ms shave.
+   - (ii) `body::meta_expand` at 3.4ms is `block.clone()` + tree walk. The clone could be elided for blocks that have no `meta for` / `meta if` to expand — quick scan check before the clone. Expected: 2-3ms shave.
 
    [updated: 2026-05-18 — Step 1 + Step 2 shipped: instrumentation + Rc<str>/&str-borrow fix on prescan; the structural body work remains as the new dominant sub-pass]
+
+   **Post-instrument-take-2 breakdown — `body::lower_block` per-statement-kind (2026-05-18, median-of-15 lightest-5)**:
+
+   | Sub-sub-pass (stmt kind)                  | Self time (ms) | % of body::lower_block |
+   |-------------------------------------------|---------------:|-----------------------:|
+   | `body::lower_block::stmt::var_decl`       |          11.7  | 29% |
+   | `body::lower_block::stmt::if`             |           9.1  | 23% |
+   | `body::lower_block::stmt::expr`           |           6.2  | 16% |
+   | `body::lower_block::stmt::match`          |           3.9  | 10% |
+   | `body::lower_block::stmt::return`         |           3.3  |  8% |
+   | `body::lower_block::stmt::assign`         |           2.3  |  6% |
+   | `body::lower_block::stmt::while`          |           1.4  |  4% |
+   | `body::lower_block::stmt::for`            |           0.3  | <1% |
+   | rest (loop/break/continue/throw/assert/…) |          <0.3  | <1% |
+   | **SUM (matches `body::lower_block`)**     |        **~40** | **100%** |
+
+   These are **EXCLUSIVE (self) times** — `lower_stmt` subtracts nested `lower_stmt` calls (`Stmt::If` → recursive `lower_block` → `lower_stmt`) via a `ctx.stmt_nested_dur` running total. So the buckets sum to `body::lower_block` total, not double-counting recursion. Reported via `gg profile` JSON as `lower_function::body::lower_block::stmt::<kind>` entries.
+
+   **Why `var_decl` dominates and why it's structural (no cheap-win surface found)**:
+   - 1500+ var_decls in the lowerer driver (`grep -c "^\s*case \|^\s*if \|^\s*for \|^\s*while \|^\s*match " self_host_lowerer/lower.gg → 1603`).
+   - Each `lower_var_decl` (stmts/mod.rs:308-948, ~640 LOC) does N typed registry checks: `is_box`, `type_name_for_id`, `get_type_def(c_runtime_alias)`, `is_resource_type`, `is_collection_type_name`, `needs_drop`, plus 2-3 `infer_operand_type_with_builder` calls, plus 2-3 drop registration calls.
+   - I audited the path: every individual operation is a single FxHashMap-on-u32-or-String lookup. There's no O(N²) pattern, no per-call allocation, no name-prefix dispatch in this function. The 12ms is genuinely 1500 × (~8μs of typed bookkeeping). A code-quality cleanup landed alongside the instrumentation: `infer_operand_type_with_builder` / `infer_operand_type_full` / `infer_type_name_from_operand_full` all linear-scanned `ctx.locals_iter()` BEFORE the O(1) `builder.locals[idx]` fallback — swapped the order (in-range index first, ctx scan only for closure-param sentinel `LocalId(u32::MAX - i)` IDs). Measured: no perf delta on lowerer (the ctx map is small enough that the scan was already fast), but it's the right shape per CLAUDE.md "fix complexity as a signal of wrong layer".
+
+   **Real cheap-win opportunities in `body::lower_block` (deferred — not exhausted, just not on the obvious O(N) surface)**:
+   - (A) **`var_decl` typed-flag check coalescing**. `lower_var_decl` does ~6 separate `type_registry.get_type_def(...)` lookups per call across the function, each hashing the same type name. A single `type_def_cache: Option<&TypeDef>` thread through the function (or a single up-front lookup populating `is_box`/`is_callable`/`is_opt_or_result`/`c_runtime_alias` into local vars) would halve the hashmap traffic. Speculative shave: 1-2ms.
+   - (B) **`if`-statement at 9ms — `lower_if`**. Condition lowering (`lower_expr` of the boolean), then-block (recurses into `lower_block`, subtracted), elif-chain unrolling, else-block. The 9ms is mostly condition expressions + builder block setup/jumps. Profile-blind below this level. Worth instrumenting `lower_if` itself if pursued.
+   - (C) **`expr` at 6ms — pure `lower_expr` on top-level statement expressions** (calls, method invocations, `assert(...)`-equivalents). The 6ms is the expression-lowering machinery itself. `src/ir/lowering/exprs/mod.rs` (4331 LOC) is the structural target — won't yield to FxHashMap swaps; will need a tour.
+   - (D) **`match` at 4ms — `lower_match_stmt`** in `patterns.rs:326`. Pattern dispatch, scrutinee type analysis, arm-body lowering (subtracted as nested). Likely structural too.
+
+   Verdict for this round: **instrumentation-only commit, no measurable cheap-win in `body::lower_block` itself.** The per-kind breakdown is the deliverable; the structural work is real per-kind cost that requires deeper refactor at the writer site (e.g., flattening the var_decl typed-flag chain) and is the next round's medium-effort target.
 
 2. **`gir_lower::validate_consume_sites` (15.2ms on lowerer, 4.6ms on typechecker) — `src/ir/lowering/` (location TBD).** Second-largest gir_lower sub-pass after `lower_functions`. Likely walks every GIR function looking for ownership consume sites and checking owner/move invariants. Cheap-win surface: if it walks insts and queries a name-keyed map for each, a one-pass merge with `validate_resource_sites_all` (1.5ms, post-`4b529742` collapse) or `validate_drop_pre_rebind_and_null_to_opt` (1.2ms) could shave 4-5ms via shared walks. FxHashMap swap if it uses stdlib HashMaps internally. [priority: medium, ~half day]
 

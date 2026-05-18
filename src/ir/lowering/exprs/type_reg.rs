@@ -218,16 +218,18 @@ pub fn ensure_task_group_type_def(ctx: &mut LoweringContext, tg_type_name: &str)
 pub fn infer_operand_type_full(ctx: &LoweringContext, operand: &Operand, builder: &FunctionBuilder) -> TypeId {
     match operand {
         Operand::Copy(place) | Operand::Move(place) => {
-            // First check ctx locals
+            // Builder index is O(1) and authoritative for in-range LocalIds.
+            // Fallback ctx scan handles closure-param sentinel IDs
+            // (`LocalId(u32::MAX - i)` from closures.rs:203). See
+            // `infer_operand_type_with_builder` for the rationale.
+            let idx = place.local.0 as usize;
+            if idx < builder.locals.len() {
+                return builder.locals[idx].type_id;
+            }
             for (_, (lid, tid)) in ctx.locals_iter() {
                 if *lid == place.local {
                     return *tid;
                 }
-            }
-            // Fall back to builder locals
-            let idx = place.local.0 as usize;
-            if idx < builder.locals.len() {
-                return builder.locals[idx].type_id;
             }
             I64_TYPE
         }

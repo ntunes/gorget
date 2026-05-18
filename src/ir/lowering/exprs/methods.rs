@@ -3253,22 +3253,22 @@ pub(super) fn infer_type_name_from_operand_full(
 ) -> Option<String> {
     let type_id = match operand {
         Operand::Copy(place) | Operand::Move(place) => {
-            // First check ctx locals (named variables)
-            let mut tid = None;
-            for (_, (lid, local_tid)) in ctx.locals_iter() {
-                if *lid == place.local {
-                    tid = Some(*local_tid);
-                    break;
+            // Builder index is O(1) and authoritative for in-range LocalIds
+            // (see `infer_operand_type_with_builder` for the rationale).
+            // Fallback ctx scan handles closure-param sentinel IDs.
+            let idx = place.local.0 as usize;
+            if idx < builder.locals.len() {
+                builder.locals[idx].type_id
+            } else {
+                let mut tid = None;
+                for (_, (lid, local_tid)) in ctx.locals_iter() {
+                    if *lid == place.local {
+                        tid = Some(*local_tid);
+                        break;
+                    }
                 }
+                tid?
             }
-            // Fall back to builder locals (temporaries)
-            if tid.is_none() {
-                let idx = place.local.0 as usize;
-                if idx < builder.locals.len() {
-                    tid = Some(builder.locals[idx].type_id);
-                }
-            }
-            tid?
         }
         Operand::Constant(c) => match c {
             Constant::Str(_) => return Some("GorgetString".to_string()),

@@ -93,11 +93,25 @@ pub fn lower_block_scoped(
 }
 
 /// Lower a single statement.
+///
+/// Per-statement-kind timing is recorded as EXCLUSIVE (self) time into
+/// `ctx.lower_fn_sub_times` under keys `lower_function::body::lower_block::stmt::<kind>`,
+/// computed as `elapsed - (ctx.stmt_nested_dur delta during this call)`.
+/// Each call adds its own `elapsed` to `ctx.stmt_nested_dur` so the parent
+/// `lower_stmt` invocation (if any) subtracts our wall time back out — this
+/// makes the per-kind buckets sum to `body::lower_block` total, no double
+/// counting from `Stmt::If`/`Stmt::Match`/`Stmt::For` recursing into nested
+/// stmts. The pattern mirrors how lower_function's body timer subtracts
+/// nested meta_expand cost from itself.
 pub fn lower_stmt(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     stmt: &Spanned<Stmt>,
 ) {
+    let __stmt_t0 = std::time::Instant::now();
+    let __nested_at_entry = ctx.stmt_nested_dur;
+    let __kind_key: &'static str;
+
     builder.set_span(stmt.span);
     match &stmt.node {
         Stmt::VarDecl {
@@ -107,6 +121,11 @@ pub fn lower_stmt(
             shared,
             ..
         } => {
+            __kind_key = if *shared != ast::SharedKind::None {
+                "lower_function::body::lower_block::stmt::shared_var_decl"
+            } else {
+                "lower_function::body::lower_block::stmt::var_decl"
+            };
             if *shared != ast::SharedKind::None {
                 lower_shared_var_decl(ctx, builder, type_, pattern, value, shared);
             } else {
@@ -114,15 +133,23 @@ pub fn lower_stmt(
             }
         }
 
-        Stmt::Assign { target, value } => lower_assign(ctx, builder, target, value),
-
-        Stmt::CompoundAssign { target, op, value } => {
-            lower_compound_assign(ctx, builder, target, *op, value)
+        Stmt::Assign { target, value } => {
+            __kind_key = "lower_function::body::lower_block::stmt::assign";
+            lower_assign(ctx, builder, target, value);
         }
 
-        Stmt::Return(expr) => lower_return(ctx, builder, expr.as_ref()),
+        Stmt::CompoundAssign { target, op, value } => {
+            __kind_key = "lower_function::body::lower_block::stmt::compound_assign";
+            lower_compound_assign(ctx, builder, target, *op, value);
+        }
+
+        Stmt::Return(expr) => {
+            __kind_key = "lower_function::body::lower_block::stmt::return";
+            lower_return(ctx, builder, expr.as_ref());
+        }
 
         Stmt::Expr(expr) => {
+            __kind_key = "lower_function::body::lower_block::stmt::expr";
             let val = lower_expr(ctx, builder, expr);
             // Auto-propagate: if the expression returns Result in a propagation
             // context, unwrap it so errors aren't silently swallowed.
@@ -130,6 +157,7 @@ pub fn lower_stmt(
         }
 
         Stmt::Pass => {
+            __kind_key = "lower_function::body::lower_block::stmt::pass";
             builder.nop();
         }
 
@@ -138,14 +166,20 @@ pub fn lower_stmt(
             then_body,
             elif_branches,
             else_body,
-        } => lower_if(ctx, builder, condition, then_body, elif_branches, else_body),
+        } => {
+            __kind_key = "lower_function::body::lower_block::stmt::if";
+            lower_if(ctx, builder, condition, then_body, elif_branches, else_body);
+        }
 
         Stmt::While {
             condition,
             body,
             else_body,
             ..
-        } => lower_while(ctx, builder, condition, body, else_body.as_ref()),
+        } => {
+            __kind_key = "lower_function::body::lower_block::stmt::while";
+            lower_while(ctx, builder, condition, body, else_body.as_ref());
+        }
 
         Stmt::For {
             pattern,
@@ -153,57 +187,106 @@ pub fn lower_stmt(
             body,
             else_body,
             ..
-        } => lower_for(ctx, builder, pattern, iterable, body, else_body.as_ref()),
+        } => {
+            __kind_key = "lower_function::body::lower_block::stmt::for";
+            lower_for(ctx, builder, pattern, iterable, body, else_body.as_ref());
+        }
 
-        Stmt::Loop { body } => lower_loop(ctx, builder, body),
+        Stmt::Loop { body } => {
+            __kind_key = "lower_function::body::lower_block::stmt::loop";
+            lower_loop(ctx, builder, body);
+        }
 
-        Stmt::Break(_) => lower_break(ctx, builder),
+        Stmt::Break(_) => {
+            __kind_key = "lower_function::body::lower_block::stmt::break_continue";
+            lower_break(ctx, builder);
+        }
 
-        Stmt::Continue => lower_continue(ctx, builder),
+        Stmt::Continue => {
+            __kind_key = "lower_function::body::lower_block::stmt::break_continue";
+            lower_continue(ctx, builder);
+        }
 
         Stmt::Match {
             scrutinee,
             arms,
             else_arm,
-        } => lower_match_stmt(ctx, builder, scrutinee, arms, else_arm),
+        } => {
+            __kind_key = "lower_function::body::lower_block::stmt::match";
+            lower_match_stmt(ctx, builder, scrutinee, arms, else_arm);
+        }
 
-        Stmt::Throw(expr) => lower_throw(ctx, builder, expr),
+        Stmt::Throw(expr) => {
+            __kind_key = "lower_function::body::lower_block::stmt::throw";
+            lower_throw(ctx, builder, expr);
+        }
 
-        Stmt::Assert { condition, message } => lower_assert(ctx, builder, condition, message.as_ref()),
+        Stmt::Assert { condition, message } => {
+            __kind_key = "lower_function::body::lower_block::stmt::assert";
+            lower_assert(ctx, builder, condition, message.as_ref());
+        }
 
         Stmt::AssertReturn { condition, message } => {
+            __kind_key = "lower_function::body::lower_block::stmt::assert_return";
             if !ctx.strip_asserts {
                 ctx.func_state.postconditions.push((condition.clone(), message.clone()));
             }
         }
 
         Stmt::Snapshot { name, value } => {
+            __kind_key = "lower_function::body::lower_block::stmt::snapshot";
             if ctx.snapshot_mode {
                 lower_snapshot(ctx, builder, name, value);
             }
         }
 
-        Stmt::With { bindings, body } => lower_with(ctx, builder, bindings, body),
+        Stmt::With { bindings, body } => {
+            __kind_key = "lower_function::body::lower_block::stmt::with";
+            lower_with(ctx, builder, bindings, body);
+        }
 
-        Stmt::Unsafe { body } => lower_block_scoped(ctx, builder, body),
+        Stmt::Unsafe { body } => {
+            __kind_key = "lower_function::body::lower_block::stmt::unsafe";
+            lower_block_scoped(ctx, builder, body);
+        }
 
-        Stmt::NamedScope { body, .. } => lower_named_scope(ctx, builder, body),
+        Stmt::NamedScope { body, .. } => {
+            __kind_key = "lower_function::body::lower_block::stmt::named_scope";
+            lower_named_scope(ctx, builder, body);
+        }
 
-        Stmt::Item(_) => { /* Nested items are hoisted — no-op in GIR */ }
+        Stmt::Item(_) => {
+            __kind_key = "lower_function::body::lower_block::stmt::item_or_meta";
+            /* Nested items are hoisted — no-op in GIR */
+        }
 
-        Stmt::Select { arms, else_arm: _ } => lower_select(ctx, builder, arms),
+        Stmt::Select { arms, else_arm: _ } => {
+            __kind_key = "lower_function::body::lower_block::stmt::select";
+            lower_select(ctx, builder, arms);
+        }
 
         // meta if/for/match/while should have been evaluated and removed before GIR lowering.
         // If they appear here it means they were in a non-generic context (a semantic
         // error should have been emitted) — emit nothing.
         Stmt::MetaIf { .. } | Stmt::MetaFor { .. } | Stmt::MetaMatch { .. }
-        | Stmt::MetaWhile { .. } | Stmt::MetaConst { .. } | Stmt::MetaLog { .. } => {}
+        | Stmt::MetaWhile { .. } | Stmt::MetaConst { .. } | Stmt::MetaLog { .. } => {
+            __kind_key = "lower_function::body::lower_block::stmt::item_or_meta";
+        }
 
         Stmt::OnError { body } => {
+            __kind_key = "lower_function::body::lower_block::stmt::on_error";
             // Register the cleanup block — it will be emitted on error paths
             ctx.func_state.on_error_blocks.push(body.clone());
         }
     }
+
+    let __elapsed = __stmt_t0.elapsed();
+    let __nested_during = ctx.stmt_nested_dur - __nested_at_entry;
+    let __exclusive = __elapsed.saturating_sub(__nested_during);
+    *ctx.lower_fn_sub_times.entry(__kind_key).or_default() += __exclusive;
+    // Report our wall time back to any parent `lower_stmt` so it subtracts
+    // us out and only counts its own self-time.
+    ctx.stmt_nested_dur += __elapsed;
 }
 
 /// Emit accumulated `on error` cleanup blocks in LIFO order.

@@ -377,6 +377,15 @@ pub struct LoweringContext<'a> {
     /// lowering and tail return emission), `finalize` (ownership flush +
     /// builder.build + module.functions push).
     pub lower_fn_sub_times: std::collections::HashMap<&'static str, std::time::Duration>,
+    /// Cumulative wall-time spent inside nested `lower_stmt` calls. Used by
+    /// the per-statement-kind instrumentation in `lower_stmt` to compute
+    /// EXCLUSIVE (self) time per kind: `exclusive = elapsed - (post - pre)`
+    /// where `pre`/`post` snapshot this counter around the dispatch. Each
+    /// `lower_stmt` adds its own total `elapsed` here so the parent call
+    /// subtracts it out. Resets implicitly with the context lifetime
+    /// (no cross-function bleed because every parent eventually finishes
+    /// and the counter is read as a delta, not absolute).
+    pub stmt_nested_dur: std::time::Duration,
 }
 
 /// Snapshot of lowering state taken at branch entry, restored at branch exit.
@@ -472,6 +481,7 @@ impl<'a> LoweringContext<'a> {
             call_resolved_names: FxHashMap::default(),
             heap_alloc_consumer_externs: rustc_hash::FxHashSet::default(),
             lower_fn_sub_times: std::collections::HashMap::new(),
+            stmt_nested_dur: std::time::Duration::ZERO,
         }
     }
 
