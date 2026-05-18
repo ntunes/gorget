@@ -2016,8 +2016,28 @@ pub fn lower_module(
     module.runtime_callees = ctx.runtime_callees;
     *pass_times.entry("runtime_metadata_and_thread").or_default() += __pass_t.elapsed();
 
+    // Fold per-function sub-pass timings accumulated inside `lower_function`
+    // into the `pass_times` map so they surface in `gg profile` JSON. These
+    // ride alongside (do NOT replace) the parent `lower_functions` entry,
+    // which still represents the wall-clock cost of the lowering loop
+    // including any monomorphized-function or equip-method work threaded
+    // through other paths. The `lower_function::*` keys break down the
+    // per-call cost of the non-generic top-level function lowering only
+    // (called from the loop at line ~1242, accounted under `lower_functions`).
+    for (k, v) in ctx.lower_fn_sub_times.drain() {
+        *pass_times.entry(k).or_default() += v;
+    }
+
     let lower_total = __lower_module_t0.elapsed();
-    let inner_sum: Duration = pass_times.values().copied().sum();
+    // The inner_sum computation must skip the `lower_function::*` sub-pass
+    // entries — those are inside the existing `lower_functions` timing,
+    // so counting both would double-attribute wall time. Only the top-level
+    // pass entries contribute to inner_sum.
+    let inner_sum: Duration = pass_times
+        .iter()
+        .filter(|(k, _)| !k.starts_with("lower_function::"))
+        .map(|(_, v)| *v)
+        .sum();
     // Residual = the bits between named phases that escape any time_pass!()
     // attribution. Lets the surfaced report sum to wall time without obscuring
     // which sub-pass dominates.

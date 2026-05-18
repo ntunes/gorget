@@ -234,11 +234,25 @@ fn prescan_expr_moves(
 fn compute_cow_reassigned_after(
     body: &[Spanned<Stmt>],
     fn_param_ownerships: &rustc_hash::FxHashMap<String, Vec<Ownership>>,
-) -> rustc_hash::FxHashMap<usize, rustc_hash::FxHashSet<String>> {
+) -> rustc_hash::FxHashMap<usize, rustc_hash::FxHashSet<std::rc::Rc<str>>> {
     let mut result = rustc_hash::FxHashMap::default();
-    let mut future = rustc_hash::FxHashSet::default();
-    cow_after_block(body, &mut future, &mut result, fn_param_ownerships);
+    let mut future: rustc_hash::FxHashSet<std::rc::Rc<str>> = rustc_hash::FxHashSet::default();
+    let mut interner: rustc_hash::FxHashMap<String, std::rc::Rc<str>> = rustc_hash::FxHashMap::default();
+    cow_after_block(body, &mut future, &mut result, fn_param_ownerships, &mut interner);
     result
+}
+
+/// Intern a `&str` as `Rc<str>`. Subsequent inserts of the same name reuse the
+/// existing `Rc` cell, which lets `future.clone()` propagate refcount bumps
+/// instead of allocating fresh `String`s per entry.
+#[inline]
+fn intern_rc(s: &str, interner: &mut rustc_hash::FxHashMap<String, std::rc::Rc<str>>) -> std::rc::Rc<str> {
+    if let Some(rc) = interner.get(s) {
+        return rc.clone();
+    }
+    let rc: std::rc::Rc<str> = std::rc::Rc::from(s);
+    interner.insert(s.to_string(), rc.clone());
+    rc
 }
 
 /// Method names that mutate a collection receiver in place. Any `receiver.method(...)`
@@ -267,40 +281,50 @@ fn extract_path_for_mut(expr: &Expr) -> Option<String> {
 /// Helper: given an `expr` that appears at a mutating-position (the receiver of a
 /// mutating method, or the inside of `&arg`), insert the right marker into the
 /// prescan set.
-fn record_path_mutation(expr: &Expr, future: &mut rustc_hash::FxHashSet<String>) {
+fn record_path_mutation(
+    expr: &Expr,
+    future: &mut rustc_hash::FxHashSet<std::rc::Rc<str>>,
+    interner: &mut rustc_hash::FxHashMap<String, std::rc::Rc<str>>,
+) {
     if let Some(path) = extract_path_for_mut(expr) {
-        future.insert(format!("@mut:{}", path));
+        let marker = format!("@mut:{}", path);
+        future.insert(intern_rc(&marker, interner));
     }
 }
 
 fn cow_after_block(
     stmts: &[Spanned<Stmt>],
-    future: &mut rustc_hash::FxHashSet<String>,
-    result: &mut rustc_hash::FxHashMap<usize, rustc_hash::FxHashSet<String>>,
+    future: &mut rustc_hash::FxHashSet<std::rc::Rc<str>>,
+    result: &mut rustc_hash::FxHashMap<usize, rustc_hash::FxHashSet<std::rc::Rc<str>>>,
     fn_param_ownerships: &rustc_hash::FxHashMap<String, Vec<Ownership>>,
+    interner: &mut rustc_hash::FxHashMap<String, std::rc::Rc<str>>,
 ) {
     for stmt in stmts.iter().rev() {
-        // Record the "reassigned-after" set at this statement's position
+        // Record the "reassigned-after" set at this statement's position.
+        // Cloning `FxHashSet<Rc<str>>` is a per-entry refcount bump — cheap
+        // compared to the prior `FxHashSet<String>` clone which reallocated
+        // every entry. This is the dominant per-statement cost.
         result.insert(stmt.span.start, future.clone());
         // Collect reassignments from this statement
-        cow_after_stmt(&stmt.node, future, result, fn_param_ownerships);
+        cow_after_stmt(&stmt.node, future, result, fn_param_ownerships, interner);
     }
 }
 
 fn cow_after_stmt(
     stmt: &Stmt,
-    future: &mut rustc_hash::FxHashSet<String>,
-    result: &mut rustc_hash::FxHashMap<usize, rustc_hash::FxHashSet<String>>,
+    future: &mut rustc_hash::FxHashSet<std::rc::Rc<str>>,
+    result: &mut rustc_hash::FxHashMap<usize, rustc_hash::FxHashSet<std::rc::Rc<str>>>,
     fn_param_ownerships: &rustc_hash::FxHashMap<String, Vec<Ownership>>,
+    interner: &mut rustc_hash::FxHashMap<String, std::rc::Rc<str>>,
 ) {
     match stmt {
         Stmt::VarDecl { value, .. } => {
-            cow_after_expr_moves(&value.node, future, fn_param_ownerships);
+            cow_after_expr_moves(&value.node, future, fn_param_ownerships, interner);
         }
         Stmt::Assign { target, value, .. } => {
             // Name reassignment: `x = rhs` marks `x` unsafe for CoW propagation.
             if let Expr::Identifier(name) = &target.node {
-                future.insert(name.clone());
+                future.insert(intern_rc(name, interner));
             }
             // Field reassignment: `self.data = rhs` means any CoW borrow sourced
             // from self.data later would dangle. Emit `@mut:self.data`.
@@ -308,50 +332,52 @@ fn cow_after_stmt(
                 // Only meaningful for multi-component paths (at least one '.') —
                 // bare identifiers are covered by the Identifier case above.
                 if path.contains('.') {
-                    future.insert(format!("@mut:{}", path));
+                    let marker = format!("@mut:{}", path);
+                    future.insert(intern_rc(&marker, interner));
                 }
             }
-            cow_after_expr_moves(&value.node, future, fn_param_ownerships);
+            cow_after_expr_moves(&value.node, future, fn_param_ownerships, interner);
         }
         Stmt::CompoundAssign { target, value, .. } => {
             if let Expr::Identifier(name) = &target.node {
-                future.insert(name.clone());
+                future.insert(intern_rc(name, interner));
             }
             if let Some(path) = extract_path_for_mut(&target.node) {
                 if path.contains('.') {
-                    future.insert(format!("@mut:{}", path));
+                    let marker = format!("@mut:{}", path);
+                    future.insert(intern_rc(&marker, interner));
                 }
             }
-            cow_after_expr_moves(&value.node, future, fn_param_ownerships);
+            cow_after_expr_moves(&value.node, future, fn_param_ownerships, interner);
         }
         Stmt::Expr(expr) => {
-            cow_after_expr_moves(&expr.node, future, fn_param_ownerships);
+            cow_after_expr_moves(&expr.node, future, fn_param_ownerships, interner);
         }
         Stmt::Return(Some(expr)) => {
-            cow_after_expr_moves(&expr.node, future, fn_param_ownerships);
+            cow_after_expr_moves(&expr.node, future, fn_param_ownerships, interner);
         }
         Stmt::While { body, else_body, .. } => {
             // Loop body reassignments are visible to statements before the loop
-            cow_after_block(&body.stmts, future, result, fn_param_ownerships);
+            cow_after_block(&body.stmts, future, result, fn_param_ownerships, interner);
             if let Some(eb) = else_body {
-                cow_after_block(&eb.stmts, future, result, fn_param_ownerships);
+                cow_after_block(&eb.stmts, future, result, fn_param_ownerships, interner);
             }
         }
         Stmt::For { body, .. } => {
-            cow_after_block(&body.stmts, future, result, fn_param_ownerships);
+            cow_after_block(&body.stmts, future, result, fn_param_ownerships, interner);
         }
         Stmt::If { then_body, elif_branches, else_body, .. } => {
             // Union all branches: if a name is reassigned in any branch, it's unsafe
             let saved = future.clone();
-            cow_after_block(&then_body.stmts, future, result, fn_param_ownerships);
+            cow_after_block(&then_body.stmts, future, result, fn_param_ownerships, interner);
             let then_set = future.clone();
             *future = saved.clone();
             for (_, branch_body) in elif_branches {
-                cow_after_block(&branch_body.stmts, future, result, fn_param_ownerships);
+                cow_after_block(&branch_body.stmts, future, result, fn_param_ownerships, interner);
                 // Accumulate into future (union)
             }
             if let Some(eb) = else_body {
-                cow_after_block(&eb.stmts, future, result, fn_param_ownerships);
+                cow_after_block(&eb.stmts, future, result, fn_param_ownerships, interner);
             }
             // Union: include then-branch reassignments too
             future.extend(then_set);
@@ -362,14 +388,14 @@ fn cow_after_stmt(
                 if let crate::parser::ast::MatchItem::Arm(arm) = item {
                     let mut branch = saved.clone();
                     if let Expr::Block(block) = &arm.body.node {
-                        cow_after_block(&block.stmts, &mut branch, result, fn_param_ownerships);
+                        cow_after_block(&block.stmts, &mut branch, result, fn_param_ownerships, interner);
                     }
                     future.extend(branch);
                 }
             }
             if let Some(b) = else_arm {
                 let mut branch = saved;
-                cow_after_block(&b.stmts, &mut branch, result, fn_param_ownerships);
+                cow_after_block(&b.stmts, &mut branch, result, fn_param_ownerships, interner);
                 future.extend(branch);
             }
         }
@@ -381,12 +407,13 @@ fn cow_after_stmt(
 /// indirect-mutation (&arg / mut-borrow sig) arg targets from expressions.
 fn cow_after_expr_moves(
     expr: &Expr,
-    future: &mut rustc_hash::FxHashSet<String>,
+    future: &mut rustc_hash::FxHashSet<std::rc::Rc<str>>,
     fn_param_ownerships: &rustc_hash::FxHashMap<String, Vec<Ownership>>,
+    interner: &mut rustc_hash::FxHashMap<String, std::rc::Rc<str>>,
 ) {
     match expr {
         Expr::Call { args, callee, .. } => {
-            cow_after_expr_moves(&callee.node, future, fn_param_ownerships);
+            cow_after_expr_moves(&callee.node, future, fn_param_ownerships, interner);
             // Look up the callee's per-param ownership for implicit-mut-borrow
             // detection. Only Expr::Identifier callees map cleanly to signatures.
             let callee_sig = if let Expr::Identifier(name) = &callee.node {
@@ -397,43 +424,43 @@ fn cow_after_expr_moves(
             for (i, arg) in args.iter().enumerate() {
                 if matches!(arg.node.ownership, Ownership::Move) {
                     if let Expr::Identifier(name) = &arg.node.value.node {
-                        future.insert(name.clone());
+                        future.insert(intern_rc(name, interner));
                     }
                 }
                 // Explicit `&arg` at call site → mutating.
                 if matches!(arg.node.ownership, Ownership::MutableBorrow) {
-                    record_path_mutation(&arg.node.value.node, future);
+                    record_path_mutation(&arg.node.value.node, future, interner);
                 }
                 // Implicit mut-borrow: callee's param is MutableBorrow per sig.
                 if let Some(ownerships) = callee_sig {
                     if let Some(Ownership::MutableBorrow) = ownerships.get(i) {
-                        record_path_mutation(&arg.node.value.node, future);
+                        record_path_mutation(&arg.node.value.node, future, interner);
                     }
                 }
-                cow_after_expr_moves(&arg.node.value.node, future, fn_param_ownerships);
+                cow_after_expr_moves(&arg.node.value.node, future, fn_param_ownerships, interner);
             }
         }
         Expr::MethodCall { receiver, args, method, .. } => {
-            cow_after_expr_moves(&receiver.node, future, fn_param_ownerships);
+            cow_after_expr_moves(&receiver.node, future, fn_param_ownerships, interner);
             // Mutating method on a collection receiver → the receiver path is mutated.
             if MUTATING_METHODS.contains(&method.node.as_str()) {
-                record_path_mutation(&receiver.node, future);
+                record_path_mutation(&receiver.node, future, interner);
             }
             for arg in args {
                 if matches!(arg.node.ownership, Ownership::Move) {
                     if let Expr::Identifier(name) = &arg.node.value.node {
-                        future.insert(name.clone());
+                        future.insert(intern_rc(name, interner));
                     }
                 }
                 if matches!(arg.node.ownership, Ownership::MutableBorrow) {
-                    record_path_mutation(&arg.node.value.node, future);
+                    record_path_mutation(&arg.node.value.node, future, interner);
                 }
-                cow_after_expr_moves(&arg.node.value.node, future, fn_param_ownerships);
+                cow_after_expr_moves(&arg.node.value.node, future, fn_param_ownerships, interner);
             }
         }
         Expr::BinaryOp { left, right, .. } => {
-            cow_after_expr_moves(&left.node, future, fn_param_ownerships);
-            cow_after_expr_moves(&right.node, future, fn_param_ownerships);
+            cow_after_expr_moves(&left.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&right.node, future, fn_param_ownerships, interner);
         }
         _ => {}
     }
@@ -559,6 +586,12 @@ pub fn lower_function(
     func: &FunctionDef,
     name_override: Option<&str>,
 ) {
+    // Sub-pass timing — sums per-function setup/prescan/body/finalize
+    // contributions across all calls to `lower_function`. Surfaces in
+    // `gg profile` as `lower_function::<sub>` entries under the
+    // `gir_lower` pass-times map. See `LoweringContext::lower_fn_sub_times`.
+    let __setup_t0 = std::time::Instant::now();
+
     let func_span = func.span;
     let name: &str = name_override.unwrap_or(func.name.node.as_str());
     let is_main = name == "main";
@@ -668,14 +701,31 @@ pub fn lower_function(
         }
     }
 
+    // End of `setup` sub-pass — accumulate timing before prescan.
+    *ctx.lower_fn_sub_times.entry("lower_function::setup").or_default() += __setup_t0.elapsed();
+
+    let __prescan_t0 = std::time::Instant::now();
+
     // Pre-scan: find variables unsafe for CoW (reassigned, !-moved).
     // Also count name uses and compute liveness for auto-move (Phase 1f).
     if let FunctionBody::Block(block) = &func.body {
+        let __t = std::time::Instant::now();
         ctx.func_state.cow_reassigned_names = prescan_cow_unsafe_names(&block.stmts);
+        *ctx.lower_fn_sub_times.entry("lower_function::prescan::cow_unsafe").or_default() += __t.elapsed();
+        let __t = std::time::Instant::now();
         ctx.func_state.cow_reassigned_after = compute_cow_reassigned_after(&block.stmts, &ctx.fn_param_ownerships);
+        *ctx.lower_fn_sub_times.entry("lower_function::prescan::cow_after").or_default() += __t.elapsed();
+        let __t = std::time::Instant::now();
         ctx.func_state.name_use_counts = prescan_name_use_counts(&block.stmts);
+        *ctx.lower_fn_sub_times.entry("lower_function::prescan::name_use_counts").or_default() += __t.elapsed();
+        let __t = std::time::Instant::now();
         ctx.func_state.liveness = super::liveness::compute_function_liveness(&block.stmts);
+        *ctx.lower_fn_sub_times.entry("lower_function::prescan::liveness").or_default() += __t.elapsed();
     }
+
+    *ctx.lower_fn_sub_times.entry("lower_function::prescan").or_default() += __prescan_t0.elapsed();
+
+    let __body_t0 = std::time::Instant::now();
 
     // NOTE: move_override_params is NOT used for non-generic functions.
     // The callee-side move-through-Ptr optimization is only safe when the
@@ -691,6 +741,7 @@ pub fn lower_function(
             // Run delayed meta expansion (e.g. `meta for` inside match arms using
             // variant_payloads(T)) for non-generic functions.  For generic functions
             // this is done inside lower_generic_function with type substitutions.
+            let __meta_t0 = std::time::Instant::now();
             let expanded_block;
             let block = {
                 let empty_subs: Vec<(String, crate::parser::ast::Type)> = vec![];
@@ -712,7 +763,10 @@ pub fn lower_function(
                 expanded_block = cloned;
                 &expanded_block
             };
+            *ctx.lower_fn_sub_times.entry("lower_function::body::meta_expand").or_default() += __meta_t0.elapsed();
+            let __lower_block_t0 = std::time::Instant::now();
             lower_block(ctx, &mut builder, block);
+            *ctx.lower_fn_sub_times.entry("lower_function::body::lower_block").or_default() += __lower_block_t0.elapsed();
 
             // Add implicit return if the last block has no terminator
             let last_block_idx = builder.current_block.0 as usize;
@@ -779,15 +833,20 @@ pub fn lower_function(
             // Not handled in lowering — skip
             // Pop the Function scope we pushed
             ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
+            *ctx.lower_fn_sub_times.entry("lower_function::body").or_default() += __body_t0.elapsed();
             return;
         }
     }
 
+    *ctx.lower_fn_sub_times.entry("lower_function::body").or_default() += __body_t0.elapsed();
+
+    let __finalize_t0 = std::time::Instant::now();
     ctx.flush_ownership_to_locals(&mut builder);
     let mut func = builder.build();
     func.display_name = Some(name.to_string());
     func.def_span = Some(func_span);
     module.functions.push(func);
+    *ctx.lower_fn_sub_times.entry("lower_function::finalize").or_default() += __finalize_t0.elapsed();
 }
 
 /// Lower an equip method into a standalone GIR function with mangled name.

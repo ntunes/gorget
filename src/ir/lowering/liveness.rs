@@ -5,6 +5,16 @@
 //!
 //! Algorithm: reverse AST walk with branch union and two-pass loops.
 //! Result: a set of span positions where the identifier is the last use.
+//!
+//! Perf note (2026-05-18): the live set was `FxHashSet<String>` and was
+//! cloned at every branch (if/elif/else, match arm, while body, for body,
+//! Expr::If, Expr::Match). For 695 functions in the self-host lowerer
+//! workload that scaled to ~9 ms by itself. Switched to
+//! `FxHashSet<&'a str>` where `'a` is the lifetime of the AST function
+//! body — the `&str` references point at the `String` fields of
+//! `Expr::Identifier`. Cloning is now hash-rebuild of small `&str`
+//! headers (16 bytes), no per-entry `String` allocation. Same applies
+//! to the `cow_reassigned_after` analysis in `functions.rs`.
 
 use crate::parser::ast::*;
 use crate::span::Spanned;
@@ -21,15 +31,15 @@ pub struct LivenessResult {
 
 /// Compute last-use information for an entire function body.
 pub fn compute_function_liveness(body: &[Spanned<Stmt>]) -> LivenessResult {
-    let mut live = FxHashSet::default();
+    let mut live: FxHashSet<&str> = FxHashSet::default();
     let mut last_use_spans = FxHashSet::default();
     walk_block(body, &mut live, &mut last_use_spans);
     LivenessResult { last_use_spans }
 }
 
-fn walk_block(
-    stmts: &[Spanned<Stmt>],
-    live: &mut FxHashSet<String>,
+fn walk_block<'a>(
+    stmts: &'a [Spanned<Stmt>],
+    live: &mut FxHashSet<&'a str>,
     last_uses: &mut FxHashSet<usize>,
 ) {
     for stmt in stmts.iter().rev() {
@@ -37,9 +47,9 @@ fn walk_block(
     }
 }
 
-fn walk_stmt(
-    stmt: &Stmt,
-    live: &mut FxHashSet<String>,
+fn walk_stmt<'a>(
+    stmt: &'a Stmt,
+    live: &mut FxHashSet<&'a str>,
     lu: &mut FxHashSet<usize>,
 ) {
     match stmt {
@@ -49,7 +59,7 @@ fn walk_stmt(
         }
         Stmt::Assign { target, value, .. } => {
             if let Expr::Identifier(name) = &target.node {
-                live.remove(name);
+                live.remove(name.as_str());
             }
             uses_expr(&value.node, value.span.start, live, lu);
             uses_target_sub(&target.node, live, lu);
@@ -107,7 +117,7 @@ fn walk_stmt(
         }
         Stmt::Match { scrutinee, arms, else_arm, .. } => {
             let saved = live.clone();
-            let mut union = FxHashSet::default();
+            let mut union: FxHashSet<&'a str> = FxHashSet::default();
             for item in arms {
                 if let MatchItem::Arm(arm) = item {
                     let mut a = saved.clone();
@@ -134,19 +144,19 @@ fn walk_stmt(
 }
 
 /// Process an expression: for each Identifier, check if it's a last use.
-fn uses_expr(
-    expr: &Expr,
+fn uses_expr<'a>(
+    expr: &'a Expr,
     span_start: usize,
-    live: &mut FxHashSet<String>,
+    live: &mut FxHashSet<&'a str>,
     lu: &mut FxHashSet<usize>,
 ) {
     match expr {
         Expr::Identifier(name) => {
-            if !live.contains(name) {
+            if !live.contains(name.as_str()) {
                 // Not in live set → this is the last use → record span
                 lu.insert(span_start);
             }
-            live.insert(name.clone());
+            live.insert(name.as_str());
         }
         Expr::Call { callee, args, .. } => {
             // Process args right-to-left (reverse of evaluation order)
@@ -194,7 +204,7 @@ fn uses_expr(
         }
         Expr::Match { scrutinee, arms, else_arm, .. } => {
             let saved = live.clone();
-            let mut union = FxHashSet::default();
+            let mut union: FxHashSet<&'a str> = FxHashSet::default();
             for arm in arms {
                 let mut a = saved.clone();
                 uses_expr(&arm.body.node, arm.body.span.start, &mut a, lu);
@@ -240,7 +250,7 @@ fn uses_expr(
         Expr::SetComprehension { expr, variable, iterable, condition, .. } => {
             if let Some(c) = condition { uses_expr(&c.node, c.span.start, live, lu); }
             uses_expr(&expr.node, expr.span.start, live, lu);
-            live.remove(&variable.node);
+            live.remove(variable.node.as_str());
             uses_expr(&iterable.node, iterable.span.start, live, lu);
         }
         Expr::StringLiteral(_, interp_exprs) => {
@@ -271,7 +281,7 @@ fn uses_expr(
             if let Some(c) = condition { uses_expr(&c.node, c.span.start, live, lu); }
             uses_expr(&value.node, value.span.start, live, lu);
             uses_expr(&key.node, key.span.start, live, lu);
-            for v in variables { live.remove(&v.node); }
+            for v in variables { live.remove(v.node.as_str()); }
             uses_expr(&iterable.node, iterable.span.start, live, lu);
         }
         Expr::Range { start, end, .. } => {
@@ -302,7 +312,7 @@ fn uses_expr(
     }
 }
 
-fn uses_target_sub(expr: &Expr, live: &mut FxHashSet<String>, lu: &mut FxHashSet<usize>) {
+fn uses_target_sub<'a>(expr: &'a Expr, live: &mut FxHashSet<&'a str>, lu: &mut FxHashSet<usize>) {
     match expr {
         Expr::FieldAccess { object, .. } | Expr::TupleFieldAccess { object, .. } => {
             uses_expr(&object.node, object.span.start, live, lu);
@@ -315,9 +325,9 @@ fn uses_target_sub(expr: &Expr, live: &mut FxHashSet<String>, lu: &mut FxHashSet
     }
 }
 
-fn kill_pattern(pat: &Spanned<Pattern>, live: &mut FxHashSet<String>) {
+fn kill_pattern<'a>(pat: &'a Spanned<Pattern>, live: &mut FxHashSet<&'a str>) {
     match &pat.node {
-        Pattern::Binding(name) => { live.remove(name); }
+        Pattern::Binding(name) => { live.remove(name.as_str()); }
         Pattern::Constructor { fields, .. } => { for f in fields { kill_pattern(f, live); } }
         Pattern::Tuple(elems) => { for e in elems { kill_pattern(e, live); } }
         _ => {}

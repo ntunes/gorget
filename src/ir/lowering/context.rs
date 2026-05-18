@@ -207,7 +207,17 @@ pub struct FunctionState {
     pub cow_reassigned_names: rustc_hash::FxHashSet<String>,
     /// Flow-sensitive CoW: for each statement span.start, the set of names
     /// reassigned or !-moved on any forward path from that point.
-    pub cow_reassigned_after: FxHashMap<usize, rustc_hash::FxHashSet<String>>,
+    ///
+    /// Perf note (2026-05-18): set value type is `Rc<str>` (not `String`)
+    /// because `cow_after_block` clones the live "future" set at every
+    /// statement boundary (`result.insert(stmt.span.start, future.clone())`)
+    /// and at every branch (`saved = future.clone()` etc). With `String`,
+    /// each clone reallocates every entry — for the 695-function
+    /// self-host lowerer that scaled to ~7 ms. With `Rc<str>` the clone
+    /// is refcount-bump-per-entry, no allocation. Synthesised
+    /// `"@mut:path"` markers and AST-borrowed names both round-trip through
+    /// the same `Rc<str>` cell.
+    pub cow_reassigned_after: FxHashMap<usize, rustc_hash::FxHashSet<std::rc::Rc<str>>>,
     /// Phase 1f: name → use count in the function body. Names with count=1 are
     /// single-use (dead after their one use) → auto-move at push/constructor.
     pub name_use_counts: rustc_hash::FxHashMap<String, u32>,
@@ -357,6 +367,16 @@ pub struct LoweringContext<'a> {
     /// Replaces the prior `callee.starts_with("__gorget_box_alloc_")`
     /// name match per CLAUDE.md "No name matching".
     pub heap_alloc_consumer_externs: rustc_hash::FxHashSet<String>,
+    /// Per-sub-pass timing accumulators for `lower_function`. Surfaces in
+    /// `gg profile` as `lower_function::<name>` sub-passes folded into the
+    /// `gir_lower_pass_times` map by `lower_module`. Mirrors the pattern
+    /// from commit `3dfc9916` (per-pass timing in `lower_module`), one
+    /// layer deeper. Sub-pass names: `setup` (return type/params/locals
+    /// registration + drop-scope push), `prescan` (cow_unsafe / name use
+    /// counts / liveness), `body` (the actual statement+expression
+    /// lowering and tail return emission), `finalize` (ownership flush +
+    /// builder.build + module.functions push).
+    pub lower_fn_sub_times: std::collections::HashMap<&'static str, std::time::Duration>,
 }
 
 /// Snapshot of lowering state taken at branch entry, restored at branch exit.
@@ -451,6 +471,7 @@ impl<'a> LoweringContext<'a> {
             runtime_callees: FxHashMap::default(),
             call_resolved_names: FxHashMap::default(),
             heap_alloc_consumer_externs: rustc_hash::FxHashSet::default(),
+            lower_fn_sub_times: std::collections::HashMap::new(),
         }
     }
 
@@ -1067,8 +1088,10 @@ impl<'a> LoweringContext<'a> {
             Some(s) => s,
             None => return false,
         };
-        // Direct mutation marker for the exact path.
-        if set.contains(&format!("@mut:{}", source_path)) {
+        // Direct mutation marker for the exact path. Set is FxHashSet<Rc<str>>;
+        // contains accepts &str via the Borrow<str> impl on Rc<str>.
+        let direct = format!("@mut:{}", source_path);
+        if set.contains(direct.as_str()) {
             return true;
         }
         // Name reassignment for a bare local path or the root of a field path
@@ -1095,7 +1118,8 @@ impl<'a> LoweringContext<'a> {
             if i == parts.len() - 1 {
                 break;
             }
-            if set.contains(&format!("@mut:{}", prefix)) {
+            let marker = format!("@mut:{}", prefix);
+            if set.contains(marker.as_str()) {
                 return true;
             }
         }

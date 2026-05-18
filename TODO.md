@@ -67,7 +67,32 @@ Fresh `gg profile` snapshot taken on `gorget-1` HEAD (e052606e) after the post-2
 
 **Top-5 cheap-win candidates (excluding drop_elab, semantic name-index, safety borrow-state, and the items shipped in the 2026-05-17 batch):**
 
-1. **`gir_lower::lower_functions` (61.0ms on lowerer, 11.7ms on typechecker, 4.0ms on resolver) — `src/ir/lowering/`. NEW #1 BY ABSOLUTE TIME OUTSIDE KNOWN ZONES.** This is the per-AST-function lowering loop in `src/ir/lowering/mod.rs:1242-1257`, calling `lower_function()` per item. Sub-passes inside this loop currently aren't broken down further — drilling in is step 1. Likely sub-cost drivers, in decreasing probability: (a) expression lowering — `src/ir/lowering/exprs/mod.rs` is 4331 LOC, the bulk of the work; (b) statement lowering — `stmts/mod.rs` 3436 LOC plus assigns/for_loops/patterns; (c) the per-function `Context` setup and tear-down. Cheap-win shapes: (i) profile-instrument `lower_function` into "exprs / stmts / setup / drops" sub-phases (mirrors what we did for `gir_lower`); (ii) audit hot-path HashMaps in `context.rs` (3330 LOC, lots of per-function scratch state — grep for stdlib `HashMap` and swap to FxHashMap); (iii) look for the `O(N²)` smell in span/scope walking. [priority: HIGH — single largest non-KNOWN sub-phase, ~2-3 days to instrument-and-profile-fix]
+1. **`gir_lower::lower_functions` — INSTRUMENTED + PRESCAN FIX SHIPPED 2026-05-18** (~65ms on lowerer baseline → ~55ms after; instrumentation pattern from `3dfc9916` extended one layer deeper). The non-generic per-AST-function lowering loop in `src/ir/lowering/mod.rs:1242-1257` now reports a breakdown across `lower_function::{setup, prescan, body, finalize}` plus body sub-passes `body::{meta_expand, lower_block}` and prescan sub-passes `prescan::{cow_unsafe, cow_after, name_use_counts, liveness}` in `gg profile` JSON. **Post-instrument breakdown on lowerer (median-of-5)**:
+
+   | Sub-pass                                  | Before (ms) | After (ms) | Δ |
+   |-------------------------------------------|------------:|-----------:|---:|
+   | `lower_functions` (parent total)          |        65.0 |       55.0 | −15% |
+   | `lower_function::body`                    |          ~50 |       45.8 | tail |
+   | &nbsp;&nbsp;`body::lower_block`           |          ~46 |       41.1 | (the bulk) |
+   | &nbsp;&nbsp;`body::meta_expand`           |          ~4 |        3.4 | (block.clone+meta walk) |
+   | `lower_function::prescan`                 |        18.0 |        7.8 | **−57%** |
+   | &nbsp;&nbsp;`prescan::liveness`           |         9.0 |        3.0 | **−66%** |
+   | &nbsp;&nbsp;`prescan::cow_after`          |         7.3 |        3.0 | **−59%** |
+   | &nbsp;&nbsp;`prescan::name_use_counts`    |         1.2 |        1.2 | flat |
+   | &nbsp;&nbsp;`prescan::cow_unsafe`         |         0.5 |        0.5 | flat |
+   | `lower_function::setup`                   |         2.3 |        1.1 | (coalesced) |
+   | `lower_function::finalize`                |         0.2 |        0.2 | flat |
+   | `gir_lower` (parent phase)                |       116.0 |      104.5 | −10% |
+   | `total`                                   |       581.0 |      570.0 | −2% |
+
+   **Fix**: `src/ir/lowering/liveness.rs` `FxHashSet<String>` → `FxHashSet<&'a str>` borrowed from AST identifier nodes (cheap clone, no per-entry allocation at branch save/restore points). `src/ir/lowering/functions.rs::compute_cow_reassigned_after` and its helpers `FxHashSet<String>` → `FxHashSet<Rc<str>>` with a per-function `String→Rc<str>` interner (the analysis result owns the map across function boundaries so a `&str`-slice approach would require lifetime plumbing through `FunctionState`; `Rc<str>` is the localized equivalent — clones are refcount bumps). `ctx.func_state.cow_reassigned_after` type updated to match; `is_source_mut_unsafe_at` queries use `set.contains(s as &str)` via `Rc<str>: Borrow<str>`. Typechecker `lower_functions` 12.3 → 11.3ms (−1ms / −8%); parser tiny. **The fix illustrates CLAUDE.md "Debugging heuristic — fix complexity as a signal of wrong layer" obliquely** — the writer site (`future.clone()` at every statement boundary plus union sites in if/match) was paying full per-String alloc cost; the cheap fix is changing the cell type to make clones cheap. The 9ms body-side speedup (from ~50ms → 45.8ms) is a downstream effect: body lowering reads `cow_reassigned_after` via `is_source_mut_unsafe_at` (called at every CoW-borrow site), and those calls used to allocate `format!("@mut:{}", path)` `String`s as map keys — they still do today (look at `is_source_mut_unsafe_at` for the lingering `format!` calls; switching to a reused-buffer or stack-buf `&str` lookup would shave the remaining 1-2ms).
+
+   **Remaining cheap-win at this site (deferred)**:
+   - (i) drop the residual `format!("@mut:{}", path)` allocations in `is_source_mut_unsafe_at` — could use a stack-allocated buffer (the marker is short, bounded by typical path lengths) or a single `String` reused across the loop. Expected: 1-2ms shave on body cost.
+   - (ii) `body::lower_block` at 41ms is now the dominant sub-pass and is the structural work — won't yield to one-line FxHashMap swaps; will require a `src/ir/lowering/exprs/mod.rs` (4331 LOC) and `stmts/mod.rs` (3436 LOC) tour. That's the next round's structural target.
+   - (iii) `body::meta_expand` at 3.4ms is `block.clone()` + tree walk. The clone could be elided for blocks that have no `meta for` / `meta if` to expand — quick scan check before the clone. Expected: 2-3ms shave.
+
+   [updated: 2026-05-18 — Step 1 + Step 2 shipped: instrumentation + Rc<str>/&str-borrow fix on prescan; the structural body work remains as the new dominant sub-pass]
 
 2. **`gir_lower::validate_consume_sites` (15.2ms on lowerer, 4.6ms on typechecker) — `src/ir/lowering/` (location TBD).** Second-largest gir_lower sub-pass after `lower_functions`. Likely walks every GIR function looking for ownership consume sites and checking owner/move invariants. Cheap-win surface: if it walks insts and queries a name-keyed map for each, a one-pass merge with `validate_resource_sites_all` (1.5ms, post-`4b529742` collapse) or `validate_drop_pre_rebind_and_null_to_opt` (1.2ms) could shave 4-5ms via shared walks. FxHashMap swap if it uses stdlib HashMaps internally. [priority: medium, ~half day]
 
