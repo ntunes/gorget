@@ -10974,6 +10974,53 @@ fn shared_weak() {
     run_gg("shared_weak.gg", "42\nok");
 }
 
+// ── Weak[T] end-to-end cycle-breaking proof (paired positive + negative) ──
+//
+// `Weak[T]` is documented as the cycle-breaker for Shared cycles
+// (docs/book/16-smart-pointers.md:109-127, docs/language-reference.md:529-531)
+// but nothing in the suite proves it end-to-end today. The four fixtures
+// below land the canonical shapes (interior-mut cycle, parent/child cycle)
+// in idiomatic Gorget. All four are #[ignore]'d pending compiler gaps —
+// the expected stdout reflects what the language *should* produce, so
+// when the gaps land these tests will start passing without modification.
+//
+// Don't reshape the fixtures to dodge the gaps (CLAUDE.md "Don't redesign
+// around compiler gaps"). The wired-in expected output is the contract.
+//
+// Gaps blocking each fixture are documented in its source comment header
+// and in TODO.md "Weak[T] cycle-breaking — missing primitives".
+
+#[test]
+#[ignore = "blocked: `Cell[T]` is documented but not implemented (resolver rejects `Cell`)"]
+fn weak_cycle_shape_a_negative() {
+    // All-Shared cycle through Cell[Option[Shared[Node]]] — must leak.
+    run_gg("weak_cycle_shape_a_negative.gg", "leaked=true\ndone");
+}
+
+#[test]
+#[ignore = "blocked: `Cell[T]` is documented but not implemented (resolver rejects `Cell`)"]
+fn weak_cycle_shape_a_positive() {
+    // One Weak edge breaks the cycle — must NOT leak.
+    run_gg("weak_cycle_shape_a_positive.gg", "leaked=false\ndone");
+}
+
+#[test]
+#[ignore = "blocked: `Shared[Parent]` has no mutability path for struct fields; `p.children.push(c)` silently no-ops"]
+fn weak_cycle_shape_b_negative() {
+    // Parent/child with Shared[Parent] back-edge — must leak.
+    run_gg("weak_cycle_shape_b_negative.gg", "leaked=true\ndone");
+}
+
+#[test]
+#[ignore = "blocked: `Shared[Parent]` has no mutability path for struct fields; `p.children.push(c)` silently no-ops"]
+fn weak_cycle_shape_b_positive() {
+    // Parent/child with Weak[Parent] back-edge — must NOT leak.
+    run_gg(
+        "weak_cycle_shape_b_positive.gg",
+        "children=3\nparent_upgrade=99\nleaked=false\ndone",
+    );
+}
+
 #[test]
 fn shared_struct() {
     run_gg("shared_struct.gg", "3\n10\n5000\n10\n5000");

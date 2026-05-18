@@ -1,0 +1,71 @@
+# Cycle-breaking proof (shape B — parent/child).
+#
+# POSITIVE CASE: a Parent owns a Vector[Shared[Child]]; each Child holds
+# a Weak[Parent] back. Parent -> child is strong; child -> parent is
+# weak. Drop completes — no cycle, no leak.
+#
+# Status: BLOCKED on absent mutability path for `Shared[T]` field —
+# even though the `Weak[Parent]` field on Child is constructible at
+# Child creation time via `p.downgrade()`, populating Parent.children
+# requires mutating a field of an already-built `Shared[Parent]`, and
+# `p.children.push(c)` for `p: Shared[Parent]` currently compiles but
+# is a silent no-op (no error, no mutation; the push goes to a
+# discarded copy and the assignment-back never happens).
+#
+# See TODO.md "Weak[T] cycle-breaking — missing primitives".
+#
+# When the primitive lands, this fixture must produce:
+#     children=3
+#     parent_upgrade=99
+#     leaked=false
+#     done
+# Comparison with weak_cycle_shape_b_negative.gg's leaked=true closes
+# the loop: the only delta is `Shared[Parent]` -> `Weak[Parent]` on
+# the child's back-edge, and that flips leak to no-leak. That is the
+# end-to-end cycle-breaking proof.
+
+from std.os import mem_live
+from std.collections import Vector
+
+struct Child:
+    int id
+    Weak[Parent] parent_weak
+
+struct Parent:
+    int id
+    Vector[Shared[Child]] children
+
+void main():
+    # First, one observable iteration to demonstrate Weak.upgrade()
+    # walks back to the live parent.
+    Shared[Parent] root = Shared[Parent](Parent(99, Vector[Shared[Child]]()))
+    int i = 0
+    while i < 3:
+        Shared[Child] c = Shared[Child](Child(i, root.downgrade()))
+        root.children.push(c)
+        i = i + 1
+    Parent v = root.get()
+    print(f"children={v.children.len()}")
+    # Walk one child's parent back-ref via Weak.upgrade()
+    Shared[Child] c0 = v.children.get(0).unwrap().clone()
+    match c0.get().parent_weak.upgrade():
+        case Some(par):
+            Parent pv = par.get()
+            print(f"parent_upgrade={pv.id}")
+        case None():
+            print("parent_upgrade=dead")
+
+    # Now the leak check: many cycles, each scope-local.
+    int baseline = mem_live()
+    int outer = 0
+    while outer < 50:
+        Shared[Parent] p = Shared[Parent](Parent(99, Vector[Shared[Child]]()))
+        int j = 0
+        while j < 3:
+            Shared[Child] kid = Shared[Child](Child(j, p.downgrade()))
+            p.children.push(kid)
+            j = j + 1
+        outer = outer + 1
+    int delta = mem_live() - baseline
+    print(f"leaked={delta > 0}")
+    print("done")
