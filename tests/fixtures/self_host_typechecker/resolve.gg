@@ -15,6 +15,7 @@ from scope import DkGenericParam, DkImport
 from scope import SkModule, SkFunction, SkBlock, SkEquipBlock, SkTraitDef, SkForLoop
 from scope import get_def_at
 from types import TypeTable, ast_type_to_resolved, ResolvedType, get_stype_at
+from diagnostic import Diagnostic
 
 # ── Function-body scope register ────────────────────────────
 # The Dict gives O(1) lookup of the canonical (last-registered) body
@@ -35,6 +36,12 @@ struct ResolveContext:
     Dict[String, int] function_body_scopes
     Vector[String] fn_scope_names
     Vector[int] fn_scope_ids
+    # Typed diagnostic stream — populated by the typechecker pass
+    # (this driver dir's typecheck.gg / infer.gg). Replaces the prior
+    # silent-failure pattern where type mismatches just propagated
+    # `types.error_id`. Drained to stderr by the comparison driver so
+    # stdout stays byte-stable for type_comparison.
+    Vector[Diagnostic] diagnostics
 
 # ── Built-in check ──────────────────────────────────────────
 
@@ -86,7 +93,7 @@ bool is_builtin(String name):
 # ═══════════════════════════════════════════════════════════
 
 ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable &types):
-    ResolveContext ctx = ResolveContext(Dict[int, int](), Dict[String, int](), Vector[String](), Vector[int]())
+    ResolveContext ctx = ResolveContext(Dict[int, int](), Dict[String, int](), Vector[String](), Vector[int](), Vector[Diagnostic]())
 
     # Register built-in core traits
     Vector[String] trait_names = Vector[String]()

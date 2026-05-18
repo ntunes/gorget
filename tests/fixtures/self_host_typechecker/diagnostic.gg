@@ -1,0 +1,117 @@
+# Typed diagnostic record produced by the resolution / type-checking
+# / lowering / validation passes.
+#
+# Replaces the free-form `Vector[String] errors` accumulator pattern.
+# Span / severity / category are first-class fields rather than baked
+# into the message text, so consumers (drivers, CLIs, IDEs) can filter,
+# group, render, and emit JSON without re-parsing strings.
+#
+# Typechecker migration (2026-05-18): the typechecker had no error
+# accumulator before this migration — type mismatches and undefined-name
+# lookups silently propagated `types.error_id`. This commit adds the
+# Diagnostic plumbing (a `Vector[Diagnostic] diagnostics` field on
+# `ResolveContext`, threaded through type_check_* via `&ctx`) and
+# wires a couple of exemplar push sites; the bulk of mirrored Rust
+# sites (47 `self.error(...)` calls in src/semantic/typecheck.rs) will
+# follow as separate migrations. Mirrors the resolver POC, parser, and
+# lexer patterns — kept per-stage while the cross-directory
+# shared-module strategy is settled.
+
+from std.collections import Vector
+from std.conv import int_to_str
+from ast import Span
+
+# ── Severity ────────────────────────────────────────────────
+
+enum Severity:
+    SevError
+    SevWarning
+    SevSuggestion  # for lints / hints
+
+# ── Diagnostic category ─────────────────────────────────────
+#
+# One variant per category currently emitted by a stage on the
+# accumulator. The typechecker populates `DkTypeMismatch` /
+# `DkUndefinedName` today; the other variants are reserved for
+# upstream / downstream stages (parser → DkParseError; resolver →
+# DkUndefinedName / DkDuplicateDefinition; lexer → DkLexError;
+# lowerer → DkUnreachable).
+
+enum DiagKind:
+    # Resolver kinds
+    DkUndefinedName        # EIdentifier / EStructLiteral lookup miss
+    DkDuplicateDefinition  # `define` rejected — name already bound
+
+    # Parser kinds
+    DkParseError           # expect_tok / expect_kw / expected-* sites
+
+    # Lexer kinds
+    DkLexError             # unterminated string / char / escape; unexpected char
+
+    # Typechecker kinds (active in this stage)
+    DkNotAType             # used a non-type identifier in a type position
+    DkTypeMismatch         # expected vs actual type disagreement
+
+    # Reserved for future migrators (kept so the type doesn't churn
+    # when lowerer sites migrate).
+    DkUnreachable
+
+# ── Diagnostic ──────────────────────────────────────────────
+
+struct Diagnostic:
+    Span span
+    Severity sev
+    DiagKind kind
+    String message
+
+# ── Constructors ────────────────────────────────────────────
+#
+# Prefer the helpers (`Diagnostic.error(...)` etc.) over inline
+# struct literals so call sites read like prose and we have one
+# place to evolve the shape.
+
+equip Diagnostic:
+
+    Diagnostic error(Span span, DiagKind kind, String message):
+        return Diagnostic(span, SevError(), kind, message)
+
+    Diagnostic warn(Span span, DiagKind kind, String message):
+        return Diagnostic(span, SevWarning(), kind, message)
+
+    Diagnostic suggest(Span span, DiagKind kind, String message):
+        return Diagnostic(span, SevSuggestion(), kind, message)
+
+# ── Rendering ───────────────────────────────────────────────
+
+String severity_str(Severity sev):
+    match sev:
+        case SevError():
+            return "error"
+        case SevWarning():
+            return "warning"
+        case SevSuggestion():
+            return "suggestion"
+
+String diag_kind_str(DiagKind kind):
+    match kind:
+        case DkUndefinedName():
+            return "undefined-name"
+        case DkDuplicateDefinition():
+            return "duplicate-definition"
+        case DkParseError():
+            return "parse-error"
+        case DkLexError():
+            return "lex-error"
+        case DkNotAType():
+            return "not-a-type"
+        case DkTypeMismatch():
+            return "type-mismatch"
+        case DkUnreachable():
+            return "unreachable"
+
+# Canonical one-line rendering used by the typechecker comparison test
+# driver. Format: `DIAG <severity> <kind> <span_start>:<span_end> <message>`.
+# Stderr-routed so the stdout comparison contract (canonical TYPE lines)
+# stays byte-stable; type_comparison reads only stdout.
+String format_diagnostic(Diagnostic d):
+    return "DIAG " + severity_str(d.sev) + " " + diag_kind_str(d.kind) + " " + int_to_str(d.span.start) + ":" + int_to_str(d.span.end) + " " + d.message

@@ -1,6 +1,9 @@
 # CLI driver for type-checker comparison testing.
 # Reads a .gg file, parses it, resolves names, type-checks, and prints
-# canonical TYPE output.
+# canonical TYPE output to stdout. Diagnostics gathered during type
+# checking are drained to stderr as `DIAG ...` lines (sorted by span
+# start for determinism), keeping the stdout comparison contract
+# byte-stable while surfacing the typed diagnostic stream for inspection.
 # Usage: driver <path-to-file.gg>
 
 from parser import parse_source
@@ -12,6 +15,8 @@ from typecheck import type_check_module
 from format_types import format_types
 from derive import expand_derives
 from meta import expand_meta_types, expand_meta_for_match
+from diagnostic import Diagnostic, format_diagnostic
+from std.io import stderr
 from std.fs import read_file, file_exists
 from std.os import args
 from std.collections import Vector
@@ -69,5 +74,36 @@ void main():
     expand_meta_types(&m, &types)
     expand_meta_for_match(&m)
     ResolveContext ctx = resolve_module(m, &scopes, &types)
-    type_check_module(m, &scopes, &types, ctx)
+    type_check_module(m, &scopes, &types, &ctx)
     print(format_types(scopes, types))
+    # Drain diagnostics to stderr. Sort by span start so the order is
+    # deterministic regardless of typechecker-internal traversal order.
+    # Stderr rather than stdout because type_comparison does a content
+    # match on stdout; routing DIAG lines off-band keeps clean type
+    # checks byte-identical while still making the diagnostic stream
+    # readable.
+    if ctx.diagnostics.len() > 0:
+        Vector[int] order = Vector[int]()
+        int i = 0
+        while i < ctx.diagnostics.len():
+            order.push(i)
+            i = i + 1
+        int oi = 1
+        while oi < order.len():
+            int key = order.get(oi).unwrap()
+            int key_start = ctx.diagnostics.get(key).unwrap().span.start
+            int oj = oi - 1
+            while oj >= 0:
+                int other = order.get(oj).unwrap()
+                if ctx.diagnostics.get(other).unwrap().span.start <= key_start:
+                    break
+                order.set(oj + 1, other)
+                oj = oj - 1
+            order.set(oj + 1, key)
+            oi = oi + 1
+        int k = 0
+        while k < order.len():
+            int idx = order.get(k).unwrap()
+            Diagnostic d = ctx.diagnostics.get(idx).unwrap()
+            print(format_diagnostic(d), file=stderr)
+            k = k + 1

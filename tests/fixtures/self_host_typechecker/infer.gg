@@ -27,13 +27,13 @@ from traits import intrinsic_resolve
 
 # ── Statement return type inference (for closure bodies) ──────
 
-int infer_stmt_return_type(Stmt s, ScopeTable scopes, TypeTable &types, ResolveContext ctx):
+int infer_stmt_return_type(Stmt s, ScopeTable scopes, TypeTable &types, ResolveContext &ctx):
     match s:
         case SExpr(sexpr):
-            return infer_expr_type(sexpr, scopes, &types, ctx)
+            return infer_expr_type(sexpr, scopes, &types, &ctx)
         case SReturn(opt_expr):
             if opt_expr is Some(sexpr):
-                return infer_expr_type(sexpr, scopes, &types, ctx)
+                return infer_expr_type(sexpr, scopes, &types, &ctx)
             return types.void_id
         else:
             return types.void_id
@@ -42,45 +42,45 @@ int infer_stmt_return_type(Stmt s, ScopeTable scopes, TypeTable &types, ResolveC
 # ── Closure return type inference ──────────────────────────────
 # Infers a closure's return type using param_types map for local bindings.
 
-int infer_closure_expr_type(SpannedExpr sexpr, Dict[String, int] param_types, ScopeTable scopes, TypeTable &types, ResolveContext ctx):
+int infer_closure_expr_type(SpannedExpr sexpr, Dict[String, int] param_types, ScopeTable scopes, TypeTable &types, ResolveContext &ctx):
     match sexpr.expr:
         case EIdentifier(name):
             # Check param_types first
             if param_types.contains(name):
                 return param_types.get(name).unwrap()
             # Fall through to normal inference
-            return infer_expr_type(sexpr, scopes, &types, ctx)
+            return infer_expr_type(sexpr, scopes, &types, &ctx)
 
         case EBinaryOp(left, op, right):
             if op == "==" or op == "!=" or op == "<" or op == ">" or op == "<=" or op == ">=" or op == "and" or op == "or" or op == "in":
                 return types.bool_id
-            int lt = infer_closure_expr_type(*left, param_types, scopes, &types, ctx)
+            int lt = infer_closure_expr_type(*left, param_types, scopes, &types, &ctx)
             if lt >= 0:
                 return lt
-            return infer_closure_expr_type(*right, param_types, scopes, &types, ctx)
+            return infer_closure_expr_type(*right, param_types, scopes, &types, &ctx)
 
         case EUnaryOp(op, operand):
             if op == "not":
                 return types.bool_id
-            return infer_closure_expr_type(*operand, param_types, scopes, &types, ctx)
+            return infer_closure_expr_type(*operand, param_types, scopes, &types, &ctx)
 
         case ECall(callee, args, targs):
-            return infer_expr_type(sexpr, scopes, &types, ctx)
+            return infer_expr_type(sexpr, scopes, &types, &ctx)
 
         case EMethodCall(obj, method_name, args, targs):
-            return infer_expr_type(sexpr, scopes, &types, ctx)
+            return infer_expr_type(sexpr, scopes, &types, &ctx)
 
         else:
-            return infer_expr_type(sexpr, scopes, &types, ctx)
+            return infer_expr_type(sexpr, scopes, &types, &ctx)
     return types.void_id
 
-int infer_closure_return_type(Stmt s, Dict[String, int] param_types, ScopeTable scopes, TypeTable &types, ResolveContext ctx):
+int infer_closure_return_type(Stmt s, Dict[String, int] param_types, ScopeTable scopes, TypeTable &types, ResolveContext &ctx):
     match s:
         case SExpr(sexpr):
-            return infer_closure_expr_type(sexpr, param_types, scopes, &types, ctx)
+            return infer_closure_expr_type(sexpr, param_types, scopes, &types, &ctx)
         case SReturn(opt_expr):
             if opt_expr is Some(sexpr):
-                return infer_closure_expr_type(sexpr, param_types, scopes, &types, ctx)
+                return infer_closure_expr_type(sexpr, param_types, scopes, &types, &ctx)
             return types.void_id
         else:
             return types.void_id
@@ -101,7 +101,7 @@ int infer_closure_return_type(Stmt s, Dict[String, int] param_types, ScopeTable 
 # the across-the-board recursive cost. Extend the recording to other
 # Expr variants as the lowerer grows new query sites.
 
-int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, ResolveContext ctx):
+int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, ResolveContext &ctx):
     Expr e = sexpr.expr
     int span_start = sexpr.span.start
 
@@ -166,7 +166,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
 
         case ECall(callee, args, targs):
             # Infer callee type, extract return type from RTFunction
-            int callee_type = infer_expr_type(SpannedExpr((*callee).expr, (*callee).span), scopes, &types, ctx)
+            int callee_type = infer_expr_type(SpannedExpr((*callee).expr, (*callee).span), scopes, &types, &ctx)
             if callee_type >= 0 and callee_type < types.types.len():
                 ResolvedType ct = get_rtype_at(types.types, callee_type)
                 match ct:
@@ -235,19 +235,19 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             if op == "==" or op == "!=" or op == "<" or op == ">" or op == "<=" or op == ">=" or op == "and" or op == "or" or op == "in":
                 return types.bool_id
             # Arithmetic/bitwise: return type of left operand
-            int lt = infer_expr_type(SpannedExpr((*left).expr, (*left).span), scopes, &types, ctx)
+            int lt = infer_expr_type(SpannedExpr((*left).expr, (*left).span), scopes, &types, &ctx)
             return lt
 
         case EUnaryOp(op, operand):
             if op == "not":
                 return types.bool_id
             # neg, bitnot, deref: return operand type
-            int ot = infer_expr_type(SpannedExpr((*operand).expr, (*operand).span), scopes, &types, ctx)
+            int ot = infer_expr_type(SpannedExpr((*operand).expr, (*operand).span), scopes, &types, &ctx)
             return ot
 
         case EFieldAccess(obj, field_name):
             # Look up struct field type from the field types table
-            int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, ctx)
+            int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, &ctx)
             if obj_type >= 0 and obj_type < types.types.len():
                 ResolvedType ort = get_rtype_at(types.types, obj_type)
                 match ort:
@@ -268,7 +268,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             # return type cleanly. The hardcoded chain still owns built-in
             # collection runtime methods (Vector.get, Dict.keys, …) where
             # no equip block exists in user-space.
-            int reg_obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, ctx)
+            int reg_obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, &ctx)
             if reg_obj_type >= 0 and reg_obj_type < types.types.len():
                 MethodResolution reg_res = resolve_method_full(types.trait_registry, reg_obj_type, method_name, scopes, &types)
                 # Receiver-by-name fallback for cases where the receiver's
@@ -313,7 +313,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                     int reg_ret = reg_res.sig.return_type
                     Vector[int] reg_arg_types = Vector[int]()
                     for a in args:
-                        reg_arg_types.push(infer_expr_type(a, scopes, &types, ctx))
+                        reg_arg_types.push(infer_expr_type(a, scopes, &types, &ctx))
                     ShapeResolution sh = resolve_method_shape(types.trait_registry, reg_obj_type, method_name)
                     if sh.found:
                         Vector[int] bound = infer_method_targs(sh.shape, reg_arg_types, scopes, types)
@@ -371,7 +371,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                 return types.bool_id
             # .unwrap() returns the inner type of Option[T] or Result[T,E]
             if method_name == "unwrap" or method_name == "unwrap_or":
-                int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, ctx)
+                int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, &ctx)
                 if obj_type >= 0 and obj_type < types.types.len():
                     ResolvedType ort = get_rtype_at(types.types, obj_type)
                     match ort:
@@ -384,7 +384,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                             pass
             # .get(i) on Vector[T] → Option[T]; on Dict[K,V] → Option[V]
             if method_name == "get":
-                int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, ctx)
+                int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, &ctx)
                 if obj_type >= 0 and obj_type < types.types.len():
                     ResolvedType ort = get_rtype_at(types.types, obj_type)
                     match ort:
@@ -409,7 +409,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                             pass
             # .keys() / .values() on Dict[K,V] → Vector[K] / Vector[V]
             if method_name == "keys":
-                int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, ctx)
+                int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, &ctx)
                 if obj_type >= 0 and obj_type < types.types.len():
                     ResolvedType ort = get_rtype_at(types.types, obj_type)
                     match ort:
@@ -423,7 +423,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                         else:
                             pass
             if method_name == "values":
-                int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, ctx)
+                int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, &ctx)
                 if obj_type >= 0 and obj_type < types.types.len():
                     ResolvedType ort = get_rtype_at(types.types, obj_type)
                     match ort:
@@ -438,7 +438,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                             pass
             # .items() on Dict → Vector[(K,V)]
             if method_name == "items":
-                int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, ctx)
+                int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, &ctx)
                 if obj_type >= 0 and obj_type < types.types.len():
                     ResolvedType ort = get_rtype_at(types.types, obj_type)
                     match ort:
@@ -457,12 +457,12 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                             pass
             # .clone() / .copy() / .sorted() / .reversed() returns the same type
             if method_name == "clone" or method_name == "copy" or method_name == "sorted" or method_name == "reversed" or method_name == "filter":
-                return infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, ctx)
+                return infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, &ctx)
             # .fold(init, fn) returns the init type
             if method_name == "fold" or method_name == "reduce":
                 if args.len() >= 1:
                     SpannedExpr init_arg = args.get(0).unwrap()
-                    return infer_expr_type(init_arg, scopes, &types, ctx)
+                    return infer_expr_type(init_arg, scopes, &types, &ctx)
             # .parse(String) on primitive type → Option[T] or Result[T, String]
             # e.g. int.parse("99") → Option[int], float.parse("1.5") → Result[float, String]
             if method_name == "parse":
@@ -486,7 +486,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                         pass
             # .pop() / .remove() on Vector[T] → Option[T]
             if method_name == "pop" or method_name == "remove":
-                int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, ctx)
+                int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, &ctx)
                 if obj_type >= 0 and obj_type < types.types.len():
                     ResolvedType ort = get_rtype_at(types.types, obj_type)
                     match ort:
@@ -503,7 +503,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
 
         case EIndex(obj, index):
             # Indexing: Vector[T][i] → T, Dict[K,V][k] → V
-            int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, ctx)
+            int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, &ctx)
             if obj_type >= 0 and obj_type < types.types.len():
                 ResolvedType ort = get_rtype_at(types.types, obj_type)
                 match ort:
@@ -532,7 +532,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             # Array type from first element
             if elements.len() > 0:
                 SpannedExpr first = elements.get(0).unwrap()
-                int elem_type = infer_expr_type(first, scopes, &types, ctx)
+                int elem_type = infer_expr_type(first, scopes, &types, &ctx)
                 if elem_type >= 0:
                     return types.add_type(RTArray(elem_type, elements.len()))
             return NO_TYPE
@@ -540,7 +540,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
         case ETupleLiteral(elements):
             Vector[int] elem_ids = Vector[int]()
             for elem in elements:
-                int et = infer_expr_type(elem, scopes, &types, ctx)
+                int et = infer_expr_type(elem, scopes, &types, &ctx)
                 elem_ids.push(et)
             return types.add_type(RTTuple(elem_ids))
 
@@ -549,8 +549,8 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             if keys.len() > 0 and values.len() > 0:
                 SpannedExpr first_key = keys.get(0).unwrap()
                 SpannedExpr first_val = values.get(0).unwrap()
-                int key_type = infer_expr_type(first_key, scopes, &types, ctx)
-                int val_type = infer_expr_type(first_val, scopes, &types, ctx)
+                int key_type = infer_expr_type(first_key, scopes, &types, &ctx)
+                int val_type = infer_expr_type(first_val, scopes, &types, &ctx)
                 if key_type >= 0 and val_type >= 0:
                     # Look up Dict def
                     if scopes.lookup("Dict") is Some(dict_def):
@@ -575,14 +575,14 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             int ret_id = types.void_id
             if body.len() > 0:
                 Stmt last = body.get(body.len() - 1).unwrap()
-                int inferred_ret = infer_closure_return_type(last, param_types, scopes, &types, ctx)
+                int inferred_ret = infer_closure_return_type(last, param_types, scopes, &types, &ctx)
                 if inferred_ret >= 0:
                     ret_id = inferred_ret
             return types.add_type(RTFunction(param_type_ids, param_ownerships, ret_id))
 
         case ETry(inner):
             # try expr — unwraps Result[T,E] → T, Option[T] → T
-            int inner_type = infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, ctx)
+            int inner_type = infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, &ctx)
             if inner_type >= 0 and inner_type < types.types.len():
                 ResolvedType irt = get_rtype_at(types.types, inner_type)
                 match irt:
@@ -599,16 +599,16 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             int cast_type = ast_type_to_resolved((*target_type).ty, (*target_type).span, scopes, &types)
             if cast_type >= 0 and cast_type != types.error_id:
                 return cast_type
-            return infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, ctx)
+            return infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, &ctx)
 
         case EMove(inner):
-            return infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, ctx)
+            return infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, &ctx)
 
         case EMutableBorrow(inner):
-            return infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, ctx)
+            return infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, &ctx)
 
         case EDeref(inner):
-            return infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, ctx)
+            return infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, &ctx)
 
 
         case EIs(inner, negated, pattern):
@@ -616,7 +616,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
 
         case EAwait(inner):
             # await on Task[T] / Future[T] yields T.
-            int await_inner_type = infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, ctx)
+            int await_inner_type = infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, &ctx)
             if await_inner_type >= 0 and await_inner_type < types.types.len():
                 ResolvedType art = get_rtype_at(types.types, await_inner_type)
                 match art:
@@ -636,7 +636,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
         case ESpawn(inner):
             # spawn(expr) returns Task[InnerType]. Look up Task in scope
             # and wrap the operand's inferred type.
-            int sp_inner_type = infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, ctx)
+            int sp_inner_type = infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, &ctx)
             if sp_inner_type >= 0:
                 # Mirror Rust typecheck.rs:2049 — when the spawned inner
                 # is itself a Future[T] (typed call to an async fn), record
@@ -659,20 +659,20 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
 
         case EDefaultOp(left, right):
             # a ?? b — return type of right (the fallback/unwrapped type)
-            int rt = infer_expr_type(SpannedExpr((*right).expr, (*right).span), scopes, &types, ctx)
+            int rt = infer_expr_type(SpannedExpr((*right).expr, (*right).span), scopes, &types, &ctx)
             return rt
 
         case EBlock(body_stmts):
             # do: block — type is the type of the last expression
             if body_stmts.len() > 0:
                 Stmt last = body_stmts.get(body_stmts.len() - 1).unwrap()
-                return infer_stmt_return_type(last, scopes, &types, ctx)
+                return infer_stmt_return_type(last, scopes, &types, &ctx)
             return NO_TYPE
 
         case EDo(body_stmts):
             if body_stmts.len() > 0:
                 Stmt last = body_stmts.get(body_stmts.len() - 1).unwrap()
-                return infer_stmt_return_type(last, scopes, &types, ctx)
+                return infer_stmt_return_type(last, scopes, &types, &ctx)
             return NO_TYPE
 
         else:

@@ -45,7 +45,7 @@ void main():
     expand_meta_types(&m, &types)
     expand_meta_for_match(&m)
     ResolveContext ctx = resolve_module(m, &scopes, &types)
-    type_check_module(m, &scopes, &types, ctx)
+    type_check_module(m, &scopes, &types, &ctx)
     GirModule gir = lower_module(m, scopes, types, call_redirects, imported_fns)
     # §6.2 hook: validate-after-every-pass dispatcher. No-op unless
     # `GG_VALIDATE_PASSES` is set; when set, runs the GIR validators
