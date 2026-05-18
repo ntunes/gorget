@@ -5903,9 +5903,17 @@ fn register_signatures_recursive(checker: &mut TypeChecker, items: &[Spanned<Ite
                 }
             }
             Item::Equip(impl_block) => {
-                let has_generics = impl_block.generic_params.is_some();
+                // Push an EquipBlock scope unconditionally — mirrors `resolve.rs:539`'s
+                // symmetric shape. The generic params (if any) are defined inside this scope.
+                // Today the inverted span-first lookup in `register_function_signature` (commit
+                // 27230b43, 2026-05-17) makes the scope-during-registration irrelevant for the
+                // signature-write path, but the resolve-pass / typecheck-pass asymmetry was a
+                // latent footgun: any future code reading `scopes.current()` or
+                // `scopes.lookup_within_function(scopes.current_fn_scope(), ...)` inside
+                // `register_function_signature` would silently see the root scope for
+                // non-generic equip methods. Push unconditionally to close that gap.
+                checker.scopes.push_scope(ScopeKind::EquipBlock { self_type: None });
                 if let Some(generics) = &impl_block.generic_params {
-                    checker.scopes.push_scope(ScopeKind::EquipBlock { self_type: None });
                     for param in &generics.node.params {
                         if let GenericParam::Type { name, .. } = &param.node {
                             let _ = checker.scopes.define(
@@ -5924,9 +5932,7 @@ fn register_signatures_recursive(checker: &mut TypeChecker, items: &[Spanned<Ite
                     checker.register_function_signature(&method.node);
                 }
                 checker.current_self_type = None;
-                if has_generics {
-                    checker.scopes.pop_scope();
-                }
+                checker.scopes.pop_scope();
             }
             _ => {}
         }
