@@ -3678,12 +3678,44 @@ impl<'a> TypeChecker<'a> {
         };
 
         // Non-generic user enum: `Color.Red()` types as `Defined(Color)`.
-        // Still infer args so side-effects/usage of inner expressions are
-        // walked, matching the rest of the call path.
+        // Still infer args (so side-effects/usage of inner expressions are
+        // walked) AND unify each arg's inferred type against the variant's
+        // declared field type — the symmetric counterpart of the
+        // substitution-driven path below, minus the substitution step.
+        // Skipping this check was gorget-js snag #8: a typechecker hole
+        // that silently accepted `Outer.StrV(int_x)` where the variant
+        // expected `String`, then handed garbage bytes to the runtime.
         if generic_params.is_empty() {
-            for arg in args {
-                self.infer_expr(&arg.node.value);
+            let field_ast_types = info
+                .variant_field_types
+                .iter()
+                .find(|(n, _)| *n == variant_name)
+                .map(|(_, ts)| ts.clone())
+                .unwrap_or_default();
+            let empty_subst: FxHashMap<String, TypeId> = FxHashMap::default();
+            let field_type_ids: Vec<TypeId> = field_ast_types
+                .iter()
+                .map(|ast_field| {
+                    self.resolve_ast_type_with_subst(
+                        &ast_field.node,
+                        ast_field.span,
+                        &empty_subst,
+                    )
+                })
+                .collect();
+            let prev_hint = self.decl_type_hint;
+            for (i, arg) in args.iter().enumerate() {
+                let field_tid = field_type_ids.get(i).copied();
+                self.decl_type_hint = field_tid;
+                let arg_ty = self.infer_expr(&arg.node.value);
+                self.decl_type_hint = prev_hint;
+                if let Some(ftid) = field_tid {
+                    if !self.is_collection_assignment(ftid, arg_ty) {
+                        self.unify(ftid, arg_ty, arg.span);
+                    }
+                }
             }
+            let _ = call_span;
             return self.types.defined_id(parent_enum_def_id);
         }
 

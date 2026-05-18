@@ -5229,6 +5229,19 @@ fn const_assign_error() {
 
 
 #[test]
+fn gorget_js_snag_8_nongeneric_enum_arg_typecheck() {
+    // gorget-js snag #8: the typechecker silently accepted
+    // `Outer.StrV(int_x)` against a `StrV(String)` variant because the
+    // non-generic fast-path in `infer_variant_constructor` skipped the
+    // arg-type unification step. Fixture must be REJECTED by `gg check`.
+    check_gg_fails(
+        "gorget_js_snag_8_nongeneric_enum_arg_typecheck.gg",
+        "type mismatch: expected `String`, found `int`",
+    );
+}
+
+
+#[test]
 fn assignment_clone() {
     run_gg(
         "assignment_clone.gg",

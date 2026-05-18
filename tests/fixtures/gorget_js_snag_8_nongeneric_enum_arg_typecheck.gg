@@ -1,0 +1,28 @@
+# Regression for gorget-js snag #8 (fixed 2026-05-18):
+# the typechecker's enum-variant-constructor path had a non-generic
+# fast-path (`if generic_params.is_empty():`) that skipped arg-type
+# unification entirely, silently waving through `Outer.StrV(int_x)`
+# where the variant expected `String`. At runtime the int bytes were
+# reinterpreted as a String header and the binary printed garbage.
+#
+# The fix in `src/semantic/typecheck.rs::infer_variant_constructor`
+# resolves each variant's AST field types (with an empty substitution
+# map — non-generic enums have no type-params to bind) and unifies
+# each arg's inferred type against the field type, mirroring the
+# generic path.
+#
+# This fixture is a negative test: `gg check` must reject it with a
+# `type mismatch: expected `String`, found `int`` diagnostic.
+
+public enum Outer:
+    StrV(String)
+    NumV(int)
+
+void main():
+    int x = 42
+    Outer v = Outer.StrV(x)
+    match v:
+        case Outer.StrV(s):
+            print(s)
+        case Outer.NumV(n):
+            print(f"{n}")
