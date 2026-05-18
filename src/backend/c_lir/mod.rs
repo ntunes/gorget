@@ -10,6 +10,7 @@ use std::fmt::Write;
 
 mod emit_call_extern;
 mod emit_hof;
+mod emit_printf;
 mod emit_types;
 pub mod helpers;
 use self::helpers::*;

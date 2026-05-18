@@ -270,7 +270,7 @@ The smaller-but-mechanical alternative is **`semantic::meta_consts` memoization*
   - Ret-from-function backfill — Ret(value) implies function return type when value is untyped.
   Each of these is *cross-instruction* reasoning. To push them upstream, the shared `compute_module_value_types` would need a fixed-point pass or a multi-phase walk that today only the local pass has. Scope: medium — half-day for any one of them, plus tests. [updated: 2026-05-15, after partial seed migration shipped]
 
-- **Decompose emit_call_extern.rs (~988 lines)**: Tier 1-3 lifts done; HOF cluster lifted 2026-05-16 (Option/Result combinator inlining → `emit_hof.rs`, -200 lines). The original "Vector HOF inline handlers" mentioned in the pre-2026-04-15 entry had already been migrated to LIR's `HofExpand` op (commits `79ab2cc2` and friends). Remaining clusters in `emit_call_extern.rs`: printf rewriting (~130 lines), out-parameter adaptation (~178 lines), collection drop/clone injection (~70 lines). These are genuinely backend-specific patterns. [updated: 2026-05-16]
+- **Decompose emit_call_extern.rs (~908 lines)**: Tier 1-3 lifts done; HOF cluster lifted 2026-05-16 (Option/Result combinator inlining → `emit_hof.rs`, -200 lines); printf rewriting lifted 2026-05-18 (`%lld → %f / %.*s` format-string fixup + single-arg fast path + per-arg Str decomposition → `emit_printf.rs`, -106 lines). The original "Vector HOF inline handlers" mentioned in the pre-2026-04-15 entry had already been migrated to LIR's `HofExpand` op (commits `79ab2cc2` and friends). Remaining clusters in `emit_call_extern.rs`: out-parameter adaptation (~178 lines), collection drop/clone injection (~70 lines). These are genuinely backend-specific patterns. [updated: 2026-05-18]
 
 ## Medium
 

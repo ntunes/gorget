@@ -667,55 +667,17 @@ pub(super) fn emit_call_extern(
             // ── void* param indices for collection functions ─────────
             let void_params = collection_void_param_indices(emit_name);
 
-            // Fix printf format strings when float args use %lld.
-            // The GIR generates %lld for all numeric args, but float args need %f.
-            let fmt_arg_id = if is_printf && !emit_args.is_empty() {
-                emit_args.first()
-            } else { None };
-            let _need_fmt_fix = is_printf && fmt_arg_id.map_or(false, |fid| {
-                ctx.is_str_lit(*fid)
-            }) && emit_args.iter().skip(1).any(|a| {
-                let ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
-                let ptr_to_str = is_str_ptr_opt(ty, module)
-                    || (matches!(ty, Some(LirType::Ptr)) && ptr_pointee.get(a.0 as usize)
-                        .and_then(|p| p.as_ref())
-                        .map_or(false, |p| is_str_struct(p, module)));
-                matches!(ty, Some(LirType::F32 | LirType::F64))
-                || matches!(ty, Some(LirType::Struct(sid)) if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetString"))
-                || ptr_to_str
-            });
-
-            // Special-case single-arg printf: `print("hello")` lowers to a
-            // `printf(str_arg)` with no format string. macOS clang rejects this
-            // under -Wformat-security, and under 32-byte Str the arg is a struct,
-            // not a char*, so we emit the decomposed form directly and return.
-            // For `print(..., file=stderr)`, the fast path must emit
-            // `fprintf(stderr, "%.*s", ...)` — the FILE* is not in `emit_args`
-            // (it's the Null placeholder that was stripped at line 559).
-            let printf_needs_fmt_guard = is_printf && emit_args.len() == 1;
-            if printf_needs_fmt_guard {
-                let a = emit_args[0];
-                let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
-                let is_gs_struct = matches!(arg_ty, Some(LirType::Struct(sid))
-                    if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetString"));
-                let stderr_prefix = if is_stderr_print { "stderr, " } else { "" };
-                if is_gs_struct {
-                    // `print(str)` → `__gorget_printf("%.*s", (int)str.len, (const char*)str.data);`
-                    writeln!(out, "{}({}\"%.*s\", (int){vv}.len, (const char*){vv}.data);",
-                        emit_name, stderr_prefix, vv = v(a)).unwrap();
-                    return;
-                }
-                // Ptr(Str) fallback: deref the pointer and use struct fields.
-                let pointee_is_str = matches!(arg_ty, Some(LirType::Ptr))
-                    && ptr_pointee.get(a.0 as usize)
-                        .and_then(|p| p.as_ref())
-                        .map_or(false, |p| is_str_struct(p, module));
-                if pointee_is_str || is_str_ptr_opt(arg_ty, module) {
-                    writeln!(out, "{}({}\"%.*s\", (int)((Str*){vv})->len, (const char*)((Str*){vv})->data);",
-                        emit_name, stderr_prefix, vv = v(a)).unwrap();
-                    return;
-                }
-                // Rare non-Str path (shouldn't normally happen) — fall through to raw call.
+            // Printf format-string rewriting + Str-arg decomposition is in
+            // `emit_printf.rs` (lifted 2026-05-18, mirroring the 2026-05-16
+            // `emit_hof.rs` extraction). `_need_fmt_fix` is the gating flag
+            // for the per-arg rewrites below; `try_emit_single_arg_printf`
+            // is the `print("hello")` / `print(str_var)` fast path that
+            // must run before the generic `emit_name(...)` open.
+            let _need_fmt_fix = super::emit_printf::need_fmt_fix(is_printf, emit_args, ctx);
+            if super::emit_printf::try_emit_single_arg_printf(
+                out, is_printf, is_stderr_print, emit_name, emit_args, ctx,
+            ) {
+                return;
             }
 
             write!(out, "{}(", emit_name).unwrap();
@@ -811,82 +773,14 @@ pub(super) fn emit_call_extern(
                 // Printf format rewriting for float/bool is handled by LIR lowering.
                 // Str decomposition for CallExtern @printf with PtrTo(Str) args is still
                 // needed here because the LIR lowering can't detect Str type for all values
-                // (e.g., gorget_array_get returns generic void*).
-                if _need_fmt_fix && i == 0 && is_str_lit {
-                    // Rewrite format string: %lld → %.*s for Str args at emit time.
-                    let fmt_val = *a;
-                    let mut fmt_text: Option<&str> = None;
-                    'find_fmt: for blk in &func.blocks {
-                        for inst2 in &blk.insts {
-                            if let Inst::StrLit { dst, value } = inst2 {
-                                if *dst == fmt_val {
-                                    fmt_text = Some(value.as_str());
-                                    break 'find_fmt;
-                                }
-                            }
-                        }
-                    }
-                    if let Some(fmt) = fmt_text {
-                        // Fix Str and Float args (bool already handled by LIR lowering)
-                        use crate::lir::lower::calls::PrintfArgKind;
-                        let arg_kinds: Vec<PrintfArgKind> = emit_args[1..].iter()
-                            .map(|ea| {
-                                let ty = val_types.get(ea.0 as usize).and_then(|t| t.as_ref());
-                                let ea_str_ptr = is_str_ptr_opt(ty, module)
-                                    || (matches!(ty, Some(LirType::Ptr)) && ptr_pointee.get(ea.0 as usize)
-                                        .and_then(|p| p.as_ref())
-                                        .map_or(false, |p| is_str_struct(p, module)))
-                                    || matches!(ty, Some(LirType::Struct(sid)) if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetString"));
-                                if matches!(ty, Some(LirType::F32 | LirType::F64)) {
-                                    PrintfArgKind::Float
-                                } else if ea_str_ptr {
-                                    PrintfArgKind::Str
-                                } else {
-                                    PrintfArgKind::Int
-                                }
-                            })
-                            .collect();
-                        if arg_kinds.iter().any(|k| *k != PrintfArgKind::Int) {
-                            let fixed = crate::lir::lower::calls::fix_printf_format(fmt, &arg_kinds);
-                            let escaped = escape_c_string(&fixed);
-                            write!(out, "\"{}\"", escaped).unwrap();
-                        } else {
-                            write!(out, "{}", v(*a)).unwrap();
-                        }
-                    } else {
-                        write!(out, "{}", v(*a)).unwrap();
-                    }
+                // (e.g., gorget_array_get returns generic void*). See `emit_printf.rs`
+                // for the four-case rewrite cluster (format-string rewrite, Struct(GS)
+                // decomposition, PtrTo(Str) deref, pre-decomposed (len, data) cast).
+                if super::emit_printf::try_emit_printf_arg(
+                    out, i, *a, arg_ty, is_str_lit, _need_fmt_fix, is_printf,
+                    emit_args, ctx,
+                ) {
                     continue;
-                }
-                // Decompose 32-byte Str / GorgetString args into (int)len, data for %.*s format.
-                // Struct is a value type; empty strings are {"", 0, 0, NULL} so len/data read safely.
-                if _need_fmt_fix && is_printf && i > 0
-                    && matches!(arg_ty, Some(LirType::Struct(sid)) if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetString"))
-                {
-                    write!(out, "(int){v}.len, (const char*){v}.data", v = v(*a)).unwrap();
-                    continue;
-                }
-                // PtrTo(Str) in printf — deref the pointer, then read struct fields.
-                if _need_fmt_fix && is_printf && i > 0 && (is_str_ptr_opt(arg_ty, module)
-                    || (matches!(arg_ty, Some(LirType::Ptr)) && ptr_pointee.get(a.0 as usize)
-                        .and_then(|p| p.as_ref())
-                        .map_or(false, |p| is_str_struct(p, module)))) {
-                    write!(out, "(int)((Str*){v})->len, (const char*)((Str*){v})->data", v = v(*a)).unwrap();
-                    continue;
-                }
-                // Pre-decomposed %.*s data arg: the LIR lowering splits Str into
-                // (int32)len + (Ptr)data as separate args. The len was already emitted;
-                // the data arg is a raw void* from a FieldPtr→Load on Str.data.
-                // Cast to (const char*) to satisfy printf's %s expectation.
-                if _need_fmt_fix && is_printf && i > 1
-                    && matches!(arg_ty, Some(LirType::Ptr))
-                {
-                    // Check if the preceding arg was i32 (the len half of a %.*s pair)
-                    let prev_ty = val_types.get(emit_args[i-1].0 as usize).and_then(|t| t.as_ref());
-                    if matches!(prev_ty, Some(LirType::I32)) {
-                        write!(out, "(const char*){}", v(*a)).unwrap();
-                        continue;
-                    }
                 }
                 if false {
                     // Placeholder
