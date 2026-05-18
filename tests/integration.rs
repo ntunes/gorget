@@ -21085,3 +21085,33 @@ fn gorget_js_snag_6_codepoint_to_str_zero() {
         "1\n0\n1\n1\n1\nA\n3\n中\n4\n😀",
     );
 }
+
+// ─── Gorget-js snag #7: view from struct field → struct field ────────
+//
+// Regression introduced by commits 0872feeb / 1af25de0 (snag #3's
+// final fix). Once StructLiteral entered the AST-level `uses_expr`
+// walker, a last-use local bound to a view-returning string method
+// (e.g. `byte_slice`) flowed into a struct field via move instead of
+// materializing through a clone-to-owned. The field then held a
+// dangling cap=0 alias past the source's drop.
+//
+// Root cause was upstream of the consume-site staging, per CLAUDE.md
+// "complexity = wrong layer": `byte_slice` (and a handful of sibling
+// methods) was missing from the `GORGET_STRING_VIEW` protocol in
+// `src/ir/lowering/builtins.rs`. The protocol's `returns_view: true`
+// flag is what tags the call's result local as `LocalOwnership::View`
+// at the call-site tagger in `methods.rs` (`builtin_returns_view`
+// queries the protocol). Without the entry, the result was treated as
+// Owned, no view-tag was set, and the consume-site clone path saw a
+// regular owned local. Fix: register the missing methods (`byte_slice`,
+// `char_at`, `trim_left`, `trim_right`, `lstrip`, `rstrip`,
+// `removeprefix`, `removesuffix`) in the protocol with
+// `returns_view: true` and the correct runtime callee.
+
+#[test]
+fn gorget_js_snag_7_view_through_struct_literal() {
+    run_gg(
+        "gorget_js_snag_7_view_through_struct_literal.gg",
+        "tok[0]=hello\ntok[1]=world",
+    );
+}

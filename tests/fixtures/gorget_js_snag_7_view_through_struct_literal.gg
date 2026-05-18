@@ -1,0 +1,49 @@
+# Gorget-js snag #7: String view from a struct field stored into another
+# struct's String field returns a dangling view. Regression from snag #3's
+# fix series (commits 0872feeb "isolate StructLiteral as snag #3 culprit"
+# + 1af25de0 "enable StructLiteral liveness arm"). Once the StructLiteral
+# arm of `uses_expr` was enabled, last-use-on-string-view locals got
+# AssignMode::Move at the struct-init boundary — but the source local
+# was bound to a view-returning method like `byte_slice` (cap=0 Str
+# pointing into the receiver's buffer). Moving the view bytes into the
+# field instead of materializing them left the field as a dangling
+# alias once the receiver dropped.
+#
+# Root cause was at the writer site, not at the consume site, per
+# CLAUDE.md "complexity = wrong layer". `byte_slice` (along with
+# `lstrip`, `rstrip`, `trim_left`, `trim_right`, `removeprefix`,
+# `removesuffix`, and `char_at`) wasn't declared in the
+# `GORGET_STRING_VIEW` protocol in `src/ir/lowering/builtins.rs`, so
+# `builtin_returns_view(type, method)` returned false at the call-site
+# tagger in `methods.rs`, the result local never got
+# `LocalOwnership::View`, and `ensure_owned_at_boundary` /
+# `clone_multi_use_resource_args` saw a normal owned String at the
+# StructLiteral arg — so no clone-to-owned materialize fired. The
+# adjacent `substring` method WAS in the protocol and worked correctly.
+#
+# Fix: add the missing methods to the protocol with `returns_view: true`.
+# Real-world site that motivated this: `src/lexer.gg` in gorget-js
+# stored `lex.source.byte_slice(start, end)` directly into `Tok.text`.
+
+struct Tok:
+    String text
+
+struct Lexer:
+    String source
+
+Vector[Tok] slice_all(String source):
+    Lexer lex = Lexer(source)
+    Vector[Tok] out = []
+    String t1 = lex.source.byte_slice(0, 5)
+    out.push(Tok(t1))
+    String t2 = lex.source.byte_slice(6, 11)
+    out.push(Tok(t2))
+    return out
+
+void main():
+    Vector[Tok] toks = slice_all("hello world")
+    int i = 0
+    while i < toks.len():
+        Tok t = toks.get(i).unwrap()
+        print(f"tok[{i}]={t.text}")
+        i = i + 1

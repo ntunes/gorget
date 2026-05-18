@@ -578,7 +578,7 @@ impl<'a> LoweringContext<'a> {
             // Collect method entries first (to avoid borrow conflicts with type_registry)
             let method_entries: Vec<_> = protocol.methods.iter().map(|method| {
                 let fn_key = format!("{mangled_name}__{}", method.name);
-                let method_params = (method.params)(&type_args);
+                let method_params = (method.params)(&type_args, &lookup_ctx);
                 let ret = (method.return_type)(&type_args, &lookup_ctx);
                 (fn_key, method_params, ret, method.runtime_callee, method.self_conv)
             }).collect();
@@ -722,7 +722,7 @@ impl<'a> LoweringContext<'a> {
         // local that was only initialized in one branch.
         let fn_key = format!("{type_name}__{method_name}");
         if !self.fn_sigs.contains_key(&fn_key) {
-            let method_params = (method.params)(&type_args);
+            let method_params = (method.params)(&type_args, &lookup_ctx);
             use crate::ir::lowering::builtins::SelfConvention;
             let mut params: Vec<TypeId> = match method.self_conv {
                 SelfConvention::Borrow => vec![
@@ -1098,10 +1098,17 @@ impl<'a> LoweringContext<'a> {
             Some(s) => s,
             None => return false,
         };
-        // Direct mutation marker for the exact path. Set is FxHashSet<Rc<str>>;
-        // contains accepts &str via the Borrow<str> impl on Rc<str>.
-        let direct = format!("@mut:{}", source_path);
-        if set.contains(direct.as_str()) {
+        // Hot path: every CoW-borrow site at var-decl + method-receiver lowering
+        // calls this. The previous shape did `format!("@mut:{}", path)` per call
+        // PLUS per-prefix in the ancestor loop — ~3 allocations per call on a
+        // typical 2-segment path like `self.data`. The set is `FxHashSet<Rc<str>>`
+        // which accepts `&str` lookups via `Borrow<str>`; reuse a single
+        // `String` buffer for all markers.
+        const PREFIX: &str = "@mut:";
+        let mut marker = String::with_capacity(PREFIX.len() + source_path.len());
+        marker.push_str(PREFIX);
+        marker.push_str(source_path);
+        if set.contains(marker.as_str()) {
             return true;
         }
         // Name reassignment for a bare local path or the root of a field path
@@ -1114,21 +1121,20 @@ impl<'a> LoweringContext<'a> {
         // Ancestor mutations invalidate the borrow: `helper(&self)` (records
         // `@mut:self`) must invalidate borrows of `self.data`; `self.data = new`
         // (records `@mut:self.data`) must invalidate borrows of `self.data.items`.
-        // Walk every prefix of the path and check for @mut:{prefix}.
-        let parts: Vec<&str> = source_path.split('.').collect();
-        let mut prefix = String::new();
-        for (i, part) in parts.iter().enumerate() {
-            if i == 0 {
-                prefix.push_str(part);
-            } else {
-                prefix.push('.');
-                prefix.push_str(part);
-            }
-            // Skip the full path — already checked above.
-            if i == parts.len() - 1 {
+        // Walk every STRICT prefix of the path and check for @mut:{prefix}.
+        // Buffer is reused: truncate back to PREFIX and rebuild incrementally.
+        marker.truncate(PREFIX.len());
+        let mut parts = source_path.split('.').peekable();
+        while let Some(part) = parts.next() {
+            // Skip the full path — already checked above (the last iteration
+            // would equal `marker == "@mut:<full path>"`).
+            if parts.peek().is_none() {
                 break;
             }
-            let marker = format!("@mut:{}", prefix);
+            if marker.len() > PREFIX.len() {
+                marker.push('.');
+            }
+            marker.push_str(part);
             if set.contains(marker.as_str()) {
                 return true;
             }

@@ -77,8 +77,10 @@ pub struct BuiltinMethodDecl {
     /// `returns_view` is `true` (mutually exclusive: a method either borrows
     /// from the receiver or produces a fresh buffer).
     pub returns_fresh: bool,
-    /// Build parameter GIR TypeIds given the type args.
-    pub params: fn(&BuiltinTypeArgs) -> Vec<TypeId>,
+    /// Build parameter GIR TypeIds given the type args and a lookup context.
+    /// The lookup context is needed for params that reference runtime-resolved
+    /// types like `ctx.owned_string_type` (e.g. `lstrip(chars: String)`).
+    pub params: fn(&BuiltinTypeArgs, &LookupCtx) -> Vec<TypeId>,
     /// Build return GIR TypeId given the type args and a lookup context.
     pub return_type: fn(&BuiltinTypeArgs, &LookupCtx) -> TypeId,
 }
@@ -120,25 +122,28 @@ pub struct BuiltinTypeProtocol {
 // ── Helper constructors for param/return closures ─────────────────────
 
 /// No params (besides self).
-fn no_params(_: &BuiltinTypeArgs) -> Vec<TypeId> { vec![] }
+fn no_params(_: &BuiltinTypeArgs, _: &LookupCtx) -> Vec<TypeId> { vec![] }
 
 /// Single int param.
-fn int_param(_: &BuiltinTypeArgs) -> Vec<TypeId> { vec![I64_TYPE] }
+fn int_param(_: &BuiltinTypeArgs, _: &LookupCtx) -> Vec<TypeId> { vec![I64_TYPE] }
 
 /// Single elem-type param.
-fn elem_param(a: &BuiltinTypeArgs) -> Vec<TypeId> { vec![a.elem] }
+fn elem_param(a: &BuiltinTypeArgs, _: &LookupCtx) -> Vec<TypeId> { vec![a.elem] }
 
 /// Two int params.
-fn two_ints(_: &BuiltinTypeArgs) -> Vec<TypeId> { vec![I64_TYPE, I64_TYPE] }
+fn two_ints(_: &BuiltinTypeArgs, _: &LookupCtx) -> Vec<TypeId> { vec![I64_TYPE, I64_TYPE] }
+
+/// Single GorgetString param (for String methods like `lstrip(chars)`).
+fn string_param(_: &BuiltinTypeArgs, ctx: &LookupCtx) -> Vec<TypeId> { vec![ctx.owned_string_type] }
 
 /// Key param (for dict).
-fn key_param(a: &BuiltinTypeArgs) -> Vec<TypeId> { vec![a.key] }
+fn key_param(a: &BuiltinTypeArgs, _: &LookupCtx) -> Vec<TypeId> { vec![a.key] }
 
 /// Key + value params (for dict.put).
-fn key_val_params(a: &BuiltinTypeArgs) -> Vec<TypeId> { vec![a.key, a.val] }
+fn key_val_params(a: &BuiltinTypeArgs, _: &LookupCtx) -> Vec<TypeId> { vec![a.key, a.val] }
 
 /// Key + value + default value params (for dict.get_or).
-fn key_val_default(a: &BuiltinTypeArgs) -> Vec<TypeId> { vec![a.key, a.val] }
+fn key_val_default(a: &BuiltinTypeArgs, _: &LookupCtx) -> Vec<TypeId> { vec![a.key, a.val] }
 
 /// Returns void.
 fn ret_void(_: &BuiltinTypeArgs, _: &LookupCtx) -> TypeId { UNIT_TYPE }
@@ -243,16 +248,16 @@ pub static VECTOR: BuiltinTypeProtocol = BuiltinTypeProtocol {
         BuiltinMethodDecl { name: "push", runtime_callee: Some("gorget_array_push"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_void },
         BuiltinMethodDecl { name: "clear", runtime_callee: Some("gorget_array_clear"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_void },
         BuiltinMethodDecl { name: "reverse", runtime_callee: Some("gorget_array_reverse"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_void },
-        BuiltinMethodDecl { name: "insert", runtime_callee: Some("gorget_array_insert"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: |a| vec![I64_TYPE, a.elem], return_type: ret_void },
+        BuiltinMethodDecl { name: "insert", runtime_callee: Some("gorget_array_insert"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: |a, _| vec![I64_TYPE, a.elem], return_type: ret_void },
         BuiltinMethodDecl { name: "extend", runtime_callee: Some("gorget_array_extend"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_void },
         BuiltinMethodDecl { name: "reserve", runtime_callee: Some("gorget_array_reserve"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: int_param, return_type: ret_void },
-        BuiltinMethodDecl { name: "set", runtime_callee: Some("gorget_array_set"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: |a| vec![I64_TYPE, a.elem], return_type: ret_void },
+        BuiltinMethodDecl { name: "set", runtime_callee: Some("gorget_array_set"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: |a, _| vec![I64_TYPE, a.elem], return_type: ret_void },
         // Order-destroying O(1) removal — moves last element into the hole.
         BuiltinMethodDecl { name: "swap_remove", runtime_callee: Some("gorget_array_swap_remove"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: int_param, return_type: ret_void },
         // Swap two elements in place.
-        BuiltinMethodDecl { name: "swap", runtime_callee: Some("gorget_array_swap"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: |_| vec![I64_TYPE, I64_TYPE], return_type: ret_void },
+        BuiltinMethodDecl { name: "swap", runtime_callee: Some("gorget_array_swap"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: |_, _| vec![I64_TYPE, I64_TYPE], return_type: ret_void },
         // Fill with n copies of a value (drops existing elements).
-        BuiltinMethodDecl { name: "fill", runtime_callee: Some("gorget_array_fill"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: |a| vec![I64_TYPE, a.elem], return_type: ret_void },
+        BuiltinMethodDecl { name: "fill", runtime_callee: Some("gorget_array_fill"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: |a, _| vec![I64_TYPE, a.elem], return_type: ret_void },
         // Borrowing reads
         BuiltinMethodDecl { name: "get", runtime_callee: Some("gorget_array_safe_get"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: int_param, return_type: ret_option_ref_or_val_elem },
         BuiltinMethodDecl { name: "first", runtime_callee: Some("gorget_array_first"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_option_ref_or_val_elem },
@@ -297,7 +302,7 @@ pub static VECTOR: BuiltinTypeProtocol = BuiltinTypeProtocol {
         BuiltinMethodDecl { name: "map", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_self },
         BuiltinMethodDecl { name: "flat_map", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_self },
         BuiltinMethodDecl { name: "enumerate", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_self },
-        BuiltinMethodDecl { name: "fold", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: |a| vec![I64_TYPE, a.elem], return_type: ret_int },
+        BuiltinMethodDecl { name: "fold", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: |a, _| vec![I64_TYPE, a.elem], return_type: ret_int },
         BuiltinMethodDecl { name: "reduce", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_int },
         BuiltinMethodDecl { name: "any", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_bool },
         BuiltinMethodDecl { name: "all", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_bool },
@@ -380,7 +385,7 @@ pub static DICT: BuiltinTypeProtocol = BuiltinTypeProtocol {
         BuiltinMethodDecl { name: "clone", runtime_callee: Some("gorget_map_clone"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: true, params: no_params, return_type: ret_self },
         // Higher-order (inline codegen)
         BuiltinMethodDecl { name: "filter", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: key_val_params, return_type: ret_self },
-        BuiltinMethodDecl { name: "fold", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: |a| vec![I64_TYPE, a.key, a.val], return_type: ret_int },
+        BuiltinMethodDecl { name: "fold", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: |a, _| vec![I64_TYPE, a.key, a.val], return_type: ret_int },
         BuiltinMethodDecl { name: "each", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: key_val_params, return_type: ret_void },
         BuiltinMethodDecl { name: "any", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: key_val_params, return_type: ret_bool },
         BuiltinMethodDecl { name: "all", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: key_val_params, return_type: ret_bool },
@@ -443,7 +448,7 @@ pub static SET: BuiltinTypeProtocol = BuiltinTypeProtocol {
         BuiltinMethodDecl { name: "is_disjoint", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_bool },
         // Higher-order
         BuiltinMethodDecl { name: "filter", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_self },
-        BuiltinMethodDecl { name: "fold", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: |a| vec![I64_TYPE, a.elem], return_type: ret_int },
+        BuiltinMethodDecl { name: "fold", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: |a, _| vec![I64_TYPE, a.elem], return_type: ret_int },
         BuiltinMethodDecl { name: "each", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_void },
         BuiltinMethodDecl { name: "any", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_bool },
         BuiltinMethodDecl { name: "all", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_bool },
@@ -509,7 +514,7 @@ pub static SHARED: BuiltinTypeProtocol = BuiltinTypeProtocol {
         }},
         // Shared[Vector[T]] convenience methods
         BuiltinMethodDecl { name: "at", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: int_param, return_type: ret_elem },
-        BuiltinMethodDecl { name: "set_at", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: true, returns_view: false, returns_fresh: false, params: |a| vec![I64_TYPE, a.elem], return_type: ret_void },
+        BuiltinMethodDecl { name: "set_at", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: true, returns_view: false, returns_fresh: false, params: |a, _| vec![I64_TYPE, a.elem], return_type: ret_void },
         BuiltinMethodDecl { name: "slen", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_int },
     ],
 };
@@ -669,9 +674,9 @@ pub static GORGET_STRING_VIEW: BuiltinTypeProtocol = BuiltinTypeProtocol {
     c_runtime_alias: None,
     methods: &[
         // Mutating (StringBuilder-style)
-        BuiltinMethodDecl { name: "push", runtime_callee: Some("gorget_str_push"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: |_| vec![I64_TYPE], return_type: ret_void },
-        BuiltinMethodDecl { name: "push_line", runtime_callee: Some("gorget_str_push_line"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: |_| vec![I64_TYPE], return_type: ret_void },
-        BuiltinMethodDecl { name: "push_char", runtime_callee: Some("gorget_str_push_char"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: |_| vec![I64_TYPE], return_type: ret_void },
+        BuiltinMethodDecl { name: "push", runtime_callee: Some("gorget_str_push"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: |_, _| vec![I64_TYPE], return_type: ret_void },
+        BuiltinMethodDecl { name: "push_line", runtime_callee: Some("gorget_str_push_line"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: |_, _| vec![I64_TYPE], return_type: ret_void },
+        BuiltinMethodDecl { name: "push_char", runtime_callee: Some("gorget_str_push_char"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: |_, _| vec![I64_TYPE], return_type: ret_void },
         BuiltinMethodDecl { name: "clear", runtime_callee: Some("gorget_str_clear"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_void },
         // Queries
         BuiltinMethodDecl { name: "len", runtime_callee: Some("gorget_str_codepoint_count"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_int },
@@ -688,8 +693,27 @@ pub static GORGET_STRING_VIEW: BuiltinTypeProtocol = BuiltinTypeProtocol {
         BuiltinMethodDecl { name: "as_str", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: true, returns_fresh: false, params: no_params, return_type: ret_owned_string },
         BuiltinMethodDecl { name: "substring", runtime_callee: Some("gorget_str_slice"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: true, returns_fresh: false, params: two_ints, return_type: ret_owned_string },
         BuiltinMethodDecl { name: "slice", runtime_callee: Some("gorget_str_slice"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: true, returns_fresh: false, params: two_ints, return_type: ret_owned_string },
+        // byte_slice(start, end) → cap=0 Str view into self's buffer (gorget_str_byte_slice).
+        // The protocol entry is what flags the result `LocalOwnership::View` at the
+        // consume-site decision in methods.rs (`builtin_returns_view` queries the
+        // protocol). Without this entry, the result was treated as Owned and moved
+        // into struct fields / pushed into Vectors verbatim — leaking a dangling
+        // view past the source's drop (gorget-js snag #7, regression introduced by
+        // commits 0872feeb / 1af25de0 when StructLiteral entered `uses_expr`).
+        BuiltinMethodDecl { name: "byte_slice", runtime_callee: Some("gorget_str_byte_slice"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: true, returns_fresh: false, params: two_ints, return_type: ret_owned_string },
+        // char_at(idx) → cap=0 Str view of the 1-byte char at idx (gorget_str_char_at).
+        BuiltinMethodDecl { name: "char_at", runtime_callee: Some("gorget_str_char_at"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: true, returns_fresh: false, params: int_param, return_type: ret_owned_string },
         BuiltinMethodDecl { name: "trim", runtime_callee: Some("gorget_str_trim"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: true, returns_fresh: false, params: no_params, return_type: ret_owned_string },
+        // trim_left/trim_right are LIR aliases of lstrip_ws/rstrip_ws (no-arg).
+        BuiltinMethodDecl { name: "trim_left", runtime_callee: Some("gorget_str_lstrip_ws"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: true, returns_fresh: false, params: no_params, return_type: ret_owned_string },
+        BuiltinMethodDecl { name: "trim_right", runtime_callee: Some("gorget_str_rstrip_ws"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: true, returns_fresh: false, params: no_params, return_type: ret_owned_string },
         BuiltinMethodDecl { name: "strip", runtime_callee: Some("gorget_str_strip"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: true, returns_fresh: false, params: no_params, return_type: ret_owned_string },
+        // {l,r}strip(chars) → char-set strip; removeprefix/suffix likewise. All
+        // return cap=0 Str views into self's buffer.
+        BuiltinMethodDecl { name: "lstrip", runtime_callee: Some("gorget_str_lstrip"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: true, returns_fresh: false, params: string_param, return_type: ret_owned_string },
+        BuiltinMethodDecl { name: "rstrip", runtime_callee: Some("gorget_str_rstrip"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: true, returns_fresh: false, params: string_param, return_type: ret_owned_string },
+        BuiltinMethodDecl { name: "removeprefix", runtime_callee: Some("gorget_str_removeprefix"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: true, returns_fresh: false, params: string_param, return_type: ret_owned_string },
+        BuiltinMethodDecl { name: "removesuffix", runtime_callee: Some("gorget_str_removesuffix"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: true, returns_fresh: false, params: string_param, return_type: ret_owned_string },
         // Allocating operations → GorgetString. `returns_fresh: true` mirrors
         // RuntimeSig.returns_fresh on the underlying runtime fn — these always
         // produce a fresh, independent heap buffer (no aliasing into self).
@@ -791,9 +815,9 @@ pub static ATOMIC_BOOL: BuiltinTypeProtocol = BuiltinTypeProtocol {
     c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "load", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_bool },
-        BuiltinMethodDecl { name: "store", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: true, returns_view: false, returns_fresh: false, params: |_| vec![BOOL_TYPE], return_type: ret_void },
-        BuiltinMethodDecl { name: "swap", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: |_| vec![BOOL_TYPE], return_type: ret_bool },
-        BuiltinMethodDecl { name: "compare_exchange", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: |_| vec![BOOL_TYPE, BOOL_TYPE], return_type: ret_bool },
+        BuiltinMethodDecl { name: "store", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: true, returns_view: false, returns_fresh: false, params: |_, _| vec![BOOL_TYPE], return_type: ret_void },
+        BuiltinMethodDecl { name: "swap", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: |_, _| vec![BOOL_TYPE], return_type: ret_bool },
+        BuiltinMethodDecl { name: "compare_exchange", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: |_, _| vec![BOOL_TYPE, BOOL_TYPE], return_type: ret_bool },
     ],
 };
 
