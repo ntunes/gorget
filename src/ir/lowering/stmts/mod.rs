@@ -371,12 +371,15 @@ fn lower_var_decl(
             if !ctx.drops.is_registered(local_id) {
                 if let Some(crate::ir::types::GirType::Named(tn)) = ctx.type_registry.get(gir_type).cloned() {
                     // Read typed `enum_category` (Option/Result discriminator)
-                    // instead of name-prefix matching the type name.
-                    let is_opt_or_result = ctx.type_registry.get_type_def(&tn)
-                        .and_then(|td| td.metadata.enum_category)
-                        .is_some();
-                    if is_opt_or_result {
-                        if let Some(td) = ctx.type_registry.get_type_def(&tn) {
+                    // instead of name-prefix matching the type name. Coalesce
+                    // the two `get_type_def(&tn)` lookups (one for the
+                    // is_opt_or_result gate, one for the Enum-kind walk) into
+                    // a single fetch — the original shape did the same
+                    // FxHashMap-by-name lookup twice. The borrow released
+                    // before any `&ctx.type_registry` use deeper in the loop.
+                    if let Some(td) = ctx.type_registry.get_type_def(&tn) {
+                        let is_opt_or_result = td.metadata.enum_category.is_some();
+                        if is_opt_or_result {
                             if let crate::ir::types::TypeDefKind::Enum(ref edef) = td.kind {
                                 let droppable = edef.variants.iter().any(|v| v.fields.iter().any(|f| {
                                     ctx.type_registry.needs_drop(f.type_id)
@@ -504,13 +507,7 @@ fn lower_var_decl(
                 // Layering-discipline: the metadata field is on the typed
                 // TypeDef, NOT a name match. Phase A residual #1.
                 let gir_is_fnptr = matches!(ctx.type_registry.get(gir_type), Some(GirType::FnPtr { .. }));
-                let inferred_is_alias_of_closure = matches!(
-                    ctx.type_registry.get(inferred),
-                    Some(GirType::Named(n))
-                        if ctx.type_registry.get_type_def(n)
-                            .and_then(|td| td.metadata.c_runtime_alias.as_deref())
-                            == Some("GorgetClosure")
-                );
+                let inferred_is_alias_of_closure = ctx.type_registry.is_closure_runtime_type(inferred);
                 let same_runtime_alias = gir_is_fnptr && inferred_is_alias_of_closure;
                 if !same_runtime_alias
                     && inferred != gir_type
@@ -540,15 +537,8 @@ fn lower_var_decl(
                 // Auto-clone unless the source is already Owned/FreshOwned
                 // (e.g., fresh from a function-call return). Added 2026-05-12
                 // as the Tier 2a consume_externs burn-down (see TODO).
-                let gir_is_closure = match ctx.type_registry.get(gir_type) {
-                    Some(GirType::FnPtr { .. }) => true,
-                    Some(GirType::Named(n)) => {
-                        ctx.type_registry.get_type_def(n)
-                            .and_then(|td| td.metadata.c_runtime_alias.as_deref())
-                            == Some("GorgetClosure")
-                    }
-                    _ => false,
-                };
+                let gir_is_closure = matches!(ctx.type_registry.get(gir_type), Some(GirType::FnPtr { .. }))
+                    || ctx.type_registry.is_closure_runtime_type(gir_type);
                 if gir_is_closure {
                     // Narrow gate: only auto-clone when the source local's
                     // type is ALSO a closure-handle shape (FnPtr or
@@ -593,15 +583,7 @@ fn lower_var_decl(
                             let src_is_ptr_to_closure = src_local
                                 .map(|l| l.type_id)
                                 .and_then(|t| ctx.pointee_type(t))
-                                .map(|inner| {
-                                    matches!(
-                                        ctx.type_registry.get(inner),
-                                        Some(GirType::Named(n))
-                                            if ctx.type_registry.get_type_def(n)
-                                                .and_then(|td| td.metadata.c_runtime_alias.as_deref())
-                                                == Some("GorgetClosure")
-                                    )
-                                })
+                                .map(|inner| ctx.type_registry.is_closure_runtime_type(inner))
                                 .unwrap_or(false);
                             // Already Owned/FreshOwned (fresh local from
                             // call result) → no clone needed.
@@ -1936,6 +1918,24 @@ fn lower_if(
     elif_branches: &[(Spanned<Expr>, Block)],
     else_body: &Option<Block>,
 ) {
+    // Sub-sub-phase instrumentation: each phase records its exclusive (self)
+    // time into `ctx.lower_fn_sub_times` under
+    // `lower_function::body::lower_block::stmt::if::<sub>`, computed as
+    // `elapsed - (stmt_nested_dur delta during this phase)`. The parent
+    // `lower_stmt` Stmt::If arm already subtracts the wall time of
+    // `lower_if` as a whole from its own bucket — so the per-sub-phase
+    // buckets here sum to the `stmt::if` exclusive total with no double
+    // counting from nested `lower_block`/`lower_stmt` calls.
+    let __if_phase = |ctx: &mut LoweringContext, key: &'static str, t0: std::time::Instant, nested_entry: std::time::Duration| {
+        let elapsed = t0.elapsed();
+        let nested_during = ctx.stmt_nested_dur - nested_entry;
+        let exclusive = elapsed.saturating_sub(nested_during);
+        *ctx.lower_fn_sub_times.entry(key).or_default() += exclusive;
+    };
+
+    // ── cond_eval: condition expression + branch setup ─────────────────
+    let __cond_t0 = std::time::Instant::now();
+    let __cond_nested_entry = ctx.stmt_nested_dur;
     let merge_bb = builder.new_block();
 
     // Lower the condition. Auto-deref Ref[bool] → bool — `if v.get(i).unwrap():`
@@ -1963,8 +1963,11 @@ fn lower_if(
     // borrow-checker's branch-merging semantics.
     let pre_branch_moved = ctx.drops.snapshot_moved();
     let mut post_branch_snapshots: Vec<Vec<(usize, usize, bool)>> = Vec::new();
+    __if_phase(ctx, "lower_function::body::lower_block::stmt::if::cond_eval", __cond_t0, __cond_nested_entry);
 
-    // Then branch
+    // ── then_branch ────────────────────────────────────────────────────
+    let __then_t0 = std::time::Instant::now();
+    let __then_nested_entry = ctx.stmt_nested_dur;
     builder.switch_to(then_bb);
     let saved_then = ctx.save_locals(builder);
     ctx.drops.push_scope(DropScopeKind::Block);
@@ -1981,8 +1984,11 @@ fn lower_if(
     ctx.restore_locals(builder, saved_then);
     post_branch_snapshots.push(ctx.drops.snapshot_moved());
     ctx.drops.restore_moved(&pre_branch_moved);
+    __if_phase(ctx, "lower_function::body::lower_block::stmt::if::then_branch", __then_t0, __then_nested_entry);
 
-    // Elif branches
+    // ── elif_branches ──────────────────────────────────────────────────
+    let __elif_t0 = std::time::Instant::now();
+    let __elif_nested_entry = ctx.stmt_nested_dur;
     let mut current_else_bb = first_else_bb;
     for (i, (elif_cond, elif_body)) in elif_branches.iter().enumerate() {
         builder.switch_to(current_else_bb);
@@ -2014,8 +2020,11 @@ fn lower_if(
 
         current_else_bb = next_else_bb;
     }
+    __if_phase(ctx, "lower_function::body::lower_block::stmt::if::elif_branches", __elif_t0, __elif_nested_entry);
 
-    // Else branch
+    // ── else_branch ────────────────────────────────────────────────────
+    let __else_t0 = std::time::Instant::now();
+    let __else_nested_entry = ctx.stmt_nested_dur;
     if let Some(else_body) = else_body {
         builder.switch_to(current_else_bb);
         let saved_else = ctx.save_locals(builder);
@@ -2031,13 +2040,18 @@ fn lower_if(
         post_branch_snapshots.push(ctx.drops.snapshot_moved());
         ctx.drops.restore_moved(&pre_branch_moved);
     }
+    __if_phase(ctx, "lower_function::body::lower_block::stmt::if::else_branch", __else_t0, __else_nested_entry);
 
+    // ── phi_merge: union post-branch snapshots + switch to merge bb ───
+    let __merge_t0 = std::time::Instant::now();
+    let __merge_nested_entry = ctx.stmt_nested_dur;
     // Conservative join: union each branch's moves into the post-if state.
     for snap in &post_branch_snapshots {
         ctx.drops.union_moved(snap);
     }
 
     builder.switch_to(merge_bb);
+    __if_phase(ctx, "lower_function::body::lower_block::stmt::if::phi_merge", __merge_t0, __merge_nested_entry);
 }
 
 /// Lower a while loop.

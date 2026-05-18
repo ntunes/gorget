@@ -741,9 +741,17 @@ pub fn lower_function(
             // Run delayed meta expansion (e.g. `meta for` inside match arms using
             // variant_payloads(T)) for non-generic functions.  For generic functions
             // this is done inside lower_generic_function with type substitutions.
+            //
+            // Cheap-fix follow-up to the prescan instrumentation (`91af0eb1`):
+            // for non-generic functions `meta_env` is empty and the only work
+            // the meta-eval pass does is splice out Meta* stmts. Pre-scan the
+            // AST in read-only mode; if no Meta* node is reachable from this
+            // block, skip the `block.clone()` + walk entirely and lower the
+            // original `&block` directly. Typical non-generic functions
+            // contain zero meta nodes — saves a deep AST clone per fn.
             let __meta_t0 = std::time::Instant::now();
             let expanded_block;
-            let block = {
+            let block: &ast::Block = if meta::block_has_delayed_meta(block) {
                 let empty_subs: Vec<(String, crate::parser::ast::Type)> = vec![];
                 let empty_env = rustc_hash::FxHashMap::default();
                 let delayed_ctx = DelayedMetaContext {
@@ -762,6 +770,8 @@ pub fn lower_function(
                 }
                 expanded_block = cloned;
                 &expanded_block
+            } else {
+                block
             };
             *ctx.lower_fn_sub_times.entry("lower_function::body::meta_expand").or_default() += __meta_t0.elapsed();
             let __lower_block_t0 = std::time::Instant::now();
@@ -1037,24 +1047,34 @@ pub fn lower_equip_method(
     // Lower the body
     match &method.body {
         FunctionBody::Block(block) => {
-            // Evaluate delayed meta blocks (meta if/for) with Self bound to the equipped type.
-            let mut block = block.clone();
-            let self_subs = vec![("Self".to_string(), equipped_type.clone())];
-            let empty_env = rustc_hash::FxHashMap::default();
-            let delayed_ctx = DelayedMetaContext {
-                type_subs:      &self_subs,
-                features:       &[],
-                meta_env:       &empty_env,
-                items:          &[],
-                trait_registry: &ctx.analysis.traits,
-                type_registry:  &ctx.type_registry,
+            // Evaluate delayed meta blocks (meta if/for) with Self bound to
+            // the equipped type. Elide the clone+walk when there are no
+            // delayed-meta nodes anywhere in the AST — same pattern as
+            // `lower_function` at the non-generic site above.
+            let expanded_block;
+            let block_ref: &ast::Block = if meta::block_has_delayed_meta(block) {
+                let mut block = block.clone();
+                let self_subs = vec![("Self".to_string(), equipped_type.clone())];
+                let empty_env = rustc_hash::FxHashMap::default();
+                let delayed_ctx = DelayedMetaContext {
+                    type_subs:      &self_subs,
+                    features:       &[],
+                    meta_env:       &empty_env,
+                    items:          &[],
+                    trait_registry: &ctx.analysis.traits,
+                    type_registry:  &ctx.type_registry,
+                };
+                let mut meta_errors = Vec::new();
+                meta::evaluate_delayed_meta_block(&mut block, &delayed_ctx, &mut meta_errors);
+                for e in &meta_errors {
+                    eprintln!("[delayed-meta equip] {e:?}");
+                }
+                expanded_block = block;
+                &expanded_block
+            } else {
+                block
             };
-            let mut meta_errors = Vec::new();
-            meta::evaluate_delayed_meta_block(&mut block, &delayed_ctx, &mut meta_errors);
-            for e in &meta_errors {
-                eprintln!("[delayed-meta equip] {e:?}");
-            }
-            lower_block(ctx, &mut builder, &block);
+            lower_block(ctx, &mut builder, block_ref);
 
             let last_block_idx = builder.current_block.0 as usize;
             if builder.blocks[last_block_idx].terminator.is_none() {
@@ -1693,24 +1713,36 @@ fn lower_equip_method_with_subs(
 
     match &method_def.body {
         FunctionBody::Block(block) => {
-            // Evaluate delayed meta blocks (meta if/for) with Self bound to the equipped type.
-            let mut block = block.clone();
-            let self_subs = vec![("Self".to_string(), substituted_equipped_type.clone())];
-            let empty_env = rustc_hash::FxHashMap::default();
-            let delayed_ctx = DelayedMetaContext {
-                type_subs:      &self_subs,
-                features:       &[],
-                meta_env:       &empty_env,
-                items:          &[],
-                trait_registry: &ctx.analysis.traits,
-                type_registry:  &ctx.type_registry,
+            // Evaluate delayed meta blocks (meta if/for) with Self bound to
+            // the equipped type. Generic-equip path — usually has meta nodes
+            // (this is monomorphization-time work), but a generic equip
+            // method with no `meta if`/`meta for` still hits this branch
+            // and would clone+walk for nothing. Same elision as the
+            // non-generic / inherent-equip paths above.
+            let expanded_block;
+            let block_ref: &ast::Block = if meta::block_has_delayed_meta(block) {
+                let mut block = block.clone();
+                let self_subs = vec![("Self".to_string(), substituted_equipped_type.clone())];
+                let empty_env = rustc_hash::FxHashMap::default();
+                let delayed_ctx = DelayedMetaContext {
+                    type_subs:      &self_subs,
+                    features:       &[],
+                    meta_env:       &empty_env,
+                    items:          &[],
+                    trait_registry: &ctx.analysis.traits,
+                    type_registry:  &ctx.type_registry,
+                };
+                let mut meta_errors = Vec::new();
+                meta::evaluate_delayed_meta_block(&mut block, &delayed_ctx, &mut meta_errors);
+                for e in &meta_errors {
+                    eprintln!("[delayed-meta generic-equip] {e:?}");
+                }
+                expanded_block = block;
+                &expanded_block
+            } else {
+                block
             };
-            let mut meta_errors = Vec::new();
-            meta::evaluate_delayed_meta_block(&mut block, &delayed_ctx, &mut meta_errors);
-            for e in &meta_errors {
-                eprintln!("[delayed-meta generic-equip] {e:?}");
-            }
-            lower_block(ctx, &mut builder, &block);
+            lower_block(ctx, &mut builder, block_ref);
 
             let last_block_idx = builder.current_block.0 as usize;
             if builder.blocks[last_block_idx].terminator.is_none() {

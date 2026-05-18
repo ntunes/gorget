@@ -784,6 +784,21 @@ impl TypeRegistry {
             .is_some()
     }
 
+    /// Whether the type lowers to the 16-byte `GorgetClosure` runtime handle.
+    /// Folds the four-line `match get(...) { Named(n) => get_type_def(n)... }`
+    /// chain that appears at multiple sites in `lower_var_decl` / methods.rs.
+    /// Layering: reads the typed `c_runtime_alias` flag, not a name prefix.
+    /// One `FxHashMap` lookup per call (the get_type_def behind the alias).
+    pub fn is_closure_runtime_type(&self, type_id: TypeId) -> bool {
+        if type_id.0 < PRIMITIVE_TYPE_COUNT { return false; }
+        if let Some(GirType::Named(name)) = self.get(type_id) {
+            if let Some(td) = self.get_type_def(name) {
+                return td.metadata.c_runtime_alias.as_deref() == Some("GorgetClosure");
+            }
+        }
+        false
+    }
+
     /// Resolve the deep-clone function name for a TypeDef, mirroring the
     /// logic in `LoweringContext::clone_fn_for_ptr`. This is the structural
     /// truth: for every named resource type, `T__clone` is generated when

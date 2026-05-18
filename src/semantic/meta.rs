@@ -3172,6 +3172,67 @@ fn eval_delayed_expr(
 }
 
 /// Evaluate and splice out all `Stmt::MetaIf`/`Stmt::MetaFor` nodes in a block.
+/// Cheap recursive scan: does `block` (or any nested block reachable via
+/// `Stmt::If`/`While`/`For`/`Loop`/`Match`/`Select`/`With`/`Unsafe`/`NamedScope`/
+/// `MetaIf`/`MetaFor`/`MetaMatch`/`MetaWhile`) contain any "delayed meta"
+/// statement (`Stmt::Meta*`) or `MatchItem::MetaFor`? Used at the three
+/// `evaluate_delayed_meta_block` call sites (non-generic fn body, inherent
+/// equip method body, generic equip method body) to elide the upfront
+/// `block.clone()` when there's nothing for the meta-eval pass to do.
+/// Read-only AST walk with early exit on first hit — no allocation.
+pub fn block_has_delayed_meta(block: &Block) -> bool {
+    block.stmts.iter().any(|s| stmt_has_delayed_meta(&s.node))
+}
+
+fn stmt_has_delayed_meta(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::MetaIf { .. }
+        | Stmt::MetaFor { .. }
+        | Stmt::MetaConst { .. }
+        | Stmt::MetaMatch { .. }
+        | Stmt::MetaWhile { .. }
+        | Stmt::MetaLog { .. } => true,
+        Stmt::If { then_body, elif_branches, else_body, .. } => {
+            block_has_delayed_meta(then_body)
+                || elif_branches.iter().any(|(_, b)| block_has_delayed_meta(b))
+                || else_body.as_ref().map_or(false, block_has_delayed_meta)
+        }
+        Stmt::While { body, else_body, .. } => {
+            block_has_delayed_meta(body)
+                || else_body.as_ref().map_or(false, block_has_delayed_meta)
+        }
+        Stmt::For { body, else_body, .. } => {
+            block_has_delayed_meta(body)
+                || else_body.as_ref().map_or(false, block_has_delayed_meta)
+        }
+        Stmt::Loop { body } | Stmt::Unsafe { body } | Stmt::NamedScope { body, .. } => {
+            block_has_delayed_meta(body)
+        }
+        Stmt::With { body, .. } => block_has_delayed_meta(body),
+        Stmt::Match { arms, else_arm, .. } => {
+            arms.iter().any(|item| match item {
+                MatchItem::MetaFor { .. } => true,
+                MatchItem::Arm(a) => match &a.body.node {
+                    Expr::Block(b) => block_has_delayed_meta(b),
+                    _ => false,
+                },
+            }) || else_arm.as_ref().map_or(false, block_has_delayed_meta)
+        }
+        Stmt::Select { arms, else_arm } => {
+            arms.iter().any(|arm| block_has_delayed_meta(&arm.body))
+                || else_arm.as_ref().map_or(false, block_has_delayed_meta)
+        }
+        Stmt::OnError { body } => block_has_delayed_meta(body),
+        // Leaf stmts — no sub-blocks to traverse. We do NOT scan expressions
+        // for nested closures/blocks: `evaluate_delayed_meta_block` itself
+        // does not recurse into expressions either (see
+        // `recurse_delayed_meta_in_stmt`), so a closure body that contains
+        // meta nodes is handled by a separate call when its enclosing
+        // function is lowered, not by walking the outer function's AST.
+        _ => false,
+    }
+}
+
 /// Called at monomorphization time, after type substitution, before GIR lowering.
 ///
 /// Modifies `block.stmts` in place: each `MetaIf`/`MetaFor` is replaced by the
