@@ -6,13 +6,25 @@
 # into the message text, so consumers (drivers, CLIs, IDEs) can filter,
 # group, render, and emit JSON without re-parsing strings.
 #
-# POC scope (2026-05-17): only the resolver populates Diagnostics
-# today. Other stages (typechecker, lowerer, parser, lexer) still use
-# `Vector[String] errors` — see TODO.md for the follow-up sweep.
+# Lexer migration (2026-05-18): the lexer populates `DkLexError`
+# diagnostics at malformed-literal sites (unterminated string, escape,
+# char literal; unexpected character). Mirrors the resolver POC and
+# parser migration patterns — kept per-stage while the cross-directory
+# shared-module strategy is settled. The lexer dir doesn't have an
+# `ast` module so Span is defined inline here (it's a trivial pair of
+# byte offsets, identical to ast.Span in the other stages).
 
 from std.collections import Vector
 from std.conv import int_to_str
-from ast import Span
+
+# ── Span ────────────────────────────────────────────────────
+#
+# Inlined here (not imported from ast) because the lexer driver has
+# no ast.gg. Other stages import the equivalent struct from ast.
+
+struct Span:
+    int start
+    int end
 
 # ── Severity ────────────────────────────────────────────────
 
@@ -24,22 +36,26 @@ enum Severity:
 # ── Diagnostic category ─────────────────────────────────────
 #
 # One variant per category currently emitted by a stage on the
-# accumulator. As new sites get migrated, new variants land here.
-# Today only the resolver populates the kinds tagged below.
+# accumulator. The lexer populates `DkLexError` exclusively today;
+# the other variants are reserved for upstream / downstream stages
+# (parser → DkParseError; resolver → DkUndefinedName / DkDuplicateDefinition;
+# typechecker → DkTypeMismatch / DkNotAType; lowerer → DkUnreachable).
 
 enum DiagKind:
-    # Resolver kinds (active)
+    # Resolver kinds
     DkUndefinedName        # EIdentifier / EStructLiteral lookup miss
     DkDuplicateDefinition  # `define` rejected — name already bound
 
+    # Parser kinds
+    DkParseError           # expect_tok / expect_kw / expected-* sites
+
+    # Lexer kinds (active in this stage)
+    DkLexError             # unterminated string / char / escape; unexpected char
+
     # Reserved for future migrators (kept so the type doesn't churn
-    # when typechecker / lowerer / parser / lexer sites migrate). Not
-    # yet emitted by any stage in this driver dir; populated upstream
-    # in self_host_parser (DkParseError) and self_host_lexer (DkLexError).
+    # when typechecker / lowerer sites migrate).
     DkNotAType
     DkTypeMismatch
-    DkParseError
-    DkLexError
     DkUnreachable
 
 # ── Diagnostic ──────────────────────────────────────────────
@@ -84,21 +100,20 @@ String diag_kind_str(DiagKind kind):
             return "undefined-name"
         case DkDuplicateDefinition():
             return "duplicate-definition"
-        case DkNotAType():
-            return "not-a-type"
-        case DkTypeMismatch():
-            return "type-mismatch"
         case DkParseError():
             return "parse-error"
         case DkLexError():
             return "lex-error"
+        case DkNotAType():
+            return "not-a-type"
+        case DkTypeMismatch():
+            return "type-mismatch"
         case DkUnreachable():
             return "unreachable"
 
-# Canonical one-line rendering used by the resolver comparison test
-# driver. Format: `DIAG <severity> <kind> <span_start>:<span_end> <message>`.
-# Keeping a `DIAG ` prefix means the integration normalizer can keep
-# the existing DEF/RES line-tag discipline; new lines slot in without
-# disturbing the comparison.
+# Canonical one-line rendering used by the lexer comparison test driver.
+# Format: `DIAG <severity> <kind> <span_start>:<span_end> <message>`.
+# Stderr-routed so the stdout comparison contract (one canonical token
+# per line) stays byte-stable; lexer_comparison reads only stdout.
 String format_diagnostic(Diagnostic d):
     return "DIAG " + severity_str(d.sev) + " " + diag_kind_str(d.kind) + " " + int_to_str(d.span.start) + ":" + int_to_str(d.span.end) + " " + d.message

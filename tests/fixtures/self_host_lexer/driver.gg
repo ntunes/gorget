@@ -1,9 +1,15 @@
 # CLI driver for lexer comparison testing.
-# Reads a .gg file and prints canonical tokens, one per line.
+# Reads a .gg file, tokenizes it, and prints canonical tokens (one per
+# line) to stdout. Diagnostics gathered during lexing are drained to
+# stderr as `DIAG ...` lines (sorted by span start for determinism),
+# keeping the stdout comparison contract line-by-line stable while
+# still surfacing the typed diagnostic stream for inspection.
 # Usage: driver <path-to-file.gg>
 
-from lexer import lex_tokenize, SpannedToken, Token
+from lexer import lex_with_diagnostics, LexResult, SpannedToken, Token
 from format import describe_token_canonical
+from diagnostic import Diagnostic, format_diagnostic
+from std.io import stderr
 from std.fs import read_file
 from std.os import args
 from std.collections import Vector
@@ -12,7 +18,8 @@ void main():
     Vector[String] cmd_args = args()
     String path = cmd_args.get(1).unwrap()
     String source = read_file(path)
-    Vector[SpannedToken] tokens = lex_tokenize(source)
+    LexResult result = lex_with_diagnostics(source)
+    Vector[SpannedToken] tokens = result.tokens
     int i = 0
     while i < tokens.len():
         SpannedToken st = tokens.get(i).unwrap()
@@ -22,3 +29,33 @@ void main():
             else:
                 print(describe_token_canonical(st.lex_token))
         i = i + 1
+    # Drain diagnostics to stderr. Sort by span start so the order is
+    # deterministic regardless of lexer-internal scan order. Stderr
+    # rather than stdout because lexer_comparison does a line-by-line
+    # match on stdout; routing DIAG lines off-band keeps clean lexes
+    # byte-identical while still making the diagnostic stream readable.
+    if result.diagnostics.len() > 0:
+        Vector[int] order = Vector[int]()
+        int j = 0
+        while j < result.diagnostics.len():
+            order.push(j)
+            j = j + 1
+        int oi = 1
+        while oi < order.len():
+            int key = order.get(oi).unwrap()
+            int key_start = result.diagnostics.get(key).unwrap().span.start
+            int oj = oi - 1
+            while oj >= 0:
+                int other = order.get(oj).unwrap()
+                if result.diagnostics.get(other).unwrap().span.start <= key_start:
+                    break
+                order.set(oj + 1, other)
+                oj = oj - 1
+            order.set(oj + 1, key)
+            oi = oi + 1
+        int k = 0
+        while k < order.len():
+            int idx = order.get(k).unwrap()
+            Diagnostic d = result.diagnostics.get(idx).unwrap()
+            print(format_diagnostic(d), file=stderr)
+            k = k + 1

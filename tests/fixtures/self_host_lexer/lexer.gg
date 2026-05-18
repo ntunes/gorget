@@ -4,6 +4,7 @@
 
 from std.collections import Vector
 from std.conv import parse_int, parse_float, chr
+from diagnostic import Diagnostic, DkLexError, Span
 
 # Owned byte_slice — allocates a copy so the result survives source deallocation.
 # Required because byte_slice returns a view into the source string, which is
@@ -98,7 +99,12 @@ struct Lexer:
     Vector[SpannedToken] lex_tokens
     bool lex_finished
     bool lex_need_newline
-    String lex_error
+    # Typed diagnostics accumulator. Replaces the old `String lex_error`
+    # single-slot field — that was write-only and lost all but the last
+    # message. Mirrors the parser's `Vector[Diagnostic] diagnostics`
+    # field (self_host_parser/parser.gg) and the resolver's
+    # ResolveContext.diagnostics. Drained via `lex_with_diagnostics`.
+    Vector[Diagnostic] lex_diagnostics
 
 # ── Keyword lookup ────────────────────────────────────────────
 
@@ -577,7 +583,7 @@ equip Lexer:
 
             # Newline in non-triple string is an error
             if self.lex_peek() == b'\n' and not triple:
-                self.lex_error = "unterminated string"
+                self.lex_diagnostics.push(Diagnostic.error(Span(start, self.lex_pos), DkLexError(), "unterminated string"))
                 break
 
             # Escape sequences (not in raw strings)
@@ -588,7 +594,7 @@ equip Lexer:
                     case Some(c):
                         current_lit = current_lit + c
                     else:
-                        self.lex_error = "unterminated string"
+                        self.lex_diagnostics.push(Diagnostic.error(Span(start, self.lex_pos), DkLexError(), "unterminated string"))
                         break
                 continue
 
@@ -672,7 +678,7 @@ equip Lexer:
                     case Some(c):
                         lit = lit + c
                     else:
-                        self.lex_error = "unterminated char literal"
+                        self.lex_diagnostics.push(Diagnostic.error(Span(start, self.lex_pos), DkLexError(), "unterminated char literal"))
                         self.lex_emit(TkError("unterminated char"), start, self.lex_pos)
                         return
             else:
@@ -680,7 +686,7 @@ equip Lexer:
                 self.lex_advance()
 
         if self.lex_at_end() or self.lex_peek() == b'\n':
-            self.lex_error = "unterminated char literal"
+            self.lex_diagnostics.push(Diagnostic.error(Span(start, self.lex_pos), DkLexError(), "unterminated char literal"))
             self.lex_emit(TkError("unterminated char"), start, self.lex_pos)
             return
 
@@ -875,6 +881,7 @@ equip Lexer:
         elif c == b',':
             self.lex_emit(TkComma(), start, self.lex_pos)
         else:
+            self.lex_diagnostics.push(Diagnostic.error(Span(start, self.lex_pos), DkLexError(), "unexpected character"))
             self.lex_emit(TkError("unexpected character"), start, self.lex_pos)
 
     # ── Comment scanning ──────────────────────────────────────
@@ -1057,9 +1064,27 @@ int lex_parse_int_radix(String s, int radix):
 
 # ── Public API ────────────────────────────────────────────────
 
-Vector[SpannedToken] lex_tokenize(String source):
+# Result of lexing: the token stream plus any diagnostics gathered
+# along the way. Malformed-literal sites (unterminated string / char /
+# escape; unexpected character) don't abort — they get recorded as
+# typed Diagnostics so downstream stages can still run on a best-
+# effort token stream. Mirrors the parser's `ParseResult` shape.
+struct LexResult:
+    Vector[SpannedToken] tokens
+    Vector[Diagnostic] diagnostics
+
+# Tokenize `source` and return both the token stream and the collected
+# diagnostics. Comparison drivers / CLIs use this entry point when they
+# need to surface lexer errors; the older `lex_tokenize` keeps a
+# tokens-only signature for callers (e.g. main.gg, the parser's
+# `parse_source`) that don't consume the diagnostic stream.
+LexResult lex_with_diagnostics(String source):
     Vector[int] indent = Vector[int]()
     indent.push(0)
-    Lexer l = Lexer(source, 0, indent, 0, Vector[SpannedToken](), false, false, "")
+    Lexer l = Lexer(source, 0, indent, 0, Vector[SpannedToken](), false, false, Vector[Diagnostic]())
     l.lex_all()
-    return l.lex_tokens
+    return LexResult(l.lex_tokens, l.lex_diagnostics)
+
+Vector[SpannedToken] lex_tokenize(String source):
+    LexResult r = lex_with_diagnostics(source)
+    return r.tokens

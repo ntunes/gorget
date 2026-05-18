@@ -39,8 +39,11 @@ enum DiagKind:
     # Parser kinds (active in this stage)
     DkParseError           # expect_tok / expect_kw / expected-* sites
 
+    # Lexer kinds (active in self_host_lexer; reserved here for parity)
+    DkLexError             # unterminated string / char / escape; unexpected char
+
     # Reserved for future migrators (kept so the type doesn't churn
-    # when typechecker / lowerer / lexer sites migrate).
+    # when typechecker / lowerer sites migrate).
     DkNotAType
     DkTypeMismatch
     DkUnreachable
@@ -89,6 +92,8 @@ String diag_kind_str(DiagKind kind):
             return "duplicate-definition"
         case DkParseError():
             return "parse-error"
+        case DkLexError():
+            return "lex-error"
         case DkNotAType():
             return "not-a-type"
         case DkTypeMismatch():
