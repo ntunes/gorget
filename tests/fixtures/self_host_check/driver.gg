@@ -66,5 +66,5 @@ void main():
     expand_meta_types(&m, &types)
     expand_meta_for_match(&m)
     ResolveContext ctx = resolve_module(m, &scopes, &types)
-    type_check_module(m, &scopes, &types, ctx)
+    type_check_module(m, &scopes, &types, &ctx)
     print(format_types(scopes, types))
