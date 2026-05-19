@@ -657,32 +657,21 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
     # represented as their parent enum, not as their own standalone struct.
     Dict[String, bool] enum_variant_names = {}
     Vector[String] ti_all_keys = gmod.type_infos.keys()
-    int tiek = 0
-    while tiek < ti_all_keys.len():
-        String tname_k = ti_all_keys.get(tiek).unwrap()
+    for tname_k in ti_all_keys:
         GirTypeInfo tinfo_k = gmod.type_infos.get(tname_k).unwrap()
         if tinfo_k.is_enum:
-            int vk = 0
-            while vk < tinfo_k.variants.len():
-                GirEnumVariantInfo v = tinfo_k.variants.get(vk).unwrap()
+            for v in tinfo_k.variants:
                 enum_variant_names.put(v.name, true)
-                vk += 1
-        tiek += 1
 
     # Pass 1: Pre-register all named types
-    int ti = PRIM_COUNT
-    while ti < gmod.type_table.len():
-        GirType gt = gmod.type_table.get(ti).unwrap()
+    for gt in gmod.type_table:
         match gt:
             case GtNamed(name):
                 if name == "":
-                    ti += 1
                     continue
                 if is_generic_placeholder_name(name):
-                    ti += 1
                     continue
                 if enum_variant_names.contains(name):
-                    ti += 1
                     continue
                 if sr.get(name).unwrap_or(-1) < 0:
                     # Phase A: typed dispatch on rmeta.collection_kind /
@@ -813,28 +802,21 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
                             m.type_runtime_map.put(name.clone(), "Task")
             else:
                 pass
-        ti += 1
 
     # Pass 1b: Ensure all types from type_infos have LIR struct entries.
     Vector[String] ti_keys = gmod.type_infos.keys()
-    int tki_pre = 0
-    while tki_pre < ti_keys.len():
-        String tname = ti_keys.get(tki_pre).unwrap()
+    for tname in ti_keys:
         if tname == "":
-            tki_pre += 1
             continue
         if is_generic_placeholder_name(tname):
-            tki_pre += 1
             continue
         if enum_variant_names.contains(tname):
-            tki_pre += 1
             continue
         if sr.get(tname).unwrap_or(-1) < 0:
             Vector[StructField] empty_fields = []
             String ph_name = tname.clone()
             int sid = lir_mod_add_struct(&m, LirStructDef(ph_name, empty_fields, 0, false, -1, -1))
             sr.put(tname, sid)
-        tki_pre += 1
 
     # Pass 1c: Register collection types referenced only as field types.
     # `Vector[int]` used only inside `MNamed(String, Vector[int])` never
@@ -843,44 +825,27 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
     # then falls back to `LT_PTR` (8 bytes), and the containing enum's
     # union-variant max-size calculation undercounts by
     # `sizeof(GorgetArray) - 8 = 56` per occurrence.
-    int pc_i = 0
-    while pc_i < ti_keys.len():
-        String pc_tname = ti_keys.get(pc_i).unwrap()
+    for pc_tname in ti_keys:
         GirTypeInfo pc_info = gmod.type_infos.get(pc_tname).unwrap()
         # Struct fields
-        int pcf_i = 0
-        while pcf_i < pc_info.fields.len():
-            GirFieldInfo pcf = pc_info.fields.get(pcf_i).unwrap()
+        for pcf in pc_info.fields:
             register_field_type_in_sr(pcf.type_name, &sr, &m)
-            pcf_i += 1
         # Enum variant fields
-        int pcv_i = 0
-        while pcv_i < pc_info.variants.len():
-            GirEnumVariantInfo pcv = pc_info.variants.get(pcv_i).unwrap()
-            int pcvf_i = 0
-            while pcvf_i < pcv.fields.len():
-                GirFieldInfo pcvf = pcv.fields.get(pcvf_i).unwrap()
+        for pcv in pc_info.variants:
+            for pcvf in pcv.fields:
                 register_field_type_in_sr(pcvf.type_name, &sr, &m)
-                pcvf_i += 1
-            pcv_i += 1
-        pc_i += 1
 
     # Pass 2: Fill in struct/enum fields from GIR type info.
-    int tki = 0
-    while tki < ti_keys.len():
-        String tname = ti_keys.get(tki).unwrap()
+    for tname in ti_keys:
         int sid = sr.get(tname).unwrap_or(-1)
         if sid < 0:
-            tki += 1
             continue
         if not gmod.type_infos.contains(tname):
-            tki += 1
             continue
         GirTypeInfo tinfo = gmod.type_infos.get(tname).unwrap()
         LirStructDef sdef = m.structs.get(sid).unwrap()
         # Only fill if placeholder (empty fields)
         if sdef.fields.len() > 0:
-            tki += 1
             continue
         if tinfo.is_enum:
             # Enum: tag (I32) + variant fields. We build both the flat
@@ -897,9 +862,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
             efields.push(StructField("tag", LT_I32))
             int max_variant_size = 0
             int flat_payload_size = 0
-            int vi = 0
-            while vi < tinfo.variants.len():
-                GirEnumVariantInfo vinfo = tinfo.variants.get(vi).unwrap()
+            for vinfo in tinfo.variants:
                 int variant_bytes = 0
                 int vfi = 0
                 while vfi < vinfo.fields.len():
@@ -913,7 +876,6 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
                     vfi += 1
                 if variant_bytes > max_variant_size:
                     max_variant_size = variant_bytes
-                vi += 1
             # Match Rust backend: union layout when field count > 4 (tag + >3 payload).
             bool is_union = efields.len() > 4
             int ek = 0
@@ -947,21 +909,17 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
             # Struct: map fields + pre-compute byte size (sum of field
             # sizes, padded to struct's alignof).
             Vector[StructField] sfields = []
-            int sfi = 0
             int s_total = 0
-            while sfi < tinfo.fields.len():
-                GirFieldInfo finfo = tinfo.fields.get(sfi).unwrap()
+            for finfo in tinfo.fields:
                 int fty = resolve_field_lir_type(finfo.type_name, &sr)
                 sfields.push(StructField(finfo.name, fty))
                 s_total = s_total + lir_type_byte_size_in_mod(fty, &m, 0)
-                sfi += 1
             int s_align = struct_alignof_from_fields(&sfields, &m)
             s_total = round_up_to(s_total, s_align)
             if s_total == 0:
                 s_total = 1
             LirStructDef new_sdef = LirStructDef(sdef.name, sfields, 0, false, s_total, -1)
             m.structs.set(sid, new_sdef)
-        tki += 1
 
     # Pass 3: Synthesize fields for monomorphized Option__T / Result__T__E
     # placeholders (they don't appear in gmod.type_infos by name).
@@ -1115,13 +1073,10 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
                 # overflow in `ScopeTable__set_def_param` during stage-1's
                 # own run on the self-host driver.
                 int offset = 0
-                int rfi2 = 0
-                while rfi2 < rsdef.fields.len():
-                    int fty2 = rsdef.fields.get(rfi2).unwrap().ty
-                    int fa2 = alignof_lir_type(fty2, &m, 0)
+                for rsf2 in rsdef.fields:
+                    int fa2 = alignof_lir_type(rsf2.ty, &m, 0)
                     offset = round_up_to(offset, fa2)
-                    offset = offset + lir_type_byte_size_in_mod(fty2, &m, 0)
-                    rfi2 += 1
+                    offset = offset + lir_type_byte_size_in_mod(rsf2.ty, &m, 0)
                 new_size = round_up_to(offset, struct_align_rs)
             if new_size == 0:
                 new_size = 8
@@ -1680,12 +1635,10 @@ int alignof_lir_type(int ty, LirModule &m, int depth):
         if sid < m.structs.len() and depth < 4:
             LirStructDef sdef = m.structs.get(sid).unwrap()
             int max_align = 1
-            int fi = 0
-            while fi < sdef.fields.len():
-                int fa = alignof_lir_type(sdef.fields.get(fi).unwrap().ty, &m, depth + 1)
+            for sfa in sdef.fields:
+                int fa = alignof_lir_type(sfa.ty, &m, depth + 1)
                 if fa > max_align:
                     max_align = fa
-                fi += 1
             return max_align
     return 8
 
@@ -1693,12 +1646,10 @@ int alignof_lir_type(int ty, LirModule &m, int depth):
 # layout doesn't matter for alignof: both are max field alignment).
 int struct_alignof_from_fields(Vector[StructField] &fields, LirModule &m):
     int max_align = 1
-    int fi = 0
-    while fi < fields.len():
-        int fa = alignof_lir_type(fields.get(fi).unwrap().ty, &m, 0)
+    for sf in fields:
+        int fa = alignof_lir_type(sf.ty, &m, 0)
         if fa > max_align:
             max_align = fa
-        fi += 1
     return max_align
 
 int round_up_to(int n, int align):
@@ -1764,11 +1715,8 @@ int lir_type_byte_size_in_mod(int ty, LirModule &m, int depth):
                     return 8
                 return u_total
             int total = 0
-            int fi = 0
-            while fi < sdef.fields.len():
-                int fty = sdef.fields.get(fi).unwrap().ty
-                total = total + lir_type_byte_size_in_mod(fty, &m, depth + 1)
-                fi += 1
+            for sff in sdef.fields:
+                total = total + lir_type_byte_size_in_mod(sff.ty, &m, depth + 1)
             if total == 0:
                 return 8
             return round_up_to(total, align_fb)
@@ -1800,11 +1748,8 @@ int type_elem_size_in_mod(String elem, Dict[String, int] &sr, LirModule &m):
         # nested union-layout Token payloads get the real size rather
         # than the 8-byte pointer-size fallback.
         int total = 0
-        int fi = 0
-        while fi < sdef.fields.len():
-            int fty = sdef.fields.get(fi).unwrap().ty
-            total = total + lir_type_byte_size_in_mod(fty, &m, 0)
-            fi += 1
+        for sff in sdef.fields:
+            total = total + lir_type_byte_size_in_mod(sff.ty, &m, 0)
         if total == 0:
             return 8
         # Round up to 8-byte boundary for C struct alignment.
@@ -3062,28 +3007,21 @@ LirTerm lower_terminator(Terminator term, LirFunction &f, int bb, Vector[int] &l
 LirFunction lir_lower_function(GirFunction gfn, GirModule &gmod, Dict[String, int] &sr, Dict[String, int] &func_index, LirModule &m):
     # Map parameter types
     Vector[int] param_types = []
-    int pi = 0
-    while pi < gfn.param_types.len():
-        int pt = gfn.param_types.get(pi).unwrap()
+    for pt in gfn.param_types:
         param_types.push(map_gir_type(pt, &gmod, &sr))
-        pi += 1
 
     # Map return type
     int ret_type = map_gir_type(gfn.return_type, &gmod, &sr)
 
     Vector[int] saved_param_types = []
-    int spi = 0
-    while spi < param_types.len():
-        saved_param_types.push(param_types.get(spi).unwrap())
-        spi += 1
+    for spt in param_types:
+        saved_param_types.push(spt)
 
     LirFunction f = LirFunction(gfn.name, param_types, ret_type, [], [], 0, false, "", [], [], [])
 
     # Create slots for all GIR locals
     Vector[int] local_to_slot = []
-    int li = 0
-    while li < gfn.locals.len():
-        GirLocal local = gfn.locals.get(li).unwrap()
+    for local in gfn.locals:
         int lir_ty = map_gir_type(local.type_id, &gmod, &sr)
         String slot_name = ""
         match local.name_hint:
@@ -3093,15 +3031,12 @@ LirFunction lir_lower_function(GirFunction gfn, GirModule &gmod, Dict[String, in
                 pass
         int slot_id = lir_fn_add_slot(&f, lir_ty, slot_name)
         local_to_slot.push(slot_id)
-        li += 1
 
     # Create blocks
     Vector[int] block_map = []
-    int bi = 0
-    while bi < gfn.blocks.len():
+    for _ in gfn.blocks:
         int blk_id = lir_fn_add_block(&f)
         block_map.push(blk_id)
-        bi += 1
 
     # Copy function parameters to their slots (params map to locals 1..N, local 0 is return place)
     if gfn.blocks.len() > 0:
@@ -3124,11 +3059,8 @@ LirFunction lir_lower_function(GirFunction gfn, GirModule &gmod, Dict[String, in
         int lir_bb = block_map.get(bii).unwrap()
 
         # Lower instructions
-        int ii = 0
-        while ii < gir_blk.insts.len():
-            Instruction gir_inst = gir_blk.insts.get(ii).unwrap()
+        for gir_inst in gir_blk.insts:
             lir_bb = lower_instruction(gir_inst, &f, lir_bb, &local_to_slot, &func_index, &gmod, &sr, &m)
-            ii += 1
 
         # Lower terminator. Move the local LirTerm into the block —
         # it's a non-Copy enum and `lir_term` is dead after the
@@ -3279,36 +3211,28 @@ LirModule lower_gir_to_lir(GirModule &gmod):
     # `name.starts_with("Vector__")` etc. See
     # docs/internals/self-host-resource-model.md §3.
     Vector[String] nt_keys = gmod.named_types.keys()
-    int nti = 0
-    while nti < nt_keys.len():
-        String tname = nt_keys.get(nti).unwrap()
+    for tname in nt_keys:
         if not gmod.resource_metadata.contains(tname):
             match build_resource_metadata(tname):
                 case Some(rmeta):
                     gmod.resource_metadata.put(tname.clone(), rmeta)
                 case None:
                     pass
-        nti += 1
 
     # Copy imported-type flags from GirModule (loader stores imported struct
     # and enum names with "__imported_type__NAME" keys). Used downstream to
     # suppress duplicate struct body / drop / clone emission — the Rust
     # preamble already provides them for imported types.
     Vector[String] gm_fn_keys = gmod.imported_fns.keys()
-    int ifki = 0
-    while ifki < gm_fn_keys.len():
-        String k = gm_fn_keys.get(ifki).unwrap()
+    for k in gm_fn_keys:
         if k.starts_with("__imported_type__"):
             String type_only = k.slice(17, k.len())
             m.imported_type_names.put(type_only, true)
-        ifki += 1
 
     # Populate enum variant → parent enum map for codegen rewriting of
     # `Variant(args)` calls into inline struct initializers.
     Vector[String] ti_keys_v = gmod.type_infos.keys()
-    int tivi = 0
-    while tivi < ti_keys_v.len():
-        String tname_v = ti_keys_v.get(tivi).unwrap()
+    for tname_v in ti_keys_v:
         GirTypeInfo tinfo_v = gmod.type_infos.get(tname_v).unwrap()
         if tinfo_v.is_enum:
             int vi_v = 0
@@ -3322,7 +3246,6 @@ LirModule lower_gir_to_lir(GirModule &gmod):
                 # tag here so callers can look it up.
                 m.enum_variant_tag.put(v_v.name, vi_v)
                 vi_v += 1
-        tivi += 1
 
     # Register builtin structs
     register_builtin_structs(&m, &sr)
@@ -3343,14 +3266,11 @@ LirModule lower_gir_to_lir(GirModule &gmod):
     # `IGlobalAddr(dst, gid)`. Dict insertion-order iteration keeps the
     # global-id sequence deterministic across runs.
     Vector[String] static_names = gmod.statics.keys()
-    int sgi = 0
-    while sgi < static_names.len():
-        String sg_name = static_names.get(sgi).unwrap()
+    for sg_name in static_names:
         GirStaticInfo sg_info = gmod.statics.get(sg_name).unwrap()
         int sg_lir_ty = map_gir_type(sg_info.type_id, &gmod, &sr)
         LirGlobal sg = LirGlobal(sg_name.clone(), sg_lir_ty, GINIT_RUNTIME_CALL, -1, sg_info.init_expr.clone(), false)
         lir_mod_add_global(&m, sg)
-        sgi += 1
 
     # Build function index: name → FuncId
     Dict[String, int] func_index = {}
@@ -3361,22 +3281,16 @@ LirModule lower_gir_to_lir(GirModule &gmod):
         fi += 1
 
     # Lower extern declarations
-    int ei = 0
-    while ei < gmod.externs.len():
-        GirExtern gext = gmod.externs.get(ei).unwrap()
+    for gext in gmod.externs:
         int ext_ret = map_gir_type(gext.return_type, &gmod, &sr)
         Vector[int] ext_params = []
         Vector[int] ext_abis = []
         m.externs.push(LirExtern(gext.name, ext_params, ext_ret, gext.is_variadic, ext_abis, ABI_AUTO))
-        ei += 1
 
     # Lower each function
-    int fli = 0
-    while fli < gmod.functions.len():
-        GirFunction gfn = gmod.functions.get(fli).unwrap()
+    for gfn in gmod.functions:
         LirFunction lf = lir_lower_function(gfn, &gmod, &sr, &func_index, &m)
         lir_mod_add_function(&m, lf)
-        fli += 1
 
     return m
 
@@ -3401,23 +3315,14 @@ void eliminate_dead_globals(LirModule &m):
         return
     # Pass 1: collect referenced global ids.
     Dict[int, bool] referenced = {}
-    int fi = 0
-    while fi < m.functions.len():
-        LirFunction func = m.functions.get(fi).unwrap()
-        int bi = 0
-        while bi < func.blocks.len():
-            LirBlock blk = func.blocks.get(bi).unwrap()
-            int ii = 0
-            while ii < blk.insts.len():
-                LirInst inst = blk.insts.get(ii).unwrap()
+    for func in m.functions:
+        for blk in func.blocks:
+            for inst in blk.insts:
                 match inst:
                     case IGlobalAddr(_, gid):
                         referenced.put(gid, true)
                     else:
                         pass
-                ii += 1
-            bi += 1
-        fi += 1
     if referenced.len() == m.globals.len():
         return
     # Pass 2: build old→new index map and the kept-globals vector.

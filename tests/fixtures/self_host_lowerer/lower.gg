@@ -454,15 +454,11 @@ void update_last_pos_for_inst(Instruction inst, int pos, Dict[int, int] &last_po
             note_operand_pos(lhs, pos, &last_pos)
             note_operand_pos(rhs, pos, &last_pos)
         case GICall(_, _, args):
-            int i = 0
-            while i < args.len():
-                note_operand_pos(args.get(i).unwrap(), pos, &last_pos)
-                i += 1
+            for a in args:
+                note_operand_pos(a, pos, &last_pos)
         case GICallExtern(_, _, args):
-            int i = 0
-            while i < args.len():
-                note_operand_pos(args.get(i).unwrap(), pos, &last_pos)
-                i += 1
+            for a in args:
+                note_operand_pos(a, pos, &last_pos)
         else:
             pass
 
@@ -514,17 +510,13 @@ Instruction rewrite_inst_at_pos(Instruction inst, int pos, Dict[int, int] &last_
             return GICmp(dst, opc, ty, demote_move_if_not_last(lhs, pos, &last_pos), demote_move_if_not_last(rhs, pos, &last_pos))
         case GICall(dst, name, args):
             Vector[Operand] new_args = []
-            int i = 0
-            while i < args.len():
-                new_args.push(demote_move_if_not_last(args.get(i).unwrap(), pos, &last_pos))
-                i += 1
+            for a in args:
+                new_args.push(demote_move_if_not_last(a, pos, &last_pos))
             return GICall(dst, name, !new_args)
         case GICallExtern(dst, name, args):
             Vector[Operand] new_args = []
-            int i = 0
-            while i < args.len():
-                new_args.push(demote_move_if_not_last(args.get(i).unwrap(), pos, &last_pos))
-                i += 1
+            for a in args:
+                new_args.push(demote_move_if_not_last(a, pos, &last_pos))
             return GICallExtern(dst, name, !new_args)
         else:
             return inst
@@ -583,21 +575,15 @@ String spanned_type_to_name(SpannedType stype):
             if targs.len() == 0:
                 return name
             String result = name
-            int i = 0
-            while i < targs.len():
-                SpannedType ta = targs.get(i).unwrap()
+            for ta in targs:
                 result = result + "__" + spanned_type_to_name(ta)
-                i += 1
             return result
         case TTuple(elems):
             if elems.len() == 0:
                 return "void"
             String result = "Tuple"
-            int i = 0
-            while i < elems.len():
-                SpannedType te = elems.get(i).unwrap()
+            for te in elems:
                 result = result + "__" + spanned_type_to_name(te)
-                i += 1
             return result
         else:
             pass
@@ -610,11 +596,8 @@ String mangle_type_name(String name, Vector[SpannedType] targs, GirModule &gmod)
             return "GorgetString"
         return name
     String result = name
-    int i = 0
-    while i < targs.len():
-        SpannedType ta = targs.get(i).unwrap()
+    for ta in targs:
         result = result + "__" + type_to_c_name(ta, &gmod)
-        i += 1
     return result
 
 String prim_to_c_name(String name):
@@ -701,12 +684,9 @@ String resolved_to_c_name(int rtid, TypeTable types, ScopeTable scopes, GirModul
         case RTGeneric(def_id, type_args):
             DefInfo di = scopes.get_def(def_id)
             String mangled = di.name
-            int i = 0
-            while i < type_args.len():
-                int arg_rtid = type_args.get(i).unwrap()
+            for arg_rtid in type_args:
                 String arg_name = resolved_to_c_name(arg_rtid, types, scopes, &gmod)
                 mangled = mangled + "__" + arg_name
-                i += 1
             return mangled
         case RTRef(inner_rtid):
             # References at the type-name level are transparent — the C
@@ -715,11 +695,8 @@ String resolved_to_c_name(int rtid, TypeTable types, ScopeTable scopes, GirModul
             return resolved_to_c_name(inner_rtid, types, scopes, &gmod)
         case RTTuple(elem_rtids):
             String tup_name = "Tuple"
-            int ti = 0
-            while ti < elem_rtids.len():
-                int et = elem_rtids.get(ti).unwrap()
+            for et in elem_rtids:
                 tup_name = tup_name + "__" + resolved_to_c_name(et, types, scopes, &gmod)
-                ti += 1
             return tup_name
         case RTArray(elem_rtid, _):
             return resolved_to_c_name(elem_rtid, types, scopes, &gmod)
@@ -759,12 +736,9 @@ int resolved_to_gir_type(int rtid, TypeTable types, ScopeTable scopes, GirModule
         case RTGeneric(def_id, type_args):
             DefInfo di = scopes.get_def(def_id)
             String mangled = di.name
-            int i = 0
-            while i < type_args.len():
-                int arg_rtid = type_args.get(i).unwrap()
+            for arg_rtid in type_args:
                 String arg_name = resolved_to_c_name(arg_rtid, types, scopes, &gmod)
                 mangled = mangled + "__" + arg_name
-                i += 1
             return lookup_or_register_named(&gmod, mangled)
         case RTRef(inner_rtid):
             # Refs in the typechecker model the borrow-vs-owned distinction
@@ -779,11 +753,8 @@ int resolved_to_gir_type(int rtid, TypeTable types, ScopeTable scopes, GirModule
             # Tuple__T1__T2__... name and let downstream code register
             # the struct shape (existing tuple-literal lowering does this).
             String tup_name = "Tuple"
-            int ti = 0
-            while ti < elem_rtids.len():
-                int et = elem_rtids.get(ti).unwrap()
+            for et in elem_rtids:
                 tup_name = tup_name + "__" + resolved_to_c_name(et, types, scopes, &gmod)
-                ti += 1
             return lookup_or_register_named(&gmod, tup_name)
         case RTArray(elem_rtid, _):
             # Arrays map to GorgetArray (the C-level Vector backing); the
@@ -849,10 +820,8 @@ int map_ast_type(SpannedType stype, GirModule &gmod):
                     match fn_arg.ty:
                         case TFunction(ret_box, fn_params, _):
                             Vector[int] param_tids = []
-                            int fpi = 0
-                            while fpi < fn_params.len():
-                                param_tids.push(map_ast_type(fn_params.get(fpi).unwrap(), &gmod))
-                                fpi += 1
+                            for fp in fn_params:
+                                param_tids.push(map_ast_type(fp, &gmod))
                             int ret_tid = map_ast_type(*ret_box, &gmod)
                             int fn_tid = register_type(&gmod, GtFnPtr(param_tids, ret_tid))
                             return register_ptr(&gmod, fn_tid)
@@ -868,11 +837,8 @@ int map_ast_type(SpannedType stype, GirModule &gmod):
             # as Ptr(FnPtr(...)) so lir_lower sees a pointer type.
             # Function types as return types are handled by map_fn_return_type.
             Vector[int] fpf_params = []
-            int fpfi = 0
-            while fpfi < fn_params_f.len():
-                SpannedType fpf = fn_params_f.get(fpfi).unwrap()
+            for fpf in fn_params_f:
                 fpf_params.push(map_ast_type(fpf, &gmod))
-                fpfi += 1
             int fpf_ret = map_ast_type(*ret_box, &gmod)
             int fpf_tid = register_type(&gmod, GtFnPtr(fpf_params, fpf_ret))
             return register_ptr(&gmod, fpf_tid)
@@ -881,11 +847,8 @@ int map_ast_type(SpannedType stype, GirModule &gmod):
         case TTuple(elems):
             # Mangle tuple: Tuple__T1__T2__...
             String tuple_name = "Tuple"
-            int ti = 0
-            while ti < elems.len():
-                SpannedType elem = elems.get(ti).unwrap()
+            for elem in elems:
                 tuple_name = tuple_name + "__" + type_to_c_name(elem, &gmod)
-                ti += 1
             return lookup_or_register_named(&gmod, tuple_name)
         else:
             pass
@@ -896,11 +859,8 @@ int map_fn_return_type(SpannedType stype, GirModule &gmod):
     match stype.ty:
         case TFunction(ret_type_box, fn_param_types, _):
             Vector[int] fn_params = []
-            int fpi = 0
-            while fpi < fn_param_types.len():
-                SpannedType fp = fn_param_types.get(fpi).unwrap()
+            for fp in fn_param_types:
                 fn_params.push(map_ast_type(fp, &gmod))
-                fpi += 1
             int fn_ret = map_ast_type(*ret_type_box, &gmod)
             return register_type(&gmod, GtFnPtr(fn_params, fn_ret))
         else:
@@ -938,16 +898,11 @@ String type_id_to_name(int tid, GirModule &gmod):
 # Get parameter type IDs for a function from the GIR module.
 Vector[int] get_fn_param_types(String name, GirModule &gmod):
     Vector[int] types = []
-    int fi = 0
-    while fi < gmod.functions.len():
-        GirFunction gfn = gmod.functions.get(fi).unwrap()
+    for gfn in gmod.functions:
         if gfn.name == name:
-            int pi = 0
-            while pi < gfn.param_types.len():
-                types.push(gfn.param_types.get(pi).unwrap())
-                pi += 1
+            for pt in gfn.param_types:
+                types.push(pt)
             return types
-        fi += 1
     return types
 
 # Check if a call name is a type constructor (produces a named type).
@@ -971,18 +926,12 @@ String binop_method_name(String op):
 # (IntCol, Red, Ok, ...) to their enclosing enum's named type.
 String enum_variant_parent(String name, GirModule &gmod):
     Vector[String] tikeys = gmod.type_infos.keys()
-    int i = 0
-    while i < tikeys.len():
-        String tname = tikeys.get(i).unwrap()
+    for tname in tikeys:
         GirTypeInfo info = gmod.type_infos.get(tname).unwrap()
         if info.is_enum:
-            int vi = 0
-            while vi < info.variants.len():
-                GirEnumVariantInfo v = info.variants.get(vi).unwrap()
+            for v in info.variants:
                 if v.name == name:
                     return tname
-                vi += 1
-        i += 1
     return ""
 
 bool is_type_constructor(String name):
@@ -1590,12 +1539,9 @@ bool is_resource_field_type(SpannedType stype, Dict[String, bool] resource_types
                     return true
                 case "Option" | "Result":
                     # Resource if any type argument is a resource
-                    int oi = 0
-                    while oi < targs.len():
-                        SpannedType ota = targs.get(oi).unwrap()
+                    for ota in targs:
                         if is_resource_field_type(ota, resource_types):
                             return true
-                        oi += 1
                     return false
                 else:
                     if resource_types.contains(name):
@@ -2049,12 +1995,9 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         # Lower args
                         Vector[Operand] cl_args = []
                         cl_args.push(op_consume(&ctx, &gmod, callable_local))  # closure/callable as first arg
-                        int cai = 0
-                        while cai < args.len():
-                            SpannedExpr carg = args.get(cai).unwrap()
+                        for carg in args:
                             int cval = lower_expr(&ctx, carg, &gmod)
                             cl_args.push(op_consume(&ctx, &gmod, cval))
-                            cai += 1
                         # Emit as __callable_N (codegen handles this as void*[2] dispatch)
                         int arity = args.len()
                         String cl_call = "__callable_" + int_to_str(arity)
@@ -2092,11 +2035,8 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 case EFieldAccess(_, method_name):
                     # Method-style call: obj.method(args) parsed as ECall(EFieldAccess(...))
                     # Lower args but return unit (method calls are complex)
-                    int mai = 0
-                    while mai < args.len():
-                        SpannedExpr marg = args.get(mai).unwrap()
+                    for marg in args:
                         lower_expr(&ctx, marg, &gmod)
-                        mai += 1
                     int mdst = add_local(&ctx, UNIT_TYPE, NO_NAME)
                     emit(&ctx, GIAssign(mdst, OpConstUnit()))
                     return mdst
@@ -2233,12 +2173,9 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             is_type = true
                     if is_type:
                         Vector[Operand] static_args = []
-                        int smi = 0
-                        while smi < margs.len():
-                            SpannedExpr sma = margs.get(smi).unwrap()
+                        for sma in margs:
                             int sma_val = lower_expr(&ctx, sma, &gmod)
                             static_args.push(op_consume(&ctx, &gmod, sma_val))
-                            smi += 1
                         # Primitive method names need C-runtime mangling.
                         String type_prefix = ident_name
                         if ident_name == "int":
@@ -2265,13 +2202,10 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         if gmod.type_infos.contains(ident_name):
                             GirTypeInfo enum_info = gmod.type_infos.get(ident_name).unwrap()
                             if enum_info.is_enum:
-                                int evi = 0
-                                while evi < enum_info.variants.len():
-                                    GirEnumVariantInfo evv = enum_info.variants.get(evi).unwrap()
+                                for evv in enum_info.variants:
                                     if evv.name == mname:
                                         is_variant_ctor = true
                                         break
-                                    evi += 1
                         if is_variant_ctor:
                             static_ret = lookup_or_register_named(&gmod, ident_name)
                         elif gmod.fn_sigs.contains(static_name):
@@ -2498,12 +2432,9 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         call_args.push(OpBorrow(recv))
                     else:
                         call_args.push(OpMove(recv))
-            int mi2 = 0
-            while mi2 < margs.len():
-                SpannedExpr ma = margs.get(mi2).unwrap()
+            for ma in margs:
                 int ma_val = lower_expr(&ctx, ma, &gmod)
                 call_args.push(op_consume(&ctx, &gmod, ma_val))
-                mi2 += 1
             # Build the mangled method name: TypeName__method
             # Resolve receiver type name from the GIR local's type
             String recv_type_name = local_type_name(recv, &ctx, &gmod)
@@ -2713,12 +2644,9 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # array is constructed. Need to keep the value locals around
             # so we can reference them in the subsequent push calls.
             Vector[int] elem_locals = []
-            int ei = 0
-            while ei < elems.len():
-                SpannedExpr elem = elems.get(ei).unwrap()
+            for elem in elems:
                 int elem_val = lower_expr(&ctx, elem, &gmod)
                 elem_locals.push(elem_val)
-                ei += 1
             # Call gorget_array_new(elem_size) so the resulting array has a
             # valid `alloc` pointer from __gorget_current_alloc. Without
             # this, subsequent `.push()` on a zero-init'd GorgetArray
@@ -2741,28 +2669,19 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # this, `[!init_insts]` and similar "array literal with
             # explicit elements" produced an EMPTY array, and any
             # subsequent `.get(0)` returned NULL.
-            int pi = 0
-            while pi < elem_locals.len():
-                int el = elem_locals.get(pi).unwrap()
+            for el in elem_locals:
                 Vector[Operand] push_args = [OpMove(adst), OpMove(el)]
                 emit(&ctx, GICallExtern(-1, "gorget_array_push", push_args))
-                pi += 1
             return adst
         case ETupleLiteral(elems):
-            int ti = 0
-            while ti < elems.len():
-                SpannedExpr te = elems.get(ti).unwrap()
+            for te in elems:
                 lower_expr(&ctx, te, &gmod)
-                ti += 1
             int tdst = add_local(&ctx, I64_TYPE, NO_NAME)
             emit(&ctx, GIAssign(tdst, OpConstI64(0)))
             return tdst
         case EStructLiteral(sname, fnames, fvals):
-            int si = 0
-            while si < fvals.len():
-                SpannedExpr sv = fvals.get(si).unwrap()
+            for sv in fvals:
                 lower_expr(&ctx, sv, &gmod)
-                si += 1
             int sdst = add_local(&ctx, lookup_or_register_named(&gmod, sname), NO_NAME)
             emit(&ctx, GIAssign(sdst, OpConstI64(0)))
             return sdst
@@ -2834,11 +2753,8 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
         case ETry(inner_box):
             return lower_expr(&ctx, *inner_box, &gmod)
         case EDotShorthand(variant, sargs):
-            int di = 0
-            while di < sargs.len():
-                SpannedExpr da = sargs.get(di).unwrap()
+            for da in sargs:
                 lower_expr(&ctx, da, &gmod)
-                di += 1
             int ddst = add_local(&ctx, I64_TYPE, NO_NAME)
             return ddst
         case EBlock(block_stmts):
@@ -2920,16 +2836,10 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             ctx.pending_dict_key_tyname = ""
             ctx.pending_dict_val_tyname = ""
             ctx.pending_dict_ordered = false
-            int dli = 0
-            while dli < dkeys.len():
-                SpannedExpr dk = dkeys.get(dli).unwrap()
+            for dk in dkeys:
                 lower_expr(&ctx, dk, &gmod)
-                dli += 1
-            int dvi = 0
-            while dvi < dvals.len():
-                SpannedExpr dv = dvals.get(dvi).unwrap()
+            for dv in dvals:
                 lower_expr(&ctx, dv, &gmod)
-                dvi += 1
             int ddst = add_local(&ctx, lookup_or_register_named(&gmod, "GorgetMap"), NO_NAME)
             if dict_kname != "" and dict_vname != "":
                 # Sentinel `__GGSEP__` separates K and V type names — zero
@@ -3062,11 +2972,8 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         # Compute mangled name for generic calls
         String call_name = fname
         if targs.len() > 0:
-            int ti = 0
-            while ti < targs.len():
-                SpannedType ta = targs.get(ti).unwrap()
+            for ta in targs:
                 call_name = call_name + "__" + type_to_c_name(ta, &gmod)
-                ti += 1
         # Resolve call redirects (bare → module-prefixed name).
         if gmod.call_redirects.contains(call_name):
             call_name = gmod.call_redirects.get(call_name).unwrap()
@@ -3128,13 +3035,10 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                 ret_type = gmod.fn_sigs.get(redir).unwrap()
         # Check function definitions for return type
         if ret_type == I64_TYPE:
-            int fi = 0
-            while fi < gmod.functions.len():
-                GirFunction gfn = gmod.functions.get(fi).unwrap()
+            for gfn in gmod.functions:
                 if gfn.name == call_name:
                     ret_type = gfn.return_type
                     break
-                fi += 1
         # Collection/struct constructors: return the named type
         if ret_type == I64_TYPE and is_type_constructor(call_name):
             # If call_name is an enum variant, route to the parent enum type.
@@ -3479,11 +3383,8 @@ void emit_chain_writeback(LowerCtx &ctx, SpannedExpr coll_expr, SpannedExpr idx_
 # ── Control flow lowering ────────────────────────────────
 
 void lower_stmts(LowerCtx &ctx, Vector[Stmt] stmts, GirModule &gmod, bool is_main):
-    int si = 0
-    while si < stmts.len():
-        Stmt stmt = stmts.get(si).unwrap()
+    for stmt in stmts:
         lower_stmt(&ctx, stmt, &gmod, is_main)
-        si = si + 1
 
 void lower_if(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] then_body, Vector[ElseBranch] elif_branches, GirModule &gmod, bool is_main):
     int cond = lower_expr(&ctx, cond_expr, &gmod)
@@ -3963,15 +3864,12 @@ int lookup_ctor_field_type(String enum_name, String variant_name, int field_idx,
     String found_field_type = ""
     if gmod.type_infos.contains(enum_name):
         GirTypeInfo ti = gmod.type_infos.get(enum_name).unwrap()
-        int vi = 0
-        while vi < ti.variants.len():
-            GirEnumVariantInfo v = ti.variants.get(vi).unwrap()
+        for v in ti.variants:
             if v.name == variant_name:
                 if field_idx < v.fields.len():
                     GirFieldInfo f = v.fields.get(field_idx).unwrap()
                     found_field_type = f.type_name.clone()
                 break
-            vi += 1
     if found_field_type != "":
         return resolve_field_gir_type(found_field_type, &gmod)
     return I64_TYPE
@@ -3992,9 +3890,7 @@ void lower_match_stmt(LowerCtx &ctx, SpannedExpr scrutinee_expr, Vector[MatchArm
                 pass
     String enum_name = match_enum_type(type_name, &gmod)
     int merge_bb = new_block(&ctx)
-    int ai = 0
-    while ai < arms.len():
-        MatchArm arm = arms.get(ai).unwrap()
+    for arm in arms:
         int arm_body_bb = new_block(&ctx)
         int next_arm_bb = new_block(&ctx)
         lower_pattern_match(&ctx, scrutinee, arm.pattern, enum_name, arm_body_bb, next_arm_bb, &gmod)
@@ -4008,7 +3904,6 @@ void lower_match_stmt(LowerCtx &ctx, SpannedExpr scrutinee_expr, Vector[MatchArm
             else:
                 pass
         switch_to(&ctx, next_arm_bb)
-        ai += 1
     # No arm matched — jump to merge (unreachable in practice when the
     # match is exhaustive; the self-host's typechecker doesn't enforce
     # exhaustiveness yet so we keep a safe fall-through).
@@ -4373,9 +4268,7 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
 
     # _1.._N = params — non-primitive bare params become Ptr(T)
     Vector[int] param_types = []
-    int pi = 0
-    while pi < fdef.params.len():
-        Param p = fdef.params.get(pi).unwrap()
+    for p in fdef.params:
         int pt = map_ast_type(p.param_type, &gmod)
         # Bare params of resource types (strings, collections, structs with resource fields) → Ptr
         # Small types (enums, simple structs) are passed by value
@@ -4390,16 +4283,12 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
         param_types.push(pt)
         int plid = add_local_with(&ctx, pt, Some(p.param_name.clone()), LoParam(), BoParam())
         nl_put(&ctx, p.param_name, plid)
-        pi = pi + 1
 
 
 
     # Lower body statements
-    int si = 0
-    while si < fdef.body.len():
-        Stmt stmt = fdef.body.get(si).unwrap()
+    for stmt in fdef.body:
         lower_stmt(&ctx, stmt, &gmod, is_main)
-        si = si + 1
 
     # If main and no explicit return, add return 0
     if is_main:
@@ -4499,9 +4388,7 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
     int target_tid = lookup_or_register_named(&gmod, target_name)
     int self_ptr_tid = register_ptr(&gmod, target_tid)
 
-    int mi = 0
-    while mi < eqblk.methods.len():
-        FunctionDef mdef = eqblk.methods.get(mi).unwrap()
+    for mdef in eqblk.methods:
         # Mangled name: Type__method or Trait_for_Type__method
         String mangled = target_name + "__" + mdef.name
         match eqblk.trait_name:
@@ -4590,13 +4477,10 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
                 nl_put(&ctx, "self", self_lid)
 
         # _2.._N = explicit params (skip self — already added above)
-        int pi = 0
-        while pi < mdef.params.len():
-            Param p = mdef.params.get(pi).unwrap()
+        for p in mdef.params:
             # Skip self parameter
             match p.param_type.ty:
                 case TSelf():
-                    pi += 1
                     continue
                 else:
                     pass
@@ -4611,7 +4495,6 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
             param_types.push(pt)
             int plid = add_local_with(&ctx, pt, Some(p.param_name.clone()), LoParam(), BoParam())
             nl_put(&ctx, p.param_name, plid)
-            pi += 1
 
         # Add the explicit-trait `self` concrete-cast alias here, AFTER
         # all params, so locals 1..N are pure params (lir_lower's
@@ -4641,7 +4524,6 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
             bi += 1
 
         gmod.functions.push(GirFunction(mangled, !param_types, ret_type, ctx.locals, !blocks))
-        mi += 1
 
 # ── Simple expression type inference ─────────────────────
 
@@ -4786,29 +4668,23 @@ bool expr_has_it(SpannedExpr sexpr):
         case ECall(callee, args, _):
             if expr_has_it(*callee):
                 return true
-            int i = 0
-            while i < args.len():
-                if expr_has_it(args.get(i).unwrap()):
+            for a in args:
+                if expr_has_it(a):
                     return true
-                i += 1
             return false
         case EMethodCall(obj, _, args, _):
             if expr_has_it(*obj):
                 return true
-            int i = 0
-            while i < args.len():
-                if expr_has_it(args.get(i).unwrap()):
+            for a in args:
+                if expr_has_it(a):
                     return true
-                i += 1
             return false
         case EIf(cond, _, _):
             return expr_has_it(*cond)
         case EFString(_, fexprs):
-            int fi = 0
-            while fi < fexprs.len():
-                if expr_has_it(fexprs.get(fi).unwrap()):
+            for fx in fexprs:
+                if expr_has_it(fx):
                     return true
-                fi += 1
             return false
         else:
             return false
@@ -4837,12 +4713,9 @@ int scan_expr_for_closures(SpannedExpr sexpr, int next_id, GirModule &gmod):
 
             # Build param types: *__Closure_N + explicit params
             Vector[int] param_types = [self_ptr]
-            int pi = 0
-            while pi < params.len():
-                Param p = params.get(pi).unwrap()
+            for p in params:
                 int pt = map_ast_type(p.param_type, &gmod)
                 param_types.push(pt)
-                pi += 1
 
             # Infer return type from body
             int ret_type = I64_TYPE
@@ -4886,12 +4759,9 @@ int scan_expr_for_closures(SpannedExpr sexpr, int next_id, GirModule &gmod):
 
             # Create minimal function with empty body
             Vector[GirLocal] locals = [GirLocal(ret_type, NO_NAME, LoOwned(), BoNone()), GirLocal(self_ptr, NO_NAME, LoParam(), BoParam())]
-            int li = 0
-            while li < params.len():
-                Param lp = params.get(li).unwrap()
+            for lp in params:
                 int lpt = map_ast_type(lp.param_type, &gmod)
                 locals.push(GirLocal(lpt, Some(lp.param_name), LoParam(), BoParam()))
-                li += 1
             Vector[BasicBlock] blocks = [BasicBlock([], GTReturn(OpCopy(0)))]
             gmod.functions.push(GirFunction(call_name, !param_types, ret_type, !locals, !blocks))
             next_id = next_id + 1
@@ -4922,25 +4792,19 @@ int scan_expr_for_closures(SpannedExpr sexpr, int next_id, GirModule &gmod):
             next_id = scan_expr_for_closures(*inner, next_id, &gmod)
         case ECall(callee, args, _):
             next_id = scan_expr_for_closures(*callee, next_id, &gmod)
-            int ai = 0
-            while ai < args.len():
-                SpannedExpr arg = args.get(ai).unwrap()
+            for arg in args:
                 if expr_has_it(arg):
                     # Implicit `it` closure — generate __Closure_N__call(self, it)
                     next_id = emit_it_closure(next_id, &gmod)
                 else:
                     next_id = scan_expr_for_closures(arg, next_id, &gmod)
-                ai += 1
         case EMethodCall(obj, _, args, _):
             next_id = scan_expr_for_closures(*obj, next_id, &gmod)
-            int ai = 0
-            while ai < args.len():
-                SpannedExpr arg = args.get(ai).unwrap()
+            for arg in args:
                 if expr_has_it(arg):
                     next_id = emit_it_closure(next_id, &gmod)
                 else:
                     next_id = scan_expr_for_closures(arg, next_id, &gmod)
-                ai += 1
         case EIf(cond, then_body, branches):
             next_id = scan_expr_for_closures(*cond, next_id, &gmod)
             next_id = scan_stmts_for_closures(then_body, next_id, &gmod)
@@ -4950,11 +4814,8 @@ int scan_expr_for_closures(SpannedExpr sexpr, int next_id, GirModule &gmod):
             next_id = scan_expr_for_closures(*obj, next_id, &gmod)
             next_id = scan_expr_for_closures(*idx, next_id, &gmod)
         case EFString(_, interp_exprs):
-            int fi = 0
-            while fi < interp_exprs.len():
-                SpannedExpr fexpr = interp_exprs.get(fi).unwrap()
+            for fexpr in interp_exprs:
                 next_id = scan_expr_for_closures(fexpr, next_id, &gmod)
-                fi += 1
         case ESpawn(inner_box):
             # Check if this is spawn (inline_closure)(args) — emit wrapper before recursing
             bool is_inline_closure = false
@@ -4999,16 +4860,13 @@ int scan_stmt_for_closures(Stmt stmt, int next_id, GirModule &gmod):
         case SIf(cond, then_body, branches):
             next_id = scan_expr_for_closures(cond, next_id, &gmod)
             next_id = scan_stmts_for_closures(then_body, next_id, &gmod)
-            int bi = 0
-            while bi < branches.len():
-                ElseBranch eb = branches.get(bi).unwrap()
+            for eb in branches:
                 match eb.condition:
                     case Some(elif_cond):
                         next_id = scan_expr_for_closures(elif_cond, next_id, &gmod)
                     case None:
                         pass
                 next_id = scan_stmts_for_closures(eb.body, next_id, &gmod)
-                bi += 1
         case SWhile(cond, body):
             next_id = scan_expr_for_closures(cond, next_id, &gmod)
             next_id = scan_stmts_for_closures(body, next_id, &gmod)
@@ -5022,11 +4880,8 @@ int scan_stmt_for_closures(Stmt stmt, int next_id, GirModule &gmod):
     return next_id
 
 int scan_stmts_for_closures(Vector[Stmt] stmts, int next_id, GirModule &gmod):
-    int si = 0
-    while si < stmts.len():
-        Stmt stmt = stmts.get(si).unwrap()
+    for stmt in stmts:
         next_id = scan_stmt_for_closures(stmt, next_id, &gmod)
-        si += 1
     return next_id
 
 # ── Closure variable name collection ────────────────────
@@ -5042,24 +4897,19 @@ int collect_closure_vars_expr(SpannedExpr sexpr, int next_id, Dict[String, Strin
             next_id = next_id + 1
         case ECall(callee, args, _):
             next_id = collect_closure_vars_expr(*callee, next_id, &cmap)
-            int cai = 0
-            while cai < args.len():
-                SpannedExpr carg = args.get(cai).unwrap()
+            for carg in args:
                 if expr_has_it(carg):
                     next_id = next_id + 1
                 else:
                     next_id = collect_closure_vars_expr(carg, next_id, &cmap)
-                cai += 1
         case ESpawn(inner_box):
             next_id = collect_closure_vars_expr(*inner_box, next_id, &cmap)
         case ESpawnBlocking(inner_box):
             next_id = collect_closure_vars_expr(*inner_box, next_id, &cmap)
         case EMethodCall(obj, _, margs, _):
             next_id = collect_closure_vars_expr(*obj, next_id, &cmap)
-            int mai = 0
-            while mai < margs.len():
-                next_id = collect_closure_vars_expr(margs.get(mai).unwrap(), next_id, &cmap)
-                mai += 1
+            for ma in margs:
+                next_id = collect_closure_vars_expr(ma, next_id, &cmap)
         else:
             pass
     return next_id
@@ -5087,11 +4937,8 @@ int collect_closure_vars_stmt(Stmt s, int next_id, Dict[String, String] &cmap):
                     pass
         case SIf(_, then_body, branches):
             next_id = collect_closure_vars_stmts(then_body, next_id, &cmap)
-            int bi = 0
-            while bi < branches.len():
-                ElseBranch eb = branches.get(bi).unwrap()
+            for eb in branches:
                 next_id = collect_closure_vars_stmts(eb.body, next_id, &cmap)
-                bi += 1
         case SWhile(_, body):
             next_id = collect_closure_vars_stmts(body, next_id, &cmap)
         case SFor(_, _, body, _, _):
@@ -5101,10 +4948,8 @@ int collect_closure_vars_stmt(Stmt s, int next_id, Dict[String, String] &cmap):
     return next_id
 
 int collect_closure_vars_stmts(Vector[Stmt] stmts, int next_id, Dict[String, String] &cmap):
-    int csi = 0
-    while csi < stmts.len():
-        next_id = collect_closure_vars_stmt(stmts.get(csi).unwrap(), next_id, &cmap)
-        csi += 1
+    for stmt in stmts:
+        next_id = collect_closure_vars_stmt(stmt, next_id, &cmap)
     return next_id
 
 # ── Generic monomorphization ─────────────────────────────
@@ -5126,11 +4971,8 @@ void expand_meta_for_generics(Vector[Stmt] stmts, Dict[String, bool] &seen, Vect
     std_types.push(SpannedType(TPrimitive("float"), -1))
     std_types.push(SpannedType(TPrimitive("String"), -1))
     # Scan for generic calls with type variable args
-    int si = 0
-    while si < stmts.len():
-        Stmt stmt = stmts.get(si).unwrap()
+    for stmt in stmts:
         expand_meta_for_stmt(stmt, &seen, &instances, std_types)
-        si += 1
 
 void expand_meta_for_stmt(Stmt stmt, Dict[String, bool] &seen, Vector[GenericInstance] &instances, Vector[SpannedType] std_types):
     match stmt:
@@ -5146,28 +4988,16 @@ void expand_meta_for_stmt(Stmt stmt, Dict[String, bool] &seen, Vector[GenericIns
                     pass
         case SIf(cond, then_body, branches):
             expand_meta_for_expr(cond, &seen, &instances, std_types)
-            int bi = 0
-            while bi < then_body.len():
-                expand_meta_for_stmt(then_body.get(bi).unwrap(), &seen, &instances, std_types)
-                bi += 1
-            int ei = 0
-            while ei < branches.len():
-                ElseBranch eb = branches.get(ei).unwrap()
-                int ebi = 0
-                while ebi < eb.body.len():
-                    expand_meta_for_stmt(eb.body.get(ebi).unwrap(), &seen, &instances, std_types)
-                    ebi += 1
-                ei += 1
+            for ts in then_body:
+                expand_meta_for_stmt(ts, &seen, &instances, std_types)
+            for eb in branches:
+                for ebs in eb.body:
+                    expand_meta_for_stmt(ebs, &seen, &instances, std_types)
         case SMatch(scrutinee, arms):
             expand_meta_for_expr(scrutinee, &seen, &instances, std_types)
-            int mai = 0
-            while mai < arms.len():
-                MatchArm arm = arms.get(mai).unwrap()
-                int mabi = 0
-                while mabi < arm.body.len():
-                    expand_meta_for_stmt(arm.body.get(mabi).unwrap(), &seen, &instances, std_types)
-                    mabi += 1
-                mai += 1
+            for arm in arms:
+                for abs in arm.body:
+                    expand_meta_for_stmt(abs, &seen, &instances, std_types)
         else:
             pass
 
@@ -5205,16 +5035,12 @@ void expand_meta_for_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Vector[Ge
                             ti += 1
                     else:
                         pass
-            int ai = 0
-            while ai < args.len():
-                expand_meta_for_expr(args.get(ai).unwrap(), &seen, &instances, std_types)
-                ai += 1
+            for arg in args:
+                expand_meta_for_expr(arg, &seen, &instances, std_types)
         case EMethodCall(obj, _, margs, _):
             expand_meta_for_expr(*obj, &seen, &instances, std_types)
-            int mi = 0
-            while mi < margs.len():
-                expand_meta_for_expr(margs.get(mi).unwrap(), &seen, &instances, std_types)
-                mi += 1
+            for ma in margs:
+                expand_meta_for_expr(ma, &seen, &instances, std_types)
         else:
             pass
 
@@ -5234,19 +5060,13 @@ void discover_generic_calls_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Ve
                     else:
                         pass
             # Recurse into call args
-            int ai = 0
-            while ai < args.len():
-                SpannedExpr arg = args.get(ai).unwrap()
+            for arg in args:
                 discover_generic_calls_expr(arg, &seen, &instances)
-                ai += 1
             discover_generic_calls_expr(*callee_box, &seen, &instances)
         case EMethodCall(obj, _, args, _):
             discover_generic_calls_expr(*obj, &seen, &instances)
-            int ai = 0
-            while ai < args.len():
-                SpannedExpr arg = args.get(ai).unwrap()
+            for arg in args:
                 discover_generic_calls_expr(arg, &seen, &instances)
-                ai += 1
         case EBinaryOp(lhs, _, rhs):
             discover_generic_calls_expr(*lhs, &seen, &instances)
             discover_generic_calls_expr(*rhs, &seen, &instances)
@@ -5263,10 +5083,8 @@ void discover_generic_calls_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Ve
         case EClosure(_, body):
             discover_generic_calls_stmts(body, &seen, &instances)
         case EFString(_, fexprs):
-            int fsi = 0
-            while fsi < fexprs.len():
-                discover_generic_calls_expr(fexprs.get(fsi).unwrap(), &seen, &instances)
-                fsi += 1
+            for fx in fexprs:
+                discover_generic_calls_expr(fx, &seen, &instances)
         else:
             pass
 
@@ -5299,16 +5117,13 @@ void discover_generic_calls_stmt(Stmt stmt, Dict[String, bool] &seen, Vector[Gen
         case SIf(cond, then_body, branches):
             discover_generic_calls_expr(cond, &seen, &instances)
             discover_generic_calls_stmts(then_body, &seen, &instances)
-            int bi = 0
-            while bi < branches.len():
-                ElseBranch eb = branches.get(bi).unwrap()
+            for eb in branches:
                 match eb.condition:
                     case Some(elif_cond):
                         discover_generic_calls_expr(elif_cond, &seen, &instances)
                     case None:
                         pass
                 discover_generic_calls_stmts(eb.body, &seen, &instances)
-                bi += 1
         case SWhile(cond, body):
             discover_generic_calls_expr(cond, &seen, &instances)
             discover_generic_calls_stmts(body, &seen, &instances)
@@ -5317,11 +5132,8 @@ void discover_generic_calls_stmt(Stmt stmt, Dict[String, bool] &seen, Vector[Gen
             discover_generic_calls_stmts(body, &seen, &instances)
         case SMatch(scrutinee, arms):
             discover_generic_calls_expr(scrutinee, &seen, &instances)
-            int ai = 0
-            while ai < arms.len():
-                MatchArm arm = arms.get(ai).unwrap()
+            for arm in arms:
                 discover_generic_calls_stmts(arm.body, &seen, &instances)
-                ai += 1
         case SMetaFor(meta_body):
             # Meta for type_variants: expand type-variable generic calls
             # to the 4 standard column types (int, float, String, bool).
@@ -5332,11 +5144,8 @@ void discover_generic_calls_stmt(Stmt stmt, Dict[String, bool] &seen, Vector[Gen
             pass
 
 void discover_generic_calls_stmts(Vector[Stmt] stmts, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
-    int si = 0
-    while si < stmts.len():
-        Stmt stmt = stmts.get(si).unwrap()
+    for stmt in stmts:
         discover_generic_calls_stmt(stmt, &seen, &instances)
-        si += 1
 
 # Lightweight type-to-C-name without GirModule (used during discovery before gmod exists)
 String spanned_type_to_c_name(SpannedType stype):
@@ -5352,11 +5161,8 @@ String spanned_type_to_c_name(SpannedType stype):
             if targs.len() == 0:
                 return name
             String result = name
-            int i = 0
-            while i < targs.len():
-                SpannedType ta = targs.get(i).unwrap()
+            for ta in targs:
                 result = result + "__" + spanned_type_to_c_name(ta)
-                i += 1
             return result
         else:
             pass
@@ -5365,9 +5171,7 @@ String spanned_type_to_c_name(SpannedType stype):
 # Check if any type arg is an unresolved type variable (e.g., T, A, B)
 # rather than a concrete type (e.g., int, String, Vector[int])
 bool has_type_variable(Vector[SpannedType] targs):
-    int i = 0
-    while i < targs.len():
-        SpannedType ta = targs.get(i).unwrap()
+    for ta in targs:
         match ta.ty:
             case TNamed(name, inner_targs):
                 if inner_targs.len() == 0:
@@ -5388,16 +5192,12 @@ bool has_type_variable(Vector[SpannedType] targs):
                 pass
             else:
                 pass
-        i += 1
     return false
 
 String compute_mangled_name(Vector[SpannedType] targs, String base_name):
     String mangled = base_name
-    int ti = 0
-    while ti < targs.len():
-        SpannedType ta = targs.get(ti).unwrap()
+    for ta in targs:
         mangled = mangled + "__" + spanned_type_to_c_name(ta)
-        ti += 1
     return mangled
 
 # Set up type substitutions for a generic instance.
@@ -5500,9 +5300,7 @@ Vector[String] extract_equip_type_params(EquipBlock eqblk):
     Vector[String] params = []
     match eqblk.target.ty:
         case TNamed(_, targs):
-            int i = 0
-            while i < targs.len():
-                SpannedType ta = targs.get(i).unwrap()
+            for ta in targs:
                 match ta.ty:
                     case TNamed(tname, _):
                         params.push(tname)
@@ -5510,7 +5308,6 @@ Vector[String] extract_equip_type_params(EquipBlock eqblk):
                         params.push(tname)
                     else:
                         pass
-                i += 1
         else:
             pass
     return params
@@ -5540,9 +5337,7 @@ String spawn_type_base_name(SpannedType ty):
 
 # Collect shared variable names from a list of statements
 void collect_shared_vars(Vector[Stmt] stmts, Dict[String, bool] &shared_vars):
-    int i = 0
-    while i < stmts.len():
-        Stmt s = stmts.get(i).unwrap()
+    for s in stmts:
         match s:
             case SVarDecl(_, name, _, _, sk, _):
                 # Only auto-mutex (sk=1) gets __shared_token_ wrappers.
@@ -5551,15 +5346,12 @@ void collect_shared_vars(Vector[Stmt] stmts, Dict[String, bool] &shared_vars):
                     shared_vars.put(name, true)
             else:
                 pass
-        i += 1
 
 # Scan for ESpawn expressions and emit wrapper function stubs
 # borrow_params: names of &-qualified params of the enclosing function;
 # passing them to a spawn implies shared-derived ownership (inner shared spawn).
 void scan_spawn_wrappers(Vector[Stmt] stmts, Dict[String, bool] &shared_vars, Dict[String, bool] &async_fns, Dict[String, bool] &emitted, GirModule &gmod, Dict[String, String] &var_types, Dict[String, bool] &borrow_params):
-    int i = 0
-    while i < stmts.len():
-        Stmt s = stmts.get(i).unwrap()
+    for s in stmts:
         match s:
             case SVarDecl(ty, name, init, _, sk, _):
                 if sk == 1:
@@ -5579,11 +5371,8 @@ void scan_spawn_wrappers(Vector[Stmt] stmts, Dict[String, bool] &shared_vars, Di
             case SIf(cond, then_body, branches):
                 scan_expr_for_spawn(cond, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
                 scan_spawn_wrappers(then_body, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
-                int bi = 0
-                while bi < branches.len():
-                    ElseBranch eb = branches.get(bi).unwrap()
+                for eb in branches:
                     scan_spawn_wrappers(eb.body, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
-                    bi += 1
             case SFor(_, iter_expr, body, _, _):
                 scan_expr_for_spawn(iter_expr, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
                 scan_spawn_wrappers(body, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
@@ -5595,7 +5384,6 @@ void scan_spawn_wrappers(Vector[Stmt] stmts, Dict[String, bool] &shared_vars, Di
                         pass
             else:
                 pass
-        i += 1
 
 void scan_expr_for_spawn(SpannedExpr sexpr, Dict[String, bool] &shared_vars, Dict[String, bool] &async_fns, Dict[String, bool] &emitted, GirModule &gmod, Dict[String, String] &var_types, Dict[String, bool] &borrow_params):
     match sexpr.expr:
@@ -5610,9 +5398,7 @@ void scan_expr_for_spawn(SpannedExpr sexpr, Dict[String, bool] &shared_vars, Dic
                             #     skip_ownership_markers strips '&' in call args so
                             #     &counter arrives as EIdentifier("counter"), not EMutableBorrow.
                             bool has_shared = false
-                            int ai = 0
-                            while ai < args.len():
-                                SpannedExpr arg = args.get(ai).unwrap()
+                            for arg in args:
                                 match arg.expr:
                                     case EIdentifier(aname):
                                         if shared_vars.contains(aname) or borrow_params.contains(aname):
@@ -5622,7 +5408,6 @@ void scan_expr_for_spawn(SpannedExpr sexpr, Dict[String, bool] &shared_vars, Dic
                                         has_shared = true
                                     else:
                                         pass
-                                ai += 1
                             if has_shared and not emitted.contains(callee_name):
                                 # Determine prefix: __shared_async_ for async, __shared_token_ otherwise
                                 String prefix = "__shared_token_"
@@ -5661,16 +5446,12 @@ void scan_expr_for_spawn(SpannedExpr sexpr, Dict[String, bool] &shared_vars, Dic
             scan_expr_for_spawn(*inner, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
         case EMethodCall(obj, _, margs, _):
             scan_expr_for_spawn(*obj, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
-            int mi = 0
-            while mi < margs.len():
-                scan_expr_for_spawn(margs.get(mi).unwrap(), &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
-                mi += 1
+            for ma in margs:
+                scan_expr_for_spawn(ma, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
         case ECall(callee, cargs, _):
             scan_expr_for_spawn(*callee, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
-            int ci = 0
-            while ci < cargs.len():
-                scan_expr_for_spawn(cargs.get(ci).unwrap(), &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
-                ci += 1
+            for ca in cargs:
+                scan_expr_for_spawn(ca, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
         else:
             pass
 
@@ -5700,23 +5481,17 @@ void emit_named_closure_spawn_expr(SpannedExpr sexpr, Dict[String, String] &clos
             emit_named_closure_spawn_expr(*inner_box, &closure_vars, &emitted, &gmod)
         case ECall(callee, args, _):
             emit_named_closure_spawn_expr(*callee, &closure_vars, &emitted, &gmod)
-            int ncai = 0
-            while ncai < args.len():
-                emit_named_closure_spawn_expr(args.get(ncai).unwrap(), &closure_vars, &emitted, &gmod)
-                ncai += 1
+            for arg in args:
+                emit_named_closure_spawn_expr(arg, &closure_vars, &emitted, &gmod)
         case EMethodCall(obj, _, margs, _):
             emit_named_closure_spawn_expr(*obj, &closure_vars, &emitted, &gmod)
-            int ncmi = 0
-            while ncmi < margs.len():
-                emit_named_closure_spawn_expr(margs.get(ncmi).unwrap(), &closure_vars, &emitted, &gmod)
-                ncmi += 1
+            for ma in margs:
+                emit_named_closure_spawn_expr(ma, &closure_vars, &emitted, &gmod)
         else:
             pass
 
 void emit_named_closure_spawn_stmts(Vector[Stmt] stmts, Dict[String, String] &closure_vars, Dict[String, bool] &emitted, GirModule &gmod):
-    int ncsi = 0
-    while ncsi < stmts.len():
-        Stmt ncs = stmts.get(ncsi).unwrap()
+    for ncs in stmts:
         match ncs:
             case SVarDecl(_, _, init, _, _, _):
                 emit_named_closure_spawn_expr(init, &closure_vars, &emitted, &gmod)
@@ -5731,11 +5506,8 @@ void emit_named_closure_spawn_stmts(Vector[Stmt] stmts, Dict[String, String] &cl
             case SIf(cond, then_body, branches):
                 emit_named_closure_spawn_expr(cond, &closure_vars, &emitted, &gmod)
                 emit_named_closure_spawn_stmts(then_body, &closure_vars, &emitted, &gmod)
-                int ncibi = 0
-                while ncibi < branches.len():
-                    ElseBranch nceb = branches.get(ncibi).unwrap()
+                for nceb in branches:
                     emit_named_closure_spawn_stmts(nceb.body, &closure_vars, &emitted, &gmod)
-                    ncibi += 1
             case SWhile(_, body):
                 emit_named_closure_spawn_stmts(body, &closure_vars, &emitted, &gmod)
             case SFor(_, iter_expr, body, _, _):
@@ -5743,7 +5515,6 @@ void emit_named_closure_spawn_stmts(Vector[Stmt] stmts, Dict[String, String] &cl
                 emit_named_closure_spawn_stmts(body, &closure_vars, &emitted, &gmod)
             else:
                 pass
-        ncsi += 1
 
 # ── Transitive generic discovery ─────────────────────────
 # Substitute type variables in a SpannedType using a name→type map.
@@ -5756,11 +5527,9 @@ SpannedType substitute_type(SpannedType stype, Dict[String, SpannedType] &type_s
                     return type_sub_map.get(name).unwrap()
             if inner_targs.len() > 0:
                 Vector[SpannedType] new_inner = []
-                int i = 0
-                while i < inner_targs.len():
-                    SpannedType sub = substitute_type(inner_targs.get(i).unwrap(), &type_sub_map)
+                for ita in inner_targs:
+                    SpannedType sub = substitute_type(ita, &type_sub_map)
                     new_inner.push(sub)
-                    i += 1
                 return SpannedType(TNamed(name, new_inner), stype.span)
             return stype
         else:
@@ -5769,9 +5538,7 @@ SpannedType substitute_type(SpannedType stype, Dict[String, SpannedType] &type_s
 # Extract meta-op suffix from a call argument list.
 # Looks for EIdentifier("__metaop__<op>") produced by the parser's meta-op handling.
 String extract_meta_op_suffix(Vector[SpannedExpr] args):
-    int ai = 0
-    while ai < args.len():
-        SpannedExpr arg = args.get(ai).unwrap()
+    for arg in args:
         match arg.expr:
             case EIdentifier(aname):
                 if aname == "__metaop__add":
@@ -5800,7 +5567,6 @@ String extract_meta_op_suffix(Vector[SpannedExpr] args):
                     pass
             else:
                 pass
-        ai += 1
     return ""
 
 int discover_transitive_expr(SpannedExpr sexpr, Dict[String, SpannedType] &type_sub_map, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
@@ -5809,10 +5575,8 @@ int discover_transitive_expr(SpannedExpr sexpr, Dict[String, SpannedType] &type_
         case ECall(callee_box, args, targs):
             if targs.len() > 0 and has_type_variable(targs):
                 Vector[SpannedType] resolved = []
-                int ti = 0
-                while ti < targs.len():
-                    resolved.push(substitute_type(targs.get(ti).unwrap(), &type_sub_map))
-                    ti += 1
+                for ta in targs:
+                    resolved.push(substitute_type(ta, &type_sub_map))
                 if not has_type_variable(resolved):
                     String meta_suffix = extract_meta_op_suffix(args)
                     match (*callee_box).expr:
@@ -5824,17 +5588,13 @@ int discover_transitive_expr(SpannedExpr sexpr, Dict[String, SpannedType] &type_
                                 added += 1
                         else:
                             pass
-            int ai = 0
-            while ai < args.len():
-                added += discover_transitive_expr(args.get(ai).unwrap(), &type_sub_map, &seen, &instances)
-                ai += 1
+            for arg in args:
+                added += discover_transitive_expr(arg, &type_sub_map, &seen, &instances)
             added += discover_transitive_expr(*callee_box, &type_sub_map, &seen, &instances)
         case EMethodCall(obj, _, margs, _):
             added += discover_transitive_expr(*obj, &type_sub_map, &seen, &instances)
-            int mi = 0
-            while mi < margs.len():
-                added += discover_transitive_expr(margs.get(mi).unwrap(), &type_sub_map, &seen, &instances)
-                mi += 1
+            for ma in margs:
+                added += discover_transitive_expr(ma, &type_sub_map, &seen, &instances)
         case EBinaryOp(lhs, _, rhs):
             added += discover_transitive_expr(*lhs, &type_sub_map, &seen, &instances)
             added += discover_transitive_expr(*rhs, &type_sub_map, &seen, &instances)
@@ -5843,11 +5603,8 @@ int discover_transitive_expr(SpannedExpr sexpr, Dict[String, SpannedType] &type_
         case EIf(cond, then_body, branches):
             added += discover_transitive_expr(*cond, &type_sub_map, &seen, &instances)
             added += discover_transitive_stmts(then_body, &type_sub_map, &seen, &instances)
-            int bi = 0
-            while bi < branches.len():
-                ElseBranch eb = branches.get(bi).unwrap()
+            for eb in branches:
                 added += discover_transitive_stmts(eb.body, &type_sub_map, &seen, &instances)
-                bi += 1
         case EFieldAccess(obj, _):
             added += discover_transitive_expr(*obj, &type_sub_map, &seen, &instances)
         case EIndex(obj, idx):
@@ -5856,10 +5613,8 @@ int discover_transitive_expr(SpannedExpr sexpr, Dict[String, SpannedType] &type_
         case EClosure(_, body):
             added += discover_transitive_stmts(body, &type_sub_map, &seen, &instances)
         case EFString(_, fexprs):
-            int fsi = 0
-            while fsi < fexprs.len():
-                added += discover_transitive_expr(fexprs.get(fsi).unwrap(), &type_sub_map, &seen, &instances)
-                fsi += 1
+            for fx in fexprs:
+                added += discover_transitive_expr(fx, &type_sub_map, &seen, &instances)
         else:
             pass
     return added
@@ -5882,11 +5637,8 @@ int discover_transitive_stmt(Stmt stmt, Dict[String, SpannedType] &type_sub_map,
         case SIf(cond, then_body, branches):
             added += discover_transitive_expr(cond, &type_sub_map, &seen, &instances)
             added += discover_transitive_stmts(then_body, &type_sub_map, &seen, &instances)
-            int bi = 0
-            while bi < branches.len():
-                ElseBranch eb = branches.get(bi).unwrap()
+            for eb in branches:
                 added += discover_transitive_stmts(eb.body, &type_sub_map, &seen, &instances)
-                bi += 1
         case SWhile(cond, body):
             added += discover_transitive_expr(cond, &type_sub_map, &seen, &instances)
             added += discover_transitive_stmts(body, &type_sub_map, &seen, &instances)
@@ -5895,21 +5647,16 @@ int discover_transitive_stmt(Stmt stmt, Dict[String, SpannedType] &type_sub_map,
             added += discover_transitive_stmts(body, &type_sub_map, &seen, &instances)
         case SMatch(scrutinee, arms):
             added += discover_transitive_expr(scrutinee, &type_sub_map, &seen, &instances)
-            int ai = 0
-            while ai < arms.len():
-                MatchArm arm = arms.get(ai).unwrap()
+            for arm in arms:
                 added += discover_transitive_stmts(arm.body, &type_sub_map, &seen, &instances)
-                ai += 1
         else:
             pass
     return added
 
 int discover_transitive_stmts(Vector[Stmt] stmts, Dict[String, SpannedType] &type_sub_map, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
     int added = 0
-    int si = 0
-    while si < stmts.len():
-        added += discover_transitive_stmt(stmts.get(si).unwrap(), &type_sub_map, &seen, &instances)
-        si += 1
+    for stmt in stmts:
+        added += discover_transitive_stmt(stmt, &type_sub_map, &seen, &instances)
     return added
 
 # ── Module lowering ──────────────────────────────────────
@@ -5921,22 +5668,17 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     # Test blocks are skipped when main exists (normal build mode),
     # emitted when no main (test-only file).
     bool has_main = false
-    int hmi = 0
-    while hmi < m.items.len():
-        Item hm_item = m.items.get(hmi).unwrap()
+    for hm_item in m.items:
         match hm_item:
             case IFunction(fdef):
                 if fdef.name == "main":
                     has_main = true
             else:
                 pass
-        hmi += 1
 
     # Pre-scan function signatures for call resolution.
     Dict[String, int] fn_sigs = {}
-    int ii = 0
-    while ii < m.items.len():
-        Item item = m.items.get(ii).unwrap()
+    for item in m.items:
         match item:
             case IFunction(fdef):
                 int rt = I64_TYPE
@@ -5965,69 +5707,48 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                 fn_sigs.put(fdef.name, rt)
             else:
                 pass
-        ii = ii + 1
 
     # Pre-scan function param ownership for borrow detection
     Dict[String, Vector[bool]] fn_borrow_params = {}
-    int bpi = 0
-    while bpi < m.items.len():
-        Item bp_item = m.items.get(bpi).unwrap()
+    for bp_item in m.items:
         match bp_item:
             case IFunction(fdef):
                 Vector[bool] borrows = []
-                int bpj = 0
-                while bpj < fdef.params.len():
-                    Param p = fdef.params.get(bpj).unwrap()
+                for p in fdef.params:
                     borrows.push(p.ownership == 1)  # 1 = OWN_MUTABLE (&)
-                    bpj += 1
                 fn_borrow_params.put(fdef.name, borrows)
             else:
                 pass
-        bpi += 1
 
     Dict[String, int] named_types = {}
     # Scan struct/enum defs to determine which types have resource fields
     Dict[String, bool] resource_types = {}
     resource_types.put("String", true)
     resource_types.put("GorgetString", true)
-    int ri = 0
-    while ri < m.items.len():
-        Item ritem = m.items.get(ri).unwrap()
+    for ritem in m.items:
         match ritem:
             case IStruct(sdef):
                 bool has_resource = false
-                int fi = 0
-                while fi < sdef.fields.len():
-                    Param fld = sdef.fields.get(fi).unwrap()
+                for fld in sdef.fields:
                     if is_resource_field_type(fld.param_type, resource_types):
                         has_resource = true
-                    fi += 1
                 if has_resource:
                     resource_types.put(sdef.name, true)
             case IEnum(edef):
                 bool has_resource = false
-                int vi = 0
-                while vi < edef.variants.len():
-                    EnumVariant var = edef.variants.get(vi).unwrap()
-                    int vfi = 0
-                    while vfi < var.fields.len():
-                        SpannedType vft = var.fields.get(vfi).unwrap()
+                for var in edef.variants:
+                    for vft in var.fields:
                         if is_resource_field_type(vft, resource_types):
                             has_resource = true
-                        vfi += 1
-                    vi += 1
                 if has_resource:
                     resource_types.put(edef.name, true)
             else:
                 pass
-        ri += 1
 
     Dict[String, int] type_subs = {}
     Dict[String, String] meta_aliases = types.meta_aliases
     # Also collect plain type aliases (ITypeAlias) into meta_aliases
-    int tai = 0
-    while tai < m.items.len():
-        Item ta_item = m.items.get(tai).unwrap()
+    for ta_item in m.items:
         match ta_item:
             case ITypeAlias(ta_name, ta_tparams, ta_target):
                 if ta_tparams.len() == 0:
@@ -6044,31 +5765,23 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                             pass
             else:
                 pass
-        tai += 1
     # Build type field info for LIR drop analysis.
     Dict[String, GirTypeInfo] type_infos = {}
     Dict[String, Vector[String]] enum_registry = {}
-    int tfi = 0
-    while tfi < m.items.len():
-        Item tfi_item = m.items.get(tfi).unwrap()
+    for tfi_item in m.items:
         match tfi_item:
             case IStruct(sdef):
                 Vector[GirFieldInfo] fields = []
-                int ffi = 0
-                while ffi < sdef.fields.len():
-                    Param fld = sdef.fields.get(ffi).unwrap()
+                for fld in sdef.fields:
                     String ftype_name = spanned_type_to_name(fld.param_type)
                     fields.push(GirFieldInfo(fld.param_name, ftype_name))
-                    ffi += 1
                 Vector[GirEnumVariantInfo] no_variants = []
                 type_infos.put(sdef.name, GirTypeInfo(sdef.name, fields, no_variants, false))
             case IEnum(edef):
                 Vector[GirFieldInfo] no_fields = []
                 Vector[GirEnumVariantInfo] variants = []
                 Vector[String] variant_names_only = []
-                int evi = 0
-                while evi < edef.variants.len():
-                    EnumVariant var = edef.variants.get(evi).unwrap()
+                for var in edef.variants:
                     Vector[GirFieldInfo] vfields = []
                     int evfi = 0
                     while evfi < var.fields.len():
@@ -6078,12 +5791,10 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         evfi += 1
                     variants.push(GirEnumVariantInfo(var.name, vfields))
                     variant_names_only.push(var.name.clone())
-                    evi += 1
                 type_infos.put(edef.name, GirTypeInfo(edef.name, no_fields, variants, true))
                 enum_registry.put(edef.name.clone(), !variant_names_only)
             else:
                 pass
-        tfi += 1
     Dict[String, int] const_decls = {}
     Dict[String, bool] none_decls = {}
     Dict[String, float] float_const_decls = {}
@@ -6104,9 +5815,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     # is the EIntLiteral-zero bug that made stage-1 produce `print(0)`
     # for `print(42)`, because `parse_int(clean).unwrap_or(0)` always
     # returned 0.
-    int rsi = 0
-    while rsi < m.items.len():
-        Item rs_item = m.items.get(rsi).unwrap()
+    for rs_item in m.items:
         match rs_item:
             case IFunction(rs_fdef):
                 if rs_fdef.name != "main":
@@ -6127,7 +5836,6 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                             pass
             else:
                 pass
-        rsi += 1
 
     # Pre-scan: evaluate IConstDecl AND IStaticDecl init exprs and register
     # values in gmod.const_decls. Without this, references to module-level
@@ -6141,9 +5849,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     # before this loop was extended, the lowerer ignored them entirely
     # — every reference to `STRING_MARKER` got the EIdentifier
     # unknown-fallback (OpConstI64(0)).
-    int cdi = 0
-    while cdi < m.items.len():
-        Item cd_item = m.items.get(cdi).unwrap()
+    for cd_item in m.items:
         match cd_item:
             case IConstDecl(_, cd_name, cd_val):
                 Option[int] cd_eval = eval_const_int_expr(cd_val, &gmod)
@@ -6190,7 +5896,6 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                             pass
             else:
                 pass
-        cdi += 1
 
     # Collect generic templates and discover instances. Restored to
     # Dict-backed storage once the underlying Dict[String, _] codegen
@@ -6201,9 +5906,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     Dict[String, bool] seen_instances = {}
     Vector[GenericInstance] generic_instances = []
 
-    int gi = 0
-    while gi < m.items.len():
-        Item gitem = m.items.get(gi).unwrap()
+    for gitem in m.items:
         match gitem:
             case IFunction(fdef):
                 if fdef.type_params.len() > 0:
@@ -6223,37 +5926,27 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         pass
             else:
                 pass
-        gi += 1
 
     # Collect generic struct templates for resource type detection
     Dict[String, StructDef] struct_templates = {}
-    int sti = 0
-    while sti < m.items.len():
-        Item st_item = m.items.get(sti).unwrap()
+    for st_item in m.items:
         match st_item:
             case IStruct(sdef):
                 if sdef.type_params.len() > 0:
                     struct_templates.put(sdef.name.clone(), sdef)
             else:
                 pass
-        sti += 1
 
     # Discover generic call sites and type instances from all function/equip bodies
-    int di = 0
-    while di < m.items.len():
-        Item ditem = m.items.get(di).unwrap()
+    for ditem in m.items:
         match ditem:
             case IFunction(fdef):
                 discover_generic_calls_stmts(fdef.body, &seen_instances, &generic_instances)
             case IEquip(eqblk):
-                int dmi = 0
-                while dmi < eqblk.methods.len():
-                    FunctionDef mdef = eqblk.methods.get(dmi).unwrap()
+                for mdef in eqblk.methods:
                     discover_generic_calls_stmts(mdef.body, &seen_instances, &generic_instances)
-                    dmi += 1
             else:
                 pass
-        di += 1
 
     # Transitive generic discovery: fixpoint loop to find instances needed
     # inside already-discovered generic function bodies (e.g. tensor_zeros[T]
@@ -6292,9 +5985,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             # lets `Vector[int]` discover `VectorIter[int]`, `VectorDrain[int]`,
             # … which in turn unlock their own `next()`/`iter()` cascades.
             if equip_generic_names.contains(tinst.base_name):
-                int eqfi = 0
-                while eqfi < equip_templates.len():
-                    EquipBlock eqf_tmpl = equip_templates.get(eqfi).unwrap()
+                for eqf_tmpl in equip_templates:
                     String eqf_target = ""
                     match eqf_tmpl.target.ty:
                         case TNamed(etn, _):
@@ -6311,9 +6002,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                             eqf_sub_map.put(etpname, etpta)
                             etpi += 1
                         int eqf_prev = generic_instances.len()
-                        int eqf_mi = 0
-                        while eqf_mi < eqf_tmpl.methods.len():
-                            FunctionDef eqf_meth = eqf_tmpl.methods.get(eqf_mi).unwrap()
+                        for eqf_meth in eqf_tmpl.methods:
                             # Method return type — substitute and register as
                             # a generic instance if it names a generic type
                             # (e.g. `VectorIter[T]` → `VectorIter[int]`).
@@ -6334,17 +6023,13 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                             # per-call-site mono and aren't reached here.
                             if eqf_meth.type_params.len() == 0:
                                 discover_transitive_stmts(eqf_meth.body, &eqf_sub_map, &seen_instances, &generic_instances)
-                            eqf_mi += 1
                         if generic_instances.len() > eqf_prev:
                             transitive_changed = true
-                    eqfi += 1
             tfix_i += 1
 
     # Register monomorphized struct types as resource types if any substituted
     # field is a resource type (e.g., Pair[int, String] has a String field)
-    int mri = 0
-    while mri < generic_instances.len():
-        GenericInstance mrinst = generic_instances.get(mri).unwrap()
+    for mrinst in generic_instances:
         if struct_templates.contains(mrinst.base_name):
             StructDef sdef = struct_templates.get(mrinst.base_name).unwrap()
             # Build substitution map
@@ -6358,15 +6043,12 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             # (`src/ir/lowering/generics/mod.rs:2249-2304`).
             Vector[GirFieldInfo] mono_fields = []
             bool has_resource = false
-            int mrf = 0
-            while mrf < sdef.fields.len():
-                Param fld = sdef.fields.get(mrf).unwrap()
+            for fld in sdef.fields:
                 int ft = map_ast_type(fld.param_type, &gmod)
                 String ft_name = type_id_to_name(ft, &gmod)
                 mono_fields.push(GirFieldInfo(fld.param_name.clone(), ft_name.clone()))
                 if is_resource_type_name(ft_name, &gmod):
                     has_resource = true
-                mrf += 1
             # Register only when the mono'd name isn't already there
             # (avoids duplicate clones when `generic_instances` lists
             # the same mono more than once across import cycles).
@@ -6376,14 +6058,11 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             clear_type_subs(&gmod)
             if has_resource:
                 gmod.resource_types.put(mrinst.mangled_name.clone(), true)
-        mri += 1
 
     # Populate fn_sigs for non-generic functions using map_ast_type now that
     # gmod.type_table is accessible. Pre-scan only handled TPrimitive return
     # types; this pass captures TNamed (String, Vector[T], …).
-    int fsi = 0
-    while fsi < m.items.len():
-        Item fs_item = m.items.get(fsi).unwrap()
+    for fs_item in m.items:
         match fs_item:
             case IFunction(fsdef):
                 if fsdef.type_params.len() == 0 and fsdef.name != "main":
@@ -6404,23 +6083,17 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         else:
                             pass
                     if target_name != "":
-                        int emi = 0
-                        while emi < ieqblk.methods.len():
-                            FunctionDef em = ieqblk.methods.get(emi).unwrap()
+                        for em in ieqblk.methods:
                             if em.type_params.len() == 0:
                                 int em_ret = map_fn_return_type(em.return_type, &gmod)
                                 if em_ret >= 0:
                                     String em_full = target_name + "__" + em.name
                                     gmod.fn_sigs.put(em_full, em_ret)
-                            emi += 1
             else:
                 pass
-        fsi += 1
 
     # Register fn_sigs for monomorphized instances
-    int si = 0
-    while si < generic_instances.len():
-        GenericInstance inst = generic_instances.get(si).unwrap()
+    for inst in generic_instances:
         # Look up template by base name, or by call-redirected (mangled) name
         String tmpl_key = inst.base_name.clone()
         if not fn_templates.contains(tmpl_key) and gmod.call_redirects.contains(inst.base_name):
@@ -6433,7 +6106,6 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             clear_type_subs(&gmod)
             # Monomorphized generics use bare names (no module prefix)
             gmod.fn_sigs.put(inst.mangled_name.clone(), rt)
-        si += 1
 
     # Register fn_sigs for monomorphized generic-equip methods. Mirrors the
     # function-template pre-pass above: fn_sigs entries must exist *before*
@@ -6443,13 +6115,9 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     # `lower_generic_equip` which strips trait_name and routes through
     # lower_equip_block — produces `Target__method` naming with type subs
     # applied. We mirror that naming here.
-    int eqsi = 0
-    while eqsi < generic_instances.len():
-        GenericInstance eqsi_inst = generic_instances.get(eqsi).unwrap()
+    for eqsi_inst in generic_instances:
         if equip_generic_names.contains(eqsi_inst.base_name):
-            int eqsti = 0
-            while eqsti < equip_templates.len():
-                EquipBlock eqs_tmpl = equip_templates.get(eqsti).unwrap()
+            for eqs_tmpl in equip_templates:
                 String eqs_target_name = ""
                 match eqs_tmpl.target.ty:
                     case TNamed(etn, _):
@@ -6462,9 +6130,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                     # `type_to_c_name(target, …)` substitutes type vars from
                     # active subs — `Vector[T]` with T → int → `Vector__int64_t`.
                     String eqs_mono_target = type_to_c_name(eqs_tmpl.target, &gmod)
-                    int eqsmi = 0
-                    while eqsmi < eqs_tmpl.methods.len():
-                        FunctionDef eqs_mdef = eqs_tmpl.methods.get(eqsmi).unwrap()
+                    for eqs_mdef in eqs_tmpl.methods:
                         # Method-level generics (`fold[A, F]` etc.) skip this
                         # pre-pass; they need per-call-site mono of their own.
                         if eqs_mdef.type_params.len() == 0:
@@ -6472,17 +6138,12 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                             if eqs_ret >= 0:
                                 String eqs_mangled = eqs_mono_target + "__" + eqs_mdef.name
                                 gmod.fn_sigs.put(eqs_mangled, eqs_ret)
-                        eqsmi += 1
                     clear_type_subs(&gmod)
-                eqsti += 1
-        eqsi += 1
 
     # Build trait lookup map for default method generation
     Dict[String, TraitDef] trait_defs = {}
-    int tdi = 0
     Dict[String, bool] local_struct_names = {}
-    while tdi < m.items.len():
-        Item td_item = m.items.get(tdi).unwrap()
+    for td_item in m.items:
         match td_item:
             case ITrait(tdef):
                 trait_defs.put(tdef.name.clone(), tdef)
@@ -6492,13 +6153,10 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                 local_struct_names.put(edef.name.clone(), true)
             else:
                 pass
-        tdi += 1
 
     # Lower each non-generic function, equip method, and test block
-    int fi = 0
     int test_idx = 0
-    while fi < m.items.len():
-        Item item = m.items.get(fi).unwrap()
+    for item in m.items:
         match item:
             case IFunction(fdef):
                 # Skip generic templates — they'll be monomorphized below
@@ -6515,12 +6173,9 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                 if not has_main:
                     # Check for @skip — parser sets "__skip__" sentinel in tags
                     bool is_skipped = false
-                    int dci = 0
-                    while dci < tags.len():
-                        String tag_val = tags.get(dci).unwrap()
+                    for tag_val in tags:
                         if tag_val == "__skip__":
                             is_skipped = true
-                        dci += 1
                     if not is_skipped:
                         String test_fn_name = "__test_" + int_to_str(test_idx)
                         Vector[int] _lc_stk3 = []
@@ -6609,34 +6264,24 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         # Check if template is needed:
                         # (1) type appears in any generic function's param types
                         bool needs_template = false
-                        int gfi = 0
-                        while gfi < m.items.len():
-                            Item gf_item = m.items.get(gfi).unwrap()
+                        for gf_item in m.items:
                             match gf_item:
                                 case IFunction(fdef):
                                     if fdef.type_params.len() > 0 and not needs_template:
-                                        int gfpi = 0
-                                        while gfpi < fdef.params.len():
-                                            Param gfp = fdef.params.get(gfpi).unwrap()
+                                        for gfp in fdef.params:
                                             match gfp.param_type.ty:
                                                 case TNamed(n, _):
                                                     if n == eq_type_name:
                                                         needs_template = true
                                                 else:
                                                     pass
-                                            gfpi += 1
                                 else:
                                     pass
-                            gfi += 1
                         # (2) any discovered instance has a non-primitive/non-String type arg
                         if not needs_template:
-                            int gci = 0
-                            while gci < generic_instances.len():
-                                GenericInstance ginst = generic_instances.get(gci).unwrap()
+                            for ginst in generic_instances:
                                 if ginst.base_name == eq_type_name:
-                                    int gai = 0
-                                    while gai < ginst.type_args.len():
-                                        SpannedType gta = ginst.type_args.get(gai).unwrap()
+                                    for gta in ginst.type_args:
                                         bool is_simple_arg = false
                                         match gta.ty:
                                             case TPrimitive(_):
@@ -6648,8 +6293,6 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                                 pass
                                         if not is_simple_arg:
                                             needs_template = true
-                                        gai += 1
-                                gci += 1
                         if needs_template:
                             lower_equip_block(eqblk, &gmod)
                 if not is_generic_equip:
@@ -6665,11 +6308,8 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                 TraitDef tdef = trait_defs.get(tname).unwrap()
                                 # Build set of method names in the trait's OWN vtable
                                 Dict[String, bool] own_vtable = {}
-                                int tvi = 0
-                                while tvi < tdef.methods.len():
-                                    FunctionDef tvmeth = tdef.methods.get(tvi).unwrap()
+                                for tvmeth in tdef.methods:
                                     own_vtable.put(tvmeth.name.clone(), true)
-                                    tvi += 1
                                 # Split equip methods: own vtable vs inherited overrides
                                 Vector[FunctionDef] own_methods = []
                                 Vector[FunctionDef] inherited_methods = []
@@ -6692,16 +6332,11 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                     lower_equip_block(inh_eqblk, &gmod)
                                 # Collect all overridden method names
                                 Dict[String, bool] overridden = {}
-                                int oi2 = 0
-                                while oi2 < eqblk.methods.len():
-                                    FunctionDef om = eqblk.methods.get(oi2).unwrap()
+                                for om in eqblk.methods:
                                     overridden.put(om.name.clone(), true)
-                                    oi2 += 1
                                 String eq_target_sp = type_to_c_name(eqblk.target, &gmod)
                                 # Emit own-trait default methods (Trait_for_Type naming)
-                                int dti2 = 0
-                                while dti2 < tdef.methods.len():
-                                    FunctionDef tmeth2 = tdef.methods.get(dti2).unwrap()
+                                for tmeth2 in tdef.methods:
                                     if tmeth2.body.len() > 0 and not overridden.contains(tmeth2.name):
                                         String dm_trait2 = mangle_trait_name(tname)
                                         String dm_mangled2 = dm_trait2 + "_for_" + eq_target_sp + "__" + tmeth2.name
@@ -6709,16 +6344,11 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                         int last_idx2 = gmod.functions.len() - 1
                                         GirFunction last_fn2 = gmod.functions.get(last_idx2).unwrap()
                                         gmod.functions.set(last_idx2, GirFunction(dm_mangled2, last_fn2.param_types, last_fn2.return_type, last_fn2.locals, last_fn2.blocks))
-                                    dti2 += 1
                                 # Emit parent trait default methods (Type__ naming, no prefix)
-                                int pti = 0
-                                while pti < tdef.parent_traits.len():
-                                    String pt_name = tdef.parent_traits.get(pti).unwrap()
+                                for pt_name in tdef.parent_traits:
                                     if trait_defs.contains(pt_name):
                                         TraitDef pt_def = trait_defs.get(pt_name).unwrap()
-                                        int pdti = 0
-                                        while pdti < pt_def.methods.len():
-                                            FunctionDef pt_meth = pt_def.methods.get(pdti).unwrap()
+                                        for pt_meth in pt_def.methods:
                                             if pt_meth.body.len() > 0 and not overridden.contains(pt_meth.name):
                                                 String pt_mangled = eq_target_sp + "__" + pt_meth.name
                                                 gmod.functions.push(lower_function(pt_meth, &gmod))
@@ -6726,8 +6356,6 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                                 GirFunction pt_last_fn = gmod.functions.get(pt_last).unwrap()
                                                 gmod.functions.set(pt_last, GirFunction(pt_mangled, pt_last_fn.param_types, pt_last_fn.return_type, pt_last_fn.locals, pt_last_fn.blocks))
                                                 overridden.put(pt_meth.name.clone(), true)
-                                            pdti += 1
-                                    pti += 1
                         case None:
                             pass
                     if not did_split:
@@ -6739,15 +6367,10 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                     TraitDef tdef = trait_defs.get(tname).unwrap()
                                     # Collect overridden method names
                                     Dict[String, bool] overridden = {}
-                                    int oi = 0
-                                    while oi < eqblk.methods.len():
-                                        FunctionDef om = eqblk.methods.get(oi).unwrap()
+                                    for om in eqblk.methods:
                                         overridden.put(om.name.clone(), true)
-                                        oi += 1
                                     # Emit defaults for trait methods with bodies not in equip
-                                    int dti = 0
-                                    while dti < tdef.methods.len():
-                                        FunctionDef tmeth = tdef.methods.get(dti).unwrap()
+                                    for tmeth in tdef.methods:
                                         if tmeth.body.len() > 0 and not overridden.contains(tmeth.name):
                                             String eq_target = type_to_c_name(eqblk.target, &gmod)
                                             String dm_trait = mangle_trait_name(tname)
@@ -6756,7 +6379,6 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                             int last_idx = gmod.functions.len() - 1
                                             GirFunction last_fn = gmod.functions.get(last_idx).unwrap()
                                             gmod.functions.set(last_idx, GirFunction(dm_mangled, last_fn.param_types, last_fn.return_type, last_fn.locals, last_fn.blocks))
-                                        dti += 1
                             case None:
                                 pass
                     # Via delegation: emit stubs for trait methods not explicitly overridden
@@ -6767,14 +6389,9 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                     if trait_defs.contains(via_tname):
                                         TraitDef via_tdef = trait_defs.get(via_tname).unwrap()
                                         Dict[String, bool] via_done = {}
-                                        int vioi = 0
-                                        while vioi < eqblk.methods.len():
-                                            FunctionDef vom = eqblk.methods.get(vioi).unwrap()
+                                        for vom in eqblk.methods:
                                             via_done.put(vom.name.clone(), true)
-                                            vioi += 1
-                                        int vimi = 0
-                                        while vimi < via_tdef.methods.len():
-                                            FunctionDef via_meth = via_tdef.methods.get(vimi).unwrap()
+                                        for via_meth in via_tdef.methods:
                                             if not via_done.contains(via_meth.name):
                                                 Vector[FunctionDef] stub_meths = []
                                                 stub_meths.push(via_meth)
@@ -6782,19 +6399,15 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                                 EquipBlock stub_eqblk = EquipBlock(eqblk.target, eqblk.type_params, eqblk.trait_name, stub_meths, stub_via, eqblk.trait_generic_args)
                                                 lower_equip_block(stub_eqblk, &gmod)
                                                 via_done.put(via_meth.name.clone(), true)
-                                            vimi += 1
                                 case None:
                                     pass
                         case None:
                             pass
             else:
                 pass
-        fi = fi + 1
 
     # Emit monomorphized generic functions
-    int mi = 0
-    while mi < generic_instances.len():
-        GenericInstance inst = generic_instances.get(mi).unwrap()
+    for inst in generic_instances:
         # Look up template by base name, or by call-redirected (mangled) name.
         String fn_key = inst.base_name.clone()
         if not fn_templates.contains(fn_key) and gmod.call_redirects.contains(inst.base_name):
@@ -6803,17 +6416,12 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             FunctionDef tmpl = fn_templates.get(fn_key).unwrap()
             # Monomorphized generics use bare names (no module prefix)
             lower_generic_function(tmpl, inst.mangled_name, tmpl.type_params, inst.type_args, &gmod)
-        mi += 1
 
     # Emit monomorphized generic equip blocks for discovered type instances
-    int ei = 0
-    while ei < generic_instances.len():
-        GenericInstance einst = generic_instances.get(ei).unwrap()
+    for einst in generic_instances:
         if equip_generic_names.contains(einst.base_name):
             # Find all equip templates matching this type name
-            int eti = 0
-            while eti < equip_templates.len():
-                EquipBlock equip_tmpl = equip_templates.get(eti).unwrap()
+            for equip_tmpl in equip_templates:
                 String eq_target_name = ""
                 match equip_tmpl.target.ty:
                     case TNamed(tn, _):
@@ -6831,47 +6439,33 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                 TraitDef gtdef = trait_defs.get(tname).unwrap()
                                 # Build set of explicitly implemented methods
                                 Dict[String, bool] g_overridden = {}
-                                int goi = 0
-                                while goi < equip_tmpl.methods.len():
-                                    FunctionDef gom = equip_tmpl.methods.get(goi).unwrap()
+                                for gom in equip_tmpl.methods:
                                     g_overridden.put(gom.name.clone(), true)
-                                    goi += 1
                                 # Compute the monomorphized type name for this instance
                                 # e.g. Container + [int] -> Container__int64_t
                                 String g_mono_name = compute_mangled_name(einst.type_args, einst.base_name)
                                 # Emit each unoverridden default method
-                                int gdti = 0
-                                while gdti < gtdef.methods.len():
-                                    FunctionDef gtmeth = gtdef.methods.get(gdti).unwrap()
+                                for gtmeth in gtdef.methods:
                                     if gtmeth.body.len() > 0 and not g_overridden.contains(gtmeth.name):
                                         String g_dm_mangled = g_mono_name + "__" + gtmeth.name
                                         gmod.functions.push(lower_function(gtmeth, &gmod))
                                         int g_last = gmod.functions.len() - 1
                                         GirFunction g_last_fn = gmod.functions.get(g_last).unwrap()
                                         gmod.functions.set(g_last, GirFunction(g_dm_mangled, g_last_fn.param_types, g_last_fn.return_type, g_last_fn.locals, g_last_fn.blocks))
-                                    gdti += 1
                         case None:
                             pass
-                eti += 1
-        ei += 1
 
     # Scan all items for closures and emit __Closure_N__call functions
     int closure_id = 0
-    int ci = 0
-    while ci < m.items.len():
-        Item citem = m.items.get(ci).unwrap()
+    for citem in m.items:
         match citem:
             case IFunction(fdef):
                 closure_id = scan_stmts_for_closures(fdef.body, closure_id, &gmod)
             case IEquip(eqblk):
-                int emi = 0
-                while emi < eqblk.methods.len():
-                    FunctionDef emdef = eqblk.methods.get(emi).unwrap()
+                for emdef in eqblk.methods:
                     closure_id = scan_stmts_for_closures(emdef.body, closure_id, &gmod)
-                    emi += 1
             else:
                 pass
-        ci += 1
 
     # Scan for spawn wrappers: shared-token and closure/method spawn
     # Two-pass approach:
@@ -6881,18 +6475,13 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     Dict[String, bool] shared_vars = {}
     Dict[String, bool] async_fns = {}
     Dict[String, bool] emitted_wrappers = {}
-    int swi1 = 0
-    while swi1 < m.items.len():
-        Item sw_item1 = m.items.get(swi1).unwrap()
+    for sw_item1 in m.items:
         match sw_item1:
             case IFunction(fdef):
                 collect_shared_vars(fdef.body, &shared_vars)
             else:
                 pass
-        swi1 += 1
-    int swi = 0
-    while swi < m.items.len():
-        Item sw_item = m.items.get(swi).unwrap()
+    for sw_item in m.items:
         match sw_item:
             case IFunction(fdef):
                 # Per-function var_types map: variable name → declared type name
@@ -6902,24 +6491,18 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                 # These are shared-derived refs; if passed to a spawn, the callee
                 # needs a shared-token wrapper (inner shared spawn pattern).
                 Dict[String, bool] borrow_params = {}
-                int bpi = 0
-                while bpi < fdef.params.len():
-                    Param bp = fdef.params.get(bpi).unwrap()
+                for bp in fdef.params:
                     if bp.ownership == 1:
                         borrow_params.put(bp.param_name, true)
-                    bpi += 1
                 scan_spawn_wrappers(fdef.body, &shared_vars, &async_fns, &emitted_wrappers, &gmod, &var_types, &borrow_params)
             else:
                 pass
-        swi += 1
 
     # Emit __spawn_wrap___Closure_N stubs for named closure variable spawns.
     # Collect closure variable names per function (using same closure ID ordering),
     # then scan for spawn calls to those variables.
     int ncv_id = 0
-    int ncvi = 0
-    while ncvi < m.items.len():
-        Item ncv_item = m.items.get(ncvi).unwrap()
+    for ncv_item in m.items:
         match ncv_item:
             case IFunction(fdef):
                 Dict[String, String] fn_closure_vars = {}
@@ -6928,6 +6511,5 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                     emit_named_closure_spawn_stmts(fdef.body, &fn_closure_vars, &emitted_wrappers, &gmod)
             else:
                 pass
-        ncvi += 1
 
     return gmod
