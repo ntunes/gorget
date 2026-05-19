@@ -1,0 +1,262 @@
+# compiler.data.resources — canonical resource + runtime-function table.
+#
+# Source of truth. Edit here only.
+#
+# Consumed by:
+# - Self-host directly via `from compiler.data.resources import …`.
+# - Rust via `src/ir/resources.rs` (include_str! + parser + AST walker).
+#
+# Bump SCHEMA_VERSION on every breaking field change in compiler/data/schema.gg.
+# Consumers refuse mismatched versions at load time.
+#
+# ── SPIKE STATUS (2026-05-19) ───────────────────────────────────────
+# This file contains ~18 representative entries chosen to exercise every
+# enum variant and every interesting field combination at least once.
+# It is NOT yet the full table (~30 resources + ~307 runtime fns) — the
+# rest gets populated AFTER the spike consumer migration (planned item 5
+# of the resources.toml plan) validates the schema.
+#
+# Per `docs/internals/unified-resource-model.md` §9.4 rule 1: the spike
+# exists to surface schema gaps before broad migration. The full table
+# fill-in is a mechanical extension once this set proves the schema.
+
+from compiler.data.schema import ResourceEntry, ResourceMetadata
+from compiler.data.schema import MatchKind, MkExact, MkPrefix
+from compiler.data.schema import CopySemantics, CsTrivial, CsResource, CsRefCounted
+from compiler.data.schema import CollectionKind, CkNotCollection, CkVector, CkDeque, CkHeap, CkDict, CkSet
+from compiler.data.schema import BoxKind, BkNotBox, BkRegularBox, BkTraitBox
+from compiler.data.schema import LirType, LtStructBase, LtPtr
+from compiler.data.schema import RuntimeFn, RuntimeParam
+from compiler.data.schema import CRuntimeType
+from compiler.data.schema import TVoid, TBool, TI64, TU8, TF64, TSize, TPtr, TVoidElem, TCStr, TStr, TArray
+from compiler.data.schema import AbiKind, AScalar, APtr, AOpaque, AGorgetString, AVoidElem, ACStr
+from compiler.data.schema import SideEffects, FxPure, FxAllocates, FxMutates, FxIo, FxConcurrent
+
+
+public static int SCHEMA_VERSION = 1
+
+
+# ── RESOURCES — 9 spike entries ─────────────────────────────────────
+#
+# Coverage matrix (each entry contributes ≥ 1 unique cell):
+#   match_on:           Exact alias-cluster, Exact singleton, Prefix singleton,
+#                       Prefix alias-cluster
+#   collection_kind:    all 6 variants (NotCollection, Vector, Deque, Heap, Dict, Set)
+#   box_kind:           all 3 variants (NotBox, RegularBox, TraitBox)
+#   copy_semantics:     Resource, RefCounted (CsTrivial does not appear — primitives
+#                       are LirType-routed, not in the resource table)
+#   opaque_handle:      true, false
+#   drop_fn / clone_fn / materialize_fn:   both Some and None states
+#   method_prefix:      both Some and None states
+#   is_typed_constructor: true, false
+
+public static Vector[ResourceEntry] RESOURCES = [
+
+    # GorgetString — multi-alias Exact cluster; CoW materialize_fn=Some;
+    # the only resource with a view discriminator today.
+    ResourceEntry(
+        [MkExact("GorgetString"), MkExact("String"), MkExact("Str")],
+        ResourceMetadata(
+            "GorgetString", 32, LtStructBase(),
+            Some("gorget_string_free"),
+            Some("gorget_string_clone"),
+            Some("gorget_string_materialize_inplace"),
+            CsResource(), CkNotCollection(), BkNotBox(),
+            false, None, false)),
+
+    # GorgetArray — Exact singleton; the runtime backing for Vector/Deque/Heap.
+    ResourceEntry(
+        [MkExact("GorgetArray")],
+        ResourceMetadata(
+            "GorgetArray", 64, LtStructBase(),
+            Some("gorget_array_free"),
+            Some("gorget_array_clone"),
+            None,
+            CsResource(), CkVector(), BkNotBox(),
+            false, None, false)),
+
+    # Vector__T — Prefix; typed_constructor=true (T(args) user shape).
+    ResourceEntry(
+        [MkPrefix("Vector__")],
+        ResourceMetadata(
+            "GorgetArray", 64, LtStructBase(),
+            Some("gorget_array_free"),
+            Some("gorget_array_clone"),
+            None,
+            CsResource(), CkVector(), BkNotBox(),
+            false, None, true)),
+
+    # Deque__T — Prefix; CkDeque (distinct kind, same runtime).
+    ResourceEntry(
+        [MkPrefix("Deque__")],
+        ResourceMetadata(
+            "GorgetArray", 64, LtStructBase(),
+            Some("gorget_array_free"),
+            Some("gorget_array_clone"),
+            None,
+            CsResource(), CkDeque(), BkNotBox(),
+            false, None, true)),
+
+    # Heap__T — Prefix; CkHeap; typed_constructor=false (factory shape, Heap.new()).
+    ResourceEntry(
+        [MkPrefix("Heap__")],
+        ResourceMetadata(
+            "GorgetArray", 64, LtStructBase(),
+            Some("gorget_array_free"),
+            Some("gorget_array_clone"),
+            None,
+            CsResource(), CkHeap(), BkNotBox(),
+            false, None, false)),
+
+    # Dict__K__V / HashMap__K__V / GorgetDict__K__V — multi-alias Prefix cluster;
+    # CkDict.
+    ResourceEntry(
+        [MkPrefix("Dict__"), MkPrefix("HashMap__"), MkPrefix("GorgetDict__")],
+        ResourceMetadata(
+            "GorgetMap", 184, LtStructBase(),
+            Some("gorget_map_free"),
+            Some("gorget_map_clone"),
+            None,
+            CsResource(), CkDict(), BkNotBox(),
+            false, None, true)),
+
+    # Set__T / HashSet__T — Prefix alias cluster; CkSet.
+    ResourceEntry(
+        [MkPrefix("Set__"), MkPrefix("HashSet__")],
+        ResourceMetadata(
+            "GorgetSet", 184, LtStructBase(),
+            Some("gorget_set_free"),
+            Some("gorget_set_clone"),
+            None,
+            CsResource(), CkSet(), BkNotBox(),
+            false, None, true)),
+
+    # Box__T — Prefix; BkRegularBox; LtPtr (8-byte pointer, not struct).
+    ResourceEntry(
+        [MkPrefix("Box__")],
+        ResourceMetadata(
+            "Box", 8, LtPtr(),
+            Some("__gorget_box_free"),
+            Some("__gorget_box_clone"),
+            None,
+            CsResource(), CkNotCollection(), BkRegularBox(),
+            false, None, false)),
+
+    # Mutex__T — Prefix; opaque_handle=true; method_prefix=Some;
+    # CsRefCounted; clone_fn=None (handles aren't deep-cloned).
+    ResourceEntry(
+        [MkPrefix("Mutex__")],
+        ResourceMetadata(
+            "Mutex", 8, LtPtr(),
+            Some("gorget_mutex_free"),
+            None,
+            None,
+            CsRefCounted(), CkNotCollection(), BkNotBox(),
+            true, Some("gorget_mutex"), true)),
+
+    # bare "Box" — Exact singleton; BkTraitBox (trait-object box, distinct
+    # from the parameterized Box__T regular form above).
+    ResourceEntry(
+        [MkExact("Box")],
+        ResourceMetadata(
+            "Box", 16, LtStructBase(),
+            Some("__gorget_trait_box_free"),
+            None,
+            None,
+            CsResource(), CkNotCollection(), BkTraitBox(),
+            false, None, false)),
+
+]
+
+
+# ── RUNTIME_FNS — 9 spike entries ───────────────────────────────────
+#
+# Coverage matrix:
+#   side_effects:       FxPure, FxAllocates, FxMutates, FxIo, FxConcurrent
+#                       (FxReadOnly / FxAborts / FxUnknown deferred to full fill-in)
+#   returns_fresh:      true, false
+#   AbiKind:            AScalar, APtr, AOpaque, AGorgetString, AVoidElem, ACStr
+#   CRuntimeType:       TVoid, TI64, TU8, TF64, TPtr, TStr, TArray
+#   param counts:       0, 1, 2 (the 3+ case is mechanical fill-in)
+
+public static Vector[RuntimeFn] RUNTIME_FNS = [
+
+    # Math — Pure, single scalar in/out.
+    RuntimeFn(
+        "gorget_sqrt",
+        [RuntimeParam(TF64(), AScalar())],
+        TF64(),
+        FxPure(),
+        false),
+
+    # Allocator hook — Opaque ABI; single Ptr in, Ptr out.
+    RuntimeFn(
+        "__gorget_alloc",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TPtr(),
+        FxAllocates(),
+        false),
+
+    # String concat — 2× GorgetString byval; returns_fresh=true
+    # (independently allocated result buffer).
+    RuntimeFn(
+        "gorget_str_cat",
+        [RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TStr(), AGorgetString())],
+        TStr(),
+        FxAllocates(),
+        true),
+
+    # String→cstr — CStr ABI on return wire; Ptr return.
+    RuntimeFn(
+        "gorget_str_to_cstr",
+        [RuntimeParam(TStr(), AGorgetString())],
+        TPtr(),
+        FxAllocates(),
+        false),
+
+    # Array push — Mutates; VoidElem ABI on the value arg;
+    # void return; mixes APtr (self) + AVoidElem (elem).
+    RuntimeFn(
+        "gorget_array_push",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TPtr(), AVoidElem())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    # Mutex lock — Concurrent; Opaque ABI; Ptr in, Ptr out.
+    RuntimeFn(
+        "gorget_mutex_lock",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TPtr(),
+        FxConcurrent(),
+        false),
+
+    # File read — Io; CStr ABI for the path arg; returns Str struct.
+    RuntimeFn(
+        "gorget_read_file",
+        [RuntimeParam(TPtr(), ACStr())],
+        TStr(),
+        FxIo(),
+        true),
+
+    # Array constructor — Allocates; Scalar arg; struct return (TArray);
+    # returns_fresh=true.
+    RuntimeFn(
+        "gorget_array_new",
+        [RuntimeParam(TI64(), AScalar())],
+        TArray(),
+        FxAllocates(),
+        true),
+
+    # Byte access — Pure; mixed param types (Str + I64); narrow scalar return.
+    RuntimeFn(
+        "gorget_str_byte_at",
+        [RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TI64(), AScalar())],
+        TU8(),
+        FxPure(),
+        false),
+
+]

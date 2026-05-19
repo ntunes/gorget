@@ -1,5 +1,6 @@
 pub mod backend;
 pub mod bir;
+pub mod compiler_data;
 pub mod errors;
 pub mod formatter;
 pub mod intern;

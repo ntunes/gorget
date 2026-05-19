@@ -1,0 +1,154 @@
+# compiler.data.schema — type definitions for the canonical resource +
+# runtime-function table.
+#
+# Consumed by:
+# - Self-host directly via `from compiler.data.schema import …`.
+# - Rust via a hand-written mirror at `src/ir/resource_schema.rs`. Any
+#   field change here MUST bump SCHEMA_VERSION in resources.gg.
+#
+# Scope discipline: every type in this file describes the static shape of
+# a resource or runtime-function entry. No expression-level helpers, no
+# operations — those belong in the consumer code. Keeping this file shaped
+# as pure data definitions keeps the canonical surface small enough to
+# audit at a glance.
+#
+# See `docs/internals/unified-resource-model.md` §3 / §9 for the design.
+
+
+# ── Lookup-key strategy ─────────────────────────────────────────────
+#
+# Resource entries are keyed by name patterns. Exact + Prefix is the
+# closed set today; freeze on these two until a real consumer needs
+# something more. Composite predicates (regex, suffix, conjunctions)
+# are deliberately not supported — when a new consumer wants them, the
+# discipline is to surface the gap, not to expand the schema speculatively.
+
+enum MatchKind:
+    MkExact(String)         # exact name match: "GorgetString"
+    MkPrefix(String)        # starts_with match: "Vector__"
+
+
+# ── Resource-metadata axes ──────────────────────────────────────────
+
+enum CopySemantics:
+    CsTrivial               # primitives / POD — no drop, bitwise copy
+    CsResource              # owns heap data; needs drop + clone
+    CsRefCounted            # ref-counted (Shared / Mutex / Channel / …)
+
+enum CollectionKind:
+    CkNotCollection
+    CkVector                # Vector — push/pop at tail
+    CkDeque                 # Deque — push/pop both ends; same GorgetArray runtime
+    CkHeap                  # Heap — priority queue; same GorgetArray runtime
+    CkDict                  # Dict / HashMap / GorgetMap
+    CkSet                   # Set / HashSet / GorgetSet
+
+enum BoxKind:
+    BkNotBox
+    BkRegularBox            # Box[T] for owned T
+    BkTraitBox              # trait-object Box[dyn Trait]
+
+# Closed set. Every variant must correspond to a LirType that an actual
+# resource entry lowers to. Add only when a new resource appears that
+# can't fit existing variants.
+enum LirType:
+    LtStructBase            # 16+ byte struct-by-value (GorgetString, GorgetArray, …)
+    LtPtr                   # 8-byte pointer / opaque handle (Box, Mutex, …)
+
+struct ResourceMetadata:
+    String runtime_name              # C struct name; collection types
+                                     # collapse to the backing runtime
+                                     # ("GorgetArray" for Vector/Deque/Heap).
+    int size_bytes                   # C ABI byte size of the runtime_name struct.
+    LirType lir_type                 # LirType this resource lowers to.
+    Option[String] drop_fn           # runtime symbol; None for trivial / non-droppable.
+    Option[String] clone_fn          # runtime symbol; None for trivial / not cloneable.
+    Option[String] materialize_fn    # CoW view→owned; None when no view distinction.
+    CopySemantics copy_semantics
+    CollectionKind collection_kind
+    BoxKind box_kind
+    bool opaque_handle               # Mutex / Channel / Thread / etc.
+    Option[String] method_prefix     # C method-prefix for opaque / guard families
+                                     # ("gorget_mutex", "gorget_channel", …).
+                                     # None for collections that route via runtime_name.
+    bool is_typed_constructor        # true for parameterized families with
+                                     # `T(args)` user-code constructor shape
+                                     # (Vector__T, Mutex__T, …). false for
+                                     # runtime singletons, Heap__ (factory shape),
+                                     # Box__ (uses runtime alloc helper), and
+                                     # opaque types constructed via `T.new()`.
+
+struct ResourceEntry:
+    Vector[MatchKind] match_on       # any key in this list hits this entry;
+                                     # supports aliases like ["String","Str","GorgetString"]
+                                     # sharing one metadata payload.
+    ResourceMetadata metadata
+
+
+# ── Runtime-function axes ───────────────────────────────────────────
+#
+# Mirrors the typed shape already in `src/lir/runtime.rs` (CRuntimeType,
+# AbiKind, SideEffects, RuntimeSig). Deliberately duplicated here rather
+# than imported FROM `lir/runtime.rs` — the schema is upstream of the IR
+# layer that consumes it; a schema that depended on its own consumer
+# would be a layering inversion. The duplication retires when self-host
+# replaces Rust (the LIR will read from compiler.data.schema directly).
+
+enum CRuntimeType:
+    TVoid
+    TBool
+    TI8
+    TI16
+    TI32
+    TI64
+    TU8
+    TU16
+    TU32
+    TU64
+    TF32
+    TF64
+    TSize                            # size_t — passed as i64; kept distinct from TI64 for clarity
+    TPtr                             # opaque void*
+    TVoidElem                        # pointer to a single collection element (same wire as TPtr)
+    TCStr                            # const char* (same wire as TPtr)
+    TStr                             # GorgetString by value (32 bytes)
+    TArray                           # GorgetArray struct (64 bytes)
+    TMap                             # GorgetMap struct
+    TSet                             # GorgetSet struct
+    TRegex                           # Regex handle struct
+    TMatch                           # RegexMatch struct
+
+enum AbiKind:
+    AAuto                            # let the backend infer
+    AScalar                          # int / float / bool by value
+    APtr                             # raw pointer
+    AOpaque                          # opaque handle (Mutex, Channel, …)
+    AGorgetString                    # 32-byte struct, byval on x86_64
+    AVoidElem                        # collection-element ABI marker
+    ACStr                            # const char* (param expects null-terminated)
+    AByValue                         # generic struct-by-value
+
+enum SideEffects:
+    FxPure                           # no reads / writes — CSE / DCE / fold-eligible
+    FxReadOnly                       # reads heap or globals; cannot hoist past Mutates
+    FxAllocates                      # may extend heap / arena
+    FxMutates                        # mutates ≥ 1 argument
+    FxIo                             # file / socket / stdio
+    FxAborts                         # may abort or unwind; CF boundary
+    FxConcurrent                     # locks / channels / atomics / threads
+    FxUnknown                        # unclassified; treated as Mutates
+
+struct RuntimeParam:
+    CRuntimeType ty
+    AbiKind abi
+
+struct RuntimeFn:
+    String c_name                    # exact C symbol; primary lookup key
+    Vector[RuntimeParam] params
+    CRuntimeType ret
+    SideEffects side_effects
+    bool returns_fresh               # true iff ALWAYS returns a fresh, independently
+                                     # heap-allocated buffer not aliasing any input
+                                     # (gorget_str_cat, gorget_int_to_str, …).
+                                     # Distinct from FxAllocates which is coarse
+                                     # may-allocate.
