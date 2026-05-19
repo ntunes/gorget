@@ -229,6 +229,29 @@ pub(super) fn collect_used_type_def_ids(
                 Expr::Rethrow { error_binding: Some((ty, _)), .. } => {
                     self.walk_type(&ty.node);
                 }
+                // MethodCall on an Identifier receiver matching an Enum: this is
+                // the shape produced by the loader's `qualify_expr` pass when a
+                // bare non-generic enum-variant ctor call (e.g. `FxPure()`) is
+                // rewritten to `SideEffects.FxPure()` (Call → MethodCall with the
+                // enum type as receiver). The variant name `FxPure` is the import,
+                // but it no longer appears as an Expr::Identifier anywhere — only
+                // as `MethodCall.method`. Credit the import by looking the method
+                // name up in scope. Spurious lookups for real method calls (e.g.
+                // `vec.push(x)`) are harmless: `push` is either not in scope or
+                // refers to a definition that no one imports, so adding its def
+                // to `used_def_ids` doesn't affect the unused-import check.
+                Expr::MethodCall { receiver, method, .. } => {
+                    if let Expr::Identifier(recv_name) = &receiver.node {
+                        if let Some(recv_def) = self.scopes.lookup(recv_name) {
+                            let recv_kind = self.scopes.get_def(recv_def).kind;
+                            if matches!(recv_kind, crate::semantic::scope::DefKind::Enum | crate::semantic::scope::DefKind::Import) {
+                                if let Some(method_def) = self.scopes.lookup(&method.node) {
+                                    self.out.insert(method_def);
+                                }
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
             crate::parser::visitor::walk_expr(self, expr);

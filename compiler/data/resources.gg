@@ -22,13 +22,13 @@
 
 from compiler.data.schema import ResourceEntry, ResourceMetadata
 from compiler.data.schema import MatchKind, MkExact, MkPrefix
-from compiler.data.schema import CopySemantics, CsTrivial, CsResource, CsRefCounted
+from compiler.data.schema import CopySemantics, CsResource, CsRefCounted
 from compiler.data.schema import CollectionKind, CkNotCollection, CkVector, CkDeque, CkHeap, CkDict, CkSet
 from compiler.data.schema import BoxKind, BkNotBox, BkRegularBox, BkTraitBox
 from compiler.data.schema import LirType, LtStructBase, LtPtr
 from compiler.data.schema import RuntimeFn, RuntimeParam
 from compiler.data.schema import CRuntimeType
-from compiler.data.schema import TVoid, TBool, TI64, TU8, TF64, TSize, TPtr, TVoidElem, TCStr, TStr, TArray
+from compiler.data.schema import TVoid, TI64, TU8, TF64, TPtr, TStr, TArray
 from compiler.data.schema import AbiKind, AScalar, APtr, AOpaque, AGorgetString, AVoidElem, ACStr
 from compiler.data.schema import SideEffects, FxPure, FxAllocates, FxMutates, FxIo, FxConcurrent
 
