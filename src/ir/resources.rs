@@ -304,7 +304,7 @@ fn build_c_runtime_type(e: &Expr) -> WalkResult<CRuntimeType> {
         "TVoidElem" => CRuntimeType::VoidElem,
         "TCStr" => CRuntimeType::CStr,
         "TStr" => CRuntimeType::Str,
-        "CtArray" => CRuntimeType::Array,
+        "TArray" => CRuntimeType::Array,
         "TMap" => CRuntimeType::Map,
         "TSet" => CRuntimeType::Set,
         "TRegex" => CRuntimeType::Regex,
