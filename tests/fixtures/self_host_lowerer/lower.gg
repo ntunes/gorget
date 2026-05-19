@@ -1751,24 +1751,81 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             emit(&ctx, GIAssign(dst, OpConstStr(s)))
             return dst
         case EFString(s, fexprs):
-            # Lower interpolated expressions (consumed to avoid double-free on drop).
-            int fi = 0
-            while fi < fexprs.len():
-                SpannedExpr farg = fexprs.get(fi).unwrap()
-                lower_expr(&ctx, farg, &gmod)
-                fi += 1
-            # Build f-string by concatenating parts with formatted values.
-            # Simplified: emit template string + gorget_str_cat chain for each interp expr.
             int gs_tid = lookup_or_register_named(&gmod, "GorgetString")
             if fexprs.len() == 0:
                 # No interpolation — just a string literal
                 int dst = add_local(&ctx, gs_tid, NO_NAME)
                 emit(&ctx, GIAssign(dst, OpConstStr(s)))
                 return dst
-            # For now: emit template string (format spec applied at runtime)
-            int dst = add_local(&ctx, gs_tid, NO_NAME)
-            emit(&ctx, GIAssign(dst, OpConstStr(s)))
-            return dst
+            # Walk template, replacing each "{}" placeholder with the printf
+            # specifier for the corresponding fexprs[i]'s type, and build the
+            # arg list in parallel. Emit `gorget_string_format(fmt, ...args)`
+            # which returns a fresh, null-terminated GorgetString. Mirrors
+            # Rust gg's `lower_string_interpolation` at
+            # `src/ir/lowering/exprs/mod.rs:3505`.
+            #
+            # Without this fix, EFString emitted only the raw template
+            # (with literal `{}` placeholders), so `print(f"{x}")` printed
+            # "{}" — the dominant OutputMismatch cluster in self_host_e2e
+            # (46 fixtures at baseline 94/995). [filed: 2026-05-19]
+            Vector[Operand] gsf_args = []
+            gsf_args.push(OpConstStr(""))  # placeholder for fmt at index 0; overwritten below
+            String fmt = ""
+            int fi = 0
+            int byte_i = 0
+            int byte_n = s.byte_len()
+            while byte_i < byte_n:
+                # `{}` placeholder bytes are 0x7B 0x7D.
+                bool is_placeholder = false
+                if byte_i + 1 < byte_n:
+                    if s.byte_at(byte_i) == 0x7B and s.byte_at(byte_i + 1) == 0x7D:
+                        is_placeholder = true
+                if is_placeholder:
+                    if fi >= fexprs.len():
+                        # Mismatched placeholder count — emit literal `{}`
+                        fmt = fmt + "{}"
+                    else:
+                        SpannedExpr farg = fexprs.get(fi).unwrap()
+                        int aloc = lower_expr(&ctx, farg, &gmod)
+                        int aty = I64_TYPE
+                        if aloc >= 0 and aloc < ctx.locals.len():
+                            aty = ctx.locals.get(aloc).unwrap().type_id
+                        if aty == F64_TYPE or aty == F32_TYPE:
+                            fmt = fmt + "%f"
+                            gsf_args.push(op_consume(&ctx, &gmod, aloc))
+                        elif aty == gs_tid:
+                            # String → %s with .data (the printf-style
+                            # emitter for gorget_string_format extracts
+                            # `.data` from GorgetString args).
+                            fmt = fmt + "%s"
+                            gsf_args.push(op_consume(&ctx, &gmod, aloc))
+                        elif aty == BOOL_TYPE:
+                            # Bool → "true"/"false" via gorget_bool_to_str.
+                            int bstr = add_local(&ctx, gs_tid, NO_NAME)
+                            Vector[Operand] bargs = [OpCopy(aloc)]
+                            emit(&ctx, GICallExtern(bstr, "gorget_bool_to_str", bargs))
+                            fmt = fmt + "%s"
+                            gsf_args.push(op_consume(&ctx, &gmod, bstr))
+                        else:
+                            # Default: int64_t printf via %lld. Narrow ints
+                            # are auto-promoted by C's variadic ABI to
+                            # `int` (4 bytes) — but vsnprintf with `%lld`
+                            # reads 8 bytes. Acceptable for I64; narrow
+                            # ints may render incorrectly until a typed
+                            # specifier table is added.
+                            fmt = fmt + "%lld"
+                            gsf_args.push(op_consume(&ctx, &gmod, aloc))
+                        fi += 1
+                    byte_i += 2
+                else:
+                    # Copy literal byte
+                    fmt = fmt + s.slice(byte_i, byte_i + 1)
+                    byte_i += 1
+            # Overwrite fmt placeholder at position 0 with the built format string.
+            gsf_args.set(0, OpConstStr(fmt))
+            int gsdst = add_local(&ctx, gs_tid, NO_NAME)
+            emit(&ctx, GICallExtern(gsdst, "gorget_string_format", gsf_args))
+            return gsdst
         case EIdentifier(name):
             if nl_contains(&ctx, name):
                 return nl_get(&ctx, name)

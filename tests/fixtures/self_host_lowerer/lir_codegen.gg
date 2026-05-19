@@ -3624,8 +3624,10 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
                 return v(dst) + " = (bool)" + v(args.get(0).unwrap()) + ";"
             return ";"
 
-    # Printf/fprintf: Str args need .data extraction for C's printf.
-    if name == "printf" or name == "fprintf":
+    # Printf/fprintf/gorget_string_format: variadic — Str args need .data
+    # extraction for C's printf-style format. gorget_string_format takes
+    # `const char* fmt, ...` and routes vsnprintf so the same rules apply.
+    if name == "printf" or name == "fprintf" or name == "gorget_string_format":
         int gs_ty = find_struct_type("GorgetString", &m)
         String pf_out = ""
         if dst >= 0:
