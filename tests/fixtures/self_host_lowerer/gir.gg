@@ -203,7 +203,9 @@ enum CopySemantics:
 
 enum CollectionKind:
     CkNotCollection
-    CkVector       # Vector / Deque / Heap (all back-onto GorgetArray)
+    CkVector       # Vector — push/pop at tail
+    CkDeque        # Deque — push/pop at both ends; same GorgetArray runtime
+    CkHeap         # Heap — priority queue; same GorgetArray runtime
     CkDict         # Dict / HashMap / GorgetMap
     CkSet          # Set / HashSet / GorgetSet
 

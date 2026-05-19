@@ -3537,11 +3537,13 @@ void lower_index_assign(LowerCtx &ctx, SpannedExpr base_expr, SpannedExpr idx_ex
     int val = lower_expr(&ctx, value_expr, &gmod)
     String setter = ""
     # Phase A typed read: dispatch on the receiver's collection_kind.
-    # CkSet has no meaningful index-assign — falls through to lower_fail.
+    # CkSet / CkHeap have no meaningful index-assign — fall through to lower_fail.
     match build_resource_metadata(base_tname):
         case Some(rmeta):
             match rmeta.collection_kind:
                 case CkVector():
+                    setter = "gorget_array_set"
+                case CkDeque():
                     setter = "gorget_array_set"
                 case CkDict():
                     setter = "gorget_map_put"
