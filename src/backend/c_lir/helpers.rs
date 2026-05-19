@@ -129,6 +129,29 @@ pub(super) fn emit_guard_wrapper(out: &mut String, type_name: &str, method: &str
 
 /// Emit a typedef for a monomorphized wrapper type.
 pub(super) fn emit_wrapper_typedef(out: &mut String, name: &str, module: &LirModule, orig_to_c: &HashMap<String, String>) {
+    // Phase A SSoT routing: consult `compiler/data/resources.gg` for
+    // collection-kind aliases (Vector__/Dict__/Set__ and their non-Gorget-
+    // prefixed siblings). The table's `runtime_name` doubles as the C
+    // typedef target name for these struct-by-value resources, so the
+    // emission is a one-line write off the typed metadata.
+    //
+    // Ref-counted handle types (Mutex__/Channel__/Shared__/Weak__/RWLock__/
+    // Guard__/ReadGuard__/WriteGuard__) stay below — their C typedef name
+    // (e.g. `GorgetMutex*`, `gorget_guard_t`) does NOT match the schema's
+    // `runtime_name` ("Mutex", "Guard"), so the table doesn't yet carry
+    // enough information to drive the spelling. Adding a `c_typedef_name`
+    // field is an additive schema change deferred until item 8.
+    if let Some(meta) = crate::ir::resources::table().lookup(name) {
+        use crate::ir::resource_schema::CollectionKind;
+        match meta.collection_kind {
+            CollectionKind::Vector | CollectionKind::Deque | CollectionKind::Heap
+            | CollectionKind::Dict | CollectionKind::Set => {
+                writeln!(out, "typedef {} {name};", meta.runtime_name).unwrap();
+                return;
+            }
+            _ => {}
+        }
+    }
     if name.starts_with("Channel__") {
         writeln!(out, "typedef GorgetChannel* {name};").unwrap();
     } else if name.starts_with("Shared__") || name.starts_with("Weak__") {
