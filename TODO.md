@@ -351,7 +351,7 @@ The smaller-but-mechanical alternative is **`semantic::meta_consts` memoization*
 
   **Revised work items** (sequenced; item 1 is independent and shippable today):
 
-  1. **Retire Rust's `runtime_extern_sig`** (~1-2 days, **no TOML dependency**). Replace `runtime_extern_sig(name, sr)` callsites in `operands.rs:213`, `insts.rs:{564,673,3533}` with `RuntimeFn::from_c_name(name).map(|f| f.resolve_lir_sig(sr))`. Delete the 399-line function. Mechanical; closes one of the three "hand-maintained mirrors" today.
+  1. ~~**Retire Rust's `runtime_extern_sig`**~~ — **DONE 2026-05-19** (commit `34be506e`). 4 callsites migrated to `RuntimeFn::from_c_name(name).map(|f| f.resolve_lir_sig(sr))`; legacy 399-line function + local `RuntimeSig` struct + obsolete cross-table consistency test deleted; docstring drift swept. Net -487 lines. Two hand-maintained mirrors remain (C-runtime header, self-host `lir_codegen.gg`).
   2. **Close lossy compression in self-host's `CollectionKind`** (<1 day). Add `CkDeque` and `CkHeap` variants to `gir.gg:204-208` (currently both collapse to `CkVector`, surviving only because downstream re-prefix-matches — the exact stale-shortcut TOML should kill).
   3. **Spike `[resource.X]` TOML — self-host as primary consumer** (~3-4 days). Schema lifted from `GirResourceMetadata`. Populate 5 representative entries (GorgetString, GorgetArray, Vector__, Box__, Mutex__). Spike consumer migration on `build_resource_metadata` end-to-end before freeze.
   4. **Spike `[runtime_fn.Y]` TOML — Rust as primary consumer** (~2-3 days). Fields lifted from `RuntimeSig`. The `runtime_table!` macro IS the de-facto spike; extract its 307 entries to TOML and verify `runtime.rs` regenerates byte-identical via `include!`.
