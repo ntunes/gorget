@@ -14224,6 +14224,23 @@ fn self_host_e2e() {
         // small allow-list — broader pattern-matching strips runtime
         // aliases like `Vector__int64_t` / `Dict__String__int64_t`
         // that downstream runtime helpers depend on, taking Match to 0.
+        //
+        // Strip `<type> __lir_g<N> = ...;` declarations too. The cut
+        // point ("Static string literals") excludes the preamble's
+        // init code in main(), so these globals are *unreachable*
+        // dead in the preamble: declared zero-initialized, never
+        // assigned, never read. Meanwhile stage-1's body emits its
+        // own sequentially-numbered `__lir_g<N>` globals starting at
+        // 0, which collide on the `__lir_g0` namespace — "conflicting
+        // types" when types differ (e.g. preamble `double __lir_g0 =
+        // INFINITY` vs stage-1 `GorgetFile __lir_g0 = stdin`) or
+        // "redefinition" when types coincide (both emit INFINITY for
+        // a fixture that uses it). Self-host's `eliminate_dead_globals`
+        // pass (`tests/fixtures/self_host_lowerer/lir_lower.gg`) prunes
+        // stage-1's side of the unused-globals problem, but globals
+        // that ARE referenced by both — INFINITY/NAN — still collide
+        // post-prune. Stripping the dead preamble decls breaks the
+        // collision: stage-1's body owns the `__lir_g<N>` namespace.
         fn is_runtime_alias_target_to_strip(name: &str) -> bool {
             // Conservative allow-list — only the types where preamble
             // and stage-1 disagree on shape. Add more as they appear.
@@ -14231,6 +14248,40 @@ fn self_host_e2e() {
                 || name.starts_with("Guard__")
                 || name.starts_with("ReadGuard__")
                 || name.starts_with("WriteGuard__")
+        }
+        fn is_dead_lir_global_decl(line: &str) -> bool {
+            // Match `<type> __lir_g<digits> = ...;` — `<type>` may be
+            // a plain identifier (double, int64_t) or a __gg_-prefixed
+            // tag, optionally `const ` qualified. Anchored against
+            // false positives on assignments inside function bodies
+            // (those are indented). Trailing `// comment` is tolerated:
+            // emit_globals appends `; // <name>` so the line ends on
+            // the name, not `;`.
+            if line.starts_with(char::is_whitespace) {
+                return false;
+            }
+            let rest = line.strip_prefix("const ").unwrap_or(line);
+            // Skip the type token, look for `__lir_g<digits>` next.
+            let after_type = match rest.split_once(' ') {
+                Some((_, r)) => r,
+                None => return false,
+            };
+            let after_g = match after_type.strip_prefix("__lir_g") {
+                Some(r) => r,
+                None => return false,
+            };
+            let digits_end = after_g
+                .find(|c: char| !c.is_ascii_digit())
+                .unwrap_or(after_g.len());
+            if digits_end == 0 {
+                return false;
+            }
+            let tail = &after_g[digits_end..];
+            if !tail.starts_with(" = ") {
+                return false;
+            }
+            // Accept `; // name` trailers as well as a bare `;` end.
+            line.contains(';')
         }
         let mut out = String::with_capacity(src.len());
         let mut in_struct = false;
@@ -14255,6 +14306,9 @@ fn self_host_e2e() {
                         continue;
                     }
                 }
+            }
+            if is_dead_lir_global_decl(line) {
+                continue;
             }
             out.push_str(line);
             out.push('\n');

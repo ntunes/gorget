@@ -3330,3 +3330,78 @@ LirModule lower_gir_to_lir(GirModule &gmod):
         fli += 1
 
     return m
+
+# ── Dead Global Elimination ─────────────────────────────────────
+#
+# Drop globals that no function references via IGlobalAddr. Mirrors
+# Rust gg's `eliminate_dead_globals` in src/lir/optimize.rs. The
+# self-host's `lower_gir_to_lir` unconditionally lowers every entry
+# in `gmod.statics` — including stdin/stdout/stderr handles from
+# lib/std/io.gg even when the fixture never touches them. Rust gg's
+# pass scrubs those out before codegen, so the .c file emits only
+# globals actually used. Without this pass, stage-1's emitted body
+# carries a tail of dead `__lir_g<N>` declarations whose numbering
+# collides with the e2e harness's runtime preamble in
+# `self_host_e2e` (`tests/integration.rs:14149`).
+#
+# Self-host only emits GINIT_RUNTIME_CALL globals — no FUNC_ADDR
+# vtable globals to preserve indirectly — so the rule is simple:
+# referenced ↔ kept.
+void eliminate_dead_globals(LirModule &m):
+    if m.globals.len() == 0:
+        return
+    # Pass 1: collect referenced global ids.
+    Dict[int, bool] referenced = {}
+    int fi = 0
+    while fi < m.functions.len():
+        LirFunction func = m.functions.get(fi).unwrap()
+        int bi = 0
+        while bi < func.blocks.len():
+            LirBlock blk = func.blocks.get(bi).unwrap()
+            int ii = 0
+            while ii < blk.insts.len():
+                LirInst inst = blk.insts.get(ii).unwrap()
+                match inst:
+                    case IGlobalAddr(_, gid):
+                        referenced.put(gid, true)
+                    else:
+                        pass
+                ii += 1
+            bi += 1
+        fi += 1
+    if referenced.len() == m.globals.len():
+        return
+    # Pass 2: build old→new index map and the kept-globals vector.
+    Vector[LirGlobal] kept = []
+    Dict[int, int] old_to_new = {}
+    int gi = 0
+    int new_idx = 0
+    while gi < m.globals.len():
+        if referenced.contains(gi):
+            LirGlobal g = m.globals.get(gi).unwrap()
+            kept.push(g)
+            old_to_new.put(gi, new_idx)
+            new_idx += 1
+        gi += 1
+    m.globals = kept
+    # Pass 3: rewrite IGlobalAddr instructions to use new indices.
+    int fi2 = 0
+    while fi2 < m.functions.len():
+        LirFunction func2 = m.functions.get(fi2).unwrap()
+        int bi2 = 0
+        while bi2 < func2.blocks.len():
+            LirBlock blk2 = func2.blocks.get(bi2).unwrap()
+            int ii2 = 0
+            while ii2 < blk2.insts.len():
+                LirInst inst2 = blk2.insts.get(ii2).unwrap()
+                match inst2:
+                    case IGlobalAddr(dst, gid):
+                        int mapped = old_to_new.get(gid).unwrap()
+                        blk2.insts.set(ii2, IGlobalAddr(dst, mapped))
+                    else:
+                        pass
+                ii2 += 1
+            func2.blocks.set(bi2, blk2)
+            bi2 += 1
+        m.functions.set(fi2, func2)
+        fi2 += 1
