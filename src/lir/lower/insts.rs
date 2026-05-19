@@ -561,8 +561,8 @@ impl<'a> FuncLowering<'a> {
                     // arg whose param is `VoidElem` (attack_82). Picking by
                     // ABI rather than by callee name means new runtimes that
                     // adopt `VoidElem` participate automatically.
-                    let abis = runtime_extern_sig(&emit_name, self.struct_reg)
-                        .map(|s| s.param_abis)
+                    let abis = crate::lir::runtime::RuntimeFn::from_c_name(&emit_name)
+                        .map(|f| f.resolve_lir_sig(self.struct_reg).param_abis)
                         .unwrap_or_default();
                     if !abis.is_empty() {
                         self.wrap_closure_args_at_void_elem(args, &mut lir_args, &abis, bb);
@@ -670,8 +670,8 @@ impl<'a> FuncLowering<'a> {
                 // scalar, etc.) leave the arg untouched, so combinators like
                 // `Result.map_err` still receive the closure as a struct value.
                 if !is_printf_like {
-                    let abis = runtime_extern_sig(&emit_name, self.struct_reg)
-                        .map(|s| s.param_abis)
+                    let abis = crate::lir::runtime::RuntimeFn::from_c_name(&emit_name)
+                        .map(|f| f.resolve_lir_sig(self.struct_reg).param_abis)
                         .unwrap_or_default();
                     if !abis.is_empty() {
                         self.wrap_closure_args_at_void_elem(args, &mut lir_args, &abis, bb);
@@ -3530,8 +3530,8 @@ impl<'a> FuncLowering<'a> {
                     }
 
                     if slot_kind == crate::lir::EnumKind::Option {
-                        let ext_ret = super::calls::runtime_extern_sig(emit_name, self.struct_reg)
-                            .map(|sig| sig.ret)
+                        let ext_ret = crate::lir::runtime::RuntimeFn::from_c_name(emit_name)
+                            .map(|f| f.resolve_lir_sig(self.struct_reg).ret)
                             .or_else(|| {
                                 self.pending_externs.iter()
                                     .find(|e| e.name == emit_name)
@@ -4001,7 +4001,7 @@ impl<'a> FuncLowering<'a> {
         let result = if is_void_ret { None } else { dst.map(|_| self.lir_func.next_value()) };
 
         // Look up ABI tags from the extern declaration (populated by ensure_extern
-        // from runtime_extern_sig's explicit tags or user-declared extern "C" annotations).
+        // from RuntimeFn::resolve_lir_sig's explicit tags or user-declared extern "C" annotations).
         let call_arg_abis = self.lookup_arg_abis(&actual_emit_name);
 
         // Parse the effective_original_name ONCE at this layer to determine if this

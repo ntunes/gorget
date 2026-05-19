@@ -210,7 +210,9 @@ impl<'a> FuncLowering<'a> {
             .unwrap_or_default();
 
         // For known runtime functions, use canonical signatures + ABI tags.
-        if let Some(rsig) = runtime_extern_sig(name, self.struct_reg) {
+        if let Some(rsig) = crate::lir::runtime::RuntimeFn::from_c_name(name)
+            .map(|f| f.resolve_lir_sig(self.struct_reg))
+        {
             // Prefer runtime ABI tags; fall back to user-declared extern ABI.
             let abis = if rsig.param_abis.iter().any(|a| *a != crate::ir::abi::AbiKind::Auto) {
                 rsig.param_abis

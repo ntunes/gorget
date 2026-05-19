@@ -22,7 +22,7 @@ pub use self::types::lower_module;
 
 #[allow(unused_imports)]
 use self::calls::{
-    fix_printf_format, runtime_extern_sig, lower_binop, lower_unop, map_cmp_op,
+    fix_printf_format, lower_binop, lower_unop, map_cmp_op,
     clone_fn_for_collection_element, is_type_name,
     map_monomorphized_to_runtime_with_table, map_monomorphized_to_runtime,
 };
@@ -300,7 +300,7 @@ impl<'a> LoweringContext<'a> {
         for ext in all_pending_externs {
             if let Some(existing) = self.module.externs.iter_mut().find(|e| e.name == ext.name) {
                 // Replace if existing is variadic, has fewer params, or has a less specific return type.
-                // For runtime functions with known signatures (from ensure_extern + runtime_extern_sig),
+                // For runtime functions with known signatures (from ensure_extern + RuntimeFn::resolve_lir_sig),
                 // always prefer the new declaration which has the canonical types.
                 let should_replace = existing.is_variadic
                     || (existing.params.is_empty() && !ext.params.is_empty())

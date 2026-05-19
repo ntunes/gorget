@@ -1593,7 +1593,7 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
                     ) {
                         // No-arg strip family: the LIR registers `gorget_str_strip` /
                         // `gorget_str_lstrip` / `gorget_str_rstrip` (2-arg sigs from
-                        // runtime_extern_sig) but the codegen renames to the `_ws`
+                        // RuntimeFn::resolve_lir_sig) but the codegen renames to the `_ws`
                         // variants for 1-arg calls. The renamed-target name has no
                         // module.externs entry, so we land here. The C runtime defines
                         // these as `Str f(Str s)` — 1 Str arg by value (byval on x86_64)
@@ -5579,7 +5579,7 @@ fn emit_inst(
             // Redirect no-arg strip variants: gorget_str_strip(s) → gorget_str_trim(s), etc.
             // Same logic as C backend (emit_call_extern.rs line 708).
             // The LIR registers the extern under the ORIGINAL name (gorget_str_strip)
-            // with the 2-arg runtime_extern_sig, so the lookup must use the ORIGINAL
+            // with the 2-arg RuntimeFn signature, so the lookup must use the ORIGINAL
             // name — that gives us the proper ABI tags (GorgetString → byval) for the
             // single Str arg. The call instruction itself uses the renamed symbol.
             let original_name: &str = name.as_str();
@@ -5753,7 +5753,7 @@ fn emit_inst(
 
                     // Detect GorgetString value passed to const char* param: trust the
                     // CStr ABI tag on the extern's param_abis (registered by
-                    // runtime_extern_sig in src/lir/lower/calls.rs).
+                    // RuntimeFn::resolve_lir_sig in src/lir/runtime.rs).
                     let param_abi = ext.param_abis.get(i).copied().unwrap_or_default();
                     let _ = expects_ptr; // kept to preserve surrounding structure
                     let is_str_to_cstr = param_abi == crate::ir::abi::AbiKind::CStr

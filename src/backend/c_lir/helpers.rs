@@ -671,7 +671,7 @@ pub(super) fn void_to_opt_variant(name: &str) -> &str {
 /// for collection runtime functions.  The caller must pass `&(Type){value}` for
 /// these positions when the argument is a concrete value (not already a pointer).
 /// DEPRECATED: Legacy fallback for VoidElem arg positions. All CallExtern
-/// instructions now carry arg_abis from runtime_extern_sig. This whitelist
+/// instructions now carry arg_abis from RuntimeFn::resolve_lir_sig. This whitelist
 /// serves only as a safety net for edge cases where arg_abis is empty.
 pub(super) fn collection_void_param_indices(name: &str) -> &'static [usize] {
     match name {
@@ -739,9 +739,9 @@ pub(super) fn is_option_result_combinator(name: &str) -> bool {
 }
 /// Returns true if the runtime function takes self (arg 0) by pointer.
 /// LEGACY: only needed for unmapped GIR names (gorget_str_push etc.) that bypass
-/// runtime_extern_sig. Tagged functions use arg_abis directly.
+/// RuntimeFn::resolve_lir_sig. Tagged functions use arg_abis directly.
 /// DEPRECATED: Legacy fallback for self-by-ptr detection. All CallExtern
-/// instructions now carry arg_abis from runtime_extern_sig. This whitelist
+/// instructions now carry arg_abis from RuntimeFn::resolve_lir_sig. This whitelist
 /// serves only as a safety net for unmapped GIR names.
 fn legacy_self_by_ptr(name: &str) -> bool {
     // gorget_str_push/push_line/push_char/clear — GIR names that don't always get remapped
@@ -1452,7 +1452,7 @@ pub(super) fn resolve_param_abi(
             return abi;
         }
     }
-    // Legacy fallback for unmapped GIR names that bypass runtime_extern_sig.
+    // Legacy fallback for unmapped GIR names that bypass RuntimeFn::resolve_lir_sig.
     if param_idx == 0 && legacy_self_by_ptr(_fn_name) {
         return AbiKind::Ptr;
     }

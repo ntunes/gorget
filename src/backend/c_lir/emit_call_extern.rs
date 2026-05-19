@@ -698,7 +698,7 @@ pub(super) fn emit_call_extern(
                 }
                 let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
                 let is_str_lit = ctx.is_str_lit(*a);
-                // ABI-driven marshalling: instruction-level tags (from runtime_extern_sig)
+                // ABI-driven marshalling: instruction-level tags (from RuntimeFn::resolve_lir_sig)
                 // take priority, then extern declaration tags, then whitelist fallback.
                 {
                     let inst_abi = arg_abis.get(i).copied().unwrap_or(crate::ir::abi::AbiKind::Auto);
