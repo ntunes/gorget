@@ -209,6 +209,7 @@ equip JsonDeserializer with Deserializer:
 struct JsonParser:
     String input
     int pos
+    int depth
     String err
 
 equip JsonParser:
@@ -237,9 +238,21 @@ equip JsonParser:
         if c == '"':
             return self.parse_string_value()
         if c == '{':
-            return self.parse_object()
+            if self.depth >= 1000:
+                self.fail("max nesting depth exceeded")
+                return Null()
+            self.depth = self.depth + 1
+            Json obj_val = self.parse_object()
+            self.depth = self.depth - 1
+            return obj_val
         if c == '[':
-            return self.parse_array()
+            if self.depth >= 1000:
+                self.fail("max nesting depth exceeded")
+                return Null()
+            self.depth = self.depth + 1
+            Json arr_val = self.parse_array()
+            self.depth = self.depth - 1
+            return arr_val
         if c == 't' or c == 'f' or c == 'n':
             return self.parse_keyword()
         if c == '-' or c >= '0' and c <= '9':
@@ -458,7 +471,7 @@ equip JsonParser:
 # ── Public API ───────────────────────────────────────────────
 
 Result[Json, ParseError] json_parse(String input):
-    JsonParser p = JsonParser(input, 0, "")
+    JsonParser p = JsonParser(input, 0, 0, "")
     Json value = p.parse_value()
     if p.failed():
         return Error(ParseError.InvalidSyntax(p.pos, !p.err))
