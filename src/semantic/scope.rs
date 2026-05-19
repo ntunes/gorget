@@ -413,6 +413,32 @@ impl ScopeTable {
         scope.values.get(name).copied().or_else(|| scope.types.get(name).copied())
     }
 
+    /// True if `name` is the name of at least one enum variant defined anywhere
+    /// in this module (in scope or not). Used by the resolver to suppress the
+    /// `undefined name` diagnostic for bare-variant constructor calls whose
+    /// qualification was dropped by the loader's ambiguity dedup (see
+    /// `build_variant_map_from_all` in `src/loader.rs`). The typechecker
+    /// disambiguates via `decl_type_hint` once it sees the call site.
+    ///
+    /// Non-generic enum variants are allocated via `alloc_def` (which inserts
+    /// into `name_index`) but NOT inserted into any scope's value namespace —
+    /// they are accessed via qualified paths (`EnumName.Variant`). When the
+    /// loader's pre-merge qualifier drops an ambiguous bare name, the
+    /// resolver hits an `Identifier(name)` that isn't in scope but is still a
+    /// legitimate variant ref; this lookup returns true for those names so
+    /// the resolver can stay silent. Real undefined names (no variant
+    /// anywhere) still report normally.
+    pub fn is_known_variant_name(&self, name: &str) -> bool {
+        if let Some(ids) = self.name_index.get(name) {
+            for &def_id in ids {
+                if self.definitions[def_id.0 as usize].kind == DefKind::Variant {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     pub fn get_def(&self, id: DefId) -> &DefInfo {
         &self.definitions[id.0 as usize]
     }

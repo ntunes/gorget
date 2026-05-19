@@ -1692,6 +1692,22 @@ impl<'a> TypeChecker<'a> {
                                     }
                                     _ => {}
                                 }
+                            } else if let Some(variant_def_id) =
+                                self.find_ambiguous_variant_by_name(cname)
+                            {
+                                // The resolver suppressed `undefined name` for this
+                                // bare identifier because at least one enum has a
+                                // variant by this name (the loader's pre-merge
+                                // qualifier dropped it as ambiguous). Recover the
+                                // intended variant via `decl_type_hint` — the call
+                                // arg's expected enum type — exactly as the pattern
+                                // path uses the scrutinee type. Mirrors the
+                                // architecture documented at
+                                // `build_variant_map_from_all` in `src/loader.rs`.
+                                let hint = self.decl_type_hint;
+                                return self.infer_variant_constructor(
+                                    variant_def_id, args, hint, expr.span,
+                                );
                             }
                         }
                         for arg in args {
@@ -3670,6 +3686,62 @@ impl<'a> TypeChecker<'a> {
             .iter()
             .find(|(_, info)| info.variants.iter().any(|(_, vid)| *vid == variant_def_id))
             .map(|(eid, info)| (*eid, info.clone()))
+    }
+
+    /// Locate the intended `DefKind::Variant` DefId for a bare identifier that
+    /// the resolver left unresolved because the loader's pre-merge variant
+    /// qualifier (see `build_variant_map_from_all` in `src/loader.rs`) dropped
+    /// it as ambiguous across multiple enums.
+    ///
+    /// Disambiguation strategy, in order:
+    ///
+    ///   1. If `decl_type_hint` resolves to an enum DefId, pick the variant of
+    ///      that enum whose name matches — this is the constructor-call
+    ///      expected-type path, the analogue of the pattern path's
+    ///      `ctx.type_registry.type_name(scrut_type)`.
+    ///   2. Otherwise (no hint, or hint isn't an enum), fall back to the
+    ///      single matching variant when only one enum carries this name.
+    ///      Returns `None` if multiple enums match and no hint disambiguates
+    ///      — the caller silently propagates `error_id` so subsequent
+    ///      unification flags the genuine type mismatch.
+    fn find_ambiguous_variant_by_name(&self, name: &str) -> Option<DefId> {
+        // Collect all (parent_enum_def_id, variant_def_id) sightings.
+        let candidates: Vec<(DefId, DefId)> = self
+            .enum_variants
+            .iter()
+            .flat_map(|(eid, info)| {
+                info.variants
+                    .iter()
+                    .filter(|(vn, _)| vn == name)
+                    .map(move |(_, vid)| (*eid, *vid))
+            })
+            .collect();
+        if candidates.is_empty() {
+            return None;
+        }
+        // Step 1: try expected-type-driven disambiguation.
+        if let Some(hint) = self.decl_type_hint {
+            let resolved = self.resolve_type(hint);
+            let hint_enum = match self.types.get(resolved) {
+                ResolvedType::Defined(eid) | ResolvedType::Generic(eid, _) => Some(*eid),
+                _ => None,
+            };
+            if let Some(hint_eid) = hint_enum {
+                for (eid, vid) in &candidates {
+                    if *eid == hint_eid {
+                        return Some(*vid);
+                    }
+                }
+            }
+        }
+        // Step 2: only return a candidate when exactly one enum defines this
+        // variant — anything else without a hint is genuinely ambiguous and
+        // we let the typechecker produce a downstream mismatch rather than
+        // guessing.
+        if candidates.len() == 1 {
+            return Some(candidates[0].1);
+        }
+        None
     }
 
     /// Infer the type of a variant constructor call. Returns the parent

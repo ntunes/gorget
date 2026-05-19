@@ -1356,7 +1356,22 @@ fn resolve_expr(
                 None => {
                     // Don't error on built-in functions like `print`, or synthetic
                     // identifiers like `__return__` (bound during IR lowering).
-                    if !is_builtin(name) && name != "__return__" {
+                    //
+                    // Also skip when `name` is a known enum-variant name: the loader's
+                    // pre-merge variant qualifier (`build_variant_map_from_all` in
+                    // `src/loader.rs`) drops ambiguous bare names from its rewrite map,
+                    // leaving the bare `Identifier` for the downstream typechecker to
+                    // resolve via `decl_type_hint` (the constructor-call expected-type
+                    // path, mirroring how `lower_pattern_condition` uses the scrutinee
+                    // type for the pattern path). Non-generic variants are allocated
+                    // via `alloc_def` (recorded in `name_index`) but not inserted into
+                    // any scope; `is_known_variant_name` consults that index so we
+                    // stay silent here. Real undefined names — no variant anywhere
+                    // by that spelling — still report normally.
+                    if !is_builtin(name)
+                        && name != "__return__"
+                        && !scopes.is_known_variant_name(name)
+                    {
                         errors.push(SemanticError {
                             kind: SemanticErrorKind::UndefinedName {
                                 name: name.clone(),
