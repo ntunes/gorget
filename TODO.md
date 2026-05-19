@@ -2,6 +2,38 @@
 
 ## High Priority
 
+- **Self-host stage-1 binary peaks at ~5.46 GB RSS on `driver.gg` — `sb_push` "fix" regressed (or was always incomplete).** Audited 2026-05-19 by worktree-isolated agent `a825b67a`. Single isolated `stage1_bin tests/fixtures/self_host_lowerer/driver.gg lib --lir-c` peaks at **5,462 MB VmHWM** in **81 s**, producing a 13.4 MB body (~350k C lines). Stage-0 (Rust-built `gg` in debug mode) on the same input peaks at 907 MB and takes 473 s — i.e. stage-1 is **6× faster but 6× hungrier** than stage-0 on the lowerer driver, and **3.4×** hungrier on the smaller typechecker driver. Super-linear scaling with input size is the fingerprint of an O(N²) string-accumulator or clone-per-iteration cascade hot only on the largest inputs.
+
+  **Test does not catch it.** `self_host_bootstrap` (`tests/integration.rs:13822-13960`) only asserts wall-clock under 120 s + non-truncated output. RSS isn't checked. Bootstrap tests are `#[serial(self_host_lowerer_driver)]` so multiple stages don't overlap, and other tests are single-digit-MB — the 5+ GB sweep peak the user observed is just this one process. Under parallel sweep contention with up to 3 incidental ~500 MB tests, total peak is roughly 6 GB, matching observation.
+
+  **Stale comment, actively misleading.** `tests/integration.rs:13760-13767` claims `sb_push` (in-place append vs `out = out + ...`) fixed a 5 GB OOM at ~21 s. Today: same 5 GB, but now finishes in 81 s instead of being killed at 21 s — so the test passes, but the leak is *not fixed*. Comment needs updating regardless of the underlying fix.
+
+  **Quantitative table (all probes single-process via `/proc/<pid>/status` VmHWM, idle host, 10 CPU / 16 GB / aarch64 / Debian 12 / gcc 12.2)**:
+  | Scenario | Wall | Peak RSS |
+  |---|---:|---:|
+  | `gg build self_host_lowerer/driver.gg` (Rust gg tree) | 15.6s | 158 MB |
+  | cc1 compiling the resulting 13.2 MB `driver.c` | 8.1s | 540 MB |
+  | cc1 compiling the bootstrap stage1.c (13.3 MB) | 7.7s | 559 MB |
+  | **stage-0 (Rust gg) `--lir-c` on driver.gg** | 473s | **907 MB** |
+  | **stage-1 binary `--lir-c` on driver.gg** | 81s | **5,462 MB** |
+  | stage-0 on typechecker/driver.gg (smaller) | 71s | 358 MB |
+  | stage-1 on typechecker/driver.gg | 12s | 1,226 MB |
+
+  **Writer-site candidates (in priority order; need profiler confirmation before fixing):**
+  1. **`tests/fixtures/self_host_lowerer/lir_codegen.gg`** (~6500 lines). The file `sb_push` was introduced to fix. Audit every `String` accumulator across the file — anywhere doing `out = out + something` inside a loop is the suspect pattern. Reference: the comment claims they were all converted; the data says no.
+  2. **`tests/fixtures/self_host_lowerer/lower.gg`** (~331 KB). Specifically the `StructRegistry` parallel-storage pattern (Vector[String] + Vector[int] with O(n) linear scan) — verify the Dict-ordering workaround actually retired or whether scans still run per emitted function. Quadratic in struct-registry × emitted-fn count.
+  3. **Clone cascades at consuming boundaries.** Per CLAUDE.md CoW rules, a named local bound to a borrow (from `.get()` or a parameter) emits a clone every iteration at `push`/`put`/`set`/`insert`/`send` sites. One hot loop over a Vector-of-large-strings with clone-per-iteration produces multi-GB transient peaks.
+
+  **Recommended next step**: install `heaptrack` (apt-get-able on Debian 12) and profile a single `stage1_bin driver.gg lib --lir-c` run. One pass pinpoints the allocation site. Manual code-read of (1) is the fallback if heaptrack isn't available — grep for `out = out +` and `\.clone\(\)` inside loops.
+
+  **Subsidiary fixes that surfaced during the audit** (file as own TODO entries or sweep in alongside the perf fix):
+  - **Update `tests/integration.rs:13760` stale comment.** Today's behaviour ≠ what the comment describes.
+  - **`self_host_bootstrap_fixed_point` IS in the live suite, not `#[ignore]`d** (verified `tests/integration.rs:13822-13824` — plain `#[test]` + `#[serial(self_host_lowerer_driver)]`, no `#[ignore]`). But a comment at `tests/integration.rs:13771` calls it `currently #[ignore]` — second stale comment. Adds 3× cc invocations + 3× stage-N executions per sweep; if its current behaviour is "expected to panic at byte-equality assertion" per its own block comment, decide whether to `#[ignore]` until the underlying gate clears, or keep running and accept the cost. Either way, comment at 13771 is wrong.
+  - **`build_gg_dir_cached` has only one cache slot** (`SELF_HOST_LOWERER_DRIVER`). The other 5 comparison drivers (lexer, parser, resolver, typechecker, check) all use the uncached variant and rebuild 15-60 s of identical work per test. Code smell, not perf-critical.
+  - **Add RSS sanity check to `self_host_bootstrap`.** `getrusage(RUSAGE_CHILDREN).ru_maxrss` after step 8, assert under (e.g.) 2 GB. Catches the next regression silently.
+
+  Probe artifacts left at `/tmp/memprobe/` (~54 MB) for re-runs. Worktree at `/workspace/gorget/.claude/worktrees/agent-a825b67a7f46d445d`. [added: 2026-05-19, audit `a825b67a`]
+
 ## Profile snapshot 2026-05-17
 
 Fresh `gg profile` snapshot taken on `gorget-1` HEAD (e052606e) after the post-2026-05-17 batch (validate_resource walks collapsed `4b529742`, semantic self-type index `e4e1f6a3`, GIR Liveness bitset `79499789`, propagate_copies FxHashMap `469d7942`, loader rayon `107ab8dc`, TypeTable primitive_ids `615a3d0b`, LIR cse/find_live_functions/eliminate_dead_globals FxHashMap `5c38ee14`, stack-traces v1 regression closed `01f91844`, LIR codegen perf rewrite `962ae144`). Profile output medianed over 5 runs per workload. Goal: identify the **next** dominant phase outside the known/handled zones (drop_elab, semantic name-index, safety borrow-state-reset, and the just-shipped batch).
