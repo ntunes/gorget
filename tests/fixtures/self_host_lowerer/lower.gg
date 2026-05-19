@@ -249,6 +249,24 @@ String stmt_kind(Stmt s):
             return "SIf"
         case SMatch(_, _):
             return "SMatch"
+        case SMetaForMatch(_, _, _):
+            return "SMetaForMatch"
+        case SWith(_, _, _):
+            return "SWith"
+        case SAssert(_, _):
+            return "SAssert"
+        case SAssertReturn(_, _):
+            return "SAssertReturn"
+        case SNamedScope(_, _):
+            return "SNamedScope"
+        case SSelect(_):
+            return "SSelect"
+        case SOnError(_):
+            return "SOnError"
+        case SItem(_):
+            return "SItem"
+        case SSnapshot(_, _, _):
+            return "SSnapshot"
     return "?unknown_stmt?"
 
 int add_local(LowerCtx &ctx, int type_id, Option[String] name):
