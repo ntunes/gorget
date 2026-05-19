@@ -363,21 +363,48 @@ equip JsonParser:
         # Optional minus
         if self.pos < self.input.byte_len() and self.input.char_at(self.pos) == '-':
             self.pos = self.pos + 1
-        # Integer part
-        while self.pos < self.input.byte_len() and self.input.char_at(self.pos) >= '0' and self.input.char_at(self.pos) <= '9':
+        # Integer part — RFC 8259: int = zero / ( digit1-9 *DIGIT )
+        # At least one int digit is required (a bare '-' or empty is invalid).
+        if self.pos >= self.input.byte_len() or self.input.char_at(self.pos) < '0' or self.input.char_at(self.pos) > '9':
+            self.fail("invalid number: missing integer part")
+            return Null()
+        if self.input.char_at(self.pos) == '0':
+            # A leading '0' must not be followed by another digit.
             self.pos = self.pos + 1
-        # Fractional part
+            if self.pos < self.input.byte_len() and self.input.char_at(self.pos) >= '0' and self.input.char_at(self.pos) <= '9':
+                self.fail("invalid number: leading zero followed by digit")
+                return Null()
+        else:
+            # digit1-9 followed by *DIGIT
+            while self.pos < self.input.byte_len() and self.input.char_at(self.pos) >= '0' and self.input.char_at(self.pos) <= '9':
+                self.pos = self.pos + 1
+        # Fractional part — RFC 8259: frac = '.' 1*DIGIT
         if self.pos < self.input.byte_len() and self.input.char_at(self.pos) == '.':
             is_float = true
             self.pos = self.pos + 1
+            # At least one digit required after '.'
+            if self.pos >= self.input.byte_len() or self.input.char_at(self.pos) < '0' or self.input.char_at(self.pos) > '9':
+                self.fail("invalid number: trailing decimal point")
+                return Null()
             while self.pos < self.input.byte_len() and self.input.char_at(self.pos) >= '0' and self.input.char_at(self.pos) <= '9':
                 self.pos = self.pos + 1
-        # Exponent
-        if self.pos < self.input.byte_len() and self.input.char_at(self.pos) == 'e' or self.pos < self.input.byte_len() and self.input.char_at(self.pos) == 'E':
+        # Exponent — RFC 8259: exp = ('e' / 'E') ['+' / '-'] 1*DIGIT
+        bool at_e = false
+        if self.pos < self.input.byte_len():
+            String e_char = self.input.char_at(self.pos)
+            if e_char == 'e' or e_char == 'E':
+                at_e = true
+        if at_e:
             is_float = true
             self.pos = self.pos + 1
-            if self.pos < self.input.byte_len() and self.input.char_at(self.pos) == '+' or self.pos < self.input.byte_len() and self.input.char_at(self.pos) == '-':
-                self.pos = self.pos + 1
+            if self.pos < self.input.byte_len():
+                String sign_char = self.input.char_at(self.pos)
+                if sign_char == '+' or sign_char == '-':
+                    self.pos = self.pos + 1
+            # At least one digit required after exponent marker.
+            if self.pos >= self.input.byte_len() or self.input.char_at(self.pos) < '0' or self.input.char_at(self.pos) > '9':
+                self.fail("invalid number: missing exponent digits")
+                return Null()
             while self.pos < self.input.byte_len() and self.input.char_at(self.pos) >= '0' and self.input.char_at(self.pos) <= '9':
                 self.pos = self.pos + 1
         String num_str = self.input.byte_slice(start, self.pos)
