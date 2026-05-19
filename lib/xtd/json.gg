@@ -271,6 +271,12 @@ equip JsonParser:
         self.pos = self.pos + 1
         String result = ""
         while self.pos < self.input.byte_len():
+            # Reject raw control bytes (< 0x20) per RFC 8259 \xa77:
+            # unescaped = %x20-21 / %x23-5B / %x5D-10FFFF
+            byte raw_b = self.input.byte_at(self.pos)
+            if raw_b < 0x20 as uint8:
+                self.fail("unescaped control character in string")
+                return ""
             String c = self.input.char_at(self.pos)
             if c == '"':
                 self.pos = self.pos + 1
@@ -292,6 +298,10 @@ equip JsonParser:
                     result = result + "\t"
                 elif esc == 'r':
                     result = result + "\r"
+                elif esc == 'b':
+                    result = result + codepoint_to_str(0x08)
+                elif esc == 'f':
+                    result = result + codepoint_to_str(0x0C)
                 elif esc == '/':
                     result = result + "/"
                 elif esc == 'u':
@@ -349,8 +359,9 @@ equip JsonParser:
                         return ""
                     result = result + codepoint_to_str(uni_cp)
                 else:
-                    result = result + "\\"
-                    result = result + esc
+                    # RFC 8259 \xa77: only " \ / b f n r t u may follow '\'.
+                    self.fail("invalid escape character")
+                    return ""
             else:
                 result = result + c
                 self.pos = self.pos + 1
