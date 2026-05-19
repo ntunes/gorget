@@ -112,7 +112,14 @@ enum CRuntimeType:
     TVoidElem                        # pointer to a single collection element (same wire as TPtr)
     TCStr                            # const char* (same wire as TPtr)
     TStr                             # GorgetString by value (32 bytes)
-    TArray                           # GorgetArray struct (64 bytes)
+    CtArray                          # GorgetArray struct (64 bytes) — Ct prefix
+                                     # avoids collision with self-host ast.gg's
+                                     # `Type.TArray`; main's `ae7e4aaf` drops
+                                     # cross-module-ambiguous variant names from
+                                     # the loader's pre-merge qualifier, so two
+                                     # enums sharing a bare name lose their
+                                     # qualification path and bare ctor calls
+                                     # fail to resolve.
     TMap                             # GorgetMap struct
     TSet                             # GorgetSet struct
     TRegex                           # Regex handle struct

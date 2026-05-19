@@ -28,7 +28,7 @@ from compiler.data.schema import BoxKind, BkNotBox, BkRegularBox, BkTraitBox
 from compiler.data.schema import LirType, LtStructBase, LtPtr
 from compiler.data.schema import RuntimeFn, RuntimeParam
 from compiler.data.schema import CRuntimeType
-from compiler.data.schema import TVoid, TI64, TU8, TF64, TPtr, TStr, TArray
+from compiler.data.schema import TVoid, TI64, TU8, TF64, TPtr, TStr, CtArray
 from compiler.data.schema import AbiKind, AScalar, APtr, AOpaque, AGorgetString, AVoidElem, ACStr
 from compiler.data.schema import SideEffects, FxPure, FxAllocates, FxMutates, FxIo, FxConcurrent
 
@@ -176,7 +176,7 @@ public static Vector[ResourceEntry] RESOURCES = [
 #                       (FxReadOnly / FxAborts / FxUnknown deferred to full fill-in)
 #   returns_fresh:      true, false
 #   AbiKind:            AScalar, APtr, AOpaque, AGorgetString, AVoidElem, ACStr
-#   CRuntimeType:       TVoid, TI64, TU8, TF64, TPtr, TStr, TArray
+#   CRuntimeType:       TVoid, TI64, TU8, TF64, TPtr, TStr, CtArray
 #   param counts:       0, 1, 2 (the 3+ case is mechanical fill-in)
 
 public static Vector[RuntimeFn] RUNTIME_FNS = [
@@ -241,12 +241,12 @@ public static Vector[RuntimeFn] RUNTIME_FNS = [
         FxIo(),
         true),
 
-    # Array constructor — Allocates; Scalar arg; struct return (TArray);
+    # Array constructor — Allocates; Scalar arg; struct return (CtArray);
     # returns_fresh=true.
     RuntimeFn(
         "gorget_array_new",
         [RuntimeParam(TI64(), AScalar())],
-        TArray(),
+        CtArray(),
         FxAllocates(),
         true),
 
