@@ -14525,8 +14525,6 @@ fn self_host_e2e() {
         let _ = std::fs::remove_file(&rust_c_path);
         let needs_tls = rust_c.contains("std_net_tls") || rust_c.contains("xtd_http");
         let needs_crypto = rust_c.contains("xtd_crypto") || rust_c.contains("xtd_p2p");
-        // xtd.regex is pure Gorget — no link flags needed.
-        let _needs_regex_unused: bool = rust_c.contains("xtd_regex");
         let needs_compress = rust_c.contains("xtd_compress");
         let needs_sdl = rust_c.contains("xtd_sdl") || rust_c.contains("xtd_gfx") || rust_c.contains("xtd_gl");
 
