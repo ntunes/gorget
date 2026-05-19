@@ -1990,6 +1990,27 @@ pub(super) fn lower_method_call(
                 }
             }
         }
+        // For Dict/HashMap.remove(), auto-register `Option[V]` with a value
+        // payload — consuming counterpart to Dict.get above. `gorget_map_remove_opt`
+        // returns `void*` into the removed value's slot (ownership transferred to
+        // caller). Without this register, the fn_sigs entry for the method falls
+        // back to a placeholder (i64) and chained `.remove(k).unwrap()` collapses
+        // the intermediate Option slot — the LIR lift's `slot_kind == Option`
+        // guard never matches and the raw void* assignment hits the unwrapped
+        // V slot. Mirrors the Vector.pop/remove branch above.
+        if method_name == "remove" && recv_is_map {
+            let prefix = if type_name.starts_with("Dict__") { "Dict__" } else { "HashMap__" };
+            if let Some(rest) = type_name.strip_prefix(prefix) {
+                if let Some(pos) = rest.find("__") {
+                    let val_name = &rest[pos + 2..];
+                    let option_name = format!("Option__{val_name}");
+                    if ctx.lookup_type_by_name(&option_name).is_none() {
+                        let inner_type = resolve_inner_type(ctx, val_name);
+                        ctx.ensure_option_type_registered(&option_name, inner_type);
+                    }
+                }
+            }
+        }
         // For index_of/find on strings/collections (NOT Regex or user-defined types), register Option[int] return type
         let sentinel_method_key = format!("{type_name}__{method_name}");
         let is_sentinel_wrapped = ctx.sentinel_to_option_methods.contains(&sentinel_method_key);
@@ -2267,14 +2288,38 @@ pub(super) fn lower_method_call(
             && recv_is_array
             && ret_type != UNIT_TYPE
             && ret_is_option;
+        // Dict/HashMap.remove(key) shares the void*-returning shape with Vector.pop/
+        // remove: `gorget_map_remove_opt` returns a pointer to the removed value's
+        // bucket-slot (NULL = not found). Build the Option explicitly with a
+        // null-check + EnumInit at the GIR layer so the IR is type-truthful
+        // regardless of downstream `.unwrap()` fusion. Without this, a chained
+        // `dp.remove(k).unwrap()` collapses the intermediate Option-typed temp,
+        // the LIR lift's `slot_kind == EnumKind::Option` guard never matches,
+        // and the raw `void*` lands directly in the unwrapped V slot — broken
+        // for struct/enum V, silent garbage for primitive V.
+        let is_option_void_ptr_dict_remove = method_name == "remove"
+            && recv_is_map
+            && ret_type != UNIT_TYPE
+            && ret_is_option;
 
-        let result = if is_option_void_ptr_vector {
-            let elem_type_name = type_name.strip_prefix("Vector__").unwrap_or("int64_t");
-            let inner_type = resolve_inner_type(ctx, elem_type_name);
-            let is_borrowing = matches!(method_name, "get" | "first" | "last");
+        let result = if is_option_void_ptr_vector || is_option_void_ptr_dict_remove {
+            // Resolve the value-name (V for Dict__K__V, T for Vector__T) for inner-type
+            // lookup and Option name resolution.
+            let elem_type_name: String = if is_option_void_ptr_dict_remove {
+                let prefix = if type_name.starts_with("Dict__") { "Dict__" } else { "HashMap__" };
+                type_name.strip_prefix(prefix)
+                    .and_then(|rest| rest.find("__").map(|pos| rest[pos + 2..].to_string()))
+                    .unwrap_or_else(|| "int64_t".to_string())
+            } else {
+                type_name.strip_prefix("Vector__").unwrap_or("int64_t").to_string()
+            };
+            let inner_type = resolve_inner_type(ctx, &elem_type_name);
+            let is_borrowing = matches!(method_name, "get" | "first" | "last")
+                && is_option_void_ptr_vector;
             // Borrowing methods always produce Option__Ref__T with a Ptr(T) payload —
             // the raw pointer from the runtime `gorget_array_safe_get` IS the payload.
-            // Consuming methods (pop/remove) deref to take ownership of the value.
+            // Consuming methods (Vector.pop/remove, Dict.remove) deref to take
+            // ownership of the value.
             let payload_is_ptr = is_borrowing;
 
             // Call with Ptr return type (truthful void* ABI)
