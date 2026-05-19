@@ -1990,25 +1990,39 @@ impl<'a> FuncLowering<'a> {
                 }
                 // Phase A SSoT fallback: consult `compiler/data/resources.gg`
                 // before the legacy prefix arms (per layering-discipline rule 2).
-                // The table's `runtime_name` carries the canonical backing-type
-                // identity (`GorgetArray` for Vector__/Deque__, `GorgetMap` for
-                // Dict__/HashMap__, `GorgetSet` for Set__/HashSet__, `Box`/
-                // `Mutex` etc. for the ref-counted handles).
+                // The schema's typed `collection_kind` drives the mapping —
+                // matching on `runtime_name` alone would over-rotate Heap__
+                // (which has runtime_name="GorgetArray" because it wraps a
+                // GorgetArray internally, but is itself a user-visible struct
+                // that the LIR routes as UserType, not as Resource).
                 if let Some(meta) = crate::ir::resources::table().lookup(n) {
-                    match meta.runtime_name.as_str() {
-                        "GorgetArray" => return ElemMeta::Resource(ResourceKind::GorgetArray),
-                        "GorgetMap" => return ElemMeta::Resource(ResourceKind::GorgetMap),
-                        "GorgetSet" => return ElemMeta::Resource(ResourceKind::GorgetSet),
-                        "GorgetString" => return ElemMeta::Resource(ResourceKind::GorgetString),
-                        // CsRefCounted entries — Box/Shared/Weak/Channel/Mutex/etc.
-                        // are opaque handles in CollectionCtor element position.
-                        _ if matches!(meta.copy_semantics,
-                            crate::ir::resource_schema::CopySemantics::RefCounted) =>
-                            return ElemMeta::Resource(ResourceKind::RefCounted),
-                        // Fall through for any runtime_name not explicitly mapped
-                        // (defensive: the table's entries beyond the spike may
-                        // surface new categories not yet wired here).
-                        _ => {}
+                    use crate::ir::resource_schema::{CollectionKind as SchemaCollectionKind, CopySemantics};
+                    match meta.collection_kind {
+                        // Vector__/Deque__ → GorgetArray. Heap__ deliberately
+                        // excluded — see comment above.
+                        SchemaCollectionKind::Vector | SchemaCollectionKind::Deque =>
+                            return ElemMeta::Resource(ResourceKind::GorgetArray),
+                        SchemaCollectionKind::Dict =>
+                            return ElemMeta::Resource(ResourceKind::GorgetMap),
+                        SchemaCollectionKind::Set =>
+                            return ElemMeta::Resource(ResourceKind::GorgetSet),
+                        SchemaCollectionKind::NotCollection
+                        | SchemaCollectionKind::Heap => {
+                            // Non-collection resources: GorgetString singleton,
+                            // and ref-counted handles (Box/Mutex/Channel/Shared/
+                            // Weak/RWLock/Guard). Heap also falls here so it
+                            // continues through to UserType lowering downstream.
+                            if meta.runtime_name == "GorgetString" {
+                                return ElemMeta::Resource(ResourceKind::GorgetString);
+                            }
+                            if matches!(meta.copy_semantics, CopySemantics::RefCounted) {
+                                return ElemMeta::Resource(ResourceKind::RefCounted);
+                            }
+                            // Fall through (Box / Heap / TraitBox / etc.) —
+                            // legacy code paths handle these as UserType, not
+                            // Resource. Don't disturb that until item 8 wires
+                            // the box_kind metadata into the consumer.
+                        }
                     }
                 }
                 // Legacy prefix fallback: covers names that don't yet appear in
