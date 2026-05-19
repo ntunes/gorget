@@ -24,7 +24,7 @@ from std.conv import int_to_str
 from std.fs import write_file, append_file
 from std.os import getenv, exit
 from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Operand
-from gir import GirType, GirResourceMetadata
+from gir import GirType, ResourceMetadata
 from gir import LocalOwnership
 from gir import PRIM_COUNT
 from lir import LirModule, LirFunction, LirBlock, LirInst, LirTerm, SwitchCase, BlockParam

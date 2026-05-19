@@ -5,6 +5,10 @@ from std.collections import Vector, Dict
 from std.conv import int_to_str
 from types import TypeTable
 from scope import ScopeTable
+from compiler.data.schema import ResourceMetadata
+from compiler.data.schema import CopySemantics, CsTrivial, CsResource, CsRefCounted
+from compiler.data.schema import CollectionKind, CkNotCollection, CkVector, CkDeque, CkHeap, CkDict, CkSet
+from compiler.data.schema import BoxKind, BkNotBox, BkRegularBox, BkTraitBox
 
 # ── Pre-allocated primitive type IDs ───────────────────────
 
@@ -196,46 +200,9 @@ struct GirTypeInfo:
 # Populated at type-registration time; consumers read instead of
 # re-deriving from `name.starts_with("Vector__")` etc.
 
-enum CopySemantics:
-    CsTrivial      # primitives, Plain Old Data
-    CsResource     # owns heap data; needs drop + clone
-    CsRefCounted   # reference-counted (Shared / Channel / Thread / ...)
-
-enum CollectionKind:
-    CkNotCollection
-    CkVector       # Vector — push/pop at tail
-    CkDeque        # Deque — push/pop at both ends; same GorgetArray runtime
-    CkHeap         # Heap — priority queue; same GorgetArray runtime
-    CkDict         # Dict / HashMap / GorgetMap
-    CkSet          # Set / HashSet / GorgetSet
-
-enum BoxKind:
-    BkNotBox
-    BkRegularBox   # Box[T] for owned T
-    BkTraitBox     # trait-object Box[dyn Trait]
-
-struct GirResourceMetadata:
-    String runtime_name             # "GorgetString", "GorgetArray", ...
-    int size_bytes                  # C ABI byte size
-    int lir_type                    # LirType the GtNamed lowers to
-    Option[String] drop_fn          # runtime symbol; None for non-droppable
-    Option[String] clone_fn         # runtime symbol; None for trivial
-    Option[String] materialize_fn   # CoW view→owned; None if no view distinction
-    CopySemantics copy_semantics
-    CollectionKind collection_kind
-    BoxKind box_kind
-    bool opaque_handle              # Mutex / Channel / Thread / ...
-    Option[String] method_prefix    # C method-prefix for opaque/guard families
-                                    # ("gorget_mutex", "gorget_channel", ...)
-                                    # — None for collections that route through
-                                    # runtime_name (GorgetArray etc.).
-    bool is_typed_constructor       # true for parameterised families with
-                                    # `T(args)` user-code constructor shape
-                                    # (Vector__T, Dict__K__V, Mutex__T, ...).
-                                    # false for runtime-singleton bare names,
-                                    # Heap__ (legacy-excluded factory shape),
-                                    # Box__ (uses runtime alloc helper), and
-                                    # opaque types built via `T.new()`.
+# (CopySemantics / CollectionKind / BoxKind / GirResourceMetadata moved to
+#  compiler/data/schema.gg as the canonical resource-model definitions;
+#  imported above as CopySemantics / CollectionKind / BoxKind / ResourceMetadata.)
 
 # Module-level static with a runtime-call initializer (lib/std/io.gg's
 # `public static File stdout = _stdout_handle()` etc.).
@@ -281,7 +248,7 @@ struct GirModule:
     # Phase A: typed resource metadata, keyed by type name. Populated at
     # registration; consumed by lir_lower / lower in place of
     # `name.starts_with("Vector__")` and friends.
-    Dict[String, GirResourceMetadata] resource_metadata
+    Dict[String, ResourceMetadata] resource_metadata
     # Typechecker side-tables — set once at lower_module start so
     # downstream passes that hold `&gmod` can query per-expression
     # resolved types without threading two extra args through every

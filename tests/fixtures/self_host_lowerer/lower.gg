@@ -16,7 +16,7 @@ from gir import OP_BITAND, OP_BITOR, OP_BITXOR, OP_SHL, OP_SHR
 from gir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
 from gir import UNOP_NEG, UNOP_NOT, UNOP_BITNOT
 from gir import init_type_table, register_type, lookup_or_register_named, register_ptr
-from gir import GirResourceMetadata
+from gir import ResourceMetadata
 # Phase A — typed-metadata classifier shared with lir_lower.gg. The
 # `name.starts_with("X__")` cascade lives there as the single source
 # of truth for which monomorphised type names belong to which runtime
@@ -6092,7 +6092,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     # IStaticDecl handler when int/float eval miss and the init shape is
     # a zero-arg call.
     Dict[String, GirStaticInfo] statics = {}
-    Dict[String, GirResourceMetadata] resource_metadata = {}
+    Dict[String, ResourceMetadata] resource_metadata = {}
     GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes)
 
     # Refine fn_sigs for functions with named/generic return types. The

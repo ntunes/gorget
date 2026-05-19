@@ -27,6 +27,13 @@ from lir import lir_fn_next_value, lir_fn_add_slot, lir_fn_add_block
 from lir import lir_mod_add_struct, lir_mod_add_function, new_lir_module
 from std.collections import Vector, Dict
 from std.conv import int_to_str
+from gir import ResourceMetadata
+from gir import CopySemantics, CsTrivial, CsResource, CsRefCounted
+from gir import CollectionKind, CkNotCollection, CkVector, CkDeque, CkHeap, CkDict, CkSet
+from gir import BoxKind, BkNotBox, BkRegularBox, BkTraitBox
+from compiler.data.resources import RESOURCES
+from compiler.data.schema import ResourceEntry, MatchKind, MkExact, MkPrefix
+from compiler.data.schema import LirType, LtStructBase, LtPtr
 
 
 # ── Builtin struct definitions ──────────────────────────────
@@ -178,86 +185,113 @@ bool is_guard_struct_type(String name):
 #                 ...
 # (`meta` is a Gorget keyword; binding name avoids the parser conflict.)
 # (See `docs/internals/self-host-resource-model.md` §3.)
-Option[GirResourceMetadata] build_resource_metadata(String name):
+
+# Iterate RESOURCES, match by Exact/Prefix.
+Option[ResourceMetadata] lookup_resource_table(String name):
+    int i = 0
+    while i < RESOURCES.len():
+        ResourceEntry entry = RESOURCES.get(i).unwrap()
+        int j = 0
+        while j < entry.match_on.len():
+            MatchKind mk = entry.match_on.get(j).unwrap()
+            match mk:
+                case MkExact(s):
+                    if name == s:
+                        return Some(entry.metadata.clone())
+                case MkPrefix(p):
+                    if name.starts_with(p):
+                        return Some(entry.metadata.clone())
+            j += 1
+        i += 1
+    return None
+
+Option[ResourceMetadata] build_resource_metadata(String name):
+    # Try the canonical compiler.data.resources table first.
+    Option[ResourceMetadata] tbl = lookup_resource_table(name)
+    match tbl:
+        case Some(m):
+            return Some(m)
+        case None:
+            pass
     # Built-in runtime structs by exact name.
     if name == "GorgetString" or name == "String" or name == "Str":
-        return Some(GirResourceMetadata(
-            "GorgetString", 32, LT_STRUCT_BASE,
+        return Some(ResourceMetadata(
+            "GorgetString", 32, LtStructBase(),
             Some("gorget_string_free"), Some("gorget_string_clone"),
             Some("gorget_string_materialize_inplace"),
             CsResource(), CkNotCollection(), BkNotBox(), false, None, false))
     if name == "GorgetArray":
-        return Some(GirResourceMetadata(
-            "GorgetArray", 64, LT_STRUCT_BASE,
+        return Some(ResourceMetadata(
+            "GorgetArray", 64, LtStructBase(),
             Some("gorget_array_free"), Some("gorget_array_clone"), None,
             CsResource(), CkVector(), BkNotBox(), false, None, false))
     if name == "GorgetMap":
-        return Some(GirResourceMetadata(
-            "GorgetMap", 184, LT_STRUCT_BASE,
+        return Some(ResourceMetadata(
+            "GorgetMap", 184, LtStructBase(),
             Some("gorget_map_free"), Some("gorget_map_clone"), None,
             CsResource(), CkDict(), BkNotBox(), false, None, false))
     if name == "GorgetSet":
-        return Some(GirResourceMetadata(
-            "GorgetSet", 184, LT_STRUCT_BASE,
+        return Some(ResourceMetadata(
+            "GorgetSet", 184, LtStructBase(),
             Some("gorget_set_free"), Some("gorget_set_clone"), None,
             CsResource(), CkSet(), BkNotBox(), false, None, false))
     if name == "GorgetClosure":
-        return Some(GirResourceMetadata(
-            "GorgetClosure", 16, LT_STRUCT_BASE,
+        return Some(ResourceMetadata(
+            "GorgetClosure", 16, LtStructBase(),
             Some("gorget_closure_free"), Some("gorget_closure_clone"), None,
             CsResource(), CkNotCollection(), BkNotBox(), false, None, false))
 
     # Vector__T → GorgetArray (is_typed_constructor=true).
     if name.starts_with("Vector__"):
-        return Some(GirResourceMetadata(
-            "GorgetArray", 64, LT_STRUCT_BASE,
+        return Some(ResourceMetadata(
+            "GorgetArray", 64, LtStructBase(),
             Some("gorget_array_free"), Some("gorget_array_clone"), None,
             CsResource(), CkVector(), BkNotBox(), false, None, true))
     # Deque__T → GorgetArray (same runtime, distinct collection kind so
     # downstream can pick double-ended ops without re-prefix-matching).
     if name.starts_with("Deque__"):
-        return Some(GirResourceMetadata(
-            "GorgetArray", 64, LT_STRUCT_BASE,
+        return Some(ResourceMetadata(
+            "GorgetArray", 64, LtStructBase(),
             Some("gorget_array_free"), Some("gorget_array_clone"), None,
             CsResource(), CkDeque(), BkNotBox(), false, None, true))
     # Heap__T → GorgetArray, but constructed via factory (`Heap.new()`),
     # not the `T(args)` constructor shape.
     if name.starts_with("Heap__"):
-        return Some(GirResourceMetadata(
-            "GorgetArray", 64, LT_STRUCT_BASE,
+        return Some(ResourceMetadata(
+            "GorgetArray", 64, LtStructBase(),
             Some("gorget_array_free"), Some("gorget_array_clone"), None,
             CsResource(), CkHeap(), BkNotBox(), false, None, false))
 
     # Dict__K__V / HashMap__K__V — user-code constructors (true);
     # GorgetDict__/GorgetMap__ are self-host mangled forms (false).
     if name.starts_with("Dict__") or name.starts_with("HashMap__"):
-        return Some(GirResourceMetadata(
-            "GorgetMap", 184, LT_STRUCT_BASE,
+        return Some(ResourceMetadata(
+            "GorgetMap", 184, LtStructBase(),
             Some("gorget_map_free"), Some("gorget_map_clone"), None,
             CsResource(), CkDict(), BkNotBox(), false, None, true))
     if name.starts_with("GorgetDict__") or name.starts_with("GorgetMap__"):
-        return Some(GirResourceMetadata(
-            "GorgetMap", 184, LT_STRUCT_BASE,
+        return Some(ResourceMetadata(
+            "GorgetMap", 184, LtStructBase(),
             Some("gorget_map_free"), Some("gorget_map_clone"), None,
             CsResource(), CkDict(), BkNotBox(), false, None, false))
 
     # Set__T / HashSet__T — user-code constructors (true);
     # GorgetSet__ is the self-host mangled form (false).
     if name.starts_with("Set__") or name.starts_with("HashSet__"):
-        return Some(GirResourceMetadata(
-            "GorgetSet", 184, LT_STRUCT_BASE,
+        return Some(ResourceMetadata(
+            "GorgetSet", 184, LtStructBase(),
             Some("gorget_set_free"), Some("gorget_set_clone"), None,
             CsResource(), CkSet(), BkNotBox(), false, None, true))
     if name.starts_with("GorgetSet__"):
-        return Some(GirResourceMetadata(
-            "GorgetSet", 184, LT_STRUCT_BASE,
+        return Some(ResourceMetadata(
+            "GorgetSet", 184, LtStructBase(),
             Some("gorget_set_free"), Some("gorget_set_clone"), None,
             CsResource(), CkSet(), BkNotBox(), false, None, false))
 
     # Box[T] — constructed via runtime alloc helper, not T() shape.
     if name.starts_with("Box__"):
-        return Some(GirResourceMetadata(
-            "Box", 8, LT_PTR,
+        return Some(ResourceMetadata(
+            "Box", 8, LtPtr(),
             None, None, None,
             CsResource(), CkNotCollection(), BkRegularBox(), false, None, false))
 
@@ -269,101 +303,101 @@ Option[GirResourceMetadata] build_resource_metadata(String name):
     # constructor shape (is_typed_constructor=true). Other opaque
     # families construct via `T.new()` factories instead.
     if name.starts_with("Mutex__"):
-        return Some(GirResourceMetadata(
-            "Ptr", 8, LT_PTR, None, None, None,
+        return Some(ResourceMetadata(
+            "Ptr", 8, LtPtr(), None, None, None,
             CsRefCounted(), CkNotCollection(), BkNotBox(), true,
             Some("gorget_mutex"), true))
     if name.starts_with("RWLock__"):
-        return Some(GirResourceMetadata(
-            "Ptr", 8, LT_PTR, None, None, None,
+        return Some(ResourceMetadata(
+            "Ptr", 8, LtPtr(), None, None, None,
             CsRefCounted(), CkNotCollection(), BkNotBox(), true,
             Some("gorget_rwlock"), true))
     if name.starts_with("Channel__"):
-        return Some(GirResourceMetadata(
-            "Ptr", 8, LT_PTR, None, None, None,
+        return Some(ResourceMetadata(
+            "Ptr", 8, LtPtr(), None, None, None,
             CsRefCounted(), CkNotCollection(), BkNotBox(), true,
             Some("gorget_channel"), true))
     if name.starts_with("Shared__"):
-        return Some(GirResourceMetadata(
-            "Ptr", 8, LT_PTR, None, None, None,
+        return Some(ResourceMetadata(
+            "Ptr", 8, LtPtr(), None, None, None,
             CsRefCounted(), CkNotCollection(), BkNotBox(), true,
             Some("gorget_shared"), true))
     # Other opaque parameterised families — factory construction shape.
     if name.starts_with("Weak__"):
-        return Some(GirResourceMetadata(
-            "Ptr", 8, LT_PTR, None, None, None,
+        return Some(ResourceMetadata(
+            "Ptr", 8, LtPtr(), None, None, None,
             CsRefCounted(), CkNotCollection(), BkNotBox(), true,
             Some("gorget_weak"), false))
     if name.starts_with("AtomicInt__"):
-        return Some(GirResourceMetadata(
-            "Ptr", 8, LT_PTR, None, None, None,
+        return Some(ResourceMetadata(
+            "Ptr", 8, LtPtr(), None, None, None,
             CsRefCounted(), CkNotCollection(), BkNotBox(), true,
             Some("gorget_atomic_int"), false))
     if name.starts_with("AtomicBool__"):
-        return Some(GirResourceMetadata(
-            "Ptr", 8, LT_PTR, None, None, None,
+        return Some(ResourceMetadata(
+            "Ptr", 8, LtPtr(), None, None, None,
             CsRefCounted(), CkNotCollection(), BkNotBox(), true,
             Some("gorget_atomic_bool"), false))
     if name.starts_with("Semaphore__"):
-        return Some(GirResourceMetadata(
-            "Ptr", 8, LT_PTR, None, None, None,
+        return Some(ResourceMetadata(
+            "Ptr", 8, LtPtr(), None, None, None,
             CsRefCounted(), CkNotCollection(), BkNotBox(), true,
             Some("gorget_semaphore"), false))
     if name.starts_with("Barrier__"):
-        return Some(GirResourceMetadata(
-            "Ptr", 8, LT_PTR, None, None, None,
+        return Some(ResourceMetadata(
+            "Ptr", 8, LtPtr(), None, None, None,
             CsRefCounted(), CkNotCollection(), BkNotBox(), true,
             Some("gorget_barrier"), false))
     if name.starts_with("OnceFlag__"):
-        return Some(GirResourceMetadata(
-            "Ptr", 8, LT_PTR, None, None, None,
+        return Some(ResourceMetadata(
+            "Ptr", 8, LtPtr(), None, None, None,
             CsRefCounted(), CkNotCollection(), BkNotBox(), true,
             Some("gorget_once_flag"), false))
     if name.starts_with("WaitGroup__"):
-        return Some(GirResourceMetadata(
-            "Ptr", 8, LT_PTR, None, None, None,
+        return Some(ResourceMetadata(
+            "Ptr", 8, LtPtr(), None, None, None,
             CsRefCounted(), CkNotCollection(), BkNotBox(), true,
             Some("gorget_wait_group"), false))
     if name.starts_with("TaskGroup__"):
-        return Some(GirResourceMetadata(
-            "Ptr", 8, LT_PTR, None, None, None,
+        return Some(ResourceMetadata(
+            "Ptr", 8, LtPtr(), None, None, None,
             CsRefCounted(), CkNotCollection(), BkNotBox(), true,
             Some("gorget_task_group"), false))
     if name.starts_with("Thread__"):
-        return Some(GirResourceMetadata(
-            "Ptr", 8, LT_PTR, None, None, None,
+        return Some(ResourceMetadata(
+            "Ptr", 8, LtPtr(), None, None, None,
             CsRefCounted(), CkNotCollection(), BkNotBox(), true, None, false))
 
     # Bare-name opaque handles (not parameterised). Method-prefix wiring
     # for these went through a different path historically (direct
     # method dispatch on bare names); leave method_prefix=None.
     if name == "Barrier" or name == "CondVar" or name == "AtomicInt" or name == "AtomicBool" or name == "Process" or name == "Thread" or name == "Semaphore" or name == "WaitGroup" or name == "OnceFlag":
-        return Some(GirResourceMetadata(
-            "Ptr", 8, LT_PTR, None, None, None,
+        return Some(ResourceMetadata(
+            "Ptr", 8, LtPtr(), None, None, None,
             CsRefCounted(), CkNotCollection(), BkNotBox(), true, None, false))
 
     # Guard structs — Read/Write variants get their dedicated prefix;
     # the bare Guard__ falls back to "gorget_guard".
     if name.starts_with("ReadGuard__"):
-        return Some(GirResourceMetadata(
-            "Guard", 16, LT_STRUCT_BASE, None, None, None,
+        return Some(ResourceMetadata(
+            "Guard", 16, LtStructBase(), None, None, None,
             CsResource(), CkNotCollection(), BkNotBox(), false,
             Some("gorget_read_guard"), false))
     if name.starts_with("WriteGuard__"):
-        return Some(GirResourceMetadata(
-            "Guard", 16, LT_STRUCT_BASE, None, None, None,
+        return Some(ResourceMetadata(
+            "Guard", 16, LtStructBase(), None, None, None,
             CsResource(), CkNotCollection(), BkNotBox(), false,
             Some("gorget_write_guard"), false))
     if name.starts_with("Guard__"):
-        return Some(GirResourceMetadata(
-            "Guard", 16, LT_STRUCT_BASE, None, None, None,
+        return Some(ResourceMetadata(
+            "Guard", 16, LtStructBase(), None, None, None,
             CsResource(), CkNotCollection(), BkNotBox(), false,
             Some("gorget_guard"), false))
 
     # Trait box: bare name (no monomorphisation suffix).
     if name == "Box":
-        return Some(GirResourceMetadata(
-            "Box", 8, LT_PTR, None, None, None,
+        return Some(ResourceMetadata(
+            "Box", 8, LtPtr(), None, None, None,
             CsResource(), CkNotCollection(), BkTraitBox(), false, None, false))
 
     # User struct/enum or unknown — caller treats as None.
@@ -372,7 +406,7 @@ Option[GirResourceMetadata] build_resource_metadata(String name):
 # Phase A — typed accessor. Consumers replace `name.starts_with("X__")`
 # dispatches with `match resource_meta_for(&gmod, name): case Some(rmeta): ...`
 # (See `docs/internals/self-host-resource-model.md` §3 / §3.4.)
-Option[GirResourceMetadata] resource_meta_for(GirModule &gmod, String name):
+Option[ResourceMetadata] resource_meta_for(GirModule &gmod, String name):
     return gmod.resource_metadata.get(name)
 
 # Phase A — typed accessor: read method_prefix off the metadata.
@@ -482,7 +516,7 @@ int map_gir_type(int type_id, GirModule &gmod, Dict[String, int] &sr):
                 return lir_struct(sid)
             # Phase A: typed accessor — read populated metadata from
             # the GirModule (populated once at lower_gir_to_lir entry).
-            Option[GirResourceMetadata] rmeta_opt = resource_meta_for(&gmod, name)
+            Option[ResourceMetadata] rmeta_opt = resource_meta_for(&gmod, name)
             match rmeta_opt:
                 case Some(rmeta):
                     int rt_sid = sr.get(rmeta.runtime_name).unwrap_or(-1)
