@@ -25,6 +25,7 @@ from lir import ABI_AUTO
 from lir import SCHED_POOL
 from lir import lir_fn_next_value, lir_fn_add_slot, lir_fn_add_block
 from lir import lir_mod_add_struct, lir_mod_add_function, new_lir_module
+from lower import get_fn_param_types
 from std.collections import Vector, Dict
 from std.conv import int_to_str
 from gir import ResourceMetadata
