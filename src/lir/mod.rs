@@ -395,6 +395,14 @@ pub enum ResourceKind {
     GorgetSet,
     /// Closure (`Callable[T(...)]` / `MutCallable[...]` / `ConsumeCallable[...]`).
     GorgetClosure,
+    /// Reference-counted opaque handle: `Box[T]`, `Shared[T]`, `Weak[T]`,
+    /// `Channel[T]`, `Mutex[T]`, `RWLock[T]`, `Guard[T]`, etc.
+    ///
+    /// These types have `CsRefCounted` copy-semantics in the resource schema
+    /// (`compiler/data/resources.gg`). The variant exists so downstream
+    /// passes can route them without re-deriving their kind from a mangled
+    /// name prefix (per layering-discipline rule 2 — no name matching).
+    RefCounted,
 }
 
 // ── Drop guard kind ───────────────────────────────────────────────────────
