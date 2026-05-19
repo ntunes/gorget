@@ -633,19 +633,20 @@ private void place_table(Dict[String, TomlValue] &root, Vector[String] tpath, in
         # Place at this level
         String final_key = tpath.get(idx).unwrap()
         if root.contains(final_key):
-            # Merge into existing table — entries from sec_data into existing
-            # Since we can't modify nested Dict in-place, we rebuild
-            TomlValue existing = root[final_key]
-            Dict[String, TomlValue] merged = merge_into(existing, sec_data)
+            # Merge into existing table — entries from sec_data into existing.
+            # The borrow into `root` is confined to `merge_into`'s param so
+            # `root` is no longer aliased by the time we re-`put`.
+            Dict[String, TomlValue] merged = merge_into(root[final_key], sec_data)
             root.put(final_key, Tbl(merged))
         else:
             root.put(final_key, Tbl(sec_data))
         return
-    # Need to navigate deeper — extract, recurse, put back
+    # Need to navigate deeper — extract, recurse, put back. `extract_tbl`
+    # returns an owned clone, so passing `root[nav_key]` inline keeps the
+    # borrow short-lived; `root` is no longer aliased when we `put` below.
     String nav_key = tpath.get(idx).unwrap()
     if root.contains(nav_key):
-        TomlValue existing = root[nav_key]
-        Dict[String, TomlValue] sub = extract_tbl(existing)
+        Dict[String, TomlValue] sub = extract_tbl(root[nav_key])
         place_table(&sub, tpath, idx + 1, !sec_data)
         root.put(nav_key, Tbl(sub))
     else:
@@ -657,9 +658,10 @@ private void place_aot(Dict[String, TomlValue] &root, Vector[String] tpath, Dict
     if tpath.len() == 1:
         String aot_key = tpath.get(0).unwrap()
         if root.contains(aot_key):
-            # Append to existing array
-            TomlValue existing = root[aot_key]
-            Vector[TomlValue] arr = extract_arr(existing)
+            # Append to existing array. `extract_arr` returns an owned clone,
+            # so the borrow of `root[aot_key]` dies at the call boundary —
+            # `root` is no longer aliased when we re-`put` below.
+            Vector[TomlValue] arr = extract_arr(root[aot_key])
             arr.push(Tbl(sec_data))
             root.put(aot_key, Arr(arr))
         else:
@@ -667,12 +669,12 @@ private void place_aot(Dict[String, TomlValue] &root, Vector[String] tpath, Dict
             new_arr.push(Tbl(sec_data))
             root.put(aot_key, Arr(new_arr))
         return
-    # Navigate to parent, recurse
+    # Navigate to parent, recurse. Same inline pattern: borrow into `root`
+    # lives only across `extract_tbl`, leaving `root` un-aliased for `put`.
     String nav_key = tpath.get(0).unwrap()
     Vector[String] rest_path = subpath(tpath, 1)
     if root.contains(nav_key):
-        TomlValue existing = root[nav_key]
-        Dict[String, TomlValue] sub = extract_tbl(existing)
+        Dict[String, TomlValue] sub = extract_tbl(root[nav_key])
         place_aot(&sub, rest_path, !sec_data)
         root.put(nav_key, Tbl(sub))
     else:
