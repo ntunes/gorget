@@ -199,6 +199,23 @@ Rules:
 
 This rule pairs with "Don't redesign around compiler gaps" — that one is about not creating new dodges; this one is about retiring old ones.
 
+## Multi-agent orchestration
+
+When you launch sub-agents via the `Agent` tool in this project, the following rules are **non-negotiable** — past sessions have repeatedly lost work because they were treated as suggestions:
+
+1. **Always pass `isolation: "worktree"`.** No exceptions. Omitting it means the agent runs in the main worktree and any `git stash` / `git reset --hard` / `git commit -a` it performs sweeps the parent conversation's uncommitted work into limbo. Even if past sessions observed worktree enforcement as "advisory" (the agent ignored it and ran in `/workspace/...` anyway), the explicit flag is still the first line of defense. Never skip it.
+
+2. **Brief the agent to verify its worktree on entry.** Open every agent prompt with:
+   > Run `pwd` and `git rev-parse --show-toplevel` FIRST and confirm both point inside your worktree. NEVER touch `/workspace/gorget-1` directly — every file operation, `cargo` command, and `git` command runs in your worktree path. Do NOT `cd` into `/workspace/gorget-1`. Do NOT use absolute paths starting with `/workspace/gorget-1/...`. If your `pwd` reports `/workspace/gorget-1`, STOP and report it back.
+
+3. **Stage explicitly by file name.** Brief every agent: `git add <specific files>` only — NEVER `git add -a`, `git add .`, or `git commit -a`. Other agents (and the parent) may have uncommitted work in the tree; a sweeping stage clobbers it.
+
+4. **Parent drives the integration sweep, not agents.** Brief every agent to run `cargo build` + `cargo test --lib` + targeted integration tests only. The 15-20 minute full `cargo test --test integration` is the parent's job; agents that try to wait for it stall and may be terminated mid-commit.
+
+5. **Brief disjoint file zones when running agents in parallel.** Tell each agent which files the other agents are touching. Even with worktree isolation, telling the agent to stay away from a specific area is cheap insurance.
+
+The failure mode when these rules slip is recoverable but ugly: working trees get contaminated, stashes accumulate mixed ownership, edits disappear into `stash@{N}` entries the parent can't easily attribute. The cost of fixing it after the fact is far higher than the cost of doing it right at launch.
+
 ## Task Continuity
 
 Maintain `TODO.md` and `DONE.md` at the project root to track work across plans and conversations.
