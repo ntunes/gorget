@@ -817,9 +817,12 @@ impl ModuleLoader {
 const PRELUDE_VARIANTS: &[&str] = &["Ok", "Error", "Some", "None"];
 
 /// Build a variant_name → enum_name map from a single module's non-generic enum definitions,
-/// excluding prelude names.
+/// excluding prelude names. Ambiguous variant names (defined on more than one
+/// enum in the same module) are excluded — same rationale as the multi-module
+/// builder; let the downstream resolver disambiguate from scrutinee type /
+/// expected type.
 fn build_variant_map_from_module(module: &Module) -> HashMap<String, String> {
-    let mut vm = HashMap::new();
+    let mut sightings: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
     for item in &module.items {
         if let Item::Enum(e) = &item.node {
             if e.generic_params.is_some() {
@@ -829,17 +832,55 @@ fn build_variant_map_from_module(module: &Module) -> HashMap<String, String> {
             for variant in &e.variants {
                 let vname = variant.node.name.node.clone();
                 if !PRELUDE_VARIANTS.contains(&vname.as_str()) {
-                    vm.insert(vname, enum_name.clone());
+                    sightings
+                        .entry(vname)
+                        .or_default()
+                        .insert(enum_name.clone());
                 }
             }
         }
     }
-    vm
+    sightings
+        .into_iter()
+        .filter_map(|(vname, enums)| {
+            if enums.len() == 1 {
+                enums.into_iter().next().map(|en| (vname, en))
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 /// Build a global variant_name → enum_name map from ALL modules (for cross-module qualification).
+///
+/// **Ambiguity handling.** When a variant name is defined on *more than one* enum
+/// across the merged set (e.g. both `Json` and `TomlValue` expose an `Arr`
+/// variant), qualifying the bare name to *either* enum is a layering violation:
+/// the loader has no idea which one the user meant at the use site. The
+/// downstream pattern-lowering and type-checking passes do — they know the
+/// scrutinee type / expected type — so leaving the variant un-qualified delegates
+/// the decision to them.
+///
+/// Concretely: ambiguous variant names are **excluded from the returned map**.
+/// `qualify_pattern` then leaves their paths at length 1, and
+/// `lower_pattern_condition` / `emit_pattern_bindings` resolve the enum from the
+/// scrutinee's static type (the existing `type_name(scrut_type)` branch that
+/// covers prelude variants). Bare `Arr(x)` constructor calls in expression
+/// position similarly stay unqualified and resolve through the typechecker's
+/// `decl_type_hint`-driven path.
+///
+/// Pre-fix behaviour was "first-writer-wins" which silently routed bare
+/// references to whichever module loaded first — a textbook
+/// `[layering-discipline]` rule-2 violation (resolving abstractions by
+/// identifier-string lookup, ignoring typed context). Surfaced by the
+/// gorget-conformance Phase 1 harness once it started importing both
+/// `xtd/json` and `xtd/toml` in the same program (see the 2026-05-19
+/// cross-module-method-resolution bug fixture).
 fn build_variant_map_from_all(modules: &[(PathBuf, String, Module)]) -> HashMap<String, String> {
-    let mut vm = HashMap::new();
+    // First pass: collect every (variant_name, enum_name) sighting so we can
+    // detect collisions before committing to a winner.
+    let mut sightings: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
     for (_, _, module) in modules {
         for item in &module.items {
             if let Item::Enum(e) = &item.node {
@@ -850,14 +891,26 @@ fn build_variant_map_from_all(modules: &[(PathBuf, String, Module)]) -> HashMap<
                 for variant in &e.variants {
                     let vname = variant.node.name.node.clone();
                     if !PRELUDE_VARIANTS.contains(&vname.as_str()) {
-                        // First-writer-wins: the defining module takes priority
-                        vm.entry(vname).or_insert_with(|| enum_name.clone());
+                        sightings
+                            .entry(vname)
+                            .or_default()
+                            .insert(enum_name.clone());
                     }
                 }
             }
         }
     }
-    vm
+    // Second pass: keep only the unambiguous entries.
+    sightings
+        .into_iter()
+        .filter_map(|(vname, enums)| {
+            if enums.len() == 1 {
+                enums.into_iter().next().map(|en| (vname, en))
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 /// Rewrite bare variant references in a module using the provided variant map.
@@ -1242,6 +1295,17 @@ fn qualify_pattern(pattern: &mut Spanned<Pattern>, vm: &HashMap<String, String>)
 /// are wrapped in an `Item::Module { path, items }` node that preserves module
 /// identity through the semantic pipeline. This allows the resolver to enforce
 /// per-module scoping and `private` visibility.
+///
+/// **Variant qualification scoping.** Bare-name variant references (`case Arr(x)`,
+/// `Arr(items)` constructor calls) are rewritten to qualified form *per module*
+/// using *only* that module's own enum definitions plus the cross-module
+/// **unambiguous** sightings. Variant names that collide across modules
+/// (e.g. `Arr` defined on both `Json` and `TomlValue`) are NOT auto-qualified —
+/// the downstream pattern-lowering / type-checking passes have the scrutinee
+/// type / expected type and can disambiguate. Per-module qualification means
+/// each module's *own* `case Arr(x)` always wins for its locally-defined enum,
+/// regardless of which other modules ship the same variant name elsewhere.
+/// See `build_variant_map_from_all` for the rationale.
 pub fn merge_modules(modules: Vec<(PathBuf, Vec<String>, String, Module, usize)>) -> Module {
     if modules.len() == 1 {
         // Single-file: build variant map from this module and qualify in-place.
@@ -1251,18 +1315,32 @@ pub fn merge_modules(modules: Vec<(PathBuf, Vec<String>, String, Module, usize)>
         return module;
     }
 
-    // Multi-file: build a global variant map from ALL modules for cross-module qualification.
-    // The variant map needs the raw (PathBuf, String, Module) triples, so extract them.
+    // Multi-file: each module qualifies bare variants using its OWN enum
+    // definitions first (so `xtd/toml.gg`'s `case Arr(x)` always picks
+    // `TomlValue.Arr`, even when `xtd/json.gg` is also loaded). On top of
+    // that we layer the unambiguous cross-module sightings — variant names
+    // defined on exactly one enum anywhere in the merged set — so modules
+    // that *use* a foreign enum's variants without defining them locally
+    // still get qualification. Ambiguous variants stay un-qualified and
+    // resolve via context downstream.
     let raw_for_vm: Vec<(PathBuf, String, Module)> = modules.iter()
         .map(|(p, _, s, m, _)| (p.clone(), s.clone(), m.clone()))
         .collect();
-    let global_vm = build_variant_map_from_all(&raw_for_vm);
+    let global_unambiguous = build_variant_map_from_all(&raw_for_vm);
 
     let mut all_items: Vec<Spanned<Item>> = Vec::new();
 
     for (i, (_path, logical_path, _source, mut module, _offset)) in modules.into_iter().enumerate() {
-        // Apply global qualification to every module (including entry).
-        qualify_module_with_map(&mut module, &global_vm);
+        // Per-module qualification: local enum defs override the global map
+        // (so each module gets its own bare-variant scoping back). Cross-
+        // module entries fill in only where the local module has nothing
+        // to say about that variant name.
+        let local_vm = build_variant_map_from_module(&module);
+        let mut effective_vm = global_unambiguous.clone();
+        for (vname, ename) in &local_vm {
+            effective_vm.insert(vname.clone(), ename.clone());
+        }
+        qualify_module_with_map(&mut module, &effective_vm);
         if i == 0 {
             // Entry file: keep all items at the top level (including its import statements,
             // so the resolver can register imported names into the global scope).
