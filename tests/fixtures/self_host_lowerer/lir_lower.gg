@@ -188,12 +188,8 @@ bool is_guard_struct_type(String name):
 
 # Iterate RESOURCES, match by Exact/Prefix.
 Option[ResourceMetadata] lookup_resource_table(String name):
-    int i = 0
-    while i < RESOURCES.len():
-        ResourceEntry entry = RESOURCES.get(i).unwrap()
-        int j = 0
-        while j < entry.match_on.len():
-            MatchKind mk = entry.match_on.get(j).unwrap()
+    for entry in RESOURCES:
+        for mk in entry.match_on:
             match mk:
                 case MkExact(s):
                     if name == s:
@@ -201,8 +197,6 @@ Option[ResourceMetadata] lookup_resource_table(String name):
                 case MkPrefix(p):
                     if name.starts_with(p):
                         return Some(entry.metadata.clone())
-            j += 1
-        i += 1
     return None
 
 Option[ResourceMetadata] build_resource_metadata(String name):
