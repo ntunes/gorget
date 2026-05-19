@@ -81,6 +81,28 @@ pub fn resolve_import_path(base: &Path, segments: &[String]) -> PathBuf {
     path.with_extension("gg")
 }
 
+/// Known "root namespaces" that resolve from the project root rather
+/// than the importing file's directory. Today: `compiler` (for
+/// `compiler/data/{schema,resources}.gg`). Add to this list when a new
+/// top-level compiler-data namespace appears (e.g. `compiler.diagnostics`).
+fn is_project_root_namespace(segments: &[String]) -> bool {
+    matches!(segments.first().map(String::as_str), Some("compiler"))
+}
+
+/// Walk up from `start` until we find an ancestor directory containing
+/// a subdirectory named `root_dir_name`. Returns that ancestor (the
+/// effective project root for resolving `<root_dir_name>.*` imports).
+fn find_project_root_for(start: &Path, root_dir_name: &str) -> Option<PathBuf> {
+    let mut cur: Option<&Path> = Some(start);
+    while let Some(d) = cur {
+        if d.join(root_dir_name).is_dir() {
+            return Some(d.to_path_buf());
+        }
+        cur = d.parent();
+    }
+    None
+}
+
 /// Extract all import paths from a parsed module.
 /// Returns `(dotted_path_segments, span)` for each import.
 pub fn extract_imports(module: &Module) -> Vec<(Vec<String>, Span)> {
@@ -716,6 +738,23 @@ impl ModuleLoader {
             } else {
                 file_path
             }
+        } else {
+            file_path
+        };
+
+        // Project-rooted imports: if the first segment is a known "root
+        // namespace" (today: `compiler`), walk up from the entry directory
+        // to find an ancestor containing a directory with that name, then
+        // resolve from there. Lets `from compiler.data.schema import …`
+        // work from any file under the project — the canonical
+        // compiler-data files live at `<project_root>/compiler/data/*.gg`
+        // regardless of where the importing file sits.
+        let file_path = if !file_path.exists() && is_project_root_namespace(segments) {
+            self.entry_base_dir.as_ref()
+                .and_then(|entry_dir| find_project_root_for(entry_dir, &segments[0]))
+                .map(|root| resolve_import_path(&root, segments))
+                .filter(|p| p.exists())
+                .unwrap_or(file_path)
         } else {
             file_path
         };

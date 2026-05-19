@@ -4,6 +4,8 @@ pub mod instructions;
 pub mod builder;
 pub mod lowering;
 pub mod printer;
+pub mod resource_schema;
+pub mod resources;
 pub mod transforms;
 pub mod validate;
 pub mod liveness;
