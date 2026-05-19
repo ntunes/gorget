@@ -9735,13 +9735,12 @@ static inline GorgetArray gorget_bytes_from_str(const char* s) {
     return arr;
 }
 
-// Convert Vector[uint8] to a null-terminated str
+// Convert Vector[uint8] to a Str. Uses length-aware copy so embedded NUL
+// bytes survive into the resulting Str (gorget_string_adopt would strlen
+// the buffer and truncate at the first '\0').
 static inline Str gorget_bytes_to_str(const GorgetArray* arr) {
     size_t len = arr->len;
-    char* s = (char*)GORGET_ALLOC(len + 1);
-    if (len > 0) memcpy(s, arr->data, len);
-    s[len] = '\0';
-    return gorget_string_adopt(s);
+    return str_alloc_copy((const char*)arr->data, len, __gorget_current_alloc);
 }
 
 // Validate that a Vector[uint8] contains well-formed UTF-8.
