@@ -180,13 +180,7 @@ pub fn map_stdlib_name(name: &str) -> Option<&'static str> {
         // CipherContext methods
         "CipherContext__encrypt" => "gorget_crypto_aes_ctr_encrypt",
         "CipherContext__decrypt" => "gorget_crypto_aes_ctr_decrypt",
-        // Regex free functions (compile+use+free wrappers)
-        "regex_compile" | "regex_compile_with" => "gorget_regex_compile",
-        "regex_is_match" => "gorget_regex_is_match_pat",
-        "regex_find" => "gorget_regex_find_pat",
-        "regex_match" => "gorget_regex_match",
-        "regex_find_all" => "gorget_regex_find_all",
-        "regex_replace" => "gorget_regex_replace_pat",
+        // (Regex free-fn shims removed — xtd.regex is pure Gorget now.)
         // Socket
         "socket_connect" => "gorget_socket_connect",
         "socket_listen" => "gorget_socket_listen",
@@ -218,18 +212,7 @@ pub fn map_stdlib_name(name: &str) -> Option<&'static str> {
         "hex_decode" => "gorget_hex_decode",
         "url_encode" => "gorget_url_encode",
         "url_decode" => "gorget_url_decode",
-        // Regex methods
-        "Regex__is_match" => "gorget_regex_is_match",
-        "Regex__find" => "gorget_regex_find",
-        "Regex__find_at" => "gorget_regex_find_at",
-        "Regex__find_all" => "gorget_regex_find_all",
-        "Regex__replace" => "gorget_regex_replace",
-        "Regex__split" | "Regex__splitn" => "gorget_regex_split",
-        "Regex__fullmatch" => "gorget_regex_fullmatch",
-        "Regex__groups" => "gorget_regex_groups",
-        "Regex__free" => "gorget_regex_free",
-        "Match__group" => "gorget_regex_match_group",
-        "Match__group_by_name" => "gorget_regex_match_group_by_name",
+        // (Regex method shims removed — xtd.regex is pure Gorget now.)
         // Allocator methods
         "Arena__bytes_used" => "gorget_arena_bytes_used",
         "Arena__checkpoint" => "gorget_arena_checkpoint",

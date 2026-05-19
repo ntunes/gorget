@@ -382,9 +382,8 @@ pub fn opaque_runtime_size(name: &str) -> Option<usize> {
         // 32 + 32 + 8 = 72 bytes. Previous 48 here truncated the memcpy back from
         // process_read_all's sret buffer, leaving exit_code uninitialized.
         "ExecResult" => 72,
-        // Regex — see c_runtime.rs GorgetRegexMatch.
-        "Regex" => 16,       // {pcre2_code*, const char* pattern}
-        "Match" | "RegexMatch" => 56, // {text, start, end, groups, count, names, names_len}
+        // Regex/Match are now pure-Gorget structs (lib/xtd/regex.gg) — no
+        // runtime-layout entry; the normal user-struct size path handles them.
         // Allocators — each has its own fixed layout.
         "Arena" => 64,       // fields vary; treat as 64-byte allocator handle
         "ArenaCheckpoint" => 16,
@@ -426,21 +425,8 @@ pub fn opaque_runtime_size(name: &str) -> Option<usize> {
 /// Keep this in sync with the runtime's actual C struct definitions.
 pub fn opaque_runtime_layout(name: &str) -> Option<Vec<LirType>> {
     match name {
-        // GorgetRegex = { pcre2_code* code, const char* pattern_str }.
-        // Returned by value from gorget_regex_compile; AArch64 ABI passes
-        // it through (x0, x1) when the LLVM type matches `{ ptr, ptr }`.
-        "Regex" => Some(vec![LirType::Ptr, LirType::Ptr]),
-        // GorgetRegexMatch = 7 × 8 bytes = 56 bytes:
-        //   { const char* text, int64_t start, int64_t end_pos,
-        //     const char** groups, int64_t group_count,
-        //     const char** group_names, int64_t names_len }
-        // Returned by value from gorget_regex_find / find_at / fullmatch.
-        // Too big for register pairs — needs sret, but LLVM still has to
-        // know the field shape so memcpy / GEP arithmetic stays correct.
-        "Match" | "RegexMatch" => Some(vec![
-            LirType::Ptr, LirType::I64, LirType::I64,
-            LirType::Ptr, LirType::I64, LirType::Ptr, LirType::I64,
-        ]),
+        // No runtime opaque structs need explicit field layout right now.
+        // (Regex/Match were here when xtd.regex was a PCRE2 wrapper.)
         _ => None,
     }
 }

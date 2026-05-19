@@ -597,12 +597,7 @@ pub(super) fn trait_box_str_arg_positions(module: &LirModule, name: &str) -> Vec
 /// These need to be wrapped into `Option<Str>` when the destination type is Option.
 #[allow(dead_code)]
 pub(super) fn is_nullable_cstr_fn(name: &str) -> bool {
-    matches!(
-        name,
-        "gorget_regex_match_group"
-            | "gorget_regex_match_group_by_name"
-            | "gorget_getenv"
-    )
+    matches!(name, "gorget_getenv")
 }
 
 /// Functions that return a nullable pointer (NULL = None, non-NULL = Some(value)).
@@ -612,14 +607,11 @@ pub(super) fn is_nullable_ptr_fn(name: &str) -> bool {
     name.starts_with("Weak__") && name.ends_with("__upgrade")
 }
 
-/// Functions that return a sentinel value indicating "no result" — e.g., GorgetRegexMatch
-/// with start==-1 means no match. These need wrapping into Option<T>.
-pub(super) fn is_sentinel_option_fn(name: &str) -> bool {
-    matches!(
-        name,
-        "gorget_regex_find" | "gorget_regex_find_at" | "gorget_regex_find_pat"
-            | "gorget_regex_fullmatch"
-    )
+/// Functions that return a sentinel value indicating "no result". Empty now —
+/// the old gorget_regex_find family routed through this when xtd.regex was a
+/// PCRE2 wrapper. The pure-Gorget engine handles its own Option wrapping.
+pub(super) fn is_sentinel_option_fn(_name: &str) -> bool {
+    false
 }
 /// Returns true if the collection runtime function returns `void*` (pointer to element).
 /// The caller must dereference the result to the concrete element type.
@@ -915,9 +907,6 @@ pub(super) fn last_error_fn(name: &str) -> Option<&'static str> {
     }
     if name.starts_with("gorget_tls_") {
         return Some("gorget_tls_last_error");
-    }
-    if name.starts_with("gorget_regex_") {
-        return Some("gorget_regex_last_error");
     }
     if name.starts_with("gorget_crypto_") {
         return Some("gorget_crypto_last_error");
@@ -1749,7 +1738,6 @@ pub(super) fn runtime_fn_return_struct(name: &str) -> Option<&'static str> {
         | "gorget_str_cat" | "gorget_string_format"
         | "gorget_string_format_alloc" => Some("GorgetString"),
         "gorget_file_open" => Some("GorgetFile"),
-        "gorget_regex_compile" => Some("Regex"),
         _ => None,
     }
 }

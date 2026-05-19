@@ -403,7 +403,6 @@ fn infer_call_extern_type(
         | "gorget_str_splitn"
         | "gorget_map_items" | "gorget_map_keys" | "gorget_map_values"
         | "gorget_set_to_array"
-        | "gorget_regex_find_all" | "gorget_regex_split"
         | "gorget_bytes_concat" | "gorget_bytes_from_hex" | "gorget_bytes_from_str"
         | "gorget_bytes_slice" => Some("GorgetArray"),
         "gorget_map_new" | "gorget_map_clone" | "gorget_map_new_like" | "gorget_map_new_str"
@@ -431,7 +430,6 @@ fn infer_call_extern_type(
         | "gorget_str_from_int" | "gorget_str_from_literal"
         | "gorget_str_removeprefix" | "gorget_str_removesuffix"
         | "gorget_process_read_stdout" | "gorget_process_read_stderr"
-        | "gorget_regex_replace"
         | "gorget_bytes_to_hex" | "gorget_bytes_to_str" | "gorget_read_file" => Some("GorgetString"),
         "gorget_file_open" => Some("GorgetFile"),
         _ => None,

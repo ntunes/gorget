@@ -930,7 +930,10 @@ mod tests {
         assert!(fn_names.contains(&"regex_is_match".to_string()));
         assert!(fn_names.contains(&"regex_find".to_string()));
         assert!(fn_names.contains(&"regex_replace".to_string()));
-        assert_eq!(equip_count, 2); // Regex + Match
+        // Public API equips: Regex, Match. Internal helper equips:
+        // RxParser, Compiler (parser + Thompson-construction compiler for
+        // the pure-Gorget RE2-class engine). 4 total.
+        assert_eq!(equip_count, 4);
     }
 
     #[test]

@@ -548,11 +548,6 @@ impl<'a> FuncLowering<'a> {
                     } else {
                         emit_name
                     };
-                    // gorget_regex_find/split take 3 args but GIR only passes 2 — inject default 0
-                    if (emit_name == "gorget_regex_find" || emit_name == "gorget_regex_split") && lir_args.len() == 2 {
-                        let zero_val = self.emit_i64_const(bb, 0);
-                        lir_args.push(zero_val);
-                    }
                     // Same VoidElem-driven wrap as the CallExtern path above —
                     // monomorphized collection methods like
                     // `Vector__Callable__push` land here (not via func_index)

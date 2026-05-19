@@ -1,93 +1,1324 @@
-# xtd.regex — Regular expressions (PCRE2)
+# xtd.regex — Pure-Gorget RE2-class regular expressions
+#
+# This is a Thompson-NFA + PikeVM engine. It is NOT PCRE-compatible.
+# Out of scope: backreferences, lookahead/lookbehind, atomic groups,
+# possessive quantifiers, `\p{...}` Unicode property classes. The
+# parser rejects these with a clear "not supported" message.
+#
+# In scope: literals, alternation `|`, `*`/`+`/`?`/`{n,m}` (greedy and
+# non-greedy), capture groups including `(?P<name>...)` and `(?:...)`,
+# character classes `[...]` and `[^...]` with ranges, anchors `^`,
+# `$`, `\A`, `\z`, `\b`, `\B`, escapes `\d\w\s\D\W\S\n\t\r\f\v\0`,
+# inline flag prefix `(?i)`.
+#
+# Matching is byte-level. `\w`/`\d`/`\s` are ASCII-only — matching
+# RE2/Go default semantics. Case-insensitive matching (`i` flag)
+# folds ASCII A-Z ↔ a-z only.
 
-from std.collections import Vector
+from std.collections import Vector, Dict, Box
+from std.conv import int_to_str
+
+# ─────────────────────────────────────────────────────────────
+# AST
+# ─────────────────────────────────────────────────────────────
+
+# A character class is a vector of (lo, hi) byte ranges (inclusive)
+# plus a negation flag. Ranges are normalized after parsing so the VM
+# can do simple range checks.
+struct CharRange:
+    int lo
+    int hi
+
+struct CharClass:
+    Vector[CharRange] ranges
+    bool negated
+
+# Anchor kinds. We encode all in one enum so the AST stays narrow.
+#   StartLine  ^      (line-start when multiline flag set, else input-start)
+#   EndLine    $      (line-end when multiline flag set, else input-end)
+#   StartText  \A     (always input-start)
+#   EndText    \z     (always input-end)
+#   WordBound  \b
+#   NotWordBound  \B
+enum AnchorKind:
+    StartLine
+    EndLine
+    StartText
+    EndText
+    WordBound
+    NotWordBound
+
+enum RxNode:
+    Empty
+    Literal(int)              # single byte (0..255)
+    AnyByte                   # `.` — matches any byte except \n (no /s flag in v1)
+    Class(CharClass)
+    Concat(Vector[RxNode])    # Vector[T] is heap-indirected so this is fine
+    Alt(Vector[RxNode])
+    Star(Box[RxNode], bool)        # (inner, greedy)
+    Plus(Box[RxNode], bool)
+    Question(Box[RxNode], bool)
+    Repeat(Box[RxNode], int, int, bool)   # (inner, min, max, greedy); max=-1 means unbounded
+    Group(int, String, Box[RxNode])       # (capture_index, name_or_empty, inner)
+    Anchor(AnchorKind)
+
+# ─────────────────────────────────────────────────────────────
+# Parser
+# ─────────────────────────────────────────────────────────────
+
+# Flag bits — also stored on the compiled Program.
+const int FLAG_CASE_INSENSITIVE = 1
+
+struct RxParser:
+    String src
+    int pos
+    int flags
+    int next_capture           # next capture group index to assign
+    Vector[String] cap_names   # parallel to capture indices; "" if unnamed
+    String err
+
+equip RxParser:
+    bool failed(self): self.err != ""
+
+    void fail(&self, String msg):
+        if self.err == "":
+            self.err = !msg
+
+    bool at_end(self): self.pos >= self.src.byte_len()
+
+    int peek(self):
+        if self.at_end():
+            return -1
+        return self.src.byte_at(self.pos) as int
+
+    int peek_at(self, int off):
+        int p = self.pos + off
+        if p >= self.src.byte_len() or p < 0:
+            return -1
+        return self.src.byte_at(p) as int
+
+    void advance(&self):
+        self.pos = self.pos + 1
+
+    # Top-level entry: returns the root node.
+    RxNode parse_root(&self):
+        # Optional inline flag prefix (?i) — must be at very start.
+        if self.peek() == b'(' as int and self.peek_at(1) == b'?' as int:
+            int saved = self.pos
+            # Try to scan flags until ')'.
+            self.advance()  # '('
+            self.advance()  # '?'
+            int set_flags = 0
+            bool saw_any = false
+            while not self.at_end() and self.peek() != b')' as int:
+                int c = self.peek()
+                if c == b'i' as int:
+                    set_flags = set_flags | FLAG_CASE_INSENSITIVE
+                    saw_any = true
+                    self.advance()
+                else:
+                    # Not a flag we recognize — bail and let normal group parsing handle it.
+                    self.pos = saved
+                    saw_any = false
+                    break
+            if saw_any:
+                if self.peek() == b')' as int:
+                    self.advance()
+                    self.flags = self.flags | set_flags
+                else:
+                    self.pos = saved
+        RxNode root = self.parse_alt()
+        if not self.failed() and not self.at_end():
+            int c = self.peek()
+            if c == b')' as int:
+                self.fail("unmatched )")
+            else:
+                self.fail("trailing junk in pattern")
+        return root
+
+    RxNode parse_alt(&self):
+        RxNode first = self.parse_concat()
+        if self.failed():
+            return first
+        if self.peek() != b'|' as int:
+            return first
+        Vector[RxNode] alts = Vector[RxNode]()
+        alts.push(!first)
+        while self.peek() == b'|' as int:
+            self.advance()
+            RxNode nxt = self.parse_concat()
+            if self.failed():
+                return Empty()
+            alts.push(!nxt)
+        return Alt(!alts)
+
+    RxNode parse_concat(&self):
+        Vector[RxNode] parts = Vector[RxNode]()
+        while not self.at_end():
+            int c = self.peek()
+            if c == b'|' as int or c == b')' as int:
+                break
+            RxNode atom = self.parse_quantified()
+            if self.failed():
+                return Empty()
+            parts.push(!atom)
+        if parts.len() == 0:
+            return Empty()
+        if parts.len() == 1:
+            # Move single element out.
+            RxNode only = parts[0].clone()
+            return only
+        return Concat(!parts)
+
+    RxNode parse_quantified(&self):
+        RxNode atom = self.parse_atom()
+        if self.failed():
+            return atom
+        if self.at_end():
+            return atom
+        int c = self.peek()
+        if c == b'*' as int:
+            self.advance()
+            bool greedy = true
+            if self.peek() == b'?' as int:
+                greedy = false
+                self.advance()
+            return Star(Box.new(!atom), greedy)
+        if c == b'+' as int:
+            self.advance()
+            bool greedy = true
+            if self.peek() == b'?' as int:
+                greedy = false
+                self.advance()
+            return Plus(Box.new(!atom), greedy)
+        if c == b'?' as int:
+            self.advance()
+            bool greedy = true
+            if self.peek() == b'?' as int:
+                greedy = false
+                self.advance()
+            return Question(Box.new(!atom), greedy)
+        if c == b'{' as int:
+            int saved = self.pos
+            self.advance()
+            int mn = self.parse_int()
+            if self.failed():
+                # Not a valid repeat — treat '{' literally (lenient).
+                self.err = ""
+                self.pos = saved
+                return atom
+            int mx = mn
+            if self.peek() == b',' as int:
+                self.advance()
+                if self.peek() == b'}' as int:
+                    mx = -1
+                else:
+                    mx = self.parse_int()
+                    if self.failed():
+                        self.err = ""
+                        self.pos = saved
+                        return atom
+            if self.peek() != b'}' as int:
+                self.err = ""
+                self.pos = saved
+                return atom
+            self.advance()
+            bool greedy = true
+            if self.peek() == b'?' as int:
+                greedy = false
+                self.advance()
+            if mx >= 0 and mn > mx:
+                self.fail("invalid repeat: min > max")
+                return Empty()
+            return Repeat(Box.new(!atom), mn, mx, greedy)
+        return atom
+
+    int parse_int(&self):
+        int start = self.pos
+        int val = 0
+        while not self.at_end():
+            int c = self.peek()
+            if c < b'0' as int or c > b'9' as int:
+                break
+            val = val * 10 + (c - b'0' as int)
+            self.advance()
+        if self.pos == start:
+            self.fail("expected integer")
+            return 0
+        return val
+
+    RxNode parse_atom(&self):
+        if self.at_end():
+            return Empty()
+        int c = self.peek()
+        if c == b'(' as int:
+            return self.parse_group()
+        if c == b'[' as int:
+            return self.parse_char_class()
+        if c == b'.' as int:
+            self.advance()
+            return AnyByte()
+        if c == b'^' as int:
+            self.advance()
+            return Anchor(StartLine())
+        if c == b'$' as int:
+            self.advance()
+            return Anchor(EndLine())
+        if c == b'\\' as int:
+            return self.parse_escape_atom()
+        if c == b')' as int or c == b'|' as int:
+            return Empty()
+        # Forbidden: bare quantifier (e.g. starts with '*')
+        if c == b'*' as int or c == b'+' as int or c == b'?' as int:
+            self.fail("nothing to repeat")
+            return Empty()
+        # Literal byte.
+        self.advance()
+        return Literal(c)
+
+    RxNode parse_group(&self):
+        # '(' already at peek.
+        self.advance()
+        bool capture = true
+        String name = ""
+        # Inspect (?: , (?P<name> , and detect unsupported (?= (?! (?<= (?<!
+        if self.peek() == b'?' as int:
+            int la = self.peek_at(1)
+            if la == b':' as int:
+                self.advance(); self.advance()
+                capture = false
+            elif la == b'P' as int and self.peek_at(2) == b'<' as int:
+                self.advance(); self.advance(); self.advance()
+                # Read name until '>'.
+                int name_start = self.pos
+                while not self.at_end() and self.peek() != b'>' as int:
+                    self.advance()
+                if self.at_end():
+                    self.fail("unterminated group name")
+                    return Empty()
+                name = self.src.byte_slice(name_start, self.pos)
+                self.advance()  # consume '>'
+                capture = true
+            elif la == b'=' as int or la == b'!' as int:
+                self.fail("lookaround (?=...) / (?!...) not supported")
+                return Empty()
+            elif la == b'<' as int:
+                self.fail("lookaround (?<=...) / (?<!...) not supported")
+                return Empty()
+            elif la == b'i' as int or la == b'm' as int or la == b's' as int:
+                # Inline flag mid-pattern — out of v1 (we only support (?i) at start).
+                self.fail("inline flags only supported at pattern start")
+                return Empty()
+            else:
+                self.fail("unrecognized group syntax")
+                return Empty()
+        int idx = -1
+        if capture:
+            idx = self.next_capture
+            self.next_capture = self.next_capture + 1
+            self.cap_names.push(name)
+        RxNode inner = self.parse_alt()
+        if self.failed():
+            return Empty()
+        if self.peek() != b')' as int:
+            self.fail("missing )")
+            return Empty()
+        self.advance()
+        if capture:
+            return Group(idx, name, Box.new(!inner))
+        return inner
+
+    RxNode parse_char_class(&self):
+        self.advance()  # consume '['
+        bool negated = false
+        if self.peek() == b'^' as int:
+            negated = true
+            self.advance()
+        Vector[CharRange] ranges = Vector[CharRange]()
+        # First char: ']' is literal if it's the very first.
+        bool first = true
+        while not self.at_end():
+            int c = self.peek()
+            if c == b']' as int and not first:
+                self.advance()
+                return Class(CharClass(ranges.clone(), negated))
+            first = false
+            int lo = 0
+            if c == b'\\' as int:
+                # An escape inside a class.
+                self.advance()
+                if self.at_end():
+                    self.fail("dangling backslash in class")
+                    return Empty()
+                int e = self.peek()
+                self.advance()
+                # Class-shorthand: \d \w \s and uppercase complements.
+                if e == b'd' as int:
+                    ranges.push(CharRange(b'0' as int, b'9' as int))
+                    continue
+                if e == b'D' as int:
+                    # Negation across the whole class — express by adding the complement.
+                    # For simplicity, push the inverse explicitly: [^0-9] ranges within this class.
+                    # We can't easily mix-and-match positive/negative inside a class; for v1
+                    # we expand \D to "everything except 0-9".
+                    ranges.push(CharRange(0, b'0' as int - 1))
+                    ranges.push(CharRange(b'9' as int + 1, 255))
+                    continue
+                if e == b'w' as int:
+                    ranges.push(CharRange(b'0' as int, b'9' as int))
+                    ranges.push(CharRange(b'A' as int, b'Z' as int))
+                    ranges.push(CharRange(b'a' as int, b'z' as int))
+                    ranges.push(CharRange(b'_' as int, b'_' as int))
+                    continue
+                if e == b'W' as int:
+                    # Complement of \w: all bytes that are not [0-9A-Za-z_].
+                    ranges.push(CharRange(0, b'0' as int - 1))
+                    ranges.push(CharRange(b'9' as int + 1, b'A' as int - 1))
+                    ranges.push(CharRange(b'Z' as int + 1, b'_' as int - 1))
+                    ranges.push(CharRange(b'_' as int + 1, b'a' as int - 1))
+                    ranges.push(CharRange(b'z' as int + 1, 255))
+                    continue
+                if e == b's' as int:
+                    ranges.push(CharRange(b' ' as int, b' ' as int))
+                    ranges.push(CharRange(b'\t' as int, b'\t' as int))
+                    ranges.push(CharRange(b'\n' as int, b'\n' as int))
+                    ranges.push(CharRange(b'\r' as int, b'\r' as int))
+                    ranges.push(CharRange(11, 11))  # \v
+                    ranges.push(CharRange(12, 12))  # \f
+                    continue
+                if e == b'S' as int:
+                    # Everything except whitespace.
+                    ranges.push(CharRange(0, 8))
+                    ranges.push(CharRange(13, 31))      # skip 9 (\t), 10 (\n), 11 (\v), 12 (\f)
+                    ranges.push(CharRange(14, 31))
+                    ranges.push(CharRange(33, 255))     # skip 32 (' ')
+                    continue
+                if e == b'n' as int:
+                    lo = b'\n' as int
+                elif e == b't' as int:
+                    lo = b'\t' as int
+                elif e == b'r' as int:
+                    lo = b'\r' as int
+                elif e == b'f' as int:
+                    lo = 12
+                elif e == b'v' as int:
+                    lo = 11
+                elif e == b'0' as int:
+                    lo = 0
+                elif e == b'p' as int or e == b'P' as int:
+                    self.fail("\\p{...} Unicode property classes not supported")
+                    return Empty()
+                else:
+                    lo = e
+            else:
+                self.advance()
+                lo = c
+            int hi = lo
+            # Range like a-z.
+            if self.peek() == b'-' as int and self.peek_at(1) != b']' as int and self.peek_at(1) != -1:
+                self.advance()  # '-'
+                int nc = self.peek()
+                if nc == b'\\' as int:
+                    self.advance()
+                    if self.at_end():
+                        self.fail("dangling backslash in class")
+                        return Empty()
+                    int e2 = self.peek()
+                    self.advance()
+                    if e2 == b'n' as int:
+                        hi = b'\n' as int
+                    elif e2 == b't' as int:
+                        hi = b'\t' as int
+                    elif e2 == b'r' as int:
+                        hi = b'\r' as int
+                    elif e2 == b'f' as int:
+                        hi = 12
+                    elif e2 == b'v' as int:
+                        hi = 11
+                    elif e2 == b'0' as int:
+                        hi = 0
+                    else:
+                        hi = e2
+                else:
+                    self.advance()
+                    hi = nc
+                if lo > hi:
+                    self.fail("invalid character class range")
+                    return Empty()
+            ranges.push(CharRange(lo, hi))
+        self.fail("unterminated character class")
+        return Empty()
+
+    RxNode parse_escape_atom(&self):
+        self.advance()  # consume '\'
+        if self.at_end():
+            self.fail("dangling backslash")
+            return Empty()
+        int e = self.peek()
+        self.advance()
+        # Anchors
+        if e == b'A' as int:
+            return Anchor(StartText())
+        if e == b'z' as int:
+            return Anchor(EndText())
+        if e == b'b' as int:
+            return Anchor(WordBound())
+        if e == b'B' as int:
+            return Anchor(NotWordBound())
+        # Character class shorthands
+        if e == b'd' as int:
+            Vector[CharRange] rd = Vector[CharRange]()
+            rd.push(CharRange(b'0' as int, b'9' as int))
+            return Class(CharClass(!rd, false))
+        if e == b'D' as int:
+            Vector[CharRange] rd = Vector[CharRange]()
+            rd.push(CharRange(b'0' as int, b'9' as int))
+            return Class(CharClass(!rd, true))
+        if e == b'w' as int:
+            Vector[CharRange] rw = Vector[CharRange]()
+            rw.push(CharRange(b'0' as int, b'9' as int))
+            rw.push(CharRange(b'A' as int, b'Z' as int))
+            rw.push(CharRange(b'a' as int, b'z' as int))
+            rw.push(CharRange(b'_' as int, b'_' as int))
+            return Class(CharClass(!rw, false))
+        if e == b'W' as int:
+            Vector[CharRange] rw = Vector[CharRange]()
+            rw.push(CharRange(b'0' as int, b'9' as int))
+            rw.push(CharRange(b'A' as int, b'Z' as int))
+            rw.push(CharRange(b'a' as int, b'z' as int))
+            rw.push(CharRange(b'_' as int, b'_' as int))
+            return Class(CharClass(!rw, true))
+        if e == b's' as int:
+            Vector[CharRange] rs = Vector[CharRange]()
+            rs.push(CharRange(b' ' as int, b' ' as int))
+            rs.push(CharRange(b'\t' as int, b'\t' as int))
+            rs.push(CharRange(b'\n' as int, b'\n' as int))
+            rs.push(CharRange(b'\r' as int, b'\r' as int))
+            rs.push(CharRange(11, 11))
+            rs.push(CharRange(12, 12))
+            return Class(CharClass(!rs, false))
+        if e == b'S' as int:
+            Vector[CharRange] rs = Vector[CharRange]()
+            rs.push(CharRange(b' ' as int, b' ' as int))
+            rs.push(CharRange(b'\t' as int, b'\t' as int))
+            rs.push(CharRange(b'\n' as int, b'\n' as int))
+            rs.push(CharRange(b'\r' as int, b'\r' as int))
+            rs.push(CharRange(11, 11))
+            rs.push(CharRange(12, 12))
+            return Class(CharClass(!rs, true))
+        # Single-char escapes
+        if e == b'n' as int:
+            return Literal(b'\n' as int)
+        if e == b't' as int:
+            return Literal(b'\t' as int)
+        if e == b'r' as int:
+            return Literal(b'\r' as int)
+        if e == b'f' as int:
+            return Literal(12)
+        if e == b'v' as int:
+            return Literal(11)
+        if e == b'0' as int:
+            return Literal(0)
+        # Backref \1..\9 — not supported in v1.
+        if e >= b'1' as int and e <= b'9' as int:
+            self.fail("backreferences (\\1..\\9) not supported")
+            return Empty()
+        if e == b'p' as int or e == b'P' as int:
+            self.fail("\\p{...} Unicode property classes not supported")
+            return Empty()
+        if e == b'k' as int:
+            self.fail("named backreferences \\k<...> not supported")
+            return Empty()
+        # Default: literal escape of the character.
+        return Literal(e)
+
+# ─────────────────────────────────────────────────────────────
+# Compiler — Thompson construction → bytecode
+# ─────────────────────────────────────────────────────────────
+
+# Instruction opcodes. We encode each instruction as a struct with all
+# fields; only the relevant ones for each opcode are used.
+#   OP_CHAR    a == byte value
+#   OP_CLASS   a == index into Program.classes
+#   OP_ANYBYTE no operands (matches any byte except '\n')
+#   OP_MATCH   end of program — terminal
+#   OP_JMP     a == target pc
+#   OP_SPLIT   a == greedy-preferred pc, b == alternate pc
+#   OP_SAVE    a == capture slot index
+#   OP_ANCHOR  a == AnchorKind ordinal (0..5)
+const int OP_CHAR = 0
+const int OP_CLASS = 1
+const int OP_ANYBYTE = 2
+const int OP_MATCH = 3
+const int OP_JMP = 4
+const int OP_SPLIT = 5
+const int OP_SAVE = 6
+const int OP_ANCHOR = 7
+
+const int ANCHOR_START_LINE = 0
+const int ANCHOR_END_LINE = 1
+const int ANCHOR_START_TEXT = 2
+const int ANCHOR_END_TEXT = 3
+const int ANCHOR_WORD_BOUND = 4
+const int ANCHOR_NOT_WORD_BOUND = 5
+
+struct Inst:
+    int op
+    int a
+    int b
+
+struct Program:
+    Vector[Inst] insts
+    Vector[CharClass] classes
+    int num_captures        # number of capturing groups (group 0 is the whole match)
+    Vector[String] cap_names
+    int flags
+    String pattern
+
+# Helper — capture name index lookup. Dict[String,int] without rebuild risk.
+int program_group_index(Program p, String name):
+    int k = 0
+    while k < p.cap_names.len():
+        if p.cap_names[k] == name:
+            return k
+        k = k + 1
+    return -1
+
+struct Compiler:
+    Vector[Inst] insts
+    Vector[CharClass] classes
+    int flags
+
+equip Compiler:
+    int emit(&self, int op, int a, int b):
+        int pc = self.insts.len()
+        self.insts.push(Inst(op, a, b))
+        return pc
+
+    int here(self): self.insts.len()
+
+    void patch(&self, int pc, int field, int value):
+        # field 0 = a, field 1 = b
+        Inst cur = self.insts[pc].clone()
+        if field == 0:
+            cur.a = value
+        else:
+            cur.b = value
+        self.insts[pc] = cur
+
+    int add_class(&self, CharClass c):
+        int idx = self.classes.len()
+        self.classes.push(c)
+        return idx
+
+    void compile_node(&self, RxNode node):
+        match node:
+            case Empty():
+                pass
+            case Literal(b):
+                int bb = b
+                if (self.flags & FLAG_CASE_INSENSITIVE) != 0 and is_ascii_letter(bb):
+                    # Expand to a 2-byte class.
+                    int lo = ascii_to_lower(bb)
+                    int hi = ascii_to_upper(bb)
+                    Vector[CharRange] rs = Vector[CharRange]()
+                    rs.push(CharRange(lo, lo))
+                    rs.push(CharRange(hi, hi))
+                    int ci = self.add_class(CharClass(!rs, false))
+                    self.emit(OP_CLASS, ci, 0)
+                else:
+                    self.emit(OP_CHAR, bb, 0)
+            case AnyByte():
+                self.emit(OP_ANYBYTE, 0, 0)
+            case Class(cc):
+                CharClass folded = cc.clone()
+                if (self.flags & FLAG_CASE_INSENSITIVE) != 0:
+                    folded = case_fold_class(folded)
+                int ci = self.add_class(folded)
+                self.emit(OP_CLASS, ci, 0)
+            case Anchor(kind):
+                int code = anchor_code(kind)
+                self.emit(OP_ANCHOR, code, 0)
+            case Concat(parts):
+                int i = 0
+                while i < parts.len():
+                    self.compile_node(parts[i].clone())
+                    i = i + 1
+            case Alt(alts):
+                self.compile_alt(alts)
+            case Star(inner, greedy):
+                self.compile_star(*inner, greedy)
+            case Plus(inner, greedy):
+                self.compile_plus(*inner, greedy)
+            case Question(inner, greedy):
+                self.compile_question(*inner, greedy)
+            case Repeat(inner, mn, mx, greedy):
+                self.compile_repeat(*inner, mn, mx, greedy)
+            case Group(idx, _, inner):
+                self.emit(OP_SAVE, idx * 2, 0)
+                self.compile_node(*inner)
+                self.emit(OP_SAVE, idx * 2 + 1, 0)
+
+    void compile_alt(&self, Vector[RxNode] alts):
+        # For n alts: chain SPLITs.
+        # split L1, L2 ; <alt0> ; jmp END ; L1: <alt1> ; jmp END ; ... ; END:
+        # We emit pairwise.
+        Vector[int] end_jmps = Vector[int]()
+        int n = alts.len()
+        int i = 0
+        while i < n - 1:
+            int sp = self.emit(OP_SPLIT, 0, 0)
+            int a_start = self.here()
+            self.patch(sp, 0, a_start)
+            self.compile_node(alts[i].clone())
+            int j = self.emit(OP_JMP, 0, 0)
+            end_jmps.push(j)
+            int b_start = self.here()
+            self.patch(sp, 1, b_start)
+            i = i + 1
+        # Final alt — no split, no following jmp.
+        self.compile_node(alts[n - 1].clone())
+        int end_pc = self.here()
+        int k = 0
+        while k < end_jmps.len():
+            self.patch(end_jmps[k], 0, end_pc)
+            k = k + 1
+
+    void compile_star(&self, RxNode inner, bool greedy):
+        # L1: split L2, L3 (greedy) or split L3, L2 (non-greedy)
+        #     <inner> ; jmp L1 ; L3:
+        int l1 = self.here()
+        int sp = self.emit(OP_SPLIT, 0, 0)
+        int l2 = self.here()
+        self.compile_node(inner)
+        self.emit(OP_JMP, l1, 0)
+        int l3 = self.here()
+        if greedy:
+            self.patch(sp, 0, l2)
+            self.patch(sp, 1, l3)
+        else:
+            self.patch(sp, 0, l3)
+            self.patch(sp, 1, l2)
+
+    void compile_plus(&self, RxNode inner, bool greedy):
+        # L1: <inner> ; split L1, L3 (greedy) or split L3, L1 (non-greedy)
+        # L3:
+        int l1 = self.here()
+        self.compile_node(inner)
+        int sp = self.emit(OP_SPLIT, 0, 0)
+        int l3 = self.here()
+        if greedy:
+            self.patch(sp, 0, l1)
+            self.patch(sp, 1, l3)
+        else:
+            self.patch(sp, 0, l3)
+            self.patch(sp, 1, l1)
+
+    void compile_question(&self, RxNode inner, bool greedy):
+        # split L_inner, L_skip (greedy) or split L_skip, L_inner (non-greedy)
+        int sp = self.emit(OP_SPLIT, 0, 0)
+        int li = self.here()
+        self.compile_node(inner)
+        int ls = self.here()
+        if greedy:
+            self.patch(sp, 0, li)
+            self.patch(sp, 1, ls)
+        else:
+            self.patch(sp, 0, ls)
+            self.patch(sp, 1, li)
+
+    void compile_repeat(&self, RxNode inner, int mn, int mx, bool greedy):
+        # Expand bounded repeats by duplication. For unbounded upper,
+        # the tail becomes a Star of the same node.
+        int i = 0
+        while i < mn:
+            self.compile_node(inner.clone())
+            i = i + 1
+        if mx < 0:
+            # Unbounded — append a star.
+            self.compile_star(inner.clone(), greedy)
+            return
+        int extra = mx - mn
+        int k = 0
+        while k < extra:
+            self.compile_question(inner.clone(), greedy)
+            k = k + 1
+
+# ──────────── helpers used by the compiler ────────────
+
+bool is_ascii_letter(int b):
+    return (b >= b'A' as int and b <= b'Z' as int) or (b >= b'a' as int and b <= b'z' as int)
+
+int ascii_to_lower(int b):
+    if b >= b'A' as int and b <= b'Z' as int:
+        return b + 32
+    return b
+
+int ascii_to_upper(int b):
+    if b >= b'a' as int and b <= b'z' as int:
+        return b - 32
+    return b
+
+# Apply ASCII case-folding to a CharClass by expanding letter ranges.
+CharClass case_fold_class(CharClass c):
+    Vector[CharRange] out = Vector[CharRange]()
+    int i = 0
+    while i < c.ranges.len():
+        CharRange r = c.ranges[i].clone()
+        out.push(r.clone())
+        # If the range overlaps A-Z or a-z, add the case-paired range.
+        int lo = r.lo
+        int hi = r.hi
+        # Overlap with A-Z?
+        int alo = if lo > b'A' as int: lo else: b'A' as int
+        int ahi = if hi < b'Z' as int: hi else: b'Z' as int
+        if alo <= ahi:
+            out.push(CharRange(alo + 32, ahi + 32))
+        int blo = if lo > b'a' as int: lo else: b'a' as int
+        int bhi = if hi < b'z' as int: hi else: b'z' as int
+        if blo <= bhi:
+            out.push(CharRange(blo - 32, bhi - 32))
+        i = i + 1
+    return CharClass(!out, c.negated)
+
+int anchor_code(AnchorKind k):
+    match k:
+        case StartLine(): return ANCHOR_START_LINE
+        case EndLine(): return ANCHOR_END_LINE
+        case StartText(): return ANCHOR_START_TEXT
+        case EndText(): return ANCHOR_END_TEXT
+        case WordBound(): return ANCHOR_WORD_BOUND
+        case NotWordBound(): return ANCHOR_NOT_WORD_BOUND
+
+# ─────────────────────────────────────────────────────────────
+# Top-level compile entry
+# ─────────────────────────────────────────────────────────────
+
+Result[Program, String] _compile(String pattern, String flag_str):
+    int flags = 0
+    int fi = 0
+    while fi < flag_str.byte_len():
+        byte fc = flag_str.byte_at(fi)
+        if fc == b'i':
+            flags = flags | FLAG_CASE_INSENSITIVE
+        else:
+            String fc_s = flag_str.byte_slice(fi, fi + 1)
+            return Error("unknown flag: " + fc_s)
+        fi = fi + 1
+    Vector[String] names = Vector[String]()
+    names.push("")  # group 0 (whole match) has no name
+    String pat_copy = pattern.clone()
+    RxParser parser = RxParser(pattern, 0, flags, 1, !names, "")
+    RxNode root = parser.parse_root()
+    if parser.failed():
+        return Error(parser.err.clone())
+    # Wrap root in implicit group 0 for whole-match captures.
+    Compiler c = Compiler(Vector[Inst](), Vector[CharClass](), parser.flags)
+    c.emit(OP_SAVE, 0, 0)
+    c.compile_node(root)
+    c.emit(OP_SAVE, 1, 0)
+    c.emit(OP_MATCH, 0, 0)
+    Vector[String] final_names = parser.cap_names.clone()
+    Vector[Inst] final_insts = c.insts.clone()
+    Vector[CharClass] final_classes = c.classes.clone()
+    int final_flags = parser.flags
+    int final_caps = parser.next_capture
+    Program p = Program(!final_insts, !final_classes, final_caps, !final_names, final_flags, !pat_copy)
+    return Ok(p)
+
+# ─────────────────────────────────────────────────────────────
+# PikeVM executor
+# ─────────────────────────────────────────────────────────────
+
+# A thread is a (pc, capture-slots) pair. Capture slots are stored
+# as a Vector[int] of length 2*num_captures; entries default to -1.
+struct VmThread:
+    int pc
+    Vector[int] caps
+
+# Test if byte b matches CharClass cc.
+bool class_match(CharClass cc, int b):
+    bool found = false
+    int i = 0
+    while i < cc.ranges.len():
+        CharRange r = cc.ranges[i].clone()
+        if b >= r.lo and b <= r.hi:
+            found = true
+            break
+        i = i + 1
+    if cc.negated:
+        return not found
+    return found
+
+bool is_word_byte(int b):
+    if b < 0:
+        return false
+    if b >= b'0' as int and b <= b'9' as int:
+        return true
+    if b >= b'A' as int and b <= b'Z' as int:
+        return true
+    if b >= b'a' as int and b <= b'z' as int:
+        return true
+    if b == b'_' as int:
+        return true
+    return false
+
+bool anchor_match(int code, String subject, int pos):
+    int n = subject.byte_len()
+    if code == ANCHOR_START_TEXT:
+        return pos == 0
+    if code == ANCHOR_END_TEXT:
+        return pos == n
+    if code == ANCHOR_START_LINE:
+        if pos == 0:
+            return true
+        return subject.byte_at(pos - 1) as int == b'\n' as int
+    if code == ANCHOR_END_LINE:
+        if pos == n:
+            return true
+        return subject.byte_at(pos) as int == b'\n' as int
+    if code == ANCHOR_WORD_BOUND or code == ANCHOR_NOT_WORD_BOUND:
+        int prev = -1
+        if pos > 0:
+            prev = subject.byte_at(pos - 1) as int
+        int cur = -1
+        if pos < n:
+            cur = subject.byte_at(pos) as int
+        bool pw = is_word_byte(prev)
+        bool cw = is_word_byte(cur)
+        bool boundary = pw != cw
+        if code == ANCHOR_WORD_BOUND:
+            return boundary
+        return not boundary
+    return false
+
+# add_thread walks ε-transitions (SPLIT/JMP/SAVE/ANCHOR) until reaching
+# a byte-consuming op (CHAR/CLASS/ANYBYTE) or MATCH. It dedupes by pc
+# using the `seen` bitmap to avoid worst-case exponential blowup.
+void add_thread(Program prog, Vector[VmThread] &threads, Vector[bool] &seen,
+                int pc, Vector[int] caps, String subject, int pos):
+    if pc < 0 or pc >= prog.insts.len():
+        return
+    if seen[pc]:
+        return
+    seen[pc] = true
+    Inst inst = prog.insts[pc].clone()
+    if inst.op == OP_JMP:
+        add_thread(prog, &threads, &seen, inst.a, caps, subject, pos)
+        return
+    if inst.op == OP_SPLIT:
+        add_thread(prog, &threads, &seen, inst.a, caps.clone(), subject, pos)
+        add_thread(prog, &threads, &seen, inst.b, caps, subject, pos)
+        return
+    if inst.op == OP_SAVE:
+        Vector[int] new_caps = caps.clone()
+        new_caps[inst.a] = pos
+        add_thread(prog, &threads, &seen, pc + 1, new_caps, subject, pos)
+        return
+    if inst.op == OP_ANCHOR:
+        if anchor_match(inst.a, subject, pos):
+            add_thread(prog, &threads, &seen, pc + 1, caps, subject, pos)
+        return
+    threads.push(VmThread(pc, !caps))
+
+# Core VM search: returns capture spans (length 2*num_captures, -1 = unset)
+# or empty vector on no match.
+Vector[int] _vm_search(Program prog, String subject, int start, bool anchored):
+    int n = subject.byte_len()
+    int ninsts = prog.insts.len()
+    Vector[VmThread] cur = Vector[VmThread]()
+    Vector[VmThread] nxt = Vector[VmThread]()
+    Vector[bool] seen_cur = Vector[bool]()
+    Vector[bool] seen_nxt = Vector[bool]()
+    int si = 0
+    while si < ninsts:
+        seen_cur.push(false)
+        seen_nxt.push(false)
+        si = si + 1
+    Vector[int] best = Vector[int]()
+    bool found = false
+    int pos = start
+    while pos <= n:
+        # If we have no matched-so-far, seed pc=0 at this position
+        # (unless anchored — then only seed at start).
+        bool can_seed = (not found) and (not anchored or pos == start)
+        if can_seed:
+            Vector[int] init = Vector[int]()
+            int ic = 0
+            while ic < prog.num_captures * 2:
+                init.push(-1)
+                ic = ic + 1
+            add_thread(prog, &cur, &seen_cur, 0, init, subject, pos)
+        # Process current threads.
+        int ti = 0
+        while ti < cur.len():
+            VmThread th = cur[ti].clone()
+            Inst inst = prog.insts[th.pc].clone()
+            if inst.op == OP_MATCH:
+                # Record the best match for this entry point. Higher-priority
+                # threads (earlier in `cur`) have already been processed; they
+                # may still advance through `nxt` and produce a higher-priority
+                # match. Lower-priority threads (later in `cur`) are dropped —
+                # they would only ever yield an inferior match.
+                Vector[int] cps = th.caps.clone()
+                best = !cps
+                found = true
+                break
+            elif inst.op == OP_CHAR:
+                if pos < n and subject.byte_at(pos) as int == inst.a:
+                    add_thread(prog, &nxt, &seen_nxt, th.pc + 1, th.caps.clone(), subject, pos + 1)
+            elif inst.op == OP_CLASS:
+                if pos < n:
+                    int b = subject.byte_at(pos) as int
+                    CharClass cc = prog.classes[inst.a].clone()
+                    if class_match(cc, b):
+                        add_thread(prog, &nxt, &seen_nxt, th.pc + 1, th.caps.clone(), subject, pos + 1)
+            elif inst.op == OP_ANYBYTE:
+                if pos < n and subject.byte_at(pos) as int != b'\n' as int:
+                    add_thread(prog, &nxt, &seen_nxt, th.pc + 1, th.caps.clone(), subject, pos + 1)
+            ti = ti + 1
+        # Swap cur/nxt, reset seen bitmaps.
+        Vector[VmThread] swapped = nxt.clone()
+        nxt = Vector[VmThread]()
+        cur = !swapped
+        int si2 = 0
+        while si2 < ninsts:
+            seen_cur[si2] = seen_nxt[si2]
+            seen_nxt[si2] = false
+            si2 = si2 + 1
+        # Once we've found a match AND no live threads remain, we're done —
+        # the best result has been recorded and nothing better is possible.
+        if found and cur.len() == 0:
+            return best
+        # Anchored searches don't re-seed past `start`; bail when cur drains.
+        if anchored and cur.len() == 0:
+            return best
+        pos = pos + 1
+    return best
+
+# ─────────────────────────────────────────────────────────────
+# Public types
+# ─────────────────────────────────────────────────────────────
 
 struct Regex:
-    pass
+    Program prog
 
 struct Match:
-    pass
+    String subject_str
+    Vector[int] caps_spans      # length 2*num_captures, -1 = unset
+    Vector[String] cap_names_ref
 
-# ── Raw C externs ────────────────────────────────────────────
-
-extern "C":
-    extern Result[Regex, String] _regex_compile_raw(cstr pattern, cstr flags) = "gorget_regex_compile"
-    extern cstr _regex_last_error() = "gorget_regex_last_error"
-    extern String regex_escape(cstr s) = "gorget_regex_escape"
-
-    # Convenience _pat functions (compile + operate + free in one call)
-    extern bool regex_is_match(cstr pattern, cstr subject) = "gorget_regex_is_match_pat"
-    extern Match _regex_find_pat_raw(cstr pattern, cstr subject) = "gorget_regex_find_pat"
-    extern String regex_replace(cstr pattern, cstr subject, cstr replacement) = "gorget_regex_replace_pat"
-
-# Convenience: sentinel → Option conversion mirroring `Regex.find()`.
-Option[Match] regex_find(String pattern, String subject):
-    Match m = _regex_find_pat_raw(pattern, subject)
-    if m.start() < 0:
-        return None
-    return Some(m)
-
-# ── Gorget wrappers ──────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
+# Public API
+# ─────────────────────────────────────────────────────────────
 
 Result[Regex, String] regex_compile(String pattern):
-    return _regex_compile_raw(pattern, "")
+    return regex_compile_with(pattern, "")
 
 Result[Regex, String] regex_compile_with(String pattern, String flags):
-    return _regex_compile_raw(pattern, flags)
+    Result[Program, String] r = _compile(pattern, flags)
+    match r:
+        case Ok(p):
+            return Ok(Regex(p))
+        case Error(e):
+            return Error(e)
 
-# ── Regex methods (equip with explicit extern symbols) ───────
+# Escape regex metacharacters.
+String regex_escape(String s):
+    String out = ""
+    int i = 0
+    while i < s.byte_len():
+        byte b = s.byte_at(i)
+        if is_regex_meta(b):
+            out = out + "\\"
+        out = out + s.byte_slice(i, i + 1)
+        i = i + 1
+    return out
+
+bool is_regex_meta(byte b):
+    if b == b'\\' or b == b'.' or b == b'*' or b == b'+' or b == b'?':
+        return true
+    if b == b'(' or b == b')' or b == b'[' or b == b']':
+        return true
+    if b == b'{' or b == b'}' or b == b'|' or b == b'^' or b == b'$':
+        return true
+    return false
+
+# Convenience top-level functions.
+bool regex_is_match(String pattern, String subject):
+    Result[Regex, String] r = regex_compile(pattern)
+    match r:
+        case Ok(rx):
+            return rx.is_match(subject)
+        case Error(_):
+            return false
+
+Option[Match] regex_find(String pattern, String subject):
+    Result[Regex, String] r = regex_compile(pattern)
+    match r:
+        case Ok(rx):
+            return rx.find(subject)
+        case Error(_):
+            return None
+
+String regex_replace(String pattern, String subject, String replacement):
+    Result[Regex, String] r = regex_compile(pattern)
+    match r:
+        case Ok(rx):
+            return rx.replace(subject, replacement)
+        case Error(_):
+            return subject.clone()
+
+# ─────────────────────────────────────────────────────────────
+# Regex methods
+# ─────────────────────────────────────────────────────────────
 
 equip Regex:
-    extern "C" bool is_match(String subject) = "gorget_regex_is_match"
-    extern "C" String replace_all(String subject, String replacement) = "gorget_regex_replace_all"
-    extern int capture_count() = "gorget_regex_capture_count"
-    extern String pattern_str() = "gorget_regex_pattern_str"
-    extern Vector[String] group_names() = "gorget_regex_group_names"
-    # Raw extern methods — sentinel values, wrapped by Gorget methods below
-    extern "C" Match _find_at_raw(String subject, int pos) = "gorget_regex_find_at"
-    extern "C" Vector[Match] find_all(String subject) = "gorget_regex_find_all"
-    extern "C" String replace(String subject, String replacement) = "gorget_regex_replace"
-    extern "C" Vector[String] splitn(String subject, int limit) = "gorget_regex_split"
-    extern "C" Match _fullmatch_raw(String subject) = "gorget_regex_fullmatch"
-
-    # Gorget wrappers: sentinel → Option conversion
-    Option[Match] find_at(self, String subject, int pos):
-        Match m = self._find_at_raw(subject, pos)
-        if m.start() < 0:
-            return None
-        return Some(m)
-
-    Option[Match] fullmatch(self, String subject):
-        Match m = self._fullmatch_raw(subject)
-        if m.start() < 0:
-            return None
-        return Some(m)
+    bool is_match(self, String subject):
+        Vector[int] caps = _vm_search(self.prog, subject, 0, false)
+        return caps.len() > 0
 
     Option[Match] find(self, String subject):
         return self.find_at(subject, 0)
 
+    Option[Match] find_at(self, String subject, int pos):
+        Vector[int] caps = _vm_search(self.prog, subject, pos, false)
+        if caps.len() == 0:
+            return None
+        Vector[String] names = self.prog.cap_names.clone()
+        return Some(Match(subject.clone(), !caps, !names))
+
+    Option[Match] fullmatch(self, String subject):
+        Vector[int] caps = _vm_search(self.prog, subject, 0, true)
+        if caps.len() == 0:
+            return None
+        # Must cover entire subject.
+        int n = subject.byte_len()
+        if caps[0] != 0 or caps[1] != n:
+            return None
+        Vector[String] names = self.prog.cap_names.clone()
+        return Some(Match(subject.clone(), !caps, !names))
+
+    Vector[Match] find_all(self, String subject):
+        Vector[Match] out = Vector[Match]()
+        int pos = 0
+        int n = subject.byte_len()
+        while pos <= n:
+            Vector[int] caps = _vm_search(self.prog, subject, pos, false)
+            if caps.len() == 0:
+                break
+            int s = caps[0]
+            int e = caps[1]
+            Vector[String] names = self.prog.cap_names.clone()
+            Vector[int] caps_clone = caps.clone()
+            out.push(Match(subject.clone(), !caps_clone, !names))
+            if e == s:
+                # Empty match — advance by 1 to avoid infinite loop.
+                pos = e + 1
+            else:
+                pos = e
+        return out
+
+    String replace(self, String subject, String replacement):
+        return self._replace_impl(subject, replacement, 1)
+
+    String replace_all(self, String subject, String replacement):
+        return self._replace_impl(subject, replacement, -1)
+
+    String _replace_impl(self, String subject, String replacement, int limit):
+        String out = ""
+        int pos = 0
+        int n = subject.byte_len()
+        int count = 0
+        while pos <= n:
+            if limit >= 0 and count >= limit:
+                break
+            Vector[int] caps = _vm_search(self.prog, subject, pos, false)
+            if caps.len() == 0:
+                break
+            int s = caps[0]
+            int e = caps[1]
+            out = out + subject.byte_slice(pos, s)
+            out = out + self._expand_replacement(replacement, caps, subject)
+            count = count + 1
+            if e == s:
+                # Empty match — copy one byte then advance.
+                if e < n:
+                    out = out + subject.byte_slice(e, e + 1)
+                    pos = e + 1
+                else:
+                    pos = e + 1
+            else:
+                pos = e
+        if pos < n:
+            out = out + subject.byte_slice(pos, n)
+        elif pos == n:
+            # already consumed everything
+            pass
+        return out
+
+    # Expand backreferences in `replacement`: $0..$9 and ${name}.
+    # $$ escapes a literal $. All other characters are copied verbatim.
+    String _expand_replacement(self, String replacement, Vector[int] caps, String subject):
+        String out = ""
+        int i = 0
+        int n = replacement.byte_len()
+        while i < n:
+            byte c = replacement.byte_at(i)
+            if c == b'$' and i + 1 < n:
+                byte nc = replacement.byte_at(i + 1)
+                if nc == b'$':
+                    out = out + "$"
+                    i = i + 2
+                    continue
+                if nc >= b'0' and nc <= b'9':
+                    int idx = nc as int - b'0' as int
+                    if idx * 2 + 1 < caps.len():
+                        int s = caps[idx * 2]
+                        int e = caps[idx * 2 + 1]
+                        if s >= 0 and e >= s:
+                            out = out + subject.byte_slice(s, e)
+                    i = i + 2
+                    continue
+                if nc == b'{':
+                    # ${name}
+                    int j = i + 2
+                    while j < n and replacement.byte_at(j) != b'}':
+                        j = j + 1
+                    if j < n:
+                        String nm = replacement.byte_slice(i + 2, j)
+                        int idx = program_group_index(self.prog, nm)
+                        if idx >= 0 and idx * 2 + 1 < caps.len():
+                            int s = caps[idx * 2]
+                            int e = caps[idx * 2 + 1]
+                            if s >= 0 and e >= s:
+                                out = out + subject.byte_slice(s, e)
+                        i = j + 1
+                        continue
+            out = out + replacement.byte_slice(i, i + 1)
+            i = i + 1
+        return out
+
+    Vector[String] splitn(self, String subject, int limit):
+        Vector[String] out = Vector[String]()
+        int pos = 0
+        int n = subject.byte_len()
+        int count = 0
+        while pos <= n:
+            if limit > 0 and count + 1 >= limit:
+                break
+            Vector[int] caps = _vm_search(self.prog, subject, pos, false)
+            if caps.len() == 0:
+                break
+            int s = caps[0]
+            int e = caps[1]
+            String piece = subject.byte_slice(pos, s)
+            out.push(piece)
+            count = count + 1
+            if e == s:
+                if e < n:
+                    pos = e + 1
+                else:
+                    break
+            else:
+                pos = e
+        String last_piece = subject.byte_slice(pos, n)
+        out.push(last_piece)
+        return out
+
     Vector[String] split(self, String subject):
         return self.splitn(subject, 0)
 
-# ── Match methods ────────────────────────────────────────────
+    # Number of EXPLICIT capture groups in the pattern (excludes the
+    # implicit whole-match group). Matches the previous PCRE2-backed API.
+    int capture_count(self):
+        if self.prog.num_captures > 0:
+            return self.prog.num_captures - 1
+        return 0
+
+    String pattern_str(self):
+        return self.prog.pattern.clone()
+
+    Vector[String] group_names(self):
+        # Return only NAMED capture names.
+        Vector[String] out = Vector[String]()
+        int i = 0
+        while i < self.prog.cap_names.len():
+            String n = self.prog.cap_names[i].clone()
+            if n.byte_len() > 0:
+                out.push(n)
+            i = i + 1
+        return out
+
+# ─────────────────────────────────────────────────────────────
+# Match methods
+# ─────────────────────────────────────────────────────────────
 
 equip Match:
-    extern String text() = "gorget_regex_match_text"
-    extern int start() = "gorget_regex_match_start"
-    extern int end_pos() = "gorget_regex_match_end"
-    extern int group_count() = "gorget_regex_match_group_count"
-    extern Vector[String] groups() = "gorget_regex_match_groups"
-    extern "C" String _group_raw(int n) = "gorget_regex_match_group"
-    extern "C" String _group_by_name_raw(String name) = "gorget_regex_match_group_by_name"
+    String text(self):
+        if self.caps_spans.len() < 2:
+            return ""
+        int s = self.caps_spans[0]
+        int e = self.caps_spans[1]
+        if s < 0 or e < 0:
+            return ""
+        return self.subject_str.byte_slice(s, e)
 
+    int start(self):
+        if self.caps_spans.len() < 1:
+            return -1
+        return self.caps_spans[0]
+
+    int end_pos(self):
+        if self.caps_spans.len() < 2:
+            return -1
+        return self.caps_spans[1]
+
+    # `group_count` returns the number of EXPLICIT capture groups (group 0,
+    # the whole match, is not counted). This matches the previous PCRE2 API
+    # and gives `\d+` 0 groups, `(\w+)@(\w+)\.(\w+)` 3 groups, etc.
+    int group_count(self):
+        int total = self.caps_spans.len() / 2
+        if total > 0:
+            return total - 1
+        return 0
+
+    # `groups` returns all explicit capture groups (index 1..N) as Strings;
+    # unset groups become empty strings (consistent with PCRE2 API).
+    Vector[String] groups(self):
+        Vector[String] out = Vector[String]()
+        int total = self.caps_spans.len() / 2
+        int i = 1
+        while i < total:
+            int s = self.caps_spans[i * 2]
+            int e = self.caps_spans[i * 2 + 1]
+            if s < 0 or e < 0:
+                out.push("")
+            else:
+                out.push(self.subject_str.byte_slice(s, e))
+            i = i + 1
+        return out
+
+    # `group(n)` indexes the EXPLICIT capture groups (n=0 → first subgroup).
+    # The whole match is available via `text()`, not `group(0)`.
     Option[String] group(self, int n):
-        String val = self._group_raw(n)
-        if val.byte_len() == 0 and n > 0:
+        # Map external index `n` to internal slot `n + 1` (skip whole-match slot).
+        int slot = n + 1
+        if n < 0 or slot * 2 + 1 >= self.caps_spans.len():
             return None
-        return Some(val)
+        int s = self.caps_spans[slot * 2]
+        int e = self.caps_spans[slot * 2 + 1]
+        if s < 0 or e < 0:
+            return None
+        return Some(self.subject_str.byte_slice(s, e))
 
     Option[String] group_by_name(self, String name):
-        String val = self._group_by_name_raw(name)
-        if val.byte_len() == 0:
-            return None
-        return Some(val)
+        # cap_names_ref is indexed by INTERNAL slot (slot 0 = whole match,
+        # slot 1..N = explicit groups). Translate to external index by
+        # subtracting 1.
+        int i = 1
+        while i < self.cap_names_ref.len():
+            if self.cap_names_ref[i] == name:
+                return self.group(i - 1)
+            i = i + 1
+        return None

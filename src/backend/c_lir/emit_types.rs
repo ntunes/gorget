@@ -2140,12 +2140,7 @@ pub(super) fn emit_runtime_modules(out: &mut String, module: &LirModule, _struct
         out.push_str(crate::backend::c::c_runtime::BYTES_RUNTIME);
     }
 
-    // Regex — the _pat convenience wrappers are now inside REGEX_RUNTIME itself
-    // (previously injected only by the C backend, causing undefined references
-    // from the LLVM backend).
-    if has(&|n| n.starts_with("gorget_regex_") || n.starts_with("gorget_match_")) {
-        out.push_str(crate::backend::c::c_runtime::REGEX_RUNTIME);
-    }
+    // (xtd.regex is now pure Gorget — no REGEX_RUNTIME injection.)
 
     // Crypto
     if has(&|n| n.starts_with("gorget_crypto_") || n.starts_with("gorget_sha") || n.starts_with("gorget_hmac") || n.starts_with("gorget_x25519") || n.starts_with("gorget_hkdf") || n.starts_with("gorget_aead")) {

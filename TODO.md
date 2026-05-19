@@ -1,5 +1,23 @@
 # TODO
 
+## High Priority
+
+### Self-host snag #4: gcc `-Wstringop-overread` on union-enum match-arm memcpy (xtd.regex RxNode)
+
+When the new `xtd.regex` module is compiled, gcc emits many warnings of the form
+`memcpy reading 80 bytes from a region of size 48` at every `match` arm
+extraction site for `RxNode` (a union-laid-out enum). The "size of 48" is the
+size of an UNRELATED variant's local (e.g. `__gg_ParseError __sN`), not the
+full union size. The output is correct, but the warning is real — the C
+backend appears to be declaring per-variant locals at the smaller size
+instead of the union's max-variant size, and only the union-layout zero-init
+pattern saves correctness. Reproduce by building `regex_basic.gg`:
+`GORGET_KEEP_RUNTIME=1 ./target/debug/gg build tests/fixtures/regex_basic.gg`
+and grep the generated `.c` for `-Wstringop-overread`. Filed against the
+LIR union-enum field-extract emitter (`src/backend/c_lir/emit_*` for match
+arm load/copy). Low severity (warning only, output correct), but symptom of
+a layering issue worth chasing.
+
 ## Profile snapshot 2026-05-17
 
 Fresh `gg profile` snapshot taken on `gorget-1` HEAD (e052606e) after the post-2026-05-17 batch (validate_resource walks collapsed `4b529742`, semantic self-type index `e4e1f6a3`, GIR Liveness bitset `79499789`, propagate_copies FxHashMap `469d7942`, loader rayon `107ab8dc`, TypeTable primitive_ids `615a3d0b`, LIR cse/find_live_functions/eliminate_dead_globals FxHashMap `5c38ee14`, stack-traces v1 regression closed `01f91844`, LIR codegen perf rewrite `962ae144`). Profile output medianed over 5 runs per workload. Goal: identify the **next** dominant phase outside the known/handled zones (drop_elab, semantic name-index, safety borrow-state-reset, and the just-shipped batch).

@@ -1394,18 +1394,8 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
         if ext.name == "gorget_task_group_submit" {
             continue;
         }
-        // gorget_regex_find_at is a C macro alias for gorget_regex_find
-        if ext.name == "gorget_regex_find_at" {
-            // Emit declaration with the real function name
-            let params: Vec<String> = ext.params.iter().map(|p| llvm_arg_type(p, snames)).collect();
-            let ret = llvm_type_full(&ext.return_type, snames);
-            if needs_sret(&ext.return_type, &module.structs) {
-                writeln!(out, "declare void @gorget_regex_find(ptr sret({ret}), {})", params.join(", ")).unwrap();
-            } else {
-                writeln!(out, "declare {ret} @gorget_regex_find({})", params.join(", ")).unwrap();
-            }
-            continue;
-        }
+        // (Removed: gorget_regex_find_at alias — xtd.regex is now pure Gorget,
+        // no PCRE2 externs.)
         // gorget_file_open with 1 arg means "open for reading".
         // The real gorget_file_open takes 2 args — redirect to __gorget_file_open_r wrapper.
         // Skip the default declaration; emit the wrapper declaration instead.
@@ -5591,12 +5581,8 @@ fn emit_inst(
                     _ => name.as_str(),
                 }
             } else { name.as_str() };
-            // gorget_regex_find_at is a C macro alias for gorget_regex_find.
-            // Look up the extern under the ORIGINAL name (find_at) so the lookup
-            // hits the LIR's registered ABI/return-type, then emit the call
-            // with the renamed (find) symbol.
+            // (Removed gorget_regex_find_at alias — xtd.regex is pure Gorget now.)
             let lookup_name: &str = original_name;
-            let name: &str = if name == "gorget_regex_find_at" { "gorget_regex_find" } else { name };
 
             // gorget_str_cmp: C returns int (32-bit). On aarch64, 'mov w0, -1' zero-extends
             // x0 to 0xFFFFFFFF (not 0xFFFFFFFFFFFFFFFF). Must call as i32 and sext to i64

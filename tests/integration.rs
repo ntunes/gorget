@@ -8423,6 +8423,87 @@ done",
 }
 
 #[test]
+fn regex_corpus() {
+    // Curated correctness corpus for the pure-Gorget RE2-class engine —
+    // 65 cases covering literals, quantifiers, classes, anchors,
+    // captures, alternation, case-insensitive matching, escapes, and
+    // explicit rejection of unsupported features (lookaround, backref,
+    // \p{...}, dangling-paren / bad-class).
+    run_gg(
+        "regex_corpus.gg",
+        "\
+literal/single PASS
+literal/midword PASS
+literal/multibyte PASS
+literal/no-match PASS
+dot/any-byte PASS
+dot/not-newline PASS
+dot/seq PASS
+dot/fail-newline PASS
+star/zero PASS
+star/many PASS
+plus/one PASS
+plus/many PASS
+plus/fail PASS
+question/match PASS
+question/match-b PASS
+repeat/exact PASS
+repeat/min PASS
+repeat/range PASS
+nongreedy/star PASS
+nongreedy/plus PASS
+nongreedy/dot-star PASS
+alt/left PASS
+alt/right PASS
+alt/three PASS
+group/capture PASS
+group/noncapture PASS
+group/named PASS
+class/simple PASS
+class/range PASS
+class/negated PASS
+class/digit-shorthand PASS
+class/word PASS
+class/space PASS
+class/D-complement PASS
+class/W-complement PASS
+class/S-complement PASS
+class/inside-class-shorthand PASS
+anchor/start PASS
+anchor/start-fail PASS
+anchor/end PASS
+anchor/end-fail PASS
+anchor/start-text PASS
+anchor/end-text PASS
+anchor/word-bound PASS
+anchor/word-bound-fail PASS
+ci/literal PASS
+ci/class PASS
+ci/inline-flag PASS
+escape/dot-literal PASS
+escape/star-literal PASS
+escape/paren PASS
+escape/tab PASS
+escape/newline PASS
+real/email PASS
+real/iso-date PASS
+real/phone-fragment PASS
+real/leading-ws PASS
+ism/yes PASS
+ism/no PASS
+err/lookahead PASS
+err/lookbehind PASS
+err/backref PASS
+err/unicode-prop PASS
+err/bad-class PASS
+err/dangling-paren PASS
+---
+pass=65
+fail=0",
+    );
+}
+
+#[test]
 fn encoding_basic() {
     run_gg(
         "encoding_basic.gg",
@@ -14444,7 +14525,8 @@ fn self_host_e2e() {
         let _ = std::fs::remove_file(&rust_c_path);
         let needs_tls = rust_c.contains("std_net_tls") || rust_c.contains("xtd_http");
         let needs_crypto = rust_c.contains("xtd_crypto") || rust_c.contains("xtd_p2p");
-        let needs_regex = rust_c.contains("xtd_regex");
+        // xtd.regex is pure Gorget — no link flags needed.
+        let _needs_regex_unused: bool = rust_c.contains("xtd_regex");
         let needs_compress = rust_c.contains("xtd_compress");
         let needs_sdl = rust_c.contains("xtd_sdl") || rust_c.contains("xtd_gfx") || rust_c.contains("xtd_gl");
 
@@ -14483,7 +14565,7 @@ fn self_host_e2e() {
             .arg("-lpthread");
         if needs_tls { cc_cmd.arg("-lssl").arg("-lcrypto"); }
         if needs_crypto && !needs_tls { cc_cmd.arg("-lcrypto"); }
-        if needs_regex { cc_cmd.arg("-lpcre2-8"); }
+        // (Was: if needs_regex { cc_cmd.arg("-lpcre2-8"); } — no longer needed.)
         if needs_compress { cc_cmd.arg("-lz"); }
         // SDL fixtures pull in many libs (SDL2, GL); skip — these tend
         // to need a windowed environment too. We classify them as

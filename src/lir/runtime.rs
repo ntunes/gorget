@@ -71,10 +71,6 @@ pub enum CRuntimeType {
     Map,
     /// `GorgetSet` struct.
     Set,
-    /// `GorgetRegex` struct (16 bytes — pcre2 handle + pattern pointer).
-    Regex,
-    /// `GorgetRegexMatch` struct (56 bytes — capture vector + offsets).
-    Match,
 }
 
 impl CRuntimeType {
@@ -103,12 +99,6 @@ impl CRuntimeType {
             CRuntimeType::Array => lookup("GorgetArray"),
             CRuntimeType::Map => lookup("GorgetMap"),
             CRuntimeType::Set => lookup("GorgetSet"),
-            CRuntimeType::Regex => lookup("Regex"),
-            CRuntimeType::Match => sr
-                .lookup("Match")
-                .or_else(|| sr.lookup("RegexMatch"))
-                .map(LirType::Struct)
-                .unwrap_or(LirType::Ptr),
         }
     }
 
@@ -119,8 +109,6 @@ impl CRuntimeType {
             CRuntimeType::Array => Some("GorgetArray"),
             CRuntimeType::Map => Some("GorgetMap"),
             CRuntimeType::Set => Some("GorgetSet"),
-            CRuntimeType::Regex => Some("Regex"),
-            CRuntimeType::Match => Some("Match"),
             _ => None,
         }
     }
@@ -568,16 +556,6 @@ runtime_table! {
     // ── Parse int/float ───────────────────────────────────────────────────
     ParseFloat => "gorget_parse_float", sig(&[(T::Ptr, A::CStr)], T::F64, F::Pure);
     ParseInt   => "gorget_parse_int",   sig(&[(T::Ptr, A::CStr)], T::I64, F::Pure);
-
-    // ── Regex ─────────────────────────────────────────────────────────────
-    RegexCompile   => "gorget_regex_compile",   sig(&[(T::Ptr, A::CStr), (T::Ptr, A::CStr)], T::Regex, F::Allocates);
-    RegexFind      => "gorget_regex_find",      sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::CStr), (T::I64, A::Scalar)], T::Match, F::Allocates);
-    RegexFindAll   => "gorget_regex_find_all",  sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::CStr)], T::Array, F::Allocates);
-    RegexFindAt    => "gorget_regex_find_at",   sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::CStr), (T::I64, A::Scalar)], T::Match, F::Allocates);
-    RegexFullmatch => "gorget_regex_fullmatch", sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::CStr)], T::Match, F::Allocates);
-    RegexIsMatch   => "gorget_regex_is_match",  sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::CStr)], T::Bool, F::ReadOnly);
-    RegexReplace   => "gorget_regex_replace",   sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::CStr), (T::Ptr, A::CStr)], T::Str, F::Allocates);
-    RegexSplit     => "gorget_regex_split",     sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::CStr), (T::I64, A::Scalar)], T::Array, F::Allocates);
 
     // ── Bytes ─────────────────────────────────────────────────────────────
     BytesConcat     => "gorget_bytes_concat",      sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::Ptr)], T::Array, F::Allocates);

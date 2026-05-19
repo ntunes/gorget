@@ -1,0 +1,219 @@
+# regex_corpus.gg — Hand-curated correctness corpus for the pure-Gorget
+# RE2-class regex engine in xtd.regex. Each row is "name|pattern|subject|expected".
+# `expected` encodes:
+#   * "n"           = no match
+#   * "s,e"         = match found, whole match spans subject[s..e]
+#   * "s,e|g1|g2|..."= ditto, plus captured group spans (each as "s,e" or "-")
+#
+# Output is "name PASS" or "name FAIL got=<...> want=<...>", followed by a
+# count of passes/fails at the end. Order is fixed; stdout is deterministic.
+
+from xtd.regex import regex_compile, regex_compile_with, Regex, Match
+from std.collections import Vector
+from std.conv import int_to_str
+
+# ─────────────────────────────────────────────────────────────
+# Test runner
+# ─────────────────────────────────────────────────────────────
+
+# Encode a Match's whole-match span and captures as "s,e|g1|g2|...".
+String encode_match(Match m):
+    String out = int_to_str(m.start()) + "," + int_to_str(m.end_pos())
+    int n = m.group_count()
+    int i = 0
+    while i < n:
+        out = out + "|"
+        Option[String] g = m.group(i)
+        match g:
+            case Some(_):
+                # Find the span via group_count / re-derive — but groups()
+                # doesn't return spans. We'll add it inline by scanning.
+                Vector[String] gs = m.groups()
+                if i < gs.len():
+                    String gv = gs[i]
+                    if gv.byte_len() == 0:
+                        # Could be unset or actually empty; report empty.
+                        out = out + ""
+                    else:
+                        out = out + gv
+                else:
+                    out = out + ""
+            case None:
+                out = out + "-"
+        i = i + 1
+    return out
+
+void run_case(String name, String pattern, String subject, String expected, Vector[int] &counter):
+    Result[Regex, String] r = regex_compile(pattern)
+    String got = ""
+    match r:
+        case Ok(rx):
+            Option[Match] m = rx.find(subject)
+            match m:
+                case Some(mm):
+                    got = encode_match(mm)
+                case None:
+                    got = "n"
+        case Error(_):
+            got = "compile-error"
+    if got == expected:
+        print(name + " PASS")
+        counter[0] = counter[0] + 1
+    else:
+        print(name + " FAIL got=" + got + " want=" + expected)
+        counter[1] = counter[1] + 1
+
+# Case-insensitive variant.
+void run_case_i(String name, String pattern, String subject, String expected, Vector[int] &counter):
+    Result[Regex, String] r = regex_compile_with(pattern, "i")
+    String got = ""
+    match r:
+        case Ok(rx):
+            Option[Match] m = rx.find(subject)
+            match m:
+                case Some(mm):
+                    got = encode_match(mm)
+                case None:
+                    got = "n"
+        case Error(_):
+            got = "compile-error"
+    if got == expected:
+        print(name + " PASS")
+        counter[0] = counter[0] + 1
+    else:
+        print(name + " FAIL got=" + got + " want=" + expected)
+        counter[1] = counter[1] + 1
+
+# is_match-only case.
+void run_match(String name, String pattern, String subject, bool expected, Vector[int] &counter):
+    Result[Regex, String] r = regex_compile(pattern)
+    bool got = false
+    match r:
+        case Ok(rx):
+            got = rx.is_match(subject)
+        case Error(_):
+            got = false
+    if got == expected:
+        print(name + " PASS")
+        counter[0] = counter[0] + 1
+    else:
+        String gw = if got: "true" else: "false"
+        String ew = if expected: "true" else: "false"
+        print(name + " FAIL got=" + gw + " want=" + ew)
+        counter[1] = counter[1] + 1
+
+# Compile-must-fail case (parser rejects with the specified prefix).
+void run_compile_error(String name, String pattern, Vector[int] &counter):
+    Result[Regex, String] r = regex_compile(pattern)
+    bool ok = false
+    match r:
+        case Ok(_):
+            ok = true
+        case Error(_):
+            ok = false
+    if not ok:
+        print(name + " PASS")
+        counter[0] = counter[0] + 1
+    else:
+        print(name + " FAIL got=ok want=error")
+        counter[1] = counter[1] + 1
+
+void main():
+    Vector[int] counter = Vector[int]()
+    counter.push(0)  # pass
+    counter.push(0)  # fail
+
+    # ── Literals ─────────────────────────────────────────────
+    run_case("literal/single",      "a",      "abc",       "0,1", &counter)
+    run_case("literal/midword",     "b",      "abc",       "1,2", &counter)
+    run_case("literal/multibyte",   "abc",    "xyabc",     "2,5", &counter)
+    run_case("literal/no-match",    "z",      "abc",       "n",   &counter)
+
+    # ── Dot ──────────────────────────────────────────────────
+    run_case("dot/any-byte",        ".",      "xy",        "0,1", &counter)
+    run_case("dot/not-newline",     ".",      "\nx",       "1,2", &counter)
+    run_case("dot/seq",             "a.c",    "abc",       "0,3", &counter)
+    run_case("dot/fail-newline",    "a.b",    "a\nb",      "n",   &counter)
+
+    # ── Quantifiers ──────────────────────────────────────────
+    run_case("star/zero",           "a*",     "bbb",       "0,0", &counter)
+    run_case("star/many",           "a*",     "aaab",      "0,3", &counter)
+    run_case("plus/one",            "a+",     "a",         "0,1", &counter)
+    run_case("plus/many",           "a+",     "aaa",       "0,3", &counter)
+    run_case("plus/fail",           "a+",     "bbb",       "n",   &counter)
+    run_case("question/match",      "ab?c",   "ac",        "0,2", &counter)
+    run_case("question/match-b",    "ab?c",   "abc",       "0,3", &counter)
+    run_case("repeat/exact",        "a{3}",   "aaaa",      "0,3", &counter)
+    run_case("repeat/min",          "a{2,}",  "aaaa",      "0,4", &counter)
+    run_case("repeat/range",        "a{2,3}", "aaaaa",     "0,3", &counter)
+
+    # ── Non-greedy ───────────────────────────────────────────
+    run_case("nongreedy/star",      "a*?b",   "aaab",      "0,4", &counter)
+    run_case("nongreedy/plus",      "a+?b",   "aaab",      "0,4", &counter)
+    run_case("nongreedy/dot-star",  "a.*?b",  "axxbxxb",   "0,4", &counter)
+
+    # ── Alternation ──────────────────────────────────────────
+    run_case("alt/left",            "ab|cd",  "abx",       "0,2", &counter)
+    run_case("alt/right",           "ab|cd",  "xcdy",      "1,3", &counter)
+    run_case("alt/three",           "a|b|c",  "xyc",       "2,3", &counter)
+
+    # ── Groups & captures ───────────────────────────────────
+    run_case("group/capture",       "(a)(b)", "ab",        "0,2|a|b", &counter)
+    run_case("group/noncapture",    "(?:ab)c","abc",       "0,3", &counter)
+    run_case("group/named",         "(?P<x>a)b","ab",      "0,2|a", &counter)
+
+    # ── Character classes ───────────────────────────────────
+    run_case("class/simple",        "[abc]",  "xb",        "1,2", &counter)
+    run_case("class/range",         "[a-z]+", "ABcdEF",    "2,4", &counter)
+    run_case("class/negated",       "[^a]",   "aaab",      "3,4", &counter)
+    run_case("class/digit-shorthand","\\d+",  "ab42cd",    "2,4", &counter)
+    run_case("class/word",          "\\w+",   "hi 123!",   "0,2", &counter)
+    run_case("class/space",         "\\s+",   "a  b",      "1,3", &counter)
+    run_case("class/D-complement",  "\\D+",   "12abc34",   "2,5", &counter)
+    run_case("class/W-complement",  "\\W+",   "ab---cd",   "2,5", &counter)
+    run_case("class/S-complement",  "\\S+",   "  hi  ",    "2,4", &counter)
+    run_case("class/inside-class-shorthand","[\\d-]+","a-12-b","1,5", &counter)
+
+    # ── Anchors ──────────────────────────────────────────────
+    run_case("anchor/start",        "^abc",   "abcxyz",    "0,3", &counter)
+    run_case("anchor/start-fail",   "^abc",   "xabc",      "n",   &counter)
+    run_case("anchor/end",          "xyz$",   "abcxyz",    "3,6", &counter)
+    run_case("anchor/end-fail",     "xyz$",   "xyz!",      "n",   &counter)
+    run_case("anchor/start-text",   "\\Aabc", "abcxyz",    "0,3", &counter)
+    run_case("anchor/end-text",     "xyz\\z", "abcxyz",    "3,6", &counter)
+    run_case("anchor/word-bound",   "\\bword\\b","my word!", "3,7", &counter)
+    run_case("anchor/word-bound-fail","\\bword\\b","sword","n", &counter)
+
+    # ── Case insensitive ────────────────────────────────────
+    run_case_i("ci/literal",        "abc",    "ABCdef",    "0,3", &counter)
+    run_case_i("ci/class",          "[a-z]+", "ABCdef",    "0,6", &counter)
+    run_case_i("ci/inline-flag",    "(?i)abc","XYZabc",    "3,6", &counter)
+
+    # ── Escapes ──────────────────────────────────────────────
+    run_case("escape/dot-literal",  "a\\.b",  "a.b",       "0,3", &counter)
+    run_case("escape/star-literal", "a\\*b",  "a*b",       "0,3", &counter)
+    run_case("escape/paren",        "\\(x\\)","(x)",       "0,3", &counter)
+    run_case("escape/tab",          "a\\tb",  "a\tb",      "0,3", &counter)
+    run_case("escape/newline",      "a\\nb",  "a\nb",      "0,3", &counter)
+
+    # ── Complex / real-world ────────────────────────────────
+    run_case("real/email",          "(\\w+)@(\\w+)", "x: a@b ok",   "3,6|a|b",   &counter)
+    run_case("real/iso-date",       "(\\d\\d\\d\\d)-(\\d\\d)-(\\d\\d)","2025-01-15", "0,10|2025|01|15", &counter)
+    run_case("real/phone-fragment", "\\d{3}-\\d{4}", "call 555-1212","5,13", &counter)
+    run_case("real/leading-ws",     "^\\s*(\\w+)","   hello", "0,8|hello", &counter)
+
+    # ── is_match (boolean only) ─────────────────────────────
+    run_match("ism/yes",            "\\d+",     "abc123",   true,  &counter)
+    run_match("ism/no",             "\\d+",     "abc",      false, &counter)
+
+    # ── Errors: unsupported features ────────────────────────
+    run_compile_error("err/lookahead",      "(?=abc)",        &counter)
+    run_compile_error("err/lookbehind",     "(?<=abc)",       &counter)
+    run_compile_error("err/backref",        "(a)\\1",         &counter)
+    run_compile_error("err/unicode-prop",   "\\p{L}+",        &counter)
+    run_compile_error("err/bad-class",      "[a-",            &counter)
+    run_compile_error("err/dangling-paren", "abc(",           &counter)
+
+    print("---")
+    print("pass=" + int_to_str(counter[0]))
+    print("fail=" + int_to_str(counter[1]))

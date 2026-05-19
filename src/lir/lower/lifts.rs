@@ -28,16 +28,16 @@ pub(super) fn is_collection_void_return_lir(name: &str) -> bool {
 /// Functions that return nullable `const char*` — NULL means None.
 pub(super) fn is_nullable_cstr_fn_lir(name: &str) -> bool {
     matches!(name,
-        "gorget_regex_match_group" | "gorget_regex_match_group_by_name" | "gorget_getenv"
+        "gorget_getenv"
     )
 }
 
 /// Functions that return a struct with a sentinel field indicating "no match".
-pub(super) fn is_sentinel_option_fn_lir(name: &str) -> bool {
-    matches!(name,
-        "gorget_regex_find" | "gorget_regex_find_at"
-        | "gorget_regex_find_pat" | "gorget_regex_fullmatch"
-    )
+/// Currently none — the old gorget_regex_find family routed through here when
+/// xtd.regex was a PCRE2 wrapper; the new pure-Gorget engine does its own
+/// Option wrapping in Gorget.
+pub(super) fn is_sentinel_option_fn_lir(_name: &str) -> bool {
+    false
 }
 
 /// Functions that return nullable pointers (non-NULL = Some, NULL = None).
@@ -54,7 +54,6 @@ pub(super) fn last_error_fn_lir(name: &str) -> Option<&'static str> {
     // TlsServer before Tls to avoid prefix collision
     if name.starts_with("gorget_tls_server_") { return Some("gorget_tls_server_last_error"); }
     if name.starts_with("gorget_tls_") { return Some("gorget_tls_last_error"); }
-    if name.starts_with("gorget_regex_") { return Some("gorget_regex_last_error"); }
     if name.starts_with("gorget_crypto_") { return Some("gorget_crypto_last_error"); }
     if name == "gorget_process_spawn" { return Some("gorget_process_spawn_err"); }
     if name == "gorget_parse_int" || name == "gorget_parse_float" { return Some("gorget_parse_last_error"); }

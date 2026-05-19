@@ -209,36 +209,6 @@ fn add_thread_flags(_cmd: &mut Command, needs_threads: bool) {
     _cmd.arg("-lpthread");
 }
 
-/// Add PCRE2 linker flags to a cc command (for xtd.regex).
-fn add_regex_flags(cmd: &mut Command, needs_regex: bool) {
-    if !needs_regex { return; }
-    let pkg_ok = Command::new("pkg-config")
-        .args(["--cflags", "--libs", "libpcre2-8"])
-        .output()
-        .ok()
-        .and_then(|o| {
-            if o.status.success() {
-                Some(String::from_utf8_lossy(&o.stdout).to_string())
-            } else {
-                None
-            }
-        });
-    if let Some(flags) = pkg_ok {
-        for flag in flags.split_whitespace() {
-            cmd.arg(flag);
-        }
-    } else {
-        cmd.arg("-lpcre2-8");
-        #[cfg(target_os = "macos")]
-        {
-            cmd.arg("-I/opt/homebrew/include");
-            cmd.arg("-L/opt/homebrew/lib");
-            cmd.arg("-I/usr/local/include");
-            cmd.arg("-L/usr/local/lib");
-        }
-    }
-}
-
 /// Add OpenGL linker flags to a cc command (for gg.gl).
 fn add_gl_flags(cmd: &mut Command, needs_gl: bool) {
     if !needs_gl { return; }
@@ -827,7 +797,6 @@ fn try_build_ir(
             add_sdl_flags(&mut cc_cmd, concat_source.contains("xtd.sdl") || concat_source.contains("xtd.gfx"), &shared_c_code);
             add_tls_flags(&mut cc_cmd, concat_source.contains("std.net.tls") || concat_source.contains("xtd.http"));
             add_crypto_flags(&mut cc_cmd, concat_source.contains("xtd.crypto") || concat_source.contains("xtd.p2p"));
-            add_regex_flags(&mut cc_cmd, concat_source.contains("xtd.regex"));
             add_thread_flags(&mut cc_cmd, concat_source.contains("std.async") || concat_source.contains("xtd.p2p"));
             let status = cc_cmd.status();
             return match status {
@@ -1074,7 +1043,6 @@ fn try_build_ir(
         add_metal_flags(&mut cc_cmd, needs_metal);
         add_tls_flags(&mut cc_cmd, concat_source.contains("std.net.tls") || concat_source.contains("xtd.http"));
         add_crypto_flags(&mut cc_cmd, concat_source.contains("xtd.crypto") || concat_source.contains("xtd.p2p"));
-        add_regex_flags(&mut cc_cmd, concat_source.contains("xtd.regex"));
         add_thread_flags(&mut cc_cmd, concat_source.contains("std.async") || concat_source.contains("xtd.p2p"));
 
         let status = cc_cmd.status();
@@ -1230,9 +1198,6 @@ fn compile_llvm_pipeline(
         runtime_src.push_str(c_runtime::PROCESS_RUNTIME);
         runtime_src.push_str(c_runtime::PROCESS_SPAWN_RUNTIME);
     }
-    if concat_source.contains("xtd.regex") {
-        runtime_src.push_str(c_runtime::REGEX_RUNTIME);
-    }
     if concat_source.contains("xtd.crypto") {
         runtime_src.push_str(c_runtime::CRYPTO_RUNTIME);
     }
@@ -1387,9 +1352,7 @@ fn compile_llvm_pipeline(
         || has_extern("EVP_") || has_extern("SSL_") || has_extern("gorget_tls_") {
         add_crypto_flags(&mut link_cmd, true);
     }
-    if concat_source.contains("xtd.regex") || has_extern("pcre2_") || has_extern("gorget_regex_") {
-        add_regex_flags(&mut link_cmd, true);
-    }
+    // (xtd.regex used to need -lpcre2-8 here; now pure Gorget — no link flag.)
     // gorget_sqlite_* now resolves through the embedded amalgamation
     // (compiled as __gorget_sqlite.o above). No -lsqlite3 needed.
 

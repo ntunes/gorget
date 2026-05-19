@@ -226,13 +226,9 @@ fn lir_to_runtime_name(name: &str) -> Option<&'static str> {
         "RSAKey" => Some("GorgetRSAKey"),
         "Ed25519KeyPair" => Some("GorgetEd25519KeyPair"),
         "X25519KeyPair" => Some("GorgetX25519KeyPair"),
-        "Regex" | "RegexMatch" | "Match" => {
-            match name {
-                "Regex" => Some("GorgetRegex"),
-                "RegexMatch" | "Match" => Some("GorgetRegexMatch"),
-                _ => None,
-            }
-        }
+        // Regex/Match are now pure-Gorget structs in lib/xtd/regex.gg —
+        // no runtime mapping. (Previously routed to GorgetRegex /
+        // GorgetRegexMatch when xtd.regex was a PCRE2 wrapper.)
         "File" => Some("GorgetFile"),
         "Barrier" => Some("GorgetBarrier"),
         "CondVar" => Some("GorgetCondVar"),
@@ -441,7 +437,6 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
         "GorgetTlsSocket", "GorgetTlsServerSocket",
         "GorgetUdpSocket",
         "GorgetBigNum", "GorgetRSAKey", "GorgetEd25519KeyPair",
-        "GorgetRegex", "GorgetRegexMatch",
     ];
     let skip_struct = |def: &StructDef| -> bool {
         RUNTIME_STRUCTS.contains(&def.name.as_str())
