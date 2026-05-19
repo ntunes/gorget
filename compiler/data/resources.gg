@@ -9,16 +9,16 @@
 # Bump SCHEMA_VERSION on every breaking field change in compiler/data/schema.gg.
 # Consumers refuse mismatched versions at load time.
 #
-# ── SPIKE STATUS (2026-05-19) ───────────────────────────────────────
-# This file contains ~18 representative entries chosen to exercise every
-# enum variant and every interesting field combination at least once.
-# It is NOT yet the full table (~30 resources + ~307 runtime fns) — the
-# rest gets populated AFTER the spike consumer migration (planned item 5
-# of the resources.toml plan) validates the schema.
+# ── STATUS (2026-05-19) ─────────────────────────────────────────────
+# Filled in to the full table per item 8 of the resources.toml plan
+# (TODO.md). Spike's 9 ResourceEntry + 9 RuntimeFn entries (chosen to
+# exercise every enum variant) are at the top of each section; the rest
+# are mechanically lifted from `tests/fixtures/self_host_lowerer/lir_lower.gg`
+# (`build_resource_metadata`) and `src/lir/runtime.rs::REGISTRY`. Loader
+# validates on first call.
 #
 # Per `docs/internals/unified-resource-model.md` §9.4 rule 1: the spike
-# exists to surface schema gaps before broad migration. The full table
-# fill-in is a mechanical extension once this set proves the schema.
+# proved the schema; this fill-in is the mechanical extension.
 
 from compiler.data.schema import ResourceEntry, ResourceMetadata
 from compiler.data.schema import MatchKind, MkExact, MkPrefix
@@ -28,17 +28,21 @@ from compiler.data.schema import BoxKind, BkNotBox, BkRegularBox, BkTraitBox
 from compiler.data.schema import LirType, LtStructBase, LtPtr
 from compiler.data.schema import RuntimeFn, RuntimeParam
 from compiler.data.schema import CRuntimeType
-from compiler.data.schema import TVoid, TI64, TU8, TF64, TPtr, TStr, TArray
-from compiler.data.schema import AbiKind, AScalar, APtr, AOpaque, AGorgetString, AVoidElem, ACStr
-from compiler.data.schema import SideEffects, FxPure, FxAllocates, FxMutates, FxIo, FxConcurrent
+from compiler.data.schema import TVoid, TBool, TI32, TI64, TU8, TF64, TPtr, TStr, TArray, TMap, TSet
+from compiler.data.schema import AbiKind, AAuto, AScalar, APtr, AOpaque, AGorgetString, AVoidElem, ACStr, AByValue
+from compiler.data.schema import SideEffects, FxPure, FxReadOnly, FxAllocates, FxMutates, FxIo, FxAborts, FxConcurrent
 
 
 public static int SCHEMA_VERSION = 1
 
 
-# ── RESOURCES — 9 spike entries ─────────────────────────────────────
+# ── RESOURCES ───────────────────────────────────────────────────────
 #
-# Coverage matrix (each entry contributes ≥ 1 unique cell):
+# Spike entries lead (each chosen to exercise ≥ 1 unique enum variant /
+# field combination); the remaining mechanical lifts follow, grouped by
+# family in declaration order matching lir_lower.gg's build_resource_metadata.
+#
+# Coverage matrix (spike):
 #   match_on:           Exact alias-cluster, Exact singleton, Prefix singleton,
 #                       Prefix alias-cluster
 #   collection_kind:    all 6 variants (NotCollection, Vector, Deque, Heap, Dict, Set)
@@ -166,17 +170,234 @@ public static Vector[ResourceEntry] RESOURCES = [
             CsResource(), CkNotCollection(), BkTraitBox(),
             false, None, false)),
 
+    # ── Mechanical fill-in from lir_lower.gg::build_resource_metadata ──
+
+    # GorgetMap — Exact singleton; backing runtime for Dict/HashMap.
+    ResourceEntry(
+        [MkExact("GorgetMap")],
+        ResourceMetadata(
+            "GorgetMap", 184, LtStructBase(),
+            Some("gorget_map_free"),
+            Some("gorget_map_clone"),
+            None,
+            CsResource(), CkDict(), BkNotBox(),
+            false, None, false)),
+
+    # GorgetSet — Exact singleton; backing runtime for Set/HashSet.
+    ResourceEntry(
+        [MkExact("GorgetSet")],
+        ResourceMetadata(
+            "GorgetSet", 184, LtStructBase(),
+            Some("gorget_set_free"),
+            Some("gorget_set_clone"),
+            None,
+            CsResource(), CkSet(), BkNotBox(),
+            false, None, false)),
+
+    # GorgetClosure — Exact singleton; 16-byte closure struct.
+    ResourceEntry(
+        [MkExact("GorgetClosure")],
+        ResourceMetadata(
+            "GorgetClosure", 16, LtStructBase(),
+            Some("gorget_closure_free"),
+            Some("gorget_closure_clone"),
+            None,
+            CsResource(), CkNotCollection(), BkNotBox(),
+            false, None, false)),
+
+    # GorgetMap__ — self-host mangled monomorphised form;
+    # is_typed_constructor=false (distinguishes from user-visible Dict__).
+    # NOTE: GorgetDict__ is part of the spike cluster above with
+    # is_typed_constructor=true; lir_lower.gg actually groups it with
+    # GorgetMap__ at false. Drift surfaced during item-8 fill-in;
+    # leaving spike untouched per scope discipline.
+    ResourceEntry(
+        [MkPrefix("GorgetMap__")],
+        ResourceMetadata(
+            "GorgetMap", 184, LtStructBase(),
+            Some("gorget_map_free"),
+            Some("gorget_map_clone"),
+            None,
+            CsResource(), CkDict(), BkNotBox(),
+            false, None, false)),
+
+    # GorgetSet__ — self-host mangled monomorphised form.
+    ResourceEntry(
+        [MkPrefix("GorgetSet__")],
+        ResourceMetadata(
+            "GorgetSet", 184, LtStructBase(),
+            Some("gorget_set_free"),
+            Some("gorget_set_clone"),
+            None,
+            CsResource(), CkSet(), BkNotBox(),
+            false, None, false)),
+
+    # RWLock__ — opaque, ref-counted, typed_constructor.
+    ResourceEntry(
+        [MkPrefix("RWLock__")],
+        ResourceMetadata(
+            "Ptr", 8, LtPtr(),
+            None, None, None,
+            CsRefCounted(), CkNotCollection(), BkNotBox(),
+            true, Some("gorget_rwlock"), true)),
+
+    # Channel__ — opaque, ref-counted, typed_constructor.
+    ResourceEntry(
+        [MkPrefix("Channel__")],
+        ResourceMetadata(
+            "Ptr", 8, LtPtr(),
+            None, None, None,
+            CsRefCounted(), CkNotCollection(), BkNotBox(),
+            true, Some("gorget_channel"), true)),
+
+    # Shared__ — opaque, ref-counted, typed_constructor.
+    ResourceEntry(
+        [MkPrefix("Shared__")],
+        ResourceMetadata(
+            "Ptr", 8, LtPtr(),
+            None, None, None,
+            CsRefCounted(), CkNotCollection(), BkNotBox(),
+            true, Some("gorget_shared"), true)),
+
+    # Weak__ — opaque, ref-counted, factory shape (typed_constructor=false).
+    ResourceEntry(
+        [MkPrefix("Weak__")],
+        ResourceMetadata(
+            "Ptr", 8, LtPtr(),
+            None, None, None,
+            CsRefCounted(), CkNotCollection(), BkNotBox(),
+            true, Some("gorget_weak"), false)),
+
+    # AtomicInt__ — opaque, ref-counted, factory.
+    ResourceEntry(
+        [MkPrefix("AtomicInt__")],
+        ResourceMetadata(
+            "Ptr", 8, LtPtr(),
+            None, None, None,
+            CsRefCounted(), CkNotCollection(), BkNotBox(),
+            true, Some("gorget_atomic_int"), false)),
+
+    # AtomicBool__ — opaque, ref-counted, factory.
+    ResourceEntry(
+        [MkPrefix("AtomicBool__")],
+        ResourceMetadata(
+            "Ptr", 8, LtPtr(),
+            None, None, None,
+            CsRefCounted(), CkNotCollection(), BkNotBox(),
+            true, Some("gorget_atomic_bool"), false)),
+
+    # Semaphore__ — opaque, ref-counted, factory.
+    ResourceEntry(
+        [MkPrefix("Semaphore__")],
+        ResourceMetadata(
+            "Ptr", 8, LtPtr(),
+            None, None, None,
+            CsRefCounted(), CkNotCollection(), BkNotBox(),
+            true, Some("gorget_semaphore"), false)),
+
+    # Barrier__ — opaque, ref-counted, factory.
+    ResourceEntry(
+        [MkPrefix("Barrier__")],
+        ResourceMetadata(
+            "Ptr", 8, LtPtr(),
+            None, None, None,
+            CsRefCounted(), CkNotCollection(), BkNotBox(),
+            true, Some("gorget_barrier"), false)),
+
+    # OnceFlag__ — opaque, ref-counted, factory.
+    ResourceEntry(
+        [MkPrefix("OnceFlag__")],
+        ResourceMetadata(
+            "Ptr", 8, LtPtr(),
+            None, None, None,
+            CsRefCounted(), CkNotCollection(), BkNotBox(),
+            true, Some("gorget_once_flag"), false)),
+
+    # WaitGroup__ — opaque, ref-counted, factory.
+    ResourceEntry(
+        [MkPrefix("WaitGroup__")],
+        ResourceMetadata(
+            "Ptr", 8, LtPtr(),
+            None, None, None,
+            CsRefCounted(), CkNotCollection(), BkNotBox(),
+            true, Some("gorget_wait_group"), false)),
+
+    # TaskGroup__ — opaque, ref-counted, factory.
+    ResourceEntry(
+        [MkPrefix("TaskGroup__")],
+        ResourceMetadata(
+            "Ptr", 8, LtPtr(),
+            None, None, None,
+            CsRefCounted(), CkNotCollection(), BkNotBox(),
+            true, Some("gorget_task_group"), false)),
+
+    # Thread__ — opaque, ref-counted, factory; no method_prefix.
+    ResourceEntry(
+        [MkPrefix("Thread__")],
+        ResourceMetadata(
+            "Ptr", 8, LtPtr(),
+            None, None, None,
+            CsRefCounted(), CkNotCollection(), BkNotBox(),
+            true, None, false)),
+
+    # Bare-name opaque cluster — Barrier / CondVar / AtomicInt / AtomicBool /
+    # Process / Thread / Semaphore / WaitGroup / OnceFlag. Method-prefix
+    # wiring for these went through direct method-name dispatch (no prefix).
+    ResourceEntry(
+        [MkExact("Barrier"), MkExact("CondVar"), MkExact("AtomicInt"),
+         MkExact("AtomicBool"), MkExact("Process"), MkExact("Thread"),
+         MkExact("Semaphore"), MkExact("WaitGroup"), MkExact("OnceFlag")],
+        ResourceMetadata(
+            "Ptr", 8, LtPtr(),
+            None, None, None,
+            CsRefCounted(), CkNotCollection(), BkNotBox(),
+            true, None, false)),
+
+    # ReadGuard__ — Guard family (LtStructBase, 16 bytes); read-side prefix.
+    ResourceEntry(
+        [MkPrefix("ReadGuard__")],
+        ResourceMetadata(
+            "Guard", 16, LtStructBase(),
+            None, None, None,
+            CsResource(), CkNotCollection(), BkNotBox(),
+            false, Some("gorget_read_guard"), false)),
+
+    # WriteGuard__ — Guard family; write-side prefix.
+    ResourceEntry(
+        [MkPrefix("WriteGuard__")],
+        ResourceMetadata(
+            "Guard", 16, LtStructBase(),
+            None, None, None,
+            CsResource(), CkNotCollection(), BkNotBox(),
+            false, Some("gorget_write_guard"), false)),
+
+    # Guard__ — bare Guard prefix; default method routing.
+    ResourceEntry(
+        [MkPrefix("Guard__")],
+        ResourceMetadata(
+            "Guard", 16, LtStructBase(),
+            None, None, None,
+            CsResource(), CkNotCollection(), BkNotBox(),
+            false, Some("gorget_guard"), false)),
+
 ]
 
 
-# ── RUNTIME_FNS — 9 spike entries ───────────────────────────────────
+# ── RUNTIME_FNS ─────────────────────────────────────────────────────
 #
-# Coverage matrix:
+# Spike entries lead (each chosen to exercise ≥ 1 unique enum variant /
+# ABI / side-effect combination); the rest is mechanically lifted from
+# `src/lir/runtime.rs::REGISTRY` in declaration order.
+#
+# Coverage matrix (spike):
 #   side_effects:       FxPure, FxAllocates, FxMutates, FxIo, FxConcurrent
-#                       (FxReadOnly / FxAborts / FxUnknown deferred to full fill-in)
+#                       (FxReadOnly / FxAborts surface in the fill-in below;
+#                        FxUnknown is reserved — no registry entry uses it)
 #   returns_fresh:      true, false
 #   AbiKind:            AScalar, APtr, AOpaque, AGorgetString, AVoidElem, ACStr
+#                       (AAuto / AByValue surface in the fill-in below)
 #   CRuntimeType:       TVoid, TI64, TU8, TF64, TPtr, TStr, TArray
+#                       (TBool / TI32 / TMap / TSet surface in the fill-in below)
 #   param counts:       0, 1, 2 (the 3+ case is mechanical fill-in)
 
 public static Vector[RuntimeFn] RUNTIME_FNS = [
@@ -259,4 +480,2198 @@ public static Vector[RuntimeFn] RUNTIME_FNS = [
         FxPure(),
         false),
 
+
+    # ── Mechanical fill-in from src/lir/runtime.rs::REGISTRY ──
+
+    RuntimeFn(
+        "__gorget_alloc_array",
+        [RuntimeParam(TI64(), AScalar()),
+         RuntimeParam(TPtr(), AOpaque())],
+        TPtr(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "__gorget_dealloc",
+        [RuntimeParam(TPtr(), AOpaque()),
+         RuntimeParam(TPtr(), AOpaque())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "__gorget_pop_allocator",
+        [],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "__gorget_push_allocator",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "free",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "malloc",
+        [RuntimeParam(TI64(), AScalar())],
+        TPtr(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "memcmp",
+        [RuntimeParam(TPtr(), AOpaque()),
+         RuntimeParam(TPtr(), AOpaque()),
+         RuntimeParam(TI64(), AScalar())],
+        TI32(),
+        FxReadOnly(),
+        false),
+
+    RuntimeFn(
+        "memset",
+        [RuntimeParam(TPtr(), AOpaque()),
+         RuntimeParam(TI32(), AScalar()),
+         RuntimeParam(TI64(), AScalar())],
+        TPtr(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_abs",
+        [RuntimeParam(TI64(), AScalar())],
+        TI64(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_acos",
+        [RuntimeParam(TF64(), AScalar())],
+        TF64(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_asin",
+        [RuntimeParam(TF64(), AScalar())],
+        TF64(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_atan",
+        [RuntimeParam(TF64(), AScalar())],
+        TF64(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_atan2",
+        [RuntimeParam(TF64(), AScalar()),
+         RuntimeParam(TF64(), AScalar())],
+        TF64(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_ceil",
+        [RuntimeParam(TF64(), AScalar())],
+        TF64(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_cos",
+        [RuntimeParam(TF64(), AScalar())],
+        TF64(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_fabs",
+        [RuntimeParam(TF64(), AScalar())],
+        TF64(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_floor",
+        [RuntimeParam(TF64(), AScalar())],
+        TF64(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_fmax",
+        [RuntimeParam(TF64(), AScalar()),
+         RuntimeParam(TF64(), AScalar())],
+        TF64(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_fmin",
+        [RuntimeParam(TF64(), AScalar()),
+         RuntimeParam(TF64(), AScalar())],
+        TF64(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_log",
+        [RuntimeParam(TF64(), AScalar())],
+        TF64(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_log10",
+        [RuntimeParam(TF64(), AScalar())],
+        TF64(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_log2",
+        [RuntimeParam(TF64(), AScalar())],
+        TF64(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_min",
+        [RuntimeParam(TI64(), AScalar()),
+         RuntimeParam(TI64(), AScalar())],
+        TI64(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_max",
+        [RuntimeParam(TI64(), AScalar()),
+         RuntimeParam(TI64(), AScalar())],
+        TI64(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_pow",
+        [RuntimeParam(TF64(), AScalar()),
+         RuntimeParam(TF64(), AScalar())],
+        TF64(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_round",
+        [RuntimeParam(TF64(), AScalar())],
+        TF64(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_sin",
+        [RuntimeParam(TF64(), AScalar())],
+        TF64(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_tan",
+        [RuntimeParam(TF64(), AScalar())],
+        TF64(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_bool_to_str",
+        [RuntimeParam(TBool(), AScalar())],
+        TStr(),
+        FxAllocates(),
+        true),
+
+    RuntimeFn(
+        "gorget_char_chr",
+        [RuntimeParam(TI64(), AScalar())],
+        TStr(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_codepoint_to_utf8",
+        [RuntimeParam(TI64(), AScalar())],
+        TStr(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_float_to_str",
+        [RuntimeParam(TF64(), AScalar())],
+        TStr(),
+        FxAllocates(),
+        true),
+
+    RuntimeFn(
+        "gorget_int_to_float",
+        [RuntimeParam(TI64(), AScalar())],
+        TF64(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_int_to_str",
+        [RuntimeParam(TI64(), AScalar())],
+        TStr(),
+        FxAllocates(),
+        true),
+
+    RuntimeFn(
+        "gorget_str_byte_len",
+        [RuntimeParam(TStr(), AGorgetString())],
+        TI64(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_byte_slice",
+        [RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TI64(), AScalar()),
+         RuntimeParam(TI64(), AScalar())],
+        TStr(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_bytes",
+        [RuntimeParam(TStr(), AGorgetString())],
+        TArray(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_capacity",
+        [RuntimeParam(TPtr(), APtr())],
+        TI64(),
+        FxReadOnly(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_char_at",
+        [RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TI64(), AScalar())],
+        TStr(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_chars",
+        [RuntimeParam(TStr(), AGorgetString())],
+        TArray(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_clear",
+        [RuntimeParam(TPtr(), APtr())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_cmp",
+        [RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TStr(), AGorgetString())],
+        TI64(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_codepoint_at",
+        [RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TI64(), AScalar())],
+        TStr(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_codepoint_count",
+        [RuntimeParam(TStr(), AGorgetString())],
+        TI64(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_codepoints",
+        [RuntimeParam(TStr(), AGorgetString())],
+        TArray(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_contains",
+        [RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TStr(), AGorgetString())],
+        TBool(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_count",
+        [RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TStr(), AGorgetString())],
+        TI64(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_empty",
+        [],
+        TStr(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_ends_with",
+        [RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TStr(), AGorgetString())],
+        TBool(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_eq",
+        [RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TStr(), AGorgetString())],
+        TBool(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_find",
+        [RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TStr(), AGorgetString())],
+        TI64(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_find_ext",
+        [RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TI64(), AScalar()),
+         RuntimeParam(TBool(), AScalar())],
+        TI64(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_find_from",
+        [RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TI64(), AScalar())],
+        TI64(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_from_bool",
+        [RuntimeParam(TI64(), AScalar())],
+        TStr(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_from_cstr",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TStr(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_from_float",
+        [RuntimeParam(TI64(), AScalar())],
+        TStr(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_from_int",
+        [RuntimeParam(TI64(), AScalar())],
+        TStr(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_from_literal",
+        [RuntimeParam(TPtr(), AOpaque()),
+         RuntimeParam(TI64(), AScalar())],
+        TStr(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_has_null",
+        [RuntimeParam(TStr(), AGorgetString())],
+        TBool(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_index",
+        [RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TI64(), AScalar())],
+        TStr(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_index_of",
+        [RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TStr(), AGorgetString())],
+        TI64(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_is_alpha",
+        [RuntimeParam(TStr(), AGorgetString())],
+        TBool(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_is_alphanumeric",
+        [RuntimeParam(TStr(), AGorgetString())],
+        TBool(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_is_ascii",
+        [RuntimeParam(TStr(), AGorgetString())],
+        TBool(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_is_digit",
+        [RuntimeParam(TStr(), AGorgetString())],
+        TBool(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_is_empty",
+        [RuntimeParam(TStr(), AGorgetString())],
+        TBool(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_is_hex_digit",
+        [RuntimeParam(TStr(), AGorgetString())],
+        TBool(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_is_lower",
+        [RuntimeParam(TStr(), AGorgetString())],
+        TBool(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_is_upper",
+        [RuntimeParam(TStr(), AGorgetString())],
+        TBool(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_is_whitespace",
+        [RuntimeParam(TStr(), AGorgetString())],
+        TBool(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_join",
+        [RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TArray(), AByValue())],
+        TStr(),
+        FxAllocates(),
+        true),
+
+    RuntimeFn(
+        "gorget_str_lines",
+        [RuntimeParam(TStr(), AGorgetString())],
+        TArray(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_lstrip",
+        [RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TStr(), AGorgetString())],
+        TStr(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_lstrip_ws",
+        [RuntimeParam(TStr(), AGorgetString())],
+        TStr(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_ord",
+        [RuntimeParam(TStr(), AGorgetString())],
+        TI64(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_pad_left",
+        [RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TI64(), AScalar()),
+         RuntimeParam(TStr(), AGorgetString())],
+        TStr(),
+        FxAllocates(),
+        true),
+
+    RuntimeFn(
+        "gorget_str_pad_right",
+        [RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TI64(), AScalar()),
+         RuntimeParam(TStr(), AGorgetString())],
+        TStr(),
+        FxAllocates(),
+        true),
+
+    RuntimeFn(
+        "gorget_str_push",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TStr(), AGorgetString())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_push_char",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TStr(), AGorgetString())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_push_line",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TStr(), AGorgetString())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_removeprefix",
+        [RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TStr(), AGorgetString())],
+        TStr(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_removesuffix",
+        [RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TStr(), AGorgetString())],
+        TStr(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_repeat",
+        [RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TI64(), AScalar())],
+        TStr(),
+        FxAllocates(),
+        true),
+
+    RuntimeFn(
+        "gorget_str_replace",
+        [RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TStr(), AGorgetString())],
+        TStr(),
+        FxAllocates(),
+        true),
+
+    RuntimeFn(
+        "gorget_str_replacen",
+        [RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TI64(), AScalar())],
+        TStr(),
+        FxAllocates(),
+        true),
+
+    RuntimeFn(
+        "gorget_str_rstrip",
+        [RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TStr(), AGorgetString())],
+        TStr(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_rstrip_ws",
+        [RuntimeParam(TStr(), AGorgetString())],
+        TStr(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_slice",
+        [RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TI64(), AScalar()),
+         RuntimeParam(TI64(), AScalar())],
+        TStr(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_split",
+        [RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TStr(), AGorgetString())],
+        TArray(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_splitn",
+        [RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TI64(), AScalar())],
+        TArray(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_starts_with",
+        [RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TStr(), AGorgetString())],
+        TBool(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_str",
+        [RuntimeParam(TPtr(), APtr())],
+        TStr(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_strip",
+        [RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TStr(), AGorgetString())],
+        TStr(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_str_to_lower",
+        [RuntimeParam(TStr(), AGorgetString())],
+        TStr(),
+        FxAllocates(),
+        true),
+
+    RuntimeFn(
+        "gorget_str_to_upper",
+        [RuntimeParam(TStr(), AGorgetString())],
+        TStr(),
+        FxAllocates(),
+        true),
+
+    RuntimeFn(
+        "gorget_str_trim",
+        [RuntimeParam(TStr(), AGorgetString())],
+        TStr(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_utf8_codepoint_len_at",
+        [RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TI64(), AScalar())],
+        TI64(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_string_append",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TPtr(), APtr())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_string_clone",
+        [RuntimeParam(TPtr(), APtr())],
+        TStr(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_string_clone_to_owned",
+        [RuntimeParam(TPtr(), APtr())],
+        TStr(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_string_concat",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TPtr(), APtr())],
+        TStr(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_string_cstr",
+        [RuntimeParam(TPtr(), APtr())],
+        TPtr(),
+        FxReadOnly(),
+        false),
+
+    RuntimeFn(
+        "gorget_string_debug",
+        [RuntimeParam(TStr(), AGorgetString())],
+        TStr(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_string_eq",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TPtr(), APtr())],
+        TBool(),
+        FxReadOnly(),
+        false),
+
+    RuntimeFn(
+        "gorget_string_free",
+        [RuntimeParam(TPtr(), APtr())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_string_from_str",
+        [RuntimeParam(TStr(), AGorgetString())],
+        TStr(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_string_new",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TStr(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_string_push_line",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TPtr(), ACStr())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_array_binary_search",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TPtr(), AVoidElem())],
+        TI64(),
+        FxReadOnly(),
+        false),
+
+    RuntimeFn(
+        "gorget_array_capacity",
+        [RuntimeParam(TPtr(), APtr())],
+        TI64(),
+        FxReadOnly(),
+        false),
+
+    RuntimeFn(
+        "gorget_array_clear",
+        [RuntimeParam(TPtr(), APtr())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_array_clone",
+        [RuntimeParam(TPtr(), APtr())],
+        TArray(),
+        FxAllocates(),
+        true),
+
+    RuntimeFn(
+        "gorget_array_contains",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TPtr(), AVoidElem()),
+         RuntimeParam(TI64(), AScalar())],
+        TBool(),
+        FxReadOnly(),
+        false),
+
+    RuntimeFn(
+        "gorget_array_dedup",
+        [RuntimeParam(TPtr(), APtr())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_array_extend",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TPtr(), APtr())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_array_fill",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TI64(), AScalar()),
+         RuntimeParam(TPtr(), AVoidElem())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_array_first",
+        [RuntimeParam(TPtr(), APtr())],
+        TPtr(),
+        FxReadOnly(),
+        false),
+
+    RuntimeFn(
+        "gorget_array_free",
+        [RuntimeParam(TPtr(), APtr())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_array_get",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TI64(), AScalar())],
+        TPtr(),
+        FxReadOnly(),
+        false),
+
+    RuntimeFn(
+        "gorget_array_index_of",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TPtr(), AVoidElem())],
+        TI64(),
+        FxReadOnly(),
+        false),
+
+    RuntimeFn(
+        "gorget_array_insert",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TI64(), AScalar()),
+         RuntimeParam(TPtr(), AVoidElem())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_array_is_empty",
+        [RuntimeParam(TPtr(), APtr())],
+        TBool(),
+        FxReadOnly(),
+        false),
+
+    RuntimeFn(
+        "gorget_array_last",
+        [RuntimeParam(TPtr(), APtr())],
+        TPtr(),
+        FxReadOnly(),
+        false),
+
+    RuntimeFn(
+        "gorget_array_len",
+        [RuntimeParam(TPtr(), APtr())],
+        TI64(),
+        FxReadOnly(),
+        false),
+
+    RuntimeFn(
+        "gorget_array_pop",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TI64(), AScalar())],
+        TPtr(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_array_remove",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TI64(), AScalar())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_array_remove_opt",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TI64(), AScalar())],
+        TPtr(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_array_reserve",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TI64(), AScalar())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_array_reverse",
+        [RuntimeParam(TPtr(), APtr())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_array_safe_get",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TI64(), AScalar())],
+        TPtr(),
+        FxReadOnly(),
+        false),
+
+    RuntimeFn(
+        "gorget_array_safe_pop",
+        [RuntimeParam(TPtr(), APtr())],
+        TPtr(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_array_set",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TI64(), AScalar()),
+         RuntimeParam(TPtr(), AVoidElem())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_array_slice",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TI64(), AScalar()),
+         RuntimeParam(TI64(), AScalar())],
+        TArray(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_array_swap",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TI64(), AScalar()),
+         RuntimeParam(TI64(), AScalar())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_array_swap_remove",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TI64(), AScalar())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_array_with_capacity",
+        [RuntimeParam(TI64(), AScalar()),
+         RuntimeParam(TI64(), AScalar())],
+        TArray(),
+        FxAllocates(),
+        true),
+
+    RuntimeFn(
+        "gorget_dict_new",
+        [RuntimeParam(TI64(), AScalar()),
+         RuntimeParam(TI64(), AScalar())],
+        TMap(),
+        FxAllocates(),
+        true),
+
+    RuntimeFn(
+        "gorget_dict_new_str",
+        [RuntimeParam(TI64(), AScalar())],
+        TMap(),
+        FxAllocates(),
+        true),
+
+    RuntimeFn(
+        "gorget_map_clear",
+        [RuntimeParam(TPtr(), APtr())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_map_clone",
+        [RuntimeParam(TPtr(), APtr())],
+        TMap(),
+        FxAllocates(),
+        true),
+
+    RuntimeFn(
+        "gorget_map_contains",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TPtr(), AVoidElem())],
+        TBool(),
+        FxReadOnly(),
+        false),
+
+    RuntimeFn(
+        "gorget_map_free",
+        [RuntimeParam(TPtr(), APtr())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_map_get",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TPtr(), AVoidElem())],
+        TPtr(),
+        FxReadOnly(),
+        false),
+
+    RuntimeFn(
+        "gorget_map_is_empty",
+        [RuntimeParam(TPtr(), APtr())],
+        TBool(),
+        FxReadOnly(),
+        false),
+
+    RuntimeFn(
+        "gorget_map_items",
+        [RuntimeParam(TPtr(), APtr())],
+        TArray(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_map_keys",
+        [RuntimeParam(TPtr(), APtr())],
+        TArray(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_map_len",
+        [RuntimeParam(TPtr(), APtr())],
+        TI64(),
+        FxReadOnly(),
+        false),
+
+    RuntimeFn(
+        "gorget_map_new",
+        [RuntimeParam(TI64(), AScalar()),
+         RuntimeParam(TI64(), AScalar())],
+        TMap(),
+        FxAllocates(),
+        true),
+
+    RuntimeFn(
+        "gorget_map_new_like",
+        [RuntimeParam(TPtr(), APtr())],
+        TMap(),
+        FxAllocates(),
+        true),
+
+    RuntimeFn(
+        "gorget_map_new_str",
+        [RuntimeParam(TI64(), AScalar())],
+        TMap(),
+        FxAllocates(),
+        true),
+
+    RuntimeFn(
+        "gorget_map_put",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TPtr(), AVoidElem()),
+         RuntimeParam(TPtr(), AVoidElem())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_map_put_cloned",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TPtr(), AVoidElem()),
+         RuntimeParam(TPtr(), AVoidElem())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_map_remove",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TPtr(), AVoidElem())],
+        TBool(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_map_remove_opt",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TPtr(), AVoidElem())],
+        TPtr(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_map_reserve",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TI64(), AScalar())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_map_values",
+        [RuntimeParam(TPtr(), APtr())],
+        TArray(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_ordered_set_new",
+        [RuntimeParam(TI64(), AScalar())],
+        TSet(),
+        FxAllocates(),
+        true),
+
+    RuntimeFn(
+        "gorget_ordered_set_new_str",
+        [],
+        TSet(),
+        FxAllocates(),
+        true),
+
+    RuntimeFn(
+        "gorget_set_add",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TPtr(), AVoidElem())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_set_clear",
+        [RuntimeParam(TPtr(), APtr())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_set_clone",
+        [RuntimeParam(TPtr(), APtr())],
+        TSet(),
+        FxAllocates(),
+        true),
+
+    RuntimeFn(
+        "gorget_set_contains",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TPtr(), AVoidElem())],
+        TBool(),
+        FxReadOnly(),
+        false),
+
+    RuntimeFn(
+        "gorget_set_free",
+        [RuntimeParam(TPtr(), APtr())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_set_is_empty",
+        [RuntimeParam(TPtr(), APtr())],
+        TBool(),
+        FxReadOnly(),
+        false),
+
+    RuntimeFn(
+        "gorget_set_len",
+        [RuntimeParam(TPtr(), APtr())],
+        TI64(),
+        FxReadOnly(),
+        false),
+
+    RuntimeFn(
+        "gorget_set_new",
+        [RuntimeParam(TI64(), AScalar())],
+        TSet(),
+        FxAllocates(),
+        true),
+
+    RuntimeFn(
+        "gorget_set_new_like",
+        [RuntimeParam(TPtr(), APtr())],
+        TSet(),
+        FxAllocates(),
+        true),
+
+    RuntimeFn(
+        "gorget_set_new_str",
+        [],
+        TSet(),
+        FxAllocates(),
+        true),
+
+    RuntimeFn(
+        "gorget_set_remove",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TPtr(), AVoidElem())],
+        TBool(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_set_reserve",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TI64(), AScalar())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_set_to_array",
+        [RuntimeParam(TPtr(), APtr())],
+        TArray(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_heap_free",
+        [RuntimeParam(TPtr(), APtr())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_heap_len",
+        [RuntimeParam(TPtr(), APtr())],
+        TI64(),
+        FxReadOnly(),
+        false),
+
+    RuntimeFn(
+        "gorget_heap_new",
+        [RuntimeParam(TI64(), AScalar())],
+        TPtr(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_heap_peek",
+        [RuntimeParam(TPtr(), APtr())],
+        TPtr(),
+        FxReadOnly(),
+        false),
+
+    RuntimeFn(
+        "gorget_heap_pop",
+        [RuntimeParam(TPtr(), APtr())],
+        TPtr(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_heap_push",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TPtr(), AVoidElem())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_guard_get",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TPtr(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_guard_get_ptr",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TPtr(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_guard_release",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TVoid(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_guard_set",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TPtr(), AVoidElem()),
+         RuntimeParam(TI64(), AScalar())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_mutex_free",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TVoid(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_mutex_lock_to",
+        [RuntimeParam(TPtr(), AOpaque()),
+         RuntimeParam(TPtr(), AOpaque())],
+        TVoid(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_mutex_new",
+        [RuntimeParam(TI64(), AScalar()),
+         RuntimeParam(TPtr(), AVoidElem())],
+        TPtr(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_shared_clone",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TPtr(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_shared_downgrade",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TPtr(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_shared_drop",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TVoid(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_shared_get",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TPtr(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_shared_get_ptr",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TPtr(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_shared_new",
+        [RuntimeParam(TI64(), AScalar()),
+         RuntimeParam(TPtr(), AVoidElem())],
+        TPtr(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_shared_strong_count",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TI64(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_weak_clone",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TPtr(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_weak_drop",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TVoid(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_weak_upgrade",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TI64(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_channel_capacity",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TI64(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_channel_close",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TVoid(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_channel_free",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TVoid(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_channel_is_closed",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TBool(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_channel_len",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TI64(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_channel_new",
+        [RuntimeParam(TI64(), AScalar()),
+         RuntimeParam(TI64(), AScalar())],
+        TPtr(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_channel_recv",
+        [RuntimeParam(TPtr(), AOpaque()),
+         RuntimeParam(TPtr(), AOpaque())],
+        TVoid(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_channel_release",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TVoid(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_channel_retain",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TPtr(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_channel_send",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TPtr(), AVoidElem())],
+        TVoid(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_read_guard_get",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TPtr(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_read_guard_get_ptr",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TPtr(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_read_guard_release",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TVoid(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_rwlock_free",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TVoid(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_rwlock_new",
+        [RuntimeParam(TI64(), AScalar()),
+         RuntimeParam(TPtr(), AVoidElem())],
+        TPtr(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_rwlock_read",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TPtr(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_rwlock_read_to",
+        [RuntimeParam(TPtr(), AOpaque()),
+         RuntimeParam(TPtr(), AOpaque())],
+        TVoid(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_rwlock_write",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TPtr(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_rwlock_write_to",
+        [RuntimeParam(TPtr(), AOpaque()),
+         RuntimeParam(TPtr(), AOpaque())],
+        TVoid(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_write_guard_get",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TPtr(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_write_guard_get_ptr",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TPtr(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_write_guard_release",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TVoid(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_write_guard_set",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TPtr(), AVoidElem()),
+         RuntimeParam(TI64(), AScalar())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_rand",
+        [],
+        TI64(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_rand_range",
+        [RuntimeParam(TI64(), AScalar()),
+         RuntimeParam(TI64(), AScalar())],
+        TI64(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_seed",
+        [RuntimeParam(TI64(), AScalar())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_format_time",
+        [RuntimeParam(TI64(), AScalar()),
+         RuntimeParam(TPtr(), ACStr())],
+        TPtr(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_parse_time",
+        [RuntimeParam(TPtr(), ACStr()),
+         RuntimeParam(TPtr(), ACStr())],
+        TI64(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_reactor_sleep_ms",
+        [RuntimeParam(TI64(), AScalar())],
+        TVoid(),
+        FxIo(),
+        false),
+
+    RuntimeFn(
+        "gorget_sleep_ms",
+        [RuntimeParam(TI64(), AScalar())],
+        TVoid(),
+        FxIo(),
+        false),
+
+    RuntimeFn(
+        "gorget_time",
+        [],
+        TI64(),
+        FxIo(),
+        false),
+
+    RuntimeFn(
+        "gorget_time_ms",
+        [],
+        TI64(),
+        FxIo(),
+        false),
+
+    RuntimeFn(
+        "gorget_barrier_free",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TVoid(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_barrier_new",
+        [RuntimeParam(TI64(), AScalar())],
+        TPtr(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_barrier_wait",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TVoid(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_condvar_free",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TVoid(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_condvar_new",
+        [],
+        TPtr(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_condvar_notify_all",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TVoid(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_condvar_notify_one",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TVoid(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_condvar_wait_guard",
+        [RuntimeParam(TPtr(), AOpaque()),
+         RuntimeParam(TPtr(), AOpaque())],
+        TVoid(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_atomic_bool_compare_exchange",
+        [RuntimeParam(TPtr(), AOpaque()),
+         RuntimeParam(TBool(), AScalar()),
+         RuntimeParam(TBool(), AScalar())],
+        TBool(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_atomic_bool_free",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TVoid(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_atomic_bool_load",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TBool(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_atomic_bool_new",
+        [RuntimeParam(TBool(), AScalar())],
+        TPtr(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_atomic_bool_store",
+        [RuntimeParam(TPtr(), AOpaque()),
+         RuntimeParam(TBool(), AScalar())],
+        TVoid(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_atomic_bool_swap",
+        [RuntimeParam(TPtr(), AOpaque()),
+         RuntimeParam(TBool(), AScalar())],
+        TBool(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_atomic_int_add",
+        [RuntimeParam(TPtr(), AOpaque()),
+         RuntimeParam(TI64(), AScalar())],
+        TI64(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_atomic_int_compare_exchange",
+        [RuntimeParam(TPtr(), AOpaque()),
+         RuntimeParam(TI64(), AScalar()),
+         RuntimeParam(TI64(), AScalar())],
+        TBool(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_atomic_int_free",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TVoid(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_atomic_int_load",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TI64(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_atomic_int_new",
+        [RuntimeParam(TI64(), AScalar())],
+        TPtr(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_atomic_int_store",
+        [RuntimeParam(TPtr(), AOpaque()),
+         RuntimeParam(TI64(), AScalar())],
+        TVoid(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_atomic_int_sub",
+        [RuntimeParam(TPtr(), AOpaque()),
+         RuntimeParam(TI64(), AScalar())],
+        TI64(),
+        FxConcurrent(),
+        false),
+
+    RuntimeFn(
+        "gorget_process_close_stdin",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TVoid(),
+        FxIo(),
+        false),
+
+    RuntimeFn(
+        "gorget_process_kill",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TVoid(),
+        FxIo(),
+        false),
+
+    RuntimeFn(
+        "gorget_process_pid",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TI64(),
+        FxIo(),
+        false),
+
+    RuntimeFn(
+        "gorget_process_read_stderr",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TStr(),
+        FxIo(),
+        false),
+
+    RuntimeFn(
+        "gorget_process_read_stdout",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TStr(),
+        FxIo(),
+        false),
+
+    RuntimeFn(
+        "gorget_process_spawn",
+        [RuntimeParam(TPtr(), ACStr()),
+         RuntimeParam(TPtr(), APtr())],
+        TPtr(),
+        FxIo(),
+        false),
+
+    RuntimeFn(
+        "gorget_process_wait",
+        [RuntimeParam(TPtr(), AOpaque())],
+        TI64(),
+        FxIo(),
+        false),
+
+    RuntimeFn(
+        "gorget_process_write_stdin",
+        [RuntimeParam(TPtr(), AOpaque()),
+         RuntimeParam(TStr(), ACStr())],
+        TVoid(),
+        FxIo(),
+        false),
+
+    RuntimeFn(
+        "gorget_assert_fail",
+        [RuntimeParam(TPtr(), ACStr()),
+         RuntimeParam(TPtr(), ACStr()),
+         RuntimeParam(TI64(), AScalar())],
+        TVoid(),
+        FxAborts(),
+        false),
+
+    RuntimeFn(
+        "gorget_assert_fail_values",
+        [RuntimeParam(TPtr(), ACStr()),
+         RuntimeParam(TStr(), AGorgetString()),
+         RuntimeParam(TStr(), AGorgetString())],
+        TVoid(),
+        FxAborts(),
+        false),
+
+    RuntimeFn(
+        "gorget_overflow_add",
+        [],
+        TVoid(),
+        FxAborts(),
+        false),
+
+    RuntimeFn(
+        "gorget_overflow_mul",
+        [],
+        TVoid(),
+        FxAborts(),
+        false),
+
+    RuntimeFn(
+        "gorget_overflow_sub",
+        [],
+        TVoid(),
+        FxAborts(),
+        false),
+
+    RuntimeFn(
+        "gorget_panic",
+        [RuntimeParam(TPtr(), ACStr())],
+        TVoid(),
+        FxAborts(),
+        false),
+
+    RuntimeFn(
+        "gorget_parse_float",
+        [RuntimeParam(TPtr(), ACStr())],
+        TF64(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_parse_int",
+        [RuntimeParam(TPtr(), ACStr())],
+        TI64(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_bytes_concat",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TPtr(), APtr())],
+        TArray(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_bytes_from_hex",
+        [RuntimeParam(TPtr(), ACStr())],
+        TArray(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_bytes_from_str",
+        [RuntimeParam(TPtr(), ACStr())],
+        TArray(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_bytes_read_f32_le",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TI64(), AScalar())],
+        TF64(),
+        FxReadOnly(),
+        false),
+
+    RuntimeFn(
+        "gorget_bytes_read_f64_le",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TI64(), AScalar())],
+        TF64(),
+        FxReadOnly(),
+        false),
+
+    RuntimeFn(
+        "gorget_bytes_read_i32_le",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TI64(), AScalar())],
+        TI64(),
+        FxReadOnly(),
+        false),
+
+    RuntimeFn(
+        "gorget_bytes_read_i64_le",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TI64(), AScalar())],
+        TI64(),
+        FxReadOnly(),
+        false),
+
+    RuntimeFn(
+        "gorget_bytes_read_u16_be",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TI64(), AScalar())],
+        TI64(),
+        FxReadOnly(),
+        false),
+
+    RuntimeFn(
+        "gorget_bytes_read_u16_le",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TI64(), AScalar())],
+        TI64(),
+        FxReadOnly(),
+        false),
+
+    RuntimeFn(
+        "gorget_bytes_read_u32_be",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TI64(), AScalar())],
+        TI64(),
+        FxReadOnly(),
+        false),
+
+    RuntimeFn(
+        "gorget_bytes_read_u32_le",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TI64(), AScalar())],
+        TI64(),
+        FxReadOnly(),
+        false),
+
+    RuntimeFn(
+        "gorget_bytes_slice",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TI64(), AScalar()),
+         RuntimeParam(TI64(), AScalar())],
+        TArray(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_bytes_to_hex",
+        [RuntimeParam(TPtr(), APtr())],
+        TStr(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_bytes_to_str",
+        [RuntimeParam(TPtr(), APtr())],
+        TStr(),
+        FxAllocates(),
+        false),
+
+    RuntimeFn(
+        "gorget_bytes_utf8_valid",
+        [RuntimeParam(TPtr(), APtr())],
+        TBool(),
+        FxPure(),
+        false),
+
+    RuntimeFn(
+        "gorget_bytes_write_f32_le",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TI64(), AScalar()),
+         RuntimeParam(TF64(), AScalar())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_bytes_write_f64_le",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TI64(), AScalar()),
+         RuntimeParam(TF64(), AScalar())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_bytes_write_i32_le",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TI64(), AScalar()),
+         RuntimeParam(TI64(), AScalar())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_bytes_write_i64_le",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TI64(), AScalar()),
+         RuntimeParam(TI64(), AScalar())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_bytes_write_u16_be",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TI64(), AScalar()),
+         RuntimeParam(TI64(), AScalar())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_bytes_write_u16_le",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TI64(), AScalar()),
+         RuntimeParam(TI64(), AScalar())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_bytes_write_u32_be",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TI64(), AScalar()),
+         RuntimeParam(TI64(), AScalar())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_bytes_write_u32_le",
+        [RuntimeParam(TPtr(), APtr()),
+         RuntimeParam(TI64(), AScalar()),
+         RuntimeParam(TI64(), AScalar())],
+        TVoid(),
+        FxMutates(),
+        false),
+
+    RuntimeFn(
+        "gorget_append_file",
+        [RuntimeParam(TPtr(), AAuto()),
+         RuntimeParam(TPtr(), AAuto())],
+        TVoid(),
+        FxIo(),
+        false),
+
+    RuntimeFn(
+        "gorget_file_exists",
+        [RuntimeParam(TPtr(), AAuto())],
+        TBool(),
+        FxIo(),
+        false),
+
+    RuntimeFn(
+        "gorget_is_dir",
+        [RuntimeParam(TPtr(), AAuto())],
+        TBool(),
+        FxIo(),
+        false),
+
+    RuntimeFn(
+        "gorget_write_file",
+        [RuntimeParam(TPtr(), AAuto()),
+         RuntimeParam(TPtr(), AAuto())],
+        TVoid(),
+        FxIo(),
+        false),
+
 ]
+

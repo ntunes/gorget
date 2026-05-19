@@ -422,14 +422,16 @@ mod tests {
     use super::*;
 
     /// End-to-end: the embedded `resources.gg` loads, the schema version
-    /// matches, and the 18 spike entries land with the expected shapes.
+    /// matches, and the full table lands with the expected shapes.
+    /// Spot-checks cover the spike entries (which still lead the file) and
+    /// a sample of the mechanical fill-in (item 8 of the resources.toml plan).
     #[test]
     fn resources_load_clean() {
         let t = table();
 
         assert_eq!(t.schema_version, SCHEMA_VERSION_EXPECTED);
-        assert_eq!(t.resources.len(), 10, "spike expected 10 ResourceEntry rows");
-        assert_eq!(t.runtime_fns.len(), 9, "spike expected 9 RuntimeFn rows");
+        assert_eq!(t.resources.len(), 31, "expected 31 ResourceEntry rows after fill-in");
+        assert_eq!(t.runtime_fns.len(), 299, "expected 299 RuntimeFn rows after fill-in");
 
         // Spot-check: GorgetString multi-alias Exact entry.
         let s = t.lookup("GorgetString").expect("GorgetString missing");
