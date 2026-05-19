@@ -2192,7 +2192,32 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             type_prefix = "GorgetString"
                         String static_name = type_prefix + "__" + mname
                         int static_ret = I64_TYPE
-                        if gmod.fn_sigs.contains(static_name):
+                        # Qualified enum variant constructor: `EnumName.Variant(args)`
+                        # is parsed as EMethodCall(EIdentifier(EnumName), "Variant",
+                        # args). The static-method path mangles to
+                        # `EnumName__Variant` — for variants this is a constructor,
+                        # not a real method, so the return type is the enum struct
+                        # itself. Without this, `static_ret` falls through to
+                        # I64_TYPE and the destination local lands at int64_t —
+                        # the C codegen then tries to assign a 100+ byte enum
+                        # struct literal into a scalar slot and barfs with
+                        # "incompatible types when assigning to type 'int64_t'
+                        # from type '__gg_Foo'". Mirrors Rust gg's enum-variant
+                        # branch in `src/ir/lowering/exprs/methods.rs` (snag #51).
+                        bool is_variant_ctor = false
+                        if gmod.type_infos.contains(ident_name):
+                            GirTypeInfo enum_info = gmod.type_infos.get(ident_name).unwrap()
+                            if enum_info.is_enum:
+                                int evi = 0
+                                while evi < enum_info.variants.len():
+                                    GirEnumVariantInfo evv = enum_info.variants.get(evi).unwrap()
+                                    if evv.name == mname:
+                                        is_variant_ctor = true
+                                        break
+                                    evi += 1
+                        if is_variant_ctor:
+                            static_ret = lookup_or_register_named(&gmod, ident_name)
+                        elif gmod.fn_sigs.contains(static_name):
                             static_ret = gmod.fn_sigs.get(static_name).unwrap()
                         elif mname == "default":
                             if gmod.type_infos.contains(ident_name):

@@ -2276,7 +2276,91 @@ Dict[int, int] compute_val_types(LirFunction &func, LirModule &m):
                 types.put(dst, ty)
             ii += 1
         bi += 1
+
+    # CallExtern→SlotStore slot-type override.
+    # Mirrors Rust gg's `apply_callextern_slotstore_override` in
+    # `src/lir/types.rs` (layering rule 4 — resolve once, write through).
+    # When an `ICallExtern` result is immediately stored into a slot whose
+    # type is more specific than what `infer_inst_type_with_ret` could
+    # derive from the extern name (e.g. extern is unknown so we fell
+    # through to the I64 fallback, but the GIR-typed slot is a user
+    # struct), prefer the slot type. The slot type comes from GIR via
+    # SSA construction and is authoritative for STRUCT slots; the extern
+    # name carries no type info on its own.
+    apply_callextern_slotstore_override(&func, &m, &types)
     return types
+
+# Find the GorgetString struct id (-1 if not registered).
+int gorget_string_struct_id(LirModule &m):
+    int i = 0
+    while i < m.structs.len():
+        LirStructDef sdef = m.structs.get(i).unwrap()
+        if sdef.name == "GorgetString":
+            return i
+        i += 1
+    return -1
+
+# Is `ty` the GorgetString struct or a Ptr-to-GorgetString? Used to
+# preserve the literal-wrap convention at the ISlotStore consumer.
+bool lir_ty_is_str_raw(int ty, int str_sid):
+    if str_sid < 0:
+        return false
+    if ty == LT_STRUCT_BASE + str_sid:
+        return true
+    if ty == LT_PTR_TO_BASE + str_sid:
+        return true
+    return false
+
+# CallExtern→SlotStore slot-type override.
+# See compute_val_types comment for the rule.
+#
+# Self-host divergence from Rust gg: Rust overrides whenever slot_ty
+# is more specific than Ptr/Void, trusting the GIR slot type as
+# authoritative. The self-host's GIR can mistype some slots as I64
+# when the source-level declaration was a struct (e.g. `String x =
+# path.byte_slice(...)` — the byte_slice return-type inference falls
+# through to I64 in the EFieldAccess-as-method path, var_type
+# inherits the wrong I64). Forcing val_types[d] = I64 in that case
+# would override the call's correct Str return inference, producing
+# `int64_t __vN = gorget_str_byte_slice(...)` which cc rejects.
+#
+# Compromise: only override when the slot type is an AGGREGATE
+# (struct). Aggregate slot types are reliable signals — the only
+# way a slot ends up typed `__gg_Foo` is via a SVarDecl/parameter
+# where the user explicitly named the struct, OR where the GIR
+# correctly inferred a struct constructor return. Scalar slots may
+# be wrong, so leave val_types intact and let the existing
+# ISlotStore scalar-slot-receiving-aggregate-value path emit a
+# zero-init fallback (pre-existing behaviour preserved).
+void apply_callextern_slotstore_override(LirFunction &func, LirModule &m, Dict[int, int] &types):
+    int str_sid = gorget_string_struct_id(&m)
+    int bi = 0
+    while bi < func.blocks.len():
+        LirBlock blk = func.blocks.get(bi).unwrap()
+        int ii = 0
+        while ii + 1 < blk.insts.len():
+            LirInst inst = blk.insts.get(ii).unwrap()
+            LirInst next = blk.insts.get(ii + 1).unwrap()
+            match inst:
+                case ICallExtern(d, _, _, _, _):
+                    if d >= 0:
+                        match next:
+                            case ISlotStore(slot, value, _):
+                                if value == d:
+                                    int raw_slot_ty = func.slots.get(slot).unwrap().ty
+                                    if lir_is_aggregate(raw_slot_ty):
+                                        int current = LT_VOID
+                                        if types.contains(d):
+                                            current = types.get(d).unwrap()
+                                        bool is_ptr_to_str = (current == LT_PTR) and lir_ty_is_str_raw(raw_slot_ty, str_sid)
+                                        if not is_ptr_to_str and current != raw_slot_ty:
+                                            types.put(d, raw_slot_ty)
+                            else:
+                                pass
+                else:
+                    pass
+            ii += 1
+        bi += 1
 
 # Extract the destination value ID from an instruction (-1 if none).
 int inst_dst(LirInst &inst):
