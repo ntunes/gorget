@@ -1204,7 +1204,61 @@ impl<'a> TypeChecker<'a> {
 
             Expr::BinaryOp { left, op, right } => {
                 let left_type = self.infer_expr(left);
-                let right_type = self.infer_expr(right);
+
+                // Thread the LHS type as a hint for the RHS literal so byte
+                // literals (`b'X'`, lexed as Token::IntLiteral) coerce to
+                // the LHS's sized integer type at the `IntLiteral` typing
+                // path (line ~1006). Same mechanism that lets `byte x = 5`
+                // coerce the literal at VarDecl. Only triggers when the
+                // LHS is fully concrete (resolved primitive) and the RHS
+                // is a bare integer literal (with optional unary minus) —
+                // anything else uses the normal independent-inference
+                // path. Without this, BinaryOp drops the LHS context and
+                // unify(uint8, int) fails because int → uint8 isn't safe
+                // widening.
+                let rhs_hint = if matches!(
+                    op,
+                    BinaryOp::Eq | BinaryOp::Neq | BinaryOp::Lt | BinaryOp::Gt
+                    | BinaryOp::LtEq | BinaryOp::GtEq
+                    | BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul
+                    | BinaryOp::Div | BinaryOp::Rem | BinaryOp::Mod
+                    | BinaryOp::AddWrap | BinaryOp::SubWrap | BinaryOp::MulWrap
+                    | BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor
+                    | BinaryOp::Shl | BinaryOp::Shr
+                ) {
+                    let rhs_is_int_literal = matches!(
+                        &right.node,
+                        Expr::IntLiteral(_)
+                    ) || matches!(
+                        &right.node,
+                        Expr::UnaryOp { op: UnaryOp::Neg, operand }
+                            if matches!(operand.node, Expr::IntLiteral(_))
+                    );
+                    if rhs_is_int_literal {
+                        let lhs_resolved = self.resolve_type(left_type);
+                        if matches!(
+                            self.types.get(lhs_resolved),
+                            ResolvedType::Primitive(p) if is_integer_type(p)
+                        ) {
+                            Some(lhs_resolved)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                let right_type = if let Some(hint) = rhs_hint {
+                    let prev_hint = self.decl_type_hint;
+                    self.decl_type_hint = Some(hint);
+                    let t = self.infer_expr(right);
+                    self.decl_type_hint = prev_hint;
+                    t
+                } else {
+                    self.infer_expr(right)
+                };
 
                 match op {
                     // Comparison operators return bool
