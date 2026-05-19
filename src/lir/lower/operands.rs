@@ -241,11 +241,26 @@ impl<'a> FuncLowering<'a> {
 
         // Higher-order collection helpers (Vector__T__filter, Dict__K__V__map, Set__T__any, etc.)
         // All take self-by-ptr as arg 0, remaining args are closures/scalars (Opaque).
+        //
+        // Phase A SSoT: the kind-detection arm previously matched six prefix
+        // patterns to decide "is this a collection method?". The same decision
+        // now reads from `compiler/data/resources.gg`'s typed
+        // `collection_kind` (per layering-discipline rule 2). The prefix arms
+        // remain as a defensive fallback for names not yet in the spike (item
+        // 8 fills out the table).
         {
             use crate::ir::abi::AbiKind;
-            let is_higher_order = (name.starts_with("Vector__") || name.starts_with("Deque__")
-                || name.starts_with("Dict__") || name.starts_with("HashMap__")
-                || name.starts_with("Set__") || name.starts_with("HashSet__"))
+            use crate::ir::resource_schema::CollectionKind as SchemaCollectionKind;
+            let is_collection_name = crate::ir::resources::table().lookup(name)
+                .map(|m| matches!(m.collection_kind,
+                    SchemaCollectionKind::Vector | SchemaCollectionKind::Deque
+                    | SchemaCollectionKind::Dict | SchemaCollectionKind::Set))
+                .unwrap_or_else(|| {
+                    name.starts_with("Vector__") || name.starts_with("Deque__")
+                    || name.starts_with("Dict__") || name.starts_with("HashMap__")
+                    || name.starts_with("Set__") || name.starts_with("HashSet__")
+                });
+            let is_higher_order = is_collection_name
                 && name.rfind("__").map_or(false, |pos| {
                     let method = &name[pos + 2..];
                     matches!(method, "filter" | "map" | "flat_map" | "fold" | "reduce"
