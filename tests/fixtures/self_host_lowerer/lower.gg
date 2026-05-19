@@ -2555,7 +2555,20 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # byte-by-byte loop — stage-1 self-host's `.slice(5, len)` on
             # a Box-prefixed type name returns empty for view-aliasing
             # reasons (see EDeref comment at line ~2549), so we walk bytes.
-            if base_type_name.starts_with("Box__"):
+            # Phase A — typed-metadata classification (BkRegularBox) via
+            # build_resource_metadata; the byte-slice for the inner-name
+            # stays string-based (rmeta doesn't carry parsed inner names).
+            bool base_is_regular_box = false
+            match build_resource_metadata(base_type_name):
+                case Some(rmeta):
+                    match rmeta.box_kind:
+                        case BkRegularBox():
+                            base_is_regular_box = true
+                        else:
+                            pass
+                case None:
+                    pass
+            if base_is_regular_box:
                 int blen = base_type_name.byte_len()
                 String inner_name = ""
                 int bi = 5
@@ -3380,8 +3393,28 @@ void emit_chain_writeback(LowerCtx &ctx, SpannedExpr coll_expr, SpannedExpr idx_
     #                                    lir_lower.gg::map_dict_method)
     # Other receivers fall through silently — better to lose the writeback
     # than emit a bogus call.
-    bool is_vector = coll_tn.starts_with("Vector__") or coll_tn.starts_with("Deque__")
-    bool is_dict = coll_tn.starts_with("Dict__") or coll_tn.starts_with("HashMap__")
+    # Phase A — typed-metadata classification (CkVector/CkDeque/CkDict) via
+    # build_resource_metadata; retires the legacy `starts_with("Vector__")`
+    # etc. cascade per docs/internals/unified-resource-model.md §3.6 + §13
+    # and docs/internals/self-host-resource-model.md §3. (`build_resource_metadata`
+    # rather than `resource_meta_for(&gmod, ...)` because lower_module runs
+    # before `gmod.resource_metadata` is populated at `lower_gir_to_lir`
+    # entry — same reasoning as other in-lower_module consumers above.)
+    bool is_vector = false
+    bool is_dict = false
+    match build_resource_metadata(coll_tn):
+        case Some(rmeta):
+            match rmeta.collection_kind:
+                case CkVector():
+                    is_vector = true
+                case CkDeque():
+                    is_vector = true
+                case CkDict():
+                    is_dict = true
+                else:
+                    pass
+        case None:
+            pass
     if not (is_vector or is_dict):
         return
     String set_fn = coll_tn + "__set"
@@ -3996,7 +4029,23 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
     # non-enumerate variant.
     int coll_local = lower_expr(&ctx, probe_coll, &gmod)
     String coll_tn = local_type_name(coll_local, &ctx, &gmod)
-    if coll_tn.starts_with("Vector__") or coll_tn.starts_with("Deque__"):
+    # Phase A — typed-metadata classification (CkVector/CkDeque) via
+    # build_resource_metadata; retires the legacy `starts_with("Vector__")`
+    # cascade per docs/internals/unified-resource-model.md §3.6 + §13 and
+    # docs/internals/self-host-resource-model.md §3.
+    bool coll_is_vec_like = false
+    match build_resource_metadata(coll_tn):
+        case Some(rmeta):
+            match rmeta.collection_kind:
+                case CkVector():
+                    coll_is_vec_like = true
+                case CkDeque():
+                    coll_is_vec_like = true
+                else:
+                    pass
+        case None:
+            pass
+    if coll_is_vec_like:
         lower_for_vector(&ctx, pat, coll_local, coll_tn, probe_is_enumerate, body, &gmod, is_main)
         return
     if probe_is_enumerate:
