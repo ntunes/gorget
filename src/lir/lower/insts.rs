@@ -1988,6 +1988,33 @@ impl<'a> FuncLowering<'a> {
                             ElemMeta::Resource(ResourceKind::GorgetSet),
                     };
                 }
+                // Phase A SSoT fallback: consult `compiler/data/resources.gg`
+                // before the legacy prefix arms (per layering-discipline rule 2).
+                // The table's `runtime_name` carries the canonical backing-type
+                // identity (`GorgetArray` for Vector__/Deque__, `GorgetMap` for
+                // Dict__/HashMap__, `GorgetSet` for Set__/HashSet__, `Box`/
+                // `Mutex` etc. for the ref-counted handles).
+                if let Some(meta) = crate::ir::resources::table().lookup(n) {
+                    match meta.runtime_name.as_str() {
+                        "GorgetArray" => return ElemMeta::Resource(ResourceKind::GorgetArray),
+                        "GorgetMap" => return ElemMeta::Resource(ResourceKind::GorgetMap),
+                        "GorgetSet" => return ElemMeta::Resource(ResourceKind::GorgetSet),
+                        "GorgetString" => return ElemMeta::Resource(ResourceKind::GorgetString),
+                        // CsRefCounted entries — Box/Shared/Weak/Channel/Mutex/etc.
+                        // are opaque handles in CollectionCtor element position.
+                        _ if matches!(meta.copy_semantics,
+                            crate::ir::resource_schema::CopySemantics::RefCounted) =>
+                            return ElemMeta::Resource(ResourceKind::RefCounted),
+                        // Fall through for any runtime_name not explicitly mapped
+                        // (defensive: the table's entries beyond the spike may
+                        // surface new categories not yet wired here).
+                        _ => {}
+                    }
+                }
+                // Legacy prefix fallback: covers names that don't yet appear in
+                // resources.gg (the spike is 9 entries; the full ~30 lands as
+                // item 8 of the SSoT plan). Safe to remove once the table is
+                // fully populated.
                 if n.starts_with("Vector__") || n.starts_with("Deque__") {
                     return ElemMeta::Resource(ResourceKind::GorgetArray);
                 }
