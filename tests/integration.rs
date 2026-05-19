@@ -64,6 +64,15 @@ fn skip_under_llvm() -> bool {
     matches!(gg_backend().as_deref(), Some("llvm"))
 }
 
+/// True when `GG_FULL=1` is NOT set — used by diagnostic-only tests that are
+/// expensive and meant to run on CI / pre-push, not on every `cargo test`.
+/// Currently gates `self_host_e2e` (~2.5 min solo, ~5 min under sweep
+/// contention). To run the full diagnostic sweep locally:
+///   `GG_FULL=1 cargo test --test integration --release -- --test-threads=4`
+fn skip_unless_full() -> bool {
+    std::env::var("GG_FULL").ok().filter(|s| !s.is_empty()).is_none()
+}
+
 /// Path to the `gg` binary that integration tests invoke. Cargo sets
 /// `CARGO_BIN_EXE_gg` at compile time of this test binary and guarantees the
 /// referenced executable is built and up-to-date before the test process
@@ -14107,6 +14116,13 @@ fn validate_passes_passes_self_host() {
 // Self-host End-to-End — every fixture, compiled+run via stage-1
 // ═══════════════════════════════════════════════════════════════
 //
+// **Gated behind `GG_FULL=1`** — this test is the heaviest in the suite
+// (~2.5 min solo, ~5 min under sweep contention). It's diagnostic only
+// (always passes, reports a Match/Total% summary), so skipping it in
+// dev iteration is strictly safe — no signal would be missed except the
+// eprintln convergence number, which is informational. CI / pre-push
+// runs should set `GG_FULL=1` to include it.
+//
 // For each fixture in `tests/fixtures/*.gg`:
 //   1. Build & run via Rust gg → capture stdout (the "gold" output).
 //   2. Run stage-0 driver with `--lir-c` → emit stage-1 C body.
@@ -14134,6 +14150,7 @@ fn validate_passes_passes_self_host() {
 #[serial(self_host_lowerer_driver)]
 fn self_host_e2e() {
     if skip_under_llvm() { return; }
+    if skip_unless_full() { return; }
 
     // 1. Build stage-0 driver (cached) and extract the Rust runtime
     //    preamble once. Both reused across every fixture.
