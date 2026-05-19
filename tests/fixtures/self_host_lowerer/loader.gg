@@ -7,7 +7,7 @@
 from parser import parse_source, parse_source_with_offset
 from ast import Module, Item, ImportStmt, FunctionDef, EquipBlock, EnumDef, StructDef, SpannedExpr, SpannedType, SpannedPattern, Stmt, ElseBranch, MatchArm, SelectArm, SelectOp, Expr, Type, Pattern, TraitDef, Param
 from derive import expand_derives
-from std.fs import read_file, file_exists
+from std.fs import read_file, file_exists, is_dir
 from std.collections import Vector, Dict
 from std.conv import int_to_str
 
@@ -35,6 +35,52 @@ String parent_dir(String path):
     if last_slash >= 0:
         return path.slice(0, last_slash)
     return "."
+
+# Project-root namespaces — first dotted segment that resolves
+# against the project root (walk up from `start` to find an ancestor
+# containing a sibling dir of that name) rather than `base_dir`.
+# Mirrors `is_project_root_namespace` in src/loader.rs:88.
+bool is_project_root_namespace(String mod_path):
+    # Match first dotted segment.
+    if mod_path == "compiler":
+        return true
+    if mod_path.starts_with("compiler."):
+        return true
+    return false
+
+# Walk up from `start` until we find an ancestor directory containing
+# a subdirectory named `root_dir_name`. Returns that ancestor path,
+# or "" if none. Mirrors `find_project_root_for` in src/loader.rs:95.
+String find_project_root_for(String start, String root_dir_name):
+    String cur = start
+    int guard = 0
+    while guard < 32:
+        if cur == "":
+            return ""
+        String candidate = cur + "/" + root_dir_name
+        if is_dir(candidate):
+            return cur
+        String par = parent_dir(cur)
+        if par == cur:
+            return ""
+        if par == ".":
+            # Reached cwd-rooted shorthand; one more attempt then stop.
+            String candidate2 = "./" + root_dir_name
+            if is_dir(candidate2):
+                return "."
+            return ""
+        cur = par
+        guard += 1
+    return ""
+
+# First dotted segment of `mod_path`.
+String first_dotted_segment(String mod_path):
+    int dot_i = 0
+    while dot_i < mod_path.len():
+        if mod_path.slice(dot_i, dot_i + 1) == ".":
+            return mod_path.slice(0, dot_i)
+        dot_i += 1
+    return mod_path
 
 # ── std.iter auto-import ────────────────────────────────
 #
@@ -537,10 +583,21 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
         String mod_path = import_paths.get(pi).unwrap()
         String mod_prefix = mangle_prefix(mod_path)
 
-        # Try local directory first, then lib directory
+        # Try local directory first, then lib directory.
         String file_path = resolve_module_path(base_dir, mod_path)
         if not file_exists(file_path):
             file_path = resolve_module_path(lib_dir, mod_path)
+        # Project-root namespace fallback: `compiler.data.schema` etc.
+        # live at `<project_root>/compiler/data/schema.gg` regardless
+        # of `base_dir` / `lib_dir`. Mirrors src/loader.rs:746-760.
+        if not file_exists(file_path):
+            if is_project_root_namespace(mod_path):
+                String root_seg = first_dotted_segment(mod_path)
+                String project_root = find_project_root_for(base_dir, root_seg)
+                if project_root != "":
+                    String pr_path = resolve_module_path(project_root, mod_path)
+                    if file_exists(pr_path):
+                        file_path = pr_path
         if file_exists(file_path):
             String source = read_file(file_path)
             int module_offset = next_offset
