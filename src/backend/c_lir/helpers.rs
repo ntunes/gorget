@@ -811,13 +811,31 @@ pub(super) fn elem_drop_fn_for_c_type(c_type: &str, module: &crate::lir::LirModu
 // equivalent FieldStore insts via `super::types::elem_clone_fn_for_type`
 // at the LIR layer. The LIR-level helper covers the same type set.
 
+/// Item 7e Phase 4 consumer: emit a collection constructor.
+///
+/// Two-tier read strategy, in priority order:
+/// 1. **Typed read (SSoT)** — if the destination `ValueId`'s
+///    `val_types[d]` is `LirType::Resource { kind, params }`, render
+///    element / key / value C-type names from `params` directly. This
+///    is the layering-discipline-aligned path: the writer (LIR lowering)
+///    sets typed params; we read them.
+/// 2. **Name-parse fallback** — when val_types isn't populated as
+///    `Resource` (legacy `CallExtern` ctor path that wasn't promoted
+///    to `Inst::CollectionCtor`), fall back to the original
+///    `strip_prefix("Vector__")` parse. The fallback retires as more
+///    of the lowering pipeline emits typed Resource operands.
+///
+/// The fallback path is deliberately preserved (not deleted) so this
+/// commit lands as a writer-aware enhancement, not a regression risk.
+/// Per CLAUDE.md scope discipline, removing it requires confirming
+/// every call site flows through the typed path first.
 pub(super) fn emit_collection_constructor(
     out: &mut String,
     name: &str,
     dst: &Option<ValueId>,
     args: &[ValueId],
-    _val_types: &[Option<LirType>],
-    _sn: &HashMap<u32, String>,
+    val_types: &[Option<LirType>],
+    sn: &HashMap<u32, String>,
     module: &crate::lir::LirModule,
 ) {
     use std::fmt::Write;
@@ -827,6 +845,79 @@ pub(super) fn emit_collection_constructor(
         write!(out, "{} = ", v(*d)).unwrap();
     }
 
+    // Tier 1: typed-Resource read. Pull (kind, params) off the dst
+    // value's inferred LIR type; render param[i] to a C type name.
+    let typed = dst.and_then(|d| val_types.get(d.0 as usize).and_then(|t| t.as_ref()))
+        .and_then(|t| match t {
+            LirType::Resource { kind, params } => Some((*kind, params.clone())),
+            _ => None,
+        });
+
+    if let Some((kind, params)) = typed {
+        use crate::lir::ResourceKind;
+        match kind {
+            ResourceKind::GorgetArray => {
+                let elem_type = params.first()
+                    .map(|p| c_type_named(p, sn))
+                    .unwrap_or_else(|| "int64_t".to_string());
+                if args.is_empty() {
+                    write!(out, "gorget_array_new(sizeof({elem_type}));").unwrap();
+                } else {
+                    write!(out, "gorget_array_with_capacity(sizeof({elem_type}), {});", v(args[0])).unwrap();
+                }
+                if let Some(drop_fn) = elem_drop_fn_for_c_type(&elem_type, module) {
+                    if let Some(d) = dst {
+                        write!(out, " {}.elem_drop = (__gorget_drop_fn){drop_fn};", v(*d)).unwrap();
+                    }
+                }
+                return;
+            }
+            ResourceKind::GorgetSet => {
+                let elem_type = params.first()
+                    .map(|p| c_type_named(p, sn))
+                    .unwrap_or_else(|| "int64_t".to_string());
+                if args.is_empty() {
+                    write!(out, "gorget_set_new(sizeof({elem_type}));").unwrap();
+                } else {
+                    write!(out, "gorget_set_with_capacity(sizeof({elem_type}), {});", v(args[0])).unwrap();
+                }
+                if is_user_hashable_key(&elem_type, module) {
+                    if let Some(d) = dst {
+                        write!(out, " {}.hash_fn = (__gorget_hash_fn)__gorget_ktable_hash__{elem_type};", v(*d)).unwrap();
+                        write!(out, " {}.eq_fn = (__gorget_eq_fn)__gorget_ktable_eq__{elem_type};", v(*d)).unwrap();
+                    }
+                }
+                return;
+            }
+            ResourceKind::GorgetMap => {
+                let key_type = params.first()
+                    .map(|p| c_type_named(p, sn))
+                    .unwrap_or_else(|| "int64_t".to_string());
+                let val_type = params.get(1)
+                    .map(|p| c_type_named(p, sn))
+                    .unwrap_or_else(|| "int64_t".to_string());
+                let fn_name = if name.starts_with("Dict__") { "gorget_dict_new" } else { "gorget_map_new" };
+                write!(out, "{fn_name}(sizeof({key_type}), sizeof({val_type}));").unwrap();
+                if let Some(drop_fn) = elem_drop_fn_for_c_type(&val_type, module) {
+                    if let Some(d) = dst {
+                        write!(out, " {}.val_drop = (__gorget_drop_fn){drop_fn};", v(*d)).unwrap();
+                    }
+                }
+                if is_user_hashable_key(&key_type, module) {
+                    if let Some(d) = dst {
+                        write!(out, " {}.hash_fn = (__gorget_hash_fn)__gorget_ktable_hash__{key_type};", v(*d)).unwrap();
+                        write!(out, " {}.eq_fn = (__gorget_eq_fn)__gorget_ktable_eq__{key_type};", v(*d)).unwrap();
+                    }
+                }
+                return;
+            }
+            // String / Closure / RefCounted don't reach this constructor path.
+            _ => {}
+        }
+    }
+
+    // Tier 2: name-parse fallback (legacy path; retire incrementally
+    // as more lowering sites emit typed Resource operands).
     if name.starts_with("Vector__") || name.starts_with("GorgetArray__") {
         let elem_type = name.strip_prefix("Vector__")
             .or_else(|| name.strip_prefix("GorgetArray__"))
