@@ -2,12 +2,12 @@
 
 ## High Priority
 
-- ~~**GIR-liveness redesign — Path A (Phases 2a+2b)**~~ **— DONE 2026-05-20** (commits `2dad58bb` [Vector__T__fill plumbing precursor] + `511938a4` [Phase 2a — wire_liveness_into_modes] + `b0b3b692` [Phase 2b — typed ConsumeKind]). Path A — pure label-correctness foundation — is in. Phase 2c (bundled emission flip + drop_elab port + DropElaborator enable) still pending; spec preserved below.
+- ~~**GIR-liveness redesign — Path A (Phases 2a+2b)**~~ **— DONE 2026-05-20** (commits `fa01b55e` (pre-cherry-pick `2dad58bb`) [Vector__T__fill plumbing precursor] + `066c836a` (pre-cherry-pick `511938a4`) [Phase 2a — wire_liveness_into_modes] + `2758696b` (pre-cherry-pick `b0b3b692`) [Phase 2b — typed ConsumeKind]). Path A — pure label-correctness foundation — is in. Phase 2c (bundled emission flip + drop_elab port + DropElaborator enable) still pending; spec preserved below.
 
   **What landed**:
   - Phase 2a: `wire_liveness_into_modes` post-pass replaces `tighten_owned_operand_modes`. Uses CFG-accurate `last_use_of_op` from Phase 1 to decide OpMove vs OpClone per (block, inst, op_idx). LoOwned + last-use → OpMove + `mark_local_moved`; otherwise → OpClone. Legacy `update_last_pos_*` helpers retained for `liveness_instrumentation_diff` regression net.
   - Phase 2b: typed `ConsumeKind` enum in `gir.gg` (CkAssign/CkReturn/CkCallArg/CkFieldWrite consume; CkBinOpArg/CkFormatArg/CkMatchPtr borrow); `is_consume_kind(k) -> bool` helper; `op_consume` signature gains `kind` param; non-consume kinds return OpBorrow unconditionally; 41 call sites updated with explicit kinds.
-  - Precursor commit `2dad58bb`: `Vector__T__fill` plumbing — fixed three self-host gaps that Phase 1's cheap-win commit `5e6b3bef` introduced but didn't verify (the cheap-win's `lowerer_comparison`-only verification gate missed the LIR-link error).
+  - Precursor commit `fa01b55e` (pre-cherry-pick `2dad58bb`): `Vector__T__fill` plumbing — fixed three self-host gaps that Phase 1's cheap-win commit `5e6b3bef` introduced but didn't verify (the cheap-win's `lowerer_comparison`-only verification gate missed the LIR-link error).
 
   **Empirical baseline that drove the rescope** (preserved for Phase 2c work): `/tmp/stage1_probe.c` (Rust gg compiling `self_host_lowerer/driver.gg`, 550K lines) emits only **338 `gorget_*_clone(` calls + 1,607 recursive `<Type>__clone(` = ~1,945 total**, 26× lower than the naive ~51K. Rust's clone-emission is gated by THREE mechanisms in tandem: borrow-by-default at non-consume positions (~15K suppressed) + drop_elab static elision after MoveZero (~12K suppressed) + last-use detection at consumes (~2K legitimate). CoW scout (2026-05-20) + 8-site stage1.c sampling confirms: every Rust clone falls into either (a) source-is-borrowed-origin needing clone for ownership, or (b) source-is-owned-but-still-live. Zero sites where Rust cloned a clean owned local at last use.
 
