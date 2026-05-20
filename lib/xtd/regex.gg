@@ -1119,6 +1119,30 @@ equip Regex:
                 pos = e
         return out
 
+    # Anchored iteration: each successive match must begin where the
+    # previous one ended. Mirrors rust-regex / RE2 anchored iter
+    # semantics. Useful for tokenizers that want to consume input only
+    # via adjacent matches starting at position 0.
+    Vector[Match] find_all_anchored(self, String subject):
+        Vector[Match] out = Vector[Match]()
+        int pos = 0
+        int n = subject.byte_len()
+        while pos <= n:
+            Vector[int] caps = _vm_search(self.prog, subject, pos, true)
+            if caps.len() == 0:
+                break
+            int s = caps[0]
+            int e = caps[1]
+            Vector[String] names = self.prog.cap_names.clone()
+            Vector[int] caps_clone = caps.clone()
+            out.push(Match(subject.clone(), !caps_clone, !names))
+            if e == s:
+                # Empty match — advance by 1 to avoid infinite loop.
+                pos = e + 1
+            else:
+                pos = e
+        return out
+
     String replace(self, String subject, String replacement):
         return self._replace_impl(subject, replacement, 1)
 
