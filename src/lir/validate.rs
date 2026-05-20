@@ -95,7 +95,7 @@ pub type ValidatorFn = fn(&LirModule) -> Vec<LirError>;
 /// that accidentally propagates the `box_inner_type` field where it
 /// doesn't belong. The forward `validate_box_inner_type` only walks
 /// `Box__*`-named structs, so a non-Box with stray metadata slips through.
-const VALIDATORS: &[ValidatorFn] = &[validate_module, validate_box_inner_type, validate_box_inner_type_consistency, validate_drop_completeness, validate_drop_fn_presence];
+const VALIDATORS: &[ValidatorFn] = &[validate_module, validate_box_inner_type, validate_box_inner_type_consistency, validate_drop_completeness, validate_drop_fn_presence, validate_resource_arity];
 
 /// Assert that `module` satisfies every registered LIR invariant. Panics with
 /// a descriptive message tagged by `after` (the name of the pass that just
@@ -1027,6 +1027,88 @@ pub fn validate_drop_fn_presence(module: &LirModule) -> Vec<LirError> {
                 sd.name,
             ),
         });
+    }
+    errors
+}
+
+/// Item 7e Phase 3/4: every `LirType::Resource { kind, params }` operand
+/// must have `params.len() == LirType::expected_resource_arity(kind)`.
+///
+/// Catches writer-site bugs where a constructor populates `Resource` with
+/// the wrong number of params (e.g. forgetting the value type on a Dict,
+/// or accidentally adding an extra param to a Vector). The arity invariant
+/// is the SSoT for "how many element types does this resource shape carry"
+/// — see `src/lir/mod.rs::expected_resource_arity`.
+///
+/// Walks: function param types, function return types, slot types, block
+/// param types, and per-instruction type fields where a `LirType` is
+/// declared inline (IConst.ty, FConst.ty, Load.ty, ParamRef.ty, etc.).
+/// Value-types inferred by `compute_module_value_types` aren't covered
+/// here because they're derived, not authored — a derivation bug is best
+/// caught by adding the check to that pass, not by re-walking its output.
+pub fn validate_resource_arity(module: &LirModule) -> Vec<LirError> {
+    let mut errors = Vec::new();
+    let mut check = |func: &str, ty: &LirType, where_: &str| {
+        if let LirType::Resource { kind, params } = ty {
+            let expected = LirType::expected_resource_arity(*kind);
+            if params.len() != expected {
+                errors.push(LirError {
+                    func: func.to_string(),
+                    block: None,
+                    message: format!(
+                        "Resource arity mismatch at {where_}: kind={kind:?}, expected {expected} params, got {} ({params:?})",
+                        params.len(),
+                    ),
+                });
+            }
+            for (i, p) in params.iter().enumerate() {
+                // Recurse into nested Resource params — e.g. Vector[Box[T]]
+                // carries Resource { GorgetArray, [Resource { RefCounted, [...] }] }.
+                if let LirType::Resource { .. } = p {
+                    let nested_where = format!("{where_} (params[{i}])");
+                    let mut nested = Vec::new();
+                    let _orig_len = errors.len();
+                    // Inline recursion to avoid threading the closure type.
+                    let _ = walk_nested(func, p, &nested_where, &mut nested);
+                    errors.extend(nested);
+                }
+            }
+        }
+    };
+    fn walk_nested(func: &str, ty: &LirType, where_: &str, errors: &mut Vec<LirError>) {
+        if let LirType::Resource { kind, params } = ty {
+            let expected = LirType::expected_resource_arity(*kind);
+            if params.len() != expected {
+                errors.push(LirError {
+                    func: func.to_string(),
+                    block: None,
+                    message: format!(
+                        "Resource arity mismatch at {where_}: kind={kind:?}, expected {expected} params, got {} ({params:?})",
+                        params.len(),
+                    ),
+                });
+            }
+            for (i, p) in params.iter().enumerate() {
+                if let LirType::Resource { .. } = p {
+                    walk_nested(func, p, &format!("{where_} (params[{i}])"), errors);
+                }
+            }
+        }
+    }
+
+    for func in &module.functions {
+        for (i, pty) in func.params.iter().enumerate() {
+            check(&func.name, pty, &format!("param {i}"));
+        }
+        check(&func.name, &func.return_type, "return_type");
+        for (sid, slot) in func.slots.iter().enumerate() {
+            check(&func.name, &slot.ty, &format!("slot s{sid}"));
+        }
+        for (bi, block) in func.blocks.iter().enumerate() {
+            for (vi, (_, ty)) in block.params.iter().enumerate() {
+                check(&func.name, ty, &format!("bb{bi} block-param {vi}"));
+            }
+        }
     }
     errors
 }

@@ -241,6 +241,14 @@ impl<'a> SsaBuilder<'a> {
                 LirType::F32 => Inst::FConst { dst: val, ty: LirType::F32, bits: 0 },
                 LirType::F64 => Inst::FConst { dst: val, ty: LirType::F64, bits: 0 },
                 LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef => Inst::NullPtr { dst: val },
+                // Item 7e Phase 3: a `Resource` slot is either pointer-shaped
+                // (RefCounted handle) — null-init same as Ptr — or aggregate-
+                // shaped, in which case the entry-block undefined value is
+                // conceptually a zero struct; emitting a NullPtr-like sentinel
+                // is the closest analog at SSA time. The aggregate path
+                // shouldn't fire in practice (slot types stay `Struct(sid)`
+                // under the surgical Phase 2 scope), but is defensive.
+                LirType::Resource { .. } => Inst::NullPtr { dst: val },
                 _ => Inst::IConst { dst: val, ty: ty.clone(), value: 0 },
             };
             self.func.blocks[bb.0 as usize].insert_inst(0, zero_inst, None);
