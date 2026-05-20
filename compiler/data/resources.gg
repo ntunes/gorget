@@ -70,7 +70,7 @@ public static Vector[ResourceEntry] RESOURCES = [
             Some("gorget_string_clone"),
             Some("gorget_string_materialize_inplace"),
             CsResource(), CkNotCollection(), BkNotBox(),
-            false, Some("gorget_str"), false)),
+            false, Some("gorget_str"), None, false)),
 
     # GorgetArray — Exact singleton; the runtime backing for Vector/Deque/Heap.
     # method_prefix="gorget_array" routes the non-generic
@@ -83,7 +83,7 @@ public static Vector[ResourceEntry] RESOURCES = [
             Some("gorget_array_clone"),
             None,
             CsResource(), CkVector(), BkNotBox(),
-            false, Some("gorget_array"), false)),
+            false, Some("gorget_array"), None, false)),
 
     # Vector__T — Prefix; typed_constructor=true (T(args) user shape).
     # GorgetArray__ shares the Vector family classification axis in
@@ -96,7 +96,7 @@ public static Vector[ResourceEntry] RESOURCES = [
             Some("gorget_array_clone"),
             None,
             CsResource(), CkVector(), BkNotBox(),
-            false, Some("gorget_array"), true)),
+            false, Some("gorget_array"), None, true)),
 
     # Deque__T — Prefix; CkDeque (distinct kind, same runtime).
     # NOTE: method_prefix left None — map_monomorphized_to_runtime does NOT
@@ -111,7 +111,7 @@ public static Vector[ResourceEntry] RESOURCES = [
             Some("gorget_array_clone"),
             None,
             CsResource(), CkDeque(), BkNotBox(),
-            false, None, true)),
+            false, None, None, true)),
 
     # Heap__T — Prefix; CkHeap; typed_constructor=false (factory shape, Heap.new()).
     # method_prefix="gorget_heap" routes Heap__T__method → gorget_heap_method.
@@ -125,7 +125,7 @@ public static Vector[ResourceEntry] RESOURCES = [
             Some("gorget_array_clone"),
             None,
             CsResource(), CkHeap(), BkNotBox(),
-            false, Some("gorget_heap"), false)),
+            false, Some("gorget_heap"), None, false)),
 
     # Dict__K__V / HashMap__K__V / GorgetDict__K__V — multi-alias Prefix cluster;
     # CkDict. method_prefix="gorget_map" routes Dict/HashMap/GorgetDict
@@ -140,7 +140,7 @@ public static Vector[ResourceEntry] RESOURCES = [
             Some("gorget_map_clone"),
             None,
             CsResource(), CkDict(), BkNotBox(),
-            false, Some("gorget_map"), true)),
+            false, Some("gorget_map"), None, true)),
 
     # Set__T / HashSet__T — Prefix alias cluster; CkSet.
     # method_prefix="gorget_set" routes Set/HashSet through the gorget_set_*
@@ -154,7 +154,7 @@ public static Vector[ResourceEntry] RESOURCES = [
             Some("gorget_set_clone"),
             None,
             CsResource(), CkSet(), BkNotBox(),
-            false, Some("gorget_set"), true)),
+            false, Some("gorget_set"), None, true)),
 
     # Box__T — Prefix; BkRegularBox; LtPtr (8-byte pointer, not struct).
     ResourceEntry(
@@ -165,10 +165,12 @@ public static Vector[ResourceEntry] RESOURCES = [
             Some("__gorget_box_clone"),
             None,
             CsResource(), CkNotCollection(), BkRegularBox(),
-            false, None, false)),
+            false, None, None, false)),
 
     # Mutex__T — Prefix; opaque_handle=true; method_prefix=Some;
     # CsRefCounted; clone_fn=None (handles aren't deep-cloned).
+    # c_typedef_name="GorgetMutex*" — schema runtime_name="Mutex" diverges
+    # from the C typedef target at the emit_wrapper_typedef boundary.
     ResourceEntry(
         [MkPrefix("Mutex__")],
         ResourceMetadata(
@@ -177,7 +179,7 @@ public static Vector[ResourceEntry] RESOURCES = [
             None,
             None,
             CsRefCounted(), CkNotCollection(), BkNotBox(),
-            true, Some("gorget_mutex"), true)),
+            true, Some("gorget_mutex"), Some("GorgetMutex*"), true)),
 
     # bare "Box" — Exact singleton; BkTraitBox (trait-object box, distinct
     # from the parameterized Box__T regular form above).
@@ -189,7 +191,7 @@ public static Vector[ResourceEntry] RESOURCES = [
             None,
             None,
             CsResource(), CkNotCollection(), BkTraitBox(),
-            false, None, false)),
+            false, None, None, false)),
 
     # ── Mechanical fill-in from lir_lower.gg::build_resource_metadata ──
 
@@ -203,7 +205,7 @@ public static Vector[ResourceEntry] RESOURCES = [
             Some("gorget_map_clone"),
             None,
             CsResource(), CkDict(), BkNotBox(),
-            false, Some("gorget_map"), false)),
+            false, Some("gorget_map"), None, false)),
 
     # GorgetSet — Exact singleton; backing runtime for Set/HashSet.
     # method_prefix="gorget_set" matches the Set__/HashSet__ family.
@@ -215,7 +217,7 @@ public static Vector[ResourceEntry] RESOURCES = [
             Some("gorget_set_clone"),
             None,
             CsResource(), CkSet(), BkNotBox(),
-            false, Some("gorget_set"), false)),
+            false, Some("gorget_set"), None, false)),
 
     # GorgetClosure — Exact singleton; 16-byte closure struct.
     ResourceEntry(
@@ -226,7 +228,7 @@ public static Vector[ResourceEntry] RESOURCES = [
             Some("gorget_closure_clone"),
             None,
             CsResource(), CkNotCollection(), BkNotBox(),
-            false, None, false)),
+            false, None, None, false)),
 
     # GorgetMap__ — self-host mangled monomorphised form;
     # is_typed_constructor=false (distinguishes from user-visible Dict__).
@@ -243,7 +245,7 @@ public static Vector[ResourceEntry] RESOURCES = [
             Some("gorget_map_clone"),
             None,
             CsResource(), CkDict(), BkNotBox(),
-            false, Some("gorget_map"), false)),
+            false, Some("gorget_map"), None, false)),
 
     # GorgetSet__ — self-host mangled monomorphised form.
     # method_prefix="gorget_set" matches the Set family.
@@ -255,43 +257,49 @@ public static Vector[ResourceEntry] RESOURCES = [
             Some("gorget_set_clone"),
             None,
             CsResource(), CkSet(), BkNotBox(),
-            false, Some("gorget_set"), false)),
+            false, Some("gorget_set"), None, false)),
 
     # RWLock__ — opaque, ref-counted, typed_constructor.
+    # c_typedef_name="GorgetRWLock*" (diverges from runtime_name="Ptr").
     ResourceEntry(
         [MkPrefix("RWLock__")],
         ResourceMetadata(
             "Ptr", 8, LtPtr(),
             None, None, None,
             CsRefCounted(), CkNotCollection(), BkNotBox(),
-            true, Some("gorget_rwlock"), true)),
+            true, Some("gorget_rwlock"), Some("GorgetRWLock*"), true)),
 
     # Channel__ — opaque, ref-counted, typed_constructor.
+    # c_typedef_name="GorgetChannel*" (diverges from runtime_name="Ptr").
     ResourceEntry(
         [MkPrefix("Channel__")],
         ResourceMetadata(
             "Ptr", 8, LtPtr(),
             None, None, None,
             CsRefCounted(), CkNotCollection(), BkNotBox(),
-            true, Some("gorget_channel"), true)),
+            true, Some("gorget_channel"), Some("GorgetChannel*"), true)),
 
     # Shared__ — opaque, ref-counted, typed_constructor.
+    # c_typedef_name="GorgetShared*" (diverges from runtime_name="Ptr").
     ResourceEntry(
         [MkPrefix("Shared__")],
         ResourceMetadata(
             "Ptr", 8, LtPtr(),
             None, None, None,
             CsRefCounted(), CkNotCollection(), BkNotBox(),
-            true, Some("gorget_shared"), true)),
+            true, Some("gorget_shared"), Some("GorgetShared*"), true)),
 
     # Weak__ — opaque, ref-counted, factory shape (typed_constructor=false).
+    # c_typedef_name="GorgetShared*" — Weak and Shared share the C wire
+    # type; the strong/weak distinction lives in the runtime's
+    # bookkeeping, not the typedef.
     ResourceEntry(
         [MkPrefix("Weak__")],
         ResourceMetadata(
             "Ptr", 8, LtPtr(),
             None, None, None,
             CsRefCounted(), CkNotCollection(), BkNotBox(),
-            true, Some("gorget_weak"), false)),
+            true, Some("gorget_weak"), Some("GorgetShared*"), false)),
 
     # AtomicInt__ — opaque, ref-counted, factory.
     ResourceEntry(
@@ -300,7 +308,7 @@ public static Vector[ResourceEntry] RESOURCES = [
             "Ptr", 8, LtPtr(),
             None, None, None,
             CsRefCounted(), CkNotCollection(), BkNotBox(),
-            true, Some("gorget_atomic_int"), false)),
+            true, Some("gorget_atomic_int"), None, false)),
 
     # AtomicBool__ — opaque, ref-counted, factory.
     ResourceEntry(
@@ -309,7 +317,7 @@ public static Vector[ResourceEntry] RESOURCES = [
             "Ptr", 8, LtPtr(),
             None, None, None,
             CsRefCounted(), CkNotCollection(), BkNotBox(),
-            true, Some("gorget_atomic_bool"), false)),
+            true, Some("gorget_atomic_bool"), None, false)),
 
     # Semaphore__ — opaque, ref-counted, factory.
     ResourceEntry(
@@ -318,7 +326,7 @@ public static Vector[ResourceEntry] RESOURCES = [
             "Ptr", 8, LtPtr(),
             None, None, None,
             CsRefCounted(), CkNotCollection(), BkNotBox(),
-            true, Some("gorget_semaphore"), false)),
+            true, Some("gorget_semaphore"), None, false)),
 
     # Barrier__ — opaque, ref-counted, factory.
     ResourceEntry(
@@ -327,7 +335,7 @@ public static Vector[ResourceEntry] RESOURCES = [
             "Ptr", 8, LtPtr(),
             None, None, None,
             CsRefCounted(), CkNotCollection(), BkNotBox(),
-            true, Some("gorget_barrier"), false)),
+            true, Some("gorget_barrier"), None, false)),
 
     # OnceFlag__ — opaque, ref-counted, factory.
     ResourceEntry(
@@ -336,7 +344,7 @@ public static Vector[ResourceEntry] RESOURCES = [
             "Ptr", 8, LtPtr(),
             None, None, None,
             CsRefCounted(), CkNotCollection(), BkNotBox(),
-            true, Some("gorget_once_flag"), false)),
+            true, Some("gorget_once_flag"), None, false)),
 
     # WaitGroup__ — opaque, ref-counted, factory.
     ResourceEntry(
@@ -345,7 +353,7 @@ public static Vector[ResourceEntry] RESOURCES = [
             "Ptr", 8, LtPtr(),
             None, None, None,
             CsRefCounted(), CkNotCollection(), BkNotBox(),
-            true, Some("gorget_wait_group"), false)),
+            true, Some("gorget_wait_group"), None, false)),
 
     # TaskGroup__ — opaque, ref-counted, factory.
     ResourceEntry(
@@ -354,7 +362,7 @@ public static Vector[ResourceEntry] RESOURCES = [
             "Ptr", 8, LtPtr(),
             None, None, None,
             CsRefCounted(), CkNotCollection(), BkNotBox(),
-            true, Some("gorget_task_group"), false)),
+            true, Some("gorget_task_group"), None, false)),
 
     # Thread__ — opaque, ref-counted, factory; no method_prefix.
     ResourceEntry(
@@ -363,7 +371,7 @@ public static Vector[ResourceEntry] RESOURCES = [
             "Ptr", 8, LtPtr(),
             None, None, None,
             CsRefCounted(), CkNotCollection(), BkNotBox(),
-            true, None, false)),
+            true, None, None, false)),
 
     # Bare-name opaque cluster — Barrier / CondVar / AtomicInt / AtomicBool /
     # Process / Thread / Semaphore / WaitGroup / OnceFlag. Method-prefix
@@ -376,34 +384,37 @@ public static Vector[ResourceEntry] RESOURCES = [
             "Ptr", 8, LtPtr(),
             None, None, None,
             CsRefCounted(), CkNotCollection(), BkNotBox(),
-            true, None, false)),
+            true, None, None, false)),
 
     # ReadGuard__ — Guard family (LtStructBase, 16 bytes); read-side prefix.
+    # c_typedef_name="gorget_read_guard_t" (diverges from runtime_name="Guard").
     ResourceEntry(
         [MkPrefix("ReadGuard__")],
         ResourceMetadata(
             "Guard", 16, LtStructBase(),
             None, None, None,
             CsResource(), CkNotCollection(), BkNotBox(),
-            false, Some("gorget_read_guard"), false)),
+            false, Some("gorget_read_guard"), Some("gorget_read_guard_t"), false)),
 
     # WriteGuard__ — Guard family; write-side prefix.
+    # c_typedef_name="gorget_write_guard_t" (diverges from runtime_name="Guard").
     ResourceEntry(
         [MkPrefix("WriteGuard__")],
         ResourceMetadata(
             "Guard", 16, LtStructBase(),
             None, None, None,
             CsResource(), CkNotCollection(), BkNotBox(),
-            false, Some("gorget_write_guard"), false)),
+            false, Some("gorget_write_guard"), Some("gorget_write_guard_t"), false)),
 
     # Guard__ — bare Guard prefix; default method routing.
+    # c_typedef_name="gorget_guard_t" (diverges from runtime_name="Guard").
     ResourceEntry(
         [MkPrefix("Guard__")],
         ResourceMetadata(
             "Guard", 16, LtStructBase(),
             None, None, None,
             CsResource(), CkNotCollection(), BkNotBox(),
-            false, Some("gorget_guard"), false)),
+            false, Some("gorget_guard"), Some("gorget_guard_t"), false)),
 
 ]
 

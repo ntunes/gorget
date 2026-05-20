@@ -352,7 +352,7 @@ fn build_resource_metadata(e: &Expr) -> WalkResult<ResourceMetadata> {
     if name != "ResourceMetadata" {
         return Err(format!("expected ResourceMetadata(...), got {}(...)", name));
     }
-    expect_arity(name, args, 12)?;
+    expect_arity(name, args, 13)?;
     Ok(ResourceMetadata {
         runtime_name: as_string(arg(args, 0)?)?,
         size_bytes: u32::try_from(as_int(arg(args, 1)?)?)
@@ -366,7 +366,8 @@ fn build_resource_metadata(e: &Expr) -> WalkResult<ResourceMetadata> {
         box_kind: build_box_kind(arg(args, 8)?)?,
         opaque_handle: as_bool(arg(args, 9)?)?,
         method_prefix: as_option_string(arg(args, 10)?)?,
-        is_typed_constructor: as_bool(arg(args, 11)?)?,
+        c_typedef_name: as_option_string(arg(args, 11)?)?,
+        is_typed_constructor: as_bool(arg(args, 12)?)?,
     })
 }
 
@@ -468,7 +469,32 @@ mod tests {
         assert!(m.opaque_handle);
         assert_eq!(m.copy_semantics, CopySemantics::RefCounted);
         assert_eq!(m.method_prefix.as_deref(), Some("gorget_mutex"));
+        assert_eq!(m.c_typedef_name.as_deref(), Some("GorgetMutex*"));
         assert!(m.clone_fn.is_none(), "Mutex doesn't deep-clone");
+
+        // Spot-check: c_typedef_name carries the C-typedef target for the
+        // ref-counted-handle + guard families (item 7c). Each entry's
+        // C typedef target diverges from its `runtime_name`, so the field
+        // drives the wrapper-typedef emission in emit_wrapper_typedef.
+        let chan = t.lookup("Channel__int64_t").expect("Channel__ missing");
+        assert_eq!(chan.c_typedef_name.as_deref(), Some("GorgetChannel*"));
+        let sh = t.lookup("Shared__int64_t").expect("Shared__ missing");
+        assert_eq!(sh.c_typedef_name.as_deref(), Some("GorgetShared*"));
+        let wk = t.lookup("Weak__int64_t").expect("Weak__ missing");
+        assert_eq!(wk.c_typedef_name.as_deref(), Some("GorgetShared*"));
+        let rw = t.lookup("RWLock__int64_t").expect("RWLock__ missing");
+        assert_eq!(rw.c_typedef_name.as_deref(), Some("GorgetRWLock*"));
+        let g = t.lookup("Guard__int64_t").expect("Guard__ missing");
+        assert_eq!(g.c_typedef_name.as_deref(), Some("gorget_guard_t"));
+        let rg = t.lookup("ReadGuard__int64_t").expect("ReadGuard__ missing");
+        assert_eq!(rg.c_typedef_name.as_deref(), Some("gorget_read_guard_t"));
+        let wg = t.lookup("WriteGuard__int64_t").expect("WriteGuard__ missing");
+        assert_eq!(wg.c_typedef_name.as_deref(), Some("gorget_write_guard_t"));
+
+        // Spot-check: rows that haven't diverged leave c_typedef_name=None
+        // (the lookup falls back to runtime_name).
+        assert!(v.c_typedef_name.is_none(), "Vector__ should leave c_typedef_name=None");
+        assert!(s.c_typedef_name.is_none(), "GorgetString should leave c_typedef_name=None");
 
         // Spot-check: Dict alias cluster hits all three names.
         for k in &["Dict__int64_t__String", "HashMap__int64_t__String", "GorgetDict__int64_t__String"] {

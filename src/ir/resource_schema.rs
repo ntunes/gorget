@@ -62,6 +62,13 @@ pub struct ResourceMetadata {
     pub box_kind: BoxKind,
     pub opaque_handle: bool,
     pub method_prefix: Option<String>,
+    /// C typedef target when it diverges from `runtime_name`; `None`
+    /// means "use `runtime_name`". Used at the C-emit boundary in
+    /// `emit_wrapper_typedef` for opaque-handle families whose C
+    /// spelling is `GorgetMutex*` / `gorget_guard_t` / etc. — names the
+    /// schema's `runtime_name` ("Mutex", "Guard") does not carry. See
+    /// `docs/internals/unified-resource-model.md` §3.6.
+    pub c_typedef_name: Option<String>,
     pub is_typed_constructor: bool,
 }
 

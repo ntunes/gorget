@@ -71,6 +71,14 @@ struct ResourceMetadata:
     Option[String] method_prefix     # C method-prefix for opaque / guard families
                                      # ("gorget_mutex", "gorget_channel", …).
                                      # None for collections that route via runtime_name.
+    Option[String] c_typedef_name    # C typedef target when it diverges from
+                                     # runtime_name; None means "use runtime_name".
+                                     # Used at the C-emit boundary in
+                                     # `emit_wrapper_typedef` for opaque-handle
+                                     # families whose C spelling is `GorgetMutex*`,
+                                     # `gorget_guard_t`, etc. — names the schema's
+                                     # `runtime_name` ("Mutex", "Guard") does not
+                                     # carry. See unified-resource-model.md §3.6.
     bool is_typed_constructor        # true for parameterized families with
                                      # `T(args)` user-code constructor shape
                                      # (Vector__T, Mutex__T, …). false for
