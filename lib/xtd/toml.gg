@@ -1445,9 +1445,71 @@ private Vector[String] subpath(Vector[String] full_path, int from_idx):
         si = si + 1
     return sub
 
+# ── UTF-8 source validation ─────────────────────────────────
+# TOML 1.0 §2.1 mandates UTF-8 source encoding. Scan the input bytes
+# once and reject any ill-formed sequence (invalid lead byte, truncated
+# multi-byte form, bad continuation, overlong encoding, surrogate
+# half U+D800..U+DFFF, codepoint > U+10FFFF). Returns the byte offset
+# of the first error, or -1 if the whole input is valid UTF-8.
+#
+# Mirrors `gorget_utf8_decode` / `gorget_utf8_validate` in the C
+# runtime so behavior is identical to `bytes_to_str` at the I/O
+# boundary, but without taking a `std.bytes` dependency.
+private int utf8_first_invalid(String input):
+    int n = input.byte_len()
+    int p = 0
+    while p < n:
+        int b0 = input.byte_at(p) as int
+        if b0 < 0x80:
+            p = p + 1
+            continue
+        int expected = 0
+        int cp = 0
+        if (b0 & 0xE0) == 0xC0:
+            expected = 2
+            cp = b0 & 0x1F
+        elif (b0 & 0xF0) == 0xE0:
+            expected = 3
+            cp = b0 & 0x0F
+        elif (b0 & 0xF8) == 0xF0:
+            expected = 4
+            cp = b0 & 0x07
+        else:
+            # Invalid lead byte (0x80-0xBF lone continuation,
+            # or 0xF8-0xFF never-valid).
+            return p
+        if p + expected > n:
+            # Truncated sequence at end of input.
+            return p
+        int i = 1
+        while i < expected:
+            int cb = input.byte_at(p + i) as int
+            if (cb & 0xC0) != 0x80:
+                return p
+            cp = (cp << 6) | (cb & 0x3F)
+            i = i + 1
+        # Reject overlong encodings.
+        if expected == 2 and cp < 0x80:
+            return p
+        if expected == 3 and cp < 0x800:
+            return p
+        if expected == 4 and cp < 0x10000:
+            return p
+        # Reject surrogate halves and out-of-range codepoints.
+        if cp >= 0xD800 and cp <= 0xDFFF:
+            return p
+        if cp > 0x10FFFF:
+            return p
+        p = p + expected
+    return -1
+
 # ── Public API ──────────────────────────────────────────────
 
 Result[TomlValue, ParseError] parse(String input):
+    int bad = utf8_first_invalid(input)
+    if bad >= 0:
+        String msg = "invalid UTF-8 in TOML source"
+        return Error(ParseError.InvalidSyntax(bad, !msg))
     Vector[TomlSection] secs = Vector[TomlSection]()
     Dict[String, TomlValue] root_data = Dict[String, TomlValue]()
     Vector[String] root_path = Vector[String]()
