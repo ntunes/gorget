@@ -32,6 +32,25 @@ struct TomlSection:
     bool sec_is_aot
 
 # ── Internal parser ─────────────────────────────────────────
+#
+# `defined` maps a dotted path to a definition kind. Used to enforce
+# TOML 1.0 §6.1 / §8 (no key/table redefinition, inline tables are
+# immutable, array-of-tables and tables can't share a path).
+# Kinds (int code, with helper functions below):
+#   0 = explicit table       — created by [t] header. Cannot be redefined
+#                              by any later [t], [[t]], or dotted key.
+#   1 = array of tables      — created by [[t]] header. Only [[t]] may
+#                              extend it; later [t] is illegal.
+#   2 = implicit table       — parent of a deeper [a.b.c] header. May be
+#                              "upgraded" to explicit by a later [a] line.
+#   3 = inline table         — created by `x = { ... }`. Closed at }; any
+#                              later extension via [t.x] or t.x = v is illegal.
+#   4 = scalar               — created by `k = v` for non-table v. Cannot
+#                              be turned into a table later.
+#   5 = dotted-key table     — created by `a.b.c = v` for the intermediate
+#                              parents (a, a.b). Each parent may grow more
+#                              dotted-key entries, but cannot be reopened as
+#                              a header [a] or [a.b].
 
 struct TomlParser:
     String source
@@ -39,6 +58,7 @@ struct TomlParser:
     String err
     Vector[TomlSection] sections
     int current_sec
+    Dict[String, int] defined
 
 equip TomlParser:
     bool failed(self): self.err != ""
@@ -97,6 +117,29 @@ equip TomlParser:
                 return
             self.pos = self.pos + 1
 
+    # After a value or table header, the only legal characters before the
+    # next line are: whitespace, '#' (comment), '\n', or EOF. Anything else
+    # (e.g. another bare-key starting a second key=value on the same line,
+    # or stray characters) is invalid per TOML 1.0 §3.
+    void expect_eol(&self, String msg):
+        self.skip_ws()
+        if self.pos >= self.source.byte_len():
+            return
+        byte b = self.source.byte_at(self.pos)
+        if b == b'#':
+            self.skip_comment()
+            return
+        if b == b'\n':
+            self.pos = self.pos + 1
+            return
+        if b == b'\r':
+            if self.pos + 1 < self.source.byte_len() and self.source.byte_at(self.pos + 1) == b'\n':
+                self.pos = self.pos + 2
+                return
+            self.fail("bare carriage return not allowed")
+            return
+        self.fail(msg)
+
     void skip_to_newline(&self):
         self.skip_ws()
         if self.pos < self.source.byte_len():
@@ -147,8 +190,16 @@ equip TomlParser:
             return ""
         String ch = self.source.char_at(self.pos)
         if ch == '"':
+            # Multi-line strings ("""...""") are NOT valid as keys per
+            # TOML 1.0 §6.1.
+            if self.pos + 2 < self.source.byte_len() and self.source.byte_at(self.pos + 1) == b'"' and self.source.byte_at(self.pos + 2) == b'"':
+                self.fail("multi-line string not allowed as key")
+                return ""
             return self.parse_basic_string()
         elif ch == '\'':
+            if self.pos + 2 < self.source.byte_len() and self.source.byte_at(self.pos + 1) == b'\'' and self.source.byte_at(self.pos + 2) == b'\'':
+                self.fail("multi-line literal string not allowed as key")
+                return ""
             return self.parse_literal_string()
         return self.parse_bare_key()
 
@@ -329,6 +380,15 @@ equip TomlParser:
             if toml_uni_cnt < toml_hex_len:
                 self.fail("truncated unicode escape")
                 return ""
+            # TOML 1.0 §5: codepoint must be a valid Unicode scalar
+            # value — i.e. in [U+0000, U+10FFFF] and NOT a surrogate
+            # (U+D800..=U+DFFF).
+            if toml_uni_cp > 0x10ffff:
+                self.fail("unicode escape out of range")
+                return ""
+            if toml_uni_cp >= 0xd800 and toml_uni_cp <= 0xdfff:
+                self.fail("unicode escape is a surrogate, not a scalar value")
+                return ""
             return codepoint_to_str(toml_uni_cp)
         self.fail("invalid escape sequence")
         return ""
@@ -469,12 +529,15 @@ equip TomlParser:
     TomlValue parse_inline_table(&self):
         self.pos = self.pos + 1
         Dict[String, TomlValue] tbl = Dict[String, TomlValue]()
-        self.skip_ws()
+        # Track local defined-paths for THIS inline table. Joined dotted
+        # path → 1 (closed leaf) | 2 (intermediate from dotted assignment).
+        Dict[String, int] local_defs = Dict[String, int]()
+        self.skip_ws_and_newlines_in_inline()
         if self.pos < self.source.byte_len() and self.source.char_at(self.pos) == '}':
             self.pos = self.pos + 1
             return Tbl(tbl)
         while self.pos < self.source.byte_len():
-            self.skip_ws()
+            self.skip_ws_and_newlines_in_inline()
             Vector[String] key_parts = self.parse_key()
             if self.failed():
                 return Str("")
@@ -487,19 +550,53 @@ equip TomlParser:
             TomlValue tbl_val = self.parse_value()
             if self.failed():
                 return Str("")
+            # Check for duplicate key inside this inline table. For a dotted
+            # key, intermediate parts must be undefined or kind-2; final
+            # part must be undefined.
+            String joined = ""
+            int kpi = 0
+            while kpi < key_parts.len():
+                joined = joined + "\x01" + key_parts.get(kpi).unwrap()
+                if kpi < key_parts.len() - 1:
+                    if local_defs.contains(joined):
+                        int lk = local_defs.get(joined).unwrap()
+                        if lk != 2:
+                            self.fail("duplicate key in inline table")
+                            return Str("")
+                    else:
+                        local_defs.put(joined.clone(), 2)
+                kpi = kpi + 1
+            if local_defs.contains(joined):
+                self.fail("duplicate key in inline table")
+                return Str("")
+            local_defs.put(joined.clone(), 1)
             # For inline tables, dotted keys create nested tables inline
             if key_parts.len() == 1:
                 tbl.put(key_parts.get(0).unwrap(), tbl_val)
             else:
-                # Build nested structure for dotted key in inline table
-                TomlValue nested = wrap_dotted(key_parts, 0, !tbl_val)
-                tbl.put(key_parts.get(0).unwrap(), nested)
+                # Build nested structure for dotted key in inline table.
+                # If the head key already exists in tbl, merge the new
+                # nested structure into it.
+                String top = key_parts.get(0).unwrap()
+                TomlValue nested = wrap_dotted(key_parts, 1, !tbl_val)
+                if tbl.contains(top):
+                    Dict[String, TomlValue] existing = extract_tbl(tbl[top])
+                    Dict[String, TomlValue] addition = extract_tbl(nested)
+                    Dict[String, TomlValue] merged = merge_into(Tbl(existing), addition)
+                    tbl.put(top, Tbl(merged))
+                else:
+                    tbl.put(top, nested)
             self.skip_ws()
             if self.pos >= self.source.byte_len():
                 self.fail("unterminated inline table")
                 return Str("")
             if self.source.char_at(self.pos) == ',':
                 self.pos = self.pos + 1
+                # TOML 1.0 forbids trailing comma in inline tables.
+                self.skip_ws()
+                if self.pos < self.source.byte_len() and self.source.char_at(self.pos) == '}':
+                    self.fail("trailing comma not allowed in inline table")
+                    return Str("")
             elif self.source.char_at(self.pos) == '}':
                 self.pos = self.pos + 1
                 return Tbl(tbl)
@@ -508,6 +605,11 @@ equip TomlParser:
                 return Str("")
         self.fail("unterminated inline table")
         return Str("")
+
+    # Inline tables forbid newlines unless following TOML 1.1 (which we
+    # don't target). Skip spaces and tabs ONLY (no \n / \r).
+    void skip_ws_and_newlines_in_inline(&self):
+        self.skip_ws()
 
     # ── Number / date-time parsing ──────────────────────────
 
@@ -850,6 +952,187 @@ equip TomlParser:
             val = 0 - val
         return Int(val)
 
+    # ── Definition tracking (§6.1 / §8 redefinition rules) ──
+
+    # Join a (current_section_path, additional_key_parts) into a single
+    # canonical dotted path used as the key in `self.defined`.
+    #
+    # Each part is prefixed with a NUL-like separator so that empty key
+    # parts (TOML allows '' / "" as a quoted key) don't collide with
+    # adjacent parts. The encoding doesn't need to be human-readable; it
+    # just needs to be injective.
+    String make_path(self, Vector[String] base, Vector[String] extra):
+        String s = ""
+        int i = 0
+        while i < base.len():
+            s = s + "\x01" + base.get(i).unwrap()
+            i = i + 1
+        int j = 0
+        while j < extra.len():
+            s = s + "\x01" + extra.get(j).unwrap()
+            j = j + 1
+        return s
+
+    # Header [t]: register every prefix as implicit (kind 2) if not yet
+    # known, then the full path as explicit (kind 0). Returns false on
+    # conflict (parser is failed).
+    bool register_table_header(&self, Vector[String] path):
+        # Prefixes: must be table-shaped (implicit / explicit / dotted-table
+        # / array-of-tables for the parent — but NOT scalar / inline).
+        Vector[String] empty = Vector[String]()
+        int n = path.len()
+        int i = 0
+        while i < n - 1:
+            Vector[String] prefix = Vector[String]()
+            int k = 0
+            while k <= i:
+                prefix.push(path.get(k).unwrap().clone())
+                k = k + 1
+            String pp = self.make_path(empty, prefix)
+            if self.defined.contains(pp):
+                int kind = self.defined.get(pp).unwrap()
+                if kind == 3 or kind == 4:
+                    self.fail("cannot extend inline table or scalar via dotted header")
+                    return false
+                # Implicit, explicit, dotted-table, array-of-tables are all OK
+                # as prefix containers.
+            else:
+                self.defined.put(pp, 2)  # implicit
+            i = i + 1
+        String fp = self.make_path(empty, path)
+        if self.defined.contains(fp):
+            int kind = self.defined.get(fp).unwrap()
+            if kind == 2:
+                # Implicit -> upgrade to explicit.
+                self.defined.put(fp, 0)
+                return true
+            # Anything else (explicit, array, inline, scalar, dotted-table)
+            # is a redefinition error.
+            self.fail("table already defined")
+            return false
+        self.defined.put(fp, 0)
+        return true
+
+    # Header [[t]]: prefixes same rules; full path must be undefined or
+    # already-an-array. Implicit upgrade NOT supported because [[t]] can
+    # only extend an existing array, not turn an implicit table into one.
+    bool register_aot_header(&self, Vector[String] path):
+        Vector[String] empty = Vector[String]()
+        int n = path.len()
+        int i = 0
+        while i < n - 1:
+            Vector[String] prefix = Vector[String]()
+            int k = 0
+            while k <= i:
+                prefix.push(path.get(k).unwrap().clone())
+                k = k + 1
+            String pp = self.make_path(empty, prefix)
+            if self.defined.contains(pp):
+                int kind = self.defined.get(pp).unwrap()
+                if kind == 3 or kind == 4:
+                    self.fail("cannot extend inline table or scalar via dotted aot header")
+                    return false
+                # Note: kind 1 (existing AoT) IS allowed as a prefix — see
+                # `[[fruits]]\n[[fruits.varieties]]` in
+                # valid/spec/array-of-tables-1. Each new [[t.x]] applies to
+                # the most recent t element.
+            else:
+                self.defined.put(pp, 2)
+            i = i + 1
+        String fp = self.make_path(empty, path)
+        if self.defined.contains(fp):
+            int kind = self.defined.get(fp).unwrap()
+            if kind == 1:
+                # Existing AoT — push another element. The new element
+                # opens a fresh scope: clear any sub-paths under fp so
+                # k=v lines and sub-[t] headers in this element don't
+                # collide with the previous element's keys.
+                self.clear_sub_paths(fp)
+                return true
+            self.fail("array-of-tables conflicts with existing definition")
+            return false
+        self.defined.put(fp, 1)
+        return true
+
+    # Remove all entries whose key is strictly under `prefix` (so fresh
+    # k=v assignments in a new [[t]] element don't collide). The internal
+    # path encoding uses "\x01" as a part separator, so children of
+    # `prefix` are those that begin with `prefix + "\x01"`.
+    void clear_sub_paths(&self, String prefix):
+        Vector[String] keys = self.defined.keys()
+        Vector[String] to_remove = Vector[String]()
+        String pdot = prefix + "\x01"
+        int i = 0
+        while i < keys.len():
+            String k = keys.get(i).unwrap()
+            if k.starts_with(pdot):
+                to_remove.push(k.clone())
+            i = i + 1
+        int j = 0
+        while j < to_remove.len():
+            self.defined.remove(to_remove.get(j).unwrap())
+            j = j + 1
+
+    # Key = value assignment in a section. `base` is the section path
+    # (from current_sec), `key_parts` is the (dotted) key.
+    # Returns false on conflict; parser is failed.
+    bool register_key_assignment(&self, Vector[String] key_parts, TomlValue val):
+        TomlSection cur = self.sections.get(self.current_sec).unwrap()
+        Vector[String] base = cur.sec_path
+        # For dotted keys a.b.c = v inside section S, intermediate paths
+        # S.a, S.a.b must be undefined or kind 5 (dotted-table). Final
+        # path S.a.b.c must be undefined.
+        int n = key_parts.len()
+        int i = 0
+        while i < n - 1:
+            Vector[String] prefix = Vector[String]()
+            int k = 0
+            while k <= i:
+                prefix.push(key_parts.get(k).unwrap().clone())
+                k = k + 1
+            String pp = self.make_path(base, prefix)
+            if self.defined.contains(pp):
+                int kind = self.defined.get(pp).unwrap()
+                if kind != 5:
+                    # 0 (explicit table) and 2 (implicit) cannot be extended
+                    # via dotted keys from a later section — see
+                    # invalid/table/append-with-dotted-keys-*. Same for 1
+                    # (array), 3 (inline), 4 (scalar).
+                    self.fail("cannot extend table via dotted key here")
+                    return false
+            else:
+                self.defined.put(pp, 5)
+            i = i + 1
+        String fp = self.make_path(base, key_parts)
+        if self.defined.contains(fp):
+            self.fail("key already defined")
+            return false
+        # Walk the value: if it's an inline table, register sub-paths.
+        self.register_value(fp, val)
+        return true
+
+    void register_value(&self, String path, TomlValue val):
+        match val:
+            case Tbl(inner):
+                # Inline table — closed. Mark path as inline (3), then
+                # recurse into entries.
+                self.defined.put(path, 3)
+                Vector[String] ks = inner.keys()
+                int i = 0
+                while i < ks.len():
+                    String k = ks.get(i).unwrap()
+                    String sub = path + "\x01" + k
+                    self.register_value(sub, inner[k])
+                    i = i + 1
+            case Arr(items):
+                # Arrays of inline tables: each element gets registered too,
+                # but we don't index per-element. Treat as scalar for the
+                # purposes of redefinition since you can't [t] into them
+                # post-hoc.
+                self.defined.put(path, 4)
+            else:
+                self.defined.put(path, 4)
+
     # ── Section-based key-value storage ─────────────────────
 
     void add_kv(&self, Vector[String] key_parts, TomlValue !toml_val):
@@ -914,8 +1197,16 @@ equip TomlParser:
                 TomlValue kv_val = self.parse_value()
                 if self.failed():
                     return
+                # Definition tracking — must check BEFORE add_kv so the
+                # error wins over silent merge.
+                if not self.register_key_assignment(kv_key, kv_val):
+                    return
                 self.add_kv(kv_key, kv_val)
-                self.skip_to_newline()
+                # Per TOML §3 there must be a newline or comment+newline
+                # after every value. "x = 1 y = 2" is invalid.
+                self.expect_eol("expected newline after value")
+                if self.failed():
+                    return
                 self.skip_ws_and_newlines()
 
     void parse_table_header(&self):
@@ -938,8 +1229,20 @@ equip TomlParser:
                 self.fail("expected ']]' in array-of-tables header")
                 return
             self.pos = self.pos + 1
+        # Definition tracking — must reject re-definition before we
+        # start a new section, otherwise the assembled tree merges the
+        # data silently.
+        bool ok = false
+        if is_array_table:
+            ok = self.register_aot_header(hdr_key)
+        else:
+            ok = self.register_table_header(hdr_key)
+        if not ok:
+            return
         self.start_section(!hdr_key, is_array_table)
-        self.skip_to_newline()
+        # The line after the closing ] must be terminated by EOL / comment +
+        # EOL. Anything else (e.g. "[t] x = 1") is invalid per TOML 1.0 §3.
+        self.expect_eol("expected newline after table header")
 
 # ── Helper free functions ───────────────────────────────────
 
@@ -1150,7 +1453,8 @@ Result[TomlValue, ParseError] parse(String input):
     Vector[String] root_path = Vector[String]()
     TomlSection root_sec = TomlSection(!root_path, !root_data, false)
     secs.push(!root_sec)
-    TomlParser tp = TomlParser(input, 0, "", !secs, 0)
+    Dict[String, int] defined0 = Dict[String, int]()
+    TomlParser tp = TomlParser(input, 0, "", !secs, 0, !defined0)
     tp.parse_document()
     if tp.failed():
         return Error(ParseError.InvalidSyntax(tp.pos, !tp.err))
