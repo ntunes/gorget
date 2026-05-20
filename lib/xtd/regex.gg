@@ -348,6 +348,51 @@ equip RxParser:
             return Group(idx, name, Box.new(!inner))
         return inner
 
+    # Try to parse a POSIX bracket class `[:name:]` or `[:^name:]` at the
+    # current position. Caller must guarantee `peek() == '['` and
+    # `peek_at(1) == ':'`. On success, appends the expanded ranges to
+    # `out` and returns true (position advanced past the trailing `]`).
+    # On failure (unknown name, malformed), restores position and returns
+    # false so the caller can fall through to literal `[` handling.
+    bool try_parse_posix_class(&self, Vector[CharRange] &out):
+        int saved = self.pos
+        self.advance()  # consume '['
+        self.advance()  # consume ':'
+        bool neg = false
+        if self.peek() == b'^' as int:
+            neg = true
+            self.advance()
+        # Scan the class name up to ':]' (must terminate with that pair).
+        int name_start = self.pos
+        while not self.at_end():
+            int b = self.peek()
+            if b == b':' as int and self.peek_at(1) == b']' as int:
+                break
+            # Names are ASCII letters only — bail if we see anything else.
+            if not ((b >= b'a' as int and b <= b'z' as int) or (b >= b'A' as int and b <= b'Z' as int)):
+                self.pos = saved
+                return false
+            self.advance()
+        if self.at_end():
+            self.pos = saved
+            return false
+        String name = self.src.byte_slice(name_start, self.pos)
+        # Consume ':]'.
+        self.advance()
+        self.advance()
+        Vector[CharRange] rs = posix_class_ranges(name)
+        if rs.len() == 0:
+            # Unknown name — restore and let the caller treat `[` as literal.
+            self.pos = saved
+            return false
+        if neg:
+            rs = invert_ranges(rs)
+        int i = 0
+        while i < rs.len():
+            out.push(rs[i].clone())
+            i = i + 1
+        return true
+
     RxNode parse_char_class(&self):
         self.advance()  # consume '['
         bool negated = false
@@ -362,6 +407,14 @@ equip RxParser:
             if c == b']' as int and not first:
                 self.advance()
                 return Class(CharClass(ranges.clone(), negated))
+            # POSIX bracket class: [:name:] or [:^name:]. Only valid inside [...].
+            # Names: alpha, alnum, ascii, blank, cntrl, digit, graph, lower,
+            # print, punct, space, upper, word, xdigit (plus '^'-negated forms).
+            if c == b'[' as int and self.peek_at(1) == b':' as int:
+                if self.try_parse_posix_class(&ranges):
+                    first = false
+                    continue
+                # Fall through — not a POSIX class, treat `[` as literal.
             first = false
             int lo = 0
             if c == b'\\' as int:
@@ -800,6 +853,92 @@ CharClass case_fold_class(CharClass c):
             out.push(CharRange(blo - 32, bhi - 32))
         i = i + 1
     return CharClass(!out, c.negated)
+
+# POSIX bracket class name → ASCII ranges. Returns an empty vector if
+# the name is unknown (caller treats `[` as literal in that case).
+# Matches RE2 / rust-regex behaviour: ASCII-only, no Unicode property
+# expansion. The recognised names are alpha, alnum, ascii, blank, cntrl,
+# digit, graph, lower, print, punct, space, upper, word, xdigit.
+Vector[CharRange] posix_class_ranges(String name):
+    Vector[CharRange] r = Vector[CharRange]()
+    if name == "alpha":
+        r.push(CharRange(b'A' as int, b'Z' as int))
+        r.push(CharRange(b'a' as int, b'z' as int))
+    elif name == "alnum":
+        r.push(CharRange(b'0' as int, b'9' as int))
+        r.push(CharRange(b'A' as int, b'Z' as int))
+        r.push(CharRange(b'a' as int, b'z' as int))
+    elif name == "ascii":
+        r.push(CharRange(0, 127))
+    elif name == "blank":
+        r.push(CharRange(b'\t' as int, b'\t' as int))
+        r.push(CharRange(b' ' as int, b' ' as int))
+    elif name == "cntrl":
+        r.push(CharRange(0, 31))
+        r.push(CharRange(127, 127))
+    elif name == "digit":
+        r.push(CharRange(b'0' as int, b'9' as int))
+    elif name == "graph":
+        r.push(CharRange(0x21, 0x7E))
+    elif name == "lower":
+        r.push(CharRange(b'a' as int, b'z' as int))
+    elif name == "print":
+        r.push(CharRange(0x20, 0x7E))
+    elif name == "punct":
+        # ASCII punctuation: !"#$%&'()*+,-./ :;<=>?@ [\]^_` {|}~
+        r.push(CharRange(0x21, 0x2F))
+        r.push(CharRange(0x3A, 0x40))
+        r.push(CharRange(0x5B, 0x60))
+        r.push(CharRange(0x7B, 0x7E))
+    elif name == "space":
+        r.push(CharRange(b'\t' as int, b'\r' as int))   # \t \n \v \f \r
+        r.push(CharRange(b' ' as int, b' ' as int))
+    elif name == "upper":
+        r.push(CharRange(b'A' as int, b'Z' as int))
+    elif name == "word":
+        r.push(CharRange(b'0' as int, b'9' as int))
+        r.push(CharRange(b'A' as int, b'Z' as int))
+        r.push(CharRange(b'_' as int, b'_' as int))
+        r.push(CharRange(b'a' as int, b'z' as int))
+    elif name == "xdigit":
+        r.push(CharRange(b'0' as int, b'9' as int))
+        r.push(CharRange(b'A' as int, b'F' as int))
+        r.push(CharRange(b'a' as int, b'f' as int))
+    return r
+
+# Compute the byte-wise complement of a set of ranges within [0..255].
+# Used to expand POSIX `[:^name:]` negations to positive ranges.
+Vector[CharRange] invert_ranges(Vector[CharRange] rs):
+    # Sort & merge inputs so we can walk the complement in one pass.
+    Vector[CharRange] sorted = Vector[CharRange]()
+    int i = 0
+    while i < rs.len():
+        sorted.push(rs[i].clone())
+        i = i + 1
+    # Insertion sort by lo — set is small (≤4 entries for POSIX classes).
+    int n = sorted.len()
+    int a = 1
+    while a < n:
+        CharRange cur = sorted[a].clone()
+        int b = a - 1
+        while b >= 0 and sorted[b].lo > cur.lo:
+            sorted[b + 1] = sorted[b].clone()
+            b = b - 1
+        sorted[b + 1] = cur
+        a = a + 1
+    Vector[CharRange] out = Vector[CharRange]()
+    int cursor = 0
+    int j = 0
+    while j < sorted.len():
+        CharRange r = sorted[j].clone()
+        if r.lo > cursor:
+            out.push(CharRange(cursor, r.lo - 1))
+        if r.hi + 1 > cursor:
+            cursor = r.hi + 1
+        j = j + 1
+    if cursor <= 255:
+        out.push(CharRange(cursor, 255))
+    return out
 
 int anchor_code(AnchorKind k, int flags):
     # `^` / `$` are line-relative ONLY when the multiline flag is set,
