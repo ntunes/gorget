@@ -25,6 +25,53 @@ from lir_lower import build_resource_metadata
 
 # ── Lowering context ─────────────────────────────────────
 
+# DropScope kind tags. Mirrors Rust's `DropScopeKind` enum in
+# `src/ir/lowering/drops.rs` — kept as int constants because the
+# self-host's typed-metadata story is GIR-level, not enum-shaped (the
+# Rust copy of the enum maps onto these ints 1:1 via match).
+const int DSK_FUNCTION = 0
+const int DSK_LOOP = 1
+const int DSK_BLOCK = 2
+
+# One entry per local that needs to be dropped when its enclosing scope
+# exits. Fields mirror Rust's `DropEntry` in `src/ir/lowering/drops.rs`:
+#   • local_id: GIR local slot to drop
+#   • type_id: GIR type id, used by Phase 2/3 emission to call
+#     `drop_fn_for_type` via gir_local_type_name. Stored on the entry
+#     rather than re-looked-up so any later type updates don't drift
+#     from the registration intent.
+#   • maybe_moved: set by `mark_local_moved` at consume sites that
+#     transfer ownership out of the local. Today the emission path
+#     always emits `GIDropIfAlive` (defensive — mirrors Rust's post-
+#     Snag #30 unconditional shape, where the LIR `drop_elab` pass
+#     statically elides the runtime memcmp when init is provably
+#     unconditional). The flag is recorded for future invariant
+#     audits and for downstream consumers (e.g. the
+#     `tighten_owned_operand_modes` post-pass) that need to know
+#     which locals had ownership transferred away.
+struct DropEntry:
+    int local_id
+    int type_id
+    bool maybe_moved
+
+# A drop scope corresponds to a language construct that owns locals.
+# `kind` is one of DSK_*; `entries` lists locals registered in this
+# scope in declaration order (drops are emitted in reverse / LIFO).
+struct DropScope:
+    int kind
+    Vector[DropEntry] entries
+
+# Tracks owned locals and emits drop instructions at scope boundaries.
+# Mirrors Rust's `DropElaborator` (`src/ir/lowering/drops.rs`). Scope
+# discipline: pushed at function entry / loop entry / each if-branch /
+# match-arm entry, popped (with drop emission) at the corresponding
+# exit. Early exits (return / break / continue) call
+# `emit_drops_for_early_exit` to walk the scope stack innermost-out
+# down to (and including) the target scope kind, emitting drops along
+# the way without popping.
+struct DropElaborator:
+    Vector[DropScope] scopes
+
 struct LowerCtx:
     Vector[GirLocal] locals
     Vector[Vector[Instruction]] block_insts
@@ -54,6 +101,13 @@ struct LowerCtx:
     # function bodies, which is what we need to figure out which
     # lowering paths fail to populate `named_locals`.
     String current_fn_name
+    # Drop elaboration state: scope stack + per-scope drop entries.
+    # Lifecycle: pushed at function entry (DSK_FUNCTION), per-loop
+    # (DSK_LOOP) and per-branch (DSK_BLOCK); popped at corresponding
+    # exits. Early-exit terminators (SReturn/SBreak/SContinue) walk
+    # the stack innermost-out and emit drops along the way. See the
+    # DropElaborator docstring for the architectural contract.
+    DropElaborator drop_elab
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -312,6 +366,240 @@ void switch_to(LowerCtx &ctx, int block_id):
 
 void set_terminator(LowerCtx &ctx, Terminator term):
     ctx.block_terms.set(ctx.current_block, term)
+
+# ── Drop elaboration (mirrors src/ir/lowering/drops.rs) ─────
+#
+# A drop scope corresponds to a language construct that owns locals
+# (function / loop body / if-branch / match-arm / etc.). At scope
+# entry we push a fresh DropScope; at scope exit we pop and emit a
+# `GIDropIfAlive(local_id)` for every owned, resource-typed local
+# registered in that scope, LIFO order.
+#
+# Early exits (return / break / continue) walk the scope stack
+# innermost-out and emit drops without popping — the surrounding
+# scope's later pop_drop_scope is responsible for cleanup if the
+# early exit branch is the only path through the scope.
+#
+# Why GIDropIfAlive (not GIDrop)?  The LIR-side handler in
+# `lir_lower.gg:2989-3015` wraps the runtime drop call in an
+# `IDropGuardOpen(byte_size+1) / IDropGuardClose` pair, which the
+# C codegen materialises as `if (memcmp(&slot, zeros, size) != 0)
+# <drop>`. That's a safe, defensive guard: function-entry slots
+# are calloc-zeroed, runtime drop fns are NULL-safe, so worst
+# case for a possibly-uninit slot is one memcmp returning 0 and
+# the drop suppressed. Rust's DropElaborator (`drops.rs:506,542`)
+# also emits DropIfAlive unconditionally post-Snag #30 (2026-05-10
+# nested-match double-free); we follow the same defensive shape.
+# The downstream LIR `drop_elab` pass statically elides the
+# memcmp when slot init is provably unconditional, recovering
+# the unconditional-drop codegen quality.
+#
+# Resource classification: `is_droppable_type` checks the local's
+# GIR type against `build_resource_metadata` (the single source of
+# truth shared with lir_lower.gg) AND `gmod.resource_types` (for
+# user-defined struct/enum types with resource fields, populated at
+# `lower_module` entry before any function is lowered). Primitives
+# and Ptr/MutPtr/FnPtr types are not droppable. Mirrors Rust's
+# `needs_drop` in `src/ir/types.rs`.
+
+void init_drop_elab(DropElaborator &de):
+    de.scopes = []
+
+void push_drop_scope(DropElaborator &de, int kind):
+    Vector[DropEntry] entries = []
+    de.scopes.push(DropScope(kind, !entries))
+
+# Emit drops for every entry in the given scope, LIFO order, using
+# GIDropIfAlive (see top-of-section docstring for the unconditional-
+# DropIfAlive rationale). `gmod` is read-only here — we only need it
+# to look up type info on the entry's local; the actual drop_fn
+# resolution happens in the LIR-side handler.
+void emit_scope_drops(LowerCtx &ctx, Vector[DropEntry] entries):
+    int i = entries.len() - 1
+    while i >= 0:
+        DropEntry entry = entries.get(i).unwrap()
+        emit(&ctx, GIDropIfAlive(entry.local_id))
+        i -= 1
+
+# Pop the innermost scope and emit its drops at the current block.
+void pop_drop_scope(LowerCtx &ctx):
+    if ctx.drop_elab.scopes.len() == 0:
+        return
+    DropScope scope = ctx.drop_elab.scopes.get(ctx.drop_elab.scopes.len() - 1).unwrap()
+    emit_scope_drops(&ctx, scope.entries)
+    ctx.drop_elab.scopes.pop()
+
+# Pop the innermost scope WITHOUT emitting drops. Used at the loop-
+# entry/exit pairing in `lower_loop`/`lower_while`/`lower_for_*` — the
+# loop body's terminator is either a back-edge jump (no drops needed —
+# the same locals re-enter the body next iteration) or a break/continue
+# (which already emitted its own drops via emit_drops_for_early_exit).
+void pop_drop_scope_no_emit(LowerCtx &ctx):
+    if ctx.drop_elab.scopes.len() == 0:
+        return
+    ctx.drop_elab.scopes.pop()
+
+# Check whether a GIR type id refers to a droppable resource type. Used
+# at every SVarDecl / param-registration site to decide whether to add
+# the local to the current drop scope. Primitives, Ptr/MutPtr/FnPtr, and
+# user types without resource fields are non-droppable.
+bool is_droppable_type(int type_id, GirModule &gmod):
+    if type_id < 0 or type_id < PRIM_COUNT:
+        return false
+    if type_id >= gmod.type_table.len():
+        return false
+    GirType gt = gmod.type_table.get(type_id).unwrap()
+    String tname = ""
+    match gt:
+        case GtNamed(n):
+            tname = n
+        case GtPtr(_):
+            # Ptr/MutPtr are non-owning aliases — the pointee's
+            # owner is responsible for dropping it.
+            return false
+        case GtMutPtr(_):
+            return false
+        case GtFnPtr(_, _):
+            return false
+        else:
+            return false
+    return is_resource_type_name(tname, &gmod)
+
+# Register a local in the innermost drop scope. Skips non-droppable
+# types so callers can call this blindly after add_local. Skips when
+# no scope is open (defensive — should never happen during normal
+# function lowering, but cheap to guard).
+void register_local_for_drop(LowerCtx &ctx, int local_id, int type_id, GirModule &gmod):
+    if not is_droppable_type(type_id, &gmod):
+        return
+    if ctx.drop_elab.scopes.len() == 0:
+        return
+    int top = ctx.drop_elab.scopes.len() - 1
+    DropScope scope = ctx.drop_elab.scopes.get(top).unwrap()
+    scope.entries.push(DropEntry(local_id, type_id, false))
+    ctx.drop_elab.scopes.set(top, scope)
+
+# Mark a local as "maybe moved" — used at consume sites that transfer
+# ownership out of the local. Walks the scope stack innermost-out;
+# matches the first entry with the given local_id and sets its
+# maybe_moved flag. No-op if the local isn't registered (e.g. it's a
+# borrow / non-resource / wasn't tracked).
+void mark_local_moved(LowerCtx &ctx, int local_id):
+    int si = ctx.drop_elab.scopes.len() - 1
+    while si >= 0:
+        DropScope scope = ctx.drop_elab.scopes.get(si).unwrap()
+        int ei = 0
+        while ei < scope.entries.len():
+            DropEntry entry = scope.entries.get(ei).unwrap()
+            if entry.local_id == local_id:
+                entry.maybe_moved = true
+                scope.entries.set(ei, entry)
+                ctx.drop_elab.scopes.set(si, scope)
+                return
+            ei += 1
+        si -= 1
+
+# Snapshot `maybe_moved` flags across every live scope. Used by branch
+# lowerings (lower_if, lower_match) to restore the pre-branch view
+# before lowering each alternative branch — otherwise a mark_local_moved
+# in the then-branch pollutes the elif-branch's view. Mirrors Rust's
+# `DropElaborator::snapshot_moved` (`drops.rs:300-308`).
+#
+# Storage shape: flat Vector[bool] indexed by (sidx * MAX_PER_SCOPE +
+# eidx). MAX_PER_SCOPE is conservatively large; self-host functions
+# rarely exceed ~50 droppable locals per scope.
+const int SNAPSHOT_MAX_PER_SCOPE = 4096
+
+Vector[bool] snap_moved_state(DropElaborator &de):
+    Vector[bool] out = []
+    int si = 0
+    while si < de.scopes.len():
+        DropScope scope = de.scopes.get(si).unwrap()
+        int ei = 0
+        while ei < scope.entries.len():
+            DropEntry entry = scope.entries.get(ei).unwrap()
+            # Pad to (si+1)*MAX_PER_SCOPE so flat indexing works:
+            # entries beyond the current scope's entry count are
+            # implicit false (not yet recorded). We push entries
+            # for THIS scope at their (ei + base) position; reads
+            # default-to-false for missing indices in restore.
+            int target_pos = si * SNAPSHOT_MAX_PER_SCOPE + ei
+            while out.len() <= target_pos:
+                out.push(false)
+            out.set(target_pos, entry.maybe_moved)
+            ei += 1
+        si += 1
+    return out
+
+# Restore `maybe_moved` flags from a snapshot. Entries added since the
+# snapshot keep their current `maybe_moved` (they're newer than the
+# snapshot frame, occupying positions beyond the snapshot's len).
+void restore_moved(DropElaborator &de, Vector[bool] snap):
+    int si = 0
+    while si < de.scopes.len():
+        DropScope scope = de.scopes.get(si).unwrap()
+        int ei = 0
+        while ei < scope.entries.len():
+            int pos = si * SNAPSHOT_MAX_PER_SCOPE + ei
+            if pos < snap.len():
+                DropEntry entry = scope.entries.get(ei).unwrap()
+                bool was = snap.get(pos).unwrap()
+                entry.maybe_moved = was
+                scope.entries.set(ei, entry)
+            ei += 1
+        de.scopes.set(si, scope)
+        si += 1
+
+# Union `maybe_moved` flags from a branch snapshot into the current
+# state — conservative join. If any branch moved a local, the post-
+# join state treats it as maybe-moved. Mirrors Rust's `union_moved`
+# (`drops.rs:328-337`).
+void union_moved(DropElaborator &de, Vector[bool] branch_snap):
+    int si = 0
+    while si < de.scopes.len():
+        DropScope scope = de.scopes.get(si).unwrap()
+        int ei = 0
+        while ei < scope.entries.len():
+            int pos = si * SNAPSHOT_MAX_PER_SCOPE + ei
+            if pos < branch_snap.len():
+                bool branch_moved = branch_snap.get(pos).unwrap()
+                if branch_moved:
+                    DropEntry entry = scope.entries.get(ei).unwrap()
+                    entry.maybe_moved = true
+                    scope.entries.set(ei, entry)
+            ei += 1
+        de.scopes.set(si, scope)
+        si += 1
+
+# Emit cleanup drops for an early exit (return / break / continue).
+# Walks scopes innermost-out, emitting GIDropIfAlive for every entry,
+# until (and INCLUDING) the target scope kind. For return, target=
+# DSK_FUNCTION (drop everything up through Function). For break /
+# continue, target=DSK_LOOP. `exclude_local` optionally skips a
+# specific local (e.g. _0 — the return place being moved out).
+#
+# Does NOT pop scopes — that's the surrounding scope's responsibility
+# at its natural exit point.
+void emit_drops_for_early_exit(LowerCtx &ctx, int target_kind, Option[int] exclude_local):
+    int si = ctx.drop_elab.scopes.len() - 1
+    while si >= 0:
+        DropScope scope = ctx.drop_elab.scopes.get(si).unwrap()
+        int ei = scope.entries.len() - 1
+        while ei >= 0:
+            DropEntry entry = scope.entries.get(ei).unwrap()
+            bool skip = false
+            match exclude_local:
+                case Some(excl):
+                    if entry.local_id == excl:
+                        skip = true
+                case None:
+                    pass
+            if not skip:
+                emit(&ctx, GIDropIfAlive(entry.local_id))
+            ei -= 1
+        if scope.kind == target_kind:
+            return
+        si -= 1
 
 # ── Operand-mode dispatch (Phase C step 5c) ─────────────────
 #
@@ -4328,7 +4616,8 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
     Vector[int] _lc_stk = []
     Vector[int] _lb_stk = []
     Dict[String, int] _named_locals = {}
-    LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, !_named_locals, 0, !_lc_stk, !_lb_stk, "", "", "", false, fdef.name.clone())
+    Vector[DropScope] _de_scopes = []
+    LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, !_named_locals, 0, !_lc_stk, !_lb_stk, "", "", "", false, fdef.name.clone(), DropElaborator(!_de_scopes))
 
     # _0 = return place
     add_local(&ctx, ret_type, NO_NAME)
@@ -4475,7 +4764,8 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
         Vector[int] _lc_stk2 = []
         Vector[int] _lb_stk2 = []
         Dict[String, int] _named_locals2 = {}
-        LowerCtx ctx = LowerCtx([], [], [], 0, !_named_locals2, 0, !_lc_stk2, !_lb_stk2, "", "", "", false, mangled.clone())
+        Vector[DropScope] _de_scopes2 = []
+        LowerCtx ctx = LowerCtx([], [], [], 0, !_named_locals2, 0, !_lc_stk2, !_lb_stk2, "", "", "", false, mangled.clone(), DropElaborator(!_de_scopes2))
         # bb0
         Vector[Instruction] init_insts = []
         ctx.block_insts.push(!init_insts)
@@ -6248,7 +6538,8 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         Vector[int] _lc_stk3 = []
                         Vector[int] _lb_stk3 = []
                         Dict[String, int] _named_locals3 = {}
-                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, 0, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone())
+                        Vector[DropScope] _de_scopes3 = []
+                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, 0, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone(), DropElaborator(!_de_scopes3))
                         Vector[Instruction] tinit = []
                         tctx.block_insts.push(!tinit)
                         tctx.block_terms.push(GTNone())
