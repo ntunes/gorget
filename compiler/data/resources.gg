@@ -56,19 +56,25 @@ public static int SCHEMA_VERSION = 1
 
 public static Vector[ResourceEntry] RESOURCES = [
 
-    # GorgetString — multi-alias Exact cluster; CoW materialize_fn=Some;
+    # GorgetString — multi-alias Exact cluster + MkPrefix for mangled methods
+    # (GorgetString__upper, GorgetString__slice, …); CoW materialize_fn=Some;
     # the only resource with a view discriminator today.
+    # method_prefix="gorget_str" routes map_monomorphized_to_runtime's
+    # GorgetString__method → gorget_str_method dispatch.
     ResourceEntry(
-        [MkExact("GorgetString"), MkExact("String"), MkExact("Str")],
+        [MkExact("GorgetString"), MkExact("String"), MkExact("Str"),
+         MkPrefix("GorgetString__")],
         ResourceMetadata(
             "GorgetString", 32, LtStructBase(),
             Some("gorget_string_free"),
             Some("gorget_string_clone"),
             Some("gorget_string_materialize_inplace"),
             CsResource(), CkNotCollection(), BkNotBox(),
-            false, None, false)),
+            false, Some("gorget_str"), false)),
 
     # GorgetArray — Exact singleton; the runtime backing for Vector/Deque/Heap.
+    # method_prefix="gorget_array" routes the non-generic
+    # GorgetArray__method form (parallel to Vector__T__method).
     ResourceEntry(
         [MkExact("GorgetArray")],
         ResourceMetadata(
@@ -77,20 +83,26 @@ public static Vector[ResourceEntry] RESOURCES = [
             Some("gorget_array_clone"),
             None,
             CsResource(), CkVector(), BkNotBox(),
-            false, None, false)),
+            false, Some("gorget_array"), false)),
 
     # Vector__T — Prefix; typed_constructor=true (T(args) user shape).
+    # GorgetArray__ shares the Vector family classification axis in
+    # map_monomorphized_to_runtime (both → gorget_array_method).
     ResourceEntry(
-        [MkPrefix("Vector__")],
+        [MkPrefix("Vector__"), MkPrefix("GorgetArray__")],
         ResourceMetadata(
             "GorgetArray", 64, LtStructBase(),
             Some("gorget_array_free"),
             Some("gorget_array_clone"),
             None,
             CsResource(), CkVector(), BkNotBox(),
-            false, None, true)),
+            false, Some("gorget_array"), true)),
 
     # Deque__T — Prefix; CkDeque (distinct kind, same runtime).
+    # NOTE: method_prefix left None — map_monomorphized_to_runtime does NOT
+    # have a Deque__ arm today (Deque method dispatch goes through different
+    # paths, e.g. insts.rs's strip_prefix). Routing Deque__ through the
+    # array-family arm would change observable behaviour; out of scope here.
     ResourceEntry(
         [MkPrefix("Deque__")],
         ResourceMetadata(
@@ -102,6 +114,9 @@ public static Vector[ResourceEntry] RESOURCES = [
             false, None, true)),
 
     # Heap__T — Prefix; CkHeap; typed_constructor=false (factory shape, Heap.new()).
+    # method_prefix="gorget_heap" routes Heap__T__method → gorget_heap_method.
+    # CkHeap distinguishes from Vector/GorgetArray (same runtime_name but
+    # different dispatch family).
     ResourceEntry(
         [MkPrefix("Heap__")],
         ResourceMetadata(
@@ -110,10 +125,13 @@ public static Vector[ResourceEntry] RESOURCES = [
             Some("gorget_array_clone"),
             None,
             CsResource(), CkHeap(), BkNotBox(),
-            false, None, false)),
+            false, Some("gorget_heap"), false)),
 
     # Dict__K__V / HashMap__K__V / GorgetDict__K__V — multi-alias Prefix cluster;
-    # CkDict.
+    # CkDict. method_prefix="gorget_map" routes Dict/HashMap/GorgetDict
+    # families through the gorget_map_* runtime. Dict__-specific overrides
+    # (Dict.new() → gorget_dict_new for ordered semantics) stay inside the
+    # dispatch arm.
     ResourceEntry(
         [MkPrefix("Dict__"), MkPrefix("HashMap__"), MkPrefix("GorgetDict__")],
         ResourceMetadata(
@@ -122,9 +140,12 @@ public static Vector[ResourceEntry] RESOURCES = [
             Some("gorget_map_clone"),
             None,
             CsResource(), CkDict(), BkNotBox(),
-            false, None, true)),
+            false, Some("gorget_map"), true)),
 
     # Set__T / HashSet__T — Prefix alias cluster; CkSet.
+    # method_prefix="gorget_set" routes Set/HashSet through the gorget_set_*
+    # runtime. Set__-specific overrides (Set.new()/new_str() → gorget_ordered_set_*
+    # for ordered semantics) stay inside the dispatch arm.
     ResourceEntry(
         [MkPrefix("Set__"), MkPrefix("HashSet__")],
         ResourceMetadata(
@@ -133,7 +154,7 @@ public static Vector[ResourceEntry] RESOURCES = [
             Some("gorget_set_clone"),
             None,
             CsResource(), CkSet(), BkNotBox(),
-            false, None, true)),
+            false, Some("gorget_set"), true)),
 
     # Box__T — Prefix; BkRegularBox; LtPtr (8-byte pointer, not struct).
     ResourceEntry(
@@ -173,6 +194,7 @@ public static Vector[ResourceEntry] RESOURCES = [
     # ── Mechanical fill-in from lir_lower.gg::build_resource_metadata ──
 
     # GorgetMap — Exact singleton; backing runtime for Dict/HashMap.
+    # method_prefix="gorget_map" matches the Dict__/HashMap__ family.
     ResourceEntry(
         [MkExact("GorgetMap")],
         ResourceMetadata(
@@ -181,9 +203,10 @@ public static Vector[ResourceEntry] RESOURCES = [
             Some("gorget_map_clone"),
             None,
             CsResource(), CkDict(), BkNotBox(),
-            false, None, false)),
+            false, Some("gorget_map"), false)),
 
     # GorgetSet — Exact singleton; backing runtime for Set/HashSet.
+    # method_prefix="gorget_set" matches the Set__/HashSet__ family.
     ResourceEntry(
         [MkExact("GorgetSet")],
         ResourceMetadata(
@@ -192,7 +215,7 @@ public static Vector[ResourceEntry] RESOURCES = [
             Some("gorget_set_clone"),
             None,
             CsResource(), CkSet(), BkNotBox(),
-            false, None, false)),
+            false, Some("gorget_set"), false)),
 
     # GorgetClosure — Exact singleton; 16-byte closure struct.
     ResourceEntry(
@@ -211,6 +234,7 @@ public static Vector[ResourceEntry] RESOURCES = [
     # is_typed_constructor=true; lir_lower.gg actually groups it with
     # GorgetMap__ at false. Drift surfaced during item-8 fill-in;
     # leaving spike untouched per scope discipline.
+    # method_prefix="gorget_map" matches the Dict family.
     ResourceEntry(
         [MkPrefix("GorgetMap__")],
         ResourceMetadata(
@@ -219,9 +243,10 @@ public static Vector[ResourceEntry] RESOURCES = [
             Some("gorget_map_clone"),
             None,
             CsResource(), CkDict(), BkNotBox(),
-            false, None, false)),
+            false, Some("gorget_map"), false)),
 
     # GorgetSet__ — self-host mangled monomorphised form.
+    # method_prefix="gorget_set" matches the Set family.
     ResourceEntry(
         [MkPrefix("GorgetSet__")],
         ResourceMetadata(
@@ -230,7 +255,7 @@ public static Vector[ResourceEntry] RESOURCES = [
             Some("gorget_set_clone"),
             None,
             CsResource(), CkSet(), BkNotBox(),
-            false, None, false)),
+            false, Some("gorget_set"), false)),
 
     # RWLock__ — opaque, ref-counted, typed_constructor.
     ResourceEntry(
