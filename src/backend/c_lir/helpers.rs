@@ -129,55 +129,45 @@ pub(super) fn emit_guard_wrapper(out: &mut String, type_name: &str, method: &str
 
 /// Emit a typedef for a monomorphized wrapper type.
 pub(super) fn emit_wrapper_typedef(out: &mut String, name: &str, module: &LirModule, orig_to_c: &HashMap<String, String>) {
-    // Phase A SSoT routing: consult `compiler/data/resources.gg` for
-    // collection-kind aliases (Vector__/Dict__/Set__ and their non-Gorget-
-    // prefixed siblings). The table's `runtime_name` doubles as the C
-    // typedef target name for these struct-by-value resources, so the
-    // emission is a one-line write off the typed metadata.
+    // SSoT routing: consult `compiler/data/resources.gg`. Two cases land
+    // here without any prefix-arm fallback:
+    //   (a) collection rows (Vector/Deque/Heap/Dict/Set) — gated on
+    //       `collection_kind`; the table's `runtime_name` doubles as the
+    //       C typedef target for these struct-by-value resources.
+    //   (b) ref-counted-handle + guard rows
+    //       (Channel/Shared/Weak/Mutex/RWLock/Guard/ReadGuard/WriteGuard)
+    //       — the table's `c_typedef_name` field overrides `runtime_name`
+    //       when the C typedef target diverges (e.g. `runtime_name="Mutex"`
+    //       but C typedef target `GorgetMutex*`).
     //
-    // Ref-counted handle types (Mutex__/Channel__/Shared__/Weak__/RWLock__/
-    // Guard__/ReadGuard__/WriteGuard__) stay below — their C typedef name
-    // (e.g. `GorgetMutex*`, `gorget_guard_t`) does NOT match the schema's
-    // `runtime_name` ("Mutex", "Guard"), so the table doesn't yet carry
-    // enough information to drive the spelling. Adding a `c_typedef_name`
-    // field is an additive schema change deferred until item 8.
+    // Box__ stays below — its emission branches on the LIR `is_trait_box`
+    // flag (trait box → `<Trait>_TraitObj`, regular box → `void*`), which
+    // can't be encoded as a static schema field today.
     if let Some(meta) = crate::ir::resources::table().lookup(name) {
         use crate::ir::resource_schema::CollectionKind;
-        match meta.collection_kind {
+        let is_collection = matches!(meta.collection_kind,
             CollectionKind::Vector | CollectionKind::Deque | CollectionKind::Heap
-            | CollectionKind::Dict | CollectionKind::Set => {
-                writeln!(out, "typedef {} {name};", meta.runtime_name).unwrap();
-                return;
-            }
-            _ => {}
+            | CollectionKind::Dict | CollectionKind::Set);
+        if is_collection {
+            writeln!(out, "typedef {} {name};", meta.runtime_name).unwrap();
+            return;
+        }
+        // Ref-counted-handle / guard rows: c_typedef_name carries the C
+        // typedef target. Only fires when Some — None falls through to
+        // the legacy arms below (Box__, TaskGroup, AtomicInt/Bool).
+        if let Some(target) = meta.c_typedef_name.as_deref() {
+            writeln!(out, "typedef {target} {name};").unwrap();
+            return;
         }
     }
-    if name.starts_with("Channel__") {
-        writeln!(out, "typedef GorgetChannel* {name};").unwrap();
-    } else if name.starts_with("Shared__") || name.starts_with("Weak__") {
-        writeln!(out, "typedef GorgetShared* {name};").unwrap();
-    } else if name.starts_with("Vector__") {
-        writeln!(out, "typedef GorgetArray {name};").unwrap();
-    } else if name.starts_with("Dict__") || name.starts_with("HashMap__") {
-        writeln!(out, "typedef GorgetMap {name};").unwrap();
-    } else if name.starts_with("Set__") || name.starts_with("HashSet__") {
-        writeln!(out, "typedef GorgetSet {name};").unwrap();
-    } else if name.starts_with("Mutex__") {
-        writeln!(out, "typedef GorgetMutex* {name};").unwrap();
-    } else if name.starts_with("RWLock__") {
-        writeln!(out, "typedef GorgetRWLock* {name};").unwrap();
-    } else if name.starts_with("Guard__") {
-        writeln!(out, "typedef gorget_guard_t {name};").unwrap();
-    } else if name.starts_with("ReadGuard__") {
-        writeln!(out, "typedef gorget_read_guard_t {name};").unwrap();
-    } else if name.starts_with("WriteGuard__") {
-        writeln!(out, "typedef gorget_write_guard_t {name};").unwrap();
-    } else if name == "TaskGroup" {
+    if name == "TaskGroup" {
         writeln!(out, "typedef gorget_task_group_t* TaskGroup;").unwrap();
     } else if name.starts_with("Box__") {
         // Read the typed `is_trait_box` flag set at registration time
         // (commit e5de1616). Trait-object Box typedef'd to <Trait>_TraitObj
         // (16 bytes: data + vtable); concrete Box typedef'd to void* (8 bytes).
+        // Can't migrate via c_typedef_name today: the trait-box branch's
+        // target is computed from the trait name, not a static field.
         let is_trait = module.structs.iter()
             .find(|s| s.name == name)
             .map_or(false, |s| s.is_trait_box);
