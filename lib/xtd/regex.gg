@@ -1107,6 +1107,26 @@ bool class_match(CharClass cc, int b):
         return not found
     return found
 
+# Return the smallest p > pos such that subject.byte_at(p) is NOT a
+# UTF-8 continuation byte (high two bits != 10), or subject.byte_len()
+# if no such p exists within the string. Always returns a value
+# strictly greater than `pos` (callers rely on this for loop progress
+# at end-of-input — when pos == n we still return pos + 1 so the
+# `while pos <= n` outer loop terminates).
+int codepoint_next(String subject, int pos):
+    int n = subject.byte_len()
+    int p = pos + 1
+    while p < n:
+        int b = subject.byte_at(p) as int
+        # Continuation bytes have top bits 10xxxxxx (0x80..0xBF).
+        if (b & 0xC0) != 0x80:
+            return p
+        p = p + 1
+    # p >= n: ensure strictly > pos.
+    if p > pos:
+        return p
+    return pos + 1
+
 bool is_word_byte(int b):
     if b < 0:
         return false
@@ -1364,8 +1384,8 @@ equip Regex:
         # iteration searches from `prev_end`. If that iteration returns
         # an empty match starting at `prev_end`, it is spurious (the
         # non-empty match already accounted for that position) and must
-        # be discarded — advance by one byte and retry. Matches RE2 /
-        # rust-regex / Go semantics.
+        # be discarded — advance by one codepoint and retry. Matches
+        # RE2 / rust-regex / Go semantics.
         int prev_match_end = -1
         while pos <= n:
             Vector[int] caps = _vm_search(self.prog, subject, pos, false)
@@ -1375,15 +1395,17 @@ equip Regex:
             int e = caps[1]
             if e == s and s == prev_match_end:
                 # Spurious empty match immediately after a non-empty
-                # match ending here — skip and try again one byte later.
-                pos = pos + 1
+                # match ending here — skip; advance past this codepoint.
+                pos = codepoint_next(subject, pos)
                 continue
             Vector[String] names = self.prog.cap_names.clone()
             Vector[int] caps_clone = caps.clone()
             out.push(Match(subject.clone(), !caps_clone, !names))
             if e == s:
-                # Empty match — advance by 1 to avoid infinite loop.
-                pos = e + 1
+                # Empty match — advance past the current codepoint to
+                # avoid an infinite loop AND to never land between the
+                # bytes of a single UTF-8 codepoint.
+                pos = codepoint_next(subject, e)
                 prev_match_end = -1
             else:
                 pos = e
@@ -1406,14 +1428,15 @@ equip Regex:
             int s = caps[0]
             int e = caps[1]
             if e == s and s == prev_match_end:
-                pos = pos + 1
+                pos = codepoint_next(subject, pos)
                 continue
             Vector[String] names = self.prog.cap_names.clone()
             Vector[int] caps_clone = caps.clone()
             out.push(Match(subject.clone(), !caps_clone, !names))
             if e == s:
-                # Empty match — advance by 1 to avoid infinite loop.
-                pos = e + 1
+                # Empty match — advance past the current codepoint to
+                # avoid an infinite loop AND to never land mid-codepoint.
+                pos = codepoint_next(subject, e)
                 prev_match_end = -1
             else:
                 pos = e
@@ -1443,19 +1466,25 @@ equip Regex:
             int e = caps[1]
             if e == s and s == prev_match_end:
                 # Spurious empty match right after a non-empty match —
-                # skip without producing a replacement.
+                # skip without producing a replacement. Copy the next
+                # codepoint verbatim to preserve UTF-8 well-formedness.
                 if pos < n:
-                    out = out + subject.byte_slice(pos, pos + 1)
-                pos = pos + 1
+                    int nx = codepoint_next(subject, pos)
+                    out = out + subject.byte_slice(pos, nx)
+                    pos = nx
+                else:
+                    pos = pos + 1
                 continue
             out = out + subject.byte_slice(pos, s)
             out = out + self._expand_replacement(replacement, caps, subject)
             count = count + 1
             if e == s:
-                # Empty match — copy one byte then advance.
+                # Empty match — copy one codepoint of source verbatim
+                # then advance past it. Never split a codepoint.
                 if e < n:
-                    out = out + subject.byte_slice(e, e + 1)
-                    pos = e + 1
+                    int nx = codepoint_next(subject, e)
+                    out = out + subject.byte_slice(e, nx)
+                    pos = nx
                 else:
                     pos = e + 1
                 prev_match_end = -1
@@ -1529,14 +1558,15 @@ equip Regex:
             if e == s and s == prev_match_end:
                 # Spurious empty match right after a non-empty match —
                 # skip; don't produce a zero-width split here.
-                pos = pos + 1
+                pos = codepoint_next(subject, pos)
                 continue
             String piece = subject.byte_slice(pos, s)
             out.push(piece)
             count = count + 1
             if e == s:
                 if e < n:
-                    pos = e + 1
+                    # Advance past one codepoint (never split a codepoint).
+                    pos = codepoint_next(subject, e)
                 else:
                     break
                 prev_match_end = -1
