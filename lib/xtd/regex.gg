@@ -79,6 +79,8 @@ enum RxNode:
 # Flag bits — also stored on the compiled Program.
 const int FLAG_CASE_INSENSITIVE = 1
 const int FLAG_MULTILINE = 2
+const int FLAG_UNGREEDY = 4         # (?U) swaps default greediness of *, +, ?, {n,m}
+const int FLAG_EXTENDED = 8         # (?x) whitespace + `#` comments ignored in pattern
 
 struct RxParser:
     String src
@@ -111,44 +113,113 @@ equip RxParser:
     void advance(&self):
         self.pos = self.pos + 1
 
+    # Skip whitespace (and `#`-to-EOL comments) IF the extended (?x)
+    # flag is currently on. No-op otherwise. Whitespace inside character
+    # classes and after backslashes is preserved; callers in those
+    # contexts must not invoke this helper.
+    bool is_pattern_ws(self, int c):
+        if c == b' ' as int:
+            return true
+        if c == b'\t' as int:
+            return true
+        if c == b'\n' as int:
+            return true
+        if c == b'\r' as int:
+            return true
+        if c == 11:
+            return true
+        if c == 12:
+            return true
+        return false
+
+    void skip_ws_extended(&self):
+        if (self.flags & FLAG_EXTENDED) == 0:
+            return
+        while not self.at_end():
+            int c = self.peek()
+            if self.is_pattern_ws(c):
+                self.advance()
+            elif c == b'#' as int:
+                # Comment to end of line.
+                while not self.at_end() and self.peek() != b'\n' as int:
+                    self.advance()
+            else:
+                break
+
+    # Parse a flag chunk like `i`, `im`, `-i`, `im-s`, leaving position
+    # at the terminator (`)`, `:`, or EOF). Returns the resulting
+    # flags. On unrecognized flag letter, sets err and returns the
+    # current flags. The `-` byte switches the scanner into "remove"
+    # mode for the remainder of the chunk (which is what rust-regex
+    # and Go do — once you've seen `-`, all subsequent letters are
+    # cleared, you can't switch back to additive).
+    int parse_flag_chunk(&self, int base):
+        int flags = base
+        bool removing = false
+        while not self.at_end():
+            int c = self.peek()
+            if c == b')' as int or c == b':' as int:
+                return flags
+            if c == b'-' as int:
+                if removing:
+                    self.fail("repeated '-' in flag list")
+                    return flags
+                removing = true
+                self.advance()
+                continue
+            int bit = 0
+            if c == b'i' as int:
+                bit = FLAG_CASE_INSENSITIVE
+            elif c == b'm' as int:
+                bit = FLAG_MULTILINE
+            elif c == b'U' as int:
+                bit = FLAG_UNGREEDY
+            elif c == b'x' as int:
+                bit = FLAG_EXTENDED
+            elif c == b's' as int:
+                # Dotall (s) — not yet implemented in engine. Accept silently
+                # so patterns like `(?is)` don't error; AnyByte already excludes
+                # \n unconditionally in v1.
+                bit = 0
+            else:
+                self.fail("unknown inline flag")
+                return flags
+            if removing:
+                flags = flags & (~bit)
+            else:
+                flags = flags | bit
+            self.advance()
+        return flags
+
     # Top-level entry: returns the root node.
     RxNode parse_root(&self):
-        # Optional inline flag prefix (?i) — must be at very start.
+        # Optional inline flag prefix (?i)/(?im)/(?-i) — must be at very start.
         if self.peek() == b'(' as int and self.peek_at(1) == b'?' as int:
             int saved = self.pos
             # Try to scan flags until ')'.
             self.advance()  # '('
             self.advance()  # '?'
-            int set_flags = 0
-            bool saw_any = false
-            while not self.at_end() and self.peek() != b')' as int:
-                int c = self.peek()
-                if c == b'i' as int:
-                    set_flags = set_flags | FLAG_CASE_INSENSITIVE
-                    saw_any = true
-                    self.advance()
-                elif c == b'm' as int:
-                    set_flags = set_flags | FLAG_MULTILINE
-                    saw_any = true
-                    self.advance()
-                else:
-                    # Not a flag we recognize — bail and let normal group parsing handle it.
-                    self.pos = saved
-                    saw_any = false
-                    break
-            if saw_any:
+            # If the next char is one of our flag chars or '-', treat
+            # the rest as flags. Otherwise restore and let parse_group
+            # handle it (so things like `(?P<name>...)` or `(?:...)`
+            # still work at the start of the pattern).
+            int la = self.peek()
+            bool is_flag_intro = is_flag_letter_or_minus(la)
+            if is_flag_intro:
+                int new_flags = self.parse_flag_chunk(self.flags)
+                if self.failed():
+                    return Empty()
                 if self.peek() == b')' as int:
                     self.advance()
-                    self.flags = self.flags | set_flags
+                    self.flags = new_flags
+                elif self.peek() == b':' as int:
+                    # Scoped group at the top: `(?im:...)`. Restore so
+                    # parse_alt -> parse_group can handle it via the
+                    # normal scoped-group path.
+                    self.pos = saved
                 else:
                     self.pos = saved
             else:
-                # Flag-prefix scan didn't find any flags; restore so normal
-                # group parsing sees the `(?...` from the start. Without
-                # this, an empty body like `(?)` leaves pos pointing past
-                # `(?` at `)`, and parse_root later reports the wrong
-                # "unmatched )" error instead of "unrecognized group
-                # syntax".
                 self.pos = saved
         RxNode root = self.parse_alt()
         if not self.failed() and not self.at_end():
@@ -163,6 +234,7 @@ equip RxParser:
         RxNode first = self.parse_concat()
         if self.failed():
             return first
+        self.skip_ws_extended()
         if self.peek() != b'|' as int:
             return first
         Vector[RxNode] alts = Vector[RxNode]()
@@ -173,18 +245,33 @@ equip RxParser:
             if self.failed():
                 return Empty()
             alts.push(!nxt)
+            self.skip_ws_extended()
         return Alt(!alts)
 
     RxNode parse_concat(&self):
         Vector[RxNode] parts = Vector[RxNode]()
         while not self.at_end():
+            self.skip_ws_extended()
+            if self.at_end():
+                break
             int c = self.peek()
             if c == b'|' as int or c == b')' as int:
                 break
             RxNode atom = self.parse_quantified()
             if self.failed():
                 return Empty()
-            parts.push(!atom)
+            # parse_quantified can return Empty() when it hit a positional
+            # `(?flags)` flip — don't push those into the concat, but
+            # also don't break out of the loop.
+            match atom:
+                case Empty():
+                    # Skip — positional flag change consumed nothing
+                    # semantic. (Distinguishing an inline-flag-emitted
+                    # Empty from a structurally-empty atom doesn't
+                    # matter: a real empty atom is also a no-op in concat.)
+                    pass
+                case _:
+                    parts.push(!atom)
         if parts.len() == 0:
             return Empty()
         if parts.len() == 1:
@@ -197,28 +284,38 @@ equip RxParser:
         RxNode atom = self.parse_atom()
         if self.failed():
             return atom
+        # In extended mode, whitespace can appear between an atom and
+        # its quantifier (e.g. `a *` is `a*`). Don't apply to the `?`
+        # suffix though — `*?` is non-greedy, and `* ?` could be the
+        # same in extended mode but for safety we only skip ws AT the
+        # quantifier slot, not between quantifier and `?`.
+        self.skip_ws_extended()
         if self.at_end():
             return atom
         int c = self.peek()
+        # Default greediness is GREEDY unless (?U) ungreedy is on, in
+        # which case the default flips and the `?` suffix re-flips back
+        # to greedy. Local helper: `default_greedy`.
+        bool default_greedy = (self.flags & FLAG_UNGREEDY) == 0
         if c == b'*' as int:
             self.advance()
-            bool greedy = true
+            bool greedy = default_greedy
             if self.peek() == b'?' as int:
-                greedy = false
+                greedy = not default_greedy
                 self.advance()
             return Star(Box.new(!atom), greedy)
         if c == b'+' as int:
             self.advance()
-            bool greedy = true
+            bool greedy = default_greedy
             if self.peek() == b'?' as int:
-                greedy = false
+                greedy = not default_greedy
                 self.advance()
             return Plus(Box.new(!atom), greedy)
         if c == b'?' as int:
             self.advance()
-            bool greedy = true
+            bool greedy = default_greedy
             if self.peek() == b'?' as int:
-                greedy = false
+                greedy = not default_greedy
                 self.advance()
             return Question(Box.new(!atom), greedy)
         if c == b'{' as int:
@@ -246,9 +343,9 @@ equip RxParser:
                 self.pos = saved
                 return atom
             self.advance()
-            bool greedy = true
+            bool greedy = default_greedy
             if self.peek() == b'?' as int:
-                greedy = false
+                greedy = not default_greedy
                 self.advance()
             if mx >= 0 and mn > mx:
                 self.fail("invalid repeat: min > max")
@@ -283,10 +380,16 @@ equip RxParser:
             return AnyByte()
         if c == b'^' as int:
             self.advance()
-            return Anchor(StartLine())
+            # Multiline flag at PARSE time decides `^` semantics so
+            # mid-pattern `(?m)` / `(?m:...)` work correctly.
+            if (self.flags & FLAG_MULTILINE) != 0:
+                return Anchor(StartLine())
+            return Anchor(StartText())
         if c == b'$' as int:
             self.advance()
-            return Anchor(EndLine())
+            if (self.flags & FLAG_MULTILINE) != 0:
+                return Anchor(EndLine())
+            return Anchor(EndText())
         if c == b'\\' as int:
             return self.parse_escape_atom()
         if c == b')' as int or c == b'|' as int:
@@ -295,8 +398,16 @@ equip RxParser:
         if c == b'*' as int or c == b'+' as int or c == b'?' as int:
             self.fail("nothing to repeat")
             return Empty()
-        # Literal byte.
+        # Literal byte. Case-fold at parse time so scoped `(?i:foo)bar`
+        # works (the compiler doesn't track per-node flags).
         self.advance()
+        if (self.flags & FLAG_CASE_INSENSITIVE) != 0 and is_ascii_letter(c):
+            int lo = ascii_to_lower(c)
+            int hi = ascii_to_upper(c)
+            Vector[CharRange] rs = Vector[CharRange]()
+            rs.push(CharRange(lo, lo))
+            rs.push(CharRange(hi, hi))
+            return Class(CharClass(!rs, false))
         return Literal(c)
 
     RxNode parse_group(&self):
@@ -335,10 +446,38 @@ equip RxParser:
             elif la == b'<' as int:
                 self.fail("lookaround (?<=...) / (?<!...) not supported")
                 return Empty()
-            elif la == b'i' as int or la == b'm' as int or la == b's' as int:
-                # Inline flag mid-pattern — out of v1 (we only support (?i) at start).
-                self.fail("inline flags only supported at pattern start")
-                return Empty()
+            elif is_flag_letter_or_minus(la):
+                # Inline flag — `(?flags)` (positional flip) or
+                # `(?flags:body)` (scoped group). Consume the `?`;
+                # parse_flag_chunk consumes the flag letters.
+                self.advance()  # consume `?`
+                int new_flags = self.parse_flag_chunk(self.flags)
+                if self.failed():
+                    return Empty()
+                if self.peek() == b')' as int:
+                    # Positional flip — mutate flags for the rest of the
+                    # enclosing group / pattern and return Empty.
+                    self.advance()
+                    self.flags = new_flags
+                    return Empty()
+                elif self.peek() == b':' as int:
+                    # Scoped group — parse inner with new flags, then
+                    # restore flags after the closing ')'.
+                    self.advance()  # consume ':'
+                    int saved_flags = self.flags
+                    self.flags = new_flags
+                    RxNode body = self.parse_alt()
+                    self.flags = saved_flags
+                    if self.failed():
+                        return Empty()
+                    if self.peek() != b')' as int:
+                        self.fail("missing ) in flag-scoped group")
+                        return Empty()
+                    self.advance()
+                    return body
+                else:
+                    self.fail("malformed inline flag group")
+                    return Empty()
             else:
                 self.fail("unrecognized group syntax")
                 return Empty()
@@ -416,7 +555,11 @@ equip RxParser:
             int c = self.peek()
             if c == b']' as int and not first:
                 self.advance()
-                return Class(CharClass(ranges.clone(), negated))
+                CharClass built = CharClass(ranges.clone(), negated)
+                # Fold at parse time so scoped `(?i:[a-z])X` works.
+                if (self.flags & FLAG_CASE_INSENSITIVE) != 0:
+                    built = case_fold_class(built)
+                return Class(built)
             # POSIX bracket class: [:name:] or [:^name:]. Only valid inside [...].
             # Names: alpha, alnum, ascii, blank, cntrl, digit, graph, lower,
             # print, punct, space, upper, word, xdigit (plus '^'-negated forms).
@@ -736,27 +879,20 @@ equip Compiler:
             case Empty():
                 pass
             case Literal(b):
-                int bb = b
-                if (self.flags & FLAG_CASE_INSENSITIVE) != 0 and is_ascii_letter(bb):
-                    # Expand to a 2-byte class.
-                    int lo = ascii_to_lower(bb)
-                    int hi = ascii_to_upper(bb)
-                    Vector[CharRange] rs = Vector[CharRange]()
-                    rs.push(CharRange(lo, lo))
-                    rs.push(CharRange(hi, hi))
-                    int ci = self.add_class(CharClass(!rs, false))
-                    self.emit(OP_CLASS, ci, 0)
-                else:
-                    self.emit(OP_CHAR, bb, 0)
+                # Case folding (when applicable) is baked into the AST
+                # at parse time — a case-insensitive literal becomes a
+                # Class node already. So Literal here is byte-exact.
+                self.emit(OP_CHAR, b, 0)
             case AnyByte():
                 self.emit(OP_ANYBYTE, 0, 0)
             case Class(cc):
-                CharClass folded = cc.clone()
-                if (self.flags & FLAG_CASE_INSENSITIVE) != 0:
-                    folded = case_fold_class(folded)
-                int ci = self.add_class(folded)
+                # Same as Literal: folding was applied at parse time.
+                int ci = self.add_class(cc.clone())
                 self.emit(OP_CLASS, ci, 0)
             case Anchor(kind):
+                # Anchor `^` / `$` line-vs-text decision is baked in at
+                # parse time (so scoped `(?m:...)` works). Compiler
+                # just lowers each kind to its opcode.
                 int code = anchor_code(kind, self.flags)
                 self.emit(OP_ANCHOR, code, 0)
             case Concat(parts):
@@ -955,6 +1091,23 @@ bool body_can_match_empty(RxNode node):
 bool is_ascii_letter(int b):
     return (b >= b'A' as int and b <= b'Z' as int) or (b >= b'a' as int and b <= b'z' as int)
 
+# True if `c` could introduce an inline flag chunk (`(?i)`, `(?-m)`, etc.).
+# Used by parse_root and parse_group to disambiguate `(?...)` syntax.
+bool is_flag_letter_or_minus(int c):
+    if c == b'i' as int:
+        return true
+    if c == b'm' as int:
+        return true
+    if c == b's' as int:
+        return true
+    if c == b'U' as int:
+        return true
+    if c == b'x' as int:
+        return true
+    if c == b'-' as int:
+        return true
+    return false
+
 int ascii_to_lower(int b):
     if b >= b'A' as int and b <= b'Z' as int:
         return b + 32
@@ -1074,19 +1227,12 @@ Vector[CharRange] invert_ranges(Vector[CharRange] rs):
     return out
 
 int anchor_code(AnchorKind k, int flags):
-    # `^` / `$` are line-relative ONLY when the multiline flag is set,
-    # else they collapse to text-start / text-end. Decided at lower
-    # time so the VM doesn't need to know about flags.
-    bool multiline = (flags & FLAG_MULTILINE) != 0
+    # The multiline-vs-text decision for `^` / `$` is baked in by the
+    # parser (so mid-pattern `(?m)` and scoped `(?m:...)` work). The
+    # `flags` arg is unused here, kept for ABI compatibility.
     match k:
-        case StartLine():
-            if multiline:
-                return ANCHOR_START_LINE
-            return ANCHOR_START_TEXT
-        case EndLine():
-            if multiline:
-                return ANCHOR_END_LINE
-            return ANCHOR_END_TEXT
+        case StartLine(): return ANCHOR_START_LINE
+        case EndLine(): return ANCHOR_END_LINE
         case StartText(): return ANCHOR_START_TEXT
         case EndText(): return ANCHOR_END_TEXT
         case WordBound(): return ANCHOR_WORD_BOUND
@@ -1109,6 +1255,13 @@ Result[Program, String] _compile(String pattern, String flag_str):
             flags = flags | FLAG_CASE_INSENSITIVE
         elif fc == b'm':
             flags = flags | FLAG_MULTILINE
+        elif fc == b'U':
+            flags = flags | FLAG_UNGREEDY
+        elif fc == b'x':
+            flags = flags | FLAG_EXTENDED
+        elif fc == b's':
+            # Dotall — accept silently (engine doesn't yet honour `.` matches \n).
+            pass
         else:
             String fc_s = flag_str.byte_slice(fi, fi + 1)
             return Error("unknown flag: " + fc_s)
