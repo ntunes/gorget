@@ -2326,6 +2326,13 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
     # self-host codebase binds the result, so void is the safe gate.
     if method == "push" or method == "set" or method == "put":
         return UNIT_TYPE
+    # `Vector[T].fill(n, val)` — preallocates capacity + memcpys n
+    # copies of val into the buffer. Void return; runtime symbol
+    # `gorget_array_fill`. Phase 1 cheap-win (`5e6b3bef`) introduced
+    # the call site without wiring this entry, which left the call
+    # typed as I64 → stage-1 cc errored "void value not ignored".
+    if method == "fill":
+        return UNIT_TYPE
     # `remove` is dispatched receiver-aware below for Vector/Deque,
     # but stays void for Dict/Set (their runtime returns bool — the
     # call sites in self-host all discard the result).

@@ -1409,6 +1409,15 @@ String map_array_method(String method):
             return "gorget_array_swap"
         case "index_of":
             return "gorget_array_index_of"
+        case "fill":
+            # `Vector[T].fill(n, val)` — preallocate capacity and fill
+            # n slots with `val`. Rust gg emits this as a direct
+            # `gorget_array_fill(...)` call; the self-host's mangled
+            # form `Vector__bool__fill` arrives here and routes to the
+            # same runtime symbol. Without this arm, stage-1 link fails
+            # with "undefined reference to Vector__bool__fill" the
+            # moment Phase 1's `liveness` bitset helpers exercise it.
+            return "gorget_array_fill"
         case "free":
             return "gorget_array_free"
         else:
@@ -1803,6 +1812,12 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
             return true
         if fn_name == "gorget_array_sort" or fn_name == "gorget_array_extend":
             return true
+        if fn_name == "gorget_array_fill":
+            # `gorget_array_fill(GorgetArray* arr, size_t n, const void* val_src)`
+            # — arg 0 self by pointer (mutating: preallocates capacity and
+            # memcpys n copies of val into the buffer). Routed through
+            # `Vector__T__fill` by `map_array_method`'s new case (2026-05-20).
+            return true
         if fn_name == "gorget_array_free":
             return true
         if fn_name == "gorget_map_put" or fn_name == "gorget_map_remove":
@@ -1860,6 +1875,10 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
     if fn_name == "gorget_array_set" and arg_idx == 2:
         return true
     if fn_name == "gorget_array_insert" and arg_idx == 2:
+        return true
+    if fn_name == "gorget_array_fill" and arg_idx == 2:
+        # Third arg (val_src) is `const void*` — pointer to the element
+        # to broadcast across the n filled slots.
         return true
     if fn_name == "gorget_map_put" and (arg_idx == 1 or arg_idx == 2):
         return true
