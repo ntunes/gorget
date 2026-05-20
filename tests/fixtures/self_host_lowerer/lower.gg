@@ -411,22 +411,72 @@ void push_drop_scope(DropElaborator &de, int kind):
 
 # Emit drops for every entry in the given scope, LIFO order, using
 # GIDropIfAlive (see top-of-section docstring for the unconditional-
-# DropIfAlive rationale). `gmod` is read-only here — we only need it
-# to look up type info on the entry's local; the actual drop_fn
-# resolution happens in the LIR-side handler.
+# DropIfAlive rationale).
+#
+# **Phase 2 status (2026-05-20): emission is DISABLED.** Wiring the
+# GIDropIfAlive emission into Phase 2's scope-exit hooks reveals two
+# entwined self-host compiler gaps that block correct drop semantics:
+#
+#   1. `lir_lower.gg`'s OpMove handler does NOT emit IMoveSlot at the
+#      load site — moved-out slots retain the byte pattern of the
+#      moved value. The LIR-side `IDropGuardOpen` memcmp gate
+#      (lir_lower.gg:3009) at scope-exit then sees non-zero bytes
+#      and runs the drop, freeing heap data that the receiving
+#      collection / return-place also owns. glibc double-free panic
+#      at runtime.
+#   2. Even if (1) were fixed, the self-host's `lir_codegen.gg`
+#      emits `IMoveSlot` as a `/* move_slot */;` no-op (line 3120),
+#      mirroring Rust's backend which relies on a downstream LIR
+#      `drop_elab` pass for static elision of the redundant drop.
+#      The self-host doesn't have `drop_elab`. The Rust `drop_elab`
+#      tracks per-slot init state (Initialised / Uninitialised /
+#      MaybeInitialised) through the LIR CFG and elides DropIfAlive
+#      whose memcmp would be statically known to suppress.
+#
+# Together (1) + (2) mean: any GIDropIfAlive emitted from this pass
+# would double-free at runtime. Fixing the self-host requires either
+# (a) implementing a real `drop_elab` pass in self-host LIR (large,
+# multi-day work), or (b) making IMoveSlot emit a real memset in
+# codegen AND ensuring all consume sites resolve to OpMove (also
+# requires more sophisticated post-call zeroing per non-last-use
+# argument — `tighten_owned_operand_modes` currently demotes
+# non-last-use OpMove → OpClone, but the demoted sites still
+# trampoline through `gorget_*_clone`-less paths and the source
+# slot remains a byte-alias of the receiver).
+#
+# Until the self-host gains real move-out / drop semantics, this
+# emission stays as a no-op. The scope-tracking + register-local
+# infrastructure ships standalone — useful as the foundation Phase 3
+# / a future drop_elab port will build on.
+#
+# See TODO.md "self-host drop semantics" entry filed alongside this
+# commit for the precise next-step plan.
 void emit_scope_drops(LowerCtx &ctx, Vector[DropEntry] entries):
-    int i = entries.len() - 1
-    while i >= 0:
-        DropEntry entry = entries.get(i).unwrap()
-        emit(&ctx, GIDropIfAlive(entry.local_id))
-        i -= 1
+    # No-op for the reasons above. The walk is preserved so that the
+    # function name + signature stay stable for Phase 3 / drop_elab
+    # to hook into; once IMoveSlot ↔ drop_elab semantics work, the
+    # body becomes a one-line `emit(&ctx, GIDropIfAlive(entry.local_id))`.
+    int _len = entries.len()
 
-# Pop the innermost scope and emit its drops at the current block.
+# Pop the innermost scope and emit its drops at the current block IF
+# the current block's terminator is still GTNone (i.e. we're on the
+# natural fall-through exit). When the terminator is already set
+# (explicit return / break / continue already emitted their own
+# drops via emit_drops_for_early_exit), pop without re-emitting to
+# avoid stranding dead instructions after a finalised terminator.
 void pop_drop_scope(LowerCtx &ctx):
     if ctx.drop_elab.scopes.len() == 0:
         return
     DropScope scope = ctx.drop_elab.scopes.get(ctx.drop_elab.scopes.len() - 1).unwrap()
-    emit_scope_drops(&ctx, scope.entries)
+    Terminator cur_term = ctx.block_terms.get(ctx.current_block).unwrap()
+    bool fall_through = false
+    match cur_term:
+        case GTNone():
+            fall_through = true
+        else:
+            pass
+    if fall_through:
+        emit_scope_drops(&ctx, scope.entries)
     ctx.drop_elab.scopes.pop()
 
 # Pop the innermost scope WITHOUT emitting drops. Used at the loop-
@@ -443,6 +493,27 @@ void pop_drop_scope_no_emit(LowerCtx &ctx):
 # at every SVarDecl / param-registration site to decide whether to add
 # the local to the current drop scope. Primitives, Ptr/MutPtr/FnPtr, and
 # user types without resource fields are non-droppable.
+#
+# Phase 2 scope: only RUNTIME resource types (`build_resource_metadata`
+# returns Some) qualify. These — GorgetString, GorgetArray, Vector__T,
+# Dict__K__V, Box__T, Mutex__/Shared__/Channel__/etc. — always have a
+# runtime `gorget_*_free` defined as part of the C preamble, so the
+# emitted `<drop_fn>(&slot)` resolves at link time.
+#
+# User struct/enum types (in `gmod.resource_types` because they
+# contain a resource field) are deliberately EXCLUDED. The self-host's
+# `populate_drop_metadata` (lir_lower.gg:3182) is supposed to emit
+# `<Type>__drop` definitions for them via the recursive_drop_structs/
+# recursive_drop_enums tables, but in practice the stage-1 output
+# contains 0 such definitions today — a pre-existing self-host gap
+# that surfaces as `undefined reference to <Type>__drop` link
+# errors the moment we emit calls. Filed for a follow-up: until the
+# `recursive_drop_structs` population path is fixed, registering user
+# types here would block stage-1 from linking.
+#
+# Mirror of Rust's `needs_drop` (`src/ir/types.rs`) which delegates to
+# TypeRegistry.needs_drop — the equivalent split here is "runtime
+# resource = yes, user struct/enum = TODO".
 bool is_droppable_type(int type_id, GirModule &gmod):
     if type_id < 0 or type_id < PRIM_COUNT:
         return false
@@ -463,7 +534,13 @@ bool is_droppable_type(int type_id, GirModule &gmod):
             return false
         else:
             return false
-    return is_resource_type_name(tname, &gmod)
+    # Runtime resource types only — see top-of-fn docstring.
+    match build_resource_metadata(tname):
+        case Some(_):
+            return true
+        case None:
+            return false
+    return false
 
 # Register a local in the innermost drop scope. Skips non-droppable
 # types so callers can call this blindly after add_local. Skips when
@@ -572,7 +649,7 @@ void union_moved(DropElaborator &de, Vector[bool] branch_snap):
         si += 1
 
 # Emit cleanup drops for an early exit (return / break / continue).
-# Walks scopes innermost-out, emitting GIDropIfAlive for every entry,
+# Walks scopes innermost-out, would emit GIDropIfAlive for every entry,
 # until (and INCLUDING) the target scope kind. For return, target=
 # DSK_FUNCTION (drop everything up through Function). For break /
 # continue, target=DSK_LOOP. `exclude_local` optionally skips a
@@ -580,6 +657,13 @@ void union_moved(DropElaborator &de, Vector[bool] branch_snap):
 #
 # Does NOT pop scopes — that's the surrounding scope's responsibility
 # at its natural exit point.
+#
+# **Phase 2 status: emission is DISABLED.** See `emit_scope_drops`
+# docstring for the gap analysis. Scope walking is preserved for
+# Phase 3 / future drop_elab to hook into. When the self-host gains
+# proper move-out / drop semantics, the no-op walk below becomes a
+# one-line `emit(&ctx, GIDropIfAlive(entry.local_id))` inside the
+# skip-check.
 void emit_drops_for_early_exit(LowerCtx &ctx, int target_kind, Option[int] exclude_local):
     int si = ctx.drop_elab.scopes.len() - 1
     while si >= 0:
@@ -595,7 +679,8 @@ void emit_drops_for_early_exit(LowerCtx &ctx, int target_kind, Option[int] exclu
                 case None:
                     pass
             if not skip:
-                emit(&ctx, GIDropIfAlive(entry.local_id))
+                # No-op for the reasons in emit_scope_drops's docstring.
+                int _eid = entry.local_id
             ei -= 1
         if scope.kind == target_kind:
             return
@@ -3464,13 +3549,25 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             int var_local = add_local(&ctx, var_type, Some(name.clone()))
             emit(&ctx, GIAssign(var_local, op_consume(&ctx, &gmod, val)))
             nl_put(&ctx, name, var_local)
+            # Phase 2: register the new local for scope-exit drop if
+            # it's a resource type. is_droppable_type filters
+            # primitives / Ptr/MutPtr / FnPtr / non-resource named
+            # types automatically, so registering blindly here is safe.
+            register_local_for_drop(&ctx, var_local, var_type, &gmod)
         case SReturn(opt_expr):
+            # Phase 2: emit cleanup drops for every scope back to the
+            # function frame BEFORE assigning the return value /
+            # closing the block with GTReturn. Exclude _0 (the return
+            # place) since its value is being moved out as the return
+            # value; dropping it would double-free.
             match opt_expr:
                 case Some(ret_expr):
                     int val = lower_expr(&ctx, ret_expr, &gmod)
                     emit(&ctx, GIAssign(0, op_consume(&ctx, &gmod, val)))
+                    emit_drops_for_early_exit(&ctx, DSK_FUNCTION, Some(0))
                     set_terminator(&ctx, GTReturn(op_consume(&ctx, &gmod, 0)))
                 case None:
+                    emit_drops_for_early_exit(&ctx, DSK_FUNCTION, Some(0))
                     set_terminator(&ctx, GTReturn(OpConstUnit()))
         case SExpr(sexpr):
             lower_expr(&ctx, sexpr, &gmod)
@@ -3504,12 +3601,16 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             # Jump to the innermost loop's break target. Silently dropped
             # before, which caused while-loops in the self-host lexer to
             # never exit on their closing-quote checks.
+            # Phase 2: emit cleanup drops up to (and including) the
+            # innermost Loop scope before the jump.
             if ctx.loop_break_stack.len() > 0:
                 int tgt = ctx.loop_break_stack.get(ctx.loop_break_stack.len() - 1).unwrap()
+                emit_drops_for_early_exit(&ctx, DSK_LOOP, None)
                 set_terminator(&ctx, GTJump(tgt))
         case SContinue:
             if ctx.loop_continue_stack.len() > 0:
                 int tgt = ctx.loop_continue_stack.get(ctx.loop_continue_stack.len() - 1).unwrap()
+                emit_drops_for_early_exit(&ctx, DSK_LOOP, None)
                 set_terminator(&ctx, GTJump(tgt))
         case SPass:
             # `pass` is a literal no-op statement. Explicit case silences
@@ -3540,14 +3641,24 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             set_terminator(&ctx, GTJump(loop_bb))
             ctx.loop_continue_stack.push(loop_bb)
             ctx.loop_break_stack.push(loop_exit_bb)
+            # Phase 2: open a Loop drop scope around the body. Locals
+            # declared inside the body get cleaned up before the
+            # back-edge / break-edge jumps fire.
+            push_drop_scope(&ctx.drop_elab, DSK_LOOP)
             switch_to(&ctx, loop_bb)
             lower_stmts(&ctx, body, &gmod, is_main)
             Terminator loop_body_term = ctx.block_terms.get(ctx.current_block).unwrap()
             match loop_body_term:
                 case GTNone():
+                    # Natural body fall-off — emit Loop-scope drops
+                    # before the back-edge jump.
+                    pop_drop_scope(&ctx)
                     set_terminator(&ctx, GTJump(loop_bb))
                 else:
-                    pass
+                    # Body already broke / continued / returned. Those
+                    # paths emitted their own drops; just pop the scope
+                    # bookkeeping without re-emitting.
+                    pop_drop_scope_no_emit(&ctx)
             ctx.loop_continue_stack.pop()
             ctx.loop_break_stack.pop()
             switch_to(&ctx, loop_exit_bb)
@@ -3731,18 +3842,24 @@ void lower_if(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] then_body, Vect
     int else_bb = new_block(&ctx)
     int merge_bb = new_block(&ctx)
     set_terminator(&ctx, GTBranch(OpCopy(cond), then_bb, else_bb))
-    # Then branch
+    # Then branch — Phase 2: open a Block drop scope per branch so
+    # locals declared inside the branch get cleaned up at the merge
+    # edge. Use pop_drop_scope_no_emit on early-exit branches (return/
+    # break/continue already emitted their drops).
     switch_to(&ctx, then_bb)
+    push_drop_scope(&ctx.drop_elab, DSK_BLOCK)
     lower_stmts(&ctx, then_body, &gmod, is_main)
     # Only jump to merge if not already terminated (no return/break)
     Terminator then_term = ctx.block_terms.get(ctx.current_block).unwrap()
     match then_term:
         case GTNone():
+            pop_drop_scope(&ctx)
             set_terminator(&ctx, GTJump(merge_bb))
         else:
-            pass
+            pop_drop_scope_no_emit(&ctx)
     # Else branch
     switch_to(&ctx, else_bb)
+    push_drop_scope(&ctx.drop_elab, DSK_BLOCK)
     if elif_branches.len() > 0:
         ElseBranch eb = elif_branches.get(0).unwrap()
         match eb.condition:
@@ -3760,9 +3877,10 @@ void lower_if(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] then_body, Vect
     Terminator else_term = ctx.block_terms.get(ctx.current_block).unwrap()
     match else_term:
         case GTNone():
+            pop_drop_scope(&ctx)
             set_terminator(&ctx, GTJump(merge_bb))
         else:
-            pass
+            pop_drop_scope_no_emit(&ctx)
     switch_to(&ctx, merge_bb)
 
 
@@ -4234,14 +4352,18 @@ void lower_match_stmt(LowerCtx &ctx, SpannedExpr scrutinee_expr, Vector[MatchArm
         int next_arm_bb = new_block(&ctx)
         lower_pattern_match(&ctx, scrutinee, arm.pattern, enum_name, arm_body_bb, next_arm_bb, &gmod)
         # Arm body lowering in the match-bound block.
+        # Phase 2: per-arm Block scope so payload bindings + arm-local
+        # SVarDecls get cleaned up at the merge edge.
         switch_to(&ctx, arm_body_bb)
+        push_drop_scope(&ctx.drop_elab, DSK_BLOCK)
         lower_stmts(&ctx, arm.body, &gmod, is_main)
         Terminator arm_term = ctx.block_terms.get(ctx.current_block).unwrap()
         match arm_term:
             case GTNone():
+                pop_drop_scope(&ctx)
                 set_terminator(&ctx, GTJump(merge_bb))
             else:
-                pass
+                pop_drop_scope_no_emit(&ctx)
         switch_to(&ctx, next_arm_bb)
     # No arm matched — jump to merge (unreachable in practice when the
     # match is exhaustive; the self-host's typechecker doesn't enforce
@@ -4378,6 +4500,10 @@ void lower_for_vector(LowerCtx &ctx, SpannedPattern pat, int coll_local, String 
     # Body: extract element via `coll.get(idx).unwrap()`, bind pattern.
     ctx.loop_continue_stack.push(incr_bb)
     ctx.loop_break_stack.push(exit_bb)
+    # Phase 2: Loop drop scope around the body (per-iteration locals
+    # like the element binding need to be cleaned up before each
+    # back-edge / break).
+    push_drop_scope(&ctx.drop_elab, DSK_LOOP)
     switch_to(&ctx, body_bb)
     String opt_name = "Option__" + elem_name
     int opt_tid = lookup_or_register_named(&gmod, opt_name)
@@ -4402,9 +4528,10 @@ void lower_for_vector(LowerCtx &ctx, SpannedPattern pat, int coll_local, String 
     Terminator body_term = ctx.block_terms.get(ctx.current_block).unwrap()
     match body_term:
         case GTNone():
+            pop_drop_scope(&ctx)
             set_terminator(&ctx, GTJump(incr_bb))
         else:
-            pass
+            pop_drop_scope_no_emit(&ctx)
     ctx.loop_continue_stack.pop()
     ctx.loop_break_stack.pop()
     # Incr: `idx = idx + 1; goto header`.
@@ -4497,6 +4624,8 @@ void lower_for_iterator(LowerCtx &ctx, SpannedPattern pat, int coll_local, Strin
     # Body: extract payload, bind pattern, lower body, jump back to header.
     ctx.loop_continue_stack.push(header_bb)
     ctx.loop_break_stack.push(exit_bb)
+    # Phase 2: Loop drop scope around the body.
+    push_drop_scope(&ctx.drop_elab, DSK_LOOP)
     switch_to(&ctx, body_bb)
     int elem_local = emit_payload_read(&ctx, scr_ptr, opt_type_name, "Some", 0, elem_tid, &gmod)
     bind_for_local(&ctx, pat, elem_local, elem_tid, &gmod)
@@ -4504,9 +4633,10 @@ void lower_for_iterator(LowerCtx &ctx, SpannedPattern pat, int coll_local, Strin
     Terminator body_term = ctx.block_terms.get(ctx.current_block).unwrap()
     match body_term:
         case GTNone():
+            pop_drop_scope(&ctx)
             set_terminator(&ctx, GTJump(header_bb))
         else:
-            pass
+            pop_drop_scope_no_emit(&ctx)
     ctx.loop_continue_stack.pop()
     ctx.loop_break_stack.pop()
     switch_to(&ctx, exit_bb)
@@ -4569,14 +4699,17 @@ void lower_while(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] body, GirMod
     # Body. Push loop targets so SBreak/SContinue know where to jump.
     ctx.loop_continue_stack.push(header_bb)
     ctx.loop_break_stack.push(exit_bb)
+    # Phase 2: open a Loop drop scope around the body.
+    push_drop_scope(&ctx.drop_elab, DSK_LOOP)
     switch_to(&ctx, body_bb)
     lower_stmts(&ctx, body, &gmod, is_main)
     Terminator body_term = ctx.block_terms.get(ctx.current_block).unwrap()
     match body_term:
         case GTNone():
+            pop_drop_scope(&ctx)
             set_terminator(&ctx, GTJump(header_bb))
         else:
-            pass
+            pop_drop_scope_no_emit(&ctx)
     # Pop — targets only apply to this loop's direct body.
     ctx.loop_continue_stack.pop()
     ctx.loop_break_stack.pop()
@@ -4619,6 +4752,13 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
     Vector[DropScope] _de_scopes = []
     LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, !_named_locals, 0, !_lc_stk, !_lb_stk, "", "", "", false, fdef.name.clone(), DropElaborator(!_de_scopes))
 
+    # Push the function-scope drop frame. Pop emits GIDropIfAlive for
+    # every owned resource local registered during lowering (param or
+    # SVarDecl), unless the natural exit was an explicit GTReturn (in
+    # which case SReturn's emit_drops_for_early_exit already emitted
+    # them). See the DropElaborator section docstring.
+    push_drop_scope(&ctx.drop_elab, DSK_FUNCTION)
+
     # _0 = return place
     add_local(&ctx, ret_type, NO_NAME)
 
@@ -4639,6 +4779,28 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
         param_types.push(pt)
         int plid = add_local_with(&ctx, pt, Some(p.param_name.clone()), LoParam(), BoParam())
         nl_put(&ctx, p.param_name, plid)
+        # Phase 2 param drop registration: only bare-by-value resource
+        # params (ownership==0 with the Ptr wrapping applied above) and
+        # the inner Ptr() do NOT own the pointee — the caller does. So
+        # we register the local for drop only when ownership==0 AND
+        # the original (pre-Ptr-wrap) type is a resource. The wrapper
+        # type is GtPtr(inner) — is_droppable_type returns false on
+        # GtPtr — so we'd otherwise miss this. Pass the inner type to
+        # register_local_for_drop instead.
+        # FIXME: by-value owning params have ABI-controlled lifetime;
+        # whether the callee drops vs. the caller drops depends on
+        # the param ownership rules (`!` = callee, `&` = neither, bare
+        # = caller for the boxed alias). For Phase 2 we keep the
+        # registration conservative: only `!arg` (ownership==2) params
+        # — the canonical "callee owns and must drop" shape — are
+        # registered. `&arg` (ownership==1) and bare params are owned
+        # by the caller.
+        if p.ownership == 2:
+            # `!arg` — callee owns the pointee. The slot here is a
+            # MutPtr(T); we register the underlying inner T's type id
+            # so drop emission resolves to the right runtime drop fn.
+            # (gir_local_type_name unwraps Ptr/MutPtr.)
+            register_local_for_drop(&ctx, plid, pt, &gmod)
 
 
 
@@ -4646,15 +4808,31 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
     for stmt in fdef.body:
         lower_stmt(&ctx, stmt, &gmod, is_main)
 
-    # If main and no explicit return, add return 0
+    # If main and no explicit return, add return 0. The drop frame's
+    # natural-exit emission needs to run BEFORE this: emit drops at
+    # the natural fall-through point, then synthesise the implicit
+    # `return 0`. Otherwise the GTReturn would close the block before
+    # we get a chance to emit the drops.
     if is_main:
         Terminator last_term = ctx.block_terms.get(ctx.current_block).unwrap()
         match last_term:
             case GTNone():
+                # Emit drops for the function scope FIRST (exclude _0
+                # since the return value is being moved out).
+                emit_drops_for_early_exit(&ctx, DSK_FUNCTION, Some(0))
                 emit(&ctx, GIAssign(0, OpConstI32(0)))
                 set_terminator(&ctx, GTReturn(OpConstI32(0)))
             else:
                 pass
+
+    # Pop the function-scope drop frame. If the natural exit was a
+    # fall-through with no implicit-return synthesis (e.g. a non-main
+    # function whose body falls off the end without an explicit
+    # return — pathological, the validator should catch it, but the
+    # pop still wants to be tidy), emit drops. Otherwise the explicit
+    # return / break / continue / implicit-return-0 paths above have
+    # already emitted theirs.
+    pop_drop_scope(&ctx)
 
     # Phase C step 5d: liveness-aware OpMove → OpClone tightening.
     # Walks the emitted blocks, counts per-local operand uses, demotes
@@ -4771,6 +4949,9 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
         ctx.block_insts.push(!init_insts)
         ctx.block_terms.push(GTNone())
 
+        # Phase 2: open the function-scope drop frame.
+        push_drop_scope(&ctx.drop_elab, DSK_FUNCTION)
+
         # _0 = return place
         add_local(&ctx, ret_type, NO_NAME)
 
@@ -4852,6 +5033,11 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
             param_types.push(pt)
             int plid = add_local_with(&ctx, pt, Some(p.param_name.clone()), LoParam(), BoParam())
             nl_put(&ctx, p.param_name, plid)
+            # Phase 2: only !-sigil resource params are callee-owned
+            # and must be dropped at function exit. Same rationale as
+            # lower_function above.
+            if p.ownership == 2:
+                register_local_for_drop(&ctx, plid, pt, &gmod)
 
         # Add the explicit-trait `self` concrete-cast alias here, AFTER
         # all params, so locals 1..N are pure params (lir_lower's
@@ -4866,6 +5052,10 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
 
         # Lower body
         lower_stmts(&ctx, mdef.body, &gmod, is_main)
+
+        # Phase 2: pop function-scope drop frame. If body fell through
+        # without an explicit return, this emits cleanup drops.
+        pop_drop_scope(&ctx)
 
         # Phase C step 5d: liveness-aware OpMove → OpClone tightening.
         # Same post-pass as lower_function; see the helper's docstring.
@@ -6543,14 +6733,18 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         Vector[Instruction] tinit = []
                         tctx.block_insts.push(!tinit)
                         tctx.block_terms.push(GTNone())
+                        # Phase 2: function-scope drop frame for test bodies.
+                        push_drop_scope(&tctx.drop_elab, DSK_FUNCTION)
                         add_local(&tctx, UNIT_TYPE, NO_NAME)
                         lower_stmts(&tctx, test_body, &gmod, false)
                         Terminator tterm = tctx.block_terms.get(tctx.current_block).unwrap()
                         match tterm:
                             case GTNone():
+                                emit_drops_for_early_exit(&tctx, DSK_FUNCTION, Some(0))
                                 set_terminator(&tctx, GTReturn(OpConstUnit()))
                             else:
                                 pass
+                        pop_drop_scope(&tctx)
                         Vector[BasicBlock] tblocks = []
                         int tbi = 0
                         while tbi < tctx.block_insts.len():
