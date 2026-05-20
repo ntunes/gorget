@@ -284,7 +284,7 @@ pub fn infer_operand_type(ctx: &LoweringContext, operand: &Operand) -> TypeId {
 
 /// Look up a global variable's type by its type name string.
 /// Tries named types first (structs/enums), then primitive type names.
-fn lookup_global_type(ctx: &LoweringContext, type_name: &str) -> Option<TypeId> {
+pub(in crate::ir::lowering) fn lookup_global_type(ctx: &LoweringContext, type_name: &str) -> Option<TypeId> {
     ctx.type_mapper.lookup_named(type_name).or_else(|| {
         match type_name {
             "int" | "i64" => Some(I64_TYPE),

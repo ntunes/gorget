@@ -1,6 +1,6 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::ir::instructions::Operand;
+use crate::ir::instructions::{Constant, Operand};
 use crate::ir::types::*;
 use crate::parser::ast::{Expr, Ownership, PrimitiveType, Stmt, Type};
 use crate::semantic::AnalysisResult;
@@ -1736,6 +1736,48 @@ impl<'a> LoweringContext<'a> {
         span: crate::span::Span,
         reason: crate::ir::ImplicitCloneReason,
     ) -> Operand {
+        // Case 0: `Constant::GlobalRef(name)` for a resource-typed module global.
+        //
+        // A `String DT_LOCAL = "literal"` global lowers to a heap-allocated
+        // `GorgetString` in the program's startup block. Reading it by name
+        // (`return DT_LOCAL`, `String s = DT_LOCAL`, …) lowers in LIR to
+        // `GlobalAddr` + `Load`, i.e. a shallow byte-copy of the global's
+        // struct. That copy aliases the global's heap buffer. If the consumer
+        // treats the value as owned (return slot, var binding, struct field
+        // init, etc.), the subsequent scope-exit drop frees the global's
+        // buffer — and the next read of the global re-frees the same buffer
+        // → double-free.
+        //
+        // The fix: at an ownership boundary, clone the global through its
+        // pointer (`GlobalRefPtr`) so the boundary receives a fresh owned
+        // allocation independent of the global.
+        //
+        // For positions that legitimately need a borrow (call args by &/bare
+        // pointer, `&GLOBAL` syntax), the `GlobalRef → GlobalRefPtr` rewrite
+        // in those code paths short-circuits before this helper runs.
+        if let Operand::Constant(Constant::GlobalRef(name)) = &operand {
+            let global_type = self.global_type_names.get(name).cloned()
+                .and_then(|tn| crate::ir::lowering::exprs::lookup_global_type(self, &tn));
+            if let Some(global_ty) = global_type {
+                if self.type_registry.is_resource_type(global_ty) {
+                    if let Some(clone_fn) = self.clone_fn_for_ptr(global_ty) {
+                        self.warn_implicit_clone(span, global_ty, reason);
+                        // Pass &GLOBAL (GlobalRefPtr) to the clone fn — matches
+                        // the `gorget_string_clone_to_owned(const GorgetString*)`
+                        // / `gorget_array_clone(const GorgetArray*)` etc. ABIs.
+                        let cloned = builder.call(
+                            &clone_fn,
+                            vec![Operand::Constant(Constant::GlobalRefPtr(name.clone()))],
+                            global_ty,
+                        );
+                        self.drops.register_local(cloned, global_ty, &self.type_registry);
+                        self.set_owned_fresh(builder, cloned);
+                        return crate::ir::builder::FunctionBuilder::copy(cloned);
+                    }
+                }
+            }
+            return operand;
+        }
         let local = match &operand {
             Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => p.local,
             _ => return operand,

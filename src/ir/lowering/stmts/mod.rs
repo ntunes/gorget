@@ -15,6 +15,61 @@ use super::context::{LoweringContext, SharedLocalInfo, SharedLocalKind};
 use super::drops::DropScopeKind;
 use super::exprs::{lower_expr, infer_operand_type_full, maybe_auto_propagate};
 
+/// If `operand` is `Constant::GlobalRef(name)` referencing a module-level
+/// global whose type needs drop (`String`, collections, …), emit a clone
+/// and return the cloned operand. Otherwise pass through.
+///
+/// Rationale: `String DT_LOCAL = "literal"` lowers to a heap-allocated
+/// `GorgetString` initialised at program start. Reading it by name
+/// produces `GlobalAddr+Load` in LIR — a shallow byte-copy of the
+/// global's struct that aliases its heap buffer. If the consumer (var
+/// binding, return slot, struct field init, …) treats the value as
+/// owned, scope-exit drop frees the global's buffer; the next read of
+/// the global re-frees the same buffer → double-free. Cloning at the
+/// boundary gives the consumer a fresh independent allocation.
+///
+/// Sites that need a borrow (`&GLOBAL`, call args by &/bare pointer)
+/// rewrite `GlobalRef → GlobalRefPtr` in their own paths and never
+/// reach this helper.
+pub(super) fn clone_resource_global_ref(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    operand: Operand,
+    span: crate::span::Span,
+) -> Operand {
+    let name = match &operand {
+        Operand::Constant(Constant::GlobalRef(n)) => n.clone(),
+        _ => return operand,
+    };
+    let type_name = match ctx.global_type_names.get(&name) {
+        Some(t) => t.clone(),
+        None => return operand,
+    };
+    let global_ty = match super::exprs::lookup_global_type(ctx, &type_name) {
+        Some(t) => t,
+        None => return operand,
+    };
+    if !ctx.type_registry.is_resource_type(global_ty) {
+        return operand;
+    }
+    let clone_fn = match ctx.clone_fn_for_ptr(global_ty) {
+        Some(f) => f,
+        None => return operand,
+    };
+    ctx.warn_implicit_clone(span, global_ty, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
+    // Pass &GLOBAL (GlobalRefPtr) to the clone fn. Clone ABIs are
+    // `gorget_string_clone_to_owned(const GorgetString*)`,
+    // `gorget_array_clone(const GorgetArray*)`, etc.
+    let cloned = builder.call(
+        &clone_fn,
+        vec![Operand::Constant(Constant::GlobalRefPtr(name))],
+        global_ty,
+    );
+    ctx.drops.register_local(cloned, global_ty, &ctx.type_registry);
+    ctx.set_owned_fresh(builder, cloned);
+    FunctionBuilder::copy(cloned)
+}
+
 /// If the operand came from a resource-type field load, emit a MoveZero for the source field
 /// to prevent double-free. Call this after assigning the operand to its destination.
 /// If the local's declared AST type is (or resolves to) a `Callable` or bare
@@ -414,6 +469,9 @@ fn lower_var_decl(
             let prev_expected = ctx.func_state.expected_type;
             ctx.func_state.expected_type = Some(gir_type);
             let operand = lower_expr(ctx, builder, value);
+            // `T x = MODULE_GLOBAL_RESOURCE`: clone the global so the new
+            // binding owns its own allocation. See `clone_resource_global_ref`.
+            let operand = clone_resource_global_ref(ctx, builder, operand, value.span);
             // Auto-propagate: if operand is Result-typed but the declared type is not Result,
             // unwrap it (propagating errors) so the binding gets the Ok value.
             // NOTE: must run before restoring expected_type so the guard sees gir_type.
@@ -1481,6 +1539,9 @@ fn lower_return(
         };
 
         let operand = lower_expr(ctx, builder, expr);
+        // `return MODULE_GLOBAL_STRING`: clone the global so the caller
+        // gets an independent allocation. See `clone_resource_global_ref`.
+        let operand = clone_resource_global_ref(ctx, builder, operand, expr.span);
         // Snag #36: `return throws_fn(...)` from a throws function. The
         // operand here is already a `Result[T, E]` (the call's typed
         // return per Snag #35) matching the function's own return type.

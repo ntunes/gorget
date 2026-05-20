@@ -108,6 +108,10 @@ pub(super) fn lower_assign(
                 let prev_expected = ctx.func_state.expected_type;
                 ctx.func_state.expected_type = Some(type_id);
                 let operand = lower_expr(ctx, builder, value);
+                // `s = MODULE_GLOBAL_RESOURCE`: clone the global so the
+                // reassigned local owns its own allocation. See
+                // `clone_resource_global_ref`.
+                let operand = super::clone_resource_global_ref(ctx, builder, operand, value.span);
                 // Auto-propagate: if RHS is Result-typed but target is not, unwrap
                 let mut operand = maybe_auto_propagate(ctx, builder, operand);
                 ctx.func_state.expected_type = prev_expected;
