@@ -144,6 +144,29 @@ enum LocalOwnership:
     LoParam        # function parameter — passed by caller; ABI-controlled lifetime
     LoMaybeOwned   # uninferred / generic / merged-from-multiple-arms
 
+# ConsumeKind classifies the *position* in the lowered GIR where a local
+# is read via `op_consume` (lower.gg). It's the typed-metadata
+# replacement for an `is_consuming: bool` sidecar that would otherwise
+# be threaded through op_consume's ~30 call sites. Phase 2b (Path A
+# part 2, 2026-05-20) introduced this enum per CLAUDE.md "No name
+# matching" and layering rule 2: every call site explicitly names its
+# kind; at non-consume kinds `op_consume` returns `OpBorrow` regardless
+# of source ownership; at consume kinds the existing
+# LoOwned→OpMove / LoBorrowed→OpBorrow dispatch applies. Helper
+# `is_consume_kind(k)` is the single source of truth for the partition.
+enum ConsumeKind:
+    # ── Consume positions ────────────────────────────────────
+    # Receiver of the read takes ownership of the value.
+    CkAssign         # SVarDecl/SAssign init RHS → owned local
+    CkReturn         # GTReturn value (move into return place)
+    CkCallArg        # function/method/closure/extern call arg (callee owns)
+    CkFieldWrite     # __field_write_TYPE_FIELD value (field takes ownership)
+    # ── Borrow positions ─────────────────────────────────────
+    # Receiver just reads the value; source stays live afterward.
+    CkBinOpArg       # GIBinOp / GICmp / GIUnOp operand (arithmetic / compare)
+    CkFormatArg      # f-string / printf arg (gorget_string_format / printf — read-only)
+    CkMatchPtr       # __field_read_<enum>_<field> args (pointer plumbing only)
+
 # When LoBorrowed, where the borrow originates — used by validators that
 # need to flag borrow-into-owned consume sites by source type. Mirrors
 # Rust's `BorrowOrigin` in `src/ir/types.rs`.
