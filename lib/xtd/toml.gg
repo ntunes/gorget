@@ -392,14 +392,173 @@ equip TomlParser:
     # ── Number / date-time parsing ──────────────────────────
 
     TomlValue parse_number_or_date(&self):
+        # Date prefix: YYYY-MM-DD at current position.
+        if self.is_date_prefix(self.pos):
+            return self.parse_datetime_value()
+        # Time prefix: HH:MM:SS at current position.
+        if self.is_time_prefix(self.pos):
+            return self.parse_time_value()
+        return self.parse_numeric_value()
+
+    bool is_date_prefix(self, int p):
+        if p + 10 > self.source.byte_len():
+            return false
+        if not (self.byte_is_digit(p) and self.byte_is_digit(p + 1) and self.byte_is_digit(p + 2) and self.byte_is_digit(p + 3)):
+            return false
+        if self.source.byte_at(p + 4) != b'-':
+            return false
+        if not (self.byte_is_digit(p + 5) and self.byte_is_digit(p + 6)):
+            return false
+        if self.source.byte_at(p + 7) != b'-':
+            return false
+        if not (self.byte_is_digit(p + 8) and self.byte_is_digit(p + 9)):
+            return false
+        return true
+
+    bool is_time_prefix(self, int p):
+        if p + 8 > self.source.byte_len():
+            return false
+        if not (self.byte_is_digit(p) and self.byte_is_digit(p + 1)):
+            return false
+        if self.source.byte_at(p + 2) != b':':
+            return false
+        if not (self.byte_is_digit(p + 3) and self.byte_is_digit(p + 4)):
+            return false
+        if self.source.byte_at(p + 5) != b':':
+            return false
+        if not (self.byte_is_digit(p + 6) and self.byte_is_digit(p + 7)):
+            return false
+        return true
+
+    bool byte_is_digit(self, int p):
+        if p >= self.source.byte_len():
+            return false
+        byte b = self.source.byte_at(p)
+        return b >= b'0' and b <= b'9'
+
+    # Parse YYYY-MM-DD optionally followed by [T|t| ] HH:MM:SS[.fff][Z|z|+HH:MM|-HH:MM].
+    # Also validates ranges (month 1-12, day 1-31 per month, hour 0-23, etc).
+    TomlValue parse_datetime_value(&self):
+        int start = self.pos
+        int year = self.read_n_digits(4)
+        self.pos = self.pos + 1  # skip '-'
+        int month = self.read_n_digits(2)
+        self.pos = self.pos + 1  # skip '-'
+        int day = self.read_n_digits(2)
+        if not valid_date(year, month, day):
+            self.fail("invalid date")
+            return Str("")
+        # Peek separator. If T/t/space-followed-by-digit, continue with time.
+        bool has_time = false
+        if self.pos < self.source.byte_len():
+            byte sep = self.source.byte_at(self.pos)
+            if sep == b'T' or sep == b't':
+                has_time = true
+                self.pos = self.pos + 1
+            elif sep == b' ' and self.pos + 1 < self.source.byte_len() and self.byte_is_digit(self.pos + 1):
+                has_time = true
+                self.pos = self.pos + 1
+        if not has_time:
+            return DateTime(self.normalize_dt_text(start, self.pos))
+        # Time portion: HH:MM:SS[.fff]
+        if not self.is_time_prefix(self.pos):
+            self.fail("invalid time after date")
+            return Str("")
+        int hour = self.read_n_digits(2)
+        self.pos = self.pos + 1  # skip ':'
+        int minute = self.read_n_digits(2)
+        self.pos = self.pos + 1  # skip ':'
+        int second = self.read_n_digits(2)
+        if not valid_time(hour, minute, second):
+            self.fail("invalid time")
+            return Str("")
+        # Optional fractional seconds.
+        if self.pos < self.source.byte_len() and self.source.byte_at(self.pos) == b'.':
+            self.pos = self.pos + 1
+            int frac_count = 0
+            while self.pos < self.source.byte_len() and self.byte_is_digit(self.pos):
+                self.pos = self.pos + 1
+                frac_count = frac_count + 1
+            if frac_count == 0:
+                self.fail("expected digits after '.' in fractional seconds")
+                return Str("")
+        # Optional offset: Z/z or +HH:MM/-HH:MM
+        if self.pos < self.source.byte_len():
+            byte ob = self.source.byte_at(self.pos)
+            if ob == b'Z' or ob == b'z':
+                self.pos = self.pos + 1
+            elif ob == b'+' or ob == b'-':
+                self.pos = self.pos + 1
+                int off_h = self.read_n_digits(2)
+                if self.pos >= self.source.byte_len() or self.source.byte_at(self.pos) != b':':
+                    self.fail("expected ':' in datetime offset")
+                    return Str("")
+                self.pos = self.pos + 1
+                int off_m = self.read_n_digits(2)
+                if off_h > 23 or off_m > 59:
+                    self.fail("invalid datetime offset")
+                    return Str("")
+        return DateTime(self.normalize_dt_text(start, self.pos))
+
+    # Read exactly n digits and return their integer value. Fails parser on
+    # non-digit / EOF. Position advances by n on success.
+    int read_n_digits(&self, int n):
+        int v = 0
+        int i = 0
+        while i < n:
+            if self.pos >= self.source.byte_len() or not self.byte_is_digit(self.pos):
+                self.fail("expected digit")
+                return 0
+            v = v * 10 + (self.source.byte_at(self.pos) as int - b'0')
+            self.pos = self.pos + 1
+            i = i + 1
+        return v
+
+    String normalize_dt_text(self, int s, int e):
+        # Preserve the raw source slice. Runner normalises t/z/space when comparing.
+        return self.source.byte_slice(s, e)
+
+    TomlValue parse_time_value(&self):
+        int start = self.pos
+        int hour = self.read_n_digits(2)
+        self.pos = self.pos + 1  # ':'
+        int minute = self.read_n_digits(2)
+        self.pos = self.pos + 1  # ':'
+        int second = self.read_n_digits(2)
+        if not valid_time(hour, minute, second):
+            self.fail("invalid time")
+            return Str("")
+        if self.pos < self.source.byte_len() and self.source.byte_at(self.pos) == b'.':
+            self.pos = self.pos + 1
+            int frac_count = 0
+            while self.pos < self.source.byte_len() and self.byte_is_digit(self.pos):
+                self.pos = self.pos + 1
+                frac_count = frac_count + 1
+            if frac_count == 0:
+                self.fail("expected digits after '.' in fractional seconds")
+                return Str("")
+        return DateTime(self.source.byte_slice(start, self.pos))
+
+    # Numeric parsing with strict TOML grammar:
+    #   - Sign optional (single +/- at start).
+    #   - 0x/0o/0b prefixes for hex/oct/bin (lowercase only, no sign before prefix).
+    #   - No leading zeros for decimal integers / float mantissas (except "0").
+    #   - Underscores only between digits.
+    #   - Float requires digits on both sides of '.', and digits after 'e'.
+    TomlValue parse_numeric_value(&self):
         int start = self.pos
         bool is_negative = false
-        if self.pos < self.source.byte_len() and self.source.char_at(self.pos) == '-':
-            is_negative = true
-            self.pos = self.pos + 1
-        elif self.pos < self.source.byte_len() and self.source.char_at(self.pos) == '+':
-            self.pos = self.pos + 1
-        # Handle signed special floats: -inf, +inf, -nan, +nan
+        bool has_sign = false
+        if self.pos < self.source.byte_len():
+            byte b = self.source.byte_at(self.pos)
+            if b == b'-':
+                is_negative = true
+                has_sign = true
+                self.pos = self.pos + 1
+            elif b == b'+':
+                has_sign = true
+                self.pos = self.pos + 1
+        # inf / nan
         if self.pos + 3 <= self.source.byte_len():
             String num_special = self.source.byte_slice(self.pos, self.pos + 3)
             if num_special == "inf":
@@ -410,44 +569,109 @@ equip TomlParser:
             if num_special == "nan":
                 self.pos = self.pos + 3
                 return Float(0.0 / 0.0)
-        # Check for hex/oct/bin prefixes
-        if self.pos + 1 < self.source.byte_len() and self.source.char_at(self.pos) == '0':
-            String num_prefix = self.source.char_at(self.pos + 1)
-            if num_prefix == 'x' or num_prefix == 'o' or num_prefix == 'b':
-                return self.parse_prefixed_int(start, is_negative, num_prefix)
-        # Scan digits
-        bool has_dot = false
-        bool has_exp = false
-        bool could_be_date = false
+        # Prefixed integer (no sign allowed before hex/oct/bin)
+        if self.pos + 1 < self.source.byte_len() and self.source.byte_at(self.pos) == b'0':
+            byte after = self.source.byte_at(self.pos + 1)
+            if after == b'x' or after == b'o' or after == b'b':
+                if has_sign:
+                    self.fail("sign not allowed before hex/oct/bin prefix")
+                    return Int(0)
+                String pfx = ""
+                if after == b'x':
+                    pfx = "x"
+                elif after == b'o':
+                    pfx = "o"
+                else:
+                    pfx = "b"
+                return self.parse_prefixed_int(start, false, pfx)
+            # Uppercase prefix (0X, 0O, 0B) is invalid per TOML spec.
+            if after == b'X' or after == b'O' or after == b'B':
+                self.fail("hex/oct/bin prefix must be lowercase")
+                return Int(0)
+        # Decimal integer/float — must start with a digit.
+        if self.pos >= self.source.byte_len() or not self.byte_is_digit(self.pos):
+            self.fail("expected digit in number")
+            return Int(0)
+        # Track leading-zero state: if the first digit is '0' and the next char
+        # is a digit, that's a leading-zero violation (e.g. "01", "0123").
+        bool starts_with_zero = self.source.byte_at(self.pos) == b'0'
+        bool int_part_has_more_than_one = false
+        int int_start = self.pos
+        self.pos = self.pos + 1
+        # Continue scanning integer digits, with strict underscore rules:
+        #   underscore must be sandwiched between digits.
         while self.pos < self.source.byte_len():
-            String ch = self.source.char_at(self.pos)
-            if ch >= '0' and ch <= '9':
+            byte b = self.source.byte_at(self.pos)
+            if self.byte_is_digit(self.pos):
+                int_part_has_more_than_one = true
                 self.pos = self.pos + 1
-            elif ch == '_':
-                self.pos = self.pos + 1
-            elif ch == '.':
-                has_dot = true
-                self.pos = self.pos + 1
-            elif ch == 'e' or ch == 'E':
-                has_exp = true
-                self.pos = self.pos + 1
-                if self.pos < self.source.byte_len():
-                    String sign_ch = self.source.char_at(self.pos)
-                    if sign_ch == '+' or sign_ch == '-':
-                        self.pos = self.pos + 1
-            elif ch == '-' or ch == ':' or ch == 'T' or ch == 'Z':
-                could_be_date = true
-                self.pos = self.pos + 1
-            elif ch == '+':
-                could_be_date = true
+            elif b == b'_':
+                # Underscore requires digit on both sides.
+                if self.pos + 1 >= self.source.byte_len() or not self.byte_is_digit(self.pos + 1):
+                    self.fail("underscore must be surrounded by digits")
+                    return Int(0)
+                # The previous byte must be a digit too (always true here since
+                # we just consumed one or the int_start digit).
                 self.pos = self.pos + 1
             else:
                 break
+        if starts_with_zero and int_part_has_more_than_one:
+            self.fail("leading zeros not allowed")
+            return Int(0)
+        # Look for '.' or 'e'/'E' to detect float.
+        bool is_float = false
+        if self.pos < self.source.byte_len():
+            byte b = self.source.byte_at(self.pos)
+            if b == b'.':
+                is_float = true
+                self.pos = self.pos + 1
+                # At least one digit required after dot.
+                if self.pos >= self.source.byte_len() or not self.byte_is_digit(self.pos):
+                    self.fail("expected digit after '.'")
+                    return Float(0.0)
+                self.pos = self.pos + 1
+                while self.pos < self.source.byte_len():
+                    byte b2 = self.source.byte_at(self.pos)
+                    if self.byte_is_digit(self.pos):
+                        self.pos = self.pos + 1
+                    elif b2 == b'_':
+                        if self.pos + 1 >= self.source.byte_len() or not self.byte_is_digit(self.pos + 1):
+                            self.fail("underscore must be surrounded by digits")
+                            return Float(0.0)
+                        self.pos = self.pos + 1
+                    else:
+                        break
+        if self.pos < self.source.byte_len():
+            byte b = self.source.byte_at(self.pos)
+            if b == b'e' or b == b'E':
+                is_float = true
+                self.pos = self.pos + 1
+                if self.pos < self.source.byte_len():
+                    byte sb = self.source.byte_at(self.pos)
+                    if sb == b'+' or sb == b'-':
+                        self.pos = self.pos + 1
+                # At least one digit required in exponent.
+                if self.pos >= self.source.byte_len() or not self.byte_is_digit(self.pos):
+                    self.fail("expected digit in exponent")
+                    return Float(0.0)
+                # Exponent disallows leading zero in stricter grammars; TOML
+                # actually permits leading zeros here ("1e01" is valid). So
+                # consume digits with underscore rules.
+                self.pos = self.pos + 1
+                while self.pos < self.source.byte_len():
+                    byte b2 = self.source.byte_at(self.pos)
+                    if self.byte_is_digit(self.pos):
+                        self.pos = self.pos + 1
+                    elif b2 == b'_':
+                        if self.pos + 1 >= self.source.byte_len() or not self.byte_is_digit(self.pos + 1):
+                            self.fail("underscore must be surrounded by digits")
+                            return Float(0.0)
+                        self.pos = self.pos + 1
+                    else:
+                        break
         String num_text = self.source.byte_slice(start, self.pos)
-        if could_be_date:
-            return DateTime(num_text)
         String cleaned = strip_underscores(num_text)
-        if has_dot or has_exp:
+        if is_float:
             float fv = parse_float(cleaned).unwrap_or(0.0)
             return Float(fv)
         int iv = parse_int(cleaned).unwrap_or(0)
@@ -457,34 +681,50 @@ equip TomlParser:
         self.pos = self.pos + 2
         int val = 0
         int base = 16
-        if num_prefix == 'o':
+        if num_prefix == "o":
             base = 8
-        elif num_prefix == 'b':
+        elif num_prefix == "b":
             base = 2
         bool has_digits = false
+        bool last_was_underscore = true  # treat start as "before any digit" so leading _ is rejected
         while self.pos < self.source.byte_len():
             byte ch = self.source.byte_at(self.pos)
             if ch == b'_':
+                if last_was_underscore:
+                    self.fail("underscore must be surrounded by digits")
+                    return Int(0)
                 self.pos = self.pos + 1
+                last_was_underscore = true
             elif ch >= b'0' and ch <= b'9':
                 int digit = ch as int - b'0'
                 if digit >= base:
-                    break
+                    if base == 16:
+                        # digit 0-9 is always valid in hex; this branch is dead. Kept for clarity.
+                        pass
+                    else:
+                        self.fail("invalid digit for base")
+                        return Int(0)
                 val = val * base + digit
                 self.pos = self.pos + 1
                 has_digits = true
+                last_was_underscore = false
             elif ch >= b'a' and ch <= b'f' and base == 16:
                 val = val * 16 + (ch as int - b'a' + 10)
                 self.pos = self.pos + 1
                 has_digits = true
+                last_was_underscore = false
             elif ch >= b'A' and ch <= b'F' and base == 16:
                 val = val * 16 + (ch as int - b'A' + 10)
                 self.pos = self.pos + 1
                 has_digits = true
+                last_was_underscore = false
             else:
                 break
         if not has_digits:
             self.fail("expected digits after prefix")
+            return Int(0)
+        if last_was_underscore:
+            self.fail("trailing underscore not allowed")
             return Int(0)
         if is_negative:
             val = 0 - val
@@ -587,6 +827,37 @@ private TomlValue wrap_dotted(Vector[String] key_parts, int from_idx, TomlValue 
     Dict[String, TomlValue] outer = Dict[String, TomlValue]()
     outer.put(key_parts.get(from_idx).unwrap(), inner)
     return Tbl(outer)
+
+private bool valid_date(int y, int m, int d):
+    if y < 1 or y > 9999:
+        return false
+    if m < 1 or m > 12:
+        return false
+    if d < 1:
+        return false
+    # Days per month.
+    int dim = 31
+    if m == 4 or m == 6 or m == 9 or m == 11:
+        dim = 30
+    elif m == 2:
+        bool is_leap = false
+        if (y % 4) == 0 and ((y % 100) != 0 or (y % 400) == 0):
+            is_leap = true
+        if is_leap:
+            dim = 29
+        else:
+            dim = 28
+    return d <= dim
+
+private bool valid_time(int h, int m, int s):
+    if h < 0 or h > 23:
+        return false
+    if m < 0 or m > 59:
+        return false
+    # Allow leap second (60); TOML 1.0 permits seconds 00-60.
+    if s < 0 or s > 60:
+        return false
+    return true
 
 private String strip_underscores(String txt):
     String cleaned = ""
