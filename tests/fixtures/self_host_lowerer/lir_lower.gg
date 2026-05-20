@@ -2391,7 +2391,35 @@ int lower_operand(Operand op, LirFunction &f, int bb, Vector[int] &local_to_slot
 
 # ── Instruction lowering ────────────────────────────────────
 
-int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &local_to_slot, Dict[String, int] &func_index, GirModule &gmod, Dict[String, int] &sr, LirModule &m):
+# Unwrap Ptr/MutPtr to reach the underlying named type. Used by GIDrop /
+# GIDropIfAlive to resolve the type name of the local being dropped so the
+# matching `<Type>__drop` / `gorget_*_free` runtime symbol can be looked up
+# via `drop_fn_for_type`. Mirrors `lower.gg::type_id_to_base_name`; kept
+# local to `lir_lower.gg` to avoid a cross-module import.
+String gir_type_id_to_base_name(int tid, GirModule &gmod):
+    if tid < 0 or tid >= gmod.type_table.len():
+        return ""
+    GirType gt = gmod.type_table.get(tid).unwrap()
+    match gt:
+        case GtNamed(name):
+            return name
+        case GtPtr(inner):
+            return gir_type_id_to_base_name(inner, &gmod)
+        case GtMutPtr(inner):
+            return gir_type_id_to_base_name(inner, &gmod)
+        else:
+            return ""
+
+# Look up a GIR local's type name for drop-fn resolution. Returns "" when
+# the local is out of range or its type is a primitive / fn-ptr that has
+# no drop function.
+String gir_local_type_name(int local_id, Vector[GirLocal] &gir_locals, GirModule &gmod):
+    if local_id < 0 or local_id >= gir_locals.len():
+        return ""
+    int tid = gir_locals.get(local_id).unwrap().type_id
+    return gir_type_id_to_base_name(tid, &gmod)
+
+int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &local_to_slot, Vector[GirLocal] &gir_locals, Dict[String, int] &func_index, GirModule &gmod, Dict[String, int] &sr, LirModule &m):
     match inst:
         case GIAssign(local_id, operand):
             int val = lower_operand(operand, &f, bb, &local_to_slot)
@@ -2936,18 +2964,55 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                         f.blocks.set(bb, blk2)
 
         case GIDrop(local_id):
-            # Emit drop as extern call: Type__drop(&place)
-            int slot = local_to_slot.get(local_id).unwrap()
-            int addr = lir_fn_next_value(&f)
-            LirBlock blk = f.blocks.get(bb).unwrap()
-            blk.insts.push(ISlotAddr(addr, slot))
-            f.blocks.set(bb, blk)
-            # For now, emit as nop — drop elaboration will handle this
-            # TODO: resolve drop function name from type info
+            # Unconditional drop: resolve the local's type → drop fn via the
+            # typed `drop_fn_for_type` accessor (which reads the populated
+            # `type_runtime_map` + `resource_types` metadata, *not* the
+            # name), then emit `<drop_fn>(&slot)`. Primitives / non-resource
+            # types return "" and the arm becomes a no-op — `drop_fn_for_type`
+            # is the single source of truth for whether a type owns
+            # droppable data, mirroring Rust's `DropStrategy` lookup in
+            # `src/lir/lower/drops.rs::lower_drop`.
+            String drop_tn = gir_local_type_name(local_id, &gir_locals, &gmod)
+            if drop_tn != "":
+                String drop_fn = drop_fn_for_type(drop_tn, &gmod.resource_types, &m.type_runtime_map)
+                if drop_fn != "":
+                    int slot = local_to_slot.get(local_id).unwrap()
+                    int addr = lir_fn_next_value(&f)
+                    LirBlock dblk = f.blocks.get(bb).unwrap()
+                    dblk.insts.push(ISlotAddr(addr, slot))
+                    Vector[int] drop_args = []
+                    drop_args.push(addr)
+                    Vector[int] drop_abis = []
+                    dblk.insts.push(ICallExtern(-1, drop_fn, drop_args, drop_fn, drop_abis))
+                    f.blocks.set(bb, dblk)
 
         case GIDropIfAlive(local_id):
-            # Similar to GIDrop but with runtime liveness check
-            pass
+            # Conditional drop: wrap the same drop emission with an
+            # `IDropGuardOpen(kind=byte_size+1, &slot)` / `IDropGuardClose`
+            # pair. The C codegen emits a `memcmp(&slot, zeros, size) != 0`
+            # gate; downstream `drop_elab` (when self-host grows one) can
+            # statically resolve Initialized → strip guard / Uninitialized
+            # → strip drop / MaybeInitialized → swap memcmp for a bool
+            # drop-flag. Until then the runtime memcmp is correct but slow,
+            # matching Rust's pre-elaboration shape.
+            String dia_tn = gir_local_type_name(local_id, &gir_locals, &gmod)
+            if dia_tn != "":
+                String dia_drop_fn = drop_fn_for_type(dia_tn, &gmod.resource_types, &m.type_runtime_map)
+                if dia_drop_fn != "":
+                    int dia_slot = local_to_slot.get(local_id).unwrap()
+                    int dia_slot_ty = f.slots.get(dia_slot).unwrap().ty
+                    int dia_size = lir_type_byte_size_in_mod(dia_slot_ty, &m, 0)
+                    int dia_addr = lir_fn_next_value(&f)
+                    LirBlock dia_blk = f.blocks.get(bb).unwrap()
+                    dia_blk.insts.push(ISlotAddr(dia_addr, dia_slot))
+                    # kind encoding: 0=Bool guard, kind-1=byte size for NonZero
+                    dia_blk.insts.push(IDropGuardOpen(dia_size + 1, dia_addr))
+                    Vector[int] dia_args = []
+                    dia_args.push(dia_addr)
+                    Vector[int] dia_abis = []
+                    dia_blk.insts.push(ICallExtern(-1, dia_drop_fn, dia_args, dia_drop_fn, dia_abis))
+                    dia_blk.insts.push(IDropGuardClose)
+                    f.blocks.set(bb, dia_blk)
 
         case GIMoveZero(local_id):
             # Mark slot as moved — pure dataflow annotation (V6: no Memset for
@@ -3061,7 +3126,7 @@ LirFunction lir_lower_function(GirFunction gfn, GirModule &gmod, Dict[String, in
 
         # Lower instructions
         for gir_inst in gir_blk.insts:
-            lir_bb = lower_instruction(gir_inst, &f, lir_bb, &local_to_slot, &func_index, &gmod, &sr, &m)
+            lir_bb = lower_instruction(gir_inst, &f, lir_bb, &local_to_slot, &gfn.locals, &func_index, &gmod, &sr, &m)
 
         # Lower terminator. Move the local LirTerm into the block —
         # it's a non-Copy enum and `lir_term` is dead after the
