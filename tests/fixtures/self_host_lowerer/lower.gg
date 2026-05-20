@@ -840,15 +840,18 @@ LivenessAnalysis empty_liveness():
     Dict[int, bool] m = {}
     return LivenessAnalysis(!m)
 
-# Helper: clone a Vector[bool] (no built-in; self-host's
-# Vector.clone clones the storage). Cheap for our sizes: ~50-200
-# bools per function.
+# Helper: clone a Vector[bool]. Preallocates via `Vector.fill(n, false)`
+# then overwrites individual bits. Skips ~10 doubling reallocations.
+# Hot path: called once per block in `liveness_fixpoint` initial seeding
+# and once per block in `liveness_record_last_uses`.
 Vector[bool] live_bitset_clone(Vector[bool] src):
     Vector[bool] out = []
-    int i = 0
     int n = src.len()
+    out.fill(n, false)
+    int i = 0
     while i < n:
-        out.push(src.get(i).unwrap())
+        if src.get(i).unwrap():
+            out.set(i, true)
         i += 1
     return out
 
@@ -879,13 +882,13 @@ void live_bitset_union(Vector[bool] &a, Vector[bool] b):
             a.set(i, true)
         i += 1
 
-# Helper: initialise an empty bitset sized for nlocals.
+# Helper: initialise an empty bitset sized for nlocals. Uses
+# `Vector.fill(n, false)` which preallocates capacity and memcpys —
+# avoids ~10 doubling reallocations during nlocals pushes. Hot path:
+# `liveness_fixpoint` allocates 2 of these per worklist pop.
 Vector[bool] live_bitset_empty(int nlocals):
     Vector[bool] out = []
-    int i = 0
-    while i < nlocals:
-        out.push(false)
-        i += 1
+    out.fill(nlocals, false)
     return out
 
 # Note the local-IDs an Operand reads. Only OpCopy/OpMove/OpClone/OpBorrow
@@ -999,6 +1002,21 @@ void liveness_term_operand_uses(Terminator term, Vector[bool] &acc):
         case GTBranch(op, _, _):
             liveness_operand_uses(op, &acc)
 
+# Direct-lid extractor for a Terminator's single operand (0-1 source
+# locals). Returns -1 if no operand or operand is a const. Used by
+# `liveness_compute_use_def` to skip the bitset allocation in the
+# common single-operand terminator case.
+int liveness_term_operand_local_id(Terminator term):
+    match term:
+        case GTNone():
+            return -1
+        case GTJump(_):
+            return -1
+        case GTReturn(op):
+            return liveness_operand_local_id(op)
+        case GTBranch(op, _, _):
+            return liveness_operand_local_id(op)
+
 # Collect the successor block ids of a Terminator. GTNone / GTReturn
 # have no successors (terminator absent or function exit). GTJump has
 # one successor; GTBranch has two.
@@ -1034,16 +1052,19 @@ void liveness_compute_use_def(Vector[Instruction] insts, Terminator term, int nl
     while ii < n:
         Instruction inst = insts.get(ii).unwrap()
         # Reads: an operand read is in USE[B] iff the local hasn't been
-        # killed (defined) earlier in this block. Implement via a
-        # temporary single-inst-uses bitset, then add (uses - def_so_far)
-        # to use_set.
-        Vector[bool] inst_uses = live_bitset_empty(nlocals)
-        liveness_inst_operand_uses(inst, &inst_uses)
-        int li = 0
-        while li < nlocals:
-            if inst_uses.get(li).unwrap() and not def_set.get(li).unwrap():
-                use_set.set(li, true)
-            li += 1
+        # killed (defined) earlier in this block.
+        #
+        # Iterate operand lids directly (typically 1-5 per inst) instead
+        # of allocating a fresh nlocals-sized bitset and sweeping the
+        # full range. Eliminates per-inst O(nlocals) overhead — Phase 1
+        # perf hunt 2026-05-20.
+        Vector[int] op_lids = liveness_inst_operand_local_ids(inst)
+        int ok = 0
+        while ok < op_lids.len():
+            int lid_u = op_lids.get(ok).unwrap()
+            if lid_u >= 0 and lid_u < nlocals and not def_set.get(lid_u).unwrap():
+                use_set.set(lid_u, true)
+            ok += 1
         # Def: kill in def_set after the reads. This way `x = x + 1`
         # correctly counts the RHS x as a USE (read happens before
         # def).
@@ -1052,14 +1073,12 @@ void liveness_compute_use_def(Vector[Instruction] insts, Terminator term, int nl
             def_set.set(def_lid, true)
         ii += 1
     # Terminator reads are post-all-block-defs, so they're USE unless
-    # killed by an earlier inst in this block.
-    Vector[bool] term_uses = live_bitset_empty(nlocals)
-    liveness_term_operand_uses(term, &term_uses)
-    int ti = 0
-    while ti < nlocals:
-        if term_uses.get(ti).unwrap() and not def_set.get(ti).unwrap():
-            use_set.set(ti, true)
-        ti += 1
+    # killed by an earlier inst in this block. Direct-lid path mirrors
+    # the per-inst optimisation above — terminators have 0-1 operand
+    # so per-terminator allocation was wasted.
+    int term_lid = liveness_term_operand_local_id(term)
+    if term_lid >= 0 and term_lid < nlocals and not def_set.get(term_lid).unwrap():
+        use_set.set(term_lid, true)
 
 # Worklist backward-dataflow fixpoint.
 #
