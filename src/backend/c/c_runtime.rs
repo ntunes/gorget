@@ -8075,8 +8075,14 @@ static inline ExecResult gorget_exec_output(const char* cmd) {
     int status = 0;
     while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
     result.exit_code = WIFEXITED(status) ? (int64_t)WEXITSTATUS(status) : (int64_t)-1;
-    result.output = out_buf ? gorget_string_adopt(out_buf) : gorget_str_from_literal("", 0);
-    result.errors = err_buf ? gorget_string_adopt(err_buf) : gorget_str_from_literal("", 0);
+    // Use the read-accumulated byte counts directly — going through strlen
+    // (gorget_string_adopt) would silently truncate subprocess stdout/stderr
+    // at the first embedded NUL byte (binary tools, raw protocol captures).
+    // Mirrors commit 53a4db02.
+    result.output = out_buf ? str_adopt_buf(out_buf, out_len, out_cap, __gorget_current_alloc)
+                            : gorget_str_from_literal("", 0);
+    result.errors = err_buf ? str_adopt_buf(err_buf, err_len, err_cap, __gorget_current_alloc)
+                            : gorget_str_from_literal("", 0);
     return result;
 }
 "#;
@@ -8854,7 +8860,10 @@ static GorgetString gorget_socket_read_line(GorgetSocket* sock) {
     while (len > 0 && (buf[len-1] == '\n' || buf[len-1] == '\r')) {
         buf[--len] = '\0';
     }
-    return gorget_string_adopt(buf);
+    // Use the recv-accumulated byte count directly — going through strlen
+    // (gorget_string_adopt) would silently truncate at the first embedded
+    // NUL byte (binary protocols, malformed input). Mirrors commit 53a4db02.
+    return str_adopt_buf(buf, len, cap, __gorget_current_alloc);
 }
 
 // Set socket timeout in milliseconds
@@ -9565,7 +9574,10 @@ static GorgetString gorget_tls_read_line(GorgetTlsSocket* sock) {
     while (len > 0 && (buf[len-1] == '\n' || buf[len-1] == '\r')) {
         buf[--len] = '\0';
     }
-    return gorget_string_adopt(buf);
+    // Use the SSL_read-accumulated byte count directly — going through strlen
+    // (gorget_string_adopt) would silently truncate at the first embedded
+    // NUL byte (binary protocols, malformed input). Mirrors commit 53a4db02.
+    return str_adopt_buf(buf, len, cap, __gorget_current_alloc);
 }
 
 static void gorget_tls_close(GorgetTlsSocket* sock) {
@@ -10684,8 +10696,12 @@ static inline ExecResult gorget_process__drain(GorgetProcess* proc, int64_t time
         waitpid(proc->pid, &status, 0);
         result.exit_code = WIFEXITED(status) ? (int64_t)WEXITSTATUS(status) : (int64_t)-1;
     }
-    result.output = gorget_string_adopt(o_buf);
-    result.errors = gorget_string_adopt(e_buf);
+    // Use the read-accumulated byte counts directly — going through strlen
+    // (gorget_string_adopt) would silently truncate subprocess stdout/stderr
+    // at the first embedded NUL byte (binary tools, raw protocol captures).
+    // Mirrors commit 53a4db02.
+    result.output = str_adopt_buf(o_buf, o_len, o_cap, __gorget_current_alloc);
+    result.errors = str_adopt_buf(e_buf, e_len, e_cap, __gorget_current_alloc);
     return result;
 }
 
