@@ -68,6 +68,7 @@ enum RxNode:
 
 # Flag bits — also stored on the compiled Program.
 const int FLAG_CASE_INSENSITIVE = 1
+const int FLAG_MULTILINE = 2
 
 struct RxParser:
     String src
@@ -114,6 +115,10 @@ equip RxParser:
                 int c = self.peek()
                 if c == b'i' as int:
                     set_flags = set_flags | FLAG_CASE_INSENSITIVE
+                    saw_any = true
+                    self.advance()
+                elif c == b'm' as int:
+                    set_flags = set_flags | FLAG_MULTILINE
                     saw_any = true
                     self.advance()
                 else:
@@ -652,7 +657,7 @@ equip Compiler:
                 int ci = self.add_class(folded)
                 self.emit(OP_CLASS, ci, 0)
             case Anchor(kind):
-                int code = anchor_code(kind)
+                int code = anchor_code(kind, self.flags)
                 self.emit(OP_ANCHOR, code, 0)
             case Concat(parts):
                 int i = 0
@@ -796,10 +801,20 @@ CharClass case_fold_class(CharClass c):
         i = i + 1
     return CharClass(!out, c.negated)
 
-int anchor_code(AnchorKind k):
+int anchor_code(AnchorKind k, int flags):
+    # `^` / `$` are line-relative ONLY when the multiline flag is set,
+    # else they collapse to text-start / text-end. Decided at lower
+    # time so the VM doesn't need to know about flags.
+    bool multiline = (flags & FLAG_MULTILINE) != 0
     match k:
-        case StartLine(): return ANCHOR_START_LINE
-        case EndLine(): return ANCHOR_END_LINE
+        case StartLine():
+            if multiline:
+                return ANCHOR_START_LINE
+            return ANCHOR_START_TEXT
+        case EndLine():
+            if multiline:
+                return ANCHOR_END_LINE
+            return ANCHOR_END_TEXT
         case StartText(): return ANCHOR_START_TEXT
         case EndText(): return ANCHOR_END_TEXT
         case WordBound(): return ANCHOR_WORD_BOUND
@@ -816,6 +831,8 @@ Result[Program, String] _compile(String pattern, String flag_str):
         byte fc = flag_str.byte_at(fi)
         if fc == b'i':
             flags = flags | FLAG_CASE_INSENSITIVE
+        elif fc == b'm':
+            flags = flags | FLAG_MULTILINE
         else:
             String fc_s = flag_str.byte_slice(fi, fi + 1)
             return Error("unknown flag: " + fc_s)
