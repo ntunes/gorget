@@ -40,6 +40,12 @@ struct CharClass:
 #   EndText    \z     (always input-end)
 #   WordBound  \b
 #   NotWordBound  \B
+#   WordStart      \b{start}      — only at start of a word (non-word→word)
+#   WordEnd        \b{end}        — only at end of a word (word→non-word)
+#   WordStartHalf  \b{start-half} — at start of word OR at start of input
+#                                   when followed by a word byte
+#   WordEndHalf    \b{end-half}   — at end of word OR at end of input
+#                                   when preceded by a word byte
 enum AnchorKind:
     StartLine
     EndLine
@@ -47,6 +53,10 @@ enum AnchorKind:
     EndText
     WordBound
     NotWordBound
+    WordStart
+    WordEnd
+    WordStartHalf
+    WordEndHalf
 
 enum RxNode:
     Empty
@@ -535,6 +545,39 @@ equip RxParser:
         if e == b'z' as int:
             return Anchor(EndText())
         if e == b'b' as int:
+            # Check for extended forms: \b{start}, \b{end}, \b{start-half}, \b{end-half}.
+            # `\B{...}` is NOT a valid extension — only \b can be qualified.
+            if self.peek() == b'{' as int:
+                int saved = self.pos
+                self.advance()  # consume '{'
+                int name_start = self.pos
+                while not self.at_end() and self.peek() != b'}' as int:
+                    int b = self.peek()
+                    # Allowed chars in the qualifier name: letters and hyphen.
+                    if not ((b >= b'a' as int and b <= b'z' as int)
+                            or (b >= b'A' as int and b <= b'Z' as int)
+                            or b == b'-' as int):
+                        # Bail; restore to the byte after \b so the `{` is
+                        # treated like a normal char (lenient repeat parsing).
+                        self.pos = saved
+                        return Anchor(WordBound())
+                    self.advance()
+                if self.at_end():
+                    self.fail("unterminated \\b{...} qualifier")
+                    return Empty()
+                String name = self.src.byte_slice(name_start, self.pos)
+                self.advance()  # consume '}'
+                if name == "start":
+                    return Anchor(WordStart())
+                elif name == "end":
+                    return Anchor(WordEnd())
+                elif name == "start-half":
+                    return Anchor(WordStartHalf())
+                elif name == "end-half":
+                    return Anchor(WordEndHalf())
+                else:
+                    self.fail("unrecognized \\b{...} qualifier: " + name)
+                    return Empty()
             return Anchor(WordBound())
         if e == b'B' as int:
             return Anchor(NotWordBound())
@@ -634,6 +677,10 @@ const int ANCHOR_START_TEXT = 2
 const int ANCHOR_END_TEXT = 3
 const int ANCHOR_WORD_BOUND = 4
 const int ANCHOR_NOT_WORD_BOUND = 5
+const int ANCHOR_WORD_START = 6
+const int ANCHOR_WORD_END = 7
+const int ANCHOR_WORD_START_HALF = 8
+const int ANCHOR_WORD_END_HALF = 9
 
 struct Inst:
     int op
@@ -1044,6 +1091,10 @@ int anchor_code(AnchorKind k, int flags):
         case EndText(): return ANCHOR_END_TEXT
         case WordBound(): return ANCHOR_WORD_BOUND
         case NotWordBound(): return ANCHOR_NOT_WORD_BOUND
+        case WordStart(): return ANCHOR_WORD_START
+        case WordEnd(): return ANCHOR_WORD_END
+        case WordStartHalf(): return ANCHOR_WORD_START_HALF
+        case WordEndHalf(): return ANCHOR_WORD_END_HALF
 
 # ─────────────────────────────────────────────────────────────
 # Top-level compile entry
@@ -1174,6 +1225,38 @@ bool anchor_match_bounded(int code, String subject, int pos, int lo, int hi):
         if code == ANCHOR_WORD_BOUND:
             return boundary
         return not boundary
+    if code == ANCHOR_WORD_START:
+        # Transition from non-word (or start of input) to word.
+        int prev = -1
+        if pos > lo:
+            prev = subject.byte_at(pos - 1) as int
+        int cur = -1
+        if pos < hi:
+            cur = subject.byte_at(pos) as int
+        return (not is_word_byte(prev)) and is_word_byte(cur)
+    if code == ANCHOR_WORD_END:
+        # Transition from word to non-word (or end of input).
+        int prev = -1
+        if pos > lo:
+            prev = subject.byte_at(pos - 1) as int
+        int cur = -1
+        if pos < hi:
+            cur = subject.byte_at(pos) as int
+        return is_word_byte(prev) and (not is_word_byte(cur))
+    if code == ANCHOR_WORD_START_HALF:
+        # Half-anchor: only the LEFT side must be non-word (or BOS).
+        # The right side is unconstrained.
+        int prev = -1
+        if pos > lo:
+            prev = subject.byte_at(pos - 1) as int
+        return not is_word_byte(prev)
+    if code == ANCHOR_WORD_END_HALF:
+        # Half-anchor: only the RIGHT side must be non-word (or EOS).
+        # The left side is unconstrained.
+        int cur = -1
+        if pos < hi:
+            cur = subject.byte_at(pos) as int
+        return not is_word_byte(cur)
     return false
 
 # add_thread walks ε-transitions (SPLIT/JMP/SAVE/ANCHOR) until reaching
