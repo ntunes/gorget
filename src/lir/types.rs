@@ -317,7 +317,74 @@ fn infer_inst_type(
         Inst::InlineC { dst, .. } => {
             if dst.is_some() { Some(LirType::I64) } else { None }
         }
+        // Item 7e Phase 2: typed collection constructor result.
+        //
+        // The instruction already carries typed `kind` + `elem_or_key` + `val`
+        // (the `ElemMeta`s populated at lowering by `parse_collection_ctor_info`
+        // and `elem_type_to_meta`). Lift those fields into a fully-typed
+        // `LirType::Resource { kind, params }` so downstream consumers
+        // (sort/sorted/unique dispatch, emit_collection_constructor, validation)
+        // read element / key / value types from the typed operand rather than
+        // re-parsing the mangled callee name.
+        //
+        // The mapping:
+        //   CollectionCtorKind::Vector / Deque        → ResourceKind::GorgetArray, [elem]
+        //   CollectionCtorKind::Set / HashSet         → ResourceKind::GorgetSet,   [elem]
+        //   CollectionCtorKind::Dict / HashMap        → ResourceKind::GorgetMap,   [key, val]
+        Inst::CollectionCtor { kind, elem_or_key, val, .. } => {
+            use crate::lir::{CollectionCtorKind, ResourceKind};
+            let resource_kind = match kind {
+                CollectionCtorKind::Vector | CollectionCtorKind::Deque => ResourceKind::GorgetArray,
+                CollectionCtorKind::Set    | CollectionCtorKind::HashSet => ResourceKind::GorgetSet,
+                CollectionCtorKind::Dict   | CollectionCtorKind::HashMap => ResourceKind::GorgetMap,
+            };
+            let mut params = Vec::with_capacity(2);
+            params.push(elem_meta_to_lir_type(elem_or_key, module));
+            if let Some(v) = val {
+                params.push(elem_meta_to_lir_type(v, module));
+            }
+            Some(LirType::Resource { kind: resource_kind, params })
+        }
         _ => None,
+    }
+}
+
+/// Convert an `ElemMeta` into the corresponding `LirType` operand.
+///
+/// Item 7e: writer-site helper invoked from `infer_inst_type` so the
+/// `Inst::CollectionCtor`'s typed `ElemMeta` fields lift into the
+/// parametric `LirType::Resource` form. UserType folds into a `Struct(sid)`
+/// — the elem-type is a user struct/enum, identified by its registered
+/// LIR StructId.
+fn elem_meta_to_lir_type(meta: &crate::lir::ElemMeta, module: &LirModule) -> LirType {
+    use crate::lir::{ElemMeta, ResourceKind};
+    match meta {
+        ElemMeta::Primitive(ty) => ty.clone(),
+        ElemMeta::Resource(kind) => {
+            // Build a Resource with the correct arity. For Phase 2 we
+            // cannot reach into the original GIR name from here, so we
+            // populate params with the kind's pointer-shaped placeholder
+            // (Ptr) — which is the right ABI placeholder for nested
+            // resources whose element type wasn't propagated at this
+            // depth. Downstream consumers that need the nested element
+            // type today still fall back to name parsing; closing that
+            // gap is item 7e Phase 4's consumer-migration work.
+            let arity = LirType::expected_resource_arity(*kind);
+            let params = vec![LirType::Ptr; arity];
+            LirType::Resource { kind: *kind, params }
+        }
+        ElemMeta::UserType(sid) => {
+            // Read the registered struct's ABI shape — if it's a runtime
+            // resource alias (Callable* aliased to GorgetClosure), prefer
+            // the alias's Resource form for consistency with the kind-
+            // routing axis.
+            if let Some(sd) = module.structs.get(sid.0 as usize) {
+                if sd.c_runtime_alias.as_deref() == Some("GorgetClosure") {
+                    return LirType::Resource { kind: ResourceKind::GorgetClosure, params: vec![] };
+                }
+            }
+            LirType::Struct(*sid)
+        }
     }
 }
 
