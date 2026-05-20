@@ -355,6 +355,16 @@ fn mangle_lir_type(ty: &LirType) -> String {
         LirType::PtrTo(sid) => format!("ptrTo{}", sid.0),
         LirType::FuncRef => "funcref".into(),
         LirType::Struct(sid) => format!("s{}", sid.0),
+        // Item 7e (Phase 1): mangle resource as kind + nested params so
+        // synthesized helper names disambiguate Vector[int] from Vector[Foo].
+        LirType::Resource { kind, params } => {
+            let mut out = format!("res{kind:?}");
+            for p in params {
+                out.push('_');
+                out.push_str(&mangle_lir_type(p));
+            }
+            out
+        }
     }
 }
 

@@ -117,19 +117,86 @@ pub enum LirType {
     // Aggregates (address-only — live in stack slots)
     Struct(StructId),
 
+    /// Resource type with parametric element / key / value types.
+    ///
+    /// Item 7e of the unified-resource-model plan: generalises the
+    /// `ElemMeta` shape from `Inst::CollectionCtor` (single construction
+    /// site) to operand types globally, so consumers read element / key /
+    /// value types from typed metadata instead of re-parsing mangled
+    /// callee-name strings.
+    ///
+    /// Per CLAUDE.md layering-discipline rule 3 ("one source of truth per
+    /// axis"), the SSoT for a resource type's element parameters must be
+    /// the type itself — not the monomorphized C symbol re-read at every
+    /// backend consumer site.
+    ///
+    /// Arity by `kind`:
+    /// - `GorgetArray` (Vector / Deque)        → 1 param: `[elem]`
+    /// - `GorgetSet`   (Set / HashSet)         → 1 param: `[elem]`
+    /// - `GorgetMap`   (Dict / HashMap)        → 2 params: `[key, val]`
+    /// - `RefCounted`  (Box/Shared/Weak/Mutex/Channel/RWLock/Guard…)
+    ///                                          → 1 param: `[inner]`
+    /// - `GorgetString` / `GorgetClosure`       → 0 params (no user-visible
+    ///                                          element type at the LIR level)
+    ///
+    /// ABI: pointer-shaped at the C/LLVM ABI (8 bytes, scalar). The
+    /// `params` field is metadata for lowering decisions, not part of the
+    /// run-time representation.
+    ///
+    /// `validate_module` checks the arity invariant per `kind`. Construction
+    /// happens at the canonical writer site `map_gir_type_with_structs`
+    /// (`src/lir/lower/mod.rs`) — never reconstructed downstream from a
+    /// mangled name.
+    Resource { kind: ResourceKind, params: Vec<LirType> },
+
     // Special
     Void,
 }
 
 impl LirType {
     /// True if this type can be an SSA value (fits in a register).
+    ///
+    /// Item 7e: `LirType::Resource` is scalar iff the kind is pointer-shaped
+    /// (currently `RefCounted` — Box/Shared/Weak/Mutex/Channel/RWLock/Guard).
+    /// The aggregate-shaped kinds (GorgetArray/Map/Set/String/Closure) live
+    /// in stack slots just like `Struct(_)`.
     pub fn is_scalar(&self) -> bool {
+        if let LirType::Resource { kind, .. } = self {
+            return matches!(kind, ResourceKind::RefCounted);
+        }
         !matches!(self, LirType::Struct(_) | LirType::Void)
     }
 
     /// True if this is an aggregate that must live in a stack slot.
     pub fn is_aggregate(&self) -> bool {
+        if let LirType::Resource { kind, .. } = self {
+            return !matches!(kind, ResourceKind::RefCounted);
+        }
         matches!(self, LirType::Struct(_))
+    }
+
+    /// Expected number of `params` for a `Resource` of this `kind` —
+    /// the arity invariant `validate_module` checks (item 7e).
+    pub fn expected_resource_arity(kind: ResourceKind) -> usize {
+        match kind {
+            ResourceKind::GorgetArray => 1,
+            ResourceKind::GorgetSet => 1,
+            ResourceKind::GorgetMap => 2,
+            ResourceKind::RefCounted => 1,
+            // No user-visible element type at the LIR level.
+            ResourceKind::GorgetString => 0,
+            ResourceKind::GorgetClosure => 0,
+        }
+    }
+
+    /// If this is `LirType::Resource`, return `(kind, params)`.
+    /// Typed accessor — never reconstruct element types from mangled names.
+    pub fn as_resource(&self) -> Option<(ResourceKind, &[LirType])> {
+        if let LirType::Resource { kind, params } = self {
+            Some((*kind, params.as_slice()))
+        } else {
+            None
+        }
     }
 
     /// True iff this is a `FuncRef` — a typed function reference distinct
@@ -158,9 +225,13 @@ impl LirType {
         matches!(self, LirType::F32 | LirType::F64)
     }
 
-    /// True if this is any pointer-shaped type (`Ptr`, `PtrTo`, or `FuncRef`).
-    /// All three lower to a single 8-byte register-sized pointer at the C/LLVM ABI.
+    /// True if this is any pointer-shaped type (`Ptr`, `PtrTo`, `FuncRef`, or
+    /// pointer-shaped `Resource`). All lower to a single 8-byte register-sized
+    /// pointer at the C/LLVM ABI.
     pub fn is_ptr(&self) -> bool {
+        if let LirType::Resource { kind, .. } = self {
+            return matches!(kind, ResourceKind::RefCounted);
+        }
         matches!(self, LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef)
     }
 
@@ -192,6 +263,18 @@ impl fmt::Display for LirType {
             LirType::PtrTo(id) => write!(f, "ptr.{}", id.0),
             LirType::FuncRef => write!(f, "funcref"),
             LirType::Struct(id) => write!(f, "{id}"),
+            LirType::Resource { kind, params } => {
+                write!(f, "resource.{kind:?}")?;
+                if !params.is_empty() {
+                    write!(f, "[")?;
+                    for (i, p) in params.iter().enumerate() {
+                        if i > 0 { write!(f, ",")?; }
+                        write!(f, "{p}")?;
+                    }
+                    write!(f, "]")?;
+                }
+                Ok(())
+            }
             LirType::Void => write!(f, "void"),
         }
     }

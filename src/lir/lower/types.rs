@@ -150,6 +150,14 @@ pub(super) fn lir_type_sizeof(ty: &LirType) -> usize {
         LirType::I64 | LirType::U64 | LirType::F64 => 8,
         LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef => 8,
         LirType::Struct(_) => 8, // conservative; struct sizeof varies
+        // Item 7e (Phase 1): resource sizes are fixed by C runtime ABI.
+        LirType::Resource { kind, .. } => match kind {
+            crate::lir::ResourceKind::GorgetString => 32,
+            crate::lir::ResourceKind::GorgetArray => 64,
+            crate::lir::ResourceKind::GorgetMap | crate::lir::ResourceKind::GorgetSet => 152,
+            crate::lir::ResourceKind::GorgetClosure => 16,
+            crate::lir::ResourceKind::RefCounted => 8,
+        },
         LirType::Void => 0,
     }
 }
@@ -489,6 +497,14 @@ pub fn c_sizeof_lir_type(ty: &LirType, structs: &[StructDef]) -> usize {
                 8
             }
         }
+        // Item 7e (Phase 1): resource sizes are fixed by C runtime ABI.
+        LirType::Resource { kind, .. } => match kind {
+            crate::lir::ResourceKind::GorgetString => 32,
+            crate::lir::ResourceKind::GorgetArray => 64,
+            crate::lir::ResourceKind::GorgetMap | crate::lir::ResourceKind::GorgetSet => 152,
+            crate::lir::ResourceKind::GorgetClosure => 16,
+            crate::lir::ResourceKind::RefCounted => 8,
+        },
         LirType::Void => 0,
     }
 }
@@ -520,6 +536,9 @@ pub fn c_alignof_lir_type(ty: &LirType, structs: &[StructDef]) -> usize {
                 8
             }
         }
+        // Item 7e (Phase 1): resource alignments match the C runtime ABI
+        // (pointer-aligned to 8 for every resource).
+        LirType::Resource { .. } => 8,
         LirType::Void => 1,
     }
 }

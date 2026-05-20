@@ -49,6 +49,13 @@ fn llvm_type(ty: &LirType) -> &'static str {
         LirType::F64 => "double",
         LirType::Bool => "i1",
         LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef => "ptr",
+        // Item 7e (Phase 1): Resource lowers to its runtime struct form.
+        // Scalar pointer-kind resources (RefCounted) lower to `ptr`; the
+        // aggregate-shaped ones flow through `llvm_type_full`.
+        LirType::Resource { kind, .. } => match kind {
+            crate::lir::ResourceKind::RefCounted => "ptr",
+            _ => unreachable!("non-pointer Resource — use llvm_type_full"),
+        },
         LirType::Struct(_) | LirType::Void => unreachable!("use llvm_type_full for these"),
     }
 }
@@ -66,6 +73,17 @@ fn llvm_type_full(ty: &LirType, snames: &HashMap<u32, String>) -> String {
             }
         }
         LirType::Void => "void".to_string(),
+        // Item 7e (Phase 1): Resource maps to a named LLVM struct
+        // (`%GorgetArray`, `%GorgetMap`, etc.) for aggregate-shaped resource
+        // kinds, and to `ptr` for the pointer-shaped ones (RefCounted).
+        LirType::Resource { kind, .. } => match kind {
+            crate::lir::ResourceKind::GorgetString => "%GorgetString".to_string(),
+            crate::lir::ResourceKind::GorgetArray => "%GorgetArray".to_string(),
+            crate::lir::ResourceKind::GorgetMap => "%GorgetMap".to_string(),
+            crate::lir::ResourceKind::GorgetSet => "%GorgetSet".to_string(),
+            crate::lir::ResourceKind::GorgetClosure => "%GorgetClosure".to_string(),
+            crate::lir::ResourceKind::RefCounted => "ptr".to_string(),
+        },
         other => llvm_type(other).to_string(),
     }
 }
@@ -759,6 +777,18 @@ fn sizeof_lir_type(ty: &LirType, structs: &[StructDef], snames: &HashMap<u32, St
                 8
             }
         }
+        // Item 7e (Phase 1): resource sizes are fixed by the C runtime
+        // ABI — defer to the runtime singleton size table.
+        LirType::Resource { kind, .. } => match kind {
+            crate::lir::ResourceKind::GorgetString => 32,
+            crate::lir::ResourceKind::GorgetArray => 64,
+            crate::lir::ResourceKind::GorgetMap => 152,
+            // GorgetSet aliases GorgetMap layout.
+            crate::lir::ResourceKind::GorgetSet => 152,
+            crate::lir::ResourceKind::GorgetClosure => 16,
+            // RefCounted handles are pointer-shaped.
+            crate::lir::ResourceKind::RefCounted => 8,
+        },
         LirType::Void => 0,
     }
 }
@@ -4667,6 +4697,9 @@ fn emit_inst(
                                     LirType::Void => 0,
                                     // Aggregate payload: compute actual size (must match LLVM struct layout)
                                     LirType::Struct(sid) => sizeof_lir_type(&LirType::Struct(*sid), &module.structs, snames),
+                                    // Item 7e (Phase 1): resource payloads route through the
+                                    // common sizeof for consistency with the surrounding ABI.
+                                    LirType::Resource { .. } => sizeof_lir_type(fty, &module.structs, snames),
                                 }).unwrap_or(8);
                                 let offset = 8 + ok_size; // tag(4) + pad to 8 + ok payload
                                 // Align error field to its own alignment (typically 8)

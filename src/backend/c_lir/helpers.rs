@@ -1034,6 +1034,18 @@ pub(super) fn c_type_named(ty: &LirType, struct_names: &HashMap<u32, String>) ->
             .get(&id.0)
             .cloned()
             .unwrap_or_else(|| format!("__lir_s{}", id.0)),
+        // Item 7e (Phase 1): Resource is ABI-equivalent to its runtime struct
+        // form. At this layer we render the C runtime struct name; the typed
+        // `params` field is consumed by lowering / consumer migration paths,
+        // not by this name-formatter.
+        LirType::Resource { kind, .. } => match kind {
+            crate::lir::ResourceKind::GorgetString => "GorgetString".into(),
+            crate::lir::ResourceKind::GorgetArray => "GorgetArray".into(),
+            crate::lir::ResourceKind::GorgetMap => "GorgetMap".into(),
+            crate::lir::ResourceKind::GorgetSet => "GorgetSet".into(),
+            crate::lir::ResourceKind::GorgetClosure => "GorgetClosure".into(),
+            crate::lir::ResourceKind::RefCounted => "void*".into(),
+        },
         LirType::Void => "void".into(),
     }
 }

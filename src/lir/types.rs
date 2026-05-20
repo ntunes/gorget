@@ -203,6 +203,13 @@ pub fn scalar_size(ty: &LirType) -> Option<u32> {
         LirType::I32 | LirType::U32 | LirType::F32 => Some(4),
         LirType::I64 | LirType::U64 | LirType::F64 | LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef => Some(8),
         LirType::Struct(_) | LirType::Void => None,
+        // Item 7e (Phase 1): only `RefCounted` resources are scalar
+        // (pointer-shaped); the aggregate ones (GorgetArray/Map/Set/String/
+        // Closure) are address-only just like `Struct(_)`.
+        LirType::Resource { kind, .. } => match kind {
+            crate::lir::ResourceKind::RefCounted => Some(8),
+            _ => None,
+        },
     }
 }
 
