@@ -1141,25 +1141,32 @@ bool is_word_byte(int b):
     return false
 
 bool anchor_match(int code, String subject, int pos):
-    int n = subject.byte_len()
+    return anchor_match_bounded(code, subject, pos, 0, subject.byte_len())
+
+# Bounded anchor evaluation: `lo` is the logical start-of-input
+# (used by \A, ^ and word boundary left-neighbour); `hi` is the
+# logical end-of-input (used by \z, $ and word boundary
+# right-neighbour). Bytes outside [lo, hi) are treated as if they
+# don't exist — matching rust-regex / RE2 bounds semantics.
+bool anchor_match_bounded(int code, String subject, int pos, int lo, int hi):
     if code == ANCHOR_START_TEXT:
-        return pos == 0
+        return pos == lo
     if code == ANCHOR_END_TEXT:
-        return pos == n
+        return pos == hi
     if code == ANCHOR_START_LINE:
-        if pos == 0:
+        if pos == lo:
             return true
         return subject.byte_at(pos - 1) as int == b'\n' as int
     if code == ANCHOR_END_LINE:
-        if pos == n:
+        if pos == hi:
             return true
         return subject.byte_at(pos) as int == b'\n' as int
     if code == ANCHOR_WORD_BOUND or code == ANCHOR_NOT_WORD_BOUND:
         int prev = -1
-        if pos > 0:
+        if pos > lo:
             prev = subject.byte_at(pos - 1) as int
         int cur = -1
-        if pos < n:
+        if pos < hi:
             cur = subject.byte_at(pos) as int
         bool pw = is_word_byte(prev)
         bool cw = is_word_byte(cur)
@@ -1172,8 +1179,10 @@ bool anchor_match(int code, String subject, int pos):
 # add_thread walks ε-transitions (SPLIT/JMP/SAVE/ANCHOR) until reaching
 # a byte-consuming op (CHAR/CLASS/ANYBYTE) or MATCH. It dedupes by pc
 # using the `seen` bitmap to avoid worst-case exponential blowup.
+# `lo`/`hi` are the logical input bounds used for anchor evaluation.
 void add_thread(Program prog, Vector[VmThread] &threads, Vector[bool] &seen,
-                int pc, Vector[int] caps, String subject, int pos):
+                int pc, Vector[int] caps, String subject, int pos,
+                int lo, int hi):
     if pc < 0 or pc >= prog.insts.len():
         return
     if seen[pc]:
@@ -1181,27 +1190,35 @@ void add_thread(Program prog, Vector[VmThread] &threads, Vector[bool] &seen,
     seen[pc] = true
     Inst inst = prog.insts[pc].clone()
     if inst.op == OP_JMP:
-        add_thread(prog, &threads, &seen, inst.a, caps, subject, pos)
+        add_thread(prog, &threads, &seen, inst.a, caps, subject, pos, lo, hi)
         return
     if inst.op == OP_SPLIT:
-        add_thread(prog, &threads, &seen, inst.a, caps.clone(), subject, pos)
-        add_thread(prog, &threads, &seen, inst.b, caps, subject, pos)
+        add_thread(prog, &threads, &seen, inst.a, caps.clone(), subject, pos, lo, hi)
+        add_thread(prog, &threads, &seen, inst.b, caps, subject, pos, lo, hi)
         return
     if inst.op == OP_SAVE:
         Vector[int] new_caps = caps.clone()
         new_caps[inst.a] = pos
-        add_thread(prog, &threads, &seen, pc + 1, new_caps, subject, pos)
+        add_thread(prog, &threads, &seen, pc + 1, new_caps, subject, pos, lo, hi)
         return
     if inst.op == OP_ANCHOR:
-        if anchor_match(inst.a, subject, pos):
-            add_thread(prog, &threads, &seen, pc + 1, caps, subject, pos)
+        if anchor_match_bounded(inst.a, subject, pos, lo, hi):
+            add_thread(prog, &threads, &seen, pc + 1, caps, subject, pos, lo, hi)
         return
     threads.push(VmThread(pc, !caps))
 
 # Core VM search: returns capture spans (length 2*num_captures, -1 = unset)
-# or empty vector on no match.
+# or empty vector on no match. Thin wrapper over the bounded form
+# using [0, subject.byte_len()) as the logical input range; searching
+# begins at `start` but anchors still see the full subject.
 Vector[int] _vm_search(Program prog, String subject, int start, bool anchored):
-    int n = subject.byte_len()
+    return _vm_search_bounded(prog, subject, 0, subject.byte_len(), start, anchored)
+
+# Bounded NFA search confined to `subject[lo..hi)`. Anchors `\A`, `^`,
+# `\b` treat `lo` as the start of input; `\z`, `$`, `\b` treat `hi`
+# as the end of input. Matches must lie wholly within [lo, hi).
+# Searching starts at `start` (must satisfy `lo <= start <= hi`).
+Vector[int] _vm_search_bounded(Program prog, String subject, int lo, int hi, int start, bool anchored):
     int ninsts = prog.insts.len()
     Vector[VmThread] cur = Vector[VmThread]()
     Vector[VmThread] nxt = Vector[VmThread]()
@@ -1215,7 +1232,7 @@ Vector[int] _vm_search(Program prog, String subject, int start, bool anchored):
     Vector[int] best = Vector[int]()
     bool found = false
     int pos = start
-    while pos <= n:
+    while pos <= hi:
         # If we have no matched-so-far, seed pc=0 at this position
         # (unless anchored — then only seed at start).
         bool can_seed = (not found) and (not anchored or pos == start)
@@ -1225,7 +1242,7 @@ Vector[int] _vm_search(Program prog, String subject, int start, bool anchored):
             while ic < prog.num_captures * 2:
                 init.push(-1)
                 ic = ic + 1
-            add_thread(prog, &cur, &seen_cur, 0, init, subject, pos)
+            add_thread(prog, &cur, &seen_cur, 0, init, subject, pos, lo, hi)
         # Process current threads.
         int ti = 0
         while ti < cur.len():
@@ -1242,17 +1259,17 @@ Vector[int] _vm_search(Program prog, String subject, int start, bool anchored):
                 found = true
                 break
             elif inst.op == OP_CHAR:
-                if pos < n and subject.byte_at(pos) as int == inst.a:
-                    add_thread(prog, &nxt, &seen_nxt, th.pc + 1, th.caps.clone(), subject, pos + 1)
+                if pos < hi and subject.byte_at(pos) as int == inst.a:
+                    add_thread(prog, &nxt, &seen_nxt, th.pc + 1, th.caps.clone(), subject, pos + 1, lo, hi)
             elif inst.op == OP_CLASS:
-                if pos < n:
+                if pos < hi:
                     int b = subject.byte_at(pos) as int
                     CharClass cc = prog.classes[inst.a].clone()
                     if class_match(cc, b):
-                        add_thread(prog, &nxt, &seen_nxt, th.pc + 1, th.caps.clone(), subject, pos + 1)
+                        add_thread(prog, &nxt, &seen_nxt, th.pc + 1, th.caps.clone(), subject, pos + 1, lo, hi)
             elif inst.op == OP_ANYBYTE:
-                if pos < n and subject.byte_at(pos) as int != b'\n' as int:
-                    add_thread(prog, &nxt, &seen_nxt, th.pc + 1, th.caps.clone(), subject, pos + 1)
+                if pos < hi and subject.byte_at(pos) as int != b'\n' as int:
+                    add_thread(prog, &nxt, &seen_nxt, th.pc + 1, th.caps.clone(), subject, pos + 1, lo, hi)
             ti = ti + 1
         # Swap cur/nxt, reset seen bitmaps.
         Vector[VmThread] swapped = nxt.clone()
@@ -1364,6 +1381,69 @@ equip Regex:
             return None
         Vector[String] names = self.prog.cap_names.clone()
         return Some(Match(subject.clone(), !caps, !names))
+
+    # Find within the slice subject[start..end). Anchors `\A`, `^`,
+    # `\b` treat `start` as the start of input; `\z`, `$`, `\b` treat
+    # `end` as the end of input. Returns Some only if a match exists
+    # wholly within [start, end). Equivalent to (but cheaper than)
+    # subject[start..end] sliced ahead of time, and preserves absolute
+    # byte offsets in the returned Match.
+    Option[Match] find_at_bounds(self, String subject, int start, int end):
+        int n = subject.byte_len()
+        int lo = start
+        int hi = end
+        if lo < 0:
+            lo = 0
+        if hi > n:
+            hi = n
+        if lo > hi:
+            return None
+        Vector[int] caps = _vm_search_bounded(self.prog, subject, lo, hi, lo, false)
+        if caps.len() == 0:
+            return None
+        Vector[String] names = self.prog.cap_names.clone()
+        return Some(Match(subject.clone(), !caps, !names))
+
+    # Iter form of find_at_bounds. Iteration is confined to
+    # [start, end); each successive search resumes from the previous
+    # match's end, never past `end`. Empty-match advancement follows
+    # the same UTF-8-codepoint rule as find_all.
+    Vector[Match] find_all_bounds(self, String subject, int start, int end):
+        Vector[Match] out = Vector[Match]()
+        int n = subject.byte_len()
+        int lo = start
+        int hi = end
+        if lo < 0:
+            lo = 0
+        if hi > n:
+            hi = n
+        if lo > hi:
+            return out
+        int pos = lo
+        int prev_match_end = -1
+        while pos <= hi:
+            Vector[int] caps = _vm_search_bounded(self.prog, subject, lo, hi, pos, false)
+            if caps.len() == 0:
+                break
+            int s = caps[0]
+            int e = caps[1]
+            if e == s and s == prev_match_end:
+                # Spurious empty match immediately after a non-empty
+                # match ending here — skip and try again one codepoint later.
+                pos = codepoint_next(subject, pos)
+                continue
+            Vector[String] names = self.prog.cap_names.clone()
+            Vector[int] caps_clone = caps.clone()
+            out.push(Match(subject.clone(), !caps_clone, !names))
+            if e == s:
+                # Empty match — advance by one codepoint to avoid an
+                # infinite loop and to never land mid-codepoint.
+                pos = codepoint_next(subject, e)
+                prev_match_end = -1
+            else:
+                pos = e
+                prev_match_end = e
+        return out
 
     Option[Match] fullmatch(self, String subject):
         Vector[int] caps = _vm_search(self.prog, subject, 0, true)
