@@ -6542,10 +6542,17 @@ static inline GorgetString gorget_file_read_all(GorgetFile* f) {
     fseek(f->handle, 0, SEEK_END);
     long len = ftell(f->handle);
     fseek(f->handle, 0, SEEK_SET);
-    char* buf = (char*)GORGET_ALLOC(len + 1);
-    fread(buf, 1, len, f->handle);
-    buf[len] = '\0';
-    return gorget_string_adopt(buf);
+    if (len <= 0) return GORGET_EMPTY_STR;
+    char* buf = (char*)GORGET_ALLOC((size_t)len + 1);
+    size_t n = fread(buf, 1, (size_t)len, f->handle);
+    buf[n] = '\0';
+    // Use fread's reported byte count directly — going through strlen would
+    // silently truncate at the first embedded NUL byte (e.g., UTF-16 source,
+    // binary blobs read as text). Mirrors gorget_bytes_to_str's NUL-preserving
+    // shape (commit a6b77b2b).
+    Str result = str_alloc_copy(buf, n, __gorget_current_alloc);
+    GORGET_FREE(buf, (size_t)len + 1);
+    return result;
 }
 
 static inline void gorget_file_write(GorgetFile* f, const char* s) {
