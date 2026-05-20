@@ -127,6 +127,14 @@ equip RxParser:
                     self.flags = self.flags | set_flags
                 else:
                     self.pos = saved
+            else:
+                # Flag-prefix scan didn't find any flags; restore so normal
+                # group parsing sees the `(?...` from the start. Without
+                # this, an empty body like `(?)` leaves pos pointing past
+                # `(?` at `)`, and parse_root later reports the wrong
+                # "unmatched )" error instead of "unrecognized group
+                # syntax".
+                self.pos = saved
         RxNode root = self.parse_alt()
         if not self.failed() and not self.at_end():
             int c = self.peek()
@@ -284,7 +292,14 @@ equip RxParser:
         # Inspect (?: , (?P<name> , and detect unsupported (?= (?! (?<= (?<!
         if self.peek() == b'?' as int:
             int la = self.peek_at(1)
-            if la == b':' as int:
+            if la == b')' as int:
+                # `(?)` — empty group introducer. RE2 / Rust / Go reject
+                # this with an "unrecognized group syntax" error; an `?`
+                # after `(` must be followed by a flag letter, `:`, or
+                # `P<name>`.
+                self.fail("unrecognized group syntax")
+                return Empty()
+            elif la == b':' as int:
                 self.advance(); self.advance()
                 capture = false
             elif la == b'P' as int and self.peek_at(2) == b'<' as int:
