@@ -64,30 +64,61 @@ equip TomlParser:
 
     void skip_ws_and_newlines(&self):
         while self.pos < self.source.byte_len():
-            String ch = self.source.char_at(self.pos)
-            if ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r':
+            byte b = self.source.byte_at(self.pos)
+            if b == b' ' or b == b'\t' or b == b'\n':
                 self.pos = self.pos + 1
-            elif ch == '#':
+            elif b == b'\r':
+                # CR only valid as part of \r\n.
+                if self.pos + 1 < self.source.byte_len() and self.source.byte_at(self.pos + 1) == b'\n':
+                    self.pos = self.pos + 2
+                else:
+                    self.fail("bare carriage return not allowed")
+                    return
+            elif b == b'#':
                 self.skip_comment()
             else:
                 return
 
     void skip_comment(&self):
-        while self.pos < self.source.byte_len() and self.source.char_at(self.pos) != '\n':
+        # TOML 1.0 §3: comments forbid control chars (0x00-0x08, 0x0A-0x1F
+        # except tab 0x09, and 0x7F).
+        while self.pos < self.source.byte_len():
+            byte b = self.source.byte_at(self.pos)
+            if b == b'\n':
+                return
+            if b == b'\r':
+                # CR ends the comment only when followed by LF.
+                if self.pos + 1 < self.source.byte_len() and self.source.byte_at(self.pos + 1) == b'\n':
+                    return
+                self.fail("bare carriage return not allowed in comment")
+                return
+            if is_basic_string_control_byte(b):
+                self.fail("control character not allowed in comment")
+                return
             self.pos = self.pos + 1
 
     void skip_to_newline(&self):
         self.skip_ws()
         if self.pos < self.source.byte_len():
-            String ch = self.source.char_at(self.pos)
-            if ch == '#':
+            byte b = self.source.byte_at(self.pos)
+            if b == b'#':
                 self.skip_comment()
-            if self.pos < self.source.byte_len() and self.source.char_at(self.pos) == '\n':
-                self.pos = self.pos + 1
-            elif self.pos < self.source.byte_len() and self.source.char_at(self.pos) == '\r':
-                self.pos = self.pos + 1
-                if self.pos < self.source.byte_len() and self.source.char_at(self.pos) == '\n':
+                if self.failed():
+                    return
+                # After skip_comment, we land at \n or \r\n (or EOF).
+                if self.pos < self.source.byte_len() and self.source.byte_at(self.pos) == b'\r':
+                    if self.pos + 1 < self.source.byte_len() and self.source.byte_at(self.pos + 1) == b'\n':
+                        self.pos = self.pos + 2
+                if self.pos < self.source.byte_len() and self.source.byte_at(self.pos) == b'\n':
                     self.pos = self.pos + 1
+                return
+            if b == b'\n':
+                self.pos = self.pos + 1
+            elif b == b'\r':
+                if self.pos + 1 < self.source.byte_len() and self.source.byte_at(self.pos + 1) == b'\n':
+                    self.pos = self.pos + 2
+                else:
+                    self.fail("bare carriage return not allowed")
 
     # ── Key parsing ─────────────────────────────────────────
 
@@ -127,8 +158,13 @@ equip TomlParser:
         if self.failed():
             return parts
         parts.push(!first_part)
-        while self.pos < self.source.byte_len() and self.source.char_at(self.pos) == '.':
+        while true:
+            # Allow whitespace around the dot: a . b = 1
+            self.skip_ws()
+            if self.pos >= self.source.byte_len() or self.source.byte_at(self.pos) != b'.':
+                break
             self.pos = self.pos + 1
+            self.skip_ws()
             String next_part = self.parse_key_part()
             if self.failed():
                 return parts
@@ -146,6 +182,12 @@ equip TomlParser:
             return self.parse_ml_basic_string()
         String toml_result = ""
         while self.pos < self.source.byte_len():
+            byte b = self.source.byte_at(self.pos)
+            # TOML 1.0 §5.1: basic strings disallow unescaped control chars
+            # 0x00-0x08, 0x0A-0x1F, 0x7F. Tab (0x09) is permitted.
+            if is_basic_string_control_byte(b):
+                self.fail("control character not allowed in basic string")
+                return ""
             String ch = self.source.char_at(self.pos)
             if ch == '"':
                 self.pos = self.pos + 1
@@ -168,25 +210,79 @@ equip TomlParser:
         while self.pos < self.source.byte_len():
             if self.pos + 2 < self.source.byte_len() and self.source.char_at(self.pos) == '"' and self.source.char_at(self.pos + 1) == '"' and self.source.char_at(self.pos + 2) == '"':
                 self.pos = self.pos + 3
+                # Allow up to two trailing " to be consumed as content
+                # (per spec, """""" closes after seeing the 3rd ").
+                if self.pos < self.source.byte_len() and self.source.byte_at(self.pos) == b'"':
+                    toml_result = toml_result + "\""
+                    self.pos = self.pos + 1
+                    if self.pos < self.source.byte_len() and self.source.byte_at(self.pos) == b'"':
+                        toml_result = toml_result + "\""
+                        self.pos = self.pos + 1
                 return toml_result
+            byte b = self.source.byte_at(self.pos)
+            # Reject control chars except \t, \n, \r (which is only valid as
+            # part of \r\n).
+            if b == b'\r':
+                if self.pos + 1 >= self.source.byte_len() or self.source.byte_at(self.pos + 1) != b'\n':
+                    self.fail("bare carriage return not allowed in multi-line basic string")
+                    return ""
+            elif is_ml_basic_control_byte(b):
+                self.fail("control character not allowed in multi-line basic string")
+                return ""
             String ch = self.source.char_at(self.pos)
             if ch == '\\':
-                self.pos = self.pos + 1
-                if self.pos < self.source.byte_len():
-                    String next_ch = self.source.char_at(self.pos)
-                    if next_ch == '\n' or next_ch == '\r':
-                        self.skip_ws_and_newlines()
-                    else:
-                        self.pos = self.pos - 1
-                        toml_result = toml_result + self.parse_escape()
+                # Line continuation: backslash followed by optional whitespace
+                # then newline swallows the newline and subsequent leading
+                # whitespace (TOML 1.0 §5.4).
+                if self.is_line_continuation(self.pos):
+                    self.pos = self.pos + 1  # consume backslash
+                    self.skip_line_cont_ws()
                 else:
-                    self.fail("unterminated escape in multi-line string")
-                    return ""
+                    toml_result = toml_result + self.parse_escape()
             else:
                 toml_result = toml_result + ch
                 self.pos = self.pos + 1
         self.fail("unterminated multi-line basic string")
         return ""
+
+    # True iff source[p] is a '\\' followed (after only spaces/tabs) by a newline.
+    bool is_line_continuation(self, int p):
+        if p >= self.source.byte_len() or self.source.byte_at(p) != b'\\':
+            return false
+        int q = p + 1
+        while q < self.source.byte_len():
+            byte b = self.source.byte_at(q)
+            if b == b' ' or b == b'\t':
+                q = q + 1
+            else:
+                break
+        if q >= self.source.byte_len():
+            return false
+        byte nb = self.source.byte_at(q)
+        return nb == b'\n' or nb == b'\r'
+
+    # Consume whitespace (spaces, tabs, newlines) after a \-line-continuation.
+    # Skips one or more newlines and any subsequent leading whitespace.
+    void skip_line_cont_ws(&self):
+        # First skip up to the newline.
+        while self.pos < self.source.byte_len():
+            byte b = self.source.byte_at(self.pos)
+            if b == b' ' or b == b'\t':
+                self.pos = self.pos + 1
+            else:
+                break
+        # Consume newline.
+        if self.pos < self.source.byte_len() and self.source.byte_at(self.pos) == b'\r':
+            self.pos = self.pos + 1
+        if self.pos < self.source.byte_len() and self.source.byte_at(self.pos) == b'\n':
+            self.pos = self.pos + 1
+        # Then skip whitespace AND newlines until the next non-ws char.
+        while self.pos < self.source.byte_len():
+            byte b = self.source.byte_at(self.pos)
+            if b == b' ' or b == b'\t' or b == b'\n' or b == b'\r':
+                self.pos = self.pos + 1
+            else:
+                break
 
     String parse_escape(&self):
         self.pos = self.pos + 1
@@ -244,6 +340,12 @@ equip TomlParser:
             return self.parse_ml_literal_string()
         String toml_result = ""
         while self.pos < self.source.byte_len():
+            byte b = self.source.byte_at(self.pos)
+            # TOML 1.0 §5.2: literal strings disallow unescaped control chars
+            # 0x00-0x08, 0x0A-0x1F, 0x7F. Tab (0x09) is permitted.
+            if is_basic_string_control_byte(b):
+                self.fail("control character not allowed in literal string")
+                return ""
             String ch = self.source.char_at(self.pos)
             if ch == '\'':
                 self.pos = self.pos + 1
@@ -262,7 +364,25 @@ equip TomlParser:
         while self.pos < self.source.byte_len():
             if self.pos + 2 < self.source.byte_len() and self.source.char_at(self.pos) == '\'' and self.source.char_at(self.pos + 1) == '\'' and self.source.char_at(self.pos + 2) == '\'':
                 self.pos = self.pos + 3
+                # Allow up to two trailing ' as content (per spec, ''''''
+                # closes after the 3rd ').
+                if self.pos < self.source.byte_len() and self.source.byte_at(self.pos) == b'\'':
+                    toml_result = toml_result + "'"
+                    self.pos = self.pos + 1
+                    if self.pos < self.source.byte_len() and self.source.byte_at(self.pos) == b'\'':
+                        toml_result = toml_result + "'"
+                        self.pos = self.pos + 1
                 return toml_result
+            byte b = self.source.byte_at(self.pos)
+            # Reject control chars except \t, \n, \r (which is only valid as
+            # part of \r\n).
+            if b == b'\r':
+                if self.pos + 1 >= self.source.byte_len() or self.source.byte_at(self.pos + 1) != b'\n':
+                    self.fail("bare carriage return not allowed in multi-line literal string")
+                    return ""
+            elif is_ml_basic_control_byte(b):
+                self.fail("control character not allowed in multi-line literal string")
+                return ""
             toml_result = toml_result + self.source.char_at(self.pos)
             self.pos = self.pos + 1
         self.fail("unterminated multi-line literal string")
@@ -771,8 +891,16 @@ equip TomlParser:
             elif ch == '[':
                 self.parse_table_header()
                 self.skip_ws_and_newlines()
-            elif ch == '\n' or ch == '\r':
+            elif ch == '\n':
                 self.pos = self.pos + 1
+            elif ch == '\r':
+                # Bare carriage return is forbidden at the document level —
+                # CR is only legal as the first half of a \r\n pair.
+                if self.pos + 1 < self.source.byte_len() and self.source.byte_at(self.pos + 1) == b'\n':
+                    self.pos = self.pos + 2
+                else:
+                    self.fail("bare carriage return not allowed")
+                    return
             else:
                 Vector[String] kv_key = self.parse_key()
                 if self.failed():
@@ -827,6 +955,35 @@ private TomlValue wrap_dotted(Vector[String] key_parts, int from_idx, TomlValue 
     Dict[String, TomlValue] outer = Dict[String, TomlValue]()
     outer.put(key_parts.get(from_idx).unwrap(), inner)
     return Tbl(outer)
+
+# Control bytes forbidden in single-line basic / literal strings AND in
+# comments: 0x00-0x08, 0x0B-0x1F, 0x7F. (Tab 0x09 is permitted; LF 0x0A
+# ends the construct so its presence isn't a control-char issue per se.)
+private bool is_basic_string_control_byte(byte b):
+    if b == b'\t':
+        return false
+    if b <= 0x08 as byte:
+        return true
+    if b >= 0x0a as byte and b <= 0x1f as byte:
+        return true
+    if b == 0x7f as byte:
+        return true
+    return false
+
+# Control bytes forbidden in multi-line basic / literal strings: same set
+# as above, but LF (0x0A) is allowed (it's a literal newline in ML strings).
+# CR (0x0D) is handled separately by the caller because it's allowed only
+# as part of \r\n.
+private bool is_ml_basic_control_byte(byte b):
+    if b == b'\t' or b == b'\n':
+        return false
+    if b <= 0x08 as byte:
+        return true
+    if b >= 0x0b as byte and b <= 0x1f as byte:
+        return true
+    if b == 0x7f as byte:
+        return true
+    return false
 
 private bool valid_date(int y, int m, int d):
     if y < 1 or y > 9999:
