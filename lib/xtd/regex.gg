@@ -1118,20 +1118,34 @@ equip Regex:
         Vector[Match] out = Vector[Match]()
         int pos = 0
         int n = subject.byte_len()
+        # After a non-empty match ending at byte `prev_end`, the next
+        # iteration searches from `prev_end`. If that iteration returns
+        # an empty match starting at `prev_end`, it is spurious (the
+        # non-empty match already accounted for that position) and must
+        # be discarded — advance by one byte and retry. Matches RE2 /
+        # rust-regex / Go semantics.
+        int prev_match_end = -1
         while pos <= n:
             Vector[int] caps = _vm_search(self.prog, subject, pos, false)
             if caps.len() == 0:
                 break
             int s = caps[0]
             int e = caps[1]
+            if e == s and s == prev_match_end:
+                # Spurious empty match immediately after a non-empty
+                # match ending here — skip and try again one byte later.
+                pos = pos + 1
+                continue
             Vector[String] names = self.prog.cap_names.clone()
             Vector[int] caps_clone = caps.clone()
             out.push(Match(subject.clone(), !caps_clone, !names))
             if e == s:
                 # Empty match — advance by 1 to avoid infinite loop.
                 pos = e + 1
+                prev_match_end = -1
             else:
                 pos = e
+                prev_match_end = e
         return out
 
     # Anchored iteration: each successive match must begin where the
@@ -1142,20 +1156,26 @@ equip Regex:
         Vector[Match] out = Vector[Match]()
         int pos = 0
         int n = subject.byte_len()
+        int prev_match_end = -1
         while pos <= n:
             Vector[int] caps = _vm_search(self.prog, subject, pos, true)
             if caps.len() == 0:
                 break
             int s = caps[0]
             int e = caps[1]
+            if e == s and s == prev_match_end:
+                pos = pos + 1
+                continue
             Vector[String] names = self.prog.cap_names.clone()
             Vector[int] caps_clone = caps.clone()
             out.push(Match(subject.clone(), !caps_clone, !names))
             if e == s:
                 # Empty match — advance by 1 to avoid infinite loop.
                 pos = e + 1
+                prev_match_end = -1
             else:
                 pos = e
+                prev_match_end = e
         return out
 
     String replace(self, String subject, String replacement):
@@ -1169,6 +1189,8 @@ equip Regex:
         int pos = 0
         int n = subject.byte_len()
         int count = 0
+        # See find_all for the prev_match_end rationale.
+        int prev_match_end = -1
         while pos <= n:
             if limit >= 0 and count >= limit:
                 break
@@ -1177,6 +1199,13 @@ equip Regex:
                 break
             int s = caps[0]
             int e = caps[1]
+            if e == s and s == prev_match_end:
+                # Spurious empty match right after a non-empty match —
+                # skip without producing a replacement.
+                if pos < n:
+                    out = out + subject.byte_slice(pos, pos + 1)
+                pos = pos + 1
+                continue
             out = out + subject.byte_slice(pos, s)
             out = out + self._expand_replacement(replacement, caps, subject)
             count = count + 1
@@ -1187,8 +1216,10 @@ equip Regex:
                     pos = e + 1
                 else:
                     pos = e + 1
+                prev_match_end = -1
             else:
                 pos = e
+                prev_match_end = e
         if pos < n:
             out = out + subject.byte_slice(pos, n)
         elif pos == n:
@@ -1243,6 +1274,8 @@ equip Regex:
         int pos = 0
         int n = subject.byte_len()
         int count = 0
+        # See find_all for the prev_match_end rationale.
+        int prev_match_end = -1
         while pos <= n:
             if limit > 0 and count + 1 >= limit:
                 break
@@ -1251,6 +1284,11 @@ equip Regex:
                 break
             int s = caps[0]
             int e = caps[1]
+            if e == s and s == prev_match_end:
+                # Spurious empty match right after a non-empty match —
+                # skip; don't produce a zero-width split here.
+                pos = pos + 1
+                continue
             String piece = subject.byte_slice(pos, s)
             out.push(piece)
             count = count + 1
@@ -1259,8 +1297,10 @@ equip Regex:
                     pos = e + 1
                 else:
                     break
+                prev_match_end = -1
             else:
                 pos = e
+                prev_match_end = e
         String last_piece = subject.byte_slice(pos, n)
         out.push(last_piece)
         return out
