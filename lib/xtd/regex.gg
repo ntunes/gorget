@@ -758,6 +758,22 @@ equip Compiler:
             k = k + 1
 
     void compile_star(&self, RxNode inner, bool greedy):
+        # If the body can match the empty string, the standard Thompson
+        # `L1: SPLIT body, exit ; body ; JMP L1` produces an incorrect
+        # preference order. The empty-body iteration walks back to L1 and
+        # the per-step `seen` dedupe kills it before it can reach the
+        # exit, so the only path that ever reaches MATCH is the one that
+        # took a non-empty arm — even though the higher-priority empty
+        # path should have won. Mirroring rust-regex (see
+        # https://github.com/rust-lang/regex/issues/779), we compile such
+        # a Star as `(R+)?` instead: the question-SPLIT outside the
+        # plus-SPLIT shares preference order with the loop-back but lives
+        # at a distinct pc, so the empty path's loop-back hits the
+        # plus-SPLIT (a NEW pc) and follows its exit branch to MATCH at
+        # zero width.
+        if body_can_match_empty(inner.clone()):
+            self.compile_star_emptyable(inner, greedy)
+            return
         # L1: split L2, L3 (greedy) or split L3, L2 (non-greedy)
         #     <inner> ; jmp L1 ; L3:
         int l1 = self.here()
@@ -772,6 +788,31 @@ equip Compiler:
         else:
             self.patch(sp, 0, l3)
             self.patch(sp, 1, l2)
+
+    # Compile `R*` as `(R+)?` for bodies that can match empty. The two
+    # SPLITs (question + plus) live at distinct pcs so the body's empty
+    # path can fall through the plus-SPLIT's exit branch (the loop-back
+    # branch is dedup'd by `seen`), and the resulting MATCH thread has
+    # priority over the body's non-empty arm because epsilon expansion
+    # explores `question -> body -> ... -> plus -> exit` before the
+    # body's char-arm push (DFS order in add_thread mirrors rust-regex's
+    # stack-based closure walk).
+    void compile_star_emptyable(&self, RxNode inner, bool greedy):
+        int q = self.emit(OP_SPLIT, 0, 0)
+        int body_start = self.here()
+        self.compile_node(inner)
+        int p = self.emit(OP_SPLIT, 0, 0)
+        int exit = self.here()
+        if greedy:
+            self.patch(q, 0, body_start)
+            self.patch(q, 1, exit)
+            self.patch(p, 0, body_start)
+            self.patch(p, 1, exit)
+        else:
+            self.patch(q, 0, exit)
+            self.patch(q, 1, body_start)
+            self.patch(p, 0, exit)
+            self.patch(p, 1, body_start)
 
     void compile_plus(&self, RxNode inner, bool greedy):
         # L1: <inner> ; split L1, L3 (greedy) or split L3, L1 (non-greedy)
@@ -818,6 +859,51 @@ equip Compiler:
             k = k + 1
 
 # ──────────── helpers used by the compiler ────────────
+
+# Conservative predicate: does this AST node admit a zero-width match?
+# Used by `compile_star` to choose between the standard Thompson layout
+# and the rust-regex (R+)? layout for empty-bodied stars. Conservative
+# in the sense that returning `true` for things that don't actually
+# match empty merely wastes a few extra split instructions — it is
+# never incorrect — while a false negative would re-introduce the bug.
+bool body_can_match_empty(RxNode node):
+    match node:
+        case Empty():
+            return true
+        case Literal(_):
+            return false
+        case AnyByte():
+            return false
+        case Class(_):
+            return false
+        case Anchor(_):
+            return true
+        case Concat(parts):
+            int i = 0
+            while i < parts.len():
+                if not body_can_match_empty(parts[i].clone()):
+                    return false
+                i = i + 1
+            return true
+        case Alt(alts):
+            int i = 0
+            while i < alts.len():
+                if body_can_match_empty(alts[i].clone()):
+                    return true
+                i = i + 1
+            return false
+        case Star(_, _):
+            return true
+        case Question(_, _):
+            return true
+        case Plus(inner, _):
+            return body_can_match_empty(*inner)
+        case Repeat(inner, mn, _, _):
+            if mn == 0:
+                return true
+            return body_can_match_empty(*inner)
+        case Group(_, _, inner):
+            return body_can_match_empty(*inner)
 
 bool is_ascii_letter(int b):
     return (b >= b'A' as int and b <= b'Z' as int) or (b >= b'a' as int and b <= b'z' as int)
