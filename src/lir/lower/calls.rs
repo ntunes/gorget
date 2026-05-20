@@ -204,12 +204,24 @@ pub(super) fn map_monomorphized_to_runtime_with_table(
 }
 
 pub(super) fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
+    // Family classification reads from `compiler/data/resources.gg`'s typed
+    // `method_prefix` field (per layering-discipline rule 2 — no string-prefix
+    // dispatch at the read site). The within-arm method-name dispatch
+    // (constructor detection, sort element-type variants, higher-order
+    // inline returns, etc.) stays as-is — only the "which family is this?"
+    // head was the name-matched part.
+    //
+    // See docs/internals/unified-resource-model.md §3.6 + §13 for the SSoT
+    // design.
+    let family = crate::ir::resources::table().lookup(name)
+        .and_then(|m| m.method_prefix.as_deref());
+
     // Vector__T__method → gorget_array_method
     // GorgetArray__method → gorget_array_method  (non-generic array calls)
     // Higher-order methods (filter, map, fold, any, all, each, reduce, flat_map, find, find_index)
     // are NOT runtime functions — they are generated inline by the c_lir backend.
     // Keep them as their original monomorphized names so the backend can detect and generate them.
-    if name.starts_with("Vector__") || name.starts_with("GorgetArray__") {
+    if family == Some("gorget_array") {
         let method = name.rsplit("__").next()?;
         // Guard: if the "method" is actually a type name (int64_t, double, etc.),
         // this is a constructor call like Vector__int64_t(cap), not a method call.
@@ -263,7 +275,7 @@ pub(super) fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
     // HashMap__K__V__method / GorgetMap__method → gorget_map_method (unordered)
     // Higher-order methods (filter, fold, each, any, all, map) and non-runtime methods
     // (update, get_or, get_or_put) keep their monomorphized names for inline codegen.
-    if name.starts_with("Dict__") || name.starts_with("HashMap__") || name.starts_with("GorgetMap__") {
+    if family == Some("gorget_map") {
         let method = name.rsplit("__").next()?;
         match method {
             "filter" | "fold" | "each" | "any" | "all" | "map"
@@ -284,7 +296,7 @@ pub(super) fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
     // Set__T__method → gorget_set_method
     // GorgetSet__method → gorget_set_method
     // Higher-order methods and non-runtime set operations keep monomorphized names.
-    if name.starts_with("Set__") || name.starts_with("HashSet__") || name.starts_with("GorgetSet__") {
+    if family == Some("gorget_set") {
         let method = name.rsplit("__").next()?;
         match method {
             "filter" | "fold" | "each" | "any" | "all" | "map" => return None,
@@ -309,8 +321,11 @@ pub(super) fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
             _ => return Some(format!("gorget_set_{method}")),
         }
     }
-    // GorgetString__method → gorget_str_method (for string methods)
-    if name.starts_with("GorgetString__") {
+    // GorgetString__method → gorget_str_method (for string methods).
+    // Bare "GorgetString" / "String" / "Str" hits family but lacks the
+    // `__method` suffix — strip_prefix returns None → `?` propagates,
+    // matching the previous starts_with-guard behaviour.
+    if family == Some("gorget_str") {
         let method = name.strip_prefix("GorgetString__")?;
         let mapped = format!("gorget_str_{method}");
         // Fixup: these GIR method names don't match runtime function names.
@@ -323,17 +338,17 @@ pub(super) fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
     }
     // Option/Result helpers are handled inline by the c_lir backend — don't map them.
     // Heap__T__method → gorget_heap_method
-    if name.starts_with("Heap__") {
+    if family == Some("gorget_heap") {
         let method = name.rsplit("__").next()?;
         return Some(format!("gorget_heap_{method}"));
     }
     // Mutex__T__method → gorget_mutex_method  (new/lock/free)
     // Guard__T__method → gorget_guard_method  (get/set/drop/get_ptr/release)
-    if name.starts_with("Mutex__") {
+    if family == Some("gorget_mutex") {
         let method = name.rsplit("__").next()?;
         return Some(format!("gorget_mutex_{method}"));
     }
-    if name.starts_with("Guard__") {
+    if family == Some("gorget_guard") {
         let method = name.rsplit("__").next()?;
         // Guard__T__drop → gorget_guard_release (RAII drop = release the mutex)
         if method == "drop" {
@@ -344,22 +359,22 @@ pub(super) fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
     // Shared__T and Weak__T methods are NOT mapped — they have different calling
     // conventions (monomorphized wrappers pass/return typed values, runtime uses void*).
     // Inline wrappers are emitted by the c_lir backend.
-    if name.starts_with("Shared__") || name.starts_with("Weak__") {
+    if family == Some("gorget_shared") || family == Some("gorget_weak") {
         return None;
     }
     // Channel__T methods are NOT mapped — they have different calling conventions
     // (monomorphized wrappers pass values, runtime uses void*). Inline wrappers
     // are emitted by the c_lir backend.
-    if name.starts_with("Channel__") {
+    if family == Some("gorget_channel") {
         return None;
     }
     // RWLock__T__method → gorget_rwlock_method  (new/read/write/free)
-    if name.starts_with("RWLock__") {
+    if family == Some("gorget_rwlock") {
         let method = name.rsplit("__").next()?;
         return Some(format!("gorget_rwlock_{method}"));
     }
     // ReadGuard__T__method → gorget_read_guard_method  (get/get_ptr/drop)
-    if name.starts_with("ReadGuard__") {
+    if family == Some("gorget_read_guard") {
         let method = name.rsplit("__").next()?;
         if method == "drop" {
             return Some("gorget_read_guard_release".into());
@@ -367,7 +382,7 @@ pub(super) fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
         return Some(format!("gorget_read_guard_{method}"));
     }
     // WriteGuard__T__method → gorget_write_guard_method  (get/set/get_ptr/drop)
-    if name.starts_with("WriteGuard__") {
+    if family == Some("gorget_write_guard") {
         let method = name.rsplit("__").next()?;
         if method == "drop" {
             return Some("gorget_write_guard_release".into());
