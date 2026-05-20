@@ -1457,86 +1457,169 @@ int liveness_instrumentation_diff(LowerCtx &ctx, LivenessAnalysis &liveness):
         bj += 1
     return diff_count
 
-# ── Liveness-aware OpMove → OpClone tightening (Phase C step 5d) ─
+# ── CFG-aware operand-mode post-pass (Path A Phase 2a) ──────────
 #
-# Post-emission pass that walks each function's instructions, builds
-# `last_pos[lid]` = the linear program-text position of `lid`'s last
-# operand read, then rewrites `OpMove(lid)` at any non-last position
-# to `OpClone(lid)`. The "linear-last" position is the maximum
-# `(block_idx, inst_idx)` pair encoded into a single int — straight-
-# line execution order (no per-CFG-path dataflow).
+# Runs AFTER `compute_liveness` and consumes `LivenessAnalysis.
+# last_use_of_op` — the per-operand "last-use across the CFG" verdict
+# — to choose OpMove vs OpClone at every consuming operand read.
+# Replaces the legacy `tighten_owned_operand_modes` (retired below),
+# whose linear-storage-order criterion produced 52K disagreements
+# against the CFG-accurate verdict (Phase 1 instrumentation diff).
 #
-# Why this matters. Today all four operand modes lower to the same
-# `ISlotLoad` (lir_lower.gg:2349-2394) — the four-way label is GIR-
-# only. When Phase 5 codegen lands real OpMove emission (move-zero
-# of the source slot at the read site) and real OpClone emission
-# (refcount bump / deep copy), an OpMove at a non-last-use site
-# would zero the source slot mid-function, leaving every subsequent
-# read of the same local pointing at zeroed memory.
+# Scope. The pass is **pure label correctness**: every operand mode
+# in {OpMove, OpClone} today lowers to the same `ISlotLoad`
+# placeholder at LIR (lir_lower.gg:2362-2376). Rewriting OpMove ↔
+# OpClone here does NOT change emission. The win is that the labels
+# become CFG-accurate, so when Phase 2c (the bundled emission flip)
+# lands, the labels already reflect the right move/clone decision —
+# no double-frees from mislabelled loop bodies or branch merges.
 #
-# Conservative — limitations:
-#   • Linear-order, not CFG-aware. For a local read once-per-branch
-#     in parallel CFG paths (each its own last-use), this pass keeps
-#     only the storage-LAST OpMove and demotes the other to OpClone
-#     (pessimistic but correct as long as runtime treats both modes
-#     as ISlotLoad).
-#   • For locals read inside loop bodies that are also defined
-#     outside the loop, the in-body OpMove may be flagged as last
-#     (no later read in storage order) but is not last in execution
-#     order (loop iterates). Currently safe because the four modes
-#     are runtime-equivalent; when Phase 5 codegen lands, this pass
-#     needs to be upgraded to full backward-dataflow live-out
-#     analysis (mirroring `src/ir/liveness.rs`).
-#   • Same-instruction multi-use of a single lid (e.g. `x + x` in
-#     a binop where both operands resolve to OpMove(_x)) stays
-#     OpMove on both; today that's safe (ISlotLoad), but Phase 5
-#     real move-zero would corrupt the second read. Documented for
-#     the future upgrade.
+# Decision per operand read at position (b, i, op_idx):
+#   • OpMove(lid) or OpClone(lid) — the operand is "in a consuming
+#     position" today. Decide:
+#       - lookup `loc = ctx.locals.get(lid)`
+#       - lookup `last_use_of_op[(b, i, op_idx)]` → bool last_use
+#       - if `loc.ownership == LoOwned` AND last_use → OpMove(lid),
+#         and call `mark_local_moved(&ctx.drop_elab, lid)` so the
+#         eventual drop_elab (Phase 2c) skips dropping this slot.
+#       - else → OpClone(lid). Source either doesn't own its data
+#         (LoBorrowed / LoView / LoParam / LoMaybeOwned) or is read
+#         again later on some CFG path — both cases require a clone
+#         today, and Phase 2c will emit the runtime clone call here.
+#   • OpCopy / OpBorrow / OpConst* — left untouched. These come from
+#     positions that explicitly chose a non-consuming mode (e.g.
+#     primitive operands of GIBinOp, pointer aliases at field-write
+#     bases, scrutinee reads in match tests). Phase 2b refactors the
+#     "what counts as consuming" boundary via a typed `ConsumeKind`
+#     enum — Phase 2a defers that question by simply preserving the
+#     mode chosen by the producer.
 #
-# Idempotent: running the pass twice produces the same result
-# (OpClone has no demotion path).
+# Why we drop LoParam / LoMaybeOwned from the OpMove eligibility set.
+# These ownership labels denote slots whose ownership escape the
+# function's stack frame: LoParam is the caller's responsibility;
+# LoMaybeOwned is a join over conflicting branches. Treating them as
+# move-eligible would compile but spuriously drop someone else's
+# data once Phase 2c flips emission. The strict reading (LoOwned only)
+# matches Rust's `AssignMode::Move` discipline at consume sites.
+#
+# Idempotent: a second run sees the same operands and applies the
+# same rule, producing identical output.
 
-void tighten_owned_operand_modes(LowerCtx &ctx):
+void wire_liveness_into_modes(LowerCtx &ctx, LivenessAnalysis &liveness):
     int n = ctx.block_insts.len()
     if n == 0:
         return
-    # Encode (block_idx, inst_idx) → single int. MAX_PER_BB must be
-    # larger than any function's max-inst-count-per-block; 1_000_000
-    # is a safe upper bound given self-host functions have ≤ ~10k
-    # instructions per block in the worst case.
-    int MAX_PER_BB = 1000000
-    # ── Pass 1: build last_pos[lid] = max position lid is operand-read. ──
-    # Iteration order is monotonic in pos, so `.put(lid, pos)` always
-    # overwrites with a larger position — no need for `if pos > prev`.
-    Dict[int, int] last_pos = {}
     int bi = 0
-    while bi < n:
-        Vector[Instruction] insts = ctx.block_insts.get(bi).unwrap()
-        int ii = 0
-        while ii < insts.len():
-            int pos = bi * MAX_PER_BB + ii
-            update_last_pos_for_inst(insts.get(ii).unwrap(), pos, &last_pos)
-            ii += 1
-        int term_pos = bi * MAX_PER_BB + (MAX_PER_BB - 1)
-        update_last_pos_for_term(ctx.block_terms.get(bi).unwrap(), term_pos, &last_pos)
-        bi += 1
-    # ── Pass 2: rewrite each function's instructions + terminators. ──
-    # For OpMove(lid) at position p:
-    #   if last_pos[lid] > p → demote to OpClone(lid) (not last-use).
-    #   else (last_pos[lid] == p) → keep OpMove (this IS the last-use).
-    bi = 0
     while bi < n:
         Vector[Instruction] insts = ctx.block_insts.get(bi).unwrap()
         Vector[Instruction] new_insts = []
         int ii = 0
         while ii < insts.len():
-            int pos = bi * MAX_PER_BB + ii
-            new_insts.push(rewrite_inst_at_pos(insts.get(ii).unwrap(), pos, &last_pos))
+            new_insts.push(rewrite_inst_modes(&ctx, insts.get(ii).unwrap(), bi, ii, &liveness))
             ii += 1
         ctx.block_insts.set(bi, !new_insts)
-        int term_pos = bi * MAX_PER_BB + (MAX_PER_BB - 1)
-        ctx.block_terms.set(bi, rewrite_term_at_pos(ctx.block_terms.get(bi).unwrap(), term_pos, &last_pos))
+        # Terminators live at op_idx 0 with inst_idx = insts.len()
+        # (matches `liveness_record_term_last_uses` keying — see the
+        # liveness pass's per-block walker).
+        int term_inst_idx = insts.len()
+        ctx.block_terms.set(bi, rewrite_term_modes(&ctx, ctx.block_terms.get(bi).unwrap(), bi, term_inst_idx, &liveness))
         bi += 1
+
+# Per-operand decision logic. `b` / `i` / `op_idx` form the
+# liveness key; ctx supplies ownership state + the drop_elab
+# the mark_local_moved call writes into.
+Operand wire_one_operand(LowerCtx &ctx, Operand op, int b, int i, int op_idx, LivenessAnalysis &liveness):
+    int lid = -1
+    bool is_consuming_mode = false
+    match op:
+        case OpMove(l):
+            lid = l
+            is_consuming_mode = true
+        case OpClone(l):
+            lid = l
+            is_consuming_mode = true
+        else:
+            return op
+    if not is_consuming_mode:
+        return op
+    if lid < 0 or lid >= ctx.locals.len():
+        # Defensive: malformed local ID — leave the operand untouched
+        # rather than rewriting it to a bogus mode.
+        return op
+    GirLocal loc = ctx.locals.get(lid).unwrap()
+    int key = liveness_encode_key(b, i, op_idx)
+    bool last_use = liveness.last_use_of_op.contains(key)
+    bool source_owns = false
+    match loc.ownership:
+        case LoOwned():
+            source_owns = true
+        else:
+            source_owns = false
+    if source_owns and last_use:
+        mark_local_moved(&ctx, lid)
+        return OpMove(lid)
+    return OpClone(lid)
+
+# Rewrite all consuming-mode operand reads in an instruction.
+# `b` / `i` come from the caller's per-block / per-inst walk. The
+# op_idx layout matches `liveness_inst_operand_local_ids` — the
+# left-to-right order of operand reads in this instruction shape.
+Instruction rewrite_inst_modes(LowerCtx &ctx, Instruction inst, int b, int i, LivenessAnalysis &liveness):
+    match inst:
+        case GIAssign(dst, op):
+            return GIAssign(dst, wire_one_operand(&ctx, op, b, i, 0, &liveness))
+        case GIBinOp(dst, opc, ty, lhs, rhs):
+            Operand new_lhs = wire_one_operand(&ctx, lhs, b, i, 0, &liveness)
+            Operand new_rhs = wire_one_operand(&ctx, rhs, b, i, 1, &liveness)
+            return GIBinOp(dst, opc, ty, new_lhs, new_rhs)
+        case GIUnOp(dst, opc, ty, src):
+            return GIUnOp(dst, opc, ty, wire_one_operand(&ctx, src, b, i, 0, &liveness))
+        case GICmp(dst, opc, ty, lhs, rhs):
+            Operand new_lhs = wire_one_operand(&ctx, lhs, b, i, 0, &liveness)
+            Operand new_rhs = wire_one_operand(&ctx, rhs, b, i, 1, &liveness)
+            return GICmp(dst, opc, ty, new_lhs, new_rhs)
+        case GICall(dst, name, args):
+            Vector[Operand] new_args = []
+            int ai = 0
+            while ai < args.len():
+                new_args.push(wire_one_operand(&ctx, args.get(ai).unwrap(), b, i, ai, &liveness))
+                ai += 1
+            return GICall(dst, name, !new_args)
+        case GICallExtern(dst, name, args):
+            Vector[Operand] new_args = []
+            int ai = 0
+            while ai < args.len():
+                new_args.push(wire_one_operand(&ctx, args.get(ai).unwrap(), b, i, ai, &liveness))
+                ai += 1
+            return GICallExtern(dst, name, !new_args)
+        else:
+            # GIDeref / GIDrop / GIDropIfAlive / GIMoveZero / GINop —
+            # operand-read shape is fixed (single lid / no operands).
+            # Per the liveness encoder, the lid is already a known
+            # local; these instructions are not consuming operand-mode
+            # carriers (they take raw local IDs, not Operand variants),
+            # so there's nothing to rewrite.
+            return inst
+
+Terminator rewrite_term_modes(LowerCtx &ctx, Terminator term, int b, int i, LivenessAnalysis &liveness):
+    match term:
+        case GTReturn(op):
+            return GTReturn(wire_one_operand(&ctx, op, b, i, 0, &liveness))
+        case GTBranch(op, t_bb, e_bb):
+            return GTBranch(wire_one_operand(&ctx, op, b, i, 0, &liveness), t_bb, e_bb)
+        else:
+            return term
+
+# ── Legacy linear-storage-order helpers (retained for instrumentation
+# diff only) ──
+#
+# These three helpers used to back `tighten_owned_operand_modes`, the
+# linear-storage-order pass retired in Phase 2a. They are kept solely
+# so `liveness_instrumentation_diff` can reconstruct the OLD pass's
+# `last_pos[lid]` view at runtime and compare it against the new
+# CFG-accurate verdict. Once we've validated the diff stays at ~zero
+# for a few release cycles, these helpers + the diff function retire
+# together.
 
 # Update `last_pos[lid]` for every operand-read in this instruction
 # (positions are monotonic across the pass, so `.put` overwrites with
@@ -1583,52 +1666,6 @@ void note_operand_pos(Operand op, int pos, Dict[int, int] &last_pos):
             last_pos.put(l, pos)
         else:
             pass
-
-# Per-operand decision: if op is `OpMove(lid)` and last_pos[lid] > pos,
-# demote to OpClone. Else pass through (this is the linear-last
-# position — kept as OpMove, last-use claim).
-Operand demote_move_if_not_last(Operand op, int pos, Dict[int, int] &last_pos):
-    match op:
-        case OpMove(lid):
-            if last_pos.contains(lid):
-                int last = last_pos.get(lid).unwrap()
-                if last > pos:
-                    return OpClone(lid)
-            return op
-        else:
-            return op
-
-Instruction rewrite_inst_at_pos(Instruction inst, int pos, Dict[int, int] &last_pos):
-    match inst:
-        case GIAssign(dst, op):
-            return GIAssign(dst, demote_move_if_not_last(op, pos, &last_pos))
-        case GIBinOp(dst, opc, ty, lhs, rhs):
-            return GIBinOp(dst, opc, ty, demote_move_if_not_last(lhs, pos, &last_pos), demote_move_if_not_last(rhs, pos, &last_pos))
-        case GIUnOp(dst, opc, ty, src):
-            return GIUnOp(dst, opc, ty, demote_move_if_not_last(src, pos, &last_pos))
-        case GICmp(dst, opc, ty, lhs, rhs):
-            return GICmp(dst, opc, ty, demote_move_if_not_last(lhs, pos, &last_pos), demote_move_if_not_last(rhs, pos, &last_pos))
-        case GICall(dst, name, args):
-            Vector[Operand] new_args = []
-            for a in args:
-                new_args.push(demote_move_if_not_last(a, pos, &last_pos))
-            return GICall(dst, name, !new_args)
-        case GICallExtern(dst, name, args):
-            Vector[Operand] new_args = []
-            for a in args:
-                new_args.push(demote_move_if_not_last(a, pos, &last_pos))
-            return GICallExtern(dst, name, !new_args)
-        else:
-            return inst
-
-Terminator rewrite_term_at_pos(Terminator term, int pos, Dict[int, int] &last_pos):
-    match term:
-        case GTReturn(op):
-            return GTReturn(demote_move_if_not_last(op, pos, &last_pos))
-        case GTBranch(op, t_bb, e_bb):
-            return GTBranch(demote_move_if_not_last(op, pos, &last_pos), t_bb, e_bb)
-        else:
-            return term
 
 # ── Type mapping ─────────────────────────────────────────
 
@@ -5550,27 +5587,24 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
     # already emitted theirs.
     pop_drop_scope(&ctx)
 
-    # Phase 1 of GIR-liveness redesign: compute backward-dataflow
-    # liveness on the BB CFG to get a CFG-accurate "last use" decision
-    # for every owned-local operand read. Pass produces a decision map
-    # (`liveness.last_use_of_op`); nothing consumes it yet — Phase 2
-    # will wire the consumer to emit explicit Clone calls at non-last-
-    # use sites and skip them at last-use sites.
+    # GIR-liveness — Phase 2a (Path A part 1, 2026-05-20). Compute
+    # backward-dataflow liveness on the BB CFG, then run the CFG-aware
+    # operand-mode post-pass `wire_liveness_into_modes` which replaces
+    # the legacy `tighten_owned_operand_modes`. The new pass uses the
+    # liveness verdict (`last_use_of_op`) keyed by (block, inst, op_idx)
+    # to decide OpMove vs OpClone at every consuming operand read.
     #
-    # Performance posture. Two prior agent attempts at this redesign
-    # (the AST-walker port) hit a hard perf wall via FxHashSet<String>-
-    # equivalent allocation per branch save/restore. The GIR-level
-    # approach used here avoids that: the CFG is explicit, locals are
-    # int-keyed bitsets, and the working set is O(nlocals) per block.
-    # Verified on `self_host_bootstrap` end-to-end before commit.
-    #
-    # The old pass `tighten_owned_operand_modes` still runs to drive
-    # actual OpMove → OpClone demotion. Phase 2 will retire it.
+    # The instrumentation diff between the new pass and the legacy
+    # linear-storage-order pass is still computed here for now — it
+    # provides a regression net while the Phase 1 → 2a transition is
+    # fresh. After Phase 2b lands and we've validated the diff stays
+    # at ~zero across two cargo runs, both `liveness_instrumentation_
+    # diff` and the diag_warn can retire.
     LivenessAnalysis liveness = compute_liveness(&ctx)
     int diff = liveness_instrumentation_diff(&ctx, &liveness)
     if diff > 0:
         diag_warn("gir_liveness_diff", fdef.name + ": " + int_to_str(diff) + " sites")
-    tighten_owned_operand_modes(&ctx)
+    wire_liveness_into_modes(&ctx, &liveness)
 
     # Assemble BasicBlocks from separate instruction and terminator vectors
     Vector[BasicBlock] blocks = []
@@ -5788,14 +5822,14 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
         # without an explicit return, this emits cleanup drops.
         pop_drop_scope(&ctx)
 
-        # Phase 1 of GIR-liveness redesign: same as lower_function.
+        # GIR-liveness Phase 2a (Path A part 1). Same wiring as
+        # `lower_function` above — see `wire_liveness_into_modes`
+        # docstring for the rewriter contract.
         LivenessAnalysis liveness2 = compute_liveness(&ctx)
         int diff2 = liveness_instrumentation_diff(&ctx, &liveness2)
         if diff2 > 0:
             diag_warn("gir_liveness_diff", mangled + ": " + int_to_str(diff2) + " sites")
-        # Phase C step 5d: liveness-aware OpMove → OpClone tightening.
-        # Same post-pass as lower_function; see the helper's docstring.
-        tighten_owned_operand_modes(&ctx)
+        wire_liveness_into_modes(&ctx, &liveness2)
 
         # Assemble blocks
         Vector[BasicBlock] blocks = []
