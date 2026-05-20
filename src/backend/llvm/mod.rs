@@ -815,12 +815,28 @@ pub fn generate_llvm_ir(module: &LirModule) -> String {
             }
         }
     }
+    // Pre-intern any `gorget_str_from_literal` StrLit args from module-level
+    // globals. These are emitted as cap=0 rodata-view static initializers
+    // (no runtime ctor call), so we need their `@.str.N` index resolved
+    // before `emit_globals` runs.
+    for g in &module.globals {
+        if let LirGlobalInit::Extern { name, args } = &g.init {
+            if crate::backend::c_lir::helpers::is_str_literal_view_init(
+                name, args, &g.ty, &module.structs,
+            ) {
+                if let LirGlobalInitArg::StrLit(text) = &args[0] {
+                    str_globals.intern(text);
+                }
+            }
+        }
+    }
+
     // Track how many strings are pre-interned so we can detect late additions.
     let pre_intern_count = str_globals.strings.len();
     emit_string_globals(&mut out, &str_globals);
 
     // Global variables
-    emit_globals(&mut out, module, &snames);
+    emit_globals(&mut out, module, &snames, &str_globals);
 
     // Extern function declarations
     emit_extern_declarations(&mut out, module, &snames);
@@ -1013,7 +1029,7 @@ fn emit_struct_types(out: &mut String, module: &LirModule, snames: &HashMap<u32,
 
 // ── Global Variables ───────────────────────────────────────────────────────
 
-fn emit_globals(out: &mut String, module: &LirModule, snames: &HashMap<u32, String>) {
+fn emit_globals(out: &mut String, module: &LirModule, snames: &HashMap<u32, String>, str_globals: &StrGlobals) {
     for (i, global) in module.globals.iter().enumerate() {
         let ty = llvm_type_full(&global.ty, snames);
         let linkage = if global.is_const { "private constant" } else { "internal global" };
@@ -1109,7 +1125,26 @@ fn emit_globals(out: &mut String, module: &LirModule, snames: &HashMap<u32, Stri
                 writeln!(out, "@__lir_g{i} = {linkage} {sty} {{ {} }} ; {}",
                     field_vals.join(", "), global.name).unwrap();
             }
-            LirGlobalInit::Extern { .. } => {
+            LirGlobalInit::Extern { name, args } => {
+                // Module-level string literal: `String FOO = "literal"` lowers
+                // to a `gorget_str_from_literal(StrLit, Int)` ctor call. Emit
+                // it as a static `%GorgetString` initializer that points at
+                // the interned `@.str.N` rodata buffer (cap=0 view, no alloc,
+                // no free). Mirrors the C backend — see
+                // `c_lir::helpers::is_str_literal_view_init`.
+                if crate::backend::c_lir::helpers::is_str_literal_view_init(
+                    name, args, &global.ty, &module.structs,
+                ) {
+                    if let (LirGlobalInitArg::StrLit(text), LirGlobalInitArg::Int(len)) = (&args[0], &args[1]) {
+                        let idx = str_globals.get_index(text);
+                        writeln!(
+                            out,
+                            "@__lir_g{i} = {linkage} %GorgetString {{ ptr @.str.{idx}, i64 0, i64 {len}, ptr null }} ; {}",
+                            global.name
+                        ).unwrap();
+                        continue;
+                    }
+                }
                 // Runtime-initialized globals are populated by a call
                 // emitted at main()'s prologue (`emit_global_runtime_init`).
                 // The declaration zero-inits the slot.
@@ -2313,6 +2348,13 @@ fn emit_function(
         // The C LIR backend emits these at the start of main(); LLVM does the same.
         for (gid, global) in module.globals.iter().enumerate() {
             if let crate::lir::LirGlobalInit::Extern { name, args } = &global.init {
+                // Module-level string literals are initialized as cap=0
+                // rodata views by `emit_globals`. Skip the runtime ctor.
+                if crate::backend::c_lir::helpers::is_str_literal_view_init(
+                    name, args, &global.ty, &module.structs,
+                ) {
+                    continue;
+                }
                 emit_global_runtime_init(out, gid, name, args, snames, module, str_globals);
             }
         }

@@ -1521,8 +1521,43 @@ pub(super) fn format_float(val: f64) -> String {
 // LIR lowering in src/lir/lower/calls.rs. The C backend no longer does format
 // string rewriting — all float/bool/string format fixes happen before codegen.
 
+/// True iff `init` is the canonical lowering of a module-level `String FOO =
+/// "literal"` declaration AND the target slot is a `GorgetString` (a.k.a.
+/// `Str`) struct. Such inits would otherwise emit a runtime
+/// `gorget_str_from_literal` call at `main()` prologue — heap-allocating via
+/// `str_alloc_copy` — even though the data is a compile-time constant. We
+/// detect this exact shape and reroute the emit to a static rodata-view
+/// initializer (cap=0), making the global zero-alloc, zero-free, and zero-
+/// cost to read. Both C and LLVM backends consult this predicate.
+pub(crate) fn is_str_literal_view_init(
+    name: &str,
+    args: &[crate::lir::LirGlobalInitArg],
+    ty: &crate::lir::LirType,
+    structs: &[crate::lir::StructDef],
+) -> bool {
+    use crate::lir::{LirGlobalInitArg, LirType};
+    if name != "gorget_str_from_literal" || args.len() != 2 {
+        return false;
+    }
+    if !matches!(&args[0], LirGlobalInitArg::StrLit(_)) {
+        return false;
+    }
+    if !matches!(&args[1], LirGlobalInitArg::Int(_)) {
+        return false;
+    }
+    let sid = match ty {
+        LirType::Struct(sid) => sid,
+        _ => return false,
+    };
+    let struct_name = match structs.get(sid.0 as usize) {
+        Some(sd) => sd.name.as_str(),
+        None => return false,
+    };
+    matches!(struct_name, "GorgetString" | "Str")
+}
+
 /// Escape a string for C string literal.
-pub(super) fn escape_c_string(s: &str) -> String {
+pub(crate) fn escape_c_string(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 8);
     let chars: Vec<char> = s.chars().collect();
     for (ci, &c) in chars.iter().enumerate() {

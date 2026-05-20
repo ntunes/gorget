@@ -322,6 +322,15 @@ pub struct LoweringContext<'a> {
     /// Module-level global variable type names: var_name → AST type name (e.g. "AtomicInt").
     /// Used by infer_type_name_from_operand_full to dispatch methods on globals.
     pub global_type_names: FxHashMap<String, String>,
+    /// Names of module-level `String FOO = "literal"` globals whose backing
+    /// `GorgetString` is a cap=0 rodata view (no heap allocation). The C/LLVM
+    /// emitters recognize the same `gorget_str_from_literal(StrLit, Int)` ctor
+    /// shape and emit a static `{ .data="...", .cap=0, .len=N, .alloc=NULL }`
+    /// initializer in place of a runtime call. Tracked here so the GIR clone-
+    /// on-access path (`clone_resource_global_ref`) can elide the clone call —
+    /// the global never aliases drop-tracked memory, so there's nothing to
+    /// double-free and nothing to deep-copy.
+    pub string_literal_view_globals: rustc_hash::FxHashSet<String>,
     /// Set of equip method names that are GIR-lowered (not extern/C-runtime).
     /// Used by lower_method_call to decide whether to pass resource-type args by pointer.
     pub gir_equip_methods: rustc_hash::FxHashSet<String>,
@@ -469,6 +478,7 @@ impl<'a> LoweringContext<'a> {
             fn_returns_borrowed: rustc_hash::FxHashSet::default(),
             global_names: rustc_hash::FxHashSet::default(),
             global_type_names: FxHashMap::default(),
+            string_literal_view_globals: rustc_hash::FxHashSet::default(),
             gir_equip_methods: rustc_hash::FxHashSet::default(),
             extern_body_fns: rustc_hash::FxHashSet::default(),
             trivial_getter_methods: rustc_hash::FxHashSet::default(),
@@ -1756,6 +1766,13 @@ impl<'a> LoweringContext<'a> {
         // pointer, `&GLOBAL` syntax), the `GlobalRef → GlobalRefPtr` rewrite
         // in those code paths short-circuits before this helper runs.
         if let Operand::Constant(Constant::GlobalRef(name)) = &operand {
+            // `String FOO = "literal"` globals are cap=0 rodata views. The
+            // shallow byte-copy that LIR's GlobalAddr+Load produces aliases
+            // immortal `.rodata`, so the consumer's drop is a no-op and no
+            // clone is needed. See `lower_static_decl` / `clone_resource_global_ref`.
+            if self.string_literal_view_globals.contains(name) {
+                return operand;
+            }
             let global_type = self.global_type_names.get(name).cloned()
                 .and_then(|tn| crate::ir::lowering::exprs::lookup_global_type(self, &tn));
             if let Some(global_ty) = global_type {

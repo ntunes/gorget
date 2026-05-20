@@ -2315,7 +2315,7 @@ fn lower_static_decl(
     module: &mut Module,
     decl: &crate::parser::ast::StaticDecl,
 ) {
-    use crate::ir::Global;
+    use crate::ir::{Global, GlobalInit, GlobalInitArg};
 
     // Use map_ast_type_mut so that generic types like Mutex[int] get registered
     // (map_ast_type returns UNIT_TYPE for unregistered generic types).
@@ -2323,6 +2323,19 @@ fn lower_static_decl(
     let name = decl.name.node.clone();
 
     let init = eval_static_init(&decl.type_.node, &decl.value.node, &ctx.extern_bindings);
+    // Record `String FOO = "literal"` globals — these lower to a cap=0
+    // rodata-view static initializer in the C/LLVM backends (no heap
+    // allocation, no runtime ctor). The GIR clone-on-access path
+    // (`clone_resource_global_ref`) checks this set and elides the
+    // implicit clone for these globals — making module-level string
+    // constants truly zero-cost to read.
+    if let GlobalInit::Extern { name: ctor, args } = &init {
+        if ctor == "gorget_str_from_literal"
+            && matches!(args.as_slice(), [GlobalInitArg::StrLit(_), GlobalInitArg::Int(_)])
+        {
+            ctx.string_literal_view_globals.insert(name.clone());
+        }
+    }
     module.globals.push(Global { name, type_id, init });
 }
 

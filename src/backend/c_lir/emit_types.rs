@@ -670,7 +670,26 @@ pub(super) fn emit_global_init_value(out: &mut String, init: &LirGlobalInit, ty:
             }
             write!(out, "}}").unwrap();
         }
-        LirGlobalInit::Extern { .. } => {
+        LirGlobalInit::Extern { name, args } => {
+            // Module-level string literal: `String FOO = "literal"` lowers
+            // to `Extern { name: "gorget_str_from_literal", args: [StrLit, Int] }`
+            // targeting a `GorgetString` slot. The runtime call would heap-
+            // allocate via `str_alloc_copy`; instead emit a static struct
+            // initializer that points into the C `.rodata` section. Layout
+            // mirrors the per-call-site `__slit_N` views the backend already
+            // emits for inline string literals — `cap = 0` marks the buffer
+            // as non-owning so `gorget_string_free` is a no-op and reads of
+            // the global require no clone.
+            if is_str_literal_view_init(name, args, ty, structs) {
+                if let (LirGlobalInitArg::StrLit(text), LirGlobalInitArg::Int(len)) = (&args[0], &args[1]) {
+                    let escaped = crate::backend::c_lir::helpers::escape_c_string(text);
+                    write!(
+                        out,
+                        "{{ .data = (char*)\"{escaped}\", .cap = 0, .len = {len}, .alloc = NULL }}"
+                    ).unwrap();
+                    return;
+                }
+            }
             // Runtime-initialized globals are populated by a constructor
             // call emitted at main()'s prologue. The compile-time
             // declaration just zero-inits the slot.

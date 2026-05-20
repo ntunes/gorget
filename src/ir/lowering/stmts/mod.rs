@@ -41,6 +41,14 @@ pub(super) fn clone_resource_global_ref(
         Operand::Constant(Constant::GlobalRef(n)) => n.clone(),
         _ => return operand,
     };
+    // `String FOO = "literal"` — backed by a cap=0 rodata view in the C/LLVM
+    // emit. The shallow byte-copy is safe (the buffer is immortal `.rodata`),
+    // and any drop the consumer emits is a runtime no-op (cap=0 fast-path in
+    // `gorget_string_free`). No clone needed, no implicit-clone warning.
+    // See `lower_static_decl` for the writer of `string_literal_view_globals`.
+    if ctx.string_literal_view_globals.contains(&name) {
+        return operand;
+    }
     let type_name = match ctx.global_type_names.get(&name) {
         Some(t) => t.clone(),
         None => return operand,

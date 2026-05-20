@@ -1538,7 +1538,13 @@ static inline GorgetString gorget_string_clone(const GorgetString* src) {
 
 // Same semantic as gorget_string_clone under 32-byte — kept as a distinct
 // entry point because the GIR lowering emits this name for explicit .clone()
-// calls and boundary materialization.
+// calls and boundary materialization. Always produces an independently-owned
+// (cap>0) buffer. Callers that hold a view (cap=0) into ephemeral storage
+// (a substring of a heap buffer that may be dropped) depend on this contract
+// to escape the aliasing — collapsing the cap=0 path to a shallow struct
+// copy would dangle the result. The zero-cost path for cap=0 rodata-view
+// globals lives elsewhere (GIR clone-on-access elides the call entirely
+// when the global is a known literal-view; see `clone_resource_global_ref`).
 static inline GorgetString gorget_string_clone_to_owned(const GorgetString* src) {
     if (src->len == 0) return GORGET_EMPTY_STR;
     return str_alloc_copy((const char*)src->data, src->len, __gorget_current_alloc);

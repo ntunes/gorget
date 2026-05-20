@@ -1759,6 +1759,15 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
             .collect();
         for (gid, g) in module.globals.iter().enumerate() {
             if let LirGlobalInit::Extern { name, args } = &g.init {
+                // Module-level string literals — initialized as cap=0 rodata
+                // views by `emit_global_init_value`. Skip the runtime ctor
+                // call here; the static initializer already populated the
+                // slot at load time.
+                if crate::backend::c_lir::helpers::is_str_literal_view_init(
+                    name, args, &g.ty, &module.structs,
+                ) {
+                    continue;
+                }
                 let mut expr = String::new();
                 use std::fmt::Write;
                 write!(expr, "{name}(").unwrap();
