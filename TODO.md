@@ -2,6 +2,55 @@
 
 ## High Priority
 
+- **Phase 2c COMMIT 3 — Rust-mirror scout 2026-05-21 (agent `a594a650`)**. Brief asked to flip `add_local`'s default from `LoOwned + BoNone` to `LoBorrowed + BoNone`, mirroring Rust's CoW-default-borrow model. **Scout: delta is medium-large, NOT the actual COMMIT 3 blocker. STOPPED at Phase 1 per the brief's stop condition.**
+
+  **Rust's actual default** (`src/ir/builder.rs:74-84` `FunctionBuilder::add_local` + `src/ir/mod.rs:450-498` `LocalOwnership::default = Untracked`): Rust defaults to `Untracked` — **not Borrowed**. New locals start with NO ownership decision; setters explicitly write a concrete state when the lowering has enough info. Drop registration in Rust (`src/ir/lowering/drops.rs:107-120` `register_local`) is **type-driven, NOT ownership-driven** — gated solely on `needs_drop(type_id, registry)`. Self-host mirrors that policy already (`is_droppable_type(type)` gate at `lower.gg:678`). The default ownership tag and drop-registration policy are **independent axes**.
+
+  **Rust's drop-emission policy** (`src/ir/lowering/drops.rs:404-508` `emit_scope_drops_ordered`): emits `DropIfAlive(Place { local })` defensively for every registered local, **explicitly ignoring `maybe_moved`** (see `let _ = entry.maybe_moved; // kept for future invariant audits` at line 504). Snag #30 (2026-05-10 comment in the same file): "the maybe_moved tracking across nested matches + early-return paths produced a false negative... Always-conditional drop is the safe contract; the optimizer recovers the unconditional shape when flow proves it." The static-elision happens in **LIR `drop_elab`** via MoveSlot tracking.
+
+  **The actual move-zero machinery** (`src/ir/lowering/stmts/assigns.rs:370-380` + 66 explicit `set_owned` call sites in `src/ir/lowering/`): at every consume site that transfers ownership, Rust emits `MoveZero` (or `move_zero_and_mark`) on the source's slot. This zeroes the bytes so the unconditional `DropIfAlive` at scope exit sees zeroed slots and the runtime memcmp gate (or static drop_elab elision) suppresses the drop. The LIR-side `drop_elab` then statically elides redundant guards via the MoveSlot dataflow.
+
+  **What self-host has + lacks**:
+  - HAS: drop_elab pass (`drop_elab.gg`, COMMIT 1 shipped 2026-05-21) that consumes `IMoveSlot` annotations for static elision.
+  - HAS: `IMoveSlot` instruction in `lir_lower.gg:3084` emitted when it sees `GIMoveZero`.
+  - LACKS: **anything that emits `GIMoveZero`**. `grep -nE "emit.*GIMoveZero|GIMoveZero\(" lower.gg` returns only handler `case` branches in walkers — no producer site. The infrastructure is wired but never fires.
+  - LACKS: real OpClone emission for Ptr-typed slots (Site 2 deferred 2026-05-21; TODO line 71-75). Without this, OpClone is a byte-load no-op and multi-use of an owned local produces aliasing slots.
+  - LACKS: bare-T resource param clone-on-binding (TODO line 14 + 127). Caller passes `f(struct_with_string_field)` by value, callee's struct field aliases caller's heap; no clone happens at the boundary.
+
+  **The delta the brief proposed** (flip `add_local` default + audit `register_local_for_drop` sites + retry COMMIT 3) is mostly cosmetic: it changes the LABEL on freshly-allocated locals but doesn't add `GIMoveZero` emission, doesn't fix Site 2, doesn't add clone-on-binding for bare-T resource params. After Prereq B (commit `277e7a56`), SVarDecl's borrowed-source case already inherits `LoBorrowed/LoView` and skips drop registration — that's the structural part of the fix. The remaining gap is on the **source-of-ownership** axis (move-zero + real clone), not the default-state axis.
+
+  **Mechanical scope of the default flip** (if pursued): `add_local(&ctx, type, NO_NAME)` is called ~100+ times in `lower.gg`. Each call is a candidate. Spot-classification: most are intermediate temps for runtime calls (gorget_array_new, gorget_string_format, etc.) where the result IS a fresh-owned value. A blind flip to `LoBorrowed` default would mis-classify ~95% of those sites; each would need explicit `add_local_with(..., LoOwned(), ...)` migration. The bare-`add_local` callers are: arithmetic temps (BOOL/I64/F64 returns), `gorget_*_*` runtime call destinations (mostly fresh-owned), struct field-read destinations (LoBorrowed/BoField is correct — already explicit at line 4025/5170 via `add_local_with`), comparison-result destinations (BOOL — primitive, irrelevant to ownership). A clean migration is a 1-2 day audit.
+
+  **Recommended next step** — three independent commits, in this order:
+
+  1. **`selfhost(lower): emit GIMoveZero at consume sites where source is LoOwned + last_use`** — at every `op_consume(... CkAssign/CkReturn/CkCallArgOwning/CkFieldWrite)` whose return is `OpMove(lid)`, additionally `emit(&ctx, GIMoveZero(lid))` after the consume. This is the dependency of all subsequent drop-emission work. **Validate**: stage-1 should still compile clean. Drop_elab gate (post-COMMIT 1) means stage-1 perf doesn't tank — only resource-typed functions with OpMove run the full dataflow.
+
+  2. **`selfhost(lir_lower): Site 2 — emit gorget_*_clone for Ptr-typed OpClone arms`** — root-cause the SSA / slot-numbering disturbance from agent `a474e398`'s investigation 2026-05-21. The crash was in `lower___emit`'s LowerCtx state, not in the modified lir_lower code itself. Likely a downstream SSA value-numbering pass needs to learn the new slot-add shape. Without Site 2, OpClone is byte-aliasing → multi-use of owned locals produces a double-free at scope exit.
+
+  3. **`selfhost(lower): flush deferred drop queue with real GIDropIfAlive emission`** (COMMIT 3 as originally specified). With (1) + (2) shipped, the moved-out slots are zeroed AND the cloned slots have independent heap. `emit_scope_drops` records `DropEmission` entries; `flush_drop_queue` after `wire_liveness_into_modes` emits real `GIDropIfAlive` calls. Defensively unconditional — let LIR drop_elab + the runtime memcmp gate handle elision. The `maybe_moved` field becomes a future optimization, NOT a correctness gate (mirrors Rust's Snag #30 comment).
+
+  **Then** the `add_local` default flip can be done as a follow-up cleanup, NOT as a precondition for COMMIT 3. With (1)+(2)+(3) shipped, the byte-aliasing classes that drove the COMMIT 3 attempts all close. The default-flip becomes a label hygiene exercise.
+
+  **What was NOT done this attempt** (per stop condition): no code changes; scout only. Today's HEAD is clean at `da9d10a1`. The next agent on COMMIT 3 should start with item (1) — emit `GIMoveZero` at OpMove consume sites — and treat that as a sufficient atomic commit. The full triplet should still pass (drops aren't emitted yet, so the MoveZero is dead annotation in lir_lower). Then (2). Then (3). Three small commits in series instead of one big bundled flip.
+
+  **Sources** (all read this attempt):
+  - `CLAUDE.md` "Ownership at Consuming Positions" (lines 76-119) — the canonical doc model.
+  - `docs/internals/clone-emission-at-calls.md` — the distilled scout citing 9 Rust impl sites.
+  - `docs/internals/copy-on-write.md` Phase 3 — the seven materialization points.
+  - `src/ir/builder.rs:74-84` — FunctionBuilder::add_local (Untracked default).
+  - `src/ir/mod.rs:450-498` — LocalOwnership enum + default = Untracked.
+  - `src/ir/lowering/context.rs:998-1001` — register_local (name+local+type, NO ownership).
+  - `src/ir/lowering/context.rs:2075-2090` — set_owned / set_owned_fresh (66 call sites).
+  - `src/ir/lowering/drops.rs:107-120` — register_local (type-gated, ownership-blind).
+  - `src/ir/lowering/drops.rs:404-508` — emit_scope_drops_ordered (defensive DropIfAlive).
+  - `src/ir/lowering/stmts/mod.rs:421-461` — SVarDecl unconditional register_local + Option/Result force-register.
+  - `src/ir/lowering/stmts/assigns.rs:240-388` — assignment with Move/Copy decision + MoveZero emission.
+  - `tests/fixtures/self_host_lowerer/lower.gg:389-404` — self-host add_local (LoOwned default) + add_local_with.
+  - `tests/fixtures/self_host_lowerer/lower.gg:677-685` — register_local_for_drop (type-gated, same as Rust).
+  - `tests/fixtures/self_host_lowerer/lower.gg:4612-4658` — SVarDecl with Prereq B carve-out (LoBorrowed/LoView inheritance).
+  - `tests/fixtures/self_host_lowerer/lir_lower.gg:3079-3085` — GIMoveZero → IMoveSlot lowering (handler present, never fires).
+  - `tests/fixtures/self_host_lowerer/drop_elab.gg:104, 524, 614` — MoveSlot consumption in drop_elab phases.
+
 - **Tighten `self_host_bootstrap_fixed_point` back to N=2** once Phase 2c stabilises. Relaxed 2026-05-21 to N=5 to accommodate the ownership cascade introduced by COMMIT 3 Prereq B-extension (LoBorrowed propagation through `.unwrap()`): the cascade takes up to ~4 generations to converge because stage-1 is built by Rust gg (different internal lowering) while stage-2+ are built by self-host. Each ownership-tag flip in lower.gg's INTERNAL operand decisions produces one extra void* slot per stage until the in-source algorithm + the in-binary lowering agree. Restore N=2 once `flush_drop_queue` real emission (COMMIT 3) ships AND a clean stage1==stage2 generation can be confirmed across two cargo runs. Test file: `tests/integration.rs:~13841-13981`.
 
 - **Phase 2c COMMIT 3 — REVERTED 2026-05-21 (third attempt, agent `aa16d6f0`)**. The next agent's brief hypothesised that bare-T resource params (currently classified `LoParam`) were the aliasing root — `op_consume` for `LoParam` should fall through to `OpMove`, freeing caller's buffer on drop. **Hypothesis refuted on inspection**: bare resource params already get **Ptr-wrapped** at lower.gg:5879 (`is_resource_type_name(type_c_name, &gmod) → register_ptr`). Their slot type is `GtPtr`, which `op_consume` matches at line 962 returning `OpCopy(lid)` (the GtNamed-only arm at 956 doesn't fire). Then `wire_liveness_into_modes` at line 1780-1784 ALSO explicitly excludes `LoParam` from move-eligibility — `source_owns=false`, demoted to `OpClone(lid)`. So bare resource params today read as OpCopy/OpClone of pointer aliases, NEVER OpMove. Changing `LoParam → LoBorrowed` at param add_local_with sites would be a no-op for the current operand-mode decisions. The brief's Phase 2 was targeting a phantom failure path.
