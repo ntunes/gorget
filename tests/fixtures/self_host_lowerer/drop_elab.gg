@@ -1,0 +1,710 @@
+# Drop elaboration pass — static dataflow analysis over LIR.
+#
+# Port of `src/lir/drop_elab.rs`. Replaces runtime
+# `__gorget_drop_if_alive_open__SIZE` / `__gorget_drop_if_alive_close`
+# guards with compile-time knowledge via forward dataflow over the CFG:
+#
+#   * Definitely Uninitialized → delete the entire guard + drop sequence.
+#   * Definitely Initialized   → strip guard wrappers, keep unconditional drop.
+#   * MaybeInitialized         → replace with a stack-local `bool` drop flag:
+#       `flag := true` at entry, `false` at each `MoveSlot`, checked at the
+#       drop site via `if (flag) { Type__drop(&slot); }`.
+#
+# The dataflow uses `IMoveSlot { slot }` (zero-cost annotation) to detect
+# ownership transfer, and `ISlotStore` / `IMemset` for (re)initialization.
+# After elaboration:
+#   - Companion `IMemset`s for deleted guards are removed.
+#   - All `IMoveSlot` annotations are swept from all blocks.
+#
+# Mirrors the per-function pipeline of the Rust reference. Pure self-host
+# port; uses the existing LIR types from lir.gg (which already provide
+# ISlotStore/ISlotLoad/ISlotAddr/IDropGuardOpen/IDropGuardClose/IMoveSlot/
+# IMemset etc.). Module entry point is `elaborate_drops(LirModule &m)`.
+
+from lir import LirModule, LirFunction, LirBlock, LirInst, LirSlot
+from lir import LT_BOOL
+from lir import ISlotStore, ISlotLoad, ISlotAddr
+from lir import IIConst, IFConst, IBoolConst, INullPtr, IFuncAddr, IGlobalAddr, IStrLit, IParamRef
+from lir import IAdd, ISub, IMul, IDiv, IRem, IMod, INeg
+from lir import IBitAnd, IBitOr, IBitXor, IBitNot, IShl, IShr
+from lir import ICmp, INot
+from lir import IIntCast, IFloatCast, IIntToFloat, IFloatToInt, IPtrCast, IBitcast
+from lir import ILoad, IStore, IFieldPtr, IElemPtr, IMemset, IMemcpy
+from lir import IBoxAlloc, IAddressOf, IStructInit, IEnumInit
+from lir import ICall, ICallExtern, ICallPtr
+from lir import IBoundsCheck, IDivCheck, ITrap
+from lir import IPrintf, IFprintf, IInlineC
+from lir import IClosurePack, ICallClosure
+from lir import IDropGuardOpen, IDropGuardClose
+from lir import IMoveSlot, INop
+from lir import lir_fn_next_value, lir_fn_add_slot
+from lir_ssa import term_successors
+from std.collections import Vector, Dict
+
+# ── Initialization lattice ─────────────────────────────────────
+
+# Per-slot initialization state at a program point.
+# Encoded as int constants for fast comparison + cheap dense Vector storage.
+const int IS_INITIALIZED = 0       # holds a live resource on every pred path
+const int IS_UNINITIALIZED = 1     # zeroed / moved on every pred path
+const int IS_MAYBE_INITIALIZED = 2  # some paths live, some dead — runtime guard
+
+# Lattice meet: join over predecessor out-states.
+# Same(Init, Init) → Init; Same(Uninit, Uninit) → Uninit; else → MaybeInit.
+int init_meet(int a, int b):
+    if a == IS_INITIALIZED and b == IS_INITIALIZED:
+        return IS_INITIALIZED
+    if a == IS_UNINITIALIZED and b == IS_UNINITIALIZED:
+        return IS_UNINITIALIZED
+    return IS_MAYBE_INITIALIZED
+
+# Read a slot's state from a dense states vector, defaulting to
+# MaybeInitialized for out-of-bounds reads (matches Rust's
+# `slot_state` fallback — safe: never eliminate unknown drops).
+int slot_state(Vector[int] &states, int slot):
+    if slot < 0 or slot >= states.len():
+        return IS_MAYBE_INITIALIZED
+    return states.get(slot).unwrap()
+
+# ── Helper: value → slot map ───────────────────────────────────
+
+# Build a Dict mapping every ValueId emitted by an ISlotAddr instruction
+# back to its SlotId. Lets us trace the argument of a DropGuardOpen
+# (or a Memset) back to the slot it targets.
+Dict[int, int] build_val_to_slot(LirFunction &f):
+    Dict[int, int] m = {}
+    int bi = 0
+    while bi < f.blocks.len():
+        LirBlock blk = f.blocks.get(bi).unwrap()
+        int ii = 0
+        while ii < blk.insts.len():
+            LirInst inst = blk.insts.get(ii).unwrap()
+            match inst:
+                case ISlotAddr(dst, slot):
+                    m.put(dst, slot)
+                else:
+                    pass
+            ii += 1
+        bi += 1
+    return m
+
+# ── Per-instruction transfer function ──────────────────────────
+
+# Apply the effect of a single instruction on the running slot states.
+# Writes silently drop out-of-range slot ids (matches Rust's bounds check —
+# the safe default at any read site is MaybeInitialized).
+void apply_inst_effect(LirInst inst, Vector[int] &state, Dict[int, int] &val_to_slot):
+    match inst:
+        case ISlotStore(slot, _, _):
+            if slot >= 0 and slot < state.len():
+                state.set(slot, IS_INITIALIZED)
+        case IClosurePack(slot, _, _, _):
+            if slot >= 0 and slot < state.len():
+                state.set(slot, IS_INITIALIZED)
+        case IMoveSlot(slot):
+            if slot >= 0 and slot < state.len():
+                state.set(slot, IS_UNINITIALIZED)
+        case IMemset(ptr, _, _):
+            if val_to_slot.contains(ptr):
+                int slot = val_to_slot.get(ptr).unwrap()
+                if slot >= 0 and slot < state.len():
+                    state.set(slot, IS_UNINITIALIZED)
+        else:
+            pass
+
+# Transfer function for one block: apply each inst's effect on a clone
+# of the in-state, return the resulting out-state.
+Vector[int] compute_transfer(LirBlock blk, Vector[int] &in_state, Dict[int, int] &val_to_slot):
+    Vector[int] state = []
+    int i = 0
+    while i < in_state.len():
+        state.push(in_state.get(i).unwrap())
+        i += 1
+    int ii = 0
+    while ii < blk.insts.len():
+        LirInst inst = blk.insts.get(ii).unwrap()
+        apply_inst_effect(inst, &state, &val_to_slot)
+        ii += 1
+    return state
+
+# Lattice meet over two slot-state vectors, length-aware. Both inputs are
+# pre-sized to n_slots in the worklist driver; the slow-path defaults
+# any missing index to MaybeInitialized.
+Vector[int] meet_states(Vector[int] &a, Vector[int] &b, int n_slots):
+    Vector[int] out = []
+    int i = 0
+    while i < n_slots:
+        int a_s = IS_MAYBE_INITIALIZED
+        if i < a.len():
+            a_s = a.get(i).unwrap()
+        int b_s = IS_MAYBE_INITIALIZED
+        if i < b.len():
+            b_s = b.get(i).unwrap()
+        out.push(init_meet(a_s, b_s))
+        i += 1
+    return out
+
+# Compare two state vectors for equality.
+bool states_equal(Vector[int] &a, Vector[int] &b):
+    if a.len() != b.len():
+        return false
+    int i = 0
+    while i < a.len():
+        if a.get(i).unwrap() != b.get(i).unwrap():
+            return false
+        i += 1
+    return true
+
+# ── Forward dataflow ───────────────────────────────────────────
+
+# Compute the per-block entry (in) states via a forward worklist
+# dataflow analysis. `in_states_present[i]` = true means in_states[i]
+# carries concrete info; false means lattice Top (no predecessor
+# has supplied info yet — unreachable until/unless one does).
+#
+# bb0 seeding (matches Rust src/lir/drop_elab.rs:105-176):
+#   * slot 0          → Uninitialized (reserved return-value local)
+#   * slots 1..=N     → Initialized   (function params — caller wrote)
+#   * slots N+1..     → Uninitialized (user locals — no store yet)
+#
+# This precise seed is what lets the bool-flag phase emit
+# `flag := true` for owning params without a separate fix-up.
+void forward_dataflow(LirFunction &f, Dict[int, int] &val_to_slot, Vector[Vector[int]] &in_states_out, Vector[bool] &in_states_present_out):
+    int n = f.blocks.len()
+    in_states_out.clear()
+    in_states_present_out.clear()
+    if n == 0:
+        return
+
+    int num_params = f.params.len()
+    int n_slots = f.slots.len()
+
+    # Seed bb0: param slots Initialized, others Uninitialized.
+    Vector[int] bb0_init = []
+    int s = 0
+    while s < n_slots:
+        bb0_init.push(IS_UNINITIALIZED)
+        s += 1
+    int p = 1
+    while p <= num_params:
+        if p < n_slots:
+            bb0_init.set(p, IS_INITIALIZED)
+        p += 1
+
+    # Initialize state arrays.
+    int bi = 0
+    while bi < n:
+        Vector[int] empty = []
+        in_states_out.push(empty)
+        in_states_present_out.push(false)
+        bi += 1
+    in_states_out.set(0, bb0_init)
+    in_states_present_out.set(0, true)
+
+    Vector[Vector[int]] out_states = []
+    int oi = 0
+    while oi < n:
+        Vector[int] empty_out = []
+        out_states.push(empty_out)
+        oi += 1
+
+    # Worklist: entry block first. Use head index + push_back to avoid
+    # O(n) pop_front on Vector (Vector.pop is O(1) at the tail).
+    Vector[int] worklist = []
+    worklist.push(0)
+    int head = 0
+
+    while head < worklist.len():
+        int bid = worklist.get(head).unwrap()
+        head += 1
+        # Skip blocks with no concrete in-state (lattice Top — wait for
+        # a predecessor to feed info).
+        if not in_states_present_out.get(bid).unwrap():
+            continue
+        Vector[int] in_state = in_states_out.get(bid).unwrap()
+        LirBlock blk = f.blocks.get(bid).unwrap()
+        Vector[int] out = compute_transfer(blk, &in_state, &val_to_slot)
+        Vector[int] prev_out = out_states.get(bid).unwrap()
+        if not states_equal(&out, &prev_out):
+            out_states.set(bid, out)
+            # Re-fetch the now-updated out for successor distribution.
+            Vector[int] out_distr = out_states.get(bid).unwrap()
+            Vector[int] succs = term_successors(blk.term)
+            int si = 0
+            while si < succs.len():
+                int succ = succs.get(si).unwrap()
+                if succ < 0 or succ >= n:
+                    si += 1
+                    continue
+                Vector[int] new_in = []
+                if not in_states_present_out.get(succ).unwrap():
+                    # Top → adopt as-is.
+                    int k = 0
+                    while k < out_distr.len():
+                        new_in.push(out_distr.get(k).unwrap())
+                        k += 1
+                else:
+                    Vector[int] prev_in = in_states_out.get(succ).unwrap()
+                    new_in = meet_states(&out_distr, &prev_in, n_slots)
+                # If new_in differs from prior in, update + re-queue.
+                bool changed = false
+                if not in_states_present_out.get(succ).unwrap():
+                    changed = true
+                else:
+                    Vector[int] prev_in2 = in_states_out.get(succ).unwrap()
+                    if not states_equal(&new_in, &prev_in2):
+                        changed = true
+                if changed:
+                    in_states_out.set(succ, new_in)
+                    in_states_present_out.set(succ, true)
+                    worklist.push(succ)
+                si += 1
+
+# ── Guard sequence helpers ─────────────────────────────────────
+
+# Find the index of the matching DropGuardClose for the open at open_idx,
+# tracking nesting depth. Returns -1 if no matching close is found within
+# the same block (a structural LIR error — the Rust impl panics; we
+# return -1 + skip in self-host because a panic here would abort the
+# entire build for an upstream pass bug, and recoverable skip-and-log
+# behaviour is preferred during the Phase 2c bring-up).
+int find_matching_close(Vector[LirInst] &insts, int open_idx):
+    int depth = 1
+    int i = open_idx + 1
+    while i < insts.len():
+        LirInst inst = insts.get(i).unwrap()
+        match inst:
+            case IDropGuardOpen(_, _):
+                depth += 1
+            case IDropGuardClose():
+                depth -= 1
+                if depth == 0:
+                    return i
+            else:
+                pass
+        i += 1
+    return -1
+
+# ── Per-block elaboration ──────────────────────────────────────
+
+# Elaborate drop guards in a single block given the block's entry slot
+# states. Mutates `blk.insts` in place to delete eliminated guard ranges.
+# Populates:
+#   * deleted_slots — slots whose Uninitialized guard+drop was fully
+#     deleted; companion Memsets get cleaned up in phase 2.
+#   * maybe_init_slots — slots that hit a MaybeInitialized guard;
+#     get bool drop-flags in phase 3.
+# Returns the number of instructions deleted.
+int elaborate_block(LirBlock &blk, Vector[int] &in_state, Dict[int, int] &val_to_slot, Dict[int, bool] &deleted_slots, Dict[int, bool] &maybe_init_slots):
+    Vector[LirInst] insts = blk.insts
+    # to_delete: dense bool vector parallel to insts. true → drop.
+    Vector[bool] to_delete = []
+    int di = 0
+    while di < insts.len():
+        to_delete.push(false)
+        di += 1
+
+    Vector[int] current_state = []
+    int si = 0
+    while si < in_state.len():
+        current_state.push(in_state.get(si).unwrap())
+        si += 1
+
+    int i = 0
+    while i < insts.len():
+        LirInst inst = insts.get(i).unwrap()
+        # Update running state with this inst's effect.
+        apply_inst_effect(inst, &current_state, &val_to_slot)
+
+        # Check for a NonZero-kind drop-guard open (kind > 0 in self-host
+        # encoding: kind=0 is Bool; kind-1 is the NonZero byte size).
+        bool is_nonzero_open = false
+        int guard_value = -1
+        int guard_kind = -1
+        match inst:
+            case IDropGuardOpen(k, v):
+                guard_kind = k
+                guard_value = v
+                if k > 0:
+                    is_nonzero_open = true
+            else:
+                pass
+
+        if is_nonzero_open:
+            int slot = -1
+            if val_to_slot.contains(guard_value):
+                slot = val_to_slot.get(guard_value).unwrap()
+            if slot >= 0:
+                int close_idx = find_matching_close(&insts, i)
+                if close_idx < 0:
+                    # Structural error — skip without modifying anything.
+                    i += 1
+                    continue
+                int state = slot_state(&current_state, slot)
+                if state == IS_UNINITIALIZED:
+                    # Delete the entire guard sequence (open + body + close).
+                    int k = i
+                    while k <= close_idx:
+                        to_delete.set(k, true)
+                        k += 1
+                    deleted_slots.put(slot, true)
+                    i = close_idx + 1
+                    continue
+                elif state == IS_INITIALIZED:
+                    # Strip the guard but keep the drop body.
+                    to_delete.set(i, true)
+                    to_delete.set(close_idx, true)
+                else:
+                    # MaybeInitialized — defer to phase 3 (bool flag).
+                    maybe_init_slots.put(slot, true)
+        i += 1
+
+    # Sweep. Count deletions; bail if none.
+    int eliminated = 0
+    int ci = 0
+    while ci < to_delete.len():
+        if to_delete.get(ci).unwrap():
+            eliminated += 1
+        ci += 1
+    if eliminated == 0:
+        return 0
+
+    # Rebuild insts vector retaining only non-deleted.
+    Vector[LirInst] kept = []
+    int ki = 0
+    while ki < insts.len():
+        if not to_delete.get(ki).unwrap():
+            kept.push(insts.get(ki).unwrap())
+        ki += 1
+    blk.insts = kept
+    return eliminated
+
+# ── Post-elaboration Memset removal ────────────────────────────
+
+# Remove IMemset-to-zero instructions whose target slot had its guard +
+# drop fully deleted (Uninitialized case). These Memsets are dead — no
+# runtime check or drop will ever read the zeroed bytes.
+# Returns the number of IMemset instructions removed.
+int remove_companion_memsets(LirFunction &f, Dict[int, int] &val_to_slot, Dict[int, bool] &deleted_slots):
+    if deleted_slots.len() == 0:
+        return 0
+    int removed = 0
+    int bi = 0
+    while bi < f.blocks.len():
+        LirBlock blk = f.blocks.get(bi).unwrap()
+        Vector[bool] keep = []
+        int ii = 0
+        bool any_dead = false
+        while ii < blk.insts.len():
+            LirInst inst = blk.insts.get(ii).unwrap()
+            bool drop_it = false
+            match inst:
+                case IMemset(ptr, _, _):
+                    if val_to_slot.contains(ptr):
+                        int slot = val_to_slot.get(ptr).unwrap()
+                        if deleted_slots.contains(slot):
+                            drop_it = true
+                            any_dead = true
+                else:
+                    pass
+            keep.push(not drop_it)
+            ii += 1
+        if any_dead:
+            Vector[LirInst] kept = []
+            int ki = 0
+            while ki < blk.insts.len():
+                if keep.get(ki).unwrap():
+                    kept.push(blk.insts.get(ki).unwrap())
+                else:
+                    removed += 1
+                ki += 1
+            blk.insts = kept
+        f.blocks.set(bi, blk)
+        bi += 1
+    return removed
+
+# ── Phase 3: Bool drop flags for MaybeInitialized slots ────────
+
+# For every slot in maybe_init_slots, allocate a bool drop-flag slot and
+# rewrite the remaining DropGuardOpen / DropGuardClose pairs to use a
+# Bool guard fed by a SlotLoad of the flag.
+#
+# Mirrors src/lir/drop_elab.rs::insert_drop_flags:
+#   1. Allocate a bool flag slot per MaybeInit slot.
+#   2. Prepend bb0 with `flag := <seed>` per slot — seed derived from
+#      the dataflow's bb0 in-state (Init → true, else false).
+#   3. Instrument every subsequent SlotStore / MoveSlot / Memset that
+#      writes a flagged user slot, mirroring the transition into the
+#      flag.
+#   4. Replace each NonZero DropGuardOpen on a flagged slot with
+#      (SlotLoad flag) + (DropGuardOpen kind=Bool, flag-value). Match
+#      closes by nesting depth (replaced vs. passthrough).
+#
+# Returns the number of guard sequences replaced.
+int insert_drop_flags(LirFunction &f, Dict[int, int] &val_to_slot, Dict[int, bool] &maybe_init_slots, Vector[int] &bb0_in_state):
+    if maybe_init_slots.len() == 0:
+        return 0
+
+    # 1. Allocate flag slots, in slot-id order for deterministic output.
+    Vector[int] sorted_slots = maybe_init_slots.keys()
+    # Sort by slot id ascending — simple insertion sort, small N (~5-30).
+    int ssi = 1
+    while ssi < sorted_slots.len():
+        int v = sorted_slots.get(ssi).unwrap()
+        int j = ssi - 1
+        while j >= 0 and sorted_slots.get(j).unwrap() > v:
+            sorted_slots.set(j + 1, sorted_slots.get(j).unwrap())
+            j -= 1
+        sorted_slots.set(j + 1, v)
+        ssi += 1
+
+    Dict[int, int] slot_to_flag = {}
+    int ai = 0
+    while ai < sorted_slots.len():
+        int slot = sorted_slots.get(ai).unwrap()
+        String flag_name = "_df_" + int_to_str(slot)
+        int flag_id = lir_fn_add_slot(&f, LT_BOOL, flag_name)
+        slot_to_flag.put(slot, flag_id)
+        ai += 1
+
+    # Track flag slots themselves so we don't recursively instrument
+    # our own flag-stores.
+    Dict[int, bool] flag_slots = {}
+    int fsi = 0
+    while fsi < sorted_slots.len():
+        int s = sorted_slots.get(fsi).unwrap()
+        int fs = slot_to_flag.get(s).unwrap()
+        flag_slots.put(fs, true)
+        fsi += 1
+
+    # 2. Prepend bb0 with init writes seeded from dataflow.
+    Vector[LirInst] inits = []
+    int initi = 0
+    while initi < sorted_slots.len():
+        int slot = sorted_slots.get(initi).unwrap()
+        int flag_slot = slot_to_flag.get(slot).unwrap()
+        int seed = slot_state(&bb0_in_state, slot)
+        bool initial = false
+        if seed == IS_INITIALIZED:
+            initial = true
+        int v_init = lir_fn_next_value(&f)
+        inits.push(IBoolConst(v_init, initial))
+        inits.push(ISlotStore(flag_slot, v_init, false))
+        initi += 1
+
+    LirBlock bb0 = f.blocks.get(0).unwrap()
+    Vector[LirInst] new_bb0 = []
+    int ipi = 0
+    while ipi < inits.len():
+        new_bb0.push(inits.get(ipi).unwrap())
+        ipi += 1
+    int oi = 0
+    while oi < bb0.insts.len():
+        new_bb0.push(bb0.insts.get(oi).unwrap())
+        oi += 1
+    bb0.insts = new_bb0
+    f.blocks.set(0, bb0)
+
+    # 3. Instrument flag transitions across all blocks.
+    int bi = 0
+    while bi < f.blocks.len():
+        LirBlock blk = f.blocks.get(bi).unwrap()
+        Vector[LirInst] old_insts = blk.insts
+        Vector[LirInst] new_insts = []
+        int ii = 0
+        while ii < old_insts.len():
+            LirInst inst = old_insts.get(ii).unwrap()
+            int trigger_flag = -1
+            bool new_val = false
+            match inst:
+                case ISlotStore(slot, _, _):
+                    if not flag_slots.contains(slot) and slot_to_flag.contains(slot):
+                        trigger_flag = slot_to_flag.get(slot).unwrap()
+                        new_val = true
+                case IMoveSlot(slot):
+                    if slot_to_flag.contains(slot):
+                        trigger_flag = slot_to_flag.get(slot).unwrap()
+                        new_val = false
+                case IMemset(ptr, _, _):
+                    if val_to_slot.contains(ptr):
+                        int s = val_to_slot.get(ptr).unwrap()
+                        if slot_to_flag.contains(s):
+                            trigger_flag = slot_to_flag.get(s).unwrap()
+                            new_val = false
+                else:
+                    pass
+            new_insts.push(inst)
+            if trigger_flag >= 0:
+                int v = lir_fn_next_value(&f)
+                new_insts.push(IBoolConst(v, new_val))
+                new_insts.push(ISlotStore(trigger_flag, v, false))
+            ii += 1
+        blk.insts = new_insts
+        f.blocks.set(bi, blk)
+        bi += 1
+
+    # 4. Replace NonZero guard opens on flagged slots with Bool guards
+    #    fed by a SlotLoad of the flag. Track depth so closes match.
+    int replaced = 0
+    int rbi = 0
+    while rbi < f.blocks.len():
+        LirBlock blk = f.blocks.get(rbi).unwrap()
+        Vector[LirInst] old_insts = blk.insts
+        Vector[LirInst] new_insts = []
+        int flag_depth = 0
+        int passthrough_depth = 0
+        int ii = 0
+        while ii < old_insts.len():
+            LirInst inst = old_insts.get(ii).unwrap()
+            bool handled = false
+            match inst:
+                case IDropGuardOpen(kind, value):
+                    if kind > 0:
+                        int slot = -1
+                        if val_to_slot.contains(value):
+                            slot = val_to_slot.get(value).unwrap()
+                        if slot >= 0 and slot_to_flag.contains(slot):
+                            int flag_slot = slot_to_flag.get(slot).unwrap()
+                            int v_flag = lir_fn_next_value(&f)
+                            new_insts.push(ISlotLoad(v_flag, flag_slot, LT_BOOL))
+                            # kind=0 = Bool guard
+                            new_insts.push(IDropGuardOpen(0, v_flag))
+                            flag_depth += 1
+                            replaced += 1
+                            handled = true
+                        else:
+                            passthrough_depth += 1
+                    # kind == 0 (already Bool) — leave alone, treat as passthrough
+                    # (depth tracking still required so its matching close stays).
+                    if not handled and kind == 0:
+                        passthrough_depth += 1
+                case IDropGuardClose():
+                    if flag_depth > 0:
+                        flag_depth -= 1
+                        new_insts.push(IDropGuardClose())
+                        handled = true
+                    elif passthrough_depth > 0:
+                        passthrough_depth -= 1
+                else:
+                    pass
+            if not handled:
+                new_insts.push(inst)
+            ii += 1
+        blk.insts = new_insts
+        f.blocks.set(rbi, blk)
+        rbi += 1
+
+    return replaced
+
+# ── Phase 4: MoveSlot sweep ────────────────────────────────────
+
+# Strip all IMoveSlot annotations — they served only as dataflow signals.
+int sweep_move_slots(LirFunction &f):
+    int swept = 0
+    int bi = 0
+    while bi < f.blocks.len():
+        LirBlock blk = f.blocks.get(bi).unwrap()
+        Vector[LirInst] kept = []
+        int ii = 0
+        bool any_dead = false
+        while ii < blk.insts.len():
+            LirInst inst = blk.insts.get(ii).unwrap()
+            bool is_move = false
+            match inst:
+                case IMoveSlot(_):
+                    is_move = true
+                else:
+                    pass
+            if is_move:
+                swept += 1
+                any_dead = true
+            else:
+                kept.push(inst)
+            ii += 1
+        if any_dead:
+            blk.insts = kept
+            f.blocks.set(bi, blk)
+        bi += 1
+    return swept
+
+# ── Public entry point ─────────────────────────────────────────
+
+# Cheap pre-check: does the function contain any guard-open or move-slot
+# annotation that drop_elab would act on? If not, the whole pass is a
+# no-op for this function — skipping avoids the heavy forward_dataflow
+# Vector[Vector[int]] allocations on every function in driver.gg.
+#
+# Per the Phase 2c plan, the bulk of self-host functions (lower.gg emits
+# zero GIDropIfAlive today) have no IDropGuardOpen and no IMoveSlot.
+# Without this gate, drop_elab allocates n_blocks * n_slots ints per
+# function * ~600 functions in driver.gg → multi-GB RSS at stage1.
+bool function_needs_drop_elab(LirFunction &f):
+    int bi = 0
+    while bi < f.blocks.len():
+        LirBlock blk = f.blocks.get(bi).unwrap()
+        int ii = 0
+        while ii < blk.insts.len():
+            LirInst inst = blk.insts.get(ii).unwrap()
+            match inst:
+                case IDropGuardOpen(_, _):
+                    return true
+                case IMoveSlot(_):
+                    return true
+                else:
+                    pass
+            ii += 1
+        bi += 1
+    return false
+
+# Run drop elaboration on every function in the module:
+#   1. Forward dataflow → per-block in-states.
+#   2. Guard elimination — Uninit → delete, Init → strip, MaybeInit → mark.
+#   3. Companion Memset removal for fully-deleted (Uninit) slots.
+#   4. Bool drop-flags for MaybeInit slots.
+#   5. Sweep IMoveSlot annotations (consumed by phases 1–4).
+void elaborate_drops(LirModule &m):
+    int fi = 0
+    while fi < m.functions.len():
+        LirFunction f = m.functions.get(fi).unwrap()
+
+        # Cheap gate — skip functions with no work for drop_elab. See
+        # `function_needs_drop_elab` docstring.
+        if not function_needs_drop_elab(&f):
+            fi += 1
+            continue
+
+        # Build the val→slot map once; SlotAddr instructions survive every
+        # phase of elaboration (we only delete inside guard ranges or
+        # Memsets — never SlotAddrs preceding them).
+        Dict[int, int] val_to_slot = build_val_to_slot(&f)
+
+        Vector[Vector[int]] in_states = []
+        Vector[bool] in_states_present = []
+        forward_dataflow(&f, &val_to_slot, &in_states, &in_states_present)
+
+        # Phase 1: guard elimination.
+        Dict[int, bool] deleted_slots = {}
+        Dict[int, bool] maybe_init_slots = {}
+        int bi = 0
+        while bi < f.blocks.len():
+            if in_states_present.get(bi).unwrap():
+                LirBlock blk = f.blocks.get(bi).unwrap()
+                Vector[int] state = in_states.get(bi).unwrap()
+                elaborate_block(&blk, &state, &val_to_slot, &deleted_slots, &maybe_init_slots)
+                f.blocks.set(bi, blk)
+            bi += 1
+
+        # Phase 2: Memset cleanup.
+        remove_companion_memsets(&f, &val_to_slot, &deleted_slots)
+
+        # Phase 3: bool drop-flags for MaybeInit slots.
+        Vector[int] bb0_state = []
+        if in_states.len() > 0 and in_states_present.get(0).unwrap():
+            bb0_state = in_states.get(0).unwrap()
+        insert_drop_flags(&f, &val_to_slot, &maybe_init_slots, &bb0_state)
+
+        # Phase 4: MoveSlot sweep.
+        sweep_move_slots(&f)
+
+        m.functions.set(fi, f)
+        fi += 1

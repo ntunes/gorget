@@ -15,6 +15,7 @@ from lir_lower import lower_gir_to_lir, eliminate_dead_globals
 from lir_ssa import construct_ssa
 from lir import LirModule, LirFunction
 from lir_codegen import generate_c
+from drop_elab import elaborate_drops
 from std.fs import read_file
 from std.os import args
 from std.collections import Vector, Dict
@@ -69,6 +70,14 @@ void main():
         eliminate_dead_globals(&lir)
         run_ssa(&lir)
         validate_lir_after("ssa-construction", &lir)
+        # Phase 2c COMMIT 1: drop elaboration runs after SSA, mirroring
+        # Rust's pipeline (src/lir/optimize.rs:78). Operates on the
+        # non-promotable slots that survived SSA construction (those
+        # touched by ISlotAddr / IDropGuardOpen). Phase 2c COMMITs 2-4
+        # turn this from a no-observable-effect pass into the linchpin
+        # of correct drop emission.
+        elaborate_drops(&lir)
+        validate_lir_after("drop-elaboration", &lir)
         print(generate_c(&lir))
     else:
         print(format_module(&gir))
