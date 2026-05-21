@@ -1,0 +1,37 @@
+# Minimal repro: compound `and` with method-chain RHS is miscompiled.
+#
+# Symptom: `if X and Y.A().B():` evaluates the body even when Y.A().B()
+# returns false. The bug specifically affects inline method CHAINS as
+# the RHS of compound `and`/`or` (single method calls work; stored bools
+# work). Discovered 2026-05-21 while debugging self-host's wire_liveness
+# silently emitting zero OpMoves: `lower.gg:1343` reads
+# `live_after.get(lid2).unwrap()` inline as the RHS of `and`, so every
+# liveness check trips falsely and the dict is never populated.
+#
+# Expected output (stdout):
+#   chain_ok
+#   stored_ok
+#   single_ok
+void main():
+    Vector[bool] v = []
+    v.fill(6, false)
+
+    # Chained `.get().unwrap()` inline as RHS of `and` — should NOT fire
+    # since v[2] is false.
+    if true and v.get(2).unwrap():
+        print("chain_BUG")
+    else:
+        print("chain_ok")
+
+    # Same value stored to a local first — works correctly.
+    bool got = v.get(2).unwrap()
+    if true and got:
+        print("stored_BUG")
+    else:
+        print("stored_ok")
+
+    # Single method call (not a chain) — works correctly.
+    if true and v.is_empty():
+        print("single_BUG")
+    else:
+        print("single_ok")

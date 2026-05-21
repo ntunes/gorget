@@ -297,6 +297,23 @@ fn hello() {
 }
 
 #[test]
+fn compound_and_method_chain_miscompile() {
+    // Regression for the compound-`and`-with-method-chain miscompile fixed
+    // 2026-05-21 in lower_short_circuit (src/ir/lowering/exprs/operators.rs).
+    // Before the fix, `if X and v.get(i).unwrap():` evaluated the body
+    // even when the unwrap returned false — the pointer-typed unwrap
+    // result was assigned to a bool slot without the deref that the
+    // non-short-circuit binary-op path applies.
+    run_gg(
+        "compound_and_method_chain_miscompile.gg",
+        "\
+chain_ok
+stored_ok
+single_ok",
+    );
+}
+
+#[test]
 fn variables() {
     run_gg(
         "variables.gg",

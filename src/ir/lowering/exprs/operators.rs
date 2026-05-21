@@ -299,7 +299,15 @@ fn lower_short_circuit(
     op: ast::BinaryOp,
     right: &Spanned<ast::Expr>,
 ) -> Operand {
+    // Auto-deref `Ref[bool] → bool` on both operands — matches the regular
+    // binary-op path at lines 50-51. Without this, an inline method-chain
+    // like `v.get(i).unwrap()` produces a `Ptr(bool)` whose non-null bits
+    // get assigned into a `bool` slot, and `branch` reads the pointer's
+    // bit pattern (always non-null when Some) instead of the bool payload.
+    // Discovered 2026-05-21 while debugging self-host's wire_liveness pass
+    // emitting zero OpMoves; see tests/fixtures/compound_and_method_chain_miscompile.gg.
     let lhs = lower_expr(ctx, builder, left);
+    let lhs = cow_deref_if_ptr(ctx, builder, lhs);
 
     // Allocate a result local
     let result_id = builder.add_local(BOOL_TYPE, None);
@@ -323,6 +331,7 @@ fn lower_short_circuit(
             // true-branch, before the guard/rhs is evaluated).
             super::super::stmts::emit_is_bindings(ctx, builder, left);
             let rhs = lower_expr(ctx, builder, right);
+            let rhs = cow_deref_if_ptr(ctx, builder, rhs);
             builder.assign(Place::local(result_id), rhs);
             builder.jump(merge_bb);
         }
@@ -338,6 +347,7 @@ fn lower_short_circuit(
             // rhs_bb: evaluate rhs, assign to result, jump merge
             builder.switch_to(rhs_bb);
             let rhs = lower_expr(ctx, builder, right);
+            let rhs = cow_deref_if_ptr(ctx, builder, rhs);
             builder.assign(Place::local(result_id), rhs);
             builder.jump(merge_bb);
         }
