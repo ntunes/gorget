@@ -133,10 +133,11 @@ void register_builtin_structs(LirModule &m, Dict[String, int] &sr):
 # ── Type mapping: GIR type ID → LIR type ───────────────────
 
 # Map a collection name pattern to its runtime struct name. Phase A
-# typed-metadata read; the prefix cascade lives in
-# `build_resource_metadata` (single source of truth).
-String collection_runtime_type(String name):
-    match build_resource_metadata(name):
+# typed-metadata read via `resource_meta_for` (lazy-populating
+# accessor); the prefix cascade lives in `build_resource_metadata`
+# (single source of truth).
+String collection_runtime_type(String name, GirModule &gmod):
+    match resource_meta_for(&gmod, name):
         case Some(rmeta):
             match rmeta.collection_kind:
                 case CkNotCollection():
@@ -147,25 +148,26 @@ String collection_runtime_type(String name):
             return ""
     return ""
 
-# Phase A typed-metadata read; the prefix cascade lives in
-# `build_resource_metadata` (single source of truth). The
-# `Heap__` prefix that the legacy cascade marked as opaque is
+# Phase A typed-metadata read via `resource_meta_for`; the prefix
+# cascade lives in `build_resource_metadata` (single source of truth).
+# The `Heap__` prefix that the legacy cascade marked as opaque is
 # now classified as its own `CkHeap` collection kind (same
 # GorgetArray runtime as Vector/Deque); every caller of this
 # helper checks `collection_runtime_type` first, so the previous
 # Heap__→true branch never fired in practice.
-bool is_opaque_pointer_type(String name):
-    match build_resource_metadata(name):
+bool is_opaque_pointer_type(String name, GirModule &gmod):
+    match resource_meta_for(&gmod, name):
         case Some(rmeta):
             return rmeta.opaque_handle
         case None:
             return false
     return false
 
-# Phase A typed-metadata read; the prefix cascade lives in
-# `build_resource_metadata` (Guard family → runtime_name "Guard").
-bool is_guard_struct_type(String name):
-    match build_resource_metadata(name):
+# Phase A typed-metadata read via `resource_meta_for`; the prefix
+# cascade lives in `build_resource_metadata` (Guard family →
+# runtime_name "Guard").
+bool is_guard_struct_type(String name, GirModule &gmod):
+    match resource_meta_for(&gmod, name):
         case Some(rmeta):
             return rmeta.runtime_name == "Guard"
         case None:
@@ -401,16 +403,32 @@ Option[ResourceMetadata] build_resource_metadata(String name):
 # Phase A — typed accessor. Consumers replace `name.starts_with("X__")`
 # dispatches with `match resource_meta_for(&gmod, name): case Some(rmeta): ...`
 # (See `docs/internals/self-host-resource-model.md` §3 / §3.4.)
+#
+# Lazy population: callers may run BEFORE `lower_gir_to_lir`'s
+# bulk-populate loop (e.g. anything inside `lower_module`). When the
+# cache misses, fall through to `build_resource_metadata` (the cascade
+# source of truth) and memoise the result. After the bulk-populate
+# loop runs, every named type is already cached and the slow path
+# becomes a single `contains` check.
 Option[ResourceMetadata] resource_meta_for(GirModule &gmod, String name):
-    return gmod.resource_metadata.get(name)
+    if gmod.resource_metadata.contains(name):
+        return gmod.resource_metadata.get(name)
+    Option[ResourceMetadata] computed = build_resource_metadata(name)
+    match computed:
+        case Some(rmeta):
+            gmod.resource_metadata.put(name.clone(), rmeta.clone())
+            return Some(rmeta)
+        case None:
+            return None
+    return None
 
 # Phase A — typed accessor: read method_prefix off the metadata.
 # `build_resource_metadata` populates `method_prefix` per-prefix; this
-# helper just unwraps it (returns "" when the prefix has no method
-# routing — e.g. bare-name opaques like CondVar that go through
-# direct method names instead).
-String opaque_ptr_method_prefix(String name):
-    match build_resource_metadata(name):
+# helper unwraps it via `resource_meta_for` (returns "" when the
+# prefix has no method routing — e.g. bare-name opaques like CondVar
+# that go through direct method names instead).
+String opaque_ptr_method_prefix(String name, GirModule &gmod):
+    match resource_meta_for(&gmod, name):
         case Some(rmeta):
             match rmeta.method_prefix:
                 case Some(p):
@@ -424,8 +442,8 @@ String opaque_ptr_method_prefix(String name):
 # Phase A — typed accessor: read method_prefix off the Guard metadata.
 # Defaults to "gorget_guard" for the bare `Guard__` prefix, matching
 # the legacy fallback behaviour.
-String guard_method_prefix(String name):
-    match build_resource_metadata(name):
+String guard_method_prefix(String name, GirModule &gmod):
+    match resource_meta_for(&gmod, name):
         case Some(rmeta):
             match rmeta.method_prefix:
                 case Some(p):
@@ -555,7 +573,7 @@ bool is_builtin_runtime_struct(String name):
 # that only appear as field types and never get `lookup_or_register_named`
 # treatment during GIR lowering. Silently no-ops for primitives / names
 # already registered / types lir_lower doesn't know how to size.
-void register_field_type_in_sr(String tname, Dict[String, int] &sr, LirModule &m):
+void register_field_type_in_sr(String tname, Dict[String, int] &sr, LirModule &m, GirModule &gmod):
     if tname == "":
         return
     if sr.get(tname).unwrap_or(-1) >= 0:
@@ -571,7 +589,7 @@ void register_field_type_in_sr(String tname, Dict[String, int] &sr, LirModule &m
     if tname == "bool" or tname == "void":
         return
     # Collection aliases → map to the pre-registered runtime struct.
-    String rt = collection_runtime_type(tname)
+    String rt = collection_runtime_type(tname, &gmod)
     if rt != "":
         int rt_sid = sr.get(rt).unwrap_or(-1)
         if rt_sid >= 0:
@@ -583,7 +601,7 @@ void register_field_type_in_sr(String tname, Dict[String, int] &sr, LirModule &m
     # the trait box (BkTraitBox) for bare `Box` doesn't reach this site
     # (no monomorphisation suffix to register).
     bool tname_is_box = false
-    match build_resource_metadata(tname):
+    match resource_meta_for(&gmod, tname):
         case Some(rmeta):
             match rmeta.box_kind:
                 case BkRegularBox():
@@ -600,13 +618,13 @@ void register_field_type_in_sr(String tname, Dict[String, int] &sr, LirModule &m
         sr.put(tname, box_id)
         m.type_runtime_map.put(tname.clone(), "Box")
         return
-    if is_opaque_pointer_type(tname):
+    if is_opaque_pointer_type(tname, &gmod):
         m.type_runtime_map.put(tname.clone(), "Ptr")
-        String opm = opaque_ptr_method_prefix(tname)
+        String opm = opaque_ptr_method_prefix(tname, &gmod)
         if opm != "":
             m.type_method_prefix_map.put(tname.clone(), opm)
         return
-    if is_guard_struct_type(tname):
+    if is_guard_struct_type(tname, &gmod):
         Vector[StructField] guard_fields = []
         guard_fields.push(StructField("owner", LT_PTR))
         guard_fields.push(StructField("ptr", LT_PTR))
@@ -614,7 +632,7 @@ void register_field_type_in_sr(String tname, Dict[String, int] &sr, LirModule &m
         int guard_id = lir_mod_add_struct(&m, LirStructDef(guard_name_ctor, guard_fields, 0, false, 16, -1))
         sr.put(tname, guard_id)
         m.type_runtime_map.put(tname.clone(), "Guard")
-        m.type_method_prefix_map.put(tname.clone(), guard_method_prefix(tname))
+        m.type_method_prefix_map.put(tname.clone(), guard_method_prefix(tname, &gmod))
         return
 
 int resolve_field_lir_type(String type_name, Dict[String, int] &sr):
@@ -682,7 +700,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
                     # elem/key/val extraction stays string-based —
                     # rmeta doesn't carry the parsed names.
                     bool dispatched = false
-                    match build_resource_metadata(name):
+                    match resource_meta_for(&gmod, name):
                         case Some(rmeta):
                             match rmeta.collection_kind:
                                 case CkVector():
@@ -830,11 +848,11 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
         GirTypeInfo pc_info = gmod.type_infos.get(pc_tname).unwrap()
         # Struct fields
         for pcf in pc_info.fields:
-            register_field_type_in_sr(pcf.type_name, &sr, &m)
+            register_field_type_in_sr(pcf.type_name, &sr, &m, &gmod)
         # Enum variant fields
         for pcv in pc_info.variants:
             for pcvf in pcv.fields:
-                register_field_type_in_sr(pcvf.type_name, &sr, &m)
+                register_field_type_in_sr(pcvf.type_name, &sr, &m, &gmod)
 
     # Pass 2: Fill in struct/enum fields from GIR type info.
     for tname in ti_keys:
@@ -1090,7 +1108,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
 
 # ── Runtime function name mapping ───────────────────────────
 
-String map_runtime_name(String name, LirModule &m):
+String map_runtime_name(String name, LirModule &m, GirModule &gmod):
     # Hardcoded aliases for extern-method stubs whose method name carries
     # the File/stream receiver type (lost to `int64_t__` fallback when the
     # self-host type inference can't keep the receiver as a named type).
@@ -1151,7 +1169,7 @@ String map_runtime_name(String name, LirModule &m):
             pass
     # Collection constructors (bare name, no method suffix).
     # Phase A: dispatch on type_runtime_map category + coll_ctor_fn_map.
-    if is_collection_constructor(name, &m):
+    if is_collection_constructor(name, &m, &gmod):
         String ctor_cat = type_category_for_name(name, &m)
         if ctor_cat == "GorgetArray":
             return "gorget_array_new"
@@ -1584,7 +1602,7 @@ String coll_ctor_fn_for_name(String name, LirModule &m):
 # E.g., "Vector__int64_t" is a constructor, "Vector__int64_t__push" is a method.
 # Phase A — uses type_runtime_map: registered types are constructors, unregistered
 # names with collection prefixes could be method calls.
-bool is_collection_constructor(String name, LirModule &m):
+bool is_collection_constructor(String name, LirModule &m, GirModule &gmod):
     # Fast path: registered collection types (GorgetArray/Map/Set) only.
     # Box, Guard, Task, Ptr, Option, Result, GorgetString are also in
     # type_runtime_map but are NOT collection constructors — only the three
@@ -1599,7 +1617,7 @@ bool is_collection_constructor(String name, LirModule &m):
     # Slow path: unregistered name or Ptr-category — check prefix + method-suffix.
     # Handles types that haven't been seen as type declarations yet.
     # collection_runtime_type is the source-of-truth for prefix matching.
-    if collection_runtime_type(name) == "" and not is_opaque_pointer_type(name):
+    if collection_runtime_type(name, &gmod) == "" and not is_opaque_pointer_type(name, &gmod):
         return false
     String method = extract_method_name(name)
     if method == "int64_t" or method == "double" or method == "bool" or method == "int32_t":
@@ -2662,12 +2680,12 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                     f.blocks.set(bb, blk2)
             else:
                 # Extern or runtime call
-                String mapped = map_runtime_name(func_name, &m)
+                String mapped = map_runtime_name(func_name, &m, &gmod)
                 String call_name = func_name
                 if mapped != "":
                     call_name = mapped
                 # Collection constructors need element size argument(s)
-                if is_collection_constructor(func_name, &m):
+                if is_collection_constructor(func_name, &m, &gmod):
                     # Phase A: dispatch on type_runtime_map category; avoids starts_with.
                     String coll_cat2 = type_category_for_name(func_name, &m)
                     if coll_cat2 == "GorgetMap":
@@ -2823,7 +2841,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                 bblk2.insts.push(ISlotStore(box_dst_slot, box_dst, false))
                 f.blocks.set(bb, bblk2)
                 return bb
-            String mapped_early = map_runtime_name(func_name, &m)
+            String mapped_early = map_runtime_name(func_name, &m, &gmod)
             String effective_name = func_name
             if mapped_early != "":
                 effective_name = mapped_early
@@ -2907,7 +2925,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                     int arg_val = lower_operand(arg, &f, bb, &local_to_slot, &m)
                     lir_args.push(arg_val)
                 ai += 1
-            String mapped = map_runtime_name(func_name, &m)
+            String mapped = map_runtime_name(func_name, &m, &gmod)
             String call_name = func_name
             if mapped != "":
                 call_name = mapped

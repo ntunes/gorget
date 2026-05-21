@@ -24,8 +24,9 @@ from gir import CkBinOpArg, CkFormatArg, CkMatchPtr
 # Phase A — typed-metadata classifier shared with lir_lower.gg. The
 # `name.starts_with("X__")` cascade lives there as the single source
 # of truth for which monomorphised type names belong to which runtime
-# family.
-from lir_lower import build_resource_metadata
+# family; `resource_meta_for` is the lazy-populating accessor that
+# memoises results into `gmod.resource_metadata`.
+from lir_lower import resource_meta_for
 
 # ── Lowering context ─────────────────────────────────────
 
@@ -539,7 +540,7 @@ bool is_droppable_type(int type_id, GirModule &gmod):
         else:
             return false
     # Runtime resource types only — see top-of-fn docstring.
-    match build_resource_metadata(tname):
+    match resource_meta_for(&gmod, tname):
         case Some(_):
             return true
         case None:
@@ -2142,13 +2143,13 @@ String enum_variant_parent(String name, GirModule &gmod):
                     return tname
     return ""
 
-bool is_type_constructor(String name):
+bool is_type_constructor(String name, GirModule &gmod):
     # Phase A typed read: parameterised resource families with the
     # `T(args)` user-code constructor shape (Vector__T, Dict__K__V,
     # Mutex__T, …) carry `is_typed_constructor=true` in their
     # metadata. Built-in singletons / factory-shape opaques /
     # Box / Heap / Atomic / etc. carry `false`.
-    match build_resource_metadata(name):
+    match resource_meta_for(&gmod, name):
         case Some(rmeta):
             if rmeta.is_typed_constructor:
                 return true
@@ -2467,7 +2468,7 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
         # Phase A typed read: Dict/Set `.remove(k)` returns bool at the
         # runtime, but every self-host caller discards the result; so
         # we type the binding as void.
-        match build_resource_metadata(recv_n):
+        match resource_meta_for(&gmod, recv_n):
             case Some(rmeta):
                 match rmeta.collection_kind:
                     case CkDict():
@@ -2766,13 +2767,14 @@ bool is_resource_field_type(SpannedType stype, Dict[String, bool] resource_types
             return false
 
 bool is_resource_type_name(String name, GirModule &gmod):
-    # Delegate to `build_resource_metadata` in lir_lower.gg — the single
-    # source of truth for the runtime-resource classification (covers
+    # Delegate to `resource_meta_for` (lazy accessor over the
+    # `build_resource_metadata` cascade in lir_lower.gg — the single
+    # source of truth for the runtime-resource classification, covering
     # GorgetString / Array / Map / Set / Closure, parameterised Vector__/
     # Dict__/Set__/Box__, opaque handles Mutex__/Channel__/Shared__/
     # Weak__/AtomicInt__/Semaphore__/OnceFlag__/WaitGroup__/etc.).
     # Layering rule 3: one source of truth per axis.
-    match build_resource_metadata(name):
+    match resource_meta_for(&gmod, name):
         case Some(_):
             return true
         case None:
@@ -3753,7 +3755,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             int mdst = -1
             if is_collection_getter_method(mname):
                 bool recv_is_collection = false
-                match build_resource_metadata(recv_type_name):
+                match resource_meta_for(&gmod, recv_type_name):
                     case Some(rmeta):
                         match rmeta.collection_kind:
                             case CkNotCollection():
@@ -3802,10 +3804,10 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # a Box-prefixed type name returns empty for view-aliasing
             # reasons (see EDeref comment at line ~2549), so we walk bytes.
             # Phase A — typed-metadata classification (BkRegularBox) via
-            # build_resource_metadata; the byte-slice for the inner-name
-            # stays string-based (rmeta doesn't carry parsed inner names).
+            # resource_meta_for; the byte-slice for the inner-name stays
+            # string-based (rmeta doesn't carry parsed inner names).
             bool base_is_regular_box = false
-            match build_resource_metadata(base_type_name):
+            match resource_meta_for(&gmod, base_type_name):
                 case Some(rmeta):
                     match rmeta.box_kind:
                         case BkRegularBox():
@@ -4005,7 +4007,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # an EDeref site (a trait box deref goes through vtable
             # dispatch, not raw pointer load).
             bool dsrc_is_box = false
-            match build_resource_metadata(dsrc_tname):
+            match resource_meta_for(&gmod, dsrc_tname):
                 case Some(rmeta):
                     match rmeta.box_kind:
                         case BkRegularBox():
@@ -4333,7 +4335,7 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                     ret_type = gfn.return_type
                     break
         # Collection/struct constructors: return the named type
-        if ret_type == I64_TYPE and is_type_constructor(call_name):
+        if ret_type == I64_TYPE and is_type_constructor(call_name, &gmod):
             # If call_name is an enum variant, route to the parent enum type.
             String parent = enum_variant_parent(call_name, &gmod)
             if parent != "":
@@ -4684,15 +4686,13 @@ void emit_chain_writeback(LowerCtx &ctx, SpannedExpr coll_expr, SpannedExpr idx_
     # Other receivers fall through silently — better to lose the writeback
     # than emit a bogus call.
     # Phase A — typed-metadata classification (CkVector/CkDeque/CkDict) via
-    # build_resource_metadata; retires the legacy `starts_with("Vector__")`
-    # etc. cascade per docs/internals/unified-resource-model.md §3.6 + §13
-    # and docs/internals/self-host-resource-model.md §3. (`build_resource_metadata`
-    # rather than `resource_meta_for(&gmod, ...)` because lower_module runs
-    # before `gmod.resource_metadata` is populated at `lower_gir_to_lir`
-    # entry — same reasoning as other in-lower_module consumers above.)
+    # the lazy `resource_meta_for` accessor; retires the legacy
+    # `starts_with("Vector__")` cascade per
+    # docs/internals/unified-resource-model.md §3.6 + §13 and
+    # docs/internals/self-host-resource-model.md §3.
     bool is_vector = false
     bool is_dict = false
-    match build_resource_metadata(coll_tn):
+    match resource_meta_for(&gmod, coll_tn):
         case Some(rmeta):
             match rmeta.collection_kind:
                 case CkVector():
@@ -4789,7 +4789,7 @@ void lower_index_assign(LowerCtx &ctx, SpannedExpr base_expr, SpannedExpr idx_ex
     String setter = ""
     # Phase A typed read: dispatch on the receiver's collection_kind.
     # CkSet / CkHeap have no meaningful index-assign — fall through to lower_fail.
-    match build_resource_metadata(base_tname):
+    match resource_meta_for(&gmod, base_tname):
         case Some(rmeta):
             match rmeta.collection_kind:
                 case CkVector():
@@ -4914,7 +4914,7 @@ int emit_tag_read(LowerCtx &ctx, int scrutinee_ptr, String enum_name, GirModule 
 String resolve_payload_clone_fn(String tname, GirModule &gmod):
     if tname == "":
         return ""
-    match build_resource_metadata(tname):
+    match resource_meta_for(&gmod, tname):
         case Some(rmeta):
             match rmeta.clone_fn:
                 case Some(fn):
@@ -5337,11 +5337,12 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
     int coll_local = lower_expr(&ctx, probe_coll, &gmod)
     String coll_tn = local_type_name(coll_local, &ctx, &gmod)
     # Phase A — typed-metadata classification (CkVector/CkDeque) via
-    # build_resource_metadata; retires the legacy `starts_with("Vector__")`
-    # cascade per docs/internals/unified-resource-model.md §3.6 + §13 and
+    # the lazy `resource_meta_for` accessor; retires the legacy
+    # `starts_with("Vector__")` cascade per
+    # docs/internals/unified-resource-model.md §3.6 + §13 and
     # docs/internals/self-host-resource-model.md §3.
     bool coll_is_vec_like = false
-    match build_resource_metadata(coll_tn):
+    match resource_meta_for(&gmod, coll_tn):
         case Some(rmeta):
             match rmeta.collection_kind:
                 case CkVector():
