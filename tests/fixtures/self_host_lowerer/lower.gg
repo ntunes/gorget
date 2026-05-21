@@ -956,10 +956,17 @@ Vector[bool] live_bitset_empty(int nlocals):
     out.fill(nlocals, false)
     return out
 
-# Note the local-IDs an Operand reads. Only OpCopy/OpMove/OpClone/OpBorrow
-# carry a source local; the const variants do not. Adds the local to
-# `acc` (no overwrite — set semantics). Used to compute USE[B] /
-# `live_in_after_inst` updates.
+# Note the local-IDs an Operand reads. Only OpCopy/OpMove/OpClone carry a
+# source local for USE purposes; OpBorrow is intentionally excluded.
+# Mirrors Rust's `src/ir/liveness.rs:354` (only Copy | Move counted as
+# reads). Sound: borrow check has already validated the program upstream
+# (Rust gg compiled the AST being processed here), so any OpBorrow of a
+# local precedes the OpMove of the same local — ignoring OpBorrow for
+# move-elision can't introduce use-after-free. Without this exclusion,
+# `wire_liveness_into_modes` demotes every OpMove of a later-borrowed
+# local to OpClone, defeating move-elision (H1 fix, 2026-05-21).
+# Adds the local to `acc` (no overwrite — set semantics). Used to
+# compute USE[B] / `live_in_after_inst` updates.
 void liveness_operand_uses(Operand op, Vector[bool] &acc):
     match op:
         case OpCopy(lid):
@@ -969,9 +976,6 @@ void liveness_operand_uses(Operand op, Vector[bool] &acc):
             if lid >= 0 and lid < acc.len():
                 acc.set(lid, true)
         case OpClone(lid):
-            if lid >= 0 and lid < acc.len():
-                acc.set(lid, true)
-        case OpBorrow(lid):
             if lid >= 0 and lid < acc.len():
                 acc.set(lid, true)
         else:
@@ -1719,6 +1723,10 @@ void update_last_pos_for_term(Terminator term, int pos, Dict[int, int] &last_pos
         else:
             pass
 
+# Legacy linear-order helper for `liveness_instrumentation_diff` regression
+# net. Mirrors `liveness_operand_uses` — OpBorrow intentionally excluded
+# so the two passes agree at OpBorrow positions and the diff warning
+# count doesn't spuriously increase (H1 fix, 2026-05-21).
 void note_operand_pos(Operand op, int pos, Dict[int, int] &last_pos):
     match op:
         case OpCopy(l):
@@ -1726,8 +1734,6 @@ void note_operand_pos(Operand op, int pos, Dict[int, int] &last_pos):
         case OpMove(l):
             last_pos.put(l, pos)
         case OpClone(l):
-            last_pos.put(l, pos)
-        case OpBorrow(l):
             last_pos.put(l, pos)
         else:
             pass
