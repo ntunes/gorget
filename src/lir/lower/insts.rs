@@ -458,7 +458,17 @@ impl<'a> FuncLowering<'a> {
                 } else {
                     // Unknown function — treat as extern.
                     // Map monomorphized collection/method names to runtime function names.
-                    let emit_name = map_monomorphized_to_runtime_with_table(func, self.runtime_callees)
+                    // Item 7e-r2: route through the typed overload so sort/sorted/unique
+                    // dispatch consults `operand_types[0]` (receiver's LirType) instead
+                    // of stripping `Vector__` off the callee name. Pre-7e-r1 most operands
+                    // arrive as `Struct(sid)` rather than `Resource{..}`, so the typed
+                    // fast path is a no-op and the legacy name-strip path inside
+                    // `map_monomorphized_to_runtime` handles them.
+                    let operand_types: Vec<Option<LirType>> = args.iter()
+                        .map(|a| Some(self.operand_lir_type(a)))
+                        .collect();
+                    let emit_name = map_monomorphized_to_runtime_with_operand_types(
+                        func, &operand_types, self.runtime_callees)
                         .unwrap_or_else(|| func.clone());
                     // For collection/concurrency methods that take self by pointer
                     // (SelfConvention::Borrow | MutBorrow), if the first arg is a
@@ -595,7 +605,12 @@ impl<'a> FuncLowering<'a> {
                 } else {
                 // Remap monomorphized names to runtime equivalents
                 // (e.g., Vector__int64_t__push → gorget_array_push).
-                let mut emit_name = map_monomorphized_to_runtime_with_table(func, self.runtime_callees)
+                // Item 7e-r2: route through the typed overload (see Call branch above).
+                let operand_types: Vec<Option<LirType>> = args.iter()
+                    .map(|a| Some(self.operand_lir_type(a)))
+                    .collect();
+                let mut emit_name = map_monomorphized_to_runtime_with_operand_types(
+                    func, &operand_types, self.runtime_callees)
                     .unwrap_or_else(|| func.clone());
                 // Dispatch abs/min/max to float variants (fabs/fmin/fmax) when args are float.
                 if matches!(emit_name.as_str(), "gorget_abs" | "gorget_min" | "gorget_max") {

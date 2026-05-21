@@ -25,6 +25,7 @@ use self::calls::{
     fix_printf_format, lower_binop, lower_unop, map_cmp_op,
     clone_fn_for_collection_element, is_type_name,
     map_monomorphized_to_runtime_with_table, map_monomorphized_to_runtime,
+    map_monomorphized_to_runtime_with_operand_types,
 };
 
 #[allow(unused_imports)]

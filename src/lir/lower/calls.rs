@@ -183,6 +183,28 @@ pub(super) fn cmp_suffix_for_elem(elem: &str) -> &'static str {
     }
 }
 
+/// Map a typed LirType element to a qsort comparator suffix.
+///
+/// Item 7e-r2: the typed counterpart to `cmp_suffix_for_elem`. Reads the
+/// element type from an operand's `LirType::Resource { params }` so the
+/// sort/sorted/unique dispatch no longer needs to strip the `Vector__`
+/// prefix off the monomorphized callee name (per layering-discipline
+/// rule 2 — no name matching at the read site).
+///
+/// Returns `None` when the operand isn't a `Resource { kind: GorgetArray }`
+/// (e.g., the writer at `map_gir_type_with_structs` hasn't been migrated
+/// to emit Resource for this operand yet — that's 7e-r1's job). The
+/// caller falls back to the legacy name-stripping path in that case.
+pub(super) fn cmp_suffix_from_lir_type(ty: &LirType) -> &'static str {
+    match ty {
+        LirType::I8 | LirType::I16 | LirType::I32 | LirType::I64
+        | LirType::U8 | LirType::U16 | LirType::U32 | LirType::U64 => "int",
+        LirType::F32 | LirType::F64 => "float",
+        LirType::Resource { kind: crate::lir::ResourceKind::GorgetString, .. } => "str",
+        _ => "generic",
+    }
+}
+
 pub(super) fn is_type_name(s: &str) -> bool {
     matches!(s, "int64_t" | "int32_t" | "int16_t" | "int8_t"
         | "uint64_t" | "uint32_t" | "uint16_t" | "uint8_t"
@@ -201,6 +223,48 @@ pub(super) fn map_monomorphized_to_runtime_with_table(
     }
     // Fall through to legacy name-based mapping for types not in the table.
     map_monomorphized_to_runtime(name)
+}
+
+/// Item 7e-r2: typed overload that consults operand `LirType`s for the
+/// sort/sorted/unique within-arm dispatch instead of stripping `Vector__`
+/// off the monomorphized callee name.
+///
+/// `operand_types[0]` is the receiver (the `Vector` self). When it
+/// arrives as `LirType::Resource { kind: GorgetArray, params: [elem] }`,
+/// the qsort comparator suffix is derived from `elem`'s `LirType` — no
+/// name parsing.
+///
+/// Falls back to `map_monomorphized_to_runtime_with_table` for every
+/// other case (the legacy name-strip path still inside
+/// `map_monomorphized_to_runtime` handles operands that haven't been
+/// migrated to typed Resource — that's 7e-r1's job).
+pub(super) fn map_monomorphized_to_runtime_with_operand_types(
+    name: &str,
+    operand_types: &[Option<LirType>],
+    table: &rustc_hash::FxHashMap<String, crate::ir::RuntimeCalleeInfo>,
+) -> Option<String> {
+    // Family-route via the resources table — same shape as the legacy
+    // path (commits e129746e + 7bb75bf4) so the typed branch only
+    // activates for genuine gorget_array sort/sorted/unique calls.
+    let family = crate::ir::resources::table().lookup(name)
+        .and_then(|m| m.method_prefix.as_deref());
+    if family == Some("gorget_array") {
+        let method = name.rsplit("__").next();
+        if matches!(method, Some("sort") | Some("sorted") | Some("unique")) {
+            // Typed fast path: receiver's LirType carries the element.
+            if let Some(Some(LirType::Resource { kind: crate::lir::ResourceKind::GorgetArray, params })) = operand_types.first() {
+                if let Some(elem_ty) = params.first() {
+                    let suffix = cmp_suffix_from_lir_type(elem_ty);
+                    let m = method.expect("method matched above");
+                    return Some(format!("gorget_array_{m}_{suffix}"));
+                }
+            }
+            // Operand wasn't typed Resource — fall through to the legacy
+            // name-strip path. Pre-7e-r1, most receivers still arrive as
+            // `LirType::Struct(sid)`, so this is the common case today.
+        }
+    }
+    map_monomorphized_to_runtime_with_table(name, table)
 }
 
 pub(super) fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
