@@ -77,6 +77,54 @@ struct DropScope:
 struct DropElaborator:
     Vector[DropScope] scopes
 
+# Phase 2c COMMIT 3 Prereq C — deferred drop-emission record.
+#
+# Background: `emit_scope_drops` / `emit_drops_for_early_exit` are
+# called INLINE during `lower_stmt`. The `maybe_moved` gate they
+# would consult is set by `mark_local_moved` inside
+# `wire_one_operand` (the post-pass `wire_liveness_into_modes`).
+# That post-pass runs AFTER all inline emit calls have returned, so
+# at inline emit time `maybe_moved` is universally false — the gate
+# is a no-op.
+#
+# The fix: convert inline emission to a queue (append a
+# `DropEmission` entry for every drop a scope-pop / early-exit
+# would have emitted). After `wire_liveness_into_modes` populates
+# `maybe_moved`, walk the queue and emit each pending drop, gated
+# on `not entry.maybe_moved`.
+#
+# Fields:
+#   • local_id: GIR local slot the deferred drop targets. Mirrors
+#     the LIFO walk's `entry.local_id` at the inline emit site.
+#   • target_block: index into `ctx.block_insts` where the drop
+#     should be inserted. Recorded at the time the inline emit
+#     site is reached (= `ctx.current_block`).
+#   • insert_at_inst_idx: position within `target_block`'s
+#     instruction vector where the drop should land. For natural-
+#     scope-exit drops, this is `block_insts.get(target_block).len()`
+#     at the inline call site (end of block, where the drop would
+#     have been pushed). For early-exit drops (SReturn/SBreak/
+#     SContinue), the drop lands BEFORE the terminator — the same
+#     end-of-block position, because the early-exit emits drops
+#     into the current block before setting its terminator.
+#   • dse_scope_idx + entry_idx: pair of indices to read the
+#     `maybe_moved` flag from at flush time. `dse_scope_idx` is the
+#     index into `ctx.drop_elab.scopes` AT THE TIME OF RECORD; the
+#     scope may have been popped by flush time, so we hold the
+#     index into a captured snapshot, not a live pointer.
+#
+# **For Prereq C, the queue is recorded but `flush_drop_queue` is
+# a no-op** — actual `GIDropIfAlive` emission lands in COMMIT 3.
+# This commit ships only the structural plumbing: the struct,
+# the field on `LowerCtx`, the constructors initialising it, and
+# the flush hook wired in at the post-wire_liveness sites.
+struct DropEmission:
+    int local_id
+    int target_block
+    int insert_at_inst_idx
+    int dse_scope_idx
+    int entry_idx
+
 struct LowerCtx:
     Vector[GirLocal] locals
     Vector[Vector[Instruction]] block_insts
@@ -113,6 +161,16 @@ struct LowerCtx:
     # the stack innermost-out and emit drops along the way. See the
     # DropElaborator docstring for the architectural contract.
     DropElaborator drop_elab
+    # Phase 2c COMMIT 3 Prereq C — deferred drop-emission queue.
+    # `emit_scope_drops` / `emit_drops_for_early_exit` append a
+    # `DropEmission` entry per pending drop instead of emitting
+    # inline. After `wire_liveness_into_modes` populates
+    # `maybe_moved`, `flush_drop_queue` walks the queue and emits
+    # `GIDropIfAlive` for each entry gated on `not maybe_moved`.
+    # See DropEmission docstring. For Prereq C, queue recording
+    # ships but flush is a no-op; COMMIT 3 flips flush to real
+    # emission.
+    Vector[DropEmission] drop_queue
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -690,6 +748,40 @@ void emit_drops_for_early_exit(LowerCtx &ctx, int target_kind, Option[int] exclu
         if scope.kind == target_kind:
             return
         si -= 1
+
+# Phase 2c COMMIT 3 Prereq C — flush the deferred drop queue.
+#
+# Called AFTER `wire_liveness_into_modes` populates `maybe_moved`
+# on every DropEntry. Walks `ctx.drop_queue` and, for each pending
+# emission, decides whether to emit a real `GIDropIfAlive` at the
+# recorded position gated on `not entry.maybe_moved`.
+#
+# **Prereq C status**: this is a no-op. The queue is still empty
+# because `emit_scope_drops` and `emit_drops_for_early_exit` are
+# also still no-ops (they don't push to the queue yet). The
+# infrastructure ships standalone so COMMIT 3 can plug in the two
+# halves — queue-write at scope-pop / early-exit sites + real
+# `GIDropIfAlive` emission here — without further plumbing churn.
+#
+# When COMMIT 3 enables emission, this body becomes the canonical
+# "read maybe_moved, insert GIDropIfAlive at target_block /
+# insert_at_inst_idx if the flag says drop is live" loop. The
+# scope/entry indices on each `DropEmission` are exactly what the
+# read-side needs to look up `maybe_moved` from the captured
+# `drop_elab` state — `dse_scope_idx` indexes the scopes snapshot
+# (note: scopes have been popped by now, so we'd need to snapshot
+# them at queue-record time or pre-flatten the entry directly into
+# `DropEmission`. The follow-up commit will pick the right shape).
+void flush_drop_queue(LowerCtx &ctx):
+    # Prereq C: queue is empty (no recorders), so this loop is a
+    # no-op. Touch each entry to keep the field exercised — the
+    # release build's dead-field elimination would otherwise hide
+    # any constructor-site omissions until COMMIT 3 ships.
+    int qi = 0
+    while qi < ctx.drop_queue.len():
+        DropEmission _em = ctx.drop_queue.get(qi).unwrap()
+        int _lid = _em.local_id
+        qi += 1
 
 # ── Operand-mode dispatch (Phase C step 5c + Path A Phase 2b) ───
 #
@@ -5687,7 +5779,8 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
     Vector[int] _lb_stk = []
     Dict[String, int] _named_locals = {}
     Vector[DropScope] _de_scopes = []
-    LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, !_named_locals, 0, !_lc_stk, !_lb_stk, "", "", "", false, fdef.name.clone(), DropElaborator(!_de_scopes))
+    Vector[DropEmission] _de_queue = []
+    LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, !_named_locals, 0, !_lc_stk, !_lb_stk, "", "", "", false, fdef.name.clone(), DropElaborator(!_de_scopes), !_de_queue)
 
     # Push the function-scope drop frame. Pop emits GIDropIfAlive for
     # every owned resource local registered during lowering (param or
@@ -5789,6 +5882,15 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
     if diff > 0:
         diag_warn("gir_liveness_diff", fdef.name + ": " + int_to_str(diff) + " sites")
     wire_liveness_into_modes(&ctx, &liveness)
+
+    # Phase 2c COMMIT 3 Prereq C — flush the deferred drop queue.
+    # `maybe_moved` is populated now (set by `mark_local_moved`
+    # inside `wire_liveness_into_modes`), so any pending
+    # `GIDropIfAlive` recorded by `emit_scope_drops` /
+    # `emit_drops_for_early_exit` during lowering can be gated
+    # correctly. Today this is a no-op (the queue is empty); COMMIT
+    # 3 flips both halves on. See `flush_drop_queue` docstring.
+    flush_drop_queue(&ctx)
 
     # Assemble BasicBlocks from separate instruction and terminator vectors
     Vector[BasicBlock] blocks = []
@@ -5892,7 +5994,8 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
         Vector[int] _lb_stk2 = []
         Dict[String, int] _named_locals2 = {}
         Vector[DropScope] _de_scopes2 = []
-        LowerCtx ctx = LowerCtx([], [], [], 0, !_named_locals2, 0, !_lc_stk2, !_lb_stk2, "", "", "", false, mangled.clone(), DropElaborator(!_de_scopes2))
+        Vector[DropEmission] _de_queue2 = []
+        LowerCtx ctx = LowerCtx([], [], [], 0, !_named_locals2, 0, !_lc_stk2, !_lb_stk2, "", "", "", false, mangled.clone(), DropElaborator(!_de_scopes2), !_de_queue2)
         # bb0
         Vector[Instruction] init_insts = []
         ctx.block_insts.push(!init_insts)
@@ -6014,6 +6117,11 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
         if diff2 > 0:
             diag_warn("gir_liveness_diff", mangled + ": " + int_to_str(diff2) + " sites")
         wire_liveness_into_modes(&ctx, &liveness2)
+
+        # Phase 2c COMMIT 3 Prereq C — flush the deferred drop
+        # queue. See the matching call site in `lower_function`
+        # for the architectural contract.
+        flush_drop_queue(&ctx)
 
         # Assemble blocks
         Vector[BasicBlock] blocks = []
@@ -7690,7 +7798,8 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         Vector[int] _lb_stk3 = []
                         Dict[String, int] _named_locals3 = {}
                         Vector[DropScope] _de_scopes3 = []
-                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, 0, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone(), DropElaborator(!_de_scopes3))
+                        Vector[DropEmission] _de_queue3 = []
+                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, 0, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone(), DropElaborator(!_de_scopes3), !_de_queue3)
                         Vector[Instruction] tinit = []
                         tctx.block_insts.push(!tinit)
                         tctx.block_terms.push(GTNone())
