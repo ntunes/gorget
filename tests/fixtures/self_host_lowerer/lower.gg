@@ -4439,14 +4439,53 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                 emit(&ctx, GICallExtern(coerced, "gorget_str_from_cstr", cstr_args))
                 val = coerced
                 var_type = gs_tid_decl
-            int var_local = add_local(&ctx, var_type, Some(name.clone()))
+            # Phase 2c COMMIT 3 Prereq B (2026-05-21): when the init
+            # expression bound to `val` is a borrow into another
+            # aggregate (LoBorrowed/BoField from EFieldAccess,
+            # LoBorrowed/BoCollectionElement from collection-getter
+            # results, LoView/BoRuntimeView from CoW slice returns), the
+            # GIR assignment `GIAssign(var_local, OpBorrow(val))` is a
+            # byte-aliasing copy — var_local and val both point at the
+            # SAME owned heap data (typically a struct field's storage
+            # or a Vector element). If var_local were registered as an
+            # owned local (LoOwned), COMMIT 3's GIDropIfAlive emission
+            # would free that heap data via var_local AND again via the
+            # recursive aggregate drop. Double-free.
+            #
+            # Inherit ownership/borrow-origin from the source so:
+            #   - Downstream `op_consume(var_local, ...)` at consume
+            #     positions returns OpBorrow (see line ~810), propagating
+            #     the alias chain — matches CoW-default-borrow.
+            #   - `register_local_for_drop` is skipped for borrowed/view
+            #     locals; the aggregate that *does* own this data takes
+            #     care of it. Owned locals still register as before.
+            #
+            # Owned/Param/MaybeOwned init keeps the prior behaviour:
+            # var_local is LoOwned (via add_local) + registered for drop.
+            GirLocal val_loc = ctx.locals.get(val).unwrap()
+            int var_local = 0
+            bool inherit_borrow = false
+            match val_loc.ownership:
+                case LoBorrowed():
+                    inherit_borrow = true
+                case LoView():
+                    inherit_borrow = true
+                else:
+                    pass
+            if inherit_borrow:
+                var_local = add_local_with(&ctx, var_type, Some(name.clone()), val_loc.ownership, val_loc.borrow_origin)
+            else:
+                var_local = add_local(&ctx, var_type, Some(name.clone()))
             emit(&ctx, GIAssign(var_local, op_consume(&ctx, &gmod, val, CkAssign())))
             nl_put(&ctx, name, var_local)
             # Phase 2: register the new local for scope-exit drop if
             # it's a resource type. is_droppable_type filters
             # primitives / Ptr/MutPtr / FnPtr / non-resource named
             # types automatically, so registering blindly here is safe.
-            register_local_for_drop(&ctx, var_local, var_type, &gmod)
+            # Skip when var_local is a borrow alias — the owner of the
+            # underlying heap data registers its own drop separately.
+            if not inherit_borrow:
+                register_local_for_drop(&ctx, var_local, var_type, &gmod)
         case SReturn(opt_expr):
             # Phase 2: emit cleanup drops for every scope back to the
             # function frame BEFORE assigning the return value /
