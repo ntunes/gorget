@@ -11,6 +11,7 @@ Contributor-facing documentation for the Gorget compiler implementation.
 | [Unified Resource Model + LIR Roadmap](unified-resource-model.md) | Phases A/B/C/D (type-axis + local-axis ownership consolidation) + Tier E (LIR/SSA hygiene) + sequencing alongside self-host | `src/ir/`, `src/lir/`, runtime |
 | [Safety Checker](safety-checker.md) | Ownership, lifetimes, concurrency checks (Pass 5) | `src/semantic/safety/` |
 | [Ownership IR](ownership-ir.md) | GIR ownership semantics: AssignMode, FieldLoadMode, ArgOwnership | `src/ir/instructions.rs`, `src/ir/lowering/` |
+| [Clone Emission at Calls](clone-emission-at-calls.md) | Canonical decision tree for clone vs move vs borrow at call sites; doc-vs-impl conformance audit findings; known Path A bugs + fixes | `tests/fixtures/self_host_lowerer/lower.gg`, `src/ir/lowering/exprs/{calls,methods}.rs`, `src/lir/drop_elab.rs` |
 | [LIR Design](lir-design.md) | SSA-based low-level IR, optimization, backend trait | `src/lir/`, `src/backend/c_lir/` |
 | [Shared Keyword](shared-keyword-design.md) | `shared` keyword, token semantics, CFA | `src/semantic/safety/helpers.rs` |
 | [Stdlib Design](stdlib-design.md) | Narrow waist architecture, trait layering, API consolidation | `src/semantic/typecheck.rs`, `docs/` |
