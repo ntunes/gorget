@@ -430,6 +430,71 @@ void switch_to(LowerCtx &ctx, int block_id):
 void set_terminator(LowerCtx &ctx, Terminator term):
     ctx.block_terms.set(ctx.current_block, term)
 
+# Phase 2c COMMIT 3 Prereq B-extension (2026-05-21) — propagate a
+# LoBorrowed/LoView ownership tag from `src` onto `dst` when `dst`
+# is a method-chain result that byte-aliases `src`'s data. Without
+# this, `.unwrap()` of a borrowed Option / Result produces an
+# LoOwned local that double-frees the alias when COMMIT 3 drops it
+# at scope exit.
+#
+# Caller contract:
+#   • `dst` was just allocated by `emit_payload_read` (or a similar
+#     method-chain handler). Its current ownership tag is whatever
+#     `emit_payload_read` set — typically LoBorrowed/BoField if no
+#     clone fired, LoOwned if the payload was materialised via
+#     `<Type>__clone`.
+#   • `src` is the receiver whose ownership we want to inherit.
+#
+# Demotion rule (mirrors Rust's `materialise_via_clone` post-pass
+# in `src/ir/lowering/method_call.rs:412`): only demote when dst
+# is currently a borrow alias. If dst is LoOwned, the upstream
+# already cloned and dst genuinely owns its data — demoting would
+# skip the drop at scope exit and leak.
+#
+# Result-side rule:
+#   • src LoBorrowed → dst LoBorrowed (inherit src's borrow_origin)
+#   • src LoView     → dst LoView (inherit src's borrow_origin)
+#   • src LoOwned/LoParam/LoMaybeOwned → no change (dst keeps its
+#     own ownership; the chain produced a fresh owner whose drop
+#     is independent).
+void inherit_borrow_from(LowerCtx &ctx, int dst, int src):
+    GirLocal dst_loc = ctx.locals.get(dst).unwrap()
+    GirLocal src_loc = ctx.locals.get(src).unwrap()
+    # Only demote if dst is currently a borrow alias (no clone fired).
+    bool dst_is_alias = false
+    match dst_loc.ownership:
+        case LoBorrowed():
+            dst_is_alias = true
+        case LoView():
+            dst_is_alias = true
+        else:
+            pass
+    if not dst_is_alias:
+        return
+    # Inherit ownership + borrow_origin from src when src is itself
+    # a borrow. Owned src → no propagation (the alias bridges across
+    # ownership transfer, which is fine — the dst still aliases
+    # heap that src owns, but src's scope-exit drop covers the
+    # heap regardless of which local is registered).
+    LocalOwnership new_own = dst_loc.ownership
+    BorrowOrigin new_origin = dst_loc.borrow_origin
+    bool propagate = false
+    match src_loc.ownership:
+        case LoBorrowed():
+            new_own = LoBorrowed()
+            new_origin = src_loc.borrow_origin
+            propagate = true
+        case LoView():
+            new_own = LoView()
+            new_origin = src_loc.borrow_origin
+            propagate = true
+        else:
+            pass
+    if not propagate:
+        return
+    GirLocal updated = GirLocal(dst_loc.type_id, dst_loc.name_hint, new_own, new_origin)
+    ctx.locals.set(dst, updated)
+
 # ── Drop elaboration (mirrors src/ir/lowering/drops.rs) ─────
 #
 # A drop scope corresponds to a language construct that owns locals
@@ -3681,6 +3746,19 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     # Plain unwrap: emit a real field read through the
                     # scrutinee-ptr helper, matching PConstructor destructure.
                     int field_val = emit_payload_read(&ctx, scr_ptr, recv_tn, variant_name, 0, inner_tid, &gmod)
+                    # Prereq B-extension (2026-05-21): when the receiver
+                    # was a borrow (e.g., `coll.get(i).unwrap()` where
+                    # `.get()` returned LoBorrowed/BoCollectionElement,
+                    # or a SVarDecl-bound borrow propagated via Prereq
+                    # B), demote `field_val` to LoBorrowed so the
+                    # COMMIT 3 drop emission doesn't double-free the
+                    # underlying aggregate data. emit_payload_read tags
+                    # `dst` LoBorrowed/BoField when no clone fn is
+                    # available (the common case for user enums whose
+                    # payload types aren't runtime resources); the
+                    # inherit shim leaves LoOwned dst's alone (those
+                    # were explicitly cloned and need their own drop).
+                    inherit_borrow_from(&ctx, field_val, recv)
                     return field_val
                 # Fall back to re-cast if we couldn't identify the variant.
                 if inner_tid >= 0:
