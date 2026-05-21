@@ -3651,16 +3651,29 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # Method call: lower receiver as first arg (&self), then args.
             # Most collection/object methods take self by pointer.
             #
-            # Phase C step 5b: pick operand mode from the receiver's
-            # ownership tag. A LoBorrowed receiver (most commonly a
-            # field-loaded local — `self.columns.get(...)`) must be
-            # passed as OpBorrow, not OpMove — moving a borrow is a
-            # use-after-free shape. OpMove stays for LoOwned and
-            # LoParam (the caller already owns the slot in both
-            # cases; the method call may consume or alias as it
-            # likes). At the LIR layer OpBorrow lowers identically
-            # to OpMove for the pass-by-ptr method-arg shape (commit
+            # Phase C step 5b + Path A receiver-dispatch (2026-05-21):
+            # pick operand mode by consulting the callee's signature for
+            # param 0 (the implicit self slot):
+            #   • `!self` (OWN_MOVE) → CkCallArgOwning → OpMove
+            #   • `&self` / bare `self` → CkCallArgBorrow → OpBorrow
+            # A LoBorrowed receiver (most commonly a field-loaded local
+            # — `self.columns.get(...)`) must always be OpBorrow — moving
+            # a borrow is a use-after-free shape, irrespective of the
+            # callee's declared ownership. For LoOwned / LoParam sources
+            # we let the callee signature drive the decision rather than
+            # hardcoding OpMove: that hardcode is the dominant source of
+            # over-consumption (Phase 2c COMMIT 2 blocker, scout
+            # `a38eb352`). Methods not pre-registered in fn_move_params
+            # default to CkCallArgBorrow — correct per CLAUDE.md
+            # "Ownership at Consuming Positions" (bare-T propagates the
+            # Ptr alias at zero cost). At the LIR layer OpBorrow lowers
+            # identically to OpMove for pass-by-ptr method args (commit
             # `af687f3d`); validators downstream get the typed signal.
+            #
+            # Build the mangled method name once — used both for the
+            # receiver dispatch and the per-arg classify_call_arg.
+            String recv_type_name = local_type_name(recv, &ctx, &gmod)
+            String full_name = recv_type_name + "__" + mname
             Vector[Operand] call_args = []
             GirLocal recv_loc = ctx.locals.get(recv).unwrap()
             if need_chain_writeback:
@@ -3675,15 +3688,10 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     case LoBorrowed():
                         call_args.push(OpBorrow(recv))
                     else:
-                        call_args.push(OpMove(recv))
-            # Build the mangled method name early so per-arg
-            # classify_call_arg can drive owning vs borrow via the
-            # callee's param ownership (offset +1 to skip the self
-            # param at index 0 in fn_move_params). Methods that aren't
-            # pre-registered in fn_move_params default to CkCallArgBorrow
-            # — correct per CLAUDE.md "Ownership at Consuming Positions".
-            String recv_type_name = local_type_name(recv, &ctx, &gmod)
-            String full_name = recv_type_name + "__" + mname
+                        # Receiver is param index 0 in the callee's
+                        # signature. Dispatch via classify_call_arg:
+                        # `!self` → OpMove, otherwise OpBorrow.
+                        call_args.push(op_consume(&ctx, &gmod, recv, classify_call_arg(&gmod, full_name, 0)))
             int _ma_idx = 0
             for ma in margs:
                 int ma_val = lower_expr(&ctx, ma, &gmod)
@@ -3843,16 +3851,24 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 if base_is_ptr:
                     field_args.push(OpCopy(base))
                 else:
-                    # Phase C step 5b: chained field access (a.b.c.d)
-                    # produces a LoBorrowed `base` for the inner reads.
-                    # OpMove on a borrow is a use-after-free; emit
-                    # OpBorrow to pass the alias through.
+                    # Phase C step 5b + Path A receiver-dispatch (2026-
+                    # 05-21): chained field access (a.b.c.d) produces a
+                    # LoBorrowed `base` for the inner reads — OpMove on
+                    # a borrow is a use-after-free, so always OpBorrow
+                    # there. For LoOwned / LoParam, route through
+                    # classify_call_arg on the synthetic field-getter's
+                    # param 0. Field-getter functions are not registered
+                    # in fn_move_params (they're declared per-emission,
+                    # never `!T` since the read is non-consuming), so
+                    # classify_call_arg defaults to CkCallArgBorrow —
+                    # correct: a field read aliases into the aggregate,
+                    # it doesn't take ownership.
                     GirLocal base_loc = ctx.locals.get(base).unwrap()
                     match base_loc.ownership:
                         case LoBorrowed():
                             field_args.push(OpBorrow(base))
                         else:
-                            field_args.push(OpMove(base))
+                            field_args.push(op_consume(&ctx, &gmod, base, classify_call_arg(&gmod, field_fn, 0)))
                 field_args.push(OpConstI64(found_fi))
                 gmod.fn_sigs.put(field_fn, field_type)
                 emit(&ctx, GICallExtern(fdst, field_fn, field_args))
@@ -4269,17 +4285,24 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
             if not is_borrow and ai < borrow_flags.len():
                 is_borrow = borrow_flags.get(ai).unwrap()
             if is_borrow:
-                # Phase C step 5b: when the source is already a borrow,
-                # propagate as OpBorrow. When the source is owned, the
-                # caller's borrow is constructed by-move and the local
-                # stays alive past the call — OpMove preserves the
-                # existing shape for owned sources.
+                # Phase C step 5b + Path A receiver-dispatch (2026-05-21):
+                # the callee declared this param as `&T` (OWN_MUTABLE)
+                # OR the caller wrote `&x` syntactically. Either way it
+                # is a borrow position: the local stays alive past the
+                # call. A LoBorrowed source must propagate as OpBorrow
+                # (moving a borrow is a use-after-free); for owned
+                # sources, route through classify_call_arg — for a
+                # borrow-declared param this naturally returns
+                # CkCallArgBorrow → OpBorrow, never OpMove. The previous
+                # hardcoded OpMove for owned sources was a Path A bug
+                # (over-consumption: turned alias reads into moves at
+                # call boundaries).
                 GirLocal arg_loc = ctx.locals.get(arg_local).unwrap()
                 match arg_loc.ownership:
                     case LoBorrowed():
                         gir_args.push(OpBorrow(arg_local))
                     else:
-                        gir_args.push(OpMove(arg_local))
+                        gir_args.push(op_consume(&ctx, &gmod, arg_local, classify_call_arg(&gmod, call_name, ai)))
             else:
                 # Phase C step 5c + Path A bugfix (2026-05-21): pick the
                 # ConsumeKind from the callee's param ownership. bare `T`
