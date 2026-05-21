@@ -2166,7 +2166,7 @@ VariantInfo prelude_variant_info(String name):
 # Attempt to lower a prelude variant constructor (Some/None/Ok/Error) as a
 # canonical IEnumInit filling the dst slot in place. Returns true on success;
 # false means the caller should fall through to the normal ICallExtern path.
-bool try_lower_prelude_variant(String func_name, int dst_local, Vector[Operand] args, LirFunction &f, int bb, Vector[int] &local_to_slot):
+bool try_lower_prelude_variant(String func_name, int dst_local, Vector[Operand] args, LirFunction &f, int bb, Vector[int] &local_to_slot, LirModule &m):
     if dst_local < 0:
         return false
     VariantInfo vi = prelude_variant_info(func_name)
@@ -2183,7 +2183,7 @@ bool try_lower_prelude_variant(String func_name, int dst_local, Vector[Operand] 
     Vector[FieldInit] fields = []
     if vi.payload_field >= 0 and args.len() >= 1:
         Operand payload = args.get(0).unwrap()
-        int pval = lower_operand(payload, &f, bb, &local_to_slot)
+        int pval = lower_operand(payload, &f, bb, &local_to_slot, &m)
         fields.push(FieldInit(vi.payload_field, pval))
     # Take the slot's address and emit IEnumInit writing in place.
     int target = lir_fn_next_value(&f)
@@ -2249,7 +2249,7 @@ bool try_lower_user_struct_ctor(String func_name, int dst_local, Vector[Operand]
     int ai = 0
     while ai < args.len():
         Operand a = args.get(ai).unwrap()
-        int aval = lower_operand(a, &f, bb, &local_to_slot)
+        int aval = lower_operand(a, &f, bb, &local_to_slot, &m)
         fields.push(FieldInit(ai, aval))
         ai += 1
     # Emit SlotAddr + IStructInit. emit_field_store (invoked by the codegen
@@ -2308,7 +2308,7 @@ int box_inner_ty_from_operand(Operand op, LirFunction &f, Vector[int] &local_to_
         return LT_STRUCT_BASE + (ty - LT_PTR_TO_BASE)
     return ty
 
-int lower_operand(Operand op, LirFunction &f, int bb, Vector[int] &local_to_slot):
+int lower_operand(Operand op, LirFunction &f, int bb, Vector[int] &local_to_slot, LirModule &m):
     match op:
         case OpConstBool(v):
             int dst = lir_fn_next_value(&f)
@@ -2379,15 +2379,32 @@ int lower_operand(Operand op, LirFunction &f, int bb, Vector[int] &local_to_slot
             f.blocks.set(bb, blk)
             return dst
         case OpClone(local_id):
-            # Phase D step 3: OpClone tagged at the GIR layer for an
-            # explicit refcount-bump / deep-copy at this read. The LIR
-            # currently lowers it as a plain load; Phase 5 codegen may
-            # promote to an explicit ICallExtern("T__clone", ...) when
-            # the source slot's type is a resource. Treating-as-load is
-            # behaviourally identical to OpCopy/OpMove for trivial types,
-            # so this preserves correctness for non-resource locals.
+            # Phase 2c COMMIT 2: OpClone now lowers to a real runtime
+            # clone call when the source slot holds a resource value.
+            # `resource_clone_fn` returns the matching `gorget_*_clone`
+            # (or `T__clone`) symbol from the slot's lir-type; "" for
+            # non-resource types (primitives / aliases). On "" we fall
+            # through to the byte-load shape — safe because trivial
+            # types have no owned data to duplicate.
             int slot = local_to_slot.get(local_id).unwrap()
             int slot_ty = f.slots.get(slot).unwrap().ty
+            # Pointer-typed slots are already aliases — the value in the
+            # slot is the pointer itself, not the resource. Plain load.
+            bool slot_is_ptr_kind = (slot_ty == LT_PTR) or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE)
+            String clone_fn = ""
+            if not slot_is_ptr_kind:
+                clone_fn = resource_clone_fn(slot_ty, &m)
+            if clone_fn != "":
+                int addr = lir_fn_next_value(&f)
+                int dst = lir_fn_next_value(&f)
+                LirBlock blk = f.blocks.get(bb).unwrap()
+                blk.insts.push(ISlotAddr(addr, slot))
+                Vector[int] cargs = []
+                cargs.push(addr)
+                Vector[int] cabis = []
+                blk.insts.push(ICallExtern(dst, clone_fn, cargs, clone_fn, cabis))
+                f.blocks.set(bb, blk)
+                return dst
             int dst = lir_fn_next_value(&f)
             LirBlock blk = f.blocks.get(bb).unwrap()
             blk.insts.push(ISlotLoad(dst, slot, slot_ty))
@@ -2441,15 +2458,15 @@ String gir_local_type_name(int local_id, Vector[GirLocal] &gir_locals, GirModule
 int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &local_to_slot, Vector[GirLocal] &gir_locals, Dict[String, int] &func_index, GirModule &gmod, Dict[String, int] &sr, LirModule &m):
     match inst:
         case GIAssign(local_id, operand):
-            int val = lower_operand(operand, &f, bb, &local_to_slot)
+            int val = lower_operand(operand, &f, bb, &local_to_slot, &m)
             int slot = local_to_slot.get(local_id).unwrap()
             LirBlock blk = f.blocks.get(bb).unwrap()
             blk.insts.push(ISlotStore(slot, val, false))
             f.blocks.set(bb, blk)
 
         case GIBinOp(dst_local, op, ty, lhs_op, rhs_op):
-            int lhs = lower_operand(lhs_op, &f, bb, &local_to_slot)
-            int rhs = lower_operand(rhs_op, &f, bb, &local_to_slot)
+            int lhs = lower_operand(lhs_op, &f, bb, &local_to_slot, &m)
+            int rhs = lower_operand(rhs_op, &f, bb, &local_to_slot, &m)
             int dst = lir_fn_next_value(&f)
             int lir_ty = map_gir_type(ty, &gmod, &sr)
             LirBlock blk = f.blocks.get(bb).unwrap()
@@ -2489,7 +2506,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
             f.blocks.set(bb, blk2)
 
         case GIUnOp(dst_local, op, ty, operand):
-            int val = lower_operand(operand, &f, bb, &local_to_slot)
+            int val = lower_operand(operand, &f, bb, &local_to_slot, &m)
             int dst = lir_fn_next_value(&f)
             int lir_ty = map_gir_type(ty, &gmod, &sr)
             LirBlock blk = f.blocks.get(bb).unwrap()
@@ -2506,8 +2523,8 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
             f.blocks.set(bb, blk2)
 
         case GICmp(dst_local, op, ty, lhs_op, rhs_op):
-            int lhs = lower_operand(lhs_op, &f, bb, &local_to_slot)
-            int rhs = lower_operand(rhs_op, &f, bb, &local_to_slot)
+            int lhs = lower_operand(lhs_op, &f, bb, &local_to_slot, &m)
+            int rhs = lower_operand(rhs_op, &f, bb, &local_to_slot, &m)
             int dst = lir_fn_next_value(&f)
             LirBlock blk = f.blocks.get(bb).unwrap()
             blk.insts.push(ICmp(dst, op, lhs, rhs))
@@ -2521,7 +2538,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
             # Canonical prelude variant constructors: Some/None/Ok/Error fill
             # the dst slot in place via IEnumInit. Struct id comes from the
             # slot's type — no codegen-side name inference needed.
-            if try_lower_prelude_variant(func_name, dst_local, args, &f, bb, &local_to_slot):
+            if try_lower_prelude_variant(func_name, dst_local, args, &f, bb, &local_to_slot, &m):
                 return bb
             # Canonical user struct constructors — emits IStructInit with
             # per-field memcpy for struct-typed fields, fixing the stage-1
@@ -2535,7 +2552,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
             if func_name == "Box" and args.len() == 1 and dst_local >= 0:
                 Operand box_arg = args.get(0).unwrap()
                 int box_inner_ty = box_inner_ty_from_operand(box_arg, &f, &local_to_slot)
-                int box_val = lower_operand(box_arg, &f, bb, &local_to_slot)
+                int box_val = lower_operand(box_arg, &f, bb, &local_to_slot, &m)
                 int box_dst = lir_fn_next_value(&f)
                 LirBlock bblk = f.blocks.get(bb).unwrap()
                 bblk.insts.push(IBoxAlloc(box_dst, box_inner_ty, box_val))
@@ -2566,7 +2583,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                             int slot_ty = f.slots.get(slot).unwrap().ty
                             if slot_ty == LT_PTR or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE):
                                 # Slot already holds a pointer — load value.
-                                int arg_val = lower_operand(arg, &f, bb, &local_to_slot)
+                                int arg_val = lower_operand(arg, &f, bb, &local_to_slot, &m)
                                 lir_args.push(arg_val)
                             else:
                                 int addr = lir_fn_next_value(&f)
@@ -2578,7 +2595,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                             int slot = local_to_slot.get(local_id).unwrap()
                             int slot_ty = f.slots.get(slot).unwrap().ty
                             if slot_ty == LT_PTR or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE):
-                                int arg_val = lower_operand(arg, &f, bb, &local_to_slot)
+                                int arg_val = lower_operand(arg, &f, bb, &local_to_slot, &m)
                                 lir_args.push(arg_val)
                             else:
                                 int addr = lir_fn_next_value(&f)
@@ -2587,13 +2604,19 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                                 f.blocks.set(bb, ablk)
                                 lir_args.push(addr)
                         case OpClone(local_id):
-                            # Phase D step 3: same pass-by-ptr behaviour
-                            # as OpMove. Clone semantics (refcount bump
-                            # or deep copy) is for Phase 5 codegen.
+                            # Phase 2c COMMIT 2: Site 2 (pass-by-ptr arg)
+                            # change deferred — Site 1 (lower_operand)
+                            # already emits the clone call when the operand
+                            # is read; on this call-arg path we still take
+                            # the source slot's address unchanged. The OpClone
+                            # tag carries semantic info downstream but the
+                            # codegen behaviour is the canonical "give the
+                            # callee a pointer to the local" shape. Phase 5
+                            # codegen can revisit.
                             int slot = local_to_slot.get(local_id).unwrap()
                             int slot_ty = f.slots.get(slot).unwrap().ty
                             if slot_ty == LT_PTR or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE):
-                                int arg_val = lower_operand(arg, &f, bb, &local_to_slot)
+                                int arg_val = lower_operand(arg, &f, bb, &local_to_slot, &m)
                                 lir_args.push(arg_val)
                             else:
                                 int addr = lir_fn_next_value(&f)
@@ -2607,7 +2630,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                             int slot = local_to_slot.get(local_id).unwrap()
                             int slot_ty = f.slots.get(slot).unwrap().ty
                             if slot_ty == LT_PTR or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE):
-                                int arg_val = lower_operand(arg, &f, bb, &local_to_slot)
+                                int arg_val = lower_operand(arg, &f, bb, &local_to_slot, &m)
                                 lir_args.push(arg_val)
                             else:
                                 int addr = lir_fn_next_value(&f)
@@ -2616,10 +2639,10 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                                 f.blocks.set(bb, ablk)
                                 lir_args.push(addr)
                         else:
-                            int arg_val = lower_operand(arg, &f, bb, &local_to_slot)
+                            int arg_val = lower_operand(arg, &f, bb, &local_to_slot, &m)
                             lir_args.push(arg_val)
                 else:
-                    int arg_val = lower_operand(arg, &f, bb, &local_to_slot)
+                    int arg_val = lower_operand(arg, &f, bb, &local_to_slot, &m)
                     lir_args.push(arg_val)
                 ai += 1
 
@@ -2736,7 +2759,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
 
         case GICallExtern(dst_local, func_name, args):
             # Canonical prelude variants (same as GICall arm).
-            if try_lower_prelude_variant(func_name, dst_local, args, &f, bb, &local_to_slot):
+            if try_lower_prelude_variant(func_name, dst_local, args, &f, bb, &local_to_slot, &m):
                 return bb
             # Function-as-value pseudo-intrinsic: `__fn_addr__<name>` —
             # emitted by `lower_expr`'s EIdentifier arm when the
@@ -2790,7 +2813,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
             if func_name == "Box" and args.len() == 1 and dst_local >= 0:
                 Operand box_arg = args.get(0).unwrap()
                 int box_inner_ty = box_inner_ty_from_operand(box_arg, &f, &local_to_slot)
-                int box_val = lower_operand(box_arg, &f, bb, &local_to_slot)
+                int box_val = lower_operand(box_arg, &f, bb, &local_to_slot, &m)
                 int box_dst = lir_fn_next_value(&f)
                 LirBlock bblk = f.blocks.get(bb).unwrap()
                 bblk.insts.push(IBoxAlloc(box_dst, box_inner_ty, box_val))
@@ -2827,7 +2850,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                             # — otherwise downstream `(T*)&__slot` reads slot
                             # storage as a struct and gets stack garbage.
                             if slot_ty == LT_PTR or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE):
-                                int arg_val = lower_operand(arg, &f, bb, &local_to_slot)
+                                int arg_val = lower_operand(arg, &f, bb, &local_to_slot, &m)
                                 lir_args.push(arg_val)
                             else:
                                 int addr = lir_fn_next_value(&f)
@@ -2839,7 +2862,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                             int slot = local_to_slot.get(local_id).unwrap()
                             int slot_ty = f.slots.get(slot).unwrap().ty
                             if slot_ty == LT_PTR or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE):
-                                int arg_val = lower_operand(arg, &f, bb, &local_to_slot)
+                                int arg_val = lower_operand(arg, &f, bb, &local_to_slot, &m)
                                 lir_args.push(arg_val)
                             else:
                                 int addr = lir_fn_next_value(&f)
@@ -2848,13 +2871,15 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                                 f.blocks.set(bb, ablk)
                                 lir_args.push(addr)
                         case OpClone(local_id):
-                            # Phase D step 3: same shape as OpMove for the
-                            # pass-by-ptr path. Clone-specific codegen
-                            # belongs to Phase 5.
+                            # Phase 2c COMMIT 2: Site 2 (pass-by-ptr arg)
+                            # change deferred — Site 1 (lower_operand)
+                            # already emits the clone call when the operand
+                            # is read; on this call-arg path we still take
+                            # the source slot's address unchanged.
                             int slot = local_to_slot.get(local_id).unwrap()
                             int slot_ty = f.slots.get(slot).unwrap().ty
                             if slot_ty == LT_PTR or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE):
-                                int arg_val = lower_operand(arg, &f, bb, &local_to_slot)
+                                int arg_val = lower_operand(arg, &f, bb, &local_to_slot, &m)
                                 lir_args.push(arg_val)
                             else:
                                 int addr = lir_fn_next_value(&f)
@@ -2867,7 +2892,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                             int slot = local_to_slot.get(local_id).unwrap()
                             int slot_ty = f.slots.get(slot).unwrap().ty
                             if slot_ty == LT_PTR or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE):
-                                int arg_val = lower_operand(arg, &f, bb, &local_to_slot)
+                                int arg_val = lower_operand(arg, &f, bb, &local_to_slot, &m)
                                 lir_args.push(arg_val)
                             else:
                                 int addr = lir_fn_next_value(&f)
@@ -2876,10 +2901,10 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                                 f.blocks.set(bb, ablk)
                                 lir_args.push(addr)
                         else:
-                            int arg_val = lower_operand(arg, &f, bb, &local_to_slot)
+                            int arg_val = lower_operand(arg, &f, bb, &local_to_slot, &m)
                             lir_args.push(arg_val)
                 else:
-                    int arg_val = lower_operand(arg, &f, bb, &local_to_slot)
+                    int arg_val = lower_operand(arg, &f, bb, &local_to_slot, &m)
                     lir_args.push(arg_val)
                 ai += 1
             String mapped = map_runtime_name(func_name, &m)
@@ -3067,17 +3092,17 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
 
 # ── Terminator lowering ─────────────────────────────────────
 
-LirTerm lower_terminator(Terminator term, LirFunction &f, int bb, Vector[int] &local_to_slot, Vector[int] &block_map):
+LirTerm lower_terminator(Terminator term, LirFunction &f, int bb, Vector[int] &local_to_slot, Vector[int] &block_map, LirModule &m):
     match term:
         case GTReturn(operand):
-            int val = lower_operand(operand, &f, bb, &local_to_slot)
+            int val = lower_operand(operand, &f, bb, &local_to_slot, &m)
             return TRet(val)
         case GTJump(target):
             int lir_target = block_map.get(target).unwrap()
             Vector[int] empty_args = []
             return TJump(lir_target, empty_args)
         case GTBranch(cond_op, then_bb, else_bb):
-            int cond = lower_operand(cond_op, &f, bb, &local_to_slot)
+            int cond = lower_operand(cond_op, &f, bb, &local_to_slot, &m)
             int lir_then = block_map.get(then_bb).unwrap()
             int lir_else = block_map.get(else_bb).unwrap()
             Vector[int] empty_then = []
@@ -3153,7 +3178,7 @@ LirFunction lir_lower_function(GirFunction gfn, GirModule &gmod, Dict[String, in
         # (mod.rs::populate_def_field_types runs before typecheck +
         # FieldAccess returns the actual field type instead of
         # error_id) now catches the previously-silent copy.
-        LirTerm lir_term = lower_terminator(gir_blk.term, &f, lir_bb, &local_to_slot, &block_map)
+        LirTerm lir_term = lower_terminator(gir_blk.term, &f, lir_bb, &local_to_slot, &block_map, &m)
         LirBlock final_blk = f.blocks.get(lir_bb).unwrap()
         final_blk.term = !lir_term
         f.blocks.set(lir_bb, final_blk)
