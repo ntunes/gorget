@@ -157,15 +157,21 @@ enum LocalOwnership:
 enum ConsumeKind:
     # ── Consume positions ────────────────────────────────────
     # Receiver of the read takes ownership of the value.
-    CkAssign         # SVarDecl/SAssign init RHS → owned local
-    CkReturn         # GTReturn value (move into return place)
-    CkCallArg        # function/method/closure/extern call arg (callee owns)
-    CkFieldWrite     # __field_write_TYPE_FIELD value (field takes ownership)
+    CkAssign           # SVarDecl/SAssign init RHS → owned local
+    CkReturn           # GTReturn value (move into return place)
+    CkCallArgOwning    # call arg the callee owns (declared `!T`,
+                       # or a specific consuming position: collection
+                       # runtime val args for push/put/set/insert/send).
+    CkFieldWrite       # __field_write_TYPE_FIELD value (field takes ownership)
     # ── Borrow positions ─────────────────────────────────────
     # Receiver just reads the value; source stays live afterward.
-    CkBinOpArg       # GIBinOp / GICmp / GIUnOp operand (arithmetic / compare)
-    CkFormatArg      # f-string / printf arg (gorget_string_format / printf — read-only)
-    CkMatchPtr       # __field_read_<enum>_<field> args (pointer plumbing only)
+    CkCallArgBorrow    # default call arg — callee declared bare `T`
+                       # (or signature unknown). Per CLAUDE.md "Ownership
+                       # at Consuming Positions", bare call args propagate
+                       # Ptr aliases at zero cost; no clone, no move.
+    CkBinOpArg         # GIBinOp / GICmp / GIUnOp operand (arithmetic / compare)
+    CkFormatArg        # f-string / printf arg (gorget_string_format / printf — read-only)
+    CkMatchPtr         # __field_read_<enum>_<field> args (pointer plumbing only)
 
 # When LoBorrowed, where the borrow originates — used by validators that
 # need to flag borrow-into-owned consume sites by source type. Mirrors
@@ -246,6 +252,15 @@ struct GirModule:
     Dict[String, bool] imported_fns
     Dict[String, GirTypeInfo] type_infos  # struct/enum field info for LIR drop analysis
     Dict[String, Vector[bool]] fn_borrow_params  # per-param: true if borrow (&)
+    # Per-param: true if `!`-move (OWN_MOVE / ownership==2). Parallel to
+    # fn_borrow_params. Used by op_consume call sites to pick
+    # CkCallArgOwning for `!T` declared params vs CkCallArgBorrow for bare
+    # `T` declared params. Per CLAUDE.md "Ownership at Consuming
+    # Positions" + the doc-vs-impl conformance scout (2026-05-21):
+    # callee-signature is the authoritative decision; bare `T` always
+    # borrows (Ptr alias propagated at zero cost), `!T` is the owning
+    # opt-in.
+    Dict[String, Vector[bool]] fn_move_params
     # Module-level int constants and None-typed sentinel decls.
     Dict[String, int] const_decls
     Dict[String, bool] none_decls

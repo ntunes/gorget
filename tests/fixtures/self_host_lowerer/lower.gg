@@ -19,7 +19,7 @@ from gir import init_type_table, register_type, lookup_or_register_named, regist
 from gir import ResourceMetadata
 # Phase 2b (Path A part 2): typed position-class enum for op_consume
 # dispatch. See gir.gg::ConsumeKind for the full partition.
-from gir import ConsumeKind, CkAssign, CkReturn, CkCallArg, CkFieldWrite
+from gir import ConsumeKind, CkAssign, CkReturn, CkCallArgBorrow, CkCallArgOwning, CkFieldWrite
 from gir import CkBinOpArg, CkFormatArg, CkMatchPtr
 # Phase A — typed-metadata classifier shared with lir_lower.gg. The
 # `name.starts_with("X__")` cascade lives there as the single source
@@ -697,12 +697,17 @@ void emit_drops_for_early_exit(LowerCtx &ctx, int target_kind, Option[int] exclu
 # argument. It enforces the *Ownership at Consuming Positions*
 # discipline from CLAUDE.md:
 #
-#   • Non-consume position (CkBinOpArg / CkFormatArg / CkMatchPtr) —
-#     receiver just reads the value; source stays live. Always
-#     returns `OpBorrow(lid)` regardless of source ownership.
-#     Phase 2c emission will treat this as a pointer alias.
-#   • Consume position (CkAssign / CkReturn / CkCallArg / CkFieldWrite)
-#     — receiver takes ownership. Dispatch by source:
+#   • Non-consume position (CkCallArgBorrow / CkBinOpArg / CkFormatArg /
+#     CkMatchPtr) — receiver just reads the value; source stays live.
+#     Always returns `OpBorrow(lid)` regardless of source ownership.
+#     Phase 2c emission will treat this as a pointer alias. The
+#     CkCallArgBorrow inclusion implements the doc model directly: per
+#     CLAUDE.md "Ownership at Consuming Positions", bare-call-arg sites
+#     propagate Ptr aliases at zero cost; clones only fire at the
+#     CkCallArgOwning sites (collection runtime val args + `!T` declared
+#     params).
+#   • Consume position (CkAssign / CkReturn / CkCallArgOwning /
+#     CkFieldWrite) — receiver takes ownership. Dispatch by source:
 #       - Non-resource source     → OpCopy (byte-copy is sound for
 #         scalars and Ptr/MutPtr aliases; the validator already filters
 #         these out).
@@ -726,6 +731,29 @@ void emit_drops_for_early_exit(LowerCtx &ctx, int target_kind, Option[int] exclu
 # any clone or move-zero codegen. When Phase 2c codegen lands real
 # OpClone/OpMove emission, the labels written here become the contract.
 
+# Callee-signature-driven classifier for regular call args.
+# Returns CkCallArgOwning iff `fname` is in fn_move_params AND the
+# `arg_idx`-th param is declared `!T` (OWN_MOVE / ownership==2).
+# Otherwise returns CkCallArgBorrow — per CLAUDE.md "Ownership at
+# Consuming Positions", bare-`T` callee params propagate the caller's
+# Ptr alias at zero cost. Mirrors Rust's `lower_call_arg` switching on
+# `param.ownership` (`src/ir/lowering/exprs/calls.rs:187-194`).
+#
+# Sites that ALWAYS own (collection runtime val args for push/put/set/
+# insert/send) bypass this helper and pass CkCallArgOwning directly.
+# Sites whose callee signature is genuinely unknown (closure/__callable_N
+# dispatch, user-op-overload fallback) pass CkCallArgBorrow directly —
+# borrow is the safe default per the docs.
+ConsumeKind classify_call_arg(GirModule &gmod, String fname, int arg_idx):
+    if not gmod.fn_move_params.contains(fname):
+        return CkCallArgBorrow()
+    Vector[bool] mflags = gmod.fn_move_params.get(fname).unwrap()
+    if arg_idx < 0 or arg_idx >= mflags.len():
+        return CkCallArgBorrow()
+    if mflags.get(arg_idx).unwrap():
+        return CkCallArgOwning()
+    return CkCallArgBorrow()
+
 # Partition `ConsumeKind` into consume vs borrow positions. Single
 # source of truth for which kinds transfer ownership — every other
 # pass that asks "is this a consume site?" reads through here.
@@ -735,10 +763,12 @@ bool is_consume_kind(ConsumeKind k):
             return true
         case CkReturn():
             return true
-        case CkCallArg():
+        case CkCallArgOwning():
             return true
         case CkFieldWrite():
             return true
+        case CkCallArgBorrow():
+            return false
         case CkBinOpArg():
             return false
         case CkFormatArg():
@@ -3060,7 +3090,9 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 int in_rhs = lower_expr(&ctx, *rhs_box, &gmod)
                 String coll_tname = local_type_name(in_rhs, &ctx, &gmod)
                 String contains_method = coll_tname + "__contains"
-                Vector[Operand] in_args = [OpMove(in_rhs), op_consume(&ctx, &gmod, in_lhs, CkCallArg())]
+                # `x in coll` → coll.contains(x): collection is the receiver
+                # (OpMove first arg), x is just read by contains — borrow.
+                Vector[Operand] in_args = [OpMove(in_rhs), op_consume(&ctx, &gmod, in_lhs, CkCallArgBorrow())]
                 int in_dst = add_local(&ctx, BOOL_TYPE, NO_NAME)
                 emit(&ctx, GICallExtern(in_dst, contains_method, in_args))
                 return in_dst
@@ -3073,7 +3105,8 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 if gmod.type_infos.contains(lhs_cmp_name) and (op == "<" or op == "<=" or op == ">" or op == ">="):
                     String cmp_method = lhs_cmp_name + "__compare"
                     if gmod.fn_sigs.contains(cmp_method):
-                        Vector[Operand] cmp_args = [OpMove(lhs), op_consume(&ctx, &gmod, rhs, CkCallArg())]
+                        # `a < b` → Type__compare(a, b): comparison reads only.
+                        Vector[Operand] cmp_args = [OpMove(lhs), op_consume(&ctx, &gmod, rhs, CkCallArgBorrow())]
                         int cmp_val = add_local(&ctx, I64_TYPE, NO_NAME)
                         emit(&ctx, GICallExtern(cmp_val, cmp_method, cmp_args))
                         int zero = add_local(&ctx, I64_TYPE, NO_NAME)
@@ -3085,7 +3118,8 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 if (op == "==" or op == "!=") and gmod.type_infos.contains(lhs_cmp_name):
                     String eq_method = lhs_cmp_name + "__eq"
                     if gmod.fn_sigs.contains(eq_method):
-                        Vector[Operand] eq_args = [OpMove(lhs), op_consume(&ctx, &gmod, rhs, CkCallArg())]
+                        # `a == b` → Type__eq(a, b): equality reads only.
+                        Vector[Operand] eq_args = [OpMove(lhs), op_consume(&ctx, &gmod, rhs, CkCallArgBorrow())]
                         int eq_dst = add_local(&ctx, BOOL_TYPE, NO_NAME)
                         emit(&ctx, GICallExtern(eq_dst, eq_method, eq_args))
                         if op == "==":
@@ -3101,8 +3135,10 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 int gs_tid = lookup_or_register_named(&gmod, "GorgetString")
                 int dst = add_local(&ctx, gs_tid, NO_NAME)
                 Vector[Operand] concat_args = []
-                concat_args.push(op_consume(&ctx, &gmod, lhs, CkCallArg()))
-                concat_args.push(op_consume(&ctx, &gmod, rhs, CkCallArg()))
+                # `a + b` (string) → gorget_str_cat(a, b): allocates new
+                # String, reads both operands — borrow.
+                concat_args.push(op_consume(&ctx, &gmod, lhs, CkCallArgBorrow()))
+                concat_args.push(op_consume(&ctx, &gmod, rhs, CkCallArgBorrow()))
                 emit(&ctx, GICallExtern(dst, "gorget_str_cat", concat_args))
                 return dst
             # Operator overload on user types: if lhs is a user struct/enum,
@@ -3121,7 +3157,10 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             lhs_is_user = true
                 if lhs_is_user:
                     String method_full = lhs_tname + "__" + op_method
-                    Vector[Operand] op_args = [OpMove(lhs), op_consume(&ctx, &gmod, rhs, CkCallArg())]
+                    # User op overload `a OP b` → Type__OP(a, b): consult
+                    # callee signature for the rhs (lhs is the receiver,
+                    # always OpMove). bare `T` → borrow; `!T` → owning.
+                    Vector[Operand] op_args = [OpMove(lhs), op_consume(&ctx, &gmod, rhs, classify_call_arg(&gmod, method_full, 1))]
                     int op_ret = I64_TYPE
                     if gmod.fn_sigs.contains(method_full):
                         op_ret = gmod.fn_sigs.get(method_full).unwrap()
@@ -3173,10 +3212,16 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         int callable_local = nl_get(&ctx, fname)
                         # Lower args
                         Vector[Operand] cl_args = []
-                        cl_args.push(op_consume(&ctx, &gmod, callable_local, CkCallArg()))  # closure/callable as first arg
+                        # Closure/__callable_N dispatch: the callable
+                        # itself is a Ptr (op_consume returns OpCopy
+                        # regardless of kind for Ptr slots). Args go
+                        # through dynamic dispatch — callee signature
+                        # isn't available here, so default to borrow
+                        # per CLAUDE.md "Ownership at Consuming Positions".
+                        cl_args.push(op_consume(&ctx, &gmod, callable_local, CkCallArgBorrow()))  # closure/callable as first arg
                         for carg in args:
                             int cval = lower_expr(&ctx, carg, &gmod)
-                            cl_args.push(op_consume(&ctx, &gmod, cval, CkCallArg()))
+                            cl_args.push(op_consume(&ctx, &gmod, cval, CkCallArgBorrow()))
                         # Emit as __callable_N (codegen handles this as void*[2] dispatch)
                         int arity = args.len()
                         String cl_call = "__callable_" + int_to_str(arity)
@@ -3351,10 +3396,30 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         elif ident_name.contains("__"):
                             is_type = true
                     if is_type:
+                        # Static method / variant ctor: dispatch via
+                        # classify_call_arg against the mangled callee
+                        # name. Built early enough that the callee name
+                        # may not yet be in fn_move_params (lazy
+                        # registration); classify_call_arg defaults to
+                        # CkCallArgBorrow when the lookup misses — correct
+                        # per the docs.
                         Vector[Operand] static_args = []
+                        # Compute the mangled callee name once for
+                        # classify_call_arg lookups. Mirrors the post-loop
+                        # `static_name` build below.
+                        String _static_call = ident_name
+                        if ident_name == "int":
+                            _static_call = "int64_t"
+                        elif ident_name == "float":
+                            _static_call = "double"
+                        elif ident_name == "String":
+                            _static_call = "GorgetString"
+                        _static_call = _static_call + "__" + mname
+                        int _sai = 0
                         for sma in margs:
                             int sma_val = lower_expr(&ctx, sma, &gmod)
-                            static_args.push(op_consume(&ctx, &gmod, sma_val, CkCallArg()))
+                            static_args.push(op_consume(&ctx, &gmod, sma_val, classify_call_arg(&gmod, _static_call, _sai)))
+                            _sai += 1
                         # Primitive method names need C-runtime mangling.
                         String type_prefix = ident_name
                         if ident_name == "int":
@@ -3611,13 +3676,19 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         call_args.push(OpBorrow(recv))
                     else:
                         call_args.push(OpMove(recv))
-            for ma in margs:
-                int ma_val = lower_expr(&ctx, ma, &gmod)
-                call_args.push(op_consume(&ctx, &gmod, ma_val, CkCallArg()))
-            # Build the mangled method name: TypeName__method
-            # Resolve receiver type name from the GIR local's type
+            # Build the mangled method name early so per-arg
+            # classify_call_arg can drive owning vs borrow via the
+            # callee's param ownership (offset +1 to skip the self
+            # param at index 0 in fn_move_params). Methods that aren't
+            # pre-registered in fn_move_params default to CkCallArgBorrow
+            # — correct per CLAUDE.md "Ownership at Consuming Positions".
             String recv_type_name = local_type_name(recv, &ctx, &gmod)
             String full_name = recv_type_name + "__" + mname
+            int _ma_idx = 0
+            for ma in margs:
+                int ma_val = lower_expr(&ctx, ma, &gmod)
+                call_args.push(op_consume(&ctx, &gmod, ma_val, classify_call_arg(&gmod, full_name, _ma_idx + 1)))
+                _ma_idx += 1
             # Return-type resolution priority — single source of truth
             # at each step (Layering rule 3):
             #
@@ -4210,11 +4281,12 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                     else:
                         gir_args.push(OpMove(arg_local))
             else:
-                # Phase C step 5c: pick OpMove/OpBorrow/OpCopy based on
-                # source ownership and resource-typedness via the
-                # `op_consume` dispatcher. Non-resource sources keep
-                # OpCopy semantics.
-                gir_args.push(op_consume(&ctx, &gmod, arg_local, CkCallArg()))
+                # Phase C step 5c + Path A bugfix (2026-05-21): pick the
+                # ConsumeKind from the callee's param ownership. bare `T`
+                # → CkCallArgBorrow (Ptr alias propagation, no clone);
+                # `!T` → CkCallArgOwning (drives OpMove/OpClone). The
+                # outer `is_borrow` branch already handled `&T` params.
+                gir_args.push(op_consume(&ctx, &gmod, arg_local, classify_call_arg(&gmod, call_name, ai)))
             ai = ai + 1
         # Look up return type from module's fn_sigs, or from function definitions
         int ret_type = I64_TYPE
@@ -4330,7 +4402,9 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             int gs_tid_decl = lookup_or_register_named(&gmod, "GorgetString")
             if declared_ty == gs_tid_decl and is_cstr_returning_call(init_expr, &gmod):
                 int coerced = add_local(&ctx, gs_tid_decl, NO_NAME)
-                Vector[Operand] cstr_args = [op_consume(&ctx, &gmod, val, CkCallArg())]
+                # gorget_str_from_cstr reads the cstr pointer to build a
+                # new GorgetString — borrow.
+                Vector[Operand] cstr_args = [op_consume(&ctx, &gmod, val, CkCallArgBorrow())]
                 emit(&ctx, GICallExtern(coerced, "gorget_str_from_cstr", cstr_args))
                 val = coerced
                 var_type = gs_tid_decl
@@ -4614,7 +4688,9 @@ void emit_chain_writeback(LowerCtx &ctx, SpannedExpr coll_expr, SpannedExpr idx_
             set_args.push(OpBorrow(coll))
         else:
             set_args.push(OpBorrow(coll))
-    set_args.push(op_consume(&ctx, &gmod, idx, CkCallArg()))
+    # Chain-writeback set: idx is read by the runtime, value takes
+    # ownership via OpMove (move-eligible — the chain ensures last use).
+    set_args.push(op_consume(&ctx, &gmod, idx, CkCallArgBorrow()))
     set_args.push(OpMove(value_local))
     emit(&ctx, GICallExtern(-1, set_fn, set_args))
 
@@ -4712,7 +4788,11 @@ void lower_index_assign(LowerCtx &ctx, SpannedExpr base_expr, SpannedExpr idx_ex
             base_op = OpBorrow(base)
         else:
             pass
-    Vector[Operand] set_args = [base_op, op_consume(&ctx, &gmod, idx, CkCallArg()), op_consume(&ctx, &gmod, val, CkCallArg())]
+    # `base[idx] = val` → setter(base, idx, val): the collection takes
+    # ownership of `val` (consuming-position per CLAUDE.md). idx is read
+    # only (gorget_map_put hashes/clones the key internally for Dicts,
+    # uses by-value for arrays). val → CkCallArgOwning, idx → borrow.
+    Vector[Operand] set_args = [base_op, op_consume(&ctx, &gmod, idx, CkCallArgBorrow()), op_consume(&ctx, &gmod, val, CkCallArgOwning())]
     emit(&ctx, GICallExtern(-1, setter, set_args))
 
 # Look up the parent enum name for a type. If `type_name` itself is an
@@ -7062,13 +7142,20 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
 
     # Pre-scan function param ownership for borrow detection
     Dict[String, Vector[bool]] fn_borrow_params = {}
+    # Parallel scan for `!`-move params (OWN_MOVE == 2). Drives
+    # CkCallArgOwning vs CkCallArgBorrow at call-arg lowering sites via
+    # `classify_call_arg`. See enum ConsumeKind / op_consume docstring.
+    Dict[String, Vector[bool]] fn_move_params = {}
     for bp_item in m.items:
         match bp_item:
             case IFunction(fdef):
                 Vector[bool] borrows = []
+                Vector[bool] moves = []
                 for p in fdef.params:
                     borrows.push(p.ownership == 1)  # 1 = OWN_MUTABLE (&)
-                fn_borrow_params.put(fdef.name, borrows)
+                    moves.push(p.ownership == 2)    # 2 = OWN_MOVE (!)
+                fn_borrow_params.put(fdef.name.clone(), borrows)
+                fn_move_params.put(fdef.name, moves)
             else:
                 pass
 
@@ -7156,7 +7243,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     # a zero-arg call.
     Dict[String, GirStaticInfo] statics = {}
     Dict[String, ResourceMetadata] resource_metadata = {}
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes)
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, !const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes)
 
     # Refine fn_sigs for functions with named/generic return types. The
     # pre-scan above defaulted those to `I64_TYPE` because `map_ast_type`
