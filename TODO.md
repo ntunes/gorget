@@ -2,6 +2,55 @@
 
 ## High Priority
 
+- **Phase 2c COMMIT 3 — sixth attempt REVERTED 2026-05-22 (this agent)**. Applied Fix B EXACTLY as the prior-agent diagnosis prescribed: wired `emit_scope_drops` + `emit_drops_for_early_exit` from no-op stubs into queue-pushers, made `flush_drop_queue` emit real `GIDropIfAlive(local_id)` at recorded positions via stable insertion-sort + per-block forward-pass splice, AND ordered `flush_drop_queue` BEFORE `compute_liveness` at both `lower_function` (~line 6109) and `lower_equip_block` (~line 6350). Fix A (`4e4fd3f1`, drops excluded from operand uses) + Fix C (`917be8fb`, transitive resource_types fixpoint) were both already shipped before this attempt.
+
+  **Empirical**: `cargo build --release` clean. `cargo test --lib --release` 1059/1061 (baseline; two pre-existing release `should_panic`). `cargo test --test integration --release lowerer_comparison -- --test-threads=1` 1/1 in 63.99s. stage-1 binary compiled OK; stage1.c grew to 595,274 lines, **2,099 `gorget_*_free(` calls** (vs prior 4th attempt's 2,103 — same order of magnitude), 24 `memcmp(` drop guards. **`self_host_bootstrap` 0/2** in 716.62s, double-free.
+
+  **NEW crash class (sixth attempt)**: `free(): double free detected in tcache 2`. Backtrace via gdb-batch: `__gorget_global_dealloc_fn ← gorget_array_free ← lexer___lex_tokenize_with_offset ← parser___parse_source_with_offset ← loader___load_imports ← main`. The crash is now in the **lexer phase**, not the loader phase the 4th attempt hit — Fix C's transitive resource detection did close the SpannedType class.
+
+  **Root cause** (different surviving aliasing class — struct constructor by-value field-init):
+
+  In `tests/fixtures/self_host_lowerer/lexer.gg:1113` `lex_tokenize_with_offset`:
+  ```gorget
+  Vector[int] indent = Vector[int]()
+  indent.push(0)
+  Lexer l = Lexer(source, 0, indent, 0, Vector[SpannedToken](), false, false, "", base_offset)
+  l.lex_all()
+  return l.lex_tokens
+  ```
+
+  Lowered to stage1.c (lines 555807-555823):
+  ```c
+  __v18 = __s4;  // __s4 is `indent`, __v18 is OpBorrow(indent)
+  __v25 = &__s13;
+  memcpy(&((__gg_Lexer *)(__v25))->lex_indent_stack, &__v18, sizeof(GorgetArray));  // byte-alias!
+  ...
+  Lexer__lex_all(__v27);   // mutates __s14, may realloc lex_indent_stack
+  ...
+  __v33 = &__s4;
+  gorget_array_free(__v33);   // ← my new GIDropIfAlive(indent) → DOUBLE-FREE
+  ```
+
+  The Lexer constructor inline field-init **byte-copies** the Vector struct (data ptr + cap + len + elem_size + alloc) from `indent` into `__s13.lex_indent_stack`. Both slots now point to the same heap. When `lex_all()` runs pushes that trigger a realloc of `lex_indent_stack`, `indent`'s `.data` pointer becomes stale (already freed by realloc). My new `GIDropIfAlive(indent)` then frees the stale pointer → tcache double-free.
+
+  **Why prior attempts didn't hit this**: drops were no-op stubs, so `indent` just leaked. The 4th attempt's loader crash predated reaching this code path because their SpannedType issue crashed earlier in `load_imports`. Fix C resolved that, exposing the next class downstream.
+
+  **The classification gap**: `classify_call_arg(&gmod, "Lexer", 2)` returns `CkCallArgBorrow` (default for unknown callees not in `fn_move_params` — struct constructors aren't registered there). `op_consume` then returns `OpBorrow(indent)` → byte-copy alias. Should be `CkCallArgOwning` so resource-typed source goes through `OpMove` (or `OpClone` if not last-use). With OpMove, `wire_liveness_into_modes` emits `GIMoveZero(indent)` after the constructor call → `GIDropIfAlive(indent)` sees zeroed slot → memcmp gate suppresses the drop.
+
+  **Suggested next step (Fix D — struct constructor consume classification)**:
+
+  At `lower.gg:~4527` (the ECall(EIdentifier, args) call-arg classify site) AND `lower.gg:~4520` (`is_borrow` branch's fallback), detect when `call_name` is a struct constructor (via `is_type_constructor(call_name, &gmod)` OR `gmod.type_infos.contains(call_name)`) and treat the arg as `CkCallArgOwning` rather than going through `classify_call_arg`. Tradeoffs:
+
+  1. Pure structural fix: a struct field-init IS a consume position per CLAUDE.md "Ownership at Consuming Positions". OpClone fires when source isn't owned-and-last-use (e.g. when the source is a borrowed local). OpMove fires when liveness allows.
+  2. Risk: breaks any existing call that passes a borrowed source where the struct field expects to alias (not own). Need to audit struct-literal sites for any case that depends on the alias semantics. Likely none, since byte-aliasing into struct fields IS the buggy pattern.
+  3. Alternative (more conservative): register every struct constructor in `fn_move_params` with `moves[i] = true` iff the i-th field is a resource-type (per `type_infos.fields[i].type_name` + `is_resource_type_name`). This keeps `classify_call_arg` as the single source of truth and surgically marks only resource-field positions.
+
+  **Files to touch (Fix D, alt 3)**: `tests/fixtures/self_host_lowerer/lower.gg`. Around line 7560 (the `fn_move_params` pre-scan loop), add a second pass that walks `m.items` for `IStructDef` / `IEnumDef`, looks up fields via `type_infos.contains`, and populates `fn_move_params[ctor_name]` with the per-field resource-flag vector. Then COMMIT 3's drop emission can ship cleanly — `indent` becomes OpMove(indent) at the Lexer constructor, GIMoveZero fires, drop suppressed by memcmp.
+
+  **What was reverted**: ALL changes to `tests/fixtures/self_host_lowerer/lower.gg`. Working tree clean. Top commit remains `917be8fb`. The Fix B implementation IS correct as written — verified against the prior 4th-attempt agent's notes — but it surfaces a strictly new bug class that Fix B alone cannot close.
+
+  **Recommendation for next agent**: ship Fix D (the struct constructor consume classification, conservative alt 3 above) as a STANDALONE commit FIRST. The triplet should still pass (no observable change because flush_drop_queue is still no-op, but `OpMove` at constructor args triggers `GIMoveZero` emission which is harmless without drops). Then re-attempt COMMIT 3 step 3 (Fix B) on top. The combined ordering — Fix A (4e4fd3f1) + Fix C (917be8fb) + Fix D (NEW) + Fix B (this agent's reverted code, ready to re-apply) — should close the COMMIT 3 attempt chain.
+
 - **Phase 2c COMMIT 3 — fourth attempt REVERTED 2026-05-22 (agent `a731021a`)**. Brief instructed to ship step 3 of the canonical fix order: flip `emit_scope_drops` and `emit_drops_for_early_exit` from no-op stubs into queue-pushers, and turn `flush_drop_queue` into a real `GIDropIfAlive` emitter at recorded positions. Did so; **bootstrap still crashes**, but the crash mode has shifted from the original double-free in `Lexer__lex_scan_number` to a SIGSEGV in `str_alloc_copy ← gorget_string_clone_to_owned ← loader___type_mentions_iter`.
 
   **Key findings (new, useful for next agent)**:
