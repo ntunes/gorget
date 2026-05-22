@@ -2476,11 +2476,58 @@ String gir_local_type_name(int local_id, Vector[GirLocal] &gir_locals, GirModule
 int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &local_to_slot, Vector[GirLocal] &gir_locals, Dict[String, int] &func_index, GirModule &gmod, Dict[String, int] &sr, LirModule &m):
     match inst:
         case GIAssign(local_id, operand):
-            int val = lower_operand(operand, &f, bb, &local_to_slot, &m)
+            # D.1 (2026-05-22) — OpBorrow + Ptr-typed-dst + value-typed-src
+            # dispatch. The canonical alias shape from B.1's Branch C is
+            # `GIAssign(dst, OpBorrow(src))` where the GIR layer tags dst
+            # as a borrow alias of src. When dst's slot is Ptr-typed
+            # (Branch C retyped per the D.1 follow-up) and src's slot is
+            # value-typed (aggregate stored inline), the previous shape
+            # `ISlotLoad(src) → ISlotStore(dst)` would byte-copy the
+            # aggregate's first 8 bytes into the pointer slot — silently
+            # corrupting the alias.
+            #
+            # Fix: when both conditions match, emit `ISlotAddr(src) →
+            # ISlotStore(dst)` instead. The dst slot now holds the address
+            # of src's storage; downstream Ptr-typed-slot consumers
+            # (GIFieldLoad auto-deref at line ~3164, GICall pass-by-ptr at
+            # line ~2602, GICallExtern pass-by-ptr at line ~2891, OpClone
+            # short-circuit at line ~2411) all handle Ptr-typed slots
+            # correctly, so the alias propagates without further work.
+            #
+            # Symmetric matches (both Ptr OR both value) keep the byte-copy
+            # path — that's the correct shape for both (Ptr→Ptr is pointer
+            # copy = alias; value→value is the unconditional byte-copy
+            # B.1's pragma already relies on). The OpBorrow operand
+            # case-disrcimination is the load-bearing signal: OpCopy /
+            # OpMove / OpClone all retain `lower_operand` semantics.
             int slot = local_to_slot.get(local_id).unwrap()
-            LirBlock blk = f.blocks.get(bb).unwrap()
-            blk.insts.push(ISlotStore(slot, val, false))
-            f.blocks.set(bb, blk)
+            int slot_ty = f.slots.get(slot).unwrap().ty
+            bool dst_is_ptr = (slot_ty == LT_PTR) or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE)
+            bool handled = false
+            if dst_is_ptr:
+                match operand:
+                    case OpBorrow(src_local):
+                        if src_local >= 0 and src_local < local_to_slot.len():
+                            int src_slot = local_to_slot.get(src_local).unwrap()
+                            int src_slot_ty = f.slots.get(src_slot).unwrap().ty
+                            bool src_is_ptr = (src_slot_ty == LT_PTR) or (src_slot_ty >= LT_PTR_TO_BASE and src_slot_ty < LT_STRUCT_BASE)
+                            if not src_is_ptr:
+                                # Value-typed src + Ptr-typed dst: take the
+                                # address of src's storage and store it as
+                                # the dst's pointer value.
+                                int addr_val = lir_fn_next_value(&f)
+                                LirBlock pblk = f.blocks.get(bb).unwrap()
+                                pblk.insts.push(ISlotAddr(addr_val, src_slot))
+                                pblk.insts.push(ISlotStore(slot, addr_val, false))
+                                f.blocks.set(bb, pblk)
+                                handled = true
+                    else:
+                        pass
+            if not handled:
+                int val = lower_operand(operand, &f, bb, &local_to_slot, &m)
+                LirBlock blk = f.blocks.get(bb).unwrap()
+                blk.insts.push(ISlotStore(slot, val, false))
+                f.blocks.set(bb, blk)
 
         case GIBinOp(dst_local, op, ty, lhs_op, rhs_op):
             int lhs = lower_operand(lhs_op, &f, bb, &local_to_slot, &m)

@@ -5158,15 +5158,33 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                             inherited_chain = true
                         else:
                             pass
-                    var_local = add_local_with(&ctx, var_type, Some(name.clone()), new_own, new_origin)
+                    # D.1 (2026-05-22) — Branch C retype to Ptr(T). B.1
+                    # left the dst slot value-typed because the LIR's
+                    # `GIAssign(dst, OpBorrow(src))` shape would byte-copy
+                    # an aggregate value into a Ptr-typed slot (silent
+                    # corruption). D.1 ships the LIR fix at
+                    # `lir_lower.gg:GIAssign` (OpBorrow + Ptr-typed-dst +
+                    # value-typed-src → ISlotAddr instead of ISlotLoad),
+                    # so the slot can now genuinely be `Ptr(T)`.
+                    #
+                    # The retype unifies Branch C with Rust's `set_ref`:
+                    # downstream Ptr-typed-slot consumers (GIFieldLoad
+                    # auto-deref, GICall pass-by-ptr, GICallExtern
+                    # pass-by-ptr, OpClone short-circuit) all handle the
+                    # Ptr-typed shape — borrow propagation now works at
+                    # the LIR layer, not just at the GIR ownership tag.
+                    int dst_type_id = register_ptr(&gmod, var_type)
+                    var_local = add_local_with(&ctx, dst_type_id, Some(name.clone()), new_own, new_origin)
                     # Explicit OpBorrow — bypass op_consume because val
                     # may be LoOwned (which op_consume would resolve to
                     # OpMove, but for the alias shape we want a pointer-
-                    # like copy, not a move-out). The LIR backend lowers
-                    # OpBorrow as ISlotLoad, which byte-aliases the
-                    # value-typed slot. The ownership tag (LoBorrowed/
-                    # LoView) is the load-bearing signal for downstream
-                    # op_consume / drop / liveness consumers.
+                    # like copy, not a move-out). With D.1's Branch C
+                    # retype, the LIR's GIAssign handler dispatches:
+                    #   • val_loc value-typed (e.g. fresh coerced cstr →
+                    #     GorgetString) → ISlotAddr(src) + ISlotStore(dst)
+                    #   • val_loc Ptr-typed (e.g. inherited from another
+                    #     Branch C / from GIFieldLoad) → ISlotLoad(src) +
+                    #     ISlotStore(dst) = pointer copy = alias chain.
                     emit(&ctx, GIAssign(var_local, OpBorrow(val)))
                     # cow_register_alias overwrites BorrowOrigin with
                     # BoAlias(val). Only call when we DIDN'T inherit a
