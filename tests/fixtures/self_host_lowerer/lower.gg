@@ -7452,29 +7452,55 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                 pass
 
     Dict[String, int] named_types = {}
-    # Scan struct/enum defs to determine which types have resource fields
+    # Scan struct/enum defs to determine which types have resource fields.
+    #
+    # Run to fixpoint: a single pass misses forward references (struct A
+    # contains struct B defined later → B isn't yet marked as resource
+    # when A is checked). The brief calls this `is_transitively_resource`;
+    # the same effect is achieved by closing the existing
+    # `is_resource_field_type` walk under iteration. Each iteration may
+    # mark more structs/enums as resource (because their already-checked
+    # nested types were just marked in the prior pass); iteration
+    # terminates when no new entries are added.
+    #
+    # Concrete bug this closes: `SpannedType { Type ty; Span span }` where
+    # Type ∋ TNamed(String, Vector[SpannedType]) — Type was forward-
+    # referenced relative to SpannedType in ast.gg, so SpannedType was NOT
+    # marked → `loader___type_mentions_iter(SpannedType ty)` got the bare
+    # byte-copy ABI rather than Ptr-wrap, aliasing caller's heap and
+    # SIGSEGV'ing at `gorget_string_clone_to_owned(&__s7)`. Fix C of the
+    # 2026-05-22 fourth-attempt review.
     Dict[String, bool] resource_types = {}
     resource_types.put("String", true)
     resource_types.put("GorgetString", true)
-    for ritem in m.items:
-        match ritem:
-            case IStruct(sdef):
-                bool has_resource = false
-                for fld in sdef.fields:
-                    if is_resource_field_type(fld.param_type, resource_types):
-                        has_resource = true
-                if has_resource:
-                    resource_types.put(sdef.name, true)
-            case IEnum(edef):
-                bool has_resource = false
-                for var in edef.variants:
-                    for vft in var.fields:
-                        if is_resource_field_type(vft, resource_types):
+    bool rt_changed = true
+    while rt_changed:
+        rt_changed = false
+        for ritem in m.items:
+            match ritem:
+                case IStruct(sdef):
+                    if resource_types.contains(sdef.name):
+                        continue
+                    bool has_resource = false
+                    for fld in sdef.fields:
+                        if is_resource_field_type(fld.param_type, resource_types):
                             has_resource = true
-                if has_resource:
-                    resource_types.put(edef.name, true)
-            else:
-                pass
+                    if has_resource:
+                        resource_types.put(sdef.name, true)
+                        rt_changed = true
+                case IEnum(edef):
+                    if resource_types.contains(edef.name):
+                        continue
+                    bool has_resource = false
+                    for var in edef.variants:
+                        for vft in var.fields:
+                            if is_resource_field_type(vft, resource_types):
+                                has_resource = true
+                    if has_resource:
+                        resource_types.put(edef.name, true)
+                        rt_changed = true
+                else:
+                    pass
 
     Dict[String, int] type_subs = {}
     Dict[String, String] meta_aliases = types.meta_aliases
