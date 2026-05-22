@@ -461,8 +461,8 @@ bool function_mentions_iter(FunctionDef f):
 bool module_shadows_vector_iter(Module m):
     int i = 0
     while i < m.items.len():
-        Item it = m.items.get(i).unwrap()
-        match it:
+        Item item = m.items.get(i).unwrap()
+        match item:
             case IStruct(sdef):
                 if sdef.name == "VectorIter":
                     return true
@@ -486,8 +486,8 @@ bool module_shadows_vector_iter(Module m):
 bool module_imports_std_iter(Module m):
     int i = 0
     while i < m.items.len():
-        Item it = m.items.get(i).unwrap()
-        match it:
+        Item item = m.items.get(i).unwrap()
+        match item:
             case IImport(imp):
                 if imp.module_path == "std.iter":
                     return true
@@ -499,8 +499,8 @@ bool module_imports_std_iter(Module m):
 bool ast_mentions_std_iter_need(Module m):
     int i = 0
     while i < m.items.len():
-        Item it = m.items.get(i).unwrap()
-        match it:
+        Item item = m.items.get(i).unwrap()
+        match item:
             case IFunction(f):
                 if function_mentions_iter(f):
                     return true
