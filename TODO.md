@@ -2,6 +2,27 @@
 
 ## High Priority
 
+- **Path A Phase 2.3 + 2.3.5 shipped 2026-05-22 — significant progress but bootstrap still fails on driver.gg / loader.gg / parser.gg**. Commits `bac24e49` (Phase 2.3 — `op_consume` GtPtr → `decide_ptr_consume` wired + `lir_lower.gg` OpClone Ptr-to-struct emission via pointee's clone fn) and `58da31e6` (Phase 2.3.5 — unwrap Ptr/MutPtr at `.clone()` dst type so the slot type matches the cloned-value runtime shape).
+
+  **What progress looks like**: stage-1 binary now compiles cleanly (Phase 2.3.5 closed all 6 cc type-mismatch errors). On simple-to-medium inputs (`int main(): print("hi") return 0`, vector iteration, etc.) stage-1 **works perfectly** — produces correct C, exits normally. Even compiles `tests/fixtures/self_host_lowerer/traits.gg` (35KB output, exit 0).
+
+  **What still hangs**: stage-1 hangs (zero output, SIGKILL on timeout) on:
+    - `tests/fixtures/self_host_lowerer/loader.gg`
+    - `tests/fixtures/self_host_lowerer/parser.gg`
+    - `tests/fixtures/self_host_lowerer/driver.gg` (which transitively imports both)
+
+  Empirical signature: process spawns, NO output written, hangs indefinitely. Earlier (Phase 2.3 only) stage-1 produced ~122KB of output then hung mid-write. Now zero output — suggests the hang is earlier in the lowering pipeline (perhaps during initial setup / module loading / dependency resolution).
+
+  **Suggested next-attempt strategy**: bisect what's structurally different about loader.gg / parser.gg vs traits.gg. Both share Gorget syntax features (match, Vector iteration, field access) but loader.gg + parser.gg have larger more-deeply-nested code paths. Candidate triggers:
+    - Box[T] heap-allocated enum payloads (parser.gg has many `Box[SpannedExpr]`).
+    - Mutually recursive type references (Type ↔ SpannedType ↔ Box[SpannedType]).
+    - Generic equip blocks with type-param substitution.
+    - `for` loops with complex iter sources.
+
+  Instrument the lowerer (per the diagnostic agent `af8950e8c7d7c577e`'s methodology — diag_warn at lower_function entry/exit) and run on parser.gg specifically. The hang location will pinpoint the trigger.
+
+  **Confirmed-working architectural pieces**: C.1 (BorrowOrigin), A.1 (GIFieldLoad variant), A.2 (Ptr-typed dst for resource field reads), B.1 (7-branch SVarDecl), D.1 (LIR Ptr-aggregate-store), Phase 2.3 (clone-through-Ptr at consume), Phase 2.3.5 (.clone() dst-type unwrap). All ship as discrete commits, all pass lib + lowerer_comparison. Phase 4 (E.1 drop emission) remains blocked on the loader.gg / parser.gg hang.
+
 - **Path A Phase 4 attempt revealed `it` keyword latent bug + A.2 regression on driver.gg 2026-05-22**. Bisect confirmed: A.1 (commit `f15a45c6`) ships clean bootstrap 2/2; A.2 (commit `2e544e84`, EFieldAccess Ptr-wrap for resource fields) regresses bootstrap.
 
   **Two discrete bugs identified, only one fixed**:
