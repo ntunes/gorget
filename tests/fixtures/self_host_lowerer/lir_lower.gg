@@ -3127,23 +3127,78 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
         case GINop():
             pass
 
-        case GIFieldLoad(_, _, _):
-            # A.1 (2026-05-22) — typed field-load STUB. The variant exists
-            # so A.2 can wire EFieldAccess to emit GIFieldLoad with the
-            # dst's GIR type carried through, enabling Ptr-typed-dst
-            # dispatch:
-            #   • Ptr(_) → store_to_local(dst, fptr, bb)  (pointer alias)
-            #   • else  → Inst::Load { dst, ptr: fptr, ty: field_ty } (byte-copy)
-            # (See Rust `src/lir/lower/insts.rs:800-869` for the reference
-            # dispatch.)
+        case GIFieldLoad(fl_dst_local, fl_base_local, fl_field):
+            # A.2 (2026-05-22) — typed field-load dispatch. Mirrors Rust
+            # `Instruction::FieldLoad` lowering at
+            # `src/lir/lower/insts.rs:800-869`.
             #
-            # A.1 status: DEAD CODE. No upstream pass emits GIFieldLoad —
-            # EFieldAccess still routes through GICallExtern("__field_read_*")
-            # at lower.gg. If a future commit accidentally emits GIFieldLoad
-            # before A.2 wires the real dispatch, this `print` surfaces the
-            # premature emission in the stage-0 → stage-1 C output. Mirrors
-            # the `lower_fail` convention in `lower.gg:198`.
-            print("/* [lower_fail] GIFieldLoad reached lir_lower before A.2 wired the dispatch */")
+            # Shape:
+            #   1. base_val = address of the base struct (slot addr OR
+            #      ISlotLoad if the slot is itself a pointer — auto-deref
+            #      for `&Foo` / `Foo*` params).
+            #   2. fptr = IFieldPtr(base_val, struct_id, field).
+            #   3. Dispatch on dst GIR type:
+            #        • GtPtr(_) / GtMutPtr(_) → ISlotStore(dst_slot, fptr)
+            #          — pointer-alias path (no byte-copy).
+            #        • else → ILoad(loaded, fptr, field_lir_ty) +
+            #          ISlotStore(dst_slot, loaded) — byte-copy path,
+            #          observationally identical to the previous
+            #          `__field_read_*` GICallExtern lowering.
+            #
+            # struct_id is resolved by name from the base local's GIR
+            # type — `gir_type_id_to_base_name` strips Ptr/MutPtr to
+            # reach the named struct, `sr.get(name)` maps to the LIR
+            # struct id (the same map that `__field_read_*` codegen
+            # uses via `find_struct_type`).
+            int fl_base_tid = gir_locals.get(fl_base_local).unwrap().type_id
+            String fl_base_tn = gir_type_id_to_base_name(fl_base_tid, &gmod)
+            int fl_struct_id = sr.get(fl_base_tn).unwrap_or(-1)
+            int fl_base_slot = local_to_slot.get(fl_base_local).unwrap()
+            int fl_base_slot_ty = f.slots.get(fl_base_slot).unwrap().ty
+            int fl_base_val = lir_fn_next_value(&f)
+            LirBlock fl_blk0 = f.blocks.get(bb).unwrap()
+            # Auto-deref: if the base slot is a pointer kind (LT_PTR or
+            # LT_PTR_TO_BASE+sid), the slot HOLDS a pointer — load it
+            # rather than taking the slot's address. Matches the OpCopy
+            # path the previous `__field_read_*` arg-prep took for
+            # is_ptr_type bases (lower.gg line ~4382).
+            bool fl_base_is_ptr = (fl_base_slot_ty == LT_PTR) or (fl_base_slot_ty >= LT_PTR_TO_BASE and fl_base_slot_ty < LT_STRUCT_BASE)
+            if fl_base_is_ptr:
+                fl_blk0.insts.push(ISlotLoad(fl_base_val, fl_base_slot, fl_base_slot_ty))
+            else:
+                fl_blk0.insts.push(ISlotAddr(fl_base_val, fl_base_slot))
+            f.blocks.set(bb, fl_blk0)
+            # FieldPtr → field address.
+            int fl_fptr = lir_fn_next_value(&f)
+            LirBlock fl_blk1 = f.blocks.get(bb).unwrap()
+            fl_blk1.insts.push(IFieldPtr(fl_fptr, fl_base_val, fl_struct_id, fl_field))
+            f.blocks.set(bb, fl_blk1)
+            # Dispatch on dst's GIR type — Ptr(_) → pointer alias,
+            # else → byte-copy load. The dst's GIR type is set by
+            # `lower.gg`'s EFieldAccess emission: resource fields are
+            # Ptr-wrapped (alias path), non-resource fields are
+            # value-typed (byte-copy path).
+            int fl_dst_tid = gir_locals.get(fl_dst_local).unwrap().type_id
+            int fl_dst_slot = local_to_slot.get(fl_dst_local).unwrap()
+            bool fl_dst_is_ptr = is_ptr_type(fl_dst_tid, &gmod)
+            if fl_dst_is_ptr:
+                # Pointer-alias: store the field address directly as
+                # the dst's pointer value. No byte-copy.
+                LirBlock fl_blk2 = f.blocks.get(bb).unwrap()
+                fl_blk2.insts.push(ISlotStore(fl_dst_slot, fl_fptr, false))
+                f.blocks.set(bb, fl_blk2)
+            else:
+                # Byte-copy: load the field value through the field
+                # pointer, then store into the dst slot. `field_lir_ty`
+                # comes from the dst slot's own ty (single source of
+                # truth — `local_to_slot` already wired the slot type
+                # to the field's value type at local allocation).
+                int fl_field_lir_ty = f.slots.get(fl_dst_slot).unwrap().ty
+                int fl_loaded = lir_fn_next_value(&f)
+                LirBlock fl_blk2 = f.blocks.get(bb).unwrap()
+                fl_blk2.insts.push(ILoad(fl_loaded, fl_fptr, fl_field_lir_ty))
+                fl_blk2.insts.push(ISlotStore(fl_dst_slot, fl_loaded, false))
+                f.blocks.set(bb, fl_blk2)
 
     return bb
 

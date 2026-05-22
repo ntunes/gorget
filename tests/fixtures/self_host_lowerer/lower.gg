@@ -4371,38 +4371,34 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     fi += 1
             if found_fi >= 0:
                 int field_type = resolve_field_gir_type(found_type_name, &gmod)
-                # Phase D step 2: a field load aliases into the base struct's
-                # storage. The local that receives it is a borrow into the
-                # aggregate, not an owned value — validators (Phase C) need
-                # this to flag Copy-of-resource-field-load violations.
-                int fdst = add_local_with(&ctx, field_type, NO_NAME, LoBorrowed(), BoField(-1, -1))
-                String field_fn = "__field_read_" + base_type_name + "_" + field_name
-                bool base_is_ptr = is_ptr_type(base_tid, &gmod)
-                Vector[Operand] field_args = []
-                if base_is_ptr:
-                    field_args.push(OpCopy(base))
-                else:
-                    # Phase C step 5b + Path A receiver-dispatch (2026-
-                    # 05-21): chained field access (a.b.c.d) produces a
-                    # LoBorrowed `base` for the inner reads — OpMove on
-                    # a borrow is a use-after-free, so always OpBorrow
-                    # there. For LoOwned / LoParam, route through
-                    # classify_call_arg on the synthetic field-getter's
-                    # param 0. Field-getter functions are not registered
-                    # in fn_move_params (they're declared per-emission,
-                    # never `!T` since the read is non-consuming), so
-                    # classify_call_arg defaults to CkCallArgBorrow —
-                    # correct: a field read aliases into the aggregate,
-                    # it doesn't take ownership.
-                    GirLocal base_loc = ctx.locals.get(base).unwrap()
-                    match base_loc.ownership:
-                        case LoBorrowed():
-                            field_args.push(OpBorrow(base))
-                        else:
-                            field_args.push(op_consume(&ctx, &gmod, base, classify_call_arg(&gmod, field_fn, 0)))
-                field_args.push(OpConstI64(found_fi))
-                gmod.fn_sigs.put(field_fn, field_type)
-                emit(&ctx, GICallExtern(fdst, field_fn, field_args))
+                # A.2 (2026-05-22) — emit GIFieldLoad with Ptr-typed dst
+                # for resource fields; value-typed dst for non-resource
+                # fields. Mirrors Rust `Instruction::FieldLoad` lowering
+                # at `src/lir/lower/insts.rs:800-869`. The Ptr-typed-dst
+                # variant lets the LIR dispatch pick the POINTER-ALIAS
+                # path (no byte-copy) for collection-/string-/struct-
+                # holding fields — eliminating the silent
+                # `field.push(...)` writeback class of bugs that motivated
+                # the EMethodCall writeback hack at line ~4154.
+                #
+                # For non-resource fields (int, bool, simple structs)
+                # the dst stays value-typed and the LIR emits a byte-copy
+                # ILoad — observationally identical to the previous
+                # `__field_read_*` GICallExtern path.
+                #
+                # `set_field_borrow(&ctx, fdst, base, found_fi)` writes
+                # the BoField(base, field_idx) origin payload that C.1
+                # provisioned but no caller wired. E.1 reads it back
+                # in the return-path validator; Phase C validators read
+                # it to flag escaping borrows. Replaces the
+                # `BoField(-1, -1)` sentinel from Phase D step 2.
+                bool field_is_resource = is_resource_type_name(found_type_name, &gmod)
+                int dst_type_id = field_type
+                if field_is_resource:
+                    dst_type_id = register_ptr(&gmod, field_type)
+                int fdst = add_local_with(&ctx, dst_type_id, NO_NAME, LoBorrowed(), BoNone())
+                set_field_borrow(&ctx, fdst, base, found_fi)
+                emit(&ctx, GIFieldLoad(fdst, base, found_fi))
                 return fdst
             # HARD BUG: unknown field access fell through to I64/0
             # placeholder, losing both the struct identity and the field
