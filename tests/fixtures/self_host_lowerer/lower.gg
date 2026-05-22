@@ -1203,15 +1203,18 @@ void liveness_inst_operand_uses(Instruction inst, Vector[bool] &acc):
         case GIDeref(_, src_lid, _):
             if src_lid >= 0 and src_lid < acc.len():
                 acc.set(src_lid, true)
-        case GIDrop(lid):
-            if lid >= 0 and lid < acc.len():
-                acc.set(lid, true)
-        case GIDropIfAlive(lid):
-            if lid >= 0 and lid < acc.len():
-                acc.set(lid, true)
-        case GIMoveZero(lid):
-            if lid >= 0 and lid < acc.len():
-                acc.set(lid, true)
+        # Drops / MoveZero are NOT reads — they're scope-exit side effects on the
+        # OWNED local (drop) or definitions that zero the source (MoveZero).
+        # Counting them as reads would extend the live range past the move and
+        # demote the OpMove decision to OpClone. Mirror of Rust
+        # src/ir/liveness.rs:431-432 (explicit exclusion). See its doc-comment
+        # at :346-351 for the rationale.
+        case GIDrop(_):
+            pass
+        case GIDropIfAlive(_):
+            pass
+        case GIMoveZero(_):
+            pass
         case GINop():
             pass
 
