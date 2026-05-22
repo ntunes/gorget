@@ -175,13 +175,40 @@ enum ConsumeKind:
 
 # When LoBorrowed, where the borrow originates — used by validators that
 # need to flag borrow-into-owned consume sites by source type. Mirrors
-# Rust's `BorrowOrigin` in `src/ir/types.rs`.
+# Rust's `BorrowOrigin` in `src/ir/mod.rs:582-624`.
+#
+# C.1 (2026-05-22) — enum expanded to carry source payloads:
+#   • BoParam(int): param-local id (the param itself, self-referential)
+#   • BoCollectionElement(int): collection local the borrow indexes into
+#   • BoField(int, int): base local + field index for struct-field borrows
+#   • BoRuntimeView(int): source local for runtime-view borrows (e.g.
+#     string slices, CoW views)
+#   • BoAlias(int): transitive alias source local (cow_register_alias)
+#   • BoFieldPath(String): multi-layer dotted field path
+#     (e.g. "self.data.items") — single LocalId can't encode a chain
+#   • BoTupleElement(int, int): tuple temp + 0-based element index, for
+#     return-path MoveZero of borrow-sourced tuple elements
+#   • BoCowBorrowPending: placeholder for deferred source resolution
+#     (set_cow_borrow without source; upgraded by set_cow_borrow_source)
+#
+# C.1 status: payloads on the four existing variants are present but
+# UNUSED — current callers pass sentinel `-1` because no upstream pass
+# writes the real source id yet. A.2 / B.1 / E.1 will wire actual values
+# at the writer sites and start reading them through the new tracking
+# helpers in `lower.gg` (set_field_borrow, field_borrow_origin,
+# cow_register_alias). The four new variants are also dead code at C.1
+# — added so subsequent commits can construct them without re-touching
+# this enum.
 enum BorrowOrigin:
-    BoNone                  # not a borrow
-    BoParam                 # borrowed from a parameter
-    BoCollectionElement     # borrowed from a Vector/Dict get / iter / safe_get
-    BoField                 # borrowed via field access on an owned aggregate
-    BoRuntimeView           # CoW view returned by string slice / similar
+    BoNone()                    # not a borrow
+    BoParam(int)                # param-local id (self-referential)
+    BoCollectionElement(int)    # collection local
+    BoField(int, int)           # base local + field index
+    BoRuntimeView(int)          # view-source local
+    BoAlias(int)                # transitive alias source local
+    BoFieldPath(String)         # multi-layer dotted field path
+    BoTupleElement(int, int)    # tuple local + element index
+    BoCowBorrowPending()        # placeholder for deferred source
 
 struct GirLocal:
     int type_id

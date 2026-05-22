@@ -534,6 +534,86 @@ void inherit_borrow_from(LowerCtx &ctx, int dst, int src):
     GirLocal updated = GirLocal(dst_loc.type_id, dst_loc.name_hint, new_own, new_origin)
     ctx.locals.set(dst, updated)
 
+# ── BorrowOrigin tracking helpers (C.1, 2026-05-22) ─────────
+#
+# Dead-code scaffolding to mirror Rust's borrow/return-corruption
+# machinery (`src/ir/lowering/context.rs:2255-2410`). Subsequent
+# commits wire callers:
+#   • A.2: `EFieldAccess` writes `set_field_borrow` at GIFieldLoad
+#     emission so the dst local carries its parent struct's identity.
+#   • B.1: bare-identifier rebinds in SVarDecl call `cow_register_alias`
+#     so the dst inherits the source's origin transitively.
+#   • E.1: return-path validator reads back via `field_borrow_origin`
+#     to flag "returning a borrow into a local stack frame".
+#
+# C.1 itself adds the enum payloads + these helpers but no caller is
+# wired — validation gate is build/lib/lowerer_comparison stays green
+# precisely because nothing reads/writes the new state.
+
+# Small helper struct for `field_borrow_origin` return — Gorget doesn't
+# have a generic `Pair` and inlining the two ints into separate Option
+# returns would change the helper's shape from Rust's
+# `Option<(LocalId, u32)>`. Keeping the struct local to this module
+# preserves the Rust-side signature 1:1 at the call sites that A.2
+# / B.1 will introduce.
+struct FieldBorrowPair:
+    int base
+    int field
+
+# Write `BoField(base, field)` as `dst`'s borrow_origin. Mirrors Rust's
+# `set_field_borrow` (`src/ir/lowering/context.rs:2255`).
+#
+# Caller contract (A.2): called immediately after `add_local_with` /
+# emit_payload_read materialises a `dst` local that carries a struct-
+# field borrow. `base` is the parent aggregate local; `field` is the
+# 0-based index into the struct/variant payload.
+#
+# Dead code at C.1: no caller wired. A.2 wires the EFieldAccess path.
+void set_field_borrow(LowerCtx &ctx, int dst, int base, int field):
+    if dst < 0 or dst >= ctx.locals.len():
+        return
+    GirLocal loc = ctx.locals.get(dst).unwrap()
+    GirLocal updated = GirLocal(loc.type_id, loc.name_hint, loc.ownership, BoField(base, field))
+    ctx.locals.set(dst, updated)
+
+# Read back the `(base, field)` pair from a local's borrow_origin.
+# Returns None when the local isn't a BoField borrow. Mirrors Rust's
+# `field_borrow_origin` (`src/ir/lowering/context.rs:2268`).
+#
+# Dead code at C.1: no caller reads. E.1 wires the return-path
+# validator that pattern-matches on this.
+Option[FieldBorrowPair] field_borrow_origin(LowerCtx &ctx, int local):
+    if local < 0 or local >= ctx.locals.len():
+        return None
+    GirLocal loc = ctx.locals.get(local).unwrap()
+    match loc.borrow_origin:
+        case BoField(base, field):
+            return Some(FieldBorrowPair(base, field))
+        else:
+            return None
+
+# Register `alias` as a transitive borrow of `source`. Writes
+# `BoAlias(source)` into the alias's borrow_origin so downstream
+# resolvers can chase the chain to the root. Mirrors Rust's
+# `cow_register_alias` (`src/ir/lowering/context.rs:2532`).
+#
+# Note: Rust's version eagerly resolves the chain at write time
+# (`cow_resolve_root`) and stores the ROOT, not the immediate source.
+# The self-host helper stores the immediate source — chain-walk is
+# the reader's job, mirroring how `add_local_inheriting` propagates
+# origins one step at a time. The two strategies are observationally
+# equivalent as long as the reader walks; B.1 will pick the strategy
+# (probably chase-on-write, matching Rust) when it wires callers.
+#
+# Dead code at C.1: no caller wired. B.1 wires the bare-rebind path
+# in SVarDecl / decide_operand_at_consuming_arg.
+void cow_register_alias(LowerCtx &ctx, int alias, int source):
+    if alias < 0 or alias >= ctx.locals.len():
+        return
+    GirLocal alias_loc = ctx.locals.get(alias).unwrap()
+    GirLocal updated = GirLocal(alias_loc.type_id, alias_loc.name_hint, alias_loc.ownership, BoAlias(source))
+    ctx.locals.set(alias, updated)
+
 # ── Drop elaboration (mirrors src/ir/lowering/drops.rs) ─────
 #
 # A drop scope corresponds to a language construct that owns locals
@@ -4184,7 +4264,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     case None:
                         recv_is_collection = false
                 if recv_is_collection:
-                    mdst = add_local_with(&ctx, ret_tid, NO_NAME, LoBorrowed(), BoCollectionElement())
+                    mdst = add_local_with(&ctx, ret_tid, NO_NAME, LoBorrowed(), BoCollectionElement(-1))
                 else:
                     mdst = add_local(&ctx, ret_tid, NO_NAME)
             else:
@@ -4281,7 +4361,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 # storage. The local that receives it is a borrow into the
                 # aggregate, not an owned value — validators (Phase C) need
                 # this to flag Copy-of-resource-field-load violations.
-                int fdst = add_local_with(&ctx, field_type, NO_NAME, LoBorrowed(), BoField())
+                int fdst = add_local_with(&ctx, field_type, NO_NAME, LoBorrowed(), BoField(-1, -1))
                 String field_fn = "__field_read_" + base_type_name + "_" + field_name
                 bool base_is_ptr = is_ptr_type(base_tid, &gmod)
                 Vector[Operand] field_args = []
@@ -5430,7 +5510,7 @@ int emit_payload_read(LowerCtx &ctx, int scrutinee_ptr, String enum_name, String
     # signature (`T T__clone(T*)` / `T gorget_string_clone_to_owned(T*)`)
     # — Phase D step 3's OpBorrow lowering at lir_lower.gg already
     # threads SlotAddr for pass-by-ptr args.
-    int dst = add_local_with(&ctx, dst_type, NO_NAME, LoBorrowed(), BoField())
+    int dst = add_local_with(&ctx, dst_type, NO_NAME, LoBorrowed(), BoField(-1, -1))
     emit(&ctx, GICallExtern(dst, read_fn, args))
     String dst_tname = type_id_to_name(dst_type, &gmod)
     String clone_fn = resolve_payload_clone_fn(dst_tname, &gmod)
@@ -5904,7 +5984,7 @@ void lower_for_vector(LowerCtx &ctx, SpannedPattern pat, int coll_local, String 
     switch_to(&ctx, body_bb)
     String opt_name = "Option__" + elem_name
     int opt_tid = lookup_or_register_named(&gmod, opt_name)
-    int got_local = add_local_with(&ctx, opt_tid, NO_NAME, LoBorrowed(), BoCollectionElement())
+    int got_local = add_local_with(&ctx, opt_tid, NO_NAME, LoBorrowed(), BoCollectionElement(-1))
     Vector[Operand] get_args = [OpBorrow(coll_local), OpCopy(idx_local)]
     emit(&ctx, GICallExtern(got_local, coll_tn + "__get", get_args))
     int scr_ptr = match_scrutinee_ptr(&ctx, &gmod, got_local)
@@ -6175,7 +6255,7 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
         if p.ownership == 1 or p.ownership == 2:
             pt = register_type(&gmod, GtMutPtr(pt))
         param_types.push(pt)
-        int plid = add_local_with(&ctx, pt, Some(p.param_name.clone()), LoParam(), BoParam())
+        int plid = add_local_with(&ctx, pt, Some(p.param_name.clone()), LoParam(), BoParam(-1))
         nl_put(&ctx, p.param_name, plid)
         # Phase 2 param drop registration: only bare-by-value resource
         # params (ownership==0 with the Ptr wrapping applied above) and
@@ -6451,7 +6531,7 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
             if p.ownership == 1 or p.ownership == 2:
                 pt = register_type(&gmod, GtMutPtr(pt))
             param_types.push(pt)
-            int plid = add_local_with(&ctx, pt, Some(p.param_name.clone()), LoParam(), BoParam())
+            int plid = add_local_with(&ctx, pt, Some(p.param_name.clone()), LoParam(), BoParam(-1))
             nl_put(&ctx, p.param_name, plid)
             # Phase 2: only !-sigil resource params are callee-owned
             # and must be dropped at function exit. Same rationale as
@@ -6674,7 +6754,7 @@ int emit_it_closure(int next_id, GirModule &gmod):
     int ic_self_ptr = register_ptr(&gmod, ic_tid)
     Vector[int] ic_params = [ic_self_ptr, I64_TYPE]
     int ic_ret = I64_TYPE
-    Vector[GirLocal] ic_locals = [GirLocal(ic_ret, NO_NAME, LoOwned(), BoNone()), GirLocal(ic_self_ptr, NO_NAME, LoParam(), BoParam()), GirLocal(I64_TYPE, Some("it"), LoParam(), BoParam())]
+    Vector[GirLocal] ic_locals = [GirLocal(ic_ret, NO_NAME, LoOwned(), BoNone()), GirLocal(ic_self_ptr, NO_NAME, LoParam(), BoParam(-1)), GirLocal(I64_TYPE, Some("it"), LoParam(), BoParam(-1))]
     Vector[BasicBlock] ic_blocks = [BasicBlock([], GTReturn(OpCopy(0)))]
     gmod.functions.push(GirFunction(ic_call, !ic_params, ic_ret, !ic_locals, !ic_blocks))
     return next_id + 1
@@ -6735,10 +6815,10 @@ int scan_expr_for_closures(SpannedExpr sexpr, int next_id, GirModule &gmod):
                 ret_type = lookup_or_register_named(&gmod, "GorgetString")
 
             # Create minimal function with empty body
-            Vector[GirLocal] locals = [GirLocal(ret_type, NO_NAME, LoOwned(), BoNone()), GirLocal(self_ptr, NO_NAME, LoParam(), BoParam())]
+            Vector[GirLocal] locals = [GirLocal(ret_type, NO_NAME, LoOwned(), BoNone()), GirLocal(self_ptr, NO_NAME, LoParam(), BoParam(-1))]
             for lp in params:
                 int lpt = map_ast_type(lp.param_type, &gmod)
-                locals.push(GirLocal(lpt, Some(lp.param_name), LoParam(), BoParam()))
+                locals.push(GirLocal(lpt, Some(lp.param_name), LoParam(), BoParam(-1)))
             Vector[BasicBlock] blocks = [BasicBlock([], GTReturn(OpCopy(0)))]
             gmod.functions.push(GirFunction(call_name, !param_types, ret_type, !locals, !blocks))
             next_id = next_id + 1
@@ -6756,7 +6836,7 @@ int scan_expr_for_closures(SpannedExpr sexpr, int next_id, GirModule &gmod):
             int ic_ret = guess_return_type(*body_box, &gmod)
             if ic_ret == STRING_MARKER:
                 ic_ret = lookup_or_register_named(&gmod, "GorgetString")
-            Vector[GirLocal] ic_locals = [GirLocal(ic_ret, NO_NAME, LoOwned(), BoNone()), GirLocal(ic_self_ptr, NO_NAME, LoParam(), BoParam()), GirLocal(I64_TYPE, Some("it"), LoParam(), BoParam())]
+            Vector[GirLocal] ic_locals = [GirLocal(ic_ret, NO_NAME, LoOwned(), BoNone()), GirLocal(ic_self_ptr, NO_NAME, LoParam(), BoParam(-1)), GirLocal(I64_TYPE, Some("it"), LoParam(), BoParam(-1))]
             Vector[BasicBlock] ic_blocks = [BasicBlock([], GTReturn(OpCopy(0)))]
             gmod.functions.push(GirFunction(ic_call, !ic_params, ic_ret, !ic_locals, !ic_blocks))
             next_id = next_id + 1
@@ -7393,7 +7473,7 @@ void scan_expr_for_spawn(SpannedExpr sexpr, Dict[String, bool] &shared_vars, Dic
                                 String wrapper_name = prefix + callee_name
                                 # Emit a stub function
                                 Vector[int] wp = [I64_TYPE]
-                                Vector[GirLocal] wl = [GirLocal(UNIT_TYPE, NO_NAME, LoOwned(), BoNone()), GirLocal(I64_TYPE, NO_NAME, LoParam(), BoParam())]
+                                Vector[GirLocal] wl = [GirLocal(UNIT_TYPE, NO_NAME, LoOwned(), BoNone()), GirLocal(I64_TYPE, NO_NAME, LoParam(), BoParam(-1))]
                                 Vector[BasicBlock] wb = [BasicBlock([], GTReturn(OpConstUnit()))]
                                 gmod.functions.push(GirFunction(wrapper_name, !wp, UNIT_TYPE, !wl, !wb))
                                 emitted.put(callee_name, true)
@@ -7410,7 +7490,7 @@ void scan_expr_for_spawn(SpannedExpr sexpr, Dict[String, bool] &shared_vars, Dic
                                     if not emitted.contains(wrapper_name):
                                         emitted.put(wrapper_name.clone(), true)
                                         Vector[int] wp = [I64_TYPE]
-                                        Vector[GirLocal] wl = [GirLocal(I64_TYPE, NO_NAME, LoOwned(), BoNone()), GirLocal(I64_TYPE, NO_NAME, LoParam(), BoParam())]
+                                        Vector[GirLocal] wl = [GirLocal(I64_TYPE, NO_NAME, LoOwned(), BoNone()), GirLocal(I64_TYPE, NO_NAME, LoParam(), BoParam(-1))]
                                         Vector[BasicBlock] wb = [BasicBlock([], GTReturn(OpConstUnit()))]
                                         gmod.functions.push(GirFunction(wrapper_name, !wp, UNIT_TYPE, !wl, !wb))
                                 case None:
