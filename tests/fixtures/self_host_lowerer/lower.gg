@@ -7552,6 +7552,43 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                 enum_registry.put(edef.name.clone(), !variant_names_only)
             else:
                 pass
+    # Fix D (2026-05-22) — register struct constructors in fn_move_params
+    # with per-field resource flags. Per CLAUDE.md "Ownership at Consuming
+    # Positions": struct field-init is a consume position. Without this,
+    # `classify_call_arg("Lexer", 2)` returned CkCallArgBorrow (default for
+    # unregistered callees), `op_consume` returned `OpBorrow`, and the
+    # constructor inline field-init byte-aliased the caller's resource
+    # source into the struct field — leading to double-free at scope exit.
+    #
+    # With this entry, resource-field positions are classified
+    # CkCallArgOwning → OpMove (last-use) or OpClone (live past call).
+    # OpMove triggers `wire_liveness_into_modes` to emit `GIMoveZero` on
+    # the source slot post-call; the source's scope-exit `GIDropIfAlive`
+    # then sees a zeroed slot and the memcmp gate suppresses the free.
+    #
+    # Field type_name is the resolved C name ("GorgetString",
+    # "Vector__int64_t", etc.); resource detection routes through
+    # `build_resource_metadata` (pattern-based, gmod-independent) and the
+    # local `resource_types` dict for user structs/enums. `build_resource_metadata`
+    # lives in lir_lower.gg; calling it here keeps the registration self-
+    # contained at module-build time.
+    for fd_item in m.items:
+        match fd_item:
+            case IStruct(fd_sdef):
+                Vector[bool] fd_moves = []
+                for fd_fld in fd_sdef.fields:
+                    String fd_ftype = spanned_type_to_name(fd_fld.param_type)
+                    bool fd_is_resource = false
+                    match build_resource_metadata(fd_ftype):
+                        case Some(_):
+                            fd_is_resource = true
+                        case None:
+                            if resource_types.contains(fd_ftype):
+                                fd_is_resource = true
+                    fd_moves.push(fd_is_resource)
+                fn_move_params.put(fd_sdef.name, fd_moves)
+            else:
+                pass
     Dict[String, int] const_decls = {}
     Dict[String, bool] none_decls = {}
     Dict[String, float] float_const_decls = {}
