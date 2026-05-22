@@ -4276,7 +4276,30 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 # copy of the receiver. Emit OpClone so downstream layers
                 # (LIR codegen, Phase C validators) know this read is a
                 # deliberate refcount bump / deep copy, not an alias.
-                int clone_dst = add_local(&ctx, ctx.locals.get(recv).unwrap().type_id, NO_NAME)
+                #
+                # Phase 2.3.5 (2026-05-22) — the dst's type is the
+                # POINTEE when recv is Ptr(T)/MutPtr(T): clone produces
+                # an owned T value, not a pointer. Without this unwrap,
+                # the clone_dst slot is typed as Ptr(T); the lir_lower
+                # OpClone handler treats the slot as a Ptr-to-resource
+                # at every later consume position, emitting an EXTRA
+                # `gorget_<T>__clone_to_owned` that takes the prior
+                # clone's Str RESULT as a pointer — type-mismatch at
+                # cc (`Str` arg vs `const GorgetString*` expected) and
+                # a guaranteed crash if it ever ran. Writer-site fix:
+                # unwrap the Ptr/MutPtr so clone_dst's GIR type matches
+                # the actual runtime value being stored.
+                int recv_tid = ctx.locals.get(recv).unwrap().type_id
+                if recv_tid >= 0 and recv_tid < gmod.type_table.len():
+                    GirType recv_gt = gmod.type_table.get(recv_tid).unwrap()
+                    match recv_gt:
+                        case GtPtr(inner_tid):
+                            recv_tid = inner_tid
+                        case GtMutPtr(inner_tid):
+                            recv_tid = inner_tid
+                        else:
+                            pass
+                int clone_dst = add_local(&ctx, recv_tid, NO_NAME)
                 emit(&ctx, GIAssign(clone_dst, OpClone(recv)))
                 return clone_dst
             # Detect mutating-method-on-field-access pattern *before*
