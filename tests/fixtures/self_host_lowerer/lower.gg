@@ -614,6 +614,143 @@ void cow_register_alias(LowerCtx &ctx, int alias, int source):
     GirLocal updated = GirLocal(alias_loc.type_id, alias_loc.name_hint, alias_loc.ownership, BoAlias(source))
     ctx.locals.set(alias, updated)
 
+# ── SVarDecl assign-mode decision tree (B.1, 2026-05-22) ────
+#
+# Mirrors Rust's `lower_var_decl_assign_mode`
+# (`src/ir/lowering/stmts/mod.rs:1055-1273`). Seven branches A-G,
+# each predicated on the cross-product of (source ownership,
+# source type, declared type, liveness, CoW-safety). The branches
+# collapse to one of three emission strategies, returned via the
+# `SVarDeclEmission` enum below.
+#
+# Pragmas in this self-host port:
+#   • `declared_is_live = true` everywhere. Self-host's
+#     `compute_liveness` runs AFTER lowering, so at SVarDecl
+#     emission time there's no last-use info to consult. The
+#     wire pass refines OpMove vs OpClone downstream; Branch F's
+#     "dead source" case isn't reachable from initial lowering
+#     with this conservative assumption — that's OK.
+#   • CoW-safe = true. Rust's `is_cow_unsafe_at` checks the
+#     `@mut:path` set from `cow_after_block`; self-host doesn't
+#     track this yet. Conservative direction: allow Branch C to
+#     fire (alias instead of clone). If correctness issues surface
+#     we can defer to Branch D's clone fallback.
+#   • Branch C does NOT retype dst's slot to Ptr(T). Rust retypes
+#     and `set_ref` so the LIR backend takes a SlotAddr at the
+#     assignment. Self-host's `OpBorrow → ISlotLoad` shape would
+#     load the 32-byte resource VALUE into an 8-byte LT_PTR slot —
+#     either truncating bytes or hitting the `lir_codegen.gg:2611`
+#     "ptr slot ← aggregate value → assign NULL" coercion. Until
+#     a `GIBorrow` instruction (or per-assign SlotAddr dispatch) is
+#     wired in lir_lower, Branch C stays at the value-typed slot;
+#     the LoBorrowed ownership tag carries the borrow-semantic. The
+#     byte-aliasing works because both slots hold the same value
+#     representation, and `register_local_for_drop` is skipped for
+#     the alias (drop discipline preserved).
+#
+# Why `add_local_inheriting` stays. Phase 3's intermediate-temp
+# binding helper (lower.gg:~435) is for sites that bind FROM a
+# single source local at IR construction time (match scrutinee,
+# PBinding, PCtor field, etc.) — those sites do not go through the
+# 7-branch tree. Only user-level SVarDecl declarations with a
+# declared type take this path.
+
+enum SVarDeclEmission:
+    BorrowAlias()                  # mark dst LoBorrowed/BoAlias, no drop register
+    CloneAndMove(String)           # emit `<clone_fn>(&src)` then Move into dst
+    MoveDirect()                   # existing path — direct Move via op_consume
+
+# Decide which of the three emission strategies SVarDecl should use
+# for `var_type x = val`. Returns an `SVarDeclEmission` variant; the
+# caller emits the corresponding IR. Pragmas: declared_is_live=true,
+# CoW-safe=true (see top-of-section docstring).
+SVarDeclEmission decide_svardecl_emission(LowerCtx &ctx, GirModule &gmod, int val, int var_type):
+    if val < 0 or val >= ctx.locals.len():
+        return MoveDirect()
+    GirLocal val_loc = ctx.locals.get(val).unwrap()
+    int source_type = val_loc.type_id
+    String source_tname = type_id_to_name(source_type, &gmod)
+    String var_tname = type_id_to_name(var_type, &gmod)
+    bool source_is_resource = is_resource_type_name(source_tname, &gmod)
+    bool is_string_same_type = (source_type == var_type) and (var_tname == "GorgetString")
+    String clone_fn = resolve_payload_clone_fn(var_tname, &gmod)
+
+    bool source_is_borrow_alias = false
+    match val_loc.ownership:
+        case LoBorrowed():
+            source_is_borrow_alias = true
+        case LoView():
+            source_is_borrow_alias = true
+        else:
+            pass
+
+    # Branch A — (live) GorgetString same-type, source IS a borrow alias.
+    # Value-aliasing `String b = a` shape where `a` is itself a borrow
+    # into another aggregate. Inherit the chain so the root owner's drop
+    # covers both. (Rust additionally fires Branch A for fresh-Owned
+    # sources via `set_shared_heap`; the self-host pragma defers that
+    # because there's no SharedHeap ownership state nor drop tracker
+    # that consults it — fresh-Owned String sources continue through
+    # MoveDirect, which transfers ownership cleanly.)
+    if source_is_borrow_alias and is_string_same_type:
+        return BorrowAlias()
+
+    # Branch B — Owned + (live) non-resource source, cross-type clone_fn
+    # available (e.g. Str → GorgetString). Self-host doesn't have a
+    # distinct non-resource cloneable type, so this branch is effectively
+    # dead — kept for parity / future evolution. The cstr→GorgetString
+    # coercion at the SVarDecl handler entry handles the analogous
+    # path before this tree fires.
+    match val_loc.ownership:
+        case LoOwned():
+            if (not source_is_resource) and (source_type != var_type) and (clone_fn != ""):
+                return CloneAndMove(clone_fn)
+        else:
+            pass
+
+    # Branch C — live resource SOURCE that's a borrow alias (transitive
+    # chain). Mirrors Rust's `is_resource_type(rhs_type)` predicate where
+    # `rhs_type` is the SOURCE's type. Self-host pragma: fire only for
+    # already-borrow sources (LoBorrowed/LoView). Fresh-Owned resource
+    # sources flow through MoveDirect; without `set_shared_heap` /
+    # alias-tracked drop, MoveDirect's ownership transfer is the safe
+    # default — the dst becomes the sole owner and registers for drop.
+    # This collapses Rust's "Branch C for Owned + Branch C for borrowed"
+    # asymmetry into the borrowed half only; the Owned half is handled
+    # by MoveDirect. Functionally observable difference: zero — Rust's
+    # Owned-Branch-C path is the `set_shared_heap` shape whose self-host
+    # equivalent isn't built yet.
+    if source_is_resource and source_is_borrow_alias:
+        return BorrowAlias()
+
+    # Branch D — live resource source, CoW-unsafe + non-Borrowed source.
+    # Self-host's CoW-safe pragma never triggers this branch from C
+    # falling through directly; kept as a defensive defer for any future
+    # `is_cow_unsafe_at` wire-up. Borrowed sources skip — cloning a borrow
+    # chain would compound the alias issue, not resolve it.
+    if source_is_resource and (not source_is_borrow_alias) and (clone_fn != ""):
+        # No CoW-unsafe trigger today, so don't preemptively clone.
+        # Leave for future is_cow_unsafe_at wire-up. The fresh-Owned
+        # resource path falls through to MoveDirect below.
+        pass
+
+    # Branch E — View source, same-type. Rust emits a clone-to-owned
+    # so the alias materializes into an independent owner (captures the
+    # CoW-view's `auto x = s.slice(...)` shape where x must outlive the
+    # underlying buffer's mutation point). Self-host's CoW-safe pragma
+    # routes LoView sources through Branch C above (BorrowAlias) — the
+    # CoW-default-borrow design intent is to alias, not materialize.
+    # If a `cow_after_block` / `is_cow_unsafe_at` wire-up lands later
+    # and flips Branch C off for a specific (local, position) pair,
+    # this branch becomes reachable; for now it's dead.
+
+    # Branch F + G — fall through to direct Move. Primitives, FnPtr,
+    # non-resource user types, AND fresh-Owned resource sources (per
+    # the self-host's Owned-Branch-A/C pragma) all land here. Move is
+    # identity-by-bytes for primitives; for resources, op_consume
+    # returns OpMove and the wire pass refines based on liveness.
+    return MoveDirect()
+
 # ── Drop elaboration (mirrors src/ir/lowering/drops.rs) ─────
 #
 # A drop scope corresponds to a language construct that owns locals
@@ -4962,53 +5099,106 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                 emit(&ctx, GICallExtern(coerced, "gorget_str_from_cstr", cstr_args))
                 val = coerced
                 var_type = gs_tid_decl
-            # Phase 2c COMMIT 3 Prereq B (2026-05-21): when the init
-            # expression bound to `val` is a borrow into another
-            # aggregate (LoBorrowed/BoField from EFieldAccess,
-            # LoBorrowed/BoCollectionElement from collection-getter
-            # results, LoView/BoRuntimeView from CoW slice returns), the
-            # GIR assignment `GIAssign(var_local, OpBorrow(val))` is a
-            # byte-aliasing copy — var_local and val both point at the
-            # SAME owned heap data (typically a struct field's storage
-            # or a Vector element). If var_local were registered as an
-            # owned local (LoOwned), COMMIT 3's GIDropIfAlive emission
-            # would free that heap data via var_local AND again via the
-            # recursive aggregate drop. Double-free.
+            # Phase B.1 (2026-05-22): 7-branch SVarDecl assign-mode
+            # decision tree. Mirrors Rust's `lower_var_decl_assign_mode`
+            # at `src/ir/lowering/stmts/mod.rs:1055-1273`. Three emission
+            # strategies (BorrowAlias / CloneAndMove / MoveDirect) chosen
+            # from the cross-product of source ownership, source type,
+            # declared type, and (pragma'd) liveness + CoW-safety. See
+            # `decide_svardecl_emission` (line ~660) for the full branch
+            # logic and pragma rationale.
             #
-            # Inherit ownership/borrow-origin from the source so:
-            #   - Downstream `op_consume(var_local, ...)` at consume
-            #     positions returns OpBorrow (see line ~810), propagating
-            #     the alias chain — matches CoW-default-borrow.
-            #   - `register_local_for_drop` is skipped for borrowed/view
-            #     locals; the aggregate that *does* own this data takes
-            #     care of it. Owned locals still register as before.
-            #
-            # Owned/Param/MaybeOwned init keeps the prior behaviour:
-            # var_local is LoOwned (via add_local) + registered for drop.
+            # Supersedes the Prereq B carve-out: that older 3-case
+            # inheritance (LoBorrowed/LoView → inherit, else → LoOwned)
+            # is now a subset of Branch C (the BorrowAlias strategy
+            # also fires for live Owned resource sources, the
+            # `String b = a` shape per CoW-default-borrow). The Phase 3
+            # `add_local_inheriting` helper stays — it handles
+            # intermediate-temp bindings (match scrutinee, PBinding,
+            # PCtor field) that don't go through this user-level
+            # SVarDecl path.
             GirLocal val_loc = ctx.locals.get(val).unwrap()
+            SVarDeclEmission plan = decide_svardecl_emission(&ctx, &gmod, val, var_type)
             int var_local = 0
-            bool inherit_borrow = false
-            match val_loc.ownership:
-                case LoBorrowed():
-                    inherit_borrow = true
-                case LoView():
-                    inherit_borrow = true
-                else:
-                    pass
-            if inherit_borrow:
-                var_local = add_local_with(&ctx, var_type, Some(name.clone()), val_loc.ownership, val_loc.borrow_origin)
-            else:
-                var_local = add_local(&ctx, var_type, Some(name.clone()))
-            emit(&ctx, GIAssign(var_local, op_consume(&ctx, &gmod, val, CkAssign())))
-            nl_put(&ctx, name, var_local)
-            # Phase 2: register the new local for scope-exit drop if
-            # it's a resource type. is_droppable_type filters
-            # primitives / Ptr/MutPtr / FnPtr / non-resource named
-            # types automatically, so registering blindly here is safe.
-            # Skip when var_local is a borrow alias — the owner of the
-            # underlying heap data registers its own drop separately.
-            if not inherit_borrow:
-                register_local_for_drop(&ctx, var_local, var_type, &gmod)
+            match plan:
+                case BorrowAlias():
+                    # Branch A / C / (transitive A/C) — mark dst as a
+                    # borrow alias of val. Ownership: inherit val's
+                    # LoBorrowed/LoView if val is already a borrow
+                    # (preserves the chain); otherwise tag dst as
+                    # LoBorrowed/BoAlias(val) — a fresh alias of an
+                    # owned source.
+                    #
+                    # Drop discipline. Two scenarios:
+                    #   (a) val is itself a borrow (transitive alias):
+                    #       neither val nor var_local registers for drop;
+                    #       the root aggregate up the chain owns the
+                    #       heap. This is the Prereq B carve-out shape.
+                    #   (b) val is LoOwned (fresh Branch A/C): val IS
+                    #       the owner. var_local must NOT register for
+                    #       drop (would double-free). val keeps its
+                    #       drop registration if it had one; otherwise
+                    #       the heap leaks once the function returns
+                    #       — caller's responsibility (the typical case
+                    #       is val is an unnamed coerced temp from
+                    #       `gorget_str_from_cstr` which we deliberately
+                    #       don't drop because the alias keeps its
+                    #       bytes alive across the function body).
+                    LocalOwnership new_own = LoBorrowed()
+                    BorrowOrigin new_origin = BoAlias(val)
+                    bool inherited_chain = false
+                    match val_loc.ownership:
+                        case LoBorrowed():
+                            new_own = val_loc.ownership
+                            new_origin = val_loc.borrow_origin
+                            inherited_chain = true
+                        case LoView():
+                            new_own = val_loc.ownership
+                            new_origin = val_loc.borrow_origin
+                            inherited_chain = true
+                        else:
+                            pass
+                    var_local = add_local_with(&ctx, var_type, Some(name.clone()), new_own, new_origin)
+                    # Explicit OpBorrow — bypass op_consume because val
+                    # may be LoOwned (which op_consume would resolve to
+                    # OpMove, but for the alias shape we want a pointer-
+                    # like copy, not a move-out). The LIR backend lowers
+                    # OpBorrow as ISlotLoad, which byte-aliases the
+                    # value-typed slot. The ownership tag (LoBorrowed/
+                    # LoView) is the load-bearing signal for downstream
+                    # op_consume / drop / liveness consumers.
+                    emit(&ctx, GIAssign(var_local, OpBorrow(val)))
+                    # cow_register_alias overwrites BorrowOrigin with
+                    # BoAlias(val). Only call when we DIDN'T inherit a
+                    # specific origin from val — otherwise we'd lose the
+                    # transitive chain's information (BoField/BoCollectionElement/etc.).
+                    if not inherited_chain:
+                        cow_register_alias(&ctx, var_local, val)
+                    nl_put(&ctx, name, var_local)
+                    # Borrow alias: don't register for drop. Drop discipline
+                    # is preserved because val (or the root aggregate it
+                    # aliases) covers the underlying heap.
+                case CloneAndMove(clone_fn_name):
+                    # Branch B / D / E — emit `<T>__clone(&val)` (or the
+                    # runtime equivalent like gorget_string_clone_to_owned),
+                    # then bind dst LoOwned to the clone result. Register
+                    # for drop because dst genuinely owns a fresh allocation.
+                    int cloned = add_local(&ctx, var_type, NO_NAME)
+                    Vector[Operand] clone_args = []
+                    clone_args.push(OpBorrow(val))
+                    emit(&ctx, GICallExtern(cloned, clone_fn_name, clone_args))
+                    var_local = add_local(&ctx, var_type, Some(name.clone()))
+                    emit(&ctx, GIAssign(var_local, op_consume(&ctx, &gmod, cloned, CkAssign())))
+                    nl_put(&ctx, name, var_local)
+                    register_local_for_drop(&ctx, var_local, var_type, &gmod)
+                case MoveDirect():
+                    # Branch F / G — direct Move. Primitives, FnPtr,
+                    # non-resource user types. op_consume picks
+                    # OpCopy/OpMove as appropriate.
+                    var_local = add_local(&ctx, var_type, Some(name.clone()))
+                    emit(&ctx, GIAssign(var_local, op_consume(&ctx, &gmod, val, CkAssign())))
+                    nl_put(&ctx, name, var_local)
+                    register_local_for_drop(&ctx, var_local, var_type, &gmod)
         case SReturn(opt_expr):
             # Phase 2: emit cleanup drops for every scope back to the
             # function frame BEFORE assigning the return value /
