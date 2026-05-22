@@ -2,42 +2,54 @@
 
 ## High Priority
 
-- **Phase 2c COMMIT 3 — seventh attempt REVERTED 2026-05-22 (this agent)**. Two-commit sequence as briefed:
-  1. **Fix D SHIPPED standalone** as `69c80d64` (`selfhost(lower): register struct constructors in fn_move_params (Fix D — resource-field consume classification)`). Populated `fn_move_params` for every IStruct in the module at module-build time, with per-field resource flags (via `build_resource_metadata` + `resource_types` local dict). This makes `classify_call_arg("Lexer", 2)` return `CkCallArgOwning` for the resource-typed `lex_indent_stack` field, routing the constructor arg through `op_consume` → `OpMove`/`OpClone` instead of byte-aliased `OpBorrow`. Verified: `cargo build --release` clean; `cargo test --lib --release` 1059/1061 (baseline); `lowerer_comparison` 1/1 in 64.20s; `self_host_bootstrap` + `self_host_bootstrap_fixed_point` 2/2 in **1381.67s** (no observable behavior change, as expected — drops aren't emitted yet, so the OpMove/OpClone classification is dead annotation until COMMIT 3 ships).
-  2. **COMMIT 3 (Fix B re-apply) FAILED + REVERTED**. Applied verbatim per the 6th-attempt recipe documented in (previous) TODO line 5-50: `emit_scope_drops` records LIFO DropEmission per entry at end-of-current-block; `emit_drops_for_early_exit` records innermost-out across scopes; `flush_drop_queue` rebuilds each affected block's instruction vector by grouping by target_block + splicing in GIDropIfAlive at recorded positions in queue order. Critical: `flush_drop_queue` ordered **BEFORE** `compute_liveness` in both `lower_function` (~line 6053) and `lower_equip_block` (~line 6307). Fix A (4e4fd3f1) + Fix C (917be8fb) + Fix D (69c80d64) all on top.
+- **Phase 2c COMMIT 3 — SEVENTH attempt REVERTED 2026-05-22 (this agent)**. Re-applied the prior 6th-attempt code with Fix D (`519ba82a`, struct constructors in fn_move_params) now also shipped. **Implementation identical to the 6th attempt**: `emit_scope_drops` and `emit_drops_for_early_exit` push DropEmission to ctx.drop_queue (instead of no-ops); `flush_drop_queue` rebuilds each touched block's instruction vector once, splicing in queued GIDropIfAlive(local_id) at recorded positions; ordered BEFORE `compute_liveness` (Fix B placement) at both `lower_function` (line 6051) and `lower_equip_block` (line 6301). Reset the queue after flush.
 
-  **Empirical (seventh attempt's COMMIT 3 phase)**:
-  - `cargo build --release` clean.
-  - `cargo test --lib --release` 1059/1061 (baseline).
-  - `cargo test --test integration --release lowerer_comparison -- --test-threads=1` 1/1 in 64.86s.
-  - `cargo test --test integration --release self_host_bootstrap -- --test-threads=1` **0/2 FAILED** in 1162.84s. Both `self_host_bootstrap` and `self_host_bootstrap_fixed_point` panicked: stage-1 binary SIGSEGV (`status=None`) immediately on every input — driver.gg AND hello.gg both crash on stage-1 before producing ANY stdout.
-  - stage1.c regenerated post-test: 594,720 lines, **1,884 `gorget_*_free(` calls** (vs 6th attempt's 2,099 — Fix D reduced the count because struct-ctor args at resource fields now route through OpMove which suppresses the source drop via GIMoveZero), **24 `memcmp(` drop guards** (unchanged).
+  **Empirical**: `cargo build --release` clean. `cargo test --lib --release` 1059/1061 (baseline). `cargo test --test integration --release lowerer_comparison -- --test-threads=1` 1/1 in 67.15s. stage-1 binary compiled OK; stage1.c at 595,505 lines, **1,884 `gorget_*_free(` calls** (down from 6th attempt's 2,099 — Fix D's OpMove suppression at struct-ctor args is reducing the drop count by ~10%), 24 `memcmp(` drop guards. **`self_host_bootstrap` 0/2 FAILED**, terminated mid-fixed_point at 17:31 (after first test failed; aborted to conserve worker time).
 
-  **Crash signature — Class 8 RETURNED**: gdb backtrace on stage-1 hello.gg:
+  **Crash signature is the SAME as 4th attempt** (TODO line 74 archived): SIGSEGV in `str_alloc_copy ← gorget_string_clone_to_owned ← loader___type_mentions_iter ← loader___function_mentions_iter ← loader___ast_mentions_std_iter_need ← loader___should_auto_load_std_iter ← loader___load_imports ← main`. Reproduces on EVERY input (`hello.gg`, minimal `int main(): print("hi") return 0`, and `driver.gg` itself) — the stage-1 binary crashes during `load_imports` before it can lower the input.
+
+  **Class 8 — field-read aliasing of resource-containing struct fields** (the new survivor, predicted by the 4th attempt's "structural fix" diagnosis at TODO line 64-68). Fix C now correctly Ptr-wraps `loader___type_mentions_iter`'s parameter (`bool loader___type_mentions_iter(void* __p0)` — confirmed at stage1.c:296539). The byte-aliasing has moved INSIDE the function body, at the field-read site:
+
+  ```c
+  __v3 = ((__gg_SpannedType *)(__v0))->ty;   // byte-copy of Type (resource-containing)
+  __s2 = __v3;
+  __v4 = __s2;
+  __s3 = __v4;
+  // later, at line 397:
+  __v27 = ((__gg_Type *)(&__s3))->data.TNamed.TNamed_0;
+  __s7 = __v27;                              // byte-alias of caller's String.data
+  __v29 = gorget_string_clone_to_owned(&__s7);  // crash if caller's heap freed
   ```
-  str_alloc_copy ← gorget_string_clone_to_owned ← loader___type_mentions_iter
-                ← loader___function_mentions_iter ← loader___ast_mentions_std_iter_need
-                ← loader___should_auto_load_std_iter ← loader___load_imports ← main
-  ```
-  Identical to the 4th attempt's signature (TODO line 74-75 of the now-deleted entry). The crash is in `gorget_string_clone_to_owned(&__s7)` where `__s7` is bound from a TNamed payload field-read off a bare-T resource param (`SpannedType ty`). Source pointer is dangling — upstream drop already freed the heap.
 
-  **Per brief stop condition**: "Bootstrap fails with NEW double-free signature (Class 8) → STOP, document. Six attempts and a class 8 means option 3 (Rust-mirror `ensure_owned_at_consuming_arg`) is the right path." Class 8 is back — STOPPED.
+  At step 4 there are TWO byte-copies of Type (`__s2`, `__s3`); inside, the String `data.TNamed.0` aliases the caller's heap. When `load_imports`'s scope-exit drops fire (now emitted), one of them is freeing a String that `__s7` aliases, leaving a dangling pointer for the clone. This is the **SVarDecl/temp field-read class** — `auto x = obj.field` where `field` is a resource-containing struct should produce a borrow (LoBorrowed), not a fresh-owned local that's then dropped. Today the field-read assigns to a fresh `LoOwned` slot AND no clone materialises at the read site.
 
-  **Why Class 8 returned**: Fix C (917be8fb) closed Class 8 for the 4th attempt by Ptr-wrapping `SpannedType` params (it's transitively resource: Type contains String). With Fix D's classifier changes, the struct-constructor args inside `type_mentions_iter` now flip from CkCallArgBorrow to CkCallArgOwning for resource fields. `op_consume` on a Ptr-typed source (the Ptr-wrapped SpannedType param) sees `LoParam` → demotes to `OpClone`. But `lir_lower.gg:2399-2424`'s OpClone arm has `slot_is_ptr_kind` gate that returns the byte-load shape (no `gorget_*_clone` call) for Ptr-typed slots — Site 2b deferred (TODO line ~105). So OpClone produces a byte-aliased value; the new constructor's struct field ends up aliasing the caller's heap. When drops fire (COMMIT 3 emission ON), the caller's GIDropIfAlive on the parent Ptr-wrapped local frees the heap; subsequent reads through the struct field's String are stale.
+  **What's NOT YET addressed (Class 8)**: when `SVarDecl x = obj.field` (or the equivalent intermediate `__s2 = __v3` pattern emitted by GIR), the destination MUST be either:
+    (a) LoBorrowed/BoField — propagating the source's borrow semantics; OR
+    (b) LoOwned + explicit GICall to the type's `<Type>__clone` constructor — materialising a fresh-heap copy.
+  Today the lowering picks neither — it emits a bare GIAssign(dst, OpCopy(src)) which byte-copies the GIR locals → at LIR/C level, a struct-typed byte-copy aliases the source's interior pointers. The drops then double-free.
 
-  **What this means architecturally**: Fix D + COMMIT 3 cannot ship without **Site 2b** also shipping. Site 2b is the deferred "GICallExtern pass-by-ptr OpClone → emit `gorget_*_clone` for Ptr-typed slots" (TODO line ~105-109). Without it, OpClone is a byte-load — drops on the source produce dangling pointers in the dest. The brief's three-fold ordering (Fix D + Fix B + Site 2b) is now required as a single atomic bundle, NOT the planned Fix D → Fix B sequential.
+  The 4th attempt's recommendation at TODO line 66-68 was "extend Prereq B beyond LoBorrowed/LoView init exprs to ALSO cover init exprs of struct types whose fields contain resources". The B-ext (commit `fe0c4b1e`) only addressed `.unwrap()` of Option/Result — not generic field-read. The Prereq B carve-out at `lower.gg:4612-4658` (SVarDecl LoBorrowed inheritance) inspects the INIT EXPR's category and routes through `inherit_borrow_from` — but only fires when the source is already tagged LoBorrowed/LoView. For a fresh `obj.field` read (which produces a `GIFieldRead` → BoField slot), the source is LoOwned/LoParam, so the carve-out doesn't fire.
 
-  **Option 3 — Rust-mirror `ensure_owned_at_consuming_arg`**: per the brief, the right path forward is to port Rust's `ensure_owned_at_consuming_arg` (`src/ir/lowering/exprs/calls.rs:~190`) and analogous `ensure_owned_at_boundary` (`src/ir/lowering/context.rs:~2090`). These wrappers materialize a real clone via the type's `clone_fn` at the consume site if the source isn't a verifiable owner. This sidesteps the OpMove/OpClone label dance entirely — the materialization is mechanical and happens at lower-time, not at LIR-rewrite time. With it, byte-aliasing at constructor args / function args becomes impossible regardless of source ownership labels.
+  **Suggested next step**:
 
-  **Files to touch (option 3)**:
-  - `tests/fixtures/self_host_lowerer/lower.gg`: add `ensure_owned_at_consuming_arg` helper that, given a SourceLocal + a CkCallArgOwning position + a resource type, emits a fresh local + an explicit GICallExtern to the type's clone function (`gorget_string_clone`, `gorget_array_clone`, etc.) and returns the fresh local's id. Replace direct `op_consume(... CkCallArgOwning)` call sites in `lower_call` (line 4520, 4527) with `ensure_owned_at_consuming_arg`. Also revisit the same at struct-field-init (already routed through call_arg via Fix D).
-  - `tests/fixtures/self_host_lowerer/lir_lower.gg`: trivially supports this because GICallExtern → ICallExtern already lowers correctly for `gorget_*_clone` calls. No Site 2b root-cause needed for this path because the clone is emitted at GIR-time, not as an operand-mode rewrite.
+  1. **Most-direct fix** — at `infer_local_ownership_for_init_expr` / the SVarDecl-init categoriser, when the init expr is a field-read (`obj.field`) whose declared field type is a resource-containing struct (per `is_resource_type_name`), tag the destination LoBorrowed/BoField. The downstream emission already knows to skip drop registration for LoBorrowed (Prereq B). This closes the class without needing real clone emission — the byte-alias becomes a typed borrow.
 
-  **What was reverted**: ALL changes to `tests/fixtures/self_host_lowerer/lower.gg` from the COMMIT 3 attempt. The Fix D commit (`69c80d64`) was kept. Working tree clean. Top commit: `69c80d64`. The COMMIT 3 emission code from this attempt is preserved in this branch's reflog if a future agent wants to consult it; it's also functionally identical to the 6th-attempt's code (which the 6th-attempt agent reported as "implementation correct, surfaces new bug class").
+  2. **Risk**: any sites that DEPENDED on owning a copy of the field (e.g. mutating it after reading) would now have a borrow. Audit: do any callers of `obj.field` then write to it via the local? In self-host code, this pattern is rare — typically you read a field, USE it, and discard. The few sites that mutate would need an explicit `.clone()` annotation.
 
-  **Recommendation for next agent**: ship option 3 (`ensure_owned_at_consuming_arg`) as a STANDALONE commit FIRST. The triplet should pass — emitting clones at consume sites doesn't break anything because the source local stays live (just produces a fresh owned copy in addition). Then re-attempt COMMIT 3 emission. With clones at every CkCallArgOwning, byte-aliasing is impossible, so drops can safely fire without producing stale pointers.
+  3. **Alternative — full Option 3** (per the brief's fallback): port Rust's `ensure_owned_at_consuming_arg` uniform consume-position materialization (`src/ir/lowering/stmts/assigns.rs:240-388`). This is the architecturally-correct fix that closes Class 8 AND any future field-read aliasing classes uniformly. Larger work — likely 2-3 days — but it's the keystone.
 
-- **Phase 2c COMMIT 3 — sixth attempt REVERTED 2026-05-22 (agent `afb7db6a`)**. Applied Fix B EXACTLY as the prior-agent diagnosis prescribed: wired `emit_scope_drops` + `emit_drops_for_early_exit` from no-op stubs into queue-pushers, made `flush_drop_queue` emit real `GIDropIfAlive(local_id)` at recorded positions via stable insertion-sort + per-block forward-pass splice, AND ordered `flush_drop_queue` BEFORE `compute_liveness` at both `lower_function` (~line 6109) and `lower_equip_block` (~line 6350). Fix A (`4e4fd3f1`, drops excluded from operand uses) + Fix C (`917be8fb`, transitive resource_types fixpoint) were both already shipped before this attempt.
+  **Files affected (this attempt, all reverted)**: `tests/fixtures/self_host_lowerer/lower.gg` only. Working tree clean. Top commit remains `519ba82a`.
+
+  **Diagnostic chain summary**:
+  - 1st-3rd attempts: hit struct-aggregate aliasing on bare-T resource params → Fix C closed.
+  - 4th attempt: hit `type_mentions_iter` field-read aliasing → diagnosed but not fixed; reverted.
+  - 5th (scout): re-confirmed the 4th attempt's diagnosis as architectural; shipped Step 1 (GIMoveZero) + Site 2a as foundational pieces.
+  - 6th attempt: shipped COMMIT 3 emission code; struct-ctor aliasing surfaced (different class) → Fix D closed.
+  - 7th attempt (this one): re-shipped COMMIT 3 with Fixes A+B+C+D + Step 1 + Site 2a all in place. **Field-read aliasing (Class 8 = 4th attempt's class) is the next survivor** — the prediction at TODO line 64-68 was correct. The diagnostic chain has converged on this specific class as the keystone-blocking gap.
+
+  The chain HAS progressed through 7 classes; the 8th is now the standalone keystone. Either fix #1 (field-read SVarDecl LoBorrowed inheritance) or fix #3 (port `ensure_owned_at_consuming_arg`) will close it. After that, COMMIT 3 should ship clean on the 8th attempt.
+
+- **Phase 2c COMMIT 3 — sixth attempt REVERTED 2026-05-22 (prior agent)**. Applied Fix B EXACTLY as the prior-agent diagnosis prescribed: wired `emit_scope_drops` + `emit_drops_for_early_exit` from no-op stubs into queue-pushers, made `flush_drop_queue` emit real `GIDropIfAlive(local_id)` at recorded positions via stable insertion-sort + per-block forward-pass splice, AND ordered `flush_drop_queue` BEFORE `compute_liveness` at both `lower_function` (~line 6109) and `lower_equip_block` (~line 6350). Fix A (`4e4fd3f1`, drops excluded from operand uses) + Fix C (`917be8fb`, transitive resource_types fixpoint) were both already shipped before this attempt.
 
   **Empirical**: `cargo build --release` clean. `cargo test --lib --release` 1059/1061 (baseline; two pre-existing release `should_panic`). `cargo test --test integration --release lowerer_comparison -- --test-threads=1` 1/1 in 63.99s. stage-1 binary compiled OK; stage1.c grew to 595,274 lines, **2,099 `gorget_*_free(` calls** (vs prior 4th attempt's 2,103 — same order of magnitude), 24 `memcmp(` drop guards. **`self_host_bootstrap` 0/2** in 716.62s, double-free.
 
