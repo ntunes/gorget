@@ -403,6 +403,45 @@ int add_local_with(LowerCtx &ctx, int type_id, Option[String] name, LocalOwnersh
     ctx.locals.push(GirLocal(type_id, name, ownership, borrow_origin))
     return id
 
+# Phase 3 (2026-05-22) — Class 8 keystone fix.
+#
+# Allocate a fresh local that BINDS to an existing source local: if `src`
+# is itself a borrow (LoBorrowed) or a view (LoView) into someone else's
+# heap, the fresh dst MUST inherit that ownership tag — otherwise the
+# downstream `GIAssign(dst, op_consume(src, ...))` byte-copies the alias
+# into an LoOwned slot, which COMMIT 3 / Phase 2.3 then treats as a real
+# owner and either double-frees (drop-at-scope-exit) or clones a borrowed-
+# interior pointer (crash inside the clone).
+#
+# Mirrors the SVarDecl Prereq B carve-out at line ~4842 — single source of
+# truth at the writer site. Every intermediate-temp binding that the
+# lowerer emits as `add_local + GIAssign(dst, op_consume(src, kind))`
+# routes through here so the LoBorrowed/LoView tag propagates through the
+# chain. Sites that consciously want a FRESH-OWNED binding (e.g., an
+# explicit `.clone()`) keep using `add_local` and don't go through this
+# helper — the inheritance only fires when the source itself is a borrow.
+#
+# Caller contract: the returned local is meant to be assigned via
+# `GIAssign(dst, op_consume(src, kind))` (or an equivalent) immediately
+# after the call. Consumers that later mutate the dst (e.g., a SVarDecl
+# rebinding the local on later reassignment) are responsible for the
+# usual ownership updates — the helper only sets the INITIAL tag.
+#
+# See `docs/internals/copy-on-write.md` Phase 3 (seven materialisation
+# points) and `CLAUDE.md` "Layering discipline — debugging heuristic":
+# the bug at every chain link was missing inheritance at the WRITER
+# site; fixing it at the reader (op_consume) requires per-call
+# heuristics, while fixing it at the writer is a one-liner.
+int add_local_inheriting(LowerCtx &ctx, int type_id, Option[String] name, int src):
+    GirLocal src_loc = ctx.locals.get(src).unwrap()
+    match src_loc.ownership:
+        case LoBorrowed():
+            return add_local_with(&ctx, type_id, name, LoBorrowed(), src_loc.borrow_origin)
+        case LoView():
+            return add_local_with(&ctx, type_id, name, LoView(), src_loc.borrow_origin)
+        else:
+            return add_local(&ctx, type_id, name)
+
 # Phase D step 2: collection-getter methods produce LoBorrowed/BoCollectionElement
 # locals. The list mirrors `infer_method_return_type`'s "get/pop/last/first/
 # remove" branch — methods that return `Option[V]` whose payload is a borrow
@@ -3968,8 +4007,11 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     inherit_borrow_from(&ctx, field_val, recv)
                     return field_val
                 # Fall back to re-cast if we couldn't identify the variant.
+                # Phase 3 (Class 8): inherit recv's borrow tag onto ud so a
+                # chained `coll.get(i).unwrap()` doesn't byte-copy the alias
+                # into a fresh LoOwned slot.
                 if inner_tid >= 0:
-                    int ud = add_local(&ctx, inner_tid, NO_NAME)
+                    int ud = add_local_inheriting(&ctx, inner_tid, NO_NAME, recv)
                     emit(&ctx, GIAssign(ud, op_consume(&ctx, &gmod, recv, CkAssign())))
                     return ud
                 return recv
@@ -4201,7 +4243,17 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     inner_name = inner_name + chr(base_type_name.byte_at(bi))
                     bi += 1
                 int box_inner_tid = resolve_field_gir_type(inner_name, &gmod)
-                int derefed = add_local(&ctx, box_inner_tid, NO_NAME)
+                # Phase 3 (Class 8): the box-deref's inner local aliases
+                # into the box's heap allocation — when `base` itself was
+                # already a borrow (chained field access on a borrowed
+                # aggregate), the derefed inner inherits that borrow tag.
+                # For an LoOwned box, dropping the box still frees the
+                # inner heap, but the inner deref still aliases into it
+                # for the duration of base's scope — leaving derefed as
+                # LoOwned would risk a double-free when COMMIT 3 drops
+                # both base and derefed on the same heap. Inheritance is
+                # the safe default.
+                int derefed = add_local_inheriting(&ctx, box_inner_tid, NO_NAME, base)
                 emit(&ctx, GIDeref(derefed, base, box_inner_tid))
                 base = derefed
                 base_tid = box_inner_tid
@@ -4410,7 +4462,11 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     d_inner_name = d_inner_name + chr(b_dni)
                     dni_i += 1
                 int d_inner_tid = resolve_field_gir_type(d_inner_name, &gmod)
-                int ddst = add_local(&ctx, d_inner_tid, NO_NAME)
+                # Phase 3 (Class 8): see EFieldAccess box-deref site
+                # at line ~4246 for the architectural rationale —
+                # the deref-inner aliases the box's heap, inherit
+                # source's borrow tag rather than freshly LoOwn.
+                int ddst = add_local_inheriting(&ctx, d_inner_tid, NO_NAME, dsrc)
                 emit(&ctx, GIDeref(ddst, dsrc, d_inner_tid))
                 return ddst
             return dsrc
@@ -5387,12 +5443,26 @@ int emit_payload_read(LowerCtx &ctx, int scrutinee_ptr, String enum_name, String
 
 # Take the address of scrutinee's local so we can pass a pointer to the
 # field_read helpers (arg 0 is Ptr-typed by needs_ptr_arg convention).
+#
+# Phase 3 (2026-05-22, Class 8 keystone): when `scrutinee` is itself a
+# borrow (LoBorrowed/LoView) — e.g. the scrutinee is an EFieldAccess
+# (`match ty.ty:`) whose result is LoBorrowed/BoField — the temp local
+# we allocate to take the address of MUST inherit that borrow tag.
+# Without inheritance, `tmp = add_local + GIAssign(tmp, OpCopy(scrutinee))`
+# binds tmp as LoOwned, and downstream sites (drop emission, clone
+# emission at consume sites) treat tmp as a real owner whose bytes alias
+# into the borrowed source — double-free or use-after-free.
+#
+# This is the chain `__s2 = __v3 = (*p0).ty` in stage1.c's
+# `loader___type_mentions_iter`: the field read tags __v3 LoBorrowed,
+# match_scrutinee_ptr rebinds it into __s2, and pre-Phase 3 __s2 was
+# LoOwned. Phase 3 propagates the LoBorrowed tag through.
 int match_scrutinee_ptr(LowerCtx &ctx, GirModule &gmod, int scrutinee):
     # Move the value into a temp local so we can take its address —
     # scrutinee may already be an identifier with a stable slot, but
     # this extra copy keeps the address path uniform.
     int scr_tid = ctx.locals.get(scrutinee).unwrap().type_id
-    int tmp = add_local(&ctx, scr_tid, NO_NAME)
+    int tmp = add_local_inheriting(&ctx, scr_tid, NO_NAME, scrutinee)
     emit(&ctx, GIAssign(tmp, op_consume(&ctx, &gmod, scrutinee, CkAssign())))
     return tmp
 
@@ -5416,8 +5486,13 @@ void lower_pattern_match(LowerCtx &ctx, int scrutinee, SpannedPattern spat, Stri
                 # Real binding: always match; bind scrutinee into a fresh
                 # local under `name`.
                 int scr_tid = ctx.locals.get(scrutinee).unwrap().type_id
+                # Phase 3 (Class 8): inherit scrutinee's borrow tag onto
+                # the binding local. When scrutinee is LoBorrowed/LoView
+                # (e.g. arrived via .get().unwrap() chain or field-read),
+                # the named binding must alias rather than byte-copy into
+                # a fresh owner that COMMIT 3 would later double-free.
                 Option[String] name_opt = Some(name.clone())
-                int bound = add_local(&ctx, scr_tid, name_opt)
+                int bound = add_local_inheriting(&ctx, scr_tid, name_opt, scrutinee)
                 emit(&ctx, GIAssign(bound, op_consume(&ctx, &gmod, scrutinee, CkAssign())))
                 nl_put(&ctx, name, bound)
                 set_terminator(&ctx, GTJump(match_bb))
@@ -5590,8 +5665,16 @@ void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vecto
                 # Look up field type from the enum's variant's field info.
                 int fty = lookup_ctor_field_type(effective_enum, effective_variant, fi, &gmod)
                 int field_val = emit_payload_read(&ctx, scrutinee_ptr, effective_enum, effective_variant, fi, fty, &gmod)
+                # Phase 3 (Class 8): inherit field_val's borrow tag onto the
+                # PBinding's named local. emit_payload_read tags field_val
+                # LoBorrowed/BoField when no clone fn is available (user
+                # enum payloads with no runtime clone fn — the common case
+                # for nested enums like Type/SpannedType). Without inheritance,
+                # the case-bound name (e.g. `case TNamed(name, targs): ...`)
+                # gets a fresh LoOwned slot byte-aliasing the scrutinee's
+                # interior — COMMIT 3 then double-frees on scope exit.
                 Option[String] bname_opt = Some(bname.clone())
-                int bound = add_local(&ctx, fty, bname_opt)
+                int bound = add_local_inheriting(&ctx, fty, bname_opt, field_val)
                 emit(&ctx, GIAssign(bound, op_consume(&ctx, &gmod, field_val, CkAssign())))
                 nl_put(&ctx, bname, bound)
             case PLiteral(lit_expr):
