@@ -1015,17 +1015,27 @@ Operand op_consume(LowerCtx &ctx, GirModule &gmod, int lid, ConsumeKind kind):
 #                                                 pointer — the source
 #                                                 doesn't own the buffer)
 #   3. By-value resource source:
-#        - LoBorrowed / LoView                → OpClone (source aliases
-#                                                 a borrow; receiver
-#                                                 needs its own buffer)
-#        - LoOwned / LoParam / LoMaybeOwned:
-#            - is_last_use = true             → OpMove (source dies;
+#        - LoOwned + is_last_use = true       → OpMove (source dies;
 #                                                 receiver takes the
 #                                                 buffer; drop_elab
 #                                                 elides the guard)
-#            - is_last_use = false            → OpClone (source still
-#                                                 live past this read)
+#        - everything else                    → OpClone
+#            (LoBorrowed/LoView source aliases a borrow; LoParam is
+#             the caller's responsibility; LoMaybeOwned is a
+#             conservative join over branches; LoOwned-not-last-use
+#             needs to stay valid past this read — all require a
+#             materialised buffer at the receiver.)
 #   4. Default                                → OpCopy
+#
+# Why the strict reading (LoOwned-only) on the move-eligible side. The
+# old inline logic at `wire_one_operand` (see the rationale comment at
+# lower.gg:1863-1869) dropped LoParam and LoMaybeOwned from the OpMove
+# set: LoParam denotes slots whose ownership escapes the function's
+# stack frame (the caller owns); LoMaybeOwned is a join over conflicting
+# branches. Treating either as move-eligible would compile but
+# spuriously drop someone else's data once Phase 2c flips emission. The
+# strict reading matches Rust's `AssignMode::Move` discipline at
+# consume sites.
 #
 # Ptr/MutPtr/FnPtr aliases at consume positions resolve as OpCopy: a
 # pointer byte-copy is a pointer copy, not a resource copy. The
@@ -1056,22 +1066,19 @@ Operand decide_operand_at_consuming_arg(LowerCtx &ctx, GirModule &gmod, int src_
             if not is_resource_type_name(tname, &gmod):
                 return OpCopy(src_lid)
             # Case 3: by-value resource. Branch on ownership.
+            # LoOwned-strict: only true-owned slots are move-eligible
+            # (and only at their CFG last use). LoParam (caller owns),
+            # LoMaybeOwned (conservative join), LoBorrowed (alias),
+            # LoView (cap=0 alias) all require OpClone — see the
+            # rationale paragraph in the docstring above and the
+            # archived inline comment at lower.gg:1863-1869.
             GirLocal loc = ctx.locals.get(src_lid).unwrap()
             match loc.ownership:
-                case LoBorrowed():
-                    # Source aliases a borrow — must materialize.
-                    return OpClone(src_lid)
-                case LoView():
-                    # CoW view (cap=0) into another buffer — must
-                    # materialize before the receiver can take
-                    # ownership.
-                    return OpClone(src_lid)
-                else:
-                    # LoOwned / LoParam / LoMaybeOwned — source owns
-                    # (or possibly owns) its data. Last-use → move;
-                    # still-live → clone.
+                case LoOwned():
                     if is_last_use:
                         return OpMove(src_lid)
+                    return OpClone(src_lid)
+                else:
                     return OpClone(src_lid)
         else:
             # GtBool / GtI* / GtU* / GtF* / GtUnit — primitives. Note
@@ -1871,7 +1878,7 @@ int liveness_instrumentation_diff(LowerCtx &ctx, LivenessAnalysis &liveness):
 # Idempotent: a second run sees the same operands and applies the
 # same rule, producing identical output.
 
-void wire_liveness_into_modes(LowerCtx &ctx, LivenessAnalysis &liveness):
+void wire_liveness_into_modes(LowerCtx &ctx, GirModule &gmod, LivenessAnalysis &liveness):
     int n = ctx.block_insts.len()
     if n == 0:
         return
@@ -1891,7 +1898,7 @@ void wire_liveness_into_modes(LowerCtx &ctx, LivenessAnalysis &liveness):
             # zeros stay anchored to their producing instruction
             # (COMMIT 3 step 1).
             Vector[int] moved_lids = []
-            Instruction rewritten = rewrite_inst_modes(&ctx, insts.get(ii).unwrap(), bi, ii, &liveness, &moved_lids)
+            Instruction rewritten = rewrite_inst_modes(&ctx, &gmod, insts.get(ii).unwrap(), bi, ii, &liveness, &moved_lids)
             new_insts.push(rewritten)
             int mi = 0
             while mi < moved_lids.len():
@@ -1909,7 +1916,7 @@ void wire_liveness_into_modes(LowerCtx &ctx, LivenessAnalysis &liveness):
         # propagate "uninitialized" into successor blocks correctly.
         int term_inst_idx = insts.len()
         Vector[int] term_moved_lids = []
-        Terminator new_term = rewrite_term_modes(&ctx, ctx.block_terms.get(bi).unwrap(), bi, term_inst_idx, &liveness, &term_moved_lids)
+        Terminator new_term = rewrite_term_modes(&ctx, &gmod, ctx.block_terms.get(bi).unwrap(), bi, term_inst_idx, &liveness, &term_moved_lids)
         int tmi = 0
         while tmi < term_moved_lids.len():
             new_insts.push(GIMoveZero(term_moved_lids.get(tmi).unwrap()))
@@ -1925,7 +1932,25 @@ void wire_liveness_into_modes(LowerCtx &ctx, LivenessAnalysis &liveness):
 # finalizes as OpMove — the caller (`wire_liveness_into_modes`)
 # walks it after the inst to emit `GIMoveZero(lid)` insts at
 # the exact move site (COMMIT 3 step 1).
-Operand wire_one_operand(LowerCtx &ctx, Operand op, int b, int i, int op_idx, LivenessAnalysis &liveness, Vector[int] &moved_lids):
+#
+# Phase 2.2: this is now a thin shim around
+# `decide_operand_at_consuming_arg`. The shim identifies
+# consume-position reads (OpMove/OpClone), resolves the source
+# local's GirType from `ctx.locals[lid].type_id` via
+# `gmod.type_table`, consults `liveness.last_use_of_op`, and
+# delegates the OpMove-vs-OpClone (vs OpCopy / clone-through-Ptr)
+# verdict to the helper. The helper IS the decision tree; this
+# function does the call-site bookkeeping (early-out, lid
+# bounds-check, mark_local_moved on a finalised OpMove,
+# moved_lids push for the GIMoveZero emitter).
+#
+# Behaviour-preservation note. The current callers only hand us
+# OpMove/OpClone for by-value resource locals — initial lowering
+# never emits OpMove/OpClone for Ptr(T) operands or primitives,
+# so the helper's Ptr-clone-through and OpCopy-on-primitive
+# branches are observationally unreachable from this entry point.
+# They sit dormant for Phase 2.3.a wire-ups at other call sites.
+Operand wire_one_operand(LowerCtx &ctx, GirModule &gmod, Operand op, int b, int i, int op_idx, LivenessAnalysis &liveness, Vector[int] &moved_lids):
     int lid = -1
     bool is_consuming_mode = false
     match op:
@@ -1943,20 +1968,29 @@ Operand wire_one_operand(LowerCtx &ctx, Operand op, int b, int i, int op_idx, Li
         # Defensive: malformed local ID — leave the operand untouched
         # rather than rewriting it to a bogus mode.
         return op
+    # Resolve the source local's GirType from the type table. If the
+    # type_id is out-of-range (shouldn't happen — locals are typed at
+    # registration), fall back to OpClone: a clone is always sound,
+    # whereas an unverified OpMove would be a use-after-free if the
+    # local actually owns its data.
     GirLocal loc = ctx.locals.get(lid).unwrap()
+    if loc.type_id < 0 or loc.type_id >= gmod.type_table.len():
+        return OpClone(lid)
+    GirType src_ty = gmod.type_table.get(loc.type_id).unwrap()
     int key = liveness_encode_key(b, i, op_idx)
     bool last_use = liveness.last_use_of_op.contains(key)
-    bool source_owns = false
-    match loc.ownership:
-        case LoOwned():
-            source_owns = true
+    Operand result = decide_operand_at_consuming_arg(&ctx, &gmod, lid, src_ty, "wire_pass: consuming operand", last_use)
+    # On a finalised OpMove, the slot is logically dead from this
+    # point on. Tell drop_elab (so the scope-drop emitter skips it)
+    # and record the lid so `wire_liveness_into_modes` can emit a
+    # `GIMoveZero(lid)` immediately after the producing instruction.
+    match result:
+        case OpMove(_):
+            mark_local_moved(&ctx, lid)
+            moved_lids.push(lid)
         else:
-            source_owns = false
-    if source_owns and last_use:
-        mark_local_moved(&ctx, lid)
-        moved_lids.push(lid)
-        return OpMove(lid)
-    return OpClone(lid)
+            pass
+    return result
 
 # Rewrite all consuming-mode operand reads in an instruction.
 # `b` / `i` come from the caller's per-block / per-inst walk. The
@@ -1964,32 +1998,32 @@ Operand wire_one_operand(LowerCtx &ctx, Operand op, int b, int i, int op_idx, Li
 # left-to-right order of operand reads in this instruction shape.
 # `moved_lids` is the side-channel for per-inst GIMoveZero
 # emission — see `wire_one_operand`.
-Instruction rewrite_inst_modes(LowerCtx &ctx, Instruction inst, int b, int i, LivenessAnalysis &liveness, Vector[int] &moved_lids):
+Instruction rewrite_inst_modes(LowerCtx &ctx, GirModule &gmod, Instruction inst, int b, int i, LivenessAnalysis &liveness, Vector[int] &moved_lids):
     match inst:
         case GIAssign(dst, op):
-            return GIAssign(dst, wire_one_operand(&ctx, op, b, i, 0, &liveness, &moved_lids))
+            return GIAssign(dst, wire_one_operand(&ctx, &gmod, op, b, i, 0, &liveness, &moved_lids))
         case GIBinOp(dst, opc, ty, lhs, rhs):
-            Operand new_lhs = wire_one_operand(&ctx, lhs, b, i, 0, &liveness, &moved_lids)
-            Operand new_rhs = wire_one_operand(&ctx, rhs, b, i, 1, &liveness, &moved_lids)
+            Operand new_lhs = wire_one_operand(&ctx, &gmod, lhs, b, i, 0, &liveness, &moved_lids)
+            Operand new_rhs = wire_one_operand(&ctx, &gmod, rhs, b, i, 1, &liveness, &moved_lids)
             return GIBinOp(dst, opc, ty, new_lhs, new_rhs)
         case GIUnOp(dst, opc, ty, src):
-            return GIUnOp(dst, opc, ty, wire_one_operand(&ctx, src, b, i, 0, &liveness, &moved_lids))
+            return GIUnOp(dst, opc, ty, wire_one_operand(&ctx, &gmod, src, b, i, 0, &liveness, &moved_lids))
         case GICmp(dst, opc, ty, lhs, rhs):
-            Operand new_lhs = wire_one_operand(&ctx, lhs, b, i, 0, &liveness, &moved_lids)
-            Operand new_rhs = wire_one_operand(&ctx, rhs, b, i, 1, &liveness, &moved_lids)
+            Operand new_lhs = wire_one_operand(&ctx, &gmod, lhs, b, i, 0, &liveness, &moved_lids)
+            Operand new_rhs = wire_one_operand(&ctx, &gmod, rhs, b, i, 1, &liveness, &moved_lids)
             return GICmp(dst, opc, ty, new_lhs, new_rhs)
         case GICall(dst, name, args):
             Vector[Operand] new_args = []
             int ai = 0
             while ai < args.len():
-                new_args.push(wire_one_operand(&ctx, args.get(ai).unwrap(), b, i, ai, &liveness, &moved_lids))
+                new_args.push(wire_one_operand(&ctx, &gmod, args.get(ai).unwrap(), b, i, ai, &liveness, &moved_lids))
                 ai += 1
             return GICall(dst, name, !new_args)
         case GICallExtern(dst, name, args):
             Vector[Operand] new_args = []
             int ai = 0
             while ai < args.len():
-                new_args.push(wire_one_operand(&ctx, args.get(ai).unwrap(), b, i, ai, &liveness, &moved_lids))
+                new_args.push(wire_one_operand(&ctx, &gmod, args.get(ai).unwrap(), b, i, ai, &liveness, &moved_lids))
                 ai += 1
             return GICallExtern(dst, name, !new_args)
         else:
@@ -2001,12 +2035,12 @@ Instruction rewrite_inst_modes(LowerCtx &ctx, Instruction inst, int b, int i, Li
             # so there's nothing to rewrite.
             return inst
 
-Terminator rewrite_term_modes(LowerCtx &ctx, Terminator term, int b, int i, LivenessAnalysis &liveness, Vector[int] &moved_lids):
+Terminator rewrite_term_modes(LowerCtx &ctx, GirModule &gmod, Terminator term, int b, int i, LivenessAnalysis &liveness, Vector[int] &moved_lids):
     match term:
         case GTReturn(op):
-            return GTReturn(wire_one_operand(&ctx, op, b, i, 0, &liveness, &moved_lids))
+            return GTReturn(wire_one_operand(&ctx, &gmod, op, b, i, 0, &liveness, &moved_lids))
         case GTBranch(op, t_bb, e_bb):
-            return GTBranch(wire_one_operand(&ctx, op, b, i, 0, &liveness, &moved_lids), t_bb, e_bb)
+            return GTBranch(wire_one_operand(&ctx, &gmod, op, b, i, 0, &liveness, &moved_lids), t_bb, e_bb)
         else:
             return term
 
@@ -6132,7 +6166,7 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
     int diff = liveness_instrumentation_diff(&ctx, &liveness)
     if diff > 0:
         diag_warn("gir_liveness_diff", fdef.name + ": " + int_to_str(diff) + " sites")
-    wire_liveness_into_modes(&ctx, &liveness)
+    wire_liveness_into_modes(&ctx, &gmod, &liveness)
 
     # Phase 2c COMMIT 3 Prereq C — flush the deferred drop queue.
     # `maybe_moved` is populated now (set by `mark_local_moved`
@@ -6367,7 +6401,7 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
         int diff2 = liveness_instrumentation_diff(&ctx, &liveness2)
         if diff2 > 0:
             diag_warn("gir_liveness_diff", mangled + ": " + int_to_str(diff2) + " sites")
-        wire_liveness_into_modes(&ctx, &liveness2)
+        wire_liveness_into_modes(&ctx, &gmod, &liveness2)
 
         # Phase 2c COMMIT 3 Prereq C — flush the deferred drop
         # queue. See the matching call site in `lower_function`
