@@ -971,6 +971,142 @@ Operand op_consume(LowerCtx &ctx, GirModule &gmod, int lid, ConsumeKind kind):
         else:
             return OpMove(lid)
 
+# ── Consume-position materialization decision (Phase 2.1) ────────────
+#
+# Mirrors Rust's `ensure_owned_at_consuming_arg`
+# (`src/ir/lowering/context.rs:1913`). Where Rust both DECIDES the
+# operand mode AND emits the clone call inline, this self-host port
+# splits the two concerns: this function returns the OperandMode label
+# only; Phase 2c clone-emission (deferred — see `flush_drop_queue`
+# docstring + `clone-emission-at-calls.md`) will produce the actual
+# `GICall(<T>__clone, ...)` at the receiving sites. The function name
+# is `decide_operand_at_consuming_arg` rather than Rust's
+# `ensure_owned_*` to reflect that split: this layer decides the mode,
+# downstream phases materialize the clone.
+#
+# **Status**: dead code in this commit. No caller exists. The
+# wire-up across the 7 ad-hoc aliasing fixes (Classes 1-7 from the
+# Phase 2c COMMIT 3 reverts) lands in Phases 2.3.a through 2.3.g; the
+# last-use information consumed by the by-value-resource branch is
+# threaded in Phase 2.2 (see the `is_last_use` param docstring).
+#
+# **Inputs**:
+#   ctx          - LowerCtx (read-only here; future wiring may emit)
+#   gmod         - GirModule (for resource-type classification)
+#   src_lid      - source local id
+#   src_ty       - source local's GirType (passed by caller; avoids
+#                  re-fetching from `ctx.locals.get(src_lid)`)
+#   reason       - String describing the consume position (e.g.
+#                  "Box.new arg", "v.push arg", "field init") — kept
+#                  for parity with Rust's `ImplicitCloneReason`; will
+#                  feed diagnostics when Phase 2c wires `warn_implicit_
+#                  clone` style reporting. Unused in 2.1.
+#   is_last_use  - whether this read is the CFG-last use of `src_lid`.
+#                  Threaded by callers via the Phase 2.2 last-use
+#                  consult (the `last_use_of_op` decision map produced
+#                  by `compute_liveness`). For Phase 2.1, no caller
+#                  provides this — the parameter exists in the
+#                  signature so Phase 2.3.a wire-ups don't reshape it.
+#
+# **Decision tree** (matches Rust + `clone-emission-at-calls.md`):
+#   1. Primitive / non-resource source        → OpCopy (byte-copy sound)
+#   2. Ptr(T) where T is a resource type      → OpClone (deref +
+#                                                 materialize through the
+#                                                 pointer — the source
+#                                                 doesn't own the buffer)
+#   3. By-value resource source:
+#        - LoBorrowed / LoView                → OpClone (source aliases
+#                                                 a borrow; receiver
+#                                                 needs its own buffer)
+#        - LoOwned / LoParam / LoMaybeOwned:
+#            - is_last_use = true             → OpMove (source dies;
+#                                                 receiver takes the
+#                                                 buffer; drop_elab
+#                                                 elides the guard)
+#            - is_last_use = false            → OpClone (source still
+#                                                 live past this read)
+#   4. Default                                → OpCopy
+#
+# Ptr/MutPtr/FnPtr aliases at consume positions resolve as OpCopy: a
+# pointer byte-copy is a pointer copy, not a resource copy. The
+# validator filters these out separately.
+Operand decide_operand_at_consuming_arg(LowerCtx &ctx, GirModule &gmod, int src_lid, GirType src_ty, String reason, bool is_last_use):
+    # Touch `reason` so the unused-param warning doesn't fire while
+    # this helper is dead code. Phase 2.3.a will route this into
+    # `warn_implicit_clone` style diagnostics at the wire-up sites.
+    int _reason_len = reason.len()
+    if src_lid < 0 or src_lid >= ctx.locals.len():
+        return OpCopy(src_lid)
+    # Case 1: primitive / non-resource. Byte-copy is sound.
+    match src_ty:
+        case GtPtr(inner):
+            # Case 2: Ptr(T). Clone-through if T is a resource;
+            # otherwise plain pointer byte-copy.
+            return decide_ptr_consume(&gmod, src_lid, inner)
+        case GtMutPtr(_):
+            # MutPtr aliases (e.g. `&` borrow Plumbing) — byte-copy
+            # of a pointer is a pointer copy. The receiver gets the
+            # same alias; ownership transfer is the caller's
+            # responsibility upstream.
+            return OpCopy(src_lid)
+        case GtFnPtr(_, _):
+            # Function pointer: not a resource. Byte-copy.
+            return OpCopy(src_lid)
+        case GtNamed(tname):
+            if not is_resource_type_name(tname, &gmod):
+                return OpCopy(src_lid)
+            # Case 3: by-value resource. Branch on ownership.
+            GirLocal loc = ctx.locals.get(src_lid).unwrap()
+            match loc.ownership:
+                case LoBorrowed():
+                    # Source aliases a borrow — must materialize.
+                    return OpClone(src_lid)
+                case LoView():
+                    # CoW view (cap=0) into another buffer — must
+                    # materialize before the receiver can take
+                    # ownership.
+                    return OpClone(src_lid)
+                else:
+                    # LoOwned / LoParam / LoMaybeOwned — source owns
+                    # (or possibly owns) its data. Last-use → move;
+                    # still-live → clone.
+                    if is_last_use:
+                        return OpMove(src_lid)
+                    return OpClone(src_lid)
+        else:
+            # GtBool / GtI* / GtU* / GtF* / GtUnit — primitives. Note
+            # the early `tid < PRIM_COUNT` shortcut in op_consume's
+            # mirror logic uses type-id; here we match on GirType
+            # variants directly. Both reach the same OpCopy verdict.
+            return OpCopy(src_lid)
+    # Unreachable — match above is exhaustive over GirType. The default
+    # OpCopy is the conservative fall-through if the enum gains a new
+    # variant before this helper is updated.
+    return OpCopy(src_lid)
+
+# Helper for the Ptr(T) branch of `decide_operand_at_consuming_arg`.
+# Split out so the inner-type lookup + resource check stay readable
+# inside the outer match. Mirrors Rust's `if let Some(inner) =
+# self.pointee_type(arg_type)` arm at context.rs:1928.
+Operand decide_ptr_consume(GirModule &gmod, int src_lid, int inner_tid):
+    # Primitive pointee — byte-copy the pointer.
+    if inner_tid < 0 or inner_tid < PRIM_COUNT:
+        return OpCopy(src_lid)
+    if inner_tid >= gmod.type_table.len():
+        return OpCopy(src_lid)
+    GirType inner_gt = gmod.type_table.get(inner_tid).unwrap()
+    match inner_gt:
+        case GtNamed(iname):
+            if is_resource_type_name(iname, &gmod):
+                # Ptr to a resource: deref + clone materializes a
+                # fresh owned T at the receiver side. Phase 2.3
+                # emission will lower this to a `<T>__clone(&src)`
+                # call.
+                return OpClone(src_lid)
+            return OpCopy(src_lid)
+        else:
+            return OpCopy(src_lid)
+
 # ── GIR backward-dataflow liveness (Phase 1 of GIR-liveness redesign) ──
 #
 # Computes, for every owned-local operand READ at position (block, inst,
