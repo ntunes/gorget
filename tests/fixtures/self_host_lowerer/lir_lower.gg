@@ -2622,18 +2622,39 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                                 f.blocks.set(bb, ablk)
                                 lir_args.push(addr)
                         case OpClone(local_id):
-                            # Phase 2c COMMIT 2: Site 2 (pass-by-ptr arg)
-                            # change deferred — Site 1 (lower_operand)
-                            # already emits the clone call when the operand
-                            # is read; on this call-arg path we still take
-                            # the source slot's address unchanged. The OpClone
-                            # tag carries semantic info downstream but the
-                            # codegen behaviour is the canonical "give the
-                            # callee a pointer to the local" shape. Phase 5
-                            # codegen can revisit.
+                            # Phase 2c COMMIT 2 Site 2a (GICall pass-by-ptr):
+                            # if the source slot holds a resource value, emit
+                            # a runtime clone into a FRESH slot and pass the
+                            # fresh slot's address. The callee receives an
+                            # independent owned copy that it can consume or
+                            # mutate without aliasing the caller's data.
+                            # Pointer-kind slots fall through to the address
+                            # shape (the value already IS a pointer; cloning
+                            # the pointer alone wouldn't duplicate the pointee).
+                            # Non-resource value types also fall through —
+                            # they have no owned data to duplicate.
                             int slot = local_to_slot.get(local_id).unwrap()
                             int slot_ty = f.slots.get(slot).unwrap().ty
-                            if slot_ty == LT_PTR or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE):
+                            bool slot_is_ptr_kind = (slot_ty == LT_PTR) or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE)
+                            String clone_fn = ""
+                            if not slot_is_ptr_kind:
+                                clone_fn = resource_clone_fn(slot_ty, &m)
+                            if clone_fn != "":
+                                int src_addr = lir_fn_next_value(&f)
+                                int cloned_val = lir_fn_next_value(&f)
+                                int new_slot = lir_fn_add_slot(&f, slot_ty, "")
+                                int new_addr = lir_fn_next_value(&f)
+                                LirBlock ablk = f.blocks.get(bb).unwrap()
+                                ablk.insts.push(ISlotAddr(src_addr, slot))
+                                Vector[int] cargs = []
+                                cargs.push(src_addr)
+                                Vector[int] cabis = []
+                                ablk.insts.push(ICallExtern(cloned_val, clone_fn, cargs, clone_fn, cabis))
+                                ablk.insts.push(ISlotStore(new_slot, cloned_val, true))
+                                ablk.insts.push(ISlotAddr(new_addr, new_slot))
+                                f.blocks.set(bb, ablk)
+                                lir_args.push(new_addr)
+                            elif slot_is_ptr_kind:
                                 int arg_val = lower_operand(arg, &f, bb, &local_to_slot, &m)
                                 lir_args.push(arg_val)
                             else:
