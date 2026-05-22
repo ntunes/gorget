@@ -1434,6 +1434,10 @@ int liveness_inst_def(Instruction inst):
             return -1
         case GINop():
             return -1
+        case GIFieldLoad(dst, _, _):
+            # A.1 — typed field-load defines its dst local. Same shape as
+            # GIDeref / GIAssign (dst is a fresh local id, base is read).
+            return dst
     return -1
 
 # Walk all operand reads in an Instruction, adding each into `acc`.
@@ -1479,6 +1483,12 @@ void liveness_inst_operand_uses(Instruction inst, Vector[bool] &acc):
             pass
         case GINop():
             pass
+        case GIFieldLoad(_, base_lid, _):
+            # A.1 — typed field-load reads its base local (the struct/aggregate
+            # being projected into). Same shape as GIDeref: a single raw local
+            # id, not an Operand. Field index is a const, not a local read.
+            if base_lid >= 0 and base_lid < acc.len():
+                acc.set(base_lid, true)
 
 # Walk all operand reads in a Terminator, adding to `acc`. GTNone /
 # GTJump have no operands. GTReturn reads its operand; GTBranch reads
@@ -1855,6 +1865,10 @@ Vector[int] liveness_inst_operand_local_ids(Instruction inst):
             out.push(lid)
         case GINop():
             pass
+        case GIFieldLoad(_, base_lid, _):
+            # A.1 — base local is the single operand-read; field index is a
+            # const (not a local). Mirrors GIDeref's shape.
+            out.push(base_lid)
     return out
 
 # Top-level entry. Compute the full per-function liveness analysis,

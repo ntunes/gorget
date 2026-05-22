@@ -3127,6 +3127,24 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
         case GINop():
             pass
 
+        case GIFieldLoad(_, _, _):
+            # A.1 (2026-05-22) — typed field-load STUB. The variant exists
+            # so A.2 can wire EFieldAccess to emit GIFieldLoad with the
+            # dst's GIR type carried through, enabling Ptr-typed-dst
+            # dispatch:
+            #   • Ptr(_) → store_to_local(dst, fptr, bb)  (pointer alias)
+            #   • else  → Inst::Load { dst, ptr: fptr, ty: field_ty } (byte-copy)
+            # (See Rust `src/lir/lower/insts.rs:800-869` for the reference
+            # dispatch.)
+            #
+            # A.1 status: DEAD CODE. No upstream pass emits GIFieldLoad —
+            # EFieldAccess still routes through GICallExtern("__field_read_*")
+            # at lower.gg. If a future commit accidentally emits GIFieldLoad
+            # before A.2 wires the real dispatch, this `print` surfaces the
+            # premature emission in the stage-0 → stage-1 C output. Mirrors
+            # the `lower_fail` convention in `lower.gg:198`.
+            print("/* [lower_fail] GIFieldLoad reached lir_lower before A.2 wired the dispatch */")
+
     return bb
 
 # ── Terminator lowering ─────────────────────────────────────

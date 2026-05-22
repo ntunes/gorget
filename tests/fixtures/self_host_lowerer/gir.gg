@@ -116,6 +116,16 @@ enum Instruction:
     GIMoveZero(int)
     GIDeref(int, int, int)    # dst_local, src_local (ptr/Box), inner_ty_id
     GINop()
+    # A.1 (2026-05-22) — typed field-load. Mirrors Rust's
+    # `Instruction::FieldLoad { dst, base, field }` in
+    # `src/ir/instructions.rs:153-157`. A.2 will wire EFieldAccess
+    # at lower.gg to emit this instead of GICallExtern("__field_read_*"),
+    # enabling LIR's Ptr-typed-dst dispatch:
+    #   • dst is GtPtr/GtMutPtr → pointer alias (no byte-copy)
+    #   • else → byte-copy load
+    # A.1 status: DEAD CODE. No call site emits GIFieldLoad; lir_lower's
+    # arm `lower_fail`s loudly so any premature emission is visible.
+    GIFieldLoad(int, int, int)    # dst_local, base_local, field_index
 
 # ── Terminators ───────────────────────────────────────────
 
