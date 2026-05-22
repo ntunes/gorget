@@ -2397,29 +2397,70 @@ int lower_operand(Operand op, LirFunction &f, int bb, Vector[int] &local_to_slot
             f.blocks.set(bb, blk)
             return dst
         case OpClone(local_id):
-            # Phase 2c COMMIT 2: OpClone now lowers to a real runtime
-            # clone call when the source slot holds a resource value.
-            # `resource_clone_fn` returns the matching `gorget_*_clone`
-            # (or `T__clone`) symbol from the slot's lir-type; "" for
-            # non-resource types (primitives / aliases). On "" we fall
-            # through to the byte-load shape — safe because trivial
-            # types have no owned data to duplicate.
+            # Phase 2c COMMIT 2 + Phase 2.3: OpClone lowers to a real
+            # runtime clone call when the source slot holds (or points
+            # to) a resource value.
+            #
+            #   • Value-typed slot (`slot_ty >= LT_STRUCT_BASE`):
+            #     `resource_clone_fn` returns the matching
+            #     `gorget_*_clone` / `T__clone` symbol for the struct;
+            #     we pass `ISlotAddr(slot)` as the by-pointer arg.
+            #   • Ptr-to-known-struct slot (`LT_PTR_TO_BASE + sid`):
+            #     the slot HOLDS a pointer to the resource (A.2 wired
+            #     Ptr-typed dsts at GIFieldLoad reads of resource
+            #     fields; B.1 wired Ptr-typed dsts at OpBorrow-source
+            #     SVarDecl bindings). The clone fn for the pointee
+            #     struct (`LT_STRUCT_BASE + sid`) takes a pointer-to-
+            #     resource and produces a fresh owned copy — exactly
+            #     what we need. Pass the slot's loaded value (which
+            #     IS the pointer) as the by-pointer arg.
+            #
+            # Without the Ptr-typed branch this handler would fall
+            # through to a plain `ISlotLoad` — a byte-copy of the
+            # pointer — and the receiver would alias the source
+            # buffer. When the source goes out of scope its storage
+            # is reclaimed, leaving the receiver's "copy" dangling.
+            # Concrete chain: `lower_function` returns a `GirFunction`
+            # embedding `ctx.locals`; with A.2 the receiver's local
+            # slot is Ptr-typed; without this clone, `gmod.functions`
+            # held aliased pointers into freed ctx storage. See
+            # `op_consume`'s GtPtr branch (Phase 2.3 Change 1) for the
+            # paired writer-side wiring that produces OpClone here.
+            #
+            # For raw `LT_PTR` slots (no pointee struct info encoded)
+            # we have no type signal to pick a clone fn — fall
+            # through to plain load (the upstream layer is responsible
+            # for tagging these with a more specific type).
             int slot = local_to_slot.get(local_id).unwrap()
             int slot_ty = f.slots.get(slot).unwrap().ty
-            # Pointer-typed slots are already aliases — the value in the
-            # slot is the pointer itself, not the resource. Plain load.
-            bool slot_is_ptr_kind = (slot_ty == LT_PTR) or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE)
             String clone_fn = ""
-            if not slot_is_ptr_kind:
+            bool slot_is_ptr_to_struct = (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE)
+            bool slot_is_raw_ptr = (slot_ty == LT_PTR)
+            if slot_is_ptr_to_struct:
+                # Ptr-to-known-struct: route to the pointee's clone fn.
+                int pointee_sid = slot_ty - LT_PTR_TO_BASE
+                clone_fn = resource_clone_fn(LT_STRUCT_BASE + pointee_sid, &m)
+            elif not slot_is_raw_ptr:
+                # Value-typed (aggregate / struct) slot: look up the
+                # struct's clone fn directly.
                 clone_fn = resource_clone_fn(slot_ty, &m)
             if clone_fn != "":
-                int addr = lir_fn_next_value(&f)
                 int dst = lir_fn_next_value(&f)
                 LirBlock blk = f.blocks.get(bb).unwrap()
-                blk.insts.push(ISlotAddr(addr, slot))
                 Vector[int] cargs = []
-                cargs.push(addr)
                 Vector[int] cabis = []
+                if slot_is_ptr_to_struct:
+                    # The slot already holds a pointer-to-resource —
+                    # load the pointer value and pass it directly.
+                    int ptr_val = lir_fn_next_value(&f)
+                    blk.insts.push(ISlotLoad(ptr_val, slot, slot_ty))
+                    cargs.push(ptr_val)
+                else:
+                    # Value-typed slot — take its address to pass by
+                    # pointer to the clone fn.
+                    int addr = lir_fn_next_value(&f)
+                    blk.insts.push(ISlotAddr(addr, slot))
+                    cargs.push(addr)
                 blk.insts.push(ICallExtern(dst, clone_fn, cargs, clone_fn, cabis))
                 f.blocks.set(bb, blk)
                 return dst

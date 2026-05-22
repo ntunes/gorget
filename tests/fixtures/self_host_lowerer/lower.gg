@@ -1211,10 +1211,25 @@ Operand op_consume(LowerCtx &ctx, GirModule &gmod, int lid, ConsumeKind kind):
     match gt:
         case GtNamed(n):
             tname = n
+        case GtPtr(inner_tid):
+            # Phase 2.3: Ptr(T) at a consume position. When T is a
+            # resource type, the source slot HOLDS A POINTER to the
+            # resource (the value lives elsewhere); a byte-copy would
+            # produce an aliased Ptr-to-resource — the same buffer
+            # would be reachable through two slots. When the consumer
+            # demands ownership (CkAssign / CkReturn / CkCallArgOwning
+            # / CkFieldWrite), emit OpClone to materialise a fresh
+            # owned T at the receiver via deref+clone-through. For
+            # Ptr to non-resource (e.g. Ptr-to-int, Ptr-to-FnPtr, or
+            # Ptr-to-aggregate-of-primitives) the byte-copy of the
+            # pointer is sound — fall through to OpCopy via the
+            # helper.
+            return decide_ptr_consume(&gmod, lid, inner_tid)
         else:
-            # Ptr/MutPtr/Tuple slots — byte-copy of a pointer is just
-            # a pointer copy, not a resource copy. Validator filters
-            # these too.
+            # GtMutPtr / GtFnPtr / GtTuple / etc. — byte-copy of a
+            # pointer is just a pointer copy, not a resource copy.
+            # Mutable pointers are by-design caller-aliased. Validator
+            # filters these too.
             return OpCopy(lid)
     if not is_resource_type_name(tname, &gmod):
         return OpCopy(lid)
@@ -1347,10 +1362,19 @@ Operand decide_operand_at_consuming_arg(LowerCtx &ctx, GirModule &gmod, int src_
     # variant before this helper is updated.
     return OpCopy(src_lid)
 
-# Helper for the Ptr(T) branch of `decide_operand_at_consuming_arg`.
-# Split out so the inner-type lookup + resource check stay readable
-# inside the outer match. Mirrors Rust's `if let Some(inner) =
-# self.pointee_type(arg_type)` arm at context.rs:1928.
+# Helper for the Ptr(T) branch of `op_consume` (and the dead-code
+# `decide_operand_at_consuming_arg`). Split out so the inner-type
+# lookup + resource check stay readable inside the outer match.
+# Mirrors Rust's `if let Some(inner) = self.pointee_type(arg_type)`
+# arm at context.rs:1928.
+#
+# Phase 2.3 (2026-05-22): now WIRED into `op_consume`'s GtPtr branch.
+# Returns OpClone(src_lid) for Ptr-to-resource at consume positions —
+# the lir_lower OpClone handler then emits a deref+clone via the
+# pointee type's `gorget_<T>__clone` / `<T>__clone` runtime symbol.
+# For Ptr-to-non-resource (primitives, FnPtr, aggregate-of-primitives)
+# falls through to OpCopy: byte-copy of a pointer is just a pointer
+# copy.
 Operand decide_ptr_consume(GirModule &gmod, int src_lid, int inner_tid):
     # Primitive pointee — byte-copy the pointer.
     if inner_tid < 0 or inner_tid < PRIM_COUNT:
