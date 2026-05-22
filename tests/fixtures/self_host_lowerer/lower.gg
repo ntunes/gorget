@@ -1742,20 +1742,51 @@ void wire_liveness_into_modes(LowerCtx &ctx, LivenessAnalysis &liveness):
         Vector[Instruction] new_insts = []
         int ii = 0
         while ii < insts.len():
-            new_insts.push(rewrite_inst_modes(&ctx, insts.get(ii).unwrap(), bi, ii, &liveness))
+            # Side-channel: each call to `wire_one_operand` that
+            # finalizes an OpMove(lid) decision pushes `lid` into
+            # `moved_lids`. After we push the rewritten inst we emit
+            # one `GIMoveZero(lid)` immediately after for each entry,
+            # so the LIR `IMoveSlot` annotation lands at the actual
+            # move site — exactly where Rust's drop_elab needs it to
+            # mark the slot uninitialized. Clear after each inst so
+            # zeros stay anchored to their producing instruction
+            # (COMMIT 3 step 1).
+            Vector[int] moved_lids = []
+            Instruction rewritten = rewrite_inst_modes(&ctx, insts.get(ii).unwrap(), bi, ii, &liveness, &moved_lids)
+            new_insts.push(rewritten)
+            int mi = 0
+            while mi < moved_lids.len():
+                new_insts.push(GIMoveZero(moved_lids.get(mi).unwrap()))
+                mi += 1
             ii += 1
-        ctx.block_insts.set(bi, !new_insts)
         # Terminators live at op_idx 0 with inst_idx = insts.len()
         # (matches `liveness_record_term_last_uses` keying — see the
-        # liveness pass's per-block walker).
+        # liveness pass's per-block walker). A terminator-level OpMove
+        # (return/branch operand) also gets a `GIMoveZero` emitted
+        # — but it has to land BEFORE the terminator in the block
+        # stream, so we append into `new_insts` first, then set the
+        # rewritten terminator. The slot is dead after the block ends
+        # anyway, but the annotation lets drop_elab's dataflow
+        # propagate "uninitialized" into successor blocks correctly.
         int term_inst_idx = insts.len()
-        ctx.block_terms.set(bi, rewrite_term_modes(&ctx, ctx.block_terms.get(bi).unwrap(), bi, term_inst_idx, &liveness))
+        Vector[int] term_moved_lids = []
+        Terminator new_term = rewrite_term_modes(&ctx, ctx.block_terms.get(bi).unwrap(), bi, term_inst_idx, &liveness, &term_moved_lids)
+        int tmi = 0
+        while tmi < term_moved_lids.len():
+            new_insts.push(GIMoveZero(term_moved_lids.get(tmi).unwrap()))
+            tmi += 1
+        ctx.block_insts.set(bi, !new_insts)
+        ctx.block_terms.set(bi, new_term)
         bi += 1
 
 # Per-operand decision logic. `b` / `i` / `op_idx` form the
 # liveness key; ctx supplies ownership state + the drop_elab
-# the mark_local_moved call writes into.
-Operand wire_one_operand(LowerCtx &ctx, Operand op, int b, int i, int op_idx, LivenessAnalysis &liveness):
+# the mark_local_moved call writes into. `moved_lids` is the
+# side-channel into which we push every lid that this call
+# finalizes as OpMove — the caller (`wire_liveness_into_modes`)
+# walks it after the inst to emit `GIMoveZero(lid)` insts at
+# the exact move site (COMMIT 3 step 1).
+Operand wire_one_operand(LowerCtx &ctx, Operand op, int b, int i, int op_idx, LivenessAnalysis &liveness, Vector[int] &moved_lids):
     int lid = -1
     bool is_consuming_mode = false
     match op:
@@ -1784,6 +1815,7 @@ Operand wire_one_operand(LowerCtx &ctx, Operand op, int b, int i, int op_idx, Li
             source_owns = false
     if source_owns and last_use:
         mark_local_moved(&ctx, lid)
+        moved_lids.push(lid)
         return OpMove(lid)
     return OpClone(lid)
 
@@ -1791,32 +1823,34 @@ Operand wire_one_operand(LowerCtx &ctx, Operand op, int b, int i, int op_idx, Li
 # `b` / `i` come from the caller's per-block / per-inst walk. The
 # op_idx layout matches `liveness_inst_operand_local_ids` — the
 # left-to-right order of operand reads in this instruction shape.
-Instruction rewrite_inst_modes(LowerCtx &ctx, Instruction inst, int b, int i, LivenessAnalysis &liveness):
+# `moved_lids` is the side-channel for per-inst GIMoveZero
+# emission — see `wire_one_operand`.
+Instruction rewrite_inst_modes(LowerCtx &ctx, Instruction inst, int b, int i, LivenessAnalysis &liveness, Vector[int] &moved_lids):
     match inst:
         case GIAssign(dst, op):
-            return GIAssign(dst, wire_one_operand(&ctx, op, b, i, 0, &liveness))
+            return GIAssign(dst, wire_one_operand(&ctx, op, b, i, 0, &liveness, &moved_lids))
         case GIBinOp(dst, opc, ty, lhs, rhs):
-            Operand new_lhs = wire_one_operand(&ctx, lhs, b, i, 0, &liveness)
-            Operand new_rhs = wire_one_operand(&ctx, rhs, b, i, 1, &liveness)
+            Operand new_lhs = wire_one_operand(&ctx, lhs, b, i, 0, &liveness, &moved_lids)
+            Operand new_rhs = wire_one_operand(&ctx, rhs, b, i, 1, &liveness, &moved_lids)
             return GIBinOp(dst, opc, ty, new_lhs, new_rhs)
         case GIUnOp(dst, opc, ty, src):
-            return GIUnOp(dst, opc, ty, wire_one_operand(&ctx, src, b, i, 0, &liveness))
+            return GIUnOp(dst, opc, ty, wire_one_operand(&ctx, src, b, i, 0, &liveness, &moved_lids))
         case GICmp(dst, opc, ty, lhs, rhs):
-            Operand new_lhs = wire_one_operand(&ctx, lhs, b, i, 0, &liveness)
-            Operand new_rhs = wire_one_operand(&ctx, rhs, b, i, 1, &liveness)
+            Operand new_lhs = wire_one_operand(&ctx, lhs, b, i, 0, &liveness, &moved_lids)
+            Operand new_rhs = wire_one_operand(&ctx, rhs, b, i, 1, &liveness, &moved_lids)
             return GICmp(dst, opc, ty, new_lhs, new_rhs)
         case GICall(dst, name, args):
             Vector[Operand] new_args = []
             int ai = 0
             while ai < args.len():
-                new_args.push(wire_one_operand(&ctx, args.get(ai).unwrap(), b, i, ai, &liveness))
+                new_args.push(wire_one_operand(&ctx, args.get(ai).unwrap(), b, i, ai, &liveness, &moved_lids))
                 ai += 1
             return GICall(dst, name, !new_args)
         case GICallExtern(dst, name, args):
             Vector[Operand] new_args = []
             int ai = 0
             while ai < args.len():
-                new_args.push(wire_one_operand(&ctx, args.get(ai).unwrap(), b, i, ai, &liveness))
+                new_args.push(wire_one_operand(&ctx, args.get(ai).unwrap(), b, i, ai, &liveness, &moved_lids))
                 ai += 1
             return GICallExtern(dst, name, !new_args)
         else:
@@ -1828,12 +1862,12 @@ Instruction rewrite_inst_modes(LowerCtx &ctx, Instruction inst, int b, int i, Li
             # so there's nothing to rewrite.
             return inst
 
-Terminator rewrite_term_modes(LowerCtx &ctx, Terminator term, int b, int i, LivenessAnalysis &liveness):
+Terminator rewrite_term_modes(LowerCtx &ctx, Terminator term, int b, int i, LivenessAnalysis &liveness, Vector[int] &moved_lids):
     match term:
         case GTReturn(op):
-            return GTReturn(wire_one_operand(&ctx, op, b, i, 0, &liveness))
+            return GTReturn(wire_one_operand(&ctx, op, b, i, 0, &liveness, &moved_lids))
         case GTBranch(op, t_bb, e_bb):
-            return GTBranch(wire_one_operand(&ctx, op, b, i, 0, &liveness), t_bb, e_bb)
+            return GTBranch(wire_one_operand(&ctx, op, b, i, 0, &liveness, &moved_lids), t_bb, e_bb)
         else:
             return term
 
