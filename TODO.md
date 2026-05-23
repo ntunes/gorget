@@ -2,26 +2,23 @@
 
 ## High Priority
 
-- **Path A Phase 2.3 + 2.3.5 shipped 2026-05-22 — significant progress but bootstrap still fails on driver.gg / loader.gg / parser.gg**. Commits `bac24e49` (Phase 2.3 — `op_consume` GtPtr → `decide_ptr_consume` wired + `lir_lower.gg` OpClone Ptr-to-struct emission via pointee's clone fn) and `58da31e6` (Phase 2.3.5 — unwrap Ptr/MutPtr at `.clone()` dst type so the slot type matches the cloned-value runtime shape).
+- **Path A driver.gg hang remains 2026-05-23 — separate bug from the parser.gg lex_emit fix.** With the lex_emit clone-after-push fix landed today, parser.gg and loader.gg compile cleanly (1116/1479 lines stdout, exit 0). driver.gg still SIGKILL'd after 1262 lines of output and reaching diag checkpoint 15 (after `elaborate_drops`). The hang is between checkpoint 15 and 16 — i.e. inside `validate_lir_after("drop-elaboration", &lir)` or `print(generate_c(&lir))`. Likely candidates:
+    - Another O(N²) string-concat pattern in `lir_codegen.gg::generate_c` (driver.gg's full transitive module is ~500K LIR insts; if any `out = out + ...` style emission is per-function rather than via sb_push, the cumulative C output text-building is N²).
+    - validate_lir_after's pass-tagged validation walks all functions; if it does a deep clone per function (similar shape to the parser.gg bug, but at the LIR layer), same pattern.
 
-  **What progress looks like**: stage-1 binary now compiles cleanly (Phase 2.3.5 closed all 6 cc type-mismatch errors). On simple-to-medium inputs (`int main(): print("hi") return 0`, vector iteration, etc.) stage-1 **works perfectly** — produces correct C, exits normally. Even compiles `tests/fixtures/self_host_lowerer/traits.gg` (35KB output, exit 0).
+  **Suggested diagnostic**: re-apply the int-checkpoint diag pattern (extern "C" gorget_diag_n + scattered diag(N) calls) at sub-statement granularity within validate_lir_after and generate_c. The successful methodology from today is documented in DONE.md.
 
-  **What still hangs**: stage-1 hangs (zero output, SIGKILL on timeout) on:
-    - `tests/fixtures/self_host_lowerer/loader.gg`
-    - `tests/fixtures/self_host_lowerer/parser.gg`
-    - `tests/fixtures/self_host_lowerer/driver.gg` (which transitively imports both)
+- **Pre-existing HEAD self-host cc emission bugs (extern name + cstr conversion) — surfaced during today's diagnosis 2026-05-23.** At bare HEAD, `cargo test --test integration --release self_host_bootstrap` fails because stage-0's emitted stage1.c has cc errors:
+    - `getenv(__v53)` instead of `gorget_str_from_cstr(gorget_getenv(gorget_str_to_cstr(__v53)))` — validate.gg sites
+    - `is_dir(__v30)` instead of `gorget_is_dir(gorget_str_to_cstr(__v30))` — loader.gg sites
+    - `write_file(__v0, __v24)` instead of `gorget_write_file(gorget_str_to_cstr(*(Str*)__v0), gorget_str_to_cstr(__v24))` — validate.gg
+    - `append_file(__v67, __v58)` instead of corresponding gorget_append_file call — validate.gg
 
-  Empirical signature: process spawns, NO output written, hangs indefinitely. Earlier (Phase 2.3 only) stage-1 produced ~122KB of output then hung mid-write. Now zero output — suggests the hang is earlier in the lowering pipeline (perhaps during initial setup / module loading / dependency resolution).
+  Pattern: self-host emits the BARE Gorget name and skips cstr conversion on extern "C" cstr args / String results. Rust gg correctly emits `gorget_<name>(... ? gorget_str_to_cstr(*(Str*)__vN) : NULL)`. The bugs are in `lir_codegen.gg`'s `emit_call_extern_with` / GICallExtern arm — name mapping via `map_runtime_name` is happening (the typed runtime symbol IS in `__slit_*` literals), but the call-site emission doesn't use the mapped name, AND the arg-conversion to cstr is missing. **Current workaround**: a `sed` post-process in `/tmp/build_stage1.sh` patches these 6 specific call sites. Proper fix: route extern-C calls through `map_runtime_name(func_name, &m, &gmod)` + emit `gorget_str_to_cstr(...)` wrapping per cstr-typed param. Mirror Rust gg's behavior at `src/lir/lower/insts.rs` CallExtern arm.
 
-  **Suggested next-attempt strategy**: bisect what's structurally different about loader.gg / parser.gg vs traits.gg. Both share Gorget syntax features (match, Vector iteration, field access) but loader.gg + parser.gg have larger more-deeply-nested code paths. Candidate triggers:
-    - Box[T] heap-allocated enum payloads (parser.gg has many `Box[SpannedExpr]`).
-    - Mutually recursive type references (Type ↔ SpannedType ↔ Box[SpannedType]).
-    - Generic equip blocks with type-param substitution.
-    - `for` loops with complex iter sources.
+- **Path A Phase 2.3 + 2.3.5 shipped 2026-05-22 — lex_emit hang fixed 2026-05-23.** Commits `bac24e49` (Phase 2.3 — `op_consume` GtPtr → `decide_ptr_consume` wired + `lir_lower.gg` OpClone Ptr-to-struct emission via pointee's clone fn) and `58da31e6` (Phase 2.3.5 — unwrap Ptr/MutPtr at `.clone()` dst type so the slot type matches the cloned-value runtime shape). The remaining parser.gg / loader.gg hang from Phase 2.3.5 was diagnosed and fixed 2026-05-23 (see DONE.md). driver.gg has a separate downstream hang — see entry above.
 
-  Instrument the lowerer (per the diagnostic agent `af8950e8c7d7c577e`'s methodology — diag_warn at lower_function entry/exit) and run on parser.gg specifically. The hang location will pinpoint the trigger.
-
-  **Confirmed-working architectural pieces**: C.1 (BorrowOrigin), A.1 (GIFieldLoad variant), A.2 (Ptr-typed dst for resource field reads), B.1 (7-branch SVarDecl), D.1 (LIR Ptr-aggregate-store), Phase 2.3 (clone-through-Ptr at consume), Phase 2.3.5 (.clone() dst-type unwrap). All ship as discrete commits, all pass lib + lowerer_comparison. Phase 4 (E.1 drop emission) remains blocked on the loader.gg / parser.gg hang.
+  **Confirmed-working architectural pieces**: C.1 (BorrowOrigin), A.1 (GIFieldLoad variant), A.2 (Ptr-typed dst for resource field reads), B.1 (7-branch SVarDecl), D.1 (LIR Ptr-aggregate-store), Phase 2.3 (clone-through-Ptr at consume), Phase 2.3.5 (.clone() dst-type unwrap), 2026-05-23 (writeback-skip for Ptr-borrow receivers). All ship as discrete commits, all pass lib + lowerer_comparison. Phase 4 (E.1 drop emission) remains blocked on the driver.gg generate_c / validate hang.
 
 - **Path A Phase 4 attempt revealed `it` keyword latent bug + A.2 regression on driver.gg 2026-05-22**. Bisect confirmed: A.1 (commit `f15a45c6`) ships clean bootstrap 2/2; A.2 (commit `2e544e84`, EFieldAccess Ptr-wrap for resource fields) regresses bootstrap.
 

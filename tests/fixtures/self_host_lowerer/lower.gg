@@ -4314,6 +4314,24 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # `self.lex_tokens.push(...)` silently drops every token and the
             # self-compiled lexer returns 0 tokens.
             bool is_mutating = mname == "push" or mname == "put" or mname == "set" or mname == "pop" or mname == "remove" or mname == "clear"
+            # Detect whether the field-read receiver is Ptr-typed (A.2,
+            # 2026-05-22: GIFieldLoad emits Ptr-typed locals for resource
+            # field reads). If so, the mutating call goes through the
+            # field POINTER directly and mutates the field in place — no
+            # writeback needed. Pre-A.2 the field-read produced a by-value
+            # copy and writeback was the only way to persist mutations.
+            # Today the writeback is not just redundant: emit_field_write_
+            # from_local routes the value through CkFieldWrite → OpClone,
+            # triggering an O(N) gorget_array_clone of the WHOLE collection
+            # after every push. That's O(N²) overall — pathological on
+            # parser.gg's ~25k-token lexing run (5min+ per file).
+            bool recv_is_ptr_borrow = false
+            GirLocal recv_loc_for_check = ctx.locals.get(recv).unwrap()
+            match recv_loc_for_check.ownership:
+                case LoBorrowed():
+                    recv_is_ptr_borrow = is_ptr_type(recv_loc_for_check.type_id, &gmod)
+                else:
+                    pass
             bool need_writeback = false
             SpannedExpr wb_base = (*recv_box)
             String wb_field = ""
@@ -4338,9 +4356,15 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             if is_mutating:
                 match (*recv_box).expr:
                     case EFieldAccess(wb_base_box, wb_f):
-                        need_writeback = true
-                        wb_base = *wb_base_box
-                        wb_field = wb_f
+                        # Skip writeback when recv is a Ptr-borrow (A.2 path):
+                        # the push goes through the field pointer directly,
+                        # so the field is already mutated in place. The
+                        # writeback would trigger a spurious whole-field
+                        # clone (CkFieldWrite → OpClone).
+                        if not recv_is_ptr_borrow:
+                            need_writeback = true
+                            wb_base = *wb_base_box
+                            wb_field = wb_f
                     case EMethodCall(unwrap_recv_box, unwrap_mname, _uargs, _utargs):
                         if unwrap_mname == "unwrap":
                             match (*unwrap_recv_box).expr:
