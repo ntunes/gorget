@@ -2,18 +2,39 @@
 
 ## High Priority
 
-- **Path A driver.gg OOM remains 2026-05-23 — confirmed downstream of parse/load.** With the lex_emit clone-after-push fix landed today, parser.gg / loader.gg / traits.gg compile cleanly (exit 0, 1011-1680 lines stdout). driver.gg still OOM-killed at ~88s. Memory growth profile (with CORRECT `lib_dir = lib`):
-    - t=30s: RSS 1.5 GB
-    - t=60s: RSS 1.8 GB
-    - t=80s: RSS 11.9 GB (exploded from 1.8 → 11.9 in 20s)
-    - t=85s: RSS 14.9 GB (near system max 14 Gi)
-    - t=88s: OOM-killed (exit 137, 1262 lines stdout emitted)
+- **Path A driver.gg OOM diagnosed 2026-05-23 — root cause: elaborate_drops leaks ~25-30 MB/function (~13 GB total).** With the lex_emit clone-after-push fix landed today, parser.gg / loader.gg / traits.gg compile cleanly. driver.gg still OOM-killed. Diagnostic narrowed the leak to a SPECIFIC pass:
 
-  Pipeline reaches checkpoint 15 (after elaborate_drops) per yesterday's int-checkpoint instrumentation; OOM happens during generate_c (or possibly validate_lir_after). driver.gg's transitive module is ~500K-600K LIR insts; suspect O(N²) memory allocation in lir_codegen.gg's generate_c — if any per-function emit uses `out = out + emit_function(...)` (string concat that copies prior buffer), memory grows ~O(N²) bytes. The codebase has fixed similar O(N²)-via-sb_push patterns before (see commit 09270a94 perf-hunt playbook); this is likely a holdover that survived in a specific code path.
+  Per-pipeline-step memory deltas (instrumented driver.gg main()):
+    parse_source:        +462 KB
+    load_imports:        +174 MB
+    expand_meta_for_match: +53 MB
+    resolve_module:      +440 MB
+    type_check_module:   +470 MB
+    lower_module:        +1.06 GB
+    run_validators:      +4 MB
+    lower_gir_to_lir:    +95 MB
+    run_ssa:             +157 MB
+    **elaborate_drops:   +10.76 GB**  ← THE OOM SOURCE
+    validate_lir_after:  +0 KB (no-op without GG_VALIDATE_PASSES)
+    generate_c:          +213 MB (was the previous suspect — NOT the culprit)
 
-  **Suggested diagnostic**: extern `int gorget_mem_live() = "gorget_mem_live"` (already in lib/std/os.gg) — checkpoint live-bytes between major loops in generate_c. The function with the biggest delta-per-function is the writer site.
+  Per-iteration breakdown inside elaborate_drops (50-fn batches):
+    batches 0-200:   slow growth, ~3 MB/fn
+    batches 200-450: spikes to 40-80 MB/fn, totaling ~10 GB
+    Function 262 (tiny: 4 blocks, 50 insts, 20 slots) showed a 3.5 GB jump at its iteration boundary — leak is NOT proportional to function size; accumulates from prior iterations and surfaces at allocator-page boundaries.
 
-  **Note**: the bootstrap integration test (`self_host_bootstrap`) is fragile to this — passes when stage-1 squeaks under 14Gi (loaded boxes' GG_STAGE1_TIMEOUT_SECS auto-scaling sometimes saves it), fails reliably when memory is constrained. Don't trust a single bootstrap PASS as evidence; rerun N times.
+  **Root cause class**: self-host doesn't emit drops on slot reassignment inside loops. Each iteration of the `while fi < m.functions.len()` body in elaborate_drops re-assigns slots holding `Dict[int, int]`, `Vector[Vector[int]]`, `LirFunction`, etc. without dropping the prior content. The runtime's `gorget_array_set` etc. DO have drop-on-overwrite via `elem_drop` fn pointers — but stage1.c has **0** `LirFunction__drop` / `<UserType>__drop` symbols emitted, and `gorget_array_new_drop(elem_size, drop_fn)` is only called 1-2 times in the entire ~600 KB stage1.c. The typed elem_drop function pointers aren't being threaded through Vector[T] constructions for user types.
+
+  **Tried**: explicit `.clear()` on per-iter locals (val_to_slot, in_states, in_states_present, deleted_slots, maybe_init_slots, bb0_state) at end of iteration. **Didn't help** — memory still grew to 13.2 GB. The leak is deeper than the visible local-overwrite sites; likely propagates through f.blocks.set / nested resource-containing structs whose drop chains aren't emitted.
+
+  **Note on agent vs parent**: the agent worktree's self_host_bootstrap PASSED at 211s. Parent's bootstrap FAILS at 1170s. The difference is timing-fragile — auto-scaled GG_STAGE1_TIMEOUT_SECS and system load determine whether stage-1 OOMs before timeout. Don't trust a single PASS.
+
+  **Three options for unblocking driver.gg** (recommended ordering):
+    A) **Targeted: emit_struct_drops + gorget_array_new_drop registration**. Self-host's `emit_struct_drops` already generates `<Type>__drop` C code, BUT they aren't being registered as elem_drop on Vector[Type] constructions. Add a post-pass in `lir_lower.gg` or `lir_codegen.gg` that, for every Vector[T] / Dict[K,V] construction of a user type, emits `gorget_array_new_drop(sizeof(T), T__drop)` instead of bare `gorget_array_new`. Smaller scope than full Phase 4; reuses existing drop emission. **Recommended start point.**
+    B) **Ship full Phase 4 / E.1** (drop emission + lower_return MoveZero). Bigger lift; this is the keystone the Rust machinery port has been building toward.
+    C) **Refactor elaborate_drops** to mutate in place via & instead of get-modify-set. Pragmatic band-aid; violates the "self-host as elegance showcase" principle.
+
+  **Suggested diagnostic methodology** (worked today, document for future): added `gorget_diag_n(int n)` runtime helper that prints `[diag] checkpoint N (live=NN KB)` to stderr (uses existing `gorget_mem_live()` counters). Instrument driver.gg main + suspected pass entry points; rerun manually with `lib_dir = lib` (NOT the self-host directory — that's the lib_dir gotcha documented below). The function-batch granularity (`if fns_processed % 50 == 0: gorget_diag_n(...)`) catches the dominant offender quickly.
 
 - **`tests/fixtures/self_host_lowerer/driver.gg` is NOT the lib_dir.** Subtle gotcha from today's debugging: manual `stage1 <input.gg> <lib_dir> --lir-c` invocations must use `lib` (or absolute `$(pwd)/lib`) as `lib_dir`. Using `tests/fixtures/self_host_lowerer` makes the loader silently skip std.fs / std.os (no `tests/fixtures/self_host_lowerer/std/` directory exists), `call_redirects` never populates for `getenv` / `write_file` / `is_dir` / `append_file` / etc., and stage-1 emits the bare Gorget names which fail cc with "incompatible type for argument 1 of getenv". The integration test uses `manifest_dir.join("lib")` correctly. If a reproducer needs this pattern, document it as `lib` not the self-host directory.
 
