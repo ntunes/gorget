@@ -1754,6 +1754,18 @@ int runtime_fn_return_type(String name, LirModule &m):
         return find_struct_type("GorgetArray", &m)
     if name == "gorget_array_repeat":
         return find_struct_type("GorgetArray", &m)
+    # User-type clone fns: `<Type>__clone(void*) -> <Type>` (returns by value).
+    # Drive from typed metadata (recursive_drop_structs / recursive_drop_enums)
+    # — CLAUDE.md "No name matching" exception: at the C-emit boundary the
+    # NAME is the contract with the runtime, but the type registry IS the
+    # source of truth for what type each `<X>__clone` returns. mirrors Rust
+    # gg's call-extern type inference at src/lir/types.rs.
+    if name.ends_with("__clone"):
+        String type_name = name.slice(0, name.len() - 7)
+        if m.recursive_drop_structs.contains(type_name) or m.recursive_drop_enums.contains(type_name):
+            int sid = find_struct_type(type_name, &m)
+            if sid >= 0:
+                return sid
     return LT_VOID
 
 # Known void-returning runtime functions (used to suppress assignment in emit).
@@ -4420,6 +4432,57 @@ void sort_strings_in_place(Vector[String] &v):
         i += 1
 
 # Emit struct drop functions from recursive_drop_structs metadata.
+# Emit forward declarations for ALL drop + clone functions BEFORE any
+# definitions. Resolves the cross-category cycle where struct clone fns
+# call enum clone fns (e.g. BasicBlock__clone → Terminator__clone) and
+# the inline forward-decl loops in each emit_X are too local to cover
+# that boundary. See generate_c's `body = ... emit_all_drop_clone_forward_decls`
+# call site for the rationale.
+String emit_all_drop_clone_forward_decls(LirModule &m, Vector[String] &sn):
+    String out = ""
+    # Struct drop forward decls
+    Vector[String] sd_keys = m.recursive_drop_structs.keys()
+    sort_strings_in_place(&sd_keys)
+    int i = 0
+    while i < sd_keys.len():
+        String tn = sd_keys.get(i).unwrap()
+        String drop_name = tn + "__drop"
+        if not fn_exists(drop_name, &m):
+            String cname = find_c_name(tn, &m, &sn)
+            out = out + "static inline void " + drop_name + "(" + cname + "* self);\n"
+        i += 1
+    # Struct clone forward decls
+    int j = 0
+    while j < sd_keys.len():
+        String tn = sd_keys.get(j).unwrap()
+        String clone_name = tn + "__clone"
+        if not fn_exists(clone_name, &m):
+            String cname = find_c_name(tn, &m, &sn)
+            out = out + cname + " " + clone_name + "(void* __p);\n"
+        j += 1
+    # Enum drop forward decls (skip if also struct — structs take priority)
+    Vector[String] ed_keys = m.recursive_drop_enums.keys()
+    sort_strings_in_place(&ed_keys)
+    int k = 0
+    while k < ed_keys.len():
+        String tn = ed_keys.get(k).unwrap()
+        String drop_name = tn + "__drop"
+        if not fn_exists(drop_name, &m) and not m.recursive_drop_structs.contains(tn):
+            out = out + "void " + drop_name + "(void* __p);\n"
+        k += 1
+    # Enum clone forward decls (skip if also struct)
+    int l = 0
+    while l < ed_keys.len():
+        String tn = ed_keys.get(l).unwrap()
+        String clone_name = tn + "__clone"
+        if not fn_exists(clone_name, &m) and not m.recursive_drop_structs.contains(tn):
+            String cname = find_c_name(tn, &m, &sn)
+            out = out + cname + " " + clone_name + "(void* __p);\n"
+        l += 1
+    if out.len() > 0:
+        out = out + "\n"
+    return out
+
 String emit_struct_drops(LirModule &m, Vector[String] &sn):
     String out = ""
     Vector[String] keys = m.recursive_drop_structs.keys()
@@ -4516,6 +4579,19 @@ String emit_enum_drops(LirModule &m, Vector[String] &sn):
     String out = ""
     Vector[String] keys = m.recursive_drop_enums.keys()
     sort_strings_in_place(&keys)
+    # Forward declarations first — drop fns may call each other for nested
+    # variant payloads (Outer__drop dispatches to Inner__drop on a payload
+    # field). Without these, C infers implicit int return and the later
+    # definition produces a "conflicting types" error.
+    int kf = 0
+    while kf < keys.len():
+        String type_name_f = keys.get(kf).unwrap()
+        String drop_name_f = type_name_f + "__drop"
+        if not fn_exists(drop_name_f, &m) and not m.recursive_drop_structs.contains(type_name_f):
+            out = out + "void " + drop_name_f + "(void* __p);\n"
+        kf += 1
+    if keys.len() > 0:
+        out = out + "\n"
     int ki = 0
     while ki < keys.len():
         String type_name = keys.get(ki).unwrap()
@@ -4582,6 +4658,19 @@ String emit_enum_clones(LirModule &m, Vector[String] &sn):
     String out = ""
     Vector[String] keys = m.recursive_drop_enums.keys()
     sort_strings_in_place(&keys)
+    # Forward declarations to prevent implicit-decl conflicts. Same
+    # rationale as emit_struct_clones (mutual references between
+    # T__clone() and U__clone() when T contains U).
+    int kf = 0
+    while kf < keys.len():
+        String type_name_f = keys.get(kf).unwrap()
+        String clone_name_f = type_name_f + "__clone"
+        if not fn_exists(clone_name_f, &m) and not m.recursive_drop_structs.contains(type_name_f):
+            String cname_f = find_c_name(type_name_f, &m, &sn)
+            out = out + cname_f + " " + clone_name_f + "(void* __p);\n"
+        kf += 1
+    if keys.len() > 0:
+        out = out + "\n"
     int ki = 0
     while ki < keys.len():
         String type_name = keys.get(ki).unwrap()
@@ -4874,6 +4963,14 @@ String generate_c(LirModule &m):
     # __gorget_box_alloc_* occurrences (codegen rewrites Box(x) → alloc at
     # emit time, so the call doesn't appear in LIR form).
     String body = ""
+    # Pre-emit ALL drop + clone forward declarations BEFORE any definitions.
+    # Struct drop/clone can call enum drop/clone (e.g. BasicBlock__clone
+    # calls Terminator__clone) and vice versa. Without one cohesive
+    # forward-decl block, the first cross-category call hits an implicit
+    # int return type and the later definition produces a "conflicting
+    # types" error. Each emit_X also has its own inline forward-decl
+    # loop; the duplicate declarations are harmless (C allows them).
+    body = body + emit_all_drop_clone_forward_decls(&m, &sn)
     body = body + emit_struct_drops(&m, &sn)
     body = body + emit_struct_clones(&m, &sn)
     body = body + emit_enum_drops(&m, &sn)
