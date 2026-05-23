@@ -2,19 +2,20 @@
 
 ## High Priority
 
-- **Path A driver.gg hang remains 2026-05-23 — separate bug from the parser.gg lex_emit fix.** With the lex_emit clone-after-push fix landed today, parser.gg and loader.gg compile cleanly (1116/1479 lines stdout, exit 0). driver.gg still SIGKILL'd after 1262 lines of output and reaching diag checkpoint 15 (after `elaborate_drops`). The hang is between checkpoint 15 and 16 — i.e. inside `validate_lir_after("drop-elaboration", &lir)` or `print(generate_c(&lir))`. Likely candidates:
-    - Another O(N²) string-concat pattern in `lir_codegen.gg::generate_c` (driver.gg's full transitive module is ~500K LIR insts; if any `out = out + ...` style emission is per-function rather than via sb_push, the cumulative C output text-building is N²).
-    - validate_lir_after's pass-tagged validation walks all functions; if it does a deep clone per function (similar shape to the parser.gg bug, but at the LIR layer), same pattern.
+- **Path A driver.gg OOM remains 2026-05-23 — confirmed downstream of parse/load.** With the lex_emit clone-after-push fix landed today, parser.gg / loader.gg / traits.gg compile cleanly (exit 0, 1011-1680 lines stdout). driver.gg still OOM-killed at ~88s. Memory growth profile (with CORRECT `lib_dir = lib`):
+    - t=30s: RSS 1.5 GB
+    - t=60s: RSS 1.8 GB
+    - t=80s: RSS 11.9 GB (exploded from 1.8 → 11.9 in 20s)
+    - t=85s: RSS 14.9 GB (near system max 14 Gi)
+    - t=88s: OOM-killed (exit 137, 1262 lines stdout emitted)
 
-  **Suggested diagnostic**: re-apply the int-checkpoint diag pattern (extern "C" gorget_diag_n + scattered diag(N) calls) at sub-statement granularity within validate_lir_after and generate_c. The successful methodology from today is documented in DONE.md.
+  Pipeline reaches checkpoint 15 (after elaborate_drops) per yesterday's int-checkpoint instrumentation; OOM happens during generate_c (or possibly validate_lir_after). driver.gg's transitive module is ~500K-600K LIR insts; suspect O(N²) memory allocation in lir_codegen.gg's generate_c — if any per-function emit uses `out = out + emit_function(...)` (string concat that copies prior buffer), memory grows ~O(N²) bytes. The codebase has fixed similar O(N²)-via-sb_push patterns before (see commit 09270a94 perf-hunt playbook); this is likely a holdover that survived in a specific code path.
 
-- **Pre-existing HEAD self-host cc emission bugs (extern name + cstr conversion) — surfaced during today's diagnosis 2026-05-23.** At bare HEAD, `cargo test --test integration --release self_host_bootstrap` fails because stage-0's emitted stage1.c has cc errors:
-    - `getenv(__v53)` instead of `gorget_str_from_cstr(gorget_getenv(gorget_str_to_cstr(__v53)))` — validate.gg sites
-    - `is_dir(__v30)` instead of `gorget_is_dir(gorget_str_to_cstr(__v30))` — loader.gg sites
-    - `write_file(__v0, __v24)` instead of `gorget_write_file(gorget_str_to_cstr(*(Str*)__v0), gorget_str_to_cstr(__v24))` — validate.gg
-    - `append_file(__v67, __v58)` instead of corresponding gorget_append_file call — validate.gg
+  **Suggested diagnostic**: extern `int gorget_mem_live() = "gorget_mem_live"` (already in lib/std/os.gg) — checkpoint live-bytes between major loops in generate_c. The function with the biggest delta-per-function is the writer site.
 
-  Pattern: self-host emits the BARE Gorget name and skips cstr conversion on extern "C" cstr args / String results. Rust gg correctly emits `gorget_<name>(... ? gorget_str_to_cstr(*(Str*)__vN) : NULL)`. The bugs are in `lir_codegen.gg`'s `emit_call_extern_with` / GICallExtern arm — name mapping via `map_runtime_name` is happening (the typed runtime symbol IS in `__slit_*` literals), but the call-site emission doesn't use the mapped name, AND the arg-conversion to cstr is missing. **Current workaround**: a `sed` post-process in `/tmp/build_stage1.sh` patches these 6 specific call sites. Proper fix: route extern-C calls through `map_runtime_name(func_name, &m, &gmod)` + emit `gorget_str_to_cstr(...)` wrapping per cstr-typed param. Mirror Rust gg's behavior at `src/lir/lower/insts.rs` CallExtern arm.
+  **Note**: the bootstrap integration test (`self_host_bootstrap`) is fragile to this — passes when stage-1 squeaks under 14Gi (loaded boxes' GG_STAGE1_TIMEOUT_SECS auto-scaling sometimes saves it), fails reliably when memory is constrained. Don't trust a single bootstrap PASS as evidence; rerun N times.
+
+- **`tests/fixtures/self_host_lowerer/driver.gg` is NOT the lib_dir.** Subtle gotcha from today's debugging: manual `stage1 <input.gg> <lib_dir> --lir-c` invocations must use `lib` (or absolute `$(pwd)/lib`) as `lib_dir`. Using `tests/fixtures/self_host_lowerer` makes the loader silently skip std.fs / std.os (no `tests/fixtures/self_host_lowerer/std/` directory exists), `call_redirects` never populates for `getenv` / `write_file` / `is_dir` / `append_file` / etc., and stage-1 emits the bare Gorget names which fail cc with "incompatible type for argument 1 of getenv". The integration test uses `manifest_dir.join("lib")` correctly. If a reproducer needs this pattern, document it as `lib` not the self-host directory.
 
 - **Path A Phase 2.3 + 2.3.5 shipped 2026-05-22 — lex_emit hang fixed 2026-05-23.** Commits `bac24e49` (Phase 2.3 — `op_consume` GtPtr → `decide_ptr_consume` wired + `lir_lower.gg` OpClone Ptr-to-struct emission via pointee's clone fn) and `58da31e6` (Phase 2.3.5 — unwrap Ptr/MutPtr at `.clone()` dst type so the slot type matches the cloned-value runtime shape). The remaining parser.gg / loader.gg hang from Phase 2.3.5 was diagnosed and fixed 2026-05-23 (see DONE.md). driver.gg has a separate downstream hang — see entry above.
 
