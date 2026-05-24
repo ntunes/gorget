@@ -836,11 +836,12 @@ void push_drop_scope(DropElaborator &de, int kind):
 # See TODO.md "self-host drop semantics" entry filed alongside this
 # commit for the precise next-step plan.
 void emit_scope_drops(LowerCtx &ctx, Vector[DropEntry] entries):
-    # No-op for the reasons above. The walk is preserved so that the
-    # function name + signature stay stable for Phase 3 / drop_elab
-    # to hook into; once IMoveSlot ↔ drop_elab semantics work, the
-    # body becomes a one-line `emit(&ctx, GIDropIfAlive(entry.local_id))`.
-    int _len = entries.len()
+    # Cluster (a) probe: emit GIDropIfAlive unconditionally in LIFO order.
+    int i = entries.len() - 1
+    while i >= 0:
+        DropEntry entry = entries.get(i).unwrap()
+        emit(&ctx, GIDropIfAlive(entry.local_id))
+        i = i - 1
 
 # Pop the innermost scope and emit its drops at the current block IF
 # the current block's terminator is still GTNone (i.e. we're on the
@@ -935,6 +936,20 @@ void register_local_for_drop(LowerCtx &ctx, int local_id, int type_id, GirModule
         return
     if ctx.drop_elab.scopes.len() == 0:
         return
+    # a-1 (the root fix): only OWNERS get dropped. A local that aliases a
+    # borrow (LoBorrowed) or a CoW view (LoView) does NOT own its data —
+    # registering it for drop double-frees the real owner's heap (the
+    # over-drop that made stage-1's array_free/map_free counts exceed Rust's).
+    # Mirrors Rust's register_local, which only registers owned resource
+    # locals. (Owning `!T` params arrive here already filtered by the
+    # p.ownership==2 gate and are LoParam/LoOwned, so they are unaffected.)
+    match ctx.locals.get(local_id).unwrap().ownership:
+        case LoBorrowed():
+            return
+        case LoView():
+            return
+        else:
+            pass
     int top = ctx.drop_elab.scopes.len() - 1
     DropScope scope = ctx.drop_elab.scopes.get(top).unwrap()
     scope.entries.push(DropEntry(local_id, type_id, false))
@@ -1063,8 +1078,7 @@ void emit_drops_for_early_exit(LowerCtx &ctx, int target_kind, Option[int] exclu
                 case None:
                     pass
             if not skip:
-                # No-op for the reasons in emit_scope_drops's docstring.
-                int _eid = entry.local_id
+                emit(&ctx, GIDropIfAlive(entry.local_id))
             ei -= 1
         if scope.kind == target_kind:
             return
@@ -4421,6 +4435,17 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         # signature. Dispatch via classify_call_arg:
                         # `!self` → OpMove, otherwise OpBorrow.
                         call_args.push(op_consume(&ctx, &gmod, recv, classify_call_arg(&gmod, full_name, 0)))
+            # TODO(a-5): collection mutators (push/put/set/insert/add/send)
+            # take OWNERSHIP of their value arg (last), but the runtime fn ABI
+            # passes it BY POINTER (the runtime memcpy's it into storage). So
+            # the correct lowering is pointer-ABI (borrow) for the CALL + a
+            # post-call GIMoveZero of an owned source (or a pre-call clone of a
+            # borrowed source) — NOT a plain operand→OpMove (that passes the
+            # struct by value → "incompatible type for argument N of
+            # gorget_array_set/push"). Mirror the v[i]=x index-assign path
+            # (lower.gg ~5558) which already does consume-via-pointer. Until
+            # then this stays OpBorrow → the set/push value shallow-aliases and
+            # double-frees at scope exit (the meta_expand_for_match backtrace).
             int _ma_idx = 0
             for ma in margs:
                 int ma_val = lower_expr(&ctx, ma, &gmod)
@@ -5297,8 +5322,23 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             match opt_expr:
                 case Some(ret_expr):
                     int val = lower_expr(&ctx, ret_expr, &gmod)
-                    emit(&ctx, GIAssign(0, op_consume(&ctx, &gmod, val, CkReturn())))
-                    emit_drops_for_early_exit(&ctx, DSK_FUNCTION, Some(0))
+                    Operand ret_op = op_consume(&ctx, &gmod, val, CkReturn())
+                    # a-6 (concern #5, the keystone): when the value is MOVED
+                    # out of a bare owned local, that local now aliases _0 and
+                    # the caller's return value. Move-zero it and exclude it
+                    # from the scope-exit drops — otherwise the exit
+                    # drop_if_alive frees it and the caller double-frees the
+                    # same heap (the canonical return-corruption double-free).
+                    int excl = 0
+                    match ret_op:
+                        case OpMove(src):
+                            excl = src
+                        else:
+                            pass
+                    emit(&ctx, GIAssign(0, ret_op))
+                    if excl != 0:
+                        emit(&ctx, GIMoveZero(excl))
+                    emit_drops_for_early_exit(&ctx, DSK_FUNCTION, Some(excl))
                     set_terminator(&ctx, GTReturn(op_consume(&ctx, &gmod, 0, CkReturn())))
                 case None:
                     emit_drops_for_early_exit(&ctx, DSK_FUNCTION, Some(0))
@@ -5832,7 +5872,12 @@ int match_scrutinee_ptr(LowerCtx &ctx, GirModule &gmod, int scrutinee):
     # this extra copy keeps the address path uniform.
     int scr_tid = ctx.locals.get(scrutinee).unwrap().type_id
     int tmp = add_local_inheriting(&ctx, scr_tid, NO_NAME, scrutinee)
-    emit(&ctx, GIAssign(tmp, op_consume(&ctx, &gmod, scrutinee, CkAssign())))
+    # a-7: a match does NOT consume its scrutinee — it borrows (the tag/field
+    # reads take the scrutinee's ADDRESS). CkMatchPtr is a borrow kind, so
+    # op_consume yields OpBorrow (Ptr alias), not OpClone. CkAssign here forced
+    # a clone for resource enums, and the clone result is a value — the
+    # downstream tag-read `((Enum*)tmp)->tag` then can't cast it to a pointer.
+    emit(&ctx, GIAssign(tmp, op_consume(&ctx, &gmod, scrutinee, CkMatchPtr())))
     return tmp
 
 # Lower a single match arm's pattern-match test. Emits branches to
@@ -8209,6 +8254,31 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                 fd_is_resource = true
                     fd_moves.push(fd_is_resource)
                 fn_move_params.put(fd_sdef.name, fd_moves)
+            case IEnum(fd_edef):
+                # Enum-variant constructors are ALSO consume positions — the
+                # constructed node OWNS its payload fields. Without this, a
+                # resource arg (e.g. a `Vector[Stmt]` moved into an `SIf` node)
+                # classified CkCallArgBorrow → OpBorrow → byte-aliased into the
+                # variant field, then the source local was dropped at scope exit
+                # AND the node owned the same heap → double-free (the
+                # parse_if_stmt → gorget_array_free → Stmt__drop backtrace,
+                # 2026-05-24). classify_call_arg keys on the BARE variant name
+                # for `SIf(...)` and on `Enum__Variant` for `Enum.Variant(...)`;
+                # register both.
+                for fd_var in fd_edef.variants:
+                    Vector[bool] fd_vmoves = []
+                    for fd_vfld in fd_var.fields:
+                        String fd_vftype = spanned_type_to_name(fd_vfld)
+                        bool fd_v_is_resource = false
+                        match build_resource_metadata(fd_vftype):
+                            case Some(_):
+                                fd_v_is_resource = true
+                            case None:
+                                if resource_types.contains(fd_vftype):
+                                    fd_v_is_resource = true
+                        fd_vmoves.push(fd_v_is_resource)
+                    fn_move_params.put(fd_var.name.clone(), fd_vmoves.clone())
+                    fn_move_params.put(fd_edef.name + "__" + fd_var.name, !fd_vmoves)
             else:
                 pass
     Dict[String, int] const_decls = {}

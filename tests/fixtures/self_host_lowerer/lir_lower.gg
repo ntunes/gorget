@@ -3433,12 +3433,13 @@ void populate_drop_metadata(LirModule &m, GirModule &gmod):
         if info.is_enum:
             ki += 1
             continue
-        # Skip imported types — Rust preamble already provides their
-        # drop/clone functions as `static inline`. Emitting our own would
-        # duplicate the definitions.
-        if gmod.imported_fns.contains("__imported_type__" + type_name):
-            ki += 1
-            continue
+        # Cluster (a), 2026-05-24: the `__imported_type__` skip was REMOVED.
+        # Whole-program compilation (bootstrap + every `gg build`) emits ALL
+        # user types in ONE C file; the Rust preamble provides only RUNTIME
+        # drops (gorget_*_free), NOT user-type `<Type>__drop`. Skipping
+        # imported user types left 0 `__drop` defs → undefined references.
+        # Double-definition is guarded by `fn_exists()` in emit_struct_drops /
+        # emit_type_drop_fns, not by suppressing registration here.
         # Check if this struct has any droppable fields
         Vector[FieldDrop] field_drops = []
         int fi = 0
@@ -3472,9 +3473,7 @@ void populate_drop_metadata(LirModule &m, GirModule &gmod):
         if not info.is_enum:
             ki += 1
             continue
-        if gmod.imported_fns.contains("__imported_type__" + type_name):
-            ki += 1
-            continue
+        # Cluster (a): __imported_type__ skip removed — see Pass 1 note.
         Vector[EnumVariantDrop] variant_drops = []
         int vi = 0
         while vi < info.variants.len():
