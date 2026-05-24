@@ -38,4 +38,3 @@ perf.data*
 **/__gorget_runtime*.o
 **/__gorget_user*.o
 *.ll
-plans/

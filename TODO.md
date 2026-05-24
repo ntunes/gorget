@@ -2,9 +2,18 @@
 
 ## High Priority
 
-- **Drop emission completion plan written 2026-05-24 — `plans/drop_emission_completion.md`.** v2 plan (post reviewer-agent feedback) for the full architectural drop emission port. 6 phases (A hybrid audit → B consumer fixes → C user-type drop registration → D scope-exit emission → E lower_return MoveZero → F lock-in). Total estimate 23-72h over 3-7 focused sessions. Rewrite threshold at 60h.
+- **Drop emission completion plan written 2026-05-24 — `docs/plans/drop_emission_completion.md`.** v2 plan (post reviewer-agent feedback) for the full architectural drop emission port. 6 phases (A hybrid audit → B consumer fixes → C user-type drop registration → D scope-exit emission → E lower_return MoveZero → F lock-in). Total estimate 23-72h over 3-7 focused sessions. Rewrite threshold at 60h.
 
   **Why this plan exists**: the Path A series (C.1, A.1, A.2, B.1, D.1, E.1) is 5/6 shipped but E.1 has failed 9 times — D.1's "consumer audit" wasn't exhaustive. The plan replaces "try E.1 again with fingers crossed" with "enumerate the runtime-reachable cascades via dynamic probe, fix them in batches, then ship E.1 with all 7 of its Rust concerns ported upfront."
+
+  **Phase A static audit COMPLETE (2026-05-24) — `docs/plans/consumer_audit.md`.** 3 parallel agents (self-host LIR, self-host lower.gg, Rust reference) + parent doc synthesis. Verdict: **A.6 gate does NOT trigger rewrite** (~13 distinct sites, 0–1 restructuring). Findings that CHANGE the plan:
+  - **PF-01/PF-05 (confirmed from Rust `drops.rs:504-505,540-541`)**: Rust emits `DropIfAlive` UNCONDITIONALLY and discards `maybe_moved` at emit; there is NO drop queue (the scope `entries` vec IS the queue). So the plan's Phase D `maybe_moved` gate is a latent double-free (Snag #30), and queue+flush is unnecessary. Phase D collapses to direct unconditional emission. `lower.gg:767-779` already documents this correctly; `lower.gg:82-94`/line-169 are the stale contradicting comments the plan inherited.
+  - **Phase C.3 misframed**: Rust uses ONE allocator + post-construction fn-ptr stores at fixed offsets (driven by `drop_strategy` metadata), NOT a `gorget_array_new_drop` symbol (which would be name-matching). Self-host ALREADY has the pattern (`emit_dict_ctor_wiring`, lir_codegen.gg:1246) for Dict/Set keys — generalize it to Vector elems + Dict values.
+  - **Phase C.1 wrong**: the `__imported_type__` skip (lir_lower.gg:3439) is CORRECT — keep it. "0 user drops" is a wiring problem, not a generation problem.
+  - **Cascade = two SEPARABLE clusters**: (a) double-free [L2/L3 `&slot` on Ptr-typed slots + C2 IMoveSlot no-op + B1 missing borrow flag + E.1] must ship ATOMICALLY (why E.1 failed 9× — half-shipped); (b) leak/OOM [D1/D2/D3 missing elem/val-drop wiring] is INDEPENDENT and directly kills the 13 GB driver.gg OOM.
+  - **Recommended reordering**: ship cluster (b) FIRST (low-risk, kills OOM → resolves R-04 + the A.2 probe-stall fear), THEN cluster (a) atomically.
+
+  **Plan revised to v3 + reviewed (2026-05-24).** User approved reorder ("cluster (b) first") + plan revision. `plans/` moved to `docs/plans/` + unignored. Fresh review-agent verdict: **ship-with-changes** — four corrections confirmed verbatim from source; **cluster (b) independence CONFIRMED** (elem_drop fires on `data+i*size` inside the collection buffer, disjoint from cluster (a)'s `&slot` stack-local path; scope drops are no-ops today → zero interaction; fn-ptr NULL-guarded). Four review edits applied. **Key finding: a-4 (IMoveSlot memset) is likely DEAD WORK** — `drop_elab.gg` is a full working port (wired driver.gg:79) consuming the IMoveSlot annotation statically (→IS_UNINITIALIZED@104, bool drop-flag@444); verify-then-add-only-if-needed. **NOW EXECUTING cluster (b)**: generalize `emit_dict_ctor_wiring` (lir_codegen.gg:1246) key-drop fn-ptr-store to Vector elems (b-1) + Dict values (b-2) + Set (b-3) + recursive box-drop in enum payloads (min-2), driven by `recursive_drop_structs/enums`. Kills the 13 GB driver.gg OOM.
 
   **Key load-bearing facts the plan calls out** (came from reviewer-agent's questions, verified empirically 2026-05-24):
   - `lowerer_comparison` is BLIND to drops — counts `fn ` declarations only (`tests/integration.rs:13389-13392`). Per-batch validation needs manual stage-1 rebuilds + grep-diff against Rust's drops.
@@ -12,7 +21,7 @@
   - `populate_drop_metadata` generator WORKS — today's COMMIT 1 attempt emitted `__gg_Token Token__clone` correctly. The blocker was downstream OpBorrow→ISlotLoad (value not address), not the generator.
   - Rust's `lower_return` has 7 distinct concerns (owning_param_returned MoveZero, clone_resource_global_ref, is_explicit_result_variant, maybe_auto_propagate, Tier 1c Move-for-fresh-Result, Ok-wrap, Ptr(T)→T auto-clone). E.1 must port all of them; "may or may not be needed" is the same reactive whack-a-mole that caused the 9 failures.
 
-  **Start here next session**: `plans/drop_emission_completion.md` → §"Reading order for next session" (~85 min cold-ready, ~6-10h for Phase A which is the gate).
+  **Start here next session**: `docs/plans/drop_emission_completion.md` → §"Reading order for next session" (~85 min cold-ready, ~6-10h for Phase A which is the gate).
 
 - **Last green bootstrap commit: `f15a45c6` (Phase A.1, 2026-05-22 16:03).** Empirical: bootstrap pair 2/2 in 1365.64s. Last clean baseline before the A.2 regression chain. If the drop emission plan blows past 60h, this is the rollback target — `git reset --hard f15a45c6` returns to "labels-only self-host that bootstraps cleanly" at the cost of all post-A.2 architectural progress (today's lex_emit fix + forward-decl prep would need re-applying on top).
 
