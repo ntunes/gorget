@@ -1248,6 +1248,125 @@ String emit_dict_ctor_wiring(int dst, String mapped_name, String original_name, 
         w = w + " " + dv + ".key_clone = (__gorget_drop_fn)" + key_ty + "__clone_inplace;"
     return w
 
+# Look up a Dict/Map value type from its original ctor name. Mirrors
+# `lc_coll_key_lookup` / `lc_coll_elem_lookup`, reading the typed
+# `coll_val_type_map`. Tries the full name first, then `__`-prefixes
+# (so `Dict__K__V__new` resolves via the bare `Dict__K__V` key).
+String lc_coll_val_lookup(String name, LirModule &m):
+    if m.coll_val_type_map.contains(name):
+        return m.coll_val_type_map.get(name).unwrap_or("")
+    int i = 0
+    while i < name.len() - 1:
+        if name.slice(i, i + 2) == "__":
+            String prefix = name.slice(0, i)
+            if m.coll_val_type_map.contains(prefix):
+                return m.coll_val_type_map.get(prefix).unwrap_or("")
+        i += 1
+    return ""
+
+# Resolve the drop fn symbol for a collection element/value type at the
+# codegen layer (LirModule-only — no GirModule here). Mirrors
+# `lir_lower.gg::drop_fn_for_type`, reading the typed `type_runtime_map`
+# + `recursive_drop_structs/enums` already on the LirModule. Returns ""
+# for trivially-droppable (primitive) elements.
+String lc_collection_drop_fn(String type_name, LirModule &m):
+    if type_name == "GorgetString" or type_name == "Str":
+        return "gorget_string_free"
+    if type_name == "GorgetArray":
+        return "gorget_array_free"
+    if type_name == "GorgetMap":
+        return "gorget_map_free"
+    if type_name == "GorgetSet":
+        return "gorget_set_free"
+    if type_name == "GorgetClosure":
+        return "gorget_closure_free"
+    String runtime = ""
+    if m.type_runtime_map.contains(type_name):
+        runtime = m.type_runtime_map.get(type_name).unwrap_or("")
+    if runtime == "GorgetArray":
+        return "gorget_array_free"
+    elif runtime == "GorgetMap":
+        return "gorget_map_free"
+    elif runtime == "GorgetSet":
+        return "gorget_set_free"
+    elif runtime == "GorgetString":
+        return "gorget_string_free"
+    if m.recursive_drop_structs.contains(type_name) or m.recursive_drop_enums.contains(type_name):
+        return type_name + "__drop"
+    return ""
+
+# Companion to lc_collection_drop_fn: the matching in-place clone symbol.
+# elem_drop and elem_clone MUST be wired as a pair — wiring drop without
+# clone turns the prior leak into a clone-path double-free (a shallow-
+# copied collection would drop the same element heap twice). When this
+# returns "", the caller wires NEITHER, leaving the element a leak (never
+# a crash) — e.g. Box/Ptr elements with no in-place clone fn.
+String lc_collection_clone_fn(String type_name, LirModule &m):
+    if type_name == "GorgetString" or type_name == "Str":
+        return "gorget_string_clone_inplace"
+    if type_name == "GorgetArray":
+        return "gorget_array_clone_inplace"
+    if type_name == "GorgetMap":
+        return "gorget_map_clone_inplace"
+    if type_name == "GorgetSet":
+        return "gorget_set_clone_inplace"
+    if type_name == "GorgetClosure":
+        return "gorget_closure_clone_inplace"
+    String runtime = ""
+    if m.type_runtime_map.contains(type_name):
+        runtime = m.type_runtime_map.get(type_name).unwrap_or("")
+    if runtime == "GorgetArray":
+        return "gorget_array_clone_inplace"
+    elif runtime == "GorgetMap":
+        return "gorget_map_clone_inplace"
+    elif runtime == "GorgetSet":
+        return "gorget_set_clone_inplace"
+    elif runtime == "GorgetString":
+        return "gorget_string_clone_inplace"
+    if m.recursive_drop_structs.contains(type_name) or m.recursive_drop_enums.contains(type_name):
+        return type_name + "__clone_inplace"
+    return ""
+
+bool is_runtime_array_ctor(String mapped_name):
+    if mapped_name == "gorget_array_new":
+        return true
+    if mapped_name == "gorget_array_with_capacity":
+        return true
+    return false
+
+# Emit per-call elem/val drop+clone fn-pointer wiring after a Vector /
+# Deque / Heap (array-backed) or Dict / HashMap constructor, so the
+# collection owns its resource-typed elements' drop + clone. Symmetric
+# with the key wiring in `emit_dict_ctor_wiring` (which handles Dict/Set
+# KEYS); this handles array ELEMENTS and dict VALUES. drop + clone are
+# wired as a pair or not at all (see lc_collection_clone_fn). Closes the
+# `elaborate_drops` leak: today the runtime's `if (arr->elem_drop)` guard
+# sees NULL and never frees overwritten/freed resource elements — the
+# ~13 GB driver.gg OOM on Vector[Vector[int]] / Vector[LirFunction]
+# loop-reassignment.
+String emit_collection_elem_wiring(int dst, String mapped_name, String original_name, LirModule &m):
+    if dst < 0 or original_name.len() == 0:
+        return ""
+    String dv = v(dst)
+    String w = ""
+    if is_runtime_array_ctor(mapped_name):
+        String elem_ty = lc_coll_elem_lookup(original_name, &m)
+        if elem_ty.len() > 0:
+            String df = lc_collection_drop_fn(elem_ty, &m)
+            String cf = lc_collection_clone_fn(elem_ty, &m)
+            if df.len() > 0 and cf.len() > 0:
+                w = w + " " + dv + ".elem_drop = (__gorget_drop_fn)" + df + ";"
+                w = w + " " + dv + ".elem_clone = (__gorget_drop_fn)" + cf + ";"
+    if mapped_name == "gorget_map_new" or mapped_name == "gorget_map_new_str" or mapped_name == "gorget_dict_new" or mapped_name == "gorget_dict_new_str":
+        String val_ty = lc_coll_val_lookup(original_name, &m)
+        if val_ty.len() > 0:
+            String vdf = lc_collection_drop_fn(val_ty, &m)
+            String vcf = lc_collection_clone_fn(val_ty, &m)
+            if vdf.len() > 0 and vcf.len() > 0:
+                w = w + " " + dv + ".val_drop = (__gorget_drop_fn)" + vdf + ";"
+                w = w + " " + dv + ".val_clone = (__gorget_drop_fn)" + vcf + ";"
+    return w
+
 String emit_func_forward_decls(LirModule &m, Vector[String] &sn):
     Vector[bool] reachable_fwd = compute_reachable_fns(&m)
     StrBuf buf = sb_new()
@@ -3019,7 +3138,10 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Vector[String] 
             # mapped `name` gates ctor-vs-method; `original_name` carries
             # the unmangled key type.
             String ce_wiring = emit_dict_ctor_wiring(dst, name, original_name, &m)
-            return ce_call + ce_wiring
+            # Vector/array element + Dict value drop+clone fn-ptr wiring
+            # (closes the elaborate_drops collection-element leak).
+            String ce_elem_wiring = emit_collection_elem_wiring(dst, name, original_name, &m)
+            return ce_call + ce_wiring + ce_elem_wiring
 
         case ICallPtr(dst, callee, args):
             String out = ""
