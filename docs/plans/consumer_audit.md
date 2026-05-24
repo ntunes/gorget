@@ -502,3 +502,74 @@ cluster (a)'s real work must solve. The `--emit-gir`/`--emit-lir` flags (being a
 background agent) are the right instrument: dump GIR/LIR for a SMALL input (parser.gg or a
 tiny fixture) with emission un-disabled and see whether the drop instruction count explodes
 or a specific pass stalls.
+
+---
+
+## Cluster (a) progress log (2026-05-24, continued — supersedes SNAG #1 framing above)
+
+### SNAG #1 RE-DIAGNOSED: perf, NOT a hang (it was a stdout-buffering artifact)
+
+The "stuck at 758 lines" was **block-buffered stdout** flushing 758 lines before the
+timeout kill — the process was progressing the whole time. With `stdbuf -oL`, `--emit-gir`
+on driver.gg **completes** (214,043 lines). Full `--emit-c` with drops completes in ~500-560s
+(slow — an O(n²) to chase, suspects: liveness / drop-type resolution at `lir_lower.gg:2490`
+/ block-instruction append — but it FINISHES, within the bootstrap's 600s build deadline).
+So snag #1 is a perf regression, not non-termination. Far more tractable.
+
+### Drop machinery WORKS — harness climbing off zero
+
+With `emit_scope_drops` + `emit_drops_for_early_exit` un-disabled (unconditional LIFO
+`GIDropIfAlive`, no maybe_moved gate):
+
+| pattern | Rust | self (no-drops → un-disabled) |
+|---|---|---|
+| `gorget_string_free(` | 5342 | 0 → **1420** |
+| `gorget_array_free(` | 544 | 0 → **454** |
+| `gorget_map_free(` | 102 | 0 → **76** |
+| `__drop(` (user types) | 2355 | 0 → 0 (gated by C.1, see below) |
+
+Tiny program (`main` with one String local) emits exactly-correct GIR: `drop_if_alive _2`
++ `move_zero _1`. The GIDropIfAlive → lir_lower → C path produces real drop calls.
+
+### Phase C.1 was WRONGLY CANCELLED — the __imported_type__ skip over-skips user types
+
+The audit (agent 1) judged the `__imported_type__` skip "correct, keep it." **Empirically
+false for whole-program compilation.** In the bootstrap, driver.gg imports every module, so
+`loader.gg:705,717` tags EVERY user enum/struct `__imported_type__`. `populate_drop_metadata`
+(`lir_lower.gg:3439,3475`) then skips all of them → `recursive_drop_structs` empty → **0
+`__drop` definitions** (Rust emits 212). The skip's rationale ("Rust preamble provides them
+via static inline") is true only for RUNTIME types (GorgetString → gorget_string_free); the
+bootstrap preamble is `rust_c[..first "typedef struct __gg_"]`, which contains NO user types,
+so user-type `<Type>__drop` is NOT preamble-provided and MUST be emitted. Both Rust gg and
+the self-host are whole-program — there is no separate-compilation linkage for the skip to
+defer to.
+
+**Fix (C.1 revived):** removed both skip sites in `populate_drop_metadata`. Result:
+`__drop` defs 0 → **267** (clone_inplace 0 → 89), **0 redefinition errors** (the `fn_exists()`
+guard in emit_struct_drops/emit_type_drop_fns handles genuine double-define — the proper
+mechanism, vs. a blanket skip). C.1 skip-removal is double-define-safe. ✅
+
+### C.1 removal UNMASKS the predicted C-01/C-02 cascade (as the audit foresaw)
+
+Once user enums are recognized as resource types (now in `recursive_drop_enums`),
+`op_consume` on a match scrutinee flips from borrow → clone. cc then fails with **2780×
+"cannot convert to a pointer type"**: e.g. `parser___token_tag` emits
+`__v1 = Token__clone(__v0); __v5 = ((__gg_Token *)(__v1))->tag;` — the clone returns a VALUE,
+and the tag-read casts it to a pointer. This is exactly audit rows **C-01** (slot-kind /
+tag-read assumes pointer base) + **C-02** (match scrutinee forced clone). Confirms the
+audit's core thesis: **C.1/c-2 (user types droppable) and a-7/a-2/a-3 (borrow scrutinee +
+slot-kind drop) are coupled — they must ship together.** This is why all 9 prior E.1 attempts
+failed: each shipped part of the cluster.
+
+### a-7 applied (validating)
+
+`match_scrutinee_ptr` (`lower.gg`): `CkAssign` → `CkMatchPtr` (borrow, not consume) — a match
+borrows its scrutinee; the tag/field reads take its address. Should eliminate the
+clone-then-tag-read cascade. Validation (rebuild + emit + cc, ~560s) in flight.
+
+### Current uncommitted WIP (atomic cluster — does NOT compile yet, do not commit until green)
+- `lower.gg`: emit_scope_drops + emit_drops_for_early_exit un-disabled; match_scrutinee_ptr a-7.
+- `lir_lower.gg`: `__imported_type__` skip removed (C.1).
+Remaining in the atomic cluster after a-7: a-1 (registration gate: don't register borrows),
+a-5 (typed borrow flag — root of a-1/B1), a-2/a-3 (slot-kind-aware GIDrop/GIDropIfAlive),
+a-6 (lower_return 7 concerns), then runtime-validate via the staged probe + the perf fix.
