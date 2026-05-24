@@ -573,3 +573,25 @@ clone-then-tag-read cascade. Validation (rebuild + emit + cc, ~560s) in flight.
 Remaining in the atomic cluster after a-7: a-1 (registration gate: don't register borrows),
 a-5 (typed borrow flag — root of a-1/B1), a-2/a-3 (slot-kind-aware GIDrop/GIDropIfAlive),
 a-6 (lower_return 7 concerns), then runtime-validate via the staged probe + the perf fix.
+
+### a-7 VALIDATED; a-1 null; a-6 keystone applied (2026-05-24, cont.)
+
+- **a-7 (match scrutinee CkAssign→CkMatchPtr): SUCCESS.** Pointer-cast cascade 2780 → 0,
+  cc exit 0. stage-1 C compiles. Drop CALLS now fire: `__drop` 0→338, `string_free` 0→1549,
+  `array_free` 0→632, `map_free` 0→116. **OOM is GONE: stage-1 peak RSS 1 MB (was 14.4 GB).**
+  But stage-1 RUN double-frees at startup (exit 134, "free(): double free in tcache 2").
+- **a-1 (skip LoBorrowed/LoView in register_local_for_drop): NULL RESULT.** Counts identical
+  (632/116/338) — the over-dropped locals are NOT tagged LoBorrowed/LoView (ownership tagging
+  is incomplete at registration), so the gate skipped nothing. a-1 is correct-in-principle
+  (kept) but not the active cause. Real over-drop root is deeper (untagged aliases) — revisit
+  with a-5 (typed borrow flag) if needed. Params already correctly gated (p.ownership==2 only).
+- **a-6 concern #5 (returned-local MoveZero): applied.** The startup double-free signature
+  (1 MB, 0 lines) = return-path corruption: `lower_return` moved the returned local into _0
+  but excluded only `Some(0)` (the return SLOT, never registered) — the returned LOCAL was
+  dropped at exit AND freed by the caller. Fix: capture the `OpMove(src)` from
+  `op_consume(val, CkReturn)`, emit `GIMoveZero(src)`, and exclude `src` (not 0) from
+  emit_drops_for_early_exit. Validating.
+
+**Cluster (a) status:** OOM closed (14.4 GB→1 MB). Cascade closed (a-7). User-type drops
+generate + fire (C.1 + 338 calls). Remaining: close the double-free (a-6 keystone in flight;
+possibly a-6 concerns #1-4/#6/#7 + the untagged-alias over-drop a-5), then perf (~560s emit).
