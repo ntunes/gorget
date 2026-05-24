@@ -438,7 +438,67 @@ memory until (a) emits the frees. **The OOM and the SIGSEGV are the SAME root ca
 drop emission (cluster a).** They are not separable the way the reorder assumed.
 
 **Revised path:** keep (b) as committed correctness groundwork (validated: emits, compiles,
-no stage-0 regression — pending lib + lowerer_comparison regression check). The OOM + SIGSEGV
-are closed together by cluster (a). The A.2 staged probe (parser→loader→driver) is still
-needed — driver.gg will OOM under stage-1 until (a) lands, so cheap cascades must be drained
-on smaller inputs first, exactly as the plan's staged design intended.
+lowerer_comparison 1/1, no stage-0 regression). The OOM + SIGSEGV are closed together by
+cluster (a). The A.2 staged probe (parser→loader→driver) is still needed — driver.gg will OOM
+under stage-1 until (a) lands, so cheap cascades must be drained on smaller inputs first.
+
+(b) committed: `d2efd716`. Docs/plan v3: `89f71963`.
+
+### Drop-emission gap, quantified — Rust driver.c vs self-host stage1.c (2026-05-24)
+
+Both are C for the SAME program (driver.gg): `driver.c` = Rust gg (reference, correct drops);
+`stage1.c` = stage-0 self-host emission. Diffing drop-call patterns gives the exact gap:
+
+| pattern | Rust driver.c | self stage1.c |
+|---|---|---|
+| `__drop(` (user-type drops) | 2339 | **0** |
+| `gorget_string_free(` | 5276 | **0** |
+| `gorget_array_free(` | 543 | **0** |
+| `gorget_map_free(` | 100 | **0** |
+| `gorget_set_free(` / `gorget_closure_free(` | 1 / 1 | **0** / **0** |
+| `.elem_drop =` (fn-ptr wiring) | 8* | 41 |
+| `.val_drop =` | 3* | 7 |
+
+\* Rust wires elem/val-drop via byte-offset stores (`*(...)((char*)&slot+40)=...`), not named
+fields — so the `.elem_drop =` text count understates Rust; both wire them. Style difference,
+not a gap.
+
+**Verdict:** the self-host emits **~8,260 → 0** drop/free calls. The ENTIRE 14 GB leak is the
+total absence of scope-exit drop emission. (b)'s 41 elem_drop fn-pointers are inert — there
+are 0 `gorget_array_free` calls to invoke them.
+
+**VALIDATION HARNESS for cluster (a):** re-emit stage1.c after each (a) sub-step and re-run
+this grep-diff; watch the self-host drop counts climb to Rust parity (2339 `__drop`, 5276
+string_free, 543 array_free, 100 map_free). Convergence = leak closed. This is the
+gradient "definition of done" — far stronger than RSS or the drop-blind lowerer_comparison.
+Reproduce:
+```bash
+RUST=tests/fixtures/self_host_lowerer/driver.c          # Rust gg compiling driver.gg
+SELF=/tmp/stage1.c                                       # stage-0 self-host emitting driver.gg
+for p in '__drop(' 'gorget_string_free(' 'gorget_array_free(' 'gorget_map_free('; do
+  printf '%-22s rust=%s self=%s\n' "$p" "$(grep -cF "$p" $RUST)" "$(grep -cF "$p" $SELF)"; done
+```
+
+### Cluster (a) SNAG #1 — un-disabling emit_scope_drops hangs stage-0 (2026-05-24)
+
+First cluster-(a) probe: changed `emit_scope_drops` + `emit_drops_for_early_exit`
+(`lower.gg`) from no-op to unconditional LIFO `GIDropIfAlive(entry.local_id)` emission (the
+Phase D edit). Result: **stage-0 (Rust-compiled self-host) emitting driver.gg TIMED OUT at
+300s, producing only 758 lines** (was 580K lines, ~1 GB, completing fast before the change).
+Drop counts still 0 (it hung in the GIR/LIR phase before emitting drop-bearing C).
+
+This is a pathological slowdown/hang, NOT a runtime double-free (we never ran the binary).
+Emitting `GIDropIfAlive` per scope-entry triggers it. Suspects (to investigate with the new
+`--emit-gir`/`--emit-lir` dump flags once they land):
+- Drop-type-name resolution at `lir_lower.gg:2490` (GIDropIfAlive → resolve type name) —
+  possibly O(n²) or recursive over the now-multiplied drop instruction count.
+- O(n²) instruction append into blocks (cf. the `sb_push` O(n²) lesson) once drop count
+  explodes the per-block instruction list.
+- A feedback loop where emitting into the current block during `lower_stmt` re-triggers
+  scope processing.
+
+Experiment reverted (`git checkout lower.gg`) — not shippable as-is. This is the first thing
+cluster (a)'s real work must solve. The `--emit-gir`/`--emit-lir` flags (being added by a
+background agent) are the right instrument: dump GIR/LIR for a SMALL input (parser.gg or a
+tiny fixture) with emission un-disabled and see whether the drop instruction count explodes
+or a specific pass stalls.
