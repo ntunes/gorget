@@ -1,9 +1,11 @@
 # Drop Emission — Next Session Execution Plan
 
-**Status:** Ready to execute. Written 2026-05-24 after a session that closed the OOM and
-opened the move-semantics core. Companion to `consumer_audit.md` (full empirical log) and
-`drop_emission_completion.md` (v3 strategic plan; note its Phase D/C.1 were corrected — see
-consumer_audit.md).
+**Status:** Ready to execute — **REVIEWED + REVISED 2026-05-24** (fresh-agent review, verdict:
+ship-with-changes; STEP 1 diagnosis was inverted and has been rewritten, STEP 3/a-5 found to be
+unwired dead code, push pitfall corrected — all folded in). Written after a session that closed
+the OOM and opened the move-semantics core. Companion to `consumer_audit.md` (full empirical
+log) and `drop_emission_completion.md` (v3.1 strategic plan; its Phase D/C.1/reorder were
+empirically corrected — see its v3.1 banner).
 
 **Guiding principle (from the user):** *Only owners free their resources. Zero EVERY move for
 now — do NOT port Rust's selective-zeroing optimization yet. Make it correct first, optimize
@@ -73,79 +75,99 @@ awk '/fn @<MangledFnName>\(/{f=1} f{print} f&&/^}/{exit}' /tmp/gir.txt    # look
 
 ---
 
-## 2. STEP 1 (immediate blocker): set/push value consume-via-pointer ABI
+## 2. STEP 1 (immediate blocker): collection-mutator value arg is OpBorrow (operand-kind, NOT ABI)
+
+> **REWRITTEN per fresh-agent review (2026-05-24) — the original STEP 1 diagnosis was INVERTED.**
+> It claimed the pointer-ABI was wrong (value not address-taken because lir_lower maps the name
+> too late). FALSE: lir_lower computes `effective_name = map_runtime_name(func_name)`
+> (`lir_lower.gg:~2962`) BEFORE `needs_ptr_arg(effective_name, ai)` (~2964), and EVERY mutator
+> value arg is already in `needs_ptr_arg` on the runtime name (`gorget_array_set`@2,
+> `gorget_array_push`@1, `gorget_array_insert`@2, `gorget_map_put`@1&2, `gorget_set_add`@1,
+> `gorget_channel_send`@1 — verified ~1893-1925). The method path ALREADY address-takes the
+> value. **The bug is purely the OPERAND KIND in `lower.gg`, and the old Options (A)/(B) were
+> a no-op / over-invasive respectively.**
 
 **Symptom:** stage-1 double-frees in `meta_expand_for_match` → `gorget_array_set` → `Item__drop`.
-**Root (confirmed via `--emit-gir`):** the `items.set(i, new)` VALUE arg is passed as `borrow`
-(GIR: `call_extern @Vector__Item__set(borrow _29, borrow _3, borrow _30)`). The runtime
-`gorget_array_set` memcpy's the value into storage (ownership transfer) AND drops the old
-element; the source local `_30` is a borrow alias → both `_30` (scope-exit) and `items[i]`
-own the same heap → double-free.
+**Root (confirmed via `--emit-gir` + the review):** `items.set(i, new)` lowers the VALUE arg as
+`borrow` (GIR: `call_extern @Vector__Item__set(borrow _29, borrow _3, borrow _30)`) because
+`classify_call_arg("Vector__Item__set", val_idx)` returns `CkCallArgBorrow` — the mutator method
+isn't in `fn_move_params` (only user struct/enum ctors are registered). So `op_consume` yields
+`OpBorrow`: (a) no `GIMoveZero` is paired with it, and (b) it never clones a borrowed source.
+The runtime memcpy's the (pointer to the) value into storage AND drops the old element; the
+source local is still live → both it (scope-exit) and `items[i]` own the same heap → double-free.
 
-**Why the naive fix failed (already tried + reverted):** forcing `CkCallArgOwning` on the
-mutator value arg in the method-call loop (`lower.gg` ~4438) makes `op_consume` return
-`OpMove`, which passes the struct **by value** — but `gorget_array_set`/`push` take the value
-**by pointer** → 146× "incompatible type for argument N of gorget_array_set/push".
+**Fix (Option C — the only correct one; `lower.gg` ~4438, currently a TODO):** classify the
+value arg (and the key arg, for map/set) of a collection mutator as `CkCallArgOwning` instead of
+letting `classify_call_arg` default it to borrow. `op_consume` then returns `OpMove` for an
+owned/last-use source, and `wire_liveness_into_modes` (verified: rewrites `GICallExtern` args at
+~2330, emits the paired `GIMoveZero`) handles the zero automatically. **NO `lir_lower` change** —
+the pointer-ABI/address-taking is already wired. ~5 lines at one site.
 
-**The correct fix — consume-via-pointer.** The value must be passed **by pointer** (runtime
-memcpy's it) AND the source **move-zeroed post-call** (owned) / **cloned pre-call** (borrowed).
-`lower_index_assign` (`lower.gg:5705`) already does this for `v[i]=x`:
-```gorget
-Vector[Operand] set_args = [base_op, op_consume(..., idx, CkCallArgBorrow()),
-                            op_consume(..., val, CkCallArgOwning())]
-emit(&ctx, GICallExtern(-1, setter, set_args))     # setter = "gorget_array_set" (RUNTIME name)
-```
-It works because it emits the **runtime name directly** (`GICallExtern("gorget_array_set",…)`),
-so lir_lower's `needs_ptr_arg`/`takes_array_ptr_args` recognizes the value as pointer-ABI and
-emits `SlotAddr`. The METHOD path emits the **mangled** name (`Vector__Item__set`), which
-lir_lower maps to the runtime fn AFTER the ptr-arg decision → the value is never address-taken.
+**BUT — this is exactly what threw 146× "incompatible type" before, and WHY is the spike.** The
+review's hypothesis (verify first): those errors are value args whose SOURCE SLOT is already a
+pointer (`LT_PTR`, e.g. a `.get()`-derived element). `op_consume`→`OpMove` on an `LT_PTR` slot
+hits lir_lower's `if slot_ty == LT_PTR: lower_operand` sub-branch, which passes the LOADED
+pointer by value → mismatches the `void*`-element C sig. Those sources are BORROWS and must be
+**cloned**, not moved — which couples STEP 1 to STEP 3 (a-5), because the clone-on-borrow path
+is currently DEAD CODE (see §4). **Mandatory spike (this is the real 30-min task, NOT reading
+lir_lower's ABI which is already correct):** re-apply the `CkCallArgOwning` value-arg change,
+reproduce the 146×, and bucket the failing sites by value-slot kind — owned-struct-value
+(OpMove is fine) vs `LT_PTR`/borrowed (needs clone via a-5). Fix owned-value first; the
+borrowed-value bucket lands with a-5.
 
-**Two fix options (pick after a 30-min spike reading lir_lower's call-ABI path):**
-- **(A) Fix lir_lower (preferred — narrower, no lowering-shape change):** make `needs_ptr_arg`
-  (and `takes_array_ptr_args`) consult the **mapped runtime name** for the value arg of
-  collection mutators, so a method-call `Vector__T__set/push/put/insert` value arg is
-  address-taken just like the direct `gorget_array_set` call. Locate `needs_ptr_arg`
-  (`lir_lower.gg` ~1810-1839) + `map_monomorphized_to_runtime`; ensure the mapping is applied
-  before the ptr-arg classification, OR add the mangled mutator names to the ptr-arg set.
-  Then re-apply the `CkCallArgOwning` value-arg change in `lower.gg` (~4438, currently a TODO).
-- **(B) Route method mutators through `lower_index_assign`'s mechanism:** in the method-call
-  path, for `push/put/set/insert/add/send`, emit `GICallExtern(-1, "<runtime setter>", …)`
-  with `CkCallArgOwning` value, instead of the generic mangled `GICall`. More invasive; risks
-  diverging from the existing method-call return-type/writeback logic.
+**Fold in (same one-line fix, same already-wired ptr-ABI):** Dict/Set `put`/`insert`/`add`
+value+key args (`gorget_map_put`@1&2, `gorget_set_add`@1) route through the SAME ~4438 path with
+the SAME OpBorrow defect. Do them in STEP 1, not as separate STEP 2 backtraces.
 
-**Validate:** cc clean (no "incompatible type"), then gdb — the meta_expand double-free should
-be gone. drop-count harness: array_free should move toward 544.
+**Validate:** cc clean (no "incompatible type"), then gdb — the meta_expand double-free gone.
+Harness: array_free toward 544.
 
-**Pitfall:** `push` has a separate dedicated path (`lower.gg` ~4687, `[OpMove(adst),OpMove(el)]`)
-— check whether it's already correct (it cc'd fine before) and don't double-handle it. The
-generic method path is the one that mishandles `.set()`.
+**Pitfall (CORRECTED):** the METHOD `.push(resource)` is NOT separately handled — it flows
+through the SAME generic ~4438 path as `.set()`, so STEP 1 must fix push/put/set/insert/add
+together. The `lower.gg` ~4687 path is the `EArrayLiteral` element-push (`[a,b,c]` construction,
+owned last-use temps → OpMove already safe) — genuinely separate, leave it untouched.
 
 ---
 
 ## 3. STEP 2: re-gdb loop until stage-1 runs to completion
 
-After STEP 1, re-run the gdb backtrace. Each remaining double-free is another unclean move at a
-specific site; the pattern is always **a resource moved to a new owner without zeroing the
-source, or consumed from a borrow without cloning.** Likely remaining sites (hypotheses):
-- Other collection mutators on resource values not covered by STEP 1's method set.
-- `Dict`/`Set` put/insert value+key (gorget_map_put) — same consume-via-pointer shape.
+After STEP 1 (+ a-5, which is coupled — see §4), re-run the gdb backtrace. Each remaining
+double-free is another unclean move: **a resource moved to a new owner without zeroing the
+source, or consumed from a borrow without cloning.** Remaining-site hypotheses (NOT
+Dict/Set put/insert — those are folded into STEP 1):
 - Struct field-assign (`self.field = x`) of a resource (CkFieldWrite) — verify it move-zeros.
-- Closure captures of resources.
+- Closure captures of resources (the genuinely-unknown remainder).
+- Any other consume site whose callee isn't in `fn_move_params`.
 Fix each with the same invariant; re-validate. Stop when stage-1 emits a full stage-2 body
 (≥ ~half of stage-0's ~580K lines) with exit 0.
 
 ---
 
-## 4. STEP 3: a-5 — verify LoBorrowed propagation (why a-1 was inert)
+## 4. STEP 3: a-5 — clone-on-borrow is DEAD CODE; wire it (COUPLED to STEP 1)
 
-a-1 (`register_local_for_drop` skips `LoBorrowed`/`LoView`) changed **nothing** — the
-over-dropped locals aren't tagged `LoBorrowed`. The GIR for `meta_expand_for_match` showed
-field clones DO fire there (so the chain works at that site), but the inert a-1 means SOME
-aliased locals are mis-tagged `LoOwned`. After STEP 1-2, re-check: if over-drops remain
-(array_free/map_free self > Rust), trace which locals are dropped that shouldn't be, dump their
-GIR ownership, and fix the propagation through `collection.get(i) → .unwrap() →
-match-payload-binding → field-access` (`inherit_borrow_from`/`add_local_inheriting`, `lower.gg`
-~435/~499). Keep a-1 (it's correct); it just needs correct upstream tagging to bite.
+**Review correction — this is bigger than "verify propagation":** the plan assumed "consume
+from a borrow → clone" is available machinery. **It is NOT wired.** `op_consume`'s `LoBorrowed`
+arm returns `OpBorrow`, NOT `OpClone` (`lower.gg` ~1244-1250). The OpClone-on-borrow decision
+lives only in `decide_operand_at_consuming_arg`, which `wire_one_operand` only reaches when
+handed an `OpMove`/`OpClone` to *refine* — it never *promotes* an `OpBorrow`. So a value/field
+source correctly tagged `LoBorrowed` still becomes `OpBorrow` → no clone → double-free.
+
+**Why this couples to STEP 1:** the 146× "incompatible type" bucket (LT_PTR / `.get()`-derived
+value sources) are borrows that must clone, not move. STEP 1's owned-value fix alone leaves them
+broken; closing them needs the clone path wired HERE. Do a-5 alongside STEP 1's borrowed-value
+bucket.
+
+**a-5 work:** wire clone-on-LoBorrowed into the consume path — either add the OpClone-on-
+LoBorrowed arm directly to `op_consume` (for consume kinds: CkAssign/CkReturn/CkFieldWrite/
+CkCallArgOwning), or route consume positions through `decide_operand_at_consuming_arg` so its
+LoBorrowed→OpClone verdict actually fires. THEN the upstream tagging matters: verify `LoBorrowed`
+propagates through `collection.get(i) → .unwrap() → match-payload-binding → field-access`
+(`inherit_borrow_from`/`add_local_inheriting`, `lower.gg` ~435/~499) so the clone fires at the
+right sources. (The `meta_expand` case happened to work only because its FIELDS clone into the
+new node, making it owned — not because clone-on-borrow is wired.)
+
+**a-1 stays** (`register_local_for_drop` skips LoBorrowed/LoView) — correct, but inert until the
+tagging above makes aliased locals actually carry `LoBorrowed`.
 
 ---
 
@@ -183,9 +205,11 @@ stopgap and file the perf fix.
 2. **Zero every move (for now).** Do NOT port Rust's selective-zeroing optimization
    (`drops.rs` skips some MoveZeros). Emit `GIMoveZero` for every `OpMove`. `drop_elab` elides
    the redundant runtime check. Optimize later, only after correctness.
-3. **Runtime ABI:** collection mutators (`gorget_array_set/push`, `gorget_map_put`) take the
-   value BY POINTER. Consume = pointer-ABI for the call + zero/clone the source — NOT pass-by-
-   value `OpMove`.
+3. **Runtime ABI is ALREADY pointer-correct** for mutator value args via the method path
+   (`needs_ptr_arg` keyed on the mapped runtime name address-takes them). An `OpMove` operand on
+   a struct-value slot IS address-taken cleanly. The ONLY ABI trap is a value source whose slot
+   is already `LT_PTR` (`.get()`-derived) — that needs CLONE (a-5), not OpMove. Do NOT "fix"
+   lir_lower's ABI; it's correct.
 4. **Drop emission is unconditional** (PF-01): `GIDropIfAlive` for every droppable owned local
    at scope exit, never gated on `maybe_moved`. `drop_elab` (driver.gg:79) handles elision.
 5. **No name-matching for routing** beyond the defined contract (the `push/put/set/insert/send`
@@ -194,13 +218,33 @@ stopgap and file the perf fix.
 
 ---
 
-## Open questions for the reviewer
+## Reviewer's answers (RESOLVED — fresh-agent review 2026-05-24, verdict: ship-with-changes)
 
-- STEP 1: is option (A) lir_lower-`needs_ptr_arg`-on-mapped-name actually narrower/safer than
-  (B) routing through `lower_index_assign`? Which has fewer side effects on existing
-  method-call return-type/writeback logic?
-- Is there a risk that STEP 1's owning value arg, once address-taken, interacts badly with the
-  existing `need_chain_writeback` / `need_writeback` logic (the `coll.get(i).unwrap().push(x)`
-  writeback path)?
-- Should the cluster be shipped atomically (squashed) or as a reviewed sequence of commits with
-  the bootstrap gated off until the final one?
+The review ground-truthed every code claim against WIP `1614ac2a` and rewrote STEP 1 (above).
+Resolutions:
+
+1. **Option A vs B → NEITHER. Use Option C** (operand-kind fix in `lower.gg`, §2). A is a no-op
+   (the ABI is already correct) and would re-add mangled-name routing (a "No name matching"
+   smell); B (route through `lower_index_assign`) is over-invasive (bypasses the method path's
+   return-type + `need_writeback`/`need_chain_writeback` logic). C is ~5 lines at one site.
+2. **`need_chain_writeback` interaction → contained.** That logic forces `OpBorrow` on the
+   RECEIVER (to keep it alive for a subsequent `coll.set(idx,!recv)`); it's orthogonal to the
+   VALUE arg. Confirm in the GIR dump that when the value arg IS the chain target, the explicit
+   move + wire's GIMoveZero don't conflict (idempotent → benign, but check — cf. #4 below).
+3. **Ship ATOMICALLY (squash).** consumer_audit.md proves it: all 9 prior E.1 attempts failed
+   because each shipped PART of the coupled cluster. C.1 + a-7 + the move-zero/clone fixes are
+   interdependent — any partial state double-frees or won't compile. One commit; bootstrap flips
+   green only at the end. Do NOT land intermediate commits with the bootstrap gated off (a
+   half-cluster on a shared branch is a landmine).
+
+## Known smells / cleanups (from the review — low priority)
+
+- **a-6 #5 redundant GIMoveZero:** `SReturn` explicitly emits `GIMoveZero(src)` AND
+  `wire_liveness_into_modes` (2199) also emits one for the `GIAssign(0, ret_op)` OpMove operand
+  → two zeros for one move. Idempotent/harmless, but consider dropping the explicit one once
+  the wire-pass coverage is confirmed (keep the `exclude` arg either way).
+- **Line refs drift:** several refs in earlier drafts were off (`lower_index_assign` GICallExtern
+  is ~5706 not 5705; the method value-arg loop body is ~4437-4470; `takes_array_ptr_args` /
+  `map_monomorphized_to_runtime` do NOT exist — the real fns are `needs_ptr_arg` @1810,
+  `map_runtime_name` @1111, `map_array_method`/`map_dict_method`/`map_set_method`). Re-grep on
+  entry; treat line numbers as approximate.
