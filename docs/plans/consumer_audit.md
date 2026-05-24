@@ -633,3 +633,55 @@ move-semantics work — the remainder of cluster (a) after the OOM was closed.
 WINS LOCKED: OOM 14.4 GB → 1 MB; cascade 2780 → 0 (cc clean); user-type drops 0 → 267 defs /
 338 calls. REMAINING: move-zero-at-construction (above) to clear the double-free, then perf
 (~510s emit), then runtime-validate (bootstrap), then the rest of a-6's 7 concerns.
+
+### Double-free #2 + #3 (2026-05-24) — move-out-of-borrow needs CLONE (the a-5 core)
+
+After a-6 #5, two more fixes + diagnoses:
+
+**Fix: enum-variant ctor consume (Fix D extension).** Backtrace #1 was
+`parse_if_stmt → gorget_array_free → Stmt__drop` — a `Vector[Stmt]` moved into an `SIf` node.
+Fix D registered only `IStruct` ctors in fn_move_params; extended it to `IEnum` variants
+(register both bare `SIf` and mangled `Stmt__SIf` keys, per-variant-field resource flags) so
+classify_call_arg returns CkCallArgOwning → OpMove → wire emits GIMoveZero. **Effect:**
+array_free 632→474. But a DIFFERENT double-free remained.
+
+**Backtrace #2 (the deep root):**
+```
+gorget_array_set ← meta___expand_meta_for_match   (overwrites m.items[i])
+  → Item__drop (OLD elem) → FunctionDef__drop → gorget_array_free → Stmt__drop
+  → MatchArm__drop → ... → Expr__drop → free  [DOUBLE]
+```
+Source (meta.gg:331-336):
+```
+Item item = m.items.get(i).unwrap()          # item = BORROW into items[i]
+match item: case IFunction(fdef):            # fdef = borrowed payload
+    FunctionDef new_fn = FunctionDef(fdef.name, fdef.params, ...)  # REUSES fdef's fields
+    m.items.set(i, IFunction(new_fn))         # set drops OLD items[i]
+```
+`new_fn` reuses `fdef.params/.name/...` — fields of a BORROWED element. `set` drops the old
+`items[i]`, whose fields `new_fn` aliases → double-free (and `item`'s own scope path). cluster
+(b)'s `elem_drop` is what makes `set` drop the old element (correct behavior; the mutation
+pattern is the unclean side).
+
+**ROOT (a-5, the hard core):** consuming a field of a BORROWED aggregate must **CLONE**, not
+move/alias — you cannot move out of a borrow (can't write the zero back through it). The CoW
+decision tree says LoBorrowed source → OpClone. The self-host MIS-tags these as owned because
+`LoBorrowed` does NOT propagate through the chain `collection.get(i) → .unwrap() →
+match-payload-binding (fdef) → field-access (fdef.params)`. This is exactly why a-1 (skip
+LoBorrowed at registration) was a NULL result — the aliased locals aren't tagged LoBorrowed in
+the first place. The `add_local_inheriting`/`inherit_borrow_from` plumbing (audit F1-F3) was
+meant to carry the tag but doesn't cover this full chain.
+
+**Precise next step (a-5):** propagate `LoBorrowed` through:
+1. `.unwrap()` on a borrowed Option/Result → result stays LoBorrowed (inherit_borrow_from).
+2. match-payload binding (`case IFunction(fdef)`) when the scrutinee is borrowed → fdef LoBorrowed.
+3. field-access (`fdef.params`) of a borrowed struct → LoBorrowed.
+Then `op_consume(fdef.params, CkCallArgOwning)` sees LoBorrowed → OpClone, new_fn owns
+independent copies, `set` drops old correctly, no double-free. This is the move-semantics
+correctness core — multi-site, deserves focused work (not a one-liner).
+
+**Session WIP (uncommitted — compiles, runs-then-double-frees at this site):** lower.gg
+(Phase D un-disable, a-7, a-1, a-6 #5, enum-variant Fix-D extension) + lir_lower.gg (C.1).
+Recoverable via `git diff`; all edits enumerated above. Wins still locked: OOM 14.4GB→1MB;
+cascade closed; user-type drops 0→267 defs/338 calls; 2 of N double-free classes closed
+(return-path, enum-ctor). Remaining: a-5 borrow propagation (above), then perf, then bootstrap.
