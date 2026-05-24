@@ -595,3 +595,41 @@ a-6 (lower_return 7 concerns), then runtime-validate via the staged probe + the 
 **Cluster (a) status:** OOM closed (14.4 GB→1 MB). Cascade closed (a-7). User-type drops
 generate + fire (C.1 + 338 calls). Remaining: close the double-free (a-6 keystone in flight;
 possibly a-6 concerns #1-4/#6/#7 + the untagged-alias over-drop a-5), then perf (~560s emit).
+
+### DOUBLE-FREE PINPOINTED via gdb backtrace (2026-05-24) — move-into-construction
+
+a-6 #5 did NOT clear the double-free (counts unchanged). gdb backtrace of the SIGABRT:
+```
+free → __gorget_global_dealloc_fn → gorget_string_free → Expr__drop
+     → SpannedExpr__drop → Stmt__drop → gorget_array_free → Parser__parse_if_stmt
+     → parse_statement → parse_block → parse_function_def → ... → main
+```
+**Diagnosis:** in `parse_if_stmt`, a `Vector[Stmt]` (the if-body) is moved INTO an `SIf` AST
+node (enum construction) which the caller owns — but the local `Vector` is ALSO dropped at
+scope exit (gorget_array_free → Stmt__drop → … → gorget_string_free on an already-freed
+String). The move-into-construction does NOT move-zero the source local. a-6 #5 only covers a
+*bare returned local* (`OpMove(src)` at SReturn); an enum/struct CONSTRUCTION that consumes a
+resource arg (`SIf(cond, body, …)`) is a different consume site.
+
+**Next step (precise):** ensure construction/field-init consume sites move-zero their moved
+resource args. Two hypotheses to check:
+1. The construction arg is lowered `OpBorrow` (field aliases `body`) instead of `OpMove` —
+   then `body` and the node both free → fix is classify the ctor arg as owning
+   (CkCallArgOwning/CkFieldWrite → OpMove), cf. audit F6 (`fn_move_params` ctor registration).
+2. The arg IS `OpMove` but no paired `GIMoveZero` is emitted — `wire_liveness_into_modes`
+   (2199/2216) emits GIMoveZero for OpMove operands; check whether it covers construction
+   args (GIEnumInit/GIStructInit operands) or only call/assign operands.
+
+The general invariant: EVERY `OpMove` of a resource local (return, construction, field-init,
+collection-put, call-arg-owning) must pair with `GIMoveZero(src)` so the scope-exit
+`drop_if_alive` is elided (drop_elab marks the slot UNINITIALIZED). This is the core of the
+move-semantics work — the remainder of cluster (a) after the OOM was closed.
+
+### Session end-state (uncommitted WIP — compiles, runs-then-double-frees, NOT shippable)
+- `lower.gg`: emit_scope_drops + emit_drops_for_early_exit un-disabled (Phase D); a-7
+  (match_scrutinee CkAssign→CkMatchPtr); a-1 (register_local_for_drop LoBorrowed/LoView gate —
+  inert but correct); a-6 #5 (SReturn OpMove move-zero + exclude).
+- `lir_lower.gg`: C.1 (__imported_type__ skip removed in populate_drop_metadata).
+WINS LOCKED: OOM 14.4 GB → 1 MB; cascade 2780 → 0 (cc clean); user-type drops 0 → 267 defs /
+338 calls. REMAINING: move-zero-at-construction (above) to clear the double-free, then perf
+(~510s emit), then runtime-validate (bootstrap), then the rest of a-6's 7 concerns.
