@@ -685,3 +685,53 @@ correctness core — multi-site, deserves focused work (not a one-liner).
 Recoverable via `git diff`; all edits enumerated above. Wins still locked: OOM 14.4GB→1MB;
 cascade closed; user-type drops 0→267 defs/338 calls; 2 of N double-free classes closed
 (return-path, enum-ctor). Remaining: a-5 borrow propagation (above), then perf, then bootstrap.
+
+### Double-free #2 ROOT confirmed via GIR dump: set/push value is shallow-aliased (2026-05-24)
+
+`--emit-gir` on `meta___expand_meta_for_match` showed the field clones ALREADY work:
+`_27 = call @FunctionDef(clone _21, clone _22, clone _23, clone _24, move _20, ...)` — fdef's
+resource fields ARE cloned into new_fn. The real bug is the very next line:
+`call_extern @Vector__Item__set(borrow _29, borrow _3, borrow _30)` — the VALUE arg `_30`
+(the new Item) is passed as **borrow**. The runtime `gorget_array_set` memcpy's it into the
+array's storage (transfer of ownership) AND drops the old element; but the source local `_30`
+is a borrow alias → both `_30` (scope-exit) and `items[i]` own the same heap → double-free.
+
+**Fix attempt + ABI complication:** forced the mutator value arg (push/put/set/insert/add/send,
+last arg) to `CkCallArgOwning` in the method-call loop. Correct semantics, WRONG ABI: it makes
+op_consume return `OpMove`, which passes the struct BY VALUE — but `gorget_array_set`/`push`
+take the value BY POINTER → 146× "incompatible type for argument N of gorget_array_set/push".
+Reverted (WIP compiles again; left a TODO at the site).
+
+**The correct fix (consume-via-pointer):** the value must be passed BY POINTER (the runtime
+memcpy's it) AND the source move-zeroed post-call (owned) / cloned pre-call (borrowed). The
+`v[i] = x` path (`lower_index_assign`, lower.gg:5705) ALREADY does this correctly — it uses
+`op_consume(val, CkCallArgOwning())` but emits `GICallExtern(-1, "gorget_array_set", ...)` with
+the RUNTIME name directly, so lir_lower's `needs_ptr_arg`/`takes_array_ptr_args` recognizes the
+value as pointer-ABI and emits SlotAddr. The METHOD path emits the MANGLED name
+(`Vector__Item__set`), which lir_lower maps to the runtime fn AFTER the ptr-arg decision → the
+OpMove value isn't address-taken. **Fix options:** (a) make lir_lower's needs_ptr_arg consult
+the mapped runtime name for mutator value args, or (b) route method-call mutators
+(set/push/put/insert) through `lower_index_assign`'s GICallExtern(runtime-name) mechanism.
+This is lir_lower ABI work — the next concrete step.
+
+### SESSION CHECKPOINT (2026-05-24) — cluster (a) substantial progress, not yet running
+
+**WINS LOCKED (uncommitted WIP — compiles, double-frees at set/push):**
+- OOM **14.4 GB → 1 MB** (the headline; bootstrap fragility root).
+- Pointer-cast cascade **2780 → 0** (a-7 match-scrutinee borrow).
+- User-type drops **0 → 267 defs / 338 calls** (C.1 revived).
+- Double-free classes closed: return-path (a-6 #5), enum-variant-ctor (Fix-D extension).
+
+**WIP edits (all uncommitted, recoverable via `git diff`, enumerated for re-apply):**
+- `lower.gg`: Phase D (emit_scope_drops/emit_drops_for_early_exit un-disabled); a-7
+  (match_scrutinee_ptr CkAssign→CkMatchPtr); a-1 (register_local_for_drop LoBorrowed/LoView
+  gate — inert); a-6 #5 (SReturn OpMove move-zero + exclude); enum-variant ctor registration
+  in fn_move_params (Fix-D extension); TODO comment at the method-mutator value-arg site.
+- `lir_lower.gg`: C.1 (__imported_type__ skip removed in populate_drop_metadata).
+
+**REMAINING (precise):**
+1. set/push value consume-via-pointer (above) — lir_lower ABI. Closes double-free #2.
+2. a-5 broad: confirm LoBorrowed propagation get→unwrap→match-payload→field so consume-from-
+   borrow clones (the GIR showed field clones DO work here, but verify other sites).
+3. Re-run gdb after each: harvest next backtrace, fix, repeat until stage-1 runs to completion.
+4. Then perf (~510s emit — the O(n²) suspect), then bootstrap + fixed_point validation.
