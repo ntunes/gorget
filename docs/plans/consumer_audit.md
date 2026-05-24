@@ -266,7 +266,7 @@ a cascade source. The plan's headline seed was misdiagnosed.
   `returns_view`/`is_borrow` typed flag, so downstream drop-registration can't tell the
   `dst` is a borrow alias vs an owner. **Layering rule-2 hole = the root of L2.**
 
-**The leak bugs (cluster b — independent, kills the OOM):**
+**The leak bugs (cluster b — ⚠️ CORRECTED: does NOT kill the OOM on its own; cluster (a)'s scope-exit emission does. (b) makes (a)'s frees deep):**
 - **D1** (`lir_lower.gg:2839-2844`, Vector/Deque/Channel/Shared ctor): emits bare
   `gorget_array_new(elem_size)`, no elem_drop. `Vector[T]` of user resources never drops
   elements on overwrite/free → the ~13 GB `elaborate_drops` OOM on driver.gg.
@@ -356,27 +356,37 @@ field in-place. Confirms the `match_scrutinee_ptr` fix direction.
 | **b-1 (D1)** | lir_lower.gg:2839 Vector ctor | bare `gorget_array_new` | one allocator + post-ctor elem_drop store @off40 | generalize D4 pattern to Vector, drive from drop_strategy metadata | b (leak/OOM) | ✓ |
 | **b-2 (D2)** | lir_lower.gg:2800 Dict ctor | bare `gorget_map_new` | + val_drop store @off104 | symmetric to D4 key_drop | b | ✓ |
 | **b-3 (D3)** | lir_lower.gg:2825 Set ctor | bare `gorget_set_new` | + elem coverage | extend key_drop path | b | ✓ |
-| **c-1** | lir_lower.gg:3439 `__imported_type__` skip | correct | correct | **NO CHANGE** (plan C.1 misframed); keep skip | — | ✓ |
+| **c-1** | lir_lower.gg:3439 `__imported_type__` skip | ⚠️ **CORRECTED**: NOT correct for whole-program | REMOVE the skip | **REMOVE both skip sites** (was wrongly "keep" — the skip zeroed all 267 user-type drops; `fn_exists` guards double-define). Done in WIP `1614ac2a`. = revived Phase C.1 | a | ✓ |
 | **c-2** | lower.gg is_droppable_type user types | excludes user types | include once drops fire & don't double-free | flip to include user resource types — **couples with cluster a** (needs a-1..a-5 first) | a-dependent | ✓ |
 | **min-1 (F1)** | lir_codegen.gg:4517/4609 | struct `cname*` vs enum `void*` | unify | unify on `void*`+cast | minor | ✓ |
 | **min-2 (F2)** | lir_codegen.gg:4609 enum Box payload | `free(access)` no recurse | recursive box-drop | box_inner_type typed field (Snag #13 shape) | b (leak) | ✓ |
 
 **Static-found = ✓ for ALL rows.** The static audit + Rust cross-ref was conclusive (see A.6).
 
-## A.5 dependency DAG + batches
+## A.5 dependency DAG + batches  (⚠️ CORRECTED post-implementation — see note)
+
+> **CORRECTION (2026-05-24):** the original DAG below claimed cluster (b) is independent and
+> "kills the OOM". DISPROVEN: cluster (a)'s scope-exit drop emission (Phase D) is what closes
+> the OOM (14.4 GB → 1 MB); (b) is inert until (a) emits the frees that invoke `elem_drop`.
+> The clusters are COUPLED, and the actual ship order this session was: cluster (b) committed
+> first as groundwork (`d2efd716`), then cluster (a) un-disabled emission + C.1 + a-7 +
+> enum-ctor fix (WIP `1614ac2a`). a-4 (IMoveSlot memset) turned out to be likely DEAD WORK
+> (drop_elab consumes the annotation). The live remaining order is in
+> `drop_emission_next_session.md`.
 
 ```
-Cluster b (LEAK/OOM) — INDEPENDENT, ship FIRST:
+Cluster b (groundwork — committed d2efd716; correct but does NOT reduce OOM alone):
   b-1, b-2, b-3, min-2  ── (generalize D4 fn-ptr-store pattern; drive from drop_strategy)
-       │  kills the 13 GB driver.gg OOM; resolves R-04 + the A.2 probe-stall fear
        ▼
-Cluster a (DOUBLE-FREE) — must ship ATOMICALLY (this is why E.1 failed 9×):
-  a-5 (typed borrow flag) ──┐
-  a-1 (registration gate) ──┼──► a-2,a-3 (slot-kind drop) ──┐
-  a-4 (IMoveSlot memset) ───┘                                ├──► c-2 (include user types)
-  a-7 (match scrutinee borrow) ──────────────────────────────┤
-  a-6 (lower_return 7 concerns = Phase E) ───────────────────┘
-       │  closes the return-corruption SIGSEGV
+Cluster a (closes BOTH the OOM and the double-free — must ship ATOMICALLY):
+  C.1 (remove __imported_type__ skip) ─┐  ← was wrongly "c-1 keep skip"
+  Phase D (un-disable scope drops) ────┼──► [drops fire: OOM 14.4GB→1MB]
+  a-7 (match scrutinee borrow) ────────┤        cascade 2780→0
+  enum-ctor fn_move_params (Fix-D ext) ┤        user drops 0→267
+  a-6 #5 (return move-zero) ───────────┘
+       │  remaining double-frees (gdb loop): set/push consume-via-pointer ABI (next),
+       │  then a-5 borrow propagation where over-drops remain.  a-1 kept (inert until a-5).
+       │  a-4 (IMoveSlot memset) = likely dead work (drop_elab handles it).
        ▼
   Validate: self_host_bootstrap + fixed_point
 Minor (independent): min-1 (ABI cleanup)
@@ -479,7 +489,11 @@ for p in '__drop(' 'gorget_string_free(' 'gorget_array_free(' 'gorget_map_free('
   printf '%-22s rust=%s self=%s\n' "$p" "$(grep -cF "$p" $RUST)" "$(grep -cF "$p" $SELF)"; done
 ```
 
-### Cluster (a) SNAG #1 — un-disabling emit_scope_drops hangs stage-0 (2026-05-24)
+### Cluster (a) SNAG #1 — un-disabling emit_scope_drops "hangs" stage-0 (2026-05-24) — ⚠️ SUPERSEDED
+
+> **SUPERSEDED by "SNAG #1 RE-DIAGNOSED" below:** the "hang" was a stdout **block-buffering
+> artifact** — with `stdbuf -oL`, emission COMPLETES (~510-560s). It is a perf regression, NOT
+> a hang/non-termination. Kept for the audit trail; read the RE-DIAGNOSED section for truth.
 
 First cluster-(a) probe: changed `emit_scope_drops` + `emit_drops_for_early_exit`
 (`lower.gg`) from no-op to unconditional LIFO `GIDropIfAlive(entry.local_id)` emission (the

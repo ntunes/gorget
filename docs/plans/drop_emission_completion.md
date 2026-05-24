@@ -1,22 +1,33 @@
 # Drop Emission Completion Plan
 
-**Status:** v3 — revised 2026-05-24 after Phase A static audit completed (`docs/plans/consumer_audit.md`). v3 corrects four load-bearing errors in v2's phase design that the audit + Rust cross-reference exposed. See "Revision history" at bottom.
+**Status:** v3.1 — this is the STRATEGIC plan + historical record. **The LIVE next-session
+execution plan is [`drop_emission_next_session.md`](drop_emission_next_session.md)** (written
+2026-05-24 after implementation began). Empirical work since v3 corrected two of v3's own claims
+(Phase C.1 and the reorder) — see the v3.1 note in "Revision history" and the running log in
+[`consumer_audit.md`](consumer_audit.md). Use those two docs for current state; this file for
+the phase taxonomy + rationale.
 **Goal:** Ship full architectural drop emission to self-host so `self_host_bootstrap` + `self_host_bootstrap_fixed_point` pass with real drop emission, NOT labels-only.
 **Estimated effort:** 15-40 hours over 2-4 sessions.
 
-> **v3 TL;DR of what changed (read `docs/plans/consumer_audit.md` for the evidence):**
-> 1. **Phase D was wrong** — emit `GIDropIfAlive` **unconditionally**, never gated on
->    `maybe_moved` (Rust `drops.rs:504-505,540-541` discards it at emit; gating reintroduces
->    the Snag #30 double-free). There is **no drop queue** — emit directly at scope-pop.
->    Phase D collapses; the `DropEmission`/`drop_queue`/`flush_drop_queue` infra is retired.
-> 2. **Phase C.3 was misframed** — Rust uses ONE allocator + post-construction fn-ptr stores
->    driven by `drop_strategy` metadata, NOT a `gorget_array_new_drop` symbol (that's
->    name-matching). Self-host already has the pattern for Dict/Set keys
->    (`emit_dict_ctor_wiring`); generalize it.
-> 3. **Phase C.1 was wrong** — the `__imported_type__` skip is CORRECT; keep it.
-> 4. **The cascade is two separable clusters**, reordered: **(b) leak/OOM ships FIRST**
->    (independent, kills the 13 GB driver.gg OOM), then **(a) double-free ships atomically**
->    (the E.1 keystone — 9 prior failures all half-shipped cluster (a)).
+> **What's TRUE as of v3.1 (2026-05-24, after implementation began — supersedes the v3 TL;DR):**
+> 1. **Phase D — CONFIRMED + SHIPPED (WIP).** Emit `GIDropIfAlive` **unconditionally**, no
+>    `maybe_moved` gate, no drop queue — emit directly at scope-pop. Un-disabled this session;
+>    drops fire correctly (string/array/map free climbing to Rust parity).
+> 2. **Phase C.3 (cluster b) — SHIPPED** (`d2efd716`): one allocator + post-construction
+>    fn-ptr stores driven by `drop_strategy`/`recursive_drop_*`, generalizing
+>    `emit_dict_ctor_wiring`. **NOTE:** C.3/(b) is correct but does NOT reduce the OOM on its
+>    own (it's inert until cluster (a) emits the frees that invoke elem_drop — see #4).
+> 3. **Phase C.1 — v3 WAS WRONG; the skip removal IS correct (REVIVED + validated).** v3
+>    cancelled C.1 ("the `__imported_type__` skip is correct"). FALSE for whole-program
+>    compilation: the bootstrap preamble carries only RUNTIME drops, not user-type
+>    `<Type>__drop`, so the skip zeroed all 267 user-type drops. Removing both skip sites in
+>    `populate_drop_metadata` → **0→267 `__drop` defs, 0 double-defines** (the `fn_exists()`
+>    guard handles dedup). C.1 = remove the skip.
+> 4. **The OOM is closed by cluster (a), NOT (b).** v3 said "(b) ships first, kills the 13 GB
+>    OOM" — DISPROVEN by measurement. The OOM is the total ABSENCE of scope-exit drop emission
+>    (cluster a); un-disabling it (Phase D) took stage-1 from 14.4 GB → 1 MB. (b) makes (a)'s
+>    frees *deep* but reduces nothing alone. OOM + the return-corruption SIGSEGV are ONE root
+>    cause: cluster (a). The clusters are coupled, not independently OOM-relevant.
 
 ## TL;DR (for picking up cold)
 
@@ -228,13 +239,23 @@ If any batch fails validation: roll it back. Continue with other independent bat
 
 **Goal:** Make `<UserType>__drop` definitions emit in stage1.c body; wire elem_drop on user-type collections.
 
-### C.1 — ~~Remove __imported_type__ skip~~ **CANCELLED (v3)**
+### C.1 — Remove __imported_type__ skip  **REVIVED + VALIDATED (v3.1, was wrongly cancelled in v3)**
 
-The audit found the `__imported_type__` skip (`lir_lower.gg:3439, 3475`) is **CORRECT** —
-imported types' drop/clone fns come from the Rust runtime preamble as `static inline`;
-re-emitting them double-defines and breaks the link. The "0 user-type drops in stage1.c" is
-a *wiring/firing* problem (cluster b), NOT a *generation* problem (the generator works —
-`Token__clone` confirmed emitted). **Do not touch this skip.**
+v3 cancelled this, claiming the `__imported_type__` skip (`lir_lower.gg:3439, 3475`) is correct
+because "imported types' drops come from the Rust preamble as static inline." **That is FALSE
+for whole-program compilation (the bootstrap).** The bootstrap preamble is
+`rust_c[..first "\ntypedef struct __gg_"]` — it contains only RUNTIME-type drops
+(`gorget_string_free` etc.), NOT user-type `<Type>__drop`. driver.gg imports every module, so
+the skip tagged EVERY user type `__imported_type__` and `populate_drop_metadata` skipped all of
+them → `recursive_drop_structs` empty → **0 `__drop` definitions** (Rust emits 212+).
+
+**Fix (validated this session):** remove BOTH skip sites in `populate_drop_metadata`. Result:
+`__drop` defs **0 → 267**, clone_inplace 0 → 89, **0 redefinition errors** — the `fn_exists()`
+guard in `emit_struct_drops`/`emit_type_drop_fns` (`lir_codegen.gg` ~4592) is the PROPER
+double-define guard (vs. a blanket skip). The "generator works" observation in v3 was true but
+irrelevant — the generator iterates `recursive_drop_structs.keys()`, which the skip kept empty.
+**This is part of the cluster-(a) atomic change** (it unmasks the match-scrutinee + move-zero
+cascades — see consumer_audit.md). Already in WIP commit `1614ac2a`.
 
 ### C.2 — Include user types in is_droppable_type
 
@@ -267,8 +288,10 @@ The self-host **already implements this pattern** for Dict/Set *keys* in
   add a typed `box_inner_type` field (Snag #13 shape), don't name-match.
 
 Drive every spelling from the typed drop table (`recursive_drop_structs/enums` /
-`drop_strategy`), never a name prefix. This kills the 13 GB `elaborate_drops` OOM on
-driver.gg.
+`drop_strategy`), never a name prefix. **SHIPPED** (`d2efd716`). **Correction (v3.1):** this
+does NOT kill the OOM on its own — `elem_drop` is inert until cluster (a) emits the scope-exit
+frees that invoke it. The OOM (14.4 GB → 1 MB) is closed by cluster (a)'s Phase D, not by (b).
+(b) makes (a)'s frees *deep* (e.g. freeing a `Vector[Vector[int]]` also frees the inner arrays).
 
 ### C.4 — Validate
 
@@ -540,6 +563,25 @@ If picking up cold, start with §"Reading order for next session" above.
 
 ## Revision history
 
+### v3.1 — 2026-05-24 (post implementation — corrects two v3 claims; live plan moved out)
+
+Implementation began (WIP commit `1614ac2a`). Empirical results corrected v3:
+- **Phase C.1 UN-cancelled.** v3 cancelled C.1 ("the `__imported_type__` skip is correct").
+  WRONG for whole-program compilation — the skip zeroed all user-type drops (0 `__drop` defs).
+  Removing both skip sites → 0→267 defs, 0 double-defines (`fn_exists` guard). C.1 = remove the
+  skip; it's part of the cluster-(a) atomic change.
+- **"(b) kills the OOM" DISPROVEN.** The OOM is the total absence of scope-exit drop emission
+  (cluster a); Phase D un-disable took stage-1 14.4 GB → 1 MB. (b) is inert until (a) emits the
+  frees. OOM + return-corruption SIGSEGV are one root cause (cluster a); the clusters are
+  coupled, not independently OOM-relevant.
+- **Confirmed/shipped:** Phase D unconditional emission (WIP); cluster (b) C.3 (`d2efd716`);
+  a-7 match-scrutinee borrow (cascade 2780→0); user-type drops generate (267). Remaining:
+  set/push consume-via-pointer ABI + the move-zero-at-all-consume-sites loop → see the LIVE
+  execution plan **[`drop_emission_next_session.md`](drop_emission_next_session.md)** and the
+  empirical log **[`consumer_audit.md`](consumer_audit.md)**.
+- This file is now the strategic/historical record; the v3 TL;DR was replaced by a v3.1 banner
+  at the top. The v3 entry below is preserved as the record of what v3 (wrongly) decided.
+
 ### v3 — 2026-05-24 (post Phase A static audit)
 
 Phase A static audit completed (`docs/plans/consumer_audit.md`): 3 parallel worktree agents
@@ -564,7 +606,9 @@ load-bearing errors in v2**:
   split it: (a) double-free [L2/L3 `&slot` on Ptr slots + C2 IMoveSlot no-op + B1 missing
   borrow flag + E.1] must ship ATOMICALLY (root cause of all 9 E.1 failures — half-shipped);
   (b) leak/OOM [D1/D2/D3 missing collection elem/val-drop wiring] is INDEPENDENT. **Reordered:
-  ship (b) first** — it kills the 13 GB driver.gg OOM, resolving R-04 and the entire reason
+  ship (b) first** — it kills the 13 GB driver.gg OOM [⚠️ **v3.1: this claim was DISPROVEN —
+  (b) does NOT reduce the OOM; cluster (a)'s Phase D does. See the v3.1 entry above.**],
+  resolving R-04 and the entire reason
   v2 built the elaborate staged a/b/c probe. The A.2 dynamic probe demotes from discovery to
   validation. **A.6 gate verdict: do NOT trigger rewrite** (~13 sites, 0-1 restructuring).
 
