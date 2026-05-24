@@ -835,8 +835,8 @@ Worth stating explicitly: making `&` Rust-style exclusive **was considered
 and rejected**. The gain (compile-time data-race freedom, signature-level
 mutation contracts) is real, but the cost is Rust-tier ergonomics — every
 existing closure capture, self-referential struct, observer pattern, and
-"mutate a vec while iterating its view" idiom would need auditing, plus a
-`Cell` / `RefCell` escape-hatch gallery. Gorget advertises Python-shaped
+"mutate a vec while iterating its view" idiom would need auditing, plus an
+interior-mutability escape-hatch gallery. Gorget advertises Python-shaped
 syntax; Rust-exclusive semantics would break that contract.
 
 The spawn-boundary model captures ~95% of the practical safety benefit

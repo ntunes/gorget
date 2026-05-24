@@ -128,34 +128,6 @@ sides hold references).
 
 ---
 
-## Cell and RefCell — Interior Mutability
-
-### Cell[T]
-
-`Cell[T]` provides interior mutability for Copy types without runtime overhead:
-
-```gorget
-Cell[int] c = Cell[int](0)
-c.set(42)
-print(f"{c.get()}")    # 42
-```
-
-Only works with Copy types (integers, floats, bools).
-
-### RefCell[T]
-
-`RefCell[T]` provides interior mutability for any type with runtime borrow checking:
-
-```gorget
-RefCell[String] r = RefCell[String]("hello")
-# Runtime borrow checks instead of compile-time
-```
-
-Panics at runtime if you violate the borrowing rules (e.g., two mutable borrows).
-Use sparingly — compile-time checking is always preferable.
-
----
-
 ## Mutex and RwLock — Concurrent Access
 
 ### Mutex[T]
@@ -193,8 +165,6 @@ Use `RwLock` when reads are much more frequent than writes.
 | `Box[T]` | Single owner, heap allocation, recursive types |
 | `Shared[T]` | Multiple owners of the same data |
 | `Weak[T]` | Breaking reference cycles |
-| `Cell[T]` | Interior mutability for Copy types |
-| `RefCell[T]` | Interior mutability for any type (runtime checks) |
 | `Mutex[T]` | Shared mutable access across threads |
 | `RwLock[T]` | Many readers, few writers across threads |
 
@@ -210,7 +180,5 @@ when ownership rules don't fit your problem, not as the default approach.
 | `Box[T]` | Single | N/A | Heap allocation |
 | `Shared[T]` | Shared (ref-counted) | Yes (atomic) | Ref count + allocation |
 | `Weak[T]` | Non-owning | Yes | Ref count check on upgrade |
-| `Cell[T]` | Interior mutability | No | None (Copy types only) |
-| `RefCell[T]` | Interior mutability | No | Runtime borrow tracking |
 | `Mutex[T]` | Shared + mutable | Yes | Lock overhead |
 | `RwLock[T]` | Shared + mutable | Yes | Lock overhead |

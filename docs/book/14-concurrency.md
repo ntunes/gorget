@@ -132,7 +132,7 @@ shared int counter = 0
 shared Vector[String] log_entries = Vector[String]()
 ```
 
-The compiler wraps the value in an `Arc<Mutex<T>>` internally. You never touch the lock
+The compiler wraps the value in a `Shared[Mutex[T]]` internally. You never touch the lock
 directly; instead, you access the value through a `with` block, which acquires the lock
 and binds the current value to a local name:
 

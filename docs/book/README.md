@@ -84,8 +84,8 @@ need prior exposure to follow along.
     file-based modules, the standard library.
 
 16. **[Smart Pointers](16-smart-pointers.md)**
-    `Box[T]`, `Rc[T]`, `Arc[T]`, `Weak[T]`, `Cell[T]`, `RefCell[T]`,
-    `Mutex[T]`, `RwLock[T]`, when to use each.
+    `Box[T]`, `Shared[T]`, `Weak[T]`, `Mutex[T]`, `RwLock[T]`,
+    when to use each.
 
 17. **[Meta Programming](17-meta.md)**
     Compile-time constants, `meta if`, `meta for`, type predicates,

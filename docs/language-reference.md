@@ -146,7 +146,7 @@ self  Self
 **Smart pointer keywords:**
 
 ```
-Box  Rc  Arc  Weak  Cell  RefCell  Mutex  RwLock
+Box  Shared  Weak  Mutex  RwLock
 ```
 
 **Ownership keywords:**
@@ -526,11 +526,8 @@ auto name = "hello"  # inferred as String
 | Type              | Description                              |
 |-------------------|------------------------------------------|
 | `Box[T]`          | Single-owner heap allocation             |
-| `Rc[T]`           | Reference-counted (single-threaded)      |
-| `Arc[T]`          | Atomic reference-counted (thread-safe)   |
-| `Weak[T]`         | Non-owning reference (for Rc/Arc)        |
-| `Cell[T]`         | Interior mutability for Copy types       |
-| `RefCell[T]`      | Interior mutability with runtime checks  |
+| `Shared[T]`       | Reference-counted shared ownership (atomic) |
+| `Weak[T]`         | Non-owning reference (for `Shared`)      |
 | `Mutex[T]`        | Thread-safe interior mutability          |
 | `RwLock[T]`       | Reader-writer lock                       |
 

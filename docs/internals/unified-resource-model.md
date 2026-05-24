@@ -627,7 +627,7 @@ fn validate_read(local: &Local, mode: ReadMode, registry: &TypeRegistry) -> Resu
         (CopySemantics::Resource,   ReadMode::Move)        => check_last_use(local),
         (CopySemantics::Resource,   ReadMode::Clone)       => check_clone_fn_exists(local),
         (CopySemantics::Resource,   ReadMode::Borrow(mu))  => check_borrow_rules(local, mu),
-        (CopySemantics::RefCounted, _)                     => Ok(()), // Shared[T]/Rc[T]
+        (CopySemantics::RefCounted, _)                     => Ok(()), // Shared[T]
         // ...
     }
 }

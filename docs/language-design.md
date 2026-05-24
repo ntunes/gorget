@@ -214,7 +214,7 @@ int add(int a, int b):
     return a + b
 
 void greet(String name):
-    print("Hello, {name}")
+    print(f"Hello, {name}")
 
 # Expression body shorthand for simple functions
 int double(int x): x * 2
@@ -390,14 +390,33 @@ Vector[int] get_first(Vector[Vector[int]] m):
 
 The `auto` keyword gives the fast path (reference/view); an explicit type annotation with `.clone()` gives an owned copy. The `!` sigil gives a zero-cost move.
 
-### 3.3 Ownership (Move Semantics)
+### 3.3 Ownership (Copy-on-Write)
 
-For Resource types (String, Vector, etc.), assignment with `!` moves:
+For Resource types (String, Vector, etc.), bare-identifier assignment **borrows** by
+default — it creates a second alias (a Ptr) to the same data at zero cost. The aliases
+share storage until one of them mutates, at which point the compiler clones so each
+side owns an independent copy. This is copy-on-write; the source stays valid:
 ```gorget
 String s1 = "hello"
-String s2 = !s1          # explicit move, s1 is invalid
-# print(s1)              # COMPILE ERROR
+String s2 = s1           # borrow — both names valid, no allocation
+print(s1)                # "hello"
+s2 = s2 + "!"            # mutation severs the alias — s1 is unaffected
+print(s1)                # "hello"
+print(s2)                # "hello!"
 ```
+
+The `!` operator is the explicit move opt-in. It transfers ownership and invalidates
+the source:
+```gorget
+String s3 = "world"
+String s4 = !s3          # explicit move, s3 is invalid
+# print(s3)              # COMPILE ERROR: use after move
+```
+
+A few single-owner-by-design types still **require** `!` (or `.clone()`) on bare-assign,
+because aliasing them is unsafe: `Box[T]`, `Task`, `TaskGroup`, `Guard`, `Owned[T]`,
+`Callable[...]` and closure values. For these, `Box[int] b = a` is a compile error
+(`E_MoveWithoutOperator`) — write `Box[int] b = !a`.
 
 Trivial types (int, float, bool) are always copied automatically:
 ```gorget
@@ -407,36 +426,39 @@ int b = a                # just copies, both valid (no ! needed)
 
 ### 3.4 Assignment Semantics
 
-For resource types, there are no implicit copies. Every assignment is either a **move** (zero cost, source consumed), an explicit **clone** (new allocation), or a **borrow** (reference):
+For resource types, there are no implicit deep copies. Bare-identifier assignment
+**borrows** (copy-on-write); `!` **moves**; `.clone()` is an explicit deep copy:
 
 | Assignment | Meaning | Cost |
 |-----------|---------|------|
+| `Vector[int] b = a` | Borrow — b aliases a (Ptr), clones on first mutation | Zero cost |
+| `auto b = a` | Borrow — identical to the explicit-type form above | Zero cost |
 | `Vector[int] b = !a` | Move — b takes ownership, a consumed | Zero cost |
-| `Vector[int] b = a.clone()` | Clone — b is an independent deep copy | Heap allocation |
-| `auto b = a` | Borrow — b references a (Ptr) | Zero cost |
+| `Vector[int] b = a.clone()` | Clone — b is an independent deep copy up front | Heap allocation |
 | `Vector[int] b = f()` | Move from temp — b owns the result | Zero cost |
 | `a = &b` | Mutable reference — a aliases b | Zero cost |
 
 ```gorget
 Vector[int] a = [1, 2, 3]
 
-Vector[int] b = a.clone()  # explicit clone — b is independent
-b.push(4)
+Vector[int] b = a          # borrow — b aliases a, zero cost
+print(b.len())             # 3 — read through the alias
+b.push(4)                  # mutation severs the alias: b is cloned
 print(a.len())             # 3 (unchanged)
 print(b.len())             # 4
 
-Vector[int] c = !a         # move — a is consumed, c owns the data
+Vector[int] c = a.clone()  # explicit clone — independent up front
+Vector[int] d = !a         # move — a is consumed, d owns the data
 # print(a.len())           # COMPILE ERROR: a was moved
 
-Vector[int] d = make_vec() # move from temp — zero cost
-auto e = d                 # borrow — e references d, no allocation
+Vector[int] e = make_vec() # move from temp — zero cost
 ```
 
 Trivial types (int, float, bool, simple structs) are copied by value — no heap allocation, no `.clone()` needed.
 
-**Key rule:** Resource types are never implicitly copied. The programmer explicitly chooses move (`!`), clone (`.clone()`), or borrow (`auto`). This makes every allocation visible in the source code.
+**Key rule:** Resource types are never *deep-copied* implicitly. Bare-assign aliases for free and the compiler inserts a clone only at the first mutation through an alias; `!` moves, `.clone()` copies up front. Every heap allocation is still visible — it happens at a mutation, a `.clone()`, or an ownership boundary (collection put, struct/enum field init, return), never silently on read.
 
-**`auto` semantics:** `auto` borrows when the compiler can guarantee the source is still valid for the variable's entire scope (same scope, LIFO drop ordering). For ephemeral sources (function call results), `auto` moves instead.
+**`auto` vs explicit type:** for bare-assign they behave identically — both borrow with copy-on-write. The only difference is inference: `auto` lets the compiler pick the type; an explicit type is a check that the RHS matches. For ephemeral sources (function-call results), the bound value is already owned-by-construction, so the bind is a move, not a borrow.
 
 ### 3.4.1 The `Cloneable` Trait
 
@@ -511,7 +533,7 @@ Never both simultaneously. Enforced at compile time. This prevents data races an
 
 **Gorget requires zero lifetime annotations.** The compiler's borrow checker internally tracks the *origin* of every borrowed value — which parameter, local, or field a reference derives from — to catch use-after-move and dangling-return errors at compile time. This analysis is fully automatic; programmers never annotate lifetimes.
 
-This is possible because Gorget's ownership model draws a hard line at function boundaries: **resource types (`String`, `Vector[T]`, structs with resource fields, etc.) always transfer ownership when returned or stored.** There is no user-visible borrowed-view type that can escape a function. Borrowed parameters (bare and `&`) are only valid within the callee's frame, and a function's return value is always an independent owned value. Within a function body, bare-identifier assignment of resource-typed locals (`Spanned b = a`) follows copy-on-write — see §3.4 below — but the cross-function-boundary contract is unchanged. This structural guarantee eliminates the class of bugs that Rust's lifetime annotations exist to prevent.
+This is possible because Gorget's ownership model draws a hard line at function boundaries: **resource types (`String`, `Vector[T]`, structs with resource fields, etc.) always transfer ownership when returned or stored.** There is no user-visible borrowed-view type that can escape a function. Borrowed parameters (bare and `&`) are only valid within the callee's frame, and a function's return value is always an independent owned value. Within a function body, bare-identifier assignment of resource-typed locals (`Spanned b = a`) follows copy-on-write — see §3.4 — but the cross-function-boundary contract is unchanged. This structural guarantee eliminates the class of bugs that Rust's lifetime annotations exist to prevent.
 
 ```gorget
 # The compiler tracks that x and y are borrowed parameters.
@@ -680,7 +702,7 @@ match c:
     case Color.Red():
         print("red")
     case Color.Custom(r, g, b):
-        print("{r},{g},{b}")
+        print(f"{r},{g},{b}")
 ```
 
 **Dot-shorthand:** When the expected type is unambiguous from context (variable declaration, assignment, return, or function parameter), `.Variant()` desugars to `EnumType.Variant()`. This is Swift-style type inference for enum construction and matching:
@@ -717,7 +739,7 @@ Option[int] age = None
 
 # Pattern matching with 'is'
 if name is Some(n):
-    print("Name: {n}")
+    print(f"Name: {n}")
 
 # Optional chaining (?.)
 # Returns None if any step is None, otherwise the final value
@@ -759,9 +781,9 @@ T identity[T](T x):
     return x
 
 # Type parameters in types
-Vector[int] numbers = Vector.new()
-HashMap[String, int] users = HashMap.new()
-Vector[Option[int]] nested = Vector.new()
+Vector[int] numbers = Vector[int]()
+HashMap[String, int] users = HashMap[String, int]()
+Vector[Option[int]] nested = Vector[Option[int]]()
 
 struct Pair[A, B]:
     A first
@@ -786,7 +808,7 @@ trait Greetable:
     String name(self)
 
     String greeting(self):
-        return "Hello, {self.name()}!"
+        return f"Hello, {self.name()}!"
 
 # Trait inheritance with extends
 trait Animal extends Displayable:
@@ -864,7 +886,7 @@ equip Point:
         self.x += dx
         self.y += dy
     String into_string(!self):                 # move (takes ownership)
-        return "({self.x}, {self.y})"
+        return f"({self.x}, {self.y})"
     static Point origin():                     # no self (static)
         return Point(0.0, 0.0)
 ```
@@ -876,13 +898,13 @@ Method receivers are **auto-borrowed**: the compiler automatically takes a refer
 ```gorget
 equip Point with Displayable:
     String display(self):
-        return "({self.x}, {self.y})"
+        return f"({self.x}, {self.y})"
 
 # Generic implementation — bound on the equip's T
 equip[Displayable T] Vector[T] with Displayable:
     String display(self):
         auto parts = [item.display() for item in self]
-        return "[{parts.join(", ")}]"
+        return f"[{parts.join(", ")}]"
 
 # Blanket implementation
 equip[Displayable T] T with Printable:
@@ -924,7 +946,7 @@ Circle c = Circle(5.0)
 c.render()                # calls Circle_render() directly
 
 # Dynamic dispatch — collection holds mixed types
-Vector[Box[Shape]] shapes = Vector.new()
+Vector[Box[Shape]] shapes = Vector[Box[Shape]]()
 shapes.push(Box.new(Circle(5.0)))
 shapes.push(Box.new(Rectangle(3.0, 4.0)))
 
@@ -936,7 +958,7 @@ Box[Shape] make_shape(String kind) throws ValueError:
     match kind:
         case "circle": Box.new(Circle(1.0))
         case "rect": Box.new(Rectangle(1.0, 1.0))
-        else: throw ValueError("unknown shape: {kind}")
+        else: throw ValueError(f"unknown shape: {kind}")
 ```
 
 **Design rationale:** No `dyn`/`dynamic` keyword. The programmer focuses on *what* they want (a Shape), not *how* it's dispatched. The compiler has enough information to decide. Generics are still monomorphized — `Vector[int]` and `Vector[String]` generate separate specialized code. This combines the simplicity of Go's interfaces with the performance of Rust's monomorphized generics.
@@ -979,7 +1001,7 @@ match color:
     case Red:
         print("red")
     case Custom(r, g, b):
-        print("rgb({r}, {g}, {b})")
+        print(f"rgb({r}, {g}, {b})")
     else:
         print("other")
 ```
@@ -1010,11 +1032,11 @@ match status_code:
 ```gorget
 match response:
     case Ok(User(name, age)) if age >= 18:
-        print("Adult: {name}")
+        print(f"Adult: {name}")
     case Ok(User(name, _)):
-        print("Minor: {name}")
+        print(f"Minor: {name}")
     case Error(e):
-        print("Error: {e}")
+        print(f"Error: {e}")
 ```
 
 ### 5.3 Match as Expression
@@ -1025,7 +1047,7 @@ Single-expression arms use `:` with the value on the same line. Multi-line arms 
 String label = match color:
     case Red: "red"
     case Green: "green"
-    case Custom(r, g, b): "rgb({r}, {g}, {b})"
+    case Custom(r, g, b): f"rgb({r}, {g}, {b})"
     else: "other"
 ```
 
@@ -1177,7 +1199,7 @@ Data safe_process(String path) throws AppError:
     match result:
         case Ok(content): return parse(content)
         case Error(e):
-            log("Fallback: {e}")
+            log(f"Fallback: {e}")
             return default_data()
 
 # To explicitly raise an error, use throw:
@@ -1191,7 +1213,7 @@ void main():
     Result[Data, AppError] result = process("data.txt")
     match result:
         case Ok(data): print(data)
-        case Error(e): print("Error: {e}")
+        case Error(e): print(f"Error: {e}")
 ```
 
 **Keywords summary:**
@@ -1214,9 +1236,9 @@ enum AppError:
 equip AppError with Displayable:
     String display(self):
         match self:
-            case Io(e): "IO error: {e}"
-            case Parse(e): "Parse error: {e}"
-            case NotFound(path): "Not found: {path}"
+            case Io(e): f"IO error: {e}"
+            case Parse(e): f"Parse error: {e}"
+            case NotFound(path): f"Not found: {path}"
 
 equip AppError with From[IoError]:
     AppError from(IoError !e):
@@ -1237,7 +1259,7 @@ Three layers, from cheap to detailed:
 ```gorget
 # Adding context:
 Result[String, IOError] content = read_file(path)
-    .context("loading config from {path}")
+    .context(f"loading config from {path}")
 
 # Accessing trace:
 Result[Data, AppError] result = process("data.txt")
@@ -1354,7 +1376,7 @@ Function types mirror declaration syntax — return type followed by parameter t
 # Function type as variable
 int(int, int) adder = add
 void(String) callback = print
-String(int) formatter = (n): "Value: {n}"
+String(int) formatter = (n): f"Value: {n}"
 
 # As parameter types
 void apply(Vector[int] data, int(int) transform):
@@ -1393,12 +1415,12 @@ Use `!` before the parameter list to force-move ALL captures:
 ```gorget
 # Default: auto-infer (immutable borrow captures)
 String name = "Alice"
-auto greet = (): print("Hello {name}")
+auto greet = (): print(f"Hello {name}")
 print(name)     # OK — name was only borrowed
 
 # Move ALL captures with !()
 auto handle = thread.spawn(!():
-    print("Hello from thread: {name}")
+    print(f"Hello from thread: {name}")
 )
 # name is moved into the closure, invalid here
 
@@ -1511,7 +1533,7 @@ import std.io                                 # import entire module
 import std.collections.HashMap                # import specific type
 from std.fmt import Displayable, format       # from...import
 from math.geometry import Point, Circle       # project-local module
-import std.sync.{Arc, Mutex, RwLock}          # multiple items with {}
+import std.sync.{Mutex, RwLock}               # multiple items with {}
 from xtd.log import LogLevel, Logger           # import type only (qualified variants)
 from xtd.log import LogLevel.*                 # glob: import type + all variants bare
 from xtd.log import LogLevel.*, Logger         # glob + other names in same statement
@@ -1582,35 +1604,29 @@ Six composable allocators are in `std.alloc`: Arena (bump), PoolAllocator (fixed
 ### 9.2 Shared Ownership
 
 ```gorget
-# Reference-counted (single-threaded)
-Rc[String] shared = Rc.new("shared data")
-Rc[String] clone = shared.clone()     # increments ref count
+# Reference-counted shared ownership (thread-safe, atomic refcount)
+Shared[String] shared = Shared[String]("shared data")
+Shared[String] clone = shared.clone()  # increments ref count
 
 # Weak reference (doesn't prevent deallocation)
 Weak[String] weak = shared.downgrade()
 if weak.upgrade() is Some(strong):
     print(strong)                      # still alive
 
-# Atomic reference-counted (thread-safe)
-Arc[Mutex[int]] counter = Arc.new(Mutex.new(0))
+# Shared mutable state across threads — wrap the data in a Mutex
+Shared[Mutex[int]] counter = Shared[Mutex[int]](Mutex[int](0))
 ```
+
+`Shared[T]` is the single shared-ownership primitive — it is always atomic, so it
+works single- or multi-threaded (one type, no single-threaded/atomic split).
 
 ### 9.3 Interior Mutability
 
-When you need to mutate data behind an immutable reference:
+When you need to mutate data behind an immutable reference, wrap it in a lock:
 
 ```gorget
-# Cell — for Copy types (single-threaded)
-Cell[int] counter = Cell.new(0)
-counter.set(counter.get() + 1)
-
-# RefCell — for non-Copy types (single-threaded, runtime borrow checking)
-RefCell[Vector[int]] data = RefCell.new(Vector.new())
-data.borrow_mut().push(42)
-print(data.borrow().len())            # 1
-
 # Mutex — for thread-safe interior mutability
-Mutex[Vector[int]] shared_data = Mutex.new(Vector.new())
+Mutex[Vector[int]] shared_data = Mutex[Vector[int]](Vector[int]())
 auto guard = shared_data.lock().unwrap()
 guard.push(42)
 ```
@@ -1630,25 +1646,24 @@ print(boxed.len())       # Box[String] auto-derefs to String, calls String.len()
 The concurrency model includes async/await, spawn, channels, `Shared[T]`, `Mutex[T]`, `RwLock[T]`, `select`, and structured concurrency with multiple scheduler backends (`pool`, `thread`, `inline`, `single`).
 
 ```gorget
-import std.thread
-import std.sync.{Arc, Mutex}
+from std.sync import Mutex
 
-void main():
-    Arc[Mutex[int]] counter = Arc.new(Mutex.new(0))
-    Vector[JoinHandle[void]] handles = Vector.new()
+async void bump(Shared[Mutex[int]] !counter):
+    auto guard = counter.lock().unwrap()
+    *guard += 1
+
+async void main():
+    Shared[Mutex[int]] counter = Shared[Mutex[int]](Mutex[int](0))
+    Vector[Task[void]] handles = Vector[Task[void]]()
 
     for _ in 0..10:
-        auto c = counter.clone()
-        auto handle = thread.spawn(!():
-            auto guard = c.lock().unwrap()
-            *guard += 1
-        )
+        Task[void] handle = spawn bump(!counter.clone())
         handles.push(handle)
 
     for h in handles:
-        h.join().unwrap()
+        h.await()
 
-    print("Count: {*counter.lock().unwrap()}")
+    print(f"Count: {*counter.lock().unwrap()}")
 ```
 
 ### Async/Await
@@ -1680,7 +1695,7 @@ async void fetch_all():
     # Await results
     String a = task1.await()
     String b = task2.await()
-    print("{a}, {b}")
+    print(f"{a}, {b}")
 
 # async closures
 auto fetcher = async (String url):
@@ -1691,7 +1706,7 @@ async void resilient_fetch(String url):
     Result[String, IOError] result = fetch(url).await()
     match result:
         case Ok(data): print(data)
-        case Error(e): print("Failed: {e}")
+        case Error(e): print(f"Failed: {e}")
 ```
 
 ### Thread Safety: Sendable & Syncable
@@ -1706,12 +1721,12 @@ Gorget uses two marker traits to enforce thread safety at compile time, similar 
 void main():
     auto data = Vector[int].from([1, 2, 3])
     thread.spawn(!():                # data is moved (!), Vector is Sendable — OK
-        print("{data.len()}")
+        print(f"{data.len()}")
     )
 
-# Arc[T] is Sendable + Syncable when T is Syncable
+# Shared[T] is Sendable + Syncable when T is Syncable
 # Mutex[T] makes any T Syncable (by synchronizing access)
-Arc[Mutex[int]] counter = Arc.new(Mutex.new(0))    # Sendable + Syncable
+Shared[Mutex[int]] counter = Shared[Mutex[int]](Mutex[int](0))    # Sendable + Syncable
 ```
 
 **Auto-derivation**: The compiler automatically derives `Sendable` and `Syncable` for types whose fields are all `Sendable`/`Syncable`. Most user-defined structs and enums are automatically thread-safe.
@@ -1867,8 +1882,8 @@ equip[Displayable T] List[T] with Displayable:
         match self:
             case Cons(head, tail):
                 match *tail:
-                    case Nil: return "{head}"
-                    case _: return "{head} -> {tail.display()}"
+                    case Nil: return f"{head}"
+                    case _: return f"{head} -> {tail.display()}"
             case Nil:
                 return "[]"
 
@@ -1878,8 +1893,8 @@ void main():
     list = list.prepend(2)
     list = list.prepend(1)
 
-    print("List: {list.display()}")         # "1 -> 2 -> 3"
-    print("Length: {list.len()}")            # 3
+    print(f"List: {list.display()}")         # "1 -> 2 -> 3"
+    print(f"Length: {list.len()}")            # 3
 ```
 
 ---
@@ -1895,7 +1910,7 @@ void main():
 | 5 | **Macro system?** | None for V1; add hygienic macros in V2+ |
 | 6 | **File extension** | `.gg` |
 | 7 | **Indentation** | 4 spaces (enforced by `gg fmt`) |
-| 8 | **Compilation target** | LLVM (Cranelift for debug builds in future) |
+| 8 | **Compilation target** | C (via SSA-based LIR → C transpilation, then a system C compiler); an LLVM backend exists behind `--backend=llvm` |
 | 9 | **Package management** | Built into `gg` CLI (`gg new`, `gg add`, `gg publish`, etc.) |
 | 10 | **Option handling** | `Option[T]` with rich sugar: `is` pattern matching, `?.` optional chaining, `??` default operator, `.unwrap()`, `.unwrap_or()`, `?` early return |
 | 11 | **Tuple syntax** | `(int, String)` — concise, universal |
@@ -1961,7 +1976,7 @@ match value:
     case 0:
         print("zero")
     case x:
-        print("negative: {x}")
+        print(f"negative: {x}")
 ```
 
 ### 17.3 The `is` Keyword - Pattern Matching in Conditions
@@ -2001,7 +2016,7 @@ match (command, arg):
     case ("delete", key):
         store.delete(key)
     case (cmd, _):
-        print("unknown command: {cmd}")
+        print(f"unknown command: {cmd}")
 ```
 
 ### 17.5 Or-patterns
@@ -2015,7 +2030,7 @@ match status_code:
     case 500 | 502 | 503:
         print("server error")
     case code:
-        print("unexpected: {code}")
+        print(f"unexpected: {code}")
 ```
 
 ---
@@ -2295,7 +2310,7 @@ auto arr = [1, 2, 3, 4, 5]           # Vector[int] — dynamic, supports push/po
 int[] slice = arr[1..4]       # [2, 3, 4]
 
 # Vector: owned, heap-allocated, growable
-Vector[int] vec = Vector.new()
+Vector[int] vec = Vector[int]()
 vec.push(1)
 vec.push(2)
 
@@ -2862,7 +2877,7 @@ void platform_init():
 
 @cfg(debug)
 void debug_log(String msg):
-    print("[DEBUG] {msg}")
+    print(f"[DEBUG] {msg}")
 
 @cfg(not(debug))
 void debug_log(String msg):
@@ -2873,7 +2888,7 @@ void debug_log(String msg):
 
 ## 34. Build System & Package Management (`gg`) in Detail
 
-### xtd.toml (Best of Cargo + npm + pyproject.toml)
+### gorget.toml (Best of Cargo + npm + pyproject.toml)
 ```toml
 [package]
 name = "my_project"
@@ -2933,8 +2948,8 @@ warn = ["missing-docs"]
 ### Project Layout
 ```
 my_project/
-  xtd.toml                  # manifest
-  gg.lock                  # lockfile (auto-generated, committed to git)
+  gorget.toml               # manifest
+  gorget.lock              # lockfile (auto-generated, committed to git)
   src/
     main.gg                # binary entry point
     lib.gg                 # library root
@@ -2964,7 +2979,7 @@ gg fmt                     # format code
 gg lint                    # run linter
 gg doc                     # generate documentation
 gg publish                 # publish to registry
-gg add http                # add dependency to xtd.toml
+gg add http                # add dependency to gorget.toml
 gg update                  # update lockfile
 gg audit                   # scan for vulnerabilities
 ```
@@ -3070,7 +3085,7 @@ equip[Comparable & Displayable T] Tree[T]:
         match self:
             case Node(v, left, right):
                 left.in_order()
-                print("{v} ")
+                print(f"{v} ")
                 right.in_order()
             case Leaf:
                 pass
@@ -3121,16 +3136,16 @@ struct Record:
 Record parse_line(String line) throws ProcessError:
     auto parts = line.split(',').collect[Vector[String]]()
     if parts.len() != 2:
-        throw ProcessError.InvalidFormat("expected 2 fields, got {parts.len()}")
+        throw ProcessError.InvalidFormat(f"expected 2 fields, got {parts.len()}")
     String name = parts[0].trim().to_string()
     Result[int, String] parsed = parts[1].trim().parse[int]()
-    int value = parsed.map_err((e): ProcessError.Parse("invalid number: {e}")).unwrap()
+    int value = parsed.map_err((e): ProcessError.Parse(f"invalid number: {e}")).unwrap()
     return Record(name, value)
 
 Vector[Record] process_file(Path path) throws ProcessError:
     auto file = fs.File.open(path)           # auto-propagates IoError → ProcessError
     auto reader = BufReader.new(file)
-    Vector[Record] records = Vector.new()
+    Vector[Record] records = Vector[Record]()
 
     for line_result in reader.lines():
         String line = line_result             # auto-propagates
@@ -3145,11 +3160,11 @@ void main():
     Result[Vector[Record], ProcessError] result = process_file(Path.new("data.csv"))
     match result:
         case Ok(records):
-            print("Processed {records.len()} records")
+            print(f"Processed {records.len()} records")
             int total = records.iter().map(it.value).sum()
-            print("Total value: {total}")
+            print(f"Total value: {total}")
         case Error(e):
-            print("Error: {e}")
+            print(f"Error: {e}")
 ```
 
 ### 36.4 Trait Objects and Dynamic Dispatch
@@ -3160,7 +3175,7 @@ trait Animal:
     String speak(self)
 
     String describe(self):
-        return "{self.name()} says {self.speak()}"
+        return f"{self.name()} says {self.speak()}"
 
 struct Dog:
     String name
@@ -3190,7 +3205,7 @@ void introduce_all(Vector[Box[Animal]] animals):
         print(animal.describe())
 
 void main():
-    Vector[Box[Animal]] zoo = Vector.new()
+    Vector[Box[Animal]] zoo = Vector[Box[Animal]]()
     zoo.push(Box.new(Dog(String.from("Rex"))))
     zoo.push(Box.new(Cat(String.from("Whiskers"), true)))
     zoo.push(Box.new(Dog(String.from("Buddy"))))
@@ -3331,147 +3346,57 @@ Gorget ships with a rich standard library — everything you need for common tas
 ### 40.2 Module Map
 
 ```
-std/
-├── core/               # Auto-imported, always available
-│   ├── types           # Primitives, Option, Result, String, bool, tuples
-│   ├── traits          # Displayable, Cloneable, Comparable, Equatable, Hashable, etc.
-│   ├── ops             # Add, Sub, Mul, Div, Mod, Index (operator traits)
-│   └── mem             # Box, Rc, Arc, size_of, drop
-│
-├── collections/        # Data structures
-│   ├── Vector, Dict, Set, HashMap, HashSet
-│   ├── BTreeMap, BTreeSet      # Sorted collections — *Not yet implemented*
-│   ├── LinkedList, VecDeque    # Specialized — *Not yet implemented*
-│   └── BinaryHeap             # Priority queue — *Not yet implemented*
-│
-├── io/                 # Input/output
-│   ├── Read, Write     # Core traits
-│   ├── BufReader, BufWriter
-│   ├── stdin, stdout, stderr
-│   └── Cursor          # In-memory I/O
-│
-├── fs/                 # Filesystem
-│   ├── File, read, write, create_dir, remove
-│   ├── metadata, permissions
-│   ├── walk_dir        # Recursive directory traversal
-│   └── temp            # Temporary files/dirs
-│
-├── path/               # Path manipulation
-│   ├── Path, PathBuf
-│   └── join, parent, extension, stem
-│
-├── net/                # Networking
-│   ├── TcpListener, TcpStream, UdpSocket
-│   ├── IpAddr, SocketAddr
-│   └── dns             # DNS resolution
-│
-├── http/               # HTTP (batteries included!)
-│   ├── Client          # HTTP client (GET, POST, etc.)
-│   ├── Request, Response
-│   ├── Server          # Simple HTTP server
-│   ├── Router          # URL routing
-│   └── StatusCode, Headers
-│
-├── json/               # JSON (batteries included!)
-│   ├── parse, stringify
-│   ├── Value           # Dynamic JSON value
-│   ├── Serializable    # Trait: to JSON
-│   └── Deserializable  # Trait: from JSON
-│
-├── sync/               # Synchronization — *Not yet implemented*
-│   ├── Mutex, RwLock
-│   ├── Arc, Channel (mpsc)
-│   ├── Barrier, Condvar
-│   └── Once            # One-time initialization
-│
-├── thread/             # Threading — *Not yet implemented*
-│   ├── spawn, sleep, JoinHandle
-│   ├── ThreadLocal
-│   └── pool            # Thread pool
-│
-├── async/              # Async runtime — *Not yet implemented*
-│   ├── spawn           # Spawn async task
-│   ├── sleep           # Async sleep
-│   ├── select          # Wait on multiple futures
-│   ├── Channel         # Async channel
-│   ├── Mutex           # Async mutex
-│   └── timeout         # Timeout wrapper
-│
-├── time/               # Time and duration
-│   ├── Instant, Duration, SystemTime
-│   ├── format, parse   # Date/time formatting
-│   └── Timer           # Periodic timer
-│
-├── math/               # Mathematics
-│   ├── constants (PI, E, TAU)
-│   ├── min, max, abs, clamp
-│   ├── sqrt, pow, log, exp
-│   ├── floor, ceil, round
-│   └── sin, cos, tan, atan2
-│
-├── regex/              # Regular expressions — *Not yet implemented*
-│   ├── Regex, Match
-│   ├── compile, is_match, find, find_all
-│   └── replace, split
-│
-├── fmt/                # Formatting
-│   ├── Displayable, Debuggable
-│   ├── format          # String formatting
-│   └── Formatter       # Custom format control
-│
-├── convert/            # Type conversions
-│   ├── From, Into, TryFrom, TryInto
-│   └── parse           # String parsing
-│
-├── iter/               # Iterator utilities
-│   ├── Iterable, Iterator
-│   ├── range, repeat, once, empty
-│   ├── chain, zip, enumerate
-│   └── map, filter, fold, collect (methods on Iterator)
-│
-├── hash/               # Hashing
-│   ├── Hashable, Hasher
-│   └── DefaultHasher
-│
-├── env/                # Environment
-│   ├── args, var, vars
-│   ├── current_dir, home_dir
-│   └── temp_dir
-│
-├── process/            # Process management
-│   ├── Command, Output # Run external commands
-│   ├── exit, abort
-│   └── id              # Current process ID
-│
-├── os/                 # OS-specific APIs
-│   ├── signals
-│   └── platform info
-│
-├── log/                # Logging — *Not yet implemented*
-│   ├── debug, info, warn, error
-│   ├── Logger          # Configurable logger
-│   └── Level           # Log levels
-│
-├── crypto/             # Basic cryptography
-│   ├── hash            # SHA-256, SHA-512, etc.
-│   ├── hmac
-│   └── random          # Cryptographic random
-│
-├── random/             # Random number generation
-│   ├── random, random_range
-│   ├── Rng             # Random generator trait
-│   └── shuffle, choose
-│
-├── encoding/           # Data encoding — *Not yet implemented*
-│   ├── base64
-│   ├── hex
-│   └── utf8
-│
-└── testing/            # Test framework
-    ├── assert, assert_eq, assert_ne
-    ├── Bencher
-    └── mock             # Basic mocking utilities
+std/                     # Core standard library — libc only, always lightweight
+├── collections          # Vector, Dict, HashMap, Set, HashSet, Box, Shared, Weak
+│                         #   (BTreeMap, LinkedList, VecDeque — *Not yet implemented*)
+├── heap                 # Heap — binary min-heap / priority queue
+├── iter                 # Lazy Iterator[T] state machines + adapters (take/map/filter/…)
+├── fs                   # read_file, write_file, file_exists, mkdir, readdir, …
+├── path                 # path_join, path_basename, path_extension, path_parent, …
+├── os                   # getenv, getcwd, args, platform, exit, mem_live
+├── process              # exec, exec_output, process_spawn
+├── signal               # signal_trap, signal_check, SIGINT / SIGTERM / …
+├── io                   # readline, input, stdout/stderr/stdin; Writer / Reader / IoError
+├── term                 # red/green/bold/…, is_tty, strip_ansi
+├── conv                 # int_to_str, parse_int, parse_float, ord, chr; ParseError
+├── fmt                  # pad_left, center, join, str_truncate, repeat
+├── bytes                # bytes_from_str, bytes_to_hex, base64_encode/decode, endian helpers
+├── encoding             # url_encode/decode, html_escape, latin1, utf8 helpers
+├── math                 # sqrt, pow, sin, cos, abs, min, max, floor, ceil; PI/E/TAU
+├── random               # rand, seed, rand_range
+├── time                 # time, time_ms, sleep_ms, format_time
+├── datetime             # DateTime (now/utc_now, add_*, diff_*, format, weekday)
+├── thread               # thread_spawn, current_thread_id
+├── sync                 # AtomicInt/Bool, Barrier, WaitGroup, Semaphore, RWLock, CondVar, OnceFlag
+├── channel              # Channel[T] (MPSC): send / recv / recv_timeout / close
+├── async                # sleep (cooperative); spawn / await are language keywords (see §10)
+├── net.socket           # TCP: socket_connect, server_socket_bind, nb_* async variants
+├── net.tls              # TLS: tls_connect, tls_server_bind (OpenSSL)
+├── net.udp              # UDP: udp_bind, sendto / recvfrom, multicast
+├── hash                 # Hashable, Hasher, FxHasher, hash_of[T]
+└── alloc                # Arena, PoolAllocator, TlsfAllocator, TrackingAllocator,
+                          #   FixedBufferAllocator, FallbackAllocator
+
+xtd/                     # Extended "batteries included" library
+├── http / httpserver         # HTTP/1.1 client (TLS) + server (routing, middleware)
+├── json / jsonpath           # JSON parse/stringify + JSONPath queries
+├── csv / yaml / toml / xml    # Data formats
+├── regex                     # PCRE2-backed regular expressions
+├── db / sqlite / influx      # Database traits + SQLite (embedded) + InfluxDB
+├── crypto / compress         # SHA/HMAC/AES/Ed25519/X25519/HKDF; zlib/deflate/crc32
+├── ssh / p2p                 # SSH2 client; Ed25519/X25519 peer-to-peer
+├── tensor / dataframe / math3d   # N-d tensors, DataFrames, Vec/Mat 3D math
+├── gfx / sdl / gl / metal / gpu   # 2D wrapper, SDL2, OpenGL, Metal, adaptive GPU
+├── image / audio             # stb_image; SDL2_mixer audio
+├── ecs                       # Entity component system
+└── cli / log / uuid          # Arg parsing, logging, UUID
 ```
+
+Core traits (`Displayable`, `Cloneable`, `Comparable`, `Equatable`, `Hashable`,
+`Default`, `Iterable`, `From`/`TryFrom`, operator traits) and `Option`/`Result`/`Box`
+are part of the prelude — always available without an import. Testing (`test` / `bench`
+blocks, smart `assert`) is built into the language and compiler (see §29), not a
+stdlib module.
 
 ### 40.3 Core Traits (auto-imported, always available)
 
@@ -3490,51 +3415,47 @@ trait TryFrom[T]        # .try_from(T) — fallible type conversion (static meth
 trait Parseable          # .parse(String) — fallible string parsing (static method)
 trait Serializable      # .serialize(ser) — serialization (derivable via @derive, import xtd.json)
 trait Deserializable    # .deserialize(de) — deserialization (derivable via @derive, import xtd.json)
-trait Debuggable        # *Not yet implemented* — development/debug representation
-trait Copy              # *Not yet implemented* — marker: bitwise copyable (primitives)
-trait Sendable          # *Not yet implemented* — marker: safe to send across threads
-trait Syncable          # *Not yet implemented* — marker: safe to share across threads
+trait Debuggable        # .debug() — developer/debug representation (derivable via @derive)
+trait Sendable          # marker: safe to send across threads (auto-derived)
+trait Syncable          # marker: safe to share across threads (auto-derived)
 ```
+
+"Copy" is a type *category* (the Trivial types of §3.2: int, float, bool, and structs
+of them), not a user-facing trait — there is no `Copy` trait to equip. The compiler
+classifies a type as Copy automatically based on whether it owns a resource.
 
 ### 40.4 Async Runtime (Built-in)
 
-*Not yet implemented.* The async runtime design below is aspirational.
+`spawn` and `await` are language keywords, not library calls (see §10). `spawn` returns
+a `Task[T]`; `.await()` suspends until it completes. `select:` multiplexes over channels.
+Schedulers (`pool`, `thread`, `inline`, `single`) are chosen via `directive scheduler=…`
+or `--scheduler`.
 
 ```gorget
-import std.async
-
-# Spawning tasks
+# Spawning tasks — spawn returns a Task[T], does not block
 async void main():
-    auto task1 = async.spawn(fetch("https://api.example.com/a"))
-    auto task2 = async.spawn(fetch("https://api.example.com/b"))
+    Task[String] task1 = spawn fetch("https://api.example.com/a")
+    Task[String] task2 = spawn fetch("https://api.example.com/b")
 
     String a = task1.await()
     String b = task2.await()
 
-# Select (wait for first completion)
-async void race():
-    match async.select(fetch(url1), fetch(url2), async.sleep(Duration.seconds(5))):
-        case (0, result): print("First URL won: {result}")
-        case (1, result): print("Second URL won: {result}")
-        case (2, _): print("Timeout!")
+# Select (respond to whichever channel is ready first)
+async void multiplex(Channel[int] urgent, Channel[String] messages):
+    loop:
+        select:
+            case int code = urgent.recv():
+                print(f"urgent: {code}")
+            case String msg = messages.recv():
+                print(msg)
 
-# Async channels
+# Channels (std.channel)
 async void producer_consumer():
-    auto (sender, receiver) = async.Channel[int].new()
+    Channel[int] ch = Channel[int](8)
+    spawn produce(ch)               # produces 0..10 then closes
 
-    async.spawn(!():
-        for i in 0..10:
-            sender.send(i)
-    )
-
-    while receiver.recv().await() is Some(value):
-        print("Got: {value}")
-
-# Timeouts
-async void with_timeout():
-    match async.timeout(Duration.seconds(5), fetch(url)):
-        case Ok(data): print(data)
-        case Error(_): print("Timed out!")
+    while ch.recv() is Some(value):
+        print(f"Got: {value}")
 ```
 
 ### 40.5 HTTP (Built-in)
@@ -3615,9 +3536,9 @@ auto items = data["items"].as_array()
    - Borrow checker (MIR-based, like Rust's)
 
 4. **Phase 4 - Code Generation**
-   - HIR -> MIR -> LLVM IR
-   - Optimization passes
-   - Target: native binaries via LLVM
+   - AST -> GIR (monomorphization, drop insertion, closures) -> SSA-based LIR
+   - LIR -> C (sole production backend); optional LIR -> LLVM IR behind `--backend=llvm`
+   - Target: native binaries via a system C compiler (optimization handled by the C compiler)
 
 5. **Phase 5 - Standard Library** (batteries included)
    - Core types, traits, collections, iterators
