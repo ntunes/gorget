@@ -223,12 +223,17 @@ stopgap and file the perf fix.
 
 ## Invariants & guardrails (do not violate)
 
-1. **Only owners free.** Consuming from a borrow/view CLONES; consuming from an owner MOVES +
-   zeroes the source. Never pass a resource to a consuming position (return / construction /
-   field-init / collection-put / `!arg`) as a plain borrow that leaves two live owners.
-2. **Zero every move (for now).** Do NOT port Rust's selective-zeroing optimization
-   (`drops.rs` skips some MoveZeros). Emit `GIMoveZero` for every `OpMove`. `drop_elab` elides
-   the redundant runtime check. Optimize later, only after correctness.
+1. **Only owners free.** The consume decision (Rust `ensure_owned_at_consuming_arg`; CLAUDE.md
+   "Ownership at Consuming Positions"): **owned AND dead-at-this-call → MOVE** (+ zero source);
+   **borrow/view, OR owned-but-live-past → CLONE**. NOT "owner always moves" — an owner used
+   again later must clone. The self-host already does this for OWNED sources (`op_consume`
+   LoOwned→OpMove; wire-pass demotes live-past→OpClone). a-5 only adds the missing borrow arm.
+   Never pass a resource to a consuming position (return / construction / field-init /
+   collection-put / `!arg`) as a plain borrow that leaves two live owners.
+2. **Make it work first; zero every move (for now).** Do NOT port Rust's selective-zeroing
+   optimization. Emit `GIMoveZero` for every `OpMove`; `drop_elab` elides the redundant runtime
+   check. Correctness before perf — **but the deferred optimizations are recorded in §7 so they
+   are not forgotten.**
 3. **Runtime ABI is ALREADY pointer-correct** for mutator value args via the method path
    (`needs_ptr_arg` keyed on the mapped runtime name address-takes them). An `OpMove` operand on
    a struct-value slot IS address-taken cleanly. The ONLY ABI trap is a value source whose slot
@@ -272,3 +277,45 @@ Resolutions:
   `map_monomorphized_to_runtime` do NOT exist — the real fns are `needs_ptr_arg` @1810,
   `map_runtime_name` @1111, `map_array_method`/`map_dict_method`/`map_set_method`). Re-grep on
   entry; treat line numbers as approximate.
+
+---
+
+## 7. Deferred optimizations — DO NOT FORGET (make it work first, then do these)
+
+We are deliberately choosing the correct-but-conservative shape now and deferring perf. These
+are NOT bugs and NOT to be done during the correctness push — but they MUST NOT be lost. File
+each into `TODO.md` (and reference here) once the cluster ships green, so they survive.
+
+1. **MoveZero elision (the headline deferred opt).** We emit `GIMoveZero` for EVERY `OpMove`
+   (guardrail #2). Rust's `drops.rs` skips the zero when drop-tracking proves the source is
+   never re-observed (`drop_elab` slot-state = provably-Uninitialized). The self-host's
+   `drop_elab.gg` already has the dataflow to do this static elision; we just don't lean on it
+   to *omit* the GIMoveZero emission. **Later:** let `drop_elab` drive selective MoveZero
+   elision (or skip emitting GIMoveZero where the slot is provably dead) → fewer instructions,
+   less codegen, faster emit. Measure against the ~510s emit (STEP 4).
+
+2. **Conservative clone where Rust would move (last-use precision).** Rust elides a clone to a
+   MOVE whenever the owned source is provably dead at the call (better liveness). Where the
+   self-host's `compute_liveness` can't prove last-use (or where a-5's borrowed-source clone is
+   actually the last use of a value the caller no longer needs), we will CLONE conservatively.
+   That's correct (a clone is always sound) but wasteful. **Later:** tighten last-use analysis
+   so more consume sites move instead of clone → fewer `T__clone` calls, toward Rust's ~338
+   stage-1 clone-call parity (vs. a conservative over-count). Track via the drop-count harness
+   (clone-call count) once stage-1 runs.
+
+3. **Clone emission layer: GIR (Rust) vs LIR (self-host).** Rust emits the clone INLINE at GIR
+   (`ensure_owned_at_consuming_arg` → `builder.call(clone_fn)`); the self-host labels `OpClone`
+   at GIR and materializes at LIR (`lir_lower.gg:2399-2464`). Functionally equivalent, but a
+   layering divergence from Rust. **Later (self-host-as-showcase reconciliation, optional):**
+   decide whether to keep the split (it may be defensible) or move materialization to GIR to
+   mirror Rust. Note it can also cause GIR-shape differences vs Rust in any GIR-level diff.
+
+4. **Perf: the ~510s emit (STEP 4).** Already a step, restated here so it's not lost: the
+   O(n²) suspect in drop-type resolution / block-instruction append. Profile after correctness.
+
+5. **`fixed_point` N back to N=2 + retire Phase F.2 workarounds** (completion.md F.1/F.2):
+   `add_local_inheriting`/`inherit_borrow_from` band-aids should be auditable-and-retired once
+   real move+clone+drop machinery lands; tighten `bootstrap_fixed_point` from N=5 to N=2.
+
+**On entry next session:** these live here; on ship (STEP 5) copy them into `TODO.md` so they
+outlive this plan doc.
