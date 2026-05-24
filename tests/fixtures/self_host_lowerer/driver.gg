@@ -10,6 +10,7 @@ from lower import lower_module
 from loader import load_imports
 from gir import GirModule
 from format_gir import format_module
+from format_lir import format_lir_module
 from validate import run_validators, validate_gir_after, validate_lir_after
 from lir_lower import lower_gir_to_lir, eliminate_dead_globals
 from lir_ssa import construct_ssa
@@ -26,12 +27,22 @@ void main():
     String lib_dir = "lib"
     if cmd_args.len() > 2:
         lib_dir = cmd_args.get(2).unwrap()
-    bool emit_lir_c = false
+    # IR-dump flags, mirroring the Rust gg's --emit-gir / --emit-lir / --emit-c-lir.
+    # `--emit-c` is the C dump; `--lir-c` is kept as an alias because the
+    # self_host_bootstrap / self_host_bootstrap_fixed_point integration tests
+    # invoke the driver with `--lir-c`.
+    bool emit_c = false
+    bool emit_gir = false
+    bool emit_lir = false
     int ai = 2
     while ai < cmd_args.len():
         String arg = cmd_args.get(ai).unwrap()
-        if arg == "--lir-c":
-            emit_lir_c = true
+        if arg == "--emit-c" or arg == "--lir-c":
+            emit_c = true
+        if arg == "--emit-gir":
+            emit_gir = true
+        if arg == "--emit-lir":
+            emit_lir = true
         ai += 1
     String source = read_file(path)
     Module m = parse_source(source)
@@ -59,7 +70,12 @@ void main():
     # (field_reads, call_args, moves) are unconditional fatal as
     # of step 5c.
     run_validators(&gir)
-    if emit_lir_c:
+    # --emit-gir: dump GIR text and stop before LIR lowering (matches Rust's
+    # `--emit-gir`, which dumps the GIR module and returns without codegen).
+    if emit_gir:
+        print(format_module(&gir))
+        return
+    if emit_c or emit_lir:
         LirModule lir = lower_gir_to_lir(&gir)
         validate_lir_after("lir-lowering", &lir)
         # Drop globals no function references — mirrors Rust gg's
@@ -78,8 +94,15 @@ void main():
         # of correct drop emission.
         elaborate_drops(&lir)
         validate_lir_after("drop-elaboration", &lir)
-        print(generate_c(&lir))
+        # --emit-lir: dump the post-SSA, post-drop-elaboration LIR (the form
+        # the C backend consumes). Rust's `--emit-lir` dumps post-SSA-post-opt;
+        # drop elaboration is the self-host's closest analog of that opt stage.
+        if emit_lir:
+            print(format_lir_module(&lir))
+        else:
+            print(generate_c(&lir))
     else:
+        # Default (no dump flag): GIR text, matching prior driver behavior.
         print(format_module(&gir))
 
 void run_ssa(LirModule &m):

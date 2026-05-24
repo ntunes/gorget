@@ -1,0 +1,432 @@
+# LIR text formatter — produces output matching `gg build --emit-lir`.
+#
+# Mirrors the Rust LIR Display impl (src/lir/display.rs) as closely as the
+# self-host LIR allows. The self-host LIR enum is a subset of Rust's: it has
+# no TraitCall / CowClone / HofExpand / EnumCheck / EnumExtract / SizeOf /
+# NamedFuncAddr / CallRuntime / CallByRef / CollectionCtor / SetCollectionBridge
+# variants (those are introduced by passes the self-host doesn't run yet), so
+# the matching instruction renderers are simply absent here.
+#
+# Value/slot/block/struct ids render exactly like Rust:
+#   ValueId  -> v{n}        SlotId   -> s{n}        BlockId  -> bb{n}
+#   StructId -> struct.{n}  FuncId   -> fn.{n}      GlobalId -> global.{n}
+
+from std.collections import Vector
+from std.conv import int_to_str
+
+from lir import LirModule, LirFunction, LirBlock, LirInst, LirSlot
+from lir import LirStructDef, StructField, LirGlobal, LirExtern
+from lir import LirTerm, SwitchCase, BlockParam, FieldInit
+from lir import ISlotStore, ISlotLoad, ISlotAddr
+from lir import IIConst, IFConst, IBoolConst, INullPtr, IFuncAddr, IGlobalAddr, IStrLit, IParamRef
+from lir import IAdd, ISub, IMul, IDiv, IRem, IMod, INeg
+from lir import IBitAnd, IBitOr, IBitXor, IBitNot, IShl, IShr
+from lir import ICmp, INot
+from lir import IIntCast, IFloatCast, IIntToFloat, IFloatToInt, IPtrCast, IBitcast
+from lir import ILoad, IStore, IFieldPtr, IElemPtr, IMemset, IMemcpy
+from lir import IBoxAlloc, IAddressOf, IStructInit, IEnumInit
+from lir import ICall, ICallExtern, ICallPtr
+from lir import IBoundsCheck, IDivCheck, ITrap
+from lir import IPrintf, IFprintf, IInlineC
+from lir import IClosurePack, ICallClosure
+from lir import IDropGuardOpen, IDropGuardClose
+from lir import IMoveSlot, INop
+from lir import TRet, TRetVoid, TJump, TBranch, TSwitch, TUnreachable
+from lir import LT_I8, LT_I16, LT_I32, LT_I64, LT_U8, LT_U16, LT_U32, LT_U64
+from lir import LT_F32, LT_F64, LT_BOOL, LT_PTR, LT_VOID
+from lir import LT_PTR_TO_BASE, LT_STRUCT_BASE
+from lir import OVF_TRAP, OVF_WRAP
+from lir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
+from lir import GINIT_ZEROED, GINIT_FUNC_ADDR, GINIT_RUNTIME_CALL
+
+# ── Identifier formatting ────────────────────────────────────────
+# These mirror the Display impls on the Rust newtypes.
+
+String fmt_value(int v): f"v{v}"
+String fmt_slot(int s): f"s{s}"
+String fmt_block(int b): f"bb{b}"
+String fmt_struct(int id): f"struct.{id}"
+
+# ── Type formatting ──────────────────────────────────────────────
+# Mirrors `impl Display for LirType` in src/lir/mod.rs.
+
+String format_lir_type(int ty):
+    match ty:
+        case LT_I8:
+            return "i8"
+        case LT_I16:
+            return "i16"
+        case LT_I32:
+            return "i32"
+        case LT_I64:
+            return "i64"
+        case LT_U8:
+            return "u8"
+        case LT_U16:
+            return "u16"
+        case LT_U32:
+            return "u32"
+        case LT_U64:
+            return "u64"
+        case LT_F32:
+            return "f32"
+        case LT_F64:
+            return "f64"
+        case LT_BOOL:
+            return "bool"
+        case LT_PTR:
+            return "ptr"
+        case LT_VOID:
+            return "void"
+        else:
+            pass
+    if ty >= LT_STRUCT_BASE:
+        return f"struct.{ty - LT_STRUCT_BASE}"
+    if ty >= LT_PTR_TO_BASE:
+        return f"ptr.{ty - LT_PTR_TO_BASE}"
+    return f"?ty{ty}"
+
+# ── Comparison operator names ────────────────────────────────────
+# Mirror `impl Display for CmpOp`: eq / ne / lt / le / gt / ge.
+
+String cmp_op_name(int op):
+    match op:
+        case CMP_EQ:
+            return "eq"
+        case CMP_NE:
+            return "ne"
+        case CMP_LT:
+            return "lt"
+        case CMP_LE:
+            return "le"
+        case CMP_GT:
+            return "gt"
+        case CMP_GE:
+            return "ge"
+        else:
+            return f"?cmp{op}"
+
+# Overflow suffix on add/sub/mul: Trap -> "", Wrap -> ".wrap".
+String overflow_op(String base, int overflow):
+    if overflow == OVF_WRAP:
+        return f"{base}.wrap"
+    return base
+
+# ── Value-list formatting ────────────────────────────────────────
+
+String format_value_list(Vector[int] values):
+    String result = ""
+    for (i, v) in values.enumerate():
+        if i > 0:
+            result = f"{result}, "
+        result = f"{result}{fmt_value(v)}"
+    return result
+
+# Field-init list: `idx=value, idx=value`.
+String format_field_inits(Vector[FieldInit] fields):
+    String result = ""
+    for (i, fi) in fields.enumerate():
+        if i > 0:
+            result = f"{result}, "
+        result = f"{result}{fi.index}={fmt_value(fi.value)}"
+    return result
+
+# ── Instruction formatting ───────────────────────────────────────
+# One renderer per LirInst variant, mirroring `write_inst` in display.rs.
+# `dst` of -1 (or `dst` < 0) means no destination; callers that may be void
+# (ICall / ICallExtern / ICallPtr / ICallClosure / IInlineC) gate the prefix.
+
+String format_inst(LirInst inst):
+    match inst:
+        # Slot access
+        case ISlotStore(slot, value, _is_move):
+            return f"slot_store {fmt_slot(slot)}, {fmt_value(value)}"
+        case ISlotLoad(dst, slot, ty):
+            return f"{fmt_value(dst)}: {format_lir_type(ty)} = slot_load {fmt_slot(slot)}"
+        case ISlotAddr(dst, slot):
+            return f"{fmt_value(dst)}: ptr = slot_addr {fmt_slot(slot)}"
+
+        # Constants
+        case IIConst(dst, ty, value):
+            return f"{fmt_value(dst)}: {format_lir_type(ty)} = iconst {value}"
+        case IFConst(dst, ty, bits):
+            # The self-host LIR stores the raw f64 bit pattern; Rust prints the
+            # decoded value via f64::from_bits. No bits->float helper exists at
+            # the self-host level, so we render the bit pattern annotated.
+            return f"{fmt_value(dst)}: {format_lir_type(ty)} = fconst bits:{bits}"
+        case IBoolConst(dst, value):
+            String bv = if value: "true" else: "false"
+            return f"{fmt_value(dst)}: bool = bconst {bv}"
+        case INullPtr(dst):
+            return f"{fmt_value(dst)}: ptr = null"
+        case IFuncAddr(dst, func_id):
+            return f"{fmt_value(dst)}: funcref = func_addr fn.{func_id}"
+        case IGlobalAddr(dst, global_id):
+            return f"{fmt_value(dst)}: ptr = global_addr global.{global_id}"
+        case IStrLit(dst, value):
+            return f"{fmt_value(dst)}: struct.Str = str_lit \"{value}\""
+        case IParamRef(dst, index, ty):
+            return f"{fmt_value(dst)}: {format_lir_type(ty)} = param {index}"
+
+        # Arithmetic. The op name (with `.wrap` suffix on wrapping arithmetic)
+        # is computed into a local first — a string literal inside an f-string
+        # interpolation isn't bindable inline here.
+        case IAdd(dst, ty, lhs, rhs, overflow):
+            String op_add = overflow_op("add", overflow)
+            return f"{fmt_value(dst)}: {format_lir_type(ty)} = {op_add} {fmt_value(lhs)}, {fmt_value(rhs)}"
+        case ISub(dst, ty, lhs, rhs, overflow):
+            String op_sub = overflow_op("sub", overflow)
+            return f"{fmt_value(dst)}: {format_lir_type(ty)} = {op_sub} {fmt_value(lhs)}, {fmt_value(rhs)}"
+        case IMul(dst, ty, lhs, rhs, overflow):
+            String op_mul = overflow_op("mul", overflow)
+            return f"{fmt_value(dst)}: {format_lir_type(ty)} = {op_mul} {fmt_value(lhs)}, {fmt_value(rhs)}"
+        case IDiv(dst, ty, lhs, rhs):
+            return f"{fmt_value(dst)}: {format_lir_type(ty)} = div {fmt_value(lhs)}, {fmt_value(rhs)}"
+        case IRem(dst, ty, lhs, rhs):
+            return f"{fmt_value(dst)}: {format_lir_type(ty)} = rem {fmt_value(lhs)}, {fmt_value(rhs)}"
+        case IMod(dst, ty, lhs, rhs):
+            return f"{fmt_value(dst)}: {format_lir_type(ty)} = mod {fmt_value(lhs)}, {fmt_value(rhs)}"
+        case INeg(dst, ty, operand):
+            return f"{fmt_value(dst)}: {format_lir_type(ty)} = neg {fmt_value(operand)}"
+
+        # Bitwise
+        case IBitAnd(dst, ty, lhs, rhs):
+            return f"{fmt_value(dst)}: {format_lir_type(ty)} = band {fmt_value(lhs)}, {fmt_value(rhs)}"
+        case IBitOr(dst, ty, lhs, rhs):
+            return f"{fmt_value(dst)}: {format_lir_type(ty)} = bor {fmt_value(lhs)}, {fmt_value(rhs)}"
+        case IBitXor(dst, ty, lhs, rhs):
+            return f"{fmt_value(dst)}: {format_lir_type(ty)} = bxor {fmt_value(lhs)}, {fmt_value(rhs)}"
+        case IBitNot(dst, ty, operand):
+            return f"{fmt_value(dst)}: {format_lir_type(ty)} = bnot {fmt_value(operand)}"
+        case IShl(dst, ty, lhs, rhs):
+            return f"{fmt_value(dst)}: {format_lir_type(ty)} = shl {fmt_value(lhs)}, {fmt_value(rhs)}"
+        case IShr(dst, ty, lhs, rhs):
+            return f"{fmt_value(dst)}: {format_lir_type(ty)} = shr {fmt_value(lhs)}, {fmt_value(rhs)}"
+
+        # Comparison & logic
+        case ICmp(dst, op, lhs, rhs):
+            return f"{fmt_value(dst)}: bool = cmp.{cmp_op_name(op)} {fmt_value(lhs)}, {fmt_value(rhs)}"
+        case INot(dst, operand):
+            return f"{fmt_value(dst)}: bool = not {fmt_value(operand)}"
+
+        # Conversions
+        case IIntCast(dst, value, to):
+            return f"{fmt_value(dst)}: {format_lir_type(to)} = int_cast {fmt_value(value)}"
+        case IFloatCast(dst, value, to):
+            return f"{fmt_value(dst)}: {format_lir_type(to)} = float_cast {fmt_value(value)}"
+        case IIntToFloat(dst, value, to):
+            return f"{fmt_value(dst)}: {format_lir_type(to)} = int_to_float {fmt_value(value)}"
+        case IFloatToInt(dst, value, to):
+            return f"{fmt_value(dst)}: {format_lir_type(to)} = float_to_int {fmt_value(value)}"
+        case IPtrCast(dst, value):
+            return f"{fmt_value(dst)}: ptr = ptr_cast {fmt_value(value)}"
+        case IBitcast(dst, value, to):
+            return f"{fmt_value(dst)}: {format_lir_type(to)} = bitcast {fmt_value(value)}"
+
+        # Memory
+        case ILoad(dst, ptr, ty):
+            return f"{fmt_value(dst)}: {format_lir_type(ty)} = load {fmt_value(ptr)}"
+        case IStore(ptr, value):
+            return f"store {fmt_value(ptr)}, {fmt_value(value)}"
+        case IFieldPtr(dst, base, struct_id, field):
+            return f"{fmt_value(dst)}: ptr = field_ptr {fmt_value(base)}, {fmt_struct(struct_id)}.{field}"
+        case IElemPtr(dst, base, index, elem_size):
+            return f"{fmt_value(dst)}: ptr = elem_ptr {fmt_value(base)}, {fmt_value(index)}, size={elem_size}"
+        case IMemset(ptr, byte, size):
+            return f"memset {fmt_value(ptr)}, {fmt_value(byte)}, {fmt_value(size)}"
+        case IMemcpy(dst_ptr, src_ptr, size):
+            return f"memcpy {fmt_value(dst_ptr)}, {fmt_value(src_ptr)}, {fmt_value(size)}"
+
+        # Canonical BIR ops
+        case IBoxAlloc(dst, inner_ty, value):
+            return f"{fmt_value(dst)}: ptr = box_alloc {fmt_value(value)}: {format_lir_type(inner_ty)}"
+        case IAddressOf(dst, value, ty):
+            return f"{fmt_value(dst)}: ptr = address_of {fmt_value(value)}: {format_lir_type(ty)}"
+
+        # Aggregate init
+        case IStructInit(target, struct_id, fields):
+            return f"struct_init {fmt_value(target)}, struct{struct_id}, fields=[{format_field_inits(fields)}]"
+        case IEnumInit(target, struct_id, variant_tag, fields):
+            return f"enum_init {fmt_value(target)}, struct{struct_id}, tag={variant_tag}, fields=[{format_field_inits(fields)}]"
+
+        # Calls
+        case ICall(dst, func_id, args):
+            String prefix = if dst >= 0: f"{fmt_value(dst)} = " else: ""
+            return f"{prefix}call fn.{func_id}({format_value_list(args)})"
+        case ICallExtern(dst, name, args, _original, _abis):
+            String prefix = if dst >= 0: f"{fmt_value(dst)} = " else: ""
+            return f"{prefix}call_extern @{name}({format_value_list(args)})"
+        case ICallPtr(dst, callee, args):
+            String prefix = if dst >= 0: f"{fmt_value(dst)} = " else: ""
+            return f"{prefix}call_ptr {fmt_value(callee)}({format_value_list(args)})"
+        case ICallClosure(dst, kind, closure, args, _abis, _ret_ty):
+            String prefix = if dst >= 0: f"{fmt_value(dst)} = " else: ""
+            String k = if kind == 0: "callable" else: "closure"
+            return f"{prefix}call_{k} {fmt_value(closure)}({format_value_list(args)})"
+
+        # Runtime checks
+        case IBoundsCheck(index, len):
+            return f"bounds_check {fmt_value(index)}, {fmt_value(len)}"
+        case IDivCheck(divisor):
+            return f"div_check {fmt_value(divisor)}"
+        case ITrap(msg):
+            return f"trap \"{msg}\""
+
+        # Printf
+        case IPrintf(fmt, args):
+            return f"printf \"{fmt}\", [{format_value_list(args)}]"
+        case IFprintf(fd, fmt, args):
+            return f"fprintf {fmt_value(fd)}, \"{fmt}\", [{format_value_list(args)}]"
+
+        # Inline C
+        case IInlineC(dst, code):
+            String prefix = if dst >= 0: f"{fmt_value(dst)} = " else: ""
+            return f"{prefix}inline_c \"{code}\""
+
+        # Closures
+        case IClosurePack(slot, env_ptr, call_func, needs_adapter):
+            String adapt = if needs_adapter: ", adapt" else: ""
+            return f"closure_pack {fmt_slot(slot)}, env={fmt_value(env_ptr)}, call={fmt_value(call_func)}{adapt}"
+
+        # Drop guards
+        case IDropGuardOpen(kind, value):
+            if kind == 0:
+                return f"drop_guard_open.bool {fmt_value(value)}"
+            return f"drop_guard_open.nonzero {fmt_value(value)}, size={kind - 1}"
+        case IDropGuardClose():
+            return "drop_guard_close"
+
+        # Dataflow / misc
+        case IMoveSlot(slot):
+            return f"move_slot {fmt_slot(slot)}"
+        case INop():
+            return "nop"
+
+# ── Terminator formatting ────────────────────────────────────────
+# Mirrors `write_term` in display.rs.
+
+# Append `(args)` only when the jump/branch edge carries block arguments.
+String edge_args(Vector[int] args):
+    if args.len() == 0:
+        return ""
+    return f"({format_value_list(args)})"
+
+String format_term(LirTerm term):
+    match term:
+        case TRet(value):
+            return f"ret {fmt_value(value)}"
+        case TRetVoid():
+            return "ret void"
+        case TJump(target, args):
+            return f"jmp {fmt_block(target)}{edge_args(args)}"
+        case TBranch(cond, then_block, then_args, else_block, else_args):
+            return f"br {fmt_value(cond)}, {fmt_block(then_block)}{edge_args(then_args)}, {fmt_block(else_block)}{edge_args(else_args)}"
+        case TSwitch(value, cases, default, default_args):
+            String result = f"switch {fmt_value(value)}"
+            for c in cases:
+                result = f"{result}, {c.value} => {fmt_block(c.target)}{edge_args(c.args)}"
+            result = f"{result}, default => {fmt_block(default)}{edge_args(default_args)}"
+            return result
+        case TUnreachable():
+            return "unreachable"
+
+# ── Function formatting ──────────────────────────────────────────
+# Mirrors `write_function` in display.rs.
+
+String format_lir_function(LirFunction func):
+    # Signature: fn @name(p0, p1, ...) -> ret {
+    String params_str = ""
+    for (i, pt) in func.params.enumerate():
+        if i > 0:
+            params_str = f"{params_str}, "
+        params_str = f"{params_str}{format_lir_type(pt)}"
+    String result = f"fn @{func.name}({params_str}) -> {format_lir_type(func.return_type)} {{"
+
+    # Slots: `    s{i}: {ty}  ; {name}` (name suffix only if present).
+    for (i, slot) in func.slots.enumerate():
+        String line = f"    {fmt_slot(i)}: {format_lir_type(slot.ty)}"
+        if slot.name != "":
+            line = f"{line}  ; {slot.name}"
+        result = f"{result}\n{line}"
+    if func.slots.len() > 0:
+        result = f"{result}\n"
+
+    # Blocks.
+    for block in func.blocks:
+        String params_part = ""
+        for (i, bp) in block.params.enumerate():
+            if i > 0:
+                params_part = f"{params_part}, "
+            params_part = f"{params_part}{fmt_value(bp.value_id)}: {format_lir_type(bp.ty)}"
+        result = f"{result}\n  {fmt_block(block.id)}({params_part}):"
+        for inst in block.insts:
+            result = f"{result}\n    {format_inst(inst)}"
+        result = f"{result}\n    {format_term(block.term)}"
+
+    return f"{result}\n}}"
+
+# ── Struct / extern / global formatting ──────────────────────────
+
+String format_lir_struct(int index, LirStructDef def):
+    String result = f"struct.{index} = type {def.name} {{"
+    for field in def.fields:
+        result = f"{result}\n    {field.name}: {format_lir_type(field.ty)},"
+    return f"{result}\n}}"
+
+String format_lir_extern(LirExtern ext):
+    String params_str = ""
+    for (i, pt) in ext.params.enumerate():
+        if i > 0:
+            params_str = f"{params_str}, "
+        params_str = f"{params_str}{format_lir_type(pt)}"
+    if ext.is_variadic:
+        if ext.params.len() > 0:
+            params_str = f"{params_str}, ..."
+        else:
+            params_str = "..."
+    return f"declare {format_lir_type(ext.return_type)} @{ext.name}({params_str})"
+
+String format_lir_global(int index, LirGlobal g):
+    String kw = if g.is_const: "const" else: "global"
+    String result = f"global.{index} = {kw} {format_lir_type(g.ty)} @{g.name}"
+    match g.init_kind:
+        case GINIT_ZEROED:
+            return f"{result} = zeroed"
+        case GINIT_FUNC_ADDR:
+            return f"{result} = fn.{g.init_func_id}"
+        case GINIT_RUNTIME_CALL:
+            return f"{result} = extern {g.init_expr}"
+        else:
+            return result
+
+# ── Module formatting ────────────────────────────────────────────
+# Mirrors `impl Display for DisplayModule` in display.rs.
+
+String format_lir_module(LirModule &m):
+    String result = ""
+
+    if m.source_filename != "":
+        result = f"; source: {m.source_filename}\n"
+    result = f"{result}\n"
+
+    # Struct definitions.
+    for (i, def) in m.structs.enumerate():
+        result = f"{result}{format_lir_struct(i, def)}\n\n"
+
+    # Extern declarations.
+    for ext in m.externs:
+        result = f"{result}{format_lir_extern(ext)}\n"
+    if m.externs.len() > 0:
+        result = f"{result}\n"
+
+    # Globals.
+    for (i, g) in m.globals.enumerate():
+        result = f"{result}{format_lir_global(i, g)}\n"
+    if m.globals.len() > 0:
+        result = f"{result}\n"
+
+    # Functions.
+    for func in m.functions:
+        result = f"{result}{format_lir_function(func)}\n\n"
+
+    return result
