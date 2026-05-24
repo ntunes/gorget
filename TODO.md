@@ -2,6 +2,20 @@
 
 ## High Priority
 
+- **Drop emission completion plan written 2026-05-24 — `plans/drop_emission_completion.md`.** v2 plan (post reviewer-agent feedback) for the full architectural drop emission port. 6 phases (A hybrid audit → B consumer fixes → C user-type drop registration → D scope-exit emission → E lower_return MoveZero → F lock-in). Total estimate 23-72h over 3-7 focused sessions. Rewrite threshold at 60h.
+
+  **Why this plan exists**: the Path A series (C.1, A.1, A.2, B.1, D.1, E.1) is 5/6 shipped but E.1 has failed 9 times — D.1's "consumer audit" wasn't exhaustive. The plan replaces "try E.1 again with fingers crossed" with "enumerate the runtime-reachable cascades via dynamic probe, fix them in batches, then ship E.1 with all 7 of its Rust concerns ported upfront."
+
+  **Key load-bearing facts the plan calls out** (came from reviewer-agent's questions, verified empirically 2026-05-24):
+  - `lowerer_comparison` is BLIND to drops — counts `fn ` declarations only (`tests/integration.rs:13389-13392`). Per-batch validation needs manual stage-1 rebuilds + grep-diff against Rust's drops.
+  - `maybe_moved` is NOT populated at scope-pop time (lower.gg:82-94 docstring confirms). `emit_scope_drops` must queue + flush, not direct-emit.
+  - `populate_drop_metadata` generator WORKS — today's COMMIT 1 attempt emitted `__gg_Token Token__clone` correctly. The blocker was downstream OpBorrow→ISlotLoad (value not address), not the generator.
+  - Rust's `lower_return` has 7 distinct concerns (owning_param_returned MoveZero, clone_resource_global_ref, is_explicit_result_variant, maybe_auto_propagate, Tier 1c Move-for-fresh-Result, Ok-wrap, Ptr(T)→T auto-clone). E.1 must port all of them; "may or may not be needed" is the same reactive whack-a-mole that caused the 9 failures.
+
+  **Start here next session**: `plans/drop_emission_completion.md` → §"Reading order for next session" (~85 min cold-ready, ~6-10h for Phase A which is the gate).
+
+- **Last green bootstrap commit: `f15a45c6` (Phase A.1, 2026-05-22 16:03).** Empirical: bootstrap pair 2/2 in 1365.64s. Last clean baseline before the A.2 regression chain. If the drop emission plan blows past 60h, this is the rollback target — `git reset --hard f15a45c6` returns to "labels-only self-host that bootstraps cleanly" at the cost of all post-A.2 architectural progress (today's lex_emit fix + forward-decl prep would need re-applying on top).
+
 - **Path A driver.gg OOM diagnosed 2026-05-23 — root cause: elaborate_drops leaks ~25-30 MB/function (~13 GB total).** With the lex_emit clone-after-push fix landed today, parser.gg / loader.gg / traits.gg compile cleanly. driver.gg still OOM-killed. Diagnostic narrowed the leak to a SPECIFIC pass:
 
   Per-pipeline-step memory deltas (instrumented driver.gg main()):
