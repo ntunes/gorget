@@ -119,6 +119,14 @@ borrowed-value bucket lands with a-5.
 value+key args (`gorget_map_put`@1&2, `gorget_set_add`@1) route through the SAME ~4438 path with
 the SAME OpBorrow defect. Do them in STEP 1, not as separate STEP 2 backtraces.
 
+**Do NOT copy `lower_index_assign` verbatim (trap flagged by 2nd review).** The WIP TODO at
+`lower.gg:~4445` and an old (now-struck) `consumer_audit.md` note point at `lower_index_assign`
+(`v[i]=x`, ~5557-5604) as the model. It is the *less*-correct sibling: it emits the **mangled**
+`coll_tn+"__set"` name (fine — maps before `needs_ptr_arg`) but **hardcodes `OpMove(value)`**
+with NO borrowed-value clone (its own latent borrowed-value bug). Use `op_consume(ma_val,
+CkCallArgOwning())` instead — it returns OpMove for owned, leaves OpBorrow for borrowed (→ a-5),
+which is strictly more correct than index-assign's blind OpMove.
+
 **Validate:** cc clean (no "incompatible type"), then gdb — the meta_expand double-free gone.
 Harness: array_free toward 544.
 
@@ -194,6 +202,11 @@ stopgap and file the perf fix.
   STEP 1-4 fixes), since it's the atomic cluster (a) per the plan — shipping partials crashes.
 - Update `consumer_audit.md` + `drop_emission_completion.md` to "shipped"; retire the
   Phase F.2 workarounds the proper machinery obviates (add_local_inheriting band-aids, etc.).
+- Retire stale code comments flagged by the 2nd review: the `decide_operand_at_consuming_arg`
+  docstring at `lower.gg:~1262` ("dead code in this commit. No caller exists" — it IS called at
+  ~2290 now) and the WIP TODO at `lower.gg:~4445` (points at lower_index_assign as the model;
+  see the STEP 1 "do not copy" note). Also consider fixing index-assign's own hardcoded
+  `OpMove(value)` (no borrowed-value clone) for symmetry once a-5 lands.
 
 ---
 

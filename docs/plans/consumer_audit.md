@@ -278,11 +278,15 @@ a cascade source. The plan's headline seed was misdiagnosed.
   generalizing to Vector elems (D1) and Dict values (D2).
 
 **Drop-body generation (mostly fine):**
-- **E1** (`lir_lower.gg:3439,3475`, `__imported_type__` skip): **CORRECT** — skips imported
-  types whose drop/clone the Rust preamble provides as `static inline` (re-emitting
-  double-defines). The "0 user-type drops" is a *wiring/firing* problem (D-class), NOT a
-  generation problem. **Do NOT remove this skip (Phase C.1 is misframed).** Generator works
-  (Token__clone confirmed emitted).
+- **E1** (`lir_lower.gg:3439,3475`, `__imported_type__` skip): ⚠️ **SUPERSEDED — DISPROVEN.**
+  See c-1 (A.4 checklist) + "Phase C.1 was WRONGLY CANCELLED" (Cluster (a) progress log). This
+  static-audit finding ("CORRECT, do NOT remove the skip") was empirically wrong for
+  whole-program compilation: the bootstrap preamble carries only RUNTIME drops, not user-type
+  `<Type>__drop`, so the skip zeroed all 267 user-type drops. **Both skip sites were REMOVED**
+  in WIP `1614ac2a` → 0→267 `__drop` defs, 0 double-defines (the `fn_exists()` guard handles
+  dedup). The "generator works" sub-claim was true but irrelevant (it iterates
+  `recursive_drop_structs.keys()`, which the skip kept empty). Retained for the audit trail.
+  *(original — now-false — text:)* ~~CORRECT … Do NOT remove this skip (Phase C.1 is misframed).~~
 - **F1** (`lir_codegen.gg:4517` vs `4609/4754`): struct drops take `cname*`, enum/unified take
   `void*` — ABI inconsistency, both pointers so works, minor cleanup.
 - **F2** (`lir_codegen.gg:4609-4652`, enum drops): Box-in-payload variant emits `free(access)`
@@ -717,16 +721,27 @@ take the value BY POINTER → 146× "incompatible type for argument N of gorget_
 Reverted (WIP compiles again; left a TODO at the site).
 
 **The correct fix (consume-via-pointer):** the value must be passed BY POINTER (the runtime
-memcpy's it) AND the source move-zeroed post-call (owned) / cloned pre-call (borrowed). The
-`v[i] = x` path (`lower_index_assign`, lower.gg:5705) ALREADY does this correctly — it uses
+memcpy's it) AND the source move-zeroed post-call (owned) / cloned pre-call (borrowed).
+
+> ⚠️ **CORRECTED (2nd review):** the paragraph below originally claimed (a) the ABI is wrong
+> because lir_lower maps the name "too late", and (b) `lower_index_assign` does consume-via-
+> pointer "correctly via `op_consume(CkCallArgOwning)` + the runtime name". **BOTH FALSE.**
+> (a) lir_lower computes `effective_name = map_runtime_name(...)` BEFORE `needs_ptr_arg`, and
+> every mutator value arg is already in `needs_ptr_arg` on the runtime name — the value IS
+> address-taken by the method path. The bug is purely the OPERAND KIND (`classify_call_arg`
+> defaults the value to `CkCallArgBorrow`). (b) `lower_index_assign` emits the **mangled**
+> `coll_tn + "__set"` name and **hardcodes `OpMove(value_local)`** (no borrowed-value clone —
+> it has its own latent borrowed-value bug). So it is the *less*-correct sibling, NOT a model to
+> copy verbatim. The live, corrected fix is **Option C** (classify the mutator value arg
+> `CkCallArgOwning` via `op_consume` — more correct than index-assign's hardcoded OpMove) —
+> see `drop_emission_next_session.md` STEP 1. The stale text below is kept for the trail.
+
+~~The `v[i] = x` path (`lower_index_assign`, lower.gg:5705) ALREADY does this correctly — it uses
 `op_consume(val, CkCallArgOwning())` but emits `GICallExtern(-1, "gorget_array_set", ...)` with
-the RUNTIME name directly, so lir_lower's `needs_ptr_arg`/`takes_array_ptr_args` recognizes the
-value as pointer-ABI and emits SlotAddr. The METHOD path emits the MANGLED name
-(`Vector__Item__set`), which lir_lower maps to the runtime fn AFTER the ptr-arg decision → the
-OpMove value isn't address-taken. **Fix options:** (a) make lir_lower's needs_ptr_arg consult
-the mapped runtime name for mutator value args, or (b) route method-call mutators
-(set/push/put/insert) through `lower_index_assign`'s GICallExtern(runtime-name) mechanism.
-This is lir_lower ABI work — the next concrete step.
+the RUNTIME name directly... The METHOD path emits the MANGLED name, which lir_lower maps AFTER
+the ptr-arg decision. Fix options: (a) lir_lower needs_ptr_arg on mapped name; (b) route through
+lower_index_assign.~~ — all superseded by Option C (operand-kind fix in lower.gg, no lir_lower
+change). See next_session.md STEP 1.
 
 ### SESSION CHECKPOINT (2026-05-24) — cluster (a) substantial progress, not yet running
 

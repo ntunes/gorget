@@ -279,7 +279,8 @@ key_drop=120/key_clone=128.
 
 The self-host **already implements this pattern** for Dict/Set *keys* in
 `emit_dict_ctor_wiring` (`lir_codegen.gg:1246-1248`: `dv.key_drop = (..)key_ty__drop`).
-**This is cluster (b) — ship FIRST, independently:**
+**This is cluster (b) — shipped as groundwork in `d2efd716` (NOT independently OOM-relevant; the
+OOM is closed by cluster (a) — see the v3.1 correction below):**
 - **b-1 (D1):** generalize the store pattern to Vector elements (`lir_lower.gg:2839` ctor).
 - **b-2 (D2):** add the symmetric `val_drop`/`val_clone` wiring for Dict values
   (`lir_lower.gg:2800` ctor).
