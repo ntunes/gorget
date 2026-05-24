@@ -177,6 +177,17 @@ new node, making it owned — not because clone-on-borrow is wired.)
 **a-1 stays** (`register_local_for_drop` skips LoBorrowed/LoView) — correct, but inert until the
 tagging above makes aliased locals actually carry `LoBorrowed`.
 
+**RESOLVED (pre-flight check the 3rd review wanted): OpClone materializes end-to-end — a-5's
+clones WILL fire.** The decision-layer docstring at `lower.gg:1262-1270` ("clone-emission
+deferred to Phase 2c... dead code, no caller") is STALE. Materialization is live one layer
+down: `lir_lower.gg:2399-2464` (`case OpClone(local_id)`) emits a real
+`ICallExtern(dst, clone_fn, ...)` with `clone_fn = resource_clone_fn(...)` = `T__clone` /
+`gorget_*_clone` ("Phase 2c COMMIT 2 + Phase 2.3: OpClone lowers to a real clone"). Empirically
+confirmed: the `meta_expand` GIR's `call @FunctionDef(clone _21, clone _22, …)` field-clones did
+NOT double-free → they produced independent copies. So once a-5 makes `op_consume` emit
+`OpClone` for a LoBorrowed consume source, lir_lower turns it into a working clone call — no
+deferred-emission blocker. (Retire the stale `lower.gg:1262-1272` docstring in STEP 5 cleanup.)
+
 ---
 
 ## 5. STEP 4: perf (the ~510s emit)
