@@ -1,0 +1,34 @@
+# Regression: an owning temporary passed to a bare (borrow) value parameter
+# must be dropped after the call expression (temporary lifetime).
+#
+# A bare resource param is a borrow — the callee does NOT drop it — so the
+# caller owns the temporary and must free it once the call returns. This used
+# to leak: the field-constructed arg-temp was borrowed for the call and never
+# dropped. (A named local already worked, because its declaring scope drops it.)
+
+from std.os import mem_live
+from std.collections import Vector
+
+struct Node:
+    Vector[int] data
+
+void take(Node value):
+    pass
+
+void main():
+    # Owning temporary in argument position — must not accumulate.
+    int baseline = mem_live()
+    int i = 0
+    while i < 200:
+        take(Node([1, 2, 3]))
+        i = i + 1
+    print(f"temp_leaked={mem_live() - baseline > 0}")
+
+    # Named local control — already correct; must stay correct.
+    int b2 = mem_live()
+    int j = 0
+    while j < 200:
+        Node n = Node([4, 5, 6])
+        take(n)
+        j = j + 1
+    print(f"named_leaked={mem_live() - b2 > 0}")

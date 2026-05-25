@@ -228,6 +228,12 @@ pub struct FunctionState {
     /// Populated by lower_call_arg when a Move param borrows a local, drained by
     /// the call lowering site after emitting the Call instruction.
     pub pending_move_zeros: Vec<LocalId>,
+    /// Owning temporaries materialized as borrow-arguments (bare resource arg
+    /// passed to a by-pointer param). The callee only borrows them, so the
+    /// caller owns them and must drop them once the call expression completes
+    /// (temporary lifetime). Populated by lower_call_arg, drained as DropIfAlive
+    /// by the call lowering site right after emitting the Call instruction.
+    pub pending_temp_drops: Vec<LocalId>,
     /// When true, pattern extraction of string fields skips cloning because
     /// the scrutinee is dead and BOTH the scrutinee copy AND the original
     /// variable will be MoveZeroed after extraction. Set by lower_match_stmt.

@@ -1801,6 +1801,7 @@ pub(super) fn lower_method_call(
         // Save pending_move_zeros baseline so we only drain entries added
         // by THIS method call's argument lowering (not from nested/prior calls).
         let move_zero_baseline = ctx.func_state.pending_move_zeros.len();
+        let temp_drop_baseline = ctx.func_state.pending_temp_drops.len();
 
         // Snag #43 (2026-05-13) prep: set `expected_type` per consuming
         // arg position so the auto-propagation step inside
@@ -2550,6 +2551,14 @@ pub(super) fn lower_method_call(
         for local in pending {
             builder.move_zero(Place::local(local));
             ctx.drops.mark_moved(local);
+        }
+
+        // Drop owning temporaries materialized as borrow-arguments for THIS
+        // method call (temporary lifetime ends after the call).
+        let temp_drops: Vec<LocalId> = ctx.func_state.pending_temp_drops.drain(temp_drop_baseline..).collect();
+        for local in temp_drops {
+            // Unconditional: a bare-borrow callee never moves the temp.
+            builder.drop(Place::local(local));
         }
 
         // Track ViewOf provenance for view-returning builtin methods (slice, trim, etc.).

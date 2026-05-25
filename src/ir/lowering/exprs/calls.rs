@@ -217,6 +217,37 @@ pub(super) fn lower_call_arg(
                         // Ownership::Move path at line ~212.
                         ctx.func_state.pending_move_zeros.push(place.local);
                         return FunctionBuilder::copy(dst);
+                    } else if place.projections.is_empty()
+                        && !ctx.is_named_local(place.local)
+                        && ctx.is_owned_local(builder, place.local)
+                        && ctx.type_registry.needs_drop(local_type)
+                        && !ctx.drops.is_registered(place.local)
+                        && !ctx.drops.is_moved(place.local)
+                    {
+                        // `place.local` is an owning temporary built for this
+                        // argument (e.g. `f(Node(...))`). The callee borrows it
+                        // (const Ptr) and does NOT drop it, so the caller owns it
+                        // and must free it once the call expression completes.
+                        //
+                        // A field-constructed temp is initialized via field-address
+                        // writes, which the LIR drop-flag dataflow does not see as
+                        // a slot init — so a drop emitted on it directly is deleted
+                        // (treated as Uninitialized). Re-home it into a fresh slot
+                        // via a whole-slot store (recognized → Initialized), mirror
+                        // of the named-local path, then borrow that and schedule a
+                        // post-call drop on it.
+                        let owned = builder.add_local(local_type, None);
+                        builder.assign_mode(
+                            crate::ir::instructions::AssignMode::Move,
+                            Place::local(owned),
+                            FunctionBuilder::mov(place.local),
+                        );
+                        ctx.set_owned(builder, owned);
+                        let ptr_type = ctx.register_ptr_type(local_type);
+                        let dst = builder.add_local(ptr_type, None);
+                        builder.emit_borrow(dst, Place::local(owned));
+                        ctx.func_state.pending_temp_drops.push(owned);
+                        return FunctionBuilder::copy(dst);
                     } else {
                         let ptr_type = ctx.register_ptr_type(local_type);
                         let dst = builder.add_local(ptr_type, None);
@@ -1200,6 +1231,7 @@ pub(super) fn lower_call(
         // Save pending_move_zeros baseline so we only drain entries added
         // by THIS call's argument lowering (not from nested/prior calls).
         let move_zero_baseline = ctx.func_state.pending_move_zeros.len();
+        let temp_drop_baseline = ctx.func_state.pending_temp_drops.len();
         let mut lowered_args: Vec<Operand> = resolved_args
             .iter()
             .enumerate()
@@ -1411,6 +1443,17 @@ pub(super) fn lower_call(
         for local in pending {
             builder.move_zero(Place::local(local));
             ctx.drops.mark_moved(local);
+        }
+
+        // Drop owning temporaries that were materialized as borrow-arguments
+        // for THIS call. The callee only borrowed them; their temporary
+        // lifetime ends here, so free them now (prevents arg-temp leaks).
+        let temp_drops: Vec<LocalId> = ctx.func_state.pending_temp_drops.drain(temp_drop_baseline..).collect();
+        for local in temp_drops {
+            // Unconditional: a bare-borrow callee never moves the temp, so it is
+            // always alive here. (DropIfAlive would be stripped — the temp isn't
+            // in drop_elab's tracked flag set, so its flag defaults to false.)
+            builder.drop(Place::local(local));
         }
 
         // `noreturn` extern calls (exit, abort, …) never return to the caller.

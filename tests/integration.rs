@@ -4749,6 +4749,13 @@ fn run_gg_panics(fixture: &str, expected_stderr: &str) {
 }
 
 #[test]
+fn arg_temp_drop_no_leak() {
+    // An owning temporary passed to a bare (borrow) value param must be dropped
+    // after the call (temporary lifetime); previously it leaked.
+    run_gg("arg_temp_drop_no_leak.gg", "temp_leaked=false\nnamed_leaked=false");
+}
+
+#[test]
 fn assert_basic() {
     run_gg("assert_basic.gg", "all asserts passed");
 }
