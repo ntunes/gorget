@@ -328,20 +328,26 @@ mod tests {
         assert!(parser.errors.is_empty(), "ecs.gg parse errors: {:?}", parser.errors);
 
         let mut struct_names = vec![];
+        let mut alias_names = vec![];
         let mut equip_count = 0;
         for item in &module.items {
             match &item.node {
                 Item::Struct(s) => struct_names.push(s.name.node.clone()),
+                Item::TypeAlias(a) => alias_names.push(a.name.node.clone()),
                 Item::Equip(_) => equip_count += 1,
                 _ => {}
             }
         }
 
-        assert!(struct_names.contains(&"Entity".to_string()));
+        // Entity is now an alias to std.slotmap's generational SlotKey, not a
+        // standalone struct — the language has one generational-handle type.
+        assert!(alias_names.contains(&"Entity".to_string()));
+        assert!(!struct_names.contains(&"Entity".to_string()));
         assert!(struct_names.contains(&"EntityPool".to_string()));
         assert!(struct_names.contains(&"SparseSet".to_string()));
         assert!(struct_names.contains(&"SparseSetIter".to_string()));
-        assert_eq!(equip_count, 5);
+        // Was 5; the old `equip Entity with Displayable` went away with the alias.
+        assert_eq!(equip_count, 4);
     }
 
     #[test]

@@ -8,5 +8,5 @@ type Handle = SlotKey
 
 void main():
     Handle h = Handle(7, 0)
-    print(h.idx)
+    print(h.id)
     print(h.gen)

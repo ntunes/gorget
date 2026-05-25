@@ -1,4 +1,4 @@
-from xtd.ecs import Entity, EntityPool, SparseSet, query2
+from xtd.ecs import EntityPool, SparseSet, query2
 
 void main():
     EntityPool pool = EntityPool.new()

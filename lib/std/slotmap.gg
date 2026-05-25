@@ -9,16 +9,16 @@
 from std.collections import Vector
 
 struct SlotKey:
-    int idx
+    int id
     int gen
 
 equip SlotKey with Displayable:
     String display(self):
-        return f"SlotKey({self.idx}:{self.gen})"
+        return f"SlotKey({self.id}:{self.gen})"
 
 equip SlotKey with Equatable:
     bool eq(self, SlotKey other):
-        return self.idx == other.idx and self.gen == other.gen
+        return self.id == other.id and self.gen == other.gen
 
 struct SlotMap[T]:
     Vector[T] values
@@ -49,23 +49,23 @@ equip SlotMap[T]:
 
     # True only if the key points at a live slot of the matching generation.
     bool contains(self, SlotKey k):
-        if k.idx < 0 or k.idx >= self.values.len():
+        if k.id < 0 or k.id >= self.values.len():
             return false
-        if self.occupied.get(k.idx).unwrap() == false:
+        if self.occupied.get(k.id).unwrap() == false:
             return false
-        return self.gens.get(k.idx).unwrap() == k.gen
+        return self.gens.get(k.id).unwrap() == k.gen
 
     # Borrow the value for a key, or None if the key is stale/removed.
     Option[T] get(self, SlotKey k):
         if self.contains(k) == false:
             return None
-        return Some(self.values.get(k.idx).unwrap())
+        return Some(self.values.get(k.id).unwrap())
 
     # Overwrite the value for a live key. Returns false if the key is stale.
     bool set(&self, SlotKey k, T value):
         if self.contains(k) == false:
             return false
-        self.values.set(k.idx, value)
+        self.values.set(k.id, value)
         return true
 
     # Remove and return the value. Bumps the slot's generation, so every prior
@@ -73,10 +73,10 @@ equip SlotMap[T]:
     Option[T] remove(&self, SlotKey k):
         if self.contains(k) == false:
             return None
-        T old = self.values.get(k.idx).unwrap()
-        self.occupied.set(k.idx, false)
-        self.gens.set(k.idx, k.gen + 1)
-        self.free.push(k.idx)
+        T old = self.values.get(k.id).unwrap()
+        self.occupied.set(k.id, false)
+        self.gens.set(k.id, k.gen + 1)
+        self.free.push(k.id)
         self.count = self.count - 1
         return Some(old)
 

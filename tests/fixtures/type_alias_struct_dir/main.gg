@@ -2,5 +2,5 @@ import aux
 
 void main():
     Handle h = mk()
-    print(h.idx)
+    print(h.id)
     print(h.gen)

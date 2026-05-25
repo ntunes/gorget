@@ -5,14 +5,12 @@
 # component storage and lookup.
 
 from std.collections import Vector
+from std.slotmap import SlotKey
 
-struct Entity:
-    int id
-    int gen
-
-equip Entity with Displayable:
-    String display(self):
-        return "Entity({self.id}:{self.gen})"
+# An entity handle is just a generational SlotKey — the language has one
+# generational-handle type. `e.id` / `e.gen` and the positional `Entity(id, gen)`
+# constructor all work transparently through the alias.
+type Entity = SlotKey
 
 struct EntityPool:
     int next_id
