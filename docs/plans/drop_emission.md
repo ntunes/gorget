@@ -1,8 +1,8 @@
 # Drop Emission — Self-Host Plan (unified)
 
 **Status (2026-05-25, HANDOVER):** IN PROGRESS — cc-clean, **not yet bootstrapping.** WIP is
-**COMMITTED** on branch `gorget-1` (`758ed737`, 1 ahead of `main`@`087b5a13`; squash at
-merge-to-main). Stage-1 now emits the full stage-2 C (**616363 lines, ~567s** — use a ≥2400s
+**COMMITTED** on branch `gorget-1` (2 ahead of `main`@`087b5a13`: `758ed737` = code WIP,
+`63c327f7` = handover docs; squash at merge-to-main). Stage-1 now emits the full stage-2 C (**616363 lines, ~567s** — use a ≥2400s
 timeout; the earlier "hang" was a 600s-timeout artifact on a loaded box, NOT a bug). The live
 blocker has moved into **stage-2 lowering**: an **`EBinaryOp` infinite recursion** (see NEXT BUG).
 Fixed + committed this run: **bug #1** (None/`NO_NAME` lowered as 8-byte `OpConstUnit()` →
@@ -63,6 +63,11 @@ also be CLONED (drop-without-clone on a shallow copy = double-free).**
 
 ## Validation loop (ASan is the tool — one run = alloc site + BOTH free stacks)
 
+**Turnaround budget (so you don't mistake slow for hung):** ~9 min stage-0 build + ~567s emit +
+~30s cc/ASan-build + ASan run = **~25–50 min to first signal**, more on a loaded box. Run ONE heavy
+thing at a time. Paths below are the MAIN worktree (`/workspace/gorget-1`) with its prebuilt
+`driver`; a fresh worktree agent must build stage-0 first (the `gg build` line does this).
+
 ```bash
 cd /workspace/gorget-1
 GG_BUILD_TIMEOUT_SECS=600 ./target/release/gg build tests/fixtures/self_host_lowerer/driver.gg   # rebuild stage-0 (~9 min)
@@ -103,21 +108,40 @@ stack-overflows in `lower_expr`:
 Source: `lower_expr`'s `case EBinaryOp(lhs_box, op, rhs_box)` (lower.gg:~3859) → `lower_expr(*lhs_box)`.
 It never bottoms out. While lowering **`derive___field_write_lines`**.
 
-**What's RULED OUT (verified 2026-05-25):**
-- NOT the deref: at the recursion site, `__s270` = lhs `Box__SpannedExpr`; `memcpy(&__s344, __s270, 192)`
-  is a correct `*box` (192 = sizeof `SpannedExpr`).
-- NOT the clone (my first suspect, item #8): `Expr__clone` case 9 (EBinaryOp) correctly DEEP-clones —
-  `__gorget_box_alloc_SpannedExpr(*box)` (fresh box + copy) then `SpannedExpr__clone_inplace`.
-- So the `EBinaryOp` **AST is CYCLIC**: `lhs_box` transitively points back to a same-shape node
-  (gdb: identical operator-`String` `.alloc` ptr at every recursion depth ⇒ shared/self-ref node).
+**Observed in the 2026-05-25 ASan session (regenerate to re-confirm — these are gdb observations,
+not re-runnable facts; the `/tmp` file no longer exists):**
+- The deref looked correct: `__s270` = lhs `Box__SpannedExpr`; `memcpy(&__s344, __s270, 192)` = a
+  `*box` (192 ≈ sizeof `SpannedExpr`, unverified by exact size).
+- `Expr__clone` case 9 (EBinaryOp) DEEP-clones correctly — `__gorget_box_alloc_SpannedExpr(*box)`
+  (fresh box + copy) then `SpannedExpr__clone_inplace`. So **`Expr__clone` is not the culprit.**
+- The recursing node looked the SAME at every depth (identical operator-`String` `.alloc` ptr) ⇒
+  two AST nodes **sharing one `Box[SpannedExpr]`** (a shared-box alias), which presents in gdb
+  exactly like a "cycle."
 
-**So the cycle is built UPSTREAM — parser or a non-clone transform — NOT in the drop-emission path.**
-(May well be pre-existing / orthogonal to drop emission.) **NEXT:** gdb-follow the `lhs_box`
-pointers from the recursing node to the self-reference; identify the exact source expression in
-`field_write_lines`; then inspect how the self-host PARSER builds that `EBinaryOp` (or any
-transform/meta-expansion that rewrites it). Repro: run the loop below, then
-`gdb -p <pid>` the hung `/tmp/s1asan` (or build a `-g` driver via `gg build … --emit-c-lir` +
-`cc -O0 -g`).
+**LEADING HYPOTHESIS — a drop-emission WIP change created a shared-box alias (NOT the parser).**
+Strong evidence this is the WIP, not upstream: (a) the WIP touched ZERO parser/AST files
+(`git diff --stat f15a45c6..HEAD -- '*parser*' '*ast*'` = empty); (b) the **labels-only** baseline
+`f15a45c6` has a *structurally identical* `lower_expr` EBinaryOp arm recursing on
+`lower_expr(*lhs_box)` and it **bootstrapped fine** — same parser, same recursion. If the parser
+built a cyclic AST, labels-only would have stack-overflowed identically. It didn't. So the cycle is
+a **runtime aliasing bug introduced by this WIP's clone/move/drop path** — most likely a
+`Box[SpannedExpr]` field consumed WITHOUT a clone or `GIMoveZero`, leaving two nodes pointing at one
+box. This is the SAME failure mode as UAF #1, the array-literal clone, and the add_local over-read
+(all looked like other things first; all were consume/move/clone decisions). The earlier "built
+upstream / pre-existing / orthogonal" framing was WRONG — it contradicted the labels-only evidence.
+
+**NEXT — cheapest decisive experiment FIRST (do this before any gdb pointer-chasing):** reproduce
+with labels-only and see if bug #3 disappears. Either `git stash`/revert the WIP's `lower.gg` +
+`lir_*.gg` deltas (keep gir.gg if needed to compile), OR build the self-host at `f15a45c6`, emit,
+ASan-run. If the EBinaryOp recursion does NOT reproduce labels-only → confirmed it's the WIP; then
+**bisect which WIP change introduces it** (prime suspects: a-5 clone-on-`LoBorrowed`, the
+prelude-variant-owning change, or a missing `GIMoveZero` on a moved `Box[SpannedExpr]` field at a
+consume/construction site). Only if it DOES reproduce labels-only is the parser/transform in play
+(secondary). To re-observe the alias: regenerate the stage-2 C (loop below), build a `-g` driver
+(`gg build … --emit-c-lir` > a `.c`, then `cc -O0 -g`), run, `gdb -p <pid>` the hung process; the
+durable code anchors are `lower.gg:~3859` (EBinaryOp arm) and fn `derive___field_write_lines` — NOT
+`/tmp` line numbers (the generated file is regenerated each run, so any `/tmp/s1full.c:NNNNN` is
+non-reproducible).
 
 ---
 
@@ -159,7 +183,11 @@ On ship, copy the "Deferred optimizations" list below into `TODO.md` so it outli
    be BETTER than the Rust impl (whose name-match removal is a separate TODO), not a mirror of its
    smell. The swap is output-NEUTRAL (same consume decisions → no `bootstrap_fixed_point` churn),
    so: make it WORK first (drop emission green), then de-smell as the final pre-ship cleanup — do
-   NOT let it crystallize.
+   NOT let it crystallize. ("Output-neutral" is the expectation, NOT a proof — VERIFY it by running
+   `bootstrap_fixed_point` after the swap; the name-match is already `collection_kind`-gated
+   (`lower.gg:~488`) so a typed signal keyed on the same kind *should* agree, but confirm. Note the
+   analogous Rust name-match was genuinely UNSOUND on `ByPtr` borrow-params — see DONE.md `07649296`
+   / `c2810559` — the self-host dodges that only via the kind gate.)
 6. **`stdbuf -oL`** on every `--emit-*` run, or block-buffering masquerades as a hang.
 
 ---
