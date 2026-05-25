@@ -300,7 +300,11 @@ struct GirModule:
     Dict[String, Vector[bool]] fn_move_params
     # Module-level int constants and None-typed sentinel decls.
     Dict[String, int] const_decls
-    Dict[String, bool] none_decls
+    # `Option[T] X = None` module consts → the const's concrete Option
+    # type_id, so an EIdentifier reference emits a properly-typed `None`
+    # (IEnumInit, tag 1) instead of an 8-byte OpConstUnit() — the latter is
+    # over-read by add_local's drop-emission clone as a 40-byte Option.
+    Dict[String, int] none_decls
     # Enum registry — used by `find_enum_by_variant` for the inverted
     # variant→enum lookup and by `enum_variant_index` for ordinal
     # resolution. Mirrors Rust's `ctx.resolve_enum_variant`.
@@ -334,6 +338,18 @@ struct GirModule:
     # don't consult these — they're a within-lower-module convenience.
     TypeTable tc_types
     ScopeTable tc_scopes
+    # Mono'd Option__X / Result__X__E instances whose payload is a resource.
+    # These are emitted as ordinary by-value enum structs (NOT runtime
+    # handles), so they must NOT go in `resource_types` — membership there
+    # flips the C param/field ABI to pass-by-pointer/void* and breaks the
+    # by-value call sites. But at a consuming position they DO own a
+    # resource transitively and must be CLONED, not byte-copied. op_consume
+    # consults this set (via is_resource_type_name) for the clone decision
+    # only; C emission never reads it. Populated by
+    # register_optionlike_resource during lower_module; the matching
+    # clone/drop fn defs are generated in lir_lower Pass 3 +
+    # recursive_drop_enums. See lower.gg's register_optionlike_resource.
+    Dict[String, bool] optionlike_resource_types
 
 # ── Helpers ──────────────────────────────────────────────
 

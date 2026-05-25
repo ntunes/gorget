@@ -21,6 +21,10 @@ from gir import ResourceMetadata
 # dispatch. See gir.gg::ConsumeKind for the full partition.
 from gir import ConsumeKind, CkAssign, CkReturn, CkCallArgBorrow, CkCallArgOwning, CkFieldWrite
 from gir import CkBinOpArg, CkFormatArg, CkMatchPtr
+# CollectionKind variants — needed to type/construct the kind in
+# `collection_kind_of` and to drive `is_owning_mutator_arg`'s
+# kind-dependent owning-arg classification (STEP 1 / Option C).
+from gir import CollectionKind, CkVector, CkDeque, CkHeap, CkDict, CkSet, CkNotCollection
 # Phase A — typed-metadata classifier shared with lir_lower.gg. The
 # `name.starts_with("X__")` cascade lives there as the single source
 # of truth for which monomorphised type names belong to which runtime
@@ -448,6 +452,73 @@ int add_local_inheriting(LowerCtx &ctx, int type_id, Option[String] name, int sr
 # into the collection rather than an owned copy.
 bool is_collection_getter_method(String method):
     return method == "get" or method == "safe_get" or method == "pop" or method == "last" or method == "first" or method == "remove"
+
+# Collection kind of a (possibly mangled) receiver type name, or
+# CkNotCollection if `tname` isn't a known resource collection.
+# Thin wrapper over `resource_meta_for` so callers can read the kind
+# without each re-matching the Option (single source of truth: the
+# lazy cascade in lir_lower.gg).
+CollectionKind collection_kind_of(GirModule &gmod, String tname):
+    match resource_meta_for(&gmod, tname):
+        case Some(rm):
+            return rm.collection_kind
+        case None:
+            return CkNotCollection()
+
+# STEP 1 / Option C — per CLAUDE.md "Ownership at Consuming Positions":
+# a collection mutator takes OWNERSHIP of the value it stores (and, for
+# Dict, the key). Returns true iff the `margs_idx`-th non-receiver arg
+# of `mname` on a `kind` collection is such an owning value/key slot.
+# Positional index args (Vector set/insert's index) stay borrows → false.
+#
+# Reference: Rust's `consuming_positions` in
+# `src/ir/lowering/exprs/methods.rs:1850` — a name-keyed match
+# (push/add/extend/send/push_back/push_front → [0]; put/set/insert →
+# [0,1]) gated only by excluding `GorgetString` string-builders. Rust
+# can be name-only because it consumes BOTH put/set/insert positions and
+# the index arg is a primitive, so `ensure_owned_at_consuming_arg` is a
+# no-op there. We branch on collection kind instead because in the self-
+# host the kind is what disambiguates `set` = (idx,value) on a Vector vs
+# (key,value) on a Dict, and `insert` = (idx,value) on a Vector vs
+# (value) on a Set. This is NOT a divergence from Rust's intent: user
+# equip methods named set/push route their param ownership through
+# `classify_call_arg`/`fn_move_params` already (Rust folds both into one
+# broad pass); the gap THIS helper closes is the builtin collection
+# runtime mutators, which are absent from fn_move_params. The kind gate
+# is therefore also the safety boundary against hijacking a user method
+# that happens to share a name. Aligns with the runtime by-pointer-into-
+# storage args in lir_lower.gg's `needs_ptr_arg` (gorget_array_push@1,
+# _set@2, _insert@2, gorget_map_put@1&2, gorget_set_add@1).
+# (extend/push_back/push_front/Channel.send: in Rust's list but not
+# exercised by the self-host today — add when a gdb pass shows one.)
+bool is_owning_mutator_arg(CollectionKind kind, String mname, int margs_idx):
+    match kind:
+        case CkVector():
+            if mname == "push":
+                return margs_idx == 0
+            if mname == "set" or mname == "insert":
+                return margs_idx == 1
+            return false
+        case CkDeque():
+            if mname == "push":
+                return margs_idx == 0
+            if mname == "set" or mname == "insert":
+                return margs_idx == 1
+            return false
+        case CkHeap():
+            if mname == "push":
+                return margs_idx == 0
+            return false
+        case CkDict():
+            if mname == "put" or mname == "set":
+                return margs_idx == 0 or margs_idx == 1
+            return false
+        case CkSet():
+            if mname == "add" or mname == "insert":
+                return margs_idx == 0
+            return false
+        case CkNotCollection():
+            return false
 
 void emit(LowerCtx &ctx, Instruction inst):
     # Workaround: can't push to a vector inside a vector via .get().
@@ -1248,11 +1319,25 @@ Operand op_consume(LowerCtx &ctx, GirModule &gmod, int lid, ConsumeKind kind):
     if not is_resource_type_name(tname, &gmod):
         return OpCopy(lid)
     # Resource source at a consume position: pick mode by ownership.
+    # a-5 (clone-on-borrow) — WIRED. We only reach here for a genuine
+    # consume kind (the non-consume kinds returned OpBorrow at the top
+    # of this fn). A borrow/view does NOT own its data, so transferring
+    # it to an owning destination (assign / return / field-init /
+    # collection-put) MUST materialise an independent copy — otherwise
+    # the destination shallow-aliases the borrow's buffer and both free
+    # it (the meta_expand `result.push(borrowed_stmt)` →
+    # `m.items.set(i, new_fn)` double-free). Mirrors Rust's
+    # `ensure_owned_at_consuming_arg` borrowed/Ptr-source arm
+    # (`src/ir/lowering/exprs/methods.rs:1862-1867`: "(a) Ptr(inner) args
+    # — always clone; (b) non-last-use resource args — clone"). OpClone
+    # materialises end-to-end at lir_lower.gg's OpClone handler
+    # (value-struct slot → `T__clone`/`gorget_*_clone` via ISlotAddr;
+    # ptr-to-struct slot → clone the pointee).
     match loc.ownership:
         case LoBorrowed():
-            return OpBorrow(lid)
+            return OpClone(lid)
         case LoView():
-            return OpBorrow(lid)
+            return OpClone(lid)
         else:
             return OpMove(lid)
 
@@ -3438,6 +3523,32 @@ bool is_resource_field_type(SpannedType stype, Dict[String, bool] resource_types
         else:
             return false
 
+# Register the mangled names of mono'd Option__X / Result__X__E instances
+# whose payload is a resource into `resource_types`, recursing through
+# nested Option/Result payloads. ONLY Option/Result: Vector/Dict/Set/Box
+# are already classified by lir_lower's `build_resource_metadata`, and
+# their mangled names (`Dict__GorgetString__GirTypeInfo`) have no C
+# typedef — registering THOSE flips field emission to a non-existent type
+# (832 cc errors). Option/Result instances DO emit a typedef, so keying
+# `is_resource_type_name` on them is safe. See the call site in
+# lower_module for why this gap exists (mono'd prelude generics aren't
+# user `m.items` defs).
+void register_optionlike_resource(SpannedType stype, Dict[String, bool] resource_types, Dict[String, bool] &optionlike):
+    match stype.ty:
+        case TNamed(name, targs):
+            if name == "Option" or name == "Result":
+                bool payload_resource = false
+                for ta in targs:
+                    if is_resource_field_type(ta, resource_types):
+                        payload_resource = true
+                if payload_resource:
+                    optionlike.put(spanned_type_to_name(stype), true)
+                # Nested Option[Option[Resource]] / Result[Option[..]] etc.
+                for ta in targs:
+                    register_optionlike_resource(ta, resource_types, &optionlike)
+        else:
+            pass
+
 bool is_resource_type_name(String name, GirModule &gmod):
     # Delegate to `resource_meta_for` (lazy accessor over the
     # `build_resource_metadata` cascade in lir_lower.gg — the single
@@ -3456,6 +3567,12 @@ bool is_resource_type_name(String name, GirModule &gmod):
     # build_resource_metadata to cover user types, so this fallback
     # remains until that consolidation lands).
     if gmod.resource_types.contains(name):
+        return true
+    # Mono'd Option__X / Result__X__E whose payload owns a resource: a
+    # by-value struct that must still be CLONED (not byte-copied) at a
+    # consume position. Kept OUT of resource_types so C emission keeps the
+    # by-value ABI; see GirModule.optionlike_resource_types.
+    if gmod.optionlike_resource_types.contains(name):
         return true
     return false
 
@@ -3712,12 +3829,22 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             int mdst_or_neg = lower_metaop_ident(&ctx, name)
             if mdst_or_neg >= 0:
                 return mdst_or_neg
-            # Module-level `Option[T] X = None` — emit a Unit (None) value
-            # rather than the int-0 EIdentifier fallback. Used in
-            # `add_local(&ctx, type, NO_NAME)` and similar callsites.
+            # Module-level `Option[T] X = None` (e.g. NO_NAME) — emit a
+            # properly-TYPED `None`: a local typed as the const's concrete
+            # Option struct, filled by the prelude-variant `None` ctor. That
+            # routes through lir_lower's `try_lower_prelude_variant` →
+            # `IEnumInit(slot, struct_id, tag=1, [])`, giving a full-size
+            # (e.g. 40-byte Option__GorgetString) value. The former
+            # `OpConstUnit()` produced an 8-byte I32-0 slot, which add_local's
+            # drop-emission clone over-read as a 40-byte Option (tag 0 == Some
+            # → bogus Str payload → stack-buffer-overflow). Mirrors Rust gg's
+            # `__lir_g1 = {0}` NO_NAME global: what matters is the 40-byte
+            # SIZE, not the tag (cloning an empty/None Option copies nothing).
             if gmod.none_decls.contains(name):
-                int ndst = add_local(&ctx, UNIT_TYPE, NO_NAME)
-                emit(&ctx, GIAssign(ndst, OpConstUnit()))
+                int opt_tid = gmod.none_decls.get(name).unwrap()
+                int ndst = add_local(&ctx, opt_tid, NO_NAME)
+                Vector[Operand] none_args = []
+                emit(&ctx, GICallExtern(ndst, "None", none_args))
                 return ndst
             # HARD BUG: silently returning `OpConstI64(0)` for an unknown
             # identifier lies about both value and type — every downstream
@@ -4435,21 +4562,30 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         # signature. Dispatch via classify_call_arg:
                         # `!self` → OpMove, otherwise OpBorrow.
                         call_args.push(op_consume(&ctx, &gmod, recv, classify_call_arg(&gmod, full_name, 0)))
-            # TODO(a-5): collection mutators (push/put/set/insert/add/send)
-            # take OWNERSHIP of their value arg (last), but the runtime fn ABI
-            # passes it BY POINTER (the runtime memcpy's it into storage). So
-            # the correct lowering is pointer-ABI (borrow) for the CALL + a
-            # post-call GIMoveZero of an owned source (or a pre-call clone of a
-            # borrowed source) — NOT a plain operand→OpMove (that passes the
-            # struct by value → "incompatible type for argument N of
-            # gorget_array_set/push"). Mirror the v[i]=x index-assign path
-            # (lower.gg ~5558) which already does consume-via-pointer. Until
-            # then this stays OpBorrow → the set/push value shallow-aliases and
-            # double-frees at scope exit (the meta_expand_for_match backtrace).
+            # STEP 1 / Option C — collection mutators (push/set/insert on
+            # Vector, put/set on Dict, add/insert on Set) take OWNERSHIP of
+            # the value they store (and, for Dict, the key). classify_call_arg
+            # defaults these to CkCallArgBorrow (the mangled method name isn't
+            # in fn_move_params), which makes op_consume return OpBorrow
+            # unconditionally → neither a paired GIMoveZero nor a clone fires,
+            # so the stored value shallow-aliases the source local and both
+            # free the same heap at scope exit (the meta_expand_for_match
+            # double-free). Promote the owning value/key arg to CkCallArgOwning
+            # so op_consume emits OpMove (owned last-use source) or OpClone
+            # (Ptr-to-resource source via decide_ptr_consume; LoBorrowed
+            # sources await a-5's clone-on-borrow arm). The runtime ABI ALREADY
+            # address-takes these args via lir_lower's needs_ptr_arg keyed on
+            # the mapped runtime name, so an OpMove operand is passed by pointer
+            # cleanly — NO lir_lower change is needed (the original "wrong ABI"
+            # diagnosis was inverted; see docs/plans/drop_emission.md).
+            CollectionKind _recv_ck = collection_kind_of(&gmod, recv_type_name)
             int _ma_idx = 0
             for ma in margs:
                 int ma_val = lower_expr(&ctx, ma, &gmod)
-                call_args.push(op_consume(&ctx, &gmod, ma_val, classify_call_arg(&gmod, full_name, _ma_idx + 1)))
+                ConsumeKind ma_kind = classify_call_arg(&gmod, full_name, _ma_idx + 1)
+                if is_owning_mutator_arg(_recv_ck, mname, _ma_idx):
+                    ma_kind = CkCallArgOwning()
+                call_args.push(op_consume(&ctx, &gmod, ma_val, ma_kind))
                 _ma_idx += 1
             # Return-type resolution priority — single source of truth
             # at each step (Layering rule 3):
@@ -4708,8 +4844,19 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # this, `[!init_insts]` and similar "array literal with
             # explicit elements" produced an EMPTY array, and any
             # subsequent `.get(0)` returned NULL.
+            # `gorget_array_push` mutates the array in place THROUGH a
+            # pointer — the receiver is a borrow, NOT a consumed value. It
+            # must use OpBorrow(adst): `adst` is live past every push (the
+            # next iteration pushes again, and `return adst` hands the
+            # filled array out). Passing OpMove(adst) tripped drop-emission's
+            # "owned but live-past → clone before call" rule, so each push
+            # mutated a throwaway CLONE while the original `adst` stayed
+            # empty — `[!init_insts]` then returned a 0-length array and the
+            # first `emit()` paniced (index 0, length 0). Matches the
+            # gorget_array_set receiver convention at `apply_chain_writeback`.
+            # The element keeps OpMove — it IS consumed into the array.
             for el in elem_locals:
-                Vector[Operand] push_args = [OpMove(adst), OpMove(el)]
+                Vector[Operand] push_args = [OpBorrow(adst), OpMove(el)]
                 emit(&ctx, GICallExtern(-1, "gorget_array_push", push_args))
             return adst
         case ETupleLiteral(elems):
@@ -5027,6 +5174,7 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         if gmod.fn_borrow_params.contains(call_name):
             borrow_flags = gmod.fn_borrow_params.get(call_name).unwrap()
         int ai = 0
+        int first_arg_type = -1
         while ai < args.len():
             SpannedExpr arg = args.get(ai).unwrap()
             # For struct-constructor calls, hint the container-literal
@@ -5039,6 +5187,8 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
             # fields and later pushes corrupt adjacent slots.
             apply_container_hint_for_ctor_arg(&ctx, call_name, ai, arg, &gmod)
             int arg_local = lower_expr(&ctx, arg, &gmod)
+            if ai == 0 and arg_local >= 0 and arg_local < ctx.locals.len():
+                first_arg_type = ctx.locals.get(arg_local).unwrap().type_id
             # Detect &arg (borrow) or pre-scanned borrow param
             bool is_borrow = false
             match arg.expr:
@@ -5116,6 +5266,37 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
             int builtin_ret = builtin_call_return_type(fname, &gmod)
             if builtin_ret >= 0:
                 ret_type = builtin_ret
+        # Prelude variant constructor `Some(x)` → `Option__<inner>`. The
+        # block above can't route it (Option is a prelude enum, absent from
+        # gmod.type_infos → enum_variant_parent "" → typed by the BARE
+        # variant name `Some`), which resolves to an LT_PTR MIS-SLOT at LIR
+        # (8 bytes for a 16-byte Option) — wrong-sized AND defeats
+        # by-pointer-param address-taking (blocks the reference-grade
+        # by-pointer Option ABI). The inner type is taken from the LOWERED
+        # ARGUMENT's local type — reliable, unlike guess_return_type (which
+        # collapses Box/struct inners to I64 → Option__int64_t ≠ the actual
+        # Option__Box__SpannedExpr) and unlike the typechecker side-table
+        # (which misses arg-position calls here). Unwrap any Ptr: a borrowed
+        # arg is typed `*T`, but the Option OWNS its payload (value type).
+        # Gate on a NON-PRIMITIVE inner: a resource/struct payload (String,
+        # user structs) is what needs the precise Option__T slot for the
+        # by-pointer ABI. Primitive-typed inners (incl. a `Box.new(...)` arg
+        # currently mistyped as I64 — a separate pre-existing gap) keep the
+        # legacy bare-`Some` typing, which coerces fine into int-typed fields
+        # (e.g. ERange); retyping them to Option__int64_t would MISMATCH
+        # those fields. This is the minimal correct scope to unblock A
+        # without depending on the orthogonal Box-typing fix.
+        if (fname == "Some") and first_arg_type >= PRIM_COUNT:
+            int some_inner = first_arg_type
+            if some_inner >= 0 and some_inner < gmod.type_table.len():
+                match gmod.type_table.get(some_inner).unwrap():
+                    case GtPtr(p_inner):
+                        some_inner = p_inner
+                    case GtMutPtr(p_inner):
+                        some_inner = p_inner
+                    else:
+                        pass
+            ret_type = lookup_or_register_named(&gmod, "Option__" + type_id_to_name(some_inner, &gmod))
         int dst = add_local(&ctx, ret_type, NO_NAME)
         emit(&ctx, GICall(dst, call_name, gir_args))
         result = dst
@@ -8169,6 +8350,37 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                 else:
                     pass
 
+    # Register the MANGLED names of mono'd Option__X / Result__X__E
+    # instances (whose payload is a resource) that appear as struct/enum
+    # fields, so the string-keyed `is_resource_type_name` (op_consume's
+    # clone-vs-copy gate) and the ctor-flag registration recognise them.
+    # The fixpoint above marks the CONTAINING user type as a resource but
+    # never the mono'd Option/Result instance itself — it isn't a user
+    # `m.items` def, so its mangled name (`Option__SpannedExpr`) is absent
+    # from resource_types. Without this, op_consume byte-copies (OpCopy →
+    # shallow alias) an `Option[Resource]` field at a consuming position:
+    # the MatchArm `guard` / ElseBranch `condition` double-free.
+    # `register_optionlike_resource` deliberately handles ONLY Option/
+    # Result (Vector/Dict/Set/Box are already classified by
+    # build_resource_metadata; registering their mangled names breaks C
+    # type emission). lir_lower drops/clones these via recursive_drop_enums
+    # (`Option__SpannedExpr__clone`).
+    # TODO(layering): is_resource_field_type (structured) and
+    # is_resource_type_name (string) are two classifiers for one axis;
+    # unify long-term (layering rule 3).
+    Dict[String, bool] optionlike_resource_types = {}
+    for mn_item in m.items:
+        match mn_item:
+            case IStruct(mn_sdef):
+                for mn_fld in mn_sdef.fields:
+                    register_optionlike_resource(mn_fld.param_type, resource_types, &optionlike_resource_types)
+            case IEnum(mn_edef):
+                for mn_var in mn_edef.variants:
+                    for mn_vft in mn_var.fields:
+                        register_optionlike_resource(mn_vft, resource_types, &optionlike_resource_types)
+            else:
+                pass
+
     Dict[String, int] type_subs = {}
     Dict[String, String] meta_aliases = types.meta_aliases
     # Also collect plain type aliases (ITypeAlias) into meta_aliases
@@ -8244,14 +8456,16 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             case IStruct(fd_sdef):
                 Vector[bool] fd_moves = []
                 for fd_fld in fd_sdef.fields:
-                    String fd_ftype = spanned_type_to_name(fd_fld.param_type)
-                    bool fd_is_resource = false
-                    match build_resource_metadata(fd_ftype):
-                        case Some(_):
-                            fd_is_resource = true
-                        case None:
-                            if resource_types.contains(fd_ftype):
-                                fd_is_resource = true
+                    # Use the structured, recursive `is_resource_field_type`
+                    # (the same predicate that builds resource_types) rather
+                    # than the string-keyed build_resource_metadata +
+                    # resource_types.contains: the string path can't see INTO
+                    # an `Option[Resource]` / `Result[Resource,_]` field, so
+                    # such fields were flagged non-owning → CkCallArgBorrow →
+                    # the MatchArm `guard` / ElseBranch `condition` aliased and
+                    # double-freed. Structured detection flags them owning →
+                    # CkCallArgOwning → op_consume clones the borrow.
+                    bool fd_is_resource = is_resource_field_type(fd_fld.param_type, resource_types)
                     fd_moves.push(fd_is_resource)
                 fn_move_params.put(fd_sdef.name, fd_moves)
             case IEnum(fd_edef):
@@ -8268,21 +8482,42 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                 for fd_var in fd_edef.variants:
                     Vector[bool] fd_vmoves = []
                     for fd_vfld in fd_var.fields:
-                        String fd_vftype = spanned_type_to_name(fd_vfld)
-                        bool fd_v_is_resource = false
-                        match build_resource_metadata(fd_vftype):
-                            case Some(_):
-                                fd_v_is_resource = true
-                            case None:
-                                if resource_types.contains(fd_vftype):
-                                    fd_v_is_resource = true
+                        # Structured detection (see the IStruct branch) —
+                        # catches Option/Result-of-resource variant payloads.
+                        bool fd_v_is_resource = is_resource_field_type(fd_vfld, resource_types)
                         fd_vmoves.push(fd_v_is_resource)
                     fn_move_params.put(fd_var.name.clone(), fd_vmoves.clone())
                     fn_move_params.put(fd_edef.name + "__" + fd_var.name, !fd_vmoves)
             else:
                 pass
+    # Prelude enum variant constructors (Option.Some, Result.Ok/Error) own
+    # their single payload — they are NOT in `m.items`, so the Fix-D loop
+    # above never registers them. Without this, `Some(x)` / `Ok(x)` /
+    # `Error(x)` classify the payload `CkCallArgBorrow` → op_consume returns
+    # OpBorrow (a non-consume early-out, so a-5's clone-on-borrow arm never
+    # fires) → the variant shallow-ALIASES the source, which is then dropped
+    # at scope exit while the constructed Option/Result (often returned or
+    # stored) still references it → use-after-free. ASan-confirmed via the
+    # `parse_equip_item` EquipBlock.trait_name UAF (`Some(tn)` aliasing a
+    # freed `tn`), 2026-05-24. Mirrors Rust treating variant payloads as
+    # owning consume positions. `None` has no payload. Registered on the
+    # bare variant name (the GIR emits `call @Some(...)`); op_consume still
+    # yields OpCopy for primitive payloads, so flagging owning is universally
+    # safe.
+    # Typed locals (NOT a bare `[true]` arg) so the `Vector[bool]` gets
+    # elem_size 1 from the declaration's container-size hint. A bare
+    # `[true]` literal passed straight to `.put()` has no type context →
+    # defaults to elem_size 8 → pushing the 1-byte bool reads 8 bytes →
+    # stack-buffer-overflow + array corruption (an "index 0, length 0"
+    # panic later in lower_module).
+    Vector[bool] some_mv = [true]
+    fn_move_params.put("Some", !some_mv)
+    Vector[bool] ok_mv = [true]
+    fn_move_params.put("Ok", !ok_mv)
+    Vector[bool] error_mv = [true]
+    fn_move_params.put("Error", !error_mv)
     Dict[String, int] const_decls = {}
-    Dict[String, bool] none_decls = {}
+    Dict[String, int] none_decls = {}
     Dict[String, float] float_const_decls = {}
     # Module-level statics with runtime-call init (`stdout` / `stderr` /
     # `stdin` from lib/std/io.gg etc.). Populated below in the
@@ -8290,7 +8525,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     # a zero-arg call.
     Dict[String, GirStaticInfo] statics = {}
     Dict[String, ResourceMetadata] resource_metadata = {}
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, !const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes)
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, !const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types)
 
     # Refine fn_sigs for functions with named/generic return types. The
     # pre-scan above defaulted those to `I64_TYPE` because `map_ast_type`
@@ -8373,11 +8608,15 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                 # in lower_expr-adjacent stack frames).
                                 bool sd_handled = try_register_static_runtime_call(&gmod, sd_ty, sd_name, sd_val)
                                 if not sd_handled:
-                                    # Recognise `Option[T] X = None` so EIdentifier can
-                                    # emit OpConstUnit() instead of the int-0 fallback.
+                                    # Recognise `Option[T] X = None` and record the
+                                    # const's concrete Option type_id, so an EIdentifier
+                                    # reference emits a properly-typed `None` (IEnumInit,
+                                    # tag 1) rather than an 8-byte OpConstUnit() that
+                                    # add_local's drop-emission clone over-reads.
                                     match sd_val.expr:
                                         case ENoneLiteral():
-                                            gmod.none_decls.put(sd_name.clone(), true)
+                                            int opt_tid = map_ast_type(sd_ty, &gmod)
+                                            gmod.none_decls.put(sd_name.clone(), opt_tid)
                                         else:
                                             pass
             else:

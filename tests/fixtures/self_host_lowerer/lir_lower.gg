@@ -957,6 +957,25 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
             ofields.push(StructField("Some_0", inner_ty))
             # Phase A: register for typed dispatch before pname moves into LirStructDef.
             m.type_runtime_map.put(pname.clone(), "Option")
+            # Generate drop/clone for a mono'd Option[Resource]: register a
+            # `Some_0` variant-drop (variant index 0 = Some; None has no
+            # payload) so emit_enum_drops/emit_enum_clones produce
+            # `Option__<inner>__drop` / `__clone`. The self-host never
+            # generated these — mono'd prelude generics aren't user
+            # `m.items` defs, so Pass 2's type_infos-driven loop misses them
+            # — which left an `Option[Resource]` field byte-copied (aliased)
+            # at a consuming position and double-freed (MatchArm `guard` /
+            # ElseBranch `condition`). Rust emits these (driver.c:11479).
+            # Mirrors Pass 2's recursive_drop_enums + type_drop_fns wiring.
+            String opt_inner_drop = drop_fn_for_type(inner, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types)
+            if opt_inner_drop != "":
+                Vector[EnumVariantDrop] opt_vd = []
+                opt_vd.push(EnumVariantDrop(0, "Some", "Some_0", opt_inner_drop.clone(), inner.clone()))
+                m.recursive_drop_enums.put(pname.clone(), opt_vd)
+                Vector[FieldDrop] opt_nofd = []
+                Vector[EnumVariantDrop] opt_vd2 = []
+                opt_vd2.push(EnumVariantDrop(0, "Some", "Some_0", opt_inner_drop, inner.clone()))
+                m.type_drop_fns.put(pname.clone(), TypeDropInfo(pname + "__drop", opt_nofd, "", opt_vd2))
             LirStructDef opt_sdef = LirStructDef(pname, ofields, 1, false, -1, -1)
             m.structs.set(psi, opt_sdef)
         elif pname.starts_with("Result__"):
@@ -1004,6 +1023,24 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
                 rfields.push(StructField("Error_0", err_ty))
                 # Phase A: register for typed dispatch before pname moves into LirStructDef.
                 m.type_runtime_map.put(pname.clone(), "Result")
+                # Generate drop/clone for a mono'd Result[Ok,Err] with a
+                # resource payload — same rationale as Option above. Ok is
+                # variant 0 (Ok_0), Error is variant 1 (Error_0); register a
+                # variant-drop for whichever payload(s) are resources.
+                String res_ok_drop = drop_fn_for_type(ok_name, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types)
+                String res_err_drop = drop_fn_for_type(err_name, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types)
+                if res_ok_drop != "" or res_err_drop != "":
+                    Vector[EnumVariantDrop] res_vd = []
+                    Vector[EnumVariantDrop] res_vd2 = []
+                    if res_ok_drop != "":
+                        res_vd.push(EnumVariantDrop(0, "Ok", "Ok_0", res_ok_drop.clone(), ok_name.clone()))
+                        res_vd2.push(EnumVariantDrop(0, "Ok", "Ok_0", res_ok_drop, ok_name.clone()))
+                    if res_err_drop != "":
+                        res_vd.push(EnumVariantDrop(1, "Error", "Error_0", res_err_drop.clone(), err_name.clone()))
+                        res_vd2.push(EnumVariantDrop(1, "Error", "Error_0", res_err_drop, err_name.clone()))
+                    m.recursive_drop_enums.put(pname.clone(), res_vd)
+                    Vector[FieldDrop] res_nofd = []
+                    m.type_drop_fns.put(pname.clone(), TypeDropInfo(pname + "__drop", res_nofd, "", res_vd2))
                 LirStructDef res_sdef = LirStructDef(pname, rfields, 2, false, -1, -1)
                 m.structs.set(psi, res_sdef)
         psi += 1
@@ -2998,22 +3035,42 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                                 f.blocks.set(bb, ablk)
                                 lir_args.push(addr)
                         case OpClone(local_id):
-                            # Phase 2c COMMIT 2: Site 2 (pass-by-ptr arg)
-                            # change deferred — Site 1 (lower_operand)
-                            # already emits the clone call when the operand
-                            # is read; on this call-arg path we still take
-                            # the source slot's address unchanged.
+                            # Phase 2c COMMIT 2 Site 2 — NOW WIRED (a-5 LIR
+                            # side). A by-pointer runtime arg needs an lvalue
+                            # (an addressable slot), but OpClone produces an
+                            # rvalue: `lower_operand` emits the clone call and
+                            # returns the fresh OWNED value (a struct value for
+                            # `T__clone`, a thin pointer for String/Closure).
+                            # Passing that value directly is the "incompatible
+                            # type for argument N of gorget_array_set/push/
+                            # map_put" error (the clone is a `T`, the runtime
+                            # wants `const void*`). So materialize the clone
+                            # into a fresh temp slot of the element type and
+                            # pass the slot's ADDRESS — the runtime then
+                            # memcpy's the owned bytes into storage, leaving the
+                            # borrow source untouched (no double-free; the whole
+                            # point of clone-on-borrow at a consuming position).
                             int slot = local_to_slot.get(local_id).unwrap()
                             int slot_ty = f.slots.get(slot).unwrap().ty
-                            if slot_ty == LT_PTR or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE):
-                                int arg_val = lower_operand(arg, &f, bb, &local_to_slot, &m)
-                                lir_args.push(arg_val)
+                            # Element (owned value) type the clone produces:
+                            # ptr-to-struct → the pointee; value-struct → itself.
+                            int elem_ty = slot_ty
+                            if slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE:
+                                elem_ty = LT_STRUCT_BASE + (slot_ty - LT_PTR_TO_BASE)
+                            int cloned_val = lower_operand(arg, &f, bb, &local_to_slot, &m)
+                            if elem_ty >= LT_STRUCT_BASE:
+                                int tmp_slot = lir_fn_add_slot(&f, elem_ty, "")
+                                LirBlock cblk = f.blocks.get(bb).unwrap()
+                                cblk.insts.push(ISlotStore(tmp_slot, cloned_val, true))
+                                int caddr = lir_fn_next_value(&f)
+                                cblk.insts.push(ISlotAddr(caddr, tmp_slot))
+                                f.blocks.set(bb, cblk)
+                                lir_args.push(caddr)
                             else:
-                                int addr = lir_fn_next_value(&f)
-                                LirBlock ablk = f.blocks.get(bb).unwrap()
-                                ablk.insts.push(ISlotAddr(addr, slot))
-                                f.blocks.set(bb, ablk)
-                                lir_args.push(addr)
+                                # Raw LT_PTR / primitive source: no struct type
+                                # signal to size a temp slot — pass the loaded
+                                # value (legacy best-effort).
+                                lir_args.push(cloned_val)
                         case OpBorrow(local_id):
                             # Phase D step 3: borrow → slot address shape.
                             int slot = local_to_slot.get(local_id).unwrap()
@@ -3145,7 +3202,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
             # `src/lir/lower/drops.rs::lower_drop`.
             String drop_tn = gir_local_type_name(local_id, &gir_locals, &gmod)
             if drop_tn != "":
-                String drop_fn = drop_fn_for_type(drop_tn, &gmod.resource_types, &m.type_runtime_map)
+                String drop_fn = drop_fn_for_type(drop_tn, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types)
                 if drop_fn != "":
                     int slot = local_to_slot.get(local_id).unwrap()
                     int addr = lir_fn_next_value(&f)
@@ -3168,7 +3225,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
             # matching Rust's pre-elaboration shape.
             String dia_tn = gir_local_type_name(local_id, &gir_locals, &gmod)
             if dia_tn != "":
-                String dia_drop_fn = drop_fn_for_type(dia_tn, &gmod.resource_types, &m.type_runtime_map)
+                String dia_drop_fn = drop_fn_for_type(dia_tn, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types)
                 if dia_drop_fn != "":
                     int dia_slot = local_to_slot.get(local_id).unwrap()
                     int dia_slot_ty = f.slots.get(dia_slot).unwrap().ty
@@ -3391,7 +3448,7 @@ LirFunction lir_lower_function(GirFunction gfn, GirModule &gmod, Dict[String, in
 
 # Determine the drop function name for a given type name.
 # Returns "" if the type doesn't need dropping.
-String drop_fn_for_type(String type_name, Dict[String, bool] &resource_types, Dict[String, String] &type_runtime_map):
+String drop_fn_for_type(String type_name, Dict[String, bool] &resource_types, Dict[String, String] &type_runtime_map, Dict[String, bool] &optionlike):
     if type_name == "GorgetString" or type_name == "Str":
         return "gorget_string_free"
     if type_name == "GorgetArray":
@@ -3420,6 +3477,18 @@ String drop_fn_for_type(String type_name, Dict[String, bool] &resource_types, Di
         return ""
     if resource_types.contains(type_name):
         return type_name + "__drop"
+    # Mono'd Option__X / Result__X__E whose payload owns a resource. Kept
+    # out of resource_types (to preserve their by-value param/field ABI),
+    # so the recursive drop/clone-fn generators would otherwise SKIP an
+    # `Option[Resource]` field — e.g. `MatchArm__clone` omitting `guard`,
+    # `Stmt__clone` omitting `SReturn`'s payload — producing a SHALLOW
+    # clone that shares the inner resource and double-frees. Rust emits the
+    # field clone (driver.c MatchArm__clone clones guard). Their `T__drop`/
+    # `T__clone` defs are generated via recursive_drop_enums (lir_lower
+    # Pass 3); here we just report them droppable so containing structs/
+    # enums include the field.
+    if optionlike.contains(type_name):
+        return type_name + "__drop"
     return ""
 
 # Populate drop/clone metadata on the LirModule from GIR type info.
@@ -3445,7 +3514,7 @@ void populate_drop_metadata(LirModule &m, GirModule &gmod):
         int fi = 0
         while fi < info.fields.len():
             GirFieldInfo finfo = info.fields.get(fi).unwrap()
-            String drop_fn = drop_fn_for_type(finfo.type_name, &gmod.resource_types, &m.type_runtime_map)
+            String drop_fn = drop_fn_for_type(finfo.type_name, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types)
             if drop_fn != "":
                 field_drops.push(FieldDrop(finfo.name, drop_fn, finfo.type_name))
             fi += 1
@@ -3481,7 +3550,7 @@ void populate_drop_metadata(LirModule &m, GirModule &gmod):
             int vfi = 0
             while vfi < vinfo.fields.len():
                 GirFieldInfo finfo = vinfo.fields.get(vfi).unwrap()
-                String drop_fn = drop_fn_for_type(finfo.type_name, &gmod.resource_types, &m.type_runtime_map)
+                String drop_fn = drop_fn_for_type(finfo.type_name, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types)
                 if drop_fn != "":
                     # Field name in the C struct is VariantName_N (e.g., Literal_0)
                     # finfo.name is "_N" (e.g., "_0"), so strip the leading underscore

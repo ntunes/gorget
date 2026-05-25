@@ -690,6 +690,29 @@ bool is_std_header_fn(String name):
 # `__gorget_box_alloc_T(x)`, so we scan for the pre-rewrite name.
 # Robust against the body-string scan failing under stage-1's String
 # slicing on large inputs.
+# If `ftn` is a `Box__<inner>` field type (typed via type_runtime_map),
+# emit the `__gorget_box_alloc_<inner>` allocator (deduped via `seen`) — the
+# deep-clone codegen (`field_clone_c`) references it, but the ICall scan
+# below only finds box types from explicit `Box.new` sites, so a box field
+# whose value never arose from a `Box__inner(...)` call (e.g. parsed
+# Box[SpannedPattern]) would otherwise link-fail.
+String box_alloc_for_field_type(String ftn, Vector[String] &seen, String emit_prefix, LirModule &m):
+    bool is_box = false
+    if m.type_runtime_map.contains(ftn):
+        if m.type_runtime_map.get(ftn).unwrap_or("") == "Box":
+            is_box = true
+    if not is_box or ftn.len() <= 5 or ftn.slice(0, 5) != "Box__":
+        return ""
+    String inner = ftn.slice(5, ftn.len())
+    int si = 0
+    while si < seen.len():
+        if seen.get(si).unwrap() == inner:
+            return ""
+        si += 1
+    seen.push(inner.clone())
+    String c_ty = box_alloc_c_type(inner)
+    return "static inline void* " + emit_prefix + inner + "(" + c_ty + " val) { " + c_ty + "* p = (" + c_ty + "*)GORGET_ALLOC(sizeof(" + c_ty + ")); *p = val; return (void*)p; }\n"
+
 String emit_box_allocators_from_lir(LirModule &m):
     Vector[String] seen = []
     String out = ""
@@ -734,6 +757,27 @@ String emit_box_allocators_from_lir(LirModule &m):
                 ii += 1
             bi += 1
         fi += 1
+    # Box-inner allocators referenced by deep-clone field codegen
+    # (field_clone_c) — scan the recursive drop/clone field metadata for
+    # `Box__<inner>` field/variant-payload types the ICall scan missed.
+    Vector[String] rds_keys = m.recursive_drop_structs.keys()
+    int rk = 0
+    while rk < rds_keys.len():
+        Vector[FieldDrop] fds = m.recursive_drop_structs.get(rds_keys.get(rk).unwrap()).unwrap()
+        int fk = 0
+        while fk < fds.len():
+            out = out + box_alloc_for_field_type(fds.get(fk).unwrap().field_type_name, &seen, emit_prefix, &m)
+            fk += 1
+        rk += 1
+    Vector[String] rde_keys = m.recursive_drop_enums.keys()
+    int ek = 0
+    while ek < rde_keys.len():
+        Vector[EnumVariantDrop] evds = m.recursive_drop_enums.get(rde_keys.get(ek).unwrap()).unwrap()
+        int vk = 0
+        while vk < evds.len():
+            out = out + box_alloc_for_field_type(evds.get(vk).unwrap().field_type_name, &seen, emit_prefix, &m)
+            vk += 1
+        ek += 1
     if out != "":
         out = out + "\n"
     return out
@@ -4481,6 +4525,41 @@ String drop_to_clone_fn(String drop_fn):
         return drop_fn.slice(0, drop_fn.len() - 4) + "clone"
     return ""
 
+# Emit the C statement to DEEP-clone a struct/enum field of type
+# `ftype_name` at lvalue `access`, or "" if no clone is needed.
+#
+# Box[T] fields are the critical case: `drop_fn_for_type("Box__T")` returns
+# "free" (the box pointer), but `drop_to_clone_fn("free")` returns "" — so a
+# Box field would be DROPPED (its box pointer freed) yet NOT CLONED, leaving
+# the clone sharing the SAME boxed payload as the source. Both then free it
+# → double-free (the meta_expand `Expr` with `Box[SpannedExpr]` operands).
+# Mirror Rust's `Expr__clone`: realloc a fresh box copying the inner value,
+# then deep-clone the inner in place. Box detection is via the typed
+# `type_runtime_map` ("Box"), not a name guess; the `Box__` mangling is the
+# established runtime-symbol contract for extracting the inner type.
+String field_clone_c(String access, String ftype_name, String drop_fn_name, LirModule &m, Vector[String] &sn):
+    bool is_box = false
+    if m.type_runtime_map.contains(ftype_name):
+        if m.type_runtime_map.get(ftype_name).unwrap_or("") == "Box":
+            is_box = true
+    if is_box and ftype_name.len() > 5 and ftype_name.slice(0, 5) == "Box__":
+        String inner = ftype_name.slice(5, ftype_name.len())
+        String inner_c = find_c_name(inner, &m, &sn)
+        String s = access + " = __gorget_box_alloc_" + inner + "(*(" + inner_c + "*)" + access + ");"
+        # Deep-clone the inner in place when it owns resources (recursive
+        # struct/enum, String, collection). lc_collection_clone_fn returns
+        # the matching `<T>__clone_inplace` / `gorget_*_clone_inplace`, or ""
+        # for a trivially-copyable inner (where the box realloc alone is the
+        # full clone).
+        String inner_clone = lc_collection_clone_fn(inner, &m)
+        if inner_clone != "":
+            s = s + " " + inner_clone + "(" + access + ");"
+        return s
+    String cf = drop_to_clone_fn(drop_fn_name)
+    if cf != "":
+        return access + " = " + cf + "(&" + access + ");"
+    return ""
+
 # Find the C struct name for a Gorget type name.
 String find_c_name(String type_name, LirModule &m, Vector[String] &sn):
     int i = 0
@@ -4683,10 +4762,10 @@ String emit_struct_clones(LirModule &m, Vector[String] &sn):
         int di = 0
         while di < drops.len():
             FieldDrop fd = drops.get(di).unwrap()
-            String clone_fn = drop_to_clone_fn(fd.drop_fn_name)
-            if clone_fn != "":
-                String access = field_access(type_name, fd.field_name, &m, &sn, false)
-                out = out + "    " + access + " = " + clone_fn + "(&" + access + ");\n"
+            String access = field_access(type_name, fd.field_name, &m, &sn, false)
+            String cstmt = field_clone_c(access, fd.field_type_name, fd.drop_fn_name, &m, &sn)
+            if cstmt != "":
+                out = out + "    " + cstmt + "\n"
             di += 1
         out = out + "    return dst;\n"
         out = out + "}\n\n"
@@ -4827,11 +4906,11 @@ String emit_enum_clones(LirModule &m, Vector[String] &sn):
             while vvi < variants.len():
                 EnumVariantDrop evd = variants.get(vvi).unwrap()
                 if evd.variant_index == vi:
-                    String clone_fn = drop_to_clone_fn(evd.drop_fn_name)
-                    if clone_fn != "":
+                    String access = field_access(type_name, evd.field_name, &m, &sn, false)
+                    String cstmt = field_clone_c(access, evd.field_type_name, evd.drop_fn_name, &m, &sn)
+                    if cstmt != "":
                         has_clones = true
-                        String access = field_access(type_name, evd.field_name, &m, &sn, false)
-                        case_body = case_body + "            " + access + " = " + clone_fn + "(&" + access + ");\n"
+                        case_body = case_body + "            " + cstmt + "\n"
                 vvi += 1
             out = out + "        case " + int_to_str(vi) + ":"
             if has_clones:
@@ -4943,11 +5022,11 @@ String emit_type_drop_fns(LirModule &m, Vector[String] &sn):
                     while vvi2 < info.enum_variants.len():
                         EnumVariantDrop evd = info.enum_variants.get(vvi2).unwrap()
                         if evd.variant_index == vi2:
-                            String clone_fn = drop_to_clone_fn(evd.drop_fn_name)
-                            if clone_fn != "":
+                            String access = field_access(type_name, evd.field_name, &m, &sn, false)
+                            String cstmt = field_clone_c(access, evd.field_type_name, evd.drop_fn_name, &m, &sn)
+                            if cstmt != "":
                                 has_clones = true
-                                String access = field_access(type_name, evd.field_name, &m, &sn, false)
-                                case_body = case_body + "            " + access + " = " + clone_fn + "(&" + access + ");\n"
+                                case_body = case_body + "            " + cstmt + "\n"
                         vvi2 += 1
                     out = out + "        case " + int_to_str(vi2) + ":"
                     if has_clones:
@@ -4960,10 +5039,10 @@ String emit_type_drop_fns(LirModule &m, Vector[String] &sn):
                 int di = 0
                 while di < info.field_drops.len():
                     FieldDrop fd = info.field_drops.get(di).unwrap()
-                    String clone_fn = drop_to_clone_fn(fd.drop_fn_name)
-                    if clone_fn != "":
-                        String access = field_access(type_name, fd.field_name, &m, &sn, false)
-                        out = out + "    " + access + " = " + clone_fn + "(&" + access + ");\n"
+                    String access = field_access(type_name, fd.field_name, &m, &sn, false)
+                    String cstmt = field_clone_c(access, fd.field_type_name, fd.drop_fn_name, &m, &sn)
+                    if cstmt != "":
+                        out = out + "    " + cstmt + "\n"
                     di += 1
             out = out + "    return dst;\n"
             out = out + "}\n\n"
