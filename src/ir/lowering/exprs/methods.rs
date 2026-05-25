@@ -1848,7 +1848,7 @@ pub(super) fn lower_method_call(
         // mutating methods (push/add/extend/send/push_back/push_front) consume
         // arg 0; (put/set/insert) consume the value at arg 1 (dict) or arg 1 (vec).
         let is_string_builder_method = type_name == "GorgetString";
-        let consuming_positions: Vec<usize> = match method_name {
+        let consuming_positions_by_name: Vec<usize> = match method_name {
             "push" | "add" | "extend" | "send" | "push_back" | "push_front"
                 if !is_string_builder_method => vec![0],
             "put" | "set" | "insert" => {
@@ -1859,6 +1859,33 @@ pub(super) fn lower_method_call(
             }
             _ => vec![],
         };
+        // The name match above only identifies CANDIDATE value positions. A
+        // position genuinely *consumes* its arg — and therefore needs the
+        // own-the-value materialization (clone non-last-use / move-zero
+        // last-use) below — only when the callee takes it by value or by move.
+        // A const-borrow param (`ParamABI::ByPtr`, e.g. a user method
+        // `SlotKey insert(&self, T value)` whose `value` is a borrow) does NOT
+        // take ownership: it reads through the pointer and clones internally if
+        // it stores. Cloning + move-zeroing such an arg here would zero a fresh
+        // clone that nobody takes ownership of → leak (the clone temps are
+        // move-zeroed, never dropped). `lower_call_arg`'s borrow path (incl. the
+        // owning-temp re-home + post-call drop) already handles those correctly.
+        // Name-matching the method alone (pre-2026-05-25) wrongly treated
+        // same-named user methods as builtin-collection consumers. ABI unknown
+        // (extern/runtime without a registered ABI) → keep, preserving prior
+        // behavior. (CLAUDE.md "no name matching": route on the typed ABI.)
+        let consuming_positions: Vec<usize> = consuming_positions_by_name
+            .into_iter()
+            .filter(|&idx| {
+                !matches!(
+                    ctx.fn_param_abis
+                        .get(&effective_name)
+                        .and_then(|abis| abis.get(idx + 1))
+                        .copied(),
+                    Some(ParamABI::ByPtr)
+                )
+            })
+            .collect();
 
         // Pre-call ownership materialization at consuming arg positions.
         // Two cases handled here:

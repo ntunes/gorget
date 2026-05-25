@@ -11156,7 +11156,6 @@ fn slotmap_stale_key() {
 }
 
 #[test]
-#[ignore = "blocked: SlotMap[T] with resource-owning T leaks (arg-temp/clone double-handling for struct elements with an Option/enum field). See TODO.md \"SlotMap with resource-owning T leaks\". Expected output is the contract — do NOT reshape (CLAUDE.md)."]
 fn slotmap_cycle_no_leak() {
     // Cyclic graph by SlotKey edges, nodes owning heap — must not leak.
     run_gg("slotmap_cycle_no_leak.gg", "leaked=false\ndone");
