@@ -1,9 +1,15 @@
 # Drop Emission — Self-Host Plan (unified)
 
-**Status (2026-05-25):** IN PROGRESS — cc-clean, **not yet bootstrapping.** Many root causes
-closed this run (including the long-standing `meta_expand` double-free); stage-1 now runs all the
-way to `lower_module` → `lower_function` (deepest ever) before ONE remaining fault. All changes
-are **UNCOMMITTED** (`git diff` on `gir.gg`, `lower.gg`, `lir_lower.gg`, `lir_codegen.gg`).
+**Status (2026-05-25, HANDOVER):** IN PROGRESS — cc-clean, **not yet bootstrapping.** WIP is
+**COMMITTED** on branch `gorget-1` (`758ed737`, 1 ahead of `main`@`087b5a13`; squash at
+merge-to-main). Stage-1 now emits the full stage-2 C (**616363 lines, ~567s** — use a ≥2400s
+timeout; the earlier "hang" was a 600s-timeout artifact on a loaded box, NOT a bug). The live
+blocker has moved into **stage-2 lowering**: an **`EBinaryOp` infinite recursion** (see NEXT BUG).
+Fixed + committed this run: **bug #1** (None/`NO_NAME` lowered as 8-byte `OpConstUnit()` →
+add_local drop-clone over-read; now a typed `IEnumInit(tag=1)` None) and **bug #2** (`EArrayLiteral`
+push receiver `OpMove`→`OpBorrow`). **SHIP-GATE (no name-matching):** before this cluster ships
+green, the consuming-position name-match (`is_owning_mutator_arg`) MUST become a typed signal —
+see guardrail #5; the self-host is to be BETTER than Rust here, not a mirror.
 
 This is the single authoritative plan for self-host drop emission. (It absorbed the former
 `consumer_audit.md` empirical log and `drop_emission_completion.md` strategic plan — both deleted
@@ -61,13 +67,13 @@ also be CLONED (drop-without-clone on a shallow copy = double-free).**
 cd /workspace/gorget-1
 GG_BUILD_TIMEOUT_SECS=600 ./target/release/gg build tests/fixtures/self_host_lowerer/driver.gg   # rebuild stage-0 (~9 min)
 OUT=/tmp/s1.c
-timeout 600 stdbuf -oL ./tests/fixtures/self_host_lowerer/driver \
-    tests/fixtures/self_host_lowerer/driver.gg lib --emit-c > "$OUT"                              # emit ~510s; stdbuf -oL MANDATORY
+timeout 2400 stdbuf -oL ./tests/fixtures/self_host_lowerer/driver \
+    tests/fixtures/self_host_lowerer/driver.gg lib --emit-c > "$OUT"                              # emit ~567s — USE ≥2400s: 600s gave a FALSE "hang" on a loaded box; stdbuf -oL MANDATORY
 python3 -c "r=open('tests/fixtures/self_host_lowerer/driver.c').read();i=r.find('\ntypedef struct __gg_');open('/tmp/s1full.c','w').write(r[:i]+'\n'+open('$OUT').read())"
 cc -O0 -w -o /tmp/s1bin /tmp/s1full.c -lm -lpthread                                               # plain cc: ABI/type/link errors
 cc -O0 -g -fsanitize=address -w -o /tmp/s1asan /tmp/s1full.c -lm -lpthread                        # ASan build
-ASAN_OPTIONS=abort_on_error=0:detect_leaks=0 timeout 400 /tmp/s1asan \
-    tests/fixtures/self_host_lowerer/driver.gg lib --emit-c > /tmp/stage2.c 2>/tmp/asan.out       # pinpoints UAF/double-free
+ASAN_OPTIONS=abort_on_error=0:detect_leaks=0 timeout 3000 /tmp/s1asan \
+    tests/fixtures/self_host_lowerer/driver.gg lib --emit-c > /tmp/stage2.c 2>/tmp/asan.out       # ASan is ~2-3x slower; bug #3 crashes early (~80s) but give headroom
 ```
 
 Supporting tools: `--emit-gir` / `--emit-lir` IR dumps (trace a value to its write site —
@@ -83,43 +89,35 @@ for p in '__drop(' 'gorget_string_free(' 'gorget_array_free(' 'gorget_map_free('
 
 ---
 
-## NEXT BUG (ASan-pinned — START HERE)
+## NEXT BUG — bug #3: `EBinaryOp` infinite recursion in stage-2 lowering (START HERE)
 
-stage-1 runs into `lower_module` → `lower_function` before a **stack-buffer-overflow**. Non-ASan
-manifestation: `gorget: panic: index out of bounds: index 0, length 0`.
+(Bugs #1 + #2 are FIXED + committed in `758ed737` — see Status. The old add_local/`NO_NAME`
+overflow WAS bug #1; do not re-chase it.)
 
-**Verified ASan trace** (from the parent's run; re-derive with the loop above):
+Running the **ASan stage-2 binary** (the self-host compiled by itself) on the source
+stack-overflows in `lower_expr`:
 ```
-#1 str_alloc_copy                  READ of size 9          (string clone reading past bounds)
-#2 gorget_string_clone_to_owned
-#3 Option__GorgetString__clone                              <-- this fn is CORRECT; not the bug
-#4 lower___add_local                                        <-- clone called DIRECTLY here
-#5 lower___lower_function
-#6 lower___lower_module
+#0 lower___lower_expr  /tmp/s1full.c:199931      (fn prologue — huge ~148KB frame overflows the stack)
+#1..#N lower___lower_expr /tmp/s1full.c:211580   (the SAME call site, every frame — the lhs recursion)
 ```
-At the `add_local` body, `Option__GorgetString__clone(name_param)` is called on `add_local`'s
-3rd arg (`name : Option[String]`), but the pointer passed in points at a **`GorgetArray`** temp
-(`__s62`, a 64-byte `GorgetArray {0}` declared in `lower_function`) — so the String-header copy
-reads past it.
+Source: `lower_expr`'s `case EBinaryOp(lhs_box, op, rhs_box)` (lower.gg:~3859) → `lower_expr(*lhs_box)`.
+It never bottoms out. While lowering **`derive___field_write_lines`**.
 
-**The bug is an argument/slot mismatch at a `lower_function` `add_local` call site**, NOT a
-struct-size under-count. (Sanity facts that kill the old "Pass-4 under-counts the Option size"
-hypothesis: `GorgetString` is registered at `computed_c_size = 32`, so `Option__GorgetString` =
-`{i32 tag; GorgetString Some_0}` = **40 bytes**, correctly accounted; the overflowing var is a
-`GorgetArray`, not a struct with an Option field.)
+**What's RULED OUT (verified 2026-05-25):**
+- NOT the deref: at the recursion site, `__s270` = lhs `Box__SpannedExpr`; `memcpy(&__s344, __s270, 192)`
+  is a correct `*box` (192 = sizeof `SpannedExpr`).
+- NOT the clone (my first suspect, item #8): `Expr__clone` case 9 (EBinaryOp) correctly DEEP-clones —
+  `__gorget_box_alloc_SpannedExpr(*box)` (fresh box + copy) then `SpannedExpr__clone_inplace`.
+- So the `EBinaryOp` **AST is CYCLIC**: `lhs_box` transitively points back to a same-shape node
+  (gdb: identical operator-`String` `.alloc` ptr at every recursion depth ⇒ shared/self-ref node).
 
-**Investigate:** `lower_function` has several `add_local` / `add_local_with` calls. One of them
-passes a `GorgetArray`-typed slot where the `name : Option[String]` arg is expected — find which,
-and why that slot is a `GorgetArray`. Two likely shapes:
-- a call site genuinely passes the wrong local as the `name` arg (a source bug), or
-- the `name` arg's slot/operand got mis-typed (suspect interaction with choice A — Option params
-  are now by-pointer, so the call must pass the address of an `Option` slot; if a site instead
-  passes the address of a `GorgetArray` local, that's the mismatch).
-
-Dump `lower_function`'s GIR (`--emit-gir`, find `fn @lower_function`) and inspect the `add_local`
-call whose `name` operand's local is `GorgetArray`-typed. Cross-check against how the Rust
-reference lowers the same `add_local` calls. Do NOT chase `lir_lower` Pass-4 sizing — the clone
-fn and the struct sizes are correct.
+**So the cycle is built UPSTREAM — parser or a non-clone transform — NOT in the drop-emission path.**
+(May well be pre-existing / orthogonal to drop emission.) **NEXT:** gdb-follow the `lhs_box`
+pointers from the recursing node to the self-reference; identify the exact source expression in
+`field_write_lines`; then inspect how the self-host PARSER builds that `EBinaryOp` (or any
+transform/meta-expansion that rewrites it). Repro: run the loop below, then
+`gdb -p <pid>` the hung `/tmp/s1asan` (or build a `-g` driver via `gg build … --emit-c-lir` +
+`cc -O0 -g`).
 
 ---
 
