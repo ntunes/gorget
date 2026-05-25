@@ -216,6 +216,10 @@ When you launch sub-agents via the `Agent` tool in this project, the following r
 
 The failure mode when these rules slip is recoverable but ugly: working trees get contaminated, stashes accumulate mixed ownership, edits disappear into `stash@{N}` entries the parent can't easily attribute. The cost of fixing it after the fact is far higher than the cost of doing it right at launch.
 
+## Review TODO items and plans with a fresh agent
+
+When you write a non-trivial TODO item or `docs/plans/` doc, have a **fresh** agent review it (read-only; worktree isolation not required) and iterate — folding in each pass's findings — until a fresh agent raises **no reservations**. Use a *new* agent each pass: a reused one anchors on its prior conclusions, while a fresh one re-derives from the code and catches what the spec baked in (more than once the second pass found the *first pass's own recommendation* was unsound). Brief it to verify every load-bearing claim against source with `file:line` and return either SIGN OFF or specific cited reservations — not to rubber-stamp, and not to invent reservations to avoid signing off.
+
 ## Task Continuity
 
 Maintain `TODO.md` and `DONE.md` at the project root to track work across plans and conversations.
