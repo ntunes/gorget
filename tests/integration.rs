@@ -11101,51 +11101,37 @@ fn shared_weak() {
     run_gg("shared_weak.gg", "42\nok");
 }
 
-// ── Weak[T] end-to-end cycle-breaking proof (paired positive + negative) ──
+// ── std.slotmap: generational-handle arena ──
 //
-// `Weak[T]` is documented as the cycle-breaker for Shared cycles
-// (docs/book/16-smart-pointers.md:109-127, docs/language-reference.md:529-531)
-// but nothing in the suite proves it end-to-end today. The four fixtures
-// below land the canonical shapes (interior-mut cycle, parent/child cycle)
-// in idiomatic Gorget. All four are #[ignore]'d pending compiler gaps —
-// the expected stdout reflects what the language *should* produce, so
-// when the gaps land these tests will start passing without modification.
-//
-// Don't reshape the fixtures to dodge the gaps (CLAUDE.md "Don't redesign
-// around compiler gaps"). The wired-in expected output is the contract.
-//
-// Gaps blocking each fixture are documented in its source comment header
-// and in TODO.md "Weak[T] cycle-breaking — missing primitives".
+// SlotMap is Gorget's answer to circular ownership: store nodes in a SlotMap
+// and make edges SlotKeys instead of Shared/Box — no refcount cycles, nothing
+// leaks (drop the map, all slots go). This replaces the abandoned Weak[T]/Cell
+// cycle-breaking approach (the 4 weak_cycle_* fixtures were deleted).
 
 #[test]
-#[ignore = "blocked: `Cell[T]` is documented but not implemented (resolver rejects `Cell`)"]
-fn weak_cycle_shape_a_negative() {
-    // All-Shared cycle through Cell[Option[Shared[Node]]] — must leak.
-    run_gg("weak_cycle_shape_a_negative.gg", "leaked=true\ndone");
-}
-
-#[test]
-#[ignore = "blocked: `Cell[T]` is documented but not implemented (resolver rejects `Cell`)"]
-fn weak_cycle_shape_a_positive() {
-    // One Weak edge breaks the cycle — must NOT leak.
-    run_gg("weak_cycle_shape_a_positive.gg", "leaked=false\ndone");
-}
-
-#[test]
-#[ignore = "blocked: `Shared[Parent]` has no mutability path for struct fields; `p.children.push(c)` silently no-ops"]
-fn weak_cycle_shape_b_negative() {
-    // Parent/child with Shared[Parent] back-edge — must leak.
-    run_gg("weak_cycle_shape_b_negative.gg", "leaked=true\ndone");
-}
-
-#[test]
-#[ignore = "blocked: `Shared[Parent]` has no mutability path for struct fields; `p.children.push(c)` silently no-ops"]
-fn weak_cycle_shape_b_positive() {
-    // Parent/child with Weak[Parent] back-edge — must NOT leak.
+fn slotmap_basic() {
     run_gg(
-        "weak_cycle_shape_b_positive.gg",
-        "children=3\nparent_upgrade=99\nleaked=false\ndone",
+        "slotmap_basic.gg",
+        "len=3\na=10\nb=20\nc=30\nb2=99\nremoved=10\nlen2=2\na_stale=false\n\
+         a_get_none=true\nd=40\na_still_stale=false\nlen3=3\ntotal=169",
     );
+}
+
+#[test]
+fn slotmap_stale_key() {
+    // Generational safety: a key to a removed slot stays dead after recycle.
+    run_gg(
+        "slotmap_stale_key.gg",
+        "got=100\nremoved=100\nstale_contains=false\nstale_get_none=true\n\
+         new=200\nold_key_still_dead=true\ndone",
+    );
+}
+
+#[test]
+#[ignore = "blocked: SlotMap[T] with resource-owning T leaks (arg-temp/clone double-handling for struct elements with an Option/enum field). See TODO.md \"SlotMap with resource-owning T leaks\". Expected output is the contract — do NOT reshape (CLAUDE.md)."]
+fn slotmap_cycle_no_leak() {
+    // Cyclic graph by SlotKey edges, nodes owning heap — must not leak.
+    run_gg("slotmap_cycle_no_leak.gg", "leaked=false\ndone");
 }
 
 #[test]

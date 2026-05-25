@@ -1,0 +1,98 @@
+# std.slotmap — a generational-handle arena.
+#
+# insert() returns a stable SlotKey; the key carries a generation tag so a
+# stale key (used after remove()) fails safe — get() returns None instead of
+# aliasing a recycled slot. This is Gorget's answer to circular ownership:
+# store nodes in a SlotMap and make edges SlotKeys instead of Shared/Box, so
+# there are no refcount cycles and nothing leaks (drop the map, all slots go).
+
+from std.collections import Vector
+
+struct SlotKey:
+    int idx
+    int gen
+
+equip SlotKey with Displayable:
+    String display(self):
+        return f"SlotKey({self.idx}:{self.gen})"
+
+equip SlotKey with Equatable:
+    bool eq(self, SlotKey other):
+        return self.idx == other.idx and self.gen == other.gen
+
+struct SlotMap[T]:
+    Vector[T] values
+    Vector[int] gens
+    Vector[bool] occupied
+    Vector[int] free
+    int count
+
+equip SlotMap[T]:
+    SlotMap[T] new():
+        return SlotMap[T](Vector[T](), Vector[int](), Vector[bool](), Vector[int](), 0)
+
+    # Insert a value, returning a stable handle to it.
+    SlotKey insert(&self, T value):
+        int idx = -1
+        if self.free.len() > 0:
+            idx = self.free.pop().unwrap()
+            self.values.set(idx, value)
+            self.occupied.set(idx, true)
+        else:
+            idx = self.values.len()
+            self.values.push(value)
+            self.gens.push(0)
+            self.occupied.push(true)
+        self.count = self.count + 1
+        int gen = self.gens.get(idx).unwrap()
+        return SlotKey(idx, gen)
+
+    # True only if the key points at a live slot of the matching generation.
+    bool contains(self, SlotKey k):
+        if k.idx < 0 or k.idx >= self.values.len():
+            return false
+        if self.occupied.get(k.idx).unwrap() == false:
+            return false
+        return self.gens.get(k.idx).unwrap() == k.gen
+
+    # Borrow the value for a key, or None if the key is stale/removed.
+    Option[T] get(self, SlotKey k):
+        if self.contains(k) == false:
+            return None
+        return Some(self.values.get(k.idx).unwrap())
+
+    # Overwrite the value for a live key. Returns false if the key is stale.
+    bool set(&self, SlotKey k, T value):
+        if self.contains(k) == false:
+            return false
+        self.values.set(k.idx, value)
+        return true
+
+    # Remove and return the value. Bumps the slot's generation, so every prior
+    # key to this slot becomes permanently stale.
+    Option[T] remove(&self, SlotKey k):
+        if self.contains(k) == false:
+            return None
+        T old = self.values.get(k.idx).unwrap()
+        self.occupied.set(k.idx, false)
+        self.gens.set(k.idx, k.gen + 1)
+        self.free.push(k.idx)
+        self.count = self.count - 1
+        return Some(old)
+
+    int len(self):
+        return self.count
+
+    bool is_empty(self):
+        return self.count == 0
+
+    # Handles of all live slots, in slot order.
+    Vector[SlotKey] keys(self):
+        Vector[SlotKey] result = Vector[SlotKey]()
+        int i = 0
+        while i < self.values.len():
+            if self.occupied.get(i).unwrap():
+                int gen = self.gens.get(i).unwrap()
+                result.push(SlotKey(i, gen))
+            i = i + 1
+        return result

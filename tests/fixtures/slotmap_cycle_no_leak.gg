@@ -1,0 +1,31 @@
+# Circular ownership without leaks, via SlotMap generational handles.
+#
+# Nodes live in a SlotMap and own heap data (Vector[int]); edges are SlotKeys,
+# not Shared/Box. So `a -> b -> a` is a genuine cycle of references, yet it
+# cannot leak: the handles don't own anything, and dropping the map frees every
+# slot (and each slot's owned payload) exactly once. Run 100x; mem must settle.
+#
+# This is the replacement for the old weak_cycle_* fixtures: the cycle-breaking
+# question disappears entirely when edges are handles instead of refcounts.
+
+from std.os import mem_live
+from std.slotmap import SlotMap, SlotKey
+
+struct Node:
+    Vector[int] data
+    Option[SlotKey] next
+
+void main():
+    int baseline = mem_live()
+    int i = 0
+    while i < 100:
+        SlotMap[Node] g = SlotMap[Node].new()
+        SlotKey a = g.insert(Node([1, 2, 3], None))
+        SlotKey b = g.insert(Node([4, 5, 6], None))
+        g.set(a, Node([1, 2, 3], Some(b)))    # a -> b
+        g.set(b, Node([4, 5, 6], Some(a)))    # b -> a  (real cycle, by handle)
+        i = i + 1
+        # g drops here: all slots and their owned Vectors are freed.
+    int delta = mem_live() - baseline
+    print(f"leaked={delta > 0}")
+    print("done")

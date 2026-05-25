@@ -1,0 +1,31 @@
+from std.slotmap import SlotMap, SlotKey
+
+void main():
+    SlotMap[int] m = SlotMap[int].new()
+    SlotKey a = m.insert(10)
+    SlotKey b = m.insert(20)
+    SlotKey c = m.insert(30)
+    print(f"len={m.len()}")
+    print(f"a={m.get(a).unwrap()}")
+    print(f"b={m.get(b).unwrap()}")
+    print(f"c={m.get(c).unwrap()}")
+
+    m.set(b, 99)
+    print(f"b2={m.get(b).unwrap()}")
+
+    Option[int] removed = m.remove(a)
+    print(f"removed={removed.unwrap()}")
+    print(f"len2={m.len()}")
+    print(f"a_stale={m.contains(a)}")
+    print(f"a_get_none={m.get(a).is_none()}")
+
+    # Reinsert reuses a's slot, but the old key `a` stays stale (gen bumped).
+    SlotKey d = m.insert(40)
+    print(f"d={m.get(d).unwrap()}")
+    print(f"a_still_stale={m.contains(a)}")
+    print(f"len3={m.len()}")
+
+    int total = 0
+    for k in m.keys():
+        total = total + m.get(k).unwrap()
+    print(f"total={total}")

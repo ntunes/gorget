@@ -32,7 +32,7 @@ pub fn is_builtin_module(segments: &[String]) -> bool {
                 "fs" | "path" | "os" | "conv" | "io" | "iter" | "random" | "time"
                 | "collections" | "math" | "fmt" | "process" | "bytes"
                 | "encoding" | "channel" | "alloc" | "term" | "heap" | "datetime"
-                | "hash" | "sync" | "thread" | "async" | "signal"),
+                | "hash" | "sync" | "thread" | "async" | "signal" | "slotmap"),
             3 => segments[1] == "net" && matches!(segments[2].as_str(), "socket" | "tls" | "udp"),
             _ => false,
         },
@@ -86,6 +86,7 @@ pub fn builtin_module_source(segments: &[String]) -> Option<&'static str> {
             Some("encoding") => Some(include_str!("../lib/std/encoding.gg")),
             Some("term") => Some(include_str!("../lib/std/term.gg")),
             Some("heap") => Some(include_str!("../lib/std/heap.gg")),
+            Some("slotmap") => Some(include_str!("../lib/std/slotmap.gg")),
             Some("hash") => Some(include_str!("../lib/std/hash.gg")),
             Some("datetime") => Some(include_str!("../lib/std/datetime.gg")),
             Some("net") => match segments.get(2).map(|s| s.as_str()) {

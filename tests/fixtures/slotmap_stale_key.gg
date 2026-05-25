@@ -1,0 +1,21 @@
+# Generational safety: a key to a removed slot stays permanently dead, even
+# after the slot is recycled by a later insert. This is the property that
+# replaces Weak[T] — use-after-remove fails closed (None), never aliases.
+
+from std.slotmap import SlotMap, SlotKey
+
+void main():
+    SlotMap[int] m = SlotMap[int].new()
+    SlotKey a = m.insert(100)
+    print(f"got={m.get(a).unwrap()}")
+
+    Option[int] r = m.remove(a)
+    print(f"removed={r.unwrap()}")
+    print(f"stale_contains={m.contains(a)}")
+    print(f"stale_get_none={m.get(a).is_none()}")
+
+    # Reinsert reuses a's slot; the old key `a` must NOT resurrect.
+    SlotKey b = m.insert(200)
+    print(f"new={m.get(b).unwrap()}")
+    print(f"old_key_still_dead={m.get(a).is_none()}")
+    print("done")
