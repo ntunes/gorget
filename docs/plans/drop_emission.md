@@ -1,8 +1,8 @@
 # Drop Emission — Self-Host Plan (unified)
 
 **Status (2026-05-25, HANDOVER):** IN PROGRESS — cc-clean, **not yet bootstrapping.** WIP is
-**COMMITTED** on branch `gorget-1` (2 ahead of `main`@`087b5a13`: `758ed737` = code WIP,
-`63c327f7` = handover docs; squash at merge-to-main). Stage-1 now emits the full stage-2 C (**616363 lines, ~567s** — use a ≥2400s
+**COMMITTED** on branch `gorget-1` (ahead of `main`@`087b5a13`; `758ed737` = code save-point +
+handover-doc commits; squash at merge-to-main). Stage-1 now emits the full stage-2 C (**616363 lines, ~567s** — use a ≥2400s
 timeout; the earlier "hang" was a 600s-timeout artifact on a loaded box, NOT a bug). The live
 blocker has moved into **stage-2 lowering**: an **`EBinaryOp` infinite recursion** (see NEXT BUG).
 Fixed + committed this run: **bug #1** (None/`NO_NAME` lowered as 8-byte `OpConstUnit()` →
@@ -83,7 +83,9 @@ ASAN_OPTIONS=abort_on_error=0:detect_leaks=0 timeout 3000 /tmp/s1asan \
 
 Supporting tools: `--emit-gir` / `--emit-lir` IR dumps (trace a value to its write site —
 `awk '/fn @<MangledName>\(/{f=1} f{print} f&&/^}/{exit}' /tmp/gir.txt`), and the drop-count
-grep-diff against the Rust reference to watch parity climb:
+grep-diff against the Rust-compiled stage-0 reference (`driver.c` = the C the Rust `gg` emits for
+the self-host frontend — NOT a separate "Rust compiler"; it's the parity target for drop counts)
+to watch parity climb:
 
 ```bash
 RUST=tests/fixtures/self_host_lowerer/driver.c
@@ -119,8 +121,11 @@ not re-runnable facts; the `/tmp` file no longer exists):**
   exactly like a "cycle."
 
 **LEADING HYPOTHESIS — a drop-emission WIP change created a shared-box alias (NOT the parser).**
-Strong evidence this is the WIP, not upstream: (a) the WIP touched ZERO parser/AST files
-(`git diff --stat f15a45c6..HEAD -- '*parser*' '*ast*'` = empty); (b) the **labels-only** baseline
+Strong evidence this is the WIP, not upstream: (a) the WIP touched ZERO self-host parser/AST files
+(`git diff --stat f15a45c6..HEAD -- '*parser*' '*ast*'` = empty) — and the Rust stage-0 deltas this
+run (`meta.rs`, `calls.rs`) don't change the self-host's INPUT AST either: the lowerer source has
+no top-level `type X = …` aliases (so `meta.rs`'s alias-rewrite is inert on it) and `calls.rs` only
+emits extra drops, so the labels-only control stays clean; (b) the **labels-only** baseline
 `f15a45c6` has a *structurally identical* `lower_expr` EBinaryOp arm recursing on
 `lower_expr(*lhs_box)` and it **bootstrapped fine** — same parser, same recursion. If the parser
 built a cyclic AST, labels-only would have stack-overflowed identically. It didn't. So the cycle is
@@ -131,9 +136,12 @@ box. This is the SAME failure mode as UAF #1, the array-literal clone, and the a
 upstream / pre-existing / orthogonal" framing was WRONG — it contradicted the labels-only evidence.
 
 **NEXT — cheapest decisive experiment FIRST (do this before any gdb pointer-chasing):** reproduce
-with labels-only and see if bug #3 disappears. Either `git stash`/revert the WIP's `lower.gg` +
-`lir_*.gg` deltas (keep gir.gg if needed to compile), OR build the self-host at `f15a45c6`, emit,
-ASan-run. If the EBinaryOp recursion does NOT reproduce labels-only → confirmed it's the WIP; then
+with labels-only and see if bug #3 disappears. Build the self-host **WHOLESALE at `f15a45c6`**,
+emit, ASan-run. (Do NOT partial-revert just `lower`/`lir_*`: this run's `gir.gg` changed
+`none_decls`'s type, added `optionlike_resource_types` (referenced 7× in `lir_lower.gg`), and
+changed the `GirModule(...)` constructor arity — and `driver.gg`'s `--emit-c` flag coupling
+changed — so f15a45c6 `lower`/`lir_*` against gorget-1 `gir.gg`/`driver.gg` will NOT type-check.)
+If the EBinaryOp recursion does NOT reproduce labels-only → confirmed it's the WIP; then
 **bisect which WIP change introduces it** (prime suspects: a-5 clone-on-`LoBorrowed`, the
 prelude-variant-owning change, or a missing `GIMoveZero` on a moved `Box[SpannedExpr]` field at a
 consume/construction site). Only if it DOES reproduce labels-only is the parser/transform in play
