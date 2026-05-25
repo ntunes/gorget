@@ -1,0 +1,12 @@
+# Regression: `type X = <struct>` where the struct has a positional
+# constructor. Before the fix, `Handle(7, 0)` was left as a call to an
+# undefined `Handle` (the alias item was erased but its constructor call was
+# never rewritten — Bug A), producing a linker "undefined reference" error.
+from std.slotmap import SlotKey
+
+type Handle = SlotKey
+
+void main():
+    Handle h = Handle(7, 0)
+    print(h.idx)
+    print(h.gen)

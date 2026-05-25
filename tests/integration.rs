@@ -669,6 +669,34 @@ fn type_alias_callback() {
     );
 }
 
+// Regression for the struct-alias erasure gap (Bug A): `type X = <struct>`
+// must rewrite the struct's positional-constructor call `X(..)` to the target
+// type, else the alias item is erased and `X(..)` links to an undefined symbol.
+#[test]
+fn type_alias_struct_ctor() {
+    run_gg(
+        "type_alias_struct_ctor.gg",
+        "\
+7
+0",
+    );
+}
+
+// Regression for the struct-alias erasure gap (Bug B): a `type X = <struct>`
+// alias declared in an *imported* module (wrapped in `Item::Module` by the
+// loader) must be collected, rewritten, AND erased — else it survives into
+// resolve as an opaque `DefKind::TypeAlias`. This is the actual ECS scenario.
+#[test]
+fn type_alias_struct_dir() {
+    run_gg_dir(
+        "type_alias_struct_dir",
+        "main.gg",
+        "\
+7
+0",
+    );
+}
+
 #[test]
 fn traits() {
     run_gg("traits.gg", "circle created");

@@ -187,7 +187,15 @@ fn fixup_calls_in_expr(
                 if generic_args.is_none() {
                     if let Some((real_name, gen_args)) = fixups.get(name.as_str()) {
                         callee.node = Expr::Identifier(real_name.clone());
-                        *generic_args = Some(gen_args.clone());
+                        // Non-generic struct alias → leave args `None` so the
+                        // rewritten call is byte-identical to a direct
+                        // constructor call (`SlotKey(7, 0)`); only inject
+                        // `Some(..)` for generic aliases that carry args.
+                        *generic_args = if gen_args.is_empty() {
+                            None
+                        } else {
+                            Some(gen_args.clone())
+                        };
                     }
                 }
             }
@@ -467,22 +475,15 @@ fn evaluate_meta_consts_impl(
         let ctx = MetaContext::with_source_dir(features, &module.items, source_dir.clone());
         for item in &module.items {
             process_meta_item(&item.node, &mut env, &mut type_env, &mut type_func_env, &ctx, &mut errors);
-            // Collect `type` aliases alongside `meta type` aliases
-            if let Item::TypeAlias(ta) = &item.node {
-                let param_names: Vec<String> = ta.generic_params.as_ref().map_or_else(Vec::new, |gp| {
-                    gp.node.params.iter().filter_map(|p| match &p.node {
-                        GenericParam::Type { name, .. } => Some(name.node.clone()),
-                        _ => None,
-                    }).collect()
-                });
-                if param_names.is_empty() {
-                    type_env.insert(ta.name.node.clone(), ta.type_.node.clone());
-                } else {
-                    generic_aliases.insert(ta.name.node.clone(), (param_names, ta.type_.node.clone()));
-                }
-            }
         }
     }
+    // Collect `type` aliases (both simple and generic) into the type envs.
+    // Recurses into `Item::Module` so aliases declared in *imported* modules —
+    // which `loader::merge_modules` wraps in an `Item::Module` node — are
+    // collected too. Without this, an imported `type Entity = SlotKey` is never
+    // erased and survives into resolve as an opaque `DefKind::TypeAlias` with no
+    // struct body (Bug B).
+    collect_type_aliases(&module.items, &mut type_env, &mut generic_aliases);
 
     // Phase 1.5: Flatten MetaIf (conditional compilation).
     // Snapshot the current items for the context so user-defined functions are still accessible.
@@ -499,12 +500,17 @@ fn evaluate_meta_consts_impl(
         let mut constructor_fixups: FxHashMap<String, (String, Vec<Spanned<Type>>)> = FxHashMap::default();
         for (alias_name, underlying) in &type_env {
             if let Type::Named { name, generic_args } = underlying {
-                if !generic_args.is_empty() {
-                    constructor_fixups.insert(
-                        alias_name.clone(),
-                        (name.node.clone(), generic_args.clone()),
-                    );
-                }
+                // Generic aliases (`type IntList = Vector[int]`) inject the
+                // underlying generic args. Non-generic struct aliases
+                // (`type Handle = SlotKey`) carry empty args — the rewrite
+                // site renames the callee identifier only (and emits `None`,
+                // matching a plain non-generic constructor call). Primitive
+                // and function aliases never reach here (they're not
+                // `Type::Named`), so `Count`/`Op` are correctly left alone.
+                constructor_fixups.insert(
+                    alias_name.clone(),
+                    (name.node.clone(), generic_args.clone()),
+                );
             }
         }
         if !constructor_fixups.is_empty() {
@@ -526,8 +532,21 @@ fn evaluate_meta_consts_impl(
         }
     }
 
-    // Phase 3: Remove all meta declarations and type aliases
-    module.items.retain(|item| {
+    // Phase 3: Remove all meta declarations and type aliases — at the top level
+    // AND inside imported `Item::Module` wrappers. Edits (a)+(b) collect and
+    // rewrite the *uses* of an imported alias, but its *declaration* lives
+    // nested in an `Item::Module`; without recursing here it survives Phase 3,
+    // reaches resolve, and re-creates the opaque `DefKind::TypeAlias` (Bug B).
+    remove_meta_and_alias_items(&mut module.items);
+
+    errors
+}
+
+/// Remove meta declarations and `type` aliases from `items`, recursing one level
+/// into `Item::Module` (imported modules) — the removal counterpart to
+/// `collect_type_aliases`. (`merge_modules` nests only one level.)
+fn remove_meta_and_alias_items(items: &mut Vec<Spanned<Item>>) {
+    items.retain(|item| {
         !matches!(
             &item.node,
             Item::MetaConst(_) | Item::MetaAssert(_) | Item::MetaLog(_)
@@ -535,8 +554,43 @@ fn evaluate_meta_consts_impl(
             | Item::TypeAlias(_)
         )
     });
+    for item in items.iter_mut() {
+        if let Item::Module { items: sub_items, .. } = &mut item.node {
+            remove_meta_and_alias_items(sub_items);
+        }
+    }
+}
 
-    errors
+/// Collect `type X = ...` aliases: non-generic into `type_env`, generic into
+/// `generic_aliases`. Recurses one level into `Item::Module` so aliases from
+/// imported modules are collected. (`merge_modules` produces only flat sibling
+/// `Item::Module` nodes — single-level recursion is sufficient.)
+fn collect_type_aliases(
+    items: &[Spanned<Item>],
+    type_env: &mut FxHashMap<String, Type>,
+    generic_aliases: &mut FxHashMap<String, (Vec<String>, Type)>,
+) {
+    for item in items {
+        match &item.node {
+            Item::TypeAlias(ta) => {
+                let param_names: Vec<String> = ta.generic_params.as_ref().map_or_else(Vec::new, |gp| {
+                    gp.node.params.iter().filter_map(|p| match &p.node {
+                        GenericParam::Type { name, .. } => Some(name.node.clone()),
+                        _ => None,
+                    }).collect()
+                });
+                if param_names.is_empty() {
+                    type_env.insert(ta.name.node.clone(), ta.type_.node.clone());
+                } else {
+                    generic_aliases.insert(ta.name.node.clone(), (param_names, ta.type_.node.clone()));
+                }
+            }
+            Item::Module { items, .. } => {
+                collect_type_aliases(items, type_env, generic_aliases);
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Process a single meta item: MetaConst, MetaAssert, MetaType, or MetaTypeFunc.

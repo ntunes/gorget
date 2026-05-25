@@ -1,0 +1,10 @@
+# The struct alias lives in an *imported* module. The loader wraps these items
+# in an `Item::Module` node, so before the fix the alias was never collected
+# (Bug B): it survived meta erasure into resolve as an opaque `DefKind::TypeAlias`
+# with no struct body, breaking the backend.
+from std.slotmap import SlotKey
+
+type Handle = SlotKey
+
+Handle mk():
+    return Handle(7, 0)
