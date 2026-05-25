@@ -136,8 +136,12 @@ box. This is the SAME failure mode as UAF #1, the array-literal clone, and the a
 upstream / pre-existing / orthogonal" framing was WRONG — it contradicted the labels-only evidence.
 
 **NEXT — cheapest decisive experiment FIRST (do this before any gdb pointer-chasing):** reproduce
-with labels-only and see if bug #3 disappears. Build the self-host **WHOLESALE at `f15a45c6`**,
-emit, ASan-run. (Do NOT partial-revert just `lower`/`lir_*`: this run's `gir.gg` changed
+with labels-only and see if bug #3 disappears. Build the self-host **WHOLESALE at `f15a45c6`**:
+`git checkout f15a45c6 -- tests/fixtures/self_host_lowerer/` (this also reverts the harmless
+`loader.gg` `it`→`item` rename and `driver.gg`'s flag set — fine, `f15a45c6` bootstrapped with
+them), then **rebuild stage-0** (`GG_BUILD_TIMEOUT_SECS=600 ./target/release/gg build
+tests/fixtures/self_host_lowerer/driver.gg` — the prebuilt `driver` is now stale), then run the
+loop above + ASan. (Do NOT partial-revert just `lower`/`lir_*`: this run's `gir.gg` changed
 `none_decls`'s type, added `optionlike_resource_types` (referenced 7× in `lir_lower.gg`), and
 changed the `GirModule(...)` constructor arity — and `driver.gg`'s `--emit-c` flag coupling
 changed — so f15a45c6 `lower`/`lir_*` against gorget-1 `gir.gg`/`driver.gg` will NOT type-check.)
@@ -212,7 +216,7 @@ File these into `TODO.md` when the cluster ships green:
 3. **Clone-emission layer** — Rust emits the clone inline at GIR; the self-host labels `OpClone`
    at GIR and materializes at LIR. Functionally equivalent; reconcile (self-host-as-showcase) or
    keep the split, but note it can cause GIR-shape diffs vs Rust.
-4. **Perf: the ~510s emit** — profile (per `feedback_perf_hunt_playbook`); suspect O(n²)
+4. **Perf: the ~567s emit** — profile (per `feedback_perf_hunt_playbook`); suspect O(n²)
    drop-type resolution / block-instruction append as drop count grows.
 5. **`fixed_point` N back to 2 + retire Phase-F.2 band-aids** — `add_local_inheriting` /
    `inherit_borrow_from` were workarounds; audit-and-retire once real move+clone+drop is in, then
