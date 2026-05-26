@@ -233,7 +233,16 @@ correct CoW default: a read-only walk is a **borrow** position, so it must NOT c
 (7658-7673: `*callee_box`, `*lhs`, `*rhs`, `*inner`, `*cond`, `arg`, `then_body`, …) and any sibling
 read-only walkers reached from them (e.g. pattern/type sub-walkers) for the same by-value smell.
 
-**STEP B — ensure the borrow actually elides the clones (the crux).** Changing the signature to `&` is
+**STEP B — ensure the borrow actually elides the clones (the crux). CONFIRMED PRODUCER SITE:**
+`lower_for` (`lower.gg:6427`) already passes `OpBorrow(coll_local)` to `.get(idx)` (line 6525), but
+binds the element via **`emit_payload_read(...)` at `lower.gg:6528`, which CLONES the element**
+(the code comment at ~5743 says "independently cloned by emit_payload_read"). So `for stmt in stmts`
+deep-clones every element regardless of receiver ownership — that is the clone bomb, and the CoW
+default (CLAUDE.md: "collection element reads … propagate Ptr aliases at zero cost") is being violated.
+Fix at this producer: bind the for-element as a **borrow alias** into the collection (LoBorrowed,
+no clone), and let the existing clone-on-consume/clone-on-mutation materialize a fresh copy only when
+the loop body actually consumes/mutates the element. NB this is BROAD (affects every `for x in coll`)
+→ full validation required. Changing the signature to `&` is
 necessary but may not be sufficient: the `for stmt in stmts` element-extract and the `*box` derefs must
 lower to **borrows**, not `OpClone`. Verify (probe the regenerated C — no stage-0 rebuild needed to
 re-probe) that iterating a borrowed `Vector[Stmt]` yields `OpBorrow` elements (mirror `lower_for`'s
