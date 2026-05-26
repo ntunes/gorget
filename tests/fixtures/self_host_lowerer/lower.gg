@@ -3405,6 +3405,24 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
             # coll.get(i).unwrap()` infers a pointer, not the name-derived V.
             int unwrap_ref_payload = option_ref_payload_of(&gmod, recv_tid)
             if unwrap_ref_payload >= 0:
+                # option_ref_borrow Phase 6 (R1, refinement — site #2): gate on
+                # the POINTEE so type-inference consumers (`auto x =
+                # …unwrap()` via fallback) agree with the SSA that site #1
+                # produces. Resource pointee → keep the `GtPtr` borrow;
+                # primitive pointee → the deref'd VALUE pointee type. (The
+                # plain-unwrap LOWERING doesn't read this — it returns the
+                # local directly — so this is refinement, not the load-bearing
+                # fix; keep it consistent anyway.)
+                if unwrap_ref_payload >= 0 and unwrap_ref_payload < gmod.type_table.len():
+                    GirType urp_gt = gmod.type_table.get(unwrap_ref_payload).unwrap()
+                    match urp_gt:
+                        case GtPtr(urp_inner):
+                            if is_resource_type_name(type_id_to_name(urp_inner, &gmod), &gmod):
+                                return unwrap_ref_payload
+                            else:
+                                return urp_inner
+                        else:
+                            pass
                 return unwrap_ref_payload
             if recv_tid >= 0 and recv_tid < gmod.type_table.len():
                 GirType gt0 = gmod.type_table.get(recv_tid).unwrap()
@@ -6408,7 +6426,18 @@ void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vecto
                 bool scrut_borrow = scrutinee_nonowning(&ctx, &gmod, scrutinee)
                 int field_val = emit_payload_read_mode(&ctx, scrutinee_ptr, effective_enum, effective_variant, fi, fty, &gmod, scrut_borrow)
                 Option[String] bname_opt = Some(bname.clone())
-                int bound = add_local_inheriting(&ctx, fty, bname_opt, field_val)
+                # option_ref_borrow Phase 6 (R1, site #3): KEEP `fty`(=GtPtr for
+                # an Option[Ref[T]] scrutinee) as the `dst_type` arg above so the
+                # site-#1 guard fires and derefs primitive pointees. But type the
+                # BOUND local from the RETURNED `field_val`'s ACTUAL type — site
+                # #1 returns a value-typed local for a primitive pointee (the
+                # deref result) and the GtPtr for a resource pointee. Binding to
+                # `fty` would force a pointer slot for a primitive (the bug). No
+                # primitive-pointee `match coll.get(i): case Some(p):` site exists
+                # in the current self-host (all chain `.unwrap()` first), so the
+                # primitive case is unexercised by the bootstrap — but it's now
+                # sound; the exercised resource-match case keeps `bound: GtPtr`.
+                int bound = add_local_inheriting(&ctx, ctx.locals.get(field_val).unwrap().type_id, bname_opt, field_val)
                 ConsumeKind bk = CkAssign()
                 if scrut_borrow and local_is_borrow_alias(&ctx, field_val):
                     bk = CkCallArgBorrow()
