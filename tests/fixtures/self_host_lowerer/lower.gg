@@ -1310,11 +1310,29 @@ Operand op_consume(LowerCtx &ctx, GirModule &gmod, int lid, ConsumeKind kind):
             # pointer is sound — fall through to OpCopy via the
             # helper.
             return decide_ptr_consume(&gmod, lid, inner_tid)
+        case GtMutPtr(inner_tid):
+            # MutPtr(T) at a consume position. `&`-borrow AND `!`-move
+            # resource params BOTH lower to MutPtr(T) (one slot kind,
+            # `is_owning_param` distinguishes them only for the exit
+            # drop — mirrors Rust `ir/mod.rs` Local + `functions.rs`
+            # param setup). Neither owns the pointee at THIS call: a `&`
+            # borrows it; a `!` owns it but is consumed here while still
+            # live past the call (last-use move is a deferred opt). So,
+            # exactly like the Ptr(T) arm and Rust's
+            # `ensure_owned_at_consuming_arg` (borrow-state source →
+            # clone, never shallow-alias — `context.rs:1953-1987`),
+            # materialise a fresh owned T via deref+clone-through.
+            # decide_ptr_consume keeps OpCopy for non-resource pointees
+            # (MutPtr-to-int etc.), so this is inert there. Reaching here
+            # at all implies a consume kind — non-consume kinds returned
+            # OpBorrow at the top of this fn. Without this, a `!`-param
+            # consumed into Box/push/field-init shallow-aliased the
+            # pointee, and drop emission then freed it → dangle (bug #3).
+            return decide_ptr_consume(&gmod, lid, inner_tid)
         else:
-            # GtMutPtr / GtFnPtr / GtTuple / etc. — byte-copy of a
-            # pointer is just a pointer copy, not a resource copy.
-            # Mutable pointers are by-design caller-aliased. Validator
-            # filters these too.
+            # GtFnPtr / GtTuple / etc. — byte-copy of a pointer is just
+            # a pointer copy, not a resource copy. Validator filters
+            # these too.
             return OpCopy(lid)
     if not is_resource_type_name(tname, &gmod):
         return OpCopy(lid)
@@ -1423,12 +1441,16 @@ Operand decide_operand_at_consuming_arg(LowerCtx &ctx, GirModule &gmod, int src_
             # Case 2: Ptr(T). Clone-through if T is a resource;
             # otherwise plain pointer byte-copy.
             return decide_ptr_consume(&gmod, src_lid, inner)
-        case GtMutPtr(_):
-            # MutPtr aliases (e.g. `&` borrow Plumbing) — byte-copy
-            # of a pointer is a pointer copy. The receiver gets the
-            # same alias; ownership transfer is the caller's
-            # responsibility upstream.
-            return OpCopy(src_lid)
+        case GtMutPtr(inner):
+            # Case 2b: MutPtr(T). `&`-borrow AND `!`-move resource params
+            # both lower to MutPtr(T) (see op_consume's GtMutPtr arm).
+            # At a consuming position neither may shallow-alias: a borrow
+            # doesn't own the pointee, and a `!` consumed while live-past
+            # this use must materialise (last-use move is a deferred opt).
+            # Clone-through if T is a resource; otherwise plain pointer
+            # byte-copy. Mirrors the Ptr(T) arm and Rust's
+            # `ensure_owned_at_consuming_arg` (borrow-state → clone).
+            return decide_ptr_consume(&gmod, src_lid, inner)
         case GtFnPtr(_, _):
             # Function pointer: not a resource. Byte-copy.
             return OpCopy(src_lid)
@@ -8516,6 +8538,22 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     fn_move_params.put("Ok", !ok_mv)
     Vector[bool] error_mv = [true]
     fn_move_params.put("Error", !error_mv)
+    # `Box(x)` is the sibling prelude ctor: `Box[T]` is a SINGLE-OWNER
+    # heap allocation (language-reference.md §"Box[T]") — it OWNS its
+    # payload, exactly like Some/Ok/Error own theirs. Without this,
+    # `Box(x)` classifies the payload CkCallArgBorrow → op_consume's
+    # non-consume early-out returns OpBorrow → IBoxAlloc shallow-memcpy's
+    # the payload, aliasing the source's interior `Box`/`String` ptrs;
+    # drop emission then frees the source while the box still references
+    # it → dangle (bug #3, the `Box(lhs)` cycle in parse_expr_bp_with_lhs).
+    # Rust treats `Box(x)`/`Box.new(x)` as an owning consume position too
+    # (`ir/lowering/exprs/calls.rs` Box ctor + `methods.rs` Box.new, both
+    # run `ensure_owned_at_consuming_arg`). Flagging owning routes the arg
+    # through op_consume → move (owned last-use) or clone (borrow/`!`-param
+    # live-past, via the MutPtr/Ptr clone-through arms). Typed local, not a
+    # bare `[true]` (elem_size trap — see above).
+    Vector[bool] box_mv = [true]
+    fn_move_params.put("Box", !box_mv)
     Dict[String, int] const_decls = {}
     Dict[String, int] none_decls = {}
     Dict[String, float] float_const_decls = {}
