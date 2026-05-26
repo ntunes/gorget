@@ -1,13 +1,15 @@
 # Drop Emission — Self-Host Plan (unified)
 
-**Status (2026-05-25, HANDOVER):** IN PROGRESS — cc-clean, **not yet bootstrapping.** WIP is
-**COMMITTED** on branch `gorget-1` (ahead of `main`@`087b5a13`; `758ed737` = code save-point +
-handover-doc commits; squash at merge-to-main). Stage-1 now emits the full stage-2 C (**616363 lines, ~567s** — use a ≥2400s
-timeout; the earlier "hang" was a 600s-timeout artifact on a loaded box, NOT a bug). The live
-blocker has moved into **stage-2 lowering**: an **`EBinaryOp` infinite recursion** (see NEXT BUG).
-Fixed + committed this run: **bug #1** (None/`NO_NAME` lowered as 8-byte `OpConstUnit()` →
-add_local drop-clone over-read; now a typed `IEnumInit(tag=1)` None) and **bug #2** (`EArrayLiteral`
-push receiver `OpMove`→`OpBorrow`). **SHIP-GATE (no name-matching):** before this cluster ships
+**Status (2026-05-26):** IN PROGRESS — cc-clean, **not yet bootstrapping.** WIP is **COMMITTED** on
+branch `gorget-1` (ahead of `main`@`087b5a13`; squash at merge-to-main). **Live blocker = bug #3b** (a
+heap clone-OOM in `lir_codegen.gg::generate_c` — `while`-loop `.get().unwrap()` deep-clones whole
+`LirFunction`s; ~11 GB). It is the SAME `.get()`-aggregate-clone class as bug #3, whose lower-phase
+instance (for-element / discovery walkers) is **FIXED + verified in `7cc7a101`** (CoW borrow
+for-element + read-only match-destructure → `lower_module` completes, `lowerer_comparison` green). See
+NEXT BUG (STATUS) + NEXT STEPS for the bug #3b fork (A reference-grade `.get()`-borrow + clone-on-mutation
+port vs B surgical borrow-accessor). Also committed: `19f90339` (Box/MutPtr clone-through, orthogonal).
+Earlier this run: **bug #1** (None/`NO_NAME` 8-byte `OpConstUnit()` → typed `IEnumInit(tag=1)`) and
+**bug #2** (`EArrayLiteral` push receiver `OpMove`→`OpBorrow`), both committed in `758ed737`. **SHIP-GATE (no name-matching):** before this cluster ships
 green, the consuming-position name-match (`is_owning_mutator_arg`) MUST become a typed signal —
 see guardrail #5; the self-host is to be BETTER than Rust here, not a mirror.
 
@@ -58,6 +60,13 @@ also be CLONED (drop-without-clone on a shallow copy = double-free).**
    <I>__clone_inplace(field);` at all 4 field-clone sites; `box_alloc_for_field_type` generates
    the box-inner allocators the ICall scan misses (e.g. `SpannedPattern`). Box detected via the
    typed `type_runtime_map == "Box"`.
+9. **CoW borrow for-element + read-only match-destructure** (`7cc7a101`, bug #3 lower-phase) —
+   `for x in coll` and non-owning `match` destructures bind the element as a BORROW, not a clone.
+   Both clone sites suppressed for for-elements: `coll.get()`→`Option[T]` wrap
+   (`emit_void_ptr_option_wrap`, `lir_lower.gg:2077`) and `emit_payload_read`, keyed on the typed
+   `BoCollectionElement(coll≥0)` tag (`gir_local_is_for_element`); String/Closure keep eager clone
+   (value-slot consume ABI). Read-only walkers 7–19 clones→0–1; `lower_module` completes;
+   `lowerer_comparison` green. (Was the lower-phase half of bug #3; bug #3b is the codegen half.)
 
 ---
 
@@ -96,7 +105,24 @@ for p in '__drop(' 'gorget_string_free(' 'gorget_array_free(' 'gorget_map_free('
 
 ---
 
-## NEXT BUG — bug #3: heap clone-OOM — read-only `discover_generic_calls_*` walkers deep-clone the AST by value under the clone-on-consume regime
+## bug #3 (lower-phase clone-OOM) — FIXED `7cc7a101`; live blocker is now bug #3b (codegen-phase `.get()` clone)
+
+> **STATUS (2026-05-26, end of session) — START HERE:**
+> - **bug #3 (the lower-phase clone-OOM described in this section) is FIXED + VERIFIED in `7cc7a101`**
+>   ("CoW borrow for-element + read-only match-destructure"). `for x in coll` and non-owning `match`
+>   destructures now bind the element as a BORROW, not a clone (the producer was *two* clones —
+>   `coll.get()`→`Option[T]` wrap at `lir_lower.gg:2077` AND `emit_payload_read` — both skipped for
+>   for-elements via the typed `BoCollectionElement(coll≥0)` tag). Read-only walkers: 7–19 clones → 0–1;
+>   `lower_module` now runs to completion (was OOM 14.5 GB). `lowerer_comparison` GREEN (re-verified);
+>   `cargo test --lib` 1059/2-pre-existing-fail. Committed on `gorget-1`.
+> - **LIVE BLOCKER is now bug #3b** — the SAME `.get()`-aggregate-clone class at a different idiom
+>   (manual `while` loop). With bug #3 fixed, stage-1 runs through lower→lir-lower→ssa→drop-elab and
+>   OOMs (~11 GB) in **`lir_codegen.gg::generate_c`**: `compute_reachable_fns` (`lir_codegen.gg:902`)
+>   and `emit_func_forward_decls` (`:1414/1419`) do `m.functions.get(i).unwrap().name` in `while`
+>   loops — each `.get().unwrap()` deep-clones the WHOLE `LirFunction` to read one field. (Body loop
+>   `:5193` has the same `.get().unwrap()` clone.) See "## NEXT STEPS" for the fix fork.
+> - The section below (DIAGNOSIS CORRECTED block + the superseded A.2/recursion analysis) is the
+>   RECORD of how bug #3 was diagnosed; it's resolved — read it only for context.
 
 (Bugs #1 + #2 are FIXED + committed in `758ed737` — see Status. The old add_local/`NO_NAME`
 overflow WAS bug #1; do not re-chase it.)
@@ -217,49 +243,47 @@ LOWERING fabricates the 13,000+-deep one** (consistent with the ASan box-allocat
 
 ---
 
-## NEXT STEPS — make the read-only `discover_generic_calls_*` walkers borrow (verified 2026-05-26)
+## NEXT STEPS — bug #3b: the `.get().unwrap()` whole-`LirFunction` clone in `generate_c`
 
-**Diagnosis (verified, STEP A executed + independently re-checked):** see the "DIAGNOSIS CORRECTED"
-block under NEXT BUG. The OOM is a heap clone-bomb: the read-only generic-discovery walkers take AST
-**by value** and deep-recurse, and under the post-A.2 clone-on-consume regime that deep-clones the
-subtree at every descent (7 clone calls in each walker's emitted C; `lower_module` runs them over every
-body + a transitive fixpoint) → 10M+ `SpannedExpr__clone` → ~14.5 GB → OOM. The fix is the layering-
-correct CoW default: a read-only walk is a **borrow** position, so it must NOT clone.
+**DONE this session (verified, `7cc7a101`):** the lower-phase clone-OOM (bug #3) is fixed — for-element
++ non-owning-match destructures now borrow (see STATUS under NEXT BUG). `lower_module` completes;
+`lowerer_comparison` green.
 
-**STEP A — make the three walkers (and their helpers) take borrows.** In `lower.gg`:
-`discover_generic_calls_stmts(Vector[Stmt] stmts, …)` → `&stmts` (7740);
-`discover_generic_calls_stmt(Stmt stmt, …)` → `&stmt` (7685);
-`discover_generic_calls_expr(SpannedExpr sexpr, …)` → `&sexpr` (7642). Audit the recursive call sites
-(7658-7673: `*callee_box`, `*lhs`, `*rhs`, `*inner`, `*cond`, `arg`, `then_body`, …) and any sibling
-read-only walkers reached from them (e.g. pattern/type sub-walkers) for the same by-value smell.
+**bug #3b (live blocker):** the SAME `.get()`-aggregate-clone class, now in `lir_codegen.gg::generate_c`.
+`compute_reachable_fns` (`lir_codegen.gg:902`), `emit_func_forward_decls` (`:1414/1419`), and the body
+loop (`:5193`) iterate with `m.functions.get(i).unwrap().name` in `while` loops — each `.get().unwrap()`
+deep-clones the WHOLE `LirFunction` (all blocks/instructions) just to read one field → OOM ~11 GB.
+The for-element fix doesn't cover the manual `while`-loop `.get()` idiom. **Repro:** build stage-0, run
+stage-1 on `driver.gg --emit-c`, `cc -O0`, run → OOM-SIGKILL ~11 GB in `generate_c` (it dies in the
+reachability/fwd-decl setup, BEFORE the function-emission loop). Confirm with `print`-trace bisecting.
 
-**STEP B — ensure the borrow actually elides the clones (the crux). CONFIRMED PRODUCER SITE:**
-`lower_for` (`lower.gg:6427`) already passes `OpBorrow(coll_local)` to `.get(idx)` (line 6525), but
-binds the element via **`emit_payload_read(...)` at `lower.gg:6528`, which CLONES the element**
-(the code comment at ~5743 says "independently cloned by emit_payload_read"). So `for stmt in stmts`
-deep-clones every element regardless of receiver ownership — that is the clone bomb, and the CoW
-default (CLAUDE.md: "collection element reads … propagate Ptr aliases at zero cost") is being violated.
-Fix at this producer: bind the for-element as a **borrow alias** into the collection (LoBorrowed,
-no clone), and let the existing clone-on-consume/clone-on-mutation materialize a fresh copy only when
-the loop body actually consumes/mutates the element. NB this is BROAD (affects every `for x in coll`)
-→ full validation required. Changing the signature to `&` is
-necessary but may not be sufficient: the `for stmt in stmts` element-extract and the `*box` derefs must
-lower to **borrows**, not `OpClone`. Verify (probe the regenerated C — no stage-0 rebuild needed to
-re-probe) that iterating a borrowed `Vector[Stmt]` yields `OpBorrow` elements (mirror `lower_for`'s
-`OpBorrow(coll_local)` path) rather than `emit_payload_read`'s auto-clone, and that passing a `*box`
-deref (a `LoBorrowed`/`GIDeref` alias) to a `&`-param stays `OpBorrow`. If the for-element extract clones
-unconditionally regardless of receiver ownership, that is the real producer-site bug to fix (per
-`docs/internals/layering-discipline.md`: fix where the clone is *emitted*, driven by typed ownership,
-not at the walker). Confirm clone count drops by orders of magnitude (counter probe: was 10M+).
+**FORK — pick one next session:**
 
-**STEP C — validate (in order):** `self_host_bootstrap` (exact) green → `self_host_bootstrap_fixed_point`
-green → `lowerer_comparison` fn-count parity → `cargo test --lib --release` (baseline per CLAUDE.md
-~1027; ~1059 observed this branch) → full `cargo test --test integration` (parent drives). NB: stage-2
-is built with plain `cc -O0` (NO ASan) — measure the REAL failure mode; ASan inflates frames and can
-mask a heap-OOM as a stack-overflow (it did, this session). Re-run the drop-count grep-diff vs
-`driver.c`.
+- **(A) reference-grade — close the whole class.** Make `.get()` (and the other aggregate reads:
+  Option-wrap, payload-read) **borrow by default** (CoW: "collection element reads propagate Ptr aliases
+  at zero cost") and **port Rust's clone-on-mutation detection** (`index_borrow_sources`,
+  `src/semantic/safety/check_expr.rs:358`) into the self-host safety pass so the get-mutate-set idiom
+  (`t = coll.get(i); t.field.push(x); coll.set(i,t)`) clones on the MUTATION, not the read. This kills
+  bug #3b AND every future `.get()`-clone instance in one stroke. **Caveat (verified by the impl agent):**
+  a naive general-`.get()`-borrow WITHOUT the detection **double-frees** get-mutate-set (e.g.
+  `traits.gg:append_builtin_method`). So this is substantial + UAF-risky and MUST land with the
+  detection machinery, not before. This is the project-directive ("reference-grade over surgical")
+  answer.
 
-**STEP D — SHIP-GATE + squash.** Before green-ship, replace the consuming-position name-match
+- **(B) surgical stopgap — borrow-iterate the codegen `while` loops only.** Add a `LirModule`
+  borrow-accessor (e.g. `function_names() -> Vector[String]`, or a by-index field-borrow) so
+  `compute_reachable_fns` / `emit_func_forward_decls` / the `:5193` body loop read names/fields without
+  cloning whole `LirFunction`s. Unblocks bootstrap fast, but it's **whack-a-mole** — other
+  `while … .get().unwrap()` aggregate reads will keep biting until (A) lands. Treat as a bridge, not the
+  fix.
+
+**Then — validate (in order):** `self_host_bootstrap` (exact) green → `self_host_bootstrap_fixed_point`
+green → `lowerer_comparison` parity → `cargo test --lib --release` (baseline per CLAUDE.md ~1027; ~1059
+observed) → full `cargo test --test integration` (parent drives). NB: stage-2 is built with plain
+`cc -O0` (NO ASan) — judge the REAL failure mode there (ASan inflates frames and masked a heap-OOM as a
+stack-overflow this session). Re-run the drop-count grep-diff vs `driver.c`.
+
+**Then — SHIP-GATE + squash.** Before green-ship, replace the consuming-position name-match
 (`is_owning_mutator_arg`) with a typed signal (guardrail #5), then squash the whole cluster as ONE
 commit (partial states crash). Fold "Deferred optimizations" into `TODO.md`.
 
