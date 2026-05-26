@@ -107,12 +107,13 @@ overflow WAS bug #1; do not re-chase it.)
 > in the emitted C** (`Box(lhs)` now emits `SpannedExpr__clone(...)` before the alloc), yet
 > `self_host_bootstrap` **fails identically** (`status=None` signal-kill at step 8). The `Box`/`MutPtr`
 > change is correct-by-spec (matches Rust's `ensure_owned_at_consuming_arg` + language-ref §9.6) but is
-> **orthogonal to bug #3**. It is currently UNCOMMITTED in the working tree (lower.gg op_consume +
-> decide_operand_at_consuming_arg GtMutPtr arms → clone-through; "Box" in fn_move_params); decide
-> separately whether to keep it. Do NOT re-chase the Box-ctor mechanism.
+> **orthogonal to bug #3**. It is **COMMITTED as `19f90339`** (lower.gg op_consume +
+> decide_operand_at_consuming_arg GtMutPtr arms → clone-through; "Box" in fn_move_params) — KEPT
+> (lowerer_comparison-green); reconcile with the recovery fix's clone path (NEXT STEPS STEP B). Do NOT
+> re-chase the Box-ctor mechanism.
 
 **CONFIRMED NATURE (three independent probes, 2026-05-25):** `lower_expr`'s `case EBinaryOp(lhs_box,…)`
-(`lower.gg:~3859`) → `lower_expr(*lhs_box)` recurses **without bound**.
+(`lower.gg:3881`, recursion `lower_expr(*lhs_box)` at `lower.gg:3928`) recurses **without bound**.
 1. **ASan stack-overflow** in `lower___lower_expr`, every frame the same lhs-recursion call site.
 2. **Unlimited-stack run → OOM SIGKILL** (137), NOT completion and NOT a clean SIGSEGV. So it is
    **genuinely unbounded** (a finite-but-deep `+` chain would have completed; the ~148KB frame alone is
@@ -179,28 +180,39 @@ field-read source local (`LoBorrowed`, `BoField(base,fi)`, slot `LT_PTR_TO_BASE+
 finished. So **finish it**, mirroring Rust's `FieldLoad` consume path (`src/lir/lower/insts.rs:800-869`
 + how `ensure_owned_at_consuming_arg` / the GIR consume sites treat a `BorrowedPtr`/field-origin source).
 
-**STEP A — pinpoint the exact mishandling consumer (do FIRST; cheap, no rebuild).** The runaway is in
-`lower_expr` lowering `derive___field_write_lines`' `+`-concat chain (parsed ~50 deep; lowering
-fabricates ~13k via clone-recursion). Use the documented harness (emit `--lir-c` ~580s → splice
-`driver.c` preamble → `cc -O0 -g [-fsanitize=address]` → run on `driver.gg`; inject probes directly
-into the generated `/tmp/*.c`, no stage-0 rebuild). Trace where a Ptr-typed field-read result
-(`sexpr.expr` is an `Expr` = resource → A.2 makes it a Ptr-alias; likewise any `.field` of a resource)
-flows into a consume/clone site that (a) treats the Ptr-alias as an owned value, or (b) re-clones +
-re-lowers it, compounding depth. Prime suspects: `op_consume`/`decide_operand_at_consuming_arg` on a
-`LoBorrowed`+ptr-to-struct source (a-5 clone-on-borrow → `OpClone` that deep-clones the whole subchain
-per recursion level); the `*lhs_box` box-deref reading through a Ptr-aliased `Expr`; and the
-`GIFieldLoad`→`match` interaction (matching on `sexpr.expr` when it is now a Ptr-to-`Expr`). Confirm the
-single site, don't guess.
+**STEP A — CONFIRM the A.2-era failure IS today's bug #3, THEN pinpoint the mishandling consumer.**
+*Caveat the whole plan rests on (be honest):* the bisect found first-BREAKAGE = A.2, and bootstrap fails
+throughout [A.2..758ed737] for evolving reasons. We have NOT verified that the crash *signature* at A.2
+(the ~13k-deep `+`-chain OOM/stack-overflow in `lower_expr` on `field_write_lines`) is the SAME as
+today's at 758ed737 — bug #3 could have shifted/emerged at a later drop-emission commit, in which case
+STEP B is aimed one layer off. **A.0 (do this first):** check out `2e544e84`, run the documented
+self-host harness, and confirm the identical signature (run the stage-2 binary on `driver.gg`; expect a
+`lower_expr` lhs-recursion stack-overflow lowering `derive___field_write_lines`). If A.2's failure is a
+DIFFERENT crash (e.g. a compile/link failure of stage-2, or a non-`field_write_lines` site), bisect
+*within* [A.2..758ed737] for the commit that introduces THIS signature before proceeding.
+**A.1 (then) — pinpoint the consumer (cheap, no rebuild):** the runaway is `lower_expr` lowering
+`field_write_lines`' `+`-concat chain (parsed ~50 deep; lowering fabricates ~13k via clone-recursion).
+Use the documented harness (emit `--lir-c` ~580s → splice `driver.c` preamble → `cc -O0 -g
+[-fsanitize=address]` → run on `driver.gg`; inject probes directly into the generated `/tmp/*.c`, no
+stage-0 rebuild). Trace where a Ptr-typed field-read result (`sexpr.expr` is an `Expr` = resource → A.2
+makes it a Ptr-alias; likewise any `.field` of a resource) flows into a consume/clone site that (a)
+treats the Ptr-alias as an owned value, or (b) re-clones + re-lowers it, compounding depth. Prime
+suspects: `op_consume`/`decide_operand_at_consuming_arg` on a `LoBorrowed`+ptr-to-struct source (a-5
+clone-on-borrow → `OpClone` that deep-clones the whole subchain per recursion level); the `*lhs_box`
+box-deref reading through a Ptr-aliased `Expr`; the `GIFieldLoad`→`match` interaction. **Confirm the
+single site with evidence — don't guess, and don't start STEP B until A.1 names it.**
 
-**STEP B — fix at the consumer(s), Rust-parity.** A Ptr-typed field-read result is a BORROW into the
-base; consuming it at an owning position must **materialize once** (deref + clone to a fresh owned
-value), and the recursion/match must **deref the pointer, not re-clone-and-re-lower**. Ensure: (1)
-reading/lowering through a Ptr-typed `sexpr.expr` derefs (no per-level re-clone); (2) `op_consume` on a
-`LoBorrowed`+`LT_PTR_TO_BASE+sid` source at a consume position clones the POINTEE exactly once (it does
-not, today, compound); (3) no clone-then-re-lower loop. Cite `docs/internals/layering-discipline.md`
-(fix at the write/producer site if a downstream pass is reconstructing from a Ptr it should have been
-handed materialized). This likely overlaps the `decide_ptr_consume` / `OpClone`-materialization paths my
-uncommitted `Box`/`MutPtr` change touched — reconcile, don't double-handle.
+**STEP B — fix at the consumer(s) STEP A.1 identified, Rust-parity.** *Contingent on A.1's finding — the
+direction below is the expected default (matches Rust + §9.6), not a pre-committed patch; adjust to the
+actual site.* A Ptr-typed field-read result is a BORROW into the base; consuming it at an owning position
+must **materialize once** (deref + clone to a fresh owned value), and the recursion/match must **deref
+the pointer, not re-clone-and-re-lower**. Likely needs: (1) reading/lowering through a Ptr-typed
+`sexpr.expr` derefs (no per-level re-clone); (2) `op_consume` on a `LoBorrowed`+`LT_PTR_TO_BASE+sid`
+source at a consume position clones the POINTEE exactly once (must not compound); (3) no
+clone-then-re-lower loop. Follow `docs/internals/layering-discipline.md` (fix at the write/producer site
+if a downstream pass is reconstructing from a Ptr it should have been handed materialized). This likely
+overlaps the `decide_ptr_consume` / `OpClone`-materialization paths the committed `Box`/`MutPtr` change
+(`19f90339`) touched — reconcile, don't double-handle.
 
 **STEP C — validate (in order):** `self_host_bootstrap` (exact) green → `self_host_bootstrap_fixed_point`
 green → `lowerer_comparison` fn-count parity → `cargo test --lib --release` (~1059 baseline) → full
@@ -218,7 +230,7 @@ separately; it is correct-by-spec (Rust `ensure_owned_at_consuming_arg` + lang-r
 STEP B's clone path — reconcile there.
 
 **Anchors:** first-bad `2e544e84` (A.2); `lower.gg` EFieldAccess named-field path (the `GIFieldLoad`
-+ `register_ptr` + `set_field_borrow` emission), `lower_expr` `case EBinaryOp` (~3859) + `match
++ `register_ptr` + `set_field_borrow` emission), `lower_expr` `case EBinaryOp` (3881) + `match
 sexpr.expr`, `op_consume`/`decide_operand_at_consuming_arg`/`decide_ptr_consume`; `lir_lower.gg`
 `GIFieldLoad` dispatch + `OpClone` materialization; fn `derive___field_write_lines` (derive.gg:160-187);
 Rust `src/lir/lower/insts.rs:800-869`, `src/ir/lowering/context.rs` `ensure_owned_at_consuming_arg`.
@@ -228,7 +240,7 @@ Rust `src/lir/lower/insts.rs:800-869`, `src/ir/lowering/context.rs` `ensure_owne
 ### (superseded) earlier Box-ctor analysis — kept for context, DISPROVEN above
 
 **Symptom:** the stage-2 binary (self-host compiled by itself) stack-overflows in `lower_expr`'s
-`case EBinaryOp(lhs_box, …)` (`lower.gg:~3859`) → `lower_expr(*lhs_box)`, which never bottoms out,
+`case EBinaryOp(lhs_box, …)` (`lower.gg:3881`) → `lower_expr(*lhs_box)`, which never bottoms out,
 while lowering **`derive___field_write_lines`** (whose body is a deep left-leaning `+`
 String-concat chain, parsed via the Pratt loop in `parser.gg:~1765`). gdb saw the same node at every
 depth (identical operator-`String` `.alloc` ptr) — a self-referential `Box[SpannedExpr]`.
@@ -293,7 +305,7 @@ diff bodies. The box-of-`lhs` site is `GORGET_ALLOC(sizeof(__gg_SpannedExpr)); m
 new drops are the `*_free`/`__drop` lines absent at `f15a45c6`. (A minimal stand-alone fixture did
 NOT reproduce — its smaller types gave the `!lhs` slot a raw `LT_PTR` instead of the real fn's
 typed `LT_PTR_TO_BASE+sid`, so it emitted a different `sizeof(void*)` box. Use the real fn.)
-Durable anchors: `lower.gg:~3859` (EBinaryOp arm), `parser.gg:~1765` (Pratt loop), fn
+Durable anchors: `lower.gg:3881` (EBinaryOp arm), `parser.gg:~1765` (Pratt loop), fn
 `Parser__parse_expr_bp_with_lhs` / `derive___field_write_lines`.
 
 ---
