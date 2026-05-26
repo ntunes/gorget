@@ -4510,6 +4510,18 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         inner_tid = F32_TYPE
                     elif inner_name_str == "Str":
                         inner_tid = lookup_or_register_named(&gmod, "GorgetString")
+                    elif inner_name_str.starts_with("Ref__"):
+                        # option_ref_borrow: an `Option__Ref__T` payload name
+                        # `Ref__T` must resolve to a real `GtPtr(T)` via the
+                        # bridge — NOT `lookup_or_register_named` (which would
+                        # register a `GtNamed("Ref__T")` → empty C struct that
+                        # poisons resolve_field_lir_type's LT_PTR fallback,
+                        # making Some_0 a value struct → shallow-copy/memcpy
+                        # type-error). Mirrors the guard at the infer site
+                        # (~3461) + the resolve_field_gir_type bridge (~3070).
+                        # The typed override below sets the same GtPtr; this
+                        # just avoids the GtNamed registration SIDE EFFECT.
+                        inner_tid = resolve_field_gir_type(inner_name_str, &gmod)
                     else:
                         inner_tid = lookup_or_register_named(&gmod, inner_name_str)
                 # option_ref_borrow Phase 3: override with the typed GtPtr
