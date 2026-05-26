@@ -466,16 +466,27 @@ is, at a VALUE-consuming position:
    Some(p):` site exists in the current self-host (all `match …get` chain `.unwrap()` first), so this
    primitive case is NOT exercised by the bootstrap — but implement it correctly anyway (don't ship
    an unsound instruction); the resource-match case IS exercised and keeps `bound: GtPtr`.
-4. **`unwrap_or` (`lower.gg:~4509-4532`) — REQUIRED EDIT, exercised (review pass 2, B1).** NOT mere
-   sanity: `sr.get(name).unwrap_or(-1)` (`sr: Dict[String,int]`) is load-bearing throughout
-   `lir_lower.gg` (StructRegistry id lookups: `:528,536,543,580,595,665,696,708…`). The `unwrap_or`
-   path allocates its result slot `uo_dst` INDEPENDENTLY at `lower.gg:~4513` as
-   `add_local(&ctx, inner_tid, …)` with `inner_tid = ref_payload_tid = GtPtr(int)` — site #1 never
-   touches it. As written it limps for `int` (ptr and int are both 8 bytes, both arms store values)
-   but the slot's GIR/LIR type is wrong (`LT_PTR`) → fragile + violates one-type-per-slot. FIX: gate
-   `inner_tid` at `:4500-4501/4513` (resource pointee → `GtPtr`; primitive → value pointee type) so
-   `uo_dst` and both arm-stores (the site-#1-deref'd Some payload + the `-1` literal default) are the
-   value pointee type for primitive pointees.
+4. **`unwrap_or` (`lower.gg:~4509-4532`) — REQUIRED EDIT, exercised (review pass 2 B1, mechanism
+   CORRECTED review pass 3).** NOT mere sanity: `sr.get(name).unwrap_or(-1)` (`sr: Dict[String,int]`)
+   is load-bearing throughout `lir_lower.gg` (StructRegistry id lookups: `:528,536,543,580,595,665,696,708…`).
+   ⚠ **Do NOT gate the shared `inner_tid`** (declared `lower.gg:4468`, set `=ref_payload_tid` at
+   `4500-4501`). It is the SAME variable used at the field-read calls (`emit_payload_read` at `~4524`
+   unwrap_or-Some AND `~4535` plain-unwrap) — those MUST keep `dst_type = GtPtr(inner)` so the site-#1
+   guard fires and emits the `GIDeref`. Gating `inner_tid` would type the field-read dst as a value
+   slot (the helper writes the pointer into it → bug reintroduced) AND stop the guard from matching →
+   no deref → breaks the dominant plain-unwrap path too. FIX: keep `inner_tid = GtPtr` unconditionally;
+   introduce a SEPARATE slot-type variable for `uo_dst` only — at `~4513`, `int uo_slot_tid =
+   primitive_pointee ? value_pointee_tid : inner_tid` (resource → `GtPtr`; primitive → value pointee
+   type), `add_local(&ctx, uo_slot_tid, …)`. Then the Some arm stores the site-#1-deref'd value
+   (`~4525`) and the None arm the value default `-1` (`~4529`) into a value-typed `uo_dst`. (Pointee
+   name: `type_id_to_name(ref_payload_tid)` already collapses `GtPtr(inner)`→inner name,
+   `lower.gg:~2935`; value pointee tid: destructure `GtPtr(inner)` off `gmod.type_table`.)
+5. **PLiteral sub-pattern (`lower.gg:~6400-6416`) — refinement, unexercised (review pass 2).** The
+   `case Some(0):`-style literal path computes `lit_fty` via `lookup_ctor_field_type`→the `Ref__`
+   bridge→`GtPtr`, would deref via site #1, but `GICmp` at `~6413` still passes `lit_fty`(=GtPtr) as
+   the operand type. No primitive-pointee literal-match on a getter exists today (all chain
+   `.unwrap()` first). Gate it for completeness OR leave a `# TODO` + fixture per "don't redesign
+   around gaps"; not a blocker.
 
 **R2 follow-up (refinement, verify-after-green, not a blocker):** the return-type priority
 (`lower.gg:~4732`) is `fn_sigs` → typechecker side-table (populates `option_ref_payload`) →
