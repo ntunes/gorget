@@ -3495,6 +3495,17 @@ LirFunction lir_lower_function(GirFunction gfn, GirModule &gmod, Dict[String, in
 # Determine the drop function name for a given type name.
 # Returns "" if the type doesn't need dropping.
 String drop_fn_for_type(String type_name, Dict[String, bool] &resource_types, Dict[String, String] &type_runtime_map, Dict[String, bool] &optionlike):
+    # option_ref_borrow RES-5: a `Ref__T` payload is a BORROW (a pointer
+    # into a collection the caller owns), never dropped (§2 invariant: only
+    # the owner frees). An `Option__Ref__T` is likewise a borrow wrapper.
+    # Today this falls through to "" accidentally (Ref__T is never registered
+    # as a resource); make it EXPLICIT so a future edit that registers a
+    # `Ref__`/`Option__Ref__` type can't silently emit a drop that would free
+    # the pointee → double-free. The pointer-ness lands via the LT_PTR
+    # fallback in resolve_field_lir_type; the Option struct itself is generated
+    # in Pass 3 with no variant-drop because of this guard.
+    if type_name.starts_with("Ref__") or type_name.starts_with("Option__Ref__"):
+        return ""
     if type_name == "GorgetString" or type_name == "Str":
         return "gorget_string_free"
     if type_name == "GorgetArray":

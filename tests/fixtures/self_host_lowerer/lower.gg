@@ -2677,10 +2677,15 @@ String resolved_to_c_name(int rtid, TypeTable types, ScopeTable scopes, GirModul
                 mangled = mangled + "__" + arg_name
             return mangled
         case RTRef(inner_rtid):
-            # References at the type-name level are transparent — the C
-            # name reflects the pointee. The pointer-ness comes back when
-            # we go through `resolved_to_gir_type` (registers a Ptr).
-            return resolved_to_c_name(inner_rtid, types, scopes, &gmod)
+            # option_ref_borrow Phase 1: a `Ref[T]` mangles to `Ref__<pointee>`
+            # so an `Option[Ref[T]]` becomes `Option__Ref__T` (Rust parity,
+            # matches driver.c's `__gg_Option__Ref__*`) — distinct from the
+            # owned `Option__T` that pop/remove produce. The pointer-ness is
+            # carried by the matching `GtPtr` in `resolved_to_gir_type`. We do
+            # NOT strip the Ref here anymore: stripping collapsed the borrowed
+            # and owned Option types onto one name and erased the payload's
+            # pointer representation (the shallow-copy unsoundness).
+            return "Ref__" + resolved_to_c_name(inner_rtid, types, scopes, &gmod)
         case RTTuple(elem_rtids):
             String tup_name = "Tuple"
             for et in elem_rtids:
@@ -2727,15 +2732,35 @@ int resolved_to_gir_type(int rtid, TypeTable types, ScopeTable scopes, GirModule
             for arg_rtid in type_args:
                 String arg_name = resolved_to_c_name(arg_rtid, types, scopes, &gmod)
                 mangled = mangled + "__" + arg_name
-            return lookup_or_register_named(&gmod, mangled)
+            int opt_tid = lookup_or_register_named(&gmod, mangled)
+            # option_ref_borrow Phase 2b: when this is a borrowing-getter
+            # result `Option[Ref[T]]` / `Result[Ref[T], _]`, thread the
+            # payload `GtPtr(T)` id through the typed `option_ref_payload`
+            # channel so unwrap / match-destructure mint a real pointer
+            # without re-parsing the `Ref__` infix (CLAUDE.md "No name
+            # matching"). The Option id is name-deduped, so this same id
+            # appears at every read site.
+            if (di.name == "Option" or di.name == "Result") and type_args.len() >= 1:
+                int first_arg = get_int_at(type_args, 0)
+                if first_arg >= 0 and first_arg < types.types.len():
+                    ResolvedType arg_rt = types.types.get(first_arg).unwrap()
+                    match arg_rt:
+                        case RTRef(pointee_rtid):
+                            int ptr_tid = register_ptr(&gmod, resolved_to_gir_type(pointee_rtid, types, scopes, &gmod))
+                            record_option_ref_payload(&gmod, opt_tid, ptr_tid)
+                        else:
+                            pass
+            return opt_tid
         case RTRef(inner_rtid):
-            # Refs in the typechecker model the borrow-vs-owned distinction
-            # explicitly. The lowerer tracks the same distinction on the
-            # GIR local's `ownership` field (LoBorrowed / LoOwned), so the
-            # type id itself reflects the pointee, not the borrow wrapper.
-            # Matches `infer_method_return_type`'s convention for
-            # `.get(i).unwrap()` and friends — same shape downstream.
-            return resolved_to_gir_type(inner_rtid, types, scopes, &gmod)
+            # option_ref_borrow Phase 1: a `Ref[T]` lowers to `GtPtr(T)` (Rust
+            # parity — ResolvedType::Ref → GirType::Ptr). We no longer strip
+            # the Ref to the bare pointee: stripping erased the pointer
+            # representation that downstream deref / clone-at-owning relies on.
+            # The borrow vs owned distinction is ALSO carried on the GIR
+            # local's `ownership` (LoBorrowed); the type now carries it too
+            # (Decision D2), and a standalone-Ref bind matches `GtPtr(inner)`
+            # directly at the svardecl site.
+            return register_ptr(&gmod, resolved_to_gir_type(inner_rtid, types, scopes, &gmod))
         case RTTuple(elem_rtids):
             # Mirror `mangle_type_name` for tuples — register the mangled
             # Tuple__T1__T2__... name and let downstream code register
@@ -3000,6 +3025,17 @@ int resolve_field_gir_type(String type_name, GirModule &gmod):
         case "int8_t" | "i8" | "byte" | "uint8_t":
             return I8_TYPE
         else:
+            # BRIDGE (option_ref_borrow): a `Ref__<pointee>` field name is a
+            # borrow-payload (Option[Ref[T]].Some_0) — resolve it to a real
+            # GtPtr(pointee). This is the ONE name-matching site (mirrors Rust
+            # methods.rs:612-615 strip_prefix("Ref__")→Ptr), reached only by a
+            # heuristic that derives the payload type from a NAME before any
+            # registered Option id exists. The typed path (option_ref_payload,
+            # Phase 2b) covers unwrap + match-destructure directly; delete this
+            # bridge once every name-deriving caller is on the typed channel.
+            if type_name.starts_with("Ref__"):
+                String pointee = type_name.slice(5, type_name.len())
+                return register_ptr(&gmod, resolve_field_gir_type(pointee, &gmod))
             # Named type (user struct, collection, etc.)
             return lookup_or_register_named(&gmod, type_name)
 
@@ -3329,6 +3365,13 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
         String recv_name = ""
         if recv >= 0 and recv < ctx.locals.len():
             int recv_tid = ctx.locals.get(recv).unwrap().type_id
+            # option_ref_borrow Phase 3 (typed path): if the receiver Option is
+            # a borrowing-getter result `Option[Ref[V]]`, unwrap yields the
+            # typed `GtPtr(V)` payload recorded on the channel — `auto x =
+            # coll.get(i).unwrap()` infers a pointer, not the name-derived V.
+            int unwrap_ref_payload = option_ref_payload_of(&gmod, recv_tid)
+            if unwrap_ref_payload >= 0:
+                return unwrap_ref_payload
             if recv_tid >= 0 and recv_tid < gmod.type_table.len():
                 GirType gt0 = gmod.type_table.get(recv_tid).unwrap()
                 match gt0:
@@ -3384,8 +3427,17 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
             if recv >= 0 and recv < ctx.locals.len():
                 return ctx.locals.get(recv).unwrap().type_id
         return I64_TYPE
-    # get/pop/last/first/remove on a collection: return Option[V].
-    if method == "get" or method == "pop" or method == "last" or method == "first" or method == "remove":
+    # get/pop/last/first/remove/safe_get on a collection: return Option[V].
+    # option_ref_borrow Phase 3 (R1 — SPLIT, don't flip): the borrowing
+    # getters (get/first/last/safe_get) return Option[Ref[V]] — a borrow into
+    # the collection; the consuming getters (pop/remove) transfer ownership
+    # OUT and keep the owned Option[V] (a wholesale flip would alias→double-
+    # free them). This is the heuristic FALLBACK for getters the typechecker
+    # didn't type as RTRef (first/last/safe_get have no infer arm); the
+    # typed-path (.get()) already produced Option__Ref__T upstream so it never
+    # reaches here. Kept for parity/robustness.
+    if method == "get" or method == "first" or method == "last" or method == "safe_get" or method == "pop" or method == "remove":
+        bool borrowing_getter = method == "get" or method == "first" or method == "last" or method == "safe_get"
         String recv_name = ""
         if recv >= 0 and recv < ctx.locals.len():
             int recv_tid = ctx.locals.get(recv).unwrap().type_id
@@ -3420,6 +3472,18 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
         String elem_norm = elem
         if elem == "Str":
             elem_norm = "GorgetString"
+        if borrowing_getter:
+            # Borrowing getter (heuristic fallback): result is Option[Ref[V]].
+            # Mint the typed GtPtr(V) payload and record it on the
+            # option_ref_payload channel so unwrap/match-destructure mint a
+            # real pointer (same as the typed .get() path) — no Ref__ parsing
+            # downstream.
+            String ref_opt_name = "Option__Ref__" + elem_norm
+            int ref_opt_tid = lookup_or_register_named(&gmod, ref_opt_name)
+            int elem_gir = resolve_field_gir_type(elem_norm, &gmod)
+            int ref_ptr_tid = register_ptr(&gmod, elem_gir)
+            record_option_ref_payload(&gmod, ref_opt_tid, ref_ptr_tid)
+            return ref_opt_tid
         String opt_name = "Option__" + elem_norm
         return lookup_or_register_named(&gmod, opt_name)
     # clone: return receiver type
@@ -4330,6 +4394,17 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 String recv_tn = local_type_name(recv, &ctx, &gmod)
                 String variant_name = ""
                 String inner_name_str = ""
+                # option_ref_borrow Phase 3 (typed path, no name-matching):
+                # for a borrowing-getter result `Option[Ref[T]]`, the payload
+                # is a real `GtPtr(T)` recorded at registration. Read it from
+                # the typed `option_ref_payload` channel keyed on the receiver
+                # Option's GIR id — the unwrap then mints the pointer directly,
+                # never slicing the `Ref__` infix out of recv_tn. The
+                # downstream emit_payload_read GtPtr guard returns the pointer
+                # (no clone); field-access auto-derefs; op_consume clones the
+                # pointee only at owning positions (§2 table).
+                int recv_type_id = ctx.locals.get(recv).unwrap().type_id
+                int ref_payload_tid = option_ref_payload_of(&gmod, recv_type_id)
                 if recv_tn.starts_with("Option__"):
                     variant_name = "Some"
                     inner_name_str = recv_tn.slice(8, recv_tn.len())
@@ -4376,6 +4451,11 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         inner_tid = lookup_or_register_named(&gmod, "GorgetString")
                     else:
                         inner_tid = lookup_or_register_named(&gmod, inner_name_str)
+                # option_ref_borrow Phase 3: override with the typed GtPtr
+                # payload when this is an Option[Ref[T]] — the name-slice above
+                # produced a GtNamed("Ref__T"); we want the real GtPtr(T).
+                if ref_payload_tid >= 0:
+                    inner_tid = ref_payload_tid
                 if inner_tid >= 0 and variant_name != "":
                     int scr_ptr = match_scrutinee_ptr(&ctx, &gmod, recv)
                     # `.unwrap_or(default)`: emit a real tag check so
@@ -6074,6 +6154,22 @@ int emit_payload_read_mode(LowerCtx &ctx, int scrutinee_ptr, String enum_name, S
     # threads SlotAddr for pass-by-ptr args.
     int dst = add_local_with(&ctx, dst_type, NO_NAME, LoBorrowed(), BoField(-1, -1))
     emit(&ctx, GICallExtern(dst, read_fn, args))
+    # option_ref_borrow Phase 3 (RES-2 guard): a `GtPtr(T)` payload (the
+    # Some_0 of an `Option__Ref__T` borrowing-getter result) IS the element
+    # pointer — never clone-extract it. dst_tname collapses GtPtr(T)→"T", so
+    # without this guard resolve_payload_clone_fn("T") would find T__clone and
+    # the direct `match coll.get(i)` case (owned Option temp, borrow_only
+    # false) would clone-extract a POINTER (corruption). The guard is ADDITIVE
+    # — it precedes BOTH the borrow_only elision (still needed for the
+    # value-payload for-element path, D5) and the clone arm. Read the typed
+    # GIR type, not the name (the name collapsed).
+    if dst_type >= 0 and dst_type < gmod.type_table.len():
+        GirType dst_gt = gmod.type_table.get(dst_type).unwrap()
+        match dst_gt:
+            case GtPtr(_):
+                return dst
+            else:
+                pass
     String dst_tname = type_id_to_name(dst_type, &gmod)
     String clone_fn = resolve_payload_clone_fn(dst_tname, &gmod)
     # CoW borrow-elision (for-element + nonowning-scrutinee match-destructure):
@@ -6323,6 +6419,17 @@ void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vecto
             case PBinding(bname):
                 # Look up field type from the enum's variant's field info.
                 int fty = lookup_ctor_field_type(effective_enum, effective_variant, fi, &gmod)
+                # option_ref_borrow Phase 3 (typed path): if the scrutinee is a
+                # borrowing-getter result `Option[Ref[T]]` (e.g. `match
+                # coll.get(i): case Some(p):`), bind `p` as the real `GtPtr(T)`
+                # payload recorded in the typed option_ref_payload channel —
+                # NOT the name-derived type. Keyed on the scrutinee Option's
+                # GIR id; zero `Ref__` string inspection. The downstream
+                # emit_payload_read_mode GtPtr guard returns the pointer.
+                int scr_opt_tid = ctx.locals.get(scrutinee).unwrap().type_id
+                int scr_ref_payload = option_ref_payload_of(&gmod, scr_opt_tid)
+                if scr_ref_payload >= 0 and fi == 0 and effective_variant == "Some":
+                    fty = scr_ref_payload
                 # CoW match-destructure: when the SCRUTINEE is a borrow alias
                 # (a by-value param / borrowed local being matched read-only —
                 # e.g. the generic-discovery walkers `match sexpr.expr: case
@@ -8683,7 +8790,8 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     # a zero-arg call.
     Dict[String, GirStaticInfo] statics = {}
     Dict[String, ResourceMetadata] resource_metadata = {}
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, !const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types)
+    Dict[int, int] option_ref_payload = {}
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, !const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types, !option_ref_payload)
 
     # Refine fn_sigs for functions with named/generic return types. The
     # pre-scan above defaulted those to `I64_TYPE` because `map_ast_type`

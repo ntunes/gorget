@@ -350,6 +350,17 @@ struct GirModule:
     # clone/drop fn defs are generated in lir_lower Pass 3 +
     # recursive_drop_enums. See lower.gg's register_optionlike_resource.
     Dict[String, bool] optionlike_resource_types
+    # Phase 2b (option_ref_borrow): typed payload-type channel for
+    # borrowing-getter Option results. Maps an `Option__Ref__T` GIR type
+    # id → the payload `GtPtr(T)` GIR type id. Populated once at
+    # Option-of-ref registration (resolved_to_gir_type RTGeneric arm);
+    # read at the unwrap / match-destructure sites so they mint a real
+    # `GtPtr(T)` payload local WITHOUT parsing `Ref__` out of a mangled
+    # name (CLAUDE.md "No name matching"; single source of truth, one
+    # accessor — Layering rule 3). The Option id is name-deduped via
+    # `named_types`, so the SAME id appears at registration and every
+    # read site.
+    Dict[int, int] option_ref_payload
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -429,3 +440,16 @@ int lookup_or_register_named(GirModule &gmod, String name):
 
 int register_ptr(GirModule &gmod, int inner):
     return register_type(&gmod, GtPtr(inner))
+
+# Phase 2b (option_ref_borrow): record / query the typed payload `GtPtr`
+# id for a borrowing-getter Option type id. The single accessor for the
+# `option_ref_payload` channel (Layering rule 3).
+void record_option_ref_payload(GirModule &gmod, int option_tid, int ptr_tid):
+    gmod.option_ref_payload.put(option_tid, ptr_tid)
+
+# Returns the payload `GtPtr` id for an `Option__Ref__T` type id, or -1
+# if this Option is a plain value-payload Option (pop/remove/user enums).
+int option_ref_payload_of(GirModule &gmod, int option_tid):
+    if gmod.option_ref_payload.contains(option_tid):
+        return gmod.option_ref_payload.get(option_tid).unwrap()
+    return -1
