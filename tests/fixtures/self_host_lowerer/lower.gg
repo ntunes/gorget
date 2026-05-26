@@ -5995,6 +5995,23 @@ int emit_tag_read(LowerCtx &ctx, int scrutinee_ptr, String enum_name, GirModule 
 # `_to_owned` variants are what `infer_runtime_return_type` registers
 # as returning the struct type by value (vs the in-place variants
 # that return void).
+# True iff `clone_fn` is a DEEP (recursive, subtree-copying) clone — a user
+# `T__clone` or a collection `gorget_{array,map,set}_clone`. These are the
+# clone-bomb types whose per-descent invocation compounds O(tree^2) in the
+# recursive AST walkers, so they are the ones the CoW borrow-elision skips.
+# String/Closure clones (`gorget_string_clone_to_owned` /
+# `gorget_closure_clone_to_owned`) are single-level + have a value-slot
+# consume ABI that the borrow path can't satisfy — they keep eager cloning.
+bool is_deep_clone_fn(String clone_fn):
+    if clone_fn == "":
+        return false
+    if clone_fn == "gorget_array_clone" or clone_fn == "gorget_map_clone" or clone_fn == "gorget_set_clone":
+        return true
+    if clone_fn == "gorget_string_clone_to_owned" or clone_fn == "gorget_closure_clone_to_owned":
+        return false
+    # Any other resolved clone fn is a user-type `T__clone` (deep).
+    return clone_fn.ends_with("__clone")
+
 String resolve_payload_clone_fn(String tname, GirModule &gmod):
     if tname == "":
         return ""
@@ -6024,7 +6041,20 @@ String resolve_payload_clone_fn(String tname, GirModule &gmod):
 
 # Emit a variant-payload read. `variant_name` + `field_idx` determines
 # which struct field to read; result binds into `dst_type`.
+# `borrow_only` (CoW for-element default): when true, return the
+# LoBorrowed/BoField field-read alias WITHOUT materialising a clone.
+# Used by the for-loop element extract (`for x in coll`), where the
+# element is a borrow into the collection per the CoW default
+# (CLAUDE.md "Ownership at Consuming Positions": collection element
+# reads propagate Ptr aliases at zero cost). A read-only loop body
+# then costs zero clones; a body that CONSUMES/MUTATES the element
+# clones on demand via op_consume's a-5 LoBorrowed arm at that
+# consume site. Match-arm payload binds pass false → keep the eager
+# clone (their binding semantics own the payload).
 int emit_payload_read(LowerCtx &ctx, int scrutinee_ptr, String enum_name, String variant_name, int field_idx, int dst_type, GirModule &gmod):
+    return emit_payload_read_mode(&ctx, scrutinee_ptr, enum_name, variant_name, field_idx, dst_type, &gmod, false)
+
+int emit_payload_read_mode(LowerCtx &ctx, int scrutinee_ptr, String enum_name, String variant_name, int field_idx, int dst_type, GirModule &gmod, bool borrow_only):
     String field = variant_name + "_" + int_to_str(field_idx)
     String read_fn = "__field_read_" + enum_name + "_" + field
     Vector[Operand] args = [op_consume(&ctx, &gmod, scrutinee_ptr, CkMatchPtr()), OpConstI64(field_idx)]
@@ -6046,6 +6076,18 @@ int emit_payload_read(LowerCtx &ctx, int scrutinee_ptr, String enum_name, String
     emit(&ctx, GICallExtern(dst, read_fn, args))
     String dst_tname = type_id_to_name(dst_type, &gmod)
     String clone_fn = resolve_payload_clone_fn(dst_tname, &gmod)
+    # CoW borrow-elision (for-element + nonowning-scrutinee match-destructure):
+    # return the borrow alias WITHOUT cloning — but ONLY for DEEP-clone
+    # payloads (user structs / Vectors / Dicts whose `__clone`/`gorget_*_clone`
+    # recursively copies a subtree). Those are the O(tree^2) clone-bomb types.
+    # String/Closure payloads keep their eager single-clone path: their clone
+    # is cheap (not the bomb) AND the borrow→clone-on-consume ABI for a
+    # value-typed `Str` slot mismatches `gorget_string_clone_to_owned(const
+    # GorgetString*)` at the consume site (cc "incompatible type" in
+    # derive___format_type_inner). Scoping the elision to aggregate payloads
+    # kills the bomb without disturbing the String/Closure consume path.
+    if borrow_only and is_deep_clone_fn(clone_fn):
+        return dst
     if clone_fn != "":
         int cloned = add_local(&ctx, dst_type, NO_NAME)
         Vector[Operand] clone_args = [OpBorrow(dst)]
@@ -6281,18 +6323,25 @@ void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vecto
             case PBinding(bname):
                 # Look up field type from the enum's variant's field info.
                 int fty = lookup_ctor_field_type(effective_enum, effective_variant, fi, &gmod)
-                int field_val = emit_payload_read(&ctx, scrutinee_ptr, effective_enum, effective_variant, fi, fty, &gmod)
-                # Phase 3 (Class 8): inherit field_val's borrow tag onto the
-                # PBinding's named local. emit_payload_read tags field_val
-                # LoBorrowed/BoField when no clone fn is available (user
-                # enum payloads with no runtime clone fn — the common case
-                # for nested enums like Type/SpannedType). Without inheritance,
-                # the case-bound name (e.g. `case TNamed(name, targs): ...`)
-                # gets a fresh LoOwned slot byte-aliasing the scrutinee's
-                # interior — COMMIT 3 then double-frees on scope exit.
+                # CoW match-destructure: when the SCRUTINEE is a borrow alias
+                # (a by-value param / borrowed local being matched read-only —
+                # e.g. the generic-discovery walkers `match sexpr.expr: case
+                # ECall(callee_box, args, targs):`), bind the payload as a
+                # borrow alias into the scrutinee WITHOUT deep-cloning it. The
+                # arm body reads it as a borrow; any consume/mutation clones on
+                # demand (op_consume a-5). This kills the second clone bomb:
+                # cloning `args`/`targs` Vectors at every ECall match-bind
+                # compounded O(tree^2) through the recursive walkers. When the
+                # scrutinee OWNS its data, keep the eager clone (independent
+                # owner — matches the original Class-8 double-free fix).
+                bool scrut_borrow = scrutinee_nonowning(&ctx, &gmod, scrutinee)
+                int field_val = emit_payload_read_mode(&ctx, scrutinee_ptr, effective_enum, effective_variant, fi, fty, &gmod, scrut_borrow)
                 Option[String] bname_opt = Some(bname.clone())
                 int bound = add_local_inheriting(&ctx, fty, bname_opt, field_val)
-                emit(&ctx, GIAssign(bound, op_consume(&ctx, &gmod, field_val, CkAssign())))
+                ConsumeKind bk = CkAssign()
+                if scrut_borrow and local_is_borrow_alias(&ctx, field_val):
+                    bk = CkCallArgBorrow()
+                emit(&ctx, GIAssign(bound, op_consume(&ctx, &gmod, field_val, bk)))
                 nl_put(&ctx, bname, bound)
             case PLiteral(lit_expr):
                 # Literal sub-pattern: read the payload field, compare against
@@ -6521,11 +6570,22 @@ void lower_for_vector(LowerCtx &ctx, SpannedPattern pat, int coll_local, String 
     switch_to(&ctx, body_bb)
     String opt_name = "Option__" + elem_name
     int opt_tid = lookup_or_register_named(&gmod, opt_name)
-    int got_local = add_local_with(&ctx, opt_tid, NO_NAME, LoBorrowed(), BoCollectionElement(-1))
+    # CoW for-element: tag the get-result with the SOURCE collection local
+    # (BoCollectionElement(coll_local), a non-negative id) — distinct from
+    # the general `.get()` path (BoCollectionElement(-1)). The non-negative
+    # origin signals lir_lower's void*→Option lift to shallow-alias the
+    # element instead of deep-cloning it (the for-element clone bomb). The
+    # for-loop fully controls the element's lifecycle: the body reads it as
+    # a borrow and any consume/mutation clones on demand (a-5), so the alias
+    # is safe. The general `.get()` keeps the eager clone because its result
+    # may be bound to a user local and mutated in place (get-mutate-set).
+    int got_local = add_local_with(&ctx, opt_tid, NO_NAME, LoBorrowed(), BoCollectionElement(coll_local))
     Vector[Operand] get_args = [OpBorrow(coll_local), OpCopy(idx_local)]
     emit(&ctx, GICallExtern(got_local, coll_tn + "__get", get_args))
     int scr_ptr = match_scrutinee_ptr(&ctx, &gmod, got_local)
-    int elem_local = emit_payload_read(&ctx, scr_ptr, opt_name, "Some", 0, elem_tid, &gmod)
+    # CoW for-element: bind the element as a borrow alias into the
+    # collection (no clone). Body consume/mutation sites clone on demand.
+    int elem_local = emit_payload_read_mode(&ctx, scr_ptr, opt_name, "Some", 0, elem_tid, &gmod, true)
     if is_enumerate:
         match pat.pat:
             case PTuple(parts):
@@ -6641,7 +6701,8 @@ void lower_for_iterator(LowerCtx &ctx, SpannedPattern pat, int coll_local, Strin
     # Phase 2: Loop drop scope around the body.
     push_drop_scope(&ctx.drop_elab, DSK_LOOP)
     switch_to(&ctx, body_bb)
-    int elem_local = emit_payload_read(&ctx, scr_ptr, opt_type_name, "Some", 0, elem_tid, &gmod)
+    # CoW for-element: borrow alias (see lower_for_vector).
+    int elem_local = emit_payload_read_mode(&ctx, scr_ptr, opt_type_name, "Some", 0, elem_tid, &gmod, true)
     bind_for_local(&ctx, pat, elem_local, elem_tid, &gmod)
     lower_stmts(&ctx, body, &gmod, is_main)
     Terminator body_term = ctx.block_terms.get(ctx.current_block).unwrap()
@@ -6655,19 +6716,78 @@ void lower_for_iterator(LowerCtx &ctx, SpannedPattern pat, int coll_local, Strin
     ctx.loop_break_stack.pop()
     switch_to(&ctx, exit_bb)
 
-# Bind a for-loop pattern part to a GIR local. Allocates a fresh named
-# local + emits the assignment (op_consume picks Move for owned resources,
-# Copy for primitives), mirroring SVarDecl's binding shape.
+# Bind a for-loop pattern part to a GIR local. The element binding is a
+# BORROW ALIAS into the collection per the CoW default (CLAUDE.md
+# "Ownership at Consuming Positions": collection element reads propagate
+# Ptr aliases at zero cost; clones happen only at ownership boundaries).
+# When `src_local` is a LoBorrowed/LoView element (from the for-element
+# extract, see lower_for_vector / lower_for_iterator), inherit that tag
+# onto the bound local and assign with a NON-consume operand (OpBorrow,
+# via CkCallArgBorrow) so no clone is emitted. A loop body that consumes
+# or mutates the element materialises a fresh copy at THAT site via
+# op_consume's a-5 LoBorrowed→OpClone arm. Owned/primitive elements
+# (LoOwned) keep the original move/copy binding shape.
 void bind_for_local(LowerCtx &ctx, SpannedPattern pat, int src_local, int tid, GirModule &gmod):
     match pat.pat:
         case PBinding(name):
-            int bound = add_local(&ctx, tid, Some(name.clone()))
-            emit(&ctx, GIAssign(bound, op_consume(&ctx, &gmod, src_local, CkAssign())))
+            int bound = add_local_inheriting(&ctx, tid, Some(name.clone()), src_local)
+            # If the element is a borrow alias, bind it as a borrow (no
+            # clone). add_local_inheriting tagged `bound` LoBorrowed/LoView
+            # iff src is; in that case CkCallArgBorrow keeps op_consume at
+            # OpBorrow. Otherwise (LoOwned/primitive) CkAssign moves/copies.
+            ConsumeKind bind_kind = CkAssign()
+            if local_is_borrow_alias(&ctx, bound):
+                bind_kind = CkCallArgBorrow()
+            emit(&ctx, GIAssign(bound, op_consume(&ctx, &gmod, src_local, bind_kind)))
             nl_put(&ctx, name, bound)
         case PWildcard:
             pass
         else:
             lower_fail("SFor: only PBinding / PWildcard supported in for-loop pattern (got nested pattern)")
+
+# True iff `lid`'s ownership tag is a borrow alias (LoBorrowed/LoView).
+bool local_is_borrow_alias(LowerCtx &ctx, int lid):
+    if lid < 0 or lid >= ctx.locals.len():
+        return false
+    match ctx.locals.get(lid).unwrap().ownership:
+        case LoBorrowed():
+            return true
+        case LoView():
+            return true
+        else:
+            return false
+
+# True iff `lid` does NOT own its data — a match scrutinee we may destructure
+# into BORROW-aliased payload binds (CoW match-destructure, no deep clone).
+# Covers (a) explicit borrow aliases (LoBorrowed/LoView) and (b) bare
+# by-value resource PARAMS, which lower to GtPtr(T)/LoParam: the caller owns,
+# the callee borrows (CLAUDE.md CoW default — bare params are borrows). A
+# `&`/`!` param is GtMutPtr (excluded here): `!` the callee owns, `&` is a
+# mutable borrow whose payload binds keep their existing clone-on-consume
+# path. Owned locals (LoOwned) return false → eager clone, preserving the
+# Class-8 double-free fix for genuinely-owned scrutinees written back into a
+# collection. Used by lower_ctor_pattern's PBinding payload bind.
+bool scrutinee_nonowning(LowerCtx &ctx, GirModule &gmod, int lid):
+    if lid < 0 or lid >= ctx.locals.len():
+        return false
+    GirLocal loc = ctx.locals.get(lid).unwrap()
+    match loc.ownership:
+        case LoBorrowed():
+            return true
+        case LoView():
+            return true
+        case LoParam():
+            # Bare by-value resource param == GtPtr(T) slot (caller owns,
+            # callee borrows). `&`/`!` params are GtMutPtr → not borrow here.
+            if loc.type_id < 0 or loc.type_id >= gmod.type_table.len():
+                return false
+            match gmod.type_table.get(loc.type_id).unwrap():
+                case GtPtr(_):
+                    return true
+                else:
+                    return false
+        else:
+            return false
 
 # Map a collection element type name (as produced by collection_element_type)
 # to a GIR type id. Mirrors the resolution chain in the EMethodCall unwrap

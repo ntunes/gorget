@@ -29,6 +29,7 @@ from lower import get_fn_param_types
 from std.collections import Vector, Dict
 from std.conv import int_to_str
 from gir import ResourceMetadata
+from gir import BorrowOrigin, BoCollectionElement
 from gir import CopySemantics, CsTrivial, CsResource, CsRefCounted
 from gir import CollectionKind, CkNotCollection, CkVector, CkDeque, CkHeap, CkDict, CkSet
 from gir import BoxKind, BkNotBox, BkRegularBox, BkTraitBox
@@ -2074,7 +2075,19 @@ String resource_clone_fn(int payload_ty, LirModule &m):
         return name + "__clone"
     return ""
 
-int emit_void_ptr_option_wrap(String emit_name, int dst_local, int opt_sid, Vector[int] lir_args, LirFunction &f, int bb, Vector[int] &local_to_slot, LirModule &m):
+# `dst_is_borrow` (CoW collection-get default): when the GIR result
+# local is tagged LoBorrowed/LoView (a non-consuming `.get()`/`.first()`/
+# `.last()` whose Option aliases the collection element per CLAUDE.md
+# "Ownership at Consuming Positions": collection element reads propagate
+# Ptr aliases at zero cost), do NOT deep-clone the aggregate payload into
+# the Option — shallow-copy the element header (a borrow alias). The
+# borrowed Option is dropped-skipped (a-1) and clone-materialised only at
+# genuine consume sites via op_consume's a-5 LoBorrowed→OpClone arm. This
+# closes the for-element clone bomb: `for x in coll` over a Vector of
+# structs no longer clones every element (was 10M+ Stmt/SpannedExpr clones
+# → ~14.5 GB OOM in the self-host driver). Owned results (LoOwned, e.g. a
+# `.get().clone()` whose binding owns) keep the eager clone.
+int emit_void_ptr_option_wrap(String emit_name, int dst_local, int opt_sid, Vector[int] lir_args, LirFunction &f, int bb, Vector[int] &local_to_slot, LirModule &m, bool dst_is_borrow):
     int raw_ptr = lir_fn_next_value(&f)
     Vector[int] empty_abis = []
     LirBlock blk0 = f.blocks.get(bb).unwrap()
@@ -2131,7 +2144,14 @@ int emit_void_ptr_option_wrap(String emit_name, int dst_local, int opt_sid, Vect
         payload_val = raw_in_some
     elif lir_is_aggregate(payload_field_ty):
         String clone_fn = ""
-        if not consuming:
+        # CoW: clone the aggregate element into the Option ONLY when the
+        # result must own it. Consuming methods (pop/remove) already
+        # transferred ownership out of the collection → no clone (shallow
+        # move). Non-consuming gets whose GIR local is a borrow alias
+        # (dst_is_borrow) → no clone either (the Option borrows the
+        # element; consume sites clone on demand). Eager clone remains
+        # only for owned (non-borrow) non-consuming results.
+        if not consuming and not dst_is_borrow:
             clone_fn = resource_clone_fn(payload_field_ty, &m)
         if clone_fn != "":
             int cloned = lir_fn_next_value(&f)
@@ -2550,6 +2570,25 @@ String gir_local_type_name(int local_id, Vector[GirLocal] &gir_locals, GirModule
         return ""
     int tid = gir_locals.get(local_id).unwrap().type_id
     return gir_type_id_to_base_name(tid, &gmod)
+
+# True iff the GIR local is a FOR-LOOP element borrow — tagged by
+# lower_for_vector with BoCollectionElement(coll_local) where coll_local
+# is the non-negative source-collection local id. The general `.get()`
+# path uses BoCollectionElement(-1), which returns false here so its
+# result still owns (eager clone) — protecting the get-mutate-set idiom
+# (`t = coll.get(i); t.push(x); coll.set(i, t)`) that relies on `t` being
+# an independent owned copy. Only the for-element, whose full lifecycle the
+# loop scaffold controls (read-only body → borrow; consume/mutate → a-5
+# clone), is safe to shallow-alias. This is the CoW collection-read default
+# scoped to the one site that can guarantee it.
+bool gir_local_is_for_element(int local_id, Vector[GirLocal] &gir_locals):
+    if local_id < 0 or local_id >= gir_locals.len():
+        return false
+    match gir_locals.get(local_id).unwrap().borrow_origin:
+        case BoCollectionElement(coll_local):
+            return coll_local >= 0
+        else:
+            return false
 
 int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &local_to_slot, Vector[GirLocal] &gir_locals, Dict[String, int] &func_index, GirModule &gmod, Dict[String, int] &sr, LirModule &m):
     match inst:
@@ -3151,7 +3190,14 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                         if lift_opt_sid < m.structs.len():
                             LirStructDef lift_opt_def = m.structs.get(lift_opt_sid).unwrap()
                             if lift_opt_def.enum_kind == EK_OPTION:
-                                int new_bb = emit_void_ptr_option_wrap(call_name, dst_local, lift_opt_sid, lir_args, &f, bb, &local_to_slot, &m)
+                                # CoW: read the GIR result's ownership tag —
+                                # a LoBorrowed/LoView get-result aliases the
+                                # collection element and must NOT clone (the
+                                # for-element clone bomb). Tag set at the get
+                                # site in lower.gg (is_collection_getter_method
+                                # / lower_for_vector's BoCollectionElement).
+                                bool wrap_is_borrow = gir_local_is_for_element(dst_local, &gir_locals)
+                                int new_bb = emit_void_ptr_option_wrap(call_name, dst_local, lift_opt_sid, lir_args, &f, bb, &local_to_slot, &m, wrap_is_borrow)
                                 return new_bb
                 int dst = -1
                 if dst_local >= 0:
