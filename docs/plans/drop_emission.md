@@ -136,7 +136,7 @@ overflow WAS bug #1; do not re-chase it.)
 > `lower_expr` recursion depth stays **< 100** (~30k calls), while RSS climbs monotonically to
 > **~14.5 GB** driven by **`SpannedExpr__clone` called 10M+ times**, then OOM-SIGKILL. The driver is
 > the read-only generic-discovery walkers **`discover_generic_calls_{stmts,stmt,expr}`**
-> (`lower.gg:7740` / `7685` / `7642`), which take their AST args **BY VALUE**
+> (`lower.gg:7860` / `7805` / `7762`), which take their AST args **BY VALUE**
 > (`Vector[Stmt] stmts`, `Stmt stmt`, `SpannedExpr sexpr`) and deep-recurse (`*callee_box`, `*lhs`,
 > `*rhs`, `*inner`, `*cond`, …). Under the **clone-on-consume regime** installed *after* A.2
 > (`bac24e49` Phase 2.3 clone-through-deref / a-5), the `for stmt in stmts` element-extract and the
@@ -170,7 +170,7 @@ overflow WAS bug #1; do not re-chase it.)
 > assume it's implicated without measuring. (The handover agent grouped it with the clone regime by
 > commit-proximity, not evidence.)
 >
-> Anchors: `lower.gg:7740/7685/7642` (the three walkers); their call/recursion sites `7658-7673`;
+> Anchors: `lower.gg:7860/7805/7762` (the three walkers); their call/recursion sites `7658-7673`;
 > `lower_module` body-walk + transitive fixpoint (~`8704`+); the for-element consume decision
 > (`op_consume`/`emit_payload_read` vs `lower_for`'s `OpBorrow`); `bac24e49` (clone-on-consume regime).
 
@@ -184,6 +184,13 @@ overflow WAS bug #1; do not re-chase it.)
 > decide_operand_at_consuming_arg GtMutPtr arms → clone-through; "Box" in fn_move_params) — KEPT
 > (lowerer_comparison-green); reconcile with the recovery fix's clone path (NEXT STEPS STEP B). Do NOT
 > re-chase the Box-ctor mechanism.
+
+### (superseded — REFUTED, kept as diagnostic record) the A.2 / unbounded-recursion analysis
+
+*Everything from here until "## NEXT STEPS" was the working theory before STEP A was executed; it is
+DISPROVEN (see the DIAGNOSIS-CORRECTED block above + STATUS at top). Read only for the audit trail —
+the bug was a heap clone-OOM (lower-phase FIXED `7cc7a101`; codegen-phase = bug #3b), not unbounded
+recursion and not A.2.*
 
 **CONFIRMED NATURE (three independent probes, 2026-05-25):** `lower_expr`'s `case EBinaryOp(lhs_box,…)`
 (`lower.gg:3881`, recursion `lower_expr(*lhs_box)` at `lower.gg:3928`) recurses **without bound**.
@@ -294,7 +301,7 @@ walkers this OOM is about — so likely not the driver. Keep it; if STEP B's for
 this fix's `OpClone`-materialization arms overlap, reconcile (don't double-handle), but do not assume
 `19f90339` is implicated without a clone-count measurement.
 
-**Anchors:** the three walkers `lower.gg:7740/7685/7642` + their call/recursion sites `7658-7673`;
+**Anchors:** the three walkers `lower.gg:7860/7805/7762` + their call/recursion sites `7658-7673`;
 `lower_module` body-walk + transitive fixpoint (~`8704`+); the for-element consume decision
 (`emit_payload_read` auto-clone vs `lower_for`'s `OpBorrow(coll_local)`); `op_consume`/
 `decide_operand_at_consuming_arg`/`decide_ptr_consume`; `bac24e49` (Phase 2.3 clone-on-consume regime,
@@ -456,7 +463,7 @@ treating it as ONE atomic cluster and driving each fault to root with ASan: the 
 MB), the pointer-cast cascade (2780 → 0), user-type drops (0 → hundreds), the return-path and
 enum-variant-ctor double-frees, and finally (2026-05-25) the prelude-variant-owning UAF, choice-A
 Option ABI, variant-ctor typing, and the Box-field deep-clone that closed the `meta_expand`
-double-free. Remaining (the live blocker): bug #3 — the A.2 Ptr-typed field-read incomplete
-recovery (unbounded `lower_expr` clone-explosion of `field_write_lines`' `+` chain); see the NEXT BUG
-+ NEXT STEPS sections above. The full
-blow-by-blow is in `git log` and `DONE.md`.
+double-free. bug #3 (lower-phase heap clone-OOM — for-element/discovery-walker `.get()` clones, NOT
+recursion/A.2) is FIXED in `7cc7a101`; the live blocker is now **bug #3b** (the same `.get()`-clone
+class at `generate_c`'s `while`-loop idiom) — see the NEXT BUG STATUS + NEXT STEPS sections above. The
+full blow-by-blow is in `git log` and `DONE.md`.
