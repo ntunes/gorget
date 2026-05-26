@@ -3433,6 +3433,15 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
                 return F64_TYPE
             if inner == "GorgetString" or inner == "Str":
                 return lookup_or_register_named(&gmod, "GorgetString")
+            # BRIDGE (option_ref_borrow Phase 5): an `Option__Ref__T` whose
+            # payload escaped the typed `option_ref_payload` channel (the
+            # channel lookup at the top of this arm catches the common case)
+            # must still mint a real `GtPtr(T)`, NOT a `GtNamed("Ref__T")`.
+            # `resolve_field_gir_type` strip-prefixes `Ref__`→GtPtr (the one
+            # name-matching site; mirrors Rust methods.rs:612-615). Delete
+            # once every getter is on the typed channel.
+            if inner.starts_with("Ref__"):
+                return resolve_field_gir_type(inner, &gmod)
             return lookup_or_register_named(&gmod, inner)
         if recv_name.starts_with("Result__"):
             String rest = recv_name.slice(8, recv_name.len())
