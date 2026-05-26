@@ -414,3 +414,58 @@ materialize dodge) · Phase 5 (plumbing cleanup) · final (squash + ship-gate).
   `Vector.get(i)`? (Runtime: `gorget_map_get` returns `m->values + idx*val_size` — inline, yes.)
 - Should `v[i]` index-read share the exact same `Option[Ref]`-less path (it returns a bare ref, not
   an Option)? Confirm `lower_index_assign`/index-read already use the pointer path and don't regress.
+
+---
+
+## Phase 6 — R1 fix: deref `GtPtr(primitive)` payloads at value-consuming positions
+
+**Found by post-implementation review (2026-05-26).** Phases 1-5 left a hole: `int key =
+vec.get(i).unwrap()` (the most common getter shape — `Vector[int]`/`Vector[bool]`, hundreds of
+sites: `lir_ssa.gg:66/486/492/537`, `driver.gg:93/97`, …). `.get()` types as `Option[Ref[int]]`,
+unwrap yields `GtPtr(int)`, and value-binding it into an `int` slot `OpCopy`s the 8-byte POINTER,
+not `*ptr` → `key` holds the element's address → garbage downstream. `gg check` is clean (types
+line up) but stage-2 would miscompile.
+
+**Reference (Rust `methods.rs:610-731`):** unwrap of `Option__Ref__T` returns `Ptr(T)` UNIFORMLY
+(even primitives); the `inner_is_resource` gate (`:647`) only chooses Move-vs-Copy of the borrow
+operand for drop-tracking. The deref of a `Ptr(primitive)` happens at the CONSUMER (var-decl copies
+through the pointer). The self-host's `decide_ptr_consume` instead `OpCopy`s the pointer bits — the
+bug.
+
+**Rule (gate on `is_resource(pointee)`):** a `GtPtr(inner)` extracted from an `Option[Ref[inner]]`
+is, at a VALUE-consuming position:
+- **inner is a resource** (String/Vector/Dict/user struct-or-enum-with-resource) → keep the
+  `GtPtr` borrow (current Phase 3/4 behavior: field-access auto-derefs; owned-bind deref+clones via
+  Branch C-pre; consume clones the pointee). NO CHANGE.
+- **inner is Copy/primitive** (int/float/bool/byte/…/POD value struct) → **deref-load** `*ptr` into
+  a value-typed local. A primitive borrow is semantically pointless (book ch11: Copy types copy);
+  copying the pointer is the bug.
+
+**Sites (apply the SAME gate consistently — `is_resource_type_name(pointee, &gmod)`):**
+1. **`emit_payload_read_mode` GtPtr guard (`lower.gg:~6113`).** Currently `case GtPtr(_): return dst`
+   (returns the pointer) for ALL pointees. Split: resource pointee → `return dst` (pointer);
+   non-resource pointee → emit a deref load (`GIDeref`/`ILoad` of `*dst` into a fresh value-typed
+   local of the pointee type, `LoOwned`) and return THAT. This is the single load-bearing fix — all
+   value-consuming paths (svardecl bind, call-arg, unwrap_or merge, match-destructure) route their
+   payload through here, so derefing primitives here fixes them at once. Keep passing `dst_type =
+   GtPtr(inner)` so the guard still sees the pointer source.
+2. **`infer_method_return_type` unwrap arm (`lower.gg:~3406`).** The `ref_payload` override returns
+   `GtPtr(payload)`. Gate: resource pointee → `GtPtr`; primitive pointee → the value pointee type.
+   (Keeps the lowerer's inferred type consistent with what `emit_payload_read_mode` now returns.)
+3. **match-destructure `fty` override (`lower_ctor_pattern`, `lower.gg:~6376`).** `fty =
+   scr_ref_payload` (GtPtr). Gate: resource → `GtPtr`; primitive → value pointee type, so the bound
+   local is value-typed and the deref'd value assigns cleanly.
+4. **Sanity:** confirm `unwrap_or` (`lower.gg:~4509`) and direct call-arg passing of a primitive
+   getter result now produce/consume a value (they consume the `emit_payload_read_mode` result, so
+   #1 covers them — verify the unwrap_or merge slot is value-typed for primitive pointees, not
+   `GtPtr`).
+
+**R2 follow-up (refinement, verify-after-green, not a blocker):** the return-type priority
+(`lower.gg:~4732`) is `fn_sigs` → typechecker side-table (populates `option_ref_payload`) →
+`infer_method_return_type` (populates). If a collection getter ever resolves via `fn_sigs`, neither
+populate site runs and the channel is empty. Not exercised today (getters are runtime methods, not
+in `fn_sigs`). After the bootstrap is green, add an assert/guard or confirm no getter resolves via
+`fn_sigs`.
+
+**Validation:** `gg check` clean → then the parent's stage-0 → stage-1 emit → cc → **stage-2 runs +
+fixed point** (this is the gate R1 specifically threatens) → bootstrap/comparison → ASan.
