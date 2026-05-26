@@ -1,7 +1,12 @@
 # Drop Emission — Self-Host Plan (unified)
 
 **Status (2026-05-26):** IN PROGRESS — cc-clean, **not yet bootstrapping.** WIP is **COMMITTED** on
-branch `gorget-1` (ahead of `main`@`087b5a13`; squash at merge-to-main). **Live blocker = bug #3b** (a
+branch `gorget-1`. **Branch state (verified 2026-05-26): `main` is at `7cc7a101` and ALREADY contains
+the drop-emission cluster UN-SQUASHED (`758ed737` → `19f90339` → `7cc7a101`); `gorget-1` is only 2
+docs-only commits ahead (`8f9b6224`, `fdf24970`).** ⚠ The cluster landed on `main` before bootstrap is
+green — so the "squash the cluster as ONE commit at merge-to-main" ship plan (NEXT STEPS / guardrails)
+is now describing a state that partially already happened; reconcile next session (the squash, if still
+wanted, would be a `main` history rewrite, not a side-branch merge). Flag to the user. **Live blocker = bug #3b** (a
 heap clone-OOM in `lir_codegen.gg::generate_c` — `while`-loop `.get().unwrap()` deep-clones whole
 `LirFunction`s; ~11 GB). It is the SAME `.get()`-aggregate-clone class as bug #3, whose lower-phase
 instance (for-element / discovery walkers) is **FIXED + verified in `7cc7a101`** (CoW borrow
@@ -63,7 +68,7 @@ also be CLONED (drop-without-clone on a shallow copy = double-free).**
 9. **CoW borrow for-element + read-only match-destructure** (`7cc7a101`, bug #3 lower-phase) —
    `for x in coll` and non-owning `match` destructures bind the element as a BORROW, not a clone.
    Both clone sites suppressed for for-elements: `coll.get()`→`Option[T]` wrap
-   (`emit_void_ptr_option_wrap`, `lir_lower.gg:2077`) and `emit_payload_read`, keyed on the typed
+   (`emit_void_ptr_option_wrap`, `lir_lower.gg:2090`) and `emit_payload_read`, keyed on the typed
    `BoCollectionElement(coll≥0)` tag (`gir_local_is_for_element`); String/Closure keep eager clone
    (value-slot consume ABI). Read-only walkers 7–19 clones→0–1; `lower_module` completes;
    `lowerer_comparison` green. (Was the lower-phase half of bug #3; bug #3b is the codegen half.)
@@ -111,7 +116,7 @@ for p in '__drop(' 'gorget_string_free(' 'gorget_array_free(' 'gorget_map_free('
 > - **bug #3 (the lower-phase clone-OOM described in this section) is FIXED + VERIFIED in `7cc7a101`**
 >   ("CoW borrow for-element + read-only match-destructure"). `for x in coll` and non-owning `match`
 >   destructures now bind the element as a BORROW, not a clone (the producer was *two* clones —
->   `coll.get()`→`Option[T]` wrap at `lir_lower.gg:2077` AND `emit_payload_read` — both skipped for
+>   `coll.get()`→`Option[T]` wrap at `lir_lower.gg:2090` AND `emit_payload_read` — both skipped for
 >   for-elements via the typed `BoCollectionElement(coll≥0)` tag). Read-only walkers: 7–19 clones → 0–1;
 >   `lower_module` now runs to completion (was OOM 14.5 GB). `lowerer_comparison` GREEN (re-verified);
 >   `cargo test --lib` 1059/2-pre-existing-fail. Committed on `gorget-1`.
