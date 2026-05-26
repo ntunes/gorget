@@ -779,6 +779,40 @@ SVarDeclEmission decide_svardecl_emission(LowerCtx &ctx, GirModule &gmod, int va
         else:
             pass
 
+    # Branch C-pre (option_ref_borrow Phase 4a) — GtPtr-to-resource source
+    # bound to an OWNED local. This is the `T x = coll.get(i).unwrap()` shape:
+    # `.get()` now returns `Option[Ref[T]]`, so the unwrapped payload is a
+    # `GtPtr(T)` borrow (`LoBorrowed`) whose pointer is the element's address
+    # in the collection. Aliasing it into an "owned" `x` (Branch C →
+    # BorrowAlias) would make `x` share the collection's heap → double-free
+    # when both drop. The owned bind must instead DEREF+CLONE the pointee:
+    # `T__clone(OpBorrow(val))` materializes a fresh, independent owner.
+    #
+    # Match on the GIR TYPE, not the name: `type_id_to_name(GtPtr(T))`
+    # collapses to "T" (lower.gg:~2884), so `source_tname` already reads as
+    # the resource pointee name — indistinguishable from a value-typed `T`
+    # source by name alone. The typed `GtPtr(inner)` shape is the only sound
+    # discriminator. This branch MUST precede Branch C (whose name-based
+    # `source_is_resource and source_is_borrow_alias` would otherwise fire
+    # BorrowAlias for this exact shape).
+    #
+    # `OpBorrow(val)` on a `GtPtr`/`LT_PTR` slot passes the POINTER value
+    # (the `const T*` the clone fn wants), not the slot address — verified
+    # at lir_lower.gg:~2830-2843 (GICallExtern OpBorrow arm,
+    # `slot_ty == LT_PTR` → pass loaded value directly). So `CloneAndMove`'s
+    # `GICallExtern(cloned, clone_fn, [OpBorrow(val)])` (lower.gg:~5586)
+    # deref-clones correctly.
+    if source_type >= 0 and source_type < gmod.type_table.len():
+        GirType src_gt = gmod.type_table.get(source_type).unwrap()
+        match src_gt:
+            case GtPtr(inner_tid):
+                String pointee_tname = type_id_to_name(inner_tid, &gmod)
+                String pointee_clone_fn = resolve_payload_clone_fn(pointee_tname, &gmod)
+                if pointee_clone_fn != "":
+                    return CloneAndMove(pointee_clone_fn)
+            else:
+                pass
+
     # Branch C — live resource SOURCE that's a borrow alias (transitive
     # chain). Mirrors Rust's `is_resource_type(rhs_type)` predicate where
     # `rhs_type` is the SOURCE's type. Self-host pragma: fire only for
