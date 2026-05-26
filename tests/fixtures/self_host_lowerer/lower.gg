@@ -6113,8 +6113,25 @@ int emit_payload_read_mode(LowerCtx &ctx, int scrutinee_ptr, String enum_name, S
     if dst_type >= 0 and dst_type < gmod.type_table.len():
         GirType dst_gt = gmod.type_table.get(dst_type).unwrap()
         match dst_gt:
-            case GtPtr(_):
-                return dst
+            case GtPtr(inner):
+                # option_ref_borrow Phase 6 (R1 fix): gate on the POINTEE.
+                # A `GtPtr(inner)` extracted from an `Option[Ref[inner]]` is,
+                # at a value-consuming position, EITHER a borrow we keep
+                # (resource pointee — field-access auto-derefs, consume
+                # clones the pointee: Phase 3/4 behavior, NO CHANGE) OR a
+                # primitive borrow that is semantically pointless (Copy types
+                # copy — book ch11) and must be DEREF-LOADED. Without this,
+                # `int key = vec.get(i).unwrap()` OpCopy's the 8-byte POINTER
+                # into the int slot → `key` holds the element's address.
+                if is_resource_type_name(type_id_to_name(inner, &gmod), &gmod):
+                    return dst
+                else:
+                    # Primitive pointee: deref `*dst` into a fresh
+                    # value-typed local of the pointee type. GIDeref lowers
+                    # to a sized load (gir.gg:117).
+                    int value_local = add_local(&ctx, inner, NO_NAME)
+                    emit(&ctx, GIDeref(value_local, dst, inner))
+                    return value_local
             else:
                 pass
     String dst_tname = type_id_to_name(dst_type, &gmod)
