@@ -96,10 +96,57 @@ for p in '__drop(' 'gorget_string_free(' 'gorget_array_free(' 'gorget_map_free('
 
 ---
 
-## NEXT BUG — bug #3: unbounded `lower_expr` recursion — lower-time clone explosion of a finite `+` chain (A.2 Ptr-typed field-read incomplete recovery)
+## NEXT BUG — bug #3: heap clone-OOM — read-only `discover_generic_calls_*` walkers deep-clone the AST by value under the clone-on-consume regime
 
 (Bugs #1 + #2 are FIXED + committed in `758ed737` — see Status. The old add_local/`NO_NAME`
 overflow WAS bug #1; do not re-chase it.)
+
+> **DIAGNOSIS CORRECTED (2026-05-26, STEP A executed in a worktree + independently verified) —
+> everything below this block about "A.2 root / unbounded `lower_expr` recursion / ~13k-deep `+`
+> chain / complete the A.2 recovery" is REFUTED. Read this; ignore the rest of the section except as
+> a record of how we got here.**
+>
+> **What it actually is:** a **heap allocation blow-up**, NOT a stack/recursion problem. At the tip,
+> `lower_expr` recursion depth stays **< 100** (~30k calls), while RSS climbs monotonically to
+> **~14.5 GB** driven by **`SpannedExpr__clone` called 10M+ times**, then OOM-SIGKILL. The driver is
+> the read-only generic-discovery walkers **`discover_generic_calls_{stmts,stmt,expr}`**
+> (`lower.gg:7740` / `7685` / `7642`), which take their AST args **BY VALUE**
+> (`Vector[Stmt] stmts`, `Stmt stmt`, `SpannedExpr sexpr`) and deep-recurse (`*callee_box`, `*lhs`,
+> `*rhs`, `*inner`, `*cond`, …). Under the **clone-on-consume regime** installed *after* A.2
+> (`bac24e49` Phase 2.3 clone-through-deref / a-5), the `for stmt in stmts` element-extract and the
+> by-value recursive args now deep-clone the whole subtree at every descent — verified: the emitted C
+> for each walker contains 7 `Stmt__clone`/`SpannedExpr__clone`/`Expr__clone` calls. `lower_module`
+> runs these over every function body (+ a transitive fixpoint re-walk), so across the self-host's
+> ~1000+ functions the per-descent clone compounds to O(tree²)+ → 10M+ clones → OOM.
+>
+> **Why the earlier framing was wrong (verified):** (1) the `git bisect` first-bad `2e544e84` (A.2)
+> is a DIFFERENT, since-fixed bug — at A.2 stage-1 **hangs in `loader___load_imports`** (loader.gg:560)
+> and **never reaches lowering** (zero AST clones; `*box` deref is a shallow `memcpy(192)`). A.2
+> predates the clone-on-consume regime (`bac24e49` is newer), so it categorically cannot be the
+> clone-OOM. The bisect found *first-breakage*, exactly as the (now-removed) STEP A.0 gate warned.
+> (2) "Unbounded recursion / ~13k-deep chain" was a **call-count↔depth conflation** (the ring-log
+> `__ri≈13k` counted total `lower_expr` calls; depth was <100) **plus an ASan artifact** — my
+> stack-overflow signal came from running an **ASan-instrumented** stage-2 (inflated frames hit the
+> 8MB stack first), whereas real `self_host_bootstrap` compiles stage-2 with **plain `cc -O0`**, where
+> the failure is the heap-OOM. NOT a cycle, NOT a UAF, NOT corruption, NOT the `Box` ctor.
+>
+> **FIX (verified-correct target): make the read-only walkers BORROW their AST args** (CoW-default-
+> borrow — they never mutate). Change `discover_generic_calls_{stmts,stmt,expr}` to take `&` params,
+> and ensure the `for`-element extract over a borrowed collection + the `*box` recursive derefs
+> propagate Ptr aliases at zero cost (mirror `lower_for`'s `OpBorrow(coll_local)` path, NOT
+> `emit_payload_read`'s auto-clone). Reconcile with the clone-on-consume arms so the `&`-param +
+> for-element path does NOT route through `OpClone` (that path is correct only at genuine *owning*
+> consume positions; a read-only walk is not one). See "## NEXT STEPS" below for the worked plan.
+>
+> **On the committed `Box`/`MutPtr` fix `19f90339`:** it changed the `GtMutPtr`(`&`/`!`-param) consume
+> arm; the walkers use BARE (`GtPtr`) params, so it is likely NOT the direct driver of this OOM (the
+> driver is the bare-by-value-resource + for-element clone from `bac24e49`/a-5). Keep it; do NOT
+> assume it's implicated without measuring. (The handover agent grouped it with the clone regime by
+> commit-proximity, not evidence.)
+>
+> Anchors: `lower.gg:7740/7685/7642` (the three walkers); their call/recursion sites `7658-7673`;
+> `lower_module` body-walk + transitive fixpoint (~`8704`+); the for-element consume decision
+> (`op_consume`/`emit_payload_read` vs `lower_for`'s `OpBorrow`); `bac24e49` (clone-on-consume regime).
 
 > **CORRECTION (2026-05-25, second session):** an earlier draft of this section root-caused bug #3 to
 > `Box(x)` shallow-aliasing its payload (a missing `fn_move_params` entry + `GtMutPtr→OpCopy` consume).
@@ -170,70 +217,56 @@ LOWERING fabricates the 13,000+-deep one** (consistent with the ASan box-allocat
 
 ---
 
-## NEXT STEPS — complete the A.2 Ptr-typed-field-read recovery (reference-grade) [chosen 2026-05-26]
+## NEXT STEPS — make the read-only `discover_generic_calls_*` walkers borrow (verified 2026-05-26)
 
-**Decision (user, 2026-05-26):** pursue the reference-grade completion of the Rust-machinery port
-(`project_rust_machinery_port_plan`), NOT a revert of A.2. A.2's resource-field `GIFieldLoad`→Ptr-dst
-is the intended design (it eliminates the silent `field.push(...)` writeback-bug class); the defect is
-that the *recovery* A.2 deferred to "B.1 + E.1" — making every downstream consumer handle a Ptr-typed
-field-read source local (`LoBorrowed`, `BoField(base,fi)`, slot `LT_PTR_TO_BASE+sid`) — was never
-finished. So **finish it**, mirroring Rust's `FieldLoad` consume path (`src/lir/lower/insts.rs:800-869`
-+ how `ensure_owned_at_consuming_arg` / the GIR consume sites treat a `BorrowedPtr`/field-origin source).
+**Diagnosis (verified, STEP A executed + independently re-checked):** see the "DIAGNOSIS CORRECTED"
+block under NEXT BUG. The OOM is a heap clone-bomb: the read-only generic-discovery walkers take AST
+**by value** and deep-recurse, and under the post-A.2 clone-on-consume regime that deep-clones the
+subtree at every descent (7 clone calls in each walker's emitted C; `lower_module` runs them over every
+body + a transitive fixpoint) → 10M+ `SpannedExpr__clone` → ~14.5 GB → OOM. The fix is the layering-
+correct CoW default: a read-only walk is a **borrow** position, so it must NOT clone.
 
-**STEP A — CONFIRM the A.2-era failure IS today's bug #3, THEN pinpoint the mishandling consumer.**
-*Caveat the whole plan rests on (be honest):* the bisect found first-BREAKAGE = A.2, and bootstrap fails
-throughout [A.2..758ed737] for evolving reasons. We have NOT verified that the crash *signature* at A.2
-(the ~13k-deep `+`-chain OOM/stack-overflow in `lower_expr` on `field_write_lines`) is the SAME as
-today's at 758ed737 — bug #3 could have shifted/emerged at a later drop-emission commit, in which case
-STEP B is aimed one layer off. **A.0 (do this first):** check out `2e544e84`, run the documented
-self-host harness, and confirm the identical signature (run the stage-2 binary on `driver.gg`; expect a
-`lower_expr` lhs-recursion stack-overflow lowering `derive___field_write_lines`). If A.2's failure is a
-DIFFERENT crash (e.g. a compile/link failure of stage-2, or a non-`field_write_lines` site), bisect
-*within* [A.2..758ed737] for the commit that introduces THIS signature before proceeding.
-**A.1 (then) — pinpoint the consumer (cheap, no rebuild):** the runaway is `lower_expr` lowering
-`field_write_lines`' `+`-concat chain (parsed ~50 deep; lowering fabricates ~13k via clone-recursion).
-Use the documented harness (emit `--lir-c` ~580s → splice `driver.c` preamble → `cc -O0 -g
-[-fsanitize=address]` → run on `driver.gg`; inject probes directly into the generated `/tmp/*.c`, no
-stage-0 rebuild). Trace where a Ptr-typed field-read result (`sexpr.expr` is an `Expr` = resource → A.2
-makes it a Ptr-alias; likewise any `.field` of a resource) flows into a consume/clone site that (a)
-treats the Ptr-alias as an owned value, or (b) re-clones + re-lowers it, compounding depth. Prime
-suspects: `op_consume`/`decide_operand_at_consuming_arg` on a `LoBorrowed`+ptr-to-struct source (a-5
-clone-on-borrow → `OpClone` that deep-clones the whole subchain per recursion level); the `*lhs_box`
-box-deref reading through a Ptr-aliased `Expr`; the `GIFieldLoad`→`match` interaction. **Confirm the
-single site with evidence — don't guess, and don't start STEP B until A.1 names it.**
+**STEP A — make the three walkers (and their helpers) take borrows.** In `lower.gg`:
+`discover_generic_calls_stmts(Vector[Stmt] stmts, …)` → `&stmts` (7740);
+`discover_generic_calls_stmt(Stmt stmt, …)` → `&stmt` (7685);
+`discover_generic_calls_expr(SpannedExpr sexpr, …)` → `&sexpr` (7642). Audit the recursive call sites
+(7658-7673: `*callee_box`, `*lhs`, `*rhs`, `*inner`, `*cond`, `arg`, `then_body`, …) and any sibling
+read-only walkers reached from them (e.g. pattern/type sub-walkers) for the same by-value smell.
 
-**STEP B — fix at the consumer(s) STEP A.1 identified, Rust-parity.** *Contingent on A.1's finding — the
-direction below is the expected default (matches Rust + §9.6), not a pre-committed patch; adjust to the
-actual site.* A Ptr-typed field-read result is a BORROW into the base; consuming it at an owning position
-must **materialize once** (deref + clone to a fresh owned value), and the recursion/match must **deref
-the pointer, not re-clone-and-re-lower**. Likely needs: (1) reading/lowering through a Ptr-typed
-`sexpr.expr` derefs (no per-level re-clone); (2) `op_consume` on a `LoBorrowed`+`LT_PTR_TO_BASE+sid`
-source at a consume position clones the POINTEE exactly once (must not compound); (3) no
-clone-then-re-lower loop. Follow `docs/internals/layering-discipline.md` (fix at the write/producer site
-if a downstream pass is reconstructing from a Ptr it should have been handed materialized). This likely
-overlaps the `decide_ptr_consume` / `OpClone`-materialization paths the committed `Box`/`MutPtr` change
-(`19f90339`) touched — reconcile, don't double-handle.
+**STEP B — ensure the borrow actually elides the clones (the crux).** Changing the signature to `&` is
+necessary but may not be sufficient: the `for stmt in stmts` element-extract and the `*box` derefs must
+lower to **borrows**, not `OpClone`. Verify (probe the regenerated C — no stage-0 rebuild needed to
+re-probe) that iterating a borrowed `Vector[Stmt]` yields `OpBorrow` elements (mirror `lower_for`'s
+`OpBorrow(coll_local)` path) rather than `emit_payload_read`'s auto-clone, and that passing a `*box`
+deref (a `LoBorrowed`/`GIDeref` alias) to a `&`-param stays `OpBorrow`. If the for-element extract clones
+unconditionally regardless of receiver ownership, that is the real producer-site bug to fix (per
+`docs/internals/layering-discipline.md`: fix where the clone is *emitted*, driven by typed ownership,
+not at the walker). Confirm clone count drops by orders of magnitude (counter probe: was 10M+).
 
 **STEP C — validate (in order):** `self_host_bootstrap` (exact) green → `self_host_bootstrap_fixed_point`
-green → `lowerer_comparison` fn-count parity → `cargo test --lib --release` (~1059 baseline) → full
-`cargo test --test integration` (parent drives). Re-run the drop-count grep-diff vs `driver.c` to watch
-parity hold.
+green → `lowerer_comparison` fn-count parity → `cargo test --lib --release` (baseline per CLAUDE.md
+~1027; ~1059 observed this branch) → full `cargo test --test integration` (parent drives). NB: stage-2
+is built with plain `cc -O0` (NO ASan) — measure the REAL failure mode; ASan inflates frames and can
+mask a heap-OOM as a stack-overflow (it did, this session). Re-run the drop-count grep-diff vs
+`driver.c`.
 
 **STEP D — SHIP-GATE + squash.** Before green-ship, replace the consuming-position name-match
 (`is_owning_mutator_arg`) with a typed signal (guardrail #5), then squash the whole cluster as ONE
 commit (partial states crash). Fold "Deferred optimizations" into `TODO.md`.
 
-**Orthogonal in-tree change:** the `Box`-owning + `GtMutPtr`-to-resource clone-through fix
-(`lower.gg` `op_consume` + `decide_operand_at_consuming_arg` + `fn_move_params.put("Box")`) is committed
-separately; it is correct-by-spec (Rust `ensure_owned_at_consuming_arg` + lang-ref §9.6) and
-**verified orthogonal to bug #3** (crash byte-identical with/without it). Keep it; it may interact with
-STEP B's clone path — reconcile there.
+**In-tree change `19f90339` (`Box`-owning + `GtMutPtr`-to-resource clone-through):** committed; correct-
+by-spec (Rust `ensure_owned_at_consuming_arg` + lang-ref §9.6); crash byte-identical with/without it. It
+touches the `GtMutPtr` (`&`/`!`-param) consume arm — a DIFFERENT param shape than the BARE (`GtPtr`)
+walkers this OOM is about — so likely not the driver. Keep it; if STEP B's for-element borrow fix and
+this fix's `OpClone`-materialization arms overlap, reconcile (don't double-handle), but do not assume
+`19f90339` is implicated without a clone-count measurement.
 
-**Anchors:** first-bad `2e544e84` (A.2); `lower.gg` EFieldAccess named-field path (the `GIFieldLoad`
-+ `register_ptr` + `set_field_borrow` emission), `lower_expr` `case EBinaryOp` (3881) + `match
-sexpr.expr`, `op_consume`/`decide_operand_at_consuming_arg`/`decide_ptr_consume`; `lir_lower.gg`
-`GIFieldLoad` dispatch + `OpClone` materialization; fn `derive___field_write_lines` (derive.gg:160-187);
-Rust `src/lir/lower/insts.rs:800-869`, `src/ir/lowering/context.rs` `ensure_owned_at_consuming_arg`.
+**Anchors:** the three walkers `lower.gg:7740/7685/7642` + their call/recursion sites `7658-7673`;
+`lower_module` body-walk + transitive fixpoint (~`8704`+); the for-element consume decision
+(`emit_payload_read` auto-clone vs `lower_for`'s `OpBorrow(coll_local)`); `op_consume`/
+`decide_operand_at_consuming_arg`/`decide_ptr_consume`; `bac24e49` (Phase 2.3 clone-on-consume regime,
+post-A.2). (NOT bug-#3-relevant but historical: first-bad `2e544e84`=A.2 is a since-fixed
+`load_imports` hang.) Rust read-only-walk parity: `src/ir/lowering/` discovery passes borrow their AST.
 
 ---
 
