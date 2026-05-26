@@ -96,7 +96,7 @@ for p in '__drop(' 'gorget_string_free(' 'gorget_array_free(' 'gorget_map_free('
 
 ---
 
-## NEXT BUG — bug #3: unbounded `lower_expr(*lhs_box)` recursion on a cyclic/corrupt `Box[SpannedExpr]`
+## NEXT BUG — bug #3: unbounded `lower_expr` recursion — lower-time clone explosion of a finite `+` chain (A.2 Ptr-typed field-read incomplete recovery)
 
 (Bugs #1 + #2 are FIXED + committed in `758ed737` — see Status. The old add_local/`NO_NAME`
 overflow WAS bug #1; do not re-chase it.)
