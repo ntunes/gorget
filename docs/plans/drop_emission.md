@@ -2,8 +2,7 @@
 
 **Status (2026-05-26):** IN PROGRESS — cc-clean, **not yet bootstrapping.** WIP is **COMMITTED** on
 branch `gorget-1`. **Branch state (verified 2026-05-26): `main` is at `7cc7a101` and ALREADY contains
-the drop-emission cluster UN-SQUASHED (`758ed737` → `19f90339` → `7cc7a101`); `gorget-1` is only 2
-docs-only commits ahead (`8f9b6224`, `fdf24970`).** ⚠ The cluster landed on `main` before bootstrap is
+the drop-emission cluster UN-SQUASHED (`758ed737` → `19f90339` → `7cc7a101`); `gorget-1` is a few docs-only commits ahead (this session's status/handover doc commits).** ⚠ The cluster landed on `main` before bootstrap is
 green — so the "squash the cluster as ONE commit at merge-to-main" ship plan (NEXT STEPS / guardrails)
 is now describing a state that partially already happened; reconcile next session (the squash, if still
 wanted, would be a `main` history rewrite, not a side-branch merge). Flag to the user. **Live blocker = bug #3b** (a
@@ -175,7 +174,7 @@ overflow WAS bug #1; do not re-chase it.)
 > assume it's implicated without measuring. (The handover agent grouped it with the clone regime by
 > commit-proximity, not evidence.)
 >
-> Anchors: `lower.gg:7860/7805/7762` (the three walkers); their call/recursion sites `7658-7673`;
+> Anchors: `lower.gg:7860/7805/7762` (the three walkers); their call/recursion sites `7778-7850 self-recursion + 8827/8830 lower_module calls`;
 > `lower_module` body-walk + transitive fixpoint (~`8704`+); the for-element consume decision
 > (`op_consume`/`emit_payload_read` vs `lower_for`'s `OpBorrow`); `bac24e49` (clone-on-consume regime).
 
@@ -306,7 +305,7 @@ walkers this OOM is about — so likely not the driver. Keep it; if STEP B's for
 this fix's `OpClone`-materialization arms overlap, reconcile (don't double-handle), but do not assume
 `19f90339` is implicated without a clone-count measurement.
 
-**Anchors:** the three walkers `lower.gg:7860/7805/7762` + their call/recursion sites `7658-7673`;
+**Anchors:** the three walkers `lower.gg:7860/7805/7762` + their call/recursion sites `7778-7850 self-recursion + 8827/8830 lower_module calls`;
 `lower_module` body-walk + transitive fixpoint (~`8704`+); the for-element consume decision
 (`emit_payload_read` auto-clone vs `lower_for`'s `OpBorrow(coll_local)`); `op_consume`/
 `decide_operand_at_consuming_arg`/`decide_ptr_consume`; `bac24e49` (Phase 2.3 clone-on-consume regime,
