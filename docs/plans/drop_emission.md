@@ -96,64 +96,205 @@ for p in '__drop(' 'gorget_string_free(' 'gorget_array_free(' 'gorget_map_free('
 
 ---
 
-## NEXT BUG — bug #3: `EBinaryOp` infinite recursion in stage-2 lowering (START HERE)
+## NEXT BUG — bug #3: unbounded `lower_expr(*lhs_box)` recursion on a cyclic/corrupt `Box[SpannedExpr]`
 
 (Bugs #1 + #2 are FIXED + committed in `758ed737` — see Status. The old add_local/`NO_NAME`
 overflow WAS bug #1; do not re-chase it.)
 
-Running the **ASan stage-2 binary** (the self-host compiled by itself) on the source
-stack-overflows in `lower_expr`:
-```
-#0 lower___lower_expr  /tmp/s1full.c:199931      (fn prologue — huge ~148KB frame overflows the stack)
-#1..#N lower___lower_expr /tmp/s1full.c:211580   (the SAME call site, every frame — the lhs recursion)
-```
-Source: `lower_expr`'s `case EBinaryOp(lhs_box, op, rhs_box)` (lower.gg:~3859) → `lower_expr(*lhs_box)`.
-It never bottoms out. While lowering **`derive___field_write_lines`**.
+> **CORRECTION (2026-05-25, second session):** an earlier draft of this section root-caused bug #3 to
+> `Box(x)` shallow-aliasing its payload (a missing `fn_move_params` entry + `GtMutPtr→OpCopy` consume).
+> That was **WRONG** — it's been DISPROVEN. The `Box`/`MutPtr` clone fix was implemented and **verified
+> in the emitted C** (`Box(lhs)` now emits `SpannedExpr__clone(...)` before the alloc), yet
+> `self_host_bootstrap` **fails identically** (`status=None` signal-kill at step 8). The `Box`/`MutPtr`
+> change is correct-by-spec (matches Rust's `ensure_owned_at_consuming_arg` + language-ref §9.6) but is
+> **orthogonal to bug #3**. It is currently UNCOMMITTED in the working tree (lower.gg op_consume +
+> decide_operand_at_consuming_arg GtMutPtr arms → clone-through; "Box" in fn_move_params); decide
+> separately whether to keep it. Do NOT re-chase the Box-ctor mechanism.
 
-**Observed in the 2026-05-25 ASan session (regenerate to re-confirm — these are gdb observations,
-not re-runnable facts; the `/tmp` file no longer exists):**
-- The deref looked correct: `__s270` = lhs `Box__SpannedExpr`; `memcpy(&__s344, __s270, 192)` = a
-  `*box` (192 ≈ sizeof `SpannedExpr`, unverified by exact size).
-- `Expr__clone` case 9 (EBinaryOp) DEEP-clones correctly — `__gorget_box_alloc_SpannedExpr(*box)`
-  (fresh box + copy) then `SpannedExpr__clone_inplace`. So **`Expr__clone` is not the culprit.**
-- The recursing node looked the SAME at every depth (identical operator-`String` `.alloc` ptr) ⇒
-  two AST nodes **sharing one `Box[SpannedExpr]`** (a shared-box alias), which presents in gdb
-  exactly like a "cycle."
+**CONFIRMED NATURE (three independent probes, 2026-05-25):** `lower_expr`'s `case EBinaryOp(lhs_box,…)`
+(`lower.gg:~3859`) → `lower_expr(*lhs_box)` recurses **without bound**.
+1. **ASan stack-overflow** in `lower___lower_expr`, every frame the same lhs-recursion call site.
+2. **Unlimited-stack run → OOM SIGKILL** (137), NOT completion and NOT a clean SIGSEGV. So it is
+   **genuinely unbounded** (a finite-but-deep `+` chain would have completed; the ~148KB frame alone is
+   not the cause).
+3. **Chain dump** (inject a stack-depth guard at `lower_expr` entry; at >6MB growth dump the `lhs_box`
+   chain): nodes march by a **regular 256-byte stride** through the heap (`…9840 → …9740 → …9640 → …`),
+   all `tag=9` (EBinaryOp), then a `tag=6` node with garbage `opdata` — and ASan flags a
+   **heap-buffer-OVERFLOW** (reading past an allocation), **not** a use-after-free.
 
-**LEADING HYPOTHESIS — a drop-emission WIP change created a shared-box alias (NOT the parser).**
-Strong evidence this is the WIP, not upstream: (a) the WIP touched ZERO self-host parser/AST files
-(`git diff --stat f15a45c6..HEAD -- '*parser*' '*ast*'` = empty) — and the Rust stage-0 deltas this
-run (`meta.rs`, `calls.rs`) don't change the self-host's INPUT AST either: the lowerer source has
-no top-level `type X = …` aliases (so `meta.rs`'s alias-rewrite is inert on it) and `calls.rs` only
-emits extra drops, so the labels-only control stays clean; (b) the **labels-only** baseline
-`f15a45c6` has a *structurally identical* `lower_expr` EBinaryOp arm recursing on
-`lower_expr(*lhs_box)` and it **bootstrapped fine** — same parser, same recursion. If the parser
-built a cyclic AST, labels-only would have stack-overflowed identically. It didn't. So the cycle is
-a **runtime aliasing bug introduced by this WIP's clone/move/drop path** — most likely a
-`Box[SpannedExpr]` field consumed WITHOUT a clone or `GIMoveZero`, leaving two nodes pointing at one
-box. This is the SAME failure mode as UAF #1, the array-literal clone, and the add_local over-read
-(all looked like other things first; all were consume/move/clone decisions). The earlier "built
-upstream / pre-existing / orthogonal" framing was WRONG — it contradicted the labels-only evidence.
+**INTERPRETATION (REVISED 2026-05-26 — supersedes the corruption framing; that was wrong):** it is
+**NOT a cycle, NOT a UAF, NOT a corrupt/mis-stored box.** Definitive probes (all on the stage-2 binary,
+guard fires at a stack-growth threshold then inspects):
+- Cycle detector (visited-set over the `lhs_box` chain, mirroring the real recursion): **no repeat**.
+- Heap-`lhs_box` ring-log of the last 40 `lower_expr` entries at the 7.5MB-deep point: all `tag=9
+  op='+'`, all **distinct** addresses increasing by exactly 0xd0 (208B = one `SpannedExpr` box),
+  `REPEATS=0`. Call counter ~13,080.
+- 512MB ASan quarantine: still stack-overflow, NOT a UAF → memory is **live**, not freed.
+- Unlimited stack → OOM SIGKILL at 75s → genuinely unbounded depth.
 
-**NEXT — cheapest decisive experiment FIRST (do this before any gdb pointer-chasing):** reproduce
-with labels-only and see if bug #3 disappears. Build the self-host **WHOLESALE at `f15a45c6`**:
-`git checkout f15a45c6 -- tests/fixtures/self_host_lowerer/` (this also reverts the harmless
-`loader.gg` `it`→`item` rename and `driver.gg`'s flag set — fine, `f15a45c6` bootstrapped with
-them), then **rebuild stage-0** (`GG_BUILD_TIMEOUT_SECS=600 ./target/release/gg build
-tests/fixtures/self_host_lowerer/driver.gg` — the prebuilt `driver` is now stale), then run the
-loop above + ASan. (Do NOT partial-revert just `lower`/`lir_*`: this run's `gir.gg` changed
-`none_decls`'s type, added `optionlike_resource_types` (referenced 7× in `lir_lower.gg`), and
-changed the `GirModule(...)` constructor arity — and `driver.gg`'s `--emit-c` flag coupling
-changed — so f15a45c6 `lower`/`lir_*` against gorget-1 `gir.gg`/`driver.gg` will NOT type-check.)
-If the EBinaryOp recursion does NOT reproduce labels-only → confirmed it's the WIP; then
-**bisect which WIP change introduces it** (prime suspects: a-5 clone-on-`LoBorrowed`, the
-prelude-variant-owning change, or a missing `GIMoveZero` on a moved `Box[SpannedExpr]` field at a
-consume/construction site). Only if it DOES reproduce labels-only is the parser/transform in play
-(secondary). To re-observe the alias: regenerate the stage-2 C (loop below), build a `-g` driver
-(`gg build … --emit-c-lir` > a `.c`, then `cc -O0 -g`), run, `gdb -p <pid>` the hung process; the
-durable code anchors are `lower.gg:~3859` (EBinaryOp arm) and fn `derive___field_write_lines` — NOT
-`/tmp` line numbers (the generated file is regenerated each run, so any `/tmp/s1full.c:NNNNN` is
-non-reproducible).
+⇒ `lower_expr` is descending a genuinely **~13,000+-deep `+` `EBinaryOp` chain** of consecutive
+freshly-bump-allocated heap boxes, while handling `derive___field_write_lines` (whose SOURCE has only
+~30 `+`). So an **over-built / unboundedly-deep `+` chain** is generated from a finite input — NOT
+corruption. The ASan "allocated by" stack for these boxes was a deep `Expr__clone ↔ SpannedExpr__clone`
+recursion, so the chain is fabricated by a CLONE (or the parser's Pratt loop). The earlier
+"256-stride into a string / box-holds-String-ptr / heap-buffer-overflow" signals were artifacts of the
+*blind* dump walking PAST the chain into adjacent memory — ignore them. (`Expr__clone` case 9 and the
+parser's box construction both look structurally correct on inspection.)
+
+**BISECT RESULT (2026-05-26):** `git bisect` (good=f15a45c6, bad=758ed737, test=`self_host_bootstrap`
+exact) → **first bad commit `2e544e84` = "wire GIFieldLoad with Ptr-typed dst for resource fields
+(A.2)"**. A.2's own message ADMITS it: *"Bootstrap MAY regress until B.1 + E.1 land — downstream
+consumers (SVarDecl, op_consume) don't yet handle Ptr-typed source locals from field reads… bootstrap
+reactivation is later commits' job."* **That recovery was never completed** → bug #3. A.2 makes
+`EFieldAccess` on a **resource** field emit `GIFieldLoad` into a **Ptr-typed (aliasing) dst**
+(`lower.gg` EFieldAccess named-field path: `dst_type_id = register_ptr(field_type)` for resource fields,
+`LoBorrowed` + `BoField` origin; `lir_lower.gg` GIFieldLoad dispatch → `ISlotStore` of the field
+pointer). `lower_expr` itself does `match sexpr.expr:` (an `Expr`-typed resource field read, now a
+Ptr-alias) which flows into the EBinaryOp/box-deref/clone path where a downstream consumer mishandles it,
+fabricating the unbounded `+` chain. **Caveat:** bootstrap fails throughout [A.2..758ed737] for evolving
+reasons, so the bisect found first-BREAKAGE (=A.2, the first drop CODE commit; f15a45c6=A.1 added only
+the unused instruction). A.2's documented breakage IS the incomplete Ptr-typed-field port — the root
+B.1/D.1/E.1 were meant to fully recover but didn't. **FIX = complete the A.2 recovery** (handle
+Ptr-typed field-read source locals — `LoBorrowed`/`BoField`, slot `LT_PTR_TO_BASE+sid` — correctly where
+they flow into consume/clone/recursion: materialize/deref so they don't alias-then-explode), OR revert
+A.2's resource-field Ptr-dst to a value-load if the alias benefit isn't yet needed.
+
+**FORK RESOLVED (2026-05-26) — it's LOWER-TIME.** A shallow-stack probe (walk the `lhs_box` chain only
+when `current_fn=="derive___field_write_lines"` and stack-growth < 1MB, i.e. before recursion deepens)
+reports a max parsed `+`-chain depth of **50** (`terminator tag=6`) — matching the ~30-50 source `+`.
+The 13k-deep chain NEVER appears at shallow stack. So the **parser builds a correct ~50-deep chain, and
+LOWERING fabricates the 13,000+-deep one** (consistent with the ASan box-allocation stack being a deep
+`Expr__clone`/`SpannedExpr__clone` recursion). I.e. a **lower-time clone-and-re-lower explosion** of the
+`+` chain → unbounded `lower_expr` recursion → OOM/stack-overflow.
+
+---
+
+## NEXT STEPS — complete the A.2 Ptr-typed-field-read recovery (reference-grade) [chosen 2026-05-26]
+
+**Decision (user, 2026-05-26):** pursue the reference-grade completion of the Rust-machinery port
+(`project_rust_machinery_port_plan`), NOT a revert of A.2. A.2's resource-field `GIFieldLoad`→Ptr-dst
+is the intended design (it eliminates the silent `field.push(...)` writeback-bug class); the defect is
+that the *recovery* A.2 deferred to "B.1 + E.1" — making every downstream consumer handle a Ptr-typed
+field-read source local (`LoBorrowed`, `BoField(base,fi)`, slot `LT_PTR_TO_BASE+sid`) — was never
+finished. So **finish it**, mirroring Rust's `FieldLoad` consume path (`src/lir/lower/insts.rs:800-869`
++ how `ensure_owned_at_consuming_arg` / the GIR consume sites treat a `BorrowedPtr`/field-origin source).
+
+**STEP A — pinpoint the exact mishandling consumer (do FIRST; cheap, no rebuild).** The runaway is in
+`lower_expr` lowering `derive___field_write_lines`' `+`-concat chain (parsed ~50 deep; lowering
+fabricates ~13k via clone-recursion). Use the documented harness (emit `--lir-c` ~580s → splice
+`driver.c` preamble → `cc -O0 -g [-fsanitize=address]` → run on `driver.gg`; inject probes directly
+into the generated `/tmp/*.c`, no stage-0 rebuild). Trace where a Ptr-typed field-read result
+(`sexpr.expr` is an `Expr` = resource → A.2 makes it a Ptr-alias; likewise any `.field` of a resource)
+flows into a consume/clone site that (a) treats the Ptr-alias as an owned value, or (b) re-clones +
+re-lowers it, compounding depth. Prime suspects: `op_consume`/`decide_operand_at_consuming_arg` on a
+`LoBorrowed`+ptr-to-struct source (a-5 clone-on-borrow → `OpClone` that deep-clones the whole subchain
+per recursion level); the `*lhs_box` box-deref reading through a Ptr-aliased `Expr`; and the
+`GIFieldLoad`→`match` interaction (matching on `sexpr.expr` when it is now a Ptr-to-`Expr`). Confirm the
+single site, don't guess.
+
+**STEP B — fix at the consumer(s), Rust-parity.** A Ptr-typed field-read result is a BORROW into the
+base; consuming it at an owning position must **materialize once** (deref + clone to a fresh owned
+value), and the recursion/match must **deref the pointer, not re-clone-and-re-lower**. Ensure: (1)
+reading/lowering through a Ptr-typed `sexpr.expr` derefs (no per-level re-clone); (2) `op_consume` on a
+`LoBorrowed`+`LT_PTR_TO_BASE+sid` source at a consume position clones the POINTEE exactly once (it does
+not, today, compound); (3) no clone-then-re-lower loop. Cite `docs/internals/layering-discipline.md`
+(fix at the write/producer site if a downstream pass is reconstructing from a Ptr it should have been
+handed materialized). This likely overlaps the `decide_ptr_consume` / `OpClone`-materialization paths my
+uncommitted `Box`/`MutPtr` change touched — reconcile, don't double-handle.
+
+**STEP C — validate (in order):** `self_host_bootstrap` (exact) green → `self_host_bootstrap_fixed_point`
+green → `lowerer_comparison` fn-count parity → `cargo test --lib --release` (~1059 baseline) → full
+`cargo test --test integration` (parent drives). Re-run the drop-count grep-diff vs `driver.c` to watch
+parity hold.
+
+**STEP D — SHIP-GATE + squash.** Before green-ship, replace the consuming-position name-match
+(`is_owning_mutator_arg`) with a typed signal (guardrail #5), then squash the whole cluster as ONE
+commit (partial states crash). Fold "Deferred optimizations" into `TODO.md`.
+
+**Orthogonal in-tree change:** the `Box`-owning + `GtMutPtr`-to-resource clone-through fix
+(`lower.gg` `op_consume` + `decide_operand_at_consuming_arg` + `fn_move_params.put("Box")`) is committed
+separately; it is correct-by-spec (Rust `ensure_owned_at_consuming_arg` + lang-ref §9.6) and
+**verified orthogonal to bug #3** (crash byte-identical with/without it). Keep it; it may interact with
+STEP B's clone path — reconcile there.
+
+**Anchors:** first-bad `2e544e84` (A.2); `lower.gg` EFieldAccess named-field path (the `GIFieldLoad`
++ `register_ptr` + `set_field_borrow` emission), `lower_expr` `case EBinaryOp` (~3859) + `match
+sexpr.expr`, `op_consume`/`decide_operand_at_consuming_arg`/`decide_ptr_consume`; `lir_lower.gg`
+`GIFieldLoad` dispatch + `OpClone` materialization; fn `derive___field_write_lines` (derive.gg:160-187);
+Rust `src/lir/lower/insts.rs:800-869`, `src/ir/lowering/context.rs` `ensure_owned_at_consuming_arg`.
+
+---
+
+### (superseded) earlier Box-ctor analysis — kept for context, DISPROVEN above
+
+**Symptom:** the stage-2 binary (self-host compiled by itself) stack-overflows in `lower_expr`'s
+`case EBinaryOp(lhs_box, …)` (`lower.gg:~3859`) → `lower_expr(*lhs_box)`, which never bottoms out,
+while lowering **`derive___field_write_lines`** (whose body is a deep left-leaning `+`
+String-concat chain, parsed via the Pratt loop in `parser.gg:~1765`). gdb saw the same node at every
+depth (identical operator-`String` `.alloc` ptr) — a self-referential `Box[SpannedExpr]`.
+
+**CONFIRMED it's the WIP, not the parser (the decisive A/B):**
+- `self_host_typechecker/` (the symlinked INPUT: `parser.gg`/`ast.gg`/`derive.gg`/…) is
+  **byte-identical** `f15a45c6..HEAD` (`git diff --stat` empty). So the stage-2 parser builds the
+  exact same AST in both. Only the 6 real lowerer files differ.
+- `self_host_bootstrap` (step 8 *runs* the compiled stage-2 binary on driver.gg): **PASSES at
+  `f15a45c6`** (both it and `_fixed_point`), **FAILS at HEAD** (`status=None`, signal-kill = stack
+  overflow). Same input, only the lowerer differs ⇒ the recursion is a WIP runtime-aliasing bug.
+
+**ROOT CAUSE (two coupled gaps), found by diffing the self-host-emitted C for
+`Parser__parse_expr_bp_with_lhs` at `f15a45c6` vs HEAD:**
+
+`parse_expr_bp_with_lhs(&self, int min_bp, SpannedExpr !lhs)` repeatedly does
+`lhs = SpannedExpr(EBinaryOp(Box(lhs), op, Box(rhs)), Span(lhs.span.start, rhs.span.end))`.
+`Box(x)` is lowered as `GORGET_ALLOC(sizeof(SpannedExpr)); memcpy(box, src, sizeof)` — a **shallow**
+copy (it duplicates the struct bytes, *including the inner `Box`/`String` pointers*, but does NOT
+deep-clone them). At `f15a45c6` that was harmless (labels-only → nothing freed `src`). The WIP turned
+on **drop emission** (the new `gorget_string_free`/`gorget_array_free`/`__drop` calls visible in the
+HEAD body diff), so the owned source is now dropped — freeing the inner boxes the shallow copy still
+aliases. Dangling alias + deterministic same-size allocator reuse → the self-referential box. This is
+exactly the plan invariant: **"a field/element that is DROPPED must also be CLONED — drop-without-
+clone on a shallow copy = double-free."**
+
+Why `Box(x)` shallow-copies instead of clone/move:
+1. **`Box` is missing from `fn_move_params`.** `Some`/`Ok`/`Error` were registered as owning prelude
+   ctors (`lower.gg:8514-8518`, item #5 — fixed the `parse_equip_item` UAF), but `Box` — the sibling
+   prelude ctor with identical heap-payload-ownership semantics — was missed. So
+   `classify_call_arg(&gmod, "Box", 0)` misses → `CkCallArgBorrow` → `op_consume` returns `OpBorrow`
+   (a non-consume early-out: clone/move never considered). `Box(x)` routes through `lower_call`'s
+   generic arg loop (`lower.gg:5219/5226`), so registering it there *does* take effect.
+2. **`!`-move params are typed `GtMutPtr`, indistinguishable from `&`-borrow params.** Even with (1)
+   fixed, consuming `lhs` (a `!`-param) hits `decide_operand_at_consuming_arg`'s
+   `case GtMutPtr(_): return OpCopy` (`lower.gg:~1426`) — a shallow pointer-copy — because
+   `lower.gg:6770-6771` (functions) and `7046-7047` (methods) collapse BOTH `&` (ownership==1) and
+   `!` (ownership==2) to `GtMutPtr(inner)`. A `!`-param is **callee-owned** and must clone/move on
+   consume; only `&` is a borrow-alias (`OpCopy`). NB the `rhs` operand is a by-value owned local
+   (`GtNamed`, `LoOwned`) — gap (1) alone fixes *that* arm (→ `OpClone`/`OpMove`); gap (2) is needed
+   for the `!lhs` arm.
+
+**THE FIX (both parts; correctness-first per the guiding principle — clone unless owned-and-dead):**
+- Part 1: register `Box` owning — `Vector[bool] box_mv = [true]; fn_move_params.put("Box", !box_mv)`
+  beside `Some`/`Ok`/`Error` (`lower.gg:~8518`). Use a **typed** `Vector[bool]` local, not a bare
+  `[true]` (elem_size-8 push-overflow trap — see the item-#5 docstring at `lower.gg:8507-8512`).
+- Part 2: make `!`-move params distinguishable from `&`-borrow so consuming a `!`-param clones.
+  **Recommended (reference-grade):** type `!` (ownership==2) as `GtPtr(inner)` (which already routes
+  through `decide_operand_at_consuming_arg`'s `case GtPtr(inner) → decide_ptr_consume → OpClone` for
+  resource inners), keeping `&` (ownership==1) as `GtMutPtr`. Touches the TWO param-typing sites
+  (`lower.gg:6770-6771` + `7046-7047`). **ABI caveat — verify before shipping:** confirm a `!`-param
+  typed `GtPtr` still address-takes/mutates correctly and that nothing downstream keys on `GtMutPtr`
+  to recognise a `!`-param (grep `GtMutPtr` consumers). Alternative if GtPtr ripples: a distinct
+  ownership tag (`LoOwnedParam` for `!`, retain `LoParam`/borrow for `&`) consulted in the
+  `GtMutPtr` arm of `decide_operand_at_consuming_arg`. Both are output-affecting (more clones) — run
+  the full bootstrap to verify green and watch for new double-frees elsewhere.
+
+**Reproduction harness used (cheap, no bisect):** emit the self-host's own C for the offending fn at
+each revision and diff — `driver driver.gg lib --lir-c > s2.c` (~580s at HEAD; faster labels-only),
+extract `Parser__parse_expr_bp_with_lhs`, normalize SSA names (`sed -E 's/__v[0-9]+/__v/g; …'`),
+diff bodies. The box-of-`lhs` site is `GORGET_ALLOC(sizeof(__gg_SpannedExpr)); memcpy(…)`; the WIP's
+new drops are the `*_free`/`__drop` lines absent at `f15a45c6`. (A minimal stand-alone fixture did
+NOT reproduce — its smaller types gave the `!lhs` slot a raw `LT_PTR` instead of the real fn's
+typed `LT_PTR_TO_BASE+sid`, so it emitted a different `sizeof(void*)` box. Use the real fn.)
+Durable anchors: `lower.gg:~3859` (EBinaryOp arm), `parser.gg:~1765` (Pratt loop), fn
+`Parser__parse_expr_bp_with_lhs` / `derive___field_write_lines`.
 
 ---
 
