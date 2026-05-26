@@ -4525,10 +4525,32 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     # `sr_lookup` workaround in lir_lower.gg:35 can now
                     # inline as `sr.get(name).unwrap_or(-1)`).
                     if mname == "unwrap_or" and default_local >= 0:
+                        # option_ref_borrow Phase 6 (R1, site #4): the result
+                        # SLOT (`uo_dst`) needs a SEPARATE type from `inner_tid`.
+                        # ⚠ `inner_tid` MUST stay `GtPtr` for an Option[Ref[T]]
+                        # — it is reused at the `emit_payload_read` field reads
+                        # (Some-arm ~below AND the plain-unwrap path) where the
+                        # site-#1 guard fires and emits the GIDeref. Gating it
+                        # would type the field-read dst as a value slot (helper
+                        # writes the pointer into it → bug) AND stop the guard
+                        # matching → no deref. So: resource pointee → slot stays
+                        # `GtPtr` (=inner_tid); primitive pointee → slot is the
+                        # VALUE pointee type, so the Some arm stores the
+                        # site-#1-deref'd value and the None arm the value
+                        # default into a value-typed `uo_dst`.
+                        int uo_slot_tid = inner_tid
+                        if ref_payload_tid >= 0 and ref_payload_tid < gmod.type_table.len():
+                            GirType rp_gt = gmod.type_table.get(ref_payload_tid).unwrap()
+                            match rp_gt:
+                                case GtPtr(rp_inner):
+                                    if not is_resource_type_name(type_id_to_name(rp_inner, &gmod), &gmod):
+                                        uo_slot_tid = rp_inner
+                                else:
+                                    pass
                         # Materialise the result slot up front; both arms
                         # store into it so the merge block sees a single
                         # def (SSA construction inserts the phi).
-                        int uo_dst = add_local(&ctx, inner_tid, NO_NAME)
+                        int uo_dst = add_local(&ctx, uo_slot_tid, NO_NAME)
                         int tag = emit_tag_read(&ctx, scr_ptr, recv_tn, &gmod)
                         # tag == 0 → Some / Ok arm.
                         int cmp_dst = add_local(&ctx, BOOL_TYPE, NO_NAME)
@@ -6453,10 +6475,30 @@ void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vecto
                 # are wired here; string literal sub-patterns would need a
                 # `gorget_str_eq` call and aren't exercised today.
                 int lit_fty = lookup_ctor_field_type(effective_enum, effective_variant, fi, &gmod)
+                # option_ref_borrow Phase 6 (R1, site #5): gate the GICmp operand
+                # type on the pointee. For an `Option[Ref[T]]` scrutinee with a
+                # literal sub-pattern (`case Some(0):` on a getter result),
+                # `lit_fty` resolves through the `Ref__` bridge to `GtPtr(T)`.
+                # emit_payload_read routes through site #1, which for a PRIMITIVE
+                # pointee derefs `*ptr` and returns a VALUE-typed `lit_field_val`
+                # — so the GICmp must compare against the VALUE pointee type, not
+                # the `GtPtr`. (Resource pointee keeps `GtPtr` for both. No
+                # primitive-pointee literal-match on a getter exists today — all
+                # chain `.unwrap()` first — so this is unexercised, but gated for
+                # completeness rather than shipping a silently-wrong instruction.)
+                int lit_cmp_ty = lit_fty
+                if lit_fty >= 0 and lit_fty < gmod.type_table.len():
+                    GirType lit_gt = gmod.type_table.get(lit_fty).unwrap()
+                    match lit_gt:
+                        case GtPtr(lit_inner):
+                            if not is_resource_type_name(type_id_to_name(lit_inner, &gmod), &gmod):
+                                lit_cmp_ty = lit_inner
+                        else:
+                            pass
                 int lit_field_val = emit_payload_read(&ctx, scrutinee_ptr, effective_enum, effective_variant, fi, lit_fty, &gmod)
                 int lit_val = lower_expr(&ctx, lit_expr, &gmod)
                 int lit_eq = add_local(&ctx, BOOL_TYPE, NO_NAME)
-                emit(&ctx, GICmp(lit_eq, CMP_EQ, lit_fty, OpCopy(lit_field_val), OpCopy(lit_val)))
+                emit(&ctx, GICmp(lit_eq, CMP_EQ, lit_cmp_ty, OpCopy(lit_field_val), OpCopy(lit_val)))
                 int lit_continue_bb = new_block(&ctx)
                 set_terminator(&ctx, GTBranch(OpCopy(lit_eq), lit_continue_bb, no_match_bb))
                 switch_to(&ctx, lit_continue_bb)
