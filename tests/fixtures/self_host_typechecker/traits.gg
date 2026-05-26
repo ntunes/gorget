@@ -266,29 +266,19 @@ void collect_equip(EquipBlock eq, int equip_scope, ScopeTable &scopes, TypeTable
     # impls live in disjoint Dicts so `resolve_method_full` can take the
     # correct precedence path without re-scanning. Mirrors Rust's
     # `inherent_impls` (the trait_impls index is self-host-specific —
-    # see types.gg for the rationale). The `get().push()` chain on a
-    # nested Vector is known to drop mutations on this codebase (see
-    # `feedback_nested_vector_get_set.md`), so we rebuild the inner
-    # Vector + put it back — same pattern as lir_ssa.gg's target_slots.
+    # see types.gg for the rationale). `.get(k).unwrap().push(x)` mutates
+    # the inner Vector in place through the `Option[Ref[T]]` element
+    # pointer (option_ref_borrow Phase 4) — the old "rebuild + put back"
+    # workaround (feedback_nested_vector_get_set) is retired.
     if trait_def_id == NO_DEF:
         if registry.inherent_impls.contains(self_tid):
-            Vector[int] old_indices = registry.inherent_impls.get(self_tid).unwrap()
-            Vector[int] new_indices = Vector[int]()
-            for oi in old_indices:
-                new_indices.push(oi)
-            new_indices.push(new_idx)
-            registry.inherent_impls.put(self_tid, !new_indices)
+            registry.inherent_impls.get(self_tid).unwrap().push(new_idx)
         else:
             Vector[int] new_indices = [new_idx]
             registry.inherent_impls.put(self_tid, !new_indices)
     else:
         if registry.trait_impls.contains(self_tid):
-            Vector[int] old_indices = registry.trait_impls.get(self_tid).unwrap()
-            Vector[int] new_indices = Vector[int]()
-            for oi in old_indices:
-                new_indices.push(oi)
-            new_indices.push(new_idx)
-            registry.trait_impls.put(self_tid, !new_indices)
+            registry.trait_impls.get(self_tid).unwrap().push(new_idx)
         else:
             Vector[int] new_indices = [new_idx]
             registry.trait_impls.put(self_tid, !new_indices)
