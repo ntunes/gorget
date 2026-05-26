@@ -390,5 +390,7 @@ treating it as ONE atomic cluster and driving each fault to root with ASan: the 
 MB), the pointer-cast cascade (2780 → 0), user-type drops (0 → hundreds), the return-path and
 enum-variant-ctor double-frees, and finally (2026-05-25) the prelude-variant-owning UAF, choice-A
 Option ABI, variant-ctor typing, and the Box-field deep-clone that closed the `meta_expand`
-double-free. Remaining: the `lower_function` `add_local` slot/arg mismatch above. The full
+double-free. Remaining (the live blocker): bug #3 — the A.2 Ptr-typed field-read incomplete
+recovery (unbounded `lower_expr` clone-explosion of `field_write_lines`' `+` chain); see the NEXT BUG
++ NEXT STEPS sections above. The full
 blow-by-blow is in `git log` and `DONE.md`.
