@@ -449,16 +449,33 @@ is, at a VALUE-consuming position:
    value-consuming paths (svardecl bind, call-arg, unwrap_or merge, match-destructure) route their
    payload through here, so derefing primitives here fixes them at once. Keep passing `dst_type =
    GtPtr(inner)` so the guard still sees the pointer source.
-2. **`infer_method_return_type` unwrap arm (`lower.gg:~3406`).** The `ref_payload` override returns
-   `GtPtr(payload)`. Gate: resource pointee → `GtPtr`; primitive pointee → the value pointee type.
-   (Keeps the lowerer's inferred type consistent with what `emit_payload_read_mode` now returns.)
-3. **match-destructure `fty` override (`lower_ctor_pattern`, `lower.gg:~6376`).** `fty =
-   scr_ref_payload` (GtPtr). Gate: resource → `GtPtr`; primitive → value pointee type, so the bound
-   local is value-typed and the deref'd value assigns cleanly.
-4. **Sanity:** confirm `unwrap_or` (`lower.gg:~4509`) and direct call-arg passing of a primitive
-   getter result now produce/consume a value (they consume the `emit_payload_read_mode` result, so
-   #1 covers them — verify the unwrap_or merge slot is value-typed for primitive pointees, not
-   `GtPtr`).
+2. **`infer_method_return_type` unwrap arm (`lower.gg:~3406`) — REFINEMENT, not the load-bearing fix
+   (review pass 2).** The plain-unwrap *lowering* (`lower.gg:~4500-4549`) does NOT consult this
+   function — it returns the value local directly and `decide_svardecl_emission` reads the local's
+   real type. Gate it anyway (resource → `GtPtr`; primitive → value pointee type) so type-inference
+   consumers (`auto x = …unwrap()` via fallback) agree with the SSA — but know the unwrap fix is #1,
+   not this.
+3. **match-destructure (`lower_ctor_pattern`, `lower.gg:~6376/6392/6394`) — CORRECTED (review pass 2,
+   B2).** `fty` is used for BOTH the `emit_payload_read_mode` `dst_type` arg AND the bound local's
+   type, so it can't be gated one way for both. Required shape: KEEP `fty = scr_ref_payload`
+   (`GtPtr`) as the `dst_type` passed into `emit_payload_read_mode` (so the #1 guard fires and
+   derefs primitives), but type the BOUND local from the RETURNED `field_val`'s actual type
+   (`ctx.locals.get(field_val).type_id`), NOT `fty` — i.e. `add_local_inheriting(&ctx,
+   ctx.locals.get(field_val).type_id, name, field_val)`. Then resource → `bound: GtPtr`, primitive →
+   `bound: value`, matching what #1 returns. NOTE: no primitive-pointee `match coll.get(i): case
+   Some(p):` site exists in the current self-host (all `match …get` chain `.unwrap()` first), so this
+   primitive case is NOT exercised by the bootstrap — but implement it correctly anyway (don't ship
+   an unsound instruction); the resource-match case IS exercised and keeps `bound: GtPtr`.
+4. **`unwrap_or` (`lower.gg:~4509-4532`) — REQUIRED EDIT, exercised (review pass 2, B1).** NOT mere
+   sanity: `sr.get(name).unwrap_or(-1)` (`sr: Dict[String,int]`) is load-bearing throughout
+   `lir_lower.gg` (StructRegistry id lookups: `:528,536,543,580,595,665,696,708…`). The `unwrap_or`
+   path allocates its result slot `uo_dst` INDEPENDENTLY at `lower.gg:~4513` as
+   `add_local(&ctx, inner_tid, …)` with `inner_tid = ref_payload_tid = GtPtr(int)` — site #1 never
+   touches it. As written it limps for `int` (ptr and int are both 8 bytes, both arms store values)
+   but the slot's GIR/LIR type is wrong (`LT_PTR`) → fragile + violates one-type-per-slot. FIX: gate
+   `inner_tid` at `:4500-4501/4513` (resource pointee → `GtPtr`; primitive → value pointee type) so
+   `uo_dst` and both arm-stores (the site-#1-deref'd Some payload + the `-1` literal default) are the
+   value pointee type for primitive pointees.
 
 **R2 follow-up (refinement, verify-after-green, not a blocker):** the return-type priority
 (`lower.gg:~4732`) is `fn_sigs` → typechecker side-table (populates `option_ref_payload`) →
