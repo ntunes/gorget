@@ -444,6 +444,29 @@ int lir_fn_add_block(LirFunction &f):
     f.blocks.push(LirBlock(id, empty_params, empty_insts, TUnreachable()))
     return id
 
+# Append an instruction to block `bb`'s instruction list, IN PLACE.
+#
+# Mirrors Rust's `self.lir_func.block_mut(bb).push_inst(inst)`
+# (src/lir/lower/mod.rs:1480). The `.get(bb).unwrap()` returns a BORROW
+# of the block (Option[Ref] → GtPtr alias, zero-copy) and `.insts.push`
+# mutates the block's vector through that alias. This is O(1) amortised.
+#
+# This REPLACES the old `LirBlock blk = f.blocks.get(bb).unwrap();
+# blk.insts.push(inst); f.blocks.set(bb, blk)` get-mutate-set idiom, which
+# bound the block to a VALUE local — deep-cloning the ENTIRE block (its
+# whole, growing `insts` vector) on every single instruction emitted.
+# That made `lower_operand`/`lower_instruction` O(n^2) in block size and
+# blew the self-host's `lower_gir_to_lir` to ~13 GB (OOM). The clone was a
+# CoW-contract violation: a read (`.get()`) must borrow, not deep-copy.
+void lir_push_inst(LirFunction &f, int bb, LirInst inst):
+    f.blocks.get(bb).unwrap().insts.push(inst)
+
+# Set block `bb`'s terminator IN PLACE. Mirrors Rust's
+# `block.terminator = term` via `block_mut(bb)` (src/lir/lower/mod.rs:1490).
+# Same borrow-not-clone rationale as `lir_push_inst`.
+void lir_set_term(LirFunction &f, int bb, LirTerm term):
+    f.blocks.get(bb).unwrap().term = term
+
 # ── LirModule helpers ───────────────────────────────────────────
 
 int lir_mod_add_struct(LirModule &m, LirStructDef sdef):
