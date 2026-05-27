@@ -725,14 +725,37 @@ ITSELF is wrong in s1bin → a residual String-compare/`starts_with` fidelity bu
 Dict[String,Vector[String]] lookups WORK post-L5, so a blanket Dict-key failure is unlikely — favor
 the Option[Ref]-return-coercion sub-lead.)
 
-**FIX at the WRITER (NOT the validator — it is CORRECT; driver/reference agrees with 0 violations;
-"fixing" it would MASK a real s1bin runtime defect, violating CLAUDE.md "don't redesign around
-gaps").** Fix whatever stage-1 mis-compilation makes `resource_meta_for`/its Dict-cache/its
-Ref-return misbehave in s1bin. **METHOD:** repro with `Vector[int] w = v` (push twice + same-type
-rebind) compiled by the **self-host driver** + the isolation prints above; trace `driver` vs `s1bin`
-behavior of `resource_meta_for("GorgetArray")` to the exact mis-compiled primitive; fix at the
-writer; confirm op_consume now returns OpMove/OpClone and ALL 1238 collapse (single shared root).
-gg-check clean; `cargo build` + `cargo test --lib`; commit by file. Do NOT run the bootstrap
-(parent's job). Report the dominant root (exact primitive + why), the fix, the repro before/after,
-expected violation drop. (Orchestrator caveat: pass-1 localized the divergence point with certainty
-but did not bisect WHICH String/Dict/Option-Ref primitive s1bin mis-emits — that's your job.)
+**SUB-ROOT PINNED (brief-review pass 2 — RAN the isolation, decisive before/after) = (b), the
+`Option[Ref]`-returned-as-`Option[value]` coercion.** `resource_meta_for` ends with
+`return gmod.resource_metadata.get(name)` (`lir_lower.gg:416`) — a raw `Option[Ref[ResourceMetadata]]`
+where the fn is declared `Option[ResourceMetadata]`. The self-host LOWERER does not deref+clone the
+`Ref` payload at that `return` (Rust's lowerer does — that's why `driver` is correct), so on every
+CACHE-HIT (`contains→get`) the returned Option is empty → `is_resource_type_name` false → OpCopy.
+(The MISS path — build→put→`Some(m)` — returns an owned value and is correct; that's why the FIRST
+lookup per type works and subsequent ones don't.) Verified by a faithful replica compiled through
+the self-host: raw `return cache.get(name)` → `false`; `return Some(cache.get(name).unwrap().clone())`
+→ `true`. (a) Dict `contains`/`put`/`get-via-unwrap` all work (enum_registry Dict[String,Vector]
+lookups succeed post-L5, `variant-not-in-enum`=0); (c) `build_resource_metadata` is immune (returns
+an inline-constructed owned `Some(...)`, no Dict Ref). Grep confirms `lir_lower.gg:416` is the ONLY
+bare `return <dict>.get(key)` (no `.unwrap`) across all self-host files — single chokepoint, no
+sibling.
+
+**THE FIX (one line, verified by pass-2 through self-host emission):** at `lir_lower.gg:416`, change
+`return gmod.resource_metadata.get(name)` → `return Some(gmod.resource_metadata.get(name).unwrap().clone())`.
+The `if gmod.resource_metadata.contains(name):` guard immediately above guarantees the `.unwrap()` is
+safe. This materializes an owned `ResourceMetadata` value — exactly what the declared return type
+`Option[ResourceMetadata]` means (idiomatic: a fn returning a value materializes it, doesn't leak a
+borrow). After it, `op_consume` returns OpMove/OpClone and ALL 1238 OpCopy-on-resource collapse
+(single shared root via `is_resource_type_name`).
+
+**Scope (pass-2 R2):** the underlying defect — the self-host lowerer not auto-deref+cloning an
+`Option[Ref]` payload at a `return` whose declared type is `Option[value]` — is a separate, LARGER
+self-host-lowering item; do NOT attempt that deeper fix this cycle. The one-line explicit `.clone()`
+is correct, idiomatic, and reference-grade for the bootstrap. LOG the deeper return-coercion gap to
+`TODO.md`. Optional (pass-2 R3): add a one-line comment at `lir_lower.gg:~408-413` noting the hit
+branch returns an owned value. Do NOT touch the validator (correct; would mask).
+
+**METHOD:** repro with `Vector[int] w = v` (or `Dict[String,int] d = {}`) compiled by the **self-host
+driver** → s1bin flags `OpCopy(_) on resource`, driver=0; after the fix, both clean. gg-check clean;
+`cargo build` + `cargo test --lib`; commit by file. Do NOT run the bootstrap (parent's job). Report
+the diff, the repro before/after, and the violation-count drop.
