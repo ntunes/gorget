@@ -1,5 +1,26 @@
 # Drop Emission — Self-Host Plan (unified)
 
+> **LATEST (2026-05-27 pm/3) — parse_int `Error(Empty())` return SIGSEGV FIXED; next fixed_point blocker is `parse_dot_expr`.**
+> The fixed_point stage-2-binary crash in `std.conv.parse_int`'s `return Error(ParseError.Empty())`
+> (memcpy-from-NULL) is **resolved**. Root was a self-host `lower.gg` type bug (case (a)): a `return`'d
+> prelude-variant constructor (`Ok`/`Error`/`Some`/`None`) was typed with the bogus standalone variant
+> name (`Error` → `GtNamed("Error")` → LT_PTR slot), so the constructed aggregate was stored into a
+> Ptr slot (NULL'd by codegen) and the return-slot copy memcpy'd from NULL. The Rust-gg-compiled DRIVER
+> tolerated it (its `run_ssa` copy-prop collapses the dead Ptr-slot store); the self-host
+> `lower_gir_to_lir` has NO SSA cleanup, so s1bin emitted the literal NULL store. **Fix** (mirrors Rust
+> `lower_return`'s `func_state.expected_type = locals[0].type_id`): at `SReturn`, retype a bare
+> variant-constructor result local to the function's return place (local 0, already correctly typed
+> `Result__T__E`/`Option__T`) so the slot is aggregate-typed → `try_lower_prelude_variant` emits a
+> canonical in-place `IEnumInit`. One hunk in `tests/fixtures/self_host_lowerer/lower.gg`
+> (`expr_is_prelude_variant_ctor` + the SReturn retype). `self_host_bootstrap` STAYS GREEN; GIR now
+> matches Rust (`_N: Result__int64_t__PErr`); ZERO NULL stores in the emitted parse_int.
+> **`self_host_bootstrap_fixed_point` STILL FAILS** — now PAST parse_int, at a SEPARATE pre-existing
+> blocker: the stage-2 binary SIGSEGVs in `Parser__parse_dot_expr` reading `lhs.span` with the
+> `!`-moved `SpannedExpr lhs` arg passed as **NULL** (a move-arg ABI/lowering gap; signature
+> parser.gg:1769, caller :1584). Confirmed separate + pre-existing (v12 pre-fix binary crashed at
+> parse_int FIRST, during lexing). See TODO.md "NEXT BLOCKER #2" + DONE.md (2026-05-27) for the full
+> trace and repro. ← PICK UP at the parse_dot_expr move-arg-NULL bug.
+
 > **SUPERSEDED 2026-05-27 — READ "## NEXT STEPS" FIRST.** s1bin now BUILDS CLEAN and no longer segfaults
 > (Option[Ref] Phases 1-6 + Layers 1-6 + Gap A `bdc5b537` + Layer 9 `dac39a64`). bug #3b's `generate_c`
 > `.get()`-clone is **RESOLVED** (`compute_reachable_fns` borrows via `gorget_array_safe_get`). **The live
