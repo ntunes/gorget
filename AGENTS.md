@@ -220,6 +220,8 @@ The failure mode when these rules slip is recoverable but ugly: working trees ge
 
 A **fresh** agent must review any non-trivial artifact before it's acted on, iterating — folding each pass's findings — until a fresh agent raises **no reservations**. Use a *new* agent each pass: a reused one anchors on its prior conclusions, while a fresh one re-derives from the code and catches what the artifact baked in (more than once the second pass found the *first pass's own recommendation* was unsound). Brief every reviewer to verify each load-bearing claim against source with `file:line` and return either SIGN OFF or specific cited reservations — not to rubber-stamp, and not to invent reservations to avoid signing off. The reviewer may build or run minimal checks to verify.
 
+**The passes are SEQUENTIAL, not parallel.** Each pass reviews the artifact *after* the previous pass's findings have been folded in — pass 2 sees the corrected v2, pass 3 sees v3, and so on. Do **not** fan out N reviewers concurrently against the same version: that gives you N opinions on v1, misses defects introduced *by* a correction, and forfeits the point — a fresh agent re-deriving against the *latest* artifact (which may include another reviewer's now-folded suggestion that itself turns out unsound). The loop is strictly: review → fold → fresh review of the corrected artifact → fold → … → a fresh pass raises no reservations. "≥3 fresh passes" means ≥3 such sequential rounds, not 3 simultaneous reads.
+
 This applies to three kinds of artifact:
 
 1. **Plans / TODO items** — review before you start implementing.
