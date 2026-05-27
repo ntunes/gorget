@@ -602,32 +602,53 @@ foundational functions. Same "stage-1 mis-compiles fn X → s1bin's X broken →
 as L1-L4, now hitting foundational paths. Artifacts: stage-1 C = `$(cat /tmp/v6-out-path)`; stage-2 =
 `/tmp/v6-stage2.c`; s1bin = `/tmp/v6-s1bin`; stage-1 driver = `tests/fixtures/self_host_lowerer/driver`.
 
-**PRIMARY LEAD — s1bin's LOADER mis-runs (one root → ~4000 symptoms):** the enum-registration loop
-(`lower.gg:8743-8758`) registers EVERY enum in `m.items` with NO imported gate — so
-`IoError` "variant not in enum" means `IoError` is NOT IN `s1bin`'s `m.items`, i.e. `s1bin`'s
-`loader___load_imports` failed to load the imported module(s)' types/enums/fns. That single failure
-cascades: every imported enum → "variant not in enum"; every imported-defined identifier →
-"unknown identifier"; missing iter/next methods → "no iter()/next() chain". `driver` loads them fine.
-The ASan (L4) showed `loader___load_imports` actively cloning Stmts, so the loader RUNS in s1bin but
-mis-loads. **Diagnose: does s1bin's m.items contain the imported modules' items?** (e.g. add a count
-print, or inspect via a minimal multi-file fixture that imports an enum + matches its variant,
-compiled by the self-host driver: does the self-host-compiled binary find the variant?)
+**PRIMARY LEAD (corrected by brief-review pass 1 + orchestrator-verified against the artifact) —
+String-keyed `Dict` (named_locals) fidelity: function params/locals not landing in / not found in
+`named_locals`.** The loader lead is REFUTED: the failures are dominated by LOCAL types, not imports.
+Verified counts in `/tmp/v6-stage2.c`:
+- "variant not in enum" (1417): `Expr` 289, `LirInst` 286, `Stmt` 176, `ResolvedType` 82,
+  `Instruction` 80, `GirType` 75, `Item` 66… — ALL local (`ast.gg`/`lir.gg`/`gir.gg`); imported
+  `IoError`=34, `ParseError`=10 are ~3%. A loader failure would hit ONLY imported enums; instead
+  local enums dominate → the enum LOOKUP fails (`match_variant_index`/`enum_variant_index` over the
+  `enum_registry` Dict), not the load.
+- "unknown identifier" (2825): `dst` 232, `name` 213, `op` 112, `args` 110, `value` 80, `ty` 80,
+  `rhs` 69, `mname` 68… — ALL local variables / params / match-bindings, none imported. The
+  EIdentifier path checks `nl_contains(name)` first (`lower.gg:189`, = `named_locals.contains`); for
+  these to reach the unknown-id fallback, `named_locals` (a `Dict[String,int]`) must be missing keys
+  that were `put`.
 
-**SECONDARY LEADS (if the loader isn't the dominant root):**
-- s1bin's String-keyed `Dict.get → Option[Ref]` mis-compiled → `named_locals.get`/`type_infos.get`/
-  `enum_registry.get` lookups fail → name-res + enum cascade. (Directly in the Option[Ref] change's
-  path.)
-- s1bin's `op_consume`/`decide_*_consume` resource fidelity → OpCopy-on-resource (1236). Possibly a
-  separate root (a consume-decision fn mis-compiled).
+This is a **DOCUMENTED, pre-existing self-host bug**, not (necessarily) an Option[Ref] regression:
+`lower.gg:215-219` states *"stage-1 running on its own source emits ~58k diagnostics today because
+many function parameters aren't ending up in `named_locals` — a separate bug still under
+investigation."* That is EXACTLY this layer. `driver` (Rust-compiled self-host) binds params/locals
+correctly (clean stage-1); `s1bin` (self-host-compiled) does not → the self-host's CODEGEN of the
+param-binding / `nl_put` / `Dict[String,int]` put-get path is wrong, so `s1bin` mis-binds → cascade.
+**Diagnose the dominant root here:** is it (a) `nl_put` not being CALLED for params (the param-binding
+logic in the fn-prologue lowering), or (b) `Dict[String,int].put`/`.contains`/`.get` codegen
+fidelity (String-keyed `.get()→Option[Ref]` / `contains`)? Both land params out of `named_locals`.
+(b) is directly in the Option[Ref] change's path; (a) may predate it.
 
-**METHOD (mirror the L3 agent that succeeded):** build MINIMAL fixtures targeting each lead
-(multi-file imported-enum-match for the loader lead; String-keyed Dict-get-and-use for the Dict
-lead; resource get/consume for the OpCopy lead), compile each with the **self-host driver**
-(`./tests/fixtures/self_host_lowerer/driver <fix>.gg <libdir> --emit-c`), assemble + `cc`/run, and
-find which reproduces broad mis-lowering — that isolates the ONE foundational function whose
-self-host-emitted C is wrong. Trace it (compare stage-1's C for that fn vs the GIR it should
-produce). Fix the DOMINANT root in CODEGEN (one root per cycle; the parent re-bootstraps to surface
-the next). Don't rewrite self-host source to dodge; don't reintroduce L1-L4 fixes' behavior.
+**SECONDARY / LIKELY-SEPARATE root (a LATER cycle, do NOT conflate):** OpCopy-on-resource (1236,
+`validate.gg:~147`) is a `op_consume`/`decide_*_consume` consume-decision axis, independent of the
+Dict lookup. It may be partly downstream of mis-resolved locals (wrong ownership tags) OR an
+independent fidelity bug — fix the Dict/named_locals root FIRST (this cycle), re-bootstrap, and treat
+OpCopy-on-resource as the next root if it persists. Drop any "one root → all 4000 symptoms" framing.
+
+**METHOD (mirror the L3 agent that succeeded; single-file fixtures FIRST — no imports needed):**
+1. **`Dict[String,int]` put/get fixture (tests the dominant root directly):** `put` several string
+   keys, then `contains`/`get` them and use the result in a `match … case Some(v):`. Compile with
+   the **self-host driver** (`./tests/fixtures/self_host_lowerer/driver <fix>.gg <libdir> --emit-c`),
+   `cc`/run → do the lookups find the keys, or fail (reproducing "unknown identifier"/empty)?
+2. **fn-with-params + local-enum-match fixture:** a function with several params used in the body,
+   and a `match localEnum: case Variant(name):` — compile with the self-host driver, run the
+   resulting binary on a small input → do params/bindings resolve, or hit `nl_contains`-false?
+   (This reproduces both "unknown identifier" and "variant not in enum" without any imports.)
+Whichever reproduces, that isolates the mis-compiled foundational fn (`nl_put`/`nl_contains`/`nl_get`
+at `lower.gg:185-194`, the param-prologue binding, or the `Dict[String,int]` `.put/.contains/.get`
+codegen). Trace stage-1's emitted C for that fn vs the GIR it should produce. Fix the DOMINANT root
+in CODEGEN (ONE root this cycle; the parent re-bootstraps to surface the next). The multi-file
+imported-enum fixture is the LEAST likely root — skip it unless (1)+(2) come back clean. Don't
+rewrite self-host source to dodge; don't reintroduce L1-L4 fixes' behavior.
 gg-check clean; `cargo build` + `cargo test --lib` (2 pre-existing should_panic-release fails OK);
 commit by file. Do NOT run the bootstrap/integration sweep (parent's job). Report: the dominant root
 (exact fn + why), the fix, the minimal fixture proving before/after, and the symptom classes you
