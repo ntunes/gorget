@@ -6133,15 +6133,20 @@ String resolve_payload_clone_fn(String tname, GirModule &gmod):
                     pass
         case None:
             pass
-    # §7 row 1 (2026-05-13): user-type fallback. `T__clone` is emitted
-    # by `populate_drop_metadata` in `lir_lower.gg` for every type
-    # registered as a resource AND not imported from another module
-    # (the imported-type skip there avoids duplicate definitions).
-    # We mirror that filter here so we never emit a call to a clone
-    # symbol that the lir_codegen pass would skip.
+    # §7 row 1 (2026-05-13; de-gated 2026-05-27): user-type fallback.
+    # `T__clone` is emitted by `populate_drop_metadata` in `lir_lower.gg`
+    # for EVERY type registered as a resource — the `__imported_type__`
+    # skip there was REMOVED in cluster (a) 2026-05-24 (lir_lower.gg:3562),
+    # because whole-program compilation emits all user types in one C file
+    # and double-definition is guarded by `fn_exists()`, not by suppression.
+    # We mirror that here: return `T__clone` for any registered resource
+    # user type, imported or not — the LIR layer always defines it. The
+    # old imported-type gate left Branch C-pre (lower.gg:805-814) skipping
+    # the deref+clone for imported types, so `Item item = m.items.get(i)
+    # .unwrap()` bound a BorrowAlias into m.items[i] → the meta-expansion
+    # recursive get-mutate-set aliased the slot → stage-2 double-free.
     if gmod.resource_types.contains(tname) and gmod.type_infos.contains(tname):
-        if not gmod.imported_fns.contains("__imported_type__" + tname):
-            return tname + "__clone"
+        return tname + "__clone"
     return ""
 
 # Emit a variant-payload read. `variant_name` + `field_idx` determines
