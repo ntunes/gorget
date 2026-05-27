@@ -341,29 +341,41 @@ fn test_var_decl() {
 }
 
 #[test]
-fn test_var_decl_with_it_binding() {
-    // Regression for Self-host snag #5: `Type it = expr` used to silently
-    // split into two statements (an expr stmt + an assignment to the `it`
-    // keyword) because `it` is the implicit-closure-parameter keyword.
-    // The downstream lowerer then emitted a unit-typed local with elided
-    // init, miscompiling the function. The parser now accepts `it` as a
-    // binding name in var-decl position.
-    let module = parse("void main():\n    int it = 5\n");
-    if let Item::Function(ref f) = module.items[0].node {
-        if let FunctionBody::Block(ref block) = f.body {
-            assert_eq!(block.stmts.len(), 1);
-            assert!(matches!(&block.stmts[0].node, Stmt::VarDecl { is_const: false, .. }));
-            if let Stmt::VarDecl { ref pattern, .. } = block.stmts[0].node {
-                assert!(matches!(&pattern.node, Pattern::Binding(name) if name == "it"));
-            } else {
-                panic!("Expected VarDecl");
-            }
-        } else {
-            panic!("Expected block body");
-        }
-    } else {
-        panic!("Expected function");
-    }
+fn test_var_decl_with_it_binding_rejected() {
+    // `it` is the implicit-closure-parameter keyword: every *read* of `it`
+    // parses to `Expr::It`, so a local named `it` would be unreadable.
+    // `int it = 5` used to be accepted (commit 089b8e48), producing a silent
+    // miscompile (`int it = 42; print(it)` printed garbage). The parser now
+    // rejects a keyword in binding-name position with a clear error.
+    let (_module, errors) = parse_with_errors("void main():\n    int it = 5\n");
+    assert!(!errors.is_empty(), "expected a parse error for `int it = 5`");
+    let rendered = errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("\n");
+    assert!(
+        rendered.contains("reserved keyword") && rendered.contains("it"),
+        "expected a 'reserved keyword' error mentioning `it`, got: {rendered}"
+    );
+
+    // `mutable` prefix variant is rejected the same way.
+    let (_module, errors) = parse_with_errors("void main():\n    mutable int it = 42\n");
+    assert!(!errors.is_empty(), "expected a parse error for `mutable int it = 42`");
+    let rendered = errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("\n");
+    assert!(
+        rendered.contains("reserved keyword") && rendered.contains("it"),
+        "expected a 'reserved keyword' error mentioning `it`, got: {rendered}"
+    );
+}
+
+#[test]
+fn test_type_path_followed_by_infix_keyword_not_rejected() {
+    // Regression guard for the `=`-immediately-after lookahead: a parsed
+    // type-path followed by an infix keyword (`as` cast here) is a valid
+    // expression statement and must NOT be mis-rejected as a keyword-as-name.
+    let (_module, errors) =
+        parse_with_errors("void main():\n    int x = 5\n    x as float\n");
+    assert!(
+        errors.is_empty(),
+        "expected no errors for `x as float`, got: {errors:?}"
+    );
 }
 
 #[test]

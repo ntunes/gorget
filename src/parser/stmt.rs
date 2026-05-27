@@ -5,6 +5,22 @@ use super::ast::*;
 use super::Parser;
 use crate::errors::ParseError;
 
+/// Outcome of the speculative var-decl name probe in `parse_decl_or_expr_stmt`.
+/// `Reserved` carries a keyword found in binding-name position (immediately
+/// before `=`) so the non-speculative caller can raise a clear diagnostic —
+/// `try_parse` can only signal failure via `None`, not return a `ParseError`.
+enum DeclName {
+    Name {
+        is_mutable: bool,
+        type_: Spanned<Type>,
+        name: Spanned<String>,
+    },
+    Reserved {
+        span: Span,
+        kw: Keyword,
+    },
+}
+
 fn make_var_decl(
     is_const: bool,
     is_mutable: bool,
@@ -618,7 +634,25 @@ impl Parser {
         let start = self.peek_span();
 
         // Speculatively try: [mutable] type [ownership] name =
-        if let Some((is_mutable, type_, name)) = self.try_parse(|p| {
+        //
+        // The binding name must be a plain identifier. A reserved keyword in
+        // this position (after a successfully-parsed type + optional ownership
+        // sigil) followed immediately by `=` is never a valid program — the
+        // only legal continuations are a binding name or an expression-tail
+        // operator (`.`, `(`, `[`, `as`, `and`, …). So `<type> [sigil] <kw> =`
+        // is unambiguously a misuse of a keyword as a variable name; we carry a
+        // typed `Reserved` signal out of the speculative closure (its position
+        // stays advanced on `Some`) and raise a clear error in the caller.
+        //
+        // This deliberately reverts commit 089b8e48, which special-cased the
+        // `it` keyword as an acceptable binding name. That acceptance bound a
+        // local named `it`, but every *read* of `it` parses to `Expr::It`
+        // (the implicit-closure parameter), so the binding was unreadable —
+        // `int it = 42; print(it)` printed garbage with only an unused-variable
+        // warning. Rejecting the declaration outright makes such programs a hard
+        // parse error, which is correct. Implicit-`it` closures are unaffected:
+        // they never go through this var-decl path.
+        match self.try_parse(|p| {
             let has_mutable_prefix = if p.check_keyword(Keyword::Mutable) {
                 p.advance();
                 true
@@ -646,35 +680,41 @@ impl Parser {
                 has_mutable_prefix
             };
 
-            // Accept either a plain identifier or the contextual keyword `it`
-            // as the binding name. Without the `it` branch, `Type it = expr`
-            // silently splits into two statements (an `Type` expression stmt
-            // followed by an `it = expr` assignment) because `it` is a
-            // keyword in expression position. The downstream lowerer then
-            // emits a unit-typed local with elided init — see Self-host
-            // snag #5. `it` as a binding name is unambiguous here (we've
-            // already consumed a type and expect `=`), so accept it. The
-            // implicit-closure-param meaning of `it` stays scoped to closure
-            // bodies via name resolution — any binding shadows it locally.
-            let name = match p.peek() {
-                Token::Identifier(_) => p.expect_identifier().ok()?,
-                Token::Keyword(Keyword::It) => {
-                    let span = p.peek_span();
-                    p.advance();
-                    Spanned::new("it".to_string(), span)
+            match p.peek() {
+                Token::Identifier(_) => {
+                    let name = p.expect_identifier().ok()?;
+                    p.match_token(&Token::Eq)
+                        .then(|| DeclName::Name { is_mutable, type_, name })
                 }
-                _ => return None,
-            };
-
-            p.match_token(&Token::Eq)
-                .then_some((is_mutable, type_, name))
+                // A keyword immediately followed by `=` is a keyword used as a
+                // variable name. The `peek_ahead(1) == Eq` guard is load-bearing:
+                // a type-path followed by an infix keyword (`x as float`, `a and
+                // b`, `v is Some(p)`, `k in d`) is a valid expression statement
+                // and must fall through to `parse_expr_or_assign_stmt` via `None`.
+                Token::Keyword(kw) if *p.peek_ahead(1) == Token::Eq => {
+                    let kw = *kw;
+                    let span = p.peek_span();
+                    Some(DeclName::Reserved { span, kw })
+                }
+                // Anything else (operator, `(`, `.`, `[`, a keyword NOT followed
+                // by `=`, …): not a var-decl. Fall through unchanged.
+                _ => None,
+            }
         }) {
-            let value = self.parse_expr()?;
-            self.consume_newline();
-            let pattern = Spanned::new(Pattern::Binding(name.node), name.span);
-            Ok(make_var_decl(false, is_mutable, SharedKind::None, type_, pattern, value, start))
-        } else {
-            self.parse_expr_or_assign_stmt()
+            Some(DeclName::Name { is_mutable, type_, name }) => {
+                let value = self.parse_expr()?;
+                self.consume_newline();
+                let pattern = Spanned::new(Pattern::Binding(name.node), name.span);
+                Ok(make_var_decl(false, is_mutable, SharedKind::None, type_, pattern, value, start))
+            }
+            Some(DeclName::Reserved { span, kw }) => Err(self.error_at(
+                span,
+                &format!(
+                    "`{}` is a reserved keyword and cannot be used as a variable name",
+                    kw.as_name()
+                ),
+            )),
+            None => self.parse_expr_or_assign_stmt(),
         }
     }
 
