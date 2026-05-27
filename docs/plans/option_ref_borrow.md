@@ -623,16 +623,27 @@ change made `vn` a pointer). NB the `lower.gg:215-219` "~58k params not in named
 STALE (git-dated 2026-04-24, a since-FIXED hash_fn=NULL Dict bug; commit chain
 `0e84a044`→fixed by `6e76b13c`/`d1a0d1d7`) — IGNORE it, it's a red herring.
 
-**FIX DIRECTION (at the writer):** when `==`/`!=` compares String operands and an operand is a
-`Ref`/pointer-to-`GorgetString` (`GtPtr(GorgetString)`, from `.get().unwrap()`), it must DEREF and
-route to `gorget_str_eq`, NOT pointer-compare. Two candidate sites (pick per "fix complexity = wrong
-layer"): (i) the str-eq routing `lir_codegen.gg:2925-2949` — recognize a pointer-to-`GorgetString`
-operand (`LT_PTR_TO_BASE + gs_sid`) as a string operand so its existing `*(Str*)` deref fires for
-BOTH-pointer cases; or (ii) the lowerer's `==` binop (`lower.gg:~4085`) — deref a `GtPtr(String)`
-operand to a value `String` before the compare. Prefer whichever is the single typed write site;
-ensure the operand's GIR type is `GtPtr(GorgetString)` (typed, not opaque `LT_PTR`) so the deref is
-sound. Verify driver-vs-s1bin GIR for the `==` goes from `cmp_eq i64 <ptr>,<ptr>` to a
-`gorget_str_eq` call.
+**FIX DIRECTION (corrected by brief-review pass 3 + orchestrator-verified) — fix at the LOWERER,
+mirroring Rust; the codegen str-eq block is a self-confessed band-aid.** The reference-grade root:
+`lower.gg`'s `==`/`!=` binop path has NO String routing at all — it routes to a user `Type__eq`
+overload if present, else falls to a bare `GICmp(I64_TYPE)` (`lower.gg:~4085`), a pointer/int
+compare. (The sibling `+` path right below, `~4088`, DOES route String to `gorget_str_cat` — the
+asymmetry is the bug.) Rust lowers String `==`/`!=` in the lowerer: `operators.rs:87-95` —
+`if is_string && (Eq|Neq): dst = call_extern("gorget_str_eq", [lhs, rhs], BOOL); if Neq: negate`.
+**FIX: add that exact branch to `lower.gg`'s `==`/`!=` path** (just before the `GICmp` fallthrough at
+`~4084`, modeled on the adjacent `+`→`gorget_str_cat` branch): detect String operands via
+`is_string_local(lhs,...) or is_string_local(rhs,...)` (the SAME predicate the `+` branch uses — and
+`is_string_local`/`local_type_name` already UNWRAP `GtPtr(inner)`→`"GorgetString"`, `lower.gg:~3037`,
+so a `Ref[String]` operand from `.get().unwrap()` is correctly detected); emit
+`GICallExtern(dst, "gorget_str_eq", [op_consume(lhs, CkCallArgBorrow), op_consume(rhs, CkCallArgBorrow)])`
+into a BOOL dst; for `!=` wrap in `GIUnOp(UNOP_NOT)`. `gorget_str_eq` takes the operands by pointer and
+compares CONTENT, so it works whether the operand is a `GorgetString` value or a `Ref`/`GtPtr(String)`.
+**Do NOT use "deref before compare"** (pass-3: `*(Str*)a == *(Str*)b` is a struct/pointer compare,
+NOT content equality — unsound). **Do NOT just patch the `lir_codegen.gg:2925-2972` band-aid** — that
+perpetuates a divergence Rust doesn't have and leaves `lower.gg` emitting a semantically-wrong bare
+GICmp for String `==` (CLAUDE.md "fix upstream / resolve once / no band-aid"). After the lowerer fix,
+the codegen band-aid becomes redundant for this case (leave it; a separate cleanup could retire it).
+Verify driver-vs-s1bin GIR for a String `==` both show a `gorget_str_eq` call (not `cmp_eq i64`).
 
 **SEPARATE root (a LATER cycle, do NOT conflate) — and it is FATAL:** OpCopy-on-resource (1236,
 `validate.gg:~147` `validate_resource_moves`) is an independent `op_consume`/`decide_*_consume` axis;
