@@ -222,14 +222,22 @@ void forward_dataflow(LirFunction &f, Dict[int, int] &val_to_slot, Vector[Vector
         if not in_states_present_out.get(bid).unwrap():
             continue
         Vector[int] in_state = in_states_out.get(bid).unwrap()
-        LirBlock blk = f.blocks.get(bid).unwrap()
-        Vector[int] out = compute_transfer(blk, &in_state, &val_to_slot)
+        # Pass the block as a BORROW into compute_transfer (read-only) and
+        # read `.term` through a borrow — NOT `LirBlock blk =
+        # f.blocks.get(bid).unwrap()`, which value-binds and deep-clones the
+        # ENTIRE block (its whole `insts` vector) on every worklist visit.
+        # In a forward dataflow that re-queues blocks until fixpoint, that
+        # clone fired O(visits × block-size) times and blew drop_elab to OOM
+        # (the residual of the lower_operand LirBlock-clone class). The read
+        # must borrow, not copy (CoW contract); mirrors Rust drop_elab.rs
+        # iterating `&func.blocks[bid]`.
+        Vector[int] out = compute_transfer(f.blocks.get(bid).unwrap(), &in_state, &val_to_slot)
         Vector[int] prev_out = out_states.get(bid).unwrap()
         if not states_equal(&out, &prev_out):
             out_states.set(bid, out)
             # Re-fetch the now-updated out for successor distribution.
             Vector[int] out_distr = out_states.get(bid).unwrap()
-            Vector[int] succs = term_successors(blk.term)
+            Vector[int] succs = term_successors(f.blocks.get(bid).unwrap().term)
             int si = 0
             while si < succs.len():
                 int succ = succs.get(si).unwrap()

@@ -721,15 +721,12 @@ String emit_box_allocators_from_lir(LirModule &m):
     int box_plen = box_prefix.len()
     int fi = 0
     while fi < m.functions.len():
-        LirFunction func = m.functions.get(fi).unwrap()
         int bi = 0
-        while bi < func.blocks.len():
-            LirBlock blk = func.blocks.get(bi).unwrap()
+        while bi < m.functions.get(fi).unwrap().blocks.len():
             int ii = 0
-            while ii < blk.insts.len():
-                LirInst inst = blk.insts.get(ii).unwrap()
+            while ii < m.functions.get(fi).unwrap().blocks.get(bi).unwrap().insts.len():
                 String inst_name = ""
-                match inst:
+                match m.functions.get(fi).unwrap().blocks.get(bi).unwrap().insts.get(ii).unwrap():
                     case ICallExtern(_, name, _, _, _):
                         inst_name = name
                     case ICall(_, fid, _):
@@ -833,14 +830,11 @@ Vector[StringLitEntry] collect_string_lits(LirModule &m):
     Vector[StringLitEntry] entries = []
     int fi = 0
     while fi < m.functions.len():
-        LirFunction func = m.functions.get(fi).unwrap()
         int bi = 0
-        while bi < func.blocks.len():
-            LirBlock blk = func.blocks.get(bi).unwrap()
+        while bi < m.functions.get(fi).unwrap().blocks.len():
             int ii = 0
-            while ii < blk.insts.len():
-                LirInst inst = blk.insts.get(ii).unwrap()
-                match inst:
+            while ii < m.functions.get(fi).unwrap().blocks.get(bi).unwrap().insts.len():
+                match m.functions.get(fi).unwrap().blocks.get(bi).unwrap().insts.get(ii).unwrap():
                     case IStrLit(_, value):
                         if not seen.contains(value):
                             int idx = entries.len()
@@ -1017,17 +1011,23 @@ Vector[bool] compute_reachable_fns(LirModule &m):
         wi += 1
         if cur < 0 or cur >= n:
             continue
-        LirFunction cur_func = m.functions.get(cur).unwrap()
+        # Read the function/block/inst through BORROWS — do NOT value-bind
+        # `LirBlock blk = …` / `LirInst inst = …`, which deep-clone the whole
+        # block (its insts vector, each inst's Strings) on every iteration of
+        # this transitive-closure scan. This is a read-only walk (we only
+        # inspect call targets), so the read must borrow, not copy (CoW
+        # contract). The block-clone here was the next OOM consumer once the
+        # lower_operand + drop_elab clones were removed (LirBlock__clone in
+        # compute_reachable_fns, generate_c phase). Mirrors Rust DCE
+        # (src/lir/optimize.rs) iterating `&func.blocks[..].insts[..]`.
         int bi = 0
-        while bi < cur_func.blocks.len():
-            LirBlock blk = cur_func.blocks.get(bi).unwrap()
+        while bi < m.functions.get(cur).unwrap().blocks.len():
             int ii = 0
-            while ii < blk.insts.len():
-                LirInst inst = blk.insts.get(ii).unwrap()
+            while ii < m.functions.get(cur).unwrap().blocks.get(bi).unwrap().insts.len():
                 int target_fid = -1
                 String target_name = ""
                 String target_orig = ""
-                match inst:
+                match m.functions.get(cur).unwrap().blocks.get(bi).unwrap().insts.get(ii).unwrap():
                     case ICall(_, callee_fid, _):
                         target_fid = callee_fid
                     case ICallExtern(_, callee_name, _, callee_orig, _):
@@ -1216,16 +1216,19 @@ Vector[String] collect_hashable_key_types(LirModule &m):
     Vector[String] keys = []
     int fi = 0
     while fi < m.functions.len():
-        LirFunction f = m.functions.get(fi).unwrap()
+        # Read-only scan for Dict/Set ctors — read blocks/insts through
+        # BORROWS, not value-binds that deep-clone each block (its insts +
+        # Strings) every iteration. Same CoW-borrow discipline as
+        # compute_reachable_fns; the LirBlock clone here was the next OOM
+        # consumer in generate_c once drop_elab + compute_reachable_fns were
+        # fixed.
         int bi = 0
-        while bi < f.blocks.len():
-            LirBlock b = f.blocks.get(bi).unwrap()
+        while bi < m.functions.get(fi).unwrap().blocks.len():
             int ii = 0
-            while ii < b.insts.len():
-                LirInst inst = b.insts.get(ii).unwrap()
+            while ii < m.functions.get(fi).unwrap().blocks.get(bi).unwrap().insts.len():
                 String mapped_name = ""
                 String orig_name = ""
-                match inst:
+                match m.functions.get(fi).unwrap().blocks.get(bi).unwrap().insts.get(ii).unwrap():
                     case ICallExtern(_, mname, _, oname, _):
                         mapped_name = mname
                         orig_name = oname
@@ -1416,35 +1419,34 @@ String emit_func_forward_decls(LirModule &m, Vector[String] &sn):
     StrBuf buf = sb_new()
     int i = 0
     while i < m.functions.len():
-        LirFunction func = m.functions.get(i).unwrap()
         if not reachable_fwd.get(i).unwrap():
             i += 1
             continue
-        if func.name == "main":
+        if m.functions.get(i).unwrap().name == "main":
             sb_push(&buf, "int main(int argc, char** argv);\n")
             i += 1
             continue
-        String ret = c_type_name(func.return_type, &sn)
+        String ret = c_type_name(m.functions.get(i).unwrap().return_type, &sn)
         sb_push(&buf, ret)
         sb_push(&buf, " ")
-        sb_push(&buf, c_func_name(func.name))
+        sb_push(&buf, c_func_name(m.functions.get(i).unwrap().name))
         sb_push(&buf, "(")
-        if func.params.len() == 0:
+        if m.functions.get(i).unwrap().params.len() == 0:
             sb_push(&buf, "void")
         else:
             int pi = 0
-            while pi < func.params.len():
+            while pi < m.functions.get(i).unwrap().params.len():
                 if pi > 0:
                     sb_push(&buf, ", ")
-                int pty = func.params.get(pi).unwrap()
+                int pty = m.functions.get(i).unwrap().params.get(pi).unwrap()
                 String ty_str = ""
                 if pty == LT_VOID:
                     ty_str = "void*"
                 else:
                     ty_str = c_type_name(pty, &sn)
                 # const params
-                if pi < func.const_params.len():
-                    bool is_const = func.const_params.get(pi).unwrap()
+                if pi < m.functions.get(i).unwrap().const_params.len():
+                    bool is_const = m.functions.get(i).unwrap().const_params.get(pi).unwrap()
                     if is_const and lir_is_ptr(pty):
                         ty_str = "const " + ty_str
                 sb_push(&buf, ty_str)
@@ -1463,14 +1465,11 @@ Dict[int, bool] collect_func_addr_targets(LirModule &m):
     Dict[int, bool] targets = {}
     int fi = 0
     while fi < m.functions.len():
-        LirFunction func = m.functions.get(fi).unwrap()
         int bi = 0
-        while bi < func.blocks.len():
-            LirBlock blk = func.blocks.get(bi).unwrap()
+        while bi < m.functions.get(fi).unwrap().blocks.len():
             int ii = 0
-            while ii < blk.insts.len():
-                LirInst inst = blk.insts.get(ii).unwrap()
-                match inst:
+            while ii < m.functions.get(fi).unwrap().blocks.get(bi).unwrap().insts.len():
+                match m.functions.get(fi).unwrap().blocks.get(bi).unwrap().insts.get(ii).unwrap():
                     case IFuncAddr(_, fid):
                         targets.put(fid, true)
                     else:
@@ -1487,14 +1486,13 @@ String emit_adapter_functions(LirModule &m, Vector[String] &sn, Dict[int, bool] 
         if not targets.contains(fi):
             fi += 1
             continue
-        LirFunction target = m.functions.get(fi).unwrap()
-        String ret_c = c_type_name(target.return_type, &sn)
-        String tname = c_func_name(target.name)
+        String ret_c = c_type_name(m.functions.get(fi).unwrap().return_type, &sn)
+        String tname = c_func_name(m.functions.get(fi).unwrap().name)
         String adapt_name = "__adapt_" + tname
         out = out + ret_c + " " + adapt_name + "(void* __env"
         int pi = 0
-        while pi < target.params.len():
-            int pty = target.params.get(pi).unwrap()
+        while pi < m.functions.get(fi).unwrap().params.len():
+            int pty = m.functions.get(fi).unwrap().params.get(pi).unwrap()
             String ty_str = ""
             if pty == LT_VOID:
                 ty_str = "void*"
@@ -1503,11 +1501,11 @@ String emit_adapter_functions(LirModule &m, Vector[String] &sn, Dict[int, bool] 
             out = out + ", " + ty_str + " __p" + int_to_str(pi)
             pi += 1
         out = out + ") { "
-        if target.return_type != LT_VOID:
+        if m.functions.get(fi).unwrap().return_type != LT_VOID:
             out = out + "return "
         out = out + tname + "("
         pi = 0
-        while pi < target.params.len():
+        while pi < m.functions.get(fi).unwrap().params.len():
             if pi > 0:
                 out = out + ", "
             out = out + "__p" + int_to_str(pi)
@@ -2197,12 +2195,11 @@ int infer_inst_type_with_ret(LirInst &inst, LirModule &m, Dict[int, int] &val_ty
             return LT_PTR
         case ICall(dst, fid, args):
             if dst >= 0 and fid >= 0 and fid < m.functions.len():
-                LirFunction callee = m.functions.get(fid).unwrap()
                 # Prelude variants (Some/None/Ok/Error) / Box constructors —
-                # callee.return_type is a generic placeholder. Compute the
+                # m.functions.get(fid).unwrap().return_type is a generic placeholder. Compute the
                 # actual parametrized type from the first argument's type.
                 if args.len() > 0:
-                    String cn = callee.name
+                    String cn = m.functions.get(fid).unwrap().name
                     if cn == "Some" or cn == "None" or cn == "Ok" or cn == "Error":
                         int arg0 = args.get(0).unwrap()
                         int arg_ty = LT_VOID
@@ -2231,7 +2228,7 @@ int infer_inst_type_with_ret(LirInst &inst, LirModule &m, Dict[int, int] &val_ty
                                 int psid = find_struct_type(parent_nm, &m)
                                 if psid >= LT_STRUCT_BASE:
                                     return psid
-                return callee.return_type
+                return m.functions.get(fid).unwrap().return_type
             return LT_VOID
         case ICallExtern(dst, name, args_ce, _, _):
             if dst >= 0:
@@ -2408,9 +2405,8 @@ int infer_inst_type_with_ret(LirInst &inst, LirModule &m, Dict[int, int] &val_ty
                 # Check user functions (ICall redirected through CallExtern).
                 int fi = 0
                 while fi < m.functions.len():
-                    LirFunction func = m.functions.get(fi).unwrap()
-                    if func.name == name:
-                        return func.return_type
+                    if m.functions.get(fi).unwrap().name == name:
+                        return m.functions.get(fi).unwrap().return_type
                     fi += 1
                 # Default: I64 (matches Rust backend fallback).
                 return LT_I64
@@ -2433,21 +2429,19 @@ Dict[int, int] compute_val_types(LirFunction &func, LirModule &m):
     Dict[int, int] types = {}
     int bi = 0
     while bi < func.blocks.len():
-        LirBlock blk = func.blocks.get(bi).unwrap()
         # Block params
         int pi = 0
-        while pi < blk.params.len():
-            BlockParam bp = blk.params.get(pi).unwrap()
+        while pi < func.blocks.get(bi).unwrap().params.len():
+            BlockParam bp = func.blocks.get(bi).unwrap().params.get(pi).unwrap()
             types.put(bp.value_id, bp.ty)
             pi += 1
         # Instructions — pass the function's return type so Some/Ok/Error
         # in `return VariantCtor(x)` positions can resolve the parent.
         int ii = 0
-        while ii < blk.insts.len():
-            LirInst inst = blk.insts.get(ii).unwrap()
-            int dst = inst_dst(&inst)
+        while ii < func.blocks.get(bi).unwrap().insts.len():
+            int dst = inst_dst(&func.blocks.get(bi).unwrap().insts.get(ii).unwrap())
             if dst >= 0:
-                int ty = infer_inst_type_with_ret(&inst, &m, &types, func.return_type)
+                int ty = infer_inst_type_with_ret(&func.blocks.get(bi).unwrap().insts.get(ii).unwrap(), &m, &types, func.return_type)
                 types.put(dst, ty)
             ii += 1
         bi += 1
@@ -2511,12 +2505,10 @@ void apply_callextern_slotstore_override(LirFunction &func, LirModule &m, Dict[i
     int str_sid = gorget_string_struct_id(&m)
     int bi = 0
     while bi < func.blocks.len():
-        LirBlock blk = func.blocks.get(bi).unwrap()
         int ii = 0
-        while ii + 1 < blk.insts.len():
-            LirInst inst = blk.insts.get(ii).unwrap()
-            LirInst next = blk.insts.get(ii + 1).unwrap()
-            match inst:
+        while ii + 1 < func.blocks.get(bi).unwrap().insts.len():
+            LirInst next = func.blocks.get(bi).unwrap().insts.get(ii + 1).unwrap()
+            match func.blocks.get(bi).unwrap().insts.get(ii).unwrap():
                 case ICallExtern(d, _, _, _, _):
                     if d >= 0:
                         match next:
@@ -2832,8 +2824,7 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Vector[String] 
 
         case IFuncAddr(dst, fid):
             if fid >= 0 and fid < m.functions.len():
-                LirFunction target = m.functions.get(fid).unwrap()
-                String adapt = "__adapt_" + c_func_name(target.name)
+                String adapt = "__adapt_" + c_func_name(m.functions.get(fid).unwrap().name)
                 return "{ static void* __fa_" + int_to_str(dst) + "[] = { (void*)" + adapt + ", NULL }; " + v(dst) + " = (void*)__fa_" + int_to_str(dst) + "; }"
             return v(dst) + " = NULL;"
 
@@ -3111,28 +3102,27 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Vector[String] 
         # ── Calls ──
         case ICall(dst, fid, args):
             if fid >= 0 and fid < m.functions.len():
-                LirFunction callee = m.functions.get(fid).unwrap()
                 # If this is actually an enum variant constructor, route
                 # through emit_call_extern which handles inline struct init.
-                if m.enum_variant_parent.contains(callee.name):
-                    return emit_call_extern_with(dst, callee.name, &args, &sn, &val_types, &m, func.return_type)
+                if m.enum_variant_parent.contains(m.functions.get(fid).unwrap().name):
+                    return emit_call_extern_with(dst, m.functions.get(fid).unwrap().name, &args, &sn, &val_types, &m, func.return_type)
                 # Box(x) / Box__TYPE(x) also routes through emit_call_extern.
                 # Phase A — Box type detected via type_runtime_map "Box" category.
-                bool is_box_callee = callee.name == "Box"
-                if not is_box_callee and m.type_runtime_map.contains(callee.name):
-                    if m.type_runtime_map.get(callee.name).unwrap_or("") == "Box":
+                bool is_box_callee = m.functions.get(fid).unwrap().name == "Box"
+                if not is_box_callee and m.type_runtime_map.contains(m.functions.get(fid).unwrap().name):
+                    if m.type_runtime_map.get(m.functions.get(fid).unwrap().name).unwrap_or("") == "Box":
                         is_box_callee = true
                 if is_box_callee:
-                    return emit_call_extern_with(dst, callee.name, &args, &sn, &val_types, &m, func.return_type)
+                    return emit_call_extern_with(dst, m.functions.get(fid).unwrap().name, &args, &sn, &val_types, &m, func.return_type)
                 # Prelude Option/Result variant constructors — pulled from
                 # user-code even if unrecognized in type_infos. The codegen
                 # uses dst type to resolve parametrization.
-                if callee.name == "Some" or callee.name == "None" or callee.name == "Ok" or callee.name == "Error":
-                    return emit_call_extern_with(dst, callee.name, &args, &sn, &val_types, &m, func.return_type)
-                String fname = c_func_name(callee.name)
+                if m.functions.get(fid).unwrap().name == "Some" or m.functions.get(fid).unwrap().name == "None" or m.functions.get(fid).unwrap().name == "Ok" or m.functions.get(fid).unwrap().name == "Error":
+                    return emit_call_extern_with(dst, m.functions.get(fid).unwrap().name, &args, &sn, &val_types, &m, func.return_type)
+                String fname = c_func_name(m.functions.get(fid).unwrap().name)
                 int gs_ty = find_struct_type("GorgetString", &m)
                 String out = ""
-                if dst >= 0 and callee.return_type != LT_VOID:
+                if dst >= 0 and m.functions.get(fid).unwrap().return_type != LT_VOID:
                     out = v(dst) + " = "
                 out = out + fname + "("
                 int ai = 0
@@ -3147,8 +3137,8 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Vector[String] 
                     # Scalar/ptr-to-aggregate coercion: self-host often loses
                     # type info and passes I64 placeholders or void* to
                     # aggregate-typed params. Emit cast so C compile succeeds.
-                    if ai < callee.params.len():
-                        int pty = callee.params.get(ai).unwrap()
+                    if ai < m.functions.get(fid).unwrap().params.len():
+                        int pty = m.functions.get(fid).unwrap().params.get(ai).unwrap()
                         if lir_is_aggregate(pty) and not lir_is_aggregate(arg_ty):
                             String pty_name = c_type_name(pty, &sn)
                             if is_ptr:
@@ -3716,7 +3706,39 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
         if dst >= 0:
             String arr_tyname = name.slice(25, name.len())
             String arr_c_tname = resolve_sizeof_c_type(arr_tyname, &m, &sn)
-            return v(dst) + " = gorget_array_new(sizeof(" + arr_c_tname + "));"
+            String sized_out = v(dst) + " = gorget_array_new(sizeof(" + arr_c_tname + "));"
+            # Wire element drop+clone ONLY when the element is itself a NESTED
+            # COLLECTION (Vector/Dict/Set whose runtime is GorgetArray/Map/Set).
+            # Typed-literal allocations (`Vector[Vector[int]] x = []`) lower to
+            # this magic `__gorget_array_new_sized_T` name and otherwise leave
+            # `elem_drop = NULL` — so a `.set()` that displaces an inner Vector,
+            # and the outer Vector's own drop, LEAK the inner buffer. In
+            # drop_elab's forward-dataflow worklist (re-sets `Vector[Vector
+            # [int]]` state per fixpoint re-visit across ~600 functions) this
+            # leaked to ~14 GB → OOM.
+            #
+            # SCOPE: nested-collection elements ONLY. We deliberately do NOT
+            # wire String / user-struct elements here: the self-host lacks the
+            # Rust frontend's `index_borrow_sources` clone-on-mutation
+            # detection, so the get-mutate-set idiom (`t = coll.get(i);
+            # t.field.push(x); coll.set(i,t)` in traits.gg) treats a String/
+            # struct element binding as owned and re-sets it — wiring its
+            # elem_drop turns that into a use-after-free / double-free
+            # (verified: a global wiring crashed in compute_reachable_fns,
+            # freeing a still-aliased LirInst String). Nested COLLECTIONS aren't
+            # used in that mutate-in-place idiom (they're rebuilt-and-set as
+            # whole vectors), so freeing the displaced inner collection is safe.
+            String sized_runtime = ""
+            if m.type_runtime_map.contains(arr_tyname):
+                sized_runtime = m.type_runtime_map.get(arr_tyname).unwrap_or("")
+            bool sized_is_nested_coll = (sized_runtime == "GorgetArray" or sized_runtime == "GorgetMap" or sized_runtime == "GorgetSet")
+            if sized_is_nested_coll:
+                String sized_df = lc_collection_drop_fn(arr_tyname, &m)
+                String sized_cf = lc_collection_clone_fn(arr_tyname, &m)
+                if sized_df.len() > 0 and sized_cf.len() > 0:
+                    sized_out = sized_out + " " + v(dst) + ".elem_drop = (__gorget_drop_fn)" + sized_df + ";"
+                    sized_out = sized_out + " " + v(dst) + ".elem_clone = (__gorget_drop_fn)" + sized_cf + ";"
+            return sized_out
         return ";"
     if name.starts_with("__gorget_dict_new_sized_"):
         if dst >= 0:
@@ -3848,9 +3870,8 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
         if not returns_void:
             int fi = 0
             while fi < m.functions.len():
-                LirFunction func = m.functions.get(fi).unwrap()
-                if func.name == name:
-                    if func.return_type == LT_VOID:
+                if m.functions.get(fi).unwrap().name == name:
+                    if m.functions.get(fi).unwrap().return_type == LT_VOID:
                         returns_void = true
                     break
                 fi += 1
@@ -4170,9 +4191,8 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
                 # Scalar placeholder (lossy lowering) at Str position — substitute empty Str.
                 out = out + "((Str){0})"
         elif callee_idx >= 0:
-            LirFunction callee_fn = m.functions.get(callee_idx).unwrap()
-            if ai < callee_fn.params.len():
-                int pty = callee_fn.params.get(ai).unwrap()
+            if ai < m.functions.get(callee_idx).unwrap().params.len():
+                int pty = m.functions.get(callee_idx).unwrap().params.get(ai).unwrap()
                 if lir_is_aggregate(pty) and not lir_is_aggregate(arg_ty):
                     String pty_name = c_type_name(pty, &sn)
                     if is_ptr:
@@ -4392,17 +4412,15 @@ String emit_function(LirFunction &func, LirModule &m, Vector[String] &sn, Dict[S
     int max_val = func.next_value
     int bi = 0
     while bi < func.blocks.len():
-        LirBlock blk = func.blocks.get(bi).unwrap()
         int pi = 0
-        while pi < blk.params.len():
-            BlockParam bp = blk.params.get(pi).unwrap()
+        while pi < func.blocks.get(bi).unwrap().params.len():
+            BlockParam bp = func.blocks.get(bi).unwrap().params.get(pi).unwrap()
             if bp.value_id >= max_val:
                 max_val = bp.value_id + 1
             pi += 1
         int ii = 0
-        while ii < blk.insts.len():
-            LirInst inst = blk.insts.get(ii).unwrap()
-            int dst = inst_dst(&inst)
+        while ii < func.blocks.get(bi).unwrap().insts.len():
+            int dst = inst_dst(&func.blocks.get(bi).unwrap().insts.get(ii).unwrap())
             if dst >= max_val:
                 max_val = dst + 1
             ii += 1
@@ -4428,10 +4446,9 @@ String emit_function(LirFunction &func, LirModule &m, Vector[String] &sn, Dict[S
     # Block parameter move variables
     bi = 0
     while bi < func.blocks.len():
-        LirBlock blk = func.blocks.get(bi).unwrap()
         int pi = 0
-        while pi < blk.params.len():
-            BlockParam bp = blk.params.get(pi).unwrap()
+        while pi < func.blocks.get(bi).unwrap().params.len():
+            BlockParam bp = func.blocks.get(bi).unwrap().params.get(pi).unwrap()
             String ty_str = c_type_name(bp.ty, &sn)
             sb_push(&buf, "    ")
             sb_push(&buf, ty_str)
@@ -4445,11 +4462,9 @@ String emit_function(LirFunction &func, LirModule &m, Vector[String] &sn, Dict[S
     # dst so the &__at<dst> address stays valid for the rest of the function.
     bi = 0
     while bi < func.blocks.len():
-        LirBlock blk = func.blocks.get(bi).unwrap()
         int ii = 0
-        while ii < blk.insts.len():
-            LirInst inst = blk.insts.get(ii).unwrap()
-            match inst:
+        while ii < func.blocks.get(bi).unwrap().insts.len():
+            match func.blocks.get(bi).unwrap().insts.get(ii).unwrap():
                 case IAddressOf(dst, _, ty):
                     String ty_str = c_type_name(ty, &sn)
                     if ty_str == "void":
@@ -4473,34 +4488,39 @@ String emit_function(LirFunction &func, LirModule &m, Vector[String] &sn, Dict[S
     # Blocks
     bi = 0
     while bi < func.blocks.len():
-        LirBlock blk = func.blocks.get(bi).unwrap()
+        # Read each block/param/inst/term through a BORROW — do NOT value-bind
+        # `LirBlock blk = …` / `LirInst inst = …` / `BlockParam bp = …`, which
+        # deep-clone the block (its whole insts vector + Strings) on every
+        # block of every emitted function. This is the main per-block C
+        # emitter (read-only — it only produces strings), so the reads must
+        # borrow, not copy (CoW contract). These leaked LirBlock/LirInst
+        # clones were the dominant generate_c OOM consumer; mirrors Rust
+        # c_lir iterating `&func.blocks[..]` to emit.
         sb_push(&buf, "__bb")
-        sb_push(&buf, int_to_str(blk.id))
+        sb_push(&buf, int_to_str(func.blocks.get(bi).unwrap().id))
         sb_push(&buf, ":\n")
 
         # Move block params from temporaries
         int pi = 0
-        while pi < blk.params.len():
-            BlockParam bp = blk.params.get(pi).unwrap()
+        while pi < func.blocks.get(bi).unwrap().params.len():
             sb_push(&buf, "    __v")
-            sb_push(&buf, int_to_str(bp.value_id))
+            sb_push(&buf, int_to_str(func.blocks.get(bi).unwrap().params.get(pi).unwrap().value_id))
             sb_push(&buf, " = __bp")
-            sb_push(&buf, int_to_str(bp.value_id))
+            sb_push(&buf, int_to_str(func.blocks.get(bi).unwrap().params.get(pi).unwrap().value_id))
             sb_push(&buf, ";\n")
             pi += 1
 
         # Instructions
         int ii = 0
-        while ii < blk.insts.len():
-            LirInst inst = blk.insts.get(ii).unwrap()
-            String code = emit_inst(&inst, &m, &func, &sn, &val_types, &slit_map)
+        while ii < func.blocks.get(bi).unwrap().insts.len():
+            String code = emit_inst(&func.blocks.get(bi).unwrap().insts.get(ii).unwrap(), &m, &func, &sn, &val_types, &slit_map)
             sb_push(&buf, "    ")
             sb_push(&buf, code)
             sb_push(&buf, "\n")
             ii += 1
 
         # Terminator
-        String tcode = emit_term(&blk.term, &func, &sn, &val_types)
+        String tcode = emit_term(&func.blocks.get(bi).unwrap().term, &func, &sn, &val_types)
         sb_push(&buf, "    ")
         sb_push(&buf, tcode)
         sb_push(&buf, "\n")
@@ -4574,8 +4594,12 @@ String find_c_name(String type_name, LirModule &m, Vector[String] &sn):
 bool fn_exists(String name, LirModule &m):
     int i = 0
     while i < m.functions.len():
-        LirFunction f = m.functions.get(i).unwrap()
-        if f.name == name:
+        # Read `.name` through a BORROW — `LirFunction f =
+        # m.functions.get(i).unwrap()` value-binds and deep-clones the WHOLE
+        # function (all blocks/insts/Strings) just to compare its name.
+        # fn_exists runs per drop/clone forward-decl candidate × all
+        # functions, so the clone was a generate_c OOM consumer.
+        if m.functions.get(i).unwrap().name == name:
             return true
         i += 1
     return false
@@ -5190,8 +5214,10 @@ String generate_c(LirModule &m):
         if not reachable_body.get(fi).unwrap():
             fi += 1
             continue
-        LirFunction func = m.functions.get(fi).unwrap()
-        sb_push(&body_buf, emit_function(&func, &m, &sn, &slit_map))
+        # Pass the function as a BORROW to emit_function — `LirFunction func
+        # = m.functions.get(fi).unwrap()` value-binds and deep-clones the
+        # whole function per emitted definition (a generate_c clone consumer).
+        sb_push(&body_buf, emit_function(&m.functions.get(fi).unwrap(), &m, &sn, &slit_map))
         sb_push(&body_buf, "\n")
         fi += 1
     body = body_buf.s
