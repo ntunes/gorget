@@ -1,6 +1,52 @@
 # Drop Emission — Self-Host Plan (unified)
 
-> **LATEST (2026-05-27 pm/3) — parse_int `Error(Empty())` return SIGSEGV FIXED; next fixed_point blocker is `parse_dot_expr`.**
+> **LATEST (2026-05-27 pm/4) — `parse_dot_expr` NULL `!`-move-arg SIGSEGV FIXED + the `EFieldAccess(Box(lhs),…)` NULL-box that it unmasked; next fixed_point blocker is now DEEP in `lower_module` (empty-name ECall → NULL Dict key in `lower_call`).**
+> Three self-host lowering fidelity gaps fixed (all case (a)/(b) — the Rust-gg DRIVER tolerates them
+> via `run_ssa` copy-prop / register-resident SSA values; the self-host `lower_gir_to_lir` has no such
+> cleanup, so s1bin emits the literal bad store). The stage-2 binary now runs PAST the entire frontend
+> (lex/parse/resolve/typecheck) and crashes much later, inside `lower_module → lower_function →
+> lower_stmt → lower_expr → lower_call`. All three fixes are in `lir_lower.gg` + `lir_codegen.gg` (NO
+> `lower.gg` GIR-type change — an attempted GIR-type fix for the box rippled into the driver's own
+> struct-ctor routing and was reverted in favour of the LIR-slot-level retype).
+>
+> **Fix 1 — GIAssign Ptr-dst ← value-src rebind (`lir_lower.gg` GIAssign handler).** `parse_expr_bp_with_lhs`'s
+> loop `lhs = self.parse_dot_expr(lhs)` (parser.gg:1584) — `lhs` is a `!`-param (Ptr-typed loop var),
+> the result is a by-value SpannedExpr. GIR is `_3 = move _10` (canonical, identical to the driver's).
+> The self-host GIAssign handler only special-cased `OpBorrow` for the Ptr-dst ← value-src rebind;
+> `OpMove`/`OpCopy` fell through to a value-load + ISlotStore into a pointer slot → lir_codegen's
+> "aggregate-into-pointer → NULL" give-up → `lhs` slot NULLed → next loop iteration passed NULL as the
+> `!`-arg → SIGSEGV at `parse_dot_expr`'s `lhs.span`. Fix: extend the Ptr-dst rebind (ISlotAddr +
+> ISlotStore = `lhs_ptr = &result`, mirroring the driver's `__bp972 = &__v22` back-edge phi) to
+> OpMove/OpCopy of value-typed sources, not just OpBorrow. (OpClone stays on its materialise path.)
+>
+> **Fix 2 — `Box(x)` result slot retype (`lir_lower.gg` `emit_box_alloc`).** The prelude `Box(x)` ctor
+> is absent from fn_sigs/type_infos, so `lower.gg` defaults its GIR result local to `i64` → a SCALAR
+> slot (`_73: i64`, a KNOWN gap the old Some-typing comment flagged). IBoxAlloc produces a `Box__<inner>`
+> (pointer-represented, `typedef void* Box__T`) value; storing it into the scalar slot hit lir_codegen's
+> "aggregate-into-scalar → 0" give-up → box NULLed. Surfaced once Fix 1 let `parse_dot_expr` actually
+> RUN: it returned `SpannedExpr(EFieldAccess(Box(lhs), name), …)` with a NULL boxed base → deref SIGSEGV
+> in `Expr__clone`. Fix: in the shared `emit_box_alloc` helper (both GICall + GICallExtern Box sites),
+> retype the result slot to its `Box__<inner>` struct type (looked up in `sr`) so the slot matches
+> IBoxAlloc's result type — done at the LIR slot level so the GIR-level struct-ctor routing is untouched.
+>
+> **Fix 3 — `lir_type_is_box` ISlotStore guard (`lir_codegen.gg`).** Defensive companion to Fix 2: a
+> Box-typed VALUE (pointer-represented but LIR-classified aggregate) stored into a pointer slot is a
+> plain pointer copy, not the "aggregate-into-pointer → NULL" give-up. Reads the typed `type_runtime_map`
+> registry (== "Box"), not a name match.
+>
+> **`self_host_bootstrap` STAYS GREEN; `lowerer_comparison` GREEN; `cargo test --lib` 1060/2-pre-existing-fail.**
+> **`self_host_bootstrap_fixed_point` STILL FAILS** — now at a NEW, much deeper pre-existing blocker:
+> the stage-2 binary SIGSEGVs in `lower___lower_call` at `gmod.call_redirects.contains(call_name)`
+> (`lower.gg:5469`) with `call_name`/`fname` an EMPTY String (`{data="", cap=0, len=0}`) → NULL key
+> into `__gorget_str_key_hash`. I.e. some ECall callee resolved to `""` and the empty-String borrow
+> round-trips to a NULL Dict key — a separate self-host String-view/empty-name lowering gap, unrelated
+> to the move-arg / Box fixes. See TODO.md "NEXT BLOCKER #3" + DONE.md (2026-05-27) for the repro. ← PICK
+> UP at the empty-name ECall → NULL Dict-key crash in `lower_call`.
+>
+> ---
+> (Prior status — parse_int fix, retained for history:)
+
+> **(prior) LATEST (2026-05-27 pm/3) — parse_int `Error(Empty())` return SIGSEGV FIXED; next fixed_point blocker is `parse_dot_expr`.**
 > The fixed_point stage-2-binary crash in `std.conv.parse_int`'s `return Error(ParseError.Empty())`
 > (memcpy-from-NULL) is **resolved**. Root was a self-host `lower.gg` type bug (case (a)): a `return`'d
 > prelude-variant constructor (`Ok`/`Error`/`Some`/`None`) was typed with the bogus standalone variant

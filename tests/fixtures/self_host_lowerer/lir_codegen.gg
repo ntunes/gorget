@@ -696,6 +696,28 @@ bool is_std_header_fn(String name):
 # below only finds box types from explicit `Box.new` sites, so a box field
 # whose value never arose from a `Box__inner(...)` call (e.g. parsed
 # Box[SpannedPattern]) would otherwise link-fail.
+# True iff the LIR type-id names a `Box__<inner>` struct. Box types are
+# registered as structs (>= LT_STRUCT_BASE) so `Some(Box(x))` resolves to
+# `Option__Box__T` and the deep-clone codegen finds the inner allocator —
+# but in C they are `typedef void* Box__<inner>`, i.e. pointer-represented.
+# `lir_is_aggregate` (>= LT_STRUCT_BASE) therefore mis-classifies a Box VALUE
+# as an inline aggregate; this predicate (reading the typed `type_runtime_map`
+# registry, not a name match) lets the store/coercion paths treat a Box value
+# as the pointer it actually is. Without it, IBoxAlloc's `Box__T`-typed result
+# stored into an `LT_PTR` slot hit the "aggregate-into-pointer → NULL" give-up
+# branch, NULLing the box (the parse_dot_expr `EFieldAccess(Box(lhs), ...)`
+# crash: the boxed base came out NULL → deref SIGSEGV in `Expr__clone`).
+bool lir_type_is_box(int ty, LirModule &m):
+    if ty < LT_STRUCT_BASE:
+        return false
+    int sid = ty - LT_STRUCT_BASE
+    if sid < 0 or sid >= m.structs.len():
+        return false
+    String nm = m.structs.get(sid).unwrap().name
+    if not m.type_runtime_map.contains(nm):
+        return false
+    return m.type_runtime_map.get(nm).unwrap_or("") == "Box"
+
 String box_alloc_for_field_type(String ftn, Vector[String] &seen, String emit_prefix, LirModule &m):
     bool is_box = false
     if m.type_runtime_map.contains(ftn):
@@ -2768,6 +2790,16 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Vector[String] 
                         if slot_sdef_ms.enum_kind == EK_OPTION:
                             return s(slot) + " = (" + ty_name + "){.tag = 1};"
                     return s(slot) + " = (" + ty_name + "){0};"
+                return s(slot) + " = " + v(value) + ";"
+            # Box value (typedef void*) into a pointer slot: a Box is
+            # pointer-represented even though its LIR type-id classifies as
+            # aggregate (>= LT_STRUCT_BASE). This is a plain pointer copy, NOT
+            # the lost-type give-up below — without this guard the IBoxAlloc
+            # result (`Box__T`-typed) stored into the box-result `LT_PTR` slot
+            # NULLed the box (parse_dot_expr's `EFieldAccess(Box(lhs), ...)`
+            # crash). Mirrors the driver's SSA, which keeps the box value live
+            # in a register and never round-trips it through a typed slot.
+            if (slot_ty == LT_PTR or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE)) and lir_type_is_box(vty, &m):
                 return s(slot) + " = " + v(value) + ";"
             # Pointer slot (void* / Ptr) receiving an aggregate value — self-host
             # lost track of slot type (multi-branch SVarDecl took the first init

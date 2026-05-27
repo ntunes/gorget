@@ -2366,6 +2366,40 @@ int box_inner_ty_from_operand(Operand op, LirFunction &f, Vector[int] &local_to_
         return LT_STRUCT_BASE + (ty - LT_PTR_TO_BASE)
     return ty
 
+# Canonical `Box(x)` lowering: emit IBoxAlloc and store the heap pointer into
+# the result slot. Shared by the GICall and GICallExtern handlers.
+#
+# Retypes the result slot to its `Box__<inner>` struct type when the GIR left
+# it scalar (`i64`). The prelude `Box(x)` ctor is absent from fn_sigs/type_infos,
+# so lower.gg defaults the result local to I64 → a scalar slot. IBoxAlloc
+# produces a `Box__<inner>`-typed (pointer-represented, `typedef void* Box__T`)
+# value; storing it into the scalar slot hit ISlotStore's "aggregate-into-scalar
+# → 0" give-up, NULLing the box, and the downstream `EFieldAccess(box, …)`
+# variant ctor then emitted `(Box__T){0}` → `parse_dot_expr`'s
+# `EFieldAccess(Box(lhs), …)` returned a NULL boxed base → deref SIGSEGV in
+# `Expr__clone`. Aligning the slot type with IBoxAlloc's result type makes the
+# store a direct copy and the variant-arg read pass the box pointer through.
+# The Rust-gg driver tolerates the I64 GIR typing because its `run_ssa` keeps
+# the box value live in a register; the self-host `lower_gir_to_lir` has none.
+# Done at the LIR slot level (not the GIR type) so the GIR-level struct-ctor
+# routing is untouched.
+void emit_box_alloc(int dst_local, Operand box_arg, LirFunction &f, int bb, Vector[int] &local_to_slot, Dict[String, int] &sr, LirModule &m):
+    int box_inner_ty = box_inner_ty_from_operand(box_arg, &f, &local_to_slot)
+    int box_val = lower_operand(box_arg, &f, bb, &local_to_slot, &m)
+    int box_dst = lir_fn_next_value(&f)
+    lir_push_inst(&f, bb, IBoxAlloc(box_dst, box_inner_ty, box_val))
+    int box_dst_slot = local_to_slot.get(dst_local).unwrap()
+    int cur_box_slot_ty = f.slots.get(box_dst_slot).unwrap().ty
+    if not lir_is_aggregate(cur_box_slot_ty) and box_inner_ty >= LT_STRUCT_BASE:
+        int box_inner_sid = box_inner_ty - LT_STRUCT_BASE
+        if box_inner_sid >= 0 and box_inner_sid < m.structs.len():
+            String box_inner_name = m.structs.get(box_inner_sid).unwrap().name
+            int box_sid = sr.get("Box__" + box_inner_name).unwrap_or(-1)
+            if box_sid >= 0:
+                LirSlot old_box_slot = f.slots.get(box_dst_slot).unwrap()
+                f.slots.set(box_dst_slot, LirSlot(LT_STRUCT_BASE + box_sid, old_box_slot.name))
+    lir_push_inst(&f, bb, ISlotStore(box_dst_slot, box_dst, false))
+
 int lower_operand(Operand op, LirFunction &f, int bb, Vector[int] &local_to_slot, LirModule &m):
     match op:
         case OpConstBool(v):
@@ -2579,22 +2613,50 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
             bool dst_is_ptr = (slot_ty == LT_PTR) or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE)
             bool handled = false
             if dst_is_ptr:
+                # Ptr-typed dst receiving a VALUE-typed source: rebind the
+                # pointer slot to the source's storage (`dst = &src`) rather
+                # than byte-copying the aggregate's first 8 bytes into a
+                # pointer slot (which lir_codegen's give-up branch turns into
+                # `dst = NULL`).
+                #
+                # OpBorrow is the canonical alias shape (B.1 Branch C). But
+                # the SAME shape arises for OpMove/OpCopy of a value-typed
+                # source into a Ptr-typed dst — the loop-carried
+                # rebind-pointer-to-new-value pattern. Canonical example:
+                # `parse_expr_bp_with_lhs`'s `lhs = self.parse_dot_expr(lhs)`
+                # where `lhs` is a `!`-param (Ptr-typed loop var) and the
+                # call result is a by-value SpannedExpr. The GIR is
+                # `_3 = move _10` (`move_zero` zeros the result temp `_10`);
+                # Rust's codegen emits `lhs_ptr = &result` (the back-edge
+                # rebind). Without this, the GIAssign stored NULL into the
+                # pointer slot, so the next loop iteration passed NULL as the
+                # `!`-moved arg → SIGSEGV reading `lhs.span` (TODO #2).
+                #
+                # OpClone is intentionally NOT routed here: it materialises a
+                # fresh owned value via its own deref+clone path, not an
+                # alias of an existing slot.
+                int rebind_src = -1
                 match operand:
-                    case OpBorrow(src_local):
-                        if src_local >= 0 and src_local < local_to_slot.len():
-                            int src_slot = local_to_slot.get(src_local).unwrap()
-                            int src_slot_ty = f.slots.get(src_slot).unwrap().ty
-                            bool src_is_ptr = (src_slot_ty == LT_PTR) or (src_slot_ty >= LT_PTR_TO_BASE and src_slot_ty < LT_STRUCT_BASE)
-                            if not src_is_ptr:
-                                # Value-typed src + Ptr-typed dst: take the
-                                # address of src's storage and store it as
-                                # the dst's pointer value.
-                                int addr_val = lir_fn_next_value(&f)
-                                lir_push_inst(&f, bb, ISlotAddr(addr_val, src_slot))
-                                lir_push_inst(&f, bb, ISlotStore(slot, addr_val, false))
-                                handled = true
+                    case OpBorrow(sl):
+                        rebind_src = sl
+                    case OpMove(sl):
+                        rebind_src = sl
+                    case OpCopy(sl):
+                        rebind_src = sl
                     else:
                         pass
+                if rebind_src >= 0 and rebind_src < local_to_slot.len():
+                    int src_slot = local_to_slot.get(rebind_src).unwrap()
+                    int src_slot_ty = f.slots.get(src_slot).unwrap().ty
+                    bool src_is_ptr = (src_slot_ty == LT_PTR) or (src_slot_ty >= LT_PTR_TO_BASE and src_slot_ty < LT_STRUCT_BASE)
+                    if not src_is_ptr:
+                        # Value-typed src + Ptr-typed dst: take the
+                        # address of src's storage and store it as
+                        # the dst's pointer value.
+                        int addr_val = lir_fn_next_value(&f)
+                        lir_push_inst(&f, bb, ISlotAddr(addr_val, src_slot))
+                        lir_push_inst(&f, bb, ISlotStore(slot, addr_val, false))
+                        handled = true
             if not handled:
                 int val = lower_operand(operand, &f, bb, &local_to_slot, &m)
                 lir_push_inst(&f, bb, ISlotStore(slot, val, false))
@@ -2673,13 +2735,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
             # from the operand's pointer-to-struct type if needed) so downstream
             # Some(Box(x)) resolves to Option__Box__T, not Option__GorgetString.
             if func_name == "Box" and args.len() == 1 and dst_local >= 0:
-                Operand box_arg = args.get(0).unwrap()
-                int box_inner_ty = box_inner_ty_from_operand(box_arg, &f, &local_to_slot)
-                int box_val = lower_operand(box_arg, &f, bb, &local_to_slot, &m)
-                int box_dst = lir_fn_next_value(&f)
-                lir_push_inst(&f, bb, IBoxAlloc(box_dst, box_inner_ty, box_val))
-                int box_dst_slot = local_to_slot.get(dst_local).unwrap()
-                lir_push_inst(&f, bb, ISlotStore(box_dst_slot, box_dst, false))
+                emit_box_alloc(dst_local, args.get(0).unwrap(), &f, bb, &local_to_slot, &sr, &m)
                 return bb
             # Lower call arguments — check function param types for Ptr(T) params.
             # User functions with resource-type bare params receive Ptr(T),
@@ -2913,13 +2969,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                     return bb
             # Canonical Box(x): emit IBoxAlloc, same as in GICall.
             if func_name == "Box" and args.len() == 1 and dst_local >= 0:
-                Operand box_arg = args.get(0).unwrap()
-                int box_inner_ty = box_inner_ty_from_operand(box_arg, &f, &local_to_slot)
-                int box_val = lower_operand(box_arg, &f, bb, &local_to_slot, &m)
-                int box_dst = lir_fn_next_value(&f)
-                lir_push_inst(&f, bb, IBoxAlloc(box_dst, box_inner_ty, box_val))
-                int box_dst_slot = local_to_slot.get(dst_local).unwrap()
-                lir_push_inst(&f, bb, ISlotStore(box_dst_slot, box_dst, false))
+                emit_box_alloc(dst_local, args.get(0).unwrap(), &f, bb, &local_to_slot, &sr, &m)
                 return bb
             String mapped_early = map_runtime_name(func_name, &m, &gmod)
             String effective_name = func_name
