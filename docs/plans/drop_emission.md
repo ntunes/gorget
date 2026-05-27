@@ -311,17 +311,37 @@ LOWERING fabricates the 13,000+-deep one** (consistent with the ASan box-allocat
 > correctly in s1bin — it does: NO SIGSEGV, NO dropped/corrupt instructions, the full instruction
 > stream is present. The borrow work is retroactively confirmed.
 >
-> **REMAINING (the fixed-point, lower priority):** `self_host_bootstrap_fixed_point` is not yet
-> byte-identical: stage-2 (663,687 lines, s1bin-emitted) vs stage-1 (610,087 lines, Rust-gg-emitted)
-> differ — extra `__gg_R`/`__gg_W` generic-param (Reader/Writer trait) structs in stage-2, plus
-> slot-numbering / slot-ordering drift (`__s75` int64 vs bool, etc.). These are the documented
-> N-generation convergence differences (see the `self_host_bootstrap_fixed_point` test comment: each
-> ownership-tag flip costs one extra void* slot per generation until the in-source algorithm and the
-> in-binary lowering agree), NOT dropped/corrupt instructions. The fixed-point test iterates up to
-> N=5 generations; whether this LoView tag flip converges within N or needs another generation is the
-> next thing to measure (run `cargo test --test integration --release self_host_bootstrap_fixed_point
-> -- --test-threads=1`). The fix itself is output-correct; the fixed-point is a separate convergence
-> property.
+> **NEXT BLOCKER (measured 2026-05-27 pm/2): `self_host_bootstrap_fixed_point` FAILS — stage-2 binary
+> SIGSEGVs (memcpy-from-NULL) in `parse_int`'s `Error(ParseError.Empty())` return.** `self_host_bootstrap`
+> PASSES; the fixed_point test (which iterates generations, RUNNING each stage's binary) now reaches
+> one generation further than before and panics at `integration.rs:14009` — "stage-2 binary failed"
+> (empty stderr = signal). Reproduced manually: the stage-2 binary (cc'd from s1bin's 14.9 MB output)
+> crashes **exit 139** immediately, gdb bt = `Lexer__lex_scan_number → std__conv___parse_int → memcpy`.
+> Crash site (s1bin's emitted C for `parse_int`, `lib/std/conv.gg:90-92`
+> `if s.len()==0: return Error(ParseError.Empty())`):
+> ```c
+> __v10 = (Result__int64_t__ParseError){.tag = 1, .Error_0 = __v9};   // built correctly...
+> __s6 = NULL;
+> /* move_slot */;
+> __v11 = __s6;
+> memcpy(&__s0 /*ret slot*/, __v11 /*=NULL*/, sizeof(Result__int64_t__ParseError));  // SIGSEGV
+> ```
+> The constructed Result `__v10` is discarded; a NULL is memcpy'd into the return slot. The Rust `gg`
+> (driver.c) lowers the SAME source correctly — builds the Result field-by-field into `__s5`
+> (tag + Error_0 via FieldPtr) then `memcpy(&__s0, &__s5, ...)`. So this is a **self-host LIR-lowering
+> fidelity bug** in returning an enum/Result built from a nested nullary-variant constructor
+> (`ParseError.Empty()`): the return-slot store reads a zeroed/NULL slot rather than the inline
+> `(Result){...}` literal `__v10`. **NOT caused by the LoView fix** (this path has no string-view
+> method; `s.len()` is int, `Empty()` is nullary) — a PRE-EXISTING s1bin codegen bug newly exposed
+> because the truncation previously stopped the fixed_point test before stage-2 ever ran. Suspect: the
+> GIR `return Error(...)` / inline-Result-literal → return-slot store in `lir_lower.gg`, near the
+> `move_slot` zeroing that precedes the bad memcpy. **Repro:** assemble s1bin's `--lir-c` output +
+> driver.c runtime preamble → `cc` → run on `driver.gg lib --lir-c` → SIGSEGV. This is the
+> §5-anticipated SEPARATE bug; report + localize, do NOT paper over.
+>
+> (An earlier stage1↔stage2 text diff showed extra `__gg_R`/`__gg_W` generic-param structs + slot
+> drift, but that's moot: the fixed_point fails at the stage-2-binary SIGSEGV above, before any
+> convergence comparison runs.)
 
 ---
 
