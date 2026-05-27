@@ -586,3 +586,49 @@ layer-3 triple-clone). Keep resource/primitive/for-element paths intact. gg-chec
 (Orchestrator caveat: no reviewer ran the 25-min bootstrap to 100%-confirm this is the SOLE cause;
 it's a source-verified defect matching the failing ASan shape — if removing the gate doesn't fully
 fix it, re-trace from Branch C-pre with the minimal recursive imported-type fixture.)
+
+---
+
+## Layer 5 — s1bin broad mis-lowering (diagnose-the-dominant-root + fix; fix-agent brief)
+
+**Found by bootstrap cycle 4 (2026-05-27):** layers 1-4 fixed → stage-2 (`s1bin`) now RUNS (no crash)
+but emits only a ~6957-line ERROR PREAMBLE then `exit 1` (never reaches the C body). vs the correct
+stage-1 (`driver`): `s1bin` has **1236 OpCopy-on-resource** (across 209 fns; driver=0), **1850
+[lower_fail]** (1417 "PConstructor variant not in enum" + ~250 "no iter()/next() chain" + 112
+"non-enum scrutinee"; driver=2), **3096 [bug]** (2825 "EIdentifier unknown identifier" + 271
+EFieldAccess; driver=3). `driver` and `s1bin` are the SAME compiler on the SAME input — so
+stage-1's emitted C (which builds `s1bin`) mis-renders the self-host, making `s1bin` mis-run many
+foundational functions. Same "stage-1 mis-compiles fn X → s1bin's X broken → cascade" fidelity class
+as L1-L4, now hitting foundational paths. Artifacts: stage-1 C = `$(cat /tmp/v6-out-path)`; stage-2 =
+`/tmp/v6-stage2.c`; s1bin = `/tmp/v6-s1bin`; stage-1 driver = `tests/fixtures/self_host_lowerer/driver`.
+
+**PRIMARY LEAD — s1bin's LOADER mis-runs (one root → ~4000 symptoms):** the enum-registration loop
+(`lower.gg:8743-8758`) registers EVERY enum in `m.items` with NO imported gate — so
+`IoError` "variant not in enum" means `IoError` is NOT IN `s1bin`'s `m.items`, i.e. `s1bin`'s
+`loader___load_imports` failed to load the imported module(s)' types/enums/fns. That single failure
+cascades: every imported enum → "variant not in enum"; every imported-defined identifier →
+"unknown identifier"; missing iter/next methods → "no iter()/next() chain". `driver` loads them fine.
+The ASan (L4) showed `loader___load_imports` actively cloning Stmts, so the loader RUNS in s1bin but
+mis-loads. **Diagnose: does s1bin's m.items contain the imported modules' items?** (e.g. add a count
+print, or inspect via a minimal multi-file fixture that imports an enum + matches its variant,
+compiled by the self-host driver: does the self-host-compiled binary find the variant?)
+
+**SECONDARY LEADS (if the loader isn't the dominant root):**
+- s1bin's String-keyed `Dict.get → Option[Ref]` mis-compiled → `named_locals.get`/`type_infos.get`/
+  `enum_registry.get` lookups fail → name-res + enum cascade. (Directly in the Option[Ref] change's
+  path.)
+- s1bin's `op_consume`/`decide_*_consume` resource fidelity → OpCopy-on-resource (1236). Possibly a
+  separate root (a consume-decision fn mis-compiled).
+
+**METHOD (mirror the L3 agent that succeeded):** build MINIMAL fixtures targeting each lead
+(multi-file imported-enum-match for the loader lead; String-keyed Dict-get-and-use for the Dict
+lead; resource get/consume for the OpCopy lead), compile each with the **self-host driver**
+(`./tests/fixtures/self_host_lowerer/driver <fix>.gg <libdir> --emit-c`), assemble + `cc`/run, and
+find which reproduces broad mis-lowering — that isolates the ONE foundational function whose
+self-host-emitted C is wrong. Trace it (compare stage-1's C for that fn vs the GIR it should
+produce). Fix the DOMINANT root in CODEGEN (one root per cycle; the parent re-bootstraps to surface
+the next). Don't rewrite self-host source to dodge; don't reintroduce L1-L4 fixes' behavior.
+gg-check clean; `cargo build` + `cargo test --lib` (2 pre-existing should_panic-release fails OK);
+commit by file. Do NOT run the bootstrap/integration sweep (parent's job). Report: the dominant root
+(exact fn + why), the fix, the minimal fixture proving before/after, and the symptom classes you
+expect it to collapse.
