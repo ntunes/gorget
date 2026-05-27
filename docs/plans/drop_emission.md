@@ -20,6 +20,19 @@
 > parser.gg:1769, caller :1584). Confirmed separate + pre-existing (v12 pre-fix binary crashed at
 > parse_int FIRST, during lexing). See TODO.md "NEXT BLOCKER #2" + DONE.md (2026-05-27) for the full
 > trace and repro. ← PICK UP at the parse_dot_expr move-arg-NULL bug.
+>
+> **RESIDUAL CLASS (tracked, non-blocking — output-review 2026-05-27):** the parse_int fix is
+> RETURN-position only. The underlying defect — `lower_call` types a bare prelude-variant ctor
+> (`Ok`/`Error`/`None`) as the standalone variant name → LT_PTR — is the self-host's narrow port of
+> Rust gg's pervasive `expected_type` propagation (Rust sets it at return AND var-decl/assign
+> `assigns.rs:108-109`, call-args, closures). It is still LATENT at non-return consume positions
+> WITHOUT recovery: bare `Ok`/`Error` call-args (Some has a partial fix, `lower_call` ~5569-5579),
+> field initializers, collection pushes of a direct ctor, and indirect-ctor returns
+> (`return (if c: Ok else: Error)`). (Var-decl `Result[T,E] r = Error(...)` is already covered
+> incidentally by the monomorphized-collection recovery heuristic at `lower.gg:5632-5639`.) The
+> reference-grade fix is to port `expected_type` propagation to those positions; until then each may
+> surface as its own stage-2 crash. Likely the proper home for this is the same pass that retypes at
+> SReturn. Not blocking fixed_point progress (the return fix is correct for its scope).
 
 > **SUPERSEDED 2026-05-27 — READ "## NEXT STEPS" FIRST.** s1bin now BUILDS CLEAN and no longer segfaults
 > (Option[Ref] Phases 1-6 + Layers 1-6 + Gap A `bdc5b537` + Layer 9 `dac39a64`). bug #3b's `generate_c`
