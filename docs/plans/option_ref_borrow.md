@@ -563,7 +563,26 @@ minimal **recursive** get-mutate-set over an IMPORTED-type Vector (the meta patt
 NOT a flat one-level struct ctor, which already clones per Fix D) reproduces the double-free before
 the fix and is clean after. Do NOT touch the ctor-arg path (already correct; touching it risks the
 layer-3 triple-clone). Keep resource/primitive/for-element paths intact. gg-check clean; `cargo build`
-+ `cargo test --lib`; commit by file. Parent drives the bootstrap. (Orchestrator caveat: pass-1
-reviewer couldn't run the 25-min bootstrap to 100%-confirm this is the SOLE cause; it's a
-source-verified defect matching the failing shape — if removing the gate doesn't fully fix it,
-re-trace from Branch C-pre with the minimal recursive fixture.)
++ `cargo test --lib`; commit by file. Parent drives the bootstrap.
+
+**Refinements (brief-review pass 2, both verified):**
+- **EXPECTED side effect — do NOT suppress it:** removing the gate also makes the match-arm
+  value-payload path (`emit_payload_read_mode`, the eager-clone arm at `lower.gg:~6216/6229`) clone
+  imported types (e.g. `match item: case IFunction(fdef): ... use fdef`). This is CORRECT and
+  intended (the binding owns its payload); it is NOT a regression — do NOT add a guard to dodge it.
+  The for-element path (`borrow_only=true`, `lower.gg:~6768/6885`) is unaffected: it still returns
+  the alias, now via the `is_deep_clone_fn` elision (`lower.gg:~6227-6228`) instead of the empty-
+  clone-fn fall-through — same result, different route. (Safety re-confirmed pass 2: the clone-call
+  set after the fix is a SUBSET of the LIR clone-emission set — `recursive_drop_structs/enums` in
+  `lir_codegen.gg` `emit_struct_clones`/`emit_enum_clones`, `fn_exists`-guarded — so no call to an
+  undefined clone symbol, no double-def, no linker error. Only one gate exists: `lower.gg:~6143`;
+  the other `imported_fns` hits (`~8558/8867`) are plumbing, not clone/drop gates. No sibling stale
+  drop-gate in lower.gg — drop resolution is in `lir_lower.gg`, already de-gated in cluster (a).)
+- **Fixture must use a genuinely IMPORTED type:** the gate only fires for `__imported_type__`-tagged
+  types, so the minimal recursive get-mutate-set fixture must put the Vector's element type behind a
+  multi-file `from <mod> import <Type>` (like meta.gg imports `Item`/`MatchArm` from `ast`) — a
+  locally-defined type has the gate already false and won't reproduce the double-free.
+
+(Orchestrator caveat: no reviewer ran the 25-min bootstrap to 100%-confirm this is the SOLE cause;
+it's a source-verified defect matching the failing ASan shape — if removing the gate doesn't fully
+fix it, re-trace from Branch C-pre with the minimal recursive imported-type fixture.)
