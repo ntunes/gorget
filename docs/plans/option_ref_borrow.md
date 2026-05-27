@@ -497,3 +497,59 @@ in `fn_sigs`). After the bootstrap is green, add an assert/guard or confirm no g
 
 **Validation:** `gg check` clean → then the parent's stage-0 → stage-1 emit → cc → **stage-2 runs +
 fixed point** (this is the gate R1 specifically threatens) → bootstrap/comparison → ASan.
+
+---
+
+## Layer 4 — stage-2 double-free: struct/enum ctor from borrowed/GtPtr field-reads (fix-agent brief)
+
+**Found by bootstrap cycle 3 (2026-05-27):** layers 1-3 fixed (int64_t regression, Ref__ struct
+leak, resource get-mutate-set triple-clone). cc now passes. Running stage-2 (`s1bin`) ABORTS:
+`free(): double free detected in tcache 2` (exit 134). ASan localized it:
+
+```
+freed by (TWICE):  gorget_array_set <- meta___expand_meta_for_match (meta.gg ~333/336)
+  -> Item__drop -> FunctionDef__drop -> Stmt__drop(arr_free) -> MatchArm__drop
+  -> SpannedPattern__drop -> Pattern__drop -> gorget_string_free   (a 10-byte String)
+  (2nd free path: meta___expand_meta_for_in_stmts -> MatchArm__drop -> ... same String)
+allocated by:  loader___load_imports -> gorget_array_clone -> Stmt__clone -> MatchArm__clone
+  -> SpannedPattern__clone -> Pattern__clone -> gorget_string_clone_to_owned
+```
+
+**Pattern (meta-expansion get-mutate-set + struct-ctor-from-borrowed-field):** `meta.gg`
+`expand_meta_for_match` / `expand_meta_for_in_stmts` do:
+```
+Item item = m.items.get(i).unwrap()                  # Option[Ref] -> GtPtr borrow (or Branch C-pre clone)
+match item: case IFunction(fdef):
+    Vector[Stmt] new_body = expand_meta_for_in_stmts(fdef.body, m)
+    FunctionDef new_fn = FunctionDef(fdef.name, fdef.params, ..., new_body, ...)   # ctor from fdef's FIELDS
+    m.items.set(i, IFunction(new_fn))                 # .set drops old item
+# and in _in_stmts:  MatchArm a = expanded_arms.get(ai).unwrap(); final_arms.push(MatchArm(a.pattern, a.guard, new_body))
+```
+`fdef.name`/`a.pattern` are field-reads of a borrowed/owned-but-alive aggregate; the new
+`FunctionDef`/`MatchArm` shallow-ALIASES them instead of cloning, so the String is owned by BOTH the
+new item (in m.items via set) AND the original/clone that still gets dropped → freed twice.
+
+**Why it SHOULD already clone (and the open question):** "Fix D" (`lower.gg:8756`) registers struct
+ctors in `fn_move_params` with per-field resource flags so `classify_call_arg("FunctionDef", nameIdx)`
+returns `CkCallArgOwning` -> `op_consume(LoBorrowed) -> OpClone` (`lower.gg:1375-1395` comment names
+this EXACT meta_expand double-free). Yet it double-frees, so under `Option[Ref]` the ctor-arg
+clone/move isn't firing for a borrowed/GtPtr field-read. Likely suspects (root-cause via a minimal
+fixture, like the layer-3 agent did):
+  (a) the field-read `fdef.name` (EFieldAccess on a GtPtr/owned `item`) is NOT tagged `LoBorrowed`
+      (or is tagged in a way `op_consume` doesn't clone), so even `CkCallArgOwning` doesn't clone it;
+  (b) `item` from `m.items.get(i).unwrap()` is NOT being deep-cloned by Branch C-pre (Item is an
+      ENUM — is `is_resource_type_name("Item")` true? if not, item stays a borrow), so fdef.name
+      aliases the original m.items[i] directly;
+  (c) the enum-payload match-bind `case IFunction(fdef)` binds `fdef` sharing the buffer, and the
+      ctor move/clone doesn't MoveZero the source so both drop;
+  (d) `FunctionDef(...)` ctor args don't route through `op_consume` with the owning kind at all under
+      the current Option[Ref] flow.
+
+**FIX (for the agent):** make struct/enum constructor field-init args that read fields of a
+borrowed/GtPtr/owned-alive aggregate CLONE (materialize) the field into the new struct — mirroring
+Rust's `ensure_owned_at_consuming_arg` and the `lower.gg:1377` invariant. Reproduce with a MINIMAL
+fixture (a struct/enum built from fields of a `coll.get(i).unwrap()` result that's then both
+set-back and dropped — the meta pattern in miniature), trace GIR + ASan to the exact write site, fix
+in CODEGEN (don't rewrite meta.gg). Keep resource/primitive/for-element paths intact; do not
+reintroduce the layer-3 triple-clone. gg-check clean; `cargo build` + `cargo test --lib`; commit by
+file. Parent drives the bootstrap.
