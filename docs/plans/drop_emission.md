@@ -268,7 +268,75 @@ LOWERING fabricates the 13,000+-deep one** (consistent with the ASan box-allocat
 
 ---
 
-## NEXT STEPS — bug #3b RE-LOCALIZED (2026-05-27): `generate_c` clone FIXED; live OOM is now in the LOWERING phase (`lower_module`)
+## NEXT STEPS — bug #3b clone-OOM CLEARED (2026-05-27 pm): s1bin now exits 0; new blocker is a SCALE-dependent self-host large-String truncation
+
+> **Read this first.** The bug #3b clone-accumulation OOM (`lower_module` → `lower_gir_to_lir` →
+> `drop_elab` → `generate_c`, the whole cascade) is **FIXED**. s1bin previously SIGKILLed at ~13 GB; it
+> now **exits 0 with a ~5 GB peak**. The fix was a series of CoW-contract restorations (reads must
+> borrow, not deep-clone) at the writer sites, found by capturing the REAL gdb OOM backtraces
+> (`gorget_array_reserve` alloc-fail / `LirBlock__clone` / `LirFunction__clone`) — NOT the misleading
+> batch-mode lexer artifact. Commits on `gorget-1`: `2041d255` (lir_lower in-place push/term) +
+> `30f882ec` (drop_elab + lir_codegen borrows + nested-collection elem-drop wiring).
+
+**What was fixed (all CoW reads-must-borrow at the writer; output-neutral — `lowerer_comparison` GREEN, `cargo test --lib` 1060/1062 with 2 pre-existing `lir::validate` panic-assert fails):**
+1. **`lir_lower.gg` `lower_operand`/`lower_instruction` LirBlock-clone (THE original bug #3b residual).**
+   Real backtrace: `gorget_array_reserve(fail) ← gorget_array_clone ← LirBlock__clone ←
+   lower_operand ← lower_instruction ← lir_lower_function ← lower_gir_to_lir`. The get-mutate-set idiom
+   `LirBlock blk = f.blocks.get(bb).unwrap(); blk.insts.push(x); f.blocks.set(bb, blk)` value-bound the
+   block → deep-cloned its whole growing `insts` vector on EVERY instruction → O(n²)/function → ~13 GB.
+   Fix: `lir_push_inst`/`lir_set_term` in `lir.gg` mutate the block IN PLACE via the `.get()` borrow
+   (`f.blocks.get(bb).unwrap().insts.push(x)`), mirroring Rust `block_mut(bb).push_inst()`
+   (`src/lir/lower/mod.rs:1480/1490`). All 79 sites converted.
+2. **`drop_elab.gg` `forward_dataflow` LirBlock-clone** (per-worklist-visit) → borrow the block into
+   `compute_transfer`/`term_successors`.
+3. **`lir_codegen.gg` (generate_c) read-only block/inst/fn scans** — `compute_reachable_fns`,
+   `collect_hashable_key_types`, `collect_func_addr_targets`, `fn_exists`, the main function-emit loop,
+   and the per-block C emitter — all value-bound `LirFunction`/`LirBlock`/`LirInst` (deep clones, leaked)
+   → converted to BORROW chains (`m.functions.get(fi).unwrap().blocks.get(bi).unwrap()...`). lir_codegen
+   does ZERO block mutation, so these are safely borrows.
+4. **`drop_elab` `Vector[Vector[int]]` leak** — `forward_dataflow`'s state arrays leaked the inner vectors
+   on every `.set()` (displaced element) and at function exit, because `__gorget_array_new_sized_T`
+   typed-literal ctors emitted `gorget_array_new` with `elem_drop = NULL`. Fix: wire `elem_drop`+
+   `elem_clone` for **NESTED-COLLECTION elements only** (Vector/Dict/Set inner) in the
+   `__gorget_array_new_sized_` branch of `emit_call_extern_with` (lir_codegen.gg ~:3715). **Scoped
+   to collections deliberately** — wiring String/user-struct elements DOUBLE-FREES the get-mutate-set
+   idiom (self-host lacks Rust's `index_borrow_sources` clone-on-mutation; a GLOBAL wiring crashed in
+   `compute_reachable_fns` freeing a still-aliased LirInst String — verified, reverted). Two other
+   reverted dead-ends: `assign_inner_state` (in-place nested `outer.get(i).push()` SIGSEGVs in s1bin —
+   the `feedback_nested_vector_get_set` gap).
+
+**NEW LIVE BLOCKER (2026-05-27 pm) — SCALE-dependent self-host large-String truncation in `generate_c` output.**
+With the OOM gone, s1bin runs to completion (exit 0) but emits a **TRUNCATED** stage-2: **59415 lines /
+1,633,116 bytes** (deterministic, byte-identical across runs), cut **mid-token** inside `emit_function`
+for `Parser__parse_match_stmt` (3407 of 3997 functions emitted), ending `…__v236 = gorget_array_new(sizeof(`.
+**This is NOT the clone-OOM** (exit 0, empty stderr, ~5 GB peak — no SIGKILL/panic) and **NOT my borrow
+conversions** (they're output-neutral: `lowerer_comparison` GREEN, and s1bin emits **clean, complete**
+output for a SMALL input — `_self_host_e2e_preamble.gg` → 830 lines ending in a proper `}`). It is a
+**pre-existing self-host runtime String/StrBuf scaling bug, newly EXPOSED** because s1bin now gets far
+enough to assemble the ~610K-line / multi-MB output String. Matches the MEMORY note "stage-1's runtime
+`body.slice()` / `index_of` mishandles 9 MB strings". Pipeline: `driver.gg:103 print(generate_c(&lir))`
+— `generate_c` (`lir_codegen.gg:5120`) builds the whole C as ONE `String` (StrBuf `body_buf.s` then
+`out + body`), and either the StrBuf concat or the final `print` truncates past ~1.6 MB in s1bin.
+
+**FIRST DIAGNOSTIC (fresh session):** repro = `cc -O0 -g` the assembled stage-1, run on `driver.gg lib
+--lir-c` (NO ulimit needed — it's not OOM), confirm exit 0 + 1,633,116-byte truncation. Then bisect the
+String path: (a) is `generate_c`'s returned `String` already truncated (StrBuf concat / `String + String`
+bug at scale), or (b) does `print` (`fwrite` of `msg.data`/`msg.len`) truncate a complete String? Add a
+`gorget_print_err(int_to_str(generate_c(&lir).len()))` probe in `driver.gg` main to see if the String's
+own `.len` is ~1.6 M (print bug) or the full ~20 MB (StrBuf-assembly bug). The thin-pointer String
+redesign (`project_thin_pointer_string`) and `StrBuf` growth in the C runtime (`gorget_array_reserve` /
+the String header) are the suspects. NB the truncation cut mid-`resolve_sizeof_c_type` output suggests a
+per-append boundary, not a hard cap — likely a 32-bit length/offset overflow or a realloc-size
+miscalculation in the self-host's String append at multi-MB sizes.
+
+**Then — validate (in order):** once the String truncation is fixed, s1bin should emit the full ~610K
+lines → `self_host_bootstrap` (exact) → `self_host_bootstrap_fixed_point` → `lowerer_comparison` →
+`cargo test --lib` → full integration (parent). Then SHIP-GATE (`is_owning_mutator_arg` name-match →
+typed signal) + squash, per below.
+
+---
+
+## NEXT STEPS — (HISTORICAL, superseded by the section above) bug #3b RE-LOCALIZED (2026-05-27 am): `generate_c` clone FIXED; live OOM is now in the LOWERING phase (`lower_module`)
 
 > **Read this first — the old framing below this section ("(superseded)…") is stale.** bug #3b's
 > ORIGINAL site — `m.functions.get(i).unwrap().name` cloning a whole `LirFunction` in `generate_c` — is
