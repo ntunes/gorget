@@ -268,7 +268,64 @@ LOWERING fabricates the 13,000+-deep one** (consistent with the ASan box-allocat
 
 ---
 
-## NEXT STEPS — bug #3b clone-OOM CLEARED (2026-05-27 pm): s1bin now exits 0; new blocker is a SCALE-dependent self-host large-String truncation
+## NEXT STEPS — large-String truncation FIXED (2026-05-27 pm/2): root was view-method ownership-tag, NOT a print/StrBuf scale bug. Remaining: byte-identical fixed-point.
+
+> **Read this first.** The "scale-dependent large-String truncation" (the section below this one)
+> is **FIXED**, and the diagnosis there was a red herring: it was NOT a print/StrBuf/`gorget_str_to_cstr`
+> scale bug. The real cause was a **self-host lowering fidelity gap** — view-returning String methods
+> had their result local tagged `LoOwned` instead of `LoView`.
+>
+> **Diagnostic chain that found it (for the record):**
+> 1. STEP-2 probe (`String c = generate_c(&lir)`; `gorget_eprint_debug(c.byte_len())` to stderr): the
+>    String was the FULL **14.87 MB** at assembly — so the cut was at OUTPUT, not assembly.
+> 2. `%s` truncation theory: `print(String)` lowers to `printf("%s\n", c.data)`; `%s` stops at the
+>    first embedded NUL. A NUL-safe `fwrite` dump (temporary `gorget_print_raw` runtime fn, routed in
+>    via a patched body) emitted the full 14.93 MB and revealed **162 embedded NUL bytes**, first at
+>    offset 1,633,533 — all inside `gorget_array_new(sizeof(\0\0\0\0))`. NOTE: `%.*s` does NOT help —
+>    its precision is a max, not a forced length; it stops at NUL too (verified in isolated C). So the
+>    print-format is innocent; the NULs are real output corruption.
+> 3. The 4-NUL type names traced to `LowerCtx.pending_vec_elem_tyname` (a `String` field) holding a
+>    **dangling view**. `apply_container_hint_for_ctor_arg` (`lower.gg`) does
+>    `ctx.pending_vec_elem_tyname = fty_name.slice(8,…).clone()`. GIR dump showed the `.slice()` result
+>    `_47`, then `_48 = move _47` / `_49 = move _48` / `field_write(move _49)` — a **by-value MOVE of
+>    the cap==0 view** into the owned field, NOT a clone. (`op_consume`'s `LoView/LoBorrowed → OpClone`
+>    materialization arm was never reached because the slice result was tagged `LoOwned`.) The moved
+>    view dangled once the receiver buffer was freed/reused → NUL bytes.
+>
+> **Fix (`tests/fixtures/self_host_lowerer/lower.gg`, one hunk):** added `is_string_view_method`
+> (slice/substring/byte_slice/char_at/trim/trim_left/trim_right/strip/lstrip/rstrip/removeprefix/
+> removesuffix/str/as_str — exactly Rust's `returns_view: true` GorgetString builtins) and tag those
+> method results `LoView()` (gated on a String receiver) at the method-call result site in
+> `lower_expr`'s `EMethodCall` arm, alongside the existing `is_collection_getter_method → LoBorrowed`
+> tagging. `op_consume`'s existing `LoView → OpClone` arm then deep-copies the view at every owning
+> consume position (field-init, return, collection-put). **The Rust `gg` was always correct** (its
+> builtins carry `returns_view: true`); only the self-host's `lower.gg` defaulted view results to
+> owned — a case-(a) self-host `.gg` bug, NOT a Rust `src/` bug. `src/` untouched.
+>
+> **Result:** s1bin emits the FULL **663,687-line / 14.93 MB** stage-2, ending cleanly (proper `}`),
+> ZERO embedded NULs. `self_host_bootstrap` (the `stage2.len() >= stage0.len()/2` gate) PASSES.
+> `cargo test --lib --release` 1060/1062 (2 pre-existing `lir::validate` panic-asserts only).
+>
+> **§5 nested-push finding (bug#3b borrow conversions):** reaching full stage-2 emission is the first
+> end-to-end proof that `lir_push_inst`'s nested-vector-mutation-through-`.get()`-borrow lowers
+> correctly in s1bin — it does: NO SIGSEGV, NO dropped/corrupt instructions, the full instruction
+> stream is present. The borrow work is retroactively confirmed.
+>
+> **REMAINING (the fixed-point, lower priority):** `self_host_bootstrap_fixed_point` is not yet
+> byte-identical: stage-2 (663,687 lines, s1bin-emitted) vs stage-1 (610,087 lines, Rust-gg-emitted)
+> differ — extra `__gg_R`/`__gg_W` generic-param (Reader/Writer trait) structs in stage-2, plus
+> slot-numbering / slot-ordering drift (`__s75` int64 vs bool, etc.). These are the documented
+> N-generation convergence differences (see the `self_host_bootstrap_fixed_point` test comment: each
+> ownership-tag flip costs one extra void* slot per generation until the in-source algorithm and the
+> in-binary lowering agree), NOT dropped/corrupt instructions. The fixed-point test iterates up to
+> N=5 generations; whether this LoView tag flip converges within N or needs another generation is the
+> next thing to measure (run `cargo test --test integration --release self_host_bootstrap_fixed_point
+> -- --test-threads=1`). The fix itself is output-correct; the fixed-point is a separate convergence
+> property.
+
+---
+
+## NEXT STEPS — bug #3b clone-OOM CLEARED (2026-05-27 pm): s1bin now exits 0; new blocker is a SCALE-dependent self-host large-String truncation (SUPERSEDED — root found, see section above)
 
 > **Read this first.** The bug #3b clone-accumulation OOM (`lower_module` → `lower_gir_to_lir` →
 > `drop_elab` → `generate_c`, the whole cascade) is **FIXED**. s1bin previously SIGKILLed at ~13 GB; it

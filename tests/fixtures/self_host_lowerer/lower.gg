@@ -453,6 +453,32 @@ int add_local_inheriting(LowerCtx &ctx, int type_id, Option[String] name, int sr
 bool is_collection_getter_method(String method):
     return method == "get" or method == "safe_get" or method == "pop" or method == "last" or method == "first" or method == "remove"
 
+# String methods that return a non-owning VIEW (cap==0) aliasing the
+# receiver's buffer, mirroring Rust's `returns_view: true` builtins
+# (`src/ir/lowering/builtins.rs` GorgetString block). The runtime helpers
+# (`gorget_str_slice`/`_trim`/`_strip`/...) all return `gorget_str_view_region`
+# into `self.data`. The result local MUST be tagged LoView so `op_consume`
+# materializes (OpClone) it at any owning consume position (field-init,
+# return, collection-put). Without the tag the result defaults to LoOwned,
+# op_consume emits OpMove, and the view is stored by value — a dangling
+# alias once the receiver buffer is freed/reused (reads as NUL bytes). This
+# was the `pending_vec_elem_tyname = fty_name.slice(...).clone()` corruption:
+# the slice view was tagged owned, the `.clone()` move-elided to a plain
+# move, and `__gorget_array_new_sized_\0\0\0\0` injected NULs into the
+# multi-MB generate_c output (truncating it at the print boundary).
+bool is_string_view_method(String method):
+    if method == "slice" or method == "substring" or method == "byte_slice" or method == "char_at":
+        return true
+    if method == "trim" or method == "trim_left" or method == "trim_right":
+        return true
+    if method == "strip" or method == "lstrip" or method == "rstrip":
+        return true
+    if method == "removeprefix" or method == "removesuffix":
+        return true
+    if method == "str" or method == "as_str":
+        return true
+    return false
+
 # Collection kind of a (possibly mangled) receiver type name, or
 # CkNotCollection if `tname` isn't a known resource collection.
 # Thin wrapper over `resource_meta_for` so callers can read the kind
@@ -4884,6 +4910,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # gate avoids false positives when the user shadows these names
             # on a non-collection type (e.g. an `equip` block on a struct).
             int mdst = -1
+            bool recv_is_string = recv_type_name == "String" or recv_type_name == "GorgetString" or recv_type_name == "Str"
             if is_collection_getter_method(mname):
                 bool recv_is_collection = false
                 match resource_meta_for(&gmod, recv_type_name):
@@ -4899,6 +4926,12 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     mdst = add_local_with(&ctx, ret_tid, NO_NAME, LoBorrowed(), BoCollectionElement(-1))
                 else:
                     mdst = add_local(&ctx, ret_tid, NO_NAME)
+            elif recv_is_string and is_string_view_method(mname):
+                # View-returning String method: result aliases the receiver's
+                # buffer (cap==0). Tag LoView so op_consume materializes it
+                # (OpClone) at any owning consume position — otherwise the
+                # view is moved-by-value into owned storage and dangles.
+                mdst = add_local_with(&ctx, ret_tid, NO_NAME, LoView(), BoNone())
             else:
                 mdst = add_local(&ctx, ret_tid, NO_NAME)
             emit(&ctx, GICallExtern(mdst, full_name, call_args))
