@@ -743,7 +743,30 @@ SVarDeclEmission decide_svardecl_emission(LowerCtx &ctx, GirModule &gmod, int va
     String source_tname = type_id_to_name(source_type, &gmod)
     String var_tname = type_id_to_name(var_type, &gmod)
     bool source_is_resource = is_resource_type_name(source_tname, &gmod)
-    bool is_string_same_type = (source_type == var_type) and (var_tname == "GorgetString")
+    # A GtPtr/GtMutPtr SOURCE (e.g. the `GtPtr(GorgetString)` borrow that
+    # `coll.get(i).unwrap()` yields from an Option[Ref] payload) must NOT take
+    # the value-alias Branch A — it has to fall through to Branch C-pre's
+    # deref+clone. Mirrors Rust `lower_var_decl_assign_mode`
+    # (src/ir/lowering/stmts/mod.rs:1140-1141), whose `same_type_string` test
+    # compares the SOURCE's type id to the value GorgetString id — a Ptr source
+    # fails it. The self-host's `var_tname == "GorgetString"` is a name-collapse
+    # (`type_id_to_name(GtPtr(GorgetString))` → "GorgetString") and `var_type`
+    # stays `GtPtr(GorgetString)` because the declared-type override (~line 5577)
+    # only fires for "__" names — so without this typed guard, Branch A
+    # BorrowAlias pre-empts Branch C-pre and the owned bind aliases the
+    # collection element → use-after-free (populate_drop_metadata's
+    # `recursive_drop_structs.put(tname, …)` dangling String key, lir_lower.gg
+    # :3589). Typed check, not a name match.
+    bool source_is_ptr_type = false
+    if source_type >= 0 and source_type < gmod.type_table.len():
+        match gmod.type_table.get(source_type).unwrap():
+            case GtPtr(_):
+                source_is_ptr_type = true
+            case GtMutPtr(_):
+                source_is_ptr_type = true
+            else:
+                pass
+    bool is_string_same_type = (source_type == var_type) and (var_tname == "GorgetString") and (not source_is_ptr_type)
     String clone_fn = resolve_payload_clone_fn(var_tname, &gmod)
 
     bool source_is_borrow_alias = false
