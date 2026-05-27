@@ -3131,6 +3131,34 @@ int lower_static_ref_ident(LowerCtx &ctx, GirModule &gmod, String name):
     emit(&ctx, GICallExtern(sdst, "__global_ref__" + name, no_args))
     return sdst
 
+# Bare nullary enum-variant used as a value: `IDropGuardClose` brought
+# into scope via `from lir import IDropGuardClose` and referenced WITHOUT
+# parens (lir_lower.gg:3296 `dia_blk.insts.push(IDropGuardClose)`).
+# docs/language-reference.md:677/719 permit bare nullary variants
+# (`LogLevel lvl = Info`); Rust gg accepts them (kept as an identifier
+# through parse/resolve, resolved in the lowerer — src/ir/lowering/exprs/
+# mod.rs:176-180). The with-parens form `IDropGuardClose()` already works,
+# so we delegate the bare form to the identical `lower_call(name, [], [])`
+# path: lower_call types the dst as the parent enum via is_type_constructor
+# + enum_variant_parent (lower.gg:5432-5436), emits `GICall(dst, name, [])`,
+# which lir_lower passes through as an ICallExtern and the C backend renders
+# as a full-size `(Inst){.tag = N}` compound literal (lir_codegen.gg:4043,
+# 4106-4132). (NOT via try_lower_prelude_variant/IEnumInit — that path is
+# Some/None/Ok/Error only.) Without this, the bare form falls through to the
+# EIdentifier [bug] fallback and emits an 8-byte OpConstI64(0); a later
+# `vec.push(...)` then memcpy's it as a full-size Inst (208 B) → stack-
+# buffer-overflow at runtime. Out-of-line for the same stack-frame reason
+# as lower_fn_addr_ident / lower_static_ref_ident (lower_expr's frame is
+# ~148 KB and overflows on deep recursion). Returns the new local id
+# (>= 0) on hit, -1 on miss.
+int lower_nullary_variant_ident(LowerCtx &ctx, GirModule &gmod, String name):
+    String parent = enum_variant_parent(name, &gmod)
+    if parent == "":
+        return -1
+    Vector[SpannedExpr] no_args = []
+    Vector[SpannedType] no_targs = []
+    return lower_call(&ctx, &name, &no_args, &no_targs, &gmod)
+
 # Meta-op token (`meta +`, `meta /`, …): the parser encodes these
 # as `EIdentifier("__metaop__add")` / `__metaop__div` / etc. and
 # passes them as args to generic functions like
@@ -3993,6 +4021,14 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 Vector[Operand] none_args = []
                 emit(&ctx, GICallExtern(ndst, "None", none_args))
                 return ndst
+            # Bare nullary enum-variant used as a value (see
+            # lower_nullary_variant_ident). Runs after all the resolution
+            # categories above and immediately before the [bug] fallback —
+            # a variant name can't legitimately collide with any of them.
+            # Cures the `push(IDropGuardClose)` 208-vs-8-byte overflow.
+            int evdst_or_neg = lower_nullary_variant_ident(&ctx, &gmod, name)
+            if evdst_or_neg >= 0:
+                return evdst_or_neg
             # HARD BUG: silently returning `OpConstI64(0)` for an unknown
             # identifier lies about both value and type — every downstream
             # use thinks it's holding an int64 with value 0. Stage-1 has
