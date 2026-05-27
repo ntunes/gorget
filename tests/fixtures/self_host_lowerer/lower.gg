@@ -5644,18 +5644,44 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     # is preserved because val (or the root aggregate it
                     # aliases) covers the underlying heap.
                 case CloneAndMove(clone_fn_name):
-                    # Branch B / D / E — emit `<T>__clone(&val)` (or the
-                    # runtime equivalent like gorget_string_clone_to_owned),
+                    # Branch B / D / E + Branch C-pre — emit `<T>__clone(&val)`
+                    # (or the runtime equivalent like gorget_string_clone_to_owned),
                     # then bind dst LoOwned to the clone result. Register
                     # for drop because dst genuinely owns a fresh allocation.
-                    int cloned = add_local(&ctx, var_type, NO_NAME)
+                    #
+                    # OWNED-RESULT TYPE (option_ref_borrow Phase 4a): for the
+                    # Branch C-pre shape `T x = coll.get(i).unwrap()`, the
+                    # source `val` is a `GtPtr(inner)` (the element's address)
+                    # and the clone fn DEREFERENCES it, returning an OWNED
+                    # `inner` value — NOT a pointer. `var_type` here is the
+                    # source's slot type, which is the `GtPtr(inner)` (the
+                    # declared-type heuristic at ~5523 can't override it
+                    # because `type_id_to_name` collapses `GtPtr(inner)`→inner,
+                    # so declared and inferred names match). Typing `cloned` /
+                    # `var_local` as that Ptr would (1) mislabel an owned value
+                    # as a pointer and (2) make the subsequent
+                    # `op_consume(cloned, CkAssign)` re-enter the GtPtr arm and
+                    # emit a SECOND `OpClone` (the triple-clone / value-where-
+                    # pointer bug). When the source is a `GtPtr(inner)`, bind
+                    # the owned locals at the pointee type `inner` so the clone
+                    # result is value-typed and op_consume picks OpMove.
+                    int owned_type = var_type
+                    GirLocal cam_src = ctx.locals.get(val).unwrap()
+                    if cam_src.type_id >= 0 and cam_src.type_id < gmod.type_table.len():
+                        GirType cam_src_gt = gmod.type_table.get(cam_src.type_id).unwrap()
+                        match cam_src_gt:
+                            case GtPtr(cam_inner):
+                                owned_type = cam_inner
+                            else:
+                                pass
+                    int cloned = add_local(&ctx, owned_type, NO_NAME)
                     Vector[Operand] clone_args = []
                     clone_args.push(OpBorrow(val))
                     emit(&ctx, GICallExtern(cloned, clone_fn_name, clone_args))
-                    var_local = add_local(&ctx, var_type, Some(name.clone()))
+                    var_local = add_local(&ctx, owned_type, Some(name.clone()))
                     emit(&ctx, GIAssign(var_local, op_consume(&ctx, &gmod, cloned, CkAssign())))
                     nl_put(&ctx, name, var_local)
-                    register_local_for_drop(&ctx, var_local, var_type, &gmod)
+                    register_local_for_drop(&ctx, var_local, owned_type, &gmod)
                 case MoveDirect():
                     # Branch F / G — direct Move. Primitives, FnPtr,
                     # non-resource user types. op_consume picks
