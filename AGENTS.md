@@ -216,9 +216,17 @@ When you launch sub-agents via the `Agent` tool in this project, the following r
 
 The failure mode when these rules slip is recoverable but ugly: working trees get contaminated, stashes accumulate mixed ownership, edits disappear into `stash@{N}` entries the parent can't easily attribute. The cost of fixing it after the fact is far higher than the cost of doing it right at launch.
 
-## Review TODO items and plans with a fresh agent
+## Review plans, TODO items, AND agent briefs/outputs with a fresh agent
 
 When you write a non-trivial TODO item or `docs/plans/` doc, have a **fresh** agent review it (read-only; worktree isolation not required) and iterate — folding in each pass's findings — until a fresh agent raises **no reservations**. Use a *new* agent each pass: a reused one anchors on its prior conclusions, while a fresh one re-derives from the code and catches what the spec baked in (more than once the second pass found the *first pass's own recommendation* was unsound). Brief it to verify every load-bearing claim against source with `file:line` and return either SIGN OFF or specific cited reservations — not to rubber-stamp, and not to invent reservations to avoid signing off.
+
+**This same rigor applies to every BACKGROUND-AGENT task you orchestrate — the brief AND the output, not just plans.** When you (the orchestrator) delegate work to a background `Agent`:
+
+1. **Review the brief before launch (≥3 fresh-agent passes, until no reservations).** A delegated agent's brief/prompt is a spec — treat it exactly like a plan. Bounce it off a *fresh* reviewer each pass (read-only; may build/run minimal fixtures to verify), fold the findings, and iterate until a fresh pass raises no reservations *before* you launch the execution agent. This is not optional ceremony: in practice these brief-reviews repeatedly caught **wrong diagnoses** (a mis-identified root cause, a fix aimed at the wrong layer, a "fix" that was already implemented) that would each have wasted a full execution + multi-minute validation cycle. A cheap fresh-agent pass is far cheaper than launching an agent against a wrong brief. The orchestrator holds the full context (the plan, the reference implementation, the running diagnosis) and briefs the reviewer with it — and cross-checks the reviewer's load-bearing claims against source, keeping the reviewers honest too.
+
+2. **Launch a fresh agent to review the execution agent's WORK after it finishes, before you integrate.** When the execution agent reports back, do NOT merge/integrate or kick off the expensive validation on trust. Launch a *fresh* reviewer over its diff/commits (cite `file:line`; SIGN OFF or cited reservations) to confirm correctness and catch regressions. This is the same "review its work" step as for a plan — and it has caught both real bugs the executor missed and bonus issues (e.g. a latent leak the fix incidentally exposed). Only after a clean work-review do you integrate and run the bootstrap / integration sweep.
+
+The loop per delegated task is therefore: **write brief → ≥3 fresh brief-reviews (until no reservations) → launch execution agent (worktree, per "Multi-agent orchestration") → fresh work-review → integrate + parent-driven validation.** Future orchestrators must run this loop in full; skipping the brief-review or the work-review is how wrong diagnoses and unreviewed regressions reach the expensive bootstrap.
 
 ## Task Continuity
 
