@@ -672,3 +672,45 @@ gg-check clean; `cargo build` + `cargo test --lib` (2 pre-existing should_panic-
 commit by file. Do NOT run the bootstrap/integration sweep (parent's job). Report: the dominant root
 (exact fn + why), the fix, the minimal fixture proving before/after, and the symptom classes you
 expect it to collapse.
+
+---
+
+## Layer 6 — stage-2 FATAL `OpCopy`-on-resource (1238) (diagnose-dominant-root + fix; fix-agent brief)
+
+**Found by bootstrap cycle 5 (2026-05-27):** L5 (String== fix) collapsed the enum/name cascade
+(variant-not-in-enum 1417→0, [bug] 3096→110, [lower_fail] 1850→321). The remaining FATAL blocker is
+`OpCopy`-on-resource: `s1bin`'s `validate_resource_moves` (`validate.gg`, `check_inst_for_copy`/
+`check_operand_for_copy`; FATAL `exit(1)` at `validate.gg:~298`) reports **1238** violations across
+**209 functions** (`main`, `Parser__parse_type`, … every resource type: GorgetArray, GorgetMap,
+Dict, Vector__*) → aborts stage-2 before the C body. `driver` (Rust-compiled self-host) emits **0**.
+So `s1bin`'s LOWERING emits `OpCopy(local)` on resource-typed locals where it should emit `OpMove`/
+`OpClone`/`OpBorrow` — the validator (which is correct, same in both) flags `s1bin`'s wrong output.
+Same "stage-1 mis-compiles fn X → s1bin's X broken" fidelity class as L1-L5. Artifacts: stage-2
+`/tmp/v7-stage2.c` (the violations), stage-1 `$(cat /tmp/v7-out-path)` (correct, 0), s1bin
+`/tmp/v7-s1bin`, driver `tests/fixtures/self_host_lowerer/driver`.
+
+**LEADS (root-cause via minimal fixture, like L3/L5):**
+1. **GtPtr-borrow `OpCopy` false-positive OR mis-emission (Option[Ref]-related, likely dominant):**
+   with `.get().unwrap()` now yielding `GtPtr(resource)` borrows, copying such a borrow is a
+   legitimate POINTER copy (zero-cost alias). Check `local_is_resource` (`validate.gg`) — does it
+   unwrap `GtPtr(inner)` and classify a `GtPtr(GorgetArray)` local as "resource"? If so, an `OpCopy`
+   of a borrow gets flagged. Either (a) the LOWERING should emit `OpBorrow` (not `OpCopy`) for a
+   GtPtr-borrow value copy [writer fix], or (b) `validate_resource_moves` should NOT flag `OpCopy` of
+   a `GtPtr`/borrow local (a pointer copy is sound) [validator fix]. Determine which: is `s1bin`
+   emitting `OpCopy` on a borrow that `driver` emits as `OpBorrow`? (op_consume returns OpBorrow for
+   non-consume kinds — so a bare `OpCopy` site is elsewhere; grep `OpCopy(` emission sites in
+   `lower.gg`.)
+2. **Consume/assign decision fidelity:** `op_consume` returns only OpBorrow/OpClone/OpMove (never
+   OpCopy), so the OpCopy comes from a DIRECT `OpCopy(local)` emission (a `GIAssign(dst, OpCopy(src))`
+   or operand) in some lowering path. Find the dominant such site and why `s1bin` reaches it for a
+   resource where `driver` doesn't (likely a mis-resolved local type/ownership → wrong branch).
+
+**METHOD:** minimal fixture(s) reproducing `OpCopy`-on-resource when compiled by the **self-host
+driver** (e.g. a fn that copies a `Vector`/`GorgetArray` local, or a `.get().unwrap()` borrow used in
+a copy position) → run `validate_resource_moves` (it runs in `gg build`/`run`) → find the violating
+Inst + the lowering site that emitted the `OpCopy`. Compare `driver` vs `s1bin` GIR for that site.
+Fix the DOMINANT root at the writer (one root this cycle; parent re-bootstraps). If it's a validator
+false-positive on GtPtr-borrows, fix the validator to not flag pointer copies. gg-check clean; `cargo
+build` + `cargo test --lib`; commit by file. Do NOT run the bootstrap (parent's job). Report the
+dominant root (exact site + why), the fix, the minimal repro before/after, and the expected
+violation-count drop.
