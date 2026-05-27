@@ -689,28 +689,50 @@ Same "stage-1 mis-compiles fn X → s1bin's X broken" fidelity class as L1-L5. A
 `/tmp/v7-stage2.c` (the violations), stage-1 `$(cat /tmp/v7-out-path)` (correct, 0), s1bin
 `/tmp/v7-s1bin`, driver `tests/fixtures/self_host_lowerer/driver`.
 
-**LEADS (root-cause via minimal fixture, like L3/L5):**
-1. **GtPtr-borrow `OpCopy` false-positive OR mis-emission (Option[Ref]-related, likely dominant):**
-   with `.get().unwrap()` now yielding `GtPtr(resource)` borrows, copying such a borrow is a
-   legitimate POINTER copy (zero-cost alias). Check `local_is_resource` (`validate.gg`) — does it
-   unwrap `GtPtr(inner)` and classify a `GtPtr(GorgetArray)` local as "resource"? If so, an `OpCopy`
-   of a borrow gets flagged. Either (a) the LOWERING should emit `OpBorrow` (not `OpCopy`) for a
-   GtPtr-borrow value copy [writer fix], or (b) `validate_resource_moves` should NOT flag `OpCopy` of
-   a `GtPtr`/borrow local (a pointer copy is sound) [validator fix]. Determine which: is `s1bin`
-   emitting `OpCopy` on a borrow that `driver` emits as `OpBorrow`? (op_consume returns OpBorrow for
-   non-consume kinds — so a bare `OpCopy` site is elsewhere; grep `OpCopy(` emission sites in
-   `lower.gg`.)
-2. **Consume/assign decision fidelity:** `op_consume` returns only OpBorrow/OpClone/OpMove (never
-   OpCopy), so the OpCopy comes from a DIRECT `OpCopy(local)` emission (a `GIAssign(dst, OpCopy(src))`
-   or operand) in some lowering path. Find the dominant such site and why `s1bin` reaches it for a
-   resource where `driver` doesn't (likely a mis-resolved local type/ownership → wrong branch).
+**ROOT CAUSE (corrected by brief-review pass 1, which REPRODUCED it + orchestrator-verified) — a
+self-host fidelity defect on the `resource_meta_for` Dict-cache path makes `op_consume` mis-classify
+value resources as non-resource → emits `OpCopy`. NOT a validator false-positive, NOT a GtPtr-borrow
+issue, NOT a lowering-logic gap.** Lead-1 (GtPtr false-positive) is REFUTED: `resolve_type_name`
+returns `""` for `GtPtr`/`GtMutPtr` (`validate.gg:56-59`) so `local_is_resource` CANNOT flag a
+pointer copy; all 1238 flagged locals are VALUE resources (GorgetArray/Vector__*/GorgetMap/Dict/Box).
+Reproduced minimally: `Vector[int] w = v` → s1bin flags `OpCopy(_) on resource GorgetArray`+`Vector__int64_t`;
+driver = 0. The divergence (verified):
+- The VALIDATOR's `local_is_resource` (`validate.gg:74`) calls `build_resource_metadata(tname)`
+  **DIRECTLY** (pure `name=="GorgetArray"`/`.starts_with("Vector__")` compares, `lir_lower.gg:206+`)
+  → correct → flags s1bin's wrong OpCopy.
+- `op_consume`'s path: `CkAssign` IS a consume kind, so for an owned value resource op_consume MUST
+  return OpMove/OpClone (`lower.gg:~1388`) — it returns OpCopy ONLY via its `not is_resource_type_name(tname)`
+  early-out (`lower.gg:~1370-1372`). `is_resource_type_name` (`lower.gg:~3699`) → `resource_meta_for`
+  (`lir_lower.gg:414`), which goes through the **`gmod.resource_metadata` Dict[String,ResourceMetadata]
+  CACHE** (`contains(name)`/`get(name)`) AND returns `gmod.resource_metadata.get(name)` — an
+  **`Option[Ref[ResourceMetadata]]`** — though the fn is declared `Option[ResourceMetadata]` (a
+  Ref→value coercion at the return boundary, squarely Option[Ref]-related). s1bin's
+  `resource_meta_for("GorgetArray")` returns None where driver returns Some → `is_resource_type_name`
+  false → `op_consume` OpCopy. Same "stage-1 mis-compiles a String/Dict/Option[Ref] path → s1bin
+  mis-runs it" fidelity class as L5 — and the L5 memo noted Dict[String,_] key-compare wasn't covered.
+  (NB op_consume DOES emit OpCopy — `lower.gg:1314/1325/1327/1370/1372` — only for cases it BELIEVES
+  non-resource; my earlier "never OpCopy" was wrong.)
 
-**METHOD:** minimal fixture(s) reproducing `OpCopy`-on-resource when compiled by the **self-host
-driver** (e.g. a fn that copies a `Vector`/`GorgetArray` local, or a `.get().unwrap()` borrow used in
-a copy position) → run `validate_resource_moves` (it runs in `gg build`/`run`) → find the violating
-Inst + the lowering site that emitted the `OpCopy`. Compare `driver` vs `s1bin` GIR for that site.
-Fix the DOMINANT root at the writer (one root this cycle; parent re-bootstraps). If it's a validator
-false-positive on GtPtr-borrows, fix the validator to not flag pointer copies. gg-check clean; `cargo
-build` + `cargo test --lib`; commit by file. Do NOT run the bootstrap (parent's job). Report the
-dominant root (exact site + why), the fix, the minimal repro before/after, and the expected
-violation-count drop.
+**LOCATE the dominant sub-root (isolation step):** add a debug fixture / prints comparing under
+s1bin vs driver: `is_resource_type_name("GorgetArray")`, `resource_meta_for("GorgetArray").is_some()`,
+`build_resource_metadata("GorgetArray").is_some()`. If `build_resource_metadata` (direct, no Dict) is
+correct in s1bin but `resource_meta_for` (Dict-cache) is wrong → the defect is the
+`Dict[String,ResourceMetadata]` `.contains/.get`/cache-`put` OR the **`Option[Ref[ResourceMetadata]]`-
+returned-as-`Option[ResourceMetadata]` Ref→value coercion** (strong sub-lead: a `Dict.get()` result
+returned from a fn declared to return the value type — the Ref payload must be deref'd/cloned at the
+`return`; if s1bin mis-handles that, the returned metadata is garbage/None). If `build_resource_metadata`
+ITSELF is wrong in s1bin → a residual String-compare/`starts_with` fidelity bug. (Enum_registry
+Dict[String,Vector[String]] lookups WORK post-L5, so a blanket Dict-key failure is unlikely — favor
+the Option[Ref]-return-coercion sub-lead.)
+
+**FIX at the WRITER (NOT the validator — it is CORRECT; driver/reference agrees with 0 violations;
+"fixing" it would MASK a real s1bin runtime defect, violating CLAUDE.md "don't redesign around
+gaps").** Fix whatever stage-1 mis-compilation makes `resource_meta_for`/its Dict-cache/its
+Ref-return misbehave in s1bin. **METHOD:** repro with `Vector[int] w = v` (push twice + same-type
+rebind) compiled by the **self-host driver** + the isolation prints above; trace `driver` vs `s1bin`
+behavior of `resource_meta_for("GorgetArray")` to the exact mis-compiled primitive; fix at the
+writer; confirm op_consume now returns OpMove/OpClone and ALL 1238 collapse (single shared root).
+gg-check clean; `cargo build` + `cargo test --lib`; commit by file. Do NOT run the bootstrap
+(parent's job). Report the dominant root (exact primitive + why), the fix, the repro before/after,
+expected violation drop. (Orchestrator caveat: pass-1 localized the divergence point with certainty
+but did not bisect WHICH String/Dict/Option-Ref primitive s1bin mis-emits — that's your job.)
