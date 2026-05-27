@@ -1,5 +1,12 @@
 # Drop Emission — Self-Host Plan (unified)
 
+> **SUPERSEDED 2026-05-27 — READ "## NEXT STEPS" FIRST.** s1bin now BUILDS CLEAN and no longer segfaults
+> (Option[Ref] Phases 1-6 + Layers 1-6 + Gap A `bdc5b537` + Layer 9 `dac39a64`). bug #3b's `generate_c`
+> `.get()`-clone is **RESOLVED** (`compute_reachable_fns` borrows via `gorget_array_safe_get`). **The live
+> blocker is now a RESIDUAL clone-accumulation OOM in the LOWERING phase (`lower_module`), NOT generate_c
+> and NOT the lexer.** The "Live blocker = bug #3b … generate_c" wording in the 2026-05-26 status below is
+> STALE — see "## NEXT STEPS" for the current state, first-diagnostic, and repro.
+
 **Status (2026-05-26):** IN PROGRESS — cc-clean, **not yet bootstrapping.** WIP is **COMMITTED** on
 branch `gorget-1`. **Branch state (verified 2026-05-26): `main` is at `7cc7a101` and ALREADY contains
 the drop-emission cluster UN-SQUASHED (`758ed737` → `19f90339` → `7cc7a101`); `gorget-1` is a few docs-only commits ahead (this session's status/handover doc commits).** ⚠ The cluster landed on `main` before bootstrap is
@@ -109,9 +116,16 @@ for p in '__drop(' 'gorget_string_free(' 'gorget_array_free(' 'gorget_map_free('
 
 ---
 
-## bug #3 (lower-phase clone-OOM) — FIXED `7cc7a101`; live blocker is now bug #3b (codegen-phase `.get()` clone)
+## bug #3 (lower-phase clone-OOM) — FIXED `7cc7a101`; (2026-05-27) live blocker is a RESIDUAL lower-phase OOM in `lower_module` — see "## NEXT STEPS"
 
-> **STATUS (2026-05-26, end of session) — START HERE:**
+> **⚠ THIS "START HERE" BLOCK IS 2026-05-26 AND ITS "live blocker = generate_c" IS STALE. The current
+> START-HERE is "## NEXT STEPS" (2026-05-27):** generate_c's `.get()`-clone is RESOLVED (Option[Ref] →
+> `compute_reachable_fns` uses `gorget_array_safe_get`); Gap A (`bdc5b537`) + Layer 9 (`dac39a64`) landed;
+> s1bin builds clean + no segfault. The live blocker is now a RESIDUAL clone-accumulation OOM in the
+> LOWERING phase (`lower_module`), NOT generate_c. Read the rest of THIS block only for the (resolved)
+> bug #3 record.
+
+> **STATUS (2026-05-26, end of session — SUPERSEDED, see banner above):**
 > - **bug #3 (the lower-phase clone-OOM described in this section) is FIXED + VERIFIED in `7cc7a101`**
 >   ("CoW borrow for-element + read-only match-destructure"). `for x in coll` and non-owning `match`
 >   destructures now bind the element as a BORROW, not a clone (the producer was *two* clones —
@@ -254,39 +268,90 @@ LOWERING fabricates the 13,000+-deep one** (consistent with the ASan box-allocat
 
 ---
 
-## NEXT STEPS — bug #3b: the `.get().unwrap()` whole-`LirFunction` clone in `generate_c`
+## NEXT STEPS — bug #3b RE-LOCALIZED (2026-05-27): `generate_c` clone FIXED; live OOM is now in the LOWERING phase (`lower_module`)
 
-**DONE this session (verified, `7cc7a101`):** the lower-phase clone-OOM (bug #3) is fixed — for-element
-+ non-owning-match destructures now borrow (see STATUS under NEXT BUG). `lower_module` completes;
-`lowerer_comparison` green.
+> **Read this first — the old framing below this section ("(superseded)…") is stale.** bug #3b's
+> ORIGINAL site — `m.functions.get(i).unwrap().name` cloning a whole `LirFunction` in `generate_c` — is
+> **RESOLVED.** The Option[Ref] borrow-by-default work (Phases 1-6, on `gorget-1`) made `.get()` return
+> `Option[Ref[T]]` (a `GtPtr` payload). **Verified in the emitted stage-1 C:** `compute_reachable_fns`
+> now lowers `m.functions.get(i)` to `gorget_array_safe_get` (a **borrow pointer**), NOT
+> `gorget_array_clone` — only small `gorget_string_clone_to_owned` calls remain. No whole-`LirFunction`
+> clone in `generate_c`.
 
-**bug #3b (live blocker):** the SAME `.get()`-aggregate-clone class, now in `lir_codegen.gg::generate_c`.
-`compute_reachable_fns` (`lir_codegen.gg:902`), `emit_func_forward_decls` (`:1414/1419`), and the body
-loop (`:5193`) iterate with `m.functions.get(i).unwrap().name` in `while` loops — each `.get().unwrap()`
-deep-clones the WHOLE `LirFunction` (all blocks/instructions) just to read one field → OOM ~11 GB.
-The for-element fix doesn't cover the manual `while`-loop `.get()` idiom. **Repro:** build stage-0, run
-stage-1 on `driver.gg --emit-c`, `cc -O0`, run → OOM-SIGKILL ~11 GB in `generate_c` (it dies in the
-reachability/fwd-decl setup, BEFORE the function-emission loop). Confirm with `print`-trace bisecting.
+**DONE since this doc was written (all on `gorget-1`; squash at green — see `## History`):**
+- Option[Ref] (Phases 1-6) + Layers 1-6 (`c96efd58` → `6186b436`) — full record in `option_ref_borrow.md`.
+- **Gap A** / bare nullary enum-variant resolution (`bdc5b537`): fixed the `push(IDropGuardClose)`
+  208-vs-8-byte stack overflow (a bare nullary `Inst` variant used as a value now lowers via
+  `lower_nullary_variant_ident` → `lower_call`, like the with-parens form).
+- **Layer 9** / `Dict.put` borrowed-String-key UAF (`dac39a64`): `decide_svardecl_emission` Branch A now
+  excludes `GtPtr`/`GtMutPtr` sources (typed, mirrors Rust `src/ir/lowering/stmts/mod.rs:1140-1141`), so
+  `String x = coll.get(i).unwrap()` clones via Branch C-pre instead of a name-collapse `BorrowAlias`.
+  3-pass brief review + a diff review (ASan repro) signed off.
+- **Result:** s1bin now **builds clean** (`cc` exit 0, schema 12/12, no `(Option*)`/unknown-field errors)
+  and **no longer segfaults**.
 
-**FORK — pick one next session:**
+**LIVE BLOCKER — a clone-ACCUMULATION OOM in the LOWERING phase (`lower_module`), the bug #3 class.**
+s1bin OOMs (system `SIGKILL`/137 at ~11 GB in the canonical run; `gorget: panic: allocation failed` under
+`ulimit -v 3000000`). **It is in LOWERING, not parse — VERIFIED:** the truncated s1bin output is **758
+`gir_liveness_diff` warnings** (`/tmp/v12-stage2.c`, all but one line), which `diag_warn` emits
+**per-function inside `lower_module`** (lower.gg:7250 / :7485). The driver pipeline (driver.gg) is
+`parse_source`(48) → `resolve_module`(59) → `type_check_module`(60) → **`lower_module`(61)** → … →
+`generate_c`(later). So emitting 758 warnings PROVES s1bin completed parse + resolve + typecheck and was
+executing `lower_module` when memory ran out (the 3 GB cap dies at 758; a larger run reaches the full ~797
+warnings before the panic). The accumulation builds through `lower_module` (and possibly the later
+`lower_gir_to_lir` / `generate_c`).
 
-- **(A) reference-grade — close the whole class.** Make `.get()` (and the other aggregate reads:
-  Option-wrap, payload-read) **borrow by default** (CoW: "collection element reads propagate Ptr aliases
-  at zero cost") and **port Rust's clone-on-mutation detection** (`index_borrow_sources`,
-  `src/semantic/safety/check_expr.rs:358`) into the self-host safety pass so the get-mutate-set idiom
-  (`t = coll.get(i); t.field.push(x); coll.set(i,t)`) clones on the MUTATION, not the read. This kills
-  bug #3b AND every future `.get()`-clone instance in one stroke. **Caveat (verified by the impl agent):**
-  a naive general-`.get()`-borrow WITHOUT the detection **double-frees** get-mutate-set (e.g.
-  `traits.gg:append_builtin_method`). So this is substantial + UAF-risky and MUST land with the
-  detection machinery, not before. This is the project-directive ("reference-grade over surgical")
-  answer.
+**⚠ The earlier "lexer / `StringLiteral.lex_segments` clone" framing was WRONG — do NOT chase it.** A gdb
+backtrace through `lex_emit → StringLiteral__clone → gorget_array_clone` was a **batch-mode artifact**:
+`gdb -batch -ex run -ex bt` stops at the FIRST breakpoint hit — an early `lex_segments` clone during
+`load_imports`' parse that SUCCEEDED — then exits, never reaching the real alloc-failure in lowering. The
+`lex_emit` clone is at most a minor wart (≈9k string literals × tiny `lex_segments` ≈ single-digit MB —
+numerically cannot be the ~11 GB consumer). **The real OOM backtrace was never captured; getting it is
+step 1 below.**
 
-- **(B) surgical stopgap — borrow-iterate the codegen `while` loops only.** Add a `LirModule`
-  borrow-accessor (e.g. `function_names() -> Vector[String]`, or a by-index field-borrow) so
-  `compute_reachable_fns` / `emit_func_forward_decls` / the `:5193` body loop read names/fields without
-  cloning whole `LirFunction`s. Unblocks bootstrap fast, but it's **whack-a-mole** — other
-  `while … .get().unwrap()` aggregate reads will keep biting until (A) lands. Treat as a bridge, not the
-  fix.
+**Why s1bin but not the driver:** the Rust-gg-compiled driver lowers the SAME program and emits all 612963
+lines without OOM. So s1bin's `lower_module` (compiled from stage-1 C) accumulates/clones where the
+driver's (compiled by Rust gg) moves/borrows/frees. This is the **residual of bug #3** (the lower-phase
+clone-bomb): the for-element + non-owning-match borrow fix made the DRIVER's `lower_module` complete, but a
+residual clone/retain in self-compiled `lower_module` still grows to ~11 GB. Same "stage-1 mis-compiles fn
+X → s1bin's X is memory-pathological" fidelity class as Layers 1-6.
+
+**PRE-EXISTING, NOT a Layer-9 regression — VERIFIED.** Pre-Layer-9 s1bin (`/tmp/v11-bin`) dies at the SAME
+758-warning lowering point under the 3 GB cap (`allocation failed`); cycle 8 only reached its (now-fixed)
+UAF because it ran under full system memory. Clearing the earlier crashes (IDropGuardClose, Layer 9 UAF)
+just let s1bin run far enough into lowering to exhaust memory.
+
+**FIRST DIAGNOSTIC (fresh session):**
+1. **Repro (canonical — do NOT hand-roll cwd/paths; a wrong cwd faked a `schema.gg`-drop earlier, see TODO
+   `find_project_root_for`):** rebuild driver (`cd tests/fixtures/self_host_lowerer && GG_BUILD_TIMEOUT_SECS=900
+   ../../../target/release/gg build driver.gg`), then `cargo test --test integration self_host_bootstrap`
+   or `/tmp/cycle9.sh` (mirrors it: repo-root cwd, ABSOLUTE `driver.gg`+`lib` paths, `--lir-c`, preamble
+   `\ntypedef struct __gg_`, `cc -O0 -w -lm -lpthread`). Fast fail: `cc -O0 -g` the assembled C, run under
+   `ulimit -v 3000000`.
+2. **Get the REAL OOM backtrace** (the artifact this handoff LACKS — do not skip): under the cap, gdb must
+   `continue` PAST the many SUCCESSFUL `gorget_array_reserve`/`gorget_array_clone` calls to the FAILING one
+   — break on the `fprintf(…"allocation failed")` / the `gorget_array_reserve` alloc-fail (v12-full.c:~2275)
+   and let it run to THAT hit, then `bt`. (Do NOT `bt` on the first clone — that's the artifact that misled
+   this handoff.) That stack names the `lower_module`/`lower_gir_to_lir` site allocating the dominant buffer.
+3. **Bisect by memory, not guesswork:** the per-function `gir_liveness_diff` warnings are a FREE progress
+   meter — note RSS at warning N to see whether memory grows LINEARLY across `lower_module`'s function loop
+   (a per-function clone/retain) or JUMPS (one big structure). `__gorget_array_clone_count` (runtime global)
+   tracks clone growth; distinguish churn (freed) vs leak (retained).
+4. **Re-open the lower-phase anchors** (the live targets): the discovery walkers + `lower_module` body-walk +
+   transitive generic fixpoint, and `op_consume`/`decide_ptr_consume`. **Diff vs the driver:** which
+   `lower_module`/GIR structure does s1bin clone/retain that Rust moves/borrows?
+5. **Rust parity:** `src/ir/lowering/` discovery/lowering passes borrow their AST and don't retain
+   per-function deep copies.
+
+**LIKELY ROOT (bug #3 residual — CONFIRM via the real backtrace; do NOT pre-commit a site):** a
+per-function clone or retained-copy in self-compiled `lower_module` (or `lower_gir_to_lir`) that the
+Rust-compiled driver does as a move/borrow. The OLD fork (A) ("make `.get()` borrow + port
+`index_borrow_sources`") and fork (B) ("surgical generate_c accessor") are **superseded** — generate_c is
+fixed and the live OOM is in `lower_module`. **One residual generate_c clone for LATER:** `LirFunction
+cur_func = m.functions.get(cur).unwrap()` (lir_codegen.gg:~1020) still binds a VALUE → a whole-`LirFunction`
+clone per worklist entry; harmless now (generate_c unreached) but a latent next-blocker once lowering is
+fixed — borrow it (`&cur_func` / bind the borrow). Fix at the writer (CLAUDE.md "Don't redesign around
+compiler gaps"); validate via the canonical bootstrap.
 
 **Then — validate (in order):** `self_host_bootstrap` (exact) green → `self_host_bootstrap_fixed_point`
 green → `lowerer_comparison` parity → `cargo test --lib --release` (baseline per CLAUDE.md ~1027; ~1059
@@ -298,19 +363,25 @@ stack-overflow this session). Re-run the drop-count grep-diff vs `driver.c`.
 (`is_owning_mutator_arg`) with a typed signal (guardrail #5), then squash the whole cluster as ONE
 commit (partial states crash). Fold "Deferred optimizations" into `TODO.md`.
 
-**In-tree change `19f90339` (`Box`-owning + `GtMutPtr`-to-resource clone-through):** committed; correct-
-by-spec (Rust `ensure_owned_at_consuming_arg` + lang-ref §9.6); crash byte-identical with/without it. It
-touches the `GtMutPtr` (`&`/`!`-param) consume arm — a DIFFERENT param shape than the BARE (`GtPtr`)
-walkers this OOM is about — so likely not the driver. Keep it; if STEP B's for-element borrow fix and
-this fix's `OpClone`-materialization arms overlap, reconcile (don't double-handle), but do not assume
-`19f90339` is implicated without a clone-count measurement.
+**Anchors (LOWERING clone-OOM — the live blocker):** `lower_module` (lower.gg, the per-function lowering
+loop that emits the `gir_liveness_diff` warnings at :7250/:7485) + the discovery walkers + the transitive
+generic fixpoint (~lower.gg:8704+); `op_consume`/`decide_ptr_consume` consume decisions (lower.gg:1312+/
+1533+); then `lower_gir_to_lir` (lir_lower.gg). The dominant ~11 GB consumer is one of these — pin it via
+the REAL OOM backtrace (FIRST DIAGNOSTIC step 2) + the per-warning RSS meter (step 3). Diff vs the
+Rust-compiled driver's `lower_module` (which completes). **Repro artifacts (this session, `/tmp`):**
+`cycle9.sh` (canonical cycle), `v12-full.c` (assembled stage-1 C), `v12-g` (`-O0 -g` debug build), `v12-bin`
+(the OOMing s1bin), `v12-stage2.c` (the 758-warning truncated output = proof OOM is in lowering); `v11-bin`
+= pre-Layer-9 s1bin (OOMs identically under cap → proves pre-existing). NOTE: `v12-gdb2.log`'s lexer
+backtrace is the MISLEADING batch-mode artifact (first clone during parse, not the OOM) — ignore it.
+**generate_c `.get()` borrow — NOW FIXED via Option[Ref]** (`compute_reachable_fns` uses
+`gorget_array_safe_get`); the old walker/fixpoint anchors below are kept only as historical record.
 
-**Anchors:** the three walkers `lower.gg:7860/7805/7762` + their call/recursion sites `7778-7850 self-recursion + 8827/8830 lower_module calls`;
-`lower_module` body-walk + transitive fixpoint (~`8704`+); the for-element consume decision
-(`emit_payload_read` auto-clone vs `lower_for`'s `OpBorrow(coll_local)`); `op_consume`/
-`decide_operand_at_consuming_arg`/`decide_ptr_consume`; `bac24e49` (Phase 2.3 clone-on-consume regime,
-post-A.2). (NOT bug-#3-relevant but historical: first-bad `2e544e84`=A.2 is a since-fixed
-`load_imports` hang.) Rust read-only-walk parity: `src/ir/lowering/` discovery passes borrow their AST.
+**(historical) In-tree change `19f90339` (`Box`-owning + `GtMutPtr`-to-resource clone-through):**
+committed; correct-by-spec (Rust `ensure_owned_at_consuming_arg` + lang-ref §9.6). Keep it; reconcile only
+if a future `OpClone`-materialization arm overlaps. **(historical, STALE) old generate_c anchors:** the
+three walkers `lower.gg:7860/7805/7762`; `lower_module` body-walk + transitive fixpoint (~`8704`+);
+`emit_payload_read` auto-clone vs `lower_for`'s `OpBorrow(coll_local)`; `bac24e49` (Phase 2.3 clone-on-
+consume regime). (first-bad `2e544e84`=A.2 = a since-fixed `load_imports` hang.)
 
 ---
 
@@ -468,6 +539,8 @@ MB), the pointer-cast cascade (2780 → 0), user-type drops (0 → hundreds), th
 enum-variant-ctor double-frees, and finally (2026-05-25) the prelude-variant-owning UAF, choice-A
 Option ABI, variant-ctor typing, and the Box-field deep-clone that closed the `meta_expand`
 double-free. bug #3 (lower-phase heap clone-OOM — for-element/discovery-walker `.get()` clones, NOT
-recursion/A.2) is FIXED in `7cc7a101`; the live blocker is now **bug #3b** (the same `.get()`-clone
-class at `generate_c`'s `while`-loop idiom) — see the NEXT BUG STATUS + NEXT STEPS sections above. The
-full blow-by-blow is in `git log` and `DONE.md`.
+recursion/A.2) is FIXED in `7cc7a101`. THEN (2026-05-27): Option[Ref] (Phases 1-6) + Layers 1-6 + Gap A
+(`bdc5b537`) + Layer 9 (`dac39a64`) landed — s1bin now BUILDS CLEAN and no longer segfaults; bug #3b's
+`generate_c` `.get()`-clone is RESOLVED (`compute_reachable_fns` borrows via `gorget_array_safe_get`). The
+**live blocker is now a residual lower-phase clone-accumulation OOM in `lower_module`** (NOT generate_c,
+NOT the lexer) — see "## NEXT STEPS" above. The full blow-by-blow is in `git log` and `DONE.md`.
