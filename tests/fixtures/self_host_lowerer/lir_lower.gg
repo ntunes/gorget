@@ -413,7 +413,15 @@ Option[ResourceMetadata] build_resource_metadata(String name):
 # becomes a single `contains` check.
 Option[ResourceMetadata] resource_meta_for(GirModule &gmod, String name):
     if gmod.resource_metadata.contains(name):
-        return gmod.resource_metadata.get(name)
+        # `.get()` yields `Option[Ref[ResourceMetadata]]`; this fn returns
+        # `Option[ResourceMetadata]` (a value), so materialise an OWNED clone
+        # rather than returning the cache Ref. Without the explicit clone the
+        # self-host lowerer (compiling this very fn) leaves the Ref payload
+        # un-deref'd at the return → callers see None → `is_resource_type_name`
+        # falsely false → `op_consume` emits OpCopy on resources (1238 FATAL
+        # validate_resource_moves violations). See TODO.md "Option[Ref] return
+        # auto-deref" for the deeper lowerer gap this works around.
+        return Some(gmod.resource_metadata.get(name).unwrap().clone())
     Option[ResourceMetadata] computed = build_resource_metadata(name)
     match computed:
         case Some(rmeta):
