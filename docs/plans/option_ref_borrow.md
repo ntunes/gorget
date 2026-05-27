@@ -529,27 +529,41 @@ match item: case IFunction(fdef):
 `FunctionDef`/`MatchArm` shallow-ALIASES them instead of cloning, so the String is owned by BOTH the
 new item (in m.items via set) AND the original/clone that still gets dropped → freed twice.
 
-**Why it SHOULD already clone (and the open question):** "Fix D" (`lower.gg:8756`) registers struct
-ctors in `fn_move_params` with per-field resource flags so `classify_call_arg("FunctionDef", nameIdx)`
-returns `CkCallArgOwning` -> `op_consume(LoBorrowed) -> OpClone` (`lower.gg:1375-1395` comment names
-this EXACT meta_expand double-free). Yet it double-frees, so under `Option[Ref]` the ctor-arg
-clone/move isn't firing for a borrowed/GtPtr field-read. Likely suspects (root-cause via a minimal
-fixture, like the layer-3 agent did):
-  (a) the field-read `fdef.name` (EFieldAccess on a GtPtr/owned `item`) is NOT tagged `LoBorrowed`
-      (or is tagged in a way `op_consume` doesn't clone), so even `CkCallArgOwning` doesn't clone it;
-  (b) `item` from `m.items.get(i).unwrap()` is NOT being deep-cloned by Branch C-pre (Item is an
-      ENUM — is `is_resource_type_name("Item")` true? if not, item stays a borrow), so fdef.name
-      aliases the original m.items[i] directly;
-  (c) the enum-payload match-bind `case IFunction(fdef)` binds `fdef` sharing the buffer, and the
-      ctor move/clone doesn't MoveZero the source so both drop;
-  (d) `FunctionDef(...)` ctor args don't route through `op_consume` with the owning kind at all under
-      the current Option[Ref] flow.
+**ROOT CAUSE (corrected by brief-review pass 1 + orchestrator-verified against source):** NOT a
+ctor-arg-clone gap — that path is ALREADY correct (Fix D `lower.gg:8756` registers ctor resource
+fields `CkCallArgOwning`; `op_consume` GtPtr→`decide_ptr_consume`→`OpClone`; ctor args clone). The
+real defect is upstream at the `Item item = m.items.get(i).unwrap()` BIND: it binds a **BorrowAlias**
+into `m.items[i]` instead of a deep clone, so the recursive `expand_meta_for_in_stmts(fdef.body, m)`
+walker leaks aliases into the new items that `m.items.set` then frees → double-free.
 
-**FIX (for the agent):** make struct/enum constructor field-init args that read fields of a
-borrowed/GtPtr/owned-alive aggregate CLONE (materialize) the field into the new struct — mirroring
-Rust's `ensure_owned_at_consuming_arg` and the `lower.gg:1377` invariant. Reproduce with a MINIMAL
-fixture (a struct/enum built from fields of a `coll.get(i).unwrap()` result that's then both
-set-back and dropped — the meta pattern in miniature), trace GIR + ASan to the exact write site, fix
-in CODEGEN (don't rewrite meta.gg). Keep resource/primitive/for-element paths intact; do not
-reintroduce the layer-3 triple-clone. gg-check clean; `cargo build` + `cargo test --lib`; commit by
-file. Parent drives the bootstrap.
+Why the bind doesn't deep-clone: **a stale `__imported_type__` gate in `resolve_payload_clone_fn`
+(`lower.gg:~6142-6144`).** Branch C-pre (`lower.gg:805-814`, the deref+clone for a `GtPtr`-to-resource
+owned bind) only fires when `resolve_payload_clone_fn(pointee) != ""`. But that function returns `""`
+for IMPORTED user types: `if gmod.resource_types.contains(tname) and gmod.type_infos.contains(tname):
+if not gmod.imported_fns.contains("__imported_type__"+tname): return tname+"__clone"`. `Item`,
+`FunctionDef`, `MatchArm`, `SpannedPattern`, `Pattern` are ALL `from ast import` (`meta.gg:5,12,13`)
+→ tagged `__imported_type__` → the guard is false → returns `""`. So Branch C-pre is skipped →
+Branch C → `BorrowAlias()` (`lower.gg:~828`). **This gate is STALE:** the LIR layer REMOVED the
+`__imported_type__` skip in cluster (a) 2026-05-24 (`lir_lower.gg:3562-3568`, explicit comment) — it
+NOW emits `Item__clone`/`FunctionDef__clone` for imported types (whole-program compile; double-def
+guarded by `fn_exists()`, not by suppression). So `lower.gg:~6143` is OUT OF SYNC with
+`lir_lower.gg:3562` — a "one source of truth per axis" violation (CLAUDE.md layering rule 3): GIR
+says "no clone fn for imported Item", LIR emits one. (Suspects (a)/(c)/(d) from the prior draft are
+DISPROVED statically: field-reads ARE tagged LoBorrowed+GtPtr; ctor args DO route owning→clone;
+`is_resource_type_name("Item")` IS true. Don't chase them.)
+
+**FIX (for the agent):** in `resolve_payload_clone_fn` (`lower.gg:~6142-6144`), REMOVE the stale
+`not gmod.imported_fns.contains("__imported_type__"+tname)` gate so it returns `tname + "__clone"`
+for any registered resource user type — matching the LIR layer's cluster-(a) decision
+(`lir_lower.gg:3562`, which emits the clone fn for imported types and guards double-def via
+`fn_exists()`). Then Branch C-pre fires for `Item item = m.items.get(i).unwrap()` → deep clone →
+`item` is owned/independent → the recursive walker no longer aliases `m.items[i]` → no double-free.
+**Verify:** confirm `resolve_payload_clone_fn("Item")=="Item__clone"`, Branch C-pre now fires, and a
+minimal **recursive** get-mutate-set over an IMPORTED-type Vector (the meta pattern in miniature —
+NOT a flat one-level struct ctor, which already clones per Fix D) reproduces the double-free before
+the fix and is clean after. Do NOT touch the ctor-arg path (already correct; touching it risks the
+layer-3 triple-clone). Keep resource/primitive/for-element paths intact. gg-check clean; `cargo build`
++ `cargo test --lib`; commit by file. Parent drives the bootstrap. (Orchestrator caveat: pass-1
+reviewer couldn't run the 25-min bootstrap to 100%-confirm this is the SOLE cause; it's a
+source-verified defect matching the failing shape — if removing the gate doesn't fully fix it,
+re-trace from Branch C-pre with the minimal recursive fixture.)
