@@ -323,11 +323,16 @@ enough to assemble the ~610K-line / multi-MB output String. Matches the MEMORY n
 String path: (a) is `generate_c`'s returned `String` already truncated (StrBuf concat / `String + String`
 bug at scale), or (b) does `print` (`fwrite` of `msg.data`/`msg.len`) truncate a complete String? Add a
 `gorget_print_err(int_to_str(generate_c(&lir).len()))` probe in `driver.gg` main to see if the String's
-own `.len` is ~1.6 M (print bug) or the full ~20 MB (StrBuf-assembly bug). The thin-pointer String
-redesign (`project_thin_pointer_string`) and `StrBuf` growth in the C runtime (`gorget_array_reserve` /
-the String header) are the suspects. NB the truncation cut mid-`resolve_sizeof_c_type` output suggests a
-per-append boundary, not a hard cap — likely a 32-bit length/offset overflow or a realloc-size
-miscalculation in the self-host's String append at multi-MB sizes.
+own `.len` is ~1.6 M (print bug) or the full ~20 MB (StrBuf-assembly bug). **Sharper localization:** the output String is grown by `sb_push`
+(`lir_codegen.gg:46`), which calls `gorget_string_append_buf(&buf, rhs, rhs.byte_len())`. The C runtime
+`gorget_string_append_buf` (`size_t len`, correct 64-bit realloc) is NOT the bug. **The suspect is the
+call lowering**: the emitted C passes `gorget_str_to_cstr(rhs)` (a NUL-terminated C string) as `data` and
+copies `rhs.byte_len()` bytes — if `gorget_str_to_cstr` or `byte_len()` mis-handles `rhs` at scale, or if
+the cumulative `buf.s` realloc path in s1bin is miscompiled, the append silently truncates. The cut is
+mid-token (not a hard byte cap), pointing at a per-append failure once `buf.s` is multi-MB. Check
+`byte_len()` (`int` return — fine at 1.6 M but verify the self-host's impl) and whether `gorget_str_to_cstr`
+allocates a fresh cstr each append (an O(n²) cstr churn that could itself OOM/corrupt at scale). The
+thin-pointer String redesign (`project_thin_pointer_string`) is the broader context.
 
 **Then — validate (in order):** once the String truncation is fixed, s1bin should emit the full ~610K
 lines → `self_host_bootstrap` (exact) → `self_host_bootstrap_fixed_point` → `lowerer_comparison` →
