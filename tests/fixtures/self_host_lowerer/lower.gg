@@ -4081,6 +4081,24 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         int neq_dst = add_local(&ctx, BOOL_TYPE, NO_NAME)
                         emit(&ctx, GIUnOp(neq_dst, UNOP_NOT, BOOL_TYPE, OpCopy(eq_dst)))
                         return neq_dst
+                # String ==/!=: content equality via gorget_str_eq(Str, Str).
+                # Mirrors Rust src/ir/lowering/exprs/operators.rs:87-95. Without
+                # this, String ==/!= falls to the GICmp(I64_TYPE) below — a raw
+                # pointer/int compare that breaks for two distinct String
+                # instances (and for GtPtr(String) operands from .get().unwrap()).
+                # is_string_local unwraps GtPtr/GtMutPtr, so a Ref[String]
+                # operand is detected; gorget_str_eq takes operands by pointer
+                # and compares CONTENT, so borrow operands are correct whether
+                # the operand is a value String or a GtPtr(String).
+                if (op == "==" or op == "!=") and (is_string_local(lhs, &ctx, &gmod) or is_string_local(rhs, &ctx, &gmod)):
+                    int eqd = add_local(&ctx, BOOL_TYPE, NO_NAME)
+                    Vector[Operand] str_eq_args = [op_consume(&ctx, &gmod, lhs, CkCallArgBorrow()), op_consume(&ctx, &gmod, rhs, CkCallArgBorrow())]
+                    emit(&ctx, GICallExtern(eqd, "gorget_str_eq", str_eq_args))
+                    if op == "==":
+                        return eqd
+                    int nd = add_local(&ctx, BOOL_TYPE, NO_NAME)
+                    emit(&ctx, GIUnOp(nd, UNOP_NOT, BOOL_TYPE, OpCopy(eqd)))
+                    return nd
                 int dst = add_local(&ctx, BOOL_TYPE, NO_NAME)
                 emit(&ctx, GICmp(dst, map_cmpop(op), I64_TYPE, op_consume(&ctx, &gmod, lhs, CkBinOpArg()), op_consume(&ctx, &gmod, rhs, CkBinOpArg())))
                 return dst
