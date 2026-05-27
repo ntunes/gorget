@@ -602,53 +602,61 @@ foundational functions. Same "stage-1 mis-compiles fn X → s1bin's X broken →
 as L1-L4, now hitting foundational paths. Artifacts: stage-1 C = `$(cat /tmp/v6-out-path)`; stage-2 =
 `/tmp/v6-stage2.c`; s1bin = `/tmp/v6-s1bin`; stage-1 driver = `tests/fixtures/self_host_lowerer/driver`.
 
-**PRIMARY LEAD (corrected by brief-review pass 1 + orchestrator-verified against the artifact) —
-String-keyed `Dict` (named_locals) fidelity: function params/locals not landing in / not found in
-`named_locals`.** The loader lead is REFUTED: the failures are dominated by LOCAL types, not imports.
-Verified counts in `/tmp/v6-stage2.c`:
-- "variant not in enum" (1417): `Expr` 289, `LirInst` 286, `Stmt` 176, `ResolvedType` 82,
-  `Instruction` 80, `GirType` 75, `Item` 66… — ALL local (`ast.gg`/`lir.gg`/`gir.gg`); imported
-  `IoError`=34, `ParseError`=10 are ~3%. A loader failure would hit ONLY imported enums; instead
-  local enums dominate → the enum LOOKUP fails (`match_variant_index`/`enum_variant_index` over the
-  `enum_registry` Dict), not the load.
-- "unknown identifier" (2825): `dst` 232, `name` 213, `op` 112, `args` 110, `value` 80, `ty` 80,
-  `rhs` 69, `mname` 68… — ALL local variables / params / match-bindings, none imported. The
-  EIdentifier path checks `nl_contains(name)` first (`lower.gg:189`, = `named_locals.contains`); for
-  these to reach the unknown-id fallback, `named_locals` (a `Dict[String,int]`) must be missing keys
-  that were `put`.
+**PRIMARY ROOT (corrected by brief-review pass 2, which RAN the fixtures + orchestrator-verified
+against source) — `String ==` on an unwrapped `Option[Ref[String]]` (a `GtPtr(String)`) pointer-
+compares instead of `gorget_str_eq`.** Both the loader lead AND the named_locals/param lead are
+REFUTED EMPIRICALLY: pass-2 ran single-file fixtures through `driver` vs `s1bin` — plain params,
+plain locals, `Dict[String,int]` put/get, and enum CONSTRUCTION all emit **0 diagnostics** in s1bin.
+ONLY enum **match-destructuring** fails. The dominant cascade originates in **`enum_variant_index`
+(`gir.gg:404-410`)**: `Vector[String] vs = gmod.enum_registry.get(enum).unwrap(); … String vn =
+vs.get(j).unwrap(); if vn == variant_name:`. Under Option[Ref], `vs.get(j).unwrap()` yields a
+`GtPtr(String)` (pointer), and `variant_name` is itself a borrow param (pointer) — so BOTH `==`
+operands are pointers. The str-eq routing (`lir_codegen.gg:2925-2949`) only enters its deref+`gorget_str_eq`
+block when `lty == gs_sid` OR `rty == gs_sid` (an operand's C-type IS the `GorgetString` STRUCT); when
+BOTH operands are pointers, neither matches → it falls through to a raw `lhs == rhs` **pointer
+compare** (`~2972`). Two distinct String instances never share an address → EVERY variant comparison
+returns -1 → "variant not in enum" → the destructure bails before `nl_put`-ing its bindings → the
+2825 "unknown identifier" (match-arm bindings `name`/`x`/`dst`…) are DOWNSTREAM, not a named_locals
+defect. `driver` is clean because Rust's `gg` deref's the operands; `s1bin` carries the pointer-
+compare from the self-host's emitted C. **This IS an Option[Ref] regression** (the `.get()→Option[Ref]`
+change made `vn` a pointer). NB the `lower.gg:215-219` "~58k params not in named_locals" comment is
+STALE (git-dated 2026-04-24, a since-FIXED hash_fn=NULL Dict bug; commit chain
+`0e84a044`→fixed by `6e76b13c`/`d1a0d1d7`) — IGNORE it, it's a red herring.
 
-This is a **DOCUMENTED, pre-existing self-host bug**, not (necessarily) an Option[Ref] regression:
-`lower.gg:215-219` states *"stage-1 running on its own source emits ~58k diagnostics today because
-many function parameters aren't ending up in `named_locals` — a separate bug still under
-investigation."* That is EXACTLY this layer. `driver` (Rust-compiled self-host) binds params/locals
-correctly (clean stage-1); `s1bin` (self-host-compiled) does not → the self-host's CODEGEN of the
-param-binding / `nl_put` / `Dict[String,int]` put-get path is wrong, so `s1bin` mis-binds → cascade.
-**Diagnose the dominant root here:** is it (a) `nl_put` not being CALLED for params (the param-binding
-logic in the fn-prologue lowering), or (b) `Dict[String,int].put`/`.contains`/`.get` codegen
-fidelity (String-keyed `.get()→Option[Ref]` / `contains`)? Both land params out of `named_locals`.
-(b) is directly in the Option[Ref] change's path; (a) may predate it.
+**FIX DIRECTION (at the writer):** when `==`/`!=` compares String operands and an operand is a
+`Ref`/pointer-to-`GorgetString` (`GtPtr(GorgetString)`, from `.get().unwrap()`), it must DEREF and
+route to `gorget_str_eq`, NOT pointer-compare. Two candidate sites (pick per "fix complexity = wrong
+layer"): (i) the str-eq routing `lir_codegen.gg:2925-2949` — recognize a pointer-to-`GorgetString`
+operand (`LT_PTR_TO_BASE + gs_sid`) as a string operand so its existing `*(Str*)` deref fires for
+BOTH-pointer cases; or (ii) the lowerer's `==` binop (`lower.gg:~4085`) — deref a `GtPtr(String)`
+operand to a value `String` before the compare. Prefer whichever is the single typed write site;
+ensure the operand's GIR type is `GtPtr(GorgetString)` (typed, not opaque `LT_PTR`) so the deref is
+sound. Verify driver-vs-s1bin GIR for the `==` goes from `cmp_eq i64 <ptr>,<ptr>` to a
+`gorget_str_eq` call.
 
-**SECONDARY / LIKELY-SEPARATE root (a LATER cycle, do NOT conflate):** OpCopy-on-resource (1236,
-`validate.gg:~147`) is a `op_consume`/`decide_*_consume` consume-decision axis, independent of the
-Dict lookup. It may be partly downstream of mis-resolved locals (wrong ownership tags) OR an
-independent fidelity bug — fix the Dict/named_locals root FIRST (this cycle), re-bootstrap, and treat
-OpCopy-on-resource as the next root if it persists. Drop any "one root → all 4000 symptoms" framing.
+**SEPARATE root (a LATER cycle, do NOT conflate) — and it is FATAL:** OpCopy-on-resource (1236,
+`validate.gg:~147` `validate_resource_moves`) is an independent `op_consume`/`decide_*_consume` axis;
+pass-2 confirmed it ABORTS emission (fatal) on a `Vector[String]` literal, before the body. So the
+re-bootstrap after the string-eq fix may still abort on this — the parent's repro should either
+avoid resource literals to isolate the string-eq fix, or expect to co-resolve OpCopy-on-resource in
+the same/next cycle. Fix the string-eq root FIRST; treat OpCopy-on-resource as the next root.
 
-**METHOD (mirror the L3 agent that succeeded; single-file fixtures FIRST — no imports needed):**
-1. **`Dict[String,int]` put/get fixture (tests the dominant root directly):** `put` several string
-   keys, then `contains`/`get` them and use the result in a `match … case Some(v):`. Compile with
-   the **self-host driver** (`./tests/fixtures/self_host_lowerer/driver <fix>.gg <libdir> --emit-c`),
-   `cc`/run → do the lookups find the keys, or fail (reproducing "unknown identifier"/empty)?
-2. **fn-with-params + local-enum-match fixture:** a function with several params used in the body,
-   and a `match localEnum: case Variant(name):` — compile with the self-host driver, run the
-   resulting binary on a small input → do params/bindings resolve, or hit `nl_contains`-false?
-   (This reproduces both "unknown identifier" and "variant not in enum" without any imports.)
-Whichever reproduces, that isolates the mis-compiled foundational fn (`nl_put`/`nl_contains`/`nl_get`
-at `lower.gg:185-194`, the param-prologue binding, or the `Dict[String,int]` `.put/.contains/.get`
-codegen). Trace stage-1's emitted C for that fn vs the GIR it should produce. Fix the DOMINANT root
-in CODEGEN (ONE root this cycle; the parent re-bootstraps to surface the next). The multi-file
-imported-enum fixture is the LEAST likely root — skip it unless (1)+(2) come back clean. Don't
-rewrite self-host source to dodge; don't reintroduce L1-L4 fixes' behavior.
+**METHOD (single-file fixtures, no imports — both verified by pass-2 to reproduce/not):**
+1. **PRIMARY repro (mirrors `enum_variant_index` exactly):** a `Vector[String]` + a loop that does
+   `String vn = vs.get(j).unwrap(); if vn == target: …` (target a String param). Compile with the
+   **self-host driver** (`./tests/fixtures/self_host_lowerer/driver <fix>.gg <libdir> --emit-c`); diff
+   the emitted GIR/C for the `==`: `driver` → `gorget_str_eq` (deref'd); `s1bin` → `cmp_eq i64
+   <ptr>,<ptr>` (raw pointer compare = the bug). This lands directly on `lir_codegen.gg:2925-2972`.
+2. **End-to-end repro:** `match localEnum: case Variant(name): …` (a locally-defined enum) — `s1bin`
+   emits "variant not in enum" + "unknown identifier 'name'"; `driver` is clean. Confirms the
+   pointer-compare → variant-lookup-fail → binding-bail cascade end-to-end. (NB: keep the fixture
+   FREE of `Vector[String]`/resource LITERALS — those hit the separate FATAL OpCopy-on-resource and
+   abort emission before you can observe the str-eq fix.)
+(Pass-2 confirmed a `Dict[String,int]` put-get fixture does NOT reproduce — don't use it; and a
+multi-file imported-enum fixture is NOT needed — the bug is local.) After the fix, fixture 1's `==`
+emits `gorget_str_eq` and fixture 2 is diagnostic-clean. Fix the str-eq root in CODEGEN this cycle
+(the parent re-bootstraps to surface the next root, likely OpCopy-on-resource). Don't rewrite
+self-host source to dodge; don't reintroduce L1-L4 fixes' behavior.
 gg-check clean; `cargo build` + `cargo test --lib` (2 pre-existing should_panic-release fails OK);
 commit by file. Do NOT run the bootstrap/integration sweep (parent's job). Report: the dominant root
 (exact fn + why), the fix, the minimal fixture proving before/after, and the symptom classes you
