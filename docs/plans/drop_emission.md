@@ -597,6 +597,12 @@ File these into `TODO.md` when the cluster ships green:
    tighten `bootstrap_fixed_point` from N=5 to N=2.
 6. **Retire stale docstrings** — e.g. `lower.gg`'s `decide_operand_at_consuming_arg` still says
    "dead code in this commit. No caller exists" — it IS called now. Sweep for similar.
+7. **Restore named-local clarity in the borrow-chain read scans** — bug #3b's fix turned clean
+   `LirFunction func = m.functions.get(fi).unwrap()` loops in `lir_codegen.gg`/`drop_elab.gg` into
+   verbose repeated `m.functions.get(fi).unwrap().blocks.get(bi).unwrap().insts.get(ii).unwrap()`
+   chains (a value-bind would deep-clone). This is forced ONLY by the absent `Ref[T]`/`MutRef[T]`
+   borrow-local (language-reference.md:912, "(planned)"). When `Ref[T]` ships, revisit these sites
+   to restore readability (self-host-as-showcase). Output-review reservation #2, 2026-05-27.
 
 ---
 
