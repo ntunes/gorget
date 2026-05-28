@@ -23,6 +23,18 @@ Two predicates remain:
 Both predicates live in `EMethodCall`'s arms inside `lower_expr`
 (`lower.gg:4363` onward).
 
+**Co-retirement requirement (NEXT BLOCKER #5 close, 2026-05-28 pm₃):** a THIRD
+parallel name-match list exists at `lower.gg:3473` — `infer_method_return_type`'s
+GorgetString-returning method list (`slice` / `byte_slice` / `substring` /
+`char_at` / `trim` / `upper` / `lower` after the BLOCKER #5 fix). It is a
+content-overlapping subset of predicate #1 (`is_string_view_method`) and was the
+fault site for BLOCKER #5 — `byte_slice`/`substring`/`char_at` were missing,
+defaulting to `I64_TYPE` and cascading to stage-2 emission failure. **When the
+`BuiltinMethodDecl` port (Option D below) lands, it MUST sweep all THREE sites
+in one shot** — predicate #1 (`:462-473`), predicate #2 (`:513-540`), and the
+return-type list (`:3473`) — so the port doesn't leave one parallel list behind
+to drift again. Recommend a port-time grep: `grep -n '"slice"\|"byte_slice"\|"substring"\|"char_at"' lower.gg` should return zero matches after the port.
+
 ## 1. Current state — per-predicate inventory
 
 ### 1.1 `is_string_view_method`
