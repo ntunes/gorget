@@ -446,13 +446,6 @@ int add_local_inheriting(LowerCtx &ctx, int type_id, Option[String] name, int sr
         else:
             return add_local(&ctx, type_id, name)
 
-# Phase D step 2: collection-getter methods produce LoBorrowed/BoCollectionElement
-# locals. The list mirrors `infer_method_return_type`'s "get/pop/last/first/
-# remove" branch — methods that return `Option[V]` whose payload is a borrow
-# into the collection rather than an owned copy.
-bool is_collection_getter_method(String method):
-    return method == "get" or method == "safe_get" or method == "pop" or method == "last" or method == "first" or method == "remove"
-
 # String methods that return a non-owning VIEW (cap==0) aliasing the
 # receiver's buffer, mirroring Rust's `returns_view: true` builtins
 # (`src/ir/lowering/builtins.rs` GorgetString block). The runtime helpers
@@ -4922,17 +4915,24 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 int void_dst = add_local(&ctx, UNIT_TYPE, NO_NAME)
                 emit(&ctx, GIAssign(void_dst, OpConstUnit()))
                 return void_dst
-            # Phase D step 2: collection-getter methods (.get / .pop /
-            # .first / .last / .remove / .safe_get) return `Option[V]` whose
-            # payload is a borrow into the collection element, not an owned
-            # copy. Tag the destination LoBorrowed/BoCollectionElement so
-            # validators downstream can distinguish "owned wrapper around a
-            # borrow" from "wrapper around an owned value." Receiver-type
-            # gate avoids false positives when the user shadows these names
-            # on a non-collection type (e.g. an `equip` block on a struct).
+            # Phase D step 2: borrowing collection getters (.get / .first /
+            # .last / .safe_get) return `Option[Ref[V]]` whose payload is a
+            # borrow into the collection element, not an owned copy. Tag the
+            # destination LoBorrowed/BoCollectionElement so validators
+            # downstream can distinguish "owned wrapper around a borrow" from
+            # "wrapper around an owned value." Detection is by RETURN-TYPE
+            # SHAPE (typed) — `option_ref_payload_of(&gmod, ret_tid) >= 0`
+            # iff `ret_tid` is the `Option__Ref__T` shape recorded on the
+            # `option_ref_payload` channel; mirrors Rust's
+            # `ret_option_ref_or_val_elem` discriminator at
+            # `src/ir/lowering/builtins.rs:172-185`. Consuming getters
+            # (`pop`/`remove`) return `Option[T]` (owned, ownership transfers
+            # OUT) and correctly fall through to the default `add_local`
+            # (LoOwned) path. Receiver-type gate still avoids false positives
+            # when the user shadows these names on a non-collection type.
             int mdst = -1
             bool recv_is_string = recv_type_name == "String" or recv_type_name == "GorgetString" or recv_type_name == "Str"
-            if is_collection_getter_method(mname):
+            if option_ref_payload_of(&gmod, ret_tid) >= 0:
                 bool recv_is_collection = false
                 match resource_meta_for(&gmod, recv_type_name):
                     case Some(rmeta):

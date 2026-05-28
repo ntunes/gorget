@@ -609,7 +609,13 @@ FORGIVEN for now since the patch fixes the truncation; a FOLLOW-UP agent removes
 and makes the code reference-grade on a subsequent pass** — do NOT block green on it. **Squash
 OBSOLETE (2026-05-28): the user has already fast-forwarded `main` to the cluster as individual
 commits — no single-commit squash is needed; the cleanup commits land on top.** Fold "Deferred
-optimizations" into `TODO.md`.
+optimizations" into `TODO.md`. **Progress 2026-05-28**: pass #1 SHIPPED — `is_collection_getter_method`
+RETIRED in favour of the typed `option_ref_payload_of(&gmod, ret_tid) >= 0` discriminator at the one
+call site (`lower.gg:4935`), mirroring Rust's `ret_option_ref_or_val_elem` shape check. Behavior
+change is intentional: `pop`/`remove` now correctly fall through to `LoOwned` (their `Option[T]`
+return doesn't shape-match `Option__Ref__T`), aligning with the in-tree `borrowing_getter =
+get/first/last/safe_get` split documented at `lower.gg:3590-3597`. Two predicates remain
+(`is_string_view_method`, `is_owning_mutator_arg`) — separate future passes.
 
 **Anchors (LOWERING clone-OOM — the live blocker):** `lower_module` (lower.gg, the per-function lowering
 loop that emits the `gir_liveness_diff` warnings at :7250/:7485) + the discovery walkers + the transitive

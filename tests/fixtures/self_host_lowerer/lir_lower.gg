@@ -3123,8 +3123,9 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                                 # a LoBorrowed/LoView get-result aliases the
                                 # collection element and must NOT clone (the
                                 # for-element clone bomb). Tag set at the get
-                                # site in lower.gg (is_collection_getter_method
-                                # / lower_for_vector's BoCollectionElement).
+                                # site in lower.gg (typed check via
+                                # option_ref_payload_of / lower_for_vector's
+                                # BoCollectionElement).
                                 bool wrap_is_borrow = gir_local_is_for_element(dst_local, &gir_locals)
                                 int new_bb = emit_void_ptr_option_wrap(call_name, dst_local, lift_opt_sid, lir_args, &f, bb, &local_to_slot, &m, wrap_is_borrow)
                                 return new_bb
