@@ -1201,20 +1201,15 @@ equip Parser:
                         else:
                             pass
                     # Check for function type: RetType(ParamTypes...)
-                    # Re-fetch the keyword name on each TPrimitive
-                    # construction to dodge a String-move aliasing bug
-                    # where the OUTER ret type's primitive name ends up
-                    # pointing into source memory (formats
-                    # `int(int) make_adder()` as `mak(int) make_adder()`).
                     if self.check_tok(TOK_LPAREN):
                         int saved = self.pos
-                        SpannedType ret_ty = self.mk_type(TPrimitive(type_keyword_name(kw)), start)
+                        SpannedType ret_ty = self.mk_type(TPrimitive(name), start)
                         SpannedType fn_ty = self.parse_function_type(ret_ty, start)
                         # Accept if followed by a name, closing bracket, comma, newline, colon, or EOF (in type context)
                         if self.check_tok(TOK_IDENT) or self.check_tok(TOK_RBRACKET) or self.check_tok(TOK_COMMA) or self.check_tok(TOK_RPAREN) or self.check_tok(TOK_BANG) or self.check_tok(TOK_AMP) or self.check_tok(TOK_NEWLINE) or self.check_tok(TOK_COLON) or self.at_end():
                             return fn_ty
                         self.pos = saved
-                        return self.mk_type(TPrimitive(type_keyword_name(kw)), start)
+                        return self.mk_type(TPrimitive(name), start)
                     return self.mk_type(TPrimitive(name), start)
             else:
                 pass
