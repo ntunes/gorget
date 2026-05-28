@@ -175,6 +175,19 @@ struct LowerCtx:
     # ships but flush is a no-op; COMMIT 3 flips flush to real
     # emission.
     Vector[DropEmission] drop_queue
+    # Expected-type propagation (mirrors Rust gg's
+    # `LoweringContext.func_state.expected_type`). Set by writer sites
+    # (SVarDecl, SAssign, SReturn, call-arg loop, struct field-init)
+    # to the destination's declared type immediately BEFORE recursing
+    # into `lower_expr`; restored to the saved value (`prev`) on
+    # return. Reader sites — bare `Ok`/`Error`/`Some`/`None` constructor
+    # calls in `lower_call`, the bare `None` literal in `lower_expr`,
+    # `EIdentifier(name)` resolution — consult this field to resolve a
+    # context-dependent type that the local expression shape cannot
+    # determine alone (the variant name does not carry the parent enum's
+    # full monomorphised name, etc.). `-1` is the sentinel for "no
+    # expectation set". See `docs/plans/self_host_ssa_cleanup.md` §7.
+    int expected_type
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -5123,6 +5136,24 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             int ifdst = add_local(&ctx, I64_TYPE, NO_NAME)
             return ifdst
         case ENoneLiteral():
+            # Bare `None` literal — when expected_type is a typed
+            # `Option__T`, emit a properly-TYPED `None` ctor call
+            # that routes through `try_lower_prelude_variant`'s
+            # canonical `IEnumInit(slot, struct_id, tag=1, [])` at
+            # LIR. Mirrors Rust gg's
+            # `materialise_none_for_expected_type` at
+            # `src/ir/lowering/exprs/mod.rs:2504-2529`. Without
+            # expected_type set, fall back to the legacy
+            # UNIT/OpConstUnit shape — `Constant::Null` in Rust —
+            # which the SVarDecl/SAssign Assign handler may rewrite
+            # downstream if it sees a typed dst slot.
+            if ctx.expected_type >= 0 and ctx.expected_type < gmod.type_table.len():
+                String et_name_nl = type_id_to_name(ctx.expected_type, &gmod)
+                if et_name_nl.starts_with("Option__") and not et_name_nl.starts_with("Option__Ref__"):
+                    int ndst_nl = add_local(&ctx, ctx.expected_type, NO_NAME)
+                    Vector[Operand] none_args_nl = []
+                    emit(&ctx, GICallExtern(ndst_nl, "None", none_args_nl))
+                    return ndst_nl
             int dst = add_local(&ctx, UNIT_TYPE, NO_NAME)
             emit(&ctx, GIAssign(dst, OpConstUnit()))
             return dst
@@ -5496,6 +5527,17 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         Vector[bool] borrow_flags = []
         if gmod.fn_borrow_params.contains(call_name):
             borrow_flags = gmod.fn_borrow_params.get(call_name).unwrap()
+        # Resolve callee param types ONCE for the call-arg expected_type
+        # propagation. Mirrors Rust gg's call-arg path at
+        # `src/ir/lowering/exprs/calls.rs:1228-1255` — set
+        # `ctx.expected_type = param_types[i]` BEFORE recursing into
+        # `lower_expr` for each arg, then restore. Reader sites
+        # (bare prelude-variant ctors, bare `None`, EIdentifier) thus
+        # type their result to the parameter's declared shape rather
+        # than to the bare variant name — fixes the NULL-give-up class
+        # for `f(Ok(x))` / `f(None)` / etc. at non-return user-level
+        # consume positions.
+        Vector[int] callee_param_types = get_fn_param_types(call_name, &gmod)
         int ai = 0
         int first_arg_type = -1
         while ai < args.len():
@@ -5509,7 +5551,14 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
             # ...)` keeps scalar-sized allocators for the Vector/Dict
             # fields and later pushes corrupt adjacent slots.
             apply_container_hint_for_ctor_arg(&ctx, call_name, ai, arg, &gmod)
+            # Expected-type propagation per arg (Rust calls.rs:1239-1255).
+            int prev_expected_arg = ctx.expected_type
+            if ai < callee_param_types.len():
+                int pt = callee_param_types.get(ai).unwrap()
+                if pt != I64_TYPE and pt != UNIT_TYPE:
+                    ctx.expected_type = pt
             int arg_local = lower_expr(&ctx, arg, &gmod)
+            ctx.expected_type = prev_expected_arg
             if ai == 0 and arg_local >= 0 and arg_local < ctx.locals.len():
                 first_arg_type = ctx.locals.get(arg_local).unwrap().type_id
             # Detect &arg (borrow) or pre-scanned borrow param
@@ -5550,7 +5599,27 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
             ai = ai + 1
         # Look up return type from module's fn_sigs, or from function definitions
         int ret_type = I64_TYPE
-        if gmod.fn_sigs.contains(call_name):
+        # Expected-type read for bare prelude-variant ctors (Rust gg's
+        # `resolve_option_result_variant` at `src/ir/lowering/exprs/mod.rs:1452-1551`).
+        # When the caller (SVarDecl / SAssign / SReturn / call-arg / struct-field-init)
+        # has set `ctx.expected_type` to a typed `Option__T` / `Result__T__E` enum,
+        # adopt it as ret_type. This makes the dst slot struct-typed upstream so
+        # `try_lower_prelude_variant` fires at LIR (emits canonical `IEnumInit`).
+        # Subsumes the Some-with-non-primitive-inner hack at the end of this
+        # block at non-return user-level consume positions (the SReturn site
+        # used to retype after-the-fact; that path remains as a defensive
+        # backstop, see `case SReturn:`).
+        if (fname == "Ok" or fname == "Error" or fname == "Some" or fname == "None") and ctx.expected_type >= 0:
+            int et = ctx.expected_type
+            if et < gmod.type_table.len():
+                String et_name = type_id_to_name(et, &gmod)
+                bool et_is_option = et_name.starts_with("Option__") and not et_name.starts_with("Option__Ref__")
+                bool et_is_result = et_name.starts_with("Result__")
+                bool variant_matches_option = (fname == "Some" or fname == "None") and et_is_option
+                bool variant_matches_result = (fname == "Ok" or fname == "Error") and et_is_result
+                if variant_matches_option or variant_matches_result:
+                    ret_type = et
+        if ret_type == I64_TYPE and gmod.fn_sigs.contains(call_name):
             ret_type = gmod.fn_sigs.get(call_name).unwrap()
         # Also check call_redirects for the original name.
         if ret_type == I64_TYPE and gmod.call_redirects.contains(fname):
@@ -5665,7 +5734,21 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                             pass
                 else:
                     pass
+            # Expected-type propagation: mirrors Rust gg's `lower_var_decl`
+            # at `src/ir/lowering/stmts/mod.rs:477-487`. Setting
+            # `ctx.expected_type` to the declared local type BEFORE
+            # lowering the init expression lets reader sites
+            # (bare `Ok`/`Error`/`Some`/`None` ctors, bare `None`
+            # literal, EIdentifier) resolve a context-dependent type
+            # the local expression shape cannot determine alone — so
+            # the init's dst slot is typed to the declared shape
+            # upstream, never round-tripped through a wrong slot type.
+            int prev_expected_vd = ctx.expected_type
+            int declared_ty_pre = map_ast_type(stype, &gmod)
+            if declared_ty_pre != I64_TYPE and declared_ty_pre != UNIT_TYPE:
+                ctx.expected_type = declared_ty_pre
             int val = lower_expr(&ctx, init_expr, &gmod)
+            ctx.expected_type = prev_expected_vd
             int var_type = ctx.locals.get(val).unwrap().type_id
             # Prefer the declared type when it carries more info than the
             # init expression's inferred type. This recovers the Vector[T]
@@ -5863,26 +5946,33 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             # value; dropping it would double-free.
             match opt_expr:
                 case Some(ret_expr):
-                    int val = lower_expr(&ctx, ret_expr, &gmod)
                     # Expected-type-at-return (mirrors Rust gg's
                     # `lower_return` setting `func_state.expected_type =
-                    # locals[0].type_id`). A bare prelude-variant
+                    # locals[0].type_id` at `stmts/mod.rs:1523-1526`).
+                    # Set BEFORE lowering — the reader sites (bare
+                    # prelude-variant ctors in `lower_call`, bare `None`,
+                    # EIdentifier) pick up the return place's full
+                    # monomorphised type and type their dst slot
+                    # accordingly. This is the proper expected_type port;
+                    # the after-the-fact retype below is now a defensive
+                    # backstop for the residual case where the lower_expr
+                    # path produced a wrong-typed local (e.g. multi-arg
+                    # forms that pre-date expected_type, or bare
+                    # identifier returns through a non-EIdentifier reader
+                    # path). The two paths agree on the final typing —
+                    # the early-set version is the primary mechanism.
+                    int prev_expected_ret = ctx.expected_type
+                    int ret_place_ty_pre = ctx.locals.get(0).unwrap().type_id
+                    if ret_place_ty_pre != I64_TYPE and ret_place_ty_pre != UNIT_TYPE:
+                        ctx.expected_type = ret_place_ty_pre
+                    int val = lower_expr(&ctx, ret_expr, &gmod)
+                    ctx.expected_type = prev_expected_ret
+                    # Defensive backstop: a bare prelude-variant
                     # constructor (`return Ok(x)` / `return Error(e)` /
-                    # `return Some(v)` / `return None`) can't reconstruct
-                    # its parent enum's full monomorphised name from the
-                    # variant alone — `lower_call` types the result as the
-                    # bogus standalone variant name (`Error`), which
-                    # `map_gir_type` resolves to LT_PTR (an 8-byte pointer
-                    # slot for a multi-word aggregate). The subsequent
-                    # `IEnumInit` then can't fire (slot isn't struct-typed),
-                    # the aggregate value gets stored into a Ptr slot
-                    # (NULL'd by codegen), and the return-slot copy memcpy's
-                    # from NULL → SIGSEGV. The function's return place
-                    # (local 0) already carries the correct, registered
-                    # `Result__T__E` / `Option__T` type — retype the
-                    # variant-constructor result to match it so the slot
-                    # is aggregate-typed and `try_lower_prelude_variant`
-                    # emits a canonical in-place `IEnumInit`.
+                    # `return Some(v)` / `return None`) reaching here
+                    # with the wrong slot type is the previous-mechanism
+                    # path. Retype to the return place so
+                    # `try_lower_prelude_variant` still fires at LIR.
                     if val > 0 and val < ctx.locals.len():
                         if expr_is_prelude_variant_ctor(ret_expr):
                             int ret_place_ty = ctx.locals.get(0).unwrap().type_id
@@ -5922,7 +6012,20 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                 case EIdentifier(name):
                     if nl_contains(&ctx, name):
                         int lid = nl_get(&ctx, name)
+                        # Expected-type propagation: mirrors Rust gg's
+                        # `lower_assign` at `src/ir/lowering/stmts/assigns.rs:108-117`.
+                        # Setting `ctx.expected_type` to the LHS local's type
+                        # BEFORE lowering the RHS lets reader sites resolve
+                        # bare prelude-variant ctors / bare `None` to the
+                        # destination's shape, instead of typing them by
+                        # the bare variant name (which collapses to an
+                        # 8-byte Ptr slot for a multi-word aggregate).
+                        int prev_expected_asn = ctx.expected_type
+                        int lhs_ty = ctx.locals.get(lid).unwrap().type_id
+                        if lhs_ty != I64_TYPE and lhs_ty != UNIT_TYPE:
+                            ctx.expected_type = lhs_ty
                         int val = lower_expr(&ctx, value_expr, &gmod)
+                        ctx.expected_type = prev_expected_asn
                         emit(&ctx, GIAssign(lid, op_consume(&ctx, &gmod, val, CkAssign())))
                 case EFieldAccess(base_box, field_name):
                     # self.field = value
@@ -7261,7 +7364,7 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
     Dict[String, int] _named_locals = {}
     Vector[DropScope] _de_scopes = []
     Vector[DropEmission] _de_queue = []
-    LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, !_named_locals, 0, !_lc_stk, !_lb_stk, "", "", "", false, fdef.name.clone(), DropElaborator(!_de_scopes), !_de_queue)
+    LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, !_named_locals, 0, !_lc_stk, !_lb_stk, "", "", "", false, fdef.name.clone(), DropElaborator(!_de_scopes), !_de_queue, -1)
 
     # Push the function-scope drop frame. Pop emits GIDropIfAlive for
     # every owned resource local registered during lowering (param or
@@ -7476,7 +7579,7 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
         Dict[String, int] _named_locals2 = {}
         Vector[DropScope] _de_scopes2 = []
         Vector[DropEmission] _de_queue2 = []
-        LowerCtx ctx = LowerCtx([], [], [], 0, !_named_locals2, 0, !_lc_stk2, !_lb_stk2, "", "", "", false, mangled.clone(), DropElaborator(!_de_scopes2), !_de_queue2)
+        LowerCtx ctx = LowerCtx([], [], [], 0, !_named_locals2, 0, !_lc_stk2, !_lb_stk2, "", "", "", false, mangled.clone(), DropElaborator(!_de_scopes2), !_de_queue2, -1)
         # bb0
         Vector[Instruction] init_insts = []
         ctx.block_insts.push(!init_insts)
@@ -9443,7 +9546,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         Dict[String, int] _named_locals3 = {}
                         Vector[DropScope] _de_scopes3 = []
                         Vector[DropEmission] _de_queue3 = []
-                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, 0, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone(), DropElaborator(!_de_scopes3), !_de_queue3)
+                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, 0, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone(), DropElaborator(!_de_scopes3), !_de_queue3, -1)
                         Vector[Instruction] tinit = []
                         tctx.block_insts.push(!tinit)
                         tctx.block_terms.push(GTNone())

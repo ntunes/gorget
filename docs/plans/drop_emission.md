@@ -1,5 +1,53 @@
 # Drop Emission — Self-Host Plan (unified)
 
+> **LATEST (2026-05-28 pm) — `expected_type` propagation ported to non-return user-level consume positions in `lower.gg`; the LATENT-SIBLINGS class is CLOSED.**
+> Mirrors Rust gg's `LoweringContext.func_state.expected_type` (`src/ir/lowering/stmts/mod.rs:477-487`,
+> `src/ir/lowering/stmts/assigns.rs:108-117`, `src/ir/lowering/exprs/calls.rs:1228-1255`,
+> `src/ir/lowering/exprs/mod.rs:1404-1502`, `:2504-2529`). The self-host now threads an
+> `int expected_type` field on `LowerCtx` (`-1` sentinel for "no expectation"), set at writer sites
+> (SVarDecl, SAssign, SReturn, lower_call's per-arg loop) immediately BEFORE recursing into
+> `lower_expr`, restored on return. Reader sites — bare `Ok`/`Error`/`Some`/`None` ctor calls in
+> `lower_call`, bare `None` literal `ENoneLiteral`, the existing EIdentifier `gmod.none_decls` path —
+> consult the field to resolve the parent enum's full monomorphised name; the variant name alone
+> can't carry it. Result: dst slot is struct-typed (`Option__T` / `Result__T__E`) upstream, so
+> `try_lower_prelude_variant` fires at LIR and emits canonical `IEnumInit(slot, struct_id, tag, [])`
+> instead of the bogus-name LT_PTR misslot. Sites ported: STEP 0 (field + protocol), STEP 1 readers
+> (`ENoneLiteral`, prelude-variant ret_type in `lower_call`), STEP 2.1 (SVarDecl), STEP 2.2 (SAssign
+> EIdentifier target), STEP 2.3 (call-arg loop). The SReturn site refactored to set expected_type
+> BEFORE `lower_expr` (matches Rust); the after-the-fact retype stays as a defensive backstop.
+>
+> **Verified:** `self_host_bootstrap` PASSED (513.59s). `cargo test --lib --release` 1060/1062
+> (2 pre-existing `lir::validate` panic-asserts). `lowerer_comparison`
+> `Total: 1118, Matched: 795, Adjusted: 887/1111 (79.8%)` — IDENTICAL to baseline (the port adds
+> typed-field changes per slot, not fn-count changes, so the function-count comparison is invariant
+> as expected). Stage-2 binary runs end-to-end (`emit exit=0 lines=613527`, `cc exit=0`,
+> `stage-2 exit=0 lines=667086`); +1462 lines past baseline = more code emitted before residual
+> convergence drift. NO new crashes; the only stage-output [bug]/[lower_fail] diagnostics are
+> pre-existing known unrelated issues (`RESOURCES` unknown identifier and `SFor: no iter()/next()
+> chain on type int64_t`).
+>
+> **What this closed:** the **latent-siblings class** behind the historic NULL-give-up crashes —
+> bare `Ok`/`Error`/`Some`/`None` ctors and bare `None` mistyped at non-return user-level consume
+> positions (var-decl, assign, call-args). The partial `Some` first-arg-non-primitive hack at
+> `lower.gg:~5643-5653` is now superseded by the principled call-arg expected_type path (kept as a
+> conservative backstop until a sweep removes it). The existing SReturn retype kept as a defensive
+> backstop because it covers paths that pre-date expected_type (multi-arg, non-EIdentifier reader
+> paths). Both backstops are now subordinate to the principled mechanism.
+>
+> **What this did NOT close (per the scope clarification in the brief):** NEXT BLOCKER #4
+> (`type_category_for_name`'s `unwrap_or` Some-arm) was a separately-tracked **writer-side peel**,
+> not a byproduct. The fault site at `lower.gg:~4716` is a synthesized internal
+> `GIAssign(uo_dst, op_consume(payload, CkAssign))` where `payload` comes from `emit_payload_read`
+> (not `lower_expr`), so `op_consume`'s OpMove/OpClone decision doesn't read `ctx.expected_type`.
+> The two recorded writer-side fix options (uo_dst retype OR OpBorrow in the Some-arm) remain a
+> separate peel.
+>
+> **Deferred (TODO.md):** STEP 2.4 (struct-literal per-field expected_type wiring at `EStructLiteral` /
+> field-init handler; Rust counterpart `exprs/mod.rs:1800-1887` per-field prev/restore) and
+> EmptyArrayLiteral via expected_type's element type (Rust `:198-200`). The call-args path covers
+> most fixture coverage already; field-inits is the next batch. Also unrelated: NEXT BLOCKER #4
+> remains.
+
 > **SCOPING (2026-05-28) — see `docs/plans/self_host_ssa_cleanup.md`** for an
 > audit of the "Rust's `run_ssa` would have collapsed this" framing used
 > below. Short version: the self-host **already has** a faithful port of
