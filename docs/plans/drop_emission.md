@@ -658,6 +658,10 @@ change is intentional: `pop`/`remove` now correctly fall through to `LoOwned` (t
 return doesn't shape-match `Option__Ref__T`), aligning with the in-tree `borrowing_getter =
 get/first/last/safe_get` split documented at `lower.gg:3590-3597`. Two predicates remain
 (`is_string_view_method`, `is_owning_mutator_arg`) — separate future passes.
+**Scoping done 2026-05-28**: see `docs/plans/self_host_namematch_retirement.md` —
+recommendation is DEFER both to a future `BuiltinMethodDecl` port effort
+(Option D, joint end-state); no incremental cleanup path with a clean typed
+home exists short of a SCHEMA_VERSION bump.
 
 **Anchors (LOWERING clone-OOM — the live blocker):** `lower_module` (lower.gg, the per-function lowering
 loop that emits the `gir_liveness_diff` warnings at :7250/:7485) + the discovery walkers + the transitive
