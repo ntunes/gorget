@@ -3048,27 +3048,6 @@ String binop_method_name(String op):
 # Returns the parent enum name if `name` is a variant of a known enum,
 # or "" if not a variant. Used to route bare variant constructors
 # (IntCol, Red, Ok, ...) to their enclosing enum's named type.
-# True when `e` is a bare prelude-variant constructor call —
-# `Ok(...)`, `Error(...)`, `Some(...)`, or `None`/`None()`. These are
-# the variant constructors that `lower_call` cannot type with their
-# full parent-enum monomorphised name (the variant name alone doesn't
-# carry the other type argument), so the SReturn handler retypes their
-# result to the function's return place. Mirrors the callee-name guard
-# in Rust gg's `lower_return` (`is_explicit_result_variant`).
-bool expr_is_prelude_variant_ctor(SpannedExpr e):
-    match e.expr:
-        case ECall(callee_box, _, _):
-            match (*callee_box).expr:
-                case EIdentifier(fname):
-                    return fname == "Ok" or fname == "Error" or fname == "Some" or fname == "None"
-                else:
-                    return false
-        case EIdentifier(fname2):
-            # `return None` with no parens parses as a bare identifier.
-            return fname2 == "None"
-        else:
-            return false
-
 String enum_variant_parent(String name, GirModule &gmod):
     Vector[String] tikeys = gmod.type_infos.keys()
     for tname in tikeys:
@@ -6028,33 +6007,15 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     # prelude-variant ctors in `lower_call`, bare `None`,
                     # EIdentifier) pick up the return place's full
                     # monomorphised type and type their dst slot
-                    # accordingly. This is the proper expected_type port;
-                    # the after-the-fact retype below is now a defensive
-                    # backstop for the residual case where the lower_expr
-                    # path produced a wrong-typed local (e.g. multi-arg
-                    # forms that pre-date expected_type, or bare
-                    # identifier returns through a non-EIdentifier reader
-                    # path). The two paths agree on the final typing —
-                    # the early-set version is the primary mechanism.
+                    # accordingly. This is the proper expected_type port
+                    # (mirrors Rust gg's `lower_return` in
+                    # `src/ir/lowering/stmts.rs`).
                     int prev_expected_ret = ctx.expected_type
                     int ret_place_ty_pre = ctx.locals.get(0).unwrap().type_id
                     if ret_place_ty_pre != I64_TYPE and ret_place_ty_pre != UNIT_TYPE:
                         ctx.expected_type = ret_place_ty_pre
                     int val = lower_expr(&ctx, ret_expr, &gmod)
                     ctx.expected_type = prev_expected_ret
-                    # Defensive backstop: a bare prelude-variant
-                    # constructor (`return Ok(x)` / `return Error(e)` /
-                    # `return Some(v)` / `return None`) reaching here
-                    # with the wrong slot type is the previous-mechanism
-                    # path. Retype to the return place so
-                    # `try_lower_prelude_variant` still fires at LIR.
-                    if val > 0 and val < ctx.locals.len():
-                        if expr_is_prelude_variant_ctor(ret_expr):
-                            int ret_place_ty = ctx.locals.get(0).unwrap().type_id
-                            int val_ty = ctx.locals.get(val).unwrap().type_id
-                            if ret_place_ty != val_ty and ret_place_ty != I64_TYPE and ret_place_ty != UNIT_TYPE:
-                                GirLocal vl = ctx.locals.get(val).unwrap()
-                                ctx.locals.set(val, GirLocal(ret_place_ty, vl.name_hint, vl.ownership, vl.borrow_origin))
                     Operand ret_op = op_consume(&ctx, &gmod, val, CkReturn())
                     # a-6 (concern #5, the keystone): when the value is MOVED
                     # out of a bare owned local, that local now aliases _0 and
