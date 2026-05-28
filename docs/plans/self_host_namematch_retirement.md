@@ -17,14 +17,14 @@ Two predicates remain:
 
 | # | Predicate                  | Def                          | Call site                                  | Drives                                       |
 |---|----------------------------|------------------------------|--------------------------------------------|----------------------------------------------|
-| 1 | `is_string_view_method`    | `lower.gg:462-473`           | `lower.gg:4972` (EMethodCall result-tag)  | `LoView` tag → `op_consume` materialises    |
-| 2 | `is_owning_mutator_arg`    | `lower.gg:513-540`           | `lower.gg:4899` (EMethodCall arg-loop)    | `CkCallArgOwning` → `OpMove`/`OpClone`      |
+| 1 | `is_string_view_method`    | `lower.gg:475-486`           | `lower.gg:4972` (EMethodCall result-tag)  | `LoView` tag → `op_consume` materialises    |
+| 2 | `is_owning_mutator_arg`    | `lower.gg:526-553`           | `lower.gg:4899` (EMethodCall arg-loop)    | `CkCallArgOwning` → `OpMove`/`OpClone`      |
 
 Both predicates live in `EMethodCall`'s arms inside `lower_expr`
 (`lower.gg:4363` onward).
 
 **Co-retirement requirement (NEXT BLOCKER #5 close, 2026-05-28 pm₃):** a THIRD
-parallel name-match list exists at `lower.gg:3473` — `infer_method_return_type`'s
+parallel name-match list exists at `lower.gg:3452` — `infer_method_return_type`'s
 GorgetString-returning method list (`slice` / `byte_slice` / `substring` /
 `char_at` / `trim` / `upper` / `lower` after the BLOCKER #5 fix). It is a
 content-overlapping subset of predicate #1 (`is_string_view_method`) and was the
@@ -39,7 +39,7 @@ to drift again. Recommend a port-time grep: `grep -n '"slice"\|"byte_slice"\|"su
 
 ### 1.1 `is_string_view_method`
 
-**Body (`lower.gg:462-473`):** open-coded `if method == "slice" or method == "substring"
+**Body (`lower.gg:475-486`):** open-coded `if method == "slice" or method == "substring"
 or method == "byte_slice" or method == "char_at": return true` × 5 lines covering
 {slice, substring, byte_slice, char_at, trim, trim_left, trim_right, strip, lstrip,
 rstrip, removeprefix, removesuffix, str, as_str} — 14 method names (matches Rust's 14
@@ -74,7 +74,7 @@ keyed on the typed `BuiltinMethodDecl.returns_view` field, NOT a name table.**
 
 ### 1.2 `is_owning_mutator_arg`
 
-**Body (`lower.gg:513-540`):** `match kind` over `CollectionKind` (5 arms +
+**Body (`lower.gg:526-553`):** `match kind` over `CollectionKind` (5 arms +
 `CkNotCollection`):
 - `CkVector` / `CkDeque`: `push` ⇒ idx==0; `set` / `insert` ⇒ idx==1
 - `CkHeap`: `push` ⇒ idx==0

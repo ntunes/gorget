@@ -1,3 +1,5 @@
+> **⚠️ ARCHIVED / SUPERSEDED (2026-05-28).** The bootstrap struggle this plan tracked is OVER — `self_host_bootstrap_fixed_point` is GREEN (DONE.md; commit 3c13388a, suite 1170/0). All blockers herein (NEXT BLOCKER #4/#5/#6, bug #1/#2/#3/#3b, Option[Ref] repr, the SSA-port question) are CLOSED. Retained for historical narrative + debugging worked-examples only. The one live remnant (SHIP-GATE name-match retirement) lives in `docs/plans/self_host_namematch_retirement.md` + TODO.md.
+
 # Self-Host SSA Cleanup — Scoping (port `run_ssa` to `lower_gir_to_lir`?)
 
 > **Bottom line (rev 1, 2026-05-28):** the brief's framing is wrong about the

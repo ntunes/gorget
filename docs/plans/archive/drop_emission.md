@@ -1,3 +1,5 @@
+> **⚠️ ARCHIVED / SUPERSEDED (2026-05-28).** The bootstrap struggle this plan tracked is OVER — `self_host_bootstrap_fixed_point` is GREEN (DONE.md; commit 3c13388a, suite 1170/0). All blockers herein (NEXT BLOCKER #4/#5/#6, bug #1/#2/#3/#3b, Option[Ref] repr, the SSA-port question) are CLOSED. Retained for historical narrative + debugging worked-examples only. The one live remnant (SHIP-GATE name-match retirement) lives in `docs/plans/self_host_namematch_retirement.md` + TODO.md.
+
 # Drop Emission — Self-Host Plan (unified)
 
 > **LATEST (2026-05-28 pm₄) — NEXT BLOCKER #6 CLOSED + `self_host_bootstrap_fixed_point` CONVERGES: `chr` missing from `builtin_call_return_type` GorgetString list → `*box` deref mis-sized to 8 bytes → stage-3 SIGSEGV.**
