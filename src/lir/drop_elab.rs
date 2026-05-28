@@ -34,36 +34,141 @@ enum InitState {
 }
 
 impl InitState {
-    /// Lattice meet: join over predecessor out-states.
-    fn meet(a: Self, b: Self) -> Self {
-        match (a, b) {
-            (Self::Initialized, Self::Initialized) => Self::Initialized,
-            (Self::Uninitialized, Self::Uninitialized) => Self::Uninitialized,
+    /// 2-bit encoding used by the packed `SlotStates` word-vector. Chosen so
+    /// that the lattice meet is exactly bitwise OR (see `SlotStates::meet`):
+    ///   Init=0b01, Uninit=0b10, Maybe=0b11, and Top (no info) = 0b00.
+    ///   01|01=01, 10|10=10, 11|11=11 (idempotent), 01|10=11 (Init meet Uninit
+    ///   = Maybe), and 11|x=11 (Maybe is the top of the reachable lattice).
+    ///   00|x=x makes 0b00 the OR-identity, so a freshly-zeroed word is "no
+    ///   predecessor info yet" and meeting it with any state adopts that state.
+    #[inline]
+    fn bits(self) -> u64 {
+        match self {
+            Self::Initialized => 0b01,
+            Self::Uninitialized => 0b10,
+            Self::MaybeInitialized => 0b11,
+        }
+    }
+    #[inline]
+    fn from_bits(b: u64) -> Self {
+        match b & 0b11 {
+            0b01 => Self::Initialized,
+            0b10 => Self::Uninitialized,
+            // 0b11 (Maybe) AND 0b00 (Top/no-info) both read as Maybe — a slot
+            // with no concrete state is conservatively MaybeInitialized, matching
+            // the prior dense-Vec `unwrap_or(MaybeInitialized)` for absent slots.
             _ => Self::MaybeInitialized,
         }
     }
 }
 
-/// Dense per-slot initialization state, indexed by `SlotId.0 as usize`.
+/// Packed per-slot initialization state: 2 bits per slot, 32 slots per `u64`
+/// word, indexed by `SlotId.0`.
 ///
-/// Replaces an earlier `HashMap<SlotId, InitState>`: drop elaboration clones the
-/// state per block-visit during the worklist dataflow and again per block in
-/// `elaborate_block`. With `InitState` at 1 byte and typical slot counts of
-/// 20-100, a dense `Vec` is a memcpy of a few dozen bytes vs hashmap allocator
-/// churn. The lattice semantics are unchanged — bounds checks at every read
-/// site default to `MaybeInitialized` (safe), matching the prior `.get(...).
-/// unwrap_or(MaybeInitialized)` shape.
-type SlotStates = Vec<InitState>;
+/// Replaces an earlier `Vec<InitState>` (1 byte/slot, which itself replaced a
+/// `HashMap`). Drop elaboration clones the state per worklist pop, per
+/// successor edge, and per block in `elaborate_block`; on the self-host
+/// lowerer workload the hot function has ~2300 slots, so each clone was a
+/// ~2.3 KB memcpy and each meet a fresh ~2.3 KB allocation — 264 MB of byte
+/// churn total. Packing 2 bits/slot shrinks every clone/alloc ~16× and turns
+/// the per-slot meet (a branchy match over three states) into a single
+/// word-wise bitwise OR, processing 32 slots per instruction.
+///
+/// The lattice semantics are unchanged: reads of slots beyond capacity default
+/// to `MaybeInitialized` (safe — never eliminate an unknown drop), matching the
+/// prior `.get(...).unwrap_or(MaybeInitialized)` shape.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+struct SlotStates {
+    /// 2-bit fields packed LSB-first; word `i` holds slots `32*i ..= 32*i+31`.
+    words: Vec<u64>,
+}
 
-/// Read a slot's state from a dense `SlotStates` vector, defaulting to
-/// `MaybeInitialized` for out-of-bounds indices (same safety behaviour as the
-/// previous `HashMap::get(...).copied().unwrap_or(MaybeInitialized)`).
+#[inline]
+fn n_words(n_slots: usize) -> usize {
+    // 2 bits/slot, 64 bits/word ⇒ 32 slots/word.
+    n_slots.div_ceil(32)
+}
+
+impl SlotStates {
+    /// All slots `Uninitialized` (`0b10` in every field) for `n_slots`.
+    fn all_uninit(n_slots: usize) -> Self {
+        // 0b10 repeated across the word = 0xAAAA…AAAA.
+        let mut words = vec![0xAAAA_AAAA_AAAA_AAAAu64; n_words(n_slots)];
+        // Clear any tail bits beyond n_slots so equality/meet stay canonical.
+        clear_tail(&mut words, n_slots);
+        Self { words }
+    }
+
+    /// Empty placeholder (zero words) — distinct from any reachable state, used
+    /// to seed `out_states` so the first transfer always registers a change.
+    fn empty() -> Self {
+        Self { words: Vec::new() }
+    }
+
+    #[inline]
+    fn get(&self, slot: SlotId) -> InitState {
+        let i = slot.0 as usize;
+        let w = i / 32;
+        let shift = (i % 32) * 2;
+        match self.words.get(w) {
+            Some(word) => InitState::from_bits(word >> shift),
+            // Out of capacity ⇒ no info ⇒ MaybeInitialized (safe default).
+            None => InitState::MaybeInitialized,
+        }
+    }
+
+    /// Set slot `i` to `st`, silently ignoring slots beyond capacity (matches
+    /// the prior dense-Vec `if let Some(cell) = state.get_mut(idx)` guard).
+    #[inline]
+    fn set(&mut self, slot: SlotId, st: InitState) {
+        let i = slot.0 as usize;
+        let w = i / 32;
+        if w >= self.words.len() {
+            return;
+        }
+        let shift = (i % 32) * 2;
+        let word = &mut self.words[w];
+        *word = (*word & !(0b11u64 << shift)) | (st.bits() << shift);
+    }
+
+    /// Lattice meet of two same-length word-vectors = word-wise bitwise OR.
+    /// (Top/no-info is `0b00`, the OR identity, so meeting an absent predecessor
+    /// adopts the other side directly.)
+    fn meet(a: &Self, b: &Self) -> Self {
+        debug_assert_eq!(a.words.len(), b.words.len());
+        let words = a
+            .words
+            .iter()
+            .zip(b.words.iter())
+            .map(|(x, y)| x | y)
+            .collect();
+        Self { words }
+    }
+}
+
+/// Zero the 2-bit fields for slot indices `>= n_slots` in the final word, so
+/// that vectors built from `all_uninit` / repeated patterns compare equal only
+/// when their in-range contents match (no spurious tail-bit differences).
+#[inline]
+fn clear_tail(words: &mut [u64], n_slots: usize) {
+    let len = words.len();
+    let used_bits = n_slots * 2;
+    let total_bits = len * 64;
+    if used_bits < total_bits && len > 0 {
+        let valid_in_last = used_bits - (len - 1) * 64;
+        if valid_in_last < 64 {
+            let mask = (1u64 << valid_in_last) - 1;
+            words[len - 1] &= mask;
+        }
+    }
+}
+
+/// Read a slot's state, defaulting to `MaybeInitialized` for out-of-capacity
+/// indices (same safety behaviour as the previous dense-Vec
+/// `.get(...).unwrap_or(MaybeInitialized)`).
 #[inline]
 fn slot_state(states: &SlotStates, slot: SlotId) -> InitState {
-    states
-        .get(slot.0 as usize)
-        .copied()
-        .unwrap_or(InitState::MaybeInitialized)
+    states.get(slot)
 }
 
 // ── Helper: value → slot map ─────────────────────────────────────────────────
@@ -115,10 +220,10 @@ fn forward_dataflow(
     // local) and slots beyond the parameter range start Uninitialized.
     let num_params = func.params.len();
     let n_slots = func.slots.len();
-    let mut bb0_init: SlotStates = vec![InitState::Uninitialized; n_slots];
+    let mut bb0_init = SlotStates::all_uninit(n_slots);
     for i in 1..=num_params {
         if i < n_slots {
-            bb0_init[i] = InitState::Initialized;
+            bb0_init.set(SlotId(i as u32), InitState::Initialized);
         }
     }
 
@@ -130,7 +235,7 @@ fn forward_dataflow(
     // into `MaybeInitialized` (because `meet(Init, Uninit) = Maybe`), which
     // over-flagged definitely-dead slots.
     let mut in_states: Vec<Option<SlotStates>> = vec![None; n];
-    let mut out_states: Vec<SlotStates> = vec![Vec::new(); n];
+    let mut out_states: Vec<SlotStates> = vec![SlotStates::empty(); n];
     in_states[0] = Some(bb0_init);
 
     // Worklist starts with only the entry block; successors get queued as
@@ -156,10 +261,10 @@ fn forward_dataflow(
                 }
                 // Meet the predecessor's out into the successor's in.
                 // None on the successor side means "Top" → adopt out as-is;
-                // otherwise do an element-wise lattice meet.
+                // otherwise do an element-wise lattice meet (word-wise OR).
                 let new_in = match &in_states[si] {
                     None => out.clone(),
-                    Some(prev) => meet_states(&out, prev, n_slots),
+                    Some(prev) => SlotStates::meet(&out, prev),
                 };
                 if Some(&new_in) != in_states[si].as_ref() {
                     in_states[si] = Some(new_in);
@@ -191,10 +296,10 @@ fn compute_transfer(
 
 /// Apply the effect of a single instruction on the running slot states.
 ///
-/// Writes are bounds-checked against `state.len()` — slot indices beyond the
-/// pre-sized vector silently drop their update (matches prior HashMap
-/// behaviour where an out-of-range slot simply wasn't in the map; the safe
-/// default at every read site is `MaybeInitialized`).
+/// Writes are bounds-checked against the packed vector's capacity — slot
+/// indices beyond the pre-sized words silently drop their update (matches prior
+/// behaviour where an out-of-range slot simply wasn't tracked; the safe default
+/// at every read site is `MaybeInitialized`).
 #[inline]
 fn apply_inst_effect(
     inst: &Inst,
@@ -204,46 +309,21 @@ fn apply_inst_effect(
     match inst {
         // Writing to a slot → definitely initialized.
         Inst::SlotStore { slot, .. } | Inst::ClosurePack { slot, .. } => {
-            let idx = slot.0 as usize;
-            if let Some(cell) = state.get_mut(idx) {
-                *cell = InitState::Initialized;
-            }
+            state.set(*slot, InitState::Initialized);
         }
         // MoveSlot annotation → definitely uninitialized (V4).
         Inst::MoveSlot { slot } => {
-            let idx = slot.0 as usize;
-            if let Some(cell) = state.get_mut(idx) {
-                *cell = InitState::Uninitialized;
-            }
+            state.set(*slot, InitState::Uninitialized);
         }
         // memset-to-zero of a slot address → definitely uninitialized.
         // Only projected MoveZero (field-level moves) still emits Memset.
         Inst::Memset { ptr, .. } => {
             if let Some(&slot) = val_to_slot.get(ptr) {
-                let idx = slot.0 as usize;
-                if let Some(cell) = state.get_mut(idx) {
-                    *cell = InitState::Uninitialized;
-                }
+                state.set(slot, InitState::Uninitialized);
             }
         }
         _ => {}
     }
-}
-
-/// Join two slot-state vectors (one entry per slot).  Both inputs are expected
-/// to carry concrete information — the `None`/Top case is handled at the
-/// call site in `forward_dataflow`. For slots beyond either input's length we
-/// assume `MaybeInitialized` (safe default — don't eliminate unknown drops);
-/// in practice both vectors are pre-sized to `n_slots`, so the slow path is
-/// only taken if the caller is wrong about pre-sizing.
-fn meet_states(a: &SlotStates, b: &SlotStates, n_slots: usize) -> SlotStates {
-    let mut result = Vec::with_capacity(n_slots);
-    for i in 0..n_slots {
-        let a_s = a.get(i).copied().unwrap_or(InitState::MaybeInitialized);
-        let b_s = b.get(i).copied().unwrap_or(InitState::MaybeInitialized);
-        result.push(InitState::meet(a_s, b_s));
-    }
-    result
 }
 
 // ── Guard sequence helpers ────────────────────────────────────────────────────
@@ -743,6 +823,7 @@ pub fn elaborate_drops(module: &mut LirModule) -> ElabStats {
             .first()
             .cloned()
             .unwrap_or_default();
+
         stats.flags_inserted +=
             insert_drop_flags(func, &val_to_slot, &maybe_init_slots, &bb0_in_state);
 
