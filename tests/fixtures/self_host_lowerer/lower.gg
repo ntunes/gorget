@@ -5201,10 +5201,32 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # Lower each element — we'll push them in order after the
             # array is constructed. Need to keep the value locals around
             # so we can reference them in the subsequent push calls.
+            # Per-element expected_type propagation (Rust counterpart
+            # `src/ir/lowering/exprs/collections.rs:49-63`): when the
+            # outer is a collection (Vector/Deque/Set/HashSet — same
+            # wider gate as STEP 2.4 elem-size fallback above; type-
+            # checker rejects non-array shapes upstream), propagate the
+            # element type INTO each element's lower_expr via
+            # ctx.expected_type. This resolves e.g.
+            # `Vector[Option[int]] v = [None(), Some(1)]` per-element
+            # None() to Option__int instead of bare Constant::Null.
+            # Restored unconditionally after the loop. Same I64/UNIT
+            # guard as SVarDecl / SAssign / SReturn / call-arg sites.
+            int prev_eali_et = ctx.expected_type
+            String eali_outer_name2 = ""
+            String eali_elem_name2 = ""
+            if ctx.expected_type >= 0:
+                eali_outer_name2 = type_id_to_name(ctx.expected_type, &gmod)
+                eali_elem_name2 = collection_element_type(eali_outer_name2)
+            if elems.len() > 0 and eali_elem_name2 != "":
+                int eali_et_new = lookup_or_register_named(&gmod, eali_elem_name2)
+                if eali_et_new != I64_TYPE and eali_et_new != UNIT_TYPE:
+                    ctx.expected_type = eali_et_new
             Vector[int] elem_locals = []
             for elem in elems:
                 int elem_val = lower_expr(&ctx, elem, &gmod)
                 elem_locals.push(elem_val)
+            ctx.expected_type = prev_eali_et
             # Call gorget_array_new(elem_size) so the resulting array has a
             # valid `alloc` pointer from __gorget_current_alloc. Without
             # this, subsequent `.push()` on a zero-init'd GorgetArray
