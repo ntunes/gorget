@@ -5013,12 +5013,10 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # `expr.span` where `expr` is `Box[SpannedExpr]` (auto-boxed
             # parameter, etc.) silently fell into the [bug] OpConstI64(0)
             # placeholder. The inner-name extraction mirrors `case EDeref`'s
-            # byte-by-byte loop — stage-1 self-host's `.slice(5, len)` on
-            # a Box-prefixed type name returns empty for view-aliasing
-            # reasons (see EDeref comment at line ~2549), so we walk bytes.
+            # prefix-slice.
             # Phase A — typed-metadata classification (BkRegularBox) via
-            # resource_meta_for; the byte-slice for the inner-name stays
-            # string-based (rmeta doesn't carry parsed inner names).
+            # resource_meta_for; the inner name is the post-`Box__` suffix
+            # (rmeta doesn't carry parsed inner names, so slice the prefix).
             bool base_is_regular_box = false
             match resource_meta_for(&gmod, base_type_name):
                 case Some(rmeta):
@@ -5030,12 +5028,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 case None:
                     pass
             if base_is_regular_box:
-                int blen = base_type_name.byte_len()
-                String inner_name = ""
-                int bi = 5
-                while bi < blen:
-                    inner_name = inner_name + chr(base_type_name.byte_at(bi))
-                    bi += 1
+                String inner_name = base_type_name.slice(5, base_type_name.len())
                 int box_inner_tid = resolve_field_gir_type(inner_name, &gmod)
                 # Phase 3 (Class 8): the box-deref's inner local aliases
                 # into the box's heap allocation — when `base` itself was
@@ -5326,21 +5319,9 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 case None:
                     pass
             if dsrc_is_box:
-                # Build the inner name byte-by-byte instead of using
-                # `.substring()` / `.byte_slice()`. Stage-1 self-host's
-                # runtime returns empty for `dsrc_tname.substring(5,
-                # dsrc_tname.len())` even though dsrc_tname is the
-                # full "Box__SpannedExpr" string and `.starts_with`
-                # returned true on it. Likely a view-aliasing
-                # interaction with the slice helpers. The byte loop
-                # is reliable and only runs once per EDeref.
-                int d_blen = dsrc_tname.byte_len()
-                String d_inner_name = ""
-                int dni_i = 5
-                while dni_i < d_blen:
-                    int b_dni = dsrc_tname.byte_at(dni_i)
-                    d_inner_name = d_inner_name + chr(b_dni)
-                    dni_i += 1
+                # The inner name is the post-`Box__` suffix of the mangled
+                # name (e.g. "Box__SpannedExpr" -> "SpannedExpr").
+                String d_inner_name = dsrc_tname.slice(5, dsrc_tname.len())
                 int d_inner_tid = resolve_field_gir_type(d_inner_name, &gmod)
                 # Phase 3 (Class 8): see EFieldAccess box-deref site
                 # at line ~4246 for the architectural rationale —
