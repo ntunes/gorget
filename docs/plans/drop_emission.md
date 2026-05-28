@@ -589,7 +589,7 @@ observed) → full `cargo test --test integration` (parent drives). NB: stage-2 
 `cc -O0` (NO ASan) — judge the REAL failure mode there (ASan inflates frames and masked a heap-OOM as a
 stack-overflow this session). Re-run the drop-count grep-diff vs `driver.c`.
 
-**Then — SHIP-GATE + squash.** Before green-ship, replace the consuming-position name-matches
+**SHIP-GATE — typed-signal cleanup (no squash needed).** Replace the consuming-position name-matches
 with typed signals (guardrail #5): both `is_owning_mutator_arg` AND the new `is_string_view_method`
 (`lower.gg`, added in `4ce2be0f` to fix the large-String truncation — it mirrors Rust's
 `returns_view: true` builtins as a method-NAME set, consistent with the sibling
@@ -597,8 +597,10 @@ with typed signals (guardrail #5): both `is_owning_mutator_arg` AND the new `is_
 `returns_view`/`returns_fresh` as TYPED metadata onto the self-host builtin decls and retires ALL
 THREE name-set predicates. **User directive (2026-05-27): the `is_string_view_method` name-match is
 FORGIVEN for now since the patch fixes the truncation; a FOLLOW-UP agent removes the name-matching
-and makes the code reference-grade on a subsequent pass** — do NOT block green on it. Then squash the
-whole cluster as ONE commit (partial states crash). Fold "Deferred optimizations" into `TODO.md`.
+and makes the code reference-grade on a subsequent pass** — do NOT block green on it. **Squash
+OBSOLETE (2026-05-28): the user has already fast-forwarded `main` to the cluster as individual
+commits — no single-commit squash is needed; the cleanup commits land on top.** Fold "Deferred
+optimizations" into `TODO.md`.
 
 **Anchors (LOWERING clone-OOM — the live blocker):** `lower_module` (lower.gg, the per-function lowering
 loop that emits the `gir_liveness_diff` warnings at :7250/:7485) + the discovery walkers + the transitive
