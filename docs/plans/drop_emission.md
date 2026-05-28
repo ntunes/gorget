@@ -1,5 +1,14 @@
 # Drop Emission — Self-Host Plan (unified)
 
+> **SCOPING (2026-05-28) — see `docs/plans/self_host_ssa_cleanup.md`** for an
+> audit of the "Rust's `run_ssa` would have collapsed this" framing used
+> below. Short version: the self-host **already has** a faithful port of
+> `construct_ssa` (`lir_ssa.gg`, wired at `driver.gg:87`); the surveyed
+> crashes (A/B/C) are at non-promotable slots that *neither* compiler's SSA
+> would touch. The actual class root is missing `expected_type` propagation
+> in `lower.gg` (the SReturn fix `6e49ead3` is the first port). Recommendation:
+> port the remaining `expected_type` sites instead of touching SSA.
+
 > **LATEST (2026-05-27 pm/4) — `parse_dot_expr` NULL `!`-move-arg SIGSEGV FIXED + the `EFieldAccess(Box(lhs),…)` NULL-box that it unmasked; next fixed_point blocker is now DEEP in `lower_module` (empty-name ECall → NULL Dict key in `lower_call`).**
 > Three self-host lowering fidelity gaps fixed (all case (a)/(b) — the Rust-gg DRIVER tolerates them
 > via `run_ssa` copy-prop / register-resident SSA values; the self-host `lower_gir_to_lir` has no such
