@@ -9,7 +9,49 @@
 > in `lower.gg` (the SReturn fix `6e49ead3` is the first port). Recommendation:
 > port the remaining `expected_type` sites instead of touching SSA.
 
-> **LATEST (2026-05-27 pm/4) — `parse_dot_expr` NULL `!`-move-arg SIGSEGV FIXED + the `EFieldAccess(Box(lhs),…)` NULL-box that it unmasked; next fixed_point blocker is now DEEP in `lower_module` (empty-name ECall → NULL Dict key in `lower_call`).**
+> **LATEST (2026-05-28) — `lower_call` `__s77 = NULL` String-borrow-into-Ptr-slot SIGSEGV FIXED (blocker #3); next fixed_point blocker is now in `lir_lower___type_category_for_name` (`unwrap_or` Some-arm — SAME `lir_codegen:2810` give-up at a different writer site).**
+> Single-class fix at the writer per CLAUDE.md "Layering discipline — debugging heuristic". The
+> lowering of `String call_name = fname` (where `fname` is `String &fname` — a `MutableBorrow` param
+> with GIR type `GtMutPtr(GorgetString)`) was falling through to `decide_svardecl_emission`'s
+> MoveDirect because Branch C-pre only matched `GtPtr(inner_tid)`, not `GtMutPtr(inner_tid)`. MoveDirect
+> allocated `var_local` typed `GtMutPtr(GorgetString)` (Ptr-typed slot inherited from source); the
+> subsequent `op_consume(CkAssign)` returned `OpClone` for the GtMutPtr-to-resource source (via
+> `decide_ptr_consume` at `lower.gg:1396`); the OpClone handler emitted `gorget_string_clone_to_owned(...)`
+> returning a Str VALUE; storing that into the Ptr-typed dst hit `lir_codegen.gg:2809-2810`'s
+> "Pointer slot ← aggregate value → assign NULL" give-up branch — `__s77 = NULL;` even though
+> `gorget_string_clone_to_owned(__v191)` had just completed successfully. The Rust DRIVER lowers
+> the same source correctly because its `lower_var_decl_assign_mode` (Branch G safety-net + Move-mode
+> codegen-side auto-deref) emits a value-typed `Str __s48` slot.
+>
+> **Fix (`tests/fixtures/self_host_lowerer/lower.gg`, +14 lines).** Two symmetric matches added,
+> single source of truth at the writer:
+>   - `decide_svardecl_emission` Branch C-pre (~line 856-870): added `case GtMutPtr(inner_tid)` arm
+>     alongside `case GtPtr(inner_tid)`. `&T` and `!T` resource params both lower to `GtMutPtr(T)`
+>     via `resolve_param_type` (`src/ir/lowering/context.rs:1613` / `lower.gg:~7255`), so the
+>     deref+clone-and-Move strategy applies symmetrically.
+>   - `CloneAndMove` handler (~line 5803): added `case GtMutPtr(cam_inner): owned_type = cam_inner`
+>     alongside the GtPtr case, so the cloned + var_local locals are both value-typed at the pointee.
+>     `OpBorrow(val)` on a MutPtr slot was already lowered correctly via lir_lower's OpBorrow handler
+>     (ISlotLoads the pointer value through the typed-Ptr slot).
+>
+> **Verified end-to-end:** the C now declares `Str __s77` (value-typed!) and emits `__s77 = __v190`
+> (the clone result) cleanly. Stage-2 binary runs PAST the entire GIR `lower_module` phase
+> (`lower_function → lower_stmt → lower_expr → lower_call`) into `lir_lower_gir_to_lir`, where it
+> SIGSEGVs in `type_category_for_name`'s `unwrap_or` Some-arm — a SEPARATE pre-existing blocker
+> (gdb: `gorget_string_clone_to_owned(src=0x0)` from `lower_instruction → map_runtime_name →
+> type_category_for_name`; same `lir_codegen.gg:2809-2810` give-up, different writer site —
+> `lower.gg:4685-4730`'s `unwrap_or` Some-arm `GIAssign(uo_dst, op_consume(payload, CkAssign))` where
+> uo_dst is intentionally Ptr-typed but op_consume returns OpClone for resource GtPtr sources, mismatch).
+> Recorded as TODO.md NEXT BLOCKER #4 with two writer-side fix options (a: make uo_dst value-typed for
+> resource pointees, mirroring Rust; b: in the Some-arm, use `OpBorrow(payload)` instead of
+> `op_consume(payload, CkAssign)` to preserve the design's Ptr-slot intent + match the None-arm's
+> OpMove→ISlotAddr pointer-aliasing shape).
+>
+> `self_host_bootstrap` STAYS GREEN; `lowerer_comparison` GREEN (1/1, 66.21s); `cargo test --lib --release`
+> 1060/1062 (2 pre-existing `lir::validate` release-mode `#[should_panic]` fails; no `src/` touched).
+> Only `tests/fixtures/self_host_lowerer/lower.gg` changed.
+
+> **PRIOR (2026-05-27 pm/4) — `parse_dot_expr` NULL `!`-move-arg SIGSEGV FIXED + the `EFieldAccess(Box(lhs),…)` NULL-box that it unmasked; next fixed_point blocker is now DEEP in `lower_module` (empty-name ECall → NULL Dict key in `lower_call`).**
 > Three self-host lowering fidelity gaps fixed (all case (a)/(b) — the Rust-gg DRIVER tolerates them
 > via `run_ssa` copy-prop / register-resident SSA values; the self-host `lower_gir_to_lir` has no such
 > cleanup, so s1bin emits the literal bad store). The stage-2 binary now runs PAST the entire frontend
