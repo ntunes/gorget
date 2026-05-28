@@ -1008,11 +1008,26 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
     if !wrappers_only {
         writeln!(out, "// ── Function Definitions ──").unwrap();
         let has_test_runner = !module.test_fns.is_empty() || !module.bench_fns.is_empty() || module.is_test_module;
+        // Module-invariant lookup tables consumed by every `emit_function`'s
+        // per-instruction analysis prologue. Built once here instead of being
+        // re-derived by a linear `.find`/`.any`-by-name scan on every CallExtern
+        // (~10.8k scans × full externs vec on the self-host lowerer).
+        //   - `extern_by_name`: extern name → declaration, FIRST match wins
+        //     (insert in iteration order, never overwrite — mirrors `.find`).
+        //   - `struct_orig_names`: set of original struct names for the
+        //     "is this runtime struct emitted in-module?" membership test.
+        let mut extern_by_name: HashMap<&str, &LirExtern> = HashMap::with_capacity(module.externs.len());
+        for e in &module.externs {
+            extern_by_name.entry(e.name.as_str()).or_insert(e);
+        }
+        let struct_orig_names: HashSet<&str> =
+            module.structs.iter().map(|s| s.name.as_str()).collect();
         for func in &module.functions {
             if has_test_runner && func.name == "main" {
                 continue;
             }
-            emit_function(&mut out, func, module, &struct_names, &string_lit_map);
+            emit_function(&mut out, func, module, &struct_names, &string_lit_map,
+                &extern_by_name, &struct_orig_names);
             writeln!(out).unwrap();
         }
     }
@@ -1028,7 +1043,8 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
 }
 
 
-fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &HashMap<u32, String>, string_lit_map: &HashMap<String, usize>) {
+fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &HashMap<u32, String>, string_lit_map: &HashMap<String, usize>,
+    extern_by_name: &HashMap<&str, &LirExtern>, struct_orig_names: &HashSet<&str>) {
     // For main() with a Result return type (throws-int main), override to int.
     // Read typed `enum_kind` (Phase A) — set at LIR struct registration.
     let is_throws_main = func.name == "main" && matches!(&func.return_type, LirType::Struct(sid) if {
@@ -1179,8 +1195,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
             // and the struct isn't in `module.structs` (i.e. it's a runtime
             // singleton not emitted by the user), record the override.
             if let Inst::CallExtern { dst: Some(d), name, .. } = inst {
-                let typed_override = module.externs.iter()
-                    .find(|e| &e.name == name)
+                let typed_override = extern_by_name.get(name.as_str())
                     .and_then(|e| match &e.return_type {
                         LirType::Struct(sid) => module.structs
                             .get(sid.0 as usize)
@@ -1190,7 +1205,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
                 let rt_name_owned: Option<String> = typed_override
                     .or_else(|| runtime_fn_return_struct(name).map(String::from));
                 if let Some(rt_name) = rt_name_owned {
-                    let in_module = module.structs.iter().any(|s| s.name == rt_name);
+                    let in_module = struct_orig_names.contains(rt_name.as_str());
                     if !in_module {
                         val_c_type_override[d.0 as usize] = Some(rt_name);
                     }
@@ -1566,8 +1581,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
         for (idx, inst) in insts.iter().enumerate() {
             if let Inst::CallExtern { dst: Some(d), name, .. } = inst {
                 if parse_option_result_combinator(name).is_some() {
-                    if let Some(result_sid) = module.externs.iter()
-                        .find(|e| e.name == *name)
+                    if let Some(result_sid) = extern_by_name.get(name.as_str())
                         .and_then(|e| e.combinator_result_struct_id)
                     {
                         let target_ty = LirType::Struct(result_sid);
@@ -3044,7 +3058,14 @@ impl super::Backend for CLirBackend {
         let sn = build_struct_names(module);
         let string_lit_map = HashMap::new();
         let mut out = String::new();
-        emit_function(&mut out, func, module, &sn, &string_lit_map);
+        let mut extern_by_name: HashMap<&str, &LirExtern> = HashMap::with_capacity(module.externs.len());
+        for e in &module.externs {
+            extern_by_name.entry(e.name.as_str()).or_insert(e);
+        }
+        let struct_orig_names: HashSet<&str> =
+            module.structs.iter().map(|s| s.name.as_str()).collect();
+        emit_function(&mut out, func, module, &sn, &string_lit_map,
+            &extern_by_name, &struct_orig_names);
         Some(out)
     }
 }

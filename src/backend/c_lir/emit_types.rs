@@ -2490,10 +2490,30 @@ pub(super) fn emit_runtime_helpers(out: &mut String, module: &LirModule, struct_
     }
 
     // Generate gorget_str_push/gorget_str_str/gorget_str_clear if called but not in runtime.
-    let has_extern = |n: &str| module.externs.iter().any(|e| e.name == n)
-        || module.functions.iter().flat_map(|f| f.blocks.iter())
-            .flat_map(|b| b.insts.iter())
-            .any(|inst| matches!(inst, Inst::CallExtern { name, .. } if name == n));
+    //
+    // `has_extern(n)` answers "is `n` declared as an extern OR referenced by any
+    // CallExtern instruction?". The naive form re-scanned every extern + every
+    // instruction in the module per query; with ~40 queries over a ~220k-inst
+    // module that's millions of comparisons. Build the membership set once
+    // (extern names ∪ CallExtern target names) — pure set membership, identical
+    // semantics to the original `.any` short-circuit.
+    let extern_call_names: HashSet<&str> = {
+        let mut s: HashSet<&str> = HashSet::new();
+        for e in &module.externs {
+            s.insert(e.name.as_str());
+        }
+        for f in &module.functions {
+            for b in &f.blocks {
+                for inst in &b.insts {
+                    if let Inst::CallExtern { name, .. } = inst {
+                        s.insert(name.as_str());
+                    }
+                }
+            }
+        }
+        s
+    };
+    let has_extern = |n: &str| extern_call_names.contains(n);
     if has_extern("gorget_str_push") {
         writeln!(out, "static inline void gorget_str_push(GorgetString* s, Str chunk) {{ gorget_string_push_char(s, chunk); }}").unwrap();
     }
