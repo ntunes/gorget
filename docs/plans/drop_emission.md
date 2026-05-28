@@ -1,6 +1,64 @@
 # Drop Emission — Self-Host Plan (unified)
 
-> **LATEST (2026-05-28 pm₂) — NEXT BLOCKER #4 CLOSED: `unwrap_or` Some-arm `op_consume(payload, CkAssign)` → Ptr-slot NULL give-up fixed at the writer.**
+> **LATEST (2026-05-28 pm₃) — NEXT BLOCKER #5 CLOSED: `byte_slice`/`substring`/`char_at` missing from `infer_method_return_type` GorgetString list at the writer.**
+> Single-line fix at `tests/fixtures/self_host_lowerer/lower.gg:3473`. The fallback
+> `infer_method_return_type("clone", recv, …)` returns `ctx.locals.get(recv).type_id` —
+> CORRECT for a named receiver — but stage-2's `owned_slice` calls `s.byte_slice(start, end).clone()`,
+> a chained call on a temporary, so the `recv` clone sees is the local holding the byte_slice
+> result. That local's type_id was `I64_TYPE` because `byte_slice` (along with `substring` and
+> `char_at`) was missing from the String-returning method list at line 3473 — `slice` was there
+> but its byte-level / substring / char-at siblings were not. `byte_slice` → I64 propagated
+> through clone → I64 propagated to the return slot of `owned_slice`, where lir_codegen's
+> `ISlotStore` give-up branch (`lir_codegen.gg:2788`) saw `slot_ty=Str, vty=I64` (true type
+> mismatch) and emitted `__s0 = (Str){0}` — zero Str into the return slot. Stage-2's lexer
+> then read EVERY identifier as empty string; `keyword_from_str("")` returned `None`; every
+> keyword token (`from`/`import`/`extern`/etc.) was emitted as `TkIdentifier("")`; parse_module's
+> top-level item-detection fell through to the `parse_statement → SVarDecl → IStaticDecl` branch
+> (parser.gg:4067-4069), so 22 `from` imports became 13 `IStaticDecl` + 9 mid-parse losses.
+> load_imports saw 0 IImport items → no modules loaded → GIR had 3 functions (vs 814 expected)
+> → generate_c emitted 0 function bodies → stage-3.c was 37 lines of preamble only → stage-3
+> cc-link failed with `undefined reference to main`.
+>
+> **Diagnostic protocol.** `gorget_eprint_debug` extern routed to stderr at: (a) `generate_c`
+> ENTER + reachable-fn count + emit-count; (b) driver pipeline boundaries (parse_source /
+> load_imports / lower_module / lower_gir_to_lir / SSA / drop-elab); (c) `load_imports` per-Item
+> match dispatch (per-variant tally); (d) parse_module's per-iteration `peek_kw` + `peek_tag`;
+> (e) `lex_scan_identifier`'s `word`/`start`/`end`/`src.len` and `owned_slice`'s pre- and
+> post-`byte_slice` lengths. The traces pinned: stage-2 lexer reads `from` at correct
+> `start=0 end=4 src.len=4950` BUT `owned_slice` returns `''` (len 0). The C diff between
+> Rust-emitted `stage1.c` and self-host-emitted `stage2.c` for `lexer___owned_slice` isolated
+> the give-up: stage-1 has `__s0 = __v6;` (the byte_slice result), stage-2 has
+> `__s4 = 0; __v7 = __s4; __s5 = __v7; __v8 = __s5; __s0 = (Str){0};` — `__v6` dead, `__v8` is
+> the I64 chain from the mis-typed clone result. Fix at the writer site (lower.gg:3473) since
+> that's where the type_id for byte_slice is set; downstream ISlotStore give-up is then never
+> reached for this class.
+>
+> **Verified end-to-end.** Stage-2 binary emits **667611 lines** (vs 37 broken; matches the
+> brief-11 baseline `667626`). Stage-3 cc-link **PASSES** (no `undefined reference to main`).
+> Stage-3 binary RUNS and produces a **667356-line stage-4-body candidate**, but stage-3 binary
+> SIGSEGVs partway through its second-stage run (rc=139). The 37-line empty-output class is
+> closed; the new failure is a downstream blocker (#6) at stage-3-runtime, separate writer-site
+> peel. `self_host_bootstrap` **PASSED** (1 / 1 GREEN). `self_host_bootstrap_fixed_point` still
+> fails — but at the stage-3 binary runtime, NOT at stage-2 cc-link as before; this is the
+> architectural advancement.
+> `cargo test --lib --release` 1060/1062 (the 2 pre-existing `lir::validate` panic-asserts;
+> independently verified on the cb1c826c base, unchanged). `lowerer_comparison` PASSED.
+> Only `tests/fixtures/self_host_lowerer/lower.gg` changed (+1 LOC, byte_slice / substring /
+> char_at appended to the slice/trim/upper/lower list at line 3473).
+>
+> **Why this is the writer-site fix.** The give-up at `lir_codegen.gg:2788` (`vty != slot_ty
+> → emit (slot_ty){0}`) is structurally correct: it handles `return None` lowering to
+> `IIConst 0` (UNIT placeholder) into an Option slot by emitting `(Option__T){.tag = 1}`. The
+> bug is at the UPSTREAM site that produces the wrong vty — `infer_method_return_type("clone")`
+> defaulted to the receiver's type_id, but the receiver was typed I64 because `byte_slice` was
+> missing from the GorgetString-returning list. Once `byte_slice` returns GorgetString, the
+> chain types correctly all the way through. No SlotStore mitigation needed.
+>
+> **Deferred (TODO.md):** NEXT BLOCKER #6 — stage-3 binary segfaults at runtime (rc=139)
+> partway through its third-generation emission. Trace not yet captured. Separate writer-site
+> peel.
+
+> **PRIOR (2026-05-28 pm₂) — NEXT BLOCKER #4 CLOSED: `unwrap_or` Some-arm `op_consume(payload, CkAssign)` → Ptr-slot NULL give-up fixed at the writer.**
 > Single-class fix at `lower.gg:~4691-4717`, the `unwrap_or` Some-arm. The `uo_slot_tid` override
 > (which decouples the result-slot's type from the field-read dst's type via the existing pattern
 > at `lower.gg:~4705-4713`) was gated on `not is_resource_type_name(...)`, so resource pointees

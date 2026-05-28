@@ -3449,7 +3449,7 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
     if method == "starts_with" or method == "ends_with":
         return BOOL_TYPE
     # String-returning methods
-    if method == "slice" or method == "trim" or method == "upper" or method == "lower":
+    if method == "slice" or method == "byte_slice" or method == "substring" or method == "char_at" or method == "trim" or method == "upper" or method == "lower":
         return lookup_or_register_named(&gmod, "GorgetString")
     if method == "to_lower" or method == "to_upper":
         return lookup_or_register_named(&gmod, "GorgetString")
