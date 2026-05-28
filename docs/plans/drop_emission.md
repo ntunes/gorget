@@ -1,5 +1,32 @@
 # Drop Emission — Self-Host Plan (unified)
 
+> **LATEST (2026-05-28 pm₄) — NEXT BLOCKER #6 CLOSED + `self_host_bootstrap_fixed_point` CONVERGES: `chr` missing from `builtin_call_return_type` GorgetString list → `*box` deref mis-sized to 8 bytes → stage-3 SIGSEGV.**
+> Two-line fix at `tests/fixtures/self_host_lowerer/lower.gg:3670-3671` (`if fname == "chr": return … "GorgetString"`).
+> Same class as #5 — a String-returning builtin missing from a return-type list, mis-typed I64,
+> dropped at a string boundary. Causal chain: `chr(byte)` → ret_type stays `I64_TYPE` (builtin
+> list miss) → at the `d_inner_name + chr(b_dni)` string concat (`lower.gg:4219` path) the
+> `op_consume(rhs=chr_result_I64, CkCallArgBorrow())` substitutes `(Str){0}` for the mis-typed
+> operand → the chr Str result is DROPPED, `inner_name` stays `""` → the Box-inner-name byte
+> loops at `lower.gg:5035`/`5340` produce `""` → `resolve_field_gir_type("")` →
+> `map_gir_type(GtNamed(""))` → `sr.get("")` miss → `LT_PTR` (8 bytes) for the `*box` deref's
+> `inner_ty` → `GIDeref` (`lir_lower.gg:3215`) reads `lir_type_byte_size_in_mod(LT_PTR)=8` →
+> emits an 8-byte `memcpy` + pass-by-VALUE instead of the 192-byte SpannedExpr struct-copy +
+> pass-by-pointer → `expr_mentions_iter`'s recursive `*recv_box` arg is `0x6` (the Expr tag =
+> first 8 bytes of the pointee) → SIGSEGV deref of `0x6` in `should_auto_load_std_iter` at the
+> top of `load_imports`. **Diagnostic protocol:** reproduced rc=139 via worktree-local cycle
+> script; `gdb -batch -ex run -ex bt` → crash frame `loader___expr_mentions_iter(__p0=0x6)`;
+> emitted-C parity (stage1.c Rust = `memcpy 192 + pass &local`; stage3.c self-host = `memcpy 8 +
+> pass value`; global `192LL`-count 264→13); C-level instrumentation of the buggy stage2.c at the
+> `GIDeref` size site (`inner_ty=154 inner_lir_ty=11(LT_PTR) size=8` ×275) and the `map_gir_type`
+> `GtNamed` branch (`name='' get_ptr=(nil)` ×583) and the 4 `resolve_field_gir_type` sites (site D
+> = the EDeref `d_inner_name` = 274 empties); reading the byte-loop C revealed `gorget_char_chr`'s
+> result computed-then-discarded with `gorget_str_cat(inner_name, (Str){0})`. **Verified:** manual
+> cycle stage-3.bin → rc=0 (full stage-4.c); **fixed point reached** — stage-2 body == stage-3
+> body (md5 `3b0dae9e…`, 667120 lines) == stage-4 body (md5 `db663ee3…`). `lowerer_comparison`
+> count-identical green; `cargo test --lib --release` 1060/1062 floor. Deferred: retire the
+> Box-inner-name byte loops (the `.substring()`-returns-empty claim they work around is now
+> possibly stale — TODO.md).
+>
 > **LATEST (2026-05-28 pm₃) — NEXT BLOCKER #5 CLOSED: `byte_slice`/`substring`/`char_at` missing from `infer_method_return_type` GorgetString list at the writer.**
 > Single-line fix at `tests/fixtures/self_host_lowerer/lower.gg:3473`. The fallback
 > `infer_method_return_type("clone", recv, …)` returns `ctx.locals.get(recv).type_id` —

@@ -3669,6 +3669,8 @@ int builtin_call_return_type(String fname, GirModule &gmod):
         return lookup_or_register_named(&gmod, "GorgetString")
     if fname == "int_to_str" or fname == "float_to_str" or fname == "bool_to_str":
         return lookup_or_register_named(&gmod, "GorgetString")
+    if fname == "chr":
+        return lookup_or_register_named(&gmod, "GorgetString")
     if fname == "parse_int" or fname == "str_to_int":
         return I64_TYPE
     if fname == "parse_float" or fname == "str_to_float":
