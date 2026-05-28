@@ -4689,26 +4689,40 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     # `sr_lookup` workaround in lir_lower.gg:35 can now
                     # inline as `sr.get(name).unwrap_or(-1)`).
                     if mname == "unwrap_or" and default_local >= 0:
-                        # option_ref_borrow Phase 6 (R1, site #4): the result
-                        # SLOT (`uo_dst`) needs a SEPARATE type from `inner_tid`.
-                        # ⚠ `inner_tid` MUST stay `GtPtr` for an Option[Ref[T]]
-                        # — it is reused at the `emit_payload_read` field reads
-                        # (Some-arm ~below AND the plain-unwrap path) where the
-                        # site-#1 guard fires and emits the GIDeref. Gating it
-                        # would type the field-read dst as a value slot (helper
-                        # writes the pointer into it → bug) AND stop the guard
-                        # matching → no deref. So: resource pointee → slot stays
-                        # `GtPtr` (=inner_tid); primitive pointee → slot is the
-                        # VALUE pointee type, so the Some arm stores the
-                        # site-#1-deref'd value and the None arm the value
-                        # default into a value-typed `uo_dst`.
+                        # option_ref_borrow Phase 6 (R1, site #4 — extended
+                        # 2026-05-28 for NEXT BLOCKER #4): the result SLOT
+                        # (`uo_dst`) needs a SEPARATE type from `inner_tid`.
+                        # ⚠ `inner_tid` MUST stay `GtPtr` — it is reused at
+                        # the `emit_payload_read` field reads (Some-arm ~below
+                        # AND the plain-unwrap path) where the site-#1 guard
+                        # fires and emits the GIDeref. The two slot types are
+                        # ALREADY decoupled here; the `uo_slot_tid` override
+                        # only changes the result-slot, not the field-read dst.
+                        #
+                        # For BOTH primitive and resource pointees, the slot
+                        # type is the VALUE pointee — the Some-arm clones the
+                        # GtPtr payload (`op_consume(payload, CkAssign)` →
+                        # OpClone → `<T>__clone(ptr)` → fresh value) and stores
+                        # the value; the None-arm moves the value-typed default
+                        # into the same value slot. The caller's
+                        # `op_consume(uo_dst, CkReturn)` then sees a value-typed
+                        # owned local — OpMove → direct return.
+                        #
+                        # Pre-2026-05-28: this gated the override on
+                        # `not is_resource_type_name(...)` so resource pointees
+                        # kept `uo_slot_tid = inner_tid` (GtPtr). The Some-arm
+                        # then hit lir_codegen's "Ptr-slot ← aggregate-value →
+                        # NULL" give-up branch (`__s33 = NULL`), and the merge's
+                        # downstream `clone_to_owned` SIGSEGV'd. The resource
+                        # case wants the SAME value-typed slot as primitives;
+                        # the GtPtr requirement was only about `inner_tid`, not
+                        # `uo_slot_tid`.
                         int uo_slot_tid = inner_tid
                         if ref_payload_tid >= 0 and ref_payload_tid < gmod.type_table.len():
                             GirType rp_gt = gmod.type_table.get(ref_payload_tid).unwrap()
                             match rp_gt:
                                 case GtPtr(rp_inner):
-                                    if not is_resource_type_name(type_id_to_name(rp_inner, &gmod), &gmod):
-                                        uo_slot_tid = rp_inner
+                                    uo_slot_tid = rp_inner
                                 else:
                                     pass
                         # Materialise the result slot up front; both arms

@@ -1,17 +1,58 @@
 # Drop Emission — Self-Host Plan (unified)
 
-> **LATEST (2026-05-28 pm++) — `expected_type` STEP 2.4 LANDED: `EStructLiteral` per-field + `EArrayLiteral` elem-size now propagate `ctx.expected_type` like every other writer site. Field-init and empty-array-literal coverage closed.**
+> **LATEST (2026-05-28 pm₂) — NEXT BLOCKER #4 CLOSED: `unwrap_or` Some-arm `op_consume(payload, CkAssign)` → Ptr-slot NULL give-up fixed at the writer.**
+> Single-class fix at `lower.gg:~4691-4717`, the `unwrap_or` Some-arm. The `uo_slot_tid` override
+> (which decouples the result-slot's type from the field-read dst's type via the existing pattern
+> at `lower.gg:~4705-4713`) was gated on `not is_resource_type_name(...)`, so resource pointees
+> kept `uo_slot_tid = inner_tid` (`GtPtr`). The Some-arm `GIAssign(uo_dst, op_consume(payload,
+> CkAssign))` then routed through `op_consume` → `decide_ptr_consume` → `OpClone` (correct for
+> the GtPtr resource source), which materialised a `Str` VALUE via `gorget_string_clone_to_owned`
+> — but storing that VALUE into the Ptr-typed `uo_dst` slot hit lir_codegen's "Ptr-slot ←
+> aggregate-value → NULL" give-up branch (`lir_codegen.gg:2809-2810`). The clone result was
+> discarded; uo_dst became NULL; the merge-block consumer's `gorget_string_clone_to_owned(NULL)`
+> SIGSEGV'd. Diagnosis matched §1-§2 of brief-10 exactly.
+>
+> **Fix option (a) picked — emitted-C parity diff + latent-None-arm tiebreaker.** Drop the
+> `not is_resource_type_name` guard at `~:4710`; the resource case now also lands
+> `uo_slot_tid = rp_inner` (value-typed pointee). The Some-arm OpClone now stores a `Str` value
+> into a value-typed slot (sound aggregate store), and the None-arm OpMove of the value-typed
+> `default_local` into the value-typed `uo_dst` is also sound (the brief's §2 latent-None-arm
+> tiebreaker: option (a) heals BOTH arms naturally; option (b) would have only healed Some-arm
+> via OpBorrow's pointer-aliasing path, leaving the None-arm structurally identical to the
+> broken Some-arm pending a complex default-source). The caller's
+> `op_consume(uo_dst, CkReturn)` then sees an owned `Str` value → direct return (no Ptr→value
+> coercion clone at the return — single clone total vs Rust's double-clone with Ptr uo_dst, but
+> semantically equivalent). The `inner_tid` MUST stay GtPtr requirement (comment at `~:4694`)
+> is preserved: `inner_tid` and `uo_slot_tid` were already decoupled in the original gating
+> structure, the gate just over-conservatively kept resource pointees pinned to GtPtr.
+>
+> **Verified end-to-end.** Stage-2 binary now runs PAST the `lir_lower___type_category_for_name`
+> SIGSEGV. NEW DOWNSTREAM BLOCKER #5 observed: stage-2 binary completes cleanly (`exit=0`) but
+> emits only 37 lines of preamble — `main` is missing from stage-2's output, so the
+> `self_host_bootstrap_fixed_point` test fails at the stage-3 cc link step with `undefined
+> reference to main`. This is unrelated to NEXT BLOCKER #4 — a frontend / module-iteration gap
+> in the stage-2 binary not lowering function definitions. Recorded as NEXT BLOCKER #5 in
+> TODO.md.
+>
+> `self_host_bootstrap` PASSED (1044.38s, the comparison test — 1/1 GREEN);
+> `cargo test --lib --release` 1060/1062 (2 pre-existing `lir::validate` release-mode
+> `#[should_panic]` fails; no `src/` touched); `lowerer_comparison`
+> `Total: 1118, Matched: 795, Adjusted: 887/1111 (79.8%), Crashes: 7` — **IDENTICAL** to baseline
+> (zero fn-count regression). Only `tests/fixtures/self_host_lowerer/lower.gg` changed (+15 LOC
+> net: −15/+30, comment expansion + the one gate-flip).
+
+> **PRIOR (2026-05-28 pm++) — `expected_type` STEP 2.4 LANDED: `EStructLiteral` per-field + `EArrayLiteral` elem-size now propagate `ctx.expected_type` like every other writer site. Field-init and empty-array-literal coverage closed.**
 > Mirrors Rust gg's `lower_struct_literal` per-field prev/restore (`src/ir/lowering/exprs/mod.rs:1867-1890`)
 > and `lower_array_literal`'s empty-array elem-size from outer-expected-type (`src/ir/lowering/exprs/collections.rs:27,46-49,62`).
 > Two ports at `tests/fixtures/self_host_lowerer/lower.gg`:
 > (a) `EStructLiteral` arm (~line 5222): converted `for sv in fvals:` to indexed `while sli_i < fvals.len():`; before each field's `lower_expr`, looks up `gmod.type_infos.get(sname).fields.get(sli_i).type_name`, runs it through `lookup_or_register_named` to get a type_id, and sets `ctx.expected_type` (subject to the I64/UNIT guard). Restored after. Uses the same `GirTypeInfo` lookup as the existing `apply_container_hint_for_ctor_arg` (~line 5421-5487) — single source of truth for self-host field-type lookup.
 > (b) `EArrayLiteral` arm (~line 5165): ADD-only fallback — when `vec_tyname == ""` AND `ctx.expected_type >= 0`, derive `vec_tyname` from `collection_element_type(type_id_to_name(ctx.expected_type, &gmod))`. The pre-existing `pending_vec_elem_tyname` side-channel still wins when set (e.g. SVarDecl already sets it); this fills the empty-array slots that previously fell back to scalar size 8.
 >
-> **Verified:** `self_host_bootstrap` PASSED (1087s, exit 0). `cargo test --lib --release` 1060/1062 (the 2 pre-existing `lir::validate` panic-asserts). `lowerer_comparison` `Total: 1118, Matched: 795, Adjusted: 887/1111 (79.8%)` — IDENTICAL to STEP 2.3 baseline (counts are fn-shape-driven; the STEP 2.4 changes are typed-slot changes per fn that don't move the function-count needle, as expected). Stage-2 binary cycle: stage-1 emit `lines=614053` (was 613527, **+526 lines**); cc exit=0; stage-2 exit=0 `lines=667626` (was 667086, **+540 lines past STEP 2.3 baseline**) — monotone gain, no crash, confirming more code emitted before residual convergence drift. `self_host_bootstrap_fixed_point` STILL FAILS at NEXT BLOCKER #4 (brief-10's zone, separate writer-site peel — not in this brief's scope).
+> **Verified:** `self_host_bootstrap` PASSED (1087s, exit 0). `cargo test --lib --release` 1060/1062 (the 2 pre-existing `lir::validate` panic-asserts). `lowerer_comparison` `Total: 1118, Matched: 795, Adjusted: 887/1111 (79.8%)` — IDENTICAL to STEP 2.3 baseline (counts are fn-shape-driven; the STEP 2.4 changes are typed-slot changes per fn that don't move the function-count needle, as expected). Stage-2 binary cycle: stage-1 emit `lines=614053` (was 613527, **+526 lines**); cc exit=0; stage-2 exit=0 `lines=667626` (was 667086, **+540 lines past STEP 2.3 baseline**) — monotone gain, no crash, confirming more code emitted before residual convergence drift. `self_host_bootstrap_fixed_point` STILL FAILS at NEXT BLOCKER #4 (brief-10's zone, separate writer-site peel — not in this brief's scope; now CLOSED in pm₂ above).
 >
 > **Scope note (out-of-scope follow-up):** Rust's `lower_array_literal` ALSO propagates `expected_type` PER-ELEMENT (`infer_collection_element_type` for `Vector[Option[T]]` → each elem sees `Option[T]` as expected, so bare `None()` resolves to `Option__T` not `Constant::Null`). STEP 2.4 ports only the elem-size half (the bug class that lacks elem_type at all for empty arrays). The per-element prev/restore is a separate gap — added as a TODO follow-up.
->
-> **Previous (2026-05-28 pm) — `expected_type` propagation ported to non-return user-level consume positions in `lower.gg`; the LATENT-SIBLINGS class is CLOSED.**
+
+> **PRIOR (2026-05-28 pm) — `expected_type` propagation ported to non-return user-level consume positions in `lower.gg`; the LATENT-SIBLINGS class is CLOSED.**
 > Mirrors Rust gg's `LoweringContext.func_state.expected_type` (`src/ir/lowering/stmts/mod.rs:477-487`,
 > `src/ir/lowering/stmts/assigns.rs:108-117`, `src/ir/lowering/exprs/calls.rs:1228-1255`,
 > `src/ir/lowering/exprs/mod.rs:1404-1502`, `:2504-2529`). The self-host now threads an
