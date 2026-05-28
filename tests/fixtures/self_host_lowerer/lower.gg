@@ -5169,6 +5169,21 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # scalar-element Vectors used as temporaries.
             String vec_tyname = ctx.pending_vec_elem_tyname
             ctx.pending_vec_elem_tyname = ""
+            # ADD-only fallback: when no pending hint was set, try
+            # deriving elem type from `ctx.expected_type` (Rust counterpart
+            # `src/ir/lowering/exprs/collections.rs:27,46-49,62` — the
+            # empty-array branch reads expected_type to size the array
+            # buffer). This closes empty-array literals at writer sites
+            # that already set expected_type but didn't set the
+            # `pending_vec_elem_tyname` side-channel (e.g. EStructLiteral's
+            # field-init port above; the call-arg loop's per-arg expected
+            # type). NOT a replacement for the pending-name protocol —
+            # that wins when set; this is the fallback for when it isn't.
+            if vec_tyname == "" and ctx.expected_type >= 0:
+                String eali_outer_name = type_id_to_name(ctx.expected_type, &gmod)
+                String eali_elem_name = collection_element_type(eali_outer_name)
+                if eali_elem_name != "":
+                    vec_tyname = eali_elem_name
             # Lower each element — we'll push them in order after the
             # array is constructed. Need to keep the value locals around
             # so we can reference them in the subsequent push calls.
@@ -5220,8 +5235,32 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             emit(&ctx, GIAssign(tdst, OpConstI64(0)))
             return tdst
         case EStructLiteral(sname, fnames, fvals):
-            for sv in fvals:
+            # Expected-type propagation per field (Rust counterpart
+            # `src/ir/lowering/exprs/mod.rs:1867-1890`). For each positional
+            # field-init expr, set `ctx.expected_type` to that field's
+            # declared type via `gmod.type_infos` BEFORE lowering — so reader
+            # sites (bare prelude-variant ctors, bare `None`, empty array
+            # literals consuming elem-size from expected_type, EIdentifier)
+            # resolve to the field's declared shape instead of an
+            # 8-byte default. Mirrors `apply_container_hint_for_ctor_arg`'s
+            # GirTypeInfo lookup at `lower.gg:~5432-5441`. Restored
+            # unconditionally after each lower_expr. Same I64/UNIT guard as
+            # SVarDecl / SAssign / SReturn / call-arg sites.
+            int sli_i = 0
+            while sli_i < fvals.len():
+                SpannedExpr sv = fvals.get(sli_i).unwrap()
+                int prev_expected_sli = ctx.expected_type
+                if gmod.type_infos.contains(sname):
+                    GirTypeInfo sli_ti = gmod.type_infos.get(sname).unwrap()
+                    if not sli_ti.is_enum and sli_i < sli_ti.fields.len():
+                        String sli_fty_name = sli_ti.fields.get(sli_i).unwrap().type_name.clone()
+                        if sli_fty_name != "":
+                            int sli_fty = lookup_or_register_named(&gmod, sli_fty_name)
+                            if sli_fty != I64_TYPE and sli_fty != UNIT_TYPE:
+                                ctx.expected_type = sli_fty
                 lower_expr(&ctx, sv, &gmod)
+                ctx.expected_type = prev_expected_sli
+                sli_i += 1
             int sdst = add_local(&ctx, lookup_or_register_named(&gmod, sname), NO_NAME)
             emit(&ctx, GIAssign(sdst, OpConstI64(0)))
             return sdst

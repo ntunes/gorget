@@ -1,6 +1,17 @@
 # Drop Emission — Self-Host Plan (unified)
 
-> **LATEST (2026-05-28 pm) — `expected_type` propagation ported to non-return user-level consume positions in `lower.gg`; the LATENT-SIBLINGS class is CLOSED.**
+> **LATEST (2026-05-28 pm++) — `expected_type` STEP 2.4 LANDED: `EStructLiteral` per-field + `EArrayLiteral` elem-size now propagate `ctx.expected_type` like every other writer site. Field-init and empty-array-literal coverage closed.**
+> Mirrors Rust gg's `lower_struct_literal` per-field prev/restore (`src/ir/lowering/exprs/mod.rs:1867-1890`)
+> and `lower_array_literal`'s empty-array elem-size from outer-expected-type (`src/ir/lowering/exprs/collections.rs:27,46-49,62`).
+> Two ports at `tests/fixtures/self_host_lowerer/lower.gg`:
+> (a) `EStructLiteral` arm (~line 5222): converted `for sv in fvals:` to indexed `while sli_i < fvals.len():`; before each field's `lower_expr`, looks up `gmod.type_infos.get(sname).fields.get(sli_i).type_name`, runs it through `lookup_or_register_named` to get a type_id, and sets `ctx.expected_type` (subject to the I64/UNIT guard). Restored after. Uses the same `GirTypeInfo` lookup as the existing `apply_container_hint_for_ctor_arg` (~line 5421-5487) — single source of truth for self-host field-type lookup.
+> (b) `EArrayLiteral` arm (~line 5165): ADD-only fallback — when `vec_tyname == ""` AND `ctx.expected_type >= 0`, derive `vec_tyname` from `collection_element_type(type_id_to_name(ctx.expected_type, &gmod))`. The pre-existing `pending_vec_elem_tyname` side-channel still wins when set (e.g. SVarDecl already sets it); this fills the empty-array slots that previously fell back to scalar size 8.
+>
+> **Verified:** `self_host_bootstrap` PASSED (1087s, exit 0). `cargo test --lib --release` 1060/1062 (the 2 pre-existing `lir::validate` panic-asserts). `lowerer_comparison` `Total: 1118, Matched: 795, Adjusted: 887/1111 (79.8%)` — IDENTICAL to STEP 2.3 baseline (counts are fn-shape-driven; the STEP 2.4 changes are typed-slot changes per fn that don't move the function-count needle, as expected). Stage-2 binary cycle: stage-1 emit `lines=614053` (was 613527, **+526 lines**); cc exit=0; stage-2 exit=0 `lines=667626` (was 667086, **+540 lines past STEP 2.3 baseline**) — monotone gain, no crash, confirming more code emitted before residual convergence drift. `self_host_bootstrap_fixed_point` STILL FAILS at NEXT BLOCKER #4 (brief-10's zone, separate writer-site peel — not in this brief's scope).
+>
+> **Scope note (out-of-scope follow-up):** Rust's `lower_array_literal` ALSO propagates `expected_type` PER-ELEMENT (`infer_collection_element_type` for `Vector[Option[T]]` → each elem sees `Option[T]` as expected, so bare `None()` resolves to `Option__T` not `Constant::Null`). STEP 2.4 ports only the elem-size half (the bug class that lacks elem_type at all for empty arrays). The per-element prev/restore is a separate gap — added as a TODO follow-up.
+>
+> **Previous (2026-05-28 pm) — `expected_type` propagation ported to non-return user-level consume positions in `lower.gg`; the LATENT-SIBLINGS class is CLOSED.**
 > Mirrors Rust gg's `LoweringContext.func_state.expected_type` (`src/ir/lowering/stmts/mod.rs:477-487`,
 > `src/ir/lowering/stmts/assigns.rs:108-117`, `src/ir/lowering/exprs/calls.rs:1228-1255`,
 > `src/ir/lowering/exprs/mod.rs:1404-1502`, `:2504-2529`). The self-host now threads an
