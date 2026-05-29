@@ -65,10 +65,11 @@ Verified empirically in this worktree:
   correctly** (`len=2`, element `name` = `"alpha"`).
 
 The difference is `expected_type`: a `VarDecl` sets `ctx.func_state.expected_type` to the declared
-type before lowering the init (`src/ir/lowering/stmts/assigns.rs:109`), which the array-literal
-lowering reads to size the buffer and propagate the element type
-(`collections.rs:27,36,46-63`). Return position does not set it. **So the synthetic body MUST be the
-local-binding-then-return shape.**
+type before lowering the init (`src/ir/lowering/stmts/mod.rs:478`, in `lower_var_decl` — NOT
+`assigns.rs:109`, which is the `Stmt::Assign` reassignment path), which the array-literal lowering
+reads to size the buffer and propagate the element type (`collections.rs:27,36,46-63`; the empty-array
+`elem_size` fallback to I64=8 is at `collections.rs:165-167`). Return position does not set it. **So
+the synthetic body MUST be the local-binding-then-return shape.**
 
 Crucially, the synthetic function is built **during IR lowering**, *after* semantic analysis has run —
 so it never faces the type checker, and the `return RHS` rejection above does not block us. (We choose
@@ -119,7 +120,7 @@ predicate change plus an init-ordering decision — not a re-architecture. Recor
 | Concern | File:line | Change |
 |---|---|---|
 | Detect collection-literal init | `src/ir/lowering/mod.rs:2357` (top of `eval_static_init` match) **and/or** `lower_static_decl` `:2325` | Before `eval_static_init`, test `initializer_needs_synthetic_fn(&decl.value.node)` (true for `Expr::ArrayLiteral`/`Expr::DictLiteral`). If true, skip `eval_static_init` and take the synthetic path. |
-| Synthesize + register | `lower_static_decl`, `src/ir/lowering/mod.rs:2313-2340` | Build a `FunctionDef` (name `__gg_static_init_<name>`, no params, `return_type = decl.type_.clone()`, body = `Block([SVarDecl{type_: decl.type_, name:"__r", value: decl.value, …}, Return(Some(EIdentifier("__r")))])` — use `FunctionBody::Block`). Push it to a new `ctx.synthetic_static_init_fns: Vec<FunctionDef>` accumulator (new field on `LoweringContext`). Push the `Global` with `init = GlobalInit::Extern { name: "__gg_static_init_<name>".into(), args: vec![] }`. |
+| Synthesize + register | `lower_static_decl`, `src/ir/lowering/mod.rs:2313-2340` | Build a `FunctionDef` (name `__gg_static_init_<name>`, no params, `return_type = decl.type_.clone()`, body = `FunctionBody::Block(Block([VarDecl_stmt, Return(Some(EIdentifier("__r")))]))`). **The `VarDecl` stmt is the REAL `Stmt::VarDecl` shape (`ast.rs:914-921`): `pattern: Pattern::Binding("__r")`, `type_: Some(decl.type_.clone())`, `value: decl.value.clone()`, `is_const:false`, `is_mutable:true`, `shared:false`** — there is NO `name` field; `lower_var_decl` dispatches on `Pattern::Binding` (`stmts/mod.rs:380`). Push the fn to a new `ctx.synthetic_static_init_fns: Vec<FunctionDef>` accumulator (new field on `LoweringContext`). Push the `Global` with `init = GlobalInit::Extern { name: "__gg_static_init_<name>".into(), args: vec![] }`. (Clone `decl.value` into the synthetic body; the global slot itself is left zeroed + prologue-assigned — `decl.value` is lowered ONCE, inside the synthetic fn, never into the slot.) |
 | Lower synthetic fns | `src/ir/lowering/mod.rs:1242-1257` (the non-generic function loop) | After the existing user-function loop, iterate `ctx.synthetic_static_init_fns` (cloned out to satisfy the borrow checker) and call `lower_function(&mut ctx, &mut module, &f, None)`. Placing it here (not inside the globals loop at `:1234`) guarantees the type registry + monomorph collection have run. |
 | DCE root seeding | `src/lir/optimize.rs:206-220` (root loop in `find_live_functions`) | Add `|| func.name.starts_with("__gg_static_init_")` to the root predicate. **Required**: the prologue call is raw C text, invisible to the LIR call graph (`collect_global_func_refs`, `optimize.rs:358-368`, only handles `FuncAddr`/`Struct`, not `Extern{name}`). Without this seed the fn is DCE'd and the prologue call link-fails. |
 | `GlobalInit` enum | `src/ir/mod.rs:721-741` | **No change** — reuse `Extern { name, args: [] }`. |
@@ -137,6 +138,20 @@ predicate change plus an init-ordering decision — not a re-architecture. Recor
 | `lir_lower.gg` global registration | `lir_lower.gg:3605-3610` | **No change** — already iterates `gmod.statics`, builds `LirGlobal(… GINIT_RUNTIME_CALL … sg_info.init_expr …)`. |
 | Prologue | `lir_codegen.gg:4386-4395` | **No change** — emits `__lir_g<N> = <init_expr>;` verbatim. |
 | Self-host DCE | `lir_codegen.gg:944-961` (root-seeding block in `compute_reachable_fns`) | Add an `elif name.starts_with("__gg_static_init_"): is_root = true` arm. **Required** for the same reason as the Rust seed: the prologue call is raw text (`init_expr`), invisible to the ICall/ICallExtern transitive walk (`lir_codegen.gg:1028-1101`). |
+
+> **⚠ Pipeline-position caveat (pass-1 finding) — v1-safe, but the §3 widening MUST revisit it.**
+> Rust lowers the synthetic fn in the non-generic function loop *after* monomorph collection
+> (`mod.rs:1257`); the self-host §4.2 lowers it *inline in the `IStaticDecl` pass* (`lower.gg:~9246`),
+> which runs *before* generic-template collection (`~9285`) and the main function loop (`~9541`). For
+> **v1's restricted scope (collection literals with CONCRETE element ctors, non-generic)** the two
+> positions are EQUIVALENT — the synthetic body needs no monomorph instantiation, so early vs late
+> lowering produces byte-identical results, and the `lowerer_comparison` fn-count guard confirms parity.
+> But if the §3 widening ever lets an element expression trigger a generic instantiation, the
+> self-host's early-lowered body would be INVISIBLE to the monomorph collector while Rust's late-lowered
+> one is collected → internal-body byte-divergence the fn-count guard would NOT catch. **The §3
+> widening follow-up must defer the self-host synthetic-fn lowering to the same relative position as
+> Rust (post-monomorph), or keep the concrete-element restriction.** Stated here so the v1 executor
+> does not "tidy up" by widening the predicate without revisiting placement.
 
 ### 4.3 CLASS-1 DCE overlap (note, do not entangle)
 
@@ -233,7 +248,8 @@ init-ordering spec. Note the C-consolidation (Option C) as optional future work.
   reverts to the type-checker-rejected shape *for hand-written code* — but since the synthetic fn skips
   the checker, the failure would instead be a *mis-sized array* (no `expected_type` → wrong
   `elem_size`), a quiet runtime corruption, not a compile error. The `VarDecl`-with-declared-type shape
-  is load-bearing; comment it at both synthesis sites citing `assigns.rs:109` / `collections.rs:46-63`.
+  is load-bearing; comment it at both synthesis sites citing `stmts/mod.rs:478` (the VarDecl
+  `expected_type` set) / `collections.rs:46-63,165-167` (the size+elem-type read).
 - **Third risk: self-host fn-count parity.** Adding a synthetic fn changes `user_fn_count`; the mirror
   must add the *same* fn so `lowerer_comparison` stays at parity. Sequencing (Rust first) means the
   comparison is briefly skewed by exactly the synthetic fns Rust emits for fixtures that use the
