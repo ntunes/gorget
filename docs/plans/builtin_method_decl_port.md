@@ -26,13 +26,32 @@ Reference-grade single-source-of-truth. Option (B) self-host-only is NOT taken. 
 - **(B) Self-host-only module** — a new `tests/fixtures/self_host_lowerer/builtin_methods.gg` (or appended to `gir.gg`). Sidesteps the SCHEMA_VERSION bump entirely. The live plan's litmus weakness for self-host-only tables ("single-consumer = rename") does NOT apply here: THREE consumers justify the typed home.
 - **Plan-agent recommendation:** prefer (A) for parity with Rust's single-source philosophy; fall back to (B) if the coordinate-land proves too heavy. **Surface this to the user/reviewer before executing** — it's a SCHEMA_VERSION + Rust-mirror commitment.
 
-## Typed shape (minimal)
+## Typed shape (minimal) — REVISED per plan-review reservation 1
 ```
 enum BuiltinRetKind: BrkVoid/BrkInt/BrkBool/BrkF64/BrkU8/BrkString/BrkArray/BrkSelf/BrkElem/BrkOptionElem/BrkOptionRefElem/BrkInfer
-struct BuiltinMethodDecl: String name; bool returns_view; bool is_owning_mutator; BuiltinRetKind ret_kind
+struct BuiltinMethodDecl:
+    String name
+    bool returns_view
+    Vector[int] owning_arg_positions   # NOT a scalar bool — see below
+    BuiltinRetKind ret_kind
 struct BuiltinMethodEntry: Vector[MatchKind] match_on; CollectionKind collection_kind; Vector[BuiltinMethodDecl] methods
 ```
+**Reservation-1 fix (CORRECTNESS):** `is_owning_mutator_arg(kind, mname, margs_idx)` (`lower.gg:526-553`) returns a per-`(kind, method, INDEX)` truth — Dict `put`/`set` own BOTH idx 0+1; Vector `set`/`insert` own ONLY idx 1 (idx 0 is the index arg); Vector `push`/Set `add` own idx 0. A scalar `bool is_owning_mutator` CANNOT encode this → site #2 would retire nothing. Therefore the decl carries **`Vector[int] owning_arg_positions`** (the owning argument indices for that method). Since the table is keyed per-family (`BuiltinMethodEntry.collection_kind`), the positions are naturally per-`(kind, method)`. Site #2's consumer becomes: `builtin_method_decl(recv_type_name, mname)` → check if `margs_idx in d.owning_arg_positions`. This RETIRES the name-set AND the per-kind index `match` (the index truth is now data, not code) — a fuller retirement than the original "keep the kind-match" framing. Cross-check the positions row-by-row against the current `is_owning_mutator_arg` body AND Rust's `consuming_positions_by_name` (`methods.rs:1851-1861`) + its `ParamABI::ByPtr` filter (`:1877-1888`).
+
 Self-host can't port Rust's `fn(&Args,&Ctx)->TypeId` closures → use a `BuiltinRetKind` enum tag + small dispatcher instead. Accessor: `Option[BuiltinMethodDecl] builtin_method_decl(String type_name, String mname)` near `resource_meta_for`.
+
+## ⚠ Pre-execution re-pin (plan-review reservation 2)
+This plan was scoped at tip `aaaaec57`; HEAD is now `b80f9e2f` and NEXT BLOCKER #5 (`6f74dd3e`) already added `byte_slice`/`substring`/`char_at` to BOTH the site-#1 list (`~lower.gg:476`) AND the site-#3 list (`~:3452`). **Before transcribing, the execution agent MUST re-pin to current HEAD and re-verify the actual row sets** at `lower.gg:475-486` (is_string_view_method), `:526-553` (is_owning_mutator_arg), `:3452-3471` (infer_method_return_type String rows) — the "faithful row-by-row transcription" is the #1 risk and its source moved.
+
+## ⚠ Loader test (plan-review note)
+`resources_load_clean` in `src/ir/resources.rs:~434` asserts EXACT table counts (currently RESOURCES=31, RUNTIME_FNS=299). Adding `BUILTIN_METHODS` → the walker counts a new table → update this test's assertions in the step-1 (schema+table land) commit.
+
+## ⚠ Self-host-resource-model constraints (`docs/internals/self-host-resource-model.md` — read it too)
+The self-host side is the PRIMARY long-term consumer; that doc adds binding constraints:
+- **§3.2 — real Gorget enums, NEVER int-coded.** `BuiltinRetKind` as an enum is correct; do NOT int-code any categorical axis (semantic-state-in-a-primitive-pun = Rule 2 violation). `Vector[int] owning_arg_positions` is fine — those are genuine integer indices, not encoded semantics.
+- **§3.4.1 (closed 2026-05-10) — site #3 has LOAD-BEARING collection-getter Option rows. HARD CONSTRAINT.** `infer_method_return_type`'s `get/pop/unwrap/first/last/remove` arms were deliberately made to return `Option__V` (elem-typed) to feed the Tier-1 lift's `slot.enum_kind == EK_OPTION` discriminator (`lir_lower.gg` `emit_void_ptr_option_wrap`). **The BuiltinMethodDecl port must leave those collection-getter Option-return rows EXACTLY ALONE — only the String-VIEW return rows (`slice`/`substring`/`trim`/… → GorgetString) retire to `ret_kind`.** Touching the getter-Option rows re-breaks the lift. This is the sharp version of "don't over-port #3": getter-Option rows are not "fuzzy heuristics to leave as BrkInfer" — they are correct, load-bearing, and out of scope entirely.
+- **§3.4 — fix Gorget, not work around.** If the table emit (struct-with-many-enum-fields read in hot lowering paths; `Option[...]` field reads) trips a self-host codegen bug, file it + fix `src/` — do NOT ship a `tests/fixtures/` workaround (per the override, a Rust-correctness bug takes precedence anyway).
+- **§3.3 item 4 — lint ratchet.** `tests/lints.rs` has a `MANGLED_PREFIXES` budget scanning self-host name-prefix dispatches (type-name `X__` prefixes). The 3 retired lists are method-NAME matches (may or may not be in that budget) — check whether retiring them lowers the ratchet count + update the budget if so.
 
 ## Consumer rewrites (scope-bounded — do NOT over-port)
 - **#1 view tag (`:4980`):** read `d.returns_view`; delete `is_string_view_method`. The `recv_is_string` gate is subsumed (non-String recv won't match the String entry).
