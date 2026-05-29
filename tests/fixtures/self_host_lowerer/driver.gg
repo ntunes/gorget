@@ -108,7 +108,5 @@ void main():
 void run_ssa(LirModule &m):
     int fi = 0
     while fi < m.functions.len():
-        LirFunction func = m.functions.get(fi).unwrap()
-        construct_ssa(&func)
-        m.functions.set(fi, func)
+        construct_ssa(&m.functions.get(fi).unwrap())
         fi += 1
