@@ -528,10 +528,10 @@ void patch_terminators(LirFunction &f, Dict[int, bool] &promotable, Dict[int, in
                 else:
                     args.push(0)
                 si += 1
-            # Patch the terminator
-            LirBlock pred_blk = f.blocks.get(pred_bb).unwrap()
-            pred_blk.term = add_args_to_term(pred_blk.term, target_bb, args)
-            f.blocks.set(pred_bb, pred_blk)
+            # Patch the terminator in place on the live block (mirrors
+            # lir_set_term: chained .get().unwrap().term = ... mutates through
+            # the borrow — no LirBlock copy, no set-back).
+            f.blocks.get(pred_bb).unwrap().term = add_args_to_term(f.blocks.get(pred_bb).unwrap().term, target_bb, args)
             pi += 1
         ti += 1
 
