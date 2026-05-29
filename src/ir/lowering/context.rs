@@ -401,6 +401,13 @@ pub struct LoweringContext<'a> {
     /// (no cross-function bleed because every parent eventually finishes
     /// and the counter is read as a delta, not absolute).
     pub stmt_nested_dur: std::time::Duration,
+    /// Synthetic zero-arg `__gg_static_init_<name>()` functions built during
+    /// static-decl lowering for collection-literal static initializers
+    /// (Bug B). Accumulated here, then lowered through the normal
+    /// `lower_function` path in the non-generic function loop (after
+    /// monomorph collection). Each function's body is the load-bearing
+    /// `<T> __r = <RHS>; return __r` shape — see `lower_static_decl`.
+    pub synthetic_static_init_fns: Vec<crate::parser::ast::FunctionDef>,
 }
 
 /// Snapshot of lowering state taken at branch entry, restored at branch exit.
@@ -498,6 +505,7 @@ impl<'a> LoweringContext<'a> {
             heap_alloc_consumer_externs: rustc_hash::FxHashSet::default(),
             lower_fn_sub_times: std::collections::HashMap::new(),
             stmt_nested_dur: std::time::Duration::ZERO,
+            synthetic_static_init_fns: Vec::new(),
         }
     }
 

@@ -209,6 +209,12 @@ fn find_live_functions(module: &LirModule) -> rustc_hash::FxHashSet<FuncId> {
             || func.name.starts_with("__test")
             || func.name.starts_with("__bench_")
             || func.name.starts_with("__suite_")
+            // Bug B: synthetic static-init fns are referenced ONLY by raw C
+            // text in the module-init prologue (`__lir_g<N> = name();`),
+            // invisible to the LIR call graph (`collect_global_func_refs` only
+            // sees `FuncAddr`/`Struct`, not `Extern{name}`). Seed as a root or
+            // DCE prunes them and the prologue call link-fails.
+            || func.name.starts_with("__gg_static_init_")
             || func.name.contains("__call")
             || spawned_names.contains(func.name.as_str())
             || hot_reload_roots.contains(func.name.as_str())

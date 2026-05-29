@@ -1,0 +1,27 @@
+# Bug B regression: `public static Vector[T]/Dict[K,V] = [literal]` initializers
+# must materialize their elements at module-init time (was: silently Zeroed →
+# dropped every element). See docs/plans/bugB_static_collection_init.md.
+
+struct Item:
+    String name
+    int weight
+
+public static Vector[Item] TABLE = [Item("alpha", 10), Item("beta", 20), Item("gamma", 30)]
+
+public static Dict[String, int] SCORES = {"x": 100, "y": 200}
+
+# Empty-literal static (also previously Zeroed → mis-sized on later push).
+public static Vector[int] EXTRA = []
+
+void main():
+    print(f"table_len={TABLE.len()}")
+    Item first = TABLE.get(0).unwrap()
+    print(f"first={first.name}:{first.weight}")
+    Item last = TABLE.get(2).unwrap()
+    print(f"last={last.name}:{last.weight}")
+    int sx = SCORES.get("x").unwrap()
+    print(f"score_x={sx}")
+    EXTRA.push(7)
+    EXTRA.push(8)
+    print(f"extra_len={EXTRA.len()}")
+    print(f"extra_0={EXTRA.get(0).unwrap()}")

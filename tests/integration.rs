@@ -297,6 +297,26 @@ fn hello() {
 }
 
 #[test]
+fn static_vec_literal() {
+    // Bug B regression: `public static Vector[T]/Dict[K,V] = [literal]`
+    // initializers must materialize their elements at module-init time. Before
+    // the fix they fell through to GlobalInit::Zeroed, silently dropping every
+    // element (table_len=0). Covers a Vector[struct] static, a Dict[String,int]
+    // static, and an empty Vector[int] static pushed to in main.
+    // See docs/plans/bugB_static_collection_init.md.
+    run_gg(
+        "static_vec_literal.gg",
+        "\
+table_len=3
+first=alpha:10
+last=gamma:30
+score_x=100
+extra_len=2
+extra_0=7",
+    );
+}
+
+#[test]
 fn compound_and_method_chain_miscompile() {
     // Regression for the compound-`and`-with-method-chain miscompile fixed
     // 2026-05-21 in lower_short_circuit (src/ir/lowering/exprs/operators.rs).

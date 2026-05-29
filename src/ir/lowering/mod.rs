@@ -1256,6 +1256,17 @@ pub fn lower_module(
         }
     }
 
+    // Bug B: lower the synthetic `__gg_static_init_<name>()` functions built
+    // during static-decl lowering. Placed HERE (after the non-generic function
+    // loop) — not in the globals loop — so the type registry + monomorph
+    // collection have run. The synthetic fns are non-generic (concrete element
+    // types), so they need no monomorph instantiation.
+    let synth_static_fns: Vec<_> = std::mem::take(&mut ctx.synthetic_static_init_fns);
+    for f in &synth_static_fns {
+        ctx.gir_equip_methods.insert(f.name.node.clone());
+        lower_function(&mut ctx, &mut module, f, None);
+    }
+
     *pass_times.entry("lower_functions").or_default() += __pass_t.elapsed();
 
     let __pass_t = Instant::now();
@@ -2322,6 +2333,27 @@ fn lower_static_decl(
     let type_id = ctx.type_mapper.map_ast_type_mut(&decl.type_.node, &mut ctx.type_registry);
     let name = decl.name.node.clone();
 
+    // Bug B: collection-literal static initializers (`static Vector[T] = [..]`,
+    // `static Dict[K,V] = {..}`) cannot be encoded as a compile-time `GlobalInit`
+    // — their elements are arbitrary expressions (e.g. `Item("alpha")`). They
+    // would otherwise fall through to `GlobalInit::Zeroed`, silently dropping
+    // every element. Instead, synthesize a zero-arg `__gg_static_init_<name>()`
+    // function whose body materializes the RHS, register it as a runtime-init
+    // (`Extern { name, args: [] }`), and seed it as a DCE root (see
+    // `src/lir/optimize.rs`). The prologue emits `__lir_g<N> = name();`.
+    if initializer_needs_synthetic_fn(&decl.value.node) {
+        let synth_name = format!("__gg_static_init_{}", name);
+        synthesize_static_init_fn(ctx, &synth_name, decl);
+        // Mirror `module.globals.push` below, changing ONLY `init`: the global
+        // slot is left zeroed and the prologue assigns it from the synthetic fn.
+        module.globals.push(Global {
+            name,
+            type_id,
+            init: GlobalInit::Extern { name: synth_name, args: vec![] },
+        });
+        return;
+    }
+
     let init = eval_static_init(&decl.type_.node, &decl.value.node, &ctx.extern_bindings);
     // Record `String FOO = "literal"` globals — these lower to a cap=0
     // rodata-view static initializer in the C/LLVM backends (no heap
@@ -2337,6 +2369,79 @@ fn lower_static_decl(
         }
     }
     module.globals.push(Global { name, type_id, init });
+}
+
+/// Bug B: does this static-initializer RHS require a synthesized init function?
+///
+/// True for array/dict literals only (set literals `{a,b,c}` parse as
+/// `Expr::ArrayLiteral`, so they're covered too). These have arbitrary-
+/// expression elements that cannot be encoded as a compile-time `GlobalInit`,
+/// and would otherwise hit the `GlobalInit::Zeroed` fallback in
+/// `eval_static_init`, silently dropping every element. v1 deliberately does
+/// NOT widen to general non-const RHS (e.g. `static Foo X = some_fn()`) — that
+/// has an init-ordering interaction across statics that needs a spec first
+/// (see `docs/plans/bugB_static_collection_init.md` §3). Widening is a one-line
+/// change here plus an init-ordering decision.
+fn initializer_needs_synthetic_fn(expr: &crate::parser::ast::Expr) -> bool {
+    use crate::parser::ast::Expr;
+    matches!(expr, Expr::ArrayLiteral(_) | Expr::DictLiteral(_))
+}
+
+/// Bug B: build a synthetic `<T> __gg_static_init_<name>(): <T> __r = RHS; return __r`
+/// function and push it onto `ctx.synthetic_static_init_fns`. Lowered later in
+/// the non-generic function loop via the normal `lower_function` path.
+///
+/// The body MUST be the `VarDecl`-with-declared-type then `return __r` shape,
+/// NOT `return RHS`: a `VarDecl` sets `ctx.func_state.expected_type` to the
+/// declared type before lowering the init (`stmts/mod.rs:478`), which the
+/// array-literal lowering reads to size the buffer and propagate the element
+/// type (`exprs/collections.rs:46-63,165-167`). A bare `return RHS` would leave
+/// `expected_type` unset → wrong `elem_size` → quiet runtime corruption. Do not
+/// "simplify" this to `return RHS`.
+fn synthesize_static_init_fn(
+    ctx: &mut LoweringContext,
+    synth_name: &str,
+    decl: &crate::parser::ast::StaticDecl,
+) {
+    use crate::parser::ast::{
+        Block, Expr, FunctionBody, FunctionDef, FunctionQualifiers, Pattern, SharedKind, Stmt,
+        Visibility,
+    };
+    use crate::span::Spanned;
+
+    let span = decl.span;
+
+    let var_decl_stmt = Stmt::VarDecl {
+        is_const: false,
+        is_mutable: true,
+        shared: SharedKind::None,
+        type_: decl.type_.clone(),
+        pattern: Spanned::new(Pattern::Binding("__r".into()), span),
+        value: decl.value.clone(),
+    };
+    let return_stmt = Stmt::Return(Some(Spanned::new(Expr::Identifier("__r".into()), span)));
+
+    let func = FunctionDef {
+        attributes: vec![],
+        visibility: Visibility::Private,
+        qualifiers: FunctionQualifiers::default(),
+        return_type: decl.type_.clone(),
+        name: Spanned::new(synth_name.to_string(), span),
+        generic_params: None,
+        params: vec![],
+        throws: None,
+        body: FunctionBody::Block(Block {
+            stmts: vec![Spanned::new(var_decl_stmt, span), Spanned::new(return_stmt, span)],
+            span,
+        }),
+        doc_comment: None,
+        span,
+        param_abis: vec![],
+        extern_abi: None,
+        returns_borrowed: false,
+    };
+
+    ctx.synthetic_static_init_fns.push(func);
 }
 
 /// Evaluate a static initializer expression into a GlobalInit value.
