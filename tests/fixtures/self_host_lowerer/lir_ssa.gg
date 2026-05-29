@@ -267,22 +267,14 @@ int read_variable(int slot, int bb, LirFunction &f, Dict[int, bool] &promotable,
 
 # Add a block parameter for a slot at a merge point.
 #
-# Phase C step §6.4 (2026-05-12): retired the flat-`pending_phis`
-# parallel-Vector workaround in favour of in-place rebuild. The naive
-# chained shape `f.blocks.get(bb).params.push(...)` silently drops the
-# push because `.unwrap()` byte-copies the LirBlock struct and the
-# `.push` modifies a temporary that's discarded — same family as the
-# nested-Vector mutation gap documented in compute_predecessors at
-# line 65-92. The rebuild-and-set pattern works:
-#
-#   1. Read the block as a local `blk`.
-#   2. Build `new_params` from `blk.params` + the new BlockParam.
-#   3. Reassign `blk.params = new_params` and write `blk` back via
-#      `f.blocks.set(bb, blk)`.
-#
-# Identical shape to `process_block`'s `blk.insts = new_insts` pattern
-# at line 214, which has worked for the inst rebuild since SSA shipped.
-# Equally robust for `params`.
+# Mutate-through-borrow: push the new phi straight into the live block's
+# params via the chained `f.blocks.get(bb).unwrap().params.push(...)` form
+# — the proven zero-clone shape (see `lir_push_inst` / `lir_set_term` in
+# lir.gg, where the same chained `.get().unwrap().FIELD.push/=` mutates the
+# live block in place). `.get()` borrows the block (Option[Ref]),
+# `.unwrap()` yields the ref, and `.push` mutates through it: no LirBlock
+# copy, no set-back. `process_block` re-fetches `f.blocks[bb]` after its
+# iteration (see its docstring) so it observes this push on the live block.
 int add_block_param(int slot, int bb, LirFunction &f, Dict[int, int] &block_params, Dict[int, int] &current_def, Dict[int, int] &incomplete_phis):
     int key = ssa_key(bb, slot)
     if block_params.contains(key):
@@ -294,16 +286,7 @@ int add_block_param(int slot, int bb, LirFunction &f, Dict[int, int] &block_para
     current_def.put(key, param_val)
     incomplete_phis.put(key, param_val)
 
-    # In-place rebuild: copy existing params + append the new phi.
-    LirBlock blk = f.blocks.get(bb).unwrap()
-    Vector[BlockParam] new_params = []
-    int ei = 0
-    while ei < blk.params.len():
-        new_params.push(blk.params.get(ei).unwrap())
-        ei += 1
-    new_params.push(BlockParam(param_val, s.ty))
-    blk.params = new_params
-    f.blocks.set(bb, blk)
+    f.blocks.get(bb).unwrap().params.push(BlockParam(param_val, s.ty))
 
     return param_val
 
