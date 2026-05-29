@@ -751,13 +751,22 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
         case ESpawnBlocking(inner):
             resolve_expr(*inner, &scopes, &ctx)
 
-        case ERethrow(expr, _, _, transform):
+        case ERethrow(expr, eopt, _, transform):
             resolve_expr(*expr, &scopes, &ctx)
-            resolve_expr(*transform, &scopes, &ctx)
+            if eopt is Some(ename):
+                scopes.push_scope(SkBlock())
+                scopes.define(ename, DkVariable(), Span(0, 0))
+                resolve_expr(*transform, &scopes, &ctx)
+                scopes.pop_scope()
+            else:
+                resolve_expr(*transform, &scopes, &ctx)
 
-        case ECatch(expr, _, recovery):
+        case ECatch(expr, ename, recovery):
             resolve_expr(*expr, &scopes, &ctx)
+            scopes.push_scope(SkBlock())
+            scopes.define(ename, DkVariable(), Span(0, 0))
             resolve_expr(*recovery, &scopes, &ctx)
+            scopes.pop_scope()
 
         case EClosure(params, body):
             scopes.push_scope(SkFunction())
