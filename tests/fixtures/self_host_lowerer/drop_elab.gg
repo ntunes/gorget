@@ -696,10 +696,8 @@ void elaborate_drops(LirModule &m):
         int bi = 0
         while bi < f.blocks.len():
             if in_states_present.get(bi).unwrap():
-                LirBlock blk = f.blocks.get(bi).unwrap()
                 Vector[int] state = in_states.get(bi).unwrap()
-                elaborate_block(&blk, &state, &val_to_slot, &deleted_slots, &maybe_init_slots)
-                f.blocks.set(bi, blk)
+                elaborate_block(&f.blocks.get(bi).unwrap(), &state, &val_to_slot, &deleted_slots, &maybe_init_slots)
             bi += 1
 
         # Phase 2: Memset cleanup.
