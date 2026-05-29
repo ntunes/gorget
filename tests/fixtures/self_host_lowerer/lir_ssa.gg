@@ -164,7 +164,7 @@ int ssa_key(int bb, int slot): bb * 100000 + slot
 # Re-fetches the block at the end before writing `new_insts` back —
 # `read_variable` may call `add_block_param(slot, bb, ...)` for THIS
 # bb during the ISlotLoad iteration (multi-pred case), which appends
-# a phi to `f.blocks[bb].params` via rebuild-and-set. Writing back
+# a phi to `f.blocks[bb].params` (in place, via chained borrow). Writing back
 # the start-of-function snapshot would clobber those param updates;
 # the re-fetch picks up the latest state. (§6.4 retirement of
 # pending_phis — the old code dodged this by deferring all phi-param
@@ -616,7 +616,7 @@ void construct_ssa(LirFunction &f):
 
     # Phase 3: Patch terminators with block arguments for phis. Phi
     # params themselves are appended to each merge block's `params`
-    # in-place by `add_block_param`'s rebuild-and-set (Phase C step
+    # in-place by `add_block_param`'s chained `.params.push` (Phase C step
     # §6.4 retirement of the flat-pending_phis workaround) — no
     # separate phase-4 block rebuild needed.
     patch_terminators(&f, &promotable, &block_params, &incomplete_phis, &current_def, &value_subst, &preds)
