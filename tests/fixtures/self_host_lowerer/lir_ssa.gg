@@ -220,39 +220,23 @@ int read_variable(int slot, int bb, LirFunction &f, Dict[int, bool] &promotable,
     Vector[int] bb_preds = preds.get(bb).unwrap()
 
     if bb_preds.len() == 0:
-        # Entry block, no definition — create zero constant
+        # Entry block, no definition — create zero constant and prepend it in
+        # place. Mutate-through-borrow (the proven zero-clone shape — see
+        # add_block_param below and `lir_push_inst` in lir.gg): `f.blocks.get(bb)`
+        # borrows the live block (Ptr), `.insts.insert(0, ...)` shifts existing
+        # insts via a shallow memmove and moves the fresh const temp in at index 0.
+        # No whole-block value-local copy, no per-inst deep clone, no set-back —
+        # replaces the old [const]++existing rebuild (same resulting order).
         int val = lir_fn_next_value(&f)
         LirSlot s = f.slots.get(slot).unwrap()
-        LirBlock blk = f.blocks.get(bb).unwrap()
         if s.ty == LT_BOOL:
-            Vector[LirInst] new_insts = [IBoolConst(val, false)]
-            int ni = 0
-            while ni < blk.insts.len():
-                new_insts.push(blk.insts.get(ni).unwrap())
-                ni += 1
-            blk.insts = new_insts
+            f.blocks.get(bb).unwrap().insts.insert(0, IBoolConst(val, false))
         elif s.ty == LT_F32 or s.ty == LT_F64:
-            Vector[LirInst] new_insts = [IFConst(val, s.ty, 0)]
-            int ni = 0
-            while ni < blk.insts.len():
-                new_insts.push(blk.insts.get(ni).unwrap())
-                ni += 1
-            blk.insts = new_insts
+            f.blocks.get(bb).unwrap().insts.insert(0, IFConst(val, s.ty, 0))
         elif s.ty == LT_PTR:
-            Vector[LirInst] new_insts = [INullPtr(val)]
-            int ni = 0
-            while ni < blk.insts.len():
-                new_insts.push(blk.insts.get(ni).unwrap())
-                ni += 1
-            blk.insts = new_insts
+            f.blocks.get(bb).unwrap().insts.insert(0, INullPtr(val))
         else:
-            Vector[LirInst] new_insts = [IIConst(val, s.ty, 0)]
-            int ni = 0
-            while ni < blk.insts.len():
-                new_insts.push(blk.insts.get(ni).unwrap())
-                ni += 1
-            blk.insts = new_insts
-        f.blocks.set(bb, blk)
+            f.blocks.get(bb).unwrap().insts.insert(0, IIConst(val, s.ty, 0))
         current_def.put(key, val)
         return val
     elif bb_preds.len() == 1:
