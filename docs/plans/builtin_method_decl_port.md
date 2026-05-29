@@ -61,7 +61,7 @@ The self-host side is the PRIMARY long-term consumer; that doc adds binding cons
 ## Step plan (ONE chain, 4-5 sequential commits, output-neutral per step)
 1. **Land table + accessor, no consumers** (additive data → must be a no-op). Gate: bootstrap + fixed_point + lowerer_comparison green.
 2. **Migrate #1** (lowest risk, single bool). Gate: lowerer_comparison byte-identical GIR + fixed_point green.
-3. **Migrate #2** (keep kind-match; watch `extend`/`push_back`/`send` rows). Gate: same.
+3. **Migrate #2** (per the revised §Consumer-rewrites #2: read `margs_idx in d.owning_arg_positions`; RETIRE BOTH the method-name set AND the per-`CollectionKind` index `match` — the index truth is now data; delete `is_owning_mutator_arg` entirely; transcribe ALL families incl. CkDeque/CkHeap into `owning_arg_positions`). Gate: same.
 4. **Migrate String rows of #3.** Gate: same + the success grep.
 5. **Sweep:** `grep is_string_view_method\|is_owning_mutator_arg lower.gg` → zero; update TODO + namematch plan; close the CLAUDE.md item.
 
