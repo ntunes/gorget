@@ -1969,8 +1969,23 @@ equip Parser:
                 if depth == 0:
                     self.advance()
                     return self.check_tok(TOK_COLON)
+            elif self.tok_cannot_be_in_closure_params():
+                return false
             self.advance()
         return false
+
+    # Tokens that can never appear in a closure parameter list — if any is
+    # seen inside the parens, this is a parenthesized expression, not a
+    # closure. Mirrors Rust's looks_like_closure bail-set (src/parser/expr.rs).
+    # `-`/`*`/`&`/`!` are deliberately EXCLUDED: they double as unary/sigil
+    # tokens in param-type contexts (`-1` default, `*T` ptr, `&T` borrow, `!T` move).
+    bool tok_cannot_be_in_closure_params(self):
+        if self.check_kw(KW_AND) or self.check_kw(KW_OR) or self.check_kw(KW_NOT):
+            return true
+        if self.check_kw(KW_AS) or self.check_kw(KW_IS):
+            return true
+        int tag = self.peek_tag()
+        return tag == TOK_EQEQ or tag == TOK_BANGEQ or tag == TOK_LTEQ or tag == TOK_GTEQ or tag == TOK_LT or tag == TOK_GT or tag == TOK_PLUS or tag == TOK_SLASH or tag == TOK_PERCENT or tag == TOK_PIPE or tag == TOK_CARET or tag == TOK_LTLT or tag == TOK_GTGT or tag == TOK_DOTDOT or tag == TOK_DOTDOTEQ or tag == TOK_PLUSPERCENT or tag == TOK_MINUSPERCENT or tag == TOK_STARPERCENT or tag == TOK_QUESTION or tag == TOK_DOUBLEQUESTION or tag == TOK_QUESTIONDOT or tag == TOK_DOT
 
     # Parse a single closure parameter — could be typed (Type name) or untyped (name)
     Param parse_closure_param(&self):
