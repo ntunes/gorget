@@ -10,7 +10,17 @@ The three consumers (current lines at `aaaaec57`):
 2. `is_owning_mutator_arg` — def `lower.gg:526-553`, call `:4907` → `CkCallArgOwning` (OpMove/OpClone).
 3. `infer_method_return_type` String-returning list — `:3452` (fn spans `:3379-3540`), call `:4939` → builtin method return typing (was the NEXT BLOCKER #5/#6 fault surface).
 
-## ⚠ The one open design decision (for the reviewer)
+## ✅ DESIGN DECISION (user, 2026-05-29): OPTION (A) — shared schema home, via the SHIPPED unified-resource-model pipeline.
+The table lives in `compiler/data/schema.gg` + a static table in `compiler/data/resources.gg`. **This is NOT greenfield — it extends the already-shipped unified-resource-model infrastructure** (authoritative doc: `docs/internals/unified-resource-model.md` §3.6/§9.2/§13; landed 2026-05-19/20, TODO items 3-8 + 7c). Follow that pipeline EXACTLY:
+
+- **`resources.toml` is DEAD** — the original TOML/build.rs plan was rejected 2026-05-19 (TODO:938). Canonical source is idiomatic Gorget `.gg`, baked into Rust via `include_str!` (`src/compiler_data.rs`), parsed at compiler-runtime by the compiler's OWN parser. Do NOT reintroduce TOML/codegen.
+- **Existing pattern (mirror it):** `RESOURCES` + `RUNTIME_FNS` are two static tables in `resources.gg` parsed by the AST-walker in **`src/ir/resources.rs`** (`OnceLock`-cached `table()` accessor; walks `Item::StaticDecl`). The new `BUILTIN_METHODS` is a THIRD such table → extend `resources.rs` to walk it, mirror the new types in **`src/ir/resource_schema.rs`**, and add the self-host import/consumer (the self-host already does `from compiler.data.schema import ...` + reads via a `lookup_*`/`build_*` accessor like `build_resource_metadata` in `lir_lower.gg`).
+- **Additive-change precedent = item 7c (2026-05-20, `c_typedef_name`):** purely-additive field, all existing rows leave it default/None, schema + Rust mirror + self-host constructor calls updated together, SCHEMA_VERSION bumped. The BuiltinMethodDecl table follows this exact playbook.
+- **SCHEMA_VERSION:** bump 1→2 in `resources.gg` AND `SCHEMA_VERSION_EXPECTED` in `resources.rs` (the loader panics on mismatch) — schema + mirror + walker + bump in ONE atomic commit.
+
+Reference-grade single-source-of-truth. Option (B) self-host-only is NOT taken. **The plan-review + execution MUST read `docs/internals/unified-resource-model.md` + study `src/ir/resources.rs` + the `c_typedef_name` precedent commits before writing code** — this is a well-trodden path, not a new design. (Original fork rationale below retained for context.)
+
+## ⚠ The original design fork (RESOLVED → A above; retained for context)
 **Where the table lives:**
 - **(A) Shared home** — new `BuiltinMethodDecl`/`BuiltinRetKind`/`BuiltinMethodEntry` types in `compiler/data/schema.gg` + static `BUILTIN_METHODS` table in `compiler/data/resources.gg`, mirroring the existing `ResourceMetadata`/`RESOURCES` pattern. **Requires SCHEMA_VERSION bump (1→2) + an atomic Rust mirror update in `src/ir/resource_schema.rs`.** Reference-grade (single source of truth, Rust-mirrored), but a cross-language coordinate-land with bootstrap-fixed-point risk.
 - **(B) Self-host-only module** — a new `tests/fixtures/self_host_lowerer/builtin_methods.gg` (or appended to `gir.gg`). Sidesteps the SCHEMA_VERSION bump entirely. The live plan's litmus weakness for self-host-only tables ("single-consumer = rename") does NOT apply here: THREE consumers justify the typed home.
