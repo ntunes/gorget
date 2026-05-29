@@ -1,0 +1,521 @@
+{
+  "summary": "Fresh-agent review of the generated devbook: per-chapter accuracy re-derivation + cross-cutting consistency sweep, before integration",
+  "agentCount": 34,
+  "logs": [
+    "Fresh review: 30 per-chapter reviewers + 4 consistency dimensions.",
+    "Reviewed 30 chapters: 17 sign-off, 13 with reservations (2 blocking, 8 major). 4/4 consistency dimensions flagged issues."
+  ],
+  "result": {
+    "signedOff": [
+      "docs/devbook/00-how-to-read.md",
+      "docs/devbook/02-foundations.md",
+      "docs/devbook/03-lexer.md",
+      "docs/devbook/04-parser-ast.md",
+      "docs/devbook/05-formatter.md",
+      "docs/devbook/07-name-resolution.md",
+      "docs/devbook/08-traits.md",
+      "docs/devbook/09-type-checking.md",
+      "docs/devbook/10-ownership-safety.md",
+      "docs/devbook/12-gir-lowering.md",
+      "docs/devbook/14-lir-ssa.md",
+      "docs/devbook/15-drop-elaboration.md",
+      "docs/devbook/16-bir.md",
+      "docs/devbook/18-runtime-abi.md",
+      "docs/devbook/20-extern-gpu.md",
+      "docs/devbook/22-modules-packages.md",
+      "docs/devbook/23-stdlib.md"
+    ],
+    "chaptersWithReservations": [
+      {
+        "file": "docs/devbook/01-pipeline-and-driver.md",
+        "qualityNote": "Reference-grade and unusually accurate — pass table is exact, ~50 file:line cites verified correct (including Lexer::new lexer/mod.rs:70, Parser::new parser/mod.rs:60, all subcommand arms, VmHWM main.rs:1584), the stale-README 'Pass 4.5 provenance.rs' debunk is correct, cross-refs all resolve; only flaw is the false 'LIR optimizer runs twice' statement plus a non-exhaustive canonical-op list.",
+        "issues": [
+          {
+            "severity": "major",
+            "kind": "inaccuracy",
+            "claim": "Note the LIR optimizer is run *twice* in `try_build_ir`: optimization happens **after** BIR synthesis (`src/main.rs:712`)",
+            "evidence": "src/main.rs:712 (only post-BIR optimize in the normal build path); pre-BIR LIR setup at src/main.rs:681-702 contains NO lir::optimize call. The other two lir::optimize::optimize_module call sites (src/main.rs:601, :663) are inside the mutually-exclusive --emit-lir and --emit-c-lir short-circuit branches, so only one optimize ever runs per invocation.",
+            "fix": "Drop the 'run twice' claim — the LIR optimizer runs ONCE (post-BIR, main.rs:712). What actually runs twice is the type-computation triple compute_module_pointee_types/value_types/value_origins: pre-BIR at main.rs:699-701 and again post-BIR at main.rs:714-716. Reword to: 'The module's value/pointee types are recomputed after BIR synthesis (main.rs:714-716), and the LIR optimizer runs post-BIR (main.rs:712) so DCE/fold/CSE and drop elaboration see the expanded primitives.'"
+          },
+          {
+            "severity": "minor",
+            "kind": "coverage-gap",
+            "claim": "expands canonical high-level LIR ops (`SizeOf`, `EnumInit`, `StructInit`, `TraitCall`, `CowClone`, `AddressOf`, `HofExpand`, `BoxAlloc`) into primitives, then `assert_primitives_only` (`src/bir/validate.rs:36`) validates that none survive",
+            "evidence": "src/bir/validate.rs:46-110 (check_inst) enumerates 11 canonical ops; the chapter's list omits EnumCheck, EnumExtract, and CollectionCtor",
+            "fix": "Either add the three missing ops to the list (EnumCheck, EnumExtract, CollectionCtor) or mark the list as illustrative (e.g. 'canonical ops such as SizeOf, EnumInit, … — the full set is the canonical-op arms in src/bir/validate.rs:47-110')."
+          }
+        ]
+      },
+      {
+        "file": "docs/devbook/06-meta-derive.md",
+        "qualityNote": "Reference-grade and almost entirely accurate — nearly every file:line cite verified correct in the current tree; one minor over-generalization about which delayed-meta call sites pre-check block_has_delayed_meta.",
+        "issues": [
+          {
+            "severity": "minor",
+            "kind": "inaccuracy",
+            "claim": "Each site first calls `block_has_delayed_meta` (`src/semantic/meta.rs:3237`) — a read-only, early-exit AST scan — to skip the upfront `block.clone()` when there is no meta work to do.",
+            "evidence": "src/ir/lowering/functions.rs:1173 (no block_has_delayed_meta guard; gates on `subs.is_empty() && meta_env_map.is_empty()` at functions.rs:1159); src/ir/lowering/traits.rs:1375 and src/ir/lowering/traits.rs:1605 (both clone and call evaluate_delayed_meta_block unconditionally, no block_has_delayed_meta). Only functions.rs:754, 1055, 1723 (preceding the 767/1068/1736 calls) use the block_has_delayed_meta guard.",
+            "fix": "Drop the universal quantifier. Reword to: \"The three primary fn-body sites (functions.rs:754→767, 1055→1068, 1723→1736) first call `block_has_delayed_meta` to skip the upfront `block.clone()`; the generic-template site (functions.rs:1173) instead gates on `subs.is_empty() && meta_env_map.is_empty()`, and the static-trait sites (traits.rs:1375, 1605) clone and evaluate unconditionally.\""
+          }
+        ]
+      },
+      {
+        "file": "docs/devbook/11-copy-on-write.md",
+        "qualityNote": "Reference-grade and almost entirely accurate — cites resolve, the layering/zero_arg_indices and SIX-vs-SEVEN corrections are themselves verified current, and the self-host section checks out; one load-bearing inventory table mislabels two of three boundary call-sites (tuple↔struct↔enum), which must be fixed.",
+        "issues": [
+          {
+            "severity": "major",
+            "kind": "inaccuracy",
+            "claim": "In the `ensure_owned_at_boundary` table: \"| `exprs/mod.rs:480` | struct field init (`lower_struct_init`) |\" and \"| `exprs/mod.rs:1950` | enum variant init |\"",
+            "evidence": "src/ir/lowering/exprs/mod.rs:469 (`Expr::TupleLiteral(elems) =>`) with the call at :480 under the comment \"tuple fields need independently owned values\" (mod.rs:473); and src/ir/lowering/exprs/mod.rs:1555 (`fn lower_struct_literal`) containing the :1950 call under the comment \"struct fields need independently owned values\" (mod.rs:1891)",
+            "fix": "Relabel the two rows: `exprs/mod.rs:480` is the TUPLE-literal field-init boundary (inside `Expr::TupleLiteral` in `lower_expr_inner`), and `exprs/mod.rs:1950` is the STRUCT field-init boundary (inside `lower_struct_literal`). There is NO dedicated `ensure_owned_at_boundary` call for enum-variant init at all — enum constructors route their borrow-clone through `emit_enum_init_owned` (called at mod.rs:1409/1420/1478/1510/1536), not this helper. Either drop the \"enum variant init\" row or replace it with the `emit_enum_init_owned` path. The three actual exprs/mod.rs call sites are 480 (tuple), 1950 (struct), 2538 (match arm)."
+          },
+          {
+            "severity": "minor",
+            "kind": "inaccuracy",
+            "claim": "\"struct field init (`lower_struct_init`)\" — names the function `lower_struct_init`",
+            "evidence": "src/ir/lowering/exprs/mod.rs:1555 — the function is named `lower_struct_literal`; no `lower_struct_init` exists (grep returns nothing)",
+            "fix": "Rename the reference to `lower_struct_literal`."
+          },
+          {
+            "severity": "minor",
+            "kind": "stale-cite",
+            "claim": "\"bare resource params are passed as a const pointer (`ParamABI::ByPtr`, `src/ir/lowering/context.rs:30`)\"",
+            "evidence": "src/ir/lowering/context.rs:30 is `pub enum ParamABI {`; the `ByPtr` variant is at context.rs:33",
+            "fix": "Cite context.rs:33 for the `ByPtr` variant (or keep :30 but frame it as \"the ParamABI enum\")."
+          }
+        ]
+      },
+      {
+        "file": "docs/devbook/13-ownership-in-ir.md",
+        "qualityNote": "Reference-grade and overwhelmingly accurate — every variant name, the seven-branch assign-mode tree, the validator one-rule design, the LoadRef-shipped/StoreRef-unemitted asymmetry, and the self-host port all verified against current source with correct file:line cites; one stale-name defect (`check_resource_moves` doesn't exist — actual fn is `validate_resource_moves`/`assign_read_site`), inherited from a stale source comment.",
+        "issues": [
+          {
+            "severity": "minor",
+            "kind": "inaccuracy",
+            "claim": "\"it is handled by a separate check, `check_resource_moves`, whose own auto-deref skip logic doesn't fit the simple `ReadMode` rule (see the doc comment at `validate.rs:1412-1418`)\" — and again \"the `assign` bucket by the separate `check_resource_moves` check\"",
+            "evidence": "src/ir/validate.rs:1416 (the ONLY occurrence of `check_resource_moves` in the whole tree is a stale rustdoc reference); the real functions are `validate_resource_moves` at src/ir/validate.rs:995 and the inline Assign extractor `assign_read_site` at src/ir/validate.rs:1119 invoked from `validate_resource_sites_all` at src/ir/validate.rs:1076-1084",
+            "fix": "Rename `check_resource_moves` → `validate_resource_moves` (the standalone fn) or, more precisely for the bucket-population sentence, the inline `assign_read_site` extractor within `validate_resource_sites_all`. The chapter inherited the wrong name from the stale doc-comment at validate.rs:1416 (which it even cites). The conceptual description and the cited line range are correct; only the function name is wrong, in both occurrences (~line 413 and ~line 419-420)."
+          }
+        ]
+      },
+      {
+        "file": "docs/devbook/17-c-backend.md",
+        "qualityNote": "Reference-grade prose with overwhelmingly accurate cites; one load-bearing factual error (five vs ten canonical/BIR-lowered ops) repeated three times must be fixed, plus two minor cite imprecisions.",
+        "issues": [
+          {
+            "severity": "major",
+            "kind": "inaccuracy",
+            "claim": "by the time codegen runs, LIR has already been lowered through a **BIR** pass (`src/bir/`) that expands the *canonical* LIR ops (`HofExpand`, `CowClone`, `TraitCall`, `BoxAlloc`, `AddressOf`) into primitive instructions. The C backend never sees those — its `emit_inst` treats every one of them as `unreachable!` ... (`mod.rs:2045-2055`)",
+            "evidence": "src/backend/c_lir/mod.rs:2044-2055 (the unreachable arm lists TEN ops: SizeOf, EnumInit, EnumCheck, EnumExtract, StructInit, CowClone, TraitCall, HofExpand, AddressOf, BoxAlloc); src/bir/lower.rs:129-819 expands all ten; src/bir/lower.rs:3897-3906 validates all ten",
+            "fix": "Replace the five-op list with the full ten: SizeOf, EnumInit, EnumCheck, EnumExtract, StructInit, CowClone, TraitCall, HofExpand, AddressOf, BoxAlloc. The chapter cites mod.rs:2045-2055 (which itself enumerates all ten), so the omission directly contradicts the cited lines. Note that enum/struct construction and SizeOf are also BIR-lowered, which is the more interesting fact the current text hides."
+          },
+          {
+            "severity": "major",
+            "kind": "inaccuracy",
+            "claim": "The five BIR-lowered ops (`HofExpand`, `CowClone`, `TraitCall`, `BoxAlloc`, `AddressOf`) are `unreachable!` in `emit_inst` (`mod.rs:2045-2055`).",
+            "evidence": "src/backend/c_lir/mod.rs:2044-2055 lists ten ops, not five",
+            "fix": "Same correction as above — this is the second of three occurrences of the same five-vs-ten error (the third is in the `emit_inst` section, lines 227-228). Fix all three occurrences."
+          },
+          {
+            "severity": "minor",
+            "kind": "stale-cite",
+            "claim": "The fix is at the VarDecl-from-adapter-result site in GIR lowering: `methods.rs:2867-2924` ... and allocates the result local with it (`methods.rs:2924`)",
+            "evidence": "the file is src/ir/lowering/exprs/methods.rs:2867-2924 (the only methods.rs in the tree); line numbers are correct but the path prefix is missing",
+            "fix": "Spell the full path src/ir/lowering/exprs/methods.rs:2867-2924 (and :2924) for navigability, consistent with the other fully-qualified cites in the chapter."
+          },
+          {
+            "severity": "minor",
+            "kind": "stale-cite",
+            "claim": "(that weaker property is what `self_host_bootstrap` and `self_host_bootstrap_fixed_point` lock in, `tests/integration.rs:13722`)",
+            "evidence": "tests/integration.rs:13722 is the `#[test]` attribute of self_host_bootstrap (fn at 13724); self_host_bootstrap_fixed_point is a separate test at 13897",
+            "fix": "Cite tests/integration.rs:13724 for self_host_bootstrap and add :13897 for self_host_bootstrap_fixed_point, since the sentence names both."
+          }
+        ]
+      },
+      {
+        "file": "docs/devbook/19-llvm-backend.md",
+        "qualityNote": "Reference-grade and almost entirely accurate — emit order, transliteration table, struct layout, sret/byval, overflow intrinsics, the 6-step runtime-.o pipeline, LLVM version probe, shared-code imports, and test harness all verified against current source; one genuine inaccuracy (non-existent `LirGlobalInit::RuntimeCall` variant) plus a few off-by-a-few line cites.",
+        "issues": [
+          {
+            "severity": "major",
+            "kind": "inaccuracy",
+            "claim": "Runtime-initialized globals (`LirGlobalInit::RuntimeCall`) are handled by `emit_global_runtime_init` (`src/backend/llvm/mod.rs:1772`)",
+            "evidence": "src/lir/mod.rs:1587 (enum LirGlobalInit has only Zeroed/Bytes/FuncAddr/Extern/Struct — no RuntimeCall); src/backend/llvm/mod.rs:1768-1771 (comment: \"GlobalInit::RuntimeCall(String) got replaced with the typed Extern { name, args } shape\"); src/backend/llvm/mod.rs:2380-2388 (dispatch is `if let LirGlobalInit::Extern { name, args } = &global.init { ... emit_global_runtime_init(out, gid, name, args, ...) }`)",
+            "fix": "Replace `LirGlobalInit::RuntimeCall` with `LirGlobalInit::Extern { name, args }` — the runtime-ctor global path is dispatched off the `Extern` variant (the `RuntimeCall` variant was removed). Keep the `emit_global_runtime_init` cite, which is correct."
+          },
+          {
+            "severity": "minor",
+            "kind": "stale-cite",
+            "claim": "emitted as `@.str.N = private unnamed_addr constant [len x i8] c\"…\\00\"` (`src/backend/llvm/mod.rs:930`)",
+            "evidence": "src/backend/llvm/mod.rs:930 is `fn emit_string_globals(...)`; the actual `@.str.{i} = private unnamed_addr constant ...` writeln is at src/backend/llvm/mod.rs:934",
+            "fix": "Point the cite at 934 (or cite 930-935 as a range) so it lands on the format string, not the function header."
+          },
+          {
+            "severity": "minor",
+            "kind": "stale-cite",
+            "claim": "`ElemPtr` … `getelementptr` … site `mod.rs:3647` (GEP at 3651)",
+            "evidence": "src/backend/llvm/mod.rs:3647 is the `Inst::ElemPtr` arm; the `getelementptr i8, ptr %v{base}, i64 %{offset}` is at src/backend/llvm/mod.rs:3652 (3651 is the `mul i64` offset computation, not the GEP)",
+            "fix": "Change the parenthetical to (GEP at 3652)."
+          },
+          {
+            "severity": "minor",
+            "kind": "stale-cite",
+            "claim": "`main` is exempt and always `i32 @main(i32 %argc, ptr %argv)` (`src/backend/llvm/mod.rs:2156`)",
+            "evidence": "src/backend/llvm/mod.rs:2156 is `let is_main = func.name == \"main\";`; the `define i32 @main(i32 %argc, ptr %argv)` writeln is at src/backend/llvm/mod.rs:2159",
+            "fix": "Cite 2157-2159 (the is_main branch that emits the main define) rather than 2156."
+          }
+        ]
+      },
+      {
+        "file": "docs/devbook/21-simulator.md",
+        "qualityNote": "Reference-grade and almost entirely accurate — dozens of cites across all 8 sim files, main.rs, and the Python harness verified correct; one load-bearing claim (the Unimplemented fall-through) is both miscited and overstated, plus one minor LOC-attribution nit.",
+        "issues": [
+          {
+            "severity": "major",
+            "kind": "inaccuracy",
+            "claim": "Any name that falls through every handler returns `SimError::Unimplemented(name)` (`src/sim/runtime.rs:1800`).",
+            "evidence": "src/sim/runtime.rs:2347-2356 (catch-all `other =>` arm); line 1800 is the arm for \"gorget_str_to_upper_to_str\" | \"gorget_str_to_lower_to_str\"",
+            "fix": "Two corrections: (1) the cite is wrong — line 1800 is a specific named arm, not the fall-through. The actual catch-all is `runtime.rs:2347-2356`. (2) The claim is inaccurate: the fall-through returns `Unimplemented(name)` ONLY when the name starts with `gorget_` (2350-2351); non-`gorget_` externs (C stdlib etc.) silently return `Ok(Value::Unit)` (2353-2354). Reword to: \"Any unhandled `gorget_`-prefixed name returns `SimError::Unimplemented`; non-`gorget_` externs return `Unit` as a safe default (`src/sim/runtime.rs:2347-2356`).\""
+          },
+          {
+            "severity": "minor",
+            "kind": "quality",
+            "claim": "`runtime.rs` is a ~2.3K-LOC `match name { ... }` that hand-reimplements the C runtime in pure Rust",
+            "evidence": "src/sim/runtime.rs is 2358 lines; the `call_extern` match runs from src/sim/runtime.rs:602 to its catch-all at 2347 — the file also holds do_printf, the format engine, fnv1a/splitmix64, path/time helpers outside the match",
+            "fix": "Slight conflation of file size with the match. Reword to e.g. \"`runtime.rs` (~2.3K LOC) is dominated by a giant `match name { ... }` in `call_extern`\" so the LOC figure attaches to the file, not the single match expression."
+          }
+        ]
+      },
+      {
+        "file": "docs/devbook/24-layering-discipline.md",
+        "qualityNote": "Reference-grade and almost entirely accurate — every IR-layer/cite/validator/snag claim re-verified true against current source — but the 'In the self-host' section is materially wrong: it denies a self-host LIR + C backend that demonstrably exists (~10.8k lines), inverting its own coverage conclusion.",
+        "issues": [
+          {
+            "severity": "major",
+            "kind": "inaccuracy",
+            "claim": "The self-host does not implement the LIR/BIR/backend layers, so the rules' downstream half (Rule 4 write-through into LIR/BIR, the C-emit symbol-spelling exception) has no self-host coverage at all.",
+            "evidence": "tests/fixtures/self_host_lowerer/lir_codegen.gg (5265 lines, a full LIR→C backend: emit_structs, emit_externs, emit_box_allocators_from_lir spelling __gorget_box_alloc_<inner> at :721,:738,:775); also lir.gg:509, lir_lower.gg:3698 (GIR→LIR lowering), lir_ssa.gg:606 (SSA), drop_elab.gg:716. The self-host DOES implement LIR lowering, SSA, drop elaboration, and the C backend.",
+            "fix": "Rewrite the second half of the 'In the self-host' section. The self-host DOES implement the LIR layer (lir.gg / lir_lower.gg / lir_ssa.gg / drop_elab.gg) and a C backend (lir_codegen.gg), so the C-emit symbol-spelling boundary (Rule 4 / the runtime-symbol exception) IS exercised in self-host (lir_codegen.gg spells gorget_* / __gorget_box_alloc_<inner> directly). What the self-host lacks is a *separate BIR newtype layer* (no bir_*.gg; canonical-op helpers are folded into lir_lower.gg, see lir_lower.gg:2208 'Canonical-op helpers'). Also worth noting (since it's directly on-topic for Rule 2): the self-host LIR lowering itself still uses name-prefix tests — lir_lower.gg:244 'name.starts_with(\"Vector__\")', :291 'name.starts_with(\"Box__\")' — which is exactly the litmus-test pattern."
+          },
+          {
+            "severity": "minor",
+            "kind": "inaccuracy",
+            "claim": "The canonical four-rule summary lives in `CLAUDE.md` (symlinked as `AGENTS.md`)",
+            "evidence": "`ls -la`: CLAUDE.md -> AGENTS.md (CLAUDE.md is the symlink; AGENTS.md is the real 25648-byte file). Symlink direction is the reverse of what the chapter states.",
+            "fix": "Reverse the parenthetical: the real file is AGENTS.md and CLAUDE.md is the symlink to it — e.g. 'lives in `AGENTS.md` (symlinked as `CLAUDE.md`)'. Both names resolve to identical content, so impact is low, but the stated direction is backwards. (The 'See also' line '`CLAUDE.md` / `AGENTS.md`' at the bottom is fine as-is.)"
+          }
+        ]
+      },
+      {
+        "file": "docs/devbook/25-structural-guards.md",
+        "qualityNote": "Reference-grade and meticulously cited throughout (all GIR/LIR/BIR line numbers, the validate_read code block, the migration-framework env-var/panic cites, and the Snag #32 description all verified correct against current source, and it correctly avoids stale line-cites that the internals doc still carries) — but the \"In the self-host\" section is flatly wrong: the self-host lowerer ports these validators in a wired-in 497-line validate.gg.",
+        "issues": [
+          {
+            "severity": "blocking",
+            "kind": "inaccuracy",
+            "claim": "n/a — the self-host frontend (`tests/fixtures/self_host_*`) reimplements the lexer/parser/resolver/typechecker/lowerer, not the writer-side validators. The GIR/LIR/BIR validators are Rust-only compiler internals with no self-host analogue; the `*_comparison` parity tests do not cover this subsystem.",
+            "evidence": "tests/fixtures/self_host_lowerer/validate.gg:1 (25KB file, header reads \"Migration framework (mirror of structural-guards.md)\"); validate.gg:93 validate_resource_moves, :162 validate_resource_field_reads, :228 validate_resource_call_args, :288 run_validators, :361 validate_gir_after, :383 validate_lir_after, :403 validate_lir_function, :422 check_inst_slot_refs, :446 check_term_successors, :480 check_args_match_params; tests/fixtures/self_host_lowerer/driver.gg:14 `from validate import run_validators, validate_gir_after, validate_lir_after` and :66/:80/:88/:96 actively call them as a validate-after-every-pass dispatcher",
+            "fix": "Rewrite the section: the self-host lowerer DOES port the writer-side structural guards. `tests/fixtures/self_host_lowerer/validate.gg` reimplements the GIR resource-move/field-read/call-arg validators and the LIR structural checks (slot refs, terminator successors, jump-arg/block-param parity), wired into driver.gg via run_validators / validate_gir_after / validate_lir_after with the same per-pass + GG_VALIDATE_<NAME> env-gate pattern this chapter describes. Only the BIR validator has no self-host analogue. Note it is a 25KB independent copy (not symlinked) and is the self-host instance of the migration framework."
+          }
+        ]
+      },
+      {
+        "file": "docs/devbook/26-self-host-frontend.md",
+        "qualityNote": "Well-structured, well-cited reference chapter — the symlink/md5sum facts, integration.rs test cites, schema.gg/resource_schema.rs cross-language source-of-truth, bootstrap MAX_GEN narrative, lexer-not-green keyword-drift example, and no-defensive-workarounds fossils all verify against current source — but the Phase D resource-model status paragraph is materially stale: it describes shipped clone codegen (op_consume→OpClone for borrows + OpClone→real T__clone call) as 'still pending', which is the opposite of the actual tree.",
+        "issues": [
+          {
+            "severity": "blocking",
+            "kind": "inaccuracy",
+            "claim": "But those labels do not yet drive real clone / move-zero codegen: all four operand modes still lower to the same `ISlotLoad` in `lir_lower.gg:2349-2394`, and for `LoBorrowed` / `LoView` sources at consume positions `op_consume` currently returns `OpBorrow` rather than `OpClone`. Emitting real `OpClone` / `OpMove` from these labels is \"Phase 2c\", still pending (`lower.gg:1324-1342`).",
+            "evidence": "tests/fixtures/self_host_lowerer/lir_lower.gg:2453-2520 (OpClone case: \"Phase 2c COMMIT 2 + Phase 2.3: OpClone lowers to a real runtime clone call when the source slot holds (or points to) a resource value\" — emits ICallExtern to T__clone/gorget_*_clone, NOT a plain ISlotLoad); tests/fixtures/self_host_lowerer/lower.gg:1466-1471 (op_consume returns `OpClone(lid)` for both `LoBorrowed()` and `LoView()`, with the comment at :1451-1452 \"a-5 (clone-on-borrow) — WIRED\")",
+            "fix": "Rewrite the Phase D bullet to reflect shipped state: op_consume returns OpClone (not OpBorrow) for LoBorrowed/LoView at consume positions (lower.gg:1466-1471), and the OpClone operand mode lowers to a real runtime clone call (lir_lower.gg:2453-2520), so clone codegen has SHIPPED (Phase 2c COMMIT 2 + Phase 2.3). What remains pending is OpMove move-zero codegen (OpMove still lowers to plain ISlotLoad at lir_lower.gg:2445-2451; the SlotAddr conversion happens in the GICallExtern handler). The chapter is reading the now-stale in-source comment at lower.gg:1339-1342 ('all four operand modes lower to the same ISlotLoad') as current truth — that comment predates the OpClone wiring and should not be cited as the status."
+          },
+          {
+            "severity": "major",
+            "kind": "stale-cite",
+            "claim": "all four operand modes still lower to the same `ISlotLoad` in `lir_lower.gg:2349-2394`",
+            "evidence": "tests/fixtures/self_host_lowerer/lir_lower.gg:2349-2394 is `operand_lir_type` + `box_inner_ty_from_operand` (a type-computation helper that returns the slot type for each mode), NOT the operand-lowering/ISlotLoad-emission site. The actual emission is in `lower_operand` at lir_lower.gg:2403-2533 (OpCopy@2443, OpMove@2451, OpClone@2453-2520, OpBorrow@2520-2531).",
+            "fix": "Cite `lower_operand` (lir_lower.gg:2403-2533) as the operand-emission site rather than 2349-2394; and correct the substance per the blocking issue (OpClone is NOT a plain ISlotLoad)."
+          },
+          {
+            "severity": "minor",
+            "kind": "coverage-gap",
+            "claim": "Pointers section lists per-phase chapters 3,4,5,6,7,9,12,14,15 but never cross-references chapter 27 (Comparison, bootstrap & report generation), despite chapter 26 itself covering the comparison tests and bootstrap fixed-point that chapter 27 treats in depth.",
+            "evidence": "docs/devbook/27-comparison-bootstrap.md:1-3 covers the *_comparison tests and self_host_bootstrap/self_host_bootstrap_fixed_point in detail; chapter 26 lines 95-209 cover the same topics at overview depth with no pointer to 27.",
+            "fix": "Add a cross-reference to chapter 27 in the Pointers section (and ideally at the top of 'The comparison tests' / 'The bootstrap fixed-point' sections) directing readers to chapter 27 for the deep treatment of the test machinery and report generator."
+          },
+          {
+            "severity": "minor",
+            "kind": "inaccuracy",
+            "claim": "can emit GIR / LIR / C (`driver.gg:75-103`)",
+            "evidence": "tests/fixtures/self_host_lowerer/driver.gg: the emit-gated section spans lines 75-106 (emit_gir at 75-77, emit_c/emit_lir block at 78-103, and the default GIR-text fallback at 104-106). main() runs 24-106.",
+            "fix": "Minor: the emit-gated block is 75-106 (the cited 75-103 stops at generate_c and omits the default-fallback else at 104-106). Either widen to 75-106 or note the cite covers only the dump-flag arms."
+          }
+        ]
+      },
+      {
+        "file": "docs/devbook/27-comparison-bootstrap.md",
+        "qualityNote": "Reference-grade and overwhelmingly accurate (cites for report.rs, the comparison/bootstrap/e2e tests, backend selector, and aux harnesses all check out); only three minor precision defects — a swapped diagnostic-comment cite pair, a wrong ratchet count (5 not 3), and a mis-attributed import.",
+        "issues": [
+          {
+            "severity": "minor",
+            "kind": "stale-cite",
+            "claim": "used verbatim by `parser_comparison` (`tests/integration.rs:12569`), `type_comparison` (`:13174`), and `c_emit_comparison` (`:13532`); `lexer_comparison` (`:9526`) and `lowerer_comparison` (`:13545`) use equivalent 3-line / shorter variants.",
+            "evidence": "tests/integration.rs:13532 (verbatim comment is the end of lowerer_comparison, fn 13390-13534) vs tests/integration.rs:13545 (the shorter \"Diagnostic: always passes. Use the eprintln...\" docstring belongs to c_emit_comparison, fn 13549-13705)",
+            "fix": "Swap the two: lowerer_comparison uses the verbatim comment at :13532; c_emit_comparison uses the shorter variant docstring at :13545 (its body ends at :13704 with no verbatim comment). Also note resolver_comparison ends with the verbatim comment at :12866 and check_comparison ends with no comment at :13381, if completeness is wanted."
+          },
+          {
+            "severity": "minor",
+            "kind": "inaccuracy",
+            "claim": "Three ratchets: `no_growth_in_name_prefix_routing` (`:166`...), `no_typed_metadata_sidecars` (`:321`...), and `no_growth_in_phase_d_proxy_reads` (`:434`...).",
+            "evidence": "tests/lints.rs:600 (container_literal_arms_count) and tests/lints.rs:637 (no_growth_in_self_host_name_prefix_routing, BUDGET=69) are two additional #[test] ratchets — five total, not three",
+            "fix": "Change \"Three ratchets\" to \"five ratchets\" and add `container_literal_arms_count` (:600) and `no_growth_in_self_host_name_prefix_routing` (:637) — the latter is especially relevant since the chapter states lints.rs scans `tests/fixtures/self_host_*`."
+          },
+          {
+            "severity": "minor",
+            "kind": "inaccuracy",
+            "claim": "it concatenates `RUNTIME_PREAMBLE` + `PANIC_NORMAL` + an inline `TEST_MAIN` (imported from `gorget::backend::c::c_runtime`)",
+            "evidence": "tests/str_runtime.rs:4 imports only RUNTIME_PREAMBLE and PANIC_NORMAL; TEST_MAIN is defined locally as a `const TEST_MAIN: &str` at tests/str_runtime.rs:89",
+            "fix": "Move the \"(imported from gorget::backend::c::c_runtime)\" parenthetical to apply to RUNTIME_PREAMBLE + PANIC_NORMAL; TEST_MAIN is inline/local (defined at :89), not imported."
+          }
+        ]
+      },
+      {
+        "file": "docs/devbook/appendix-a-file-map.md",
+        "qualityNote": "Reference-grade and remarkably accurate: every directory total, every individual file LOC, and every symbol cite (RuntimeFn, RUNTIME_PREAMBLE, map_stdlib_name, ResolveError variants, field_value/field_set, c_sizeof_lir_type, etc.) verify against the current tree; the resolver disambiguation and the bir Step-0-stale callout are both correct. Only one broken internal anchor and a handful of cosmetic cite/label nits hold it back from a clean sign-off.",
+        "issues": [
+          {
+            "severity": "minor",
+            "kind": "broken-ref",
+            "claim": "[Backend](#backend--srcbackend) section",
+            "evidence": "docs/devbook/appendix-a-file-map.md:15 links to #backend--srcbackend, but the only matching header is `## Inside `src/backend/`` at docs/devbook/appendix-a-file-map.md:189, whose GitHub-style slug is #inside-srcbackend",
+            "fix": "Change the anchor to `#inside-srcbackend` (or rename the section header to a heading that slugifies to `backend--srcbackend`). This is the only internal anchor link in the file and it currently resolves to nothing."
+          },
+          {
+            "severity": "minor",
+            "kind": "inaccuracy",
+            "claim": "`integration.rs`, `queries.rs` | ~285 total | Integration glue; LIR queries.",
+            "evidence": "src/lir/integration.rs:1 reads `//! Integration test: lower a real GIR module from the compilation pipeline to LIR.` and src/lir/integration.rs:3-4 is `#[cfg(test)] mod tests {` — the entire file is a test module, not glue code.",
+            "fix": "Relabel integration.rs as an LIR integration *test* module (e.g. \"LIR pipeline integration tests; LIR queries\"), not \"integration glue.\""
+          },
+          {
+            "severity": "minor",
+            "kind": "stale-cite",
+            "claim": "Logos-based tokenizer with indentation tracking (`mod.rs:1`, header at `src/lexer/mod.rs:1`).",
+            "evidence": "src/lexer/mod.rs:1 is `pub mod token;`; the descriptive doc-comment header (\"Indentation-aware lexer for Gorget source code...\") is at src/lexer/mod.rs:9.",
+            "fix": "Point the \"header\" cite at src/lexer/mod.rs:9 and drop the redundant duplicate `mod.rs:1` reference in the same cell."
+          },
+          {
+            "severity": "minor",
+            "kind": "stale-cite",
+            "claim": "Its error type is `ResolveError` (`src/resolver.rs:14`)",
+            "evidence": "src/resolver.rs:15 is `pub enum ResolveError {`; line 14 is the `#[derive(Debug)]` attribute. (Cited again identically at docs/devbook/appendix-a-file-map.md:48 and :66.)",
+            "fix": "Cite `src/resolver.rs:15` for the `ResolveError` enum definition (off by one in all three occurrences)."
+          },
+          {
+            "severity": "minor",
+            "kind": "quality",
+            "claim": "C and LLVM backends plus the embedded C runtime. The runtime + vendored C is ~282k lines on top (see below).",
+            "evidence": "Vendored C alone sums to 282,214 (src/backend/c/sqlite3/sqlite3.c 260493 + sqlite3.h 13583 + stb_image.h 7988 + gorget_sqlite.c 150); the C runtime itself lives in src/backend/c/c_runtime.rs (14903 lines) and is already inside the ~31,700 Rust figure.",
+            "fix": "Say \"vendored C is ~282k lines on top\" — the runtime is a Rust string constant already counted in the Rust LOC, so \"runtime + vendored C ~282k\" conflates the two."
+          }
+        ]
+      },
+      {
+        "file": "docs/devbook/appendix-b-glossary.md",
+        "qualityNote": "Reference-grade and accurate: every primary source path:line cite re-derived and confirmed correct, all structural claims hold, scope well covered. Only three minor sibling-chapter line-anchor drifts (one wrong, two off-by-one) keep it from a clean sign-off.",
+        "issues": [
+          {
+            "severity": "minor",
+            "kind": "stale-cite",
+            "claim": "Monomorphization ... looping to a fixed point so that generics instantiated *by* other generics are caught ([`12-gir-lowering.md:79`](12-gir-lowering.md)).",
+            "evidence": "docs/devbook/12-gir-lowering.md:79 is the \"Drop-strategy upgrade — upgrade_types_from_fields\" step; the monomorphization material is at 12-gir-lowering.md:87 (numbered step \"Generic monomorphization\") and the dedicated \"## Monomorphization\" section at 12-gir-lowering.md:133.",
+            "fix": "Repoint the cross-cite to `12-gir-lowering.md:87` (or `:133`), which actually covers monomorphization."
+          },
+          {
+            "severity": "minor",
+            "kind": "stale-cite",
+            "claim": "the compiler picks per-argument move-vs-clone via the canonical decision tree in `ensure_owned_at_consuming_arg` (..., [`13-ownership-in-ir.md:340`](13-ownership-in-ir.md)).",
+            "evidence": "docs/devbook/13-ownership-in-ir.md:340 is blank; the helper sentence \"The consuming-position helper, `ensure_owned_at_consuming_arg` (`src/ir/lowering/context.rs:1927-2007`)\" begins at line 341.",
+            "fix": "Bump the cross-cite from `:340` to `:341`."
+          },
+          {
+            "severity": "minor",
+            "kind": "stale-cite",
+            "claim": "Note bare call args are deliberately *not* routed through this helper — they stay borrows ([`13-ownership-in-ir.md:334`](13-ownership-in-ir.md)).",
+            "evidence": "docs/devbook/13-ownership-in-ir.md:334 reads \"`emit_borrow_mut` when the callee's param ownership is `Move` — and\"; the actual \"does **not** route bare call args through `ensure_owned_at_consuming_arg`\" statement is at lines 335-336.",
+            "fix": "Bump the cross-cite from `:334` to `:335`."
+          }
+        ]
+      }
+    ],
+    "blockingIssues": [
+      {
+        "file": "docs/devbook/25-structural-guards.md",
+        "severity": "blocking",
+        "kind": "inaccuracy",
+        "claim": "n/a — the self-host frontend (`tests/fixtures/self_host_*`) reimplements the lexer/parser/resolver/typechecker/lowerer, not the writer-side validators. The GIR/LIR/BIR validators are Rust-only compiler internals with no self-host analogue; the `*_comparison` parity tests do not cover this subsystem.",
+        "evidence": "tests/fixtures/self_host_lowerer/validate.gg:1 (25KB file, header reads \"Migration framework (mirror of structural-guards.md)\"); validate.gg:93 validate_resource_moves, :162 validate_resource_field_reads, :228 validate_resource_call_args, :288 run_validators, :361 validate_gir_after, :383 validate_lir_after, :403 validate_lir_function, :422 check_inst_slot_refs, :446 check_term_successors, :480 check_args_match_params; tests/fixtures/self_host_lowerer/driver.gg:14 `from validate import run_validators, validate_gir_after, validate_lir_after` and :66/:80/:88/:96 actively call them as a validate-after-every-pass dispatcher",
+        "fix": "Rewrite the section: the self-host lowerer DOES port the writer-side structural guards. `tests/fixtures/self_host_lowerer/validate.gg` reimplements the GIR resource-move/field-read/call-arg validators and the LIR structural checks (slot refs, terminator successors, jump-arg/block-param parity), wired into driver.gg via run_validators / validate_gir_after / validate_lir_after with the same per-pass + GG_VALIDATE_<NAME> env-gate pattern this chapter describes. Only the BIR validator has no self-host analogue. Note it is a 25KB independent copy (not symlinked) and is the self-host instance of the migration framework."
+      },
+      {
+        "file": "docs/devbook/26-self-host-frontend.md",
+        "severity": "blocking",
+        "kind": "inaccuracy",
+        "claim": "But those labels do not yet drive real clone / move-zero codegen: all four operand modes still lower to the same `ISlotLoad` in `lir_lower.gg:2349-2394`, and for `LoBorrowed` / `LoView` sources at consume positions `op_consume` currently returns `OpBorrow` rather than `OpClone`. Emitting real `OpClone` / `OpMove` from these labels is \"Phase 2c\", still pending (`lower.gg:1324-1342`).",
+        "evidence": "tests/fixtures/self_host_lowerer/lir_lower.gg:2453-2520 (OpClone case: \"Phase 2c COMMIT 2 + Phase 2.3: OpClone lowers to a real runtime clone call when the source slot holds (or points to) a resource value\" — emits ICallExtern to T__clone/gorget_*_clone, NOT a plain ISlotLoad); tests/fixtures/self_host_lowerer/lower.gg:1466-1471 (op_consume returns `OpClone(lid)` for both `LoBorrowed()` and `LoView()`, with the comment at :1451-1452 \"a-5 (clone-on-borrow) — WIRED\")",
+        "fix": "Rewrite the Phase D bullet to reflect shipped state: op_consume returns OpClone (not OpBorrow) for LoBorrowed/LoView at consume positions (lower.gg:1466-1471), and the OpClone operand mode lowers to a real runtime clone call (lir_lower.gg:2453-2520), so clone codegen has SHIPPED (Phase 2c COMMIT 2 + Phase 2.3). What remains pending is OpMove move-zero codegen (OpMove still lowers to plain ISlotLoad at lir_lower.gg:2445-2451; the SlotAddr conversion happens in the GICallExtern handler). The chapter is reading the now-stale in-source comment at lower.gg:1339-1342 ('all four operand modes lower to the same ISlotLoad') as current truth — that comment predates the OpClone wiring and should not be cited as the status."
+      }
+    ],
+    "majorIssues": [
+      {
+        "file": "docs/devbook/01-pipeline-and-driver.md",
+        "severity": "major",
+        "kind": "inaccuracy",
+        "claim": "Note the LIR optimizer is run *twice* in `try_build_ir`: optimization happens **after** BIR synthesis (`src/main.rs:712`)",
+        "evidence": "src/main.rs:712 (only post-BIR optimize in the normal build path); pre-BIR LIR setup at src/main.rs:681-702 contains NO lir::optimize call. The other two lir::optimize::optimize_module call sites (src/main.rs:601, :663) are inside the mutually-exclusive --emit-lir and --emit-c-lir short-circuit branches, so only one optimize ever runs per invocation.",
+        "fix": "Drop the 'run twice' claim — the LIR optimizer runs ONCE (post-BIR, main.rs:712). What actually runs twice is the type-computation triple compute_module_pointee_types/value_types/value_origins: pre-BIR at main.rs:699-701 and again post-BIR at main.rs:714-716. Reword to: 'The module's value/pointee types are recomputed after BIR synthesis (main.rs:714-716), and the LIR optimizer runs post-BIR (main.rs:712) so DCE/fold/CSE and drop elaboration see the expanded primitives.'"
+      },
+      {
+        "file": "docs/devbook/11-copy-on-write.md",
+        "severity": "major",
+        "kind": "inaccuracy",
+        "claim": "In the `ensure_owned_at_boundary` table: \"| `exprs/mod.rs:480` | struct field init (`lower_struct_init`) |\" and \"| `exprs/mod.rs:1950` | enum variant init |\"",
+        "evidence": "src/ir/lowering/exprs/mod.rs:469 (`Expr::TupleLiteral(elems) =>`) with the call at :480 under the comment \"tuple fields need independently owned values\" (mod.rs:473); and src/ir/lowering/exprs/mod.rs:1555 (`fn lower_struct_literal`) containing the :1950 call under the comment \"struct fields need independently owned values\" (mod.rs:1891)",
+        "fix": "Relabel the two rows: `exprs/mod.rs:480` is the TUPLE-literal field-init boundary (inside `Expr::TupleLiteral` in `lower_expr_inner`), and `exprs/mod.rs:1950` is the STRUCT field-init boundary (inside `lower_struct_literal`). There is NO dedicated `ensure_owned_at_boundary` call for enum-variant init at all — enum constructors route their borrow-clone through `emit_enum_init_owned` (called at mod.rs:1409/1420/1478/1510/1536), not this helper. Either drop the \"enum variant init\" row or replace it with the `emit_enum_init_owned` path. The three actual exprs/mod.rs call sites are 480 (tuple), 1950 (struct), 2538 (match arm)."
+      },
+      {
+        "file": "docs/devbook/17-c-backend.md",
+        "severity": "major",
+        "kind": "inaccuracy",
+        "claim": "by the time codegen runs, LIR has already been lowered through a **BIR** pass (`src/bir/`) that expands the *canonical* LIR ops (`HofExpand`, `CowClone`, `TraitCall`, `BoxAlloc`, `AddressOf`) into primitive instructions. The C backend never sees those — its `emit_inst` treats every one of them as `unreachable!` ... (`mod.rs:2045-2055`)",
+        "evidence": "src/backend/c_lir/mod.rs:2044-2055 (the unreachable arm lists TEN ops: SizeOf, EnumInit, EnumCheck, EnumExtract, StructInit, CowClone, TraitCall, HofExpand, AddressOf, BoxAlloc); src/bir/lower.rs:129-819 expands all ten; src/bir/lower.rs:3897-3906 validates all ten",
+        "fix": "Replace the five-op list with the full ten: SizeOf, EnumInit, EnumCheck, EnumExtract, StructInit, CowClone, TraitCall, HofExpand, AddressOf, BoxAlloc. The chapter cites mod.rs:2045-2055 (which itself enumerates all ten), so the omission directly contradicts the cited lines. Note that enum/struct construction and SizeOf are also BIR-lowered, which is the more interesting fact the current text hides."
+      },
+      {
+        "file": "docs/devbook/17-c-backend.md",
+        "severity": "major",
+        "kind": "inaccuracy",
+        "claim": "The five BIR-lowered ops (`HofExpand`, `CowClone`, `TraitCall`, `BoxAlloc`, `AddressOf`) are `unreachable!` in `emit_inst` (`mod.rs:2045-2055`).",
+        "evidence": "src/backend/c_lir/mod.rs:2044-2055 lists ten ops, not five",
+        "fix": "Same correction as above — this is the second of three occurrences of the same five-vs-ten error (the third is in the `emit_inst` section, lines 227-228). Fix all three occurrences."
+      },
+      {
+        "file": "docs/devbook/19-llvm-backend.md",
+        "severity": "major",
+        "kind": "inaccuracy",
+        "claim": "Runtime-initialized globals (`LirGlobalInit::RuntimeCall`) are handled by `emit_global_runtime_init` (`src/backend/llvm/mod.rs:1772`)",
+        "evidence": "src/lir/mod.rs:1587 (enum LirGlobalInit has only Zeroed/Bytes/FuncAddr/Extern/Struct — no RuntimeCall); src/backend/llvm/mod.rs:1768-1771 (comment: \"GlobalInit::RuntimeCall(String) got replaced with the typed Extern { name, args } shape\"); src/backend/llvm/mod.rs:2380-2388 (dispatch is `if let LirGlobalInit::Extern { name, args } = &global.init { ... emit_global_runtime_init(out, gid, name, args, ...) }`)",
+        "fix": "Replace `LirGlobalInit::RuntimeCall` with `LirGlobalInit::Extern { name, args }` — the runtime-ctor global path is dispatched off the `Extern` variant (the `RuntimeCall` variant was removed). Keep the `emit_global_runtime_init` cite, which is correct."
+      },
+      {
+        "file": "docs/devbook/21-simulator.md",
+        "severity": "major",
+        "kind": "inaccuracy",
+        "claim": "Any name that falls through every handler returns `SimError::Unimplemented(name)` (`src/sim/runtime.rs:1800`).",
+        "evidence": "src/sim/runtime.rs:2347-2356 (catch-all `other =>` arm); line 1800 is the arm for \"gorget_str_to_upper_to_str\" | \"gorget_str_to_lower_to_str\"",
+        "fix": "Two corrections: (1) the cite is wrong — line 1800 is a specific named arm, not the fall-through. The actual catch-all is `runtime.rs:2347-2356`. (2) The claim is inaccurate: the fall-through returns `Unimplemented(name)` ONLY when the name starts with `gorget_` (2350-2351); non-`gorget_` externs (C stdlib etc.) silently return `Ok(Value::Unit)` (2353-2354). Reword to: \"Any unhandled `gorget_`-prefixed name returns `SimError::Unimplemented`; non-`gorget_` externs return `Unit` as a safe default (`src/sim/runtime.rs:2347-2356`).\""
+      },
+      {
+        "file": "docs/devbook/24-layering-discipline.md",
+        "severity": "major",
+        "kind": "inaccuracy",
+        "claim": "The self-host does not implement the LIR/BIR/backend layers, so the rules' downstream half (Rule 4 write-through into LIR/BIR, the C-emit symbol-spelling exception) has no self-host coverage at all.",
+        "evidence": "tests/fixtures/self_host_lowerer/lir_codegen.gg (5265 lines, a full LIR→C backend: emit_structs, emit_externs, emit_box_allocators_from_lir spelling __gorget_box_alloc_<inner> at :721,:738,:775); also lir.gg:509, lir_lower.gg:3698 (GIR→LIR lowering), lir_ssa.gg:606 (SSA), drop_elab.gg:716. The self-host DOES implement LIR lowering, SSA, drop elaboration, and the C backend.",
+        "fix": "Rewrite the second half of the 'In the self-host' section. The self-host DOES implement the LIR layer (lir.gg / lir_lower.gg / lir_ssa.gg / drop_elab.gg) and a C backend (lir_codegen.gg), so the C-emit symbol-spelling boundary (Rule 4 / the runtime-symbol exception) IS exercised in self-host (lir_codegen.gg spells gorget_* / __gorget_box_alloc_<inner> directly). What the self-host lacks is a *separate BIR newtype layer* (no bir_*.gg; canonical-op helpers are folded into lir_lower.gg, see lir_lower.gg:2208 'Canonical-op helpers'). Also worth noting (since it's directly on-topic for Rule 2): the self-host LIR lowering itself still uses name-prefix tests — lir_lower.gg:244 'name.starts_with(\"Vector__\")', :291 'name.starts_with(\"Box__\")' — which is exactly the litmus-test pattern."
+      },
+      {
+        "file": "docs/devbook/26-self-host-frontend.md",
+        "severity": "major",
+        "kind": "stale-cite",
+        "claim": "all four operand modes still lower to the same `ISlotLoad` in `lir_lower.gg:2349-2394`",
+        "evidence": "tests/fixtures/self_host_lowerer/lir_lower.gg:2349-2394 is `operand_lir_type` + `box_inner_ty_from_operand` (a type-computation helper that returns the slot type for each mode), NOT the operand-lowering/ISlotLoad-emission site. The actual emission is in `lower_operand` at lir_lower.gg:2403-2533 (OpCopy@2443, OpMove@2451, OpClone@2453-2520, OpBorrow@2520-2531).",
+        "fix": "Cite `lower_operand` (lir_lower.gg:2403-2533) as the operand-emission site rather than 2349-2394; and correct the substance per the blocking issue (OpClone is NOT a plain ISlotLoad)."
+      }
+    ],
+    "consistencyFindings": [
+      {
+        "dimension": "links-anchors",
+        "verdict": "issues",
+        "findings": [
+          {
+            "severity": "minor",
+            "detail": "Broken intra-file anchor link. The intro at appendix-a-file-map.md:15 reads `...counted separately in the [Backend](#backend--srcbackend) section.` The anchor `#backend--srcbackend` matches no heading in the file. The intended target is the heading `## Inside `src/backend/`` at appendix-a-file-map.md:189, whose GitHub-style slug is `inside-srcbackend`. Clicking the link goes nowhere (no scroll). Fix: change the anchor to `#inside-srcbackend`. This is the ONLY broken reference found.",
+            "evidence": "appendix-a-file-map.md:15 (link `](#backend--srcbackend)`) vs target heading appendix-a-file-map.md:189 (`## Inside `src/backend/`` -> slug `inside-srcbackend`)"
+          }
+        ]
+      },
+      {
+        "dimension": "terminology-glossary",
+        "verdict": "issues",
+        "findings": [
+          {
+            "severity": "minor",
+            "detail": "SSA merge-mechanism terminology conflicts between the glossary and Chapter 14. The glossary (appendix-b-glossary.md:63) defines SSA as 'each scalar slot becomes a value assigned exactly once, with φ-nodes at control-flow merges.' But Chapter 14 (14-lir-ssa.md:188-189) deliberately emphasizes the opposite as a load-bearing implementation fact: 'Block parameters, not phi nodes — this is the Cranelift model: params: Vec<(ValueId, LirType)>'. For a HOW-IT-IS-IMPLEMENTED book, the glossary's textbook 'φ-nodes' phrasing directly contradicts the exact distinction Chapter 14 calls out; a reader cross-referencing the two finds them at odds on the merge representation. The source itself blurs the two (src/lir/ssa.rs:264 comment 'a block parameter (phi)', and field block_params alongside incomplete_phis at ssa.rs:111-114), so the concepts are equated internally — but the glossary entry should match the chapter's emphasized framing (e.g. 'block parameters at control-flow merges — the Cranelift model, not LLVM-style φ-nodes').",
+            "evidence": "appendix-b-glossary.md:63 vs 14-lir-ssa.md:188-189; src/lir/ssa.rs:111-114,264"
+          },
+          {
+            "severity": "minor",
+            "detail": "Drop-elaboration scheduling cite points to two different lines of the same function for the same fact. The glossary (appendix-b-glossary.md:95) says drop elaboration is 'scheduled by optimize_module at src/lir/optimize.rs:78' (the actual elaborate_drops call site, verified at optimize.rs:78). Chapter 15 (15-drop-elaboration.md:3) says 'scheduled ... by optimize_module in src/lir/optimize.rs:46' (the function's doc-comment/definition line; pub fn optimize_module is at line 47, doc comment at 46). Both land inside the correct function, but a reader cross-referencing the glossary against the chapter sees two different line numbers for the identical claim. The glossary's :78 is the more precise (it is the scheduling call). Recommend aligning the chapter to the call-site line.",
+            "evidence": "appendix-b-glossary.md:95 (optimize.rs:78) vs 15-drop-elaboration.md:3 (optimize.rs:46); src/lir/optimize.rs:47 (fn def), :78 (drop_elab call)"
+          },
+          {
+            "severity": "minor",
+            "detail": "Glossary 'Monomorphization' entry anchors to 12-gir-lowering.md:79, but line 79 is inside the module-flattening step (item 1); monomorphization is actually treated at item 4 (12-gir-lowering.md:87-89, 'Generic monomorphization — collect templates, discover concrete instantiations...'). The within-chapter anchor is imprecise — it should point near line 87. The glossary's prose description ('looping to a fixed point so generics instantiated by other generics are caught') is accurate and matches the worklist fixpoint in src/ir/lowering/generics/mod.rs:783 (discover_transitive) / 12-gir-lowering.md:149.",
+            "evidence": "appendix-b-glossary.md:83 cites 12-gir-lowering.md:79; actual monomorphization at 12-gir-lowering.md:87-89,149; src/ir/lowering/generics/mod.rs:783"
+          },
+          {
+            "severity": "minor",
+            "detail": "LIR expansion spelled inconsistently: glossary (appendix-b-glossary.md:40) expands LIR as 'Low-Level IR' while Chapter 14 (14-lir-ssa.md:3) expands it as 'Low-Level Intermediate Representation'. Same meaning, but a glossary should fix one canonical full expansion of the acronym it defines. (GIR is consistent everywhere as 'Gorget IR'; BIR consistent as 'Backend IR'.)",
+            "evidence": "appendix-b-glossary.md:40 vs 14-lir-ssa.md:3"
+          }
+        ]
+      },
+      {
+        "dimension": "duplication-contradiction",
+        "verdict": "issues",
+        "findings": [
+          {
+            "severity": "major",
+            "detail": "Direct cross-chapter contradiction on the CoW materialization-point count. Chapter 11 has a dedicated callout (11-copy-on-write.md:169-184, 'Materialization points — the SIX-vs-SEVEN finding') arguing that BOTH the SEVEN and SIX figures are 'stale as a closed enumeration', that 'The current source does *not* maintain a numbered list of materialization points', and that 'Any doc claiming a fixed count is describing an implementation that no longer exists.' Chapter 13 then asserts the opposite as live fact, twice: 13-ownership-in-ir.md:322 says 'Clones happen only at the seven materialization points (assignment, mutating method, struct/enum init, collection put, return, move transfer, field store)', and 13-ownership-in-ir.md:569 cites 'docs/internals/copy-on-write.md Phase 3 — the seven materialization points, full spec' approvingly. Ch 13's enumerated 'seven' is exactly the stale list Ch 11 debunks (Ch 11:209-214 even documents that the 'field store' entry was unified into the shared ensure_owned_at_consuming_arg helper, and Ch 11:186-208 lists >7 live call sites). Source supports Ch 11: ~33 call sites of the two boundary helpers in src/ir/lowering/ (grep), not a fixed enumeration; internals copy-on-write.md:215 and language-reference.md:2297 are the SEVEN-enumeration docs Ch 11 flags as stale. The two devbook chapters cannot both stand — Ch 13 repeats the figure Ch 11 was written to correct.",
+            "evidence": "Ch11 docs/devbook/11-copy-on-write.md:169-184 (and 209-219); Ch13 docs/devbook/13-ownership-in-ir.md:322 and :569; corroborating source: docs/internals/copy-on-write.md:215, docs/language-reference.md:2297, ~33 ensure_owned_at_* call sites in src/ir/lowering/"
+          },
+          {
+            "severity": "major",
+            "detail": "Contradictory count/set of BIR canonical ops between the C-backend chapter and the BIR/LIR/structural-guard chapters. Chapter 17 presents the canonical-op set as exactly FIVE ops, three times: 17-c-backend.md:18-19 ('expands the *canonical* LIR ops (HofExpand, CowClone, TraitCall, BoxAlloc, AddressOf)'), :59 ('The five BIR-lowered ops (HofExpand, CowClone, TraitCall, BoxAlloc, AddressOf)'), and :227 ('Canonical ops (HofExpand, CowClone, TraitCall, BoxAlloc, AddressOf)'). Chapter 16 (16-bir.md:54-69) says 'Eleven variants are rejected today' and tables eleven; Chapter 25 (25-structural-guards.md:92) lists the same eleven; Chapter 14 (14-lir-ssa.md:125-128) lists eleven. The validator source confirms eleven arms: src/bir/validate.rs:54-108 rejects SizeOf, EnumInit, EnumCheck, EnumExtract, StructInit, CowClone, TraitCall, HofExpand, AddressOf, BoxAlloc, CollectionCtor. Ch 17's 'five' is not a defensible subset framing because it claims 'The C backend never sees those — its emit_inst treats every one of them as unreachable!' while the cited unreachable arm (src/backend/c_lir/mod.rs:2044-2053) actually lists TEN ops (adds SizeOf, EnumInit, EnumCheck, EnumExtract, StructInit), so Ch 17 contradicts both the other chapters (eleven) and its own cited source arm (ten). A reader cross-referencing Ch 16 and Ch 17 gets two different counts for the same set.",
+            "evidence": "Ch17 docs/devbook/17-c-backend.md:18-19, :59, :227; Ch16 docs/devbook/16-bir.md:54-69; Ch25 docs/devbook/25-structural-guards.md:92; Ch14 docs/devbook/14-lir-ssa.md:125-128; source src/bir/validate.rs:54-108 (11 arms) and src/backend/c_lir/mod.rs:2044-2053 (10-op unreachable arm)"
+          },
+          {
+            "severity": "minor",
+            "detail": "Ch 17's citation for the C-backend canonical-op unreachable arm is off-by-one and mis-scoped: it cites 'mod.rs:2045-2055' (17-c-backend.md:22, :59-62, :227-229) but the arm starts at src/backend/c_lir/mod.rs:2044 (Inst::SizeOf) and runs through :2055, and it covers ten ops (SizeOf/EnumInit/EnumCheck/EnumExtract/StructInit/CowClone/TraitCall/HofExpand/AddressOf/BoxAlloc) rather than the five Ch 17 names. CollectionCtor is rejected by the validator (the 11th) but is NOT in this C-backend unreachable arm — a precision point neither Ch 17 nor Ch 14 surfaces. Folding this into the fix for the prior finding would resolve both.",
+            "evidence": "docs/devbook/17-c-backend.md:22 (cite '2045-2055') vs src/backend/c_lir/mod.rs:2044-2055 (arm start at 2044, ten ops)"
+          },
+          {
+            "severity": "minor",
+            "detail": "Non-issue worth recording so it is not re-raised: the 'sole production backend' axis is internally consistent across the devbook, not contradictory. Ch 17:3 says 'sole production backend' (echoing CLAUDE.md). Ch 19:7 calls LLVM 'a second backend' (deliberately NOT 'second production backend') and Ch 19:11-15 explicitly self-flags the 'sole production backend' wording elsewhere as 'a doc-vs-doc wording inconsistency worth aligning, not a contradiction in behavior.' Ch 14:381 uses neutral 'The production backend is c_lir; an LLVM backend ships behind GG_BACKEND=llvm', and appendix-a:36 says 'C and LLVM backends.' No chapter claims LLVM is a 'second production backend', so there is no live contradiction; the tension is acknowledged and reconciled. Likewise the lexer-parity axis (Ch 03:155 '601 mismatches at ffd58b65, do not assert green' vs Ch 26:172-178 'hundreds of mismatches ... despite memory recording the lexer as green') is fully consistent — both reject the stale 'green' claim and attribute the gap to missing SkFormat / keyword-set drift. The pipeline order (Ch 01:35-78, Ch 14:306-323, Ch 16:302-329) matches src/main.rs:654-717 (pre-BIR compute-types → from_lir → split_critical_edges → optimize POST-BIR → recompute-types) across all three chapters.",
+            "evidence": "docs/devbook/17-c-backend.md:3; 19-llvm-backend.md:7,:11-15; 14-lir-ssa.md:381; appendix-a-file-map.md:36; 03-lexer.md:155; 26-self-host-frontend.md:172-178; src/main.rs:654-717"
+          }
+        ]
+      },
+      {
+        "dimension": "honesty-fold-discipline",
+        "verdict": "issues",
+        "findings": [
+          {
+            "severity": "minor",
+            "detail": "Cross-chapter contradiction on the number of production backends. Ch.17 line 3 asserts as bald fact: \"The C backend is the sole production backend\". But Ch.19 (lines 7-15) describes the LLVM backend as a shipped second backend \"held at parity with the C backend ... against the full integration fixture set\" and explicitly flags the exact \"sole production backend\" wording as a doc-vs-doc inconsistency \"worth aligning\". CLAUDE.md:29-33 confirms the full integration suite is run under GG_BACKEND=llvm with backends \"at parity\", and src/main.rs:1089 has a real compile_llvm_pipeline. So there is a genuine second, full-suite-tested production codegen path. Ch.17 repeats the disputed phrasing without the qualifier that Ch.19 says it needs — a reader of Ch.17 alone is told there is one production backend; a reader of Ch.19 is told that claim is stale. The two chapters should agree (e.g. Ch.17 should say \"the default/primary production backend\" or carry the same alignment note Ch.19 does).",
+            "evidence": "docs/devbook/17-c-backend.md:3 vs docs/devbook/19-llvm-backend.md:7-15; CLAUDE.md:29-33; src/main.rs:1089"
+          }
+        ]
+      }
+    ],
+    "summary": {
+      "total": 30,
+      "signOff": 17,
+      "reservations": 13,
+      "blocking": 2,
+      "major": 8
+    }
+  }
+}
