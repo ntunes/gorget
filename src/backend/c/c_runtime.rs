@@ -1692,28 +1692,50 @@ static inline const char* gorget_string_cstr(const GorgetString* s) {
 
 static inline GorgetString gorget_string_format(const char* fmt, ...) {
     GorgetAllocator* a = __gorget_current_alloc;
+    // Single-pass fast path: format into a stack scratch buffer, then copy
+    // exactly `len+1` bytes into one right-sized heap allocation. vsnprintf
+    // returns the length it WOULD have written, so we still learn the true
+    // length even if it didn't fit — only then do we re-format. This avoids
+    // the probe-pass vsnprintf(NULL, 0, ...) for the common short-string case
+    // (f-string keys/values), halving the formatting work.
+    char scratch[256];
     va_list args1, args2;
     va_start(args1, fmt);
     va_copy(args2, args1);
-    int len = vsnprintf(NULL, 0, fmt, args1);
+    int len = vsnprintf(scratch, sizeof(scratch), fmt, args1);
     va_end(args1);
-    if (len < 0) { fprintf(stderr, "gorget: panic: format error\n"); exit(1); }
+    if (len < 0) { va_end(args2); fprintf(stderr, "gorget: panic: format error\n"); exit(1); }
     size_t cap = (size_t)len + 1;
     char* data = (char*)a->alloc(a->ctx, cap);
-    vsnprintf(data, cap, fmt, args2);
+    if (cap <= sizeof(scratch)) {
+        // Fully formatted in scratch — just copy out (includes '\0').
+        memcpy(data, scratch, cap);
+    } else {
+        // Output was truncated; re-format directly into the right-sized buffer.
+        vsnprintf(data, cap, fmt, args2);
+    }
     va_end(args2);
     return (Str){ .data = data, .cap = cap, .len = (size_t)len, .alloc = a };
 }
 
 static inline const char* gorget_format(const char* fmt, ...) {
+    // Single-pass fast path (see gorget_string_format): format into a stack
+    // scratch buffer, then copy out into one right-sized allocation, falling
+    // back to a re-format only when the result didn't fit in scratch.
+    char scratch[256];
     va_list args1, args2;
     va_start(args1, fmt);
     va_copy(args2, args1);
-    int len = vsnprintf(NULL, 0, fmt, args1);
+    int len = vsnprintf(scratch, sizeof(scratch), fmt, args1);
     va_end(args1);
-    if (len < 0) { fprintf(stderr, "gorget: panic: format error\n"); exit(1); }
-    char* data = (char*)GORGET_ALLOC((size_t)len + 1);
-    vsnprintf(data, (size_t)len + 1, fmt, args2);
+    if (len < 0) { va_end(args2); fprintf(stderr, "gorget: panic: format error\n"); exit(1); }
+    size_t cap = (size_t)len + 1;
+    char* data = (char*)GORGET_ALLOC(cap);
+    if (cap <= sizeof(scratch)) {
+        memcpy(data, scratch, cap);
+    } else {
+        vsnprintf(data, cap, fmt, args2);
+    }
     va_end(args2);
     return data;
 }
@@ -2024,17 +2046,45 @@ static inline bool gorget_string_is_valid_utf8(const GorgetString* s) {
 }
 
 // ── Codepoint-level Str operations ──────────────────────────
-// Count codepoints — O(n) UTF-8 walk
+// Count codepoints. A UTF-8 codepoint is encoded as one lead byte
+// (top two bits != 0b10) followed by 0–3 continuation bytes
+// (top two bits == 0b10). So the codepoint count is simply the number
+// of NON-continuation bytes: count = len - (#continuation bytes).
+//
+// We count continuation bytes word-at-a-time (SWAR): a byte is a
+// continuation byte iff (b & 0xC0) == 0x80, i.e. bit7 set AND bit6 clear.
+// For a 64-bit word w: ((w >> 7) & ~(w >> 6) & 0x0101...01) marks each
+// continuation byte's low bit; popcount gives the per-word tally. This is
+// ~8× fewer iterations than the per-byte walk and removes the per-byte
+// function call, while producing the identical count for any valid or
+// invalid UTF-8 byte sequence (each leading/invalid byte is counted once).
 static inline int64_t gorget_str_codepoint_count(Str s) {
     if (s.len == 0) return 0;
-    const char* d = (const char*)s.data;
-    int64_t count = 0;
+    const unsigned char* d = (const unsigned char*)s.data;
+    size_t len = s.len;
+    size_t cont = 0; // number of continuation bytes (0b10xxxxxx)
+
     size_t i = 0;
-    while (i < s.len) {
-        i += (size_t)gorget_utf8_codepoint_len((unsigned char)d[i]);
-        count++;
+    // Align to 8 bytes so the word loads below are well-defined.
+    while (i < len && ((uintptr_t)(d + i) & 7u) != 0) {
+        if ((d[i] & 0xC0) == 0x80) cont++;
+        i++;
     }
-    return count;
+    // Word-at-a-time core.
+    while (i + 8 <= len) {
+        uint64_t w;
+        memcpy(&w, d + i, 8);
+        // Mark bytes with bit7 set and bit6 clear (continuation bytes).
+        uint64_t marks = (w >> 7) & ~(w >> 6) & 0x0101010101010101ULL;
+        cont += (size_t)__builtin_popcountll(marks);
+        i += 8;
+    }
+    // Tail.
+    while (i < len) {
+        if ((d[i] & 0xC0) == 0x80) cont++;
+        i++;
+    }
+    return (int64_t)(len - cont);
 }
 
 // Forward declarations
