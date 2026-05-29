@@ -1,0 +1,19 @@
+# Exposes the index-load-on-global-struct-vector bug (TODO 2026-05-29): `STATIC[i].field`
+# on a static `Vector[struct]` returns a ZEROED struct, while `STATIC.get(i).unwrap().field`
+# (and `[i].field` on a LOCAL vector) read correctly. Bug B (static collection population) is
+# fixed — the elements ARE materialized — this is a SEPARATE IndexLoad-on-global codegen bug.
+#
+# The expected stdout below is what the language SHOULD produce (correct element fields). The
+# integration test is #[ignore]'d until the index-load-on-global bug is fixed; flip it to active
+# then. (Per CLAUDE.md "don't redesign around compiler gaps": the wired-in expected output
+# reflects correct behavior, not the current buggy output.)
+
+struct Item:
+    String name
+    int weight
+
+public static Vector[Item] TABLE = [Item("alpha", 10), Item("beta", 20), Item("gamma", 30)]
+
+void main():
+    print(f"i0={TABLE[0].name}:{TABLE[0].weight}")
+    print(f"i2={TABLE[2].name}:{TABLE[2].weight}")
