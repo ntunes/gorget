@@ -3022,11 +3022,13 @@ String type_id_to_name(int tid, GirModule &gmod):
 # Get parameter type IDs for a function from the GIR module.
 Vector[int] get_fn_param_types(String name, GirModule &gmod):
     Vector[int] types = []
-    for gfn in gmod.functions:
-        if gfn.name == name:
-            for pt in gfn.param_types:
+    int i = 0
+    while i < gmod.functions.len():
+        if gmod.functions.get(i).unwrap().name == name:
+            for pt in gmod.functions.get(i).unwrap().param_types:
                 types.push(pt)
             return types
+        i += 1
     return types
 
 # Check if a call name is a type constructor (produces a named type).
@@ -5665,10 +5667,12 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                 ret_type = gmod.fn_sigs.get(redir).unwrap()
         # Check function definitions for return type
         if ret_type == I64_TYPE:
-            for gfn in gmod.functions:
-                if gfn.name == call_name:
-                    ret_type = gfn.return_type
+            int i = 0
+            while i < gmod.functions.len():
+                if gmod.functions.get(i).unwrap().name == call_name:
+                    ret_type = gmod.functions.get(i).unwrap().return_type
                     break
+                i += 1
         # Collection/struct constructors: return the named type
         if ret_type == I64_TYPE and is_type_constructor(call_name, &gmod):
             # If call_name is an enum variant, route to the parent enum type.
