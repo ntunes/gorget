@@ -340,9 +340,6 @@ pub struct LoweringContext<'a> {
     /// Set of equip method names that are GIR-lowered (not extern/C-runtime).
     /// Used by lower_method_call to decide whether to pass resource-type args by pointer.
     pub gir_equip_methods: rustc_hash::FxHashSet<String>,
-    /// Functions with FunctionBody::Extern — their call results are always owned.
-    /// A C function cannot return a view into Gorget-managed memory.
-    pub extern_body_fns: rustc_hash::FxHashSet<String>,
     /// Equip methods detected as trivial getters (body is `return self.field[idx]`
     /// or `return self.field`). These return Ptr(T) instead of cloning — the caller
     /// receives a CowBorrow with collection provenance.
@@ -493,7 +490,6 @@ impl<'a> LoweringContext<'a> {
             global_type_names: FxHashMap::default(),
             string_literal_view_globals: rustc_hash::FxHashSet::default(),
             gir_equip_methods: rustc_hash::FxHashSet::default(),
-            extern_body_fns: rustc_hash::FxHashSet::default(),
             trivial_getter_methods: rustc_hash::FxHashSet::default(),
             sentinel_to_option_methods: rustc_hash::FxHashSet::default(),
             implicit_clone_warnings: Vec::new(),

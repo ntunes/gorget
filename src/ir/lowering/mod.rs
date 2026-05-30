@@ -704,7 +704,6 @@ pub fn lower_module(
             // Declaration functions are C-runtime inline implementations; do not rename them.
             if let FunctionBody::Extern(c_symbol) = &func.body {
                 ctx.extern_bindings.insert(name.clone(), c_symbol.clone());
-                ctx.extern_body_fns.insert(name.clone());
                 // Derive param ABI from inline extern's language tag or explicit cstr types.
                 // extern "C" → String params become CStr (same as extern "C": blocks).
                 {
@@ -825,7 +824,6 @@ pub fn lower_module(
                 // Register extern binding: name → C symbol
                 if let FunctionBody::Extern(c_symbol) = &func.body {
                     ctx.extern_bindings.insert(name.clone(), c_symbol.clone());
-                    ctx.extern_body_fns.insert(name.clone());
                 }
 
                 // Derive ABI kinds from block's ABI string
@@ -906,7 +904,6 @@ pub fn lower_module(
         let FunctionBody::Extern(c_symbol) = &template.body else { continue; };
         // extern_bindings: mangled → C symbol (same C symbol for every mono instance).
         ctx.extern_bindings.insert(mangled_name.clone(), c_symbol.clone());
-        ctx.extern_body_fns.insert(mangled_name.clone());
         // Propagate per-function ABI metadata keyed by the base name.
         if let Some(abis) = ctx.fn_extern_abi_kinds.get(base_name).cloned() {
             ctx.fn_extern_abi_kinds.insert(mangled_name.clone(), abis);
@@ -1015,7 +1012,6 @@ pub fn lower_module(
                     // Register extern binding for equip methods (e.g., UdpSocket__local_addr → gorget_udp_local_addr)
                     if let FunctionBody::Extern(c_symbol) = &method_def.body {
                         ctx.extern_bindings.insert(mangled.clone(), c_symbol.clone());
-                        ctx.extern_body_fns.insert(mangled.clone());
 
                         // Derive param ABI from inline extern's language tag or explicit cstr types.
                         // Prepend Auto for implicit self (always position 0 in C call).
