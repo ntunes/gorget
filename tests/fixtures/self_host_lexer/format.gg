@@ -57,10 +57,6 @@ String describe_keyword_canonical(Keyword kw):
             return "kw:float64"
         case KwBool():
             return "kw:bool"
-        case KwChar():
-            return "kw:char"
-        case KwStr():
-            return "kw:str"
         case KwStringType():
             return "kw:String"
         case KwVoid():
@@ -125,14 +121,6 @@ String describe_keyword_canonical(Keyword kw):
             return "kw:true"
         case KwFalse():
             return "kw:false"
-        case KwNone():
-            return "kw:None"
-        case KwSome():
-            return "kw:Some"
-        case KwOk():
-            return "kw:Ok"
-        case KwError():
-            return "kw:Error"
         case KwThrow():
             return "kw:throw"
         case KwThrows():
@@ -179,8 +167,6 @@ String describe_keyword_canonical(Keyword kw):
             return "kw:bench"
         case KwIt():
             return "kw:it"
-        case KwPanic():
-            return "kw:panic"
         case KwAssert():
             return "kw:assert"
         case KwShared():
@@ -191,8 +177,18 @@ String describe_keyword_canonical(Keyword kw):
             return "kw:select"
         case KwRethrow():
             return "kw:rethrow"
-        case KwMod():
-            return "kw:mod"
+        case KwCatch():
+            return "kw:catch"
+        case KwSnapshot():
+            return "kw:snapshot"
+        case KwBlocking():
+            return "kw:blocking"
+        case KwUnchecked():
+            return "kw:unchecked"
+        case KwPrivate():
+            return "kw:private"
+        case KwNoreturn():
+            return "kw:noreturn"
     return "kw:unknown"
 
 String describe_string_canonical(StringLiteral slit):

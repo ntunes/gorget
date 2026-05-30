@@ -147,10 +147,6 @@ String describe_keyword(Keyword kw):
             return "kw:float"
         case KwBool():
             return "kw:bool"
-        case KwChar():
-            return "kw:char"
-        case KwStr():
-            return "kw:str"
         case KwVoid():
             return "kw:void"
         case KwAuto():
@@ -189,10 +185,6 @@ String describe_keyword(Keyword kw):
             return "kw:true"
         case KwFalse():
             return "kw:false"
-        case KwNone():
-            return "kw:None"
-        case KwSome():
-            return "kw:Some"
         case KwIn():
             return "kw:in"
         case KwMatch():

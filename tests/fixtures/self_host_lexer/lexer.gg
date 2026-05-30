@@ -18,12 +18,12 @@ enum Keyword:
     KwInt  KwInt8  KwInt16  KwInt32  KwInt64
     KwUint  KwUint8  KwUint16  KwUint32  KwUint64
     KwFloat  KwFloat32  KwFloat64
-    KwBool  KwChar  KwStr  KwStringType  KwVoid  KwAuto
+    KwBool  KwStringType  KwVoid  KwAuto
     KwConst  KwStruct  KwEnum  KwTrait  KwEquip  KwPublic  KwStatic  KwType  KwNewtype
     KwIf  KwElif  KwElse  KwFor  KwWhile  KwLoop  KwIn  KwMatch  KwCase
     KwBreak  KwContinue  KwReturn  KwDo  KwPass
     KwAnd  KwOr  KwNot  KwIs
-    KwTrue  KwFalse  KwNone  KwSome  KwOk  KwError
+    KwTrue  KwFalse
     KwThrow  KwThrows
     KwImport  KwFrom  KwDirective
     KwWith  KwAs  KwVia
@@ -32,8 +32,9 @@ enum Keyword:
     KwUnsafe  KwExtern
     KwSelfLower  KwSelfUpper
     KwMove  KwMutable
-    KwTest  KwSuite  KwBench  KwIt  KwPanic  KwAssert
-    KwShared  KwMeta  KwSelect  KwRethrow  KwMod  KwCatch  KwOn  KwSnapshot
+    KwTest  KwSuite  KwBench  KwIt  KwAssert
+    KwShared  KwMeta  KwSelect  KwRethrow  KwCatch  KwSnapshot
+    KwBlocking  KwUnchecked  KwPrivate  KwNoreturn
 
 # ── String literal types ──────────────────────────────────────
 
@@ -140,10 +141,6 @@ Option[Keyword] keyword_from_str(String s):
         return Some(KwFloat64())
     elif s == "bool":
         return Some(KwBool())
-    elif s == "char":
-        return Some(KwChar())
-    elif s == "str":
-        return Some(KwStr())
     elif s == "String":
         return Some(KwStringType())
     elif s == "void":
@@ -208,14 +205,6 @@ Option[Keyword] keyword_from_str(String s):
         return Some(KwTrue())
     elif s == "false":
         return Some(KwFalse())
-    elif s == "None":
-        return Some(KwNone())
-    elif s == "Some":
-        return Some(KwSome())
-    elif s == "Ok":
-        return Some(KwOk())
-    elif s == "Error":
-        return Some(KwError())
     elif s == "throw":
         return Some(KwThrow())
     elif s == "throws":
@@ -262,8 +251,6 @@ Option[Keyword] keyword_from_str(String s):
         return Some(KwBench())
     elif s == "it":
         return Some(KwIt())
-    elif s == "panic":
-        return Some(KwPanic())
     elif s == "assert":
         return Some(KwAssert())
     elif s == "shared":
@@ -274,14 +261,18 @@ Option[Keyword] keyword_from_str(String s):
         return Some(KwSelect())
     elif s == "rethrow":
         return Some(KwRethrow())
-    elif s == "mod":
-        return Some(KwMod())
     elif s == "catch":
         return Some(KwCatch())
-    elif s == "on":
-        return Some(KwOn())
     elif s == "snapshot":
         return Some(KwSnapshot())
+    elif s == "blocking":
+        return Some(KwBlocking())
+    elif s == "unchecked":
+        return Some(KwUnchecked())
+    elif s == "private":
+        return Some(KwPrivate())
+    elif s == "noreturn":
+        return Some(KwNoreturn())
     return None
 
 # ── Lexer methods ─────────────────────────────────────────────

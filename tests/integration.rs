@@ -1972,11 +1972,11 @@ kw:int ident:add ( kw:int ident:a , kw:int ident:b ) : NL INDENT kw:return ident
 ident:x == ident:y != ident:z <= ident:w >= ident:v NL EOF
 int:255 int:63 int:10 float:3.14 NL EOF
 ident:print ( str:hello {name} ) NL EOF
-kw:char ident:c = str:a NL EOF
+ident:char ident:c = str:a NL EOF
 comment:this is a comment ident:x = int:1 NL EOF
 ident:f ( ident:a , ident:b ) NL EOF
 ident:a += int:1 NL ident:b -= int:2 NL ident:c ..= ident:d NL EOF
-kw:if kw:true kw:and kw:not kw:false : NL INDENT kw:return kw:None NL DEDENT EOF",
+kw:if kw:true kw:and kw:not kw:false : NL INDENT kw:return ident:None NL DEDENT EOF",
     );
 }
 
