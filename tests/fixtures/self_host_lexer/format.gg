@@ -167,22 +167,6 @@ String describe_keyword_canonical(Keyword kw):
             return "kw:self"
         case KwSelfUpper():
             return "kw:Self"
-        case KwBox():
-            return "kw:Box"
-        case KwRc():
-            return "kw:Rc"
-        case KwArc():
-            return "kw:Arc"
-        case KwWeak():
-            return "kw:Weak"
-        case KwCell():
-            return "kw:Cell"
-        case KwRefCell():
-            return "kw:RefCell"
-        case KwMutex():
-            return "kw:Mutex"
-        case KwRwLock():
-            return "kw:RwLock"
         case KwMove():
             return "kw:move"
         case KwMutable():
@@ -220,6 +204,10 @@ String describe_string_canonical(StringLiteral slit):
             prefix = "mstr:"
         case SkByte():
             prefix = "bstr:"
+        case SkFormat():
+            prefix = "fstr:"
+        case SkCStr():
+            prefix = "cstr:"
         else:
             pass
     String result = prefix

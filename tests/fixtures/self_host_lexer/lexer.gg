@@ -31,7 +31,6 @@ enum Keyword:
     KwAsync  KwAwait  KwSpawn
     KwUnsafe  KwExtern
     KwSelfLower  KwSelfUpper
-    KwBox  KwRc  KwArc  KwWeak  KwCell  KwRefCell  KwMutex  KwRwLock
     KwMove  KwMutable
     KwTest  KwSuite  KwBench  KwIt  KwPanic  KwAssert
     KwShared  KwMeta  KwSelect  KwRethrow  KwMod  KwCatch  KwOn  KwSnapshot
@@ -39,7 +38,7 @@ enum Keyword:
 # ── String literal types ──────────────────────────────────────
 
 enum StringKind:
-    SkNormal  SkRaw  SkMultiLine  SkByte
+    SkNormal  SkRaw  SkMultiLine  SkByte  SkFormat  SkCStr
 
 enum StringSegment:
     SegLiteral(String)
@@ -251,22 +250,6 @@ Option[Keyword] keyword_from_str(String s):
         return Some(KwSelfLower())
     elif s == "Self":
         return Some(KwSelfUpper())
-    elif s == "Box":
-        return Some(KwBox())
-    elif s == "Rc":
-        return Some(KwRc())
-    elif s == "Arc":
-        return Some(KwArc())
-    elif s == "Weak":
-        return Some(KwWeak())
-    elif s == "Cell":
-        return Some(KwCell())
-    elif s == "RefCell":
-        return Some(KwRefCell())
-    elif s == "Mutex":
-        return Some(KwMutex())
-    elif s == "RwLock":
-        return Some(KwRwLock())
     elif s == "move":
         return Some(KwMove())
     elif s == "mutable":
@@ -545,6 +528,7 @@ equip Lexer:
         bool is_raw = false
         bool is_byte = false
         bool is_format = false
+        bool is_cstr = false
         if self.lex_peek() == b'r':
             is_raw = true
             self.lex_advance()
@@ -555,6 +539,7 @@ equip Lexer:
             is_format = true
             self.lex_advance()
         elif self.lex_peek() == b'c':
+            is_cstr = true
             self.lex_advance()
 
         # Capture and skip opening quote (may be " or ')
@@ -657,6 +642,10 @@ equip Lexer:
             final_kind = SkRaw()
         elif is_byte:
             final_kind = SkByte()
+        elif is_cstr:
+            final_kind = SkCStr()
+        elif is_format:
+            final_kind = SkFormat()
         elif triple:
             final_kind = SkMultiLine()
         auto slit = StringLiteral(final_kind, segments)
