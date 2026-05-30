@@ -1,11 +1,325 @@
 # Working on the compiler: a contributor's playbook
 
-> **Status: STUB** — deepened after reference coverage is complete (per [the plan](../plans/devbook_plan.md), reference-first).
+*Verified against commit `7d3350a0` (branch `worktree-agent-a3fe15a62bbab46c4`).*
 
-This chapter will turn the project's hard-won working rules into narrative with worked examples. It draws on `CLAUDE.md` and the internals docs, but as *story*, not rules-list. Planned material:
+The rest of this book tells you how the compiler *is* built. This chapter tells
+you how to *work on it without breaking it* — the hard-won rules in
+`CLAUDE.md`/`AGENTS.md`, turned from a rules-list into the reasoning behind
+them, with worked examples from real bugs in this tree. If you read one chapter
+before touching the compiler, read this one and [Chapter 24
+(layering discipline)](24-layering-discipline.md) together: 24 states the law,
+this chapter is the how-to.
 
-- **The debugging heuristic: fix-complexity is a signal of the wrong layer.** When a fix needs save/restore around branches, phi insertion, or manual SSA repair, you're patching a symptom — trace the data to its *write* site. Worked examples: Snag #17 (`self_conv` flag ignored) and Snag #13 (`Box[T]` inner-type not exposed to the C backend).
-- **Don't redesign around compiler gaps.** Fix the gap, or write a failing fixture + a sharp TODO — never reshape tests/fixtures/self-host to dodge it.
-- **Self-host as the elegance showcase.** Defensive code with a stale justification is debt; retire workarounds when their bug is fixed.
-- **Re-verify a premise against current source before acting.** Dated scores, diagnoses, and TODO notes go stale.
-- **Layering discipline in practice** — see [Chapter 24](24-layering-discipline.md); this section is the how-to companion.
+The single most useful instinct to internalize is this:
+
+> **When the fix you are sketching is intrinsically complex, you are almost
+> certainly fixing the wrong layer.**
+
+Everything below is a corollary of that.
+
+---
+
+## The debugging heuristic: fix-complexity is a signal of the wrong layer
+
+You have localized a bug. The fix you are about to write needs to save and
+restore state around branches, insert a phi at a merge, thread a
+scope-tracking name map, or repair SSA by hand. **Stop.** In a well-layered
+compiler, real bugs are almost never multi-case rules at a *read* site — they
+are one-line oversights at a *write* site one layer up (`AGENTS.md` →
+"Debugging heuristic"). The complexity you are feeling is the symptom resisting
+you, not the disease.
+
+The procedure (`AGENTS.md:154-161`):
+
+1. **Trace the data the buggy site reads. Where was it last written?**
+2. **Look at the writer. Did it respect every typed fact available to it?** Or
+   did it default, hardcode, or collapse cases that an upstream pass had already
+   distinguished?
+3. **Writer was lossy → fix it at the source.** The "complex fix" you were
+   sketching at the read site evaporates — the bad input never arrives.
+4. **Writer was faithful → trace one more layer up.** Repeat.
+
+The counterintuitive part is step 4's emotional content: *every layer hop that
+doesn't find the bug should make you more suspicious of your diagnosis, not
+less.* If you are three layers deep and still want to write a save/restore
+patch, the diagnosis is wrong, not the architecture. Two real snags from this
+tree show the pattern end to end.
+
+### Worked example — Snag #17: a chained `substring` corrupting a later `parse_float`
+
+**The symptom.** A program that did `text.substring(a, b)` and *later*
+`parse_float(text)` got a corrupted `text` at the `parse_float`. It looked like
+a control-flow problem: a string view rebound across a CF merge.
+
+**The tempting fix.** The obvious suspect was `cow_materialize_alias` — the
+machinery that materializes a string view when its source is mutated (see
+[Chapter 11](11-copy-on-write.md)). Sketching a fix there meant tracking the
+view's rebinding across the control-flow merge between the two statements: 50+
+lines of save/restore-around-branches. That is precisely the "intrinsically
+complex" smell.
+
+**The real bug, one layer up.** `substring` is a builtin method, declared once
+in the protocol table as a `BuiltinMethodDecl`:
+
+```rust
+BuiltinMethodDecl { name: "substring", runtime_callee: Some("gorget_str_slice"),
+    self_conv: SelfConvention::Borrow, …, returns_view: true, … }
+```
+
+(`src/ir/lowering/builtins.rs:694`). It *borrows* `self` (`self_conv:
+Borrow`) and returns a *view* (`returns_view: true`). The return-type resolver,
+`resolve_builtin_method_return_type` (`src/ir/lowering/context.rs:658`), read
+the declaration to type the result — but ignored the `self_conv` flag, so it
+modeled the call as if it *consumed/mutated* `text`, triggering a bogus
+materialization of `text`'s buffer. The materialization is what corrupted the
+later `parse_float(text)`. The rebind across the CF merge was downstream
+*fallout*, not the cause.
+
+**The fix.** Five lines at the *writer* — teach the return-type resolver to
+honor `self_conv` (a `Borrow`/`MutBorrow` self is received by pointer and not
+consumed; the field that records this is `self_by_ptr`, set from `self_conv` at
+`context.rs:647`). With the writer corrected, the bogus materialization never
+fires, and the 50-line "rebind across merges" fix is **never-taken code** — it
+was patching a symptom of a value that should never have been materialized
+(`AGENTS.md:164`).
+
+The lesson is the heuristic verbatim: the read site (`cow_materialize_alias`)
+*looked* buggy because it was being handed input it should never have received.
+The fix was at the writer (`resolve_builtin_method_return_type`), which had
+dropped a typed fact (`self_conv`) that was sitting right there on the
+declaration.
+
+### Worked example — Snag #13: a Box-recursive enum linking to an undefined allocator
+
+**The symptom.** A `Box[T]`-recursive enum (e.g. `Expr → Box[SpannedExpr] →
+SpannedExpr → Expr`) compiled to C that referenced `__gorget_box_alloc_<inner>`
+and a per-type `Box__<inner>__drop` wrapper that were *never defined* — a link
+error.
+
+**The tempting fix.** Make the emitter that generates those helpers scan the
+recursive-drop tables for `Box__X__drop` entries and synthesize the missing
+allocators. That is **name-matching** — pattern-matching on a runtime-symbol
+string to recover a semantic fact — which is exactly what `CLAUDE.md` → "No
+name matching" forbids, and exactly the smell the layering-discipline litmus
+flags ([Chapter 24](24-layering-discipline.md)).
+
+**The real bug, one layer up.** The `StructDef` for a regular `Box[T]` is
+registered during LIR lowering, and at registration time the inner type `T` is
+*known* — but the LIR `StructDef` had no field to carry it, so the inner type
+was *lost at the layer boundary*. The C backend, needing to emit
+`__gorget_box_alloc_<inner>`, had no typed source for `<inner>` and was reduced
+to fishing it out of names.
+
+**The fix.** Add a typed field — `box_inner_type: Option<String>` on the LIR
+`StructDef` (`src/lir/mod.rs:1541`) — **set once at the writer**, the Box
+registration site:
+
+```rust
+box_inner_type: Some(inner_name.to_string()), …
+```
+
+(`src/lir/lower/mod.rs:940`), and **read at the consumer**, the C box-helper
+emitter:
+
+```rust
+for sd in &module.structs {
+    if let Some(inner) = &sd.box_inner_type { … box_inners.push(inner.clone()); }
+}
+```
+
+(`src/backend/c_lir/emit_types.rs:1403-1408`). The inner type now crosses the
+GIR→LIR→backend boundary as a typed field instead of being reconstructed from a
+`Box__`-prefixed name. This is "resolve once, write through"
+([Chapter 24](24-layering-discipline.md), rule 4) applied at the runtime-symbol
+boundary.
+
+And then the fix is *locked*: a dedicated LIR invariant
+`validate_box_inner_type` (`src/lir/validate.rs:788`) asserts that *every*
+regular Box `StructDef` carries the metadata, and its inverse
+`validate_box_inner_type_consistency` (`:855`) asserts no *non*-Box struct
+carries stray Box metadata. The validators run after each LIR pass, so a future
+registrar that forgets to set the field fails loudly at compile time rather than
+producing a silent link error — see [Chapter 25 (structural guards)](25-structural-guards.md)
+§1d. (The validator's own doc comment cites snag #13's commit, `c7a652f0`.)
+
+### What the two snags have in common
+
+Both bugs *looked* like they lived at the read site (a materialization rebind; a
+helper emitter). Both were really a **typed fact dropped at the write site one
+layer up** (`self_conv` ignored; `box_inner_type` not carried). Both
+"obvious" fixes were the forbidden shape — complex save/restore for #17,
+name-matching for #13 — and both evaporated once the writer was corrected. When
+your fix is ugly, the ugliness is the diagnosis.
+
+---
+
+## Don't redesign around compiler gaps
+
+Sometimes the bug is real and you *can't* fix it right now. The rule
+(`AGENTS.md` → "Don't redesign around compiler gaps") allows exactly two
+responses, and forbids a tempting third:
+
+1. **Fix the gap.** The default — most gaps are a missing default-move or a
+   dropped typed fact, i.e. the writer-fix above.
+2. **Write a failing fixture that exposes the gap, plus a sharp `TODO.md`
+   entry citing it.** Wire it `#[ignore]` if leaving it red would block other
+   work — *but the fixture's expected output must encode what the language
+   should do, not what it currently does.*
+
+**Forbidden:** reshaping the surrounding code — tests, fixtures, examples, even
+production code — to *avoid* the gap. Even a commented workaround does harm,
+because the wired-in expected output (or the surviving workaround idiom) becomes
+the load-bearing artifact, and a "passing" test then locks buggy behavior in as
+canonical (`AGENTS.md:174,183`).
+
+This tree has been burned by exactly this. The `Dict.len()` workaround
+(`scores.keys().len()`) outlived the bug it dodged by ~8 weeks, documented only
+in a fixture comment, so the redesign quietly became the recommended idiom. A
+`!`-param drop-at-exit leak got hidden for a day because a canonical fixture was
+rewritten to use locals instead of `!` params — and when the bug was finally
+fixed, three masked-leak tests needed their expected output updated
+(`AGENTS.md:177-178`).
+
+**The litmus test** (`AGENTS.md:181`): if a fixture uses a more complex shape
+than seems necessary, or a comment cites a bug as the reason for a workaround,
+*ask why* — and **re-verify the bug still exists** before treating the
+workaround as canonical. Which is the next rule.
+
+---
+
+## Self-host as the elegance showcase — and retiring fossils
+
+The self-host frontend (`tests/fixtures/self_host_*`,
+[Chapter 26](26-self-host-frontend.md)) is not just a stress test and a
+regression net; it is the language's **reference-grade demonstration**. It must
+read like the user manual — idiomatic Gorget, the way the language looks when
+it's *working* — not the way it had to be written to dodge a compiler bug six
+months ago (`AGENTS.md` → "Self-host as the elegance showcase").
+
+Defensive code with a stale justification is **technical debt with a false
+historical record.** The bug gets fixed; the workaround stays; the comment
+explaining "why the parallel vector / extra clone / wrapper function" now lies
+about the present. New contributors read the workaround as canonical style,
+copy it, and the rot spreads. This tree has carried real fossils: a
+`StructRegistry` with parallel `Vector[String]` + `Vector[int]` and an O(n)
+scan, kept "because callers iterate in insertion order" long after the
+Dict-ordering bug it dodged was fixed; a `type_info_keys_safe` wrapper whose
+*entire purpose* was to dodge a state-loss bug that no longer exists
+(`AGENTS.md:191-194`).
+
+The operating rules:
+
+1. **No defensive code without a live, cited bug.** Find a "parallel because…"
+   or "wrapper to avoid…" comment? Verify the bug still exists. If it doesn't,
+   delete the workaround and write the idiomatic shape.
+2. **Self-host reads like `docs/book/`.** If you wouldn't recommend the pattern
+   there, don't write it in the self-host.
+3. **A fix is incomplete until its dodge is retired.** When you fix a gap,
+   `grep` for the workaround across *all* self-host directories before declaring
+   the fix shipped. (Note the self-host dirs share files by symlink — e.g.
+   `self_host_lowerer`'s `parser.gg`/`ast.gg` are symlinks into
+   `self_host_typechecker` — so a single edit can land in several drivers, and a
+   non-symlinked copy in another driver can silently diverge. `md5sum` to check.)
+
+This rule is the mirror image of "don't redesign around gaps": that one is about
+not *creating* new dodges; this one is about *retiring old ones*.
+
+---
+
+## Re-verify a premise against current source before acting
+
+Diagnoses, plans, dated comparison scores, and `TODO.md`/`MEMORY.md` notes go
+**stale the moment they are written** (`AGENTS.md:129`). Before you act on a
+load-bearing fact, confirm it still holds against *current* source and tests —
+re-run the `*_comparison` test for a score, re-read the cited source for a
+claimed "bug," check the actual code shape rather than a remembered one.
+
+This tree has repeatedly burned cycles on stale premises: a "resolver at 57%"
+that was actually 96% by the time someone acted on it; an "unshipped f-string
+port" that had already shipped; a "live function-type bug" already fixed; a
+"cleanup target" whose fossils were already retired (`AGENTS.md:129`). Do not
+trust a dated figure or an agent's unverified conclusion — cross-check first.
+The book itself lives by this rule: every chapter's `file:line`s are re-derived
+at authoring time and stamped "verified against `<commit>`"
+([Chapter 0](00-how-to-read.md)), precisely because a transcribed figure is
+presumed stale.
+
+A corollary specific to *this* book and the self-host: **the comparison scores
+are not facts you can quote.** The next section is why.
+
+---
+
+## The gates: comparison tests and the fixed-point loop
+
+Two families of test guard correctness as you work; both are easy to misread.
+
+### `*_comparison` is diagnostic-only — green says nothing
+
+The self-host parity tests — `lexer_comparison`, `parser_comparison`,
+`resolver_comparison`, `type_comparison`, `check_comparison`,
+`lowerer_comparison`, `c_emit_comparison` — are **diagnostic-always-pass**. Each
+ends with a `// Diagnostic test — always passes` comment and has *no `assert!`
+on the matched count*; the only assertions are setup invariants like "fixtures
+dir is non-empty" ([Chapter 27](27-comparison-bootstrap.md)). **A green
+`cargo test` therefore tells you nothing about parity.** The signal is the
+matched/mismatched count printed to stderr, and you only see it with
+`--nocapture`:
+
+```bash
+cargo test --test integration <name>_comparison -- --nocapture 2>&1 | tee /tmp/cmp-$RANDOM.log
+# then read the "=== <Name> Comparison Results ===" block
+```
+
+This is *by design*: the parity gap is the work, not a regression — turning it
+red would make every routine `cargo test` fail and the suite useless as a signal
+for everything else ([Chapter 27](27-comparison-bootstrap.md)). The practical
+consequence for you: **never quote a parity figure from memory or a dated doc;
+re-run and read the printed count.** (This is the previous section's
+re-verify-a-premise rule, made concrete for the one number most often quoted
+stale.)
+
+### `self_host_bootstrap_fixed_point` is a milestone, not the finish line
+
+The bootstrap fixed-point test proves the self-host can recompile *itself* to a
+fixed point — stage-2 == stage-3 == stage-4, byte-identical
+([Chapter 27](27-comparison-bootstrap.md)). When it is green, the self-host is a
+*usable* compiler that reproduces itself. That is a closed loop and a real
+milestone — but it is **not** parity with Rust. The north star is the
+*comparison* counts climbing toward 100% (the self-host compiling every fixture
+*the same way* Rust does), not a green fixed-point or a green suite
+(`MEMORY.md` → "NORTH STAR"; [Chapter 27](27-comparison-bootstrap.md)). Do not
+treat a green gate as the stopping condition.
+
+### The layering ratchet
+
+One more gate runs at lint time and enforces the "no name matching" rule
+mechanically: `no_growth_in_name_prefix_routing` (`tests/lints.rs:166`) counts
+the `starts_with("X__")`-style name-prefix routing sites in the compiler tree
+and fails if the count *grows* (`count_name_prefix_sites`, `:47`). It is a
+one-way ratchet: you can remove name-matching (by adding a typed field, as
+Snag #13 did) but you cannot add it. If your change trips this lint, you have
+introduced exactly the smell this chapter is about — go add the typed field
+instead.
+
+---
+
+## The playbook in one paragraph
+
+When a fix feels complex, you are at the wrong layer: trace the buggy read to
+its write site and fix the dropped typed fact there (Snags #13 and #17). When
+you hit a gap you can't fix now, expose it with a fixture + `TODO.md` entry —
+never reshape code to dodge it. Keep the self-host idiomatic and retire
+workarounds the moment their bug is fixed. Re-verify every dated premise against
+current source before acting — *especially* parity scores, which the
+diagnostic-only comparison tests will happily report green while wildly
+mismatched. The gates (`*_comparison`, `bootstrap_fixed_point`, the name-prefix
+ratchet) catch regressions, but only the comparison *counts* — read with
+`--nocapture` — measure progress toward the actual finish line, which is parity
+with Rust, not a green suite.
+
+---
+
+*Playbook chapter. Verified against `7d3350a0`. The rules originate in
+`AGENTS.md`/`CLAUDE.md`; the `file:line`s cite the source the worked examples
+fixed (or the gates that enforce them) and are re-derived per the freshness rule
+([Chapter 0](00-how-to-read.md)).*
