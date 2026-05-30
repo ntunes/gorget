@@ -6,7 +6,7 @@
 # resolve shadowing — the most-recent define for a given (scope, name)
 # wins.
 
-from std.collections import Vector
+from std.collections import Vector, Dict
 from ast import Span
 from ids import NO_DEF, NO_SCOPE
 
@@ -65,6 +65,16 @@ struct ScopeTable:
     Vector[String] name_keys
     Vector[int] name_def_ids
     int current
+    # PERF index (A): name → the list of name-table entry indices for
+    # that name (in INSERTION order). `find_name_entry` scans this small
+    # per-name list instead of the whole flat name table. Maintained at
+    # the single `name_keys.push` site in `define_with_mutability`.
+    Dict[String, Vector[int]] name_index
+    # PERF index (B): scope id → its DIRECT child scope ids. Lets the
+    # `lookup_in_subtree*` walks visit only descendants instead of every
+    # scope. `children.len()` is kept == `scopes.len()`; grown in BOTH
+    # `init` (root scope) and `push_scope`.
+    Vector[Vector[int]] children
 
 # ── Typed accessors ────
 
@@ -98,18 +108,35 @@ equip ScopeTable:
         Vector[int](),
         Vector[String](),
         Vector[int](),
-        NO_SCOPE
+        NO_SCOPE,
+        Dict[String, Vector[int]](),
+        Vector[Vector[int]]()
     )
 
     void init(&self):
         Scope root = Scope(NO_SCOPE, SkModule())
         self.scopes.push(root)
+        # PERF index (B): keep `children.len() == scopes.len()`. The root
+        # scope is created HERE (not via push_scope), so it needs its own
+        # empty child-list slot or every later index is off-by-one. Its
+        # parent is NO_SCOPE (-1) — no parent list to append to.
+        Vector[int] root_children = []
+        self.children.push(!root_children)
         self.current = 0
 
     int push_scope(&self, ScopeKind kind):
         int id = self.scopes.len()
-        Scope s = Scope(self.current, kind)
+        int parent = self.current
+        Scope s = Scope(parent, kind)
         self.scopes.push(s)
+        # PERF index (B): give the new scope its own empty child-list slot
+        # (keeps `children.len() == scopes.len()`), then register it as a
+        # direct child of its parent. Append to the parent list only when
+        # `parent >= 0` (the root's parent is NO_SCOPE == -1).
+        Vector[int] new_children = []
+        self.children.push(!new_children)
+        if parent >= 0:
+            self.children.get(parent).unwrap().push(id)
         self.current = id
         return id
 
@@ -133,9 +160,20 @@ equip ScopeTable:
         int def_id = self.definitions.len()
         DefInfo info = DefInfo(name.clone(), kind, span, self.current, NO_DEF, is_mutable, false)
         self.definitions.push(info)
+        # PERF index (A): the new entry lands at index `i` in the parallel
+        # name table. Capture `i` and the key BEFORE the `name_keys.push`
+        # consumes `name`, then append `i` to the per-name index list (in
+        # insertion order — preserves shadowing resolution).
+        int i = self.name_keys.len()
+        String key = name.clone()
         self.name_scope_ids.push(self.current)
         self.name_keys.push(name)
         self.name_def_ids.push(def_id)
+        if self.name_index.contains(key):
+            self.name_index.get(key).unwrap().push(i)
+        else:
+            Vector[int] v = [i]
+            self.name_index.put(key, !v)
         return Some(def_id)
 
     # Try to replace or fail for duplicate definition (extracted for borrow checker)
@@ -174,14 +212,25 @@ equip ScopeTable:
         self.definitions.push(info)
         return def_id
 
-    # Find name entry index in flat table (returns None if not found)
+    # Find name entry index in flat table (returns None if not found).
+    #
+    # PERF index (A): instead of scanning the WHOLE flat name table
+    # backwards, look up the small per-name index list and scan only
+    # THAT backwards. The list is already filtered to `name_keys[i] ==
+    # name` by construction (entries are appended in insertion order),
+    # so scanning it backward and returning the first entry whose
+    # `name_scope_ids[i] == scope_id` yields the SAME winner the old
+    # full backward scan did: the highest matching index (most-recent
+    # define wins → correct shadowing). Absent name → None, as before.
     Option[int] find_name_entry(self, int scope_id, String name):
-        int i = self.name_scope_ids.len() - 1
-        while i >= 0:
-            if self.name_scope_ids.get(i).unwrap() == scope_id:
-                if self.name_keys.get(i).unwrap() == name:
+        if self.name_index.contains(name):
+            Vector[int] idxs = self.name_index.get(name).unwrap()
+            int j = idxs.len() - 1
+            while j >= 0:
+                int i = idxs.get(j).unwrap()
+                if self.name_scope_ids.get(i).unwrap() == scope_id:
                     return Some(i)
-            i = i - 1
+                j = j - 1
         return None()
 
     Option[int] lookup(self, String name):
@@ -207,62 +256,90 @@ equip ScopeTable:
             return Some(self.name_def_ids.get(ni).unwrap())
         return None()
 
+    # Collect the transitive descendant scope ids of `root_scope` via the
+    # `children` adjacency index (PERF index B). Each scope appears once
+    # (the scope graph is a tree), so the worklist terminates. The set is
+    # NOT id-sorted; callers that need ascending-id order track the
+    # minimum matching id explicitly.
+    Vector[int] collect_descendants(self, int root_scope):
+        Vector[int] desc = []
+        if root_scope < 0 or root_scope >= self.children.len():
+            return desc
+        Vector[int] root_kids = self.children.get(root_scope).unwrap()
+        for k in root_kids:
+            desc.push(k)
+        int wi = 0
+        while wi < desc.len():
+            int cur = desc.get(wi).unwrap()
+            Vector[int] kids = self.children.get(cur).unwrap()
+            for k in kids:
+                desc.push(k)
+            wi = wi + 1
+        return desc
+
     # Search scope and all descendant scopes for a name.
     # Returns the first matching def_id or None.
+    #
+    # PERF index (B): visit only the transitive descendants of
+    # `root_scope` (via `children`) instead of EVERY scope. The original
+    # checked the root first, then scanned scope ids ASCENDING from
+    # `root_scope+1`, returning the first descendant with a match — i.e.
+    # the match at the SMALLEST descendant id. We reproduce that exactly:
+    # check the root first, then over the collected descendant set pick
+    # the matching scope with the minimum id (provably identical winner).
     Option[int] lookup_in_subtree(self, int root_scope, String name):
         # Check root scope first
         if self.find_name_entry(root_scope, name) is Some(ni):
             return Some(self.name_def_ids.get(ni).unwrap())
-        # Check all child scopes (any scope whose parent chain includes root_scope)
-        int sid = root_scope + 1
-        while sid < self.scopes.len():
-            # Walk parent chain to see if this scope descends from root_scope
-            bool is_child = false
-            int p = sid
-            while p >= 0:
-                Scope ps = get_scope_at(self.scopes, p)
-                if ps.parent == root_scope:
-                    is_child = true
-                    p = -1
-                elif ps.parent < root_scope:
-                    p = -1
-                else:
-                    p = ps.parent
-            if is_child:
+        Vector[int] desc = self.collect_descendants(root_scope)
+        int best_sid = -1
+        int best_def = NO_DEF
+        int di = 0
+        while di < desc.len():
+            int sid = desc.get(di).unwrap()
+            if best_sid < 0 or sid < best_sid:
                 if self.find_name_entry(sid, name) is Some(cni):
-                    return Some(self.name_def_ids.get(cni).unwrap())
-            sid = sid + 1
+                    best_sid = sid
+                    best_def = self.name_def_ids.get(cni).unwrap()
+            di = di + 1
+        if best_sid >= 0:
+            return Some(best_def)
         return None()
 
-    # Like lookup_in_subtree, but skips defs that already have a type assigned.
-    # Used by assign_pattern_types to find the correct def when the same name
+    # Like lookup_in_subtree, but skips defs that already have a type
+    # assigned (only returns a def whose `type_id < 0`). Used by
+    # assign_pattern_types to find the correct def when the same name
     # appears in multiple match arm scopes.
+    #
+    # PERF index (B): same descendant-only walk as lookup_in_subtree.
+    # CRITICAL — the original does NOT short-circuit on a root match
+    # whose `type_id >= 0`: it falls through to the descendants. We
+    # preserve that (the root `return` is gated on `type_id < 0`). At
+    # every descendant the `type_id < 0` filter applies identically, and
+    # we return the qualifying match at the SMALLEST descendant id —
+    # exactly what the original ascending scan returned.
     Option[int] lookup_in_subtree_untyped(self, int root_scope, String name):
         if self.find_name_entry(root_scope, name) is Some(ni):
             int did = self.name_def_ids.get(ni).unwrap()
             DefInfo d = get_def_at(self.definitions, did)
             if d.type_id < 0:
                 return Some(did)
-        int sid = root_scope + 1
-        while sid < self.scopes.len():
-            bool is_child = false
-            int p = sid
-            while p >= 0:
-                Scope ps = get_scope_at(self.scopes, p)
-                if ps.parent == root_scope:
-                    is_child = true
-                    p = -1
-                elif ps.parent < root_scope:
-                    p = -1
-                else:
-                    p = ps.parent
-            if is_child:
+        Vector[int] desc = self.collect_descendants(root_scope)
+        int best_sid = -1
+        int best_def = NO_DEF
+        int di = 0
+        while di < desc.len():
+            int sid = desc.get(di).unwrap()
+            if best_sid < 0 or sid < best_sid:
                 if self.find_name_entry(sid, name) is Some(cni):
                     int cdid = self.name_def_ids.get(cni).unwrap()
                     DefInfo cd = get_def_at(self.definitions, cdid)
                     if cd.type_id < 0:
-                        return Some(cdid)
-            sid = sid + 1
+                        best_sid = sid
+                        best_def = cdid
+            di = di + 1
+        if best_sid >= 0:
+            return Some(best_def)
         return None()
 
     DefInfo get_def(self, int id):
