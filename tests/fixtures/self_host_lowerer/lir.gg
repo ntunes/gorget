@@ -281,14 +281,24 @@ struct LirStructDef:
 const int GINIT_ZEROED = 0
 const int GINIT_FUNC_ADDR = 1
 const int GINIT_RUNTIME_CALL = 2
+# ADD AT END (do NOT renumber 0/1/2 — MEMORY: mid-enum insert shifts
+# ordinals → regressions). Struct-of-FuncAddr init (vtable). Mirrors
+# `LirGlobalInit::Struct { struct_id, fields }` (`src/lir/mod.rs:1594-1598`).
+const int GINIT_STRUCT = 3
+
+# One field of a GINIT_STRUCT global init. For vtables: a FuncAddr by fid.
+struct LirGlobalField:
+    int kind          # reuse GINIT_FUNC_ADDR for fn-ptr fields (GINIT_ZEROED → NULL)
+    int func_id       # for GINIT_FUNC_ADDR; -1 for zeroed
 
 struct LirGlobal:
     String name
     int ty                      # LirType
-    int init_kind               # GINIT_* constant
+    int init_kind               # GINIT_* constant (now incl. GINIT_STRUCT)
     int init_func_id            # for GINIT_FUNC_ADDR
     String init_expr            # for GINIT_RUNTIME_CALL
     bool is_const
+    Vector[LirGlobalField] struct_fields   # for GINIT_STRUCT (NEW, at end)
 
 # ── Externs ─────────────────────────────────────────────────────
 

@@ -3606,7 +3606,7 @@ LirModule lower_gir_to_lir(GirModule &gmod):
     for sg_name in static_names:
         GirStaticInfo sg_info = gmod.statics.get(sg_name).unwrap()
         int sg_lir_ty = map_gir_type(sg_info.type_id, &gmod, &sr)
-        LirGlobal sg = LirGlobal(sg_name.clone(), sg_lir_ty, GINIT_RUNTIME_CALL, -1, sg_info.init_expr.clone(), false)
+        LirGlobal sg = LirGlobal(sg_name.clone(), sg_lir_ty, GINIT_RUNTIME_CALL, -1, sg_info.init_expr.clone(), false, [])
         lir_mod_add_global(&m, sg)
 
     # Build function index: name → FuncId

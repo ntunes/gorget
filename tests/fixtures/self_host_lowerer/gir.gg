@@ -276,6 +276,34 @@ struct GirStaticInfo:
     String init_expr  # C expression — currently always `gorget_<sym>()`
     int type_id       # GIR type id of the declared type
 
+# ── Globals (vtables) ────────────────────────────────────────────
+# Typed model of a module-level global with a const initializer,
+# mirroring Rust's `ir::Global` / `ir::GlobalInit` (`src/ir/mod.rs:713-741`).
+# Used for trait-impl `_VTable` globals (a struct of FuncAddr slots). The
+# separate `statics` channel above models runtime-call-init statics, so this
+# model is kept minimal — only the variants needed for vtables.
+
+# Global initializer kind tags. ADD-AT-END discipline (MEMORY: inserting
+# mid-enum shifts ordinals → regressions). These are int consts, not an
+# enum, matching the LIR GINIT_* style in lir.gg:281.
+const int GGINIT_ZEROED = 0
+const int GGINIT_FN_REF = 1   # scalar &fn (by name)
+const int GGINIT_STRUCT = 2   # struct-of-inits (vtable)
+
+# One field of a struct global init. For vtables every field is
+# GGINIT_FN_REF, so a flat representation suffices: a kind + the mangled
+# impl fn name (for FN_REF). Nested structs are not needed for vtables.
+struct GirGlobalField:
+    int kind          # GGINIT_* (only GGINIT_FN_REF used for vtables)
+    String fn_name    # for GGINIT_FN_REF: the mangled impl fn name
+
+struct GirGlobal:
+    String name           # e.g. "Serializer_for_JsonSerializer_vtable"
+    int type_id           # GIR type id of the _VTable struct (GtNamed)
+    int init_kind         # GGINIT_STRUCT for vtables
+    Vector[GirGlobalField] fields   # struct-init fields (ordered slots)
+    bool is_const
+
 struct GirModule:
     Vector[GirFunction] functions
     Vector[GirExtern] externs
@@ -361,6 +389,13 @@ struct GirModule:
     # `named_types`, so the SAME id appears at registration and every
     # read site.
     Dict[int, int] option_ref_payload
+    # Module-level globals with a const initializer — trait-impl `_VTable`
+    # globals (a struct of FuncAddr slots). Mirrors Rust gg's
+    # `module.globals: Vec<Global>` (`src/ir/mod.rs:713-741`), built by
+    # `emit_vtable_globals` (`src/ir/lowering/traits.rs:985`). Appended AT
+    # END to avoid shifting positional constructor call sites. Empty until
+    # the vtable-emission pass populates it (latent in Phase 1).
+    Vector[GirGlobal] globals
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -375,6 +410,13 @@ int static_lookup_type(GirModule &gmod, String name):
 
 void static_put(GirModule &gmod, String name, String init_expr, int type_id):
     gmod.statics.put(name.clone(), GirStaticInfo(init_expr.clone(), type_id))
+
+# Append a const-init global (vtable) to the module; returns its index.
+# Mirrors Rust gg pushing onto `module.globals` in `emit_vtable_globals`.
+int gir_mod_add_global(GirModule &gmod, GirGlobal g):
+    int id = gmod.globals.len()
+    gmod.globals.push(g)
+    return id
 
 # Scan registered enums to find one that declares a given variant.
 # Mirrors Rust's `resolve_enum_variant` fallback used by the pattern

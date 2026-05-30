@@ -37,7 +37,8 @@ from lir import LT_F32, LT_F64, LT_BOOL, LT_PTR, LT_VOID
 from lir import LT_PTR_TO_BASE, LT_STRUCT_BASE
 from lir import OVF_TRAP, OVF_WRAP
 from lir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
-from lir import GINIT_ZEROED, GINIT_FUNC_ADDR, GINIT_RUNTIME_CALL
+from lir import GINIT_ZEROED, GINIT_FUNC_ADDR, GINIT_RUNTIME_CALL, GINIT_STRUCT
+from lir import LirGlobalField
 
 # ── Identifier formatting ────────────────────────────────────────
 # These mirror the Display impls on the Rust newtypes.
@@ -396,6 +397,19 @@ String format_lir_global(int index, LirGlobal g):
             return f"{result} = fn.{g.init_func_id}"
         case GINIT_RUNTIME_CALL:
             return f"{result} = extern {g.init_expr}"
+        case GINIT_STRUCT:
+            String slots = ""
+            int si = 0
+            while si < g.struct_fields.len():
+                if si > 0:
+                    slots = f"{slots}, "
+                LirGlobalField sf = g.struct_fields.get(si).unwrap()
+                if sf.kind == GINIT_FUNC_ADDR:
+                    slots = f"{slots}fn.{sf.func_id}"
+                else:
+                    slots = f"{slots}zeroed"
+                si += 1
+            return f"{result} = struct {{{slots}}}"
         else:
             return result
 
