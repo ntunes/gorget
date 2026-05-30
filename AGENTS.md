@@ -116,7 +116,7 @@ use-after-free. The decision is mechanical, not heuristic.
 
 **This is the compiler contract — not a suggestion.** Post-call
 zeroing (when emitted) is correct only for the move-eligible shapes.
-See [`docs/devbook/11-copy-on-write.md`](docs/devbook/11-copy-on-write.md#materialization-points--the-six-vs-seven-finding)
+See [`docs/devbook/11-copy-on-write.md`](docs/devbook/11-copy-on-write.md#materialization-points--the-enforced-boundary-set)
 for the full specification.
 
 ## Solution Quality

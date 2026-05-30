@@ -372,7 +372,7 @@ Type: `Option[T]` for some inferred `T`.
 | `cstr`    | pointer | Null-terminated C string pointer |
 | `void`    | 0       | No value (unit type)            |
 
-All primitive numeric types and `bool` are **Copy** types — they are implicitly copied on assignment and do not require `!` to transfer. `String` values are automatically classified by the compiler's provenance inference pass: string literals and function parameters are lightweight views (Copy), while concatenation and f-strings produce owned values (Move). `byte` is a convenience alias for `uint8`. `cstr` is a raw C string pointer (`const char*`) for FFI interop — prefer `String` for normal string handling.
+All primitive numeric types and `bool` are **Copy** types — they are implicitly copied on assignment and do not require `!` to transfer. `String` values carry their owned-vs-view status structurally: string literals and function parameters are lightweight views (Copy), while concatenation and f-strings produce owned values (Move). The distinction is resolved during IR lowering by the copy-on-write alias and last-use Move analysis (Phase D4) — there is no separate provenance pass. `byte` is a convenience alias for `uint8`. `cstr` is a raw C string pointer (`const char*`) for FFI interop — prefer `String` for normal string handling.
 
 ### 4.2 Compound Types
 
@@ -2306,15 +2306,30 @@ assign, the IR-lowering picks Move instead of Borrow (still no clone,
 and the source becomes invalid as if `!`-moved). See
 `docs/devbook/11-copy-on-write.md` for the full Phase D4 decision tree.
 
-**Materialization points** — the compiler materializes (clones) a borrowed value when it crosses an ownership boundary:
+**Ownership-transfer / materialization points** — at each of these the
+compiler must give the destination an owned value, so a borrowed source
+is materialized (cloned). (Where the source is dead at the point and
+owns its data, the compiler moves instead of cloning — the boundary is
+the same; only the cost differs.)
 
-1. **Reassignment** — writing to a variable that borrows from another
+1. **Mutation through a borrowing alias** — writing through a variable that borrows from another severs the alias (copy-on-write) and gives the mutator its own copy
 2. **Mutating method** — calling a mutating method (push, pop, etc.) on a borrowed variable
 3. **Struct/enum construction** — passing a borrowed value into a constructor
-4. **Collection store** — pushing/putting a borrowed value into a collection
+4. **Collection store** — pushing/putting/inserting a borrowed value into a collection
 5. **Return** — returning a borrowed value from a function
-6. **Move transfer** — using `!` on a borrowed value
+6. **Move transfer** — using `!` to transfer ownership (a move, not a clone — listed because it is an ownership-transfer boundary; when the source is a borrow that can't be moved out, the move materializes a clone)
 7. **Field store** — assigning a borrowed value to a struct field (`self.name = text`)
+8. **Match-arm extraction that escapes** — a resource-type value bound out of a `case` pattern and used past the match arm
+9. **Channel send** — sending a borrowed value across a channel (`ch.send(x)`)
+10. **Spawn / task capture** — capturing a borrowed value into a spawned task
+11. **Escaping-closure capture** — a closure that outlives the capture's source closing over a borrowed value
+12. **Borrowed-extern return** — the result of an `extern borrowed T f(...)` call (the FFI returned a non-owning alias, cloned so the caller's slot survives later FFI mutations)
+13. **Comprehension into an owned collection** — a comprehension whose elements are collected into an owned collection
+
+This set is the boundary inventory enforced by `validate_consume_sites`
+(`src/ir/validate.rs`) via `ConsumeSiteClass`, and each implicit clone is
+emitted tagged with an `ImplicitCloneReason` (`src/ir/mod.rs`); those two
+enums are the source of truth — keep this list in sync with them.
 
 **`.clone()` works on all types.** Explicit `.clone()` calls route to the correct clone function: collections use `gorget_array_clone`/`gorget_map_clone`/etc., user structs use generated `{Name}__clone`, copy types return the value unchanged.
 

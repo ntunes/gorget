@@ -160,13 +160,15 @@ zeros.fill(5, 0)            # [0, 0, 0, 0, 0]
 
 ### Index Access and Ownership
 
-`v[i]` borrows the element — it doesn't remove it from the vector. For simple types like `int` or `bool`, the value is just copied. For resource types like `Vector` or `String`, assigning the result to a variable auto-clones:
+`v[i]` borrows the element — it doesn't remove it from the vector. For simple types like `int` or `bool`, the value is just copied. For resource types like `Vector` or `String`, a bare-assign borrows (whether `auto` or explicitly typed); the borrow CoW-severs on the first mutation. For an independent owned copy up front, call `.clone()`:
 
 ```gorget
 Vector[Vector[int]] matrix = [[1, 2, 3], [4, 5, 6]]
-Vector[int] row = matrix[0]    # auto-clones — matrix still has both rows
+Vector[int] row = matrix[0]    # borrow — CoW-severs on mutation; matrix still has both rows
 print(f"{row.len()}")          # 3
 print(f"{matrix.len()}")       # still 2
+
+Vector[int] owned = matrix[0].clone()  # independent owned copy (explicit)
 ```
 
 To move an element out (no clone), use a consuming method:

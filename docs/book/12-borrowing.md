@@ -143,24 +143,31 @@ These all work without annotations. The compiler sees that:
 
 ---
 
-## Structs with Borrowed Fields
+## Structs Own Their Fields
 
-Structs can hold borrowed values:
+A struct field is an ownership boundary: a struct owns its resource-type
+fields and frees them when it is dropped. Storing a value into a field
+therefore can't leave a borrow behind that outlives the struct — the
+compiler materializes (clones) the borrow at the field-store boundary,
+or you write `!`/`.clone()` to make the transfer explicit:
 
 ```gorget
-struct View:
+struct Holder:
     String name
 
-View make_view(String s):
-    return View(s)         # View borrows from s
+Holder make_holder(String s):
+    return Holder(s)       # field-store boundary — `s` is cloned into the field
 
 void main():
-    View v = make_view("hello")
-    print(v.name)          # valid — "hello" is static
+    Holder h = make_holder("hello")
+    print(h.name)          # valid — h owns its own copy of the string
 ```
 
-The compiler tracks that `View.name` borrows from the argument passed to
-`make_view`. The `View` cannot outlive that source.
+Because the field is owned, `Holder` is independent of the argument
+passed to `make_holder`: the struct can outlive that source, and
+mutating the source later doesn't disturb the field. This is the same
+rule as everywhere else — borrow by default, clone only at an ownership
+boundary (here, the struct field).
 
 ---
 

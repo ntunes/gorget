@@ -168,23 +168,24 @@ closure capture; enum field init is the same shape but goes through the
 using the local, so the last-use check is what distinguishes "transfer
 ownership" from "clone and keep."
 
-## Materialization points — the SIX-vs-SEVEN finding
+## Materialization points — the enforced boundary set
 
-> **Finding (re-derived 2026-05-29 from current source).** Three docs carry a
-> fixed numbered list of "materialization points": the former internals doc
-> (since folded into this chapter, which previously enumerated **SEVEN** at its
-> line 215) and the authoritative spec
-> `docs/language-reference.md:2297-2305` (also **SEVEN**);
-> `CLAUDE.md` and `feedback_cow_design_clarity.md` say **SIX**. **Both numbers
-> are now stale as a closed enumeration.** The current source does *not*
-> maintain a numbered list of materialization points; materialization is driven
-> structurally by the two helpers above, which are called from ~16 sites. Any
-> doc claiming a fixed count is describing an implementation that no longer
-> exists. The honest statement is "boundaries are wherever the two helpers are
-> invoked," and the live list is whatever the call-site grep below returns. The
-> spec's numbered list at `language-reference.md:2297-2305` is the same
-> stale closed-enumeration and is a spec-cleanup TODO (out of scope for this
-> chapter).
+> **Finding (re-derived 2026-05-29 from current source; reframed 2026-05-30).**
+> Several docs carry a numbered list of "materialization points": the former
+> internals doc (since folded into this chapter) and the authoritative spec
+> `docs/language-reference.md` historically enumerated **SEVEN**; `CLAUDE.md`
+> and `feedback_cow_design_clarity.md` said **SIX**. The disagreement was not
+> that the list was *garbage* — it is the validator-enforced ownership-boundary
+> set, just historically **under-listed**. Materialization boundaries are
+> exactly the consuming positions the validator guards: `validate_consume_sites`
+> (`src/ir/validate.rs`) classifies each via `ConsumeSiteClass`, and every
+> implicit clone is emitted tagged with an `ImplicitCloneReason` (`src/ir/mod.rs`)
+> — those two enums are the source of truth. At the lowering level the clone is
+> driven structurally by the two helpers above (called from ~16 sites), so the
+> live call-site grep below is the operational inventory; the completed,
+> human-readable boundary list lives in the spec
+> (`docs/language-reference.md` §9.6, kept in sync with the two enums). A fixed
+> hard-coded count in a doc drifts; the enums don't.
 
 Live call-site inventory (re-derive with the grep, do not transcribe — these
 move):

@@ -367,28 +367,31 @@ for x in matrix[0]:
     print(x)
 ```
 
-**Auto-clone on type context:**
+**Bare-assign borrows — `auto` and explicit type are identical:**
 
-When a reference (`Ptr(T)`) is used where an owned value (`T`) is expected, the compiler automatically inserts a clone. The type annotation is the signal — `auto` gives the fast path (reference), explicit type gives an owned copy:
+Reading an indexed element (`matrix[0]`) returns a borrow (`Ptr(T)`). Binding it with a bare assignment borrows whether you write `auto` or an explicit type — the type annotation is only a check on the RHS, not a clone signal. The borrow CoW-severs on the first mutation; for an independent owned copy up front, call `.clone()`. A clone is inserted only at a genuine ownership boundary (return, struct/enum field init, collection store, closure capture, a move of a borrow):
 
 ```gorget
-# auto → reference, zero cost
+# auto → borrow, zero cost
 auto row_ref = matrix[0]
 
-# Explicit type → auto-clone, produces independent owned copy
-Vector[int] row_copy = matrix[0]
-row_copy.push(5)          # modifying the copy
+# Explicit type → also a borrow (NOT an auto-clone); CoW-severs on mutation
+Vector[int] row = matrix[0]
+row.push(5)               # mutation severs the alias — row is cloned here
 print(matrix[0].len())    # original unchanged — 2, not 3
+
+# .clone() for an independent owned copy up front
+Vector[int] row_copy = matrix[0].clone()
 
 # Move (!) of a reference → auto-clone for ownership transfer
 consume(!row_ref)
 
-# Return from function with T return type → auto-clone
+# Return from function with T return type → auto-clone (ownership boundary)
 Vector[int] get_first(Vector[Vector[int]] m):
     return m[0]            # auto-clones for owned return
 ```
 
-The `auto` keyword gives the fast path (reference/view); an explicit type annotation with `.clone()` gives an owned copy. The `!` sigil gives a zero-cost move.
+Both `auto` and an explicit type give the fast path (borrow); `.clone()` gives an owned copy. The `!` sigil gives a zero-cost move. Clones happen only at a mutation through an alias or at an ownership boundary — never silently on a typed read.
 
 ### 3.3 Ownership (Copy-on-Write)
 
@@ -509,17 +512,20 @@ Structs **own** their fields. When a struct is dropped, all its resource-type fi
 
 The struct retains ownership. The view/reference borrows from the struct and is valid as long as the struct is alive.
 
-**Auto-clone on assignment** — same rule as collection element access:
+**Bare-assign borrows on read** — same rule as collection element access (and as §3.4): both `auto` and an explicit type produce a borrow that CoW-severs on mutation. The explicit type is only a check on the RHS, not a clone signal. For an independent owned copy up front, call `.clone()`:
 
 ```gorget
 auto fast = p.name         # String view (zero cost, borrows from p)
-String owned = p.name      # auto-clone via gorget_string_clone_to_owned (independent copy)
+String view = p.name       # ALSO a borrow — CoW-severs on mutation, not an auto-clone
 
 auto ref = p.scores        # Ptr reference (zero cost)
-Vector[int] copy = p.scores  # auto-clone via gorget_array_clone (independent)
+Vector[int] row = p.scores # ALSO a borrow — CoW-severs on mutation
+
+String owned = p.name.clone()      # owned copy up front (explicit)
+Vector[int] copy = p.scores.clone() # owned copy up front (explicit)
 ```
 
-`auto` gives the fast path (reference/view). An explicit type annotation signals "I want an independent owned copy" — the compiler inserts the clone automatically.
+Both `auto` and an explicit type give the fast path (borrow). The clone is deferred to a later mutation through the alias, or inserted at an ownership boundary; an explicit `.clone()` makes it eager. The compiler never inserts a clone silently on a typed read.
 
 ### 3.5 The Borrow Rules (same as Rust)
 
@@ -2240,7 +2246,7 @@ This is similar to how Swift's `String` unifies owned and borrowed representatio
 - Passing a string to a function that only reads it keeps the view provenance.
 - The compiler inserts ownership promotion (copy to heap) only when needed — e.g., storing into a collection or returning from a function where the source would go out of scope.
 
-**Struct field ownership:** String fields in structs are **owned** (heap-allocated). The struct is responsible for freeing them. Reading a string field returns a **view** (no allocation, borrows from the struct). Assigning to a `String` variable triggers an auto-clone:
+**Struct field ownership:** String fields in structs are **owned** (heap-allocated). The struct is responsible for freeing them. Reading a string field returns a **view** (no allocation, borrows from the struct). A bare-assign to a `String` variable also borrows — whether `auto` or explicitly typed — and CoW-severs on the first mutation; use `.clone()` for an independent owned copy up front:
 
 ```gorget
 struct Config:
@@ -2248,7 +2254,8 @@ struct Config:
 
 Config c = Config("myapp")
 print(c.name)                 # view — zero cost, borrows from c
-String copy = c.name          # auto-clone — independent owned copy
+String view = c.name          # ALSO a borrow — CoW-severs on mutation, not an auto-clone
+String owned = c.name.clone() # independent owned copy (explicit)
 # When c goes out of scope, c.name is freed automatically
 ```
 
@@ -2380,7 +2387,8 @@ What happens next depends on how the borrow is used:
 | Usage | Semantics | Example |
 |-------|-----------|---------|
 | Read through the reference | Zero-cost borrow | `print(v[0])` |
-| Assign to an owned variable | Auto-clone | `Vector[int] row = matrix[0]` |
+| Bare-assign to a variable (`auto` or typed) | Zero-cost borrow — CoW-severs on mutation | `Vector[int] row = matrix[0]` |
+| `.clone()` the read | Owned copy up front | `Vector[int] row = matrix[0].clone()` |
 | Call a mutating method | Mutate in place | `matrix[0].push(4)` |
 | Pass to a function taking `&` | Pass the borrow | `process(&matrix[0])` |
 
@@ -2401,7 +2409,7 @@ Option[int] last = v.pop()           # removes last — no clone
 
 **Subscript write** (`v[i] = val`) drops the existing element and moves `!val` into the slot. `v.insert(i, !val)` shifts elements right and moves `!val` in.
 
-**Design rationale:** This follows Rust's principle that indexing borrows, explicit methods consume. Gorget adds auto-clone on the borrow-to-owned boundary to avoid requiring `.clone()` at every read site — a deliberate trade-off of explicitness for ergonomics, consistent with Gorget's "Python-like surface, Rust-like safety" philosophy.
+**Design rationale:** This follows Rust's principle that indexing borrows, explicit methods consume. A bare-assign from a subscript read borrows whether you write `auto` or an explicit type — the clone is deferred to a mutation through the alias (copy-on-write) or to an ownership boundary, and an explicit `.clone()` makes it eager. This keeps reads zero-cost by default while keeping every heap allocation visible at the mutation or `.clone()` site, consistent with Gorget's "Python-like surface, Rust-like safety" philosophy.
 
 ---
 
