@@ -3570,13 +3570,7 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
             return lookup_or_register_named(&gmod, inner)
         if recv_name.starts_with("Result__"):
             String rest = recv_name.slice(8, recv_name.len())
-            int split = -1
-            int si = 0
-            while si + 1 < rest.byte_len():
-                if rest.byte_at(si) == 0x5F and rest.byte_at(si + 1) == 0x5F:
-                    split = si
-                    break
-                si += 1
+            int split = rest.index_of("__").unwrap_or(-1)
             if split > 0:
                 String ok = rest.slice(0, split)
                 int prim_ok = prim_name_to_type(ok)
@@ -4609,13 +4603,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     # Ok type: longest-prefix scan for first `__` splits
                     # Result__<OkT>__<ErrT>.
                     String rest = recv_tn.slice(8, recv_tn.len())
-                    int split = -1
-                    int si = 0
-                    while si + 1 < rest.byte_len():
-                        if rest.byte_at(si) == 0x5F and rest.byte_at(si + 1) == 0x5F:
-                            split = si
-                            break
-                        si += 1
+                    int split = rest.index_of("__").unwrap_or(-1)
                     if split > 0:
                         inner_name_str = rest.slice(0, split)
                 int inner_tid = -1
@@ -5508,13 +5496,7 @@ void apply_container_hint_for_ctor_arg(LowerCtx &ctx, String ctor_name, int ai, 
             d_ordered = true
         if d_prefix_len > 0:
             String d_rest = fty_name.slice(d_prefix_len, fty_name.len())
-            int d_sep = -1
-            int d_i = 0
-            while d_i + 1 < d_rest.byte_len():
-                if d_rest.byte_at(d_i) == 0x5F and d_rest.byte_at(d_i + 1) == 0x5F:
-                    d_sep = d_i
-                    break
-                d_i += 1
+            int d_sep = d_rest.index_of("__").unwrap_or(-1)
             if d_sep > 0:
                 String k_only = d_rest.slice(0, d_sep)
                 String v_only = d_rest.slice(d_sep + 2, d_rest.len())
