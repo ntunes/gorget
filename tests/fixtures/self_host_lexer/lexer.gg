@@ -390,6 +390,18 @@ equip Lexer:
                 self.lex_advance()
             int code = lex_parse_int_radix(hex_str, 16)
             return Some(chr(code))
+        elif c == b'u':
+            # \uXXXX — 4-hex-digit BMP shorthand (JS/Rust/Java shape).
+            # The braced \u{...} form is handled above; this is the bare form.
+            self.lex_advance()
+            int u_hex_start = self.lex_pos
+            int u_read = 0
+            while u_read < 4 and self.lex_pos < self.lex_source.byte_len() and self.lex_peek().is_hex_digit():
+                self.lex_advance()
+                u_read = u_read + 1
+            String u_hex = owned_slice(self.lex_source, u_hex_start, self.lex_pos)
+            int u_code = lex_parse_int_radix(u_hex, 16)
+            return Some(chr(u_code))
         else:
             self.lex_advance()
             return Some(owned_slice(self.lex_source, self.lex_pos - 1, self.lex_pos))
@@ -609,7 +621,8 @@ equip Lexer:
                     self.lex_advance()
 
                 String expr_text = owned_slice(self.lex_source, expr_start, self.lex_pos)
-                segments.push(SegInterpolation(expr_text))
+                String expr_only = split_interpolation_expr(expr_text)
+                segments.push(SegInterpolation(expr_only))
                 if self.lex_pos < self.lex_source.byte_len():
                     self.lex_advance()
                 continue
@@ -1025,6 +1038,52 @@ String str_remove_char(String s, byte target):
             result = result + s.byte_slice(i, i + 1)
         i = i + 1
     return result
+
+# Strip an f-string interpolation's trailing format spec, mirroring Rust
+# `split_interpolation_spec` (src/lexer/mod.rs:940). Splits on the LAST `:`
+# at paren+bracket+brace depth 0, outside quoted strings, and only when the
+# spec (everything after the colon) is non-empty. Returns the expr text with
+# the spec removed: `x:x` → `x`, `d[1:3]` → `d[1:3]` (unchanged).
+String split_interpolation_expr(String text):
+    int n = text.byte_len()
+    int last_colon = -1
+    int paren_depth = 0
+    int bracket_depth = 0
+    int brace_depth = 0
+    int i = 0
+    while i < n:
+        byte c = text.byte_at(i)
+        if c == b'(':
+            paren_depth = paren_depth + 1
+        elif c == b')':
+            if paren_depth > 0:
+                paren_depth = paren_depth - 1
+        elif c == b'[':
+            bracket_depth = bracket_depth + 1
+        elif c == b']':
+            if bracket_depth > 0:
+                bracket_depth = bracket_depth - 1
+        elif c == b'{':
+            brace_depth = brace_depth + 1
+        elif c == b'}':
+            if brace_depth > 0:
+                brace_depth = brace_depth - 1
+        elif c == b'"' or c == b'\'':
+            # Skip the quoted string (honoring backslash escapes).
+            byte quote = c
+            i = i + 1
+            while i < n and text.byte_at(i) != quote:
+                if text.byte_at(i) == b'\\':
+                    i = i + 1
+                i = i + 1
+            # Advance past the closing quote (loop's i+1 below).
+        elif c == b':' and paren_depth == 0 and bracket_depth == 0 and brace_depth == 0:
+            last_colon = i
+        i = i + 1
+    if last_colon >= 0 and last_colon + 1 < n:
+        # Non-empty spec → keep only the text before the colon.
+        return owned_slice(text, 0, last_colon)
+    return text
 
 int lex_parse_int_radix(String s, int radix):
     int result = 0
