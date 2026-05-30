@@ -86,17 +86,6 @@ keyed collections. Other `Hasher` implementations slot in
 transparently because `Hashable.hash` is generic over the Hasher; a
 user-defined `SipHasher` works the same way.
 
-### Ordinal
-
-```gorget
-trait Ordinal:
-    int ordinal(self)
-```
-
-Returns the zero-based positional index of an enum variant. Only derivable for
-enums. The first variant is 0, the second is 1, and so on. Payload values are
-ignored.
-
 ---
 
 ## Copying and Cleanup
@@ -441,8 +430,7 @@ struct Point:
 ```
 
 Derivable traits: `Equatable`, `Hashable`, `Displayable`, `Debuggable`,
-`Cloneable`, `Comparable`, `Default`, `Ordinal` (enums only),
-`Serializable`, `Deserializable`.
+`Cloneable`, `Comparable`, `Default`, `Serializable`, `Deserializable`.
 
 The generated implementation operates field-by-field. For `Equatable`, all fields
 must be equal. For `Hashable`, all fields are combined into the hash. For
@@ -463,7 +451,6 @@ for tuple variants.
 | Equatable | `eq` | `==`, `!=` | Yes |
 | Comparable | `compare` | `<`, `>`, `<=`, `>=` | Yes |
 | Hashable | `hash` | Dict keys, Set elements | Yes |
-| Ordinal | `ordinal` | Variant index (enums) | Yes |
 | Cloneable | `clone` | `.clone()` | Yes |
 | Drop | `drop` | Automatic cleanup | No |
 | Default | `default` | `.default()` | Yes |

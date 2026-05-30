@@ -326,36 +326,6 @@ from std.hash import hash_of
 int h = hash_of[Point](p)
 ```
 
-### Ordinal
-
-Returns the zero-based positional index of an enum variant. Only derivable for
-enums — the first variant is 0, the second is 1, and so on:
-
-```gorget
-@derive(Ordinal)
-enum Direction:
-    North
-    East
-    South
-    West
-
-Direction d = Direction.South
-print(d.ordinal())  # 2
-```
-
-Payload values are ignored — only the variant's position matters:
-
-```gorget
-@derive(Ordinal)
-enum Token:
-    Plus
-    Number(float)
-    Ident(String)
-
-print(Token.Plus.ordinal())        # 0
-print(Token.Ident("x").ordinal())  # 2
-```
-
 ### Drop
 
 Auto-cleanup when a value goes out of scope or a `with` block ends. The `!` in
@@ -436,7 +406,6 @@ Config c = Config.default()    # Config(0, 0, false, "")
 | `Equatable` | `bool eq(self, Self other)` | `==` and `!=` |
 | `Comparable` | `int compare(self, Self other)` | `<`, `>`, `<=`, `>=` |
 | `Hashable` | `void hash(self, FxHasher &h)` | `Dict` keys, `Set` elements |
-| `Ordinal` | `int ordinal(self)` | Zero-based variant index (enums only) |
 | `Cloneable` | `Self clone(self)` | Deep copying |
 | `Drop` | `void drop(!self)` | Auto-cleanup on scope exit |
 | `Iterator[T]` | `Option[T] next(&self)` | `for` loop iteration |
@@ -468,7 +437,7 @@ This generates `eq`, `display`, `clone`, and `hash` by operating on all fields.
 Works on enums too:
 
 ```gorget
-@derive(Equatable, Displayable, Cloneable, Ordinal)
+@derive(Equatable, Displayable, Cloneable)
 enum Color:
     Red
     Green
@@ -479,11 +448,10 @@ void main():
     Color r2 = .Red
     if r == r2:
         print("colors equal")    # colors equal
-    print(r.ordinal())           # 0
 ```
 
-**Derivable traits:** `Equatable`, `Displayable`, `Cloneable`, `Hashable`, `Ordinal`, `Default`,
-`Serializable`, `Deserializable`. `Ordinal` is enum-only. Single-field structs can also derive `From` and
+**Derivable traits:** `Equatable`, `Displayable`, `Cloneable`, `Hashable`, `Default`,
+`Serializable`, `Deserializable`. Single-field structs can also derive `From` and
 `TryFrom`.
 
 For `Default`, the derived implementation zero-initializes all fields (0 for numbers,

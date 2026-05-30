@@ -1027,7 +1027,7 @@ int fast_add(int a, int b): a + b
 **Derivable traits:**
 
 - **Structs:** Equatable, Displayable, Cloneable, Hashable, Serializable, Deserializable, Default, From, TryFrom, FromRow
-- **Enums:** Equatable, Displayable, Cloneable, Hashable, Ordinal, Serializable, Deserializable
+- **Enums:** Equatable, Displayable, Cloneable, Hashable, Serializable, Deserializable
 
 Note: `From` and `TryFrom` are only derivable for single-field structs (newtypes). `FromRow` generates a `from_row(Row)` method that maps struct field names to database row columns (see `xtd.db`).
 
@@ -2714,7 +2714,6 @@ The compiler automatically registers the following core traits. They cannot be r
 | `Equatable` | `bool eq(self, Self other)` | `bool` | `==` and `!=` operators |
 | `Hashable` | `void hash(self, FxHasher &h)` | `void` | `Dict` keys, `Set` elements |
 | `Hasher` | `void write_int(&self, int v)` / `write_bytes(&self, Vector[byte])` / `write_string(&self, String)` / `int finish(self)` | — | Role trait for hash state accumulators; `FxHasher` in `std.hash` is the shipping implementor |
-| `Ordinal` | `int ordinal(self)` | `int` | Zero-based variant index (enums only) |
 | `Cloneable` | `Self clone(self)` | `Self` | Deep copying |
 | `Drop` | `void drop(!self)` | `void` | Auto-cleanup on scope exit, `with` statement (§6.14) |
 | `Iterator[T]` | `Option[T] next(&self)` | `Option[T]` | `for` loop desugaring (§6.11) |
@@ -2791,44 +2790,6 @@ points.add(Point(1.0, 2.0))
 # One-shot int digest (rarely needed — Dict/Set handle this internally):
 int h = hash_of[Point](Point(1.0, 2.0))
 ```
-
-#### Ordinal
-
-Returns the zero-based positional index of an enum variant. Only derivable for enums. The ordinal reflects declaration order — the first variant is 0, the second is 1, and so on. Payload values are ignored; only the variant's position matters.
-
-```gorget
-@derive(Ordinal)
-enum Color:
-    Red
-    Green
-    Blue
-
-print(Color.Red.ordinal())     # 0
-print(Color.Blue.ordinal())    # 2
-```
-
-Works with payload variants — the payload is bound but unused:
-
-```gorget
-@derive(Ordinal)
-enum Token:
-    Plus
-    Minus
-    Number(float)
-    Ident(String)
-
-Token t = Token.Number(3.14)
-print(t.ordinal())  # 2
-```
-
-Useful as a generic bound for serialization or indexing by variant:
-
-```gorget
-int enum_to_index[T: Ordinal](T value):
-    return value.ordinal()
-```
-
-> **Note:** Ordinal returns the *positional* index, not an explicit discriminant value. If you need stable integer mappings for protocols or FFI, use named integer constants instead.
 
 #### Cloneable
 

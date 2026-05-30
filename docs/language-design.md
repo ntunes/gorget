@@ -1405,10 +1405,13 @@ void() do_nothing = (): pass
 
 ### 7.3 Capture Semantics
 
-The compiler infers the minimal capture mode automatically:
-- Immutable capture for reads
-- Mutable capture for mutations
-- Move capture for ownership transfer
+Closures support three user-facing capture modes:
+
+- **Immutable borrow** (default) — the variable is read but not mutated inside the closure; the outer binding stays valid.
+- **Mutable borrow** — the compiler detects that the closure mutates the variable and captures a pointer to the outer slot automatically.
+- **Move** — the closure takes ownership of the captured value. Use `!` before the parameter list to force ALL captures into move mode.
+
+The compiler infers immutable-borrow vs. mutable-borrow automatically from the closure body. Move capture is never inferred — it must be requested explicitly with `!`. Internally, immutable-borrow and move captures are both stored by value in the closure struct (the difference is whether the outer binding survives); mutable-borrow captures store a pointer to the outer variable.
 
 Use `!` before the parameter list to force-move ALL captures:
 
@@ -1911,7 +1914,7 @@ void main():
 | 6 | **File extension** | `.gg` |
 | 7 | **Indentation** | 4 spaces (enforced by `gg fmt`) |
 | 8 | **Compilation target** | C (via SSA-based LIR → C transpilation, then a system C compiler); an LLVM backend exists behind `--backend=llvm` |
-| 9 | **Package management** | Built into `gg` CLI (`gg new`, `gg add`, `gg publish`, etc.) |
+| 9 | **Package management** | Built into `gg` CLI (`gg new`, `gg add --git/--path`, `gg remove`) |
 | 10 | **Option handling** | `Option[T]` with rich sugar: `is` pattern matching, `?.` optional chaining, `??` default operator, `.unwrap()`, `.unwrap_or()`, `?` early return |
 | 11 | **Tuple syntax** | `(int, String)` — concise, universal |
 | 12 | **Array syntax** | C-style: `int[5]` fixed array, `Vector[int]` growable, `int[]` slice |
@@ -2888,62 +2891,19 @@ void debug_log(String msg):
 
 ## 34. Build System & Package Management (`gg`) in Detail
 
-### gorget.toml (Best of Cargo + npm + pyproject.toml)
+### gorget.toml
 ```toml
 [package]
 name = "my_project"
 version = "0.1.0"
-authors = ["Nuno Antunes <nuno@example.com>"]
-edition = "2026"
-license = "MIT"
-gorget = ">=1.0"              # minimum compiler version
 
-# Custom tasks (inspired by npm scripts)
-[scripts]
-dev = "gg run --watch"
-deploy = "gg build --release && ./deploy.sh"
-lint = "gg check && gg fmt --check"
-
-# Dependencies with explicit semver prefixes
 [dependencies]
-http = "^1.2"                # ^1.2 = >=1.2.0, <2.0.0
-json = "~0.5"                # ~0.5 = >=0.5.0, <0.6.0
-logger = "=2.0.1"            # exact version
-crypto = { version = "^2.0", features = ["aes", "rsa"] }
 local-lib = { path = "../my-lib" }
 git-dep = { git = "https://github.com/user/repo", tag = "v1.0" }
-
-[dev-dependencies]
-mock = "^0.3"
-
-# Compile-time feature flags
-[features]
-default = ["json"]
-full = ["json", "crypto", "http"]
-
-# Build profiles
-[profiles.dev]
-opt-level = 0
-debug = true
-
-[profiles.release]
-opt-level = 3
-lto = true
-strip = true
-
-# Monorepo support
-[workspace]
-members = ["core", "cli", "web"]
-
-# Tool configuration in one file (from pyproject.toml)
-[tool.fmt]
-indent = 4
-line-length = 100
-
-[tool.lint]
-deny = ["unused-variables", "dead-code"]
-warn = ["missing-docs"]
+git-branch = { git = "https://github.com/user/repo", branch = "main" }
 ```
+
+Dependencies are sourced from a local path or a Git URL; a `gorget.lock` lockfile pins exact commits and is auto-generated. The fetched sources are cached in `~/.gorget/cache/` for offline reproducibility.
 
 ### Project Layout
 ```
@@ -2968,20 +2928,15 @@ my_project/
 
 ### CLI Commands
 ```bash
-gg new my_project          # create project from template
-gg build                   # compile
-gg run                     # compile and run
-gg run dev                 # run a custom script
-gg test                    # run tests
-gg bench                   # run benchmarks
-gg check                   # type-check only (fast)
-gg fmt                     # format code
-gg lint                    # run linter
-gg doc                     # generate documentation
-gg publish                 # publish to registry
-gg add http                # add dependency to gorget.toml
-gg update                  # update lockfile
-gg audit                   # scan for vulnerabilities
+gg new my_project                                    # create project from template
+gg build                                             # compile
+gg run                                               # compile and run
+gg test                                              # run tests
+gg check                                             # type-check only (fast)
+gg fmt                                               # format code
+gg add mylib --git https://github.com/user/repo      # add a git dependency
+gg add mylib --path ../mylib                         # add a local path dependency
+gg remove mylib                                      # remove a dependency
 ```
 
 ---
