@@ -107,7 +107,7 @@ equip ScopeTable:
         if parent >= 0:
             self.current = parent
 
-    # Read scope parent without typed accessor (avoids memset bug)
+    # Convenience reader for a scope's parent id.
     int scope_parent_of(self, int id):
         Scope s = get_scope_at(self.scopes, id)
         return s.parent
@@ -235,7 +235,7 @@ equip ScopeTable:
 
     void set_def_param(&self, int id, bool is_param):
         # Use direct field assignment on definition
-        # Can't use get_def_at in &self (memset bug), so reconstruct
+        # Vector elements aren't mutable in place via .get(); copy, mutate, write back.
         DefInfo d = self.definitions.get(id).unwrap()
         d.is_param = is_param
         self.definitions.set(id, d)
