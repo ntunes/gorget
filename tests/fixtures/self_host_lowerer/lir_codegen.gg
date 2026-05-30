@@ -7,7 +7,7 @@
 # Phase 4 of the self-host LIR backend.
 
 from lir import LirModule, LirFunction, LirBlock, LirInst, LirTerm, LirSlot
-from lir import LirStructDef, LirExtern, LirGlobal, LirSpawnedFn, LirTestFn, LirBenchFn
+from lir import LirStructDef, LirExtern, LirGlobal, LirGlobalField, LirSpawnedFn, LirTestFn, LirBenchFn
 from lir import StructField, BlockParam, SwitchCase, FieldDrop, EnumVariantDrop, TypeDropInfo, FieldInit
 from lir import LT_I8, LT_I16, LT_I32, LT_I64, LT_U8, LT_U16, LT_U32, LT_U64
 from lir import LT_F32, LT_F64, LT_BOOL, LT_PTR, LT_VOID
@@ -17,7 +17,7 @@ from lir import lir_struct_id
 from lir import OVF_TRAP, OVF_WRAP
 from lir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
 from lir import EK_NOT_ENUM, EK_OPTION, EK_RESULT, EK_GENERAL
-from lir import GINIT_ZEROED, GINIT_FUNC_ADDR, GINIT_RUNTIME_CALL
+from lir import GINIT_ZEROED, GINIT_FUNC_ADDR, GINIT_RUNTIME_CALL, GINIT_STRUCT
 from std.collections import Vector, Dict
 from std.conv import int_to_str
 
@@ -820,6 +820,14 @@ String emit_globals(LirModule &m, Vector[String] &sn):
     int i = 0
     while i < m.globals.len():
         LirGlobal g = m.globals.get(i).unwrap()
+        # FuncAddr-bearing globals (GINIT_STRUCT vtables + any scalar
+        # GINIT_FUNC_ADDR) reference functions, so they must be DEFERRED
+        # past the function forward-declarations. emit_deferred_globals
+        # emits them after emit_func_forward_decls. Mirrors Rust gg's
+        # `has_func_addrs` skip in `src/backend/c_lir/mod.rs:759-768`.
+        if g.init_kind == GINIT_STRUCT or g.init_kind == GINIT_FUNC_ADDR:
+            i += 1
+            continue
         String kw = ""
         if g.is_const:
             kw = "const "
@@ -830,15 +838,52 @@ String emit_globals(LirModule &m, Vector[String] &sn):
                 out = out + " = 0"
             else:
                 out = out + " = {0}"
-        elif g.init_kind == GINIT_FUNC_ADDR:
-            # Deferred — needs function forward decls first.
-            out = out + " = {0}"
         elif g.init_kind == GINIT_RUNTIME_CALL:
             out = out + " = {0}"
         out = out + "; // " + g.name + "\n"
         i += 1
     if m.globals.len() > 0:
         out = out + "\n"
+    return out
+
+# Deferred globals: GINIT_STRUCT (trait-impl `_VTable` vtables, a struct of
+# FuncAddr slots) — and any scalar GINIT_FUNC_ADDR — are emitted AFTER the
+# function forward-declarations so the `(void*)&fn` casts reference
+# already-declared functions. Mirrors Rust gg's deferred-global emission in
+# `src/backend/c_lir/mod.rs:857-864` + the field rendering in
+# `src/backend/c_lir/emit_types.rs:656-658`.
+#
+# CRITICAL: each FuncAddr field renders as the BARE `(void*)&<c_func_name>`
+# form — NOT the `__adapt_<fn>` closure-wrapper protocol that IFuncAddr
+# *instructions* use (lir_codegen.gg IFuncAddr arm). Rust emits the plain
+# cast (`emit_types.rs:656-658`), and a vtable slot is a direct fn pointer,
+# not a closure. Routing through the adapter would diverge from Rust AND
+# perturb the adapter-function path.
+String emit_deferred_globals(LirModule &m, Vector[String] &sn):
+    String out = ""
+    int i = 0
+    while i < m.globals.len():
+        LirGlobal g = m.globals.get(i).unwrap()
+        if g.init_kind == GINIT_STRUCT:
+            String kw = ""
+            if g.is_const:
+                kw = "const "
+            String ty = c_type_name(g.ty, &sn)
+            out = out + kw + ty + " __lir_g" + int_to_str(i) + " = {"
+            int fi = 0
+            while fi < g.struct_fields.len():
+                if fi > 0:
+                    out = out + ", "
+                LirGlobalField fld = g.struct_fields.get(fi).unwrap()
+                if fld.kind == GINIT_FUNC_ADDR and fld.func_id >= 0:
+                    # Bare (void*)&fn — see header note (NOT __adapt_).
+                    String fname = c_func_name(m.functions.get(fld.func_id).unwrap().name)
+                    out = out + "(void*)&" + fname
+                else:
+                    out = out + "NULL"
+                fi += 1
+            out = out + "}; // " + g.name + "\n"
+        i += 1
     return out
 
 # ── String literal pooling ─────────────────────────────────
@@ -5211,6 +5256,13 @@ String generate_c(LirModule &m):
     # reference `__gorget_ktable_hash__T` / `__gorget_ktable_eq__T` via
     # ctor wiring.
     out = out + emit_hashable_key_bridges(&m)
+
+    # Deferred globals (FuncAddr-bearing: GINIT_STRUCT vtables + scalar
+    # GINIT_FUNC_ADDR). Emitted HERE — after forward-decls + hashable-key
+    # bridges, before adapter functions — so the `(void*)&fn` casts
+    # reference already-forward-declared functions. Mirrors Rust gg's
+    # deferred-global emission in `src/backend/c_lir/mod.rs:857-864`.
+    out = out + emit_deferred_globals(&m, &sn)
 
     # Adapter functions (FuncAddr → closure protocol)
     Dict[int, bool] fa_targets = collect_func_addr_targets(&m)
