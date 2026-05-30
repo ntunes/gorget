@@ -716,8 +716,10 @@ pub enum Inst {
     /// LIR-level fusion passes reason about adjacent `HofExpand`s (e.g.
     /// `filter` → `map` → sum fused into a single walk).
     ///
-    /// Not yet emitted — scaffolding for the Step 8 migration. See
-    /// `docs/devbook/16-bir.md` for the full specification.
+    /// Emitted at `src/lir/lower/insts.rs:2571,2739,3206` for Vector/Dict/Set HOFs.
+    /// BIR (`src/bir/lower.rs`) expands each `HofExpand` to primitive loops before
+    /// backend emission. The C backend makes `HofExpand` unreachable at `mod.rs:2051`.
+    /// See `docs/devbook/16-bir.md` for the full specification.
     HofExpand {
         /// The collection being iterated (pointer to a `GorgetArray` /
         /// `GorgetMap` / `GorgetSet`).
@@ -882,7 +884,8 @@ pub enum Inst {
     /// backend can lower this to `call_indirect <table-index>` rather than
     /// an opaque indirect-pointer call. The `fref` operand must be a value
     /// of type `LirType::FuncRef` (typically produced by `Inst::FuncAddr`
-    /// or `Inst::NamedFuncAddr`); `validate_module` bound-checks this.
+    /// or `Inst::NamedFuncAddr`); `validate_module` checks that `fref` is a
+    /// defined value but does not verify it carries `LirType::FuncRef`.
     ///
     /// Backends today (C, LLVM) treat this exactly like `CallPtr`; only the
     /// type carried on `fref` differs.

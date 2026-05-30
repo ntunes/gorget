@@ -40,7 +40,7 @@ Gorget uses indentation to delimit blocks, like Python. The lexer converts leadi
 - Blocks are opened by a `:` at the end of a line, followed by an increase in indentation.
 - The indentation level must be consistent within a block.
 - A decrease in indentation emits one or more `DEDENT` tokens.
-- Tabs and spaces must not be mixed. Four spaces is the canonical indent.
+- Tabs are forbidden; the lexer rejects them with `LexErrorKind::TabCharacter`. Four spaces is the canonical indent.
 - Expressions inside paired brackets (`()`, `[]`, `{}`) suppress newline and indentation processing, allowing multi-line expressions.
 - A leading `.` on a new line is treated as continuation of the previous expression (method chaining).
 
@@ -237,7 +237,7 @@ Interpolation is only available in **f-strings** (strings prefixed with `f`). Ex
 | `r`       | Raw        | No            | No      |
 | `b`       | Byte       | No            | Yes     |
 | `"""`     | Multi-line | No            | Yes     |
-| `f"""`    | Multi-line format | Yes    | Yes     |
+| `f"""`    | Format (multi-line) | Yes    | Yes     |
 | `c`       | C string   | No            | Yes     |
 
 Type: `String`. Internally a 32-byte struct `{ data, cap, len, alloc }`. String literals and slicing/trim results are zero-allocation views (`cap == 0`). Concatenation, f-strings, and methods like `to_upper()` produce owned copies (`cap > 0`). The compiler auto-materializes views when the source is mutated (copy-on-write).
@@ -831,8 +831,8 @@ equip Wrapper with Describable via inner:
 import_stmt = simple_import | grouped_import | from_import ;
 simple_import  = "import" dotted_name NEWLINE ;
 grouped_import = "import" dotted_name ".{" IDENTIFIER { "," IDENTIFIER } "}" NEWLINE ;
-from_import    = "from" dotted_name "import" import_name { "," import_name } NEWLINE ;
-import_name    = IDENTIFIER | IDENTIFIER ".*" ;
+from_import    = "from" dotted_name "import" ( "*" | import_name { "," import_name } ) NEWLINE ;
+import_name    = IDENTIFIER [ "as" IDENTIFIER ] | IDENTIFIER ".*" ;
 dotted_name    = IDENTIFIER { "." IDENTIFIER } ;
 ```
 
@@ -982,6 +982,18 @@ Equip methods may carry `extern` bodies too:
 ```gorget
 equip Socket:
     extern "C" blocking int write_str(String s) = "gorget_socket_write_str"
+```
+
+#### `borrowed` qualifier
+
+Mark an extern function that returns a non-owned pointer into an internal
+buffer (e.g., `SDL_GetError`, `strerror`). The return value is a view — the
+caller must clone it before the buffer may be invalidated. The IR is expected
+to insert that clone at ownership boundaries automatically.
+
+```gorget
+extern "C":
+    extern borrowed String last_error() = "gorget_last_error"
 ```
 
 See `docs/devbook/20-extern-gpu.md` for the full ABI pipeline
@@ -4635,7 +4647,7 @@ The Gorget compiler is invoked as `gg` with the following commands:
 | `gg run <file>`    | Compile and execute                      |
 | `gg test <file>`   | Compile and run tests                    |
 | `gg test <dir>`    | Discover and run all test files recursively |
-| `gg fmt <file>`    | Format source code (prints to stdout; use `-i`/`--in-place` to overwrite) |
+| `gg fmt <file>`    | Format source code (prints to stdout; use `-i`/`--in-place` to overwrite, `-c`/`--check` to exit 1 if not formatted) |
 | `gg report <file>` | Generate HTML report from trace file     |
 | `gg init`          | Initialize a new Gorget project in the current directory |
 | `gg new <name>`    | Create a new project directory with scaffolding |
@@ -4668,6 +4680,7 @@ The Gorget compiler is invoked as `gg` with the following commands:
 | `--show-borrows`     | Print inferred borrow analysis for all functions (diagnostic) |
 | `--show-clones`      | Print clone report: all implicit clones with location, type, and reason (including CoW materializations) |
 | `-i` / `--in-place`  | Format file in place (for `gg fmt`)                     |
+| `-c` / `--check`     | Exit 1 if file is not formatted (for `gg fmt`)          |
 
 **Target selection:**
 
@@ -4901,7 +4914,7 @@ The `--trace` flag works with `gg test` to produce a JSONL trace file (`<name>.t
 ```jsonl
 {"type":"test_start","name":"addition works"}
 {"type":"call","fn":"add","args":{"a":1,"b":2},"depth":0}
-{"type":"return","fn":"add","value":3,"depth":0}
+{"type":"return","fn":"add","depth":0}
 {"type":"test_end","name":"addition works","status":"pass","duration_ms":0}
 {"type":"test_start","name":"string equality"}
 {"type":"test_end","name":"string equality","status":"pass","duration_ms":0}
@@ -5255,7 +5268,7 @@ These are always available in meta contexts:
 
 ```gorget
 meta int  INT_SIZE  = sizeof(int)          # 8
-meta int  STR_SIZE  = sizeof(String)       # 16
+meta int  STR_SIZE  = sizeof(String)       # 32
 meta int  PTR_ALIGN = alignof(cstr)        # 8
 meta String INT_NAME = typename(int)        # "int"
 meta bool IS_64     = arch_word_bits() == 64

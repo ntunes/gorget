@@ -20,11 +20,13 @@
 //!   (after adding its primitive expansion in `bir::lower`) is how a
 //!   canonical op graduates from "must lower" to "not a valid LIR op anymore."
 //!
-//! ## Current state (Step 0)
+//! ## Current state
 //!
-//! No canonical ops exist in LIR yet, so this validator currently accepts
-//! every LIR instruction. The framework is in place for Steps 1-8 to plug
-//! canonical-op arms into the match.
+//! 11 canonical ops are rejected: `SizeOf`, `EnumInit`, `EnumCheck`,
+//! `EnumExtract`, `StructInit`, `CowClone`, `TraitCall`, `HofExpand`,
+//! `AddressOf`, `BoxAlloc`, `CollectionCtor`. All other instructions are
+//! primitives and pass through. A surviving canonical op means `bir::lower`
+//! missed an expansion site.
 
 use crate::bir::BirError;
 use crate::lir::{Inst, LirModule};

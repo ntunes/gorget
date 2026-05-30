@@ -285,10 +285,9 @@ pub struct Module {
     /// `FunctionDef.returns_borrowed` for both the Gorget-side name and
     /// the bound C symbol (so call-site lookups find it via either).
     ///
-    /// **Consumer not yet wired** — the call-site auto-clone insertion is
-    /// a separate TODO. Until then this map carries the metadata so the
-    /// parser/AST surface compiles, but the runtime behaviour matches
-    /// the pre-`borrowed` semantics (no clone). See TODO.md.
+    /// **Consumer wired** at `src/ir/lowering/exprs/calls.rs:1401` —
+    /// call sites that return a borrowed value have a clone inserted
+    /// automatically.
     pub fn_returns_borrowed: rustc_hash::FxHashSet<String>,
     /// Tier 2c (snag #23 class) — typed registry of shallow-copy
     /// heap-allocating consumer extern names.

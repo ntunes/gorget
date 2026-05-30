@@ -2,13 +2,12 @@
 //!
 //! The data lives in `compiler/data/{schema,resources}.gg` as idiomatic
 //! Gorget source. Bake it in here via `include_str!` so the shipped `gg`
-//! binary is self-contained. A future `src/ir/resources.rs` loader will
-//! parse this source with the compiler's own parser, walk the AST, and
-//! produce the typed `ResourceTable`.
+//! binary is self-contained. `src/ir/resources.rs` parses this source with
+//! the compiler's own parser, walks the AST, and exposes a `OnceLock`-cached
+//! `ResourceTable` via `table()` → `load_table()` → `walk_module`.
 //!
-//! Today this module only carries the embedded source strings and a
-//! parse-only sanity test. Wiring the parser + AST walker is item 4 of
-//! the resources.toml plan (TODO.md).
+//! This module carries the embedded source strings and the parse-only
+//! sanity tests. The typed loader lives at `src/ir/resources.rs`.
 
 pub const SCHEMA_SRC: &str = include_str!("../compiler/data/schema.gg");
 pub const RESOURCES_SRC: &str = include_str!("../compiler/data/resources.gg");

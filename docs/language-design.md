@@ -3536,9 +3536,9 @@ auto items = data["items"].as_array()
    - Borrow checker (MIR-based, like Rust's)
 
 4. **Phase 4 - Code Generation**
-   - AST -> GIR (monomorphization, drop insertion, closures) -> SSA-based LIR
-   - LIR -> C (sole production backend); optional LIR -> LLVM IR behind `--backend=llvm`
-   - Target: native binaries via a system C compiler (optimization handled by the C compiler)
+   - AST -> GIR (monomorphization, drop insertion, closures) -> SSA-based LIR -> BIR (backend IR, expands canonical ops) -> C or LLVM IR
+   - C backend (`c-lir`): sole default production backend; LLVM IR backend available via `--backend=llvm`
+   - Target: native binaries via a system C compiler or LLVM (optimization handled by the backend)
 
 5. **Phase 5 - Standard Library** (batteries included)
    - Core types, traits, collections, iterators

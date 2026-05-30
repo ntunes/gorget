@@ -994,7 +994,9 @@ void push_drop_scope(DropElaborator &de, int kind):
 #      emits `IMoveSlot` as a `/* move_slot */;` no-op (line 3120),
 #      mirroring Rust's backend which relies on a downstream LIR
 #      `drop_elab` pass for static elision of the redundant drop.
-#      The self-host doesn't have `drop_elab`. The Rust `drop_elab`
+#      The self-host's `drop_elab.gg` (wired at `driver.gg:19`) mirrors
+#      the Rust `drop_elab` pass but the lir_codegen.gg IMoveSlot no-op
+#      means drop_elab's elision is never triggered. The Rust `drop_elab`
 #      tracks per-slot init state (Initialised / Uninitialised /
 #      MaybeInitialised) through the LIR CFG and elides DropIfAlive
 #      whose memcmp would be statically known to suppress.
@@ -1335,11 +1337,10 @@ void flush_drop_queue(LowerCtx &ctx):
 # whose mutating-status depends on the callee) STOP and file as TODO
 # rather than defaulting to consume-with-conservative-clone.
 #
-# All four operand modes lower to the same `ISlotLoad` in
-# `lir_lower.gg:2349-2394`, so the runtime behaviour is unchanged —
-# the helper produces correct GIR ownership labels without inserting
-# any clone or move-zero codegen. When Phase 2c codegen lands real
-# OpClone/OpMove emission, the labels written here become the contract.
+# OpClone now emits a real runtime clone call (`lir_lower.gg:2453-2521`);
+# OpMove/OpBorrow/OpCopy still lower to `ISlotLoad`. The ownership labels
+# written here are the contract that drives clone vs load vs addr selection
+# in `lir_lower.gg:2349-2521`.
 
 # Callee-signature-driven classifier for regular call args.
 # Returns CkCallArgOwning iff `fname` is in fn_move_params AND the

@@ -17,13 +17,15 @@
 //! See `docs/devbook/16-bir.md` for the full design and
 //! the migration roadmap.
 //!
-//! ## Current state (Step 0)
+//! ## Current state
 //!
-//! The scaffolding exists but no canonical ops have been added to LIR yet,
-//! so `lower_lir_to_bir` is a trivial passthrough and
-//! `assert_primitives_only` has an empty allowlist of ops-to-reject. As each
-//! canonical op lands in LIR (Steps 1-8), it gets a match arm in the
-//! validator and an expansion in the lowering pass.
+//! `lower_lir_to_bir` expands 11 canonical ops (`SizeOf`, `EnumInit`,
+//! `EnumCheck`, `EnumExtract`, `StructInit`, `CowClone`, `TraitCall`,
+//! `HofExpand`, `AddressOf`, `BoxAlloc`, `CollectionCtor`) to primitive
+//! instructions via `src/bir/lower.rs` (~4 000 lines). `validate.rs`
+//! rejects any surviving canonical op — the BIR newtype guarantee is
+//! enforced at the type level. `lower.rs` also holds the BIR synth
+//! helpers used by backends.
 
 pub mod lower;
 pub(crate) mod synth;

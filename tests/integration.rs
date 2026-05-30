@@ -13834,8 +13834,8 @@ fn self_host_bootstrap() {
     //
     //    Doesn't yet check for byte-equality vs stage-0's output —
     //    that's the fixed-point property tracked by the separate
-    //    `self_host_bootstrap_fixed_point` test (currently #[ignore]
-    //    pending self-host emission correctness fixes).
+    //    `self_host_bootstrap_fixed_point` test (live as of 2026-05-28;
+    //    converges in up to 5 generations).
     let stage1_run_out = run_with_deadline(
         Command::new(&stage1_bin)
             .arg(&driver_gg)

@@ -201,12 +201,19 @@ fn module_imports_std_iter(module: &Module) -> bool {
 /// in the prelude, but their actual definitions (with default methods
 /// like `count`/`collect`/`take`/…) live in `std.iter`. Modules that
 /// `equip X with Iterator[T]:` or call `.iter()` need those defaults.
+///
+/// Note: `sum_iter`, `product_iter`, `min_iter`, `max_iter`, `join_iter`
+/// were retired from `lib/std/iter.gg` on 2026-04-27 (replaced by
+/// `Iterator` default methods). Kept here for backwards-compatible
+/// auto-load triggering: old user code referencing them still gets
+/// `std.iter` loaded so the migration error is clear.
 const STD_ITER_NAMES: &[&str] = &[
     "Iterator", "Iterable", "IntoIterable", "Drainable",
     "VectorIter", "VectorDrain", "TakeIter", "SkipIter", "ChainIter",
     "MapIter", "FilterIter", "TakeWhileIter", "DropWhileIter",
     "FilterMapIter", "InspectIter", "EnumerateIter", "ZipIter",
     "WindowsIter", "ChunksIter", "DictIter", "SetIter",
+    // retired free-fn names — kept as detection sentinels (see above)
     "sum_iter", "product_iter", "min_iter", "max_iter",
     "join_iter", "set_iter",
 ];
@@ -618,40 +625,21 @@ impl ModuleLoader {
             self.load_recursive(&base_dir, &hash_segments, &mut results)?;
         }
 
-        // NOTE: auto-loading `std.iter` heuristic is scaffolded
-        // (`module_should_auto_load_std_iter`) but the call site is
-        // intentionally disabled. Two mutually-aware IR passes need
-        // to reconcile before turn-on:
+        // Auto-load `std.iter` when the entry module references iterator
+        // names or calls `.iter()` — see `module_should_auto_load_std_iter`.
+        // Shadowing + existing-import checks avoid collisions with fixtures
+        // that define their own iterator types.
         //
-        // 1. `try_lower_iterator_adapter` in
-        //    `src/ir/lowering/exprs/methods.rs` still eagerly
-        //    materialises `.map()` / `.filter()` / `.fold()` /
-        //    `.collect()` on any Iterator implementor into a
-        //    `GorgetArray` literal (the old "one-step" path).
-        //
-        // 2. With std.iter loaded, typecheck's name-based
-        //    trait-default dispatch resolves those same calls to the
-        //    lazy `Iterator[T]` default adapters
-        //    (`FilterIter[Self, T, F]` etc.).
-        //
-        // Turning on auto-load without reconciling them causes
-        // typecheck/IR type mismatch at call sites
-        // (`Vector[int] evens = it.filter(p)` returns Vector per
-        // typecheck but GorgetArray per IR; next-hop `.collect()`
-        // mangles to `gorget_array_collect` which doesn't exist).
-        //
-        // Follow-up: either delete the eager shortcut (+ migrate
-        // fixtures that rely on it to `.collect()` semantics) or
-        // make typecheck prefer the eager shortcut when the receiver
-        // has one registered. Tracked in
-        // `docs/devbook/22-modules-packages.md` (auto-loads —
-        // "Auto-import std.iter via the loader").
-        //
-        // Auto-load std.iter when the entry module references
-        // iterator names or calls `.iter()` — see
-        // `module_should_auto_load_std_iter`. Shadowing + existing-
-        // import checks avoid collisions with fixtures that define
-        // their own iterator types.
+        // Known tension (TODO — tracked in
+        // `docs/devbook/22-modules-packages.md`): `try_lower_iterator_adapter`
+        // in `src/ir/lowering/exprs/methods.rs` eagerly materialises
+        // `.map()` / `.filter()` etc. into `GorgetArray` literals (the old
+        // "one-step" path), while typecheck with std.iter loaded dispatches
+        // those same calls to lazy `Iterator[T]` default adapters. If a
+        // fixture hits the mismatch (`Vector[int]` from typecheck vs
+        // `GorgetArray` from IR) the next-hop `.collect()` fails. Resolve by
+        // either deleting the eager shortcut + migrating callers, or by making
+        // typecheck prefer the eager shortcut when one is registered.
         let auto_load_iter = results.last()
             .map(|(_, _, _, m, _)| module_should_auto_load_std_iter(m))
             .unwrap_or(false);

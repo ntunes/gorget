@@ -165,7 +165,7 @@ Useful for debugging and UB detection.
 ```bash
 gg sim app.gg
 gg sim app.gg --ub-checks           # detect undefined behavior
-gg sim app.gg --max-steps=100000    # limit execution steps
+gg sim app.gg --seed=42             # seed the RNG for reproducibility
 ```
 
 ### `gg sim test <file.gg>`
@@ -181,9 +181,12 @@ gg sim test app.gg --ub-checks
 | Flag | Description |
 |------|-------------|
 | `--ub-checks` | Enable undefined behavior detection |
-| `--max-steps=<n>` | Limit execution steps |
+| `--seed=<n>` | Seed the RNG with N for reproducible runs |
+| `--many-seeds=<from>..<to>` | Run with each seed in `[from, to)` to find non-deterministic bugs |
+| `--ignore-leaks` | Suppress leak reports |
+| `--disable-isolation` | Allow real I/O (otherwise sandboxed) |
+| `--backtrace=<0\|1\|full>` | Error detail level |
 | `--overflow=<mode>` | Overflow behavior (`wrap` or `checked`) |
-| `--scheduler=<mode>` | Scheduler mode |
 
 ---
 

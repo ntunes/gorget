@@ -48,9 +48,10 @@ Backends should be at parity; a regression on one but not the other usually mean
 
 - `src/lexer/` — Logos-based tokenizer with indentation tracking
 - `src/parser/` — Recursive descent parser producing AST
-- `src/semantic/` — Name resolution, type checking, trait registry, provenance inference, borrow checking
+- `src/semantic/` — Name resolution, type checking, trait registry, borrow checking
 - `src/ir/` — Intermediate representation and lowering from AST (monomorphization, drop insertion, closures)
-- `src/lir/` + `src/backend/c_lir/` — SSA-based LIR backend (sole production backend)
+- `src/lir/` + `src/backend/c_lir/` — SSA-based LIR; `src/bir/` — BIR lowers canonical ops before backend emit
+- `src/backend/llvm/` — LLVM IR backend (`--backend=llvm`)
 - `src/backend/c/` — C runtime library and SQLite amalgamation
 - `src/formatter/` — Source formatter (`gg fmt`)
 - `src/sim/` — Interpreter / simulation runtime
