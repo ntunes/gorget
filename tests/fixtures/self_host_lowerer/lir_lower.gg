@@ -3617,6 +3617,29 @@ LirModule lower_gir_to_lir(GirModule &gmod):
         func_index.put(gfn.name.clone(), fi)
         fi += 1
 
+    # Translate const-init globals (trait-impl `_VTable` structs) GIR → LIR.
+    # Each GirGlobal is a struct-of-FuncAddr; resolve every GGINIT_FN_REF
+    # field's mangled impl-fn name to a FuncId via `func_index` (built just
+    # above, so all bodies are already indexed). Mirrors Rust gg's
+    # `lower_global_init` resolving `GlobalInit::FnRef(name)` through the
+    # func index (`src/lir/lower/types.rs:573-579`). A name with no fid
+    # falls back to a GINIT_ZEROED field → NULL slot in C (defensive parity
+    # with Rust `types.rs:577`; should not happen given the default-emit
+    # guarantee). Latent until the vtable-emission pass populates
+    # `gmod.globals` (Phase 4) — this loop is a no-op over an empty vector
+    # today.
+    for gg_global in gmod.globals:
+        int g_ty = map_gir_type(gg_global.type_id, &gmod, &sr)
+        Vector[LirGlobalField] lf = []
+        for f in gg_global.fields:
+            if f.kind == GGINIT_FN_REF:
+                if func_index.contains(f.fn_name):
+                    int fid = func_index.get(f.fn_name).unwrap()
+                    lf.push(LirGlobalField(GINIT_FUNC_ADDR, fid))
+                else:
+                    lf.push(LirGlobalField(GINIT_ZEROED, -1))
+        lir_mod_add_global(&m, LirGlobal(gg_global.name.clone(), g_ty, GINIT_STRUCT, -1, "", gg_global.is_const, lf))
+
     # Lower extern declarations
     for gext in gmod.externs:
         int ext_ret = map_gir_type(gext.return_type, &gmod, &sr)
@@ -3644,9 +3667,15 @@ LirModule lower_gir_to_lir(GirModule &gmod):
 # collides with the e2e harness's runtime preamble in
 # `self_host_e2e` (`tests/integration.rs:14149`).
 #
-# Self-host only emits GINIT_RUNTIME_CALL globals — no FUNC_ADDR
-# vtable globals to preserve indirectly — so the rule is simple:
-# referenced ↔ kept.
+# For GINIT_RUNTIME_CALL globals the rule is simple: referenced via
+# IGlobalAddr ↔ kept. But GINIT_STRUCT (vtable) globals are referenced
+# by NO IGlobalAddr — their slot fns are reached only through the
+# `(void*)&fn` casts the C backend emits in the global initializer, never
+# via an instruction. The dead-global pruner would therefore wrongly
+# delete every vtable global. Pass 1 marks any GINIT_STRUCT global as
+# referenced unconditionally, mirroring Rust gg's `eliminate_dead_globals`
+# keeping any global whose init contains FuncAddrs
+# (`src/lir/optimize.rs:436-443`, `global_has_func_addrs`).
 void eliminate_dead_globals(LirModule &m):
     if m.globals.len() == 0:
         return
@@ -3660,6 +3689,15 @@ void eliminate_dead_globals(LirModule &m):
                         referenced.put(gid, true)
                     else:
                         pass
+    # Keep vtable globals (FuncAddr-bearing) — referenced indirectly via
+    # the `(void*)&fn` casts in the C global initializer, not via any
+    # IGlobalAddr instruction. Mirror Rust gg's `eliminate_dead_globals`
+    # carve-out (`src/lir/optimize.rs:436-443`, `global_has_func_addrs`).
+    int kg = 0
+    while kg < m.globals.len():
+        if m.globals.get(kg).unwrap().init_kind == GINIT_STRUCT:
+            referenced.put(kg, true)
+        kg += 1
     if referenced.len() == m.globals.len():
         return
     # Pass 2: build old→new index map and the kept-globals vector.
