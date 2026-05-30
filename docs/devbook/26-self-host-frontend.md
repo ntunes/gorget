@@ -329,15 +329,17 @@ Concrete fossils this rule has already retired (cited so they're not re-grown):
 the `StructRegistry` parallel `Vector[String]` + `Vector[int]` → `Dict`
 (commit `8d944ddc`), the `type_info_keys_safe` Dict-keys wrapper, the
 `sr_lookup` wrapper (retired; only a comment at `lower.gg:4670` still references
-it), and the flat-`pending_phis` SSA dodge. Note that **not every dodge of this
-class is gone**: the get-then-unwrap workaround survives as `get_item_at_idx`
-(`tests/fixtures/self_host_typechecker/traits.gg:479`), with a still-cited
-codegen bug in its comment (`traits.gg:477-478`: *"works around a codegen bug
-where inline `module.items.get(i).unwrap()` zero-inits the local instead of
-loading"*) — the same bug class as resource-model §7. The running audit log of
-gaps surfaced → fixed → re-implemented lives in
-`docs/internals/self-host-resource-model.md` §7; an entry only moves to
-`DONE.md` once the third column (idiomatic re-implementation) is filled.
+it), the flat-`pending_phis` SSA dodge, and the get-then-unwrap typed-accessor
+wrapper in `traits.gg`. That last one is instructive: its comment cited *"a
+codegen bug where inline `module.items.get(i).unwrap()` zero-inits the local
+instead of loading"* — but the bug was fixed long ago, the inline
+`.get(i).unwrap()` shape is used directly at ~10 live sites (e.g. `meta.gg`,
+`loader.gg`, `driver.gg`) that compile and bootstrap fine, and the wrapper had
+**zero callers** by the time it was deleted: a dead fossil whose stale comment
+was a false historical record. The running audit log of gaps surfaced → fixed →
+re-implemented is maintained inline in this chapter; an entry only counts as
+fully retired once the idiomatic re-implementation has replaced the workaround
+everywhere (not merely "the bug is fixed").
 
 ## Pointers
 

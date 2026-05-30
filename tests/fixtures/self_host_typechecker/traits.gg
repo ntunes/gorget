@@ -474,11 +474,6 @@ void register_builtin_traits(ScopeTable scopes, TypeTable types, TraitRegistry &
 
 # ── Build the registry for a module ──────────────────────────
 
-# Typed accessor — works around a codegen bug where inline
-# `module.items.get(i).unwrap()` zero-inits the local instead of loading.
-Item get_item_at_idx(Vector[Item] v, int i):
-    return v.get(i).unwrap()
-
 TraitRegistry build_trait_registry(Module module, ScopeTable &scopes, TypeTable &types):
     TraitRegistry registry = new_trait_registry()
     int module_scope = 0
