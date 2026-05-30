@@ -690,6 +690,49 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                             # Create a renamed copy
                             FunctionDef renamed = FunctionDef(mangled, fdef.params, fdef.return_type, fdef.type_params, fdef.body, fdef.is_expr_body, fdef.throws_type)
                             m.items.push(IFunction(renamed))
+                        else:
+                            # Imported extern stub / forward declaration
+                            # (`extern "C" String __bytes_to_str_raw(...) = "sym"`).
+                            # When imported, the parser yields an IFunction whose
+                            # body is empty (forward-decl shape) or a single
+                            # string-literal alias stmt — either way `has_real_body`
+                            # is false and the stub is otherwise DROPPED, so its
+                            # RETURN TYPE never reaches the lowerer's fn_sigs. A
+                            # caller's `String chunk = __bytes_to_str_raw(buf.clone())`
+                            # then types `chunk` as I64 (the default); the i64 slot
+                            # mismatches the Str call result and the C-emit
+                            # ISlotStore give-up (lir_codegen aggregate-into-scalar)
+                            # zeroes the store whenever SSA doesn't promote the dead
+                            # slot — the io.gg Writer-for-String self-instability
+                            # (bug #4). Push an EMPTY-body copy under the SOURCE name
+                            # so the fn_sigs refine pass registers the real return
+                            # type; the empty body keeps the function-lowering loop
+                            # (lower.gg:~9623, gated on body.len() > 0) from emitting
+                            # a degenerate body, and lir_lower's map_runtime_name
+                            # still spells the C symbol at the call site.
+                            #
+                            # SCOPE: only String-returning stubs. `cstr`-returning
+                            # externs (getenv / _parse_last_error / getcwd …) also
+                            # declare an aggregate-ish return but have a SEPARATE
+                            # cstr-coercion path (is_cstr_returning_call at SVarDecl,
+                            # gorget_str_from_cstr) that keys off the I64-default
+                            # slot; registering them as GorgetString breaks that
+                            # path (const char* vs Str cc mismatch). Restrict to the
+                            # `String` return shape that the bug #4 class needs.
+                            bool stub_is_string_ret = false
+                            match fdef.return_type.ty:
+                                case TPrimitive(stub_rt_name):
+                                    if stub_rt_name == "String":
+                                        stub_is_string_ret = true
+                                case TNamed(stub_rt_name2, _):
+                                    if stub_rt_name2 == "String":
+                                        stub_is_string_ret = true
+                                else:
+                                    pass
+                            if stub_is_string_ret:
+                                Vector[Stmt] empty_body = Vector[Stmt]()
+                                FunctionDef stub_decl = FunctionDef(fdef.name.clone(), fdef.params, fdef.return_type, fdef.type_params, empty_body, false, fdef.throws_type)
+                                m.items.push(IFunction(stub_decl))
                     case IEnum(edef):
                         # Merge imported enums so type_infos has variant info —
                         # this lets the lowerer route bare variant constructors

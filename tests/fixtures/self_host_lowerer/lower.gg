@@ -9229,6 +9229,23 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                 case None:
                                     pass
                             gmod.fn_sigs.put(rs_fdef.name, rs_rt)
+                        case TPrimitive(rs_prim_name):
+                            # `String` is a TPrimitive in the AST but resolves to
+                            # the aggregate GorgetString — the fn_sigs pre-scan
+                            # left it at the I64 default (it `pass`es on String
+                            # because map_ast_type needs the real gmod). Resolve
+                            # it now. Single-line externs like
+                            # `extern "C" String __bytes_to_str_raw(...)` parse as
+                            # IFunction (parser.gg:3808-3809) with a String return;
+                            # without this, `String x = __bytes_to_str_raw(...)`
+                            # types `x` as i64, the i64 slot mismatches the Str
+                            # call result, and the C-emit ISlotStore give-up
+                            # (lir_codegen:2886 aggregate-into-scalar) zeroes the
+                            # store whenever SSA does not promote the dead slot —
+                            # the io.gg Writer-for-String self-instability (bug #4).
+                            int rs_prim_rt = map_ast_type(rs_fdef.return_type, &gmod)
+                            if rs_prim_rt != I64_TYPE:
+                                gmod.fn_sigs.put(rs_fdef.name, rs_prim_rt)
                         else:
                             pass
             else:
