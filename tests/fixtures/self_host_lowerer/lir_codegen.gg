@@ -1070,6 +1070,28 @@ Vector[bool] compute_reachable_fns(LirModule &m):
             dei += 1
         dek += 1
 
+    # FIDELITY Phase 5, edge (i) — vtable-global FuncAddr roots.
+    # A struct-of-FuncAddr global (a trait-impl `_VTable`) keeps its slot
+    # functions live even when no IFuncAddr/ICall references them — Rust gg
+    # seeds these as reachability roots unconditionally
+    # (`src/lir/optimize.rs:268-275` + `collect_global_func_refs:364-374`),
+    # matching its emit-vtable-for-every-impl rule. Without this seed the
+    # entire trait-impl island (Serializer/Deserializer/Writer/Reader/...)
+    # is pruned at C-emit DCE (json_parse: 67 → 28 user fns).
+    int gvi = 0
+    while gvi < m.globals.len():
+        LirGlobal gv = m.globals.get(gvi).unwrap()
+        if gv.init_kind == GINIT_STRUCT:
+            int gfi = 0
+            while gfi < gv.struct_fields.len():
+                LirGlobalField gf = gv.struct_fields.get(gfi).unwrap()
+                if gf.kind == GINIT_FUNC_ADDR and gf.func_id >= 0 and gf.func_id < n:
+                    if not reachable.get(gf.func_id).unwrap():
+                        reachable.set(gf.func_id, true)
+                        worklist.push(gf.func_id)
+                gfi += 1
+        gvi += 1
+
     # Transitive closure: walk reachable functions, follow ICall fids
     # and ICallExtern names.
     int wi = 0
@@ -1102,6 +1124,12 @@ Vector[bool] compute_reachable_fns(LirModule &m):
                         target_orig = callee_orig
                     case IClosurePack(_, _, cf, _):
                         target_fid = cf
+                    case IFuncAddr(_, fa_fid):
+                        # FIDELITY Phase 5, edge (ii) — `&fn` taken as a value
+                        # keeps `fn` live. Mirrors Rust gg's
+                        # `collect_inst_func_refs` (`src/lir/optimize.rs:358`,
+                        # `Inst::FuncAddr { func } => cb(*func)`).
+                        target_fid = fa_fid
                     else:
                         pass
                 if target_fid >= 0 and target_fid < n:

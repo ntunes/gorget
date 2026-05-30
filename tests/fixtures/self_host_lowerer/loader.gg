@@ -727,6 +727,14 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                             # bodies, so self-host must emit them itself.
                             m.items.push(IStruct(sdef))
                     case IEquip(eqblk):
+                        # Extract the equip target's base type name (e.g. "File")
+                        # for mangling extern-stub method redirects below.
+                        String equip_target_name = ""
+                        match eqblk.target.ty:
+                            case TNamed(eq_tn, _):
+                                equip_target_name = eq_tn
+                            else:
+                                pass
                         # Filter: real methods have >=2 body stmts, OR expression body,
                         # OR 1 stmt that isn't a string-literal extern stub marker.
                         # Extern stubs look like: method_name(): "abi_symbol"
@@ -734,6 +742,42 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                         int emi = 0
                         while emi < eqblk.methods.len():
                             FunctionDef emdef = eqblk.methods.get(emi).unwrap()
+                            # Extern-method stub inside an equip: `extern int
+                            # _write_bytes_buf(...) = "gorget_file_write_bytes_buf"`.
+                            # The parser lowers `= "symbol"` to an EXPRESSION body
+                            # `[SReturn(Some(EStringLiteral(symbol)))]` with
+                            # `is_expr_body=true` — so the `or emdef.is_expr_body`
+                            # gate below would WRONGLY treat it as a real method and
+                            # emit a degenerate body that `return`s the symbol string
+                            # (cc-rejected: returns Str where int64_t expected). These
+                            # must instead become call_redirects to the C runtime
+                            # symbol, exactly as Rust gg inlines `self._m(args)` to
+                            # `gorget_<symbol>(self, args)` (see Writer_for_File__write
+                            # → gorget_file_write_bytes_buf). Detect the stub shape,
+                            # register `<Target>__<method>` → `<symbol>`, and SKIP it.
+                            # Latent until the FIDELITY vtable globals made the io.gg
+                            # Writer/Reader-for-File impls reachable.
+                            if emdef.is_expr_body and emdef.body.len() == 1 and equip_target_name != "":
+                                String stub_symbol = ""
+                                Stmt stub_s = emdef.body.get(0).unwrap()
+                                match stub_s:
+                                    case SReturn(stub_ret_opt):
+                                        match stub_ret_opt:
+                                            case Some(stub_expr):
+                                                match stub_expr.expr:
+                                                    case EStringLiteral(stub_val, _):
+                                                        stub_symbol = stub_val
+                                                    else:
+                                                        pass
+                                            case None:
+                                                pass
+                                    else:
+                                        pass
+                                if stub_symbol != "":
+                                    String stub_key = equip_target_name + "__" + emdef.name
+                                    call_redirects.put(stub_key, stub_symbol.clone())
+                                    emi += 1
+                                    continue
                             bool is_real = emdef.body.len() >= 2 or emdef.is_expr_body
                             if not is_real and emdef.body.len() == 1:
                                 Stmt first_s = emdef.body.get(0).unwrap()
@@ -775,6 +819,23 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                         if real_methods.len() > 0:
                             EquipBlock filtered = EquipBlock(eqblk.target, eqblk.type_params, eqblk.trait_name, real_methods, eqblk.via_field, eqblk.trait_generic_args)
                             m.items.push(IEquip(filtered))
+                    case ITrait(tdef):
+                        # Merge imported concrete (non-generic) trait
+                        # declarations so the lowerer's `trait_defs` map has
+                        # the full ordered method-slot list. Mirrors Rust gg's
+                        # loader, which merges ALL imported items unconditionally
+                        # (`src/loader.rs:1386 all_items.extend(module.items)`,
+                        # including `Item::Trait`). Required by FIDELITY Phase 4:
+                        # `emit_vtable_globals` gates on the trait being in
+                        # `trait_defs` (analog of Rust's `trait_info.get(name)`),
+                        # and the io.gg / serde traits (Writer/Reader/Error/
+                        # Serializer/Deserializer) are all imported — without
+                        # this merge, json_parse's trait-impl island is never
+                        # vtable-rooted and stays DCE'd (28 user fns vs Rust's 67).
+                        # Generic traits would need monomorphization (Rust skips
+                        # them in register_trait_types too) — merge concrete only.
+                        if tdef.type_params.len() == 0:
+                            m.items.push(ITrait(tdef))
                     case IConstDecl(_, _, _):
                         # Merge module-level `const int X = 5` so the main
                         # lowerer's pre-scan sees them and EIdentifier(X)

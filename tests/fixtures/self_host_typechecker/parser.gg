@@ -3477,8 +3477,31 @@ equip Parser:
 
     Item parse_trait_item(&self):
         self.expect_kw(KW_TRAIT, "expected 'trait'")
-        SpannedToken name_tok = self.advance()
-        String name = token_ident(name_tok.lex_token)
+        # Trait name may be a prelude-variant keyword (`trait Error extends
+        # …` in lib/std/io.gg). Those tokens lex as keywords (KwError /
+        # KwOk / …), so `token_ident` returns "" for them — which would
+        # register the trait under an EMPTY name in `trait_defs` and break
+        # the `trait_defs.contains("Error")` gate that FIDELITY Phase 4's
+        # vtable emission depends on. Mirror the exact same special-case
+        # `parse_equip_item` already applies to `with Error`
+        # (parser.gg:3548-3561), so the declaration and impl sides agree.
+        String name = ""
+        int trait_kw_tag = self.peek_kw()
+        if trait_kw_tag == KW_ERROR:
+            name = "Error"
+            self.advance()
+        elif trait_kw_tag == KW_OK:
+            name = "Ok"
+            self.advance()
+        elif trait_kw_tag == KW_SOME:
+            name = "Some"
+            self.advance()
+        elif trait_kw_tag == KW_NONE:
+            name = "None"
+            self.advance()
+        else:
+            SpannedToken name_tok = self.advance()
+            name = token_ident(name_tok.lex_token)
         Vector[String] type_params = Vector[String]()
         if self.check_tok(TOK_LBRACKET):
             type_params = self.parse_type_params()

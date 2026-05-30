@@ -17,6 +17,11 @@ from gir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
 from gir import UNOP_NEG, UNOP_NOT, UNOP_BITNOT
 from gir import init_type_table, register_type, lookup_or_register_named, register_ptr
 from gir import ResourceMetadata
+# FIDELITY Phase 4: vtable-global emission (struct-of-FuncAddr globals for
+# non-derive trait impls). Mirrors Rust gg's `emit_vtable_globals`
+# (`src/ir/lowering/traits.rs:985`). GirTypeInfo/GirFieldInfo/
+# lookup_or_register_named are already imported above.
+from gir import GirGlobal, GirGlobalField, gir_mod_add_global, GGINIT_FN_REF, GGINIT_STRUCT
 # Phase 2b (Path A part 2): typed position-class enum for op_consume
 # dispatch. See gir.gg::ConsumeKind for the full partition.
 from gir import ConsumeKind, CkAssign, CkReturn, CkCallArgBorrow, CkCallArgOwning, CkFieldWrite
@@ -4860,6 +4865,17 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # receiver dispatch and the per-arg classify_call_arg.
             String recv_type_name = local_type_name(recv, &ctx, &gmod)
             String full_name = recv_type_name + "__" + mname
+            # Extern-method redirect: an `extern int _m(...) = "gorget_sym"`
+            # method inside an equip block (e.g. File's `_write_bytes_buf`)
+            # is registered by the loader as a call_redirect keyed on the
+            # mangled `<Target>__<method>` name. Resolve it here so the call
+            # emits the C runtime symbol DIRECTLY (mirroring Rust gg inlining
+            # `self._m(args)` → `gorget_sym(self, args)`), rather than calling
+            # a degenerate stub body. Only extern-equip methods land in
+            # call_redirects under this Type__method shape, so this never
+            # perturbs ordinary user-method dispatch.
+            if gmod.call_redirects.contains(full_name):
+                full_name = gmod.call_redirects.get(full_name).unwrap()
             Vector[Operand] call_args = []
             GirLocal recv_loc = ctx.locals.get(recv).unwrap()
             match recv_loc.ownership:
@@ -7557,6 +7573,22 @@ bool is_builtin_trait(String tname):
         return true
     return false
 
+# Predicate: is this an instance method (first param's TYPE is `TSelf()`)?
+# FIDELITY Phase 4 — vtable globals carry one FuncAddr slot per INSTANCE
+# trait method; static methods are not vtable slots. Mirrors Rust gg's
+# `register_trait_types` has_self check (`src/ir/lowering/traits.rs:88-93`)
+# and the inline pattern at lower_equip_block (`lower.gg:7603-7607`).
+# Matches on the TYPE being `TSelf()`, NOT on `param_name == "self"`.
+bool method_has_self(FunctionDef mdef):
+    if mdef.params.len() == 0:
+        return false
+    Param first_p = mdef.params.get(0).unwrap()
+    match first_p.param_type.ty:
+        case TSelf():
+            return true
+        else:
+            return false
+
 void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
     # Get the target type name
     String target_name = type_to_c_name(eqblk.target, &gmod)
@@ -9523,6 +9555,43 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             else:
                 pass
 
+    # FIDELITY Phase 4(a) — `_VTable` struct typedef pre-pass.
+    # For each non-generic, non-derive trait with ≥1 INSTANCE method,
+    # register a `<MangledTrait>_VTable` struct type so the vtable global's
+    # `type_id` resolves to a real LIR struct (→ `struct __gg_<Trait>_VTable`).
+    # Mirrors Rust gg's `register_trait_types` VTable struct creation
+    # (`src/ir/lowering/traits.rs:174-199`), including its method-less skip
+    # (`traits.rs:174: if methods.is_empty(): continue`).
+    #
+    # Each slot field carries an OPAQUE, NON-resource, NON-keyword
+    # `type_name` (`"__vtslot"`) so `resolve_field_lir_type` falls through
+    # to `LT_PTR` → `void*` in C (the precise fn-ptr field spellings are a
+    # deferred byte-parity concern — see the design's §7e). The opaque name
+    # is non-resource so `populate_drop_metadata` emits no spurious slot
+    # drop (`drop_fn_for_type` returns "" for it). Field types don't affect
+    # the `user_fn_count` metric — only the slot fns' reachability does.
+    for vt_item in m.items:
+        match vt_item:
+            case ITrait(vt_tdef):
+                if vt_tdef.type_params.len() == 0 and not is_builtin_trait(vt_tdef.name):
+                    Vector[GirFieldInfo] vt_ti_fields = []
+                    int vt_slot_idx = 0
+                    for vt_slot in vt_tdef.methods:
+                        if method_has_self(vt_slot):
+                            vt_ti_fields.push(GirFieldInfo("slot" + int_to_str(vt_slot_idx), "__vtslot"))
+                            vt_slot_idx += 1
+                    # Method-less skip (Fold 2): only register when ≥1 instance slot.
+                    if vt_ti_fields.len() > 0:
+                        String vt_ti_name = mangle_trait_name(vt_tdef.name) + "_VTable"
+                        # (a) GtNamed entry so the struct gets a type id /
+                        # `__gg_<Trait>_VTable` c-name; (b) GirTypeInfo so
+                        # `lower_type_defs` Pass-1b/Pass-2 register + fill it.
+                        int _vt_tid_reg = lookup_or_register_named(&gmod, vt_ti_name)
+                        Vector[GirEnumVariantInfo] vt_no_variants = []
+                        gmod.type_infos.put(vt_ti_name.clone(), GirTypeInfo(vt_ti_name.clone(), vt_ti_fields, vt_no_variants, false))
+            else:
+                pass
+
     # Lower each non-generic function, equip method, and test block
     int test_idx = 0
     for item in m.items:
@@ -9731,6 +9800,29 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                                 GirFunction pt_last_fn = gmod.functions.get(pt_last).unwrap()
                                                 gmod.functions.set(pt_last, GirFunction(pt_mangled, pt_last_fn.param_types, pt_last_fn.return_type, pt_last_fn.locals, pt_last_fn.blocks))
                                                 overridden.put(pt_meth.name.clone(), true)
+                                # FIDELITY Phase 4(b) — emit the vtable global
+                                # for this non-derive trait impl, ONCE per equip.
+                                # A struct-of-FuncAddr global whose slots are
+                                # `(void*)&<MangledTrait>_for_<target>__<slot>`,
+                                # one per INSTANCE trait method. Mirrors Rust gg's
+                                # `emit_vtable_globals` (`traits.rs:1015-1037`):
+                                # unconditional per-impl, regardless of any
+                                # use-site. The FnRef mangling is byte-identical
+                                # to the body mangling above (`mangle_trait_name`
+                                # + "_for_" + `eq_target_sp` + "__" + slot.name —
+                                # same `eq_target_sp` the bodies use), so every
+                                # slot resolves to a real emitted fn. Phase 5's
+                                # DCE then keeps those bodies live.
+                                String vt_struct_name = mangle_trait_name(tname) + "_VTable"
+                                int vt_tid = lookup_or_register_named(&gmod, vt_struct_name)
+                                Vector[GirGlobalField] vt_fields = []
+                                for tslot in tdef.methods:
+                                    if method_has_self(tslot):
+                                        String impl_fn = mangle_trait_name(tname) + "_for_" + eq_target_sp + "__" + tslot.name
+                                        vt_fields.push(GirGlobalField(GGINIT_FN_REF, impl_fn))
+                                if vt_fields.len() > 0:
+                                    String vt_global_name = mangle_trait_name(tname) + "_for_" + eq_target_sp + "_vtable"
+                                    int _vt_gid = gir_mod_add_global(&gmod, GirGlobal(vt_global_name, vt_tid, GGINIT_STRUCT, vt_fields, false))
                         case None:
                             pass
                     if not did_split:

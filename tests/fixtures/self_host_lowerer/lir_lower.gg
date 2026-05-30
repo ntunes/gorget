@@ -1275,7 +1275,18 @@ String map_runtime_name(String name, LirModule &m, GirModule &gmod):
         String method = extract_method_name(name)
         match method:
             case "push":
-                return "gorget_string_push"
+                # `String.push(Str chunk)` → `gorget_string_push_char(
+                # GorgetString*, Str)`. The old spelling `gorget_string_push`
+                # has NO definition (only `_char`/`_byte`/`_int`/… variants),
+                # and `gorget_str_push` is a Rust-emitted thin wrapper that
+                # lives in the per-MODULE C section (NOT the shared runtime
+                # preamble the bootstrap concatenates), so it link-fails when
+                # the self-host body calls it. `gorget_string_push_char` IS in
+                # the core preamble and has the exact `(GorgetString*, Str)`
+                # ABI. Surfaced once io.gg's `equip String with Writer:`
+                # (`self.push(chunk)`) became reachable via the FIDELITY
+                # vtable globals.
+                return "gorget_string_push_char"
             case "len":
                 return "gorget_str_codepoint_count"
             case "byte_len":
@@ -1921,6 +1932,14 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
         if fn_name == "gorget_set_contains" or fn_name == "gorget_set_len":
             return true
         if fn_name == "gorget_set_clone" or fn_name == "gorget_set_is_empty":
+            return true
+        # `gorget_bytes_to_str(const GorgetArray* arr)` — reads a Vector[byte]
+        # by const pointer (`__bytes_to_str_raw` / `.to_str()` on a byte
+        # buffer). Without this, the array self-arg is passed by value and cc
+        # rejects it (`incompatible type for argument 1 of gorget_bytes_to_str`).
+        # Surfaced once the io.gg Writer-for-GorgetString impl became reachable
+        # via the FIDELITY vtable globals. Mirrors Rust gg's by-pointer ABI.
+        if fn_name == "gorget_bytes_to_str":
             return true
         # Note: gorget_str_codepoint_count takes Str by value, NOT by pointer.
         # Clone fns (used by emit_payload_read's blocker-2 path for
@@ -2741,6 +2760,17 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
             # User functions with resource-type bare params receive Ptr(T),
             # so the caller must pass SlotAddr (pointer) instead of SlotLoad (value).
             Vector[int] fn_param_tys = get_fn_param_types(func_name, &gmod)
+            # Effective runtime name (post map_runtime_name) so the
+            # `needs_ptr_arg` runtime ABI table is consulted here too — the
+            # extern-by-value declaration of a runtime fn (e.g.
+            # `extern "C" String __bytes_to_str_raw(Vector[uint8])` →
+            # `gorget_bytes_to_str(const GorgetArray*)`) has a by-value GIR
+            # param type, so `is_ptr_type` alone would pass the array by value
+            # and cc rejects it. Mirrors the GICallExtern arm (line ~2993).
+            String gic_eff_name = func_name
+            String gic_mapped = map_runtime_name(func_name, &m, &gmod)
+            if gic_mapped != "":
+                gic_eff_name = gic_mapped
             Vector[int] lir_args = []
             int ai = 0
             while ai < args.len():
@@ -2751,6 +2781,8 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                     int pty = fn_param_tys.get(ai).unwrap()
                     if is_ptr_type(pty, &gmod):
                         pass_by_ptr = true
+                if not pass_by_ptr and needs_ptr_arg(gic_eff_name, ai):
+                    pass_by_ptr = true
                 if pass_by_ptr:
                     match arg:
                         case OpCopy(local_id):
