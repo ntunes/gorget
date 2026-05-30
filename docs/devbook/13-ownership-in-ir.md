@@ -324,8 +324,8 @@ own (assignment, mutating method, struct/enum/tuple init, collection put,
 return, move transfer, field store, closure capture) — and "boundary" is
 structural, not a fixed numbered list: it is wherever the two materialization
 helpers (`ensure_owned_at_boundary` / `ensure_owned_at_consuming_arg`) are
-invoked (see Chapter 11's "SIX-vs-SEVEN" callout — any doc quoting a closed
-count is stale). And the dispatch is **callee-driven**: the per-arg mode is
+invoked (see Chapter 11's "enforced boundary set" callout — any doc quoting a
+closed count is stale). And the dispatch is **callee-driven**: the per-arg mode is
 chosen by looking up the *callee's* parameter declaration, not the
 caller's syntactic sigil. The caller's `&`/`!`/bare sigil is an opt-in
 annotation; sigil parity is not required.
@@ -575,9 +575,9 @@ quote a fixed parity figure from memory — re-derive it from the
 - `CLAUDE.md` "Ownership at Consuming Positions" — the user-facing compiler
   contract this metadata implements.
 - [Chapter 11](11-copy-on-write.md) (materialization points) — the
-  materialization-point spec (note its closed "seven" enumeration is stale;
-  see Chapter 11's "SIX-vs-SEVEN" callout — boundaries are structural, driven
-  by the two materialization helpers, not a fixed count).
+  materialization-point spec (note any closed "seven" enumeration is stale;
+  see Chapter 11's "enforced boundary set" callout — boundaries are structural,
+  driven by the two materialization helpers, not a fixed count).
 - The former `unified-resource-model.md` deep-dive — §3 (Phase A, type axis),
   §5 (Phase C, validator), §6 (Phase D, local axis) — has been folded into
   this chapter (and chapters 15/18/25).
