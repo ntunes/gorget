@@ -3,7 +3,7 @@
 //! Single source of truth for the Gorget runtime API at the IR level.
 //! Enum whose variants are the only legal way to name a runtime function
 //! in `Inst::CallRuntime` (added in A1 — see
-//! `docs/internals/lir-correctness-roadmap.md`). Retired the legacy
+//! `docs/devbook/18-runtime-abi.md`). Retired the legacy
 //! string-keyed `runtime_extern_sig()` parallel mirror 2026-05-19; the
 //! `RuntimeFn::from_c_name + resolve_lir_sig` path is the only canonical
 //! lookup now.

@@ -17,9 +17,9 @@ library and the `lib/` modules. The job of this subsystem is to turn a
 `const char*` back into an owned `String`, and pass pointer-sized GPU handles
 through untouched.
 
-This chapter folds `docs/internals/extern-modules.md`. That doc described the
+This chapter folds the former `extern-modules.md` deep-dive. That doc described the
 `borrowed` return qualifier as a *future* feature; it has since shipped — see
-[The `borrowed` qualifier](#the-borrowed-qualifier). The GPU half has no
+[The `borrowed` qualifier](#the-borrowed-qualifier). The GPU half had no
 internals doc and is written here from the runtime source.
 
 ## Extern declaration syntax

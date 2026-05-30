@@ -203,8 +203,8 @@ at `traits.rs:247`, `resolve_method_by_name` at `traits.rs:273`).
 
 ## Method-level generic inference (the real Pass 2c)
 
-> **Status note (fold of `docs/internals/method-level-inference.md`):** that
-> doc's header says "Not yet implemented" — it is **stale**. The work shipped.
+> **Status note (folded from the former `method-level-inference.md` deep-dive):**
+> that doc's header said "Not yet implemented" — it was **stale**. The work shipped.
 > `try_infer_method_targs` (`typecheck.rs:4262`) exists, is wired into the
 > `MethodCall` arm (`typecheck.rs:1805`), is plumbed through Pass 4.5
 > (`apply_inferred_method_targs`, `typecheck.rs:5536`), and the typed failure

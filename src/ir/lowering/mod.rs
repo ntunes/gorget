@@ -954,7 +954,7 @@ pub fn lower_module(
             // Accepts Type::Named (non-generic) AND Type::Primitive — the latter
             // handles `equip String:` / `equip int:` / etc. Returns None for
             // generic-Named (monomorphization handles those) and non-equippable
-            // types. See docs/internals/codegen-gap-spike.md.
+            // types. See docs/devbook/17-c-backend.md.
             if let Some(type_name) = types::equip_target_name(&equip.type_.node) {
                 for method in &equip.items {
                     let method_def = &method.node;
@@ -1571,7 +1571,7 @@ pub fn lower_module(
     // to coherent state. Any TypeDef registered with metadata less
     // restrictive than its fields/variants demand halts the build.
     //
-    // See `docs/internals/structural-guards.md` §Tier 1c.
+    // See `docs/devbook/25-structural-guards.md` §Tier 1c.
     time_pass!(pass_times, "validate_type_metadata_coherence", {
         let warnings = crate::ir::validate::validate_type_metadata_coherence(&module);
         if !warnings.is_empty() {
@@ -1623,7 +1623,7 @@ pub fn lower_module(
     // ONE walk per function and partitions warnings into class buckets
     // so the existing fatal diagnostics — including class-specific
     // labels and per-class violation counts — stay byte-identical with
-    // the legacy split path. See `docs/internals/structural-guards.md`
+    // the legacy split path. See `docs/devbook/25-structural-guards.md`
     // §Phase C / §6.4 for the contract.
     time_pass!(pass_times, "validate_resource_sites_all", {
         let findings = crate::ir::validate::validate_resource_sites_all(&module);
@@ -1707,7 +1707,7 @@ pub fn lower_module(
     }
 
     // Tier 1b — Move follow-through validator. See
-    // `docs/internals/structural-guards.md` §Tier 1b. Promoted from
+    // `docs/devbook/25-structural-guards.md` §Tier 1b. Promoted from
     // env-gated diagnostic to unconditional fatal: the f-string interp
     // segment migration (commit `1d3ccd5b`) closed the dominant
     // violation class, and the c_emit_comparison full-fixture sweep
@@ -1739,7 +1739,7 @@ pub fn lower_module(
     // at `4ebefe44`; this validator locks in the rule so a future
     // shallow-copy heap-allocating consumer can't ship without the
     // paired `move_zero_and_mark`. See
-    // `docs/internals/structural-guards.md` Tier 2c.
+    // `docs/devbook/25-structural-guards.md` Tier 2c.
     //
     // Recognition is typed: `Module::heap_alloc_consumer_externs` is
     // populated at the writer site (3 Box.new lowering paths) and read
@@ -1892,7 +1892,7 @@ pub fn lower_module(
     // Set GG_VALIDATE_CONSUME_SITES=/path/to/log to also write a structured
     // report (class counts, sample violations) without suppressing the panic.
     //
-    // See `docs/internals/structural-guards.md` Tier 2a for the full spec.
+    // See `docs/devbook/25-structural-guards.md` Tier 2a for the full spec.
     time_pass!(pass_times, "validate_consume_sites", {
         let warnings = crate::ir::validate::validate_consume_sites(&module);
         // Tier 2a Phase 3 promoted (2026-05-10): all classes — including

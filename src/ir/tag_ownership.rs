@@ -56,7 +56,7 @@
 //! * Does not introduce drops or registrations — drop tracking is
 //!   independent of ownership inference.
 //!
-//! See `docs/internals/structural-guards.md` Tier 2a for the framing.
+//! See `docs/devbook/25-structural-guards.md` Tier 2a for the framing.
 
 use rustc_hash::FxHashSet;
 

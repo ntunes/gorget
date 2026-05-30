@@ -2387,7 +2387,7 @@ pub(super) fn lower_method_call(
             // some_val/none_val temp is dead immediately after this assign;
             // Copy mode would shallow-alias the heap payload of a resource
             // Option, tripping Phase C's resource-moves validator. See
-            // `docs/internals/unified-resource-model.md` Phase A — Cluster 1.
+            // `docs/devbook/13-ownership-in-ir.md` (Phase A, type axis).
             builder.assign_mode(AssignMode::Move, Place::local(result_id), FunctionBuilder::copy(some_val));
             builder.jump(merge_bb);
 

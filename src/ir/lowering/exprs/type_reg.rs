@@ -124,7 +124,7 @@ pub(crate) fn get_or_register_type(
 /// entry points (alongside `register_collection_alias`'s Box arm in
 /// `lowering/types.rs:789` and `monomorphize_struct`'s Box arm in
 /// `lowering/generics/mod.rs:2334`). All three must populate `is_box`
-/// uniformly — see `docs/internals/layering-discipline.md` rule 3
+/// uniformly — see `docs/devbook/24-layering-discipline.md` rule 3
 /// (one source of truth per axis).
 pub fn ensure_box_type_def(ctx: &mut LoweringContext, box_type_name: &str, inner_type: TypeId) {
     use crate::ir::types::{CopySemantics, DropStrategy, StructDef, StructField, TypeDef, TypeDefKind, TypeMetadata};

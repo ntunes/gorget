@@ -305,7 +305,7 @@ pub(super) fn emit_box_wrapper(out: &mut String, type_name: &str, method: &str, 
     // Trait-object dispatch wrappers (previously a `_ =>` branch here)
     // have been retired: Step 7 moved that to `__gg_synth_trait_*`
     // helpers synthesized via `bir::synth::get_or_emit_trait_helper`.
-    // See `docs/internals/lir-backend-lift-plan.md`.
+    // See `docs/devbook/16-bir.md`.
     match method {
         "get" => writeln!(out, "static inline {elem} {type_name}__get({type_name} self) {{ return *({elem}*)self; }}").unwrap(),
         "set" => writeln!(out, "static inline void {type_name}__set({type_name} self, {elem} val) {{ *({elem}*)self = val; }}").unwrap(),

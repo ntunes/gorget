@@ -55,7 +55,7 @@ We think safe languages shouldn't have to be verbose. Here's what that means in 
   | borrow (`&` / `.get()` / param)       | auto-clone (always)     |
   | explicit `!source`                    | forced move (source consumed) |
 
-  No `?`-style noise at every call site; `--show-clones` reports every implicit clone with its location and reason if you want to audit them. The full design is in [`docs/internals/copy-on-write.md`](docs/internals/copy-on-write.md).
+  No `?`-style noise at every call site; `--show-clones` reports every implicit clone with its location and reason if you want to audit them. The full design is in [`docs/devbook/11-copy-on-write.md`](docs/devbook/11-copy-on-write.md).
 
 - **Error handling without noise** — functions declare `throws` and errors propagate automatically. No `?` at every call site, no `try` blocks wrapping your logic, no `if err != nil`. When you do need control, `catch`, `rethrow`, and `on error` give you exactly the level of handling you want.
 - **Compiler-checked concurrency** — `shared int count = 0` gives you thread-safe mutable state. The compiler selects the right synchronization primitive (atomic, mutex, or rwlock), prevents deadlocks by enforcing consistent lock ordering, and warns about stale reads, check-then-act races, and lost updates — all at compile time.

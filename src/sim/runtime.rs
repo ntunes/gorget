@@ -708,7 +708,7 @@ pub fn call_extern(
         // (Rust String/Vec), so these collapse to "produce an independent
         // owned String from the source bytes". The compiler inserts these
         // calls at boundary materialization sites (struct/enum init, field
-        // store, return, etc.) — see `docs/internals/copy-on-write.md`.
+        // store, return, etc.) — see `docs/devbook/11-copy-on-write.md`.
         "gorget_string_clone_to_owned"
         | "gorget_string_copy_cow"
         | "gorget_string_borrow"

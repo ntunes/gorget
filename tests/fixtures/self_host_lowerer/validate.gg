@@ -17,7 +17,7 @@
 #      permanently closed.
 #   6. Move the TODO to `DONE.md`.
 #
-# See `docs/internals/self-host-resource-model.md` §5.
+# See `docs/devbook/26-self-host-frontend.md` §5.
 
 from std.collections import Vector, Dict
 from std.conv import int_to_str

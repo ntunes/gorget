@@ -2433,7 +2433,7 @@ fn monomorphize_enum(
     // NEW Result type (e.g., Result__int__int from map_err) to the
     // VarDecl's destination local — currently the dst local is
     // allocated with the OLD type. See
-    // `docs/internals/tier1c-cluster1-burn-down.md`.
+    // `docs/devbook/17-c-backend.md` (the Tier 1c cross-type adapter bug).
     //
     // After view-awareness was added to `validate_resource_moves`
     // (2026-05-11, this commit), the GIR-level validator probe shows

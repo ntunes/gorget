@@ -12,9 +12,10 @@ and `Writer`/`Reader` traits, capacity constructors, the lazy-iterator
 adapter machinery, and how the compiler registers and types the parts that
 *can't* be pure library code.
 
-The design rationale lives in `docs/internals/stdlib-design.md` (approved
-2026-04-16, revised through Phase 5 in 2026-04). This chapter re-derives the
-*shipped* shape from current source — most of what that doc describes in
+The design rationale (formerly the `stdlib-design.md` deep-dive, approved
+2026-04-16, revised through Phase 5 in 2026-04) is folded into this chapter and
+Chapter 22. This chapter re-derives the
+*shipped* shape from current source — most of what that doc described in
 present/future tense is now implemented in `lib/std/`, and the residual
 roadmap (advanced adapters, the third const-borrow iterator tier) is noted
 where relevant but is a TODO, not a description of today's code.
@@ -388,8 +389,8 @@ local `spawn unchecked` opt-out parsed in the expression grammar. This is a
 compiler concern rather than a library one, covered in the safety/borrow
 chapters; it is relevant here only because `Iterator[T !]` (drain) and the
 `shared` sigil are what make the M+N iterator surface safe to use across
-tasks without a Rust-tier borrow tax. (Full detail:
-`docs/internals/stdlib-design.md` §8.)
+tasks without a Rust-tier borrow tax. (Full detail was in the former
+`stdlib-design.md` §8, now folded into this chapter.)
 
 ## 23.9 Roadmap (not yet shipped)
 

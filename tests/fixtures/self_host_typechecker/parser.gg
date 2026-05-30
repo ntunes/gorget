@@ -1290,7 +1290,7 @@ equip Parser:
                 # in the AST. Without this, `extern int f(BigNum* p) =
                 # "..."` parses as f(BigNum, ...) and the leftover `*` and
                 # `p` derail the rest of the param list. See
-                # docs/internals/project_ptr_syntax_extern.md.
+                # docs/devbook/20-extern-gpu.md (the T* pointer syntax).
                 if self.check_tok(TOK_STAR):
                     self.advance()
                 return named_ty

@@ -75,7 +75,7 @@ pub enum Constant {
 }
 
 /// How a value is read at a use site (the *unified* read-mode discipline,
-/// per `docs/internals/unified-resource-model.md` §6.4).
+/// per `docs/devbook/13-ownership-in-ir.md`, the unified read-mode vocabulary).
 ///
 /// Replaces the four previously-parallel per-instruction read mode enums
 /// (`AssignMode`, `FieldLoadMode`, `IndexLoad.borrow: bool`, `ArgOwnership`)
@@ -113,7 +113,7 @@ pub enum ReadMode {
 /// emission and consumer site already uses `AssignMode::{Copy,Move,Clone,Borrow}`
 /// with no behaviour distinct from the unified vocabulary; the alias preserves
 /// the migration-friendly name while folding the semantics into one source of
-/// truth. See `docs/internals/unified-resource-model.md` §6.4.
+/// truth. See `docs/devbook/13-ownership-in-ir.md`, the unified read-mode vocabulary.
 pub type AssignMode = ReadMode;
 
 /// Move vs Borrow mode for `EnumFieldLoad` (Snag #34 family).

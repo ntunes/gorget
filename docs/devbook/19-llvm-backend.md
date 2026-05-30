@@ -20,10 +20,11 @@ where the two backends share ABI logic, and the handful of places the LLVM
 emitter must do work the C compiler otherwise did for free (signedness,
 struct padding, sret, overflow intrinsics).
 
-> The old planning doc `docs/internals/llvm-backend-plan.md` is framed in the
-> future tense ("Phase 1 … Phase 3 … will add closures, enums, …"). That work
-> has **shipped** — the backend is at C-parity. Treat that doc's status claims
-> as historical; the live facts below are re-derived from current source.
+> The old planning doc (the former `llvm-backend-plan.md`, now folded into this
+> chapter) was framed in the future tense ("Phase 1 … Phase 3 … will add closures,
+> enums, …"). That work has **shipped** — the backend is at C-parity. Treat that
+> doc's status claims as historical; the live facts below are re-derived from
+> current source.
 
 ## Where it plugs in
 

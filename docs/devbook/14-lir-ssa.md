@@ -16,8 +16,8 @@ This chapter covers the IR's shape, SSA construction, the critical-edge /
 dominance validators, the typed `LirType::FuncRef`, and the backend boundary.
 GIR→LIR lowering itself (how each Gorget construct becomes LIR) is a separate
 concern; this chapter describes the *target* of that lowering and the passes
-that run on it. For the design rationale and the survey of production SSA IRs
-that informed it, see `docs/internals/lir-design.md`.
+that run on it. The design rationale and the survey of production SSA IRs
+that informed it (formerly in `lir-design.md`) are folded into this chapter.
 
 ## The split: GIR decides semantics, LIR decides mechanics
 
@@ -163,8 +163,8 @@ read at emit-decision sites via a typed match. `ValueOrigin`
 `FuncAddr(FuncId)`, or `SpawnSource(String)`. The companion `pointee_types`
 table (`src/lir/mod.rs:1383`) carries per-pointer-value pointee types the same
 way. This is the LIR side of Phase D6 of the unified resource model
-(`docs/internals/unified-resource-model.md` §6.8): the GIR-side `BorrowOrigin`
-provenance has a deliberate LIR-side counterpart. Note that a *typed
+(the former `unified-resource-model.md` §6.8, now folded into chapters 13–14):
+the GIR-side `BorrowOrigin` provenance has a deliberate LIR-side counterpart. Note that a *typed
 `Slot.origin` field* (per-slot, as opposed to per-value `value_origins`) is NOT
 yet present — `Slot` (`src/lir/mod.rs:1334`) carries only `ty` and `name`; that
 last step remains future work (it gates cross-pass borrow-aware codegen).

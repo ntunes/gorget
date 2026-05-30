@@ -24,7 +24,7 @@ about the typed metadata that records the answer and the validator that
 enforces it. The user-facing contract — what the compiler promises at
 `push`/`put`/`set`/`insert`/`send` and at bare-identifier assignment — is
 in `CLAUDE.md` "Ownership at Consuming Positions"; the full CoW spec is
-`docs/internals/copy-on-write.md` Phase 3.
+[Chapter 11](11-copy-on-write.md).
 
 ## The problem this metadata solves
 
@@ -38,8 +38,8 @@ read of a resource, whether that read is a bitwise copy, an ownership
 transfer, a deep clone, or a non-owning borrow — and a downstream pass
 must reject any read that would shallow-copy a resource.
 
-The historical failure mode (catalogued in
-`docs/internals/unified-resource-model.md` §1) was that this decision was
+The historical failure mode (catalogued in the former
+`unified-resource-model.md` deep-dive, §1) was that this decision was
 spread across a dozen parallel name-based lookup tables and half a dozen
 sidecar `HashMap`s keyed by `LocalId`, which drifted relative to each
 other — "every use-after-move that escaped the borrow checker in the last
@@ -574,12 +574,13 @@ quote a fixed parity figure from memory — re-derive it from the
 - Chapter 12 — GIR & lowering generally.
 - `CLAUDE.md` "Ownership at Consuming Positions" — the user-facing compiler
   contract this metadata implements.
-- `docs/internals/copy-on-write.md` Phase 3 — the materialization-point
-  spec (note its closed "seven" enumeration is stale; see Chapter 11's
-  "SIX-vs-SEVEN" callout — boundaries are structural, driven by the two
-  materialization helpers, not a fixed count).
-- `docs/internals/unified-resource-model.md` §3 (Phase A, type axis),
-  §5 (Phase C, validator), §6 (Phase D, local axis) — the design doc this
-  chapter folds.
-- `docs/internals/clone-emission-at-calls.md` — the canonical
-  clone-vs-move-vs-borrow decision tree and the sigil asymmetry.
+- [Chapter 11](11-copy-on-write.md) (materialization points) — the
+  materialization-point spec (note its closed "seven" enumeration is stale;
+  see Chapter 11's "SIX-vs-SEVEN" callout — boundaries are structural, driven
+  by the two materialization helpers, not a fixed count).
+- The former `unified-resource-model.md` deep-dive — §3 (Phase A, type axis),
+  §5 (Phase C, validator), §6 (Phase D, local axis) — has been folded into
+  this chapter (and chapters 15/18/25).
+- The canonical clone-vs-move-vs-borrow decision tree and the sigil asymmetry
+  (folded here from the former `clone-emission-at-calls.md`) — see the
+  decision-tree section above.

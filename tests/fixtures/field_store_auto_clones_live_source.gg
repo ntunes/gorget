@@ -6,8 +6,8 @@
 #   (3) explicit `!source`           → forced move (source dead after)
 #
 # Same rule that already governs `push` / `put` / `set` / struct init /
-# enum variant init — see docs/internals/copy-on-write.md "Ownership
-# Transfer" and AGENTS.md "Ownership at Consuming Positions". Field-store
+# enum variant init — see docs/devbook/11-copy-on-write.md (post-call
+# ownership transfer) and AGENTS.md "Ownership at Consuming Positions". Field-store
 # was the only outlier prior to 2026-05-05; this fixture locks the
 # consistency in.
 #

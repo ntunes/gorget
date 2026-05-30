@@ -3,7 +3,7 @@
 # (all filtered on `Type::Named`, skipping `Type::Primitive`). After
 # the fix in `types::equip_target_name`, equip-on-primitive lowers
 # correctly — including methods returning aggregate types like
-# Result / Option. See docs/internals/codegen-gap-spike.md.
+# Result / Option. See docs/devbook/17-c-backend.md.
 
 from std.io import IoError
 

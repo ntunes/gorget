@@ -12,7 +12,8 @@
 # as pure data definitions keeps the canonical surface small enough to
 # audit at a glance.
 #
-# See `docs/internals/unified-resource-model.md` §3 / §9 for the design.
+# See `docs/devbook/13-ownership-in-ir.md` (Phase A, type axis) and
+# `docs/devbook/18-runtime-abi.md` (the resource table) for the design.
 
 
 # ── Lookup-key strategy ─────────────────────────────────────────────

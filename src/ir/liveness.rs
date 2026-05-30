@@ -30,7 +30,7 @@
 //! `union` / `clone` / `equality` operations that dominate fixpoint
 //! iteration. See the 2026-05-17 perf commit for measurements.
 //!
-//! See `docs/internals/structural-guards.md` Tier 2a for the broader
+//! See `docs/devbook/25-structural-guards.md` Tier 2a for the broader
 //! consume-site discipline this enables, and the `validate` module's
 //! `ConsumeSite` walker for the consumer.
 

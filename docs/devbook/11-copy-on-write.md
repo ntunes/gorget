@@ -171,9 +171,10 @@ ownership" from "clone and keep."
 ## Materialization points — the SIX-vs-SEVEN finding
 
 > **Finding (re-derived 2026-05-29 from current source).** Three docs carry a
-> fixed numbered list of "materialization points": the internals doc
-> `docs/internals/copy-on-write.md:215` and the authoritative spec
-> `docs/language-reference.md:2297-2305` both enumerate **SEVEN**;
+> fixed numbered list of "materialization points": the former internals doc
+> (since folded into this chapter, which previously enumerated **SEVEN** at its
+> line 215) and the authoritative spec
+> `docs/language-reference.md:2297-2305` (also **SEVEN**);
 > `CLAUDE.md` and `feedback_cow_design_clarity.md` say **SIX**. **Both numbers
 > are now stale as a closed enumeration.** The current source does *not*
 > maintain a numbered list of materialization points; materialization is driven

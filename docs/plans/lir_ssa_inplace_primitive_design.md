@@ -577,7 +577,7 @@ and de-risks the harder Site B by confirming the clone-attribution model on the 
 
 - **Borrowed source at consuming position → clone before call.** CLAUDE.md "Ownership at Consuming
   Positions" table ("Borrow, OR owned but live past this call → clone before call");
-  `docs/internals/copy-on-write.md` Phase 3; `docs/book/11-ownership.md`.
+  `docs/devbook/11-copy-on-write.md` (materialization points); `docs/book/11-ownership.md`.
 - **Subscript/`.get()` returns a mutable borrow, not a move-out.** `docs/language-design.md:2373`.
 - **Owned temp at last use → move (zero-cost).** CLAUDE.md "three move-eligible shapes" ("expression
   temp (last-use + owning by construction)"). This is why `sub_vals`'s fresh vector moves into the

@@ -373,7 +373,7 @@ pub struct BackendFeatures {
 /// backend; this turns "forgot to lower a canonical op" from a silent runtime
 /// miscompile into a compile-time type error.
 ///
-/// See `docs/internals/lir-backend-lift-plan.md` for the pipeline rationale.
+/// See `docs/devbook/16-bir.md` for the pipeline rationale.
 pub trait Backend {
     /// Human-readable backend name (e.g., "c-lir", "llvm").
     fn name(&self) -> &str;

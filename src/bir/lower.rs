@@ -1,8 +1,8 @@
 //! LIR → BIR lowering pass.
 //!
 //! Expands LIR's canonical-level high-level ops into sequences of primitive
-//! instructions that backends can emit directly. Each canonical op listed in
-//! `docs/internals/lir-backend-lift-plan.md` gets an expansion here as the
+//! instructions that backends can emit directly. Each canonical op described in
+//! `docs/devbook/16-bir.md` gets an expansion here as the
 //! corresponding LIR variant is added.
 //!
 //! ## Current canonical ops expanded

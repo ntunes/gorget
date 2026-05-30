@@ -77,7 +77,7 @@ pub type ValidatorFn = fn(&LirModule) -> Vec<LirError>;
 /// (or `enum_variants` for enums). Catches the snag #24 class — the validator
 /// would have rejected the original Option/Result-skip lines that silently left
 /// resource-payload Option/Result fields un-dropped at scope exit. See
-/// `docs/internals/structural-guards.md` §1a.
+/// `docs/devbook/25-structural-guards.md` §1a.
 ///
 /// Tier 1a inverse (`validate_drop_fn_presence`): every StructDef whose
 /// `expects_drop_fn` flag is set (mirroring GIR's `DropStrategy::Recursive |
@@ -86,7 +86,7 @@ pub type ValidatorFn = fn(&LirModule) -> Vec<LirError>;
 /// because every field type fell into a `_ => continue` arm (non-Named,
 /// non-FnPtr GIR types like fixed-size `Array`, bare `Generic`, etc.) and
 /// thus produced no drop fn at all — silent leak. See
-/// `docs/internals/structural-guards.md` §1a.
+/// `docs/devbook/25-structural-guards.md` §1a.
 ///
 /// Tier 1d inverse (`validate_box_inner_type_consistency`): every StructDef
 /// carrying `box_inner_type: Some(_)` metadata must have a `Box__` name
@@ -872,7 +872,7 @@ pub fn validate_box_inner_type_consistency(module: &LirModule) -> Vec<LirError> 
     errors
 }
 
-/// Tier 1a — drop completeness. Per `docs/internals/structural-guards.md` §1a:
+/// Tier 1a — drop completeness. Per `docs/devbook/25-structural-guards.md` §1a:
 /// every droppable field of a type with a registered `type_drop_fns` entry must
 /// appear in that entry's `field_drops` (or, for enums, in `enum_variants`).
 ///

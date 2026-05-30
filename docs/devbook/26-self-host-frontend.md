@@ -18,7 +18,7 @@ self-host subsystem; per-phase chapters (3, 4, 7, 9, 12, 14, …) each carry an
 
 The self-host is deliberately load-bearing in three ways at once. All three are
 non-negotiable; the third is what distinguishes this from a throwaway bootstrap
-(the design narrative is `docs/internals/self-host-resource-model.md` §0):
+(the design narrative, formerly `self-host-resource-model.md` §0, is folded into this chapter):
 
 1. **Stress test.** Compiling ~30k lines of `.gg` across the self-host
    directories exercises corners of the language no hand-written fixture
@@ -246,7 +246,8 @@ typed not name-matched.
 
 ## Typed metadata in the self-host IR (resource model)
 
-`docs/internals/self-host-resource-model.md` is the roadmap for porting the
+The former `self-host-resource-model.md` deep-dive (folded into this chapter)
+was the roadmap for porting the
 Rust unified-resource-model (chapter 13) into the self-host's own GIR. Re-derived
 against current source, the status is well ahead of that doc's present/future
 tense:
@@ -304,7 +305,8 @@ than deferring them to a post-pass reconstruction
 This is the rule that makes the self-host's third role (idiomatic showcase) real
 rather than aspirational. It is the operational form of
 `CLAUDE.md` *"Self-host as the elegance showcase"* + *"Don't redesign around
-compiler gaps"*, formalized in `docs/internals/self-host-resource-model.md` §0:
+compiler gaps"*, formalized in the former `self-host-resource-model.md` §0
+(folded into this chapter):
 
 > When the stress-test role surfaces a gap — a pattern that *should* compile
 > cleanly but doesn't, or compiles to wrong code — the response is always: **fix
@@ -350,8 +352,8 @@ everywhere (not merely "the bug is fixed").
   `*_comparison` tests, the `self_host_bootstrap` / `self_host_bootstrap_fixed_point`
   loop, and the HTML report generator — is chapter 27 (Comparison, bootstrap &
   report generation).
-- Roadmap (not status — that's re-derived above):
-  `docs/internals/self-host-resource-model.md`.
+- Roadmap (not status — that's re-derived above): the former
+  `self-host-resource-model.md` deep-dive, folded into this chapter.
 - The discipline this chapter's last section enforces: chapter 24 (layering),
   chapter 25 (structural guards), and the `CLAUDE.md` sections
   *"Self-host as the elegance showcase"* and *"Don't redesign around compiler

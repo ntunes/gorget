@@ -662,7 +662,7 @@ pub fn lower_module(gir: &ir::Module) -> LirModule {
     // `Box__<inner>__drop` wrapper and `__gorget_box_alloc_<inner>` /
     // `__gorget_box_free_<inner>` helpers without name-prefix scanning.
     // Snag #13's family — see commit `c7a652f0` for the original fix and
-    // `docs/internals/structural-guards.md` Tier 1d for the rationale.
+    // `docs/devbook/25-structural-guards.md` Tier 1d for the rationale.
     //
     // The same validator also runs per-pass under `assert_module_valid` via
     // the `VALIDATORS` registry, but that path is debug-only / env-gated

@@ -206,7 +206,7 @@ fn build_val_to_slot(func: &LirFunction) -> HashMap<ValueId, SlotId> {
 /// dance: with params seeded `Initialized`, the bb0 flag init below
 /// directly emits `flag := true` for owning params, even if their
 /// explicit param-`SlotStore` were absent.  See
-/// `docs/internals/unified-resource-model.md` §8.1.
+/// `docs/devbook/15-drop-elaboration.md` (bool drop flags).
 fn forward_dataflow(
     func: &LirFunction,
     val_to_slot: &HashMap<ValueId, SlotId>,

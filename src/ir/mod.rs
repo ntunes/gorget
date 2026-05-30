@@ -427,7 +427,7 @@ pub struct InnerSharedSpawn {
 }
 
 // ── Phase D: typed local ownership and borrow provenance ─────────────
-// See docs/internals/unified-resource-model.md §6 for the design.
+// See docs/devbook/13-ownership-in-ir.md (Phase D, local axis) for the design.
 //
 // `LocalOwnership` + `BorrowOrigin` + `Mutability` replaced the 7-variant
 // `LocalOwnershipState` (deleted in D3-full) and the 3-variant

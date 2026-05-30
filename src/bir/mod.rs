@@ -14,7 +14,7 @@
 //! the Rust type system prevents them from ever receiving an unlowered
 //! `LirModule`.
 //!
-//! See `docs/internals/lir-backend-lift-plan.md` for the full design and
+//! See `docs/devbook/16-bir.md` for the full design and
 //! the migration roadmap.
 //!
 //! ## Current state (Step 0)

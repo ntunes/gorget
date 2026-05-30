@@ -4,7 +4,7 @@
 //! (today: sort_by family; future: any op that needs a dedicated specialized
 //! body the backends shouldn't reinvent per-type).
 //!
-//! See `docs/internals/bir-module-synthesis-plan.md` for the design.
+//! See `docs/devbook/16-bir.md` for the design.
 //!
 //! ## Opaque-closure invariant
 //!

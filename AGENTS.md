@@ -42,7 +42,7 @@ Backends should be at parity; a regression on one but not the other usually mean
 - `docs/book/` — [The Gorget Book](docs/book/README.md): learn the language from scratch (assumes programming experience, not Gorget experience)
 - `docs/language-reference.md` — Full syntax and semantics specification (the authoritative language spec)
 - `docs/language-design.md` — Design philosophy, safety features, and rationale
-- `docs/internals/` — [Compiler Internals](docs/internals/README.md): contributor-facing pipeline and design docs
+- `docs/devbook/` — [Compiler Internals Book](docs/devbook/README.md): contributor-facing pipeline and design docs
 
 ## Project Structure
 
@@ -115,8 +115,8 @@ use-after-free. The decision is mechanical, not heuristic.
 
 **This is the compiler contract — not a suggestion.** Post-call
 zeroing (when emitted) is correct only for the move-eligible shapes.
-See `docs/internals/copy-on-write.md` Phase 3 for the full
-specification.
+See [`docs/devbook/11-copy-on-write.md`](docs/devbook/11-copy-on-write.md#materialization-points--the-six-vs-seven-finding)
+for the full specification.
 
 ## Solution Quality
 
@@ -130,7 +130,7 @@ specification.
 
 ## Layering discipline
 
-How information crosses IR layer boundaries (AST → GIR → LIR → backend). Full rules in [`docs/internals/layering-discipline.md`](docs/internals/layering-discipline.md); four-line summary:
+How information crosses IR layer boundaries (AST → GIR → LIR → backend). Full rules in [`docs/devbook/24-layering-discipline.md`](docs/devbook/24-layering-discipline.md); four-line summary:
 
 1. **Lossless on invariants, lossy on syntax.** Each layer may resolve abstractions (generics, methods, traits) and add information (control flow, SSA). It may not drop semantic invariants (ownership, drop strategy, view-vs-owned, ABI, copy semantics, borrow provenance). Invariants accumulate; abstractions evaporate.
 2. **Typed metadata, not name-matched.** Facts cross boundaries as typed fields on structs — never as name prefixes, sentinel values, or runtime-symbol conventions. (See "No name matching" below.)

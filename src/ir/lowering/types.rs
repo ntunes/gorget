@@ -1062,7 +1062,7 @@ fn mangle_tuple_name(elems: &[Spanned<Type>]) -> String {
 /// all parse as `Type::Primitive(_)`; without this helper the
 /// equip-lowering pipeline silently dropped them (the filter sites in
 /// mod.rs only matched `Type::Named`). See
-/// `docs/internals/codegen-gap-spike.md`.
+/// `docs/devbook/17-c-backend.md`.
 pub fn equip_target_name(ty: &Type) -> Option<String> {
     match ty {
         Type::Named { name, generic_args } => {

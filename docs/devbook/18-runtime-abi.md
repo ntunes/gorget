@@ -247,7 +247,8 @@ keys off the method name, but "which family?" — the part that used to be a
 
 ## Future direction: `RUNTIME_DECLS` / a single canonical source file
 
-`docs/internals/unified-resource-model.md` §3.6 sketches a `RUNTIME_DECLS` const
+The former `unified-resource-model.md` §3.6 (now folded into this chapter)
+sketched a `RUNTIME_DECLS` const
 generated, along with the C runtime header and a self-host Gorget form, from one
 canonical `resources.toml` at `build.rs` time — so the C backend's `extern`s,
 an LLVM backend's `declare`s, and a future WASM backend's `(import …)`s, plus the
@@ -269,14 +270,14 @@ work — tracked as a `TODO.md` roadmap item, not a gap in the shipped code — 
 unify both axes under one hand-edited canonical source that *also* generates the
 C header and the self-host form, closing the latent "frontend/runtime/self-host
 signature drift" bug class and de-duplicating the hand-written Rust mirror in
-`src/ir/resource_schema.rs`. See `docs/internals/unified-resource-model.md` §3.6,
-§9.2, and §13 for the design.
+`src/ir/resource_schema.rs`. The design lived in the former
+`unified-resource-model.md` §3.6 / §9.2 / §13, now folded into this chapter.
 
-> Note: the dangling citation in `src/lir/runtime.rs:6` points at
-> `docs/internals/lir-correctness-roadmap.md`, which no longer exists — it was
-> superseded by `unified-resource-model.md` (per that document's status line at
-> `:3`). The `RuntimeFn`-enum design that comment describes is documented in this
-> chapter.
+> Note: the citation in `src/lir/runtime.rs:6` formerly pointed at a
+> `lir-correctness-roadmap.md` that never existed — its content was
+> superseded by the `unified-resource-model.md` deep-dive. The `RuntimeFn`-enum
+> design that comment describes is documented in this chapter, where the
+> citation now points.
 
 ## In the self-host
 

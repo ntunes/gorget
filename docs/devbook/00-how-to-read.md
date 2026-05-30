@@ -82,13 +82,14 @@ how much to trust it.
 
 ## The fold protocol
 
-This book is being **grown by folding** the older `docs/internals/` deep-dives
-into chapters, repointing their source citations at the chapter's stable
-anchors, and then deleting the absorbed doc — `docs/internals/` shrinks to empty
-by attrition ([`README.md:19`](README.md),
-[`devbook_plan.md:15`](../plans/devbook_plan.md)). Folding is **lazy**: no
-internals file is moved or deleted, and no source comment repointed, until the
-chapter that absorbs it is actually written
+This book was **grown by folding** the former `internals/` deep-dives
+into chapters, repointing their source citations at each chapter's stable
+anchors, and then deleting the absorbed doc — the former `internals/` tree died
+of attrition once every doc had been folded
+([`README.md:19`](README.md),
+[`devbook_plan.md:15`](../plans/devbook_plan.md)). Folding was **lazy**: no
+internals file was moved or deleted, and no source comment repointed, until the
+chapter that absorbed it was actually written
 ([`devbook_plan.md:17`](../plans/devbook_plan.md)).
 
 When a chapter folds in an internals doc, each piece of that doc's content is
@@ -131,7 +132,7 @@ and never restates the spec. The planning audit already logged real drift — it
 seed catalog records a CoW materialization-point count mismatch ("6 vs 7")
 between the corpora ([`devbook_plan.md:111-112`](../plans/devbook_plan.md)); the
 fold then re-derives the live count from current source (the materialization
-table in [`docs/internals/copy-on-write.md`](../internals/copy-on-write.md))
+table in [`11-copy-on-write.md`](11-copy-on-write.md))
 rather than repeating either figure. The devbook gate is the forcing function
 that keeps all four corpora honest.
 
@@ -160,8 +161,8 @@ from stale docs. The actual semantic pass order, read from
 ([`mod.rs:307`](../../src/semantic/mod.rs)) → 4.6 `suggest_throws` lint
 ([`mod.rs:317`](../../src/semantic/mod.rs)) → 5 borrow checking
 ([`mod.rs:336`](../../src/semantic/mod.rs)). There is **no** provenance pass and
-**no** `src/semantic/provenance.rs` — a "Pass 4.5 provenance.rs" that appears in
-`internals/README.md` is stale ([`devbook_plan.md:39`](../plans/devbook_plan.md));
+**no** `src/semantic/provenance.rs` — a "Pass 4.5 provenance.rs" that appeared in
+the former `internals/README.md` was stale ([`devbook_plan.md:39`](../plans/devbook_plan.md));
 the file does not exist in the tree. This is exactly the kind of fact the book
 cites to source rather than transcribes: [Chapter 1](01-pipeline-and-driver.md)
 folds a corrected diagram from `src/semantic/mod.rs`, not from the old README.

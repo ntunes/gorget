@@ -870,8 +870,8 @@ fn lower_var_decl(
             let actual_var_type = builder.local_type(local_id);
 
             // Phase D4 typed signals — see TODO entry "Phase D4 —
-            // lower_var_decl decision tree refactor" and `docs/internals/
-            // unified-resource-model.md` §6.7. The decision tree below is
+            // lower_var_decl decision tree refactor" and
+            // `docs/devbook/13-ownership-in-ir.md` (Phase D, §6.7). The decision tree below is
             // expressed as a typed match on (target_resource, source_live,
             // source_own). Three of the seven branches are fully typed
             // (E, F-extension, G); the remaining four (A, B, C, D) keep
@@ -1054,7 +1054,7 @@ fn lower_var_decl(
 
 /// Phase D4: typed-shape decision tree for the VarDecl assign mode.
 ///
-/// Implements the §6.7 contract from `docs/internals/unified-resource-model.md`.
+/// Implements the §6.7 contract from `docs/devbook/13-ownership-in-ir.md` (Phase D).
 /// Reads three signals from the surrounding lowering state:
 /// - `target_resource`: does the destination type own heap data?
 /// - `source_live`: is the source's underlying local live AFTER `stmt_span`?
@@ -1215,8 +1215,8 @@ fn lower_var_decl_assign_mode(
     // "local _19 read after MoveZero in bb5"): when D's `clone_fn_for_ptr`
     // lookup failed, assign_mode stayed Copy and the safety-net G's
     // Move zeroed a Borrowed transitive alias's heap data. The added
-    // `!Borrowed` bail (option (b) per docs/internals/unified-resource-model.md
-    // §6.7) routes Borrowed sources to E/F/G with correct Borrowed-aware
+    // `!Borrowed` bail (option (b) per docs/devbook/13-ownership-in-ir.md
+    // Phase D §6.7) routes Borrowed sources to E/F/G with correct Borrowed-aware
     // behavior instead of triggering the clone-failure → G-Move chain.
     // Owned-named-at-last-use sources correctly fall through to F's Move
     // path now (instead of the redundant clone D was emitting under the

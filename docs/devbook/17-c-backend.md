@@ -374,7 +374,7 @@ since shipped; the *evergreen* lessons are lifted below in past tense, with
 status re-derived from current source rather than copied from the (stale)
 doc text.
 
-- **`docs/internals/codegen-gap-spike.md`** ("`equip` on primitive receivers").
+- **The former `codegen-gap-spike.md`** ("`equip` on primitive receivers").
   The gap was that every equip-lowering site filtered on `Type::Named`, so
   `equip String:` was silently dropped and the call fell through to
   `map_monomorphized_to_runtime`, which rewrote `GorgetString__user_method` to a
@@ -388,15 +388,15 @@ doc text.
   unmapped names*, and any path that bypasses the func-index check would
   reintroduce the gap.
 
-- **`docs/internals/tier1c-cluster1-burn-down.md`** (making `Option`/`Result`
+- **The former `tier1c-cluster1-burn-down.md`** (making `Option`/`Result`
   full Resource types by removing the `monomorphize_enum` carve-out at
   `src/ir/lowering/generics/mod.rs`). This **shipped** (commit `c779d976`,
   2026-05-11; `DONE.md` "Tier 1c COMPLETE"). The carve-out is gone:
   `generics/mod.rs:2455` now computes the drop strategy
   *unconditionally* — `registry.compute_drop_strategy_for_enum(&variants)`
   for every enum including `Option`/`Result` — so they are full Resource types
-  rather than special-cased Copy values. (The internals doc still reads
-  "Status: Active"; it is stale and should be marked closed.) The
+  rather than special-cased Copy values. (The former internals doc still read
+  "Status: Active" at fold time; that status was stale, hence closed here.) The
   backend-visible lesson is the *cross-type adapter destination-size bug*: when
   an `Option`/`Result` combinator changes a payload type (`map`/`map_err`
   turning `Result[int, String]` into `Result[int, int]`), the destination local

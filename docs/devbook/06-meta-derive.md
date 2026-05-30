@@ -15,8 +15,8 @@ lowering (`src/ir/lowering/functions.rs`, `src/ir/lowering/traits.rs`). It is
 covered in [§Delayed meta](#delayed-meta-monomorphization-time).
 
 The design philosophy ("one keyword, types are first-class compile-time values,
-complements generics rather than replacing them") is in
-`docs/internals/meta.md`; the user-facing surface is in
+complements generics rather than replacing them") is folded into this chapter;
+the user-facing surface is in
 `docs/language-reference.md`. This chapter is about *how the passes work*.
 
 ---

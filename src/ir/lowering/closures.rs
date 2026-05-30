@@ -146,7 +146,7 @@ impl ClosureLowering {
                 // ownership — outer-scope drops handle cleanup). The consume-site
                 // validator skips StructInit fields for closure-env destinations so
                 // the bitwise-copy alias pattern doesn't fire OwnedLiveSourceConsumed.
-                // See validate.rs `validate_consume` and docs/internals/closure-capture.md.
+                // See validate.rs `validate_consume` and docs/devbook/12-gir-lowering.md (closure lowering and capture).
                 is_closure_env: true,
                 ..TypeMetadata::default()
             },

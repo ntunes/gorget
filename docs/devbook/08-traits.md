@@ -141,7 +141,7 @@ slices, tuples, function types, refs/owned/pointers. Notably it treats
 `"Self"` entry (`src/semantic/traits.rs:1612-1623`) — needed for default
 sigs like `TakeIter[Self, T] take(self, int n)` on `Iterator[T]`.
 
-This is rule 2 of [layering discipline](../internals/layering-discipline.md)
+This is rule 2 of [layering discipline](24-layering-discipline.md#rule-2--typed-metadata-not-name-matched)
 in microcosm: the registry doesn't reconstruct generic structure from names
 downstream — it carries the typed AST shape forward and substitutes once.
 

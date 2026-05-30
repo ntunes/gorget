@@ -275,8 +275,8 @@ AST-based semantic analysis silently skipped them.
 
 ### The shipped design: a parsed-expr sidecar
 
-The fix that shipped (note: **not** the enum-replacement the old design
-doc `docs/internals/fstring-interp-as-expr.md` proposed — the lexer
+The fix that shipped (note: **not** the enum-replacement an earlier design
+proposed — the lexer
 `StringSegment::Interpolation(String, Option<String>)` shape is
 unchanged) is a **sidecar** on the AST node. `Expr::StringLiteral`
 carries a second field:

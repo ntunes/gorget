@@ -6,7 +6,7 @@ This chapter is about the *writer-side validators* that turn Gorget's soundness 
 - `src/lir/validate.rs` — the LIR validator (SSA/CFG invariants + drop-table completeness + Box/resource-shape guards), driven by a per-pass `VALIDATORS` registry.
 - `src/bir/validate.rs` — the BIR validator (asserts every instruction is a primitive — covered in depth in [Chapter 16](16-bir.md); this chapter treats it as one instance of the framework).
 
-The design narrative folded here comes from `docs/internals/structural-guards.md` and `docs/internals/unified-resource-model.md` §5 (Phase C) / §8.3 (Tier E). All figures and line numbers below were re-derived from current source.
+The design narrative folded here comes from the former `structural-guards.md` and `unified-resource-model.md` §5 (Phase C) / §8.3 (Tier E) deep-dives. All figures and line numbers below were re-derived from current source.
 
 ## What a structural guard is, and why
 
@@ -16,7 +16,7 @@ A soundness invariant that is documented but unchecked is a regression waiting t
 
 A guard is *not* "a test that covers this case." It is "we fail the build if the invariant is ever violated, in any input, anywhere." The validator runs over the module structure after lowering and checks the property a human reviewer would check by reading the lowering code — but mechanically, on every program, every time. The cost is a structural walk: no codegen, no runtime cost.
 
-This is the enforcement arm of the layering discipline ([Chapter 02](02-foundations.md), `docs/internals/layering-discipline.md`). When layering-discipline says "if a downstream pass reconstructs information from names, the boundary upstream was drawn wrong," a structural guard is what makes that statement load-bearing: without the guard the claim is editorial; with it the build fails until the boundary is fixed.
+This is the enforcement arm of the layering discipline ([Chapter 02](02-foundations.md), [Chapter 24](24-layering-discipline.md)). When layering-discipline says "if a downstream pass reconstructs information from names, the boundary upstream was drawn wrong," a structural guard is what makes that statement load-bearing: without the guard the claim is editorial; with it the build fails until the boundary is fixed.
 
 ## The three concrete validators at a glance
 
@@ -108,7 +108,7 @@ The three companion meta-invariant guards live as Rust lint tests in `tests/lint
 
 ## The backlog and its tiers
 
-`docs/internals/structural-guards.md` organizes the invariants into three tiers; the doc's per-item status claims are historical and should be treated as presumed-stale (the live status is whatever the validator's wiring in source says today). The tiering itself is the evergreen part:
+The former `structural-guards.md` deep-dive organized the invariants into three tiers; that doc's per-item status claims are historical and should be treated as presumed-stale (the live status is whatever the validator's wiring in source says today). The tiering itself is the evergreen part:
 
 - **Tier 1 — invariants with known violations, concrete burn-downs.** Drop completeness (1a, LIR + its GIR counterpart 1c), move follow-through (1b), Box-inner-type completeness (1d). Tiers 1a and 1c are *distinct* invariants at different layers that compose: 1c (`validate_type_metadata_coherence`, GIR) locks the GIR→LIR handoff by checking a `TypeDef`'s recorded `(drop_strategy, copy_semantics)` matches a fresh transitive field walk; 1a (`validate_drop_completeness`, LIR) locks the LIR→C-emit handoff by checking the populated drop table reaches every droppable field. Both must hold for the snag #24 leak class to stay shut.
 - **Tier 2 — invariants we should have.** CoW consume-site discipline (2a, `validate_consume_sites`: the source's IR mode must match its typed `LocalOwnership` at every consuming position — the classes its walker actually emits are `StructInit`, `EnumInit`, `CollectionMutator` (push/put/insert/send), `CallByValueArg`, `CallExternByValueArg`, and `AssignIntoOwnedSlot`, per the table in `CLAUDE.md`'s *Ownership at Consuming Positions*). A `ConsumeSiteClass::BoxNew` variant is *defined* (`:2277`) but currently never constructed by the walker; Box.new ownership is policed instead by the 2c drop-pre-rebind validator. Drop-pre-rebind correctness (2c, `validate_drop_pre_rebind`: a heap-allocating shallow-copy consumer's source — driven by the typed `Module::heap_alloc_consumer_externs` set populated at each Box.new emission — must be `MoveZero`'d before any later drop); sidecar absence (2d, the `tests/lints.rs` lint). Tier 2b (match-scrutinee discipline) is subsumed — it is the same shape that Phase C's `validate_resource_moves` already catches.
@@ -116,7 +116,7 @@ The three companion meta-invariant guards live as Rust lint tests in `tests/lint
 
 ## How to add one
 
-The checklist (from `docs/internals/structural-guards.md`, condensed):
+The checklist (from the former `structural-guards.md`, condensed):
 
 1. Name the invariant in one sentence. If you can't, the framing isn't crisp enough.
 2. Identify the **writer site** — where the violating shape is produced. The validator runs after it.
@@ -126,7 +126,7 @@ The checklist (from `docs/internals/structural-guards.md`, condensed):
 6. File a TODO; sweep to get initial counts by class.
 7. Migrate one class at a time, integration sweep green each commit.
 8. Promote to fatal.
-9. Move the TODO to DONE.md; add the guard to the *what's in place* table in `docs/internals/structural-guards.md`.
+9. Move the TODO to DONE.md; record the guard in the tier backlog above ([The backlog and its tiers](#the-backlog-and-its-tiers)).
 
 When the fix you sketch for a localized bug is *intrinsically complex* (save/restore around branches, phi insertion, scope-tracking name maps), that complexity is the tell that you're patching a symptom at the read site — the real bug is a one-line oversight at the write site one layer up ([Chapter 02](02-foundations.md)'s debugging heuristic). A structural guard at that write site is precisely what makes the downstream complex fix unnecessary, because it catches the bug at the layer where it was introduced.
 

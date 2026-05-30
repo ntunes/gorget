@@ -210,7 +210,8 @@ pub enum SemanticErrorKind {
 
     /// A method-level generic param couldn't be inferred from the
     /// call's arg types. Emitted by Phase 2c inference (see
-    /// `docs/internals/method-level-inference.md`) instead of the
+    /// `docs/devbook/09-type-checking.md`, method-level generic inference)
+    /// instead of the
     /// historical silent fallback to `NoMethodFound` /
     /// `WrongArgCount` / a link error. `unresolved` is the generic
     /// param name from the method's `[T1, T2, ...]` clause; `reason`

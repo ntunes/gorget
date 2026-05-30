@@ -1,13 +1,13 @@
 //! Compiler-source-tree lints — ratchets that lock layering discipline.
 //!
 //! These tests scan `src/**/*.rs` for patterns that the layering-discipline
-//! doc (`docs/internals/layering-discipline.md`) and structural-guards
+//! chapter (`docs/devbook/24-layering-discipline.md`) and structural-guards
 //! Tier 3a flag as anti-patterns, and assert the count never grows. As
 //! migrations land, the budget tightens. A new site that bypasses typed
 //! metadata for name-prefix routing fails the test until either it's
 //! migrated to typed metadata or the budget is intentionally raised.
 //!
-//! See `docs/internals/structural-guards.md` §3a for the full design.
+//! See `docs/devbook/25-structural-guards.md` §3a for the full design.
 
 use std::fs;
 use std::path::Path;
@@ -53,7 +53,7 @@ fn count_name_prefix_sites() -> usize {
 /// to read through `build_resource_metadata` (the single source of truth);
 /// this ratchet locks in those gains so a regression is caught at lint time.
 ///
-/// See `docs/internals/self-host-resource-model.md` §3.3 step 4 (the
+/// See `docs/devbook/26-self-host-frontend.md` §3.3 step 4 (the
 /// "promote" step) and §6.1 (Tier E.1 lints ratchet).
 fn count_name_prefix_sites_self_host() -> usize {
     let alternation = MANGLED_PREFIXES.join("|");
@@ -219,8 +219,8 @@ fn no_growth_in_name_prefix_routing() {
 
 /// Tier 2d — sidecar absence. Static check that no parallel
 /// `HashMap<key, value>` sidecar exists in the codebase tracking a fact
-/// already on a typed metadata field. Per `docs/internals/structural-
-/// guards.md` Tier 2d:
+/// already on a typed metadata field. Per `docs/devbook/25-structural-guards.md`
+/// Tier 2d:
 ///
 /// > **Why it matters.** Layering discipline rule 3: one source of truth
 /// > per axis. Sidecars accumulate quietly; the validator catches them
@@ -331,7 +331,7 @@ fn no_typed_metadata_sidecars() {
          EnumKind / EnumCategory / LocalOwnership / BorrowOrigin). The \
          canonical home for these facts is the typed field on \
          TypeMetadata / Local / Inst; a parallel registry is a Layering \
-         discipline rule 3 violation (`docs/internals/layering-\
+         discipline rule 3 violation (`docs/devbook/24-layering-\
          discipline.md`).\n\n\
          To find new sites:\n  \
          grep -rnE 'HashMap\\s*<\\s*(LocalId|TypeId|String)\\s*,\\s*(DropStrategy|CopySemantics|CollectionKind|EnumKind|EnumCategory|LocalOwnership|BorrowOrigin)\\s*>' src/\n\n\
@@ -344,8 +344,8 @@ fn no_typed_metadata_sidecars() {
     );
 }
 
-/// Tier 3b — Phase D state coherence. Per `docs/internals/structural-
-/// guards.md` Tier 3b:
+/// Tier 3b — Phase D state coherence. Per `docs/devbook/25-structural-guards.md`
+/// Tier 3b:
 ///
 /// > **Rule.** `LocalOwnership` is the source of truth for ownership and
 /// > borrow tracking. Any consumer reading `drops.is_registered`,
@@ -470,7 +470,7 @@ fn no_growth_in_phase_d_proxy_reads() {
     assert!(
         count <= BUDGET,
         "Phase D proxy-read count grew beyond budget: {count} > {BUDGET}.\n\n\
-         Tier 3b (`docs/internals/structural-guards.md`) bars new proxy \
+         Tier 3b (`docs/devbook/25-structural-guards.md`) bars new proxy \
          reads of ownership state. The typed source of truth is \
          `Local.ownership` (Phase D's `LocalOwnership` field). Proxies \
          duplicate the same fact and drift from each other under \
@@ -488,7 +488,7 @@ fn no_growth_in_phase_d_proxy_reads() {
     );
 }
 
-/// Tier E.1 (per `docs/internals/self-host-resource-model.md` §6.1):
+/// Tier E.1 (per `docs/devbook/26-self-host-frontend.md` §6.1):
 /// the same ratchet applied to self-host's `.gg` source. Phase A migrated
 /// the classification consumers in `lir_lower.gg` and `lower.gg` to read
 /// through `build_resource_metadata` (the single source of truth); this
@@ -515,7 +515,7 @@ fn no_growth_in_phase_d_proxy_reads() {
 ///
 /// Container-literal arms in `infer_expr` that need decl_type_hint
 /// propagation for nested collection literals to coerce correctly.
-/// See `docs/internals/structural-guards.md` and the
+/// See `docs/devbook/25-structural-guards.md` and the
 /// `tuple_literal_resource_value` / `dict_literal_resource_value`
 /// fixtures for the failure shape.
 ///

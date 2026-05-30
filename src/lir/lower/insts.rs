@@ -3244,7 +3244,7 @@ impl<'a> FuncLowering<'a> {
         // helper has a typed signature, so the C backend's normal Call
         // coercion marshals aggregate args (Str by-value, etc.) without
         // the old static-inline's impl-param peeking. See
-        // `docs/internals/lir-backend-lift-plan.md` Step 7 and
+        // `docs/devbook/16-bir.md` (`TraitCall` synthesis) and
         // `bir::synth::get_or_emit_trait_helper`.
         if let Some(bb2) = self.try_emit_trait_call(original_name, dst, args, &lir_args, bb) {
             self.emit_post_call_zeros(args, bb2);

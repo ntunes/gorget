@@ -1,6 +1,6 @@
 # std.io — byte-shaped I/O: Writer/Reader traits, IoError, stdin/stdout/stderr.
 #
-# Phase 3 of the stdlib narrow-waist redesign (docs/internals/stdlib-design.md §6).
+# Phase 3 of the stdlib narrow-waist redesign (docs/devbook/23-stdlib.md, Writer/Reader).
 #
 # Conventions:
 # - Writer.write returns `Result[int, IoError]` — the byte count actually
@@ -455,8 +455,8 @@ Result[int, IoError] write_display[W, Displayable D](W &w, D v):
 # rendering into a String and routing through `write_all`. The
 # infallible `print(x, terminator=…)` builtin covers the script case;
 # having both `print` and `println` added a parallel surface for no
-# new semantics. See `docs/internals/stdlib-design.md` §10 Phase 3
-# follow-ups for the resolution.
+# new semantics. See `docs/devbook/23-stdlib.md` (the narrow-waist
+# principle) for the resolution.
 
 # Read all available bytes from `r` into a fresh buffer. Loops calling
 # `read` until Ok(0) (EOF) or an error. Returns the final buffer

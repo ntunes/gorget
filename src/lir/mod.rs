@@ -568,7 +568,7 @@ pub enum Inst {
     /// by consulting the shared `opaque_runtime_size` / `c_sizeof_lir_type` tables,
     /// so BIR (and therefore backends) never see this instruction.
     ///
-    /// Step 3 of the BIR lift plan — see `docs/internals/lir-backend-lift-plan.md`.
+    /// Step 3 of the BIR lift plan — see `docs/devbook/16-bir.md`.
     SizeOf { dst: ValueId, ty: LirType },
 
     /// Canonical-op: initialize an enum variant at the given target address.
@@ -717,7 +717,7 @@ pub enum Inst {
     /// `filter` → `map` → sum fused into a single walk).
     ///
     /// Not yet emitted — scaffolding for the Step 8 migration. See
-    /// `docs/internals/lir-backend-lift-plan.md` for the full specification.
+    /// `docs/devbook/16-bir.md` for the full specification.
     HofExpand {
         /// The collection being iterated (pointer to a `GorgetArray` /
         /// `GorgetMap` / `GorgetSet`).
@@ -756,7 +756,7 @@ pub enum Inst {
     /// slot. Otherwise allocates a fresh typed slot, `SlotStore`s the value,
     /// and `SlotAddr`s the slot.
     ///
-    /// Step 9 of the BIR lift plan — see `docs/internals/lir-backend-lift-plan.md`.
+    /// Step 9 of the BIR lift plan — see `docs/devbook/16-bir.md`.
     AddressOf {
         dst: ValueId,
         value: ValueId,
@@ -1552,7 +1552,7 @@ pub struct StructDef {
     /// (e.g., a populator `_ => continue` branch eats every field of a
     /// Recursive struct, leaving `field_drops` empty and producing no
     /// `type_drop_fns` entry — silent leak). See
-    /// `docs/internals/structural-guards.md` §1a.
+    /// `docs/devbook/25-structural-guards.md` §1a.
     pub expects_drop_fn: bool,
 }
 

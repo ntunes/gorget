@@ -14155,7 +14155,7 @@ fn self_host_snag5_synth_name_no_type_misroute() {
 }
 
 // Phase C fatal-promotion regression sweep
-// (`docs/internals/self-host-resource-model.md` §5.2 step 5): once a
+// (`docs/devbook/26-self-host-frontend.md` §5.2 step 5): once a
 // validator class's count is zero, the check is promoted to "fatal on
 // any violation" — the env gate is removed and the build halts on the
 // first violation. The validate.gg dispatcher exits 1 in-process; the
@@ -14251,7 +14251,7 @@ fn phase_c_closed_classes_remain_at_zero_self_host() {
          validators are promoted to fatal in self-host's validate.gg \
          (in-process exit(1) on any violation). A new violation means \
          an emit site added the bug. See \
-         docs/internals/self-host-resource-model.md §5 for the fix shape.\n\n\
+         docs/devbook/26-self-host-frontend.md §5 for the fix shape.\n\n\
          Failures:\n{}",
         failures.len(),
         failures.iter()
@@ -14261,7 +14261,7 @@ fn phase_c_closed_classes_remain_at_zero_self_host() {
     );
 }
 
-// §6.2 (`docs/internals/self-host-resource-model.md`): the
+// §6.2 (`docs/devbook/26-self-host-frontend.md`): the
 // `GG_VALIDATE_PASSES=1` env-gated dispatcher runs structural
 // validators between every pipeline pass on self-host (mirrors Rust's
 // `assert_module_valid`). The regression net: running the self-host

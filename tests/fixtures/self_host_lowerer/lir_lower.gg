@@ -189,7 +189,7 @@ bool is_guard_struct_type(String name, GirModule &gmod):
 #                 case CkVector(): ...
 #                 ...
 # (`meta` is a Gorget keyword; binding name avoids the parser conflict.)
-# (See `docs/internals/self-host-resource-model.md` §3.)
+# (See `docs/devbook/26-self-host-frontend.md` §3.)
 
 # Iterate RESOURCES, match by Exact/Prefix.
 Option[ResourceMetadata] lookup_resource_table(String name):
@@ -404,7 +404,7 @@ Option[ResourceMetadata] build_resource_metadata(String name):
 
 # Phase A — typed accessor. Consumers replace `name.starts_with("X__")`
 # dispatches with `match resource_meta_for(&gmod, name): case Some(rmeta): ...`
-# (See `docs/internals/self-host-resource-model.md` §3 / §3.4.)
+# (See `docs/devbook/26-self-host-frontend.md` §3 / §3.4.)
 #
 # Lazy population: callers may run BEFORE `lower_gir_to_lir`'s
 # bulk-populate loop (e.g. anything inside `lower_module`). When the
@@ -3546,7 +3546,7 @@ LirModule lower_gir_to_lir(GirModule &gmod):
     # Walk every named type and tag its resource shape. Downstream
     # passes read this Dict instead of re-deriving from
     # `name.starts_with("Vector__")` etc. See
-    # docs/internals/self-host-resource-model.md §3.
+    # docs/devbook/26-self-host-frontend.md §3.
     Vector[String] nt_keys = gmod.named_types.keys()
     for tname in nt_keys:
         if not gmod.resource_metadata.contains(tname):

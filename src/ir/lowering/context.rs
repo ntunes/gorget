@@ -191,7 +191,7 @@ pub struct FunctionState {
     /// Parameters upgraded from Borrow to Move in generic functions that return them directly.
     /// The return path must zero the source through the pointer to prevent caller double-free.
     /// Phase D4: keyed by `LocalId` (typed) — replaces the legacy `HashSet<String>`
-    /// name-based shape. See `docs/internals/unified-resource-model.md` §6.6.
+    /// name-based shape. See `docs/devbook/13-ownership-in-ir.md` (Phase D, §6.6).
     pub move_override_params: FxHashSet<LocalId>,
     /// Name of the function currently being lowered (for tracking consumed params).
     pub current_fn_name: String,

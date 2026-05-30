@@ -414,7 +414,7 @@ int add_local(LowerCtx &ctx, int type_id, Option[String] name):
 # locals bound to collection-getter results (LoBorrowed/BoCollectionElement),
 # CoW view results (LoView/BoRuntimeView). Validators in Phase C read
 # these fields to decide whether a consume site needs a clone, a move,
-# or a borrow. See `docs/internals/self-host-resource-model.md` §4.
+# or a borrow. See `docs/devbook/26-self-host-frontend.md` §4.
 int add_local_with(LowerCtx &ctx, int type_id, Option[String] name, LocalOwnership ownership, BorrowOrigin borrow_origin):
     int id = ctx.locals.len()
     ctx.locals.push(GirLocal(type_id, name, ownership, borrow_origin))
@@ -444,8 +444,8 @@ int add_local_with(LowerCtx &ctx, int type_id, Option[String] name, LocalOwnersh
 # rebinding the local on later reassignment) are responsible for the
 # usual ownership updates — the helper only sets the INITIAL tag.
 #
-# See `docs/internals/copy-on-write.md` Phase 3 (seven materialisation
-# points) and `CLAUDE.md` "Layering discipline — debugging heuristic":
+# See `docs/devbook/11-copy-on-write.md` (materialisation points) and
+# `CLAUDE.md` "Layering discipline — debugging heuristic":
 # the bug at every chain link was missing inheritance at the WRITER
 # site; fixing it at the reader (op_consume) requires per-call
 # heuristics, while fixing it at the writer is a one-liner.
@@ -7006,8 +7006,8 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
     # Phase A — typed-metadata classification (CkVector/CkDeque) via
     # the lazy `resource_meta_for` accessor; retires the legacy
     # `starts_with("Vector__")` cascade per
-    # docs/internals/unified-resource-model.md §3.6 + §13 and
-    # docs/internals/self-host-resource-model.md §3.
+    # docs/devbook/18-runtime-abi.md (the resource table) and
+    # docs/devbook/26-self-host-frontend.md §3.
     bool coll_is_vec_like = false
     match resource_meta_for(&gmod, coll_tn):
         case Some(rmeta):

@@ -16,8 +16,9 @@ lives in `src/ir/lowering/`, entered through
 
 > *Verified against source at the commit this chapter was written
 > against. Re-derive any line numbers that have drifted — and treat the
-> numbers in `docs/internals/unified-resource-model.md` as stale (that
-> doc is a roadmap, not a status record).*
+> numbers in the former `unified-resource-model.md` roadmap (since folded
+> into this chapter and chapters 13/15/18/25) as stale (it was a roadmap,
+> not a status record).*
 
 ## What GIR looks like
 
@@ -296,10 +297,10 @@ encodes are tabulated in the `TypeMetadata` doc comment
 
 ## Closure lowering and capture
 
-> Note: an earlier internals doc `docs/internals/closure-capture.md`
+> Note: an earlier internals doc `closure-capture.md`
 > was referenced from source comments (`src/ir/validate.rs:1943`,
-> `src/ir/lowering/closures.rs:149`) but no longer exists. Those
-> citations should point here; this section is the authoritative
+> `src/ir/lowering/closures.rs:149`) but never existed. Those
+> citations now point here; this section is the authoritative
 > closure-lowering reference.
 
 Closures don't exist in GIR — they're *lifted* into a struct + a

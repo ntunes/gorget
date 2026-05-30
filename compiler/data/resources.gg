@@ -17,8 +17,8 @@
 # (`build_resource_metadata`) and `src/lir/runtime.rs::REGISTRY`. Loader
 # validates on first call.
 #
-# Per `docs/internals/unified-resource-model.md` §9.4 rule 1: the spike
-# proved the schema; this fill-in is the mechanical extension.
+# Per `docs/devbook/18-runtime-abi.md` (the resource table — data-driven, in
+# Gorget): the spike proved the schema; this fill-in is the mechanical extension.
 
 from compiler.data.schema import ResourceEntry, ResourceMetadata
 from compiler.data.schema import MatchKind, MkExact, MkPrefix

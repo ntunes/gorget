@@ -67,7 +67,7 @@ pub struct ResourceMetadata {
     /// `emit_wrapper_typedef` for opaque-handle families whose C
     /// spelling is `GorgetMutex*` / `gorget_guard_t` / etc. — names the
     /// schema's `runtime_name` ("Mutex", "Guard") does not carry. See
-    /// `docs/internals/unified-resource-model.md` §3.6.
+    /// `docs/devbook/18-runtime-abi.md` (the resource table).
     pub c_typedef_name: Option<String>,
     pub is_typed_constructor: bool,
 }

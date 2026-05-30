@@ -20,7 +20,8 @@ delegate to, and the validator (`validate.rs`) asserts the invariant held.
 
 ## Why a layer, not just a pass
 
-The lift plan (`docs/internals/lir-backend-lift-plan.md`) measured "how dumb the
+The lift plan (the former `lir-backend-lift-plan.md`, now folded into this
+chapter and Chapter 14) measured "how dumb the
 backend is" by counting name-based dispatch sites (`name == "X"`,
 `name.starts_with("Y")`). The two backends (`c_lir`, `llvm`) historically carried
 thousands of lines of *semantic* decisions: HOF loop generation, enum
@@ -236,7 +237,7 @@ so the validator and backends see fully-populated metadata. A `debug_assert`
 `src/bir/synth.rs` (~1,981 LOC) emits new `LirFunction` definitions that several
 canonical-op expansions delegate to, so backends never reinvent them per type.
 Two families exist today: the **sort** helpers and the **trait-dispatch**
-helpers. The design (folded from `docs/internals/bir-module-synthesis-plan.md`,
+helpers. The design (folded from the former `bir-module-synthesis-plan.md`,
 "Option C", landed 2026-04-24) replaced a per-backend TLS `qsort` trampoline with
 one primitive-LIR mergesort emitted once per shape.
 
@@ -350,7 +351,8 @@ directly. So there is no `BirModule` newtype, no `SynthPool`, and no
 primitives-only validator; the canonical-op expansion is fused into codegen
 rather than separated into the BIR layer Rust uses. The synthesis-pool design
 (the once-per-shape mergesort / trait-helper emission) is explicitly out of scope
-for the self-host (`docs/internals/bir-module-synthesis-plan.md` §8).
+for the self-host (per the former `bir-module-synthesis-plan.md` §8, now folded
+into this chapter).
 
 To read the current C-emission parity, run:
 

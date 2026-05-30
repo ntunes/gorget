@@ -144,9 +144,9 @@ struct BasicBlock:
 # ── Local variable slot ──────────────────────────────────
 
 # Phase D ownership state (mirrors Rust's `Local.ownership: OwnershipState`
-# in `docs/internals/unified-resource-model.md` §6). Populated by
+# in `docs/devbook/13-ownership-in-ir.md`, Phase D). Populated by
 # `lower.gg` at every `add_local` site; read by Phase C validators
-# (§5 of `docs/internals/self-host-resource-model.md`).
+# (`docs/devbook/26-self-host-frontend.md` §5).
 enum LocalOwnership:
     LoOwned        # local owns its data; consume sites move/drop
     LoBorrowed     # local aliases a borrow; consume sites must clone
@@ -261,8 +261,8 @@ struct GirTypeInfo:
 
 # ── Phase A: typed resource metadata ────────────────────────
 # Companion to the Rust-side `TypeMetadata { drop_strategy, copy_semantics,
-# collection_kind, ... }` (see `docs/internals/unified-resource-model.md` §3).
-# Self-host scope is `docs/internals/self-host-resource-model.md` §3.
+# collection_kind, ... }` (see `docs/devbook/13-ownership-in-ir.md`, Phase A).
+# Self-host scope is `docs/devbook/26-self-host-frontend.md` §3.
 # Populated at type-registration time; consumers read instead of
 # re-deriving from `name.starts_with("Vector__")` etc.
 

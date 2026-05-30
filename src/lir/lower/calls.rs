@@ -275,8 +275,8 @@ pub(super) fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
     // inline returns, etc.) stays as-is — only the "which family is this?"
     // head was the name-matched part.
     //
-    // See docs/internals/unified-resource-model.md §3.6 + §13 for the SSoT
-    // design.
+    // See docs/devbook/18-runtime-abi.md (the resource table / runtime
+    // declaration table) for the SSoT design.
     let family = crate::ir::resources::table().lookup(name)
         .and_then(|m| m.method_prefix.as_deref());
 

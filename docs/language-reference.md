@@ -984,7 +984,7 @@ equip Socket:
     extern "C" blocking int write_str(String s) = "gorget_socket_write_str"
 ```
 
-See `docs/internals/extern-modules.md` for the full ABI pipeline
+See `docs/devbook/20-extern-gpu.md` for the full ABI pipeline
 (marshalling, ownership, `cstr`, `blocking` / `async` qualifiers).
 
 ### 5.11 Attributes
@@ -2292,7 +2292,7 @@ the aliases triggers a clone, giving the mutator its own copy.
 The compiler also optimises last-use: if the source isn't live past the
 assign, the IR-lowering picks Move instead of Borrow (still no clone,
 and the source becomes invalid as if `!`-moved). See
-`docs/internals/copy-on-write.md` for the full Phase D4 decision tree.
+`docs/devbook/11-copy-on-write.md` for the full Phase D4 decision tree.
 
 **Materialization points** — the compiler materializes (clones) a borrowed value when it crosses an ownership boundary:
 

@@ -644,8 +644,8 @@ impl ModuleLoader {
         // fixtures that rely on it to `.collect()` semantics) or
         // make typecheck prefer the eager shortcut when the receiver
         // has one registered. Tracked in
-        // `docs/internals/stdlib-design.md` §10 Phase 2c
-        // "Auto-import std.iter via the loader" row.
+        // `docs/devbook/22-modules-packages.md` (auto-loads —
+        // "Auto-import std.iter via the loader").
         //
         // Auto-load std.iter when the entry module references
         // iterator names or calls `.iter()` — see

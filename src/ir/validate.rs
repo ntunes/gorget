@@ -887,7 +887,7 @@ fn check_terminator_calls(
 }
 
 // ── Phase C: resource-move validation ────────────────────────────────
-// See docs/internals/unified-resource-model.md §5.
+// See docs/devbook/25-structural-guards.md (Phase C).
 //
 // The CoW contract: every read of a resource-typed value resolves to
 // Move / Clone / Borrow. AssignMode::Copy of a resource source is a
@@ -1683,7 +1683,7 @@ fn next_inst_zeroes_field(insts: &[Instruction], i: usize, base: &Place, field: 
 }
 
 // ── Tier 1b: Move follow-through validator ───────────────────────────
-// `docs/internals/structural-guards.md` §Tier 1b.
+// `docs/devbook/25-structural-guards.md` §Tier 1b.
 //
 // Invariant. Every `Inst::Assign { mode: Move, value: Copy(p) | Move(p) }`
 // whose source `p` is drop-registered (i.e. some `Drop` / `DropIfAlive`
@@ -1823,7 +1823,7 @@ pub fn validate_move_follow_through(module: &Module) -> Vec<MoveFollowThroughWar
 }
 
 // ── Tier 1c: TypeDef metadata coherence at registration ──────────────
-// See `docs/internals/structural-guards.md` §1c for the invariant.
+// See `docs/devbook/25-structural-guards.md` §1c for the invariant.
 //
 // Every registered TypeDef whose fields/variant-payloads contain a
 // droppable type must itself have a non-None drop_strategy and Resource
@@ -1940,7 +1940,7 @@ pub fn validate_type_metadata_coherence(
         // double-free. The consume-site validator already skips StructInit
         // fields for closure-env destinations; the coherence validator
         // skips them here for the same reason. See
-        // `docs/internals/closure-capture.md`.
+        // `docs/devbook/12-gir-lowering.md` (closure lowering and capture).
         if td.metadata.is_closure_env {
             continue;
         }
@@ -2221,7 +2221,7 @@ pub fn validate_no_null_assign_to_option_slot(
 }
 
 // ── Tier 2a Phase 1: consume-site discipline (CoW write-side) ────────
-// See `docs/internals/structural-guards.md` Tier 2a (and the project
+// See `docs/devbook/25-structural-guards.md` Tier 2a (and the project
 // brief in the Phase 1 task) for the full design.
 //
 // Companion to Phase C's READ-site validators (above): every consuming

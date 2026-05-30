@@ -450,8 +450,8 @@ struct TypeChecker<'a> {
     /// but couldn't resolve all generic params. Read at the NoMethodFound
     /// emission site to swap the generic error for a typed
     /// `MethodGenericInferenceFailed` that points at the specific
-    /// unresolved param. See `docs/internals/method-level-inference.md`
-    /// risk #3 for the design.
+    /// unresolved param. See `docs/devbook/09-type-checking.md`
+    /// (method-level generic inference) risk #3 for the design.
     inference_failures: FxHashMap<usize, (String, String)>,
 }
 
@@ -1941,8 +1941,8 @@ impl<'a> TypeChecker<'a> {
                                         // NoMethodFound — points the user at
                                         // the specific unresolved generic +
                                         // suggests the explicit-args fix.
-                                        // See `docs/internals/method-level-
-                                        // inference.md` risk #3.
+                                        // See `docs/devbook/09-type-checking.md`
+                                        // (method-level generic inference) risk #3.
                                         if let Some((unresolved, reason)) =
                                             self.inference_failures.get(&method.span.start).cloned()
                                         {

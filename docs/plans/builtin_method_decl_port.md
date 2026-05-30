@@ -11,14 +11,14 @@ The three consumers (current lines at `aaaaec57`):
 3. `infer_method_return_type` String-returning list — `:3452` (fn spans `:3379-3540`), call `:4939` → builtin method return typing (was the NEXT BLOCKER #5/#6 fault surface).
 
 ## ✅ DESIGN DECISION (user, 2026-05-29): OPTION (A) — shared schema home, via the SHIPPED unified-resource-model pipeline.
-The table lives in `compiler/data/schema.gg` + a static table in `compiler/data/resources.gg`. **This is NOT greenfield — it extends the already-shipped unified-resource-model infrastructure** (authoritative doc: `docs/internals/unified-resource-model.md` §3.6/§9.2/§13; landed 2026-05-19/20, TODO items 3-8 + 7c). Follow that pipeline EXACTLY:
+The table lives in `compiler/data/schema.gg` + a static table in `compiler/data/resources.gg`. **This is NOT greenfield — it extends the already-shipped unified-resource-model infrastructure** (authoritative doc: `docs/devbook/18-runtime-abi.md`, the resource table / runtime declaration table; landed 2026-05-19/20, TODO items 3-8 + 7c). Follow that pipeline EXACTLY:
 
 - **`resources.toml` is DEAD** — the original TOML/build.rs plan was rejected 2026-05-19 (TODO:938). Canonical source is idiomatic Gorget `.gg`, baked into Rust via `include_str!` (`src/compiler_data.rs`), parsed at compiler-runtime by the compiler's OWN parser. Do NOT reintroduce TOML/codegen.
 - **Existing pattern (mirror it):** `RESOURCES` + `RUNTIME_FNS` are two static tables in `resources.gg` parsed by the AST-walker in **`src/ir/resources.rs`** (`OnceLock`-cached `table()` accessor; walks `Item::StaticDecl`). The new `BUILTIN_METHODS` is a THIRD such table → extend `resources.rs` to walk it, mirror the new types in **`src/ir/resource_schema.rs`**, and add the self-host import/consumer (the self-host already does `from compiler.data.schema import ...` + reads via a `lookup_*`/`build_*` accessor like `build_resource_metadata` in `lir_lower.gg`).
 - **Additive-change precedent = item 7c (2026-05-20, `c_typedef_name`):** purely-additive field, all existing rows leave it default/None, schema + Rust mirror + self-host constructor calls updated together, SCHEMA_VERSION bumped. The BuiltinMethodDecl table follows this exact playbook.
 - **SCHEMA_VERSION:** bump 1→2 in `resources.gg` AND `SCHEMA_VERSION_EXPECTED` in `resources.rs` (the loader panics on mismatch) — schema + mirror + walker + bump in ONE atomic commit.
 
-Reference-grade single-source-of-truth. Option (B) self-host-only is NOT taken. **The plan-review + execution MUST read `docs/internals/unified-resource-model.md` + study `src/ir/resources.rs` + the `c_typedef_name` precedent commits before writing code** — this is a well-trodden path, not a new design. (Original fork rationale below retained for context.)
+Reference-grade single-source-of-truth. Option (B) self-host-only is NOT taken. **The plan-review + execution MUST read `docs/devbook/18-runtime-abi.md` + study `src/ir/resources.rs` + the `c_typedef_name` precedent commits before writing code** — this is a well-trodden path, not a new design. (Original fork rationale below retained for context.)
 
 ## ⚠ The original design fork (RESOLVED → A above; retained for context)
 **Where the table lives:**
@@ -46,7 +46,7 @@ This plan was scoped at tip `aaaaec57`; HEAD is now `b80f9e2f` and NEXT BLOCKER 
 ## ⚠ Loader test (plan-review note)
 `resources_load_clean` in `src/ir/resources.rs:~434` asserts EXACT table counts (currently RESOURCES=31, RUNTIME_FNS=299). Adding `BUILTIN_METHODS` → the walker counts a new table → update this test's assertions in the step-1 (schema+table land) commit.
 
-## ⚠ Self-host-resource-model constraints (`docs/internals/self-host-resource-model.md` — read it too)
+## ⚠ Self-host-resource-model constraints (`docs/devbook/26-self-host-frontend.md` — read it too)
 The self-host side is the PRIMARY long-term consumer; that doc adds binding constraints:
 - **§3.2 — real Gorget enums, NEVER int-coded.** `BuiltinRetKind` as an enum is correct; do NOT int-code any categorical axis (semantic-state-in-a-primitive-pun = Rule 2 violation). `Vector[int] owning_arg_positions` is fine — those are genuine integer indices, not encoded semantics.
 - **§3.4.1 (closed 2026-05-10) — site #3 has LOAD-BEARING collection-getter Option rows. HARD CONSTRAINT.** `infer_method_return_type`'s `get/pop/unwrap/first/last/remove` arms were deliberately made to return `Option__V` (elem-typed) to feed the Tier-1 lift's `slot.enum_kind == EK_OPTION` discriminator (`lir_lower.gg` `emit_void_ptr_option_wrap`). **The BuiltinMethodDecl port must leave those collection-getter Option-return rows EXACTLY ALONE — only the String-VIEW return rows (`slice`/`substring`/`trim`/… → GorgetString) retire to `ret_kind`.** Touching the getter-Option rows re-breaks the lift. This is the sharp version of "don't over-port #3": getter-Option rows are not "fuzzy heuristics to leave as BrkInfer" — they are correct, load-bearing, and out of scope entirely.
