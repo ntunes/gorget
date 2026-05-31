@@ -33,20 +33,26 @@ the self-host + stdlib-importing fixtures — so FIX THOSE FIRST, then remove th
 ## 2. Fix the ~7 real bugs FIRST (recon-measured; all genuine latent defects — fix, don't dodge)
 
 ### Rust stdlib (3 sites)
-1. **`lib/xtd/httpserver.gg:584` & `:608`** — `url_decode`/`form_decode` declare return `Result[String, String]`
-   but should be **`Result[String, ParseError]`** (the actual error type they construct/return). Surfaces in
-   24 fixtures. Fix the return-type annotation to match the real error type (read the fn bodies to confirm
-   `ParseError` is what's thrown).
+1. **`lib/xtd/httpserver.gg:584` & `:608`** — these are LOCAL-VARIABLE annotations (NOT return-type decls):
+   `url_decode`/`form_decode` are IMPORTED from `std.encoding` (declared `Result[String, ParseError]` at
+   `std/encoding.gg:69,104`), but the local result is annotated `Result[String, String]` at `:584`/`:608` —
+   a mismatch. Every OTHER call site in httpserver.gg already annotates `ParseError` (`:217,220,386,389,580,581,
+   604,605`); only these 2 are wrong. Fix → change the local annotation to **`Result[String, ParseError]`**.
+   Surfaces in **25** fixtures (grep `xtd.httpserver` importers).
 2. **`lib/xtd/yaml.gg:1269` & `:1276`** — `yaml_p.pos` references a NONEXISTENT field; the correct field is
    **`yaml_pos`** (silent miscompile today). Fix the field name (grep the struct def to confirm).
 3. **`lib/xtd/jsonpath.gg:248` & `:252`** — `segments.push(.ArrayLen)` / `.Wildcard` dot-shorthand enum ctor
    not inferred through the `push()` arg (the expected-type isn't threaded into the `push` argument).
-   ⚠ **DECISION (per "Don't redesign around compiler gaps"): PREFER fixing the inference gap** (thread the
-   collection's elem type as the expected-type for `push`/`put`/`insert`/`set` args so dot-shorthand resolves
-   — find where call-arg expected-type is set, likely `src/ir/lowering/exprs/calls.rs` or the typecheck
-   call-arg path; `push(Segment.ArrayLen())` qualified already works, so it's purely the shorthand inference).
-   If the inference fix is too large for this chain, FALLBACK: qualify the 2 sites
-   (`.ArrayLen`→`Segment.ArrayLen()`) WITH a cited TODO for the inference gap. State which you chose.
+   ⚠ **DECISION (per "Don't redesign around compiler gaps"): PREFER fixing the inference gap.** The error is
+   `expected enum type context for dot-shorthand`; `DotShorthand` resolution (typecheck.rs:2685-2719) depends
+   entirely on `decl_type_hint` being set. For builtin collection methods (`push`/`put`/`insert`/`set`) the
+   elem type is NOT a sig param — `push` routes through `builtin_method_type` (**`src/semantic/typecheck.rs:4810`**,
+   NOT the lowering file), and its args are inferred at `:1905-1907` with NO hint and BEFORE `builtin_method_type`
+   runs. **The bounded fix: extract the receiver's elem type (`type_args.first()`, `:4804`) and set
+   `decl_type_hint` before that arg-inference loop.** (`push(Segment.ArrayLen())` qualified already works via
+   `:1741-1762`, so it's purely the shorthand-hint gap.) Note: this same fix also clears `lib/xtd/query.gg`'s
+   shorthand sites (see §3). If too large for this chain, FALLBACK: qualify the 2 sites
+   (`.ArrayLen`→`Segment.ArrayLen()`) WITH a cited TODO. State which you chose.
 
 ### Self-host (fix in ALL affected driver-dir copies — recon enumerated them; self-host convention = fix every copy)
 4. **`parser.gg` `snap_name_tok.span`** → `SpannedToken` has NO `span` field (fields: `lex_token`/`lex_start`/
@@ -57,9 +63,13 @@ the self-host + stdlib-importing fixtures — so FIX THOSE FIRST, then remove th
    copies) — a single `case` + a trailing `return`, NO `else` → genuinely non-exhaustive (the entry-file
    checker rejects this idiom). Fix: add an explicit **`else: pass`** (or `case _: pass`) to make the
    no-op-on-other-variants intent spec-compliant. Grep the 5 `self_host_*/parser.gg` copies.
-6. **`resolve.gg:396` & `:443` `match stmt:`** missing `SMeta`/`SAssertReturn`/`SSnapshot` arms (2 copies —
-   `self_host_resolver/resolve.gg` + wherever the other lives; grep). Add the missing arms (or an `else: pass`
-   if those statements are genuinely no-ops in resolve — match what the entry-checker-clean copies do).
+6. **`resolve.gg` `match stmt:`** missing statement arms — ⚠ **4 copies, NOT 2 (brief-review pass-1 — under-
+   counting leaves 2 drivers red).** The 3 byte-identical copies (`self_host_{check,lowerer,typechecker}/
+   resolve.gg`, md5 `8a3198d5`, match at `:396`) miss ALL of `SMeta`+`SAssertReturn`+`SSnapshot`; the distinct
+   `self_host_resolver/resolve.gg` copy (md5 `113aeab8`, match at `:443`) misses ONLY `SMeta` (its
+   `SAssertReturn:590`/`SSnapshot:614` arms already exist). An `else: pass` covers either case cleanly (those
+   stmts are no-ops in resolve) — add it to all 4. Grep `match stmt:` across all 6 `self_host_*/resolve.gg`
+   and confirm each is exhaustive after your edit.
 7. **`self_host_lowerer/format_gir.gg:167`** missing **`GIFieldLoad`** arm, **`:196`** missing **`GTNone`**
    arm (lowerer only). ⚠ NOTE the `&`-param fix just added a `GIDerefStore` arm here — your `GIFieldLoad`
    arm is separate. Add a render arm for each (mirror the sibling arms). (This is the exact `format_gir`
@@ -71,9 +81,16 @@ a shared primitive must land in EVERY copy that has the defect, or that dir's `g
 red. Grep each defect across all 6 dirs; fix every real occurrence.
 
 ## 3. THEN remove the truncate + un-ignore the tests (LAST)
-- Delete/neuter the `errors.truncate(error_count)` + the `hard_errors` re-append at `typecheck.rs:6143-6151`
-  (keep the recursion). Read the surrounding code to remove it cleanly (the `error_count` snapshot may also
-  become dead — remove it too).
+- Delete the `errors.truncate(...)` + `hard_errors` re-append at `typecheck.rs:6143-6151` (keep the
+  recursion). ⚠ (brief-review pass-1) BOTH the `error_count` (`:6143`) AND `hard_count` (`:6144`) snapshots
+  become dead — remove them too. The clean reduction is the **9-line block → the single line
+  `check_items_recursive_tc(checker, inner);`** (review-verified it builds).
+- ⚠ **(brief-review pass-1 — not a blocker, log it) the recon MISSED 3 same-class latent stdlib bugs:**
+  `lib/xtd/query.gg` (same dot-shorthand class + `Option[Json]` mismatches — the jsonpath inference fix above
+  ALSO clears query's shorthand), `lib/xtd/ssh.gg` (~17 Result-unwrap mismatches), `lib/xtd/gpu.gg`
+  (duplicate-def + GLContext mismatches). **NONE are imported by any fixture** (grep-verified), so they do NOT
+  gate the comparison/bootstrap suite and are OUT of scope for this chain — but they're real. LOG them to
+  TODO (per §6) so they're not lost; do NOT expand this chain to fix them.
 - Remove `#[ignore]` from `imported_nonexhaustive_match_should_error` + `imported_body_type_error_should_error`
   (`tests/integration.rs` ~`:1895`). They should now PASS (the `#[ignore]` comments' root-cause description
   was already corrected to cite the truncate).
@@ -81,9 +98,10 @@ red. Grep each defect across all 6 dirs; fix every real occurrence.
 ## 4. Gates (ALL must hold — this chain is "green" only when the whole self-host suite re-greens)
 1. `cargo build` clean; `cargo test --lib` green (recon: stays 1065/0 — confirm).
 2. The 2 un-ignored tests PASS: `imported_nonexhaustive_match_should_error`, `imported_body_type_error_should_error`.
-3. **`gg check` is now CLEAN on the self-host drivers** — `cargo run -- check tests/fixtures/self_host_lowerer/driver.gg` (and the parser/resolver/typechecker/check dirs) → no semantic errors. (This is the burn-down's success signal.)
-4. **The self-host comparison + bootstrap suite re-greens** (force-rebuild the driver first): `c_emit_comparison` (expect ≥**850**, may RISE as the 24 httpserver fixtures + others now type-check — record the number), `lowerer_comparison`, `resolver_comparison`, `parser_comparison`, `type_comparison`, `check_comparison`, `self_host_bootstrap`, `self_host_bootstrap_fixed_point` — ALL must be GREEN/at-or-above baseline. ⚠ A RED here means a self-host defect you missed — fix it, don't exclude it.
-5. The 24 httpserver + 2 yaml + jsonpath fixtures build + run correctly (the stdlib fixes).
+3. **`gg check` is now CLEAN on ALL 6 self-host drivers** — `cargo run -- check tests/fixtures/self_host_{lowerer,parser,resolver,typechecker,check,lexer}/driver.gg` → no semantic errors each. (This is the burn-down's success signal. `self_host_lexer` has none of the 7 defects but check it for completeness.)
+4. **The self-host comparison + bootstrap suite re-greens** (force-rebuild the driver first). ⚠ (brief-review pass-1) the `*_comparison` tests are **DIAGNOSTIC-ALWAYS-PASS (no `assert!`)** — "green" is MEANINGLESS; you MUST read the printed matched-counts via `--nocapture` for ALL of them: `c_emit_comparison` (expect ≥**850**, may RISE as the 25 httpserver fixtures + others now type-check — record the number), `lowerer_comparison`, `resolver_comparison`, `parser_comparison`, `type_comparison`, `check_comparison` — each at-or-above its baseline (none regressed). Only `self_host_bootstrap` + `self_host_bootstrap_fixed_point` actually ASSERT (real red/green) — both must be GREEN. ⚠ A regressed count or a red bootstrap means a self-host defect you missed — fix it, don't exclude it.
+5. The 25 httpserver + 2 yaml + the jsonpath-importing fixtures build + run correctly (the stdlib fixes).
+   NOTE jsonpath is reached via `query_basic.gg` (imports `xtd.jsonpath`), not a `jsonpath_*` fixture.
 
 ## 5. Report back
 The diff per bug cluster + commit hashes; the jsonpath decision (inference fix vs qualify+TODO); the
