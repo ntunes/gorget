@@ -75,8 +75,8 @@ This book is for *compiler developers*, not application programmers. It assumes 
 - [B — Glossary](appendix-b-glossary.md)
 
 ### Part X — Walkthroughs
-- [Follow the value: a construct from source to machine code](stub-follow-the-value.md) — one collection literal traced through every pipeline stage, with the handler at each hop
-- [Working on the compiler: a contributor's playbook](stub-contributor-playbook.md) — the debugging heuristic, the layering litmus, and the comparison/fixed-point gates, via worked snags
+- [Follow the value: a construct from source to machine code](28-follow-the-value.md) — one collection literal traced through every pipeline stage, with the handler at each hop
+- [Working on the compiler: a contributor's playbook](29-contributor-playbook.md) — the debugging heuristic, the layering litmus, and the comparison/fixed-point gates, via worked snags
 
 ---
 

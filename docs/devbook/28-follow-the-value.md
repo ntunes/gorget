@@ -310,7 +310,7 @@ Three things are worth carrying away from this one walk:
    typed fact the previous stage wrote (`collection_kind`, `LocalOwnership`,
    `arg_abis`). When you go to *fix* something on a path like this, the place to
    fix is the **writer** of the fact the buggy reader consumed — which is exactly
-   the heuristic the [contributor playbook](stub-contributor-playbook.md) makes
+   the heuristic the [contributor playbook](29-contributor-playbook.md) makes
    into a discipline.
 
 ## Two more constructs, in brief
