@@ -18,8 +18,15 @@ from lir import OVF_TRAP, OVF_WRAP
 from lir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
 from lir import EK_NOT_ENUM, EK_OPTION, EK_RESULT, EK_GENERAL
 from lir import GINIT_ZEROED, GINIT_FUNC_ADDR, GINIT_RUNTIME_CALL, GINIT_STRUCT
+from lir import SCHED_POOL, SCHED_THREAD, SCHED_INLINE, SCHED_SINGLE
 from std.collections import Vector, Dict
 from std.conv import int_to_str
+# Chain 2: the full-program preamble reads the shared runtime .c files at
+# `src/backend/c/runtime/` and fails loud (exit 1) on a missing/empty read —
+# read_file returns "" silently on a bad path.
+from std.fs import read_file
+from std.os import exit
+from std.io import stderr
 
 # ── String builder ──────────────────────────────────────────
 #
@@ -5405,3 +5412,739 @@ String generate_c(LirModule &m):
 
     out = out + body
     return out
+
+# ════════════════════════════════════════════════════════════════════
+# Chain 2 — full-program runtime preamble
+#
+# Ports Rust's `emit_runtime_modules` (src/backend/c_lir/emit_types.rs:1791)
+# + `emit_lir_helpers` (:2308) into the self-host so `driver F lib --emit-c`
+# emits a COMPLETE, standalone `.c` (runtime preamble + body) — no external
+# splice. The 62 shared runtime `.c` files at `src/backend/c/runtime/` are read
+# at emit time and conditionally concatenated in the SAME top-to-bottom order
+# as the Rust source (a misordered dependency yields a `.c` that won't compile).
+#
+# The string is built with StrBuf/sb_push (NOT `out = out + X`): the latter is
+# O(N²) and OOM-kills stage-1, and `&String`/`&bool` mutable-ref helpers
+# MISCOMPILE in the self-host — sb_push mutates a StrBuf STRUCT through a
+# pointer, which works. Emit-once flags are plain function-local bools.
+# ════════════════════════════════════════════════════════════════════
+
+# Read a runtime `.c` file and FAIL LOUD on an empty/missing read. read_file
+# returns "" silently on a bad path; every runtime `.c` is non-empty, so an
+# empty read ALWAYS means a wrong path → exit(1), don't emit a broken preamble.
+String read_runtime(String rdir, String name):
+    String s = read_file(rdir + "/" + name)
+    if s.byte_len() == 0:
+        print("error: runtime file " + name + " empty or missing at " + rdir, file=stderr)
+        exit(1)
+    return s
+
+# any name in `names` starts with `prefix` (mirrors Rust `has(&|n| n.starts_with(...))`)
+bool cn_has_prefix(Vector[String] &names, String prefix):
+    int i = 0
+    while i < names.len():
+        if names.get(i).unwrap().starts_with(prefix):
+            return true
+        i += 1
+    return false
+
+# any name in `names` == `exact`
+bool cn_has_eq(Vector[String] &names, String exact):
+    int i = 0
+    while i < names.len():
+        if names.get(i).unwrap() == exact:
+            return true
+        i += 1
+    return false
+
+# any name in `names` contains `sub` (mirrors Rust `n.contains(...)`)
+bool cn_has_contains(Vector[String] &names, String sub):
+    int i = 0
+    while i < names.len():
+        if names.get(i).unwrap().contains(sub):
+            return true
+        i += 1
+    return false
+
+# Mirror Rust's `recursive_drop_fn_used` closure (emit_types.rs:1942): true if
+# any recursive-drop struct field OR enum-variant payload resolves to
+# `drop_fn` (a stable runtime drop symbol). The self-host's LirStructDef has no
+# `elem_drop_fn` field (see lir.gg:270) — this scan + the name-prefix check are
+# the surviving collection-presence disjuncts.
+bool recursive_drop_fn_used(LirModule &m, String drop_fn):
+    Vector[String] rds_keys = m.recursive_drop_structs.keys()
+    int rk = 0
+    while rk < rds_keys.len():
+        Vector[FieldDrop] fds = m.recursive_drop_structs.get(rds_keys.get(rk).unwrap()).unwrap()
+        int fk = 0
+        while fk < fds.len():
+            if fds.get(fk).unwrap().drop_fn_name == drop_fn:
+                return true
+            fk += 1
+        rk += 1
+    Vector[String] rde_keys = m.recursive_drop_enums.keys()
+    int ek = 0
+    while ek < rde_keys.len():
+        Vector[EnumVariantDrop] evds = m.recursive_drop_enums.get(rde_keys.get(ek).unwrap()).unwrap()
+        int vk = 0
+        while vk < evds.len():
+            if evds.get(vk).unwrap().drop_fn_name == drop_fn:
+                return true
+            vk += 1
+        ek += 1
+    return false
+
+# Build the call-name set scanned by the family predicates: extern names +
+# function names + every body ICallExtern name + every global's init_expr
+# (the latter holds full C call exprs like "gorget_math_infinity()" for
+# GINIT_RUNTIME_CALL globals — a fixture whose ONLY runtime-family trigger is a
+# static global would otherwise miss its family and fail to link; the prefix
+# matcher works directly since "gorget_math_" matches "gorget_math_infinity()").
+Vector[String] build_all_call_names(LirModule &m):
+    Vector[String] names = []
+    int ei = 0
+    while ei < m.externs.len():
+        names.push(m.externs.get(ei).unwrap().name)
+        ei += 1
+    int fi = 0
+    while fi < m.functions.len():
+        names.push(m.functions.get(fi).unwrap().name)
+        fi += 1
+    fi = 0
+    while fi < m.functions.len():
+        int bi = 0
+        while bi < m.functions.get(fi).unwrap().blocks.len():
+            int ii = 0
+            while ii < m.functions.get(fi).unwrap().blocks.get(bi).unwrap().insts.len():
+                match m.functions.get(fi).unwrap().blocks.get(bi).unwrap().insts.get(ii).unwrap():
+                    case ICallExtern(_, name, _, _, _):
+                        names.push(name)
+                    else:
+                        pass
+                ii += 1
+            bi += 1
+        fi += 1
+    int gi = 0
+    while gi < m.globals.len():
+        String ie = m.globals.get(gi).unwrap().init_expr
+        if ie.byte_len() > 0:
+            names.push(ie)
+        gi += 1
+    return names
+
+# ── String-extended block predicate (emit_types.rs:1853-1871) ──
+# Early-return-per-prefix (the Rust source is one big `||` chain; the self-host
+# lexer has no backslash line-continuation, so split into statements).
+bool needs_string_extended(Vector[String] &n):
+    if cn_has_prefix(&n, "gorget_str_to_upper") or cn_has_prefix(&n, "gorget_str_to_lower"): return true
+    if cn_has_prefix(&n, "gorget_str_is_alpha") or cn_has_prefix(&n, "gorget_str_is_upper"): return true
+    if cn_has_prefix(&n, "gorget_str_is_lower") or cn_has_prefix(&n, "gorget_str_is_digit"): return true
+    if cn_has_prefix(&n, "gorget_str_is_whitespace"): return true
+    if cn_has_prefix(&n, "gorget_str_contains") or cn_has_prefix(&n, "gorget_str_starts_with"): return true
+    if cn_has_prefix(&n, "gorget_str_ends_with") or cn_has_prefix(&n, "gorget_str_find"): return true
+    if cn_has_prefix(&n, "gorget_memmem"): return true
+    if cn_has_prefix(&n, "gorget_str_trim") or cn_has_prefix(&n, "gorget_str_replace"): return true
+    if cn_has_prefix(&n, "gorget_str_repeat") or cn_has_prefix(&n, "gorget_str_pad"): return true
+    if cn_has_prefix(&n, "gorget_str_strip") or cn_has_prefix(&n, "gorget_str_lstrip"): return true
+    if cn_has_prefix(&n, "gorget_str_rstrip") or cn_has_prefix(&n, "gorget_str_removeprefix"): return true
+    if cn_has_prefix(&n, "gorget_str_removesuffix") or cn_has_prefix(&n, "gorget_str_index_of"): return true
+    if cn_has_prefix(&n, "gorget_str_count") or cn_has_prefix(&n, "gorget_str_center"): return true
+    if cn_has_prefix(&n, "gorget_str_ljust") or cn_has_prefix(&n, "gorget_str_rjust"): return true
+    if cn_has_prefix(&n, "gorget_str_zfill") or cn_has_prefix(&n, "gorget_str_reverse"): return true
+    if cn_has_prefix(&n, "gorget_str_encode_") or cn_has_prefix(&n, "gorget_str_decode_"): return true
+    if cn_has_prefix(&n, "gorget_base64_") or cn_has_prefix(&n, "gorget_json_escape"): return true
+    if cn_has_prefix(&n, "gorget_str_to_json") or cn_has_prefix(&n, "gorget_str_from_json"): return true
+    if cn_has_prefix(&n, "gorget_uint8_is_") or cn_has_prefix(&n, "gorget_uint8_to_"): return true
+    return false
+
+# ── needs_sync (emit_types.rs:2081) ──
+bool needs_sync_pred(Vector[String] &n):
+    if cn_has_prefix(&n, "gorget_atomic_int_") or cn_has_prefix(&n, "gorget_atomic_bool_"): return true
+    if cn_has_prefix(&n, "gorget_atomic_") or cn_has_prefix(&n, "gorget_barrier_"): return true
+    if cn_has_prefix(&n, "gorget_condvar_") or cn_has_prefix(&n, "gorget_rwlock_"): return true
+    if cn_has_prefix(&n, "gorget_waitgroup_") or cn_has_prefix(&n, "gorget_semaphore_"): return true
+    if cn_has_prefix(&n, "gorget_onceflag_"): return true
+    if cn_has_prefix(&n, "gorget_read_guard_") or cn_has_prefix(&n, "gorget_write_guard_"): return true
+    if cn_has_prefix(&n, "ReadGuard__") or cn_has_prefix(&n, "WriteGuard__"): return true
+    return false
+
+# ── needs_async (emit_types.rs:2094) ──
+bool needs_async_pred(Vector[String] &n):
+    if cn_has_contains(&n, "channel") or cn_has_contains(&n, "Channel"): return true
+    if cn_has_prefix(&n, "gorget_mutex_") or cn_has_prefix(&n, "gorget_guard_"): return true
+    if cn_has_prefix(&n, "gorget_executor_") or cn_has_eq(&n, "gorget_spawn"): return true
+    if cn_has_prefix(&n, "__gorget_spawn_") or cn_has_prefix(&n, "__gorget_await_"): return true
+    if cn_has_prefix(&n, "gorget_task_group_") or cn_has_prefix(&n, "gorget_reactor_"): return true
+    if cn_has_prefix(&n, "Mutex__") or cn_has_prefix(&n, "RWLock__"): return true
+    return false
+
+# ── needs_spawn (emit_types.rs:2193) ──
+bool needs_spawn_pred(Vector[String] &n):
+    if cn_has_prefix(&n, "gorget_process_spawn") or cn_has_prefix(&n, "gorget_process_wait"): return true
+    if cn_has_prefix(&n, "gorget_process_kill") or cn_has_prefix(&n, "gorget_process_pid"): return true
+    if cn_has_prefix(&n, "gorget_process_read_") or cn_has_prefix(&n, "gorget_process_write_"): return true
+    if cn_has_prefix(&n, "gorget_process_close_"): return true
+    if cn_has_prefix(&n, "gorget_signal_") or cn_has_eq(&n, "gorget_getpid"): return true
+    return false
+
+
+# Emit the full runtime preamble: the conditionally-selected runtime `.c` files
+# followed by emit_lir_helpers, in the SAME order as Rust's emit_runtime_modules
+# (emit_types.rs:1791-2302). Returns the preamble text; the driver prepends it
+# to generate_c(&lir) for `--emit-c`.
+#
+# Self-host deviations from the Rust source (all per the executor brief):
+#   - `clone_stats` field is ABSENT → default false → SKIP RUNTIME_CLONE_STATS.
+#   - `target`/freestanding is ABSENT → default hosted → SKIP the freestanding
+#     early-return; always emit the full hosted preamble.
+#   - LirStructDef has no `elem_drop_fn` field → the array/map/set triggers lose
+#     the `s.elem_drop_fn==Some(...)` disjunct; the recursive_drop_fn_used +
+#     name-prefix disjuncts survive.
+#   - emit-once is open-coded with plain function-local bools (a `bool &flag`
+#     helper would miscompile — see file header on the StrBuf idiom).
+String emit_runtime_preamble(LirModule &m, String runtime_dir):
+    String rdir = runtime_dir
+    Vector[String] n = build_all_call_names(&m)
+    StrBuf buf = sb_new()
+
+    # ── Minimal preamble (headers, allocator, scoped alloc stubs) ──
+    sb_push(&buf, read_runtime(rdir, "runtime_preamble.c"))
+
+    # ── Conditional allocators ──
+    if cn_has_prefix(&n, "gorget_arena_") or cn_has_prefix(&n, "GorgetArena"):
+        sb_push(&buf, read_runtime(rdir, "runtime_arena_alloc.c"))
+    if cn_has_prefix(&n, "gorget_tracking_"):
+        sb_push(&buf, read_runtime(rdir, "runtime_tracking_alloc.c"))
+    if cn_has_prefix(&n, "gorget_pool_") or cn_has_prefix(&n, "GorgetPool"):
+        sb_push(&buf, read_runtime(rdir, "runtime_pool_alloc.c"))
+    if cn_has_prefix(&n, "gorget_tlsf_"):
+        sb_push(&buf, read_runtime(rdir, "runtime_tlsf_alloc.c"))
+    if cn_has_prefix(&n, "gorget_fba_") or cn_has_prefix(&n, "gorget_fixed_buffer_"):
+        sb_push(&buf, read_runtime(rdir, "runtime_fixedbuf_alloc.c"))
+    if cn_has_prefix(&n, "gorget_fallback_"):
+        sb_push(&buf, read_runtime(rdir, "runtime_fallback_alloc.c"))
+
+    # ── String types and operations ──
+    sb_push(&buf, read_runtime(rdir, "runtime_string.c"))
+
+    # Extended string methods (unicode tables, search, split/replace/trim/etc.)
+    if needs_string_extended(&n):
+        sb_push(&buf, read_runtime(rdir, "runtime_string_extended.c"))
+
+    # Base string operations (Str-aware concat, append, cstr conversion)
+    sb_push(&buf, read_runtime(rdir, "runtime_string_base_ops.c"))
+
+    # ── Alloc report (test/bench mode only) ──
+    bool is_test_or_bench = m.test_fns.len() > 0 or m.bench_fns.len() > 0 or m.is_test_module
+    if is_test_or_bench:
+        sb_push(&buf, read_runtime(rdir, "runtime_alloc_report.c"))
+
+    # ── Clone stats report: `clone_stats` field ABSENT → default false → skip. ──
+
+    # ── Panic handler ──
+    if not is_test_or_bench:
+        sb_push(&buf, read_runtime(rdir, "panic_normal.c"))
+    else:
+        sb_push(&buf, read_runtime(rdir, "panic_test.c"))
+
+    # ── Conditional core sections ──
+    # emit-once flags (plain function-local bools — see the StrBuf note in the
+    # file header; a `bool &flag` helper miscompiles).
+    bool emitted_array = false
+    bool emitted_map = false
+
+    # Checked arithmetic
+    if cn_has_prefix(&n, "gorget_checked_") or cn_has_prefix(&n, "GORGET_CHECKED_"):
+        sb_push(&buf, read_runtime(rdir, "runtime_checked_arith.c"))
+
+    # Collections: Array
+    bool vector_struct_present = recursive_drop_fn_used(&m, "gorget_array_free")
+    if vector_struct_present or cn_has_prefix(&n, "gorget_array_") or cn_has_prefix(&n, "Vector__"):
+        if not emitted_array:
+            sb_push(&buf, read_runtime(rdir, "runtime_array.c"))
+            emitted_array = true
+
+    # String/Array operations (join, split, iterators — needs RUNTIME_ARRAY)
+    if pred_string_array(&n):
+        if not emitted_array:
+            sb_push(&buf, read_runtime(rdir, "runtime_array.c"))
+            emitted_array = true
+        sb_push(&buf, read_runtime(rdir, "runtime_string_array.c"))
+
+    # Collections: Map (depends on Array)
+    bool map_struct_present = recursive_drop_fn_used(&m, "gorget_map_free")
+    if map_struct_present or pred_map(&n):
+        if not emitted_array:
+            sb_push(&buf, read_runtime(rdir, "runtime_array.c"))
+            emitted_array = true
+        if not emitted_map:
+            sb_push(&buf, read_runtime(rdir, "runtime_map.c"))
+            emitted_map = true
+
+    # Collections: Set (depends on Map)
+    bool set_struct_present = recursive_drop_fn_used(&m, "gorget_set_free")
+    if set_struct_present or pred_set(&n):
+        if not emitted_array:
+            sb_push(&buf, read_runtime(rdir, "runtime_array.c"))
+            emitted_array = true
+        if not emitted_map:
+            sb_push(&buf, read_runtime(rdir, "runtime_map.c"))
+            emitted_map = true
+        sb_push(&buf, read_runtime(rdir, "runtime_set.c"))
+
+    # Error handling (test/bench mode or explicit catch/throw)
+    if is_test_or_bench or pred_error(&n):
+        sb_push(&buf, read_runtime(rdir, "runtime_error.c"))
+
+    # File I/O (depends on Array for read_file_bytes)
+    if pred_file(&n):
+        if not emitted_array:
+            sb_push(&buf, read_runtime(rdir, "runtime_array.c"))
+            emitted_array = true
+        sb_push(&buf, read_runtime(rdir, "runtime_file.c"))
+
+    # Path functions + readdir (depends on Array for readdir)
+    if pred_path(&n):
+        if not emitted_array:
+            sb_push(&buf, read_runtime(rdir, "runtime_array.c"))
+            emitted_array = true
+        sb_push(&buf, read_runtime(rdir, "runtime_path.c"))
+
+    # CLI args (needs RUNTIME_ARRAY)
+    if cn_has_eq(&n, "gorget_args"):
+        if not emitted_array:
+            sb_push(&buf, read_runtime(rdir, "runtime_array.c"))
+            emitted_array = true
+        sb_push(&buf, read_runtime(rdir, "runtime_args.c"))
+
+    # Parsing (also detects int__parse/float__parse codegen patterns)
+    if cn_has_prefix(&n, "gorget_parse_int") or cn_has_prefix(&n, "gorget_parse_float") or cn_has_prefix(&n, "gorget_try_parse") or parse_method_present(&n):
+        sb_push(&buf, read_runtime(rdir, "runtime_parse.c"))
+
+    # to_str conversions
+    if pred_tostr(&n):
+        sb_push(&buf, read_runtime(rdir, "runtime_tostr.c"))
+
+    # Environment
+    if pred_env(&n):
+        sb_push(&buf, read_runtime(rdir, "runtime_env.c"))
+
+    # Interactive I/O, time, datetime, random, line input (depends on Array)
+    if pred_io(&n):
+        if not emitted_array:
+            sb_push(&buf, read_runtime(rdir, "runtime_array.c"))
+            emitted_array = true
+        sb_push(&buf, read_runtime(rdir, "runtime_io.c"))
+
+    # Math
+    if pred_math(&n):
+        sb_push(&buf, read_runtime(rdir, "runtime_math.c"))
+
+    # Sort comparators (depends on Array)
+    if pred_sort(&n):
+        if not emitted_array:
+            sb_push(&buf, read_runtime(rdir, "runtime_array.c"))
+            emitted_array = true
+        sb_push(&buf, read_runtime(rdir, "runtime_sort.c"))
+
+    # Blank line between core sections and sync/async sections (emit_types.rs:2078)
+    sb_push(&buf, "\n")
+
+    # Sync primitives
+    bool needs_sync = needs_sync_pred(&n)
+    if needs_sync:
+        sb_push(&buf, read_runtime(rdir, "sync_runtime.c"))
+
+    # Async core (compute needs_async FIRST — channel/mutex re-append it below)
+    bool needs_async = needs_async_pred(&n)
+    if needs_async:
+        sb_push(&buf, read_runtime(rdir, "async_runtime.c"))
+        sb_push(&buf, read_runtime(rdir, "task_common.c"))
+        if m.scheduler_mode == SCHED_POOL:
+            sb_push(&buf, read_runtime(rdir, "scheduler_pool_runtime.c"))
+        elif m.scheduler_mode == SCHED_THREAD:
+            sb_push(&buf, read_runtime(rdir, "scheduler_thread_runtime.c"))
+        elif m.scheduler_mode == SCHED_INLINE:
+            sb_push(&buf, read_runtime(rdir, "scheduler_inline_runtime.c"))
+        elif m.scheduler_mode == SCHED_SINGLE:
+            sb_push(&buf, read_runtime(rdir, "scheduler_single_runtime.c"))
+        sb_push(&buf, read_runtime(rdir, "main_waker_runtime.c"))
+        # EXECUTOR_RUNTIME is the empty const — emit nothing (no file).
+
+    # Channels (also triggered by monomorphized Channel__T methods)
+    if cn_has_prefix(&n, "gorget_channel_") or cn_has_prefix(&n, "Channel__"):
+        if not needs_async:
+            sb_push(&buf, read_runtime(rdir, "async_runtime.c"))
+        sb_push(&buf, read_runtime(rdir, "channel_runtime.c"))
+
+    # Shared / Weak references
+    if cn_has_prefix(&n, "gorget_shared_") or cn_has_prefix(&n, "gorget_weak_") or cn_has_prefix(&n, "Shared__") or cn_has_prefix(&n, "Weak__"):
+        sb_push(&buf, read_runtime(rdir, "shared_runtime.c"))
+
+    # Mutex / Guard
+    if pred_mutex(&n):
+        if not needs_async:
+            sb_push(&buf, read_runtime(rdir, "async_runtime.c"))
+        sb_push(&buf, read_runtime(rdir, "mutex_runtime.c"))
+
+    # Reactor (async I/O, sleep, timers)
+    if cn_has_prefix(&n, "gorget_reactor_") or cn_has_prefix(&n, "gorget_sleep_async"):
+        sb_push(&buf, read_runtime(rdir, "reactor_runtime.c"))
+
+    # Blocking pool — also needed for spawned functions
+    if cn_has_prefix(&n, "gorget_blocking_") or m.spawned_fns.len() > 0:
+        sb_push(&buf, read_runtime(rdir, "blocking_pool_runtime.c"))
+
+    # Task groups
+    if cn_has_prefix(&n, "gorget_task_group_"):
+        sb_push(&buf, read_runtime(rdir, "task_group_runtime.c"))
+
+    # Bytes
+    if cn_has_prefix(&n, "gorget_bytes_"):
+        sb_push(&buf, read_runtime(rdir, "bytes_runtime.c"))
+
+    # Crypto
+    if pred_crypto(&n):
+        sb_push(&buf, read_runtime(rdir, "crypto_runtime.c"))
+
+    # Socket (depends on Array)
+    if cn_has_prefix(&n, "gorget_socket_") or cn_has_prefix(&n, "gorget_tcp_"):
+        if not emitted_array:
+            sb_push(&buf, read_runtime(rdir, "runtime_array.c"))
+            emitted_array = true
+        sb_push(&buf, read_runtime(rdir, "socket_runtime.c"))
+
+    # Server socket (depends on Array)
+    if cn_has_prefix(&n, "gorget_server_socket_") or cn_has_prefix(&n, "gorget_listener_"):
+        if not emitted_array:
+            sb_push(&buf, read_runtime(rdir, "runtime_array.c"))
+            emitted_array = true
+        sb_push(&buf, read_runtime(rdir, "server_socket_runtime.c"))
+
+    # UDP socket
+    if cn_has_prefix(&n, "gorget_udp_"):
+        sb_push(&buf, read_runtime(rdir, "udp_socket_runtime.c"))
+
+    # TLS
+    if cn_has_prefix(&n, "gorget_tls_"):
+        sb_push(&buf, read_runtime(rdir, "tls_socket_runtime.c"))
+        sb_push(&buf, read_runtime(rdir, "tls_server_runtime.c"))
+
+    # Process spawn + signal handling
+    bool needs_spawn = needs_spawn_pred(&n)
+
+    # Process — also needed when spawn is used (ExecResult typedef lives here)
+    if needs_spawn or cn_has_prefix(&n, "gorget_process_") or cn_has_prefix(&n, "gorget_exec_") or cn_has_eq(&n, "gorget_getenv") or cn_has_eq(&n, "gorget_setenv"):
+        sb_push(&buf, read_runtime(rdir, "process_runtime.c"))
+
+    if needs_spawn:
+        if not emitted_array:
+            sb_push(&buf, read_runtime(rdir, "runtime_array.c"))
+            emitted_array = true
+        sb_push(&buf, read_runtime(rdir, "process_spawn_runtime.c"))
+
+    # Thread
+    if cn_has_prefix(&n, "gorget_thread_") or cn_has_prefix(&n, "gorget_current_thread_id") or cn_has_prefix(&n, "__gorget_thread_spawn_") or m.thread_spawned_fns.len() > 0:
+        sb_push(&buf, read_runtime(rdir, "thread_runtime.c"))
+
+    # Trace (trace_filename is a String, "" if none)
+    if m.trace_filename != "" or cn_has_prefix(&n, "gorget_trace_"):
+        sb_push(&buf, read_runtime(rdir, "trace_runtime.c"))
+
+    # SDL (needs external libs; ported faithfully but gate-excluded)
+    if cn_has_prefix(&n, "sdl_") or cn_has_prefix(&n, "gorget_sdl_"):
+        if cn_has_eq(&n, "sdl_load_texture") or cn_has_eq(&n, "gorget_sdl_load_texture"):
+            sb_push(&buf, "#define GORGET_USE_SDL_IMAGE\n")
+        if pred_sdl_ttf(&n):
+            sb_push(&buf, "#define GORGET_USE_SDL_TTF\n")
+        sb_push(&buf, read_runtime(rdir, "sdl_runtime.c"))
+
+    # Bytes f32/f64/i64 helpers
+    if cn_has_bytes_fp(&n):
+        sb_push(&buf, read_runtime(rdir, "bytes_f32_runtime.c"))
+
+    # OpenGL
+    if cn_has_prefix(&n, "gorget_gl_"):
+        sb_push(&buf, read_runtime(rdir, "gl_runtime.c"))
+
+    # Image loading (stb_image — vendored header outside runtime/)
+    if cn_has_prefix(&n, "gorget_image_"):
+        sb_push(&buf, "\n#define STB_IMAGE_IMPLEMENTATION\n")
+        sb_push(&buf, "#define STBI_NO_STDIO\n")
+        sb_push(&buf, "#define STBI_ONLY_PNG\n")
+        sb_push(&buf, "#define STBI_ONLY_JPEG\n")
+        sb_push(&buf, "#define STBI_ONLY_TGA\n")
+        sb_push(&buf, "#define STBI_ONLY_BMP\n")
+        sb_push(&buf, "#define GORGET_HAS_STB_IMAGE 1\n")
+        sb_push(&buf, "#pragma GCC diagnostic push\n")
+        sb_push(&buf, "#pragma GCC diagnostic ignored \"-Wunused-function\"\n")
+        sb_push(&buf, "#pragma GCC diagnostic ignored \"-Wunused-parameter\"\n")
+        sb_push(&buf, "#pragma GCC diagnostic ignored \"-Wsign-compare\"\n")
+        sb_push(&buf, "#pragma GCC diagnostic ignored \"-Wshift-negative-value\"\n")
+        sb_push(&buf, read_runtime(rdir, "../stb_image.h"))
+        sb_push(&buf, "\n#pragma GCC diagnostic pop\n")
+        sb_push(&buf, read_runtime(rdir, "image_runtime.c"))
+
+    # Audio (SDL2_mixer)
+    if cn_has_prefix(&n, "gorget_audio_"):
+        sb_push(&buf, read_runtime(rdir, "audio_runtime.c"))
+
+    # Compression (zlib/deflate)
+    if cn_has_prefix(&n, "gorget_zlib_") or cn_has_prefix(&n, "gorget_deflate_") or cn_has_prefix(&n, "gorget_crc32_"):
+        sb_push(&buf, read_runtime(rdir, "compress_runtime.c"))
+
+    # Metal (macOS Objective-C wrappers)
+    if cn_has_prefix(&n, "gorget_metal_") or cn_has_prefix(&n, "gorget_sdl_metal_"):
+        sb_push(&buf, read_runtime(rdir, "metal_runtime.c"))
+
+    # SQLite (vendored amalgamation outside runtime/)
+    if cn_has_prefix(&n, "gorget_sqlite_") or cn_has_eq(&n, "sqlite_open"):
+        sb_push(&buf, "\n#define SQLITE_MAX_MMAP_SIZE 0\n")
+        sb_push(&buf, "#define HAVE_MREMAP 0\n")
+        sb_push(&buf, "#pragma GCC diagnostic push\n")
+        sb_push(&buf, "#pragma GCC diagnostic ignored \"-Wunused-parameter\"\n")
+        sb_push(&buf, "#pragma GCC diagnostic ignored \"-Wunused-variable\"\n")
+        sb_push(&buf, "#pragma GCC diagnostic ignored \"-Wunused-function\"\n")
+        sb_push(&buf, "#pragma GCC diagnostic ignored \"-Wimplicit-fallthrough\"\n")
+        sb_push(&buf, "#pragma GCC diagnostic ignored \"-Wpedantic\"\n")
+        sb_push(&buf, read_runtime(rdir, "../sqlite3/sqlite3.c"))
+        sb_push(&buf, "\n#pragma GCC diagnostic pop\n")
+        sb_push(&buf, read_runtime(rdir, "../sqlite3/gorget_sqlite.c"))
+
+    # Hot-reload runtime
+    if m.hot_reload:
+        sb_push(&buf, read_runtime(rdir, "hot_reload_runtime.c"))
+
+    # LIR helpers (default values, comparators, hashers, char/utf8 helpers, etc.)
+    sb_push(&buf, emit_lir_helpers(&m))
+
+    return buf.s
+
+# RUNTIME_PARSE also fires on int__parse/uint__parse/double__parse/etc. codegen
+# patterns (emit_types.rs:2022-2023): `n.ends_with("__parse") && (n.starts_with("int")
+# || n.starts_with("uint") || n == "double__parse" || n == "float__parse"
+# || n == "bool__parse")`.
+bool parse_method_present(Vector[String] &names):
+    int i = 0
+    while i < names.len():
+        String nm = names.get(i).unwrap()
+        if nm.ends_with("__parse"):
+            if nm.starts_with("int") or nm.starts_with("uint") or nm == "double__parse" or nm == "float__parse" or nm == "bool__parse":
+                return true
+        i += 1
+    return false
+
+# BYTES_F32_RUNTIME: `n.starts_with("gorget_bytes_") && (n.contains("f32")
+# || n.contains("f64") || n.contains("i64"))` (emit_types.rs:2235).
+bool cn_has_bytes_fp(Vector[String] &names):
+    int i = 0
+    while i < names.len():
+        String nm = names.get(i).unwrap()
+        if nm.starts_with("gorget_bytes_"):
+            if nm.contains("f32") or nm.contains("f64") or nm.contains("i64"):
+                return true
+        i += 1
+    return false
+
+# Build the name set emit_lir_helpers scans: extern names + body ICallExtern
+# names ONLY (mirrors Rust's `has` closure at emit_types.rs:2309-2314 — it does
+# NOT scan function names or globals, unlike emit_runtime_modules' all_call_names).
+Vector[String] build_helper_call_names(LirModule &m):
+    Vector[String] names = []
+    int ei = 0
+    while ei < m.externs.len():
+        names.push(m.externs.get(ei).unwrap().name)
+        ei += 1
+    int fi = 0
+    while fi < m.functions.len():
+        int bi = 0
+        while bi < m.functions.get(fi).unwrap().blocks.len():
+            int ii = 0
+            while ii < m.functions.get(fi).unwrap().blocks.get(bi).unwrap().insts.len():
+                match m.functions.get(fi).unwrap().blocks.get(bi).unwrap().insts.get(ii).unwrap():
+                    case ICallExtern(_, name, _, _, _):
+                        names.push(name)
+                    else:
+                        pass
+                ii += 1
+            bi += 1
+        fi += 1
+    return names
+
+# Port of Rust's emit_lir_helpers (emit_types.rs:2308-2401): inline-GENERATED C
+# text — default-value fns, str_ord, hashers, generic/typed comparators, the
+# signal.h include, and a few has(...)-gated helpers (char_chr, utf8/codepoint
+# helpers, the task_group_submit macro, file_create/open wrappers). These are in
+# NEITHER any self-host .gg source NOR any runtime .c — the body CALLS them
+# (e.g. int64_t__default()), so a standalone .c must emit them or fail to link.
+String emit_lir_helpers(LirModule &m):
+    Vector[String] n = build_helper_call_names(&m)
+    StrBuf buf = sb_new()
+
+    sb_push(&buf, "// ── LIR helpers ──\n")
+    if cn_has_eq(&n, "gorget_char_chr"):
+        sb_push(&buf, "static inline Str gorget_char_chr(int64_t code) { return gorget_codepoint_to_utf8(code); }\n")
+    # Always emit gorget_str_ord — needed by .ord() AND int(string) cast.
+    sb_push(&buf, "static inline int64_t gorget_str_ord(Str s) { size_t pos = 0; return (int64_t)gorget_utf8_decode((const char*)s.data, s.len, &pos); }\n")
+    # Default value functions for primitive types
+    sb_push(&buf, "static inline Str gorget_str_default(void) { return GORGET_EMPTY_STR; }\n")
+    sb_push(&buf, "static inline int64_t int64_t__default(void) { return 0; }\n")
+    sb_push(&buf, "static inline int64_t int__default(void) { return 0; }\n")
+    sb_push(&buf, "static inline int8_t int8_t__default(void) { return 0; }\n")
+    sb_push(&buf, "static inline int16_t int16_t__default(void) { return 0; }\n")
+    sb_push(&buf, "static inline int32_t int32_t__default(void) { return 0; }\n")
+    sb_push(&buf, "static inline uint8_t uint8_t__default(void) { return 0; }\n")
+    sb_push(&buf, "static inline uint16_t uint16_t__default(void) { return 0; }\n")
+    sb_push(&buf, "static inline uint32_t uint32_t__default(void) { return 0; }\n")
+    sb_push(&buf, "static inline uint64_t uint64_t__default(void) { return 0; }\n")
+    sb_push(&buf, "static inline double double__default(void) { return 0.0; }\n")
+    sb_push(&buf, "static inline double float__default(void) { return 0.0; }\n")
+    sb_push(&buf, "static inline bool bool__default(void) { return false; }\n")
+    # Hash functions
+    sb_push(&buf, "static inline int64_t __gorget_hash_int(int64_t v) { return (int64_t)__gorget_fnv1a(&v, sizeof(v)); }\n")
+    sb_push(&buf, "static inline int64_t gorget_str_hash(Str s) { return (int64_t)__gorget_hash_str_len((const char*)s.data, s.len); }\n")
+    # Signal functions — minimal include when the runtime signal module is absent.
+    sb_push(&buf, "#ifndef _WIN32\n")
+    sb_push(&buf, "#include <signal.h>\n")
+    sb_push(&buf, "#endif\n")
+    # Comparison functions for sorted()
+    sb_push(&buf, "static int gorget_generic_compare(const void* a, const void* b) { return memcmp(a, b, sizeof(int64_t)); }\n")
+    sb_push(&buf, "static int gorget_int_compare(const void* a, const void* b) { int64_t va = *(const int64_t*)a, vb = *(const int64_t*)b; return (va > vb) - (va < vb); }\n")
+    sb_push(&buf, "static int gorget_float_compare(const void* a, const void* b) { double da = *(const double*)a, db = *(const double*)b; return (da > db) - (da < db); }\n")
+    sb_push(&buf, "static int gorget_str_compare(const void* a, const void* b) { Str sa = *(const Str*)a, sb = *(const Str*)b; size_t la = sa.len, lb = sb.len; size_t ml = la < lb ? la : lb; int r = ml > 0 ? memcmp(sa.data, sb.data, ml) : 0; if (r) return r; return (la > lb) - (la < lb); }\n")
+    sb_push(&buf, "static inline int64_t int64_t__one(void) { return 1; }\n")
+    sb_push(&buf, "static inline int64_t int__one(void) { return 1; }\n")
+    sb_push(&buf, "static inline double double__one(void) { return 1.0; }\n")
+    sb_push(&buf, "static inline double float__one(void) { return 1.0; }\n")
+
+    # UTF-8 codepoint helpers (normally in emit_runtime_modules)
+    if cn_has_eq(&n, "gorget_utf8_codepoint_len_at"):
+        sb_push(&buf, "static inline int64_t gorget_utf8_codepoint_len_at(Str s, int64_t byte_pos) { if (byte_pos < 0 || byte_pos >= (int64_t)s.len) return 0; return (int64_t)gorget_utf8_codepoint_len(((const unsigned char*)s.data)[byte_pos]); }\n")
+    if cn_has_eq(&n, "gorget_str_codepoint_at"):
+        sb_push(&buf, "static inline Str gorget_str_codepoint_at(Str s, int64_t byte_pos) { if (byte_pos < 0 || byte_pos >= (int64_t)s.len) return GORGET_EMPTY_STR; int cplen = gorget_utf8_codepoint_len(((const unsigned char*)s.data)[byte_pos]); if (byte_pos + cplen > (int64_t)s.len) cplen = (int)(s.len - (size_t)byte_pos); return gorget_str_view_region((const char*)s.data + byte_pos, (size_t)cplen); }\n")
+
+    # gorget_task_group_submit MACRO (struct-type-agnostic Task__T submit).
+    if cn_has_eq(&n, "gorget_task_group_submit"):
+        sb_push(&buf, "#undef gorget_task_group_submit\n")
+        sb_push(&buf, "#define gorget_task_group_submit(g, task) do { \\\n")
+        sb_push(&buf, "    gorget_task_group_submit_raw((g), (task).__task, (task).__drop); \\\n")
+        sb_push(&buf, "    (task).__task = NULL; \\\n")
+        sb_push(&buf, "} while(0)\n")
+
+    # gorget_file_create(GorgetString* path) synthetic — calls gorget_file_open(path, "w").
+    if cn_has_eq(&n, "gorget_file_create"):
+        sb_push(&buf, "GorgetFile gorget_file_create(GorgetString* path) {\n")
+        sb_push(&buf, "    return gorget_file_open((const char*)path->data, \"w\");\n")
+        sb_push(&buf, "}\n")
+    # __gorget_file_open_r wrapper — adds the "r" mode.
+    if cn_has_eq(&n, "gorget_file_open"):
+        sb_push(&buf, "GorgetFile __gorget_file_open_r(const char* path) {\n")
+        sb_push(&buf, "    return gorget_file_open(path, \"r\");\n")
+        sb_push(&buf, "}\n")
+    sb_push(&buf, "\n")
+    return buf.s
+
+# ── Multi-prefix family predicates (each mirrors one Rust `has(&|n| ...)`
+# disjunction; split into early-return statements because the self-host lexer
+# has no backslash line-continuation). All transcribed verbatim from the Rust
+# source string-for-string. ──
+
+bool pred_string_array(Vector[String] &n):
+    if cn_has_prefix(&n, "gorget_str_join") or cn_has_prefix(&n, "gorget_str_split"): return true
+    if cn_has_prefix(&n, "gorget_str_bytes") or cn_has_prefix(&n, "gorget_str_codepoints"): return true
+    if cn_has_prefix(&n, "gorget_str_chars"): return true
+    return false
+
+bool pred_map(Vector[String] &n):
+    if cn_has_prefix(&n, "gorget_map_") or cn_has_prefix(&n, "gorget_dict_"): return true
+    if cn_has_prefix(&n, "Dict__") or cn_has_prefix(&n, "HashMap__"): return true
+    return false
+
+bool pred_set(Vector[String] &n):
+    if cn_has_prefix(&n, "gorget_set_") or cn_has_prefix(&n, "Set__"): return true
+    if cn_has_prefix(&n, "HashSet__"): return true
+    return false
+
+bool pred_error(Vector[String] &n):
+    if cn_has_prefix(&n, "gorget_catch") or cn_has_prefix(&n, "gorget_throw"): return true
+    if cn_has_prefix(&n, "gorget_cleanup_"): return true
+    return false
+
+bool pred_file(Vector[String] &n):
+    if cn_has_prefix(&n, "gorget_file_"): return true
+    if cn_has_eq(&n, "gorget_read_file") or cn_has_eq(&n, "gorget_write_file"): return true
+    if cn_has_eq(&n, "gorget_append_file") or cn_has_eq(&n, "gorget_read_file_bytes"): return true
+    if cn_has_eq(&n, "File__open") or cn_has_eq(&n, "File__create"): return true
+    return false
+
+bool pred_path(Vector[String] &n):
+    if cn_has_prefix(&n, "gorget_path_") or cn_has_eq(&n, "gorget_is_file") or cn_has_eq(&n, "gorget_is_dir"): return true
+    if cn_has_prefix(&n, "gorget_mkdir") or cn_has_prefix(&n, "gorget_readdir"): return true
+    if cn_has_eq(&n, "gorget_rename") or cn_has_eq(&n, "gorget_copy_file") or cn_has_eq(&n, "gorget_remove"): return true
+    if cn_has_eq(&n, "gorget_basename") or cn_has_eq(&n, "gorget_dirname") or cn_has_eq(&n, "gorget_file_size"): return true
+    if cn_has_eq(&n, "gorget_file_mtime"): return true
+    return false
+
+bool pred_tostr(Vector[String] &n):
+    if cn_has_prefix(&n, "gorget_int_to_str") or cn_has_prefix(&n, "gorget_float_to_str"): return true
+    if cn_has_prefix(&n, "gorget_bool_to_str") or cn_has_prefix(&n, "gorget_codepoint_to_utf8"): return true
+    if cn_has_prefix(&n, "gorget_char_to_str") or cn_has_prefix(&n, "gorget_int_to_binary"): return true
+    if cn_has_prefix(&n, "gorget_int_to_hex") or cn_has_prefix(&n, "gorget_int_to_octal"): return true
+    if cn_has_prefix(&n, "gorget_int_to_float") or cn_has_prefix(&n, "gorget_float_to_int"): return true
+    if cn_has_eq(&n, "gorget_string_debug"): return true
+    if cn_has_eq(&n, "gorget_char_chr") or cn_has_eq(&n, "gorget_assert_fail_values"): return true
+    return false
+
+bool pred_env(Vector[String] &n):
+    if cn_has_eq(&n, "gorget_getenv") or cn_has_eq(&n, "gorget_setenv") or cn_has_eq(&n, "gorget_getcwd"): return true
+    if cn_has_eq(&n, "gorget_platform") or cn_has_eq(&n, "gorget_exit"): return true
+    return false
+
+bool pred_io(Vector[String] &n):
+    if cn_has_prefix(&n, "gorget_input") or cn_has_prefix(&n, "gorget_rand"): return true
+    if cn_has_prefix(&n, "gorget_seed") or cn_has_prefix(&n, "gorget_sleep_ms"): return true
+    if cn_has_eq(&n, "sleep_ms"): return true
+    if cn_has_prefix(&n, "gorget_time") or cn_has_prefix(&n, "gorget_format_time"): return true
+    if cn_has_prefix(&n, "gorget_parse_time") or cn_has_prefix(&n, "gorget_readline"): return true
+    if cn_has_prefix(&n, "gorget_dt_decompose") or cn_has_prefix(&n, "gorget_getchar"): return true
+    if cn_has_prefix(&n, "gorget_term_") or cn_has_eq(&n, "gorget_is_tty"): return true
+    return false
+
+bool pred_math(Vector[String] &n):
+    if cn_has_prefix(&n, "gorget_sqrt") or cn_has_prefix(&n, "gorget_pow"): return true
+    if cn_has_prefix(&n, "gorget_floor") or cn_has_prefix(&n, "gorget_ceil"): return true
+    if cn_has_prefix(&n, "gorget_round") or cn_has_prefix(&n, "gorget_abs"): return true
+    if cn_has_prefix(&n, "gorget_sin") or cn_has_prefix(&n, "gorget_cos"): return true
+    if cn_has_prefix(&n, "gorget_tan") or cn_has_prefix(&n, "gorget_log"): return true
+    if cn_has_prefix(&n, "gorget_exp") or cn_has_prefix(&n, "gorget_atan2"): return true
+    if cn_has_prefix(&n, "gorget_fmod") or cn_has_eq(&n, "gorget_min") or cn_has_eq(&n, "gorget_max"): return true
+    if cn_has_prefix(&n, "gorget_math_"): return true
+    if cn_has_prefix(&n, "GORGET_PI") or cn_has_prefix(&n, "GORGET_E"): return true
+    if cn_has_prefix(&n, "GORGET_TAU") or cn_has_prefix(&n, "GORGET_INF"): return true
+    if cn_has_prefix(&n, "GORGET_NAN"): return true
+    return false
+
+bool pred_sort(Vector[String] &n):
+    if cn_has_prefix(&n, "__gorget_cmp_") or cn_has_prefix(&n, "gorget_array_sort"): return true
+    if cn_has_prefix(&n, "gorget_array_reverse") or cn_has_prefix(&n, "gorget_array_unique"): return true
+    return false
+
+bool pred_mutex(Vector[String] &n):
+    if cn_has_prefix(&n, "gorget_mutex_") or cn_has_prefix(&n, "gorget_guard_"): return true
+    if cn_has_prefix(&n, "Mutex__") or cn_has_prefix(&n, "RWLock__"): return true
+    if cn_has_prefix(&n, "Guard__") or cn_has_prefix(&n, "ReadGuard__") or cn_has_prefix(&n, "WriteGuard__"): return true
+    if cn_has_prefix(&n, "gorget_rwlock_") or cn_has_prefix(&n, "gorget_read_guard_"): return true
+    if cn_has_prefix(&n, "gorget_write_guard_"): return true
+    return false
+
+bool pred_crypto(Vector[String] &n):
+    if cn_has_prefix(&n, "gorget_crypto_") or cn_has_prefix(&n, "gorget_sha") or cn_has_prefix(&n, "gorget_hmac"): return true
+    if cn_has_prefix(&n, "gorget_x25519") or cn_has_prefix(&n, "gorget_hkdf") or cn_has_prefix(&n, "gorget_aead"): return true
+    return false
+
+bool pred_sdl_ttf(Vector[String] &n):
+    if cn_has_eq(&n, "sdl_load_font") or cn_has_eq(&n, "sdl_close_font") or cn_has_eq(&n, "sdl_draw_text"): return true
+    if cn_has_eq(&n, "sdl_render_text") or cn_has_eq(&n, "sdl_text_width") or cn_has_eq(&n, "sdl_text_height"): return true
+    if cn_has_prefix(&n, "gorget_sdl_load_font") or cn_has_prefix(&n, "gorget_sdl_draw_text"): return true
+    if cn_has_prefix(&n, "gorget_sdl_render_text"): return true
+    return false

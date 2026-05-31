@@ -15,7 +15,7 @@ from validate import run_validators, validate_gir_after, validate_lir_after
 from lir_lower import lower_gir_to_lir, eliminate_dead_globals
 from lir_ssa import construct_ssa
 from lir import LirModule, LirFunction
-from lir_codegen import generate_c
+from lir_codegen import generate_c, emit_runtime_preamble
 from drop_elab import elaborate_drops
 from std.fs import read_file
 from std.os import args, getenv
@@ -31,21 +31,36 @@ void main():
     if cmd_args.len() > 2:
         lib_dir = cmd_args.get(2).unwrap()
     # IR-dump flags, mirroring the Rust gg's --emit-gir / --emit-lir / --emit-c-lir.
-    # `--emit-c` is the C dump; `--lir-c` is kept as an alias because the
-    # self_host_bootstrap / self_host_bootstrap_fixed_point integration tests
-    # invoke the driver with `--lir-c`.
-    bool emit_c = false
+    # Chain 2: `--emit-c` and `--lir-c` are now DISTINCT.
+    #   --lir-c  → body-only C (the existing path; what self_host_bootstrap /
+    #              self_host_bootstrap_fixed_point / c_emit_comparison invoke,
+    #              splicing the Rust runtime preamble in front of it).
+    #   --emit-c → FULL program: the runtime preamble (the conditionally-selected
+    #              runtime .c files + emit_lir_helpers) followed by the body, so
+    #              `driver F lib --emit-c | cc -` runs with NO external splice.
+    # The pipeline (lower→ssa→drop_elab) is identical for both; only the final
+    # emit differs (full = emit_runtime_preamble + generate_c, body = generate_c).
+    bool emit_c_full = false
+    bool emit_c_body = false
     bool emit_gir = false
     bool emit_lir = false
+    # Repo-relative default; the gate test passes an absolute --runtime-dir so
+    # the preamble read does not depend on cwd. read_file returns "" silently on
+    # a bad path, so read_runtime (in lir_codegen.gg) fails loud on an empty read.
+    String runtime_dir = "src/backend/c/runtime"
     int ai = 2
     while ai < cmd_args.len():
         String arg = cmd_args.get(ai).unwrap()
-        if arg == "--emit-c" or arg == "--lir-c":
-            emit_c = true
+        if arg == "--emit-c":
+            emit_c_full = true
+        if arg == "--lir-c":
+            emit_c_body = true
         if arg == "--emit-gir":
             emit_gir = true
         if arg == "--emit-lir":
             emit_lir = true
+        if arg.starts_with("--runtime-dir="):
+            runtime_dir = arg.slice(14, arg.len())
         ai += 1
     # Phase-timer gate: mirror the GG_VALIDATE_PASSES idiom in validate.gg:352.
     # OFF by default (env unset → getenv returns "" → _timing false) so every
@@ -113,7 +128,7 @@ void main():
     if emit_gir:
         print(format_module(&gir))
         return
-    if emit_c or emit_lir:
+    if emit_c_full or emit_c_body or emit_lir:
         LirModule lir = lower_gir_to_lir(&gir)
         _t1 = time_ms()
         if _timing: print("PHASE lower_gir_to_lir(LIR) " + int_to_str(_t1 - _tp) + " ms", file=stderr)
@@ -152,6 +167,18 @@ void main():
         # drop elaboration is the self-host's closest analog of that opt stage.
         if emit_lir:
             print(format_lir_module(&lir))
+        elif emit_c_full:
+            # FULL program: runtime preamble (selected runtime .c files +
+            # emit_lir_helpers) THEN the body. Order is preamble-then-body,
+            # matching Rust's splice boundary (the runtime precedes the body's
+            # user typedefs). No external splice needed downstream.
+            String _pre = emit_runtime_preamble(&lir, runtime_dir)
+            String _body = generate_c(&lir)
+            _t1 = time_ms()
+            if _timing: print("PHASE generate_c " + int_to_str(_t1 - _tp) + " ms", file=stderr)
+            _tp = _t1
+            if _timing: print("PHASE TOTAL " + int_to_str(_t1 - _t0) + " ms", file=stderr)
+            print(_pre + _body)
         else:
             String _c = generate_c(&lir)
             _t1 = time_ms()
