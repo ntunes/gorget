@@ -59,10 +59,11 @@ via `generate_c(&lir)` at `driver.gg:156`). **Split them:**
   repurposing it is free.
 
 So in `driver.gg`, replace the single `bool emit_c` with two booleans, e.g. `bool emit_c_full` (set by
-`--emit-c`) and `bool emit_c_body` (set by `--lir-c`). ⚠ **(brief-review pass-2 R2) The driver reads
-`emit_c` at TWO sites — update BOTH:** the LIR-pipeline gate `if emit_c or emit_lir:` (`driver.gg:116`)
-must become `if emit_c_full or emit_c_body or emit_lir:` (else `--emit-c`/`--lir-c` silently fall through to
-the default GIR-text `else` at `:155`), and the final-emit branch (`driver.gg:155-161`). The pipeline
+`--emit-c`) and `bool emit_c_body` (set by `--lir-c`). ⚠ **(brief-review pass-2 R2) Update TWO places:**
+(1) the LIR-pipeline gate currently spelled `if emit_c or emit_lir:` (`driver.gg:116`) — which references
+the now-removed `emit_c` — must become `if emit_c_full or emit_c_body or emit_lir:` (else `--emit-c`/`--lir-c`
+silently fall through to the default GIR-text `else` at `:155`); and (2) the final-emit branch
+(`driver.gg:153-161`, the `if emit_lir: ... else: generate_c`) must split full-vs-body. The pipeline
 (lower→ssa→drop_elab) is identical for both; only the final emit differs: full =
 `emit_runtime_preamble(&lir, rdir) + generate_c(&lir)`, body = `generate_c(&lir)`.
 `--emit-lir`/`--emit-gir` stay as-is.
