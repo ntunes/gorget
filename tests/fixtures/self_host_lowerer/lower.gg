@@ -134,6 +134,13 @@ struct DropEmission:
     int dse_scope_idx
     int entry_idx
 
+# Ok/Error payload GIR type ids extracted from a monomorphized
+# `Result__<OkT>__<ErrT>` name. Mirrors the (TypeId, TypeId) tuple Rust
+# returns from `extract_result_field_types` (`exprs/mod.rs:2845`).
+struct ResultPayloadTypes:
+    int ok_type
+    int err_type
+
 struct LowerCtx:
     Vector[GirLocal] locals
     Vector[Vector[Instruction]] block_insts
@@ -193,6 +200,17 @@ struct LowerCtx:
     # full monomorphised name, etc.). `-1` is the sentinel for "no
     # expectation set". See `docs/plans/self_host_ssa_cleanup.md` §7.
     int expected_type
+    # `on error:` cleanup blocks registered in the current function, in
+    # source order. Mirrors Rust gg's
+    # `LoweringContext.func_state.on_error_blocks`
+    # (`src/ir/lowering/stmts/mod.rs:342`). `SOnError(body)` pushes the
+    # body here; the error-exit paths (SThrow's Result.Error return, and
+    # ERethrow's Error return) drain them in LIFO order via
+    # `emit_on_error_cleanups` (mirrors Rust's `emit_on_error_cleanups`
+    # at `stmts/mod.rs:357`, called from `lower_throw`/`lower_rethrow_expr`).
+    # A bare push with no consumer would be dead code, so the consumer is
+    # wired at both error-return sites.
+    Vector[Vector[Stmt]] on_error_blocks
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -5465,9 +5483,13 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     Vector[Operand] dn_args = [OpConstI64(8), OpConstI64(8)]
                     emit(&ctx, GICallExtern(ddst, "gorget_map_new", dn_args))
             return ddst
+        case ECatch(inner_box, error_binding, recovery_box):
+            return lower_catch_expr(&ctx, *inner_box, error_binding, *recovery_box, &gmod)
+        case ERethrow(inner_box, error_binding, _err_ty, transform_box):
+            return lower_rethrow_expr(&ctx, *inner_box, error_binding, *transform_box, &gmod)
         else:
             # Remaining: EIt, EImplicitClosure, ESetComp,
-            # EDictComp, EListComp, ERethrow, ECatch, EDo, ERange
+            # EDictComp, EListComp, EDo, ERange
             int fallback = add_local(&ctx, UNIT_TYPE, NO_NAME)
             emit(&ctx, GIAssign(fallback, OpConstUnit()))
             return fallback
@@ -6020,6 +6042,24 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                         ctx.expected_type = ret_place_ty_pre
                     int val = lower_expr(&ctx, ret_expr, &gmod)
                     ctx.expected_type = prev_expected_ret
+                    # Throws-function Result.Ok wrapping (mirrors Rust gg's
+                    # `lower_return` at `stmts/mod.rs:1585-1658`): when the
+                    # return place is a `Result__T__E` (the fn is `throws`)
+                    # and the returned expression produced a PLAIN value (not
+                    # already a Result — e.g. a bare `Ok(x)`/`Error(x)` ctor,
+                    # a throws-call result, or another Result value), wrap it
+                    # in `Result.Ok(val)`. Without this, `return 42` in a
+                    # throws-fn zero-inits the Result (tag=0=Ok, Ok_0=0) and
+                    # silently drops the value. The bare `Ok` variant name
+                    # routes through the LIR `try_lower_prelude_variant`
+                    # rewrite (same substrate as `lower_throw_stmt`'s Error).
+                    String ret_place_tn = type_id_to_name(ret_place_ty_pre, &gmod)
+                    String ret_val_tn = type_id_to_name(ctx.locals.get(val).unwrap().type_id, &gmod)
+                    if ret_place_tn.starts_with("Result__") and not ret_val_tn.starts_with("Result__"):
+                        int ok_dst = add_local(&ctx, ret_place_ty_pre, NO_NAME)
+                        Vector[Operand] ok_args = [op_consume(&ctx, &gmod, val, CkCallArgOwning())]
+                        emit(&ctx, GICallExtern(ok_dst, "Ok", ok_args))
+                        val = ok_dst
                     Operand ret_op = op_consume(&ctx, &gmod, val, CkReturn())
                     # a-6 (concern #5, the keystone): when the value is MOVED
                     # out of a bare owned local, that local now aliases _0 and
@@ -6179,6 +6219,13 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     lower_fail("SCompoundAssign target is neither EIdentifier nor EFieldAccess")
         case SFor(pat, iter_expr, body, _own, else_body):
             lower_for(&ctx, pat, iter_expr, body, else_body, &gmod, is_main)
+        case SThrow(throw_expr):
+            lower_throw_stmt(&ctx, throw_expr, &gmod)
+        case SOnError(cleanup_body):
+            # Register the cleanup block — emitted on error-exit paths
+            # (throw / rethrow error return). Mirrors Rust's
+            # `Stmt::OnError` push at `stmts/mod.rs:342`.
+            ctx.on_error_blocks.push(cleanup_body)
         else:
             lower_fail("unhandled in lower_stmt: " + stmt_kind(stmt))
 
@@ -6893,11 +6940,19 @@ int lookup_ctor_field_type(String enum_name, String variant_name, int field_idx,
             return resolve_field_gir_type(inner, &gmod)
         return I64_TYPE
     if enum_name.starts_with("Result__"):
-        # Skip this fix for Result — naive leftmost-`__` split fails on
-        # nested generics like `Result__Vector__byte__IoError` where Ok
-        # would incorrectly become `Vector` and Err `byte__IoError`.
-        # Use the pre-existing I64 fallback until we can mirror Pass 3's
-        # try-each-split approach here.
+        # Split `Result__<OkT>__<ErrT>` via the shared `result_payload_types`
+        # helper (leftmost-`__`, the same split the `.unwrap()` path at
+        # `:4629-4632` uses). The old unconditional I64 fallback silently
+        # mistyped a `match r: case Error(e):` binding on a String/resource
+        # payload as int — `print(e)` then used `%lld` on the Str's data
+        # pointer (garbage). KNOWN LIMITATION (shared with `.unwrap()`):
+        # a nested-generic Ok payload (`Result__Vector__byte__IoError`)
+        # mis-splits; the error-handling fixtures all have simple payloads.
+        ResultPayloadTypes rp = result_payload_types(enum_name, &gmod)
+        if variant_name == "Ok" and field_idx == 0:
+            return rp.ok_type
+        if variant_name == "Error" and field_idx == 0:
+            return rp.err_type
         return I64_TYPE
     String found_field_type = ""
     if gmod.type_infos.contains(enum_name):
@@ -6911,6 +6966,199 @@ int lookup_ctor_field_type(String enum_name, String variant_name, int field_idx,
     if found_field_type != "":
         return resolve_field_gir_type(found_field_type, &gmod)
     return I64_TYPE
+
+# ── Error-handling lowering (SThrow / SOnError / ECatch / ERethrow) ──
+#
+# Mirrors Rust gg's `lower_throw` (`src/ir/lowering/stmts/mod.rs:2244`),
+# `lower_catch_expr` (`src/ir/lowering/exprs/mod.rs:3056`),
+# `lower_rethrow_expr` (`exprs/mod.rs:2918`), and the `Stmt::OnError`
+# registration (`stmts/mod.rs:339`). The self-host re-expresses these
+# with the local block/branch/tag-read/payload-read vocabulary.
+
+# Split a monomorphized `Result__<OkT>__<ErrT>` type name into its Ok
+# and Error payload GIR type ids. Mirrors Rust's
+# `extract_result_field_types` (`exprs/mod.rs:2845`) — Rust reads the Ok
+# and Error variant field types off the enum's TypeDef; the self-host's
+# mono'd `Result__T__E` is NOT in `type_infos`, so we parse the mangled
+# name and resolve each half via `resolve_field_gir_type` (the same
+# helper `lookup_ctor_field_type` uses for Option). This is the same
+# leftmost-`__` split as the `.unwrap()` path at `:4629-4632` — and
+# shares its KNOWN LIMITATION: a nested-generic Ok payload
+# (`Result__Vector__byte__IoError`) mis-splits (Ok wrongly `Vector`).
+# All 28 error-handling target fixtures have SIMPLE payloads
+# (`Result__int__String`, `Result__String__String`), so the leftmost
+# split is correct for them; the nested case is a noted follow-up, not
+# fixed here. `result_tn` MUST be a `Result__`-prefixed name (the
+# scrutinee/inner-expr lowered local type, with `GtPtr` peeled).
+# Returns (ok_tid, err_tid); both default to `I64_TYPE` if the name is
+# not a recognizable `Result__T__E`.
+ResultPayloadTypes result_payload_types(String result_tn, GirModule &gmod):
+    int ok_tid = I64_TYPE
+    int err_tid = I64_TYPE
+    if result_tn.starts_with("Result__"):
+        String rest = result_tn.slice(8, result_tn.len())
+        int split = rest.index_of("__").unwrap_or(-1)
+        if split > 0:
+            String ok_name = rest.slice(0, split)
+            String err_name = rest.slice(split + 2, rest.len())
+            ok_tid = resolve_field_gir_type(ok_name, &gmod)
+            err_tid = resolve_field_gir_type(err_name, &gmod)
+    return ResultPayloadTypes(ok_tid, err_tid)
+
+# Emit the registered `on error:` cleanup blocks, LIFO, into the current
+# block. Mirrors Rust's `emit_on_error_cleanups` (`stmts/mod.rs:357`),
+# called from the throw / rethrow error-return paths BEFORE drop
+# elaboration. No-op when nothing is registered.
+void emit_on_error_cleanups(LowerCtx &ctx, GirModule &gmod):
+    int bi = ctx.on_error_blocks.len() - 1
+    while bi >= 0:
+        Vector[Stmt] body = ctx.on_error_blocks.get(bi).unwrap()
+        lower_stmts(&ctx, body, &gmod, false)
+        bi -= 1
+
+# Lower `throw expr` inside a throws function: wrap `expr` in the
+# enclosing function's `Result.Error(expr)`, run on-error cleanups, emit
+# the function-scope drop set (excluding the return place), and return.
+# Mirrors Rust's `lower_throw` (`stmts/mod.rs:2244`) — the throws-fn
+# branch only (the non-throws `gorget_throw` branch is a parser/semantic
+# error in valid programs, so the self-host omits it and lower_fails).
+void lower_throw_stmt(LowerCtx &ctx, SpannedExpr expr, GirModule &gmod):
+    # The enclosing function's Result__T__E return type lives at local 0
+    # (the return place), exactly as SReturn reads it (`:6018`).
+    int result_type = ctx.locals.get(0).unwrap().type_id
+    String result_tn = type_id_to_name(result_type, &gmod)
+    if not result_tn.starts_with("Result__"):
+        lower_fail("throw in non-throws function (ret type not Result__): " + result_tn)
+        return
+    # Expected-type so the bare `Error` ctor below types its dst to the
+    # full mono'd Result enum (mirrors the SReturn expected_type set).
+    int prev_expected = ctx.expected_type
+    ctx.expected_type = result_type
+    int val = lower_expr(&ctx, expr, &gmod)
+    ctx.expected_type = prev_expected
+    # Build `Result.Error(val)` with the BARE variant name (so the LIR
+    # rewrite `try_lower_prelude_variant` recognizes it) and the dst slot
+    # typed to the concrete Result enum (so the same rewrite's
+    # `slot_ty >= LT_STRUCT_BASE` gate passes). A fully-mangled name
+    # would fall through to a raw extern call → stage-1 link error.
+    int err_dst = add_local(&ctx, result_type, NO_NAME)
+    Vector[Operand] err_args = [op_consume(&ctx, &gmod, val, CkCallArgOwning())]
+    emit(&ctx, GICallExtern(err_dst, "Error", err_args))
+    # Assign into the return place, run cleanups + drops, then return.
+    emit(&ctx, GIAssign(0, op_consume(&ctx, &gmod, err_dst, CkReturn())))
+    emit_on_error_cleanups(&ctx, &gmod)
+    emit_drops_for_early_exit(&ctx, DSK_FUNCTION, Some(0))
+    set_terminator(&ctx, GTReturn(op_consume(&ctx, &gmod, 0, CkReturn())))
+    # Dead block for any statements after the throw.
+    int dead_bb = new_block(&ctx)
+    switch_to(&ctx, dead_bb)
+
+# Lower `inner catch (name): recovery` — always succeeds. On Ok, the
+# value is the unwrapped Ok payload; on Error, bind `name` to the Error
+# payload, evaluate `recovery`, use that. Mirrors Rust's
+# `lower_catch_expr` (`exprs/mod.rs:3056`). Returns the local holding
+# the merged (Ok-typed) result.
+int lower_catch_expr(LowerCtx &ctx, SpannedExpr inner, String error_binding, SpannedExpr recovery, GirModule &gmod):
+    int val = lower_expr(&ctx, inner, &gmod)
+    int val_tid = ctx.locals.get(val).unwrap().type_id
+    # The inner expr's type is the Result; peel any GtPtr (borrowed call
+    # result) to get the mono'd Result__T__E name for the tag/payload
+    # reads (mirrors the scrutinee-fallback peel at `:6730-6744`).
+    String result_tn = type_id_to_name(val_tid, &gmod)
+    ResultPayloadTypes pt = result_payload_types(result_tn, &gmod)
+    int ok_tid = pt.ok_type
+    int err_tid = pt.err_type
+    # Read the Result tag (0=Ok, 1=Error) via the monomorphized enum
+    # name — `lir_codegen`'s longest-prefix split handles `Result__T__E`
+    # (`:6722-6727`), so the stale "Result not supported" comment on
+    # emit_tag_read (`:6408`) does not apply to the mangled name.
+    int scrutinee_ptr = match_scrutinee_ptr(&ctx, &gmod, val)
+    int tag = emit_tag_read(&ctx, scrutinee_ptr, result_tn, &gmod)
+    int zero = add_local(&ctx, I64_TYPE, NO_NAME)
+    emit(&ctx, GIAssign(zero, OpConstI64(0)))
+    int is_ok = add_local(&ctx, BOOL_TYPE, NO_NAME)
+    emit(&ctx, GICmp(is_ok, CMP_EQ, I64_TYPE, OpCopy(tag), OpCopy(zero)))
+    int ok_bb = new_block(&ctx)
+    int err_bb = new_block(&ctx)
+    int merge_bb = new_block(&ctx)
+    # The merged result local is Ok-typed.
+    int result_local = add_local(&ctx, ok_tid, NO_NAME)
+    set_terminator(&ctx, GTBranch(OpCopy(is_ok), ok_bb, err_bb))
+    # Ok path: extract Ok payload (clone-extract via emit_payload_read_mode),
+    # store into result.
+    switch_to(&ctx, ok_bb)
+    int ok_val = emit_payload_read_mode(&ctx, scrutinee_ptr, result_tn, "Ok", 0, ok_tid, &gmod, false)
+    emit(&ctx, GIAssign(result_local, op_consume(&ctx, &gmod, ok_val, CkAssign())))
+    set_terminator(&ctx, GTJump(merge_bb))
+    # Error path: bind error to `error_binding`, evaluate recovery, store.
+    switch_to(&ctx, err_bb)
+    int err_val = emit_payload_read_mode(&ctx, scrutinee_ptr, result_tn, "Error", 0, err_tid, &gmod, false)
+    Option[String] errn_opt = Some(error_binding)
+    int err_local = add_local_inheriting(&ctx, ctx.locals.get(err_val).unwrap().type_id, errn_opt, err_val)
+    emit(&ctx, GIAssign(err_local, op_consume(&ctx, &gmod, err_val, CkAssign())))
+    nl_put(&ctx, error_binding, err_local)
+    int recovery_val = lower_expr(&ctx, recovery, &gmod)
+    emit(&ctx, GIAssign(result_local, op_consume(&ctx, &gmod, recovery_val, CkAssign())))
+    set_terminator(&ctx, GTJump(merge_bb))
+    switch_to(&ctx, merge_bb)
+    return result_local
+
+# Lower `inner rethrow [(Type name)]: transform` — like auto-propagation,
+# but the error path evaluates `transform` and throws THAT from the
+# enclosing throws-fn. On Ok, continue with the unwrapped Ok value.
+# Mirrors Rust's `lower_rethrow_expr` (`exprs/mod.rs:2918`). Returns the
+# local holding the unwrapped Ok value.
+int lower_rethrow_expr(LowerCtx &ctx, SpannedExpr inner, Option[String] error_binding, SpannedExpr transform, GirModule &gmod):
+    int val = lower_expr(&ctx, inner, &gmod)
+    int val_tid = ctx.locals.get(val).unwrap().type_id
+    String result_tn = type_id_to_name(val_tid, &gmod)
+    ResultPayloadTypes pt = result_payload_types(result_tn, &gmod)
+    int ok_tid = pt.ok_type
+    int err_tid = pt.err_type
+    # The enclosing function's Result__T__E return type (local 0).
+    int fn_result_type = ctx.locals.get(0).unwrap().type_id
+    int scrutinee_ptr = match_scrutinee_ptr(&ctx, &gmod, val)
+    int tag = emit_tag_read(&ctx, scrutinee_ptr, result_tn, &gmod)
+    int zero = add_local(&ctx, I64_TYPE, NO_NAME)
+    emit(&ctx, GIAssign(zero, OpConstI64(0)))
+    int is_ok = add_local(&ctx, BOOL_TYPE, NO_NAME)
+    emit(&ctx, GICmp(is_ok, CMP_EQ, I64_TYPE, OpCopy(tag), OpCopy(zero)))
+    int ok_bb = new_block(&ctx)
+    int err_bb = new_block(&ctx)
+    int merge_bb = new_block(&ctx)
+    # Ok-typed result for the unwrapped value.
+    int ok_result = add_local(&ctx, ok_tid, NO_NAME)
+    set_terminator(&ctx, GTBranch(OpCopy(is_ok), ok_bb, err_bb))
+    # Ok path: extract Ok payload, continue.
+    switch_to(&ctx, ok_bb)
+    int ok_val = emit_payload_read_mode(&ctx, scrutinee_ptr, result_tn, "Ok", 0, ok_tid, &gmod, false)
+    emit(&ctx, GIAssign(ok_result, op_consume(&ctx, &gmod, ok_val, CkAssign())))
+    set_terminator(&ctx, GTJump(merge_bb))
+    # Error path: optionally bind the error, evaluate transform, wrap that
+    # in the enclosing fn's Result.Error and return.
+    switch_to(&ctx, err_bb)
+    match error_binding:
+        case Some(err_name):
+            int err_val = emit_payload_read_mode(&ctx, scrutinee_ptr, result_tn, "Error", 0, err_tid, &gmod, false)
+            Option[String] errn_opt = Some(err_name)
+            int err_local = add_local_inheriting(&ctx, ctx.locals.get(err_val).unwrap().type_id, errn_opt, err_val)
+            emit(&ctx, GIAssign(err_local, op_consume(&ctx, &gmod, err_val, CkAssign())))
+            nl_put(&ctx, err_name, err_local)
+        case None:
+            pass
+    int prev_expected_rt = ctx.expected_type
+    ctx.expected_type = fn_result_type
+    int new_err = lower_expr(&ctx, transform, &gmod)
+    ctx.expected_type = prev_expected_rt
+    int err_dst = add_local(&ctx, fn_result_type, NO_NAME)
+    Vector[Operand] err_args = [op_consume(&ctx, &gmod, new_err, CkCallArgOwning())]
+    emit(&ctx, GICallExtern(err_dst, "Error", err_args))
+    emit(&ctx, GIAssign(0, op_consume(&ctx, &gmod, err_dst, CkReturn())))
+    emit_on_error_cleanups(&ctx, &gmod)
+    emit_drops_for_early_exit(&ctx, DSK_FUNCTION, Some(0))
+    set_terminator(&ctx, GTReturn(op_consume(&ctx, &gmod, 0, CkReturn())))
+    switch_to(&ctx, merge_bb)
+    return ok_result
 
 void lower_match_stmt(LowerCtx &ctx, SpannedExpr scrutinee_expr, Vector[MatchArm] arms, GirModule &gmod, bool is_main):
     int scrutinee = lower_expr(&ctx, scrutinee_expr, &gmod)
@@ -7488,7 +7736,8 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
     Dict[String, int] _named_locals = {}
     Vector[DropScope] _de_scopes = []
     Vector[DropEmission] _de_queue = []
-    LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, !_named_locals, 0, !_lc_stk, !_lb_stk, "", "", "", false, fdef.name.clone(), DropElaborator(!_de_scopes), !_de_queue, -1)
+    Vector[Vector[Stmt]] _on_err_blocks = []
+    LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, !_named_locals, 0, !_lc_stk, !_lb_stk, "", "", "", false, fdef.name.clone(), DropElaborator(!_de_scopes), !_de_queue, -1, !_on_err_blocks)
 
     # Push the function-scope drop frame. Pop emits GIDropIfAlive for
     # every owned resource local registered during lowering (param or
@@ -7719,7 +7968,8 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
         Dict[String, int] _named_locals2 = {}
         Vector[DropScope] _de_scopes2 = []
         Vector[DropEmission] _de_queue2 = []
-        LowerCtx ctx = LowerCtx([], [], [], 0, !_named_locals2, 0, !_lc_stk2, !_lb_stk2, "", "", "", false, mangled.clone(), DropElaborator(!_de_scopes2), !_de_queue2, -1)
+        Vector[Vector[Stmt]] _on_err_blocks2 = []
+        LowerCtx ctx = LowerCtx([], [], [], 0, !_named_locals2, 0, !_lc_stk2, !_lb_stk2, "", "", "", false, mangled.clone(), DropElaborator(!_de_scopes2), !_de_queue2, -1, !_on_err_blocks2)
         # bb0
         Vector[Instruction] init_insts = []
         ctx.block_insts.push(!init_insts)
@@ -9587,6 +9837,23 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             case IFunction(fsdef):
                 if fsdef.type_params.len() == 0 and fsdef.name != "main":
                     int ret_tid = map_fn_return_type(fsdef.return_type, &gmod)
+                    # Honour throws_type for Result[T, E] wrapping. This is the
+                    # AUTHORITATIVE fn_sigs pass (it runs after the pre-scan and
+                    # the named-return refine pass, overwriting both), so the
+                    # throws-wrap MUST live here too — otherwise a
+                    # `T f(...) throws E` records the UNWRAPPED `T` and a
+                    # `catch`/`match` on the call sees a `T` scrutinee where the
+                    # actual call returns `Result__T__E` (slot type-mismatch →
+                    # zero-init). Mirrors the function-build wrap at `:7472`.
+                    match fsdef.throws_type:
+                        case Some(fs_throws):
+                            int fs_err = map_ast_type(fs_throws, &gmod)
+                            if ret_tid >= 0 and fs_err >= 0:
+                                String fs_ret_c = type_id_to_name(ret_tid, &gmod)
+                                String fs_err_c = type_id_to_name(fs_err, &gmod)
+                                ret_tid = lookup_or_register_named(&gmod, "Result__" + fs_ret_c + "__" + fs_err_c)
+                        case None:
+                            pass
                     if ret_tid >= 0:
                         gmod.fn_sigs.put(fsdef.name.clone(), ret_tid)
             case IEquip(ieqblk):
@@ -9740,7 +10007,8 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         Dict[String, int] _named_locals3 = {}
                         Vector[DropScope] _de_scopes3 = []
                         Vector[DropEmission] _de_queue3 = []
-                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, 0, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone(), DropElaborator(!_de_scopes3), !_de_queue3, -1)
+                        Vector[Vector[Stmt]] _on_err_blocks3 = []
+                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, 0, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone(), DropElaborator(!_de_scopes3), !_de_queue3, -1, !_on_err_blocks3)
                         Vector[Instruction] tinit = []
                         tctx.block_insts.push(!tinit)
                         tctx.block_terms.push(GTNone())
