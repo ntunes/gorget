@@ -1890,18 +1890,21 @@ fn imported_call_arg_type_check_errors() {
     );
 }
 
-// ── BUG: imported-module function BODIES skip semantic checking ──
+// ── BUG: imported-module function-body errors are CHECKED then DISCARDED ──
 // The language spec REQUIRES exhaustive match (language-design.md:44,1003) and
-// type-checking everywhere, but `check_module` (typecheck.rs ~:5489; check_function
-// loop ~:6154) iterates ONLY the entry file's functions — imported-module bodies are
-// silently unchecked. CONFIRMED: a non-exhaustive match OR a blatant `int x = String`
-// in an imported module yields "OK: no semantic errors", and the type error even
-// reaches codegen (`gg build` emits void*-from-int64_t). `imported_call_arg_type_check`
-// above passes because the CALL SITE (in the entry) is checked; the imported BODY is not.
-// These two tests assert what the checker SHOULD do — FLIP TO ACTIVE (remove #[ignore])
-// when check_module checks imported fns. See TODO "imported-module semantic-check bypass".
+// type-checking everywhere. Imported-module bodies ARE checked (check_items_recursive_tc
+// descends into Item::Module and calls check_function), BUT the Item::Module branch at
+// `typecheck.rs:6143-6151` snapshots errors.len() and then `errors.truncate(...)` THROWS
+// AWAY every error from the imported module, re-appending only `hard_errors` (concrete
+// call-arg mismatches, populated at :1434). So a non-exhaustive match OR a blatant
+// `int x = String` in an imported BODY is checked-then-discarded → "OK: no semantic
+// errors", and the type error even reaches codegen (`gg build` emits void*-from-int64_t).
+// `imported_call_arg_type_check` above passes precisely because call-arg mismatches ARE
+// "hard". FIX = stop truncating imported-body errors (~6-line deletion). These two tests
+// assert what the checker SHOULD do — FLIP TO ACTIVE (remove #[ignore]) when the truncate
+// is removed. See TODO "imported-module semantic-check bypass".
 #[test]
-#[ignore = "BUG: imported-module bodies skip exhaustiveness checking — flip active when typecheck.rs check_module checks imported fns"]
+#[ignore = "BUG: imported-module body errors are truncated away (typecheck.rs:6143-6151) — flip active when the truncate is removed"]
 fn imported_nonexhaustive_match_should_error() {
     check_gg_fails(
         "imported_nonexhaustive_match/main.gg",
@@ -1910,7 +1913,7 @@ fn imported_nonexhaustive_match_should_error() {
 }
 
 #[test]
-#[ignore = "BUG: imported-module bodies skip type-checking — flip active when typecheck.rs check_module checks imported fns"]
+#[ignore = "BUG: imported-module body errors are truncated away (typecheck.rs:6143-6151) — flip active when the truncate is removed"]
 fn imported_body_type_error_should_error() {
     check_gg_fails(
         "imported_body_type_error/main.gg",
