@@ -65,22 +65,31 @@ lowering at `lir_lower.gg:3247`). Thread it through:
   `*(T*)ptr = value;` / `memcpy` per inner type).
 - **`format_gir.gg`** — add a render arm for `GIDerefStore` (mirror the `GIDeref` arm at `format_gir.gg:188`)
   so GIR dumps don't break.
-- ⚠ **`lower.gg` exhaustiveness arms (review-pass-3 — DO NOT SKIP).** Adding a variant to the `Instruction`
-  enum forces a new `case` arm in EVERY exhaustive `match` over `Instruction` that has NO `else`. There are
-  THREE such matchers in `lower.gg` (none has a catch-all — Rust gg, which builds the driver, errors
-  `NonExhaustiveMatch` if an arm is missing): `liveness_inst_def` (`:1844`), `liveness_inst_operand_uses`
-  (`:1882`), `liveness_inst_operand_local_ids` (`:2270`). Add a `GIDerefStore(ptr_local, value, _)` arm to
-  each: `liveness_inst_def` → returns NO def (it stores through a pointer, defines no value local — mirror
-  the no-def arms, e.g. `return -1`); `liveness_inst_operand_uses` + `liveness_inst_operand_local_ids` →
-  record BOTH reads: the `ptr_local` (an int local read) AND the `value` `Operand` (mirror how the
-  `GIAssign`/`GIDeref` arms record their operand/src reads). (The OTHER 3 `Instruction` matchers —
-  `rewrite_inst_modes` `:2565`, `update_last_pos_for_inst` `:2625`, `validate.gg:106` — HAVE `else` arms, so
-  they absorb the variant silently; no edit needed there.)
-**So the new op threads through 4 files** (`gir.gg` variant + `lir_lower.gg` arm + `format_gir.gg` render +
-`lower.gg`'s 3 liveness arms) — NOT 3. To find every matcher needing an arm: **grep `GIDeref` across the
-WHOLE `tests/fixtures/self_host_lowerer/` dir** (not just the 3 named files), then build and let any residual
-`NonExhaustiveMatch` error point you at a missed one. (No new LIR inst / no new `lir_codegen.gg` C-emit —
-codegen reuses `IStore`.)
+- ⚠ **`lower.gg` liveness arms — RUNTIME-CORRECTNESS-required, NOT exhaustiveness-enforced (review-pass-4
+  — DO NOT SKIP, and DO NOT trust the compiler to catch a miss).** ⚠⚠ **CRITICAL (pass-4, empirically
+  verified): Rust gg enforces `match` exhaustiveness ONLY on the ENTRY file (`driver.gg`). Imported module
+  bodies (`lower.gg`/`lir_lower.gg`/`format_gir.gg`/`validate.gg`) are NOT exhaustiveness-checked — a missing
+  `case` arm with no `else` SILENTLY FALLS THROUGH to the trailing default at RUNTIME (returns
+  `-1`/empty/no-op), with NO build error and NO crash.** (Proof: `format_gir.gg:166` is ALREADY missing its
+  `GIFieldLoad` arm and the driver builds + checks clean.) So a missed `GIDerefStore` liveness arm =
+  a SILENT wrong-liveness MISCOMPILE of the self-host (the `ptr_local`+`value` reads go unrecorded → bad
+  move/clone decisions — the exact bug class this chain fixes). **You CANNOT lean on the compiler; discovery
+  MUST be exhaustive grep, verified by hand.**
+  The COMPLETE set of no-`else` `Instruction` matchers needing a `GIDerefStore` arm (pass-4 grep-verified
+  complete across the whole dir): `liveness_inst_def` (`lower.gg:1845`) → NO def (stores through a pointer,
+  defines no value local; `return -1`, mirror `GIDrop`'s no-def arm); `liveness_inst_operand_uses`
+  (`:1883`) + `liveness_inst_operand_local_ids` (`:2272`) → record BOTH reads: the `ptr_local` the
+  `GIDeref` way (raw int local: `acc.set`/`out.push(ptr_local)`) AND the `value` the `GIAssign` way (via
+  `liveness_operand_uses`/`liveness_operand_local_id` on the Operand). PLUS the already-listed
+  `lir_lower.gg:2604` lowering arm and `format_gir.gg:166` render arm (both ALSO no-`else`). The `else`-having
+  matchers absorb the variant silently — NO edit: `rewrite_inst_modes` (`lower.gg:2566`, `else` `:2593`),
+  `update_last_pos_for_inst` (`:2626`, `else` `:2643`), and all 3 `validate.gg` `Instruction` matchers
+  (`:105`/`:171`/`:237`, all with `else`).
+**So the new op threads through 4 files** (`gir.gg` variant + `lir_lower.gg` lowering arm + `format_gir.gg`
+render arm + `lower.gg`'s 3 liveness arms) — NOT 3. ⚠ Verify by `grep -rn "GIFieldLoad" tests/fixtures/
+self_host_lowerer/` (a KNOWN partially-handled variant) to enumerate every `Instruction` matcher, then
+hand-check each has (or you add) a `GIDerefStore` arm — the build will NOT tell you. (No new LIR inst / no
+new `lir_codegen.gg` C-emit — codegen reuses `IStore`.)
 
 ### Edit 1 — READ (`lower.gg:4074-4075`)
 Currently `case EIdentifier(name): if nl_contains(&ctx, name): return nl_get(&ctx, name)` returns the MutPtr
@@ -107,6 +116,16 @@ inner, by contrast — resource `&`-writes ARE currently broken.)
 propagation (`:6112-6116`), lower the RHS, then emit `GIDerefStore(lid, op_consume(&ctx, &gmod, val,
 CkAssign()), inner)` instead of `GIAssign`. Else keep `GIAssign`. Rust parity:
 `src/ir/lowering/stmts/assigns.rs:231-243` (`assign` into a `Place{local,[Deref]}`).
+⚠ **(pass-4) clone-not-move for resource `&`-writes — wire `GIDerefStore` into `rewrite_inst_modes`.**
+`GIDerefStore` carries an `Operand value`, but `rewrite_inst_modes` (the `OpClone`→`OpMove` last-use
+promoter, `lower.gg:2566`) currently absorbs it via its `else` (no promotion). For SCALAR targets (`int &x`,
+`bool &b` — the PRIMARY bug) `op_consume` returns `OpCopy` (never promoted) → zero impact. But for a RESOURCE
+write (`String &s = s + "!"`) `op_consume` returns `OpClone`, which then stays an un-promoted CLONE where
+Rust emits a MOVE → CORRECT output but an extra clone (a `c_emit` byte-parity miss vs Rust, NOT a crash; the
+fixture still passes). Add a `GIDerefStore` arm to `rewrite_inst_modes` that promotes its `value` operand at
+last-use (mirror the `GIAssign` arm's `wire_one_operand`, `lower.gg:2517`) so resource `&`-writes move like
+Rust. If wiring it complicates the chain, you MAY defer — but then log a TODO (`GIDerefStore` resource
+`&`-write over-clones by 1 vs Rust) and note it in the report.
 
 ### Edit 3 — COMPOUND-ASSIGN (`lower.gg:6199-6213`) — the recon's extra find, do NOT skip
 `case SCompoundAssign → EIdentifier` (`x += 1` on a `&`-param) is broken on BOTH legs: it reads `lid`
