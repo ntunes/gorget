@@ -13641,6 +13641,7 @@ fn c_emit_comparison() {
         RustOnly,
         Mismatched(String, usize, usize),
         SelfHostCrash(String, String),
+        RustRejected,
         RustCrash,
     }
 
@@ -13655,7 +13656,15 @@ fn c_emit_comparison() {
             &fname,
         );
         if !rust_out.status.success() {
-            return Outcome::RustCrash;
+            // A clean non-zero exit (status.code().is_some()) is Rust gg correctly
+            // REJECTING an error-test fixture with a diagnostic — not a crash. Only a
+            // signal-terminated process (status.code().is_none() on Unix → SIGSEGV etc.)
+            // is a true crash.
+            return if rust_out.status.code().is_some() {
+                Outcome::RustRejected
+            } else {
+                Outcome::RustCrash
+            };
         }
         let rust_c = String::from_utf8_lossy(&rust_out.stdout);
         let rust_n = user_fn_count(&rust_c);
@@ -13688,6 +13697,7 @@ fn c_emit_comparison() {
     let mut rust_only = 0;
     let mut mismatched: Vec<(String, usize, usize)> = Vec::new();
     let mut self_host_crashes: Vec<(String, String)> = Vec::new();
+    let mut rust_rejected = 0;
     let mut rust_crashes = 0;
     let total = outcomes.len();
     for o in outcomes {
@@ -13696,6 +13706,7 @@ fn c_emit_comparison() {
             Outcome::RustOnly => rust_only += 1,
             Outcome::Mismatched(f, r, g) => mismatched.push((f, r, g)),
             Outcome::SelfHostCrash(f, msg) => self_host_crashes.push((f, msg)),
+            Outcome::RustRejected => rust_rejected += 1,
             Outcome::RustCrash => rust_crashes += 1,
         }
     }
@@ -13707,15 +13718,16 @@ fn c_emit_comparison() {
     eprintln!("================================");
     eprintln!(
         "Total: {total}, Matched: {matched}, Rust-only (self-host empty): {rust_only}, \
-         Mismatched: {}, Self-host crashes: {}, Rust crashes: {}",
+         Mismatched: {}, Self-host crashes: {}, Rust rejected (error fixtures): {}, Rust crashes: {}",
         mismatched.len(),
         self_host_crashes.len(),
+        rust_rejected,
         rust_crashes,
     );
-    let processable = total - rust_crashes;
+    let processable = total - (rust_rejected + rust_crashes);
     if processable > 0 {
         eprintln!(
-            "Match rate (excl. Rust crashes): {matched}/{processable} ({:.1}%)",
+            "Match rate (excl. Rust rejected/crashes): {matched}/{processable} ({:.1}%)",
             matched as f64 / processable as f64 * 100.0
         );
     }
