@@ -581,7 +581,7 @@ Dict[String, String] parse_query_string(String qs):
             Result[String, ParseError] dv = url_decode(raw_val)
             params.put(dk.unwrap_or(raw_key), dv.unwrap_or(raw_val))
         else:
-            Result[String, String] dk2 = url_decode(pair)
+            Result[String, ParseError] dk2 = url_decode(pair)
             params.put(dk2.unwrap_or(pair), "")
         i = i + 1
     return params
@@ -605,7 +605,7 @@ Dict[String, String] parse_form_body(String body):
             Result[String, ParseError] dv = form_decode(raw_val)
             params.put(dk.unwrap_or(raw_key), dv.unwrap_or(raw_val))
         else:
-            Result[String, String] dk2 = form_decode(pair)
+            Result[String, ParseError] dk2 = form_decode(pair)
             params.put(dk2.unwrap_or(pair), "")
         i = i + 1
     return params

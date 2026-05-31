@@ -1901,10 +1901,21 @@ impl<'a> TypeChecker<'a> {
                         self.expr_types.insert(expr.span, ret_type);
                         ret_type
                     } else {
-                        // Method not found — check built-in type methods
-                        for arg in args {
+                        // Method not found — check built-in type methods.
+                        // For builtin collection mutators (push/insert/put/set)
+                        // the element/value type is NOT a sig param — it comes
+                        // from the receiver's generic args. Thread it in as a
+                        // decl_type_hint so dot-shorthand enum ctors
+                        // (`segments.push(.ArrayLen)`) infer their enum context.
+                        let arg_hints =
+                            self.builtin_mutator_arg_hints(resolved_receiver, &method.node);
+                        let prev_hint = self.decl_type_hint;
+                        for (i, arg) in args.iter().enumerate() {
+                            self.decl_type_hint =
+                                arg_hints.get(i).copied().flatten();
                             self.infer_expr(&arg.node.value);
                         }
+                        self.decl_type_hint = prev_hint;
                         if let Some(ret_type) = self.builtin_method_type(resolved_receiver, &method.node) {
                             self.expr_types.insert(expr.span, ret_type);
                             ret_type
@@ -4763,6 +4774,36 @@ impl<'a> TypeChecker<'a> {
                 Some(prim_tid)
             }
             _ => None,
+        }
+    }
+
+    /// For builtin collection mutators whose element/value type comes from
+    /// the receiver's generic args (not from a sig param), return the
+    /// per-argument type hint so dot-shorthand enum constructors in the
+    /// argument position can infer their enum context. Returns an empty
+    /// Vec for any receiver/method that doesn't carry such a hint.
+    fn builtin_mutator_arg_hints(
+        &self,
+        receiver_type: TypeId,
+        method: &str,
+    ) -> Vec<Option<TypeId>> {
+        let (type_name, type_args) = match self.types.get(receiver_type) {
+            ResolvedType::Generic(def_id, args) => {
+                (self.scopes.get_def(*def_id).name.clone(), args.clone())
+            }
+            _ => return Vec::new(),
+        };
+        let elem = type_args.first().copied();
+        let val = type_args.get(1).copied();
+        match (type_name.as_str(), method) {
+            // Vector[T].push(T) / .insert(idx, T)
+            ("Vector", "push") => vec![elem],
+            ("Vector", "insert") => vec![None, elem],
+            // Set[T].insert(T) / .contains(T) / .remove(T)
+            ("Set", "insert") | ("Set", "contains") | ("Set", "remove") => vec![elem],
+            // Dict[K, V].put(K, V) / .insert(K, V) / .set(K, V)
+            ("Dict", "put") | ("Dict", "insert") | ("Dict", "set") => vec![elem, val],
+            _ => Vec::new(),
         }
     }
 
