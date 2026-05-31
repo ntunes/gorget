@@ -1,6 +1,6 @@
 # SPEC — Shared runtime + self-host full-program emission + runtime-parity harness
 
-**Status:** spec v2 (review #1 of v1 folded + owner architecture decisions 2026-05-31). For ≥3 fresh reviews →
+**Status:** spec v4 (reviews #1+#2 folded + owner architecture decisions 2026-05-31). For ≥3 fresh reviews →
 build as 3 staged chains.
 **Owner decisions (2026-05-31):**
 - Runtime parity (does the self-host binary produce Rust's output?) is the PRIMARY north-star; fn-count
@@ -27,8 +27,9 @@ runtime ("skip if the runtime preamble already defines it"). So this spec ALSO m
 compiler.
 
 ### The runtime today (where it lives, who consumes it)
-- The runtime C is ~40 string constants in `src/backend/c/c_runtime.rs` (617 KB): `RUNTIME_PREAMBLE`,
-  `RUNTIME_STRING`, `RUNTIME_ARRAY`, `RUNTIME_ARENA_ALLOC`, … (one per family).
+- The runtime C is ~65 C-text constants (across ~40 families) in `src/backend/c/c_runtime.rs` (617 KB):
+  `RUNTIME_PREAMBLE`, `RUNTIME_STRING`, `RUNTIME_ARRAY`, `RUNTIME_ARENA_ALLOC`, plus the `*_RUNTIME`-suffixed
+  ones (`ASYNC_RUNTIME`, `CHANNEL_RUNTIME`, …) + `PANIC_*`/`TASK_COMMON`.
 - Rust's `emit_runtime_modules` (`src/backend/c_lir/emit_types.rs:1791`) `push_str`s each CONDITIONALLY:
   `if has(|n| n.starts_with("gorget_<family>_")) { out.push_str(RUNTIME_<FAMILY>) }` — a program carries only
   the families it calls.
@@ -54,11 +55,16 @@ compiler.
 
 ## CHAIN 1 — Extract the runtime to shared `.c`/`.h` files (PURE TEXT MOVE — selection UNTOUCHED)
 
-**Goal:** move the ~66 `RUNTIME_*` constant BODIES out of `c_runtime.rs` into standalone files
-(`src/backend/c/runtime/<family>.c|.h`), each constant becoming `pub const RUNTIME_<FAMILY>: &str =
-include_str!("runtime/<family>.c")`. ONE on-disk source of truth, consumable BOTH ways (inline: `push_str` of
-the same `&str`; compile-and-link: the LLVM/WASM path `cc`s the real `.c` on disk). `include_str!` is the
-proven idiom here (`c_runtime.rs:14896` already does it for `stb_image.h`/`sqlite3.c`).
+**Goal:** move the **~65 runtime C-text constant BODIES** out of `c_runtime.rs` into standalone files
+(`src/backend/c/runtime/<family>.c|.h`), each constant becoming `pub const X: &str =
+include_str!("runtime/<family>.c")`. ⚠ **The constants use TWO naming conventions — extract BOTH** (review #2):
+only **27** are `RUNTIME_*`-PREFIXED; ~38 more use the `*_RUNTIME` SUFFIX (`ASYNC_RUNTIME`, `CHANNEL_RUNTIME`,
+`THREAD_RUNTIME`, `MUTEX_RUNTIME`, `SCHEDULER_*_RUNTIME`, `METAL_RUNTIME`, …) plus `PANIC_NORMAL`/`PANIC_TEST`,
+`TASK_COMMON`. ALL ~65 are consumed by `emit_runtime_modules`/`main.rs` and are equally in scope — the
+`*_RUNTIME`-suffixed ones are the concurrency/scheduler/trace families Chain 2 most needs, so DON'T extract
+only the 27 prefixed. ONE on-disk source of truth, consumable BOTH ways (inline: `push_str` of the same `&str`;
+compile-and-link: the LLVM/WASM path `cc`s the real `.c` on disk). `include_str!` is the proven idiom here
+(`c_runtime.rs:14896/14898/14903` already do it for `stb_image.h`/`sqlite3.c`).
 
 **⚠ DO NOT TOUCH ANY SELECTION LOGIC IN CHAIN 1.** The four consumers each hardcode their OWN selection (C:
 `emit_runtime_modules`' `if has(...)` chain; LLVM: `main.rs`' `source.contains("std.async")`; hot-reload:
@@ -68,10 +74,13 @@ BY CONSTRUCTION — output-neutrality is automatic. (The family→trigger-prefix
 CHAIN 2 artifact; do NOT build it here.)
 
 **Approach (mechanical):**
-1. For each `pub const RUNTIME_<FAMILY>: &str = r#"..."#` in `c_runtime.rs`, write the body verbatim to
-   `runtime/<family>.c` (or `.h`) and replace the const RHS with `include_str!("runtime/<family>.c")`. Watch
-   for `r#"..."#`/escaping artifacts (the file gets the RAW text, no Rust escaping) and any constant built by
-   concatenation/`format!` (those stay in `.rs` or get a different treatment — inventory them first).
+1. For each runtime C-text `pub const X: &str = r#"..."#` (both `RUNTIME_*` and `*_RUNTIME`/`PANIC_*`/
+   `TASK_COMMON`), write the body verbatim to `runtime/<family>.c` (or `.h`) and replace the const RHS with
+   `include_str!("runtime/<family>.c")`. Review #2 confirmed: all are single-hash `r#"..."#` raw literals (no
+   `r##` multi-hash escaping trap), 3 are already `include_str!`, 1 is the trivial empty `EXECUTOR_RUNTIME = ""`
+   — there are ZERO `concat!`/`format!`-constructed runtime constants, so every one is 1:1 extractable (the
+   pure-text-move premise holds). Still: inventory the full list first + handle the empty/already-`include_str!`
+   ones as no-ops.
 2. VERIFY byte-exactness BEFORE touching emission: a unit test asserts each `RUNTIME_<FAMILY>` value is
    byte-identical pre/post extraction (the `include_str!` content == the old literal). Zero diff required.
 
@@ -103,6 +112,13 @@ byte-identity unit test (step 2) — land that FIRST, then the gate is mechanica
   Build the family→trigger manifest HERE by reading that function; the self-host scans its LIR module's call
   names (its analog of `all_call_names`) + module flags, selects, reads the shared Chain-1 `.c`/`.h` files,
   and emits their text before the body.
+- **⚠ Chain-2 sub-task (review #2): two enumerated triggers are ABSENT from the self-host `LirModule`** — it
+  has `test_fns`/`bench_fns`/`is_test_module`/`scheduler_mode`/`trace_filename`/`hot_reload`/`spawned_fns`/
+  `thread_spawned_fns`/`recursive_drop_structs`/`enums`/`drop_collision_types`/`type_drop_fns`
+  (`self_host_lowerer/lir.gg:371-436`) but NO `clone_stats` and NO `target`/`freestanding` field. Both are
+  safely DEFAULTABLE for the self-host's purposes: `clone_stats=false` (skip `RUNTIME_CLONE_STATS`), hosted
+  `target` (skip the freestanding early-return). So the port can default them rather than add fields — but
+  name this explicitly; do NOT assume all of `emit_runtime_modules`' flags exist on the self-host module.
 - **MUST reuse the Chain-1 on-disk files** (NOT a vendored copy of the runtime text — that re-introduces the
   drift the owner rejected). The self-host already reads files (`driver.gg:20 from std.fs import read_file`,
   `lib/std/fs.gg:6`); pass the runtime dir like the existing `lib_dir` arg (`driver.gg:32`), or a known repo-
@@ -166,7 +182,7 @@ binary → run → stdout. Oracle = Rust gg's output (`gg run F`). Compare. NO p
 
 **Oracle & snapshot (cost):** Running `gg run` per fixture every build is expensive. The lock-in net asserts
 against a committed SNAPSHOT of expected outputs (Rust-gg-generated, `GG_REGEN_RUNTIME_SNAPSHOT=1` to
-regenerate). NOTE (review #1): **115 `*.expected`/`*.gg.expected` files already exist in `tests/fixtures/` but
+regenerate). NOTE (review #1): **80 `*.expected` files already exist (35 of them `*.gg.expected`) in `tests/fixtures/` but
 are UNWIRED** (0 refs in `integration.rs`) — reuse them to SEED the snapshot, but do NOT assume they're
 validated by the current suite; regenerate/verify against `gg run`.
 
