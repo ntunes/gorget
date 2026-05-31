@@ -5,12 +5,11 @@ use crate::span::Spanned;
 
 use crate::semantic::errors::{ArenaEscapeKind, SemanticErrorKind};
 use crate::semantic::ids::DefId;
-use crate::semantic::types::ResolvedType;
 use crate::semantic::scope::DefKind;
 use crate::semantic::types::{self as types};
 
 use super::{BorrowChecker, BorrowOrigin, BorrowCaptureMode, FallibleState, SharedDerivedInfo, WithGuardKind};
-use super::type_utils::{is_copy_type, is_ast_type_ref};
+use super::type_utils::{is_copy_type, is_ast_type_ref, needs_explicit_move};
 
 impl<'a> BorrowChecker<'a> {
     pub(super) fn check_stmt(&mut self, stmt: &Spanned<Stmt>) {
@@ -1208,33 +1207,20 @@ impl<'a> BorrowChecker<'a> {
                         // borrow by default with CoW-sever on mutation. Explicit `!` is kept
                         // as the use-site move opt-in; explicit `.clone()` stays for explicit
                         // independent-copy intent.
-                        if !is_copy_type(type_id, self.types, self.scopes) {
-                            // Specific shapes that still require explicit `!` — these are not
-                            // CoW-eligible (closures hold env captures whose semantics are
-                            // load-bearing on the move, Box[T] semantics are by-value-of-heap,
-                            // and the safety pass models Owned[T] explicitly).
-                            let resolved = self.types.get(type_id).clone();
-                            let needs_explicit_move = match resolved {
-                                ResolvedType::Function { .. }
-                                | ResolvedType::CallableTrait(_)
-                                | ResolvedType::MutCallableTrait(_)
-                                | ResolvedType::ConsumeCallableTrait(_)
-                                | ResolvedType::BoxedCallable { .. }
-                                | ResolvedType::Owned(_) => true,
-                                ResolvedType::Generic(def_id, _) => {
-                                    matches!(self.scopes.get_def(def_id).name.as_str(),
-                                        "Box" | "Task" | "TaskGroup" | "Guard")
-                                }
-                                _ => false,
-                            };
-                            if needs_explicit_move {
-                                self.error(
-                                    SemanticErrorKind::MoveWithoutOperator {
-                                        name: def.name.clone(),
-                                    },
-                                    value.span,
-                                );
-                            }
+                        // Single-owner carve-out types (closures/Callable, Owned[T],
+                        // Box[T], Task/TaskGroup/Guard) are not CoW-eligible — bare-assign
+                        // requires explicit `!`. Shared predicate `needs_explicit_move` is
+                        // the single source of truth (also used at the constructor / struct /
+                        // enum init boundaries in `check_expr`).
+                        if !is_copy_type(type_id, self.types, self.scopes)
+                            && needs_explicit_move(type_id, self.types, self.scopes)
+                        {
+                            self.error(
+                                SemanticErrorKind::MoveWithoutOperator {
+                                    name: def.name.clone(),
+                                },
+                                value.span,
+                            );
                         }
                     }
                 }

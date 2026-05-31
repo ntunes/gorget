@@ -8,8 +8,38 @@ use crate::semantic::ids::{DefId, ScopeId};
 use crate::semantic::scope::DefKind;
 
 use super::{BorrowChecker, BorrowOrigin, FallibleState, VarState};
+use super::type_utils::needs_explicit_move;
 
 impl<'a> BorrowChecker<'a> {
+    /// At a constructor / struct-literal / enum-variant init boundary, a bare
+    /// (non-`!`) identifier arg of a CoW-eligible type is fine — the lowering
+    /// clones-if-live / moves-if-dead. But the single-owner carve-out types
+    /// (closures/`Callable`, `Owned[T]`, `Box[T]`, `Task`/`TaskGroup`/`Guard`)
+    /// have NO clone path: passing one bare would be accepted here and then
+    /// panic the IR lowering as an untracked consumed source — so they still
+    /// require an explicit `!`. Emit `MoveWithoutOperator` (liveness-independent,
+    /// mirroring the bare-assign carve-out in `check_stmt`). Explicit `!arg`
+    /// goes through the `Ownership::Move` arm / `Expr::Move` walk and is never
+    /// an `Expr::Identifier` here, so it is correctly not flagged.
+    fn require_explicit_move_for_single_owner_init(&mut self, arg: &Spanned<Expr>) {
+        if let Expr::Identifier(_) = &arg.node {
+            if let Some(&var_def_id) = self.resolution_map.get(&arg.span.start) {
+                let def = self.scopes.get_def(var_def_id);
+                if def.kind == DefKind::Variable {
+                    if let Some(type_id) = def.type_id {
+                        let name = def.name.clone();
+                        if needs_explicit_move(type_id, self.types, self.scopes) {
+                            self.error(
+                                SemanticErrorKind::MoveWithoutOperator { name },
+                                arg.span,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub(super) fn check_expr(&mut self, expr: &Spanned<Expr>) {
         match &expr.node {
             // Literals — no ownership concerns
@@ -150,11 +180,19 @@ impl<'a> BorrowChecker<'a> {
                 self.check_call_ownership(callee, args);
                 self.check_call_aliasing(args);
 
-                // CoW rule (b): constructor (Variant/Newtype) args are no longer
-                // treated as implicit moves at this checker — see the
-                // `Ownership::Borrow` arm below. The old `is_constructor`
-                // classification that gated the implicit-move rejection is
-                // therefore gone.
+                // CoW rule (b): a constructor (Variant/Newtype) arg no longer
+                // implicitly-moves / rejects a live CoW-eligible source — the
+                // lowering clones-if-live. But the single-owner carve-out types
+                // still require explicit `!` at a constructor (the carve-out in
+                // the `Ownership::Borrow` arm below), and that carve-out must NOT
+                // fire for a plain function call (where the arg is borrowed, no
+                // `!` needed) — so we still need to know whether the callee IS a
+                // constructor.
+                let is_constructor = self
+                    .resolve_callee_def_id(callee)
+                    .map(|id| matches!(self.scopes.get_def(id).kind, DefKind::Variant | DefKind::Newtype))
+                    .unwrap_or(false);
+
                 for arg in args {
                     match arg.node.ownership {
                         Ownership::Move => {
@@ -202,7 +240,14 @@ impl<'a> BorrowChecker<'a> {
                             // through to `check_expr`, which marks the use
                             // without consuming the source. Explicit `!arg`
                             // moves still go through the `Ownership::Move` arm
-                            // above; the implicit-move rejection is removed.
+                            // above. Carve-out: single-owner types (closures/
+                            // `Box`/`Owned`/`Task`/...) still require explicit
+                            // `!` at a CONSTRUCTOR (they have no clone path) — but
+                            // NOT at a plain function call, where the arg is just
+                            // borrowed. Hence the `is_constructor` gate.
+                            if is_constructor {
+                                self.require_explicit_move_for_single_owner_init(&arg.node.value);
+                            }
                             self.check_expr(&arg.node.value);
                         }
                     }
@@ -406,11 +451,22 @@ impl<'a> BorrowChecker<'a> {
                     }
                 }
 
-                // CoW rule (b): qualified enum variant constructor args
-                // (`EnumName.VariantName(args)`) are no longer treated as
-                // implicit moves at this checker — see the `Ownership::Borrow`
-                // arm below. The old `is_enum_constructor` classification that
-                // gated the implicit-move rejection is therefore gone.
+                // CoW rule (b): a qualified enum variant constructor arg
+                // (`EnumName.VariantName(args)`) no longer implicitly-moves /
+                // rejects a live CoW-eligible source — the lowering clones-if-live.
+                // But single-owner carve-out types still require explicit `!` at a
+                // constructor, and that carve-out must NOT fire for a plain method
+                // call (where the arg is borrowed) — so we still detect whether
+                // the receiver resolves to an Enum (qualified-variant construction).
+                let is_enum_constructor = if let Expr::Identifier(_) = &receiver.node {
+                    self.resolution_map
+                        .get(&receiver.span.start)
+                        .map(|&def_id| self.scopes.get_def(def_id).kind == DefKind::Enum)
+                        .unwrap_or(false)
+                } else {
+                    false
+                };
+
                 for arg in args {
                     match arg.node.ownership {
                         Ownership::Move => {
@@ -438,11 +494,16 @@ impl<'a> BorrowChecker<'a> {
                             // was already excluded here (the IR clones strings
                             // into enum fields); the relaxation extends the same
                             // clone-if-live / move-if-dead treatment to all
-                            // non-Copy payloads, matching the lowering's
+                            // CoW-eligible payloads, matching the lowering's
                             // `clone_resource_args_for_init` → `is_last_use_at`
                             // decision. Fall through to `check_expr` (marks the
                             // use, doesn't consume). Explicit `!arg` still moves
-                            // via the `Ownership::Move` arm above.
+                            // via the `Ownership::Move` arm above. Carve-out:
+                            // single-owner types still require explicit `!` at a
+                            // qualified-enum CONSTRUCTOR (not a plain method call).
+                            if is_enum_constructor {
+                                self.require_explicit_move_for_single_owner_init(&arg.node.value);
+                            }
                             self.check_expr(&arg.node.value);
                         }
                     }
@@ -862,7 +923,10 @@ impl<'a> BorrowChecker<'a> {
                         // `!arg` moves are still handled by `Expr::Move`'s own
                         // walk inside `check_expr`. Borrow fields (`Ref`/`MutRef`)
                         // keep their genuine-borrow handling in the
-                        // `target_is_mut_ref` arm below.
+                        // `target_is_mut_ref` arm below. Carve-out: single-owner
+                        // types (closures/`Box`/`Owned`/`Task`/...) still require
+                        // explicit `!` — they have no clone path.
+                        self.require_explicit_move_for_single_owner_init(arg);
                     } else if target_is_mut_ref {
                         // Identify the source local being mutably-borrowed.
                         if let Some(src) = self.find_root_def_id(arg) {

@@ -80,6 +80,36 @@ pub(super) fn is_copy_type(type_id: TypeId, types: &TypeTable, scopes: &ScopeTab
     }
 }
 
+/// Returns true for the single-owner carve-out types that ALWAYS require an
+/// explicit `!` (move) or `.clone()` at an ownership boundary — they are NOT
+/// CoW-eligible, so there is no implicit clone-if-live path. Closures hold env
+/// captures whose semantics are load-bearing on the move; `Owned[T]`/`Box[T]`
+/// are by-value-of-heap; `Task`/`TaskGroup`/`Guard` are single-owner handles.
+///
+/// This is the single source of truth for the carve-out set, shared by the
+/// bare-assign check (`check_stmt`) AND the constructor / struct-literal /
+/// enum-variant init checks (`check_expr`). For these types the IR lowering has
+/// no clone boundary — passing one bare (no `!`) into a constructor would be
+/// accepted by the checker and then panic the lowering as an untracked consumed
+/// source — so the checker must require the explicit move here.
+pub(super) fn needs_explicit_move(type_id: TypeId, types: &TypeTable, scopes: &ScopeTable) -> bool {
+    match types.get(type_id) {
+        ResolvedType::Function { .. }
+        | ResolvedType::CallableTrait(_)
+        | ResolvedType::MutCallableTrait(_)
+        | ResolvedType::ConsumeCallableTrait(_)
+        | ResolvedType::BoxedCallable { .. }
+        | ResolvedType::Owned(_) => true,
+        ResolvedType::Generic(def_id, _) => {
+            matches!(
+                scopes.get_def(*def_id).name.as_str(),
+                "Box" | "Task" | "TaskGroup" | "Guard"
+            )
+        }
+        _ => false,
+    }
+}
+
 // ─── Reference-Type Struct Detection ──────────────────────
 
 /// Check if an AST Type refers to a reference type: `str`, `Slice`, sigil

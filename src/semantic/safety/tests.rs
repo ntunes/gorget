@@ -1531,6 +1531,51 @@ void main():
     }
 
     #[test]
+    fn constructor_single_owner_requires_explicit_move() {
+        // CoW rule (b) CARVE-OUT: single-owner types (closures/Callable, Box,
+        // Owned, Task/...) are NOT CoW-eligible — there is no clone-if-live path
+        // in the lowering. Passing one BARE into a constructor must be REJECTED
+        // with MoveWithoutOperator (forcing explicit `!`), NOT accepted and then
+        // panic the IR lowering as an untracked consumed source. Regression test
+        // for the (b) relaxation's over-relaxation (a closure was un-guarded).
+        let source = "\
+struct Holder:
+    int(int) f
+
+void main():
+    int(int) g = (int x): x * 2
+    Holder h = Holder(g)
+    print(\"{h.f(3)}\")
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::MoveWithoutOperator { name }
+                if name == "g")),
+            "expected MoveWithoutOperator for a bare closure into a constructor, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn constructor_single_owner_explicit_move_ok() {
+        // The explicit `!` form of the carve-out is accepted by the checker (the
+        // guard only fires on a bare `Expr::Identifier`, never on `!g`).
+        let source = "\
+struct Holder:
+    int(int) f
+
+void main():
+    int(int) g = (int x): x * 2
+    Holder h = Holder(!g)
+    print(\"{h.f(3)}\")
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::MoveWithoutOperator { .. })),
+            "explicit !g into a constructor should be accepted by the checker, got: {:?}", errors
+        );
+    }
+
+    #[test]
     fn struct_constructor_double_move() {
         // CoW rule (b): `Pair(s, s)` is sound, NOT a double move. The first `s`
         // is live (used again as the second arg), so the lowering CLONES it
