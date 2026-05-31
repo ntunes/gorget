@@ -51,16 +51,20 @@ Add to the `gir.gg` Instruction enum (near `GIDeref`, `gir.gg:117`). It is the i
 (`gir.gg:117` = `GIDeref(dst, src_ptr, inner_ty)`; its lowering at `lir_lower.gg:3247`). Thread it through:
 - **`gir.gg`** — add the variant (carry the `inner_ty` too if the LIR store needs it: `GIDerefStore(int,
   Operand, int)` = ptr_local, value, inner_ty — match `GIDeref`'s shape).
-- **`lir_lower.gg`** — new arm near `GIDeref` (`:3247`): `ISlotLoad(ptr_val, ptr_slot, LT_PTR)` to load the
-  pointer, `lower_operand(value)` to get the value, then a store-through-pointer LIR inst writing
-  `*ptr_val = value`. CHECK `lir.gg` for the existing store inst: `ILoad`/`ISlotLoad`/`ISlotStore` exist;
-  find/confirm the pointer-store form (the field-write path `lower_field_write`→ its LIR is the model; or an
-  `IStore(ptr, val, ty)`). If a pointer-store LIR inst already exists, reuse it; if not, add the minimal one
-  and its C-emit.
-- **`lir_codegen.gg`** — emit `*(T*)ptr = value;` for the store inst (mirror how the field-write deref-store
-  emits `((T*)base)->field = value`, but whole-value: `*(T*)ptr = v`). T = the inner C type.
-- **`format_gir.gg`** — add a render arm for `GIDerefStore` (mirror `GIDeref`) so GIR dumps don't break.
-Mirror EXACTLY how `GIDeref` is threaded through all these files (grep `GIDeref` in each).
+- **`lir_lower.gg`** — new arm near `GIDeref` (`:3247`). ✅ **`IStore(ptr, value)` ALREADY EXISTS**
+  (`lir.gg:150`) and its C codegen (`lir_codegen.gg:3138-3149`) already dispatches scalar
+  (`*(T*)ptr = value`) / aggregate (`memcpy(ptr, &value, sizeof)`) / ptr — exactly a whole-value
+  store-through-pointer for BOTH non-resource and resource inner. So the `GIDerefStore` arm is just:
+  `ISlotLoad(ptr_val, ptr_slot, LT_PTR)` (load the pointer) → `lower_operand(value)` → `IStore(ptr_val,
+  lowered_value)`. **DO NOT add a new LIR inst and DO NOT add a new `lir_codegen.gg` C-emit arm** (review-pass-1
+  confirmed `IStore` covers it). The GIR-op-only path is the clean one.
+- **`lir_codegen.gg`** — NO new arm needed (the existing `IStore` codegen at `:3138-3149` already emits
+  `*(T*)ptr = value;` / `memcpy` per inner type).
+- **`format_gir.gg`** — add a render arm for `GIDerefStore` (mirror the `GIDeref` arm at `format_gir.gg:188`)
+  so GIR dumps don't break.
+Mirror EXACTLY how `GIDeref` is threaded through `gir.gg` (variant) + `lir_lower.gg` (arm) + `format_gir.gg`
+(render) — grep `GIDeref` in each. (The thread-through is 3 files for the new op, not 4 — codegen reuses
+`IStore`.)
 
 ### Edit 1 — READ (`lower.gg:4074-4075`)
 Currently `case EIdentifier(name): if nl_contains(&ctx, name): return nl_get(&ctx, name)` returns the MutPtr
@@ -74,7 +78,12 @@ return value_local
 else return `lid` unchanged. **This is the EXACT pattern already shipped at `lower.gg:6599-6607`** (the
 `Option[Ref[T]]` getter: resource inner → return dst; primitive inner → `GIDeref` into a value temp) — copy
 it. Do NOT deref resource inner (that path works; double-deref would break it). Rust parity:
-`src/ir/lowering/exprs/mod.rs:140-164` (Deref projection into a `pointee_type` temp).
+`src/ir/lowering/exprs/mod.rs:140-164` (Deref projection into a `pointee_type` temp). ⚠ NOTE the deliberate
+divergence: Rust's read-deref gates on `pointee_type` existing (it derefs resources too, via Copy=clone),
+but the self-host read-gate fires ONLY for NON-resource inner — because self-host resource slots are
+pointer-valued by ABI and their consumers already deref. This matches the `lower.gg:6599` precedent; do NOT
+"fix" it to match Rust's gate or you'll double-deref the working `&String` read path. (The WRITE fire on any
+inner, by contrast — resource `&`-writes ARE currently broken.)
 
 ### Edit 2 — WRITE (`lower.gg:6099-6118`)
 `case SAssign → EIdentifier`: currently `emit(&ctx, GIAssign(lid, op_consume(...)))`. If `lid` is
