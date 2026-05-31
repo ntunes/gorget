@@ -38,7 +38,8 @@ the self-host + stdlib-importing fixtures — so FIX THOSE FIRST, then remove th
    `std/encoding.gg:69,104`), but the local result is annotated `Result[String, String]` at `:584`/`:608` —
    a mismatch. Every OTHER call site in httpserver.gg already annotates `ParseError` (`:217,220,386,389,580,581,
    604,605`); only these 2 are wrong. Fix → change the local annotation to **`Result[String, ParseError]`**.
-   Surfaces in **25** fixtures (grep `xtd.httpserver` importers).
+   Surfaces in **24** importer fixtures (`grep -rln 'xtd.httpserver' tests/fixtures/*.gg` = 24; a 25th
+   "httpserver" hit in `cow_borrow_outlives_push.gg:17` is a comment-only mention, not an import).
 2. **`lib/xtd/yaml.gg:1269` & `:1276`** — `yaml_p.pos` references a NONEXISTENT field; the correct field is
    **`yaml_pos`** (silent miscompile today). Fix the field name (grep the struct def to confirm).
 3. **`lib/xtd/jsonpath.gg:248` & `:252`** — `segments.push(.ArrayLen)` / `.Wildcard` dot-shorthand enum ctor
@@ -63,13 +64,23 @@ the self-host + stdlib-importing fixtures — so FIX THOSE FIRST, then remove th
    copies) — a single `case` + a trailing `return`, NO `else` → genuinely non-exhaustive (the entry-file
    checker rejects this idiom). Fix: add an explicit **`else: pass`** (or `case _: pass`) to make the
    no-op-on-other-variants intent spec-compliant. Grep the 5 `self_host_*/parser.gg` copies.
-6. **`resolve.gg` `match stmt:`** missing statement arms — ⚠ **4 copies, NOT 2 (brief-review pass-1 — under-
-   counting leaves 2 drivers red).** The 3 byte-identical copies (`self_host_{check,lowerer,typechecker}/
-   resolve.gg`, md5 `8a3198d5`, match at `:396`) miss ALL of `SMeta`+`SAssertReturn`+`SSnapshot`; the distinct
-   `self_host_resolver/resolve.gg` copy (md5 `113aeab8`, match at `:443`) misses ONLY `SMeta` (its
-   `SAssertReturn:590`/`SSnapshot:614` arms already exist). An `else: pass` covers either case cleanly (those
-   stmts are no-ops in resolve) — add it to all 4. Grep `match stmt:` across all 6 `self_host_*/resolve.gg`
-   and confirm each is exhaustive after your edit.
+6. **`resolve.gg` `resolve_stmt` `match stmt:`** missing statement arms — **4 PATHS, 2 REAL FILES (symlinked;
+   brief-review pass-1+2).** `self_host_{check,lowerer}/resolve.gg` are SYMLINKS to
+   `self_host_typechecker/resolve.gg` (one real file, md5 `8a3198d5`, `resolve_stmt` match at `:396`) — it
+   misses `SMeta`+`SAssertReturn`+`SSnapshot`. The distinct real file `self_host_resolver/resolve.gg` (md5
+   `113aeab8`, match at `:443`) misses ONLY `SMeta` (its `SAssertReturn:590`/`SSnapshot:614` arms already
+   exist). ⚠ **(pass-2 — BLOCKING) `else: pass` is WRONG for `SAssertReturn`/`SSnapshot`** — they carry
+   expressions the canonical resolver MUST resolve (Rust `src/semantic/resolve.rs:1235-1244`; the resolver
+   copy already does `resolve_expr(condition)` at `:590` / `resolve_expr(value)` at `:614`). An `else: pass`
+   would DODGE resolution (drop RES entries → regress `type_comparison`/`check_comparison`/`c_emit_comparison`
+   on `assert_return_*`/`snapshot_basic`) AND mask the exhaustiveness error via the `has_else` short-circuit —
+   a §6 violation. **Add REAL arms** to the typechecker file (`:396`): `case SAssertReturn(condition, _):
+   resolve_expr(condition, &scopes, &ctx)` + `case SSnapshot(_, _, value): resolve_expr(value, &scopes, &ctx)`
+   + `case SMeta(): pass` (SMeta is a genuine no-op — ast.gg:107, no payload). For the resolver file (`:443`),
+   add ONLY `case SMeta(): pass`. (Editing `typechecker/resolve.gg` fixes its 3 symlinked paths.) The SECOND
+   function `resolve_stmt_expr` (`:767`) already has a trailing `else:` — leave it. Confirm each `resolve_stmt`
+   is exhaustive after your edit, and that the `assert_return_*`/`snapshot_basic` comparison counts do NOT
+   regress (proof the real arms resolve correctly).
 7. **`self_host_lowerer/format_gir.gg:167`** missing **`GIFieldLoad`** arm, **`:196`** missing **`GTNone`**
    arm (lowerer only). ⚠ NOTE the `&`-param fix just added a `GIDerefStore` arm here — your `GIFieldLoad`
    arm is separate. Add a render arm for each (mirror the sibling arms). (This is the exact `format_gir`
@@ -99,8 +110,8 @@ red. Grep each defect across all 6 dirs; fix every real occurrence.
 1. `cargo build` clean; `cargo test --lib` green (recon: stays 1065/0 — confirm).
 2. The 2 un-ignored tests PASS: `imported_nonexhaustive_match_should_error`, `imported_body_type_error_should_error`.
 3. **`gg check` is now CLEAN on ALL 6 self-host drivers** — `cargo run -- check tests/fixtures/self_host_{lowerer,parser,resolver,typechecker,check,lexer}/driver.gg` → no semantic errors each. (This is the burn-down's success signal. `self_host_lexer` has none of the 7 defects but check it for completeness.)
-4. **The self-host comparison + bootstrap suite re-greens** (force-rebuild the driver first). ⚠ (brief-review pass-1) the `*_comparison` tests are **DIAGNOSTIC-ALWAYS-PASS (no `assert!`)** — "green" is MEANINGLESS; you MUST read the printed matched-counts via `--nocapture` for ALL of them: `c_emit_comparison` (expect ≥**850**, may RISE as the 25 httpserver fixtures + others now type-check — record the number), `lowerer_comparison`, `resolver_comparison`, `parser_comparison`, `type_comparison`, `check_comparison` — each at-or-above its baseline (none regressed). Only `self_host_bootstrap` + `self_host_bootstrap_fixed_point` actually ASSERT (real red/green) — both must be GREEN. ⚠ A regressed count or a red bootstrap means a self-host defect you missed — fix it, don't exclude it.
-5. The 25 httpserver + 2 yaml + the jsonpath-importing fixtures build + run correctly (the stdlib fixes).
+4. **The self-host comparison + bootstrap suite re-greens** (force-rebuild the driver first). ⚠ (brief-review pass-1) the `*_comparison` tests are **DIAGNOSTIC-ALWAYS-PASS (no `assert!`)** — "green" is MEANINGLESS; you MUST read the printed matched-counts via `--nocapture` for ALL of them: `c_emit_comparison` (expect ≥**850**, may RISE as the 24 httpserver fixtures + others now type-check — record the number), `lowerer_comparison`, `resolver_comparison`, `parser_comparison`, `type_comparison`, `check_comparison` — each at-or-above its baseline (none regressed). Only `self_host_bootstrap` + `self_host_bootstrap_fixed_point` actually ASSERT (real red/green) — both must be GREEN. ⚠ A regressed count or a red bootstrap means a self-host defect you missed — fix it, don't exclude it.
+5. The 24 httpserver + 2 yaml + the jsonpath-importing fixtures build + run correctly (the stdlib fixes).
    NOTE jsonpath is reached via `query_basic.gg` (imports `xtd.jsonpath`), not a `jsonpath_*` fixture.
 
 ## 5. Report back
