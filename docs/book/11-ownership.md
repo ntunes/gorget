@@ -299,6 +299,33 @@ To get an independent owned copy up front (before any mutation), use
 String x = obj.name.clone()    # x is an independent owned copy
 ```
 
+### Ownership boundaries: one rule everywhere
+
+A few positions need to **own** their value rather than borrow it: a
+collection put (`push`, `put`, `insert`), a struct or enum field at
+construction (`S(name)`, `Some(name)`), a value `return`ed from a
+function, and a closure capture. At every one of these the rule is the
+same:
+
+- If the source is **still used afterward** (live), the compiler
+  **clones** it — the boundary gets its own independent copy and your
+  original stays valid.
+- If the source is at its **last use** (dead), the compiler **moves**
+  it — zero cost, no clone.
+
+```gorget
+String name = greeting()
+Holder h = Holder(name)    # name is read below → cloned into the field
+print(name)                # still valid
+
+Option[String] tag = Some(make_tag())   # the temp is dead → moved, no clone
+```
+
+There is no special case: a `push`, a `Some(...)`, a struct literal,
+and a `return` all behave identically. You never write `.clone()` to
+make a constructor work — borrow-by-default and clone-when-needed is
+one mental model across the whole language.
+
 The compiler handles all of this automatically. You don't need to think
 about when clones happen — the rule is simple: borrows are free,
 ownership costs a clone, and clones only happen when they're actually

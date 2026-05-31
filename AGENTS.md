@@ -74,20 +74,25 @@ Backends should be at parity; a regression on one but not the other usually mean
 
 **Always use type-first Gorget syntax** in code, plans, and examples: `int x = 5`, `String greet(String name)`. The only string type is `String` — `str` is not a keyword.
 
-## Ownership at Consuming Positions (push/put/set/insert/send)
+## Ownership at Consuming Positions (push/put/set/insert/send, constructors, returns, captures)
 
 CoW's default everywhere is **borrow** — bare-identifier assignments
 (`Spanned b = a`), regular function call args, match scrutinees,
 collection reads all propagate Ptr aliases at zero cost. Clones happen
 only at ownership boundaries, where the destination must own
-(collection puts, returns, struct/enum field init, closure captures).
-Even there, the compiler prefers move when liveness allows it.
+(collection puts, **constructor / struct / enum field init** like
+`S(name)` / `Some(name)`, returns, closure captures). The rule is
+**uniform across all of them** — there is no push-vs-constructor split:
+clone-if-the-source-is-live, move-if-it-is-dead. Even at the boundary,
+the compiler prefers move when liveness allows it.
 
-The carve-outs to CoW-default-borrow on bare-assign are: closures /
-`Callable[T]`, `Owned[T]`, `Box[T]`, `Task`, `TaskGroup`, `Guard`.
-These are single-owner-by-design — the safety pass still emits
-`MoveWithoutOperator` (E_MoveWithoutOperator) at bare-assign sites for
-these, forcing the user to write `!source` or `source.clone()`.
+The carve-outs to CoW-default-borrow are: closures / `Callable[T]`,
+`Owned[T]`, `Box[T]`, `Task`, `TaskGroup`, `Guard`. These are
+single-owner-by-design (no clone path in the lowering) — the safety pass
+emits `MoveWithoutOperator` (E_MoveWithoutOperator) for these at
+bare-assign sites AND at constructor / struct / enum-init sites, forcing
+the user to write `!source` or `source.clone()`. (At a plain function /
+method call these types are simply borrowed, so no operator is needed.)
 
 At each consuming position (`push`, `put`, `set`, `insert`, `send`,
 `v[i] = x`) the collection must own. The compiler picks per-arg from
