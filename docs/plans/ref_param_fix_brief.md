@@ -82,9 +82,10 @@ lowering at `lir_lower.gg:3247`). Thread it through:
   `GIDeref` way (raw int local: `acc.set`/`out.push(ptr_local)`) AND the `value` the `GIAssign` way (via
   `liveness_operand_uses`/`liveness_operand_local_id` on the Operand). PLUS the already-listed
   `lir_lower.gg:2604` lowering arm and `format_gir.gg:166` render arm (both ALSO no-`else`). The `else`-having
-  matchers absorb the variant silently — NO edit: `rewrite_inst_modes` (`lower.gg:2566`, `else` `:2593`),
-  `update_last_pos_for_inst` (`:2626`, `else` `:2643`), and all 3 `validate.gg` `Instruction` matchers
-  (`:105`/`:171`/`:237`, all with `else`).
+  matchers absorb the variant silently — NO arm needed FOR CORRECTNESS: `rewrite_inst_modes`
+  (`lower.gg:2566`, `else` `:2593` — but it optionally gets a `GIDerefStore` arm for clone→move PARITY, see
+  Edit-2's note, distinct from this correctness floor), `update_last_pos_for_inst` (`:2626`, `else` `:2643`),
+  and all 3 `validate.gg` `Instruction` matchers (`:105`/`:171`/`:237`, all with `else`).
 **So the new op threads through 4 files** (`gir.gg` variant + `lir_lower.gg` lowering arm + `format_gir.gg`
 render arm + `lower.gg`'s 3 liveness arms) — NOT 3. ⚠ Verify by `grep -rn "GIFieldLoad" tests/fixtures/
 self_host_lowerer/` (a KNOWN partially-handled variant) to enumerate every `Instruction` matcher, then
