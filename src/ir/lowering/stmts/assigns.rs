@@ -437,8 +437,24 @@ pub(super) fn lower_assign(
                 // propagation misses (Snag #32).
                 let prev_expected = ctx.func_state.expected_type;
                 ctx.func_state.expected_type = Some(pointee_type);
-                let rhs = lower_expr(ctx, builder, value);
+                let mut rhs = lower_expr(ctx, builder, value);
                 ctx.func_state.expected_type = prev_expected;
+                // CoW: a `*box = borrowed` / `*ptr = borrowed` store moves a
+                // value into an OWNED pointee — exactly the consuming-position
+                // discipline the field-store path runs (`lower_field_assign`
+                // at :508/:531). Route the RHS through the SAME helper so a
+                // borrowed/live source is cloned (and a fresh/move-eligible
+                // one still moves). Gate on the pointee being a resource type
+                // so non-resource fresh-value stores (e.g. `*b = Inner(99)` in
+                // box_deref_write.gg) stay a plain Copy and don't regress to a
+                // clone. The validator's `Instruction::Assign` arm enforces the
+                // same `is_resource_type(pointee)` predicate. (Enum-payload
+                // pointees like `Box[Option[String]]` stay SKIPPED here because
+                // `is_resource_type` doesn't descend enum variants — a deferred
+                // gap recorded in TODO.md.)
+                if ctx.type_registry.is_resource_type(pointee_type) {
+                    clone_ptr_rhs_if_needed(ctx, builder, &mut rhs, value);
+                }
                 emit_field_store_with_cleanup(ctx, builder, &deref_place, pointee_type, &rhs);
             }
         }

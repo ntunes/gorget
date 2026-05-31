@@ -1,0 +1,30 @@
+# Deref-store missing-clone UAF regression (R2 SAFETY).
+#
+# `*box = borrowed_string` writes a value INTO an OWNED pointee (the
+# Box[String] heap slot). The RHS `original` is a borrowed/live source —
+# it is read again after the store (`original = original + " world"`).
+#
+# Pre-fix, the `Expr::Deref` arm of `lower_assign` lowered the RHS and
+# called `emit_field_store_with_cleanup` DIRECTLY, WITHOUT routing through
+# `clone_ptr_rhs_if_needed` (the discipline every other consuming position
+# runs). So the borrowed `original` was shallow-copied into the owned
+# pointee — both alias the same heap data, double-free at scope exit, and
+# mutating `original` afterwards could corrupt the box copy. The validator
+# also bailed on projected (Deref) dsts, so it was UNCAUGHT.
+#
+# With the fix, the borrowed RHS is cloned at the deref-store boundary, so
+# the box copy is INDEPENDENT of the source. Mutating `original` after the
+# store leaves the box copy untouched.
+#
+# Expected (CORRECT) behavior:
+#   hello
+#   hello world
+from std.collections import Box
+
+void main():
+    String original = "hello"
+    Box[String] b = Box.new("placeholder")
+    *b = original                    # borrowed source into owned pointee — must CLONE
+    original = original + " world"   # mutate the source after the store
+    print(*b)                        # box copy is independent: hello
+    print(original)                  # source mutated: hello world

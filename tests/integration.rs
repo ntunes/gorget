@@ -3072,6 +3072,21 @@ fn box_deref_write() {
 }
 
 #[test]
+fn box_deref_borrowed_string() {
+    // R2 SAFETY: deref-store missing-clone UAF. `*box = borrowed_string`
+    // must CLONE the borrowed RHS into the owned pointee (the field-store
+    // discipline every other consuming position runs), so the box copy is
+    // independent of the source. Mutating `original` after the store leaves
+    // the box copy untouched. Active because the fix makes it CORRECT.
+    run_gg(
+        "box_deref_borrowed_string.gg",
+        "\
+hello
+hello world",
+    );
+}
+
+#[test]
 fn box_in_recursive_struct() {
     run_gg(
         "box_in_recursive_struct.gg",

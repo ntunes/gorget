@@ -2558,6 +2558,68 @@ fn for_each_consume_site<F: FnMut(ConsumeSiteWarning)>(
                     }
                 }
                 Instruction::Assign { mode, dst, value } => {
+                    // Deref-store (`*box = value` / `*ptr = value`) lowers to a
+                    // single `[Deref]`-projection dst. It writes a value INTO an
+                    // owned pointee, so it is a consume site exactly like the
+                    // whole-local `AssignIntoOwnedSlot` shape — but the bail
+                    // below (`projections.is_empty`) would skip it, leaving the
+                    // deref-store missing-clone UAF unguarded. Resolve the
+                    // pointee type INLINE (the validator only holds
+                    // `registry: &TypeRegistry`, not a `LoweringContext`, so it
+                    // cannot call `deref_inner_type`; and `Box[T]` locals are
+                    // `Named("Box__T")`, NOT `Ptr`, so the Ptr-only Deref
+                    // resolvers above return None for a Box). Gate on the same
+                    // `is_resource_type(pointee)` predicate the lowering uses
+                    // (leg 1) so the two layers agree: enum-payload pointees
+                    // (`Box[Option[String]]`) stay skipped on BOTH legs —
+                    // `is_resource_type` doesn't descend enum variants (a
+                    // deferred gap, recorded in TODO.md). Reuse the `BoxNew`
+                    // class — this is its first real construction site, closing
+                    // the dead-class gap.
+                    if dst.projections.len() == 1
+                        && matches!(dst.projections[0], Projection::Deref)
+                        && !matches!(mode, ReadMode::Borrow)
+                    {
+                        let dst_idx = dst.local.0 as usize;
+                        if dst_idx >= func.locals.len() { continue; }
+                        let box_ty = func.locals[dst_idx].type_id;
+                        // Resolve pointee: Box__T via the typed `is_box` flag +
+                        // its single `_0` field (mirrors
+                        // `LoweringContext::deref_inner_type`'s Box body), else
+                        // the Ptr/MutPtr pointee for a true-pointer dst.
+                        let pointee = if registry.is_box(box_ty) {
+                            registry.get(box_ty).and_then(|t| {
+                                if let GirType::Named(name) = t {
+                                    registry.get_type_def(name).and_then(|td| {
+                                        if let TypeDefKind::Struct(ref s) = td.kind {
+                                            s.fields.first()
+                                                .filter(|f| f.name == "_0")
+                                                .map(|f| f.type_id)
+                                        } else { None }
+                                    })
+                                } else { None }
+                            })
+                        } else {
+                            match registry.get(box_ty) {
+                                Some(GirType::Ptr(inner)) | Some(GirType::MutPtr(inner)) => {
+                                    Some(*inner)
+                                }
+                                _ => None,
+                            }
+                        };
+                        if let Some(pointee) = pointee {
+                            if registry.is_resource_type(pointee) {
+                                let class = ConsumeSiteClass::BoxNew;
+                                if let Some(w) = validate_assign_consume(
+                                    func, registry, liveness, clone_fns, value,
+                                    &bb.instructions, b, i, class,
+                                ) {
+                                    emit(w);
+                                }
+                            }
+                        }
+                        continue;
+                    }
                     // Whole-local assigns only — projections (FieldStore-
                     // like) are out of scope for this class.
                     if !dst.projections.is_empty() { continue; }
