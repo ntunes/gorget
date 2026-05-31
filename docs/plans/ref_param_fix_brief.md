@@ -40,9 +40,10 @@ Match the local's GIR type. Fix ONLY `GtMutPtr(inner)`; distinguish from the wor
 Predicate: fetch the local's `type_id`, `gmod.type_table.get(tid)`, `match GtMutPtr(inner)`, then for the
 read-gate `not is_resource_type_name(type_id_to_name(inner, &gmod), &gmod)` (`is_resource_type_name` at
 `lower.gg:3844`). ⚠ Do NOT use `is_ptr_type` (`lir_lower.gg:2003`) — it returns true for BOTH `GtPtr` and
-`GtMutPtr` and would misfire on resource bare params. There is no `LoParam`/`BoParam` origin discriminator
-to use — the GIR TYPE `GtMutPtr` is the only correct signal, and it's sufficient (only `&`/`!` params produce
-`GtMutPtr`-typed named locals).
+`GtMutPtr` and would misfire on resource bare params. (`LoParam`/`BoParam` origins exist but every param gets
+`LoParam()/BoParam(-1)` at `lower.gg:7775` regardless of ownership, so they CAN'T discriminate `&`/`!` from
+bare-resource — the GIR TYPE `GtMutPtr` is the only correct signal, and it's sufficient: only `&`/`!` params
+produce `GtMutPtr`-typed named locals.)
 
 ## 3. The four edits + one new GIR op
 
@@ -113,7 +114,7 @@ unaffected.)
 
 ## 4. New active fixture
 Add `tests/fixtures/ref_param_reassign.gg` (NOT `#[ignore]`) + register it in `tests/integration.rs`
-mirroring `static_ref_param` (`integration.rs:~15724`). Assert exact runtime output. Use VALID Gorget
+mirroring `static_ref_param` (`integration.rs:~16003` — grep the fn name, line cites drift). Assert exact runtime output. Use VALID Gorget
 syntax (verify the bool-to-string idiom against the language — the harness builds via Rust gg, which is
 correct):
 ```
@@ -163,9 +164,10 @@ correct; this fixture then doubles as a self-host parity datapoint via `c_emit_c
   hide it. The fix must make the self-host MATCH Rust, not paper over a difference.
 - Mirror Rust exactly (the cited `src/ir/lowering/...` sites are the spec). When in doubt, diff the
   self-host's emitted C for `ref_param_reassign` against Rust gg's (`--emit-c-lir`) and converge.
-- Stay in the file zone: `lower.gg`, `gir.gg`, `lir_lower.gg`, `lir_codegen.gg`, `format_gir.gg`,
-  `lir.gg` (only if a new store inst is needed) — all in `tests/fixtures/self_host_lowerer/` — plus the new
-  fixture + its `integration.rs` registration. These are unique to the lowerer dir (only parser.gg/ast.gg
+- Stay in the file zone: `lower.gg` (the 3 edits), `gir.gg` (+`GIDerefStore` variant), `lir_lower.gg`
+  (+the `GIDerefStore` arm reusing `IStore`, +the Edit-4 `ILoad`), `format_gir.gg` (+render arm) — all in
+  `tests/fixtures/self_host_lowerer/` — plus the new fixture + its `integration.rs` registration. (NO `lir.gg`
+  edit — `IStore` already exists; NO `lir_codegen.gg` edit — its `IStore` codegen already emits the store.) These are unique to the lowerer dir (only parser.gg/ast.gg
   are symlinked), so no cross-dir propagation needed. ⚠ Another chain (R5 PERF) edits `lower.gg:3093` and
   (R5 FIDELITY) edits `lower.gg` codegen region — your edits are at 4075/6118/6209 (disjoint line ranges);
   if those chains land first you may rebase, but you're branching from current `gorget-1` so it's moot.
