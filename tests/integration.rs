@@ -1890,6 +1890,34 @@ fn imported_call_arg_type_check_errors() {
     );
 }
 
+// ── BUG: imported-module function BODIES skip semantic checking ──
+// The language spec REQUIRES exhaustive match (language-design.md:44,1003) and
+// type-checking everywhere, but `check_module` (typecheck.rs ~:5489; check_function
+// loop ~:6154) iterates ONLY the entry file's functions — imported-module bodies are
+// silently unchecked. CONFIRMED: a non-exhaustive match OR a blatant `int x = String`
+// in an imported module yields "OK: no semantic errors", and the type error even
+// reaches codegen (`gg build` emits void*-from-int64_t). `imported_call_arg_type_check`
+// above passes because the CALL SITE (in the entry) is checked; the imported BODY is not.
+// These two tests assert what the checker SHOULD do — FLIP TO ACTIVE (remove #[ignore])
+// when check_module checks imported fns. See TODO "imported-module semantic-check bypass".
+#[test]
+#[ignore = "BUG: imported-module bodies skip exhaustiveness checking — flip active when typecheck.rs check_module checks imported fns"]
+fn imported_nonexhaustive_match_should_error() {
+    check_gg_fails(
+        "imported_nonexhaustive_match/main.gg",
+        "non-exhaustive match",
+    );
+}
+
+#[test]
+#[ignore = "BUG: imported-module bodies skip type-checking — flip active when typecheck.rs check_module checks imported fns"]
+fn imported_body_type_error_should_error() {
+    check_gg_fails(
+        "imported_body_type_error/main.gg",
+        "type mismatch",
+    );
+}
+
 #[test]
 fn modules_nested() {
     run_gg_dir("modules_nested", "main.gg", "hello world");

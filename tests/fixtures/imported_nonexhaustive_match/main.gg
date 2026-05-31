@@ -1,0 +1,6 @@
+from helper import Color, classify
+from std.conv import int_to_str
+
+void main():
+    Color c = Color.Red()
+    print(int_to_str(classify(c)))

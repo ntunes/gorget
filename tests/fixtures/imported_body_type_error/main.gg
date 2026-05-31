@@ -1,0 +1,5 @@
+from helper import bad_value
+from std.conv import int_to_str
+
+void main():
+    print(int_to_str(bad_value()))

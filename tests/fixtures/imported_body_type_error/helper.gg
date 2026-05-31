@@ -1,0 +1,7 @@
+# This module's `bad_value` has a blatant type error (int x = String). It MUST be a
+# compile error. Currently it is NOT caught (and `gg build` emits C returning void*
+# from an int64_t function) because the checker skips imported-module bodies.
+# TODO: imported-module semantic-check bypass.
+int bad_value():
+    int x = "definitely not an int"
+    return x

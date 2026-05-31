@@ -1,0 +1,13 @@
+# This module's `classify` has a NON-EXHAUSTIVE match (missing Color.Blue, no else).
+# The language spec (language-design.md:44,1003) requires exhaustive match — this
+# MUST be a compile error. Currently it is NOT caught because the checker skips
+# imported-module bodies (TODO: imported-module semantic-check bypass).
+enum Color:
+    Red()
+    Blue()
+
+int classify(Color c):
+    match c:
+        case Color.Red():
+            return 1
+    return 0

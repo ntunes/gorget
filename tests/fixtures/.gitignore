@@ -13,6 +13,10 @@
 !fstring_cross_module/**
 !imported_call_arg_type_check/
 !imported_call_arg_type_check/**
+!imported_nonexhaustive_match/
+!imported_nonexhaustive_match/**
+!imported_body_type_error/
+!imported_body_type_error/**
 !equip_method_no_shadow_extern/
 !equip_method_no_shadow_extern/**
 !type_alias_struct_dir/
