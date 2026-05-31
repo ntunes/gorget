@@ -4323,6 +4323,15 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     int dst = add_local(&ctx, BOOL_TYPE, NO_NAME)
                     emit(&ctx, GIUnOp(dst, UNOP_NOT, BOOL_TYPE, OpCopy(inner)))
                     return dst
+                case "~":
+                    # Bitwise NOT — result keeps the operand's integer type
+                    # (mirrors Rust src/ir/lowering/exprs/operators.rs:407,410
+                    # where BitNot's result_type == operand_type). Without this
+                    # case the `~` was silently dropped (fell through to
+                    # `return inner`), corrupting e.g. `cur & ~(mask)` masks.
+                    int dst = add_local(&ctx, inner_type, NO_NAME)
+                    emit(&ctx, GIUnOp(dst, UNOP_BITNOT, inner_type, OpCopy(inner)))
+                    return dst
                 else:
                     pass
             return inner

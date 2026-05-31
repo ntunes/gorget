@@ -41,30 +41,100 @@ from lir import lir_fn_next_value, lir_fn_add_slot
 from lir_ssa import term_successors
 from std.collections import Vector, Dict
 
-# ── Initialization lattice ─────────────────────────────────────
+# ── Initialization lattice (packed 2-bit SlotStates) ──────────
+#
+# Mirror of Rust `src/lir/drop_elab.rs` `SlotStates`: 2 bits per slot,
+# 32 slots packed per 64-bit word, stored as a `Vector[int]` of words
+# (plain signed `int` — the most-exercised self-host type, zero casts).
+#
+# The three lattice values are 2-bit fields chosen so the lattice MEET
+# is exactly bitwise OR:
+#   Initialized      = 0b01
+#   Uninitialized    = 0b10
+#   MaybeInitialized = 0b11
+#   0b00             = "no info / unreached" — the OR identity. Reads of
+#                      unreached / out-of-capacity fields decode to
+#                      MaybeInitialized (safe: never eliminate an unknown drop).
+# OR table: 01|01=01 Init; 10|10=10 Uninit; 01|10=11 Maybe; 11|x=11; 00|x=x.
+#
+# ⚠ SIGNED-INT NOTE: `int` is signed i64 and the all-uninit word 0xAAAA…
+# has the high bit set (negative); the LIR backend emits a RAW `>>` which is
+# ARITHMETIC (sign-extending) for int64_t. We use the MASKED-SIGNED path: every
+# decode masks with `& 3`, which discards the sign-extended high bits, so the
+# 2-bit result is correct even with an arithmetic shift (worst case
+# `(0xAAAA… >> 62) & 3 == 2`). `ss_set` rewrites only the target field; meet is
+# bitwise OR (sign-agnostic); equality compares words (sign-agnostic).
+const int IS_INITIALIZED = 1        # 0b01 — live resource on every pred path
+const int IS_UNINITIALIZED = 2      # 0b10 — zeroed / moved on every pred path
+const int IS_MAYBE_INITIALIZED = 3  # 0b11 — some paths live, some dead
 
-# Per-slot initialization state at a program point.
-# Encoded as int constants for fast comparison + cheap dense Vector storage.
-const int IS_INITIALIZED = 0       # holds a live resource on every pred path
-const int IS_UNINITIALIZED = 1     # zeroed / moved on every pred path
-const int IS_MAYBE_INITIALIZED = 2  # some paths live, some dead — runtime guard
+# Number of 64-bit words needed to pack `n_slots` 2-bit fields (32/word).
+int ss_n_words(int n_slots):
+    return (n_slots + 31) / 32
 
-# Lattice meet: join over predecessor out-states.
-# Same(Init, Init) → Init; Same(Uninit, Uninit) → Uninit; else → MaybeInit.
-int init_meet(int a, int b):
-    if a == IS_INITIALIZED and b == IS_INITIALIZED:
-        return IS_INITIALIZED
-    if a == IS_UNINITIALIZED and b == IS_UNINITIALIZED:
-        return IS_UNINITIALIZED
-    return IS_MAYBE_INITIALIZED
-
-# Read a slot's state from a dense states vector, defaulting to
-# MaybeInitialized for out-of-bounds reads (matches Rust's
-# `slot_state` fallback — safe: never eliminate unknown drops).
-int slot_state(Vector[int] &states, int slot):
-    if slot < 0 or slot >= states.len():
+# Decode the 2-bit lattice state of `slot` from a packed word vector.
+# Out-of-capacity (unreached) fields read as MaybeInitialized — the safe
+# default, mirroring Rust `get`'s `None => MaybeInitialized` and the prior
+# dense-Vec `unwrap_or(MaybeInitialized)`.
+int ss_get(Vector[int] &words, int slot):
+    if slot < 0:
         return IS_MAYBE_INITIALIZED
-    return states.get(slot).unwrap()
+    int w = slot / 32
+    if w >= words.len():
+        return IS_MAYBE_INITIALIZED
+    int shift = (slot % 32) * 2
+    int field = (words.get(w).unwrap() >> shift) & 3
+    if field == 0:
+        # 0b00 = no info / unreached → conservatively MaybeInitialized.
+        return IS_MAYBE_INITIALIZED
+    return field
+
+# Set the 2-bit field of `slot` to `st` (one of the IS_* encodings),
+# silently ignoring slots beyond capacity (mirrors Rust `set`'s bounds guard
+# and the prior dense-Vec `if slot < state.len()` guard).
+void ss_set(Vector[int] &words, int slot, int st):
+    if slot < 0:
+        return
+    int w = slot / 32
+    if w >= words.len():
+        return
+    int shift = (slot % 32) * 2
+    int cur = words.get(w).unwrap()
+    int cleared = cur & ~(3 << shift)
+    words.set(w, cleared | (st << shift))
+
+# The all-Uninitialized word: 0b10 repeated across all 32 fields = 0xAAAA…AAAA.
+# The literal 0xAAAAAAAAAAAAAAAA is REJECTED by the lexer (high bit / overflow),
+# so build it by OR-ing `2 << (2*i)` for i in 0..32. `2 << 62` sets the top
+# field; `2 << 63` (never reached here) would wrap to 0 without trapping.
+int ss_uninit_word():
+    int w = 0
+    int i = 0
+    while i < 32:
+        w = w | (2 << (2 * i))
+        i += 1
+    return w
+
+# Build an all-Uninitialized packed state of `n_slots` slots: `n_words`
+# words each 0xAAAA…. Mirrors Rust `SlotStates::all_uninit`. Tail fields
+# beyond n_slots stay 0b10 (Uninit) — harmless: no slot id ever exceeds
+# n_slots-1, so tail fields are never read or `ss_set`, and the OR-meet is
+# tail-stable (every reachable state shares this same 0b10 tail seed), so
+# omitting `clear_tail` cannot make two states wrongly compare unequal.
+Vector[int] ss_all_uninit(int n_slots):
+    Vector[int] words = []
+    int uw = ss_uninit_word()
+    int nw = ss_n_words(n_slots)
+    int i = 0
+    while i < nw:
+        words.push(uw)
+        i += 1
+    return words
+
+# Read a slot's state from a packed word vector — thin alias kept so the
+# guard-phase call sites read like the Rust `slot_state`.
+int slot_state(Vector[int] &states, int slot):
+    return ss_get(&states, slot)
 
 # ── Helper: value → slot map ───────────────────────────────────
 
@@ -96,24 +166,22 @@ Dict[int, int] build_val_to_slot(LirFunction &f):
 void apply_inst_effect(LirInst inst, Vector[int] &state, Dict[int, int] &val_to_slot):
     match inst:
         case ISlotStore(slot, _, _):
-            if slot >= 0 and slot < state.len():
-                state.set(slot, IS_INITIALIZED)
+            ss_set(&state, slot, IS_INITIALIZED)
         case IClosurePack(slot, _, _, _):
-            if slot >= 0 and slot < state.len():
-                state.set(slot, IS_INITIALIZED)
+            ss_set(&state, slot, IS_INITIALIZED)
         case IMoveSlot(slot):
-            if slot >= 0 and slot < state.len():
-                state.set(slot, IS_UNINITIALIZED)
+            ss_set(&state, slot, IS_UNINITIALIZED)
         case IMemset(ptr, _, _):
             if val_to_slot.contains(ptr):
                 int slot = val_to_slot.get(ptr).unwrap()
-                if slot >= 0 and slot < state.len():
-                    state.set(slot, IS_UNINITIALIZED)
+                ss_set(&state, slot, IS_UNINITIALIZED)
         else:
             pass
 
 # Transfer function for one block: apply each inst's effect on a clone
-# of the in-state, return the resulting out-state.
+# of the in-state, return the resulting out-state. `state` is the packed
+# WORD vector (n_words ints), so this copy is ~32× cheaper than the prior
+# 1-int-per-slot representation.
 Vector[int] compute_transfer(LirBlock blk, Vector[int] &in_state, Dict[int, int] &val_to_slot):
     Vector[int] state = []
     int i = 0
@@ -127,24 +195,29 @@ Vector[int] compute_transfer(LirBlock blk, Vector[int] &in_state, Dict[int, int]
         ii += 1
     return state
 
-# Lattice meet over two slot-state vectors, length-aware. Both inputs are
-# pre-sized to n_slots in the worklist driver; the slow-path defaults
-# any missing index to MaybeInitialized.
+# Lattice meet over two packed word-vectors = word-wise bitwise OR (mirror
+# Rust `SlotStates::meet`). Both inputs are uniformly `n_words(n_slots)` long
+# in the worklist driver, so this is O(slots/32) word-ops with no per-slot
+# branching. (0b00 = Top is the OR identity, so an absent predecessor
+# contributes nothing; the encoding makes meet == OR for every value pair.)
 Vector[int] meet_states(Vector[int] &a, Vector[int] &b, int n_slots):
     Vector[int] out = []
+    int nw = ss_n_words(n_slots)
     int i = 0
-    while i < n_slots:
-        int a_s = IS_MAYBE_INITIALIZED
+    while i < nw:
+        int a_w = 0
         if i < a.len():
-            a_s = a.get(i).unwrap()
-        int b_s = IS_MAYBE_INITIALIZED
+            a_w = a.get(i).unwrap()
+        int b_w = 0
         if i < b.len():
-            b_s = b.get(i).unwrap()
-        out.push(init_meet(a_s, b_s))
+            b_w = b.get(i).unwrap()
+        out.push(a_w | b_w)
         i += 1
     return out
 
-# Compare two state vectors for equality.
+# Compare two packed word-vectors for equality (mirror Rust derived `PartialEq`
+# on `SlotStates { words }`). Words are sign-agnostic for ==, so a plain
+# per-word compare is correct for signed `int`.
 bool states_equal(Vector[int] &a, Vector[int] &b):
     if a.len() != b.len():
         return false
@@ -179,16 +252,13 @@ void forward_dataflow(LirFunction &f, Dict[int, int] &val_to_slot, Vector[Vector
     int num_params = f.params.len()
     int n_slots = f.slots.len()
 
-    # Seed bb0: param slots Initialized, others Uninitialized.
-    Vector[int] bb0_init = []
-    int s = 0
-    while s < n_slots:
-        bb0_init.push(IS_UNINITIALIZED)
-        s += 1
+    # Seed bb0: all slots Uninitialized (packed), then param slots → Init.
+    # Mirror Rust drop_elab.rs:223-228 (all_uninit + set params Initialized).
+    Vector[int] bb0_init = ss_all_uninit(n_slots)
     int p = 1
     while p <= num_params:
         if p < n_slots:
-            bb0_init.set(p, IS_INITIALIZED)
+            ss_set(&bb0_init, p, IS_INITIALIZED)
         p += 1
 
     # Initialize state arrays.
