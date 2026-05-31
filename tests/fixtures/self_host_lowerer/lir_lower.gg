@@ -977,7 +977,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
             # at a consuming position and double-freed (MatchArm `guard` /
             # ElseBranch `condition`). Rust emits these (driver.c:11479).
             # Mirrors Pass 2's recursive_drop_enums + type_drop_fns wiring.
-            String opt_inner_drop = drop_fn_for_type(inner, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types)
+            String opt_inner_drop = drop_fn_for_type(inner, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types, &m.drop_collision_types)
             if opt_inner_drop != "":
                 Vector[EnumVariantDrop] opt_vd = []
                 opt_vd.push(EnumVariantDrop(0, "Some", "Some_0", opt_inner_drop.clone(), inner.clone()))
@@ -1037,8 +1037,8 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
                 # resource payload — same rationale as Option above. Ok is
                 # variant 0 (Ok_0), Error is variant 1 (Error_0); register a
                 # variant-drop for whichever payload(s) are resources.
-                String res_ok_drop = drop_fn_for_type(ok_name, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types)
-                String res_err_drop = drop_fn_for_type(err_name, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types)
+                String res_ok_drop = drop_fn_for_type(ok_name, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types, &m.drop_collision_types)
+                String res_err_drop = drop_fn_for_type(err_name, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types, &m.drop_collision_types)
                 if res_ok_drop != "" or res_err_drop != "":
                     Vector[EnumVariantDrop] res_vd = []
                     Vector[EnumVariantDrop] res_vd2 = []
@@ -3202,7 +3202,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
             # `src/lir/lower/drops.rs::lower_drop`.
             String drop_tn = gir_local_type_name(local_id, &gir_locals, &gmod)
             if drop_tn != "":
-                String drop_fn = drop_fn_for_type(drop_tn, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types)
+                String drop_fn = drop_fn_for_type(drop_tn, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types, &m.drop_collision_types)
                 if drop_fn != "":
                     int slot = local_to_slot.get(local_id).unwrap()
                     int addr = lir_fn_next_value(&f)
@@ -3223,7 +3223,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
             # matching Rust's pre-elaboration shape.
             String dia_tn = gir_local_type_name(local_id, &gir_locals, &gmod)
             if dia_tn != "":
-                String dia_drop_fn = drop_fn_for_type(dia_tn, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types)
+                String dia_drop_fn = drop_fn_for_type(dia_tn, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types, &m.drop_collision_types)
                 if dia_drop_fn != "":
                     int dia_slot = local_to_slot.get(local_id).unwrap()
                     int dia_slot_ty = f.slots.get(dia_slot).unwrap().ty
@@ -3428,7 +3428,7 @@ LirFunction lir_lower_function(GirFunction gfn, GirModule &gmod, Dict[String, in
 
 # Determine the drop function name for a given type name.
 # Returns "" if the type doesn't need dropping.
-String drop_fn_for_type(String type_name, Dict[String, bool] &resource_types, Dict[String, String] &type_runtime_map, Dict[String, bool] &optionlike):
+String drop_fn_for_type(String type_name, Dict[String, bool] &resource_types, Dict[String, String] &type_runtime_map, Dict[String, bool] &optionlike, Dict[String, bool] &collision_types):
     # option_ref_borrow RES-5: a `Ref__T` payload is a BORROW (a pointer
     # into a collection the caller owns), never dropped (§2 invariant: only
     # the owner frees). An `Option__Ref__T` is likewise a borrow wrapper.
@@ -3467,6 +3467,14 @@ String drop_fn_for_type(String type_name, Dict[String, bool] &resource_types, Di
     elif runtime == "Task":
         return ""
     if resource_types.contains(type_name):
+        # Drop-name collision: a user `T.drop(...)` method owns the plain
+        # `T__drop` C symbol, so route field/variant drops to the mangled
+        # auto-glue name `__gorget_dtor_{T}` (mirrors Rust gg
+        # `src/lir/lower/mod.rs:651-655`). The collision set is populated
+        # once at the top of `lower_gir_to_lir`, read here via the typed
+        # accessor — no name-shape heuristic.
+        if collision_types.contains(type_name):
+            return "__gorget_dtor_" + type_name
         return type_name + "__drop"
     # Mono'd Option__X / Result__X__E whose payload owns a resource. Kept
     # out of resource_types (to preserve their by-value param/field ABI),
@@ -3479,6 +3487,8 @@ String drop_fn_for_type(String type_name, Dict[String, bool] &resource_types, Di
     # Pass 3); here we just report them droppable so containing structs/
     # enums include the field.
     if optionlike.contains(type_name):
+        if collision_types.contains(type_name):
+            return "__gorget_dtor_" + type_name
         return type_name + "__drop"
     return ""
 
@@ -3505,7 +3515,7 @@ void populate_drop_metadata(LirModule &m, GirModule &gmod):
         int fi = 0
         while fi < info.fields.len():
             GirFieldInfo finfo = info.fields.get(fi).unwrap()
-            String drop_fn = drop_fn_for_type(finfo.type_name, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types)
+            String drop_fn = drop_fn_for_type(finfo.type_name, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types, &m.drop_collision_types)
             if drop_fn != "":
                 field_drops.push(FieldDrop(finfo.name, drop_fn, finfo.type_name))
             fi += 1
@@ -3513,8 +3523,14 @@ void populate_drop_metadata(LirModule &m, GirModule &gmod):
         if field_drops.len() > 0 or is_resource_struct:
             String tname = type_name
             m.recursive_drop_structs.put(tname, field_drops)
-            # Also add to type_drop_fns for unified emission
+            # Also add to type_drop_fns for unified emission. For a drop-name
+            # collision type the auto glue takes the mangled name
+            # `__gorget_dtor_{T}` (the plain `T__drop` symbol belongs to the
+            # user method); emit_struct_drops / the DCE seed read this typed
+            # name (Rust gg `src/lir/lower/mod.rs:680-686`).
             String drop_fn_name = type_name + "__drop"
+            if m.drop_collision_types.contains(type_name):
+                drop_fn_name = "__gorget_dtor_" + type_name
             Vector[FieldDrop] fd_copy = []
             int di = 0
             while di < field_drops.len():
@@ -3541,7 +3557,7 @@ void populate_drop_metadata(LirModule &m, GirModule &gmod):
             int vfi = 0
             while vfi < vinfo.fields.len():
                 GirFieldInfo finfo = vinfo.fields.get(vfi).unwrap()
-                String drop_fn = drop_fn_for_type(finfo.type_name, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types)
+                String drop_fn = drop_fn_for_type(finfo.type_name, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types, &m.drop_collision_types)
                 if drop_fn != "":
                     # Field name in the C struct is VariantName_N (e.g., Literal_0)
                     # finfo.name is "_N" (e.g., "_0"), so strip the leading underscore
@@ -3556,8 +3572,11 @@ void populate_drop_metadata(LirModule &m, GirModule &gmod):
         if variant_drops.len() > 0 or is_resource_enum:
             String tname = type_name
             m.recursive_drop_enums.put(tname, variant_drops)
-            # Also add to type_drop_fns
+            # Also add to type_drop_fns. Collision types take the mangled
+            # `__gorget_dtor_{T}` glue name (see the struct branch above).
             String drop_fn_name = type_name + "__drop"
+            if m.drop_collision_types.contains(type_name):
+                drop_fn_name = "__gorget_dtor_" + type_name
             Vector[FieldDrop] no_fd = []
             Vector[EnumVariantDrop] evd_copy = []
             int di = 0
@@ -3618,6 +3637,39 @@ LirModule lower_gir_to_lir(GirModule &gmod):
 
     # Register builtin structs
     register_builtin_structs(&m, &sr)
+
+    # ── Drop-name collision detection ──────────────────────────
+    # A USER method whose mangled C symbol is `T__drop` (e.g.
+    # `DataFrame.drop(col)` → `DataFrame__drop(self, col)`) COLLIDES with
+    # the compiler's auto drop-glue name `T__drop(self)`. When that happens
+    # the type is recorded here and ALL field/variant drop call sites route
+    # to `__gorget_dtor_{T}` instead, while the auto glue is emitted under
+    # that mangled name (the user method keeps the plain `T__drop` symbol).
+    # Mirrors Rust gg's `LoweringContext::populate_*` collision check
+    # (`src/lir/lower/mod.rs:540-545`): a fn named `{T}__drop` with
+    # `params.len() > 1` is a non-destructor (a real Drop impl takes only
+    # `self`), so its C name can't double as the field-drop glue.
+    #
+    # MUST run BEFORE `lower_type_defs` (just below): the Option/Result
+    # variant-drop names are built INSIDE lower_type_defs (`:980` / `:1040`)
+    # via `drop_fn_for_type`, which reads `m.drop_collision_types`. Populate
+    # after lower_type_defs and those names would still say `DataFrame__drop`
+    # → the Result/Option `Ok_0` drop site would mis-link to the user 2-arg
+    # method and leak. See docs/devbook/24-layering-discipline.md
+    # (resolve once, write through: the collision fact is set at this single
+    # source and read via the typed `drop_collision_types` accessor).
+    int cf = 0
+    while cf < gmod.functions.len():
+        String fn_name = gmod.functions.get(cf).unwrap().name
+        if fn_name.ends_with("__drop") and gmod.functions.get(cf).unwrap().param_types.len() > 1:
+            # Strip the trailing "__drop" (6 bytes) to recover the type name.
+            String coll_ty = fn_name.slice(0, fn_name.len() - 6)
+            # Only a registered struct/enum type can collide with auto glue;
+            # ignore a stray `X__drop`-named free fn (guards against a false
+            # entry that would mis-route an unrelated type).
+            if gmod.type_infos.contains(coll_ty):
+                m.drop_collision_types.put(coll_ty, true)
+        cf += 1
 
     # Lower user-defined type definitions
     lower_type_defs(&gmod, &m, &sr)

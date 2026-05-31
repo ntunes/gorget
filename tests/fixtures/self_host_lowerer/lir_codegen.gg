@@ -1039,15 +1039,27 @@ Vector[bool] compute_reachable_fns(LirModule &m):
 
     # Type-drop user-fn references: emit_struct_drops walks
     # m.recursive_drop_structs and m.recursive_drop_enums and emits
-    # T__drop / T__clone helpers; those are called from generated
-    # destructor sites that aren't visible in the LIR call graph.
-    # Treat any fn with a name matching a drop-table key (T__drop /
-    # T__clone) as a root.
+    # the auto drop/clone helpers; those are called from generated
+    # destructor sites that aren't visible in the LIR call graph, so the
+    # helper is seeded as a reachability root here.
+    #
+    # The drop-fn name comes from the TYPED `type_drop_fns[key].drop_fn_name`
+    # (so a drop-name COLLISION type seeds `__gorget_dtor_{T}`, NOT the
+    # `{T}__drop` C symbol that belongs to the user `T.drop(...)` method).
+    # Reconstructing `key + "__drop"` by name — the old shape — falsely
+    # rooted the user 2-arg method, keeping it past DCE (the spurious +1
+    # vs Rust) AND leaving the leak live. Reading the resolved name closes
+    # that name-matching anti-pattern (docs/devbook/24-layering-discipline.md:
+    # the collision was resolved once at lowering, written into
+    # type_drop_fns, and is read through that accessor here).
     Vector[String] drop_keys = m.recursive_drop_structs.keys()
     int dk = 0
     while dk < drop_keys.len():
-        String dn = drop_keys.get(dk).unwrap() + "__drop"
-        String cn = drop_keys.get(dk).unwrap() + "__clone"
+        String dkey = drop_keys.get(dk).unwrap()
+        String dn = dkey + "__drop"
+        if m.type_drop_fns.contains(dkey):
+            dn = m.type_drop_fns.get(dkey).unwrap().drop_fn_name
+        String cn = dkey + "__clone"
         int dfi = 0
         while dfi < n:
             String fname_d = m.functions.get(dfi).unwrap().name
@@ -1059,8 +1071,11 @@ Vector[bool] compute_reachable_fns(LirModule &m):
     Vector[String] drop_e_keys = m.recursive_drop_enums.keys()
     int dek = 0
     while dek < drop_e_keys.len():
-        String den = drop_e_keys.get(dek).unwrap() + "__drop"
-        String cen = drop_e_keys.get(dek).unwrap() + "__clone"
+        String ekey = drop_e_keys.get(dek).unwrap()
+        String den = ekey + "__drop"
+        if m.type_drop_fns.contains(ekey):
+            den = m.type_drop_fns.get(ekey).unwrap().drop_fn_name
+        String cen = ekey + "__clone"
         int dei = 0
         while dei < n:
             String fname_e = m.functions.get(dei).unwrap().name
@@ -1386,7 +1401,16 @@ String emit_dict_ctor_wiring(int dst, String mapped_name, String original_name, 
     String w = " " + dv + ".hash_fn = (__gorget_hash_fn)__gorget_ktable_hash__" + key_ty + ";"
     w = w + " " + dv + ".eq_fn = (__gorget_eq_fn)__gorget_ktable_eq__" + key_ty + ";"
     if m.recursive_drop_structs.contains(key_ty) or m.recursive_drop_enums.contains(key_ty):
-        w = w + " " + dv + ".key_drop = (__gorget_drop_fn)" + key_ty + "__drop;"
+        # A drop-name collision key type (a `Dict[T, _]` whose `T` has a
+        # user `T.drop(...)` method) routes its key drop fn-ptr to the
+        # mangled auto glue `__gorget_dtor_{T}`, matching the renamed
+        # definition. Not exercised by current fixtures (no such Dict key),
+        # but kept consistent so a future one can't mis-link to the user
+        # 2-arg method. Typed `drop_collision_types` lookup.
+        String key_drop_fn = key_ty + "__drop"
+        if m.drop_collision_types.contains(key_ty):
+            key_drop_fn = "__gorget_dtor_" + key_ty
+        w = w + " " + dv + ".key_drop = (__gorget_drop_fn)" + key_drop_fn + ";"
         w = w + " " + dv + ".key_clone = (__gorget_drop_fn)" + key_ty + "__clone_inplace;"
     return w
 
@@ -1434,6 +1458,13 @@ String lc_collection_drop_fn(String type_name, LirModule &m):
     elif runtime == "GorgetString":
         return "gorget_string_free"
     if m.recursive_drop_structs.contains(type_name) or m.recursive_drop_enums.contains(type_name):
+        # Drop-name collision element type (a `Vector[T]` / `Dict[_, T]`
+        # whose `T` has a user `T.drop(...)` method) routes element drops to
+        # `__gorget_dtor_{T}`. Not exercised by current fixtures, but kept
+        # consistent so a future collection-of-collision-type can't mis-link
+        # to the user 2-arg method. Typed `drop_collision_types` lookup.
+        if m.drop_collision_types.contains(type_name):
+            return "__gorget_dtor_" + type_name
         return type_name + "__drop"
     return ""
 
@@ -2096,6 +2127,10 @@ bool is_void_runtime_fn(String name):
     if name.starts_with("gorget_array_each") or name.starts_with("gorget_map_each"):
         return true
     if name.ends_with("__drop") or name.ends_with("__clone_inplace"):
+        return true
+    # `__gorget_dtor_{T}` is the collision-renamed auto drop glue — also
+    # `void`-returning, so suppress any dst-assignment at a call site.
+    if name.starts_with("__gorget_dtor_"):
         return true
     return false
 
@@ -4648,6 +4683,15 @@ String drop_to_clone_fn(String drop_fn):
         return "gorget_set_clone"
     elif drop_fn.ends_with("__drop"):
         return drop_fn.slice(0, drop_fn.len() - 4) + "clone"
+    elif drop_fn.starts_with("__gorget_dtor_"):
+        # Drop-name collision type: the field's drop fn is the mangled
+        # `__gorget_dtor_{T}`, but its clone is still the plain `{T}__clone`
+        # (only the DROP symbol collided with the user method, not clone).
+        # Without this arm the field-clone path returns "" → a containing
+        # struct/enum would DROP the collision-type field but never deep-
+        # clone it → shallow-copy double-free. Mirrors Rust gg
+        # `src/backend/c_lir/emit_types.rs:1529-1531`.
+        return drop_fn.slice(14, drop_fn.len()) + "__clone"
     return ""
 
 # Emit the C statement to DEEP-clone a struct/enum field of type
@@ -4776,7 +4820,13 @@ String emit_all_drop_clone_forward_decls(LirModule &m, Vector[String] &sn):
     int i = 0
     while i < sd_keys.len():
         String tn = sd_keys.get(i).unwrap()
+        # Collision types forward-declare the mangled glue `__gorget_dtor_{T}`
+        # (matching the renamed definition in emit_struct_drops); declaring
+        # `{T}__drop` here would conflict with the user 2-arg method's
+        # signature. Typed `drop_collision_types` lookup, no name guess.
         String drop_name = tn + "__drop"
+        if m.drop_collision_types.contains(tn):
+            drop_name = "__gorget_dtor_" + tn
         if not fn_exists(drop_name, &m):
             String cname = find_c_name(tn, &m, &sn)
             out = out + "static inline void " + drop_name + "(" + cname + "* self);\n"
@@ -4827,7 +4877,13 @@ String emit_struct_drops(LirModule &m, Vector[String] &sn):
     int kf = 0
     while kf < keys.len():
         String type_name_f = keys.get(kf).unwrap()
+        # For a drop-name collision type the auto glue is named
+        # `__gorget_dtor_{T}` (the plain `T__drop` symbol is the user's
+        # method). Read the typed `drop_collision_types` accessor — never
+        # a name-shape heuristic. See docs/devbook/24-layering-discipline.md.
         String drop_name_f = type_name_f + "__drop"
+        if m.drop_collision_types.contains(type_name_f):
+            drop_name_f = "__gorget_dtor_" + type_name_f
         if not fn_exists(drop_name_f, &m):
             String cname_f = find_c_name(type_name_f, &m, &sn)
             out = out + "static inline void " + drop_name_f + "(" + cname_f + "* self);\n"
@@ -4837,8 +4893,14 @@ String emit_struct_drops(LirModule &m, Vector[String] &sn):
     int ki = 0
     while ki < keys.len():
         String type_name = keys.get(ki).unwrap()
-        # Skip if user already defined a drop function
+        # Auto-glue name: mangled for collision types, plain otherwise.
         String drop_name = type_name + "__drop"
+        if m.drop_collision_types.contains(type_name):
+            drop_name = "__gorget_dtor_" + type_name
+        # Skip if a function with the glue name already exists. For a
+        # collision type this checks `__gorget_dtor_{T}` (absent → emit),
+        # so the auto glue is now generated instead of being shadowed by
+        # the same-named user `T__drop` method.
         if fn_exists(drop_name, &m):
             ki += 1
             continue
