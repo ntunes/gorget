@@ -6978,6 +6978,35 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
     if else_body.len() > 0:
         lower_fail("SFor with else-body not yet implemented")
         return
+    # Range fast path — `for i in start..end` over a literal `ERange`.
+    # Mirrors Rust's `lower_for` first branch (src/ir/lowering/stmts/
+    # for_loops.rs:118-128 → lower_for_range :1003): when the pattern is a
+    # bare binding AND the iterable is a both-bounded range, emit a counter
+    # loop directly instead of routing through the iterator protocol (the
+    # iterator path would `lower_fail` — `int64_t` has no iter()/next() chain
+    # — silently dropping the whole loop body). The self-host `ERange` AST
+    # (ast.gg:66) carries only `start`/`end` (no `inclusive` field) and the
+    # parser only produces exclusive `..`, so the comparison is always `<`.
+    match pat.pat:
+        case PBinding(loop_name):
+            match iter_expr.expr:
+                case ERange(start_opt, end_opt):
+                    match start_opt:
+                        case Some(start_box):
+                            match end_opt:
+                                case Some(end_box):
+                                    SpannedExpr start_e = *start_box
+                                    SpannedExpr end_e = *end_box
+                                    lower_for_range(&ctx, loop_name, start_e, end_e, body, &gmod, is_main)
+                                    return
+                                case None:
+                                    pass
+                        case None:
+                            pass
+                else:
+                    pass
+        else:
+            pass
     # Detect `.enumerate()` and strip it for the Vector/Deque fast path —
     # if `recv` turns out to be Vector/Deque, the idx-based scaffold can
     # bind both the index and the element directly. For non-Vector
@@ -7114,6 +7143,61 @@ void lower_for_vector(LowerCtx &ctx, SpannedPattern pat, int coll_local, String 
     int new_idx = add_local(&ctx, I64_TYPE, NO_NAME)
     emit(&ctx, GIBinOp(new_idx, OP_ADD, I64_TYPE, OpCopy(idx_local), OpConstI64(1)))
     emit(&ctx, GIAssign(idx_local, OpCopy(new_idx)))
+    set_terminator(&ctx, GTJump(header_bb))
+    switch_to(&ctx, exit_bb)
+
+# Range fast path: `for i in start..end` → an i64 counter loop, matching
+# Rust's `lower_for_range` (src/ir/lowering/stmts/for_loops.rs:1003). The
+# loop var is a freshly-OWNED i64 (not an Option-extracted borrow alias, so
+# `add_local`/`nl_put` — NOT `bind_for_local`). Same block scaffold as
+# `lower_for_vector` (header/body/incr/exit, loop stacks, per-iteration drop
+# scope); the only differences are the counter is seeded from the lowered
+# `start` (instead of 0) and the bound is the lowered `end` (instead of
+# `coll.len()`). Exclusive `<` only — the self-host `ERange` has no inclusive
+# form. Continue → incr_bb (advance the counter); break → exit_bb.
+void lower_for_range(LowerCtx &ctx, String loop_name, SpannedExpr start_e, SpannedExpr end_e, Vector[Stmt] body, GirModule &gmod, bool is_main):
+    # ── Iteration state ──────────────────────────────────────
+    # Loop var: a fresh OWNED i64 seeded from `start`. Clone the name —
+    # `nl_put` reads it again below; a bare `Some(loop_name)` risks the
+    # move analysis killing the slot (lower.gg:5969/5977 idiom).
+    int loop_var = add_local(&ctx, I64_TYPE, Some(loop_name.clone()))
+    int start_local = lower_expr(&ctx, start_e, &gmod)
+    emit(&ctx, GIAssign(loop_var, OpCopy(start_local)))
+    nl_put(&ctx, loop_name, loop_var)
+    # End bound, lowered once (the cond re-reads this fixed value each iter).
+    int end_local = lower_expr(&ctx, end_e, &gmod)
+    # ── Block layout ─────────────────────────────────────────
+    int header_bb = new_block(&ctx)
+    int body_bb = new_block(&ctx)
+    int incr_bb = new_block(&ctx)
+    int exit_bb = new_block(&ctx)
+    set_terminator(&ctx, GTJump(header_bb))
+    # Header: `loop_var < end ? body : exit`
+    switch_to(&ctx, header_bb)
+    int cond_local = add_local(&ctx, BOOL_TYPE, NO_NAME)
+    emit(&ctx, GICmp(cond_local, CMP_LT, I64_TYPE, OpCopy(loop_var), OpCopy(end_local)))
+    set_terminator(&ctx, GTBranch(OpCopy(cond_local), body_bb, exit_bb))
+    # Body: lower the loop body in a fresh loop/drop scope. Continue jumps
+    # to incr (advance the counter); break jumps to exit.
+    ctx.loop_continue_stack.push(incr_bb)
+    ctx.loop_break_stack.push(exit_bb)
+    push_drop_scope(&ctx.drop_elab, DSK_LOOP)
+    switch_to(&ctx, body_bb)
+    lower_stmts(&ctx, body, &gmod, is_main)
+    Terminator body_term = ctx.block_terms.get(ctx.current_block).unwrap()
+    match body_term:
+        case GTNone():
+            pop_drop_scope(&ctx)
+            set_terminator(&ctx, GTJump(incr_bb))
+        else:
+            pop_drop_scope_no_emit(&ctx)
+    ctx.loop_continue_stack.pop()
+    ctx.loop_break_stack.pop()
+    # Incr: `loop_var = loop_var + 1; goto header`.
+    switch_to(&ctx, incr_bb)
+    int new_var = add_local(&ctx, I64_TYPE, NO_NAME)
+    emit(&ctx, GIBinOp(new_var, OP_ADD, I64_TYPE, OpCopy(loop_var), OpConstI64(1)))
+    emit(&ctx, GIAssign(loop_var, OpCopy(new_var)))
     set_terminator(&ctx, GTJump(header_bb))
     switch_to(&ctx, exit_bb)
 
