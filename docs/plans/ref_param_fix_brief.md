@@ -41,15 +41,17 @@ Predicate: fetch the local's `type_id`, `gmod.type_table.get(tid)`, `match GtMut
 read-gate `not is_resource_type_name(type_id_to_name(inner, &gmod), &gmod)` (`is_resource_type_name` at
 `lower.gg:3844`). ⚠ Do NOT use `is_ptr_type` (`lir_lower.gg:2003`) — it returns true for BOTH `GtPtr` and
 `GtMutPtr` and would misfire on resource bare params. (`LoParam`/`BoParam` origins exist but every param gets
-`LoParam()/BoParam(-1)` at `lower.gg:7775` regardless of ownership, so they CAN'T discriminate `&`/`!` from
+`LoParam()/BoParam(-1)` at `lower.gg:7776` regardless of ownership, so they CAN'T discriminate `&`/`!` from
 bare-resource — the GIR TYPE `GtMutPtr` is the only correct signal, and it's sufficient: only `&`/`!` params
 produce `GtMutPtr`-typed named locals.)
 
 ## 3. The four edits + one new GIR op
 
-### New op: `GIDerefStore(int ptr_local, Operand value)` — store `value` through `*ptr_local`
-Add to the `gir.gg` Instruction enum (near `GIDeref`, `gir.gg:117`). It is the inverse of `GIDeref`
-(`gir.gg:117` = `GIDeref(dst, src_ptr, inner_ty)`; its lowering at `lir_lower.gg:3247`). Thread it through:
+### New op: `GIDerefStore(int ptr_local, Operand value, int inner_ty)` — store `value` through `*ptr_local`
+Add to the `gir.gg` Instruction enum **at the TAIL — after `GIFieldLoad` (`gir.gg:128`), NOT mid-enum**
+(MEMORY pitfall: inserting mid-enum shifts ordinals; self-host matches are by-name but follow the safe
+end-append rule). It is the inverse of `GIDeref` (`gir.gg:117` = `GIDeref(dst, src_ptr, inner_ty)`; its
+lowering at `lir_lower.gg:3247`). Thread it through:
 - **`gir.gg`** — add the variant (carry the `inner_ty` too if the LIR store needs it: `GIDerefStore(int,
   Operand, int)` = ptr_local, value, inner_ty — match `GIDeref`'s shape).
 - **`lir_lower.gg`** — new arm near `GIDeref` (`:3247`). ✅ **`IStore(ptr, value)` ALREADY EXISTS**
@@ -63,9 +65,22 @@ Add to the `gir.gg` Instruction enum (near `GIDeref`, `gir.gg:117`). It is the i
   `*(T*)ptr = value;` / `memcpy` per inner type).
 - **`format_gir.gg`** — add a render arm for `GIDerefStore` (mirror the `GIDeref` arm at `format_gir.gg:188`)
   so GIR dumps don't break.
-Mirror EXACTLY how `GIDeref` is threaded through `gir.gg` (variant) + `lir_lower.gg` (arm) + `format_gir.gg`
-(render) — grep `GIDeref` in each. (The thread-through is 3 files for the new op, not 4 — codegen reuses
-`IStore`.)
+- ⚠ **`lower.gg` exhaustiveness arms (review-pass-3 — DO NOT SKIP).** Adding a variant to the `Instruction`
+  enum forces a new `case` arm in EVERY exhaustive `match` over `Instruction` that has NO `else`. There are
+  THREE such matchers in `lower.gg` (none has a catch-all — Rust gg, which builds the driver, errors
+  `NonExhaustiveMatch` if an arm is missing): `liveness_inst_def` (`:1844`), `liveness_inst_operand_uses`
+  (`:1882`), `liveness_inst_operand_local_ids` (`:2270`). Add a `GIDerefStore(ptr_local, value, _)` arm to
+  each: `liveness_inst_def` → returns NO def (it stores through a pointer, defines no value local — mirror
+  the no-def arms, e.g. `return -1`); `liveness_inst_operand_uses` + `liveness_inst_operand_local_ids` →
+  record BOTH reads: the `ptr_local` (an int local read) AND the `value` `Operand` (mirror how the
+  `GIAssign`/`GIDeref` arms record their operand/src reads). (The OTHER 3 `Instruction` matchers —
+  `rewrite_inst_modes` `:2565`, `update_last_pos_for_inst` `:2625`, `validate.gg:106` — HAVE `else` arms, so
+  they absorb the variant silently; no edit needed there.)
+**So the new op threads through 4 files** (`gir.gg` variant + `lir_lower.gg` arm + `format_gir.gg` render +
+`lower.gg`'s 3 liveness arms) — NOT 3. To find every matcher needing an arm: **grep `GIDeref` across the
+WHOLE `tests/fixtures/self_host_lowerer/` dir** (not just the 3 named files), then build and let any residual
+`NonExhaustiveMatch` error point you at a missed one. (No new LIR inst / no new `lir_codegen.gg` C-emit —
+codegen reuses `IStore`.)
 
 ### Edit 1 — READ (`lower.gg:4074-4075`)
 Currently `case EIdentifier(name): if nl_contains(&ctx, name): return nl_get(&ctx, name)` returns the MutPtr
@@ -164,10 +179,12 @@ correct; this fixture then doubles as a self-host parity datapoint via `c_emit_c
   hide it. The fix must make the self-host MATCH Rust, not paper over a difference.
 - Mirror Rust exactly (the cited `src/ir/lowering/...` sites are the spec). When in doubt, diff the
   self-host's emitted C for `ref_param_reassign` against Rust gg's (`--emit-c-lir`) and converge.
-- Stay in the file zone: `lower.gg` (the 3 edits), `gir.gg` (+`GIDerefStore` variant), `lir_lower.gg`
-  (+the `GIDerefStore` arm reusing `IStore`, +the Edit-4 `ILoad`), `format_gir.gg` (+render arm) — all in
-  `tests/fixtures/self_host_lowerer/` — plus the new fixture + its `integration.rs` registration. (NO `lir.gg`
-  edit — `IStore` already exists; NO `lir_codegen.gg` edit — its `IStore` codegen already emits the store.) These are unique to the lowerer dir (only parser.gg/ast.gg
+- Stay in the file zone: `lower.gg` (the 3 semantic edits at 4075/6118/6209+6213 **+ 3 trivial
+  exhaustiveness arms** for the new variant at the `:1844/:1882/:2270` liveness matchers — see §3),
+  `gir.gg` (+`GIDerefStore` variant at the enum tail), `lir_lower.gg` (+the `GIDerefStore` arm reusing
+  `IStore`, +the Edit-4 `ILoad`), `format_gir.gg` (+render arm) — all in `tests/fixtures/self_host_lowerer/`
+  — plus the new fixture + its `integration.rs` registration. (NO `lir.gg` edit — `IStore` already exists;
+  NO `lir_codegen.gg` edit — its `IStore` codegen already emits the store.) These are unique to the lowerer dir (only parser.gg/ast.gg
   are symlinked), so no cross-dir propagation needed. ⚠ Another chain (R5 PERF) edits `lower.gg:3093` and
   (R5 FIDELITY) edits `lower.gg` codegen region — your edits are at 4075/6118/6209 (disjoint line ranges);
   if those chains land first you may rebase, but you're branching from current `gorget-1` so it's moot.
