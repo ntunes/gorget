@@ -5915,7 +5915,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     # Ptr-typed shape — borrow propagation now works at
                     # the LIR layer, not just at the GIR ownership tag.
                     int dst_type_id = register_ptr(&gmod, var_type)
-                    var_local = add_local_with(&ctx, dst_type_id, Some(name.clone()), new_own, new_origin)
+                    var_local = add_local_with(&ctx, dst_type_id, Some(name), new_own, new_origin)
                     # Explicit OpBorrow — bypass op_consume because val
                     # may be LoOwned (which op_consume would resolve to
                     # OpMove, but for the alias shape we want a pointer-
@@ -5984,7 +5984,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     Vector[Operand] clone_args = []
                     clone_args.push(OpBorrow(val))
                     emit(&ctx, GICallExtern(cloned, clone_fn_name, clone_args))
-                    var_local = add_local(&ctx, owned_type, Some(name.clone()))
+                    var_local = add_local(&ctx, owned_type, Some(name))
                     emit(&ctx, GIAssign(var_local, op_consume(&ctx, &gmod, cloned, CkAssign())))
                     nl_put(&ctx, name, var_local)
                     register_local_for_drop(&ctx, var_local, owned_type, &gmod)
@@ -5992,7 +5992,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     # Branch F / G — direct Move. Primitives, FnPtr,
                     # non-resource user types. op_consume picks
                     # OpCopy/OpMove as appropriate.
-                    var_local = add_local(&ctx, var_type, Some(name.clone()))
+                    var_local = add_local(&ctx, var_type, Some(name))
                     emit(&ctx, GIAssign(var_local, op_consume(&ctx, &gmod, val, CkAssign())))
                     nl_put(&ctx, name, var_local)
                     register_local_for_drop(&ctx, var_local, var_type, &gmod)
@@ -6627,7 +6627,7 @@ void lower_pattern_match(LowerCtx &ctx, int scrutinee, SpannedPattern spat, Stri
                 # (e.g. arrived via .get().unwrap() chain or field-read),
                 # the named binding must alias rather than byte-copy into
                 # a fresh owner that COMMIT 3 would later double-free.
-                Option[String] name_opt = Some(name.clone())
+                Option[String] name_opt = Some(name)
                 int bound = add_local_inheriting(&ctx, scr_tid, name_opt, scrutinee)
                 emit(&ctx, GIAssign(bound, op_consume(&ctx, &gmod, scrutinee, CkAssign())))
                 nl_put(&ctx, name, bound)
@@ -6824,7 +6824,7 @@ void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vecto
                 # owner — matches the original Class-8 double-free fix).
                 bool scrut_borrow = scrutinee_nonowning(&ctx, &gmod, scrutinee)
                 int field_val = emit_payload_read_mode(&ctx, scrutinee_ptr, effective_enum, effective_variant, fi, fty, &gmod, scrut_borrow)
-                Option[String] bname_opt = Some(bname.clone())
+                Option[String] bname_opt = Some(bname)
                 # option_ref_borrow Phase 6 (R1, site #3): KEEP `fty`(=GtPtr for
                 # an Option[Ref[T]] scrutinee) as the `dst_type` arg above so the
                 # site-#1 guard fires and derefs primitive pointees. But type the
@@ -7175,10 +7175,10 @@ void lower_for_vector(LowerCtx &ctx, SpannedPattern pat, int coll_local, String 
 # form. Continue → incr_bb (advance the counter); break → exit_bb.
 void lower_for_range(LowerCtx &ctx, String loop_name, SpannedExpr start_e, SpannedExpr end_e, Vector[Stmt] body, GirModule &gmod, bool is_main):
     # ── Iteration state ──────────────────────────────────────
-    # Loop var: a fresh OWNED i64 seeded from `start`. Clone the name —
-    # `nl_put` reads it again below; a bare `Some(loop_name)` risks the
-    # move analysis killing the slot (lower.gg:5969/5977 idiom).
-    int loop_var = add_local(&ctx, I64_TYPE, Some(loop_name.clone()))
+    # Loop var: a fresh OWNED i64 seeded from `start`. `nl_put` reads
+    # `loop_name` again below, so it is LIVE here — the bare `Some(loop_name)`
+    # name-hint clones-if-live (CoW), no explicit `.clone()` needed.
+    int loop_var = add_local(&ctx, I64_TYPE, Some(loop_name))
     int start_local = lower_expr(&ctx, start_e, &gmod)
     emit(&ctx, GIAssign(loop_var, OpCopy(start_local)))
     nl_put(&ctx, loop_name, loop_var)
@@ -7333,7 +7333,7 @@ void lower_for_iterator(LowerCtx &ctx, SpannedPattern pat, int coll_local, Strin
 void bind_for_local(LowerCtx &ctx, SpannedPattern pat, int src_local, int tid, GirModule &gmod):
     match pat.pat:
         case PBinding(name):
-            int bound = add_local_inheriting(&ctx, tid, Some(name.clone()), src_local)
+            int bound = add_local_inheriting(&ctx, tid, Some(name), src_local)
             # If the element is a borrow alias, bind it as a borrow (no
             # clone). add_local_inheriting tagged `bound` LoBorrowed/LoView
             # iff src is; in that case CkCallArgBorrow keeps op_consume at
