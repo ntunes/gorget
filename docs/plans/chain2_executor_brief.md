@@ -91,10 +91,13 @@ panic). So a wrong path yields a silently-incomplete preamble. Therefore:
   4th positional) in `driver.gg`, defaulting to `"src/backend/c/runtime"`. Pass it into
   `emit_runtime_preamble`.
 - Add a GUARD: a helper `String read_runtime(String rdir, String name)` that does
-  `String s = read_file(rdir + "/" + name)` and, if `s.len() == 0`, `panic`/print-to-stderr-and-exit with a
-  clear message (`runtime file <name> empty or missing at <rdir>`). Every runtime `.c` is non-empty, so an
-  empty read ALWAYS means a bad path — fail loud, don't emit a broken preamble. (`EXECUTOR_RUNTIME` is the
-  ONE empty const — it has NO file; do not read a file for it, emit nothing, see §4.)
+  `String s = read_file(rdir + "/" + name)` and, if `s.len() == 0`, **`print(..., file=stderr)` then
+  `exit(1)`** with a clear message (`runtime file <name> empty or missing at <rdir>`). ⚠ Use `exit(1)`, NOT
+  `panic` (brief-review N1: `panic` is never actually invoked anywhere in the self-host; the established
+  fail-loud idiom is `print(..., file=stderr); exit(1)` — see `validate.gg:25,293`). Import `exit` from
+  `std.os` and `stderr` from `std.io` into `lir_codegen.gg`. Every runtime `.c` is non-empty, so an empty
+  read ALWAYS means a bad path — fail loud, don't emit a broken preamble. (`EXECUTOR_RUNTIME` is the ONE
+  empty const — it has NO file; do not read a file for it, emit nothing, see §4.)
 
 ---
 
@@ -146,18 +149,24 @@ families need external libs the CI box may lack — emit their selection logic f
 WILL NOT test those fixtures (they're platform/lib/non-deterministic and excluded). Port the logic; don't
 worry about cc-ing them here.**
 
-### 4a. The `all_call_names` scan (recon §B)
+### 4a. The `all_call_names` scan (recon §B; CORRECTED per brief-review B2)
 Build `Vector[String] all_call_names` = extern names (`lir.externs[].name`, `LirExtern.name` at lir.gg:306)
 + function names (`lir.functions[].name`, lir.gg:246) + EVERY `ICallExtern` name inside
 `lir.functions[].blocks[].insts[]`. The inst variant is
 `ICallExtern(int dst, String name, Vector[int] args, String original_name, Vector[int] arg_abis)`
 (lir.gg:175) — match `case ICallExtern(_, name, _, _, _):` and collect `name`. The idiom already exists at
 `lir_codegen.gg:738-763` (`emit_box_allocators_from_lir`) and `:1137` — copy that walk.
-⚠ **CORRECTION vs spec (recon §B):** the self-host has NO `LirGlobalInit::Extern` variant; its globals use
-`init_kind` ints with `GINIT_RUNTIME_CALL.init_expr` holding a full C call expression, not a bare name.
-OMIT the global-extern scan — for the self-host's own compilation the only runtime-call globals are the
-unconditional stdout/stderr/stdin handles (already in RUNTIME_PREAMBLE). (Fidelity note for general
-fixtures only; not a blocker.)
+
+⚠ **YOU MUST ALSO scan globals' `init_expr` (brief-review B2 — this is a REAL cc-fail otherwise).** The
+self-host has NO `LirGlobalInit::Extern` variant (so the spec can't be mirrored verbatim), BUT its globals
+carry `String init_expr` (lir.gg:299) holding a full C call expression like `"gorget_math_infinity()"` for
+`GINIT_RUNTIME_CALL` globals. A fixture whose ONLY trigger for a runtime family is a static global —
+**verified: `static_init_imported.gg` uses only `INFINITY`/`NAN` → lowers to
+`global f64 @INFINITY = extern gorget_math_infinity()`, emitted from the global's `init_expr`, NOT as any
+body `ICallExtern`** — would miss `RUNTIME_MATH` and fail to link. So **append every global's `init_expr`
+string into `all_call_names`** (they're full call exprs, so the `cn_has_prefix` matcher — e.g. prefix
+`"gorget_math_"` matches `"gorget_math_infinity()"` — works directly). ~3 lines; do not omit. (The earlier
+"only stdout/stderr/stdin globals" rationale was FALSE.)
 
 ### 4b. The `has(...)` predicate
 Rust uses `has(&|n| n.starts_with("x") || ...)`. Implement two helpers (do NOT depend on closures):
@@ -168,18 +177,38 @@ Then each Rust `has(&|n| n.starts_with("a") || n.starts_with("b"))` becomes
 source exactly (the string-extended block at `emit_types.rs:1853-1871` alone has ~40 prefixes — copy them
 all). Build `all_call_names` ONCE before the conditionals.
 
-### 4c. The emit-once dependency macros (recon §E)
-`ensure_array!`/`ensure_map!` are emit-once. Use `bool emitted_array = false; bool emitted_map = false` and
-two mutable-ref helpers:
-- `void ensure_array(String &out, bool &emitted_array, String rdir)`: if not emitted, append
-  `runtime_array.c`, set flag.
-- `void ensure_map(String &out, bool &emitted_array, bool &emitted_map, String rdir)`: call `ensure_array`
-  first (MAP-depends-ARRAY), then if not emitted_map append `runtime_map.c`, set flag.
-SET depends on MAP: `ensure_map(...)` then append `runtime_set.c`. Many families call `ensure_array` first
-(string_array, file, path, args, io, sort, socket, server_socket, process_spawn) — preserve each.
-(Helpers that take `String &out` must APPEND; verify the self-host supports `&`-mutation of a String param —
-it does, this is how the codebase builds output. If a `&String` append is awkward, inline the
-`if not emitted_array: out = out + read_runtime(...); emitted_array = true` at each site instead.)
+### 4c. The emit-once dependency macros (recon §E; CORRECTED per brief-review B1)
+`ensure_array!`/`ensure_map!` are emit-once. ⚠ **DO NOT use `void f(String &out, bool &emitted)`
+mutable-ref helpers — the self-host SILENTLY MISCOMPILES whole-value reassignment of a `&String`/`&bool`
+param (brief-review B1 PROVED it: `void append_x(String &out, bool &flag): out = out + "X"; flag = true`
+emits the write-back under Rust gg but the self-host body NEVER stores through the pointer — the caller's
+value is unchanged).** This is a self-host codegen gap (logged to TODO); for Chain 2, sidestep it entirely.
+
+**MANDATORY pattern: inline accumulation into the function's own locals.** `emit_runtime_preamble` declares
+`String out = ""`, `bool emitted_array = false`, `bool emitted_map = false` as its OWN locals and `return out`
+at the end (the proven, working `generate_c` idiom — local mutation + return-accumulation). At each
+array-needing site, open-code:
+```
+if not emitted_array:
+    out = out + read_runtime(rdir, "runtime_array.c")
+    emitted_array = true
+```
+MAP (depends ARRAY) — open-code the array check FIRST, then the map check:
+```
+# ensure array, then map:
+if not emitted_array:
+    out = out + read_runtime(rdir, "runtime_array.c")
+    emitted_array = true
+if not emitted_map:
+    out = out + read_runtime(rdir, "runtime_map.c")
+    emitted_map = true
+```
+SET depends MAP: the two blocks above, then `out = out + read_runtime(rdir, "runtime_set.c")`. Many families
+need ARRAY first (string_array, file, path, args, io, sort, socket, server_socket, process_spawn) — open-code
+the array block at each. (If the repetition bothers you, a helper may RETURN the text to append and the
+caller updates the flag — `String s = array_text_if_needed(emitted_array); if s.len()>0: out=out+s;
+emitted_array=true` — but a `&out`/`&emitted` void helper is FORBIDDEN: it miscompiles. Inline is simplest
+and proven.)
 
 ### 4d. The derived booleans + ordering (recon §E — preserve EXACTLY)
 - `is_test_or_bench = lir.test_fns.len() > 0 or lir.bench_fns.len() > 0 or lir.is_test_module`
@@ -250,18 +279,34 @@ Add ONE new test `fn self_host_full_program()` in `tests/integration.rs`, near `
 (reuse the existing `build_gg_dir_cached` / driver-build helper), the cc invocation (reuse the EXACT cc
 flags + libs those tests use — `-lm -lpthread` etc.), and run+capture-stdout.
 
+⚠ **Gating decision (brief-review N2): the new test MUST RUN BY DEFAULT on plain `cargo test --test
+integration` — do NOT copy `self_host_e2e`'s `skip_unless_full()` / `GG_FULL=1` gate.** This test is THE
+deliverable that proves Chain 2 and the regression net; a `GG_FULL`-only gate wouldn't catch regressions on
+ordinary runs. To keep default-run cost bounded, the asserted set is SMALL (~6-10 fixtures spanning ≥6
+runtime families) and reuses the already-cached driver build (one build, shared). If even that proves too
+slow for default CI, the fallback is to keep it default-run but trim to ~6 fixtures — NOT to `GG_FULL`-gate
+it. State which you chose in the report.
+
 **Mechanism per fixture F:** `driver F <abs lib> --emit-c --runtime-dir=<abs src/backend/c/runtime>` →
 complete `.c` → write to temp → `cc` → run → capture stdout. Oracle = `gg run F` stdout (or the fixture's
 committed `.expected` if one exists and is verified). Assert equal. Difference from `self_host_e2e`: NO
 preamble splice — the `.c` is self-complete.
 
-**Fixture list — curated, deterministic, no platform libs, families the self-host now emits.** Start with
-~10-15. Suggested (VERIFY each exists in `tests/fixtures/` and that `gg run` gives deterministic output —
-adjust freely): a basic arithmetic/control-flow fixture, a `Vector`/array fixture, a `Dict`/map fixture, a
-`Set` fixture, a string-methods fixture, a math fixture, a file-I/O fixture, an error-handling fixture
-(`catch_basic`), a struct/enum fixture, a closures fixture. EXCLUDE: error/`*_error.gg` (Rust rejects),
-random/time/network/thread/async-sleep (non-deterministic), SDL/GL/Metal/SQLite/audio/image (platform libs),
-stress/bench.
+**Fixture list — curated, deterministic, no platform libs, families the self-host now emits.** ~6-10.
+Suggested (VERIFY each exists in `tests/fixtures/` and that `gg run` gives deterministic output — adjust
+freely): a basic arithmetic/control-flow fixture (e.g. `hello`), a `Vector`/array fixture, a `Dict`/map
+fixture (e.g. `dict_literal`), a `Set` fixture, a string-methods fixture (e.g. `string_methods`), a math
+fixture (e.g. `math_constants`), a struct/enum fixture, a closures fixture, and the `static_init_imported`
+fixture (it specifically exercises the §4a global-`init_expr` scan — a good regression anchor for B2).
+⚠ **(brief-review N3) `catch_basic.gg` does NOT exercise `RUNTIME_ERROR`** — the self-host lowers throw/catch
+to plain `Result` returns (its body has 0 `gorget_catch`/`gorget_throw`/`gorget_cleanup_` symbols). It's
+fine to include (it'll MATCH if lowering is correct) but it does NOT validate the error family. To cover
+`RUNTIME_ERROR`, include a TEST-MODE fixture (where `is_test_or_bench` triggers `RUNTIME_ERROR` +
+`PANIC_TEST` + `RUNTIME_ALLOC_REPORT`) — but note test-mode fixtures emit the alloc-report atexit line, so
+the oracle must be `gg run`/`gg test` of the SAME fixture (apples-to-apples), not a hand-written expected.
+If covering test-mode is awkward, accept `RUNTIME_ERROR` as gate-untested and log it. EXCLUDE:
+error/`*_error.gg` (Rust rejects), random/time/network/thread/async-sleep (non-deterministic),
+SDL/GL/Metal/SQLite/audio/image (platform libs), stress/bench.
 
 **Make it diagnostic-friendly:** print MATCH/WRONG-OUTPUT/CC-FAIL per fixture + a summary line, like the
 `*_comparison` tests. The ASSERT should cover the curated passing set (a regression fails the build). If a
