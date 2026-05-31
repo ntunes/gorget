@@ -1,7 +1,9 @@
 # SPEC — Shared runtime + self-host full-program emission + runtime-parity harness
 
-**Status:** spec v4 (reviews #1+#2 folded + owner architecture decisions 2026-05-31). For ≥3 fresh reviews →
-build as 3 staged chains.
+**Status:** ✅ REVIEW-COMPLETE (v4) — 3 fresh review passes on the reshaped arc, ending CLEAN (#1: 2 blocking +
+3 minor folded → v3; #2: minor folded → v4; #3: clean sign-off, every claim source-verified). READY TO BUILD as
+3 staged chains, full-program-first. Each chain still gets its own executor discipline (brief from the relevant
+section + output-review + the cross-backend output-neutral gate).
 **Owner decisions (2026-05-31):**
 - Runtime parity (does the self-host binary produce Rust's output?) is the PRIMARY north-star; fn-count
   `c_emit_comparison` is demoted to a SECONDARY structural diagnostic (it overstates correctness — a sample
