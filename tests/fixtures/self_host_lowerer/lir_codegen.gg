@@ -5291,6 +5291,105 @@ String mono_wrapper_runtime_type(String name, LirModule &m):
     String runtime = m.type_runtime_map.get(name).unwrap_or("")
     return runtime_category_to_c_type(runtime)
 
+# ── Test runner main ───────────────────────────────────────
+#
+# Mirrors Rust gg's `emit_test_runner_main`
+# (src/backend/c_lir/helpers.rs:1145, called from mod.rs:1038). When a
+# module contains `test "..."` blocks and NO user `main`, each test body
+# is lowered to a `__test_N(void) {}` function (lower.gg gates all test
+# lowering on `if not has_main`, so `__test_N` exists ⟺ no user main).
+# The frontend then synthesizes a runner `main` that calls each test
+# inside the panic/cleanup/capture machinery and reports a pass/fail
+# tally — without it, the self-host emits one FEWER user function than
+# Rust (the missing runner) and every test fixture is off-by-1 on
+# `c_emit_comparison`.
+#
+# `test_names` are the ACTUAL emitted `__test_*` symbols in emission
+# order (NON-CONTIGUOUS: an `@skip` test gets no body, so a module can
+# emit `__test_0` and `__test_3` with no `__test_1`/`__test_2`). The
+# runtime globals referenced here (`__gorget_test_jmp`, `__gorget_in_test`,
+# …) are file-local `static`s in the spliced `panic_test.c` runtime, so
+# the runner shares their translation unit. This is a SIMPLIFIED runner:
+# the self-host does not model per-test should_panic / skip / timeout /
+# tags / parallel-shard / results-file flags, so every emitted test is
+# run as a plain pass/fail test. The signature line is emitted verbatim
+# (`int main(int argc, char** argv) {` — ending `) {`) so the comparison
+# harness's `user_fn_count` gate counts it.
+String emit_test_runner_main(Vector[String] &test_names):
+    StrBuf buf = sb_new()
+    sb_push(&buf, "int main(int argc, char** argv) {\n")
+    sb_push(&buf, "    gorget_init_args(argc, argv);\n")
+    sb_push(&buf, "    int __test_passed = 0, __test_failed = 0, __test_skipped = 0;\n")
+    sb_push(&buf, "    int __nocapture = (getenv(\"GORGET_TEST_NOCAPTURE\") != NULL);\n")
+    sb_push(&buf, "    struct timespec __total_start, __total_end;\n")
+    sb_push(&buf, "    clock_gettime(CLOCK_MONOTONIC, &__total_start);\n")
+    sb_push(&buf, "    __gorget_snapshot_open();\n")
+    sb_push(&buf, "    int __test_total = ")
+    sb_push(&buf, int_to_str(test_names.len()))
+    sb_push(&buf, ";\n")
+    sb_push(&buf, "    printf(\"Running %d tests...\\n\", __test_total);\n")
+
+    int ti = 0
+    while ti < test_names.len():
+        String fn_name = test_names.get(ti).unwrap()
+        # Per-test label: the emitted `__test_N` symbol. The self-host
+        # does not carry the test's source display name onto LirFunction
+        # (display_name is "" for lowered test bodies), so we print the
+        # function name rather than fish a name we don't have.
+        sb_push(&buf, "    printf(\"  test: ")
+        sb_push(&buf, fn_name)
+        sb_push(&buf, " ... \");\n")
+        sb_push(&buf, "    fflush(stdout);\n")
+        sb_push(&buf, "    {\n")
+        sb_push(&buf, "        __gorget_in_test = 1;\n")
+        sb_push(&buf, "        __gorget_test_fail_msg = NULL;\n")
+        sb_push(&buf, "        __gorget_test_timed_out = 0;\n")
+        sb_push(&buf, "        __gorget_current_test = \"")
+        sb_push(&buf, fn_name)
+        sb_push(&buf, "\";\n")
+        sb_push(&buf, "        int __cleanup_mark = __gorget_cleanup_top;\n")
+        sb_push(&buf, "        struct timespec __t_start, __t_end;\n")
+        sb_push(&buf, "        clock_gettime(CLOCK_MONOTONIC, &__t_start);\n")
+        sb_push(&buf, "        __gorget_test_cleanup_mark = __cleanup_mark;\n")
+        sb_push(&buf, "        if (!__nocapture) __gorget_capture_start();\n")
+        sb_push(&buf, "        int __jmp_val = setjmp(__gorget_test_jmp);\n")
+        sb_push(&buf, "        if (__jmp_val == 0) {\n")
+        sb_push(&buf, "            ")
+        sb_push(&buf, fn_name)
+        sb_push(&buf, "();\n")
+        sb_push(&buf, "            __gorget_cleanup_top = __cleanup_mark;\n")
+        sb_push(&buf, "        }\n")
+        sb_push(&buf, "        __gorget_cleanup_run(__cleanup_mark);\n")
+        sb_push(&buf, "        __gorget_in_test = 0;\n")
+        sb_push(&buf, "        size_t __cap_len = 0;\n")
+        sb_push(&buf, "        const char *__cap_buf = __gorget_capture_end(&__cap_len);\n")
+        sb_push(&buf, "        clock_gettime(CLOCK_MONOTONIC, &__t_end);\n")
+        sb_push(&buf, "        long __t_ms = (__t_end.tv_sec - __t_start.tv_sec) * 1000 + (__t_end.tv_nsec - __t_start.tv_nsec) / 1000000;\n")
+        sb_push(&buf, "        if (!__gorget_test_fail_msg) {\n")
+        sb_push(&buf, "            __test_passed++;\n")
+        sb_push(&buf, "            printf(\"PASS (%ldms)\\n\", __t_ms);\n")
+        sb_push(&buf, "        } else {\n")
+        sb_push(&buf, "            __test_failed++;\n")
+        sb_push(&buf, "            printf(\"FAIL: %s (%ldms)\\n\", __gorget_test_fail_msg, __t_ms);\n")
+        sb_push(&buf, "            if (__cap_len > 0) {\n")
+        sb_push(&buf, "                printf(\"    --- captured output ---\\n\");\n")
+        sb_push(&buf, "                fwrite(__cap_buf, 1, __cap_len, stdout);\n")
+        sb_push(&buf, "                if (__cap_buf[__cap_len - 1] != '\\n') printf(\"\\n\");\n")
+        sb_push(&buf, "                printf(\"    ---\\n\");\n")
+        sb_push(&buf, "            }\n")
+        sb_push(&buf, "        }\n")
+        sb_push(&buf, "    }\n")
+        ti += 1
+
+    sb_push(&buf, "    clock_gettime(CLOCK_MONOTONIC, &__total_end);\n")
+    sb_push(&buf, "    long __total_ms = (__total_end.tv_sec - __total_start.tv_sec) * 1000 + (__total_end.tv_nsec - __total_start.tv_nsec) / 1000000;\n")
+    sb_push(&buf, "    if (__test_skipped > 0) printf(\"\\n%d passed, %d failed, %d skipped (%ldms)\\n\", __test_passed, __test_failed, __test_skipped, __total_ms);\n")
+    sb_push(&buf, "    else printf(\"\\n%d passed, %d failed (%ldms)\\n\", __test_passed, __test_failed, __total_ms);\n")
+    sb_push(&buf, "    __gorget_snapshot_close();\n")
+    sb_push(&buf, "    return __test_failed > 0 ? 1 : 0;\n")
+    sb_push(&buf, "}\n")
+    return buf.s
+
 String generate_c(LirModule &m):
     Vector[String] sn = build_struct_names(&m)
 
@@ -5388,11 +5487,37 @@ String generate_c(LirModule &m):
     # producing a few MB total, the naive concat OOM-kills stage-1.
     # Mirrors src/backend/c_lir/mod.rs:`out: &mut String`.
     Vector[bool] reachable_body = compute_reachable_fns(&m)
+
+    # Test-mode detection (metadata-free): the self-host's
+    # `LirModule.test_fns` / `is_test_module` are NEVER populated
+    # (constructed empty in lir_lower.gg), so we scan the REACHABLE
+    # functions for emitted `__test_*` bodies. Collecting the actual
+    # names here (not a `0..count` loop) handles the non-contiguous
+    # indices that `@skip` produces. `has_test_runner` is true ⟺ any
+    # `__test_*` is emitted ⟺ (per lower.gg's `if not has_main` gate) the
+    # module has NO user `main`.
+    Vector[String] test_names = []
+    int tfi = 0
+    while tfi < m.functions.len():
+        if reachable_body.get(tfi).unwrap():
+            String tfname = m.functions.get(tfi).unwrap().name
+            if tfname.starts_with("__test_"):
+                test_names.push(tfname.clone())
+        tfi += 1
+    bool has_test_runner = test_names.len() > 0
+
     StrBuf body_buf = StrBuf(body)
     sb_push(&body_buf, "// ── Function Definitions ──\n")
     int fi = 0
     while fi < m.functions.len():
         if not reachable_body.get(fi).unwrap():
+            fi += 1
+            continue
+        # In test-mode the user `main` is replaced by the synthesized
+        # runner. This guard mirrors Rust gg (mod.rs:1026) and is
+        # future-proof, though it can never actually fire in the
+        # self-host: `__test_*` exists ⟺ no user `main`.
+        if has_test_runner and m.functions.get(fi).unwrap().name == "main":
             fi += 1
             continue
         # Pass the function as a BORROW to emit_function — `LirFunction func
@@ -5401,6 +5526,15 @@ String generate_c(LirModule &m):
         sb_push(&body_buf, emit_function(&m.functions.get(fi).unwrap(), &m, &sn, &slit_map))
         sb_push(&body_buf, "\n")
         fi += 1
+
+    # Synthesize the test-runner `main` AFTER the function loop (so it
+    # lands in body_buf, past the `// ── Function Definitions ──` marker
+    # the `user_fn_count` gate counts from). Calls each emitted
+    # `__test_*` in emission order.
+    if has_test_runner:
+        sb_push(&body_buf, emit_test_runner_main(&test_names))
+        sb_push(&body_buf, "\n")
+
     body = body_buf.s
 
     # Box allocator helpers: scan ICallExtern/ICall instructions directly
