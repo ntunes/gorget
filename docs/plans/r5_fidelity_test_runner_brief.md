@@ -7,13 +7,20 @@ chains):** `tests/fixtures/self_host_lowerer/lir_codegen.gg` only.
 ## 0. Worktree discipline
 Run `pwd` + `git rev-parse --show-toplevel` FIRST; confirm inside YOUR worktree. NEVER touch
 `/workspace/gorget-1`; no `cd` there; no `/workspace/gorget-1/...` paths. `git add <specific files>` only.
+⚠ **(brief-review pass-1 — coordination) BRANCH FROM THE POST-IMPORTED-CHECK BASE** (an imported-check fix
+chain is landing that makes Rust gg STRICTLY type+exhaustiveness-check imported modules, incl. this
+`lir_codegen.gg`). Your new runner code must be **type-clean and any `match` you add exhaustive** — once the
+truncate-deletion lands, `gg build` checks this file strictly and a latent defect breaks every self-host
+comparison/bootstrap test. (Low risk — the runner is pure `sb_push` string-building, no new `match` needed —
+but don't introduce one carelessly.) If the imported-check chain isn't integrated yet when you start, rebase
+onto it before your final gate run.
 Commit in your worktree. FORCE-REBUILD the driver before comparison/bootstrap runs:
 `rm -f tests/fixtures/self_host_lowerer/driver tests/fixtures/self_host_lowerer/driver.c`. Run `cargo build` +
 `cargo test --lib` + the targeted gates below — NOT the full sweep (parent's job). `GG_BUILD_TIMEOUT_SECS=600
 GG_TEST_TIMEOUT_SECS=120` if slow.
 
 ## 1. The gap (ground-truthed)
-The self-host lowers each test body to a `__test_N(void) {}` function (the `ITest` arm, ~`lower.gg:10003`)
+The self-host lowers each test body to a `__test_N(void) {}` function (the `ITest` arm, `lower.gg:10135`)
 but NEVER synthesizes the **test-runner `main`** that Rust generates to call them. So for test fixtures with
 NO user `main`, the self-host emits one FEWER user function than Rust (the missing runner main) → 13 fixtures
 are all off-by-1 on `c_emit_comparison` (`test_basic`, `test_cleanup`, `test_skip`, `test_suite`,
@@ -34,18 +41,27 @@ flag, skip at the function loop ~`:1027`). READ those Rust sites for the exact r
 1. **Detect test mode:** `bool has_test_runner = <any m.functions[i].name starts_with "__test_">`. Compute
    once before/around the function-emission loop (`lir_codegen.gg:~5392-5404`).
 2. **Skip the user `main`** when `has_test_runner`: in the function-emission loop (and/or the
-   `func.name == "main"` handling near `lir_codegen.gg:4492`), do NOT emit the user-defined `main` — the
-   runner becomes the entry point (mirrors Rust's skip). (For the 13 no-`main` fixtures this is a no-op; it
-   matters for correctness on fixtures that have both a `main` and tests.)
-3. **Synthesize the runner `main`** after the function loop: emit a `int main(...)` (or the project's main
-   signature) that calls each `__test_N()` in declaration order and prints a pass/fail tally. PORT the
-   STRUCTURE of `helpers.rs:emit_test_runner_main` — but a SIMPLIFIED runner suffices for the gate: the
-   self-host doesn't model should_panic/skip/timeout/tags attributes, so a straight "call each `__test_N`,
-   count, print summary" runner matches `user_fn_count` (what the gate measures). Use the existing `StrBuf`/
-   `sb_push` idiom (the file's string-building convention) — NOT `out = out + X` in a loop.
-   ⚠ Collect the `__test_N` names in the SAME order Rust does (declaration/emission order) so the runner's
-   body matches; the gate counts FUNCTIONS not bodies, but keep it faithful for the eventual runtime-parity
-   harness (Chain 3).
+   `func.name == "main"` handling near `lir_codegen.gg:4492`), do NOT emit the user-defined `main`. ⚠
+   **(brief-review pass-1 — corrected rationale) This guard can NEVER actually fire in the self-host** —
+   `lower.gg` gates ALL test/suite lowering on `if not has_main` (`:10138/:10179/:10186`), so a module emits
+   `__test_N` ⟺ it has NO user `main` (verified: `test_coexist`, which has a user main, emits ZERO `__test_N`).
+   So `has_test_runner ⟺ no user main`, and `has_test_runner && name=="main"` is unreachable. KEEP the guard
+   anyway (harmless, mirrors Rust, future-proof) — but do NOT add complexity chasing a both-main-and-tests
+   case that the self-host can't produce.
+3. **Synthesize the runner `main`** after the function loop: emit `int main(int argc, char** argv) {` (reuse
+   the EXACT existing main-signature line at `lir_codegen.gg:4492` — it already ends `) {`, which the gate's
+   `user_fn_count` requires; do NOT split the signature across `sb_push` calls in a way that breaks the
+   `) {` line-ending) ... body ... `}`. The body calls each emitted `__test_*` function and prints a
+   pass/fail tally. ⚠ **(brief-review pass-1) `__test_N` indices are NON-CONTIGUOUS** — `@skip` tests get no
+   body in either backend (`test_skip` emits `__test_0` and `__test_3`, not 0..3). So **collect the ACTUAL
+   emitted `__test_*` names** (the same scan you used for `has_test_runner`) and call exactly those, in
+   emission order — do NOT loop a `0..count` counter. PORT the STRUCTURE of `helpers.rs:emit_test_runner_main`,
+   but a SIMPLIFIED runner suffices for the gate (the self-host doesn't model should_panic/skip/timeout/tags;
+   `user_fn_count` counts FUNCTIONS not bodies). ⚠ **Emit the runner into `body_buf` AFTER the
+   `// ── Function Definitions ──` marker** (pushed at `lir_codegen.gg:5392`, flushed to `out` at `:5417`) so
+   `user_fn_count` (`integration.rs:13611`, counts post-marker lines starting `[A-Za-z_]` ending `) {`)
+   actually counts it. Use the existing `StrBuf`/`sb_push` idiom — NOT `out = out + X` in a loop. Keep the
+   call order faithful for the eventual runtime-parity harness (Chain 3).
 
 ## 3. Gates
 - `cargo build` clean; `cargo test --lib` green.
