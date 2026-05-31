@@ -6169,27 +6169,12 @@ fn check_items_recursive_tc(checker: &mut TypeChecker, items: &[Spanned<Item>]) 
     for item in items {
         match &item.node {
             Item::Module { items: inner, .. } => {
-                // Type-check imported module code to populate expr_types/method_resolutions
-                // but discard any type errors — library code may have false positives
-                // in a foreign scope context.
-                //
-                // EXCEPTION: hard errors (concrete-vs-concrete call-arg type mismatches
-                // pushed via `hard_type_mismatch`) survive the truncate. They get emitted
-                // into both `errors` and `hard_errors`; here we truncate `errors` back to
-                // the pre-recursion count, then re-append the hard errors that were
-                // generated during the recursion. This catches the snag #2 shape (silent
-                // `to_uint32(float_arg)` in a 6000-line eval.gg) without re-surfacing the
-                // foreign-scope false positives (byte-literal int_id mismatches, auto-prop
-                // holes with unbound Vars) that motivated the original truncate.
-                let error_count = checker.errors.len();
-                let hard_count = checker.hard_errors.len();
+                // Type-check imported module code. Errors from imported modules
+                // are real (non-exhaustive matches, body type errors) and must
+                // surface — the language spec REQUIRES exhaustive match, so a
+                // bug in a library is still a bug. (Previously these were
+                // truncated away, silently accepting miscompiles in imports.)
                 check_items_recursive_tc(checker, inner);
-                checker.errors.truncate(error_count);
-                if checker.hard_errors.len() > hard_count {
-                    // Re-append the hard errors generated inside this module.
-                    let new_hard: Vec<_> = checker.hard_errors[hard_count..].to_vec();
-                    checker.errors.extend(new_hard);
-                }
             }
             Item::Function(f) => {
                 checker.check_function(f);

@@ -1904,7 +1904,6 @@ fn imported_call_arg_type_check_errors() {
 // assert what the checker SHOULD do — FLIP TO ACTIVE (remove #[ignore]) when the truncate
 // is removed. See TODO "imported-module semantic-check bypass".
 #[test]
-#[ignore = "BUG: imported-module body errors are truncated away (typecheck.rs:6143-6151) — flip active when the truncate is removed"]
 fn imported_nonexhaustive_match_should_error() {
     check_gg_fails(
         "imported_nonexhaustive_match/main.gg",
@@ -1913,7 +1912,6 @@ fn imported_nonexhaustive_match_should_error() {
 }
 
 #[test]
-#[ignore = "BUG: imported-module body errors are truncated away (typecheck.rs:6143-6151) — flip active when the truncate is removed"]
 fn imported_body_type_error_should_error() {
     check_gg_fails(
         "imported_body_type_error/main.gg",
