@@ -576,8 +576,11 @@ void main():
 
     #[test]
     fn struct_outlives_source() {
-        // After string unification, struct with str field takes ownership of the string.
-        // View(s) implicitly moves s, then consume(!s) is a double move.
+        // CoW rule (b): `View(s)` does NOT consume a live `s` — the lowering
+        // clones at the struct-init boundary because `s` is still used by the
+        // following `consume(!s)`. So `consume(!s)` is the FIRST and only move
+        // of the original `s`; there is no double move. `v.name` reads the
+        // independent clone. (ASan-verified clean: clone-if-live, no UAF.)
         let source = "\
 struct View:
     String name
@@ -593,9 +596,9 @@ void main():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::DoubleMove { name, .. }
-                if name == "s")),
-            "expected DoubleMove for s (moved into struct, then consume), got: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::DoubleMove { .. }
+                | SemanticErrorKind::UseAfterMove { .. })),
+            "rule (b): View(s) clones a live s, so consume(!s) is sound; got: {:?}", errors
         );
     }
 
@@ -647,8 +650,10 @@ void main():
 
     #[test]
     fn struct_transitive_borrow() {
-        // After string unification, Inner(s) moves s into the struct.
-        // consume(!s) is a double move.
+        // CoW rule (b): `Inner(s)` does NOT consume a live `s` — it clones at
+        // the struct-init boundary because `s` is still used by `consume(!s)`.
+        // So `consume(!s)` is the first and only move of the original; no
+        // double move. `o.inner.name` reads the independent clone.
         let source = "\
 struct Inner:
     String name
@@ -668,18 +673,22 @@ void main():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::DoubleMove { name, .. }
-                if name == "s")),
-            "expected DoubleMove for s (moved into struct, then consume), got: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::DoubleMove { .. }
+                | SemanticErrorKind::UseAfterMove { .. })),
+            "rule (b): Inner(s) clones a live s, so consume(!s) is sound; got: {:?}", errors
         );
     }
 
     #[test]
     fn struct_mixed_fields() {
-        // After string unification, Tagged(s, 42) moves s into the struct.
-        // consume(!s) is a double move.
+        // CoW rule (b): `Tagged(s, 42)` does NOT consume a live `s` — it clones
+        // the String field at the boundary because `s` is still used by
+        // `consume(!s)`. The int field is Copy. So `consume(!s)` is the first
+        // and only move of the original; no double move. `t.label` reads the
+        // independent clone.
         let source = "\
 struct Tagged:
+    String label
     int count
 
 void consume(String !s):
@@ -693,9 +702,9 @@ void main():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::DoubleMove { name, .. }
-                if name == "s")),
-            "expected DoubleMove for s (moved into struct, then consume), got: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::DoubleMove { .. }
+                | SemanticErrorKind::UseAfterMove { .. })),
+            "rule (b): Tagged(s, 42) clones a live s, so consume(!s) is sound; got: {:?}", errors
         );
     }
 
@@ -1476,6 +1485,10 @@ void main():
 
     #[test]
     fn struct_constructor_implicit_move() {
+        // CoW rule (b): `Wrapper(s)` followed by `print(s)` is sound — `s` is
+        // live past the construction, so the lowering CLONES into the struct
+        // field (it does not move). The `print(s)` reads the still-valid
+        // source. (ASan-verified clean: clone emitted at the init site.)
         let source = "\
 struct Wrapper:
     String value
@@ -1487,8 +1500,8 @@ void main():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterMove { name, .. } if name == "s")),
-            "expected UseAfterMove for s after implicit move into struct constructor, got: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterMove { .. })),
+            "rule (b): Wrapper(s) clones a live s; print(s) is sound, got: {:?}", errors
         );
     }
 
@@ -1519,6 +1532,12 @@ void main():
 
     #[test]
     fn struct_constructor_double_move() {
+        // CoW rule (b): `Pair(s, s)` is sound, NOT a double move. The first `s`
+        // is live (used again as the second arg), so the lowering CLONES it
+        // into field `a`; the second `s` is the last use, so it MOVES into
+        // field `b`. Two independent values, no double-free. (ASan-verified
+        // clean with a `Pair(s, s)` + print(p.a)/print(p.b) fixture: 1 clone,
+        // correct distinct output.)
         let source = "\
 struct Pair:
     String a
@@ -1530,8 +1549,9 @@ void main():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::DoubleMove { name, .. } if name == "s")),
-            "expected DoubleMove for s passed twice to struct constructor, got: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::DoubleMove { .. }
+                | SemanticErrorKind::UseAfterMove { .. })),
+            "rule (b): Pair(s, s) clones the live first s and moves the last-use second s; sound, got: {:?}", errors
         );
     }
 
@@ -1558,8 +1578,11 @@ void main():
 
     #[test]
     fn struct_constructor_param_not_moved() {
-        // With StringView removed, String is non-Copy and owned.
-        // Passing s to Wrapper(s) moves it, so print(s) is use-after-move.
+        // CoW rule (b): `Wrapper(s)` where `s` is a by-value param, followed by
+        // `print(s)`, is sound — `s` is live past the construction, so the
+        // lowering CLONES it into the struct field (a by-value param is a
+        // borrow at the IR level and is always cloned at the owning boundary).
+        // `print(s)` reads the still-valid param.
         let source = "\
 struct Wrapper:
     String value
@@ -1570,11 +1593,11 @@ void wrap(String s):
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(
+            !has_error(&errors, |k| matches!(
                 k,
                 SemanticErrorKind::UseAfterMove { .. }
             )),
-            "expected UseAfterMove for param used after constructor move: {:?}", errors
+            "rule (b): Wrapper(s) clones the live param s; print(s) is sound, got: {:?}", errors
         );
     }
 
@@ -1620,8 +1643,12 @@ Wrapper find(Vector[String] items):
 
     #[test]
     fn struct_literal_move_in_loop_not_return() {
-        // Struct constructor consuming non-loop-local var in a loop should error.
-        // Parser rewrites `Container(s)` to StructLiteral for struct types.
+        // CoW rule (b): `Container(s)` in a loop, where `s` is declared OUTSIDE
+        // the loop, is sound — `s` is live across iterations (each iteration
+        // reads the same source), so the lowering CLONES it into the struct on
+        // every iteration (`clone_multi_use_resource_args` treats a non-loop-
+        // local named source as multi-use). No MoveInLoop: the source is never
+        // consumed by the construction.
         let source = "\
 struct Container:
     String value
@@ -1633,8 +1660,8 @@ void main():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::MoveInLoop { name } if name == "s")),
-            "expected MoveInLoop for s in struct literal, got: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::MoveInLoop { .. })),
+            "rule (b): Container(s) clones the loop-carried s each iteration; no MoveInLoop, got: {:?}", errors
         );
     }
 

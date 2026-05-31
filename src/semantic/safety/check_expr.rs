@@ -8,7 +8,6 @@ use crate::semantic::ids::{DefId, ScopeId};
 use crate::semantic::scope::DefKind;
 
 use super::{BorrowChecker, BorrowOrigin, FallibleState, VarState};
-use super::type_utils::is_copy_type;
 
 impl<'a> BorrowChecker<'a> {
     pub(super) fn check_expr(&mut self, expr: &Spanned<Expr>) {
@@ -151,15 +150,11 @@ impl<'a> BorrowChecker<'a> {
                 self.check_call_ownership(callee, args);
                 self.check_call_aliasing(args);
 
-                // Determine if callee is a constructor (variant/newtype) —
-                // their args implicitly consume non-Copy values.
-                let is_constructor = self.resolve_callee_def_id(callee)
-                    .map(|id| {
-                        let kind = self.scopes.get_def(id).kind;
-                        matches!(kind, DefKind::Variant | DefKind::Newtype)
-                    })
-                    .unwrap_or(false);
-
+                // CoW rule (b): constructor (Variant/Newtype) args are no longer
+                // treated as implicit moves at this checker — see the
+                // `Ownership::Borrow` arm below. The old `is_constructor`
+                // classification that gated the implicit-move rejection is
+                // therefore gone.
                 for arg in args {
                     match arg.node.ownership {
                         Ownership::Move => {
@@ -197,39 +192,17 @@ impl<'a> BorrowChecker<'a> {
                                     self.check_borrow_field_mutation(src_def_id, arg.node.value.span);
                                 }
                             }
-                            // For constructor calls, bare non-Copy identifier
-                            // args are implicitly consumed (moved into fields).
-                            if is_constructor {
-                                if let Expr::Identifier(_) = &arg.node.value.node {
-                                    if let Some(&var_def_id) = self.resolution_map.get(&arg.node.value.span.start) {
-                                        let def = self.scopes.get_def(var_def_id);
-                                        if def.kind == DefKind::Variable {
-                                            if let Some(type_id) = def.type_id {
-                                                if !is_copy_type(type_id, self.types, self.scopes) {
-                                                    let skip_implicit_move = self.loop_depth > 0
-                                                        && !self.loop_local_defs.last()
-                                                            .map_or(false, |s| s.contains(&var_def_id))
-                                                        && self.in_return_expr;
-                                                    if !skip_implicit_move {
-                                                        // Mark the consumed variable as used —
-                                                        // implicit move into a constructor field
-                                                        // is a real use site. Without this, the
-                                                        // unused-variable warning fires a false
-                                                        // positive on `String x = ...; T(x)`
-                                                        // (the `continue` below skips the
-                                                        // `check_expr` that normally marks uses).
-                                                        if let Some(entry) = self.local_var_usage.get_mut(&var_def_id) {
-                                                            entry.2 = true;
-                                                        }
-                                                        self.check_move(var_def_id, arg.span);
-                                                        continue;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                            // CoW rule (b): a bare non-Copy identifier arg at a
+                            // constructor (Variant/Newtype) is NOT an implicit
+                            // move that rejects a live source. The lowering
+                            // clones-if-live and moves-if-dead at the init
+                            // boundary (`clone_resource_args_for_init` →
+                            // `is_last_use_at`), exactly as collection
+                            // mutators / tuple-array literals do. So we fall
+                            // through to `check_expr`, which marks the use
+                            // without consuming the source. Explicit `!arg`
+                            // moves still go through the `Ownership::Move` arm
+                            // above; the implicit-move rejection is removed.
                             self.check_expr(&arg.node.value);
                         }
                     }
@@ -433,15 +406,11 @@ impl<'a> BorrowChecker<'a> {
                     }
                 }
 
-                // Detect qualified enum variant constructors: EnumName.VariantName(args)
-                // When the receiver resolves to an Enum def, treat args as implicitly consumed.
-                let is_enum_constructor = if let Expr::Identifier(_) = &receiver.node {
-                    self.resolution_map.get(&receiver.span.start)
-                        .map(|&def_id| self.scopes.get_def(def_id).kind == DefKind::Enum)
-                        .unwrap_or(false)
-                } else {
-                    false
-                };
+                // CoW rule (b): qualified enum variant constructor args
+                // (`EnumName.VariantName(args)`) are no longer treated as
+                // implicit moves at this checker — see the `Ownership::Borrow`
+                // arm below. The old `is_enum_constructor` classification that
+                // gated the implicit-move rejection is therefore gone.
                 for arg in args {
                     match arg.node.ownership {
                         Ownership::Move => {
@@ -463,33 +432,17 @@ impl<'a> BorrowChecker<'a> {
                             if arg.node.ownership == Ownership::MutableBorrow {
                                 self.mark_mut_param_if_applicable(&arg.node.value);
                             }
-                            // For qualified enum variant constructors, bare non-Copy
-                            // identifier args are implicitly consumed (moved into fields).
-                            // String types are excluded: the IR clones/borrows strings into
-                            // enum fields (CoW), so the source is not consumed.
-                            if is_enum_constructor {
-                                if let Expr::Identifier(_) = &arg.node.value.node {
-                                    if let Some(&var_def_id) = self.resolution_map.get(&arg.node.value.span.start) {
-                                        let def = self.scopes.get_def(var_def_id);
-                                        if def.kind == DefKind::Variable && !def.is_param {
-                                            if let Some(type_id) = def.type_id {
-                                                let is_string = type_id == self.types.string_id
-                                                    || type_id == self.types.owned_string_id;
-                                                if !is_copy_type(type_id, self.types, self.scopes) && !is_string {
-                                                    let skip_implicit_move = self.loop_depth > 0
-                                                        && !self.loop_local_defs.last()
-                                                            .map_or(false, |s| s.contains(&var_def_id))
-                                                        && self.in_return_expr;
-                                                    if !skip_implicit_move {
-                                                        self.check_move(var_def_id, arg.span);
-                                                        continue;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                            // CoW rule (b): a bare non-Copy identifier arg at a
+                            // qualified enum variant constructor (`E.W(x)`) is NOT
+                            // an implicit move that rejects a live source. String
+                            // was already excluded here (the IR clones strings
+                            // into enum fields); the relaxation extends the same
+                            // clone-if-live / move-if-dead treatment to all
+                            // non-Copy payloads, matching the lowering's
+                            // `clone_resource_args_for_init` → `is_last_use_at`
+                            // decision. Fall through to `check_expr` (marks the
+                            // use, doesn't consume). Explicit `!arg` still moves
+                            // via the `Ownership::Move` arm above.
                             self.check_expr(&arg.node.value);
                         }
                     }
@@ -899,35 +852,17 @@ impl<'a> BorrowChecker<'a> {
                     let target_is_ref = field_ref_flags.get(i).copied().unwrap_or(false);
                     let target_is_mut_ref = field_mut_ref_flags.get(i).copied().unwrap_or(false);
                     if !target_is_ref {
-                        if let Expr::Identifier(_) = &arg.node {
-                            if let Some(&var_def_id) = self.resolution_map.get(&arg.span.start) {
-                                let def = self.scopes.get_def(var_def_id);
-                                if def.kind == DefKind::Variable {
-                                    if let Some(type_id) = def.type_id {
-                                        if !is_copy_type(type_id, self.types, self.scopes) {
-                                            let skip_implicit_move = self.loop_depth > 0
-                                                && !self.loop_local_defs.last()
-                                                    .map_or(false, |s| s.contains(&var_def_id))
-                                                && self.in_return_expr;
-                                            if !skip_implicit_move {
-                                                // Mark consumed variable as used —
-                                                // implicit move into a struct field
-                                                // is a real use site. Without this,
-                                                // `String x = ...; T(x)` (struct ctor)
-                                                // false-positives on unused-variable
-                                                // because the `continue` skips the
-                                                // `check_expr` that marks uses.
-                                                if let Some(entry) = self.local_var_usage.get_mut(&var_def_id) {
-                                                    entry.2 = true;
-                                                }
-                                                self.check_move(var_def_id, arg.span);
-                                                continue;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        // CoW rule (b): a bare non-Copy identifier arg at a struct
+                        // literal field is NOT an implicit move that rejects a
+                        // live source. The lowering clones-if-live and
+                        // moves-if-dead at the struct-init boundary
+                        // (`clone_multi_use_resource_args` → `is_last_use_at`,
+                        // then `move_zero_consumed_args`). Fall through to
+                        // `check_expr` (marks the use, doesn't consume). Explicit
+                        // `!arg` moves are still handled by `Expr::Move`'s own
+                        // walk inside `check_expr`. Borrow fields (`Ref`/`MutRef`)
+                        // keep their genuine-borrow handling in the
+                        // `target_is_mut_ref` arm below.
                     } else if target_is_mut_ref {
                         // Identify the source local being mutably-borrowed.
                         if let Some(src) = self.find_root_def_id(arg) {
