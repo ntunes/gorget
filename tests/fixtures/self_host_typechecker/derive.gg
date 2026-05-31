@@ -103,19 +103,11 @@ Option[int] find_top_comma(String s):
         i = i + 1
     return None()
 
-String substr_range(String s, int start, int end):
-    String result = ""
-    int i = start
-    while i < end:
-        result = result + s.char_at(i)
-        i = i + 1
-    return result
-
 String trim_leading(String s):
     int start = 0
     while start < s.len() and s.char_at(start) == " ":
         start = start + 1
-    return substr_range(s, start, s.len())
+    return s.byte_slice(start, s.len())
 
 # Returns "vector", "option", "dict", "hashmap", or ""
 String collection_kind(String ty):
@@ -142,7 +134,7 @@ String collection_key(String ty):
     if inner == "":
         return ""
     if find_top_comma(inner) is Some(comma):
-        return trim_leading(substr_range(inner, 0, comma))
+        return trim_leading(inner.byte_slice(0, comma))
     return ""
 
 String collection_val(String ty):
@@ -152,7 +144,7 @@ String collection_val(String ty):
     if inner == "":
         return ""
     if find_top_comma(inner) is Some(comma):
-        return trim_leading(substr_range(inner, comma + 1, inner.len()))
+        return trim_leading(inner.byte_slice(comma + 1, inner.len()))
     return ""
 
 # ── Multi-line serialization codegen ────────────────────────
