@@ -81,13 +81,7 @@ String strip_generic_prefix(String ty, String prefix):
     if last != "]":
         return ""
     # Extract between prefix[ and ]
-    # Build a new string character by character
-    String result = ""
-    int i = plen + 1
-    while i < ty.len() - 1:
-        result = result + ty.char_at(i)
-        i = i + 1
-    return result
+    return ty.byte_slice(plen + 1, ty.len() - 1)
 
 Option[int] find_top_comma(String s):
     int depth = 0
