@@ -1,141 +1,173 @@
-# SPEC — Self-host RUNTIME parity validation harness
+# SPEC — Shared runtime + self-host full-program emission + runtime-parity harness
 
-**Status:** spec for review (≥3 fresh passes) → build next session / via background agent.
-**Owner decision (2026-05-31):** runtime parity is the PRIMARY north-star metric; fn-count
-`c_emit_comparison` is demoted to a SECONDARY structural diagnostic that overstates correctness.
+**Status:** spec v2 (review #1 of v1 folded + owner architecture decisions 2026-05-31). For ≥3 fresh reviews →
+build as 3 staged chains.
+**Owner decisions (2026-05-31):**
+- Runtime parity (does the self-host binary produce Rust's output?) is the PRIMARY north-star; fn-count
+  `c_emit_comparison` is demoted to a SECONDARY structural diagnostic (it overstates correctness — a sample
+  found ~10-25% runtime-correct vs 83% fn-count "match").
+- **Make the self-host emit a FULL PROGRAM** (runtime preamble + body), not a body-only `--lir-c`.
+- **The runtime is ONE source of truth, extracted to shared `.c`/`.h` files**, consumed by all backends + the
+  self-host.
+- **Sequence: full-program first, then the harness** (the harness becomes trivial once the self-host emits a
+  complete program; skip the interim splice harness).
 
-## 1. Why (the blind spot)
+## 0. Why (the blind spot + the architecture)
 
-Every existing self-host validation measures STRUCTURE, not BEHAVIOR:
-- `c_emit_comparison` (849/1029 "matched") compares emitted-C **function counts** — a body-level
-  miscompile (right count, wrong code) is invisible. The `~`-operator gap (`lower.gg` EUnaryOp silently
-  dropped `~`, found 2026-05-31, fixed in `1289a7d7`) sat in this blind spot until a 2nd-order drop_elab
-  double-free surfaced it.
-- `fixed_point` only exercises features the self-host's OWN source uses.
-- lexer/parser/resolver/type/check comparisons check diagnostic OUTPUT — they stop before codegen.
+Every existing self-host validation measures STRUCTURE not BEHAVIOR: `c_emit_comparison` (849/1029 "matched")
+compares emitted-C FUNCTION COUNTS — a body-level miscompile (right count, wrong code) is invisible. The
+`~`-operator gap (`lower.gg` EUnaryOp silently dropped `~`, fixed `1289a7d7`) sat in this blind spot until a
+2nd-order drop_elab double-free surfaced it. A runtime diagnostic (compile the self-host's emitted C + run,
+diff vs Rust) over ~116 fixtures found only ~10-25% produce CORRECT output, ~30% RUN-BUT-WRONG. The `~` bug
+was REPRESENTATIVE of a large invisible class. **fn-counting can't see a wrong body; runtime parity can.**
 
-A throwaway bash diagnostic (compile the self-host's emitted C + run, diff vs Rust gg) over ~116 feature
-fixtures found only **~10–25% produce CORRECT output** (vs 83% fn-count "match"), with **~30% RUN-BUT-WRONG**
-(silent miscompiles: `bounds_check`, `char_methods`, `closures`, `auto_types`, `bare_tuples`, arena/async/
-borrow families). The `~` bug was representative of a LARGE invisible class. **fn-counting cannot see a wrong
-body. Runtime parity can.**
+The clean way to validate runtime parity needs the self-host to emit a COMPLETE program — which it cannot
+today: `driver.gg:156-161` only `print(generate_c(...))`, and `generate_c`/`lir_codegen.gg:286` emit no
+runtime ("skip if the runtime preamble already defines it"). So this spec ALSO makes the self-host a complete
+compiler.
 
-⚠ Those bash numbers are NOISY — see §4 (the preamble-splice is the key design risk). The proper harness
-gives clean numbers.
+### The runtime today (where it lives, who consumes it)
+- The runtime C is ~40 string constants in `src/backend/c/c_runtime.rs` (617 KB): `RUNTIME_PREAMBLE`,
+  `RUNTIME_STRING`, `RUNTIME_ARRAY`, `RUNTIME_ARENA_ALLOC`, … (one per family).
+- Rust's `emit_runtime_modules` (`src/backend/c_lir/emit_types.rs:1791`) `push_str`s each CONDITIONALLY:
+  `if has(|n| n.starts_with("gorget_<family>_")) { out.push_str(RUNTIME_<FAMILY>) }` — a program carries only
+  the families it calls.
+- **Four consumers of the SAME runtime** (this is the key architecture fact, found 2026-05-31):
+  - **C backend** — INLINES it (`push_str` into the `.c`). (`emit_types.rs`)
+  - **LLVM backend** — LINKS it: emits LLVM IR for user code, declares runtime fns `extern`
+    (`llvm/mod.rs:1387`), bodies "live in the linked C runtime" (`:1675`, `:153`). Needs the runtime as a
+    compiled `.o`.
+  - **Future WASM backend** — planned (`llvm/mod.rs:6047`, `c_lir/mod.rs:2674`); will compile the runtime too.
+  - **Self-host** (after this spec) — INLINES it, like the C backend.
+- Other Rust consumers of `c_runtime::RUNTIME_*`: `src/backend/mod.rs`, `src/main.rs` (build orchestration —
+  these handle the LLVM compile-and-link path; the extraction must keep them working).
 
-## 2. Goal
+## CHAIN 1 — Extract the runtime to shared `.c`/`.h` files (the foundation)
 
-A test that runs EVERY (eligible) fixture through the SELF-HOST compiler — compile its emitted C, run the
-binary — and confirms the runtime output matches Rust gg (the oracle). Two mechanisms:
-- **Diagnostic** (`self_host_runtime_diff`, on-demand/gated): report MATCH / WRONG-OUTPUT / CC-FAIL counts +
-  per-fixture lists. Diagnostic-always-pass (read the count). This is the honest runtime-parity number.
-- **Lock-in regression net** (`self_host_runtime`, build-breaking): assert the PASSING SET still matches;
-  a fixture that regresses FAILS the build. The set only grows (add fixtures as gaps are fixed).
+**Goal:** move the runtime out of `c_runtime.rs` Rust string constants into standalone `.c`/`.h` files (e.g.
+`src/backend/c/runtime/<family>.c` + a manifest mapping family → file + the `gorget_<family>_` trigger
+prefixes). ONE source of truth, consumable BOTH ways:
+- **Inline** (C backend, self-host): read the file's text + concatenate (today's `push_str` becomes
+  `push_str(read_file(...))` or `include_str!`).
+- **Compile-and-link** (LLVM, future WASM): compile the file(s) to `.o`, link.
 
-The WRONG-OUTPUT + CC-FAIL lists become the gap backlog — the real parity work for future 1:1:1:1 rounds.
+**Approach:**
+- For each `RUNTIME_<FAMILY>` constant, move its body to `runtime/<family>.c` (or `.h` for decls). Keep the
+  exact text (byte-identical) so emitted C is unchanged. A small manifest (the family → file + trigger-prefix
+  list) preserves `emit_runtime_modules`' conditional logic — the SAME selection, just sourced from files.
+- `include_str!` is the lightest in-Rust mechanism (compile-time embed, no runtime FS dependency, keeps the
+  binary self-contained). PREFER it for the Rust side unless the LLVM/WASM link path needs real files on disk
+  (it likely does — a `.o` is compiled from a real `.c`; so the files must exist on disk anyway, and Rust can
+  `include_str!` them for the inline path while the link path `cc`s them). Decide + document.
+- The self-host (Chain 2) reads the SAME files at emit time (from a known path, or a vendored-but-symlinked
+  copy under the self-host fixture dir — see Chain 2's "how does the self-host get the files" risk).
 
-## 3. The mechanism (reuse `self_host_bootstrap`'s proven path)
+**⚠ OUTPUT-NEUTRAL GATE (across ALL backends — the make-or-break for Chain 1):** the extraction must change
+NO emitted output:
+- C backend: `gg build --emit-c-lir` for a broad fixture set → byte-identical to pre-extraction.
+- C backend runtime: a built binary for representative fixtures (collections/string/arena/concurrency/etc.)
+  → identical behavior; the full `cargo test --test integration` sweep stays 1172/0.
+- **LLVM backend:** `GG_BACKEND=llvm` build + run for a representative set → identical behavior (the linked
+  runtime `.o` must be byte-identical). This is the easy-to-forget gate — the LLVM link path consumes the
+  same constants (`backend/mod.rs`/`main.rs`); confirm the extracted files compile to the same `.o`.
+- `cargo test --lib` green.
 
-`self_host_bootstrap` (integration.rs:13739) already compiles-and-runs self-host-emitted C:
-1. Build the self-host driver (cached): `build_gg_dir_cached("self_host_lowerer", "driver.gg")` → (driver
-   exe, driver.c). The Rust-compiled `driver.c` carries the full runtime preamble.
-2. Self-host emits a C BODY (NOT a full program): `driver FIXTURE lib --lir-c` → body C.
-3. Splice a runtime preamble + the body → full C → `cc -O0 -w -o bin full.c -lm -lpthread` → binary.
-4. Run the binary → stdout.
+**Risk:** the byte-exactness of the extraction (whitespace/ordering). Mitigate by extracting mechanically
+(script the constant→file split) + diffing the reassembled preamble against the original `RUNTIME_*`
+concatenation before changing any emission code.
 
-Oracle = Rust gg's output for the same fixture (`target/debug/gg run FIXTURE`, OR the existing `run_gg`
-expected strings, OR a generated snapshot — see §6).
+## CHAIN 2 — Self-host emits a FULL PROGRAM (the parity win + the harness enabler)
 
-## 4. ⚠ THE KEY DESIGN RISK — the runtime preamble splice (the builder MUST resolve this first)
+**Goal:** the self-host driver emits a complete, compilable `.c` (runtime preamble + body), so
+`driver F lib --emit-c | cc - && ./a.out` works with no external preamble.
 
-The self-host `--lir-c` is a body that needs a preamble. The bash diagnostic proved the splice is FRAGILE:
-- Full `driver.gg` preamble (4694 lines, most complete runtime) for ALL fixtures: 28 MATCH / 37 WRONG / 51
-  CC-FAIL over ~116.
-- Per-fixture Rust preamble (`gg build --emit-c-lir FIXTURE`, cut at the first `\ntypedef struct __gg_`,
-  leaner): 12 MATCH / 27 WRONG / **77 CC-FAIL** — the lean preamble misses runtime the self-host body calls
-  → MORE cc-fails. So a wrong/incomplete preamble FABRICATES cc-fails that are not real self-host gaps.
+**Approach (mirror Rust's `emit_runtime_modules`):**
+- Add a self-host port of `emit_runtime_modules`: scan the LIR module's call names, select the runtime
+  families used (the SAME `gorget_<family>_` trigger prefixes as the manifest from Chain 1), read those
+  shared `.c`/`.h` files, and emit their text BEFORE the body. This must reuse the Chain-1 files (NOT a
+  vendored copy of the runtime text — that would re-introduce drift, the exact thing the owner rejected).
+- `generate_c` (`lir_codegen.gg:5287`) gains a runtime-preamble prologue; `lir_codegen.gg:286`'s "skip if the
+  runtime preamble already defines it" assumption now holds because the self-host EMITS that preamble.
+- **The conditional-selection logic must MATCH Rust's exactly** (same trigger prefixes, same order, same
+  modules) so the self-host's emitted preamble == Rust's for the same program — otherwise the runtimes drift.
+  The manifest from Chain 1 is the shared selection spec both implement.
 
-**The builder must FIRST determine the reliable splice, in this order of preference:**
-1. **Does the self-host emit a FULL self-contained program?** Check for a `--emit-c` / full-program mode (vs
-   `--lir-c` body-only). If yes, compile it DIRECTLY (no splice) — cleanest, no preamble risk. (Likely NO,
-   since `self_host_bootstrap` splices — but verify; the answer determines everything.)
-2. **If body-only:** the preamble must be the SUPERSET runtime (the full `driver.gg` preamble) so no runtime
-   symbol is missing, AND the boundary must align (the self-host body's user-typedefs must follow exactly
-   what the preamble ends with). Validate by: for a fixture, does `Rust-preamble + Rust-body` compile+run
-   (it must — it's the oracle)? Then `Rust-preamble + self-host-body` isolates the self-host CODEGEN. If
-   that cc-fails, the self-host body is the only difference → a REAL gap (NOT a preamble artifact) — PROVIDED
-   the preamble is the superset. Use the FULL driver preamble (not the lean per-fixture one) to avoid
-   fabricated cc-fails.
-3. **Distinguish real CC-FAIL from artifact:** a CC-FAIL is a REAL self-host gap iff Rust's full C for the
-   SAME fixture compiles+runs (it does — oracle) AND the only swapped component is the body. With the
-   superset preamble, every CC-FAIL is real. If using a per-fixture preamble, a missing-symbol cc-fail is
-   ambiguous — DON'T use the lean preamble.
+**⚠ KEY RISK — how does the self-host get the shared runtime files?** The self-host runs as a compiled binary
+in `tests/fixtures/self_host_lowerer/`. To read the shared `runtime/*.c`, it needs a path. Options the builder
+must choose + document: (a) read from `src/backend/c/runtime/` via a relative/known path (couples the
+self-host to the repo layout — acceptable for the in-repo self-host); (b) symlink the runtime dir under the
+self-host fixture dir (like the other symlinked self-host sources); (c) pass the runtime dir as a driver arg
+the test supplies. Whatever is chosen, it must be the SAME files Chain 1 created (no copy/drift).
 
-The builder should land on a splice where `Rust-preamble + Rust-body` ≈ the oracle (sanity check: it
-compiles+runs == `gg run`), then swap in the self-host body. Document the chosen approach + WHY.
+**Gates:**
+- `driver F lib --emit-c` for representative fixtures → a complete `.c` that `cc`s + runs == `gg run F`
+  (FIRST for fixtures whose runtime families the self-host now emits — collections/string/etc., THEN the
+  previously-splice-blocked families like concurrency).
+- The emitted preamble for a program == Rust's emitted preamble for the same program (the selection matches).
+  Diff them.
+- `self_host_bootstrap` + `fixed_point` still GREEN (the self-host's OWN compilation now emits a preamble too;
+  confirm the bootstrap still reproduces — it may need updating since it currently SPLICES Rust's preamble; if
+  the self-host emits its own, the bootstrap simplifies — update it).
+- `c_emit_comparison` / `lowerer_comparison` unchanged at the BODY level (the new preamble is additive; the
+  comparison counts user fns in the body — confirm the preamble doesn't perturb the count).
 
-## 5. Categorization (the diagnostic's output)
+## CHAIN 3 — The runtime-parity validation harness (now splice-free)
 
-Per eligible fixture:
-- **MATCH** — self-host binary stdout == Rust stdout. (runtime-parity ✓)
-- **WRONG-OUTPUT** — self-host runs, stdout != Rust → REAL silent miscompile (highest-value gap class).
-- **CC-FAIL** — self-host body won't compile with the superset preamble → REAL gap (emits invalid/incomplete
-  C). [Only real if §4's superset-preamble rule holds.]
-- **SH-EMIT-FAIL / SH-TIMEOUT** — self-host crashes emitting / binary hangs → real gap (rare; c_emit shows 0
-  self-host crashes).
-- **EXCLUDED** — Rust gg rejects the fixture (error/`*_error.gg` fixtures), or it's non-deterministic
-  (random/time/network: httpserver, p2p, random, async-sleep), or stress/bench/platform (metal/gl). The
-  diagnostic auto-excludes via RUST-FAIL + a name/exclusion list. Document the exclusion list + reasons.
+**Goal:** the test the owner asked for — run every eligible fixture through the self-host, confirm runtime
+output == Rust gg.
 
-## 6. Oracle & snapshot (cost control)
+**Mechanism (trivial once Chain 2 lands):** for fixture F: `driver F lib --emit-c` → complete `.c` → `cc` →
+binary → run → stdout. Oracle = Rust gg's output (`gg run F`). Compare. NO preamble splice, NO splice risk.
 
-Running `gg run` (full Rust build) per fixture every test run is expensive. Strategy:
-- **Diagnostic** (on-demand): may run the Rust oracle live for the full, current picture.
-- **Lock-in net** (every-build): assert against a SNAPSHOT of expected outputs (Rust-gg-generated, committed
-  once). The self-host output must == snapshot. A `GG_REGEN_RUNTIME_SNAPSHOT=1` mode regenerates it (run Rust
-  oracle over the passing set). The snapshot file (e.g. `tests/fixtures/self_host_runtime_expected.txt` or a
-  dir) IS the locked passing set + expected outputs. New-passing fixtures → regenerate to add them.
-- Reuse existing `run_gg` expected strings where present (already validated) to seed the snapshot.
+**Two mechanisms (per owner steer):**
+- **Diagnostic** (`self_host_runtime_diff`, env-gated/on-demand): report MATCH / WRONG-OUTPUT / CC-FAIL /
+  EXCLUDED counts + per-fixture lists. Diagnostic-always-pass. The honest runtime-parity number.
+- **Lock-in net** (`self_host_runtime`, build-breaking): assert the PASSING SET still matches; a regression
+  FAILS the build. The set only grows.
 
-## 7. The `gg test` framework angle (secondary)
+**Categorization:**
+- MATCH — self-host binary stdout == Rust. (parity ✓)
+- WRONG-OUTPUT — runs, stdout != Rust → REAL silent miscompile (the `~` class; highest-value gap).
+- CC-FAIL — self-host's complete `.c` won't compile → REAL gap (now unambiguous: the self-host emitted the
+  whole program incl. its own preamble, so a cc-fail is genuinely the self-host's output, not a harness
+  splice artifact). [This is WHY Chain 2 comes first — it makes CC-FAIL trustworthy.]
+- EMIT-FAIL / TIMEOUT — self-host crashes emitting / hangs → real gap.
+- EXCLUDED — Rust gg rejects (error/`*_error.gg` fixtures, 79 of them); non-deterministic
+  (random/time/network: httpserver, p2p, random, async-sleep, socket); stress/bench; platform (metal/gl). The
+  diagnostic auto-excludes via RUST-FAIL + a documented exclusion list. NOTE (review #1): the concurrency
+  family (channel/shared/mutex/thread/task-group/async) is largely DETERMINISTIC and has `.expected` files —
+  INCLUDE it (Chain 2 makes it emittable); only exclude the genuinely non-deterministic ones.
 
-18 fixtures carry `Item::Test` blocks (`loader.rs:246`). For those, ADDITIONALLY run their test assertions
-via the self-host (compile + run the test-runner main). Lower priority — the stdout-comparison covers the
-~1100 print-based fixtures. Note: the self-host's test-runner-main synthesis is a known gap (FIDELITY scout's
-TEST_BLOCK class, 13 fixtures) — folding `gg test` in may require closing that first.
+**Oracle & snapshot (cost):** Running `gg run` per fixture every build is expensive. The lock-in net asserts
+against a committed SNAPSHOT of expected outputs (Rust-gg-generated, `GG_REGEN_RUNTIME_SNAPSHOT=1` to
+regenerate). NOTE (review #1): **115 `*.expected`/`*.gg.expected` files already exist in `tests/fixtures/` but
+are UNWIRED** (0 refs in `integration.rs`) — reuse them to SEED the snapshot, but do NOT assume they're
+validated by the current suite; regenerate/verify against `gg run`.
 
-## 8. Cost management
+**Compare OUTPUT, never C text** (review #1): the self-host and Rust emit non-identical C for the same program
+(e.g. self-host emits bare `sqrt`/`pow`, Rust emits `gorget_sqrt` wrappers — both link via `-lm`, both
+correct). Parity is RUNTIME OUTPUT equality, not C-text equality. Never let this be "optimized" into a C diff.
 
-~1121 fixtures × (cc ~1-2s + run) is heavy. Mitigations:
-- Parallelize via `parallel_map_fixtures` (already in integration.rs).
-- Gate the FULL diagnostic behind an env var (`GG_RUNTIME_DIFF=1`) — on-demand, not every `cargo test`.
-- The lock-in net runs ONLY the passing set (smaller, bounded) — but still parallelize + use a generous
-  timeout like `fixed_point` (`GG_*_TIMEOUT_SECS`).
-- The cached driver + a single superset-preamble extraction (once) amortize.
+**Cost:** parallelize via `parallel_map_fixtures` (`integration.rs:211`); gate the full diagnostic behind
+`GG_RUNTIME_DIFF=1`; the lock-in net runs only the passing set + a generous timeout (`GG_*_TIMEOUT_SECS`).
 
-## 9. Deliverable (what the builder produces)
+## Acceptance (per chain)
+- **Chain 1:** all backends output-neutral — C `--emit-c-lir` byte-identical, LLVM build+run identical, full
+  integration sweep 1172/0, lib green. The reassembled-from-files preamble == the original `RUNTIME_*`
+  concatenation (byte-diff = 0).
+- **Chain 2:** `driver F lib --emit-c` → standalone `.c` compiles+runs == `gg run F` for a broad set incl. the
+  previously-splice-blocked families; self-host preamble == Rust preamble per program; `fixed_point` green.
+- **Chain 3:** trustworthy runtime-parity number; lock-in net green on the passing set + PROVABLY fails on a
+  regression (revert the `~` fix — the `case "~":` in `lower.gg:4326`, landed in `1289a7d7` — `bitwise_ops`
+  must flip to WRONG-OUTPUT); the WRONG-OUTPUT/CC-FAIL backlog logged to TODO by feature family.
 
-1. `self_host_runtime_diff` — the diagnostic test (gated): MATCH/WRONG-OUTPUT/CC-FAIL counts + lists; prints
-   the runtime-parity %. The honest north-star number.
-2. `self_host_runtime` — the lock-in regression net: asserts the passing-set snapshot still matches; FAILS
-   the build on a regression. Parallelized + timeout-gated.
-3. The passing-set snapshot (committed) + a `GG_REGEN_RUNTIME_SNAPSHOT` regenerator.
-4. The chosen preamble-splice approach, documented + validated (§4).
-5. The clean runtime-parity number recorded to MEMORY/DONE; the WRONG-OUTPUT + CC-FAIL backlog logged to
-   TODO (categorized by feature family) as the parity work for future rounds.
-
-## 10. First-milestone acceptance
-
-- The diagnostic runs clean (splice resolved per §4 — `Rust-preamble + Rust-body` sanity-checks == oracle).
-- A trustworthy runtime-parity number (not the noisy bash estimate).
-- The lock-in net is green on the passing set + would FAIL if a passing fixture regresses (prove it: revert
-  the `~` fix in a scratch tree → `bitwise_ops` must turn WRONG-OUTPUT/fail).
-- The backlog is logged. Then future 1:1:1:1 FIDELITY rounds fix WRONG-OUTPUT gaps, each growing the set.
-
-## 11. Open questions for the reviewers
-
-- Is there a self-host full-program emit mode (§4.1)? If yes, the whole splice risk evaporates.
-- Is the superset-preamble (full driver.gg) genuinely sufficient for ALL fixtures' runtime needs, or do some
-  fixtures need runtime driver.gg doesn't pull in (→ those need a different preamble or are excluded)?
-- Snapshot vs live-oracle for the lock-in net — which is less brittle as fixtures evolve?
+## Open questions for the reviewers
+- Chain 1: `include_str!` (self-contained binary) vs on-disk files (the LLVM `.o` path needs real files
+  anyway) — which, and does the LLVM/WASM link path force on-disk files (then Rust inline = `include_str!` of
+  the same on-disk file)?
+- Chain 2: the self-host's access to the shared runtime files (path/symlink/arg) — least-coupled choice?
+- Chain 2: does emitting its own preamble simplify or complicate `self_host_bootstrap` (which currently
+  splices Rust's preamble)? Update it accordingly.
+- Is the conditional-selection manifest (family → trigger-prefixes) faithfully extractable from
+  `emit_runtime_modules`' current `if has(...)` chain, and complete (all ~40 modules)?
 - Exclusion list completeness (non-deterministic fixtures that would flake).
