@@ -58,7 +58,7 @@ flag, skip at the function loop ~`:1027`). READ those Rust sites for the exact r
    emission order — do NOT loop a `0..count` counter. PORT the STRUCTURE of `helpers.rs:emit_test_runner_main`,
    but a SIMPLIFIED runner suffices for the gate (the self-host doesn't model should_panic/skip/timeout/tags;
    `user_fn_count` counts FUNCTIONS not bodies). ⚠ **Emit the runner into `body_buf` AFTER the
-   `// ── Function Definitions ──` marker** (pushed at `lir_codegen.gg:5392`, flushed to `out` at `:5417`) so
+   `// ── Function Definitions ──` marker** (pushed at `lir_codegen.gg:5392`, flushed to `out` at `:5413`) so
    `user_fn_count` (`integration.rs:13611`, counts post-marker lines starting `[A-Za-z_]` ending `) {`)
    actually counts it. Use the existing `StrBuf`/`sb_push` idiom — NOT `out = out + X` in a loop. Keep the
    call order faithful for the eventual runtime-parity harness (Chain 3).
