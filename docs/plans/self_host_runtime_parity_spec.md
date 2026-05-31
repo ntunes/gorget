@@ -32,65 +32,91 @@ compiler.
 - Rust's `emit_runtime_modules` (`src/backend/c_lir/emit_types.rs:1791`) `push_str`s each CONDITIONALLY:
   `if has(|n| n.starts_with("gorget_<family>_")) { out.push_str(RUNTIME_<FAMILY>) }` — a program carries only
   the families it calls.
-- **Four consumers of the SAME runtime** (this is the key architecture fact, found 2026-05-31):
-  - **C backend** — INLINES it (`push_str` into the `.c`). (`emit_types.rs`)
-  - **LLVM backend** — LINKS it: emits LLVM IR for user code, declares runtime fns `extern`
-    (`llvm/mod.rs:1387`), bodies "live in the linked C runtime" (`:1675`, `:153`). Needs the runtime as a
-    compiled `.o`.
-  - **Future WASM backend** — planned (`llvm/mod.rs:6047`, `c_lir/mod.rs:2674`); will compile the runtime too.
-  - **Self-host** (after this spec) — INLINES it, like the C backend.
-- Other Rust consumers of `c_runtime::RUNTIME_*`: `src/backend/mod.rs`, `src/main.rs` (build orchestration —
-  these handle the LLVM compile-and-link path; the extraction must keep them working).
+- **FOUR existing Rust consumers of the SAME runtime constants** (the key architecture fact; consumer set
+  CORRECTED per review #1 — grep `c_runtime::RUNTIME` to confirm exactly these):
+  - **C backend — INLINES it** conditionally: `emit_runtime_modules` (`emit_types.rs:1791`) `push_str`s each
+    `RUNTIME_*` if `all_call_names` has a `gorget_<family>_` match. This is the path the self-host mirrors.
+  - **LLVM backend — LINKS it**: `main.rs:compile_llvm_pipeline` (`~:1088`) writes the selected `RUNTIME_*` to
+    a REAL on-disk `.c` (`__gorget_runtime_<stem>.c`, `~:1108`) and `cc`s it to `.o`. ⚠ Its selection logic
+    DIVERGES from the C backend's — it keys off `concat_source.contains("std.async")` + `lir_module.externs`
+    scans (`main.rs:~1142-1226`), NOT the call-name family prefixes. So there is NO single shared "selection"
+    today.
+  - **Hot-reload host/guest split** — `backend/mod.rs:generate_hot_reload_split` (`~:478-498`) `push_str`s an
+    UNCONDITIONAL hardcoded ~20-constant list. A real 4th consumer (review #1 caught the spec mislabeling it).
+  - **Future WASM backend** — aspirational (`llvm/mod.rs:6047`, `c_lir/mod.rs:2674` comments). NOT a current
+    consumer; must never become a load-bearing Chain-1 constraint.
+  - **Self-host** becomes the 5th consumer (Chain 2) — INLINES like the C backend, mirroring
+    `emit_runtime_modules` specifically.
+- **KEY CONSEQUENCE (review #1):** because the four existing consumers each hardcode their OWN selection, Chain
+  1 must NOT try to unify/share selection — it is a PURE TEXT MOVE (const → `include_str!`), leaving every
+  selection site byte-for-byte unchanged. Output-neutrality then holds BY CONSTRUCTION. All selection work
+  (incl. the family→trigger manifest) belongs to Chain 2.
 
-## CHAIN 1 — Extract the runtime to shared `.c`/`.h` files (the foundation)
+## CHAIN 1 — Extract the runtime to shared `.c`/`.h` files (PURE TEXT MOVE — selection UNTOUCHED)
 
-**Goal:** move the runtime out of `c_runtime.rs` Rust string constants into standalone `.c`/`.h` files (e.g.
-`src/backend/c/runtime/<family>.c` + a manifest mapping family → file + the `gorget_<family>_` trigger
-prefixes). ONE source of truth, consumable BOTH ways:
-- **Inline** (C backend, self-host): read the file's text + concatenate (today's `push_str` becomes
-  `push_str(read_file(...))` or `include_str!`).
-- **Compile-and-link** (LLVM, future WASM): compile the file(s) to `.o`, link.
+**Goal:** move the ~66 `RUNTIME_*` constant BODIES out of `c_runtime.rs` into standalone files
+(`src/backend/c/runtime/<family>.c|.h`), each constant becoming `pub const RUNTIME_<FAMILY>: &str =
+include_str!("runtime/<family>.c")`. ONE on-disk source of truth, consumable BOTH ways (inline: `push_str` of
+the same `&str`; compile-and-link: the LLVM/WASM path `cc`s the real `.c` on disk). `include_str!` is the
+proven idiom here (`c_runtime.rs:14896` already does it for `stb_image.h`/`sqlite3.c`).
 
-**Approach:**
-- For each `RUNTIME_<FAMILY>` constant, move its body to `runtime/<family>.c` (or `.h` for decls). Keep the
-  exact text (byte-identical) so emitted C is unchanged. A small manifest (the family → file + trigger-prefix
-  list) preserves `emit_runtime_modules`' conditional logic — the SAME selection, just sourced from files.
-- `include_str!` is the lightest in-Rust mechanism (compile-time embed, no runtime FS dependency, keeps the
-  binary self-contained). PREFER it for the Rust side unless the LLVM/WASM link path needs real files on disk
-  (it likely does — a `.o` is compiled from a real `.c`; so the files must exist on disk anyway, and Rust can
-  `include_str!` them for the inline path while the link path `cc`s them). Decide + document.
-- The self-host (Chain 2) reads the SAME files at emit time (from a known path, or a vendored-but-symlinked
-  copy under the self-host fixture dir — see Chain 2's "how does the self-host get the files" risk).
+**⚠ DO NOT TOUCH ANY SELECTION LOGIC IN CHAIN 1.** The four consumers each hardcode their OWN selection (C:
+`emit_runtime_modules`' `if has(...)` chain; LLVM: `main.rs`' `source.contains("std.async")`; hot-reload:
+`backend/mod.rs`' fixed list). Chain 1 changes ONLY the constant DEFINITIONS (string-literal → `include_str!`),
+NOT a single `push_str` call or selection condition. Then every consumer keeps emitting byte-identical output
+BY CONSTRUCTION — output-neutrality is automatic. (The family→trigger-prefix MANIFEST the self-host needs is a
+CHAIN 2 artifact; do NOT build it here.)
 
-**⚠ OUTPUT-NEUTRAL GATE (across ALL backends — the make-or-break for Chain 1):** the extraction must change
-NO emitted output:
-- C backend: `gg build --emit-c-lir` for a broad fixture set → byte-identical to pre-extraction.
-- C backend runtime: a built binary for representative fixtures (collections/string/arena/concurrency/etc.)
-  → identical behavior; the full `cargo test --test integration` sweep stays 1172/0.
-- **LLVM backend:** `GG_BACKEND=llvm` build + run for a representative set → identical behavior (the linked
-  runtime `.o` must be byte-identical). This is the easy-to-forget gate — the LLVM link path consumes the
-  same constants (`backend/mod.rs`/`main.rs`); confirm the extracted files compile to the same `.o`.
+**Approach (mechanical):**
+1. For each `pub const RUNTIME_<FAMILY>: &str = r#"..."#` in `c_runtime.rs`, write the body verbatim to
+   `runtime/<family>.c` (or `.h`) and replace the const RHS with `include_str!("runtime/<family>.c")`. Watch
+   for `r#"..."#`/escaping artifacts (the file gets the RAW text, no Rust escaping) and any constant built by
+   concatenation/`format!` (those stay in `.rs` or get a different treatment — inventory them first).
+2. VERIFY byte-exactness BEFORE touching emission: a unit test asserts each `RUNTIME_<FAMILY>` value is
+   byte-identical pre/post extraction (the `include_str!` content == the old literal). Zero diff required.
+
+**⚠ OUTPUT-NEUTRAL GATE — must cover ALL FOUR consumers:**
+- C inline: `gg build --emit-c-lir` over a broad fixture set → byte-identical to pre-extraction.
+- C runtime behavior: full `cargo test --test integration` sweep stays 1172/0.
+- LLVM link: `GG_BACKEND=llvm` build+run a representative set → identical behavior (the `__gorget_runtime_*.c`
+  the link path writes must be byte-identical — `main.rs:~1108`).
+- Hot-reload: exercise `generate_hot_reload_split` (`backend/mod.rs:~478`) if any test covers it; else assert
+  its emitted text is unchanged.
 - `cargo test --lib` green.
 
-**Risk:** the byte-exactness of the extraction (whitespace/ordering). Mitigate by extracting mechanically
-(script the constant→file split) + diffing the reassembled preamble against the original `RUNTIME_*`
-concatenation before changing any emission code.
+**Risk:** byte-exactness (whitespace/escaping/concatenated constants). Mitigated by the per-constant
+byte-identity unit test (step 2) — land that FIRST, then the gate is mechanical.
 
 ## CHAIN 2 — Self-host emits a FULL PROGRAM (the parity win + the harness enabler)
 
 **Goal:** the self-host driver emits a complete, compilable `.c` (runtime preamble + body), so
 `driver F lib --emit-c | cc - && ./a.out` works with no external preamble.
 
-**Approach (mirror Rust's `emit_runtime_modules`):**
-- Add a self-host port of `emit_runtime_modules`: scan the LIR module's call names, select the runtime
-  families used (the SAME `gorget_<family>_` trigger prefixes as the manifest from Chain 1), read those
-  shared `.c`/`.h` files, and emit their text BEFORE the body. This must reuse the Chain-1 files (NOT a
-  vendored copy of the runtime text — that would re-introduce drift, the exact thing the owner rejected).
+**Approach — a FAITHFUL PORT of `emit_runtime_modules` (NOT a table lookup; review #1):**
+- The self-host port must reproduce the C backend's `emit_runtime_modules` (`emit_types.rs:1791`, ~500 lines)
+  — this is the real work of Chain 2. It is NOT a flat family→prefix manifest: it has dependency chains
+  (`ensure_array!`/`ensure_map!`, MAP-depends-on-ARRAY, SET-depends-on-MAP), `module.*`-flag triggers
+  (`test_fns`/`bench_fns`/`is_test_module`, `clone_stats`, `scheduler_mode`, `hot_reload`, `spawned_fns`/
+  `thread_spawned_fns`, `trace_filename`, `target`), recursive-drop-table scans
+  (`recursive_drop_structs`/`enums`), `elem_drop_fn` struct scans, strict ORDERING constraints (e.g. scheduler
+  before task-group), and interleaved `#define`/`#pragma` emission (SQLite/STB/SDL, `emit_types.rs:2221-2292`).
+  Build the family→trigger manifest HERE by reading that function; the self-host scans its LIR module's call
+  names (its analog of `all_call_names`) + module flags, selects, reads the shared Chain-1 `.c`/`.h` files,
+  and emits their text before the body.
+- **MUST reuse the Chain-1 on-disk files** (NOT a vendored copy of the runtime text — that re-introduces the
+  drift the owner rejected). The self-host already reads files (`driver.gg:20 from std.fs import read_file`,
+  `lib/std/fs.gg:6`); pass the runtime dir like the existing `lib_dir` arg (`driver.gg:32`), or a known repo-
+  relative path. Document the choice.
 - `generate_c` (`lir_codegen.gg:5287`) gains a runtime-preamble prologue; `lir_codegen.gg:286`'s "skip if the
-  runtime preamble already defines it" assumption now holds because the self-host EMITS that preamble.
-- **The conditional-selection logic must MATCH Rust's exactly** (same trigger prefixes, same order, same
-  modules) so the self-host's emitted preamble == Rust's for the same program — otherwise the runtimes drift.
-  The manifest from Chain 1 is the shared selection spec both implement.
+  runtime preamble already defines it" (`is_runtime_defined_named`) assumption now holds because the self-host
+  EMITS that preamble. ⚠ **Dedup interaction (review #1):** the body's type-emission already skips types the
+  preamble defines via `is_runtime_defined_named`; confirm the NEW self-emitted preamble + that dedup don't
+  produce a DUPLICATE typedef (a type the preamble defines that the body re-emits, or vice-versa). This is the
+  concrete correctness risk of Chain 2.
+- **The correctness bar = the C BACKEND's preamble** (review #1 R3 — Rust has TWO preambles: the C-backend
+  `emit_runtime_modules` and the LLVM `compile_llvm_pipeline`, which DIFFER). The self-host inlines like the C
+  backend, so the gate is: **self-host preamble for program P == `emit_runtime_modules` output for P** (NOT the
+  LLVM one). Diff against the C backend specifically.
 
 **⚠ KEY RISK — how does the self-host get the shared runtime files?** The self-host runs as a compiled binary
 in `tests/fixtures/self_host_lowerer/`. To read the shared `runtime/*.c`, it needs a path. Options the builder
@@ -159,7 +185,9 @@ correct). Parity is RUNTIME OUTPUT equality, not C-text equality. Never let this
   previously-splice-blocked families; self-host preamble == Rust preamble per program; `fixed_point` green.
 - **Chain 3:** trustworthy runtime-parity number; lock-in net green on the passing set + PROVABLY fails on a
   regression (revert the `~` fix — the `case "~":` in `lower.gg:4326`, landed in `1289a7d7` — `bitwise_ops`
-  must flip to WRONG-OUTPUT); the WRONG-OUTPUT/CC-FAIL backlog logged to TODO by feature family.
+  must flip to WRONG-OUTPUT — the `~` fix CODE is the `case "~":` at `lower.gg:4326`, which landed bundled in
+  the drop_elab commit `1289a7d7` and is recorded in DONE.md under `326b124d`); the WRONG-OUTPUT/CC-FAIL
+  backlog logged to TODO by feature family.
 
 ## Open questions for the reviewers
 - Chain 1: `include_str!` (self-contained binary) vs on-disk files (the LLVM `.o` path needs real files
