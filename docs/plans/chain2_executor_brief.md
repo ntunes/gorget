@@ -59,15 +59,31 @@ via `generate_c(&lir)` at `driver.gg:156`). **Split them:**
   repurposing it is free.
 
 So in `driver.gg`, replace the single `bool emit_c` with two booleans, e.g. `bool emit_c_full` (set by
-`--emit-c`) and `bool emit_c_body` (set by `--lir-c`). The pipeline (lower→ssa→drop_elab) is identical for
-both; only the final emit differs: full = `emit_runtime_preamble(&lir, rdir) + generate_c(&lir)`,
-body = `generate_c(&lir)`. `--emit-lir`/`--emit-gir` stay as-is.
+`--emit-c`) and `bool emit_c_body` (set by `--lir-c`). ⚠ **(brief-review pass-2 R2) The driver reads
+`emit_c` at TWO sites — update BOTH:** the LIR-pipeline gate `if emit_c or emit_lir:` (`driver.gg:116`)
+must become `if emit_c_full or emit_c_body or emit_lir:` (else `--emit-c`/`--lir-c` silently fall through to
+the default GIR-text `else` at `:155`), and the final-emit branch (`driver.gg:155-161`). The pipeline
+(lower→ssa→drop_elab) is identical for both; only the final emit differs: full =
+`emit_runtime_preamble(&lir, rdir) + generate_c(&lir)`, body = `generate_c(&lir)`.
+`--emit-lir`/`--emit-gir` stay as-is.
 
 **Implementation lives in `lir_codegen.gg`:** add a top-level `String emit_runtime_preamble(LirModule &lir,
 String runtime_dir)` and a `String emit_lir_helpers(LirModule &lir)` (called at the END of
 `emit_runtime_preamble`, mirroring Rust where `emit_runtime_modules` ends by calling `emit_lir_helpers`,
 `emit_types.rs:2302`). Export both from the module; `driver.gg` already does
 `from lir_codegen import generate_c` — add `emit_runtime_preamble`.
+
+⚠ **BUILD THE STRING WITH `StrBuf`/`sb_push`, NOT `out = out + X` (brief-review pass-2 R1 — this is the
+file's hard-won OOM lesson).** `lir_codegen.gg:28-30,5379-5382` document that `out = out + emit_X(...)` in a
+loop is O(N²) and OOM-kills stage-1 (RSS 103MB→10GB). `generate_c` uses `StrBuf` everywhere (132 `sb_push`
+sites). The API (lir_codegen.gg:40-55): `struct StrBuf` with a `.s: String` field; `StrBuf sb_new()` (empty);
+`StrBuf(String)` ctor; `void sb_push(StrBuf &buf, String rhs)` appends in-place (O(1) amortized via the
+`gorget_string_append_buf` extern). **`sb_push` is ALSO immune to B1** — it mutates a `StrBuf &buf` STRUCT
+through a pointer (struct `&`-mutation works), NOT a `&String` whole-value reassignment (which miscompiles).
+So `emit_runtime_preamble` is: `StrBuf buf = sb_new()` → `sb_push(&buf, read_runtime(rdir, "x.c"))` per
+family → `sb_push(&buf, emit_lir_helpers(&lir))` at the end → `return buf.s`. (The emit-once flags
+`emitted_array`/`emitted_map` are plain function-local `bool`s — read/written in-function, never through a
+`&`-param — so they work fine.)
 
 **Order is preamble THEN body** — Rust's splice boundary `\ntypedef struct __gg_` (integration.rs:13790)
 proves the runtime preamble (incl. `emit_lir_helpers`) precedes the body's user typedefs. So
@@ -105,7 +121,8 @@ panic). So a wrong path yields a silently-incomplete preamble. Therefore:
 
 Port the selection logic from `emit_types.rs:1791-2300` IN THE SAME TOP-TO-BOTTOM ORDER. Each Rust
 `out.push_str(crate::backend::c::c_runtime::CONST)` becomes
-`out = out + read_runtime(rdir, "<file>.c")`. The const→file map (all 62 verified):
+`sb_push(&buf, read_runtime(rdir, "<file>.c"))` (NOT `out = out + ...` — see §2/§4c). The const→file map
+(all 62 verified):
 
 ```
 RUNTIME_PREAMBLE→runtime_preamble.c            RUNTIME_ARENA_ALLOC→runtime_arena_alloc.c
@@ -184,31 +201,29 @@ param (brief-review B1 PROVED it: `void append_x(String &out, bool &flag): out =
 emits the write-back under Rust gg but the self-host body NEVER stores through the pointer — the caller's
 value is unchanged).** This is a self-host codegen gap (logged to TODO); for Chain 2, sidestep it entirely.
 
-**MANDATORY pattern: inline accumulation into the function's own locals.** `emit_runtime_preamble` declares
-`String out = ""`, `bool emitted_array = false`, `bool emitted_map = false` as its OWN locals and `return out`
-at the end (the proven, working `generate_c` idiom — local mutation + return-accumulation). At each
-array-needing site, open-code:
+**MANDATORY pattern: `sb_push` into the function's `StrBuf`, with plain-`bool` emit-once flags.**
+`emit_runtime_preamble` declares `StrBuf buf = sb_new()`, `bool emitted_array = false`,
+`bool emitted_map = false` and `return buf.s` at the end (see §2 — this is `generate_c`'s actual idiom and is
+B1-immune). At each array-needing site, open-code:
 ```
 if not emitted_array:
-    out = out + read_runtime(rdir, "runtime_array.c")
+    sb_push(&buf, read_runtime(rdir, "runtime_array.c"))
     emitted_array = true
 ```
 MAP (depends ARRAY) — open-code the array check FIRST, then the map check:
 ```
 # ensure array, then map:
 if not emitted_array:
-    out = out + read_runtime(rdir, "runtime_array.c")
+    sb_push(&buf, read_runtime(rdir, "runtime_array.c"))
     emitted_array = true
 if not emitted_map:
-    out = out + read_runtime(rdir, "runtime_map.c")
+    sb_push(&buf, read_runtime(rdir, "runtime_map.c"))
     emitted_map = true
 ```
-SET depends MAP: the two blocks above, then `out = out + read_runtime(rdir, "runtime_set.c")`. Many families
-need ARRAY first (string_array, file, path, args, io, sort, socket, server_socket, process_spawn) — open-code
-the array block at each. (If the repetition bothers you, a helper may RETURN the text to append and the
-caller updates the flag — `String s = array_text_if_needed(emitted_array); if s.len()>0: out=out+s;
-emitted_array=true` — but a `&out`/`&emitted` void helper is FORBIDDEN: it miscompiles. Inline is simplest
-and proven.)
+SET depends MAP: the two blocks above, then `sb_push(&buf, read_runtime(rdir, "runtime_set.c"))`. Many
+families need ARRAY first (string_array, file, path, args, io, sort, socket, server_socket, process_spawn) —
+open-code the array block at each. ⚠ **FORBIDDEN: a `void f(String &out, bool &emitted)` helper (miscompiles,
+B1) AND `out = out + X` in any loop (OOM, R1).** `sb_push(&buf, ...)` is both safe and the file's idiom.
 
 ### 4d. The derived booleans + ordering (recon §E — preserve EXACTLY)
 - `is_test_or_bench = lir.test_fns.len() > 0 or lir.bench_fns.len() > 0 or lir.is_test_module`
@@ -239,9 +254,9 @@ and proven.)
 
 ### 4f. The special `#define`/`#pragma` blocks (recon §E — transcribe the literal lines)
 SDL (emit_types.rs:2221-2232), stb_image (2244-2261), SQLite (2278-2292) emit literal `#define`/`#pragma`
-lines around the runtime text. Transcribe those literal strings EXACTLY from the Rust source (push them as
-string literals; e.g. `out = out + "\n#define STB_IMAGE_IMPLEMENTATION\n" + ...`). These are gate-excluded
-(need libs) but port them faithfully for completeness.
+lines around the runtime text. Transcribe those literal strings EXACTLY from the Rust source via
+`sb_push(&buf, "\n#define STB_IMAGE_IMPLEMENTATION\n")` etc. (one `sb_push` per literal, NOT `out = out +`).
+These are gate-excluded (need libs) but port them faithfully for completeness.
 
 ---
 
@@ -256,7 +271,8 @@ macro, `gorget_file_create`, `__gorget_file_open_r`, etc.). VERIFIED: these are 
 Today they come from the SPLICED Rust preamble; once the self-host emits its own preamble, it MUST emit
 these or the standalone `.c` fails to link.
 
-**Port:** add `String emit_lir_helpers(LirModule &lir)` that reproduces `emit_types.rs:2308-2401` as C text.
+**Port:** add `String emit_lir_helpers(LirModule &lir)` that reproduces `emit_types.rs:2308-2401` as C text,
+built with `StrBuf`/`sb_push` (NOT `out = out + X`) and `return buf.s` — same as §2/§4c.
 - READ the Rust function. Most of it is UNCONDITIONAL `static inline` defs — emit them as string literals.
 - A few are `has(...)`-gated (e.g. `gorget_char_chr`, `gorget_utf8_codepoint_len_at`,
   `gorget_str_codepoint_at`, the `gorget_task_group_submit` macro, `gorget_file_create`/`gorget_file_open`).
@@ -323,9 +339,12 @@ to hide it (CLAUDE.md "don't redesign around compiler gaps"). The asserted set m
 1. `cargo build` clean.
 2. `cargo test --lib` green (you touched no Rust lib code, so this is a sanity check).
 3. **NEW** `self_host_full_program` passes (≥6 families, non-empty asserted set).
-4. **Existing byte-identity:** force-rebuild the driver, then `c_emit_comparison` == **849** and
-   `lowerer_comparison` == **951** (UNCHANGED — the preamble is emitted only under `--emit-c`, which these
-   tests do not use; `generate_c` is untouched).
+4. **Existing byte-identity:** ⚠ (brief-review pass-2 R3) do NOT hard-code counts — they drift and the
+   `*_comparison` tests are diagnostic-always-pass. Instead: BEFORE your change, force-rebuild the driver and
+   record the printed `c_emit_comparison` / `lowerer_comparison` matched-counts from `--nocapture` (expected
+   ~849 / ~951 at the time of writing, but READ the actual baseline). AFTER your change, force-rebuild and
+   confirm BOTH are UNCHANGED vs your recorded baseline (the preamble is emitted only under `--emit-c`, which
+   these tests don't use; `generate_c` is untouched, so they MUST be identical).
 5. `self_host_bootstrap_fixed_point` GREEN (it uses `--lir-c` body-only + splice — untouched by you; confirm
    it still reconverges).
 6. Report: the per-fixture MATCH/WRONG-OUTPUT/CC-FAIL table, the asserted set, any fixtures you had to
@@ -338,6 +357,6 @@ to hide it (CLAUDE.md "don't redesign around compiler gaps"). The asserted set m
 - Preserve the EXACT top-to-bottom emission order of `emit_runtime_modules` — a misordered dependency
   (e.g. MUTEX before ASYNC when `!needs_async`) produces a `.c` that won't compile.
 - The `writeln!(out).unwrap()` at emit_types.rs:2078 emits a blank line between the core sections and the
-  sync/async sections — reproduce it (`out = out + "\n"`).
+  sync/async sections — reproduce it (`sb_push(&buf, "\n")`).
 - Build `all_call_names` ONCE; the predicate helpers scan it each call — for ~50 families × N names this is
   fine (it's a one-shot emit), do not micro-optimize.
