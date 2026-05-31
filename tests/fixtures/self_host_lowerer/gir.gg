@@ -408,6 +408,17 @@ struct GirModule:
     # END to avoid shifting positional constructor call sites. Empty until
     # the vtable-emission pass populates it (latent in Phase 1).
     Vector[GirGlobal] globals
+    # Flat inverted variant→enum index. Mirrors Rust's precomputed
+    # `enum_variants: FxHashMap` (`src/ir/lowering/context.rs:267`, O(1)
+    # lookup `:1553`). Built FIRST-WRITE-WINS alongside `enum_registry` in
+    # the build `IEnum` arm so `enum_variant_parent(name)` becomes an O(1)
+    # dict lookup instead of an O(types) scan with a per-type `GirTypeInfo`
+    # deep-clone (the #1 array_clone site). First-write-wins == the scan's
+    # first-match (insertion-order first enum whose variant matches) — a
+    # plain last-wins `.put` would diverge IFF two enums in the unit share a
+    # bare variant name. Appended AT END to avoid shifting positional ctor
+    # call sites.
+    Dict[String, String] enum_variant_parent_idx
 
 # ── Helpers ──────────────────────────────────────────────
 

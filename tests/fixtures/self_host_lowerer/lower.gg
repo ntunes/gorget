@@ -3120,13 +3120,12 @@ String binop_method_name(String op):
 # or "" if not a variant. Used to route bare variant constructors
 # (IntCol, Red, Ok, ...) to their enclosing enum's named type.
 String enum_variant_parent(String name, GirModule &gmod):
-    Vector[String] tikeys = gmod.type_infos.keys()
-    for tname in tikeys:
-        GirTypeInfo info = gmod.type_infos.get(tname).unwrap()
-        if info.is_enum:
-            for v in info.variants:
-                if v.name == name:
-                    return tname
+    # O(1) lookup into the flat variant→enum index (built FIRST-WRITE-WINS
+    # at lower_module construction, mirroring this scan's old insertion-order
+    # first-match). Replaces an O(types) scan that deep-cloned a
+    # `GirTypeInfo` per type (the #1 array_clone site).
+    if gmod.enum_variant_parent_idx.contains(name):
+        return gmod.enum_variant_parent_idx.get(name).unwrap()
     return ""
 
 bool is_type_constructor(String name, GirModule &gmod):
@@ -9556,6 +9555,10 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     # Build type field info for LIR drop analysis.
     Dict[String, GirTypeInfo] type_infos = {}
     Dict[String, Vector[String]] enum_registry = {}
+    # Flat variant→enum index, built FIRST-WRITE-WINS in the IEnum arm below
+    # (mirrors the insertion-order first-match of the old `enum_variant_parent`
+    # scan). Threaded into GirModule so the lookup is O(1).
+    Dict[String, String] enum_variant_parent_idx = {}
     for tfi_item in m.items:
         match tfi_item:
             case IStruct(sdef):
@@ -9579,6 +9582,13 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         evfi += 1
                     variants.push(GirEnumVariantInfo(var.name, vfields))
                     variant_names_only.push(var.name.clone())
+                    # FIRST-WRITE-WINS: keep the first enum (insertion order)
+                    # whose variant matches, identical to the old
+                    # `enum_variant_parent` scan. A plain (last-wins) `.put`
+                    # would silently flip the result on a variant-name
+                    # collision across enums.
+                    if not enum_variant_parent_idx.contains(var.name):
+                        enum_variant_parent_idx.put(var.name.clone(), edef.name.clone())
                 type_infos.put(edef.name, GirTypeInfo(edef.name, no_fields, variants, true))
                 enum_registry.put(edef.name.clone(), !variant_names_only)
             else:
@@ -9694,7 +9704,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     Dict[String, GirStaticInfo] statics = {}
     Dict[String, ResourceMetadata] resource_metadata = {}
     Dict[int, int] option_ref_payload = {}
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, !const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types, !option_ref_payload, [])
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, !const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types, !option_ref_payload, [], !enum_variant_parent_idx)
 
     # Refine fn_sigs for functions with named/generic return types. The
     # pre-scan above defaulted those to `I64_TYPE` because `map_ast_type`
