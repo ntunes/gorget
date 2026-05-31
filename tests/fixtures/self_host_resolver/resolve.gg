@@ -590,6 +590,9 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
         case SAssertReturn(condition, _):
             resolve_expr(condition, &scopes, &ctx)
 
+        case SMeta():
+            pass
+
         case SMetaFor(body):
             scopes.push_scope(SkBlock())
             resolve_block(body, &scopes, &types, &ctx)

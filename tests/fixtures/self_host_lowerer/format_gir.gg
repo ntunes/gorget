@@ -189,6 +189,8 @@ String format_instruction(Instruction inst, GirModule &gmod):
             return f"        _{dst} = deref _{src}"
         case GIDerefStore(ptr, val, _):
             return f"        *_{ptr} = {format_operand(val, &gmod)}"
+        case GIFieldLoad(dst, base, field):
+            return f"        _{dst} = field_load _{base}, {field}"
         case GINop():
             return "        nop"
 
@@ -202,6 +204,8 @@ String format_terminator(Terminator term, GirModule &gmod):
             return f"        jump bb{bid}"
         case GTBranch(cond, then_bb, else_bb):
             return f"        br {format_operand(cond, &gmod)}, bb{then_bb}, bb{else_bb}"
+        case GTNone():
+            return "        <none>"
 
 # ── Function formatting ──────────────────────────────────
 

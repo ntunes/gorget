@@ -2518,7 +2518,7 @@ equip Parser:
             if self.check_tok(TOK_STRING):
                 SpannedToken snap_name_tok = self.advance()
                 snap_name = token_string_val(snap_name_tok.lex_token)
-                snap_name_span = snap_name_tok.span
+                snap_name_span = snap_name_tok.lex_start
             SpannedExpr snap_val = self.parse_expr()
             return SSnapshot(snap_name, snap_name_span, snap_val)
 
@@ -3034,6 +3034,8 @@ equip Parser:
                 case EMethodCall(receiver, method, _, _):
                     if method == "recv":
                         return SORecv(name, name_span, *receiver)
+                else:
+                    pass
             # Fallback: use the whole expression
             return SORecv(name, name_span, recv_expr)
         self.pos = saved
@@ -3044,6 +3046,8 @@ equip Parser:
                 if method == "send" and sexpr_vec_len(args) == 1:
                     SpannedExpr value = get_sexpr_at(args, 0)
                     return SOSend(*receiver, value)
+            else:
+                pass
         # Fallback: treat as recv with empty name
         return SORecv("", 0, send_expr)
 

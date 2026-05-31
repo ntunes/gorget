@@ -3238,6 +3238,8 @@ equip Parser:
                 case EMethodCall(receiver, method, _, _):
                     if method == "recv":
                         return SORecv(name, name_span, *receiver)
+                else:
+                    pass
             # Fallback: use the whole expression
             return SORecv(name, name_span, recv_expr)
         self.pos = saved
@@ -3248,6 +3250,8 @@ equip Parser:
                 if method == "send" and args.len() == 1:
                     SpannedExpr value = args.get(0).unwrap()
                     return SOSend(*receiver, value)
+            else:
+                pass
         # Fallback: treat as recv with empty name
         return SORecv("", 0, send_expr)
 
