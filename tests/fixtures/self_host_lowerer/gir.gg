@@ -126,6 +126,18 @@ enum Instruction:
     # A.1 status: DEAD CODE. No call site emits GIFieldLoad; lir_lower's
     # arm `lower_fail`s loudly so any premature emission is visible.
     GIFieldLoad(int, int, int)    # dst_local, base_local, field_index
+    # Store `value` through the pointer held in `ptr_local` — `*ptr = value`.
+    # Inverse of GIDeref. Emitted for whole-value writes to a `&`/`!` param
+    # (a `GtMutPtr(inner)`-typed local): the slot holds a `T*`, so a plain
+    # GIAssign would clobber the pointer slot instead of the pointee. Lowers
+    # to `ISlotLoad(ptr) + IStore(ptr_val, value)` — IStore's codegen
+    # (lir_codegen.gg) dispatches scalar (`*(T*)ptr = v`) / aggregate
+    # (memcpy) / ptr per the value's LIR type, so it covers BOTH non-resource
+    # and resource inner. Mirrors Rust gg's `assign` into a `Place{local,
+    # [Deref]}` (src/ir/lowering/stmts/assigns.rs:231-243). Carries inner_ty
+    # to match GIDeref's shape (unused by the IStore lowering, kept for
+    # symmetry / future sized-store needs).
+    GIDerefStore(int, Operand, int)    # ptr_local, value, inner_ty_id
 
 # ── Terminators ───────────────────────────────────────────
 

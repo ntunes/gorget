@@ -1869,6 +1869,10 @@ int liveness_inst_def(Instruction inst):
             # A.1 — typed field-load defines its dst local. Same shape as
             # GIDeref / GIAssign (dst is a fresh local id, base is read).
             return dst
+        case GIDerefStore(_, _, _):
+            # Store-through-pointer (`*ptr = value`) DEFINES no value local —
+            # it writes the pointee. Same no-def shape as GIDrop / GIMoveZero.
+            return -1
     return -1
 
 # Walk all operand reads in an Instruction, adding each into `acc`.
@@ -1920,6 +1924,12 @@ void liveness_inst_operand_uses(Instruction inst, Vector[bool] &acc):
             # id, not an Operand. Field index is a const, not a local read.
             if base_lid >= 0 and base_lid < acc.len():
                 acc.set(base_lid, true)
+        case GIDerefStore(ptr_lid, val_op, _):
+            # Store-through-pointer reads BOTH: the pointer local (raw int,
+            # like GIDeref's src) AND the value operand (like GIAssign's op).
+            if ptr_lid >= 0 and ptr_lid < acc.len():
+                acc.set(ptr_lid, true)
+            liveness_operand_uses(val_op, &acc)
 
 # Walk all operand reads in a Terminator, adding to `acc`. GTNone /
 # GTJump have no operands. GTReturn reads its operand; GTBranch reads
@@ -2300,6 +2310,13 @@ Vector[int] liveness_inst_operand_local_ids(Instruction inst):
             # A.1 — base local is the single operand-read; field index is a
             # const (not a local). Mirrors GIDeref's shape.
             out.push(base_lid)
+        case GIDerefStore(ptr_lid, val_op, _):
+            # Two operand reads in left-to-right order: the pointer local
+            # (raw int, op_idx 0) then the value (Operand, op_idx 1). The
+            # op_idx layout MUST match the wire order in `rewrite_inst_modes`
+            # (the value is wired at op_idx 1 there).
+            out.push(ptr_lid)
+            out.push(liveness_operand_local_id(val_op))
     return out
 
 # Top-level entry. Compute the full per-function liveness analysis,
@@ -2590,6 +2607,16 @@ Instruction rewrite_inst_modes(LowerCtx &ctx, GirModule &gmod, Instruction inst,
                 new_args.push(wire_one_operand(&ctx, &gmod, args.get(ai).unwrap(), b, i, ai, &liveness, &moved_lids))
                 ai += 1
             return GICallExtern(dst, name, !new_args)
+        case GIDerefStore(ptr_lid, val_op, inner_ty):
+            # Promote the VALUE operand's OpClone→OpMove at last-use, exactly
+            # like the GIAssign arm. The ptr_local is a raw int (op_idx 0, not
+            # a consuming Operand — nothing to rewrite); the value is op_idx 1,
+            # matching `liveness_inst_operand_local_ids`' push order. For SCALAR
+            # `&`-writes op_consume returns OpCopy (never promoted → no-op); for
+            # RESOURCE `&`-writes (`String &s = s + "!"`) it returns OpClone,
+            # which this promotes to OpMove at last-use so resource `&`-writes
+            # move like Rust gg instead of leaving a stray clone.
+            return GIDerefStore(ptr_lid, wire_one_operand(&ctx, &gmod, val_op, b, i, 1, &liveness, &moved_lids), inner_ty)
         else:
             # GIDeref / GIDrop / GIDropIfAlive / GIMoveZero / GINop —
             # operand-read shape is fixed (single lid / no operands).
@@ -4072,7 +4099,31 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             return gsdst
         case EIdentifier(name):
             if nl_contains(&ctx, name):
-                return nl_get(&ctx, name)
+                int eid_lid = nl_get(&ctx, name)
+                # `&`/`!`-param value READ. A `GtMutPtr(inner)`-typed slot
+                # holds a `T*`; a bare read returns the POINTER bits, so a
+                # later `x + 10` does arithmetic on the pointer instead of
+                # `*ptr`. Deref-load the pointee into a fresh value temp and
+                # return THAT — mirrors Rust gg's Deref projection into a
+                # `pointee_type` temp (src/ir/lowering/exprs/mod.rs:140-164).
+                #
+                # Gate ONLY on NON-resource inner: resource slots ARE pointer-
+                # valued by ABI and their consumers already deref, so a deref
+                # here would double-deref the working `&String` read path. This
+                # is the exact precedent shipped at lower.gg (the
+                # Option[Ref[T]] getter): resource inner → return the local
+                # unchanged; primitive inner → GIDeref into a value temp.
+                int eid_tid = ctx.locals.get(eid_lid).unwrap().type_id
+                if eid_tid >= PRIM_COUNT and eid_tid < gmod.type_table.len():
+                    match gmod.type_table.get(eid_tid).unwrap():
+                        case GtMutPtr(eid_inner):
+                            if not is_resource_type_name(type_id_to_name(eid_inner, &gmod), &gmod):
+                                int eid_value_local = add_local(&ctx, eid_inner, NO_NAME)
+                                emit(&ctx, GIDeref(eid_value_local, eid_lid, eid_inner))
+                                return eid_value_local
+                        else:
+                            pass
+                return eid_lid
             # Module-level `const int` — inline the evaluated value.
             # Without this, the self-compiled parser's KW_* / PREC_*
             # constants all become 0 and check_kw(0, 0) hangs.
@@ -4619,7 +4670,14 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # losing the actual Ok_0 value. Now emits a real field read
             # through the `__field_read_<enum>_<Variant>_0` helper, same as
             # PConstructor destructure.
-            int recv = lower_expr(&ctx, *recv_box, &gmod)
+            #
+            # Place base — a method receiver is passed as `self` BY POINTER,
+            # so a `&`/`!`-param (`GtMutPtr`) receiver must stay the pointer
+            # (else the method mutates a discarded dereffed copy, not the
+            # caller's value). `lower_place_base` bypasses Edit-1's value-read
+            # deref for a bare identifier; non-identifier receivers (chained
+            # calls etc.) fall back to `lower_expr` unchanged.
+            int recv = lower_place_base(&ctx, *recv_box, &gmod)
             if mname == "unwrap" or mname == "unwrap_or":
                 # Lower the default value first (for unwrap_or) and
                 # capture its local id — needed if we synthesize a
@@ -5042,7 +5100,12 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 emit_field_write_from_local(&ctx, wb_base, wb_field, recv, &gmod)
             return mdst
         case EFieldAccess(base_box, field_name):
-            int base = lower_expr(&ctx, *base_box, &gmod)
+            # Place base — keep a `&`/`!`-param (`GtMutPtr`) or bare-resource
+            # param (`GtPtr`) base as the POINTER (the field codegen wants
+            # `((T*)base)->field`). `lower_place_base` bypasses Edit-1's
+            # value-read deref for a bare identifier; nested bases fall back
+            # to `lower_expr`.
+            int base = lower_place_base(&ctx, *base_box, &gmod)
             # Resolve the base's struct type to find the field
             int base_tid = ctx.locals.get(base).unwrap().type_id
             String base_type_name = type_id_to_name(base_tid, &gmod)
@@ -6101,6 +6164,22 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                 case EIdentifier(name):
                     if nl_contains(&ctx, name):
                         int lid = nl_get(&ctx, name)
+                        # `&`/`!`-param whole-value WRITE detection. A
+                        # `GtMutPtr(inner)`-typed slot holds a `T*`; a plain
+                        # GIAssign would clobber the POINTER slot instead of
+                        # writing the pointee. Emit GIDerefStore (`*ptr = v`)
+                        # for ANY inner — scalar `&`-writes are the primary
+                        # bug, but resource `&`-writes (`String &s = s + "!"`)
+                        # were ALSO dropped. Mirrors Rust gg's assign into a
+                        # `Place{local,[Deref]}` (assigns.rs:231-243).
+                        int asn_inner_ty = -1
+                        int asn_lhs_full_ty = ctx.locals.get(lid).unwrap().type_id
+                        if asn_lhs_full_ty >= PRIM_COUNT and asn_lhs_full_ty < gmod.type_table.len():
+                            match gmod.type_table.get(asn_lhs_full_ty).unwrap():
+                                case GtMutPtr(asn_inner):
+                                    asn_inner_ty = asn_inner
+                                else:
+                                    pass
                         # Expected-type propagation: mirrors Rust gg's
                         # `lower_assign` at `src/ir/lowering/stmts/assigns.rs:108-117`.
                         # Setting `ctx.expected_type` to the LHS local's type
@@ -6108,14 +6187,21 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                         # bare prelude-variant ctors / bare `None` to the
                         # destination's shape, instead of typing them by
                         # the bare variant name (which collapses to an
-                        # 8-byte Ptr slot for a multi-word aggregate).
+                        # 8-byte Ptr slot for a multi-word aggregate). For a
+                        # `&`-write the destination is the POINTEE, so use the
+                        # inner type, not the `GtMutPtr` wrapper.
                         int prev_expected_asn = ctx.expected_type
-                        int lhs_ty = ctx.locals.get(lid).unwrap().type_id
+                        int lhs_ty = asn_lhs_full_ty
+                        if asn_inner_ty >= 0:
+                            lhs_ty = asn_inner_ty
                         if lhs_ty != I64_TYPE and lhs_ty != UNIT_TYPE:
                             ctx.expected_type = lhs_ty
                         int val = lower_expr(&ctx, value_expr, &gmod)
                         ctx.expected_type = prev_expected_asn
-                        emit(&ctx, GIAssign(lid, op_consume(&ctx, &gmod, val, CkAssign())))
+                        if asn_inner_ty >= 0:
+                            emit(&ctx, GIDerefStore(lid, op_consume(&ctx, &gmod, val, CkAssign()), asn_inner_ty))
+                        else:
+                            emit(&ctx, GIAssign(lid, op_consume(&ctx, &gmod, val, CkAssign())))
                 case EFieldAccess(base_box, field_name):
                     # self.field = value
                     # Lower as: __field_write_TYPE_FIELD(&base, value).
@@ -6204,13 +6290,38 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                 case EIdentifier(name):
                     if nl_contains(&ctx, name):
                         int lid = nl_get(&ctx, name)
-                        int lhs_type = ctx.locals.get(lid).unwrap().type_id
-                        int lhs_val = add_local(&ctx, lhs_type, NO_NAME)
-                        emit(&ctx, GIAssign(lhs_val, op_consume(&ctx, &gmod, lid, CkAssign())))
-                        int rhs_val = lower_expr(&ctx, value_expr, &gmod)
-                        int op_dst = add_local(&ctx, lhs_type, NO_NAME)
-                        emit(&ctx, GIBinOp(op_dst, map_compound_binop(op), lhs_type, op_consume(&ctx, &gmod, lhs_val, CkBinOpArg()), op_consume(&ctx, &gmod, rhs_val, CkBinOpArg())))
-                        emit(&ctx, GIAssign(lid, op_consume(&ctx, &gmod, op_dst, CkAssign())))
+                        int lhs_full_type = ctx.locals.get(lid).unwrap().type_id
+                        # `&`/`!`-param compound-assign (`x += 1` on `int &x`)
+                        # is broken on BOTH legs: the slot holds a `T*`, so a
+                        # bare read of `lid` consumes the POINTER bits (the
+                        # binop would do arithmetic on the pointer) AND the
+                        # GIAssign write-back clobbers the pointer slot. Detect
+                        # `GtMutPtr(inner)`: deref-load the current value before
+                        # the binop, run the binop at the INNER type, and store
+                        # the result back THROUGH the pointer via GIDerefStore.
+                        int cmp_inner_ty = -1
+                        if lhs_full_type >= PRIM_COUNT and lhs_full_type < gmod.type_table.len():
+                            match gmod.type_table.get(lhs_full_type).unwrap():
+                                case GtMutPtr(cmp_inner):
+                                    cmp_inner_ty = cmp_inner
+                                else:
+                                    pass
+                        if cmp_inner_ty >= 0:
+                            # `&`-param path: read `*lid` into a value temp.
+                            int cmp_cur = add_local(&ctx, cmp_inner_ty, NO_NAME)
+                            emit(&ctx, GIDeref(cmp_cur, lid, cmp_inner_ty))
+                            int cmp_rhs = lower_expr(&ctx, value_expr, &gmod)
+                            int cmp_dst = add_local(&ctx, cmp_inner_ty, NO_NAME)
+                            emit(&ctx, GIBinOp(cmp_dst, map_compound_binop(op), cmp_inner_ty, op_consume(&ctx, &gmod, cmp_cur, CkBinOpArg()), op_consume(&ctx, &gmod, cmp_rhs, CkBinOpArg())))
+                            emit(&ctx, GIDerefStore(lid, op_consume(&ctx, &gmod, cmp_dst, CkAssign()), cmp_inner_ty))
+                        else:
+                            int lhs_type = lhs_full_type
+                            int lhs_val = add_local(&ctx, lhs_type, NO_NAME)
+                            emit(&ctx, GIAssign(lhs_val, op_consume(&ctx, &gmod, lid, CkAssign())))
+                            int rhs_val = lower_expr(&ctx, value_expr, &gmod)
+                            int op_dst = add_local(&ctx, lhs_type, NO_NAME)
+                            emit(&ctx, GIBinOp(op_dst, map_compound_binop(op), lhs_type, op_consume(&ctx, &gmod, lhs_val, CkBinOpArg()), op_consume(&ctx, &gmod, rhs_val, CkBinOpArg())))
+                            emit(&ctx, GIAssign(lid, op_consume(&ctx, &gmod, op_dst, CkAssign())))
                 case EFieldAccess(base_box, field_name):
                     # self.field <op>= value
                     # Lower as: self.field = self.field <op> value.
@@ -6238,10 +6349,31 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
         else:
             lower_fail("unhandled in lower_stmt: " + stmt_kind(stmt))
 
+# Lower the BASE of a place projection (field access, index, method
+# receiver) to its local id WITHOUT the value-read auto-deref. A bare
+# `EIdentifier` naming a local resolves directly to its slot — for a
+# `&`/`!` param (`GtMutPtr`) or bare-resource param (`GtPtr`) that slot
+# holds the POINTER, which is exactly what the field/index/method
+# codegen needs (`((T*)base)->field`). Going through `lower_expr` here
+# would trip Edit-1's value-read deref and hand back a dereffed VALUE
+# copy, so a field write would update a discarded temp. Mirrors Rust gg,
+# where place lowering (assigns.rs) keeps the base local + a Deref
+# projection and never routes through the value-operand deref
+# (exprs/mod.rs:140). Non-identifier bases (nested field access, calls,
+# etc.) fall back to `lower_expr` unchanged.
+int lower_place_base(LowerCtx &ctx, SpannedExpr base_expr, GirModule &gmod):
+    match base_expr.expr:
+        case EIdentifier(name):
+            if nl_contains(&ctx, name):
+                return nl_get(&ctx, name)
+        else:
+            pass
+    return lower_expr(&ctx, base_expr, &gmod)
+
 # Lower `base.field = value_expr`. Emits GICallExtern for the codegen-side
 # __field_write_TYPE_FIELD helper which expands to `((T*)base)->field = value`.
 void lower_field_write(LowerCtx &ctx, SpannedExpr base_expr, String field_name, SpannedExpr value_expr, GirModule &gmod):
-    int base = lower_expr(&ctx, base_expr, &gmod)
+    int base = lower_place_base(&ctx, base_expr, &gmod)
     int base_tid = ctx.locals.get(base).unwrap().type_id
     String base_type_name = type_id_to_name(base_tid, &gmod)
     # Unwrap Ptr/MutPtr to get the inner type name.
@@ -6274,7 +6406,7 @@ void lower_field_write(LowerCtx &ctx, SpannedExpr base_expr, String field_name, 
 # Variant of lower_field_write that takes a pre-lowered local id for the
 # value rather than re-lowering an expression.
 void emit_field_write_from_local(LowerCtx &ctx, SpannedExpr base_expr, String field_name, int value_local, GirModule &gmod):
-    int base = lower_expr(&ctx, base_expr, &gmod)
+    int base = lower_place_base(&ctx, base_expr, &gmod)
     int base_tid = ctx.locals.get(base).unwrap().type_id
     String base_type_name = type_id_to_name(base_tid, &gmod)
     if base_tid >= 0 and base_tid < gmod.type_table.len():
@@ -6360,7 +6492,7 @@ void lower_if(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] then_body, Vect
 # routes to gorget_array_set; Dict / HashMap route to gorget_map_put;
 # Set has no meaningful index-assign so falls through to lower_fail.
 void lower_index_assign(LowerCtx &ctx, SpannedExpr base_expr, SpannedExpr idx_expr, SpannedExpr value_expr, GirModule &gmod):
-    int base = lower_expr(&ctx, base_expr, &gmod)
+    int base = lower_place_base(&ctx, base_expr, &gmod)
     int base_tid = ctx.locals.get(base).unwrap().type_id
     String base_tname = type_id_to_name(base_tid, &gmod)
     int idx = lower_expr(&ctx, idx_expr, &gmod)

@@ -14983,10 +14983,17 @@ fn self_host_full_program() {
     //
     // EXCLUDED (pre-existing self-host BODY miscompiles, NOT preamble bugs —
     // see TODO(chain3) below):
-    //   static_init_imported / math_constants / numeric_trait — `&global`
-    //     scalar-read bug: body emits `&__lir_gN` (pointer) where the value
-    //     load is needed, so floats print 0.000000 and `void* > double` even
-    //     fails to cc. (The MATH family IS correctly emitted by the preamble.)
+    //   static_init_imported / math_constants / numeric_trait — the `&global`
+    //     scalar-read bug is now FIXED (lir_lower.gg inserts GlobalAddr→ILoad
+    //     for value-typed statics; INFINITY/`inf` now reads correctly). These
+    //     three remain excluded because each hits a SEPARATE still-open gap:
+    //       • static_init_imported — `print(bool)` emits `1`, not `true`.
+    //       • math_constants — a runtime `division by zero` in the floor()
+    //         comparisons + the bool-print gap.
+    //       • numeric_trait / numeric_trait_ops — self-host `float` add/print
+    //         yields `0.000000` (a plain `float a=1.5; print(a+b)` repros it,
+    //         independent of generics and of `&global`).
+    //     See TODO.md "self-host float-print / bool-print / div-by-zero gaps".
     //   dict_literal / closures / bare_tuples / enumerate / struct_nested_access
     //     — other pre-existing body codegen gaps (empty/garbled output).
     //   set_operations / stdlib_iter_join / vector_sort — body calls std-lib
@@ -15009,10 +15016,12 @@ fn self_host_full_program() {
         ("fstring_basic.gg", "f-strings", &["STRING"]),
     ];
     // TODO(chain3): static_init_imported / math_constants / numeric_trait
-    //   WRONG-OUTPUT — pre-existing `&global` scalar-read body bug (floats
-    //   print 0.000000; the preamble correctly emits RUNTIME_MATH). The B2
-    //   global-init_expr scan IS verified by these fixtures' preamble (they
-    //   pull in runtime_math.c); only the body read is wrong.
+    //   — the `&global` scalar-read body bug is FIXED (GlobalAddr→ILoad in
+    //   lir_lower.gg). Remaining WRONG-OUTPUT is from OTHER still-open gaps:
+    //   self-host `print(bool)` → `1`/`0` (not `true`/`false`); self-host
+    //   `float` add/print → `0.000000`; a `division by zero` in
+    //   math_constants's floor() path. De-exclude once those land — see
+    //   TODO.md.
     // TODO(chain3): dict_literal / closures / bare_tuples — pre-existing body
     //   codegen gaps (empty / garbled output), unrelated to the preamble.
     // TODO(chain3): RUNTIME_ERROR family is gate-untested here — the self-host
@@ -16038,6 +16047,26 @@ fn static_ref_param() {
 0
 42
 100",
+    );
+}
+
+#[test]
+fn ref_param_reassign() {
+    // Whole-value read/write through a `&`/`!` (mutable-ref) param. A
+    // scalar `int &x` slot holds an `int64_t*`; the value READ must deref
+    // (`*ptr`) and the WRITE must store through the pointer (`*ptr = v`),
+    // not clobber the pointer slot. Covers scalar (`int`/`bool`), resource
+    // (`String`) reassignment, and struct field-write (regression guard).
+    // Rust gg compiles this correctly; this fixture also serves as a
+    // self-host parity datapoint (the self-host previously miscompiled the
+    // read as pointer-arithmetic and dropped the write).
+    run_gg(
+        "ref_param_reassign.gg",
+        "\
+int:15
+str:hi!
+bool:true
+struct:99",
     );
 }
 

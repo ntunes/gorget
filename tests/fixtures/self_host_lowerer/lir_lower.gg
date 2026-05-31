@@ -2997,7 +2997,23 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                     int gr_dst = lir_fn_next_value(&f)
                     lir_push_inst(&f, bb, IGlobalAddr(gr_dst, gr_gid))
                     int gr_dst_slot = local_to_slot.get(dst_local).unwrap()
-                    lir_push_inst(&f, bb, ISlotStore(gr_dst_slot, gr_dst, false))
+                    int gr_dst_slot_ty = f.slots.get(gr_dst_slot).unwrap().ty
+                    # `IGlobalAddr` yields the global's ADDRESS. For a VALUE-typed
+                    # destination (scalar like `float INFINITY` / `int`), the
+                    # reader wants the VALUE, not the address — load it first.
+                    # Mirrors Rust gg's `Constant::GlobalRef` → GlobalAddr+Load
+                    # (src/lir/lower/operands.rs:128-134). Without the load the
+                    # body emits `&__lir_gN` (a pointer) where a `double` is
+                    # expected → float prints 0.0 / `void* > double` cc-fails.
+                    # Resource statics (`stdout`/`stderr`/`stdin` — pointer-kind
+                    # slots) WANT the address, so gate on a scalar value slot.
+                    bool gr_slot_is_ptr_kind = (gr_dst_slot_ty == LT_PTR) or (gr_dst_slot_ty >= LT_PTR_TO_BASE and gr_dst_slot_ty < LT_STRUCT_BASE)
+                    if lir_is_scalar(gr_dst_slot_ty) and not gr_slot_is_ptr_kind:
+                        int gr_loaded = lir_fn_next_value(&f)
+                        lir_push_inst(&f, bb, ILoad(gr_loaded, gr_dst, gr_dst_slot_ty))
+                        lir_push_inst(&f, bb, ISlotStore(gr_dst_slot, gr_loaded, false))
+                    else:
+                        lir_push_inst(&f, bb, ISlotStore(gr_dst_slot, gr_dst, false))
                     return bb
             # Canonical Box(x): emit IBoxAlloc, same as in GICall.
             if func_name == "Box" and args.len() == 1 and dst_local >= 0:
@@ -3260,6 +3276,27 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
             lir_push_inst(&f, bb, ISlotAddr(dst_addr_val, dst_slot_d))
             lir_push_inst(&f, bb, IIConst(size_val, LT_I64, size_bytes))
             lir_push_inst(&f, bb, IMemcpy(dst_addr_val, src_ptr_val, size_val))
+
+        case GIDerefStore(ds_ptr_local, ds_value, ds_inner_ty):
+            # *ptr = value — store `value` THROUGH the pointer held in
+            # `ds_ptr_local`'s slot. Used for whole-value writes to a `&`/`!`
+            # param (a `GtMutPtr(inner)`-typed local): the slot holds a `T*`,
+            # so a GIAssign would clobber the pointer slot, not the pointee.
+            #
+            # Shape (mirrors Rust gg's `assign` into `Place{local,[Deref]}`,
+            # src/ir/lowering/stmts/assigns.rs:231-243):
+            #   1. ds_ptr_val = ISlotLoad(ptr_slot, LT_PTR)  — load the pointer.
+            #   2. ds_val     = lower_operand(value)         — produce the value.
+            #   3. IStore(ds_ptr_val, ds_val)                — `*ptr = value`.
+            # IStore's codegen (lir_codegen.gg:3138-3149) dispatches scalar
+            # (`*(T*)ptr = v`) / aggregate (memcpy) / ptr per the value's LIR
+            # type — covering BOTH non-resource and resource inner. No new LIR
+            # inst and no new C-emit arm needed: IStore already exists.
+            int ds_ptr_slot = local_to_slot.get(ds_ptr_local).unwrap()
+            int ds_ptr_val = lir_fn_next_value(&f)
+            lir_push_inst(&f, bb, ISlotLoad(ds_ptr_val, ds_ptr_slot, LT_PTR))
+            int ds_val = lower_operand(ds_value, &f, bb, &local_to_slot, &m)
+            lir_push_inst(&f, bb, IStore(ds_ptr_val, ds_val))
 
         case GINop():
             pass
