@@ -1775,17 +1775,26 @@ Vector[bool] live_bitset_empty(int nlocals):
     out.fill(nlocals, false)
     return out
 
-# Note the local-IDs an Operand reads. Only OpCopy/OpMove/OpClone carry a
-# source local for USE purposes; OpBorrow is intentionally excluded.
-# Mirrors Rust's `src/ir/liveness.rs:354` (only Copy | Move counted as
-# reads). Sound: borrow check has already validated the program upstream
-# (Rust gg compiled the AST being processed here), so any OpBorrow of a
-# local precedes the OpMove of the same local — ignoring OpBorrow for
-# move-elision can't introduce use-after-free. Without this exclusion,
-# `wire_liveness_into_modes` demotes every OpMove of a later-borrowed
-# local to OpClone, defeating move-elision (H1 fix, 2026-05-21).
-# Adds the local to `acc` (no overwrite — set semantics). Used to
-# compute USE[B] / `live_in_after_inst` updates.
+# Note the local-IDs an Operand reads (marks them live for the backward
+# dataflow). OpCopy/OpMove/OpClone AND OpBorrow all carry a source local that
+# is READ here — a borrow reads its source, so the source must be live at the
+# borrow point. Mirrors Rust's `compute_function_liveness`
+# (`src/ir/lowering/liveness.rs:154`): every `Expr::Identifier` read — whatever
+# it lowers to — marks the name live and feeds `is_last_use_at` at consuming
+# positions; corroborated by `src/ir/liveness.rs:407-408`, which counts the
+# borrow base. The `else: pass` drops only the OpConst*/OpSizeOf variants, which
+# carry no source local.
+#
+# HISTORY — do not re-exclude OpBorrow: a 2026-05-21 "H1" change excluded it
+# here to suppress what looked like spurious clones ("demotes every OpMove of a
+# later-borrowed local to OpClone, defeating move-elision"). That WAS the bug,
+# not an optimization — those demotions are correct clone-if-live. Excluding
+# OpBorrow under-counted liveness, so a consuming position (push / struct-init /
+# enum-init) followed by a later `&x` read was mis-flagged last-use → MOVE
+# instead of clone → alias/leak (Rust gg clones there). Re-including OpBorrow
+# restores parity; the differential touches only borrow-after-consume CoW sites,
+# each moving toward Rust's clone count. Used to compute USE[B] /
+# `live_in_after_inst` updates.
 void liveness_operand_uses(Operand op, Vector[bool] &acc):
     match op:
         case OpCopy(lid):
@@ -1798,13 +1807,8 @@ void liveness_operand_uses(Operand op, Vector[bool] &acc):
             if lid >= 0 and lid < acc.len():
                 acc.set(lid, true)
         case OpBorrow(lid):
-            # A borrow READS its source — the source must be live at the borrow
-            # point. Dropping this (the old `else: pass`) under-counted liveness,
-            # so a later `&x` read didn't keep `x` live, mis-flagging an earlier
-            # consuming position (push/ctor) as last-use → MOVE instead of
-            # clone-if-live. Mirrors `liveness_operand_local_id`, which already
-            # counts OpBorrow as a source read. The `else: pass` below now drops
-            # only the OpConst* variants, which carry no local (correct).
+            # Borrow reads its source — count it (see header note). Mirrors
+            # `liveness_operand_local_id`, which already counts OpBorrow.
             if lid >= 0 and lid < acc.len():
                 acc.set(lid, true)
         else:
@@ -2631,9 +2635,11 @@ void update_last_pos_for_term(Terminator term, int pos, Dict[int, int] &last_pos
             pass
 
 # Legacy linear-order helper for `liveness_instrumentation_diff` regression
-# net. Mirrors `liveness_operand_uses` — OpBorrow intentionally excluded
-# so the two passes agree at OpBorrow positions and the diff warning
-# count doesn't spuriously increase (H1 fix, 2026-05-21).
+# net. Mirrors `liveness_operand_uses` — counts OpBorrow as a source read too
+# (a borrow reads its source), so the two passes stay in agreement at OpBorrow
+# positions. (The earlier H1 exclusion here mirrored that function's wrong
+# exclusion; both now correctly count the borrow read — see the header note on
+# `liveness_operand_uses`.) The `else: pass` drops only no-local-id variants.
 void note_operand_pos(Operand op, int pos, Dict[int, int] &last_pos):
     match op:
         case OpCopy(l):
@@ -2641,6 +2647,8 @@ void note_operand_pos(Operand op, int pos, Dict[int, int] &last_pos):
         case OpMove(l):
             last_pos.put(l, pos)
         case OpClone(l):
+            last_pos.put(l, pos)
+        case OpBorrow(l):
             last_pos.put(l, pos)
         else:
             pass
