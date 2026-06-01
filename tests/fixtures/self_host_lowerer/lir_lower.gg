@@ -29,6 +29,7 @@ from lir import lir_mod_add_struct, lir_mod_add_function, new_lir_module
 from lower import get_fn_param_types
 from std.collections import Vector, Dict
 from std.conv import int_to_str
+from std.conv import float_to_bits
 from gir import ResourceMetadata
 from gir import BorrowOrigin, BoCollectionElement
 from gir import CopySemantics, CsTrivial, CsResource, CsRefCounted
@@ -2435,8 +2436,12 @@ int lower_operand(Operand op, LirFunction &f, int bb, Vector[int] &local_to_slot
             return dst
         case OpConstF64(v):
             int dst = lir_fn_next_value(&f)
-            # Store float bits as int (reinterpret)
-            lir_push_inst(&f, bb, IFConst(dst, LT_F64, v as int))
+            # Store the float's TRUE IEEE-754 bit pattern (not `v as int`, which
+            # TRUNCATES the value). C-emit memcpy's these bits back into a double
+            # (lir_codegen.gg IFConst), so the constant round-trips exactly.
+            # Mirrors Rust Constant::F64(v) → Inst::FConst{bits: v.to_bits()}
+            # (src/lir/lower/operands.rs:111).
+            lir_push_inst(&f, bb, IFConst(dst, LT_F64, float_to_bits(v)))
             return dst
         case OpConstStr(s):
             int dst = lir_fn_next_value(&f)

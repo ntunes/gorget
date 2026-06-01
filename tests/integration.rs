@@ -14984,26 +14984,27 @@ fn self_host_full_program() {
     // other five (ARRAY/MAP/SET/STRING_ARRAY/TOSTR) are conditionally selected
     // by emit_runtime_preamble's family predicates. Together: ≥6 families.
     //
-    // NOTE: the MATH / PARSE / SORT / STREXT / ERROR families could not be
-    // covered by a CLEAN fixture — every candidate hits a PRE-EXISTING
-    // self-host BODY miscompile (the `&global`/float-print bug, the `bool`
-    // printed as 0/1, GorgetArray sort-return type mismatch, etc.), NOT a
-    // preamble bug. Their selection logic IS ported + faithful; the
-    // body-side gaps block a clean runtime comparison. Logged below.
+    // NOTE: the MATH family is now covered (R6 FIDELITY — see below). The
+    // PARSE / SORT / STREXT / ERROR families still could not be covered by a
+    // CLEAN fixture — every candidate hits a PRE-EXISTING self-host BODY
+    // miscompile (GorgetArray sort-return type mismatch, etc.), NOT a preamble
+    // bug. Their selection logic IS ported + faithful; the body-side gaps block
+    // a clean runtime comparison. Logged below.
+    //
+    // R6 FIDELITY (de-excluded): static_init_imported / numeric_trait /
+    //   math_constants now MATCH end-to-end and are asserted below. The three
+    //   self-host gaps that blocked them are fixed:
+    //     • `print(bool)` → `true`/`false` (was `1`/`0`) — lower.gg routes
+    //       BOOL_TYPE through gorget_bool_to_str.
+    //     • `float` arithmetic + print → correct value (was `0.000000`) —
+    //       lower.gg binop result type follows the operand type (was hardcoded
+    //       I64); lir_lower.gg OpConstF64 carries the true IEEE-754 bits via
+    //       gorget_float_to_bits (was `v as int`, which truncated 1.5→1).
+    //     • the `division by zero` in math_constants's floor() path is gone —
+    //       float binops no longer take the integer IDiv guard.
     //
     // EXCLUDED (pre-existing self-host BODY miscompiles, NOT preamble bugs —
     // see TODO(chain3) below):
-    //   static_init_imported / math_constants / numeric_trait — the `&global`
-    //     scalar-read bug is now FIXED (lir_lower.gg inserts GlobalAddr→ILoad
-    //     for value-typed statics; INFINITY/`inf` now reads correctly). These
-    //     three remain excluded because each hits a SEPARATE still-open gap:
-    //       • static_init_imported — `print(bool)` emits `1`, not `true`.
-    //       • math_constants — a runtime `division by zero` in the floor()
-    //         comparisons + the bool-print gap.
-    //       • numeric_trait / numeric_trait_ops — self-host `float` add/print
-    //         yields `0.000000` (a plain `float a=1.5; print(a+b)` repros it,
-    //         independent of generics and of `&global`).
-    //     See TODO.md "self-host float-print / bool-print / div-by-zero gaps".
     //   dict_literal / closures / bare_tuples / enumerate / struct_nested_access
     //     — other pre-existing body codegen gaps (empty/garbled output).
     //   set_operations / stdlib_iter_join / vector_sort — body calls std-lib
@@ -15024,14 +15025,11 @@ fn self_host_full_program() {
         ("hashset_methods.gg", "Set methods", &["STRING", "ARRAY", "MAP", "SET", "STRING_ARRAY"]),
         ("set_insert_contains.gg", "Set + to_str", &["STRING", "ARRAY", "MAP", "SET", "STRING_ARRAY", "TOSTR"]),
         ("fstring_basic.gg", "f-strings", &["STRING"]),
+        // R6 FIDELITY: bool-print, float arithmetic/print, MATH constants.
+        ("static_init_imported.gg", "bool-print + float static (INFINITY/NAN)", &["STRING", "TOSTR"]),
+        ("numeric_trait.gg", "float arithmetic + f-strings + Numeric trait", &["STRING"]),
+        ("math_constants.gg", "MATH (PI/E/TAU/sin/cos/floor) + float compares", &["STRING", "TOSTR", "MATH"]),
     ];
-    // TODO(chain3): static_init_imported / math_constants / numeric_trait
-    //   — the `&global` scalar-read body bug is FIXED (GlobalAddr→ILoad in
-    //   lir_lower.gg). Remaining WRONG-OUTPUT is from OTHER still-open gaps:
-    //   self-host `print(bool)` → `1`/`0` (not `true`/`false`); self-host
-    //   `float` add/print → `0.000000`; a `division by zero` in
-    //   math_constants's floor() path. De-exclude once those land — see
-    //   TODO.md.
     // TODO(chain3): dict_literal / closures / bare_tuples — pre-existing body
     //   codegen gaps (empty / garbled output), unrelated to the preamble.
     // TODO(chain3): RUNTIME_ERROR family is gate-untested here — the self-host

@@ -1,0 +1,16 @@
+Hello Alice
+double = 20
+sum = 15
+len = 5
+foo and bar
+flag = true
+val = 2.500000
+empty=''
+zero = 0
+prefix 42 suffix
+x=3 y=7
+calc = 26
+[world]
+99
+neg = -10
+{literal braces}

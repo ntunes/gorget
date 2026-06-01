@@ -1,0 +1,6 @@
+int: 42
+float: 3.140000
+str: world
+bool: true
+expr: 50
+multi: world has 42 items

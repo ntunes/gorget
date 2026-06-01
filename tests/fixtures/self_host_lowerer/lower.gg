@@ -4347,8 +4347,14 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     int op_dst = add_local(&ctx, op_ret, NO_NAME)
                     emit(&ctx, GICallExtern(op_dst, method_full, op_args))
                     return op_dst
-            int dst = add_local(&ctx, I64_TYPE, NO_NAME)
-            emit(&ctx, GIBinOp(dst, map_binop(op), I64_TYPE, op_consume(&ctx, &gmod, lhs, CkBinOpArg()), op_consume(&ctx, &gmod, rhs, CkBinOpArg())))
+            # Result type of + - * / follows the operand type, not hardcoded
+            # I64. Mirrors Rust infer_operand_type_full + bin_op
+            # (src/ir/lowering/exprs/operators.rs:54,288). Without this, float
+            # arithmetic lowered as I64 → wrong C type, the print-format pick
+            # below, and the integer IDiv path (div-by-zero guard) for floats.
+            int op_ty = ctx.locals.get(lhs).unwrap().type_id
+            int dst = add_local(&ctx, op_ty, NO_NAME)
+            emit(&ctx, GIBinOp(dst, map_binop(op), op_ty, op_consume(&ctx, &gmod, lhs, CkBinOpArg()), op_consume(&ctx, &gmod, rhs, CkBinOpArg())))
             return dst
         case EUnaryOp(op, inner_box):
             int inner = lower_expr(&ctx, *inner_box, &gmod)
@@ -5646,10 +5652,21 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
             int val_type = I64_TYPE
             if val >= 0 and val < ctx.locals.len():
                 val_type = ctx.locals.get(val).unwrap().type_id
+            int gs_tid = lookup_or_register_named(&gmod, "GorgetString")
             String fmt = "%lld\n"
             if val_type == F64_TYPE:
                 fmt = "%f\n"
-            int gs_tid = lookup_or_register_named(&gmod, "GorgetString")
+            elif val_type == BOOL_TYPE:
+                # bool → gorget_bool_to_str → GorgetString, print as "%s\n".
+                # Mirrors Rust format_for_printf BOOL_TYPE→"%s"
+                # (src/ir/lowering/exprs/calls.rs:1915) + bool→gorget_bool_to_str
+                # (src/lir/lower/calls.rs:50-53). Without this, print(true)
+                # emits printf("%lld\n", true) → "1".
+                int bdst = add_local(&ctx, gs_tid, NO_NAME)
+                emit(&ctx, GICallExtern(bdst, "gorget_bool_to_str", [op_consume(&ctx, &gmod, val, CkFormatArg())]))
+                val = bdst
+                val_type = gs_tid
+                fmt = "%s\n"
             if val_type == gs_tid:
                 fmt = "%s\n"
             Vector[Operand] printf_args = [OpConstStr(fmt), op_consume(&ctx, &gmod, val, CkFormatArg())]

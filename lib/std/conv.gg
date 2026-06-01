@@ -30,6 +30,7 @@ extern "Gorget":
 
 extern "C":
     extern float int_to_float(int n) = "gorget_int_to_float"
+    extern int float_to_bits(float x) = "gorget_float_to_bits"
 
 # ── ParseError ───────────────────────────────────────────────
 #

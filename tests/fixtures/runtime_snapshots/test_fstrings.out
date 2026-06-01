@@ -1,0 +1,11 @@
+hello world
+x = 42
+pi = 3.140000
+flag = true
+double = 84
+sum = 50
+42 and world
+upper = WORLD
+len = 5
+empty=''
+no interpolation

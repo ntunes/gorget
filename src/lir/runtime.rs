@@ -272,6 +272,7 @@ runtime_table! {
     BoolToStr        => "gorget_bool_to_str",        sig_fresh(&[(T::Bool, A::Scalar)], T::Str, F::Allocates);
     CharChr          => "gorget_char_chr",           sig(&[(T::I64, A::Scalar)], T::Str, F::Allocates);
     CodepointToUtf8  => "gorget_codepoint_to_utf8",  sig(&[(T::I64, A::Scalar)], T::Str, F::Allocates);
+    FloatToBits      => "gorget_float_to_bits",      sig(&[(T::F64, A::Scalar)], T::I64, F::Pure);
     FloatToStr       => "gorget_float_to_str",       sig_fresh(&[(T::F64, A::Scalar)], T::Str, F::Allocates);
     IntToFloat       => "gorget_int_to_float",       sig(&[(T::I64, A::Scalar)], T::F64, F::Pure);
     IntToStr         => "gorget_int_to_str",         sig_fresh(&[(T::I64, A::Scalar)], T::Str, F::Allocates);

@@ -1,0 +1,4 @@
+int: 42
+float: 3.140000
+str: hello
+bool: true

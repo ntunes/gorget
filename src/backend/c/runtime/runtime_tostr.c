@@ -69,6 +69,16 @@ static inline Str gorget_string_debug(Str s) {
 
 static inline double gorget_int_to_float(int64_t n) { return (double)n; }
 
+// Bit-reinterpret a double as its IEEE-754 u64 payload. The self-host lowerer
+// uses this to carry a float constant's exact bits through IFConst (which
+// stores them as an int64_t and memcpy's them back at C-emit) — `(int64_t)v`
+// would TRUNCATE the value instead of preserving the bit pattern.
+static inline int64_t gorget_float_to_bits(double x) {
+    int64_t bits;
+    memcpy(&bits, &x, sizeof(bits));
+    return bits;
+}
+
 static inline Str gorget_char_to_str(char c) {
     char* out = (char*)GORGET_ALLOC(2);
     out[0] = c;
