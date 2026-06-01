@@ -1,0 +1,4 @@
+peak >= used: true
+peak > 0: true
+peak after reset: 0
+done

@@ -1,0 +1,4 @@
+bytes_used > 0: true
+pool_size: 65536
+after reset: 0
+done

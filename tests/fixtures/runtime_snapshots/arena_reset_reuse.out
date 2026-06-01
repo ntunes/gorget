@@ -1,0 +1,10 @@
+cycle 0 len: 10
+cycle 0 first: 0
+cycle 0 last: 9
+cycle 1 len: 10
+cycle 1 first: 0
+cycle 1 last: 18
+cycle 2 len: 10
+cycle 2 first: 0
+cycle 2 last: 27
+done
