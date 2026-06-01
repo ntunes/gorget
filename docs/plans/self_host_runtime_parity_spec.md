@@ -1,9 +1,11 @@
 # SPEC — Shared runtime + self-host full-program emission + runtime-parity harness
 
-**Status:** ✅ REVIEW-COMPLETE (v4) — 3 fresh review passes on the reshaped arc, ending CLEAN (#1: 2 blocking +
-3 minor folded → v3; #2: minor folded → v4; #3: clean sign-off, every claim source-verified). READY TO BUILD as
-3 staged chains, full-program-first. Each chain still gets its own executor discipline (brief from the relevant
-section + output-review + the cross-backend output-neutral gate).
+**Status:** ✅ ALL 3 CHAINS LANDED (2026-06-01). Chain 1 `765cbfc6` (shared runtime files), Chain 2 `be9fcfbd`
+(self-host full-program `--emit-c`), **Chain 3 `1c1ac9aa`+`1b918c1b` (the splice-free runtime-parity harness;
+honest parity = 172/923 = 18.6% MATCH — see DONE.md 2026-06-01).** The non-MATCH set is the runtime-parity
+gap backlog (TODO.md, grouped by family). This spec is now historical; the arc is complete.
+_(Originally: REVIEW-COMPLETE v4 — 3 fresh review passes ending CLEAN; built full-program-first, each chain with
+its own executor discipline + output-review + cross-backend output-neutral gate.)_
 **Owner decisions (2026-05-31):**
 - Runtime parity (does the self-host binary produce Rust's output?) is the PRIMARY north-star; fn-count
   `c_emit_comparison` is demoted to a SECONDARY structural diagnostic (it overstates correctness — a sample
@@ -202,8 +204,8 @@ correct). Parity is RUNTIME OUTPUT equality, not C-text equality. Never let this
 - **Chain 2:** `driver F lib --emit-c` → standalone `.c` compiles+runs == `gg run F` for a broad set incl. the
   previously-splice-blocked families; self-host preamble == Rust preamble per program; `fixed_point` green.
 - **Chain 3:** trustworthy runtime-parity number; lock-in net green on the passing set + PROVABLY fails on a
-  regression (revert the `~` fix — the `case "~":` in `lower.gg:4326`, landed in `1289a7d7` — `bitwise_ops`
-  must flip to WRONG-OUTPUT — the `~` fix CODE is the `case "~":` at `lower.gg:4326`, which landed bundled in
+  regression (revert the `~` fix — the `case "~":` in `lower.gg:4376`, landed in `1289a7d7` — `bitwise_ops`
+  must flip to WRONG-OUTPUT — the `~` fix CODE is the `case "~":` at `lower.gg:4376`, which landed bundled in
   the drop_elab commit `1289a7d7` and is recorded in DONE.md under `326b124d`); the WRONG-OUTPUT/CC-FAIL
   backlog logged to TODO by feature family.
 
