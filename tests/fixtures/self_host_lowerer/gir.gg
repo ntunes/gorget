@@ -419,6 +419,13 @@ struct GirModule:
     # bare variant name. Appended AT END to avoid shifting positional ctor
     # call sites.
     Dict[String, String] enum_variant_parent_idx
+    # `directive strip-asserts` active for this module — asserts become
+    # no-ops (the SAssert case in lower_stmt emits nothing). Mirrors Rust
+    # gg's `LoweringContext.strip_asserts` (`src/ir/lowering/context.rs:282`),
+    # populated from the `IDirective("strip-asserts", _)` module item in
+    # `lower_module` (mirrors `src/ir/lowering/mod.rs:489`). Appended AT END
+    # to avoid shifting positional ctor call sites.
+    bool strip_asserts
 
 # ── Helpers ──────────────────────────────────────────────
 

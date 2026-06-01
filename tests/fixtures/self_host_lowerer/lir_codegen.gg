@@ -1771,6 +1771,9 @@ bool runtime_arg_is_cstr(String name, int arg_idx):
             return true
         if name == "gorget_getenv" or name == "gorget_setenv":
             return true
+        # gorget_panic takes `const char*` (panic_normal.c:7); arg 0 = message.
+        if name == "gorget_panic":
+            return true
         if name == "gorget_mkdir" or name == "gorget_rmdir" or name == "gorget_remove":
             return true
         if name == "gorget_rename" or name == "gorget_copy_file":

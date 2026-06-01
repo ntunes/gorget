@@ -6515,6 +6515,37 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     Vector[Operand] with_destroy_args = []
                     with_destroy_args.push(OpCopy(with_local))
                     emit(&ctx, GICallExtern(-1, with_destroy_fn, with_destroy_args))
+        case SAssert(assert_cond, assert_msg_opt):
+            # R11: lower an assert to a conditional panic — mirrors Rust's
+            # lower_assert simple path (src/ir/lowering/stmts/mod.rs:2358-2385).
+            # Without this, SAssert hit `else: lower_fail` and was SILENTLY
+            # DROPPED (the assert + a [lower_fail] comment; the body continued).
+            #
+            # `directive strip-asserts` makes asserts no-ops — emit NOTHING
+            # (no blocks, no branch), mirroring Rust's early-return
+            # (stmts/mod.rs:2293-2296). Guarding the WHOLE body (not just the
+            # condition eval) is required: otherwise `assert false` under
+            # strip-asserts would still panic (regresses use_strip_asserts),
+            # and a stripped condition would leave assert_cv unbound.
+            if not gmod.strip_asserts:
+                int assert_cv = lower_expr(&ctx, assert_cond, &gmod)
+                int assert_pass_bb = new_block(&ctx)
+                int assert_fail_bb = new_block(&ctx)
+                set_terminator(&ctx, GTBranch(OpCopy(assert_cv), assert_pass_bb, assert_fail_bb))
+                switch_to(&ctx, assert_fail_bb)
+                String assert_msg = "assertion failed"
+                match assert_msg_opt:
+                    case Some(am):
+                        assert_msg = am
+                    case None:
+                        pass
+                emit(&ctx, GICallExtern(-1, "gorget_panic", [OpConstStr(assert_msg)]))
+                # gorget_panic is noreturn; this jump is a DEAD edge that keeps
+                # the CFG well-formed (Terminator has no GTUnreachable — Rust
+                # uses unreachable(); GTJump(pass_bb) is the faithful self-host
+                # equivalent, mirroring the merge-jump idiom at lower.gg:4285).
+                set_terminator(&ctx, GTJump(assert_pass_bb))
+                switch_to(&ctx, assert_pass_bb)
         else:
             lower_fail("unhandled in lower_stmt: " + stmt_kind(stmt))
 
@@ -9874,7 +9905,18 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     Dict[String, GirStaticInfo] statics = {}
     Dict[String, ResourceMetadata] resource_metadata = {}
     Dict[int, int] option_ref_payload = {}
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, !const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types, !option_ref_payload, [], !enum_variant_parent_idx)
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, !const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types, !option_ref_payload, [], !enum_variant_parent_idx, false)
+
+    # R11: extract the `strip-asserts` directive so the SAssert case in
+    # lower_stmt can emit a no-op instead of a conditional panic. Mirrors
+    # Rust gg's directive scan (`src/ir/lowering/mod.rs:486-489`).
+    for dir_item in m.items:
+        match dir_item:
+            case IDirective(dir_name, _):
+                if dir_name == "strip-asserts":
+                    gmod.strip_asserts = true
+            else:
+                pass
 
     # Refine fn_sigs for functions with named/generic return types. The
     # pre-scan above defaulted those to `I64_TYPE` because `map_ast_type`
