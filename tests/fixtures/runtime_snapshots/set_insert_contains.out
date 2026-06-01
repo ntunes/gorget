@@ -1,0 +1,8 @@
+size: 5
+after dup: 5
+has 3: true
+has 9: false
+after remove: 4
+words: 2
+has hello: true
+has bye: false

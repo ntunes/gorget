@@ -1,0 +1,10 @@
+len: 0
+empty: true
+contains: false
+starts: false
+ends: false
+trimmed len: 0
+parts: 1
+concat: hello
+concat2: world
+done

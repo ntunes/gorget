@@ -15226,6 +15226,705 @@ fn self_host_full_program() {
     );
 }
 
+// ===========================================================================
+// Chain 3 — splice-free runtime-parity harness
+// ===========================================================================
+//
+// Per fixture: build via the self-host (`driver F lib --emit-c` → `cc` → run),
+// compare STDOUT vs Rust `gg run` (the oracle). No preamble splice; OUTPUT is
+// compared, never C-text. Two entry points share the machinery below:
+//
+//   * `self_host_runtime_diff`  — DIAGNOSTIC, env-gated (GG_RUNTIME_DIFF=1),
+//      always-pass. Full corpus, live `gg run` oracle. Prints the honest
+//      parity number + the WRONG-OUTPUT / CC-FAIL backlog.
+//   * `self_host_runtime`       — LOCK-IN NET, default-running, build-breaking.
+//      Oracle = committed snapshots in tests/fixtures/runtime_snapshots/. For
+//      each snapshotted fixture, re-emits via the self-host and asserts the run
+//      output still matches the snapshot. Regression net for the passing set.
+//
+// The snapshot regen path lives in `self_host_runtime` under
+// GG_REGEN_RUNTIME_SNAPSHOT=1; it materializes one `<stem>.out` per fixture
+// that is a STABLE MATCH (self-host twice + oracle twice, identical).
+//
+// CLAUDE.md "don't redesign around compiler gaps": the exclusion blocklist
+// below carries ONLY non-deterministic / platform-gated fixtures (the Rust
+// output is itself unstable or host-specific). A fixture the self-host
+// MISCOMPILES is NEVER excluded — it surfaces as WRONG-OUTPUT / CC-FAIL in the
+// diagnostic and goes to the TODO backlog. Inflating parity by excluding
+// self-host failures is the forbidden anti-pattern.
+
+/// Static exclusion blocklist for the runtime-parity harness. Each entry is a
+/// `(reason, predicate)` pair; a fixture stem matching ANY predicate is
+/// excluded from the parity number (its Rust output is non-deterministic or
+/// platform-gated, so a stdout diff would be meaningless / flaky).
+///
+/// Predicates use PRECISE shapes (prefix / exact-name / explicit contains),
+/// never a loose substring on a short token — `contains("now")` would wrongly
+/// catch `leak_known_patterns` ("known") and `unknown_directive_error`
+/// ("unknown"). The stability filter (run-twice) is the final arbiter for the
+/// LOCK-IN net: a "deterministic" entry here that still varies gets no
+/// snapshot; a real deterministic fixture wrongly family-matched is reinstated
+/// by evidence. We deliberately do NOT blanket-exclude
+/// async/channel/mutex/thread/shared/spawn — the deterministic ones belong in
+/// the set; the stability filter decides per fixture.
+fn runtime_parity_excluded(stem: &str) -> Option<&'static str> {
+    // Time/date: wall-clock / now() / current-date dependent output.
+    if stem.starts_with("datetime_")
+        || stem.starts_with("time_")
+        || stem == "toml_datetime"
+    {
+        return Some("time/date (wall-clock dependent)");
+    }
+    // Randomness.
+    if stem.starts_with("random_") || stem.contains("_rand") {
+        return Some("randomness (non-deterministic)");
+    }
+    // Network / sockets — bind to ports, talk to peers, non-deterministic.
+    if stem.starts_with("httpserver_")
+        || stem.starts_with("p2p_")
+        || stem.starts_with("socket_")
+        || stem.starts_with("udp_")
+        || stem.contains("_socket_")
+        || stem.starts_with("stdlib_udp_")
+        || stem.starts_with("stdlib_io_socket_")
+        || stem == "process_spawn"
+    {
+        return Some("network/sockets (non-deterministic / platform)");
+    }
+    // Sleep / timing.
+    if stem.contains("sleep")
+        || stem.contains("timer")
+        || stem == "async_reactor_sleep"
+        || stem == "shared_sleep_loop"
+        || stem == "channel_recv_timeout"
+    {
+        return Some("sleep/timing (wall-clock dependent)");
+    }
+    // Stress / bench — PREFIX only. A loose `*_stress*` CONTAINS would
+    // over-exclude the deterministic string_stress_methods /
+    // string_fstring_stress / string_unicode_stress; the stability filter
+    // reinstates real deterministic *stress* fixtures by evidence.
+    if stem.starts_with("stress_")
+        || stem.starts_with("bench_")
+        || stem == "dict_tombstone_stress"
+        || stem == "leak_stress"
+    {
+        return Some("stress/bench (timing / non-deterministic)");
+    }
+    // Platform GPU / windowing.
+    if stem.starts_with("metal_")
+        || stem.starts_with("gl_")
+        || stem.contains("_gpu")
+        || stem.starts_with("sdl_")
+    {
+        return Some("platform (GPU/windowing — not available)");
+    }
+    None
+}
+
+/// Outcome of one fixture under the runtime-parity diagnostic.
+#[derive(Debug, Clone)]
+enum RuntimeParityOutcome {
+    Match,
+    WrongOutput { first_diff: String },
+    CcFailed { detail: String },
+    DriverFailed { detail: String },
+    Crashed { exit_code: Option<i32>, stderr_first: String },
+    /// Statically excluded (non-det / platform). Carries the reason.
+    Excluded(&'static str),
+    /// Rust `gg run` rejected the fixture with a diagnostic (clean non-zero
+    /// exit). An error-test fixture — excluded from parity.
+    RustRejected,
+    /// Rust `gg run` crashed (signal-terminated). Logged separately.
+    RustCrash,
+}
+
+/// First-differing-line summary between an oracle and a self-host stdout.
+fn first_diff_line(oracle: &str, mine: &str) -> String {
+    oracle
+        .lines()
+        .zip(mine.lines())
+        .enumerate()
+        .find(|(_, (r, s))| r != s)
+        .map(|(i, (r, s))| format!("L{i}: oracle={r:?} self={s:?}"))
+        .unwrap_or_else(|| {
+            format!(
+                "line-count: oracle={} self={}",
+                oracle.lines().count(),
+                mine.lines().count(),
+            )
+        })
+}
+
+/// `run_with_timeout` PANICS when a child overruns the deadline. Inside a
+/// `parallel_map_fixtures` worker that panic aborts the whole chunk — over the
+/// full corpus, ONE infinite-loop / stdin-blocking fixture would take out every
+/// result the worker accumulated. This wrapper catches the timeout panic and
+/// returns `None` so the caller can record a per-fixture outcome instead.
+///
+/// The default panic hook would still spew the "timed out" line to stderr; the
+/// corpus-level entry points install a silent hook for the duration (see
+/// `with_silent_panic_hook`). `AssertUnwindSafe` is sound here: the closure
+/// only spawns a subprocess and reads its output — no shared mutable state
+/// crosses the unwind boundary.
+fn run_with_timeout_catching(cmd: &mut Command, fixture: &str) -> Option<std::process::Output> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_with_timeout(cmd, fixture)
+    }))
+    .ok()
+}
+
+/// Run `f` with the default panic hook suppressed, restoring it after. Used by
+/// the corpus-level runtime-parity entry points so the expected per-fixture
+/// timeout panics (caught by `run_with_timeout_catching`) don't flood the
+/// report with backtrace noise. NOT re-entrant across threads — call it ONCE
+/// around the whole `parallel_map_fixtures` body, never per-fixture (the hook
+/// is process-global and a per-fixture swap would race across workers).
+fn with_silent_panic_hook<R>(f: impl FnOnce() -> R) -> R {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let out = f();
+    let _ = std::panic::take_hook();
+    std::panic::set_hook(prev);
+    out
+}
+
+/// Build a fixture through the self-host driver (`F lib --emit-c`) → `cc` →
+/// run, returning the trimmed stdout on success or a non-Match outcome on any
+/// failure. `tmp_root` must already exist; the caller owns its cleanup.
+fn self_host_emit_cc_run(
+    driver_exe: &Path,
+    lib_dir: &Path,
+    runtime_dir: &Path,
+    fixture: &Path,
+    tmp_root: &Path,
+    tag: &str,
+) -> Result<String, RuntimeParityOutcome> {
+    let fname = fixture.file_name().unwrap().to_string_lossy().to_string();
+    let stem = fixture.file_stem().unwrap().to_string_lossy().to_string();
+    let c_path = tmp_root.join(format!("{stem}_{tag}.c"));
+    let bin_path = tmp_root.join(format!("{stem}_{tag}"));
+
+    // Self-host: driver F lib --emit-c --runtime-dir=<abs>.
+    let emit = run_with_timeout(
+        Command::new(driver_exe)
+            .arg(fixture)
+            .arg(lib_dir)
+            .arg("--emit-c")
+            .arg(format!("--runtime-dir={}", runtime_dir.display())),
+        &fname,
+    );
+    if !emit.status.success() {
+        let stderr = String::from_utf8_lossy(&emit.stderr);
+        return Err(RuntimeParityOutcome::DriverFailed {
+            detail: stderr.lines().next().unwrap_or("(no stderr)").chars().take(200).collect(),
+        });
+    }
+    let full_c = String::from_utf8_lossy(&emit.stdout).to_string();
+    if let Err(e) = std::fs::write(&c_path, &full_c) {
+        return Err(RuntimeParityOutcome::CcFailed { detail: format!("write .c failed: {e}") });
+    }
+
+    let cc_out = Command::new("cc")
+        .arg("-O0").arg("-w")
+        .arg("-o").arg(&bin_path)
+        .arg(&c_path)
+        .arg("-lm")
+        .arg("-lpthread")
+        .output();
+    let cc_out = match cc_out {
+        Ok(o) => o,
+        Err(e) => {
+            return Err(RuntimeParityOutcome::CcFailed { detail: format!("spawn cc: {e}") });
+        }
+    };
+    if !cc_out.status.success() {
+        let stderr = String::from_utf8_lossy(&cc_out.stderr);
+        let first = stderr
+            .lines()
+            .find(|l| l.contains("error") || l.contains("undefined"))
+            .or_else(|| stderr.lines().next())
+            .unwrap_or("(no stderr)")
+            .chars().take(200).collect::<String>();
+        return Err(RuntimeParityOutcome::CcFailed { detail: first });
+    }
+
+    // `run_with_timeout` PANICS on a hung binary. Over the full corpus a single
+    // infinite-loop / stdin-blocking fixture would abort the whole parallel
+    // worker (and with it every result it accumulated). Isolate it: a timeout
+    // becomes a Crashed("timed out") outcome for THIS fixture, not a fatal
+    // abort.
+    let run = match run_with_timeout_catching(&mut Command::new(&bin_path), &fname) {
+        Some(out) => out,
+        None => {
+            return Err(RuntimeParityOutcome::Crashed {
+                exit_code: None,
+                stderr_first: format!("timed out after {}s", test_binary_timeout().as_secs()),
+            });
+        }
+    };
+    if !run.status.success() {
+        let stderr = String::from_utf8_lossy(&run.stderr);
+        return Err(RuntimeParityOutcome::Crashed {
+            exit_code: run.status.code(),
+            stderr_first: stderr.lines().next().unwrap_or("(no stderr)").chars().take(200).collect(),
+        });
+    }
+    Ok(String::from_utf8_lossy(&run.stdout).trim_end().to_string())
+}
+
+/// Full corpus of `.gg` fixtures (read_dir + ext=="gg" + sort), mirroring the
+/// corpus enumeration in `c_emit_comparison`.
+fn runtime_parity_corpus(manifest_dir: &Path) -> Vec<PathBuf> {
+    let fixtures_dir = manifest_dir.join("tests/fixtures");
+    let mut fixtures: Vec<PathBuf> = std::fs::read_dir(&fixtures_dir)
+        .expect("failed to read fixtures dir")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.extension().map_or(false, |ext| ext == "gg"))
+        .collect();
+    fixtures.sort();
+    fixtures
+}
+
+/// (A) DIAGNOSTIC — env-gated (GG_RUNTIME_DIFF=1), always-pass.
+///
+/// Full corpus, live `gg run` oracle. Discovers the MATCH set and the
+/// WRONG-OUTPUT / CC-FAIL / CRASH / DRIVER-FAIL backlog. Prints the honest
+/// parity rate MATCH / (MATCH + WRONG + CC-FAIL + CRASH + DRIVER-FAIL) over the
+/// non-excluded set. No assertion — it never fails the suite.
+///
+/// Run it with:
+///   GG_RUNTIME_DIFF=1 cargo test --test integration --release self_host_runtime_diff -- --nocapture
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_runtime_diff() {
+    if skip_under_llvm() { return; }
+    if std::env::var("GG_RUNTIME_DIFF").as_deref() != Ok("1") {
+        // Diagnostic-only: opt in via GG_RUNTIME_DIFF=1.
+        return;
+    }
+
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let gg_exe: PathBuf = gg_binary().to_path_buf();
+
+    let fixtures = runtime_parity_corpus(&manifest_dir);
+
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_runtime_diff_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+
+    let driver_exe = &driver_exe;
+    let lib_dir = &lib_dir;
+    let runtime_dir = &runtime_dir;
+    let gg_exe = &gg_exe;
+    let tmp_root = &tmp_root;
+
+    // Silence the default panic hook for the duration: hung-fixture timeouts are
+    // EXPECTED here and caught per-fixture by run_with_timeout_catching; without
+    // this the report would be buried under "timed out" backtrace lines.
+    let results: Vec<(String, RuntimeParityOutcome)> = with_silent_panic_hook(|| {
+        parallel_map_fixtures(&fixtures, |fixture| {
+            let stem = fixture.file_stem().unwrap().to_string_lossy().to_string();
+
+            // 1. Static exclusion (non-det / platform) — skip all work.
+            if let Some(reason) = runtime_parity_excluded(&stem) {
+                return (stem, RuntimeParityOutcome::Excluded(reason));
+            }
+
+            // 2. Oracle: gg run F (live). A hung fixture (infinite loop /
+            // stdin-block) is treated as a Rust crash for parity purposes
+            // (excluded) rather than aborting the worker.
+            let oracle = match run_with_timeout_catching(
+                Command::new(gg_exe).arg("run").arg(fixture),
+                &stem,
+            ) {
+                Some(o) => o,
+                None => return (stem, RuntimeParityOutcome::RustCrash),
+            };
+            if !oracle.status.success() {
+                // Clean non-zero ⇒ Rust correctly rejecting an error fixture;
+                // signal-terminated ⇒ a true Rust crash.
+                return if oracle.status.code().is_some() {
+                    (stem, RuntimeParityOutcome::RustRejected)
+                } else {
+                    (stem, RuntimeParityOutcome::RustCrash)
+                };
+            }
+            let oracle_stdout = String::from_utf8_lossy(&oracle.stdout).trim_end().to_string();
+
+            // 3-5. Self-host emit → cc → run.
+            match self_host_emit_cc_run(
+                driver_exe, lib_dir, runtime_dir, fixture, tmp_root, "diff",
+            ) {
+                Ok(self_stdout) => {
+                    if self_stdout == oracle_stdout {
+                        (stem, RuntimeParityOutcome::Match)
+                    } else {
+                        (stem, RuntimeParityOutcome::WrongOutput {
+                            first_diff: first_diff_line(&oracle_stdout, &self_stdout),
+                        })
+                    }
+                }
+                Err(outcome) => (stem, outcome),
+            }
+        })
+    });
+
+    let _ = std::fs::remove_dir_all(tmp_root);
+
+    // Tally + per-category lists.
+    let mut matched: Vec<String> = Vec::new();
+    let mut wrong: Vec<(String, String)> = Vec::new();
+    let mut cc_fail: Vec<(String, String)> = Vec::new();
+    let mut driver_fail: Vec<(String, String)> = Vec::new();
+    let mut crashed: Vec<(String, String)> = Vec::new();
+    let mut excluded: Vec<(String, &'static str)> = Vec::new();
+    let mut rust_rejected: Vec<String> = Vec::new();
+    let mut rust_crash: Vec<String> = Vec::new();
+
+    for (stem, outcome) in &results {
+        match outcome {
+            RuntimeParityOutcome::Match => matched.push(stem.clone()),
+            RuntimeParityOutcome::WrongOutput { first_diff } => {
+                wrong.push((stem.clone(), first_diff.clone()))
+            }
+            RuntimeParityOutcome::CcFailed { detail } => cc_fail.push((stem.clone(), detail.clone())),
+            RuntimeParityOutcome::DriverFailed { detail } => {
+                driver_fail.push((stem.clone(), detail.clone()))
+            }
+            RuntimeParityOutcome::Crashed { exit_code, stderr_first } => {
+                crashed.push((stem.clone(), format!("exit={exit_code:?} {stderr_first}")))
+            }
+            RuntimeParityOutcome::Excluded(reason) => excluded.push((stem.clone(), reason)),
+            RuntimeParityOutcome::RustRejected => rust_rejected.push(stem.clone()),
+            RuntimeParityOutcome::RustCrash => rust_crash.push(stem.clone()),
+        }
+    }
+
+    let non_excluded =
+        matched.len() + wrong.len() + cc_fail.len() + crashed.len() + driver_fail.len();
+    let parity_rate = if non_excluded == 0 {
+        0.0
+    } else {
+        100.0 * matched.len() as f64 / non_excluded as f64
+    };
+
+    eprintln!("\n================================");
+    eprintln!("Self-host Runtime Parity Diagnostic (splice-free)");
+    eprintln!("================================");
+    eprintln!("  total fixtures      : {}", results.len());
+    eprintln!("  MATCH               : {}", matched.len());
+    eprintln!("  WRONG-OUTPUT        : {}", wrong.len());
+    eprintln!("  CC-FAIL             : {}", cc_fail.len());
+    eprintln!("  CRASH               : {}", crashed.len());
+    eprintln!("  DRIVER-FAIL         : {}", driver_fail.len());
+    eprintln!("  --- excluded from parity ---");
+    eprintln!("  EXCLUDED (non-det)  : {}", excluded.len());
+    eprintln!("  RUST-REJECTED       : {}", rust_rejected.len());
+    eprintln!("  RUST-CRASH          : {}", rust_crash.len());
+    eprintln!(
+        "\n  PARITY = MATCH/(MATCH+WRONG+CC-FAIL+CRASH+DRIVER-FAIL) = {}/{} = {:.1}%",
+        matched.len(), non_excluded, parity_rate,
+    );
+
+    eprintln!("\n--- WRONG-OUTPUT backlog ({}) ---", wrong.len());
+    for (stem, diff) in &wrong {
+        eprintln!("  WRONG-OUTPUT  {stem} | {diff}");
+    }
+    eprintln!("\n--- CC-FAIL backlog ({}) ---", cc_fail.len());
+    for (stem, detail) in &cc_fail {
+        eprintln!("  CC-FAIL       {stem} | {detail}");
+    }
+    eprintln!("\n--- CRASH ({}) ---", crashed.len());
+    for (stem, detail) in &crashed {
+        eprintln!("  CRASH         {stem} | {detail}");
+    }
+    eprintln!("\n--- DRIVER-FAIL ({}) ---", driver_fail.len());
+    for (stem, detail) in &driver_fail {
+        eprintln!("  DRIVER-FAIL   {stem} | {detail}");
+    }
+    eprintln!("\n--- RUST-CRASH (oracle signal-terminated; excluded) ({}) ---", rust_crash.len());
+    for stem in &rust_crash {
+        eprintln!("  RUST-CRASH    {stem}");
+    }
+    eprintln!("================================\n");
+    // Diagnostic only — no assertion.
+}
+
+/// (B) LOCK-IN NET — default-running, build-breaking.
+///
+/// Oracle = committed snapshots in tests/fixtures/runtime_snapshots/<stem>.out
+/// (NOT a live `gg run`). For each snapshotted fixture, re-emit via the
+/// self-host, cc, run, and assert the trimmed stdout still equals the snapshot.
+/// Any regression fails the suite, listing every regressed fixture.
+///
+/// Snapshot regen (run after the diagnostic discovers the MATCH set):
+///   GG_REGEN_RUNTIME_SNAPSHOT=1 cargo test --test integration --release \
+///       self_host_runtime -- --nocapture --test-threads=1
+/// Regen writes `<stem>.out` for every non-excluded fixture that is a STABLE
+/// MATCH (self-host binary twice + oracle twice, identical both times — the
+/// anti-flake gate). Flaky / mismatched fixtures get no snapshot. Commit the
+/// result; the passing set = snapshot files present.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_runtime() {
+    if skip_under_llvm() { return; }
+
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let snapshot_dir = manifest_dir.join("tests/fixtures/runtime_snapshots");
+
+    let regen = std::env::var("GG_REGEN_RUNTIME_SNAPSHOT").as_deref() == Ok("1");
+
+    if regen {
+        regenerate_runtime_snapshots(&driver_exe, &lib_dir, &runtime_dir, &manifest_dir, &snapshot_dir);
+        return;
+    }
+
+    // ----- default: lock-in net against committed snapshots -----
+    let mut snapshots: Vec<(String, PathBuf)> = match std::fs::read_dir(&snapshot_dir) {
+        Ok(rd) => rd
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.is_file() && p.extension().map_or(false, |ext| ext == "out"))
+            .map(|p| (p.file_stem().unwrap().to_string_lossy().to_string(), p))
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    snapshots.sort();
+
+    // Regression-proof: the passing set must be non-empty AND contain
+    // bitwise_ops (exercises `~0`; guards the `~` fix landed in 1289a7d7).
+    assert!(
+        !snapshots.is_empty(),
+        "self_host_runtime: no snapshots in {} — run with GG_REGEN_RUNTIME_SNAPSHOT=1 to seed.",
+        snapshot_dir.display(),
+    );
+    assert!(
+        snapshots.iter().any(|(stem, _)| stem == "bitwise_ops"),
+        "self_host_runtime: regression-proof fixture `bitwise_ops` missing from the passing set.",
+    );
+
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_runtime_net_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+
+    let fixtures_dir = manifest_dir.join("tests/fixtures");
+    let fixtures: Vec<PathBuf> = snapshots
+        .iter()
+        .map(|(stem, _)| fixtures_dir.join(format!("{stem}.gg")))
+        .collect();
+    let snap_paths: std::collections::HashMap<String, PathBuf> = snapshots.into_iter().collect();
+
+    let driver_exe = &driver_exe;
+    let lib_dir = &lib_dir;
+    let runtime_dir = &runtime_dir;
+    let tmp_root = &tmp_root;
+    let snap_paths = &snap_paths;
+
+    let failures: Vec<String> = with_silent_panic_hook(|| {
+      parallel_map_fixtures(&fixtures, |fixture| {
+        let stem = fixture.file_stem().unwrap().to_string_lossy().to_string();
+        let expected = match std::fs::read_to_string(&snap_paths[&stem]) {
+            Ok(s) => s.trim_end().to_string(),
+            Err(e) => return Some(format!("{stem}: snapshot read failed: {e}")),
+        };
+        match self_host_emit_cc_run(driver_exe, lib_dir, runtime_dir, fixture, tmp_root, "net") {
+            Ok(self_stdout) => {
+                if self_stdout.trim_end() == expected {
+                    None
+                } else {
+                    Some(format!(
+                        "{stem}: WRONG-OUTPUT ({})",
+                        first_diff_line(&expected, &self_stdout),
+                    ))
+                }
+            }
+            Err(RuntimeParityOutcome::CcFailed { detail }) => Some(format!("{stem}: CC-FAIL ({detail})")),
+            Err(RuntimeParityOutcome::DriverFailed { detail }) => {
+                Some(format!("{stem}: DRIVER-FAIL ({detail})"))
+            }
+            Err(RuntimeParityOutcome::Crashed { exit_code, stderr_first }) => {
+                Some(format!("{stem}: CRASH (exit={exit_code:?} {stderr_first})"))
+            }
+            Err(other) => Some(format!("{stem}: unexpected outcome {other:?}")),
+        }
+      })
+    })
+    .into_iter()
+    .flatten()
+    .collect();
+
+    let _ = std::fs::remove_dir_all(tmp_root);
+
+    eprintln!("\n================================");
+    eprintln!("Self-host Runtime Lock-in Net");
+    eprintln!("================================");
+    eprintln!("  passing set : {}", fixtures.len());
+    eprintln!("  regressed   : {}", failures.len());
+    eprintln!("================================\n");
+
+    assert!(
+        failures.is_empty(),
+        "self_host_runtime: {} fixture(s) regressed against committed snapshots:\n  {}\n\
+         (If the change is intended, re-seed with GG_REGEN_RUNTIME_SNAPSHOT=1.)",
+        failures.len(),
+        failures.join("\n  "),
+    );
+}
+
+/// Snapshot regeneration (GG_REGEN_RUNTIME_SNAPSHOT=1). For every non-excluded
+/// fixture, runs the stability gate (self-host binary twice + oracle `gg run`
+/// twice, all identical) and — only on a STABLE MATCH — writes the trimmed Rust
+/// stdout to runtime_snapshots/<stem>.out. The double-pass gate is the
+/// anti-flake filter: a one-run match that varies across the double-pass gets
+/// NO snapshot, so the committed default net never goes flaky.
+fn regenerate_runtime_snapshots(
+    driver_exe: &Path,
+    lib_dir: &Path,
+    runtime_dir: &Path,
+    manifest_dir: &Path,
+    snapshot_dir: &Path,
+) {
+    std::fs::create_dir_all(snapshot_dir).expect("failed to create runtime_snapshots dir");
+    let gg_exe: PathBuf = gg_binary().to_path_buf();
+    let fixtures = runtime_parity_corpus(manifest_dir);
+
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_runtime_regen_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+
+    let driver_exe = driver_exe;
+    let lib_dir = lib_dir;
+    let runtime_dir = runtime_dir;
+    let gg_exe = &gg_exe;
+    let tmp_root = &tmp_root;
+
+    #[derive(Debug)]
+    enum Regen {
+        Stable(String, String),  // (stem, snapshot stdout)
+        Flaky(String, String),   // (stem, reason)
+        Skipped(String, String), // (stem, reason) — excluded / non-match / failure
+    }
+
+    let outcomes: Vec<Regen> = with_silent_panic_hook(|| {
+      parallel_map_fixtures(&fixtures, |fixture| {
+        let stem = fixture.file_stem().unwrap().to_string_lossy().to_string();
+
+        if let Some(reason) = runtime_parity_excluded(&stem) {
+            return Regen::Skipped(stem, format!("excluded: {reason}"));
+        }
+
+        // Oracle twice. A hung oracle ⇒ skip (can't snapshot a non-terminating
+        // fixture); caught per-fixture so it doesn't abort the worker.
+        let oracle1 = match run_with_timeout_catching(Command::new(gg_exe).arg("run").arg(fixture), &stem) {
+            Some(o) => o,
+            None => return Regen::Skipped(stem, "rust gg run timed out".into()),
+        };
+        if !oracle1.status.success() {
+            return Regen::Skipped(stem, "rust gg run failed (reject/crash)".into());
+        }
+        let o1 = String::from_utf8_lossy(&oracle1.stdout).trim_end().to_string();
+        let oracle2 = match run_with_timeout_catching(Command::new(gg_exe).arg("run").arg(fixture), &stem) {
+            Some(o) => o,
+            None => return Regen::Flaky(stem, "rust gg run non-deterministic (2nd run timed out)".into()),
+        };
+        if !oracle2.status.success() {
+            return Regen::Flaky(stem, "rust gg run non-deterministic (2nd run failed)".into());
+        }
+        let o2 = String::from_utf8_lossy(&oracle2.stdout).trim_end().to_string();
+        if o1 != o2 {
+            return Regen::Flaky(stem, "rust oracle output varies across runs".into());
+        }
+
+        // Self-host twice.
+        let s1 = match self_host_emit_cc_run(driver_exe, lib_dir, runtime_dir, fixture, tmp_root, "regen1") {
+            Ok(s) => s,
+            Err(o) => return Regen::Skipped(stem, format!("self-host failed: {o:?}")),
+        };
+        if s1 != o1 {
+            return Regen::Skipped(stem, "self-host output != oracle (not a match)".into());
+        }
+        let s2 = match self_host_emit_cc_run(driver_exe, lib_dir, runtime_dir, fixture, tmp_root, "regen2") {
+            Ok(s) => s,
+            Err(o) => return Regen::Flaky(stem, format!("self-host 2nd run failed: {o:?}")),
+        };
+        if s1 != s2 {
+            return Regen::Flaky(stem, "self-host output varies across runs".into());
+        }
+
+        // STABLE MATCH: self-host == oracle, both stable across two runs.
+        Regen::Stable(stem, o1)
+      })
+    });
+
+    let _ = std::fs::remove_dir_all(tmp_root);
+
+    // Wipe stale snapshots so the committed set reflects EXACTLY the current
+    // stable-match set (a fixture that regressed since the last regen must not
+    // keep a fossil snapshot).
+    if let Ok(rd) = std::fs::read_dir(snapshot_dir) {
+        for e in rd.filter_map(|e| e.ok()) {
+            let p = e.path();
+            if p.extension().map_or(false, |ext| ext == "out") {
+                let _ = std::fs::remove_file(&p);
+            }
+        }
+    }
+
+    let mut written = 0usize;
+    let mut flaky: Vec<String> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
+    for o in &outcomes {
+        match o {
+            Regen::Stable(stem, stdout) => {
+                let path = snapshot_dir.join(format!("{stem}.out"));
+                // One trailing newline; the net trims both sides anyway.
+                std::fs::write(&path, format!("{stdout}\n")).expect("write snapshot");
+                written += 1;
+            }
+            Regen::Flaky(stem, reason) => flaky.push(format!("{stem}: {reason}")),
+            Regen::Skipped(stem, reason) => skipped.push(format!("{stem}: {reason}")),
+        }
+    }
+
+    eprintln!("\n================================");
+    eprintln!("Runtime Snapshot Regeneration");
+    eprintln!("================================");
+    eprintln!("  wrote {written} stable-match snapshots to {}", snapshot_dir.display());
+    eprintln!("  skipped (excluded / non-match / self-host failure): {}", skipped.len());
+    eprintln!("  flaky (excluded from set): {}", flaky.len());
+    for f in &flaky {
+        eprintln!("    FLAKY  {f}");
+    }
+    eprintln!("================================\n");
+    assert!(written > 0, "regen produced 0 snapshots — investigate before committing.");
+}
+
 // Numeric trait integration tests
 
 #[test]

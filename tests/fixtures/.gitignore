@@ -25,6 +25,10 @@
 !security/*.gg
 !security/*.expected
 !security/*.md
+# Chain 3 runtime-parity lock-in net: committed Rust `gg run` stdout snapshots,
+# the oracle for the self_host_runtime test (regen via GG_REGEN_RUNTIME_SNAPSHOT=1).
+!runtime_snapshots/
+!runtime_snapshots/*.out
 
 # Re-ignore compiled/generated artifacts inside self-host subdirs
 self_host_*/driver

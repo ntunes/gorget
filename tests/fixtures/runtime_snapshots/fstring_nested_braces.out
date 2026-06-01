@@ -1,0 +1,7 @@
+42
+{literal braces}
+50
+len=5
+msg: hello world
+10 + 20 = 30
+flag: true

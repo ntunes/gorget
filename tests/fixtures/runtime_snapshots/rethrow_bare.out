@@ -1,0 +1,4 @@
+ok:42
+exit:1
+err:wrapped: invalid number
+done
