@@ -1,0 +1,4 @@
+used > 0: true
+block_size: 64
+total >= 256: true
+done

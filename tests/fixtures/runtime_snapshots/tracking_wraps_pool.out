@@ -1,0 +1,4 @@
+allocs > 0: true
+bytes > 0: true
+pool used > 0: true
+done

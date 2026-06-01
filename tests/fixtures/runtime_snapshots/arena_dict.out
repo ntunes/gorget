@@ -1,0 +1,4 @@
+len: 3
+alice: 30
+bytes_used > 0: true
+done

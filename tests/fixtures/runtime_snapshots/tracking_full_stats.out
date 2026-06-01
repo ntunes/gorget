@@ -1,0 +1,4 @@
+peak >= current: true
+bytes_freed > 0: true
+free_count > 0: true
+done

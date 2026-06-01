@@ -1,0 +1,4 @@
+len: 3
+alloc_count > 0: true
+bytes > 0: true
+done

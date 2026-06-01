@@ -3165,6 +3165,51 @@ bool is_type_constructor(String name, GirModule &gmod):
             return true
     return false
 
+# R9 FIDELITY — scoped-allocator constructor → runtime `gorget_<kind>_new`.
+# Mirrors Rust gg's allocator-constructor special-cases in
+# `src/ir/lowering/exprs/calls.rs:708-744`. Returns the runtime symbol for
+# the 6 stdlib allocator constructors, "" for anything else. Name-matching
+# these 6 builtin allocator types is the Rust-blessed exception (the
+# constructor name IS the contract with the runtime — there is no
+# corresponding `T(args)` user code, the allocator structs are opaque
+# handles). Kept FLAT with explicit literals (no concat) per the layering
+# discipline + R9 MINOR-1 (a nested/concat shape tripped a spurious driver
+# C error in prototyping).
+String allocator_constructor_runtime_name(String name):
+    if name == "Arena":
+        return "gorget_arena_new"
+    if name == "TrackingAllocator":
+        return "gorget_tracking_new"
+    if name == "PoolAllocator":
+        return "gorget_pool_new"
+    if name == "TlsfAllocator":
+        return "gorget_tlsf_new"
+    if name == "FixedBufferAllocator":
+        return "gorget_fba_new"
+    if name == "FallbackAllocator":
+        return "gorget_fallback_new"
+    return ""
+
+# R9 FIDELITY — allocator TYPE-name → runtime `gorget_<kind>_destroy`.
+# Mirrors Rust gg's `lower_with` destroy dispatch
+# (`src/ir/lowering/stmts/mod.rs:2835-2841`). Keys are the FULL allocator
+# type-names (mirrors Rust `type_name_for_id`). Returns "" for non-allocator
+# types. Same Rust-blessed-name-match exception as the `_new` map above.
+String allocator_type_destroy_name(String type_name):
+    if type_name == "Arena":
+        return "gorget_arena_destroy"
+    if type_name == "TrackingAllocator":
+        return "gorget_tracking_destroy"
+    if type_name == "PoolAllocator":
+        return "gorget_pool_destroy"
+    if type_name == "TlsfAllocator":
+        return "gorget_tlsf_destroy"
+    if type_name == "FixedBufferAllocator":
+        return "gorget_fba_destroy"
+    if type_name == "FallbackAllocator":
+        return "gorget_fallback_destroy"
+    return ""
+
 # Get the type name for a GIR local (e.g., "Vector__int64_t", "GorgetString").
 String local_type_name(int local_id, LowerCtx &ctx, GirModule &gmod):
     if local_id < 0 or local_id >= ctx.locals.len():
@@ -5682,6 +5727,36 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         # Lower the inner arg and pass its type through.
         SpannedExpr inner = args.get(0).unwrap()
         result = lower_expr(&ctx, inner, &gmod)
+    elif allocator_constructor_runtime_name(fname) != "":
+        # R9 FIDELITY — scoped-allocator constructor (`Arena(8192)`,
+        # `PoolAllocator(sz, n)`, `TrackingAllocator()`, …). These are NOT
+        # user-struct instantiations: the runtime returns an opaque handle
+        # pointer (`GorgetArena*` etc.), so emit a runtime `gorget_<kind>_new`
+        # CallExtern instead of routing through the user-struct constructor
+        # path (which would build `Arena{_handle=...}` and deref garbage).
+        # Mirrors Rust gg `src/ir/lowering/exprs/calls.rs:708-744`.
+        #
+        # ⚠ The dst MUST be a POINTER-to-named slot, NOT a bare named type:
+        # the runtime fn returns a `GorgetArena*`, and a bare `Arena` slot
+        # (C `struct __gg_Arena`) can't hold it (C type error). Rust
+        # pre-registers allocators as `MutPtr(Named(...))`; the self-host has
+        # no such pre-registration, so we register the Ptr explicitly here.
+        # `type_id_to_base_name` unwraps `GtPtr`→"Arena" so later method
+        # dispatch (`pool.bytes_used()`) still resolves on the type name.
+        String alloc_new_fn = allocator_constructor_runtime_name(fname)
+        Vector[Operand] alloc_args = []
+        int aci = 0
+        while aci < args.len():
+            SpannedExpr aarg = args.get(aci).unwrap()
+            int aval = lower_expr(&ctx, aarg, &gmod)
+            # Allocator constructor args are plain scalars (capacity/count);
+            # pass by value (CkCallArgBorrow yields OpCopy for a primitive).
+            alloc_args.push(op_consume(&ctx, &gmod, aval, CkCallArgBorrow()))
+            aci = aci + 1
+        int alloc_ptr_ty = register_ptr(&gmod, lookup_or_register_named(&gmod, fname))
+        int alloc_dst = add_local(&ctx, alloc_ptr_ty, NO_NAME)
+        emit(&ctx, GICallExtern(alloc_dst, alloc_new_fn, alloc_args))
+        result = alloc_dst
     else:
         # Compute mangled name for generic calls
         String call_name = fname
@@ -6366,6 +6441,72 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             # (throw / rethrow error return). Mirrors Rust's
             # `Stmt::OnError` push at `stmts/mod.rs:342`.
             ctx.on_error_blocks.push(cleanup_body)
+        case SWith(with_resource, with_name, with_body):
+            # R9 FIDELITY — `with <allocator>: as name:`-block lowering.
+            # Mirrors Rust gg's `lower_with` (`src/ir/lowering/stmts/mod.rs:
+            # 2732-2849`), single-binding. Before this, SWith hit the `else`
+            # fall-through → lower_fail → the whole body was silently DROPPED.
+            #
+            # The `with` block is linear control flow (no new basic blocks):
+            # construct the resource, push it as the active thread-local
+            # allocator, run the body inside a fresh block drop-scope, then
+            # pop the scope (dropping body locals while the allocator is still
+            # alive — avoids UAF), pop the allocator, and destroy it.
+            #
+            # SCOPED to allocator `with`-blocks whose body uses VALUE methods.
+            # Detection of the allocator-constructor shape mirrors Rust's
+            # `is_allocator_constructor` (`stmts/mod.rs:2609`) via the
+            # runtime-name map.
+            #
+            # Step 1 — lower the resource expr (routes through Root A's
+            # allocator-constructor interception → `gorget_<kind>_new`,
+            # yielding a `GtPtr(Named(kind))` local). Bind the with-name.
+            String with_alloc_kind = ""
+            match with_resource.expr:
+                case ECall(with_callee_box, _, _):
+                    SpannedExpr with_callee = *with_callee_box
+                    match with_callee.expr:
+                        case EIdentifier(with_ctor_name):
+                            if allocator_constructor_runtime_name(with_ctor_name) != "":
+                                with_alloc_kind = with_ctor_name
+                        else:
+                            pass
+                else:
+                    pass
+            int with_val = lower_expr(&ctx, with_resource, &gmod)
+            int with_ty = ctx.locals.get(with_val).unwrap().type_id
+            int with_local = add_local(&ctx, with_ty, Some(with_name))
+            # ⚠ MUST nl_put to bind the identifier: add_local only appends to
+            # ctx.locals, it does NOT bind the name. Body refs (`pool.…`)
+            # resolve via nl_get; SVarDecl binds the same way. Without this
+            # the body method calls resolve to `…__bytes_used(0)`.
+            emit(&ctx, GIAssign(with_local, op_consume(&ctx, &gmod, with_val, CkAssign())))
+            nl_put(&ctx, with_name, with_local)
+            # Allocator local is `GtPtr(Named(kind))` — is_droppable_type
+            # returns false for Ptr slots, so register_local_for_drop skips
+            # it (no double-free; the manual destroy below is sole cleanup).
+            register_local_for_drop(&ctx, with_local, with_ty, &gmod)
+            # Step 2 — push as the active thread-local allocator.
+            if with_alloc_kind != "":
+                Vector[Operand] with_push_args = []
+                with_push_args.push(OpCopy(with_local))
+                emit(&ctx, GICallExtern(-1, "__gorget_push_allocator", with_push_args))
+            # Step 3 — lower the body inside a fresh block drop-scope so locals
+            # declared in the body are cleaned up at block exit (canonical
+            # block pattern, mirrors lower_if's then-branch).
+            push_drop_scope(&ctx.drop_elab, DSK_BLOCK)
+            lower_stmts(&ctx, with_body, &gmod, is_main)
+            # Step 4 — body locals drop FIRST (while the allocator is alive),
+            # then pop + destroy the allocator (mirrors lower_with:2826-2847).
+            pop_drop_scope(&ctx)
+            # Step 5 — pop the active allocator + destroy the handle.
+            if with_alloc_kind != "":
+                emit(&ctx, GICallExtern(-1, "__gorget_pop_allocator", []))
+                String with_destroy_fn = allocator_type_destroy_name(with_alloc_kind)
+                if with_destroy_fn != "":
+                    Vector[Operand] with_destroy_args = []
+                    with_destroy_args.push(OpCopy(with_local))
+                    emit(&ctx, GICallExtern(-1, with_destroy_fn, with_destroy_args))
         else:
             lower_fail("unhandled in lower_stmt: " + stmt_kind(stmt))
 

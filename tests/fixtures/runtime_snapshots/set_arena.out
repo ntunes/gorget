@@ -1,0 +1,4 @@
+len: 3
+has 20: true
+bytes_used > 0: true
+done

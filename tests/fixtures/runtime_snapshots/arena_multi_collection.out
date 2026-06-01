@@ -1,0 +1,6 @@
+nums: 3
+names: 2
+scores: 2
+alice: 100
+bytes_used > 0: true
+done

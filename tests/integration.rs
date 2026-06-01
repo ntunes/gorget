@@ -15039,6 +15039,15 @@ fn self_host_full_program() {
         // is_ok/is_error + the 8 char predicates to BOOL_TYPE, so both formatters
         // emit `gorget_bool_to_str` → `true`/`false` (mirrors Rust methods.rs:1129).
         ("bounds_check.gg", "Option is_some/is_none predicates in f-strings", &["STRING", "ARRAY"]),
+        // R9 FIDELITY: `with <allocator>:`-block lowering. SWith was unhandled
+        // in the self-host's lower_stmt → the whole block body was silently
+        // DROPPED (printed only `done`). lower.gg now lowers SWith (mirror Rust
+        // lower_with stmts/mod.rs:2732) — construct via `gorget_arena_new`
+        // (POINTER-typed dst), push as the active allocator, run the body in a
+        // block drop-scope, then pop + `gorget_arena_destroy`. Value-method-only
+        // body (`pool.bytes_used()`); the void-extern-method allocator fixtures
+        // (`pool.reset()`) await R10 (loader fn_sigs void-stub return types).
+        ("set_arena.gg", "with-allocator block (Arena + Set + bytes_used)", &["STRING", "ARRAY", "MAP", "SET", "ALLOC"]),
     ];
     // TODO(chain3): dict_literal / closures / bare_tuples — pre-existing body
     //   codegen gaps (empty / garbled output), unrelated to the preamble.
