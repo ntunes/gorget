@@ -5263,13 +5263,23 @@ String emit_mono_typedefs(LirModule &m):
         if m.type_runtime_map.contains(sdef.name):
             if not seen.contains(sdef.name):
                 seen.put(sdef.name.clone(), true)
-                String runtime_ty = mono_wrapper_runtime_type(sdef.name, &m)
-                if runtime_ty != "":
-                    sb_push(&buf, "typedef ")
-                    sb_push(&buf, runtime_ty)
-                    sb_push(&buf, " ")
+                # Task__* types are self-contained inline anon structs — mirror
+                # Rust c_lir/mod.rs:474 (the synthesized TaskHandle LIR struct is
+                # NOT a runtime header type, so it has no standalone C decl; an
+                # alias `typedef TaskHandle Task__T;` would dangle → cc-fail). Gate
+                # on the typed runtime category, NOT a `Task__` name substring.
+                if m.type_runtime_map.get(sdef.name).unwrap_or("") == "Task":
+                    sb_push(&buf, "typedef struct { void* __task; void (*__drop)(void*); } ")
                     sb_push(&buf, sdef.name)
                     sb_push(&buf, ";\n")
+                else:
+                    String runtime_ty = mono_wrapper_runtime_type(sdef.name, &m)
+                    if runtime_ty != "":
+                        sb_push(&buf, "typedef ")
+                        sb_push(&buf, runtime_ty)
+                        sb_push(&buf, " ")
+                        sb_push(&buf, sdef.name)
+                        sb_push(&buf, ";\n")
         si += 1
     if buf.s.byte_len() > 0:
         sb_push(&buf, "\n")

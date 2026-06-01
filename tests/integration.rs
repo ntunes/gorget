@@ -15029,6 +15029,10 @@ fn self_host_full_program() {
         ("static_init_imported.gg", "bool-print + float static (INFINITY/NAN)", &["STRING", "TOSTR"]),
         ("numeric_trait.gg", "float arithmetic + f-strings + Numeric trait", &["STRING"]),
         ("math_constants.gg", "MATH (PI/E/TAU/sin/cos/floor) + float compares", &["STRING", "TOSTR", "MATH"]),
+        // R7 FIDELITY: Task/async — `spawn` + RAII drop-join. Was the #1 CC-FAIL
+        // (`Task__T` aliased to undeclared `TaskHandle`); now emits the inline
+        // anon struct mirroring Rust c_lir/mod.rs:474, so it cc's and runs `ok`.
+        ("spawn_drop_void.gg", "Task spawn + RAII drop-join", &["STRING", "TASK"]),
     ];
     // TODO(chain3): dict_literal / closures / bare_tuples — pre-existing body
     //   codegen gaps (empty / garbled output), unrelated to the preamble.
