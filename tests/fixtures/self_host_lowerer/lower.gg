@@ -3518,6 +3518,10 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
         return BOOL_TYPE
     if method == "starts_with" or method == "ends_with":
         return BOOL_TYPE
+    if method == "is_some" or method == "is_none" or method == "is_ok" or method == "is_error":
+        return BOOL_TYPE
+    if method == "is_alpha" or method == "is_digit" or method == "is_alphanumeric" or method == "is_whitespace" or method == "is_upper" or method == "is_lower" or method == "is_ascii" or method == "is_hex_digit":
+        return BOOL_TYPE
     # String-returning methods
     if method == "slice" or method == "byte_slice" or method == "substring" or method == "char_at" or method == "trim" or method == "upper" or method == "lower":
         return lookup_or_register_named(&gmod, "GorgetString")

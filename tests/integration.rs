@@ -15033,6 +15033,12 @@ fn self_host_full_program() {
         // (`Task__T` aliased to undeclared `TaskHandle`); now emits the inline
         // anon struct mirroring Rust c_lir/mod.rs:474, so it cc's and runs `ok`.
         ("spawn_drop_void.gg", "Task spawn + RAII drop-join", &["STRING", "TASK"]),
+        // R8 FIDELITY: bool-predicate return-type inference. `r.is_some()` /
+        // `oob.is_none()` in an f-string previously inferred I64 → printed
+        // `1`/`0`; lower.gg's infer_method_return_type now maps is_some/is_none/
+        // is_ok/is_error + the 8 char predicates to BOOL_TYPE, so both formatters
+        // emit `gorget_bool_to_str` → `true`/`false` (mirrors Rust methods.rs:1129).
+        ("bounds_check.gg", "Option is_some/is_none predicates in f-strings", &["STRING", "ARRAY"]),
     ];
     // TODO(chain3): dict_literal / closures / bare_tuples — pre-existing body
     //   codegen gaps (empty / garbled output), unrelated to the preamble.
