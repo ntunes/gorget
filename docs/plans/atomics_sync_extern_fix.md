@@ -32,7 +32,7 @@ of truth; reproduce ALL sync entries, not just these):
 - `WaitGroup`: add/done/wait → `gorget_waitgroup_*`.
 - `Semaphore`: acquire/release/try_acquire → `gorget_semaphore_*`.
 - `OnceFlag`: do_once→`gorget_onceflag_do_once`, is_done→`..._is_done`.
-- `RWLock`/`ReadGuard`/`WriteGuard`: check `map_stdlib_name` for their entries + match exactly.
+- `RWLock`/`ReadGuard`/`WriteGuard`: ⚠ these have NO `map_stdlib_name` entries (verified 2026-06-01 — they're resolved by a DIFFERENT mechanism and already work in Rust gg). Per the fallback rule, LEAVE them BARE — do NOT extern-ify them. (Only extern-ify methods that HAVE a `map_stdlib_name` entry.)
 ⚠ **`__new`/`__free` are NOT plain equip methods** — `map_stdlib_name` has `AtomicInt__new`/`__free`
 etc., but constructors/drops are handled by a different path. INVESTIGATE before touching: do NOT
 naively extern-ify a constructor. If `__new`/`__free` are already handled (and only the instance
