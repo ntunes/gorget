@@ -5022,6 +5022,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # receiver dispatch and the per-arg classify_call_arg.
             String recv_type_name = local_type_name(recv, &ctx, &gmod)
             String full_name = recv_type_name + "__" + mname
+            String sig_lookup_name = full_name.clone()   # R10: pre-redirect mangled name for fn_sigs
             # Extern-method redirect: an `extern int _m(...) = "gorget_sym"`
             # method inside an equip block (e.g. File's `_write_bytes_buf`)
             # is registered by the loader as a call_redirect keyed on the
@@ -5093,7 +5094,14 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             #      like `gorget_array_get`); returns I64 when truly
             #      unknown.
             int ret_tid = I64_TYPE
-            if gmod.fn_sigs.contains(full_name):
+            if gmod.fn_sigs.contains(sig_lookup_name):
+                # R10: fn_sigs is keyed by the Gorget-level mangled method name
+                # (Target__method, see lower.gg:~10190). For a call_redirect'd
+                # extern method, full_name was rewritten to the C symbol above,
+                # which is never a fn_sigs key — so the void extern-method return
+                # type (registered under the mangled name by loader.gg) is found here.
+                ret_tid = gmod.fn_sigs.get(sig_lookup_name).unwrap()
+            elif gmod.fn_sigs.contains(full_name):
                 ret_tid = gmod.fn_sigs.get(full_name).unwrap()
             else:
                 int tc_ret = lookup_expr_gir_type(sexpr, &gmod)

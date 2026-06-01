@@ -819,6 +819,36 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                                 if stub_symbol != "":
                                     String stub_key = equip_target_name + "__" + emdef.name
                                     call_redirects.put(stub_key, stub_symbol.clone())
+                                    # R10: void extern equip-method stubs are SKIPPED
+                                    # here (continue below), so the equip fn_sigs
+                                    # pre-pass (lower.gg:~10186) never registers their
+                                    # return type → the call site defaults ret_tid to
+                                    # I64 → emits `__v = <void call>` (cc "void value
+                                    # not ignored"). Push an empty-body IFunction stub
+                                    # under the mangled `Target__method` name so the
+                                    # fn_sigs passes register `Arena__reset → UNIT_TYPE`;
+                                    # the call site (lower.gg) looks it up by the
+                                    # pre-redirect mangled name and takes the void-branch.
+                                    # VOID ONLY — int returns already default to I64
+                                    # correctly, and String/cstr returns MUST NOT be
+                                    # registered (they rely on the I64-default slot +
+                                    # the cstr-coercion path is_cstr_returning_call).
+                                    # Empty body → the function-lowering loop
+                                    # (lower.gg:~10305, gated body.len()>0) skips it;
+                                    # codegen never sees it (iterates gmod.functions, not
+                                    # m.items). Mirrors the IFunction String carve-out
+                                    # above (loader.gg:~732).
+                                    bool stub_is_void = false
+                                    match emdef.return_type.ty:
+                                        case TPrimitive(stub_rt):
+                                            if stub_rt == "void":
+                                                stub_is_void = true
+                                        else:
+                                            pass
+                                    if stub_is_void:
+                                        Vector[Stmt] empty_m_body = Vector[Stmt]()
+                                        FunctionDef void_stub = FunctionDef(stub_key.clone(), emdef.params, emdef.return_type, emdef.type_params, empty_m_body, false, emdef.throws_type)
+                                        m.items.push(IFunction(void_stub))
                                     emi += 1
                                     continue
                             bool is_real = emdef.body.len() >= 2 or emdef.is_expr_body
