@@ -4,34 +4,34 @@ struct AtomicInt:
     pass
 
 equip AtomicInt:
-    int load()
-    void store(int val)
-    int add(int val)
-    int sub(int val)
-    bool compare_exchange(int expected, int desired)
+    extern int load() = "gorget_atomic_int_load"
+    extern void store(int val) = "gorget_atomic_int_store"
+    extern int add(int val) = "gorget_atomic_int_add"
+    extern int sub(int val) = "gorget_atomic_int_sub"
+    extern bool compare_exchange(int expected, int desired) = "gorget_atomic_int_compare_exchange"
 
 struct AtomicBool:
     pass
 
 equip AtomicBool:
-    bool load()
-    void store(bool val)
-    bool swap(bool val)
-    bool compare_exchange(bool expected, bool desired)
+    extern bool load() = "gorget_atomic_bool_load"
+    extern void store(bool val) = "gorget_atomic_bool_store"
+    extern bool swap(bool val) = "gorget_atomic_bool_swap"
+    extern bool compare_exchange(bool expected, bool desired) = "gorget_atomic_bool_compare_exchange"
 
 struct Barrier:
     pass
 
 equip Barrier:
-    void wait()
+    extern void wait() = "gorget_barrier_wait"
 
 struct CondVar:
     pass
 
 equip CondVar:
-    void notify_one()
-    void notify_all()
-    void wait(Guard[bool] guard)
+    extern void notify_one() = "gorget_condvar_notify_one"
+    extern void notify_all() = "gorget_condvar_notify_all"
+    extern void wait(Guard[bool] guard) = "gorget_condvar_wait_guard"
 
 struct RWLock[T]:
     pass
@@ -57,21 +57,21 @@ struct WaitGroup:
     pass
 
 equip WaitGroup:
-    void add(int n)
-    void done()
-    void wait()
+    extern void add(int n) = "gorget_waitgroup_add"
+    extern void done() = "gorget_waitgroup_done"
+    extern void wait() = "gorget_waitgroup_wait"
 
 struct Semaphore:
     pass
 
 equip Semaphore:
-    void acquire()
-    void release()
-    bool try_acquire()
+    extern void acquire() = "gorget_semaphore_acquire"
+    extern void release() = "gorget_semaphore_release"
+    extern bool try_acquire() = "gorget_semaphore_try_acquire"
 
 struct OnceFlag:
     pass
 
 equip OnceFlag:
-    bool do_once()
-    bool is_done()
+    extern bool do_once() = "gorget_onceflag_do_once"
+    extern bool is_done() = "gorget_onceflag_is_done"

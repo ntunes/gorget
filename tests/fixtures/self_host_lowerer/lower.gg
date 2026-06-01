@@ -3190,6 +3190,34 @@ String allocator_constructor_runtime_name(String name):
         return "gorget_fallback_new"
     return ""
 
+# SYNC FIDELITY — non-generic sync-primitive constructor → runtime
+# `gorget_<kind>_new`. Mirrors the R9 allocator special-case above and Rust
+# gg's hardcoded sync constructors (`src/ir/lowering/exprs/calls.rs:851` /
+# `exprs/mod.rs:1652`). These structs are opaque handles (the runtime returns
+# a `GorgetAtomicInt*` etc.); there is no user `T(args)` body, so the default
+# struct-constructor path would build a zero-field struct + store into a
+# nameless field (cc-rejected `-> = `). Name-matching these builtin sync types
+# is the same Rust-blessed exception as the allocator map (the constructor name
+# IS the contract with the runtime). RWLock/ReadGuard/WriteGuard are GENERIC
+# (`RWLock__T`) and construct via the existing method_prefix path — NOT listed
+# here. Kept FLAT with explicit literals (no concat) per R9.
+String sync_constructor_runtime_name(String name):
+    if name == "AtomicInt":
+        return "gorget_atomic_int_new"
+    if name == "AtomicBool":
+        return "gorget_atomic_bool_new"
+    if name == "Barrier":
+        return "gorget_barrier_new"
+    if name == "CondVar":
+        return "gorget_condvar_new"
+    if name == "Semaphore":
+        return "gorget_semaphore_new"
+    if name == "WaitGroup":
+        return "gorget_waitgroup_new"
+    if name == "OnceFlag":
+        return "gorget_onceflag_new"
+    return ""
+
 # R9 FIDELITY — allocator TYPE-name → runtime `gorget_<kind>_destroy`.
 # Mirrors Rust gg's `lower_with` destroy dispatch
 # (`src/ir/lowering/stmts/mod.rs:2835-2841`). Keys are the FULL allocator
@@ -5765,6 +5793,25 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         int alloc_dst = add_local(&ctx, alloc_ptr_ty, NO_NAME)
         emit(&ctx, GICallExtern(alloc_dst, alloc_new_fn, alloc_args))
         result = alloc_dst
+    elif sync_constructor_runtime_name(fname) != "":
+        # SYNC FIDELITY — non-generic sync-primitive constructor
+        # (`AtomicInt(0)`, `OnceFlag()`, `Semaphore(n)`, …). Same shape as the
+        # allocator branch above: the runtime returns an opaque handle pointer
+        # (`GorgetAtomicInt*` etc.), so emit `gorget_<kind>_new` and register
+        # the dst as a POINTER-to-named slot (a bare value slot can't hold the
+        # `GorgetAtomicInt*`). Mirrors Rust gg calls.rs:851 / exprs/mod.rs:1652.
+        String sync_new_fn = sync_constructor_runtime_name(fname)
+        Vector[Operand] sync_args = []
+        int sci = 0
+        while sci < args.len():
+            SpannedExpr sarg = args.get(sci).unwrap()
+            int sval = lower_expr(&ctx, sarg, &gmod)
+            sync_args.push(op_consume(&ctx, &gmod, sval, CkCallArgBorrow()))
+            sci = sci + 1
+        int sync_ptr_ty = register_ptr(&gmod, lookup_or_register_named(&gmod, fname))
+        int sync_dst = add_local(&ctx, sync_ptr_ty, NO_NAME)
+        emit(&ctx, GICallExtern(sync_dst, sync_new_fn, sync_args))
+        result = sync_dst
     else:
         # Compute mangled name for generic calls
         String call_name = fname
