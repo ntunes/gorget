@@ -236,9 +236,9 @@ Interpolation is only available in **f-strings** (strings prefixed with `f`). Ex
 | `f`       | Format     | Yes           | Yes     |
 | `r`       | Raw        | No            | No      |
 | `b`       | Byte       | No            | Yes     |
-| `"""`     | Multi-line | No            | Yes     |
-| `f"""`    | Format (multi-line) | Yes    | Yes     |
 | `c`       | C string   | No            | Yes     |
+
+Any prefix combines with triple quotes (`"""`) for a multi-line literal of that kind — `"""…"""` (normal), `f"""…"""` (with interpolation), `r"""…"""`, `b"""…"""`, and `c"""…"""` all span multiple lines. The triple-quote form simply permits embedded newlines; the prefix's interpolation and escape rules still apply.
 
 Type: `String`. Internally a 32-byte struct `{ data, cap, len, alloc }`. String literals and slicing/trim results are zero-allocation views (`cap == 0`). Concatenation, f-strings, and methods like `to_upper()` produce owned copies (`cap > 0`). The compiler auto-materializes views when the source is mutated (copy-on-write).
 
