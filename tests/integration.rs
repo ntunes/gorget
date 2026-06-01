@@ -15375,18 +15375,34 @@ fn run_with_timeout_catching(cmd: &mut Command, fixture: &str) -> Option<std::pr
 }
 
 /// Run `f` with the default panic hook suppressed, restoring it after. Used by
-/// the corpus-level runtime-parity entry points so the expected per-fixture
-/// timeout panics (caught by `run_with_timeout_catching`) don't flood the
-/// report with backtrace noise. NOT re-entrant across threads — call it ONCE
-/// around the whole `parallel_map_fixtures` body, never per-fixture (the hook
-/// is process-global and a per-fixture swap would race across workers).
+/// the corpus-level runtime-parity entry points (A `self_host_runtime_diff` and
+/// the regen path) so the expected per-fixture timeout panics (caught by
+/// `run_with_timeout_catching`) don't flood the report with backtrace noise.
+/// NOT re-entrant across threads — call it ONCE around the whole
+/// `parallel_map_fixtures` body, never per-fixture (the hook is process-global
+/// and a per-fixture swap would race across workers).
+///
+/// Restoration is RAII: the previous hook is captured in a Drop guard, so it is
+/// ALWAYS restored — even if `f` panics on a non-caught path (e.g. a
+/// `parallel_map_fixtures` worker re-panics). A bare set/restore around `f()`
+/// would leak the silent hook on such a panic, swallowing every subsequent
+/// panic message in the process.
 fn with_silent_panic_hook<R>(f: impl FnOnce() -> R) -> R {
-    let prev = std::panic::take_hook();
+    struct HookGuard {
+        prev: Option<Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send>>,
+    }
+    impl Drop for HookGuard {
+        fn drop(&mut self) {
+            if let Some(prev) = self.prev.take() {
+                std::panic::set_hook(prev);
+            }
+        }
+    }
+
+    let _guard = HookGuard { prev: Some(std::panic::take_hook()) };
     std::panic::set_hook(Box::new(|_| {}));
-    let out = f();
-    let _ = std::panic::take_hook();
-    std::panic::set_hook(prev);
-    out
+    f()
+    // `_guard` drops here (or on unwind), restoring the previous hook.
 }
 
 /// Build a fixture through the self-host driver (`F lib --emit-c`) → `cc` →
@@ -15740,8 +15756,16 @@ fn self_host_runtime() {
     let tmp_root = &tmp_root;
     let snap_paths = &snap_paths;
 
-    let failures: Vec<String> = with_silent_panic_hook(|| {
-      parallel_map_fixtures(&fixtures, |fixture| {
+    // NO `with_silent_panic_hook` here: this net runs by DEFAULT on every
+    // `cargo test`, concurrently with ~1100 non-serial tests, and the panic hook
+    // is process-global — installing a silent one for this ~13s window would
+    // suppress those concurrent tests' panic messages. It also isn't needed: the
+    // per-fixture RUN-step timeout is already caught by `run_with_timeout_catching`
+    // (→ `Crashed`, reported as a regression), and the only OTHER panic source is
+    // an emit-step hang in the passing set — that's a REAL regression that must
+    // surface loudly, not be silenced. (A)/regen keep the hook because there
+    // hung fixtures are expected and the entry point is opt-in/env-gated.
+    let failures: Vec<String> = parallel_map_fixtures(&fixtures, |fixture| {
         let stem = fixture.file_stem().unwrap().to_string_lossy().to_string();
         let expected = match std::fs::read_to_string(&snap_paths[&stem]) {
             Ok(s) => s.trim_end().to_string(),
@@ -15768,7 +15792,6 @@ fn self_host_runtime() {
             Err(other) => Some(format!("{stem}: unexpected outcome {other:?}")),
         }
       })
-    })
     .into_iter()
     .flatten()
     .collect();
