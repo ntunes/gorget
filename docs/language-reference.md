@@ -237,6 +237,7 @@ Interpolation is only available in **f-strings** (strings prefixed with `f`). Ex
 | `r`       | Raw        | No            | No      |
 | `b`       | Byte       | No            | Yes     |
 | `"""`     | Multi-line | No            | Yes     |
+| `f"""`    | Format (multi-line) | Yes    | Yes     |
 | `c`       | C string   | No            | Yes     |
 
 Type: `String`. Internally a 32-byte struct `{ data, cap, len, alloc }`. String literals and slicing/trim results are zero-allocation views (`cap == 0`). Concatenation, f-strings, and methods like `to_upper()` produce owned copies (`cap > 0`). The compiler auto-materializes views when the source is mutated (copy-on-write).
