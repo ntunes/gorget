@@ -731,13 +731,30 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
                                         m.coll_elem_type_map.put(name.clone(), name.slice(7, name.len()))
                                     dispatched = true
                                 case CkHeap():
-                                    int rt_sid = sr.get(rmeta.runtime_name).unwrap_or(-1)
-                                    if rt_sid >= 0:
-                                        sr.put(name, rt_sid)
-                                    m.type_runtime_map.put(name.clone(), rmeta.runtime_name.clone())
+                                    # Heap[T] is a user-defined generic struct
+                                    # (`lib/std/heap.gg`: `struct Heap[T]: Vector[T]
+                                    # heap_data`), NOT a runtime collection alias.
+                                    # Its `collection_kind=CkHeap` drives ownership
+                                    # (Heap.push consumes its arg, in lower.gg) and
+                                    # element sizing, but at the LIR type layer it
+                                    # MUST route as a UserType: the monomorphized
+                                    # drop/clone fns access `self->heap_data`
+                                    # (populate_drop_metadata reads its type_infos
+                                    # fields), so `Heap__<T>` needs a real struct body
+                                    # `struct Heap__<T> { GorgetArray heap_data; }`,
+                                    # NOT a `typedef GorgetArray Heap__<T>`. Aliasing it
+                                    # to GorgetArray (type_runtime_map + dispatched=true)
+                                    # made should_skip_struct drop the body while the
+                                    # drop fn still referenced the field → cc-fail
+                                    # (heap_basic/advanced/edges). Mirror Rust, which
+                                    # deliberately excludes Heap__ from the GorgetArray
+                                    # alias path and routes it as UserType
+                                    # (src/lir/lower/insts.rs:2008-2012,2024-2029).
+                                    # Leave `dispatched=false` so the placeholder block
+                                    # below registers Heap__<T> as a user struct; Pass 2
+                                    # fills `heap_data` from gmod.type_infos.
                                     if name.starts_with("Heap__"):
                                         m.coll_elem_type_map.put(name.clone(), name.slice(7, name.len()))
-                                    dispatched = true
                                 case CkSet():
                                     int rt_sid = sr.get(rmeta.runtime_name).unwrap_or(-1)
                                     if rt_sid >= 0:
