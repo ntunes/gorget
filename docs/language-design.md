@@ -20,7 +20,7 @@ Long-term objectives grouped by pillar. These targets and anti-targets guide eve
 | Move semantics with an explicit operator (`!`) — transfers visible at call sites | Hidden heap allocation with no way to control or redirect it |
 | Borrow checking without lifetime annotations in API signatures | Rust-style lifetime annotations leaking into public APIs |
 | Scope-guarded references with generation tokens as a safety fallback | Null pointers as a default value for any type |
-| Scoped allocator control — `with Arena() as pool:` redirects all allocations in a block; `alloc=` on constructors for one-shot control; provenance inference eliminates unnecessary copies | Use-after-free and double-free reachable from safe code |
+| Scoped allocator control — `with Arena() as pool:` redirects all allocations in a block; `alloc=` on constructors for one-shot control; copy-on-write alias + last-use move analysis eliminates unnecessary copies | Use-after-free and double-free reachable from safe code |
 | Stale-condition warnings when shared data crosses suspension points | Silent memory corruption from undefined behavior |
 | Distinct newtype / semantic types (UserId ≠ int at compile time) | C-style pointer arithmetic accessible without explicit opt-in |
 
