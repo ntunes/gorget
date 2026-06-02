@@ -215,9 +215,10 @@ the diff, LOG it as a separate cleanup instead of bundling).
 
 ## 6. Named-closure-spawn pass — RE-POINT to make-site cids (the A3 concern)
 The named-spawn pass (`collect_closure_vars_stmts` `:9901` builds `Dict[varname→"__Closure_N"]` via
-its own module-global `ncv_id` `:11781`; `emit_named_closure_spawn_stmts` `:10445` pushes
-`__spawn_wrap___Closure_N` for `spawn f(...)`, dedup via the shared `emitted_wrappers`) currently
-re-derives each closure's cid by REPLAYING `ncv_id` over the source `m.items` IFunction bodies.
+its own module-global `ncv_id` `:11781`; `emit_named_closure_spawn_expr` `:10445` is where the
+`__spawn_wrap___Closure_N` push lives — dispatched into by `emit_named_closure_spawn_stmts` `:10477`
+for `spawn f(...)`, dedup via the shared `emitted_wrappers`) currently re-derives each closure's cid
+by REPLAYING `ncv_id` over the source `m.items` IFunction bodies.
 
 ⚠ **CORRECTION (do NOT assume consistency):** after the refactor the make-site assigns cids
 **inside the `lower_function` loop** (`lower.gg:~11406`), which also lowers closures in **test
@@ -244,7 +245,7 @@ agree).
   all make-sites, so a plain overwrite map yields the LAST function's cid for every function's
   `spawn f()`). `LowerCtx.current_fn_name` EXISTS (`lower.gg:172`, set to `fdef.name` at
   `lower_function` `:8543`) and is reachable at the SVarDecl-lowering site (`:6177`/`:6226`). Then
-  give `emit_named_closure_spawn_stmts`/`_expr` (`:10445`/`:10477`) a `String fn_name` param
+  give `emit_named_closure_spawn_stmts` (`:10477`) / `_expr` (`:10445`) a `String fn_name` param
   (replacing the per-function `closure_vars` Dict param) and have it read
   `gmod.closure_var_cids.get(fn_name + "\0" + spawned_var)` (instead of `closure_vars.contains/get`
   on a bare varname). DELETE `collect_closure_vars_*` + the `ncv_id` counter; `:11781-11790` becomes:
