@@ -61,9 +61,10 @@ from Rust `lower_expr` at `:391`; identical merge algorithm to `lower_match_stmt
    else `I64_TYPE` — see how `lower_if_chain_expr` seeds it); create a `merge_bb`.
 3. **Per arm** (iterate the uniform `Vector[MatchArm]` — see AST note below):
    `lower_pattern_match(&ctx, scrutinee, arm.pattern, enum_name, arm_body_bb, next_test_bb,
-   &gmod)` (`lower.gg:7314`) to branch; in `arm_body_bb` emit the pattern bindings, then
-   `int val = lower_block_expr(&ctx, arm.body, &gmod)` (`lower.gg:4108` — `arm.body` is
-   `Vector[Stmt]`, exactly what `lower_block_expr` consumes).
+   &gmod)` (`lower.gg:7314`) to branch — `lower_pattern_match` ITSELF emits the pattern
+   bindings into the matched block (as in `lower_match_stmt:7841-7847`; do NOT emit them
+   separately) — then in `arm_body_bb`: `int val = lower_block_expr(&ctx, arm.body, &gmod)`
+   (`lower.gg:4108` — `arm.body` is `Vector[Stmt]`, exactly what `lower_block_expr` consumes).
 4. **Merge — ONLY `if not block_terminated(&ctx)`** (this guard is LOAD-BEARING for
    diverging arms; copy `lower_if_chain_expr`'s gating EXACTLY): `refine_local_type(&ctx,
    result, <val's type>)` from the first non-Unit arm (`lower.gg:4248`), assign via
@@ -90,7 +91,8 @@ from Rust `lower_expr` at `:391`; identical merge algorithm to `lower_match_stmt
    being integral — not needed here, and not what Rust does. The `classify`/`code`/`tag`
    cases carry an explicit `else:` → a `PWildcard` arm that always matches + assigns, so they
    need no default either way.)
-6. `switch_to(merge_bb)`; return `result` (or `copy(result)` per the if-chain helper).
+6. `switch_to(merge_bb)`; return bare `result` (as `lower_if_chain_expr:4240` does — no
+   `copy()` wrapper at this self-host boundary).
 
 ### (2) Wire-in site A — `lower_expr` EMatch arm
 Add `case EMatch(scrut_box, arms): return lower_match_expr(&ctx, *scrut_box, arms, &gmod)`
