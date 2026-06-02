@@ -46,11 +46,18 @@ REAL lowering of the closure body:
    set the OpMove/OpClone operand modes + emit drops; skipping them leaves every consuming read
    at its default mode → a SILENT MISCOMPILE for any closure body that touches a resource. The
    RIGHT way to guarantee this is to **factor a SHARED helper** out of `lower_function`'s
-   post-body core (drop-scope pop → liveness → wire-modes → flush → block-assemble → return
-   finalize) and call it from BOTH `lower_function` and the closure-call synthesis (reference-
-   grade reuse, mirrors why Rust shares its body path). Inlining a partial copy that omits these
-   passes is the failure mode to avoid. (Two other fresh-ctx precedents exist —
-   method `lower.gg:8727`, test-fn `:10788` — confirming the pattern.)
+   post-body core and call it from BOTH `lower_function` and the closure-call synthesis
+   (reference-grade reuse, mirrors why Rust shares its body path). ⚠ **(pass-2 nit) the shared
+   helper's boundary = drop-scope-pop → `compute_liveness` → `wire_liveness_into_modes` →
+   `flush_drop_queue` → block-assemble, RETURNING the assembled `Vector[BasicBlock]` ONLY.** Do
+   NOT pull the `return GirFunction(fdef.name, …)` construction (`lower.gg:8615`) into the helper
+   — it hardcodes `fdef.name`, but the closure sites name their fn `call_name`/`ic_call` and
+   `push` it (not return). Each caller: (a) does its own tail-value→`_0` implicit-return funnel
+   BEFORE calling the helper, and (b) names + constructs + pushes/returns its own `GirFunction`
+   AFTER. Also keep `lower_function`'s `is_main` implicit-return synthesis (`:8558-8568`) OUTSIDE
+   the helper (main-specific). Inlining a partial copy that omits the liveness/flush passes is
+   the failure mode to avoid. (Two other fresh-ctx precedents exist — method `lower.gg:8727`,
+   test-fn `:10788` — confirming the pattern.)
 2. Register the function's params as named locals: **param 0 = the env `void*` ptr** (present
    for the `__callable_N` ABI; UNUSED in Phase 1 — no captures), **params 1..N = the closure's
    declared params** by name (so the body can reference them).
@@ -90,18 +97,38 @@ env). **This must NOT silently miscompile and must NOT panic/crash the self-host
   COMPILES and RUNS but **silently collapses the capture to 0** (`x + k` → `x + 0` → prints
   `3`, not `13`; driver exits 0, cc exits 0). There is NO driver crash and NO CC-FAIL — it is
   the **(b) UNACCEPTABLE silent-wrong-but-plausible** outcome.
-- **THEREFORE THE GUARD IS REQUIRED (not optional).** Detect captures with a free-var check
-  mirroring Rust's `collect_free_vars` (`closures.rs:604`): does the body reference any
-  `EIdentifier` whose name is NOT one of the closure's params and NOT a global fn / const? If
-  YES (the closure captures), Phase 1 leaves the STUB for that closure (keeps today's behavior
-  — broken, but Phase 2 fixes it) and does NOT lower its body. Two reasons the guard is
-  load-bearing: (1) it prevents converting today's uninitialized garbage into a DETERMINISTIC
-  silent-wrong value, and (2) — more important — it prevents **false-parity inflation**: a
-  capture-collapses-to-0 body could coincidentally match an oracle and get snapshotted as a
-  "MATCH" that is actually a miscompile (the forbidden anti-pattern). Only NON-capturing
-  closures get their body lowered in Phase 1. (Reuse the same free-var walk for the
-  `emit_it_closure`/`EImplicitClosure` variants — an implicit-`it` closure body that references
-  a non-`it`, non-param free var is likewise a capturer → keep its stub.)
+- **THEREFORE THE GUARD IS REQUIRED (not optional).** Two reasons it's load-bearing: (1) it
+  prevents converting today's uninitialized garbage into a DETERMINISTIC silent-wrong value;
+  (2) — more important — it prevents **false-parity inflation**: a capture-collapses-to-0 body
+  could coincidentally match an oracle and get snapshotted as a "MATCH" that is actually a
+  miscompile (the forbidden anti-pattern). Only NON-capturing closures get their body lowered.
+- **★ GUARD DEFINITION (pass-2 BLOCKING corrections — get this EXACTLY right or Phase 1 fixes
+  NOTHING):** The guard runs in the module-level pre-pass (`scan_expr_for_closures` `:9043`),
+  which has **NO outer-function local scope**. So it CANNOT mirror Rust's POSITIVE test
+  (`collect_free_vars` uses `ctx.lookup_local(name)` `closures.rs:636` — "resolves to an OUTER
+  local" — an outer scope the self-host pre-pass does not have). The guard must be **INVERTED**
+  and run over the closure body, walking it while tracking the set of in-scope NON-capture
+  names. A bare-`EIdentifier` name is a **CAPTURE iff it is NONE of:**
+  1. a **closure param** (or the implicit `"it"` for `it`-closures);
+  2. a **body-local binding** declared earlier in the body — ⚠ **pass-2 BLOCKING #1: you MUST
+     track `SVarDecl` (and `auto`/destructuring/pattern) bindings introduced inside the body as
+     non-captures** (mirror Rust `local_names.insert` on VarDecl, `closures.rs:730-744`). BOTH
+     headline fixtures rely on this — `closure_block_tail_expr`'s `g` body is
+     `int twice = x + x; twice + 1` (`twice` is a body-local), `snag51_closure_block_tail_value`
+     bodies are `int x = 42; match x: …`. A guard that flags `twice`/`x` as captures would
+     WRONGLY STUB the exact fixtures Phase 1 targets → ZERO MATCHes. Walk the body in order,
+     adding each `SVarDecl`/pattern binding to the in-scope set as you pass it.
+  3. **module-resolvable via `&gmod`** — ⚠ **pass-2 nit: test ALL the categories
+     `lower_expr`'s `EIdentifier` chain resolves before the bug fallback**, not just "fn/const":
+     `const_decls`, `float_const_decls`, `fn_sigs` (global fns), statics, `none_decls`, and
+     nullary enum variants (`:4381/4397/3330/3346/4437/4448`). All reachable from `&gmod`.
+     (Narrowing this set only over-stubs → keeps a fixture unfixed = safe but undercounts
+     MATCHes; do the full set to maximize Phase-1 wins. Latent edge, NOT to handle: a body-local
+     whose name COLLIDES with a module const/fn — pre-existing flat-namespace ambiguity, no
+     candidate fixture hits it.)
+  If the body has ANY capture by this definition → Phase 1 leaves the STUB for that closure
+  (Phase 2 fixes it). Apply the SAME walk to `emit_it_closure`/`EImplicitClosure` (a `self`- or
+  outer-var-referencing implicit closure is a capturer → stub).
 
 ## Scope / expected outcome
 **Candidate fixtures that should move (non-capturing, direct-call) — re-measure, snapshot ONLY
@@ -137,8 +164,12 @@ Pipe long runs through `tee /tmp/closure-<name>-$RANDOM.log`.
 ## Follow-ups to LOG in TODO.md (out of scope — do NOT bundle)
 - **Phase 2 — captures + env** (the re-architecture; see the TODO entry for the full scoping).
 - **Phase 1.5 — adjacent direct-call gaps:** `__callable_N` function-type-param arg-coercion
-  (CC-FAILs `closure_multiline_return`); `'self' undeclared` in closure block-tail
-  (`snag51_closure_block_tail_value`, if it doesn't clear with body-lowering alone).
+  (CC-FAILs `closure_multiline_return`). NOTE (pass-2): a method-closure referencing `self` is a
+  CAPTURE under the guard (`self` is not a param and not module-resolvable) → Phase 1 STUBS it
+  → it stays WRONG-OUTPUT (NOT a `'self' undeclared` CC-FAIL — that was the pre-guard outcome);
+  `self`-capture belongs to **Phase 2** (env), not Phase 1.5. If `snag51_closure_block_tail_value`
+  uses only body-locals (no `self`/outer capture), it SHOULD clear with Phase-1 body-lowering;
+  re-measure.
 - The `lir_codegen.gg:3714` `name.starts_with("__make_closure_")` `.env=NULL` name-matching
   wart (CLAUDE.md "no name matching") — Phase 2 replaces it with a real env StructInit.
 
