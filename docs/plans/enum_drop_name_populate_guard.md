@@ -31,10 +31,15 @@ drop fn:
 - → the seed never matches the emitted name → `{enum}__drop` can be pruned as unreachable →
   the enum's drop fn is dropped → leak / UAF.
 
-(`lc_collection_drop_fn` at `lir_codegen.gg:1473-1475` also reads `type_drop_fns[...].
-drop_fn_name` for enum element types, so under collision it too would emit a
-`__gorget_dtor_{enum}(...)` call that no longer matches the emitted `{enum}__drop` — the same
-inconsistency, fixed by the same deletion.)
+(Note — pass-1 correction: `lc_collection_drop_fn` at `lir_codegen.gg:1457-1475` does NOT
+read `type_drop_fns`; it consults `m.drop_collision_types.contains(type_name)` DIRECTLY and
+returns `__gorget_dtor_{T}` for a collision collection-element. That is a SEPARATE latent path
+this deletion does NOT touch — already commented "Not exercised by current fixtures"
+(`:1470`) — and it stays as-is. The seed-vs-emit mismatch fixed here is specifically the
+enum's own `TypeDropInfo.drop_fn_name` read by the DCE seed at `lir_codegen.gg:1083-1084`.)
+Bonus consistency win to cite in the commit: the parametric Option/Result enum registrations
+already use the UNGUARDED `pname + "__drop"` (`lir_lower.gg:1004`, `:1069`), so deleting the
+Pass-2 guard makes all THREE enum-registration sites agree on `{T}__drop`.
 
 ## Why it's LATENT / output-neutral (confirmed)
 `drop_collision_types` is populated ONLY by a `{T}__drop` function with >1 param on a
