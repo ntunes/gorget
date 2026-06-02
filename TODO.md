@@ -1,9 +1,53 @@
 # TODO
 
+## ⏭ CURRENT NEXT (2026-06-02, supersedes the "🎯 NEXT SESSION — Phase 2 FULL UNIVERSAL" block below)
+**✅ Phase-2 STEP A LANDED — gorget-1 `231abb78` (DONE.md).** The ATOMIC universal make-site closure
+refactor is in: `lower_expr` is the SOLE closure-id source + recorder (`LiftedClosure` record on
+`GirModule.lifted_closures`), a drain-until-empty post-pass is the SOLE pusher of `__Closure_N__call`,
+the pre-pass scan closure-walk + counter + `emit_it_closure` + `collect_closure_vars_*` are DELETED,
+and named-closure-spawn is re-pointed to `gmod.closure_var_cids`. The make-site/scan closure-id
+desync is FIXED. Owner chose ATOMIC (not the 3-way A1/A2/A3 split — proven non-shippable). All gates
+GREEN: full integration 1179/0, lowerer 954, c_emit 882, fixed_point GREEN, runtime 260/0,
+runtime_diff 261 MATCH. Brief `docs/plans/closure_phase2_stepA_atomic_universal.md` (FINAL v6, 5
+fresh reviews). Parity unchanged (the desync fixtures CC-FAIL on the Phase-1.5 ABI gap regardless).
+
+**⬅ ACTIVE NEXT = Phase-2 STEP B (ByValue PRIMITIVE captures) on the unified ground.** Brief
+`docs/plans/closure_phase2a_byvalue_primitives.md` — RE-SCOPE to "assumes Step A landed" (the
+`LiftedClosure` record / make-site arms / post-pass / `closure_var_cids` already EXIST; Step B ADDS:
+a `captures` field on `LiftedClosure`, a positive deduped free-var COLLECTOR at the make-site EClosure
+arm [`lower.gg:5689`, `&ctx.named_locals` live], `__Closure_N` env-struct FIELD registration at the
+make-site [mirror the IStruct `type_infos`/`GirFieldInfo` pattern `lower.gg:10751`], `GIFieldLoad`
+emission in the post-pass body, LIR closure-pack promotion [`try_closure_pack` equivalent in
+`lir_lower.gg` — does NOT exist yet; emit `__gorget_closure_env_alloc` + `IMemcpy` + `IClosurePack`],
+and the 2a guard [lift ONLY when every capture's `type_id < UNIT_TYPE` (=11) AND no mutation AND no
+nested closure; else KEEP STUB]). Touches `lower.gg` + `gir.gg` + `lir_lower.gg` + `lir_codegen.gg`
+(NOT disjoint — serialize). The `lir_codegen.gg` `__make_closure_` NULL-env wart STAYS (transitional;
+deleted only at end of Phase 2). Unblocks `auto_types` (`int base`), `test_if_expressions` c20 (4 int
+captures), `test_closures_edge_cases` primitives, `closures.gg` primitives. ⚠ **Grounding scout (post
+Step-A, current line numbers) DONE 2026-06-02** — all Step-B premises VALID against `231abb78`; the
+old brief is structurally sound, just re-cite lines (LiftedClosure `gir.gg:330`, GIFieldLoad
+lowering `lir_lower.gg:3324`, struct-ctor intercept `lir_lower.gg:2309`, the wart `lir_codegen.gg:3707`,
+`type_infos` write `lower.gg:10751`). Full discipline (≥3 fresh reviews → worktree executor →
+output-review → gate → integrate); `bootstrap_fixed_point` is a REGRESSION guard NOT the signal
+(driver is closure-free) — validate via runtime-diff. ⚠ owner check-in satisfied by this session's
+directive.
+
+**Step-A follow-ups (out of scope of Step A; logged):**
+- **dead `LowerCtx.next_closure_id` field** (`lower.gg:~164`) — never read/written (only `0` in the 4
+  positional ctors); §5c deferred removal (touches 4 ctor sites). Trivial cleanup, do anytime.
+- **§5a′ nested-closure-inside-STUBBED-outer** record-only walk (option a) — NOT needed now (corpus
+  proven empty: per-fixture fn-count byte-identical); implement IF a future fixture nests a closure
+  inside a capturing/nested-containing outer (the new design discovers nested only by lowering, so a
+  stubbed outer would lose them). Caught by the per-fixture fn-count gate.
+- **stale `gir.gg:127` GIFieldLoad "DEAD CODE" comment** — GIFieldLoad is LIVE (lowered
+  `lir_lower.gg:3324`); update when Step B makes it an emit site.
+- **Phase 1.5** — the `it`-closure-call ABI gap (`lir_codegen.gg:~3672` casts → `void value not
+  ignored`) blocking every implicit-it/spawn RUN; + real `__gorget_spawn_`/`__gorget_await_` wiring.
+
 ## 🧭 SESSION ROLLUP / HANDOVER
 **Code GREEN on `gorget-1` @ live tip `7c91ec75` (`git log -1` for the live tip) — landed 2026-06-02: EIf-as-value + 3 PARALLEL FILE-DISJOINT CHAINS [A arena_checkpoint `loader.gg` `4189e55f` +1 · C enum-drop-name-guard DELETION `lir_lower.gg` `d4e9b78d` +0 reference-grade · B EMatch-as-value `lower.gg` `43216ed5` +7] + closure-body PHASE 1 [`lower.gg` `3164368b` +4, non-capturing/direct-call] + **uint8 literal-narrowing FIX [RUST `src/semantic/typecheck.rs` `b6f67cd9`, parity-NEUTRAL correctness: peel Ref/Owned before the int-literal narrowing gate → unblocks gorget-arena md3/bsp; regression fixture `narrow_int_literal_vs_ref_operand` now LIVE]**; ALL gates GREEN — parity 260/28.2% [+12 this session: 248→260; uint8 is a correctness fix, NOT a parity change], lock-in 260/0, fixed_point GREEN, FULL integration **1179/0** (the +1 vs 1178 = the un-ignored uint8 fixture). 🧩 START HERE → **the "🎯 NEXT SESSION — Phase 2 FULL UNIVERSAL" block immediately below.**** The **3-chain runtime-parity arc is COMPLETE**, and **TEN backlog FIDELITY rounds have landed**: R6→R11 (see DONE.md) → **atomics/sync `d742af36`** (extern-method dispatch + construction special-case + bool-return reg; +3; ⚠ owner-approved `map_stdlib_name` retirement DEFERRED with PROOF it breaks Rust's SPAWNED sync fixtures — High Priority follow-up) → **Option[Ref]-lift `32784887`** (port `try_lift_option_ref` + retire the `resource_meta_for` `.clone()` workaround; +1 heap_basic; 5 brief-review passes caught a UAF/double-deref/double-free chain) → **EIf-as-value `504f871a`** (port Rust's `build_if_chain_expr` + `lower_block_expr` + `lower_stmt_as_tail_value`; the self-host `EIf`-in-`lower_expr` was a stub that dropped branch values + returned unassigned I64 → every if-EXPRESSION yielded garbage; +1 `if_expr_resource_arms`; **the driver self-compiles its OWN if-exprs** (`format_gir.gg:177`) so `fixed_point` RE-CONVERGED = the load-bearing validation; 3 review passes caught a blocking no-else default + the closure-blocked demo) — all DONE, see DONE.md. **HONEST north-star number: RUNTIME PARITY = 260/923 = 28.2% MATCH** (Chain-3 baseline 18.6%; R10 +6; Heap +2; sync +3; Option[Ref] +1; EIf +1; **3 parallel chains A/C/B +8** = 256; **closure-body Phase 1 +4** = 260). Now (re-measure post-regen via `GG_RUNTIME_DIFF=1 … self_host_runtime_diff`): MATCH 260; the +12 came OUT of the WRONG/CC-FAIL/CRASH buckets (EMatch +7 value-position matches, arena +1 CC-FAIL, closure Phase 1 +4). **⬅ ACTIVE NEXT (owner-chosen 2026-06-02, to be done with FRESH CONTEXT) = Phase 2 closure CAPTURES via the FULL-UNIVERSAL make-site refactor — see the dedicated "🎯 NEXT SESSION" block below. Deferred-but-queued (do NOT lose): the `EDo`/`EBlock` block-expr cluster (reuse `lower_match_expr`/`lower_block_expr`/`lower_stmt_as_tail_value`) + the 2 EMatch-isolated pre-existing bugs (struct-with-String enum-payload binding in `lower_match_stmt`; String `.data` field-access → unblock the 2 named EMatch targets, +2). ⚠ Per [[feedback-rust-not-sacrosanct]]: don't blindly mirror Rust — evaluate if Rust's shape is reference-grade first; improve BOTH where it isn't (Rust changes = heavier full-suite chains, owner promotes main).**
 
-🎯 **NEXT SESSION — Phase 2 closure CAPTURES via the FULL-UNIVERSAL make-site (owner-chosen 2026-06-02; do with FRESH CONTEXT — the prior session stopped here at ~70% deliberately to hand off clean).**
+🎯 **[✅ SUPERSEDED 2026-06-02 — STEP A LANDED `231abb78`; see "⏭ CURRENT NEXT" at the TOP of this file. The decomposition below is HISTORICAL — the owner chose ATOMIC over the A1/A2/A3 split it describes.] NEXT SESSION — Phase 2 closure CAPTURES via the FULL-UNIVERSAL make-site.**
 - **GOAL:** make CAPTURING closures work (unblocks `auto_types`, `test_if_expressions` c20, `closures.gg`, etc.). Closure-body Phase 1 (NON-capturing/direct-call) already LANDED (`3164368b`); captures are the remaining foundational gap.
 - **DECOMPOSITION:** **Step A** = the UNIVERSAL make-site REFACTOR (no captures) — make `lower_expr` the single closure-id source + a single post-pass the sole `__Closure_N__call` pusher, retiring the pre-pass counter; this ALSO fixes a **pre-existing closure-id desync bug** (mixed explicit+implicit-`it` modules mis-wire — proven in emitted C: the explicit closure's `__make_closure_0` resolves to the implicit-it body). **Step B** = ByValue-PRIMITIVE captures on the unified ground (positive deduped free-var collector + env-struct fields + `GIFieldLoad` + LIR closure-pack promotion + delete the `__make_closure_` NULL-env wart). Then **2b** (resource/CoW captures) + **2c** (ByMutRef write-back).
 - **⚠ WHY "FULL UNIVERSAL" IS BIG (Step-A pass-1 found 4 BLOCKING — the make-site does NOT currently reach 3 closure classes):** (1) **inline-spawn** `spawn ((): …)(args)` — the ECall arm (`lower.gg:~4646`) matches only `EIdentifier`/`EFieldAccess` callees; an `EClosure` callee hits `else→UNIT` WITHOUT lowering (Rust uses a spawn-closure Case A/B dispatch, `src/ir/lowering/exprs/mod.rs:1032-1091` + `spawn.rs:278-401`). (2) **nested closures** — `lower_expr(EClosure)` never descends into a closure body; needs the post-pass to lower bodies through `lower_expr` (hitting nested EClosure arms) with a **drain-until-empty worklist** (mirror Rust `mod.rs:1428-1432`), NOT a fixed snapshot. (3) **named-closure-spawn** — `collect_closure_vars_*` (`lower.gg:~9875-9937`) + `emit_named_closure_spawn_stmts` (`~10470`) replicate the removed counter → must re-point at recorded cids. (4) `.map(it*2)` currently lowers INLINE (no `__make_closure`) — the new `EImplicitClosure` make-site arm changes it to a closure value (state this + its `lowerer`/`c_emit` fn-count effect).
