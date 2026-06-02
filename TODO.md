@@ -54,6 +54,42 @@ for live; docs commits on top). RUNTIME PARITY 261 → 267 = 28.9%.**
 - **stale comments retired in Step A/B**; the self-host-as-showcase audit can sweep any remaining
   `__Closure_`/scan fossils.
 
+**⚠ DEFERRED parity chains — EMPIRICALLY REFUTED by review (2026-06-02 pm; both built+ran+hand-patched, parity ≈0). Do NOT re-chase as quick wins:**
+- **Closure-call typed ABI cast (`lir_codegen.gg:3397-3424` `ICallClosure` hardcodes all-`void*`).** The
+  typed-cast fix is a real FIDELITY/correctness improvement (mirror Rust `mod.rs:2786`) BUT: (a) PURE
+  scalars already MATCH under `-w` (so ~0 parity), (b) the brief's literal `c_type_name(val_types[arg])`
+  SIGSEGVs on REF args (`&Counter` recorded by-value → struct into a `void*` adapter) — needs the
+  UPSTREAM ref-arg/aggregate deref machinery (Rust `arg_abis`/`ptr_pointee`/`deref_args`,
+  `mod.rs:2830-2862`; `cl_abis` is built EMPTY at `lir_lower.gg:3248`), so it is NOT a one-file scalar
+  fix, (c) use the `contains`-guard + `int64_t` fallback (Rust `unwrap_or`), never bare `.unwrap()`.
+  String/struct RETURNS also need the upstream `cl_ret` slot-typing fix (`lir_lower.gg:~3239`). Brief
+  `docs/plans/closure_call_typed_abi_cast.md` (parity claims DISPROVEN — rewrite before use). Real value
+  = fidelity + prerequisite for String closures + Option/Result combinator crashes; do it PROPERLY
+  (full typed ABI w/ ref/aggregate handling) as a fidelity round, not a parity round.
+- **Free-extern struct-return fn_sig (`loader.gg:982-1010` `IExternBlock`).** The literal "mirror the
+  equip arm" is a NO-OP — the equip read site preserves a pre-redirect `sig_lookup_name`
+  (`lower.gg:5270`), but the free-extern read site looks up fn_sigs under the POST-redirect RUNTIME
+  SYMBOL (`lower.gg:6282-6288`), so the stub must be keyed under the redirect-target symbol, NOT
+  `ext_fd.name`. AND the carve-out must also exclude `Result`/`Vector`/`Option` (TNamed → materialize
+  unemitted structs like `GorgetProcess` → regression), not just cstr/String. AND even fully fixed,
+  the 2 target fixtures stay non-MATCH (`exec_output_captures_stderr` = a separate trim-VIEW `.data`
+  bug; `test_process` = missing test-harness preamble) → +0 parity. Brief
+  `docs/plans/free_extern_struct_returns.md` (DISPROVEN). Low value until the orthogonal blockers land.
+
+**⬅ NEXT SERIAL high-value targets (scout-surfaced, RE-VERIFY end-to-end by RUNNING — scout parity claims proved unreliable this round; a fixture only counts if its WHOLE stdout MATCHes):**
+- **V/E/Err "enum-typedef-drop" (~12 fixtures, `catch_*`/`result_*`)** — NOT a generic-param leak: a
+  concrete user enum named `V`/`E`/`Err` (single uppercase letter) whose typedef/struct decl is never
+  emitted (`unknown type name 'V'`) because the self-host mistakes it for a generic param. Fix in the
+  enum→struct registration (`lir_lower.gg` `m.structs` population, ~`:940-1071`). Biggest tractable
+  win IF the fix is contained + a fixture reaches MATCH end-to-end (verify — may have orthogonal
+  blockers like the deferred chains above). ⚠ likely a name-heuristic (`len==1 && uppercase`) — fixing
+  it is also a CLAUDE.md no-name-matching win.
+- **box `__gg_new` (~11, `box_*`/serializable/dynamic_dispatch)** — `Box.new(...)` inner-type
+  resolution; closure-entangled (Box of Callable); `lower.gg`/`lir_lower.gg`.
+- **collection-HOF inlining (~33, `.map/.filter/.fold` on Vector/Set/Dict → undefined `Vector__T__map`)**
+  — DEEP: self-host has ZERO `HofExpand` (Rust ~2100 lines of BIR generators). Multi-chain effort.
+- **closure Phase 2b (resource/CoW captures, ~5-8)** + **2c (ByMutRef)** — deep, `lower.gg`+`lir_*`.
+
 ## 🧭 SESSION ROLLUP / HANDOVER  [⚠ SUPERSEDED 2026-06-02 pm by the "⏭ CURRENT NEXT" block at the TOP of this file — Step A+B landed, tip `d6902ccf`, parity 267. The numbers below (260/952/880, tip `7c91ec75`) are HISTORICAL — do not read as current.]
 **Code GREEN on `gorget-1` @ live tip `7c91ec75` (`git log -1` for the live tip) — landed 2026-06-02: EIf-as-value + 3 PARALLEL FILE-DISJOINT CHAINS [A arena_checkpoint `loader.gg` `4189e55f` +1 · C enum-drop-name-guard DELETION `lir_lower.gg` `d4e9b78d` +0 reference-grade · B EMatch-as-value `lower.gg` `43216ed5` +7] + closure-body PHASE 1 [`lower.gg` `3164368b` +4, non-capturing/direct-call] + **uint8 literal-narrowing FIX [RUST `src/semantic/typecheck.rs` `b6f67cd9`, parity-NEUTRAL correctness: peel Ref/Owned before the int-literal narrowing gate → unblocks gorget-arena md3/bsp; regression fixture `narrow_int_literal_vs_ref_operand` now LIVE]**; ALL gates GREEN — parity 260/28.2% [+12 this session: 248→260; uint8 is a correctness fix, NOT a parity change], lock-in 260/0, fixed_point GREEN, FULL integration **1179/0** (the +1 vs 1178 = the un-ignored uint8 fixture). 🧩 START HERE → **the "🎯 NEXT SESSION — Phase 2 FULL UNIVERSAL" block immediately below.**** The **3-chain runtime-parity arc is COMPLETE**, and **TEN backlog FIDELITY rounds have landed**: R6→R11 (see DONE.md) → **atomics/sync `d742af36`** (extern-method dispatch + construction special-case + bool-return reg; +3; ⚠ owner-approved `map_stdlib_name` retirement DEFERRED with PROOF it breaks Rust's SPAWNED sync fixtures — High Priority follow-up) → **Option[Ref]-lift `32784887`** (port `try_lift_option_ref` + retire the `resource_meta_for` `.clone()` workaround; +1 heap_basic; 5 brief-review passes caught a UAF/double-deref/double-free chain) → **EIf-as-value `504f871a`** (port Rust's `build_if_chain_expr` + `lower_block_expr` + `lower_stmt_as_tail_value`; the self-host `EIf`-in-`lower_expr` was a stub that dropped branch values + returned unassigned I64 → every if-EXPRESSION yielded garbage; +1 `if_expr_resource_arms`; **the driver self-compiles its OWN if-exprs** (`format_gir.gg:177`) so `fixed_point` RE-CONVERGED = the load-bearing validation; 3 review passes caught a blocking no-else default + the closure-blocked demo) — all DONE, see DONE.md. **HONEST north-star number: RUNTIME PARITY = 260/923 = 28.2% MATCH** (Chain-3 baseline 18.6%; R10 +6; Heap +2; sync +3; Option[Ref] +1; EIf +1; **3 parallel chains A/C/B +8** = 256; **closure-body Phase 1 +4** = 260). Now (re-measure post-regen via `GG_RUNTIME_DIFF=1 … self_host_runtime_diff`): MATCH 260; the +12 came OUT of the WRONG/CC-FAIL/CRASH buckets (EMatch +7 value-position matches, arena +1 CC-FAIL, closure Phase 1 +4). **⬅ ACTIVE NEXT (owner-chosen 2026-06-02, to be done with FRESH CONTEXT) = Phase 2 closure CAPTURES via the FULL-UNIVERSAL make-site refactor — see the dedicated "🎯 NEXT SESSION" block below. Deferred-but-queued (do NOT lose): the `EDo`/`EBlock` block-expr cluster (reuse `lower_match_expr`/`lower_block_expr`/`lower_stmt_as_tail_value`) + the 2 EMatch-isolated pre-existing bugs (struct-with-String enum-payload binding in `lower_match_stmt`; String `.data` field-access → unblock the 2 named EMatch targets, +2). ⚠ Per [[feedback-rust-not-sacrosanct]]: don't blindly mirror Rust — evaluate if Rust's shape is reference-grade first; improve BOTH where it isn't (Rust changes = heavier full-suite chains, owner promotes main).**
 
