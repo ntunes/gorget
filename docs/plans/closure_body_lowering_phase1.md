@@ -39,8 +39,18 @@ At each of the 3 stub sites, REPLACE the `[BasicBlock([], GTReturn(OpCopy(0)))]`
 REAL lowering of the closure body:
 1. Build a FRESH `LowerCtx` for the `__Closure_N__call` function — use `lower_function`
    (`lower.gg:8460`) as the template for ctx setup / param registration / block assembly.
-   (Prefer a SHARED helper if `lower_function`'s body-lowering core can be factored cleanly —
-   reference-grade — else inline mirroring it. The reviewers will check for idiomatic reuse.)
+   ⚠ **(pass-1 nit-2 — MANDATORY) you MUST run `lower_function`'s body-FINALIZATION post-passes
+   on the closure ctx, not just assemble blocks:** `push_drop_scope`/`pop_drop_scope` around the
+   body, then `compute_liveness` + `wire_liveness_into_modes` + `flush_drop_queue`
+   (`lower.gg:8592-8605`) BEFORE assembling `ctx.block_insts`/`block_terms` into blocks. These
+   set the OpMove/OpClone operand modes + emit drops; skipping them leaves every consuming read
+   at its default mode → a SILENT MISCOMPILE for any closure body that touches a resource. The
+   RIGHT way to guarantee this is to **factor a SHARED helper** out of `lower_function`'s
+   post-body core (drop-scope pop → liveness → wire-modes → flush → block-assemble → return
+   finalize) and call it from BOTH `lower_function` and the closure-call synthesis (reference-
+   grade reuse, mirrors why Rust shares its body path). Inlining a partial copy that omits these
+   passes is the failure mode to avoid. (Two other fresh-ctx precedents exist —
+   method `lower.gg:8727`, test-fn `:10788` — confirming the pattern.)
 2. Register the function's params as named locals: **param 0 = the env `void*` ptr** (present
    for the `__callable_N` ABI; UNUSED in Phase 1 — no captures), **params 1..N = the closure's
    declared params** by name (so the body can reference them).
@@ -54,8 +64,18 @@ REAL lowering of the closure body:
    how `lower_function` finalizes a normal function's return.
 5. Replace the stub `blocks` with `ctx`'s assembled blocks before the `gmod.functions.push`.
 
-Do the SAME at all 3 sites (`:9103`, `:9039`, `:9121`). The `emit_it_closure`/`EImplicitClosure`
-bodies are also `Vector[Stmt]`/expr — route them through the same path.
+Do the SAME at all 3 sites (`:9103`, `:9039`, `:9121`), with these per-site specifics
+(pass-1 nit-1 — the 3 sites are NOT symmetric):
+- **`:9103` real closures** — body is `Vector[Stmt]` → `lower_block_expr(&ctx, body, &gmod)`.
+- **`:9121` `EImplicitClosure`** — its body is a SINGLE `Box[SpannedExpr]` (NOT a `Vector[Stmt]`)
+  with an implicit param named `"it"` → lower via `lower_expr(&ctx, *body_box, &gmod)` (or wrap
+  the expr as a one-element tail block); register the `"it"` param. The free-var guard still
+  applies (a body referencing a non-`it`, non-param name is a capturer → keep its stub).
+- **`:9039` `emit_it_closure`** — ⚠ its current signature `int emit_it_closure(int next_id,
+  GirModule &gmod)` takes **NO body parameter** (called at `:9136`/`:9143` knowing only
+  `expr_has_it(arg)`). To lower the implicit-`it` body you MUST change the signature to accept
+  the body expr and update BOTH call sites to pass `arg`. Then lower via `lower_expr` as for
+  `:9121` (implicit param `"it"`). Mechanical, but don't miss it.
 
 ## ⚠ Phase-1 SCOPE + the capturing-closure HAZARD (read carefully)
 Phase 1 fixes **non-capturing, direct-called** closures only. Phase 2 (queued) does
@@ -63,20 +83,25 @@ captures/env. BUT the pre-pass lowers EVERY closure's body, including CAPTURING 
 capturing closure's body references a captured var (e.g. `k`) that is NOT a registered local
 in the fresh closure-function ctx (Phase 2 will load it from the env struct; Phase 1 has no
 env). **This must NOT silently miscompile and must NOT panic/crash the self-host driver.**
-- Determine empirically how the body lowering resolves an unresolved free-var reference in the
-  fresh ctx (lower_fail/drop? a `[bug]` placeholder? a hard error?). The ACCEPTABLE outcomes
-  are: the capturing fixture stays WRONG-OUTPUT or becomes CC-FAIL (no worse than today's
-  garbage). The UNACCEPTABLE outcomes are: (a) the self-host DRIVER panics/crashes while
-  compiling a capturing-closure fixture (would turn a WRONG fixture into a driver-crash, and
-  could be a worse failure mode), or (b) a silent wrong-but-plausible resolution of the
-  capture to some other local/global.
-- If lowering a capturing body risks a driver panic, GUARD it: detect that the body references
-  a name that is not a param (a free var) and, for Phase 1, FALL BACK to the existing stub for
-  that closure (so capturing closures keep today's behavior — still broken, but not worse) and
-  log it for Phase 2. A clean free-var check (does the body reference any `EIdentifier` whose
-  name is not a param and not a global fn?) mirrors Rust's `collect_free_vars`
-  (`closures.rs:604`) — if it finds captures, Phase 1 leaves the stub. Prefer this guard over
-  risking a regression. (The reviewers must confirm the chosen behavior is safe.)
+- **EMPIRICALLY DETERMINED (pass-1 built the driver + traced it):** an unresolved free-var
+  `EIdentifier` (a capture) hits `lower_expr`'s `EIdentifier` fallback (`lower.gg:4451-4460`)
+  → `diag_bug(...)` (just prints a harmless `/* [bug] ... */` C comment, NO abort, NO
+  error-count) + `GIAssign(unk, OpConstI64(0))`. So WITHOUT a guard, a capturing closure body
+  COMPILES and RUNS but **silently collapses the capture to 0** (`x + k` → `x + 0` → prints
+  `3`, not `13`; driver exits 0, cc exits 0). There is NO driver crash and NO CC-FAIL — it is
+  the **(b) UNACCEPTABLE silent-wrong-but-plausible** outcome.
+- **THEREFORE THE GUARD IS REQUIRED (not optional).** Detect captures with a free-var check
+  mirroring Rust's `collect_free_vars` (`closures.rs:604`): does the body reference any
+  `EIdentifier` whose name is NOT one of the closure's params and NOT a global fn / const? If
+  YES (the closure captures), Phase 1 leaves the STUB for that closure (keeps today's behavior
+  — broken, but Phase 2 fixes it) and does NOT lower its body. Two reasons the guard is
+  load-bearing: (1) it prevents converting today's uninitialized garbage into a DETERMINISTIC
+  silent-wrong value, and (2) — more important — it prevents **false-parity inflation**: a
+  capture-collapses-to-0 body could coincidentally match an oracle and get snapshotted as a
+  "MATCH" that is actually a miscompile (the forbidden anti-pattern). Only NON-capturing
+  closures get their body lowered in Phase 1. (Reuse the same free-var walk for the
+  `emit_it_closure`/`EImplicitClosure` variants — an implicit-`it` closure body that references
+  a non-`it`, non-param free var is likewise a capturer → keep its stub.)
 
 ## Scope / expected outcome
 **Candidate fixtures that should move (non-capturing, direct-call) — re-measure, snapshot ONLY
