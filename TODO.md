@@ -1,48 +1,58 @@
 # TODO
 
-## ⏭ CURRENT NEXT (2026-06-02, supersedes the "🎯 NEXT SESSION — Phase 2 FULL UNIVERSAL" block below)
-**✅ Phase-2 STEP A LANDED — gorget-1 `231abb78` (DONE.md).** The ATOMIC universal make-site closure
-refactor is in: `lower_expr` is the SOLE closure-id source + recorder (`LiftedClosure` record on
-`GirModule.lifted_closures`), a drain-until-empty post-pass is the SOLE pusher of `__Closure_N__call`,
-the pre-pass scan closure-walk + counter + `emit_it_closure` + `collect_closure_vars_*` are DELETED,
-and named-closure-spawn is re-pointed to `gmod.closure_var_cids`. The make-site/scan closure-id
-desync is FIXED. Owner chose ATOMIC (not the 3-way A1/A2/A3 split — proven non-shippable). All gates
-GREEN: full integration 1179/0, lowerer 954, c_emit 882, fixed_point GREEN, runtime 260/0,
-runtime_diff 261 MATCH. Brief `docs/plans/closure_phase2_stepA_atomic_universal.md` (FINAL v6, 5
-fresh reviews). Parity unchanged (the desync fixtures CC-FAIL on the Phase-1.5 ABI gap regardless).
+## ⏭ CURRENT NEXT (2026-06-02 pm — supersedes the "🧭 SESSION ROLLUP" + "🎯 NEXT SESSION FULL UNIVERSAL" blocks below)
+**✅ Phase-2 STEP A + STEP B both LANDED this session — gorget-1 code tip `d6902ccf` (`git log -1`
+for live; docs commits on top). RUNTIME PARITY 261 → 267 = 28.9%.**
+- **STEP A** (`231abb78`, DONE.md): ATOMIC universal make-site closure refactor + latent desync FIX.
+  `lower_expr` = SOLE closure-id source/recorder (`LiftedClosure` on `GirModule.lifted_closures`);
+  drain-until-empty post-pass = SOLE pusher of `__Closure_N__call`; pre-pass scan closure-walk +
+  counter + `emit_it_closure` + `collect_closure_vars_*` DELETED; named-spawn re-pointed to
+  `gmod.closure_var_cids`. Parity-neutral (desync fixtures CC-FAIL on the Phase-1.5 ABI gap). Owner
+  chose ATOMIC over the 3-way split (proven non-shippable). Brief `…stepA_atomic_universal.md`.
+- **STEP B** (`d6902ccf`, DONE.md): ByValue PRIMITIVE captures WORK. `ClosureCapture` record +
+  `captures` field; positive deduped collector+classifier at the make-site (same capture-shaped
+  criterion as the Phase-1 detector; non-local/`self`→STUB); 2a guard lifts ONLY
+  `{bool=0,int64=4,double=10}`-typed (the `type_id_to_name`-faithful set), unmutated, no-nested
+  captures (else KEEP STUB); env-struct fields in `type_infos`; make-site `GICall` struct-ctor →
+  `IStructInit` stack env; NEW LIR `try_closure_pack` (`__Closure_N`→GorgetClosure GIAssign →
+  env_alloc+memcpy+IClosurePack); post-pass `GIFieldLoad`s. +6 parity. Brief
+  `…stepB_byvalue_primitives.md`. The `int k=10; (int x):x+k; f(3)`→**13** proof passes.
+- **GATES GREEN at `d6902ccf`:** full integration **1179/0**, `self_host_runtime` **267/0**,
+  `self_host_runtime_diff` MATCH **267**, `lowerer_comparison` **954**, `c_emit_comparison` **882**,
+  `bootstrap_fixed_point` GREEN, `cargo test --lib` 1066/0 (debug; 2 `--release` `should_panic`-over-
+  `debug_assert` reds are a pre-existing `src/` `--release` artifact, NOT this work).
 
-**⬅ ACTIVE NEXT = Phase-2 STEP B (ByValue PRIMITIVE captures) on the unified ground.** Brief
-`docs/plans/closure_phase2a_byvalue_primitives.md` — RE-SCOPE to "assumes Step A landed" (the
-`LiftedClosure` record / make-site arms / post-pass / `closure_var_cids` already EXIST; Step B ADDS:
-a `captures` field on `LiftedClosure`, a positive deduped free-var COLLECTOR at the make-site EClosure
-arm [`lower.gg:5689`, `&ctx.named_locals` live], `__Closure_N` env-struct FIELD registration at the
-make-site [mirror the IStruct `type_infos`/`GirFieldInfo` pattern `lower.gg:10751`], `GIFieldLoad`
-emission in the post-pass body, LIR closure-pack promotion [`try_closure_pack` equivalent in
-`lir_lower.gg` — does NOT exist yet; emit `__gorget_closure_env_alloc` + `IMemcpy` + `IClosurePack`],
-and the 2a guard [lift ONLY when every capture's `type_id < UNIT_TYPE` (=11) AND no mutation AND no
-nested closure; else KEEP STUB]). Touches `lower.gg` + `gir.gg` + `lir_lower.gg` + `lir_codegen.gg`
-(NOT disjoint — serialize). The `lir_codegen.gg` `__make_closure_` NULL-env wart STAYS (transitional;
-deleted only at end of Phase 2). Unblocks `auto_types` (`int base`), `test_if_expressions` c20 (4 int
-captures), `test_closures_edge_cases` primitives, `closures.gg` primitives. ⚠ **Grounding scout (post
-Step-A, current line numbers) DONE 2026-06-02** — all Step-B premises VALID against `231abb78`; the
-old brief is structurally sound, just re-cite lines (LiftedClosure `gir.gg:330`, GIFieldLoad
-lowering `lir_lower.gg:3324`, struct-ctor intercept `lir_lower.gg:2309`, the wart `lir_codegen.gg:3707`,
-`type_infos` write `lower.gg:10751`). Full discipline (≥3 fresh reviews → worktree executor →
-output-review → gate → integrate); `bootstrap_fixed_point` is a REGRESSION guard NOT the signal
-(driver is closure-free) — validate via runtime-diff. ⚠ owner check-in satisfied by this session's
-directive.
+**⬅ ACTIVE NEXT (closure Phase-2 continuation — re-verify by RUNNING; full discipline ≥3 reviews):**
+- **Phase 2b — ByValue RESOURCE/CoW captures** (String/Vector/struct). The Step-B 2a guard STUBS
+  these today (`cow_closure_capture` etc. stay WRONG, not false-MATCH). Needs make-site CoW
+  clone/move at capture + `is_closure_env`-style ownership so the consume-validator skips the alias
+  copy + per-field recursive `__Closure_N` drop. Mirror Rust `closures.rs:150`. Highest closure
+  parity left.
+- **Phase 1.5 — the closure-call ABI gap** (`lir_codegen.gg:~3672` casts closure args to
+  `(void)x*(void)y` → `void value not ignored`) blocks EVERY implicit-it (`.map(it…)`) + String-param
+  closure RUN. Unblocks a big implicit-it/`.map`/`.filter` family that currently CC-FAILs. + real
+  `__gorget_spawn_`/`__gorget_await_` spawn wiring (separate, deeper).
+- **Phase 2c — ByMutRef (mutated) captures** (`MutPtr` fields + `emit_borrow_mut` + `GIDerefStore`
+  write-back; riskiest — drop interaction, no borrow-check pass). Lower priority.
+- **Widen 2a to all primitives** — gated on extending `type_id_to_name` (`lower.gg:3077`) to the 7
+  sub-int/float widths (i8/i16/i32/u8…/f32 currently fall to `int64_t`); then relax the §4b guard
+  from `{0,4,10}` to the full primitive set. Small, clean.
+- **NON-closure backlog (unchanged — see "## High Priority" below):** `EDo`/`EBlock` block-expr
+  cluster (reuse `lower_block_expr`/`lower_match_expr`); the 2 EMatch-isolated bugs (struct-with-
+  String enum-payload binding; String `.data` field-access); INT-zero WRONG-OUTPUT subset
+  (auto_types' 2nd const-auto root, bare_tuples, block_expr); generic-type-param leak (`catch_*`/
+  `result_*`); drop/cow/leak; R12 typed-extern-sig registry. ⚠ Re-verify each by RUNNING before
+  briefing.
 
-**Step-A follow-ups (out of scope of Step A; logged):**
-- **dead `LowerCtx.next_closure_id` field** (`lower.gg:~164`) — never read/written (only `0` in the 4
-  positional ctors); §5c deferred removal (touches 4 ctor sites). Trivial cleanup, do anytime.
-- **§5a′ nested-closure-inside-STUBBED-outer** record-only walk (option a) — NOT needed now (corpus
-  proven empty: per-fixture fn-count byte-identical); implement IF a future fixture nests a closure
-  inside a capturing/nested-containing outer (the new design discovers nested only by lowering, so a
-  stubbed outer would lose them). Caught by the per-fixture fn-count gate.
-- **stale `gir.gg:127` GIFieldLoad "DEAD CODE" comment** — GIFieldLoad is LIVE (lowered
-  `lir_lower.gg:3324`); update when Step B makes it an emit site.
-- **Phase 1.5** — the `it`-closure-call ABI gap (`lir_codegen.gg:~3672` casts → `void value not
-  ignored`) blocking every implicit-it/spawn RUN; + real `__gorget_spawn_`/`__gorget_await_` wiring.
+**Closure follow-ups (logged, low-pri):**
+- **dead `LowerCtx.next_closure_id` field** (`lower.gg:~164`) — never read/written; trivial cleanup
+  (touches 4 ctor sites).
+- **§5a′ nested-closure-inside-STUBBED-outer** record-only walk — NOT needed now (corpus proven
+  empty); implement IF a future fixture nests a closure inside a capturing/nested outer.
+- **end-of-Phase-2 cleanup: delete the `__make_closure_` NULL-env wart** (`lir_codegen.gg:3707`) once
+  EVERY closure class lowers through the real struct path.
+- **stale comments retired in Step A/B**; the self-host-as-showcase audit can sweep any remaining
+  `__Closure_`/scan fossils.
 
 ## 🧭 SESSION ROLLUP / HANDOVER
 **Code GREEN on `gorget-1` @ live tip `7c91ec75` (`git log -1` for the live tip) — landed 2026-06-02: EIf-as-value + 3 PARALLEL FILE-DISJOINT CHAINS [A arena_checkpoint `loader.gg` `4189e55f` +1 · C enum-drop-name-guard DELETION `lir_lower.gg` `d4e9b78d` +0 reference-grade · B EMatch-as-value `lower.gg` `43216ed5` +7] + closure-body PHASE 1 [`lower.gg` `3164368b` +4, non-capturing/direct-call] + **uint8 literal-narrowing FIX [RUST `src/semantic/typecheck.rs` `b6f67cd9`, parity-NEUTRAL correctness: peel Ref/Owned before the int-literal narrowing gate → unblocks gorget-arena md3/bsp; regression fixture `narrow_int_literal_vs_ref_operand` now LIVE]**; ALL gates GREEN — parity 260/28.2% [+12 this session: 248→260; uint8 is a correctness fix, NOT a parity change], lock-in 260/0, fixed_point GREEN, FULL integration **1179/0** (the +1 vs 1178 = the un-ignored uint8 fixture). 🧩 START HERE → **the "🎯 NEXT SESSION — Phase 2 FULL UNIVERSAL" block immediately below.**** The **3-chain runtime-parity arc is COMPLETE**, and **TEN backlog FIDELITY rounds have landed**: R6→R11 (see DONE.md) → **atomics/sync `d742af36`** (extern-method dispatch + construction special-case + bool-return reg; +3; ⚠ owner-approved `map_stdlib_name` retirement DEFERRED with PROOF it breaks Rust's SPAWNED sync fixtures — High Priority follow-up) → **Option[Ref]-lift `32784887`** (port `try_lift_option_ref` + retire the `resource_meta_for` `.clone()` workaround; +1 heap_basic; 5 brief-review passes caught a UAF/double-deref/double-free chain) → **EIf-as-value `504f871a`** (port Rust's `build_if_chain_expr` + `lower_block_expr` + `lower_stmt_as_tail_value`; the self-host `EIf`-in-`lower_expr` was a stub that dropped branch values + returned unassigned I64 → every if-EXPRESSION yielded garbage; +1 `if_expr_resource_arms`; **the driver self-compiles its OWN if-exprs** (`format_gir.gg:177`) so `fixed_point` RE-CONVERGED = the load-bearing validation; 3 review passes caught a blocking no-else default + the closure-blocked demo) — all DONE, see DONE.md. **HONEST north-star number: RUNTIME PARITY = 260/923 = 28.2% MATCH** (Chain-3 baseline 18.6%; R10 +6; Heap +2; sync +3; Option[Ref] +1; EIf +1; **3 parallel chains A/C/B +8** = 256; **closure-body Phase 1 +4** = 260). Now (re-measure post-regen via `GG_RUNTIME_DIFF=1 … self_host_runtime_diff`): MATCH 260; the +12 came OUT of the WRONG/CC-FAIL/CRASH buckets (EMatch +7 value-position matches, arena +1 CC-FAIL, closure Phase 1 +4). **⬅ ACTIVE NEXT (owner-chosen 2026-06-02, to be done with FRESH CONTEXT) = Phase 2 closure CAPTURES via the FULL-UNIVERSAL make-site refactor — see the dedicated "🎯 NEXT SESSION" block below. Deferred-but-queued (do NOT lose): the `EDo`/`EBlock` block-expr cluster (reuse `lower_match_expr`/`lower_block_expr`/`lower_stmt_as_tail_value`) + the 2 EMatch-isolated pre-existing bugs (struct-with-String enum-payload binding in `lower_match_stmt`; String `.data` field-access → unblock the 2 named EMatch targets, +2). ⚠ Per [[feedback-rust-not-sacrosanct]]: don't blindly mirror Rust — evaluate if Rust's shape is reference-grade first; improve BOTH where it isn't (Rust changes = heavier full-suite chains, owner promotes main).**
