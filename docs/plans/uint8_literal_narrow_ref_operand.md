@@ -34,7 +34,8 @@ In `infer_expr`'s `Expr::BinaryOp` arm (`src/semantic/typecheck.rs`):
 At the gate (lines 1238–1246), before the `Primitive` check, peel `Ref`/`Owned` wrappers and
 thread the PEELED-INNER typeid as the hint (the `IntLiteral` consumer at line ~1007 requires a
 `Primitive` hint, so thread the inner P's typeid, NOT the `Ref` typeid). Mirror the EXISTING
-reference-grade peel idiom in the SAME file at **lines 2676–2680** (cast-castability "auto-deref"):
+reference-grade peel idiom in the SAME file at **lines 2667–2670** (the `src_inner` cast
+auto-deref; pass-1 corrected the cite from 2676 — 2676 is the adjacent `tgt_castable` block):
 ```rust
 let src_inner = match self.types.get(src) {
     ResolvedType::Ref(inner) | ResolvedType::Owned(inner) => self.resolve_type(*inner),
@@ -74,8 +75,11 @@ the established idiom; the gate just never adopted it).
 3. **Targeted regression (must stay green):** `cargo test --test integration --release` for
    `value_out_of_range_error`, `string_coerce_args`, `struct_string_coerce`, `char_str_coerce`,
    `int_range`, `match_int_ranges`, `overflow_add`/`overflow_sub`/`overflow_mul`/`overflow_wrap`,
-   `panic_location_overflow`; `cargo test --test security` (esp. `attack_40_integer_narrowing` —
-   uses explicit `as`, must be unaffected).
+   `panic_location_overflow`; `cargo test --test security` (esp. `sec_40_integer_narrowing` —
+   uses explicit `as`, must be unaffected). ⚠ **(pass-1 baseline flag) `sec_19_field_borrow_escape`
+   and `sec_80_char_construction_edges` FAIL on the clean tree WITHOUT this fix** (pre-existing,
+   unrelated to integer narrowing — confirmed by stashing the fix). Do NOT read those 2 reds as a
+   regression from this change; everything else in the security suite must stay green.
 4. **FULL** `cargo test --lib` + `cargo test --test integration -- --test-threads=4` (parent
    runs the full sweep at integration — this is a compiler change, broad blast radius in
    principle even if narrow in practice). ⚠ Because the Rust compiler builds the self-host driver,
