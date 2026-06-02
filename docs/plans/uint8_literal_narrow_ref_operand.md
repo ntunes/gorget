@@ -80,15 +80,18 @@ the established idiom; the gate just never adopted it).
    runs the full sweep at integration — this is a compiler change, broad blast radius in
    principle even if narrow in practice). ⚠ Because the Rust compiler builds the self-host driver,
    the combined-tree gate also re-runs the self-host comparison/runtime tests.
-5. **Wire a fixture** (per "Don't redesign around compiler gaps" — expected output reflects what
-   the language SHOULD do): `tests/fixtures/narrow_int_literal_vs_ref_operand.gg` exercising all
-   3 forms (declared-local, plain-fn, inline `.get().unwrap()`) with DETERMINISTIC stdout that
-   PROVES narrowing works AND the runtime value is correct — design the data so the inline-chain
-   comparison branch is actually TAKEN (e.g. push a known byte equal to the literal so the
-   `== <lit>` branch prints), not just type-checks. Register it in `tests/integration.rs` as a
-   normal build+run fixture.
+5. **The regression fixture ALREADY EXISTS — UN-IGNORE it (do NOT create a duplicate).**
+   `tests/fixtures/narrow_int_literal_vs_ref_operand.gg` (exercises all 3 forms — declared-local,
+   plain-fn, inline `.get().unwrap()` — with deterministic stdout, and the inline-chain comparison
+   branches are actually TAKEN: data `[7,0]`, prints `local: seven` / `plain: seven` /
+   `inline: seven` / `inline: zero`) is already wired in `tests/integration.rs` as
+   `narrow_int_literal_vs_ref_operand`, currently `#[ignore]`d (the inline case won't type-check
+   until this fix lands). The executor must: REMOVE the `#[ignore = "..."]` attribute on that test
+   + confirm it now PASSES (`cargo test --test integration --release narrow_int_literal_vs_ref_operand`).
+   It already follows "Don't redesign around compiler gaps" (expected output = correct behavior).
+   Do NOT author a new fixture.
 
 ## Files (stage by name only — never `-a`)
-`src/semantic/typecheck.rs` + new `tests/fixtures/narrow_int_literal_vs_ref_operand.gg` +
-`tests/integration.rs` (the fixture registration). No self-host `.gg` files; no `TODO`/`DONE`
-(parent owns them).
+`src/semantic/typecheck.rs` (the fix) + `tests/integration.rs` (REMOVE the `#[ignore]` on
+`narrow_int_literal_vs_ref_operand` — the fixture `.gg` + its registration already exist, do NOT
+re-add them). No self-host `.gg` files; no `TODO`/`DONE` (parent owns them).
