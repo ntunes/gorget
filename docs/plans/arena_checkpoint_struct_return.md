@@ -21,9 +21,12 @@ The loader's extern-equip-stub return-type registration (`loader.gg:854-866`) re
 the return type only for `TPrimitive` returns `void`/`bool` (the R10 + sync-round work).
 It has **no `TNamed` (struct) case**, so for `checkpoint()` (return type
 `TNamed("ArenaCheckpoint")`) `stub_register_ret` stays false → no fn_sigs stub is pushed →
-the equip pre-pass (`lower.gg:10373-10392`, which ALREADY handles TNamed via
-`map_fn_return_type`) never sees it → the call site (`lower.gg:~5124`) defaults `ret_tid`
-to `I64_TYPE`. The downstream type-mapping is ALREADY CORRECT and needs NO changes:
+the IFunction fn_sigs pre-pass (`lower.gg:10516-10539`, the
+`gmod.fn_sigs.put(fsdef.name, ret_tid)` loop, which routes TNamed through
+`map_fn_return_type`/`map_ast_type`) never sees it → the call site
+(`lower.gg:5297` `int ret_tid = I64_TYPE`, overridden at `:5304` only if `fn_sigs`
+contains the sig) defaults `ret_tid` to `I64_TYPE`. The downstream type-mapping is ALREADY
+CORRECT and needs NO changes:
 `lir_to_runtime_name` maps `ArenaCheckpoint → GorgetArenaCheckpoint` (`lir_codegen.gg:172`),
 `is_runtime_defined_named` skips emitting it (uses the runtime typedef, `:146`), and the
 `GorgetArenaCheckpoint` typedef is spliced from `runtime_arena_alloc.c` whenever a
@@ -63,14 +66,24 @@ struct/generic returns — `read_all`→`Result[..]`, `local_addr`→`UdpAddr`, 
 (the ~10 affected network fixtures were already CC-FAIL for unrelated reasons and stay so;
 the only bare-struct returns — ArenaCheckpoint/ExecResult/UdpAddr — all have
 `lir_to_runtime_name` mappings, so no unmapped-struct emit). **Executor nicety:** update the
-`loader.gg:822-853` comment block to describe the new TNamed struct-handle case (+ that
-String/str can't reach it because they're TPrimitive) — keep the self-host reading like the
-manual.
+`loader.gg:822-853` comment block to describe the new TNamed struct-handle case AND state
+WHY it can safely register all-TNamed-except-String here when the sibling free-extern stub
+arm (`loader.gg:722-731`) is deliberately String-ONLY (and warns that registering a `cstr`
+return breaks the `const char*`-vs-`Str` coercion path): **no `cstr`-returning extern lives
+in an equip block** — every `cstr` extern is declared in an `extern "C":`/`extern "Gorget":`
+block, so a `cstr` return can never reach this equip-stub arm (and `String`/`str` parse as
+`TPrimitive`, so they can't either). Without that note a future reader sees two
+contradictory carve-out philosophies in the same file and copies the wrong one. Keep the
+self-host reading like the manual.
 
 ## Scope / expected outcome
-`arena_checkpoint` CC-FAIL → MATCH (**+1**). The same fix unlocks 4 other struct-returning
-extern equip methods (`io.gg` File `_std*_handle()` ×3, `udp.gg` `local_addr()`) — only
-`arena_checkpoint` is fixture-tested, but re-measure for any others that move. Do NOT
+`arena_checkpoint` CC-FAIL → MATCH (**+1**). The same TNamed arm also registers the OTHER
+struct-returning extern methods that live *inside equip blocks* — `File.read_all → Result`,
+`Process.read_all → ExecResult`, `Udp.local_addr → UdpAddr` (pass-3 enumerated these) — only
+`arena_checkpoint` is fixture-tested; re-measure for any others that move. ⚠ NOTE (pass-3
+correction): `io.gg`'s `_stdin/_stdout/_stderr_handle() → File` are NOT affected — they live
+in an `extern "Gorget":` block (`io.gg:55-58`), NOT an equip block, so they go through the
+`IExternBlock` String-only path (`loader.gg:722-731`), not this equip-stub arm. Do NOT
 reshape the fixture or `alloc.gg`.
 
 ## ⚠ File-disjointness (PARALLEL-chain discipline)
