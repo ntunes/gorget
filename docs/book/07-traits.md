@@ -450,7 +450,7 @@ void main():
         print("colors equal")    # colors equal
 ```
 
-**Derivable traits:** `Equatable`, `Displayable`, `Cloneable`, `Hashable`, `Default`,
+**Derivable traits:** `Equatable`, `Displayable`, `Debuggable`, `Cloneable`, `Hashable`, `Default`,
 `Serializable`, `Deserializable`. Single-field structs can also derive `From` and
 `TryFrom`.
 

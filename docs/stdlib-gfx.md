@@ -1,6 +1,6 @@
 # xtd.gfx — High-Level 2D Graphics
 
-A simple, Gorget-idiomatic API for 2D drawing. Built on top of [`xtd.sdl`](stdlib-sdl.md) and written entirely in Gorget (see `lib/gg/gfx.gg`).
+A simple, Gorget-idiomatic API for 2D drawing. Built on top of [`xtd.sdl`](stdlib-sdl.md) and written entirely in Gorget (see `lib/xtd/gfx.gg`).
 
 For event handling, import `xtd.sdl` directly alongside `xtd.gfx`.
 
@@ -63,7 +63,7 @@ Created via `open()`, destroyed via `close()`.
 ### Window management
 
 ```gorget
-Canvas open(String title, int w, int h)  # Open a window and return a Canvas
+Result[Canvas, String] open(String title, int w, int h)  # Open a window; returns Result (call .unwrap())
 void close(Canvas c)                   # Close the window and shut down SDL
 int width(Canvas c)                    # Get window width in pixels
 int height(Canvas c)                   # Get window height in pixels
@@ -102,7 +102,7 @@ from xtd.gfx import width, height
 from xtd.sdl import sdl_poll_event, SDL_QUIT
 
 void main():
-    auto canvas = open("Bouncing Ball", 800, 600)
+    auto canvas = open("Bouncing Ball", 800, 600).unwrap()
     auto black = Color(0, 0, 0, 255)
     auto red = Color(220, 50, 50, 255)
 
@@ -142,7 +142,7 @@ See `examples/gfx_demo.gg` for a more complete demo.
 
 ## Design Notes
 
-`xtd.gfx` is implemented as a real Gorget source file (`lib/gg/gfx.gg`), not as a compiler-level module. This means:
+`xtd.gfx` is implemented as a real Gorget source file (`lib/xtd/gfx.gg`), not as a compiler-level module. This means:
 
 - It dogfoods the language — the circle algorithms use Gorget's while loops, arithmetic, and control flow
 - It demonstrates cross-module imports (gfx.gg imports from xtd.sdl)

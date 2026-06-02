@@ -45,7 +45,7 @@ running.
 assert true
 assert 2 + 2 == 4
 assert x > 0, "x must be positive"
-assert items.len() == 3, "expected 3 items, got {items.len()}"
+assert items.len() == 3, f"expected 3 items, got {items.len()}"
 ```
 
 The optional second argument is an error message. Without it, the compiler

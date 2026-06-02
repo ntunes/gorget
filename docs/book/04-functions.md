@@ -35,7 +35,7 @@ bool is_positive(int n): n > 0
 float square(float x): x * x
 ```
 
-The `= expr` form is equivalent to `return expr` in a block. Use it when the
+This expression-body form is equivalent to `return expr` in a block. Use it when the
 function fits on one line.
 
 ---

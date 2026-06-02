@@ -37,7 +37,7 @@ GIR lowering   src/ir/lowering/     lower_module(&module, &result, &opts)       
   ▼
 GIR optimize   src/ir/transforms/   optimize::optimize_module(&mut gir)          (main.rs:556)
   ▼
-LIR lowering   src/lir/lower.rs     lower::lower_module(&gir) → LirModule        (main.rs:681)
+LIR lowering   src/lir/lower/mod.rs lower::lower_module(&gir) → LirModule        (main.rs:681)
   │                                  split_critical_edges → construct_ssa (per fn)
   │                                  wire_collection_bridges, promote_runtime_calls,
   │                                  compute_module_{pointee,value}_types, value_origins

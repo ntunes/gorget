@@ -133,7 +133,7 @@ after, since they're opaque C handles never declared in `.gg` source
 
 ## Monomorphization
 
-Gorget has no runtime generics — every `Pair[int, str]` becomes a
+Gorget has no runtime generics — every `Pair[int, String]` becomes a
 distinct concrete `TypeDef`, every `identity[T]` call becomes a call to
 a distinct concrete `Function`. The machinery is `GenericCollector`
 (`src/ir/lowering/generics/mod.rs:51`), which runs in phases:
@@ -150,7 +150,7 @@ a distinct concrete `Function`. The machinery is `GenericCollector`
    (`generics/mod.rs:783`) is a **worklist fixpoint**: it indexes through
    the growing `instances` vector, and for each instance, substitutes
    the concrete type args into the template body and *re-scans* it. A
-   `Vector[Pair[int, str]]` instantiation discovered inside a generic
+   `Vector[Pair[int, String]]` instantiation discovered inside a generic
    function body only becomes concrete once the outer function is
    specialized, so the loop keeps going until no new instances appear
    (`generics/mod.rs:784-786`, `while i < self.instances.len()`). The

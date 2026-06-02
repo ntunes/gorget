@@ -174,7 +174,7 @@ that block contains a yield point.
 ```gorget
 with counter:
     int snapshot = counter       # read while lock is held
-    sleep(100)                   # lock released here; another task may write
+    sleep_ms(100)                   # lock released here; another task may write
                                  # lock reacquired; counter is refreshed
     counter = snapshot + 1       # PROBLEM: snapshot is stale
 ```
@@ -310,7 +310,7 @@ section simultaneously — without any shared variable.
 ```gorget
 async void limited(Channel[void] sem, int id):
     sem.recv()                  # acquire: blocks if pool is empty
-    sleep(100)                  # critical section
+    sleep_ms(100)                  # critical section
     print(f"running: {id}")
     sem.send(())                # release
 
@@ -404,7 +404,7 @@ released at the yield.
 ```gorget
 with x:
     if x > 0:           # condition holds now
-        sleep(100)       # lock released — another task may set x to 0
+        sleep_ms(100)       # lock released — another task may set x to 0
                          # lock reacquired, x refreshed — but we're already inside the branch
         x -= 1           # warning: condition may no longer hold
 ```
@@ -418,7 +418,7 @@ the yield. The write discards any changes that occurred during the yield.
 
 ```gorget
 int val = x             # derived from shared x
-sleep(100)              # x may change; val is now stale
+sleep_ms(100)              # x may change; val is now stale
 x = val + 1             # warning: lost update — val is stale
 ```
 

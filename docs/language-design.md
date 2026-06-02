@@ -325,18 +325,18 @@ Bare Resource params are `const` — the C compiler enforces immutability. The `
 
 **Storing borrowed parameters:**
 
-Borrowed parameters (bare and `&`) cannot be stored in any structure that escapes the callee's frame. This prevents shallow-copy bugs where the stored value shares the caller's heap allocations:
+Storing a borrowed parameter (bare or `&`) into a structure that escapes the callee's frame **clones it at the boundary** — the stored value is an independent copy, never a shallow alias of the caller's heap allocation. When the source is dead at that point (or you write `!`), the value is **moved** instead of cloned:
 
 ```gorget
 struct Wrapper:
     Vector[int] data
 
-# ERROR: cannot store immutable parameter in a struct
-Wrapper bad(Vector[int] v):
-    return Wrapper(v)
+# OK: a live borrowed parameter is CLONED into the field at the boundary
+Wrapper clone_in(Vector[int] v):
+    return Wrapper(v)        # v is still live → cloned into Wrapper.data
 
-# OK: move parameter transfers ownership
-Wrapper good(Vector[int] !v):
+# OK: move transfers ownership with no clone (v is dead afterwards)
+Wrapper move_in(Vector[int] !v):
     return Wrapper(!v)
 
 # OK: read-only access is fine
@@ -344,7 +344,7 @@ int first(Vector[int] v):
     return v.get(0).unwrap()
 ```
 
-This rule ensures that resource-type values always have exactly one owner. If you need to store a parameter, return it, or pass it to a constructor, declare it with `!` to transfer ownership.
+Either way, resource-type values still end up with exactly one owner — the clone gives the new owner its own copy, the move hands over the original. Write `!` when you want to force the transfer (no clone) and let the original go dead.
 
 **Trivial types** pass by value regardless of sigils (except `&` on primitives, which creates a mutable pointer for out-params).
 
@@ -565,7 +565,6 @@ String process(String &data):
 - **Use-after-move** — accessing a variable after it has been moved (`!`) is a compile error
 - **Dangling returns** — returning a reference to a local variable is rejected
 - **Borrow/move conflicts** — using a borrowed reference after the source has been moved
-- **Storing borrowed parameters** — borrowed parameters cannot be stored in structures that outlive the callee (see §3.3)
 - **Transitive tracking** — when the return calls another function, the compiler uses the callee's already-computed origin metadata
 - **Local aliases** — assignments from parameters to locals are traced through
 
@@ -1644,7 +1643,7 @@ guard.push(42)
 
 Smart pointers automatically dereference to their inner type:
 ```gorget
-Box[String] boxed = Box.new(String.from("hello"))
+Box[String] boxed = Box.new(String("hello"))
 print(boxed.len())       # Box[String] auto-derefs to String, calls String.len()
 ```
 
@@ -2397,13 +2396,13 @@ What happens next depends on how the borrow is used:
 ```gorget
 Vector[int] row = matrix[0].clone()   # explicit clone — allocation visible
 auto row_ref = matrix[0]              # borrow — zero cost reference
-Vector[int] taken = !matrix.remove(0) # move — take ownership, no allocation
+Vector[int] taken = matrix.remove(0).unwrap() # remove + unwrap — take ownership, no clone
 ```
 
 **Consuming element access:** To move an element out of a collection (transferring ownership), use a consuming method instead of subscript:
 
 ```gorget
-Vector[int] row = matrix.remove(0)   # removes and returns — no clone
+Vector[int] row = matrix.remove(0).unwrap()   # removes and returns — no clone
 Option[int] last = v.pop()           # removes last — no clone
 ```
 
@@ -3169,10 +3168,10 @@ void introduce_all(Vector[Box[Animal]] animals):
 
 void main():
     Vector[Box[Animal]] zoo = Vector[Box[Animal]]()
-    zoo.push(Box.new(Dog(String.from("Rex"))))
-    zoo.push(Box.new(Cat(String.from("Whiskers"), true)))
-    zoo.push(Box.new(Dog(String.from("Buddy"))))
-    zoo.push(Box.new(Cat(String.from("Shadow"), false)))
+    zoo.push(Box.new(Dog(String("Rex"))))
+    zoo.push(Box.new(Cat(String("Whiskers"), true)))
+    zoo.push(Box.new(Dog(String("Buddy"))))
+    zoo.push(Box.new(Cat(String("Shadow"), false)))
 
     introduce_all(zoo)
     # Rex says woof!
@@ -3198,7 +3197,7 @@ block          = COLON NEWLINE INDENT { statement } DEDENT ;
 (* Functions *)
 function_def   = { attribute } [ "public" ] [ "async" ] [ "const" ] [ "static" ]
                  return_type IDENT [ generic_params ] "(" [ param_list ] ")"
-                 [ "throws" type ] ( block | "=" expr NEWLINE ) ;
+                 [ "throws" type ] ( block | ":" expr NEWLINE | "=" STRING_LITERAL NEWLINE ) ;
 return_type    = type | "void" ;
 param_list     = param { "," param } ;
 param          = type [ "&" | "!" ] IDENT [ "=" expr ] ;

@@ -21,7 +21,7 @@ void main():
 
     CommandResult result = session.run("uname -a")
     print(result.stdout)
-    print("exit code: {result.exit_code}")
+    print(f"exit code: {result.exit_code}")
 
     session.close()
 ```

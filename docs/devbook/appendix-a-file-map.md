@@ -10,7 +10,7 @@ lowering → LIR → BIR → backend (C or LLVM), and the directory layout follo
 almost stage-for-stage.
 
 All LOC figures below are re-derived from the current working tree. The Rust
-sources total ~183k lines (`find src -name '*.rs' | xargs wc -l`); the bundled C
+sources total ~169k lines (`find src -name '*.rs' | xargs wc -l`); the bundled C
 runtime/vendored amalgamations are far larger and counted separately in the
 [Backend](#inside-srcbackend) section. Numbers are rounded and **will drift** —
 treat them as relative weights, not contracts, and re-run `wc -l` if you need an
@@ -33,7 +33,7 @@ file is called out. "Pipeline stage" follows the order above. Files marked
 | `src/ir/` | ~54,300 | GIR + lowering | The GIR (mid-level IR; "G" for Gorget) plus AST→GIR lowering (monomorphization, drop insertion, closures) and GIR transforms. Largest subsystem. |
 | `src/lir/` | ~22,000 | LIR | SSA-form low-level IR and the GIR→LIR lowering pass. Sole production lowering target. |
 | `src/bir/` | ~6,300 | BIR | Backend IR — a typed newtype over `LirModule` guaranteeing canonical high-level ops are expanded to primitives before a backend sees them. |
-| `src/backend/` | ~31,700 (Rust) | Codegen | C and LLVM backends plus the embedded C runtime (the runtime is a Rust string constant, already counted in the Rust figure). The vendored C amalgamations are ~282k lines on top (see below). |
+| `src/backend/` | ~17,200 (Rust) | Codegen | C and LLVM backends. The C runtime is no longer embedded as a Rust string — it lives in ~62 external `.c` files under `c/runtime/` (~14,670 LOC, pulled in via `include_str!`) and is counted separately, as are the vendored C amalgamations (~282k lines; see below). |
 | `src/sim/` | ~10,400 | Interpreter | GIR interpreter (`gg sim`) — executes GIR directly without C compilation. Reference oracle / fast-iteration path. |
 | `src/formatter/` | ~3,200 | Tooling | Source formatter (`gg fmt`), Wadler-style pretty-printer. |
 
@@ -194,7 +194,7 @@ Codegen. The GIR→C backend was retired; all compilation goes through LIR
 
 | File | LOC | Responsibility |
 |------|-----|----------------|
-| `c/c_runtime.rs` | ~14,900 | The C runtime library, embedded as Rust string constants (`RUNTIME_PREAMBLE` at `src/backend/c/c_runtime.rs:2`). Strings, collections (`GorgetArray`/`GorgetMap`), allocator, async/channels, GL/Metal/SDL runtimes. |
+| `c/c_runtime.rs` | ~243 | `include_str!` manifest that assembles the C runtime from the `.c` files in `c/runtime/` (`RUNTIME_PREAMBLE` at `src/backend/c/c_runtime.rs:2`). The runtime itself — strings, collections (`GorgetArray`/`GorgetMap`), allocator, async/channels, GL/Metal/SDL — is ~14,670 LOC across ~62 `.c` files in `c/runtime/`. |
 | `llvm/mod.rs` | ~6,735 | LIR → LLVM IR (textual `.ll`) backend; near-1:1 since LIR is already SSA (`src/backend/llvm/mod.rs:1`). |
 | `c_lir/mod.rs` | ~3,199 | LIR → C backend — thin 1:1 translation, no semantic decisions (`src/backend/c_lir/mod.rs:1`). |
 | `c_lir/emit_types.rs` | ~2,931 | C type emission (struct layout, topo sort, union enums). |
@@ -202,7 +202,7 @@ Codegen. The GIR→C backend was retired; all compilation goes through LIR
 | `c_lir/emit_call_extern.rs` | ~908 | Extern/runtime call emission. |
 | `mod.rs` | ~559 | `Backend` trait + `map_stdlib_name`. |
 | `c_lir/emit_printf.rs`, `c_lir/emit_hof.rs` | ~480 total | printf-format fixups; HOF emission. |
-| `c/mod.rs` | ~5 | Module shim re-exporting `c_runtime` (GIR C backend removed). |
+| `c/mod.rs` | ~8 | Module shim re-exporting `c_runtime` (GIR C backend removed); also hosts the runtime-extract test. |
 
 **Vendored / non-Rust C** lives under `src/backend/c/` and is not part of the
 Rust LOC: `sqlite3/sqlite3.c` (~260k), `sqlite3/sqlite3.h` (~13.6k),

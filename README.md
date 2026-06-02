@@ -11,10 +11,10 @@ struct Message:
     int priority
 
 void preview(Message msg):           # immutable borrow — caller keeps ownership
-    print("[Preview] {msg.subject}")
+    print(f"[Preview] {msg.subject}")
 
 void send(Message !msg):             # move — ownership transfers, msg is consumed
-    print("[Sent] {msg.subject}")
+    print(f"[Sent] {msg.subject}")
 
 void main():
     Message msg = Message("Alice", "Meeting tomorrow", 1)
@@ -29,7 +29,7 @@ $ gg run mail.gg
 [Sent] Meeting tomorrow
 ```
 
-> Gorget is in active development. The language is expressive enough to self-host its own lexer, parser, and type checker (comparison tests pass at 100% against the Rust originals), but it hasn't seen production use yet. Expect breaking changes before 1.0.
+> Gorget is in active development. The language is expressive enough to self-host its own lexer, parser, and type checker — the self-host lexer matches the Rust original byte-for-byte, and the parser and type checker are at near-parity — but it hasn't seen production use yet. Expect breaking changes before 1.0.
 
 ## Why Gorget
 
@@ -76,7 +76,7 @@ int add(int a, int b):
     return a + b
 
 # Expression-body shorthand
-int double(int x) = x * 2
+int double(int x): x * 2
 
 # Type inference for locals
 auto result = add(10, double(5))
@@ -99,7 +99,7 @@ void main():
 
 # rethrow — transform errors with context
 Config load(String path) throws AppError:
-    String content = read_file(path) rethrow (String e): AppError.Io("reading {path}: {e}")
+    String content = read_file(path) rethrow (String e): AppError.Io(f"reading {path}: {e}")
     return parse(content) rethrow (String e): AppError.Parse(e)
 
 # on error — cleanup that only runs on failure (like Zig's errdefer)
@@ -115,7 +115,7 @@ void main():
         case Ok(cfg):
             serve(cfg)
         case Error(e):
-            print("failed: {e}")
+            print(f"failed: {e}")
 ```
 
 ### Pattern matching
@@ -201,7 +201,7 @@ struct Circle:
 
 equip Circle with Printable:
     String describe(self):
-        return "circle with radius {self.radius}"
+        return f"circle with radius {self.radius}"
 ```
 
 ### Closures and higher-order functions
@@ -266,7 +266,7 @@ cargo build --release
 cat > hello.gg << 'EOF'
 void main():
     auto name = "Gorget"
-    print("Hello, {name}!")
+    print(f"Hello, {name}!")
 EOF
 
 gg run hello.gg
@@ -344,8 +344,8 @@ Test files use `test` blocks with `assert` for contracts, `@should_panic` for ex
 
 ```bash
 cargo build                                        # build the compiler
-cargo test --lib                                   # ~970 unit tests
-cargo test --test integration -- --test-threads=4  # ~960 integration tests
+cargo test --lib                                   # ~1066 unit tests
+cargo test --test integration -- --test-threads=4  # ~1180 integration tests
 ```
 
 Integration tests live in `tests/fixtures/*.gg` — each is a self-contained program with deterministic stdout.

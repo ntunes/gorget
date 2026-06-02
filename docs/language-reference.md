@@ -79,7 +79,7 @@ bool   String void   auto   byte
 **Declaration keywords:**
 
 ```
-const  struct  enum  trait  equip  public  static  type  newtype  directive
+const  struct  enum  trait  equip  public  private  static  type  newtype  directive  meta
 ```
 
 **Control flow keywords:**
@@ -98,13 +98,15 @@ and  or  not  is
 **Literal keywords:**
 
 ```
-true  false  None  Some  Ok  Error
+true  false
 ```
+
+`None`, `Some`, `Ok`, and `Error` are **prelude variant identifiers**, not keywords — they live in the prelude and can be shadowed.
 
 **Error handling keywords:**
 
 ```
-throw  throws  catch
+throw  throws  catch  rethrow
 ```
 
 **Import keywords:**
@@ -122,19 +124,19 @@ with  as  via
 **Generic/constraint keywords:**
 
 ```
-extends
+extends  where
 ```
 
 **Concurrency keywords:**
 
 ```
-async  await  spawn  shared
+async  await  spawn  blocking  shared  select
 ```
 
 **Safety keywords:**
 
 ```
-unsafe  extern  noreturn
+unsafe  extern  noreturn  unchecked
 ```
 
 **Self keywords:**
@@ -143,11 +145,7 @@ unsafe  extern  noreturn
 self  Self
 ```
 
-**Smart pointer keywords:**
-
-```
-Box  Shared  Weak  Mutex  RwLock
-```
+Smart-pointer / concurrency *types* — `Box`, `Shared`, `Weak`, `Mutex`, `RwLock` — are library types, **not keywords** (they can be shadowed); see §4.5. The lowercase `shared` qualifier (under Concurrency above) is the keyword.
 
 **Ownership keywords:**
 
@@ -158,7 +156,7 @@ move  mutable
 **Testing keywords:**
 
 ```
-test  suite  assert
+test  suite  assert  bench  snapshot
 ```
 
 **Special identifiers:**
@@ -382,11 +380,11 @@ All primitive numeric types and `bool` are **Copy** types — they are implicitl
 tuple_type = "(" type "," type { "," type } ")" ;
 ```
 
-A fixed-size, heterogeneous sequence. Fields are accessed by index: `.0`, `.1`, etc.
+A fixed-size, heterogeneous sequence. Fields are accessed by name: `._0`, `._1`, etc. (the bare-int form `.0` also parses for single-level access, but `._0` is preferred — it composes for nested access, e.g. `nested._1._0`).
 
 ```gorget
 (int, String) pair = (42, "hello")
-int x = pair.0
+int x = pair._0
 ```
 
 **Bare tuple return types.** In function return position, parentheses are optional — the return type can be written as a comma-separated list of types directly before the function name:
@@ -572,7 +570,7 @@ item = function_def | struct_def | enum_def | trait_def
 function_def = { attribute } [ "public" ] [ qualifiers ]
                return_type IDENTIFIER [ generic_params ]
                "(" [ param_list ] ")" [ throws_clause ]
-               ( block | "=" expr NEWLINE | NEWLINE ) ;
+               ( block | ":" expr NEWLINE | "=" STRING_LITERAL NEWLINE | NEWLINE ) ;
 
 qualifiers    = { "async" | "const" | "static" | "unsafe" } ;
 return_type   = type { "," type } | "void" ;  (* bare tuple: String, int or (String, int) *)
@@ -592,7 +590,7 @@ A function has:
 - Optional **generic parameters** in `[]`
 - A **parameter list** in `()`
 - Optional **throws clause**
-- A **body**: either an indented block, an expression body (`= expr`), or no body (declaration only, for trait methods and extern functions)
+- A **body**: either an indented block, an inline expression body (`: expr`), an extern symbol (`= "c_name"`), or no body (declaration only, for trait methods and extern functions)
 
 **Parameter ownership modes:**
 
@@ -708,7 +706,7 @@ match c:
     case .Red:                 # Pattern: nullary, no parens
         print("red")
     case .Blue(n):
-        print("blue {n}")
+        print(f"blue {n}")
 ```
 
 **Glob import:** Use `EnumName.*` to bring a type's variants into bare scope:
@@ -741,7 +739,7 @@ Traits define shared behavior. They may contain:
 
 ```gorget
 trait Displayable:
-    String to_string(self)
+    String display(self)
 
 trait Comparable:
     int compare(self, Self other)
@@ -781,8 +779,8 @@ equip Point:
 
 ```gorget
 equip Point with Displayable:
-    String to_string(self):
-        return "({self.x}, {self.y})"
+    String display(self):
+        return f"({self.x}, {self.y})"
 ```
 
 **Generic implementation** (one impl that covers a family of types — `Vector[T]` for any `T`, `Pair[A, B]` for any `A` / `B`):
@@ -791,7 +789,7 @@ equip Point with Displayable:
 # Inherent generic impl — all `Vector[T]` get this method
 equip [T] Vector[T]:
     void describe_self(self):
-        print("a Vector with {self.len()} items")
+        print(f"a Vector with {self.len()} items")
 
 # Trait generic impl — every `Vector[T]` becomes an `Iterable[T]`
 equip [T] Vector[T] with Iterable[T]:
@@ -1051,7 +1049,7 @@ var_decl = [ "const" | "shared" [ "(" shared_override ")" ] ] ( type | "auto" ) 
 shared_override = "rwlock" | "atomic" ;
 ```
 
-Declares a new variable with an explicit type or inferred type (`auto`). Local variables are mutable by default; prefix with `const` for immutability. Note that function arguments follow the opposite convention: they are immutable borrows by default, requiring `&` for mutable access (see [Ownership](#43-ownership-rules)).
+Declares a new variable with an explicit type or inferred type (`auto`). Local variables are mutable by default; prefix with `const` for immutability. Note that function arguments follow the opposite convention: they are immutable borrows by default, requiring `&` for mutable access (see [Ownership](#91-ownership-rules)).
 
 ```gorget
 int x = 5
@@ -1220,7 +1218,7 @@ match color:
     case Red:
         print("red")
     case Custom(r, g, b):
-        print("rgb({r}, {g}, {b})")
+        print(f"rgb({r}, {g}, {b})")
     else:
         print("other")
 ```
@@ -1282,7 +1280,7 @@ else:
 ```gorget
 Vector[(int, String)] pairs = ...
 for i, s in pairs:          # bare — preferred
-    print("{i}: {s}")
+    print(f"{i}: {s}")
 # for (i, s) in pairs:      # parenthesized — also valid
 ```
 
@@ -1473,21 +1471,24 @@ From lowest to highest precedence:
 | Precedence | Operators / Forms            | Associativity |
 |------------|------------------------------|---------------|
 | 0          | `rethrow` `catch`            | Right         |
-| 1          | `or`                         | Left          |
-| 2          | `and`                        | Left          |
-| 3          | `not`                        | Unary (prefix)|
-| 4          | `\|` (bitwise OR)            | Left          |
-| 5          | `^` (bitwise XOR)            | Left          |
-| 6          | `&` (bitwise AND)            | Left          |
-| 7          | `==` `!=` `<` `>` `<=` `>=` `is` `in` | Non-associative |
-| 8          | `??`                         | Left          |
-| 9          | `..` `..=`                   | Non-associative |
-| 10         | `<<` `>>`                    | Left          |
-| 11         | `+` `-` `+%` `-%`            | Left          |
-| 12         | `*` `/` `%` `*%`              | Left          |
-| 13         | Unary `-` `~` `!` `&` `*`   | Unary (prefix)|
-| 14         | `?.` `.` `()` `[]`           | Left          |
-| 15         | Atoms (literals, identifiers, grouped expressions) | — |
+| 1          | `??`                         | Right         |
+| 2          | `or`                         | Left          |
+| 3          | `and`                        | Left          |
+| 4          | `is` `is not`                | Left          |
+| 5          | `==` `!=`                    | Left          |
+| 6          | `<` `>` `<=` `>=`            | Left          |
+| 7          | `in`                         | Left          |
+| 8          | `\|` (bitwise OR)            | Left          |
+| 9          | `^` (bitwise XOR)            | Left          |
+| 10         | `&` (bitwise AND)            | Left          |
+| 11         | `..` `..=`                   | Non-associative |
+| 12         | `<<` `>>`                    | Left          |
+| 13         | `+` `-` `+%` `-%`            | Left          |
+| 14         | `*` `/` `%` `*%`             | Left          |
+| 15         | `as`                         | Left          |
+| 16         | Unary prefix `-` `not` `~` `*`, `!` (move), `&` (borrow), `spawn` | Right |
+| 17         | Postfix `.` `?.` `()` `[]` `.0` `.1`        | Left          |
+| 18         | Atoms (literals, identifiers, grouped expressions) | — |
 
 ### 7.2 Literals
 
@@ -1605,7 +1606,7 @@ Accesses a named struct field or a positional tuple/newtype field.
 
 ```gorget
 point.x
-pair.0
+pair._0
 ```
 
 ### 7.9 Index Access
@@ -1633,7 +1634,7 @@ Vector[int] owned = matrix[0].clone()  # deep clone — independent copy
 To take ownership (remove from collection), use consuming methods:
 
 ```gorget
-Vector[int] row = matrix.remove(0)   # removes element, returns owned
+Vector[int] row = matrix.remove(0).unwrap()   # removes element, returns Option[T] (owned)
 Option[int] last = v.pop()           # removes last, returns owned
 ```
 
@@ -1697,7 +1698,7 @@ When the destination variable's type is `Result[T, E]`, the compiler suppresses 
 Result[String, IOError] result = read_file(path)
 match result:
     case Ok(content): print(content)
-    case Error(e): print("Error: {e}")
+    case Error(e): print(f"Error: {e}")
 ```
 
 This replaces the need for any special keyword — the compiler infers from the declared type that you want the `Result` value, not the unwrapped success value.
@@ -1855,10 +1856,10 @@ as named locals at the start of the closure body.
 
 ```gorget
 auto handle = thread.spawn(!(x):
-    print("value: {x}")
+    print(f"value: {x}")
 )
 auto handle = thread.spawn(move (x):    # keyword form also accepted for closures
-    print("value: {x}")
+    print(f"value: {x}")
 )
 ```
 
@@ -1916,7 +1917,7 @@ Dicts and HashMaps support subscript read and write with `d[key]` syntax:
 
 ```gorget
 auto d = {"x": 10, "y": 20}
-print("{d["x"]}")      # read: 10
+print(f"{d["x"]}")      # read: 10
 d["x"] = 99            # write (update)
 d["z"] = 30            # write (insert)
 ```
@@ -2045,14 +2046,14 @@ async void process2(String data):
 
 # ERROR: String borrowed from a local variable
 async void process_local():
-    String owned = String.from("hello")
+    String owned = String("hello")
     String s = owned.as_str()
     some_task().await()
     print(s)               # error: s borrows from local `owned`
 
 # FIX: use the owned String directly
 async void process_fixed():
-    String owned = String.from("hello")
+    String owned = String("hello")
     some_task().await()
     print(owned)           # fine: String owns its data
 ```
@@ -2103,7 +2104,7 @@ async void example(String s):
     print(s)               # fine: spawn doesn't suspend, s is still live
 ```
 
-See [4.6 Copy vs. Non-Copy Types](#46-copy-vs-non-copy-types) for the full type classification and [4.3 Ownership Rules](#43-ownership-rules) for borrow semantics.
+See [4.6 Copy vs. Non-Copy Types](#46-copy-vs-non-copy-types) for the full type classification and [9.1 Ownership Rules](#91-ownership-rules) for borrow semantics.
 
 ### 7.26 Select
 
@@ -2178,7 +2179,7 @@ match result:
     case Error(e): handle(e)
 
 match point:
-    case Point(x, y): print("{x}, {y}")
+    case Point(x, y): print(f"{x}, {y}")
 ```
 
 ### 8.5 Tuple Patterns
@@ -2326,10 +2327,13 @@ the same; only the cost differs.)
 12. **Borrowed-extern return** — the result of an `extern borrowed T f(...)` call (the FFI returned a non-owning alias, cloned so the caller's slot survives later FFI mutations)
 13. **Comprehension into an owned collection** — a comprehension whose elements are collected into an owned collection
 
-This set is the boundary inventory enforced by `validate_consume_sites`
+These boundaries are enforced by `validate_consume_sites`
 (`src/ir/validate.rs`) via `ConsumeSiteClass`, and each implicit clone is
-emitted tagged with an `ImplicitCloneReason` (`src/ir/mod.rs`); those two
-enums are the source of truth — keep this list in sync with them.
+emitted tagged with an `ImplicitCloneReason` (`src/ir/mod.rs`) — those enums
+are the operational source of truth. The numbered list above is an
+illustrative summary, not a 1:1 mirror of either enum (they group the
+boundaries at different granularities), so treat it as a guide rather than
+a closed inventory.
 
 **`.clone()` works on all types.** Explicit `.clone()` calls route to the correct clone function: collections use `gorget_array_clone`/`gorget_map_clone`/etc., user structs use generated `{Name}__clone`, copy types return the value unchanged.
 
@@ -2435,7 +2439,7 @@ The `catch` keyword is the recovery counterpart to `rethrow`. Where `rethrow` tr
 ```gorget
 void main():
     int port = parse_port(input) catch (e): 8080
-    print("using port {port}")
+    print(f"using port {port}")
 ```
 
 ```gorget
@@ -2568,7 +2572,7 @@ trait_bound       = IDENTIFIER [ "[" type_or_binding { "," type_or_binding } "]"
 ```gorget
 void print_all[Displayable T](Vector[T] items):
     for item in items:
-        print(item.to_string())
+        print(item.display())
 
 void process[Displayable & Cloneable & Comparable T](T item):
     ...
@@ -2764,10 +2768,10 @@ struct Point:
 
 equip Point with Displayable:
     String display(self):
-        return "({self.x}, {self.y})"
+        return f"({self.x}, {self.y})"
 
 Point p = Point(3.0, 4.0)
-print("{p}")  # prints: (3.0, 4.0)
+print(f"{p}")  # prints: (3.0, 4.0)
 ```
 
 #### Equatable
@@ -2855,7 +2859,7 @@ equip Counter with Iterator[int]:
         return None()
 
 for i in Counter(0, 5):
-    print("{i}")  # prints 0 through 4
+    print(f"{i}")  # prints 0 through 4
 ```
 
 #### Iterable[T]
@@ -2868,7 +2872,7 @@ equip NumberRange with Iterable[int]:
         return Counter(self.start, self.end)
 
 for n in NumberRange(1, 5):
-    print("{n}")  # prints 1 through 4
+    print(f"{n}")  # prints 1 through 4
 ```
 
 #### Default
@@ -2927,7 +2931,7 @@ Fallible string parsing. Returns `Option[Self]` — `Some(value)` on success, `N
 ```gorget
 Option[int] n = int.parse("42")
 if n is Some(val):
-    print("{val}")            # 42
+    print(f"{val}")            # 42
 
 Option[int] bad = int.parse("hello")
 if bad is None:
@@ -2963,8 +2967,8 @@ equip Buffer with Measurable:
         return self.size
 
 Buffer buf = Buffer(42)
-print("{len(buf)}")    # 42
-print("{buf.len()}")   # 42
+print(f"{len(buf)}")    # 42
+print(f"{buf.len()}")   # 42
 ```
 
 #### Operator Traits
@@ -3037,7 +3041,7 @@ equip Grid with IndexMut[int, int]:
             self.b = value
 
 Grid g = Grid(10, 20)
-print("{g[0]}")   # 10
+print(f"{g[0]}")   # 10
 g[1] = 99
 ```
 
@@ -3053,7 +3057,7 @@ Note: `IndexMut.set` takes `&self` (mutable borrow) since it modifies the receiv
 trait Greetable:
     String name(self)
     String greet(self):
-        return "Hello, {self.name()}!"
+        return f"Hello, {self.name()}!"
 
 equip Person with Greetable:
     String name(self):
@@ -3406,7 +3410,7 @@ The following functions are available via `import`:
 | `getenv` | `String(String)` | Get environment variable |
 | `setenv` | `void(String, String)` | Set environment variable |
 | `getcwd` | `String()` | Current working directory |
-| `platform` | `String()` | OS name: `"macos"`, `"linux"`, `"windows"`, `"freebsd"` |
+| `platform` | `String()` | OS name: `"macos"`, `"linux"`, `"windows"`, `"unknown"` |
 | `args` | `Vector[String]()` | CLI arguments |
 | `readdir` | `Vector[String](String)` | List directory entries |
 
@@ -3533,7 +3537,7 @@ match result:
         print(out)         # hello world
         print(code)        # 0
     case Error(msg):
-        print("spawn failed: {msg}")
+        print(f"spawn failed: {msg}")
 ```
 
 **`std.signal`** — Signal handling
@@ -3800,7 +3804,7 @@ from xtd.http import get, post, put, delete, patch, HttpResponse
 Result[HttpResponse, String] r = get("https://api.example.com/data")
 if r.is_ok():
     HttpResponse resp = r.unwrap()
-    print("{resp.status_code}")   # e.g. 200
+    print(f"{resp.status_code}")   # e.g. 200
     print(resp.body_text)         # response body as string
     print(resp.headers["content-type"])
 ```
@@ -4117,7 +4121,7 @@ from xtd.tensor import Tensor, tensor_arange, tensor_zeros_int, tensor_linspace,
 
 **`xtd.dataframe`** — Tabular data manipulation (pandas-equivalent)
 
-DataFrames store heterogeneous typed columns with optional null masking. Columns can be `int`, `float`, `str`, or `bool` type.
+DataFrames store heterogeneous typed columns with optional null masking. Columns can be `int`, `float`, `String`, or `bool` type.
 
 ```gorget
 from xtd.dataframe import DataFrame, Column, df_from_columns, df_from_csv,
@@ -4179,7 +4183,7 @@ from xtd.dataframe import DataFrame, Column, df_from_columns, df_from_csv,
 | Method | Signature | Description |
 |---|---|---|
 | `col_len` | `int(self)` | Number of rows |
-| `dtype_name` | `String(self)` | `"int"`, `"float"`, `"str"`, or `"bool"` |
+| `dtype_name` | `String(self)` | `"int"`, `"float"`, `"String"`, or `"bool"` |
 | `value_as_str` | `String(self, int idx)` | Get value as string (`"null"` if masked) |
 | `is_null_at` | `bool(self, int idx)` | True if row is null |
 | `null_count` | `int(self)` | Number of null rows |
@@ -4284,7 +4288,7 @@ void main():
         while i < 100:
             v.push(i)
             i = i + 1
-        print("fallback_count: {fb.fallback_count()}")
+        print(f"fallback_count: {fb.fallback_count()}")
     print("done")
 ```
 
@@ -4301,7 +4305,7 @@ void main():
         Vector[int] v = Vector[int]()
         v.push(1)
         v.push(2)
-        print("bytes: {a.bytes_used()}")
+        print(f"bytes: {a.bytes_used()}")
     # arena destroyed here; all memory freed
 ```
 
@@ -4318,7 +4322,7 @@ void main():
     Vector[int] v = Vector[int](alloc=pool)
     v.push(10)
     v.push(20)
-    print("used: {pool.used_blocks()}")
+    print(f"used: {pool.used_blocks()}")
 ```
 
 The `alloc=` parameter is accepted by `Vector`, `List`, `Array`, `Dict`, `HashMap`, `Set`, `HashSet`, `Channel`, and `String` constructors.
@@ -4369,8 +4373,8 @@ void main():
         with Arena(1024) as inner:
             Vector[int] v2 = Vector[int]()
             v2.push(20)
-            print("inner: {v2.get(0).unwrap()}")
-        print("outer: {v1.get(0).unwrap()}")
+            print(f"inner: {v2.get(0).unwrap()}")
+        print(f"outer: {v1.get(0).unwrap()}")
 ```
 
 **When to use which allocator:**
@@ -4948,7 +4952,7 @@ test "double works":
     assert double(3) == 6
 
 void main():
-    print("{double(21)}")
+    print(f"{double(21)}")
 ```
 
 Semantic analysis (type checking, name resolution) runs on all code regardless of command, so a broken test will be caught during `gg build`.
@@ -5417,13 +5421,13 @@ No type annotation — the type is inferred from the evaluated `MetaValue`.
 void print_ordinals[T]():
     meta for vname in variant_names(T):
         meta const idx = enum_ordinal(T, vname)
-        print("{vname}={idx}")
+        print(f"{vname}={idx}")
 
 # Reverse lookup: print variant names in ordinal order
 void print_names[T]():
     meta for i in 0..variant_count(T):
         meta const vname = enum_from_ordinal(T, i)
-        print("{vname}")
+        print(f"{vname}")
 ```
 
 Without `meta const`, the same result requires nested double-loops with `meta if` conditions to match variant names against their ordinals — substantially more verbose.
@@ -5589,7 +5593,7 @@ void old_way[T]():
 # With fields(T): single loop, both variables available together
 void new_way[T]():
     meta for fname, ftype in fields(T):
-        print("{fname}:{ftype}")
+        print(f"{fname}:{ftype}")
 ```
 
 **Composable with `T is X`:** the type string bound by `fields(T)` works as the LHS of `is`
@@ -5635,7 +5639,7 @@ String to_debug[T](T val):
     meta for fname, ftype in fields(T):
         meta if ftype == "int":
             int v = field_value(val, fname)   # fname is substituted to "x", "y", ... per iteration
-            out = out + "{fname}={v}"
+            out = out + f"{fname}={v}"
     return out
 
 # Form 2 — direct string literal
@@ -5691,13 +5695,13 @@ String to_debug[T](T val):
             out = out + ","
         meta if ftype == "int":
             int v = field_value(val, fname)
-            out = out + "{fname}={v}"
+            out = out + f"{fname}={v}"
         elif ftype == "String":
             String v = field_value(val, fname)
-            out = out + "{fname}={v}"
+            out = out + f"{fname}={v}"
         elif ftype == "bool":
             bool v = field_value(val, fname)
-            out = out + "{fname}={v}"
+            out = out + f"{fname}={v}"
     return out
 
 # Generic int-field sum
@@ -5719,7 +5723,7 @@ Two builtins map between variant names and their zero-based ordinal positions at
 
 ```gorget
 meta if enum_ordinal(T, vname) == 0:
-    print("first variant: {vname}")
+    print(f"first variant: {vname}")
 ```
 
 **`enum_from_ordinal(T, n)`** — variant name at ordinal `n`:
@@ -5727,7 +5731,7 @@ meta if enum_ordinal(T, vname) == 0:
 ```gorget
 # Validated round-trip: ordinal → name → compare
 meta if enum_from_ordinal(T, i) == vname:
-    print("consistent at ordinal {i}")
+    print(f"consistent at ordinal {i}")
 ```
 
 **As a `meta for` range bound** — iterate only a prefix of the variants:
@@ -5738,7 +5742,7 @@ void print_before_blue[T]():
     meta for i in 0..enum_ordinal(T, "Blue"):
         meta for vname in variant_names(T):
             meta if enum_ordinal(T, vname) == i:
-                print("{vname}")
+                print(f"{vname}")
 ```
 
 **Printing ordinals** — combine an integer range with `variant_names` to print each variant's ordinal:
@@ -5749,7 +5753,7 @@ void print_ordinals[T]():
         meta for vname in variant_names(T):
             meta if enum_ordinal(T, vname) == i:
                 meta if enum_from_ordinal(T, i) == vname:
-                    print("{vname}={i}")
+                    print(f"{vname}={i}")
 ```
 
 Both builtins error at compile time if the type is not an enum, the variant name is not found, or
@@ -5914,7 +5918,7 @@ adapting generic code to structs with optional fields:
 ```gorget
 void maybe_print_id[T](T val):
     meta if has_field(T, "id"):
-        print("{field_value(val, "id")}")
+        print(f"{field_value(val, "id")}")
     else:
         print("(no id)")
 ```
@@ -5926,7 +5930,7 @@ argument must be a string literal or a meta-loop variable substituted to one:
 void inspect[T]():
     meta if has_field(T, "score"):
         meta const st = field_type(T, "score")
-        print("score type: {st}")
+        print(f"score type: {st}")
 ```
 
 ---
@@ -5946,7 +5950,7 @@ Three builtins introspect enum variants at monomorphization time. All require `T
 ```gorget
 void print_variants[T]():
     meta if T is Enum:
-        print("count: {variant_count(T)}")
+        print(f"count: {variant_count(T)}")
         meta for vname in variant_names(T):
             print(vname)
 
@@ -5991,7 +5995,7 @@ collapsing per-variant dispatch into a single `meta for` block (see §19.24).
 void list_payloads[T]():
     meta if T is Enum:
         meta for vname, vtype in variant_payloads(T):
-            print("{vname} → {vtype}")
+            print(f"{vname} → {vtype}")
 ```
 
 ---
@@ -6019,7 +6023,7 @@ meta const name = typeof(T)   # same as typename(T)
 
 ```gorget
 void show_bits[T]():
-    print("{bitwidth(T)}")
+    print(f"{bitwidth(T)}")
 
 void main():
     show_bits[int8]()    # → 8
@@ -6050,7 +6054,7 @@ Passing any other type is a compile-time error.
 void show_range[Signed T]():
     meta const lo = min_val(T)
     meta const hi = max_val(T)
-    print("[{lo}, {hi}]")
+    print(f"[{lo}, {hi}]")
 
 void main():
     show_range[int8]()   # → [-128, 127]
@@ -6075,7 +6079,7 @@ interfaces the concrete type provides.
 ```gorget
 String maybe_display[T](T val):
     meta if implements(T, "Displayable"):
-        return "{val}"
+        return f"{val}"
     else:
         return "<no display>"
 
@@ -6091,9 +6095,9 @@ in the same file is visible. Cross-module traits are visible after import.
 void generic_combine[T](T a, T b):
     meta if implements(T, "Addable") and implements(T, "Displayable"):
         T c = a + b
-        print("{c}")
+        print(f"{c}")
     elif implements(T, "Displayable"):
-        print("{a} and {b} (no add)")
+        print(f"{a} and {b} (no add)")
     else:
         print("(opaque type)")
 ```
@@ -6368,7 +6372,7 @@ directive = "directive" IDENTIFIER { "-" IDENTIFIER } [ "=" IDENTIFIER ] ;
 function_def = { attribute } [ "public" ] { qualifier }
                return_type IDENTIFIER [ generic_params ]
                "(" [ param_list ] ")" [ throws_clause ]
-               ( block | "=" expr NEWLINE | NEWLINE ) ;
+               ( block | ":" expr NEWLINE | "=" STRING_LITERAL NEWLINE | NEWLINE ) ;
 qualifier     = "async" | "const" | "static" | "unsafe" ;
 return_type   = type { "," type } | "void" ;  (* bare tuple: String, int or (String, int) *)
 param_list    = param { "," param } ;

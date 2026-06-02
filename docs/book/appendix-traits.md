@@ -430,7 +430,7 @@ struct Point:
 ```
 
 Derivable traits: `Equatable`, `Hashable`, `Displayable`, `Debuggable`,
-`Cloneable`, `Comparable`, `Default`, `Serializable`, `Deserializable`.
+`Cloneable`, `Default`, `Serializable`, `Deserializable`.
 
 The generated implementation operates field-by-field. For `Equatable`, all fields
 must be equal. For `Hashable`, all fields are combined into the hash. For
@@ -449,7 +449,7 @@ for tuple variants.
 | Displayable | `display` | `f"{val}"`, `print` | Yes |
 | Debuggable | `debug` | Developer logs, panics | Yes |
 | Equatable | `eq` | `==`, `!=` | Yes |
-| Comparable | `compare` | `<`, `>`, `<=`, `>=` | Yes |
+| Comparable | `compare` | `<`, `>`, `<=`, `>=` | No |
 | Hashable | `hash` | Dict keys, Set elements | Yes |
 | Cloneable | `clone` | `.clone()` | Yes |
 | Drop | `drop` | Automatic cleanup | No |

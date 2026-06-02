@@ -159,7 +159,7 @@ registered in `collect_top_level` at `src/semantic/resolve.rs:159-171` by
 inserting into `struct_generic_bounds`, and enforced by `check_trait_bounds`
 (`src/semantic/typecheck.rs:5149`) / `check_struct_type_bounds`
 (`src/semantic/typecheck.rs:5204`), which emit `UnsatisfiedTraitBound`.
-Numeric primitives, `bool`, `char`, `str`, and `String` satisfy
+Numeric primitives, `bool`, `char`, and `String` satisfy
 `Hashable`/`Equatable` intrinsically — see `is_hashable_primitive` /
 `is_hashable_trait` (`src/semantic/traits.rs:420-426`), so the common
 `Dict[String, int]` needs no user impl.

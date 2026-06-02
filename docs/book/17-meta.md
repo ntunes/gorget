@@ -250,8 +250,8 @@ Available at module level (no generic context needed):
 
 | Builtin | Returns |
 |---------|---------|
-| `platform()` | `"linux"`, `"macos"`, `"windows"`, `"freebsd"` |
-| `arch()` | `"x86_64"`, `"aarch64"` |
+| `platform()` | `"linux"`, `"macos"`, `"windows"`, `"unknown"` |
+| `arch()` | `"x86_64"`, `"aarch64"`, `"arm"`, `"wasm32"`, `"unknown"` |
 | `arch_word_bits()` | `64` or `32` |
 | `debug()` | `true` in debug builds |
 | `sizeof(Type)` | Size in bytes |

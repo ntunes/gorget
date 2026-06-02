@@ -58,7 +58,7 @@ and four lookup indices:
   already name-keyed at the source, so this only indexes existing data.
 - `trait_impls: FxHashMap<(DefId, TypeId, Vec<TypeId>), usize>` — keyed by
   `(trait, self type, resolved trait generic args)` so that multiple impls
-  of the same parameterized trait coexist, e.g. `From[int]` and `From[str]`
+  of the same parameterized trait coexist, e.g. `From[int]` and `From[String]`
   on one type (`src/semantic/traits.rs:138-141`). Also the duplicate-impl
   detector.
 
@@ -238,7 +238,7 @@ equip never makes it into the indices:
   (`src/semantic/traits.rs:997`).
 - **Duplicate impl**: `(trait, self type, resolved trait args)` already in
   `trait_impls` → `DuplicateImpl` (`:1020`). The trait-arg tuple is what lets
-  `From[int]` and `From[str]` coexist.
+  `From[int]` and `From[String]` coexist.
 - **Orphan rule** (`:1035`): when a trait is named, at least one of (trait,
   type) must be *local* — a real span and not a `DefKind::Import`
   (`:1039`). Built-ins have `Span::dummy()` and count as foreign, so

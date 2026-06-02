@@ -104,7 +104,7 @@ directly:
 ```gorget
 for e in health:
     Health h = health.get(e)
-    print("{e.id}: {h.hp} HP")
+    print(f"{e.id}: {h.hp} HP")
 ```
 
 ### Construction
@@ -131,13 +131,13 @@ Entity e = pool.create()
 health.insert(e, Health(100, 100))
 
 Health h = health.get(e)
-print("{h.hp}")           # 100
+print(f"{h.hp}")           # 100
 
 health.set(e, Health(80, 100))
 
 for e in health:
     Health val = health.get(e)
-    print("Entity {e.id}: {val.hp} HP")
+    print(f"Entity {e.id}: {val.hp} HP")
 ```
 
 ## Free Functions

@@ -154,7 +154,7 @@ Some types and functions are always available without imports:
 ### Creating a Project
 
 ```bash
-gg init myproject
+gg new myproject
 ```
 
 Creates `gorget.toml`:
@@ -163,7 +163,6 @@ Creates `gorget.toml`:
 [package]
 name = "myproject"
 version = "0.1.0"
-edition = "2026"
 ```
 
 ### Adding Dependencies

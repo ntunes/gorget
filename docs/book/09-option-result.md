@@ -326,7 +326,7 @@ Option[User] found = users.find((User u): u.id == target_id)
 
 # Result — failure means something went wrong
 Result[File, String] file = File.open("/etc/config")
-Result[int, String] parsed = int.try_parse(input)
+Result[int, ParseError] parsed = parse_int(input)
 Result[Response, HttpError] response = http.get(url)
 ```
 

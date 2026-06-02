@@ -125,7 +125,7 @@ Key things to notice:
 For a single file, just write `file.gg` and run it. For larger projects:
 
 ```bash
-gg init myproject
+gg new myproject
 ```
 
 This creates a `gorget.toml` manifest. Add dependencies with:

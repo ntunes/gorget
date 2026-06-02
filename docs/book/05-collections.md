@@ -174,7 +174,7 @@ Vector[int] owned = matrix[0].clone()  # independent owned copy (explicit)
 To move an element out (no clone), use a consuming method:
 
 ```gorget
-Vector[int] first = matrix.remove(0)   # removes row 0, shifts row 1 down
+Vector[int] first = matrix.remove(0).unwrap()   # removes row 0, shifts row 1 down
 print(f"{matrix.len()}")               # now 1
 ```
 

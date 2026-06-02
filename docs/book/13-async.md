@@ -188,7 +188,7 @@ into the suspended state and comes back when the task resumes. Always safe.
 
 ```gorget
 async void example():
-    String name = String.from("Alice")
+    String name = String("Alice")
     some_task().await()
     print(name)     # fine: String owns its data
 ```
@@ -299,7 +299,7 @@ Named scopes interact with task lifetimes: all tasks created inside a named scop
 joined before the scope exits.
 
 ```gorget
-scope workers:
+workers:
     Task[void] t1 = spawn process(data)
     Task[void] t2 = spawn process(data)
 # t2 dropped, t1 dropped — both joined here, before outer code continues
@@ -391,7 +391,7 @@ async int fib(int n):
 async void main():
     # Spawn tasks to compute fibonacci numbers in parallel
     Vector[Task[int]] tasks = Vector[Task[int]]()
-    Vector[int] inputs = Vector[int](30, 31, 32, 33, 34)
+    Vector[int] inputs = [30, 31, 32, 33, 34]
 
     for n in inputs:
         tasks.push(spawn fib(n))
@@ -400,7 +400,7 @@ async void main():
     int i = 0
     for t in tasks:
         int result = t.await()
-        print(f"fib({inputs.get(i)}) = {result}")
+        print(f"fib({inputs.get(i).unwrap()}) = {result}")
         i += 1
 ```
 

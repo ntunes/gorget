@@ -571,7 +571,7 @@ a.restore(cp)                  # free everything since checkpoint
 a.destroy()
 ```
 
-Five allocator types:
+Six allocator types:
 
 | Type | Use case |
 |------|----------|

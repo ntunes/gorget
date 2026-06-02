@@ -48,6 +48,8 @@ gg build app.gg --hot-reload       # host binary + guest dylib
 | `--sanitize` | Enable AddressSanitizer + UBSan |
 | `--feature=<name>` | Enable compile-time feature flag (repeatable) |
 | `--scheduler=<mode>` | Async scheduler: `pool`, `thread`, `inline`, `single` |
+| `--backend=<c\|llvm>` | Code generation backend (default `c`) |
+| `--target=<native\|freestanding[-x86_64\|-aarch64]>` | Compilation target (default `native`) |
 
 ### `gg run <file.gg>`
 
@@ -86,9 +88,11 @@ These flags work with `build` and `run`:
 
 | Flag | Output |
 |------|--------|
+| `--emit-gir` | High-level GIR (post-monomorphization, pre-LIR) |
 | `--emit-lir` | Low-level SSA IR |
 | `--emit-c-lir` | Generated C code |
 | `--show-clones` | Implicit clone report (ownership-boundary clones + CoW materializations) |
+| `--clones[=MODE]` | Configurable clone report (`stats`, `verbose`, `all`); `--clone-stats` prints the aggregate line |
 | `--show-borrows` | Borrow checker analysis summary |
 
 ---
