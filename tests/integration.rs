@@ -1199,8 +1199,6 @@ fn int_range() {
 // Ref/Owned-peel fix lands — FLIP TO ACTIVE (remove #[ignore]) when it does. See
 // docs/plans/uint8_literal_narrow_ref_operand.md.
 #[test]
-#[ignore = "blocked on the int-literal-vs-Ref-operand narrowing fix (typecheck.rs Ref/Owned peel); \
-            remove #[ignore] when the fix lands — see docs/plans/uint8_literal_narrow_ref_operand.md"]
 fn narrow_int_literal_vs_ref_operand() {
     run_gg(
         "narrow_int_literal_vs_ref_operand.gg",

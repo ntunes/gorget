@@ -1236,11 +1236,22 @@ impl<'a> TypeChecker<'a> {
                     );
                     if rhs_is_int_literal {
                         let lhs_resolved = self.resolve_type(left_type);
+                        // Peel Ref/Owned wrappers (auto-deref) before the integer-primitive
+                        // gate, mirroring the cast-castability peel at lines ~2667. An inline
+                        // `Vector[uint8].get(i).unwrap()` resolves to Ref(uint8); thread the
+                        // peeled-inner Primitive typeid as the hint (the IntLiteral consumer
+                        // requires a Primitive hint — a Ref hint would no-op).
+                        let lhs_inner = match self.types.get(lhs_resolved) {
+                            ResolvedType::Ref(inner) | ResolvedType::Owned(inner) => {
+                                self.resolve_type(*inner)
+                            }
+                            _ => lhs_resolved,
+                        };
                         if matches!(
-                            self.types.get(lhs_resolved),
+                            self.types.get(lhs_inner),
                             ResolvedType::Primitive(p) if is_integer_type(p)
                         ) {
-                            Some(lhs_resolved)
+                            Some(lhs_inner)
                         } else {
                             None
                         }
