@@ -4127,17 +4127,19 @@ int lower_block_expr(LowerCtx &ctx, Vector[Stmt] block_stmts, GirModule &gmod):
 # shapes and returns the producing local; for any other statement form
 # lowers it as a regular statement and returns -1 ("no tail value").
 #
-# This round handles `SExpr` (bare trailing expression) and `SIf`
+# This round handles `SExpr` (bare trailing expression), `SIf`
 # (if-chain used as a value, sharing `lower_if_chain_expr` with the
-# EIf-in-`lower_expr` case). `SMatch`-as-value is a logged follow-up:
-# we lower it as a plain statement + return -1 for now (the caller
-# assigns the typed default, never `OpCopy(-1)`).
+# EIf-in-`lower_expr` case), and `SMatch` (match used as a value,
+# sharing `lower_match_expr` with the EMatch-in-`lower_expr` case —
+# mirrors Rust `lower_stmt_as_tail_value` `exprs/mod.rs:3246-3248`).
 int lower_stmt_as_tail_value(LowerCtx &ctx, Stmt last_stmt, GirModule &gmod):
     match last_stmt:
         case SExpr(e):
             return lower_expr(&ctx, e, &gmod)
         case SIf(cond_expr, then_body, elif_branches):
             return lower_if_chain_expr(&ctx, cond_expr, then_body, elif_branches, &gmod)
+        case SMatch(scrutinee, arms):
+            return lower_match_expr(&ctx, scrutinee, arms, &gmod)
         else:
             lower_stmt(&ctx, last_stmt, &gmod, false)
             return -1
@@ -5816,6 +5818,11 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             return lower_catch_expr(&ctx, *inner_box, error_binding, *recovery_box, &gmod)
         case ERethrow(inner_box, error_binding, _err_ty, transform_box):
             return lower_rethrow_expr(&ctx, *inner_box, error_binding, *transform_box, &gmod)
+        case EMatch(scrut_box, arms):
+            # `match` in value position — lower into one result local that
+            # every reaching arm assigns. Mirrors Rust `lower_expr` EMatch
+            # dispatch (`exprs/mod.rs:391`).
+            return lower_match_expr(&ctx, *scrut_box, arms, &gmod)
         else:
             # Remaining: EIt, EImplicitClosure, ESetComp,
             # EDictComp, EListComp, EDo, ERange
@@ -7858,6 +7865,95 @@ void lower_match_stmt(LowerCtx &ctx, SpannedExpr scrutinee_expr, Vector[MatchArm
     # exhaustiveness yet so we keep a safe fall-through).
     set_terminator(&ctx, GTJump(merge_bb))
     switch_to(&ctx, merge_bb)
+
+# Lower a `match` in EXPRESSION position, producing a single `result`
+# local that every reaching (non-diverging) arm assigns. Mirrors Rust
+# `lower_match_expr` (`src/ir/lowering/exprs/mod.rs:2569`, dispatched
+# from `lower_expr` at `:391`; same merge algorithm as
+# `lower_match_stmt_as_expr` `:3257`).
+#
+# Structure = `lower_match_stmt` (`:7822`, scrutinee staging + per-arm
+# branching via `lower_pattern_match`) fused with `lower_if_chain_expr`
+# (`:4167`, the value-merge skeleton): each arm body is lowered to a
+# value via `lower_block_expr` and — ONLY when the arm did not diverge
+# (`not block_terminated`) — assigned into one result local and jumped to
+# `merge_bb`. A diverging arm (body ends in `return` / `exit()` / noreturn)
+# keeps its own terminator and contributes no merge edge — the gate is
+# LOAD-BEARING (Rust documents the same gated-jump as its Snag #33,
+# `mod.rs:3384-3395`).
+#
+# Result type: seed from `ctx.expected_type` when the enclosing writer set
+# a concrete one, else `I64_TYPE`; otherwise refine in place from the FIRST
+# non-Unit arm value (same latch as `lower_if_chain_expr`).
+#
+# No-else / fall-through: emit ONLY `GTJump(merge_bb)` after the last arm —
+# NO result-default assignment (unlike `lower_if_chain_expr`'s inlined
+# `OpConstI64(0)` no-else default at `:4234-4238`). For an exhaustive match
+# (e.g. `Ok`/`Error` returning a struct with no `else:`) the unmatched
+# fall-through is dynamically unreachable, so `result` legitimately stays
+# unassigned there; a default `GIAssign(result, OpConstI64(0))` into a
+# struct/String slot would be a C `incompatible types` error (dead code is
+# still C-typechecked). Mirrors Rust `lower_match_expr` (no default) and
+# the self-host `lower_match_stmt` fall-through (`:7856-7859`).
+#
+# Guards (`MatchArm.guard`) are NOT handled — matches `lower_match_stmt`'s
+# existing (no-guard) behavior; logged as a follow-up. Per-arm name-map
+# snapshot/restore (Rust Snag #50) is likewise omitted, matching
+# `lower_match_stmt`'s per-arm drop-scope behavior (logged follow-up).
+int lower_match_expr(LowerCtx &ctx, SpannedExpr scrutinee_expr, Vector[MatchArm] arms, GirModule &gmod):
+    int scrutinee = lower_expr(&ctx, scrutinee_expr, &gmod)
+    int scr_tid = ctx.locals.get(scrutinee).unwrap().type_id
+    String type_name = type_id_to_name(scr_tid, &gmod)
+    # Unwrap Ptr if the scrutinee came through a borrow.
+    if scr_tid >= 0 and scr_tid < gmod.type_table.len():
+        GirType bt = gmod.type_table.get(scr_tid).unwrap()
+        match bt:
+            case GtPtr(inner):
+                type_name = type_id_to_name(inner, &gmod)
+            case GtMutPtr(inner):
+                type_name = type_id_to_name(inner, &gmod)
+            else:
+                pass
+    String enum_name = match_enum_type(type_name, &gmod)
+    # Seed result type from expected_type when the writer set a concrete
+    # one; else I64 (refined below from the first non-Unit arm value).
+    int result_type_init = I64_TYPE
+    bool result_type_refined = false
+    if ctx.expected_type >= 0 and ctx.expected_type < gmod.type_table.len():
+        result_type_init = ctx.expected_type
+        result_type_refined = true
+    int result = add_local(&ctx, result_type_init, NO_NAME)
+    int merge_bb = new_block(&ctx)
+    for arm in arms:
+        int arm_body_bb = new_block(&ctx)
+        int next_arm_bb = new_block(&ctx)
+        lower_pattern_match(&ctx, scrutinee, arm.pattern, enum_name, arm_body_bb, next_arm_bb, &gmod)
+        # Arm body lowering in the match-bound block. Per-arm Block scope so
+        # payload bindings + arm-local SVarDecls get cleaned up at the merge
+        # edge (same as lower_match_stmt; lower_pattern_match already emitted
+        # the pattern bindings into this block).
+        switch_to(&ctx, arm_body_bb)
+        push_drop_scope(&ctx.drop_elab, DSK_BLOCK)
+        int arm_val = lower_block_expr(&ctx, arm.body, &gmod)
+        if not block_terminated(&ctx):
+            if not result_type_refined:
+                int aty = ctx.locals.get(arm_val).unwrap().type_id
+                if aty != UNIT_TYPE:
+                    refine_local_type(&ctx, result, aty)
+                    result_type_refined = true
+            emit(&ctx, GIAssign(result, op_consume(&ctx, &gmod, arm_val, CkAssign())))
+            pop_drop_scope(&ctx)
+            set_terminator(&ctx, GTJump(merge_bb))
+        else:
+            # Diverging arm (body ended in return / exit / noreturn): its
+            # terminator stands — no assign, no merge jump.
+            pop_drop_scope_no_emit(&ctx)
+        switch_to(&ctx, next_arm_bb)
+    # No arm matched (dynamically unreachable for an exhaustive match) —
+    # jump to merge with NO result default. See the header note.
+    set_terminator(&ctx, GTJump(merge_bb))
+    switch_to(&ctx, merge_bb)
+    return result
 
 # Lower `for pat in iter_expr: body` over Vector / Deque collections.
 #
