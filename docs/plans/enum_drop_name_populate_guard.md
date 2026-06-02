@@ -81,7 +81,9 @@ the `drop_collision_types` field/population (still needed by the struct + payloa
 3. **`c_emit_comparison`** (`--nocapture`) — matched count UNCHANGED (the real byte gate; this
    is output-neutral, so any delta is a red flag — STOP and report).
 4. **`self_host_bootstrap_fixed_point`** GREEN (`--test-threads=1`) — byte-identical reconverge.
-5. `self_host_runtime` lock-in net GREEN, unchanged at 248/0 (no parity movement expected).
+5. `self_host_runtime` lock-in net GREEN, unchanged at **249/0** (the parallel arena_checkpoint
+   chain landed `arena_checkpoint.out` via `4189e55f`, 248→249; this cleanup moves nothing —
+   read the live count, expect it unchanged).
 6. NO new snapshots (output-neutral — nothing moves).
 7. The PARENT runs the full integration sweep + `GG_BACKEND=llvm` spot-check at integration
    (the guard/drop path is backend-shared LIR; the executor runs the targeted C gates above).
