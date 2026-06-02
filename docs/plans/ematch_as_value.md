@@ -72,10 +72,12 @@ from Rust `lower_expr` at `:391`; identical merge algorithm to `lower_match_stmt
    assign-and-jump — its terminator stands.
 5. **No-else / fall-through after the last concrete arm: emit ONLY `set_terminator(
    GTJump(merge_bb))` — NO result-default assignment.** ⚠ (pass-1 [BLOCKING] correction — do
-   NOT copy `lower_if_chain_expr`'s `OpConstI64(0)` no-else default here.) That default lives
-   in `build_if_chain_expr` (a DIFFERENT function); Rust's MATCH lowering `lower_match_expr`
-   (`exprs/mod.rs:2705-2723`) emits NO default, and the self-host's own `lower_match_stmt`
-   (`lower.gg:7856-7859`) emits only `GTJump(merge_bb)`. Reason: both target fixtures' first
+   NOT copy `lower_if_chain_expr`'s `OpConstI64(0)` no-else default here.) In the self-host
+   that default is INLINED inside `lower_if_chain_expr` itself (`lower.gg:4234-4238`, named
+   after Rust's separate `build_if_chain_expr`) — i.e. it's in the very function step 1 points
+   you at as the template, so do NOT carry that one tail-assignment over. Rust's MATCH lowering
+   `lower_match_expr` (`exprs/mod.rs:2705-2723`) emits NO default, and the self-host's own
+   `lower_match_stmt` (`lower.gg:7856-7859`) emits only `GTJump(merge_bb)`. Reason: both target fixtures' first
    match returns a STRUCT (`match_expr_block_arms.parse_or_default` → `Frontmatter`;
    `match_expr_diverging_arm` → `Big`) via an exhaustive `Ok/Error` match with NO `else:` (so
    no `PWildcard` arm). An `OpConstI64(0)` default would emit `GIAssign(result, OpConstI64(0))`
@@ -150,6 +152,13 @@ passing (statement-form match via `lower_match_stmt`, NOT value position) — le
 ## Follow-ups to LOG in TODO.md (out of scope — do NOT bundle)
 - Guard-in-value-match (`MatchArm.guard`) — neither this helper nor `lower_match_stmt`
   handles it; wire when a fixture needs it.
+- **Per-arm name-map snapshot/restore (Rust Snag #50).** Rust `lower_match_expr`
+  snapshots/restores the arm-local name map (`saved_arm_locals`, `exprs/mod.rs:2680/2700`) so
+  a CoW `&v`-materialization rebind in one arm doesn't leak into a sibling arm. The new helper
+  omits this — but so does the existing self-host `lower_match_stmt` (it relies on per-arm
+  drop-scope push/pop instead), which is this brief's structural reference, and NEITHER target
+  fixture triggers it. Match `lower_match_stmt`'s existing behavior (no regression); log the
+  snapshot/restore as a separate fidelity follow-up.
 - `EDo`/`EBlock` block-expr value-dropping stub (the next lower.gg cluster item — reuses the
   same `lower_block_expr`/`lower_stmt_as_tail_value` helpers).
 - The multi-blocker value-position-match fixtures listed under Scope (each its own root).
