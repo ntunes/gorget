@@ -6282,6 +6282,27 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                         Vector[Operand] ok_args = [op_consume(&ctx, &gmod, val, CkCallArgOwning())]
                         emit(&ctx, GICallExtern(ok_dst, "Ok", ok_args))
                         val = ok_dst
+                    # Option[Ref[T]] → Option[T] lift (mirrors Rust gg's
+                    # `try_lift_option_ref` call at the return site,
+                    # `stmts/mod.rs:1755-1767`). `peek()`-style fns
+                    # `return coll.get(i)` where `.get()` produced an
+                    # `Option[Ref[T]]` but the fn returns `Option[T]` by
+                    # value: deref the Ref + rebuild an OWNED Option, else
+                    # the C backend hardcodes None at the type mismatch and
+                    # the value leaks. Gate (mirrors Rust `:1755`): the
+                    # return place (local 0) is `Option__T` (non-Ref) AND
+                    # `val`'s type is a RECORDED `Option__Ref__T` (the typed
+                    # `option_ref_payload` channel). No-op fallback (returns
+                    # -1) otherwise — leaves `val` untouched so `return
+                    # Some(x)` / `return x` / `return coll.pop()` (owned
+                    # Option) / nested-Option returns are unaffected.
+                    int ret_place_ty = ctx.locals.get(0).unwrap().type_id
+                    String ret_place_lift_tn = type_id_to_name(ret_place_ty, &gmod)
+                    int val_ty_lift = ctx.locals.get(val).unwrap().type_id
+                    if ret_place_lift_tn.starts_with("Option__") and not ret_place_lift_tn.starts_with("Option__Ref__") and option_ref_payload_of(&gmod, val_ty_lift) >= 0:
+                        int lifted = try_lift_option_ref(&ctx, val, ret_place_ty, &gmod)
+                        if lifted >= 0:
+                            val = lifted
                     Operand ret_op = op_consume(&ctx, &gmod, val, CkReturn())
                     # a-6 (concern #5, the keystone): when the value is MOVED
                     # out of a bare owned local, that local now aliases _0 and
@@ -6839,6 +6860,89 @@ int match_variant_index(String enum_name, String variant_name, GirModule &gmod):
             return i
         i += 1
     return -1
+
+# Convert `Option[Ref[T]] → Option[T]` by tag-branching and cloning /
+# dereffing the Some payload. Mirrors Rust gg's `try_lift_option_ref`
+# (`src/ir/lowering/stmts/mod.rs:2934-3065`).
+#
+# `val` is a local holding an `Option__Ref__T` value (a borrow-Option
+# produced by a borrowing getter like `coll.get(i)`); `dst_type` is the
+# `Option__T` (non-Ref) return-place / binding type. Returns the local id
+# of a freshly-filled merge holding the owned `Option[T]`, or -1 if the
+# shapes don't match (caller passes `val` through untouched — the no-op
+# fallback that preserves `return Some(x)` / `return x` / `return
+# coll.pop()` / nested-Option).
+#
+# The shape gate is the TYPED `option_ref_payload` channel — `ptr_tid =
+# option_ref_payload_of(&gmod, src_type) >= 0` iff this Option tid was
+# RECORDED by a borrowing-getter lowering (`record_option_ref_payload`).
+# That recorded-ness (not a structural `Ref__`-name re-parse) is what
+# makes the gate sound: a hand-built `Option__Ref__T` that bypassed a
+# getter has no channel entry and is left alone (CLAUDE.md "No name
+# matching"). The dst must be `Option__` (NOT `Option__Ref__`) — mirrors
+# Rust `:2966-2968`.
+#
+# Structured on the `unwrap_or` template (`:4894-4912`): tag-read +
+# GICmp + GTBranch into a Some / None / merge BB trio. The Some arm reads
+# the GtPtr payload via `emit_payload_read` (whose own `GtPtr` guard,
+# `:6965-6968`, returns the bare ptr for a resource pointee and `GIDeref`s
+# a primitive pointee), then lets `op_consume(CkCallArgOwning)` pick
+# clone-vs-copy — `GtPtr(resource)` → OpClone (deep clone), primitive
+# value → OpCopy (`decide_ptr_consume`, `:1634`). The SAME `is_resource`
+# decision `emit_payload_read` used, so there is no second predicate to
+# keep in sync. Each arm stores its built Option into `merge` via
+# `op_consume(CkAssign)` — AUTO-Move for an owned resource Option
+# (mirrors Rust `assign_mode(Move) when is_resource_type(dst)`,
+# `:3038-3046`); a plain `GIAssign(merge, OpCopy(res))` would shallow-alias
+# the freshly-built resource Option → double-free.
+int try_lift_option_ref(LowerCtx &ctx, int val, int dst_type, GirModule &gmod):
+    if val < 0 or val >= ctx.locals.len():
+        return -1
+    int src_type = ctx.locals.get(val).unwrap().type_id
+    # Shape gate (typed channel): src must be a RECORDED Option[Ref[T]],
+    # and the recorded payload is the GtPtr(inner) tid we read the Some
+    # field through.
+    int ptr_tid = option_ref_payload_of(&gmod, src_type)
+    if ptr_tid < 0:
+        return -1
+    # dst must be `Option__T` (non-Ref).
+    String dst_name = type_id_to_name(dst_type, &gmod)
+    if not dst_name.starts_with("Option__"):
+        return -1
+    if dst_name.starts_with("Option__Ref__"):
+        return -1
+    String src_name = type_id_to_name(src_type, &gmod)
+    # Materialise the result slot up front; both arms store into it so the
+    # merge block sees a single def (SSA construction inserts the phi).
+    int merge = add_local(&ctx, dst_type, NO_NAME)
+    int scr_ptr = match_scrutinee_ptr(&ctx, &gmod, val)
+    int tag = emit_tag_read(&ctx, scr_ptr, src_name, &gmod)
+    # tag == 0 → Some arm.
+    int cmp_dst = add_local(&ctx, BOOL_TYPE, NO_NAME)
+    emit(&ctx, GICmp(cmp_dst, CMP_EQ, I64_TYPE, OpCopy(tag), OpConstI64(0)))
+    int some_bb = new_block(&ctx)
+    int none_bb = new_block(&ctx)
+    int lift_merge_bb = new_block(&ctx)
+    set_terminator(&ctx, GTBranch(OpCopy(cmp_dst), some_bb, none_bb))
+    # Some arm: read the GtPtr payload (emit_payload_read's GtPtr guard
+    # returns the bare ptr for a resource pointee, GIDerefs a primitive),
+    # build Some(owned), let op_consume clone-or-copy.
+    switch_to(&ctx, some_bb)
+    int payload = emit_payload_read(&ctx, scr_ptr, src_name, "Some", 0, ptr_tid, &gmod)
+    int some_res = add_local(&ctx, dst_type, NO_NAME)
+    Vector[Operand] some_args = [op_consume(&ctx, &gmod, payload, CkCallArgOwning())]
+    emit(&ctx, GICallExtern(some_res, "Some", some_args))
+    emit(&ctx, GIAssign(merge, op_consume(&ctx, &gmod, some_res, CkAssign())))
+    set_terminator(&ctx, GTJump(lift_merge_bb))
+    # None arm: build None directly.
+    switch_to(&ctx, none_bb)
+    int none_res = add_local(&ctx, dst_type, NO_NAME)
+    Vector[Operand] none_args = []
+    emit(&ctx, GICallExtern(none_res, "None", none_args))
+    emit(&ctx, GIAssign(merge, op_consume(&ctx, &gmod, none_res, CkAssign())))
+    set_terminator(&ctx, GTJump(lift_merge_bb))
+    switch_to(&ctx, lift_merge_bb)
+    return merge
 
 # Emit a tag-read against the scrutinee. Returns the local id holding
 # the int32 tag value. The enum_name must be a plain identifier (no
