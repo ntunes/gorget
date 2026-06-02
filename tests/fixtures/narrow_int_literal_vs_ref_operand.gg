@@ -8,7 +8,7 @@
 # The narrowing gate in src/semantic/typecheck.rs (BinaryOp arm) historically matched
 # only bare `Primitive`, so the inline-chain form (case 3 below) failed to type-check
 # with "cannot implicitly convert `int` to `uint8`". Fix = peel Ref/Owned before the
-# Primitive check (mirror the cast auto-deref at typecheck.rs:~2676). See
+# Primitive check (mirror the cast auto-deref at typecheck.rs:~2667). See
 # docs/plans/uint8_literal_narrow_ref_operand.md. Surfaced in gorget-arena
 # (md3.gg:32, bsp.gg:171/403) after c462cffa stopped masking imported-module errors.
 #
