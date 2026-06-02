@@ -1194,9 +1194,8 @@ fn int_range() {
 
 // Regression guard for the int-literal-vs-Ref-operand narrowing bug: an int literal must
 // narrow to a `uint8` operand even when that operand is a Ref/Owned-wrapped integer (an inline
-// `Vector[uint8].get(i).unwrap()` chain), not only a bare `Primitive`. Asserts what the language
-// SHOULD do. Currently #[ignore]d because case (3) fails to type-check until the typecheck.rs
-// Ref/Owned-peel fix lands — FLIP TO ACTIVE (remove #[ignore]) when it does. See
+// `Vector[uint8].get(i).unwrap()` chain), not only a bare `Primitive`. The fix (peel Ref/Owned
+// before the int-literal narrowing gate) landed in `b6f67cd9`; see
 // docs/plans/uint8_literal_narrow_ref_operand.md.
 #[test]
 fn narrow_int_literal_vs_ref_operand() {
