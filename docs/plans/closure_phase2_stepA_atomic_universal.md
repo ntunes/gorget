@@ -52,15 +52,25 @@ on nested closures — `duplicate type name '__Closure_0'` — so it is NOT refe
    move (the call-fn to the post-pass via make-site records; the inline wrapper to the make-site
    ESpawn handling).
 4. **Retained, UNTOUCHED (separate spawn concerns):** `collect_shared_vars` + `scan_spawn_wrappers`
-   (shared-token / method-spawn wrappers, `lower.gg:11752-11776`) and the named-closure-spawn pass
-   (`collect_closure_vars_*` + `emit_named_closure_spawn_*`, `lower.gg:11781-11790`). See §6 for the
-   numbering-consistency requirement on the named-spawn pass.
+   (shared-token / method-spawn wrappers, `lower.gg:11752-11776`).
+5. **Named-closure-spawn pass RE-POINTED (NOT untouched):** `emit_named_closure_spawn_*` is kept but
+   re-pointed to read make-site-recorded cids; `collect_closure_vars_*` + the `ncv_id` counter are
+   DELETED (`lower.gg:11781-11790`). See §6 for the design — its cid replay is NOT consistent with
+   the make-site after the refactor, so the cid is sourced from the make-site instead.
 
 ## 3. `gir.gg` — the lifted-closure record (append at END; in-memory IR → NO SCHEMA_VERSION bump)
-- Add `Vector[LiftedClosure] lifted_closures` as the **LAST** field of `GirModule` (after
-  `strip_asserts`, `gir.gg:~428`; the struct documents "appended at END to avoid shifting positional
-  ctor call sites"). Update the SINGLE ctor call (`lower.gg:~10968`, currently ends `…,
-  !enum_variant_parent_idx, false)`) — append `, []`.
+- ⚠ **IMPORT: add `from ast import Stmt` to `gir.gg`** (its imports `gir.gg:4-11` do NOT include
+  `ast`; `LiftedClosure` references `Vector[Stmt]` → unknown-type error without it). Safe — `ast.gg`
+  imports only `std.collections`, so no import cycle. (`Param` is also needed only transitively via
+  the helper, which lives in `lower.gg` where `ast` is already imported; the RECORD stores
+  `body: Vector[Stmt]` + the already-resolved `int`/`String` sig fields, so only `Stmt` is new to
+  `gir.gg`.)
+- Add TWO new fields at the **END** of `GirModule` (after `strip_asserts`, `gir.gg:~428`; the struct
+  documents "appended at END to avoid shifting positional ctor call sites"), in this order:
+  `Vector[LiftedClosure] lifted_closures` then `Dict[String, String] closure_var_cids` (§6).
+- Update the SINGLE ctor call (`lower.gg:~10968`, currently ends `…, !enum_variant_parent_idx,
+  false)`) — append **BOTH** initializers: `, [], {}` (empty `lifted_closures`, empty
+  `closure_var_cids`). (Verified there is exactly one `GirModule(...)` ctor call.)
 - `LiftedClosure{int cid, String call_name, int self_ptr, Vector[int] abi_param_types,
   Vector[int] body_param_types, Vector[String] body_param_names, int return_type,
   Vector[Stmt] body, bool is_implicit, bool lowerable}`. (NO `captures` field — Step B adds it.)
@@ -72,14 +82,18 @@ on nested closures — `duplicate type name '__Closure_0'` — so it is NOT refe
   implicit-it: `["it"]`). Store what `lower_closure_body` needs so the post-pass does NOT re-derive.
 
 ## 4. `lower.gg` — make-site (single id source + recorder + value builder)
-**Extract a shared signature helper** so the make-site and the (deleted) scan compute identical
-metadata: `compute_closure_sig(Vector[Param] params, Vector[Stmt] body, GirModule &gmod) ->
-(abi_param_types, self_ptr, body_param_types, body_param_names, ret_type)` — lift the EXISTING scan
-logic verbatim (param-type mapping `lower.gg:9671-9676` + return-type inference `9678-9715`
-including the float-param `9697-9700` and multi-stmt-void `9703-9712` heuristics + STRING_MARKER
-resolve `9713-9715`). For implicit-it, the analogous `guess_return_type(body)` + `[I64_TYPE]`/`["it"]`
-shape (`9644/9656-9658/9753/9767-9768`). This guarantees the recorded sig == what the body-lowering
-expects.
+**Extract a shared signature helper** so the make-site (and the deleted scan's logic) compute
+identical metadata: `compute_closure_sig(int cid, Vector[Param] params, Vector[Stmt] body,
+GirModule &gmod) -> (abi_param_types, self_ptr, body_param_types, body_param_names, ret_type)`. ⚠ The
+helper MUST take `cid` — `self_ptr` is derived from the env type `__Closure_<cid>`: the scan does
+`closure_name = "__Closure_" + int_to_str(cid)` (`:9666`) → `closure_tid =
+lookup_or_register_named(&gmod, closure_name)` (`:9668`) → `self_ptr = register_ptr(&gmod,
+closure_tid)` (`:9669`); without `cid` the helper cannot reproduce `self_ptr`. Lift the EXISTING scan
+logic verbatim: env-type+self_ptr (`9666-9669`), param-type mapping `9671-9676`, return-type
+inference `9678-9715` (incl. the float-param `9697-9700` and multi-stmt-void `9703-9712` heuristics +
+STRING_MARKER resolve `9713-9715`). For implicit-it, the analogous `[I64_TYPE]`/`["it"]` param shape
++ `guess_return_type(body)` (`9644/9656-9658/9753/9767-9768`) — pass `is_implicit` or provide a
+sibling helper. This guarantees the recorded sig == what the body-lowering expects.
 
 ### (a) `EClosure` arm (`lower.gg:5651-5666`) — KEEP value, ADD record
 Keep the two existing emissions verbatim — `gmod.fn_sigs.put(make_fn, closure_tid)` (`:5664`) and
@@ -131,7 +145,9 @@ EClosure callee → `else:pass` → UNIT). Change `ESpawn` to peek: if `inner_bo
   order-INSENSITIVELY, so this is benign — do not be alarmed by the reordered diff; confirm the
   counts, not the order.
 
-### (e) Named-closure varname→cid — see §6 (kept-pass numbering, not a new make-site write).
+### (e) Named-closure varname→cid — see §6: record `name → "__Closure_<cid>"` into
+`gmod.closure_var_cids` during `SVarDecl` lowering (a new make-site-side write, keyed by
+`ctx.current_fn_name + "\0" + name`), read by the re-pointed `emit_named_closure_spawn_*`.
 
 ## 5. `lower.gg` — the post-pass (sole pusher) + the deletions
 ### (a) Post-pass — REPLACE the scan closure-walk (`lower.gg:11735-11745`) with a drain
@@ -154,6 +170,30 @@ while di < gmod.lifted_closures.len():         # re-read len() each iter = drain
 Use `lc.is_implicit` to pick the right stub local-set. (Folding both into `lower_closure_body` for
 the stub case is cleaner if it doesn't change emitted shape — executor's call, but DON'T change the
 stub's emitted locals/blocks.)
+
+### (a′) ⚠ NESTED CLOSURES INSIDE A STUBBED OUTER — fn-count parity hazard (review-found)
+The OLD scan recursed into a closure body (`scan_stmts_for_closures(body)`, `:9726`) and pushed
+nested closures' `__Closure_M__call` **BEFORE** the outer's capture check (`:9727`) — so even a
+STUBBED (capturing) outer still got its nested closures pushed. The new make-site records ONLY the
+outer; nested closures are discovered solely by LOWERING the outer body in the drain. A LOWERABLE
+outer lowers its body → nested recorded mid-drain ✓. But a STUBBED outer's body is NEVER lowered →
+its nested closures are never recorded → their `__Closure_M__call` are **LOST** → per-fixture
+fn-count DROP. (drain-until-empty covers nested-in-LOWERABLE, NOT nested-in-stub.)
+- **PRIMARY (verify-it-is-empty): require the executor to PROVE no MATCHED fixture has a nested
+  closure inside a stubbed (capturing OR nested-containing) outer** — i.e. the Phase-1 docstring
+  claim (`lower.gg:~9404`: no current candidate nests closures) still holds. Evidence: per-fixture
+  `user_fn_count` is unchanged across the whole corpus (the gate already measures this) AND a grep
+  for closure-in-closure shapes finds none in MATCHED fixtures. Since Rust also crashes on nested
+  closures, the corpus almost certainly has zero. If proven, the refactor is fn-count-preserving with
+  NO extra code.
+- **IF any such fixture exists (option a): the post-pass STUB case must record nested closures via a
+  RECORD-ONLY walk** of `lc.body` — for each directly-nested `EClosure`/`EImplicitClosure`, assign a
+  fresh `gmod_next_closure_id`, compute its sig + `lowerable`, push a `LiftedClosure` (drain picks it
+  up); recurse the walk ONLY into NON-lowerable nested bodies (a lowerable nested will be LOWERED by
+  the drain, which discovers ITS nested — recursing here too would double-record → duplicate symbol).
+  This reproduces the OLD unconditional-nested-push. Implement only if PRIMARY fails.
+- **LOG either way:** "nested-closure-inside-stubbed-outer" handling (option a) as a follow-up if not
+  needed now. Flag in §7.
 
 ### (b) DELETE the scan closure-walk + counter
 Delete `scan_expr_for_closures` / `scan_stmt_for_closures` / `scan_stmts_for_closures`
@@ -192,19 +232,25 @@ closure's make-site cid (so `__spawn_wrap___Closure_N` ↔ the post-pass-pushed 
 agree).
 
 - **PRIMARY (robust — matches the owner's "re-point to recorded cids" intent): record the cid at
-  the make-site, read it at emit.** Add `Dict[String, String] closure_var_cids` to `gmod` (END
-  field; key → `"__Closure_<cid>"`). When lowering a `SVarDecl(name, init)` whose `init` is an
-  `EClosure`/`EImplicitClosure`, after `lower_expr(init)` returns, read the just-pushed record's cid
+  the make-site, read it at emit.** Add `Dict[String, String] closure_var_cids` to `gmod` as the
+  SECOND new END field (after `lifted_closures`; key → `"__Closure_<cid>"`). When lowering a
+  `SVarDecl(name, init)` whose `init` is an `EClosure`/`EImplicitClosure`, after `lower_expr(init)`
+  returns, read the just-pushed record's cid
   (`gmod.lifted_closures.get(gmod.lifted_closures.len()-1).unwrap().cid`) and `put` it. ⚠ **SCOPING:
-  key by the CURRENT FUNCTION + varname** (e.g. `fn_name + "\x00" + name`) — a global `varname→cid`
-  map is WRONG (two functions each declaring `auto f = …` collide; the emit pass runs per-function
-  AFTER all make-sites, so a plain overwrite map yields the LAST function's cid for every function's
-  `spawn f()`). The make-site has `&ctx`; verify which `LowerCtx` field carries the enclosing
-  function name (`lower_function` sets it; `lower_closure_body` passes `call_name` as a trailing
-  String field, `:9608`) and use it. Then `emit_named_closure_spawn_stmts` (per-function, `:11788`)
-  reads `closure_var_cids.get(fdef.name + "\x00" + spawned_var)`. DELETE `collect_closure_vars_*` +
-  the `ncv_id` counter (`:11781-11790` becomes: per function, call `emit_named_closure_spawn_stmts`
-  if any closure-var key for this `fdef.name` exists).
+  key by the CURRENT FUNCTION + varname** — use `ctx.current_fn_name + "\0" + name` (the dialect's
+  lexer supports `\0` but NOT `\x00`; an embedded NUL is a safe key since runtime Strings are
+  length-prefixed and the Str-key Dict hashes/compares by `len`+`memcmp`). A global `varname→cid` map
+  is WRONG (two functions each declaring `auto f = …` collide; the emit pass runs per-function AFTER
+  all make-sites, so a plain overwrite map yields the LAST function's cid for every function's
+  `spawn f()`). `LowerCtx.current_fn_name` EXISTS (`lower.gg:172`, set to `fdef.name` at
+  `lower_function` `:8543`) and is reachable at the SVarDecl-lowering site (`:6177`/`:6226`). Then
+  give `emit_named_closure_spawn_stmts`/`_expr` (`:10445`/`:10477`) a `String fn_name` param
+  (replacing the per-function `closure_vars` Dict param) and have it read
+  `gmod.closure_var_cids.get(fn_name + "\0" + spawned_var)` (instead of `closure_vars.contains/get`
+  on a bare varname). DELETE `collect_closure_vars_*` + the `ncv_id` counter; `:11781-11790` becomes:
+  for each `IFunction(fdef)`, call `emit_named_closure_spawn_stmts(fdef.body, fdef.name, …)`
+  (it no-ops if no matching key exists). (`collect_closure_vars_*` is called ONLY from this driver
+  block — safe to delete.)
 - **ALTERNATIVE (only if PRIMARY proves too invasive AND consistency is EMPIRICALLY proven): keep
   `collect_closure_vars_*` + `ncv_id`** — but ONLY after the executor demonstrates, with a
   CONSTRUCTED fixture placing a closure in a test/generic/equip body BEFORE a named-closure spawn,
@@ -233,6 +279,18 @@ agree).
 6. **The make-site EClosure arm's `lowerable` guard must be byte-identical to the scan's** (`:9727`
    for explicit, `:9651/:9762` for implicit) so the SAME closures stub vs lower as Phase 1 → parity
    neutral except the desync fix.
+7. **Nested-closure-inside-a-STUBBED-outer (§5a′) — fn-count DROP class.** The old scan pushed
+   nested call-fns unconditionally (before the capture check); the new design discovers nested only
+   by lowering the outer body, so a stubbed outer loses its nested. Mitigated by §5a′ PRIMARY (prove
+   the corpus has none — per-fixture `user_fn_count` unchanged + grep). Caught by the per-fixture
+   fn-count gate. If it triggers, implement §5a′ option (a).
+8. **§4(b) is NOT purely behavior-preserving for `.map(it*2)`/`.filter(it…)` (acknowledge, don't be
+   alarmed):** the new EImplicitClosure make-site arm emits a `__make_closure_<cid>` value where the
+   old `else` emitted only a UNIT local → the implicit-it arg's local changes UNIT→GorgetClosure and
+   a `call_extern @__make_closure_N` appears. This is **fn-count-NEUTRAL** (`__make_closure_N`
+   expands inline at `lir_codegen.gg:3708-3715`, not a fn body; `user_fn_count` counts `) {`
+   openings), and the affected implicit-it fixtures CC-FAIL today, so it cannot regress a runnable
+   binary. Expect C-emit diffs on `.map`/`.filter` fixtures — confirm fn-counts, not byte-identity.
 
 ## 8. Validation gate (self-host-dir only; behavior-preserving refactor + latent desync fix)
 ⚠ `bootstrap_fixed_point` is a REGRESSION GUARD only (the driver sources have ZERO
