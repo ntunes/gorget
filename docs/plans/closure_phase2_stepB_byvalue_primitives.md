@@ -57,10 +57,13 @@ the make-site for capturing-lowerable closures, (d) field-load captures in the p
 add the LIR closure-pack promotion.
 
 ## 3. `gir.gg` — typed capture record (append at END of the positional ctor)
-- Add `Vector[ClosureCapture] captures` as the LAST field of `LiftedClosure` (`:330`). Update BOTH
-  push sites in `lower.gg` (the EClosure record `:5712` + the implicit-it record in
-  `record_implicit_it_closure` `~:9790`) to pass the captures vector (empty `[]` for implicit-it in
-  2a — implicit-it capture support is deferred; implicit-it stays stubbed-if-capturing as today).
+- Add `Vector[ClosureCapture] captures` as the LAST field of `LiftedClosure` (`:330`). ⚠ This bumps
+  the positional ctor arity 10→11 — update ALL **THREE** `LiftedClosure(...)` push sites in
+  `lower.gg` (grep to confirm exactly three): (1) the EClosure record `:5712`, (2) the inline-SPAWN
+  record in the ESpawn arm `~:5850`, (3) the implicit-it record in `record_implicit_it_closure`
+  `~:9792`. Sites (2) and (3) pass empty `[]` captures in 2a (inline-spawn + implicit-it capture
+  support is DEFERRED — they stay stubbed-if-capturing as today); only site (1) passes real
+  captures. Missing site (2) = a 10-arg call to an 11-field ctor = compile error.
 - `ClosureCapture{String name, int type_id, int local_id, int mode}` — `mode`: int const
   `CAP_BY_VALUE = 0` (2a). Reserve `CAP_BY_MUT_REF = 1` for 2c (do NOT implement). The capture VECTOR
   ORDER is the SINGLE source of truth: env-field order == struct-ctor arg order == body `GIFieldLoad`
@@ -69,33 +72,44 @@ add the LIR closure-pack promotion.
   2a makes it an emit site.
 
 ## 4. `lower.gg` — collector, classification, env-field registration, make-site value, post-pass body
-### (a) Positive deduped free-var COLLECTOR (new; at the make-site EClosure arm `:5689`, ctx live)
-Walk the closure body; a bare `EIdentifier(name)` that is NOT a closure param / `it` / body-local
-(SVarDecl / for-pattern / match-arm pattern — track with the SAME lexical-scope discipline the
-Phase-1 INVERTED guard `closure_body_captures` uses) AND for which `nl_contains(&ctx, name)` is TRUE
-is a CAPTURE → record `ClosureCapture(name, type_id = ctx.locals.get(nl_get(&ctx,name)).unwrap().
-type_id, local_id = nl_get(&ctx,name), CAP_BY_VALUE)`. ⚠ **MUST DEDUP** (carry a `seen` name-set;
-mirror Rust `FreeVarCollector.seen`) — a body referencing a capture twice (`base + base`) must push
-`base` ONCE, else two env fields + two ctor args trip the intercept's `args.len() !=
-sdef.fields.len()` guard (`lir_lower.gg:2333`, falls back to a miscompile) OR an off-by-one
-`GIFieldLoad` index = silent miscompile / false-MATCH. ⚠ This is a COLLECTOR (ordered deduped list +
-types), NOT the Phase-1 DETECTOR (returns bool) — MIRROR the Phase-1 walk's STRUCTURE (pattern-
-binding, body-local, nested-skip, EIf-branch coverage for c20) but it's net-new code returning
-`Vector[ClosureCapture]`. (`ESelfExpr` → treat as a capture only if a fixture needs it; 2a targets
-don't — log otherwise.)
+### (a) Capture-shaped free-var COLLECTOR (new; at the make-site EClosure arm `:5689`, ctx live)
+⚠ **The collector MUST use the SAME "capture-shaped" criterion as the Phase-1 DETECTOR it replaces
+(`closure_expr_has_capture`/`closure_body_captures` `:9238`/`:9505`) — NOT a narrower `nl_contains`
+test.** The Phase-1 detector flags a bare `EIdentifier(name)` as capture-shaped when it is NOT a
+closure param / `it` / body-local (SVarDecl / for-pattern / match-arm pattern — track with the SAME
+lexical-scope discipline) AND NOT module-resolvable (`closure_ident_module_resolvable` `:9196` — the
+6 EIdentifier categories: const/float-const/fn_sigs/static/none/nullary-variant). For EACH
+capture-shaped free var found, classify it:
+  - if `nl_contains(&ctx, name)` (a genuine outer LOCAL) → record `ClosureCapture(name, type_id =
+    ctx.locals.get(nl_get(&ctx,name)).unwrap().type_id, local_id = nl_get(&ctx,name), CAP_BY_VALUE)`.
+  - ELSE (capture-shaped but NOT an outer local — e.g. unresolvable, or `ESelfExpr`) → mark the
+    closure **UNLIFTABLE** (this is the SAFETY net — Step A/Phase-1 would STUB here; 2a must too).
+⚠ **MUST DEDUP** the per-name records (carry a `seen` name-set; mirror Rust `FreeVarCollector.seen`)
+— a body referencing a capture twice (`base + base`) pushes `base` ONCE, else two env fields + two
+ctor args trip the intercept's `args.len() != sdef.fields.len()` guard (`lir_lower.gg:2333`, falls
+to a miscompile) OR an off-by-one `GIFieldLoad` index = silent miscompile / false-MATCH. ⚠ This is a
+COLLECTOR+CLASSIFIER (ordered deduped list + types + an `unliftable` flag), built on the Phase-1
+walk's STRUCTURE (pattern-binding, body-local, nested-skip, EIf-branch coverage for c20, module-
+resolvable check) — it FINDS exactly what the detector found, but classifies each instead of
+returning bool. (`ESelfExpr` → UNLIFTABLE in 2a; 2a targets don't capture `self`.)
 
 ### (b) 2a CLASSIFICATION GUARD (load-bearing — keeps 2a in scope; REPLACES the Phase-1 lowerable test)
-2a lifts a closure ONLY IF ALL of: (a) EVERY capture's `type_id < UNIT_TYPE` (=11) — bit-copyable
-primitive; ⚠ NOT `< PRIM_COUNT` (=12, includes UNIT — a unit-typed capture is an upstream mis-type,
-exclude it); NOT resource/String/Vector/struct/enum; AND (b) NO capture is mutated in the body (no
-assign / compound-assign to a capture name — mirror Rust `detect_mutations`, block-bodies only); AND
-(c) NO nested closure (retain the Phase-1 `stmts_have_nested_closure`/`expr_has_nested_closure`
-guard). If a closure FAILS any of (a)/(b)/(c) — resource capture (→2b), mutated (→2c), or nested —
-2a KEEPS THE STUB for that whole closure (exactly as Phase 1 does) and does NOT lift it. So the NEW
-`lowerable` decision = `(no captures OR all-captures-2a-primitive-unmutated) AND no nested closure`.
-A NON-capturing lowerable closure is unchanged from Step A (Phase-1 win). Conservative: doubt → stub.
-⚠ The make-site positive collector is now the SOLE lowering-decision input — the Phase-1 INVERTED
-`closure_body_captures` (`:9505`) is NO LONGER consulted for the lowering decision (verify it's
+2a lifts a closure ONLY IF ALL of: (a) the collector marked NO capture-shaped var UNLIFTABLE (§4a —
+every capture-shaped free var IS a genuine outer LOCAL, none unresolvable / `ESelfExpr`); AND (b)
+EVERY captured local's `type_id < UNIT_TYPE` (=11) — bit-copyable primitive; ⚠ NOT `< PRIM_COUNT`
+(=12, includes UNIT — exclude a unit-typed capture as an upstream mis-type); NOT resource / String /
+Vector / struct / enum; AND (c) NO captured local is mutated in the body (no assign / compound-assign
+to a capture name — mirror Rust `detect_mutations`, block-bodies only); AND (d) NO nested closure
+(retain the Phase-1 `stmts_have_nested_closure`/`expr_has_nested_closure` guard). If a closure FAILS
+any of (a)-(d) — non-local/`self` capture, resource capture (→2b), mutated (→2c), or nested — 2a
+KEEPS THE STUB for that whole closure (exactly as Step A/Phase 1 does) and does NOT lift it. So the
+NEW `lowerable` decision = `(no captures OR all-captures-are-liftable-primitive-unmutated-LOCALS) AND
+no nested closure`. ⚠ **This MUST be at least as conservative as the Step-A/Phase-1 `lowerable` gate**
+— condition (a) is the safety net (a capture-shaped var the collector can't lift = STUB, exactly as
+Phase 1's detector would). A NON-capturing lowerable closure is unchanged from Step A (Phase-1 win).
+Conservative: doubt → stub. ⚠ The collector+classifier is now the SOLE lowering-decision input — the
+Phase-1 INVERTED `closure_body_captures` (`:9505`) is NO LONGER consulted for the decision; since the
+collector is built on the SAME walk + criterion, it subsumes it (verify `closure_body_captures` is
 unused elsewhere; if only the make-site used it, remove it — resolves the two-detector smell).
 
 ### (c) Register `__Closure_N`'s FIELDS at the MAKE-SITE (NOT in `compute_closure_sig`)
@@ -113,8 +127,12 @@ Pass-2 (`lir_lower.gg:883`) then fills `LirStructDef.fields` automatically and c
 In the EClosure arm (`:5689`), after collecting captures + the 2a guard:
 - **2a-lowerable AND has captures →** build a struct-ctor of `__Closure_<cid>`: `int env_tmp =
   add_local(&ctx, closure_struct_tid, NO_NAME)` (the `__Closure_<cid>` named type id from
-  `compute_closure_sig`/`lookup_or_register_named`), `emit(GICallExtern(env_tmp, "__Closure_<cid>",
-  [OpCopy(cap.local_id) for cap in captures]))` (the intercept lowers this to `IStructInit` — a STACK
+  `compute_closure_sig`/`lookup_or_register_named`), `emit(GICall(env_tmp, "__Closure_<cid>",
+  [OpCopy(cap.local_id) for cap in captures]))` ⚠ **`GICall`, NOT `GICallExtern`** — the user-struct-
+  ctor intercept `try_lower_user_struct_ctor` fires ONLY from the `case GICall` arm (`lir_lower.gg:
+  2771`); a `GICallExtern` would fall through to extern-call lowering and try to call a nonexistent
+  extern `__Closure_N`. This matches how every other user struct ctor is emitted (`GICall(dst,
+  call_name, gir_args)`, e.g. `lower.gg:6271`). (the intercept lowers this `GICall` to `IStructInit` — a STACK
   env; primitives are bit-copied, NO CoW). Then assign into the `GorgetClosure` closure slot: `int
   cdst = add_local(&ctx, GorgetClosure_tid, NO_NAME); emit(GIAssign(cdst, OpCopy(env_tmp)))` — the
   step-5 LIR promotion packs `env_tmp`→heap into `cdst`. Return `cdst`. Do NOT emit `__make_closure_`
