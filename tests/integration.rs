@@ -12286,7 +12286,7 @@ true
 false
 3
 3
-str
+String
 int
 float
 false
@@ -12368,7 +12368,7 @@ fn dataframe_tier2_groupby() {
 2
 int
 float
-str
+String
 bool
 done",
     );
@@ -12413,7 +12413,7 @@ true
 -2
 0
 true
-str
+String
 1
 true
 42

@@ -36,7 +36,7 @@ void main():
     print(f"{ic.value_as_str(2)}")
 
     # ── int → String ──
-    Result[DataFrame, String] r3 = df_cast(df1, "x", "str")
+    Result[DataFrame, String] r3 = df_cast(df1, "x", "String")
     print(f"{r3.is_ok()}")
     Column sc = r3.unwrap().get_column("x")
     print(f"{sc.dtype_name()}")

@@ -182,7 +182,7 @@ equip Column:
             case FloatCol(_):
                 return "float"
             case StrCol(_):
-                return "str"
+                return "String"
             case BoolCol(_):
                 return "bool"
 
@@ -2446,7 +2446,7 @@ Column cast_int_col(TypedColumn[int] c, String target_type):
                 m.push(false)
             j = j + 1
         return FloatCol(TypedColumn[float](d, m))
-    elif target_type == "str":
+    elif target_type == "String":
         Vector[String] d = Vector[String]()
         Vector[bool] m = Vector[bool]()
         int j = 0
@@ -2496,7 +2496,7 @@ Column cast_float_col(TypedColumn[float] c, String target_type):
                 m.push(false)
             j = j + 1
         return IntCol(TypedColumn[int](d, m))
-    elif target_type == "str":
+    elif target_type == "String":
         Vector[String] d = Vector[String]()
         Vector[bool] m = Vector[bool]()
         int j = 0
@@ -2613,7 +2613,7 @@ Column cast_bool_col(TypedColumn[bool] c, String target_type):
                 m.push(false)
             j = j + 1
         return FloatCol(TypedColumn[float](d, m))
-    elif target_type == "str":
+    elif target_type == "String":
         Vector[String] d = Vector[String]()
         Vector[bool] m = Vector[bool]()
         int j = 0
@@ -2628,8 +2628,8 @@ Column cast_bool_col(TypedColumn[bool] c, String target_type):
         return StrCol(TypedColumn[String](d, m))
     return BoolCol(c)
 
-# df_cast: convert a column to target_type ("int", "float", "str", "bool").
-# Nulls propagate; str→int/float that fails to parse becomes null.
+# df_cast: convert a column to target_type ("int", "float", "String", "bool").
+# Nulls propagate; String→int/float that fails to parse becomes null.
 # Returns Error if column not found or cast is unsupported.
 Result[DataFrame, String] df_cast(DataFrame df, String col_name, String target_type):
     if not df.has_column(col_name):
@@ -2637,7 +2637,7 @@ Result[DataFrame, String] df_cast(DataFrame df, String col_name, String target_t
     String src_type = df.get_column(col_name).dtype_name()
     if src_type == target_type:
         return Ok(df_copy(df))
-    if not (target_type == "int" or target_type == "float" or target_type == "str" or target_type == "bool"):
+    if not (target_type == "int" or target_type == "float" or target_type == "String" or target_type == "bool"):
         return Error("df_cast: unsupported cast from '" + src_type + "' to '" + target_type + "'")
     # Each match arm has a single direct return at its top level (workaround for a
     # compiler limitation where return inside if-inside-match-arm is incorrectly lowered).
