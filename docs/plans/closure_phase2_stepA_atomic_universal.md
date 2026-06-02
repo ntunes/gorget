@@ -61,12 +61,15 @@ on nested closures — `duplicate type name '__Closure_0'` — so it is NOT refe
   `strip_asserts`, `gir.gg:~428`; the struct documents "appended at END to avoid shifting positional
   ctor call sites"). Update the SINGLE ctor call (`lower.gg:~10968`, currently ends `…,
   !enum_variant_parent_idx, false)`) — append `, []`.
-- `LiftedClosure{int cid, String call_name, int self_ptr, Vector[int] param_types,
-  Vector[String] param_names, int return_type, Vector[Stmt] body, bool is_implicit, bool lowerable}`.
-  (NO `captures` field — Step B adds it. `param_types` here is the ABI param-types vector
-  `[self_ptr, p0, p1, …]` that `lower_closure_body` takes as `abi_param_types`; `param_names`/the
-  per-param types for the body come from the closure's own params. Store what `lower_closure_body`
-  needs so the post-pass does NOT re-derive — see §4 helper.)
+- `LiftedClosure{int cid, String call_name, int self_ptr, Vector[int] abi_param_types,
+  Vector[int] body_param_types, Vector[String] body_param_names, int return_type,
+  Vector[Stmt] body, bool is_implicit, bool lowerable}`. (NO `captures` field — Step B adds it.)
+  The fields map 1:1 onto `lower_closure_body`'s params (§4 helper produces them all):
+  `abi_param_types` = the full ABI vector `[self_ptr, p0, p1, …]` (passed as `!abi_param_types`);
+  `self_ptr` = the env-ptr type id; `body_param_types` = the closure's OWN param types
+  `[p0, p1, …]` (i.e. `abi_param_types` minus the leading `self_ptr`, stored explicitly so the
+  post-pass never re-slices/re-derives); `body_param_names` = the closure's param names (for
+  implicit-it: `["it"]`). Store what `lower_closure_body` needs so the post-pass does NOT re-derive.
 
 ## 4. `lower.gg` — make-site (single id source + recorder + value builder)
 **Extract a shared signature helper** so the make-site and the (deleted) scan compute identical
@@ -131,7 +134,7 @@ int di = 0
 while di < gmod.lifted_closures.len():         # re-read len() each iter = drain-until-empty
     LiftedClosure lc = gmod.lifted_closures.get(di).unwrap()
     if lc.lowerable:
-        lower_closure_body(lc.call_name, !lc.param_types(ABI), lc.self_ptr,
+        lower_closure_body(lc.call_name, !lc.abi_param_types, lc.self_ptr,
                            lc.body_param_types, lc.body_param_names, lc.return_type, lc.body, &gmod)
         # ^ lowering re-enters lower_expr → may APPEND new records past the current len; the while
         #   picks them up (worklist). lower_closure_body pushes the GirFunction itself (:9635).
@@ -181,8 +184,9 @@ AST order, so `ncv_id` should remain consistent.
   `__spawn_wrap___Closure_N` or an fn-count change on those canaries.
 - **FALLBACK (only if drift is found): re-point** — store `var_name` on `LiftedClosure` (set at the
   make-site when the EClosure is a `SVarDecl` init; the make-site doesn't see the name, so set it in
-  the `SVarDecl` lowering right after `lower_expr` returns, reading
-  `gmod.lifted_closures.last().cid`), and rebuild the per-function `fn_closure_vars` from the records
+  the `SVarDecl` lowering right after `lower_expr` returns, reading the just-pushed record's cid via
+  `gmod.lifted_closures.get(gmod.lifted_closures.len()-1).unwrap().cid` — the dialect has no
+  `Vector.last()`; use the `.get(len-1).unwrap()` idiom), and rebuild the per-function `fn_closure_vars` from the records
   whose cid falls in this function's range instead of replaying `ncv_id`. Only do this if (i) fails —
   it adds scoping complexity (same-named vars across functions) the replay already handles correctly.
 
