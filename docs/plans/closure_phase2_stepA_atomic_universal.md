@@ -123,7 +123,13 @@ EClosure callee → `else:pass` → UNIT). Change `ESpawn` to peek: if `inner_bo
     fn-count only today; do NOT regress the count, do NOT chase a runnable spawn binary.)
   Else (non-inline spawn, e.g. `spawn compute(3)`): keep the bare `return lower_expr(*inner_box)`.
   Apply the same to `ESpawnBlocking` only if it currently inline-spawns (it does not today — bare
-  passthrough `:5775`; leave it).
+  passthrough `:5776-5777`; leave it).
+  ⚠ EMISSION-ORDER NOTE (harmless): today the scan interleaves inline fns `wrap_0, call_0, wrap_1,
+  call_1`; after the refactor the make-site pushes wrappers during `lower_function` (`wrap_0,
+  wrap_1`) and the post-pass pushes call-fns after (`call_0, call_1`) → order becomes `wrap_0,
+  wrap_1, call_0, call_1`. fn-COUNT is unchanged and both comparison gates count fn-body openings
+  order-INSENSITIVELY, so this is benign — do not be alarmed by the reordered diff; confirm the
+  counts, not the order.
 
 ### (e) Named-closure varname→cid — see §6 (kept-pass numbering, not a new make-site write).
 
@@ -164,31 +170,48 @@ them, stop and re-scope.
 arms at `:9782/:9789`, which are being deleted). If a live caller remains, the implicit-it path it
 handled must be routed through the make-site arm instead. Also remove the now-dead `LowerCtx.
 next_closure_id` field (`lower.gg:151`) ONLY if trivially safe (it is dead — never incremented; but
-it touches all 5 `LowerCtx(...)` positional ctors → if that balloons the diff, LOG it as a separate
-cleanup instead of bundling).
+it touches all 4 `LowerCtx(...)` positional ctors at `:8543/:8737/:9608/:11434` → if that balloons
+the diff, LOG it as a separate cleanup instead of bundling).
 
-## 6. Named-closure-spawn pass — KEEP, but VERIFY numbering consistency (the A3 concern)
+## 6. Named-closure-spawn pass — RE-POINT to make-site cids (the A3 concern)
 The named-spawn pass (`collect_closure_vars_stmts` `:9901` builds `Dict[varname→"__Closure_N"]` via
 its own module-global `ncv_id` `:11781`; `emit_named_closure_spawn_stmts` `:10445` pushes
-`__spawn_wrap___Closure_N` for `spawn f(...)`, dedup via the shared `emitted_wrappers`). This is
-SEPARATE code from the deleted scan and KEEPS WORKING **iff** `ncv_id` still produces the SAME cids
-the make-site now assigns. Before the refactor `ncv_id` was built to mirror the SCAN's
-all-classes numbering; the refactor makes the MAKE-SITE count the same all-classes set in the same
-AST order, so `ncv_id` should remain consistent.
-- **DEFAULT (lower risk): KEEP `collect_closure_vars_*` + `ncv_id` UNCHANGED.** The executor MUST
-  verify consistency: (i) `collect_closure_vars_expr` (`:9875-9899`) counts inline-spawn closures
-  and `EImplicitClosure` args the SAME way the make-site now bumps (one `+1` per `EClosure` /
-  `EImplicitClosure` / inline-spawn `EClosure`, none for bare `EIt`); confirm via the
-  `spawn_closure_void` / `spawn_closure_copy` canaries (named-closure-variable spawns) + a mixed
-  fixture (a named closure AFTER an implicit-it `.map`). Any cid drift shows as a wrong/ missing
-  `__spawn_wrap___Closure_N` or an fn-count change on those canaries.
-- **FALLBACK (only if drift is found): re-point** — store `var_name` on `LiftedClosure` (set at the
-  make-site when the EClosure is a `SVarDecl` init; the make-site doesn't see the name, so set it in
-  the `SVarDecl` lowering right after `lower_expr` returns, reading the just-pushed record's cid via
-  `gmod.lifted_closures.get(gmod.lifted_closures.len()-1).unwrap().cid` — the dialect has no
-  `Vector.last()`; use the `.get(len-1).unwrap()` idiom), and rebuild the per-function `fn_closure_vars` from the records
-  whose cid falls in this function's range instead of replaying `ncv_id`. Only do this if (i) fails —
-  it adds scoping complexity (same-named vars across functions) the replay already handles correctly.
+`__spawn_wrap___Closure_N` for `spawn f(...)`, dedup via the shared `emitted_wrappers`) currently
+re-derives each closure's cid by REPLAYING `ncv_id` over the source `m.items` IFunction bodies.
+
+⚠ **CORRECTION (do NOT assume consistency):** after the refactor the make-site assigns cids
+**inside the `lower_function` loop** (`lower.gg:~11406`), which also lowers closures in **test
+bodies, generic monomorphizations, trait-default methods (`~11597`), and equip methods** — a
+SUPERSET of the scan's `m.items` IFunction/IEquip walk, in **monomorphization order, not source
+order**. So `ncv_id` (re-deriving from 0 over source IFunction bodies only) is **NOT guaranteed** to
+match the make-site cids; it only happens to agree for single-`main` fixtures with no
+test/generic/equip closures preceding a named-spawn. (`collect_closure_vars_expr` `:9875-9899` also
+has NARROWER expr coverage than the make-site — no EBinaryOp/EUnaryOp/EIf/EFieldAccess/EIndex/EFString
+recursion — a second reason not to assume agreement.) The cid the wrapper needs MUST be the
+closure's make-site cid (so `__spawn_wrap___Closure_N` ↔ the post-pass-pushed `__Closure_N__call`
+agree).
+
+- **PRIMARY (robust — matches the owner's "re-point to recorded cids" intent): record the cid at
+  the make-site, read it at emit.** Add `Dict[String, String] closure_var_cids` to `gmod` (END
+  field; key → `"__Closure_<cid>"`). When lowering a `SVarDecl(name, init)` whose `init` is an
+  `EClosure`/`EImplicitClosure`, after `lower_expr(init)` returns, read the just-pushed record's cid
+  (`gmod.lifted_closures.get(gmod.lifted_closures.len()-1).unwrap().cid`) and `put` it. ⚠ **SCOPING:
+  key by the CURRENT FUNCTION + varname** (e.g. `fn_name + "\x00" + name`) — a global `varname→cid`
+  map is WRONG (two functions each declaring `auto f = …` collide; the emit pass runs per-function
+  AFTER all make-sites, so a plain overwrite map yields the LAST function's cid for every function's
+  `spawn f()`). The make-site has `&ctx`; verify which `LowerCtx` field carries the enclosing
+  function name (`lower_function` sets it; `lower_closure_body` passes `call_name` as a trailing
+  String field, `:9608`) and use it. Then `emit_named_closure_spawn_stmts` (per-function, `:11788`)
+  reads `closure_var_cids.get(fdef.name + "\x00" + spawned_var)`. DELETE `collect_closure_vars_*` +
+  the `ncv_id` counter (`:11781-11790` becomes: per function, call `emit_named_closure_spawn_stmts`
+  if any closure-var key for this `fdef.name` exists).
+- **ALTERNATIVE (only if PRIMARY proves too invasive AND consistency is EMPIRICALLY proven): keep
+  `collect_closure_vars_*` + `ncv_id`** — but ONLY after the executor demonstrates, with a
+  CONSTRUCTED fixture placing a closure in a test/generic/equip body BEFORE a named-closure spawn,
+  that the `ncv_id` cid still equals the make-site cid (per the correction above it likely will
+  NOT). Do not choose this on the single-`main` canaries alone.
+- **Either way the gate is the same:** `spawn_closure_void` / `spawn_closure_copy` keep their
+  fn-count (3 / 4) and each `__spawn_wrap___Closure_N` matches its closure's `__Closure_N__call`.
 
 ## 7. Risks (ranked) + what each canary catches
 1. **Inline-spawn fn-count parity (HIGHEST).** Canaries `spawn_closure_inline` (must stay 3 fns:
@@ -234,7 +257,10 @@ diff + the mixed C-emit wiring check.
 6. **NEW mixed C-emit WIRING check (proof of the desync fix, do NOT snapshot — can't run yet):** a
    fixture `xs.map(it*2)` THEN `auto f=(int x):x+1; print(f(5))`; emit-C and CONFIRM the explicit
    closure's `__make_closure_<N>` value points at ITS OWN `__Closure_<N>__call` (body `x+1`), not
-   the implicit-it body. Document as the proof.
+   the implicit-it body. Document as the proof. ⚠ This new fixture raises the comparison Total
+   1123→1124; it is a normal program (`main` + 2 closure-call fns) so it must itself MATCH on
+   fn-count in BOTH comparisons (+1 to matched), keeping the totals ≥953/≥881. Confirm it MATCHes
+   (not mismatches) after adding it.
 7. `bootstrap_fixed_point` GREEN.
 
 ## 9. Files (stage by name only — never `-a`)
