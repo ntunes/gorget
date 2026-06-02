@@ -37,7 +37,8 @@ copying any specific line.
 
 ## 1. Goal + scope of 2a
 Make **ByValue PRIMITIVE captures** work: a closure capturing only bit-copyable primitives
-(`BOOL_TYPE..F64_TYPE`, i.e. `type_id < UNIT_TYPE`), not mutated, not nesting a closure, gets a REAL
+(bit-copyable primitives — but the OPERATIVE 2a gate narrows to `{bool, int64, double}` = type_ids
+{0,4,10}, the `type_id_to_name`-faithful subset; see §4b), not mutated, not nesting a closure, gets a REAL
 env struct + heap pack + field-loads in its body. Unblocks `auto_types` (`int base`),
 `test_if_expressions` c20 (4 int captures), `test_closures_edge_cases` primitive cases, `closures.gg`
 primitive cases. **OUT OF SCOPE (KEEP STUBBED, log):** ByValue RESOURCE captures (String/Vector/
