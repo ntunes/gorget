@@ -30,7 +30,7 @@ copying any specific line.
   lowering (LIVE — fix the stale `gir.gg:127` "DEAD CODE" comment). `gir.gg:129`
   `GIFieldLoad(dst, base_local, field_index)`.
 - `lir_codegen.gg:3707-3715` the `__make_closure_` NULL-env wart (+ return-type entry `:2472-2474`,
-  the `name.starts_with("__make_closure_")` name-match `:3714`); `lir_codegen.gg:3390-3395`
+  the `name.starts_with("__make_closure_")` name-match `:3708`); `lir_codegen.gg:3390-3395`
   `IClosurePack` codegen (READY, currently dead); `:3397+` `ICallClosure` codegen.
 - `lir.gg`: `ISlotAddr:107`, `IMemcpy:154`, `IStructInit:167`, `IClosurePack:191`, `ICallClosure:197`.
 - Type constants (`gir.gg:16-28`): `BOOL_TYPE=0` … `F64_TYPE=10`, `UNIT_TYPE=11`, `PRIM_COUNT=12`.
@@ -96,9 +96,17 @@ returning bool. (`ESelfExpr` → UNLIFTABLE in 2a; 2a targets don't capture `sel
 ### (b) 2a CLASSIFICATION GUARD (load-bearing — keeps 2a in scope; REPLACES the Phase-1 lowerable test)
 2a lifts a closure ONLY IF ALL of: (a) the collector marked NO capture-shaped var UNLIFTABLE (§4a —
 every capture-shaped free var IS a genuine outer LOCAL, none unresolvable / `ESelfExpr`); AND (b)
-EVERY captured local's `type_id < UNIT_TYPE` (=11) — bit-copyable primitive; ⚠ NOT `< PRIM_COUNT`
-(=12, includes UNIT — exclude a unit-typed capture as an upstream mis-type); NOT resource / String /
-Vector / struct / enum; AND (c) NO captured local is mutated in the body (no assign / compound-assign
+EVERY captured local's `type_id` is a C-name-FAITHFUL primitive — ⚠ **restrict to `{BOOL_TYPE=0,
+I64_TYPE=4, F64_TYPE=10}` in 2a, NOT the full `type_id < UNIT_TYPE` range.** The de-facto type-id→C-
+name helper `type_id_to_name` (`lower.gg:3077`, what §4c uses) only round-trips bool/int64_t/double
+faithfully; the other 7 sub-int/sub-float widths (`I8/I16/I32=1/2/3`, `U8..U64=5..8`, `F32=9`) ALL
+fall through to `return "int64_t"` (`:3100`) → a `float32`/`uint8`/`int32` capture would get a
+WRONG-SIZED `int64_t` env field → silent miscompile / false-MATCH. The named 2a targets
+(`auto_types` `int base`, `c20` 4 ints) use only `int`, so the faithful subset loses NO listed win.
+A capture of any other primitive width is UNLIFTABLE in 2a (→ STUB) until `type_id_to_name` is
+extended to all 11 primitives (a clean FOLLOW-UP that then widens this gate). NOT resource / String /
+Vector / struct / enum (those are `>= UNIT_TYPE` or composite → already excluded); AND (c) NO
+captured local is mutated in the body (no assign / compound-assign
 to a capture name — mirror Rust `detect_mutations`, block-bodies only); AND (d) NO nested closure
 (retain the Phase-1 `stmts_have_nested_closure`/`expr_has_nested_closure` guard). If a closure FAILS
 any of (a)-(d) — non-local/`self` capture, resource capture (→2b), mutated (→2c), or nested — 2a
@@ -108,14 +116,18 @@ no nested closure`. ⚠ **This MUST be at least as conservative as the Step-A/Ph
 — condition (a) is the safety net (a capture-shaped var the collector can't lift = STUB, exactly as
 Phase 1's detector would). A NON-capturing lowerable closure is unchanged from Step A (Phase-1 win).
 Conservative: doubt → stub. ⚠ The collector+classifier is now the SOLE lowering-decision input — the
-Phase-1 INVERTED `closure_body_captures` (`:9505`) is NO LONGER consulted for the decision; since the
-collector is built on the SAME walk + criterion, it subsumes it (verify `closure_body_captures` is
-unused elsewhere; if only the make-site used it, remove it — resolves the two-detector smell).
+Phase-1 INVERTED `closure_body_captures` (`:9505`) is NO LONGER consulted for the EClosure make-site
+decision. ⚠ It is STILL used at the inline-spawn make-site (`:5849`, which stays stubbed-if-capturing
+in 2a) — so it CANNOT be deleted; leave it. (The "two-detector smell" is only partially resolved in
+2a; full removal waits until inline-spawn captures land. Do NOT waste a cycle trying to delete it.)
 
 ### (c) Register `__Closure_N`'s FIELDS at the MAKE-SITE (NOT in `compute_closure_sig`)
 For a 2a-lowerable closure WITH captures, write `gmod.type_infos["__Closure_<cid>"]` =
-`GirTypeInfo("__Closure_<cid>", [GirFieldInfo(cap.name, type_name_of(cap.type_id)) for cap in
-captures (in order)], <no variants>, false)` — mirror the IStruct registration pattern
+`GirTypeInfo("__Closure_<cid>", [GirFieldInfo(cap.name, type_id_to_name(cap.type_id)) for cap in
+captures (in order)], <no variants>, false)` — use the EXISTING `type_id_to_name` (`lower.gg:3077`,
+already used at `:6269` for the Option-mangle), which is FAITHFUL for the §4b-restricted set
+(bool/int64_t/double); the §4b guard guarantees no capture reaches a width `type_id_to_name` would
+mis-name as `int64_t` — mirror the IStruct registration pattern
 (`lower.gg:10751`). This REPLACES the implicit `{char __pad;}` placeholder (today `__Closure_N` is
 registered as a bare named type with no `type_infos` fields → codegen emits `char __pad`). LIR
 Pass-2 (`lir_lower.gg:883`) then fills `LirStructDef.fields` automatically and codegen stops emitting
@@ -155,10 +167,19 @@ order + names into the post-pass. (`lower_closure_body` may need a `captures` pa
 the record — thread it cleanly.)
 
 ## 5. `lir_lower.gg` — closure-pack promotion (the `try_closure_pack` equivalent; HIGHEST RISK — does NOT exist yet)
-When a `__Closure_<cid>`-typed value is assigned into a `GorgetClosure`-typed slot, REPLACE the plain
-copy with: `__gorget_closure_env_alloc(sizeof(__Closure_<cid>))` (runtime extern → heap ptr) +
-`IMemcpy(heap_ptr, ISlotAddr(stack_env_slot), size)` + `IClosurePack(dst_slot, heap_ptr, call_func,
-false)`. Mirror Rust `try_closure_pack` (`operands.rs:1233-1355` — VERIFY against current Rust before
+When a `__Closure_<cid>`-typed value is assigned into a `GorgetClosure`-typed slot (the GIAssign arm,
+`lir_lower.gg:~2625-2701`, before the `if not handled` fallback), REPLACE the plain copy with the
+pack sequence. ⚠ **These ops take VALUE-ids, not expressions — materialize the intermediates:**
+  - `ISlotAddr(src_addr_val, stack_env_slot)` — `ISlotAddr` is an INSTRUCTION that PRODUCES a value
+    (`src_addr_val` = `&stack_env`); emit it first.
+  - a const-load of the SIZE (from the `__Closure_<cid>` struct's Pass-2 `computed_size`) into a
+    value `size_val`.
+  - `__gorget_closure_env_alloc(size_val)` via `ICallExtern` → `heap_val` (heap ptr).
+  - `IMemcpy(heap_val, src_addr_val, size_val)` — all three are VALUE-ids (codegen emits
+    `memcpy(v,v,v)`, `lir_codegen.gg:3249`).
+  - `IClosurePack(dst_slot, heap_val, call_func, false)` — ⚠ first arg is a SLOT (`s(slot)`,
+    `lir_codegen.gg:3395`), `heap_val` is a value-id, `call_func` is a FUNCTION INDEX.
+  Mirror Rust `try_closure_pack` (`operands.rs:1233-1355` — VERIFY against current Rust before
 copying). ⚠ The promotion needs the `call_func` (the `__Closure_<cid>__call` LIR function index) for
 the `__Closure_<cid>` struct — resolve it via TYPED metadata, NOT a `starts_with("__Closure_")` name
 match where avoidable (CLAUDE.md no-name-matching; the env struct name → its call fn is exactly the
@@ -185,9 +206,10 @@ work is ideally ZERO (or only ensuring `__gorget_closure_env_alloc` is declared,
    f=(int x):x+k; print(f(3))` → 13) RUNNING correctly.
 2. **Collector dedup + field-index alignment (§4a).** Off-by-one or a duplicate trips the intercept
    guard or silently mis-loads. Validate: a closure capturing one var used twice still has ONE field.
-3. **Classification guard correctness (§4b).** Must KEEP STUB for resource/mutated/nested (no
-   regression, no false-MATCH); must LIFT all-primitive-unmutated-no-nested. `< UNIT_TYPE`, not
-   `< PRIM_COUNT`.
+3. **Classification guard correctness (§4b).** Must KEEP STUB for resource/mutated/nested/non-local
+   (no regression, no false-MATCH); must LIFT all-faithful-primitive-unmutated-no-nested. ⚠ Restrict
+   to `{bool, int64, double}` (the `type_id_to_name`-faithful set), NOT the full `< UNIT_TYPE` range —
+   else a sub-int/float-width capture gets a wrong-sized `int64_t` env field (silent miscompile).
 4. **Make-site value branch (§4d).** A capturing-lowerable closure must build the struct-ctor (not
    `__make_closure_`); a non-capturing lowerable + stubbed must keep `__make_closure_` (no regression
    on Step-A/Phase-1 wins). The `__Closure_N`-typed→`GorgetClosure` assign must be the promotion key.
@@ -201,10 +223,13 @@ work is ideally ZERO (or only ensuring `__gorget_closure_env_alloc` is declared,
 2. Minimal proof: emit-C + run `int main(): int k=10; auto f=(int x): x+k; print(f(3))` → confirm
    `__Closure_0` has a `k` field, the make-site builds + packs a REAL env (not `.env=NULL`), the body
    `GIFieldLoad`s `k`, → prints **13** (Rust oracle).
-3. **MUST NOT regress:** the 4 Phase-1 closure snapshots (`closure_block_tail_expr`,
-   `closure_as_callback`, `closure_capture_loop_var`, `consume_callable_once`) + `closure_in_spawn` +
-   the Step-A spawn canaries (`spawn_closure_inline` 3, `spawn_unchecked` 5, `spawn_closure_void` 3,
-   `spawn_closure_copy` 4, `spawn_closure_shared` 3). `self_host_runtime` ≥ **260/0**.
+3. **MUST NOT regress.** ⚠ TWO distinct signal types — don't conflate: (i) RUNTIME SNAPSHOTS (files
+   `tests/fixtures/runtime_snapshots/*.out`, checked by `self_host_runtime`): the 4 Phase-1 closure
+   snapshots (`closure_block_tail_expr`, `closure_as_callback`, `closure_capture_loop_var`,
+   `consume_callable_once`) + `closure_in_spawn` — all must stay MATCH; `self_host_runtime` ≥
+   **260/0**. (ii) fn-COUNT canaries (NO snapshot files — read from `lowerer`/`c_emit` `--nocapture`):
+   `spawn_closure_inline`=3, `spawn_unchecked`=5, `spawn_closure_void`=3, `spawn_closure_copy`=4,
+   `spawn_closure_shared`=3 — none drops.
 4. NEW MATCHes (snapshot ONLY those that ACTUALLY reach MATCH — verify by running; some have a 2nd
    root): candidates `auto_types`, `test_if_expressions` c20, `test_closures_edge_cases` primitives,
    `closures.gg` primitives. Capturing-RESOURCE / ByMutRef fixtures STAY STUBBED (WRONG) — do NOT
