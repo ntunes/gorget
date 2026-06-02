@@ -70,9 +70,24 @@ from Rust `lower_expr` at `:391`; identical merge algorithm to `lower_match_stmt
    `op_consume(&ctx, &gmod, val, CkAssign())` into `result` (`lower.gg:1413`), then jump to
    `merge_bb`. A terminated arm (one whose body `return`s / calls `exit()`/noreturn) gets NO
    assign-and-jump — its terminator stands.
-5. No-else / fall-through after the last concrete arm: assign the result default (mirror
-   `lower_if_chain_expr`'s no-else `OpConstI64(0)`), so every non-terminated path writes
-   `result`.
+5. **No-else / fall-through after the last concrete arm: emit ONLY `set_terminator(
+   GTJump(merge_bb))` — NO result-default assignment.** ⚠ (pass-1 [BLOCKING] correction — do
+   NOT copy `lower_if_chain_expr`'s `OpConstI64(0)` no-else default here.) That default lives
+   in `build_if_chain_expr` (a DIFFERENT function); Rust's MATCH lowering `lower_match_expr`
+   (`exprs/mod.rs:2705-2723`) emits NO default, and the self-host's own `lower_match_stmt`
+   (`lower.gg:7856-7859`) emits only `GTJump(merge_bb)`. Reason: both target fixtures' first
+   match returns a STRUCT (`match_expr_block_arms.parse_or_default` → `Frontmatter`;
+   `match_expr_diverging_arm` → `Big`) via an exhaustive `Ok/Error` match with NO `else:` (so
+   no `PWildcard` arm). An `OpConstI64(0)` default would emit `GIAssign(result, OpConstI64(0))`
+   into a struct/String `result` slot → C error `incompatible types … from 'int32_t'` (dead
+   code is still C-typechecked) → the fix would FAIL to compile the very fixtures it targets.
+   For an exhaustive match the unmatched fall-through is dynamically unreachable, so `result`
+   legitimately stays unassigned there — that is correct (C has no definite-assignment
+   requirement; Rust relies on exactly this). Do NOT "helpfully" re-add a default. (If a
+   genuinely non-exhaustive INT match ever needs one, it must be gated on the result type
+   being integral — not needed here, and not what Rust does. The `classify`/`code`/`tag`
+   cases carry an explicit `else:` → a `PWildcard` arm that always matches + assigns, so they
+   need no default either way.)
 6. `switch_to(merge_bb)`; return `result` (or `copy(result)` per the if-chain helper).
 
 ### (2) Wire-in site A — `lower_expr` EMatch arm
