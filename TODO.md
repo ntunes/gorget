@@ -77,13 +77,26 @@ for live; docs commits on top). RUNTIME PARITY 261 → 267 = 28.9%.**
   `docs/plans/free_extern_struct_returns.md` (DISPROVEN). Low value until the orthogonal blockers land.
 
 **⬅ NEXT SERIAL high-value targets (scout-surfaced, RE-VERIFY end-to-end by RUNNING — scout parity claims proved unreliable this round; a fixture only counts if its WHOLE stdout MATCHes):**
-- **V/E/Err "enum-typedef-drop" (~12 fixtures, `catch_*`/`result_*`)** — NOT a generic-param leak: a
-  concrete user enum named `V`/`E`/`Err` (single uppercase letter) whose typedef/struct decl is never
-  emitted (`unknown type name 'V'`) because the self-host mistakes it for a generic param. Fix in the
-  enum→struct registration (`lir_lower.gg` `m.structs` population, ~`:940-1071`). Biggest tractable
-  win IF the fix is contained + a fixture reaches MATCH end-to-end (verify — may have orthogonal
-  blockers like the deferred chains above). ⚠ likely a name-heuristic (`len==1 && uppercase`) — fixing
-  it is also a CLAUDE.md no-name-matching win.
+- **V/E/Err "enum-typedef-drop" — ⏳ IN PROGRESS (brief `docs/plans/enum_typedef_drop_generic_name.md`,
+  END-TO-END verified +3 to +5).** ROOT (confirmed): `is_generic_placeholder_name` (`lir_lower.gg:469`)
+  name-blocklist `{T,E,K,V,U}` over-matches a concrete user enum at Pass-1b (`:856`, iterates
+  `type_infos.keys()` = real types) → typedef dropped. FIX (2 lines): guard both skip sites (`:700`,
+  `:856`) with `and not gmod.type_infos.contains(name)`. +3 verified (catch_into_noncopy_dest,
+  catch_divergent_arm, snag41) + 2 more found by a 2nd scout (enum_name_collision_with_constant,
+  nested_match_expr_enum_result). 267 snapshots 0 regressions. No-name-matching win.
+- **🎯 Result→T AUTO-PROPAGATION hook (NEXT big serial chain, `lower.gg`; END-TO-END scout 2026-06-02):**
+  the self-host has NONE of Rust's centralized `maybe_auto_propagate` (`src/ir/lowering/exprs/mod.rs:73-86`
+  + `should_auto_propagate :2869` + `emit_result_auto_propagate :2731`) — a `throws`-fn call result
+  (`Result__X__E`) is NOT auto-unwrapped at consumer sites (for-iter `lower.gg:8203/8473`, if/while-cond,
+  index, call/ctor args), so the loop/cond is `lower_fail`-DROPPED or the Result struct is used as a
+  scalar. Porting the ONE hook flips ~4 (snag49a-d) + ~3 more throws fixtures (throws_call_*). ⚠
+  **PREREQUISITE (fold in, +6 lines, `lir_lower.gg`): `is_generic_placeholder_name` ALSO over-matches
+  the mono'd wrapper `Result__T__E`/`Option__Ref__V` (ends in `__E`/`__V`) → `'Result'/'Option'
+  undeclared`; add `if name.starts_with("Result__") or name.starts_with("Option__"): return false`.**
+  This candidate flips 0 ALONE (verified) — it's the necessary typedef-layer prereq; the auto-prop hook
+  is what actually flips fixtures. So this chain = lower.gg auto-prop hook + the lir_lower.gg prereq
+  (must serialize after the V/E/Err chain, same file). snag43/dict_nested/snag44 need MORE (Vector/Dict-
+  of-user-type mono, `??`-lowering, nested-pattern) — separate.
 - **box `__gg_new` (~11, `box_*`/serializable/dynamic_dispatch)** — `Box.new(...)` inner-type
   resolution; closure-entangled (Box of Callable); `lower.gg`/`lir_lower.gg`.
 - **collection-HOF inlining (~33, `.map/.filter/.fold` on Vector/Set/Dict → undefined `Vector__T__map`)**

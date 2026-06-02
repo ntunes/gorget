@@ -48,10 +48,14 @@ names that have NO TypeDef (preserves the original intent). Keep `is_generic_pla
 applied exactly this. If the local is named differently in `lower_type_defs`, adapt.
 
 ## Scope + realistic yield (END-TO-END verified — a fixture counts ONLY if its WHOLE stdout MATCHes)
-**+3 fixtures truly flip to MATCH** (byte-identical, verified): `catch_into_noncopy_dest`,
-`catch_divergent_arm`, `snag41_match_scrutinee_consume`. The class has exactly 12 single-letter-enum
-CC-FAIL fixtures; the other 9 clear the typedef layer but hit ORTHOGONAL pre-existing blockers (NOT
-introduced by this fix — verified the baseline C already contained them, masked behind the first error):
+**+3 to +5 fixtures flip to MATCH** (byte-identical). Deep-scout #1 verified 3: `catch_into_noncopy_dest`,
+`catch_divergent_arm`, `snag41_match_scrutinee_consume`. A second independent scout (V/E/Err-only
+driver) found 2 MORE also flip: `enum_name_collision_with_constant`, `nested_match_expr_enum_result`.
+⚠ **EXECUTOR: snapshot EVERY fixture that reaches byte-identical MATCH from this fix (verify EACH vs
+`cargo run -- run`) — do NOT cap at 3.** Expected 3-5; re-confirm by running the full diff. The class
+is "user type whose name is in the blocklist" (incl. `struct Err`, not strictly single-letter); the
+remaining fixtures clear the typedef layer but hit ORTHOGONAL pre-existing blockers (NOT introduced by
+this fix — verified the baseline C already contained them, masked behind the first error):
 - dominant (6 of 9): a bare unmonomorphized `Result`/`Option` template name leaking into function
   bodies (`'Result' undeclared`) — a SEPARATE follow-up (+5-6), its own chain.
 - `rethrow_catch_binding` (rethrow-payload garbage), `snag42` (value-lowering), `dict_nested_pattern_noncopy_enum`
@@ -62,14 +66,14 @@ class — not affected). Snapshot ONLY the 3 verified MATCHes (re-confirm each b
 ## Validation gate (self-host-dir only; FORCE-REBUILD driver before each comparison/diff run)
 1. `cargo build` + `cargo build --release` + `cargo test --lib` (~1066/0).
 2. Force-rebuild driver (`rm -f tests/fixtures/self_host_lowerer/driver{,.c}`; `GG_BUILD_TIMEOUT_SECS=600`).
-3. `self_host_runtime` ≥ **267/0** + 3 new snapshots (`catch_into_noncopy_dest`, `catch_divergent_arm`,
-   `snag41_match_scrutinee_consume`) — verify each vs `cargo run -- run` byte-identical.
+3. `self_host_runtime` ≥ **267/0** + the new snapshots (3-5: the 3 verified + `enum_name_collision_with_constant`,
+   `nested_match_expr_enum_result` if they MATCH) — verify each vs `cargo run -- run` byte-identical.
 4. `lowerer_comparison` ≥ **954**, `c_emit_comparison` ≥ **882** (re-confirm from `--nocapture`).
    ⚠ This change makes the self-host EMIT struct/typedef defs for V/E/K/U-named enums where it didn't —
    `c_emit` counts USER FNS (not structs/typedefs), so fn-count should be unchanged-or-better; but a
    V-named enum's now-correctly-typed drop/clone fn bodies could shift counts — investigate any delta,
    ensure it's ≥.
-5. `GG_RUNTIME_DIFF=1 … self_host_runtime_diff` → MATCH ≥ **270** (267 + 3), NO fixture MATCH→worse.
+5. `GG_RUNTIME_DIFF=1 … self_host_runtime_diff` → MATCH ≥ **270** (267 + 3-to-5), NO fixture MATCH→worse.
 6. `bootstrap_fixed_point` GREEN (the driver itself may declare single-letter generic params — this is
    the KEY regression guard: confirm genuine generic-param names with no TypeDef are STILL skipped in
    Pass 1, i.e. the driver still bootstraps byte-identically).
