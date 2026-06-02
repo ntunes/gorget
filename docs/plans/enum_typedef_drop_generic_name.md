@@ -61,7 +61,9 @@ this fix — verified the baseline C already contained them, masked behind the f
 - `rethrow_catch_binding` (rethrow-payload garbage), `snag42` (value-lowering), `dict_nested_pattern_noncopy_enum`
   (`'Option' undeclared` + GorgetMap-from-int) — distinct.
 ⚠ Do NOT claim ~12 or the `result_*` fixtures (those use prelude `Result[int,String]`, a DIFFERENT
-class — not affected). Snapshot ONLY the 3 verified MATCHes (re-confirm each by running).
+class — not affected). Snapshot EVERY fixture that reaches byte-identical MATCH (the 3 verified + the
+2 named candidates `enum_name_collision_with_constant`/`nested_match_expr_enum_result` if they MATCH;
+expected 3-5) — re-confirm EACH by running vs `cargo run -- run`. Do NOT cap at 3.
 
 ## Validation gate (self-host-dir only; FORCE-REBUILD driver before each comparison/diff run)
 1. `cargo build` + `cargo build --release` + `cargo test --lib` (~1066/0).
@@ -79,11 +81,17 @@ class — not affected). Snapshot ONLY the 3 verified MATCHes (re-confirm each b
    Pass 1, i.e. the driver still bootstraps byte-identically).
 
 ## Files (stage by name only)
-`tests/fixtures/self_host_lowerer/lir_lower.gg` + new `tests/fixtures/runtime_snapshots/*.out` (the 3).
+`tests/fixtures/self_host_lowerer/lir_lower.gg` + new `tests/fixtures/runtime_snapshots/*.out` (all 3-5
+verified MATCHes).
 Do NOT touch `lower.gg`/`gir.gg`/`lir_codegen.gg`/`loader.gg`/`src/`/`TODO`/`DONE`.
 
-## Follow-ups to LOG
-- **Bare unmonomorphized `Result`/`Option` in function bodies (+5-6, 6 of the 9 remaining):** the
-  `throws` desugaring's `Result[T,E]`/`Option[T]` isn't resolved to its monomorphized name in the body
-  (`'Result'/'Option' undeclared`). Its own chain (likely `lower.gg`/`lir_lower.gg` mono path).
+## Follow-ups to LOG (⚠ the ORCHESTRATOR logs these to TODO.md after integration — the execution
+agent must NOT touch TODO/DONE per the Files section; they're already captured in TODO's NEXT-SERIAL block)
+- **Result→T AUTO-PROPAGATION hook (the real win, NOT the typedef prereq):** END-TO-END scout found the
+  "bare `Result`/`Option` in body" 6-line `lir_lower.gg` prereq (`Result__`/`Option__` prefix →
+  not-placeholder) flips ZERO alone; the actual blocker is the missing centralized
+  `maybe_auto_propagate` hook (Rust `exprs/mod.rs:73-86`/`:2731`) — port into `lower.gg` to flip ~4
+  (snag49a-d) + ~3 throws_call_*. Already logged in TODO's NEXT-SERIAL block.
 - `rethrow_catch_binding` rethrow-payload; `snag42` value-lowering; `dict_nested_pattern_noncopy_enum`.
+- **`tracking_full_stats` pre-existing snapshot divergence** (a leak-tracking `… bytes still allocated`
+  warning, byte-identical baseline-vs-fixed — independent of this fix; flagged by review #2). Log + triage.
