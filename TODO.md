@@ -45,8 +45,8 @@ for live; docs commits on top). RUNTIME PARITY 261 → 267 = 28.9%.**
   briefing.
 
 **Closure follow-ups (logged, low-pri):**
-- **dead `LowerCtx.next_closure_id` field** (`lower.gg:~164`) — never read/written; trivial cleanup
-  (touches 4 ctor sites).
+- **dead `LowerCtx.next_closure_id` field** (`lower.gg:~177`) — never read/written; trivial cleanup
+  (touches 4 ctor sites: ~8748/8942/10196/11740).
 - **§5a′ nested-closure-inside-STUBBED-outer** record-only walk — NOT needed now (corpus proven
   empty); implement IF a future fixture nests a closure inside a capturing/nested outer.
 - **end-of-Phase-2 cleanup: delete the `__make_closure_` NULL-env wart** (`lir_codegen.gg:3707`) once
