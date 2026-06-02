@@ -3,6 +3,7 @@
 
 from std.collections import Vector, Dict
 from std.conv import int_to_str
+from ast import Stmt
 from types import TypeTable
 from scope import ScopeTable
 from compiler.data.schema import ResourceMetadata
@@ -316,6 +317,28 @@ struct GirGlobal:
     Vector[GirGlobalField] fields   # struct-init fields (ordered slots)
     bool is_const
 
+# ── Lifted closure record (closure Phase 2 Step A) ───────────────
+# A closure recorded AT THE MAKE-SITE (lower_expr's EClosure /
+# EImplicitClosure / inline-spawn arms) and drained by the post-pass,
+# which is the SOLE pusher of `__Closure_N__call`. Replaces the deleted
+# `scan_*_for_closures` pre-pass: the make-site is now the single
+# closure-id source + recorder, so the two never-reconciled counters
+# (make-site `gmod_next_closure_id` vs the scan's local) can no longer
+# desync. The record stores everything `lower_closure_body` needs so the
+# post-pass never re-derives the signature. (NO `captures` field — Step B
+# adds it for ByValue captures.)
+struct LiftedClosure:
+    int cid                          # closure id (from gmod_next_closure_id)
+    String call_name                 # "__Closure_<cid>__call"
+    int self_ptr                     # env-ptr type id (*__Closure_<cid>)
+    Vector[int] abi_param_types      # full ABI vector [self_ptr, p0, p1, …]
+    Vector[int] body_param_types     # the closure's OWN param types [p0, p1, …]
+    Vector[String] body_param_names  # the closure's param names (implicit-it: ["it"])
+    int return_type
+    Vector[Stmt] body
+    bool is_implicit                 # true for EImplicitClosure (implicit `it`)
+    bool lowerable                   # false → emit the Phase-1 stub; true → lower the body
+
 struct GirModule:
     Vector[GirFunction] functions
     Vector[GirExtern] externs
@@ -426,6 +449,23 @@ struct GirModule:
     # `lower_module` (mirrors `src/ir/lowering/mod.rs:489`). Appended AT END
     # to avoid shifting positional ctor call sites.
     bool strip_asserts
+    # closure Phase 2 Step A: make-site-recorded closures, drained by the
+    # post-pass (the SOLE pusher of `__Closure_N__call`). The make-site is
+    # the single closure-id source + recorder; the post-pass re-reads
+    # `.len()` each iteration (drain-until-empty) so a closure appended
+    # mid-drain (an implicit-it inside a lowered body) is picked up.
+    # Appended AT END to avoid shifting positional ctor call sites.
+    Vector[LiftedClosure] lifted_closures
+    # closure Phase 2 Step A: maps `<current_fn_name>\0<varname>` → the
+    # closure's `__Closure_<cid>` env-type name, recorded at SVarDecl
+    # lowering when the init is a closure. The re-pointed named-spawn pass
+    # (`emit_named_closure_spawn_*`) reads this to wire each `spawn f()`'s
+    # `__spawn_wrap___Closure_N` to the closure's make-site cid (replacing
+    # the deleted `collect_closure_vars_*` / `ncv_id` replay, which was not
+    # consistent with the make-site cids for test/generic/equip closures).
+    # Keyed by fn-name + NUL + varname so two functions declaring the same
+    # `auto f = …` don't collide. Appended AT END.
+    Dict[String, String] closure_var_cids
 
 # ── Helpers ──────────────────────────────────────────────
 
