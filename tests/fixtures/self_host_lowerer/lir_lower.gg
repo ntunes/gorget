@@ -3629,11 +3629,16 @@ void populate_drop_metadata(LirModule &m, GirModule &gmod):
         if variant_drops.len() > 0 or is_resource_enum:
             String tname = type_name
             m.recursive_drop_enums.put(tname, variant_drops)
-            # Also add to type_drop_fns. Collision types take the mangled
-            # `__gorget_dtor_{T}` glue name (see the struct branch above).
+            # Also add to type_drop_fns. The enum's OWN auto-glue drop name is
+            # ALWAYS `{T}__drop` (unguarded) — mirrors Rust `lower/mod.rs:737`
+            # and the unguarded enum emit sites (`emit_enum_drops`,
+            # lir_codegen.gg:4991/5000). Do NOT apply the struct-branch collision
+            # guard here: the DCE seed reads this `drop_fn_name`
+            # (lir_codegen.gg:1083-1084) while emit uses `{T}__drop`; guarding here
+            # would mismatch them and DCE-prune the real drop fn. The variant-
+            # PAYLOAD field types ARE collision-guarded — see `drop_fn_for_type`
+            # above (matches Rust mod.rs:714-719) — but the enum's own name is not.
             String drop_fn_name = type_name + "__drop"
-            if m.drop_collision_types.contains(type_name):
-                drop_fn_name = "__gorget_dtor_" + type_name
             Vector[FieldDrop] no_fd = []
             Vector[EnumVariantDrop] evd_copy = []
             int di = 0
