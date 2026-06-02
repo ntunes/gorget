@@ -57,7 +57,10 @@ REAL lowering of the closure body:
    AFTER. Also keep `lower_function`'s `is_main` implicit-return synthesis (`:8558-8568`) OUTSIDE
    the helper (main-specific). Inlining a partial copy that omits the liveness/flush passes is
    the failure mode to avoid. (Two other fresh-ctx precedents exist — method `lower.gg:8727`,
-   test-fn `:10788` — confirming the pattern.)
+   test-fn `:10788` — confirming the pattern.) ⚠ **(pass-3 nit) the post-body core also contains
+   the interleaved `liveness_instrumentation_diff` + `diag_warn("gir_liveness_diff", fdef.name +
+   …)` (`lower.gg:8593-8595`)** — so give the shared helper a `String fn_name` param (callers
+   pass `call_name`/`ic_call`/`fdef.name`) to preserve that diagnostic.
 2. Register the function's params as named locals: **param 0 = the env `void*` ptr** (present
    for the `__callable_N` ABI; UNUSED in Phase 1 — no captures), **params 1..N = the closure's
    declared params** by name (so the body can reference them).
@@ -128,7 +131,11 @@ env). **This must NOT silently miscompile and must NOT panic/crash the self-host
      candidate fixture hits it.)
   If the body has ANY capture by this definition → Phase 1 leaves the STUB for that closure
   (Phase 2 fixes it). Apply the SAME walk to `emit_it_closure`/`EImplicitClosure` (a `self`- or
-  outer-var-referencing implicit closure is a capturer → stub).
+  outer-var-referencing implicit closure is a capturer → stub). ⚠ **(pass-3 nit) the free-var
+  walk must NOT descend into a NESTED closure's body** (mirror Rust which skips `Expr::Closure`
+  in the collector, `closures.rs:722-725`) — else an outer closure would see the inner closure's
+  params as "captures" and over-stub. (Over-stub is the safe direction + no candidate fixture
+  nests closures, but mirror Rust exactly.)
 
 ## Scope / expected outcome
 **Candidate fixtures that should move (non-capturing, direct-call) — re-measure, snapshot ONLY
