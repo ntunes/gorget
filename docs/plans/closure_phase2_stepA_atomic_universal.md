@@ -199,6 +199,9 @@ fn-count DROP. (drain-until-empty covers nested-in-LOWERABLE, NOT nested-in-stub
 Delete `scan_expr_for_closures` / `scan_stmt_for_closures` / `scan_stmts_for_closures`
 (`lower.gg:9662-9870`) AND the driver loop + counter (`lower.gg:11735-11745`, the `int closure_id =
 0` block). All their roles moved (closure-push → post-pass; inline wrapper → §4(d)).
+⚠ After deletion, update/remove now-stale docstrings on RETAINED helpers that reference the deleted
+scan/`emit_it_closure` (e.g. `lower.gg:8461-8462`, `:9042`, `:9390`) — cleanliness, but do it so the
+self-host reads correctly (CLAUDE.md self-host-as-showcase).
 ⚠ Before deleting, grep for any OTHER caller of these three functions (the named-spawn collector
 `collect_closure_vars_*` is SEPARATE — confirm it does not call the scan). If something else calls
 them, stop and re-scope.
@@ -214,7 +217,8 @@ it touches all 4 `LowerCtx(...)` positional ctors at `:8543/:8737/:9608/:11434` 
 the diff, LOG it as a separate cleanup instead of bundling).
 
 ## 6. Named-closure-spawn pass — RE-POINT to make-site cids (the A3 concern)
-The named-spawn pass (`collect_closure_vars_stmts` `:9901` builds `Dict[varname→"__Closure_N"]` via
+The named-spawn pass (`collect_closure_vars_*` `:9875-9937` builds `Dict[varname→"__Closure_N"]`
+— the `cmap.put` is in `collect_closure_vars_stmt` `:9907` — via
 its own module-global `ncv_id` `:11781`; `emit_named_closure_spawn_expr` `:10445` is where the
 `__spawn_wrap___Closure_N` push lives — dispatched into by `emit_named_closure_spawn_stmts` `:10477`
 for `spawn f(...)`, dedup via the shared `emitted_wrappers`) currently re-derives each closure's cid
@@ -316,10 +320,10 @@ diff + the mixed C-emit wiring check.
 6. **NEW mixed C-emit WIRING check (proof of the desync fix, do NOT snapshot — can't run yet):** a
    fixture `xs.map(it*2)` THEN `auto f=(int x):x+1; print(f(5))`; emit-C and CONFIRM the explicit
    closure's `__make_closure_<N>` value points at ITS OWN `__Closure_<N>__call` (body `x+1`), not
-   the implicit-it body. Document as the proof. ⚠ This new fixture raises the comparison Total
-   1123→1124; it is a normal program (`main` + 2 closure-call fns) so it must itself MATCH on
-   fn-count in BOTH comparisons (+1 to matched), keeping the totals ≥953/≥881. Confirm it MATCHes
-   (not mismatches) after adding it.
+   the implicit-it body. Document as the proof. ⚠ This new fixture raises the comparison Total by 1
+   (re-confirm the exact Total from `--nocapture`); it is a normal program (`main` + 2 closure-call
+   fns) so it must itself MATCH on fn-count in BOTH comparisons (+1 to matched), keeping the totals
+   ≥953/≥881. Confirm it MATCHes (not mismatches) after adding it.
 7. `bootstrap_fixed_point` GREEN.
 
 ## 9. Files (stage by name only — never `-a`)
