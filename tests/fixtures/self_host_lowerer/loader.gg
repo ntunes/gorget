@@ -839,22 +839,63 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                                     # m.items). Mirrors the IFunction String carve-out
                                     # above (loader.gg:~732).
                                     # Register the return type for void AND bool
-                                    # extern equip stubs. void → UNIT_TYPE (the
-                                    # original R10 fix; else the call defaults to
-                                    # I64 → `__v = <void call>` cc error). bool →
+                                    # extern equip stubs, AND for STRUCT (TNamed)
+                                    # returns. void → UNIT_TYPE (the original R10
+                                    # fix; else the call defaults to I64 →
+                                    # `__v = <void call>` cc error). bool →
                                     # BOOL_TYPE (else the bool result defaults to
                                     # I64 → the formatter prints `1`/`0`, not
                                     # `true`/`false` — the R8 class; surfaced by
                                     # `AtomicBool.load`/`compare_exchange`/`swap`,
                                     # `OnceFlag.do_once`/`is_done`,
                                     # `Semaphore.try_acquire`). int → already
-                                    # defaults to I64 correctly; String/cstr MUST
-                                    # NOT be registered (they rely on the I64
-                                    # slot + the cstr-coercion path).
+                                    # defaults to I64 correctly.
+                                    #
+                                    # TNamed STRUCT-HANDLE case (ArenaCheckpoint,
+                                    # ExecResult, UdpAddr, …): register so the call
+                                    # result types as the struct — `lir_to_runtime_name`
+                                    # maps it to the runtime C type (e.g.
+                                    # `ArenaCheckpoint → GorgetArenaCheckpoint`,
+                                    # lir_codegen.gg:172), not the I64 default →
+                                    # fixes the `int64_t = GorgetArenaCheckpoint`
+                                    # cc error (`Arena.checkpoint`).
+                                    #
+                                    # WHY this arm can register ALL TNamed-except-
+                                    # String, while the sibling FREE-extern stub arm
+                                    # (loader.gg:~722-731) is deliberately String-ONLY
+                                    # and WARNS that registering a `cstr` return breaks
+                                    # the `const char*`-vs-`Str` coercion path
+                                    # (is_cstr_returning_call): a `cstr` return can
+                                    # NEVER reach THIS equip-stub arm. Every `cstr`-
+                                    # returning extern (getenv / getcwd /
+                                    # _parse_last_error …) is declared in an
+                                    # `extern "C":` / `extern "Gorget":` block, NOT in
+                                    # an equip block — so it flows through the free-
+                                    # extern String-only path, not here. And
+                                    # `String`/`str` are TYPE KEYWORDS, so they parse
+                                    # as `TPrimitive("String")`/`TPrimitive("str")`
+                                    # (parser.gg) and take the TPrimitive arm — they
+                                    # can't reach the TNamed case either. So the
+                                    # `!= "String"`/`!= "Str"` guard below is dead-but-
+                                    # harmless belt-and-suspenders; there is no `cstr`-
+                                    # vs-`Str` coercion hazard on this arm. (Two arms,
+                                    # two carve-out philosophies, but NOT contradictory:
+                                    # the difference is which externs can structurally
+                                    # reach each arm.)
                                     bool stub_register_ret = false
                                     match emdef.return_type.ty:
                                         case TPrimitive(stub_rt):
                                             if stub_rt == "void" or stub_rt == "bool":
+                                                stub_register_ret = true
+                                        case TNamed(stub_tn, _):
+                                            # Struct-returning extern equip method
+                                            # (ArenaCheckpoint, ExecResult, UdpAddr, …):
+                                            # register so the call result types as the
+                                            # struct (lir_to_runtime_name maps it to the
+                                            # runtime C type), not the I64 default →
+                                            # fixes the `int64_t = GorgetArenaCheckpoint`
+                                            # cc error.
+                                            if stub_tn != "String" and stub_tn != "Str":   # dead-but-harmless: see comment block
                                                 stub_register_ret = true
                                         else:
                                             pass
