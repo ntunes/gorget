@@ -2620,9 +2620,84 @@ bool gir_local_is_for_element(int local_id, Vector[GirLocal] &gir_locals):
         else:
             return false
 
+# closure Phase 2 Step B: the LIR closure-pack promotion (mirrors Rust gg's
+# `try_closure_pack`, src/lir/lower/operands.rs:1233-1355). When a
+# `__Closure_N`-typed value is assigned into a `GorgetClosure`-typed slot,
+# REPLACE the plain copy with: heap-alloc the env via
+# `__gorget_closure_env_alloc(size)` + memcpy the STACK env into it +
+# IClosurePack(dst_slot, heap_ptr, call_func, false). Returns true when it
+# fired (the GIAssign arm then skips the plain store).
+#
+# Detection: dst's GIR local type name == "GorgetClosure" AND src
+# (OpCopy/OpMove operand) GIR local type name starts with "__Closure_".
+# This is the typed-name read Rust performs at operands.rs:1293 — the env
+# struct name → its `__Closure_N__call` LIR fn is the C-emit-boundary
+# name-derived mapping the brief sanctions (no typed cid channel from the
+# make-site through to here exists yet; the call fn is resolved via
+# func_index by the derived name).
+bool try_closure_pack(int dst_local, Operand operand, LirFunction &f, int bb, Vector[int] &local_to_slot, Vector[GirLocal] &gir_locals, Dict[String, int] &func_index, GirModule &gmod, LirModule &m):
+    if dst_local < 0 or dst_local >= local_to_slot.len():
+        return false
+    int dst_slot = local_to_slot.get(dst_local).unwrap()
+    # The destination must be the GorgetClosure runtime singleton.
+    if dst_local >= gir_locals.len():
+        return false
+    int dst_tid = gir_locals.get(dst_local).unwrap().type_id
+    if gir_type_id_to_base_name(dst_tid, &gmod) != "GorgetClosure":
+        return false
+    # The source must be an OpCopy/OpMove of a __Closure_N-typed local.
+    int src_local = -1
+    match operand:
+        case OpCopy(sl):
+            src_local = sl
+        case OpMove(sl):
+            src_local = sl
+        else:
+            return false
+    if src_local < 0 or src_local >= gir_locals.len():
+        return false
+    int src_tid = gir_locals.get(src_local).unwrap().type_id
+    String src_name = gir_type_id_to_base_name(src_tid, &gmod)
+    if not src_name.starts_with("__Closure_"):
+        return false
+    # Resolve the __Closure_N__call LIR function index.
+    String call_fn_name = src_name + "__call"
+    if not func_index.contains(call_fn_name):
+        return false
+    int call_func = func_index.get(call_fn_name).unwrap()
+    # Compute the env size from the source slot's LIR struct type.
+    if src_local >= local_to_slot.len():
+        return false
+    int src_slot = local_to_slot.get(src_local).unwrap()
+    int src_slot_ty = f.slots.get(src_slot).unwrap().ty
+    int env_size = lir_type_byte_size_in_mod(src_slot_ty, &m, 0)
+    # Emit: size_val = const env_size.
+    int size_val = lir_fn_next_value(&f)
+    lir_push_inst(&f, bb, IIConst(size_val, LT_I64, env_size))
+    # Emit: heap_ptr = __gorget_closure_env_alloc(size_val). The runtime
+    # provides it as a `static inline` (runtime_string.c) — no forward decl
+    # or extern declaration needed.
+    int heap_ptr = lir_fn_next_value(&f)
+    Vector[int] alloc_args = [size_val]
+    Vector[int] alloc_abis = []
+    lir_push_inst(&f, bb, ICallExtern(heap_ptr, "__gorget_closure_env_alloc", alloc_args, "__gorget_closure_env_alloc", alloc_abis))
+    # Emit: memcpy(heap_ptr, &stack_env, size_val).
+    int src_addr = lir_fn_next_value(&f)
+    lir_push_inst(&f, bb, ISlotAddr(src_addr, src_slot))
+    lir_push_inst(&f, bb, IMemcpy(heap_ptr, src_addr, size_val))
+    # Emit: ClosurePack { slot: dst_slot, env_ptr: heap_ptr, call_func }.
+    lir_push_inst(&f, bb, IClosurePack(dst_slot, heap_ptr, call_func, false))
+    return true
+
 int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &local_to_slot, Vector[GirLocal] &gir_locals, Dict[String, int] &func_index, GirModule &gmod, Dict[String, int] &sr, LirModule &m):
     match inst:
         case GIAssign(local_id, operand):
+            # closure Phase 2 Step B: promote a __Closure_N → GorgetClosure
+            # assign into a real heap env-alloc + memcpy + ClosurePack (the
+            # `try_closure_pack` equivalent). Must run BEFORE the plain
+            # store / OpBorrow-Ptr dispatch — it fully handles the assign.
+            if try_closure_pack(local_id, operand, &f, bb, &local_to_slot, &gir_locals, &func_index, &gmod, &m):
+                return bb
             # D.1 (2026-05-22) — OpBorrow + Ptr-typed-dst + value-typed-src
             # dispatch. The canonical alias shape from B.1's Branch C is
             # `GIAssign(dst, OpBorrow(src))` where the GIR layer tags dst

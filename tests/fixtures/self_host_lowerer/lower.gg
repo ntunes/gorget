@@ -9,6 +9,7 @@ from scope import ScopeTable, DefInfo
 from types import TypeTable, ResolvedType
 from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Terminator
 from gir import Operand, GirType, GirExtern, GirTypeInfo, GirFieldInfo, GirEnumVariantInfo, LiftedClosure
+from gir import ClosureCapture, CAP_BY_VALUE, CAP_BY_MUT_REF
 from gir import BOOL_TYPE, I8_TYPE, I16_TYPE, I32_TYPE, I64_TYPE, U8_TYPE, U16_TYPE, U32_TYPE, U64_TYPE, F32_TYPE, F64_TYPE, UNIT_TYPE, PRIM_COUNT
 from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM, OP_MOD
 from gir import OP_ADD_WRAP, OP_SUB_WRAP, OP_MUL_WRAP
@@ -153,6 +154,18 @@ struct ClosureSig:
     Vector[int] body_param_types     # the closure's OWN param types [p0, p1, …]
     Vector[String] body_param_names  # the closure's param names (implicit-it: ["it"])
     int return_type
+
+# closure Phase 2 Step B: result of the make-site capture COLLECTOR+
+# CLASSIFIER. `caps` is the ordered, deduped capture list (env-field /
+# struct-ctor-arg / GIFieldLoad-index order). `unliftable` is the SAFETY
+# net: set true if ANY capture-shaped free var is NOT a genuine outer
+# local (unresolvable, or `self`) — the closure then STAYS STUBBED
+# (exactly as Phase 1 would). `seen` dedups per-name records so a body
+# referencing a capture twice (`base + base`) pushes `base` ONCE.
+struct CaptureCollector:
+    Vector[ClosureCapture] caps
+    Dict[String, bool] seen
+    bool unliftable
 
 struct LowerCtx:
     Vector[GirLocal] locals
@@ -5687,29 +5700,97 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             emit(&ctx, GIAssign(sdst, OpConstI64(0)))
             return sdst
         case EClosure(cparams, cbody):
-            # closure Phase 2 Step A: the make-site is the SOLE closure-id
-            # source + recorder. Take the cid from gmod_next_closure_id, emit
-            # the GorgetClosure value (__make_closure_N), AND push a
-            # LiftedClosure record. The post-pass (sole pusher of
-            # __Closure_N__call) drains lifted_closures after the
-            # lower_function loop.
+            # closure Phase 2 Step A/B: the make-site is the SOLE closure-id
+            # source + recorder. Take the cid from gmod_next_closure_id, build
+            # the GorgetClosure value, AND push a LiftedClosure record. The
+            # post-pass (sole pusher of __Closure_N__call) drains
+            # lifted_closures after the lower_function loop.
             int cid = gmod_next_closure_id(&gmod)
             String closure_name = "__Closure_" + int_to_str(cid)
             # The closure value at the GIR level is a GorgetClosure struct
-            # (not __Closure_N which is the captured-vars struct).
+            # (not __Closure_N which is the captured-vars env struct).
             int closure_tid = lookup_or_register_named(&gmod, "GorgetClosure")
-            # Emit __make_closure_N() — codegen expands to GorgetClosure init
-            String make_fn = "__make_closure_" + int_to_str(cid)
-            int cdst = add_local(&ctx, closure_tid, NO_NAME)
-            Vector[Operand] make_args = []
-            gmod.fn_sigs.put(make_fn, closure_tid)
-            emit(&ctx, GICallExtern(cdst, make_fn, make_args))
-            # Record the closure for the post-pass. The lowerable guard is
-            # byte-identical to the old scan's: non-capturing AND nests no
-            # closure → lower the body; else keep the stub.
             ClosureSig cl_sig = compute_closure_sig(cid, cparams, cbody, &gmod)
-            bool cl_lowerable = not (closure_body_captures(cparams, cbody, &gmod) or stmts_have_nested_closure(cbody))
-            gmod.lifted_closures.push(LiftedClosure(cid, closure_name + "__call", cl_sig.self_ptr, cl_sig.abi_param_types, cl_sig.body_param_types, cl_sig.body_param_names, cl_sig.return_type, cbody, false, cl_lowerable))
+            # ── Step B (§4a/§4b): collect + classify ByValue captures. ──
+            # The collector mirrors the Phase-1 detector's walk EXACTLY (same
+            # capture-shaped criterion, scoping, nested-skip); `unliftable` is
+            # the safety net (a capture-shaped var that is NOT a genuine outer
+            # local → STUB, as Phase 1 would). This is now the SOLE lowering-
+            # decision input for the EClosure make-site; the Phase-1 inverted
+            # `closure_body_captures` is no longer consulted HERE (still used
+            # at the inline-spawn make-site, so it stays defined).
+            CaptureCollector cl_cc = collect_closure_captures(&ctx, cparams, cbody, &gmod)
+            # Bind the collector result into owned locals so the `!cl_caps`
+            # move at the LiftedClosure push below doesn't invalidate `cl_cc`
+            # mid-use (a field move is a whole-value move at the BC layer).
+            bool cl_unliftable = cl_cc.unliftable
+            Vector[ClosureCapture] cl_caps = cl_cc.caps.clone()
+            # 2a guard (§4b): lift ONLY IF — (a) no UNLIFTABLE capture-shaped
+            # var; AND (b) every capture's type_id ∈ {BOOL,I64,F64} (the
+            # type_id_to_name-faithful primitive subset); AND (c) no captured
+            # local is mutated in the body; AND (d) no nested closure.
+            bool cl_caps_ok = not cl_unliftable
+            int cl_ci = 0
+            while cl_ci < cl_caps.len():
+                int cl_ctid = cl_caps.get(cl_ci).unwrap().type_id
+                if cl_ctid != BOOL_TYPE and cl_ctid != I64_TYPE and cl_ctid != F64_TYPE:
+                    cl_caps_ok = false
+                cl_ci += 1
+            # (c) mutation check — build the capture-name set, then scan.
+            if cl_caps_ok and cl_caps.len() > 0:
+                Dict[String, bool] cl_cap_names = {}
+                int cl_cni = 0
+                while cl_cni < cl_caps.len():
+                    cl_cap_names.put(cl_caps.get(cl_cni).unwrap().name.clone(), true)
+                    cl_cni += 1
+                if stmts_mutate_any(cbody, cl_cap_names):
+                    cl_caps_ok = false
+            # (d) nested-closure guard (retain the Phase-1 guard).
+            bool cl_nested = stmts_have_nested_closure(cbody)
+            bool cl_lowerable = cl_caps_ok and not cl_nested
+            bool cl_has_caps = cl_caps.len() > 0
+            int cdst = add_local(&ctx, closure_tid, NO_NAME)
+            if cl_lowerable and cl_has_caps:
+                # ── §4c: register __Closure_N's FIELDS at the MAKE-SITE. ──
+                # type_id_to_name is FAITHFUL for the §4b-restricted set
+                # (bool/int64_t/double); the guard above guarantees no capture
+                # reaches a width it would mis-name as int64_t. LIR Pass-2
+                # then fills LirStructDef.fields → codegen stops emitting the
+                # `char __pad` placeholder. (NOT in compute_closure_sig, which
+                # also runs for stub closures.)
+                Vector[GirFieldInfo] cl_env_fields = []
+                int cl_fi = 0
+                while cl_fi < cl_caps.len():
+                    ClosureCapture cl_cap = cl_caps.get(cl_fi).unwrap()
+                    cl_env_fields.push(GirFieldInfo(cl_cap.name.clone(), type_id_to_name(cl_cap.type_id, &gmod)))
+                    cl_fi += 1
+                Vector[GirEnumVariantInfo] cl_no_variants = []
+                gmod.type_infos.put(closure_name.clone(), GirTypeInfo(closure_name.clone(), !cl_env_fields, !cl_no_variants, false))
+                # ── §4d: build a struct-ctor of __Closure_N (capture sources
+                # as field args) → the user-struct-ctor intercept turns it
+                # into an IStructInit (a STACK env). Use GICall (NOT
+                # GICallExtern) so try_lower_user_struct_ctor fires. Then
+                # assign that __Closure_N value into the GorgetClosure slot —
+                # the step-5 LIR closure-pack promotion packs it onto the heap.
+                int cl_env_tmp = add_local(&ctx, lookup_or_register_named(&gmod, closure_name), NO_NAME)
+                Vector[Operand] cl_ctor_args = []
+                int cl_ai = 0
+                while cl_ai < cl_caps.len():
+                    cl_ctor_args.push(OpCopy(cl_caps.get(cl_ai).unwrap().local_id))
+                    cl_ai += 1
+                emit(&ctx, GICall(cl_env_tmp, closure_name.clone(), cl_ctor_args))
+                emit(&ctx, GIAssign(cdst, OpCopy(cl_env_tmp)))
+            else:
+                # lowerable+no-captures OR stubbed → keep the Step-A
+                # __make_closure_N NULL-env path. (Stubbed stays WRONG as
+                # today; 2b/2c fix.)
+                String make_fn = "__make_closure_" + int_to_str(cid)
+                Vector[Operand] make_args = []
+                gmod.fn_sigs.put(make_fn, closure_tid)
+                emit(&ctx, GICallExtern(cdst, make_fn, make_args))
+            # Record the closure for the post-pass, carrying the captures so
+            # the post-pass field-loads them before lowering the body.
+            gmod.lifted_closures.push(LiftedClosure(cid, closure_name + "__call", cl_sig.self_ptr, cl_sig.abi_param_types, cl_sig.body_param_types, cl_sig.body_param_names, cl_sig.return_type, cbody, false, cl_lowerable, !cl_caps))
             return cdst
         case EAs(inner_box, _):
             return lower_expr(&ctx, *inner_box, &gmod)
@@ -5847,7 +5928,10 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             # __Closure_N__call.
                             ClosureSig sp_sig = compute_closure_sig(sp_cid, sp_params, sp_body, &gmod)
                             bool sp_lowerable = not (closure_body_captures(sp_params, sp_body, &gmod) or stmts_have_nested_closure(sp_body))
-                            gmod.lifted_closures.push(LiftedClosure(sp_cid, sp_closure_name + "__call", sp_sig.self_ptr, sp_sig.abi_param_types, sp_sig.body_param_types, sp_sig.body_param_names, sp_sig.return_type, sp_body, false, sp_lowerable))
+                            # inline-SPAWN closures: capture support is DEFERRED
+                            # (stay stubbed-if-capturing). Pass empty captures.
+                            Vector[ClosureCapture] sp_no_caps = []
+                            gmod.lifted_closures.push(LiftedClosure(sp_cid, sp_closure_name + "__call", sp_sig.self_ptr, sp_sig.abi_param_types, sp_sig.body_param_types, sp_sig.body_param_names, sp_sig.return_type, sp_body, false, sp_lowerable, !sp_no_caps))
                             # Lower the spawn-call args for side effects (don't
                             # drop them, as the old ECall else:pass did).
                             for sp_arg in spawn_args:
@@ -9515,6 +9599,285 @@ bool implicit_closure_body_captures(SpannedExpr body, GirModule &gmod):
     in_scope.put("it", true)
     return closure_expr_has_capture(body, in_scope, &gmod)
 
+# ── closure Phase 2 Step B: capture COLLECTOR + CLASSIFIER ───────────
+#
+# Built on the EXACT structure of the Phase-1 DETECTOR
+# (`closure_*_has_capture`): the SAME capture-shaped criterion (a bare
+# `EIdentifier` that is NOT a closure param / body-local / module-
+# resolvable), the SAME lexical-scope discipline (cloned sub-block sets,
+# SVarDecl/for-pattern/match-arm-pattern bindings, EIf-branch coverage),
+# the SAME nested-closure skip. The ONLY difference is the leaf: instead
+# of returning bool at a capture-shaped var, it CLASSIFIES it:
+#   • a genuine outer LOCAL (`nl_contains`) → record a ClosureCapture
+#     (deduped via `seen`), in walk order;
+#   • capture-shaped but NOT an outer local (unresolvable / `self`) →
+#     mark UNLIFTABLE (the safety net — Phase 1 would STUB here, 2a too).
+# The accumulated `caps` vector ORDER is the single source of truth:
+# env-field == struct-ctor-arg == body GIFieldLoad-index order.
+
+# Classify a single capture-shaped free var (the EIdentifier leaf).
+void cc_classify_ident(LowerCtx &ctx, String name, GirModule &gmod, CaptureCollector &cc):
+    if nl_contains(&ctx, name):
+        # A genuine outer LOCAL → record it (deduped). Walk order is
+        # the single source of truth.
+        if not cc.seen.contains(name):
+            cc.seen.put(name.clone(), true)
+            int cap_lid = nl_get(&ctx, name)
+            int cap_tid = ctx.locals.get(cap_lid).unwrap().type_id
+            cc.caps.push(ClosureCapture(name.clone(), cap_tid, cap_lid, CAP_BY_VALUE))
+    else:
+        # Capture-shaped but NOT an outer local (unresolvable) → STUB.
+        cc.unliftable = true
+
+# Walk an expression, recording captures against `in_scope`. Mirrors
+# `closure_expr_has_capture` (does NOT descend into nested closures).
+void cc_collect_expr(LowerCtx &ctx, SpannedExpr sexpr, Dict[String, bool] in_scope, GirModule &gmod, CaptureCollector &cc):
+    match sexpr.expr:
+        case EIdentifier(name):
+            if in_scope.contains(name):
+                return
+            if closure_ident_module_resolvable(name, &gmod):
+                return
+            cc_classify_ident(&ctx, name, &gmod, &cc)
+        case EBinaryOp(lhs, _, rhs):
+            cc_collect_expr(&ctx, *lhs, in_scope, &gmod, &cc)
+            cc_collect_expr(&ctx, *rhs, in_scope, &gmod, &cc)
+        case EUnaryOp(_, inner):
+            cc_collect_expr(&ctx, *inner, in_scope, &gmod, &cc)
+        case ECall(callee, args, _):
+            cc_collect_expr(&ctx, *callee, in_scope, &gmod, &cc)
+            for a in args:
+                cc_collect_expr(&ctx, a, in_scope, &gmod, &cc)
+        case EMethodCall(obj, _, args, _):
+            cc_collect_expr(&ctx, *obj, in_scope, &gmod, &cc)
+            for a in args:
+                cc_collect_expr(&ctx, a, in_scope, &gmod, &cc)
+        case EFieldAccess(obj, _):
+            cc_collect_expr(&ctx, *obj, in_scope, &gmod, &cc)
+        case EIndex(obj, idx):
+            cc_collect_expr(&ctx, *obj, in_scope, &gmod, &cc)
+            cc_collect_expr(&ctx, *idx, in_scope, &gmod, &cc)
+        case ERange(lo_opt, hi_opt):
+            match lo_opt:
+                case Some(lo):
+                    cc_collect_expr(&ctx, *lo, in_scope, &gmod, &cc)
+                case None:
+                    pass
+            match hi_opt:
+                case Some(hi):
+                    cc_collect_expr(&ctx, *hi, in_scope, &gmod, &cc)
+                case None:
+                    pass
+        case EIf(cond, then_body, branches):
+            cc_collect_expr(&ctx, *cond, in_scope, &gmod, &cc)
+            cc_collect_stmts(&ctx, then_body, in_scope, &gmod, &cc)
+            for eb in branches:
+                match eb.condition:
+                    case Some(ec):
+                        cc_collect_expr(&ctx, ec, in_scope, &gmod, &cc)
+                    case None:
+                        pass
+                cc_collect_stmts(&ctx, eb.body, in_scope, &gmod, &cc)
+        case EMatch(scrut, arms):
+            cc_collect_expr(&ctx, *scrut, in_scope, &gmod, &cc)
+            for arm in arms:
+                Dict[String, bool] arm_scope = in_scope.clone()
+                closure_collect_pattern_bindings(arm.pattern, &arm_scope)
+                match arm.guard:
+                    case Some(g):
+                        cc_collect_expr(&ctx, g, arm_scope, &gmod, &cc)
+                    case None:
+                        pass
+                cc_collect_stmts(&ctx, arm.body, arm_scope, &gmod, &cc)
+        case EArrayLiteral(elems):
+            for e in elems:
+                cc_collect_expr(&ctx, e, in_scope, &gmod, &cc)
+        case ETupleLiteral(elems):
+            for e in elems:
+                cc_collect_expr(&ctx, e, in_scope, &gmod, &cc)
+        case EDictLiteral(keys, vals):
+            for k in keys:
+                cc_collect_expr(&ctx, k, in_scope, &gmod, &cc)
+            for vv in vals:
+                cc_collect_expr(&ctx, vv, in_scope, &gmod, &cc)
+        case EStructLiteral(_, _, field_vals):
+            for fv in field_vals:
+                cc_collect_expr(&ctx, fv, in_scope, &gmod, &cc)
+        case EDotShorthand(_, args):
+            for a in args:
+                cc_collect_expr(&ctx, a, in_scope, &gmod, &cc)
+        case ETry(inner):
+            cc_collect_expr(&ctx, *inner, in_scope, &gmod, &cc)
+        case EMove(inner):
+            cc_collect_expr(&ctx, *inner, in_scope, &gmod, &cc)
+        case EMutableBorrow(inner):
+            cc_collect_expr(&ctx, *inner, in_scope, &gmod, &cc)
+        case EDeref(inner):
+            cc_collect_expr(&ctx, *inner, in_scope, &gmod, &cc)
+        case EAs(inner, _):
+            cc_collect_expr(&ctx, *inner, in_scope, &gmod, &cc)
+        case EDefaultOp(lhs, rhs):
+            cc_collect_expr(&ctx, *lhs, in_scope, &gmod, &cc)
+            cc_collect_expr(&ctx, *rhs, in_scope, &gmod, &cc)
+        case EAwait(inner):
+            cc_collect_expr(&ctx, *inner, in_scope, &gmod, &cc)
+        case EBlock(stmts):
+            cc_collect_stmts(&ctx, stmts, in_scope, &gmod, &cc)
+        case EDo(stmts):
+            cc_collect_stmts(&ctx, stmts, in_scope, &gmod, &cc)
+        case EFString(_, fexprs):
+            for fx in fexprs:
+                cc_collect_expr(&ctx, fx, in_scope, &gmod, &cc)
+        case ESelfExpr():
+            # `self` is capture-shaped but not an outer local → UNLIFTABLE
+            # (2a targets don't capture self).
+            cc.unliftable = true
+        case EClosure(_, _):
+            # Do NOT descend into a nested closure (mirror the detector +
+            # Rust collector). The nested-closure guard (b/d) keeps the
+            # whole outer closure stubbed anyway.
+            pass
+        case EImplicitClosure(_):
+            pass
+        else:
+            pass
+
+# Walk a statement, recording captures against `in_scope`. Mirrors
+# `closure_stmt_has_capture`.
+void cc_collect_stmt(LowerCtx &ctx, Stmt stmt, Dict[String, bool] in_scope, GirModule &gmod, CaptureCollector &cc):
+    match stmt:
+        case SVarDecl(_, _, init, _, _, _):
+            cc_collect_expr(&ctx, init, in_scope, &gmod, &cc)
+        case SAssign(target, value):
+            cc_collect_expr(&ctx, target, in_scope, &gmod, &cc)
+            cc_collect_expr(&ctx, value, in_scope, &gmod, &cc)
+        case SCompoundAssign(target, _, value):
+            cc_collect_expr(&ctx, target, in_scope, &gmod, &cc)
+            cc_collect_expr(&ctx, value, in_scope, &gmod, &cc)
+        case SExpr(e):
+            cc_collect_expr(&ctx, e, in_scope, &gmod, &cc)
+        case SReturn(opt_e):
+            match opt_e:
+                case Some(e):
+                    cc_collect_expr(&ctx, e, in_scope, &gmod, &cc)
+                case None:
+                    pass
+        case SThrow(e):
+            cc_collect_expr(&ctx, e, in_scope, &gmod, &cc)
+        case SBreak(opt_e):
+            match opt_e:
+                case Some(e):
+                    cc_collect_expr(&ctx, e, in_scope, &gmod, &cc)
+                case None:
+                    pass
+        case SIf(cond, then_body, branches):
+            cc_collect_expr(&ctx, cond, in_scope, &gmod, &cc)
+            cc_collect_stmts(&ctx, then_body, in_scope, &gmod, &cc)
+            for eb in branches:
+                match eb.condition:
+                    case Some(ec):
+                        cc_collect_expr(&ctx, ec, in_scope, &gmod, &cc)
+                    case None:
+                        pass
+                cc_collect_stmts(&ctx, eb.body, in_scope, &gmod, &cc)
+        case SWhile(cond, body):
+            cc_collect_expr(&ctx, cond, in_scope, &gmod, &cc)
+            cc_collect_stmts(&ctx, body, in_scope, &gmod, &cc)
+        case SLoop(body):
+            cc_collect_stmts(&ctx, body, in_scope, &gmod, &cc)
+        case SFor(pat, iter_expr, body, _, _):
+            cc_collect_expr(&ctx, iter_expr, in_scope, &gmod, &cc)
+            Dict[String, bool] body_scope = in_scope.clone()
+            closure_collect_pattern_bindings(pat, &body_scope)
+            cc_collect_stmts(&ctx, body, body_scope, &gmod, &cc)
+        case SMatch(scrut, arms):
+            cc_collect_expr(&ctx, scrut, in_scope, &gmod, &cc)
+            for arm in arms:
+                Dict[String, bool] arm_scope = in_scope.clone()
+                closure_collect_pattern_bindings(arm.pattern, &arm_scope)
+                match arm.guard:
+                    case Some(g):
+                        cc_collect_expr(&ctx, g, arm_scope, &gmod, &cc)
+                    case None:
+                        pass
+                cc_collect_stmts(&ctx, arm.body, arm_scope, &gmod, &cc)
+        case SAssert(e, _):
+            cc_collect_expr(&ctx, e, in_scope, &gmod, &cc)
+        case SAssertReturn(e, _):
+            cc_collect_expr(&ctx, e, in_scope, &gmod, &cc)
+        else:
+            pass
+
+# Walk a statement list, threading a CLONED in-scope set and accumulating
+# SVarDecl bindings left-to-right. Mirrors `closure_stmts_have_capture`.
+void cc_collect_stmts(LowerCtx &ctx, Vector[Stmt] stmts, Dict[String, bool] in_scope, GirModule &gmod, CaptureCollector &cc):
+    Dict[String, bool] scope = in_scope.clone()
+    for stmt in stmts:
+        cc_collect_stmt(&ctx, stmt, scope, &gmod, &cc)
+        match stmt:
+            case SVarDecl(_, vname, _, _, _, _):
+                scope.put(vname.clone(), true)
+            else:
+                pass
+
+# Entry point: collect the EClosure body's ByValue captures. Builds the
+# param-name in-scope set, then walks. Returns the CaptureCollector (an
+# ordered deduped capture list + the `unliftable` safety flag).
+CaptureCollector collect_closure_captures(LowerCtx &ctx, Vector[Param] params, Vector[Stmt] body, GirModule &gmod):
+    Dict[String, bool] in_scope = {}
+    for p in params:
+        in_scope.put(p.param_name.clone(), true)
+    Vector[ClosureCapture] caps0 = []
+    Dict[String, bool] seen0 = {}
+    CaptureCollector cc = CaptureCollector(!caps0, !seen0, false)
+    cc_collect_stmts(&ctx, body, in_scope, &gmod, &cc)
+    return cc
+
+# closure Phase 2 Step B: a closure body MUTATES a capture if it
+# assigns / compound-assigns to a captured name. Block-bodies only
+# (mirror Rust `detect_mutations`). Captures that are mutated → 2c, so
+# the 2a guard keeps them STUBBED. Conservative: any assign whose target
+# is a bare `EIdentifier` matching a capture name counts.
+bool stmts_mutate_any(Vector[Stmt] stmts, Dict[String, bool] cap_names):
+    for stmt in stmts:
+        if stmt_mutates_any(stmt, cap_names):
+            return true
+    return false
+
+bool expr_target_mutates_any(SpannedExpr target, Dict[String, bool] cap_names):
+    match target.expr:
+        case EIdentifier(name):
+            return cap_names.contains(name)
+        else:
+            return false
+
+bool stmt_mutates_any(Stmt stmt, Dict[String, bool] cap_names):
+    match stmt:
+        case SAssign(target, _):
+            return expr_target_mutates_any(target, cap_names)
+        case SCompoundAssign(target, _, _):
+            return expr_target_mutates_any(target, cap_names)
+        case SIf(_, then_body, branches):
+            if stmts_mutate_any(then_body, cap_names):
+                return true
+            for eb in branches:
+                if stmts_mutate_any(eb.body, cap_names):
+                    return true
+            return false
+        case SWhile(_, body):
+            return stmts_mutate_any(body, cap_names)
+        case SLoop(body):
+            return stmts_mutate_any(body, cap_names)
+        case SFor(_, _, body, _, _):
+            return stmts_mutate_any(body, cap_names)
+        case SMatch(_, arms):
+            for arm in arms:
+                if stmts_mutate_any(arm.body, cap_names):
+                    return true
+            return false
+        else:
+            return false
+
 # Phase-1 SAFETY guard, distinct from capture detection: a closure body
 # that CONTAINS a nested `EClosure` keeps the STUB rather than being lowered.
 # Nested closures are a Phase-2 concern (proper capture/env re-architecture).
@@ -9789,7 +10152,10 @@ int record_implicit_it_closure(LowerCtx &ctx, SpannedExpr ic_body, GirModule &gm
     # non-capturing AND nests no closure.
     bool ic_lowerable = not (implicit_closure_body_captures(ic_body, &gmod) or expr_has_nested_closure(ic_body))
     Vector[Stmt] ic_body_stmts = [SExpr(ic_body)]
-    gmod.lifted_closures.push(LiftedClosure(ic_cid, ic_closure_name + "__call", ic_sig.self_ptr, ic_sig.abi_param_types, ic_sig.body_param_types, ic_sig.body_param_names, ic_sig.return_type, ic_body_stmts, true, ic_lowerable))
+    # implicit-it closures: capture support is DEFERRED (stay stubbed-if-
+    # capturing). Pass empty captures.
+    Vector[ClosureCapture] ic_no_caps = []
+    gmod.lifted_closures.push(LiftedClosure(ic_cid, ic_closure_name + "__call", ic_sig.self_ptr, ic_sig.abi_param_types, ic_sig.body_param_types, ic_sig.body_param_names, ic_sig.return_type, ic_body_stmts, true, ic_lowerable, !ic_no_caps))
     return ic_cdst
 
 # ── Phase 1 closure-body lowering: fresh-ctx body lowering ──
@@ -9817,7 +10183,7 @@ int record_implicit_it_closure(LowerCtx &ctx, SpannedExpr ic_body, GirModule &gm
 # including the env ptr — this fn registers the env ptr as local _1 itself).
 # `body_stmts` is the body as a Vector[Stmt] (an expr-body closure passes a
 # single `[SExpr(expr)]`). `self_ptr` is the registered `*__Closure_N` type.
-void lower_closure_body(String call_name, Vector[int] !abi_param_types, int self_ptr, Vector[int] param_types_in, Vector[String] param_names_in, int ret_type, Vector[Stmt] body_stmts, GirModule &gmod):
+void lower_closure_body(String call_name, Vector[int] !abi_param_types, int self_ptr, Vector[int] param_types_in, Vector[String] param_names_in, int ret_type, Vector[Stmt] body_stmts, Vector[ClosureCapture] captures, GirModule &gmod):
     Vector[Instruction] cinit = []
     Vector[Vector[Instruction]] cblock_insts = [!cinit]
     Vector[Terminator] cblock_terms = [GTNone()]
@@ -9833,8 +10199,8 @@ void lower_closure_body(String call_name, Vector[int] !abi_param_types, int self
 
     # _0 = return place
     add_local(&cctx, ret_type, NO_NAME)
-    # _1 = env ptr (the `*__Closure_N` self/env pointer) — registered for
-    # ABI param-slot alignment but unused in Phase 1 (no captures).
+    # _1 = env ptr (the `*__Closure_N` self/env pointer) — the env-field
+    # base for Step-B capture loads (GIFieldLoad(fdst, _1, idx)).
     add_local_with(&cctx, self_ptr, NO_NAME, LoParam(), BoParam(-1))
     # _2.._N+1 = the closure's declared params, by name.
     int pi = 0
@@ -9844,6 +10210,21 @@ void lower_closure_body(String call_name, Vector[int] !abi_param_types, int self
         int plid = add_local_with(&cctx, pt, Some(pname.clone()), LoParam(), BoParam(-1))
         nl_put(&cctx, pname, plid)
         pi = pi + 1
+
+    # ── Step B (§4e): field-load each ByValue capture from the env BEFORE
+    # lowering the body, binding cap.name → the loaded value local so a bare
+    # EIdentifier(cap.name) in the body resolves to the load (NOT the [bug]
+    # EIdentifier fallback). Capture vector ORDER == env-field / GIFieldLoad
+    # index order (the single source of truth, set at the make-site). The
+    # env base is local _1. 2a captures are value-typed primitives →
+    # GIFieldLoad's byte-copy path. Mirrors Rust `emit_closure_call_function`.
+    int ci = 0
+    while ci < captures.len():
+        ClosureCapture cap = captures.get(ci).unwrap()
+        int fdst = add_local(&cctx, cap.type_id, Some(cap.name.clone()))
+        emit(&cctx, GIFieldLoad(fdst, 1, ci))
+        nl_put(&cctx, cap.name, fdst)
+        ci = ci + 1
 
     # Lower the body as an expression block; funnel its tail value into the
     # return place `_0`, then terminate with `return _0` — mirrors how
@@ -11681,10 +12062,13 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
         int d_ret = lc.return_type
         Vector[Stmt] d_body = lc.body.clone()
         bool d_lowerable = lc.lowerable
+        Vector[ClosureCapture] d_caps = lc.captures.clone()
         if d_lowerable:
             # lower_closure_body pushes the GirFunction itself; lowering its
-            # body may append further records (drain-until-empty).
-            lower_closure_body(d_call_name, !d_abi, d_self_ptr, d_body_pt, d_body_pn, d_ret, d_body, &gmod)
+            # body may append further records (drain-until-empty). Step B:
+            # `d_caps` carries the ByValue captures (field-loaded before the
+            # body, in env-field/GIFieldLoad-index order).
+            lower_closure_body(d_call_name, !d_abi, d_self_ptr, d_body_pt, d_body_pn, d_ret, d_body, d_caps, &gmod)
         else:
             # Phase-1 stub: _0 = return place, _1 = env ptr, then one local
             # per closure param (implicit-it: a single `it` local). Shape is

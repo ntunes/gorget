@@ -124,8 +124,9 @@ enum Instruction:
     # enabling LIR's Ptr-typed-dst dispatch:
     #   • dst is GtPtr/GtMutPtr → pointer alias (no byte-copy)
     #   • else → byte-copy load
-    # A.1 status: DEAD CODE. No call site emits GIFieldLoad; lir_lower's
-    # arm `lower_fail`s loudly so any premature emission is visible.
+    # A.1 status: LIVE — lir_lower.gg:3324 lowers GIFieldLoad, and closure
+    # Phase 2 Step B (ByValue captures) emits it in the post-pass body to
+    # read each captured env field (`GIFieldLoad(fdst, env_ptr=_1, idx)`).
     GIFieldLoad(int, int, int)    # dst_local, base_local, field_index
     # Store `value` through the pointer held in `ptr_local` — `*ptr = value`.
     # Inverse of GIDeref. Emitted for whole-value writes to a `&`/`!` param
@@ -325,8 +326,23 @@ struct GirGlobal:
 # closure-id source + recorder, so the two never-reconciled counters
 # (make-site `gmod_next_closure_id` vs the scan's local) can no longer
 # desync. The record stores everything `lower_closure_body` needs so the
-# post-pass never re-derives the signature. (NO `captures` field — Step B
-# adds it for ByValue captures.)
+# post-pass never re-derives the signature. (Step B adds the `captures`
+# field at END for ByValue captures.)
+
+# closure Phase 2 Step B: a single captured free variable, in capture
+# (= env-field = struct-ctor-arg = body GIFieldLoad-index) order. The
+# capture VECTOR ORDER is the SINGLE source of truth across all three:
+# env-field order == struct-ctor arg order == body GIFieldLoad index.
+# `mode` is CAP_BY_VALUE in 2a; CAP_BY_MUT_REF is reserved for 2c.
+const int CAP_BY_VALUE = 0    # 2a: bit-copy a primitive into the env
+const int CAP_BY_MUT_REF = 1  # 2c (reserved, not implemented)
+
+struct ClosureCapture:
+    String name      # the captured outer-local's name
+    int type_id      # GIR type id of the captured value (2a: {0,4,10})
+    int local_id     # the outer local's id at the make-site (for OpCopy)
+    int mode         # CAP_BY_VALUE (2a) / CAP_BY_MUT_REF (2c, reserved)
+
 struct LiftedClosure:
     int cid                          # closure id (from gmod_next_closure_id)
     String call_name                 # "__Closure_<cid>__call"
@@ -338,6 +354,10 @@ struct LiftedClosure:
     Vector[Stmt] body
     bool is_implicit                 # true for EImplicitClosure (implicit `it`)
     bool lowerable                   # false → emit the Phase-1 stub; true → lower the body
+    # closure Phase 2 Step B: ByValue captures, in env-field/ctor-arg/
+    # GIFieldLoad-index order (the single source of truth). Empty for
+    # non-capturing closures + inline-spawn/implicit-it records (DEFERRED).
+    Vector[ClosureCapture] captures
 
 struct GirModule:
     Vector[GirFunction] functions
