@@ -4076,6 +4076,179 @@ int map_cmpop(String op):
         else:
             return CMP_EQ
 
+# ── Block-as-expression / tail-value lowering ───────────
+#
+# These three helpers implement the block-as-value path that any
+# `if`/`elif`/`else` (or, in follow-up rounds, `match` / `do:` block)
+# used in expression position needs. Mirrors Rust gg's
+# `lower_block_expr` (`src/ir/lowering/exprs/mod.rs:3203`),
+# `lower_stmt_as_tail_value` (`:3236`), and `build_if_chain_expr`
+# (`:3414`).
+
+# Return true iff the current block already has a real terminator
+# (return / break / jump / branch). Used to suppress the
+# assign-result + jump-to-merge when a branch body already diverged
+# (e.g. ended in `return`). Mirrors Rust's `!builder.is_terminated()`.
+bool block_terminated(LowerCtx &ctx):
+    Terminator cur = ctx.block_terms.get(ctx.current_block).unwrap()
+    match cur:
+        case GTNone():
+            return false
+        else:
+            return true
+
+# Lower a block of statements as an EXPRESSION, returning the local id
+# of its tail value. Mirrors Rust `lower_block_expr` (`:3203`):
+#   • empty block → a fresh Unit local (Rust returns Constant::Unit;
+#     the `is_empty()` guard avoids a `len()-1` underflow);
+#   • otherwise lower all-but-last as statements, then the LAST stmt as
+#     a tail value via `lower_stmt_as_tail_value`. A -1 (no tail value —
+#     the SMatch/else deferral) becomes a Unit local so the caller still
+#     has a valid local to read.
+int lower_block_expr(LowerCtx &ctx, Vector[Stmt] block_stmts, GirModule &gmod):
+    if block_stmts.len() == 0:
+        int unit_dst = add_local(&ctx, UNIT_TYPE, NO_NAME)
+        emit(&ctx, GIAssign(unit_dst, OpConstUnit()))
+        return unit_dst
+    int last_idx = block_stmts.len() - 1
+    int si = 0
+    while si < last_idx:
+        lower_stmt(&ctx, block_stmts.get(si).unwrap(), &gmod, false)
+        si = si + 1
+    int tail = lower_stmt_as_tail_value(&ctx, block_stmts.get(last_idx).unwrap(), &gmod)
+    if tail < 0:
+        int unit_dst2 = add_local(&ctx, UNIT_TYPE, NO_NAME)
+        emit(&ctx, GIAssign(unit_dst2, OpConstUnit()))
+        return unit_dst2
+    return tail
+
+# Lower the LAST statement of a block as a tail value. Mirrors Rust
+# `lower_stmt_as_tail_value` (`:3236`): recognises the tail-value
+# shapes and returns the producing local; for any other statement form
+# lowers it as a regular statement and returns -1 ("no tail value").
+#
+# This round handles `SExpr` (bare trailing expression) and `SIf`
+# (if-chain used as a value, sharing `lower_if_chain_expr` with the
+# EIf-in-`lower_expr` case). `SMatch`-as-value is a logged follow-up:
+# we lower it as a plain statement + return -1 for now (the caller
+# assigns the typed default, never `OpCopy(-1)`).
+int lower_stmt_as_tail_value(LowerCtx &ctx, Stmt last_stmt, GirModule &gmod):
+    match last_stmt:
+        case SExpr(e):
+            return lower_expr(&ctx, e, &gmod)
+        case SIf(cond_expr, then_body, elif_branches):
+            return lower_if_chain_expr(&ctx, cond_expr, then_body, elif_branches, &gmod)
+        else:
+            lower_stmt(&ctx, last_stmt, &gmod, false)
+            return -1
+
+# Lower an `if`/`elif`/`else` chain in EXPRESSION position, producing a
+# single `result` local that every reaching branch assigns. Mirrors Rust
+# `build_if_chain_expr` (`src/ir/lowering/exprs/mod.rs:3414-3500`).
+#
+# Shape: the self-host AST folds elif + else into one `Vector[ElseBranch]`
+# (`ElseBranch.condition` = Some(cond) → elif, None → explicit else).
+# We materialise `result` up front (so the merge sees a single def — SSA
+# inserts the phi), lower cond → GTBranch(then, else), then in the then
+# block lift `then_body` via `lower_block_expr`, assign it into `result`
+# via `op_consume(CkAssign)` (clone-or-move per ownership — resource
+# branches need the clone), and jump to merge. Each elif spins a fresh
+# branch (cond → elif_then / next_else); the explicit else lifts its
+# block + assigns. If NO explicit-else (None-condition) branch exists,
+# the terminal else block assigns the typed default (`OpConstI64(0)`,
+# mirroring Rust `:3494`) so `result` is assigned on EVERY path to merge.
+# Every assign+jump is guarded on `not block_terminated` — a branch that
+# ended in `return`/`break` must not also jump to merge.
+#
+# Result-type refinement: start from `ctx.expected_type` (set by the
+# enclosing SVarDecl/SAssign/SReturn writer) when valid; otherwise refine
+# from the FIRST non-Unit branch value's type (mirrors Rust's
+# `infer_operand_type_full` + the `result_type_refined` latch).
+int lower_if_chain_expr(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] then_body, Vector[ElseBranch] else_branches, GirModule &gmod):
+    int cond = lower_expr(&ctx, cond_expr, &gmod)
+    # Seed result type from expected_type when the writer set a concrete
+    # one; else I64 (refined below from the first non-Unit branch).
+    int result_type_init = I64_TYPE
+    bool result_type_refined = false
+    if ctx.expected_type >= 0 and ctx.expected_type < gmod.type_table.len():
+        result_type_init = ctx.expected_type
+        result_type_refined = true
+    int result = add_local(&ctx, result_type_init, NO_NAME)
+    int merge_bb = new_block(&ctx)
+    int then_bb = new_block(&ctx)
+    int else_bb = new_block(&ctx)
+    set_terminator(&ctx, GTBranch(OpCopy(cond), then_bb, else_bb))
+    # Then branch.
+    switch_to(&ctx, then_bb)
+    int then_val = lower_block_expr(&ctx, then_body, &gmod)
+    if not block_terminated(&ctx):
+        if not result_type_refined:
+            int tty = ctx.locals.get(then_val).unwrap().type_id
+            if tty != UNIT_TYPE:
+                refine_local_type(&ctx, result, tty)
+                result_type_refined = true
+        emit(&ctx, GIAssign(result, op_consume(&ctx, &gmod, then_val, CkAssign())))
+        set_terminator(&ctx, GTJump(merge_bb))
+    # Elif chain + explicit else, walking the folded ElseBranch vector.
+    int current_else_bb = else_bb
+    bool saw_else = false
+    int ebi = 0
+    while ebi < else_branches.len():
+        ElseBranch eb = else_branches.get(ebi).unwrap()
+        match eb.condition:
+            case Some(elif_cond):
+                switch_to(&ctx, current_else_bb)
+                int elif_cond_val = lower_expr(&ctx, elif_cond, &gmod)
+                int elif_then_bb = new_block(&ctx)
+                int next_else_bb = new_block(&ctx)
+                set_terminator(&ctx, GTBranch(OpCopy(elif_cond_val), elif_then_bb, next_else_bb))
+                switch_to(&ctx, elif_then_bb)
+                int elif_val = lower_block_expr(&ctx, eb.body, &gmod)
+                if not block_terminated(&ctx):
+                    if not result_type_refined:
+                        int ety = ctx.locals.get(elif_val).unwrap().type_id
+                        if ety != UNIT_TYPE:
+                            refine_local_type(&ctx, result, ety)
+                            result_type_refined = true
+                    emit(&ctx, GIAssign(result, op_consume(&ctx, &gmod, elif_val, CkAssign())))
+                    set_terminator(&ctx, GTJump(merge_bb))
+                current_else_bb = next_else_bb
+            case None:
+                # Explicit else — terminal branch.
+                saw_else = true
+                switch_to(&ctx, current_else_bb)
+                int else_val = lower_block_expr(&ctx, eb.body, &gmod)
+                if not block_terminated(&ctx):
+                    if not result_type_refined:
+                        int sty = ctx.locals.get(else_val).unwrap().type_id
+                        if sty != UNIT_TYPE:
+                            refine_local_type(&ctx, result, sty)
+                            result_type_refined = true
+                    emit(&ctx, GIAssign(result, op_consume(&ctx, &gmod, else_val, CkAssign())))
+                    set_terminator(&ctx, GTJump(merge_bb))
+        ebi = ebi + 1
+    # No explicit else → the all-conditions-false path lands in the
+    # terminal else block with `result` unassigned. Assign the typed
+    # default (I64(0), mirroring Rust `:3494`) so EVERY path to merge
+    # writes `result`.
+    if not saw_else:
+        switch_to(&ctx, current_else_bb)
+        if not block_terminated(&ctx):
+            emit(&ctx, GIAssign(result, OpConstI64(0)))
+            set_terminator(&ctx, GTJump(merge_bb))
+    switch_to(&ctx, merge_bb)
+    return result
+
+# Overwrite a local's recorded type_id in place (used by the if-chain
+# result-type refinement: the result slot is allocated with a seed type,
+# then narrowed to the first non-Unit branch value's type). Vectors
+# don't support in-place field mutation through `.get()`, so rebuild the
+# GirLocal preserving the other fields. Mirrors Rust's
+# `builder.locals[result_id.0].type_id = ty`.
+void refine_local_type(LowerCtx &ctx, int lid, int new_type):
+    GirLocal old = ctx.locals.get(lid).unwrap()
+    ctx.locals.set(lid, GirLocal(new_type, old.name_hint, old.ownership, old.borrow_origin))
+
 # ── Expression lowering ─────────────────────────────────
 
 int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
@@ -5315,19 +5488,13 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             emit(&ctx, GIAssign(idst, OpConstI64(0)))
             return idst
         case EIf(cond_box, then_body, else_branches):
-            int cond = lower_expr(&ctx, *cond_box, &gmod)
-            int then_bb = new_block(&ctx)
-            int else_bb = new_block(&ctx)
-            int merge_bb = new_block(&ctx)
-            set_terminator(&ctx, GTBranch(OpCopy(cond), then_bb, else_bb))
-            switch_to(&ctx, then_bb)
-            lower_stmts(&ctx, then_body, &gmod, false)
-            set_terminator(&ctx, GTJump(merge_bb))
-            switch_to(&ctx, else_bb)
-            set_terminator(&ctx, GTJump(merge_bb))
-            switch_to(&ctx, merge_bb)
-            int ifdst = add_local(&ctx, I64_TYPE, NO_NAME)
-            return ifdst
+            # If-as-EXPRESSION (`int x = if c: a else: b`). Mirrors Rust
+            # `build_if_chain_expr` via the shared helper: lower each
+            # branch's block as a tail value and assign it into a single
+            # `result` local at the merge. The same helper backs the
+            # SIf-as-tail-value case in `lower_stmt_as_tail_value`, so a
+            # nested `if` ending a branch body becomes a value too.
+            return lower_if_chain_expr(&ctx, *cond_box, then_body, else_branches, &gmod)
         case ENoneLiteral():
             # Bare `None` literal — when expected_type is a typed
             # `Option__T`, emit a properly-TYPED `None` ctor call
