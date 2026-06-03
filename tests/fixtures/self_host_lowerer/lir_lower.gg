@@ -697,7 +697,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
             case GtNamed(name):
                 if name == "":
                     continue
-                if is_generic_placeholder_name(name):
+                if is_generic_placeholder_name(name) and not gmod.type_infos.contains(name):
                     continue
                 if enum_variant_names.contains(name):
                     continue
@@ -853,7 +853,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
     for tname in ti_keys:
         if tname == "":
             continue
-        if is_generic_placeholder_name(tname):
+        if is_generic_placeholder_name(tname) and not gmod.type_infos.contains(tname):
             continue
         if enum_variant_names.contains(tname):
             continue
