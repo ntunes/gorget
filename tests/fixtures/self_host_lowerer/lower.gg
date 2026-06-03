@@ -5506,6 +5506,18 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 base_tid = box_inner_tid
                 base_type_name = inner_name
                 inner_tid = box_inner_tid
+            # Special case: GorgetString.data — return the GorgetString
+            # itself (identity). GorgetString has no registered `data` field
+            # in type_infos (it's an opaque runtime struct), so the field
+            # lookup below would fall through to the [bug] I64(0) placeholder.
+            # Accessing `.data` is valid for printf (`%.*s` handles it). For a
+            # value receiver `base` is already a value GorgetString; for a
+            # `&String`/`!String` borrow it is a Ptr(GorgetString) — both are
+            # returned AS-IS (the borrowed-String formatter deref handles the
+            # Ptr at the format site). Mirrors Rust
+            # `src/ir/lowering/exprs/mod.rs:2108` (`return obj;`).
+            if base_type_name == "GorgetString" and field_name == "data":
+                return base
             # Look up field info from type_infos. Resolve to
             # (field_name, field_type_name, field_index) tuples without
             # cloning the whole GirTypeInfo — the Vector clone path
