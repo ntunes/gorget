@@ -2,7 +2,7 @@
 
 ## ⏭ CURRENT NEXT (2026-06-02 pm — supersedes the "🧭 SESSION ROLLUP" + "🎯 NEXT SESSION FULL UNIVERSAL" blocks below)
 **✅ Phase-2 STEP A + STEP B both LANDED this session — gorget-1 code tip `d6902ccf` (`git log -1`
-for live; docs commits on top). RUNTIME PARITY 261 → 267 → **272 = 29.4%** (V/E/Err enum-typedef-drop +5, `cf6d5f89`).**
+for live; docs commits on top). RUNTIME PARITY 261 → 267 → 272 → **284 = 30.7%** (V/E/Err +5 `cf6d5f89`; Result→T auto-prop +12 `eb649a04`).**
 - **STEP A** (`231abb78`, DONE.md): ATOMIC universal make-site closure refactor + latent desync FIX.
   `lower_expr` = SOLE closure-id source/recorder (`LiftedClosure` on `GirModule.lifted_closures`);
   drain-until-empty post-pass = SOLE pusher of `__Closure_N__call`; pre-pass scan closure-walk +
@@ -84,19 +84,20 @@ for live; docs commits on top). RUNTIME PARITY 261 → 267 → **272 = 29.4%** (
   `:856`) with `and not gmod.type_infos.contains(name)`. +3 verified (catch_into_noncopy_dest,
   catch_divergent_arm, snag41) + 2 more found by a 2nd scout (enum_name_collision_with_constant,
   nested_match_expr_enum_result). 267 snapshots 0 regressions. No-name-matching win.
-- **🎯 Result→T AUTO-PROPAGATION hook (NEXT big serial chain, `lower.gg`; END-TO-END scout 2026-06-02):**
-  the self-host has NONE of Rust's centralized `maybe_auto_propagate` (`src/ir/lowering/exprs/mod.rs:73-86`
-  + `should_auto_propagate :2869` + `emit_result_auto_propagate :2731`) — a `throws`-fn call result
-  (`Result__X__E`) is NOT auto-unwrapped at consumer sites (for-iter `lower.gg:8203/8473`, if/while-cond,
-  index, call/ctor args), so the loop/cond is `lower_fail`-DROPPED or the Result struct is used as a
-  scalar. Porting the ONE hook flips ~4 (snag49a-d) + ~3 more throws fixtures (throws_call_*). ⚠
-  **PREREQUISITE (fold in, +6 lines, `lir_lower.gg`): `is_generic_placeholder_name` ALSO over-matches
-  the mono'd wrapper `Result__T__E`/`Option__Ref__V` (ends in `__E`/`__V`) → `'Result'/'Option'
-  undeclared`; add `if name.starts_with("Result__") or name.starts_with("Option__"): return false`.**
-  This candidate flips 0 ALONE (verified) — it's the necessary typedef-layer prereq; the auto-prop hook
-  is what actually flips fixtures. So this chain = lower.gg auto-prop hook + the lir_lower.gg prereq
-  (must serialize after the V/E/Err chain, same file). snag43/dict_nested/snag44 need MORE (Vector/Dict-
-  of-user-type mono, `??`-lowering, nested-pattern) — separate.
+- **✅ Result→T AUTO-PROPAGATION hook — LANDED 2026-06-03 `eb649a04` (+12, parity 272→284). DONE.md.**
+  Consumer-targeted `maybe_auto_propagate` (6 sites) + `lir_lower.gg` `Result__`/`Option__` prereq +
+  `result_payload_types` smart-split. Follow-ups (logged below).
+- **Auto-prop / Result FOLLOW-UPS (NEXT candidates — re-verify end-to-end before briefing):**
+  - **`snag49c` EIndex value-read stub** (`lower.gg:5537` returns const 0) — a `v[might()]` index
+    silently reads 0. Separate index-read chain (small, but verify it's not entangled with other
+    EIndex consumers).
+  - **Option-payloaded Result smart-split gap** (`option_result_nested` etc.): `is_concrete_payload_name`
+    rejects an `Option__<inner>`/`Result__<…>` Ok payload → `Result[Option[T],_]` mis-splits leftmost.
+    Extend the helper to accept `Option__`/`Result__`-prefixed payloads as concrete (recursively).
+  - **`is_concrete_payload_name` hand-maintained prefix-list → typed-registry cleanup** (mild
+    CLAUDE.md no-name-matching smell; mirrors lir_lower's shipped smart-split — fidelity, not parity).
+  - **snag43/snag44/dict_nested_pattern_noncopy_enum** need MORE than auto-prop (Vector/Dict-of-user-
+    type mono, `??`-lowering, nested-pattern in PConstructor) — separate chains.
 - **box `__gg_new` (~12) — ⛔ END-TO-END scouted 2026-06-03 = DEEP / ZERO parity-yield. NOT a parity
   chain.** The `unknown type name '__gg_new'`/`__gg_*__set` error is a thin VENEER: a hand-applied
   contained fix (rewrite `Box__new`→`__gorget_box_alloc_<inner>` + gate the box-allocator scanner
