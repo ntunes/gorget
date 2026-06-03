@@ -1,0 +1,19 @@
+the: 3
+cat: 2
+sat: 1
+on: 1
+mat: 1
+unique: 5
+hello: 1
+words: 1
+go: 5
+most frequent: the
+host: localhost
+port: 8080
+mode: release
+has host: true
+has missing: false
+a: 4
+b: 2
+c: 2
+d: 1

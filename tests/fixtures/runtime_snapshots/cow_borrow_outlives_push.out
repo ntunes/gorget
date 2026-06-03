@@ -1,0 +1,3 @@
+s = hello
+v[0] = hello
+v.len() = 22

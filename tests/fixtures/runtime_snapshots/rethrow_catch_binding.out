@@ -1,0 +1,6 @@
+rt/+: ok 105
+rt/-: err transformed: neg!
+catch-ref/+: 5
+catch-ref/-: 4
+catch-def/+: 5
+catch-def/-: 999

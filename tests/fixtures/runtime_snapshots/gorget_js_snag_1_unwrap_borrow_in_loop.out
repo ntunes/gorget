@@ -1,0 +1,6 @@
+--- Pattern A (clone via &.unwrap() temporary) ---
+out_a[0]: StringV(first)
+out_a[1]: StringV(second)
+--- Pattern B (clone via named local) ---
+out_b[0]: StringV(first)
+out_b[1]: StringV(second)

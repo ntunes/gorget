@@ -1,0 +1,14 @@
+Usage: myapp
+A test CLI application
+Arguments:
+  input  Input file to process
+Options:
+  --verbose, -v  Enable verbose output
+  --output, -o  Output file path (default: out.txt)
+---
+Usage: tool
+A utility tool
+Options:
+  --dry-run, -n  Simulate without changes
+  --config, -c  Config file (default: config.toml)
+  --timeout, -t  Timeout in seconds (default: 30)

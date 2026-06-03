@@ -3918,6 +3918,24 @@ bool is_string_type_id(int tid, GirModule &gmod):
             return false
     return false
 
+# True only for a POINTER to a string (`GtPtr`/`GtMutPtr` whose inner is a
+# string) — a BORROWED String, as `EFieldAccess` produces for a resource
+# String field (lower.gg:~5520-5524). A value String (bare `GorgetString`,
+# even under a `"String"`/`"Str"` alias id) returns false, so the
+# print/f-string deref-before-format step never mis-derefs a value as a ptr.
+bool is_ptr_to_string_type_id(int tid, GirModule &gmod):
+    if tid < 0 or tid >= gmod.type_table.len():
+        return false
+    GirType gt = gmod.type_table.get(tid).unwrap()
+    match gt:
+        case GtPtr(inner):
+            return is_string_type_id(inner, &gmod)
+        case GtMutPtr(inner):
+            return is_string_type_id(inner, &gmod)
+        else:
+            return false
+    return false
+
 bool is_resource_field_type(SpannedType stype, Dict[String, bool] resource_types):
     match stype.ty:
         case TPrimitive(name):
@@ -4339,6 +4357,16 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         int aty = I64_TYPE
                         if aloc >= 0 and aloc < ctx.locals.len():
                             aty = ctx.locals.get(aloc).unwrap().type_id
+                        # Borrowed string (`Ptr(GorgetString)` from a struct
+                        # String-field read / match-payload binding) — deref to
+                        # a NON-OWNING value GorgetString so the `%s` branch
+                        # below fires (the `aty == gs_tid` check misses the Ptr,
+                        # else the f-string prints the pointer via `%lld`).
+                        if is_ptr_to_string_type_id(aty, &gmod):
+                            int saloc = add_local_with(&ctx, gs_tid, NO_NAME, LoBorrowed(), BoNone())
+                            emit(&ctx, GIDeref(saloc, aloc, gs_tid))
+                            aloc = saloc
+                            aty = gs_tid
                         if aty == F64_TYPE or aty == F32_TYPE:
                             fmt = fmt + "%f"
                             gsf_args.push(op_consume(&ctx, &gmod, aloc, CkFormatArg()))
@@ -6106,6 +6134,17 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
             if val >= 0 and val < ctx.locals.len():
                 val_type = ctx.locals.get(val).unwrap().type_id
             int gs_tid = lookup_or_register_named(&gmod, "GorgetString")
+            # Borrowed string (`Ptr(GorgetString)` from a struct String-field
+            # read or a match/`is` enum-payload binding) — deref to a NON-OWNING
+            # value GorgetString so the `%s`/`.data` path fires. The exact
+            # `val_type == gs_tid` check below otherwise misses the Ptr and
+            # falls through to `%lld`, printing the pointer as an int. The deref
+            # local is LoBorrowed so drop-elab won't free the aliased buffer.
+            if is_ptr_to_string_type_id(val_type, &gmod):
+                int sval = add_local_with(&ctx, gs_tid, NO_NAME, LoBorrowed(), BoNone())
+                emit(&ctx, GIDeref(sval, val, gs_tid))
+                val = sval
+                val_type = gs_tid
             String fmt = "%lld\n"
             if val_type == F64_TYPE:
                 fmt = "%f\n"
