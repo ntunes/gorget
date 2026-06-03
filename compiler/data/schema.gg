@@ -161,3 +161,59 @@ struct RuntimeFn:
                                      # (gorget_str_cat, gorget_int_to_str, …).
                                      # Distinct from FxAllocates which is coarse
                                      # may-allocate.
+
+
+# ── Builtin-method axes ─────────────────────────────────────────────
+#
+# Typed declarations for the builtin methods that the lowerer's
+# heuristic classifiers used to recognise by raw name-match lists
+# (the CLAUDE.md "No name matching" item). Each declaration carries the
+# semantic facts a name-match list used to imply, as typed columns:
+#   - returns_view: the result is a non-owning VIEW into the receiver's
+#     buffer (String slice/trim/…); the lowerer must tag the result
+#     LoView so op_consume materialises (clones) it at an owning consume.
+#   - owning_arg_positions: the argument indices (0-based, non-receiver)
+#     that a collection mutator takes OWNERSHIP of. Per-(kind, method):
+#     Vector set/insert own only idx 1 (idx 0 is the index arg); Dict
+#     put/set own both 0 (key) and 1 (value); Set add owns idx 0.
+#   - ret_kind: the builtin's return type category, for the lowerer's
+#     name-based return-type inference fall-through.
+#
+# Two-table consumption (see compiler/data/resources.gg): the String
+# builtins (keyed by name only, under a String-receiver gate) and the
+# collection builtins (keyed by (CollectionKind, name)). The receiver
+# class is the resolved CollectionKind from the resource table — NEVER a
+# re-listed type-name alias set.
+
+# Return-type category of a builtin method. Closed set; a tag the lowerer
+# dispatches on instead of inlining the type-id construction. Only the
+# categories the migrated String-return block needs are populated today
+# (BrkString); the rest are reserved so a future port of the int/bool/
+# collection arms has a home without re-shaping the enum.
+enum BuiltinRetKind:
+    BrkVoid
+    BrkInt
+    BrkBool
+    BrkF64
+    BrkU8
+    BrkString               # GorgetString (slice/trim/upper/replace/format/…)
+    BrkArray                # GorgetArray (split/keys/map/…)
+    BrkSelf                 # receiver type (clone)
+    BrkElem                 # collection element type
+    BrkOptionElem           # Option[elem] (owned getter — pop/remove)
+    BrkOptionRefElem        # Option[Ref[elem]] (borrowing getter — get/first/…)
+    BrkInfer                # not classified here; fall through to other paths
+
+struct BuiltinMethodDecl:
+    String name
+    bool returns_view                # result aliases receiver buffer (cap==0).
+    Vector[int] owning_arg_positions # non-receiver arg indices the method owns.
+    BuiltinRetKind ret_kind
+
+# A per-CollectionKind group of builtin method declarations. The
+# `collection_kind` field is the lookup discriminator for
+# `collection_builtin_method(kind, mname)` — a resolved CollectionKind,
+# matched variant-to-variant, never an int code or type-name string.
+struct BuiltinMethodEntry:
+    CollectionKind collection_kind
+    Vector[BuiltinMethodDecl] methods

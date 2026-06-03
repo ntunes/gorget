@@ -37,6 +37,14 @@ from gir import CollectionKind, CkVector, CkDeque, CkHeap, CkDict, CkSet, CkNotC
 # family; `resource_meta_for` is the lazy-populating accessor that
 # memoises results into `gmod.resource_metadata`.
 from lir_lower import resource_meta_for
+# Typed builtin-method declaration tables — the single source of truth
+# for the String-view / collection-owning-arg / String-return facts the
+# lowerer used to recognise via raw name-match lists (CLAUDE.md "No name
+# matching"). Read via `string_builtin_method` / `collection_builtin_method`
+# (mirror lir_lower.gg's `build_resource_metadata` reading RESOURCES).
+from compiler.data.resources import STRING_BUILTIN_METHODS, COLLECTION_BUILTIN_METHODS
+from compiler.data.schema import BuiltinMethodDecl, BuiltinMethodEntry
+from compiler.data.schema import BuiltinRetKind, BrkString, BrkInfer
 
 # ── Lowering context ─────────────────────────────────────
 
@@ -599,6 +607,84 @@ bool is_owning_mutator_arg(CollectionKind kind, String mname, int margs_idx):
             return false
         case CkNotCollection():
             return false
+
+# Typed-table accessors over STRING_BUILTIN_METHODS / COLLECTION_BUILTIN_METHODS
+# (compiler.data.resources) — mirror lir_lower.gg's `lookup_resource_table`
+# reading RESOURCES. They replace the three raw name-match lists with a
+# single typed source of truth; consumers read the typed columns
+# (returns_view / owning_arg_positions / ret_kind) off the returned decl.
+
+# Variant-to-variant CollectionKind equality (no derived `==`; pure match
+# over two real enums — never an int code). Used to key the collection
+# builtin table by the RESOLVED receiver kind.
+bool collection_kind_eq(CollectionKind a, CollectionKind b):
+    match a:
+        case CkVector():
+            match b:
+                case CkVector():
+                    return true
+                else:
+                    return false
+        case CkDeque():
+            match b:
+                case CkDeque():
+                    return true
+                else:
+                    return false
+        case CkHeap():
+            match b:
+                case CkHeap():
+                    return true
+                else:
+                    return false
+        case CkDict():
+            match b:
+                case CkDict():
+                    return true
+                else:
+                    return false
+        case CkSet():
+            match b:
+                case CkSet():
+                    return true
+                else:
+                    return false
+        case CkNotCollection():
+            match b:
+                case CkNotCollection():
+                    return true
+                else:
+                    return false
+
+# True iff `x` is a member of `v`. Explicit loop (not the `in` operator)
+# so the self-host lowerer's own bootstrap doesn't depend on `in`-membership
+# lowering for a Vector[int].
+bool int_vec_contains(Vector[int] v, int x):
+    for e in v:
+        if e == x:
+            return true
+    return false
+
+# Look up a String builtin method by name. Returns the typed decl (carrying
+# the independent returns_view + ret_kind columns) or None for non-String
+# builtins. Consult under the existing String-receiver gate at the call site.
+Option[BuiltinMethodDecl] string_builtin_method(String mname):
+    for d in STRING_BUILTIN_METHODS:
+        if d.name == mname:
+            return Some(d.clone())
+    return None
+
+# Look up a collection mutator declaration by RESOLVED CollectionKind +
+# method name. Returns the typed decl (carrying owning_arg_positions) or
+# None. The kind must come from the resource table (collection_kind_of),
+# never from a re-listed receiver type-name alias.
+Option[BuiltinMethodDecl] collection_builtin_method(CollectionKind kind, String mname):
+    for entry in COLLECTION_BUILTIN_METHODS:
+        if collection_kind_eq(entry.collection_kind, kind):
+            for d in entry.methods:
+                if d.name == mname:
+                    return Some(d.clone())
+    return None
 
 void emit(LowerCtx &ctx, Instruction inst):
     # Workaround: can't push to a vector inside a vector via .get().

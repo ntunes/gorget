@@ -31,6 +31,8 @@ from compiler.data.schema import CRuntimeType
 from compiler.data.schema import TVoid, TBool, TI32, TI64, TU8, TF64, TPtr, TStr, TArray, TMap, TSet
 from compiler.data.schema import AbiKind, AAuto, AScalar, APtr, AOpaque, AGorgetString, AVoidElem, ACStr, AByValue
 from compiler.data.schema import SideEffects, FxPure, FxReadOnly, FxAllocates, FxMutates, FxIo, FxAborts, FxConcurrent
+from compiler.data.schema import BuiltinMethodDecl, BuiltinMethodEntry
+from compiler.data.schema import BuiltinRetKind, BrkString, BrkInfer
 
 
 public static int SCHEMA_VERSION = 1
@@ -2709,5 +2711,103 @@ public static Vector[RuntimeFn] RUNTIME_FNS = [
         FxIo(),
         false),
 
+]
+
+
+# ── STRING_BUILTIN_METHODS ──────────────────────────────────────────
+#
+# Typed declarations for the String (GorgetString) builtin methods that
+# the lowerer used to recognise via two independent name-match lists:
+#   - returns_view: the result is a non-owning view into the receiver's
+#     buffer (was `is_string_view_method`); read under the String-receiver
+#     gate at the lowerer's view-tag site.
+#   - ret_kind=BrkString: the result is a freshly-allocated GorgetString
+#     (was the String-return arm of `infer_method_return_type`).
+#
+# These two columns are INDEPENDENT membership sets — a method may be a
+# view but not a fresh String (str/as_str/trim_left/trim_right →
+# returns_view only, ret_kind=BrkInfer so the lowerer's return-type path
+# falls through to the receiver/I64 default exactly as before), or a
+# fresh String but not a view (upper/lower/replace/… → BrkString only).
+# Methods that are both (slice/substring/trim/strip/… → an aliasing view
+# that is also typed GorgetString) carry both columns.
+#
+# `reverse` is deliberately ABSENT: it is classified UNIT-returning by an
+# earlier arm of `infer_method_return_type` (first-match wins), so it must
+# NOT carry BrkString here. The lowerer keeps that earlier UNIT arm ahead
+# of the String-table consult to preserve the ordering.
+public static Vector[BuiltinMethodDecl] STRING_BUILTIN_METHODS = [
+    # Both view AND fresh-String (the aliasing slice/substring family).
+    BuiltinMethodDecl("slice", true, [], BrkString()),
+    BuiltinMethodDecl("substring", true, [], BrkString()),
+    BuiltinMethodDecl("byte_slice", true, [], BrkString()),
+    BuiltinMethodDecl("char_at", true, [], BrkString()),
+    BuiltinMethodDecl("trim", true, [], BrkString()),
+    BuiltinMethodDecl("strip", true, [], BrkString()),
+    BuiltinMethodDecl("lstrip", true, [], BrkString()),
+    BuiltinMethodDecl("rstrip", true, [], BrkString()),
+    BuiltinMethodDecl("removeprefix", true, [], BrkString()),
+    BuiltinMethodDecl("removesuffix", true, [], BrkString()),
+    # View only (NOT a fresh String — falls through the return-type path).
+    BuiltinMethodDecl("trim_left", true, [], BrkInfer()),
+    BuiltinMethodDecl("trim_right", true, [], BrkInfer()),
+    BuiltinMethodDecl("str", true, [], BrkInfer()),
+    BuiltinMethodDecl("as_str", true, [], BrkInfer()),
+    # Fresh String only (NOT a view).
+    BuiltinMethodDecl("upper", false, [], BrkString()),
+    BuiltinMethodDecl("lower", false, [], BrkString()),
+    BuiltinMethodDecl("to_lower", false, [], BrkString()),
+    BuiltinMethodDecl("to_upper", false, [], BrkString()),
+    BuiltinMethodDecl("replace", false, [], BrkString()),
+    BuiltinMethodDecl("repeat", false, [], BrkString()),
+    BuiltinMethodDecl("join", false, [], BrkString()),
+    BuiltinMethodDecl("center", false, [], BrkString()),
+    BuiltinMethodDecl("ljust", false, [], BrkString()),
+    BuiltinMethodDecl("rjust", false, [], BrkString()),
+    BuiltinMethodDecl("zfill", false, [], BrkString()),
+    BuiltinMethodDecl("pad_left", false, [], BrkString()),
+    BuiltinMethodDecl("pad_right", false, [], BrkString()),
+    BuiltinMethodDecl("to_string", false, [], BrkString()),
+    BuiltinMethodDecl("to_str", false, [], BrkString()),
+    BuiltinMethodDecl("format", false, [], BrkString()),
+]
+
+
+# ── COLLECTION_BUILTIN_METHODS ──────────────────────────────────────
+#
+# Typed declarations for the collection mutators whose argument-ownership
+# truth the lowerer used to encode as a per-CollectionKind name+index
+# match (was `is_owning_mutator_arg`). `owning_arg_positions` lists the
+# non-receiver argument indices that the mutator takes OWNERSHIP of, per
+# (kind, method): Vector/Deque `set`/`insert` own only idx 1 (idx 0 is the
+# index arg); Dict `put`/`set` own both 0 (key) + 1 (value); Set `add`/
+# `insert` own idx 0; Vector/Deque/Heap `push` owns idx 0.
+#
+# returns_view / ret_kind are not consulted for these rows (the only
+# consumer reads owning_arg_positions); they carry default false / BrkInfer.
+# Keyed per CollectionKind — looked up by the RESOLVED kind from the
+# resource table, never by re-listing receiver type-name aliases.
+public static Vector[BuiltinMethodEntry] COLLECTION_BUILTIN_METHODS = [
+    BuiltinMethodEntry(CkVector(), [
+        BuiltinMethodDecl("push", false, [0], BrkInfer()),
+        BuiltinMethodDecl("set", false, [1], BrkInfer()),
+        BuiltinMethodDecl("insert", false, [1], BrkInfer()),
+    ]),
+    BuiltinMethodEntry(CkDeque(), [
+        BuiltinMethodDecl("push", false, [0], BrkInfer()),
+        BuiltinMethodDecl("set", false, [1], BrkInfer()),
+        BuiltinMethodDecl("insert", false, [1], BrkInfer()),
+    ]),
+    BuiltinMethodEntry(CkHeap(), [
+        BuiltinMethodDecl("push", false, [0], BrkInfer()),
+    ]),
+    BuiltinMethodEntry(CkDict(), [
+        BuiltinMethodDecl("put", false, [0, 1], BrkInfer()),
+        BuiltinMethodDecl("set", false, [0, 1], BrkInfer()),
+    ]),
+    BuiltinMethodEntry(CkSet(), [
+        BuiltinMethodDecl("add", false, [0], BrkInfer()),
+        BuiltinMethodDecl("insert", false, [0], BrkInfer()),
+    ]),
 ]
 
