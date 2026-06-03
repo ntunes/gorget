@@ -37,26 +37,34 @@ the exact Rust arm (re-pin by content — line numbers drift) to mirror the prec
 return (it returns the base operand/local, typed `GorgetString`).
 
 ## The fix (executor: implement + RE-VERIFY by RUNNING)
-In the self-host `EFieldAccess` arm, BEFORE the `found_fi < 0` placeholder
-fallthrough, add a special case: if `base_type_name == "GorgetString"` (after the
-existing Ptr/MutPtr/Box unwrap that the arm already does) AND `field_name ==
-"data"`, return the **base local itself** (typed `GorgetString`, the value), NOT
-an I64(0). Mirror Rust `mod.rs:2108`.
-- Verify the base is the right operand to return (the arm computes `base` via
-  `lower_place_base`; for a value `GorgetString` the base local is the string —
-  confirm by RUNNING the repro).
-- ⚠ Edge: if the base arrives as a `Ptr(GorgetString)` borrow (e.g. `param.data`
-  where param is `&String`), returning the Ptr must still format correctly —
-  note that `7c43abcf` made the formatters deref `Ptr(GorgetString)`, so
-  returning the Ptr-typed base is fine (it gets deref'd at the format site).
-  Confirm both `String s="one"; print(s.data)` AND a borrowed variant.
-- Do NOT add a real `"data"` field to GorgetString's `type_infos` (that would
-  ripple into every struct-field codegen path) — the identity special-case is the
+In the self-host `EFieldAccess` arm, AFTER the Ptr/MutPtr unwrap (which already
+sets `base_type_name = "GorgetString"` for a borrowed base while leaving `base`
+as the Ptr local) and BEFORE the `found_fi < 0` placeholder fallthrough, add a
+special case: if `base_type_name == "GorgetString"` AND `field_name == "data"`,
+**`return base`** — the base local AS-IS, preserving its EXISTING type. Mirror
+Rust `src/ir/lowering/exprs/mod.rs:2109` (`return obj;`) LITERALLY.
+- ⚠⚠ **DO NOT re-type/coerce the result to `gs_tid`/`GorgetString`** (review
+  precision note): for a value receiver `base` is already a value `GorgetString`;
+  for a `&String`/`!String` borrow receiver `base` is a `Ptr(GorgetString)` — and
+  that's CORRECT, because the borrowed-String formatter deref (`7c43abcf`,
+  `is_ptr_to_string_type_id` → `%s`) handles the Ptr at the format site. Rust's
+  `return obj` likewise returns the operand unchanged. Just `return base`.
+- ⚠ RE-PIN (citations drifted — review-confirmed CURRENT lines): the arm is at
+  `lower.gg:~5447` (NOT 5419); the type_infos field lookup is `~5515-5524`; the
+  placeholder fallthrough (`diag_bug` + `add_local(I64_TYPE)` + `GIAssign(
+  OpConstI64(0))`) is `~5556-5565` (`diag_bug` at ~5562). Cleanest insertion
+  point: just before `int found_fi = -1` (~5513). Re-pin by CONTENT.
+- Verify by RUNNING: `String s="one"; print(s.data)` → `one`; AND
+  `match_expr_diverging_arm` → MATCH; AND a borrowed variant (e.g. a `&String`
+  param `.data` print) formats correctly.
+- Do NOT add a real `"data"` field to GorgetString's `type_infos` (would push it
+  into the `found_fi>=0` GIFieldLoad branch against a struct with no such GIR
+  field index → codegen ripple). The narrow identity special-case is the
   surgical, Rust-faithful fix.
 - Do NOT reshape any fixture.
 
 ## File zone
-ONLY `tests/fixtures/self_host_lowerer/lower.gg` (the EFieldAccess arm, ~:5419).
+ONLY `tests/fixtures/self_host_lowerer/lower.gg` (the EFieldAccess arm, ~:5447).
 File-disjoint from the parallel method-resolution chain (`src/`) — but NOTE it is
 the SAME FILE the borrowed-String fix `7c43abcf` already touched (now landed) and
 the SAME FILE other self-host chains use; run in an ISOLATED WORKTREE and the
