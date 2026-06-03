@@ -32,12 +32,13 @@ The staged execution PROVED (byte-level `--lir-c` diff + `self_host_runtime`
 CC-FAIL + Rust-oracle + `grep`) that activating the table (which Part A does)
 emits DANGLING Box symbols. Fix the table to match the fallback FIRST:
 - `compiler/data/resources.gg`: `Box__T` entry (~:160-168) — set `clone_fn` →
-  `None` and `free_fn` → `None` (was `Some("__gorget_box_clone")`/
-  `Some("__gorget_box_free")` — both 0 runtime + 0 codegen hits = dangling; Box
+  `None` and `drop_fn` → `None` (the schema field is `drop_fn`, arg position 3,
+  `schema.gg:65`; was `Some("__gorget_box_free")` (`resources.gg:164`)/`clone_fn`
+  `Some("__gorget_box_clone")` (`:165`) — both 0 runtime + 0 codegen hits = dangling; Box
   clone at a CoW boundary is a shallow handle `memcpy`, Box free is per-mono
   `__gorget_box_free_<inner>` emitted by codegen, NOT a table-driven symbol).
 - `compiler/data/resources.gg`: bare-Box `BkTraitBox` entry (~:186-191) — set
-  `free_fn` → `None` (was `Some("__gorget_trait_box_free")` — also 0 hits =
+  `drop_fn` → `None` (was `Some("__gorget_trait_box_free")` (`resources.gg:190`) — also 0 hits =
   dangling). ⚠ This entry ALSO diverges on size (table 16 vs fallback 8) and
   lir_type (table `LtStructBase` vs fallback `LtPtr`) — those are LATENT (no
   named fixture exercised the trait-box path). When you run the FULL suite with
@@ -75,11 +76,15 @@ A1 makes `for entry in RESOURCES` (`lir_lower.gg:196`, `RESOURCES` = `public
 static Vector[ResourceEntry]`, `resources.gg:57`) WORK in the **Rust-compiled
 driver** — so `lookup_resource_table` goes LIVE in EVERY self-host gate
 (`c_emit_comparison`/`lowerer_comparison`/`self_host_runtime`/`bootstrap`
-stage-0 all run the Rust-compiled driver). The table is **KNOWN to diverge** from
-the `build_resource_metadata` fallback (`lir_lower.gg:208-404`): e.g. `Box__T`
-free/clone `Some(...)` vs fallback `None`; `Mutex__T` `runtime_name="Mutex"`/
-`c_typedef_name="GorgetMutex*"` vs fallback `"Ptr"`/`None`; bare `Box` size 16
-vs 8; `GorgetString` `method_prefix=Some("gorget_str")` vs `None`. These fields
+stage-0 all run the Rust-compiled driver). The table diverged from
+the `build_resource_metadata` fallback (`lir_lower.gg:208-404`) on Box (now FIXED
+in Phase 0): `Box__T` drop/clone `Some(...)` vs fallback `None` (Phase-0 target);
+bare `Box` ALSO diverges on size (16 vs 8) + lir_type (`LtStructBase` vs `LtPtr`)
+— LATENT (no named fixture hit the trait-box path; watch the full suite). The
+review confirmed every NON-Box family's table drop/clone EQUALS the fallback, so
+the drop/clone reconciliation is Box-only. (`Mutex__T` `runtime_name`/
+`c_typedef_name` did NOT surface in emitted C — the `GorgetMutex` typedef comes
+from the runtime preamble, not the metadata field.) These fields
 ARE consumed (`runtime_name`→`type_runtime_map` :725/733; `method_prefix`→
 dispatch :442/457/824; `box_kind`→:621/811), so activation WILL change emitted C
 for Box/Mutex/string code.
