@@ -250,8 +250,8 @@ impl<'a> FuncLowering<'a> {
         // 8 fills out the table).
         {
             use crate::ir::abi::AbiKind;
-            use crate::ir::resource_schema::CollectionKind as SchemaCollectionKind;
-            let is_collection_name = crate::ir::resources::table().lookup(name)
+            use crate::resource_schema::CollectionKind as SchemaCollectionKind;
+            let is_collection_name = crate::resources::table().lookup(name)
                 .map(|m| matches!(m.collection_kind,
                     SchemaCollectionKind::Vector | SchemaCollectionKind::Deque
                     | SchemaCollectionKind::Dict | SchemaCollectionKind::Set))

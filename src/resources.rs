@@ -5,7 +5,7 @@
 //! into the binary via `include_str!` (see `crate::compiler_data`).
 //! At first call to `table()` we parse it with the compiler's own
 //! parser, walk the AST, and convert the literal-only subset into
-//! typed Rust structs from [`crate::ir::resource_schema`].
+//! typed Rust structs from [`crate::resource_schema`].
 //!
 //! Development override: setting `GORGET_RESOURCES_PATH=<path>` reads
 //! the file from disk instead of using the embedded copy, letting you
@@ -14,13 +14,13 @@
 //! Schema discipline: this loader expects `SCHEMA_VERSION` in
 //! `resources.gg` to match [`SCHEMA_VERSION_EXPECTED`]. Bumping the
 //! schema means a coordinated edit across `compiler/data/schema.gg`,
-//! `compiler/data/resources.gg`, [`crate::ir::resource_schema`], and
+//! `compiler/data/resources.gg`, [`crate::resource_schema`], and
 //! this file's `SCHEMA_VERSION_EXPECTED`.
 
 use std::sync::OnceLock;
 
 use crate::compiler_data::RESOURCES_SRC;
-use crate::ir::resource_schema::*;
+use crate::resource_schema::*;
 use crate::parser::ast::{CallArg, Expr, Item};
 use crate::parser::Parser;
 use crate::span::Spanned;

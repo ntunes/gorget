@@ -246,7 +246,7 @@ pub(super) fn map_monomorphized_to_runtime_with_operand_types(
     // Family-route via the resources table — same shape as the legacy
     // path (commits e129746e + 7bb75bf4) so the typed branch only
     // activates for genuine gorget_array sort/sorted/unique calls.
-    let family = crate::ir::resources::table().lookup(name)
+    let family = crate::resources::table().lookup(name)
         .and_then(|m| m.method_prefix.as_deref());
     if family == Some("gorget_array") {
         let method = name.rsplit("__").next();
@@ -277,7 +277,7 @@ pub(super) fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
     //
     // See docs/devbook/18-runtime-abi.md (the resource table / runtime
     // declaration table) for the SSoT design.
-    let family = crate::ir::resources::table().lookup(name)
+    let family = crate::resources::table().lookup(name)
         .and_then(|m| m.method_prefix.as_deref());
 
     // Vector__T__method → gorget_array_method

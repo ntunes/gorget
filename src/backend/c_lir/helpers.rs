@@ -143,8 +143,8 @@ pub(super) fn emit_wrapper_typedef(out: &mut String, name: &str, module: &LirMod
     // Box__ stays below — its emission branches on the LIR `is_trait_box`
     // flag (trait box → `<Trait>_TraitObj`, regular box → `void*`), which
     // can't be encoded as a static schema field today.
-    if let Some(meta) = crate::ir::resources::table().lookup(name) {
-        use crate::ir::resource_schema::CollectionKind;
+    if let Some(meta) = crate::resources::table().lookup(name) {
+        use crate::resource_schema::CollectionKind;
         let is_collection = matches!(meta.collection_kind,
             CollectionKind::Vector | CollectionKind::Deque | CollectionKind::Heap
             | CollectionKind::Dict | CollectionKind::Set);

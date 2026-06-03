@@ -2010,8 +2010,8 @@ impl<'a> FuncLowering<'a> {
                 // (which has runtime_name="GorgetArray" because it wraps a
                 // GorgetArray internally, but is itself a user-visible struct
                 // that the LIR routes as UserType, not as Resource).
-                if let Some(meta) = crate::ir::resources::table().lookup(n) {
-                    use crate::ir::resource_schema::{CollectionKind as SchemaCollectionKind, CopySemantics};
+                if let Some(meta) = crate::resources::table().lookup(n) {
+                    use crate::resource_schema::{CollectionKind as SchemaCollectionKind, CopySemantics};
                     match meta.collection_kind {
                         // Vector__/Deque__ → GorgetArray. Heap__ deliberately
                         // excluded — see comment above.

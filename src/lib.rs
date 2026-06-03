@@ -13,6 +13,8 @@ pub mod manifest;
 pub mod parser;
 pub mod report;
 pub mod resolver;
+pub mod resource_schema;
+pub mod resources;
 pub mod semantic;
 pub mod sim;
 pub mod span;
