@@ -1,0 +1,54 @@
+diff --git a/src/ir/lowering/stmts/for_loops.rs b/src/ir/lowering/stmts/for_loops.rs
+index 0d214972..bd896f89 100644
+--- a/src/ir/lowering/stmts/for_loops.rs
++++ b/src/ir/lowering/stmts/for_loops.rs
+@@ -190,29 +190,29 @@ pub(super) fn lower_for(
+         // Determine collection kind from type metadata (set by BuiltinTypeProtocol).
+         // Falls back to name-based detection, then Iterable/Iterator trait dispatch.
+         use crate::ir::types::CollectionKind;
+-        let collection_kind = if let Operand::Copy(ref p) | Operand::Move(ref p) = iter_op {
+-            let local_idx = p.local.0 as usize;
+-            if local_idx < builder.locals.len() {
+-                let tid = builder.locals[local_idx].type_id;
+-                let tid = ctx.pointee_type(tid).unwrap_or(tid);
+-                if let Some(GirType::Named(name)) = ctx.type_registry.get(tid) {
+-                    // Metadata-based: read `collection_kind` from the TypeDef.
+-                    // Both runtime singletons (GorgetArray/GorgetMap/GorgetSet —
+-                    // registered in `lowering/mod.rs`) and monomorphized aliases
+-                    // (Vector__T/Dict__K__V/... — registered via
+-                    // `register_collection_alias` in `lowering/types.rs:766`)
+-                    // carry `collection_kind` in their TypeMetadata. The earlier
+-                    // name-prefix fallback was dead — Phase A made it so.
+-                    ctx.type_registry.get_type_def(name)
+-                        .and_then(|td| td.metadata.collection_kind)
+-                } else {
+-                    None
+-                }
++        // Derive `collection_kind` from `iter_type` (already pointee-resolved for
++        // the Copy/Move/non-Ptr branches above), not from the `iter_op` place.
++        // The place-keyed lookup only fired for Copy/Move operands, so a
++        // module-level `static Vector[…]` — lowered to `Constant(GlobalRef(name))`,
++        // not a place — dropped to None and the loop emitted nothing. `iter_type`
++        // resolves the static's `Vector__T` correctly regardless of operand shape.
++        // ⚠ KEEP the pointee unwrap: the `:170-171 else` path can leave `iter_type`
++        // as `Ptr(_)`, which would otherwise → None → drop.
++        let collection_kind = {
++            let tid = ctx.pointee_type(iter_type).unwrap_or(iter_type);
++            if let Some(GirType::Named(name)) = ctx.type_registry.get(tid) {
++                // Metadata-based: read `collection_kind` from the TypeDef.
++                // Both runtime singletons (GorgetArray/GorgetMap/GorgetSet —
++                // registered in `lowering/mod.rs`) and monomorphized aliases
++                // (Vector__T/Dict__K__V/... — registered via
++                // `register_collection_alias` in `lowering/types.rs:766`)
++                // carry `collection_kind` in their TypeMetadata. The earlier
++                // name-prefix fallback was dead — Phase A made it so.
++                ctx.type_registry.get_type_def(name)
++                    .and_then(|td| td.metadata.collection_kind)
+             } else {
+                 None
+             }
+-        } else {
+-            None
+         };
+         match collection_kind {
+             Some(CollectionKind::Array) =>
