@@ -95,10 +95,13 @@ ran clean on a Result carrying `Vector[int]` (snag49a) — no double-drop/leak.
 2. Force-rebuild driver (`rm -f tests/fixtures/self_host_lowerer/driver{,.c}`; `GG_BUILD_TIMEOUT_SECS=600`).
 3. Per-fixture END-TO-END (emit→cc→run, diff FULL stdout vs `cargo run -- run`): **snag49a, snag49b,
    snag49d, throws_call_capture_and_propagate** must MATCH; bonus expected (verify, snapshot if MATCH):
-   `encoding_basic`, `error_handling`, `error_propagation_chain`, `option_result_nested`,
-   `result_propagation`, `test_error_handling`, `on_error_basic`, `on_error_inline`. snag49c stays
-   WRONG (orthogonal EIndex-read stub — do NOT snapshot, do NOT chase). Snapshot EVERY fixture that
-   reaches byte-identical MATCH (expected +10 to +14); do NOT cap.
+   `encoding_basic`, `error_handling`, `error_propagation_chain`,
+   `result_propagation`, `test_error_handling`, `on_error_basic`, `on_error_inline`. ⚠ TWO that do
+   NOT flip (do NOT snapshot, do NOT chase — PRE-EXISTING, not regressions): `snag49c` (orthogonal
+   EIndex value-read stub `lower.gg:5537` returns const 0) and `option_result_nested` (its
+   `Result[Option[int],_]` Ok payload `Option__int64_t` defeats `is_concrete_payload_name` →
+   leftmost-split fallback; a known Option-payload smart-split gap — log as follow-up). Snapshot EVERY
+   fixture that reaches byte-identical MATCH (expected ~+9 to +12); do NOT cap.
 4. `self_host_runtime` ≥ **272/0** + the new snapshots (0 regressed).
 5. `lowerer_comparison` ≥ **954**, `c_emit_comparison` ≥ **882** (re-confirm from `--nocapture`).
 6. `GG_RUNTIME_DIFF=1 … self_host_runtime_diff` → MATCH ≥ **282** (272 + ~10), NO fixture MATCH→worse.
@@ -115,5 +118,9 @@ ran clean on a Result carrying `Vector[int]` (snag49a) — no double-drop/leak.
 
 ## Follow-ups to LOG (orchestrator logs to TODO post-integration; execution agent does NOT touch TODO)
 - `snag49c` EIndex value-read stub (`lower.gg:5537` returns const 0) — separate index-read chain.
+- **Option-payloaded Result smart-split gap:** `is_concrete_payload_name` returns false for an
+  `Option__<inner>` Ok payload (not scalar / not in type_infos / not a collection), so
+  `Result[Option[T],_]` mis-splits (leftmost) → blocks `option_result_nested` etc. Extend the helper
+  to accept `Option__`/`Result__`-prefixed payloads as concrete (recursively) — separate follow-up.
 - If the centralized variant is ever wanted (to also auto-prop in more positions), it needs the
   `suppress_auto_prop` one-shot — out of scope; the consumer-targeted variant is the chosen design.
