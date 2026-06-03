@@ -285,6 +285,12 @@ const int GINIT_RUNTIME_CALL = 2
 # ordinals → regressions). Struct-of-FuncAddr init (vtable). Mirrors
 # `LirGlobalInit::Struct { struct_id, fields }` (`src/lir/mod.rs:1594-1598`).
 const int GINIT_STRUCT = 3
+# Const-bytes initializer for a scalar-literal global (`static int x = 0`).
+# The `init_expr` holds the rendered C literal (`0LL`, `2.5`, `1`/`0`);
+# the C backend emits `<type> <name> = <init_expr>;` at the declaration —
+# no runtime synth fn. Mirrors `LirGlobalInit::Bytes` (`src/lir/mod.rs:1594`)
+# / `GlobalInit::Bytes` (`src/ir/mod.rs:726`). ADD AT END.
+const int GINIT_BYTES = 4
 
 # One field of a GINIT_STRUCT global init. For vtables: a FuncAddr by fid.
 struct LirGlobalField:

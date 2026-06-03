@@ -17,7 +17,7 @@ from lir import lir_struct_id
 from lir import OVF_TRAP, OVF_WRAP
 from lir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
 from lir import EK_NOT_ENUM, EK_OPTION, EK_RESULT, EK_GENERAL
-from lir import GINIT_ZEROED, GINIT_FUNC_ADDR, GINIT_RUNTIME_CALL, GINIT_STRUCT
+from lir import GINIT_ZEROED, GINIT_FUNC_ADDR, GINIT_RUNTIME_CALL, GINIT_STRUCT, GINIT_BYTES
 from lir import SCHED_POOL, SCHED_THREAD, SCHED_INLINE, SCHED_SINGLE
 from std.collections import Vector, Dict
 from std.conv import int_to_str
@@ -847,6 +847,14 @@ String emit_globals(LirModule &m, Vector[String] &sn):
                 out = out + " = {0}"
         elif g.init_kind == GINIT_RUNTIME_CALL:
             out = out + " = {0}"
+        elif g.init_kind == GINIT_BYTES:
+            # Scalar-literal static: emit the const C literal directly at the
+            # declaration (`int64_t __lir_gN = 0LL;`). No runtime synth fn,
+            # no main-prologue call. NOT `const`-qualified — the global is
+            # MUTABLE (`kw` is driven by g.is_const, which is false here).
+            # Mirrors Rust's `GlobalInit::Bytes` emit (`c_lir/mod.rs:764-767`,
+            # `is_const:false`).
+            out = out + " = " + g.init_expr
         out = out + "; // " + g.name + "\n"
         i += 1
     if m.globals.len() > 0:

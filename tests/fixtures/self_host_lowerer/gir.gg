@@ -286,9 +286,19 @@ struct GirTypeInfo:
 
 # Module-level static with a runtime-call initializer (lib/std/io.gg's
 # `public static File stdout = _stdout_handle()` etc.).
+# Static init-kind tags. These mirror the LIR GINIT_* codes (lir.gg) so
+# the lir_lower mapping is a direct pass-through. GGSTATIC_RUNTIME routes
+# the `init_expr` through a runtime call (synth fn or `gorget_<sym>()`) at
+# the main-prologue; GGSTATIC_BYTES emits `init_expr` as a const C
+# initializer at the declaration (scalar-literal statics — mirrors Rust's
+# `GlobalInit::Bytes`, `src/ir/mod.rs:726`).
+const int GGSTATIC_RUNTIME = 2   # == GINIT_RUNTIME_CALL
+const int GGSTATIC_BYTES = 4     # == GINIT_BYTES
+
 struct GirStaticInfo:
-    String init_expr  # C expression — currently always `gorget_<sym>()`
+    String init_expr  # C expression — `gorget_<sym>()` (RUNTIME) or a C literal (BYTES)
     int type_id       # GIR type id of the declared type
+    int init_kind     # GGSTATIC_* (RUNTIME = synth-fn/extern call; BYTES = const init)
 
 # ── Globals (vtables) ────────────────────────────────────────────
 # Typed model of a module-level global with a const initializer,
@@ -499,7 +509,14 @@ int static_lookup_type(GirModule &gmod, String name):
     return -1
 
 void static_put(GirModule &gmod, String name, String init_expr, int type_id):
-    gmod.statics.put(name.clone(), GirStaticInfo(init_expr.clone(), type_id))
+    gmod.statics.put(name.clone(), GirStaticInfo(init_expr.clone(), type_id, GGSTATIC_RUNTIME))
+
+# Register a scalar-literal static whose `init_expr` is a const C literal
+# (`42LL`, `2.5`, `1`/`0`) emitted at the declaration — NO synth init fn,
+# NO main-prologue call. Mirrors Rust's `GlobalInit::Bytes`
+# (`src/ir/lowering/mod.rs:2459-2461`, C emit `c_lir/mod.rs:764-767`).
+void static_put_bytes(GirModule &gmod, String name, String init_expr, int type_id):
+    gmod.statics.put(name.clone(), GirStaticInfo(init_expr.clone(), type_id, GGSTATIC_BYTES))
 
 # Append a const-init global (vtable) to the module; returns its index.
 # Mirrors Rust gg pushing onto `module.globals` in `emit_vtable_globals`.

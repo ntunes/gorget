@@ -3,7 +3,7 @@
 # binary ops, function calls, variable declarations, return statements, print().
 
 from std.collections import Vector, Dict
-from std.conv import int_to_str
+from std.conv import int_to_str, float_to_str
 from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch, EquipBlock, StructDef, EnumDef, EnumVariant, Type, MatchArm
 from scope import ScopeTable, DefInfo
 from types import TypeTable, ResolvedType
@@ -23,6 +23,9 @@ from gir import ResourceMetadata
 # (`src/ir/lowering/traits.rs:985`). GirTypeInfo/GirFieldInfo/
 # lookup_or_register_named are already imported above.
 from gir import GirGlobal, GirGlobalField, gir_mod_add_global, GGINIT_FN_REF, GGINIT_STRUCT
+# Scalar-literal statics register as a const-bytes global (GGSTATIC_BYTES)
+# rather than a runtime synth fn — mirrors Rust's `GlobalInit::Bytes`.
+from gir import GGSTATIC_RUNTIME, GGSTATIC_BYTES, static_put_bytes
 # Phase 2b (Path A part 2): typed position-class enum for op_consume
 # dispatch. See gir.gg::ConsumeKind for the full partition.
 from gir import ConsumeKind, CkAssign, CkReturn, CkCallArgBorrow, CkCallArgOwning, CkFieldWrite
@@ -3562,6 +3565,47 @@ bool static_is_scalar_literal_init(SpannedExpr sd_val):
 
 String static_init_fn_name(String sd_name):
     return "__gg_static_init_" + sd_name
+
+# Render a SCALAR-literal static RHS as a const C initializer expression
+# (the `init_expr` of a GGSTATIC_BYTES global): int → `<n>LL`, float →
+# `float_to_str(v)`, bool → `1`/`0`, recursing through a leading unary
+# `-` / `+`. Mirrors Rust encoding the literal as `GlobalInit::Bytes`
+# then the C backend rendering those bytes back to a literal
+# (`src/backend/c_lir/emit_types.rs:630-655`: int = `<n>LL`, float = the
+# decimal value, bool = the byte). Returns "" if not a recognised scalar
+# literal (caller falls through to the runtime synth-fn path).
+String scalar_static_c_literal(SpannedExpr sd_val):
+    match sd_val.expr:
+        case EIntLiteral(n):
+            return int_to_str(n) + "LL"
+        case EFloatLiteral(v):
+            return float_to_str(v)
+        case EBoolLiteral(b):
+            if b:
+                return "1"
+            return "0"
+        case EUnaryOp(op, inner_box):
+            if op == "-" or op == "+":
+                String inner = scalar_static_c_literal(*inner_box)
+                if inner == "":
+                    return ""
+                return op + inner
+            return ""
+        else:
+            return ""
+
+# Register a SCALAR-literal static (`static int x = 0`) as a const-bytes
+# global: render the RHS to a C literal and store it as the global's
+# `init_expr` under GGSTATIC_BYTES. NO synth init fn, NO main-prologue
+# call — the C backend emits `<type> <name> = <literal>;` at the
+# declaration. Mirrors Rust's every-StaticDecl-is-a-mutable-Global rule
+# emitting a scalar literal via `GlobalInit::Bytes`
+# (`src/ir/lowering/mod.rs:2459-2461`, `is_const:false`). The static stays
+# MUTABLE (write-backs via SAssign work as before).
+void register_scalar_static(GirModule &gmod, SpannedType sd_ty, String sd_name, SpannedExpr sd_val):
+    int ty_id = map_ast_type(sd_ty, &gmod)
+    String lit = scalar_static_c_literal(sd_val)
+    static_put_bytes(&gmod, sd_name, lit, ty_id)
 
 # Build the `gorget_array_new(...)` / `gorget_dict_new[_str](...)` C init
 # expr for a collection-CONSTRUCTOR static (case 2). The element C-type
@@ -11858,16 +11902,20 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                 # A `static` is MUTABLE module-level storage, NOT a `const`.
                 # A scalar-literal init (`static int x = 0`, `static float
                 # y = -1.5`, `static bool b = true`) is a mutable GLOBAL —
-                # register it under `gmod.statics` (runtime-init synth fn)
-                # so that an SAssign / SCompoundAssign to it writes back,
-                # rather than const-folding it into `const_decls` (which
-                # would silently drop the write). Mirrors Rust's
-                # every-StaticDecl-is-a-mutable-Global rule
-                # (`src/ir/lowering/mod.rs:1224-1232`). Only `const`s (the
-                # IConstDecl arm above) fold to compile-time values.
+                # register it under `gmod.statics` as a const-bytes init
+                # (GGSTATIC_BYTES) so the C backend emits a const initializer
+                # at the declaration (`int64_t __lir_gN = 0LL;`), NOT a
+                # runtime synth fn. An SAssign / SCompoundAssign still writes
+                # back (the global is mutable). This is preferable to
+                # const-folding into `const_decls` (which would silently drop
+                # the write). Mirrors Rust's every-StaticDecl-is-a-mutable-
+                # Global rule emitting a scalar literal via `GlobalInit::Bytes`
+                # (`src/ir/lowering/mod.rs:1224-1232`, `:2459-2461`). Only
+                # `const`s (the IConstDecl arm above) fold to compile-time
+                # values.
                 bool sd_is_scalar = static_is_scalar_literal_init(sd_val)
                 if sd_is_scalar:
-                    register_literal_static(&gmod, sd_ty, sd_name)
+                    register_scalar_static(&gmod, sd_ty, sd_name, sd_val)
                 else:
                     Option[int] sd_eval = eval_const_int_expr(sd_val, &gmod)
                     match sd_eval:
@@ -12242,22 +12290,21 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         gmod.functions.push(lower_function(fdef, &gmod))
             case IStaticDecl(si_ty, si_name, si_val):
                 # Array/dict LITERAL static (`static Vector[T] X = [..]` /
-                # `= {..}`) OR scalar-literal static (`static int x = 0`):
-                # the static was registered in the pre-pass; synthesize +
-                # lower its `__gg_static_init_<name>()` init fn HERE, where
-                # the full type/fn registry is committed (struct-element
-                # sizing for collection literals reads gmod.type_infos).
-                # Mirrors Rust's every-StaticDecl-is-a-mutable-Global rule
-                # (`src/ir/lowering/mod.rs:1224-1232`) — Rust initializes a
-                # scalar global from a `GlobalInit::Bytes` const slot, but
-                # the self-host LIR has no `GlobalInit::Bytes` equivalent,
-                # so we run the init through a runtime synth fn instead.
-                # Guarded by the SAME predicates the pre-pass used so the
-                # two stay in lockstep (one synth fn iff a literal/scalar
-                # static was registered). The collection-CONSTRUCTOR path
-                # (case 2) emits NO synth fn — its init is a direct
-                # allocator C-expr (matches Rust).
-                if static_is_literal_init(si_val) or static_is_scalar_literal_init(si_val):
+                # `= {..}`): the static was registered in the pre-pass;
+                # synthesize + lower its `__gg_static_init_<name>()` init fn
+                # HERE, where the full type/fn registry is committed
+                # (struct-element sizing for collection literals reads
+                # gmod.type_infos). Guarded by `static_is_literal_init` so it
+                # stays in lockstep with the pre-pass's literal branch (one
+                # synth fn iff an array/dict-literal static was registered).
+                # SCALAR-literal statics (`static int x = 0`) take NO synth fn
+                # — they registered as a const-bytes global (GGSTATIC_BYTES)
+                # whose init_expr is emitted as a const C initializer at the
+                # declaration, matching Rust's `GlobalInit::Bytes`
+                # (`src/ir/lowering/mod.rs:2459-2461`). The collection-
+                # CONSTRUCTOR path (case 2) likewise emits NO synth fn — its
+                # init is a direct allocator C-expr.
+                if static_is_literal_init(si_val):
                     FunctionDef si_fn = build_static_init_fn(si_ty, si_name, si_val)
                     gmod.functions.push(lower_function(si_fn, &gmod))
             case ITest(tname, decorators, tags, test_body):

@@ -3833,7 +3833,16 @@ LirModule lower_gir_to_lir(GirModule &gmod):
     for sg_name in static_names:
         GirStaticInfo sg_info = gmod.statics.get(sg_name).unwrap()
         int sg_lir_ty = map_gir_type(sg_info.type_id, &gmod, &sr)
-        LirGlobal sg = LirGlobal(sg_name.clone(), sg_lir_ty, GINIT_RUNTIME_CALL, -1, sg_info.init_expr.clone(), false, [])
+        # Map the GIR static init-kind to the LIR GINIT_* code: GGSTATIC_BYTES
+        # → GINIT_BYTES (scalar-literal static = a const C initializer at the
+        # declaration, no runtime synth fn — mirrors Rust's `GlobalInit::Bytes`,
+        # `src/lir/lower/types.rs:572`); everything else → GINIT_RUNTIME_CALL.
+        # `is_const` stays false either way: a `static` is MUTABLE storage
+        # (write-backs via SAssign), matching Rust's `is_const:false`.
+        int sg_init_kind = GINIT_RUNTIME_CALL
+        if sg_info.init_kind == GGSTATIC_BYTES:
+            sg_init_kind = GINIT_BYTES
+        LirGlobal sg = LirGlobal(sg_name.clone(), sg_lir_ty, sg_init_kind, -1, sg_info.init_expr.clone(), false, [])
         lir_mod_add_global(&m, sg)
 
     # Build function index: name → FuncId
