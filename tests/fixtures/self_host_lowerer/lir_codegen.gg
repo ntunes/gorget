@@ -1114,6 +1114,34 @@ Vector[bool] compute_reachable_fns(LirModule &m):
                 gfi += 1
         gvi += 1
 
+    # Composite-static init-fn roots: a `GINIT_RUNTIME_CALL` global whose
+    # init_expr is a synthesized `__gg_static_init_<name>()` call (the
+    # collection-literal / runtime-ctor static path; see lower.gg's
+    # build_static_init_fn) keeps that init fn live. The call is emitted
+    # only as a C string in the `main` module-init prologue
+    # (lir_codegen.gg:4504-4513), never as an IR ICall/ICallExtern, so DCE
+    # can't see it via the call graph — seed it as a root by name. Mirrors
+    # Rust gg seeding the synthetic static-init fn as a DCE root
+    # (`src/lir/optimize.rs`). Strip the trailing "()" off the init_expr to
+    # recover the function name. Runtime-symbol init exprs
+    # (`gorget_stdout_handle()`) won't match a user fn name, so they're
+    # harmlessly skipped.
+    int rci = 0
+    while rci < m.globals.len():
+        LirGlobal rcg = m.globals.get(rci).unwrap()
+        if rcg.init_kind == GINIT_RUNTIME_CALL:
+            String ie = rcg.init_expr
+            String ie_fn = ie
+            if ie.ends_with("()"):
+                ie_fn = ie.slice(0, ie.byte_len() - 2)
+            int rcf = 0
+            while rcf < n:
+                if m.functions.get(rcf).unwrap().name == ie_fn and not reachable.get(rcf).unwrap():
+                    reachable.set(rcf, true)
+                    worklist.push(rcf)
+                rcf += 1
+        rci += 1
+
     # Transitive closure: walk reachable functions, follow ICall fids
     # and ICallExtern names.
     int wi = 0

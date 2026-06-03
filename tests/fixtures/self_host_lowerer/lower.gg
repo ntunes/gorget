@@ -3468,6 +3468,118 @@ bool try_register_static_runtime_call(GirModule &gmod, SpannedType sd_ty, String
         else:
             return false
 
+# Module-level static with a CONSTRUCTIVE (non-compile-time-constant)
+# initializer. Mirrors Rust gg's TWO-PATH static lowering
+# (`src/ir/lowering/mod.rs`), and stays faithful to it so the
+# `c_emit_comparison` user-fn count matches:
+#
+#  (1) ARRAY/DICT LITERAL (`static Vector[T] X = [..]` / `= {..}`) →
+#      a synthesized zero-arg `__gg_static_init_<name>()` fn whose body
+#      materializes the RHS (Rust's `initializer_needs_synthetic_fn`
+#      `:2381` + `synthesize_static_init_fn` `:2397`). The static's
+#      init_expr is the call `__gg_static_init_<name>()`.
+#
+#  (2) COLLECTION CONSTRUCTOR (`static Vector[int] N = Vector[int]()` /
+#      `Dict[String,int]()`) → a DIRECT runtime allocator init_expr
+#      (`gorget_array_new(sizeof(T))` / `gorget_dict_new[_str](...)`),
+#      NO synth fn (Rust's `eval_static_init` arms `:2580-2620`). Rust
+#      emits ZERO user fns for these, so a synth fn here would over-count.
+#
+# Both register the static with its declared `Vector__T`/`Dict__K__V`
+# type so an `EIdentifier` reference resolves to a properly-typed
+# `__global_ref__<name>` → `IGlobalAddr`, and the loop / `.get()` route
+# to `lower_for_vector` / the typed collection methods. The
+# `GINIT_RUNTIME_CALL` global is assigned in the `main` prologue
+# (`lir_codegen.gg:4504-4513`) — for (1) it calls the synth fn, for (2)
+# it runs the allocator C-expr directly.
+
+# True for an array/dict literal RHS → synth-fn path (case 1 above).
+bool static_is_literal_init(SpannedExpr sd_val):
+    match sd_val.expr:
+        case EArrayLiteral(_):
+            return true
+        case EDictLiteral(_, _):
+            return true
+        else:
+            return false
+
+String static_init_fn_name(String sd_name):
+    return "__gg_static_init_" + sd_name
+
+# Build the `gorget_array_new(...)` / `gorget_dict_new[_str](...)` C init
+# expr for a collection-CONSTRUCTOR static (case 2). The element C-type
+# names come from the DECLARED type's args (Rust's `generic_elem_c_type`
+# reads `ty`, not the call). Returns "" if the declared type isn't a
+# recognised collection — the caller then falls through (a non-collection
+# constructor static is not handled by this path).
+String collection_ctor_init_expr(SpannedType sd_ty, GirModule &gmod):
+    match sd_ty.ty:
+        case TNamed(tn, targs):
+            if (tn == "Vector" or tn == "Array" or tn == "Deque" or tn == "Heap" or tn == "Set" or tn == "HashSet" or tn == "OrderedSet") and targs.len() >= 1:
+                String elem_c = type_to_c_name(targs.get(0).unwrap(), &gmod)
+                return "gorget_array_new(sizeof(" + elem_c + "))"
+            if (tn == "Dict" or tn == "HashMap" or tn == "Map" or tn == "OrderedDict") and targs.len() >= 2:
+                String key_c = type_to_c_name(targs.get(0).unwrap(), &gmod)
+                String val_c = type_to_c_name(targs.get(1).unwrap(), &gmod)
+                if key_c == "GorgetString":
+                    return "gorget_dict_new_str(sizeof(" + val_c + "))"
+                return "gorget_dict_new(sizeof(" + key_c + "), sizeof(" + val_c + "))"
+            return ""
+        else:
+            return ""
+
+# Detect + register a collection-constructor static (case 2). The init
+# RHS must be a zero-arg `ECall` whose callee is an EIdentifier matching
+# the declared collection type (`Vector[int]()` parses as
+# `ECall(EIdentifier("Vector"), [], [int])`). Returns true on hit
+# (registered with a direct allocator init_expr, NO synth fn); false to
+# fall through to the literal / None cascade.
+bool try_register_collection_ctor_static(GirModule &gmod, SpannedType sd_ty, String sd_name, SpannedExpr sd_val):
+    match sd_val.expr:
+        case ECall(callee_box, args, _):
+            if args.len() != 0:
+                return false
+            match (*callee_box).expr:
+                case EIdentifier(_):
+                    String init_expr = collection_ctor_init_expr(sd_ty, &gmod)
+                    if init_expr == "":
+                        return false
+                    int ty_id = map_ast_type(sd_ty, &gmod)
+                    static_put(&gmod, sd_name, init_expr, ty_id)
+                    return true
+                else:
+                    return false
+        else:
+            return false
+
+# Register a LITERAL-init static (case 1) under `gmod.statics`; the
+# matching `FunctionDef` is built by `build_static_init_fn` and lowered in
+# the main function loop. Mirrors Rust pushing a `Global { init:
+# Extern { name: synth_name, args: [] } }`.
+void register_literal_static(GirModule &gmod, SpannedType sd_ty, String sd_name):
+    int ty_id = map_ast_type(sd_ty, &gmod)
+    String init_call = static_init_fn_name(sd_name) + "()"
+    static_put(&gmod, sd_name, init_call, ty_id)
+
+# Build the synthetic `<T> __gg_static_init_<name>(): T __r = RHS; return __r`
+# FunctionDef. The body MUST be the VarDecl-with-declared-type then
+# `return __r` shape (NOT `return RHS`): the VarDecl init lowering reads
+# the declared type to size collection-literal buffers + propagate the
+# element type (`lower_stmt`'s SVarDecl arm sets `pending_vec_elem_tyname`
+# / `pending_dict_*`). Mirrors Rust's `synthesize_static_init_fn`
+# (`src/ir/lowering/mod.rs:2386-2441`) — same anti-"simplify-to-return-RHS"
+# warning applies.
+FunctionDef build_static_init_fn(SpannedType sd_ty, String sd_name, SpannedExpr sd_val):
+    # ownership=0 (OWN_BORROW), shared=0, name_span=-1 — matching the
+    # self-host parser's local-VarDecl construction (parser.gg:3208).
+    Stmt vd = SVarDecl(sd_ty, "__r", sd_val, 0, 0, -1)
+    SpannedExpr ret_id = SpannedExpr(EIdentifier("__r"), sd_val.span)
+    Stmt rs = SReturn(Some(ret_id))
+    Vector[Stmt] body = [vd, rs]
+    Vector[Param] no_params = []
+    Vector[String] no_tparams = []
+    return FunctionDef(static_init_fn_name(sd_name), no_params, sd_ty, no_tparams, body, false, None)
+
 Option[float] eval_const_float_expr(SpannedExpr spe, GirModule &gmod):
     match spe.expr:
         case EFloatLiteral(v):
@@ -11608,7 +11720,19 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                             int opt_tid = map_ast_type(sd_ty, &gmod)
                                             gmod.none_decls.put(sd_name.clone(), opt_tid)
                                         else:
-                                            pass
+                                            # Composite-init static. Two Rust-faithful
+                                            # paths (see the helper docstrings):
+                                            #  (2) collection CONSTRUCTOR (`Vector[int]()`
+                                            #      / `Dict()`) → direct allocator init_expr,
+                                            #      no synth fn (tried first).
+                                            #  (1) array/dict LITERAL (`= [..]` / `= {..}`)
+                                            #      → register a synth-fn call; the matching
+                                            #      `__gg_static_init_<name>()` FunctionDef is
+                                            #      synthesized + lowered in the non-generic
+                                            #      function loop below (full registry ready).
+                                            bool sd_ctor = try_register_collection_ctor_static(&gmod, sd_ty, sd_name, sd_val)
+                                            if not sd_ctor and static_is_literal_init(sd_val):
+                                                register_literal_static(&gmod, sd_ty, sd_name)
             else:
                 pass
 
@@ -11936,6 +12060,22 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                     # emits these as `declare extern`, not as `fn @`.
                     if fdef.body.len() > 0:
                         gmod.functions.push(lower_function(fdef, &gmod))
+            case IStaticDecl(si_ty, si_name, si_val):
+                # Array/dict LITERAL static (`static Vector[T] X = [..]` /
+                # `= {..}`): the static was registered in the pre-pass;
+                # synthesize + lower its `__gg_static_init_<name>()` init fn
+                # HERE, where the full type/fn registry is committed
+                # (struct-element sizing for collection literals reads
+                # gmod.type_infos). Mirrors Rust's deferred
+                # `synthetic_static_init_fns` lowering
+                # (`src/ir/lowering/mod.rs:1255-1262`). Guarded by the SAME
+                # predicate the pre-pass used so the two stay in lockstep
+                # (one synth fn iff a literal static was registered). The
+                # collection-CONSTRUCTOR path (case 2) emits NO synth fn —
+                # its init is a direct allocator C-expr (matches Rust).
+                if static_is_literal_init(si_val):
+                    FunctionDef si_fn = build_static_init_fn(si_ty, si_name, si_val)
+                    gmod.functions.push(lower_function(si_fn, &gmod))
             case ITest(tname, decorators, tags, test_body):
                 # Skip test blocks when main() exists (normal build mode).
                 # Emit __test_N for test-only files (no main).
