@@ -3789,27 +3789,23 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
         return BOOL_TYPE
     if method == "is_alpha" or method == "is_digit" or method == "is_alphanumeric" or method == "is_whitespace" or method == "is_upper" or method == "is_lower" or method == "is_ascii" or method == "is_hex_digit":
         return BOOL_TYPE
-    # String-returning methods
-    if method == "slice" or method == "byte_slice" or method == "substring" or method == "char_at" or method == "trim" or method == "upper" or method == "lower":
-        return lookup_or_register_named(&gmod, "GorgetString")
-    if method == "to_lower" or method == "to_upper":
-        return lookup_or_register_named(&gmod, "GorgetString")
-    if method == "replace" or method == "repeat" or method == "join":
-        return lookup_or_register_named(&gmod, "GorgetString")
-    if method == "strip" or method == "lstrip" or method == "rstrip":
-        return lookup_or_register_named(&gmod, "GorgetString")
-    if method == "removeprefix" or method == "removesuffix":
-        return lookup_or_register_named(&gmod, "GorgetString")
-    if method == "center" or method == "ljust" or method == "rjust" or method == "zfill":
-        return lookup_or_register_named(&gmod, "GorgetString")
-    if method == "reverse" or method == "pad_left" or method == "pad_right":
-        return lookup_or_register_named(&gmod, "GorgetString")
-    if method == "to_string" or method == "to_str":
-        return lookup_or_register_named(&gmod, "GorgetString")
-    if method == "format":
-        return lookup_or_register_named(&gmod, "GorgetString")
-    if method == "char_at":
-        return lookup_or_register_named(&gmod, "GorgetString")
+    # String-returning methods — declared in STRING_BUILTIN_METHODS
+    # (compiler/data/resources.gg) with `ret_kind == BrkString`. NOTE the
+    # ordering contract: `reverse` is classified UNIT by the earlier arm
+    # above (first-match wins) and is deliberately ABSENT from the table's
+    # BrkString set, so consulting the table here cannot reclassify it.
+    # The view column (`returns_view`) is INDEPENDENT — view-only methods
+    # (str/as_str/trim_left/trim_right) carry BrkInfer and correctly fall
+    # through to the receiver/I64 path, exactly as the old name list did.
+    match string_builtin_method(method):
+        case Some(sdecl):
+            match sdecl.ret_kind:
+                case BrkString():
+                    return lookup_or_register_named(&gmod, "GorgetString")
+                else:
+                    pass
+        case None:
+            pass
     if method == "byte_at":
         return U8_TYPE
     # Collection-returning methods
