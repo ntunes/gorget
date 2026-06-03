@@ -1,9 +1,9 @@
 # TODO
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE THIS BLOCK IN PLACE each session; completed work → DONE.md, do NOT accumulate "superseded" blocks)
-**gorget-1 code tip `7c43abcf` (`git log -1` for the live tip — docs commits on top). RUNTIME PARITY =
-**329/929 = 35.4%**. Live gates @ `7c43abcf`: `self_host_runtime`
-**329/0**, `runtime_diff` MATCH **329**, `lowerer_comparison` **958**, `c_emit_comparison` **887**,
+**gorget-1 code tip `52a8ae99` (`git log -1` for the live tip — docs commits on top). RUNTIME PARITY =
+**330/929 = 35.5%**. Live gates @ `52a8ae99`: `self_host_runtime`
+**330/0**, `runtime_diff` MATCH **330**, `lowerer_comparison` **958**, `c_emit_comparison` **887**,
 `bootstrap_fixed_point` GREEN, `cargo test --lib` 1066/0 (debug; the 2 `--release`
 `should_panic`-over-`debug_assert` reds are a pre-existing `src/` artifact, NOT our work). ⚠ `main` is
 OWNER-PROMOTED — NEVER touch/advance it; land everything on `gorget-1` + worktrees. ⚠ An owner merge
@@ -122,7 +122,7 @@ cluster) — parallelize the ORCHESTRATION (scout next while executing current),
 
 - **🐛 (CORRECTNESS — self-host bugs surfaced/unmasked; Rust `gg` is the oracle):**
   - **(1) ✅ RESOLVED 2026-06-03 `7c43abcf`** — was mis-framed as "struct-with-String enum-payload binding in `lower_match_stmt`"; RUNNING proved it a GENERAL borrowed-String formatting gap (a plain `Item x=Item("h"); print(x.desc)` reproduced it). Fixed in the print/f-string formatters (DONE.md). `match_expr_block_arms` → MATCH.
-  - **(2) String `.data` field-access (`EFieldAccess` on `GorgetString`) emits a placeholder (`lower.gg`).** STILL OPEN — blocks `match_expr_diverging_arm`'s last line. Repro (NO match): `String s = "one"; print(s.data)` → self-host prints `0` + emits `[bug] EFieldAccess: unknown field 'data' on base type 'GorgetString'` (lower.gg:~5556) vs Rust `one`. The self-host `EFieldAccess` lowering has no case for the String runtime-struct `.data` accessor. Add it (mirror how Rust resolves `String.data`). NOTE: this is a `.data` on a VALUE `GorgetString` (NOT the borrowed-String-format class `7c43abcf` fixed) — distinct root.
+  - **(2) ✅ RESOLVED 2026-06-03 `52a8ae99`** — `GorgetString.data` identity special-case (`if base_type_name=="GorgetString" and field_name=="data": return base`, mirror Rust `mod.rs:2108`); `match_expr_diverging_arm` → MATCH (+1, parity 329→330). DONE.md.
   - **(3) snag-#8 UNMASK (NEW 2026-06-03, surfaced by `7c43abcf`) — self-host `Vector[String]` field-store ACROSS BRANCHES yields a NULL/invalid element `Ptr(GorgetString)`.** Crashes `move_across_branches` + `field_store_auto_clones_live_source` (were WRONG pre-fix, now CRASH — the borrowed-String fix correctly derefs the field element, but the field-store-across-if/elif/match leaves it NULL → memcpy-from-NULL SEGV). Rust gg compiles these fine (oracle `if_elif b=x`). Root = the self-host's `lower_if`/`lower_match_stmt` field-store doesn't snapshot/restore the per-branch `maybe_moved` flags, so non-first branches skip `move_zero` → the field aliases a moved-out buffer (Rust's snag-#8 fix: per-branch flag snapshot + post-join union — port it). Do NOT add a formatter NULL-guard (would mask this real bug).
 
 - **🔭 EXPRESSION-POSITION-CF FOLLOW-UPS (the lower.gg value-position cluster; EDo/EBlock LANDED 2026-06-03 `2d111fad` — DONE.md):**
