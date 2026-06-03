@@ -516,30 +516,14 @@ int add_local_inheriting(LowerCtx &ctx, int type_id, Option[String] name, int sr
             return add_local(&ctx, type_id, name)
 
 # String methods that return a non-owning VIEW (cap==0) aliasing the
-# receiver's buffer, mirroring Rust's `returns_view: true` builtins
-# (`src/ir/lowering/builtins.rs` GorgetString block). The runtime helpers
-# (`gorget_str_slice`/`_trim`/`_strip`/...) all return `gorget_str_view_region`
-# into `self.data`. The result local MUST be tagged LoView so `op_consume`
-# materializes (OpClone) it at any owning consume position (field-init,
-# return, collection-put). Without the tag the result defaults to LoOwned,
-# op_consume emits OpMove, and the view is stored by value — a dangling
-# alias once the receiver buffer is freed/reused (reads as NUL bytes). This
-# was the `pending_vec_elem_tyname = fty_name.slice(...).clone()` corruption:
-# the slice view was tagged owned, the `.clone()` move-elided to a plain
-# move, and `__gorget_array_new_sized_\0\0\0\0` injected NULs into the
-# multi-MB generate_c output (truncating it at the print boundary).
-bool is_string_view_method(String method):
-    if method == "slice" or method == "substring" or method == "byte_slice" or method == "char_at":
-        return true
-    if method == "trim" or method == "trim_left" or method == "trim_right":
-        return true
-    if method == "strip" or method == "lstrip" or method == "rstrip":
-        return true
-    if method == "removeprefix" or method == "removesuffix":
-        return true
-    if method == "str" or method == "as_str":
-        return true
-    return false
+# receiver's buffer are now declared in STRING_BUILTIN_METHODS
+# (compiler/data/resources.gg) via the `returns_view` column, mirroring
+# Rust's `returns_view: true` builtins (`src/ir/lowering/builtins.rs`
+# GorgetString block). The runtime helpers (`gorget_str_slice`/`_trim`/
+# `_strip`/...) all return `gorget_str_view_region` into `self.data`, so
+# the result local MUST be tagged LoView at the consume site (below) — see
+# the LoView tagging comment there for the dangling-alias corruption this
+# prevents. Read via `string_builtin_method(mname).returns_view`.
 
 # Collection kind of a (possibly mangled) receiver type name, or
 # CkNotCollection if `tname` isn't a known resource collection.
@@ -5612,6 +5596,17 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # when the user shadows these names on a non-collection type.
             int mdst = -1
             bool recv_is_string = recv_type_name == "String" or recv_type_name == "GorgetString" or recv_type_name == "Str"
+            # Does this String method return a non-owning VIEW into the
+            # receiver's buffer? Read the typed `returns_view` column off the
+            # String builtin table (STRING_BUILTIN_METHODS) instead of the
+            # old `is_string_view_method` name match. None (not a String
+            # builtin) → false, same as the old list's fall-through.
+            bool mname_is_view = false
+            match string_builtin_method(mname):
+                case Some(sdecl):
+                    mname_is_view = sdecl.returns_view
+                case None:
+                    pass
             if option_ref_payload_of(&gmod, ret_tid) >= 0:
                 bool recv_is_collection = false
                 match resource_meta_for(&gmod, recv_type_name):
@@ -5627,7 +5622,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     mdst = add_local_with(&ctx, ret_tid, NO_NAME, LoBorrowed(), BoCollectionElement(-1))
                 else:
                     mdst = add_local(&ctx, ret_tid, NO_NAME)
-            elif recv_is_string and is_string_view_method(mname):
+            elif recv_is_string and mname_is_view:
                 # View-returning String method: result aliases the receiver's
                 # buffer (cap==0). Tag LoView so op_consume materializes it
                 # (OpClone) at any owning consume position — otherwise the
