@@ -6121,10 +6121,39 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             ctx.pending_dict_key_tyname = ""
             ctx.pending_dict_val_tyname = ""
             ctx.pending_dict_ordered = false
-            for dk in dkeys:
-                lower_expr(&ctx, dk, &gmod)
-            for dv in dvals:
-                lower_expr(&ctx, dv, &gmod)
+            # Lower each (key, value) pair into fresh locals so we can
+            # `gorget_map_put` them into the constructed map below. The
+            # previous code lowered keys/values for side effects ONLY and
+            # DISCARDED the locals, so a `static Dict[K,V] M={"a":1}`
+            # produced an EMPTY map (the entries were never inserted).
+            # Mirrors Rust `lower_dict_literal` (src/ir/lowering/exprs/
+            # collections.rs:338-388): lower the KEY first (keys are not
+            # value-typed), then set the value-override expected_type from
+            # the declared V before lowering the VALUE, then restore.
+            # Single paired loop — a separate value loop would double-lower
+            # (double side effects + double owning temps).
+            Vector[int] dict_key_locals = []
+            Vector[int] dict_val_locals = []
+            int dict_pair_n = dkeys.len()
+            int dict_pi = 0
+            while dict_pi < dict_pair_n:
+                # Key first: keys can be any type, not V — lower BEFORE the
+                # value-override (Rust collections.rs:338-340).
+                int dict_key_local = lower_expr(&ctx, dkeys.get(dict_pi).unwrap(), &gmod)
+                # Value-override from `dict_vname` ONLY: collection_element_type
+                # has no `Dict__` case (lower.gg:3961-3976 → returns "") so it
+                # would be a silent no-op here. Same I64/UNIT guard as the
+                # array-literal / SVarDecl sites (Rust collections.rs:341-344).
+                int prev_dict_et = ctx.expected_type
+                if dict_vname != "":
+                    int dict_v_et = lookup_or_register_named(&gmod, dict_vname)
+                    if dict_v_et != I64_TYPE and dict_v_et != UNIT_TYPE:
+                        ctx.expected_type = dict_v_et
+                int dict_val_local = lower_expr(&ctx, dvals.get(dict_pi).unwrap(), &gmod)
+                ctx.expected_type = prev_dict_et
+                dict_key_locals.push(dict_key_local)
+                dict_val_locals.push(dict_val_local)
+                dict_pi = dict_pi + 1
             int ddst = add_local(&ctx, lookup_or_register_named(&gmod, "GorgetMap"), NO_NAME)
             if dict_kname != "" and dict_vname != "":
                 # Sentinel `__GGSEP__` separates K and V type names — zero
@@ -6143,6 +6172,24 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 else:
                     Vector[Operand] dn_args = [OpConstI64(8), OpConstI64(8)]
                     emit(&ctx, GICallExtern(ddst, "gorget_map_new", dn_args))
+            # Insert each lowered (key, value) pair into the freshly-built
+            # map. Mirrors `lower_index_assign:7392` and Rust `insert_pair`
+            # (collections.rs:380-388/398-417). Both Dict (ordered) and
+            # HashMap (unordered) use the SAME runtime mutator
+            # `gorget_map_put` — no ordered/unordered split here.
+            # `OpBorrow(ddst)` is REQUIRED: `ddst` is owned, live past every
+            # put (the next iteration puts again) AND returned, so OpMove
+            # would trip drop-emission's "owned but live-past → clone before
+            # call" rule and each put would mutate a throwaway clone while
+            # `ddst` stayed empty (same hazard the array arm documents at
+            # :5804-5814). Key → CkCallArgBorrow (read-only; gorget_map_put
+            # hashes/clones it internally); value → CkCallArgOwning (the map
+            # takes ownership at the consuming position).
+            int dict_put_i = 0
+            while dict_put_i < dict_pair_n:
+                Vector[Operand] put_args = [OpBorrow(ddst), op_consume(&ctx, &gmod, dict_key_locals.get(dict_put_i).unwrap(), CkCallArgBorrow()), op_consume(&ctx, &gmod, dict_val_locals.get(dict_put_i).unwrap(), CkCallArgOwning())]
+                emit(&ctx, GICallExtern(-1, "gorget_map_put", put_args))
+                dict_put_i = dict_put_i + 1
             return ddst
         case ECatch(inner_box, error_binding, recovery_box):
             return lower_catch_expr(&ctx, *inner_box, error_binding, *recovery_box, &gmod)
