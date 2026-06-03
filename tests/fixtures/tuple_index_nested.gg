@@ -1,0 +1,28 @@
+# Nested tuple-index access via the bare `.N` form (no `._N` required).
+#
+# Before the lexer-side disambiguation, `nested.1.0` lexed the `1.0` as a
+# single FloatLiteral, so only `._N` composed for nested access. The lexer now
+# splits a FloatLiteral that immediately follows a `Dot` back into
+# `Int Dot Int`, so `.N` works uniformly for single and nested access and
+# composes across the postfix chain (`a.1.2.3`). `._N` still works as an alias
+# (it never went through the float path).
+void main():
+    auto nested = (1, (2, 3))
+    print(nested.0)        # 1   — single-level (lone int, always worked)
+    print(nested.1.0)      # 2   — nested: 1.0 split to . 1 . 0
+    print(nested.1.1)      # 3   — nested: 1.1 split to . 1 . 1
+
+    # Leading-zero index — the f64-reconstruction trap (0.1f64 would lose the
+    # 0/1 split). The lexer split uses the real digits, so this is exact.
+    auto leadzero = ((10, 20), 30)
+    print(leadzero.0.1)    # 20
+
+    # 3-deep chain — lexer emits `1.2` (float) then `. 3`; the split must
+    # compose so the whole chain is Int Dot Int...
+    auto deep = (0, (0, (40, 41)))
+    print(deep.1.1.0)      # 40
+    print(deep.1.1.1)      # 41
+
+    # `._N` alias still works, and mixes freely with `.N`.
+    print(nested._1.0)     # 2
+    print(nested.1._1)     # 3

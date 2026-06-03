@@ -66,6 +66,26 @@ fn is_string_prefix(bytes: &[u8], i: usize) -> bool {
     i + 1 < bytes.len() && string_prefix_kind(bytes[i], bytes[i + 1]).is_some()
 }
 
+/// Split a `FloatLiteral` slice into its two tuple-index halves when it is
+/// actually nested tuple-field access (`D.D`, no exponent).
+///
+/// Returns `(left, right, dot_byte_offset)` where both halves are pure
+/// digit/underscore runs. Returns `None` for exponent-bearing floats (`1.0e5`),
+/// which must stay floats — the caller only invokes this when the float follows
+/// a `Dot`, and `expr.1.0e5` is not meaningful tuple access. Splitting only the
+/// digit-pair case keeps every real float literal untouched.
+fn split_tuple_float(slice: &str) -> Option<(&str, &str, usize)> {
+    let dot = slice.find('.')?;
+    let left = &slice[..dot];
+    let right = &slice[dot + 1..];
+    let is_index = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit() || b == b'_');
+    if is_index(left) && is_index(right) {
+        Some((left, right, dot))
+    } else {
+        None
+    }
+}
+
 impl<'src> Lexer<'src> {
     pub fn new(source: &'src str) -> Self {
         Self::new_with_offset(source, 0)
@@ -334,6 +354,43 @@ impl<'src> Lexer<'src> {
                         let span = self.span(span_start, span_end);
                         match raw_result {
                             Ok(raw) => {
+                                // Tuple-index disambiguation: a `FloatLiteral` lexed
+                                // immediately after a `Dot` is never a real float — it is
+                                // nested tuple-field access (`tup.1.0` → `tup . 1 . 0`).
+                                // `D.D` greedily matches the FloatLiteral regex, so split it
+                                // back into `Int Dot Int`. This composes across the Pratt
+                                // postfix loop: after splitting, the trailing `Int` lets a
+                                // following `.N` chain (`a.1.2.3`) keep disambiguating.
+                                if raw == RawToken::FloatLiteral
+                                    && matches!(
+                                        self.pending.back().map(|t| &t.node),
+                                        Some(Token::Dot)
+                                    )
+                                {
+                                    if let Some((left, right, dot_off)) =
+                                        split_tuple_float(slice)
+                                    {
+                                        let left_span =
+                                            self.span(span_start, span_start + dot_off);
+                                        let dot_span = self.span(
+                                            span_start + dot_off,
+                                            span_start + dot_off + 1,
+                                        );
+                                        let right_span =
+                                            self.span(span_start + dot_off + 1, span_end);
+                                        let left_tok =
+                                            self.parse_int_literal(left, 0, 10, left_span);
+                                        let right_tok =
+                                            self.parse_int_literal(right, 0, 10, right_span);
+                                        self.pending
+                                            .push_back(Spanned::new(left_tok, left_span));
+                                        self.pending
+                                            .push_back(Spanned::new(Token::Dot, dot_span));
+                                        self.pending
+                                            .push_back(Spanned::new(right_tok, right_span));
+                                        continue;
+                                    }
+                                }
                                 if let Some(tok) = self.convert_raw_token(raw, slice, span) {
                                     match &tok {
                                         Token::LParen | Token::LBracket | Token::LBrace => {
@@ -1241,6 +1298,103 @@ mod tests {
             tokens,
             vec![Token::FloatLiteral(3.14), Token::Newline,]
         );
+    }
+
+    #[test]
+    fn test_float_literal_not_after_dot_stays_float() {
+        // Bare floats, operator-led floats, and exponent floats must NOT be split.
+        assert_eq!(
+            lex("x + 1.0\n"),
+            vec![
+                Token::Identifier(crate::intern::intern("x")),
+                Token::Plus,
+                Token::FloatLiteral(1.0),
+                Token::Newline,
+            ]
+        );
+        assert_eq!(
+            lex("6.022e23\n"),
+            vec![Token::FloatLiteral(6.022e23), Token::Newline,]
+        );
+        assert_eq!(
+            lex("1_000.5\n"),
+            vec![Token::FloatLiteral(1000.5), Token::Newline,]
+        );
+    }
+
+    #[test]
+    fn test_tuple_index_nested_splits_float() {
+        // `a.1.0` lexes the `1.0` as a FloatLiteral; after a Dot it must split to Int Dot Int.
+        assert_eq!(
+            lex("a.1.0\n"),
+            vec![
+                Token::Identifier(crate::intern::intern("a")),
+                Token::Dot,
+                Token::IntLiteral(1),
+                Token::Dot,
+                Token::IntLiteral(0),
+                Token::Newline,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_tuple_index_leading_zero() {
+        // `a.0.1` — the f64-reconstruction trap (0.1f64 loses the split). Lexer-side split is exact.
+        assert_eq!(
+            lex("a.0.1\n"),
+            vec![
+                Token::Identifier(crate::intern::intern("a")),
+                Token::Dot,
+                Token::IntLiteral(0),
+                Token::Dot,
+                Token::IntLiteral(1),
+                Token::Newline,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_tuple_index_three_deep_composes() {
+        // `a.1.2.3` lexes as `a . 1.2 . 3`; the split must compose so the chain is fully Int Dot Int...
+        assert_eq!(
+            lex("a.1.2.3\n"),
+            vec![
+                Token::Identifier(crate::intern::intern("a")),
+                Token::Dot,
+                Token::IntLiteral(1),
+                Token::Dot,
+                Token::IntLiteral(2),
+                Token::Dot,
+                Token::IntLiteral(3),
+                Token::Newline,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_tuple_index_then_operator() {
+        // `t.0 + 1`: `.0` is a lone Int already (no float), `+ 1` stays separate.
+        assert_eq!(
+            lex("t.0 + 1\n"),
+            vec![
+                Token::Identifier(crate::intern::intern("t")),
+                Token::Dot,
+                Token::IntLiteral(0),
+                Token::Plus,
+                Token::IntLiteral(1),
+                Token::Newline,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_float_method_call_not_split() {
+        // `1.0.mod(3)`: leading `1.0` is the float (no preceding Dot), `.mod` is a normal method.
+        let toks = lex("1.0.mod(3)\n");
+        assert_eq!(toks[0], Token::FloatLiteral(1.0));
+        assert_eq!(toks[1], Token::Dot);
+        assert_eq!(toks[2], Token::Identifier(crate::intern::intern("mod")));
     }
 
     #[test]

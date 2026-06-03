@@ -446,11 +446,12 @@ auto triple = (1, 2.0, true)
 
 ### Field Access
 
-Access fields by index with `._0`, `._1`, etc.:
+Access fields by index. Both the bare-int form (`pair.0`) and the underscore
+alias (`pair._0`) work:
 
 ```gorget
 auto pair = (10, 20)
-print(f"{pair._0}")    # 10
+print(f"{pair.0}")     # 10
 print(f"{pair._1}")    # 20
 ```
 
@@ -473,10 +474,12 @@ auto name, code = parse_header("...")
 
 ### Nested Tuples
 
+Nested access composes with either form (`nested.1.0` or `nested._1._0`):
+
 ```gorget
 auto nested = (1, (2, 3))
-print(f"{nested._0}")       # 1
-print(f"{nested._1._0}")    # 2
+print(f"{nested.0}")        # 1
+print(f"{nested.1.0}")      # 2
 ```
 
 ---

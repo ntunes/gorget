@@ -2410,6 +2410,65 @@ fn tuple_literal_resource_value() {
 }
 
 #[test]
+fn tuple_index_nested() {
+    // Nested tuple-index access via the bare `.N` form (no `._N` required).
+    // Pre-fix, `nested.1.0` lexed `1.0` as a single FloatLiteral so only the
+    // `._N` form composed for nested access. The lexer now splits a
+    // FloatLiteral that immediately follows a `Dot` back into `Int Dot Int`,
+    // composing across the postfix chain (`a.1.2.3`). `._N` still works.
+    run_gg(
+        "tuple_index_nested.gg",
+        "\
+1
+2
+3
+20
+40
+41
+2
+3",
+    );
+}
+
+#[test]
+fn tuple_index_fstring() {
+    // Same disambiguation inside f-string interpolation: `f"{nested.1.0}"`
+    // re-parses the `{...}` body through the shared lexer/parser. Pre-fix the
+    // tuple-access parse errored and the literal-fallback silently printed the
+    // text verbatim; now the interpolated nested index evaluates.
+    run_gg(
+        "tuple_index_fstring.gg",
+        "\
+1
+2
+3
+a=2
+40",
+    );
+}
+
+#[test]
+fn tuple_index_float_regression() {
+    // Guards that the tuple-index lexer split never touches real floats: the
+    // split fires only for a FloatLiteral immediately after a `Dot`. Bare,
+    // underscore, exponent, operator-led floats, int-method-on-literal
+    // (`5.mod(3)`), and `tuple.0 + 1` int arithmetic all lex unchanged.
+    run_gg(
+        "tuple_index_float_regression.gg",
+        "\
+3.140000
+1.000000
+0.500000
+1000.500000
+3.000000
+6.000000
+2
+2.500000
+11",
+    );
+}
+
+#[test]
 fn dict_literal_resource_value() {
     // Regression for two coupled issues:
     //   (a) bare-init expected-type propagation: `Dict[String, Vector[int]] d

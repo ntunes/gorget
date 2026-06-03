@@ -315,6 +315,22 @@ equip Lexer:
     void lex_emit(&self, Token !tok, int start, int end):
         self.lex_tokens.push(SpannedToken(!tok, start, end))
 
+    # True when the most recently emitted token is a `.` — the signal that a
+    # following number is a tuple-index (`tup.1.0`), not a real float. Mirrors
+    # the Rust lexer's tuple-index disambiguation (src/lexer/mod.rs): a `D.D`
+    # immediately after a Dot must scan as Int (then the trailing `.D` is a
+    # separate Dot + Int), so nested tuple access composes (`a.1.2.3`).
+    bool lex_prev_is_dot(&self):
+        int n = self.lex_tokens.len()
+        if n == 0:
+            return false
+        Token prev = self.lex_tokens.get(n - 1).unwrap().lex_token
+        match prev:
+            case TkDot:
+                return true
+            else:
+                return false
+
     # ── Indentation helpers ───────────────────────────────────
 
     int lex_count_leading_spaces(&self):
@@ -492,9 +508,12 @@ equip Lexer:
             else:
                 break
 
-        # Check for float (decimal point followed by digit)
+        # Check for float (decimal point followed by digit). Suppressed when
+        # the previous token is a `.` — then `tup.1.0`'s `1.0` is a tuple-index
+        # pair (Int Dot Int), not a float (see lex_prev_is_dot).
         bool is_float = false
-        if self.lex_pos < self.lex_source.byte_len() and self.lex_peek() == b'.':
+        bool prev_dot = self.lex_prev_is_dot()
+        if not prev_dot and self.lex_pos < self.lex_source.byte_len() and self.lex_peek() == b'.':
             if self.lex_pos + 1 < self.lex_source.byte_len() and self.lex_peek_at(1).is_digit():
                 is_float = true
                 self.lex_pos = self.lex_pos + 1

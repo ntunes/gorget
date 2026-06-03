@@ -1,0 +1,40 @@
+# Float-literal regression guard for the tuple-index lexer disambiguation.
+#
+# The lexer only splits a FloatLiteral into `Int Dot Int` when it immediately
+# follows a `Dot` token (the `expr.N.M` postfix position). Every other float
+# context must lex unchanged. This fixture pins the hazardous shapes from the
+# brief.
+float id(float x): x
+
+void main():
+    # Bare float literals.
+    print(3.14)            # 3.14
+    print(1.0)             # 1
+    print(0.5)             # 0.5
+
+    # Underscore-separated float.
+    print(1_000.5)         # 1000.5
+
+    # NOTE: exponent-float lexing (`6.022e23` stays one FloatLiteral, the split
+    # helper rejects the `0e...` half) is covered by the lexer unit test
+    # `test_float_literal_not_after_dot_stays_float`. It's omitted here because
+    # Rust and the self-host format large exponent floats differently
+    # (`602200000000000000000000.0` vs `6.022e+23`) — a pre-existing
+    # float-to-string divergence unrelated to this fix that would add spurious
+    # parser_comparison noise.
+
+    # Operator-led floats — the fix triggers only after `.`, never after `+`.
+    print(1.0 + 2.0)       # 3
+    float x = 5.0
+    print(x + 1.0)         # 6
+
+    # Int-method-on-literal: `5.mod(3)` — `.mod` is Dot+Identifier, not a float.
+    print(5.mod(3))        # 2
+
+    # Float passed through a call (float still a float).
+    print(id(2.5))         # 2.5
+
+    # Tuple index followed by an arithmetic operator: `.0` is a lone int,
+    # `+ 1` is separate. Result is int arithmetic, not a float.
+    auto pair = (10, 20)
+    print(pair.0 + 1)      # 11

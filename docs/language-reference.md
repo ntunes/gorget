@@ -380,7 +380,7 @@ All primitive numeric types and `bool` are **Copy** types — they are implicitl
 tuple_type = "(" type "," type { "," type } ")" ;
 ```
 
-A fixed-size, heterogeneous sequence. Fields are accessed by name: `._0`, `._1`, etc. (the bare-int form `.0` also parses for single-level access, but `._0` is preferred — it composes for nested access, e.g. `nested._1._0`).
+A fixed-size, heterogeneous sequence. Fields are accessed positionally. Both forms work and compose for nested access: the bare-int form `pair.0` / `nested.1.0`, and the underscore alias `pair._0` / `nested._1._0`. (The lexer disambiguates `.N` from float literals, so `nested.1.0` reads as `nested . 1 . 0`, not as a float `1.0`.)
 
 ```gorget
 (int, String) pair = (42, "hello")
