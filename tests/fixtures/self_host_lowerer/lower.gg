@@ -7202,6 +7202,17 @@ int lower_place_base(LowerCtx &ctx, SpannedExpr base_expr, GirModule &gmod):
         case EIdentifier(name):
             if nl_contains(&ctx, name):
                 return nl_get(&ctx, name)
+            # static-as-place — emit a Ptr alias to the global so a method
+            # receiver / field-write / index base mutates the REAL static,
+            # not a value copy. A GtMutPtr slot makes lir_lower store the
+            # global's address directly (no load/copy).
+            if static_contains(&gmod, name):
+                int sty = static_lookup_type(&gmod, name)
+                int pty = register_type(&gmod, GtMutPtr(sty))
+                int pdst = add_local(&ctx, pty, NO_NAME)
+                Vector[Operand] no_args = []
+                emit(&ctx, GICallExtern(pdst, "__global_ref__" + name, no_args))
+                return pdst
         else:
             pass
     return lower_expr(&ctx, base_expr, &gmod)
