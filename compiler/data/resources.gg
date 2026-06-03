@@ -161,8 +161,8 @@ public static Vector[ResourceEntry] RESOURCES = [
         [MkPrefix("Box__")],
         ResourceMetadata(
             "Box", 8, LtPtr(),
-            Some("__gorget_box_free"),
-            Some("__gorget_box_clone"),
+            None,
+            None,
             None,
             CsResource(), CkNotCollection(), BkRegularBox(),
             false, None, None, false)),
@@ -187,7 +187,7 @@ public static Vector[ResourceEntry] RESOURCES = [
         [MkExact("Box")],
         ResourceMetadata(
             "Box", 16, LtStructBase(),
-            Some("__gorget_trait_box_free"),
+            None,
             None,
             None,
             CsResource(), CkNotCollection(), BkTraitBox(),
