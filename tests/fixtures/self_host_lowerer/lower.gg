@@ -4194,6 +4194,8 @@ int lower_stmt_as_tail_value(LowerCtx &ctx, Stmt last_stmt, GirModule &gmod):
 # `infer_operand_type_full` + the `result_type_refined` latch).
 int lower_if_chain_expr(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] then_body, Vector[ElseBranch] else_branches, GirModule &gmod):
     int cond = lower_expr(&ctx, cond_expr, &gmod)
+    # Auto-propagate a `throws` call used as the if-expression condition.
+    cond = maybe_auto_propagate(&ctx, cond, &gmod)
     # Seed result type from expected_type when the writer set a concrete
     # one; else I64 (refined below from the first non-Unit branch).
     int result_type_init = I64_TYPE
@@ -6219,6 +6221,17 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                     ctx.expected_type = pt
             int arg_local = lower_expr(&ctx, arg, &gmod)
             ctx.expected_type = prev_expected_arg
+            # Auto-propagate a `throws` call passed as an argument
+            # (`f(might())` unwraps; `f(r)` where the param is Result keeps the
+            # raw Result). Skip when the callee's param IS a Result__ — don't
+            # unwrap into a parameter that wants the Result. Ctor args flow
+            # through this same loop, so struct/enum-field ctors are covered.
+            bool arg_param_is_result = false
+            if ai < callee_param_types.len():
+                String arg_pt_name = type_id_to_name(callee_param_types.get(ai).unwrap(), &gmod)
+                arg_param_is_result = arg_pt_name.starts_with("Result__")
+            if not arg_param_is_result:
+                arg_local = maybe_auto_propagate(&ctx, arg_local, &gmod)
             if ai == 0 and arg_local >= 0 and arg_local < ctx.locals.len():
                 first_arg_type = ctx.locals.get(arg_local).unwrap().type_id
             # Detect &arg (borrow) or pre-scanned borrow param
@@ -6411,6 +6424,13 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                 ctx.expected_type = declared_ty_pre
             int val = lower_expr(&ctx, init_expr, &gmod)
             ctx.expected_type = prev_expected_vd
+            # Auto-propagate a `throws` call captured into a non-Result local
+            # (`int v = might()` unwraps; `Result[int,E] r = might()` keeps the
+            # raw Result so the user can match/destructure it). Skip when the
+            # declared destination type IS a Result__ (don't unwrap into it).
+            String decl_pre_name = type_id_to_name(declared_ty_pre, &gmod)
+            if not decl_pre_name.starts_with("Result__"):
+                val = maybe_auto_propagate(&ctx, val, &gmod)
             # closure Phase 2 Step A: record `<fn>\0<varname>` →
             # `__Closure_<cid>` when the init is a closure, so the re-pointed
             # named-spawn pass can wire `spawn varname()`'s wrapper to the
@@ -7089,6 +7109,8 @@ void lower_stmts(LowerCtx &ctx, Vector[Stmt] stmts, GirModule &gmod, bool is_mai
 
 void lower_if(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] then_body, Vector[ElseBranch] elif_branches, GirModule &gmod, bool is_main):
     int cond = lower_expr(&ctx, cond_expr, &gmod)
+    # Auto-propagate a `throws` call used as the condition (`if might():`).
+    cond = maybe_auto_propagate(&ctx, cond, &gmod)
     int then_bb = new_block(&ctx)
     int else_bb = new_block(&ctx)
     int merge_bb = new_block(&ctx)
@@ -7854,24 +7876,82 @@ int lookup_ctor_field_type(String enum_name, String variant_name, int field_idx,
 # name and resolve each half via `resolve_field_gir_type` (the same
 # helper `lookup_ctor_field_type` uses for Option). This is the same
 # leftmost-`__` split as the `.unwrap()` path at `:4629-4632` — and
-# shares its KNOWN LIMITATION: a nested-generic Ok payload
-# (`Result__Vector__byte__IoError`) mis-splits (Ok wrongly `Vector`).
-# All 28 error-handling target fixtures have SIMPLE payloads
-# (`Result__int__String`, `Result__String__String`), so the leftmost
-# split is correct for them; the nested case is a noted follow-up, not
-# fixed here. `result_tn` MUST be a `Result__`-prefixed name (the
-# scrutinee/inner-expr lowered local type, with `GtPtr` peeled).
-# Returns (ok_tid, err_tid); both default to `I64_TYPE` if the name is
-# not a recognizable `Result__T__E`.
+# shares its (FORMER) limitation: a nested-generic Ok payload
+# (`Result__Vector__byte__IoError`) used to mis-split (Ok wrongly
+# `Vector`). FIXED here via a smart L→R split (mirrors lir_lower Pass 3,
+# `lir_lower.gg:1018-1050`): try each `__` boundary and accept the first
+# where BOTH sides name a concrete type (`is_concrete_payload_name`),
+# falling back to the leftmost split if none qualifies. `result_tn` MUST
+# be a `Result__`-prefixed name (the scrutinee/inner-expr lowered local
+# type, with `GtPtr` peeled). Returns (ok_tid, err_tid); both default to
+# `I64_TYPE` if the name is not a recognizable `Result__T__E`.
+
+# True when `name` denotes a CONCRETE type for the payload-split: a
+# scalar primitive, a registered user type (`type_infos.contains`), or a
+# monomorphized collection (a `<Coll>__<...>` prefix). Used to pick the
+# correct `__` boundary in a `Result__<Ok>__<Err>` name where `Ok` may
+# itself be compound (`Vector__int64_t`). NOT the lir_lower `!= LT_PTR`
+# test: the GIR-level `resolve_field_gir_type` always registers an
+# unknown name (no miss sentinel), so we test the name shape directly.
+bool is_concrete_payload_name(String name, GirModule &gmod):
+    # Scalar primitives (the special-cased names in resolve_field_gir_type
+    # plus the common C-int aliases).
+    if name == "int" or name == "int64_t" or name == "float" or name == "double" or name == "bool":
+        return true
+    if name == "String" or name == "GorgetString" or name == "Str":
+        return true
+    if name == "int32_t" or name == "i32" or name == "int8_t" or name == "i8" or name == "byte" or name == "uint8_t":
+        return true
+    if name == "int16_t" or name == "uint16_t" or name == "uint32_t" or name == "uint64_t":
+        return true
+    if name == "float32" or name == "float64" or name == "size_t" or name == "ssize_t":
+        return true
+    # Registered user struct/enum (mono'd prelude generics are NOT keys —
+    # they're handled by the collection-prefix arm below).
+    if gmod.type_infos.contains(name):
+        return true
+    # Monomorphized collections / parameterised resource handles — their
+    # mangled names carry a `<Coll>__<args>` shape. A bare template
+    # (`Vector`) has no `__` and is NOT in type_infos, so it correctly
+    # fails (forcing the split past it). Mirrors lir_lower's prefix set.
+    if name.starts_with("Vector__") or name.starts_with("Deque__") or name.starts_with("Heap__"):
+        return true
+    if name.starts_with("Set__") or name.starts_with("HashSet__") or name.starts_with("GorgetSet__"):
+        return true
+    if name.starts_with("Dict__") or name.starts_with("HashMap__") or name.starts_with("Map__"):
+        return true
+    if name.starts_with("GorgetDict__") or name.starts_with("GorgetMap__") or name.starts_with("OrderedDict__"):
+        return true
+    if name.starts_with("Box__") or name.starts_with("Ref__"):
+        return true
+    return false
+
 ResultPayloadTypes result_payload_types(String result_tn, GirModule &gmod):
     int ok_tid = I64_TYPE
     int err_tid = I64_TYPE
     if result_tn.starts_with("Result__"):
         String rest = result_tn.slice(8, result_tn.len())
-        int split = rest.index_of("__").unwrap_or(-1)
-        if split > 0:
-            String ok_name = rest.slice(0, split)
-            String err_name = rest.slice(split + 2, rest.len())
+        String ok_name = ""
+        String err_name = ""
+        # Smart split: try each `__` boundary L→R; accept the first where
+        # BOTH sides name a concrete type.
+        int si = 0
+        while si + 1 < rest.byte_len():
+            if rest.byte_at(si) == 0x5F and rest.byte_at(si + 1) == 0x5F:
+                String o_try = rest.slice(0, si)
+                String e_try = rest.slice(si + 2, rest.len())
+                if is_concrete_payload_name(o_try, &gmod) and is_concrete_payload_name(e_try, &gmod):
+                    ok_name = o_try
+                    err_name = e_try
+                    break
+            si += 1
+        # Fall back to the leftmost split if no boundary fully qualified.
+        if ok_name == "":
+            int split = rest.index_of("__").unwrap_or(-1)
+            if split > 0:
+                ok_name = rest.slice(0, split)
+                err_name = rest.slice(split + 2, rest.len())
+        if ok_name != "":
             ok_tid = resolve_field_gir_type(ok_name, &gmod)
             err_tid = resolve_field_gir_type(err_name, &gmod)
     return ResultPayloadTypes(ok_tid, err_tid)
@@ -8023,6 +8103,73 @@ int lower_rethrow_expr(LowerCtx &ctx, SpannedExpr inner, Option[String] error_bi
     ctx.expected_type = prev_expected_rt
     int err_dst = add_local(&ctx, fn_result_type, NO_NAME)
     Vector[Operand] err_args = [op_consume(&ctx, &gmod, new_err, CkCallArgOwning())]
+    emit(&ctx, GICallExtern(err_dst, "Error", err_args))
+    emit(&ctx, GIAssign(0, op_consume(&ctx, &gmod, err_dst, CkReturn())))
+    emit_on_error_cleanups(&ctx, &gmod)
+    emit_drops_for_early_exit(&ctx, DSK_FUNCTION, Some(0))
+    set_terminator(&ctx, GTReturn(op_consume(&ctx, &gmod, 0, CkReturn())))
+    switch_to(&ctx, merge_bb)
+    return ok_result
+
+# Result→T auto-propagation at a CONSUMER position. Given a local `val`
+# that may hold a `throws`-call's `Result__<ok>__E`, unwrap it the way
+# Rust's `maybe_auto_propagate` (`exprs/mod.rs:73-86`) does: on Ok →
+# continue with the Ok payload; on Error → forward the RAW error payload
+# re-wrapped in the enclosing fn's `Result.Error` and early-return (with
+# on-error cleanups + drops). This is `lower_rethrow_expr` (`:7982`)
+# MINUS the user `transform` — the error is forwarded unchanged.
+#
+# CONSUMER-TARGETED design ([[feedback-rust-not-sacrosanct]]): called
+# EXPLICITLY at the 6 consumer sites, never from `lower_expr`, so match
+# scrutinees stay raw Results with ZERO suppress machinery.
+#
+# Idempotent no-op (returns `val` unchanged) unless BOTH gates hold:
+#  1. `val`'s type name (GtPtr-peeled by type_id_to_name) starts_with
+#     "Result__" — it actually IS a Result.
+#  2. The enclosing fn can propagate: local-0 (the return place, which
+#     the `throws` lowering types to the mono'd Result) starts_with
+#     "Result__" — subsumes Rust's should_auto_propagate/expected_type.
+# A non-throws caller (gate 2 fails) keeps the raw Result unchanged.
+int maybe_auto_propagate(LowerCtx &ctx, int val, GirModule &gmod):
+    if val < 0 or val >= ctx.locals.len():
+        return val
+    int val_tid = ctx.locals.get(val).unwrap().type_id
+    String result_tn = type_id_to_name(val_tid, &gmod)
+    # Gate 1: val must be a Result.
+    if not result_tn.starts_with("Result__"):
+        return val
+    # Gate 2: the enclosing fn must itself be `throws` (local 0 = Result).
+    int fn_result_type = ctx.locals.get(0).unwrap().type_id
+    String fn_result_tn = type_id_to_name(fn_result_type, &gmod)
+    if not fn_result_tn.starts_with("Result__"):
+        return val
+    # Split the consumed Result's payload types.
+    ResultPayloadTypes pt = result_payload_types(result_tn, &gmod)
+    int ok_tid = pt.ok_type
+    int err_tid = pt.err_type
+    int scrutinee_ptr = match_scrutinee_ptr(&ctx, &gmod, val)
+    int tag = emit_tag_read(&ctx, scrutinee_ptr, result_tn, &gmod)
+    int zero = add_local(&ctx, I64_TYPE, NO_NAME)
+    emit(&ctx, GIAssign(zero, OpConstI64(0)))
+    int is_ok = add_local(&ctx, BOOL_TYPE, NO_NAME)
+    emit(&ctx, GICmp(is_ok, CMP_EQ, I64_TYPE, OpCopy(tag), OpCopy(zero)))
+    int ok_bb = new_block(&ctx)
+    int err_bb = new_block(&ctx)
+    int merge_bb = new_block(&ctx)
+    # Ok-typed result for the unwrapped value.
+    int ok_result = add_local(&ctx, ok_tid, NO_NAME)
+    set_terminator(&ctx, GTBranch(OpCopy(is_ok), ok_bb, err_bb))
+    # Ok path: extract Ok payload (clone-extract), continue.
+    switch_to(&ctx, ok_bb)
+    int ok_val = emit_payload_read_mode(&ctx, scrutinee_ptr, result_tn, "Ok", 0, ok_tid, &gmod, false)
+    emit(&ctx, GIAssign(ok_result, op_consume(&ctx, &gmod, ok_val, CkAssign())))
+    set_terminator(&ctx, GTJump(merge_bb))
+    # Error path: forward the RAW error payload re-wrapped in the
+    # enclosing fn's Result.Error and early-return (no user transform).
+    switch_to(&ctx, err_bb)
+    int err_val = emit_payload_read_mode(&ctx, scrutinee_ptr, result_tn, "Error", 0, err_tid, &gmod, false)
+    int err_dst = add_local(&ctx, fn_result_type, NO_NAME)
+    Vector[Operand] err_args = [op_consume(&ctx, &gmod, err_val, CkCallArgOwning())]
     emit(&ctx, GICallExtern(err_dst, "Error", err_args))
     emit(&ctx, GIAssign(0, op_consume(&ctx, &gmod, err_dst, CkReturn())))
     emit_on_error_cleanups(&ctx, &gmod)
@@ -8256,6 +8403,8 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
     # diagnostic and let the iterator-protocol path handle the
     # non-enumerate variant.
     int coll_local = lower_expr(&ctx, probe_coll, &gmod)
+    # Auto-propagate a `throws` call used as the iterable (`for x in might()`).
+    coll_local = maybe_auto_propagate(&ctx, coll_local, &gmod)
     String coll_tn = local_type_name(coll_local, &ctx, &gmod)
     # Phase A — typed-metadata classification (CkVector/CkDeque) via
     # the lazy `resource_meta_for` accessor; retires the legacy
@@ -8640,6 +8789,8 @@ void lower_while(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] body, GirMod
     # Header: evaluate condition
     switch_to(&ctx, header_bb)
     int cond = lower_expr(&ctx, cond_expr, &gmod)
+    # Auto-propagate a `throws` call used as the condition (`while might():`).
+    cond = maybe_auto_propagate(&ctx, cond, &gmod)
     set_terminator(&ctx, GTBranch(OpCopy(cond), body_bb, exit_bb))
     # Body. Push loop targets so SBreak/SContinue know where to jump.
     ctx.loop_continue_stack.push(header_bb)

@@ -467,6 +467,12 @@ String guard_method_prefix(String name, GirModule &gmod):
 # structs in C. These arise from unmonomorphized templates leaking into the
 # type table.
 bool is_generic_placeholder_name(String name):
+    # Mono'd prelude generics (Result__<ok>__E / Option__<inner>) are concrete
+    # by construction — built only from RESOLVED return/throws types — even though
+    # their fields are synthesized from m.structs (not type_infos keys). The
+    # __E/__T suffix check below would otherwise wrongly skip Result__int__E etc.
+    if name.starts_with("Result__") or name.starts_with("Option__"):
+        return false
     # Single-letter type params: T, E, K, V, U
     if name == "T" or name == "E" or name == "K" or name == "V" or name == "U":
         return true

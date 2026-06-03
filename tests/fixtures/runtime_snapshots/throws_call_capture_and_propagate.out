@@ -1,0 +1,4 @@
+capture: 10
+vardecl-prop: 11
+argprop: 20
+arg-capture: 10
