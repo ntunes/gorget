@@ -4986,6 +4986,15 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     int iife_dst = add_local(&ctx, UNIT_TYPE, NO_NAME)
                     emit(&ctx, GIAssign(iife_dst, OpConstUnit()))
                     return iife_dst
+                case ENoneLiteral():
+                    # `None()` call form (e.g. `Dict[String,Option[int]] d = {"b":None()}`).
+                    # Route through lower_call as the bare-`None` ctor: lower_call's
+                    # fname=="None" + expected_type starts_with "Option__" branch
+                    # adopts Option__T and emits IEnumInit(tag=1). Without this the
+                    # call fell to `else: pass` → add_local(UNIT_TYPE), ignoring
+                    # expected_type and yielding a unit value at an Option boundary.
+                    String none_name = "None"
+                    return lower_call(&ctx, &none_name, &args, &targs, &gmod)
                 else:
                     pass
             return add_local(&ctx, UNIT_TYPE, NO_NAME)
@@ -6300,12 +6309,15 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # would trip drop-emission's "owned but live-past → clone before
             # call" rule and each put would mutate a throwaway clone while
             # `ddst` stayed empty (same hazard the array arm documents at
-            # :5804-5814). Key → CkCallArgBorrow (read-only; gorget_map_put
-            # hashes/clones it internally); value → CkCallArgOwning (the map
-            # takes ownership at the consuming position).
+            # :5804-5814). Both key AND value → CkCallArgOwning: gorget_map_put
+            # is the NO-CLONE ownership-transfer variant — the map TAKES
+            # ownership of both at this consuming position. Passing the key as
+            # CkCallArgBorrow double-freed an owned String key (the put-loop
+            # never zeroed the source, so drop-emission dropped it AND the map
+            # later dropped its stored copy).
             int dict_put_i = 0
             while dict_put_i < dict_pair_n:
-                Vector[Operand] put_args = [OpBorrow(ddst), op_consume(&ctx, &gmod, dict_key_locals.get(dict_put_i).unwrap(), CkCallArgBorrow()), op_consume(&ctx, &gmod, dict_val_locals.get(dict_put_i).unwrap(), CkCallArgOwning())]
+                Vector[Operand] put_args = [OpBorrow(ddst), op_consume(&ctx, &gmod, dict_key_locals.get(dict_put_i).unwrap(), CkCallArgOwning()), op_consume(&ctx, &gmod, dict_val_locals.get(dict_put_i).unwrap(), CkCallArgOwning())]
                 emit(&ctx, GICallExtern(-1, "gorget_map_put", put_args))
                 dict_put_i = dict_put_i + 1
             return ddst
@@ -7574,21 +7586,25 @@ void lower_index_assign(LowerCtx &ctx, SpannedExpr base_expr, SpannedExpr idx_ex
         return
     # gorget_array_set / gorget_map_put take self by pointer (&base),
     # key/index by value, and value by pointer-or-value depending on
-    # element type. Use OpMove / OpBorrow so needs_ptr_arg emits
-    # SlotAddr for the collection pointer (Phase C step 5b: borrowed
-    # base → OpBorrow, owned → OpMove).
-    Operand base_op = OpMove(base)
-    GirLocal idx_base_loc = ctx.locals.get(base).unwrap()
-    match idx_base_loc.ownership:
-        case LoBorrowed():
-            base_op = OpBorrow(base)
-        else:
-            pass
+    # element type. An index-assign NEVER consumes its base — it mutates
+    # in place via the base's address. Mirror lower_field_write's documented
+    # fix (~:7394): Ptr/static base → OpCopy (the local already holds the
+    # address); owned OR borrowed base → OpBorrow (its slot address), NOT
+    # OpMove. An OpMove gets rewritten to OpClone by the liveness pass when
+    # the base is live past the store (it always is — `d[k]=v` keeps `d`
+    # live), which clones-and-discards the base and never mutates the
+    # original (the d[k]=v clone-bomb: every assign mutated a throwaway).
+    Operand base_op = OpBorrow(base)
+    if is_ptr_type(base_tid, &gmod):
+        base_op = OpCopy(base)
     # `base[idx] = val` → setter(base, idx, val): the collection takes
-    # ownership of `val` (consuming-position per CLAUDE.md). idx is read
-    # only (gorget_map_put hashes/clones the key internally for Dicts,
-    # uses by-value for arrays). val → CkCallArgOwning, idx → borrow.
-    Vector[Operand] set_args = [base_op, op_consume(&ctx, &gmod, idx, CkCallArgBorrow()), op_consume(&ctx, &gmod, val, CkCallArgOwning())]
+    # ownership of BOTH key/idx AND val (consuming position per CLAUDE.md).
+    # gorget_map_put is the NO-CLONE ownership-transfer variant — it does
+    # NOT hash/clone the key internally; the map TAKES the key. So key →
+    # CkCallArgOwning (an owned String key would otherwise double-free).
+    # For Vector int index this is inert (by-value scalar, no drop). val →
+    # CkCallArgOwning (unchanged).
+    Vector[Operand] set_args = [base_op, op_consume(&ctx, &gmod, idx, CkCallArgOwning()), op_consume(&ctx, &gmod, val, CkCallArgOwning())]
     emit(&ctx, GICallExtern(-1, setter, set_args))
 
 # Look up the parent enum name for a type. If `type_name` itself is an

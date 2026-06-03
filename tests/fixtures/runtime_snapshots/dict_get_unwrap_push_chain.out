@@ -1,0 +1,9 @@
+preds[0].len = 3
+  preds[0][0] = 10
+  preds[0][1] = 20
+  preds[0][2] = 30
+preds[1].len = 1
+  preds[1][0] = 99
+eng len = 2
+  Alice
+  Bob
