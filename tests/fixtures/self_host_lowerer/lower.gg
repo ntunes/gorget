@@ -174,7 +174,6 @@ struct LowerCtx:
     int current_block
     # Maps local-binding name → GIR local id.
     Dict[String, int] named_locals
-    int next_closure_id
     # Stack of (continue_target, break_target) bb ids for the enclosing
     # loops. break / continue inside a loop body jump to the innermost
     # pair. Pushed at loop entry, popped at exit. Parallel Vectors because
@@ -5843,9 +5842,16 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             int ddst = add_local(&ctx, I64_TYPE, NO_NAME)
             return ddst
         case EBlock(block_stmts):
-            lower_stmts(&ctx, block_stmts, &gmod, false)
-            int bdst = add_local(&ctx, UNIT_TYPE, NO_NAME)
-            return bdst
+            # Block in value position — lower via `lower_block_expr` and return
+            # its tail value (was dropping it into a fresh UNIT local). Mirrors
+            # Rust `lower_expr` Block dispatch (`exprs/mod.rs` → lower_block_expr
+            # `:3203`), sibling of the EMatch/EIf value-position cases.
+            return lower_block_expr(&ctx, block_stmts, &gmod)
+        case EDo(do_stmts):
+            # `do:` block in value position — same as EBlock: lower the block
+            # and return its tail value (was falling to the UNIT `else`). Also
+            # covers multi-line `catch` recovery bodies (parser.gg:1700-1713).
+            return lower_block_expr(&ctx, do_stmts, &gmod)
         case ESelfExpr():
             if nl_contains(&ctx, "self"):
                 return nl_get(&ctx, "self")
@@ -6013,7 +6019,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             emit(&ctx, GIAssign(it_dst, OpConstUnit()))
             return it_dst
         else:
-            # Remaining: ESetComp, EDictComp, EListComp, EDo, ERange
+            # Remaining: ESetComp, EDictComp, EListComp, ERange
             int fallback = add_local(&ctx, UNIT_TYPE, NO_NAME)
             emit(&ctx, GIAssign(fallback, OpConstUnit()))
             return fallback
@@ -8896,7 +8902,7 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
     Vector[DropScope] _de_scopes = []
     Vector[DropEmission] _de_queue = []
     Vector[Vector[Stmt]] _on_err_blocks = []
-    LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, !_named_locals, 0, !_lc_stk, !_lb_stk, "", "", "", false, fdef.name.clone(), DropElaborator(!_de_scopes), !_de_queue, -1, !_on_err_blocks)
+    LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, !_named_locals, !_lc_stk, !_lb_stk, "", "", "", false, fdef.name.clone(), DropElaborator(!_de_scopes), !_de_queue, -1, !_on_err_blocks)
 
     # Push the function-scope drop frame. Pop emits GIDropIfAlive for
     # every owned resource local registered during lowering (param or
@@ -9090,7 +9096,7 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
         Vector[DropScope] _de_scopes2 = []
         Vector[DropEmission] _de_queue2 = []
         Vector[Vector[Stmt]] _on_err_blocks2 = []
-        LowerCtx ctx = LowerCtx([], [], [], 0, !_named_locals2, 0, !_lc_stk2, !_lb_stk2, "", "", "", false, mangled.clone(), DropElaborator(!_de_scopes2), !_de_queue2, -1, !_on_err_blocks2)
+        LowerCtx ctx = LowerCtx([], [], [], 0, !_named_locals2, !_lc_stk2, !_lb_stk2, "", "", "", false, mangled.clone(), DropElaborator(!_de_scopes2), !_de_queue2, -1, !_on_err_blocks2)
         # bb0
         Vector[Instruction] init_insts = []
         ctx.block_insts.push(!init_insts)
@@ -10344,7 +10350,7 @@ void lower_closure_body(String call_name, Vector[int] !abi_param_types, int self
     Vector[DropScope] _cde_scopes = []
     Vector[DropEmission] _cde_queue = []
     Vector[Vector[Stmt]] _con_err = []
-    LowerCtx cctx = LowerCtx([], !cblock_insts, !cblock_terms, 0, !_cnamed, 0, !_clc, !_clb, "", "", "", false, call_name.clone(), DropElaborator(!_cde_scopes), !_cde_queue, ret_type, !_con_err)
+    LowerCtx cctx = LowerCtx([], !cblock_insts, !cblock_terms, 0, !_cnamed, !_clc, !_clb, "", "", "", false, call_name.clone(), DropElaborator(!_cde_scopes), !_cde_queue, ret_type, !_con_err)
 
     push_drop_scope(&cctx.drop_elab, DSK_FUNCTION)
 
@@ -11888,7 +11894,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         Vector[DropScope] _de_scopes3 = []
                         Vector[DropEmission] _de_queue3 = []
                         Vector[Vector[Stmt]] _on_err_blocks3 = []
-                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, 0, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone(), DropElaborator(!_de_scopes3), !_de_queue3, -1, !_on_err_blocks3)
+                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone(), DropElaborator(!_de_scopes3), !_de_queue3, -1, !_on_err_blocks3)
                         Vector[Instruction] tinit = []
                         tctx.block_insts.push(!tinit)
                         tctx.block_terms.push(GTNone())
