@@ -28,14 +28,24 @@ Do NOT port the snapshot/restore (no-op). Fix the base ownership.
 
 ## Root cause (writer-site, verified in emitted C)
 `tests/fixtures/self_host_lowerer/lower.gg`:
-- `lower_field_write` (~:7099, the store emit ~:7120-7126) and
-- `emit_field_write_from_local` (~:7132, ~:7152-7157)
+- `lower_field_write` (def :7099; the ownership match **:7122-7126** —
+  `LoBorrowed → OpBorrow(base)` already correct, `else → OpMove(base)`) and
+- `emit_field_write_from_local` (def :7132; match **:7153-7157**, same shape)
 
-emit `OpMove(base)` for a non-borrowed (`LoOwned`) struct base. The OpMove-of-
-resource path in `lir_lower` (~:2349-2521) then clones the whole base struct,
-writes the field into the clone, and the clone is discarded. Verified C from
+emit `OpMove(base)` for a non-borrowed (`LoOwned`) struct base. ⚠ **WHERE the
+clone is inserted (review precision):** NOT in lir_lower — the GIR **liveness
+post-pass** `wire_liveness_into_modes` (lower.gg:~2487) → `wire_one_operand`
+(:~2559) → `decide_operand_at_consuming_arg` (:~1591, the `LoOwned`-not-last-use
+arm :~1629) rewrites the writer's `OpMove(base)` → `OpClone(base)` because the
+base is LIVE past the store. The emitted GIR shows `call_extern @__field_write_…
+(clone _5, clone _8)` — base = `clone`. lir_lower then clones the whole base
+struct, writes the field into the clone, discards it. Verified C from
 `after_use()`: `Foo__clone(&__s5) → __s22; memcpy(&__s22->a, items_clone); /*
-__s22 discarded */` then `f.a` is read from the un-mutated `__s5` → empty.
+__s22 discarded */` then `f.a` is read from un-mutated `__s5` → empty → SEGV.
+A prior `base_is_ptr` branch (:7116-7118 / :7147-7149) emits `OpCopy(base)` for
+`GtPtr`/`GtMutPtr` bases, so `&self`/`!self`/bare-resource-param bases NEVER
+reach the ownership match — they're already correct. Only the `LoOwned`
+(by-value) struct base hits the buggy `OpMove`.
 
 ## Rust reference (the oracle — MIRROR THE SEMANTICS)
 `src/ir/lowering/stmts/assigns.rs:~395-458`: a field-store builds a
@@ -67,8 +77,19 @@ by pointer — and the Rust in-place Place store.
 ## Expected flips (RE-RUN each — count only WHOLE-stdout MATCH)
 HIGH confidence (plain field-store crashes): `field_store_auto_clones_live_source`,
 `move_across_branches`, `option_result_field_store`. PROBABLE (may carry a
-secondary diff — verify): `cow_nested_field_mutation`, `empty_literal_struct_field`,
-`string_struct_complex`. Realistic **+3 to +6**.
+secondary diff — verify): `empty_literal_struct_field`, `string_struct_complex`.
+⚠ `cow_nested_field_mutation` will likely NOT fully flip from this fix alone —
+its `0/0/4` (vs oracle `alpha/alpha/4`) comes from a SEPARATE `c.items[0]`
+borrow-read bug, not the field-store base bug (review-verified; it doesn't even
+crash). Do NOT count it as a regression if it stays unmatched. Realistic **+3 to
++5**.
+
+## Post-fix verification of the fix mechanism (review note)
+After the edit, confirm the GIR for `f.field = x` shows `borrow _5` (NOT `move`/
+`clone`) for the BASE operand — `OpBorrow` is not rewritten by `wire_one_operand`
+(it only matches OpMove/OpClone), so it bypasses the clone-insertion. That's the
+direct proof the clone-and-discard is gone. (No need to hunt in lir_lower — the
+clone originates in the GIR liveness pass.)
 
 ## File zone
 ONLY `tests/fixtures/self_host_lowerer/lower.gg` (`lower_field_write` ~:7099,
