@@ -15,7 +15,12 @@ whole-stdout MATCH) — 3 estimates this session were ~0 real until proven. And 
 chains are ~0 parity (the real parity is SERIAL in the closure/Result `lower.gg`/`lir_lower.gg`
 cluster) — parallelize the ORCHESTRATION (scout next while executing current), not the chains.**
 
-**⬅ ACTIVE NEXT (closure Phase-2 continuation — re-verify by RUNNING; full discipline ≥3 reviews):**
+**⬅ TOP NEXT (READY / high-leverage — full discipline ≥3 reviews, re-verify by RUNNING; see "## High Priority"):**
+1. **static-MUTABLE-receiver fix** — root-caused + PROTOTYPED (8 lines, MEASURED zero-regression, +1 parity `static_collection`; patch at `docs/plans/artifacts/static_mutable_receiver_prototype.patch`). Cleanest immediate win. THEN the 2 sibling gaps it surfaced: Dict-literal-static-init (A, blocks `static_vec_literal`) + scalar-static-assign (B).
+2. **Phase-2 Stage 1 — NOW UNBLOCKED** (the for-over-static fix removed the blocker): re-apply the ready `builtin_method_decl_port.md` table refactor; re-verify the name-list→table swap keeps `String.slice` dispatch + clone count stable + `fixed_point` GREEN.
+3. **closure Phase-2 continuation** (below) — deeper, the remaining closure parity.
+
+**⬅ closure Phase-2 continuation (re-verify by RUNNING; full discipline ≥3 reviews):**
 - **Phase 2b — ByValue RESOURCE/CoW captures** (String/Vector/struct). The Step-B 2a guard STUBS
   these today (`cow_closure_capture` etc. stay WRONG, not false-MATCH). Needs make-site CoW
   clone/move at capture + `is_closure_env`-style ownership so the consume-validator skips the alias
