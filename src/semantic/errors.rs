@@ -208,6 +208,13 @@ pub enum SemanticErrorKind {
     /// Method doesn't exist on type.
     NoMethodFound { method: String, type_: String },
 
+    /// `unwrap` / `expect` / `unwrap_or` called on a receiver whose type is
+    /// neither `Option` nor `Result`. These methods only exist on the optional
+    /// types; on anything else they used to silently fall through the IR
+    /// lowering to a no-op (returning the receiver unchanged). Surfacing it
+    /// here makes the failure a clean type error at `gg check`.
+    UnwrapOnNonOptional { method: String, type_: String },
+
     /// A method-level generic param couldn't be inferred from the
     /// call's arg types. Emitted by Phase 2c inference (see
     /// `docs/devbook/09-type-checking.md`, method-level generic inference)
@@ -522,6 +529,13 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::NoMethodFound { method, type_ } => {
                 write!(f, "no method `{method}` found on type `{type_}`")
+            }
+            SemanticErrorKind::UnwrapOnNonOptional { method, type_ } => {
+                write!(
+                    f,
+                    "method `{method}` requires an `Option` or `Result` receiver, \
+                     but `{type_}` is neither"
+                )
             }
             SemanticErrorKind::MethodGenericInferenceFailed { method, type_, unresolved, reason } => {
                 write!(

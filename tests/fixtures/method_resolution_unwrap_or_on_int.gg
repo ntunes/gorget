@@ -1,0 +1,7 @@
+# Brief A Phase 1: `unwrap_or` on a non-Option/Result receiver must be a CLEAN
+# type error at `gg check`. Before the fix this passed `gg check` and ran as a
+# silent no-op.
+void main():
+    int x = 5
+    int y = x.unwrap_or(0)
+    print(y)

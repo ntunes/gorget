@@ -583,29 +583,70 @@ pub(super) fn lower_method_call(
         // display/debug via equip blocks).
     }
 
-    // .unwrap() / .expect() / .unwrap_or() on Option/Result → inline extraction
-    // On non-Option/Result types → pass-through (unwrap is a no-op)
+    // .unwrap() / .expect() / .unwrap_or() on Option/Result → inline extraction.
+    //
+    // The type checker (`is_option_or_result_receiver`, Brief A Phase 1) now
+    // REJECTS these methods on a non-Option/Result *source* expression at
+    // `gg check`, so the old blanket `if !is_option_or_result { return recv }`
+    // no-op (which masked the real bug — unwrap on an `int`/struct silently
+    // returned the receiver) is gone. What REMAINS is a narrower, legitimate
+    // no-op: when the LOWERED receiver operand is no longer an Option/Result
+    // mangled type, the value was already destructured upstream (e.g. the GIR
+    // lowering of `parse_float(val)` produces a bare `double` temp, so
+    // `parse_float(val).unwrap()` arrives with a `double` receiver). In that
+    // case `unwrap` is a genuine no-op on an already-extracted payload — return
+    // it unchanged rather than falling through to the `I64_TYPE` mis-typing
+    // branch. This is keyed off the lowered TYPE, not the source — the checker
+    // gate already guaranteed the source was optional.
     if matches!(method_name, "unwrap" | "expect" | "unwrap_or") {
         let type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
-        // Read typed `enum_category` (Phase A) — the dead `n.starts_with`
-        // fallbacks are no longer needed: Phase A registration sets the
-        // category for every Option/Result.
-        let is_option_or_result = type_name.as_ref()
-            .map(|n| ctx.type_registry.is_option_or_result(n))
-            .unwrap_or(false);
-        if !is_option_or_result {
-            // Not an Option/Result — unwrap is a no-op
-            return recv;
-        }
         // For Option/Result, extract the inner value via extern call that C backend handles
         if let Some(ref tn) = type_name {
             // Read typed `enum_category` (Phase A) for Option vs Result
             // discrimination. The downstream inner-name slicing
             // (`Option__T`/`Result__Ok__Err` → T or Ok) is the C-mangling
             // boundary and stays — only the discriminator is migrated.
+            //
+            // FALLBACK on the mangled name prefix when `enum_category` is
+            // absent: some Result instantiations with a USER error enum (e.g.
+            // `Result[float, ParseError]`) reach here without their
+            // `enum_category` registered (a separate upstream gap — see
+            // TODO.md "Result enum_category not set for user-error-typed
+            // Results"). Before Brief A's checker gate the silent no-op masked
+            // this; now that `unwrap` is guaranteed-Option/Result by the
+            // checker, we must NOT fall through to the `I64_TYPE` garbage
+            // branch — that mis-typed the Ok payload (a `double` got read as
+            // `int64_t` + bogus `+8` ptr arithmetic). The name prefix is the
+            // same C-mangling boundary the inner-type slicing already trusts.
             use crate::ir::types::EnumCategory;
             let cat = ctx.type_registry.get_type_def(tn)
-                .and_then(|td| td.metadata.enum_category);
+                .and_then(|td| td.metadata.enum_category)
+                .or_else(|| {
+                    // Fall back on the mangled name prefix when `enum_category`
+                    // is absent — covers Result instantiations with a USER error
+                    // enum (e.g. `Result[float, ParseError]`) that reach here
+                    // without their category registered (a separate upstream gap).
+                    if tn.starts_with("Option__") {
+                        Some(EnumCategory::Option)
+                    } else if tn.starts_with("Result__") {
+                        Some(EnumCategory::Result)
+                    } else {
+                        None
+                    }
+                });
+            // If the lowered receiver is NOT an Option/Result mangled type, the
+            // Result/Option was ALREADY destructured upstream (e.g. the GIR
+            // lowering of `parse_float(val)` yields a bare `double` temp, so
+            // `parse_float(val).unwrap()` arrives here with a `double` receiver).
+            // `unwrap` on an already-extracted payload is a genuine no-op —
+            // return it unchanged. The Brief A checker gate guarantees the
+            // SOURCE expression was Option/Result, so this is never the
+            // unwrap-on-non-optional bug (that's rejected at `gg check`); it is
+            // only the already-unwrapped fast path. Do NOT fall through to the
+            // `I64_TYPE` branch below, which would mis-type the payload.
+            if cat.is_none() {
+                return recv;
+            }
             let is_result = cat == Some(EnumCategory::Result);
             let inner_type = if cat == Some(EnumCategory::Option) {
                 let inner_name = &tn["Option__".len()..];
@@ -747,6 +788,14 @@ pub(super) fn lower_method_call(
                 }
             }
         }
+        // Fell through without extracting: either `type_name` couldn't be
+        // inferred, or the receiver operand isn't a Copy/Move place (e.g. a
+        // constant). The checker already guaranteed the source was
+        // Option/Result, so the value is effectively already in hand — `unwrap`
+        // is a no-op here. Return the receiver rather than dropping into the
+        // generic method-dispatch path below (which would mangle a runtime
+        // symbol the C backend can't link).
+        return recv;
     }
 
     // .unwrap_error() / .unwrap_err() on Result → extract Error payload with MoveZero

@@ -1930,6 +1930,31 @@ impl<'a> TypeChecker<'a> {
                         if let Some(ret_type) = self.builtin_method_type(resolved_receiver, &method.node) {
                             self.expr_types.insert(expr.span, ret_type);
                             ret_type
+                        } else if matches!(method.node.as_str(), "unwrap" | "expect" | "unwrap_or")
+                            && !self.is_option_or_result_receiver(resolved_receiver)
+                            && !matches!(self.types.get(resolved_receiver), ResolvedType::Var(_))
+                            && resolved_receiver != self.types.error_id
+                        {
+                            // Phase 1 (Brief A): `unwrap`/`expect`/`unwrap_or` on a
+                            // non-Option/Result receiver. We only reach here when the
+                            // method resolved through NO avenue above (trait registry,
+                            // trait default, closure-Option/Result, builtin protocol),
+                            // so a user-defined `unwrap` via equip is already handled.
+                            // `builtin_method_type` returns the inner type for genuine
+                            // Option/Result receivers, so those never land here either.
+                            // Without this, the call defaulted to `error_id` and the IR
+                            // lowering silently turned it into a no-op (returning the
+                            // receiver unchanged). The `Var`/`error_id` guards avoid
+                            // false positives on receivers whose type inference is still
+                            // incomplete (we'd produce a spurious error on valid code).
+                            self.error(
+                                SemanticErrorKind::UnwrapOnNonOptional {
+                                    method: method.node.clone(),
+                                    type_: self.describe_resolved_type(resolved_receiver),
+                                },
+                                expr.span,
+                            );
+                            self.types.error_id
                         } else {
                             // Name-based fallback for cross-module equip methods
                             // where TypeId doesn't match.
@@ -4815,6 +4840,22 @@ impl<'a> TypeChecker<'a> {
             // Dict[K, V].put(K, V) / .insert(K, V) / .set(K, V)
             ("Dict", "put") | ("Dict", "insert") | ("Dict", "set") => vec![elem, val],
             _ => Vec::new(),
+        }
+    }
+
+    /// True when `receiver_type` resolves to the prelude `Option` or `Result`
+    /// enum (the only receivers for which `unwrap`/`expect`/`unwrap_or` exist).
+    /// Detected via the resolved def NAME at the semantic layer — NOT the
+    /// IR-layer `enum_category`, which is populated only during `lower_module`
+    /// after semantic analysis and is unreachable from here.
+    fn is_option_or_result_receiver(&self, receiver_type: TypeId) -> bool {
+        let resolved = self.resolve_type(receiver_type);
+        match self.types.get(resolved) {
+            ResolvedType::Generic(def_id, _) | ResolvedType::Defined(def_id) => {
+                let name = &self.scopes.get_def(*def_id).name;
+                name == "Option" || name == "Result"
+            }
+            _ => false,
         }
     }
 

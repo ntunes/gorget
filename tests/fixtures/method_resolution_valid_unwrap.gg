@@ -1,0 +1,31 @@
+# Brief A Phase 1: valid `unwrap`/`expect`/`unwrap_or` on genuine Option/Result
+# receivers must STILL compile and run after the type-checker gate + the
+# IR-lowering no-op deletion. This is the positive companion to the
+# method_resolution_*_on_* negative fixtures.
+
+Result[int, String] try_parse(int n):
+    if n > 0:
+        return Ok(n * 10)
+    return Error("negative")
+
+void main():
+    # Option from a collection borrow.
+    Vector[int] v = [11, 22, 33]
+    Option[int &] hit = v.get(1)
+    int a = hit.unwrap()
+    print(a)
+
+    # unwrap_or on a missing index → default.
+    Option[int &] miss = v.get(99)
+    int b = miss.unwrap_or(77)
+    print(b)
+
+    # Result.unwrap on an Ok value.
+    Result[int, String] r = try_parse(4)
+    int c = r.unwrap()
+    print(c)
+
+    # expect on an Option.
+    Option[int &] hit2 = v.get(2)
+    int d = hit2.expect("present")
+    print(d)

@@ -5338,6 +5338,40 @@ fn check_gg_silent_for(fixture: &str, forbidden_stderr: &str) {
     );
 }
 
+// Brief A Phase 1: `unwrap`/`expect`/`unwrap_or` on a non-Option/Result
+// receiver is now a CLEAN type error at `gg check` (was a silent IR-lowering
+// no-op that built and ran, returning the receiver unchanged).
+#[test]
+fn method_resolution_unwrap_on_int_errors() {
+    check_gg_fails(
+        "method_resolution_unwrap_on_int.gg",
+        "`unwrap` requires an `Option` or `Result` receiver",
+    );
+}
+
+#[test]
+fn method_resolution_expect_on_struct_errors() {
+    check_gg_fails(
+        "method_resolution_expect_on_struct.gg",
+        "`expect` requires an `Option` or `Result` receiver",
+    );
+}
+
+#[test]
+fn method_resolution_unwrap_or_on_int_errors() {
+    check_gg_fails(
+        "method_resolution_unwrap_or_on_int.gg",
+        "`unwrap_or` requires an `Option` or `Result` receiver",
+    );
+}
+
+#[test]
+fn method_resolution_valid_unwrap_still_compiles() {
+    // The positive companion: valid Option/Result unwrap/expect/unwrap_or
+    // must still compile and run after the gate + no-op deletion.
+    run_gg("method_resolution_valid_unwrap.gg", "22\n77\n40\n33");
+}
+
 #[test]
 fn lint_suggest_throws_basic() {
     // Positive case — the lint fires once for `add_one`.

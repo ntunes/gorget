@@ -1,0 +1,11 @@
+# Brief A Phase 1: `expect` on a struct receiver must be a CLEAN type error at
+# `gg check`. Before the fix this passed `gg check`, built, and ran as a silent
+# no-op (returning the struct unchanged).
+struct Point:
+    int x
+    int y
+
+void main():
+    Point p = Point(1, 2)
+    Point q = p.expect("m")
+    print(q.x)
