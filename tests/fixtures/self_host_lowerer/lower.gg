@@ -3503,6 +3503,26 @@ bool static_is_literal_init(SpannedExpr sd_val):
         else:
             return false
 
+# True for a SCALAR-literal RHS (int / float / bool), including a leading
+# unary `-` / `+` thereof (`static int x = -1`). Scalar statics are
+# MUTABLE module-level globals (a `static` is not a `const`), so they are
+# registered under `gmod.statics` with a runtime-init synth fn rather than
+# const-folded — see the IStaticDecl pre-pass.
+bool static_is_scalar_literal_init(SpannedExpr sd_val):
+    match sd_val.expr:
+        case EIntLiteral(_):
+            return true
+        case EFloatLiteral(_):
+            return true
+        case EBoolLiteral(_):
+            return true
+        case EUnaryOp(op, inner_box):
+            if op == "-" or op == "+":
+                return static_is_scalar_literal_init(*inner_box)
+            return false
+        else:
+            return false
+
 String static_init_fn_name(String sd_name):
     return "__gg_static_init_" + sd_name
 
@@ -6988,6 +7008,24 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                             emit(&ctx, GIDerefStore(lid, op_consume(&ctx, &gmod, val, CkAssign()), asn_inner_ty))
                         else:
                             emit(&ctx, GIAssign(lid, op_consume(&ctx, &gmod, val, CkAssign())))
+                    elif static_contains(&gmod, name):
+                        # Module-level mutable-static WRITE (`STATIC = value`).
+                        # A `static` is mutable storage; the destination is the
+                        # global itself. `lower_place_base` returns a
+                        # `GtMutPtr(sty)` slot holding the global's address
+                        # (`__global_ref__<name>` → IGlobalAddr), so we
+                        # deref-store the RHS through it. Without this the write
+                        # was silently dropped (statics fell through every local
+                        # arm). Mirrors Rust gg's assign into a static
+                        # `Place{global,[Deref]}` (assigns.rs:389-392).
+                        int sty = static_lookup_type(&gmod, name)
+                        int prev_expected_st = ctx.expected_type
+                        if sty != I64_TYPE and sty != UNIT_TYPE:
+                            ctx.expected_type = sty
+                        int sval = lower_expr(&ctx, value_expr, &gmod)
+                        ctx.expected_type = prev_expected_st
+                        int sptr = lower_place_base(&ctx, target_expr, &gmod)
+                        emit(&ctx, GIDerefStore(sptr, op_consume(&ctx, &gmod, sval, CkAssign()), sty))
                 case EFieldAccess(base_box, field_name):
                     # self.field = value
                     # Lower as: __field_write_TYPE_FIELD(&base, value).
@@ -7108,6 +7146,22 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                             int op_dst = add_local(&ctx, lhs_type, NO_NAME)
                             emit(&ctx, GIBinOp(op_dst, map_compound_binop(op), lhs_type, op_consume(&ctx, &gmod, lhs_val, CkBinOpArg()), op_consume(&ctx, &gmod, rhs_val, CkBinOpArg())))
                             emit(&ctx, GIAssign(lid, op_consume(&ctx, &gmod, op_dst, CkAssign())))
+                    elif static_contains(&gmod, name):
+                        # Module-level mutable-static COMPOUND-assign
+                        # (`STATIC += y` → `STATIC = STATIC <op> y`). Read the
+                        # current value via `lower_expr` (routes through
+                        # `lower_static_ref_ident` → `__global_ref__` load), run
+                        # the binop at the static's type, then store the result
+                        # back THROUGH the global-address pointer that
+                        # `lower_place_base` yields. Mirrors Rust gg's compound
+                        # assign into a static (assigns.rs:1120-1146).
+                        int csty = static_lookup_type(&gmod, name)
+                        int clhs_val = lower_expr(&ctx, target_expr, &gmod)
+                        int crhs_val = lower_expr(&ctx, value_expr, &gmod)
+                        int cop_dst = add_local(&ctx, csty, NO_NAME)
+                        emit(&ctx, GIBinOp(cop_dst, map_compound_binop(op), csty, op_consume(&ctx, &gmod, clhs_val, CkBinOpArg()), op_consume(&ctx, &gmod, crhs_val, CkBinOpArg())))
+                        int csptr = lower_place_base(&ctx, target_expr, &gmod)
+                        emit(&ctx, GIDerefStore(csptr, op_consume(&ctx, &gmod, cop_dst, CkAssign()), csty))
                 case EFieldAccess(base_box, field_name):
                     # self.field <op>= value
                     # Lower as: self.field = self.field <op> value.
@@ -11747,50 +11801,64 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                             case None:
                                 pass
             case IStaticDecl(sd_ty, sd_name, sd_val):
-                Option[int] sd_eval = eval_const_int_expr(sd_val, &gmod)
-                match sd_eval:
-                    case Some(sv):
-                        gmod.const_decls.put(sd_name.clone(), sv)
-                    case None:
-                        # Float fallback: `float EPSILON = 0.000001`
-                        # at module scope (e.g., lib/xtd/math3d.gg).
-                        Option[float] sd_feval = eval_const_float_expr(sd_val, &gmod)
-                        match sd_feval:
-                            case Some(sfv):
-                                gmod.float_const_decls.put(sd_name.clone(), sfv)
-                            case None:
-                                # Runtime-call fallback: `public static File
-                                # stdout = _stdout_handle()` etc. Mirrors Rust
-                                # gg's `LoweringContext::global_names`. Helper
-                                # extracts the C runtime symbol; helper lives
-                                # in its own fn so this dispatch site stays
-                                # tight (the int/float cascade already lives
-                                # in lower_expr-adjacent stack frames).
-                                bool sd_handled = try_register_static_runtime_call(&gmod, sd_ty, sd_name, sd_val)
-                                if not sd_handled:
-                                    # Recognise `Option[T] X = None` and record the
-                                    # const's concrete Option type_id, so an EIdentifier
-                                    # reference emits a properly-typed `None` (IEnumInit,
-                                    # tag 1) rather than an 8-byte OpConstUnit() that
-                                    # add_local's drop-emission clone over-reads.
-                                    match sd_val.expr:
-                                        case ENoneLiteral():
-                                            int opt_tid = map_ast_type(sd_ty, &gmod)
-                                            gmod.none_decls.put(sd_name.clone(), opt_tid)
-                                        else:
-                                            # Composite-init static. Two Rust-faithful
-                                            # paths (see the helper docstrings):
-                                            #  (2) collection CONSTRUCTOR (`Vector[int]()`
-                                            #      / `Dict()`) → direct allocator init_expr,
-                                            #      no synth fn (tried first).
-                                            #  (1) array/dict LITERAL (`= [..]` / `= {..}`)
-                                            #      → register a synth-fn call; the matching
-                                            #      `__gg_static_init_<name>()` FunctionDef is
-                                            #      synthesized + lowered in the non-generic
-                                            #      function loop below (full registry ready).
-                                            bool sd_ctor = try_register_collection_ctor_static(&gmod, sd_ty, sd_name, sd_val)
-                                            if not sd_ctor and static_is_literal_init(sd_val):
-                                                register_literal_static(&gmod, sd_ty, sd_name)
+                # A `static` is MUTABLE module-level storage, NOT a `const`.
+                # A scalar-literal init (`static int x = 0`, `static float
+                # y = -1.5`, `static bool b = true`) is a mutable GLOBAL —
+                # register it under `gmod.statics` (runtime-init synth fn)
+                # so that an SAssign / SCompoundAssign to it writes back,
+                # rather than const-folding it into `const_decls` (which
+                # would silently drop the write). Mirrors Rust's
+                # every-StaticDecl-is-a-mutable-Global rule
+                # (`src/ir/lowering/mod.rs:1224-1232`). Only `const`s (the
+                # IConstDecl arm above) fold to compile-time values.
+                bool sd_is_scalar = static_is_scalar_literal_init(sd_val)
+                if sd_is_scalar:
+                    register_literal_static(&gmod, sd_ty, sd_name)
+                else:
+                    Option[int] sd_eval = eval_const_int_expr(sd_val, &gmod)
+                    match sd_eval:
+                        case Some(sv):
+                            gmod.const_decls.put(sd_name.clone(), sv)
+                        case None:
+                            # Float fallback: `float EPSILON = 0.000001`
+                            # at module scope (e.g., lib/xtd/math3d.gg).
+                            Option[float] sd_feval = eval_const_float_expr(sd_val, &gmod)
+                            match sd_feval:
+                                case Some(sfv):
+                                    gmod.float_const_decls.put(sd_name.clone(), sfv)
+                                case None:
+                                    # Runtime-call fallback: `public static File
+                                    # stdout = _stdout_handle()` etc. Mirrors Rust
+                                    # gg's `LoweringContext::global_names`. Helper
+                                    # extracts the C runtime symbol; helper lives
+                                    # in its own fn so this dispatch site stays
+                                    # tight (the int/float cascade already lives
+                                    # in lower_expr-adjacent stack frames).
+                                    bool sd_handled = try_register_static_runtime_call(&gmod, sd_ty, sd_name, sd_val)
+                                    if not sd_handled:
+                                        # Recognise `Option[T] X = None` and record the
+                                        # const's concrete Option type_id, so an EIdentifier
+                                        # reference emits a properly-typed `None` (IEnumInit,
+                                        # tag 1) rather than an 8-byte OpConstUnit() that
+                                        # add_local's drop-emission clone over-reads.
+                                        match sd_val.expr:
+                                            case ENoneLiteral():
+                                                int opt_tid = map_ast_type(sd_ty, &gmod)
+                                                gmod.none_decls.put(sd_name.clone(), opt_tid)
+                                            else:
+                                                # Composite-init static. Two Rust-faithful
+                                                # paths (see the helper docstrings):
+                                                #  (2) collection CONSTRUCTOR (`Vector[int]()`
+                                                #      / `Dict()`) → direct allocator init_expr,
+                                                #      no synth fn (tried first).
+                                                #  (1) array/dict LITERAL (`= [..]` / `= {..}`)
+                                                #      → register a synth-fn call; the matching
+                                                #      `__gg_static_init_<name>()` FunctionDef is
+                                                #      synthesized + lowered in the non-generic
+                                                #      function loop below (full registry ready).
+                                                bool sd_ctor = try_register_collection_ctor_static(&gmod, sd_ty, sd_name, sd_val)
+                                                if not sd_ctor and static_is_literal_init(sd_val):
+                                                    register_literal_static(&gmod, sd_ty, sd_name)
             else:
                 pass
 
@@ -12120,18 +12188,22 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         gmod.functions.push(lower_function(fdef, &gmod))
             case IStaticDecl(si_ty, si_name, si_val):
                 # Array/dict LITERAL static (`static Vector[T] X = [..]` /
-                # `= {..}`): the static was registered in the pre-pass;
-                # synthesize + lower its `__gg_static_init_<name>()` init fn
-                # HERE, where the full type/fn registry is committed
-                # (struct-element sizing for collection literals reads
-                # gmod.type_infos). Mirrors Rust's deferred
-                # `synthetic_static_init_fns` lowering
-                # (`src/ir/lowering/mod.rs:1255-1262`). Guarded by the SAME
-                # predicate the pre-pass used so the two stay in lockstep
-                # (one synth fn iff a literal static was registered). The
-                # collection-CONSTRUCTOR path (case 2) emits NO synth fn —
-                # its init is a direct allocator C-expr (matches Rust).
-                if static_is_literal_init(si_val):
+                # `= {..}`) OR scalar-literal static (`static int x = 0`):
+                # the static was registered in the pre-pass; synthesize +
+                # lower its `__gg_static_init_<name>()` init fn HERE, where
+                # the full type/fn registry is committed (struct-element
+                # sizing for collection literals reads gmod.type_infos).
+                # Mirrors Rust's every-StaticDecl-is-a-mutable-Global rule
+                # (`src/ir/lowering/mod.rs:1224-1232`) — Rust initializes a
+                # scalar global from a `GlobalInit::Bytes` const slot, but
+                # the self-host LIR has no `GlobalInit::Bytes` equivalent,
+                # so we run the init through a runtime synth fn instead.
+                # Guarded by the SAME predicates the pre-pass used so the
+                # two stay in lockstep (one synth fn iff a literal/scalar
+                # static was registered). The collection-CONSTRUCTOR path
+                # (case 2) emits NO synth fn — its init is a direct
+                # allocator C-expr (matches Rust).
+                if static_is_literal_init(si_val) or static_is_scalar_literal_init(si_val):
                     FunctionDef si_fn = build_static_init_fn(si_ty, si_name, si_val)
                     gmod.functions.push(lower_function(si_fn, &gmod))
             case ITest(tname, decorators, tags, test_body):
