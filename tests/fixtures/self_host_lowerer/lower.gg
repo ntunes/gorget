@@ -28,8 +28,8 @@ from gir import GirGlobal, GirGlobalField, gir_mod_add_global, GGINIT_FN_REF, GG
 from gir import ConsumeKind, CkAssign, CkReturn, CkCallArgBorrow, CkCallArgOwning, CkFieldWrite
 from gir import CkBinOpArg, CkFormatArg, CkMatchPtr
 # CollectionKind variants — needed to type/construct the kind in
-# `collection_kind_of` and to drive `is_owning_mutator_arg`'s
-# kind-dependent owning-arg classification (STEP 1 / Option C).
+# `collection_kind_of` and to key the collection owning-arg lookup
+# (`collection_builtin_method`, reading COLLECTION_BUILTIN_METHODS).
 from gir import CollectionKind, CkVector, CkDeque, CkHeap, CkDict, CkSet, CkNotCollection
 # Phase A — typed-metadata classifier shared with lir_lower.gg. The
 # `name.starts_with("X__")` cascade lives there as the single source
@@ -553,60 +553,27 @@ CollectionKind collection_kind_of(GirModule &gmod, String tname):
         case None:
             return CkNotCollection()
 
-# STEP 1 / Option C — per CLAUDE.md "Ownership at Consuming Positions":
-# a collection mutator takes OWNERSHIP of the value it stores (and, for
-# Dict, the key). Returns true iff the `margs_idx`-th non-receiver arg
-# of `mname` on a `kind` collection is such an owning value/key slot.
-# Positional index args (Vector set/insert's index) stay borrows → false.
+# Per CLAUDE.md "Ownership at Consuming Positions": a collection mutator
+# takes OWNERSHIP of the value it stores (and, for Dict, the key). The
+# per-(kind, method, index) owning-arg truth that used to live in a
+# `is_owning_mutator_arg` name+index match is now DATA in
+# COLLECTION_BUILTIN_METHODS (compiler/data/resources.gg), keyed by the
+# RESOLVED CollectionKind and read at the consume site via
+# `collection_builtin_method(kind, mname).owning_arg_positions`.
 #
-# Reference: Rust's `consuming_positions` in
-# `src/ir/lowering/exprs/methods.rs:1850` — a name-keyed match
-# (push/add/extend/send/push_back/push_front → [0]; put/set/insert →
-# [0,1]) gated only by excluding `GorgetString` string-builders. Rust
-# can be name-only because it consumes BOTH put/set/insert positions and
-# the index arg is a primitive, so `ensure_owned_at_consuming_arg` is a
-# no-op there. We branch on collection kind instead because in the self-
-# host the kind is what disambiguates `set` = (idx,value) on a Vector vs
-# (key,value) on a Dict, and `insert` = (idx,value) on a Vector vs
-# (value) on a Set. This is NOT a divergence from Rust's intent: user
-# equip methods named set/push route their param ownership through
-# `classify_call_arg`/`fn_move_params` already (Rust folds both into one
-# broad pass); the gap THIS helper closes is the builtin collection
-# runtime mutators, which are absent from fn_move_params. The kind gate
-# is therefore also the safety boundary against hijacking a user method
-# that happens to share a name. Aligns with the runtime by-pointer-into-
-# storage args in lir_lower.gg's `needs_ptr_arg` (gorget_array_push@1,
-# _set@2, _insert@2, gorget_map_put@1&2, gorget_set_add@1).
-# (extend/push_back/push_front/Channel.send: in Rust's list but not
-# exercised by the self-host today — add when a gdb pass shows one.)
-bool is_owning_mutator_arg(CollectionKind kind, String mname, int margs_idx):
-    match kind:
-        case CkVector():
-            if mname == "push":
-                return margs_idx == 0
-            if mname == "set" or mname == "insert":
-                return margs_idx == 1
-            return false
-        case CkDeque():
-            if mname == "push":
-                return margs_idx == 0
-            if mname == "set" or mname == "insert":
-                return margs_idx == 1
-            return false
-        case CkHeap():
-            if mname == "push":
-                return margs_idx == 0
-            return false
-        case CkDict():
-            if mname == "put" or mname == "set":
-                return margs_idx == 0 or margs_idx == 1
-            return false
-        case CkSet():
-            if mname == "add" or mname == "insert":
-                return margs_idx == 0
-            return false
-        case CkNotCollection():
-            return false
+# Reference: Rust's `consuming_positions`
+# (`src/ir/lowering/exprs/methods.rs:1850`) is name-keyed (push/add/… →
+# [0]; put/set/insert → [0,1]) and gated only by excluding GorgetString
+# string-builders — Rust can be name-only because it consumes BOTH
+# put/set/insert positions and the index arg is a primitive (so
+# `ensure_owned_at_consuming_arg` is a no-op there). The self-host stays
+# KIND-AWARE because the kind disambiguates `set` = (idx,value) on a
+# Vector vs (key,value) on a Dict, and `insert` = (idx,value) on a Vector
+# vs (value) on a Set; the resolved kind is also the safety boundary
+# against hijacking a user method that happens to share a name. Aligns
+# with the runtime by-pointer-into-storage args in lir_lower.gg's
+# `needs_ptr_arg` (gorget_array_push@1, _set@2, _insert@2,
+# gorget_map_put@1&2, gorget_set_add@1).
 
 # Typed-table accessors over STRING_BUILTIN_METHODS / COLLECTION_BUILTIN_METHODS
 # (compiler.data.resources) — mirror lir_lower.gg's `lookup_resource_table`
@@ -5570,8 +5537,18 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 else:
                     ma_val = lower_expr(&ctx, ma, &gmod)
                 ConsumeKind ma_kind = classify_call_arg(&gmod, full_name, _ma_idx + 1)
-                if is_owning_mutator_arg(_recv_ck, mname, _ma_idx):
-                    ma_kind = CkCallArgOwning()
+                # Owning-mutator promotion: a collection mutator takes
+                # ownership of the value (and, for Dict, the key) at the
+                # `owning_arg_positions` indices carried by its typed decl
+                # (COLLECTION_BUILTIN_METHODS, keyed by the RESOLVED kind).
+                # None (non-collection receiver or non-mutator method) → no
+                # promotion, exactly as the old `is_owning_mutator_arg` false.
+                match collection_builtin_method(_recv_ck, mname):
+                    case Some(cdecl):
+                        if int_vec_contains(cdecl.owning_arg_positions, _ma_idx):
+                            ma_kind = CkCallArgOwning()
+                    case None:
+                        pass
                 call_args.push(op_consume(&ctx, &gmod, ma_val, ma_kind))
                 _ma_idx += 1
             # Return-type resolution priority — single source of truth
