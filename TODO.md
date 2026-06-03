@@ -1,8 +1,11 @@
 # TODO
 
 ## ⏭ CURRENT NEXT (2026-06-02 pm — supersedes the "🧭 SESSION ROLLUP" + "🎯 NEXT SESSION FULL UNIVERSAL" blocks below)
-**✅ Phase-2 STEP A + STEP B both LANDED this session — gorget-1 code tip `d6902ccf` (`git log -1`
-for live; docs commits on top). RUNTIME PARITY 261 → 267 → 272 → **284 = 30.7%** (V/E/Err +5 `cf6d5f89`; Result→T auto-prop +12 `eb649a04`).**
+**✅ FOUR chains LANDED this session — gorget-1 code tip `eb649a04` (`git log -1` for live; docs
+commits on top). RUNTIME PARITY 261 → 267 → 272 → **284 = 30.7%** (closure Step A `231abb78` +0 [latent
+desync fix] / Step B `d6902ccf` +6; V/E/Err enum-typedef `cf6d5f89` +5; Result→T auto-prop `eb649a04`
++12). Live gates @ `eb649a04`: full integration **1179/0**, `self_host_runtime` **284/0**,
+`runtime_diff` MATCH **284**, `lowerer_comparison` **954**, `c_emit_comparison` **883**, fixed_point GREEN.**
 - **STEP A** (`231abb78`, DONE.md): ATOMIC universal make-site closure refactor + latent desync FIX.
   `lower_expr` = SOLE closure-id source/recorder (`LiftedClosure` on `GirModule.lifted_closures`);
   drain-until-empty post-pass = SOLE pusher of `__Closure_N__call`; pre-pass scan closure-walk +
@@ -17,10 +20,14 @@ for live; docs commits on top). RUNTIME PARITY 261 → 267 → 272 → **284 = 3
   `IStructInit` stack env; NEW LIR `try_closure_pack` (`__Closure_N`→GorgetClosure GIAssign →
   env_alloc+memcpy+IClosurePack); post-pass `GIFieldLoad`s. +6 parity. Brief
   `…stepB_byvalue_primitives.md`. The `int k=10; (int x):x+k; f(3)`→**13** proof passes.
-- **GATES GREEN at `d6902ccf`:** full integration **1179/0**, `self_host_runtime` **267/0**,
-  `self_host_runtime_diff` MATCH **267**, `lowerer_comparison` **954**, `c_emit_comparison` **882**,
-  `bootstrap_fixed_point` GREEN, `cargo test --lib` 1066/0 (debug; 2 `--release` `should_panic`-over-
-  `debug_assert` reds are a pre-existing `src/` `--release` artifact, NOT this work).
+- **(Step-B-era gate snapshot @ `d6902ccf`, historical — see the LIVE @ `eb649a04` numbers in the
+  header above):** then `self_host_runtime` 267/0, `runtime_diff` 267, `c_emit` 882. ⚠ `cargo test
+  --lib` 1066/0 (debug); the 2 `--release` `should_panic`-over-`debug_assert` reds are a pre-existing
+  `src/` `--release` artifact, NOT this work.
+- **V/E/Err `cf6d5f89` (+5):** 2-line `lir_lower.gg` typed-discriminator (`is_generic_placeholder_name`
+  skip guarded by `not type_infos.contains`) — a concrete user `enum V`/`E`/`struct Err` was mis-dropped.
+- **Result→T auto-prop `eb649a04` (+12):** consumer-targeted `maybe_auto_propagate` (6 sites) + the
+  `Result__`/`Option__` prereq + `result_payload_types` smart-split. See DONE.md + the follow-ups below.
 
 **⬅ ACTIVE NEXT (closure Phase-2 continuation — re-verify by RUNNING; full discipline ≥3 reviews):**
 - **Phase 2b — ByValue RESOURCE/CoW captures** (String/Vector/struct). The Step-B 2a guard STUBS
@@ -41,7 +48,8 @@ for live; docs commits on top). RUNTIME PARITY 261 → 267 → 272 → **284 = 3
   cluster (reuse `lower_block_expr`/`lower_match_expr`); the 2 EMatch-isolated bugs (struct-with-
   String enum-payload binding; String `.data` field-access); INT-zero WRONG-OUTPUT subset
   (auto_types' 2nd const-auto root, bare_tuples, block_expr); generic-type-param leak (`catch_*`/
-  `result_*`); drop/cow/leak; R12 typed-extern-sig registry. ⚠ Re-verify each by RUNNING before
+  `result_*` — ⚠ V/E/Err `cf6d5f89` already CLEARED 5 of these; ~7 residual, RE-MEASURE before
+  targeting); drop/cow/leak; R12 typed-extern-sig registry. ⚠ Re-verify each by RUNNING before
   briefing.
 
 **Closure follow-ups (logged, low-pri):**
@@ -77,13 +85,12 @@ for live; docs commits on top). RUNTIME PARITY 261 → 267 → 272 → **284 = 3
   `docs/plans/free_extern_struct_returns.md` (DISPROVEN). Low value until the orthogonal blockers land.
 
 **⬅ NEXT SERIAL high-value targets (scout-surfaced, RE-VERIFY end-to-end by RUNNING — scout parity claims proved unreliable this round; a fixture only counts if its WHOLE stdout MATCHes):**
-- **V/E/Err "enum-typedef-drop" — ⏳ IN PROGRESS (brief `docs/plans/enum_typedef_drop_generic_name.md`,
-  END-TO-END verified +3 to +5).** ROOT (confirmed): `is_generic_placeholder_name` (`lir_lower.gg:469`)
-  name-blocklist `{T,E,K,V,U}` over-matches a concrete user enum at Pass-1b (`:856`, iterates
-  `type_infos.keys()` = real types) → typedef dropped. FIX (2 lines): guard both skip sites (`:700`,
-  `:856`) with `and not gmod.type_infos.contains(name)`. +3 verified (catch_into_noncopy_dest,
-  catch_divergent_arm, snag41) + 2 more found by a 2nd scout (enum_name_collision_with_constant,
-  nested_match_expr_enum_result). 267 snapshots 0 regressions. No-name-matching win.
+- **V/E/Err "enum-typedef-drop" — ✅ LANDED 2026-06-03 `cf6d5f89` (+5, DONE.md).** 2-line
+  `lir_lower.gg` typed-discriminator: guard the `is_generic_placeholder_name` blocklist `{T,E,K,V,U}`
+  skip sites (`:700`/`:856`) with `and not gmod.type_infos.contains(name)` — a concrete user `enum V`/
+  `E`/`struct Err` was mis-dropped as a generic param → `unknown type name 'V'`. +5 MATCH
+  (catch_into_noncopy_dest, catch_divergent_arm, snag41, enum_name_collision_with_constant,
+  nested_match_expr_enum_result). No-name-matching win.
 - **✅ Result→T AUTO-PROPAGATION hook — LANDED 2026-06-03 `eb649a04` (+12, parity 272→284). DONE.md.**
   Consumer-targeted `maybe_auto_propagate` (6 sites) + `lir_lower.gg` `Result__`/`Option__` prereq +
   `result_payload_types` smart-split. Follow-ups (logged below).
@@ -182,7 +189,7 @@ for live; docs commits on top). RUNTIME PARITY 261 → 267 → 272 → **284 = 3
   - **NIT (latent, harmless post-R7): `is_runtime_defined_named` (`lir_codegen.gg:140`) conflates Rust's LIR_NAMED_STRUCTS (a NAMING concern) with `runtime_defined_named` (a SKIP concern) — `TaskHandle`/`GorgetRange` are mis-listed in its skip set.** Post-R7 `TaskHandle` is no longer referenced (the alias is gone) so the mis-skip is inert; `GorgetRange` was never referenced as a typedef alias so it never cc-failed. A latent fidelity nit, not a live bug — do NOT refactor the skip-list speculatively.
   - **`incompatible types ... assigning to type 'Str' from type 'int'` (69 + ~40 struct/aka variants = ~109)** — the self-host assigns an `int` (or anon-struct) where a `Str`/struct slot is expected. Overlaps the known bool-print / int-as-Str class (see the `&`/`!`-param item below). The single largest WRONG-shape class after TaskHandle.
   - **`unknown type name '__gg_new'` (11) + `__gg_int64_t__set` / `__gg_*__set` (2)** — Box/Heap allocation helper symbols (`box_*`, `option_box_*`, `dict_box_*`) emitted but not declared. The Box-alloc-symbol gap.
-  - **`unknown type name 'E'/'V'/'Err'` (~12)** — generic-type-param leakage into emitted C (error/result generic fixtures: `catch_*`, `result_*`); a mono/generic-substitution gap in the self-host emit.
+  - **`unknown type name 'E'/'V'/'Err'` (~12 → ~7 residual)** — ⚠ NOT a generic leak: a concrete user enum NAMED `E`/`V`/`Err` whose typedef was dropped by `is_generic_placeholder_name`. **V/E/Err `cf6d5f89` CLEARED 5; auto-prop `eb649a04`'s `Result__`/`Option__` prereq cleared the throws-`Result__*__E` typedef-drop too.** Residual ~7 hit ORTHOGONAL blockers (Vector/Dict-of-user-type mono, `??`-lowering, nested-pattern in PConstructor) — re-measure from the diagnostic before targeting.
   - **`GorgetRegexMatch` (3)** — missing runtime-type decl (regex; likely an unfinished feature, defer). [The Heap__T (4) runtime-type-decl gap is DONE 2026-06-01 — see DONE.md.]
   - **`incompatible type for argument N` (~55), `too few/many arguments` (9), `expected identifier` (12), `has no member` (11), `aggregate value used where an integer was expected` (6), `invalid initializer` (5), `void value not ignored` (2)** — assorted ABI / signature / struct-layout mismatches; triage per-fixture from the diagnostic's CC-FAIL list.
 
