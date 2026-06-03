@@ -7117,13 +7117,17 @@ void lower_field_write(LowerCtx &ctx, SpannedExpr base_expr, String field_name, 
     if base_is_ptr:
         write_args.push(OpCopy(base))
     else:
-        # Phase C step 5b: borrowed base → OpBorrow, owned → OpMove.
+        # A field-store never consumes its base; it mutates in place via the
+        # base's address. Borrowed base → OpBorrow; owned (LoOwned) base → also
+        # OpBorrow (its slot address), NOT OpMove — an OpMove gets rewritten to
+        # OpClone by the liveness pass when the base is live past the store,
+        # which would clone-and-discard the base and never mutate the original.
         GirLocal fw_base_loc = ctx.locals.get(base).unwrap()
         match fw_base_loc.ownership:
             case LoBorrowed():
                 write_args.push(OpBorrow(base))
             else:
-                write_args.push(OpMove(base))
+                write_args.push(OpBorrow(base))
     write_args.push(op_consume(&ctx, &gmod, val, CkFieldWrite()))
     emit(&ctx, GICallExtern(-1, write_fn, write_args))
 
@@ -7148,13 +7152,17 @@ void emit_field_write_from_local(LowerCtx &ctx, SpannedExpr base_expr, String fi
     if base_is_ptr:
         write_args.push(OpCopy(base))
     else:
-        # Phase C step 5b: borrowed base → OpBorrow, owned → OpMove.
+        # A field-store never consumes its base; it mutates in place via the
+        # base's address. Borrowed base → OpBorrow; owned (LoOwned) base → also
+        # OpBorrow (its slot address), NOT OpMove — an OpMove gets rewritten to
+        # OpClone by the liveness pass when the base is live past the store,
+        # which would clone-and-discard the base and never mutate the original.
         GirLocal fwf_base_loc = ctx.locals.get(base).unwrap()
         match fwf_base_loc.ownership:
             case LoBorrowed():
                 write_args.push(OpBorrow(base))
             else:
-                write_args.push(OpMove(base))
+                write_args.push(OpBorrow(base))
     write_args.push(op_consume(&ctx, &gmod, value_local, CkFieldWrite()))
     emit(&ctx, GICallExtern(-1, write_fn, write_args))
 
