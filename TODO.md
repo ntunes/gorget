@@ -1,16 +1,21 @@
 # TODO
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE THIS BLOCK IN PLACE each session; completed work → DONE.md, do NOT accumulate "superseded" blocks)
-**gorget-1 code tip `eb649a04` (`git log -1` for the live tip — docs commits on top). RUNTIME PARITY =
-**284/925 = 30.7%**. Live gates @ `eb649a04`: full integration **1179/0**, `self_host_runtime`
-**284/0**, `runtime_diff` MATCH **284**, `lowerer_comparison` **954**, `c_emit_comparison` **883**,
+**gorget-1 code tip `2d111fad` (`git log -1` for the live tip — docs commits on top). RUNTIME PARITY =
+**287/925 = 31.0%**. Live gates @ `2d111fad`: `self_host_runtime`
+**287/0**, `runtime_diff` MATCH **287**, `lowerer_comparison` **954**, `c_emit_comparison` **883**,
 `bootstrap_fixed_point` GREEN, `cargo test --lib` 1066/0 (debug; the 2 `--release`
 `should_panic`-over-`debug_assert` reds are a pre-existing `src/` artifact, NOT our work). ⚠ `main` is
 OWNER-PROMOTED — NEVER touch/advance it; land everything on `gorget-1` + worktrees.**
-**LANDED 2026-06-02→03 (full detail in DONE.md — not repeated here): closure Step A (`231abb78`,
-universal make-site refactor, parity-neutral desync fix) + Step B (`d6902ccf`, ByValue primitive
-captures, +6) + V/E/Err enum-typedef-drop (`cf6d5f89`, +5) + Result→T auto-prop hook (`eb649a04`,
-+12).** ⚠ **LESSON (load-bearing): scout parity estimates MUST be END-TO-END verified (compile+run,
+**LANDED THIS ROUND (2026-06-03, 1:1:1:1; detail in DONE.md): FIDELITY+CLEANUP `2d111fad`
+(EDo/EBlock block-expr → tail value, +3 parity 284→287: block_expr/test_do_block_expr/
+error_catch_in_loop; + dead `LowerCtx.next_closure_id` field removed). PERF = attribution
+measurement only (fresh: array_clone **16.3M** / peak RSS **1.31GB**, ≈unchanged vs 2026-06-01's
+15.9M; build_struct_names is call-graph-proven struct-count-bounded, NOT a >1M site → no clean
+single-site win; remaining = the distributed ~800-site CoW `.get().unwrap()` class = a deep
+borrow-audit chain, deferred). DOC = TODO shrink (−~180 lines: pruned stale 2026-05-17 profile
+snapshot + the LANDED-recap cruft) per owner "keep TODO small".**
+(Recent landed work lives in DONE.md, not here.) ⚠ **LESSON (load-bearing): scout parity estimates MUST be END-TO-END verified (compile+run,
 whole-stdout MATCH) — 3 estimates this session were ~0 real until proven. And file-disjoint PARALLEL
 chains are ~0 parity (the real parity is SERIAL in the closure/Result `lower.gg`/`lir_lower.gg`
 cluster) — parallelize the ORCHESTRATION (scout next while executing current), not the chains.**
@@ -30,17 +35,14 @@ cluster) — parallelize the ORCHESTRATION (scout next while executing current),
 - **Widen 2a to all primitives** — gated on extending `type_id_to_name` (`lower.gg:3077`) to the 7
   sub-int/float widths (i8/i16/i32/u8…/f32 currently fall to `int64_t`); then relax the §4b guard
   from `{0,4,10}` to the full primitive set. Small, clean.
-- **NON-closure backlog (unchanged — see "## High Priority" below):** `EDo`/`EBlock` block-expr
-  cluster (reuse `lower_block_expr`/`lower_match_expr`); the 2 EMatch-isolated bugs (struct-with-
+- **NON-closure backlog (see "## High Priority" below):** the 2 EMatch-isolated bugs (struct-with-
   String enum-payload binding; String `.data` field-access); INT-zero WRONG-OUTPUT subset
-  (auto_types' 2nd const-auto root, bare_tuples, block_expr); generic-type-param leak (`catch_*`/
+  (auto_types' 2nd const-auto root, bare_tuples); generic-type-param leak (`catch_*`/
   `result_*` — ⚠ V/E/Err `cf6d5f89` already CLEARED 5 of these; ~7 residual, RE-MEASURE before
   targeting); drop/cow/leak; R12 typed-extern-sig registry. ⚠ Re-verify each by RUNNING before
   briefing.
 
 **Closure follow-ups (logged, low-pri):**
-- **dead `LowerCtx.next_closure_id` field** (`lower.gg:~177`) — never read/written; trivial cleanup
-  (touches 4 ctor sites: ~8748/8942/10196/11740).
 - **§5a′ nested-closure-inside-STUBBED-outer** record-only walk — NOT needed now (corpus proven
   empty); implement IF a future fixture nests a closure inside a capturing/nested outer.
 - **end-of-Phase-2 cleanup: delete the `__make_closure_` NULL-env wart** (`lir_codegen.gg:3707`) once
@@ -71,16 +73,7 @@ cluster) — parallelize the ORCHESTRATION (scout next while executing current),
   `docs/plans/free_extern_struct_returns.md` (DISPROVEN). Low value until the orthogonal blockers land.
 
 **⬅ NEXT SERIAL high-value targets (scout-surfaced, RE-VERIFY end-to-end by RUNNING — scout parity claims proved unreliable this round; a fixture only counts if its WHOLE stdout MATCHes):**
-- **V/E/Err "enum-typedef-drop" — ✅ LANDED 2026-06-03 `cf6d5f89` (+5, DONE.md).** 2-line
-  `lir_lower.gg` typed-discriminator: guard the `is_generic_placeholder_name` blocklist `{T,E,K,V,U}`
-  skip sites (`:700`/`:856`) with `and not gmod.type_infos.contains(name)` — a concrete user `enum V`/
-  `E`/`struct Err` was mis-dropped as a generic param → `unknown type name 'V'`. +5 MATCH
-  (catch_into_noncopy_dest, catch_divergent_arm, snag41, enum_name_collision_with_constant,
-  nested_match_expr_enum_result). No-name-matching win.
-- **✅ Result→T AUTO-PROPAGATION hook — LANDED 2026-06-03 `eb649a04` (+12, parity 272→284). DONE.md.**
-  Consumer-targeted `maybe_auto_propagate` (6 sites) + `lir_lower.gg` `Result__`/`Option__` prereq +
-  `result_payload_types` smart-split. Follow-ups (logged below).
-- **Auto-prop / Result FOLLOW-UPS (NEXT candidates — re-verify end-to-end before briefing):**
+- **Auto-prop / Result FOLLOW-UPS (NEXT candidates — re-verify end-to-end before briefing; the V/E/Err `cf6d5f89` + Result→T auto-prop `eb649a04` parents both LANDED, see DONE.md):**
   - **`snag49c` EIndex value-read stub** (`lower.gg:5537` returns const 0) — a `v[might()]` index
     silently reads 0. Separate index-read chain (small, but verify it's not entangled with other
     EIndex consumers).
@@ -105,7 +98,7 @@ cluster) — parallelize the ORCHESTRATION (scout next while executing current),
   — DEEP: self-host has ZERO `HofExpand` (Rust ~2100 lines of BIR generators). Multi-chain effort.
 - **closure Phase 2b (resource/CoW captures, ~5-8)** + **2c (ByMutRef)** — deep, `lower.gg`+`lir_*`.
 
-### 🔁 STANDING 1:1:1:1 cadence (1 perf · 1 cleanup · 1 fidelity · 1 doc). Shipped rounds CHAIN 3 + R5–R11 + Heap + the DOC/PERF parallel-round slots are in DONE.md (parity-at-Heap 243/923 = 26.3%; live = 284/30.7% per the CURRENT NEXT header at the top). ⚠ **OWNER MODEL (clarified 2026-06-03 — the `1:1:1:1` is FOUR DIFFERENT CATEGORIES run CONCURRENTLY each round): 1 FIDELITY (parity) · 1 PERF (runtime or compile-time perf) · 1 CLEANUP (small follow-ups: parallel-list→typed-registry, dead-field removal, etc.) · 1 DOC (keep docs honest + up to date). They run in PARALLEL worktrees EVEN IF they touch the SAME files — worktree isolation makes that safe, and it is the ORCHESTRATOR's JOB to MERGE them as they finish (cherry-pick / resolve at integrate; different-category edits rarely truly conflict). File-disjointness is NOT a prerequisite.** ⚠ **NARROWER LESSON (2026-06-03, empirical): do NOT run TWO PARITY chains in parallel expecting additive parity — the parity wins concentrate in the closure/Result `lower.gg`/`lir_lower.gg` cluster (serial). The FIDELITY slot is ONE chain; the parallelism comes from the OTHER three categories (PERF/CLEANUP/DOC) running alongside it.** ⚠ Re-verify every queued item against CURRENT source — AND by RUNNING end-to-end (a fixture counts only if its WHOLE stdout MATCHes; scout estimates proved unreliable) — before briefing. Each chain: brief → ≥3 fresh sequential reviews (until clean) → executor (worktree) → fresh output-review → gate → integrate. ⚠ **AGENT-WORKTREE BASE (owner directive 2026-06-01: NEVER touch/advance/reset `main` — the OWNER fast-forwards main→gorget-1 themselves; I only manage `gorget-1` + the worktrees).** Land everything on `gorget-1`; the owner promotes to `main`. Agent worktrees branch from `main` (an ancestor of `gorget-1`), so they can LAG gorget-1's latest landed work. FIX (in-lane): open EVERY delegated agent's entry preamble with `git merge --ff-only gorget-1` so the worktree fast-forwards ITSELF to the current gorget-1 tip before working (main is always an ancestor → clean ff; this also makes the integration-side `git merge --ff-only <agent-branch>` into gorget-1 a clean ff). NEVER advance `main` to solve this. [This base-staleness bit R6 review pass-1, which reviewed against a pre-Chain-3 tree.]
+### 🔁 STANDING 1:1:1:1 cadence (1 perf · 1 cleanup · 1 fidelity · 1 doc). Shipped rounds CHAIN 3 + R5–R11 + Heap + the DOC/PERF parallel-round slots are in DONE.md (parity-at-Heap 243/923 = 26.3%; live = 287/31.0% per the CURRENT NEXT header at the top). ⚠ **OWNER MODEL (clarified 2026-06-03 — the `1:1:1:1` is FOUR DIFFERENT CATEGORIES run CONCURRENTLY each round): 1 FIDELITY (parity) · 1 PERF (runtime or compile-time perf) · 1 CLEANUP (small follow-ups: parallel-list→typed-registry, dead-field removal, etc.) · 1 DOC (keep docs honest + up to date). They run in PARALLEL worktrees EVEN IF they touch the SAME files — worktree isolation makes that safe, and it is the ORCHESTRATOR's JOB to MERGE them as they finish (cherry-pick / resolve at integrate; different-category edits rarely truly conflict). File-disjointness is NOT a prerequisite.** ⚠ **NARROWER LESSON (2026-06-03, empirical): do NOT run TWO PARITY chains in parallel expecting additive parity — the parity wins concentrate in the closure/Result `lower.gg`/`lir_lower.gg` cluster (serial). The FIDELITY slot is ONE chain; the parallelism comes from the OTHER three categories (PERF/CLEANUP/DOC) running alongside it.** ⚠ Re-verify every queued item against CURRENT source — AND by RUNNING end-to-end (a fixture counts only if its WHOLE stdout MATCHes; scout estimates proved unreliable) — before briefing. Each chain: brief → ≥3 fresh sequential reviews (until clean) → executor (worktree) → fresh output-review → gate → integrate. ⚠ **AGENT-WORKTREE BASE (owner directive 2026-06-01: NEVER touch/advance/reset `main` — the OWNER fast-forwards main→gorget-1 themselves; I only manage `gorget-1` + the worktrees).** Land everything on `gorget-1`; the owner promotes to `main`. Agent worktrees branch from `main` (an ancestor of `gorget-1`), so they can LAG gorget-1's latest landed work. FIX (in-lane): open EVERY delegated agent's entry preamble with `git merge --ff-only gorget-1` so the worktree fast-forwards ITSELF to the current gorget-1 tip before working (main is always an ancestor → clean ff; this also makes the integration-side `git merge --ff-only <agent-branch>` into gorget-1 a clean ff). NEVER advance `main` to solve this. [This base-staleness bit R6 review pass-1, which reviewed against a pre-Chain-3 tree.]
 
 **Discipline reminder for the fresh session:** each chain = brief → ≥3 fresh sequential reviews (until clean) → executor in `isolation:"worktree"` (pwd-check preamble, `git add <exact files>` only) → fresh output-review → serialized gate → cherry-pick integrate. ⚠⚠ **ALWAYS pass the `isolation:"worktree"` PARAMETER on the Agent call — NOT just the worktree-discipline TEXT in the prompt.** [R7 LESSON 2026-06-01: the orchestrator put the discipline in the prompt but FORGOT the actual `isolation` parameter → the executor ran in `/workspace/gorget-1` (the primary gorget-1 worktree) and committed `f48273ad` DIRECTLY to gorget-1, bypassing isolation + the pre-integration output-review. It landed clean ONLY because the executor staged specific files (not `git add -a`) so the parent's untracked work survived, and the after-the-fact output-review signed off. Do NOT rely on that luck — the parameter is the load-bearing safeguard. The Agent tool runs in the cwd when the flag is omitted.] ⚠ **FORCE-REBUILD THE SELF-HOST DRIVER before ANY comparison run** (`rm tests/fixtures/self_host_lowerer/driver tests/fixtures/self_host_lowerer/driver.c` then let the test rebuild) — the OnceLock-cached driver can be stale/transient-bad and segfault (exit 139) on every fixture, making comparisons FALSELY report `0 matched / all-crash` (review #1 hit this; a clean rebuild gave the correct 849/951). Re-confirm `*_comparison` counts from `--nocapture` AFTER a clean rebuild before quoting. The 152-worktree accumulation degrades agent spawns over a long session — `git worktree remove --force` the completed-agent worktrees (committed work persists in branches) when spawns start failing.
 
@@ -115,8 +108,7 @@ cluster) — parallelize the ORCHESTRATION (scout next while executing current),
   - **(1) struct-with-String enum-payload binding mis-lowers in `lower_match_stmt` (`lower.gg`).** Blocks `match_expr_block_arms`. Repro (NO value-position match): `match r: case Ok(f): print(f.desc)` where `f` is a struct with a String field → self-host prints `got: 281474148104008` (garbage ptr) vs Rust `got: hello`. The match lowering binds the enum-payload struct but the String field read corrupts. int payloads + the `Error` arm are correct → it's specifically the struct-with-String payload binding. Find the writer site in `lower_match_stmt`'s pattern-binding (`lower_pattern_match` `lower.gg:7321`) for a struct payload carrying a String. Distinct from EMatch (reproduces in statement-form match).
   - **(2) String `.data` field-access (`EFieldAccess` on `GorgetString`) emits a placeholder (`lower.gg`).** Blocks `match_expr_diverging_arm`'s last line. Repro (NO match): `String s = "one"; print(s.data)` → self-host prints `0` + emits `[bug] EFieldAccess: unknown field 'data' on base type 'GorgetString'` vs Rust `one`. The self-host `EFieldAccess` lowering has no case for the String runtime-struct `.data` accessor. Add it (mirror how Rust resolves `String.data`). Once both (1)+(2) land, the 2 named EMatch targets should reach MATCH (+2 more) — re-measure.
 
-- **🔭 EMATCH-as-VALUE FOLLOW-UPS (out-of-scope of the EMatch chain that landed 2026-06-02, see DONE.md; the lower.gg expression-position-CF cluster CONTINUES — EDo/EBlock REUSE `lower_block_expr`/`lower_match_expr`):**
-  - **(a) `EDo` block-expr + `EBlock` value-dropping stub (`lower.gg` / `block_expr.gg`)** — the NEXT lower.gg cluster item; lower the block via `lower_block_expr` and return its tail value (mechanical given the helper). WRONG-OUTPUT/Unit-default subset.
+- **🔭 EXPRESSION-POSITION-CF FOLLOW-UPS (the lower.gg value-position cluster; EDo/EBlock LANDED 2026-06-03 `2d111fad` — DONE.md):**
   - **(b) Guard-in-value-match (`MatchArm.guard`)** — neither `lower_match_expr` nor `lower_match_stmt` handles guards; wire when a fixture needs it.
   - **(c) Rust "Snag #50" per-arm name-map snapshot/restore** — `lower_match_expr` deliberately omitted it (matched `lower_match_stmt`'s drop-scope approach; no current fixture triggers the `&v`-rebind-leak). ⚠ Per [[feedback-rust-not-sacrosanct]]: evaluate whether Rust's save/restore is even reference-grade before porting — the drop-scope approach may be the cleaner fix for BOTH; only port (or improve Rust) where a fixture actually leaks.
   - **(d) closure-body `return _0` stub — PHASED (scout 2026-06-02, premise CONFIRMED at `lower.gg:9103` + 2 `it` variants `:9039`/`:9121`, NOT ~9009). Rust ref `src/ir/lowering/closures.rs` judged REFERENCE-GRADE (mirror it).**
@@ -134,7 +126,7 @@ cluster) — parallelize the ORCHESTRATION (scout next while executing current),
 
 - **🧹 NEXT PARALLEL ROUND BACKLOG (re-verified 4-category audit, 2026-06-01 — the pending work for the next 1:1:1:1 parallel round; per the owner model, run these as parallel file-disjoint worktree chains).** Each item is RE-VERIFIED against current source. ⚠ file-disjointness for clean parallel integration: DOC (`docs/`) and the `.expected` deletion (`tests/fixtures/*.expected`) are disjoint from the `.gg` files; FIDELITY/PERF/the enum-guard cleanup all want `lir_codegen.gg`/`lower.gg` (overlap → either sequence those or pick one per round).
   - **FIDELITY candidates (ranked by parity-impact × cleanness):** (a) **runtime-type-decl gaps — 2 roots remain (Heap DONE 2026-06-01, see DONE.md). ⚠ SELF-HOST-side (Rust gg compiles these fine; the self-host emit fails). Empirically re-verify root + LAYER before briefing — the audit mis-targeted the layer, and only COMPILING the fix reveals the truth (Heap's "typedef" framing was disproven at cc).** **(ATOMICS/OnceFlag — RISKIER, R10-class; `onceflag_basic`/`semaphore_basic`)** the self-host emits UNDEFINED wrapper calls `OnceFlag__do_once`/`AtomicInt__add` instead of redirecting to the `gorget_*` runtime symbols (which would splice `sync_runtime.c` via `needs_sync_pred`); same call_redirect-of-extern-equip-method shape as R10 — verify the std atomics module's extern equip methods aren't registered as call_redirects. Rust ref `src/backend/c_lir/emit_types.rs:2081`. **(REGEX — likely UNFINISHED feature, defer; `regex_basic`)** `Match__text` vs Rust's `__gg_Match` naming/synthesis mismatch. Independent. (b) **struct-return extern equip methods** (`arena_checkpoint`: "incompatible types … from GorgetArenaCheckpoint") — R10-adjacent; ⚠ VERIFY ROOT before briefing: likely the SAME loader/fn_sigs return-type gap as R10 (struct return not registered → defaults I64) rather than the codegen-fallback the audit hypothesized — scout loader.gg vs lir_codegen.gg first. Low parity (1-2). (c) **generic-type-param leak** (`E`/`V`/`Err` in emitted C, ~12 `catch_*`/`result_*`) — mono-substitution gap; MEDIUM risk. ⚠ ALL: empirically re-verify root + LAYER (self-host vs Rust) before briefing — this round's audit mis-targeted the layer.
-  - **PERF — HONEST: no clean quick-win remains.** Re-measured 2026-06-01: 15.9M array_clone / 1.30GB RSS / 17.9s; enum_variant_parent index + drop_elab packed-bitset both confirmed LIVE (DONE.md). The remaining 15.9M is the systemic ~800 `.get().unwrap()` clone-binds (797 sites: lower.gg 316, lir_codegen.gg 336, lir_lower.gg 145) — a deep CoW/borrow-analysis effort, NOT a quick chain. Option A (stub-and-measure the 3-5 hottest individual sites, e.g. `lower.gg:901` GirType clone, `lir_codegen.gg:245` LirStructDef clone; fix only if a single site >1M clones) is the only "maybe-quick" perf slot; else perf is near-optimal and the PERF slot should be the deep CoW audit (own dedicated chain) or skipped honestly this round.
+  - **PERF — HONEST: no clean quick-win remains (re-measured 2026-06-03 this round).** Fresh `--clone-stats` on the driver self-compile: **array_clone 16.3M / peak RSS 1.31GB** (≈unchanged vs 2026-06-01's 15.9M/1.30GB — the parity work added a little code). enum_variant_parent index + drop_elab packed-bitset both LIVE (DONE.md). **`build_struct_names` (lir_codegen.gg:~245 `LirStructDef sdef = ...` value-bind) was the PERF brief's candidate #1 — RULED OUT this round: it's called ONCE per compile via `generate_c`, so its loop is struct-count-bounded (hundreds), NOT a >1M site** (fresh-reviewer call-graph-verified; the borrow form `m.structs.get(i).unwrap().name` already exists at lir_codegen.gg:723 if a tidy micro-cleanup is ever wanted, but it won't move the needle). The `lower.gg:901` GirType cite was STALE (a comment). The remaining 16.3M is the systemic ~800 `.get().unwrap()` clone-binds (lower.gg ~316, lir_codegen.gg ~336, lir_lower.gg ~145) — a deep CoW/borrow-analysis effort, its OWN dedicated chain, NOT a quick single-site fix. PERF slot = that deep audit (or honestly skipped) until someone takes the borrow-audit chain. Brief `docs/plans/perf_stub_and_measure_clone_sites.md`.
   - **CLEANUP candidates:** (a) ~~delete the 80 `tests/fixtures/*.expected`~~ — ⚠ **FALSE POSITIVE (the audit's "zero-risk dead weight" was WRONG).** The `.expected` files are git-TRACKED on purpose (`tests/fixtures/.gitignore` `!*.expected`) and READ by `tests/test_ir.sh:15` (the IR-pipeline-diff diagnostic, as a cached expected-output, with a build-the-normal-pipeline fallback). NOT dead weight; deleting them is a judgment call about test_ir.sh's cache, not a clean cleanup → DROPPED unless the owner wants test_ir.sh's cache retired. (The audit scout grepped only `.rs` and missed the shell harness + `.gitignore`.) (b) **drop the dead `hard_errors` field** (`src/semantic/typecheck.rs:401`/init `:479`/write `:1446`, never read — dead since the imported-truncate removal) — source-verified; ⚠ touches `src/` (Rust) → needs the fuller suite, not just self-host. (c) ~~enum-side drop-collision guard~~ — **RESOLVED 2026-06-02 (DONE.md `d4e9b78d`), but the original framing here was REFUTED: guarding the enum EMIT sites would DIVERGE from Rust** (Rust `mod.rs:737` leaves the enum's own name unguarded). The real fix was the OPPOSITE — DELETE the divergent enum-own-name guard at the POPULATE site (`lir_lower.gg:3634-3636`), not add one at emit. A clean example of [[feedback-rust-not-sacrosanct]] in reverse (here Rust WAS reference-grade; the self-host had over-mirrored the struct branch). [(b) the dead `hard_errors` field remains — source-verified, touches `src/`, needs fuller suite. RE-VERIFY before briefing per the 2-false-positive lesson.]
   - **DOC slot — DONE this round (see DONE.md, `4cf24814`).** ⚠ The audit's "`f"""` unimplemented" finding was a FALSE POSITIVE (the doc-audit scout misread `src/lexer/mod.rs:605` + hadn't built the compiler; `f"""`/`r"""`/`b"""`/`c"""` ALL support multi-line — empirically verified). The real fix shipped: the string-kinds table now documents multi-line for all prefixes. No DOC item pending. [Most other CoW/honesty doc items already fixed — see DONE.md.]
 
@@ -154,7 +146,7 @@ cluster) — parallelize the ORCHESTRATION (scout next while executing current),
   - **`incompatible type for argument N` (~55), `too few/many arguments` (9), `expected identifier` (12), `has no member` (11), `aggregate value used where an integer was expected` (6), `invalid initializer` (5), `void value not ignored` (2)** — assorted ABI / signature / struct-layout mismatches; triage per-fixture from the diagnostic's CC-FAIL list.
 
   **WRONG-OUTPUT families (266 — compiles + runs, diffs Rust; was 274 pre-R8, R8 dropped 8: 7 pure-bool→MATCH + ~8 MIXED minus newly-surfaced):**
-  - **✅ PARTLY CLOSED by R6 FIDELITY (DONE.md, this session): direct float-arith/print + the float div-by-zero CRASH class are FIXED** — `lower.gg` binop result type now follows the operand type (was hardcoded I64); `lir_lower.gg` OpConstF64 carries the true IEEE-754 bits via the new `gorget_float_to_bits` extern (was `v as int`, truncating 1.5→1). The RESIDUAL numeric-zero WRONG-OUTPUT is the **INT-zero** subset (`self="0"` from non-float paths — `auto_types`, `bare_tuples`, `block_expr`, borrow-chain reads returning 0, …); these are a DIFFERENT root (value not flowing through, not float-bits) — triage separately. Re-count from the diagnostic.
+  - **✅ PARTLY CLOSED by R6 FIDELITY (DONE.md, this session): direct float-arith/print + the float div-by-zero CRASH class are FIXED** — `lower.gg` binop result type now follows the operand type (was hardcoded I64); `lir_lower.gg` OpConstF64 carries the true IEEE-754 bits via the new `gorget_float_to_bits` extern (was `v as int`, truncating 1.5→1). The RESIDUAL numeric-zero WRONG-OUTPUT is the **INT-zero** subset (`self="0"` from non-float paths — `auto_types`, `bare_tuples`, borrow-chain reads returning 0, …; `block_expr` LANDED 2026-06-03); these are a DIFFERENT root (value not flowing through, not float-bits) — triage separately. Re-count from the diagnostic.
   - **✅ CLOSED by R8 FIDELITY (DONE.md, this session): the f-string/print `bool`→`1` class.** ⚠ **The original "f-string-arg formatter" framing here was DISPROVEN.** Both formatters (f-string `lower.gg:4072-4078`; print, R6's fix, `lower.gg:5659-5669`) ALREADY had a correct `BOOL_TYPE → gorget_bool_to_str → %s` branch — the bug was UPSTREAM: `infer_method_return_type` (`lower.gg`) had NO case for the bool-predicate methods `is_some`/`is_none`/`is_ok`/`is_error` + the 8 char preds (`is_alpha`/`is_digit`/`is_alphanumeric`/`is_whitespace`/`is_upper`/`is_lower`/`is_ascii`/`is_hex_digit`), so `r.is_some()` fell to the default `I64_TYPE` → the formatter (correctly, for an I64 operand) picked `%lld` → printed `1`/`0`. R8 added the two missing BOOL branches (mirrors Rust `methods.rs:1129`) — ONE edit, NO formatter touch — clearing 7 pure-bool fixtures to MATCH (`bounds_check`, `char_methods`, `char_methods2`, `error_result_methods`, `generic_option_chain`, `return_in_if_in_match`, `test_enum_user_defined`) + improving ~8 MIXED (WRONG dropped 274→266). RESIDUAL: the self-host TYPECHECKER side has the analogous gap at `infer.gg:371` (improves type_comparison, not runtime — separate follow-up, logged in §5 below).
   - **arena/alloc early-exit (~25, `self="done"`)** — arena/alloc fixtures (`alloc_*`, `arena_*`) print only the trailing `done`, dropping all prior output — the body runs an early/short path. A drop/alloc-runtime miscompile family.
   - **drop / cow / leak / move / ownership / tracking (~40 across these prefixes)** — RAII/CoW-semantics divergences (`drop_*`, `cow_*`, `leak_*`, `tracking_*`); each a semantics-level self-host gap. Highest-value to fix (they're the language's safety story).
@@ -183,10 +175,6 @@ cluster) — parallelize the ORCHESTRATION (scout next while executing current),
   - **The 4 `shared_with_*` fixtures (await-coupled, spawn-adjacent)** — R9 deliberately skipped the shared/await refresh machinery (`shared_facade`/`param_source`/`with_refresh_pairs`, Rust `lower_with:2744-2824`). These serve `shared_with_blocking_refresh`/`shared_with_check_then_act`/`shared_with_refresh`/`shared_with_spawned_refresh`. Couple to the spawn/async family (below).
   - **spawn/async family (53 — DEEP multi-fix coroutine/scheduler port)** — the self-host emits ZERO spawn infra; write site `lower.gg` ~:5567 (the `ESpawn`/`EAwait`/`ESpawnBlocking` arms) strips spawn/await; Rust ref `src/ir/lowering/exprs/mod.rs:1032/978` + `emit_spawn_helpers` `emit_types.rs:362`. 18 WRONG + 18 CC-FAIL + CRASH, each a distinct root. (Already logged in the Chain-3 backlog; cross-referenced here as the shared_with_* prerequisite.)
 
-- **🔭 EIf-as-VALUE FIDELITY FOLLOW-UPS (out-of-scope of the if-chain-as-value round — `EIf`-in-`lower_expr` + `lower_block_expr`/`lower_stmt_as_tail_value`/`lower_if_chain_expr` landed this session; see DONE.md. Each its own future round, and (b)+(c) REUSE the two new block-expr helpers):**
-  - **(a) ~~Closure-body `return _0` stub~~ — ✅ DONE 2026-06-02.** Closure-body lowering landed in Phase 1 (`3164368b`, non-capturing/direct-call) + the universal make-site refactor Step A (`231abb78`) + ByValue-PRIMITIVE captures Step B (`d6902ccf`). The `scan_stmts_for_closures` pre-pass is DELETED; bodies are now lowered by `lower_closure_body` via the drain-until-empty post-pass; the `BasicBlock([], GTReturn(OpCopy(0)))` survives only as the stub fallback for non-lowerable (resource-capturing/nested) closures. `test_if_expressions` case 20 + `auto_types` capture path now lower (the `→13` proof); `auto_types` stays WRONG only on its 2nd const-auto root (NOT the capture). REMAINING closure work = Phase 2b (resource/CoW captures) + 2c (ByMutRef) + Phase 1.5 (closure-call ABI) — see "⏭ CURRENT NEXT" at the top.
-  - **(b) ~~`EMatch`-as-value~~ — DONE 2026-06-02 (DONE.md `43216ed5`, +7).** `lower_match_expr` added + wired into `lower_expr`'s EMatch arm + `lower_stmt_as_tail_value`'s SMatch arm. Remaining sibling: `EDo`/`EBlock` (item (c) below).
-  - **(c) `EDo` block-expr + `EBlock` value-dropping stub (`lower.gg`, the `case EBlock(block_stmts):` arm — `lower_stmts` then returns a FRESH UNIT local, dropping the block's tail value; `EDo`/`do:`-blocks `block_expr.gg` likewise — `EDo` has NO `lower_expr` arm at all).** Both should lower the block via the new `lower_block_expr` helper and return its tail value. WRONG-OUTPUT/Unit-default subset, mechanical given the helper.
 
 - **🐛 (CORRECTNESS — the `&`/`!`-param scalar read/write miscompile is ✅ FIXED, see DONE.md `3b3818d4`. It surfaced 3 INDEPENDENT pre-existing self-host runtime gaps, all REAL + repro'd standalone via the self-host) — these block the 3 `&global` fixtures from full c_emit parity (the `&global` READ itself is now FIXED — `static_init_imported` prints `inf`):** (1) **self-host `print(true)` emits `1`, not `true`** (Rust gg: `true`) — the bool-to-stdout lowering. (2) **self-host `float 1.5 + 2.5` yields `0`, not `4.0`** (Rust gg: `4.000000`) — float arithmetic/print miscompile. ⚠ **SCOPE UNKNOWN — could be BROAD** (many of the c_emit mismatches may trace here; investigate how general the float gap is BEFORE fixing — a plain `float a=1.5; float b=2.5; print(a+b)` repros it). (3) **`math_constants` runtime division-by-zero.** Each keeps its fixture c_emit-excluded; fixing them de-excludes `static_init_imported`/`math_constants`/`numeric_trait` and likely lifts c_emit parity (esp. if (2) is broad). Find the writer site per gap (bool-print lowering; float-binop/print lowering; the div site). [Logged by the `&`-param fix executor + output-review, 2026-05-31.]
 
@@ -863,175 +851,6 @@ cluster) — parallelize the ORCHESTRATION (scout next while executing current),
   - **`build_gg_dir_cached` has only one cache slot** (`SELF_HOST_LOWERER_DRIVER`). The other 5 comparison drivers (lexer/parser/resolver/typechecker/check) rebuild 15-60s of identical work per test. Also: cache-invalidation order between test runs may have contributed to the stale-binary misdiagnosis above — worth auditing the eviction policy.
   - **Add `VmHWM` assertion to `self_host_bootstrap`.** Poll `/proc/$PID/status` for the stage-1 process, assert peak < 1500 MB (current 890 MB has headroom). Would have caught the audit's stale-binary much earlier — and catches the next real regression silently. Defer until the upstream GIDrop-emission pass lands (agent `a90b2bbf` flagged: adding it before then would either be trivially satisfied or assert against pre-existing leak behaviour unrelated to the actual fix).
   [carried forward from audit `a825b67a` 2026-05-19; verified still applicable 2026-05-20]
-
-## Profile snapshot 2026-05-17
-
-Fresh `gg profile` snapshot taken on `gorget-1` HEAD (e052606e) after the post-2026-05-17 batch (validate_resource walks collapsed `4b529742`, semantic self-type index `e4e1f6a3`, GIR Liveness bitset `79499789`, propagate_copies FxHashMap `469d7942`, loader rayon `107ab8dc`, TypeTable primitive_ids `615a3d0b`, LIR cse/find_live_functions/eliminate_dead_globals FxHashMap `5c38ee14`, stack-traces v1 regression closed `01f91844`, LIR codegen perf rewrite `962ae144`). Profile output medianed over 5 runs per workload. Goal: identify the **next** dominant phase outside the known/handled zones (drop_elab, semantic name-index, safety borrow-state-reset, and the just-shipped batch).
-
-**Workloads profiled** (release build, median-of-5):
-
-| Workload                                            | total_ms | LIR insts | C lines |
-|-----------------------------------------------------|---------:|----------:|--------:|
-| `self_host_typechecker/driver.gg` (~12k aggregate)  |   152.0  |    75 262 | 193 988 |
-| `self_host_lowerer/driver.gg` (~30k aggregate)      |   550.8  |   194 828 | 536 943 |
-| `self_host_resolver/driver.gg` (subst. for arena)   |    75.3  |    37 241 |  99 212 |
-| `self_host_parser/driver.gg` (subst. for gorget-js) |    68.9  |    36 857 |  94 987 |
-
-**Note on substitutions:** `target/gorget-arena/src/main.gg` and `target/gorget-js/src/main.gg` were both located but failed `gg check` at the time this profile was taken. **Arena fixed 2026-05-17** (see DONE) — root cause was a compiler bug in `register_function_signature` where an equip method `bool file_exists(self, String)` clobbered the same-named `std.fs::file_exists(cstr)` extern's `type_id` because the name-based lookup found the extern at the root scope when the equip block wasn't on the scope stack. The fix swaps to span-based lookup; arena's `gg check` is now clean. **JS still fails** with 2 `expected String, found RuntimeException` errors in `eval.gg:4266/5185` — these are real bugs in gorget-js code (snag #2 commit `547a9abd` already noted them as "Real bugs that the truncate had been hiding — gorget-js will fix them"). Filed as a separate "gorget-js: fix eval.gg host_error msg type mismatch (snag #2 surface)" follow-up below. Substituted with `self_host_resolver/driver.gg` and `self_host_parser/driver.gg` per the user's fall-back instruction. Re-run the profile against `target/gorget-arena/src/main.gg` once a fresh snapshot is desired — it should now serve as a useful third profile target alongside the lowerer and typechecker.
-
-**Lowerer dropped 798ms → 550.8ms (−31%) since 2026-05-16.** Per-phase deltas vs the prior snapshot (median):
-
-| Phase             | 2026-05-16 | 2026-05-17 | Δ      | Wins explaining the drop |
-|-------------------|-----------:|-----------:|-------:|---|
-| `lir_optimize`    |     226.3  |     177.2  | −21.7% | `propagate_copies` 18.6→10.5, `cse` 5.0→2.7, `eliminate_dead_globals` and tail wins (`469d7942`, `5c38ee14`) |
-| `gir_lower`       |     155.2  |     108.7  | −30.0% | now has per-pass timing (`3dfc9916`); no specific writer-side win, likely cache/codegen-of-rustc + smaller-input drift |
-| `codegen` (c_lir) |     136.3  |      84.5  | −38.0% | LIR codegen perf rewrite (`962ae144`) |
-| `semantic`        |      86.5  |      48.1  | −44.4% | `validate_resource_*` collapse (`4b529742`), self-type index (`e4e1f6a3`), primitive_ids (`615a3d0b`) |
-| `load_imports`    |      67.1  |      24.8  | −63.0% | rayon parallelization (`107ab8dc`) |
-| `lir_ssa`         |      44.2  |      37.0  | −16.3% | secondary effect of FxHashMap swaps; structural cost unchanged |
-| `lir_lower`       |      30.9  |      27.3  | −11.7% | minor |
-| `gir_optimize`    |      27.0  |      22.6  | −16.3% | GIR Liveness bitset (`79499789`) |
-
-**Zero regressions.** Every phase moved down. The biggest absolute drop is in `codegen` (51.8ms, the `962ae144` win) and `semantic` (38.4ms, the batch).
-
-**Phase breakdown on `self_host_lowerer/driver.gg` (550.8ms, median-of-5)** — sorted by absolute time, with KNOWN/HANDLED rows annotated:
-
-| Phase                              | ms     | % total | Notes |
-|------------------------------------|-------:|--------:|---|
-| `lir_optimize` (total)             | 177.2  | 32.2%   | of which `drop_elaboration` 117.1 (KNOWN), `eliminate_dead_code` 11.2, `propagate_copies` 10.5, `post_elab_dce` 4.7, `fold_constants` 3.6, `eliminate_dead_functions` 3.0, `cse` 2.7, `merge_linear_blocks` 2.5, `simplify_algebraic` 2.3, `eliminate_dead_blocks` 1.3, `fold_constant_branches` 1.2, `eliminate_dead_globals` 1.1, rest <0.3ms |
-| `gir_lower`                        | 108.7  | 19.7%   | of which `lower_functions` 61.0, `validate_consume_sites` 15.2, `lower_equip_methods` 9.0, `monomorphize` 4.9, `validate_module` 3.8, `flatten_and_manglings` 3.4, `tag_ownership_infer_fresh_owned` 1.5, `validate_resource_sites_all` 1.5 (post-collapse, KNOWN), `auto_register_externs` 1.4, `validate_drop_pre_rebind_and_null_to_opt` 1.2, rest <1ms |
-| `codegen` (c_lir)                  |  84.5  | 15.3%   | C string assembly + serialization. Down 38% from prior snapshot. Still scales with C line count (537k lines). |
-| `semantic` (total)                 |  48.1  |  8.7%   | of which `safety_check_module` 14.8 (KNOWN), `typecheck_module` 14.2, `meta_consts` 13.8, `safety::check_items_recursive` 13.0 (KNOWN), `resolve_bodies` 3.1, `collect_top_level` 0.8, `safety::infer_purity` 0.8, `safety::unused_imports` 0.7, rest <0.7ms |
-| `lir_ssa`                          |  37.0  |  6.7%   | Critical-edge split + SSA construction (dominators, phi insertion, renaming) |
-| `lir_lower`                        |  27.3  |  5.0%   | GIR → LIR translation |
-| `load_imports`                     |  24.8  |  4.5%   | rayon-parallel file I/O + parse (`107ab8dc` already shipped) |
-| `gir_optimize`                     |  22.6  |  4.1%   | dead_drop / nop_elim / dead_block / dead_store passes |
-| `parse`                            |   0.6  |  0.1%   | entry-file lex+parse only (imports counted in `load_imports`) |
-
-**Cross-workload phase distribution** (% of total per workload, helps spot per-workload vs. universal costs):
-
-| Phase            | typechecker | lowerer | resolver | parser |
-|------------------|------------:|--------:|---------:|-------:|
-| `lir_optimize`   |       19.4% |   32.2% |    13.9% |  15.2% |
-| `gir_lower`      |       22.1% |   19.7% |    25.0% |  23.4% |
-| `codegen`        |       14.9% |   15.3% |    13.3% |  14.4% |
-| `semantic`       |       11.7% |    8.7% |    14.1% |  13.2% |
-| `lir_lower`      |        7.7% |    5.0% |     7.6% |   7.5% |
-| `lir_ssa`        |        7.4% |    6.7% |     6.6% |   6.5% |
-| `gir_optimize`   |        5.2% |    4.1% |     5.2% |   5.2% |
-| `load_imports`   |        7.4% |    4.5% |    10.4% |  10.6% |
-
-**Cross-workload observations:**
-
-1. **`gir_lower` is universal-heavy** (~20-25% on every workload) — the most consistently large phase across all four. **This makes it the highest-leverage optimization target by hit rate.**
-2. **`lir_optimize` scales worse-than-linearly with code size** — 32% on lowerer vs 14-19% on the others. Drop_elab dominates at the high end; the rest of `lir_optimize` is closer to flat.
-3. **`load_imports` matters more on small targets** — 10% on resolver/parser, 4% on lowerer (rayon's already extracted the parallel slack on the big one). Future wins here are tail.
-4. **`semantic` is consistent ~10-14%** across all workloads except lowerer (where it's diluted to 8.7%). Hot sub-passes are the same everywhere: typecheck/meta_consts/safety.
-5. **`codegen` is ~15% everywhere** — flat % across sizes, confirms it scales linearly with output. The remaining 84ms on lowerer is the next-largest pure-IO phase; 56× win in `962ae144` was real but there's still tail.
-
-**Top-5 cheap-win candidates (excluding drop_elab, semantic name-index, safety borrow-state, and the items shipped in the 2026-05-17 batch):**
-
-1. **`gir_lower::lower_functions` — INSTRUMENTED + PRESCAN FIX SHIPPED 2026-05-18** (~65ms on lowerer baseline → ~55ms after; instrumentation pattern from `3dfc9916` extended one layer deeper). The non-generic per-AST-function lowering loop in `src/ir/lowering/mod.rs:1242-1257` now reports a breakdown across `lower_function::{setup, prescan, body, finalize}` plus body sub-passes `body::{meta_expand, lower_block}` and prescan sub-passes `prescan::{cow_unsafe, cow_after, name_use_counts, liveness}` in `gg profile` JSON. **Post-instrument breakdown on lowerer (median-of-5)**:
-
-   | Sub-pass                                  | Before (ms) | After (ms) | Δ |
-   |-------------------------------------------|------------:|-----------:|---:|
-   | `lower_functions` (parent total)          |        65.0 |       55.0 | −15% |
-   | `lower_function::body`                    |          ~50 |       45.8 | tail |
-   | &nbsp;&nbsp;`body::lower_block`           |          ~46 |       41.1 | (the bulk) |
-   | &nbsp;&nbsp;`body::meta_expand`           |          ~4 |        3.4 | (block.clone+meta walk) |
-   | `lower_function::prescan`                 |        18.0 |        7.8 | **−57%** |
-   | &nbsp;&nbsp;`prescan::liveness`           |         9.0 |        3.0 | **−66%** |
-   | &nbsp;&nbsp;`prescan::cow_after`          |         7.3 |        3.0 | **−59%** |
-   | &nbsp;&nbsp;`prescan::name_use_counts`    |         1.2 |        1.2 | flat |
-   | &nbsp;&nbsp;`prescan::cow_unsafe`         |         0.5 |        0.5 | flat |
-   | `lower_function::setup`                   |         2.3 |        1.1 | (coalesced) |
-   | `lower_function::finalize`                |         0.2 |        0.2 | flat |
-   | `gir_lower` (parent phase)                |       116.0 |      104.5 | −10% |
-   | `total`                                   |       581.0 |      570.0 | −2% |
-
-   **Fix**: `src/ir/lowering/liveness.rs` `FxHashSet<String>` → `FxHashSet<&'a str>` borrowed from AST identifier nodes (cheap clone, no per-entry allocation at branch save/restore points). `src/ir/lowering/functions.rs::compute_cow_reassigned_after` and its helpers `FxHashSet<String>` → `FxHashSet<Rc<str>>` with a per-function `String→Rc<str>` interner (the analysis result owns the map across function boundaries so a `&str`-slice approach would require lifetime plumbing through `FunctionState`; `Rc<str>` is the localized equivalent — clones are refcount bumps). `ctx.func_state.cow_reassigned_after` type updated to match; `is_source_mut_unsafe_at` queries use `set.contains(s as &str)` via `Rc<str>: Borrow<str>`. Typechecker `lower_functions` 12.3 → 11.3ms (−1ms / −8%); parser tiny. **The fix illustrates CLAUDE.md "Debugging heuristic — fix complexity as a signal of wrong layer" obliquely** — the writer site (`future.clone()` at every statement boundary plus union sites in if/match) was paying full per-String alloc cost; the cheap fix is changing the cell type to make clones cheap. The 9ms body-side speedup (from ~50ms → 45.8ms) is a downstream effect: body lowering reads `cow_reassigned_after` via `is_source_mut_unsafe_at` (called at every CoW-borrow site), and those calls used to allocate `format!("@mut:{}", path)` `String`s as map keys — they still do today (look at `is_source_mut_unsafe_at` for the lingering `format!` calls; switching to a reused-buffer or stack-buf `&str` lookup would shave the remaining 1-2ms).
-
-   **Remaining cheap-win at this site (deferred)**:
-   - ~~(i) drop the residual `format!("@mut:{}", path)` allocations in `is_source_mut_unsafe_at`~~ **SHIPPED 2026-05-18** (perf bundle, commit `5579bd66`; physically on disk via `982c853e` co-commit): single reused `String` buffer + `truncate(PREFIX.len())` + incremental `push_str` rebuild eliminates 1 alloc for the direct marker + N-1 allocs for the ancestor-prefix walk.
-   - ~~(ii) `body::meta_expand` at 3.4ms is `block.clone()` + tree walk. The clone could be elided for blocks that have no `meta for` / `meta if` to expand — quick scan check before the clone. Expected: 2-3ms shave.~~ **SHIPPED 2026-05-18** (perf bundle, commit `5579bd66`): new `meta::block_has_delayed_meta(&Block)` recursive scanner gates the three `evaluate_delayed_meta_block` call sites. **Measured: meta_expand 3.4ms → 0.1ms across all 4 workloads (−97%).**
-
-   [updated: 2026-05-18 — Step 1 + Step 2 + perf bundle (`5579bd66`: items (i) + (ii) + lower_if instrumentation + var_decl get_type_def coalesce) shipped]
-
-   **Post-instrument-take-2 breakdown — `body::lower_block` per-statement-kind (2026-05-18 post-perf-bundle, median-of-5)**:
-
-   | Sub-sub-pass (stmt kind)                  | Self time (ms) | % of body::lower_block |
-   |-------------------------------------------|---------------:|-----------------------:|
-   | `body::lower_block::stmt::var_decl`       |          12.2  | 28% |
-   | `body::lower_block::stmt::if`             |          11.0  | 25% |
-   | `body::lower_block::stmt::expr`           |          ~6.0  | 14% |
-   | `body::lower_block::stmt::match`          |          ~4.0  |  9% |
-   | `body::lower_block::stmt::return`         |          ~3.3  |  8% |
-   | `body::lower_block::stmt::assign`         |          ~2.3  |  5% |
-   | `body::lower_block::stmt::while`          |          ~1.4  |  3% |
-   | `body::lower_block::stmt::for`            |          <0.4  | <1% |
-   | rest (loop/break/continue/throw/assert/…) |          <0.3  | <1% |
-   | **SUM (matches `body::lower_block` 43.3)**|        **~43** | **100%** |
-
-   **`stmt::if` sub-sub-buckets (2026-05-18 perf bundle, median-of-5)** — the bundle's lower_if instrumentation drilled one layer deeper:
-
-   | `if::<sub>`         | Self time (ms) | % of stmt::if |
-   |---------------------|---------------:|--------------:|
-   | `if::cond_eval`     |           4.06 | 37% |
-   | `if::then_branch`   |           5.19 | 47% |
-   | `if::elif_branches` |           1.47 | 13% |
-   | `if::else_branch`   |           0.46 |  4% |
-   | `if::phi_merge`     |           0.07 |  1% |
-   | **SUM (matches `stmt::if` ~11.0)** |   **~11.25** | **100%** |
-
-   **Findings on the `if` breakdown**: dominant sub-pass is `then_branch` (5.2ms / 47%) — save_locals + push_scope + emit_is_bindings + lower_block + pop_scope/restore + snapshot/restore, executed once per Stmt::If. `cond_eval` (4.1ms / 37%) is the next-largest — pure `lower_expr` cost on conditions (typically `x is Pattern(...)`, `x == y`, `len(coll) > 0`-style). No one-line cheap win surfaces from this drilldown: the work is structurally what an `if`-lowering must do per occurrence. The `lower_expr` cost feeding `cond_eval` is the same `exprs/mod.rs` (4331 LOC) target that backs `stmt::expr` — a tour-grade refactor, not a one-line fix.
-
-   These are **EXCLUSIVE (self) times** — `lower_stmt` subtracts nested `lower_stmt` calls (`Stmt::If` → recursive `lower_block` → `lower_stmt`) via a `ctx.stmt_nested_dur` running total. So the buckets sum to `body::lower_block` total, not double-counting recursion. Reported via `gg profile` JSON as `lower_function::body::lower_block::stmt::<kind>` entries.
-
-   **Why `var_decl` dominates and why it's structural (no cheap-win surface found)**:
-   - 1500+ var_decls in the lowerer driver (`grep -c "^\s*case \|^\s*if \|^\s*for \|^\s*while \|^\s*match " self_host_lowerer/lower.gg → 1603`).
-   - Each `lower_var_decl` (stmts/mod.rs:308-948, ~640 LOC) does N typed registry checks: `is_box`, `type_name_for_id`, `get_type_def(c_runtime_alias)`, `is_resource_type`, `is_collection_type_name`, `needs_drop`, plus 2-3 `infer_operand_type_with_builder` calls, plus 2-3 drop registration calls.
-   - I audited the path: every individual operation is a single FxHashMap-on-u32-or-String lookup. There's no O(N²) pattern, no per-call allocation, no name-prefix dispatch in this function. The 12ms is genuinely 1500 × (~8μs of typed bookkeeping). A code-quality cleanup landed alongside the instrumentation: `infer_operand_type_with_builder` / `infer_operand_type_full` / `infer_type_name_from_operand_full` all linear-scanned `ctx.locals_iter()` BEFORE the O(1) `builder.locals[idx]` fallback — swapped the order (in-range index first, ctx scan only for closure-param sentinel `LocalId(u32::MAX - i)` IDs). Measured: no perf delta on lowerer (the ctx map is small enough that the scan was already fast), but it's the right shape per CLAUDE.md "fix complexity as a signal of wrong layer".
-
-   **Real cheap-win opportunities in `body::lower_block` (deferred — not exhausted, just not on the obvious O(N) surface)**:
-   - ~~(A) **`var_decl` typed-flag check coalescing**~~ **SHIPPED 2026-05-18 (perf bundle `5579bd66`)**: coalesced the two `get_type_def(&tn)` lookups in the opt/result enum-droppability branch. Added `TypeRegistry::is_closure_runtime_type` to fold three independent `c_runtime_alias == Some("GorgetClosure")` chains into a typed call. Code quality + Layering rule 2 win; no isolated perf delta (sub-ms regime).
-   - ~~(B) **`if`-statement at 9ms — `lower_if`**~~ **INSTRUMENTED 2026-05-18 (perf bundle `5579bd66`)**: see `if::*` sub-bucket table above. Dominant is `then_branch` (5.2ms / 47%); `cond_eval` 4.1ms (37%); no one-line cheap win surfaces from the drilldown.
-   - (C) **`expr` at 6ms — pure `lower_expr` on top-level statement expressions** (calls, method invocations, `assert(...)`-equivalents). The 6ms is the expression-lowering machinery itself. `src/ir/lowering/exprs/mod.rs` (4331 LOC) is the structural target — won't yield to FxHashMap swaps; will need a tour.
-   - (D) **`match` at 4ms — `lower_match_stmt`** in `patterns.rs:326`. Pattern dispatch, scrutinee type analysis, arm-body lowering (subtracted as nested). Likely structural too.
-
-   Verdict for this round: **instrumentation-only commit, no measurable cheap-win in `body::lower_block` itself.** The per-kind breakdown is the deliverable; the structural work is real per-kind cost that requires deeper refactor at the writer site (e.g., flattening the var_decl typed-flag chain) and is the next round's medium-effort target.
-
-2. **`gir_lower::validate_consume_sites` (15.2ms on lowerer, 4.6ms on typechecker) — `src/ir/lowering/` (location TBD).** Second-largest gir_lower sub-pass after `lower_functions`. Likely walks every GIR function looking for ownership consume sites and checking owner/move invariants. Cheap-win surface: if it walks insts and queries a name-keyed map for each, a one-pass merge with `validate_resource_sites_all` (1.5ms, post-`4b529742` collapse) or `validate_drop_pre_rebind_and_null_to_opt` (1.2ms) could shave 4-5ms via shared walks. FxHashMap swap if it uses stdlib HashMaps internally. [priority: medium, ~half day]
-
-3. **`codegen` tail (84.5ms on lowerer, post-`962ae144`) — `src/backend/c_lir/`. STILL THE #3 PHASE BY ABSOLUTE TIME.** Output buffer is pre-sized to 256KB but actual output is ~5MB on lowerer (`src/backend/c_lir/mod.rs:408`); bumping `with_capacity(if include_runtime { 8 << 20 } else { 64 << 10 })` saves a dozen reallocations. Several `std::collections::HashMap` instances in the per-function emit path (`mod.rs:258`, `779`, `1567`, `1664`, `1780`, `helpers.rs` throughout) — swap to FxHashMap, all keys are integer-newtypes or short strings. Also `helpers.rs:131-178` has per-emit `name.starts_with("Dict__")`/`starts_with("HashMap__")` dispatching that's a Layering-discipline-rule-violation symptom; a typed `CollectionKind` on the type registry would eliminate string-prefix dispatch and the associated allocations. **Note: `src/backend/c_lir/` was the zone of the `962ae144` rewrite — coordinate with whoever's hot there next so we don't step on a redesign in flight.** [priority: medium, ~1 day for capacity+FxHashMap; the string-prefix dispatch cleanup is a layering-discipline fix worth its own commit]
-
-4. **`semantic::meta_consts` (13.8ms on lowerer, 5.3ms on typechecker, 3.1ms on resolver, 2.6ms on parser) — `src/semantic/meta.rs:440 evaluate_meta_consts`. STILL UN-INVESTIGATED.** Carryover from the 2026-05-16 honorable mention. Universal (every workload hits it), grows linearly with module size. Same hypothesis as last time: re-evaluation of identical `meta` constants without memoization. The fact that resolver and parser hit ~3ms each suggests the cost is in per-module meta-constant walks, not specific to lowerer-scale code. A simple `FxHashMap<MetaConstId, Value>` memo across the module would likely halve this. [priority: medium, ~half day, well-scoped]
-
-5. **`gir_lower::lower_equip_methods` (9.0ms on lowerer, 9.0ms on typechecker, 8.2ms on resolver, 7.2ms on parser) — `src/ir/lowering/`. NEAR-CONSTANT ACROSS WORKLOADS — SMELLS LIKE FIXED-COST WORK PER METHOD-WITH-EQUIP.** Notable: this phase barely scales with input size. Suggests either (a) a big chunk of work that's per-equip-block independent of the function bodies (signature registration?), or (b) a hot-path inefficiency that's masked by the equip count being similar across these self-host fixtures. Worth profiling for an O(equips × something) loop. If (a), check whether per-equip work duplicates per-method scaffolding that could hoist out. [priority: medium-low, investigation-first, ~half day to identify the cost source]
-
-**Honorable mentions (slow, but structural — no cheap win expected):**
-
-- **`drop_elaboration` 117.1ms on lowerer (KNOWN/HANDLED zone).** Still the single largest sub-phase by 4×. Any future big win on lowerer compile time has to attack this. `src/lir/drop_elab.rs` uses stdlib HashMap/HashSet heavily (`val_to_slot`, `deleted_slots`, `maybe_init_slots` — all keyed by u32 newtypes), but the work itself is intrinsically per-instruction per-fixpoint-iteration, so FxHashMap alone would only buy a few ms. The real lever is fewer fixpoint iterations or smarter init-state tracking. Out-of-scope for cheap-wins; treat as the next round's *structural* work.
-- **`lir_ssa` 37.0ms on lowerer (carryover from 2026-05-16, still structural).** Standard Cytron-style construction. The 2026-05-16 audit covered this — re-validate that ssa.rs internal scratch maps use FxHashMap/Bitset/IndexVec, but don't expect more than 3-5ms.
-- **`lir_lower` 27.3ms on lowerer.** Quiet middle of the pack, no specific hotspot visible. GIR→LIR translation; intrinsic per-instruction work.
-
-**Cross-workload comparison (universal vs per-workload costs):**
-
-| Cost                                | Universal? | Notes |
-|-------------------------------------|------------|---|
-| `gir_lower::lower_functions`        | YES        | top sub-pass on all 4 workloads (lowerer especially, but proportional everywhere) |
-| `drop_elaboration`                  | YES        | KNOWN — biggest absolute, every workload |
-| `gir_lower::lower_equip_methods`    | YES, flat  | unusually constant across sizes — suggests fixed per-equip cost |
-| `semantic::meta_consts`             | YES        | every workload, linear-ish |
-| `lir_optimize` non-drop tail        | YES        | proportional across workloads |
-| `load_imports`                      | partial    | already-parallelized, dominates small targets only |
-| `gir_lower::validate_consume_sites` | scales     | bigger on lowerer (15ms) than typechecker (5ms) |
-| `codegen`                           | YES        | flat % of total (~15%), scales linearly with C lines |
-
-**Where I'd point the next optimization agent:** **`gir_lower::lower_functions`** is the new #1. It's the largest single sub-phase outside the KNOWN/HANDLED zone (61ms on lowerer, 12ms on typechecker), it's universal (every workload), and it's currently profile-blind below the phase level — so step 1 is **instrument it further** (mirror the `gir_lower` instrumentation pattern from `3dfc9916`: add sub-pass timing for "exprs / stmts / setup / drops" within `lower_function`). Once the dominant sub-sub-pass is named, the cheap-win lever follows — most likely an FxHashMap swap in `src/ir/lowering/context.rs` (3330 LOC of per-function scratch state) or an O(N²) span/scope walk in `exprs/mod.rs`. Realistic expected win: 15-25ms on lowerer (~5% off total compile), proportional on every workload because this scales with function count. The follow-on (instrumented sub-pass identified, FxHashMap swap or merge of validation walks) is then a second 1-day session.
-
-The smaller-but-mechanical alternative is **`semantic::meta_consts` memoization** — 13.8ms on lowerer, ~50% likely halvable with a `FxHashMap<MetaConstId, Value>` memo. Well-scoped, half a day, lower risk, every-workload win. Good "second agent" task or warmup.
-
-**Out of scope for this round:** `drop_elaboration` (KNOWN, structural), the `gorget-arena`/`gorget-js` brokenness (not a compiler perf issue), `lir_ssa` (structural — already audited 2026-05-16). [filed 2026-05-17]
 
 ## High
 
