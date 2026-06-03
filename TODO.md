@@ -2,7 +2,7 @@
 
 ## ⏭ CURRENT NEXT (2026-06-02 pm — supersedes the "🧭 SESSION ROLLUP" + "🎯 NEXT SESSION FULL UNIVERSAL" blocks below)
 **✅ Phase-2 STEP A + STEP B both LANDED this session — gorget-1 code tip `d6902ccf` (`git log -1`
-for live; docs commits on top). RUNTIME PARITY 261 → 267 = 28.9%.**
+for live; docs commits on top). RUNTIME PARITY 261 → 267 → **272 = 29.4%** (V/E/Err enum-typedef-drop +5, `cf6d5f89`).**
 - **STEP A** (`231abb78`, DONE.md): ATOMIC universal make-site closure refactor + latent desync FIX.
   `lower_expr` = SOLE closure-id source/recorder (`LiftedClosure` on `GirModule.lifted_closures`);
   drain-until-empty post-pass = SOLE pusher of `__Closure_N__call`; pre-pass scan closure-walk +
@@ -97,8 +97,16 @@ for live; docs commits on top). RUNTIME PARITY 261 → 267 = 28.9%.**
   is what actually flips fixtures. So this chain = lower.gg auto-prop hook + the lir_lower.gg prereq
   (must serialize after the V/E/Err chain, same file). snag43/dict_nested/snag44 need MORE (Vector/Dict-
   of-user-type mono, `??`-lowering, nested-pattern) — separate.
-- **box `__gg_new` (~11, `box_*`/serializable/dynamic_dispatch)** — `Box.new(...)` inner-type
-  resolution; closure-entangled (Box of Callable); `lower.gg`/`lir_lower.gg`.
+- **box `__gg_new` (~12) — ⛔ END-TO-END scouted 2026-06-03 = DEEP / ZERO parity-yield. NOT a parity
+  chain.** The `unknown type name '__gg_new'`/`__gg_*__set` error is a thin VENEER: a hand-applied
+  contained fix (rewrite `Box__new`→`__gorget_box_alloc_<inner>` + gate the box-allocator scanner
+  `lir_codegen.gg:745/767` on the typed `type_runtime_map`) eliminates the symptom but flips 0/12 —
+  every fixture hits an ORTHOGONAL deep gap: Box-of-Callable (Phase-2 closures), trait-object boxes
+  (`_VTable`/`_TraitObj` machinery, 5 fixtures), Snag#26 deref-write-through-box (CRASH, 3), Box-in-
+  `Some` type-loss (2), missing `Box__<inner>__get/__set` wrapper-emit (box_heap). ⚠ The scanner/Box.new
+  fix IS a legit standalone FIDELITY commit (layering-clean typed-registry, 0 regression, makes future
+  box work tractable) — land it as fidelity if desired, NOT as parity. Contained box sub-chains hiding
+  here: (a) `Box__<inner>__get/__set` wrapper-emit (unblocks box_heap-class), (b) Snag#26 deref-write.
 - **collection-HOF inlining (~33, `.map/.filter/.fold` on Vector/Set/Dict → undefined `Vector__T__map`)**
   — DEEP: self-host has ZERO `HofExpand` (Rust ~2100 lines of BIR generators). Multi-chain effort.
 - **closure Phase 2b (resource/CoW captures, ~5-8)** + **2c (ByMutRef)** — deep, `lower.gg`+`lir_*`.
