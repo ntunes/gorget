@@ -3653,6 +3653,68 @@ bool try_register_collection_ctor_static(GirModule &gmod, SpannedType sd_ty, Str
         else:
             return false
 
+# Detect + register a USER-STRUCT-constructor static (case 3): a
+# `static Counter c = Counter(0)` whose RHS is `ECall(EIdentifier(cname),
+# [literal, ...], [])` with the declared type bare `TNamed(cname, [])`,
+# `cname` a NON-enum user struct (in `gmod.type_infos`), NOT a sync/atomic
+# constructor, and EVERY arg a recognised scalar literal. Builds the
+# positional C compound literal in arg order (`Counter(0)` → `{0LL}`) and
+# registers it as a GGSTATIC_BYTES const init — the C backend emits
+# `<struct> __lir_gN = {0LL};` at the declaration, no synth fn. Mirrors
+# Rust's `GlobalInit::Struct` (`src/ir/lowering/mod.rs:2630-2659`): all-args-
+# literal struct ctor → typed compile-time initializer, both backends render
+# it to `{f0, f1, …}`. Returns true on hit; false (any guard fails) to fall
+# through to the literal / None cascade with NO regression.
+bool try_register_struct_ctor_static(GirModule &gmod, SpannedType sd_ty, String sd_name, SpannedExpr sd_val):
+    match sd_val.expr:
+        case ECall(callee_box, args, targs):
+            if targs.len() != 0:
+                return false
+            if args.len() == 0:
+                return false
+            match (*callee_box).expr:
+                case EIdentifier(cname):
+                    # Declared type must be bare `TNamed(cname, [])` (no
+                    # generic args; the call's name must match the type).
+                    match sd_ty.ty:
+                        case TNamed(tn, ty_targs):
+                            if tn != cname:
+                                return false
+                            if ty_targs.len() != 0:
+                                return false
+                        else:
+                            return false
+                    # `cname` must be a registered NON-enum user struct, and
+                    # NOT a sync/atomic constructor (those route through
+                    # `sync_constructor_runtime_name` at the runtime path).
+                    if not gmod.type_infos.contains(cname):
+                        return false
+                    GirTypeInfo sct_ti = gmod.type_infos.get(cname).unwrap()
+                    if sct_ti.is_enum:
+                        return false
+                    if sync_constructor_runtime_name(cname) != "":
+                        return false
+                    # Every arg must render as a scalar C literal; build the
+                    # positional compound literal in arg order.
+                    String lit = "{"
+                    int ai = 0
+                    while ai < args.len():
+                        String al = scalar_static_c_literal(args.get(ai).unwrap())
+                        if al == "":
+                            return false
+                        if ai > 0:
+                            lit = lit + ", "
+                        lit = lit + al
+                        ai += 1
+                    lit = lit + "}"
+                    int ty_id = map_ast_type(sd_ty, &gmod)
+                    static_put_bytes(&gmod, sd_name, lit, ty_id)
+                    return true
+                else:
+                    return false
+        else:
+            return false
+
 # Register a LITERAL-init static (case 1) under `gmod.statics`; the
 # matching `FunctionDef` is built by `build_static_init_fn` and lowered in
 # the main function loop. Mirrors Rust pushing a `Global { init:
@@ -12013,6 +12075,13 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                                 #      synthesized + lowered in the non-generic
                                                 #      function loop below (full registry ready).
                                                 bool sd_ctor = try_register_collection_ctor_static(&gmod, sd_ty, sd_name, sd_val)
+                                                if not sd_ctor:
+                                                    #  (3) user-struct CONSTRUCTOR (`Counter(0)`)
+                                                    #      with all-literal args → direct
+                                                    #      GINIT_BYTES struct compound literal,
+                                                    #      no synth fn (mirror Rust
+                                                    #      GlobalInit::Struct).
+                                                    sd_ctor = try_register_struct_ctor_static(&gmod, sd_ty, sd_name, sd_val)
                                                 if not sd_ctor and static_is_literal_init(sd_val):
                                                     register_literal_static(&gmod, sd_ty, sd_name)
             else:
