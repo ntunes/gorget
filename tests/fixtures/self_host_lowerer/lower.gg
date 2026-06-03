@@ -4304,6 +4304,22 @@ int map_compound_binop(String op):
             diag_warn("map_compound_binop", "unknown compound operator '" + op + "' — routing through map_binop")
             return map_binop(op)
 
+# Emit a compound-assign arithmetic step (`x = x <op> y`). For `+=` with a
+# String operand, route to `gorget_str_cat(lhs, rhs)` (allocates a new
+# String, reads both operands → both borrow) — same form as the EBinaryOp
+# `+` String-concat path (lower.gg:~4781-4789). Without this, String `+=`
+# becomes a raw C `+` on `Str` and the emitted program fails to compile.
+# Every other op (and `+=` on non-String operands) is byte-identical to the
+# original `GIBinOp(dst, map_compound_binop(op), result_ty, …)` call.
+void emit_compound_arith(LowerCtx &ctx, String op, int dst, int lhs_val, int rhs_val, int result_ty, GirModule &gmod):
+    if op == "+=" and (is_string_local(lhs_val, &ctx, &gmod) or is_string_local(rhs_val, &ctx, &gmod)):
+        Vector[Operand] cat_args = []
+        cat_args.push(op_consume(&ctx, &gmod, lhs_val, CkCallArgBorrow()))
+        cat_args.push(op_consume(&ctx, &gmod, rhs_val, CkCallArgBorrow()))
+        emit(&ctx, GICallExtern(dst, "gorget_str_cat", cat_args))
+    else:
+        emit(&ctx, GIBinOp(dst, map_compound_binop(op), result_ty, op_consume(&ctx, &gmod, lhs_val, CkBinOpArg()), op_consume(&ctx, &gmod, rhs_val, CkBinOpArg())))
+
 bool is_comparison(String op):
     match op:
         case "==" | "!=" | "<" | "<=" | ">" | ">=":
@@ -7246,7 +7262,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                             emit(&ctx, GIDeref(cmp_cur, lid, cmp_inner_ty))
                             int cmp_rhs = lower_expr(&ctx, value_expr, &gmod)
                             int cmp_dst = add_local(&ctx, cmp_inner_ty, NO_NAME)
-                            emit(&ctx, GIBinOp(cmp_dst, map_compound_binop(op), cmp_inner_ty, op_consume(&ctx, &gmod, cmp_cur, CkBinOpArg()), op_consume(&ctx, &gmod, cmp_rhs, CkBinOpArg())))
+                            emit_compound_arith(&ctx, op, cmp_dst, cmp_cur, cmp_rhs, cmp_inner_ty, &gmod)
                             emit(&ctx, GIDerefStore(lid, op_consume(&ctx, &gmod, cmp_dst, CkAssign()), cmp_inner_ty))
                         else:
                             int lhs_type = lhs_full_type
@@ -7254,7 +7270,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                             emit(&ctx, GIAssign(lhs_val, op_consume(&ctx, &gmod, lid, CkAssign())))
                             int rhs_val = lower_expr(&ctx, value_expr, &gmod)
                             int op_dst = add_local(&ctx, lhs_type, NO_NAME)
-                            emit(&ctx, GIBinOp(op_dst, map_compound_binop(op), lhs_type, op_consume(&ctx, &gmod, lhs_val, CkBinOpArg()), op_consume(&ctx, &gmod, rhs_val, CkBinOpArg())))
+                            emit_compound_arith(&ctx, op, op_dst, lhs_val, rhs_val, lhs_type, &gmod)
                             emit(&ctx, GIAssign(lid, op_consume(&ctx, &gmod, op_dst, CkAssign())))
                     elif static_contains(&gmod, name):
                         # Module-level mutable-static COMPOUND-assign
@@ -7269,7 +7285,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                         int clhs_val = lower_expr(&ctx, target_expr, &gmod)
                         int crhs_val = lower_expr(&ctx, value_expr, &gmod)
                         int cop_dst = add_local(&ctx, csty, NO_NAME)
-                        emit(&ctx, GIBinOp(cop_dst, map_compound_binop(op), csty, op_consume(&ctx, &gmod, clhs_val, CkBinOpArg()), op_consume(&ctx, &gmod, crhs_val, CkBinOpArg())))
+                        emit_compound_arith(&ctx, op, cop_dst, clhs_val, crhs_val, csty, &gmod)
                         int csptr = lower_place_base(&ctx, target_expr, &gmod)
                         emit(&ctx, GIDerefStore(csptr, op_consume(&ctx, &gmod, cop_dst, CkAssign()), csty))
                 case EFieldAccess(base_box, field_name):
@@ -7281,7 +7297,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     int lhs_type = ctx.locals.get(lhs_val).unwrap().type_id
                     int rhs_val = lower_expr(&ctx, value_expr, &gmod)
                     int op_dst = add_local(&ctx, lhs_type, NO_NAME)
-                    emit(&ctx, GIBinOp(op_dst, map_compound_binop(op), lhs_type, op_consume(&ctx, &gmod, lhs_val, CkBinOpArg()), op_consume(&ctx, &gmod, rhs_val, CkBinOpArg())))
+                    emit_compound_arith(&ctx, op, op_dst, lhs_val, rhs_val, lhs_type, &gmod)
                     # Wrap op_dst in a synthetic SpannedExpr to feed the
                     # same field-write path used above.
                     emit_field_write_from_local(&ctx, *base_box, field_name, op_dst, &gmod)
@@ -7444,7 +7460,29 @@ void lower_field_write(LowerCtx &ctx, SpannedExpr base_expr, String field_name, 
                 base_type_name = type_id_to_name(inner, &gmod)
             else:
                 pass
+    # Expected-type propagation for the RHS, mirroring the EStructLiteral
+    # field-init site (lower.gg:~5915-5924). Without it a bare `None`
+    # field-store (`fm.desc = None`) lowers to an 8-byte `void*` default
+    # slot — the field-write then `memcpy`s from a NULL/garbage source into
+    # the Option slot → SEGV. Look the dest field's declared type up via
+    # `gmod.type_infos` matched by field NAME (`base_type_name` is already
+    # Ptr/MutPtr-unwrapped here), set `ctx.expected_type` under the same
+    # I64/UNIT guard as the EStructLiteral site, lower, then RESTORE.
+    int prev_expected_fw = ctx.expected_type
+    if gmod.type_infos.contains(base_type_name):
+        GirTypeInfo fw_ti = gmod.type_infos.get(base_type_name).unwrap()
+        int fw_fi = 0
+        while fw_fi < fw_ti.fields.len():
+            GirFieldInfo fw_field = fw_ti.fields.get(fw_fi).unwrap()
+            if fw_field.name == field_name:
+                String fw_fty_name = fw_field.type_name.clone()
+                if fw_fty_name != "":
+                    int fw_fty = lookup_or_register_named(&gmod, fw_fty_name)
+                    if fw_fty != I64_TYPE and fw_fty != UNIT_TYPE:
+                        ctx.expected_type = fw_fty
+            fw_fi += 1
     int val = lower_expr(&ctx, value_expr, &gmod)
+    ctx.expected_type = prev_expected_fw
     String write_fn = "__field_write_" + base_type_name + "_" + field_name
     Vector[Operand] write_args = []
     bool base_is_ptr = is_ptr_type(base_tid, &gmod)
