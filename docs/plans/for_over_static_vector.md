@@ -63,11 +63,19 @@ for Box/Mutex/string code.
   COUNT (not content); `bootstrap_fixed_point` checks only stage-N==stage-N+1
   STABILITY (a *stable* divergence converges GREEN). So a metadata-only body/
   typedef/dispatch change is INVISIBLE to them.
-- **REQUIRED — byte-level content diff:** build the Rust driver BEFORE and AFTER
-  A1 and diff `--lir-c` (or `--emit-c`) output for a Box-using, a Mutex-using, and
-  a String-using fixture (pick ones that exercise those symbols; e.g. a `Box[T]`
-  fixture, `sync_*`/`shared_*`, a string-method fixture). Report EXACTLY what
-  changes.
+- **REQUIRED — byte-level content diff:** build the **self-host driver** (`driver.gg`
+  compiled by Rust `gg`) BEFORE A1 (current gorget-1 Rust `gg`) and AFTER A1, then
+  run each driver on the SAME fixture and diff the emitted C. ⚠ Use the driver's
+  **`--lir-c`** flag CONSISTENTLY for both before/after (body-only, matches
+  `c_emit_comparison`'s granularity) — do NOT mix with `--emit-c` (full-program,
+  includes preamble). (Review note: `--lir-c`/`--emit-c` are the self-host
+  DRIVER's flags, `driver.gg:54-57`; the Rust `gg` binary's own dump flag is
+  `--emit-c-lir` — but A2 diffs the DRIVER's emit, which is the activation point,
+  so the driver flags are correct.) Concrete fixtures that exercise the diverging
+  symbols (review-named): Box → `box_heap.gg`/`box_callable.gg`; Mutex →
+  `mutex_basic.gg`/`async_mutex_lock.gg`; String-method → `bench_string_methods.gg`/
+  `cow_materialization_points.gg`. Report EXACTLY what changes (before=fallback,
+  after=table).
 - **DECISION GATE:**
   - If the content diff is CLEAN (table == fallback for every exercised symbol) AND
     the full suite is green → **land Part A**, proceed to Phase 2.
@@ -101,6 +109,14 @@ self-host `lower_for` (`lower.gg:8415-8505`) is type-name-driven
 static-ref local is correctly typed `Vector__T`, the loop routes to
 `lower_for_vector` automatically. (Review-confirmed; the v1 "port the place-guard"
 instruction was a non-fix — DROPPED.)
+- ⚠ **Registration must EMIT the literal storage, not just type-register it**
+  (review note 2): `static_put` (`gir.gg:~501`) makes `local_type_name`→`Vector__T`
+  and routes the loop, but the composite static's literal initializer
+  (`[Decl("slice",true), …]`) must also be EMITTED as global storage in the C —
+  else the loop iterates a correctly-typed but uninitialized/garbage static. The
+  runtime verification below (`static_collection`/`static_vec_literal` MATCH +
+  `/tmp/static_for_repro.gg`→`slice/trim/2`) covers this; confirm the emitted C
+  contains the static's element data.
 - Verify by RUNNING through the driver: `static_collection` + `static_vec_literal`
   → MATCH (they use `.get()`/`.len()`/`.push()` on a static Vector → gated on
   registration, NOT the for-loop); `/tmp/static_for_repro.gg` via the driver →
