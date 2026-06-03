@@ -27,6 +27,30 @@ place-vs-constant guard, NOT type inference. `/tmp/static_for_repro.gg`: Rust `g
 prints `0`, should print `slice/trim/2`; LOCAL Vector + `TABLE.len()`/`.get(0)`
 work — only the for-loop over the static is broken.
 
+## ───────── PHASE 0: reconcile the RESOURCES table to the fallback (NEW — the prerequisite) ─────────
+The staged execution PROVED (byte-level `--lir-c` diff + `self_host_runtime`
+CC-FAIL + Rust-oracle + `grep`) that activating the table (which Part A does)
+emits DANGLING Box symbols. Fix the table to match the fallback FIRST:
+- `compiler/data/resources.gg`: `Box__T` entry (~:160-168) — set `clone_fn` →
+  `None` and `free_fn` → `None` (was `Some("__gorget_box_clone")`/
+  `Some("__gorget_box_free")` — both 0 runtime + 0 codegen hits = dangling; Box
+  clone at a CoW boundary is a shallow handle `memcpy`, Box free is per-mono
+  `__gorget_box_free_<inner>` emitted by codegen, NOT a table-driven symbol).
+- `compiler/data/resources.gg`: bare-Box `BkTraitBox` entry (~:186-191) — set
+  `free_fn` → `None` (was `Some("__gorget_trait_box_free")` — also 0 hits =
+  dangling). ⚠ This entry ALSO diverges on size (table 16 vs fallback 8) and
+  lir_type (table `LtStructBase` vs fallback `LtPtr`) — those are LATENT (no
+  named fixture exercised the trait-box path). When you run the FULL suite with
+  A1 (Phase 1), watch for any trait-object/dyn-dispatch fixture CC-FAILing; if one
+  does, reconcile those fields to the fallback too (verify vs the Rust oracle).
+- ⚠ This is a VALUE change, NOT a schema change → NO `SCHEMA_VERSION` bump, NO
+  row-count change (`resources_load_clean` count assertions unaffected — confirm).
+- It is parity-neutral on its own (the table is still inert until Part A) — but it
+  must precede Part A so the activation is clean.
+- ⚠ The table is READ by Rust too (`src/ir/resources.rs` walker). Confirm Rust's
+  behavior is unchanged (Rust already ignores these fields → emits per-mono /
+  shallow-memcpy; `cargo test --lib` + the box fixtures' `--emit-c-lir` unchanged).
+
 ## ───────── PHASE 1: Part A (Rust) IN ISOLATION ─────────
 ### A1 — the fix (`src/ir/lowering/stmts/for_loops.rs`, `lower_for` ~187-216)
 Derive `collection_kind` from the already-pointee-resolved `iter_type`
@@ -76,18 +100,23 @@ for Box/Mutex/string code.
   `mutex_basic.gg`/`async_mutex_lock.gg`; String-method → `bench_string_methods.gg`/
   `cow_materialization_points.gg`. Report EXACTLY what changes (before=fallback,
   after=table).
-- **DECISION GATE:**
-  - If the content diff is CLEAN (table == fallback for every exercised symbol) AND
-    the full suite is green → **land Part A**, proceed to Phase 2.
-  - If it DIVERGES (near-certain for Box/Mutex/string) → **STOP. Do NOT force, do
-    NOT reshape the table.** Report: which symbols diverge, which direction (does
-    the table's richer metadata look MORE correct than the fallback's `None`/`Ptr`,
-    or are the fallback's values load-bearing?), and whether any corpus fixture's
-    RUNTIME output (`self_host_runtime`/`runtime_diff`) actually changes. The
-    RESOURCES-table-vs-fallback reconciliation is then the REAL next chain (decide
-    the intended metadata per symbol, fix the divergence, THEN activate). A1 stays
-    UNCOMMITTED until the reconciliation lands (a correct for-loop fix that
-    silently rewires Box/Mutex/string ABI is not safe to ship alone).
+- **DECISION GATE** (Phase 0 already fixed the KNOWN Box divergence, so this
+  re-diff should now be CLEAN for Box — it CONFIRMS the Phase-0 fix worked AND
+  catches any OTHER symbol Phase 0 didn't cover):
+  - If the content diff is CLEAN (table == fallback for every exercised symbol —
+    EXPECTED post-Phase-0) AND the full suite is green → commit Phase 0
+    (`compiler/data/resources.gg`) + Part A (`for_loops.rs`) as separate commits,
+    proceed to Phase 2.
+  - If it STILL DIVERGES on a symbol Phase 0 didn't cover (or the FULL suite
+    surfaces a new table-vs-fallback CC-FAIL — e.g. a trait-object fixture hitting
+    the bare-Box size/lir_type divergence) → reconcile THAT symbol to the fallback
+    too (set the table field to `build_resource_metadata`'s value, verified vs the
+    Rust oracle) and re-run. ⚠ If the residual set is LARGE/unclear (the table was
+    authored but NEVER read until now — likely several latent wrong entries) →
+    **STOP and REPORT the full divergence list** rather than open-ended whack-a-mole;
+    do NOT force, do NOT reshape the fallback. A1 + Phase 0 stay UNCOMMITTED until
+    the reconciliation is complete (a for-loop fix that silently rewires ABI is not
+    safe to ship alone). A surfaced divergence-list is a valid deliverable.
 
 ### A gates (FULL suite — frontend change, whole-corpus blast radius)
 `cargo test --lib` GREEN (baseline 1072/0); FULL `cargo test --test integration
