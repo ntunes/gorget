@@ -1,6 +1,6 @@
 # for-over-String-chars — executor brief (self-host `lower_for`)
 
-> Discrete FIDELITY win (scout a16239e0; review pass 1 RUN-verified the CORRECTED version → **PARITY 413/940 = +6**, both canaries GREEN). TWO-FILE edit: `lower.gg` + `lir_codegen.gg` (the Ptr-source-deref registrations — see Part 2). Oracle: `src/ir/lowering/stmts/for_loops.rs:237-377` (`lower_for_string`) — ⚠ but the oracle's `ch`-drop-registration comment is STALE (the runtime now returns a cap=0 VIEW; see the `ch` note below). Re-verify against CURRENT source before editing.
+> Discrete FIDELITY win (scout a16239e0; review pass 2 RUN-verified the CORRECTED version → **PARITY 409→413/941 = +4**, both canaries GREEN, lowerer 972 / c_emit 903). Flipped set (MEASURED): `test_for_loops`, `drop_reassign_after_move`, `string_replace_complex`, `string_struct_complex` (⚠ NOT `async_for_loop_collections` — pass 1 mis-claimed it; it has a SEPARATE Dict-for-loop gap, logged to TODO). TWO-FILE edit: `lower.gg` + `lir_codegen.gg` (the Ptr-source-deref registrations — see Part 2). Oracle: `src/ir/lowering/stmts/for_loops.rs:237-377` (`lower_for_string`) — ⚠ but the oracle's `ch`-drop-registration comment is STALE (the runtime now returns a cap=0 VIEW; see the `ch` note below). Re-verify against CURRENT source before editing.
 > ⚠ Review pass 1 found 2 blocking defects in the original draft (now folded): the bound symbol was `gorget_str_len` (DOES NOT EXIST → link error) — use **`gorget_str_byte_len`**; and a Ptr-source `coll` does NOT auto-deref without two `lir_codegen.gg` registrations (Part 2). Both folded below.
 
 ## The gap (RUN-verified)
@@ -63,15 +63,15 @@ void lower_for_string(LowerCtx &ctx, SpannedPattern pat, int coll_local, Vector[
 
 ### Load-bearing details (review-pass-1 corrected; RUN-VERIFY each)
 - **Bound symbol = `gorget_str_byte_len`** (`runtime_string.c:516` `static inline size_t gorget_str_byte_len(Str s){return s.len;}`, already in `runtime_takes_str_by_value` `lir_codegen.gg:1889`). ⚠ `gorget_str_len` DOES NOT EXIST (link error — only stale dead-entries `lir_codegen.gg:1929,2028`). ⚠ `gorget_str_codepoint_count` is the WRONG symbol (under-counts on multibyte). `gorget_str_byte_len` is correct.
-- **`<coll operand>` shape:** the codepoint externs + `gorget_str_byte_len` take `Str` **BY VALUE** (`lir_codegen.gg:6230-6233` `(Str s,...)`). The `*(Str*)` auto-deref for a Ptr-source `coll` is gated by `runtime_takes_str_by_value` (`:1886`) AND `runtime_arg_is_str` (`:1755`) — NOT the by-pointer list. Mirror the operand shape of an existing String `.len()` lowering.
+- **`<coll operand>` shape:** the codepoint externs + `gorget_str_byte_len` take `Str` **BY VALUE** (`lir_codegen.gg:6256-6258` `(Str s,...)`). The `*(Str*)` auto-deref for a Ptr-source `coll` is gated by `runtime_takes_str_by_value` (`:1886`) AND `runtime_arg_is_str` (`:1755`) — NOT the by-pointer list. Mirror the operand shape of an existing String `.len()` lowering.
 - **⚠ Part 2 (`lir_codegen.gg`) — REQUIRED for Ptr-source params (e.g. `drop_reassign_after_move`'s `for ch in input` where `input: String` → `void*`). Without these the codepoint externs get a raw `void*` → `cc: incompatible type for argument 1`:**
   - (a) add `gorget_str_codepoint_at` + `gorget_utf8_codepoint_len_at` to **`runtime_takes_str_by_value`** (`lir_codegen.gg:1886`).
   - (b) add `gorget_utf8_codepoint_len_at` to **`runtime_arg_is_str`** arg_idx-0 (`:1757` — the existing `starts_with("gorget_str_")` prefix MISSES the `gorget_utf8_` name; `gorget_str_codepoint_at` is already caught by the prefix).
 - **`ch` is a cap=0 VIEW** (`gorget_str_codepoint_at` → `gorget_str_view_region` `runtime_string.c:729`, cap=0, free is no-op; self-host emit `lir_codegen.gg:6257`) → bind LoBorrowed/`BoCollectionElement(coll_local)` (like the vector for-element `:9464-9470`); NO owned-drop registration. ⚠ The Rust oracle (`for_loops.rs:348-361`) drop-REGISTERS `ch` ("returns an owned Str… without this every iteration leaked") — that comment is STALE (runtime now returns a view); the cap=0-view design here is correct, do NOT copy the oracle's drop-register.
-- **`gorget_utf8_codepoint_len_at` + `gorget_str_codepoint_at` are ALREADY C-emit-defined** (`lir_codegen.gg:6230-6233`, return-type `:2081`) — NO new runtime, NO new C-emit case, NO `CkString` enum variant.
+- **`gorget_utf8_codepoint_len_at` + `gorget_str_codepoint_at` are ALREADY C-emit-defined** (`lir_codegen.gg:6256-6258`, return-type `:2081`) — NO new runtime, NO new C-emit case, NO `CkString` enum variant.
 
 ## RUN-verified impact (review pass 1 MEASURED the corrected version)
-**PARITY 407→413/940 = +6** (better than the scouted +3): `test_for_loops`, `drop_reassign_after_move` [the TODO-cited blocker], `string_replace_complex` [ROT13], AND `async_for_loop_collections` all flipped to MATCH; `fixed_point` GREEN, `self_host_runtime` GREEN, `lowerer` 971, `c_emit` 902. (NOTE: baseline 407 here is the review's worktree base; on the CURRENT gorget-1 tip 409, this is +? — RE-MEASURE the delta at executor time; the +6 set is the load-bearing fact.) Other String fixtures stay gated behind SEPARATE String-builtin-C-signature bugs (`gorget_str_is_empty` void* arg, `gorget_str_index_of` return-type, char-method mangling — log as a cluster, NOT this chain).
+**PARITY 409→413/941 = +4** (pass 2 MEASURED, baseline-stashed `comm`, 0 regressions): `test_for_loops`, `drop_reassign_after_move` [the TODO-cited blocker], `string_replace_complex` [ROT13], `string_struct_complex` all flip to MATCH; `fixed_point` GREEN, `self_host_runtime` 0-regressed, `lowerer` 972, `c_emit` 903. ⚠ `async_for_loop_collections` does NOT flip (pass 1 mis-claimed it) — it has a SEPARATE Dict-for-loop gap (`for (k,v) in <Dict>` → `lower_fail`, drops the `300`); logged to TODO as its own item. RE-CONFIRM the parity number at executor time (denominator 941 per pass 2; the handover cited 940). Other String fixtures stay gated behind SEPARATE String-builtin-C-signature bugs (`gorget_str_is_empty` void* arg, `gorget_str_index_of` return-type, char-method mangling — log as a cluster, NOT this chain).
 
 ## Risks
 - **Codepoint not byte** (the one correctness trap) — stride by `cplen`.
@@ -85,7 +85,7 @@ After the fix, RUN `test_for_loops` + `drop_reassign_after_move` + `string_repla
 1. `rm -f tests/fixtures/self_host_lowerer/driver{,.c}`
 2. `cargo build` + `cargo test --lib` (1072/0).
 3. `self_host_bootstrap_fixed_point` GREEN.
-4. `GG_RUNTIME_DIFF=1 … self_host_runtime_diff` → review measured **+6** (`test_for_loops`/`drop_reassign_after_move`/`string_replace_complex`/`async_for_loop_collections`); report the PARITY line + the flipped set.
+4. `GG_RUNTIME_DIFF=1 … self_host_runtime_diff` → review measured **+4 → 413/941** (`test_for_loops`/`drop_reassign_after_move`/`string_replace_complex`/`string_struct_complex`); report the PARITY line + the flipped set.
 5. `self_host_runtime` (+ new snapshots, 0 regressed).
 6. `lowerer_comparison` (971) + `c_emit_comparison` (902) — report any delta.
 7. A codepoint-semantics RUN: `for c in "aéb"` must yield 3 iterations `a`/`é`/`b` (NOT 4 bytes). Verify against the oracle.
