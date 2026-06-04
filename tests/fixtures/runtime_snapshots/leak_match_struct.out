@@ -1,0 +1,4 @@
+pair read-only: leaked=false
+triple read-only: leaked=false
+error string: leaked=false
+done

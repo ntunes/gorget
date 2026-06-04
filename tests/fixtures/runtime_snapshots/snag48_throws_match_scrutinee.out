@@ -1,0 +1,6 @@
+case A inline (expected 'hello'): hello
+case B inline (expected 42)        : 42
+case C inline (expected true)      : true
+case D local  (expected 'hello'): hello
+case E local  (expected 42)        : 42
+case F local  (expected true)      : true

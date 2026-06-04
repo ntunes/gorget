@@ -1,0 +1,6 @@
+case A enum BoolV(inline throws-fn): expected true, got true
+case B enum BoolV(local-bound):      expected true, got true
+case C enum BoolV(inline plain fn):  expected true, got true
+case D struct Pair(inline x2):       expected (true, 42), got (true, 42)
+case E struct Pair(literal, inline): expected (true, 42), got (true, 42)
+case F fn-arg ident(inline)        : expected true, got true

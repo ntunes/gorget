@@ -247,6 +247,15 @@ struct LowerCtx:
     # A bare push with no consumer would be dead code, so the consumer is
     # wired at both error-return sites.
     Vector[Vector[Stmt]] on_error_blocks
+    # One-shot suppress flag for the centralized Result→T auto-propagation
+    # hook (mirrors Rust gg's `func_state.suppress_auto_prop`,
+    # `src/ir/lowering/context.rs:249` + `exprs/mod.rs:78`). Sites that need
+    # the RAW `Result` operand even at a Call/MethodCall position — match
+    # scrutinees whose arms discriminate `Ok`/`Error`/`Some`/`None`, `catch`
+    # inner, `rethrow` inner — set this true immediately before calling
+    # `lower_expr`. `lower_expr` consumes it (resets to false) at entry, so
+    # nested sub-expressions still auto-prop normally. Default false.
+    bool suppress_auto_prop
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -4548,7 +4557,14 @@ int lower_stmt_as_tail_value(LowerCtx &ctx, Stmt last_stmt, GirModule &gmod):
 # from the FIRST non-Unit branch value's type (mirrors Rust's
 # `infer_operand_type_full` + the `result_type_refined` latch).
 int lower_if_chain_expr(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] then_body, Vector[ElseBranch] else_branches, GirModule &gmod):
+    # The condition is bool-typed, NOT the if-expression's result type —
+    # clear the enclosing `expected_type` (the if-RESULT's) around the cond so
+    # the centralized auto-prop hook's capture-form check doesn't suppress a
+    # throws-call condition's peel; restore it before the result_type seeding.
+    int saved_expected_ifc = ctx.expected_type
+    ctx.expected_type = -1
     int cond = lower_expr(&ctx, cond_expr, &gmod)
+    ctx.expected_type = saved_expected_ifc
     # Auto-propagate a `throws` call used as the if-expression condition.
     cond = maybe_auto_propagate(&ctx, cond, &gmod)
     # Seed result type from expected_type when the writer set a concrete
@@ -4636,7 +4652,50 @@ void refine_local_type(LowerCtx &ctx, int lid, int new_type):
 
 # ── Expression lowering ─────────────────────────────────
 
+# Centralized producer-side Result→T auto-propagation hook (mirrors Rust
+# gg's `lower_expr` wrapper, `src/ir/lowering/exprs/mod.rs:73-86`, landed at
+# `90d09414`). When the expression is a `Call` or `MethodCall` — the only
+# expression shapes that PRODUCE a `throws`-fn's `Result[T,E]` via the
+# throws-sugar — apply `maybe_auto_propagate` at the tail: in a propagating
+# context (enclosing fn is `throws` / returns `Result`) and where the
+# surrounding destination doesn't itself want a `Result`, peel `Result→T`
+# (forwarding the `Error` branch to the function's Result return slot).
+#
+# This subsumes the former CONSUMER-targeted design (N explicit call sites)
+# with ONE producer-side decision, mirroring the now-canonical Rust shape —
+# and closes the same per-position gaps Rust closed: binop operands, method
+# args, aggregate-literal elements, if-expr / match-expr arm tails, and
+# inline match scrutinees whose arms discriminate USER variants (snag48).
+# The decision is purely typed (operand IR type + enclosing-fn return type),
+# no name-matching beyond the `Result__` mangled-name prefix already used by
+# `maybe_auto_propagate`.
+#
+# Sites that need the RAW `Result` even at a Call/MethodCall position set
+# `ctx.suppress_auto_prop = true` before calling `lower_expr`: match
+# scrutinees whose arms match `Ok`/`Error`/`Some`/`None` (so the user can
+# discriminate the Result), `catch` inner, and `rethrow` inner (which
+# extract the Ok/Error payloads themselves). The flag is a ONE-SHOT —
+# consumed (reset to false) at entry — so nested sub-expressions still
+# auto-prop normally.
 int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
+    # Consume the one-shot suppress flag for THIS expression.
+    bool suppress = ctx.suppress_auto_prop
+    ctx.suppress_auto_prop = false
+    # Only Call / MethodCall produce a throws-Result via the throws sugar.
+    bool is_producer = false
+    match sexpr.expr:
+        case ECall(_, _, _):
+            is_producer = true
+        case EMethodCall(_, _, _, _):
+            is_producer = true
+        else:
+            pass
+    int v = lower_expr_inner(&ctx, sexpr, &gmod)
+    if suppress or not is_producer:
+        return v
+    return maybe_auto_propagate(&ctx, v, &gmod)
+
+int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
     match sexpr.expr:
         case EIntLiteral(v):
             int dst = add_local(&ctx, I64_TYPE, NO_NAME)
@@ -4900,8 +4959,19 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 int in_dst = add_local(&ctx, BOOL_TYPE, NO_NAME)
                 emit(&ctx, GICallExtern(in_dst, contains_method, in_args))
                 return in_dst
+            # A binop's OPERANDS are scalar/string-typed by the operator, not
+            # by the binop's destination. Clear the enclosing `expected_type`
+            # so a Result-typed surrounding context (e.g. `return to_n(x) + 5`
+            # from a `throws` fn, where SReturn set expected_type to the
+            # function's `Result[T,E]` slot) doesn't make the centralized
+            # auto-prop hook's capture-form check SUPPRESS the peel on a
+            # throws-call operand — leaving a `Result + int` mismatch at C.
+            # Mirrors Rust gg's `operators.rs:46-60`.
+            int prev_expected_binop = ctx.expected_type
+            ctx.expected_type = -1
             int lhs = lower_expr(&ctx, *lhs_box, &gmod)
             int rhs = lower_expr(&ctx, *rhs_box, &gmod)
+            ctx.expected_type = prev_expected_binop
             if is_comparison(op):
                 # Comparable operator overload: `a < b` etc. on user types →
                 # TypeName__compare(&a, b) OP 0.
@@ -5699,7 +5769,18 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 if expr_has_it(ma):
                     ma_val = record_implicit_it_closure(&ctx, ma, &gmod)
                 else:
+                    # Clear the enclosing `expected_type` around the arg so a
+                    # Result-typed surrounding context (e.g. `return a.add(to_n(sel))`
+                    # from a `throws` fn) doesn't make the centralized auto-prop
+                    # hook's capture-form check suppress the peel on a throws-call
+                    # arg — leaving a `Result` where the param wants `T`. (The
+                    # method-arg path never set a per-arg expected_type, so -1 is
+                    # the prior behaviour for non-throws args.) Mirrors the
+                    # free-call arg loop and Rust gg's per-arg expected_type clear.
+                    int prev_expected_ma = ctx.expected_type
+                    ctx.expected_type = -1
                     ma_val = lower_expr(&ctx, ma, &gmod)
+                    ctx.expected_type = prev_expected_ma
                 ConsumeKind ma_kind = classify_call_arg(&gmod, full_name, _ma_idx + 1)
                 # Owning-mutator promotion: a collection mutator takes
                 # ownership of the value (and, for Dict, the key) at the
@@ -5950,8 +6031,17 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # `lower_index_assign` (the LHS-write twin, ~:7662): dispatch
             # the getter on the base's collection_kind, NOT a name match.
             # Vector/Deque → gorget_array_get, Dict → gorget_map_get.
+            # The base (a collection) + index (int/key) are independently
+            # typed, NOT the EIndex's destination — clear the enclosing
+            # `expected_type` so a Result-typed surrounding context (e.g.
+            # `return v[pick()]` from a `throws` fn) doesn't make the
+            # centralized auto-prop hook's capture-form check suppress the peel
+            # on a throws-call index (snag49c). Mirrors the binop-operand clear.
+            int prev_expected_eix = ctx.expected_type
+            ctx.expected_type = -1
             int eix_base = lower_expr(&ctx, *base_box, &gmod)
             int eix_idx = lower_expr(&ctx, *idx_box, &gmod)
+            ctx.expected_type = prev_expected_eix
             eix_idx = maybe_auto_propagate(&ctx, eix_idx, &gmod)
             # Base type name, unwrapping a Ptr/MutPtr param/static base.
             int eix_base_tid = ctx.locals.get(eix_base).unwrap().type_id
@@ -6487,24 +6577,33 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             Vector[int] dict_val_locals = []
             int dict_pair_n = dkeys.len()
             int dict_pi = 0
+            int prev_dict_et = ctx.expected_type
             while dict_pi < dict_pair_n:
+                # Keys + values are independently typed, NOT the dict's
+                # destination type — clear the enclosing `expected_type` so a
+                # Result-typed surrounding context (e.g. `return {"a": to_n(sel)}`
+                # from a `throws` fn, where SReturn set expected_type to the
+                # function's `Result[Dict..,E]` slot) doesn't make the
+                # centralized auto-prop hook's capture-form check suppress the
+                # peel on a throws-call value — leaving a raw `Result` memcpy'd
+                # into the int slot (zero-init garbage). Mirrors the tuple/dict
+                # per-element expected_type override+clear documented on the
+                # throws_autoprop_dict_value fixture.
+                ctx.expected_type = -1
                 # Key first: keys can be any type, not V — lower BEFORE the
                 # value-override (Rust collections.rs:338-340).
                 int dict_key_local = lower_expr(&ctx, dkeys.get(dict_pi).unwrap(), &gmod)
-                # Value-override from `dict_vname` ONLY: collection_element_type
-                # has no `Dict__` case (lower.gg:3961-3976 → returns "") so it
-                # would be a silent no-op here. Same I64/UNIT guard as the
-                # array-literal / SVarDecl sites (Rust collections.rs:341-344).
-                int prev_dict_et = ctx.expected_type
+                # Value-override from `dict_vname` when known (else -1 — let the
+                # value type itself, e.g. the auto-prop'd Ok payload, decide).
                 if dict_vname != "":
                     int dict_v_et = lookup_or_register_named(&gmod, dict_vname)
                     if dict_v_et != I64_TYPE and dict_v_et != UNIT_TYPE:
                         ctx.expected_type = dict_v_et
                 int dict_val_local = lower_expr(&ctx, dvals.get(dict_pi).unwrap(), &gmod)
-                ctx.expected_type = prev_dict_et
                 dict_key_locals.push(dict_key_local)
                 dict_val_locals.push(dict_val_local)
                 dict_pi = dict_pi + 1
+            ctx.expected_type = prev_dict_et
             int ddst = add_local(&ctx, lookup_or_register_named(&gmod, "GorgetMap"), NO_NAME)
             if dict_kname != "" and dict_vname != "":
                 # Sentinel `__GGSEP__` separates K and V type names — zero
@@ -6787,7 +6886,16 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
             # fields and later pushes corrupt adjacent slots.
             apply_container_hint_for_ctor_arg(&ctx, call_name, ai, arg, &gmod)
             # Expected-type propagation per arg (Rust calls.rs:1239-1255).
+            # The arg's destination is the PARAM type, NOT the surrounding
+            # context — so START by clearing any leaked `expected_type` (e.g. a
+            # `Result[T,E]` from an enclosing `throws` return, `return f(g(x))`).
+            # Otherwise the centralized auto-prop hook's capture-form check
+            # would see that leaked Result and wrongly suppress the peel on a
+            # throws-call arg passed to a NON-Result (e.g. `int`) param — the
+            # case (3) `double_it(might(x))` regression. Then set the param type
+            # for non-primitive params (so bare None/Ok reader sites resolve).
             int prev_expected_arg = ctx.expected_type
+            ctx.expected_type = -1
             if ai < callee_param_types.len():
                 int pt = callee_param_types.get(ai).unwrap()
                 if pt != I64_TYPE and pt != UNIT_TYPE:
@@ -7773,7 +7881,14 @@ void lower_stmts(LowerCtx &ctx, Vector[Stmt] stmts, GirModule &gmod, bool is_mai
         lower_stmt(&ctx, stmt, &gmod, is_main)
 
 void lower_if(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] then_body, Vector[ElseBranch] elif_branches, GirModule &gmod, bool is_main):
+    # The condition is bool-typed and independent of any enclosing
+    # destination — clear `expected_type` around it so a leaked Result-typed
+    # expectation doesn't make the centralized auto-prop hook's capture-form
+    # check suppress a throws-call condition's peel (`if might():`).
+    int saved_expected_if = ctx.expected_type
+    ctx.expected_type = -1
     int cond = lower_expr(&ctx, cond_expr, &gmod)
+    ctx.expected_type = saved_expected_if
     # Auto-propagate a `throws` call used as the condition (`if might():`).
     cond = maybe_auto_propagate(&ctx, cond, &gmod)
     int then_bb = new_block(&ctx)
@@ -7829,8 +7944,15 @@ void lower_index_assign(LowerCtx &ctx, SpannedExpr base_expr, SpannedExpr idx_ex
     int base = lower_place_base(&ctx, base_expr, &gmod)
     int base_tid = ctx.locals.get(base).unwrap().type_id
     String base_tname = type_id_to_name(base_tid, &gmod)
+    # idx (int/key) + val (element) are independently typed, not the
+    # surrounding context — clear any leaked `expected_type` so a Result-typed
+    # expectation doesn't make the centralized auto-prop hook's capture-form
+    # check suppress a throws-call idx/value's peel (`v[pick()] = might()`).
+    int saved_expected_ia = ctx.expected_type
+    ctx.expected_type = -1
     int idx = lower_expr(&ctx, idx_expr, &gmod)
     int val = lower_expr(&ctx, value_expr, &gmod)
+    ctx.expected_type = saved_expected_ia
     idx = maybe_auto_propagate(&ctx, idx, &gmod)
     val = maybe_auto_propagate(&ctx, val, &gmod)
     String setter = ""
@@ -8713,6 +8835,9 @@ void lower_throw_stmt(LowerCtx &ctx, SpannedExpr expr, GirModule &gmod):
 # `lower_catch_expr` (`exprs/mod.rs:3056`). Returns the local holding
 # the merged (Ok-typed) result.
 int lower_catch_expr(LowerCtx &ctx, SpannedExpr inner, String error_binding, SpannedExpr recovery, GirModule &gmod):
+    # Suppress the centralized auto-prop hook — catch operates on the RAW
+    # `Result[T, E]` (it extracts the Ok/Error payloads itself).
+    ctx.suppress_auto_prop = true
     int val = lower_expr(&ctx, inner, &gmod)
     int val_tid = ctx.locals.get(val).unwrap().type_id
     # The inner expr's type is the Result; peel any GtPtr (borrowed call
@@ -8763,6 +8888,9 @@ int lower_catch_expr(LowerCtx &ctx, SpannedExpr inner, String error_binding, Spa
 # Mirrors Rust's `lower_rethrow_expr` (`exprs/mod.rs:2918`). Returns the
 # local holding the unwrapped Ok value.
 int lower_rethrow_expr(LowerCtx &ctx, SpannedExpr inner, Option[String] error_binding, SpannedExpr transform, GirModule &gmod):
+    # Suppress the centralized auto-prop hook — rethrow operates on the RAW
+    # `Result[T, E]` (it extracts the Ok/Error payloads itself).
+    ctx.suppress_auto_prop = true
     int val = lower_expr(&ctx, inner, &gmod)
     int val_tid = ctx.locals.get(val).unwrap().type_id
     String result_tn = type_id_to_name(val_tid, &gmod)
@@ -8814,17 +8942,23 @@ int lower_rethrow_expr(LowerCtx &ctx, SpannedExpr inner, Option[String] error_bi
     switch_to(&ctx, merge_bb)
     return ok_result
 
-# Result→T auto-propagation at a CONSUMER position. Given a local `val`
-# that may hold a `throws`-call's `Result__<ok>__E`, unwrap it the way
-# Rust's `maybe_auto_propagate` (`exprs/mod.rs:73-86`) does: on Ok →
-# continue with the Ok payload; on Error → forward the RAW error payload
-# re-wrapped in the enclosing fn's `Result.Error` and early-return (with
-# on-error cleanups + drops). This is `lower_rethrow_expr` (`:7982`)
-# MINUS the user `transform` — the error is forwarded unchanged.
+# Result→T auto-propagation. Given a local `val` that may hold a
+# `throws`-call's `Result__<ok>__E`, unwrap it the way Rust's
+# `maybe_auto_propagate` (`exprs/mod.rs:73-86`) does: on Ok → continue with
+# the Ok payload; on Error → forward the RAW error payload re-wrapped in the
+# enclosing fn's `Result.Error` and early-return (with on-error cleanups +
+# drops). This is `lower_rethrow_expr` MINUS the user `transform` — the
+# error is forwarded unchanged.
 #
-# CONSUMER-TARGETED design ([[feedback-rust-not-sacrosanct]]): called
-# EXPLICITLY at the 6 consumer sites, never from `lower_expr`, so match
-# scrutinees stay raw Results with ZERO suppress machinery.
+# CENTRALIZED producer-side hook (mirrors Rust gg's `90d09414`): invoked
+# from `lower_expr`'s tail for `Call`/`MethodCall` producers (see the
+# `lower_expr` wrapper docstring). The earlier consumer-targeted design
+# (N explicit call sites) had the SAME per-position gaps the Rust side fixed
+# (binop operands, method args, aggregate-literal elements, inline match
+# scrutinees) — the central hook closes the class at the producer. Raw-Result
+# sites set `ctx.suppress_auto_prop` (match scrutinee with Ok/Error/Some/None
+# arms, catch inner, rethrow inner); dest-is-Result is suppressed here via
+# the `ctx.expected_type` check.
 #
 # Idempotent no-op (returns `val` unchanged) unless BOTH gates hold:
 #  1. `val`'s type name (GtPtr-peeled by type_id_to_name) starts_with
@@ -8836,6 +8970,20 @@ int lower_rethrow_expr(LowerCtx &ctx, SpannedExpr inner, Option[String] error_bi
 int maybe_auto_propagate(LowerCtx &ctx, int val, GirModule &gmod):
     if val < 0 or val >= ctx.locals.len():
         return val
+    # Capture-form suppress (mirrors Rust gg's `maybe_auto_propagate`
+    # expected-type check, `exprs/mod.rs:2937-2943`): when the surrounding
+    # destination expects a `Result` (e.g. `Result[int,E] r = risky()`, a
+    # `throws`-fn return forwarding the raw Result, a Result-typed param /
+    # field), keep the raw Result — don't unwrap into a slot that wants it.
+    # The writer sites set `ctx.expected_type` to the destination type
+    # immediately before recursing into `lower_expr`, so the centralized hook
+    # observes it here. Per-site callers that already cleared expected_type
+    # rely on gate 1/2 below (this check is a no-op when expected_type is -1
+    # or non-Result).
+    if ctx.expected_type >= 0 and ctx.expected_type < gmod.type_table.len():
+        String et_name = type_id_to_name(ctx.expected_type, &gmod)
+        if et_name.starts_with("Result__"):
+            return val
     int val_tid = ctx.locals.get(val).unwrap().type_id
     String result_tn = type_id_to_name(val_tid, &gmod)
     # Gate 1: val must be a Result.
@@ -8881,8 +9029,64 @@ int maybe_auto_propagate(LowerCtx &ctx, int val, GirModule &gmod):
     switch_to(&ctx, merge_bb)
     return ok_result
 
+# True iff any arm pattern discriminates a `Result`/`Option` variant —
+# `Ok`/`Error`/`Some`/`None`, or their qualified `Result.Ok` / `Option.Some`
+# forms. Mirrors Rust gg's `arms_match_result_or_option_item`
+# (`src/ir/lowering/stmts/patterns.rs:155-172`). When true, the match
+# scrutinee must stay a RAW `Result`/`Option` so the arms can discriminate
+# it — the centralized auto-prop hook is suppressed for the scrutinee. When
+# false (arms match USER variants like `Tagged.StringV`, e.g. snag48), the
+# scrutinee SHOULD auto-prop so a `throws`-call scrutinee peels to its
+# payload before the user-variant match.
+bool arms_match_result_or_option(Vector[MatchArm] arms):
+    for arm in arms:
+        match arm.pattern.pat:
+            case PConstructor(variant_name, _):
+                if pattern_head_is_result_or_option(variant_name):
+                    return true
+            case PDotShorthand(variant_name, _):
+                if pattern_head_is_result_or_option(variant_name):
+                    return true
+            case PLiteral(lit_expr):
+                # The parser renders bare `case None:` as PLiteral(ENoneLiteral).
+                match lit_expr.expr:
+                    case ENoneLiteral():
+                        return true
+                    else:
+                        pass
+            else:
+                pass
+    return false
+
+bool pattern_head_is_result_or_option(String variant_name):
+    # Bare prelude variant (`Ok` / `Error` / `Some` / `None`) or its
+    # qualified `Result.Ok` / `Option.Some` form (the head before the dot).
+    String head = variant_name
+    if variant_name.contains("."):
+        int dot_pos = variant_name.index_of(".").unwrap()
+        String qual = variant_name.slice(0, dot_pos)
+        # `Result.Ok` / `Option.None` — the qualifier names the wrapper.
+        if qual == "Result" or qual == "Option":
+            return true
+        head = qual
+    if head == "Ok" or head == "Error":
+        return true
+    if head == "Some" or head == "None":
+        return true
+    return false
+
 void lower_match_stmt(LowerCtx &ctx, SpannedExpr scrutinee_expr, Vector[MatchArm] arms, GirModule &gmod, bool is_main):
+    # Suppress the centralized auto-prop on the scrutinee when the arms
+    # discriminate a Result/Option (keep it raw); otherwise let a throws-call
+    # scrutinee peel to its payload (snag48). Take expected_type so a
+    # Result-typed surrounding context (the match's destination) doesn't make
+    # the hook's capture-form check suppress the scrutinee peel — the
+    # scrutinee's expectation is independent of the match result's.
+    int saved_expected_ms = ctx.expected_type
+    ctx.expected_type = -1
+    ctx.suppress_auto_prop = arms_match_result_or_option(arms)
     int scrutinee = lower_expr(&ctx, scrutinee_expr, &gmod)
+    ctx.expected_type = saved_expected_ms
     int scr_tid = ctx.locals.get(scrutinee).unwrap().type_id
     String type_name = type_id_to_name(scr_tid, &gmod)
     # Unwrap Ptr if the scrutinee came through a borrow.
@@ -8956,7 +9160,18 @@ void lower_match_stmt(LowerCtx &ctx, SpannedExpr scrutinee_expr, Vector[MatchArm
 # snapshot/restore (Rust Snag #50) is likewise omitted, matching
 # `lower_match_stmt`'s per-arm drop-scope behavior (logged follow-up).
 int lower_match_expr(LowerCtx &ctx, SpannedExpr scrutinee_expr, Vector[MatchArm] arms, GirModule &gmod):
+    # Same scrutinee discipline as lower_match_stmt: suppress the centralized
+    # auto-prop when the arms discriminate a Result/Option (keep it raw);
+    # otherwise let a throws-call scrutinee peel to its payload. Take
+    # expected_type (the match RESULT's expected type) around the SCRUTINEE
+    # lowering only — it must not leak into the scrutinee's auto-prop
+    # capture-form check — then restore it so the result_type seeding below
+    # still sees it.
+    int saved_expected_me = ctx.expected_type
+    ctx.expected_type = -1
+    ctx.suppress_auto_prop = arms_match_result_or_option(arms)
     int scrutinee = lower_expr(&ctx, scrutinee_expr, &gmod)
+    ctx.expected_type = saved_expected_me
     int scr_tid = ctx.locals.get(scrutinee).unwrap().type_id
     String type_name = type_id_to_name(scr_tid, &gmod)
     # Unwrap Ptr if the scrutinee came through a borrow.
@@ -9105,7 +9320,14 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
     # self-host has no in-tree use case today — fail loudly with a
     # diagnostic and let the iterator-protocol path handle the
     # non-enumerate variant.
+    # The iterable is collection-typed, not the surrounding context — clear
+    # any leaked `expected_type` so a Result-typed expectation doesn't make
+    # the centralized auto-prop hook's capture-form check suppress a
+    # throws-call iterable's peel (`for x in might():`).
+    int saved_expected_for = ctx.expected_type
+    ctx.expected_type = -1
     int coll_local = lower_expr(&ctx, probe_coll, &gmod)
+    ctx.expected_type = saved_expected_for
     # Auto-propagate a `throws` call used as the iterable (`for x in might()`).
     coll_local = maybe_auto_propagate(&ctx, coll_local, &gmod)
     String coll_tn = local_type_name(coll_local, &ctx, &gmod)
@@ -9528,7 +9750,14 @@ void lower_while(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] body, GirMod
     set_terminator(&ctx, GTJump(header_bb))
     # Header: evaluate condition
     switch_to(&ctx, header_bb)
+    # The condition is bool-typed and independent of any enclosing
+    # destination — clear `expected_type` around it so a leaked Result-typed
+    # expectation doesn't make the centralized auto-prop hook's capture-form
+    # check suppress a throws-call condition's peel (`while might():`).
+    int saved_expected_wh = ctx.expected_type
+    ctx.expected_type = -1
     int cond = lower_expr(&ctx, cond_expr, &gmod)
+    ctx.expected_type = saved_expected_wh
     # Auto-propagate a `throws` call used as the condition (`while might():`).
     cond = maybe_auto_propagate(&ctx, cond, &gmod)
     set_terminator(&ctx, GTBranch(OpCopy(cond), body_bb, exit_bb))
@@ -9636,7 +9865,7 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
     Vector[DropScope] _de_scopes = []
     Vector[DropEmission] _de_queue = []
     Vector[Vector[Stmt]] _on_err_blocks = []
-    LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, !_named_locals, !_lc_stk, !_lb_stk, "", "", "", false, fdef.name.clone(), DropElaborator(!_de_scopes), !_de_queue, -1, !_on_err_blocks)
+    LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, !_named_locals, !_lc_stk, !_lb_stk, "", "", "", false, fdef.name.clone(), DropElaborator(!_de_scopes), !_de_queue, -1, !_on_err_blocks, false)
 
     # Push the function-scope drop frame. Pop emits GIDropIfAlive for
     # every owned resource local registered during lowering (param or
@@ -9830,7 +10059,7 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
         Vector[DropScope] _de_scopes2 = []
         Vector[DropEmission] _de_queue2 = []
         Vector[Vector[Stmt]] _on_err_blocks2 = []
-        LowerCtx ctx = LowerCtx([], [], [], 0, !_named_locals2, !_lc_stk2, !_lb_stk2, "", "", "", false, mangled.clone(), DropElaborator(!_de_scopes2), !_de_queue2, -1, !_on_err_blocks2)
+        LowerCtx ctx = LowerCtx([], [], [], 0, !_named_locals2, !_lc_stk2, !_lb_stk2, "", "", "", false, mangled.clone(), DropElaborator(!_de_scopes2), !_de_queue2, -1, !_on_err_blocks2, false)
         # bb0
         Vector[Instruction] init_insts = []
         ctx.block_insts.push(!init_insts)
@@ -11084,7 +11313,7 @@ void lower_closure_body(String call_name, Vector[int] !abi_param_types, int self
     Vector[DropScope] _cde_scopes = []
     Vector[DropEmission] _cde_queue = []
     Vector[Vector[Stmt]] _con_err = []
-    LowerCtx cctx = LowerCtx([], !cblock_insts, !cblock_terms, 0, !_cnamed, !_clc, !_clb, "", "", "", false, call_name.clone(), DropElaborator(!_cde_scopes), !_cde_queue, ret_type, !_con_err)
+    LowerCtx cctx = LowerCtx([], !cblock_insts, !cblock_terms, 0, !_cnamed, !_clc, !_clb, "", "", "", false, call_name.clone(), DropElaborator(!_cde_scopes), !_cde_queue, ret_type, !_con_err, false)
 
     push_drop_scope(&cctx.drop_elab, DSK_FUNCTION)
 
@@ -12684,7 +12913,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         Vector[DropScope] _de_scopes3 = []
                         Vector[DropEmission] _de_queue3 = []
                         Vector[Vector[Stmt]] _on_err_blocks3 = []
-                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone(), DropElaborator(!_de_scopes3), !_de_queue3, -1, !_on_err_blocks3)
+                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone(), DropElaborator(!_de_scopes3), !_de_queue3, -1, !_on_err_blocks3, false)
                         Vector[Instruction] tinit = []
                         tctx.block_insts.push(!tinit)
                         tctx.block_terms.push(GTNone())
