@@ -1,0 +1,32 @@
+HELLO
+ALICE
+len=5
+7 + 3 = 10
+7 * 3 = 21
+7 / 3 = 2
+7 mod 3 = 1
+1x1=1, 1x2=2, 1x3=3, 2x1=2, 2x2=4, 2x3=6, 3x1=3, 3x2=6, 3x3=9
+positive: true
+even: true
+big: false
+0: even
+1: odd
+2: even
+3: odd
+4: even
+hello dear world
+{literal braces}
+value = {42}
+  1. apple
+  2. banana
+  3. cherry
+upper: HELLO WORLD
+starts: true
+count l: 3
+replace: hello gorget
+acc len: 100
+starts: true
+ends: true
+1 2 3
+4 5 6
+7 8 9

@@ -1933,6 +1933,12 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
         # Read-only methods also take self by const pointer
         if fn_name == "gorget_array_safe_get" or fn_name == "gorget_array_len":
             return true
+        # `gorget_array_get(const GorgetArray* arr, size_t idx)` — the
+        # EIndex value-read getter (`v[i]`). Self (arg 0) is the array by
+        # const pointer, exactly like gorget_map_get below. Without this the
+        # array self-arg passes by value and cc rejects it.
+        if fn_name == "gorget_array_get":
+            return true
         if fn_name == "gorget_array_is_empty" or fn_name == "gorget_array_contains":
             return true
         if fn_name == "gorget_array_safe_last" or fn_name == "gorget_array_safe_first":

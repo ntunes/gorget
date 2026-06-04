@@ -1,0 +1,7 @@
+size: 3
+alice: 95
+bob: 87
+alice updated: 100
+after remove: 2
+has carol: true
+has bob: false

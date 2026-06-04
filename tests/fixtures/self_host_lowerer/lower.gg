@@ -5893,10 +5893,88 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             emit(&ctx, GIAssign(fdst, OpConstI64(0)))
             return fdst
         case EIndex(base_box, idx_box):
-            lower_expr(&ctx, *base_box, &gmod)
-            lower_expr(&ctx, *idx_box, &gmod)
-            int idst = add_local(&ctx, I64_TYPE, NO_NAME)
-            emit(&ctx, GIAssign(idst, OpConstI64(0)))
+            # `base[idx]` value-READ → collection getter call. Mirrors
+            # `lower_index_assign` (the LHS-write twin, ~:7662): dispatch
+            # the getter on the base's collection_kind, NOT a name match.
+            # Vector/Deque → gorget_array_get, Dict → gorget_map_get.
+            int eix_base = lower_expr(&ctx, *base_box, &gmod)
+            int eix_idx = lower_expr(&ctx, *idx_box, &gmod)
+            # Base type name, unwrapping a Ptr/MutPtr param/static base.
+            int eix_base_tid = ctx.locals.get(eix_base).unwrap().type_id
+            String eix_base_name = type_id_to_name(eix_base_tid, &gmod)
+            if eix_base_tid >= 0 and eix_base_tid < gmod.type_table.len():
+                GirType eix_bt = gmod.type_table.get(eix_base_tid).unwrap()
+                match eix_bt:
+                    case GtPtr(eix_inner):
+                        eix_base_name = type_id_to_name(eix_inner, &gmod)
+                    case GtMutPtr(eix_inner2):
+                        eix_base_name = type_id_to_name(eix_inner2, &gmod)
+                    else:
+                        pass
+            String eix_getter = ""
+            match resource_meta_for(&gmod, eix_base_name):
+                case Some(eix_rmeta):
+                    match eix_rmeta.collection_kind:
+                        case CkVector():
+                            eix_getter = "gorget_array_get"
+                        case CkDeque():
+                            eix_getter = "gorget_array_get"
+                        case CkDict():
+                            eix_getter = "gorget_map_get"
+                        else:
+                            pass
+                case None:
+                    pass
+            if eix_getter == "":
+                # Unsupported base (Set has no index-read, unknown type):
+                # keep the legacy I64/0 placeholder rather than crash.
+                int idst = add_local(&ctx, I64_TYPE, NO_NAME)
+                emit(&ctx, GIAssign(idst, OpConstI64(0)))
+                return idst
+            # Element type NAME — Vector/Deque via collection_element_type,
+            # Dict via the value-type suffix (mirrors infer_method_return_type
+            # ~:4063-4072). Empty → fall back to the I64/0 placeholder.
+            String eix_elem_name = collection_element_type(eix_base_name)
+            if eix_elem_name == "":
+                if eix_base_name.starts_with("Dict__GorgetString__"):
+                    eix_elem_name = eix_base_name.slice(20, eix_base_name.len())
+                elif eix_base_name.starts_with("Dict__int64_t__"):
+                    eix_elem_name = eix_base_name.slice(15, eix_base_name.len())
+                elif eix_base_name.starts_with("HashMap__GorgetString__"):
+                    eix_elem_name = eix_base_name.slice(23, eix_base_name.len())
+                elif eix_base_name.starts_with("HashMap__int64_t__"):
+                    eix_elem_name = eix_base_name.slice(18, eix_base_name.len())
+            if eix_elem_name == "":
+                int idst = add_local(&ctx, I64_TYPE, NO_NAME)
+                emit(&ctx, GIAssign(idst, OpConstI64(0)))
+                return idst
+            String eix_elem_norm = eix_elem_name
+            if eix_elem_name == "Str":
+                eix_elem_norm = "GorgetString"
+            int eix_elem_tid = resolve_field_gir_type(eix_elem_norm, &gmod)
+            # MANDATORY 3-way dst split (a 2-way split regresses
+            # leak_game_loop):
+            #   (a) scalar elem (< PRIM_COUNT): BARE element type — the
+            #       lir_lower scalar-deref ILoad derefs the void*.
+            #   (b) runtime-RESOURCE elem (String/Array/Map/…): GtPtr(elem)
+            #       LoBorrowed — op_consume clones at owning boundaries.
+            #   (c) NON-resource non-scalar elem (a plain struct): FALL
+            #       BACK to the I64/0 stub — a real void* read here cc-fails
+            #       `incompatible types from void*`.
+            int idst = -1
+            if eix_elem_tid < PRIM_COUNT:
+                idst = add_local(&ctx, eix_elem_tid, NO_NAME)
+            elif is_resource_type_name(eix_elem_norm, &gmod):
+                int eix_ptr_tid = register_ptr(&gmod, eix_elem_tid)
+                idst = add_local_with(&ctx, eix_ptr_tid, NO_NAME, LoBorrowed(), BoNone())
+            else:
+                idst = add_local(&ctx, I64_TYPE, NO_NAME)
+                emit(&ctx, GIAssign(idst, OpConstI64(0)))
+                return idst
+            # index/key MUST be OpBorrow (NOT OpCopy — OpCopy on a String
+            # dict key trips validate_resource_moves → lowerer crashes).
+            Vector[Operand] eix_args = [OpBorrow(eix_base), OpBorrow(eix_idx)]
+            emit(&ctx, GICallExtern(idst, eix_getter, eix_args))
             return idst
         case EIf(cond_box, then_body, else_branches):
             # If-as-EXPRESSION (`int x = if c: a else: b`). Mirrors Rust

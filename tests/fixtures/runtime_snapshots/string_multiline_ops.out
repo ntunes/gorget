@@ -1,0 +1,28 @@
+lines: 3
+hello
+world
+foo
+non-empty: 3
+first
+second
+third
+    if true:
+        print(x)
+        return
+1: roses are red
+2: violets are blue
+3: gorget is fast
+4: and safe too
+and safe too
+gorget is fast
+violets are blue
+roses are red
+block lines: 3
+first: line one
+last: line three
+name | age | city
+-----------------
+alice | 30 | paris
+bob | 25 | london
+total words: 6
+max line len: 11

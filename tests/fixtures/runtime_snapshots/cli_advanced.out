@@ -1,0 +1,14 @@
+true
+true
+true
+2
+file1.txt
+file2.txt
+Usage: mytool
+A sample tool
+Arguments:
+  input  Input file
+Options:
+  --verbose, -v  Be verbose
+  --output, -o  Output path (default: out.txt)
+done
