@@ -16,7 +16,7 @@
 #     MoveZero in bbX` GIR validation failure (Compiler internal panic).
 #   - Chained `if`s that each store `items` into a different field
 #     silently double-freed the heap buffer at scope exit (snag #8 sibling).
-# Post-fix: both shapes auto-clone the live source. `--show-clones` reports
+# Post-fix: both shapes auto-clone the live source. `--clones=sites` reports
 # one implicit clone per field-store with a still-live source.
 
 from std.collections import Vector

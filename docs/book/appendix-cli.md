@@ -67,7 +67,7 @@ violations, and unresolved names.
 ```bash
 gg check app.gg
 gg check app.gg --show-borrows    # print borrow checker summary
-gg build app.gg --show-clones     # print implicit clone report (including CoW materializations)
+gg build app.gg --clones          # print implicit clone report (default: silent)
 ```
 
 ---
@@ -91,9 +91,20 @@ These flags work with `build` and `run`:
 | `--emit-gir` | High-level GIR (post-monomorphization, pre-LIR) |
 | `--emit-lir` | Low-level SSA IR |
 | `--emit-c-lir` | Generated C code |
-| `--show-clones` | Implicit clone report (ownership-boundary clones + CoW materializations) |
-| `--clones[=MODE]` | Configurable clone report (`stats`, `verbose`, `all`); `--clone-stats` prints the aggregate line |
+| `--clones[=MODE]` | Clone diagnostics (default: silent). Modes: `sites` (default), `verbose`, `stats`, `all`. See note below. |
 | `--show-borrows` | Borrow checker analysis summary |
+
+All clone diagnostics live under `--clones` and are **silent by default**:
+
+- `--clones` / `--clones=sites` — compile-time report (one line per implicit-clone
+  site: `file:line:col`, type, reason; covers ownership-boundary clones, CoW
+  materializations, closure-handle clones, and the CoW element-mutation case).
+- `--clones=verbose` — `sites` plus clone id, `size_bytes`, and runtime clone fn.
+- `--clones=stats` — the compiled binary prints a `[clone-stats] …` aggregate line at exit.
+- `--clones=all` — alias for `verbose,stats`. Modes combine: `--clones=sites,stats`.
+
+The pre-unification spellings `--show-clones` and `--clone-stats` were removed;
+use `--clones=sites` and `--clones=stats`.
 
 ---
 

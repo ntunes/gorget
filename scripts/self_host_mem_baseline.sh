@@ -51,13 +51,13 @@ fi
 echo "[1/4] Building gg release binary..." >&2
 cargo build --release >&2
 
-# Build the self-host driver (stage-0) with --clone-stats so its own emitted
+# Build the self-host driver (stage-0) with --clones=stats so its own emitted
 # binary will also print the [clone-stats] line at exit. We're about to use
 # that binary as the workload.
-echo "[2/4] Building self-host driver with --clone-stats..." >&2
+echo "[2/4] Building self-host driver with --clones=stats..." >&2
 DRIVER_GG="tests/fixtures/self_host_lowerer/driver.gg"
 DRIVER_EXE="/tmp/self_host_driver_bench"
-./target/release/gg build --clone-stats "$DRIVER_GG" -o "$DRIVER_EXE" >&2
+./target/release/gg build --clones=stats "$DRIVER_GG" -o "$DRIVER_EXE" >&2
 
 # Run it on its own source — representative self-host workload.
 echo "[3/4] Running self-host driver on its own source (captures RSS + clone-stats)..." >&2

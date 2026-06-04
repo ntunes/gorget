@@ -4217,7 +4217,7 @@ fn borrowed_extern_string() {
     // post-call `gorget_string_clone` runs end-to-end against a real
     // runtime fn. The clone normalises the borrowed alias into an owned
     // local that scope-exit can drop without UAFing the static buffer.
-    // See `--show-clones` on this fixture for "borrowed extern return"
+    // See `--clones=sites` on this fixture for "borrowed extern return"
     // entries at both call sites.
     run_gg("borrowed_extern_string.gg", "\
 len(a)=0

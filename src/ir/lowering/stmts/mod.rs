@@ -675,6 +675,7 @@ fn lower_var_decl(
                         }
                     } else { false };
                     if should_clone {
+                        ctx.warn_implicit_clone(value.span, gir_type, crate::ir::ImplicitCloneReason::ClosureCapture);
                         let cloned = builder.call_extern(
                             "gorget_closure_clone_to_owned",
                             vec![operand.clone()],

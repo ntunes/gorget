@@ -4658,7 +4658,7 @@ The Gorget compiler is invoked as `gg` with the following commands:
 | `--hot-reload`       | Enable hot code reload (builds host + guest shared library) |
 | `--shared [-o file]` | Build as a shared library (`.dylib`/`.so`)              |
 | `--show-borrows`     | Print inferred borrow analysis for all functions (diagnostic) |
-| `--show-clones`      | Print clone report: all implicit clones with location, type, and reason (including CoW materializations) |
+| `--clones[=MODE]`    | Clone diagnostics (default: silent). See *Clone diagnostics* below |
 | `-i` / `--in-place`  | Format file in place (for `gg fmt`)                     |
 | `-c` / `--check`     | Exit 1 if file is not formatted (for `gg fmt`)          |
 
@@ -4675,6 +4675,26 @@ The freestanding target compiles Gorget programs with no OS, no libc, and a
 minimal bump-allocator runtime. The output is a PE binary suitable for UEFI
 boot. Requires `clang` with `lld` linker. See [Build Targets](book/22-targets.md)
 for details, prerequisites, and QEMU run instructions.
+
+**Clone diagnostics (`--clones`):**
+
+Gorget inserts clones automatically at ownership boundaries (see the
+copy-on-write model in [language-design.md](language-design.md)). These clones
+are correct by design, so the compiler is **silent about them by default** — a
+plain `gg build`, `gg run`, or `gg check` prints nothing about clones. To audit
+where clones happen, pass `--clones`:
+
+| Mode               | What it shows                                                                 |
+|--------------------|-------------------------------------------------------------------------------|
+| `--clones`         | Same as `--clones=sites`.                                                     |
+| `--clones=sites`   | Compile-time report — one line per implicit-clone site: `file:line:col`, type, and reason. Covers every auto-clone the compiler inserts (ownership-boundary clones, CoW materializations, closure-handle clones, and the CoW element-mutation case where a collection is mutated while an element borrow is live). |
+| `--clones=verbose` | `sites` plus extra columns: clone id, handle `size_bytes`, and the runtime clone function (`gorget_array_clone`, `<Type>__clone`, …). |
+| `--clones=stats`   | Runtime instrumentation — the compiled binary prints a `[clone-stats] array_clone=N map_clone=N …` aggregate line to stderr at exit. |
+| `--clones=all`     | Alias for `--clones=verbose,stats`. |
+
+Modes combine: `--clones=sites,stats`. The pre-unification spellings
+`--show-clones` and `--clone-stats` were removed — use `--clones=sites` and
+`--clones=stats` respectively (the old flags now error with the replacement).
 
 ---
 

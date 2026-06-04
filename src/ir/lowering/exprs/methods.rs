@@ -1597,6 +1597,7 @@ pub(super) fn lower_method_call(
                 if !is_last_use {
                     let recv_type = builder.local_type(recv_local);
                     if let Some(clone_fn) = ctx.clone_fn_for_ptr(recv_type) {
+                        ctx.warn_implicit_clone(receiver.span, recv_type, crate::ir::ImplicitCloneReason::CallArg);
                         let ptr_type = ctx.register_ptr_type(recv_type);
                         let ptr_local = builder.add_local(ptr_type, None);
                         builder.emit_borrow(ptr_local, Place::local(recv_local));
@@ -2837,6 +2838,9 @@ fn try_lower_option_result_combinator(
     };
     if let Some(ref p) = recv_place {
         if let Some(clone_fn) = ctx.clone_fn_for_ptr(recv_type) {
+            // `args` is non-empty here (guarded above); use the closure arg's
+            // span as the diagnostic site for this combinator-receiver clone.
+            ctx.warn_implicit_clone(args[0].span, recv_type, crate::ir::ImplicitCloneReason::CallArg);
             let ptr_type = ctx.register_ptr_type(recv_type);
             let ptr_local = builder.add_local(ptr_type, None);
             builder.emit_borrow(ptr_local, p.clone());

@@ -11,12 +11,13 @@ deliverable is the measurement + an honest TODO update. Do NOT manufacture a
 fix the data doesn't support (CLAUDE.md "refusing to manufacture work").
 
 ## Measurement method (the `[clone-stats]` runtime counter)
-`--clones=stats` (alias `--clone-stats`) instruments the COMPILED binary to print
-`[clone-stats] array_clone=N` at exit (`src/main.rs:374`, `src/lir/mod.rs:1755`).
+`--clones=stats` instruments the COMPILED binary to print
+`[clone-stats] array_clone=N` at exit (`src/lir/mod.rs:1755`). (The pre-unification
+`--clone-stats` alias was removed — use `--clones=stats`.)
 To attribute the **self-host driver's** clones:
 1. Build the driver binary with stats on (⚠ R1 fold: `gg build` takes ONE
    positional filename — NO `lib` arg here; `lib` is a DRIVER run-time arg):
-   `cargo run --release -- build --clone-stats tests/fixtures/self_host_lowerer/driver.gg -o /tmp/driver_stats`
+   `cargo run --release -- build --clones=stats tests/fixtures/self_host_lowerer/driver.gg -o /tmp/driver_stats`
    (matches `scripts/self_host_mem_baseline.sh:60` + `build_gg_dir` at
    `tests/integration.rs:9223`).
 2. Run the instrumented driver on a representative heavy workload (the driver

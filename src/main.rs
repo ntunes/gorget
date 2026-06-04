@@ -346,9 +346,11 @@ fn parse_features(args: &[String]) -> Vec<String> {
     features
 }
 
-/// Bitset of selected `--clones[=MODE]` modes. The unified clone-diagnostic
-/// flag superseded `--show-clones` (→ `sites`) and `--clone-stats` (→ `stats`);
-/// the legacy spellings remain as aliases. `all` is shorthand for `verbose,stats`.
+/// Bitset of selected `--clones[=MODE]` modes. All clone diagnostics — both the
+/// compile-time per-site report and the runtime `[clone-stats]` line — live
+/// under this one flag and are default-silent. `all` is shorthand for
+/// `verbose,stats`. The pre-unification spellings `--show-clones` and
+/// `--clone-stats` are retired (see [`parse_clone_modes`]).
 #[derive(Debug, Clone, Copy, Default)]
 struct CloneDiagModes {
     /// Compact compile-time report: file:line:col  type  reason.
@@ -361,18 +363,21 @@ struct CloneDiagModes {
     stats: bool,
 }
 
-/// Parse `--clones[=MODE[,MODE…]]`, plus the legacy aliases `--show-clones`
-/// (→ `sites`) and `--clone-stats` (→ `stats`). Recognised modes are
-/// `sites`, `verbose`, `stats`, `all`. Returns `Err(msg)` on unknown modes.
+/// Parse `--clones[=MODE[,MODE…]]`. Recognised modes are `sites`, `verbose`,
+/// `stats`, `all`; a bare `--clones` defaults to `sites`. Returns `Err(msg)` on
+/// an unknown mode, or on the retired `--show-clones` / `--clone-stats`
+/// spellings (with a message pointing at the replacement) — a clean error
+/// rather than silently ignoring a flag the user expects to do something.
 fn parse_clone_modes(args: &[String]) -> Result<CloneDiagModes, String> {
     let mut modes = CloneDiagModes::default();
 
-    // Legacy spellings — translate at parse time so existing CI keeps working.
+    // Retired aliases — fail loudly with the migration path rather than
+    // silently no-op'ing (the general arg loop below would otherwise skip them).
     if args.iter().any(|a| a == "--show-clones") {
-        modes.sites = true;
+        return Err("`--show-clones` was removed; use `--clones=sites` (or `--clones`).".to_string());
     }
     if args.iter().any(|a| a == "--clone-stats") {
-        modes.stats = true;
+        return Err("`--clone-stats` was removed; use `--clones=stats`.".to_string());
     }
 
     for a in args {
@@ -398,6 +403,39 @@ fn parse_clone_modes(args: &[String]) -> Result<CloneDiagModes, String> {
         }
     }
     Ok(modes)
+}
+
+/// True if a semantic warning is a clone diagnostic that belongs under the
+/// `--clones` umbrella rather than the always-on warning stream. Today that is
+/// exactly `CowBorrowMutation` (the CoW system inserts an element clone when a
+/// collection is mutated while an element borrow is live). It is informational,
+/// not actionable — the clone is correct by design — so it is default-silent
+/// like the rest of System A's clone report; `--clones=sites`/`verbose` surfaces
+/// it. All other semantic warnings always display.
+fn is_clone_diagnostic(warn: &gorget::semantic::errors::SemanticWarning) -> bool {
+    matches!(
+        warn.kind,
+        gorget::semantic::errors::SemanticWarningKind::CowBorrowMutation { .. }
+    )
+}
+
+/// Display the non-fatal semantic warnings, filtering out the clone diagnostics
+/// (see [`is_clone_diagnostic`]) unless `show_clones` requested them. The clone
+/// diagnostics are folded into the dedicated clone report on the build path; on
+/// `check`/`sim` (no lowering, no clone report) they are surfaced here through
+/// the normal warning reporter when `show_clones` is set, and suppressed
+/// otherwise. Keeps a plain `gg build`/`gg check`/`gg sim` clone-silent.
+fn report_semantic_warnings_filtered(
+    reporter: &ErrorReporter,
+    warnings: &[gorget::semantic::errors::SemanticWarning],
+    show_clones: bool,
+) {
+    for warn in warnings {
+        if is_clone_diagnostic(warn) && !show_clones {
+            continue;
+        }
+        reporter.report_semantic_warning(warn);
+    }
 }
 
 /// Build a .gg source file: parse → analyze → GIR → LIR → C → binary.
@@ -454,10 +492,16 @@ fn try_build_ir(
         return Err(format!("{} semantic error(s) found", result.errors.len()));
     }
 
-    // Display warnings (non-fatal)
+    // Display warnings (non-fatal). Clone diagnostics (CowBorrowMutation) are
+    // filtered out here unconditionally on the build path — they are folded
+    // into the dedicated Clone Report below (shown only under `--clones`), so a
+    // plain build stays clone-silent.
     if !result.warnings.is_empty() {
         let reporter = ErrorReporter::new_multi(file_infos.clone());
         for warn in &result.warnings {
+            if is_clone_diagnostic(warn) {
+                continue;
+            }
             reporter.report_semantic_warning(warn);
         }
     }
@@ -472,13 +516,15 @@ fn try_build_ir(
     if show_clones {
         let reporter = ErrorReporter::new_multi(file_infos.clone());
         let mut shown = std::collections::HashSet::new();
-        struct CloneEntry<'a> {
+        struct CloneEntry {
             file: String,
             line: usize,
             col: usize,
-            id: u32,
+            /// `None` for clone sites detected by the semantic pass (CoW element
+            /// mutation), which predate the lowering-time CloneId allocation.
+            id: Option<u32>,
             type_name: String,
-            reason: &'a str,
+            reason: String,
             size_bytes: usize,
             runtime_fn: String,
         }
@@ -503,11 +549,38 @@ fn try_build_ir(
             };
             entries.push(CloneEntry {
                 file, line, col,
-                id: warn.id.0,
+                id: Some(warn.id.0),
                 type_name: warn.type_name.clone(),
-                reason,
+                reason: reason.to_string(),
                 size_bytes: warn.size_bytes,
                 runtime_fn: warn.runtime_fn.clone(),
+            });
+        }
+        // Fold in the semantic-pass clone diagnostics (CoW element-mutation).
+        // These live in the safety pass (they need borrow-source tracking that
+        // lowering lacks) so they carry variable-name context instead of a
+        // CloneId/runtime_fn; render them in the same table for one unified view.
+        for warn in &result.warnings {
+            if !is_clone_diagnostic(warn) {
+                continue;
+            }
+            if !shown.insert(warn.span.start) {
+                continue;
+            }
+            let (file, line, col) = reporter.span_location(warn.span);
+            let reason = match &warn.kind {
+                gorget::semantic::errors::SemanticWarningKind::CowBorrowMutation { source, borrow } => {
+                    format!("CoW element mutation (`{source}` mutated while `{borrow}` held)")
+                }
+                _ => continue,
+            };
+            entries.push(CloneEntry {
+                file, line, col,
+                id: None,
+                type_name: String::from("-"),
+                reason,
+                size_bytes: 0,
+                runtime_fn: String::new(),
             });
         }
         entries.sort_by(|a, b| a.line.cmp(&b.line).then(a.col.cmp(&b.col)));
@@ -519,10 +592,11 @@ fn try_build_ir(
             for e in &entries {
                 let size_str = if e.size_bytes == 0 { String::from("-") } else { e.size_bytes.to_string() };
                 let rt = if e.runtime_fn.is_empty() { "-" } else { e.runtime_fn.as_str() };
+                let id_str = e.id.map_or_else(|| String::from("-"), |id| format!("#{id}"));
                 eprintln!(
-                    "  {file}:{line}:{col}  #{id:<4} {type_name:<16} {reason:<32} {size:>4}  {rt}",
+                    "  {file}:{line}:{col}  {id:<5} {type_name:<16} {reason:<48} {size:>4}  {rt}",
                     file = e.file, line = e.line, col = e.col,
-                    id = e.id, type_name = e.type_name, reason = e.reason,
+                    id = id_str, type_name = e.type_name, reason = e.reason,
                     size = size_str, rt = rt,
                 );
             }
@@ -2296,13 +2370,12 @@ fn main() {
         println!("  --emit-gir              Dump GIR (intermediate representation) to stdout instead of compiling");
         println!("  --emit-lir              Dump LIR (low-level SSA IR) to stdout instead of compiling");
         println!("  --emit-c-lir            Dump C code generated from LIR to stdout");
-        println!("  --clones[=MODE,…]       Clone diagnostics. Modes: sites (default), verbose, stats, all");
-        println!("                          sites: file:line:col + type + reason");
-        println!("                          verbose: + size_bytes + runtime_fn (subsumes the old --trace-cow plan)");
-        println!("                          stats: runtime `[clone-stats]` atexit line");
-        println!("                          all: alias for verbose,stats");
-        println!("  --show-clones           Alias for --clones=sites (legacy)");
-        println!("  --clone-stats           Alias for --clones=stats  (legacy)");
+        println!("  --clones[=MODE,…]       Clone diagnostics (default: silent). Modes: sites (default), verbose, stats, all");
+        println!("                          sites:   compile-time report — file:line:col + type + reason");
+        println!("                          verbose: sites + id + size_bytes + runtime_fn columns");
+        println!("                          stats:   runtime `[clone-stats]` atexit counter line");
+        println!("                          all:     alias for verbose,stats");
+        println!("                          Without --clones, no clone diagnostics are printed.");
         println!();
         println!("Targets:");
         println!("  --target native                 Default — build for the host OS with full runtime");
@@ -2774,9 +2847,7 @@ fn main() {
             if result.errors.is_empty() {
                 if !result.warnings.is_empty() {
                     let reporter = ErrorReporter::new_multi(file_infos);
-                    for warn in &result.warnings {
-                        reporter.report_semantic_warning(warn);
-                    }
+                    report_semantic_warnings_filtered(&reporter, &result.warnings, show_clones);
                 }
                 println!("OK: no semantic errors");
             } else {
@@ -3330,9 +3401,7 @@ fn main() {
 
             if !result.warnings.is_empty() {
                 let reporter = gorget::errors::ErrorReporter::new_multi(file_infos.clone());
-                for warn in &result.warnings {
-                    reporter.report_semantic_warning(warn);
-                }
+                report_semantic_warnings_filtered(&reporter, &result.warnings, show_clones);
             }
 
             // Parse test-mode flags (--filter, --tag, --exclude-tag).

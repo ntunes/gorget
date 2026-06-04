@@ -182,6 +182,7 @@ pub(super) fn lower_assign(
                             && !ctx.is_fresh_string(builder, place.local)
                         {
                             let owned = ctx.type_mapper.owned_string_type;
+                            ctx.warn_implicit_clone(value.span, owned, crate::ir::ImplicitCloneReason::NamedToNamed);
                             let cloned = builder.call(
                                 "gorget_string_clone_to_owned",
                                 vec![FunctionBuilder::copy(place.local)],
