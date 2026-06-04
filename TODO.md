@@ -1,9 +1,9 @@
 # TODO
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE THIS BLOCK IN PLACE each session; completed work → DONE.md, do NOT accumulate "superseded" blocks)
-**gorget-1 code tip `9bb2252d` (`git log -1` for the live tip — docs commits on top). RUNTIME PARITY =
-**385/929 = 41.4%** (was 375 at session start; +10: static-index +1, 3g +3, snag49c +1, 3h-drop +5). This session (2026-06-04): TODO.md hygiene `0c24c11f`
-(pruned 1280→718 lines, −44%), then 4 parity chains with full discipline —
+**gorget-1 code tip `7256173f` (`git log -1` for the live tip — docs commits on top). RUNTIME PARITY =
+**392/929 = 42.2%** (was 375 at session start; +17: static-index +1, 3g +3, snag49c +1, 3h-drop +5, String-trim/view-print +7). This session (2026-06-04): TODO.md hygiene `0c24c11f`
+(pruned 1280→718 lines, −44%), then 5 parity chains with full discipline —
 **Rust-oracle static-index-read `7939bb50` +1** (a static `Vector[struct]` index-read was dropped:
 `lower_index_access`'s Copy/Move place-guard didn't match the `GlobalRef` operand → materialize-to-local;
 recovers `static_vec_index_load` at the correct behavior) + **3g by-value-struct EIndex `4ef49503` +3**
@@ -11,23 +11,27 @@ recovers `static_vec_index_load` at the correct behavior) + **3g by-value-struct
 keyed on the UNMAPPED getter) + **snag49c EIndex-INDEX auto-prop `b07f8160` +1** (the throwing index
 operand of `v[pick()]` wasn't auto-propagated) + **3h-drop user-resource-struct drop `9bb2252d` +5**
 (`is_droppable_type` excluded user resource-containing structs → per-iteration leak; corrected a STALE
-"COMMIT-3-blocked" premise — the drop machinery is ACTIVE). All DONE.md. Denominator 929 (an earlier owner
-merge added `.N` tuple-index + unwrap-on-non-Option/Result `gg check`, +4 fixtures).
-Live gates @ `9bb2252d`: `self_host_runtime` **385/0**, `runtime_diff` MATCH **385**,
+"COMMIT-3-blocked" premise — the drop machinery is ACTIVE) + **String trim/strip + Str-VIEW printing
+`7256173f` +7** (no-arg `.strip()` lowered to a no-op empty-chars strip; print/f-string `%s`+`.data`
+over-read non-NUL-terminated cap=0 VIEWS → no-arg→whitespace-variant + `%.*s`-with-`ai==0`-carve-out). All
+DONE.md. Denominator 929 (an earlier owner merge added `.N` tuple-index + unwrap-on-non-Option/Result `gg
+check`, +4 fixtures).
+Live gates @ `7256173f`: `self_host_runtime` **392/0**, `runtime_diff` MATCH **392**,
 `lowerer_comparison` **960**, `c_emit_comparison` **891**, `bootstrap_fixed_point` GREEN, `cargo test
 --lib` 1072/0 (debug; the 2 `--release` `should_panic`-over-`debug_assert` reds are a pre-existing `src/`
 artifact, NOT our work). FULL `cargo test --test integration` **1187/0/0** last run at `4ef49503`
-(static-index + 3g); snag49c + 3h-drop are self-host-`.gg`-only → cannot affect non-self-host Rust fixtures,
-gated by the self-host suite above (3h-drop's output-review independently ran all 385 snapshots byte-clean).
-Nothing in flight. NEXT (RUN-verify each before briefing; scout `a0ea3277` 2026-06-04 ranked these):
-**(1) closure 2b-1 — copy-struct capture widen** (`copy_struct_closure_capture`: a `{int,int}` COPY-struct
-capture; the 2a guard at `lower.gg:~6172` restricts to `{BOOL,I64,F64}` — widen to copy-structs, NO clone/drop
-machinery, ~+1, low risk) → **(2) String trim/strip cluster** (~+5: `string_strip`/`string_stdlib`/
-`test_str_predicates` — trailing-whitespace not trimmed, a String trim/strip method-body gap; non-drop,
-non-closure) → **(3) Option/Result nested smart-split** — ⚠ NOT a quick fix (RUN-verified: predicate-only =
+(static-index + 3g); snag49c/3h-drop/String-trim are self-host-`.gg`-only → cannot affect non-self-host Rust
+fixtures (each gated by the self-host suite; String-trim's regen wiped+rewrote ALL 385 prior snapshots
+byte-identical = a complete-corpus regression proof for the sensitive printf path).
+Nothing in flight. NEXT (RUN-verify each before briefing):
+**(1) closure 2b-1 — copy-struct capture widen** — RUN-CONFIRMED +1 (scout `a8678c68` 2026-06-04): widen the
+2a guard at `lower.gg:~6163` (`{BOOL,I64,F64}`) to ALSO accept a registered struct that is `not
+is_resource_type_name` and `not is_enum` (byte-copyable copy-struct; env-field + GIFieldLoad already work, NO
+clone/drop machinery). Flips `copy_struct_closure_capture`. Single-file, low risk — READY to brief →
+execute. → **(2) Option/Result nested smart-split** — ⚠ NOT a quick fix (RUN-verified: predicate-only =
 +0 trap; +2 only CHAINED with a prelude-ctor-arg hook, and that chain UNMASKS 2 segfaults in
-`csv_edge`/`csv_stringify` — see TODO #1) → **(4) closure Phase-2b** (ByValue RESOURCE/CoW captures, 2b-2/2b-3
-— deep: env drop/clone is type-erased + entangled with the same drop machinery; decompose). ⚠ The
+`csv_edge`/`csv_stringify` — see High-Priority). → **(3) closure Phase-2b** (ByValue RESOURCE/CoW captures,
+2b-2/2b-3 — deep: env drop/clone is type-erased + entangled with the same drop machinery; decompose). ⚠ The
 closure-call typed-ABI cast
 (`lir_codegen.gg` ICallClosure) is **PARKED — already REFUTED-by-review** (scalars match under `-w` ≈0
 parity; the real fix needs deep upstream ref/aggregate machinery) — a landscape scout re-surfaced it as
@@ -42,7 +46,7 @@ cluster) — parallelize the ORCHESTRATION (scout next while executing current),
 **⬅ TOP NEXT (READY / high-leverage — full discipline ≥3 reviews, re-verify by RUNNING; see "## High Priority"):**
 1. **Option/Result nested smart-split** — ⚠ **RUN-VERIFIED 2026-06-04: the predicate fix ALONE = +0 (the lesson's ~0 trap); the chain = +2 BUT unmasks 2 segfaults. NOT the small self-contained fix it looks like.** (a) `lower.gg:~8477` `is_concrete_payload_name` rejecting `Option__`/`Result__`-prefixed Ok payloads IS a real bug — the predicate fix is SOUND groundwork (fixes the `Result__Option__int64_t__GorgetString` struct layout: `Ok_0` bare `__gg_Option`→`Option__int64_t`) and `lir_lower.gg` needs NO matching change (its split uses `resolve_field_lir_type`, already resolves once registered) — BUT it is NECESSARY-NOT-SUFFICIENT: every candidate has a 2nd blocker (the inner `None()`/`Some()` ctor-arg of `return Ok(None())` gets NO expected-type because `Ok`/`Some`/`Error` aren't in `fn_sigs` → `callee_param_types` empty → inner literal mis-types its dst, CC-fail). (b) CHAINED with a 2nd hook — prelude-ctor-arg expected-type via `lookup_ctor_field_type` at `lower.gg:~6730` — reaches **+2** (`option_result_nested`, `match_nested_option` → MATCH). (c) ⚠ BUT the chain REGRESSES `csv_edge` + `csv_stringify` (`Result[Vector[Vector[String]], String]`) from clean CC-FAIL → **SEGFAULT** (the sharper payload typing makes them compile then crash at runtime — a deeper `Vector[Vector[String]]`-payload bug it UNMASKS). So this is a 2-part fix + a 3rd investigation (the unmasked nested-collection-payload crash), NOT a quick win. Affects `option_result_nested`/`option_result_combinators`/`match_option_result`/`option_result_field_store`/`coroutine_option_result`. lower.gg-serial.
 2. **closure Phase-2 continuation** (below) — the deeper serial parity cluster in `lower.gg`/`lir_lower.gg`. ⚠ The closure-call typed-ABI cast is PARKED (refuted — see CURRENT NEXT header). Phase-2b (ByValue RESOURCE/CoW captures) is the real next closure parity (root re-pinned 2026-06-04: the 2a guard at `lower.gg:~6172` restricts captures to `{BOOL,I64,F64}`; resource captures fall to the `__make_closure_N()` NULL-env stub at ~:6223).
-3. **method-resolution follow-ups** (parity-neutral cleanup; logged): the 4th name-match classifier `guess_return_type`/`STRING_MARKER` (a distinct fn; fold into `BUILTIN_METHODS` too) + the LIR-level String-method match in `lir_lower.gg` (a 2nd `BrkString`-column consumer); and the const-bytes LIR init kind to restore the −6 scalar-static fn-count (High Priority). Phase-2 Stage 2 (the checker TOTALITY gate) stays BLOCKED by the measured superset failure (below).
+3. **method-resolution follow-ups** (parity-neutral cleanup; logged): the 4th name-match classifier `guess_return_type`/`STRING_MARKER` (a distinct fn; fold into `BUILTIN_METHODS` too) + the LIR-level String-method match in `lir_lower.gg` (a 2nd `BrkString`-column consumer); and the const-bytes LIR init kind to restore the −6 scalar-static fn-count (High Priority). Also (from String-trim `7256173f`): add `gorget_str_lstrip_ws`/`gorget_str_rstrip_ws` to the self-host `runtime_takes_str_by_value`/`runtime_fn_return_type` classifier lists for consistency with `gorget_str_trim` (benign today — `self` arrives by-value so the ptr-ABI branch is skipped; only bites if a future fixture passes `.lstrip()`/`.rstrip()` self via pointer ABI). Phase-2 Stage 2 (the checker TOTALITY gate) stays BLOCKED by the measured superset failure (below).
 
 **⬅ closure Phase-2 continuation (re-verify by RUNNING; full discipline ≥3 reviews):**
 - **Phase 2b — ByValue RESOURCE/CoW captures** (String/Vector/struct). The Step-B 2a guard STUBS
