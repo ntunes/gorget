@@ -6163,7 +6163,16 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             while cl_ci < cl_caps.len():
                 int cl_ctid = cl_caps.get(cl_ci).unwrap().type_id
                 if cl_ctid != BOOL_TYPE and cl_ctid != I64_TYPE and cl_ctid != F64_TYPE:
-                    cl_caps_ok = false
+                    # 2b-1: ALSO accept a byte-copyable COPY struct — a
+                    # registered non-resource non-enum struct (e.g.
+                    # `Config{int,int}`). The env-field build + IStructInit /
+                    # GIFieldLoad byte-copy paths already handle it (no
+                    # clone/drop machinery). Resource-containing structs
+                    # (is_resource_type_name) + enums still fall to the
+                    # NULL-env stub (Phase 2b-2/2b-3).
+                    String cl_tname = type_id_to_name(cl_ctid, &gmod)
+                    if not (gmod.type_infos.contains(cl_tname) and not is_resource_type_name(cl_tname, &gmod) and not gmod.type_infos.get(cl_tname).unwrap().is_enum):
+                        cl_caps_ok = false
                 cl_ci += 1
             # (c) mutation check — build the capture-name set, then scan.
             if cl_caps_ok and cl_caps.len() > 0:
