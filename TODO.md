@@ -1,8 +1,8 @@
 # TODO
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE THIS BLOCK IN PLACE each session; completed work → DONE.md, do NOT accumulate "superseded" blocks)
-**gorget-1 code tip `6d11e238` (`git log -1` for the live tip — docs commits on top). RUNTIME PARITY =
-**398/930 = 42.8%** (was 375 at session start; +23: static-index +1, 3g +3, snag49c +1, 3h-drop +5, String-trim/view-print +7, closure-2b-1 +1, **KEYSTONE ③(b) +5**). This session (2026-06-04): TODO.md hygiene `0c24c11f`
+**gorget-1 code tip `a9e9d060` (`git log -1` for the live tip — docs commits on top). RUNTIME PARITY =
+**407/940 = 43.3%** (was 375 at session start; the keystone-era chains +23 [static-index/3g/snag49c/3h-drop/String-trim/closure-2b-1/**KEYSTONE ③(b)**], then **Chain-2 self-host auto-prop +6**; denominator 930→940 = this session's B/C +8 + Rust-correctness +2 fixtures, the latter 2 not yet self-host-twinned [#6]). This session (2026-06-04): TODO.md hygiene `0c24c11f`
 (pruned 1280→718 lines, −44%), then 6 parity chains with full discipline —
 **Rust-oracle static-index-read `7939bb50` +1** (a static `Vector[struct]` index-read was dropped:
 `lower_index_access`'s Copy/Move place-guard didn't match the `GlobalRef` operand → materialize-to-local;
@@ -21,16 +21,15 @@ match-destructured owned Option/Result payloads via a structural-decompose `is_d
 wire-liveness post-pass — closing a latent `return r`/`v.push(r)` UAF a review pass caught; +1 regression
 fixture). All DONE.md. Denominator 930 (the +1 keystone fixture; an earlier owner
 merge added `.N` tuple-index + unwrap-on-non-Option/Result `gg check`, +4 fixtures).
-Live gates @ `65f5f591`: `self_host_runtime` **394/0**, `runtime_diff` MATCH **398/930**,
-`lowerer_comparison` **961**, `c_emit_comparison` **892**, `bootstrap_fixed_point` GREEN, `cargo test
+Live gates @ `a9e9d060`: `self_host_runtime` **407/0**, `runtime_diff` MATCH **407/940**,
+`lowerer_comparison` **971**, `c_emit_comparison` **902**, `bootstrap_fixed_point` GREEN, `cargo test
 --lib` 1072/0 (debug; the 2 `--release` `should_panic`-over-`debug_assert` reds are a pre-existing `src/`
 artifact, NOT our work). FULL `cargo test --test integration` **1197/0** last run at `6d11e238`
 (keystone ③(b) `65f5f591` [self-host] + gorget-js B/C Rust-`gg` auto-prop centralization `ca6fd527`/`d1999314`/`51f56c64`
 [+8 `throws_autoprop_*` fixtures] + Rust-`gg` correctness `6d11e238` [collection-literal-in-return + all-scalar-tuple
 typed-VarDecl-init, +2 fixtures] — all landed on top; the Rust-`gg`/`src/` fixes are parity-NEUTRAL for the self-host
 runtime number, the self-host gates above are unchanged by them).
-⏳ IN FLIGHT (2026-06-04 pm): Chain 2 self-host auto-prop twin (port the centralized hook to the self-host lowerer —
-mirror the Rust B/C fix). ⏭ QUEUED (see TaskList #3/#5/#6/#7): clone-flag consolidation (unify A+B clone diagnostics
+✅ Chain 2 self-host auto-prop twin LANDED `77f16002` (+6 → 407/940; DONE.md). ⏭ QUEUED (see TaskList #3/#5/#6/#7): clone-flag consolidation (unify A+B clone diagnostics
 under `--clones`, default silent, retire `--show-clones`/`--clone-stats`, document — gate-B SAFE: clone-bomb
 investigation MEASURED no O(n²), CoW clones the held element O(element)/set); PERF lever-(c) (liveness-gate
 `cow_materialize_collection_ref` → zero-clone for dead-borrow RMW `coll.set(i,…coll.get(i)…)`); self-host
