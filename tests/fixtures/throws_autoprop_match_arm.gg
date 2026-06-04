@@ -1,0 +1,26 @@
+# Snag #35-followup: a throwing call as a match-ARM TAIL value (not the
+# scrutinee) inside a propagating function. The arm `to_n(sel)` peels to
+# `int`, unifying with the `else` arm and the `int cv` destination.
+struct PErr:
+    String msg
+
+int to_n(int x) throws PErr:
+    if x < 0:
+        throw PErr("neg")
+    return x
+
+int dispatch(int sel) throws PErr:
+    int cv = match sel:
+        case 0:
+            to_n(100)
+        else:
+            to_n(sel)
+    return cv
+
+void main():
+    int a = dispatch(0) catch (e): -1
+    print(a)
+    int b = dispatch(7) catch (e): -1
+    print(b)
+    int c = dispatch(-1) catch (e): -99
+    print(c)

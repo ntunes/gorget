@@ -3627,6 +3627,52 @@ fn snag50_match_as_expr_arm_locals_leak() {
     run_gg("snag50_match_as_expr_arm_locals_leak.gg", expected);
 }
 
+// ── Snag #35-followup (gorget-js Snag #B/C): centralized Result→T
+//    auto-propagation. A throwing call used in ANY consumer position
+//    inside a propagating function must auto-prop. The typecheck now peels
+//    the throws-fn call to its Ok(T) type by default in a propagating
+//    context (mirror of IR-lowering's centralized `maybe_auto_propagate`
+//    hook), so every position type-checks without a per-position carve-out.
+//    Each fixture exercises both a success path and an error-propagation
+//    path (the error short-circuits to a top-level `catch`).
+
+#[test]
+fn throws_autoprop_binop_operand() {
+    // `return to_n(x) + 5` — throwing call as a binary-op operand.
+    run_gg("throws_autoprop_binop_operand.gg", "15\n-99");
+}
+
+#[test]
+fn throws_autoprop_match_arm() {
+    // `match sel: case 0: to_n(100) else: to_n(sel)` — throwing call as a
+    // match-arm tail value.
+    run_gg("throws_autoprop_match_arm.gg", "100\n7\n-99");
+}
+
+#[test]
+fn throws_autoprop_if_branch() {
+    // `if c: to_n(sel) else: 0` — throwing call as an if-expression branch.
+    run_gg("throws_autoprop_if_branch.gg", "7\n-99");
+}
+
+#[test]
+fn throws_autoprop_list_element() {
+    // `[to_n(sel), 5]` — throwing call as a list-literal element.
+    run_gg("throws_autoprop_list_element.gg", "3\n5\n0");
+}
+
+#[test]
+fn throws_autoprop_method_arg() {
+    // `a.add(to_n(sel))` — throwing call as a method-call argument.
+    run_gg("throws_autoprop_method_arg.gg", "105\n-99");
+}
+
+#[test]
+fn throws_autoprop_ctor_field() {
+    // `Wrap(to_n(sel))` — throwing call as a struct-constructor field arg.
+    run_gg("throws_autoprop_ctor_field.gg", "42\n-99");
+}
+
 #[test]
 fn snag51_closure_block_tail_value() {
     // Snag #51 — multi-statement closure body whose last statement is

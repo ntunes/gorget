@@ -418,6 +418,19 @@ struct TypeChecker<'a> {
     current_self_type: Option<TypeId>,
     /// Declared type hint for integer literal coercion (e.g., uint8 x = 5).
     decl_type_hint: Option<TypeId>,
+    /// One-shot flag, mirror of IR-lowering's `func_state.suppress_auto_prop`
+    /// (`src/ir/lowering/exprs/mod.rs:78`). When set, the next throws-fn call
+    /// inference (the Result-peel at `infer_expr` for a `Call`/`MethodCall`)
+    /// keeps the raw `Result[T, E]` instead of peeling to `Ok(T)`. Set at the
+    /// sites that genuinely want the whole Result — match scrutinee with
+    /// Ok/Error/Some/None arms, `catch` inner, `rethrow` inner — mirroring the
+    /// lowering suppress set. Consumed (reset to false) at the start of every
+    /// `infer_expr`, so it only affects the immediately-enclosing producer,
+    /// not nested sub-expressions. (No `==`/`!=` suppress is needed: the peel
+    /// is gated to *throws*-fn calls, and an explicit `Result`-returning fn —
+    /// the only `==` operand whose raw-vs-peeled compare differs — is never
+    /// peeled at the producer, so `make(1) == make(1)` is unchanged.)
+    suppress_auto_prop: bool,
     /// Maps (function_name, span_start) → body scope id (for scope-aware lookups).
     function_body_scopes: &'a FxHashMap<(String, usize), ScopeId>,
     /// Current function's body scope (for scope-aware variable lookup).
@@ -487,6 +500,7 @@ impl<'a> TypeChecker<'a> {
             method_resolutions: FxHashMap::default(),
             current_self_type: None,
             decl_type_hint: None,
+            suppress_auto_prop: false,
             function_body_scopes,
             current_fn_scope: None,
             current_trait_bounds: Vec::new(),
@@ -1001,6 +1015,11 @@ impl<'a> TypeChecker<'a> {
     // ─── Expression Inference ──────────────────────────────
 
     fn infer_expr(&mut self, expr: &Spanned<Expr>) -> TypeId {
+        // One-shot consume, mirror of IR-lowering's `lower_expr` entry
+        // (`src/ir/lowering/exprs/mod.rs:78`). Captured here and read at the
+        // throws-fn-call produce site (the Result-peel); reset so nested
+        // sub-expressions auto-prop normally.
+        let suppress_auto_prop = std::mem::replace(&mut self.suppress_auto_prop, false);
         match &expr.node {
             Expr::IntLiteral(n) => {
                 if let Some(hint_id) = self.decl_type_hint {
@@ -1519,19 +1538,57 @@ impl<'a> TypeChecker<'a> {
                             self.types.never_id
                         } else if let Some(err_ty) = func_info.and_then(|fi| fi.throws_type_id) {
                             // Snag #35: throws functions return `Result[T, E]`
-                            // at the call boundary. Modelling this in the type
-                            // system means `int n = throws_fn()` correctly fails
-                            // unification (Result[int, E] vs int) UNLESS the
-                            // VarDecl/arg site explicitly opts into capture
-                            // (declared `Result[T, E]`) or the enclosing
-                            // function can propagate (`throws E` or returns
-                            // `Result[T, E]`). The IR-lowering's
-                            // `maybe_auto_propagate` then performs the unwrap
-                            // at consumption.
-                            if let Some(result_def_id) = self.scopes.lookup("Result") {
-                                self.types.intern_generic(result_def_id, vec![return_type, err_ty])
-                            } else {
-                                return_type
+                            // at the call boundary. Snag #35-followup
+                            // (Snag #B/C, gorget-js): the per-position carve-out
+                            // for auto-propagation was incomplete — a throwing
+                            // call in an un-carved consumer position (binop
+                            // operand, match-arm tail, if-expr branch,
+                            // list-literal element, method-call arg,
+                            // struct-ctor field arg) failed to type-check even
+                            // though IR-lowering auto-props it correctly.
+                            //
+                            // Fix: CENTRALIZE the peel here at the producer,
+                            // mirroring IR-lowering's centralized
+                            // `maybe_auto_propagate` hook (`lower_expr` entry,
+                            // commit 90d09414). In a *propagating* context
+                            // (`throws` or returns `Result`) the call peels to
+                            // its `Ok(T)` type BY DEFAULT, so every consumer
+                            // position just sees `T` and unifies normally —
+                            // no position has to opt in. The raw `Result[T, E]`
+                            // is kept (the peel is SUPPRESSED) only where a
+                            // whole-Result value is genuinely wanted, exactly
+                            // mirroring the lowering suppress set:
+                            //   - destination type is `Result[..]`  (the
+                            //     `Result[T,E] r = f()` capture form; mirrors
+                            //     lowering's `expected_type is Result`);
+                            //   - match scrutinee with Ok/Error/Some/None arms,
+                            //     `catch` inner, `rethrow` inner, and both
+                            //     operands of `==`/`!=` — flagged via the
+                            //     one-shot `suppress_auto_prop` (mirror of
+                            //     lowering's `func_state.suppress_auto_prop`).
+                            // In a NON-propagating context the call cannot
+                            // propagate, so it stays `Result[T, E]` and the
+                            // user must handle it explicitly (`catch`, or a
+                            // `Result`-typed binding).
+                            match self.scopes.lookup("Result") {
+                                Some(result_def_id) => {
+                                    let raw_result = self.types.intern_generic(
+                                        result_def_id,
+                                        vec![return_type, err_ty],
+                                    );
+                                    let dest_is_result = self
+                                        .decl_type_hint
+                                        .map_or(false, |h| self.type_is_result(h));
+                                    if !suppress_auto_prop
+                                        && !dest_is_result
+                                        && self.current_fn_can_propagate()
+                                    {
+                                        return_type
+                                    } else {
+                                        raw_result
+                                    }
+                                }
+                                None => return_type,
                             }
                         } else {
                             return_type
@@ -2300,7 +2357,17 @@ impl<'a> TypeChecker<'a> {
                 arms,
                 else_arm,
             } => {
+                // Suppress the throws-fn-call auto-prop peel for the
+                // scrutinee when the arms discriminate Result/Option, so the
+                // raw `Result[T, E]` reaches `assign_pattern_types`. Clear the
+                // inherited `decl_type_hint` so the peel decision depends only
+                // on the arms + propagating context (mirror of lowering's
+                // `expected_type.take()` at `patterns.rs:389`).
+                let prev_hint = self.decl_type_hint;
+                self.decl_type_hint = None;
+                self.suppress_auto_prop = Self::arms_match_result_or_option(arms);
                 let scrutinee_type = self.infer_expr(scrutinee);
+                self.decl_type_hint = prev_hint;
                 // Record the scrutinee's typed shape so downstream passes
                 // (e.g. `lint:suggest_throws`) can recognize Result[T, E]
                 // scrutinees without re-running inference.
@@ -2777,6 +2844,11 @@ impl<'a> TypeChecker<'a> {
                 self.types.void_id
             }
             Expr::Rethrow { expr: inner, error_binding, transform } => {
+                // `rethrow` operates on the raw `Result[T, E]` (its error
+                // path transforms the `E`), so suppress the throws-fn-call
+                // auto-prop peel on the inner — mirror of lowering's
+                // `suppress_auto_prop = true` at `exprs/mod.rs:2952`.
+                self.suppress_auto_prop = true;
                 let inner_type = self.infer_expr(inner);
                 // Snag #37: bind the error-payload local's type. The
                 // resolver registers `name` in scope; here we set its
@@ -2799,6 +2871,12 @@ impl<'a> TypeChecker<'a> {
                 inner_type
             }
             Expr::Catch { expr: inner, error_binding, recovery } => {
+                // `catch` resolves the raw `Result[T, E]` itself (reads the
+                // `E` slot for the error binding, the `T` slot for the
+                // expression's value), so suppress the throws-fn-call
+                // auto-prop peel on the inner — mirror of lowering's
+                // `suppress_auto_prop = true` at `exprs/mod.rs:3093`.
+                self.suppress_auto_prop = true;
                 let inner_type = self.infer_expr(inner);
                 // Snag #37: bind the error-payload local's type. The error
                 // type comes from the throws-Result's `E` slot. The
@@ -3157,7 +3235,15 @@ impl<'a> TypeChecker<'a> {
                 arms,
                 else_arm,
             } => {
+                // Suppress the throws-fn-call auto-prop peel for the
+                // scrutinee when the arms discriminate Result/Option (mirror
+                // of lowering's `patterns.rs:389`; see the `Expr::Match` arm).
+                let arm_arms: Vec<_> = arms.iter().filter_map(|i| i.arm().cloned()).collect();
+                let prev_hint = self.decl_type_hint;
+                self.decl_type_hint = None;
+                self.suppress_auto_prop = Self::arms_match_result_or_option(&arm_arms);
                 let scrutinee_type = self.infer_expr(scrutinee);
+                self.decl_type_hint = prev_hint;
                 // Record the scrutinee's typed shape so downstream passes
                 // (e.g. `lint:suggest_throws`) can recognize Result[T, E]
                 // scrutinees without re-running inference.
@@ -4021,9 +4107,67 @@ impl<'a> TypeChecker<'a> {
         self.types.intern_generic(parent_enum_def_id, final_args)
     }
 
+    /// Whether the current function can auto-propagate an error: it has
+    /// `throws` OR returns `Result[T, E]`. This is the type-check mirror of
+    /// IR-lowering's `should_auto_propagate` propagating-context check
+    /// (`src/ir/lowering/exprs/mod.rs:2874-2882`). Factored out so the
+    /// centralized throws-fn-call peel (the producer-side Result→T inversion)
+    /// and the legacy `is_auto_propagation_compatible` consumer guards share
+    /// one source of truth.
+    fn current_fn_can_propagate(&self) -> bool {
+        if self.current_function_throws {
+            return true;
+        }
+        if let Some(ret_type) = self.current_return_type {
+            let ret_resolved = self.resolve_type(ret_type);
+            if let ResolvedType::Generic(ret_def_id, _) = self.types.get(ret_resolved) {
+                if self.scopes.get_def(*ret_def_id).name == "Result" {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Whether any match arm pattern discriminates a `Result`/`Option`
+    /// (`Ok` / `Error` / `Some` / `None`, optionally `Result.`/`Option.`
+    /// qualified). When true, a throws-fn-call scrutinee must keep its raw
+    /// `Result[T, E]` so the arm patterns bind correctly — the auto-prop
+    /// peel is suppressed. Mirror of IR-lowering's
+    /// `pattern_is_result_or_option` (`src/ir/lowering/stmts/patterns.rs`).
+    fn arms_match_result_or_option(arms: &[crate::parser::ast::MatchArm]) -> bool {
+        arms.iter().any(|arm| {
+            if let Pattern::Constructor { path, .. } = &arm.pattern.node {
+                let head = path.first().map(|s| s.node.as_str());
+                let second = path.get(1).map(|s| s.node.as_str());
+                matches!(head, Some("Ok" | "Error" | "Some" | "None"))
+                    || (matches!(head, Some("Result" | "Option"))
+                        && matches!(second, Some("Ok" | "Error" | "Some" | "None")))
+            } else {
+                false
+            }
+        })
+    }
+
+    /// True when `type_id` resolves to a `Result[T, E]` enum.
+    fn type_is_result(&self, type_id: TypeId) -> bool {
+        let resolved = self.resolve_type(type_id);
+        if let ResolvedType::Generic(def_id, args) = self.types.get(resolved) {
+            return args.len() == 2 && self.scopes.get_def(*def_id).name == "Result";
+        }
+        false
+    }
+
     /// Check if auto-propagation allows assigning a `Result[T, E]` value to a `T`-typed
     /// destination. Requires the current function to be a propagation context (has `throws`
     /// or returns `Result`).
+    ///
+    /// NOTE: with the centralized throws-fn-call peel at the producer (the
+    /// Snag #35-followup inversion above), a *throws-fn* call is already peeled
+    /// to `T` in a propagating context, so this guard's Result-value branch is
+    /// dead for those calls. It stays live for *explicit* `Result`-returning
+    /// fn calls (not peeled at the producer), which still auto-prop at the
+    /// consumer positions via this predicate.
     fn is_auto_propagation_compatible(&self, declared: TypeId, value: TypeId) -> bool {
         // Check if value type is Result[T, E]
         let value_resolved = self.resolve_type(value);

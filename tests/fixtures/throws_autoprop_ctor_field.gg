@@ -1,0 +1,23 @@
+# Snag #35-followup: a throwing call as a struct-constructor field
+# argument inside a propagating function. The field arg `to_n(sel)` peels
+# to `int`, matching the `int v` field.
+struct PErr:
+    String msg
+
+struct Wrap:
+    int v
+
+int to_n(int x) throws PErr:
+    if x < 0:
+        throw PErr("neg")
+    return x
+
+Wrap dispatch(int sel) throws PErr:
+    Wrap w = Wrap(to_n(sel))
+    return w
+
+void main():
+    Wrap a = dispatch(42) catch (e): Wrap(-1)
+    print(a.v)
+    Wrap b = dispatch(-1) catch (e): Wrap(-99)
+    print(b.v)

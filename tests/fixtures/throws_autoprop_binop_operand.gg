@@ -1,0 +1,22 @@
+# Snag #35-followup: a throwing call used as a binary-operator operand
+# inside a propagating function. The centralized Result→T auto-prop peel
+# (typecheck) makes `to_n(x) + 5` type as `int + int`, and IR-lowering
+# unwraps-or-rethrows the call. Success path returns the sum; the error
+# path short-circuits the function with the thrown error.
+struct PErr:
+    String msg
+
+int to_n(int x) throws PErr:
+    if x < 0:
+        throw PErr("neg")
+    return x
+
+int doubled_plus(int x) throws PErr:
+    # binop operand position
+    return to_n(x) + 5
+
+void main():
+    int a = doubled_plus(10) catch (e): -1
+    print(a)
+    int b = doubled_plus(-1) catch (e): -99
+    print(b)

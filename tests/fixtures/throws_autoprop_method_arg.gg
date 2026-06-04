@@ -1,0 +1,27 @@
+# Snag #35-followup: a throwing call as a method-call ARGUMENT inside a
+# propagating function. The arg `to_n(sel)` peels to `int`, matching the
+# `int y` parameter of `add`.
+struct PErr:
+    String msg
+
+int to_n(int x) throws PErr:
+    if x < 0:
+        throw PErr("neg")
+    return x
+
+struct Adder:
+    int base
+
+equip Adder:
+    int add(self, int y):
+        return self.base + y
+
+int dispatch(int sel) throws PErr:
+    Adder a = Adder(100)
+    return a.add(to_n(sel))
+
+void main():
+    int a = dispatch(5) catch (e): -1
+    print(a)
+    int b = dispatch(-1) catch (e): -99
+    print(b)

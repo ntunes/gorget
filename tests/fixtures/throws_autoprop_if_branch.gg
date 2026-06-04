@@ -1,0 +1,23 @@
+# Snag #35-followup: a throwing call as an if-EXPRESSION branch inside a
+# propagating function. The then-branch `to_n(sel)` peels to `int`,
+# unifying with the else-branch and the `int cv` destination.
+struct PErr:
+    String msg
+
+int to_n(int x) throws PErr:
+    if x < 0:
+        throw PErr("neg")
+    return x
+
+int dispatch(int sel) throws PErr:
+    # then-branch is a throwing call; when sel is in (0, threshold) it
+    # succeeds, when sel < 0 the SAME branch throws (sel > -100 routes the
+    # negative into the then-branch so the throw propagates).
+    int cv = if sel > -100: to_n(sel) else: 0
+    return cv
+
+void main():
+    int a = dispatch(7) catch (e): -1
+    print(a)
+    int b = dispatch(-1) catch (e): -99
+    print(b)

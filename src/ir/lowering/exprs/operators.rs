@@ -43,8 +43,21 @@ pub(super) fn lower_binary_op(
         return lower_short_circuit(ctx, builder, left, op, right);
     }
 
+    // A binary op's OPERANDS have their own scalar/string types determined by
+    // the operator, not the binop's destination. Clear the enclosing
+    // `expected_type` so it doesn't leak into operand lowering. Without this,
+    // a `return throws_call() + n` from a `throws` function sets
+    // `expected_type = Result[T, E]` (the function's return slot, set by
+    // `lower_return`), which suppresses `maybe_auto_propagate`'s peel on the
+    // `throws_call()` operand — leaving a `Result[T, E] + int` mismatch at the
+    // C layer. The throws-call operand must auto-prop like at any other
+    // consumer position. (Mirror of the type-check side, where the
+    // throws-fn-call peel is gated on `decl_type_hint`-is-Result, and a binop
+    // operand is never bound to a Result destination directly.)
+    let prev_expected = ctx.func_state.expected_type.take();
     let mut lhs = lower_expr(ctx, builder, left);
     let mut rhs = lower_expr(ctx, builder, right);
+    ctx.func_state.expected_type = prev_expected;
 
     // CoW: if operands are Ptr(T) aliases, deref to get the underlying value.
     lhs = cow_deref_if_ptr(ctx, builder, lhs);
