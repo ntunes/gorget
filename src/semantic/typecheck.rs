@@ -3011,7 +3011,12 @@ impl<'a> TypeChecker<'a> {
                 self.decl_type_hint = Some(target_type);
                 let value_type = self.infer_expr(value);
                 self.decl_type_hint = prev_hint;
-                if !self.is_auto_propagation_compatible(target_type, value_type)
+                // `is_collection_assignment`: mirror the `Stmt::VarDecl`
+                // arm so `v = [1, 2, 3]` (where `v: Vector[int]`) accepts
+                // a bare collection literal, exactly as the VarDecl-init
+                // form does.
+                if !self.is_collection_assignment(target_type, value_type)
+                    && !self.is_auto_propagation_compatible(target_type, value_type)
                     && !self.is_result_capture_compatible(target_type, value_type)
                 {
                     self.unify(target_type, value_type, value.span);
@@ -3050,7 +3055,18 @@ impl<'a> TypeChecker<'a> {
                         // destination IS the wrapping Result[T, E]
                         // (return-Result-typed function capturing the
                         // whole Result directly).
-                        if !self.is_auto_propagation_compatible(ret_type, expr_type)
+                        //
+                        // `is_collection_assignment`: mirror the
+                        // `Stmt::VarDecl` arm so `Vector[int] f(): return
+                        // [1, 2, 3]` (and `Set`/`Dict`) accepts a bare
+                        // collection literal in return position exactly
+                        // as `Vector[int] v = [1, 2, 3]` does in a
+                        // VarDecl. The `decl_type_hint` is already set to
+                        // the return type above; without this guard the
+                        // literal types as `int[N]` and fails to unify
+                        // with the declared collection return type.
+                        if !self.is_collection_assignment(ret_type, expr_type)
+                            && !self.is_auto_propagation_compatible(ret_type, expr_type)
                             && !self.is_result_capture_compatible(ret_type, expr_type)
                         {
                             self.unify(ret_type, expr_type, expr.span);

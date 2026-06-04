@@ -1,0 +1,27 @@
+# Regression: a bare collection literal in RETURN position must unify with the
+# declared collection return type, exactly as the VarDecl-init form does
+# (`Vector[int] v = [1, 2, 3]`). Previously the return arm went straight to
+# unify() and rejected `Vector[int] f(): return [1, 2, 3]` with
+# "expected Vector[int], found int[3]".
+
+Vector[int] make_vec():
+    return [1, 2, 3]
+
+Set[int] make_set():
+    return {1, 2, 3}
+
+Dict[String, int] make_dict():
+    return {"a": 1, "b": 2}
+
+Vector[Vector[int]] make_nested():
+    return [[1, 2], [3, 4]]
+
+Vector[int] make_empty():
+    return []
+
+void main():
+    print(make_vec().len())
+    print(make_set().len())
+    print(make_dict().len())
+    print(make_nested().len())
+    print(make_empty().len())

@@ -1140,6 +1140,42 @@ true
 }
 
 #[test]
+fn return_collection_literal() {
+    // Regression: bare collection literal in return position unifies with the
+    // declared collection return type (parity with VarDecl-init).
+    run_gg(
+        "return_collection_literal.gg",
+        "\
+3
+3
+2
+2
+0",
+    );
+}
+
+#[test]
+fn typed_scalar_tuple_vardecl() {
+    // Regression: typed VarDecl-init for an all-scalar / scalar-first tuple
+    // registers the Tuple TypeDef so the local is tuple-typed (not unit).
+    run_gg(
+        "typed_scalar_tuple_vardecl.gg",
+        "\
+5
+7
+1
+2
+3
+true
+99
+7
+hi
+1
+9",
+    );
+}
+
+#[test]
 fn test_tuples() {
     run_gg(
         "test_tuples.gg",

@@ -384,14 +384,26 @@ fn lower_var_decl(
             // unregistered generic types. Fall back to map_ast_type_mut which can auto-register them
             // (Callable, ReadGuard, WriteGuard, RWLock, etc.).
             let gir_type = if gir_type == crate::ir::types::UNIT_TYPE {
-                if let ast::Type::Named { name: _, ref generic_args } = type_.node {
-                    if !generic_args.is_empty() {
+                match type_.node {
+                    ast::Type::Named { name: _, ref generic_args } if !generic_args.is_empty() => {
                         ctx.type_mapper.map_ast_type_mut(&type_.node, &mut ctx.type_registry)
-                    } else {
-                        gir_type
                     }
-                } else {
-                    gir_type
+                    // A non-empty tuple type (`(int, int) t = (5, 7)`)
+                    // maps to UNIT_TYPE on the immutable path when its
+                    // `Tuple__…` TypeDef hasn't been registered yet —
+                    // `try_map_ast_type` only LOOKS UP tuples, it doesn't
+                    // create them. Without this fallback the declared
+                    // local stays `unit`-typed and the subsequent
+                    // `_dst = copy <tuple temp>` memcpy reads garbage (the
+                    // all-scalar / scalar-first case; resource-element
+                    // tuples happened to be registered elsewhere). Use the
+                    // mut path to register-on-the-fly, same as the
+                    // `auto`/`return` paths' `register_tuple_type`. Empty
+                    // tuples correctly stay UNIT.
+                    ast::Type::Tuple(ref elems) if !elems.is_empty() => {
+                        ctx.type_mapper.map_ast_type_mut(&type_.node, &mut ctx.type_registry)
+                    }
+                    _ => gir_type,
                 }
             } else {
                 gir_type
