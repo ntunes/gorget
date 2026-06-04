@@ -1,0 +1,9 @@
+consume iter-0
+drop iter-0
+drop iter-1
+consume iter-2
+drop iter-2
+drop iter-3
+consume iter-4
+drop iter-4
+done

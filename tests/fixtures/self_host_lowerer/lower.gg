@@ -1067,46 +1067,22 @@ void push_drop_scope(DropElaborator &de, int kind):
 # GIDropIfAlive (see top-of-section docstring for the unconditional-
 # DropIfAlive rationale).
 #
-# **Phase 2 status (2026-05-20): emission is DISABLED.** Wiring the
-# GIDropIfAlive emission into Phase 2's scope-exit hooks reveals two
-# entwined self-host compiler gaps that block correct drop semantics:
+# **Status: ACTIVE.** Emission runs unconditionally — for each entry
+# registered in the scope we emit `GIDropIfAlive(entry.local_id)` in
+# reverse registration order. A String/Vector/Dict/Box (or a user
+# resource-containing struct, see `is_droppable_type`) bound in a scope
+# IS dropped at scope exit today. (The earlier "Phase 2 emission is
+# DISABLED / would double-free" note was retired once the move-out side
+# matured: `SReturn` move-zeros the returned local and excludes it from
+# the scope-exit drops (:7227-7229), and the LIR `IDropGuardOpen` memcmp
+# gate suppresses drops of moved-out / zeroed slots — so a moved value is
+# dropped exactly once, by its receiver, not double-freed here. The
+# scope-tracking + register-local infrastructure is the live drop path,
+# not a standalone foundation.)
 #
-#   1. `lir_lower.gg`'s OpMove handler does NOT emit IMoveSlot at the
-#      load site — moved-out slots retain the byte pattern of the
-#      moved value. The LIR-side `IDropGuardOpen` memcmp gate
-#      (lir_lower.gg:3009) at scope-exit then sees non-zero bytes
-#      and runs the drop, freeing heap data that the receiving
-#      collection / return-place also owns. glibc double-free panic
-#      at runtime.
-#   2. Even if (1) were fixed, the self-host's `lir_codegen.gg`
-#      emits `IMoveSlot` as a `/* move_slot */;` no-op (line 3120),
-#      mirroring Rust's backend which relies on a downstream LIR
-#      `drop_elab` pass for static elision of the redundant drop.
-#      The self-host's `drop_elab.gg` (wired at `driver.gg:19`) mirrors
-#      the Rust `drop_elab` pass but the lir_codegen.gg IMoveSlot no-op
-#      means drop_elab's elision is never triggered. The Rust `drop_elab`
-#      tracks per-slot init state (Initialised / Uninitialised /
-#      MaybeInitialised) through the LIR CFG and elides DropIfAlive
-#      whose memcmp would be statically known to suppress.
-#
-# Together (1) + (2) mean: any GIDropIfAlive emitted from this pass
-# would double-free at runtime. Fixing the self-host requires either
-# (a) implementing a real `drop_elab` pass in self-host LIR (large,
-# multi-day work), or (b) making IMoveSlot emit a real memset in
-# codegen AND ensuring all consume sites resolve to OpMove (also
-# requires more sophisticated post-call zeroing per non-last-use
-# argument — `tighten_owned_operand_modes` currently demotes
-# non-last-use OpMove → OpClone, but the demoted sites still
-# trampoline through `gorget_*_clone`-less paths and the source
-# slot remains a byte-alias of the receiver).
-#
-# Until the self-host gains real move-out / drop semantics, this
-# emission stays as a no-op. The scope-tracking + register-local
-# infrastructure ships standalone — useful as the foundation Phase 3
-# / a future drop_elab port will build on.
-#
-# See TODO.md "self-host drop semantics" entry filed alongside this
-# commit for the precise next-step plan.
+# `bootstrap_fixed_point` (stage-1==stage-2 byte-identical) is the
+# strongest regression net here: the driver self-compiles its own scopes
+# and re-converges.
 void emit_scope_drops(LowerCtx &ctx, Vector[DropEntry] entries):
     # Cluster (a) probe: emit GIDropIfAlive unconditionally in LIFO order.
     int i = entries.len() - 1
@@ -1146,31 +1122,29 @@ void pop_drop_scope_no_emit(LowerCtx &ctx):
         return
     ctx.drop_elab.scopes.pop()
 
-# Check whether a GIR type id refers to a droppable resource type. Used
-# at every SVarDecl / param-registration site to decide whether to add
-# the local to the current drop scope. Primitives, Ptr/MutPtr/FnPtr, and
-# user types without resource fields are non-droppable.
+# Check whether a GIR type id refers to a droppable type. Used at every
+# SVarDecl / param-registration site to decide whether to add the local
+# to the current drop scope. Primitives, Ptr/MutPtr/FnPtr, and POD user
+# types (no resource field) are non-droppable.
 #
-# Phase 2 scope: only RUNTIME resource types (`build_resource_metadata`
-# returns Some) qualify. These — GorgetString, GorgetArray, Vector__T,
-# Dict__K__V, Box__T, Mutex__/Shared__/Channel__/etc. — always have a
-# runtime `gorget_*_free` defined as part of the C preamble, so the
-# emitted `<drop_fn>(&slot)` resolves at link time.
-#
-# User struct/enum types (in `gmod.resource_types` because they
-# contain a resource field) are deliberately EXCLUDED. The self-host's
-# `populate_drop_metadata` (lir_lower.gg:3182) is supposed to emit
-# `<Type>__drop` definitions for them via the recursive_drop_structs/
-# recursive_drop_enums tables, but in practice the stage-1 output
-# contains 0 such definitions today — a pre-existing self-host gap
-# that surfaces as `undefined reference to <Type>__drop` link
-# errors the moment we emit calls. Filed for a follow-up: until the
-# `recursive_drop_structs` population path is fixed, registering user
-# types here would block stage-1 from linking.
+# Two droppable classes qualify:
+#   1. RUNTIME resource types (`resource_meta_for`/`build_resource_metadata`
+#      returns Some) — GorgetString, GorgetArray, Vector__T, Dict__K__V,
+#      Box__T, Mutex__/Shared__/Channel__/etc. — always have a runtime
+#      `gorget_*_free` in the C preamble, so the emitted `<drop_fn>(&slot)`
+#      resolves at link time.
+#   2. USER struct/enum types that transitively contain a resource field
+#      (collected into `gmod.resource_types` by the fixpoint at :11779-11809).
+#      `populate_drop_metadata` (lir_lower.gg:3658) emits a `<Type>__drop`
+#      for each via the recursive_drop_structs/recursive_drop_enums tables
+#      (the old `__imported_type__` skip that produced "0 defs" was removed
+#      2026-05-24), so `Def__drop`/`Stage__drop`/etc. ARE defined and the
+#      drop calls link. A value-typed local of such a type leaked before it
+#      was registered (leak_method_return_loop).
 #
 # Mirror of Rust's `needs_drop` (`src/ir/types.rs`) which delegates to
-# TypeRegistry.needs_drop — the equivalent split here is "runtime
-# resource = yes, user struct/enum = TODO".
+# TypeRegistry.needs_drop — same split: runtime resource OR user
+# resource-containing struct/enum = yes, POD = no.
 bool is_droppable_type(int type_id, GirModule &gmod):
     if type_id < 0 or type_id < PRIM_COUNT:
         return false
@@ -1191,12 +1165,23 @@ bool is_droppable_type(int type_id, GirModule &gmod):
             return false
         else:
             return false
-    # Runtime resource types only — see top-of-fn docstring.
+    # Runtime resource types (GorgetString/GorgetArray/Vector__T/Dict__K__V/
+    # Box__T/Mutex__/etc.) have a `gorget_*_free` defined in the C preamble —
+    # `resource_meta_for` returns Some for them.
     match resource_meta_for(&gmod, tname):
         case Some(_):
             return true
         case None:
-            return false
+            pass
+    # User struct/enum types that transitively contain a resource field are
+    # collected into `gmod.resource_types` (the fixpoint at :11779-11809), and
+    # `populate_drop_metadata` (lir_lower.gg:3658) emits a `<Type>__drop` for
+    # each. So a value-typed local of such a type IS droppable. (Only GtNamed
+    # reaches here — GtPtr/GtMutPtr/GtFnPtr returned false above. Mangled
+    # Option/Result names live in the SEPARATE optionlike_resource_types dict,
+    # so this check stays clean and never matches them.)
+    if gmod.resource_types.contains(tname):
+        return true
     return false
 
 # Register a local in the innermost drop scope. Skips non-droppable
@@ -7111,12 +7096,14 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     # the owned locals at the pointee type `inner` so the clone
                     # result is value-typed and op_consume picks OpMove.
                     int owned_type = var_type
+                    bool source_was_ptr = false
                     GirLocal cam_src = ctx.locals.get(val).unwrap()
                     if cam_src.type_id >= 0 and cam_src.type_id < gmod.type_table.len():
                         GirType cam_src_gt = gmod.type_table.get(cam_src.type_id).unwrap()
                         match cam_src_gt:
                             case GtPtr(cam_inner):
                                 owned_type = cam_inner
+                                source_was_ptr = true
                             case GtMutPtr(cam_inner):
                                 # Symmetric with GtPtr above. `&T`/`!T` params
                                 # lower to `GtMutPtr(T)` (resolve_param_type at
@@ -7129,6 +7116,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                                 # NULL" coercion fired (self_host_bootstrap_
                                 # fixed_point lower_call SIGSEGV).
                                 owned_type = cam_inner
+                                source_was_ptr = true
                             else:
                                 pass
                     int cloned = add_local(&ctx, owned_type, NO_NAME)
@@ -7138,7 +7126,21 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     var_local = add_local(&ctx, owned_type, Some(name))
                     emit(&ctx, GIAssign(var_local, op_consume(&ctx, &gmod, cloned, CkAssign())))
                     nl_put(&ctx, name, var_local)
-                    register_local_for_drop(&ctx, var_local, owned_type, &gmod)
+                    # When the source was a GtPtr/GtMutPtr (the Branch C-pre
+                    # `coll.get(i).unwrap()` deref-clone), do NOT register the
+                    # owned local for drop. The clone fn makes a DEEP independent
+                    # heap copy (resolve_payload_clone_fn → <T>__clone, :7983-8013),
+                    # so dropping it is NOT a double-free — it's a memory-SAFE
+                    # EXTRA drop. But the ORACLE borrows the element and never
+                    # drops it, so that extra drop DOUBLE-PRINTS (e.g.
+                    # drop_struct_collection_fields). Suppressing it matches the
+                    # oracle's borrow-no-drop stdout, AT THE COST OF LEAKING the
+                    # deref-clone's heap (invisible to fixtures, which have no
+                    # mem_live() check). Removable once Branch C-pre BORROWS
+                    # instead of clones (see TODO). Value-owned clones
+                    # (source not a Ptr) still register normally.
+                    if not source_was_ptr:
+                        register_local_for_drop(&ctx, var_local, owned_type, &gmod)
                 case MoveDirect():
                     # Branch F / G — direct Move. Primitives, FnPtr,
                     # non-resource user types. op_consume picks

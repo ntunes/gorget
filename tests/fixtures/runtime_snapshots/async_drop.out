@@ -1,0 +1,4 @@
+drop compute-local
+42
+done
+drop main-local
