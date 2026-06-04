@@ -1,17 +1,20 @@
 # TODO
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE THIS BLOCK IN PLACE each session; completed work → DONE.md, do NOT accumulate "superseded" blocks)
-**gorget-1 code tip `21d2a980` (`git log -1` for the live tip — docs commits on top). RUNTIME PARITY =
-**347/929 = 37.4%** (was 334; +13 — STATIC CLUSTER `d19a3f56`/`57902599`/`9501df77` +8, method-resolution
-table refactor `34360f96` +0, then the prototype-scout BATCH: const-bytes `69151ea2` +0/fn-count-restore,
-3d/3e `7716ab75` +3, 3a/3b `21d2a980` +2 — all DONE.md).
-Live gates @ `21d2a980`: `self_host_runtime` **347/0**, `runtime_diff` MATCH **347**,
-`lowerer_comparison` **960**, `c_emit_comparison` **889** (the const-bytes `GINIT_BYTES` fix RESTORED the
-−6 the scalar-static synth-fn divergence had cost), `bootstrap_fixed_point` GREEN, `cargo test --lib`
-1072/0 (debug; the 2 `--release` `should_panic`-over-`debug_assert` reds are a pre-existing `src/`
-artifact, NOT our work).
-⏳ IN FLIGHT: corrected-#7 re-scout (user-struct-ctor static via direct `GINIT_STRUCT`, NOT the rejected
-synth-fn path; +1 `static_global_method_call`). NEXT after = closure Phase-2 continuation
+**gorget-1 code tip `b4922146` (`git log -1` for the live tip — docs commits on top). RUNTIME PARITY =
+**348/929 = 37.5%** (was 334; +14 — STATIC CLUSTER +8, method-resolution refactor +0, prototype-scout
+BATCH: const-bytes `69151ea2` +0/fn-count-restore + 3d/3e `7716ab75` +3 + 3a/3b `21d2a980` +2, then
+user-struct-ctor static `b4922146` +1 `static_global_method_call` — all DONE.md/in-flight below).
+Live gates @ `b4922146`: `self_host_runtime` **348/0**, `runtime_diff` MATCH **348**,
+`lowerer_comparison` **960**, `c_emit_comparison` **890** (const-bytes restored the −6, +1 from #7),
+`bootstrap_fixed_point` GREEN, `cargo test --lib` 1072/0 (debug; the 2 `--release`
+`should_panic`-over-`debug_assert` reds are a pre-existing `src/` artifact, NOT our work).
+⏳ IN FLIGHT: **3h EIndex value-read fix (+27: +29 gains, −2 documented removals)** — the EIndex
+value-read was a 0-stub; wired to `gorget_array_get`/`gorget_map_get` (brief `docs/plans/
+brief_3h_eindex_read.md` v2, scout+pass1+pass2 all validated; executor `af7f28ccffeb7ee1a` re-running
+with foreground gates). Target 348→375. The −2: `static_vec_index_load` (self now correct vs buggy
+Rust) + `leak_method_return_loop` (unmasks a pre-existing drop gap — see 3h-drop follow-up).
+NEXT after = closure Phase-2 continuation
 (the real serial parity cluster) — see TOP NEXT + below. ⚠ `main` is
 OWNER-PROMOTED — NEVER touch/advance it; land everything on `gorget-1` + worktrees. ⚠ An owner merge
 (`0db411a9`/`30e6c47b`/`b6c37a0d`: Rust `.N` tuple-index + unwrap-on-non-Option/Result `gg check`)
@@ -110,7 +113,6 @@ cluster) — parallelize the ORCHESTRATION (scout next while executing current),
 
 ## High Priority
 
-- **🐛 static USER-STRUCT receiver mangles to `int64_t` (self-host) — surfaced by the static-receiver fix's pass-3 review 2026-06-03.** `static_global_method_call` stays CC-FAIL (`undefined reference to int64_t__inc`): a method call on a module-level `static Counter c = ...` derives the receiver TYPE NAME as `int64_t` instead of `Counter`, so it emits `int64_t__inc` instead of `Counter__inc`. SEPARATE root from the static-as-place receiver fix (that fix is about place-vs-value; this is receiver-type-NAME derivation for a static user-struct receiver). Find where the method-call receiver type name is derived (`lower.gg:~5409` `type_id_to_base_name` path) — a static's `static_lookup_type` likely returns a default/mis-resolved type for a user-struct static. Repro: `static Counter c = Counter(0); c.inc()`.
 - **🔭 (low-pri, from const-bytes #10) — scalar-FLOAT static const-init uses `%g` (`float_to_str`), not bit-exact.** `scalar_static_c_literal`'s float path round-trips the only corpus float static (`2.5`) exactly, but a future precision-sensitive float static (e.g. `3.14159265358979`) would `%g`-truncate to a DIFFERENT double than Rust's `.17e`/`to_le_bytes`. Switch the float path to a `.17e`-equivalent / LE-byte encoding if/when such a static appears. No corpus impact today.
 - **🐛 (pre-existing, self-host) module-level `meta int`/`meta bool` consts resolve to `0` in the self-host driver pipeline** (surfaced by the gap-B pass-2 review; confirmed identical pre/post gap-B → NOT introduced by it). The self-host doesn't fold module-level `meta`-consts. Distinct from `const` (which DOES inline) and `static` (now a mutable global). Find the self-host `IMetaConst` handling (`meta.gg:~115`) — module-level meta-const evaluation is missing/zeroed.
 - **🧹 (low-pri) self-host `collection_ctor_init_expr` (`lower.gg`) matches MORE static-ctor type-names than Rust (`Array`/`Deque`/`Heap`/`Set`/`HashSet`/`OrderedSet`/`Map`/`OrderedDict`) — currently DEAD CODE** (no static ctor beyond `Vector[T]()`/`Dict[K,V]()` exists in the corpus, so c_emit parity holds). If a `static Set[...]()`/`static Deque[...]()` is later added it could diverge from Rust's `eval_static_init` (Vector/Dict/HashMap only — a Set would get an array-shaped allocator). Narrow to Rust's set, or verify per-type when one appears.
