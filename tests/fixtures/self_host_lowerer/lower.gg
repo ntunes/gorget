@@ -7469,7 +7469,66 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                         if asn_inner_ty >= 0:
                             emit(&ctx, GIDerefStore(lid, op_consume(&ctx, &gmod, val, CkAssign()), asn_inner_ty))
                         else:
-                            emit(&ctx, GIAssign(lid, op_consume(&ctx, &gmod, val, CkAssign())))
+                            Operand rhs_op = op_consume(&ctx, &gmod, val, CkAssign())
+                            # ③(a) drop-on-overwrite (mirror Rust gg assigns.rs:197-231):
+                            # drop `lid`'s PRIOR value AFTER computing the RHS, BEFORE the
+                            # assign overwrites the slot. Gate on (1) the slot type being
+                            # droppable AND (2) `lid` currently OWNING its value. A
+                            # LoBorrowed/LoView alias does NOT own the old value — dropping
+                            # it would free another local's heap (protects
+                            # cow_param_alias_reassign: `alias = alias + " world"` where
+                            # `alias` is a CoW borrow of a param). Same ownership gate as
+                            # register_local_for_drop's a-1 rule.
+                            bool drop_old = false
+                            if is_droppable_type(asn_lhs_full_ty, &gmod):
+                                match ctx.locals.get(lid).unwrap().ownership:
+                                    case LoBorrowed():
+                                        pass
+                                    case LoView():
+                                        pass
+                                    else:
+                                        drop_old = true
+                            # Self-assign guard: `s = s` lowers to rhs source == lid;
+                            # dropping then re-moving the same slot is a UAF. Skip the drop
+                            # (degenerate no-op). Extract the rhs source local id.
+                            int rhs_src = -1
+                            match rhs_op:
+                                case OpMove(s0):
+                                    rhs_src = s0
+                                case OpClone(s0):
+                                    rhs_src = s0
+                                case OpCopy(s0):
+                                    rhs_src = s0
+                                case OpBorrow(s0):
+                                    rhs_src = s0
+                                else:
+                                    pass
+                            if rhs_src == lid:
+                                drop_old = false
+                            if drop_old:
+                                # Self-referential VIEW guard (mirror assigns.rs:178-196):
+                                # when rhs_op is an OpClone of a borrow/view, the source may
+                                # alias `lid`'s buffer (`s = s.trim()` / `s = s.slice(..)`).
+                                # Materialise the clone into a fresh OWNED temp FIRST, so the
+                                # clone reads the OLD buffer while it is still alive; only
+                                # THEN free the old value and Move the temp in. (OpMove/OpCopy
+                                # sources are independent of lid — concat/ctor results, owned
+                                # locals — and the self-assign guard above already excluded
+                                # rhs_src == lid, so they need no pre-materialisation.)
+                                match rhs_op:
+                                    case OpClone(_):
+                                        int mat = add_local(&ctx, asn_lhs_full_ty, NO_NAME)
+                                        emit(&ctx, GIAssign(mat, rhs_op))
+                                        rhs_op = OpMove(mat)
+                                    else:
+                                        pass
+                                # GIDropIfAlive (memcmp-gated), NOT GIDrop: a slot already
+                                # moved-out earlier in this fn (drop_reassign_after_move:
+                                # `tokens.push(current)` zeroes current's slot via the
+                                # post-pass GIMoveZero, then `current = ""`) is then a
+                                # runtime no-op. Mirrors Rust's is_moved -> drop_if_alive.
+                                emit(&ctx, GIDropIfAlive(lid))
+                            emit(&ctx, GIAssign(lid, rhs_op))
                     elif static_contains(&gmod, name):
                         # Module-level mutable-static WRITE (`STATIC = value`).
                         # A `static` is mutable storage; the destination is the
