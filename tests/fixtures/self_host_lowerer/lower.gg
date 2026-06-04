@@ -650,11 +650,7 @@ Option[BuiltinMethodDecl] collection_builtin_method(CollectionKind kind, String 
     return None
 
 void emit(LowerCtx &ctx, Instruction inst):
-    # Workaround: can't push to a vector inside a vector via .get().
-    # Reconstruct the block_insts with the new instruction appended.
-    Vector[Instruction] old = ctx.block_insts.get(ctx.current_block).unwrap()
-    old.push(inst)
-    ctx.block_insts.set(ctx.current_block, old)
+    ctx.block_insts.get(ctx.current_block).unwrap().push(inst)
 
 int new_block(LowerCtx &ctx):
     int id = ctx.block_insts.len()
@@ -4642,13 +4638,10 @@ int lower_if_chain_expr(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] then_
 
 # Overwrite a local's recorded type_id in place (used by the if-chain
 # result-type refinement: the result slot is allocated with a seed type,
-# then narrowed to the first non-Unit branch value's type). Vectors
-# don't support in-place field mutation through `.get()`, so rebuild the
-# GirLocal preserving the other fields. Mirrors Rust's
-# `builder.locals[result_id.0].type_id = ty`.
+# then narrowed to the first non-Unit branch value's type). Mirrors Rust's
+# `builder.locals[result_id.0].type_id = ty` — in-place field mutation.
 void refine_local_type(LowerCtx &ctx, int lid, int new_type):
-    GirLocal old = ctx.locals.get(lid).unwrap()
-    ctx.locals.set(lid, GirLocal(new_type, old.name_hint, old.ownership, old.borrow_origin))
+    ctx.locals.get(lid).unwrap().type_id = new_type
 
 # ── Expression lowering ─────────────────────────────────
 

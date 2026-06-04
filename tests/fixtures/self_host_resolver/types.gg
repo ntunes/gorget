@@ -85,10 +85,7 @@ equip TypeTable:
         if self.defined_cache.contains(def_id):
             return self.defined_cache.get(def_id).unwrap()
         int tid = self.add_type(RTDefined(def_id))
-        # Extract-modify-putback: Dict.set through &self loses type
-        Dict[int, int] cache = !self.defined_cache
-        cache.put(def_id, tid)
-        self.defined_cache = !cache
+        self.defined_cache.put(def_id, tid)
         return tid
 
     ResolvedType get(self, int id):
