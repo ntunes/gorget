@@ -1,7 +1,7 @@
 # TODO
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE THIS BLOCK IN PLACE each session; completed work → DONE.md, do NOT accumulate "superseded" blocks)
-**gorget-1 code tip `65f5f591` (`git log -1` for the live tip — docs commits on top). RUNTIME PARITY =
+**gorget-1 code tip `51f56c64` (`git log -1` for the live tip — docs commits on top). RUNTIME PARITY =
 **398/930 = 42.8%** (was 375 at session start; +23: static-index +1, 3g +3, snag49c +1, 3h-drop +5, String-trim/view-print +7, closure-2b-1 +1, **KEYSTONE ③(b) +5**). This session (2026-06-04): TODO.md hygiene `0c24c11f`
 (pruned 1280→718 lines, −44%), then 6 parity chains with full discipline —
 **Rust-oracle static-index-read `7939bb50` +1** (a static `Vector[struct]` index-read was dropped:
@@ -24,8 +24,10 @@ merge added `.N` tuple-index + unwrap-on-non-Option/Result `gg check`, +4 fixtur
 Live gates @ `65f5f591`: `self_host_runtime` **394/0**, `runtime_diff` MATCH **398/930**,
 `lowerer_comparison` **961**, `c_emit_comparison` **892**, `bootstrap_fixed_point` GREEN, `cargo test
 --lib` 1072/0 (debug; the 2 `--release` `should_panic`-over-`debug_assert` reds are a pre-existing `src/`
-artifact, NOT our work). FULL `cargo test --test integration` **1187/0/0** last run at `65f5f591`
-(the keystone ③(b) integration — run TWICE, on the borrow candidate and the move-axis fold);
+artifact, NOT our work). FULL `cargo test --test integration` **1195/0** last run at `51f56c64`
+(keystone ③(b) `65f5f591` + the gorget-js B/C Rust-`gg` auto-prop centralization `ca6fd527`/`d1999314`/`51f56c64`
+landed on top — +8 `throws_autoprop_*` fixtures, parity-NEUTRAL for the self-host runtime number since it's a
+Rust-`gg`/`src/` fix; the self-host gates above are unchanged by it);
 all this session's chains are self-host-`.gg`-only → cannot affect non-self-host
 Rust fixtures (each gated by the self-host suite).
 **KEYSTONE ③(b) LANDED `65f5f591` (DONE.md, +5); ③(a) drop-on-overwrite is the keystone-continuation (NEXT).**
@@ -188,6 +190,8 @@ cluster) — parallelize the ORCHESTRATION (scout next while executing current),
 - **🐛 DISCOVERED pre-existing (NOT introduced by the aggregate-literal fix — confirmed identical on baseline `92fa7619`/`d1999314`):**
   - **String-ABI ICE on an auto-propped `Result[String,E]` return.** `return mk(x)` where `String mk(int) throws PErr` (a plain String throws-return, NO aggregate) ICEs at C emit: `GorgetString ABI received non-Str, non-Ptr value '__vN' (type Some(I32))` (`src/backend/c_lir/emit_types.rs:753`). The auto-prop result-extraction hands the emit a value the GorgetString ABI doesn't recognize (an I32 — likely the Result tag). Repro `/tmp/str_direct.gg`. Affects every throws-fn whose Ok payload is a `String` (and by extension `Dict[String,String]` / `(String, int)` aggregate elements). Independent of aggregate lowering; fix in the auto-prop emit / String-ABI classification.
   - **Dict + `catch`-fallback double-free.** A `Dict[K,V]`-returning `throws` fn consumed via `D x = build(...) catch (e): Dict[K,V]()` double-frees at runtime (`free(): double free detected in tcache 2`) — the `catch` fallback `Dict()` and the Ok-path dict both fire a drop on the same buffer. Repro `/tmp/dict_catch_plain.gg` (no auto-prop needed — plain `{"a": sel}` value). The `match`-form (no catch) is clean. Fix in the catch-merge drop-flag handling for Dict-typed throws returns.
+  - **Collection-literal in RETURN position doesn't unify with the declared collection return type (NO `throws` involved).** `return [1,2,3]` from a `Vector[int]` fn and `return {1,2,3}` from a `Set[int]` fn are REJECTED at type-check (`expected Vector[int], found int[3]`), while the identical literal as a `Vector[int] v = [1,2,3]` VarDecl is accepted. (Found by the B/C review pass 3 as the real reason set-literal/list-of-tuple auto-prop "siblings" can't even be exercised — they're blocked here, not by auto-prop.) Pre-existing on `92fa7619`. Fix: route the return-position collection-literal through the same destination-type unification the VarDecl path uses.
+  - **All-scalar tuple in a typed VarDecl-init miscompiles.** `(int, int) t = (5, 7)` reads back garbage/zeros (`t.0`→`0`/`281474…`), while `auto t = (5,7)`, `return (5,7)`, and `(Vector[int],int) t = ([..],..)` all work. Specific to the typed-VarDecl-init path for a tuple whose first element is a non-pointer scalar. Pre-existing on `92fa7619`, orthogonal to auto-prop (the B/C fold's tuple-element TYPING is correct; the bug is downstream in the VarDecl init/memcpy). Found by B/C review pass 3.
 - **🐛 ③(b)-SURFACED pre-existing gaps (2026-06-04, all baseline-present, NOT introduced by the keystone — confirmed by review):**
   - **`Vector[Result[T,E]]` / `Vector[Option[T]]` element drop not wired (self-host, LEAK).** A vector whose ELEMENT is a droppable Option/Result aggregate doesn't set `GorgetArray.elem_drop` (`gorget_array_new(sizeof(...))` with elem_drop NULL), so pushed elements' inner heaps leak at array-free; the oracle sets `elem_drop = <Type>__drop`. ASan-clean (no double-free), orthogonal to the move/drop axis. Repro: push a `Result`/`Option`-with-String into a `Vector`, let it drop, `mem_live` leak. Part of the drop/leak tail.
   - **`LoMaybeOwned` dead-branch re-validation (self-host).** `scrutinee_owned_whole_dropped` (`lower.gg`) handles `LoMaybeOwned` as an owner, but `LoMaybeOwned` is NEVER CONSTRUCTED in the self-host today (dead/forward-defensive). If a future change starts building it (merged-arm scrutinees), re-validate that branch — a non-materialized merged scrutinee borrowed as an owner could leak/dangle.
