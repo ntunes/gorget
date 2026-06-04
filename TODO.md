@@ -2,43 +2,23 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE THIS BLOCK IN PLACE each session; completed work → DONE.md, do NOT accumulate "superseded" blocks)
 **gorget-1 code tip `0cf2dee3` (`git log -1` for the live tip — docs commits on top). RUNTIME PARITY =
-**409/940 = 43.5%** (was 375 at session start; the keystone-era chains +23, then **Chain-2 self-host auto-prop +6**, then **KEYSTONE ③(a) `5320b872` +1**, **CLEANUP fossils `4c98dba5` +0 output-neutral**, **KEYSTONE ③(c) `0cf2dee3` +1** — the ③ drop model is now COMPLETE (a+b+c) [all DONE.md]; denominator 930→940 = this session's B/C +8 + Rust-correctness +2 fixtures, the latter 2 not yet self-host-twinned [#6]). This session (2026-06-04): TODO.md hygiene `0c24c11f`
-(pruned 1280→718 lines, −44%), then 6 parity chains with full discipline —
-**Rust-oracle static-index-read `7939bb50` +1** (a static `Vector[struct]` index-read was dropped:
-`lower_index_access`'s Copy/Move place-guard didn't match the `GlobalRef` operand → materialize-to-local;
-recovers `static_vec_index_load` at the correct behavior) + **3g by-value-struct EIndex `4ef49503` +3**
-(case-(c) struct element was an `OpConstI64(0)` stub → reads the real struct; +aggregate-ILoad copy-out
-keyed on the UNMAPPED getter) + **snag49c EIndex-INDEX auto-prop `b07f8160` +1** (the throwing index
-operand of `v[pick()]` wasn't auto-propagated) + **3h-drop user-resource-struct drop `9bb2252d` +5**
-(`is_droppable_type` excluded user resource-containing structs → per-iteration leak; corrected a STALE
-"COMMIT-3-blocked" premise — the drop machinery is ACTIVE) + **String trim/strip + Str-VIEW printing
-`7256173f` +7** (no-arg `.strip()` lowered to a no-op empty-chars strip; print/f-string `%s`+`.data`
-over-read non-NUL-terminated cap=0 VIEWS → no-arg→whitespace-variant + `%.*s`-with-`ai==0`-carve-out)
-+ **closure 2b-1 copy-struct capture `6fa09d26` +1** (the 2a guard rejected copy-struct captures → NULL-env
-stub; widened to byte-copyable non-resource non-enum structs) + **KEYSTONE ③(b) `65f5f591` +5** (borrow
-match-destructured owned Option/Result payloads via a structural-decompose `is_droppable_type` +
-`EnumFieldLoadMode::Borrow`-style bind, THEN align the move-axis to the drop-axis in `op_consume`+the
-wire-liveness post-pass — closing a latent `return r`/`v.push(r)` UAF a review pass caught; +1 regression
-fixture). All DONE.md. Denominator 930 (the +1 keystone fixture; an earlier owner
-merge added `.N` tuple-index + unwrap-on-non-Option/Result `gg check`, +4 fixtures).
+409/940 = 43.5%** (was 375 at session start). Denominator 940 (this session's gorget-js B/C +8 +
+Rust-correctness +2 fixtures, the latter 2 not yet self-host-twinned [#6]). **Recent landed work lives in
+DONE.md, NOT here — keep this block free of COMPLETE/DONE/LANDED breadcrumbs (state + NEXT only).**
 Live gates @ `0cf2dee3`: `self_host_runtime` **409/0**, `runtime_diff` MATCH **409/940**,
 `lowerer_comparison` **971**, `c_emit_comparison` **902**, `bootstrap_fixed_point` GREEN, `cargo test
 --lib` 1072/0 (debug; the 2 `--release` `should_panic`-over-`debug_assert` reds are a pre-existing `src/`
-artifact, NOT our work). FULL `cargo test --test integration` **1197/0** last run at `5320b872`
-(keystone ③(a) `5320b872` [self-host, this chain] on top of ③(b) `65f5f591` + gorget-js B/C Rust-`gg` auto-prop
-centralization `ca6fd527`/`d1999314`/`51f56c64` [+8 `throws_autoprop_*` fixtures] + Rust-`gg` correctness `6d11e238`
-[collection-literal-in-return + all-scalar-tuple typed-VarDecl-init, +2 fixtures]; the Rust-`gg`/`src/` fixes are
-parity-NEUTRAL for the self-host runtime number, the self-host gates above are unchanged by them).
-✅ **KEYSTONE ③ DROP MODEL COMPLETE (a+b+c all landed, DONE.md):** ③(b) `65f5f591` +5, ③(a) `5320b872` +1, ③(c) `0cf2dee3` +1; + CLEANUP fossils `4c98dba5` (output-neutral) + Chain-2 auto-prop `77f16002` +6 + `--clones` `cd8f224d`. ⬅ **NEXT = the scout-prepped queue (all RUN-verified, brief-ready; FIDELITY is SERIAL in the `lower.gg`/`lir_*.gg` cluster — execute ONE at a time, RE-VERIFY each scout's base at brief time):**
+artifact, NOT our work). FULL `cargo test --test integration` last GREEN **1197/0** (re-running on the ③(c) integration).
+
+⬅ **NEXT = the scout-prepped queue (all RUN-verified, brief-ready; FIDELITY is SERIAL in the `lower.gg`/`lir_*.gg` cluster — execute ONE at a time, RE-VERIFY each scout's base at brief time):**
 - **② closure-env-as-first-class-struct** (FIDELITY, next spine; TaskList #6) — unify the closure env into the typed struct drop/clone machinery (now incl. ③(c)'s user-drop handling), delete the type-erased `gorget_closure_free` + `__make_closure_` NULL-env wart (`lir_codegen.gg:~3708`); enables Phase-2b-2/2b-3 resource captures (`cow_closure_capture`). Scout a1cd3fc3 (pending). ⚠ `bootstrap_fixed_point` uses NO closures → regression guard not signal; validate via runtime-diff.
 - **① typed enum_category migration** (ARCHITECTURE/name-match kill; TaskList #7) — scout a8df728c DONE: the self-host mints `Result__X__Y` via `lookup_or_register_named` WITHOUT typed payload tids → 33 `starts_with("Option__"/"Result__")` sites re-parse them from the mangled name via a `__`-boundary smart-split (`lower.gg:8806 result_payload_types` + `lir_lower.gg:1013` Pass 3, DUPLICATE) → provably wrong on nested generics (`Result__Option__int64_t__GorgetString` is genuinely ambiguous; csv_edge/csv_stringify SIGSEGV, option_result_nested/match_nested_option/csv_basic CC-FAIL — RUN-confirmed). Fix: record a typed `(category, ok_tid, err_tid)` channel at the ~8 MINT sites (group C), migrate the ~25 readers, DELETE both smart-splits. ⚠ DANGER: `optionlike_resource_types` is the SEPARATE droppability/ABI axis (drives `is_resource_type_name`/by-value ABI) — NOT subsumed, LEAVE IT; `Option__Ref__` carve-outs already on the typed `option_ref_payload` channel. BOTH duplicate splits must migrate (the LIR Pass-3 one emits the segfaulting field types). Honest parity ~4-5 (csv_edge/csv_stringify/csv_basic/option_result_nested/match_nested_option); option_result_combinators/coroutine_option_result are CLOSURE-blocked (won't recover — verified). No SCHEMA_VERSION bump (channel on GirModule, not schema.gg). Brief-ready.
 - **for-over-String-chars** (FIDELITY quick-win; TaskList #8) — scout a16239e0 DONE: `lower_for` (`lower.gg:9320`) has NO String arm → a `GorgetString` iterable falls to `lower_for_iterator` → silent-drop `lower_fail` (`:9599`). Fix: add ONE arm (after the Vector check ~`:9405`) mirroring `lower_for_vector` but iterating UTF-8 CODEPOINTS (loop-var owned `GorgetString`, `byte_pos`+=`gorget_utf8_codepoint_len_at`, `ch`=`gorget_str_codepoint_at` — BOTH externs already C-emit-defined `lir_codegen.gg:6230-6233`, no new runtime). ⚠ codepoint not byte (stride by cplen, not 1). +3 confident (`test_for_loops`/`drop_reassign_after_move`/`string_replace_complex`), +1 possible (async). Driver doesn't use it → fixed_point safe. SINGLE-FILE edit. Brief-ready, smallest/cleanest — good to land first/interleave.
 - **PERF String-append O(n²)** (PERF; TaskList #5) — scout a5ee5e83 PROTOTYPING+MEASURING (Rust `assigns.rs`, file-disjoint). `gorget_str_cat` copies both operands → quadratic `out=out+x` accumulation; route to the unused amortized-O(1) `gorget_string_append_str` WITH a `cow_has_aliases` uniqueness gate + ③(a)-drop-bypass for self-referential `s=s+x`. Awaiting the prototype's measured win.
 - ⏭ Other queued (TaskList): #6 self-host Rust-correctness twin (mimic `6d11e238`); CLEANUP fossils #4/#5 (cross-dir, deferred); fix-the-oracle Rust leak (`mod.rs:529`, High Pri).
-**KEYSTONE ③ COMPLETE (a `5320b872` + b `65f5f591` + c `0cf2dee3`); NEXT = ② closure-env / ① enum_category / for-over-chars (scouted, brief-ready, SERIAL).**
-The B/C gorget-js auto-prop regression (Rust `gg`) is under investigation by 2 scouts (bisect + architecture) —
-see the gorget-js block in High Priority. **The remaining self-host parity is concentrated in ONE
-architectural gap, not 3 parity chains: the self-host lacks a TYPED ownership/category subsystem, so it
+
+**The remaining self-host parity is concentrated in ONE
+architectural gap, not N parity chains: the self-host lacks a TYPED ownership/category subsystem, so it
 reconstructs that information from mangled NAMES (Option/Result), from TYPE-ERASED special-cases (closure
 env), or NOT AT ALL (reassign/destructure drops). Build the typed subsystem ONCE — porting Rust's clean
 cores (it passes the layering-discipline "no name-matching / typed-at-the-right-layer" test for these),
@@ -48,62 +28,18 @@ it as ARCHITECTURE, not parity (briefing these as "small fixes" is what produced
 fixed-point double-free this session). Each phase = its own scout → brief → ≥3 reviews → executor →
 output-review → gate; `bootstrap_fixed_point` is the load-bearing safety net (it double-frees on a wrong
 drop model — proven).
-- **③ — typed `LocalOwnership`-aware drop/ownership model (IN PROGRESS: (b) ✅ DONE `65f5f591`; (a) ✅ DONE `5320b872`; (c) REMAINS — ⬅ NEXT).**
-  This IS the CoW contract CLAUDE.md names ("Ownership at Consuming Positions — mechanical, not heuristic").
-  The three parts INTERLOCK (fixing one in isolation double-frees another — PROVEN this session).
-  - **(b) borrow-vs-own for destructured match payloads — ✅ LANDED `65f5f591` (+5, DONE.md).** `is_droppable_type`
-    structural-decomposes `Result__`/`Option__` mono'd LOCALS → registers the owned scrutinee for whole-drop;
-    `lower_ctor_pattern` BORROWS the payload (`EnumFieldLoadMode::Borrow`-style, via `scrutinee_owned_whole_dropped`
-    + `emit_payload_read_mode_full(borrow_all)`); AND `op_consume`+the `decide_operand_at_consuming_arg`
-    wire-liveness post-pass now drive move-vs-copy off the DROP axis (droppable Option/Result local at a consume
-    → OpMove/OpClone, not OpCopy) — closing a latent `return r`/`v.push(r)` UAF a review pass caught. (The Rust
-    Move+zero path was declined: the self-host's `OpMove` source-field-zero is deferred; borrow sidesteps it.)
-  - **(a) drop-on-overwrite — ✅ LANDED `5320b872` (+1, DONE.md).** `SAssign`→`EIdentifier` plain-local arm
-    (`lower.gg:7471`) now drops `lid`'s prior value AFTER computing the RHS, BEFORE assigning: ownership-gated
-    (`is_droppable_type` + skip LoBorrowed/LoView), self-assign-guarded (`rhs_src==lid`), materialize-first for an
-    OpClone view-source (`s = s.trim()`), via `GIDropIfAlive` (memcmp-gated → no-op on a moved/zeroed slot). The
-    post-pass auto-emits the RHS-source `GIMoveZero`. `drop_reassign`→MATCH. (Brief
-    `docs/plans/keystone3a_drop_on_overwrite_brief.md`.)
-  - **(c) user-Drop→auto-field-drop sequence — ⬅ NEXT (`drop_struct_fields`).** Oracle `drops.rs:307-346`: DropGuardOpen →
-    call user drop fn (unified `__gorget_dtor_Type`) → `lower_field_drops` (per-field drops, AFTER the user fn)
-    → close. **Self-host gap (deep-scouted, TaskList #2):** `emit_struct_drops` (`lir_codegen.gg:4938`) emits ONLY
-    field drops in the auto-glue body, NEVER calling the user `<Type>__drop` method; and for a name-colliding
-    user-Drop type `fn_exists(<Type>__drop)=true` makes it SKIP the glue entirely (`:4976`) so the drop site calls
-    the user method alone (no field drops). TWO parts: fix `drop_collision_types` population + rename routing, AND
-    make the collision-type body call user-fn-THEN-field-drops (mirror `drops.rs:322-341`); check `emit_enum_drops`.
-    Cluster: `drop_struct_fields`/`drop_match_partial_init`/`named_scope_drop` (WRONG), `drop_raii`/`owning_param_drop_at_exit` (CC-FAIL).
-  Unblocks the rest of the drop/leak tail (`leak_collection_*`/`leak_comprehensive`/`leak_known_patterns` + the
-  pre-existing `Vector[Result/Option]` `GorgetArray.elem_drop` gap, below) + ② below.
-- **② NEXT (falls out of ③) — closure env as a first-class struct.** UNIFY the closure env into the SAME
-  typed struct drop/clone machinery (per-field, recursive) and DELETE the type-erased
-  `gorget_closure_free`/`gorget_closure_clone_to_owned` + the `__make_closure_` NULL-env wart
-  (`lir_codegen.gg:~3708`). More elegant than today (removes special-casing); matches Rust's first-class
-  env. Enables ByValue RESOURCE/CoW captures (Phase-2b-2/2b-3: `cow_closure_capture` etc.). Depends on ③'s
-  drop model existing.
-- **① REFRAME (NOT "smart-split extension") — port typed `enum_category` + payload type-ids to the GIR.**
-  ⚠ The handover previously framed this as "extend `is_concrete_payload_name`'s mangled-name recursion" —
-  that DEEPENS a name-matching wart (RUN-verified +0-trap / +2-with-2-segfaults `a8678c68`). The clean,
-  reference-grade fix: Rust carries `enum_category: Option<EnumCategory>` TYPED on the TypeDef
-  (`src/ir/types.rs:188`, accessor `:724`; `validate.rs:1896/:2181` "No name-matching") + payload type-ids;
-  the self-host has NO such field (`gir.gg` only a name-keyed `optionlike_resource_types`) → ~20
-  `starts_with("Option__"/"Result__")` sites reconstruct it from names. Port the typed field + retire the
-  ~20 name sites → the smart-split dissolves entirely (and the nested `Result[Option[T],_]` case + the
-  `Vector[Vector[String]]` segfault become typed, not string-parsed). A clean FIDELITY chain (parity side
-  effect). ⚠ The closure-call typed-ABI cast
+⚠ The closure-call typed-ABI cast
 (`lir_codegen.gg` ICallClosure) is **PARKED — already REFUTED-by-review** (scalars match under `-w` ≈0
 parity; the real fix needs deep upstream ref/aggregate machinery) — a landscape scout re-surfaced it as
 "35 fixtures"; do NOT re-chase it as a quick parity win. ⚠ `main` is OWNER-PROMOTED — NEVER touch/advance
-it; land everything on `gorget-1` + worktrees (the owner ff's main→gorget-1; observed this session at
-`0c24c11f`).**
-(Recent landed work lives in DONE.md, not here.) ⚠ **LESSON (load-bearing): scout parity estimates MUST be END-TO-END verified (compile+run,
-whole-stdout MATCH) — 3 estimates this session were ~0 real until proven. And file-disjoint PARALLEL
-chains are ~0 parity (the real parity is SERIAL in the closure/Result `lower.gg`/`lir_lower.gg`
-cluster) — parallelize the ORCHESTRATION (scout next while executing current), not the chains.**
+it; land everything on `gorget-1` + worktrees (the owner ff's main→gorget-1).**
+⚠ **LESSON (load-bearing): scout parity estimates MUST be END-TO-END verified (compile+run,
+whole-stdout MATCH) — estimates were ~0 real until proven. And file-disjoint PARALLEL
+chains are ~0 ADDITIVE parity (the real parity is SERIAL in the closure/Result `lower.gg`/`lir_lower.gg`
+cluster) — parallelize the ORCHESTRATION (scout next + PERF/CLEANUP on Rust `src/`, while ONE fidelity chain executes), not the fidelity chains.**
 
-**⬅ TOP NEXT (READY / high-leverage — full discipline ≥3 reviews, re-verify by RUNNING; see "## High Priority"):**
-1. **TYPED ownership/category subsystem — ARCHITECTURE, sequence ③→②→① (full framing + file:line in the "⏭ CURRENT NEXT" block above).** The remaining parity is ONE architectural gap, not 3 separate chains: the self-host reconstructs ownership/category info from mangled NAMES / type-erased special-cases / not at all. Build the typed subsystem ONCE (porting Rust's clean cores, declining its scar tissue), parity as a side effect: **③ `LocalOwnership`-aware drop model ((b) borrow-payload+move-axis ✅ DONE `65f5f591` +5; ⬅ (a) drop-on-overwrite `SAssign :~7298` NEXT [oracle `assigns.rs:196-230`]; (c) user-Drop→auto-field-drop [oracle `drops.rs:307-346`])** → **② closure-env-as-first-class-struct** (unify into the typed struct drop/clone machinery, delete the type-erased `gorget_closure_free` + `__make_closure_` NULL-env wart; enables Phase-2b-2/2b-3 resource captures) → **① typed `enum_category`+payload-ids migration** (retires ~20 `starts_with("Option__"/"Result__")` name-match sites; dissolves the Option/Result smart-split). ⚠ Brief as ARCHITECTURE/fidelity, NOT small parity fixes — that framing produced this session's +0-trap AND a fixed_point double-free.
-   - **① RUN-verified background (WHY the naive "extend the smart-split" is wrong, `a8678c68`):** the mangled-name predicate-only fix = **+0 trap**; chained with a prelude-ctor-arg expected-type hook (`lookup_ctor_field_type` `lower.gg:~6730`) reaches **+2** (`option_result_nested`/`match_nested_option`) BUT UNMASKS 2 SEGFAULTS (`csv_edge`/`csv_stringify`, `Result[Vector[Vector[String]],_]` payload). The typed `enum_category` migration (①) makes all of this typed instead of string-parsed → the trap + the segfault become well-typed. Affects `option_result_nested`/`_combinators`/`match_option_result`/`option_result_field_store`/`coroutine_option_result`.
-2. **method-resolution follow-ups** (parity-neutral cleanup; logged): the 4th name-match classifier `guess_return_type`/`STRING_MARKER` (a distinct fn; fold into `BUILTIN_METHODS` too) + the LIR-level String-method match in `lir_lower.gg` (a 2nd `BrkString`-column consumer); and the const-bytes LIR init kind to restore the −6 scalar-static fn-count (High Priority). Also (from String-trim `7256173f`): add `gorget_str_lstrip_ws`/`gorget_str_rstrip_ws` to the self-host `runtime_takes_str_by_value`/`runtime_fn_return_type` classifier lists for consistency with `gorget_str_trim` (benign today — `self` arrives by-value so the ptr-ABI branch is skipped; only bites if a future fixture passes `.lstrip()`/`.rstrip()` self via pointer ABI). Phase-2 Stage 2 (the checker TOTALITY gate) stays BLOCKED by the measured superset failure (below).
+**⬅ OTHER READY (full discipline ≥3 reviews, re-verify by RUNNING; see "## High Priority"):**
+1. **method-resolution follow-ups** (parity-neutral cleanup; logged): the 4th name-match classifier `guess_return_type`/`STRING_MARKER` (a distinct fn; fold into `BUILTIN_METHODS` too) + the LIR-level String-method match in `lir_lower.gg` (a 2nd `BrkString`-column consumer); and the const-bytes LIR init kind to restore the −6 scalar-static fn-count (High Priority). Also (from String-trim `7256173f`): add `gorget_str_lstrip_ws`/`gorget_str_rstrip_ws` to the self-host `runtime_takes_str_by_value`/`runtime_fn_return_type` classifier lists for consistency with `gorget_str_trim` (benign today — `self` arrives by-value so the ptr-ABI branch is skipped; only bites if a future fixture passes `.lstrip()`/`.rstrip()` self via pointer ABI). Phase-2 Stage 2 (the checker TOTALITY gate) stays BLOCKED by the measured superset failure (below).
 
 **⬅ closure Phase-2 continuation (re-verify by RUNNING; full discipline ≥3 reviews):**
 - **Phase 2b — ByValue RESOURCE/CoW captures** (String/Vector/struct). The Step-B 2a guard STUBS
