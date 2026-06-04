@@ -1757,6 +1757,10 @@ bool runtime_arg_is_str(String name, int arg_idx):
     if arg_idx == 0:
         if name.starts_with("gorget_str_"):
             return true
+        # The `gorget_str_` prefix misses `gorget_utf8_codepoint_len_at`, whose
+        # arg 0 is also a `Str` (codepoint iteration over a Ptr-source coll).
+        if name == "gorget_utf8_codepoint_len_at":
+            return true
     # Binary: str_cat/str_eq/cmp take Str at positions 0 and 1.
     if arg_idx == 1:
         if name == "gorget_str_cat" or name == "gorget_str_concat":
@@ -1887,6 +1891,10 @@ bool runtime_takes_str_by_value(String name):
     if name == "gorget_str_char_at" or name == "gorget_str_byte_at":
         return true
     if name == "gorget_str_byte_len" or name == "gorget_str_byte_slice":
+        return true
+    # for-over-String codepoint iteration: both take `Str s` by value
+    # (lir_codegen.gg:6249/6251); a Ptr-source coll needs the *(Str*) deref.
+    if name == "gorget_str_codepoint_at" or name == "gorget_utf8_codepoint_len_at":
         return true
     if name == "gorget_str_cat" or name == "gorget_str_concat":
         return true

@@ -9403,6 +9403,14 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
     if coll_is_vec_like:
         lower_for_vector(&ctx, pat, coll_local, coll_tn, probe_is_enumerate, body, &gmod, is_main)
         return
+    # String fast path: `for c in <String>` iterates UTF-8 CODEPOINTS. The
+    # iterator-protocol fallback below would `lower_fail` (GorgetString has no
+    # __iter/__next), silently dropping the body. `coll_tn == "GorgetString"`
+    # also covers a Ptr-to-String param — type_id_to_name(GtPtr(GorgetString))
+    # collapses to "GorgetString" (lower.gg:877-879).
+    if coll_tn == "GorgetString":
+        lower_for_string(&ctx, pat, coll_local, body, &gmod, is_main)
+        return
     if probe_is_enumerate:
         # Non-Vector `.enumerate()` — would need either (a) an iterator-
         # protocol path that also threads an index counter, or (b) a
@@ -9495,6 +9503,81 @@ void lower_for_vector(LowerCtx &ctx, SpannedPattern pat, int coll_local, String 
     int new_idx = add_local(&ctx, I64_TYPE, NO_NAME)
     emit(&ctx, GIBinOp(new_idx, OP_ADD, I64_TYPE, OpCopy(idx_local), OpConstI64(1)))
     emit(&ctx, GIAssign(idx_local, OpCopy(new_idx)))
+    set_terminator(&ctx, GTJump(header_bb))
+    switch_to(&ctx, exit_bb)
+
+# String fast path: `for c in <String>` iterates UTF-8 CODEPOINTS (one owned
+# String per iteration), mirroring Rust's `lower_for_string`
+# (src/ir/lowering/stmts/for_loops.rs:237). Same header/body/incr/exit block
+# scaffold as `lower_for_vector`, but the iteration state is a `byte_pos`
+# counter (NOT a logical index) bounded by the BYTE length — per iteration the
+# stride is `gorget_utf8_codepoint_len_at(coll, byte_pos)`, NOT 1, so a
+# multibyte codepoint (e.g. `é`) is consumed whole rather than split into bytes.
+#
+# The loop var `ch` is a cap=0 VIEW into the source string
+# (`gorget_str_codepoint_at` → `gorget_str_view_region`, free is a no-op), so
+# it is bound LoBorrowed with BoCollectionElement(coll_local) like the
+# vector for-element — NO owned-drop registration. (The Rust oracle's
+# drop-register at :347-354 is STALE: its comment predates the runtime
+# returning a view.)
+#
+# `coll` operand: passed as `OpBorrow(coll_local)` like the vector __len/__get
+# calls. `gorget_str_byte_len` / `gorget_str_codepoint_at` /
+# `gorget_utf8_codepoint_len_at` all take `Str` BY VALUE; a Ptr-source `coll`
+# (bare String param's void* ABI) is auto-deref'd `*(Str*)` at C-emit via the
+# `runtime_takes_str_by_value` + `runtime_arg_is_str` registrations
+# (lir_codegen.gg).
+void lower_for_string(LowerCtx &ctx, SpannedPattern pat, int coll_local, Vector[Stmt] body, GirModule &gmod, bool is_main):
+    int gstr_tid = lookup_or_register_named(&gmod, "GorgetString")
+    # ── Iteration state ──────────────────────────────────────
+    # byte_pos counter (seeded 0) + the BYTE-length bound (NOT codepoint count).
+    int bytepos_local = add_local(&ctx, I64_TYPE, NO_NAME)
+    emit(&ctx, GIAssign(bytepos_local, OpConstI64(0)))
+    int len_local = add_local(&ctx, I64_TYPE, NO_NAME)
+    Vector[Operand] len_args = [OpBorrow(coll_local)]
+    emit(&ctx, GICallExtern(len_local, "gorget_str_byte_len", len_args))
+    # ── Block layout ─────────────────────────────────────────
+    int header_bb = new_block(&ctx)
+    int body_bb = new_block(&ctx)
+    int incr_bb = new_block(&ctx)
+    int exit_bb = new_block(&ctx)
+    set_terminator(&ctx, GTJump(header_bb))
+    # Header: `byte_pos < len ? body : exit`
+    switch_to(&ctx, header_bb)
+    int cond_local = add_local(&ctx, BOOL_TYPE, NO_NAME)
+    emit(&ctx, GICmp(cond_local, CMP_LT, I64_TYPE, OpCopy(bytepos_local), OpCopy(len_local)))
+    set_terminator(&ctx, GTBranch(OpCopy(cond_local), body_bb, exit_bb))
+    # Body: `ch = gorget_str_codepoint_at(coll, byte_pos)` — a cap=0 view into
+    # the source string; bind as a borrow alias (no clone, no owned drop).
+    ctx.loop_continue_stack.push(incr_bb)
+    ctx.loop_break_stack.push(exit_bb)
+    push_drop_scope(&ctx.drop_elab, DSK_LOOP)
+    switch_to(&ctx, body_bb)
+    int ch_local = add_local_with(&ctx, gstr_tid, NO_NAME, LoBorrowed(), BoCollectionElement(coll_local))
+    Vector[Operand] cp_args = [OpBorrow(coll_local), OpCopy(bytepos_local)]
+    emit(&ctx, GICallExtern(ch_local, "gorget_str_codepoint_at", cp_args))
+    bind_for_local(&ctx, pat, ch_local, gstr_tid, &gmod)
+    lower_stmts(&ctx, body, &gmod, is_main)
+    Terminator body_term = ctx.block_terms.get(ctx.current_block).unwrap()
+    match body_term:
+        case GTNone():
+            pop_drop_scope(&ctx)
+            set_terminator(&ctx, GTJump(incr_bb))
+        else:
+            pop_drop_scope_no_emit(&ctx)
+    ctx.loop_continue_stack.pop()
+    ctx.loop_break_stack.pop()
+    # Incr: `cplen = gorget_utf8_codepoint_len_at(coll, byte_pos)` (byte_pos is
+    # unchanged from the body, so the same codepoint is measured); advance
+    # `byte_pos += cplen` — stride by cplen, NOT 1. Computed HERE (not in the
+    # body) to avoid threading `cplen` across the body/incr block boundary.
+    switch_to(&ctx, incr_bb)
+    int cplen_local = add_local(&ctx, I64_TYPE, NO_NAME)
+    Vector[Operand] cplen_args = [OpBorrow(coll_local), OpCopy(bytepos_local)]
+    emit(&ctx, GICallExtern(cplen_local, "gorget_utf8_codepoint_len_at", cplen_args))
+    int new_pos = add_local(&ctx, I64_TYPE, NO_NAME)
+    emit(&ctx, GIBinOp(new_pos, OP_ADD, I64_TYPE, OpCopy(bytepos_local), OpCopy(cplen_local)))
+    emit(&ctx, GIAssign(bytepos_local, OpCopy(new_pos)))
     set_terminator(&ctx, GTJump(header_bb))
     switch_to(&ctx, exit_bb)
 

@@ -1,0 +1,11 @@
+Alice: alice@example.com
+Alice (alice@example.com, age 30)
+Alice (alice@example.com, age 30)
+Bob (bob@test.org, age 25)
+Charlie (charlie@mail.net, age 35)
+found: Bob
+dave: true
+example: Alice
+Dave (dave@new.io, age 28)
+host=localhost port=8080 timeout=30
+names: Alice, Bob, Charlie
