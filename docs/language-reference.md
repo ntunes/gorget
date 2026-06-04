@@ -420,8 +420,16 @@ slice_type = type "[" "]" ;
 
 A borrowed view into contiguous memory. Does not own its data.
 
+> **Status: `String`-only.** The general `T[]` slice type is parsed and
+> type-checked but **not lowered to IR** — it has no runtime representation. The
+> only runtime view is the `cap == 0` `String` view (see *String Types*). A
+> non-`String` `int[]` binding works as a function local but cannot cross a
+> function boundary (returning one miscompiles). Use `String` slicing for views
+> and `Vector[T]` / `Vector.slice` (an independent copy) for array sub-ranges.
+
 ```gorget
-int[] slice = arr[1..4]
+String sub = text[1..4]        # String view — supported
+# int[] slice = arr[1..4]      # general slice: parsed/typed but NOT lowered
 ```
 
 #### Function Types

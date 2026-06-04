@@ -1,0 +1,16 @@
+# Every variable declaration must carry an explicit initializer (Gorget has no
+# zero-init-by-default form). This exercises explicit init across the primitive
+# types plus `auto` inference and `const`. See language-design.md §2.1.
+void main():
+    int i = 42
+    float f = 3.5
+    bool flag = true
+    String s = "init"
+    auto inferred = 7
+    const int c = 100
+    print(i)
+    print(f)
+    print(flag)
+    print(s)
+    print(inferred)
+    print(c)

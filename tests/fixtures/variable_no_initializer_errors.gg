@@ -1,0 +1,13 @@
+# Declaring a variable without an initializer is a COMPILE ERROR — Gorget has no
+# uninitialized-variable form (every decl must be `Type name = value`). This is
+# the negative counterpart to variable_initialization.gg. See language-design.md
+# §2.1. NOTE: the diagnostic is currently the misleading "undefined name" (the
+# no-`=` form falls through to expression parsing); improving it to "variable
+# declaration requires an initializer" is a logged TODO papercut — when that
+# lands, update the expected-stderr substring in the integration test.
+void main():
+    int i
+    float f
+    bool flag
+    String s
+    print(i)

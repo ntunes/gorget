@@ -153,22 +153,18 @@ No semicolons. Newline terminates statements. No curly braces - indentation defi
 
 #### Variable Initialization
 
-All variables are **zero-initialized by default** (like Go). Declaring a variable without an initializer gives it the zero value for its type:
+Every variable declaration must include an explicit initializer. The form is always `Type name = value` (or `auto name = value`):
 
 ```gorget
-int x             # x == 0
-float y           # y == 0.0
-bool flag         # flag == false
-String name       # name == ""
+int count = 0
+float ratio = 1.0
+bool ready = false
+String name = ""
 ```
 
-This eliminates an entire class of bugs from uninitialized memory reads. For types with no natural zero (e.g., enums, non-nullable structs), the compiler requires an explicit initializer.
+There is no uninitialized-variable form: a bare `int x` (no `= …`) is a compile error, not an implicitly zero-valued variable. This removes the class of bugs from uninitialized reads *and* the subtler class where a value is syntactically fine but semantically unset — a `0` or `""` that was never meant to be a real value. If zero or empty is the correct starting value, you write it. Consistent with the language's safety-by-default stance, the safe choice is the only choice: there is no flag to opt out.
 
-The compiler flag `--require-init` switches to Rust-style behavior where *all* variables must be explicitly initialized. This is recommended for safety-critical projects:
-
-```bash
-gg build --require-init main.gg    # error: variable `x` declared without initializer
-```
+(Struct fields are declared without initializers and supplied at construction — a separate construct from a local variable declaration.)
 
 ### 2.2 Primitive Types
 
@@ -1922,7 +1918,7 @@ void main():
 | 9 | **Package management** | Built into `gg` CLI (`gg new`, `gg add --git/--path`, `gg remove`) |
 | 10 | **Option handling** | `Option[T]` with rich sugar: `is` pattern matching, `?.` optional chaining, `??` default operator, `.unwrap()`, `.unwrap_or()`, `?` early return |
 | 11 | **Tuple syntax** | `(int, String)` — concise, universal |
-| 12 | **Array syntax** | C-style: `int[5]` fixed array, `Vector[int]` growable, `int[]` slice |
+| 12 | **Array syntax** | C-style: `int[5]` fixed array, `Vector[int]` growable; `int[]` slices are `String`-only today (see §24) |
 | 13 | **Operator overloading** | Via traits (like Rust) |
 | 14 | **Type aliases** | `type Name = String` |
 | 15 | **Mutability** | Mutable by default, `const` for immutable. No `mut` keyword. |
@@ -2315,9 +2311,6 @@ int[5] arr = [1, 2, 3, 4, 5]
 # Type inferred
 auto arr = [1, 2, 3, 4, 5]           # Vector[int] — dynamic, supports push/pop/etc.
 
-# Slice: a borrowed view into contiguous memory
-int[] slice = arr[1..4]       # [2, 3, 4]
-
 # Vector: owned, heap-allocated, growable
 Vector[int] vec = Vector[int]()
 vec.push(1)
@@ -2326,15 +2319,20 @@ vec.push(2)
 # Vector from literal
 Vector[int] nums = [1, 2, 3, 4, 5]   # literal syntax, type annotation clarifies
 
-# Slicing operations
-int[] first_three = arr[..3]
-int[] last_two = arr[3..]
-int[] middle = arr[1..4]
-
 # Array methods
 int length = arr.len()
 bool has_3 = arr.contains(3)
 ```
+
+> **Slices are `String`-only today.** The general `T[]` slice type — a borrowed
+> view into a contiguous array/vector — is parsed and type-checked but **not
+> lowered**: it has no runtime representation. The only runtime view is the
+> `cap == 0` `String` view (§23), which works precisely because owned and view
+> share one 32-byte type. So `String` slicing (`s[1..4]`, `byte_slice`) is fully
+> supported; a non-`String` `int[]` works only as a function-local binding and
+> miscompiles if it escapes (e.g. returned). For an array/vector sub-range use
+> `Vector[T]` and `Vector.slice(start, end)`, which returns an **independent
+> copy** (deep-cloning resource-type elements), not a borrowed view.
 
 **Disambiguation**: `int[5]` = fixed array type (type position), `arr[5]` = indexing (value position). Compiler knows which is which from context, same as generics (`Vector[int]` vs `vec[0]`).
 

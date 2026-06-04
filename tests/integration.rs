@@ -5530,6 +5530,35 @@ fn method_resolution_valid_unwrap_still_compiles() {
 }
 
 #[test]
+fn variable_initialization() {
+    // Every variable declaration carries an explicit initializer (Gorget has no
+    // zero-init-by-default form). Covers the primitive types + `auto` + `const`.
+    // See language-design.md §2.1.
+    run_gg(
+        "variable_initialization.gg",
+        "\
+42
+3.500000
+true
+init
+7
+100",
+    );
+}
+
+#[test]
+fn variable_no_initializer_errors() {
+    // Negative counterpart: declaring a variable of any type WITHOUT an
+    // initializer is a compile error — there is no uninitialized-variable form.
+    // NOTE: the diagnostic is currently the misleading "undefined name" (the
+    // no-`=` form falls through to expression parsing); when the logged TODO
+    // papercut lands (a clearer "requires an initializer" message), update this
+    // expected substring. The invariant under test — no-init decls are rejected
+    // at `gg check` — is what matters.
+    check_gg_fails("variable_no_initializer_errors.gg", "undefined name");
+}
+
+#[test]
 fn lint_suggest_throws_basic() {
     // Positive case — the lint fires once for `add_one`.
     check_gg_warns(

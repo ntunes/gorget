@@ -425,12 +425,21 @@ int[3] fixed = [1, 2, 3]          # int[3] — fixed size, stack-allocated
 
 ### Slices
 
-A slice is a borrowed view into contiguous memory — an array or vector section
-without copying:
+A slice is a borrowed view into contiguous memory — a window into existing data
+without copying. **Today only `String` supports slicing:**
 
 ```gorget
-int[5] arr = [1, 2, 3, 4, 5]
-int[] middle = arr[1..4]           # borrowed view: [2, 3, 4]
+String text = "hello"
+String sub = text[1..4]            # borrowed view: "ell" (no copy)
+```
+
+A general `T[]` slice type exists in the grammar but is **not yet implemented**
+for arrays and vectors — it has no runtime representation. To take a sub-range of
+a `Vector[T]`, use `.slice(start, end)`, which returns an independent **copy**:
+
+```gorget
+Vector[int] v = [1, 2, 3, 4, 5]
+Vector[int] mid = v.slice(1, 4)    # new vector [2, 3, 4] — a copy, not a view
 ```
 
 ---
@@ -703,6 +712,6 @@ print(type(v))             # "Vector[int]"
 | `Set[T]` | (constructor) | `add`, `in`, `len`, unique elements |
 | `HashSet[T]` | (constructor) | Same API as `Set`, unordered, faster |
 | `T[N]` (array) | `int[5] a = [...]` | Fixed-size, stack-allocated |
-| `T[]` (slice) | `arr[1..4]` | Borrowed view into contiguous memory |
+| `String` slice | `s[1..4]` | Borrowed view (general `T[]` array/vector slices not yet implemented) |
 | Tuple | `(a, b, c)` | `._0`, `._1`, unpacking |
 | Comprehension | `[expr for x in items if cond]` | List, set, and dict forms |
