@@ -1,8 +1,8 @@
 # TODO
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE THIS BLOCK IN PLACE each session; completed work → DONE.md, do NOT accumulate "superseded" blocks)
-**gorget-1 code tip `6fa09d26` (`git log -1` for the live tip — docs commits on top). RUNTIME PARITY =
-**393/929 = 42.3%** (was 375 at session start; +18: static-index +1, 3g +3, snag49c +1, 3h-drop +5, String-trim/view-print +7, closure-2b-1 +1). This session (2026-06-04): TODO.md hygiene `0c24c11f`
+**gorget-1 code tip `65f5f591` (`git log -1` for the live tip — docs commits on top). RUNTIME PARITY =
+**398/930 = 42.8%** (was 375 at session start; +23: static-index +1, 3g +3, snag49c +1, 3h-drop +5, String-trim/view-print +7, closure-2b-1 +1, **KEYSTONE ③(b) +5**). This session (2026-06-04): TODO.md hygiene `0c24c11f`
 (pruned 1280→718 lines, −44%), then 6 parity chains with full discipline —
 **Rust-oracle static-index-read `7939bb50` +1** (a static `Vector[struct]` index-read was dropped:
 `lower_index_access`'s Copy/Move place-guard didn't match the `GlobalRef` operand → materialize-to-local;
@@ -15,16 +15,22 @@ operand of `v[pick()]` wasn't auto-propagated) + **3h-drop user-resource-struct 
 `7256173f` +7** (no-arg `.strip()` lowered to a no-op empty-chars strip; print/f-string `%s`+`.data`
 over-read non-NUL-terminated cap=0 VIEWS → no-arg→whitespace-variant + `%.*s`-with-`ai==0`-carve-out)
 + **closure 2b-1 copy-struct capture `6fa09d26` +1** (the 2a guard rejected copy-struct captures → NULL-env
-stub; widened to byte-copyable non-resource non-enum structs). All DONE.md. Denominator 929 (an earlier owner
+stub; widened to byte-copyable non-resource non-enum structs) + **KEYSTONE ③(b) `65f5f591` +5** (borrow
+match-destructured owned Option/Result payloads via a structural-decompose `is_droppable_type` +
+`EnumFieldLoadMode::Borrow`-style bind, THEN align the move-axis to the drop-axis in `op_consume`+the
+wire-liveness post-pass — closing a latent `return r`/`v.push(r)` UAF a review pass caught; +1 regression
+fixture). All DONE.md. Denominator 930 (the +1 keystone fixture; an earlier owner
 merge added `.N` tuple-index + unwrap-on-non-Option/Result `gg check`, +4 fixtures).
-Live gates @ `6fa09d26`: `self_host_runtime` **393/0**, `runtime_diff` MATCH **393**,
-`lowerer_comparison` **960**, `c_emit_comparison` **891**, `bootstrap_fixed_point` GREEN, `cargo test
+Live gates @ `65f5f591`: `self_host_runtime` **394/0**, `runtime_diff` MATCH **398/930**,
+`lowerer_comparison` **961**, `c_emit_comparison` **892**, `bootstrap_fixed_point` GREEN, `cargo test
 --lib` 1072/0 (debug; the 2 `--release` `should_panic`-over-`debug_assert` reds are a pre-existing `src/`
-artifact, NOT our work). FULL `cargo test --test integration` **1187/0/0** last run at `4ef49503`
-(static-index + 3g); snag49c/3h-drop/String-trim/2b-1 are self-host-`.gg`-only → cannot affect non-self-host
-Rust fixtures (each gated by the self-host suite; String-trim's regen wiped+rewrote ALL 385 prior snapshots
-byte-identical = a complete-corpus regression proof for the sensitive printf path).
-Nothing in flight. The contained quick-wins are EXHAUSTED. **The remaining parity is concentrated in ONE
+artifact, NOT our work). FULL `cargo test --test integration` **1187/0/0** last run at `65f5f591`
+(the keystone ③(b) integration — run TWICE, on the borrow candidate and the move-axis fold);
+all this session's chains are self-host-`.gg`-only → cannot affect non-self-host
+Rust fixtures (each gated by the self-host suite).
+**KEYSTONE ③(b) LANDED `65f5f591` (DONE.md, +5); ③(a) drop-on-overwrite is the keystone-continuation (NEXT).**
+The B/C gorget-js auto-prop regression (Rust `gg`) is under investigation by 2 scouts (bisect + architecture) —
+see the gorget-js block in High Priority. **The remaining self-host parity is concentrated in ONE
 architectural gap, not 3 parity chains: the self-host lacks a TYPED ownership/category subsystem, so it
 reconstructs that information from mangled NAMES (Option/Result), from TYPE-ERASED special-cases (closure
 env), or NOT AT ALL (reassign/destructure drops). Build the typed subsystem ONCE — porting Rust's clean
@@ -35,18 +41,28 @@ it as ARCHITECTURE, not parity (briefing these as "small fixes" is what produced
 fixed-point double-free this session). Each phase = its own scout → brief → ≥3 reviews → executor →
 output-review → gate; `bootstrap_fixed_point` is the load-bearing safety net (it double-frees on a wrong
 drop model — proven).
-- **③ FIRST (foundational keystone) — typed `LocalOwnership`-aware drop/ownership model.** This IS the CoW
-  contract CLAUDE.md names ("Ownership at Consuming Positions — mechanical, not heuristic"). The self-host
-  models scope-exit drops of owned locals but NOT: (a) drop-on-overwrite (`SAssign` `lower.gg:7298` emits no
-  prior-value drop), (b) borrow-vs-own for destructured match payloads (`emit_payload_read_mode`
-  `lower.gg:8053/:8120` CLONES where the oracle BORROWS → scrutinee whole-`Result__drop` + payload-bind drop
-  DOUBLE-FREE, scout-proven `ad3d3ead`), (c) user-Drop→auto-field-drop sequence (`drop_struct_fields`).
-  These INTERLOCK — fixing one in isolation double-frees another. Port Rust's `LocalOwnership` core (the
-  self-host's `drop_elab` already does the static-elision the "always-conditional drop" relies on, so we
-  skip Snag #30's scar). The SAFE scrutinee-drop half is ready standalone as foundation (+0, fixed-point
-  GREEN, patch `/tmp/drop_optionlike_local_scout.patch`). This also subsumes the long-thrashing Phase-2c
-  COMMIT-3 emission saga (same subsystem). Unblocks the drop/leak tail (~14: `leak_match_*`/`leak_result_*`/
-  `drop_reassign*`/`drop_struct_fields`/`leak_collection_*`) + ② below.
+- **③ — typed `LocalOwnership`-aware drop/ownership model (IN PROGRESS: (b) ✅ DONE `65f5f591`; (a)+(c) REMAIN).**
+  This IS the CoW contract CLAUDE.md names ("Ownership at Consuming Positions — mechanical, not heuristic").
+  The three parts INTERLOCK (fixing one in isolation double-frees another — PROVEN this session).
+  - **(b) borrow-vs-own for destructured match payloads — ✅ LANDED `65f5f591` (+5, DONE.md).** `is_droppable_type`
+    structural-decomposes `Result__`/`Option__` mono'd LOCALS → registers the owned scrutinee for whole-drop;
+    `lower_ctor_pattern` BORROWS the payload (`EnumFieldLoadMode::Borrow`-style, via `scrutinee_owned_whole_dropped`
+    + `emit_payload_read_mode_full(borrow_all)`); AND `op_consume`+the `decide_operand_at_consuming_arg`
+    wire-liveness post-pass now drive move-vs-copy off the DROP axis (droppable Option/Result local at a consume
+    → OpMove/OpClone, not OpCopy) — closing a latent `return r`/`v.push(r)` UAF a review pass caught. (The Rust
+    Move+zero path was declined: the self-host's `OpMove` source-field-zero is deferred; borrow sidesteps it.)
+  - **(a) drop-on-overwrite — ⬅ NEXT (the keystone-continuation).** `SAssign` (`lower.gg:~7298`) emits `GIAssign`
+    with NO prior-value drop → `drop_reassign`/`drop_reassign_after_move` leak the overwritten owned value. Oracle
+    `assigns.rs:196-230`: drop the old value AFTER computing the RHS, BEFORE assigning — for enum/`DropStrategy::None`
+    emit an explicit `{Name}__drop` (via borrow_mut+call_void), else `drop`/`drop_if_alive` gated on `is_moved`.
+    ⚠ self-referential `s = s.trim()` needs the RHS materialized before the old-value drop. ⚠ Carry the (b)
+    finding: the self-host conditional-drop never zeros the slot/resets the drop-flag after `GIDropIfAlive`, so use
+    the move-exclusion machinery (`mark_local_moved`+`GIMoveZero`), not a raw block-scoped drop, where applicable.
+  - **(c) user-Drop→auto-field-drop sequence (`drop_struct_fields`).** Oracle `drops.rs:307-346`: DropGuardOpen →
+    call user drop fn (or unified `__gorget_dtor_Type`) → `lower_field_drops` (per-field drops, AFTER the user fn)
+    → close. The self-host's drop glue for a user `Drop` impl.
+  Unblocks the rest of the drop/leak tail (`leak_collection_*`/`leak_comprehensive`/`leak_known_patterns` + the
+  pre-existing `Vector[Result/Option]` `GorgetArray.elem_drop` gap, below) + ② below.
 - **② NEXT (falls out of ③) — closure env as a first-class struct.** UNIFY the closure env into the SAME
   typed struct drop/clone machinery (per-field, recursive) and DELETE the type-erased
   `gorget_closure_free`/`gorget_closure_clone_to_owned` + the `__make_closure_` NULL-env wart
@@ -74,7 +90,7 @@ chains are ~0 parity (the real parity is SERIAL in the closure/Result `lower.gg`
 cluster) — parallelize the ORCHESTRATION (scout next while executing current), not the chains.**
 
 **⬅ TOP NEXT (READY / high-leverage — full discipline ≥3 reviews, re-verify by RUNNING; see "## High Priority"):**
-1. **TYPED ownership/category subsystem — ARCHITECTURE, sequence ③→②→① (full framing + file:line in the "⏭ CURRENT NEXT" block above).** The remaining parity is ONE architectural gap, not 3 separate chains: the self-host reconstructs ownership/category info from mangled NAMES / type-erased special-cases / not at all. Build the typed subsystem ONCE (porting Rust's clean cores, declining its scar tissue), parity as a side effect: **③ `LocalOwnership`-aware drop model FIRST** (the keystone — borrow-vs-own at destructure `lower.gg:8053/:8120`, drop-on-overwrite `SAssign :7298`, user-Drop→auto-field-drop; subsumes the Phase-2c COMMIT-3 saga; SAFE scrutinee-drop half ready as foundation, patch `/tmp/drop_optionlike_local_scout.patch`) → **② closure-env-as-first-class-struct** (unify into the typed struct drop/clone machinery, delete the type-erased `gorget_closure_free` + `__make_closure_` NULL-env wart; enables Phase-2b-2/2b-3 resource captures) → **① typed `enum_category`+payload-ids migration** (retires ~20 `starts_with("Option__"/"Result__")` name-match sites; dissolves the Option/Result smart-split). ⚠ Brief as ARCHITECTURE/fidelity, NOT small parity fixes — that framing produced this session's +0-trap AND a fixed_point double-free.
+1. **TYPED ownership/category subsystem — ARCHITECTURE, sequence ③→②→① (full framing + file:line in the "⏭ CURRENT NEXT" block above).** The remaining parity is ONE architectural gap, not 3 separate chains: the self-host reconstructs ownership/category info from mangled NAMES / type-erased special-cases / not at all. Build the typed subsystem ONCE (porting Rust's clean cores, declining its scar tissue), parity as a side effect: **③ `LocalOwnership`-aware drop model ((b) borrow-payload+move-axis ✅ DONE `65f5f591` +5; ⬅ (a) drop-on-overwrite `SAssign :~7298` NEXT [oracle `assigns.rs:196-230`]; (c) user-Drop→auto-field-drop [oracle `drops.rs:307-346`])** → **② closure-env-as-first-class-struct** (unify into the typed struct drop/clone machinery, delete the type-erased `gorget_closure_free` + `__make_closure_` NULL-env wart; enables Phase-2b-2/2b-3 resource captures) → **① typed `enum_category`+payload-ids migration** (retires ~20 `starts_with("Option__"/"Result__")` name-match sites; dissolves the Option/Result smart-split). ⚠ Brief as ARCHITECTURE/fidelity, NOT small parity fixes — that framing produced this session's +0-trap AND a fixed_point double-free.
    - **① RUN-verified background (WHY the naive "extend the smart-split" is wrong, `a8678c68`):** the mangled-name predicate-only fix = **+0 trap**; chained with a prelude-ctor-arg expected-type hook (`lookup_ctor_field_type` `lower.gg:~6730`) reaches **+2** (`option_result_nested`/`match_nested_option`) BUT UNMASKS 2 SEGFAULTS (`csv_edge`/`csv_stringify`, `Result[Vector[Vector[String]],_]` payload). The typed `enum_category` migration (①) makes all of this typed instead of string-parsed → the trap + the segfault become well-typed. Affects `option_result_nested`/`_combinators`/`match_option_result`/`option_result_field_store`/`coroutine_option_result`.
 2. **method-resolution follow-ups** (parity-neutral cleanup; logged): the 4th name-match classifier `guess_return_type`/`STRING_MARKER` (a distinct fn; fold into `BUILTIN_METHODS` too) + the LIR-level String-method match in `lir_lower.gg` (a 2nd `BrkString`-column consumer); and the const-bytes LIR init kind to restore the −6 scalar-static fn-count (High Priority). Also (from String-trim `7256173f`): add `gorget_str_lstrip_ws`/`gorget_str_rstrip_ws` to the self-host `runtime_takes_str_by_value`/`runtime_fn_return_type` classifier lists for consistency with `gorget_str_trim` (benign today — `self` arrives by-value so the ptr-ABI branch is skipped; only bites if a future fixture passes `.lstrip()`/`.rstrip()` self via pointer ABI). Phase-2 Stage 2 (the checker TOTALITY gate) stays BLOCKED by the measured superset failure (below).
 
@@ -162,6 +178,12 @@ cluster) — parallelize the ORCHESTRATION (scout next while executing current),
 
 ## High Priority
 
+- **🐛 gorget-js BUILD REGRESSION (Rust `gg`, owner-reported 2026-06-04) — `throws`/auto-prop. Repros `/tmp/snag{A,B,C}.gg`, `/tmp/probe.gg`.** gorget-js (JS interpreter in Gorget, last green May 18 @ 95.2% Test262) no longer builds; 16 errors → 3 families. **Family A — `return Error(X)` in a `throws E` fn now rejected: SETTLED as INTENDED (owner 2026-06-04).** A `throws` fn returns `T` and raises via `throw`/auto-propagation, never `return Error`/`return Ok`. gorget-js migrates `return Error(X)`→`throw X` (their side, 11 sites). ⚠ Possible DX nit: the diagnostic is a raw type-mismatch (`expected Vector[int], found Result[...]`) — a tailored "use `throw` in a `throws` fn" error would be better (optional, not required). **Families B+C — REAL Rust `gg` REGRESSION, fix upstream, do NOT paper over (per CLAUDE.md):** auto-propagation fires for bare-RHS / call-arg / f-string but NOT for **binary-operator operands** (`to_s(x) + ""`, snagB) or **match-arm tail expressions** (`case 0: lookup(sel)`, snagC) → a raw `Result` leaks into the position. (Match SCRUTINEES staying raw is correct/intended — only arm TAILS are the gap.) **2 scouts IN FLIGHT (2026-06-04):** bisect (`a53109a9`, find culprit commit[s] in `src/` history, ~May 18→now) + auto-prop architecture map (`a24c2e75`, locate the hook + WHY binop/match-tail miss + fix direction). On report: brief→≥3 reviews→executor (src/ fix lands on gorget-1, owner promotes)→full gate. ⚠ The self-host `maybe_auto_propagate` likely has the SAME position gaps (mirrors Rust, extended site-by-site) — fix both so they don't drift. **Coverage lesson:** the 1187/0 integration suite has ZERO fixtures for these `throws` patterns (gorget-js caught what the suite missed) — add minimal `return-Error-in-throws` (negative), `throwing-call-in-binop`, `throwing-call-in-match-arm-tail` fixtures; consider wiring a gorget-js subset as a build-canary.
+- **🐛 ③(b)-SURFACED pre-existing gaps (2026-06-04, all baseline-present, NOT introduced by the keystone — confirmed by review):**
+  - **`Vector[Result[T,E]]` / `Vector[Option[T]]` element drop not wired (self-host, LEAK).** A vector whose ELEMENT is a droppable Option/Result aggregate doesn't set `GorgetArray.elem_drop` (`gorget_array_new(sizeof(...))` with elem_drop NULL), so pushed elements' inner heaps leak at array-free; the oracle sets `elem_drop = <Type>__drop`. ASan-clean (no double-free), orthogonal to the move/drop axis. Repro: push a `Result`/`Option`-with-String into a `Vector`, let it drop, `mem_live` leak. Part of the drop/leak tail.
+  - **`LoMaybeOwned` dead-branch re-validation (self-host).** `scrutinee_owned_whole_dropped` (`lower.gg`) handles `LoMaybeOwned` as an owner, but `LoMaybeOwned` is NEVER CONSTRUCTED in the self-host today (dead/forward-defensive). If a future change starts building it (merged-arm scrutinees), re-validate that branch — a non-materialized merged scrutinee borrowed as an owner could leak/dangle.
+  - **Rust ORACLE miscompiles `Result x = src` (var-decl-bind of a whole Result/Option local from an identifier RHS): "cannot convert to a pointer type" in emitted C.** A pre-existing Rust `gg` gap (fix-the-oracle candidate per CLAUDE.md). Blocked the ③(b) executor from adding a var-decl-bind regression fixture (no valid oracle reference). Find Rust `lower_var_decl` of a whole Result/Option local from an identifier RHS.
+  - **`EStructLiteral` (self-host, `lower.gg:~6194`) is a zeroing stub** — `GIAssign(sdst, OpConstI64(0))` lowers field exprs but never consumes/stores them. Pre-existing; a struct-literal-construction gap (distinct from the `Counter(...)`-ctor-call path which works). Worth confirming scope + fixing.
 - **🔭 (low-pri, from const-bytes #10) — scalar-FLOAT static const-init uses `%g` (`float_to_str`), not bit-exact.** `scalar_static_c_literal`'s float path round-trips the only corpus float static (`2.5`) exactly, but a future precision-sensitive float static (e.g. `3.14159265358979`) would `%g`-truncate to a DIFFERENT double than Rust's `.17e`/`to_le_bytes`. Switch the float path to a `.17e`-equivalent / LE-byte encoding if/when such a static appears. No corpus impact today.
 - **🐛 (pre-existing, self-host) module-level `meta int`/`meta bool` consts resolve to `0` in the self-host driver pipeline** (surfaced by the gap-B pass-2 review; confirmed identical pre/post gap-B → NOT introduced by it). The self-host doesn't fold module-level `meta`-consts. Distinct from `const` (which DOES inline) and `static` (now a mutable global). Find the self-host `IMetaConst` handling (`meta.gg:~115`) — module-level meta-const evaluation is missing/zeroed.
 - **🧹 (low-pri) self-host `collection_ctor_init_expr` (`lower.gg`) matches MORE static-ctor type-names than Rust (`Array`/`Deque`/`Heap`/`Set`/`HashSet`/`OrderedSet`/`Map`/`OrderedDict`) — currently DEAD CODE** (no static ctor beyond `Vector[T]()`/`Dict[K,V]()` exists in the corpus, so c_emit parity holds). If a `static Set[...]()`/`static Deque[...]()` is later added it could diverge from Rust's `eval_static_init` (Vector/Dict/HashMap only — a Set would get an array-shaped allocator). Narrow to Rust's set, or verify per-type when one appears.
