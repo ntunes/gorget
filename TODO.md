@@ -1,9 +1,9 @@
 # TODO
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE THIS BLOCK IN PLACE each session; completed work → DONE.md, do NOT accumulate "superseded" blocks)
-**gorget-1 code tip `7256173f` (`git log -1` for the live tip — docs commits on top). RUNTIME PARITY =
-**392/929 = 42.2%** (was 375 at session start; +17: static-index +1, 3g +3, snag49c +1, 3h-drop +5, String-trim/view-print +7). This session (2026-06-04): TODO.md hygiene `0c24c11f`
-(pruned 1280→718 lines, −44%), then 5 parity chains with full discipline —
+**gorget-1 code tip `6fa09d26` (`git log -1` for the live tip — docs commits on top). RUNTIME PARITY =
+**393/929 = 42.3%** (was 375 at session start; +18: static-index +1, 3g +3, snag49c +1, 3h-drop +5, String-trim/view-print +7, closure-2b-1 +1). This session (2026-06-04): TODO.md hygiene `0c24c11f`
+(pruned 1280→718 lines, −44%), then 6 parity chains with full discipline —
 **Rust-oracle static-index-read `7939bb50` +1** (a static `Vector[struct]` index-read was dropped:
 `lower_index_access`'s Copy/Move place-guard didn't match the `GlobalRef` operand → materialize-to-local;
 recovers `static_vec_index_load` at the correct behavior) + **3g by-value-struct EIndex `4ef49503` +3**
@@ -13,25 +13,26 @@ operand of `v[pick()]` wasn't auto-propagated) + **3h-drop user-resource-struct 
 (`is_droppable_type` excluded user resource-containing structs → per-iteration leak; corrected a STALE
 "COMMIT-3-blocked" premise — the drop machinery is ACTIVE) + **String trim/strip + Str-VIEW printing
 `7256173f` +7** (no-arg `.strip()` lowered to a no-op empty-chars strip; print/f-string `%s`+`.data`
-over-read non-NUL-terminated cap=0 VIEWS → no-arg→whitespace-variant + `%.*s`-with-`ai==0`-carve-out). All
-DONE.md. Denominator 929 (an earlier owner merge added `.N` tuple-index + unwrap-on-non-Option/Result `gg
-check`, +4 fixtures).
-Live gates @ `7256173f`: `self_host_runtime` **392/0**, `runtime_diff` MATCH **392**,
+over-read non-NUL-terminated cap=0 VIEWS → no-arg→whitespace-variant + `%.*s`-with-`ai==0`-carve-out)
++ **closure 2b-1 copy-struct capture `6fa09d26` +1** (the 2a guard rejected copy-struct captures → NULL-env
+stub; widened to byte-copyable non-resource non-enum structs). All DONE.md. Denominator 929 (an earlier owner
+merge added `.N` tuple-index + unwrap-on-non-Option/Result `gg check`, +4 fixtures).
+Live gates @ `6fa09d26`: `self_host_runtime` **393/0**, `runtime_diff` MATCH **393**,
 `lowerer_comparison` **960**, `c_emit_comparison` **891**, `bootstrap_fixed_point` GREEN, `cargo test
 --lib` 1072/0 (debug; the 2 `--release` `should_panic`-over-`debug_assert` reds are a pre-existing `src/`
 artifact, NOT our work). FULL `cargo test --test integration` **1187/0/0** last run at `4ef49503`
-(static-index + 3g); snag49c/3h-drop/String-trim are self-host-`.gg`-only → cannot affect non-self-host Rust
-fixtures (each gated by the self-host suite; String-trim's regen wiped+rewrote ALL 385 prior snapshots
+(static-index + 3g); snag49c/3h-drop/String-trim/2b-1 are self-host-`.gg`-only → cannot affect non-self-host
+Rust fixtures (each gated by the self-host suite; String-trim's regen wiped+rewrote ALL 385 prior snapshots
 byte-identical = a complete-corpus regression proof for the sensitive printf path).
-Nothing in flight. NEXT (RUN-verify each before briefing):
-**(1) closure 2b-1 — copy-struct capture widen** — RUN-CONFIRMED +1 (scout `a8678c68` 2026-06-04): widen the
-2a guard at `lower.gg:~6163` (`{BOOL,I64,F64}`) to ALSO accept a registered struct that is `not
-is_resource_type_name` and `not is_enum` (byte-copyable copy-struct; env-field + GIFieldLoad already work, NO
-clone/drop machinery). Flips `copy_struct_closure_capture`. Single-file, low risk — READY to brief →
-execute. → **(2) Option/Result nested smart-split** — ⚠ NOT a quick fix (RUN-verified: predicate-only =
-+0 trap; +2 only CHAINED with a prelude-ctor-arg hook, and that chain UNMASKS 2 segfaults in
-`csv_edge`/`csv_stringify` — see High-Priority). → **(3) closure Phase-2b** (ByValue RESOURCE/CoW captures,
-2b-2/2b-3 — deep: env drop/clone is type-erased + entangled with the same drop machinery; decompose). ⚠ The
+Nothing in flight. The contained quick-wins are EXHAUSTED — the remaining queued targets are DEEP (each
+needs its own RUN-verify scout + decomposition; do NOT brief them as small fixes):
+**(1) Option/Result nested smart-split** — ⚠ NOT a quick fix (RUN-verified `a8678c68`: predicate-only =
++0 trap; +2 only CHAINED with a prelude-ctor-arg expected-type hook at `lower.gg:~6730`, and that chain
+UNMASKS 2 segfaults in `csv_edge`/`csv_stringify` (`Vector[Vector[String]]` payload) — a 2-part fix + a 3rd
+crash investigation; see High-Priority). → **(2) closure Phase-2b-2/2b-3** (ByValue RESOURCE/CoW captures —
+deep: make-site CoW + typed per-field `__Closure_N` env drop/clone, since `gorget_closure_free`/
+`_clone_to_owned` are type-erased; entangled with the drop machinery). → **(3) drop/leak backlog tail** (~14,
+same family as 3h-drop — match-arm-destructure drops + reassign-drops; see High-Priority). ⚠ The
 closure-call typed-ABI cast
 (`lir_codegen.gg` ICallClosure) is **PARKED — already REFUTED-by-review** (scalars match under `-w` ≈0
 parity; the real fix needs deep upstream ref/aggregate machinery) — a landscape scout re-surfaced it as
