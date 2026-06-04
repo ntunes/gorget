@@ -1,24 +1,27 @@
 # TODO
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE THIS BLOCK IN PLACE each session; completed work → DONE.md, do NOT accumulate "superseded" blocks)
-**gorget-1 code tip `4ef49503` (`git log -1` for the live tip — docs commits on top). RUNTIME PARITY =
-**379/929 = 40.8%** (was 375 at session start). This session (2026-06-04): TODO.md hygiene `0c24c11f`
+**gorget-1 code tip `b07f8160` (`git log -1` for the live tip — docs commits on top). RUNTIME PARITY =
+**380/929 = 40.9%** (was 375 at session start; +5: static-index +1, 3g +3, snag49c +1). This session (2026-06-04): TODO.md hygiene `0c24c11f`
 (pruned 1280→718 lines, −44%), then the two READY scout-measured chains landed with full discipline —
 **Rust-oracle static-index-read `7939bb50` +1** (a static `Vector[struct]` index-read was dropped:
 `lower_index_access`'s Copy/Move place-guard didn't match the `GlobalRef` operand → materialize-to-local;
 recovers `static_vec_index_load` at the correct behavior) + **3g by-value-struct EIndex `4ef49503` +3**
 (case-(c) struct element was an `OpConstI64(0)` stub → reads the real struct; +aggregate-ILoad copy-out
-keyed on the UNMAPPED getter). All DONE.md. Denominator 929 (an earlier owner merge added `.N` tuple-index
-+ unwrap-on-non-Option/Result `gg check`, +4 fixtures).
-Live gates @ `4ef49503`: FULL `cargo test --test integration` **1187/0/0**, `self_host_runtime` **379/0**,
-`runtime_diff` MATCH **379**, `lowerer_comparison` **960**, `c_emit_comparison` **891**,
-`bootstrap_fixed_point` GREEN, `cargo test --lib` 1072/0 (debug; the 2 `--release` `should_panic`-over-
-`debug_assert` reds are a pre-existing `src/` artifact, NOT our work).
-Nothing in flight. NEXT (RUN-verify each before briefing): **snag49c** (EIndex-INDEX auto-prop — `lower.gg`
-EIndex arm + LHS-write don't call `maybe_auto_propagate` on the index operand, so `v[might()]` reads a
-Result's bytes as the index; +1, serial in the same `lower.gg` EIndex region just touched) → **Option/Result
-nested smart-split** (`is_concrete_payload_name` `lower.gg:~8477` rejects `Option__`/`Result__`-prefixed Ok
-payloads; +~5) → **closure Phase-2** (the deeper serial cluster). ⚠ The closure-call typed-ABI cast
+keyed on the UNMAPPED getter) + **snag49c EIndex-INDEX auto-prop `b07f8160` +1** (the throwing index
+operand of `v[pick()]` wasn't auto-propagated). All DONE.md. Denominator 929 (an earlier owner merge added
+`.N` tuple-index + unwrap-on-non-Option/Result `gg check`, +4 fixtures).
+Live gates @ `b07f8160`: `self_host_runtime` **380/0**, `runtime_diff` MATCH **380**,
+`lowerer_comparison` **960**, `c_emit_comparison` **891**, `bootstrap_fixed_point` GREEN, `cargo test
+--lib` 1072/0 (debug; the 2 `--release` `should_panic`-over-`debug_assert` reds are a pre-existing `src/`
+artifact, NOT our work). FULL `cargo test --test integration` **1187/0/0** last run at `4ef49503`
+(static-index + 3g); snag49c is self-host-`.gg`-only → cannot affect non-self-host Rust fixtures, gated by
+the self-host suite above.
+Nothing in flight. NEXT (RUN-verify each before briefing): **Option/Result nested smart-split** — ⚠ NOT a
+quick fix (RUN-verified 2026-06-04: predicate-only = +0 trap; +2 only when CHAINED with a prelude-ctor-arg
+expected-type hook, and that chain UNMASKS 2 segfaults in `csv_edge`/`csv_stringify` — see TODO #2) →
+**closure Phase-2b** (ByValue RESOURCE/CoW captures — the deeper serial cluster; needs its own RUN-verify
+scout). ⚠ The closure-call typed-ABI cast
 (`lir_codegen.gg` ICallClosure) is **PARKED — already REFUTED-by-review** (scalars match under `-w` ≈0
 parity; the real fix needs deep upstream ref/aggregate machinery) — a landscape scout re-surfaced it as
 "35 fixtures"; do NOT re-chase it as a quick parity win. ⚠ `main` is OWNER-PROMOTED — NEVER touch/advance
@@ -30,10 +33,9 @@ chains are ~0 parity (the real parity is SERIAL in the closure/Result `lower.gg`
 cluster) — parallelize the ORCHESTRATION (scout next while executing current), not the chains.**
 
 **⬅ TOP NEXT (READY / high-leverage — full discipline ≥3 reviews, re-verify by RUNNING; see "## High Priority"):**
-1. **snag49c — EIndex-INDEX auto-prop** (next immediate; +1, serial in the `lower.gg` EIndex region the 3g fix just touched). Landscape scout (2026-06-04, source-only — RUN-VERIFY before briefing): the EIndex arm (`lower.gg` `case EIndex` ~:5901) and the index-LHS-write (~:7662) do NOT call `maybe_auto_propagate()` on the index operand, so a throwing index `v[pick()]` (Result-returning) leaves the Result struct un-propagated and its bytes are read as the int index. `maybe_auto_propagate` already exists + is proven at 5 sites (EIf cond, call args, EWhile, EFor). Affects `snag49c_throws_index.gg` (no snapshot yet). Tiny (~3-4 lines).
-2. **Option/Result nested smart-split** — ⚠ **RUN-VERIFIED 2026-06-04: the predicate fix ALONE = +0 (the lesson's ~0 trap); the chain = +2 BUT unmasks 2 segfaults. NOT the small self-contained fix it looks like.** (a) `lower.gg:~8477` `is_concrete_payload_name` rejecting `Option__`/`Result__`-prefixed Ok payloads IS a real bug — the predicate fix is SOUND groundwork (fixes the `Result__Option__int64_t__GorgetString` struct layout: `Ok_0` bare `__gg_Option`→`Option__int64_t`) and `lir_lower.gg` needs NO matching change (its split uses `resolve_field_lir_type`, already resolves once registered) — BUT it is NECESSARY-NOT-SUFFICIENT: every candidate has a 2nd blocker (the inner `None()`/`Some()` ctor-arg of `return Ok(None())` gets NO expected-type because `Ok`/`Some`/`Error` aren't in `fn_sigs` → `callee_param_types` empty → inner literal mis-types its dst, CC-fail). (b) CHAINED with a 2nd hook — prelude-ctor-arg expected-type via `lookup_ctor_field_type` at `lower.gg:~6730` — reaches **+2** (`option_result_nested`, `match_nested_option` → MATCH). (c) ⚠ BUT the chain REGRESSES `csv_edge` + `csv_stringify` (`Result[Vector[Vector[String]], String]`) from clean CC-FAIL → **SEGFAULT** (the sharper payload typing makes them compile then crash at runtime — a deeper `Vector[Vector[String]]`-payload bug it UNMASKS). So this is a 2-part fix + a 3rd investigation (the unmasked nested-collection-payload crash), NOT a quick win. Affects `option_result_nested`/`option_result_combinators`/`match_option_result`/`option_result_field_store`/`coroutine_option_result`. lower.gg → serial with #1.
-3. **closure Phase-2 continuation** (below) — the deeper serial parity cluster in `lower.gg`/`lir_lower.gg`. ⚠ The closure-call typed-ABI cast is PARKED (refuted — see CURRENT NEXT header). Phase-2b (ByValue RESOURCE/CoW captures) is the real next closure parity (root re-pinned 2026-06-04: the 2a guard at `lower.gg:~6172` restricts captures to `{BOOL,I64,F64}`; resource captures fall to the `__make_closure_N()` NULL-env stub at ~:6223).
-4. **method-resolution follow-ups** (parity-neutral cleanup; logged): the 4th name-match classifier `guess_return_type`/`STRING_MARKER` (a distinct fn; fold into `BUILTIN_METHODS` too) + the LIR-level String-method match in `lir_lower.gg` (a 2nd `BrkString`-column consumer); and the const-bytes LIR init kind to restore the −6 scalar-static fn-count (High Priority). Phase-2 Stage 2 (the checker TOTALITY gate) stays BLOCKED by the measured superset failure (below).
+1. **Option/Result nested smart-split** — ⚠ **RUN-VERIFIED 2026-06-04: the predicate fix ALONE = +0 (the lesson's ~0 trap); the chain = +2 BUT unmasks 2 segfaults. NOT the small self-contained fix it looks like.** (a) `lower.gg:~8477` `is_concrete_payload_name` rejecting `Option__`/`Result__`-prefixed Ok payloads IS a real bug — the predicate fix is SOUND groundwork (fixes the `Result__Option__int64_t__GorgetString` struct layout: `Ok_0` bare `__gg_Option`→`Option__int64_t`) and `lir_lower.gg` needs NO matching change (its split uses `resolve_field_lir_type`, already resolves once registered) — BUT it is NECESSARY-NOT-SUFFICIENT: every candidate has a 2nd blocker (the inner `None()`/`Some()` ctor-arg of `return Ok(None())` gets NO expected-type because `Ok`/`Some`/`Error` aren't in `fn_sigs` → `callee_param_types` empty → inner literal mis-types its dst, CC-fail). (b) CHAINED with a 2nd hook — prelude-ctor-arg expected-type via `lookup_ctor_field_type` at `lower.gg:~6730` — reaches **+2** (`option_result_nested`, `match_nested_option` → MATCH). (c) ⚠ BUT the chain REGRESSES `csv_edge` + `csv_stringify` (`Result[Vector[Vector[String]], String]`) from clean CC-FAIL → **SEGFAULT** (the sharper payload typing makes them compile then crash at runtime — a deeper `Vector[Vector[String]]`-payload bug it UNMASKS). So this is a 2-part fix + a 3rd investigation (the unmasked nested-collection-payload crash), NOT a quick win. Affects `option_result_nested`/`option_result_combinators`/`match_option_result`/`option_result_field_store`/`coroutine_option_result`. lower.gg-serial.
+2. **closure Phase-2 continuation** (below) — the deeper serial parity cluster in `lower.gg`/`lir_lower.gg`. ⚠ The closure-call typed-ABI cast is PARKED (refuted — see CURRENT NEXT header). Phase-2b (ByValue RESOURCE/CoW captures) is the real next closure parity (root re-pinned 2026-06-04: the 2a guard at `lower.gg:~6172` restricts captures to `{BOOL,I64,F64}`; resource captures fall to the `__make_closure_N()` NULL-env stub at ~:6223).
+3. **method-resolution follow-ups** (parity-neutral cleanup; logged): the 4th name-match classifier `guess_return_type`/`STRING_MARKER` (a distinct fn; fold into `BUILTIN_METHODS` too) + the LIR-level String-method match in `lir_lower.gg` (a 2nd `BrkString`-column consumer); and the const-bytes LIR init kind to restore the −6 scalar-static fn-count (High Priority). Phase-2 Stage 2 (the checker TOTALITY gate) stays BLOCKED by the measured superset failure (below).
 
 **⬅ closure Phase-2 continuation (re-verify by RUNNING; full discipline ≥3 reviews):**
 - **Phase 2b — ByValue RESOURCE/CoW captures** (String/Vector/struct). The Step-B 2a guard STUBS
