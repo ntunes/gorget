@@ -3,7 +3,8 @@
 > Keystone-③ continuation (after ③(a) `5320b872`, ③(b) `65f5f591`). Oracle:
 > `src/lir/lower/drops.rs:307-346` (`DropStrategy::Custom`) + `mod.rs:507-602`.
 > Foundations: `docs/plans/keystone3_drop_model_foundations.md`.
-> All premises RUN-verified end-to-end at gorget-1 tip `5320b872`. Re-verify against CURRENT source before editing.
+> All premises RUN-verified end-to-end (review pass 1 prototyped the COMPLETE 3-part fix: parity 408→409/940 +1, fixed_point GREEN, lowerer 971/c_emit 902, ASan leak-reduced no-double-free). Re-verify against CURRENT source before editing.
+> ⚠ Line numbers were written at tip `5320b872` and DRIFT (±20 from later commits): e.g. `emit_type_drop_fns`≈`lir_codegen.gg:5216`, `emit_struct_drops`≈`:4954`, skip-recursive≈`:5226`. ANCHOR on the function NAMES + the surrounding code, not the literal line numbers. THREE edits are required: Part 1 (`populate_drop_metadata`), Part 2 (`emit_struct_drops`), **Part 3 (`compute_reachable_fns` DCE seed — link-critical, do NOT skip)**.
 
 ## The gap (RUN-verified)
 For a user type with BOTH a `Drop` impl AND droppable fields (`drop_struct_fields.gg`'s `Container`: `Inner inner` + `String tag` + `equip Container with Drop`), the self-host's drop runs the user `Container__drop` method ONLY — the per-field drops (`Inner__drop(&self->inner)`, `gorget_string_free(&self->tag)`) **never fire after it**.
@@ -77,7 +78,29 @@ int di = 0
 while di < drops.len():
     …existing field-drop loop…
 ```
-(The user method's C signature is `void {T}__drop(void* __p0)`; passing `self` — a `cname*` — to the `void*` param is a valid implicit cast, exactly as `Inner__drop(&self->inner)` already does at `:4989`.)
+(The user method's C signature is `void {T}__drop(void* __p0)`; passing `self` — a `cname*` — to the `void*` param is a valid implicit cast, exactly as `Inner__drop(&self->inner)` already does.)
+
+### Part 3 — seed the user drop fn as a DCE root (`lir_codegen.gg`, `compute_reachable_fns`, struct-drop seed loop ~1070-1085) — REQUIRED (link-critical, found by review pass 1)
+After the fix, the user `{T}__drop` (e.g. `Container__drop`) is no longer called from any LIR drop site — it is called ONLY from inside the generated `__gorget_dtor_{T}` glue via a C STRING (`emit_struct_drops`' `udf + "(self);"`), which is invisible to the LIR call graph. So DCE prunes it → `undefined reference to 'Container__drop'` LINK FAILURE. (RUN-proven by review pass 1: removing this seed link-fails.) Mirror Rust `src/lir/optimize.rs:228-241` ("functions referenced by type_drop_fns are invisible to DCE → seed them"). The existing struct-drop seed loop already seeds `dn` (= `type_drop_fns[dkey].drop_fn_name`, i.e. `__gorget_dtor_{T}`) and `{T}__clone`; ADD the `user_drop_fn` to the same root set:
+```gorget
+    while dk < drop_keys.len():
+        String dkey = drop_keys.get(dk).unwrap()
+        String dn = dkey + "__drop"
+        String udn = ""        # ③(c): the user Drop fn called from __gorget_dtor_{T}
+        if m.type_drop_fns.contains(dkey):
+            dn = m.type_drop_fns.get(dkey).unwrap().drop_fn_name
+            udn = m.type_drop_fns.get(dkey).unwrap().user_drop_fn
+        String cn = dkey + "__clone"
+        int dfi = 0
+        while dfi < n:
+            String fname_d = m.functions.get(dfi).unwrap().name
+            if (fname_d == dn or fname_d == cn or (udn != "" and fname_d == udn)) and not reachable.get(dfi).unwrap():
+                reachable.set(dfi, true)
+                worklist.push(dfi)
+            dfi += 1
+        dk += 1
+```
+⚠ Do NOT add the symmetric seed to the ENUM seed loop (~1086-1101): the enum EMIT path (`emit_enum_drops`) is NOT being changed (no user-Drop enum in the corpus), so an enum `user_drop_fn` would never be called → seeding it would keep a dead fn alive (a `c_emit` fn-count regression). Struct loop only.
 
 ### Why this is correct
 - `drop_struct_fields`: Container → `user_drop != ""` → `drop_collision_types` gets Container → `drop_fn_name = __gorget_dtor_Container`. The drop SITE routes to `__gorget_dtor_Container` (via `drop_fn_for_type`'s collision branch, `lir_lower.gg:3648`). `emit_struct_drops` generates `__gorget_dtor_Container(self)` = `Container__drop(self);` (user, prints "drop container box") THEN `Inner__drop(&self->inner)` ("drop inner nested") + `gorget_string_free(&self->tag)`. Output gains **"drop inner nested"** → MATCH (+1). Wrapper (no user Drop) is unchanged.
@@ -85,7 +108,8 @@ while di < drops.len():
 - **No regression to existing collision types** (DataFrame, `params>1`): their `user_drop_fn` stays `""` (the detection requires `param_types.len()==1`), so `emit_struct_drops` emits field-drops only for them — unchanged.
 
 ## Scope / NOT in scope
-- ONLY the struct path (`emit_struct_drops` + `populate_drop_metadata` struct loop). **No user-Drop ENUM exists in the corpus** → the `emit_enum_drops`/enum-variant symmetry is NOT exercised; log a TODO ("if a user-Drop enum with droppable payloads appears, mirror the user_drop_fn call into the enum path"). Do NOT speculatively edit the enum path.
+- ⚠ **The detection is a NAME-SHAPE MATCH** (`gf.name == type_name + "__drop" and param_types.len() == 1`), NOT a typed signal. Rust derives `DropStrategy::Custom(fn_name)` from the `equip…with Drop` AST node at GIR construction (`src/ir/lowering/mod.rs:264`) and reads the typed enum (`mod.rs:673`); the self-host's `GirTypeInfo` (`gir.gg:~270`) / `ResourceMetadata` (`schema.gg`) carry NO drop-strategy flag, so "has a Drop impl" can only be reconstructed from the name today. This is the CLAUDE.md "No name matching" pattern — accepted here as a documented, **NOT-new** violation: the EXISTING `>1` collision loop in the same function (`lir_lower.gg`) already name-matches identically, and Rust ALSO name-matches for collision detection (`mod.rs:540-541`). The architecturally-pure fix (add a typed `has_user_drop: bool` / a `DropStrategy` to `GirTypeInfo`, set when `equip…with Drop` is lowered) belongs to the ① typed-enum_category/ownership-subsystem chain — log it as a ① follow-up; do NOT expand ③(c) into it.
+- ONLY the struct path (`emit_struct_drops` + `populate_drop_metadata` struct loop + the struct DCE-seed loop). **No user-Drop ENUM exists in the corpus** → the `emit_enum_drops`/enum-variant + enum-DCE-seed symmetry is NOT exercised; log a TODO ("if a user-Drop enum with droppable payloads appears, mirror the user_drop_fn call into the enum emit path AND its DCE seed"). Do NOT speculatively edit the enum path.
 - `drop_match_partial_init` (drop-ORDERING: `drop r1` after vs before "after-match"), `named_scope_drop` (missing inner-scope `a`/`b` drops), `drop_raii` (undefined `gorget_box_get`), `owning_param_drop_at_exit` (`!`-param ABI type mismatch) are SEPARATE pre-existing gaps — NOT ③(c). Do not touch.
 - ⚠ Layering note (document, do not fix here): `drop_collision_types` is populated for the user-Drop case in `populate_drop_metadata`, which runs AFTER `lower_type_defs` (where Option/Result variant-drop names are built, `lir_lower.gg:3830` comment). So a user-Drop struct used as an `Option[T]`/`Result[T,_]` PAYLOAD would route its variant-drop to the user method (no field drops) — but this is the SAME as today's behaviour (no regression; Container isn't an Option payload in the corpus), so it is a documented follow-up, not a blocker. (The existing `>1` collision loop runs before lower_type_defs; if review deems the Option-payload case worth closing now, the 1-param destructor detection can ALSO be added to that early loop with a field-droppability check — but that needs `drop_fn_for_type`'s deps populated early; verify before doing so.)
 
