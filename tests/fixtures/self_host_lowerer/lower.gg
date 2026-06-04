@@ -1182,6 +1182,27 @@ bool is_droppable_type(int type_id, GirModule &gmod):
     # so this check stays clean and never matches them.)
     if gmod.resource_types.contains(tname):
         return true
+    # Mono'd Option__X / Result__X__E whose payload owns a resource and that
+    # appears as a LOCAL / return-value / scrutinee type (the field-position
+    # instances ARE in optionlike_resource_types, but locals/returns are NOT —
+    # register_optionlike_resource only walks struct/enum fields). We must NOT
+    # add these to optionlike_resource_types: that dict ALSO drives the
+    # clone/borrow ABI (is_resource_type_name), and flipping a by-value
+    # Result__int__String param to "resource" breaks its pass-by-value ABI
+    # (variant_auto_ok_inference: `show(r)` passed `&r` to a by-value param).
+    # Instead decompose the mangled name structurally and check payload
+    # droppability — a pure DROP-axis decision, no ABI side-effect. lir_lower's
+    # drop_fn_for_type mirrors this so the GIDropIfAlive resolves <Type>__drop.
+    if gmod.optionlike_resource_types.contains(tname):
+        return true
+    if tname.starts_with("Result__"):
+        ResultPayloadTypes rp = result_payload_types(tname, &gmod)
+        if is_droppable_type(rp.ok_type, &gmod) or is_droppable_type(rp.err_type, &gmod):
+            return true
+    if tname.starts_with("Option__") and not tname.starts_with("Option__Ref__"):
+        int opt_inner_tid = resolve_field_gir_type(tname.slice(8, tname.len()), &gmod)
+        if is_droppable_type(opt_inner_tid, &gmod):
+            return true
     return false
 
 # Register a local in the innermost drop scope. Skips non-droppable
@@ -8041,9 +8062,22 @@ String resolve_payload_clone_fn(String tname, GirModule &gmod):
 # consume site. Match-arm payload binds pass false → keep the eager
 # clone (their binding semantics own the payload).
 int emit_payload_read(LowerCtx &ctx, int scrutinee_ptr, String enum_name, String variant_name, int field_idx, int dst_type, GirModule &gmod):
-    return emit_payload_read_mode(&ctx, scrutinee_ptr, enum_name, variant_name, field_idx, dst_type, &gmod, false)
+    return emit_payload_read_mode_full(&ctx, scrutinee_ptr, enum_name, variant_name, field_idx, dst_type, &gmod, false, false)
 
 int emit_payload_read_mode(LowerCtx &ctx, int scrutinee_ptr, String enum_name, String variant_name, int field_idx, int dst_type, GirModule &gmod, bool borrow_only):
+    return emit_payload_read_mode_full(&ctx, scrutinee_ptr, enum_name, variant_name, field_idx, dst_type, &gmod, borrow_only, false)
+
+# `borrow_all` (owned-whole-dropped scrutinee): when true, elide the clone for
+# EVERY payload type — String/Closure included — not just the DEEP-clone
+# aggregates the `borrow_only` path covers. The scrutinee OWNS the payload and
+# is registered for a whole-scrutinee `Result__/Option____drop` (is_droppable_
+# type via the structural decompose), which frees the payload exactly once at
+# scope exit. Binding `dst` (the LoBorrowed field-read alias) avoids a second
+# heap (no leak) and the second drop (no double-free). The arm's consume sites
+# clone on demand (op_consume LoBorrowed → OpClone), so a consuming arm stays
+# sound: the consumer gets a fresh independent copy, the whole-drop frees the
+# original. Mirrors Rust EnumFieldLoadMode::Borrow (devbook ch.13).
+int emit_payload_read_mode_full(LowerCtx &ctx, int scrutinee_ptr, String enum_name, String variant_name, int field_idx, int dst_type, GirModule &gmod, bool borrow_only, bool borrow_all):
     String field = variant_name + "_" + int_to_str(field_idx)
     String read_fn = "__field_read_" + enum_name + "_" + field
     Vector[Operand] args = [op_consume(&ctx, &gmod, scrutinee_ptr, CkMatchPtr()), OpConstI64(field_idx)]
@@ -8109,6 +8143,11 @@ int emit_payload_read_mode(LowerCtx &ctx, int scrutinee_ptr, String enum_name, S
     # derive___format_type_inner). Scoping the elision to aggregate payloads
     # kills the bomb without disturbing the String/Closure consume path.
     if borrow_only and is_deep_clone_fn(clone_fn):
+        return dst
+    # Owned-whole-dropped scrutinee: elide the clone for ALL payload types,
+    # String/Closure included. `dst` is the LoBorrowed field-read alias into
+    # the scrutinee's payload — the whole-scrutinee drop frees it exactly once.
+    if borrow_all:
         return dst
     if clone_fn != "":
         int cloned = add_local(&ctx, dst_type, NO_NAME)
@@ -8368,7 +8407,15 @@ void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vecto
                 # scrutinee OWNS its data, keep the eager clone (independent
                 # owner — matches the original Class-8 double-free fix).
                 bool scrut_borrow = scrutinee_nonowning(&ctx, &gmod, scrutinee)
-                int field_val = emit_payload_read_mode(&ctx, scrutinee_ptr, effective_enum, effective_variant, fi, fty, &gmod, scrut_borrow)
+                # Owned-whole-dropped scrutinee (Result/Option local whose own
+                # whole-drop frees the payload once): borrow the payload instead
+                # of deep-cloning it — for ALL payload types incl. String. This
+                # is the oracle's EnumFieldLoadMode::Borrow (devbook ch.13): no
+                # second heap (Prototype A's leak), no second drop (Prototype B's
+                # double-free). The bound alias is read-only here; a consuming arm
+                # clones on demand via op_consume LoBorrowed→OpClone.
+                bool scrut_owned_dropped = scrutinee_owned_whole_dropped(&ctx, &gmod, scrutinee)
+                int field_val = emit_payload_read_mode_full(&ctx, scrutinee_ptr, effective_enum, effective_variant, fi, fty, &gmod, scrut_borrow, scrut_owned_dropped)
                 Option[String] bname_opt = Some(bname)
                 # option_ref_borrow Phase 6 (R1, site #3): KEEP `fty`(=GtPtr for
                 # an Option[Ref[T]] scrutinee) as the `dst_type` arg above so the
@@ -8383,7 +8430,13 @@ void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vecto
                 # sound; the exercised resource-match case keeps `bound: GtPtr`.
                 int bound = add_local_inheriting(&ctx, ctx.locals.get(field_val).unwrap().type_id, bname_opt, field_val)
                 ConsumeKind bk = CkAssign()
-                if scrut_borrow and local_is_borrow_alias(&ctx, field_val):
+                # Borrow-bind (alias, no clone) when the field-read returned a
+                # LoBorrowed alias — both the nonowning-scrutinee path AND the
+                # owned-whole-dropped path (Prototype C). CkCallArgBorrow is a
+                # NON-consume kind, so op_consume yields OpBorrow (pure alias);
+                # CkAssign would route LoBorrowed→OpClone and re-clone the very
+                # payload we just elided.
+                if (scrut_borrow or scrut_owned_dropped) and local_is_borrow_alias(&ctx, field_val):
                     bk = CkCallArgBorrow()
                 emit(&ctx, GIAssign(bound, op_consume(&ctx, &gmod, field_val, bk)))
                 nl_put(&ctx, bname, bound)
@@ -9353,6 +9406,43 @@ bool scrutinee_nonowning(LowerCtx &ctx, GirModule &gmod, int lid):
                     return false
         else:
             return false
+
+# True iff `lid` is an OWNED match scrutinee whose own type is whole-droppable
+# (registered for drop by register_local_for_drop). For such a scrutinee the
+# whole-scrutinee `Result__/Option____drop` (discriminant switch) frees the
+# payload exactly once at scope exit — so a payload BIND must NOT deep-clone
+# (would leak the clone, since the bind is block-scoped) and must NOT register
+# the bind for its own drop (would double-free the SAME heap the whole drop
+# frees). Instead bind the payload as a LoBorrowed alias into the scrutinee.
+# Mirrors Rust's EnumFieldLoadMode::Borrow on a read-only / owner-retained
+# extraction (devbook ch.13). Pure TYPED ownership + droppability test — no
+# name matching. LoOwned and LoMaybeOwned both reach the owned whole-drop path
+# (a merged-arm scrutinee is treated as an owner here, conservatively binding
+# a borrow — sound because the whole-scrutinee drop still owns the free).
+bool scrutinee_owned_whole_dropped(LowerCtx &ctx, GirModule &gmod, int lid):
+    if lid < 0 or lid >= ctx.locals.len():
+        return false
+    GirLocal loc = ctx.locals.get(lid).unwrap()
+    match loc.ownership:
+        case LoOwned():
+            pass
+        case LoMaybeOwned():
+            pass
+        else:
+            return false
+    # Peel a Ptr/MutPtr wrapper (a borrowed-but-owned-pointee case is excluded
+    # above by the ownership gate; this peel only matters for the rare LoOwned
+    # value held behind a pointer slot) and test the underlying type.
+    int tid = loc.type_id
+    if tid >= 0 and tid < gmod.type_table.len():
+        match gmod.type_table.get(tid).unwrap():
+            case GtPtr(_):
+                return false
+            case GtMutPtr(_):
+                return false
+            else:
+                pass
+    return is_droppable_type(tid, &gmod)
 
 # Map a collection element type name (as produced by collection_element_type)
 # to a GIR type id. Mirrors the resolution chain in the EMethodCall unwrap

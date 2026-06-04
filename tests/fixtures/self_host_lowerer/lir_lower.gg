@@ -3365,6 +3365,16 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
             String dia_tn = gir_local_type_name(local_id, &gir_locals, &gmod)
             if dia_tn != "":
                 String dia_drop_fn = drop_fn_for_type(dia_tn, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types, &m.drop_collision_types)
+                # Mono'd Option/Result locals/scrutinees whose payload owns a
+                # resource are NOT in optionlike_resource_types (that dict is
+                # field-position-only AND drives the by-value ABI, so we must not
+                # add them — see is_droppable_type). But Pass 3 DID generate their
+                # `<Type>__drop` and recorded it in type_drop_fns. Use that typed
+                # registry as the fallback: it's the authoritative "this type has
+                # a generated drop fn" signal (populated only when a payload is a
+                # resource, so POD-payload Option/Result correctly stay drop-less).
+                if dia_drop_fn == "" and m.type_drop_fns.contains(dia_tn):
+                    dia_drop_fn = m.type_drop_fns.get(dia_tn).unwrap().drop_fn_name
                 if dia_drop_fn != "":
                     int dia_slot = local_to_slot.get(local_id).unwrap()
                     int dia_slot_ty = f.slots.get(dia_slot).unwrap().ty
