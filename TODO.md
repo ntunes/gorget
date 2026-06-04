@@ -1,27 +1,34 @@
 # TODO
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE THIS BLOCK IN PLACE each session; completed work → DONE.md, do NOT accumulate "superseded" blocks)
-**gorget-1 code tip `b07f8160` (`git log -1` for the live tip — docs commits on top). RUNTIME PARITY =
-**380/929 = 40.9%** (was 375 at session start; +5: static-index +1, 3g +3, snag49c +1). This session (2026-06-04): TODO.md hygiene `0c24c11f`
-(pruned 1280→718 lines, −44%), then the two READY scout-measured chains landed with full discipline —
+**gorget-1 code tip `9bb2252d` (`git log -1` for the live tip — docs commits on top). RUNTIME PARITY =
+**385/929 = 41.4%** (was 375 at session start; +10: static-index +1, 3g +3, snag49c +1, 3h-drop +5). This session (2026-06-04): TODO.md hygiene `0c24c11f`
+(pruned 1280→718 lines, −44%), then 4 parity chains with full discipline —
 **Rust-oracle static-index-read `7939bb50` +1** (a static `Vector[struct]` index-read was dropped:
 `lower_index_access`'s Copy/Move place-guard didn't match the `GlobalRef` operand → materialize-to-local;
 recovers `static_vec_index_load` at the correct behavior) + **3g by-value-struct EIndex `4ef49503` +3**
 (case-(c) struct element was an `OpConstI64(0)` stub → reads the real struct; +aggregate-ILoad copy-out
 keyed on the UNMAPPED getter) + **snag49c EIndex-INDEX auto-prop `b07f8160` +1** (the throwing index
-operand of `v[pick()]` wasn't auto-propagated). All DONE.md. Denominator 929 (an earlier owner merge added
-`.N` tuple-index + unwrap-on-non-Option/Result `gg check`, +4 fixtures).
-Live gates @ `b07f8160`: `self_host_runtime` **380/0**, `runtime_diff` MATCH **380**,
+operand of `v[pick()]` wasn't auto-propagated) + **3h-drop user-resource-struct drop `9bb2252d` +5**
+(`is_droppable_type` excluded user resource-containing structs → per-iteration leak; corrected a STALE
+"COMMIT-3-blocked" premise — the drop machinery is ACTIVE). All DONE.md. Denominator 929 (an earlier owner
+merge added `.N` tuple-index + unwrap-on-non-Option/Result `gg check`, +4 fixtures).
+Live gates @ `9bb2252d`: `self_host_runtime` **385/0**, `runtime_diff` MATCH **385**,
 `lowerer_comparison` **960**, `c_emit_comparison` **891**, `bootstrap_fixed_point` GREEN, `cargo test
 --lib` 1072/0 (debug; the 2 `--release` `should_panic`-over-`debug_assert` reds are a pre-existing `src/`
 artifact, NOT our work). FULL `cargo test --test integration` **1187/0/0** last run at `4ef49503`
-(static-index + 3g); snag49c is self-host-`.gg`-only → cannot affect non-self-host Rust fixtures, gated by
-the self-host suite above.
-Nothing in flight. NEXT (RUN-verify each before briefing): **Option/Result nested smart-split** — ⚠ NOT a
-quick fix (RUN-verified 2026-06-04: predicate-only = +0 trap; +2 only when CHAINED with a prelude-ctor-arg
-expected-type hook, and that chain UNMASKS 2 segfaults in `csv_edge`/`csv_stringify` — see TODO #2) →
-**closure Phase-2b** (ByValue RESOURCE/CoW captures — the deeper serial cluster; needs its own RUN-verify
-scout). ⚠ The closure-call typed-ABI cast
+(static-index + 3g); snag49c + 3h-drop are self-host-`.gg`-only → cannot affect non-self-host Rust fixtures,
+gated by the self-host suite above (3h-drop's output-review independently ran all 385 snapshots byte-clean).
+Nothing in flight. NEXT (RUN-verify each before briefing; scout `a0ea3277` 2026-06-04 ranked these):
+**(1) closure 2b-1 — copy-struct capture widen** (`copy_struct_closure_capture`: a `{int,int}` COPY-struct
+capture; the 2a guard at `lower.gg:~6172` restricts to `{BOOL,I64,F64}` — widen to copy-structs, NO clone/drop
+machinery, ~+1, low risk) → **(2) String trim/strip cluster** (~+5: `string_strip`/`string_stdlib`/
+`test_str_predicates` — trailing-whitespace not trimmed, a String trim/strip method-body gap; non-drop,
+non-closure) → **(3) Option/Result nested smart-split** — ⚠ NOT a quick fix (RUN-verified: predicate-only =
++0 trap; +2 only CHAINED with a prelude-ctor-arg hook, and that chain UNMASKS 2 segfaults in
+`csv_edge`/`csv_stringify` — see TODO #1) → **(4) closure Phase-2b** (ByValue RESOURCE/CoW captures, 2b-2/2b-3
+— deep: env drop/clone is type-erased + entangled with the same drop machinery; decompose). ⚠ The
+closure-call typed-ABI cast
 (`lir_codegen.gg` ICallClosure) is **PARKED — already REFUTED-by-review** (scalars match under `-w` ≈0
 parity; the real fix needs deep upstream ref/aggregate machinery) — a landscape scout re-surfaced it as
 "35 fixtures"; do NOT re-chase it as a quick parity win. ⚠ `main` is OWNER-PROMOTED — NEVER touch/advance
@@ -139,10 +146,9 @@ cluster) — parallelize the ORCHESTRATION (scout next while executing current),
 
 - **🐛 (CORRECTNESS — OPEN self-host bugs; Rust `gg` is the oracle):**
   - **(3c) minor DCE link-fail when only ONE Option field of a 2-field struct is consumed (OPEN, low-pri)** — a drop/clone fn for the unconsumed field gets DCE'd but is still referenced. Surfaced by `b49ea1c3`; triage from the repro.
-  - **🟢 READY CHAIN — by-value-struct EIndex read (subsumes 3g + 3h-struct). SCOUT-MEASURED +3 (375→378), 0 regress, 2-file fix. Brief `docs/plans/brief_3g_byvalue_struct_eindex.md`.** Root: the 3h EIndex dst-typing case (c) (non-resource non-scalar struct elem, incl. `Option__int`) is an I64/0 STUB → `v[i]` of a struct elem reads 0 (the bare-`Option` symptom was downstream). Fix: case (c) types dst by-value (bare elem) + `lir_lower` lift-skip for the EIndex getter + aggregate-ILoad copy-out; ⚠ DICT TRAP (key the skip on the UNMAPPED `func_name` — `gorget_map_get` is shared by `Dict[k]` and `Dict.get()`). Flips `test_struct_methods`/`coroutine_struct_methods`/`test_generic_struct`. NEXT to execute (≥3-review → executor). Surfaced `spawn_vector_await` follow-up (below).
-  - **(3h-drop) PRE-EXISTING drop gap UNMASKED by the 3h EIndex-read fix (OPEN) — `leak_method_return_loop`.** A RESOURCE struct returned from a fn/method and bound via `auto` in a loop is not dropped per-iteration → leaks (`leaked=true` vs Rust `false`). Repros WITHOUT any index read (minimal: `auto d = make_resource_struct()` in a loop). Before 3h, `self.items[idx]` returned the 0-stub (nothing allocated → nothing to leak); 3h returns the real element, exposing it. A drop-elaboration gap; fix to re-MATCH `leak_method_return_loop` (it LEFT the parity set when 3h landed). [(3h) v[i]-read-const-0 itself = ✅ LANDED `b69334c7` +27, see DONE.md.]
+  - **(3h-drop follow-up, OPEN) Branch C-pre `.get().unwrap()` should BORROW, not deref-CLONE.** 3h-drop (`9bb2252d`, +5: leak_method_return_loop/drop_block_scope/drop_early_return/drop_loop_reinit/async_drop) registered user resource-containing structs for drop, but needed a paired guard (`lower.gg` ~`:7141`, `source_was_ptr`) suppressing the drop of the Branch C-pre `.get().unwrap()` deref-clone — a DEEP copy the oracle never makes (the oracle BORROWS the element). The guard matches the oracle's stdout AT THE COST OF LEAKING the deref-clone. REAL FIX: make Branch C-pre BORROW instead of deref-clone (`lower.gg:925-979` returns `CloneAndMove` for GtPtr/GtMutPtr) → the guard becomes REMOVABLE + the leak disappears. ⚠ The guard also covers GtMutPtr (`T x = &param` shape); no fixture exercises a resource-struct `&param`-clone today, but if one appears the guard would wrongly leak it (the borrow fix resolves that too).
+  - **(drop/leak backlog tail, ~14 OPEN) same root family as 3h-drop — need ADDITIONAL sub-fixes.** `leak_collection_elements`/`_comprehensive`/`_match_resource`/`_match_struct`/`_result_*`, `drop_flag_*`, `drop_*reassign*`, match-arm-destructure drops. 3h-drop flipped the clean subset (+5); these need match-arm-destructure drops + reassign-drops (a follow-on chain). RUN-verify before briefing.
   - **(3h-await) `.await()` (and method dispatch) on an EIndex-read result is dropped (OPEN) — surfaced by the by-value-struct EIndex scout.** Once `tasks[j]` types as `Task__int64_t` (the ready chain above), `tasks[j].await()` isn't lowered → the Task struct flows into `sum += …` (`aggregate value used where integer expected`); `spawn_vector_await` shifts WRONG→CC-FAIL. Wire `.await()`/method dispatch on an EIndex-read result. (Left unmasked per "don't redesign around gaps.")
-  - **🦀 (RUST-ORACLE FIX — `static_vec_index_load`: Rust `gg` is the BUGGY side) — surfaced by 3h.** Post-3h the SELF-HOST emits the CORRECT `i0=alpha:10`; Rust `gg` ITSELF emits the buggy zeroed `i0=0:0` (a struct-element index-READ bug in Rust — a `static Vector[struct]`'s `v[i].field` reads 0). ⚠ **Per the owner's "fix the oracle when Rust is buggy" directive ([[feedback-rust-not-sacrosanct]], 2026-06-04): FIX RUST's index-struct-read in `src/` (do NOT re-stub the self-host).** Then re-snapshot → `static_vec_index_load` re-MATCHes AT the correct behavior (recovers the −1 → 3h effectively +28). A Rust `src/` chain (full `cargo test` suite; owner promotes main). 🟢 **READY (scout-measured, full-suite clean): brief `docs/plans/brief_rust_oracle_static_index_read.md`.** Root `methods.rs:3185` — `lower_index_access` place-guard is Copy/Move-only; a `static Vector` is `Constant::GlobalRef` → falls through to `Unit` → folds to 0. Fix (23 lines): materialize the GlobalRef→local before the guard (mirror `init_borrow_iter_local`, `for_loops.rs:49`; Borrow for resources) + remove the `#[ignore]` at `integration.rs:319` (test already asserts the correct output). Measured: integration 1187/0, lib 1072/0, parity 375→**376**. ≥3-review (full-suite) → execute.
   - **(3i) owned-String LOCAL moved into a dict via index-assign leaks ~17 bytes (OPEN, benign) — surfaced by the 3e review 2026-06-03.** `Dict[String,String] sv; sv["k"]=val` (owned local `val`) leaks the original local after its value is cloned into the map — a VALUE-operand drop-tracking gap (NOT the key; the 3e fix didn't touch the value operand). Benign leak, not a double-free/UAF; no corpus fixture exercises it at runtime-MATCH level. Part of the broader self-host scope-exit drop-elaboration gap (ASan-surfaced; orthogonal to stdout-parity).
   - **(3j) `gorget_string_push_char` arg-type mismatch CC-fail (OPEN) — `string_owned` blocker, surfaced by the 3b scout 2026-06-03.** `string_owned.gg` stays CC-FAIL (`string_owned.c:~4957`) on a `push_char` method codegen gap — separate from the (landed) `String +=` fix. Find the `push_char` builtin-method emit/arg-typing.
   - **(3f) pass-`&<module-static>`-to-a-`&`-param doesn't write back (OPEN) — surfaced by the const-bytes scout 2026-06-03.** `static_ref_param` is WRONG (`0/0/0` vs oracle `0/42/100`), CONFIRMED pre-existing (clean-tree driver, NOT the const-init kind). The self-host lowers `set_to(&value, 42)` (where `value` is a module-level static) by DEREFERENCING the static into a temp (`__v8 = *(int64_t*)(__v7); __v10 = &__s4`) and passing `&temp` → the write lands in the throwaway temp, never `__lir_g0`. A static-as-place ARGUMENT gap (sibling to the receiver/SAssign static-place fixes already landed — the `&arg`-at-call-site path for a static doesn't reuse `lower_place_base`'s GtMutPtr). Find the `&`-arg lowering for a static-identifier operand; route it through the static-as-place Ptr (mirror the receiver fix). +1 `static_ref_param`.
