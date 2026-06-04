@@ -3178,9 +3178,29 @@ pub(super) fn lower_index_access(
     // `v[throws_fn()]` — leaving the index slot holding the bytes of the
     // Result struct rather than an int.
     let saved_expected = ctx.func_state.expected_type.take();
-    let obj = lower_expr(ctx, builder, object);
+    let mut obj = lower_expr(ctx, builder, object);
     let idx = lower_expr(ctx, builder, index);
     ctx.func_state.expected_type = saved_expected;
+
+    // A module-level `static` lowers to Operand::Constant(GlobalRef) (see
+    // exprs/mod.rs), which the place-guard below would not match — falling
+    // through to Constant::Unit and silently dropping the read (the whole
+    // `TABLE[i].field` index-read const-folded to 0). Materialize the
+    // GlobalRef into a local so the place path emits the real index_load.
+    // Resource collections (Vector/Dict) Borrow (zero-cost; the global
+    // retains ownership, freed once at static teardown → no double-free);
+    // value types Copy. Mirrors `init_borrow_iter_local` (for_loops.rs).
+    if let Operand::Constant(Constant::GlobalRef(_)) = obj {
+        let base_type = infer_operand_type_full(ctx, &obj, builder);
+        let local = builder.add_local(base_type, None);
+        let mode = if ctx.type_registry.is_resource_type(base_type) {
+            AssignMode::Borrow
+        } else {
+            AssignMode::Copy
+        };
+        builder.assign_mode(mode, Place::local(local), obj);
+        obj = Operand::Copy(Place::local(local));
+    }
 
     if let Operand::Copy(ref place) | Operand::Move(ref place) = obj {
         // Infer element type from the base collection type

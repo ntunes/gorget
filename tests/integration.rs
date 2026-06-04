@@ -317,10 +317,6 @@ extra_0=7",
 }
 
 #[test]
-#[ignore = "index-load STATIC_VEC[i].field on a global struct vector returns a zeroed struct \
-— a separate IndexLoad-on-global codegen bug (TODO 2026-05-29), orthogonal to Bug B (whose \
-elements ARE materialized: .get(i).unwrap().field works). Asserts the CORRECT behavior; flip \
-to active when the index-load-on-global bug is fixed."]
 fn static_vec_index_load() {
     run_gg("static_vec_index_load.gg", "i0=alpha:10\ni2=gamma:30");
 }
