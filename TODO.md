@@ -24,16 +24,45 @@ artifact, NOT our work). FULL `cargo test --test integration` **1187/0/0** last 
 (static-index + 3g); snag49c/3h-drop/String-trim/2b-1 are self-host-`.gg`-only → cannot affect non-self-host
 Rust fixtures (each gated by the self-host suite; String-trim's regen wiped+rewrote ALL 385 prior snapshots
 byte-identical = a complete-corpus regression proof for the sensitive printf path).
-Nothing in flight. The contained quick-wins are EXHAUSTED — the remaining queued targets are DEEP (each
-needs its own RUN-verify scout + decomposition; do NOT brief them as small fixes):
-**(1) Option/Result nested smart-split** — ⚠ NOT a quick fix (RUN-verified `a8678c68`: predicate-only =
-+0 trap; +2 only CHAINED with a prelude-ctor-arg expected-type hook at `lower.gg:~6730`, and that chain
-UNMASKS 2 segfaults in `csv_edge`/`csv_stringify` (`Vector[Vector[String]]` payload) — a 2-part fix + a 3rd
-crash investigation; see High-Priority). → **(2) closure Phase-2b-2/2b-3** (ByValue RESOURCE/CoW captures —
-deep: make-site CoW + typed per-field `__Closure_N` env drop/clone, since `gorget_closure_free`/
-`_clone_to_owned` are type-erased; entangled with the drop machinery). → **(3) drop/leak backlog tail** (~14,
-same family as 3h-drop — match-arm-destructure drops + reassign-drops; see High-Priority). ⚠ The
-closure-call typed-ABI cast
+Nothing in flight. The contained quick-wins are EXHAUSTED. **The remaining parity is concentrated in ONE
+architectural gap, not 3 parity chains: the self-host lacks a TYPED ownership/category subsystem, so it
+reconstructs that information from mangled NAMES (Option/Result), from TYPE-ERASED special-cases (closure
+env), or NOT AT ALL (reassign/destructure drops). Build the typed subsystem ONCE — porting Rust's clean
+cores (it passes the layering-discipline "no name-matching / typed-at-the-right-layer" test for these),
+declining its scar tissue (Snag #30 conditional-drop, Snag #50 name-map — already declined in EMatch) —
+and all three dissolve, retiring a large class of name-matching debt with parity as a SIDE EFFECT.** Sequence
+it as ARCHITECTURE, not parity (briefing these as "small fixes" is what produced the +0-trap AND the
+fixed-point double-free this session). Each phase = its own scout → brief → ≥3 reviews → executor →
+output-review → gate; `bootstrap_fixed_point` is the load-bearing safety net (it double-frees on a wrong
+drop model — proven).
+- **③ FIRST (foundational keystone) — typed `LocalOwnership`-aware drop/ownership model.** This IS the CoW
+  contract CLAUDE.md names ("Ownership at Consuming Positions — mechanical, not heuristic"). The self-host
+  models scope-exit drops of owned locals but NOT: (a) drop-on-overwrite (`SAssign` `lower.gg:7298` emits no
+  prior-value drop), (b) borrow-vs-own for destructured match payloads (`emit_payload_read_mode`
+  `lower.gg:8053/:8120` CLONES where the oracle BORROWS → scrutinee whole-`Result__drop` + payload-bind drop
+  DOUBLE-FREE, scout-proven `ad3d3ead`), (c) user-Drop→auto-field-drop sequence (`drop_struct_fields`).
+  These INTERLOCK — fixing one in isolation double-frees another. Port Rust's `LocalOwnership` core (the
+  self-host's `drop_elab` already does the static-elision the "always-conditional drop" relies on, so we
+  skip Snag #30's scar). The SAFE scrutinee-drop half is ready standalone as foundation (+0, fixed-point
+  GREEN, patch `/tmp/drop_optionlike_local_scout.patch`). This also subsumes the long-thrashing Phase-2c
+  COMMIT-3 emission saga (same subsystem). Unblocks the drop/leak tail (~14: `leak_match_*`/`leak_result_*`/
+  `drop_reassign*`/`drop_struct_fields`/`leak_collection_*`) + ② below.
+- **② NEXT (falls out of ③) — closure env as a first-class struct.** UNIFY the closure env into the SAME
+  typed struct drop/clone machinery (per-field, recursive) and DELETE the type-erased
+  `gorget_closure_free`/`gorget_closure_clone_to_owned` + the `__make_closure_` NULL-env wart
+  (`lir_codegen.gg:~3708`). More elegant than today (removes special-casing); matches Rust's first-class
+  env. Enables ByValue RESOURCE/CoW captures (Phase-2b-2/2b-3: `cow_closure_capture` etc.). Depends on ③'s
+  drop model existing.
+- **① REFRAME (NOT "smart-split extension") — port typed `enum_category` + payload type-ids to the GIR.**
+  ⚠ The handover previously framed this as "extend `is_concrete_payload_name`'s mangled-name recursion" —
+  that DEEPENS a name-matching wart (RUN-verified +0-trap / +2-with-2-segfaults `a8678c68`). The clean,
+  reference-grade fix: Rust carries `enum_category: Option<EnumCategory>` TYPED on the TypeDef
+  (`src/ir/types.rs:188`, accessor `:724`; `validate.rs:1896/:2181` "No name-matching") + payload type-ids;
+  the self-host has NO such field (`gir.gg` only a name-keyed `optionlike_resource_types`) → ~20
+  `starts_with("Option__"/"Result__")` sites reconstruct it from names. Port the typed field + retire the
+  ~20 name sites → the smart-split dissolves entirely (and the nested `Result[Option[T],_]` case + the
+  `Vector[Vector[String]]` segfault become typed, not string-parsed). A clean FIDELITY chain (parity side
+  effect). ⚠ The closure-call typed-ABI cast
 (`lir_codegen.gg` ICallClosure) is **PARKED — already REFUTED-by-review** (scalars match under `-w` ≈0
 parity; the real fix needs deep upstream ref/aggregate machinery) — a landscape scout re-surfaced it as
 "35 fixtures"; do NOT re-chase it as a quick parity win. ⚠ `main` is OWNER-PROMOTED — NEVER touch/advance
@@ -45,9 +74,9 @@ chains are ~0 parity (the real parity is SERIAL in the closure/Result `lower.gg`
 cluster) — parallelize the ORCHESTRATION (scout next while executing current), not the chains.**
 
 **⬅ TOP NEXT (READY / high-leverage — full discipline ≥3 reviews, re-verify by RUNNING; see "## High Priority"):**
-1. **Option/Result nested smart-split** — ⚠ **RUN-VERIFIED 2026-06-04: the predicate fix ALONE = +0 (the lesson's ~0 trap); the chain = +2 BUT unmasks 2 segfaults. NOT the small self-contained fix it looks like.** (a) `lower.gg:~8477` `is_concrete_payload_name` rejecting `Option__`/`Result__`-prefixed Ok payloads IS a real bug — the predicate fix is SOUND groundwork (fixes the `Result__Option__int64_t__GorgetString` struct layout: `Ok_0` bare `__gg_Option`→`Option__int64_t`) and `lir_lower.gg` needs NO matching change (its split uses `resolve_field_lir_type`, already resolves once registered) — BUT it is NECESSARY-NOT-SUFFICIENT: every candidate has a 2nd blocker (the inner `None()`/`Some()` ctor-arg of `return Ok(None())` gets NO expected-type because `Ok`/`Some`/`Error` aren't in `fn_sigs` → `callee_param_types` empty → inner literal mis-types its dst, CC-fail). (b) CHAINED with a 2nd hook — prelude-ctor-arg expected-type via `lookup_ctor_field_type` at `lower.gg:~6730` — reaches **+2** (`option_result_nested`, `match_nested_option` → MATCH). (c) ⚠ BUT the chain REGRESSES `csv_edge` + `csv_stringify` (`Result[Vector[Vector[String]], String]`) from clean CC-FAIL → **SEGFAULT** (the sharper payload typing makes them compile then crash at runtime — a deeper `Vector[Vector[String]]`-payload bug it UNMASKS). So this is a 2-part fix + a 3rd investigation (the unmasked nested-collection-payload crash), NOT a quick win. Affects `option_result_nested`/`option_result_combinators`/`match_option_result`/`option_result_field_store`/`coroutine_option_result`. lower.gg-serial.
-2. **closure Phase-2 continuation** (below) — the deeper serial parity cluster in `lower.gg`/`lir_lower.gg`. ⚠ The closure-call typed-ABI cast is PARKED (refuted — see CURRENT NEXT header). Phase-2b (ByValue RESOURCE/CoW captures) is the real next closure parity (root re-pinned 2026-06-04: the 2a guard at `lower.gg:~6172` restricts captures to `{BOOL,I64,F64}`; resource captures fall to the `__make_closure_N()` NULL-env stub at ~:6223).
-3. **method-resolution follow-ups** (parity-neutral cleanup; logged): the 4th name-match classifier `guess_return_type`/`STRING_MARKER` (a distinct fn; fold into `BUILTIN_METHODS` too) + the LIR-level String-method match in `lir_lower.gg` (a 2nd `BrkString`-column consumer); and the const-bytes LIR init kind to restore the −6 scalar-static fn-count (High Priority). Also (from String-trim `7256173f`): add `gorget_str_lstrip_ws`/`gorget_str_rstrip_ws` to the self-host `runtime_takes_str_by_value`/`runtime_fn_return_type` classifier lists for consistency with `gorget_str_trim` (benign today — `self` arrives by-value so the ptr-ABI branch is skipped; only bites if a future fixture passes `.lstrip()`/`.rstrip()` self via pointer ABI). Phase-2 Stage 2 (the checker TOTALITY gate) stays BLOCKED by the measured superset failure (below).
+1. **TYPED ownership/category subsystem — ARCHITECTURE, sequence ③→②→① (full framing + file:line in the "⏭ CURRENT NEXT" block above).** The remaining parity is ONE architectural gap, not 3 separate chains: the self-host reconstructs ownership/category info from mangled NAMES / type-erased special-cases / not at all. Build the typed subsystem ONCE (porting Rust's clean cores, declining its scar tissue), parity as a side effect: **③ `LocalOwnership`-aware drop model FIRST** (the keystone — borrow-vs-own at destructure `lower.gg:8053/:8120`, drop-on-overwrite `SAssign :7298`, user-Drop→auto-field-drop; subsumes the Phase-2c COMMIT-3 saga; SAFE scrutinee-drop half ready as foundation, patch `/tmp/drop_optionlike_local_scout.patch`) → **② closure-env-as-first-class-struct** (unify into the typed struct drop/clone machinery, delete the type-erased `gorget_closure_free` + `__make_closure_` NULL-env wart; enables Phase-2b-2/2b-3 resource captures) → **① typed `enum_category`+payload-ids migration** (retires ~20 `starts_with("Option__"/"Result__")` name-match sites; dissolves the Option/Result smart-split). ⚠ Brief as ARCHITECTURE/fidelity, NOT small parity fixes — that framing produced this session's +0-trap AND a fixed_point double-free.
+   - **① RUN-verified background (WHY the naive "extend the smart-split" is wrong, `a8678c68`):** the mangled-name predicate-only fix = **+0 trap**; chained with a prelude-ctor-arg expected-type hook (`lookup_ctor_field_type` `lower.gg:~6730`) reaches **+2** (`option_result_nested`/`match_nested_option`) BUT UNMASKS 2 SEGFAULTS (`csv_edge`/`csv_stringify`, `Result[Vector[Vector[String]],_]` payload). The typed `enum_category` migration (①) makes all of this typed instead of string-parsed → the trap + the segfault become well-typed. Affects `option_result_nested`/`_combinators`/`match_option_result`/`option_result_field_store`/`coroutine_option_result`.
+2. **method-resolution follow-ups** (parity-neutral cleanup; logged): the 4th name-match classifier `guess_return_type`/`STRING_MARKER` (a distinct fn; fold into `BUILTIN_METHODS` too) + the LIR-level String-method match in `lir_lower.gg` (a 2nd `BrkString`-column consumer); and the const-bytes LIR init kind to restore the −6 scalar-static fn-count (High Priority). Also (from String-trim `7256173f`): add `gorget_str_lstrip_ws`/`gorget_str_rstrip_ws` to the self-host `runtime_takes_str_by_value`/`runtime_fn_return_type` classifier lists for consistency with `gorget_str_trim` (benign today — `self` arrives by-value so the ptr-ABI branch is skipped; only bites if a future fixture passes `.lstrip()`/`.rstrip()` self via pointer ABI). Phase-2 Stage 2 (the checker TOTALITY gate) stays BLOCKED by the measured superset failure (below).
 
 **⬅ closure Phase-2 continuation (re-verify by RUNNING; full discipline ≥3 reviews):**
 - **Phase 2b — ByValue RESOURCE/CoW captures** (String/Vector/struct). The Step-B 2a guard STUBS
