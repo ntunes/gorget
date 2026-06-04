@@ -3695,14 +3695,37 @@ void populate_drop_metadata(LirModule &m, GirModule &gmod):
         if field_drops.len() > 0 or is_resource_struct:
             String tname = type_name
             m.recursive_drop_structs.put(tname, field_drops)
+            # ③(c): detect a user `Drop` impl — a GIR fn named "{type_name}__drop"
+            # with EXACTLY 1 param (the `!self` destructor). >1 params = a
+            # non-destructor method (DataFrame.drop(cols)) handled by the
+            # existing collision loop; 0/absent = no user Drop. Mirrors Rust
+            # DropStrategy::Custom (drops.rs:307-346) — the type has a Drop impl,
+            # so the unified `__gorget_dtor_{T}` runs the user fn FIRST then the
+            # per-field auto-drops. This gate lives inside `field_drops.len() > 0
+            # or is_resource_struct` so a FIELDLESS user-Drop type (not in
+            # recursive_drop_structs / not emitted as `__gorget_dtor_`) is NOT
+            # routed to a missing symbol — it keeps calling `{T}__drop` directly.
+            String user_drop = ""
+            int uf = 0
+            while uf < gmod.functions.len():
+                GirFunction gf = gmod.functions.get(uf).unwrap()
+                if gf.name == type_name + "__drop" and gf.param_types.len() == 1:
+                    user_drop = gf.name
+                uf += 1
             # Also add to type_drop_fns for unified emission. For a drop-name
-            # collision type the auto glue takes the mangled name
-            # `__gorget_dtor_{T}` (the plain `T__drop` symbol belongs to the
+            # collision type OR a user-Drop type the auto glue takes the mangled
+            # name `__gorget_dtor_{T}` (the plain `T__drop` symbol belongs to the
             # user method); emit_struct_drops / the DCE seed read this typed
             # name (Rust gg `src/lir/lower/mod.rs:680-686`).
             String drop_fn_name = type_name + "__drop"
-            if m.drop_collision_types.contains(type_name):
+            if m.drop_collision_types.contains(type_name) or user_drop != "":
                 drop_fn_name = "__gorget_dtor_" + type_name
+                # Route drop SITES to the renamed glue. drop_fn_for_type reads
+                # drop_collision_types; without this the site keeps calling the
+                # user method directly. For the user-Drop case this also records
+                # the rename so the GIDropIfAlive lowering resolves
+                # __gorget_dtor_{T}.
+                m.drop_collision_types.put(type_name, true)
             Vector[FieldDrop] fd_copy = []
             int di = 0
             while di < field_drops.len():
@@ -3710,7 +3733,7 @@ void populate_drop_metadata(LirModule &m, GirModule &gmod):
                 fd_copy.push(FieldDrop(fd.field_name, fd.drop_fn_name, fd.field_type_name))
                 di += 1
             Vector[EnumVariantDrop] no_evd = []
-            m.type_drop_fns.put(type_name, TypeDropInfo(drop_fn_name, fd_copy, "", no_evd))
+            m.type_drop_fns.put(type_name, TypeDropInfo(drop_fn_name, fd_copy, user_drop, no_evd))
         ki += 1
 
     # Pass 2: Enum variant drops

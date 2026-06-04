@@ -1072,13 +1072,21 @@ Vector[bool] compute_reachable_fns(LirModule &m):
     while dk < drop_keys.len():
         String dkey = drop_keys.get(dk).unwrap()
         String dn = dkey + "__drop"
+        String udn = ""        # ③(c): the user Drop fn called from __gorget_dtor_{T}
         if m.type_drop_fns.contains(dkey):
             dn = m.type_drop_fns.get(dkey).unwrap().drop_fn_name
+            udn = m.type_drop_fns.get(dkey).unwrap().user_drop_fn
         String cn = dkey + "__clone"
         int dfi = 0
         while dfi < n:
             String fname_d = m.functions.get(dfi).unwrap().name
-            if (fname_d == dn or fname_d == cn) and not reachable.get(dfi).unwrap():
+            # ③(c): also seed the user `{T}__drop` — after the fix it is called
+            # ONLY from inside the generated `__gorget_dtor_{T}` glue via a C
+            # string (emit_struct_drops' `udf + "(self);"`), invisible to the
+            # LIR call graph, so DCE would prune it → undefined reference.
+            # Mirror Rust src/lir/optimize.rs:228-241. Struct loop ONLY (no
+            # user-Drop enum in the corpus — the enum seed is unchanged).
+            if (fname_d == dn or fname_d == cn or (udn != "" and fname_d == udn)) and not reachable.get(dfi).unwrap():
                 reachable.set(dfi, true)
                 worklist.push(dfi)
             dfi += 1
@@ -4979,6 +4987,16 @@ String emit_struct_drops(LirModule &m, Vector[String] &sn):
         String cname = find_c_name(type_name, &m, &sn)
         Vector[FieldDrop] drops = m.recursive_drop_structs.get(type_name).unwrap()
         out = out + "static inline void " + drop_name + "(" + cname + "* self) {\n"
+        # ③(c): a user Drop impl runs FIRST, then the per-field auto-drops
+        # (mirror Rust drops.rs:322-341). The user method is recorded on
+        # TypeDropInfo.user_drop_fn. Its C signature is `void {T}__drop(void* __p0)`;
+        # passing `self` (a cname*) to the void* param is a valid implicit cast,
+        # exactly as `Inner__drop(&self->inner)` already does below.
+        String udf = ""
+        if m.type_drop_fns.contains(type_name):
+            udf = m.type_drop_fns.get(type_name).unwrap().user_drop_fn
+        if udf != "":
+            out = out + "    " + udf + "(self);\n"
         int di = 0
         while di < drops.len():
             FieldDrop fd = drops.get(di).unwrap()
