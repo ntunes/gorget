@@ -1,29 +1,39 @@
 # TODO
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE THIS BLOCK IN PLACE each session; completed work → DONE.md, do NOT accumulate "superseded" blocks)
-**gorget-1 code tip `b69334c7` (`git log -1` for the live tip — docs commits on top). RUNTIME PARITY =
-**375/929 = 40.4%** (was 334; +41 this session — STATIC CLUSTER +8, method-resolution refactor +0,
-prototype-scout BATCH +5 (const-bytes fn-count-restore + 3d/3e + 3a/3b), user-struct-ctor static +1,
-then **3h EIndex value-read `b69334c7` +27** — the EIndex value-read was a 0-STUB returning 0 for every
-`v[i]`/`d[k]`; wired to `gorget_array_get`/`gorget_map_get` → +29 gains, −2 documented removals. All DONE.md).
-Live gates @ `b69334c7`: `self_host_runtime` **375/0**, `runtime_diff` MATCH **375**,
-`lowerer_comparison` **960**, `c_emit_comparison` **890**, `bootstrap_fixed_point` GREEN, `cargo test
---lib` 1072/0 (debug; the 2 `--release` `should_panic`-over-`debug_assert` reds are a pre-existing
-`src/` artifact, NOT our work).
-Nothing in flight. NEXT = closure Phase-2 continuation
-(the real serial parity cluster) — see TOP NEXT + below. ⚠ `main` is
-OWNER-PROMOTED — NEVER touch/advance it; land everything on `gorget-1` + worktrees. ⚠ An owner merge
-(`0db411a9`/`30e6c47b`/`b6c37a0d`: Rust `.N` tuple-index + unwrap-on-non-Option/Result `gg check`)
-landed ON TOP of this session's work — it added 4 fixtures to the parity denominator (925→929) and
-touches the Rust ORACLE, so ALWAYS rebuild the compiler + force-rebuild the driver + re-measure.**
+**gorget-1 code tip `4ef49503` (`git log -1` for the live tip — docs commits on top). RUNTIME PARITY =
+**379/929 = 40.8%** (was 375 at session start). This session (2026-06-04): TODO.md hygiene `0c24c11f`
+(pruned 1280→718 lines, −44%), then the two READY scout-measured chains landed with full discipline —
+**Rust-oracle static-index-read `7939bb50` +1** (a static `Vector[struct]` index-read was dropped:
+`lower_index_access`'s Copy/Move place-guard didn't match the `GlobalRef` operand → materialize-to-local;
+recovers `static_vec_index_load` at the correct behavior) + **3g by-value-struct EIndex `4ef49503` +3**
+(case-(c) struct element was an `OpConstI64(0)` stub → reads the real struct; +aggregate-ILoad copy-out
+keyed on the UNMAPPED getter). All DONE.md. Denominator 929 (an earlier owner merge added `.N` tuple-index
++ unwrap-on-non-Option/Result `gg check`, +4 fixtures).
+Live gates @ `4ef49503`: FULL `cargo test --test integration` **1187/0/0**, `self_host_runtime` **379/0**,
+`runtime_diff` MATCH **379**, `lowerer_comparison` **960**, `c_emit_comparison` **891**,
+`bootstrap_fixed_point` GREEN, `cargo test --lib` 1072/0 (debug; the 2 `--release` `should_panic`-over-
+`debug_assert` reds are a pre-existing `src/` artifact, NOT our work).
+Nothing in flight. NEXT (RUN-verify each before briefing): **snag49c** (EIndex-INDEX auto-prop — `lower.gg`
+EIndex arm + LHS-write don't call `maybe_auto_propagate` on the index operand, so `v[might()]` reads a
+Result's bytes as the index; +1, serial in the same `lower.gg` EIndex region just touched) → **Option/Result
+nested smart-split** (`is_concrete_payload_name` `lower.gg:~8477` rejects `Option__`/`Result__`-prefixed Ok
+payloads; +~5) → **closure Phase-2** (the deeper serial cluster). ⚠ The closure-call typed-ABI cast
+(`lir_codegen.gg` ICallClosure) is **PARKED — already REFUTED-by-review** (scalars match under `-w` ≈0
+parity; the real fix needs deep upstream ref/aggregate machinery) — a landscape scout re-surfaced it as
+"35 fixtures"; do NOT re-chase it as a quick parity win. ⚠ `main` is OWNER-PROMOTED — NEVER touch/advance
+it; land everything on `gorget-1` + worktrees (the owner ff's main→gorget-1; observed this session at
+`0c24c11f`).**
 (Recent landed work lives in DONE.md, not here.) ⚠ **LESSON (load-bearing): scout parity estimates MUST be END-TO-END verified (compile+run,
 whole-stdout MATCH) — 3 estimates this session were ~0 real until proven. And file-disjoint PARALLEL
 chains are ~0 parity (the real parity is SERIAL in the closure/Result `lower.gg`/`lir_lower.gg`
 cluster) — parallelize the ORCHESTRATION (scout next while executing current), not the chains.**
 
 **⬅ TOP NEXT (READY / high-leverage — full discipline ≥3 reviews, re-verify by RUNNING; see "## High Priority"):**
-1. **closure Phase-2 continuation** (below) — the remaining closure parity (the real serial parity cluster in `lower.gg`/`lir_lower.gg`). NOW THE HIGHEST-VALUE TARGET (the static cluster + method-resolution Stage-1 cleanup all landed this session).
-2. **method-resolution follow-ups** (parity-neutral cleanup; logged this session): the 4th name-match classifier `guess_return_type`/`STRING_MARKER` (a distinct fn; fold into `BUILTIN_METHODS` too) + the LIR-level String-method match in `lir_lower.gg` (a 2nd `BrkString`-column consumer); and the const-bytes LIR init kind to restore the −6 scalar-static fn-count (High Priority). Phase-2 Stage 2 (the checker TOTALITY gate) stays BLOCKED by the measured superset failure (below).
+1. **snag49c — EIndex-INDEX auto-prop** (next immediate; +1, serial in the `lower.gg` EIndex region the 3g fix just touched). Landscape scout (2026-06-04, source-only — RUN-VERIFY before briefing): the EIndex arm (`lower.gg` `case EIndex` ~:5901) and the index-LHS-write (~:7662) do NOT call `maybe_auto_propagate()` on the index operand, so a throwing index `v[pick()]` (Result-returning) leaves the Result struct un-propagated and its bytes are read as the int index. `maybe_auto_propagate` already exists + is proven at 5 sites (EIf cond, call args, EWhile, EFor). Affects `snag49c_throws_index.gg` (no snapshot yet). Tiny (~3-4 lines).
+2. **Option/Result nested smart-split** (+~5; `lower.gg:~8477` `is_concrete_payload_name` rejects `Option__<inner>`/`Result__<…>` Ok payloads → `Result[Option[T],_]` mis-splits leftmost). Extend the predicate to accept `Option__`/`Result__`-prefixed payloads (recursively). Affects `option_result_nested`/`option_result_combinators`/`match_option_result`/`option_result_field_store`/`coroutine_option_result`. Also lower.gg → serial with #1.
+3. **closure Phase-2 continuation** (below) — the deeper serial parity cluster in `lower.gg`/`lir_lower.gg`. ⚠ The closure-call typed-ABI cast is PARKED (refuted — see CURRENT NEXT header). Phase-2b (ByValue RESOURCE/CoW captures) is the real next closure parity (root re-pinned 2026-06-04: the 2a guard at `lower.gg:~6172` restricts captures to `{BOOL,I64,F64}`; resource captures fall to the `__make_closure_N()` NULL-env stub at ~:6223).
+4. **method-resolution follow-ups** (parity-neutral cleanup; logged): the 4th name-match classifier `guess_return_type`/`STRING_MARKER` (a distinct fn; fold into `BUILTIN_METHODS` too) + the LIR-level String-method match in `lir_lower.gg` (a 2nd `BrkString`-column consumer); and the const-bytes LIR init kind to restore the −6 scalar-static fn-count (High Priority). Phase-2 Stage 2 (the checker TOTALITY gate) stays BLOCKED by the measured superset failure (below).
 
 **⬅ closure Phase-2 continuation (re-verify by RUNNING; full discipline ≥3 reviews):**
 - **Phase 2b — ByValue RESOURCE/CoW captures** (String/Vector/struct). The Step-B 2a guard STUBS
