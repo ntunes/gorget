@@ -1,0 +1,28 @@
+# Snag #35-followup: a throwing call as a TUPLE-literal ELEMENT in a return
+# position inside a propagating function. The element `to_n(sel)` must peel
+# to `int` so it lands in the tuple's int slot.
+#
+# Regression: before the per-element `expected_type` override/clear in the
+# `Expr::TupleLiteral` lowering, the function's `Result[(int,int), PErr]`
+# return slot leaked into the element lowering, suppressing
+# `maybe_auto_propagate`'s peel — the raw `Result` was memcpy'd into the
+# tuple's int slot, reading back as a zero-init garbage value. The `92fa7619`
+# baseline MISCOMPILED this identically (a pre-existing same-class gap).
+
+struct PErr:
+    String msg
+
+int to_n(int x) throws PErr:
+    if x < 0:
+        throw PErr("neg")
+    return x * 10
+
+(int, int) build(int sel) throws PErr:
+    return (to_n(sel), 5)
+
+void main():
+    (int, int) ok = build(3) catch (e): (0, 0)
+    print(ok._0)
+    print(ok._1)
+    (int, int) err = build(-1) catch (e): (-99, -99)
+    print(err._0)

@@ -3674,6 +3674,26 @@ fn throws_autoprop_ctor_field() {
 }
 
 #[test]
+fn throws_autoprop_dict_value() {
+    // `return {"a": to_n(sel), "b": 5}` — throwing call as a dict-literal
+    // VALUE in a return position. The dict-value `expected_type` override/
+    // clear in `lower_dict_literal` lets the value peel `Result[int,_]→int`
+    // instead of leaking the function's `Result[Dict,_]` return slot.
+    // Baseline `92fa7619` REJECTED this at type-check (NEW regression closed).
+    run_gg("throws_autoprop_dict_value.gg", "30\n5\n-99");
+}
+
+#[test]
+fn throws_autoprop_tuple_element() {
+    // `return (to_n(sel), 5)` — throwing call as a tuple-literal ELEMENT in a
+    // return position. The per-element `expected_type` override/clear in the
+    // `Expr::TupleLiteral` lowering lets the element peel `Result[int,_]→int`
+    // instead of leaking the function's `Result[(int,int),_]` return slot.
+    // Baseline `92fa7619` MISCOMPILED this identically (pre-existing same class).
+    run_gg("throws_autoprop_tuple_element.gg", "30\n5\n-99");
+}
+
+#[test]
 fn snag51_closure_block_tail_value() {
     // Snag #51 — multi-statement closure body whose last statement is
     // a `match`/`if` used as a tail value silently returned the

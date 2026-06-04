@@ -467,8 +467,42 @@ fn lower_expr_inner(
         }
 
         Expr::TupleLiteral(elems) => {
+            // Per-element `expected_type`: set it to the destination tuple's
+            // element type when the enclosing context declares a tuple (incl.
+            // a `Result[Tuple..]` throws/Result return slot, which we peel),
+            // else CLEAR it. This is load-bearing for `Result→T` auto-prop:
+            // a `return (throws_call(), 5)` from a `throws` function sets
+            // `expected_type` to the function's `Result[Tuple.., E]` return
+            // slot (via `lower_return`). Leaving that `Result` in place while
+            // lowering the throwing-call element suppresses
+            // `maybe_auto_propagate`'s peel (it skips when the destination
+            // expects a `Result`), leaving the raw `Result` memcpy'd into the
+            // tuple's element slot — a silent miscompile (the element reads as
+            // its zero-init default). Mirrors the per-element override in
+            // `lower_array_literal` and the `expected_type` clear in
+            // `lower_binary_op` (operators.rs).
+            let saved_expected = ctx.func_state.expected_type;
+            // Peel a Result wrapper, then keep only a tuple destination.
+            let dest_tuple = saved_expected.and_then(|t| {
+                let inner = if ctx.type_registry.enum_category(t)
+                    == Some(EnumCategory::Result)
+                {
+                    extract_result_ok_type(ctx, t)
+                } else { t };
+                match ctx.type_name_for_id(inner) {
+                    Some(name) if name.starts_with("Tuple__") => Some(inner),
+                    _ => None,
+                }
+            });
             let mut operands: Vec<Operand> = elems.iter()
-                .map(|e| lower_expr(ctx, builder, e))
+                .enumerate()
+                .map(|(i, e)| {
+                    ctx.func_state.expected_type = dest_tuple
+                        .map(|tup| resolve_tuple_field_type(ctx, tup, i));
+                    let op = lower_expr(ctx, builder, e);
+                    ctx.func_state.expected_type = saved_expected;
+                    op
+                })
                 .collect();
             // Ownership boundary: tuple fields need independently owned values.
             // First pass: `ensure_owned_at_boundary` clones Ptr(T) borrows and
@@ -2839,6 +2873,13 @@ pub fn emit_result_auto_propagate(
 
     builder.switch_to(merge_bb);
     FunctionBuilder::copy(ok_val)
+}
+
+/// The `Ok` payload type of a `Result[T, E]` (the `T`). Used to peel a
+/// throws/Result return slot down to its inner destination when propagating
+/// a per-element/per-value `expected_type` into an aggregate literal.
+fn extract_result_ok_type(ctx: &LoweringContext, result_type: TypeId) -> TypeId {
+    extract_result_field_types(ctx, result_type).0
 }
 
 /// Extract Ok and Error field types from a Result type definition.

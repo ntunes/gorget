@@ -1,0 +1,40 @@
+# Snag #35-followup: a throwing call as a DICT-literal VALUE in a return
+# position inside a propagating function. The value `to_n(sel)` must peel to
+# `int` so the literal types/lowers as `Dict[String, int]`.
+#
+# Regression: before the dict-value `expected_type` override/clear in
+# `lower_dict_literal`, the function's `Result[Dict[..], PErr]` return slot
+# leaked into the value lowering, suppressing `maybe_auto_propagate`'s peel —
+# the raw `Result` was memcpy'd into the dict's int slot (Tier 2a consume
+# violation for resource values; zero-init garbage for primitives). The
+# `92fa7619` baseline cleanly REJECTED this at type-check (the centralization
+# at `ca6fd527` made it type-check, exposing the lowering gap).
+#
+# The success + error paths use `match` (not `catch`) to keep the fixture
+# focused on the auto-prop fix — a `Dict` returned through a `catch` fallback
+# double-frees on a separate, pre-existing path (see TODO).
+from std.collections import Dict
+
+struct PErr:
+    String msg
+
+int to_n(int x) throws PErr:
+    if x < 0:
+        throw PErr("neg")
+    return x * 10
+
+Dict[String, int] build(int sel) throws PErr:
+    return {"a": to_n(sel), "b": 5}
+
+void main():
+    match build(3):
+        case Ok(d):
+            print(d.get("a").unwrap())
+            print(d.get("b").unwrap())
+        case Error(e):
+            print(-1)
+    match build(-1):
+        case Ok(d2):
+            print(d2.get("a").unwrap())
+        case Error(e2):
+            print(-99)

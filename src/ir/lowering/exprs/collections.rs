@@ -337,10 +337,24 @@ pub(super) fn lower_dict_literal(
     });
     // Lower first key BEFORE setting the value-override (keys can be any
     // type, not the value-type), then lower first value with the override.
+    //
+    // Override the per-value `expected_type` to the dict's VALUE type when
+    // known (`val_expected_override`), else CLEAR it (`None`). Clearing is
+    // load-bearing for `Result→T` auto-prop: a `return {"a": throws_call()}`
+    // from a `throws`/`Result` function sets `expected_type` to the
+    // function's `Result[Dict[..], E]` return slot (via `lower_return`),
+    // whose `collection_kind` is NOT a Map → `val_expected_override` is
+    // `None`. If we left `saved_expected` (the `Result`) in place while
+    // lowering the value, `maybe_auto_propagate`'s peel on the throwing-call
+    // value would be suppressed (it skips when the destination expects a
+    // `Result`), leaking the raw `Result` into the dict's `put` — a
+    // miscompile (Tier 2a consume-site violation for resource values, or a
+    // zero-init garbage value for primitives). Mirrors the `expected_type`
+    // clear in `lower_binary_op` (operators.rs) and the per-element override
+    // in `lower_array_literal`. Keys keep `saved_expected` (their type is
+    // unrelated to the value type).
     let first_key = lower_expr(ctx, builder, &pairs[0].0);
-    if let Some(vt) = val_expected_override {
-        ctx.func_state.expected_type = Some(vt);
-    }
+    ctx.func_state.expected_type = val_expected_override;
     let first_val = lower_expr(ctx, builder, &pairs[0].1);
     ctx.func_state.expected_type = saved_expected;
     let key_type = infer_operand_type_full(ctx, &first_key, builder);
@@ -380,9 +394,9 @@ pub(super) fn lower_dict_literal(
     insert_pair(ctx, builder, dict_local, dict_type, &put_fn, first_key, first_val, key_type, val_type);
     for (key_expr, val_expr) in &pairs[1..] {
         let k = lower_expr(ctx, builder, key_expr);
-        if let Some(vt) = val_expected_override {
-            ctx.func_state.expected_type = Some(vt);
-        }
+        // Same value-override / clear as the first pair (see above) so a
+        // throwing-call value in any pair auto-props consistently.
+        ctx.func_state.expected_type = val_expected_override;
         let v = lower_expr(ctx, builder, val_expr);
         ctx.func_state.expected_type = saved_expected;
         insert_pair(ctx, builder, dict_local, dict_type, &put_fn, k, v, key_type, val_type);
