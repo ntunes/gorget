@@ -107,7 +107,7 @@ with logic that drops the prior value first. Concrete shape (adapt names to matc
 
 ### Why this is correct (each gate RUN-traced)
 - **drop_reassign** (`t = Tracked("second")`): `t` is LoOwned, `Tracked` droppable, rhs_op = OpMove(fresh ctor temp), rhs_src != lid → `GIDropIfAlive(t)` fires (slot live) → `Tracked__drop` → **`drop first`**. ✓ Target flips to MATCH.
-- **string_reassign_loop** (`result = result + "\n" + next` in a while loop, then `return result`): rhs is a fresh concat (independent of result's old buffer), OpMove → drop old `result` each iter (fixes a latent leak), assign new. The final `result` is RETURNED — `SReturn` already move-zeroes it and excludes it from scope drops, so no double-free. Currently MATCHes; stays MATCH (and stops leaking). ✓
+- **string_reassign_loop** (`result = result + "\n" + next` in a while loop, then `return result`): `result` is bound from `lines.get(0).unwrap()` (an `Option[Ref]` getter → the local may stay **LoBorrowed**), so the ownership gate may SKIP the prior-value drop entirely — and even when it drops, the concat rhs is a fresh independent buffer. Either way: no double-free, the final `result` is RETURNED (SReturn move-zeroes + excludes it from scope drops). Currently MATCHes; **RUN-verified stays MATCH** under the fix. ✓ (The per-iteration mechanism is gate-skip, not drop — the conclusion holds regardless.)
 - **cow_param_alias_reassign** (`alias = alias + " world"`, `alias` is LoBorrowed CoW of param `s`): ownership gate → LoBorrowed → `drop_old=false`. No drop emitted; behaviour unchanged. ✓ (Critical safety case.)
 - **lifetime_reassign** (`s = "world"` after `s = "hello"`): `s` is LoOwned + droppable; rhs is a fresh string-literal temp. Drop old "hello" — but a string LITERAL is `cap==0` and `gorget_string_free` no-ops on `cap==0` (`if (s->cap == 0) { *s = (Str){0}; return; }`), so the drop is a safe no-op. Output `world` unchanged. ✓
 - **drop_reassign_after_move** (`tokens.push(current); current = ""`): the push's post-pass `GIMoveZero(current)` zeroes the slot; the reassign's `GIDropIfAlive(current)` memcmp-gate sees zeros → no-op (no double-free). ✓ (NOTE: this fixture is ALSO blocked by a SEPARATE pre-existing gap — for-over-String-chars doesn't iterate, logged in TODO — so it will NOT flip to MATCH from ③(a) alone. Verify the reassign-after-move SEMANTICS with a `/tmp`-style explicit-statement repro, not this fixture.)
@@ -131,7 +131,13 @@ Do NOT add explicit GIMoveZero for the reassign source — that would double-zer
 - The driver is force-rebuilt by the gate (`rm tests/fixtures/self_host_lowerer/driver{,.c}`). No other self-host dir is involved (the lowerer's parser/ast are symlinked to the typechecker; this change is in lower.gg only — confirm no other dir has an independent lower.gg copy that needs the same edit: `ls tests/fixtures/self_host_*/lower.gg`).
 
 ## Add a regression fixture + snapshot
-- `drop_reassign` becomes the canonical ③(a) win. After the fix, RUN it and confirm `drop first`/`alive: second`/`drop second`. If it MATCHes, ADD its snapshot to the lock-in net: write `tests/fixtures/runtime_snapshots/drop_reassign.out` with the oracle's exact stdout (so `self_host_runtime` keeps it green). (Check how other snapshots are added — they are the committed oracle stdout.)
+- `drop_reassign` becomes the canonical ③(a) win. After the fix, RUN it and confirm `drop first`/`alive: second`/`drop second`. If it MATCHes, ADD its snapshot to the lock-in net: write `tests/fixtures/runtime_snapshots/drop_reassign.out` with the oracle's exact stdout — confirmed content (trailing newline, matching `lifetime_reassign.out`'s format):
+  ```
+  drop first
+  alive: second
+  drop second
+  ```
+  (so `self_host_runtime` keeps it green; the snapshots ARE the committed oracle stdout). Verify the EXACT bytes against `cargo run -q -- run tests/fixtures/drop_reassign.gg` before writing.
 
 ## Gates (in order; STOP and report on any red)
 1. Force-rebuild driver: `rm -f tests/fixtures/self_host_lowerer/driver tests/fixtures/self_host_lowerer/driver.c`
