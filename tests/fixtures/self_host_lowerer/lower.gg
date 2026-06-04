@@ -5899,6 +5899,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # Vector/Deque → gorget_array_get, Dict → gorget_map_get.
             int eix_base = lower_expr(&ctx, *base_box, &gmod)
             int eix_idx = lower_expr(&ctx, *idx_box, &gmod)
+            eix_idx = maybe_auto_propagate(&ctx, eix_idx, &gmod)
             # Base type name, unwrapping a Ptr/MutPtr param/static base.
             int eix_base_tid = ctx.locals.get(eix_base).unwrap().type_id
             String eix_base_name = type_id_to_name(eix_base_tid, &gmod)
@@ -7748,6 +7749,8 @@ void lower_index_assign(LowerCtx &ctx, SpannedExpr base_expr, SpannedExpr idx_ex
     String base_tname = type_id_to_name(base_tid, &gmod)
     int idx = lower_expr(&ctx, idx_expr, &gmod)
     int val = lower_expr(&ctx, value_expr, &gmod)
+    idx = maybe_auto_propagate(&ctx, idx, &gmod)
+    val = maybe_auto_propagate(&ctx, val, &gmod)
     String setter = ""
     # Phase A typed read: dispatch on the receiver's collection_kind.
     # CkSet / CkHeap have no meaningful index-assign — fall through to lower_fail.
