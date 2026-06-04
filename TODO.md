@@ -1,8 +1,8 @@
 # TODO
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE THIS BLOCK IN PLACE each session; completed work → DONE.md, do NOT accumulate "superseded" blocks)
-**gorget-1 code tip `cd8f224d` (`git log -1` for the live tip — docs commits on top). RUNTIME PARITY =
-**407/940 = 43.3%** (was 375 at session start; the keystone-era chains +23 [static-index/3g/snag49c/3h-drop/String-trim/closure-2b-1/**KEYSTONE ③(b)**], then **Chain-2 self-host auto-prop +6**; denominator 930→940 = this session's B/C +8 + Rust-correctness +2 fixtures, the latter 2 not yet self-host-twinned [#6]). This session (2026-06-04): TODO.md hygiene `0c24c11f`
+**gorget-1 code tip `5320b872` (`git log -1` for the live tip — docs commits on top). RUNTIME PARITY =
+**408/940 = 43.4%** (was 375 at session start; the keystone-era chains +23 [static-index/3g/snag49c/3h-drop/String-trim/closure-2b-1/**KEYSTONE ③(b)**], then **Chain-2 self-host auto-prop +6**, then **KEYSTONE ③(a) drop-on-overwrite `5320b872` +1** [DONE.md]; denominator 930→940 = this session's B/C +8 + Rust-correctness +2 fixtures, the latter 2 not yet self-host-twinned [#6]). This session (2026-06-04): TODO.md hygiene `0c24c11f`
 (pruned 1280→718 lines, −44%), then 6 parity chains with full discipline —
 **Rust-oracle static-index-read `7939bb50` +1** (a static `Vector[struct]` index-read was dropped:
 `lower_index_access`'s Copy/Move place-guard didn't match the `GlobalRef` operand → materialize-to-local;
@@ -21,16 +21,16 @@ match-destructured owned Option/Result payloads via a structural-decompose `is_d
 wire-liveness post-pass — closing a latent `return r`/`v.push(r)` UAF a review pass caught; +1 regression
 fixture). All DONE.md. Denominator 930 (the +1 keystone fixture; an earlier owner
 merge added `.N` tuple-index + unwrap-on-non-Option/Result `gg check`, +4 fixtures).
-Live gates @ `cd8f224d`: `self_host_runtime` **407/0**, `runtime_diff` MATCH **407/940**,
+Live gates @ `5320b872`: `self_host_runtime` **408/0**, `runtime_diff` MATCH **408/940**,
 `lowerer_comparison` **971**, `c_emit_comparison` **902**, `bootstrap_fixed_point` GREEN, `cargo test
 --lib` 1072/0 (debug; the 2 `--release` `should_panic`-over-`debug_assert` reds are a pre-existing `src/`
-artifact, NOT our work). FULL `cargo test --test integration` **1197/0** last run at `6d11e238`
-(keystone ③(b) `65f5f591` [self-host] + gorget-js B/C Rust-`gg` auto-prop centralization `ca6fd527`/`d1999314`/`51f56c64`
-[+8 `throws_autoprop_*` fixtures] + Rust-`gg` correctness `6d11e238` [collection-literal-in-return + all-scalar-tuple
-typed-VarDecl-init, +2 fixtures] — all landed on top; the Rust-`gg`/`src/` fixes are parity-NEUTRAL for the self-host
-runtime number, the self-host gates above are unchanged by them).
-✅ Chain 2 self-host auto-prop twin (`77f16002`, +6 → 407/940) + ✅ `--clones` consolidation (`cd8f224d`, Rust-`gg`, default-silent + legacy flags retired + documented) BOTH LANDED (DONE.md). ⬅ **NEXT = ③(a) drop-on-overwrite** (the keystone continuation — deep/interlocking, its OWN scout→brief→≥3-review→executor→gate chain; oracle spec `assigns.rs:196-230` [drop old value AFTER computing RHS, before assign]; self-host `SAssign` `lower.gg:~7298` emits NO prior-value drop; ⚠ use the move-exclusion machinery `mark_local_moved`+`GIMoveZero` per the keystone-③(b) finding [self-host conditional-drop never zeros slot/resets flag after `GIDropIfAlive`]; foundations doc `docs/plans/keystone3_drop_model_foundations.md`). ⏭ QUEUED (TaskList #3/#6/#7): self-host Rust-correctness twin #6 (mimic `6d11e238` collection-literal-return + tuple-VarDecl); PERF lever-(c) #7 (liveness-gate `cow_materialize_collection_ref` → zero-clone dead-borrow RMW); then ③(c) user-Drop→auto-field-drop → ② closure-env → ① typed enum_category (serial self-host `lower.gg` cluster). Parallel-able (file-disjoint Rust `src/`): the deferred per-site RUNTIME clone-stats (CloneId plumbing); the `is_collection_assignment` element-type laxity (High Pri).
-**KEYSTONE ③(b) LANDED `65f5f591` (DONE.md, +5); ③(a) drop-on-overwrite is the keystone-continuation (NEXT).**
+artifact, NOT our work). FULL `cargo test --test integration` **1197/0** last run at `5320b872`
+(keystone ③(a) `5320b872` [self-host, this chain] on top of ③(b) `65f5f591` + gorget-js B/C Rust-`gg` auto-prop
+centralization `ca6fd527`/`d1999314`/`51f56c64` [+8 `throws_autoprop_*` fixtures] + Rust-`gg` correctness `6d11e238`
+[collection-literal-in-return + all-scalar-tuple typed-VarDecl-init, +2 fixtures]; the Rust-`gg`/`src/` fixes are
+parity-NEUTRAL for the self-host runtime number, the self-host gates above are unchanged by them).
+✅ Chain 2 self-host auto-prop twin (`77f16002`, +6 → 407/940) + ✅ `--clones` consolidation (`cd8f224d`) + ✅ **KEYSTONE ③(a) drop-on-overwrite (`5320b872`, +1 → 408/940)** ALL LANDED (DONE.md). ⬅ **NEXT = ③(c) user-Drop→auto-field-drop** (the keystone-continuation; serial self-host drop cluster, its OWN scout→brief→≥3-review→executor→gate chain). Oracle `drops.rs:307-346` (DropStrategy::Custom): unified `__gorget_dtor_Type` = DropGuardOpen → call user drop fn FIRST → `lower_field_drops` (per-field, AFTER the user fn) → close. **Self-host gap (deep-scouted, see TaskList #2):** `emit_struct_drops` (`lir_codegen.gg:4938`) emits ONLY field drops in the auto-glue body — it NEVER calls the user `<Type>__drop` method; AND for a user-Drop type whose method name collides with the auto-glue name, `fn_exists(<Type>__drop)=true` makes it SKIP generating the glue (`:4976`) so the drop SITE calls the user method alone → no field drops fire (CONFIRMED in `drop_reassign`: `Tracked__drop` = user method body only, no free of `self.label`). TWO parts: (1) verify/fix `drop_collision_types` population so user-Drop-with-droppable-fields types get the `__gorget_dtor_` rename + drop sites route to it; (2) make the collision-type body call user `<Type>__drop` FIRST then field drops (mirror `drops.rs:322-341`); check the enum path (`emit_enum_drops`) for symmetry. Canonical target `drop_struct_fields` (WRONG) + cluster `drop_match_partial_init`/`named_scope_drop` (WRONG) + `drop_raii`/`owning_param_drop_at_exit` (CC-FAIL) — RUN-verify each before briefing. ⏭ QUEUED (TaskList #6/#7): self-host Rust-correctness twin #6 (mimic `6d11e238` collection-literal-return + tuple-VarDecl); PERF lever-(c) #7 (liveness-gate `cow_materialize_collection_ref` → zero-clone dead-borrow RMW); then ③(c) → ② closure-env → ① typed enum_category (serial self-host `lower.gg`/`lir_codegen.gg` drop cluster). Parallel-able (file-disjoint Rust `src/`): the deferred per-site RUNTIME clone-stats (CloneId plumbing); the `is_collection_assignment` element-type laxity (High Pri). ⚠ Also NEW this chain (DONE.md): two pre-existing gaps discovered + logged to High Priority — for-over-String-chars yields 0 iterations (blocks `drop_reassign_after_move`); `leak_reassign` CC-FAIL type error.
+**KEYSTONE ③(a) LANDED `5320b872` (DONE.md, +1); ③(c) user-Drop→auto-field-drop is the keystone-continuation (NEXT).**
 The B/C gorget-js auto-prop regression (Rust `gg`) is under investigation by 2 scouts (bisect + architecture) —
 see the gorget-js block in High Priority. **The remaining self-host parity is concentrated in ONE
 architectural gap, not 3 parity chains: the self-host lacks a TYPED ownership/category subsystem, so it
@@ -43,7 +43,7 @@ it as ARCHITECTURE, not parity (briefing these as "small fixes" is what produced
 fixed-point double-free this session). Each phase = its own scout → brief → ≥3 reviews → executor →
 output-review → gate; `bootstrap_fixed_point` is the load-bearing safety net (it double-frees on a wrong
 drop model — proven).
-- **③ — typed `LocalOwnership`-aware drop/ownership model (IN PROGRESS: (b) ✅ DONE `65f5f591`; (a)+(c) REMAIN).**
+- **③ — typed `LocalOwnership`-aware drop/ownership model (IN PROGRESS: (b) ✅ DONE `65f5f591`; (a) ✅ DONE `5320b872`; (c) REMAINS — ⬅ NEXT).**
   This IS the CoW contract CLAUDE.md names ("Ownership at Consuming Positions — mechanical, not heuristic").
   The three parts INTERLOCK (fixing one in isolation double-frees another — PROVEN this session).
   - **(b) borrow-vs-own for destructured match payloads — ✅ LANDED `65f5f591` (+5, DONE.md).** `is_droppable_type`
@@ -53,16 +53,20 @@ drop model — proven).
     wire-liveness post-pass now drive move-vs-copy off the DROP axis (droppable Option/Result local at a consume
     → OpMove/OpClone, not OpCopy) — closing a latent `return r`/`v.push(r)` UAF a review pass caught. (The Rust
     Move+zero path was declined: the self-host's `OpMove` source-field-zero is deferred; borrow sidesteps it.)
-  - **(a) drop-on-overwrite — ⬅ NEXT (the keystone-continuation).** `SAssign` (`lower.gg:~7298`) emits `GIAssign`
-    with NO prior-value drop → `drop_reassign`/`drop_reassign_after_move` leak the overwritten owned value. Oracle
-    `assigns.rs:196-230`: drop the old value AFTER computing the RHS, BEFORE assigning — for enum/`DropStrategy::None`
-    emit an explicit `{Name}__drop` (via borrow_mut+call_void), else `drop`/`drop_if_alive` gated on `is_moved`.
-    ⚠ self-referential `s = s.trim()` needs the RHS materialized before the old-value drop. ⚠ Carry the (b)
-    finding: the self-host conditional-drop never zeros the slot/resets the drop-flag after `GIDropIfAlive`, so use
-    the move-exclusion machinery (`mark_local_moved`+`GIMoveZero`), not a raw block-scoped drop, where applicable.
-  - **(c) user-Drop→auto-field-drop sequence (`drop_struct_fields`).** Oracle `drops.rs:307-346`: DropGuardOpen →
-    call user drop fn (or unified `__gorget_dtor_Type`) → `lower_field_drops` (per-field drops, AFTER the user fn)
-    → close. The self-host's drop glue for a user `Drop` impl.
+  - **(a) drop-on-overwrite — ✅ LANDED `5320b872` (+1, DONE.md).** `SAssign`→`EIdentifier` plain-local arm
+    (`lower.gg:7471`) now drops `lid`'s prior value AFTER computing the RHS, BEFORE assigning: ownership-gated
+    (`is_droppable_type` + skip LoBorrowed/LoView), self-assign-guarded (`rhs_src==lid`), materialize-first for an
+    OpClone view-source (`s = s.trim()`), via `GIDropIfAlive` (memcmp-gated → no-op on a moved/zeroed slot). The
+    post-pass auto-emits the RHS-source `GIMoveZero`. `drop_reassign`→MATCH. (Brief
+    `docs/plans/keystone3a_drop_on_overwrite_brief.md`.)
+  - **(c) user-Drop→auto-field-drop sequence — ⬅ NEXT (`drop_struct_fields`).** Oracle `drops.rs:307-346`: DropGuardOpen →
+    call user drop fn (unified `__gorget_dtor_Type`) → `lower_field_drops` (per-field drops, AFTER the user fn)
+    → close. **Self-host gap (deep-scouted, TaskList #2):** `emit_struct_drops` (`lir_codegen.gg:4938`) emits ONLY
+    field drops in the auto-glue body, NEVER calling the user `<Type>__drop` method; and for a name-colliding
+    user-Drop type `fn_exists(<Type>__drop)=true` makes it SKIP the glue entirely (`:4976`) so the drop site calls
+    the user method alone (no field drops). TWO parts: fix `drop_collision_types` population + rename routing, AND
+    make the collision-type body call user-fn-THEN-field-drops (mirror `drops.rs:322-341`); check `emit_enum_drops`.
+    Cluster: `drop_struct_fields`/`drop_match_partial_init`/`named_scope_drop` (WRONG), `drop_raii`/`owning_param_drop_at_exit` (CC-FAIL).
   Unblocks the rest of the drop/leak tail (`leak_collection_*`/`leak_comprehensive`/`leak_known_patterns` + the
   pre-existing `Vector[Result/Option]` `GorgetArray.elem_drop` gap, below) + ② below.
 - **② NEXT (falls out of ③) — closure env as a first-class struct.** UNIFY the closure env into the SAME
