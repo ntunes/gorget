@@ -1562,10 +1562,14 @@ impl<'a> TypeChecker<'a> {
                             //     `Result[T,E] r = f()` capture form; mirrors
                             //     lowering's `expected_type is Result`);
                             //   - match scrutinee with Ok/Error/Some/None arms,
-                            //     `catch` inner, `rethrow` inner, and both
-                            //     operands of `==`/`!=` — flagged via the
-                            //     one-shot `suppress_auto_prop` (mirror of
+                            //     `catch` inner, `rethrow` inner — flagged via
+                            //     the one-shot `suppress_auto_prop` (mirror of
                             //     lowering's `func_state.suppress_auto_prop`).
+                            //     (No `==`/`!=` suppress: the peel is gated to
+                            //     *throws*-fn calls, so an explicit `Result`-
+                            //     returning fn — the only operand whose
+                            //     raw-vs-peeled compare differs — is never
+                            //     peeled, leaving `make(1) == make(1)` unchanged.)
                             // In a NON-propagating context the call cannot
                             // propagate, so it stays `Result[T, E]` and the
                             // user must handle it explicitly (`catch`, or a
