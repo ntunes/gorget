@@ -4643,17 +4643,19 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             fmt = fmt + "%f"
                             gsf_args.push(op_consume(&ctx, &gmod, aloc, CkFormatArg()))
                         elif aty == gs_tid:
-                            # String → %s with .data (the printf-style
-                            # emitter for gorget_string_format extracts
-                            # `.data` from GorgetString args).
-                            fmt = fmt + "%s"
+                            # String → %.*s with (int)len,data (the printf-style
+                            # emitter for gorget_string_format decomposes a
+                            # GorgetString value arg into `(int)len, data`).
+                            # %.*s bounds the read to len bytes — required for
+                            # non-NUL-terminated cap=0 views (trim/strip/slice).
+                            fmt = fmt + "%.*s"
                             gsf_args.push(op_consume(&ctx, &gmod, aloc, CkFormatArg()))
                         elif aty == BOOL_TYPE:
                             # Bool → "true"/"false" via gorget_bool_to_str.
                             int bstr = add_local(&ctx, gs_tid, NO_NAME)
                             Vector[Operand] bargs = [OpCopy(aloc)]
                             emit(&ctx, GICallExtern(bstr, "gorget_bool_to_str", bargs))
-                            fmt = fmt + "%s"
+                            fmt = fmt + "%.*s"
                             gsf_args.push(op_consume(&ctx, &gmod, bstr, CkFormatArg()))
                         else:
                             # Default: int64_t printf via %lld. Narrow ints
@@ -6606,9 +6608,12 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                 emit(&ctx, GICallExtern(bdst, "gorget_bool_to_str", [op_consume(&ctx, &gmod, val, CkFormatArg())]))
                 val = bdst
                 val_type = gs_tid
-                fmt = "%s\n"
+                fmt = "%.*s\n"
             if val_type == gs_tid:
-                fmt = "%s\n"
+                # %.*s + (int)len,data so a non-NUL-terminated cap=0 view
+                # (trim/strip/slice) prints exactly len bytes, not over-reading.
+                # The printf emitter decomposes the Str value arg (ai != 0).
+                fmt = "%.*s\n"
             Vector[Operand] printf_args = [OpConstStr(fmt), op_consume(&ctx, &gmod, val, CkFormatArg())]
             int pdst = add_local(&ctx, I32_TYPE, NO_NAME)
             emit(&ctx, GICallExtern(pdst, "printf", printf_args))

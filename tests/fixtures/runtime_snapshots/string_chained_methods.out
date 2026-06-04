@@ -1,0 +1,18 @@
+hello, world, foo
+hi world
+trim idem: true
+upper idem: true
+lower idem: true
+upper-lower: true
+a-b-c: ccc
+split-join roundtrip: true
+hello
+world
+foo_bar
+path: api/v1/users
+pad-trim: true
+trim shorter: true
+upper same len: true
+stripped: Hello
+upper starts: true
+replace contains: true

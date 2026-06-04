@@ -1,0 +1,32 @@
+original: Hello World
+upper: HELLO WORLD
+lower: hello world
+unchanged: true
+base: foo bar foo
+replaced: baz bar baz
+unchanged: true
+padded: [  hello  ]
+trimmed: [hello]
+unchanged: true
+csv after split: a,b,c
+unchanged: true
+full: abcdefgh
+sub: cde
+unchanged: true
+unit: ab
+repeated: ababab
+unchanged: true
+start: [  Hello World  ]
+step1: Hello World
+step2: hello world
+step3: hello gorget
+s1 ok: true
+s2 ok: true
+s3 ok: true
+a: hello
+b:  world
+c: hello world
+a ok: true
+b ok: true
+template: value: {}
+survived: true
