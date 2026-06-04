@@ -1,0 +1,80 @@
+# Drop keystone ③ — move-axis follows drop-axis at consume positions.
+#
+# An owned Result/Option LOCAL whose payload owns a resource (String) is now
+# whole-drop-registered at scope exit (keystone is_droppable_type decompose).
+# Consuming such a local (return it, push it into a collection) must MOVE — not
+# byte-copy — the value, then exclude the moved source from the scope-exit
+# whole-drop. Otherwise the consumer and the scope-exit drop both free the same
+# payload heap → use-after-free / double-free.
+#
+# Without the move-axis fix the candidate keystone produced a heap-use-after-
+# free + `free(): double free detected` abort on `return r`. This fixture
+# regression-protects both consume positions the language compiles end-to-end:
+# return-position (`return r`) and collection-put (`bag.push(elem)`). The
+# `mem_live()` check confirms the value is freed exactly once — no leak (the
+# negative of the double-free) and no per-iteration accumulation.
+from std.os import mem_live
+
+Result[String, String] make(int id):
+    if id > 0:
+        return Ok(f"value_{id}")
+    return Error(f"err_{id}")
+
+Option[String] make_opt(int id):
+    if id > 0:
+        return Some(f"opt_{id}")
+    return None
+
+# return-position consume: `r` is byte-copied to _0 AND whole-dropped here
+# without the move-axis fix → UAF. With the fix `r` is moved + move-zeroed.
+Result[String, String] passthrough(int id):
+    Result[String, String] r = make(id)
+    return r
+
+Option[String] passthrough_opt(int id):
+    Option[String] o = make_opt(id)
+    return o
+
+void main():
+    int baseline = mem_live()
+
+    # Section 1: return-position consume of an owned Result local.
+    int i = 0
+    while i < 200:
+        Result[String, String] rr = passthrough(i)
+        match rr:
+            case Ok(v):
+                int _len = v.len()
+            case Error(e):
+                int _len = e.len()
+        i = i + 1
+
+    # Section 2: return-position consume of an owned Option local.
+    i = 0
+    while i < 200:
+        Option[String] oo = passthrough_opt(i)
+        match oo:
+            case Some(s):
+                int _len = s.len()
+            case None:
+                pass
+        i = i + 1
+
+    # Section 3: collection-put-position consume — push an owned Option local
+    # into a Vector. The source `elem` is dead after the push.
+    i = 0
+    while i < 200:
+        Vector[Option[String]] bag = []
+        Option[String] elem = make_opt(i)
+        bag.push(elem)
+        Option[String] back = bag.get(0).unwrap()
+        match back:
+            case Some(s):
+                int _len = s.len()
+            case None:
+                pass
+        i = i + 1
+
+    int leaked = mem_live() - baseline
+    print(f"leaked={leaked > 0}")
+    print("done")

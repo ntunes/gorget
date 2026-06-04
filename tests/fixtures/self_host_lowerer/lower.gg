@@ -1541,6 +1541,24 @@ Operand op_consume(LowerCtx &ctx, GirModule &gmod, int lid, ConsumeKind kind):
             # these too.
             return OpCopy(lid)
     if not is_resource_type_name(tname, &gmod):
+        # Move-axis follows drop-axis (drop keystone ③ alignment). A mono'd
+        # Option/Result LOCAL whose payload owns a resource is NOT a resource
+        # by `is_resource_type_name` (it's deliberately kept out of
+        # optionlike_resource_types so the by-value ABI is unchanged) — yet
+        # `is_droppable_type` registers it for whole-drop at scope exit. If we
+        # byte-copied it out here (OpCopy) the consumer would own the SAME heap
+        # the scope-exit whole-drop frees → UAF / double-free. So when the drop
+        # axis owns this value, the move axis must too: route it exactly like
+        # the resource path below (borrow/view → clone, owned → move). The
+        # oracle drives move-vs-copy off `needs_drop` uniformly; this mirrors it.
+        if is_droppable_type(tid, &gmod):
+            match loc.ownership:
+                case LoBorrowed():
+                    return OpClone(lid)
+                case LoView():
+                    return OpClone(lid)
+                else:
+                    return OpMove(lid)
         return OpCopy(lid)
     # Resource source at a consume position: pick mode by ownership.
     # a-5 (clone-on-borrow) — WIRED. We only reach here for a genuine
@@ -1662,6 +1680,33 @@ Operand decide_operand_at_consuming_arg(LowerCtx &ctx, GirModule &gmod, int src_
             return OpCopy(src_lid)
         case GtNamed(tname):
             if not is_resource_type_name(tname, &gmod):
+                # Move-axis follows drop-axis (drop keystone ③ alignment),
+                # mirroring op_consume's same-named branch. A mono'd
+                # Option/Result LOCAL whose payload owns a resource is droppable
+                # (registered for whole-drop at scope exit) but is NOT
+                # resource-named (kept out of optionlike_resource_types to
+                # preserve the by-value ABI). This post-pass RE-DECIDES the mode
+                # for every OpMove/OpClone operand op_consume produced, so it
+                # MUST recognise the same set — otherwise it demotes the
+                # consume-position OpMove back to OpCopy (byte-copy out) while
+                # the source stays whole-drop-registered → UAF / double-free.
+                # Routing it as OpMove here also triggers the caller's
+                # mark_local_moved + GIMoveZero, which is exactly the scope-exit
+                # drop exclusion we need (so the var-decl/assign/push/field-write
+                # positions get the same exclusion SReturn wires explicitly).
+                GirLocal dloc = ctx.locals.get(src_lid).unwrap()
+                if is_droppable_type(dloc.type_id, &gmod):
+                    match dloc.ownership:
+                        case LoOwned():
+                            if is_last_use:
+                                return OpMove(src_lid)
+                            return OpClone(src_lid)
+                        case LoBorrowed():
+                            return OpClone(src_lid)
+                        case LoView():
+                            return OpClone(src_lid)
+                        else:
+                            return OpClone(src_lid)
                 return OpCopy(src_lid)
             # Case 3: by-value resource. Branch on ownership.
             # LoOwned-strict: only true-owned slots are move-eligible
