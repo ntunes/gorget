@@ -5958,15 +5958,20 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             #       lir_lower scalar-deref ILoad derefs the void*.
             #   (b) runtime-RESOURCE elem (String/Array/Map/…): GtPtr(elem)
             #       LoBorrowed — op_consume clones at owning boundaries.
-            #   (c) NON-resource non-scalar elem (a plain struct): FALL
-            #       BACK to the I64/0 stub — a real void* read here cc-fails
-            #       `incompatible types from void*`.
+            #   (c) NON-resource non-scalar elem (a plain struct): BARE
+            #       element type BY VALUE — lir_lower emits an aggregate
+            #       `*(StructT*)(void*)` copy-out for the raw
+            #       gorget_array_get/gorget_map_get getter.
+            #   (d) truly-UNREGISTERED elem (< 0): FALL BACK to the I64/0
+            #       stub.
             int idst = -1
             if eix_elem_tid < PRIM_COUNT:
                 idst = add_local(&ctx, eix_elem_tid, NO_NAME)
             elif is_resource_type_name(eix_elem_norm, &gmod):
                 int eix_ptr_tid = register_ptr(&gmod, eix_elem_tid)
                 idst = add_local_with(&ctx, eix_ptr_tid, NO_NAME, LoBorrowed(), BoNone())
+            elif eix_elem_tid >= 0:
+                idst = add_local(&ctx, eix_elem_tid, NO_NAME)
             else:
                 idst = add_local(&ctx, I64_TYPE, NO_NAME)
                 emit(&ctx, GIAssign(idst, OpConstI64(0)))

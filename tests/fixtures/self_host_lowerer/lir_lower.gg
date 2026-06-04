@@ -3307,10 +3307,28 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                     # as if it were the int — the `bb = &block_map[i]` bug).
                     bool is_ptr_ret = returns_ptr_to_element(call_name)
                     bool slot_is_ptr_kind = (dst_slot_ty == LT_PTR) or (dst_slot_ty >= LT_PTR_TO_BASE and dst_slot_ty < LT_STRUCT_BASE)
+                    # EIndex-exclusive raw getter into a by-value struct dst
+                    # (lower.gg EIndex case (c)). The getter returns a void*
+                    # pointing at the element; the GIR caller typed the result
+                    # slot as the bare aggregate struct, so dereference the
+                    # void* with an aggregate `*(StructT*)(void*)` copy-out
+                    # (ILoad codegen at lir_codegen.gg:3179) before the
+                    # SlotStore — a plain SlotStore of the void* into a struct
+                    # slot is the bug this fixes. Keyed on the UNMAPPED
+                    # `func_name` (NOT `call_name`): only the EIndex arm emits
+                    # the raw `gorget_array_get`/`gorget_map_get` symbols —
+                    # `Vector.get()` arrives as `gorget_array_safe_get` and
+                    # `Dict.get()` arrives mapped from `Dict__K__V__get`, so
+                    # this never catches a `.get()`/`.unwrap()` Option dst.
+                    bool eindex_raw_getter = (func_name == "gorget_array_get") or (func_name == "gorget_map_get")
                     if is_ptr_ret and lir_is_scalar(dst_slot_ty) and not slot_is_ptr_kind:
                         int loaded = lir_fn_next_value(&f)
                         lir_push_inst(&f, bb, ILoad(loaded, dst, dst_slot_ty))
                         lir_push_inst(&f, bb, ISlotStore(dst_slot, loaded, false))
+                    elif eindex_raw_getter and lir_is_aggregate(dst_slot_ty):
+                        int agg_loaded = lir_fn_next_value(&f)
+                        lir_push_inst(&f, bb, ILoad(agg_loaded, dst, dst_slot_ty))
+                        lir_push_inst(&f, bb, ISlotStore(dst_slot, agg_loaded, false))
                     else:
                         lir_push_inst(&f, bb, ISlotStore(dst_slot, dst, false))
 
