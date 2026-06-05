@@ -3483,6 +3483,37 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                     lir_push_inst(&f, bb, ISlotAddr(dia_addr, dia_slot))
                     # kind encoding: 0=Bool guard, kind-1=byte size for NonZero
                     lir_push_inst(&f, bb, IDropGuardOpen(dia_size + 1, dia_addr))
+                    # ② closure ENV-FIELD leak fix — for a resource/CoW-capturing
+                    # `GorgetClosure` value, `gorget_closure_free` frees only the
+                    # env BLOCK, leaking the captured String/Vector/struct field
+                    # buffers. The auto-generated `__Closure_N__drop(env*)` frees
+                    # those, but is never invoked. Route it here: a recorded
+                    # `closure_env_type` entry (gated at the make-site to a
+                    # genuinely-resource-owning env) + a generated `__Closure_N`
+                    # drop => emit `__Closure_N__drop(closure.env)` BEFORE
+                    # `gorget_closure_free` (which zeroes env). The entry presence
+                    # gate is load-bearing: a stub / no-capture closure has a NULL
+                    # env + NO entry, so the env-load+dtor is never emitted for it
+                    # (no NULL deref). Keyed by `f.name + NUL + local_id` (the
+                    # per-function composite — bare ints collide across fns).
+                    if dia_tn == "GorgetClosure":
+                        String cevt_key = f.name + "\0" + int_to_str(local_id)
+                        if gmod.closure_env_type.contains(cevt_key):
+                            String cevt_env_tn = gmod.closure_env_type.get(cevt_key).unwrap()
+                            if m.type_drop_fns.contains(cevt_env_tn):
+                                String cevt_drop_fn = m.type_drop_fns.get(cevt_env_tn).unwrap().drop_fn_name
+                                int gc_sid = sr.get("GorgetClosure").unwrap_or(-1)
+                                if gc_sid >= 0:
+                                    # closure.env is field 1 ({fn_ptr@0, env@1}).
+                                    # `dia_addr` is `&slot` (the GorgetClosure*).
+                                    int cevt_fptr = lir_fn_next_value(&f)
+                                    lir_push_inst(&f, bb, IFieldPtr(cevt_fptr, dia_addr, gc_sid, 1))
+                                    int cevt_env = lir_fn_next_value(&f)
+                                    lir_push_inst(&f, bb, ILoad(cevt_env, cevt_fptr, LT_PTR))
+                                    Vector[int] cevt_args = []
+                                    cevt_args.push(cevt_env)
+                                    Vector[int] cevt_abis = []
+                                    lir_push_inst(&f, bb, ICallExtern(-1, cevt_drop_fn, cevt_args, cevt_drop_fn, cevt_abis))
                     Vector[int] dia_args = []
                     dia_args.push(dia_addr)
                     Vector[int] dia_abis = []

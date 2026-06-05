@@ -534,6 +534,22 @@ struct GirModule:
     # `enum_category_of`. Single source of truth, one accessor — Layering
     # rule 3; CLAUDE.md "No name matching". Appended AT END.
     Dict[int, EnumCategory] enum_category
+    # ② closure ENV-FIELD leak fix: maps `<fn_name>\0<int_to_str(local_id)>`
+    # → the closure's `__Closure_<cid>` env-type name, for a resource/CoW-
+    # capturing closure VALUE local (a `GorgetClosure` whose heap env owns
+    # String/Vector/struct field SNAPSHOTS). The make-site records it under
+    # the GorgetClosure value's `cdst` local id (only when the env owns ≥1
+    # resource field); the SVarDecl MoveDirect arm copies the entry onto the
+    # fresh `var_local` it mints (the dropped local). The `GorgetClosure`
+    # `GIDropIfAlive` lowering reads it: present + `__Closure_N ∈ type_drop_fns`
+    # ⇒ emit `__Closure_N__drop(closure.env)` BEFORE `gorget_closure_free`
+    # (which frees only the env BLOCK, leaking the field buffers — the
+    # auto-generated per-field `__Closure_N__drop` was never invoked). KEY is
+    # composite per-function (GIR local-ids are per-function — a bare-int key
+    # would COLLIDE across functions); this reuses the exact `closure_var_cids`
+    # key idiom. Single source of truth, one accessor — Layering rule 3.
+    # Appended AT END.
+    Dict[String, String] closure_env_type
 
 # ── Helpers ──────────────────────────────────────────────
 
