@@ -8883,6 +8883,16 @@ int lookup_ctor_field_type(String enum_name, String variant_name, int field_idx,
             if variant_name == "Error" and field_idx == 0:
                 return ec.err_type
             return I64_TYPE
+        # Channel MISS on an `Option__`/`Result__`-named enum: its mint site
+        # failed to `record_enum_category` (a completeness bug — the payload
+        # is now mistyped as I64). Surface it loudly via the idiomatic
+        # non-fatal `diag_bug` (a `/* [bug] … */` in the emitted C), not a
+        # silent sentinel. The fix is to record at the new mint — never to
+        # re-introduce a name-split here (CLAUDE.md "No name matching"). This
+        # rides the existing semantic `starts_with` gate above, so it fires
+        # ONLY on a genuine miss. (`option_result_field_store` was one such
+        # miss, caught during development.)
+        diag_bug("lookup_ctor_field_type", "Option__/Result__ channel miss for '" + enum_name + "' — mint missed record_enum_category; payload mistyped as I64 (WRONG)")
         return I64_TYPE
     String found_field_type = ""
     if gmod.type_infos.contains(enum_name):
@@ -8935,6 +8945,16 @@ ResultPayloadTypes result_payload_types(int result_tid, GirModule &gmod):
     EnumCategory ec = enum_category_of(&gmod, enum_tid)
     if ec.category == ENUM_CAT_RESULT:
         return ResultPayloadTypes(ec.ok_type, ec.err_type)
+    # Channel MISS. A non-Result tid here is a legitimate no-op (catch /
+    # rethrow are semantically Result-only, but the self-host's own
+    # inference can still hand us a placeholder tid). A `Result__`-named
+    # enum reaching here, though, means its mint missed
+    # `record_enum_category` — Ok/Error payloads silently mistyped as I64.
+    # Surface THAT loudly; the name test gates only the diagnostic, never
+    # the (I64,I64) result (so it stays a diagnostic, not a semantic
+    # name-match).
+    if type_id_to_name(enum_tid, &gmod).starts_with("Result__"):
+        diag_bug("result_payload_types", "Result__ channel miss — mint missed record_enum_category; Ok/Error payloads mistyped as I64 (WRONG)")
     return ResultPayloadTypes(I64_TYPE, I64_TYPE)
 
 # Emit the registered `on error:` cleanup blocks, LIFO, into the current
