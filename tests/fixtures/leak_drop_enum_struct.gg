@@ -1,0 +1,91 @@
+# Leak test for the self-host's OWN drop codegen (#12):
+#   1. user-Drop ENUM whose variant payload owns a resource (String) —
+#      the auto variant-payload free was SKIPPED because the user `{T}__drop`
+#      shadowed the auto glue → the String payload leaked (128B class).
+#   2. user-Drop STRUCT pair (Outer has an Inner field; both user-Drop).
+#      Field-drop resolution is hash-order-sensitive: if Outer is lowered
+#      before Inner, `Inner__drop` resolved to the bare user body (no inner-
+#      field frees) → the Inner String leaked (64B class).
+#
+# Neither user `drop` body FREES the payload (the auto switch/field-drop
+# does that — a free here would double-free). The struct body READS a field
+# (self.tag); the enum body reads only a primitive (see its note re: a
+# separate match-bind-clone gap).
+#
+# Asserts leaked=false: alloc/free must balance after the auto glue runs.
+from std.os import mem_live
+
+# ── user-Drop ENUM with a resource payload ──────────────────────
+enum Payload:
+    Text(String)
+    Tag(String)
+
+equip Payload with Drop:
+    void drop(!self):
+        # User Drop body: must run FIRST (before the auto variant-switch
+        # frees the String payload), and must NOT free the payload itself
+        # (the switch does that — freeing here would double-free). It reads
+        # only a primitive so the payload is untouched by the user body.
+        #
+        # NOTE: it deliberately does NOT `match self` to read the inner
+        # String — a separate self-host gap (match-arm binding of a resource
+        # payload from an owned/`!self` scrutinee CLONES the payload but never
+        # drops the bound clone → leak) would mask this #12 test. Logged in
+        # TODO.md ("match-arm resource bind leak"). Reading a primitive here
+        # keeps the fixture isolated to #12 (enum variant-payload auto-drop).
+        int _marker = 1
+
+# ── user-Drop STRUCT pair, Outer DECLARED BEFORE Inner (order hazard) ──
+# `type_infos.keys()` is insertion-order (= declaration order). Declaring
+# Outer first forces Pass-1 to resolve Outer.inner's field-drop BEFORE
+# Inner is registered in drop_collision_types — without the (e) pre-pass
+# it resolves to the bare user `Inner__drop` (no inner-field frees) → leak.
+struct Outer:
+    Inner inner
+    String tag
+
+equip Outer with Drop:
+    void drop(!self):
+        String t = self.tag
+        int _n = t.len()
+
+struct Inner:
+    String label
+
+equip Inner with Drop:
+    void drop(!self):
+        String l = self.label
+        int _n = l.len()
+
+void main():
+    int baseline = mem_live()
+
+    # Exercise the user-Drop enum (both variants): build → drop at scope
+    # end. Each drop runs `__gorget_dtor_Payload` = user body FIRST, then the
+    # variant switch that frees the String payload. Pre-#12 the switch was
+    # SKIPPED (the user `Payload__drop` shadowed the auto glue) → the String
+    # leaked (128B class). No `match` here — see the Drop-body note above.
+    int i = 0
+    while i < 200:
+        Payload p = Payload.Text(f"text_{i}")
+        i = i + 1
+
+    i = 0
+    while i < 200:
+        Payload p2 = Payload.Tag(f"tag_{i}")
+        i = i + 1
+
+    # Exercise the user-Drop struct pair: Outer owns Inner (String) + tag.
+    # Each Outer drop runs `__gorget_dtor_Outer` → must call
+    # `__gorget_dtor_Inner` (NOT bare `Inner__drop`) so Inner.label is freed.
+    # Pre-#12 (Outer declared before Inner) it resolved to bare `Inner__drop`
+    # → Inner.label leaked (64B class).
+    i = 0
+    while i < 200:
+        Outer o = Outer(Inner(f"inner_{i}"), f"tag_{i}")
+        int _ln = o.tag.len()
+        i = i + 1
+
+    int leaked = mem_live() - baseline
+    print(f"leaked={leaked > 0}")
+    print("done")

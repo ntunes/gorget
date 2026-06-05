@@ -3898,16 +3898,39 @@ void populate_drop_metadata(LirModule &m, GirModule &gmod):
         if variant_drops.len() > 0 or is_resource_enum:
             String tname = type_name
             m.recursive_drop_enums.put(tname, variant_drops)
-            # Also add to type_drop_fns. The enum's OWN auto-glue drop name is
-            # ALWAYS `{T}__drop` (unguarded) — mirrors Rust `lower/mod.rs:737`
-            # and the unguarded enum emit sites (`emit_enum_drops`,
-            # lir_codegen.gg:4991/5000). Do NOT apply the struct-branch collision
-            # guard here: the DCE seed reads this `drop_fn_name`
-            # (lir_codegen.gg:1083-1084) while emit uses `{T}__drop`; guarding here
-            # would mismatch them and DCE-prune the real drop fn. The variant-
-            # PAYLOAD field types ARE collision-guarded — see `drop_fn_for_type`
-            # above (matches Rust mod.rs:714-719) — but the enum's own name is not.
+            # ③(c)/#12: detect a user `Drop` impl — a 1-param GIR fn named
+            # `{type_name}__drop` (the `!self` destructor). >1 params = a
+            # non-destructor method (handled by the 2-param collision loop);
+            # 0/absent = no user Drop. (REUSES Pass-1's 1-param scan shape.)
+            # A user-Drop enum's `{T}__drop` C symbol IS the user body, so the
+            # auto variant-payload-drop glue must take the mangled name
+            # `__gorget_dtor_{T}` — otherwise `emit_enum_drops`' `fn_exists`
+            # gate sees the user `{T}__drop` and SKIPS emitting the auto glue,
+            # leaking the variant payload. The `drop_collision_types` entry is
+            # already seeded by the user-Drop pre-pass in `lower_gir_to_lir`
+            # (so field/variant SITES route to the glue via `drop_fn_for_type`);
+            # here we record `user_drop_fn` (so `emit_enum_drops` runs the user
+            # body FIRST, then the switch) and the mangled `drop_fn_name`.
+            #
+            # Strategy B keeps BOTH the DCE-seed name (lir_codegen.gg enum DCE
+            # loop) AND the emit name as `__gorget_dtor_{T}`, so they cannot
+            # mismatch — mirrors `emit_struct_drops`' user-Drop path. Mirrors
+            # Rust `lower/mod.rs:680-686`. The clone name is unchanged
+            # (`{Enum}__clone`, flowing from `emit_enum_clones`); `drop_to_clone_fn`
+            # maps `__gorget_dtor_` → `{Enum}__clone` too.
+            String user_drop = ""
+            int uf = 0
+            while uf < gmod.functions.len():
+                GirFunction gf = gmod.functions.get(uf).unwrap()
+                if gf.name == type_name + "__drop" and gf.param_types.len() == 1:
+                    user_drop = gf.name
+                uf += 1
             String drop_fn_name = type_name + "__drop"
+            if m.drop_collision_types.contains(type_name) or user_drop != "":
+                drop_fn_name = "__gorget_dtor_" + type_name
+                # Route variant-drop SITES to the renamed glue (idempotent —
+                # the pre-pass already seeded this for user-Drop types).
+                m.drop_collision_types.put(type_name, true)
             Vector[FieldDrop] no_fd = []
             Vector[EnumVariantDrop] evd_copy = []
             int di = 0
@@ -3915,7 +3938,7 @@ void populate_drop_metadata(LirModule &m, GirModule &gmod):
                 EnumVariantDrop evd = variant_drops.get(di).unwrap()
                 evd_copy.push(EnumVariantDrop(evd.variant_index, evd.variant_name, evd.field_name, evd.drop_fn_name, evd.field_type_name))
                 di += 1
-            m.type_drop_fns.put(type_name, TypeDropInfo(drop_fn_name, no_fd, "", evd_copy))
+            m.type_drop_fns.put(type_name, TypeDropInfo(drop_fn_name, no_fd, user_drop, evd_copy))
         ki += 1
 
 # ── Module lowering (main entry point) ──────────────────────
@@ -4001,6 +4024,33 @@ LirModule lower_gir_to_lir(GirModule &gmod):
             if gmod.type_infos.contains(coll_ty):
                 m.drop_collision_types.put(coll_ty, true)
         cf += 1
+
+    # ── User-`Drop` impl pre-pass (#12) ─────────────────────────
+    # A user `T.drop(!self)` impl emits the plain `T__drop(self)` C symbol
+    # (1 param), which COLLIDES with the auto drop-glue name `T__drop` — the
+    # same collision as the 2-param method loop above, but for the
+    # destructor `drop` itself. Populate `drop_collision_types` for EVERY
+    # such struct AND enum here, BEFORE `populate_drop_metadata` Pass 1/2 run.
+    #
+    # WHY a pre-pass and not per-row detection: Pass 1/2 resolve a containing
+    # type's FIELD/VARIANT drop names via `drop_fn_for_type`, which reads
+    # `drop_collision_types`. `type_infos.keys()` is insertion-order, so an
+    # `Outer { Inner field }` declared before `Inner` would resolve
+    # `Outer.inner`'s drop to the bare user `Inner__drop` (no inner-field
+    # frees) → leak. Seeding ALL user-Drop types up front makes field-drop
+    # resolution order-INDEPENDENT (covers struct-field-of-enum,
+    # enum-payload-of-struct, and nested holes). Typed gate
+    # `type_infos.contains(T)` — no name-shape heuristic. Mirrors the 2-param
+    # loop's single-source-of-truth discipline (24-layering-discipline.md).
+    int udf = 0
+    while udf < gmod.functions.len():
+        GirFunction gf = gmod.functions.get(udf).unwrap()
+        if gf.name.ends_with("__drop") and gf.param_types.len() == 1:
+            # Strip the trailing "__drop" (6 bytes) to recover the type name.
+            String drop_ty = gf.name.slice(0, gf.name.len() - 6)
+            if gmod.type_infos.contains(drop_ty):
+                m.drop_collision_types.put(drop_ty, true)
+        udf += 1
 
     # Lower user-defined type definitions
     lower_type_defs(&gmod, &m, &sr)

@@ -1096,13 +1096,20 @@ Vector[bool] compute_reachable_fns(LirModule &m):
     while dek < drop_e_keys.len():
         String ekey = drop_e_keys.get(dek).unwrap()
         String den = ekey + "__drop"
+        String uden = ""        # #12: the user Drop fn called from __gorget_dtor_{Enum}
         if m.type_drop_fns.contains(ekey):
             den = m.type_drop_fns.get(ekey).unwrap().drop_fn_name
+            uden = m.type_drop_fns.get(ekey).unwrap().user_drop_fn
         String cen = ekey + "__clone"
         int dei = 0
         while dei < n:
             String fname_e = m.functions.get(dei).unwrap().name
-            if (fname_e == den or fname_e == cen) and not reachable.get(dei).unwrap():
+            # #12: also seed the user `{Enum}__drop` — after the fix it is
+            # called ONLY from inside the generated `__gorget_dtor_{Enum}` glue
+            # via a C string (emit_enum_drops' `udf_e + "(self);"`), invisible
+            # to the LIR call graph, so DCE would prune it → undefined
+            # reference. Mirror the struct DCE loop above + Rust optimize.rs.
+            if (fname_e == den or fname_e == cen or (uden != "" and fname_e == uden)) and not reachable.get(dei).unwrap():
                 reachable.set(dei, true)
                 worklist.push(dei)
             dei += 1
@@ -4990,7 +4997,14 @@ String emit_all_drop_clone_forward_decls(LirModule &m, Vector[String] &sn):
     int k = 0
     while k < ed_keys.len():
         String tn = ed_keys.get(k).unwrap()
+        # #12: a user-Drop enum's auto variant-payload glue is the mangled
+        # `__gorget_dtor_{T}` (the plain `{T}__drop` is the user body). Declare
+        # the SAME name emit_enum_drops defines, so a caller earlier in the C
+        # file resolves it. Keep the enum signature shape `void <name>(void* __p)`
+        # — do NOT use the struct loop's `static inline void <name>(cname* self)`.
         String drop_name = tn + "__drop"
+        if m.drop_collision_types.contains(tn):
+            drop_name = "__gorget_dtor_" + tn
         if not fn_exists(drop_name, &m) and not m.recursive_drop_structs.contains(tn):
             out = out + "void " + drop_name + "(void* __p);\n"
         k += 1
@@ -5132,7 +5146,16 @@ String emit_enum_drops(LirModule &m, Vector[String] &sn):
     int kf = 0
     while kf < keys.len():
         String type_name_f = keys.get(kf).unwrap()
+        # #12: a user-Drop enum's plain `{T}__drop` symbol belongs to the
+        # user body, so the auto variant-payload glue is named
+        # `__gorget_dtor_{T}` (collision-aware, mirroring emit_struct_drops).
+        # Forward-declare the SAME name the definition below emits — declaring
+        # `{T}__drop` here would conflict with the user fn's signature. Keep
+        # the enum fwd-decl signature shape `void <name>(void* __p)` (NOT the
+        # struct loop's `static inline void <name>(cname* self)`).
         String drop_name_f = type_name_f + "__drop"
+        if m.drop_collision_types.contains(type_name_f):
+            drop_name_f = "__gorget_dtor_" + type_name_f
         if not fn_exists(drop_name_f, &m) and not m.recursive_drop_structs.contains(type_name_f):
             out = out + "void " + drop_name_f + "(void* __p);\n"
         kf += 1
@@ -5141,7 +5164,13 @@ String emit_enum_drops(LirModule &m, Vector[String] &sn):
     int ki = 0
     while ki < keys.len():
         String type_name = keys.get(ki).unwrap()
+        # #12: collision-aware glue name. BOTH the name AND the fn_exists
+        # skip-gate below must use it — if the gate checked `{T}__drop` it
+        # would find the user body, `continue`, and SKIP emitting the auto
+        # variant-payload-drop glue → the payload leaks.
         String drop_name = type_name + "__drop"
+        if m.drop_collision_types.contains(type_name):
+            drop_name = "__gorget_dtor_" + type_name
         if fn_exists(drop_name, &m):
             ki += 1
             continue
@@ -5154,6 +5183,16 @@ String emit_enum_drops(LirModule &m, Vector[String] &sn):
 
         out = out + "void " + drop_name + "(void* __p) {\n"
         out = out + "    " + cname + "* self = (" + cname + "*)__p;\n"
+        # #12: a user Drop impl runs FIRST, then the variant-payload switch
+        # (mirror emit_struct_drops, which emits `udf(self)` then field drops).
+        # user_drop_fn is recorded on TypeDropInfo by populate_drop_metadata's
+        # Pass 2. Its C signature is `void {T}__drop(void* __p0)`; `self`
+        # (a cname*) casts implicitly to the void* param.
+        String udf_e = ""
+        if m.type_drop_fns.contains(type_name):
+            udf_e = m.type_drop_fns.get(type_name).unwrap().user_drop_fn
+        if udf_e != "":
+            out = out + "    " + udf_e + "(self);\n"
         out = out + "    switch (self->tag) {\n"
 
         # Group by variant index
