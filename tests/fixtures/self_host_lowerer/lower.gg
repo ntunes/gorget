@@ -4895,6 +4895,14 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             int bstr = add_local(&ctx, gs_tid, NO_NAME)
                             Vector[Operand] bargs = [OpCopy(aloc)]
                             emit(&ctx, GICallExtern(bstr, "gorget_bool_to_str", bargs))
+                            # FRESH-OWNED-TEMP drop registration (#7-style):
+                            # gorget_bool_to_str allocates a fresh `GorgetString`
+                            # (LoOwned) that is only BORROWED by the surrounding
+                            # gorget_string_format below (CkFormatArg → OpBorrow),
+                            # so it is orphaned and leaks. Register at creation so
+                            # the scope-exit GIDropIfAlive frees it once. Borrow-
+                            # only consume ⇒ never moved ⇒ no double-free.
+                            register_local_for_drop(&ctx, bstr, gs_tid, &gmod)
                             fmt = fmt + "%.*s"
                             gsf_args.push(op_consume(&ctx, &gmod, bstr, CkFormatArg()))
                         else:
@@ -4916,6 +4924,20 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             gsf_args.set(0, OpConstStr(fmt))
             int gsdst = add_local(&ctx, gs_tid, NO_NAME)
             emit(&ctx, GICallExtern(gsdst, "gorget_string_format", gsf_args))
+            # FRESH-OWNED-TEMP drop registration (#7-style): gorget_string_format
+            # allocates a fresh `GorgetString` (LoOwned). When this f-string
+            # EXPRESSION flows into a print/format arg it is BORROWED only
+            # (CkFormatArg → is_consume_kind=false → OpBorrow), so the assembled
+            # buffer is orphaned and leaks (O(1) end-of-program residue per
+            # f-string). Registering at creation makes the scope-exit
+            # GIDropIfAlive free it exactly once. SAFE-BY-CONSTRUCTION: when the
+            # result is instead MOVED into a binding (`String s = f"…"`) or
+            # RETURNED, op_consume/wire-liveness emits OpMove → GIMoveZero →
+            # drop_elab marks the slot uninitialized and statically deletes the
+            # guard, so no double-free. GorgetString is a runtime resource
+            # (LoOwned, droppable) → register_local_for_drop's
+            # LoView/LoBorrowed/non-droppable gates pass it through.
+            register_local_for_drop(&ctx, gsdst, gs_tid, &gmod)
             return gsdst
         case EIdentifier(name):
             if nl_contains(&ctx, name):
@@ -6987,6 +7009,13 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                 # emits printf("%lld\n", true) → "1".
                 int bdst = add_local(&ctx, gs_tid, NO_NAME)
                 emit(&ctx, GICallExtern(bdst, "gorget_bool_to_str", [op_consume(&ctx, &gmod, val, CkFormatArg())]))
+                # FRESH-OWNED-TEMP drop registration (#7-style):
+                # gorget_bool_to_str allocates a fresh `GorgetString` (LoOwned)
+                # that is only BORROWED by the printf below (CkFormatArg →
+                # OpBorrow), so it is orphaned and leaks. Register at creation
+                # so the scope-exit GIDropIfAlive frees it once. Borrow-only
+                # consume ⇒ never moved ⇒ no double-free.
+                register_local_for_drop(&ctx, bdst, gs_tid, &gmod)
                 val = bdst
                 val_type = gs_tid
                 fmt = "%.*s\n"
