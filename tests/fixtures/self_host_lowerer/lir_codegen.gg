@@ -1551,6 +1551,22 @@ String lc_collection_clone_fn(String type_name, LirModule &m):
         return type_name + "__clone_inplace"
     return ""
 
+# Resolve the drop-fn name for an aggregate FIELD given its LIR type id, for
+# the field-overwrite (`obj.field = x`) drop-on-reassign path. The field type
+# is mapped to its registered type name (struct name via `m.structs`), then
+# routed through `lc_collection_drop_fn`'s TYPED registry (String/Array/Map/Set
+# runtime + `recursive_drop_structs/enums` + `drop_collision_types`). Returns ""
+# when the field type owns nothing droppable (plain struct/scalar) — the caller
+# then emits no drop. TYPED resolution end-to-end; no field/type name matching.
+String field_drop_fn_for_lir_type(int field_ty, LirModule &m):
+    if field_ty < LT_STRUCT_BASE:
+        return ""
+    int fsid = field_ty - LT_STRUCT_BASE
+    if fsid < 0 or fsid >= m.structs.len():
+        return ""
+    String fty_name = m.structs.get(fsid).unwrap().name
+    return lc_collection_drop_fn(fty_name, &m)
+
 bool is_runtime_array_ctor(String mapped_name):
     if mapped_name == "gorget_array_new":
         return true
@@ -3844,18 +3860,35 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
                         if c_field_name(sf_w.name) == c_field_w:
                             field_ty_w = sf_w.ty
                         fi_w += 1
+                # Drop-on-overwrite: `obj.field = x` is the REASSIGNMENT path
+                # ONLY (initial construction lowers via IStructInit, not
+                # __field_write_), so the field always holds a previously-
+                # initialized owned value here. Drop it before the memcpy
+                # overwrites it, or its heap (String buffer / nested
+                # collection / user struct) leaks. The drop-fn name is resolved
+                # from the field's static LIR type via the TYPED registry
+                # (field_drop_fn_for_lir_type → lc_collection_drop_fn). Safe
+                # against double-free: the self-host is unconditional eager-
+                # clone, so `x` is a fresh value, never an alias into the field.
+                # Only aggregate fields can own heap; scalar/ptr fields below
+                # need no drop.
+                String fw_drop_pre = ""
+                if lir_is_aggregate(field_ty_w):
+                    String fw_drop_fn = field_drop_fn_for_lir_type(field_ty_w, &m)
+                    if fw_drop_fn.len() > 0:
+                        fw_drop_pre = fw_drop_fn + "(&" + lval_w + "); "
                 # Aggregate field + aggregate value → memcpy from &value.
                 if lir_is_aggregate(field_ty_w) and lir_is_aggregate(val_ty_w):
-                    return "memcpy(&" + lval_w + ", &" + v(val_arg) + ", sizeof(" + v(val_arg) + "));"
+                    return fw_drop_pre + "memcpy(&" + lval_w + ", &" + v(val_arg) + ", sizeof(" + v(val_arg) + "));"
                 # Aggregate field + pointer value → memcpy from *value.
                 if lir_is_aggregate(field_ty_w) and (val_ty_w == LT_PTR or (val_ty_w >= LT_PTR_TO_BASE and val_ty_w < LT_STRUCT_BASE)):
                     String ft_name_w = c_type_name(field_ty_w, &sn)
-                    return "memcpy(&" + lval_w + ", " + v(val_arg) + ", sizeof(" + ft_name_w + "));"
+                    return fw_drop_pre + "memcpy(&" + lval_w + ", " + v(val_arg) + ", sizeof(" + ft_name_w + "));"
                 # Aggregate field + unknown value → assume pointer (ABI
                 # convention for aggregate args) and memcpy from pointee.
                 if lir_is_aggregate(field_ty_w):
                     String ft_name_w = c_type_name(field_ty_w, &sn)
-                    return "memcpy(&" + lval_w + ", " + v(val_arg) + ", sizeof(" + ft_name_w + "));"
+                    return fw_drop_pre + "memcpy(&" + lval_w + ", " + v(val_arg) + ", sizeof(" + ft_name_w + "));"
                 # Scalar/ptr field: direct assignment with cast.
                 if val_ty_w == LT_PTR or (val_ty_w >= LT_PTR_TO_BASE and val_ty_w < LT_STRUCT_BASE):
                     return lval_w + " = (void*)" + v(val_arg) + ";"
@@ -3936,37 +3969,50 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
             String arr_tyname = name.slice(25, name.len())
             String arr_c_tname = resolve_sizeof_c_type(arr_tyname, &m, &sn)
             String sized_out = v(dst) + " = gorget_array_new(sizeof(" + arr_c_tname + "));"
-            # Wire element drop+clone ONLY when the element is itself a NESTED
-            # COLLECTION (Vector/Dict/Set whose runtime is GorgetArray/Map/Set).
-            # Typed-literal allocations (`Vector[Vector[int]] x = []`) lower to
-            # this magic `__gorget_array_new_sized_T` name and otherwise leave
-            # `elem_drop = NULL` — so a `.set()` that displaces an inner Vector,
-            # and the outer Vector's own drop, LEAK the inner buffer. In
-            # drop_elab's forward-dataflow worklist (re-sets `Vector[Vector
-            # [int]]` state per fixpoint re-visit across ~600 functions) this
-            # leaked to ~14 GB → OOM.
+            # Wire element drop+clone so `gorget_array_set`'s `if (arr->elem_drop)`
+            # guard drops the displaced old element on `v[i] = x` overwrite (and
+            # the outer array's own free drops every element) instead of leaking.
+            # Mirrors the general constructor path (`emit_collection_elem_wiring`).
             #
-            # SCOPE: nested-collection elements ONLY. We deliberately do NOT
-            # wire String / user-struct elements here: the self-host lacks the
-            # Rust frontend's `index_borrow_sources` clone-on-mutation
-            # detection, so the get-mutate-set idiom (`t = coll.get(i);
-            # t.field.push(x); coll.set(i,t)` in traits.gg) treats a String/
-            # struct element binding as owned and re-sets it — wiring its
-            # elem_drop turns that into a use-after-free / double-free
-            # (verified: a global wiring crashed in compute_reachable_fns,
-            # freeing a still-aliased LirInst String). Nested COLLECTIONS aren't
-            # used in that mutate-in-place idiom (they're rebuilt-and-set as
-            # whole vectors), so freeing the displaced inner collection is safe.
+            # SCOPE = RUNTIME-RESOURCE elements only (String, and nested
+            # Vector/Dict/Set), NOT user `recursive_drop` struct/enum aggregates
+            # (e.g. `Option[String]`, `Result[_,_]`, resource-bearing structs).
+            # The discriminator is TYPED: a runtime resource is in
+            # `type_runtime_map` with a Gorget* category; a user aggregate is in
+            # `recursive_drop_structs`/`recursive_drop_enums` and absent from
+            # `type_runtime_map`.
+            #
+            # WHY exclude user aggregates: `coll.get(i).unwrap()` DEEP-clones a
+            # runtime resource (the `47a468f3` deref-clone registers it) but only
+            # SHALLOW byte-copies a user Option/Result/struct element — so a read
+            # binding (`T back = coll.get(i).unwrap()`) ALIASES the in-array
+            # element's heap. Wiring elem_drop there would double-free at scope
+            # exit (the alias's drop + the array-free's elem_drop hit the same
+            # heap). The get-mutate-SET idiom is safe (eager-clone makes `t`
+            # independent), but the get-READ idiom is not until the `.get()`
+            # deref deep-clones user aggregates (TODO #8-residual / the ".get()
+            # clone-bomb" ROOT fix). Verified by `drop_return_optionlike_local`
+            # (a `Vector[Option[String]]` + `.get(0).unwrap()` read): wiring its
+            # elem_drop reproduces `free(): double free detected`.
+            #
+            # drop + clone are wired as a PAIR (a clone path that shallow-copied
+            # without elem_clone would double-free).
             String sized_runtime = ""
             if m.type_runtime_map.contains(arr_tyname):
                 sized_runtime = m.type_runtime_map.get(arr_tyname).unwrap_or("")
-            bool sized_is_nested_coll = (sized_runtime == "GorgetArray" or sized_runtime == "GorgetMap" or sized_runtime == "GorgetSet")
-            if sized_is_nested_coll:
+            bool sized_is_runtime_resource = (sized_runtime == "GorgetArray" or sized_runtime == "GorgetMap" or sized_runtime == "GorgetSet" or sized_runtime == "GorgetString")
+            if sized_is_runtime_resource:
                 String sized_df = lc_collection_drop_fn(arr_tyname, &m)
                 String sized_cf = lc_collection_clone_fn(arr_tyname, &m)
                 if sized_df.len() > 0 and sized_cf.len() > 0:
                     sized_out = sized_out + " " + v(dst) + ".elem_drop = (__gorget_drop_fn)" + sized_df + ";"
                     sized_out = sized_out + " " + v(dst) + ".elem_clone = (__gorget_drop_fn)" + sized_cf + ";"
+                # String elements also need `elem_materialize` so a stored
+                # element owns its own buffer (CoW view→owned). Mirrors the ctor
+                # path's `gorget_string_materialize_inplace` wiring (offset 56 in
+                # the Rust oracle, `insts.rs:2108`).
+                if arr_c_tname == "GorgetString":
+                    sized_out = sized_out + " " + v(dst) + ".elem_materialize = (__gorget_drop_fn)gorget_string_materialize_inplace;"
             return sized_out
         return ";"
     if name.starts_with("__gorget_dict_new_sized_"):
