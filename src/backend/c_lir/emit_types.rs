@@ -902,6 +902,32 @@ pub(super) fn is_gorget_string_type(ty: Option<&LirType>, sn: &HashMap<u32, Stri
         false
     }
 }
+/// Resolve the actual drop function to CALL for a struct/enum field of type
+/// `field_type_name`, whose drop was recorded as the bare `{Field}__drop` by
+/// `populate_recursive_drop_structs`.
+///
+/// When the field's type has a user `Drop` impl (`DropStrategy::Custom`), the
+/// recorded `{Field}__drop` is the BARE user destructor — it runs the user
+/// body but does NOT drop the field type's OWN resource fields. Calling it for
+/// a nested field would leak those inner resources (e.g. an `Inner{Vector}`
+/// field of an `Outer` struct: `Outer__drop` calling bare `Inner__drop` leaks
+/// the Vector). The unified `__gorget_dtor_{Field}` runs the user drop THEN the
+/// field's field-drops — the same glue a top-level Custom-drop site invokes
+/// (`src/lir/lower/drops.rs:318-327`). Return it so the field-drop CALL routes
+/// through it; `None` means "keep the recorded drop fn".
+///
+/// The recorded `field_drops` value is deliberately left as the bare
+/// `{Field}__drop` so the clone-side emitters (which key on the `__drop` suffix
+/// to derive `{Field}__clone`) are unaffected — this is purely a drop-call
+/// rewrite, not a metadata change.
+fn field_drop_call_name(module: &LirModule, field_type_name: &str) -> Option<String> {
+    let info = module.type_drop_fns.get(field_type_name)?;
+    if info.user_drop_fn.is_some() {
+        Some(info.drop_fn_name.clone())
+    } else {
+        None
+    }
+}
 /// Emit inline tag-checked clones for Option fields containing resources.
 /// Drop-side intentionally does nothing — Option types have DropStrategy::None
 /// to avoid double-free with match/unwrap paths, and struct-field drops rely
@@ -996,8 +1022,10 @@ pub(super) fn emit_recursive_struct_drops(out: &mut String, module: &LirModule, 
         // so this signature change is callwise-compatible.
         writeln!(out, "static inline void {drop_fn_name}(void* __p) {{").unwrap();
         writeln!(out, "    {c_name}* self = ({c_name}*)__p;").unwrap();
-        for (field_name, drop_fn, _field_type_name) in drop_info {
-            writeln!(out, "    {drop_fn}((void*)&self->{field_name});").unwrap();
+        for (field_name, drop_fn, field_type_name) in drop_info {
+            let call = field_drop_call_name(module, field_type_name)
+                .unwrap_or_else(|| drop_fn.clone());
+            writeln!(out, "    {call}((void*)&self->{field_name});").unwrap();
         }
         writeln!(out, "}}").unwrap();
         writeln!(out).unwrap();
@@ -1282,7 +1310,7 @@ pub(super) fn emit_enum_drop_fns(out: &mut String, module: &LirModule, sn: &Hash
         for vi in indices {
             let fields = &by_variant[&vi];
             write!(out, "        case {vi}: ").unwrap();
-            for (variant_name, field_name, drop_fn, _field_type_name) in fields {
+            for (variant_name, field_name, drop_fn, field_type_name) in fields {
                 let variant_prefix = format!("{variant_name}_");
                 let variant_field_count = sdef.fields.iter()
                     .filter(|(n, _)| n.starts_with(&variant_prefix))
@@ -1300,7 +1328,9 @@ pub(super) fn emit_enum_drop_fns(out: &mut String, module: &LirModule, sn: &Hash
                 if *drop_fn == "free" {
                     write!(out, "free(self->{access}); ").unwrap();
                 } else {
-                    write!(out, "{drop_fn}((void*)&self->{access}); ").unwrap();
+                    let call = field_drop_call_name(module, field_type_name)
+                        .unwrap_or_else(|| (*drop_fn).to_string());
+                    write!(out, "{call}((void*)&self->{access}); ").unwrap();
                 }
             }
             writeln!(out, "break;").unwrap();
@@ -1467,7 +1497,7 @@ pub(super) fn emit_type_drop_fns(out: &mut String, module: &LirModule, sn: &Hash
                 for vi in indices {
                     let fields = &by_variant[&vi];
                     write!(out, "        case {vi}: ").unwrap();
-                    for (variant_name, field_name, drop_fn, _ftn) in fields {
+                    for (variant_name, field_name, drop_fn, ftn) in fields {
                         let variant_prefix = format!("{variant_name}_");
                         let variant_field_count = sdef.fields.iter()
                             .filter(|(n, _)| n.starts_with(&variant_prefix))
@@ -1482,7 +1512,9 @@ pub(super) fn emit_type_drop_fns(out: &mut String, module: &LirModule, sn: &Hash
                         if *drop_fn == "free" {
                             write!(out, "free(self->{access}); ").unwrap();
                         } else {
-                            write!(out, "{drop_fn}((void*)&self->{access}); ").unwrap();
+                            let call = field_drop_call_name(module, ftn)
+                                .unwrap_or_else(|| (*drop_fn).to_string());
+                            write!(out, "{call}((void*)&self->{access}); ").unwrap();
                         }
                     }
                     writeln!(out, "break;").unwrap();
@@ -1497,11 +1529,13 @@ pub(super) fn emit_type_drop_fns(out: &mut String, module: &LirModule, sn: &Hash
                 if let Some(ref user_fn) = info.user_drop_fn {
                     writeln!(out, "    {user_fn}(__p);").unwrap();
                 }
-                for (field_name, drop_fn, _ftn) in &info.field_drops {
+                for (field_name, drop_fn, ftn) in &info.field_drops {
                     if drop_fn == "free" {
                         writeln!(out, "    free(self->{field_name});").unwrap();
                     } else {
-                        writeln!(out, "    {drop_fn}(&self->{field_name});").unwrap();
+                        let call = field_drop_call_name(module, ftn)
+                            .unwrap_or_else(|| drop_fn.clone());
+                        writeln!(out, "    {call}(&self->{field_name});").unwrap();
                     }
                 }
                 writeln!(out, "}}").unwrap();

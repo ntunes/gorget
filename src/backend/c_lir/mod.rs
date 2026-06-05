@@ -971,19 +971,26 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
             }
         }
     }
+    // Forward-declare __gorget_dtor_* functions so the recursive struct drops
+    // AND the enum drops below can reference them — they're DEFINED later in
+    // emit_type_drop_fns. This MUST precede emit_recursive_struct_drops: a
+    // Recursive-drop struct with a Custom-drop FIELD now emits a
+    // `__gorget_dtor_{Field}(...)` call (so the field's own inner resources
+    // are freed, not just the user drop body), which would otherwise be an
+    // implicit-declaration compile ERROR under
+    // -Werror=implicit-function-declaration (clang ≥16 / Xcode default; only a
+    // warning under gcc, which is why the suite's gcc build didn't catch it).
+    for info in module.type_drop_fns.values() {
+        if info.drop_fn_name.starts_with("__gorget_dtor_") {
+            writeln!(out, "void {}(void* __p);", info.drop_fn_name).unwrap();
+        }
+    }
     // Emit struct drop functions for structs with Recursive drop strategy.
     // These are needed when a Recursive-drop struct appears as a field in
     // another struct — the parent's field drop calls {Name}__drop.
     emit_recursive_struct_drops(&mut out, module, &struct_names);
     emit_recursive_struct_clones(&mut out, module, &struct_names);
     emit_recursive_enum_clones(&mut out, module, &struct_names);
-    // Forward-declare __gorget_dtor_* functions so enum drop functions
-    // can reference them (they're defined later in emit_type_drop_fns).
-    for info in module.type_drop_fns.values() {
-        if info.drop_fn_name.starts_with("__gorget_dtor_") {
-            writeln!(out, "void {}(void* __p);", info.drop_fn_name).unwrap();
-        }
-    }
     emit_enum_drop_fns(&mut out, module, &struct_names);
     emit_type_drop_fns(&mut out, module, &struct_names);
     // Box wrappers MUST emit after the per-type T__drop fns above so the
