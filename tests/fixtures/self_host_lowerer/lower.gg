@@ -7322,6 +7322,25 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     # (source not a Ptr) still register normally.
                     if not source_was_ptr:
                         register_local_for_drop(&ctx, var_local, owned_type, &gmod)
+                    else:
+                        # ③(d)-RSS: a RUNTIME-resource deref-clone (String/Array/
+                        # Vector/Dict/Set/Box/…) has no observable drop, so
+                        # registering it frees its fresh independent heap invisibly
+                        # (the self-compile RSS leak — string_free 2.6M vs Rust 93.8M,
+                        # stage-1 peak 9.96→6.28 GB). The blanket-skip above left
+                        # EVERY `T x = coll.get(i).unwrap()` deref-clone leaking.
+                        # A USER struct/enum ptr-clone's drop may printf → registering
+                        # it double-PRINTS (it stays on the leak-but-stdout-correct
+                        # path until Branch C-pre BORROWS — the root-cause fix, TODO).
+                        String owned_tname = type_id_to_name(owned_type, &gmod)
+                        bool is_runtime_resource = false
+                        match resource_meta_for(&gmod, owned_tname):
+                            case Some(_):
+                                is_runtime_resource = true
+                            case None:
+                                pass
+                        if is_runtime_resource:
+                            register_local_for_drop(&ctx, var_local, owned_type, &gmod)
                 case MoveDirect():
                     # Branch F / G — direct Move. Primitives, FnPtr,
                     # non-resource user types. op_consume picks
