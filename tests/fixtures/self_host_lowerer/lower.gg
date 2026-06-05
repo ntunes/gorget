@@ -6444,8 +6444,13 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     # INDEPENDENT snapshot. The body field-loads it as a
                     # Ptr-alias (see lower_closure_body §4e) so it borrows
                     # the env's storage and auto-clones at owning boundaries
-                    # (no body-side double-free). Enums still STUB (no
-                    # enum-payload clone-through wired at the ctor arg yet).
+                    # (no body-side double-free). A NON-resource enum (a plain
+                    # user enum, or a primitive-payload optionlike like
+                    # `Option[int]`) still STUBs (no enum clone-through wired at
+                    # the ctor arg yet); a RESOURCE-payload optionlike
+                    # (`Option[String]`, droppable per optionlike_resource_types)
+                    # IS admitted here via `cl_is_resource` and handled by the
+                    # resource clone path above.
                     String cl_tname = type_id_to_name(cl_ctid, &gmod)
                     bool cl_is_resource = is_resource_type_name(cl_tname, &gmod)
                     bool cl_is_copy_struct = gmod.type_infos.contains(cl_tname) and not cl_is_resource and not gmod.type_infos.get(cl_tname).unwrap().is_enum
