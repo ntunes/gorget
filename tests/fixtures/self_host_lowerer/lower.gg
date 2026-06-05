@@ -6420,22 +6420,36 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             Vector[ClosureCapture] cl_caps = cl_cc.caps.clone()
             # 2a guard (§4b): lift ONLY IF — (a) no UNLIFTABLE capture-shaped
             # var; AND (b) every capture's type_id ∈ {BOOL,I64,F64} (the
-            # type_id_to_name-faithful primitive subset); AND (c) no captured
-            # local is mutated in the body; AND (d) no nested closure.
+            # type_id_to_name-faithful primitive subset) OR a byte-copyable
+            # COPY struct OR a RESOURCE (Phase 2b: String/Vector/resource-
+            # struct — env owns an independent snapshot via op_consume's
+            # clone-or-move, body reads through a Ptr-alias field-load);
+            # AND (c) no captured local is mutated in the body; AND (d) no
+            # nested closure.
             bool cl_caps_ok = not cl_unliftable
             int cl_ci = 0
             while cl_ci < cl_caps.len():
                 int cl_ctid = cl_caps.get(cl_ci).unwrap().type_id
                 if cl_ctid != BOOL_TYPE and cl_ctid != I64_TYPE and cl_ctid != F64_TYPE:
-                    # 2b-1: ALSO accept a byte-copyable COPY struct — a
+                    # 2b-1: accept a byte-copyable COPY struct — a
                     # registered non-resource non-enum struct (e.g.
                     # `Config{int,int}`). The env-field build + IStructInit /
                     # GIFieldLoad byte-copy paths already handle it (no
-                    # clone/drop machinery). Resource-containing structs
-                    # (is_resource_type_name) + enums still fall to the
-                    # NULL-env stub (Phase 2b-2/2b-3).
+                    # clone/drop machinery).
+                    # 2b-2 (Phase 2b): ALSO accept a RESOURCE capture
+                    # (String/Vector/resource-struct — is_resource_type_name).
+                    # The make-site env-ctor arg routes through
+                    # op_consume(CkFieldWrite) so a LIVE owned source CLONES
+                    # and a DEAD owned source MOVES — the env owns an
+                    # INDEPENDENT snapshot. The body field-loads it as a
+                    # Ptr-alias (see lower_closure_body §4e) so it borrows
+                    # the env's storage and auto-clones at owning boundaries
+                    # (no body-side double-free). Enums still STUB (no
+                    # enum-payload clone-through wired at the ctor arg yet).
                     String cl_tname = type_id_to_name(cl_ctid, &gmod)
-                    if not (gmod.type_infos.contains(cl_tname) and not is_resource_type_name(cl_tname, &gmod) and not gmod.type_infos.get(cl_tname).unwrap().is_enum):
+                    bool cl_is_resource = is_resource_type_name(cl_tname, &gmod)
+                    bool cl_is_copy_struct = gmod.type_infos.contains(cl_tname) and not cl_is_resource and not gmod.type_infos.get(cl_tname).unwrap().is_enum
+                    if not (cl_is_resource or cl_is_copy_struct):
                         cl_caps_ok = false
                 cl_ci += 1
             # (c) mutation check — build the capture-name set, then scan.
@@ -6464,7 +6478,26 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 int cl_fi = 0
                 while cl_fi < cl_caps.len():
                     ClosureCapture cl_cap = cl_caps.get(cl_fi).unwrap()
-                    cl_env_fields.push(GirFieldInfo(cl_cap.name.clone(), type_id_to_name(cl_cap.type_id, &gmod)))
+                    # §4c-2 (Phase 2b): the env field OWNS the pointee T, never
+                    # a Ptr. If a ByValue capture's type_id is a Ptr(T)/MutPtr(T)
+                    # CoW-alias (mirrors Rust closures.rs:128-130 "Resolve
+                    # Ptr(T) → T for CoW aliases"), name the field by the OWNED
+                    # pointee T — op_consume's clone-through (decide_ptr_consume)
+                    # materialises the owned value into it. Value-typed
+                    # resource/COPY captures keep their own name. (Self-host's
+                    # SVarDecl Branch-C-pre already keeps most CoW aliases
+                    # value-typed, so this is mostly defensive parity; it makes
+                    # the field-owns-pointee invariant explicit at the source.)
+                    int cl_field_tid = cl_cap.type_id
+                    if cl_field_tid >= 0 and cl_field_tid < gmod.type_table.len():
+                        match gmod.type_table.get(cl_field_tid).unwrap():
+                            case GtPtr(cl_pointee):
+                                cl_field_tid = cl_pointee
+                            case GtMutPtr(cl_pointee2):
+                                cl_field_tid = cl_pointee2
+                            else:
+                                pass
+                    cl_env_fields.push(GirFieldInfo(cl_cap.name.clone(), type_id_to_name(cl_field_tid, &gmod)))
                     cl_fi += 1
                 Vector[GirEnumVariantInfo] cl_no_variants = []
                 gmod.type_infos.put(closure_name.clone(), GirTypeInfo(closure_name.clone(), !cl_env_fields, !cl_no_variants, false))
@@ -6478,7 +6511,18 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 Vector[Operand] cl_ctor_args = []
                 int cl_ai = 0
                 while cl_ai < cl_caps.len():
-                    cl_ctor_args.push(OpCopy(cl_caps.get(cl_ai).unwrap().local_id))
+                    # §4d-2 (Phase 2b): route the capture source through
+                    # op_consume at an OWNING (CkFieldWrite) position — the
+                    # env field OWNS its data. A LIVE owned resource → OpClone
+                    # (the wire pass keeps it for live sources; e.g.
+                    # `String s` printed after the make-site MUST clone, not
+                    # move); a DEAD owned resource → OpMove (refined by the
+                    # liveness wire pass); a Ptr/borrow-alias → OpClone through
+                    # the pointer (decide_ptr_consume). Primitives / COPY
+                    # structs fall to OpCopy inside op_consume, identical to
+                    # the prior raw OpCopy. So the env always holds an
+                    # INDEPENDENT snapshot, never a shared alias.
+                    cl_ctor_args.push(op_consume(&ctx, &gmod, cl_caps.get(cl_ai).unwrap().local_id, CkFieldWrite()))
                     cl_ai += 1
                 emit(&ctx, GICall(cl_env_tmp, closure_name.clone(), cl_ctor_args))
                 emit(&ctx, GIAssign(cdst, OpCopy(cl_env_tmp)))
@@ -11000,6 +11044,24 @@ bool implicit_closure_body_captures(SpannedExpr body, GirModule &gmod):
 # The accumulated `caps` vector ORDER is the single source of truth:
 # env-field == struct-ctor-arg == body GIFieldLoad-index order.
 
+# True iff `callee` is a bare-identifier FUNCTION reference (a builtin or
+# top-level fn name), NOT a value capture. The discriminator: a bare
+# `EIdentifier` that is neither in the closure's lexical `in_scope` set NOR
+# an outer LOCAL (`nl_contains`) names something in the FUNCTION namespace
+# (`print`, a top-level helper, an enum-variant ctor) — calling it captures
+# nothing. A callee that IS an outer local (a captured closure value, `f()`)
+# returns false here so the walk records it as a genuine capture.
+bool cc_callee_is_free_fn(LowerCtx &ctx, SpannedExpr callee, Dict[String, bool] in_scope, GirModule &gmod):
+    match callee.expr:
+        case EIdentifier(name):
+            if in_scope.contains(name):
+                return false
+            if nl_contains(&ctx, name):
+                return false
+            return true
+        else:
+            return false
+
 # Classify a single capture-shaped free var (the EIdentifier leaf).
 void cc_classify_ident(LowerCtx &ctx, String name, GirModule &gmod, CaptureCollector &cc):
     if nl_contains(&ctx, name):
@@ -11030,7 +11092,17 @@ void cc_collect_expr(LowerCtx &ctx, SpannedExpr sexpr, Dict[String, bool] in_sco
         case EUnaryOp(_, inner):
             cc_collect_expr(&ctx, *inner, in_scope, &gmod, &cc)
         case ECall(callee, args, _):
-            cc_collect_expr(&ctx, *callee, in_scope, &gmod, &cc)
+            # A bare-identifier CALLEE is a FUNCTION reference, not a value
+            # capture — `print(s)` / `helper(x)` name a builtin/top-level fn
+            # in the function namespace, NOT an outer local. Recursing into
+            # it would mis-classify `print` (absent from fn_sigs/const/etc.)
+            # as an UNLIFTABLE capture and STUB the whole closure. Only a
+            # callee that IS an outer LOCAL is a genuine capture (calling a
+            # captured closure value, `f()`); route THAT through the walk so
+            # it's recorded. Mirrors Rust `collect_free_vars`, which resolves
+            # call targets in the function namespace and never captures them.
+            if not cc_callee_is_free_fn(&ctx, *callee, in_scope, &gmod):
+                cc_collect_expr(&ctx, *callee, in_scope, &gmod, &cc)
             for a in args:
                 cc_collect_expr(&ctx, a, in_scope, &gmod, &cc)
         case EMethodCall(obj, _, args, _):
@@ -11606,7 +11678,26 @@ void lower_closure_body(String call_name, Vector[int] !abi_param_types, int self
     int ci = 0
     while ci < captures.len():
         ClosureCapture cap = captures.get(ci).unwrap()
-        int fdst = add_local(&cctx, cap.type_id, Some(cap.name.clone()))
+        # §4e-2 (Phase 2b): RESOURCE captures (String/Vector/resource-struct)
+        # load as a Ptr-ALIAS into the env's storage, NOT a value byte-copy.
+        # Mirrors Rust `emit_closure_call_function` (closures.rs:395-411) and
+        # the EFieldAccess resource-field path (lower.gg:~6119-6125): the env
+        # OWNS the snapshot across calls; the body reads THROUGH a borrow, and
+        # op_consume auto-clones at any owning boundary (call args / returns /
+        # field-init). A VALUE field-load here would byte-copy the owned
+        # String/Vector struct out of the env — the loaded local would then
+        # alias the env's heap buffer and a double-free follows if either side
+        # frees it. The Ptr-alias + LoBorrowed + set_field_borrow shape is the
+        # same one EFieldAccess uses for owned-base struct fields. Primitive /
+        # COPY-struct captures keep the value byte-copy (sound, no heap).
+        String cap_tname = type_id_to_name(cap.type_id, &gmod)
+        int fdst = -1
+        if is_resource_type_name(cap_tname, &gmod):
+            int cap_ptr_tid = register_ptr(&gmod, cap.type_id)
+            fdst = add_local_with(&cctx, cap_ptr_tid, Some(cap.name.clone()), LoBorrowed(), BoNone())
+            set_field_borrow(&cctx, fdst, 1, ci)
+        else:
+            fdst = add_local(&cctx, cap.type_id, Some(cap.name.clone()))
         emit(&cctx, GIFieldLoad(fdst, 1, ci))
         nl_put(&cctx, cap.name, fdst)
         ci = ci + 1
