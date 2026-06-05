@@ -528,6 +528,14 @@ static inline GorgetArray gorget_map_keys(const GorgetMap* m) {
     if (m->key_drop) {
         result.elem_drop = m->key_drop;
     }
+    // Propagate the element clone hook too: the result owns deep-cloned
+    // resource keys (below), so a subsequent `k.clone()` must per-element
+    // clone them. Without this, gorget_array_clone does a shallow buffer
+    // copy while still propagating elem_drop → double-free. (Mirrors the
+    // elem_drop guard above; covers Set→array via gorget_set_to_array.)
+    if (m->key_clone) {
+        result.elem_clone = m->key_clone;
+    }
     if (m->order != NULL) {
         for (size_t oi = 0; oi < m->order_len; oi++) {
             size_t i = m->order[oi];
