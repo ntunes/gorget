@@ -2040,6 +2040,14 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
             return true
         if fn_name == "gorget_map_items":
             return true
+        # Dict/HashMap for-loop iteration accessors (lower_for_dict): self
+        # (arg 0) is the map by const pointer. `gorget_map_iter_cap(const
+        # void*)`, `gorget_map_iter_state(const void*, idx)`,
+        # `gorget_map_iter_key/value(const void*, idx, void* out)`.
+        if fn_name == "gorget_map_iter_cap" or fn_name == "gorget_map_iter_state":
+            return true
+        if fn_name == "gorget_map_iter_key" or fn_name == "gorget_map_iter_value":
+            return true
         if fn_name == "gorget_map_clone":
             return true
         if fn_name == "gorget_set_contains" or fn_name == "gorget_set_len":
@@ -2078,6 +2086,13 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
         # to broadcast across the n filled slots.
         return true
     if fn_name == "gorget_map_put" and (arg_idx == 1 or arg_idx == 2):
+        return true
+    # lower_for_dict key/value extraction: arg 2 is the `void* out` slot the
+    # accessor writes the (owned-cloned) key/value into — pass the bound
+    # local's slot ADDRESS, not its value.
+    if fn_name == "gorget_map_iter_key" and arg_idx == 2:
+        return true
+    if fn_name == "gorget_map_iter_value" and arg_idx == 2:
         return true
     if fn_name == "gorget_array_contains" and arg_idx == 1:
         return true

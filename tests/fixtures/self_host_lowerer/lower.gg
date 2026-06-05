@@ -153,6 +153,14 @@ struct ResultPayloadTypes:
     int ok_type
     int err_type
 
+# Key/value GIR type NAMES split out of a monomorphized `Dict__K__V`
+# name. Mirrors the (String, String) tuple Rust's `parse_dict_kv_types`
+# returns (`stmts/for_loops.rs:949`). Same multi-value-return-as-struct
+# idiom as `ResultPayloadTypes` above.
+struct DictKvNames:
+    String key_name
+    String val_name
+
 # closure Phase 2 Step A: the metadata `compute_closure_sig` derives for a
 # closure make-site, packaged so the make-site and the post-pass compute
 # identical signatures (a struct return rather than a 5-tuple, mirroring
@@ -9562,6 +9570,7 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
     # docs/devbook/18-runtime-abi.md (the resource table) and
     # docs/devbook/26-self-host-frontend.md §3.
     bool coll_is_vec_like = false
+    bool coll_is_dict = false
     match resource_meta_for(&gmod, coll_tn):
         case Some(rmeta):
             match rmeta.collection_kind:
@@ -9569,12 +9578,24 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
                     coll_is_vec_like = true
                 case CkDeque():
                     coll_is_vec_like = true
+                case CkDict():
+                    coll_is_dict = true
                 else:
                     pass
         case None:
             pass
     if coll_is_vec_like:
         lower_for_vector(&ctx, pat, coll_local, coll_tn, probe_is_enumerate, body, &gmod, is_main)
+        return
+    # Dict/HashMap fast path: `for (k, v) in <Dict>` (entry pairs) or
+    # `for k in <Dict>` (keys only). The iterator-protocol fallback below
+    # would `lower_fail` — a mono'd `Dict__K__V` has no `__iter`/`__next`
+    # chain — silently dropping the whole loop body. Mirrors Rust's
+    # `lower_for_dict` (src/ir/lowering/stmts/for_loops.rs:574). The
+    # `.enumerate()` strip never applies to a Dict (no Vector/Deque kind),
+    # so `probe_is_enumerate` is false here.
+    if coll_is_dict:
+        lower_for_dict(&ctx, pat, coll_local, coll_tn, body, &gmod, is_main)
         return
     # String fast path: `for c in <String>` iterates UTF-8 CODEPOINTS. The
     # iterator-protocol fallback below would `lower_fail` (GorgetString has no
@@ -9752,6 +9773,173 @@ void lower_for_string(LowerCtx &ctx, SpannedPattern pat, int coll_local, Vector[
     int new_pos = add_local(&ctx, I64_TYPE, NO_NAME)
     emit(&ctx, GIBinOp(new_pos, OP_ADD, I64_TYPE, OpCopy(bytepos_local), OpCopy(cplen_local)))
     emit(&ctx, GIAssign(bytepos_local, OpCopy(new_pos)))
+    set_terminator(&ctx, GTJump(header_bb))
+    switch_to(&ctx, exit_bb)
+
+# Split a mono'd Dict/HashMap type name into its KEY and VALUE GIR type
+# names. Mirrors Rust's `parse_dict_kv_types` + `find_kv_split`
+# (src/ir/lowering/stmts/for_loops.rs:949/979). The naive "first `__`
+# after the prefix" split (used by the dict-literal element-hint path at
+# :6883) mis-splits when the KEY is itself a mangled generic (e.g.
+# `Dict__Vector__int64_t__int64_t` → key `Vector`, not `Vector__int64_t`),
+# so we try known one-segment primitive prefixes (`int64_t`, …,
+# `GorgetString`) FIRST and only fall back to the first interior `__`.
+# Returns ("int64_t", "int64_t") when no split is found (the same scalar
+# default Rust uses).
+DictKvNames parse_dict_kv_types(String type_name):
+    int prefix_len = -1
+    if type_name.starts_with("Dict__"):
+        prefix_len = 6
+    elif type_name.starts_with("HashMap__"):
+        prefix_len = 9
+    elif type_name.starts_with("GorgetDict__"):
+        prefix_len = 12
+    elif type_name.starts_with("GorgetMap__"):
+        prefix_len = 11
+    if prefix_len < 0:
+        return DictKvNames("int64_t", "int64_t")
+    String rest = type_name.slice(prefix_len, type_name.len())
+    # Known single-segment primitive key prefixes — split right after one
+    # when `rest` begins with it followed by `__` (so the value is whatever
+    # trails, however mangled). Order is longest-safe-first; each is checked
+    # for the trailing `__` boundary.
+    Vector[String] prims = ["int64_t", "int32_t", "int16_t", "int8_t", "uint64_t", "uint32_t", "uint16_t", "uint8_t", "double", "float", "bool", "GorgetString"]
+    int pi = 0
+    while pi < prims.len():
+        String prim = prims.get(pi).unwrap()
+        if rest.starts_with(prim):
+            String after = rest.slice(prim.len(), rest.len())
+            if after.starts_with("__"):
+                String v_only = after.slice(2, after.len())
+                return DictKvNames(prim, v_only)
+        pi += 1
+    # Fallback: first interior `__` with a non-empty key AND value.
+    int sep = rest.index_of("__").unwrap_or(-1)
+    if sep > 0 and sep + 2 < rest.len():
+        String k_only = rest.slice(0, sep)
+        String v_only = rest.slice(sep + 2, rest.len())
+        return DictKvNames(k_only, v_only)
+    return DictKvNames("int64_t", "int64_t")
+
+# Extract the binding name from a for-loop sub-pattern, defaulting to
+# `fallback` for non-`PBinding` shapes (wildcard / nested). Mirrors the
+# k_name/v_name extraction in Rust's `lower_for_dict` (:636-637).
+String for_pat_binding_name(SpannedPattern p, String fallback):
+    match p.pat:
+        case PBinding(name):
+            return name
+        else:
+            return fallback
+
+# Dict/HashMap fast path: `for (k, v) in <Dict>` (entry pairs) or
+# `for k in <Dict>` (keys only). Mirrors Rust's `lower_for_dict`
+# (src/ir/lowering/stmts/for_loops.rs:574). Iterates the map's slot array
+# directly — `oi` walks `[0, cap)`, a per-slot `state == USED(1)` filter
+# (`emit_state_filter`) skips empty/tombstone slots, and `gorget_map_iter_key`
+# / `gorget_map_iter_value` write OWNED copies of the key/value into freshly
+# bound locals via void out-param calls.
+#
+# OWNERSHIP (differs from `lower_for_vector`): the runtime accessors CLONE
+# resource-typed keys/values (`key_clone`/`val_clone` in runtime_map.c) into
+# the out slot, so each bound K/V is a fresh OWNER — bound LoOwned (via
+# `add_local`) and `register_local_for_drop`'d so the per-iteration DSK_LOOP
+# scope frees it (no leak — the snag_6 canary). For `int64_t` keys/values
+# `register_local_for_drop` is a no-op (non-droppable). The vector path binds
+# a LoBorrowed view with NO drop reg because its `__get` returns an alias, not
+# a clone; mixing the two models would either leak (no drop on a clone) or
+# double-free (drop on a view).
+#
+# Block scaffold (header/body/incr/exit, loop stacks, per-iteration drop
+# scope) is the same shape as `lower_for_vector` — see the duplication note at
+# `lower_for_iterator`. The differences are: the bound is `gorget_map_iter_cap`
+# (slot capacity, not logical len, because we walk raw slots); the body opens
+# with the state filter; and the binds are owned-clone out-params.
+void lower_for_dict(LowerCtx &ctx, SpannedPattern pat, int coll_local, String coll_tn, Vector[Stmt] body, GirModule &gmod, bool is_main):
+    DictKvNames kv = parse_dict_kv_types(coll_tn)
+    String key_name = kv.key_name
+    String val_name = kv.val_name
+    int key_tid = resolve_elem_type_id(key_name, &gmod)
+    int val_tid = resolve_elem_type_id(val_name, &gmod)
+    # ── Iteration state ──────────────────────────────────────
+    # oi walks [0, cap); cap is the SLOT capacity (not logical len) — empty
+    # and tombstone slots are skipped per-iteration by the state filter.
+    int oi_local = add_local(&ctx, I64_TYPE, NO_NAME)
+    emit(&ctx, GIAssign(oi_local, OpConstI64(0)))
+    int cap_local = add_local(&ctx, I64_TYPE, NO_NAME)
+    Vector[Operand] cap_args = [OpBorrow(coll_local)]
+    emit(&ctx, GICallExtern(cap_local, "gorget_map_iter_cap", cap_args))
+    # ── Block layout ─────────────────────────────────────────
+    int header_bb = new_block(&ctx)
+    int body_bb = new_block(&ctx)
+    int incr_bb = new_block(&ctx)
+    int exit_bb = new_block(&ctx)
+    set_terminator(&ctx, GTJump(header_bb))
+    # Header: `oi < cap ? body : exit`
+    switch_to(&ctx, header_bb)
+    int cond_local = add_local(&ctx, BOOL_TYPE, NO_NAME)
+    emit(&ctx, GICmp(cond_local, CMP_LT, I64_TYPE, OpCopy(oi_local), OpCopy(cap_local)))
+    set_terminator(&ctx, GTBranch(OpCopy(cond_local), body_bb, exit_bb))
+    # Body: filter empty/tombstone slots, bind k/v, lower body.
+    ctx.loop_continue_stack.push(incr_bb)
+    ctx.loop_break_stack.push(exit_bb)
+    push_drop_scope(&ctx.drop_elab, DSK_LOOP)
+    switch_to(&ctx, body_bb)
+    # State filter: `state = gorget_map_iter_state(&coll, oi)`; skip to incr
+    # (next slot) unless USED(1). On a hit, fall into a fresh `elem_bb`.
+    int state_local = add_local(&ctx, I64_TYPE, NO_NAME)
+    Vector[Operand] state_args = [OpBorrow(coll_local), OpCopy(oi_local)]
+    emit(&ctx, GICallExtern(state_local, "gorget_map_iter_state", state_args))
+    int state_ok = add_local(&ctx, BOOL_TYPE, NO_NAME)
+    emit(&ctx, GICmp(state_ok, CMP_EQ, I64_TYPE, OpCopy(state_local), OpConstI64(1)))
+    int elem_bb = new_block(&ctx)
+    set_terminator(&ctx, GTBranch(OpCopy(state_ok), elem_bb, incr_bb))
+    switch_to(&ctx, elem_bb)
+    # Bind the key (and value for a tuple pattern). The accessors write OWNED
+    # copies into the bound slots via the void* out-param (arg 2), so each
+    # local is a fresh owner — bound LoOwned (add_local) + registered for the
+    # per-iteration drop. `OpBorrow(<local>)` at arg 2 becomes a SlotAddr
+    # (pointer to the local's slot) at C-emit via `needs_ptr_arg`.
+    match pat.pat:
+        case PTuple(parts):
+            if parts.len() == 2:
+                String kname = for_pat_binding_name(parts.get(0).unwrap(), "__k")
+                String vname = for_pat_binding_name(parts.get(1).unwrap(), "__v")
+                int k_local = add_local(&ctx, key_tid, Some(kname))
+                Vector[Operand] k_args = [OpBorrow(coll_local), OpCopy(oi_local), OpBorrow(k_local)]
+                emit(&ctx, GICallExtern(-1, "gorget_map_iter_key", k_args))
+                nl_put(&ctx, kname, k_local)
+                register_local_for_drop(&ctx, k_local, key_tid, &gmod)
+                int v_local = add_local(&ctx, val_tid, Some(vname))
+                Vector[Operand] v_args = [OpBorrow(coll_local), OpCopy(oi_local), OpBorrow(v_local)]
+                emit(&ctx, GICallExtern(-1, "gorget_map_iter_value", v_args))
+                nl_put(&ctx, vname, v_local)
+                register_local_for_drop(&ctx, v_local, val_tid, &gmod)
+            else:
+                lower_fail("SFor over Dict: expected 2-tuple pattern, got " + int_to_str(parts.len()) + " parts")
+        case PBinding(kname):
+            # Key-only iteration: `for k in <Dict>`.
+            int k_local = add_local(&ctx, key_tid, Some(kname))
+            Vector[Operand] k_args = [OpBorrow(coll_local), OpCopy(oi_local), OpBorrow(k_local)]
+            emit(&ctx, GICallExtern(-1, "gorget_map_iter_key", k_args))
+            nl_put(&ctx, kname, k_local)
+            register_local_for_drop(&ctx, k_local, key_tid, &gmod)
+        else:
+            lower_fail("SFor over Dict: only (k, v) tuple or bare key binding supported")
+    lower_stmts(&ctx, body, &gmod, is_main)
+    Terminator body_term = ctx.block_terms.get(ctx.current_block).unwrap()
+    match body_term:
+        case GTNone():
+            pop_drop_scope(&ctx)
+            set_terminator(&ctx, GTJump(incr_bb))
+        else:
+            pop_drop_scope_no_emit(&ctx)
+    ctx.loop_continue_stack.pop()
+    ctx.loop_break_stack.pop()
+    # Incr: `oi = oi + 1; goto header`.
+    switch_to(&ctx, incr_bb)
+    int new_oi = add_local(&ctx, I64_TYPE, NO_NAME)
+    emit(&ctx, GIBinOp(new_oi, OP_ADD, I64_TYPE, OpCopy(oi_local), OpConstI64(1)))
+    emit(&ctx, GIAssign(oi_local, OpCopy(new_oi)))
     set_terminator(&ctx, GTJump(header_bb))
     switch_to(&ctx, exit_bb)
 

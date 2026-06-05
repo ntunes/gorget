@@ -2023,6 +2023,11 @@ int runtime_fn_return_type(String name, LirModule &m):
     # Scalar returns
     if name == "gorget_array_len" or name == "gorget_map_len" or name == "gorget_set_len":
         return LT_I64
+    # Dict for-loop iteration scalars (lower_for_dict): cap = slot capacity,
+    # state = per-slot occupancy code. (key/value are void out-param writers,
+    # registered in is_void_runtime_fn below.)
+    if name == "gorget_map_iter_cap" or name == "gorget_map_iter_state":
+        return LT_I64
     if name == "gorget_str_len" or name == "gorget_str_codepoint_count":
         return LT_I64
     if name == "gorget_str_find" or name == "gorget_str_index_of" or name == "gorget_str_count":
@@ -2132,6 +2137,11 @@ bool is_void_runtime_fn(String name):
     if name == "gorget_map_put" or name == "gorget_map_put_cloned":
         return true
     if name == "gorget_map_clear" or name == "gorget_map_free":
+        return true
+    # lower_for_dict key/value extraction: `void gorget_map_iter_key/value(
+    # const void*, idx, void* out)` — writes through the out-param, returns
+    # nothing, so suppress the dst assignment.
+    if name == "gorget_map_iter_key" or name == "gorget_map_iter_value":
         return true
     if name == "gorget_set_add" or name == "gorget_set_remove":
         return true
