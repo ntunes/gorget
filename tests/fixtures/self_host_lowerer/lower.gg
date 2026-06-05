@@ -5147,6 +5147,25 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 concat_args.push(op_consume(&ctx, &gmod, lhs, CkCallArgBorrow()))
                 concat_args.push(op_consume(&ctx, &gmod, rhs, CkCallArgBorrow()))
                 emit(&ctx, GICallExtern(dst, "gorget_str_cat", concat_args))
+                # FRESH-OWNED-TEMP drop registration (#7): `gorget_str_cat`
+                # allocates a fresh `GorgetString` (LoOwned). In a NESTED
+                # concat `a + b + c`, the inner `a + b` result is borrowed by
+                # the outer `+` (CkCallArgBorrow) and orphaned — its heap
+                # leaks (ASan: 1400 bytes / 200 str_cat allocs over a 200-iter
+                # loop). Registering it at creation makes the scope-exit
+                # GIDropIfAlive free it exactly once. SAFE-BY-CONSTRUCTION:
+                # when the result is instead MOVED into a named binding
+                # (`String s = a + b`), op_consume emits OpMove → GIMoveZero →
+                # drop_elab marks the slot IS_UNINITIALIZED and statically
+                # deletes the guard, so no double-free; a GorgetString is a
+                # runtime resource (LoOwned, droppable), so register_local_for_
+                # drop's LoView/LoBorrowed/non-droppable gates pass it through.
+                # NOTE (#7 scope): the SISTER leak — a fresh STRUCT/ENUM
+                # constructor temp passed to a bare param (`take(Node([1,2,3]))`)
+                # — is NOT registered here. That class is entangled with the
+                # named-binding move/clone path whose correct (move) resolution
+                # unmasks the pre-existing `!`-param-no-drop gap; see TODO.md.
+                register_local_for_drop(&ctx, dst, gs_tid, &gmod)
                 return dst
             # Operator overload on user types: if lhs is a user struct/enum,
             # route `a + b` → a.add(b), `a - b` → a.sub(b), etc.

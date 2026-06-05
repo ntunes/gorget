@@ -1,0 +1,41 @@
+# Regression: the inner result of a NESTED string concat must be freed.
+#
+# `a + b + c` lowers to `gorget_str_cat(gorget_str_cat(a, b), c)`. The
+# INNER `gorget_str_cat(a, b)` allocates a fresh GorgetString that the
+# OUTER `+` only BORROWS (CkCallArgBorrow) — nobody owns it past the
+# expression, so without a scope-exit drop it leaks once per evaluation.
+# (A single `a + b` already worked: its result is bound to a named local
+# whose declaring scope drops it. The nested case has no binding for the
+# inner temp.)
+from std.os import mem_live
+
+void main():
+    int baseline = mem_live()
+
+    # Nested concat in a loop — the inner `a + b` temp is the orphan.
+    int i = 0
+    while i < 500:
+        String a = "aaa"
+        String b = "bbb"
+        String c = "ccc"
+        String r = a + b + c
+        i = i + 1
+    int p1 = mem_live() - baseline
+    baseline = mem_live()
+
+    # Deeper nesting: two inner temps per iteration.
+    i = 0
+    while i < 500:
+        String w = "ww"
+        String x = "xx"
+        String y = "yy"
+        String z = "zz"
+        String r2 = w + x + y + z
+        i = i + 1
+    int p2 = mem_live() - baseline
+
+    print(f"nested3={p1}")
+    print(f"nested4={p2}")
+    bool all_zero = p1 == 0 and p2 == 0
+    print(f"leaked={not all_zero}")
+    print("done")
