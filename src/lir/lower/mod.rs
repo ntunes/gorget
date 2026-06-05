@@ -733,15 +733,44 @@ impl<'a> LoweringContext<'a> {
                             variant_drops.push((vi as u32, variant.name.clone(), field_name, drop_fn, field_type_name));
                         }
                     }
-                    if !variant_drops.is_empty() {
-                        let drop_fn_name = format!("{name}__drop");
-                        self.module.type_drop_fns.insert(name.clone(), crate::lir::TypeDropInfo {
-                            drop_fn_name,
-                            field_drops: Vec::new(),
-                            user_drop_fn: None,
-                            enum_variants: Some(variant_drops),
-                        });
+                    // Mirror the Struct branch above: a Custom-drop enum must
+                    // record `user_drop_fn: Some(..)` + a mangled
+                    // `__gorget_dtor_{name}` drop fn name. Without this, the
+                    // recorded `{name}__drop` collides with the USER's drop
+                    // function — and the two emitters disagree:
+                    //   * a standalone Custom-drop enum drops via the user fn
+                    //     (`{name}__drop`), so the variant payloads LEAK (the
+                    //     variant-drop emitter skips a name the user already
+                    //     defined);
+                    //   * a Custom-drop enum nested as a struct FIELD drops via
+                    //     the variant-drop `{name}__drop` (the user fn is DCE'd),
+                    //     so the user `drop` body never runs.
+                    // Routing both through `__gorget_dtor_{name}` (user body THEN
+                    // variant drops, emitted by `emit_type_drop_fns`) fixes both,
+                    // exactly as the Struct branch does for Custom-drop structs.
+                    // A Custom-drop enum with NO resource payloads (empty
+                    // `variant_drops`) is still recorded so its user body runs.
+                    let user_drop_fn = if let DropStrategy::Custom(fn_name) = strategy {
+                        Some(fn_name.clone())
+                    } else {
+                        None
+                    };
+                    if variant_drops.is_empty() && user_drop_fn.is_none() {
+                        continue;
                     }
+                    let drop_fn_name = if user_drop_fn.is_some()
+                        || self.module.drop_collision_types.contains(name)
+                    {
+                        format!("__gorget_dtor_{name}")
+                    } else {
+                        format!("{name}__drop")
+                    };
+                    self.module.type_drop_fns.insert(name.clone(), crate::lir::TypeDropInfo {
+                        drop_fn_name,
+                        field_drops: Vec::new(),
+                        user_drop_fn,
+                        enum_variants: Some(variant_drops),
+                    });
                 }
                 _ => {} // Alias types — skip
             }
