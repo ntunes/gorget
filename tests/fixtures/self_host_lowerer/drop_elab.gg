@@ -23,6 +23,7 @@
 
 from lir import LirModule, LirFunction, LirBlock, LirInst, LirSlot
 from lir import LT_BOOL
+from lir import ABI_OUT_PTR
 from lir import ISlotStore, ISlotLoad, ISlotAddr
 from lir import IIConst, IFConst, IBoolConst, INullPtr, IFuncAddr, IGlobalAddr, IStrLit, IParamRef
 from lir import IAdd, ISub, IMul, IDiv, IRem, IMod, INeg
@@ -175,6 +176,19 @@ void apply_inst_effect(LirInst inst, Vector[int] &state, Dict[int, int] &val_to_
             if val_to_slot.contains(ptr):
                 int slot = val_to_slot.get(ptr).unwrap()
                 ss_set(&state, slot, IS_UNINITIALIZED)
+        case ICallExtern(_, _, args, _, arg_abis):
+            # A call arg tagged ABI_OUT_PTR is the address of a slot the callee
+            # writes the (owned) result INTO — e.g. gorget_map_iter_key/value
+            # arg 2. The pointee slot becomes Initialized after the call, so its
+            # drop must be kept (#11; mirrors Rust drop_elab.rs apply_inst_effect).
+            int ai = 0
+            while ai < args.len() and ai < arg_abis.len():
+                if arg_abis.get(ai).unwrap() == ABI_OUT_PTR:
+                    int arg_val = args.get(ai).unwrap()
+                    if val_to_slot.contains(arg_val):
+                        int oslot = val_to_slot.get(arg_val).unwrap()
+                        ss_set(&state, oslot, IS_INITIALIZED)
+                ai += 1
         else:
             pass
 
@@ -609,6 +623,21 @@ int insert_drop_flags(LirFunction &f, Dict[int, int] &val_to_slot, Dict[int, boo
                         if slot_to_flag.contains(s):
                             trigger_flag = slot_to_flag.get(s).unwrap()
                             new_val = false
+                case ICallExtern(_, _, ce_args, _, ce_abis):
+                    # OutPtr arg writes its pointee slot → flag := true (mirror
+                    # of the ISlotStore init arm, for the out-param init path;
+                    # #11). iter_key/value carry exactly one OutPtr arg, so the
+                    # first flagged one suffices.
+                    int cai = 0
+                    while cai < ce_args.len() and cai < ce_abis.len():
+                        if ce_abis.get(cai).unwrap() == ABI_OUT_PTR:
+                            int cav = ce_args.get(cai).unwrap()
+                            if val_to_slot.contains(cav):
+                                int cas = val_to_slot.get(cav).unwrap()
+                                if slot_to_flag.contains(cas):
+                                    trigger_flag = slot_to_flag.get(cas).unwrap()
+                                    new_val = true
+                        cai += 1
                 else:
                     pass
             new_insts.push(inst)

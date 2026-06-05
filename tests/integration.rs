@@ -4523,6 +4523,17 @@ done");
 }
 
 #[test]
+fn leak_dict_iter_resource() {
+    // #11 out-param-init leak: Dict/Set for-loop iteration with String
+    // keys/values clones an owned key/value into the bound local via the
+    // accessor's void* out-param (arg 2). Marked `AbiKind::OutPtr` so
+    // drop-elaboration keeps the per-iteration drop alive.
+    run_gg("leak_dict_iter_resource.gg", "\
+leaked=false
+done");
+}
+
+#[test]
 fn leak_comprehensive() {
     run_gg("leak_comprehensive.gg", "\
 leaked=false

@@ -823,6 +823,16 @@ pub(super) fn emit_abi_arg(
             }
             true
         }
+        AbiKind::OutPtr => {
+            // Output pointer: the argument is already the address of the
+            // destination slot the callee writes into (a SlotAddr value).
+            // Pass it through unchanged — identical marshalling to a
+            // passthrough `Ptr`. The semantic meaning of `OutPtr` (callee
+            // initializes the pointee) is consumed by drop-elaboration, not
+            // by the C marshalling here.
+            write!(out, "{val}").unwrap();
+            true
+        }
         AbiKind::Auto => false, // fall back to existing logic
     }
 }

@@ -47,4 +47,16 @@ pub enum AbiKind {
     /// For values already a pointer, passes through unchanged.
     /// Used for collection element params (gorget_array_push arg 1, gorget_map_put args 1/2, etc.).
     VoidElem,
+    /// Output pointer: a `void*` (or typed `T*`) argument the callee writes the
+    /// result INTO — the pointee slot is *initialized by the call*, not before it.
+    /// Marshalled identically to a passthrough pointer at the C boundary (the
+    /// argument value is already the address of the destination slot).
+    ///
+    /// The semantic payload of this kind is consumed by *drop elaboration*: a
+    /// call argument tagged `OutPtr` marks its pointee slot `Initialized`, so the
+    /// slot's `drop_if_alive` guard is NOT deleted as dead. Without it, a slot
+    /// written only through an out-param (e.g. `gorget_map_iter_key`'s arg 2)
+    /// looks uninitialized to drop-elab and its owned value leaks.
+    /// C/LLVM/WASM: pass the pointer through unchanged.
+    OutPtr,
 }

@@ -1,0 +1,57 @@
+# Leak test: Dict/Set for-loop iteration with resource-typed (String)
+# keys and values. The iteration accessors (gorget_map_iter_key/value)
+# write an OWNED, resource-CLONED key/value into the bound local via a
+# void* out-param (arg 2). That local must be dropped at the end of each
+# iteration — else the clone leaks once per iteration (#11). The bug had
+# two halves: GIR never registered the iter local for drop (for_loops.rs),
+# AND drop-elaboration deleted any drop it did emit because the slot,
+# written only through the out-param pointer, looked uninitialized. The
+# fix tags the out-param arg `AbiKind::OutPtr` so drop-elab marks the
+# pointee slot Initialized and keeps the drop.
+from std.os import mem_live
+from std.collections import Dict, Set
+
+void main():
+    int baseline = mem_live()
+
+    # Section 1: Dict[int, String] — value is a resource cloned per iter.
+    int i = 0
+    while i < 200:
+        Dict[int, String] d = Dict[int, String]()
+        d.put(1, "alpha")
+        d.put(2, "beta")
+        d.put(3, "gamma")
+        int total = 0
+        for (k, v) in d:
+            total = total + k + v.len()
+        i = i + 1
+
+    # Section 2: Dict[String, int] — KEY is a resource cloned per iter
+    # (both the (k, v) and the key-only iteration shapes).
+    i = 0
+    while i < 200:
+        Dict[String, int] ages = Dict[String, int]()
+        ages.put("alice", 30)
+        ages.put("bob", 25)
+        int sum = 0
+        for (name, age) in ages:
+            sum = sum + name.len() + age
+        for name in ages:
+            sum = sum + name.len()
+        i = i + 1
+
+    # Section 3: Set[String] — element is a resource cloned per iter.
+    i = 0
+    while i < 200:
+        Set[String] tags = Set[String]()
+        tags.add("red")
+        tags.add("green")
+        tags.add("blue")
+        int n = 0
+        for tag in tags:
+            n = n + tag.len()
+        i = i + 1
+
+    int leaked = mem_live() - baseline
+    print(f"leaked={leaked > 0}")
+    print("done")

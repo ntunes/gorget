@@ -409,6 +409,12 @@ runtime_table! {
     MapGet          => "gorget_map_get",          sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::VoidElem)], T::Ptr, F::ReadOnly);
     MapIsEmpty      => "gorget_map_is_empty",     sig(&[(T::Ptr, A::Ptr)], T::Bool, F::ReadOnly);
     MapItems        => "gorget_map_items",        sig(&[(T::Ptr, A::Ptr)], T::Array, F::Allocates);
+    // Dict/Set for-loop iteration accessors. Arg 2 is the `void* out` slot the
+    // accessor writes the (owned, resource-cloned) key/value INTO — tagged
+    // `OutPtr` so drop-elaboration marks the destination slot Initialized and
+    // keeps its `drop_if_alive` (else the cloned key/value leaks — #11).
+    MapIterKey      => "gorget_map_iter_key",     sig(&[(T::Ptr, A::Ptr), (T::I64, A::Scalar), (T::Ptr, A::OutPtr)], T::Void, F::Mutates);
+    MapIterValue    => "gorget_map_iter_value",   sig(&[(T::Ptr, A::Ptr), (T::I64, A::Scalar), (T::Ptr, A::OutPtr)], T::Void, F::Mutates);
     MapKeys         => "gorget_map_keys",         sig(&[(T::Ptr, A::Ptr)], T::Array, F::Allocates);
     MapLen          => "gorget_map_len",          sig(&[(T::Ptr, A::Ptr)], T::I64, F::ReadOnly);
     MapNew          => "gorget_map_new",          sig_fresh(&[(T::I64, A::Scalar), (T::I64, A::Scalar)], T::Map, F::Allocates);

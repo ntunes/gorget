@@ -331,6 +331,7 @@ fn mangle_abi_list(abis: &[AbiKind]) -> String {
             AbiKind::Opaque => "o",
             AbiKind::ByValue => "v",
             AbiKind::VoidElem => "e",
+            AbiKind::OutPtr => "u",
         })
         .collect::<Vec<_>>()
         .join("")

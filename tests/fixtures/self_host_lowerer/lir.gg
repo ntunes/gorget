@@ -82,6 +82,10 @@ const int ABI_PTR = 5
 const int ABI_OPAQUE = 6
 const int ABI_BY_VALUE = 7
 const int ABI_VOID_ELEM = 8
+# Output pointer: arg the callee writes the result INTO (e.g.
+# gorget_map_iter_key/value arg 2). Drop-elaboration marks the pointee
+# slot Initialized so its drop survives (#11). Mirrors Rust AbiKind::OutPtr.
+const int ABI_OUT_PTR = 9
 
 # ── Scheduler modes ─────────────────────────────────────────────
 

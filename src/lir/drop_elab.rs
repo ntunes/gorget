@@ -311,6 +311,21 @@ fn apply_inst_effect(
         Inst::SlotStore { slot, .. } | Inst::ClosurePack { slot, .. } => {
             state.set(*slot, InitState::Initialized);
         }
+        // A call argument tagged `AbiKind::OutPtr` is the address of a slot the
+        // callee writes the (owned) result INTO — e.g. `gorget_map_iter_key`'s
+        // arg 2. The pointee slot becomes Initialized *after the call*, so its
+        // `drop_if_alive` must be kept (#11: without this the cloned key/value
+        // leaks). Trace the arg ValueId (a SlotAddr) back to its slot.
+        Inst::CallExtern { args, arg_abis, .. }
+        | Inst::CallRuntime { args, arg_abis, .. } => {
+            for (arg, abi) in args.iter().zip(arg_abis.iter()) {
+                if *abi == crate::ir::abi::AbiKind::OutPtr {
+                    if let Some(&slot) = val_to_slot.get(arg) {
+                        state.set(slot, InitState::Initialized);
+                    }
+                }
+            }
+        }
         // MoveSlot annotation → definitely uninitialized (V4).
         Inst::MoveSlot { slot } => {
             state.set(*slot, InitState::Uninitialized);
@@ -662,6 +677,19 @@ fn insert_drop_flags(
                         .and_then(|s| slot_to_flag.get(s))
                         .copied();
                     (s, false)
+                }
+                // A call with an `OutPtr` arg writes the pointee slot →
+                // flag := true (mirror of the SlotStore init arm, for the
+                // out-param init path; #11). iter_key/value carry exactly one
+                // OutPtr arg, so picking the first flagged one suffices.
+                Inst::CallExtern { args, arg_abis, .. }
+                | Inst::CallRuntime { args, arg_abis, .. } => {
+                    let s = args.iter().zip(arg_abis.iter())
+                        .filter(|(_, abi)| **abi == crate::ir::abi::AbiKind::OutPtr)
+                        .find_map(|(arg, _)| {
+                            val_to_slot.get(arg).and_then(|s| slot_to_flag.get(s)).copied()
+                        });
+                    (s, true)
                 }
                 _ => (None, false),
             };

@@ -21,7 +21,7 @@ from lir import EK_NOT_ENUM, EK_OPTION
 from lir import lir_ptr_to, lir_struct, lir_is_scalar, lir_is_aggregate
 from lir import OVF_TRAP, OVF_WRAP
 from lir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
-from lir import ABI_AUTO
+from lir import ABI_AUTO, ABI_OUT_PTR
 from lir import SCHED_POOL
 from lir import lir_fn_next_value, lir_fn_add_slot, lir_fn_add_block
 from lir import lir_push_inst, lir_set_term
@@ -2127,6 +2127,19 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
         return true
     return false
 
+# Out-param ABI table (sibling of `needs_ptr_arg`): true when arg `arg_idx`
+# of `fn_name` is a `void* out` the callee writes the (owned) result INTO —
+# the pointee slot is initialized BY the call. Tagged ABI_OUT_PTR in the
+# ICallExtern arg_abis so drop-elaboration keeps the slot's drop alive (#11).
+# Currently only the Dict/Set iteration accessors' arg 2. Mirrors Rust gg's
+# AbiKind::OutPtr on gorget_map_iter_key/value arg 2 (src/lir/runtime.rs).
+bool out_param_arg(String fn_name, int arg_idx):
+    if fn_name == "gorget_map_iter_key" and arg_idx == 2:
+        return true
+    if fn_name == "gorget_map_iter_value" and arg_idx == 2:
+        return true
+    return false
+
 # Check if a GIR type ID represents a pointer type (Ptr or MutPtr).
 bool is_ptr_type(int tid, GirModule &gmod):
     if tid < 0 or tid >= gmod.type_table.len():
@@ -3390,8 +3403,25 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                     # Don't create a value destination — the call returns void.
                     if call_name != "gorget_channel_recv" and call_name != "gorget_channel_try_recv":
                         dst = lir_fn_next_value(&f)
-                Vector[int] empty_abis = []
-                lir_push_inst(&f, bb, ICallExtern(dst, call_name, lir_args, func_name, empty_abis))
+                # Build per-arg ABI tags. Empty unless an out-param is present
+                # (out_param_arg): then a full-length vector tags ABI_OUT_PTR at
+                # the out-param positions (ABI_AUTO elsewhere) so drop-elab
+                # recognizes the callee-initialized pointee slot (#11). The
+                # abi positions align with `lir_args` 1:1 for the iter accessors
+                # (no fixup appends args for them).
+                Vector[int] call_abis = []
+                bool has_out_param = false
+                int abi_i = 0
+                while abi_i < lir_args.len():
+                    if out_param_arg(effective_name, abi_i):
+                        call_abis.push(ABI_OUT_PTR)
+                        has_out_param = true
+                    else:
+                        call_abis.push(ABI_AUTO)
+                    abi_i += 1
+                if not has_out_param:
+                    call_abis = []
+                lir_push_inst(&f, bb, ICallExtern(dst, call_name, lir_args, func_name, call_abis))
                 if dst >= 0 and dst_local >= 0:
                     int dst_slot = local_to_slot.get(dst_local).unwrap()
                     int dst_slot_ty = f.slots.get(dst_slot).unwrap().ty

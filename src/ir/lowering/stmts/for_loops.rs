@@ -644,6 +644,11 @@ fn lower_for_dict(
                 vec![FunctionBuilder::copy(dict_ptr), FunctionBuilder::copy(idx), FunctionBuilder::copy(k_ptr)],
             );
             ctx.register_local(&k_name, k_local, key_type);
+            // The accessor wrote an OWNED (resource-cloned) key into `k_local`
+            // via its out-param — register it for drop-at-scope-exit, else the
+            // clone leaks once per iteration (#11). `register_local` no-ops for
+            // Copy-typed keys (int, bool), so only resource keys cost a drop.
+            ctx.drops.register_local(k_local, key_type, &ctx.type_registry);
 
             let v_local = builder.add_local(val_type, Some(&v_name));
             let v_ptr_type = ctx.register_ptr_type(val_type);
@@ -653,6 +658,7 @@ fn lower_for_dict(
                 vec![FunctionBuilder::copy(dict_ptr), FunctionBuilder::copy(idx), FunctionBuilder::copy(v_ptr)],
             );
             ctx.register_local(&v_name, v_local, val_type);
+            ctx.drops.register_local(v_local, val_type, &ctx.type_registry);
         }
         Pattern::Binding(name) => {
             let k_local = builder.add_local(key_type, Some(name));
@@ -663,6 +669,7 @@ fn lower_for_dict(
                 vec![FunctionBuilder::copy(dict_ptr), FunctionBuilder::copy(idx), FunctionBuilder::copy(k_ptr)],
             );
             ctx.register_local(name, k_local, key_type);
+            ctx.drops.register_local(k_local, key_type, &ctx.type_registry);
         }
         _ => {}
     }
@@ -769,6 +776,10 @@ fn lower_for_set(
         vec![FunctionBuilder::copy(set_ptr), FunctionBuilder::copy(key_idx), FunctionBuilder::copy(elem_ptr)],
     );
     ctx.register_local(var_name, elem_local, elem_type);
+    // Owned (resource-cloned) element from the out-param accessor — register
+    // for drop-at-scope-exit so resource elements don't leak per iteration
+    // (#11). No-ops for Copy-typed elements.
+    ctx.drops.register_local(elem_local, elem_type, &ctx.type_registry);
 
     lower_block(ctx, builder, body);
 
