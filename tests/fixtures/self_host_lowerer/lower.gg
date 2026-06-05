@@ -11698,7 +11698,26 @@ void lower_closure_body(String call_name, Vector[int] !abi_param_types, int self
         String cap_tname = type_id_to_name(cap.type_id, &gmod)
         int fdst = -1
         if is_resource_type_name(cap_tname, &gmod):
-            int cap_ptr_tid = register_ptr(&gmod, cap.type_id)
+            # Deref a Ptr-typed CoW-alias capture to its OWNED pointee T —
+            # matching Site-3's env-field type — BEFORE register_ptr, so the
+            # body-load dst is `Ptr(T)`, NOT `Ptr(Ptr(T))`. SVarDecl Branch C
+            # retypes a CoW alias (`Vector[int] snap = nums`) to `Ptr(T)`;
+            # without this deref `register_ptr(Ptr(T))=Ptr(Ptr(T))`, and an
+            # OWNING body consume of the capture would hit decide_ptr_consume's
+            # OpCopy-of-pointer arm (alias / dormant double-free) instead of
+            # OpClone. Value-typed captures (fresh literal / `.clone()`) are
+            # unaffected (no GtPtr → cap_value_tid == cap.type_id). Keeps
+            # Site-3 (field=T) and Site-4 (body-load=Ptr(T)) consistent.
+            int cap_value_tid = cap.type_id
+            if cap_value_tid >= 0 and cap_value_tid < gmod.type_table.len():
+                match gmod.type_table.get(cap_value_tid).unwrap():
+                    case GtPtr(cap_pointee):
+                        cap_value_tid = cap_pointee
+                    case GtMutPtr(cap_pointee2):
+                        cap_value_tid = cap_pointee2
+                    else:
+                        pass
+            int cap_ptr_tid = register_ptr(&gmod, cap_value_tid)
             fdst = add_local_with(&cctx, cap_ptr_tid, Some(cap.name.clone()), LoBorrowed(), BoNone())
             set_field_borrow(&cctx, fdst, 1, ci)
         else:
