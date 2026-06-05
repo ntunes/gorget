@@ -1200,13 +1200,17 @@ bool is_droppable_type(int type_id, GirModule &gmod):
     # drop_fn_for_type mirrors this so the GIDropIfAlive resolves <Type>__drop.
     if gmod.optionlike_resource_types.contains(tname):
         return true
-    if tname.starts_with("Result__"):
-        ResultPayloadTypes rp = result_payload_types(tname, &gmod)
-        if is_droppable_type(rp.ok_type, &gmod) or is_droppable_type(rp.err_type, &gmod):
+    # Mono'd Option/Result droppability: read the payload tids off the
+    # typed `enum_category` channel (no mangled-name re-parse). A recorded
+    # `Option__Ref__T` carries its `GtPtr(T)` payload here, which
+    # `is_droppable_type` correctly rejects (a borrow alias isn't dropped),
+    # so the former `Option__Ref__` carve-out is subsumed.
+    EnumCategory ec = enum_category_of(&gmod, type_id)
+    if ec.category == ENUM_CAT_RESULT:
+        if is_droppable_type(ec.ok_type, &gmod) or is_droppable_type(ec.err_type, &gmod):
             return true
-    if tname.starts_with("Option__") and not tname.starts_with("Option__Ref__"):
-        int opt_inner_tid = resolve_field_gir_type(tname.slice(8, tname.len()), &gmod)
-        if is_droppable_type(opt_inner_tid, &gmod):
+    elif ec.category == ENUM_CAT_OPTION:
+        if is_droppable_type(ec.ok_type, &gmod):
             return true
     return false
 
@@ -3051,6 +3055,19 @@ int resolved_to_gir_type(int rtid, TypeTable types, ScopeTable scopes, GirModule
                             record_option_ref_payload(&gmod, opt_tid, ptr_tid)
                         else:
                             pass
+                # Typed enum-category channel: record the resolved payload
+                # tids so unwrap / match / catch / rethrow / LIR field-shape
+                # never re-parse the mangled name. The first type-arg is the
+                # Some_0 / Ok_0 payload; the second (Result only) is Error_0.
+                # The payload tids come straight from the typechecker's
+                # `type_args` — the authoritative typed source (Layering rule
+                # 4, resolve once / write through).
+                int ec_ok = resolved_to_gir_type(get_int_at(type_args, 0), types, scopes, &gmod)
+                if di.name == "Option":
+                    record_enum_category(&gmod, opt_tid, ENUM_CAT_OPTION, ec_ok, -1)
+                elif type_args.len() >= 2:
+                    int ec_err = resolved_to_gir_type(get_int_at(type_args, 1), types, scopes, &gmod)
+                    record_enum_category(&gmod, opt_tid, ENUM_CAT_RESULT, ec_ok, ec_err)
             return opt_tid
         case RTRef(inner_rtid):
             # option_ref_borrow Phase 1: a `Ref[T]` lowers to `GtPtr(T)` (Rust
@@ -3144,7 +3161,18 @@ int map_ast_type(SpannedType stype, GirModule &gmod):
                 return UNIT_TYPE
             # Named type with possible generic args
             String mangled = mangle_type_name(name, targs, &gmod)
-            return lookup_or_register_named(&gmod, mangled)
+            int mat_tid = lookup_or_register_named(&gmod, mangled)
+            # Typed enum-category channel (AST path — mirrors the
+            # ResolvedType RTGeneric arm). Record the payload tids resolved
+            # from the AST type-args so downstream never re-parses `mangled`.
+            if name == "Option" and targs.len() >= 1:
+                int mat_ok = map_ast_type(targs.get(0).unwrap(), &gmod)
+                record_enum_category(&gmod, mat_tid, ENUM_CAT_OPTION, mat_ok, -1)
+            elif name == "Result" and targs.len() >= 2:
+                int mat_rok = map_ast_type(targs.get(0).unwrap(), &gmod)
+                int mat_rerr = map_ast_type(targs.get(1).unwrap(), &gmod)
+                record_enum_category(&gmod, mat_tid, ENUM_CAT_RESULT, mat_rok, mat_rerr)
+            return mat_tid
         case TFunction(ret_box, fn_params_f, _):
             # Function types as params/fields → Ptr(FnPtr). The C-level ABI for
             # bare closure params is void* (GorgetClosure* effectively); encode
@@ -3412,7 +3440,81 @@ int resolve_field_gir_type(String type_name, GirModule &gmod):
                 String pointee = type_name.slice(5, type_name.len())
                 return register_ptr(&gmod, resolve_field_gir_type(pointee, &gmod))
             # Named type (user struct, collection, etc.)
-            return lookup_or_register_named(&gmod, type_name)
+            int rft_tid = lookup_or_register_named(&gmod, type_name)
+            # Typed enum-category recording for a mono'd Option/Result that
+            # arrives as a struct/enum FIELD type NAME (e.g. `R.outcome:
+            # Result[int, String]`). These don't flow through a typed mint —
+            # the typechecker's RTGeneric was lost when the field type was
+            # stored as a name in `GirTypeInfo`, and `gmod` doesn't exist yet
+            # at struct-registration time — so this lazy resolver is the
+            # earliest point with `gmod` in hand. Record ONCE here (write
+            # site) so the match-destructure / LIR field-shape readers stay
+            # name-free (Layering rule 4). Idempotent (record_enum_category
+            # is first-write-wins).
+            record_field_enum_category(type_name, rft_tid, &gmod)
+            return rft_tid
+
+# Record the typed `enum_category` payloads for a mono'd `Option__`/
+# `Result__` field-type NAME (the one residual name-derivation site — a
+# field type stored as a name in `GirTypeInfo`, with no surviving typed
+# RTGeneric). The Option payload is unambiguous (`Option__<rest>`). The
+# Result split (`Result__<Ok>__<Err>`, Ok possibly compound) probes each
+# `__` boundary and accepts the first where the Err half resolves to a
+# registered/primitive type — recorded into the typed channel so EVERY
+# READER reads tids, not names. (`Option__Ref__` is left to the
+# option_ref_payload channel.)
+void record_field_enum_category(String type_name, int enum_tid, GirModule &gmod):
+    if has_enum_category(&gmod, enum_tid):
+        return
+    if type_name.starts_with("Option__") and not type_name.starts_with("Option__Ref__"):
+        String inner = type_name.slice(8, type_name.len())
+        record_enum_category(&gmod, enum_tid, ENUM_CAT_OPTION, resolve_field_gir_type(inner, &gmod), -1)
+    elif type_name.starts_with("Result__"):
+        String rest = type_name.slice(8, type_name.len())
+        String ok_name = ""
+        String err_name = ""
+        int si = 0
+        while si + 1 < rest.byte_len():
+            if rest.byte_at(si) == 0x5F and rest.byte_at(si + 1) == 0x5F:
+                String e_try = rest.slice(si + 2, rest.len())
+                # Accept the boundary whose Err half is a known concrete type
+                # (registered user type / mono'd collection / primitive). The
+                # Ok half is then whatever precedes it — possibly compound.
+                if is_known_field_type_name(e_try, &gmod):
+                    ok_name = rest.slice(0, si)
+                    err_name = e_try
+                    break
+            si += 1
+        if ok_name == "":
+            # Fall back to the leftmost split.
+            int split = rest.index_of("__").unwrap_or(-1)
+            if split > 0:
+                ok_name = rest.slice(0, split)
+                err_name = rest.slice(split + 2, rest.len())
+        if ok_name != "":
+            record_enum_category(&gmod, enum_tid, ENUM_CAT_RESULT, resolve_field_gir_type(ok_name, &gmod), resolve_field_gir_type(err_name, &gmod))
+
+# True when `name` is a CONCRETE field-type name: a primitive, a
+# registered user struct/enum, or a mono'd collection prefix. Used only by
+# `record_field_enum_category` to pick the Result Ok/Err `__` boundary.
+bool is_known_field_type_name(String name, GirModule &gmod):
+    if name == "int" or name == "int64_t" or name == "float" or name == "double" or name == "bool":
+        return true
+    if name == "String" or name == "GorgetString" or name == "Str":
+        return true
+    if name == "int32_t" or name == "i32" or name == "int8_t" or name == "i8" or name == "byte" or name == "uint8_t":
+        return true
+    if name == "int16_t" or name == "uint16_t" or name == "uint32_t" or name == "uint64_t":
+        return true
+    if gmod.type_infos.contains(name):
+        return true
+    if name.starts_with("Vector__") or name.starts_with("Deque__") or name.starts_with("Heap__"):
+        return true
+    if name.starts_with("Set__") or name.starts_with("HashSet__") or name.starts_with("Dict__"):
+        return true
+    if name.starts_with("HashMap__") or name.starts_with("GorgetMap__") or name.starts_with("Box__"):
+        return true
+    return false
 
 # Constant-fold a top-level `const int` initializer. Supports int
 # literals, references to other const_decls, and the binary/unary ops
@@ -4044,6 +4146,15 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
                         recv_name = name
                     else:
                         pass
+            # Typed enum-category channel (value-payload Option/Result):
+            # `.unwrap()` yields the Some_0 / Ok_0 payload recorded at the
+            # mint site — no mangled-name re-parse. (`Option__Ref__` results
+            # already returned above via `option_ref_payload`.) The name
+            # arms below remain as a fallback for any path the channel
+            # hasn't recorded yet.
+            EnumCategory uec = enum_category_of(&gmod, recv_tid)
+            if uec.category == ENUM_CAT_OPTION or uec.category == ENUM_CAT_RESULT:
+                return uec.ok_type
         if recv_name.starts_with("Option__"):
             String inner = recv_name.slice(8, recv_name.len())
             int prim = prim_name_to_type(inner)
@@ -4142,9 +4253,12 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
             int elem_gir = resolve_field_gir_type(elem_norm, &gmod)
             int ref_ptr_tid = register_ptr(&gmod, elem_gir)
             record_option_ref_payload(&gmod, ref_opt_tid, ref_ptr_tid)
+            record_enum_category(&gmod, ref_opt_tid, ENUM_CAT_OPTION, ref_ptr_tid, -1)
             return ref_opt_tid
         String opt_name = "Option__" + elem_norm
-        return lookup_or_register_named(&gmod, opt_name)
+        int opt_pop_tid = lookup_or_register_named(&gmod, opt_name)
+        record_enum_category(&gmod, opt_pop_tid, ENUM_CAT_OPTION, resolve_field_gir_type(elem_norm, &gmod), -1)
+        return opt_pop_tid
     # clone: return receiver type
     if method == "clone":
         if recv >= 0 and recv < ctx.locals.len():
@@ -5393,6 +5507,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             if pt >= 0:
                                 String opt_name = "Option__" + type_id_to_name(pt, &gmod)
                                 static_ret = lookup_or_register_named(&gmod, opt_name)
+                                record_enum_category(&gmod, static_ret, ENUM_CAT_OPTION, pt, -1)
                         else:
                             int binfer = builtin_call_return_type(static_name, &gmod)
                             if binfer >= 0:
@@ -6865,6 +6980,26 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         # for `f(Ok(x))` / `f(None)` / etc. at non-return user-level
         # consume positions.
         Vector[int] callee_param_types = get_fn_param_types(call_name, &gmod)
+        # Prelude-variant ctor arg expected-type, off the typed enum-category
+        # channel. `Ok`/`Error`/`Some` aren't real fns (no `callee_param_types`),
+        # so a nested ctor arg like `Ok(None())` / `Some(Box(x))` would lower
+        # its inner with no expected type and mis-slot it (`None()` typed
+        # `int64_t` instead of `Option__int64_t`). When the ENCLOSING
+        # `expected_type` is a recorded `Result__`/`Option__`, the arg's
+        # expected type IS that enum's Ok/Error/Some payload — read it from the
+        # channel (CLAUDE.md "No name matching"; the same typed fact the field
+        # shape and match-destructure read). -1 when not a variant ctor / no
+        # record / no enclosing expectation.
+        int variant_arg_expected = -1
+        if fname == "Ok" or fname == "Error" or fname == "Some":
+            EnumCategory pvec = enum_category_of(&gmod, ctx.expected_type)
+            if pvec.category == ENUM_CAT_RESULT:
+                if fname == "Ok":
+                    variant_arg_expected = pvec.ok_type
+                elif fname == "Error":
+                    variant_arg_expected = pvec.err_type
+            elif pvec.category == ENUM_CAT_OPTION and fname == "Some":
+                variant_arg_expected = pvec.ok_type
         int ai = 0
         int first_arg_type = -1
         while ai < args.len():
@@ -6893,6 +7028,12 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                 int pt = callee_param_types.get(ai).unwrap()
                 if pt != I64_TYPE and pt != UNIT_TYPE:
                     ctx.expected_type = pt
+            # Prelude-variant ctor (Ok/Error/Some): no callee_param_types, so
+            # use the channel-derived payload type as the arg's expectation
+            # (the `ai == 0` payload position). This is what makes a nested
+            # `Ok(None())` type its inner `None()` to the Ok payload.
+            elif ai == 0 and variant_arg_expected >= 0:
+                ctx.expected_type = variant_arg_expected
             int arg_local = lower_expr(&ctx, arg, &gmod)
             ctx.expected_type = prev_expected_arg
             # Auto-propagate a `throws` call passed as an argument
@@ -7038,6 +7179,7 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                     else:
                         pass
             ret_type = lookup_or_register_named(&gmod, "Option__" + type_id_to_name(some_inner, &gmod))
+            record_enum_category(&gmod, ret_type, ENUM_CAT_OPTION, some_inner, -1)
         int dst = add_local(&ctx, ret_type, NO_NAME)
         emit(&ctx, GICall(dst, call_name, gir_args))
         result = dst
@@ -8721,27 +8863,26 @@ void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vecto
     set_terminator(&ctx, GTJump(match_bb))
 
 int lookup_ctor_field_type(String enum_name, String variant_name, int field_idx, GirModule &gmod):
-    # Prelude mono'd enum payload type: extract T from the mangled name.
-    # Option__T.Some(T) → T.  Result__T__E.Ok(T) / Error(E) → T or E.
-    if enum_name.starts_with("Option__"):
-        if variant_name == "Some" and field_idx == 0:
-            String inner = enum_name.slice(8, enum_name.len())
-            return resolve_field_gir_type(inner, &gmod)
-        return I64_TYPE
-    if enum_name.starts_with("Result__"):
-        # Split `Result__<OkT>__<ErrT>` via the shared `result_payload_types`
-        # helper (leftmost-`__`, the same split the `.unwrap()` path at
-        # `:4629-4632` uses). The old unconditional I64 fallback silently
-        # mistyped a `match r: case Error(e):` binding on a String/resource
-        # payload as int — `print(e)` then used `%lld` on the Str's data
-        # pointer (garbage). KNOWN LIMITATION (shared with `.unwrap()`):
-        # a nested-generic Ok payload (`Result__Vector__byte__IoError`)
-        # mis-splits; the error-handling fixtures all have simple payloads.
-        ResultPayloadTypes rp = result_payload_types(enum_name, &gmod)
-        if variant_name == "Ok" and field_idx == 0:
-            return rp.ok_type
-        if variant_name == "Error" and field_idx == 0:
-            return rp.err_type
+    # Prelude mono'd enum payload type — read off the typed `enum_category`
+    # channel (recorded at the MINT site), not re-parsed from the mangled
+    # name. `Option__T.Some(0)` → T; `Result__T__E.Ok(0)` → T / `.Error(0)`
+    # → E. The enum's GIR id is the name-deduped `named_types` entry, so it
+    # matches the id recorded at mint time. This RETIRES the old leftmost-/
+    # smart-`__` split (mis-split on nested-generic payloads) — CLAUDE.md
+    # "No name matching".
+    if enum_name.starts_with("Option__") or enum_name.starts_with("Result__"):
+        int enum_tid = gmod.named_types.get(enum_name).unwrap_or(-1)
+        EnumCategory ec = enum_category_of(&gmod, enum_tid)
+        if ec.category == ENUM_CAT_OPTION:
+            if variant_name == "Some" and field_idx == 0:
+                return ec.ok_type
+            return I64_TYPE
+        if ec.category == ENUM_CAT_RESULT:
+            if variant_name == "Ok" and field_idx == 0:
+                return ec.ok_type
+            if variant_name == "Error" and field_idx == 0:
+                return ec.err_type
+            return I64_TYPE
         return I64_TYPE
     String found_field_type = ""
     if gmod.type_infos.contains(enum_name):
@@ -8764,93 +8905,37 @@ int lookup_ctor_field_type(String enum_name, String variant_name, int field_idx,
 # registration (`stmts/mod.rs:339`). The self-host re-expresses these
 # with the local block/branch/tag-read/payload-read vocabulary.
 
-# Split a monomorphized `Result__<OkT>__<ErrT>` type name into its Ok
-# and Error payload GIR type ids. Mirrors Rust's
-# `extract_result_field_types` (`exprs/mod.rs:2845`) — Rust reads the Ok
-# and Error variant field types off the enum's TypeDef; the self-host's
-# mono'd `Result__T__E` is NOT in `type_infos`, so we parse the mangled
-# name and resolve each half via `resolve_field_gir_type` (the same
-# helper `lookup_ctor_field_type` uses for Option). This is the same
-# leftmost-`__` split as the `.unwrap()` path at `:4629-4632` — and
-# shares its (FORMER) limitation: a nested-generic Ok payload
-# (`Result__Vector__byte__IoError`) used to mis-split (Ok wrongly
-# `Vector`). FIXED here via a smart L→R split (mirrors lir_lower Pass 3,
-# `lir_lower.gg:1018-1050`): try each `__` boundary and accept the first
-# where BOTH sides name a concrete type (`is_concrete_payload_name`),
-# falling back to the leftmost split if none qualifies. `result_tn` MUST
-# be a `Result__`-prefixed name (the scrutinee/inner-expr lowered local
-# type, with `GtPtr` peeled). Returns (ok_tid, err_tid); both default to
-# `I64_TYPE` if the name is not a recognizable `Result__T__E`.
-
-# True when `name` denotes a CONCRETE type for the payload-split: a
-# scalar primitive, a registered user type (`type_infos.contains`), or a
-# monomorphized collection (a `<Coll>__<...>` prefix). Used to pick the
-# correct `__` boundary in a `Result__<Ok>__<Err>` name where `Ok` may
-# itself be compound (`Vector__int64_t`). NOT the lir_lower `!= LT_PTR`
-# test: the GIR-level `resolve_field_gir_type` always registers an
-# unknown name (no miss sentinel), so we test the name shape directly.
-bool is_concrete_payload_name(String name, GirModule &gmod):
-    # Scalar primitives (the special-cased names in resolve_field_gir_type
-    # plus the common C-int aliases).
-    if name == "int" or name == "int64_t" or name == "float" or name == "double" or name == "bool":
-        return true
-    if name == "String" or name == "GorgetString" or name == "Str":
-        return true
-    if name == "int32_t" or name == "i32" or name == "int8_t" or name == "i8" or name == "byte" or name == "uint8_t":
-        return true
-    if name == "int16_t" or name == "uint16_t" or name == "uint32_t" or name == "uint64_t":
-        return true
-    if name == "float32" or name == "float64" or name == "size_t" or name == "ssize_t":
-        return true
-    # Registered user struct/enum (mono'd prelude generics are NOT keys —
-    # they're handled by the collection-prefix arm below).
-    if gmod.type_infos.contains(name):
-        return true
-    # Monomorphized collections / parameterised resource handles — their
-    # mangled names carry a `<Coll>__<args>` shape. A bare template
-    # (`Vector`) has no `__` and is NOT in type_infos, so it correctly
-    # fails (forcing the split past it). Mirrors lir_lower's prefix set.
-    if name.starts_with("Vector__") or name.starts_with("Deque__") or name.starts_with("Heap__"):
-        return true
-    if name.starts_with("Set__") or name.starts_with("HashSet__") or name.starts_with("GorgetSet__"):
-        return true
-    if name.starts_with("Dict__") or name.starts_with("HashMap__") or name.starts_with("Map__"):
-        return true
-    if name.starts_with("GorgetDict__") or name.starts_with("GorgetMap__") or name.starts_with("OrderedDict__"):
-        return true
-    if name.starts_with("Box__") or name.starts_with("Ref__"):
-        return true
-    return false
-
-ResultPayloadTypes result_payload_types(String result_tn, GirModule &gmod):
-    int ok_tid = I64_TYPE
-    int err_tid = I64_TYPE
-    if result_tn.starts_with("Result__"):
-        String rest = result_tn.slice(8, result_tn.len())
-        String ok_name = ""
-        String err_name = ""
-        # Smart split: try each `__` boundary L→R; accept the first where
-        # BOTH sides name a concrete type.
-        int si = 0
-        while si + 1 < rest.byte_len():
-            if rest.byte_at(si) == 0x5F and rest.byte_at(si + 1) == 0x5F:
-                String o_try = rest.slice(0, si)
-                String e_try = rest.slice(si + 2, rest.len())
-                if is_concrete_payload_name(o_try, &gmod) and is_concrete_payload_name(e_try, &gmod):
-                    ok_name = o_try
-                    err_name = e_try
-                    break
-            si += 1
-        # Fall back to the leftmost split if no boundary fully qualified.
-        if ok_name == "":
-            int split = rest.index_of("__").unwrap_or(-1)
-            if split > 0:
-                ok_name = rest.slice(0, split)
-                err_name = rest.slice(split + 2, rest.len())
-        if ok_name != "":
-            ok_tid = resolve_field_gir_type(ok_name, &gmod)
-            err_tid = resolve_field_gir_type(err_name, &gmod)
-    return ResultPayloadTypes(ok_tid, err_tid)
+# Read the Ok and Error payload GIR type ids of a monomorphized
+# `Result__<OkT>__<ErrT>` enum off the typed `enum_category` channel
+# (recorded at the MINT site — `record_enum_category` — where the typed
+# payload tids were in hand). Mirrors Rust's `extract_result_field_types`
+# (`exprs/mod.rs:2845`), which reads the Ok/Error variant field types off
+# the enum's TypeDef; the self-host's mono'd `Result__T__E` is not in
+# `type_infos`, so we carry the same typed fact on `enum_category` instead.
+# This RETIRES the former L→R `__`-boundary "smart split" of the mangled
+# name (genuinely ambiguous on nested generics like
+# `Result__Option__int64_t__GorgetString`) — CLAUDE.md "No name matching",
+# Layering rule 3. `result_tid` is the GIR id of the Result enum (the
+# scrutinee/inner-expr lowered local type, with `GtPtr` already peeled by
+# the caller's `type_id_to_name`-style lookup). Returns (ok_tid, err_tid);
+# both default to `I64_TYPE` if `result_tid` carries no recorded category.
+ResultPayloadTypes result_payload_types(int result_tid, GirModule &gmod):
+    # Peel a leading GtPtr/GtMutPtr (a borrowed call result's local type)
+    # to the underlying Result enum id — the channel is keyed by the enum
+    # id, exactly as `type_id_to_name` peels the pointer to the enum name.
+    int enum_tid = result_tid
+    if enum_tid >= 0 and enum_tid < gmod.type_table.len():
+        match gmod.type_table.get(enum_tid).unwrap():
+            case GtPtr(inner):
+                enum_tid = inner
+            case GtMutPtr(inner):
+                enum_tid = inner
+            else:
+                pass
+    EnumCategory ec = enum_category_of(&gmod, enum_tid)
+    if ec.category == ENUM_CAT_RESULT:
+        return ResultPayloadTypes(ec.ok_type, ec.err_type)
+    return ResultPayloadTypes(I64_TYPE, I64_TYPE)
 
 # Emit the registered `on error:` cleanup blocks, LIFO, into the current
 # block. Mirrors Rust's `emit_on_error_cleanups` (`stmts/mod.rs:357`),
@@ -8915,7 +9000,7 @@ int lower_catch_expr(LowerCtx &ctx, SpannedExpr inner, String error_binding, Spa
     # result) to get the mono'd Result__T__E name for the tag/payload
     # reads (mirrors the scrutinee-fallback peel at `:6730-6744`).
     String result_tn = type_id_to_name(val_tid, &gmod)
-    ResultPayloadTypes pt = result_payload_types(result_tn, &gmod)
+    ResultPayloadTypes pt = result_payload_types(val_tid, &gmod)
     int ok_tid = pt.ok_type
     int err_tid = pt.err_type
     # Read the Result tag (0=Ok, 1=Error) via the monomorphized enum
@@ -8965,7 +9050,7 @@ int lower_rethrow_expr(LowerCtx &ctx, SpannedExpr inner, Option[String] error_bi
     int val = lower_expr(&ctx, inner, &gmod)
     int val_tid = ctx.locals.get(val).unwrap().type_id
     String result_tn = type_id_to_name(val_tid, &gmod)
-    ResultPayloadTypes pt = result_payload_types(result_tn, &gmod)
+    ResultPayloadTypes pt = result_payload_types(val_tid, &gmod)
     int ok_tid = pt.ok_type
     int err_tid = pt.err_type
     # The enclosing function's Result__T__E return type (local 0).
@@ -9066,7 +9151,7 @@ int maybe_auto_propagate(LowerCtx &ctx, int val, GirModule &gmod):
     if not fn_result_tn.starts_with("Result__"):
         return val
     # Split the consumed Result's payload types.
-    ResultPayloadTypes pt = result_payload_types(result_tn, &gmod)
+    ResultPayloadTypes pt = result_payload_types(val_tid, &gmod)
     int ok_tid = pt.ok_type
     int err_tid = pt.err_type
     int scrutinee_ptr = match_scrutinee_ptr(&ctx, &gmod, val)
@@ -9479,6 +9564,7 @@ void lower_for_vector(LowerCtx &ctx, SpannedPattern pat, int coll_local, String 
     switch_to(&ctx, body_bb)
     String opt_name = "Option__" + elem_name
     int opt_tid = lookup_or_register_named(&gmod, opt_name)
+    record_enum_category(&gmod, opt_tid, ENUM_CAT_OPTION, elem_tid, -1)
     # CoW for-element: tag the get-result with the SOURCE collection local
     # (BoCollectionElement(coll_local), a non-negative id) — distinct from
     # the general `.get()` path (BoCollectionElement(-1)). The non-negative
@@ -9995,6 +10081,7 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
                 String err_c = type_id_to_name(err_type, &gmod)
                 String result_name = "Result__void__" + err_c
                 ret_type = lookup_or_register_named(&gmod, result_name)
+                record_enum_category(&gmod, ret_type, ENUM_CAT_RESULT, UNIT_TYPE, err_type)
             case None:
                 ret_type = I32_TYPE
     else:
@@ -10002,11 +10089,13 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
         # Wrap return type in Result[T, E] for throws functions
         match fdef.throws_type:
             case Some(throws_ty):
+                int ok_payload = ret_type
                 int err_type = map_ast_type(throws_ty, &gmod)
                 String ret_c = type_id_to_name(ret_type, &gmod)
                 String err_c = type_id_to_name(err_type, &gmod)
                 String result_name = "Result__" + ret_c + "__" + err_c
                 ret_type = lookup_or_register_named(&gmod, result_name)
+                record_enum_category(&gmod, ret_type, ENUM_CAT_RESULT, ok_payload, err_type)
             case None:
                 pass
 
@@ -10410,7 +10499,9 @@ int guess_return_type(SpannedExpr sexpr, GirModule &gmod):
                         if inner_t == STRING_MARKER:
                             inner_t = lookup_or_register_named(&gmod, "GorgetString")
                         String inner_name = type_id_to_name(inner_t, &gmod)
-                        return lookup_or_register_named(&gmod, "Option__" + inner_name)
+                        int gss_opt = lookup_or_register_named(&gmod, "Option__" + inner_name)
+                        record_enum_category(&gmod, gss_opt, ENUM_CAT_OPTION, inner_t, -1)
+                        return gss_opt
                     if fname == "None":
                         return UNIT_TYPE
                     if fname == "Ok" or fname == "Error":
@@ -12545,7 +12636,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     Dict[String, GirStaticInfo] statics = {}
     Dict[String, ResourceMetadata] resource_metadata = {}
     Dict[int, int] option_ref_payload = {}
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, !const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types, !option_ref_payload, [], !enum_variant_parent_idx, false, [], {})
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, !const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types, !option_ref_payload, [], !enum_variant_parent_idx, false, [], {}, {})
 
     # R11: extract the `strip-asserts` directive so the SAssert case in
     # lower_stmt can emit a no-op instead of a conditional panic. Mirrors
@@ -12577,10 +12668,12 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                             # Honour throws_type for Result[T, E] wrapping.
                             match rs_fdef.throws_type:
                                 case Some(rs_throws):
+                                    int rs_ok = rs_rt
                                     int rs_err = map_ast_type(rs_throws, &gmod)
                                     String rs_ret_c = type_id_to_name(rs_rt, &gmod)
                                     String rs_err_c = type_id_to_name(rs_err, &gmod)
                                     rs_rt = lookup_or_register_named(&gmod, "Result__" + rs_ret_c + "__" + rs_err_c)
+                                    record_enum_category(&gmod, rs_rt, ENUM_CAT_RESULT, rs_ok, rs_err)
                                 case None:
                                     pass
                             gmod.fn_sigs.put(rs_fdef.name, rs_rt)
@@ -12887,11 +12980,13 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                     # zero-init). Mirrors the function-build wrap at `:7472`.
                     match fsdef.throws_type:
                         case Some(fs_throws):
+                            int fs_ok = ret_tid
                             int fs_err = map_ast_type(fs_throws, &gmod)
                             if ret_tid >= 0 and fs_err >= 0:
                                 String fs_ret_c = type_id_to_name(ret_tid, &gmod)
                                 String fs_err_c = type_id_to_name(fs_err, &gmod)
                                 ret_tid = lookup_or_register_named(&gmod, "Result__" + fs_ret_c + "__" + fs_err_c)
+                                record_enum_category(&gmod, ret_tid, ENUM_CAT_RESULT, fs_ok, fs_err)
                         case None:
                             pass
                     if ret_tid >= 0:

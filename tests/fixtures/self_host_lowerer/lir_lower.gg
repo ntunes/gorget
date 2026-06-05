@@ -26,7 +26,8 @@ from lir import SCHED_POOL
 from lir import lir_fn_next_value, lir_fn_add_slot, lir_fn_add_block
 from lir import lir_push_inst, lir_set_term
 from lir import lir_mod_add_struct, lir_mod_add_function, new_lir_module
-from lower import get_fn_param_types
+from lower import get_fn_param_types, type_id_to_name
+from gir import EnumCategory, enum_category_of, ENUM_CAT_OPTION, ENUM_CAT_RESULT
 from std.collections import Vector, Dict
 from std.conv import int_to_str
 from std.conv import float_to_bits
@@ -682,6 +683,28 @@ int resolve_field_lir_type(String type_name, Dict[String, int] &sr):
     # Fallback: treat as pointer (opaque or unresolved type)
     return LT_PTR
 
+# Bridge a GIR payload type id (read off the typed `enum_category` channel)
+# to its LIR field type — the typed replacement for re-parsing a mono'd
+# `Option__`/`Result__` name. A `GtPtr`/`GtMutPtr` payload (a borrowed
+# `Option__Ref__T`'s `GtPtr(T)`) maps to `LT_PTR` directly — we must NOT
+# strip it to the pointee struct (that's the shallow-copy unsoundness the
+# `option_ref_payload` channel guards). A `void`/`unit` Ok payload (a
+# `T f() throws E` with `T=void`) maps to `LT_VOID`. Otherwise resolve the
+# payload's NAME (a typed `type_id_to_name` lookup off the GtNamed
+# registry — NOT a mangled-name split) through `resolve_field_lir_type`.
+int gir_payload_to_lir_type(int gir_tid, GirModule &gmod, Dict[String, int] &sr):
+    if gir_tid == UNIT_TYPE:
+        return LT_VOID
+    if gir_tid >= 0 and gir_tid < gmod.type_table.len():
+        match gmod.type_table.get(gir_tid).unwrap():
+            case GtPtr(_):
+                return LT_PTR
+            case GtMutPtr(_):
+                return LT_PTR
+            else:
+                pass
+    return resolve_field_lir_type(type_id_to_name(gir_tid, &gmod), &sr)
+
 # Register user-defined structs and enums from the GIR type table.
 void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
     # Two-pass registration: Pass 1 creates placeholder entries,
@@ -981,9 +1004,38 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
             psi += 1
             continue
         String pname = psdef.name
+        # Look up the typed enum-category record for this mono'd struct (the
+        # name-deduped GIR id is `named_types[pname]`). When present, the
+        # Some_0/Ok_0/Error_0 field TYPES come straight off the channel via
+        # `gir_payload_to_lir_type` — no `__`-boundary re-parse of `pname`,
+        # which is genuinely ambiguous for nested generics like
+        # `Result__Option__int64_t__GorgetString` (the SEGFAULTING mis-split).
+        # Layering rule 3 / CLAUDE.md "No name matching". The legacy
+        # name-split below is a TRANSITIONAL fallback for the few mono'd
+        # names registered without a channel record (a `Result__`/`Option__`
+        # field-type-name resolved by `resolve_field_gir_type`'s `else` arm,
+        # which lacks the structured payloads to record).
+        int pname_tid = gmod.named_types.get(pname).unwrap_or(-1)
+        EnumCategory pec = enum_category_of(&gmod, pname_tid)
         if pname.starts_with("Option__"):
             String inner = pname.slice(8, pname.len())
             int inner_ty = resolve_field_lir_type(inner, &sr)
+            # Typed channel (primary): the recorded Some_0 payload tid drives
+            # both the field LIR type and the drop-name. A `GtPtr` payload (a
+            # borrowed `Option__Ref__T`) is `LT_PTR` and gets NO drop — the
+            # typed restatement of the `Ref__`-prefix borrow guard.
+            bool opt_is_borrow = false
+            if pec.category == ENUM_CAT_OPTION:
+                inner_ty = gir_payload_to_lir_type(pec.ok_type, &gmod, &sr)
+                inner = type_id_to_name(pec.ok_type, &gmod)
+                if pec.ok_type >= 0 and pec.ok_type < gmod.type_table.len():
+                    match gmod.type_table.get(pec.ok_type).unwrap():
+                        case GtPtr(_):
+                            opt_is_borrow = true
+                        case GtMutPtr(_):
+                            opt_is_borrow = true
+                        else:
+                            pass
             Vector[StructField] ofields = []
             ofields.push(StructField("tag", LT_I32))
             ofields.push(StructField("Some_0", inner_ty))
@@ -999,7 +1051,9 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
             # at a consuming position and double-freed (MatchArm `guard` /
             # ElseBranch `condition`). Rust emits these (driver.c:11479).
             # Mirrors Pass 2's recursive_drop_enums + type_drop_fns wiring.
-            String opt_inner_drop = drop_fn_for_type(inner, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types, &m.drop_collision_types)
+            String opt_inner_drop = ""
+            if not opt_is_borrow:
+                opt_inner_drop = drop_fn_for_type(inner, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types, &m.drop_collision_types)
             if opt_inner_drop != "":
                 Vector[EnumVariantDrop] opt_vd = []
                 opt_vd.push(EnumVariantDrop(0, "Some", "Some_0", opt_inner_drop.clone(), inner.clone()))
@@ -1011,43 +1065,70 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
             LirStructDef opt_sdef = LirStructDef(pname, ofields, 1, false, -1, -1)
             m.structs.set(psi, opt_sdef)
         elif pname.starts_with("Result__"):
-            # Split "Result__<Ok>__<Err>". Ok may itself be compound like
-            # `Vector__byte`, so a naive left-first `__` split fails. Try
-            # each possible `__` position from left to right and accept the
-            # first split where BOTH sides resolve to a registered type.
-            String rest = pname.slice(8, pname.len())
             String ok_name = ""
             String err_name = ""
             int ok_ty = -1
             int err_ty = -1
-            int si = 0
-            while si + 1 < rest.byte_len():
-                if rest.byte_at(si) == 0x5F and rest.byte_at(si + 1) == 0x5F:
-                    String o_try = rest.slice(0, si)
-                    String e_try = rest.slice(si + 2, rest.len())
-                    int ot = resolve_field_lir_type(o_try, &sr)
-                    int et = resolve_field_lir_type(e_try, &sr)
-                    # Accept only if both resolve as non-pointer fallbacks
-                    # (both registered OR scalar). resolve_field_lir_type
-                    # returns LT_PTR for unresolved, which we treat as a miss.
-                    if ot != LT_PTR and et != LT_PTR:
-                        ok_name = o_try
-                        err_name = e_try
-                        ok_ty = ot
-                        err_ty = et
-                        break
-                si += 1
-            if ok_name == "":
-                # Fall back to first-underscore split even if one side misses.
-                int si2 = 0
-                while si2 + 1 < rest.byte_len():
-                    if rest.byte_at(si2) == 0x5F and rest.byte_at(si2 + 1) == 0x5F:
-                        ok_name = rest.slice(0, si2)
-                        err_name = rest.slice(si2 + 2, rest.len())
-                        ok_ty = resolve_field_lir_type(ok_name, &sr)
-                        err_ty = resolve_field_lir_type(err_name, &sr)
-                        break
-                    si2 += 1
+            bool res_ok_borrow = false
+            bool res_err_borrow = false
+            if pec.category == ENUM_CAT_RESULT:
+                # Typed channel (primary): payload tids → field LIR types +
+                # drop-names, no `pname` re-parse.
+                ok_ty = gir_payload_to_lir_type(pec.ok_type, &gmod, &sr)
+                err_ty = gir_payload_to_lir_type(pec.err_type, &gmod, &sr)
+                ok_name = type_id_to_name(pec.ok_type, &gmod)
+                err_name = type_id_to_name(pec.err_type, &gmod)
+                if pec.ok_type >= 0 and pec.ok_type < gmod.type_table.len():
+                    match gmod.type_table.get(pec.ok_type).unwrap():
+                        case GtPtr(_):
+                            res_ok_borrow = true
+                        case GtMutPtr(_):
+                            res_ok_borrow = true
+                        else:
+                            pass
+                if pec.err_type >= 0 and pec.err_type < gmod.type_table.len():
+                    match gmod.type_table.get(pec.err_type).unwrap():
+                        case GtPtr(_):
+                            res_err_borrow = true
+                        case GtMutPtr(_):
+                            res_err_borrow = true
+                        else:
+                            pass
+            else:
+                # TRANSITIONAL fallback: split "Result__<Ok>__<Err>". Ok may
+                # itself be compound like `Vector__byte`, so a naive
+                # left-first `__` split fails. Try each possible `__` position
+                # from left to right and accept the first split where BOTH
+                # sides resolve to a registered type.
+                String rest = pname.slice(8, pname.len())
+                int si = 0
+                while si + 1 < rest.byte_len():
+                    if rest.byte_at(si) == 0x5F and rest.byte_at(si + 1) == 0x5F:
+                        String o_try = rest.slice(0, si)
+                        String e_try = rest.slice(si + 2, rest.len())
+                        int ot = resolve_field_lir_type(o_try, &sr)
+                        int et = resolve_field_lir_type(e_try, &sr)
+                        # Accept only if both resolve as non-pointer fallbacks
+                        # (both registered OR scalar). resolve_field_lir_type
+                        # returns LT_PTR for unresolved, which we treat as a miss.
+                        if ot != LT_PTR and et != LT_PTR:
+                            ok_name = o_try
+                            err_name = e_try
+                            ok_ty = ot
+                            err_ty = et
+                            break
+                    si += 1
+                if ok_name == "":
+                    # Fall back to first-underscore split even if one side misses.
+                    int si2 = 0
+                    while si2 + 1 < rest.byte_len():
+                        if rest.byte_at(si2) == 0x5F and rest.byte_at(si2 + 1) == 0x5F:
+                            ok_name = rest.slice(0, si2)
+                            err_name = rest.slice(si2 + 2, rest.len())
+                            ok_ty = resolve_field_lir_type(ok_name, &sr)
+                            err_ty = resolve_field_lir_type(err_name, &sr)
+                            break
+                        si2 += 1
             if ok_name != "":
                 Vector[StructField] rfields = []
                 rfields.push(StructField("tag", LT_I32))
@@ -1059,8 +1140,12 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
                 # resource payload — same rationale as Option above. Ok is
                 # variant 0 (Ok_0), Error is variant 1 (Error_0); register a
                 # variant-drop for whichever payload(s) are resources.
-                String res_ok_drop = drop_fn_for_type(ok_name, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types, &m.drop_collision_types)
-                String res_err_drop = drop_fn_for_type(err_name, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types, &m.drop_collision_types)
+                String res_ok_drop = ""
+                if not res_ok_borrow:
+                    res_ok_drop = drop_fn_for_type(ok_name, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types, &m.drop_collision_types)
+                String res_err_drop = ""
+                if not res_err_borrow:
+                    res_err_drop = drop_fn_for_type(err_name, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types, &m.drop_collision_types)
                 if res_ok_drop != "" or res_err_drop != "":
                     Vector[EnumVariantDrop] res_vd = []
                     Vector[EnumVariantDrop] res_vd2 = []

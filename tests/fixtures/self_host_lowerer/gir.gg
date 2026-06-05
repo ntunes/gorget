@@ -27,6 +27,20 @@ const int F64_TYPE = 10
 const int UNIT_TYPE = 11
 const int PRIM_COUNT = 12
 
+# Enum-category discriminator for the typed `enum_category` channel on
+# GirModule (see `EnumCategory` / `record_enum_category`). A monomorphized
+# prelude `Option__<Inner>` / `Result__<Ok>__<Err>` enum is NOT in
+# `type_infos` (it has no user `m.items` def), so its payload-field types
+# can't be read off a TypeDef the way Rust does. Rather than RE-PARSE the
+# mangled name at every reader (the genuinely AMBIGUOUS L→R `__`-boundary
+# "smart split" — `Result__Option__int64_t__GorgetString` has two valid
+# splits), the MINT site (which holds the typed payload tids already)
+# records them here, and every reader looks them up by the enum's GIR type
+# id. Single source of truth, one accessor — Layering rule 3; no name
+# matching — CLAUDE.md "No name matching".
+const int ENUM_CAT_OPTION = 0
+const int ENUM_CAT_RESULT = 1
+
 # ── GIR type representation ───────────────────────────────
 
 enum GirType:
@@ -369,6 +383,21 @@ struct LiftedClosure:
     # non-capturing closures + inline-spawn/implicit-it records (DEFERRED).
     Vector[ClosureCapture] captures
 
+# Typed payload-type channel for a monomorphized prelude `Option__<Inner>`
+# / `Result__<Ok>__<Err>` enum. `category` is `ENUM_CAT_OPTION` /
+# `ENUM_CAT_RESULT`. `ok_type` is the Some_0 (Option) / Ok_0 (Result)
+# payload GIR type id; `err_type` is the Error_0 payload GIR type id for a
+# Result (or -1 for an Option, which has no second payload). Recorded at
+# the MINT site (where the typed payload tids are in hand) and read by the
+# unwrap / match-destructure / catch / rethrow / auto-prop / LIR
+# field-shape sites — none of which re-parse the mangled name. Mirrors the
+# `(TypeId, TypeId)` Rust reads off the enum's TypeDef in
+# `extract_result_field_types` (`exprs/mod.rs:2845`).
+struct EnumCategory:
+    int category
+    int ok_type
+    int err_type
+
 struct GirModule:
     Vector[GirFunction] functions
     Vector[GirExtern] externs
@@ -496,8 +525,31 @@ struct GirModule:
     # Keyed by fn-name + NUL + varname so two functions declaring the same
     # `auto f = …` don't collide. Appended AT END.
     Dict[String, String] closure_var_cids
+    # Typed payload-type channel for mono'd `Option__<Inner>` /
+    # `Result__<Ok>__<Err>` enums, keyed by the enum's GIR type id (the
+    # name-deduped `lookup_or_register_named` id, so the SAME id appears at
+    # the mint site and every reader). Replaces the genuinely-ambiguous L→R
+    # `__`-boundary "smart split" that re-parsed the mangled name to recover
+    # the payload types — see `EnumCategory` / `record_enum_category` /
+    # `enum_category_of`. Single source of truth, one accessor — Layering
+    # rule 3; CLAUDE.md "No name matching". Appended AT END.
+    Dict[int, EnumCategory] enum_category
 
 # ── Helpers ──────────────────────────────────────────────
+
+# Record the typed payload types for a mono'd Option/Result enum (the
+# single writer for the `enum_category` channel — Layering rule 4,
+# "resolve once, write through"). Called at each MINT site where the typed
+# payload tids are in hand. `enum_tid` is the name-deduped enum GIR id;
+# `ok_tid` is the Some_0/Ok_0 payload; `err_tid` is the Error_0 payload
+# (pass -1 for an Option). First-write-wins (the mint is the same
+# name-deduped id every time, so a re-record is identical).
+void record_enum_category(GirModule &gmod, int enum_tid, int category, int ok_tid, int err_tid):
+    if enum_tid < 0:
+        return
+    if gmod.enum_category.contains(enum_tid):
+        return
+    gmod.enum_category.put(enum_tid, EnumCategory(category, ok_tid, err_tid))
 
 # Module-level static (runtime-call init) accessors.
 bool static_contains(GirModule &gmod, String name):
@@ -602,3 +654,17 @@ int option_ref_payload_of(GirModule &gmod, int option_tid):
     if gmod.option_ref_payload.contains(option_tid):
         return gmod.option_ref_payload.get(option_tid).unwrap()
     return -1
+
+# True iff `enum_tid` was recorded as a mono'd Option/Result on the typed
+# `enum_category` channel. The single membership accessor (Layering rule 3).
+bool has_enum_category(GirModule &gmod, int enum_tid):
+    return gmod.enum_category.contains(enum_tid)
+
+# The recorded `EnumCategory` for `enum_tid`, or a sentinel
+# `EnumCategory(-1, -1, -1)` if none was recorded. Callers gate on
+# `has_enum_category` (or on `.category >= 0`) before trusting the
+# payloads. Single read accessor for the channel (Layering rule 3).
+EnumCategory enum_category_of(GirModule &gmod, int enum_tid):
+    if gmod.enum_category.contains(enum_tid):
+        return gmod.enum_category.get(enum_tid).unwrap()
+    return EnumCategory(-1, -1, -1)
