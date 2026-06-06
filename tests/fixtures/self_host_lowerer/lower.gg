@@ -6168,7 +6168,17 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # the SReturn path separately move-zeros + excludes the returned local.
             # Placed BEFORE the emit so the `need_writeback` path is covered too.
             # Mirrors Rust's call_extern_tracked `needs_drop` registration.
-            if recv_is_string and not mname_is_view:
+            # #19-GENERAL (prototype, separable from the generic-equip fix):
+            # register EVERY owned, droppable method-call result for drop, not
+            # just owning-String methods. `register_local_for_drop` self-gates:
+            # is_droppable_type skips primitives/non-resource returns, and the
+            # LoView/LoBorrowed tag self-skips view/element-borrow results. This
+            # was previously gated to `recv_is_string` because the general form
+            # woke the generic-equip `!self` double-free (drain) — now that the
+            # generic-equip `fn_move_params` pre-pass move-zeroes the drain
+            # SOURCE, registering the drain RESULT here drops the buffer exactly
+            # once. Mirrors Rust's `call_extern_tracked` `needs_drop`.
+            if not mname_is_view:
                 register_local_for_drop(&ctx, mdst, ret_tid, &gmod)
             emit(&ctx, GICallExtern(mdst, full_name, call_args))
             if need_writeback:
@@ -12947,17 +12957,15 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                 # and `classify_call_arg(full_name, _ma_idx + 1)` for args.
                 # Only non-generic equips on a concrete named/primitive target
                 # (the call site resolves `recv_type_name` to that name).
-                # ⚠ KNOWN GAP (TODO): generic-equip mono'd instances
-                # (`equip [T] Box2[T]:`) are NOT registered here — every
-                # `fn_move_params.put` lives in THIS `lower_module` pre-scan,
-                # and `lower_generic_equip` (which runs after `gmod` is built)
-                # does zero such puts. A generic-equip method taking a `!`-param
-                # would therefore double-DROP (callee `register_owning_param`
-                # exit-drop + caller's un-suppressed drop). DORMANT: no fixture
-                # has a generic-equip `!`-param method today (corpus-scanned), and
-                # the runtime frees zero-after-free so the 2nd drop is a guarded
-                # no-op. Register generic-equip mono'd `!`-params in the move set
-                # (or assert against the shape) when one appears.
+                # GENERIC-equip mono'd instances (`equip [T] Vector[T] with
+                # Drainable[T]: VectorDrain[T] drain(!self)`) are registered
+                # SEPARATELY, in the `fn_sigs` generic-instances pre-pass (search
+                # "GENERIC-EQUIP `!`-PARAM MOVE CONTRACT" in `lower_module`), which
+                # runs over the mono'd instances BEFORE function bodies and so
+                # reaches the call sites — `lower_generic_equip` itself runs too
+                # late. Both paths put under the same `Target__method` key with the
+                # same `ownership==1/==2` flags; this `type_params.len()==0` arm is
+                # the NON-generic case only.
                 if bp_eqblk.type_params.len() == 0:
                     String bpe_target = ""
                     match bp_eqblk.target.ty:
@@ -13659,6 +13667,39 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                             if eqs_ret >= 0:
                                 String eqs_mangled = eqs_mono_target + "__" + eqs_mdef.name
                                 gmod.fn_sigs.put(eqs_mangled, eqs_ret)
+                            # GENERIC-EQUIP `!`-PARAM MOVE CONTRACT (#14 class).
+                            # Register the mono'd method's `!`/`&`-params in
+                            # fn_move_params / fn_borrow_params under the SHORT
+                            # `Target__method` key — the exact form
+                            # `classify_call_arg` looks up at the call site
+                            # (`recv_type_name + "__" + mname`, lower.gg:~5947).
+                            # The `lower_module` pre-scan (IEquip case,
+                            # lower.gg:~12972) does this only for NON-GENERIC
+                            # equips; a generic-equip mono instance like
+                            # `equip [T] Vector[T] with Drainable[T]:
+                            # VectorDrain[T] drain(!self)` reaches the lowerer
+                            # via `lower_generic_equip` AFTER function bodies are
+                            # lowered, so its `Vector__int64_t__drain` was NEVER
+                            # registered → classify_call_arg returned
+                            # CkCallArgBorrow → the `!self` receiver was NOT
+                            # move-zeroed → the drain SOURCE and the drain RESULT
+                            # both owned the same buffer (a masked leak today; a
+                            # double-free the instant owned-method-result
+                            # registration goes general — lower.gg:~6138). This
+                            # MUST run BEFORE function bodies are lowered
+                            # (line ~13746+) so the call-site lookup resolves,
+                            # exactly like the fn_sigs pre-pass it lives in.
+                            # `eqs_mono_target` is the mono'd C name (type_subs
+                            # active), so the key matches the call site. Param 0
+                            # is `self`, aligned with classify_call_arg(_, 0).
+                            Vector[bool] eqs_borrows = []
+                            Vector[bool] eqs_moves = []
+                            for eqs_p in eqs_mdef.params:
+                                eqs_borrows.push(eqs_p.ownership == 1)
+                                eqs_moves.push(eqs_p.ownership == 2)
+                            String eqs_mv_key = eqs_mono_target + "__" + eqs_mdef.name
+                            gmod.fn_borrow_params.put(eqs_mv_key.clone(), eqs_borrows)
+                            gmod.fn_move_params.put(eqs_mv_key, eqs_moves)
                     clear_type_subs(&gmod)
 
     # Build trait lookup map for default method generation
