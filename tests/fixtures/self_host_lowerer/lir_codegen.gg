@@ -240,9 +240,8 @@ String lir_to_runtime_name(String name):
 # be an int).
 Vector[String] build_struct_names(LirModule &m):
     Vector[String] map = []
-    int i = 0
-    while i < m.structs.len():
-        LirStructDef sdef = m.structs.get(i).unwrap()
+    # CoW for-element BORROW scan (no LirStructDef__clone): reads sdef.name only.
+    for sdef in m.structs:
         String rt = lir_to_runtime_name(sdef.name)
         if rt != "":
             map.push(rt)
@@ -254,7 +253,6 @@ Vector[String] build_struct_names(LirModule &m):
             # Sanitize: replace non-alphanumeric chars with underscores.
             String sanitized = sanitize_c_name(sdef.name)
             map.push("__gg_" + sanitized)
-        i += 1
     return map
 
 String sanitize_c_name(String name):
@@ -2241,13 +2239,11 @@ bool is_struct_constructor(String name, LirModule &m):
     # Non-parameterized built-in types not in type_runtime_map
     if name == "TaskGroup" or name == "printf" or name == "fprintf":
         return false
-    # Check if there's a struct with this name in the module
-    int i = 0
-    while i < m.structs.len():
-        LirStructDef sdef = m.structs.get(i).unwrap()
+    # Check if there's a struct with this name in the module.
+    # CoW for-element BORROW scan (no LirStructDef__clone): reads sdef.name only.
+    for sdef in m.structs:
         if sdef.name == name:
             return true
-        i += 1
     return false
 
 # Map a type_runtime_map category to the C sizeof type string.
@@ -2291,19 +2287,17 @@ String resolve_sizeof_c_type(String tyname, LirModule &m, Vector[String] &sn):
     return find_c_struct_name(tyname, &m, &sn)
 
 String find_c_struct_name(String name, LirModule &m, Vector[String] &sn):
-    int i = 0
-    while i < m.structs.len():
-        LirStructDef sdef = m.structs.get(i).unwrap()
+    # CoW for-element BORROW scan (no LirStructDef__clone): reads sdef.name only;
+    # enumerate() preserves the index for LT_STRUCT_BASE + i.
+    for (i, sdef) in m.structs.enumerate():
         if sdef.name == name:
             return c_type_name(LT_STRUCT_BASE + i, &sn)
-        i += 1
     return name
 
 Vector[String] get_struct_field_names(String name, LirModule &m):
     Vector[String] names = []
-    int i = 0
-    while i < m.structs.len():
-        LirStructDef sdef = m.structs.get(i).unwrap()
+    # CoW for-element BORROW scan (no LirStructDef__clone): reads sdef.name/fields.
+    for sdef in m.structs:
         if sdef.name == name:
             int fi = 0
             while fi < sdef.fields.len():
@@ -2311,16 +2305,15 @@ Vector[String] get_struct_field_names(String name, LirModule &m):
                 names.push(f.name)
                 fi += 1
             return names
-        i += 1
     return names
 
 int find_struct_type(String name, LirModule &m):
-    int i = 0
-    while i < m.structs.len():
-        LirStructDef sdef = m.structs.get(i).unwrap()
+    # CoW for-element BORROW scan (no LirStructDef__clone): the loop only
+    # reads sdef.name. enumerate() preserves the index for LT_STRUCT_BASE + i.
+    # Mirrors Rust's module.structs.iter() in src/lir/types.rs:590.
+    for (i, sdef) in m.structs.enumerate():
         if sdef.name == name:
             return LT_STRUCT_BASE + i
-        i += 1
     return LT_PTR
 
 # Infer the result type of an LIR instruction.
@@ -2344,12 +2337,11 @@ int infer_inst_type_with_ret(LirInst &inst, LirModule &m, Dict[int, int] &val_ty
             return LT_PTR
         case IStrLit(_, _):
             # StrLit produces a Str struct value. Find GorgetString struct ID.
-            int si = 0
-            while si < m.structs.len():
-                LirStructDef sdef = m.structs.get(si).unwrap()
+            # CoW for-element BORROW scan (no LirStructDef__clone): reads
+            # sdef.name only; enumerate() preserves the index.
+            for (si, sdef) in m.structs.enumerate():
                 if sdef.name == "GorgetString":
                     return LT_STRUCT_BASE + si
-                si += 1
             return LT_PTR
         case IParamRef(_, _, ty):
             return ty
@@ -2601,12 +2593,11 @@ int infer_inst_type_with_ret(LirInst &inst, LirModule &m, Dict[int, int] &val_ty
                 # may also appear as extern declarations with void return type.
                 # Note: check name match only (not fields.len() > 0) because
                 # enum variant structs like Some/Ok/Error have 0 fields.
-                int si = 0
-                while si < m.structs.len():
-                    LirStructDef sdef = m.structs.get(si).unwrap()
+                # CoW for-element BORROW scan (no LirStructDef__clone): reads
+                # sdef.name only; enumerate() preserves the index.
+                for (si, sdef) in m.structs.enumerate():
                     if sdef.name == name:
                         return LT_STRUCT_BASE + si
-                    si += 1
                 # Check runtime function return types (both raw and
                 # post-mapping — int64_t__char_at → gorget_str_char_at).
                 int rt_ret = runtime_fn_return_type(name, &m)
@@ -2686,12 +2677,11 @@ Dict[int, int] compute_val_types(LirFunction &func, LirModule &m):
 
 # Find the GorgetString struct id (-1 if not registered).
 int gorget_string_struct_id(LirModule &m):
-    int i = 0
-    while i < m.structs.len():
-        LirStructDef sdef = m.structs.get(i).unwrap()
+    # CoW for-element BORROW scan (no LirStructDef__clone): reads sdef.name only;
+    # enumerate() preserves the index.
+    for (i, sdef) in m.structs.enumerate():
         if sdef.name == "GorgetString":
             return i
-        i += 1
     return -1
 
 # Is `ty` the GorgetString struct or a Ptr-to-GorgetString? Used to
@@ -4882,12 +4872,11 @@ String field_clone_c(String access, String ftype_name, String drop_fn_name, LirM
 
 # Find the C struct name for a Gorget type name.
 String find_c_name(String type_name, LirModule &m, Vector[String] &sn):
-    int i = 0
-    while i < m.structs.len():
-        LirStructDef sdef = m.structs.get(i).unwrap()
+    # CoW for-element BORROW scan (no LirStructDef__clone): reads sdef.name only;
+    # enumerate() preserves the index for LT_STRUCT_BASE + i.
+    for (i, sdef) in m.structs.enumerate():
         if sdef.name == type_name:
             return c_type_name(LT_STRUCT_BASE + i, &sn)
-        i += 1
     return type_name
 
 # Check if a function already exists in the module.
@@ -4906,10 +4895,9 @@ bool fn_exists(String name, LirModule &m):
 
 # Struct field access pattern — handles union layout for enum types.
 String field_access(String sdef_name, String field_name, LirModule &m, Vector[String] &sn, bool use_arrow):
-    # Find struct def to check union layout
-    int i = 0
-    while i < m.structs.len():
-        LirStructDef sdef = m.structs.get(i).unwrap()
+    # Find struct def to check union layout.
+    # CoW for-element BORROW scan (no LirStructDef__clone): reads name/fields only.
+    for sdef in m.structs:
         if sdef.name == sdef_name:
             if sdef.is_union_layout:
                 String accessor = ""
@@ -4930,7 +4918,6 @@ String field_access(String sdef_name, String field_name, LirModule &m, Vector[St
                     return accessor + c_field_name(vprefix) + "." + c_field_name(field_name)
                 return accessor + c_field_name(field_name)
             break
-        i += 1
     # Regular struct
     if use_arrow:
         return "self->" + c_field_name(field_name)
@@ -5443,9 +5430,8 @@ String emit_type_drop_fns(LirModule &m, Vector[String] &sn):
 String emit_mono_typedefs(LirModule &m):
     StrBuf buf = sb_new()
     Dict[String, bool] seen = {}
-    int si = 0
-    while si < m.structs.len():
-        LirStructDef sdef = m.structs.get(si).unwrap()
+    # CoW for-element BORROW scan (no LirStructDef__clone): reads sdef.name only.
+    for sdef in m.structs:
         if m.type_runtime_map.contains(sdef.name):
             if not seen.contains(sdef.name):
                 seen.put(sdef.name.clone(), true)
@@ -5466,7 +5452,6 @@ String emit_mono_typedefs(LirModule &m):
                         sb_push(&buf, " ")
                         sb_push(&buf, sdef.name)
                         sb_push(&buf, ";\n")
-        si += 1
     if buf.s.byte_len() > 0:
         sb_push(&buf, "\n")
     return buf.s
