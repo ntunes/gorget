@@ -166,6 +166,32 @@ void apply_inst_effect(LirInst inst, Vector[int] &state, Dict[int, int] &val_to_
             ss_set(&state, slot, IS_INITIALIZED)
         case IClosurePack(slot, _, _, _):
             ss_set(&state, slot, IS_INITIALIZED)
+        case IStructInit(target, _, _):
+            # A user-struct constructor (`Node([1,2,3])`) fills its dst slot in
+            # place: `try_lower_user_struct_ctor` emits `ISlotAddr(target,
+            # dst_slot)` then `IStructInit(target,…)` (lir_lower.gg:2479-2480).
+            # `target` is the ADDRESS value of the slot, so map it back through
+            # val_to_slot (same as IMemset / ABI_OUT_PTR). The invariant: a
+            # struct-init WRITE initializes its destination slot. WITHOUT marking
+            # it, the ctor-temp slot stays Uninitialized → its scope-exit
+            # GIDropIfAlive guard is DELETED (the Uninitialized branch at :433) →
+            # the owned fields (e.g. the Vector buffer) leak. Rust gg keeps this
+            # drop (verified: Rust does NOT leak the ctor temp); it reaches the
+            # same result through its own slot-init analysis. The precise Rust
+            # path differs (Rust's apply_inst_effect does not enumerate StructInit
+            # either), but the invariant is identical — converging the self-host
+            # onto Rust's observable drop behavior, not diverging from it.
+            if val_to_slot.contains(target):
+                int si_slot = val_to_slot.get(target).unwrap()
+                ss_set(&state, si_slot, IS_INITIALIZED)
+        case IEnumInit(target, _, _, _):
+            # Symmetric with IStructInit: an enum-variant constructor writes its
+            # dst slot in place via `ISlotAddr(target, dst_slot)` +
+            # `IEnumInit(target,…)` (lir_lower.gg:2412-2413). Mark the destination
+            # slot initialized so its scope-exit drop is kept.
+            if val_to_slot.contains(target):
+                int ei_slot = val_to_slot.get(target).unwrap()
+                ss_set(&state, ei_slot, IS_INITIALIZED)
         case IMoveSlot(slot):
             ss_set(&state, slot, IS_UNINITIALIZED)
         case IMemset(ptr, _, _):
