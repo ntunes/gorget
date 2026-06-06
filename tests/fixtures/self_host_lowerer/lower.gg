@@ -481,7 +481,7 @@ String stmt_kind(Stmt s):
 
 int add_local(LowerCtx &ctx, int type_id, Option[String] name):
     int id = ctx.locals.len()
-    ctx.locals.push(GirLocal(type_id, name, LoOwned(), BoNone()))
+    ctx.locals.push(GirLocal(type_id, name, LoOwned(), BoNone(), false))
     return id
 
 # Phase D step 2: same as `add_local` but with explicit ownership / borrow
@@ -493,7 +493,7 @@ int add_local(LowerCtx &ctx, int type_id, Option[String] name):
 # or a borrow. See `docs/devbook/26-self-host-frontend.md` §4.
 int add_local_with(LowerCtx &ctx, int type_id, Option[String] name, LocalOwnership ownership, BorrowOrigin borrow_origin):
     int id = ctx.locals.len()
-    ctx.locals.push(GirLocal(type_id, name, ownership, borrow_origin))
+    ctx.locals.push(GirLocal(type_id, name, ownership, borrow_origin, false))
     return id
 
 # Phase 3 (2026-05-22) — Class 8 keystone fix.
@@ -735,7 +735,7 @@ void inherit_borrow_from(LowerCtx &ctx, int dst, int src):
             pass
     if not propagate:
         return
-    GirLocal updated = GirLocal(dst_loc.type_id, dst_loc.name_hint, new_own, new_origin)
+    GirLocal updated = GirLocal(dst_loc.type_id, dst_loc.name_hint, new_own, new_origin, dst_loc.owning_param)
     ctx.locals.set(dst, updated)
 
 # ── BorrowOrigin tracking helpers (C.1, 2026-05-22) ─────────
@@ -777,7 +777,7 @@ void set_field_borrow(LowerCtx &ctx, int dst, int base, int field):
     if dst < 0 or dst >= ctx.locals.len():
         return
     GirLocal loc = ctx.locals.get(dst).unwrap()
-    GirLocal updated = GirLocal(loc.type_id, loc.name_hint, loc.ownership, BoField(base, field))
+    GirLocal updated = GirLocal(loc.type_id, loc.name_hint, loc.ownership, BoField(base, field), loc.owning_param)
     ctx.locals.set(dst, updated)
 
 # Read back the `(base, field)` pair from a local's borrow_origin.
@@ -815,7 +815,7 @@ void cow_register_alias(LowerCtx &ctx, int alias, int source):
     if alias < 0 or alias >= ctx.locals.len():
         return
     GirLocal alias_loc = ctx.locals.get(alias).unwrap()
-    GirLocal updated = GirLocal(alias_loc.type_id, alias_loc.name_hint, alias_loc.ownership, BoAlias(source))
+    GirLocal updated = GirLocal(alias_loc.type_id, alias_loc.name_hint, alias_loc.ownership, BoAlias(source), alias_loc.owning_param)
     ctx.locals.set(alias, updated)
 
 # ── SVarDecl assign-mode decision tree (B.1, 2026-05-22) ────
@@ -1250,6 +1250,65 @@ void register_local_for_drop(LowerCtx &ctx, int local_id, int type_id, GirModule
     scope.entries.push(DropEntry(local_id, type_id, false))
     ctx.drop_elab.scopes.set(top, scope)
 
+# ── Tier E §8.1: owning `!`-param exit drop ──────────────────────
+#
+# Register an owning `!`-move resource PARAMETER (sigil ownership==2) for
+# drop at function exit. DEDICATED — NOT a reuse of `register_local_for_drop`
+# — for two load-bearing reasons:
+#
+#   (1) It must SET `owning_param=true` on the param's GirLocal. The shared
+#       fn doesn't, and that flag is read at the consume-mode decision (D)
+#       and the GIDropIfAlive emission (C). Without it the `!`-param is
+#       never moved-on-transfer and the drop arg derefs the wrong cell.
+#   (2) The param slot is `GtMutPtr(inner)` — `is_droppable_type` REJECTS
+#       GtMutPtr (a pointer alias isn't dropped), so passing the wrapper to
+#       the shared fn is a silent no-op (the original bug). We deref to
+#       `inner` and gate on `is_droppable_type(inner)` so the registration
+#       gate passes for a droppable pointee (resource struct, mono'd
+#       Option/Result) and skips a non-droppable one (e.g. `!int`).
+#
+# `maybe_moved` stays false: the §8.1 drop-flag dataflow (the LIR memcmp
+# guard, statically resolvable once self-host grows a drop_elab) handles
+# transfer — a consumed param flips its slot to UNINITIALIZED via the
+# GIMoveZero the move-on-consume (D) emits, and the guard suppresses the
+# re-drop. We do NOT pre-mark maybe_moved here (that would suppress the
+# drop on the NO-transfer path — the very leak we are fixing).
+#
+# Caller: the two param-setup loops (`lower_function` free-fn and the
+# method loop) call this in place of `register_local_for_drop` at the
+# `p.ownership == 2` gate. `&`-borrows (ownership==1) never reach here —
+# they are NOT registered (the caller's gate is ownership==2 only), so
+# their GirLocal keeps `owning_param=false` and is never moved/derefed.
+void register_owning_param(LowerCtx &ctx, int local_id, int type_id, GirModule &gmod):
+    if ctx.drop_elab.scopes.len() == 0:
+        return
+    if local_id < 0 or local_id >= ctx.locals.len():
+        return
+    # Deref the GtMutPtr(inner) wrapper to the underlying pointee T. The
+    # `!`-param slot holds a `T*`; the drop axis cares about T's dropability.
+    int inner_tid = type_id
+    if type_id >= 0 and type_id < gmod.type_table.len():
+        match gmod.type_table.get(type_id).unwrap():
+            case GtMutPtr(inner):
+                inner_tid = inner
+            case GtPtr(inner):
+                inner_tid = inner
+            else:
+                pass
+    if not is_droppable_type(inner_tid, &gmod):
+        return
+    # Set owning_param=true on the param's GirLocal (rebuild-and-set; the
+    # GirLocal is a value type — mirror the ctx.locals.set idiom).
+    GirLocal ploc = ctx.locals.get(local_id).unwrap()
+    ctx.locals.set(local_id, GirLocal(ploc.type_id, ploc.name_hint, ploc.ownership, ploc.borrow_origin, true))
+    # Register the inner T for exit drop. Only local_id is load-bearing at
+    # emission (GIDropIfAlive resolves the type from the local's own slot),
+    # but we record inner_tid for consistency with register_local_for_drop.
+    int top = ctx.drop_elab.scopes.len() - 1
+    DropScope oscope = ctx.drop_elab.scopes.get(top).unwrap()
+    oscope.entries.push(DropEntry(local_id, inner_tid, false))
+    ctx.drop_elab.scopes.set(top, oscope)
+
 # Mark a local as "maybe moved" — used at consume sites that transfer
 # ownership out of the local. Walks the scope stack innermost-out;
 # matches the first entry with the given local_id and sets its
@@ -1536,7 +1595,7 @@ Operand op_consume(LowerCtx &ctx, GirModule &gmod, int lid, ConsumeKind kind):
         case GtMutPtr(inner_tid):
             # MutPtr(T) at a consume position. `&`-borrow AND `!`-move
             # resource params BOTH lower to MutPtr(T) (one slot kind,
-            # `is_owning_param` distinguishes them only for the exit
+            # `owning_param` distinguishes them only for the exit
             # drop — mirrors Rust `ir/mod.rs` Local + `functions.rs`
             # param setup). Neither owns the pointee at THIS call: a `&`
             # borrows it; a `!` owns it but is consumed here while still
@@ -2431,12 +2490,26 @@ Vector[int] liveness_inst_operand_local_ids(Instruction inst):
                 out.push(liveness_operand_local_id(a))
         case GIDeref(_, src_lid, _):
             out.push(src_lid)
-        case GIDrop(lid):
-            out.push(lid)
-        case GIDropIfAlive(lid):
-            out.push(lid)
-        case GIMoveZero(lid):
-            out.push(lid)
+        case GIDrop(_):
+            # Drops / MoveZero are NOT operand reads — they are scope-exit
+            # side effects on the OWNED local (drop) or definitions that
+            # zero the source (MoveZero). Counting them as USES (a) inflates
+            # USE[B] in `liveness_fixpoint` so a local stays "live" across
+            # the scope-exit GIDropIfAlive at a CF merge, which demotes the
+            # consume-branch OpMove → OpClone (the `drop_loop_reinit`
+            # conditional-consume double-drop), and (b) would suppress the
+            # very last-use this pass exists to find. Push -1 (a non-source
+            # placeholder, skipped by both the USE-set builder's `lid >= 0`
+            # guard and the last-use recorder) so the op_idx LAYOUT stays
+            # identical to the wire pass's `rewrite_inst_modes` — only the
+            # source identity is dropped. Mirrors the sibling
+            # `liveness_inst_operand_uses` (lower.gg:2099-2110) and Rust
+            # `src/ir/liveness.rs:431-432`.
+            out.push(-1)
+        case GIDropIfAlive(_):
+            out.push(-1)
+        case GIMoveZero(_):
+            out.push(-1)
         case GINop():
             pass
         case GIFieldLoad(_, base_lid, _):
@@ -6750,7 +6823,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             # matching the old scan's inline-spawn wrapper push).
                             String sp_wrap_name = "__spawn_wrap_" + sp_closure_name
                             Vector[int] sp_wp = []
-                            Vector[GirLocal] sp_wl = [GirLocal(UNIT_TYPE, NO_NAME, LoOwned(), BoNone())]
+                            Vector[GirLocal] sp_wl = [GirLocal(UNIT_TYPE, NO_NAME, LoOwned(), BoNone(), false)]
                             Vector[BasicBlock] sp_wb = [BasicBlock([], GTReturn(OpConstUnit()))]
                             gmod.functions.push(GirFunction(sp_wrap_name, !sp_wp, UNIT_TYPE, !sp_wl, !sp_wb))
                             # Record the closure (lowerable guard identical to
@@ -10495,10 +10568,13 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
         # by the caller.
         if p.ownership == 2:
             # `!arg` — callee owns the pointee. The slot here is a
-            # MutPtr(T); we register the underlying inner T's type id
-            # so drop emission resolves to the right runtime drop fn.
-            # (gir_local_type_name unwraps Ptr/MutPtr.)
-            register_local_for_drop(&ctx, plid, pt, &gmod)
+            # MutPtr(T); register via the DEDICATED owning-param path
+            # (Tier E §8.1): it derefs the GtMutPtr wrapper to gate on the
+            # inner T's dropability AND sets owning_param=true so the
+            # consume-mode (D) + GIDropIfAlive emission (C) treat the slot
+            # as holding a `T*`. (`register_local_for_drop(pt)` was a silent
+            # no-op — is_droppable_type rejects GtMutPtr — the original leak.)
+            register_owning_param(&ctx, plid, pt, &gmod)
 
 
 
@@ -10734,9 +10810,11 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
             nl_put(&ctx, p.param_name, plid)
             # Phase 2: only !-sigil resource params are callee-owned
             # and must be dropped at function exit. Same rationale as
-            # lower_function above.
+            # lower_function above — use the dedicated owning-param path
+            # (Tier E §8.1) so the GtMutPtr wrapper is deref'd, the inner
+            # T's dropability gates registration, and owning_param=true.
             if p.ownership == 2:
-                register_local_for_drop(&ctx, plid, pt, &gmod)
+                register_owning_param(&ctx, plid, pt, &gmod)
 
         # Add the explicit-trait `self` concrete-cast alias here, AFTER
         # all params, so locals 1..N are pure params (lir_lower's
@@ -12336,7 +12414,7 @@ void lower_generic_function(FunctionDef fdef, String mangled_name, Vector[String
                             match gt:
                                 case GtPtr(inner):
                                     int new_tid = register_type(&gmod, GtMutPtr(inner))
-                                    gfn.locals.set(local_idx, GirLocal(new_tid, loc.name_hint, loc.ownership, loc.borrow_origin))
+                                    gfn.locals.set(local_idx, GirLocal(new_tid, loc.name_hint, loc.ownership, loc.borrow_origin, loc.owning_param))
                                     gfn.param_types.set(pi, new_tid)
                                 else:
                                     pass
@@ -12472,7 +12550,7 @@ void scan_expr_for_spawn(SpannedExpr sexpr, Dict[String, bool] &shared_vars, Dic
                                 String wrapper_name = prefix + callee_name
                                 # Emit a stub function
                                 Vector[int] wp = [I64_TYPE]
-                                Vector[GirLocal] wl = [GirLocal(UNIT_TYPE, NO_NAME, LoOwned(), BoNone()), GirLocal(I64_TYPE, NO_NAME, LoParam(), BoParam(-1))]
+                                Vector[GirLocal] wl = [GirLocal(UNIT_TYPE, NO_NAME, LoOwned(), BoNone(), false), GirLocal(I64_TYPE, NO_NAME, LoParam(), BoParam(-1), false)]
                                 Vector[BasicBlock] wb = [BasicBlock([], GTReturn(OpConstUnit()))]
                                 gmod.functions.push(GirFunction(wrapper_name, !wp, UNIT_TYPE, !wl, !wb))
                                 emitted.put(callee_name, true)
@@ -12489,7 +12567,7 @@ void scan_expr_for_spawn(SpannedExpr sexpr, Dict[String, bool] &shared_vars, Dic
                                     if not emitted.contains(wrapper_name):
                                         emitted.put(wrapper_name.clone(), true)
                                         Vector[int] wp = [I64_TYPE]
-                                        Vector[GirLocal] wl = [GirLocal(I64_TYPE, NO_NAME, LoOwned(), BoNone()), GirLocal(I64_TYPE, NO_NAME, LoParam(), BoParam(-1))]
+                                        Vector[GirLocal] wl = [GirLocal(I64_TYPE, NO_NAME, LoOwned(), BoNone(), false), GirLocal(I64_TYPE, NO_NAME, LoParam(), BoParam(-1), false)]
                                         Vector[BasicBlock] wb = [BasicBlock([], GTReturn(OpConstUnit()))]
                                         gmod.functions.push(GirFunction(wrapper_name, !wp, UNIT_TYPE, !wl, !wb))
                                 case None:
@@ -12532,7 +12610,7 @@ void emit_named_closure_spawn_expr(SpannedExpr sexpr, String fn_name, Dict[Strin
                                 if not emitted.contains(wrap):
                                     emitted.put(wrap.clone(), true)
                                     Vector[int] ncwp = []
-                                    Vector[GirLocal] ncwl = [GirLocal(UNIT_TYPE, NO_NAME, LoOwned(), BoNone())]
+                                    Vector[GirLocal] ncwl = [GirLocal(UNIT_TYPE, NO_NAME, LoOwned(), BoNone(), false)]
                                     Vector[BasicBlock] ncwb = [BasicBlock([], GTReturn(OpConstUnit()))]
                                     gmod.functions.push(GirFunction(wrap, !ncwp, UNIT_TYPE, !ncwl, !ncwb))
                         else:
@@ -12785,6 +12863,52 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                     moves.push(p.ownership == 2)    # 2 = OWN_MOVE (!)
                 fn_borrow_params.put(fdef.name.clone(), borrows)
                 fn_move_params.put(fdef.name, moves)
+            case IEquip(bp_eqblk):
+                # Equip-method `!`-params must register too, otherwise a
+                # `self.m(!arg)`-shaped call (a bare local passed to a `!T`
+                # method param) classifies as CkCallArgBorrow → op_consume
+                # returns OpBorrow → no caller-side GIMoveZero → the caller
+                # drops its local at scope exit WHILE the callee's `!`-param
+                # exit-drop ALSO frees it → double-free. The call site keys
+                # `classify_call_arg` on `recv_type_name + "__" + mname` (the
+                # SHORT form, `lower.gg:5933`), never the `Trait_for_…` form,
+                # so we register under the same short `Target__method` key.
+                # Param indices include `self` at 0 — aligned with the call
+                # site's `classify_call_arg(full_name, 0)` receiver dispatch
+                # and `classify_call_arg(full_name, _ma_idx + 1)` for args.
+                # Only non-generic equips on a concrete named/primitive target
+                # (the call site resolves `recv_type_name` to that name).
+                # ⚠ KNOWN GAP (TODO): generic-equip mono'd instances
+                # (`equip [T] Box2[T]:`) are NOT registered here — every
+                # `fn_move_params.put` lives in THIS `lower_module` pre-scan,
+                # and `lower_generic_equip` (which runs after `gmod` is built)
+                # does zero such puts. A generic-equip method taking a `!`-param
+                # would therefore double-DROP (callee `register_owning_param`
+                # exit-drop + caller's un-suppressed drop). DORMANT: no fixture
+                # has a generic-equip `!`-param method today (corpus-scanned), and
+                # the runtime frees zero-after-free so the 2nd drop is a guarded
+                # no-op. Register generic-equip mono'd `!`-params in the move set
+                # (or assert against the shape) when one appears.
+                if bp_eqblk.type_params.len() == 0:
+                    String bpe_target = ""
+                    match bp_eqblk.target.ty:
+                        case TNamed(bpe_tn, bpe_targs):
+                            if bpe_targs.len() == 0:
+                                bpe_target = bpe_tn
+                        case TPrimitive(bpe_tn):
+                            bpe_target = bpe_tn
+                        else:
+                            pass
+                    if bpe_target != "":
+                        for bpe_m in bp_eqblk.methods:
+                            Vector[bool] em_borrows = []
+                            Vector[bool] em_moves = []
+                            for ep in bpe_m.params:
+                                em_borrows.push(ep.ownership == 1)
+                                em_moves.push(ep.ownership == 2)
+                            String bpe_full = bpe_target + "__" + bpe_m.name
+                            fn_borrow_params.put(bpe_full.clone(), em_borrows)
+                            fn_move_params.put(bpe_full, em_moves)
             else:
                 pass
 
@@ -13597,14 +13721,14 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             case ISuiteSetup(setup_body):
                 if not has_main:
                     Vector[int] sp = []
-                    Vector[GirLocal] sl = [GirLocal(UNIT_TYPE, NO_NAME, LoOwned(), BoNone())]
+                    Vector[GirLocal] sl = [GirLocal(UNIT_TYPE, NO_NAME, LoOwned(), BoNone(), false)]
                     Vector[BasicBlock] sb = [BasicBlock([], GTReturn(OpConstUnit()))]
                     gmod.functions.push(GirFunction("__suite_setup", !sp, UNIT_TYPE, !sl, !sb))
                     test_idx += 1
             case ISuiteTeardown(teardown_body):
                 if not has_main:
                     Vector[int] tp = []
-                    Vector[GirLocal] tl = [GirLocal(UNIT_TYPE, NO_NAME, LoOwned(), BoNone())]
+                    Vector[GirLocal] tl = [GirLocal(UNIT_TYPE, NO_NAME, LoOwned(), BoNone(), false)]
                     Vector[BasicBlock] tb = [BasicBlock([], GTReturn(OpConstUnit()))]
                     gmod.functions.push(GirFunction("__suite_teardown", !tp, UNIT_TYPE, !tl, !tb))
                     test_idx += 1
@@ -13904,12 +14028,12 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             # Phase-1 stub: _0 = return place, _1 = env ptr, then one local
             # per closure param (implicit-it: a single `it` local). Shape is
             # byte-identical to the old scan's stub (explicit + implicit-it).
-            Vector[GirLocal] stub_locals = [GirLocal(d_ret, NO_NAME, LoOwned(), BoNone()), GirLocal(d_self_ptr, NO_NAME, LoParam(), BoParam(-1))]
+            Vector[GirLocal] stub_locals = [GirLocal(d_ret, NO_NAME, LoOwned(), BoNone(), false), GirLocal(d_self_ptr, NO_NAME, LoParam(), BoParam(-1), false)]
             int spi = 0
             while spi < d_body_pt.len():
                 int spt = d_body_pt.get(spi).unwrap()
                 String spn = d_body_pn.get(spi).unwrap()
-                stub_locals.push(GirLocal(spt, Some(spn.clone()), LoParam(), BoParam(-1)))
+                stub_locals.push(GirLocal(spt, Some(spn.clone()), LoParam(), BoParam(-1), false))
                 spi = spi + 1
             Vector[BasicBlock] stub_blocks = [BasicBlock([], GTReturn(OpCopy(0)))]
             gmod.functions.push(GirFunction(d_call_name, !d_abi, d_ret, !stub_locals, !stub_blocks))

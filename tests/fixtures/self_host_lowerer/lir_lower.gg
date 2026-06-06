@@ -2745,6 +2745,20 @@ bool gir_local_is_for_element(int local_id, Vector[GirLocal] &gir_locals):
         else:
             return false
 
+# Tier E §8.1: true iff the GIR local is an owning `!`-move resource
+# PARAMETER (sigil ownership==2), tagged by `register_owning_param` in
+# lower.gg. The slot for such a param holds a `T*` (the caller transferred
+# the pointer in), so the GIDropIfAlive emission passes the LOADED pointer
+# (`ISlotLoad(slot)`) — not `&slot` (`ISlotAddr`) — to `T__drop`. A
+# `&`-borrow ALSO lowers to GtMutPtr but keeps owning_param=false, so it
+# returns false here and is dropped/derefed by neither path (it isn't even
+# registered). Mirrors `gir_local_is_for_element` — a typed-field read, no
+# new coupling.
+bool gir_local_is_owning_param(int local_id, Vector[GirLocal] &gir_locals):
+    if local_id < 0 or local_id >= gir_locals.len():
+        return false
+    return gir_locals.get(local_id).unwrap().owning_param
+
 # closure Phase 2 Step B: the LIR closure-pack promotion (mirrors Rust gg's
 # `try_closure_pack`, src/lir/lower/operands.rs:1233-1355). When a
 # `__Closure_N`-typed value is assigned into a `GorgetClosure`-typed slot,
@@ -3511,8 +3525,29 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                     int dia_size = lir_type_byte_size_in_mod(dia_slot_ty, &m, 0)
                     int dia_addr = lir_fn_next_value(&f)
                     lir_push_inst(&f, bb, ISlotAddr(dia_addr, dia_slot))
-                    # kind encoding: 0=Bool guard, kind-1=byte size for NonZero
+                    # kind encoding: 0=Bool guard, kind-1=byte size for NonZero.
+                    # The GUARD stays on `&slot` (ISlotAddr): `drop_elab`'s
+                    # `build_val_to_slot` maps ONLY ISlotAddr producers → slots,
+                    # so the guard's value must be the ISlotAddr result for the
+                    # NonZero memcmp / static suppression to trace back to the
+                    # slot. Switching this to ISlotLoad would sever that map and
+                    # reintroduce the double-free. The DROP-FN ARG below differs
+                    # for owning `!`-params (see dia_drop_arg).
                     lir_push_inst(&f, bb, IDropGuardOpen(dia_size + 1, dia_addr))
+                    # Tier E §8.1: the drop-fn arg. For a normal by-value local
+                    # the slot holds the value and `T__drop(&slot)` is correct, so
+                    # the arg is `dia_addr` (=&slot). But an owning `!`-MOVE
+                    # resource param's slot holds a `T*` (the caller transferred
+                    # the pointer in) — `T__drop` wants that `T*`, so we pass the
+                    # LOADED pointer (`ISlotLoad(slot)`), not `&slot`. Keyed on the
+                    # TYPED owning_param flag (NEVER slot-shape): a `&`-borrow also
+                    # lowers to GtMutPtr but keeps owning_param=false and isn't even
+                    # registered for drop, so it never reaches this arm.
+                    int dia_drop_arg = dia_addr
+                    if gir_local_is_owning_param(local_id, &gir_locals):
+                        int dia_loaded = lir_fn_next_value(&f)
+                        lir_push_inst(&f, bb, ISlotLoad(dia_loaded, dia_slot, LT_PTR))
+                        dia_drop_arg = dia_loaded
                     # ② closure ENV-FIELD leak fix — for a resource/CoW-capturing
                     # `GorgetClosure` value, `gorget_closure_free` frees only the
                     # env BLOCK, leaking the captured String/Vector/struct field
@@ -3526,6 +3561,13 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                     # env + NO entry, so the env-load+dtor is never emitted for it
                     # (no NULL deref). Keyed by `f.name + NUL + local_id` (the
                     # per-function composite — bare ints collide across fns).
+                    # NOTE: this GorgetClosure env-field sub-block is UNREACHABLE
+                    # for owning `!`-params — it's gated on a `closure_env_type`
+                    # entry, which is keyed ONLY at closure make-sites, and a
+                    # `!`-param is never a make-site. So `dia_addr` (=&slot) stays
+                    # correct here even though the drop-fn arg above is the loaded
+                    # pointer for owning params; if a future make-site ever tags a
+                    # `!`-param, this assumption must be revisited.
                     if dia_tn == "GorgetClosure":
                         String cevt_key = f.name + "\0" + int_to_str(local_id)
                         if gmod.closure_env_type.contains(cevt_key):
@@ -3545,7 +3587,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                                     Vector[int] cevt_abis = []
                                     lir_push_inst(&f, bb, ICallExtern(-1, cevt_drop_fn, cevt_args, cevt_drop_fn, cevt_abis))
                     Vector[int] dia_args = []
-                    dia_args.push(dia_addr)
+                    dia_args.push(dia_drop_arg)
                     Vector[int] dia_abis = []
                     lir_push_inst(&f, bb, ICallExtern(-1, dia_drop_fn, dia_args, dia_drop_fn, dia_abis))
                     lir_push_inst(&f, bb, IDropGuardClose)

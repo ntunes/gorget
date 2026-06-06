@@ -253,6 +253,16 @@ struct GirLocal:
     Option[String] name_hint
     LocalOwnership ownership
     BorrowOrigin borrow_origin
+    # True iff this local is an owning `!`-move resource PARAMETER (sigil
+    # ownership==2). Set by `register_owning_param` after the param's
+    # GirLocal is pushed; every other construction site passes `false`.
+    # Read at two sites: (D) the consume-mode decision (`op_consume` /
+    # `decide_operand_at_consuming_arg` GtMutPtr arms move the param on
+    # its last use instead of cloning the pointee) and (C) the
+    # `GIDropIfAlive` emission (the drop-fn arg is the loaded `T*` from the
+    # slot, not `&slot`). A `&`-borrow (ownership==1) ALSO lowers to
+    # GtMutPtr but keeps this `false`, so it is never moved/zeroed/derefed.
+    bool owning_param
 
 # ── Function ─────────────────────────────────────────────
 
