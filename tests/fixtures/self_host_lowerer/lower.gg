@@ -12205,7 +12205,31 @@ void lower_closure_body(String call_name, Vector[int] !abi_param_types, int self
     # `lower_function` finalizes a normal function's return value.
     int tail = lower_block_expr(&cctx, body_stmts, &gmod)
     if not block_terminated(&cctx):
-        emit(&cctx, GIAssign(0, op_consume(&cctx, &gmod, tail, CkReturn())))
+        # Mirror SReturn's Some(val) arm (lower.gg:7895-7912): emit the
+        # function-scope GIDropIfAlive for every body temp BEFORE setting the
+        # GTReturn terminator. The closure body ALWAYS sets a terminator here,
+        # so `finalize_body_blocks`→`pop_drop_scope` sees a terminated block
+        # and skips its fall-through drop emission — without this explicit
+        # early-exit emission, every owned body temp (an f-string
+        # `gorget_string_format` result, a CoW clone, …) LEAKS, since a regular
+        # void function falls through and gets drops from `pop_drop_scope`
+        # while the closure body never does. When the tail value is MOVED into
+        # `_0` (`(): f"..."` — the f-string IS the return value), `op_consume`
+        # yields OpMove(src); we move-zero `src` and EXCLUDE it from the
+        # early-exit drops (Some(excl)) so the moved-out value is dropped once
+        # by the receiver, not double-freed here — identical to SReturn's a-6
+        # move-out handling.
+        Operand cret_op = op_consume(&cctx, &gmod, tail, CkReturn())
+        int cexcl = 0
+        match cret_op:
+            case OpMove(csrc):
+                cexcl = csrc
+            else:
+                pass
+        emit(&cctx, GIAssign(0, cret_op))
+        if cexcl != 0:
+            emit(&cctx, GIMoveZero(cexcl))
+        emit_drops_for_early_exit(&cctx, DSK_FUNCTION, Some(cexcl))
         set_terminator(&cctx, GTReturn(op_consume(&cctx, &gmod, 0, CkReturn())))
 
     Vector[BasicBlock] cblocks = finalize_body_blocks(&cctx, &gmod, call_name)
