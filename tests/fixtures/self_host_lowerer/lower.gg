@@ -6746,6 +6746,26 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # Record the closure for the post-pass, carrying the captures so
             # the post-pass field-loads them before lowering the body.
             gmod.lifted_closures.push(LiftedClosure(cid, closure_name + "__call", cl_sig.self_ptr, cl_sig.abi_param_types, cl_sig.body_param_types, cl_sig.body_param_names, cl_sig.return_type, cbody, false, cl_lowerable, !cl_caps))
+            # CLOSURE LEAK Class B — register the freshly-packed GorgetClosure
+            # value (`cdst`, LoOwned) for drop at the MAKE-SITE. A capturing
+            # closure owns a HEAP env-box (`__gorget_closure_env_alloc`); when
+            # the make-site value flows DIRECTLY into a non-consuming position —
+            # an INLINE callable arg (`apply_mut((int n): n+base, 5)`, borrowed
+            # → never registered) — it is orphaned and the env-box leaks
+            # (closure_mutable_capture: 16B). Registering at creation makes the
+            # scope-exit GIDropIfAlive(GorgetClosure) free it exactly once via
+            # `gorget_closure_free` (+ the per-field `__Closure_N__drop` when a
+            # `closure_env_type` entry exists). SAFE-BY-CONSTRUCTION for the
+            # directly-bound case (`auto f = (int y): y+k`): the SVarDecl
+            # MoveDirect arm mints a fresh registered `var_local` and op_consume
+            # emits OpMove → GIMoveZero zeros `cdst`, so its scope-exit memcmp-
+            # guarded drop finds a zeroed slot and is suppressed (drop_elab
+            # further elides it) — the var_local drops the env exactly once, no
+            # double-free. A no-capture / stubbed closure has a NULL env, and
+            # `gorget_closure_free` no-ops on NULL (`if (c->env)`), so this is
+            # harmless there too. Mirrors the FRESH-OWNED-TEMP registration the
+            # String/resource call-results already use (lower.gg:7464).
+            register_local_for_drop(&ctx, cdst, closure_tid, &gmod)
             return cdst
         case EAs(inner_box, _):
             return lower_expr(&ctx, *inner_box, &gmod)
@@ -7438,6 +7458,32 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                         pass
             ret_type = lookup_or_register_named(&gmod, "Option__" + type_id_to_name(some_inner, &gmod))
             record_enum_category(&gmod, ret_type, ENUM_CAT_OPTION, some_inner, -1)
+        # CLOSURE LEAK Class A — a closure-returning fn (`int(int) make_adder(...)`)
+        # has a DECLARED return type that resolves to a `GtFnPtr` (`fn(i64)->i64`),
+        # but its RUNTIME value is a `GorgetClosure` (the producer literally returns
+        # a 16-byte {fn_ptr, env} struct and `__gorget_closure_env_alloc`s a heap
+        # env-box). The `GtFnPtr` typing is the lossy abstraction; the concrete
+        # runtime representation is `GorgetClosure` — resolve it here (layering
+        # rule 1/4: fix at the writer). Without this the call-result local stays
+        # `GtFnPtr`, `is_droppable_type` returns false for it, the FRESH-OWNED-TEMP
+        # registration below is a no-op, and the escaping env-box is NEVER freed
+        # (closure_escape/closure_returning_closure 32B, closure_partial_application
+        # 48B — SELF-HOST-ONLY; Rust gg is clean). Retyping to `GorgetClosure`
+        # makes `dst` droppable so it registers below, AND makes op_consume route
+        # the var-decl binding through the resource path (owned last-use → OpMove →
+        # GIMoveZero), so the call-result's drop is move-elided and the VAR-LOCAL
+        # drops the env exactly once — identical to a directly-bound closure
+        # (`auto add_x = (int y): x+y` lowers its make-site value as GorgetClosure
+        # and binds with `move`). No double-free: exactly one live owner at a time.
+        # Borrowed callable PARAMS are `GtPtr`/`GtMutPtr` (not GtFnPtr) so they are
+        # unaffected; a bare top-level fn-ref return would carry a NULL env, which
+        # `gorget_closure_free` no-ops on — safe either way.
+        if ret_type >= PRIM_COUNT and ret_type < gmod.type_table.len():
+            match gmod.type_table.get(ret_type).unwrap():
+                case GtFnPtr(_, _):
+                    ret_type = lookup_or_register_named(&gmod, "GorgetClosure")
+                else:
+                    pass
         int dst = add_local(&ctx, ret_type, NO_NAME)
         emit(&ctx, GICall(dst, call_name, gir_args))
         # FRESH-OWNED-TEMP drop registration (#7-style): a resource/String-
