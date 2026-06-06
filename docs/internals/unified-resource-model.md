@@ -678,6 +678,15 @@ Stage D6: Persist `LocalOwnership` through GIR → LIR (`Slot.origin: Option<Bor
 
 > **Status (2026-05-12): D6 partial.** `Local.ownership: LocalOwnership` flows through to LIR via `flush_ownership_to_locals` (which now derives `Slot.slot_kind` per the §6.8 Stage 3 rule). But the LIR side reads ownership indirectly via `slot_kind` (`Value` / `OwnedPtr` / `BorrowedPtr`); it does not yet expose a typed `Slot.origin: Option<BorrowOrigin>` field for downstream borrow-aware codegen. That last step is the future enhancement gating cross-pass borrow optimisations.
 
+> **⭐ DESIGN DECISION for D6's final hop (owner, 2026-06-06): build the slot-provenance state as a SINGLE unified enum, NOT the two-field `slot_kind` + `Slot.origin` split.** When D6 actually lands the LIR-side borrow provenance (in either compiler — and per the "complete Rust if it helps reference-grade" directive, possibly both), use:
+> ```
+> enum SlotProvenance:
+>     Value                   # slot holds the value directly
+>     Owned                   # slot holds a pointer the local owns (borrow_mut, Option[Ref]::unwrap)
+>     Borrowed(BorrowOrigin)  # non-owning view pointer; the origin rides in the payload
+> ```
+> The layout/access decision the 6 current `slot_kind == BorrowedPtr` consumers do (`src/lir/lower/{drops.rs:524,operands.rs:22,insts.rs:815/967/1291/1495}`) becomes a match on the **variant**; the borrow provenance rides in the `Borrowed` payload. **One source of truth instead of two** — no risk of `slot_kind`/`origin` disagreeing, one accessor. This is an "exceed Rust" call (the current `slot_kind`+`Slot.origin` split is an artifact of `slot_kind` shipping first while `Slot.origin` was deferred). ⚠ Build this layer at all only once a REAL consumer exists (a cross-pass borrow-aware optimisation); until then `Slot.origin`/`SlotProvenance` is unused infrastructure (the deferred-and-unused status above still holds). The minimal nearer-term cleanup remains: port the SHIPPED `slot_kind` projection (D4.5) to retire shape-test reconstruction — but if/when the provenance layer is built on top, prefer the unified `SlotProvenance` shape. See also the self-host foundational-subsystem plan (`self-host-resource-model.md`, Phase 4) and the session memory `design-unified-slotprovenance`.
+
 **Residual: Tier 3b proxy-read ratchet.** Phase D3's migration retired the sidecar maps but left ~77 callsites still going through proxy fns (`is_named_local`, `is_owned_local`, `drops.is_registered`, `drops.is_moved`). All of these are typed-field reads under the hood — the proxies just hide the field accessor. Tracked by `tests/lints.rs::no_growth_in_phase_d_proxy_reads` (BUDGET=77, one-way ratchet). Mechanical migration; no soundness impact. See `structural-guards.md` Tier 3b for the ratchet's design.
 
 Estimated effort (2026-05-12, historical): Phase D as a whole was ~2 weeks. D6's final hop and the Tier 3b ratchet burn-down are the remaining incremental items.
