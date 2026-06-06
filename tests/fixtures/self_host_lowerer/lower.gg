@@ -7381,6 +7381,28 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
             record_enum_category(&gmod, ret_type, ENUM_CAT_OPTION, some_inner, -1)
         int dst = add_local(&ctx, ret_type, NO_NAME)
         emit(&ctx, GICall(dst, call_name, gir_args))
+        # FRESH-OWNED-TEMP drop registration (#7-style): a resource/String-
+        # returning free-fn/builtin/user call (`int_to_str`/`chr`/`read_file`/
+        # `getenv`/`args`/user `String f()`) yields a fresh OWNED value (LoOwned).
+        # When this CALL EXPRESSION flows directly into a non-consuming position
+        # (`print(int_to_str(x))`, `f"{int_to_str(x)}"`) it is BORROWED only
+        # (CkFormatArg/CkCallArgBorrow → is_consume_kind=false → OpBorrow), so the
+        # result is orphaned and leaks (O(1) per occurrence). Registering at
+        # creation makes the scope-exit GIDropIfAlive free it exactly once.
+        # SAFE-BY-CONSTRUCTION: when the result is instead MOVED into a binding
+        # (`String s = int_to_str(x)`), RETURNED, or pushed/field-init'd,
+        # op_consume/wire-liveness emits OpMove → GIMoveZero zeros the moved-out
+        # slot, so the unconditional scope-exit GIDropIfAlive — which lowers to a
+        # memcmp-guarded drop — finds a zeroed slot and SUPPRESSES the drop at
+        # runtime (and the LIR drop_elab pass further elides the guard statically
+        # when init is provable). SReturn separately excludes the moved local from
+        # early-exit drops. Either way the value is dropped exactly once; no
+        # double-free.
+        # register_local_for_drop's is_droppable_type gate makes this a no-op for
+        # primitive returns (int/bool/F64) and its LoView/LoBorrowed gates pass
+        # only genuine fresh owners; `dst` is LoOwned here. Mirrors Rust's
+        # call_tracked/call_extern_tracked `needs_drop` registration (context.rs).
+        register_local_for_drop(&ctx, dst, ret_type, &gmod)
         result = dst
     return result
 
