@@ -6121,6 +6121,55 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 mdst = add_local_with(&ctx, ret_tid, NO_NAME, LoView(), BoNone())
             else:
                 mdst = add_local(&ctx, ret_tid, NO_NAME)
+            # FRESH-OWNED-TEMP drop registration (#19, sibling of #17 at the
+            # lower_call return-temp site lower.gg:~7405): an owning String
+            # method (`.upper()`/`.lower()`/`.replace()`/`.repeat()`/`.trim()`/
+            # `.strip()`/`.reverse()`/`.center()`/`.ljust()`/`.rjust()`/
+            # `.zfill()`/`.removeprefix()`/`.removesuffix()`) materializes a
+            # fresh OWNED GorgetString in the default `add_local` (LoOwned)
+            # branch above. When this CALL EXPRESSION flows directly into a
+            # non-consuming position (`print(s.upper())`, `f"{s.replace("a","b")}"`)
+            # it is BORROWED only (CkFormatArg/CkCallArgBorrow → is_consume_kind=
+            # false → OpBorrow), so the result is orphaned and leaks (O(1) per
+            # occurrence). Registering at creation makes the scope-exit
+            # GIDropIfAlive free it exactly once.
+            #
+            # SCOPE — NARROW (owning-String methods only), NOT the general "any
+            # owned method result". The general one-liner (register every
+            # `mdst`) RED'd `self_host_runtime` (stdlib_iter_drain): it woke a
+            # PRE-EXISTING LATENT ownership bug — `equip [T] Vector[T] with
+            # Drainable[T]: VectorDrain[T] drain(!self)` is a GENERIC-equip
+            # `!self`-consuming method, so `Vector__int64_t__drain` is NEVER put
+            # in `fn_move_params` (the generic-equip `!`-param gap documented at
+            # lower.gg:~12934). classify_call_arg therefore returns
+            # CkCallArgBorrow → op_consume does NOT move-zero the receiver, so
+            # the SOURCE Vector buffer is logically owned by BOTH the `drain()`
+            # result (which now drops it, post-registration) AND the source
+            # local / `!`-param `g` (whose own exit-drop also frees it) →
+            # double-free (ASan: __gorget_dtor_VectorDrain frees the array, then
+            # gorget_array_free on the same region from the `!`-param drop). The
+            # leak this registration was masking was the SAFE side of that latent
+            # bug. The CORRECT general fix is to close the generic-equip
+            # `fn_move_params` gap (separate, larger — logged in TODO); until
+            # then we register ONLY owning-String-method results, which all take
+            # `&self` (a borrow, never `!self`) so there is no receiver-move to
+            # mis-track. View-returning String methods are excluded by
+            # `not mname_is_view` (and would self-skip via register_local_for_drop's
+            # LoView gate anyway).
+            #
+            # SELF-GATING beyond the String gate: primitive/non-droppable returns
+            # are skipped by register_local_for_drop's is_droppable_type gate
+            # (lower.gg:1230); LoView results self-skip (lower.gg:1244).
+            # SAFE-BY-CONSTRUCTION when MOVED instead (`String s = obj.upper()`,
+            # `return s.trim()`, pushed/field-init'd): op_consume/wire-liveness
+            # emits OpMove → GIMoveZero zeros the moved-out slot, so the
+            # unconditional memcmp-guarded scope-exit GIDropIfAlive finds a zeroed
+            # slot and suppresses the drop (drop_elab further elides statically);
+            # the SReturn path separately move-zeros + excludes the returned local.
+            # Placed BEFORE the emit so the `need_writeback` path is covered too.
+            # Mirrors Rust's call_extern_tracked `needs_drop` registration.
+            if recv_is_string and not mname_is_view:
+                register_local_for_drop(&ctx, mdst, ret_tid, &gmod)
             emit(&ctx, GICallExtern(mdst, full_name, call_args))
             if need_writeback:
                 emit_field_write_from_local(&ctx, wb_base, wb_field, recv, &gmod)
