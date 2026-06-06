@@ -6496,9 +6496,10 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # GirTypeInfo lookup at `lower.gg:~5432-5441`. Restored
             # unconditionally after each lower_expr. Same I64/UNIT guard as
             # SVarDecl / SAssign / SReturn / call-arg sites.
-            int sli_i = 0
-            while sli_i < fvals.len():
-                SpannedExpr sv = fvals.get(sli_i).unwrap()
+            # CoW for-element BORROW scan (no SpannedExpr__clone): sv is only
+            # read by lower_expr's immutable-borrow param; enumerate() preserves
+            # the positional index sli_i used for the field-type pairing.
+            for (sli_i, sv) in fvals.enumerate():
                 int prev_expected_sli = ctx.expected_type
                 if gmod.type_infos.contains(sname):
                     GirTypeInfo sli_ti = gmod.type_infos.get(sname).unwrap()
@@ -6510,7 +6511,6 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                                 ctx.expected_type = sli_fty
                 lower_expr(&ctx, sv, &gmod)
                 ctx.expected_type = prev_expected_sli
-                sli_i += 1
             int sdst = add_local(&ctx, lookup_or_register_named(&gmod, sname), NO_NAME)
             emit(&ctx, GIAssign(sdst, OpConstI64(0)))
             return sdst
@@ -7124,14 +7124,13 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         # dispatch (`pool.bytes_used()`) still resolves on the type name.
         String alloc_new_fn = allocator_constructor_runtime_name(fname)
         Vector[Operand] alloc_args = []
-        int aci = 0
-        while aci < args.len():
-            SpannedExpr aarg = args.get(aci).unwrap()
+        # CoW for-element BORROW scan (no SpannedExpr__clone): aarg is only read
+        # by lower_expr's immutable-borrow param.
+        for aarg in args:
             int aval = lower_expr(&ctx, aarg, &gmod)
             # Allocator constructor args are plain scalars (capacity/count);
             # pass by value (CkCallArgBorrow yields OpCopy for a primitive).
             alloc_args.push(op_consume(&ctx, &gmod, aval, CkCallArgBorrow()))
-            aci = aci + 1
         int alloc_ptr_ty = register_ptr(&gmod, lookup_or_register_named(&gmod, fname))
         int alloc_dst = add_local(&ctx, alloc_ptr_ty, NO_NAME)
         emit(&ctx, GICallExtern(alloc_dst, alloc_new_fn, alloc_args))
@@ -7145,12 +7144,11 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         # `GorgetAtomicInt*`). Mirrors Rust gg calls.rs:851 / exprs/mod.rs:1652.
         String sync_new_fn = sync_constructor_runtime_name(fname)
         Vector[Operand] sync_args = []
-        int sci = 0
-        while sci < args.len():
-            SpannedExpr sarg = args.get(sci).unwrap()
+        # CoW for-element BORROW scan (no SpannedExpr__clone): sarg is only read
+        # by lower_expr's immutable-borrow param.
+        for sarg in args:
             int sval = lower_expr(&ctx, sarg, &gmod)
             sync_args.push(op_consume(&ctx, &gmod, sval, CkCallArgBorrow()))
-            sci = sci + 1
         int sync_ptr_ty = register_ptr(&gmod, lookup_or_register_named(&gmod, fname))
         int sync_dst = add_local(&ctx, sync_ptr_ty, NO_NAME)
         emit(&ctx, GICallExtern(sync_dst, sync_new_fn, sync_args))
@@ -7201,10 +7199,11 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                     variant_arg_expected = pvec.err_type
             elif pvec.category == ENUM_CAT_OPTION and fname == "Some":
                 variant_arg_expected = pvec.ok_type
-        int ai = 0
         int first_arg_type = -1
-        while ai < args.len():
-            SpannedExpr arg = args.get(ai).unwrap()
+        # CoW for-element BORROW scan (no SpannedExpr__clone): arg is only read
+        # (apply_container_hint/lower_expr/match arg.expr — all immutable-borrow
+        # uses); enumerate() preserves the positional arg index ai.
+        for (ai, arg) in args.enumerate():
             # For struct-constructor calls, hint the container-literal
             # element size for each positional arg using the target field's
             # declared type. Look up type_infos inline (per-arg) — keeping
@@ -7285,7 +7284,6 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                 # `!T` → CkCallArgOwning (drives OpMove/OpClone). The
                 # outer `is_borrow` branch already handled `&T` params.
                 gir_args.push(op_consume(&ctx, &gmod, arg_local, classify_call_arg(&gmod, call_name, ai)))
-            ai = ai + 1
         # Look up return type from module's fn_sigs, or from function definitions
         int ret_type = I64_TYPE
         # Expected-type read for bare prelude-variant ctors (Rust gg's

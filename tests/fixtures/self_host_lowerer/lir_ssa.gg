@@ -21,29 +21,23 @@ from std.collections import Vector, Dict
 Dict[int, bool] find_promotable_slots(LirFunction &f):
     Dict[int, bool] candidates = {}
 
-    # All scalar slots are candidates
-    int si = 0
-    while si < f.slots.len():
-        LirSlot slot = f.slots.get(si).unwrap()
+    # All scalar slots are candidates.
+    # CoW for-element BORROW scan: enumerate() preserves the slot index si.
+    for (si, slot) in f.slots.enumerate():
         if lir_is_scalar(slot.ty):
             candidates.put(si, true)
-        si += 1
 
-    # Remove any slot referenced by SlotAddr
-    int bi = 0
-    while bi < f.blocks.len():
-        LirBlock blk = f.blocks.get(bi).unwrap()
-        int ii = 0
-        while ii < blk.insts.len():
-            LirInst inst = blk.insts.get(ii).unwrap()
+    # Remove any slot referenced by SlotAddr.
+    # CoW for-element BORROW scans (no LirBlock__clone/LirInst__clone): the
+    # loops only read blk.insts and match each inst.
+    for blk in f.blocks:
+        for inst in blk.insts:
             match inst:
                 case ISlotAddr(_, slot):
                     if candidates.contains(slot):
                         candidates.remove(slot)
                 else:
                     pass
-            ii += 1
-        bi += 1
 
     return candidates
 
@@ -57,16 +51,15 @@ Vector[Vector[int]] compute_predecessors(LirFunction &f):
         preds.push(empty)
         pi += 1
 
-    int bi = 0
-    while bi < f.blocks.len():
-        LirBlock blk = f.blocks.get(bi).unwrap()
+    # CoW for-element BORROW scan (no LirBlock__clone): only reads blk.term.
+    # enumerate() preserves the block index bi pushed into preds.
+    for (bi, blk) in f.blocks.enumerate():
         Vector[int] succs = term_successors(blk.term)
         int si = 0
         while si < succs.len():
             int succ = succs.get(si).unwrap()
             preds.get(succ).unwrap().push(bi)
             si += 1
-        bi += 1
 
     return preds
 

@@ -601,24 +601,19 @@ String field_type_str(int ty, Vector[String] &sn):
 
 String emit_externs(LirModule &m, Vector[String] &sn):
     String out = ""
-    int i = 0
-    while i < m.externs.len():
-        LirExtern ext = m.externs.get(i).unwrap()
+    # CoW for-element BORROW scan (no LirExtern__clone): reads ext fields only.
+    for ext in m.externs:
         # Skip runtime-provided functions (they're in the included runtime).
         if is_runtime_fn(ext.name) or is_std_header_fn(ext.name):
-            i += 1
             continue
         # Skip C keyword casts.
         if ext.name == "float" or ext.name == "int" or ext.name == "bool":
-            i += 1
             continue
         # Skip monomorphized wrapper methods.
         if is_mono_wrapper_method(ext.name, &m):
-            i += 1
             continue
         # Skip variadic externs with no params.
         if ext.is_variadic and ext.params.len() == 0:
-            i += 1
             continue
         String ret = c_type_name(ext.return_type, &sn)
         out = out + ret + " " + ext.name + "("
@@ -640,7 +635,6 @@ String emit_externs(LirModule &m, Vector[String] &sn):
                     out = out + ", "
                 out = out + "..."
         out = out + ");\n"
-        i += 1
     if m.externs.len() > 0:
         out = out + "\n"
     return out
@@ -4139,23 +4133,22 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
         if is_void_runtime_fn(name):
             returns_void = true
         if not returns_void:
-            int ei = 0
-            while ei < m.externs.len():
-                LirExtern ext = m.externs.get(ei).unwrap()
+            # CoW for-element BORROW scan (no LirExtern__clone): reads ext.name
+            # and ext.return_type only.
+            for ext in m.externs:
                 if ext.name == name:
                     if ext.return_type == LT_VOID:
                         returns_void = true
                     break
-                ei += 1
         # Also check user functions (ICall masquerading as CallExtern via redirect)
         if not returns_void:
-            int fi = 0
-            while fi < m.functions.len():
-                if m.functions.get(fi).unwrap().name == name:
-                    if m.functions.get(fi).unwrap().return_type == LT_VOID:
+            # CoW for-element BORROW scan (no LirFunction__clone): reads
+            # ufn.name and ufn.return_type only.
+            for ufn in m.functions:
+                if ufn.name == name:
+                    if ufn.return_type == LT_VOID:
                         returns_void = true
                     break
-                fi += 1
     # Self-host emit gap closure (2026-05-10): cstr-returning runtime
     # fns need their result wrapped with gorget_str_from_cstr(...) when
     # the destination is a Str slot — self-host treats `cstr` in Gorget
@@ -4291,13 +4284,12 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
                         parent_sid_pv = func_ret_ty
             # None with no args: pick any Option__X (first registered Option type).
             if parent_sid_pv < 0 and (name == "None"):
-                int sdi_pv = 0
-                while sdi_pv < m.structs.len():
-                    LirStructDef sd_pv = m.structs.get(sdi_pv).unwrap()
+                # CoW for-element BORROW scan (no LirStructDef__clone): reads
+                # sd_pv.enum_kind only; enumerate() preserves the index.
+                for (sdi_pv, sd_pv) in m.structs.enumerate():
                     if sd_pv.enum_kind == EK_OPTION:
                         parent_sid_pv = LT_STRUCT_BASE + sdi_pv
                         break
-                    sdi_pv += 1
             if parent_sid_pv >= LT_STRUCT_BASE:
                 String parent_c_dst = c_type_name(parent_sid_pv, &sn)
                 int pv_tag = 0

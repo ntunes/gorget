@@ -3221,12 +3221,11 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
             if func_name.starts_with("__global_ref__") and dst_local >= 0:
                 String gr_target = func_name.slice(14, func_name.len())
                 int gr_gid = -1
-                int gri = 0
-                while gri < m.globals.len():
-                    LirGlobal gr_g = m.globals.get(gri).unwrap()
+                # CoW for-element BORROW scan (no LirGlobal__clone): reads
+                # gr_g.name only; enumerate() preserves the global index gri.
+                for (gri, gr_g) in m.globals.enumerate():
                     if gr_g.name == gr_target:
                         gr_gid = gri
-                    gri += 1
                 if gr_gid >= 0:
                     int gr_dst = lir_fn_next_value(&f)
                     lir_push_inst(&f, bb, IGlobalAddr(gr_dst, gr_gid))
@@ -3776,10 +3775,10 @@ LirFunction lir_lower_function(GirFunction gfn, GirModule &gmod, Dict[String, in
             lir_push_inst(&f, 0, ISlotStore(param_slot, param_val, false))
             pci += 1
 
-    # Lower instructions and terminators for each block
-    int bii = 0
-    while bii < gfn.blocks.len():
-        BasicBlock gir_blk = gfn.blocks.get(bii).unwrap()
+    # Lower instructions and terminators for each block.
+    # CoW for-element BORROW scan (no BasicBlock__clone): reads gir_blk.insts
+    # and gir_blk.term only; enumerate() preserves the block index bii.
+    for (bii, gir_blk) in gfn.blocks.enumerate():
         int lir_bb = block_map.get(bii).unwrap()
 
         # Lower instructions
@@ -3794,8 +3793,6 @@ LirFunction lir_lower_function(GirFunction gfn, GirModule &gmod, Dict[String, in
         # error_id) now catches the previously-silent copy.
         LirTerm lir_term = lower_terminator(gir_blk.term, &f, lir_bb, &local_to_slot, &block_map, &m)
         lir_set_term(&f, lir_bb, lir_term)
-
-        bii += 1
 
     return f
 
@@ -3909,12 +3906,11 @@ void populate_drop_metadata(LirModule &m, GirModule &gmod):
             # recursive_drop_structs / not emitted as `__gorget_dtor_`) is NOT
             # routed to a missing symbol — it keeps calling `{T}__drop` directly.
             String user_drop = ""
-            int uf = 0
-            while uf < gmod.functions.len():
-                GirFunction gf = gmod.functions.get(uf).unwrap()
+            # CoW for-element BORROW scan (no GirFunction__clone): reads gf.name
+            # and gf.param_types only.
+            for gf in gmod.functions:
                 if gf.name == type_name + "__drop" and gf.param_types.len() == 1:
                     user_drop = gf.name
-                uf += 1
             # Also add to type_drop_fns for unified emission. For a drop-name
             # collision type OR a user-Drop type the auto glue takes the mangled
             # name `__gorget_dtor_{T}` (the plain `T__drop` symbol belongs to the
@@ -3949,12 +3945,11 @@ void populate_drop_metadata(LirModule &m, GirModule &gmod):
             continue
         # Cluster (a): __imported_type__ skip removed — see Pass 1 note.
         Vector[EnumVariantDrop] variant_drops = []
-        int vi = 0
-        while vi < info.variants.len():
-            GirEnumVariantInfo vinfo = info.variants.get(vi).unwrap()
-            int vfi = 0
-            while vfi < vinfo.fields.len():
-                GirFieldInfo finfo = vinfo.fields.get(vfi).unwrap()
+        # CoW for-element BORROW scans (no GirEnumVariantInfo__clone): read
+        # vinfo.fields/vinfo.name and finfo fields only; enumerate() preserves
+        # the variant index vi used in EnumVariantDrop.
+        for (vi, vinfo) in info.variants.enumerate():
+            for finfo in vinfo.fields:
                 String drop_fn = drop_fn_for_type(finfo.type_name, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types, &m.drop_collision_types)
                 if drop_fn != "":
                     # Field name in the C struct is VariantName_N (e.g., Literal_0)
@@ -3964,8 +3959,6 @@ void populate_drop_metadata(LirModule &m, GirModule &gmod):
                         field_idx = field_idx.slice(1, field_idx.len())
                     String c_field = vinfo.name + "_" + field_idx
                     variant_drops.push(EnumVariantDrop(vi, vinfo.name, c_field, drop_fn, finfo.type_name))
-                vfi += 1
-            vi += 1
         bool is_resource_enum = gmod.resource_types.contains(type_name)
         if variant_drops.len() > 0 or is_resource_enum:
             String tname = type_name
@@ -3991,12 +3984,11 @@ void populate_drop_metadata(LirModule &m, GirModule &gmod):
             # (`{Enum}__clone`, flowing from `emit_enum_clones`); `drop_to_clone_fn`
             # maps `__gorget_dtor_` → `{Enum}__clone` too.
             String user_drop = ""
-            int uf = 0
-            while uf < gmod.functions.len():
-                GirFunction gf = gmod.functions.get(uf).unwrap()
+            # CoW for-element BORROW scan (no GirFunction__clone): reads gf.name
+            # and gf.param_types only.
+            for gf in gmod.functions:
                 if gf.name == type_name + "__drop" and gf.param_types.len() == 1:
                     user_drop = gf.name
-                uf += 1
             String drop_fn_name = type_name + "__drop"
             if m.drop_collision_types.contains(type_name) or user_drop != "":
                 drop_fn_name = "__gorget_dtor_" + type_name
@@ -4049,9 +4041,9 @@ LirModule lower_gir_to_lir(GirModule &gmod):
     for tname_v in ti_keys_v:
         GirTypeInfo tinfo_v = gmod.type_infos.get(tname_v).unwrap()
         if tinfo_v.is_enum:
-            int vi_v = 0
-            while vi_v < tinfo_v.variants.len():
-                GirEnumVariantInfo v_v = tinfo_v.variants.get(vi_v).unwrap()
+            # CoW for-element BORROW scan (no GirEnumVariantInfo__clone): reads
+            # v_v.name only; enumerate() preserves the variant tag vi_v.
+            for (vi_v, v_v) in tinfo_v.variants.enumerate():
                 m.enum_variant_parent.put(v_v.name, tname_v)
                 # The variant's ordinal position in the source enum declaration
                 # IS its runtime tag. The codegen's struct-field-scan heuristic
@@ -4059,7 +4051,6 @@ LirModule lower_gir_to_lir(GirModule &gmod):
                 # unit variants contribute no payload fields. Record the right
                 # tag here so callers can look it up.
                 m.enum_variant_tag.put(v_v.name, vi_v)
-                vi_v += 1
 
     # Register builtin structs
     register_builtin_structs(&m, &sr)
@@ -4114,15 +4105,14 @@ LirModule lower_gir_to_lir(GirModule &gmod):
     # enum-payload-of-struct, and nested holes). Typed gate
     # `type_infos.contains(T)` — no name-shape heuristic. Mirrors the 2-param
     # loop's single-source-of-truth discipline (24-layering-discipline.md).
-    int udf = 0
-    while udf < gmod.functions.len():
-        GirFunction gf = gmod.functions.get(udf).unwrap()
+    # CoW for-element BORROW scan (no GirFunction__clone): reads gf.name and
+    # gf.param_types only.
+    for gf in gmod.functions:
         if gf.name.ends_with("__drop") and gf.param_types.len() == 1:
             # Strip the trailing "__drop" (6 bytes) to recover the type name.
             String drop_ty = gf.name.slice(0, gf.name.len() - 6)
             if gmod.type_infos.contains(drop_ty):
                 m.drop_collision_types.put(drop_ty, true)
-        udf += 1
 
     # Lower user-defined type definitions
     lower_type_defs(&gmod, &m, &sr)
@@ -4157,11 +4147,10 @@ LirModule lower_gir_to_lir(GirModule &gmod):
 
     # Build function index: name → FuncId
     Dict[String, int] func_index = {}
-    int fi = 0
-    while fi < gmod.functions.len():
-        GirFunction gfn = gmod.functions.get(fi).unwrap()
+    # CoW for-element BORROW scan (no GirFunction__clone): reads gfn.name only;
+    # enumerate() preserves the function index fi.
+    for (fi, gfn) in gmod.functions.enumerate():
         func_index.put(gfn.name.clone(), fi)
-        fi += 1
 
     # Translate const-init globals (trait-impl `_VTable` structs) GIR → LIR.
     # Each GirGlobal is a struct-of-FuncAddr; resolve every GGINIT_FN_REF
