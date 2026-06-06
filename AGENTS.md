@@ -11,6 +11,20 @@ Gorget is a statically typed, Python-like language with Rust-inspired ownership 
 
 **Binary:** `gg` with commands: `lex`, `parse`, `check`, `build`, `run`
 
+## Core invariants (read first)
+
+The sections below are the spec; these are the load-bearing rules they reduce to. **New lessons go here as a one-line rule; the war-story goes in [`docs/devbook/29`](docs/devbook/29-contributor-playbook.md) — that split is how this file stays lean.**
+
+1. **Fix at the write site, not the read site.** A complex read-side fix (save/restore, phi repair, per-case rules) means a writer one layer up dropped a typed invariant. (→ Layering discipline)
+2. **Typed metadata, never name-matching.** No `name.starts_with("Vector__")` to decide *meaning* — put the flag on the typed decl, set at the source, read via an accessor. (→ Layering discipline)
+3. **Register ownership at the value's birth.** Every freshly-materialized owned, droppable value is registered for drop (or provably moved) at the producer; the leak/double-free class is always a missing or mis-typed ownership tag. (→ Ownership at Consuming Positions)
+4. **One fix, all siblings.** Fix the enumerated *class* (every consume/dispatch site), not the instance; centralize at the producer; add an arm-count lint. (→ Layering discipline)
+5. **Re-verify every premise; regenerate every number.** No dated figure enters a plan/brief/commit/handover unless you regenerated it this session. (→ Solution Quality)
+6. **Convert a recurring bug class into an executable guard** (validator or `tests/lints.rs` ratchet: env-gate → burn down → fatal). Prose rots; guards don't. (→ `docs/devbook/25-structural-guards.md`)
+7. **Gate on the bootstrap and the sanitizer**, not just a green suite — `self_host_bootstrap_fixed_point` + ASan catch what `cargo test` and the always-pass `*_comparison` diagnostics miss. (→ Build & Test)
+
+Delegated work runs **scout → brief → ≥3 fresh brief-reviews → launch (worktree) → fresh output-review → integrate** (→ Review … with a fresh agent).
+
 ## Build & Test
 
 ```bash
@@ -109,20 +123,15 @@ temp (last-use + owning by construction), and named local at last use,
 bound to an owned value (not from `.get()`, a view-returning method,
 or a parameter — those bind borrows).
 
-On a valid move, the source slot becomes logically dead. The IR
-instruction is `MoveZero`; the backend zeros the source only when
-drop-tracking would otherwise re-drop the value, and elides the
-zero when liveness proves it unobservable. The zero is a backend
-optimization for drop correctness, not part of the move semantics.
+On a valid move the source slot becomes logically dead; the IR instruction is
+`MoveZero` (the backend zeros the source only when drop-tracking would otherwise
+re-drop it, eliding the zero when liveness proves it unobservable — a drop-correctness
+optimization, not part of the move semantics). The clone case is required, not a
+fallback: a borrowed or still-live source would be a use-after-free if moved. The
+decision is mechanical, not heuristic.
 
-The clone case is required, not a fallback: the source either doesn't
-own its data or must stay valid past the call; move would be a
-use-after-free. The decision is mechanical, not heuristic.
-
-**This is the compiler contract — not a suggestion.** Post-call
-zeroing (when emitted) is correct only for the move-eligible shapes.
-See [`docs/devbook/11-copy-on-write.md`](docs/devbook/11-copy-on-write.md#materialization-points--the-enforced-boundary-set)
-for the full specification.
+**This is the compiler contract — not a suggestion.** Full spec:
+[`docs/devbook/11-copy-on-write.md`](docs/devbook/11-copy-on-write.md#materialization-points--the-enforced-boundary-set).
 
 ## Solution Quality
 
@@ -131,8 +140,8 @@ for the full specification.
 - Flag code smells and structural issues you encounter, even if unrelated to the current task. Log non-trivial findings to `TODO.md`.
 - You are allowed an opinion. If the user is proposing something dumb, call him out.
 - You are allowed to swear if opportune. Don't over do it, but if something deserves a 'holy shit', use it!
-- **Performance work measures MEMORY, not just time.** Every perf investigation/fix tracks peak RSS + alloc/clone counts (`--clones=stats` build flag → the `[clone-stats] array_clone=N` line, `/usr/bin/time -v`, `scripts/self_host_mem_baseline.sh`) alongside wall-clock — a memory balloon is as blocking as a time regression. Worked example: a `self_host_stage` process ballooning to ~4GB RSS (a 1.5-billion-array_clone get-mutate-set clone-bomb) went undiagnosed because perf chains only timed ms; the long compile times were a *symptom* of the memory thrash, not the disease.
-- **Re-verify a premise against CURRENT source/tests before acting on it.** Diagnoses, plans, comparison scores, and dated TODO/memory notes go stale — confirm the load-bearing fact still holds (re-run the `*_comparison` test for a score; re-read the cited source for a "bug"; check the actual current code shape, not a remembered one). This codebase has repeatedly burned cycles on stale premises: a "resolver at 57%" that was actually 96%, an "unshipped f-string port" already shipped, a "live function-type bug" already fixed, a "cleanup target" whose fossils were already retired, a fix-brief that misread a workaround's *current* state as its *proposed* state. Don't trust dated figures or an agent's unverified conclusion (an agent claimed "multi-agent load" when it was the only agent running, and "Rust codegen bug" without a repro); cross-check first.
+- **Performance work measures MEMORY, not just time.** Every perf investigation/fix tracks peak RSS + alloc/clone counts (`--clones=stats` build flag → the `[clone-stats] array_clone=N` line, `/usr/bin/time -v`, `scripts/self_host_mem_baseline.sh`) alongside wall-clock — a memory balloon is as blocking as a time regression (a ~4GB-RSS clone-bomb once hid behind ms-only timing; the slow compile was the *symptom*, not the disease).
+- **Re-verify a premise against CURRENT source/tests before acting on it.** Diagnoses, plans, comparison scores, and dated TODO/memory notes go stale — confirm the load-bearing fact still holds (re-run the `*_comparison` test for a score; re-read the cited source for a "bug"; check the actual current code shape, not a remembered one). Don't trust dated figures or an agent's unverified conclusion; cross-check first. **No un-regenerated numbers:** a figure you did not regenerate this session does not enter a plan, brief, commit message, TODO/handover, or statement to the owner — quote the *command*, not the stale value (the `*_comparison` tests are diagnostic-always-pass, so only the freshly-printed counts mean anything). Burned-cycle incidents (resolver "57%"→96%, already-shipped ports, retired fossils) in [`docs/devbook/29`](docs/devbook/29-contributor-playbook.md#re-verify-a-premise-against-current-source-before-acting).
 
 ## Layering discipline
 
@@ -166,9 +175,17 @@ When you've localized a bug and the fix you're sketching is *intrinsically compl
 
 Every layer hop without finding the bug should make you *more* suspicious of your diagnosis, not less.
 
-Worked examples:
-- **Snag #17** (chained `text.substring(...)` corrupting later `parse_float(text)`): symptom looked like `cow_materialize_alias` rebinding across CF merges (50+ line fix candidates). Real bug: `resolve_builtin_method_return_type` ignored the protocol's `self_conv` flag, triggering bogus materialization. 5-line fix at the writer; rebind path now never-taken.
-- **Snag #13** (Box-recursive enum links to undefined `__gorget_box_alloc_<T>`): tempting fix was scanning recursive-drop tables for `Box__X__drop` — name-matching. Real bug: `StructDef` for `Box[T]` had typed inner-type info at registration but didn't expose it to the C backend. Fix: add `box_inner_type: Option<String>`, set at registration, read at emit.
+Worked examples (Snag #17 — `self_conv` ignored → bogus materialization, 5-line writer fix; Snag #13 — Box inner-type dropped at the layer boundary, fixed with a typed `box_inner_type` field): [`docs/devbook/29`](docs/devbook/29-contributor-playbook.md#the-debugging-heuristic-fix-complexity-is-a-signal-of-the-wrong-layer).
+
+### Sibling-site drift — fix the class, not the instance
+
+When you fix a bug at one position in an *enumerated set* — consume positions (`push`/`put`/`set`/`insert`/`send`/ctor/return/capture), tail-value dispatchers, container-literal arms, registration paths — fix the **class**, not the instance:
+
+1. **Grep for the siblings before you commit.**
+2. **Prefer centralizing at the producer** over patching each consumer (e.g. `maybe_auto_propagate` hoisted to the `lower_expr` exit; `builder.set_terminator` made a no-op when already terminated — one line that killed a whole class).
+3. **Add an arm-count lint** (`tests/lints.rs`, like `container_literal_arms_count`) so the next sibling is forced through the shared path — as part of the fix, not after the next regression.
+
+**Litmus test:** if your fix is "add the missing call to site N", ask "how many sites are there, and what stops site N+1 from the same hole?" If nothing does, you fixed the instance, not the class. Sagas (auto-prop #43→#49; tail-value #8→#51) in [`docs/devbook/29`](docs/devbook/29-contributor-playbook.md#sibling-site-drift-fix-the-class-not-the-instance).
 
 ## Don't redesign around compiler gaps
 
@@ -179,10 +196,7 @@ When work hits a compiler bug, the response must be one of:
 
 Forbidden: reshaping the surrounding code (tests, fixtures, examples, even production code) to avoid the gap. Even when commented, this buries the bug. The wired-in expected output (or the surviving workaround idiom) becomes the load-bearing artifact, and "passing" tests lock in buggy behavior as canonical.
 
-Worked examples from this codebase:
-- **Tier E §8.1 drop-flag**: agent dodged a universal `!`-param drop-at-exit leak by rewriting the canonical fixture to use locals instead of `!` params. Bug stayed hidden a day; three masked-leak tests needed expected-output updates once it was fixed.
-- **`Dict.len()`**: workaround `scores.keys().len()` was documented in a fixture comment for ~8 weeks past the silent fix. The redesign outlived its justification.
-- **Phase A `collection_runtime_type`**: stale TODO that had already been resolved as a side-effect of foundation commits — refusing to manufacture migration work to fit it is itself an instance of this rule.
+Worked examples (Tier E `!`-param drop-flag dodged via a rewritten fixture; `Dict.len()` workaround outliving its bug ~8 weeks; Phase A stale-but-already-resolved TODO): [`docs/devbook/29`](docs/devbook/29-contributor-playbook.md#dont-redesign-around-compiler-gaps).
 
 **Litmus test:** if a fixture uses a more complex shape than seems necessary, OR a workaround comment cites a bug, ask why. Patterns like "uses locals instead of `!` params" or "passes an extra explicit arg the language should default" are smells — likely a gap was dodged. Verify the bug still exists before treating the workaround as canonical.
 
@@ -194,10 +208,7 @@ The self-host frontend (`tests/fixtures/self_host_*/`) is the language's referen
 
 Defensive code accumulated for past compiler gaps is **technical debt with a stale justification.** The bug was fixed; the workaround stayed; the comment explaining "why the parallel-vector / extra clone / wrapper function" became a false historical record. New contributors read the workaround as canonical style, copy it, and the rot spreads.
 
-Examples already burned into the codebase:
-- `StructRegistry`: parallel `Vector[String]` + `Vector[int]` with O(n) linear scan in `lir_lower.gg`, kept "because callers iterate in insertion order at emission time" — a workaround for a Dict-ordering bug fixed 2026-05-08.
-- `type_info_keys_safe`: a wrapper function around `Dict.keys()` whose entire purpose is to dodge a state-loss bug that no longer exists.
-- Comments containing `# parallel storage to dodge Dict[String, _] state-loss` scattered across `lower.gg`.
+Fossils already burned in (`StructRegistry` parallel `Vector[String]`+`Vector[int]` scan; `type_info_keys_safe` wrapper around `Dict.keys()`; `# parallel storage to dodge Dict[String, _] state-loss` comments) — all dodging bugs since fixed: [`docs/devbook/29`](docs/devbook/29-contributor-playbook.md#self-host-as-the-elegance-showcase--and-retiring-fossils).
 
 Rules:
 1. **No defensive code without a live, cited bug.** If you find a workaround comment ("parallel because…", "wrapper to avoid…", "rebuild instead of mutate…"), verify the bug still exists. If it doesn't, delete the workaround and use the idiomatic shape.
@@ -226,20 +237,20 @@ The failure mode when these rules slip is recoverable but ugly: working trees ge
 
 ## Review plans, TODO items, AND agent briefs/outputs with a fresh agent
 
-A **fresh** agent must review any non-trivial artifact before it's acted on, iterating — folding each pass's findings — until a fresh agent raises **no reservations**. Use a *new* agent each pass: a reused one anchors on its prior conclusions, while a fresh one re-derives from the code and catches what the artifact baked in (more than once the second pass found the *first pass's own recommendation* was unsound). Brief every reviewer to verify each load-bearing claim against source with `file:line` and return either SIGN OFF or specific cited reservations — not to rubber-stamp, and not to invent reservations to avoid signing off. The reviewer may build or run minimal checks to verify.
+A **fresh** agent must review any non-trivial artifact before it's acted on, folding each pass's findings, until a fresh pass raises **no reservations**. Use a *new* agent each pass (a reused one anchors on its prior conclusions; a fresh one re-derives from the code and catches what the artifact baked in). Brief every reviewer to verify each load-bearing claim against source with `file:line` and return SIGN OFF or specific cited reservations — not to rubber-stamp, not to invent reservations — and cross-check their claims yourself; a reviewer can be wrong too.
 
-**The passes are SEQUENTIAL, not parallel.** Each pass reviews the artifact *after* the previous pass's findings have been folded in — pass 2 sees the corrected v2, pass 3 sees v3, and so on. Do **not** fan out N reviewers concurrently against the same version: that gives you N opinions on v1, misses defects introduced *by* a correction, and forfeits the point — a fresh agent re-deriving against the *latest* artifact (which may include another reviewer's now-folded suggestion that itself turns out unsound). The loop is strictly: review → fold → fresh review of the corrected artifact → fold → … → a fresh pass raises no reservations. "≥3 fresh passes" means ≥3 such sequential rounds, not 3 simultaneous reads.
+**Scout before you brief.** A brief is only as good as its premises, and this tree's most expensive mistakes were briefs built on stale ones. Before writing a brief — and before committing to any non-trivial plan — run a scout: a read-only probe/audit (often a delegated `Explore`/`general-purpose` agent) that verifies every load-bearing premise against CURRENT source with `file:line`, confirms the bug still reproduces, and where the plan claims a yield, **prototypes it end-to-end and MEASURES the real result.** Killing an unsound plan after a one-agent scout is a win. **Scout yield estimates MUST be end-to-end-verified — compile AND run AND diff whole output, never source-read** (three estimates in this tree were ~0 real because they were source-read).
 
-**Never launch after a pass that raised reservations — the NEXT pass, on the corrected artifact, must itself come back clean.** A fold can leave a stale remnant *or introduce a new defect*, and only a fresh pass catches it. Worked examples from this codebase: a brief whose reservation-1 fold updated the "typed shape" section but left the "consumer rewrites" section describing the *pre-fold* design — a direct contradiction caught only on the next pass; and a plan that needed **four** passes because passes 2 and 3 each surfaced a fresh stale-remnant of the same class. Do **not** rationalize skipping the confirming pass with "the fix was mechanical" or "the design is source-verified" — the fold itself is exactly what the next pass exists to verify. If a pass is *blocking* (not just nit-level), you are not done; fold and run another.
+**The passes are SEQUENTIAL, not parallel** (fanning out N reviewers at v1 gives N opinions on v1 and misses defects introduced *by* a fold), and you **never stop on a pass that raised reservations** — a fold can leave a stale remnant or introduce a fresh defect, and only the next pass catches it. Do not rationalize skipping the confirming pass with "the fix was mechanical". The loop is: review → fold → fresh review of the corrected artifact → … → a clean pass. The why + worked examples (a fold that left a *contradicting* section; a plan that needed four passes) are in [`docs/devbook/29`](docs/devbook/29-contributor-playbook.md#scout-before-you-brief-review-in-sequential-fresh-passes).
 
 This applies to four kinds of artifact:
 
 1. **Plans / TODO items** — review before you start implementing.
-2. **Agent briefs (≥3 fresh passes)** — a brief you hand a delegated `Agent` is a spec; review it *before launching* the agent. A wrong brief wastes the whole execution + validation cycle, so a cheap fresh-agent pass is the bargain — and these passes routinely catch a mis-identified root cause, a fix aimed at the wrong layer, or a "fix" that's already implemented.
-3. **Agent output** — when the execution agent finishes, a fresh agent reviews its diff/commits *before you integrate or run expensive validation*, to confirm correctness and catch regressions.
-4. **Session-handover / state snapshots** — the in-flight-state doc a fresh session resumes from (the `TODO.md` handover block, persisted resumption artifacts, the `MEMORY.md` north-star/scores) is a *spec the next session executes from*; a stale, wrong, or incomplete one misleads it exactly as a wrong brief misleads an execution agent — and it's the highest-leverage artifact to get right, since every downstream action inherits its errors. Before relying on it for a handover, a fresh agent verifies every load-bearing claim against ACTUAL state: commit hashes resolve, worktree progress is as described, comparison scores re-confirmed from the `*_comparison` tests (not quoted from memory), durable artifacts (patches/plans) are present at the cited paths, and nothing is stale, contradictory, or missing. This is the same trap as "re-verify a premise" — a handover written from memory/agent-reports is dated the moment it's written.
+2. **Agent briefs (≥3 fresh passes)** — a brief you hand a delegated `Agent` is a spec; review it *before launching*. A wrong brief wastes the whole execution + validation cycle, and these passes routinely catch a mis-identified root cause, a fix aimed at the wrong layer, or a "fix" that's already implemented.
+3. **Agent output** — when the executor finishes, a fresh agent reviews its diff/commits *before you integrate or run expensive validation*. This includes the **breadcrumb-check**: verify no completed-status entries (`LANDED`/`FIXED`/`RESOLVED`/`DONE`/`SHIPPED`/`✅`) were added to `TODO.md` — those are either completed work to MOVE to `DONE.md` or pending follow-ups to REPHRASE as the work that remains. `TODO.md` holds pending work only.
+4. **Session-handover / state snapshots** — the in-flight-state doc a fresh session resumes from (the `TODO.md` handover block, the `MEMORY.md` north-star/scores) is a *spec the next session executes from*; a stale one misleads it exactly as a wrong brief misleads an executor. Before relying on it, a fresh agent verifies every load-bearing claim against ACTUAL state: commit hashes resolve, scores re-confirmed from the `*_comparison` tests (not memory), durable artifacts present at cited paths, nothing stale or contradictory. Same trap as "re-verify a premise".
 
-So a delegated task runs: **write brief → ≥3 fresh brief-reviews (until no reservations) → launch agent (worktree, per "Multi-agent orchestration") → fresh review of its output → integrate.** A session handover runs the same loop on the state snapshot before the baton is passed. You (the orchestrator) hold the full context and brief the reviewers with it — and cross-check their load-bearing claims against source, keeping the reviewers honest too. Skipping the brief-review or the output-review is how wrong diagnoses and unreviewed regressions slip through.
+So a delegated task runs: **scout (verify premises + measure yield end-to-end) → write brief → ≥3 fresh brief-reviews (until no reservations) → launch agent (worktree, per "Multi-agent orchestration") → fresh output-review → integrate.** A session handover runs the same loop on the state snapshot before the baton is passed. You (the orchestrator) hold the full context, brief the reviewers with it, and keep them honest.
 
 ## Task Continuity
 
@@ -253,3 +264,4 @@ Maintain `TODO.md` and `DONE.md` at the project root to track work across plans 
 - **Restoring context:** Read `TODO.md` at the start of every conversation and after finishing any tangential fix.
 - **Discovered issues:** Fix small bugs inline. For anything too large to fix immediately, add it to `TODO.md` and move on. Never silently work around a bug — either fix it or record it.
 - **Never delete `TODO.md`** — only move completed items out of it.
+- **The handover stores invariants and commands, not numbers.** The `TODO.md` handover block and any state snapshot are specs the next session executes from; a dated number in them is a stale premise waiting to happen. Record *what to run to get the current number* and *what it means*, not the number itself.

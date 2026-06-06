@@ -178,7 +178,11 @@ in a fixture comment, so the redesign quietly became the recommended idiom. A
 `!`-param drop-at-exit leak got hidden for a day because a canonical fixture was
 rewritten to use locals instead of `!` params — and when the bug was finally
 fixed, three masked-leak tests needed their expected output updated
-(`AGENTS.md:177-178`).
+(`AGENTS.md:177-178`). The inverse failure mode is the same rule read
+backwards: a stale `TODO.md` entry (the Phase A `collection_runtime_type`
+migration) once described work that foundation commits had *already* completed —
+and refusing to *manufacture* migration work to fit the stale premise is itself
+an instance of this rule (verify the gap still exists before acting on it).
 
 **The litmus test** (`AGENTS.md:181`): if a fixture uses a more complex shape
 than seems necessary, or a comment cites a bug as the reason for a workaround,
@@ -204,7 +208,9 @@ copy it, and the rot spreads. This tree has carried real fossils: a
 `StructRegistry` with parallel `Vector[String]` + `Vector[int]` and an O(n)
 scan, kept "because callers iterate in insertion order" long after the
 Dict-ordering bug it dodged was fixed; a `type_info_keys_safe` wrapper whose
-*entire purpose* was to dodge a state-loss bug that no longer exists
+*entire purpose* was to dodge a state-loss bug that no longer exists; and
+`# parallel storage to dodge Dict[String, _] state-loss` comments scattered
+across `lower.gg`, each naming a Dict-ordering/state-loss bug long since fixed
 (`AGENTS.md:191-194`).
 
 The operating rules:
@@ -303,6 +309,94 @@ instead.
 
 ---
 
+## Sibling-site drift: fix the class, not the instance
+
+A family of this tree's worst time-sinks was *one* bug re-discovered at N sibling
+sites that should have shared a single implementation. The fix kept landing at
+site N, shipping, and site N+1 surfaced days later wearing a different hat.
+
+Two canonical sagas:
+
+- **`Result→T` auto-propagation.** Making a `throws` call type as `Result[T,E]`
+  at the boundary exposed every consume site that hadn't been taught to unwrap
+  it: call-arg (Snag #43) → constructor / enum-variant arg (#46) → match
+  scrutinee (#48) → conditions / index / for-iter (#49). Each entry literally
+  predicted the next ("a future audit should check push/put/insert/return") —
+  and each prediction came true. The cycle broke only when the unwrap was
+  **centralized at the producer** (the `lower_expr` exit, gated to
+  Call/MethodCall with a one-shot suppress flag) instead of patched per consumer.
+- **Tail-value-as-zero-init.** The "last statement of a block is the block's
+  value" logic drifted across four dispatchers — statement-match (#8/#41), the
+  `set_owned(result_local)` invariant (#31), expr-match (#50), and multi-statement
+  closure bodies (#51). The original dispatcher had the discipline; each copy
+  re-grew the same hole. The durable fix factored a shared
+  `lower_stmt_as_tail_value` helper "so a future fourth dispatcher can't silently
+  regress this family."
+
+The rule (`AGENTS.md` → "Sibling-site drift"): when you fix a bug at one position
+in an *enumerated set* — consume positions
+(`push`/`put`/`set`/`insert`/`send`/ctor/return/capture), tail-value
+dispatchers, container-literal arms, registration paths — **grep for the
+siblings before you commit, prefer centralizing at the producer, and add an
+arm-count lint** (`tests/lints.rs`, like `container_literal_arms_count`) so the
+next sibling is forced through the shared path. The most elegant "centralize at
+the producer" in this tree is one line: making `builder.set_terminator` a no-op
+when the block is already terminated killed an entire class of "divergent
+terminator silently overwritten" bugs (Snags #33/#39) by construction. When your
+fix is "add the missing call to site N", ask "how many sites are there, and what
+stops site N+1 from having the same hole?"
+
+---
+
+## Scout before you brief; review in sequential fresh passes
+
+A delegated task is expensive: brief → reviews → execution → output-review →
+integration. A wrong premise anywhere upstream burns the whole chain. Two cheap
+habits front-load the risk.
+
+**Scout first.** Before you write the brief — and before you commit to any
+non-trivial plan — run a *scout*: a read-only probe (often a delegated
+`Explore`/`general-purpose` agent) that verifies every load-bearing premise
+against current source with `file:line`, confirms the bug still reproduces, and —
+where the plan claims a yield — *prototypes it end-to-end and measures the real
+result*. The scout's job is to **kill the plan cheaply if it's unsound**, and it
+has earned its keep doing exactly that: refuting parity chains by running them
+(the Box `__gg_new` chain scouted "DEEP / 0-yield"; a closure-call `void*`-cast
+chain that SIGSEGV'd), and killing an RSS probe whose override fired zero times. A
+killed plan after a one-agent scout is a *win*.
+
+The non-negotiable scout rule: **yield estimates must be end-to-end-verified —
+compile AND run AND diff whole output, never source-read.** Three separate scout
+estimates in this tree were ~0 real because they were source-read. "It looks like
+this fixes ~14 fixtures" is worthless until you have built the change and watched
+14 fixtures flip. A scout that estimates a number without running the code has not
+scouted.
+
+**Then review in sequential fresh passes.** A fresh agent reviews the artifact;
+you fold its findings; a *new* fresh agent reviews the corrected version; repeat
+until a pass raises no reservations. The passes are **sequential, not parallel** —
+fanning out N reviewers at v1 gives you N opinions on v1 and misses defects
+introduced *by* a correction. And you **never stop on a pass that raised
+reservations**: a fold can leave a stale remnant or introduce a fresh defect, and
+only the next pass catches it. This tree has a brief whose fix to one section left
+a *contradicting* second section (caught only on the next pass) and a plan that
+needed **four** passes because passes 2 and 3 each surfaced a fresh remnant of the
+same class. (The process that produced these very playbook additions is an
+instance: a producer-side leak-validator design was scouted, then took four
+sequential review passes — each catching a citation defect the prior fold left —
+before a pass came clean.)
+
+The reviewers are neither rubber-stamps nor nitpickers-for-sport: brief each to
+verify load-bearing claims against source with `file:line` and return **SIGN OFF
+or specific cited reservations**, and cross-check their claims yourself — a
+reviewer can be wrong too. The lifecycle: **scout → brief → ≥3 fresh
+brief-reviews → launch (worktree) → fresh output-review → integrate.** The
+output-review includes the **breadcrumb-check**: no `LANDED`/`FIXED`/`DONE`/`✅`
+status entries land in `TODO.md` — completed work belongs in `DONE.md`, and
+`TODO.md` holds pending work only.
+
+---
+
 ## The playbook in one paragraph
 
 When a fix feels complex, you are at the wrong layer: trace the buggy read to
@@ -315,7 +409,10 @@ diagnostic-only comparison tests will happily report green while wildly
 mismatched. The gates (`*_comparison`, `bootstrap_fixed_point`, the name-prefix
 ratchet) catch regressions, but only the comparison *counts* — read with
 `--nocapture` — measure progress toward the actual finish line, which is parity
-with Rust, not a green suite.
+with Rust, not a green suite. And when you *delegate*: fix the whole sibling
+class, not the instance; scout the premises end-to-end before briefing; and
+review in sequential fresh passes — a wrong premise upstream burns the entire
+brief → execute → validate chain.
 
 ---
 
