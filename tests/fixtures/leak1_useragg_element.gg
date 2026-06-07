@@ -1,0 +1,18 @@
+# Witness: Vector[Option[String]] where elements are NOT all read out.
+# The array is freed at scope exit; with no elem_drop wired, the
+# unread Option[String] payloads (owned String heap) leak.
+void main():
+    Vector[Option[String]] bag = []
+    int i = 0
+    while i < 5:
+        bag.push(Some(f"item_{i}"))
+        i = i + 1
+    # Read only element 0 — elements 1..4 are never read, so their
+    # String payloads can only be freed by the array's elem_drop.
+    Option[String] back = bag.get(0).unwrap()
+    match back:
+        case Some(s):
+            print(s)
+        case None:
+            print("none")
+    print("done")
