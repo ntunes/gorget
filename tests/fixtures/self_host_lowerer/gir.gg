@@ -560,6 +560,19 @@ struct GirModule:
     # key idiom. Single source of truth, one accessor — Layering rule 3.
     # Appended AT END.
     Dict[String, String] closure_env_type
+    # P0 Bug A: type names that have a USER-DEFINED `drop` method (an
+    # `equip <T> with Drop:` whose body runs observable side effects, e.g.
+    # `print(...)`). Populated by a pre-pass over `m.items` in `lower_module`
+    # (BEFORE any function body is lowered, so the signal is available when
+    # `main` is lowered — independent of `gmod.functions` push ordering).
+    # Read by the `CloneAndMove` SVarDecl arm: a Branch C-pre ptr-clone of a
+    # type WITHOUT a user drop registers for drop (frees the deref-clone's
+    # fresh heap — fixes the leak, no observable print). A type WITH a user
+    # drop keeps the leak-but-stdout-correct skip (registering would run the
+    # user drop a SECOND time, double-printing vs the borrow-no-drop oracle).
+    # Typed real-declared-property discriminator, not a name match. Appended
+    # AT END to avoid shifting positional ctor call sites.
+    Dict[String, bool] types_with_user_drop
 
 # ── Helpers ──────────────────────────────────────────────
 

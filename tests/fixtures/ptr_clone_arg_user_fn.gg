@@ -1,0 +1,38 @@
+# Regression (P0 Bug B): a clone consumed into a USER fn's owning Ptr param
+# via the GICall path. The GICall pass-by-ptr OpClone arm used to diverge
+# from its GICallExtern (runtime) twin: for a ptr-to-struct source it failed
+# the `resource_clone_fn` lookup (which requires `>= LT_STRUCT_BASE`) and
+# either aliased the raw pointer or passed the clone struct VALUE where a
+# pointer was expected — emitting C that did not compile (`incompatible type
+# for argument 1 of 'take'`). Both OpClone arms now route through the shared
+# `lower_clone_arg_by_ptr` helper: deref ptr-to-struct → pointee, clone,
+# materialise into a fresh temp slot, pass its ADDRESS (independent owned
+# copy; the callee mutates without aliasing the caller's element).
+#
+# `take(!r.clone())` explicitly clones the borrow + moves the clone into the
+# `!Rec` owning param. After take(), the caller's borrow `r` AND the source
+# element must be UNCHANGED. Output matches the Rust oracle.
+
+from std.collections import Vector
+
+struct Rec:
+    String name
+    int id
+
+void take(Rec !c):
+    c.id = 999
+    c.name = "mutated"
+
+void outer(Rec &r):
+    take(!r.clone())
+    print(r.name)
+    print(r.id)
+
+int main():
+    Vector[Rec] src = []
+    src.push(Rec("alpha", 1))
+    outer(&src[0])
+    auto e0 = src.get(0).unwrap()
+    print(e0.name)
+    print(e0.id)
+    return 0

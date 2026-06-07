@@ -2244,6 +2244,48 @@ String resource_clone_fn(int payload_ty, LirModule &m):
         return name + "__clone"
     return ""
 
+# P0 Bug B (fold the siblings): the SHARED by-pointer OpClone arm for BOTH
+# the GICall (user-fn) and GICallExtern (runtime) pass-by-ptr paths. Returns
+# the LIR value to push into `lir_args`.
+#
+# A by-pointer arg needs an lvalue (an addressable slot). `lower_operand` on
+# an `OpClone` emits the clone call and returns the fresh OWNED value (a
+# struct value for `T__clone`, a thin pointer for String/Closure):
+#   • value-struct source slot (`slot_ty >= LT_STRUCT_BASE`):
+#     `lower_operand` takes the slot's address and calls `<T>__clone` →
+#     the cloned struct VALUE.  elem_ty == slot_ty.
+#   • ptr-to-known-struct source slot (`LT_PTR_TO_BASE..LT_STRUCT_BASE`):
+#     `lower_operand` loads the pointer and calls the POINTEE's clone fn →
+#     a fresh owned pointee VALUE.  elem_ty is the dereferenced pointee
+#     struct type (`LT_STRUCT_BASE + (slot_ty - LT_PTR_TO_BASE)`).
+# In BOTH cases the clone is a struct VALUE that must be materialised into a
+# fresh temp slot of the element type, whose ADDRESS is passed by pointer —
+# the callee receives an independent owned copy it can consume or mutate
+# WITHOUT aliasing the caller's element. (Before the fold the GICall arm
+# fell through to passing the raw aliased pointer for a ptr-to-struct source
+# — NO clone — while the GICallExtern twin cloned: the duplicated-and-drifted
+# OpClone-arm bug this helper retires.)
+#
+# Raw `LT_PTR` / primitive sources have no struct type signal to size a temp
+# slot — pass the loaded clone value directly (legacy best-effort, matching
+# the prior GICallExtern fall-through).
+int lower_clone_arg_by_ptr(Operand arg, int local_id, LirFunction &f, int bb, Vector[int] &local_to_slot, LirModule &m):
+    int slot = local_to_slot.get(local_id).unwrap()
+    int slot_ty = f.slots.get(slot).unwrap().ty
+    # Element (owned value) type the clone produces:
+    # ptr-to-struct → the pointee; value-struct → itself.
+    int elem_ty = slot_ty
+    if slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE:
+        elem_ty = LT_STRUCT_BASE + (slot_ty - LT_PTR_TO_BASE)
+    int cloned_val = lower_operand(arg, &f, bb, &local_to_slot, &m)
+    if elem_ty >= LT_STRUCT_BASE:
+        int tmp_slot = lir_fn_add_slot(&f, elem_ty, "")
+        lir_push_inst(&f, bb, ISlotStore(tmp_slot, cloned_val, true))
+        int caddr = lir_fn_next_value(&f)
+        lir_push_inst(&f, bb, ISlotAddr(caddr, tmp_slot))
+        return caddr
+    return cloned_val
+
 # `dst_is_borrow` (CoW collection-get default): when the GIR result
 # local is tagged LoBorrowed/LoView (a non-consuming `.get()`/`.first()`/
 # `.last()` whose Option aliases the collection element per CLAUDE.md
@@ -3041,43 +3083,16 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                                 lir_push_inst(&f, bb, ISlotAddr(addr, slot))
                                 lir_args.push(addr)
                         case OpClone(local_id):
-                            # Phase 2c COMMIT 2 Site 2a (GICall pass-by-ptr):
-                            # if the source slot holds a resource value, emit
-                            # a runtime clone into a FRESH slot and pass the
-                            # fresh slot's address. The callee receives an
-                            # independent owned copy that it can consume or
-                            # mutate without aliasing the caller's data.
-                            # Pointer-kind slots fall through to the address
-                            # shape (the value already IS a pointer; cloning
-                            # the pointer alone wouldn't duplicate the pointee).
-                            # Non-resource value types also fall through —
-                            # they have no owned data to duplicate.
-                            int slot = local_to_slot.get(local_id).unwrap()
-                            int slot_ty = f.slots.get(slot).unwrap().ty
-                            bool slot_is_ptr_kind = (slot_ty == LT_PTR) or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE)
-                            String clone_fn = ""
-                            if not slot_is_ptr_kind:
-                                clone_fn = resource_clone_fn(slot_ty, &m)
-                            if clone_fn != "":
-                                int src_addr = lir_fn_next_value(&f)
-                                int cloned_val = lir_fn_next_value(&f)
-                                int new_slot = lir_fn_add_slot(&f, slot_ty, "")
-                                int new_addr = lir_fn_next_value(&f)
-                                lir_push_inst(&f, bb, ISlotAddr(src_addr, slot))
-                                Vector[int] cargs = []
-                                cargs.push(src_addr)
-                                Vector[int] cabis = []
-                                lir_push_inst(&f, bb, ICallExtern(cloned_val, clone_fn, cargs, clone_fn, cabis))
-                                lir_push_inst(&f, bb, ISlotStore(new_slot, cloned_val, true))
-                                lir_push_inst(&f, bb, ISlotAddr(new_addr, new_slot))
-                                lir_args.push(new_addr)
-                            elif slot_is_ptr_kind:
-                                int arg_val = lower_operand(arg, &f, bb, &local_to_slot, &m)
-                                lir_args.push(arg_val)
-                            else:
-                                int addr = lir_fn_next_value(&f)
-                                lir_push_inst(&f, bb, ISlotAddr(addr, slot))
-                                lir_args.push(addr)
+                            # P0 Bug B (fold the siblings): route through the
+                            # SHARED by-ptr clone helper so a ptr-to-struct
+                            # source DEREFS to the pointee struct type and
+                            # CLONES (independent owned copy) — same as the
+                            # GICallExtern twin. Before the fold this arm passed
+                            # the raw aliased pointer for a ptr-to-struct source
+                            # (resource_clone_fn requires `>= LT_STRUCT_BASE`),
+                            # so a borrowed resource consumed into a USER fn's
+                            # owning Ptr param ALIASED instead of cloning.
+                            lir_args.push(lower_clone_arg_by_ptr(arg, local_id, &f, bb, &local_to_slot, &m))
                         case OpBorrow(local_id):
                             # Phase D step 3: borrow → always pass slot
                             # address (the canonical borrow shape).
@@ -3296,40 +3311,16 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                                 lir_push_inst(&f, bb, ISlotAddr(addr, slot))
                                 lir_args.push(addr)
                         case OpClone(local_id):
-                            # Phase 2c COMMIT 2 Site 2 — NOW WIRED (a-5 LIR
-                            # side). A by-pointer runtime arg needs an lvalue
-                            # (an addressable slot), but OpClone produces an
-                            # rvalue: `lower_operand` emits the clone call and
-                            # returns the fresh OWNED value (a struct value for
-                            # `T__clone`, a thin pointer for String/Closure).
-                            # Passing that value directly is the "incompatible
-                            # type for argument N of gorget_array_set/push/
-                            # map_put" error (the clone is a `T`, the runtime
-                            # wants `const void*`). So materialize the clone
-                            # into a fresh temp slot of the element type and
-                            # pass the slot's ADDRESS — the runtime then
+                            # P0 Bug B (fold the siblings): the GICall twin now
+                            # routes through this SAME shared helper. A by-ptr
+                            # runtime arg needs an addressable lvalue; the helper
+                            # derefs a ptr-to-struct source to the pointee type,
+                            # clones via `lower_operand`, materialises into a
+                            # fresh temp slot, and passes its ADDRESS (the runtime
                             # memcpy's the owned bytes into storage, leaving the
-                            # borrow source untouched (no double-free; the whole
+                            # borrow source untouched — no double-free, the whole
                             # point of clone-on-borrow at a consuming position).
-                            int slot = local_to_slot.get(local_id).unwrap()
-                            int slot_ty = f.slots.get(slot).unwrap().ty
-                            # Element (owned value) type the clone produces:
-                            # ptr-to-struct → the pointee; value-struct → itself.
-                            int elem_ty = slot_ty
-                            if slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE:
-                                elem_ty = LT_STRUCT_BASE + (slot_ty - LT_PTR_TO_BASE)
-                            int cloned_val = lower_operand(arg, &f, bb, &local_to_slot, &m)
-                            if elem_ty >= LT_STRUCT_BASE:
-                                int tmp_slot = lir_fn_add_slot(&f, elem_ty, "")
-                                lir_push_inst(&f, bb, ISlotStore(tmp_slot, cloned_val, true))
-                                int caddr = lir_fn_next_value(&f)
-                                lir_push_inst(&f, bb, ISlotAddr(caddr, tmp_slot))
-                                lir_args.push(caddr)
-                            else:
-                                # Raw LT_PTR / primitive source: no struct type
-                                # signal to size a temp slot — pass the loaded
-                                # value (legacy best-effort).
-                                lir_args.push(cloned_val)
+                            lir_args.push(lower_clone_arg_by_ptr(arg, local_id, &f, bb, &local_to_slot, &m))
                         case OpBorrow(local_id):
                             # Phase D step 3: borrow → slot address shape.
                             int slot = local_to_slot.get(local_id).unwrap()

@@ -7877,9 +7877,6 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                         # (the self-compile RSS leak — string_free 2.6M vs Rust 93.8M,
                         # stage-1 peak 9.96→6.28 GB). The blanket-skip above left
                         # EVERY `T x = coll.get(i).unwrap()` deref-clone leaking.
-                        # A USER struct/enum ptr-clone's drop may printf → registering
-                        # it double-PRINTS (it stays on the leak-but-stdout-correct
-                        # path until Branch C-pre BORROWS — the root-cause fix, TODO).
                         String owned_tname = type_id_to_name(owned_type, &gmod)
                         bool is_runtime_resource = false
                         match resource_meta_for(&gmod, owned_tname):
@@ -7889,6 +7886,29 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                                 pass
                         if is_runtime_resource:
                             register_local_for_drop(&ctx, var_local, owned_type, &gmod)
+                        else:
+                            # P0 Bug A: a USER struct/enum ptr-clone (e.g. `Rec`
+                            # with a String field) genuinely OWNS a fresh
+                            # independent heap (the deref-clone deep-copies the
+                            # field buffers). Not registering it leaks that heap
+                            # (ASan `LeakSanitizer: N byte(s)` via
+                            # `<T>__clone`→`gorget_string_clone_to_owned`→`main`).
+                            # The deep-clone makes dropping it memory-SAFE (no
+                            # double-free against the borrowed element's owner).
+                            # The ONLY observable difference vs the borrow-no-drop
+                            # oracle is a USER `drop` method's side effects (a
+                            # `print` would double vs the oracle). So register
+                            # ONLY when the type has NO user-defined `drop`: the
+                            # implicit field-drop frees the clone's buffers with
+                            # zero stdout effect (matches the oracle's output AND
+                            # closes the leak). A type WITH a user drop stays on
+                            # the leak-but-stdout-correct path until Branch C-pre
+                            # BORROWS (the root-cause fix, TODO). Typed
+                            # real-declared-property discriminator, not a name
+                            # match (`types_with_user_drop`, pre-scanned in
+                            # lower_module).
+                            if not gmod.types_with_user_drop.contains(owned_tname):
+                                register_local_for_drop(&ctx, var_local, owned_type, &gmod)
                 case MoveDirect():
                     # Branch F / G — direct Move. Primitives, FnPtr,
                     # non-resource user types. op_consume picks
@@ -13457,7 +13477,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     Dict[String, GirStaticInfo] statics = {}
     Dict[String, ResourceMetadata] resource_metadata = {}
     Dict[int, int] option_ref_payload = {}
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, !const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types, !option_ref_payload, [], !enum_variant_parent_idx, false, [], {}, {}, {})
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, !const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types, !option_ref_payload, [], !enum_variant_parent_idx, false, [], {}, {}, {}, {})
 
     # R11: extract the `strip-asserts` directive so the SAssert case in
     # lower_stmt can emit a no-op instead of a conditional panic. Mirrors
@@ -13469,6 +13489,57 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                     gmod.strip_asserts = true
             else:
                 pass
+
+    # P0 Bug A: pre-scan equip blocks for a USER-DEFINED `drop` method, so
+    # the `CloneAndMove` SVarDecl arm knows whether dropping a Branch C-pre
+    # ptr-clone would run observable side effects (a `print` in the user
+    # drop, double-printing vs the borrow-no-drop oracle). Runs HERE — before
+    # any function body is lowered — so the signal is populated when `main`
+    # reaches `decide_svardecl_emission` regardless of `gmod.functions` push
+    # order. A `drop` method appears either via `equip <T> with Drop:`
+    # (trait_name == "Drop") or as an inherent/derived method literally named
+    # `drop`; we match on the method name (the sole criterion that produces an
+    # observable `<Type>__drop` user fn body).
+    #
+    # The set is TRANSITIVE over fields: a type with no direct drop but a
+    # field whose type has an observable drop (e.g. `struct Wrapper:
+    # Container inner` where `Container` has a user drop) ALSO double-prints
+    # when its implicit field-drop recurses into the field's `<T>__drop`. So
+    # after seeding the direct-drop types we run a fixpoint over `type_infos`,
+    # joining any struct/enum one of whose (variant-)field `type_name`s is
+    # already observable, until no change. Mirrors the recursive-drop
+    # discovery `populate_drop_metadata` runs at the LIR layer; done here at
+    # the GIR layer because `decide_svardecl_emission` runs before LIR.
+    for udrop_item in m.items:
+        match udrop_item:
+            case IEquip(udrop_eqblk):
+                bool udrop_has = false
+                for udrop_m in udrop_eqblk.methods:
+                    if udrop_m.name == "drop":
+                        udrop_has = true
+                if udrop_has:
+                    String udrop_target = type_to_c_name(udrop_eqblk.target, &gmod)
+                    gmod.types_with_user_drop.put(udrop_target, true)
+            else:
+                pass
+    # Transitive field-propagation fixpoint.
+    bool udrop_changed = true
+    while udrop_changed:
+        udrop_changed = false
+        for udrop_tname in gmod.type_infos.keys():
+            if not gmod.types_with_user_drop.contains(udrop_tname):
+                GirTypeInfo udrop_ti = gmod.type_infos.get(udrop_tname).unwrap()
+                bool udrop_field_obs = false
+                for udrop_fi in udrop_ti.fields:
+                    if gmod.types_with_user_drop.contains(udrop_fi.type_name):
+                        udrop_field_obs = true
+                for udrop_vi in udrop_ti.variants:
+                    for udrop_vfi in udrop_vi.fields:
+                        if gmod.types_with_user_drop.contains(udrop_vfi.type_name):
+                            udrop_field_obs = true
+                if udrop_field_obs:
+                    gmod.types_with_user_drop.put(udrop_tname, true)
+                    udrop_changed = true
 
     # Refine fn_sigs for functions with named/generic return types. The
     # pre-scan above defaulted those to `I64_TYPE` because `map_ast_type`

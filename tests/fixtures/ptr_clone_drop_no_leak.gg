@@ -1,0 +1,34 @@
+# Regression (P0 Bug A): a value-position deref-clone of a borrowed USER
+# struct that owns a String field must be drop-registered.
+#
+# `auto r0 = src.get(0).unwrap()` deref-clones the borrowed element into an
+# owned `Rec` (CoW Branch C-pre). `r0` is then used PAST the consuming
+# `show(r0)` call (the `print(r0.name)` below), so the clone is a distinct
+# live owner — NOT covered by the call's arg-temp drop. It used to LEAK its
+# `gorget_string_clone_to_owned` allocation (ASan `LeakSanitizer: 6 byte(s)`
+# via `Rec__clone`→`gorget_string_clone_to_owned`→`main`), invisible to
+# stdout but caught by ASan `detect_leaks=1`. The fix registers the clone for
+# drop when the struct has no user-defined `drop` (so freeing it is
+# stdout-silent and matches the borrow-no-drop Rust oracle's output).
+#
+# This fixture's STDOUT is the parity guard (must equal the Rust oracle); the
+# leak itself is an ASan-only property — run under `cc -fsanitize=address`
+# + `ASAN_OPTIONS=detect_leaks=1` to confirm leak-freedom.
+
+from std.collections import Vector
+
+struct Rec:
+    String name
+    int id
+
+void show(Rec r):
+    print(r.name)
+
+int main():
+    Vector[Rec] src = []
+    src.push(Rec("alpha", 1))
+    auto r0 = src.get(0).unwrap()
+    show(r0)         # consume into a bare resource param
+    print(r0.name)   # r0 used past show → the clone is a distinct live owner
+    print(r0.id)
+    return 0
