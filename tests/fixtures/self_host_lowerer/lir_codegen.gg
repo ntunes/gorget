@@ -3988,16 +3988,22 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
             #
             # drop + clone are wired as a PAIR (a clone path that shallow-copied
             # without elem_clone would double-free).
-            String sized_runtime = ""
-            if m.type_runtime_map.contains(arr_tyname):
-                sized_runtime = m.type_runtime_map.get(arr_tyname).unwrap_or("")
-            bool sized_is_runtime_resource = (sized_runtime == "GorgetArray" or sized_runtime == "GorgetMap" or sized_runtime == "GorgetSet" or sized_runtime == "GorgetString")
-            if sized_is_runtime_resource:
-                String sized_df = lc_collection_drop_fn(arr_tyname, &m)
-                String sized_cf = lc_collection_clone_fn(arr_tyname, &m)
-                if sized_df.len() > 0 and sized_cf.len() > 0:
-                    sized_out = sized_out + " " + v(dst) + ".elem_drop = (__gorget_drop_fn)" + sized_df + ";"
-                    sized_out = sized_out + " " + v(dst) + ".elem_clone = (__gorget_drop_fn)" + sized_cf + ";"
+            # Leak 1 (#8-residual): widen to the SHARED helper set — drives
+            # off the same TYPED `type_runtime_map` + `recursive_drop_structs/
+            # enums` registries the general ctor path (`emit_collection_elem_
+            # wiring`/`lc_collection_drop_fn`) already uses, so a USER aggregate
+            # element (`Option[String]`/`Result[_,_]`/resource-struct) now wires
+            # its `T__drop`/`T__clone_inplace`. SAFE only because the paired
+            # Leak-1 borrow-flip (lower.gg `decide_svardecl_emission` Branch A)
+            # makes a `T back = coll.get(i).unwrap()` read bind a non-owning Ptr
+            # alias — so the array-free elem_drop is the SOLE owner and frees
+            # each element exactly once (no alias double-free). drop + clone are
+            # wired as a PAIR (lc_collection_clone_fn returns "" → wire neither).
+            String sized_df = lc_collection_drop_fn(arr_tyname, &m)
+            String sized_cf = lc_collection_clone_fn(arr_tyname, &m)
+            if sized_df.len() > 0 and sized_cf.len() > 0:
+                sized_out = sized_out + " " + v(dst) + ".elem_drop = (__gorget_drop_fn)" + sized_df + ";"
+                sized_out = sized_out + " " + v(dst) + ".elem_clone = (__gorget_drop_fn)" + sized_cf + ";"
                 # String elements also need `elem_materialize` so a stored
                 # element owns its own buffer (CoW view→owned). Mirrors the ctor
                 # path's `gorget_string_materialize_inplace` wiring (offset 56 in

@@ -935,6 +935,43 @@ SVarDeclEmission decide_svardecl_emission(LowerCtx &ctx, GirModule &gmod, int va
         else:
             pass
 
+    # Branch A-agg (Leak 1, #8-residual) — borrow-flip a `T back =
+    # coll.get(i).unwrap()` read bind of a DROPPABLE USER AGGREGATE
+    # (`Option[String]`/`Result[_,_]`/resource-struct). The source is a
+    # `GtPtr(T)` borrow (`LoBorrowed`) into the collection element (kept as a
+    # borrow by the widened `emit_payload_read` gate). Unlike a runtime
+    # resource (which Branch C-pre DEEP-CLONES via `resolve_payload_clone_fn`),
+    # a user aggregate has NO payload clone fn registered → Branch C-pre falls
+    # through to MoveDirect, which byte-copies the 40-byte payload, SHALLOW-
+    # ALIASING the element's inner heap. A scope-exit whole-drop of that alias
+    # then double-frees against the array-free `elem_drop` (Leak-1's wiring in
+    # `lir_codegen.gg`). The fix is to make `back` a NON-OWNING Ptr alias: the
+    # array owns + frees the element exactly once; `back` borrows it (read via
+    # the Ptr — match auto-derefs, field-access auto-derefs, op_consume clones
+    # the pointee only at an OWNING consume). This is the borrow-flip half of
+    # the Leak-1 pairing (the elem_drop half is the `lir_codegen.gg` gate
+    # widen). Typed `is_droppable_type(inner)` discriminator, not a name match.
+    #
+    # SCOPE GUARD: only a `GtPtr`/`GtMutPtr` borrow-alias source whose pointee
+    # is a droppable user aggregate. Runtime-resource pointees keep Branch
+    # C-pre's deep-clone (they have a clone fn + their own drop discipline).
+    # Recursive-Box AST aggregates are NEVER reached here — their `.get()`
+    # path clone-extracts (the permanent NO-GO exclusion).
+    if source_is_ptr_type and source_is_borrow_alias:
+        match gmod.type_table.get(source_type).unwrap():
+            case GtPtr(agg_inner):
+                if is_droppable_type(agg_inner, &gmod):
+                    String agg_pointee = type_id_to_name(agg_inner, &gmod)
+                    if resolve_payload_clone_fn(agg_pointee, &gmod) == "":
+                        return BorrowAlias()
+            case GtMutPtr(agg_inner_m):
+                if is_droppable_type(agg_inner_m, &gmod):
+                    String agg_pointee_m = type_id_to_name(agg_inner_m, &gmod)
+                    if resolve_payload_clone_fn(agg_pointee_m, &gmod) == "":
+                        return BorrowAlias()
+            else:
+                pass
+
     # Branch C-pre (option_ref_borrow Phase 4a) — GtPtr-to-resource source
     # bound to an OWNED local. This is the `T x = coll.get(i).unwrap()` shape:
     # `.get()` now returns `Option[Ref[T]]`, so the unwrapped payload is a
@@ -1837,6 +1874,25 @@ Operand decide_ptr_consume(GirModule &gmod, int src_lid, int inner_tid):
                 # fresh owned T at the receiver side. Phase 2.3
                 # emission will lower this to a `<T>__clone(&src)`
                 # call.
+                return OpClone(src_lid)
+            # Leak 1 (#8-residual): a Ptr to a DROPPABLE USER AGGREGATE
+            # (`Option[String]`/`Result[_,_]`/resource-struct — droppable
+            # but NOT a runtime resource, so `is_resource_type_name` is
+            # false) at an OWNING consume must ALSO deref+clone: the source
+            # is a borrow alias into a collection element (the Branch A-agg
+            # borrow-flip), and transferring it to an owning destination
+            # (push/return/ctor/field-store) shallow-aliases the element's
+            # heap → the array-free elem_drop + the consumer's drop both
+            # free it (RUN-proven heap-use-after-free when a borrow-flipped
+            # `back` ESCAPES). OpClone deref-clones the pointee via the LIR
+            # `resource_clone_fn` (`recursive_drop_structs/enums` →
+            # `T__clone`, lir_lower.gg:2243) → the consumer owns an
+            # independent copy. Mirrors `op_consume`'s `is_droppable_type`
+            # non-resource arm (:1667). Typed droppability test, not a name
+            # match. (A read-only borrow-flipped bind never reaches a
+            # consume kind here — op_consume returns OpBorrow at non-consume
+            # positions — so this only fires on a genuine escape.)
+            if is_droppable_type(inner_tid, &gmod):
                 return OpClone(src_lid)
             return OpCopy(src_lid)
         else:
@@ -7699,9 +7755,33 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     # pass-by-ptr, OpClone short-circuit) all handle the
                     # Ptr-typed shape — borrow propagation now works at
                     # the LIR layer, not just at the GIR ownership tag.
+                    # When `val` is ALREADY a Ptr/MutPtr (Leak-1 Branch A-agg:
+                    # a `Ptr(T)` element-borrow from `coll.get(i).unwrap()`, or
+                    # any inherited-chain Ptr source), the dst alias is the SAME
+                    # Ptr type — a pointer-value COPY, NOT a fresh `register_ptr`
+                    # wrap (which would double-indirect to `Ptr(Ptr(T))` and
+                    # break the downstream droppable-pointee predicate +
+                    # field-read auto-deref). Only a VALUE source (e.g. the
+                    # original Branch A `String b = a` same-type alias) gets
+                    # `register_ptr(var_type)` so the dst Ptr points AT the value.
+                    bool val_is_ptr_already = false
+                    if val_loc.type_id >= 0 and val_loc.type_id < gmod.type_table.len():
+                        match gmod.type_table.get(val_loc.type_id).unwrap():
+                            case GtPtr(_):
+                                val_is_ptr_already = true
+                            case GtMutPtr(_):
+                                val_is_ptr_already = true
+                            else:
+                                pass
                     int dst_type_id = register_ptr(&gmod, var_type)
+                    Operand alias_op = OpBorrow(val)
+                    if val_is_ptr_already:
+                        # dst type = val's Ptr type (no re-wrap); pointer-value
+                        # copy via OpCopy (ISlotLoad of the 8-byte pointer).
+                        dst_type_id = val_loc.type_id
+                        alias_op = OpCopy(val)
                     var_local = add_local_with(&ctx, dst_type_id, Some(name), new_own, new_origin)
-                    # Explicit OpBorrow — bypass op_consume because val
+                    # Explicit OpBorrow/OpCopy — bypass op_consume because val
                     # may be LoOwned (which op_consume would resolve to
                     # OpMove, but for the alias shape we want a pointer-
                     # like copy, not a move-out). With D.1's Branch C
@@ -7711,7 +7791,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     #   • val_loc Ptr-typed (e.g. inherited from another
                     #     Branch C / from GIFieldLoad) → ISlotLoad(src) +
                     #     ISlotStore(dst) = pointer copy = alias chain.
-                    emit(&ctx, GIAssign(var_local, OpBorrow(val)))
+                    emit(&ctx, GIAssign(var_local, alias_op))
                     # cow_register_alias overwrites BorrowOrigin with
                     # BoAlias(val). Only call when we DIDN'T inherit a
                     # specific origin from val — otherwise we'd lose the
@@ -8837,7 +8917,23 @@ int emit_payload_read_mode_full(LowerCtx &ctx, int scrutinee_ptr, String enum_na
                 # copy — book ch11) and must be DEREF-LOADED. Without this,
                 # `int key = vec.get(i).unwrap()` OpCopy's the 8-byte POINTER
                 # into the int slot → `key` holds the element's address.
-                if is_resource_type_name(type_id_to_name(inner, &gmod), &gmod):
+                #
+                # Leak 1 (#8-residual): a DROPPABLE USER AGGREGATE pointee
+                # (`Option[String]`/`Result[_,_]`/resource-struct — in
+                # `resource_types`/`optionlike_resource_types` per
+                # `is_droppable_type`, but NOT a runtime resource so
+                # `is_resource_type_name` is false) is ALSO kept as a borrow:
+                # deref-loading it byte-copies the 40-byte payload, shallow-
+                # ALIASING the element's inner heap (the `back = coll.get(i)
+                # .unwrap()` shape), so a scope-exit whole-drop double-frees
+                # against the array-free elem_drop. Keeping the `GtPtr` borrow
+                # lets `decide_svardecl_emission` Branch A flip the read bind
+                # to a non-owning Ptr alias — the array owns + frees the
+                # element exactly once. The pointee is read via a Ptr (match
+                # auto-derefs the scrutinee ptr; field-access auto-derefs;
+                # op_consume clones only at an owning consume). Typed
+                # droppability check, not a name match.
+                if is_resource_type_name(type_id_to_name(inner, &gmod), &gmod) or is_droppable_type(inner, &gmod):
                     return dst
                 else:
                     # Primitive pointee: deref `*dst` into a fresh
@@ -9133,6 +9229,21 @@ void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vecto
                 # double-free). The bound alias is read-only here; a consuming arm
                 # clones on demand via op_consume LoBorrowed→OpClone.
                 bool scrut_owned_dropped = scrutinee_owned_whole_dropped(&ctx, &gmod, scrutinee)
+                # Leak 1 (#8-residual): a borrow-flipped read bind (`T back =
+                # coll.get(i).unwrap()`, Branch A-agg) is a `Ptr(T)` LoBorrowed
+                # alias into a collection element the COLLECTION owns + frees
+                # (via the array-free elem_drop). Matching it (`match back: case
+                # Some(s):`) must borrow the payload for ALL types — INCLUDING
+                # String — exactly like the owned-whole-dropped case: the array
+                # frees the element's inner String once at array-free, so a
+                # cloned `s` (the String `borrow_only` path's eager clone, since
+                # String isn't a deep-clone type) would be a block-scoped LEAK
+                # (never registered for its own drop). Route through `borrow_all`
+                # so `s` is a read-only LoBorrowed alias; a consuming arm clones
+                # on demand (op_consume LoBorrowed→OpClone). Typed test on the
+                # `Ptr`-pointee droppability, not a name match.
+                if scrutinee_borrow_into_owning_collection(&ctx, &gmod, scrutinee):
+                    scrut_owned_dropped = true
                 int field_val = emit_payload_read_mode_full(&ctx, scrutinee_ptr, effective_enum, effective_variant, fi, fty, &gmod, scrut_borrow, scrut_owned_dropped)
                 Option[String] bname_opt = Some(bname)
                 # option_ref_borrow Phase 6 (R1, site #3): KEEP `fty`(=GtPtr for
@@ -10488,6 +10599,39 @@ bool scrutinee_owned_whole_dropped(LowerCtx &ctx, GirModule &gmod, int lid):
             else:
                 pass
     return is_droppable_type(tid, &gmod)
+
+# Leak 1 (#8-residual): true iff `lid` is a borrow-flipped read bind — a
+# LoBorrowed `Ptr(T)`/`MutPtr(T)` alias whose pointee `T` is a DROPPABLE USER
+# AGGREGATE (the `T back = coll.get(i).unwrap()` shape flipped by
+# `decide_svardecl_emission` Branch A-agg). The collection that the pointer
+# aliases into OWNS + frees the element (array-free elem_drop), so a payload
+# match-bind must BORROW (not clone) — even String — exactly like the
+# owned-whole-dropped case. Distinct from `scrutinee_owned_whole_dropped`
+# (which is the OWNED-VALUE scrutinee whose own whole-drop frees the payload):
+# here the scrutinee is a borrow and the OWNER is the collection one hop away.
+bool scrutinee_borrow_into_owning_collection(LowerCtx &ctx, GirModule &gmod, int lid):
+    if lid < 0 or lid >= ctx.locals.len():
+        return false
+    GirLocal loc = ctx.locals.get(lid).unwrap()
+    bool is_borrow = false
+    match loc.ownership:
+        case LoBorrowed():
+            is_borrow = true
+        case LoView():
+            is_borrow = true
+        else:
+            pass
+    if not is_borrow:
+        return false
+    if loc.type_id < 0 or loc.type_id >= gmod.type_table.len():
+        return false
+    match gmod.type_table.get(loc.type_id).unwrap():
+        case GtPtr(inner):
+            return is_droppable_type(inner, &gmod)
+        case GtMutPtr(inner_m):
+            return is_droppable_type(inner_m, &gmod)
+        else:
+            return false
 
 # Map a collection element type name (as produced by collection_element_type)
 # to a GIR type id. Mirrors the resolution chain in the EMethodCall unwrap
