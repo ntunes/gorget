@@ -3075,6 +3075,14 @@ String type_to_c_name(SpannedType stype, GirModule &gmod):
             if gmod.type_subs.contains(name):
                 return type_id_to_name(gmod.type_subs.get(name).unwrap(), &gmod)
             return mangle_type_name(name, targs, &gmod)
+        case TTuple(elems):
+            # `Vector[(int,int)]` mangles the element tuple to `Tuple__…` AND
+            # registers its struct body (so the for-loop / index element read
+            # gets the full struct, not a collapsed `int64_t`). Route through
+            # `map_ast_type` so the shared `register_tuple_type` helper runs,
+            # then return the registered name. (Previously this fell through to
+            # the `int64_t` default — the bare_tuples for-loop bug.)
+            return type_id_to_name(map_ast_type(stype, &gmod), &gmod)
         else:
             pass
     return "int64_t"
@@ -3139,6 +3147,53 @@ String resolved_to_c_name(int rtid, TypeTable types, ScopeTable scopes, GirModul
             return resolved_to_c_name(elem_rtid, types, scopes, &gmod)
         else:
             return "int64_t"
+
+# Register a `Tuple__<T1>__<T2>__…` struct type from its element GIR type
+# ids and return the registered named tid. Mirrors Rust
+# `register_tuple_type` (`src/ir/lowering/exprs/type_reg.rs:10`): a tuple is
+# a positional struct with fields `_0`, `_1`, … (one per element). Idempotent:
+# a re-registration with the same name is a no-op (the first GirTypeInfo wins),
+# so this is safe to call from BOTH the type-mapping site
+# (`resolved_to_gir_type` RTTuple arm) AND `ETupleLiteral` lowering — they
+# converge on the same name because element mangles come from the same
+# `type_id_to_name`. The struct body is filled by `lower_type_defs` Pass 2,
+# which reads `gmod.type_infos` (same path as the closure env-struct at
+# `:6756`). Fields are named ONLY `_N` (Rust parity); the bare-digit `.N`
+# access form is reconciled at the EFieldAccess lookup (digit→`_N`).
+int register_tuple_type(Vector[int] elem_tids, GirModule &gmod):
+    String tup_name = "Tuple"
+    for et in elem_tids:
+        tup_name = tup_name + "__" + type_id_to_name(et, &gmod)
+    int tup_tid = lookup_or_register_named(&gmod, tup_name)
+    # First-write-wins: skip if a GirTypeInfo body already exists (the type
+    # may have been name-registered with no body by an earlier
+    # `lookup_or_register_named`, so we key on the type_infos body, not the
+    # named id).
+    if gmod.type_infos.contains(tup_name):
+        return tup_tid
+    Vector[GirFieldInfo] tup_fields = []
+    bool tup_owns_resource = false
+    int fi = 0
+    while fi < elem_tids.len():
+        int et = elem_tids.get(fi).unwrap()
+        tup_fields.push(GirFieldInfo("_" + int_to_str(fi), type_id_to_name(et, &gmod)))
+        # Coherence-at-construction: a tuple holding a droppable element is
+        # itself a resource (its drop must recurse). The `resource_types`
+        # fixpoint (`:13530`) only walks AST-declared structs/enums, so a
+        # dynamically-created tuple never enters it — register here directly so
+        # `is_droppable_type` returns true and the GIR `register_local_for_drop`
+        # at the literal site fires (else the resource element LEAKS — ASan on
+        # `tuple_literal_resource_value`). Mirrors Rust's
+        # `compute_drop_strategy_for_struct` marking the tuple Resource
+        # (`type_reg.rs:48`).
+        if is_droppable_type(et, &gmod):
+            tup_owns_resource = true
+        fi += 1
+    Vector[GirEnumVariantInfo] tup_no_variants = []
+    gmod.type_infos.put(tup_name.clone(), GirTypeInfo(tup_name.clone(), !tup_fields, !tup_no_variants, false))
+    if tup_owns_resource:
+        gmod.resource_types.put(tup_name.clone(), true)
+    return tup_tid
 
 int resolved_to_gir_type(int rtid, TypeTable types, ScopeTable scopes, GirModule &gmod):
     if rtid < 0 or rtid >= types.types.len():
@@ -3217,13 +3272,20 @@ int resolved_to_gir_type(int rtid, TypeTable types, ScopeTable scopes, GirModule
             # directly at the svardecl site.
             return register_ptr(&gmod, resolved_to_gir_type(inner_rtid, types, scopes, &gmod))
         case RTTuple(elem_rtids):
-            # Mirror `mangle_type_name` for tuples — register the mangled
-            # Tuple__T1__T2__... name and let downstream code register
-            # the struct shape (existing tuple-literal lowering does this).
-            String tup_name = "Tuple"
+            # Register the `Tuple__T1__T2__…` struct here — at the
+            # type-MAPPING site, not only at the literal — so a tuple that
+            # arrives via a typed binding with NO literal (e.g. `m.items()`
+            # typed `Vector[(int,int)]`, then `item._1`) resolves its fields
+            # against `gmod.type_infos`. Mirrors Rust registering at
+            # `map_ast_type_mut` (`type_reg.rs:25`), not just literal lowering.
+            # `register_tuple_type` is the SHARED helper that `ETupleLiteral`
+            # also calls; both converge on the same name. We resolve each
+            # element rtid → GIR tid first so the per-element mangle is driven
+            # by `type_id_to_name` (the same source the helper uses).
+            Vector[int] tup_elem_tids = []
             for et in elem_rtids:
-                tup_name = tup_name + "__" + resolved_to_c_name(et, types, scopes, &gmod)
-            return lookup_or_register_named(&gmod, tup_name)
+                tup_elem_tids.push(resolved_to_gir_type(et, types, scopes, &gmod))
+            return register_tuple_type(tup_elem_tids, &gmod)
         case RTArray(elem_rtid, _):
             # Arrays map to GorgetArray (the C-level Vector backing); the
             # element type is metadata stored elsewhere (type_infos).
@@ -3324,11 +3386,17 @@ int map_ast_type(SpannedType stype, GirModule &gmod):
         case TInferred():
             return I64_TYPE
         case TTuple(elems):
-            # Mangle tuple: Tuple__T1__T2__...
-            String tuple_name = "Tuple"
+            # A tuple type maps to a `Tuple__…` positional struct. Register the
+            # struct BODY (fields `_N`) via the shared `register_tuple_type`
+            # helper — not just the bare name — so a `Vector[(int,int)]` decl,
+            # a tuple param/field/return type resolves its element struct
+            # shape (mirrors Rust `map_ast_type_mut` for `Type::Tuple` →
+            # `register_tuple_type`, `type_reg.rs:25`). Without the body the
+            # for-loop element / field access read a collapsed `int64_t`.
+            Vector[int] mat_tup_elems = []
             for elem in elems:
-                tuple_name = tuple_name + "__" + type_to_c_name(elem, &gmod)
-            return lookup_or_register_named(&gmod, tuple_name)
+                mat_tup_elems.push(map_ast_type(elem, &gmod))
+            return register_tuple_type(mat_tup_elems, &gmod)
         else:
             pass
     return I64_TYPE
@@ -4216,7 +4284,48 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
         return lookup_or_register_named(&gmod, "GorgetArray")
     if method == "enumerate" or method == "take" or method == "skip":
         return lookup_or_register_named(&gmod, "GorgetArray")
-    if method == "keys" or method == "values" or method == "items":
+    if method == "items":
+        # `Dict[K,V].items()` returns `Vector[(K, V)]`. The self-host
+        # typechecker doesn't record this chain's expr-type (tc side-table
+        # miss), so derive it here: split the receiver `Dict__K__V` into K/V,
+        # register the `Tuple__K__V` struct (shared helper), and return a
+        # `Vector__Tuple__K__V` so the downstream `.get(i).unwrap()` element
+        # extraction (collection_element_type) yields the tuple — making
+        # `item._N` resolve against `gmod.type_infos`. Falls back to the bare
+        # GorgetArray when the receiver isn't a recognized Dict.
+        String items_recv = ""
+        if recv >= 0 and recv < ctx.locals.len():
+            int items_rtid = ctx.locals.get(recv).unwrap().type_id
+            if items_rtid >= 0 and items_rtid < gmod.type_table.len():
+                match gmod.type_table.get(items_rtid).unwrap():
+                    case GtPtr(items_inner):
+                        items_recv = type_id_to_name(items_inner, &gmod)
+                    case GtMutPtr(items_inner2):
+                        items_recv = type_id_to_name(items_inner2, &gmod)
+                    case GtNamed(items_n):
+                        items_recv = items_n
+                    else:
+                        pass
+        String items_kv = ""
+        if items_recv.starts_with("Dict__"):
+            items_kv = items_recv.slice(6, items_recv.len())
+        elif items_recv.starts_with("HashMap__"):
+            items_kv = items_recv.slice(9, items_recv.len())
+        elif items_recv.starts_with("GorgetMap__"):
+            items_kv = items_recv.slice(11, items_recv.len())
+        if items_kv != "":
+            # Split K__V at the top-level `__` boundary.
+            int items_split = items_kv.index_of("__").unwrap_or(-1)
+            if items_split > 0:
+                String items_k = items_kv.slice(0, items_split)
+                String items_v = items_kv.slice(items_split + 2, items_kv.len())
+                Vector[int] items_elem_tids = []
+                items_elem_tids.push(resolve_field_gir_type(items_k, &gmod))
+                items_elem_tids.push(resolve_field_gir_type(items_v, &gmod))
+                int items_tup_tid = register_tuple_type(items_elem_tids, &gmod)
+                return lookup_or_register_named(&gmod, "Vector__" + type_id_to_name(items_tup_tid, &gmod))
+        return lookup_or_register_named(&gmod, "GorgetArray")
+    if method == "keys" or method == "values":
         return lookup_or_register_named(&gmod, "GorgetArray")
     if method == "chunks" or method == "zip":
         return lookup_or_register_named(&gmod, "GorgetArray")
@@ -6314,6 +6423,25 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # `src/ir/lowering/exprs/mod.rs:2108` (`return obj;`).
             if base_type_name == "GorgetString" and field_name == "data":
                 return base
+            # Tuple-index reconciliation: the parser produces field-name `"_0"`
+            # for `t._0` but a BARE DIGIT `"0"/"1"/…` for `t.0` (parser.gg:
+            # 1802-1816). Tuple structs register their fields ONLY as `_N`
+            # (Rust parity — `register_tuple_type`), so a bare-digit access
+            # must normalize digit→`_N` to hit the field. Without this, `t.0`
+            # / `nested.1.0` / `p.0` miss the lookup and fall through to the
+            # `[bug] I64(0) placeholder` (4 of the tuple targets). All-digit
+            # (and non-empty) is the trigger; a normal `.field` is untouched.
+            String tuple_lookup_name = field_name
+            bool fld_all_digits = field_name.byte_len() > 0
+            int fld_di = 0
+            while fld_di < field_name.byte_len():
+                int fld_b = field_name.byte_at(fld_di)
+                if fld_b < 0x30 or fld_b > 0x39:
+                    fld_all_digits = false
+                    break
+                fld_di += 1
+            if fld_all_digits:
+                tuple_lookup_name = "_" + field_name
             # Look up field info from type_infos. Resolve to
             # (field_name, field_type_name, field_index) tuples without
             # cloning the whole GirTypeInfo — the Vector clone path
@@ -6325,7 +6453,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 int fi = 0
                 while fi < info.fields.len():
                     GirFieldInfo finfo = info.fields.get(fi).unwrap()
-                    if finfo.name == field_name:
+                    if finfo.name == tuple_lookup_name:
                         found_fi = fi
                         found_type_name = finfo.type_name.clone()
                         break
@@ -6594,10 +6722,83 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 emit(&ctx, GICallExtern(-1, "gorget_array_push", push_args))
             return adst
         case ETupleLiteral(elems):
+            # A tuple literal is a positional struct value. Mirror Rust
+            # `Expr::TupleLiteral` (`src/ir/lowering/exprs/mod.rs:469`):
+            #   1. lower each element (per-element `expected_type` peel),
+            #   2. register the `Tuple__…` struct type from the element types,
+            #   3. emit a struct-ctor `GICall` that `try_lower_user_struct_ctor`
+            #      (`lir_lower.gg:2476`) lowers to `IStructInit`.
+            #
+            # Per-element `expected_type` (Rust exprs/mod.rs:484-505): when the
+            # enclosing destination declares a tuple (possibly wrapped in the
+            # `throws`/Result return slot, which we peel), set each element's
+            # `expected_type` to the corresponding declared field type before
+            # lowering it — else CLEAR it. This is load-bearing for the
+            # `Result→T` auto-prop of a throwing-call element
+            # (`throws_autoprop_tuple_element`): leaving the function's
+            # `Result[Tuple.., E]` slot in place suppresses
+            # `maybe_auto_propagate`'s peel (it skips when the destination
+            # expects a `Result`), so the raw `Result` would be memcpy'd into
+            # the element's int slot (reads back as a zero-init default).
+            int tup_saved_et = ctx.expected_type
+            # Peel a Result wrapper, then keep only a Tuple destination.
+            int tup_dest = -1
+            if tup_saved_et >= 0 and tup_saved_et < gmod.type_table.len():
+                int tup_dest_try = tup_saved_et
+                EnumCategory tup_ec = enum_category_of(&gmod, tup_saved_et)
+                if tup_ec.category == ENUM_CAT_RESULT:
+                    tup_dest_try = tup_ec.ok_type
+                if tup_dest_try >= 0 and type_id_to_name(tup_dest_try, &gmod).starts_with("Tuple__"):
+                    tup_dest = tup_dest_try
+            Vector[int] tup_elem_locals = []
+            int tup_ei = 0
             for te in elems:
-                lower_expr(&ctx, te, &gmod)
-            int tdst = add_local(&ctx, I64_TYPE, NO_NAME)
-            emit(&ctx, GIAssign(tdst, OpConstI64(0)))
+                # Per-element expected_type: the destination tuple's i-th
+                # field type (peeled above), else clear so a nested literal
+                # / bare ctor doesn't inherit the whole-tuple slot.
+                int tup_elem_et = -1
+                if tup_dest >= 0:
+                    String tup_dest_name = type_id_to_name(tup_dest, &gmod)
+                    if gmod.type_infos.contains(tup_dest_name):
+                        GirTypeInfo tup_dti = gmod.type_infos.get(tup_dest_name).unwrap()
+                        if tup_ei < tup_dti.fields.len():
+                            tup_elem_et = resolve_field_gir_type(tup_dti.fields.get(tup_ei).unwrap().type_name, &gmod)
+                ctx.expected_type = tup_elem_et
+                int tup_ev = lower_expr(&ctx, te, &gmod)
+                ctx.expected_type = tup_saved_et
+                # Auto-prop a throwing-call element to its payload (the peel
+                # above cleared the Result-suppress for this element).
+                tup_ev = maybe_auto_propagate(&ctx, tup_ev, &gmod)
+                tup_elem_locals.push(tup_ev)
+                tup_ei += 1
+            ctx.expected_type = tup_saved_et
+            # Re-infer element types AFTER lowering (a nested tuple element is
+            # typed as its inner `Tuple__…`, an auto-prop'd element as its
+            # peeled payload — facet 4: nested-element typing flows through
+            # here, not a hardcoded i64).
+            Vector[int] tup_elem_types = []
+            for tel in tup_elem_locals:
+                tup_elem_types.push(ctx.locals.get(tel).unwrap().type_id)
+            int tup_tid = register_tuple_type(tup_elem_types, &gmod)
+            # Build the struct-ctor args. Route EACH element through the
+            # OWNING consume position `CkFieldWrite` (clone-or-move): the tuple
+            # OWNS its element, so a borrow/view/live-owned resource element
+            # CLONES (facet 5 — CoW consume-position rule; raw OpCopy would
+            # shallow-alias a String/Vector element and trip
+            # validate_resource_moves / double-free), a dead-owned resource
+            # MOVES, and a primitive byte-copies. Mirrors the closure
+            # env-ctor at `:6778` and the struct-field-init path.
+            Vector[Operand] tup_ctor_args = []
+            for tel2 in tup_elem_locals:
+                tup_ctor_args.push(op_consume(&ctx, &gmod, tel2, CkFieldWrite()))
+            String tup_ctor_name = type_id_to_name(tup_tid, &gmod)
+            int tdst = add_local(&ctx, tup_tid, NO_NAME)
+            emit(&ctx, GICall(tdst, tup_ctor_name, tup_ctor_args))
+            # FRESH-OWNED-TEMP drop registration: a tuple holding a resource
+            # element is itself droppable (its drop recurses into the element).
+            # Register it so a scope-exit drop frees the owned element exactly
+            # once (the OpMove/MoveZero on a later consume suppresses it).
+            register_local_for_drop(&ctx, tdst, tup_tid, &gmod)
             return tdst
         case EStructLiteral(sname, fnames, fvals):
             # Expected-type propagation per field (Rust counterpart
@@ -7572,6 +7773,29 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
 void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
     match stmt:
         case SVarDecl(stype, name, init_expr, _, _, _):
+            # Facet 2 — tuple destructure VarDecl. The parser packs a tuple
+            # binding pattern (`auto a, b = expr`, `(int a, String b) = expr`,
+            # `auto (x, y) = expr`) into ONE SVarDecl whose `name` is the
+            # literal parenthesized string `"(a, b)"` (parser.gg:3182-3208).
+            # Lower the init to a tuple VALUE, then project each sub-name to its
+            # `_N` field via the shared `bind_tuple_destructure`. Without this
+            # the whole `"(a, b)"` string `nl_put`s and every `print(a)` hits
+            # `unknown identifier 'a'`. (Mirrors Rust's tuple-pattern desugar.)
+            if name.starts_with("(") and name.ends_with(")"):
+                # Hint the init's expected type to the declared tuple type so
+                # an `(int, String) (a, b) = (…)` literal init / a Result-peel
+                # element resolves correctly (no-op for `auto`).
+                int td_prev_et = ctx.expected_type
+                int td_decl_ty = map_ast_type(stype, &gmod)
+                if td_decl_ty != I64_TYPE and td_decl_ty != UNIT_TYPE:
+                    ctx.expected_type = td_decl_ty
+                int td_tuple = lower_expr(&ctx, init_expr, &gmod)
+                ctx.expected_type = td_prev_et
+                td_tuple = maybe_auto_propagate(&ctx, td_tuple, &gmod)
+                String td_inner = name.substring(1, name.len() - 1)
+                Vector[String] td_names = td_inner.split(", ")
+                bind_tuple_destructure(&ctx, td_tuple, td_names, &gmod)
+                return
             # Element-type hint for container literals: `Vector[T] x = []`
             # needs `gorget_array_new(sizeof(T))`, not the hardcoded 8.
             # Lift T from stype and park it on ctx; the EArrayLiteral /
@@ -10521,6 +10745,56 @@ void lower_for_iterator(LowerCtx &ctx, SpannedPattern pat, int coll_local, Strin
 # or mutates the element materialises a fresh copy at THAT site via
 # op_consume's a-5 LoBorrowed→OpClone arm. Owned/primitive elements
 # (LoOwned) keep the original move/copy binding shape.
+# Bind a tuple-destructure pattern: project each sub-name to its `_N` field
+# of `tuple_local` via GIFieldLoad + clone-or-move. Shared by the VarDecl
+# destructure (facet 2 — `auto a, b = expr`) and the generic for-loop tuple
+# pattern (facet 3 — `for (a, b) in vec_of_tuples`). The tuple OWNS its
+# fields, so each binding takes an INDEPENDENT value: the field-load yields a
+# value (primitive) or a `GtPtr(field)` borrow (resource), and
+# `op_consume(…, CkAssign)` byte-copies the primitive or deref-CLONEs the
+# resource (CoW consume-position rule — the tuple stays live and drops its own
+# copy, so a clone, not a borrow, is required to avoid a dangling bind). A `_`
+# sub-name is skipped. Mirrors Rust's tuple-pattern desugar to per-field
+# `T name = tuple._N` VarDecls.
+# Project tuple field `idx` of `tuple_local` and bind it to `sub_name`
+# (independent owned value). The tuple OWNS its fields, so the field-load
+# yields a value (primitive) or a `GtPtr(field)` borrow (resource), and
+# `op_consume(…, CkAssign)` byte-copies the primitive or deref-CLONEs the
+# resource — a clone, not a borrow, because the tuple stays live and drops
+# its own copy (CoW consume-position rule). Mirrors the EFieldAccess
+# field-load at `:6460`.
+void bind_tuple_field(LowerCtx &ctx, int tuple_local, int idx, String sub_name, GirModule &gmod):
+    int tuple_tid = ctx.locals.get(tuple_local).unwrap().type_id
+    String tuple_tname = type_id_to_name(tuple_tid, &gmod)
+    int field_type = I64_TYPE
+    if gmod.type_infos.contains(tuple_tname):
+        GirTypeInfo tup_info = gmod.type_infos.get(tuple_tname).unwrap()
+        if idx < tup_info.fields.len():
+            field_type = resolve_field_gir_type(tup_info.fields.get(idx).unwrap().type_name, &gmod)
+    bool field_is_resource = is_resource_type_name(type_id_to_name(field_type, &gmod), &gmod)
+    int fdst_type = field_type
+    if field_is_resource:
+        fdst_type = register_ptr(&gmod, field_type)
+    int fdst = add_local_with(&ctx, fdst_type, NO_NAME, LoBorrowed(), BoNone())
+    set_field_borrow(&ctx, fdst, tuple_local, idx)
+    emit(&ctx, GIFieldLoad(fdst, tuple_local, idx))
+    int bound = add_local(&ctx, field_type, Some(sub_name))
+    emit(&ctx, GIAssign(bound, op_consume(&ctx, &gmod, fdst, CkAssign())))
+    nl_put(&ctx, sub_name, bound)
+    register_local_for_drop(&ctx, bound, field_type, &gmod)
+
+# Bind a tuple-destructure pattern's sub-names to their `_N` fields. Shared by
+# the VarDecl destructure (facet 2 — `auto a, b = expr`). A `_` sub-name is
+# skipped. Mirrors Rust's tuple-pattern desugar to per-field `T name =
+# tuple._N` VarDecls.
+void bind_tuple_destructure(LowerCtx &ctx, int tuple_local, Vector[String] sub_names, GirModule &gmod):
+    int bi = 0
+    while bi < sub_names.len():
+        String sub_name = sub_names.get(bi).unwrap()
+        if sub_name != "_":
+            bind_tuple_field(&ctx, tuple_local, bi, sub_name, &gmod)
+        bi += 1
+
 void bind_for_local(LowerCtx &ctx, SpannedPattern pat, int src_local, int tid, GirModule &gmod):
     match pat.pat:
         case PBinding(name):
@@ -10536,8 +10810,29 @@ void bind_for_local(LowerCtx &ctx, SpannedPattern pat, int src_local, int tid, G
             nl_put(&ctx, name, bound)
         case PWildcard:
             pass
+        case PTuple(parts):
+            # Facet 3 — generic for-loop tuple pattern `for (a, b) in
+            # <vec-of-tuples>`. `src_local` is the loop element (a tuple
+            # value/borrow typed `Tuple__…`). Project each part to its `_N`
+            # field. (The `enumerate()` and dict for-loops bind from iterator
+            # ACCESSORS, not `_N` projection — they have dedicated PTuple
+            # handlers at the for-loop level [`:10284` / dict path] and never
+            # reach here.) Each part is a PBinding (project + bind) or
+            # PWildcard (skip); a deeper nested pattern isn't a tuple target.
+            int ptp_i = 0
+            while ptp_i < parts.len():
+                SpannedPattern ptp = parts.get(ptp_i).unwrap()
+                match ptp.pat:
+                    case PBinding(pname):
+                        # Project the part's `_ptp_i` field and bind it.
+                        bind_tuple_field(&ctx, src_local, ptp_i, pname, &gmod)
+                    case PWildcard:
+                        pass
+                    else:
+                        lower_fail("SFor: nested tuple-element pattern not supported (got " + pat_kind(ptp.pat) + ")")
+                ptp_i += 1
         else:
-            lower_fail("SFor: only PBinding / PWildcard supported in for-loop pattern (got nested pattern)")
+            lower_fail("SFor: only PBinding / PWildcard / PTuple supported in for-loop pattern (got nested pattern)")
 
 # True iff `lid`'s ownership tag is a borrow alias (LoBorrowed/LoView).
 bool local_is_borrow_alias(LowerCtx &ctx, int lid):
