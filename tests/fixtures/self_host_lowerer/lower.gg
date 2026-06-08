@@ -3157,6 +3157,12 @@ String type_to_c_name(SpannedType stype, GirModule &gmod):
             # then return the registered name. (Previously this fell through to
             # the `int64_t` default — the bare_tuples for-loop bug.)
             return type_id_to_name(map_ast_type(stype, &gmod), &gmod)
+        case TFunction(_, _, _):
+            # PROTO phase-1b: a function-typed generic arg (e.g. the `F` of
+            # MapIter[...,int(int)]) mangles to GorgetClosure so the struct
+            # instance, its `F` field, the method-mono body, and the call-site
+            # symbol all agree on one name. Mirrors Rust mangle_type_for_name.
+            return "GorgetClosure"
         case TSelf():
             # Lazy-iterator Phase 1a: under the generic-equip default-method
             # emit (lower.gg:14666), `gmod.type_subs` carries a `"Self"` →
@@ -3377,6 +3383,16 @@ int resolved_to_gir_type(int rtid, TypeTable types, ScopeTable scopes, GirModule
             return lookup_or_register_named(&gmod, "GorgetArray")
         case RTSlice(elem_rtid):
             return lookup_or_register_named(&gmod, "GorgetArray")
+        case RTFunction(_, _, _):
+            # Lazy-iterator phase 1b: a function-typed method-targ (the `F`
+            # of `fold[A,F]` / `any[F]`, inferred from a passed fn value) is
+            # carried at runtime as a `GorgetClosure` (16-byte fn-ptr + env),
+            # NOT an I64. Without this arm the inferred `F` falls to the
+            # `else` I64 default and the bare-form call mangles `__int64_t`
+            # instead of `__GorgetClosure`, diverging from both the body-emit
+            # symbol and the turbofish form (whose `TFunction` AST type
+            # already maps to GorgetClosure via type_to_c_name).
+            return lookup_or_register_named(&gmod, "GorgetClosure")
         else:
             return I64_TYPE
 
@@ -3391,6 +3407,34 @@ int lookup_expr_gir_type(SpannedExpr sexpr, GirModule &gmod):
         return -1
     int rtid = gmod.tc_types.expr_types.get(span_start).unwrap()
     return resolved_to_gir_type(rtid, gmod.tc_types, gmod.tc_scopes, &gmod)
+
+# Lazy-iterator phase 1b: the inferred method-level type-args recorded by
+# the typechecker for a bare-form (no-turbofish) Iterator terminal call,
+# keyed on the EMethodCall span.start. Returns the resolved-type ids exactly
+# as `infer_method_targs` produced them (an `F` targ is an RTFunction id, an
+# `A` targ a primitive id). Empty vector when nothing recorded.
+#
+# ⚠ The parser shares one span.start across a whole method chain, so the
+# inner `.iter()` and outer `.fold()` of `v.iter().fold(0,f)` collide on the
+# key. We guard with the recorded method NAME: a reader only gets the entry
+# when its own method name matches the writer's, so `.iter()` never picks up
+# `.fold`'s targs (which would mangle a bogus
+# `Vector__int64_t__iter__int64_t__GorgetClosure`).
+Vector[int] bare_method_targ_rtids(int span_start, String mname, GirModule &gmod):
+    if gmod.tc_types.expr_method_targs.contains(span_start):
+        if gmod.tc_types.expr_method_targs_name.contains(span_start):
+            String recorded = gmod.tc_types.expr_method_targs_name.get(span_start).unwrap()
+            if recorded == mname:
+                return gmod.tc_types.expr_method_targs.get(span_start).unwrap()
+    return []
+
+# Mangle one recorded method-targ rtid to its C name, threading the
+# RTFunction→GorgetClosure rule via `resolved_to_gir_type` so the bare-form
+# suffix is byte-identical to the turbofish form (whose AST `TFunction`
+# already maps to GorgetClosure through type_to_c_name).
+String bare_method_targ_c_name(int rtid, GirModule &gmod):
+    int gir_tid = resolved_to_gir_type(rtid, gmod.tc_types, gmod.tc_scopes, &gmod)
+    return type_id_to_name(gir_tid, &gmod)
 
 int map_ast_type(SpannedType stype, GirModule &gmod):
     match stype.ty:
@@ -5692,7 +5736,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 else:
                     pass
             return add_local(&ctx, UNIT_TYPE, NO_NAME)
-        case EMethodCall(recv_box, mname, margs, _):
+        case EMethodCall(recv_box, mname, margs, mtargs_proto):
             # Static method call: receiver is a TYPE name (e.g. Point.default()
             # or int.parse(s)). Route to TypeName__method with no self argument.
             #
@@ -6209,6 +6253,25 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # receiver dispatch and the per-arg classify_call_arg.
             String recv_type_name = local_type_name(recv, &ctx, &gmod)
             String full_name = recv_type_name + "__" + mname
+            # PROTO phase-1b: method-level-generic call — append the
+            # mangled method-targs so the call dispatches to the
+            # per-call-site mono'd body (VectorIter__int64_t__map__int64_t__GorgetClosure).
+            String _proto_mtarg_suffix = ""
+            if mtargs_proto.len() > 0:
+                # Explicit turbofish form: mangle from the syntactic AST types.
+                for _mt in mtargs_proto:
+                    _proto_mtarg_suffix = _proto_mtarg_suffix + "__" + type_to_c_name(_mt, &gmod)
+            else:
+                # Lazy-iterator phase 1b bare form: no turbofish written, so
+                # read the typechecker's inferred method-targs side-table for
+                # this call's span and mangle from the recorded rtids. This
+                # feeds the SAME symbol the body-emit + fn_sigs pre-reg path
+                # produce, so the call dispatches to a DEFINED userland
+                # adapter method (never a bare CALLED-but-undefined symbol).
+                Vector[int] _bare_mtargs = bare_method_targ_rtids(sexpr.span.start, mname, &gmod)
+                for _bmt in _bare_mtargs:
+                    _proto_mtarg_suffix = _proto_mtarg_suffix + "__" + bare_method_targ_c_name(_bmt, &gmod)
+            full_name = full_name + _proto_mtarg_suffix
             String sig_lookup_name = full_name.clone()   # R10: pre-redirect mangled name for fn_sigs
             # Extern-method redirect: an `extern int _m(...) = "gorget_sym"`
             # method inside an equip block (e.g. File's `_write_bytes_buf`)
@@ -12826,6 +12889,136 @@ struct GenericInstance:
     Vector[SpannedType] type_args
     String mangled_name
 
+# PROTO phase-1b: a discovered method-level-generic call site.
+#
+# A site is recorded in ONE of two forms:
+#  * TURBOFISH form — `method_targs` (the syntactic AST types) is non-empty,
+#    `method_targ_tids` is empty. Used by the explicit `v.iter().fold[A,F](…)`.
+#  * BARE form (lazy-iterator phase 1b) — `method_targ_tids` (the inferred
+#    resolved-type ids from the typechecker side-table) is non-empty,
+#    `method_targs` is empty. Used by `v.iter().fold(0, f)` with no turbofish.
+# The two are mutually exclusive; `proto_inst_targ_count` returns the
+# effective arity and `proto_inst_targ_tid` resolves the i-th targ from
+# whichever representation is populated.
+struct ProtoMethInst:
+    String recv_instance     # mangled receiver instance, e.g. VectorIter__int64_t
+    String method_name       # e.g. map / filter / fold
+    Vector[SpannedType] method_targs   # the turbofish args (turbofish form)
+    Vector[int] method_targ_tids       # the inferred rtids (bare form)
+    String mangled_symbol    # recv_instance__method__<targs...>
+
+# PROTO phase-1b: map a method-level type-arg to its GIR type-id, with a
+# function type binding to GorgetClosure (the closure value carried in the
+# adapter struct's F field), not Ptr(FnPtr).
+int proto_method_targ_tid(SpannedType t, GirModule &gmod):
+    match t.ty:
+        case TFunction(_, _, _):
+            return lookup_or_register_named(&gmod, "GorgetClosure")
+        else:
+            return map_ast_type(t, &gmod)
+
+# Effective method-targ arity of a discovered instance, independent of which
+# representation (turbofish SpannedType vs inferred rtid) is populated.
+int proto_inst_targ_count(ProtoMethInst pmi):
+    if pmi.method_targs.len() > 0:
+        return pmi.method_targs.len()
+    return pmi.method_targ_tids.len()
+
+# Resolve the i-th method-targ of a discovered instance to its GIR type-id,
+# selecting the populated representation. The RTFunction→GorgetClosure rule
+# is threaded through both paths (proto_method_targ_tid for the AST form,
+# resolved_to_gir_type's RTFunction arm for the rtid form) so the bound subs
+# are byte-identical regardless of how the site was discovered.
+int proto_inst_targ_tid(ProtoMethInst pmi, int i, GirModule &gmod):
+    if pmi.method_targs.len() > 0:
+        return proto_method_targ_tid(pmi.method_targs.get(i).unwrap(), &gmod)
+    return resolved_to_gir_type(pmi.method_targ_tids.get(i).unwrap(), gmod.tc_types, gmod.tc_scopes, &gmod)
+
+# PROTO: walk an expression collecting method-generic call sites.
+void proto_walk_expr(SpannedExpr sexpr, GirModule &gmod, Vector[ProtoMethInst] &out, Dict[String, bool] &seen):
+    match sexpr.expr:
+        case EMethodCall(recv_box, mname, margs, mtargs):
+            proto_walk_expr(*recv_box, &gmod, &out, &seen)
+            for a in margs:
+                proto_walk_expr(a, &gmod, &out, &seen)
+            if mtargs.len() > 0:
+                # TURBOFISH form: mangle from the syntactic AST types.
+                # Resolve the receiver instance via the typecheck side-table.
+                int recv_tid = lookup_expr_gir_type(*recv_box, &gmod)
+                if recv_tid >= 0:
+                    String recv_name = type_id_to_name(recv_tid, &gmod)
+                    if recv_name.len() > 0 and recv_name.contains("__"):
+                        String sym = recv_name + "__" + mname
+                        for mt in mtargs:
+                            sym = sym + "__" + type_to_c_name(mt, &gmod)
+                        if not seen.contains(sym):
+                            seen.put(sym.clone(), true)
+                            out.push(ProtoMethInst(recv_name, mname, mtargs, [], sym))
+            else:
+                # BARE form (lazy-iterator phase 1b): no turbofish written.
+                # If the typechecker recorded inferred method-targs for this
+                # call's span, record the SAME instance the call-site mangle
+                # produces — this drives BOTH the fn_sigs pre-reg AND the
+                # body-emit, so the bare symbol is DEFINED (not just called).
+                Vector[int] bm_tids = bare_method_targ_rtids(sexpr.span.start, mname, &gmod)
+                if bm_tids.len() > 0:
+                    int recv_tid_b = lookup_expr_gir_type(*recv_box, &gmod)
+                    if recv_tid_b >= 0:
+                        String recv_name_b = type_id_to_name(recv_tid_b, &gmod)
+                        if recv_name_b.len() > 0 and recv_name_b.contains("__"):
+                            String sym_b = recv_name_b + "__" + mname
+                            for bmt in bm_tids:
+                                sym_b = sym_b + "__" + bare_method_targ_c_name(bmt, &gmod)
+                            if not seen.contains(sym_b):
+                                seen.put(sym_b.clone(), true)
+                                out.push(ProtoMethInst(recv_name_b, mname, [], bm_tids, sym_b))
+        case ECall(callee_box, cargs, _):
+            proto_walk_expr(*callee_box, &gmod, &out, &seen)
+            for a in cargs:
+                proto_walk_expr(a, &gmod, &out, &seen)
+        case EFieldAccess(obj, _):
+            proto_walk_expr(*obj, &gmod, &out, &seen)
+        case EBinaryOp(l, _, r):
+            proto_walk_expr(*l, &gmod, &out, &seen)
+            proto_walk_expr(*r, &gmod, &out, &seen)
+        case EUnaryOp(_, inner):
+            proto_walk_expr(*inner, &gmod, &out, &seen)
+        case EIndex(b, i):
+            proto_walk_expr(*b, &gmod, &out, &seen)
+            proto_walk_expr(*i, &gmod, &out, &seen)
+        else:
+            pass
+
+void proto_walk_stmts(Vector[Stmt] stmts, GirModule &gmod, Vector[ProtoMethInst] &out, Dict[String, bool] &seen):
+    for stmt in stmts:
+        match stmt:
+            case SVarDecl(_, _, init, _, _, _):
+                proto_walk_expr(init, &gmod, &out, &seen)
+            case SExpr(e):
+                proto_walk_expr(e, &gmod, &out, &seen)
+            case SReturn(opt):
+                match opt:
+                    case Some(e):
+                        proto_walk_expr(e, &gmod, &out, &seen)
+                    case None:
+                        pass
+            case SAssign(_, e):
+                proto_walk_expr(e, &gmod, &out, &seen)
+            case SIf(c, tb, elifs):
+                proto_walk_expr(c, &gmod, &out, &seen)
+                proto_walk_stmts(tb, &gmod, &out, &seen)
+                for el in elifs:
+                    proto_walk_stmts(el.body, &gmod, &out, &seen)
+            case SWhile(c, b):
+                proto_walk_expr(c, &gmod, &out, &seen)
+                proto_walk_stmts(b, &gmod, &out, &seen)
+            case SFor(_, p_iter, b, _, eb):
+                proto_walk_expr(p_iter, &gmod, &out, &seen)
+                proto_walk_stmts(b, &gmod, &out, &seen)
+                proto_walk_stmts(eb, &gmod, &out, &seen)
+            else:
+                pass
+
 # Expand generic calls inside meta for bodies to the 4 standard types.
 # meta for T in type_variants(...): generates code for int, float, String, bool.
 void expand_meta_for_generics(Vector[Stmt] stmts, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
@@ -13031,6 +13224,11 @@ String spanned_type_to_c_name(SpannedType stype):
             for ta in targs:
                 result = result + "__" + spanned_type_to_c_name(ta)
             return result
+        case TFunction(_, _, _):
+            # PROTO phase-1b: function-typed generic arg → GorgetClosure
+            # (same as type_to_c_name), so the adapter struct instance name
+            # agrees with the method-mono body + call-site symbol.
+            return "GorgetClosure"
         else:
             pass
     return "int64_t"
@@ -14265,6 +14463,24 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             for fld in sdef.fields:
                 int ft = map_ast_type(fld.param_type, &gmod)
                 String ft_name = type_id_to_name(ft, &gmod)
+                # PROTO phase-1b: a struct field whose template type is a
+                # type-param bound to a FUNCTION type (e.g. MapIter's `F f`
+                # where F=int(int)) must lay out as a GorgetClosure value
+                # (16 bytes: fn-ptr + env), not a truncated int64_t pointer.
+                # Mirrors Rust gg laying out `GorgetClosure f`.
+                match fld.param_type.ty:
+                    case TNamed(p_fname, _):
+                        int p_fpi = 0
+                        while p_fpi < sdef.type_params.len():
+                            if sdef.type_params.get(p_fpi).unwrap() == p_fname and p_fpi < mrinst.type_args.len():
+                                match mrinst.type_args.get(p_fpi).unwrap().ty:
+                                    case TFunction(_, _, _):
+                                        ft_name = "GorgetClosure"
+                                    else:
+                                        pass
+                            p_fpi += 1
+                    else:
+                        pass
                 mono_fields.push(GirFieldInfo(fld.param_name.clone(), ft_name.clone()))
                 bool fld_is_res = is_resource_type_name(ft_name, &gmod)
                 mono_ctor_moves.push(fld_is_res)
@@ -14527,6 +14743,69 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         gmod.type_infos.put(vt_ti_name.clone(), GirTypeInfo(vt_ti_name.clone(), vt_ti_fields, vt_no_variants, false))
             else:
                 pass
+
+    # PROTO phase-1b PRE-PASS: register method-generic instance return types
+    # in fn_sigs BEFORE the user-function loop (so the call-site ret_tid
+    # lookup resolves to the adapter struct, not the I64 fallback). The
+    # bodies are emitted later (after the adapter structs are registered).
+    Vector[ProtoMethInst] proto_minsts = []
+    Dict[String, bool] proto_seen = {}
+    for pmi_item in m.items:
+        match pmi_item:
+            case IFunction(pfdef):
+                proto_walk_stmts(pfdef.body, &gmod, &proto_minsts, &proto_seen)
+            case IEquip(peqblk):
+                for pmdef in peqblk.methods:
+                    proto_walk_stmts(pmdef.body, &gmod, &proto_minsts, &proto_seen)
+            else:
+                pass
+    for pmi0 in proto_minsts:
+        String p0_base = ""
+        Vector[SpannedType] p0_eq_targs = []
+        for pgi0 in generic_instances:
+            if pgi0.mangled_name == pmi0.recv_instance:
+                p0_base = pgi0.base_name
+                p0_eq_targs = pgi0.type_args
+        if p0_base.len() == 0:
+            continue
+        for p0_eqtmpl in equip_templates:
+            String p0_eqtarget = ""
+            match p0_eqtmpl.target.ty:
+                case TNamed(p0tn, _):
+                    p0_eqtarget = p0tn
+                else:
+                    pass
+            if p0_eqtarget != p0_base:
+                continue
+            match p0_eqtmpl.trait_name:
+                case Some(p0_tname):
+                    if not is_builtin_trait(p0_tname) and trait_defs.contains(p0_tname):
+                        TraitDef p0_tdef = trait_defs.get(p0_tname).unwrap()
+                        bool p0_overridden = false
+                        for p0_om in p0_eqtmpl.methods:
+                            if p0_om.name == pmi0.method_name:
+                                p0_overridden = true
+                        if not p0_overridden:
+                            for p0_tmeth in p0_tdef.methods:
+                                if p0_tmeth.name == pmi0.method_name and p0_tmeth.body.len() > 0 and p0_tmeth.type_params.len() == proto_inst_targ_count(pmi0) and p0_tmeth.type_params.len() > 0:
+                                    Vector[String] p0_eqparams = extract_equip_type_params(p0_eqtmpl)
+                                    setup_type_subs(&gmod, p0_eqparams, p0_eq_targs)
+                                    int p0_self_tid = lookup_or_register_named(&gmod, pmi0.recv_instance)
+                                    gmod.type_subs.put("Self", p0_self_tid)
+                                    int p0_tpi = 0
+                                    while p0_tpi < p0_tdef.type_params.len() and p0_tpi < p0_eqtmpl.trait_generic_args.len():
+                                        gmod.type_subs.put(p0_tdef.type_params.get(p0_tpi).unwrap(), map_ast_type(p0_eqtmpl.trait_generic_args.get(p0_tpi).unwrap(), &gmod))
+                                        p0_tpi += 1
+                                    int p0_mpi = 0
+                                    while p0_mpi < p0_tmeth.type_params.len() and p0_mpi < proto_inst_targ_count(pmi0):
+                                        int p0_mta_tid = proto_inst_targ_tid(pmi0, p0_mpi, &gmod)
+                                        gmod.type_subs.put(p0_tmeth.type_params.get(p0_mpi).unwrap(), p0_mta_tid)
+                                        p0_mpi += 1
+                                    int p0_ret_tid = map_ast_type(p0_tmeth.return_type, &gmod)
+                                    gmod.fn_sigs.put(pmi0.mangled_symbol.clone(), p0_ret_tid)
+                                    clear_type_subs(&gmod)
+                case None:
+                    pass
 
     # Lower each non-generic function, equip method, and test block
     int test_idx = 0
@@ -14966,6 +15245,75 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                 clear_type_subs(&gmod)
                         case None:
                             pass
+
+    # PROTO phase-1b: per-call-site method-level-generic body emit.
+    # Re-uses proto_minsts discovered in the pre-pass above; emits the
+    # method-generic trait-default body with equip + Self + method-level
+    # subs merged. Mirrors Rust's lower_method_instance.
+    for pmi in proto_minsts:
+        # Recover the equip base + SpannedType targs from generic_instances.
+        String p_base = ""
+        Vector[SpannedType] p_eq_targs = []
+        for pgi in generic_instances:
+            if pgi.mangled_name == pmi.recv_instance:
+                p_base = pgi.base_name
+                p_eq_targs = pgi.type_args
+        if p_base.len() == 0:
+            continue
+        # Find the equip template for this base.
+        for p_eqtmpl in equip_templates:
+            String p_eqtarget = ""
+            match p_eqtmpl.target.ty:
+                case TNamed(ptn, _):
+                    p_eqtarget = ptn
+                else:
+                    pass
+            if p_eqtarget != p_base:
+                continue
+            match p_eqtmpl.trait_name:
+                case Some(p_tname):
+                    if not is_builtin_trait(p_tname) and trait_defs.contains(p_tname):
+                        TraitDef p_tdef = trait_defs.get(p_tname).unwrap()
+                        # Is the method overridden in the equip block?
+                        bool p_overridden = false
+                        for p_om in p_eqtmpl.methods:
+                            if p_om.name == pmi.method_name:
+                                p_overridden = true
+                        if not p_overridden:
+                            # Find the trait-default method with matching name + arity.
+                            for p_tmeth in p_tdef.methods:
+                                if p_tmeth.name == pmi.method_name and p_tmeth.body.len() > 0 and p_tmeth.type_params.len() == proto_inst_targ_count(pmi) and p_tmeth.type_params.len() > 0:
+                                    # Set up merged subs: equip [T->...] + Self + method [U->...,F->...].
+                                    Vector[String] p_eqparams = extract_equip_type_params(p_eqtmpl)
+                                    setup_type_subs(&gmod, p_eqparams, p_eq_targs)
+                                    int p_self_tid = lookup_or_register_named(&gmod, pmi.recv_instance)
+                                    gmod.type_subs.put("Self", p_self_tid)
+                                    # Bind the trait's own generic params (T) to the trait args.
+                                    int p_tpi = 0
+                                    while p_tpi < p_tdef.type_params.len() and p_tpi < p_eqtmpl.trait_generic_args.len():
+                                        String p_tp = p_tdef.type_params.get(p_tpi).unwrap()
+                                        SpannedType p_ta = p_eqtmpl.trait_generic_args.get(p_tpi).unwrap()
+                                        int p_ta_tid = map_ast_type(p_ta, &gmod)
+                                        gmod.type_subs.put(p_tp, p_ta_tid)
+                                        p_tpi += 1
+                                    # Method-level subs (turbofish or inferred bare form).
+                                    int p_mpi = 0
+                                    while p_mpi < p_tmeth.type_params.len() and p_mpi < proto_inst_targ_count(pmi):
+                                        String p_mp = p_tmeth.type_params.get(p_mpi).unwrap()
+                                        int p_mta_tid = proto_inst_targ_tid(pmi, p_mpi, &gmod)
+                                        gmod.type_subs.put(p_mp, p_mta_tid)
+                                        p_mpi += 1
+                                    gmod.functions.push(lower_function(p_tmeth, &gmod))
+                                    int p_li = gmod.functions.len() - 1
+                                    GirFunction p_lf = gmod.functions.get(p_li).unwrap()
+                                    gmod.functions.set(p_li, GirFunction(pmi.mangled_symbol, p_lf.param_types, p_lf.return_type, p_lf.locals, p_lf.blocks))
+                                    # Register the return type under the mangled symbol so
+                                    # the call-site ret_tid lookup (fn_sigs) resolves to the
+                                    # adapter struct, not the I64 fallback.
+                                    gmod.fn_sigs.put(pmi.mangled_symbol.clone(), p_lf.return_type)
+                                    clear_type_subs(&gmod)
+                case None:
+                    pass
 
     # closure Phase 2 Step A: the post-pass — SOLE pusher of
     # __Closure_N__call. Drain gmod.lifted_closures (recorded at the

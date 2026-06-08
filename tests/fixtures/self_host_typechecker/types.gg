@@ -167,6 +167,28 @@ struct TypeTable:
     # one source of truth per axis — the typechecker computes
     # expression types, the lowerer reads them. (Gap #2 Phase 1.)
     Dict[int, int] expr_types
+    # Per-method-call inferred method-level type-args side-table — key:
+    # EMethodCall.span.start, value: the Vector of inferred method-targ
+    # TypeIds (parallel to `expr_types`). Written by `infer_expr_type`
+    # when a method-level-generic equip method (e.g. Iterator's
+    # `fold[A,F]`/`any[F]`) is called WITHOUT an explicit turbofish, so
+    # the bare-form call site can be monomorphized to the same userland
+    # adapter symbol the turbofish form produces. Read by the lowerer at
+    # the EMethodCall lowering when the syntactic 4th field is empty
+    # (lazy-iterator phase 1b). Layering rule 3: the typechecker infers
+    # the method-targs once; the lowerer reads them.
+    #
+    # ⚠ KEY COLLISION: the parser gives the OUTER and every INNER call of a
+    # method chain the SAME `span.start` (the chain's receiver start) —
+    # `v.iter().fold(0,f)` makes both the `.iter()` and `.fold()` EMethodCall
+    # nodes start at `v`. So a single span.start can be shared by a writer
+    # (the method-generic `.fold`) and a non-generic reader (`.iter()`). The
+    # parallel `expr_method_targs_name` records the METHOD NAME of the writer
+    # so readers (call-site + discovery walk) only consume the entry when the
+    # method name matches — otherwise `.iter()` would pick up `.fold`'s targs
+    # and mangle a bogus `Vector__int64_t__iter__int64_t__GorgetClosure`.
+    Dict[int, Vector[int]] expr_method_targs
+    Dict[int, String] expr_method_targs_name
 
 equip TypeTable:
 
@@ -193,7 +215,9 @@ equip TypeTable:
         types.push(RTNever())
         TraitRegistry empty_reg = TraitRegistry(Vector[TraitInfo](), Vector[EquipInfo](), Dict[int, Vector[int]](), Dict[int, Vector[int]]())
         Dict[int, int] empty_expr_types = Dict[int, int]()
-        return TypeTable(types, Dict[int, int](), 0, 1, 2, 3, 4, 5, 6, 7, 8, -1, Dict[String, int](), 0, 0, Dict[String, String](), 1, empty_reg, Dict[int, bool](), -1, empty_expr_types)
+        Dict[int, Vector[int]] empty_expr_method_targs = Dict[int, Vector[int]]()
+        Dict[int, String] empty_expr_method_targs_name = Dict[int, String]()
+        return TypeTable(types, Dict[int, int](), 0, 1, 2, 3, 4, 5, 6, 7, 8, -1, Dict[String, int](), 0, 0, Dict[String, String](), 1, empty_reg, Dict[int, bool](), -1, empty_expr_types, empty_expr_method_targs, empty_expr_method_targs_name)
 
     int add_type(&self, ResolvedType !ty):
         int id = self.types.len()

@@ -790,6 +790,30 @@ ShapeResolution resolve_method_shape(TraitRegistry registry, int type_id, String
                         return ShapeResolution(true, tinfo.shape_method_shapes.get(midx).unwrap())
     return not_found_shape()
 
+# Lazy-iterator phase 1b Blocker #2: the TypeId-keyed `resolve_method_shape`
+# above matches `impl.self_type == type_id`, which FAILS for a freshly
+# monomorphized generic-receiver instance (e.g. `VectorIter[int]`) — its
+# concrete TypeId never equals the registered impl's abstract placeholder
+# self_type. The method itself resolves only via the by-NAME
+# `resolve_method_for_generic_receiver` path; this is the shape mirror of
+# that path so `infer_method_targs` can compute the method-level targs for
+# the bare (no-turbofish) terminal calls (`v.iter().fold(0, f)`). The shape
+# is read from the same stores as the TypeId-keyed path:
+# `impl.shape_method_shapes` (impl-override) and the implemented trait's
+# `tinfo.shape_method_shapes` (trait method-generic default).
+ShapeResolution resolve_method_shape_for_generic_receiver(TraitRegistry registry, String recv_name, String method):
+    for impl in registry.impls:
+        if impl.self_type_name == recv_name:
+            if find_method_index(impl.shape_method_names, method) is Some(idx):
+                return ShapeResolution(true, impl.shape_method_shapes.get(idx).unwrap())
+    for impl in registry.impls:
+        if impl.self_type_name == recv_name and impl.trait_def_id != NO_DEF:
+            for tinfo in registry.traits:
+                if tinfo.def_id == impl.trait_def_id:
+                    if find_method_index(tinfo.shape_method_names, method) is Some(midx):
+                        return ShapeResolution(true, tinfo.shape_method_shapes.get(midx).unwrap())
+    return not_found_shape()
+
 # ── Method-generic inference ──────────────────────────────────
 # Returns a Vector[int] of length shape.generic_params.len(); element i
 # is the bound TypeId for the i-th generic, or -1 if unbound.

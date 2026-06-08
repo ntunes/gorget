@@ -10,6 +10,7 @@ from ast import Module, Item, Stmt, Param, FunctionDef, StructDef, EnumDef
 from ast import EnumVariant, TraitDef, EquipBlock, MatchArm, ElseBranch
 from ast import SpannedExpr, SpannedType, SpannedPattern, Span, Type, Expr, Pattern
 from ast import EMethodCall, EBinaryOp, EIs, EClosure, ECall, EBlock, EDo, EAs, EIdentifier, EFString, SelectArm, SORecv, EMatch
+from ast import EFieldAccess, EUnaryOp, EIndex
 from ast import SExpr, SVarDecl, SReturn
 from ast import TPrimitive
 from ids import NO_DEF, NO_TYPE
@@ -950,6 +951,100 @@ void resolve_param_type_var(int old_type_id, int new_type_id, int scope_id, Scop
             scopes.set_def_type(i, new_type_id)
         i = i + 1
 
+# ── Lazy-iterator phase 1b Blocker #1: method-targs-only recording walk ──
+#
+# For an EXPLICITLY-typed binding (`int total = v.iter().fold(0, f)`), the
+# SVarDecl arm takes the annotation and NEVER infers the initializer, so the
+# EMethodCall inference arm — the SOLE writer of `expr_method_targs` — never
+# runs for the bare-form (no-turbofish) Iterator terminals, and the lowerer
+# emits a CALLED-but-never-DEFINED bare symbol (link fail).
+#
+# TWO side-effect channels must both be neutralized:
+#  1. the BINDING TYPE — the naive fix (`var_type_id = infer_expr_type(init)`)
+#     sets it to the inferred `RTArray` instead of the annotated `Vector[int]`
+#     and corrupts `set_def_type`, RUN-regressing array-literal lowering (the
+#     canary). The walk NEVER writes `var_type_id` (caller keeps the annotation).
+#  2. `expr_types` — `infer_expr_type` writes `expr_types[span]` for the
+#     registry-resolved calls it visits, and the parser shares ONE span.start
+#     across a whole method chain, so the OUTER call's write CLOBBERS the inner
+#     receiver's. Inferring the FULL chain top-down here writes a DIFFERENT
+#     last-value at that shared key than `walk_expr_closures` (which infers
+#     only the receiver) does immediately after — RUN-regressed
+#     `string_chained_methods` (`data.trim().to_upper().len()` → the `.to_upper`
+#     dispatched to the char overload). We SNAPSHOT `expr_types` and RESTORE it
+#     after the walk, so the ONLY net change is the new `expr_method_targs`
+#     entries — `walk_expr_closures` then re-derives `expr_types` exactly as it
+#     would have without this walk. (RUN-confirmed both directions.)
+#
+# ⚠ The same shared-span.start also collides the `expr_method_targs` key of the
+# OUTER terminal (`.fold`) with the INNER receiver (`.iter()`). The recorded
+# method NAME (`expr_method_targs_name`) disambiguates at the READ sites
+# (lower.gg's call-site + discovery walk), so `.iter()` never consumes
+# `.fold`'s targs (which would mangle a bogus
+# `Vector__int64_t__iter__int64_t__GorgetClosure`).
+void record_method_targs_in_expr(SpannedExpr sexpr, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
+    match sexpr.expr:
+        case EMethodCall(recv_box, _, margs, _):
+            # Infer the whole method call (side effect: records the method
+            # targs into `expr_method_targs`). `infer_expr_type` already walks
+            # the receiver + args, so we do NOT descend manually here.
+            int _ignore = infer_expr_type(sexpr, scopes, &types, &ctx)
+        case ECall(callee_box, cargs, _):
+            record_method_targs_in_expr(*callee_box, &scopes, &types, &ctx)
+            for a in cargs:
+                record_method_targs_in_expr(a, &scopes, &types, &ctx)
+        case EFieldAccess(obj, _):
+            record_method_targs_in_expr(*obj, &scopes, &types, &ctx)
+        case EBinaryOp(l, _, r):
+            record_method_targs_in_expr(*l, &scopes, &types, &ctx)
+            record_method_targs_in_expr(*r, &scopes, &types, &ctx)
+        case EUnaryOp(_, inner):
+            record_method_targs_in_expr(*inner, &scopes, &types, &ctx)
+        case EIndex(b, i):
+            record_method_targs_in_expr(*b, &scopes, &types, &ctx)
+            record_method_targs_in_expr(*i, &scopes, &types, &ctx)
+        else:
+            pass
+
+# True iff `sexpr` syntactically contains an EMethodCall anywhere. Cheap
+# structural pre-check so the explicit-typed-binding path only pays for the
+# `expr_types` snapshot/restore when a method call is actually present (plain
+# bindings — array literals, identifiers, … — touch nothing).
+bool expr_has_method_call(SpannedExpr sexpr):
+    match sexpr.expr:
+        case EMethodCall(_, _, _, _):
+            return true
+        case ECall(callee_box, cargs, _):
+            if expr_has_method_call(*callee_box):
+                return true
+            for a in cargs:
+                if expr_has_method_call(a):
+                    return true
+            return false
+        case EFieldAccess(obj, _):
+            return expr_has_method_call(*obj)
+        case EBinaryOp(l, _, r):
+            return expr_has_method_call(*l) or expr_has_method_call(*r)
+        case EUnaryOp(_, inner):
+            return expr_has_method_call(*inner)
+        case EIndex(b, i):
+            return expr_has_method_call(*b) or expr_has_method_call(*i)
+        else:
+            return false
+
+# Record bare-form method-targs for an explicitly-typed binding initializer
+# WITHOUT perturbing `expr_types` or the binding type. Snapshots `expr_types`,
+# runs the recording walk (which writes `expr_method_targs` — KEPT — and
+# `expr_types` — DISCARDED), then restores the snapshot so `walk_expr_closures`
+# re-derives `expr_types` exactly as it would have. Gated on a method call
+# being present so plain initializers are untouched.
+void record_method_targs_preserving_expr_types(SpannedExpr init_expr, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
+    if not expr_has_method_call(init_expr):
+        return
+    Dict[int, int] saved_expr_types = types.expr_types.clone()
+    record_method_targs_in_expr(init_expr, &scopes, &types, &ctx)
+    types.expr_types = saved_expr_types
+
 # ── Type-check statements (looking for VarDecl with explicit types) ──
 
 void type_check_stmts(Vector[Stmt] stmts, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
@@ -970,6 +1065,13 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
             int var_type_id = -1
             if not is_inferred:
                 var_type_id = ast_type_to_resolved(stype.ty, stype.span, scopes, &types)
+                # Lazy-iterator phase 1b Blocker #1: for an explicitly-typed
+                # binding the initializer is otherwise never inferred, so the
+                # method-targs side-table stays empty for bare-form Iterator
+                # terminals. Record them WITHOUT touching `var_type_id` (the
+                # binding stays the annotated type — the array-literal canary)
+                # and WITHOUT perturbing `expr_types` (snapshot/restored).
+                record_method_targs_preserving_expr_types(init_expr, &scopes, &types, &ctx)
             else:
                 # Phase 2: infer type from initializer expression
                 var_type_id = infer_expr_type(init_expr, scopes, &types, &ctx)

@@ -316,11 +316,68 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                     for a in args:
                         reg_arg_types.push(infer_expr_type(a, scopes, &types, &ctx))
                     ShapeResolution sh = resolve_method_shape(types.trait_registry, reg_obj_type, method_name)
+                    # Lazy-iterator phase 1b Blocker #2: the TypeId-keyed
+                    # shape lookup above fails for a monomorphized generic
+                    # receiver (e.g. VectorIter[int]) whose concrete TypeId
+                    # never equals the impl's abstract placeholder self_type.
+                    # Fall back to the by-NAME shape resolver so `bound`
+                    # actually computes for the bare-form terminal calls.
+                    if not sh.found:
+                        String sh_recv_name = ""
+                        ResolvedType sh_recv_rt = get_rtype_at(types.types, reg_obj_type)
+                        match sh_recv_rt:
+                            case RTDefined(sh_rdef):
+                                sh_recv_name = scopes.get_def(sh_rdef).name
+                            case RTGeneric(sh_rdef, _):
+                                sh_recv_name = scopes.get_def(sh_rdef).name
+                            else:
+                                pass
+                        if sh_recv_name.len() > 0:
+                            sh = resolve_method_shape_for_generic_receiver(types.trait_registry, sh_recv_name, method_name)
                     if sh.found:
                         Vector[int] bound = infer_method_targs(sh.shape, reg_arg_types, scopes, types)
                         int subst_ret = substitute_return_type(sh.shape, bound, scopes, &types)
                         if subst_ret >= 0 and subst_ret != types.error_id:
                             reg_ret = subst_ret
+                        # Lazy-iterator phase 1b: record the inferred
+                        # method-level targs into the side-table so the
+                        # lowerer can monomorphize the bare-form terminal
+                        # call to the same userland adapter symbol the
+                        # turbofish form produces. Only record when EVERY
+                        # method-targ bound cleanly (no -1 / error) AND the
+                        # method actually HAS method-level generics — a
+                        # shape with zero generic_params would record an
+                        # empty vector, which the lowerer must not treat as
+                        # a method-generic call.
+                        #
+                        # SCOPE GATE (phase 1b = TERMINALS ONLY): the lazy
+                        # ADAPTERS (`map`/`filter`/`filter_map`) are phase
+                        # 1b-iii — their trait-default body CONSTRUCTS a
+                        # closure-bearing adapter struct (`MapIter`/`FilterIter`)
+                        # whose make-site zero-stores the `GorgetClosure` field
+                        # (a separate closure-in-struct ABI fix). Monomorphizing
+                        # them here re-emits the receiver's `iter()` body twice
+                        # (a duplicate-definition link error). The terminals
+                        # (`fold`/`any`/`all`/`find`/`find_index`/`for_each`)
+                        # instead call `F` directly inside a `for x in self`
+                        # loop and return a scalar/Option — the in-scope set.
+                        # This name set IS the owner-drawn phase boundary, not a
+                        # semantic decision; 1b-iii replaces it with the typed
+                        # closure-bearing-adapter discriminator.
+                        bool is_terminal_method = method_name == "fold" or method_name == "any" or method_name == "all" or method_name == "find" or method_name == "find_index" or method_name == "for_each"
+                        if is_terminal_method and sh.shape.generic_params.len() > 0:
+                            bool all_bound = true
+                            for bt in bound:
+                                if bt < 0 or bt == types.error_id:
+                                    all_bound = false
+                            if all_bound:
+                                types.expr_method_targs.put(span_start, bound)
+                                # Record the method name too: the parser shares
+                                # one span.start across a whole method chain, so
+                                # readers must verify the name to avoid an inner
+                                # non-generic call (`.iter()`) consuming this
+                                # outer entry (`.fold`). See the side-table doc.
+                                types.expr_method_targs_name.put(span_start, method_name)
                     # Receiver-generic substitution: if the method's return
                     # type is `T` and the receiver is `Vector[T]`-shaped,
                     # bind T to the receiver's i-th type arg. We piggy-back
