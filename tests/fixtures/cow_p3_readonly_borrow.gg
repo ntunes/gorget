@@ -1,0 +1,14 @@
+# CoW true-lazy P3 tier-1 — POSITIVE witness: the borrow-flip FIRES.
+#
+# `String x = coll.get(0).unwrap()` is a read-only element bind: neither
+# `x` nor the source collection `coll` is ever mutated in the function.
+# The whole-function forward-scan proves it pristine, so the resource-bind
+# borrow-flip turns the eager deep-clone into a zero-cost Ptr borrow alias
+# (0 `gorget_string_clone_to_owned` calls vs 1 at baseline). Pure reads of
+# `x` after the bind observe the element in place — same output as an
+# eager clone, but without the allocation.
+void main():
+    Vector[String] coll = ["alphalonglonglongbuffer", "betalonglonglongbuffer"]
+    String x = coll.get(0).unwrap()
+    print(x)
+    print(x.len())

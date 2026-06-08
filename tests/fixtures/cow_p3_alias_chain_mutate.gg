@@ -1,0 +1,25 @@
+# CoW true-lazy P3 tier-1 — alias-chain user-method-mutate witness.
+#
+# `x = coll.get(0).unwrap()` then `y = x` then `y.bump(99)`. The mutation
+# is on the transitive ALIAS `y`, a user `bump(&self, ...)` (&self mutable
+# borrow). The whole-function scan marks `y` mutated; the bind for `x`
+# stays read-only but the bind for `y` (a same-resource alias of `x`) is
+# the one carrying the mutation. Because the scan is whole-function and
+# conservative, `x`'s bind only flips when BOTH x and the source are
+# pristine — here it eager-clones, keeping every copy independent. ASan-
+# clean: no shared heap, no double-free across coll[0] / x / y.
+equip [T] Vector[T]:
+    void bump(&self, T v):
+        self.push(v)
+
+void main():
+    Vector[Vector[int]] coll = [[1, 2], [3, 4]]
+    Vector[int] x = coll.get(0).unwrap()
+    Vector[int] y = x
+    y.bump(99)
+    print("coll[0].len:")
+    print(coll.get(0).unwrap().len())
+    print("x.len:")
+    print(x.len())
+    print("y.len:")
+    print(y.len())

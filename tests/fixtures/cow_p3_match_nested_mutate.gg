@@ -1,0 +1,21 @@
+# CoW true-lazy P3 tier-1 — match-arm-NESTED mutation witness.
+#
+# Same shape as cow_p3_cond_nested_mutate but the source mutation
+# (`coll.fill(...)`, a realloc) is buried inside a `match` arm. The
+# construct-agnostic forward-scan recurses through match arms too, so
+# `coll` is marked mutated and the `String x = coll.get(0).unwrap()` bind
+# does NOT flip — `x` eager-clones, and the post-`match` reads observe the
+# pre-mutation value. Soundness over flow-precision: tier-1 declines the
+# flip whenever ANY mutation of the source exists anywhere in the function.
+void main():
+    Vector[String] coll = ["alphalonglonglongstring", "betalonglonglongstring"]
+    String x = coll.get(0).unwrap()
+    int sel = 1
+    match sel:
+        case 0:
+            print("noop")
+        else:
+            coll.fill(4, "z")
+            coll.fill(4, "newlonglonglonglonglonglonglonglongstringhere")
+    print(x)
+    print(x.len())

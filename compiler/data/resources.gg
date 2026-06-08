@@ -2736,40 +2736,44 @@ public static Vector[RuntimeFn] RUNTIME_FNS = [
 # earlier arm of `infer_method_return_type` (first-match wins), so it must
 # NOT carry BrkString here. The lowerer keeps that earlier UNIT arm ahead
 # of the String-table consult to preserve the ordering.
+# NOTE: the trailing `false` on every row is `is_mutating` — every String
+# builtin here is a pure read / fresh-allocate (Borrow/ByValue self in
+# Rust's table), so NONE mutate the receiver. Mirrors `is_mutating: false`
+# for these names in `src/ir/lowering/builtins.rs`.
 public static Vector[BuiltinMethodDecl] STRING_BUILTIN_METHODS = [
     # Both view AND fresh-String (the aliasing slice/substring family).
-    BuiltinMethodDecl("slice", true, [], BrkString()),
-    BuiltinMethodDecl("substring", true, [], BrkString()),
-    BuiltinMethodDecl("byte_slice", true, [], BrkString()),
-    BuiltinMethodDecl("char_at", true, [], BrkString()),
-    BuiltinMethodDecl("trim", true, [], BrkString()),
-    BuiltinMethodDecl("strip", true, [], BrkString()),
-    BuiltinMethodDecl("lstrip", true, [], BrkString()),
-    BuiltinMethodDecl("rstrip", true, [], BrkString()),
-    BuiltinMethodDecl("removeprefix", true, [], BrkString()),
-    BuiltinMethodDecl("removesuffix", true, [], BrkString()),
+    BuiltinMethodDecl("slice", true, [], BrkString(), false),
+    BuiltinMethodDecl("substring", true, [], BrkString(), false),
+    BuiltinMethodDecl("byte_slice", true, [], BrkString(), false),
+    BuiltinMethodDecl("char_at", true, [], BrkString(), false),
+    BuiltinMethodDecl("trim", true, [], BrkString(), false),
+    BuiltinMethodDecl("strip", true, [], BrkString(), false),
+    BuiltinMethodDecl("lstrip", true, [], BrkString(), false),
+    BuiltinMethodDecl("rstrip", true, [], BrkString(), false),
+    BuiltinMethodDecl("removeprefix", true, [], BrkString(), false),
+    BuiltinMethodDecl("removesuffix", true, [], BrkString(), false),
     # View only (NOT a fresh String — falls through the return-type path).
-    BuiltinMethodDecl("trim_left", true, [], BrkInfer()),
-    BuiltinMethodDecl("trim_right", true, [], BrkInfer()),
-    BuiltinMethodDecl("str", true, [], BrkInfer()),
-    BuiltinMethodDecl("as_str", true, [], BrkInfer()),
+    BuiltinMethodDecl("trim_left", true, [], BrkInfer(), false),
+    BuiltinMethodDecl("trim_right", true, [], BrkInfer(), false),
+    BuiltinMethodDecl("str", true, [], BrkInfer(), false),
+    BuiltinMethodDecl("as_str", true, [], BrkInfer(), false),
     # Fresh String only (NOT a view).
-    BuiltinMethodDecl("upper", false, [], BrkString()),
-    BuiltinMethodDecl("lower", false, [], BrkString()),
-    BuiltinMethodDecl("to_lower", false, [], BrkString()),
-    BuiltinMethodDecl("to_upper", false, [], BrkString()),
-    BuiltinMethodDecl("replace", false, [], BrkString()),
-    BuiltinMethodDecl("repeat", false, [], BrkString()),
-    BuiltinMethodDecl("join", false, [], BrkString()),
-    BuiltinMethodDecl("center", false, [], BrkString()),
-    BuiltinMethodDecl("ljust", false, [], BrkString()),
-    BuiltinMethodDecl("rjust", false, [], BrkString()),
-    BuiltinMethodDecl("zfill", false, [], BrkString()),
-    BuiltinMethodDecl("pad_left", false, [], BrkString()),
-    BuiltinMethodDecl("pad_right", false, [], BrkString()),
-    BuiltinMethodDecl("to_string", false, [], BrkString()),
-    BuiltinMethodDecl("to_str", false, [], BrkString()),
-    BuiltinMethodDecl("format", false, [], BrkString()),
+    BuiltinMethodDecl("upper", false, [], BrkString(), false),
+    BuiltinMethodDecl("lower", false, [], BrkString(), false),
+    BuiltinMethodDecl("to_lower", false, [], BrkString(), false),
+    BuiltinMethodDecl("to_upper", false, [], BrkString(), false),
+    BuiltinMethodDecl("replace", false, [], BrkString(), false),
+    BuiltinMethodDecl("repeat", false, [], BrkString(), false),
+    BuiltinMethodDecl("join", false, [], BrkString(), false),
+    BuiltinMethodDecl("center", false, [], BrkString(), false),
+    BuiltinMethodDecl("ljust", false, [], BrkString(), false),
+    BuiltinMethodDecl("rjust", false, [], BrkString(), false),
+    BuiltinMethodDecl("zfill", false, [], BrkString(), false),
+    BuiltinMethodDecl("pad_left", false, [], BrkString(), false),
+    BuiltinMethodDecl("pad_right", false, [], BrkString(), false),
+    BuiltinMethodDecl("to_string", false, [], BrkString(), false),
+    BuiltinMethodDecl("to_str", false, [], BrkString(), false),
+    BuiltinMethodDecl("format", false, [], BrkString(), false),
 ]
 
 
@@ -2787,27 +2791,188 @@ public static Vector[BuiltinMethodDecl] STRING_BUILTIN_METHODS = [
 # consumer reads owning_arg_positions); they carry default false / BrkInfer.
 # Keyed per CollectionKind — looked up by the RESOLVED kind from the
 # resource table, never by re-listing receiver type-name aliases.
+# NOTE: the trailing `true` on every row is `is_mutating` — every entry
+# here is an owning mutator (push/set/insert/put/add), all `is_mutating:
+# true` in `src/ir/lowering/builtins.rs`.
 public static Vector[BuiltinMethodEntry] COLLECTION_BUILTIN_METHODS = [
     BuiltinMethodEntry(CkVector(), [
-        BuiltinMethodDecl("push", false, [0], BrkInfer()),
-        BuiltinMethodDecl("set", false, [1], BrkInfer()),
-        BuiltinMethodDecl("insert", false, [1], BrkInfer()),
+        BuiltinMethodDecl("push", false, [0], BrkInfer(), true),
+        BuiltinMethodDecl("set", false, [1], BrkInfer(), true),
+        BuiltinMethodDecl("insert", false, [1], BrkInfer(), true),
     ]),
     BuiltinMethodEntry(CkDeque(), [
-        BuiltinMethodDecl("push", false, [0], BrkInfer()),
-        BuiltinMethodDecl("set", false, [1], BrkInfer()),
-        BuiltinMethodDecl("insert", false, [1], BrkInfer()),
+        BuiltinMethodDecl("push", false, [0], BrkInfer(), true),
+        BuiltinMethodDecl("set", false, [1], BrkInfer(), true),
+        BuiltinMethodDecl("insert", false, [1], BrkInfer(), true),
     ]),
     BuiltinMethodEntry(CkHeap(), [
-        BuiltinMethodDecl("push", false, [0], BrkInfer()),
+        BuiltinMethodDecl("push", false, [0], BrkInfer(), true),
     ]),
     BuiltinMethodEntry(CkDict(), [
-        BuiltinMethodDecl("put", false, [0, 1], BrkInfer()),
-        BuiltinMethodDecl("set", false, [0, 1], BrkInfer()),
+        BuiltinMethodDecl("put", false, [0, 1], BrkInfer(), true),
+        BuiltinMethodDecl("set", false, [0, 1], BrkInfer(), true),
     ]),
     BuiltinMethodEntry(CkSet(), [
-        BuiltinMethodDecl("add", false, [0], BrkInfer()),
-        BuiltinMethodDecl("insert", false, [0], BrkInfer()),
+        BuiltinMethodDecl("add", false, [0], BrkInfer(), true),
+        BuiltinMethodDecl("insert", false, [0], BrkInfer(), true),
     ]),
+]
+
+
+# ── BUILTIN_METHOD_MUTATES ──────────────────────────────────────────
+#
+# Complete, name-keyed mutation table for builtin methods — the typed
+# source of truth behind `method_mutates_receiver` (lower.gg). Mirrors
+# Rust's authoritative `is_mutating` column on `BuiltinMethodDecl`
+# (`src/ir/lowering/builtins.rs`) one-for-one: every builtin method name
+# that appears in that table is here with the SAME truth value, so the
+# self-host CoW resource-bind forward-scan classifies receiver mutation
+# identically to Rust.
+#
+# This is a FLAT name→is_mutating set (the other two statics are keyed by
+# String-receiver / CollectionKind and list only a slice of the surface;
+# the CoW scan sees a bare method NAME with no resolved receiver kind, so
+# it needs the whole table). Only the `name` + `is_mutating` columns are
+# meaningful here; the rest carry defaults (returns_view=false,
+# owning_arg_positions=[], ret_kind=BrkInfer).
+#
+# CONSERVATIVE DEFAULT (see `method_mutates_receiver`): a builtin name
+# ABSENT from this table is treated as MUTATING — over-clones, never
+# UAFs. So only rows present-and-false enable the borrow-flip; the
+# read-only rows (get/unwrap/len/iter/keys/values/first/last/contains/
+# is_empty/clone/…) are load-bearing — without them the bind's own
+# `coll.get(i).unwrap()` chain would mark the source mutated and the flip
+# would silently never fire.
+#
+# Where Rust lists a name under two self-conventions with DIFFERENT
+# is_mutating values (`add`/`swap` = ByValue:false + MutBorrow:true,
+# `get` = always false), the conservative choice for a name-keyed lookup
+# is the MUTATING one (the borrow-flip suppressed = safe over-clone).
+public static Vector[BuiltinMethodDecl] BUILTIN_METHOD_MUTATES = [
+    # ── Mutating (is_mutating = true) — mirror Rust's `true` rows ──────
+    BuiltinMethodDecl("push", false, [], BrkInfer(), true),
+    BuiltinMethodDecl("push_char", false, [], BrkInfer(), true),
+    BuiltinMethodDecl("push_line", false, [], BrkInfer(), true),
+    BuiltinMethodDecl("put", false, [], BrkInfer(), true),
+    BuiltinMethodDecl("set", false, [], BrkInfer(), true),
+    BuiltinMethodDecl("set_at", false, [], BrkInfer(), true),
+    BuiltinMethodDecl("insert", false, [], BrkInfer(), true),
+    BuiltinMethodDecl("add", false, [], BrkInfer(), true),
+    BuiltinMethodDecl("clear", false, [], BrkInfer(), true),
+    BuiltinMethodDecl("pop", false, [], BrkInfer(), true),
+    BuiltinMethodDecl("remove", false, [], BrkInfer(), true),
+    BuiltinMethodDecl("swap_remove", false, [], BrkInfer(), true),
+    BuiltinMethodDecl("swap", false, [], BrkInfer(), true),
+    BuiltinMethodDecl("fill", false, [], BrkInfer(), true),
+    BuiltinMethodDecl("reverse", false, [], BrkInfer(), true),
+    BuiltinMethodDecl("extend", false, [], BrkInfer(), true),
+    BuiltinMethodDecl("reserve", false, [], BrkInfer(), true),
+    BuiltinMethodDecl("sort", false, [], BrkInfer(), true),
+    BuiltinMethodDecl("sort_by", false, [], BrkInfer(), true),
+    BuiltinMethodDecl("sort_by_key", false, [], BrkInfer(), true),
+    BuiltinMethodDecl("get_or_put", false, [], BrkInfer(), true),
+    BuiltinMethodDecl("update", false, [], BrkInfer(), true),
+    BuiltinMethodDecl("send", false, [], BrkInfer(), true),
+    BuiltinMethodDecl("store", false, [], BrkInfer(), true),
+    BuiltinMethodDecl("close", false, [], BrkInfer(), true),
+    # ── Read-only (is_mutating = false) — mirror Rust's `false` rows ───
+    # Collection / Option / Result readers + the bind-path chain.
+    BuiltinMethodDecl("get", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("get_or", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("first", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("last", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("len", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("slen", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("capacity", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("is_empty", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("contains", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("has", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("index_of", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("binary_search", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("clone", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("iter", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("keys", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("values", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("items", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("count", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("peek", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("at", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("ord", false, [], BrkInfer(), false),
+    # Option / Result combinators (all read-only `&self`/ByValue).
+    BuiltinMethodDecl("unwrap", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("unwrap_or", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("unwrap_or_else", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("unwrap_error", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("or", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("or_else", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("and_then", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("map", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("map_err", false, [], BrkInfer(), false),
+    # Iterator adapters / queries (Borrow self, no in-place mutation).
+    BuiltinMethodDecl("filter", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("flat_map", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("flatten", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("enumerate", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("fold", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("reduce", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("any", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("all", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("find", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("find_index", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("zip", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("each", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("sorted", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("sorted_by", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("sorted_by_key", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("reversed", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("unique", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("slice", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("windows", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("chunks", false, [], BrkInfer(), false),
+    # Set algebra (Borrow self, returns a fresh set).
+    BuiltinMethodDecl("union", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("intersection", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("difference", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("symmetric_difference", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("is_subset", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("is_superset", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("is_disjoint", false, [], BrkInfer(), false),
+    # String readers (also in STRING_BUILTIN_METHODS; duplicated here so
+    # the flat lookup is self-contained — same is_mutating=false).
+    BuiltinMethodDecl("byte_slice", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("char_at", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("substring", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("trim", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("strip", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("lstrip", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("rstrip", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("removeprefix", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("removesuffix", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("trim_left", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("trim_right", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("str", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("as_str", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("upper", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("lower", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("to_lower", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("to_upper", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("strong_count", false, [], BrkInfer(), false),
+    # Sync / channel readers (Rust `is_mutating: false` — they read, the
+    # mutation is internal to the runtime resource, not the bound value).
+    BuiltinMethodDecl("load", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("recv", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("recv_timeout", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("poll_recv", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("is_closed", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("compare_exchange", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("acquire", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("try_acquire", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("release", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("lock", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("read", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("write", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("wait", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("upgrade", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("downgrade", false, [], BrkInfer(), false),
 ]
 

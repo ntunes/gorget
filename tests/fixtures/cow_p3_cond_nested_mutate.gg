@@ -1,0 +1,20 @@
+# CoW true-lazy P3 tier-1 — control-flow-NESTED mutation witness.
+#
+# `String x = coll.get(0).unwrap()` then a mutation of `coll` (`fill`,
+# which reallocs the element storage) buried inside an `if` branch. The
+# forward-scan is CONSTRUCT-AGNOSTIC: it recurses through the `if` body and
+# sees the `coll.fill(...)` mutation, so the source root `coll` is marked
+# mutated and the bind does NOT flip — `x` eager-clones BEFORE the loop, so
+# the post-`if` reads observe the PRE-mutation value. This is the correct
+# tier-1 outcome: the whole-function scan over-clones (it can't tell the
+# mutation is gated behind a runtime-false condition) but is always sound —
+# an under-clone here would dangle `x` into the realloc'd buffer (UAF).
+void main():
+    Vector[String] coll = ["alphalonglonglongstring", "betalonglonglongstring"]
+    String x = coll.get(0).unwrap()
+    bool grow = true
+    if grow:
+        coll.fill(4, "z")
+        coll.fill(4, "newlonglonglonglonglonglonglonglongstringhere")
+    print(x)
+    print(x.len())

@@ -1,0 +1,23 @@
+# CoW true-lazy P3 tier-1 — field-path-mutate witness (heap-UAF guard).
+#
+# `Vector[int] x = h.items.get(0).unwrap()` binds an element borrowed out
+# of the FIELD-PATH collection `h.items`. The loop then mutates that same
+# collection through the field path (`h.items.push(...)`), which reallocs
+# the backing storage. The forward-scan's `cow_mark_if_ident` walks the
+# field-path receiver `h.items` down to its ROOT identifier `h` and marks
+# it mutated, so the bind does NOT flip — it eager-clones, giving `x` an
+# independent copy that survives the realloc. Without the field-path root
+# marking this was a use-after-free (the break3c witness).
+struct Holder:
+    Vector[Vector[int]] items
+
+void main():
+    Holder h = Holder([[111, 222], [333, 444]])
+    Vector[int] x = h.items.get(0).unwrap()
+    int i = 0
+    while i < 50:
+        h.items.push([i, i])
+        i = i + 1
+    print(x.len())
+    print(x.get(0).unwrap())
+    print(x.get(1).unwrap())

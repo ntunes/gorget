@@ -1,0 +1,21 @@
+# CoW true-lazy P3 tier-1 — index-read bind + user-method-mutate witness.
+#
+# `Vector[int] x = coll[0]` binds an element via index read. `x.bump(99)`
+# calls a USER method `bump(&self, ...)` that pushes onto its receiver —
+# a `&self` (mutable-borrow) self-convention. The TYPED user-method path
+# (fn_borrow_params[key][0]) classifies `bump` as mutating its receiver,
+# so the scan marks `x` mutated and the bind does NOT flip — `x` is an
+# eager-cloned independent owner. The eager-clone observed value (the
+# pre-mutation snapshot for coll[0]; x carries its own pushed copy) is the
+# SOUND tier-1 outcome (tier-2's liveness gate recovers the borrow). No
+# UAF / double-free: x and coll[0] are independent.
+equip [T] Vector[T]:
+    void bump(&self, T v):
+        self.push(v)
+
+void main():
+    Vector[Vector[int]] coll = [[1, 2], [3, 4]]
+    Vector[int] x = coll[0]
+    x.bump(99)
+    print(coll[0].len())
+    print(x.len())

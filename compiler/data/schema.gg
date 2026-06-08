@@ -3,8 +3,23 @@
 #
 # Consumed by:
 # - Self-host directly via `from compiler.data.schema import …`.
-# - Rust via a hand-written mirror at `src/ir/resource_schema.rs`. Any
-#   field change here MUST bump SCHEMA_VERSION in resources.gg.
+# - Rust via a hand-written mirror at `src/resource_schema.rs`. Any
+#   field change to the RUST-PARSED surface — the `ResourceMetadata`
+#   (`RESOURCES`) and `RuntimeFnDecl` (`RUNTIME_FNS`) rows that
+#   `src/resources.rs` deserializes — MUST bump SCHEMA_VERSION in
+#   resources.gg (and the matching `SCHEMA_VERSION_EXPECTED` in
+#   `src/resources.rs`), or the Rust loader panics on the version
+#   mismatch.
+#
+#   SELF-HOST-ONLY types are OUTSIDE this rule. `BuiltinMethodDecl` /
+#   `BuiltinMethodEntry` and the `*_BUILTIN_METHODS` statics in
+#   resources.gg are consumed only by the self-host lowerer
+#   (`tests/fixtures/self_host_lowerer/lower.gg`); `src/resource_schema.rs`
+#   has no mirror for them and `src/resources.rs` never parses them. Adding
+#   or changing a field on these does NOT reach the Rust loader, so it must
+#   NOT bump SCHEMA_VERSION — a one-sided bump would PANIC the otherwise-
+#   unaffected Rust loader. (`is_mutating` on `BuiltinMethodDecl` was added
+#   this way: self-host-only, no version bump. See `resources_load_clean`.)
 #
 # Scope discipline: every type in this file describes the static shape of
 # a resource or runtime-function entry. No expression-level helpers, no
@@ -209,6 +224,12 @@ struct BuiltinMethodDecl:
     bool returns_view                # result aliases receiver buffer (cap==0).
     Vector[int] owning_arg_positions # non-receiver arg indices the method owns.
     BuiltinRetKind ret_kind
+    # True iff the call mutates its receiver in place (mirrors Rust's
+    # authoritative `is_mutating` on the same struct, `src/ir/lowering/
+    # builtins.rs:67`). Read via `method_mutates_receiver` in the lowerer;
+    # drives the CoW resource-bind forward-scan's mutation set. Distinct
+    # from `self_conv` (a `MutBorrow`-self `len` is `is_mutating: false`).
+    bool is_mutating
 
 # A per-CollectionKind group of builtin method declarations. The
 # `collection_kind` field is the lookup discriminator for
