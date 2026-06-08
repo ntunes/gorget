@@ -7,6 +7,7 @@
 # Phase 4 of the self-host LIR backend.
 
 from lir import LirModule, LirFunction, LirBlock, LirInst, LirTerm, LirSlot
+from lir import SlotProvenance
 from lir import LirStructDef, LirExtern, LirGlobal, LirGlobalField, LirSpawnedFn, LirTestFn, LirBenchFn
 from lir import StructField, BlockParam, SwitchCase, FieldDrop, EnumVariantDrop, TypeDropInfo, FieldInit
 from lir import LT_I8, LT_I16, LT_I32, LT_I64, LT_U8, LT_U16, LT_U32, LT_U64
@@ -2663,6 +2664,55 @@ int infer_inst_type_with_ret(LirInst &inst, LirModule &m, Dict[int, int] &val_ty
         else:
             return LT_VOID
 
+# P2 — once-per-function value→slot back-map. Maps a VALUE produced by a
+# direct `ISlotLoad`/`ISlotAddr` to the SLOT it reads. Built once in
+# `emit_function` (like `compute_val_types`), shared by every provenance
+# read-site instead of the prototype's O(insts) per-value re-scan. A value
+# NOT in the map is a computed temp (no slot provenance answer).
+#
+# Distinct from `drop_elab.build_val_to_slot` (ISlotAddr-ONLY, for
+# DropGuard tracing): this one also maps ISlotLoad producers, since a
+# read-site sees the loaded value, not just an address.
+Dict[int, int] build_slot_read_map(LirFunction &func):
+    Dict[int, int] vts = {}
+    int bi = 0
+    while bi < func.blocks.len():
+        int ii = 0
+        while ii < func.blocks.get(bi).unwrap().insts.len():
+            match func.blocks.get(bi).unwrap().insts.get(ii).unwrap():
+                case ISlotLoad(d, slot, _):
+                    vts.put(d, slot)
+                case ISlotAddr(d, slot):
+                    vts.put(d, slot)
+                else:
+                    pass
+            ii += 1
+        bi += 1
+    return vts
+
+# P2 — provenance of a VALUE as an int tag, via the shared value→slot
+# back-map: 0=PvValue, 1=PvOwnedPtr, 2=PvBorrowed, -1=no-answer (the value
+# is a computed temp, or the slot has no provenance entry — a temp slot
+# created after the projection loop / out of range). The -1 sentinel makes
+# every read-site fall back to the existing shape test UNCHANGED.
+int prov_tag_of_value(int val_id, Dict[int, int] &val_to_slot, LirFunction &func):
+    if val_id < 0:
+        return -1
+    if not val_to_slot.contains(val_id):
+        return -1
+    int slot = val_to_slot.get(val_id).unwrap()
+    # PARALLEL-VECTOR GUARD: temp slots created after the projection loop
+    # have no entry → out of range → no-answer.
+    if slot < 0 or slot >= func.slot_provenance.len():
+        return -1
+    match func.slot_provenance.get(slot).unwrap():
+        case PvValue():
+            return 0
+        case PvOwnedPtr():
+            return 1
+        case PvBorrowed(_):
+            return 2
+
 # Compute value types for all values in a function.
 Dict[int, int] compute_val_types(LirFunction &func, LirModule &m):
     Dict[int, int] types = {}
@@ -2975,7 +3025,8 @@ String emit_field_store(String target_v, int struct_id, int field, int value, Li
     return lval + " = " + v(value) + ";"
 
 String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Vector[String] &sn,
-                 Dict[int, int] &val_types, Dict[String, int] &slit_map):
+                 Dict[int, int] &val_types, Dict[String, int] &slit_map,
+                 Dict[int, int] &val_to_slot):
     match inst:
         # ── Slot access ──
         case ISlotStore(slot, value, is_move):
@@ -3266,6 +3317,13 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Vector[String] 
             if val_types.contains(value):
                 ba_vty = val_types.get(value).unwrap()
             bool ba_value_is_ptr = ba_vty == LT_PTR or (ba_vty >= LT_PTR_TO_BASE and ba_vty < LT_STRUCT_BASE)
+            # P2 (3b) — provenance-driven read-routing; -1 sentinel falls
+            # back to the shape test above UNCHANGED.
+            int ba_prov = prov_tag_of_value(value, &val_to_slot, &func)
+            if ba_prov == 1 or ba_prov == 2:
+                ba_value_is_ptr = true
+            elif ba_prov == 0:
+                ba_value_is_ptr = false
             if lir_is_aggregate(inner_ty):
                 if ba_value_is_ptr:
                     return v(dst) + " = GORGET_ALLOC(sizeof(" + ty_name + ")); memcpy(" + v(dst) + ", " + v(value) + ", sizeof(" + ty_name + "));"
@@ -3283,6 +3341,13 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Vector[String] 
             if val_types.contains(value):
                 ao_vty = val_types.get(value).unwrap()
             bool ao_value_is_ptr = ao_vty == LT_PTR or (ao_vty >= LT_PTR_TO_BASE and ao_vty < LT_STRUCT_BASE)
+            # P2 (3b) — provenance-driven read-routing; -1 sentinel falls
+            # back to the shape test above UNCHANGED.
+            int ao_prov = prov_tag_of_value(value, &val_to_slot, &func)
+            if ao_prov == 1 or ao_prov == 2:
+                ao_value_is_ptr = true
+            elif ao_prov == 0:
+                ao_value_is_ptr = false
             if lir_is_aggregate(ty):
                 if ao_value_is_ptr:
                     return "memcpy(&" + at_name + ", " + v(value) + ", sizeof(" + ty_name + ")); " + v(dst) + " = &" + at_name + ";"
@@ -3386,7 +3451,17 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Vector[String] 
                     int arg_ty = LT_VOID
                     if val_types.contains(arg_id):
                         arg_ty = val_types.get(arg_id).unwrap()
+                    # P2 KEYSTONE — provenance-driven is_ptr (the single
+                    # source of truth for the read-routing axis). Falls back
+                    # to the shape test when the value isn't a direct slot
+                    # read (prov == -1) — keeps the (T){0} type-loss arm and
+                    # the temp-result path UNCHANGED.
                     bool is_ptr = (arg_ty == LT_PTR) or (arg_ty >= LT_PTR_TO_BASE and arg_ty < LT_STRUCT_BASE)
+                    int arg_prov = prov_tag_of_value(arg_id, &val_to_slot, &func)
+                    if arg_prov == 1 or arg_prov == 2:
+                        is_ptr = true
+                    elif arg_prov == 0:
+                        is_ptr = false
                     # Scalar/ptr-to-aggregate coercion: self-host often loses
                     # type info and passes I64 placeholders or void* to
                     # aggregate-typed params. Emit cast so C compile succeeds.
@@ -4658,6 +4733,8 @@ String emit_function(LirFunction &func, LirModule &m, Vector[String] &sn, Dict[S
     # quadratic concatenation. Each push amortizes O(1) per byte.
     StrBuf buf = sb_new()
     Dict[int, int] val_types = compute_val_types(&func, &m)
+    # P2 — shared value→slot back-map for provenance reads (built once).
+    Dict[int, int] val_to_slot = build_slot_read_map(&func)
 
     # Function signature
     if func.name == "main":
@@ -4831,7 +4908,7 @@ String emit_function(LirFunction &func, LirModule &m, Vector[String] &sn, Dict[S
         # Instructions
         int ii = 0
         while ii < func.blocks.get(bi).unwrap().insts.len():
-            String code = emit_inst(&func.blocks.get(bi).unwrap().insts.get(ii).unwrap(), &m, &func, &sn, &val_types, &slit_map)
+            String code = emit_inst(&func.blocks.get(bi).unwrap().insts.get(ii).unwrap(), &m, &func, &sn, &val_types, &slit_map, &val_to_slot)
             sb_push(&buf, "    ")
             sb_push(&buf, code)
             sb_push(&buf, "\n")

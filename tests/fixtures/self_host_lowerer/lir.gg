@@ -7,6 +7,7 @@
 # ValueId, SlotId, BlockId, StructId, FuncId, GlobalId are all plain ints.
 
 from std.collections import Vector, Dict
+from gir import BorrowOrigin
 
 # ── Types ───────────────────────────────────────────────────────
 
@@ -244,6 +245,30 @@ struct LirSlot:
     int ty
     String name    # "" if unnamed
 
+# ── Slot provenance ─────────────────────────────────────────────
+#
+# P2 of the CoW true-lazy keystone: the SINGLE SOURCE OF TRUTH for the
+# owned-vs-borrowed-vs-value (read-routing) axis, replacing the `is_ptr`
+# SHAPE-heuristic that re-derives it from the LirType range at every read
+# site. Projected ONCE from the GIR ownership axis at the GIR→LIR
+# slot-creation boundary (`lir_lower.gg`), GATED on the LIR layout axis
+# (only POINTER-shaped slots can be OwnedPtr/Borrowed — the read-routing
+# decision is about LAYOUT). Read at the consumer sites via a `match`.
+#
+# Exactly THREE variants (RUN-proven sufficient over the whole corpus):
+#   • Value      — value-typed slot; drop reads `&slot`. A scalar/aggregate
+#                  slot, or a ptr-shaped owned-VALUE (e.g. Box[T] drops via
+#                  `Box__T__drop(&slot)`).
+#   • OwnedPtr   — ptr-typed slot OWNS its pointee; drop reads the LOADED
+#                  `T*`. The `!`-move resource param (folds the GIR
+#                  `owning_param` flag into this variant).
+#   • Borrowed   — ptr-typed ALIAS; never owns / never drops. Carries the
+#                  GIR `BorrowOrigin` (source provenance) for P3.
+enum SlotProvenance:
+    PvValue()
+    PvOwnedPtr()
+    PvBorrowed(BorrowOrigin)
+
 # ── Functions ───────────────────────────────────────────────────
 
 struct LirFunction:
@@ -258,6 +283,12 @@ struct LirFunction:
     Vector[String] param_names  # "" entries for unnamed
     Vector[bool] const_params
     Vector[int] value_types     # per-value LirType, -1 = None
+    # P2 — per-SLOT provenance, parallel to `slots`, indexed by slot-id.
+    # Populated by the GIR→LIR slot-creation loop (`lir_lower.gg`). Temp
+    # slots created LATER (after that loop) have NO entry, so every read
+    # MUST guard `slot < slot_provenance.len()` and treat out-of-range as
+    # the no-answer sentinel (fall back to the existing shape test).
+    Vector[SlotProvenance] slot_provenance
 
 # ── Struct Definitions ──────────────────────────────────────────
 

@@ -13,12 +13,13 @@ from gir import OP_ADD_WRAP, OP_SUB_WRAP, OP_MUL_WRAP
 from gir import OP_BITAND, OP_BITOR, OP_BITXOR, OP_SHL, OP_SHR
 from gir import UNOP_NEG, UNOP_NOT, UNOP_BITNOT
 from lir import LirModule, LirFunction, LirBlock, LirInst, LirTerm, LirSlot, LirStructDef, LirExtern, LirGlobal
+from lir import SlotProvenance
 from lir import StructField, BlockParam, SwitchCase, FieldDrop, EnumVariantDrop, TypeDropInfo, FieldInit
 from lir import LT_I8, LT_I16, LT_I32, LT_I64, LT_U8, LT_U16, LT_U32, LT_U64
 from lir import LT_F32, LT_F64, LT_BOOL, LT_PTR, LT_VOID
 from lir import LT_PTR_TO_BASE, LT_STRUCT_BASE
 from lir import EK_NOT_ENUM, EK_OPTION
-from lir import lir_ptr_to, lir_struct, lir_is_scalar, lir_is_aggregate
+from lir import lir_ptr_to, lir_struct, lir_is_scalar, lir_is_aggregate, lir_is_ptr
 from lir import OVF_TRAP, OVF_WRAP
 from lir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
 from lir import ABI_AUTO, ABI_OUT_PTR
@@ -3534,7 +3535,25 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                     # lowers to GtMutPtr but keeps owning_param=false and isn't even
                     # registered for drop, so it never reaches this arm.
                     int dia_drop_arg = dia_addr
-                    if gir_local_is_owning_param(local_id, &gir_locals):
+                    # P2 — the drop consumer reads the OWNEDPTR VARIANT (the
+                    # single source of truth for "this ptr-slot owns + heap-
+                    # frees its pointee"), into which the projection folded
+                    # `owning_param`. The GIR `owning_param` field stays as
+                    # the projection SOURCE (read in the slot-creation loop);
+                    # here we read the projected variant, NOT a parallel flag.
+                    # Fall back to the GIR read only when the slot has no
+                    # provenance entry (out of range — a defensive guard; the
+                    # original-local slots that reach this drop ARE projected).
+                    bool dia_owns_ptr = false
+                    if dia_slot >= 0 and dia_slot < f.slot_provenance.len():
+                        match f.slot_provenance.get(dia_slot).unwrap():
+                            case PvOwnedPtr():
+                                dia_owns_ptr = true
+                            else:
+                                dia_owns_ptr = false
+                    else:
+                        dia_owns_ptr = gir_local_is_owning_param(local_id, &gir_locals)
+                    if dia_owns_ptr:
                         int dia_loaded = lir_fn_next_value(&f)
                         lir_push_inst(&f, bb, ISlotLoad(dia_loaded, dia_slot, LT_PTR))
                         dia_drop_arg = dia_loaded
@@ -3733,7 +3752,7 @@ LirFunction lir_lower_function(GirFunction gfn, GirModule &gmod, Dict[String, in
     for spt in param_types:
         saved_param_types.push(spt)
 
-    LirFunction f = LirFunction(gfn.name, param_types, ret_type, [], [], 0, false, "", [], [], [])
+    LirFunction f = LirFunction(gfn.name, param_types, ret_type, [], [], 0, false, "", [], [], [], [])
 
     # Create slots for all GIR locals
     Vector[int] local_to_slot = []
@@ -3747,6 +3766,33 @@ LirFunction lir_lower_function(GirFunction gfn, GirModule &gmod, Dict[String, in
                 pass
         int slot_id = lir_fn_add_slot(&f, lir_ty, slot_name)
         local_to_slot.push(slot_id)
+        # P2 — project SlotProvenance from the GIR ownership axis, GATED on
+        # the LIR layout axis: only POINTER-shaped slots can be
+        # OwnedPtr/Borrowed (the read-routing decision is about LAYOUT). A
+        # scalar/aggregate-VALUE LoParam/LoBorrowed slot stays PvValue.
+        # The !-owning-param is PvOwnedPtr (folds `local.owning_param` into
+        # the variant); a ptr-aliasing LoBorrowed/LoView/LoParam is
+        # PvBorrowed; everything else PvValue. This is the SOLE projection
+        # site — "resolve once, write through".
+        SlotProvenance prov = PvValue()
+        if lir_is_ptr(lir_ty):
+            if local.owning_param:
+                prov = PvOwnedPtr()
+            else:
+                match local.ownership:
+                    case LoBorrowed():
+                        prov = PvBorrowed(local.borrow_origin)
+                    case LoView():
+                        prov = PvBorrowed(local.borrow_origin)
+                    case LoParam():
+                        # ⚠ a ptr-shaped NON-owning param IS a borrow — do
+                        # NOT fall through to PvValue (that would flip the
+                        # read-routing for borrowed param slots, breaking the
+                        # param-deref class).
+                        prov = PvBorrowed(local.borrow_origin)
+                    else:
+                        prov = PvValue()
+        f.slot_provenance.push(prov)
 
     # Create blocks
     Vector[int] block_map = []
