@@ -7698,6 +7698,22 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
             elif pvec.category == ENUM_CAT_OPTION and fname == "Some":
                 variant_arg_expected = pvec.ok_type
         int first_arg_type = -1
+        # Ownership at Consuming Positions: a struct/enum CONSTRUCTOR's
+        # field-init is a consuming position — the destination field must
+        # OWN, so each arg routes through `CkFieldWrite` (clone-if-live,
+        # move-if-dead). A plain function call instead borrows bare `T`
+        # args (CoW-default-borrow) via `classify_call_arg`. The TWO-ARM
+        # ctor discriminator is the canonical idiom this fn already uses at
+        # the ret_type block (`:7823`+`:7832`): `is_type_constructor` for
+        # plain user-struct / prelude-variant ctors, `type_infos.contains`
+        # for the MONOMORPHIZED ctor whose mangled name contains `__` (which
+        # `is_type_constructor` explicitly excludes `:3661`) — e.g. the
+        # lazy-adapter `MapIter__…__GorgetClosure`, registered in
+        # `type_infos` under its mangled name. Both arms are TYPED (no name
+        # match). Without CkFieldWrite the ctor's resource arg is a borrow →
+        # shallow memcpy into the field → the source and the field alias one
+        # buffer → both drop → double-free (the adapter `inner`/`f` fields).
+        bool is_ctor_call = is_type_constructor(call_name, &gmod) or gmod.type_infos.contains(call_name)
         # CoW for-element BORROW scan (no SpannedExpr__clone): arg is only read
         # (apply_container_hint/lower_expr/match arg.expr — all immutable-borrow
         # uses); enumerate() preserves the positional arg index ai.
@@ -7774,14 +7790,22 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                     case LoBorrowed():
                         gir_args.push(OpBorrow(arg_local))
                     else:
-                        gir_args.push(op_consume(&ctx, &gmod, arg_local, classify_call_arg(&gmod, call_name, ai)))
+                        if is_ctor_call:
+                            gir_args.push(op_consume(&ctx, &gmod, arg_local, CkFieldWrite()))
+                        else:
+                            gir_args.push(op_consume(&ctx, &gmod, arg_local, classify_call_arg(&gmod, call_name, ai)))
             else:
                 # Phase C step 5c + Path A bugfix (2026-05-21): pick the
                 # ConsumeKind from the callee's param ownership. bare `T`
                 # → CkCallArgBorrow (Ptr alias propagation, no clone);
                 # `!T` → CkCallArgOwning (drives OpMove/OpClone). The
                 # outer `is_borrow` branch already handled `&T` params.
-                gir_args.push(op_consume(&ctx, &gmod, arg_local, classify_call_arg(&gmod, call_name, ai)))
+                # A constructor field-init is a CONSUME position (the field
+                # must own) → CkFieldWrite; see `is_ctor_call` above.
+                if is_ctor_call:
+                    gir_args.push(op_consume(&ctx, &gmod, arg_local, CkFieldWrite()))
+                else:
+                    gir_args.push(op_consume(&ctx, &gmod, arg_local, classify_call_arg(&gmod, call_name, ai)))
         # Look up return type from module's fn_sigs, or from function definitions
         int ret_type = I64_TYPE
         # Expected-type read for bare prelude-variant ctors (Rust gg's
@@ -11629,7 +11653,15 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
             blocks.push(BasicBlock(insts, term))
             bi += 1
 
-        gmod.functions.push(GirFunction(mangled, !param_types, ret_type, ctx.locals, !blocks))
+        # Dup-def dedup (lazy-adapter pre-existing bug): an explicit
+        # `MapIter[…]` annotation + the `.map()` chain both reach here for the
+        # same mono'd receiver method (`Vector__int64_t__iter` etc.) → a C
+        # `redefinition`. Skip the re-push when this mangled name was already
+        # emitted from THIS path; record it on first emit. (Localized to the
+        # `lower_equip_block` push — the typed `emitted_fns` membership set.)
+        if not gmod.emitted_fns.contains(mangled):
+            gmod.emitted_fns.put(mangled.clone(), true)
+            gmod.functions.push(GirFunction(mangled, !param_types, ret_type, ctx.locals, !blocks))
 
 # ── Simple expression type inference ─────────────────────
 
@@ -13272,7 +13304,26 @@ void setup_type_subs(GirModule &gmod, Vector[String] type_params, Vector[Spanned
     while i < type_params.len() and i < type_args.len():
         String param_name = type_params.get(i).unwrap()
         SpannedType arg_type = type_args.get(i).unwrap()
-        int tid = map_ast_type(arg_type, &gmod)
+        # Lazy-iterator mangle-unification (KEYSTONE): a function-typed
+        # generic targ (the `F` of `MapIter[Iter,T,U,F]` / `FilterIter`)
+        # is carried at runtime as a `GorgetClosure` (16-byte fn-ptr+env),
+        # so its substitution must bind the `GorgetClosure` NAMED tid — the
+        # same decision the ctor/struct/for-loop path makes (`type_to_c_name`
+        # TFunction arm `:3160`) and the ResolvedType→GIR mapper makes
+        # (`resolved_to_gir_type` RTFunction arm `:3386`). The general
+        # `map_ast_type(TFunction)` instead returns a `Ptr(FnPtr)` tid, which
+        # `type_id_to_name` derefs to no `GtNamed` and collapses to the
+        # `int64_t` default — diverging the equip-`next`-body mono symbol
+        # (`MapIter__…__int64_t__next` with an empty `{char __pad}` struct +
+        # orphaned `unknown field 'inner'/'f'`) from the for-loop dispatcher's
+        # `MapIter__…__GorgetClosure__next`. Narrowed to TFunction targs only
+        # (no collateral on other generic equips). One funnel → centralized.
+        int tid = -1
+        match arg_type.ty:
+            case TFunction(_, _, _):
+                tid = lookup_or_register_named(&gmod, "GorgetClosure")
+            else:
+                tid = map_ast_type(arg_type, &gmod)
         gmod.type_subs.put(param_name, tid)
         i += 1
 
@@ -14095,7 +14146,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     Dict[String, GirStaticInfo] statics = {}
     Dict[String, ResourceMetadata] resource_metadata = {}
     Dict[int, int] option_ref_payload = {}
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, !const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types, !option_ref_payload, [], !enum_variant_parent_idx, false, [], {}, {}, {}, {})
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, !const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types, !option_ref_payload, [], !enum_variant_parent_idx, false, [], {}, {}, {}, {}, {})
 
     # R11: extract the `strip-asserts` directive so the SAssert case in
     # lower_stmt can emit a no-op instead of a conditional panic. Mirrors

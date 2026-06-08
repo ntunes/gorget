@@ -365,7 +365,28 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                         # semantic decision; 1b-iii replaces it with the typed
                         # closure-bearing-adapter discriminator.
                         bool is_terminal_method = method_name == "fold" or method_name == "any" or method_name == "all" or method_name == "find" or method_name == "find_index" or method_name == "for_each"
-                        if is_terminal_method and sh.shape.generic_params.len() > 0:
+                        # Lazy-iterator phase 1b-iii: admit the closure-bearing
+                        # ADAPTERS (`map`/`filter`/`filter_map`) via a TYPED
+                        # discriminator rather than a 7th hard-coded name. The
+                        # adapter's method-targ set carries the closure `F`, so
+                        # `bound_has_closure` is true iff ANY inferred targ
+                        # resolves to `RTFunction` (a real ResolvedType variant,
+                        # `types.gg:18`; `resolved_to_gir_type` already maps
+                        # `RTFunction → GorgetClosure`). This makes the bare-form
+                        # `.map(double)` (no turbofish) record its inferred targs
+                        # so the lowerer mangles to the mono'd
+                        # `MapIter__…__GorgetClosure`. (The TURBOFISH form carries
+                        # explicit targs already, so this gate is foundation for
+                        # the bare form, not load-bearing for that path.)
+                        bool bound_has_closure = false
+                        for bt in bound:
+                            if bt >= 0 and bt < types.types.len():
+                                match get_rtype_at(types.types, bt):
+                                    case RTFunction(_, _, _):
+                                        bound_has_closure = true
+                                    else:
+                                        pass
+                        if (is_terminal_method or bound_has_closure) and sh.shape.generic_params.len() > 0:
                             bool all_bound = true
                             for bt in bound:
                                 if bt < 0 or bt == types.error_id:

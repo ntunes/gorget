@@ -1996,6 +1996,15 @@ int runtime_fn_return_type(String name, LirModule &m):
         return find_struct_type("GorgetString", &m)
     if name == "gorget_string_clone_to_owned" or name == "gorget_string_copy_cow":
         return find_struct_type("GorgetString", &m)
+    # Closure clone (the `F` field of a lazy-iterator adapter struct is a
+    # `GorgetClosure`; consuming it into the ctor field clones via
+    # `gorget_closure_clone_to_owned`). Without this arm the clone temp
+    # defaults `LT_I64` → `emit_field_store` zero-stores `->f =
+    # (GorgetClosure){0}`. Mirrors the string-clone arm above; the only
+    # owned-return closure-clone symbol (the void in-place
+    # `gorget_closure_clone_inplace` must NOT appear in a return-type map).
+    if name == "gorget_closure_clone_to_owned":
+        return find_struct_type("GorgetClosure", &m)
     if name == "gorget_str_slice" or name == "gorget_str_trim":
         return find_struct_type("GorgetString", &m)
     if name == "gorget_str_replace" or name == "gorget_str_upper" or name == "gorget_str_lower":

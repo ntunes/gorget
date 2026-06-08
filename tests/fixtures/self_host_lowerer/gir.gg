@@ -573,6 +573,18 @@ struct GirModule:
     # Typed real-declared-property discriminator, not a name match. Appended
     # AT END to avoid shifting positional ctor call sites.
     Dict[String, bool] types_with_user_drop
+    # Set of mangled method names already pushed onto `functions` from
+    # `lower_equip_block`. The lazy-adapter chain (`iter_map_inference`-class)
+    # reaches `lower_equip_block` for the SAME monomorphized receiver method
+    # (`Vector__int64_t__iter` / `VectorDrain__int64_t__drop`) from both an
+    # explicit `MapIter[…]` annotation AND the `.map()` chain → the body is
+    # emitted TWICE → a C `redefinition` link error. This dedup guards the
+    # `lower_equip_block` push only (a localized, pre-existing-bug fix): skip
+    # re-push when the mangled name was already emitted from this path. A
+    # Dict membership set (NOT an O(n) scan; `fn_sigs` is keyed by return-type,
+    # not emit-status, so a fresh set is needed). Appended AT END to avoid
+    # shifting positional ctor call sites.
+    Dict[String, bool] emitted_fns
 
 # ── Helpers ──────────────────────────────────────────────
 
