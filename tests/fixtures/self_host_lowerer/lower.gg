@@ -3030,6 +3030,80 @@ String mangle_type_name(String name, Vector[SpannedType] targs, GirModule &gmod)
         result = result + "__" + type_to_c_name(ta, &gmod)
     return result
 
+# Lazy-iterator Phase 1a — the DEMAND-GATE predicate. Walk an AST type
+# and return true ONLY if every nominal (named struct / enum) reachable
+# through it is already registered as an instance in `gmod.type_infos`.
+# Used to gate bulk trait-default emission for generic-equip instances:
+# an adapter-returning default like `TakeIter[Self, T] take(self, int n)`
+# is emitted ONLY if `TakeIter__<mangled Self>__<mangled T>` was demanded
+# (and thus registered) by a real user call site — otherwise emitting it
+# would cascade into every adapter constructor for every Iterator
+# implementor forever. Mirrors Rust `all_return_nominals_registered`
+# (`src/ir/lowering/functions.rs:69-100`). MANGLER CHOICE IS LOAD-BEARING:
+# `mangle_type_name`/`type_to_c_name` are type_subs-AWARE (read the active
+# `Self`/`T` bindings), so the mangled instance name matches the registered
+# one; the blind `compute_mangled_name` would NOT see `type_subs`.
+bool all_return_nominals_registered(SpannedType stype, GirModule &gmod):
+    match stype.ty:
+        case TNamed(name, args):
+            # Bare names (no generic args) mangle directly to a primitive /
+            # builtin (int64_t / GorgetString / …) and need no instance reg.
+            if args.len() == 0:
+                return true
+            # Skip the substitution placeholders themselves — a `T`/`Self`
+            # name with no args is handled above; with args (impossible for a
+            # bound param) we still recurse below.
+            String mangled = mangle_type_name(name, args, &gmod)
+            if not gmod.type_infos.contains(mangled):
+                return false
+            for a in args:
+                if not all_return_nominals_registered(a, &gmod):
+                    return false
+            return true
+        case TTuple(elems):
+            for e in elems:
+                if not all_return_nominals_registered(e, &gmod):
+                    return false
+            return true
+        case TArray(elem_box, _):
+            return all_return_nominals_registered(*elem_box, &gmod)
+        case TSlice(elem_box):
+            return all_return_nominals_registered(*elem_box, &gmod)
+        case TFunction(ret_box, fparams, _):
+            if not all_return_nominals_registered(*ret_box, &gmod):
+                return false
+            for fp in fparams:
+                if not all_return_nominals_registered(fp, &gmod):
+                    return false
+            return true
+        else:
+            # TPrimitive / TSelf / TInferred → no nominal to register.
+            return true
+
+# Lazy-iterator Phase 1a — set up `gmod.type_subs` for a CONCRETE
+# `equip Target with Trait[args]:` default-method emission. Binds
+# `"Self"` → the concrete target type-id AND each trait generic param
+# (`tdef.type_params`, e.g. `["T"]` for `Iterator[T]`) → the trait
+# clause arg (`trait_generic_args`, e.g. `[int]` for `Iterator[int]`).
+# Mirrors the generic-equip site's bind (and Rust's `default_subs`).
+# After A1 dropped `Iterator` from `is_builtin_trait` + A3 admitted the
+# generic trait def, a concrete `equip Counter with Iterator[int]:` now
+# reaches the concrete default-emit; without this bind + the method-
+# generic skip + demand-gate, every default (`take`/`any[F]`/…) would
+# emit with an UNBOUND `Self`/`T`/`F` → broken dead bodies (the
+# `iterator`/`iterator_direct` regressions). `clear_type_subs` after.
+void setup_concrete_trait_subs(GirModule &gmod, SpannedType target, Vector[String] trait_params, Vector[SpannedType] trait_args):
+    gmod.type_subs = {}
+    String tgt_name = type_to_c_name(target, &gmod)
+    int tgt_tid = lookup_or_register_named(&gmod, tgt_name)
+    gmod.type_subs.put("Self", tgt_tid)
+    int ci = 0
+    while ci < trait_params.len() and ci < trait_args.len():
+        String pname = trait_params.get(ci).unwrap()
+        int atid = map_ast_type(trait_args.get(ci).unwrap(), &gmod)
+        gmod.type_subs.put(pname, atid)
+        ci += 1
+
 String prim_to_c_name(String name):
     match name:
         case "int":
@@ -3083,6 +3157,17 @@ String type_to_c_name(SpannedType stype, GirModule &gmod):
             # then return the registered name. (Previously this fell through to
             # the `int64_t` default — the bare_tuples for-loop bug.)
             return type_id_to_name(map_ast_type(stype, &gmod), &gmod)
+        case TSelf():
+            # Lazy-iterator Phase 1a: under the generic-equip default-method
+            # emit (lower.gg:14666), `gmod.type_subs` carries a `"Self"` →
+            # mono-type-id binding so `Self` inside a trait-default body/sig
+            # (e.g. `take`'s return `TakeIter[Self, T]`) mangles to the
+            # concrete instance name (`TakeIter__VectorIter__int64_t…`),
+            # matching the call site. When NO `"Self"` binding is active
+            # (the general `lower_function` path for concrete equips that set
+            # no Self sub), fall through to the existing `int64_t` default.
+            if gmod.type_subs.contains("Self"):
+                return type_id_to_name(gmod.type_subs.get("Self").unwrap(), &gmod)
         else:
             pass
     return "int64_t"
@@ -3397,6 +3482,20 @@ int map_ast_type(SpannedType stype, GirModule &gmod):
             for elem in elems:
                 mat_tup_elems.push(map_ast_type(elem, &gmod))
             return register_tuple_type(mat_tup_elems, &gmod)
+        case TSelf():
+            # Lazy-iterator Phase 1a: param/return-type lowering of a trait
+            # default whose self param / nested type-arg is `Self` (parser
+            # emits `TSelf()` for the `Self` keyword everywhere). Under the
+            # generic-equip default-emit, `gmod.type_subs["Self"]` binds the
+            # concrete mono type-id; resolve through it. The general
+            # `lower_function` path at the CONCRETE equip default sites
+            # (lower.gg:14548/14559/14606 — e.g. `equip SparseSetIter with
+            # Iterator[Entity]`) sets NO `"Self"` sub, so guard the lookup
+            # and fall through to the `I64_TYPE` default there (otherwise an
+            # unguarded `.get("Self").unwrap()` panics → ecs.gg / bootstrap
+            # RED).
+            if gmod.type_subs.contains("Self"):
+                return gmod.type_subs.get("Self").unwrap()
         else:
             pass
     return I64_TYPE
@@ -11249,11 +11348,30 @@ bool is_builtin_trait(String tname):
         return true
     if tname == "Add" or tname == "Sub" or tname == "Mul" or tname == "Div":
         return true
-    if tname.starts_with("Iterator") or tname.starts_with("Iterable"):
+    if tname.starts_with("Iterable"):
         return true
     if tname.starts_with("Add[") or tname.starts_with("Sub["):
         return true
     if tname.starts_with("Mul[") or tname.starts_with("Div["):
+        return true
+    return false
+
+# Lazy-iterator Phase 1a — the for-loop iterator PROTOCOL dispatches the
+# core methods by SHORT name (`Type__next` / `Type__iter` / `Type__drain`,
+# see `lower_for_iterator` `next_fn = iter_type_name + "__next"`). So a
+# concrete `equip Counter with Iterator[int]:`'s `next` MUST be emitted
+# under the short `Counter__next` name — NOT the user-trait-prefixed
+# `Iterator_for_Counter__next` — or the for-loop's call dangles → C
+# implicit-int → `Option__int64_t from int`. Mirrors Rust gg, which emits
+# `Counter__next` short for the concrete Iterator impl. A1 dropped
+# `Iterator` from `is_builtin_trait` (so its DEFAULTS now emit), which
+# flipped the naming to prefixed — this predicate restores the protocol's
+# short naming WITHOUT re-adding `Iterator` to the default-emit gate. The
+# trait name IS the protocol contract here (the C-emit-boundary exception).
+bool is_iterator_protocol_trait(String tname):
+    if tname.starts_with("Iterator") or tname.starts_with("Iterable"):
+        return true
+    if tname.starts_with("Drainable"):
         return true
     return false
 
@@ -11285,8 +11403,11 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
         match eqblk.trait_name:
             case Some(tname):
                 # Derive-generated traits use short form (Type__method)
-                # Explicit trait impls use prefix (Trait_for_Type__method)
-                bool is_derive = is_builtin_trait(tname)
+                # Explicit trait impls use prefix (Trait_for_Type__method).
+                # Iterator/Iterable/Drainable use SHORT form too — the for-loop
+                # protocol dispatches `Type__next`/`__iter`/`__drain` by name
+                # (see is_iterator_protocol_trait).
+                bool is_derive = is_builtin_trait(tname) or is_iterator_protocol_trait(tname)
                 if not is_derive:
                     String mangled_trait = mangle_trait_name(tname)
                     mangled = mangled_trait + "_for_" + target_name + "__" + mdef.name
@@ -11324,11 +11445,15 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
                 else:
                     pass
 
-        # Check if this is an explicit (non-derive) trait impl
+        # Check if this is an explicit (non-derive) trait impl. Iterator/
+        # Iterable/Drainable are NOT treated as explicit here — their `self`
+        # uses the plain concrete-pointer convention (NOT the `*unit` vtable
+        # cast), matching pristine behaviour (when they were is_builtin_trait)
+        # AND the for-loop protocol's direct `self.field` access in `next`.
         bool is_explicit_trait = false
         match eqblk.trait_name:
             case Some(tname):
-                bool is_derive_trait = is_builtin_trait(tname)
+                bool is_derive_trait = is_builtin_trait(tname) or is_iterator_protocol_trait(tname)
                 if not is_derive_trait:
                     is_explicit_trait = true
             case None:
@@ -14133,11 +14258,17 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             # (`src/ir/lowering/generics/mod.rs:2249-2304`).
             Vector[GirFieldInfo] mono_fields = []
             bool has_resource = false
+            # Per-field move flags for the MONO'd struct constructor (see
+            # below). A field is "owning" (CkCallArgOwning → clone-or-move
+            # at the ctor arg) iff its SUBSTITUTED type is a resource.
+            Vector[bool] mono_ctor_moves = []
             for fld in sdef.fields:
                 int ft = map_ast_type(fld.param_type, &gmod)
                 String ft_name = type_id_to_name(ft, &gmod)
                 mono_fields.push(GirFieldInfo(fld.param_name.clone(), ft_name.clone()))
-                if is_resource_type_name(ft_name, &gmod):
+                bool fld_is_res = is_resource_type_name(ft_name, &gmod)
+                mono_ctor_moves.push(fld_is_res)
+                if fld_is_res:
                     has_resource = true
             # Register only when the mono'd name isn't already there
             # (avoids duplicate clones when `generic_instances` lists
@@ -14145,6 +14276,21 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             if not gmod.type_infos.contains(mrinst.mangled_name):
                 Vector[GirEnumVariantInfo] mono_no_variants = []
                 gmod.type_infos.put(mrinst.mangled_name.clone(), GirTypeInfo(mrinst.mangled_name.clone(), mono_fields, mono_no_variants, false))
+            # Register the MONO'd ctor in fn_move_params, keyed by the mangled
+            # name. Fix D (lower.gg:~13860) registers struct ctors ONLY under
+            # the TEMPLATE name (`VectorIter`); a call to the MONO'd ctor
+            # `VectorIter__int64_t(src, 0)` looks up `classify_call_arg(
+            # "VectorIter__int64_t", 0)` → MISS → CkCallArgBorrow → the
+            # borrowed-`&self` source is byte-aliased (shallow memcpy, no
+            # clone) into the field → the source AND the field both free the
+            # same buffer at scope exit → double-free. This is the lazy-
+            # iterator double-free (`iter(&self)` returns `VectorIter[T](self,
+            # 0)`): the mono'd `Vector__int64_t__iter`'s ctor arg must CLONE
+            # the borrowed source, exactly as the non-generic ctor does. Mirror
+            # Fix D's per-field resource flags for the mono'd instance. (Same
+            # mono-vs-template registration gap as the fn_sigs / Gap-B class.)
+            if not gmod.fn_move_params.contains(mrinst.mangled_name):
+                gmod.fn_move_params.put(mrinst.mangled_name.clone(), mono_ctor_moves)
             clear_type_subs(&gmod)
             if has_resource:
                 gmod.resource_types.put(mrinst.mangled_name.clone(), true)
@@ -14295,6 +14441,55 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                 local_struct_names.put(edef.name.clone(), true)
             else:
                 pass
+
+    # Lazy-iterator Phase 1a — fn_sigs PRE-PASS for generic-equip TRAIT
+    # DEFAULTS. The equip-method pre-pass above only registered fn_sigs for
+    # the EXPLICIT equip methods (`eqs_tmpl.methods` → `next`); the trait
+    # DEFAULTS (`take`/`skip`/`count`/…) live in the trait def, not the
+    # equip. Their bodies are emitted later (A2 site, ~14730), but
+    # CALL-SITE return-type lookups (`v.iter().take(3)`'s EMethodCall, in
+    # `main` which is lowered BEFORE the A2 emit) read `fn_sigs` — so the
+    # signature MUST be registered HERE, before any function body lowers,
+    # exactly like the equip-method pre-pass. Without it, the call site
+    # types the binding via `infer_method_return_type` (a name heuristic
+    # that doesn't know `take`) → the local is mis-typed as the receiver
+    # (`VectorIter__int64_t`) → `incompatible types ... from
+    # __gg_TakeIter...`. Same naming + Self/T binding + method-generic
+    # skip + demand-gate as the A2 emit (kept in lockstep). `trait_defs`
+    # must already be built (above).
+    for dsi_inst in generic_instances:
+        if equip_generic_names.contains(dsi_inst.base_name):
+            for dsi_tmpl in equip_templates:
+                String dsi_target_name = ""
+                match dsi_tmpl.target.ty:
+                    case TNamed(dtn, _):
+                        dsi_target_name = dtn
+                    else:
+                        pass
+                if dsi_target_name == dsi_inst.base_name:
+                    match dsi_tmpl.trait_name:
+                        case Some(dsi_tname):
+                            if not is_builtin_trait(dsi_tname) and trait_defs.contains(dsi_tname):
+                                TraitDef dsi_tdef = trait_defs.get(dsi_tname).unwrap()
+                                Dict[String, bool] dsi_overridden = {}
+                                for dsi_om in dsi_tmpl.methods:
+                                    dsi_overridden.put(dsi_om.name.clone(), true)
+                                String dsi_mono = compute_mangled_name(dsi_inst.type_args, dsi_inst.base_name)
+                                Vector[String] dsi_tparams = extract_equip_type_params(dsi_tmpl)
+                                setup_type_subs(&gmod, dsi_tparams, dsi_inst.type_args)
+                                int dsi_self_tid = lookup_or_register_named(&gmod, dsi_mono)
+                                gmod.type_subs.put("Self", dsi_self_tid)
+                                for dsi_meth in dsi_tdef.methods:
+                                    if dsi_meth.body.len() > 0 and not dsi_overridden.contains(dsi_meth.name):
+                                        if dsi_meth.type_params.len() == 0:
+                                            if all_return_nominals_registered(dsi_meth.return_type, &gmod):
+                                                int dsi_ret = map_fn_return_type(dsi_meth.return_type, &gmod)
+                                                if dsi_ret >= 0:
+                                                    String dsi_key = dsi_mono + "__" + dsi_meth.name
+                                                    gmod.fn_sigs.put(dsi_key, dsi_ret)
+                                clear_type_subs(&gmod)
+                        case None:
+                            pass
 
     # FIDELITY Phase 4(a) — `_VTable` struct typedef pre-pass.
     # For each non-generic, non-derive trait with ≥1 INSTANCE method,
@@ -14540,27 +14735,45 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                 for om in eqblk.methods:
                                     overridden.put(om.name.clone(), true)
                                 String eq_target_sp = type_to_c_name(eqblk.target, &gmod)
+                                # Gate ONLY iterator-protocol traits (see the main
+                                # concrete site for why non-iterator traits stay
+                                # unconditional — the Writer.flush −85 regression).
+                                # Bind Self+T ONLY for those (Required after A1/A3
+                                # routed `equip X with Iterator[int]:` here); non-
+                                # iterator traits keep pristine no-subs behaviour.
+                                bool tc_gate_sp = is_iterator_protocol_trait(tname)
+                                if tc_gate_sp:
+                                    setup_concrete_trait_subs(&gmod, eqblk.target, tdef.type_params, eqblk.trait_generic_args)
                                 # Emit own-trait default methods (Trait_for_Type naming)
                                 for tmeth2 in tdef.methods:
                                     if tmeth2.body.len() > 0 and not overridden.contains(tmeth2.name):
-                                        String dm_trait2 = mangle_trait_name(tname)
-                                        String dm_mangled2 = dm_trait2 + "_for_" + eq_target_sp + "__" + tmeth2.name
-                                        gmod.functions.push(lower_function(tmeth2, &gmod))
-                                        int last_idx2 = gmod.functions.len() - 1
-                                        GirFunction last_fn2 = gmod.functions.get(last_idx2).unwrap()
-                                        gmod.functions.set(last_idx2, GirFunction(dm_mangled2, last_fn2.param_types, last_fn2.return_type, last_fn2.locals, last_fn2.blocks))
+                                        bool emit_dm2 = true
+                                        if tc_gate_sp:
+                                            emit_dm2 = tmeth2.type_params.len() == 0 and all_return_nominals_registered(tmeth2.return_type, &gmod)
+                                        if emit_dm2:
+                                            String dm_trait2 = mangle_trait_name(tname)
+                                            String dm_mangled2 = dm_trait2 + "_for_" + eq_target_sp + "__" + tmeth2.name
+                                            gmod.functions.push(lower_function(tmeth2, &gmod))
+                                            int last_idx2 = gmod.functions.len() - 1
+                                            GirFunction last_fn2 = gmod.functions.get(last_idx2).unwrap()
+                                            gmod.functions.set(last_idx2, GirFunction(dm_mangled2, last_fn2.param_types, last_fn2.return_type, last_fn2.locals, last_fn2.blocks))
                                 # Emit parent trait default methods (Type__ naming, no prefix)
                                 for pt_name in tdef.parent_traits:
                                     if trait_defs.contains(pt_name):
                                         TraitDef pt_def = trait_defs.get(pt_name).unwrap()
                                         for pt_meth in pt_def.methods:
                                             if pt_meth.body.len() > 0 and not overridden.contains(pt_meth.name):
-                                                String pt_mangled = eq_target_sp + "__" + pt_meth.name
-                                                gmod.functions.push(lower_function(pt_meth, &gmod))
-                                                int pt_last = gmod.functions.len() - 1
-                                                GirFunction pt_last_fn = gmod.functions.get(pt_last).unwrap()
-                                                gmod.functions.set(pt_last, GirFunction(pt_mangled, pt_last_fn.param_types, pt_last_fn.return_type, pt_last_fn.locals, pt_last_fn.blocks))
-                                                overridden.put(pt_meth.name.clone(), true)
+                                                bool emit_pt = true
+                                                if tc_gate_sp:
+                                                    emit_pt = pt_meth.type_params.len() == 0 and all_return_nominals_registered(pt_meth.return_type, &gmod)
+                                                if emit_pt:
+                                                    String pt_mangled = eq_target_sp + "__" + pt_meth.name
+                                                    gmod.functions.push(lower_function(pt_meth, &gmod))
+                                                    int pt_last = gmod.functions.len() - 1
+                                                    GirFunction pt_last_fn = gmod.functions.get(pt_last).unwrap()
+                                                    gmod.functions.set(pt_last, GirFunction(pt_mangled, pt_last_fn.param_types, pt_last_fn.return_type, pt_last_fn.locals, pt_last_fn.blocks))
+                                                    overridden.put(pt_meth.name.clone(), true)
+                                clear_type_subs(&gmod)
                                 # FIDELITY Phase 4(b) — emit the vtable global
                                 # for this non-derive trait impl, ONCE per equip.
                                 # A struct-of-FuncAddr global whose slots are
@@ -14574,16 +14787,27 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                 # same `eq_target_sp` the bodies use), so every
                                 # slot resolves to a real emitted fn. Phase 5's
                                 # DCE then keeps those bodies live.
-                                String vt_struct_name = mangle_trait_name(tname) + "_VTable"
-                                int vt_tid = lookup_or_register_named(&gmod, vt_struct_name)
-                                Vector[GirGlobalField] vt_fields = []
-                                for tslot in tdef.methods:
-                                    if method_has_self(tslot):
-                                        String impl_fn = mangle_trait_name(tname) + "_for_" + eq_target_sp + "__" + tslot.name
-                                        vt_fields.push(GirGlobalField(GGINIT_FN_REF, impl_fn))
-                                if vt_fields.len() > 0:
-                                    String vt_global_name = mangle_trait_name(tname) + "_for_" + eq_target_sp + "_vtable"
-                                    int _vt_gid = gir_mod_add_global(&gmod, GirGlobal(vt_global_name, vt_tid, GGINIT_STRUCT, vt_fields, false))
+                                # Skip the vtable global for iterator-protocol
+                                # traits: they're dispatched DIRECTLY by short name
+                                # (the for-loop calls `Type__next`), never as trait
+                                # objects, AND `Iterator[T]` is generic so its
+                                # `_VTable` struct is never registered (the pre-pass
+                                # at :14512 skips generic traits) — emitting a global
+                                # of an unresolved struct type + FnRefs to the now-
+                                # SHORT-named `next` would dangle ("initializer not
+                                # computable"). Mirrors Rust gg (no vtable for the
+                                # for-loop protocol impls).
+                                if not is_iterator_protocol_trait(tname):
+                                    String vt_struct_name = mangle_trait_name(tname) + "_VTable"
+                                    int vt_tid = lookup_or_register_named(&gmod, vt_struct_name)
+                                    Vector[GirGlobalField] vt_fields = []
+                                    for tslot in tdef.methods:
+                                        if method_has_self(tslot):
+                                            String impl_fn = mangle_trait_name(tname) + "_for_" + eq_target_sp + "__" + tslot.name
+                                            vt_fields.push(GirGlobalField(GGINIT_FN_REF, impl_fn))
+                                    if vt_fields.len() > 0:
+                                        String vt_global_name = mangle_trait_name(tname) + "_for_" + eq_target_sp + "_vtable"
+                                        int _vt_gid = gir_mod_add_global(&gmod, GirGlobal(vt_global_name, vt_tid, GGINIT_STRUCT, vt_fields, false))
                         case None:
                             pass
                     if not did_split:
@@ -14597,16 +14821,35 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                     Dict[String, bool] overridden = {}
                                     for om in eqblk.methods:
                                         overridden.put(om.name.clone(), true)
+                                    # The (m) method-generic skip + (b) demand-gate
+                                    # + the Self/T bind are needed ONLY for iterator-
+                                    # protocol traits (whose defaults return UN-
+                                    # registered adapters `TakeIter[Self,T]` / take
+                                    # method-generics). For OTHER concrete traits
+                                    # (Writer/Reader/Serializer) the pre-existing emit
+                                    # was UNCONDITIONAL + no-subs and correct — gating
+                                    # them with the demand-gate wrongly skips e.g.
+                                    # `Writer.flush`→`Result[int, IoError]` (the
+                                    # prelude-enum mono isn't a type_infos instance) →
+                                    # −85 c_emit regression. Keep their pristine path.
+                                    bool tc_gate = is_iterator_protocol_trait(tname)
+                                    if tc_gate:
+                                        setup_concrete_trait_subs(&gmod, eqblk.target, tdef.type_params, eqblk.trait_generic_args)
                                     # Emit defaults for trait methods with bodies not in equip
                                     for tmeth in tdef.methods:
                                         if tmeth.body.len() > 0 and not overridden.contains(tmeth.name):
-                                            String eq_target = type_to_c_name(eqblk.target, &gmod)
-                                            String dm_trait = mangle_trait_name(tname)
-                                            String dm_mangled = dm_trait + "_for_" + eq_target + "__" + tmeth.name
-                                            gmod.functions.push(lower_function(tmeth, &gmod))
-                                            int last_idx = gmod.functions.len() - 1
-                                            GirFunction last_fn = gmod.functions.get(last_idx).unwrap()
-                                            gmod.functions.set(last_idx, GirFunction(dm_mangled, last_fn.param_types, last_fn.return_type, last_fn.locals, last_fn.blocks))
+                                            bool emit_dm = true
+                                            if tc_gate:
+                                                emit_dm = tmeth.type_params.len() == 0 and all_return_nominals_registered(tmeth.return_type, &gmod)
+                                            if emit_dm:
+                                                String eq_target = type_to_c_name(eqblk.target, &gmod)
+                                                String dm_trait = mangle_trait_name(tname)
+                                                String dm_mangled = dm_trait + "_for_" + eq_target + "__" + tmeth.name
+                                                gmod.functions.push(lower_function(tmeth, &gmod))
+                                                int last_idx = gmod.functions.len() - 1
+                                                GirFunction last_fn = gmod.functions.get(last_idx).unwrap()
+                                                gmod.functions.set(last_idx, GirFunction(dm_mangled, last_fn.param_types, last_fn.return_type, last_fn.locals, last_fn.blocks))
+                                    clear_type_subs(&gmod)
                             case None:
                                 pass
                     # Via delegation: emit stubs for trait methods not explicitly overridden
@@ -14672,14 +14915,55 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                 # Compute the monomorphized type name for this instance
                                 # e.g. Container + [int] -> Container__int64_t
                                 String g_mono_name = compute_mangled_name(einst.type_args, einst.base_name)
+                                # Lazy-iterator Phase 1a — (a) BIND the trait-default
+                                # substitution before lowering each default body.
+                                # `lower_generic_equip` above set up + CLEARED its
+                                # own type_subs, so re-establish the equip
+                                # `[T]`→`[int]` mapping AND add `"Self"` →
+                                # g_mono_name's type-id. Mirrors Rust's
+                                # `lower_generic_equip_methods_with_defaults`
+                                # default_subs = [Self→type, equip-subs]. The
+                                # `case TSelf()` arms in `type_to_c_name` /
+                                # `map_ast_type` read this so `Self` inside a
+                                # default sig/body (`TakeIter[Self, T]`) resolves
+                                # to the concrete instance.
+                                Vector[String] g_eq_tparams = extract_equip_type_params(equip_tmpl)
+                                setup_type_subs(&gmod, g_eq_tparams, einst.type_args)
+                                int g_self_tid = lookup_or_register_named(&gmod, g_mono_name)
+                                gmod.type_subs.put("Self", g_self_tid)
                                 # Emit each unoverridden default method
                                 for gtmeth in gtdef.methods:
                                     if gtmeth.body.len() > 0 and not g_overridden.contains(gtmeth.name):
-                                        String g_dm_mangled = g_mono_name + "__" + gtmeth.name
-                                        gmod.functions.push(lower_function(gtmeth, &gmod))
-                                        int g_last = gmod.functions.len() - 1
-                                        GirFunction g_last_fn = gmod.functions.get(g_last).unwrap()
-                                        gmod.functions.set(g_last, GirFunction(g_dm_mangled, g_last_fn.param_types, g_last_fn.return_type, g_last_fn.locals, g_last_fn.blocks))
+                                        # (m) METHOD-GENERIC SKIP GUARD — defaults
+                                        # with method-level type params (`any[F]`,
+                                        # `map[U, F]`, `fold[A, F]`, …) ride the
+                                        # per-call-site method-mono path, NOT this
+                                        # bulk emit. Lowering them here with an
+                                        # UNBOUND `F`/`U` produces dead, broken
+                                        # bodies (the demand-gate alone does NOT
+                                        # catch the ones whose return omits the
+                                        # method-generic, e.g. `any[F]`→bool). Rust
+                                        # keeps the same skip (functions.rs:1518).
+                                        # phase 1b: method-generic defaults skipped
+                                        # here; emitted per-call-site by method-mono.
+                                        if gtmeth.type_params.len() == 0:
+                                            # (b) THE DEMAND-GATE — emit a default
+                                            # ONLY if its SUBSTITUTED return type's
+                                            # nominals are all registered instances
+                                            # (mangled via the type_subs-aware
+                                            # `type_to_c_name`, so `TakeIter[Self,T]`
+                                            # → `TakeIter__VectorIter__int64_t__int64_t`).
+                                            # Prevents emitting adapter constructors
+                                            # (`take`/`skip`/…) for instances whose
+                                            # adapter struct was never demanded by a
+                                            # user call site (Rust functions.rs:1571).
+                                            if all_return_nominals_registered(gtmeth.return_type, &gmod):
+                                                String g_dm_mangled = g_mono_name + "__" + gtmeth.name
+                                                gmod.functions.push(lower_function(gtmeth, &gmod))
+                                                int g_last = gmod.functions.len() - 1
+                                                GirFunction g_last_fn = gmod.functions.get(g_last).unwrap()
+                                                gmod.functions.set(g_last, GirFunction(g_dm_mangled, g_last_fn.param_types, g_last_fn.return_type, g_last_fn.locals, g_last_fn.blocks))
+                                clear_type_subs(&gmod)
                         case None:
                             pass
 

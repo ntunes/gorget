@@ -2310,6 +2310,28 @@ int find_struct_type(String name, LirModule &m):
             return LT_STRUCT_BASE + i
     return LT_PTR
 
+# Gap-B (longest-valid-field split): return the 0-based field index of
+# `field` in the struct at `sid` (a 0-based index into `m.structs`), or -1.
+# Matches via `c_field_name` on both sides — the SAME normalization the
+# `__field_read_`/`__field_write_` emit/infer sites use — so the field-
+# existence check inside the split scan agrees with the later field lookup.
+# This lets the split prefer the LONGEST registered struct prefix whose
+# SUFFIX is a real field (e.g. `TakeIter__VectorIter__int64_t__int64_t.idx`)
+# over a SHORTER registered-but-wrong prefix (`VectorIter`, the generic
+# template, whose first `_` boundary matches but lacks the field).
+int lir_struct_field_index(int sid, String field, LirModule &m):
+    if sid < 0 or sid >= m.structs.len():
+        return -1
+    LirStructDef sdef = m.structs.get(sid).unwrap()
+    String want = c_field_name(field)
+    int fi = 0
+    while fi < sdef.fields.len():
+        StructField sf = sdef.fields.get(fi).unwrap()
+        if c_field_name(sf.name) == want:
+            return fi
+        fi += 1
+    return -1
+
 # Infer the result type of an LIR instruction.
 int infer_inst_type_with_ret(LirInst &inst, LirModule &m, Dict[int, int] &val_types, int func_ret_ty):
     match inst:
@@ -2551,6 +2573,12 @@ int infer_inst_type_with_ret(LirInst &inst, LirModule &m, Dict[int, int] &val_ty
                 # stamp the whole call's return type as I64 fallback.
                 if name.starts_with("__field_read_"):
                     String rest = name.slice(13, name.len())
+                    # Gap-B: don't break on the FIRST registered struct prefix
+                    # (the generic template `VectorIter` matches before the
+                    # mono'd `VectorIter__int64_t` / adapter
+                    # `TakeIter__VectorIter__int64_t__int64_t`). Accept a split
+                    # ONLY when the suffix is a real field of the candidate
+                    # struct, and prefer the LONGEST such valid prefix.
                     String struct_name = ""
                     String field = ""
                     int sid_inf = -1
@@ -2561,10 +2589,11 @@ int infer_inst_type_with_ret(LirInst &inst, LirModule &m, Dict[int, int] &val_ty
                             if sep_inf + 1 < rest.byte_len():
                                 int try_sid_inf = find_struct_type(try_struct_inf, &m) - LT_STRUCT_BASE
                                 if try_sid_inf >= 0 and try_sid_inf < m.structs.len():
-                                    struct_name = try_struct_inf
-                                    field = rest.slice(sep_inf + 1, rest.byte_len())
-                                    sid_inf = try_sid_inf
-                                    break
+                                    String try_field_inf = rest.slice(sep_inf + 1, rest.byte_len())
+                                    if lir_struct_field_index(try_sid_inf, try_field_inf, &m) >= 0:
+                                        struct_name = try_struct_inf
+                                        field = try_field_inf
+                                        sid_inf = try_sid_inf
                         sep_inf += 1
                     if sid_inf >= 0:
                         LirStructDef sdef = m.structs.get(sid_inf).unwrap()
@@ -3808,10 +3837,16 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
             int base_val = args.get(0).unwrap()
             int val_arg = args.get(1).unwrap()
             String rest_w = name.slice(14, name.len())
-            # Find the longest-prefix split that matches a registered
-            # struct (same fix as __field_read_ above — plain first-`_`
-            # split miscompiles `__field_write_Option__Keyword_tag` into
-            # `((Option*)base)->_Keyword_tag` which breaks type lookup).
+            # Gap-B (longest-valid-FIELD split): don't break on the FIRST
+            # registered struct prefix — the generic template (`VectorIter`)
+            # matches before the mono'd instance / adapter
+            # (`TakeIter__VectorIter__int64_t__int64_t`), producing a wrong
+            # cast + mangled field (`((__gg_VectorIter*)base)->_int64_t_idx`).
+            # Accept a split ONLY when the suffix is a real field of the
+            # candidate struct, and prefer the LONGEST such valid prefix.
+            # (The earlier `__field_write_Option__Keyword_tag` miscompile this
+            # fix also covers: `Option` lacks field `_Keyword_tag`, so the
+            # longer `Option__Keyword` prefix with field `tag` wins.)
             String struct_name_w = ""
             String field_w = ""
             int sid_w = -1
@@ -3822,10 +3857,11 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
                     if sep_iw + 1 < rest_w.byte_len():
                         int try_sid_w = find_struct_type(try_struct_w, &m) - LT_STRUCT_BASE
                         if try_sid_w >= 0 and try_sid_w < m.structs.len():
-                            struct_name_w = try_struct_w
-                            field_w = rest_w.slice(sep_iw + 1, rest_w.byte_len())
-                            sid_w = try_sid_w
-                            break
+                            String try_field_w = rest_w.slice(sep_iw + 1, rest_w.byte_len())
+                            if lir_struct_field_index(try_sid_w, try_field_w, &m) >= 0:
+                                struct_name_w = try_struct_w
+                                field_w = try_field_w
+                                sid_w = try_sid_w
                 sep_iw += 1
             if struct_name_w == "":
                 # Fallback: first-underscore split.
@@ -3895,15 +3931,17 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
         if dst >= 0 and args.len() >= 2:
             int base_val = args.get(0).unwrap()
             String rest = name.slice(13, name.len())
-            # Scan every `_` position from left to right. The first one
-            # where the prefix resolves to a registered struct wins.
-            # Plain-first-`_` split failed for generic-mono'd enums like
-            # `Option__Keyword` because the `__` gap gave struct="Option"
-            # (not registered) and field="_Keyword_tag" (garbage),
-            # silently falling through to the raw-arrow fallback that
-            # emitted `((Option*)base)->_Keyword_tag` — the C compiler
-            # couldn't find `struct Option`, stage-1's tag read returned
-            # zero, and every Option match dispatched to Some.
+            # Gap-B (longest-valid-FIELD split): scan every `_` position L→R;
+            # accept a split ONLY when the suffix is a real field of the
+            # candidate struct, and prefer the LONGEST such valid prefix.
+            # The old shortest-prefix-`break` failed for generic-mono'd enums
+            # like `Option__Keyword` (struct="Option" matched first but lacks
+            # field `_Keyword_tag` → raw-arrow `((Option*)base)->_Keyword_tag`
+            # miscompile) AND for adapter fields like
+            # `TakeIter__VectorIter__int64_t__int64_t_inner` (generic template
+            # `VectorIter` matched before the mono'd adapter, wrong cast).
+            # Requiring the field to exist picks `Option__Keyword.tag` /
+            # `TakeIter__….inner` correctly.
             String struct_name = ""
             String field = ""
             int split_sid = -1
@@ -3914,10 +3952,11 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
                     if sep_i + 1 < rest.byte_len():
                         int try_sid = find_struct_type(try_struct, &m) - LT_STRUCT_BASE
                         if try_sid >= 0 and try_sid < m.structs.len():
-                            struct_name = try_struct
-                            field = rest.slice(sep_i + 1, rest.byte_len())
-                            split_sid = try_sid
-                            break
+                            String try_field = rest.slice(sep_i + 1, rest.byte_len())
+                            if lir_struct_field_index(try_sid, try_field, &m) >= 0:
+                                struct_name = try_struct
+                                field = try_field
+                                split_sid = try_sid
                 sep_i += 1
             if split_sid >= 0:
                 LirStructDef sdef = m.structs.get(split_sid).unwrap()

@@ -960,8 +960,25 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                         # this merge, json_parse's trait-impl island is never
                         # vtable-rooted and stays DCE'd (28 user fns vs Rust's 67).
                         # Generic traits would need monomorphization (Rust skips
-                        # them in register_trait_types too) — merge concrete only.
-                        if tdef.type_params.len() == 0:
+                        # them in register_trait_types too) — merge concrete only,
+                        # EXCEPT generic traits carrying DEFAULT method bodies
+                        # (`Iterator[T]`): the generic-equip default-emit path
+                        # (lower.gg:14666) gates each `equip X with Iterator[T]:`
+                        # instance on `trait_defs.contains("Iterator")`, then
+                        # lowers the trait's default bodies (take/skip/count/…)
+                        # under a Self+T type_subs binding. Without admitting the
+                        # generic def WITH its bodies, `trait_defs` never has
+                        # Iterator → the lazy-adapter defaults are never emitted →
+                        # `__gg_VectorIter from int` CC-FAILs. The placeholder
+                        # signature-only generic traits (Iterable/Drainable) carry
+                        # no default bodies, so this guard leaves them filtered
+                        # exactly as before — only generic traits with ≥1 default
+                        # body are admitted.
+                        bool trait_has_default = false
+                        for tm in tdef.methods:
+                            if tm.body.len() > 0:
+                                trait_has_default = true
+                        if tdef.type_params.len() == 0 or trait_has_default:
                             m.items.push(ITrait(tdef))
                     case IConstDecl(_, _, _):
                         # Merge module-level `const int X = 5` so the main
