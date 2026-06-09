@@ -1,14 +1,15 @@
 # TODO
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE THIS BLOCK IN PLACE each session; completed work → DONE.md, do NOT accumulate "superseded" blocks)
-**gorget-1 code tip `caf102fd` (lazy `iter_map_inference` +2 — expected_type closure-return threading + the owned for-element
-LEAK-CLASS fix at `bind_for_local`; on top of closure-ABI `6e856ce8` [+1] + CoW P3 TIER-1 `488534d3` [sound borrow-flip core,
-parity-NEUTRAL] + lazy-iter ADAPTER-MONO `518dc364` [+1] + lazy-iter 1b `d8807885` + CoW P2 `f19ce0dd` [byte-neutral keystone]
-+ lazy-iter 1a `f0e4064c` [+11]). Docs/fossil-fix on top, `git log -1` for the live tip; owner ff's main→gorget-1).
-RE-MEASURE PARITY (never trust a dated number) via: `GG_RUNTIME_DIFF=1 GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration
---release self_host_runtime_diff -- --nocapture` → read the `PARITY = MATCH/(...)` line. Last measured THIS SESSION
-(2026-06-09, runtime_diff-confirmed): **466/953 = 48.9%** (1a +11, P2/P3-tier-1 parity-neutral, 1b +1, adapter-mono +1,
-closure-ABI +1, iter_map_inference +2). ⚠ denominator shifted 947→953 (corpus grew); only the freshly-printed count means anything.**
+**gorget-1 code tip `b00797d2` (lazy bare-form terminal SExpr method-targ recording, +1 `stdlib_iter_map_filter`; on top of
+Rust-gg CoW `.get().unwrap()`-bind correctness fix `2ffa8882` [parity-neutral; ⭐ the REFERENCE for self-host tier-2] +
+lazy `iter_map_inference` +2 `caf102fd` + closure-ABI `6e856ce8` [+1] + CoW P3 TIER-1 `488534d3` [sound borrow-flip core,
+parity-NEUTRAL] + adapter-mono `518dc364` [+1] + 1b `d8807885` + CoW P2 `f19ce0dd` + 1a `f0e4064c` [+11]). Docs on top,
+`git log -1` for the live tip; owner ff's main→gorget-1). RE-MEASURE PARITY (never trust a dated number) via: `GG_RUNTIME_DIFF=1
+GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration --release self_host_runtime_diff -- --nocapture` → read the
+`PARITY = MATCH/(...)` line. Last RUN-CONFIRMED-increment count THIS SESSION (2026-06-09): **~467/953 ≈ 49%** (each +N
+runtime_diff-confirmed; RE-MEASURE for the exact live number). ⚠ denominator shifted 947→953 (corpus grew); only the
+freshly-printed count means anything. ⚠⚠ 2 FAILING budget lints on gorget-1 (see ## High Priority) — `cargo test --test lints`.**
 **Recent landed work lives in DONE.md, NOT here — keep this block free of COMPLETE/DONE/LANDED breadcrumbs (state + NEXT only).**
 Live gates (re-run, don't trust): `self_host_runtime` (snapshot lock-in net), `runtime_diff` (the parity command above),
 `lowerer_comparison`, `c_emit_comparison`, `bootstrap_fixed_point` (THE load-bearing canary), `cargo test
