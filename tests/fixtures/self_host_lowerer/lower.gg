@@ -287,6 +287,34 @@ struct LowerCtx:
     # set. Default: empty (computed per function in `lower_function` /
     # owning-param `lower_function` analog before the body loop).
     Dict[String, bool] cow_mutated_names
+    # ── CoW tier-2 L1: position-aware mutation tracking ──────────────
+    # For each mutated NAME, the LATEST (max over all mutation sites)
+    # textual `span.start` at which it is mutated. Populated in the SAME
+    # `compute_cow_scan` pass as `cow_mutated_names` (via the `cow_mark_*`
+    # helpers, threading the mutating expression's `span.start`). The
+    # `max` is LOAD-BEARING — an inner-loop mutation textually AFTER the
+    # bind, or a back-edge mutation, must keep the name non-pristine; a
+    # `min`/per-occurrence model would be unsound. Consumed by
+    # `cow_pristine_after(name, bind_pos)`: a name is pristine-at-pos iff
+    # it is never mutated OR its LAST mutation `span.start` is strictly
+    # before `bind_pos`. This lets the Branch C-pre flip fire for the
+    # read-then-dead / mut-before-bind cases (mutation only OUTSIDE the
+    # alias's live window) while still refusing the mutate-while-live
+    # case (tier-1's eager clone). See docs/devbook/11-copy-on-write.md
+    # (the liveness gate) and `decide_svardecl_emission`.
+    Dict[String, int] cow_mut_max_span
+    # Property (d) — closure-deferred mutation (the soundness anchor). A
+    # name mutated inside a closure BODY has a textual span that bears NO
+    # relation to WHEN the closure runs (it can be invoked AFTER the
+    # bind, reallocating the source while a flipped alias is still live →
+    # UAF). So a closure-captured-mutated name is treated as NEVER
+    # pristine: `cow_pristine_after` consults this set FIRST and returns
+    # false. Populated in the `EClosure`/`EImplicitClosure` scan arms
+    # (any mutation seen while scanning a closure body routes here, not
+    # into the position-aware map). This keeps the closure case
+    # position-AGNOSTIC, matching tier-1's whole-fn refusal — straight-
+    # line / loop sources stay position-aware.
+    Dict[String, bool] cow_closure_mutated
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -948,14 +976,31 @@ void cow_register_alias(LowerCtx &ctx, int alias, int source):
 # field-path / index BASE down to its root identifier (`h.items` /
 # `m[i]` mutate the owning container `h` / `m`) — structural, not a name
 # list (the break3c field-path-heap-UAF fix).
-void cow_mark_if_ident(LowerCtx &ctx, SpannedExpr e):
+# `pos` is the textual `span.start` of the MUTATION site (not of `e`).
+# `in_closure` true means the mutation is textually inside a closure body
+# (its run-time order bears no relation to `pos`) → route the name into
+# `cow_closure_mutated` (NEVER-pristine) instead of the position-aware
+# `cow_mut_max_span` (property (d)). The `max`-merge into `cow_mut_max_span`
+# is load-bearing — see the field docstring.
+void cow_mark_name(LowerCtx &ctx, String idn, int pos, bool in_closure):
+    ctx.cow_mutated_names.put(idn, true)
+    if in_closure:
+        ctx.cow_closure_mutated.put(idn, true)
+    else:
+        int prev = -1
+        if ctx.cow_mut_max_span.contains(idn):
+            prev = ctx.cow_mut_max_span.get(idn).unwrap()
+        if pos > prev:
+            ctx.cow_mut_max_span.put(idn, pos)
+
+void cow_mark_if_ident(LowerCtx &ctx, SpannedExpr e, int pos, bool in_closure):
     match e.expr:
         case EIdentifier(idn):
-            ctx.cow_mutated_names.put(idn, true)
+            cow_mark_name(&ctx, idn, pos, in_closure)
         case EFieldAccess(base_box, _):
-            cow_mark_if_ident(&ctx, *base_box)
+            cow_mark_if_ident(&ctx, *base_box, pos, in_closure)
         case EIndex(base_box, _):
-            cow_mark_if_ident(&ctx, *base_box)
+            cow_mark_if_ident(&ctx, *base_box, pos, in_closure)
         else:
             pass
 
@@ -968,116 +1013,127 @@ void cow_mark_if_ident(LowerCtx &ctx, SpannedExpr e):
 # marked — only an actual mutation marks the name. The walk still recurses
 # through every sub-expression so a mutation nested inside (e.g.
 # `f(g(x.push(1)))`) is caught.
-void cow_scan_expr(LowerCtx &ctx, GirModule &gmod, SpannedExpr e):
+# `in_closure` true once we are scanning textually inside a closure body
+# (recursively); any mutation seen there is closure-deferred (property
+# (d)) and routes to `cow_closure_mutated` (NEVER-pristine) rather than
+# the position-aware `cow_mut_max_span`. The mutation POSITION threaded
+# into the mark helpers is the mutating expression's own `span.start`.
+void cow_scan_expr(LowerCtx &ctx, GirModule &gmod, SpannedExpr e, bool in_closure):
     match e.expr:
         case EMethodCall(recv_box, mname, margs, _):
             # TYPED: builtin `is_mutating` table OR user `&self`/`!self`
             # self-convention (method_mutates_receiver). A read-only call
             # does NOT mark its receiver; a mutating one marks the root.
             if method_mutates_receiver(*recv_box, mname, &gmod):
-                cow_mark_if_ident(&ctx, *recv_box)
-            cow_scan_expr(&ctx, &gmod, *recv_box)
+                cow_mark_if_ident(&ctx, *recv_box, e.span.start, in_closure)
+            cow_scan_expr(&ctx, &gmod, *recv_box, in_closure)
             for ma in margs:
-                cow_scan_expr(&ctx, &gmod, ma)
+                cow_scan_expr(&ctx, &gmod, ma, in_closure)
         case EMutableBorrow(inner_box):
-            cow_mark_if_ident(&ctx, *inner_box)
-            cow_scan_expr(&ctx, &gmod, *inner_box)
+            cow_mark_if_ident(&ctx, *inner_box, e.span.start, in_closure)
+            cow_scan_expr(&ctx, &gmod, *inner_box, in_closure)
         case EMove(inner_box):
-            cow_mark_if_ident(&ctx, *inner_box)
-            cow_scan_expr(&ctx, &gmod, *inner_box)
+            cow_mark_if_ident(&ctx, *inner_box, e.span.start, in_closure)
+            cow_scan_expr(&ctx, &gmod, *inner_box, in_closure)
         case ECall(callee_box, cargs, _):
-            cow_scan_expr(&ctx, &gmod, *callee_box)
+            cow_scan_expr(&ctx, &gmod, *callee_box, in_closure)
             for ca in cargs:
-                cow_scan_expr(&ctx, &gmod, ca)
+                cow_scan_expr(&ctx, &gmod, ca, in_closure)
         case EBinaryOp(lhs_box, _, rhs_box):
-            cow_scan_expr(&ctx, &gmod, *lhs_box)
-            cow_scan_expr(&ctx, &gmod, *rhs_box)
+            cow_scan_expr(&ctx, &gmod, *lhs_box, in_closure)
+            cow_scan_expr(&ctx, &gmod, *rhs_box, in_closure)
         case EUnaryOp(_, inner_box):
-            cow_scan_expr(&ctx, &gmod, *inner_box)
+            cow_scan_expr(&ctx, &gmod, *inner_box, in_closure)
         case EFieldAccess(base_box, _):
-            cow_scan_expr(&ctx, &gmod, *base_box)
+            cow_scan_expr(&ctx, &gmod, *base_box, in_closure)
         case EIndex(base_box, idx_box):
-            cow_scan_expr(&ctx, &gmod, *base_box)
-            cow_scan_expr(&ctx, &gmod, *idx_box)
+            cow_scan_expr(&ctx, &gmod, *base_box, in_closure)
+            cow_scan_expr(&ctx, &gmod, *idx_box, in_closure)
         case EDeref(inner_box):
-            cow_scan_expr(&ctx, &gmod, *inner_box)
+            cow_scan_expr(&ctx, &gmod, *inner_box, in_closure)
         case EAs(inner_box, _):
-            cow_scan_expr(&ctx, &gmod, *inner_box)
+            cow_scan_expr(&ctx, &gmod, *inner_box, in_closure)
         case ETry(inner_box):
-            cow_scan_expr(&ctx, &gmod, *inner_box)
+            cow_scan_expr(&ctx, &gmod, *inner_box, in_closure)
         case EAwait(inner_box):
-            cow_scan_expr(&ctx, &gmod, *inner_box)
+            cow_scan_expr(&ctx, &gmod, *inner_box, in_closure)
         case ESpawn(inner_box):
-            cow_scan_expr(&ctx, &gmod, *inner_box)
+            cow_scan_expr(&ctx, &gmod, *inner_box, in_closure)
         case ESpawnBlocking(inner_box):
-            cow_scan_expr(&ctx, &gmod, *inner_box)
+            cow_scan_expr(&ctx, &gmod, *inner_box, in_closure)
         case EArrayLiteral(elems):
             for el in elems:
-                cow_scan_expr(&ctx, &gmod, el)
+                cow_scan_expr(&ctx, &gmod, el, in_closure)
         case ETupleLiteral(elems_t):
             for elt in elems_t:
-                cow_scan_expr(&ctx, &gmod, elt)
+                cow_scan_expr(&ctx, &gmod, elt, in_closure)
         case EDictLiteral(keys_d, vals_d):
             for kd in keys_d:
-                cow_scan_expr(&ctx, &gmod, kd)
+                cow_scan_expr(&ctx, &gmod, kd, in_closure)
             for vd in vals_d:
-                cow_scan_expr(&ctx, &gmod, vd)
+                cow_scan_expr(&ctx, &gmod, vd, in_closure)
         case EStructLiteral(_, _, fields_s):
             for fs in fields_s:
-                cow_scan_expr(&ctx, &gmod, fs)
+                cow_scan_expr(&ctx, &gmod, fs, in_closure)
         case EFString(_, parts_f):
             for pf in parts_f:
-                cow_scan_expr(&ctx, &gmod, pf)
+                cow_scan_expr(&ctx, &gmod, pf, in_closure)
         case EIf(cond_box, then_b, elses):
-            cow_scan_expr(&ctx, &gmod, *cond_box)
-            cow_scan_stmts(&ctx, &gmod, then_b)
+            cow_scan_expr(&ctx, &gmod, *cond_box, in_closure)
+            cow_scan_stmts(&ctx, &gmod, then_b, in_closure)
             for eb in elses:
-                cow_scan_stmts(&ctx, &gmod, eb.body)
+                cow_scan_stmts(&ctx, &gmod, eb.body, in_closure)
         case EMatch(scrut_box, arms):
-            cow_scan_expr(&ctx, &gmod, *scrut_box)
+            cow_scan_expr(&ctx, &gmod, *scrut_box, in_closure)
             for arm in arms:
                 match arm.guard:
                     case Some(ge):
-                        cow_scan_expr(&ctx, &gmod, ge)
+                        cow_scan_expr(&ctx, &gmod, ge, in_closure)
                     case None:
                         pass
-                cow_scan_stmts(&ctx, &gmod, arm.body)
+                cow_scan_stmts(&ctx, &gmod, arm.body, in_closure)
         case EBlock(blk_stmts):
-            cow_scan_stmts(&ctx, &gmod, blk_stmts)
+            cow_scan_stmts(&ctx, &gmod, blk_stmts, in_closure)
         case EDo(do_stmts):
-            cow_scan_stmts(&ctx, &gmod, do_stmts)
+            cow_scan_stmts(&ctx, &gmod, do_stmts, in_closure)
         case EClosure(_, clo_body):
-            # A closure body that mutates a CAPTURED name still endangers
-            # any alias the enclosing fn holds — be conservative and scan
-            # the body into the SAME mutation set.
-            cow_scan_stmts(&ctx, &gmod, clo_body)
+            # Property (d): a closure body that mutates a CAPTURED name
+            # endangers any alias the enclosing fn holds, but the body's
+            # textual span bears NO relation to WHEN the closure is
+            # invoked (it can run AFTER the bind). Scan the body with
+            # in_closure=true so every mutation there routes to
+            # `cow_closure_mutated` (NEVER-pristine) — position-AGNOSTIC,
+            # matching tier-1's whole-fn refusal.
+            cow_scan_stmts(&ctx, &gmod, clo_body, true)
         case EImplicitClosure(ic_box):
-            cow_scan_expr(&ctx, &gmod, *ic_box)
+            # An implicit closure (`it`-form) is also a closure body —
+            # any mutation it performs is closure-deferred. (d).
+            cow_scan_expr(&ctx, &gmod, *ic_box, true)
         case EDefaultOp(lhs_box, rhs_box):
-            cow_scan_expr(&ctx, &gmod, *lhs_box)
-            cow_scan_expr(&ctx, &gmod, *rhs_box)
+            cow_scan_expr(&ctx, &gmod, *lhs_box, in_closure)
+            cow_scan_expr(&ctx, &gmod, *rhs_box, in_closure)
         case EListComp(elem_box, _, iter_box, opt_filt):
-            cow_scan_expr(&ctx, &gmod, *elem_box)
-            cow_scan_expr(&ctx, &gmod, *iter_box)
+            cow_scan_expr(&ctx, &gmod, *elem_box, in_closure)
+            cow_scan_expr(&ctx, &gmod, *iter_box, in_closure)
             match opt_filt:
                 case Some(filt_box):
-                    cow_scan_expr(&ctx, &gmod, *filt_box)
+                    cow_scan_expr(&ctx, &gmod, *filt_box, in_closure)
                 case None:
                     pass
         case ESetComp(selem_box, _, siter_box, sfilt_box):
-            cow_scan_expr(&ctx, &gmod, *selem_box)
-            cow_scan_expr(&ctx, &gmod, *siter_box)
-            cow_scan_expr(&ctx, &gmod, *sfilt_box)
+            cow_scan_expr(&ctx, &gmod, *selem_box, in_closure)
+            cow_scan_expr(&ctx, &gmod, *siter_box, in_closure)
+            cow_scan_expr(&ctx, &gmod, *sfilt_box, in_closure)
         case EDictComp(dk_box, dv_box, _, diter_box):
-            cow_scan_expr(&ctx, &gmod, *dk_box)
-            cow_scan_expr(&ctx, &gmod, *dv_box)
-            cow_scan_expr(&ctx, &gmod, *diter_box)
+            cow_scan_expr(&ctx, &gmod, *dk_box, in_closure)
+            cow_scan_expr(&ctx, &gmod, *dv_box, in_closure)
+            cow_scan_expr(&ctx, &gmod, *diter_box, in_closure)
         case ERethrow(re_inner, _, _, re_handler):
-            cow_scan_expr(&ctx, &gmod, *re_inner)
-            cow_scan_expr(&ctx, &gmod, *re_handler)
+            cow_scan_expr(&ctx, &gmod, *re_inner, in_closure)
+            cow_scan_expr(&ctx, &gmod, *re_handler, in_closure)
         case ECatch(ce_inner, _, ce_handler):
-            cow_scan_expr(&ctx, &gmod, *ce_inner)
-            cow_scan_expr(&ctx, &gmod, *ce_handler)
+            cow_scan_expr(&ctx, &gmod, *ce_inner, in_closure)
+            cow_scan_expr(&ctx, &gmod, *ce_handler, in_closure)
         else:
             pass
 
@@ -1085,106 +1141,135 @@ void cow_scan_expr(LowerCtx &ctx, GirModule &gmod, SpannedExpr e):
 # compound-assignment LHS mark the target name; every contained
 # expression is scanned for in-place mutations; nested control-flow
 # bodies recurse.
-void cow_scan_stmts(LowerCtx &ctx, GirModule &gmod, Vector[Stmt] stmts):
+void cow_scan_stmts(LowerCtx &ctx, GirModule &gmod, Vector[Stmt] stmts, bool in_closure):
     for st in stmts:
         match st:
             case SVarDecl(_, _, init_e, _, _, _):
-                cow_scan_expr(&ctx, &gmod, init_e)
+                cow_scan_expr(&ctx, &gmod, init_e, in_closure)
             case SAssign(lhs_e, rhs_e):
                 # `x = …` reassigns x; `x[i] = …` / `x.f = …` mutates the
-                # base x. Mark the root identifier of the LHS path.
-                cow_mark_assign_target(&ctx, lhs_e)
-                cow_scan_expr(&ctx, &gmod, lhs_e)
-                cow_scan_expr(&ctx, &gmod, rhs_e)
+                # base x. Mark the root identifier of the LHS path at the
+                # LHS's textual position.
+                cow_mark_assign_target(&ctx, lhs_e, lhs_e.span.start, in_closure)
+                cow_scan_expr(&ctx, &gmod, lhs_e, in_closure)
+                cow_scan_expr(&ctx, &gmod, rhs_e, in_closure)
             case SCompoundAssign(lhs_e, _, rhs_e):
-                cow_mark_assign_target(&ctx, lhs_e)
-                cow_scan_expr(&ctx, &gmod, lhs_e)
-                cow_scan_expr(&ctx, &gmod, rhs_e)
+                cow_mark_assign_target(&ctx, lhs_e, lhs_e.span.start, in_closure)
+                cow_scan_expr(&ctx, &gmod, lhs_e, in_closure)
+                cow_scan_expr(&ctx, &gmod, rhs_e, in_closure)
             case SExpr(ex):
-                cow_scan_expr(&ctx, &gmod, ex)
+                cow_scan_expr(&ctx, &gmod, ex, in_closure)
             case SReturn(opt_e):
                 match opt_e:
                     case Some(re):
-                        cow_scan_expr(&ctx, &gmod, re)
+                        cow_scan_expr(&ctx, &gmod, re, in_closure)
                     case None:
                         pass
             case SThrow(te):
-                cow_scan_expr(&ctx, &gmod, te)
+                cow_scan_expr(&ctx, &gmod, te, in_closure)
             case SBreak(opt_be):
                 match opt_be:
                     case Some(be):
-                        cow_scan_expr(&ctx, &gmod, be)
+                        cow_scan_expr(&ctx, &gmod, be, in_closure)
                     case None:
                         pass
             case SWhile(cond_e, body_w):
-                cow_scan_expr(&ctx, &gmod, cond_e)
-                cow_scan_stmts(&ctx, &gmod, body_w)
+                cow_scan_expr(&ctx, &gmod, cond_e, in_closure)
+                cow_scan_stmts(&ctx, &gmod, body_w, in_closure)
             case SLoop(body_l):
-                cow_scan_stmts(&ctx, &gmod, body_l)
+                cow_scan_stmts(&ctx, &gmod, body_l, in_closure)
             case SFor(_, iter_e, body_f, _, else_f):
-                cow_scan_expr(&ctx, &gmod, iter_e)
-                cow_scan_stmts(&ctx, &gmod, body_f)
-                cow_scan_stmts(&ctx, &gmod, else_f)
+                cow_scan_expr(&ctx, &gmod, iter_e, in_closure)
+                cow_scan_stmts(&ctx, &gmod, body_f, in_closure)
+                cow_scan_stmts(&ctx, &gmod, else_f, in_closure)
             case SIf(cond_if, then_if, elses_if):
-                cow_scan_expr(&ctx, &gmod, cond_if)
-                cow_scan_stmts(&ctx, &gmod, then_if)
+                cow_scan_expr(&ctx, &gmod, cond_if, in_closure)
+                cow_scan_stmts(&ctx, &gmod, then_if, in_closure)
                 for eb_if in elses_if:
-                    cow_scan_stmts(&ctx, &gmod, eb_if.body)
+                    cow_scan_stmts(&ctx, &gmod, eb_if.body, in_closure)
             case SMatch(scrut_if, arms_if):
-                cow_scan_expr(&ctx, &gmod, scrut_if)
+                cow_scan_expr(&ctx, &gmod, scrut_if, in_closure)
                 for arm_if in arms_if:
                     match arm_if.guard:
                         case Some(gif):
-                            cow_scan_expr(&ctx, &gmod, gif)
+                            cow_scan_expr(&ctx, &gmod, gif, in_closure)
                         case None:
                             pass
-                    cow_scan_stmts(&ctx, &gmod, arm_if.body)
+                    cow_scan_stmts(&ctx, &gmod, arm_if.body, in_closure)
             case SWith(with_e, _, body_with):
-                cow_scan_expr(&ctx, &gmod, with_e)
-                cow_scan_stmts(&ctx, &gmod, body_with)
+                cow_scan_expr(&ctx, &gmod, with_e, in_closure)
+                cow_scan_stmts(&ctx, &gmod, body_with, in_closure)
             case SNamedScope(_, body_ns):
-                cow_scan_stmts(&ctx, &gmod, body_ns)
+                cow_scan_stmts(&ctx, &gmod, body_ns, in_closure)
             case SOnError(body_oe):
-                cow_scan_stmts(&ctx, &gmod, body_oe)
+                cow_scan_stmts(&ctx, &gmod, body_oe, in_closure)
             case SAssert(ae, _):
-                cow_scan_expr(&ctx, &gmod, ae)
+                cow_scan_expr(&ctx, &gmod, ae, in_closure)
             case SAssertReturn(are, _):
-                cow_scan_expr(&ctx, &gmod, are)
+                cow_scan_expr(&ctx, &gmod, are, in_closure)
             case SSnapshot(_, _, se):
-                cow_scan_expr(&ctx, &gmod, se)
+                cow_scan_expr(&ctx, &gmod, se, in_closure)
             case SSelect(sel_arms):
                 for sel_arm in sel_arms:
                     match sel_arm.op:
                         case SORecv(_, _, recv_e):
-                            cow_scan_expr(&ctx, &gmod, recv_e)
+                            cow_scan_expr(&ctx, &gmod, recv_e, in_closure)
                         case SOSend(send_ch, send_v):
-                            cow_scan_expr(&ctx, &gmod, send_ch)
-                            cow_scan_expr(&ctx, &gmod, send_v)
-                    cow_scan_stmts(&ctx, &gmod, sel_arm.body)
+                            cow_scan_expr(&ctx, &gmod, send_ch, in_closure)
+                            cow_scan_expr(&ctx, &gmod, send_v, in_closure)
+                    cow_scan_stmts(&ctx, &gmod, sel_arm.body, in_closure)
             else:
                 pass
 
 # Mark the root identifier of an assignment LHS as mutated. For a bare
 # `x` this is x; for `x[i]` / `x.f` / `x.f[i]` it walks down to the
 # root EIdentifier (the owning container is mutated through the path).
-void cow_mark_assign_target(LowerCtx &ctx, SpannedExpr lhs):
+void cow_mark_assign_target(LowerCtx &ctx, SpannedExpr lhs, int pos, bool in_closure):
     match lhs.expr:
         case EIdentifier(idn):
-            ctx.cow_mutated_names.put(idn, true)
+            cow_mark_name(&ctx, idn, pos, in_closure)
         case EIndex(base_box, _):
-            cow_mark_assign_target(&ctx, *base_box)
+            cow_mark_assign_target(&ctx, *base_box, pos, in_closure)
         case EFieldAccess(base_box, _):
-            cow_mark_assign_target(&ctx, *base_box)
+            cow_mark_assign_target(&ctx, *base_box, pos, in_closure)
         case EDeref(inner_box):
-            cow_mark_assign_target(&ctx, *inner_box)
+            cow_mark_assign_target(&ctx, *inner_box, pos, in_closure)
         else:
             pass
+
+# CoW tier-2 L1: is `name` PRISTINE for an alias bound at textual
+# position `pos`? True iff the name is never mutated, OR its mutations
+# are ALL strictly before `pos` (and none are closure-deferred). A
+# closure-captured-mutated name is NEVER pristine (property (d), checked
+# FIRST). This is the position-aware replacement for the whole-fn
+# `cow_mutated_names.contains(name)` check in the Branch C-pre flip gate.
+#
+# Soundness for a non-escaping re-binding `SVarDecl` bind rests on three
+# properties (re-derive if the bind shape or escape funnel changes):
+#   (a) forward — a mutation at/after `pos` (in the live window) has
+#       `max_span >= pos` ⇒ not pristine ⇒ no flip.
+#   (b) back-edge — a mutation textually BEFORE `pos` re-executes only
+#       AFTER the SVarDecl re-binds at the next iteration's top, so the
+#       previous-iteration alias is already DEAD (shadowed).
+#   (c) escape — a surviving previous-iteration alias is materialized by
+#       the decide_ptr_consume/OpClone escape funnel.
+#   (d) closure-deferred — a closure-body mutation runs at an unknown
+#       time, so the name is never pristine (the cow_closure_mutated set).
+bool cow_pristine_after(LowerCtx &ctx, String name, int pos):
+    if ctx.cow_closure_mutated.contains(name):
+        return false
+    if not ctx.cow_mutated_names.contains(name):
+        return true
+    int last = -1
+    if ctx.cow_mut_max_span.contains(name):
+        last = ctx.cow_mut_max_span.get(name).unwrap()
+    return last < pos
 
 # Run the forward-scan over a whole function body, populating
 # `ctx.cow_mutated_names`. Called once per function before the
 # statement-lowering loop.
 void compute_cow_scan(LowerCtx &ctx, GirModule &gmod, Vector[Stmt] body):
-    cow_scan_stmts(&ctx, &gmod, body)
+    cow_scan_stmts(&ctx, &gmod, body, false)
 
 # Peel the read-chain of a resource-bind init expression down to its
 # source-collection root identifier name. Handles `coll.get(i).unwrap()`,
@@ -1267,10 +1352,14 @@ enum SVarDeclEmission:
 # source-collection root identifier of the init expression (e.g. `v` for
 # `v.get(0).unwrap()`, `matrix` for `matrix[1]`; "" when the init has no
 # aliasable collection root). Both feed the substrate-(ii) resource-bind
-# borrow-flip in Branch C-pre: that flip fires only when NEITHER name is
-# in `ctx.cow_mutated_names` (the whole-fn forward-scan set). See
-# `compute_cow_scan`.
-SVarDeclEmission decide_svardecl_emission(LowerCtx &ctx, GirModule &gmod, int val, int var_type, String bound_name, String source_root):
+# borrow-flip in Branch C-pre. `bind_pos` is the init expression's
+# textual `span.start` — the position the alias is born at. CoW tier-2 L1
+# makes the flip POSITION-AWARE: it fires when neither the bound name nor
+# the source root is mutated *while the alias is live* — i.e. each is
+# `cow_pristine_after(bind_pos)` (never mutated, or last-mutated strictly
+# before the bind, and not closure-deferred). See `compute_cow_scan` /
+# `cow_pristine_after`.
+SVarDeclEmission decide_svardecl_emission(LowerCtx &ctx, GirModule &gmod, int val, int var_type, String bound_name, String source_root, int bind_pos):
     if val < 0 or val >= ctx.locals.len():
         return MoveDirect()
     GirLocal val_loc = ctx.locals.get(val).unwrap()
@@ -1444,7 +1533,14 @@ SVarDeclEmission decide_svardecl_emission(LowerCtx &ctx, GirModule &gmod, int va
                     # at the owning consume — so a read-only borrow is the only
                     # shape this flip ever leaves un-cloned. Mirrors Rust's
                     # CoW-default-borrow at a same-string-type bind.
-                    if source_root != "" and (not ctx.cow_mutated_names.contains(bound_name)) and (not ctx.cow_mutated_names.contains(source_root)):
+                    # CoW tier-2 L1: position-aware. The flip fires when
+                    # the bound name AND the source root are BOTH pristine
+                    # at the bind position — never mutated, or last-mutated
+                    # strictly before the bind (mut-before-bind / read-then-
+                    # dead), and never closure-deferred (property (d)). A
+                    # mutation while the alias is live (`max_span >= bind_pos`)
+                    # keeps tier-1's eager deref+clone.
+                    if source_root != "" and cow_pristine_after(&ctx, bound_name, bind_pos) and cow_pristine_after(&ctx, source_root, bind_pos):
                         return BorrowAlias()
                     return CloneAndMove(pointee_clone_fn)
             case GtMutPtr(inner_tid):
@@ -8600,7 +8696,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             # `v.get(0).unwrap()`) — feeds the substrate-(ii) resource-bind
             # borrow-flip gate in decide_svardecl_emission.
             String cow_src_root = cow_source_root_name(init_expr)
-            SVarDeclEmission plan = decide_svardecl_emission(&ctx, &gmod, val, var_type, name, cow_src_root)
+            SVarDeclEmission plan = decide_svardecl_emission(&ctx, &gmod, val, var_type, name, cow_src_root, init_expr.span.start)
             int var_local = 0
             match plan:
                 case BorrowAlias():
@@ -11813,7 +11909,9 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
     Vector[DropEmission] _de_queue = []
     Vector[Vector[Stmt]] _on_err_blocks = []
     Dict[String, bool] _cow_mut = {}
-    LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, !_named_locals, !_lc_stk, !_lb_stk, "", "", "", false, fdef.name.clone(), DropElaborator(!_de_scopes), !_de_queue, -1, !_on_err_blocks, false, !_cow_mut)
+    Dict[String, int] _cow_span = {}
+    Dict[String, bool] _cow_clo = {}
+    LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, !_named_locals, !_lc_stk, !_lb_stk, "", "", "", false, fdef.name.clone(), DropElaborator(!_de_scopes), !_de_queue, -1, !_on_err_blocks, false, !_cow_mut, !_cow_span, !_cow_clo)
 
     # Push the function-scope drop frame. Pop emits GIDropIfAlive for
     # every owned resource local registered during lowering (param or
@@ -12038,7 +12136,9 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
         Vector[DropEmission] _de_queue2 = []
         Vector[Vector[Stmt]] _on_err_blocks2 = []
         Dict[String, bool] _cow_mut2 = {}
-        LowerCtx ctx = LowerCtx([], [], [], 0, !_named_locals2, !_lc_stk2, !_lb_stk2, "", "", "", false, mangled.clone(), DropElaborator(!_de_scopes2), !_de_queue2, -1, !_on_err_blocks2, false, !_cow_mut2)
+        Dict[String, int] _cow_span2 = {}
+        Dict[String, bool] _cow_clo2 = {}
+        LowerCtx ctx = LowerCtx([], [], [], 0, !_named_locals2, !_lc_stk2, !_lb_stk2, "", "", "", false, mangled.clone(), DropElaborator(!_de_scopes2), !_de_queue2, -1, !_on_err_blocks2, false, !_cow_mut2, !_cow_span2, !_cow_clo2)
         # bb0
         Vector[Instruction] init_insts = []
         ctx.block_insts.push(!init_insts)
@@ -13341,7 +13441,9 @@ void lower_closure_body(String call_name, Vector[int] !abi_param_types, int self
     Vector[DropEmission] _cde_queue = []
     Vector[Vector[Stmt]] _con_err = []
     Dict[String, bool] _cow_mut_c = {}
-    LowerCtx cctx = LowerCtx([], !cblock_insts, !cblock_terms, 0, !_cnamed, !_clc, !_clb, "", "", "", false, call_name.clone(), DropElaborator(!_cde_scopes), !_cde_queue, ret_type, !_con_err, false, !_cow_mut_c)
+    Dict[String, int] _cow_span_c = {}
+    Dict[String, bool] _cow_clo_c = {}
+    LowerCtx cctx = LowerCtx([], !cblock_insts, !cblock_terms, 0, !_cnamed, !_clc, !_clb, "", "", "", false, call_name.clone(), DropElaborator(!_cde_scopes), !_cde_queue, ret_type, !_con_err, false, !_cow_mut_c, !_cow_span_c, !_cow_clo_c)
 
     push_drop_scope(&cctx.drop_elab, DSK_FUNCTION)
 
@@ -15444,7 +15546,9 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         Vector[DropEmission] _de_queue3 = []
                         Vector[Vector[Stmt]] _on_err_blocks3 = []
                         Dict[String, bool] _cow_mut3 = {}
-                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone(), DropElaborator(!_de_scopes3), !_de_queue3, -1, !_on_err_blocks3, false, !_cow_mut3)
+                        Dict[String, int] _cow_span3 = {}
+                        Dict[String, bool] _cow_clo3 = {}
+                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone(), DropElaborator(!_de_scopes3), !_de_queue3, -1, !_on_err_blocks3, false, !_cow_mut3, !_cow_span3, !_cow_clo3)
                         Vector[Instruction] tinit = []
                         tctx.block_insts.push(!tinit)
                         tctx.block_terms.push(GTNone())

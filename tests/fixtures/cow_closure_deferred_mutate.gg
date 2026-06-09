@@ -1,0 +1,37 @@
+# CoW tier-2 L1 PROPERTY-(d) regression witness — the soundness anchor.
+#
+# A closure `grow` CAPTURES the source collection `v` and MUTATES it
+# (`v.push`). The read-only bind `String s = v.get(0).unwrap()` comes
+# AFTER the closure def, then `grow()` is INVOKED three times AFTER the
+# bind, then `s` is READ.
+#
+# The closure-body mutation's textual span is BEFORE the bind, so a naive
+# position-aware gate (max_span < bind_pos) would WRONGLY borrow-flip the
+# bind even though the closure RUNS after it. Property (d) treats any
+# closure-captured-mutated name as NEVER pristine (`cow_closure_mutated`),
+# so the flip does NOT fire — `s` is an independent owned clone taken at the
+# bind. Output correct + ASan-clean.
+#
+# ⚠ HONESTY (output-review NIT 2026-06-09): under the self-host's CURRENT
+# by-value closure capture, `grow()` mutates a COPY — the outer `v` stays
+# len 2 (see the `2` in the expected output) — so a wrong flip would NOT
+# actually dangle here. This fixture therefore LOCKS IN correct output +
+# Rust-parity for the closure-deferred shape, but does NOT behaviorally
+# discriminate (d)-on from (d)-off at runtime. Property (d)'s code is still
+# sound, load-bearing DEFENSE: required for by-reference / shared-heap
+# capture and any future capture-semantics change. A stronger discriminating
+# witness would need by-reference capture (not yet a language form).
+#
+# Expected: `s` is the snapshot of v[0] taken at the bind ("first…"); the
+# three pushes do not perturb it; `v.len()` stays 2 (by-value capture).
+
+void main():
+    Vector[String] v = ["firstlonglonglonglongstring", "secondlonglonglongstring"]
+    auto grow = (): v.push("grownlonglonglonglonglongstring")
+    String s = v.get(0).unwrap()
+    grow()
+    grow()
+    grow()
+    print(s)
+    print(s.len())
+    print(v.len())

@@ -1,0 +1,24 @@
+# CoW tier-2 L1 witness: the source collection is mutated BEFORE a
+# read-only `String s = coll.get(i).unwrap()` element bind; the bind is
+# then only READ (never mutated, never escapes). The mutation's last
+# textual position is strictly BEFORE the bind, so the alias's live
+# window (bind → final read) contains NO mutation of `v` or `s`.
+#
+# Tier-1's whole-fn gate over-clones here (it sees `v` is mutated
+# *somewhere* and keeps the eager deref+clone). L1's position-aware gate
+# proves the mutation is outside the live window and BORROW-flips:
+# the `gorget_string_clone_to_owned` is recovered (1 → 0).
+#
+# At-parity caveat: the flip alone leaves a 6-byte materialized copy
+# un-dropped (ASan). Rust gg leaks the identical 6 bytes on this fixture
+# — so the flip-alone is AT PARITY with Rust, not a regression.
+# Expected stdout: the bound element after the pre-bind mutation.
+
+void main():
+    Vector[String] v = ["alpha", "beta"]
+    # MUTATION of the source, BEFORE the bind. Its span.start < the bind's.
+    v.push("gamma")
+    # READ-only bind: `s` aliases v[2]; never mutated, never escapes.
+    String s = v.get(2).unwrap()
+    print(s)
+    print(s.len())
