@@ -3597,7 +3597,13 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Vector[String] 
             String out = ""
             if dst2 >= 0:
                 out = v(dst2) + " = "
-            out = out + "((" + "void*" + "(*)(void*"
+            int cl_ret_ty = ret_ty
+            if cl_ret_ty == LT_I64 and dst2 >= 0 and val_types.contains(dst2):
+                cl_ret_ty = val_types.get(dst2).unwrap()
+            if dst2 < 0:
+                cl_ret_ty = LT_VOID
+            String cl_ret_c = c_type_name(cl_ret_ty, &sn)
+            out = out + "((" + cl_ret_c + "(*)(void*"
             int ai = 0
             while ai < cl_args.len():
                 out = out + ", void*"
