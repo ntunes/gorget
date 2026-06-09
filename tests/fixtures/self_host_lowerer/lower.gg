@@ -6102,12 +6102,21 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         String cl_call = "__callable_" + int_to_str(arity)
                         # Infer return type from the callable's type (function pointer return type)
                         int cl_ret_type = I64_TYPE
+                        # Set true ONLY when an FnPtr-signature arm below reads a
+                        # real return tid. When the callable's static type is the
+                        # ERASED `GorgetClosure` named struct (a mono'd adapter's
+                        # `F` field), NO FnPtr arm fires → `cl_ret_found` stays
+                        # false → the typed `expected_type` the WRITER set is read
+                        # through below. CLAUDE.md #2 (typed-metadata-read-through,
+                        # NOT mangled-name reconstruction).
+                        bool cl_ret_found = false
                         int callable_tid = ctx.locals.get(callable_local).unwrap().type_id
                         if callable_tid >= 0 and callable_tid < gmod.type_table.len():
                             GirType ct = gmod.type_table.get(callable_tid).unwrap()
                             match ct:
                                 case GtFnPtr(_, ret_tid):
                                     cl_ret_type = ret_tid
+                                    cl_ret_found = true
                                 case GtPtr(inner_tid):
                                     # Callable params are Ptr(FnPtr(...)) — unwrap
                                     if inner_tid >= 0 and inner_tid < gmod.type_table.len():
@@ -6115,6 +6124,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                                         match inner_ct:
                                             case GtFnPtr(_, ret_tid2):
                                                 cl_ret_type = ret_tid2
+                                                cl_ret_found = true
                                             else:
                                                 pass
                                 case GtMutPtr(inner_tid):
@@ -6123,10 +6133,25 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                                         match inner_ct:
                                             case GtFnPtr(_, ret_tid2):
                                                 cl_ret_type = ret_tid2
+                                                cl_ret_found = true
                                             else:
                                                 pass
                                 else:
                                     pass
+                        # Fallback: the callable is the erased `GorgetClosure`
+                        # struct (no FnPtr sig) — read the WRITER-set
+                        # `ctx.expected_type` (the result slot's real type, e.g.
+                        # `U`=GorgetString set at SReturn / the Some-payload arg
+                        # loop). GUARD pinned to `>= PRIM_COUNT` ONLY (NOT the
+                        # writer-idiom `!= I64 and != UNIT`): `expected_type` is
+                        # frequently `-1` (e.g. `lower_if` clears it before the
+                        # cond — the fixture's own `filter(is_even)` `if cb(x):`
+                        # hits this), and `-1 != I64 and -1 != UNIT` → true →
+                        # `cl_ret_type=-1` (INVALID tid). `>= PRIM_COUNT` rejects
+                        # -1, BOOL(0), F64(10); the defensive `< len()` bound
+                        # mirrors the FnPtr-arm checks above.
+                        if not cl_ret_found and ctx.expected_type >= PRIM_COUNT and ctx.expected_type < gmod.type_table.len():
+                            cl_ret_type = ctx.expected_type
                         int cl_dst = add_local(&ctx, cl_ret_type, NO_NAME)
                         emit(&ctx, GICallExtern(cl_dst, cl_call, cl_args))
                         return cl_dst
@@ -11362,6 +11387,22 @@ void lower_for_iterator(LowerCtx &ctx, SpannedPattern pat, int coll_local, Strin
     ctx.loop_break_stack.push(exit_bb)
     # Phase 2: Loop drop scope around the body.
     push_drop_scope(&ctx.drop_elab, DSK_LOOP)
+    # Register the OWNED `step_local` (the whole `Option[U]` returned by
+    # `next()`) for drop in THIS loop scope, so `pop_drop_scope` emits a
+    # per-iteration `GIDropIfAlive(step_local)` before the back-edge. This frees
+    # the Option WRAPPER's own payload (the String the adapter yielded): a
+    # resource-yielding adapter (`Option__GorgetString`) drops it each
+    # iteration; a primitive one (`Option__int64_t`) is a no-op. SELF-GATES via
+    # the typed `enum_category` channel in `is_droppable_type` — NO name match
+    # (CLAUDE.md #3 register-at-creation; #2 typed metadata). This is DISTINCT
+    # from the for-element binding `bound`: for a String/Closure (shallow-clone)
+    # payload, `emit_payload_read_mode` CLONES `step_local`'s payload into a
+    # SEPARATE owned allocation for the loop var `s` — that second allocation is
+    # registered+dropped at the `bind_for_local` producer (see there). Two
+    # distinct allocations, two distinct drops, no double-free. (For a DEEP-clone
+    # aggregate payload `emit_payload_read_mode` instead borrow-aliases, and
+    # `bind_for_local`'s registration self-skips that alias.)
+    register_local_for_drop(&ctx, step_local, opt_ret_tid, &gmod)
     switch_to(&ctx, body_bb)
     # CoW for-element: borrow alias (see lower_for_vector).
     int elem_local = emit_payload_read_mode(&ctx, scr_ptr, opt_type_name, "Some", 0, elem_tid, &gmod, true)
@@ -11452,6 +11493,21 @@ void bind_for_local(LowerCtx &ctx, SpannedPattern pat, int src_local, int tid, G
                 bind_kind = CkCallArgBorrow()
             emit(&ctx, GIAssign(bound, op_consume(&ctx, &gmod, src_local, bind_kind)))
             nl_put(&ctx, name, bound)
+            # Register the owned for-element binding for per-iteration drop
+            # (register-at-creation, CLAUDE.md #3). For SHALLOW-clone resource
+            # payloads (String/Closure) `emit_payload_read_mode` returns a FRESH
+            # OWNED clone (it elides the clone only for DEEP-clone aggregate
+            # payloads, lower.gg:9872) — so `src_local` is owned, `bound`
+            # inherits LoOwned, and the CkAssign above MOVES it in: an owned
+            # value that leaks per iteration unless dropped at the loop-scope
+            # back-edge (the `for name in Vector[String]` P3 leak, and the
+            # iterator-adapter target). SELF-GATES via `is_droppable_type`:
+            # borrow-alias for-elements (LoBorrowed/LoView — the deep-clone
+            # aggregate path) and primitive elements are skipped, so this is a
+            # no-op there (NO double-free: a borrow alias isn't owned; the
+            # collection/scrutinee whole-drop frees the real owner once).
+            # Mirrors Rust's `register_local` for the owned for-binding.
+            register_local_for_drop(&ctx, bound, tid, &gmod)
         case PWildcard:
             pass
         case PTuple(parts):
