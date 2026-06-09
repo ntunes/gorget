@@ -699,23 +699,52 @@ int register_ptr(GirModule &gmod, int inner):
 void record_option_ref_payload(GirModule &gmod, int option_tid, int ptr_tid):
     gmod.option_ref_payload.put(option_tid, ptr_tid)
 
+# Peel `GtPtr`/`GtMutPtr` wrappers off `tid`, returning the innermost
+# non-pointer id — the key the typed `enum_category` / `option_ref_payload`
+# channels are recorded under (`record_enum_category`/`record_option_ref_payload`
+# key on the BARE `lookup_or_register_named` id). The self-host Ptr-wraps `&`/`!`
+# params (`GtMutPtr`) and bare resource-payload params (`GtPtr`) at the
+# type-table level, and receivers/projections can be Ptr aliases too; Rust gg
+# models borrows via a SEPARATE ownership channel so its `enum_category(type_id)`
+# never peels, but the self-host's pointer-in-the-tid representation means the
+# faithful equivalent is to peel here. The three channel accessors call this so
+# a borrowed/projected/param alias still classifies as its pointee type. Layering
+# rule 3: the peel lives in ONE place, structurally unavoidable, not re-derived
+# at each reader (the call-site `peel`-then-read drift was the bug class this
+# closes). A pointer-to-Option IS an Option for the type-classification question.
+int peel_ptr_tid(GirModule &gmod, int tid):
+    if tid >= PRIM_COUNT and tid < gmod.type_table.len():
+        GirType gt = gmod.type_table.get(tid).unwrap()
+        match gt:
+            case GtPtr(inner):
+                return peel_ptr_tid(&gmod, inner)
+            case GtMutPtr(inner):
+                return peel_ptr_tid(&gmod, inner)
+            else:
+                pass
+    return tid
+
 # Returns the payload `GtPtr` id for an `Option__Ref__T` type id, or -1
 # if this Option is a plain value-payload Option (pop/remove/user enums).
+# Peels Ptr/MutPtr aliases first (see `peel_ptr_tid`).
 int option_ref_payload_of(GirModule &gmod, int option_tid):
-    if gmod.option_ref_payload.contains(option_tid):
-        return gmod.option_ref_payload.get(option_tid).unwrap()
+    int t = peel_ptr_tid(&gmod, option_tid)
+    if gmod.option_ref_payload.contains(t):
+        return gmod.option_ref_payload.get(t).unwrap()
     return -1
 
-# True iff `enum_tid` was recorded as a mono'd Option/Result on the typed
-# `enum_category` channel. The single membership accessor (Layering rule 3).
+# True iff `enum_tid` (Ptr/MutPtr-peeled) was recorded as a mono'd
+# Option/Result on the typed `enum_category` channel. The single membership
+# accessor (Layering rule 3).
 bool has_enum_category(GirModule &gmod, int enum_tid):
-    return gmod.enum_category.contains(enum_tid)
+    return gmod.enum_category.contains(peel_ptr_tid(&gmod, enum_tid))
 
-# The recorded `EnumCategory` for `enum_tid`, or a sentinel
+# The recorded `EnumCategory` for `enum_tid` (Ptr/MutPtr-peeled), or a sentinel
 # `EnumCategory(-1, -1, -1)` if none was recorded. Callers gate on
 # `has_enum_category` (or on `.category >= 0`) before trusting the
 # payloads. Single read accessor for the channel (Layering rule 3).
 EnumCategory enum_category_of(GirModule &gmod, int enum_tid):
-    if gmod.enum_category.contains(enum_tid):
-        return gmod.enum_category.get(enum_tid).unwrap()
+    int t = peel_ptr_tid(&gmod, enum_tid)
+    if gmod.enum_category.contains(t):
+        return gmod.enum_category.get(t).unwrap()
     return EnumCategory(-1, -1, -1)

@@ -6548,10 +6548,14 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 # pointee only at owning positions (§2 table).
                 int recv_type_id = ctx.locals.get(recv).unwrap().type_id
                 int ref_payload_tid = option_ref_payload_of(&gmod, recv_type_id)
-                if recv_tn.starts_with("Option__"):
+                # `enum_category_of` peels Ptr/MutPtr internally, so a raw
+                # `recv_type_id` that is a `GtPtr(Option__…)` (projected/borrowed
+                # recv) still classifies correctly.
+                EnumCategory recv_ec = enum_category_of(&gmod, recv_type_id)
+                if recv_ec.category == ENUM_CAT_OPTION:
                     variant_name = "Some"
                     inner_name_str = recv_tn.slice(8, recv_tn.len())
-                elif recv_tn.starts_with("Result__"):
+                elif recv_ec.category == ENUM_CAT_RESULT:
                     variant_name = "Ok"
                     # Ok type: longest-prefix scan for first `__` splits
                     # Result__<OkT>__<ErrT>.
@@ -7363,8 +7367,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # which the SVarDecl/SAssign Assign handler may rewrite
             # downstream if it sees a typed dst slot.
             if ctx.expected_type >= 0 and ctx.expected_type < gmod.type_table.len():
-                String et_name_nl = type_id_to_name(ctx.expected_type, &gmod)
-                if et_name_nl.starts_with("Option__") and not et_name_nl.starts_with("Option__Ref__"):
+                if enum_category_of(&gmod, ctx.expected_type).category == ENUM_CAT_OPTION and option_ref_payload_of(&gmod, ctx.expected_type) < 0:
                     int ndst_nl = add_local(&ctx, ctx.expected_type, NO_NAME)
                     Vector[Operand] none_args_nl = []
                     emit(&ctx, GICallExtern(ndst_nl, "None", none_args_nl))
@@ -8339,8 +8342,12 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
             # through this same loop, so struct/enum-field ctors are covered.
             bool arg_param_is_result = false
             if ai < callee_param_types.len():
-                String arg_pt_name = type_id_to_name(callee_param_types.get(ai).unwrap(), &gmod)
-                arg_param_is_result = arg_pt_name.starts_with("Result__")
+                # `callee_param_types` wraps `&`/`!` params in GtMutPtr and bare
+                # by-value resource-payload Result params in GtPtr (see
+                # `lower_function`); `enum_category_of` peels internally, so a
+                # borrowed/by-ptr Result param still classifies as a Result and
+                # `maybe_auto_propagate` is correctly skipped.
+                arg_param_is_result = enum_category_of(&gmod, callee_param_types.get(ai).unwrap()).category == ENUM_CAT_RESULT
             if not arg_param_is_result:
                 arg_local = maybe_auto_propagate(&ctx, arg_local, &gmod)
             if ai == 0 and arg_local >= 0 and arg_local < ctx.locals.len():
@@ -8403,9 +8410,13 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         if (fname == "Ok" or fname == "Error" or fname == "Some" or fname == "None") and ctx.expected_type >= 0:
             int et = ctx.expected_type
             if et < gmod.type_table.len():
-                String et_name = type_id_to_name(et, &gmod)
-                bool et_is_option = et_name.starts_with("Option__") and not et_name.starts_with("Option__Ref__")
-                bool et_is_result = et_name.starts_with("Result__")
+                # `enum_category_of`/`option_ref_payload_of` peel Ptr/MutPtr
+                # internally, so `et` (possibly a borrowed/param `GtPtr(Result__…)`)
+                # classifies correctly while staying raw for the dst-slot
+                # `add_local`/`ret_type` uses below, which want the real type.
+                EnumCategory et_ec = enum_category_of(&gmod, et)
+                bool et_is_option = et_ec.category == ENUM_CAT_OPTION and option_ref_payload_of(&gmod, et) < 0
+                bool et_is_result = et_ec.category == ENUM_CAT_RESULT
                 bool variant_matches_option = (fname == "Some" or fname == "None") and et_is_option
                 bool variant_matches_result = (fname == "Ok" or fname == "Error") and et_is_result
                 if variant_matches_option or variant_matches_result:
@@ -8618,8 +8629,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             # (`int v = might()` unwraps; `Result[int,E] r = might()` keeps the
             # raw Result so the user can match/destructure it). Skip when the
             # declared destination type IS a Result__ (don't unwrap into it).
-            String decl_pre_name = type_id_to_name(declared_ty_pre, &gmod)
-            if not decl_pre_name.starts_with("Result__"):
+            if not (enum_category_of(&gmod, declared_ty_pre).category == ENUM_CAT_RESULT):
                 val = maybe_auto_propagate(&ctx, val, &gmod)
             # closure Phase 2 Step A: record `<fn>\0<varname>` →
             # `__Closure_<cid>` when the init is a closure, so the re-pointed
@@ -8960,9 +8970,11 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     # silently drops the value. The bare `Ok` variant name
                     # routes through the LIR `try_lower_prelude_variant`
                     # rewrite (same substrate as `lower_throw_stmt`'s Error).
-                    String ret_place_tn = type_id_to_name(ret_place_ty_pre, &gmod)
-                    String ret_val_tn = type_id_to_name(ctx.locals.get(val).unwrap().type_id, &gmod)
-                    if ret_place_tn.starts_with("Result__") and not ret_val_tn.starts_with("Result__"):
+                    # `enum_category_of` peels Ptr/MutPtr internally (a borrowed
+                    # `return r` gives `val` a `GtPtr(Result__…)` tid; the channel
+                    # is keyed on the bare Result GIR id) so a borrowed Result is
+                    # still seen as a Result and not double-wrapped.
+                    if enum_category_of(&gmod, ret_place_ty_pre).category == ENUM_CAT_RESULT and not (enum_category_of(&gmod, ctx.locals.get(val).unwrap().type_id).category == ENUM_CAT_RESULT):
                         int ok_dst = add_local(&ctx, ret_place_ty_pre, NO_NAME)
                         Vector[Operand] ok_args = [op_consume(&ctx, &gmod, val, CkCallArgOwning())]
                         emit(&ctx, GICallExtern(ok_dst, "Ok", ok_args))
@@ -9662,7 +9674,7 @@ String match_enum_type(String type_name, GirModule &gmod):
     # "main" as TkKeyword — the `else:` branch of the Option match was
     # never reached). Return the type_name itself for these; paired with
     # match_variant_index's hardcoded Some/None/Ok/Error indices below.
-    if type_name.starts_with("Option__") or type_name.starts_with("Result__"):
+    if has_enum_category(&gmod, gmod.named_types.get(type_name).unwrap_or(-1)):
         return type_name
     return ""
 
@@ -9675,13 +9687,13 @@ int match_variant_index(String enum_name, String variant_name, GirModule &gmod):
     # (`Option`) — the latter is the synthetic name used by
     # `lower_ctor_pattern`'s last-resort fallback when the scrutinee's
     # type couldn't be recovered.
-    if enum_name == "Option" or enum_name.starts_with("Option__"):
+    if enum_name == "Option" or enum_category_of(&gmod, gmod.named_types.get(enum_name).unwrap_or(-1)).category == ENUM_CAT_OPTION:
         if variant_name == "Some":
             return 0
         if variant_name == "None":
             return 1
         return -1
-    if enum_name == "Result" or enum_name.starts_with("Result__"):
+    if enum_name == "Result" or enum_category_of(&gmod, gmod.named_types.get(enum_name).unwrap_or(-1)).category == ENUM_CAT_RESULT:
         if variant_name == "Ok":
             return 0
         if variant_name == "Error":
@@ -10154,7 +10166,7 @@ void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vecto
                 else:
                     pass
             String scr_type_name = type_id_to_name(peeled_tid, &gmod)
-            if scr_type_name.starts_with("Option__") or scr_type_name.starts_with("Result__"):
+            if has_enum_category(&gmod, peeled_tid):
                 effective_enum = scr_type_name
     # Last-resort prelude fallback: when the scrutinee's type was lost
     # entirely (`auto` binding mis-typed to I64, generic-context T not
@@ -10444,7 +10456,7 @@ void lower_throw_stmt(LowerCtx &ctx, SpannedExpr expr, GirModule &gmod):
     # (the return place), exactly as SReturn reads it (`:6018`).
     int result_type = ctx.locals.get(0).unwrap().type_id
     String result_tn = type_id_to_name(result_type, &gmod)
-    if not result_tn.starts_with("Result__"):
+    if not (enum_category_of(&gmod, result_type).category == ENUM_CAT_RESULT):
         lower_fail("throw in non-throws function (ret type not Result__): " + result_tn)
         return
     # Expected-type so the bare `Error` ctor below types its dst to the
@@ -10622,18 +10634,19 @@ int maybe_auto_propagate(LowerCtx &ctx, int val, GirModule &gmod):
     # rely on gate 1/2 below (this check is a no-op when expected_type is -1
     # or non-Result).
     if ctx.expected_type >= 0 and ctx.expected_type < gmod.type_table.len():
-        String et_name = type_id_to_name(ctx.expected_type, &gmod)
-        if et_name.starts_with("Result__"):
+        if enum_category_of(&gmod, ctx.expected_type).category == ENUM_CAT_RESULT:
             return val
     int val_tid = ctx.locals.get(val).unwrap().type_id
     String result_tn = type_id_to_name(val_tid, &gmod)
-    # Gate 1: val must be a Result.
-    if not result_tn.starts_with("Result__"):
+    # Gate 1: val must be a Result. `enum_category_of` peels Ptr/MutPtr
+    # internally, so a borrowed/resource-param Result local (`GtPtr(Result__…)`)
+    # classifies correctly — exactly as `result_payload_types` peels this same
+    # `val_tid` below at the payload split.
+    if not (enum_category_of(&gmod, val_tid).category == ENUM_CAT_RESULT):
         return val
     # Gate 2: the enclosing fn must itself be `throws` (local 0 = Result).
     int fn_result_type = ctx.locals.get(0).unwrap().type_id
-    String fn_result_tn = type_id_to_name(fn_result_type, &gmod)
-    if not fn_result_tn.starts_with("Result__"):
+    if not (enum_category_of(&gmod, fn_result_type).category == ENUM_CAT_RESULT):
         return val
     # Split the consumed Result's payload types.
     ResultPayloadTypes pt = result_payload_types(val_tid, &gmod)
@@ -11453,7 +11466,7 @@ void lower_for_iterator(LowerCtx &ctx, SpannedPattern pat, int coll_local, Strin
         return
     int opt_ret_tid = gmod.fn_sigs.get(next_fn).unwrap()
     String opt_type_name = type_id_to_name(opt_ret_tid, &gmod)
-    if not opt_type_name.starts_with("Option__"):
+    if not (enum_category_of(&gmod, opt_ret_tid).category == ENUM_CAT_OPTION):
         lower_fail("SFor: " + next_fn + " return type isn't Option__T (got " + opt_type_name + ")")
         return
     String elem_name = opt_type_name.slice(8, opt_type_name.len())

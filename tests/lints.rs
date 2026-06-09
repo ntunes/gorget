@@ -716,8 +716,17 @@ fn no_growth_in_self_host_name_prefix_routing() {
 /// **As you migrate:** LOWER `BUDGET` toward 0 in the same commit that retires sites.
 #[test]
 fn no_growth_in_self_host_prelude_optionlike_routing() {
-    // Floor as of 2026-06-09: 37 (Result__ 21 + Option__ 16). Migration target: 0.
-    const BUDGET: usize = 37;
+    // Floor as of 2026-06-09: 17, after the Phase-1 enum_category migration
+    // (37 -> 17) retired the 20 output-neutral sites — the 16 non-drop-path
+    // Class-A classification gates + the 2 Class-C `match_variant_index`
+    // `starts_with` halves (the `== "Option"`/`== "Result"` synthetic-name
+    // equalities stay) + the 2 Class-B `match_enum_type` occurrences. The 17
+    // remaining are the later-phase / irreducible cohort: the DROP-PATH/ASan
+    // sites (lir 476/957/961/1021/1068, lower 8983/9747 `try_lift_option_ref`),
+    // Class D (writer `record_field_enum_category` + the `diag_bug` miss-gates),
+    // and Class E payload readers (TODO 177-179). Migration target: floor 5
+    // (Class D) until TODO-178 upstream typed-field registration; 0 thereafter.
+    const BUDGET: usize = 17;
 
     let count = count_name_prefix_sites_self_host(PRELUDE_OPTIONLIKE_PREFIXES);
     assert!(
