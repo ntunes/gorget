@@ -1231,18 +1231,21 @@ String cow_source_root_name(SpannedExpr e):
 #     track this yet. Conservative direction: allow Branch C to
 #     fire (alias instead of clone). If correctness issues surface
 #     we can defer to Branch D's clone fallback.
-#   • Branch C does NOT retype dst's slot to Ptr(T). Rust retypes
-#     and `set_ref` so the LIR backend takes a SlotAddr at the
-#     assignment. Self-host's `OpBorrow → ISlotLoad` shape would
-#     load the 32-byte resource VALUE into an 8-byte LT_PTR slot —
-#     either truncating bytes or hitting the `lir_codegen.gg:2611`
-#     "ptr slot ← aggregate value → assign NULL" coercion. Until
-#     a `GIBorrow` instruction (or per-assign SlotAddr dispatch) is
-#     wired in lir_lower, Branch C stays at the value-typed slot;
-#     the LoBorrowed ownership tag carries the borrow-semantic. The
-#     byte-aliasing works because both slots hold the same value
-#     representation, and `register_local_for_drop` is skipped for
-#     the alias (drop discipline preserved).
+#   • Branch C DOES retype dst's slot to Ptr(T) — shipped D.1
+#     (2026-05-22, see the emission code ~100 lines down at the
+#     BorrowAlias arm `:8608`): `register_ptr(var_type)` retypes the
+#     dst slot, and the per-assign SlotAddr dispatch is wired in
+#     `lir_lower.gg` GIAssign (`:2876` — OpBorrow + Ptr-typed-dst +
+#     value-typed-src → ISlotAddr, not ISlotLoad). This is the Rust
+#     `set_ref` analogue; downstream Ptr-slot consumers (GIFieldLoad
+#     auto-deref, GICall/GICallExtern pass-by-ptr, OpClone short-
+#     circuit) handle the Ptr shape. ⚠ HISTORICAL (pre-D.1, B.1):
+#     this used to stay value-typed (OpBorrow → ISlotLoad would load
+#     the 32-byte resource VALUE into an 8-byte LT_PTR slot). That is
+#     NO LONGER TRUE — do not reintroduce the value-typed-slot
+#     framing (it mis-scoped a 2026-06-09 borrow-ABI brief + mis-led
+#     the CoW tier-2 scout; the real tier-2 blocker is the GAP-B1
+#     VALUE-POSITION consume val_size mismatch, NOT the slot-retype).
 #
 # Why `add_local_inheriting` stays. Phase 3's intermediate-temp
 # binding helper (lower.gg:~435) is for sites that bind FROM a
