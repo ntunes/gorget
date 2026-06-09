@@ -399,6 +399,44 @@ fn cow_after_stmt(
                 future.extend(branch);
             }
         }
+        Stmt::Loop { body } => {
+            cow_after_block(&body.stmts, future, result, fn_param_ownerships, interner);
+        }
+        // Block-bearing scope forms: a mutating method / reassignment inside a
+        // `with` / `unsafe` / named-scope / bare block body is still a forward
+        // mutation w.r.t. statements BEFORE the block. Omitting these left every
+        // such mutation invisible to the prescan — a CoW element borrow taken
+        // before a `with`-block that mutates its source collection would dangle
+        // (the in-block `cow_before_mutation` materialise doesn't survive the
+        // block's save/restore boundary, so the eager-clone at var-decl is the
+        // correct severance — and it only fires when `is_source_mut_unsafe_at`
+        // sees the `@mut:` marker recorded here).
+        Stmt::With { bindings, body } => {
+            cow_after_block(&body.stmts, future, result, fn_param_ownerships, interner);
+            for b in bindings {
+                cow_after_expr_moves(&b.expr.node, future, fn_param_ownerships, interner);
+            }
+        }
+        Stmt::Unsafe { body } | Stmt::NamedScope { body, .. } | Stmt::OnError { body } => {
+            cow_after_block(&body.stmts, future, result, fn_param_ownerships, interner);
+        }
+        // `select` multiplexes over channel ops; each arm body (and the optional
+        // `else` arm) can mutate a source collection just like a `match` arm.
+        // Treating select as a union of its arm bodies keeps the prescan honest
+        // (mirrors the `Match` arm above; `SelectArm { op, body: Block, .. }`).
+        Stmt::Select { arms, else_arm } => {
+            let saved = future.clone();
+            for arm in arms {
+                let mut branch = saved.clone();
+                cow_after_block(&arm.body.stmts, &mut branch, result, fn_param_ownerships, interner);
+                future.extend(branch);
+            }
+            if let Some(eb) = else_arm {
+                let mut branch = saved;
+                cow_after_block(&eb.stmts, &mut branch, result, fn_param_ownerships, interner);
+                future.extend(branch);
+            }
+        }
         _ => {}
     }
 }

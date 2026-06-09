@@ -2683,6 +2683,33 @@ impl<'a> LoweringContext<'a> {
             self.cow_materialize_alias(builder, local, source, span);
         }
 
+        // Case 1b: local is ITSELF a CollectionElement / FieldPath borrow being
+        // mutated in place (e.g. `Vector[int] x = coll.get(0).unwrap(); x.bump(99)`).
+        // Mutating `x` directly aliases into the collection's buffer; value
+        // semantics requires materialising `x` into an independent owned copy
+        // first, so the mutation lands in `x`'s own buffer (and the source
+        // collection is left untouched). Case 3 only severs when the COLLECTION
+        // is mutated — this is the symmetric "the element ref is the thing being
+        // mutated" case, which was previously unhandled (Case 1 matches only
+        // `Alias`). `cow_materialize_collection_ref` clones the pointee and
+        // rebinds the name; the mutating-method caller re-resolves the receiver
+        // afterwards (exprs/methods.rs).
+        let is_element_borrow = {
+            use crate::ir::{LocalOwnership, BorrowOrigin};
+            let idx = local.0 as usize;
+            idx < builder.locals.len()
+                && matches!(
+                    &builder.locals[idx].ownership,
+                    LocalOwnership::Borrowed {
+                        origin: BorrowOrigin::CollectionElement(_) | BorrowOrigin::FieldPath(_),
+                        ..
+                    }
+                )
+        };
+        if is_element_borrow {
+            self.cow_materialize_collection_ref(builder, local, span);
+        }
+
         // Case 2: local is a source with aliases → clone into each alias
         let aliases = self.cow_aliases_of(builder, local);
         if !aliases.is_empty() {

@@ -237,6 +237,13 @@ The cases it severs:
 
 - **bare Ptr param** → clone to owned in place (Case at `context.rs:2665`);
 - **local is an alias** → clone the source into the local (`Case 1`);
+- **local is itself an element/field borrow being mutated in place** →
+  materialize it into an independent owned copy first, so the mutation lands in
+  the local's own buffer and the source collection/struct is left untouched
+  (`Case 1b`, via `cow_materialize_collection_ref`). Symmetric to `Case 3`
+  (which severs when the *collection* is mutated) — this is the "the element ref
+  is the thing being mutated" direction, e.g. `x.bump()` on a
+  `T x = coll.get(i).unwrap()` bind;
 - **local is a source with aliases** → clone into each alias (`Case 2`);
 - **local is a collection with element refs** → materialize each ref
   (`Case 3`, via `cow_materialize_collection_ref`);

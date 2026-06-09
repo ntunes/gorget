@@ -655,3 +655,102 @@ fn no_growth_in_self_host_name_prefix_routing() {
         MANGLED_PREFIXES.iter().take(3).copied().collect::<Vec<_>>().join("|"),
     );
 }
+
+/// Every RUNTIME (post-meta-expansion) block-bearing `Stmt` variant. The CoW
+/// reassignment prescan `cow_after_stmt` (src/ir/lowering/functions.rs) MUST
+/// recurse into each of these bodies — a source-mutation inside a block that is
+/// invisible to the prescan reintroduces the element-borrow dangling bug
+/// (`docs/devbook/11-copy-on-write.md` §"Mutation severs the alias"). `Meta*`
+/// forms are intentionally excluded: they are evaluated and removed before GIR
+/// lowering (`src/ir/lowering/stmts/mod.rs:331-337` — they emit nothing if they
+/// survive), so they never reach the prescan's statement stream.
+///
+/// Keep this list in sync with the block-bearing variants of `enum Stmt`
+/// (`src/parser/ast.rs`). The companion lint below fails if any of these is
+/// dropped to the `_ => {}` arm.
+const COW_PRESCAN_BLOCK_BEARING_STMTS: &[&str] = &[
+    "OnError", "For", "While", "Loop", "If", "Match", "Select", "With",
+    "Unsafe", "NamedScope",
+];
+
+/// Extract the source of `fn cow_after_stmt` from functions.rs (brace-depth
+/// scoped, comment lines skipped) so we only inspect that match.
+fn cow_after_stmt_source() -> String {
+    let content = match fs::read_to_string("src/ir/lowering/functions.rs") {
+        Ok(s) => s,
+        Err(_) => return String::new(),
+    };
+    let mut out = String::new();
+    let mut in_fn = false;
+    let mut depth = 0i32;
+    let mut seen_open = false;
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if !in_fn {
+            if trimmed.starts_with("fn cow_after_stmt(") {
+                in_fn = true;
+                seen_open = false;
+                depth = 0;
+            } else {
+                continue;
+            }
+        }
+        out.push_str(line);
+        out.push('\n');
+        if !trimmed.starts_with("//") {
+            depth += line.matches('{').count() as i32;
+            depth -= line.matches('}').count() as i32;
+        }
+        if depth > 0 {
+            seen_open = true;
+        }
+        if seen_open && depth <= 0 {
+            break;
+        }
+    }
+    out
+}
+
+/// Ratchet: `cow_after_stmt` must have a non-`_` arm for every runtime
+/// block-bearing `Stmt` variant. A new block-bearing variant that falls through
+/// to `_ => {}` is invisible to the CoW reassignment prescan — a source
+/// collection mutated inside its body would dangle a live element borrow taken
+/// before it (CLAUDE.md #4 "one fix, all siblings"; the latent hole that left
+/// `Loop`/`With`/`Unsafe`/`NamedScope`/`Select`/`OnError` unhandled).
+///
+/// **If this fails:** you added a block-bearing `Stmt` variant. Add an arm to
+/// `cow_after_stmt` that recurses into its body/bodies via `cow_after_block`
+/// (mirror the `With`/`Match`/`Select` arms), then add the variant name to
+/// `COW_PRESCAN_BLOCK_BEARING_STMTS`. Do NOT just silence the lint — the recurse
+/// is load-bearing for value-semantics correctness.
+#[test]
+fn cow_after_stmt_covers_block_bearing_variants() {
+    let src = cow_after_stmt_source();
+    assert!(
+        !src.is_empty(),
+        "could not locate `fn cow_after_stmt` in src/ir/lowering/functions.rs — \
+         did it move or get renamed? Update cow_after_stmt_source().",
+    );
+    let mut missing = Vec::new();
+    for variant in COW_PRESCAN_BLOCK_BEARING_STMTS {
+        // An arm matches the variant if the body references `Stmt::Variant`
+        // (the match patterns are `Stmt::Loop { .. }`, `Stmt::With { .. }`,
+        // combined `A | B`, etc.). A bare `_ => {}` does not.
+        let pat = format!("Stmt::{variant}");
+        if !src.contains(&pat) {
+            missing.push(*variant);
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "`cow_after_stmt` (src/ir/lowering/functions.rs) is missing arms for \
+         block-bearing Stmt variant(s): {missing:?}.\n\n\
+         These fell through to `_ => {{}}`, so a source-collection mutation inside \
+         such a block body is invisible to the CoW reassignment prescan — a live \
+         element borrow taken before it would dangle (docs/devbook/11-copy-on-write.md \
+         §\"Mutation severs the alias\"; CLAUDE.md #4).\n\n\
+         Add an arm recursing into the body via `cow_after_block` (mirror the \
+         With/Match/Select arms). If you instead REMOVED a variant from `enum Stmt`, \
+         drop it from COW_PRESCAN_BLOCK_BEARING_STMTS in this file.",
+    );
+}

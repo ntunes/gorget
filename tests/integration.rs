@@ -20986,6 +20986,35 @@ done",
     );
 }
 
+/// CoW Dir-A: a `T x = coll.get(i).unwrap()` element-bind is an independent
+/// owned value; mutating `x` in place must NOT touch the source collection
+/// (Case 1b in cow_before_mutation, src/ir/lowering/context.rs). Pre-fix this
+/// printed `3\n2` (the bump leaked into coll[0] and missed x).
+#[test]
+fn cow_element_borrow_alias_mutate() {
+    run_gg(
+        "cow_element_borrow_alias_mutate.gg",
+        "\
+2
+3",
+    );
+}
+
+/// CoW Dir-B: a `String s = coll.get(i).unwrap()` element borrow taken before a
+/// `with`-block that mutates its source must observe the pre-mutation snapshot,
+/// not a dangling pointer into the realloc'd buffer (Stmt::With arm in
+/// cow_after_stmt, src/ir/lowering/functions.rs). Pre-fix `s` dangled across the
+/// fill/push realloc (garbage / wrong length).
+#[test]
+fn cow_element_borrow_source_mutate_with() {
+    run_gg(
+        "cow_element_borrow_source_mutate_with.gg",
+        "\
+alphalonglonglongstring
+23",
+    );
+}
+
 #[test]
 fn cow_param_alias_reassign() {
     run_gg(

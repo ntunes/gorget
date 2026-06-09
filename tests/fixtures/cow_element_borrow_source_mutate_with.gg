@@ -1,0 +1,25 @@
+# CoW Dir-B regression: a `String s = coll.get(i).unwrap()` element borrow taken
+# BEFORE a block (`with`) whose body mutates the source collection must observe
+# the snapshot from before the mutation, not a dangling pointer into a realloc'd
+# buffer. Before the `cow_after_stmt` Stmt::With arm (src/ir/lowering/functions.rs),
+# the in-block `coll.fill(...)`/`coll.push(...)` source-mutation was invisible to
+# the reassignment prescan, so the eager-clone severance at the var-decl never
+# fired and `s` dangled across the realloc.
+# Spec: docs/devbook/11-copy-on-write.md §"Mutation severs the alias".
+# Expected: s == "alphalonglonglongstring" (snapshot), s.len() == 23.
+
+struct Res:
+    int id
+
+equip Res with Drop:
+    void drop(!self):
+        pass
+
+void main():
+    Vector[String] coll = ["alphalonglonglongstring", "betalonglonglongstring"]
+    String s = coll.get(0).unwrap()
+    with Res(1) as r:
+        coll.fill(4, "mutatedlonglonglonglonglonglonglonglonglongstringhere")
+        coll.push("addedlonglonglonglonglonglonglonglonglonglongstringhere")
+    print(s)
+    print(s.len())

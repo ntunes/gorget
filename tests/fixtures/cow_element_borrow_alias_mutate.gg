@@ -1,0 +1,18 @@
+# CoW Dir-A regression: a `T x = coll.get(i).unwrap()` element-bind is an
+# independent owned value; mutating `x` IN PLACE (via a mutating method) must
+# NOT touch the source collection's buffer. Before the Case 1b fix in
+# `cow_before_mutation` (src/ir/lowering/context.rs), `x` aliased into the
+# collection's backing store, so `x.bump(99)` corrupted `coll[0]` too.
+# Spec: docs/devbook/11-copy-on-write.md §"Mutation severs the alias".
+# Expected: coll[0].len() == 2 (untouched), x.len() == 3 (got the push).
+
+equip [T] Vector[T]:
+    void bump(&self, T v):
+        self.push(v)
+
+void main():
+    Vector[Vector[int]] coll = [[1, 2], [3, 4]]
+    Vector[int] x = coll.get(0).unwrap()
+    x.bump(99)
+    print(coll.get(0).unwrap().len())
+    print(x.len())
