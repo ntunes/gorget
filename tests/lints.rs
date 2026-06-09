@@ -48,15 +48,27 @@ fn count_name_prefix_sites() -> usize {
     count_name_prefix_in_tree("src", "rs")
 }
 
-/// Walk `tests/fixtures/self_host_*/**/*.gg` and count the same pattern in
-/// self-host source. Phase A migrated self-host's classification consumers
+/// The prelude option-like enums. Name-prefix matches on these (`Option__` /
+/// `Result__`) decide enum MEANING from the mangled name — the typed channel
+/// that should answer "is this Option/Result" is `gir.gg`'s `EnumCategory`
+/// (`record_enum_category` writer + `enum_category_of` / `has_enum_category`
+/// accessors, mirroring Rust's `EnumKind` / `enum_category(type_id)`). The
+/// channel already EXISTS; the remaining sites just never adopted it. They are
+/// ratcheted SEPARATELY from the Phase-A classification-routing class (below)
+/// as a BURN-DOWN toward 0 — see `no_growth_in_self_host_prelude_optionlike_routing`.
+const PRELUDE_OPTIONLIKE_PREFIXES: &[&str] = &["Option", "Result"];
+
+/// Walk `tests/fixtures/self_host_*/**/*.gg` and count `starts_with("X__")` for
+/// each `X` in `prefixes`. Phase A migrated self-host's classification consumers
 /// to read through `build_resource_metadata` (the single source of truth);
 /// this ratchet locks in those gains so a regression is caught at lint time.
+/// Parameterized so the Phase-A class and the prelude option-like class can be
+/// ratcheted independently (different migration targets, different channels).
 ///
 /// See `docs/devbook/26-self-host-frontend.md` §3.3 step 4 (the
 /// "promote" step) and §6.1 (Tier E.1 lints ratchet).
-fn count_name_prefix_sites_self_host() -> usize {
-    let alternation = MANGLED_PREFIXES.join("|");
+fn count_name_prefix_sites_self_host(prefixes: &[&str]) -> usize {
+    let alternation = prefixes.join("|");
     let pattern = regex::Regex::new(
         &format!(r#"starts_with\("({alternation})__"\)"#)
     ).unwrap();
@@ -464,7 +476,18 @@ fn no_growth_in_phase_d_proxy_reads() {
     /// the 2026-05-12/13 self-host modernization sweep (CoW-by-
     /// default + EnumFieldLoad fixes + for-each migrations).
     /// Locking in the new floor; not investigated, low priority.
-    const BUDGET: usize = 78;
+    /// Bumped 78 → 82 (2026-06-09): four proxy reads in ONE cohesive
+    /// write-side guard added by `360c8bd8` ("drop owning temporaries
+    /// passed to bare value params"): `!is_named_local && is_owned_local
+    /// && !drops.is_registered && !drops.is_moved` — the "this place is an
+    /// unnamed, owned temp not already registered/moved → drop it" guard.
+    /// The `is_named_local`/`is_owned_local` halves COULD route through
+    /// `Local.ownership`, but the `drops.is_registered`/`drops.is_moved`
+    /// halves are DROP-ACCOUNTANT state (not `LocalOwnership`) and have no
+    /// typed-accessor equivalent — same write-side-discipline class as the
+    /// 64→70→77 bumps. Not migratable without first making the drop
+    /// accountant queryable off `Local`. Locking in the floor.
+    const BUDGET: usize = 82;
 
     let count = count_phase_d_proxy_reads();
     assert!(
@@ -633,11 +656,27 @@ fn container_literal_arms_count() {
 /// the old prefix list silently undercounted. Bringing them in
 /// brings the ratchet's scope in line with the actual self-host
 /// dispatch surface.
+///
+/// **Scope (2026-06-09):** this ratchet now covers ONLY the Phase-A
+/// classification-routing class (Vector/Dict/Set/Box/handles/...). The prelude
+/// option-like prefixes (`Option__` / `Result__`) are ratcheted separately as a
+/// BURN-DOWN by `no_growth_in_self_host_prelude_optionlike_routing` — they have
+/// a distinct typed channel (`EnumCategory`) and a migration target of 0, so
+/// folding them into one budget here would (a) hide Phase-A regressions under
+/// the prelude headroom and (b) wrongly bless name-matched enum-meaning as a
+/// permanent floor. Splitting keeps THIS class pinned at its true floor.
 #[test]
 fn no_growth_in_self_host_name_prefix_routing() {
     const BUDGET: usize = 69;
 
-    let count = count_name_prefix_sites_self_host();
+    // Phase-A classification-routing class only: all MANGLED_PREFIXES EXCEPT
+    // the prelude option-like ones (those are the sibling lint's burn-down).
+    let nonprelude: Vec<&str> = MANGLED_PREFIXES
+        .iter()
+        .copied()
+        .filter(|p| !PRELUDE_OPTIONLIKE_PREFIXES.contains(p))
+        .collect();
+    let count = count_name_prefix_sites_self_host(&nonprelude);
     assert!(
         count <= BUDGET,
         "Self-host name-prefix routing count grew beyond budget: {count} > {BUDGET}.\n\n\
@@ -653,6 +692,43 @@ fn no_growth_in_self_host_name_prefix_routing() {
          To find sites:\n  \
          grep -rnE --include='*.gg' 'starts_with(\"({}|...)__\")' tests/fixtures/self_host_*",
         MANGLED_PREFIXES.iter().take(3).copied().collect::<Vec<_>>().join("|"),
+    );
+}
+
+/// BURN-DOWN ratchet (target: **0**) for the prelude option-like name-matches
+/// (`starts_with("Option__")` / `starts_with("Result__")`) in self-host code.
+///
+/// These decide enum MEANING ("is this Option/Result?") from the mangled name —
+/// the CLAUDE.md rule-#2 anti-pattern. The reference-grade fix already has a home:
+/// the self-host carries a TYPED `EnumCategory` channel on `GirModule`
+/// (`gir.gg`: `record_enum_category` single-writer + `enum_category_of` /
+/// `has_enum_category` accessors), mirroring Rust's `EnumKind` /
+/// `TypeRegistry::enum_category(type_id)`. The channel EXISTS; these sites just
+/// never adopted it. Migrating each `name.starts_with("Option__")` →
+/// `enum_category_of(&gmod, tid).category == CAT_OPTION` (where a type-id is in
+/// hand) or a single name→category registrar (where only a name is) drives this
+/// to ~0. Genuine name-PARSING (extracting the payload `T` from `Option__T`)
+/// should read the structured `EnumCategory` payload fields, not substring the
+/// mangled name. Tracked as a migration task in `TODO.md`.
+///
+/// **If this fails (count went UP):** you added a new `Option__`/`Result__`
+/// name-match instead of reading `enum_category`. Don't bump — read the channel.
+/// **As you migrate:** LOWER `BUDGET` toward 0 in the same commit that retires sites.
+#[test]
+fn no_growth_in_self_host_prelude_optionlike_routing() {
+    // Floor as of 2026-06-09: 37 (Result__ 21 + Option__ 16). Migration target: 0.
+    const BUDGET: usize = 37;
+
+    let count = count_name_prefix_sites_self_host(PRELUDE_OPTIONLIKE_PREFIXES);
+    assert!(
+        count <= BUDGET,
+        "Self-host prelude option-like name-prefix routing grew beyond budget: {count} > {BUDGET}.\n\n\
+         A new `starts_with(\"Option__\")` / `starts_with(\"Result__\")` was added. This decides \
+         enum MEANING from the mangled name (CLAUDE.md rule #2). Read the TYPED channel instead:\n  \
+         `enum_category_of(&gmod, tid)` / `has_enum_category(&gmod, tid)` (gir.gg) — mirrors \
+         Rust's `enum_category(type_id)`. If you only have a name, route it through a single \
+         name->category registrar (the blessed source), not an inline prefix test.\n\n\
+         This is a BURN-DOWN ratchet (target 0). Do NOT bump it — migrate the site.",
     );
 }
 
