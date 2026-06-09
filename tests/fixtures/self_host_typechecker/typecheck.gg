@@ -1174,6 +1174,17 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
             type_check_stmts(body, scope_id, &scopes, &types, &ctx)
 
         case SExpr(sexpr):
+            # Lazy-iterator bare-form method-targ recording (sibling of the
+            # SVarDecl arm, caf102fd): a bare terminal call as a STATEMENT
+            # (`v.iter().for_each(f)`) is never inferred top-down —
+            # `walk_expr_closures` only infers the RECEIVER of an EMethodCall,
+            # not the outer call — so the method-targs side-table stays empty
+            # and the lowerer emits a CALLED-but-never-DEFINED bare symbol
+            # (`VectorIter__int64_t__for_each` etc.). Record them WITHOUT
+            # perturbing `expr_types` (snapshot/restored inside the helper),
+            # mirroring the explicitly-typed SVarDecl arm. (Sibling-site drift:
+            # caf102fd wired this into SVarDecl only.)
+            record_method_targs_preserving_expr_types(sexpr, &scopes, &types, &ctx)
             walk_expr_closures(sexpr, scope_id, &scopes, &types, &ctx)
 
         case SAssign(target, value):
