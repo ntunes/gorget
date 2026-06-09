@@ -3485,7 +3485,14 @@ bool all_return_nominals_registered(SpannedType stype, GirModule &gmod):
             # name with no args is handled above; with args (impossible for a
             # bound param) we still recurse below.
             String mangled = mangle_type_name(name, args, &gmod)
-            if not gmod.type_infos.contains(mangled):
+            # Read the name->tid registry (`named_types`), NOT `type_infos`:
+            # prelude `Option__T`/`Result__T__E` monos land in `named_types`
+            # (via `lookup_or_register_named`) but have no struct/enum body in
+            # `type_infos`, so a `type_infos` check spuriously drops every
+            # terminal returning `Option[T]`/`Result[T,E]` (`min`/`max`/`last`/
+            # `nth`/`find`). Faithful mirror of Rust `all_return_nominals_
+            # registered` (`src/ir/lowering/functions.rs:81`: `lookup_named`).
+            if not gmod.named_types.contains(mangled):
                 return false
             for a in args:
                 if not all_return_nominals_registered(a, &gmod):
