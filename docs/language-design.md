@@ -24,6 +24,17 @@ Long-term objectives grouped by pillar. These targets and anti-targets guide eve
 | Stale-condition warnings when shared data crosses suspension points | Silent memory corruption from undefined behavior |
 | Distinct newtype / semantic types (UserId ≠ int at compile time) | C-style pointer arithmetic accessible without explicit opt-in |
 
+### Performance
+
+| Design Targets | Explicitly Avoid |
+|---|---|
+| Safety is the constraint, speed is the objective function — every optimization must be a semantic REFINEMENT, with eager-copy correctness as the always-available fallback | Buying performance by weakening an invariant — no "fast mode" that reintroduces memory unsafety or UB |
+| Value semantics at hand-optimal cost — CoW + liveness + lazy materialization make the compiler place the minimal clone set, as if the user had written every copy by hand | Making the user pay for speed with annotations, visible lifetimes, or unsafe escape hatches on the default path |
+| Runtime safety backstops (bounds checks, cap-driven frees) removed only by per-site compiler PROOF of unreachability | Globally disabling safety checks as an optimization flag |
+| Performance claims measured as EXECUTED behavior (operation counts, peak RSS, wall-clock) on real programs | Static estimates or proxy counters standing in for measured results |
+| Every aliasing/copy-elision optimization ships WITH its executable guard and behavioral oracle (dual-compiler output diffing, fixture batteries, enumeration lints) | Optimizations whose safety argument lives only in prose or in someone's memory |
+| Zero-cost where provable, cheap where not, never unsafe | Undefined behavior as a performance technique |
+
 ### Type System
 
 | Design Targets | Explicitly Avoid |
