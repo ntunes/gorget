@@ -23076,3 +23076,53 @@ fn witness_never_emitted_c_clone_shape() {
     let _ = std::fs::remove_file(&gg_path);
     let _ = std::fs::remove_dir(&work_dir);
 }
+
+// ── #37 Phase 2 (self-host lazy CoW, provenance-direct) — W1: the F1
+// scan-soundness probes ───────────────────────────────────────────────
+//
+// The parser discards `&`/`!` sigils on call args (parser.gg
+// skip_ownership_markers), so the self-host CoW scan recovers arg-mutation
+// facts from the TYPED callee signature maps (fn_borrow_params /
+// fn_move_params), redirect-resolved for imported callees. These probes are
+// Rust-oracle (both compilers agree on eager semantics for this shape).
+
+#[test]
+fn mutarg_probe() {
+    run_gg("mutarg_probe.gg", "s = alpha\nv0 = mutated");
+}
+
+#[test]
+fn mutarg_import_probe() {
+    run_gg_dir("mutarg_import_probe", "main.gg", "s = alpha\nv0 = mutated");
+}
+
+/// The p1-R2 regression net proper: the SELF-HOST route on the two-module
+/// shape. The loader registers the imported `poke` under its MANGLED name,
+/// so the scan only finds the `&`-param signature after resolving
+/// `call_redirects` — a Rust-route test can never regress on this.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn mutarg_import_probe_self_host() {
+    if skip_under_llvm() {
+        return;
+    }
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let fixture = manifest_dir.join("tests/fixtures/mutarg_import_probe/main.gg");
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_mutarg_import_probe_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+    match self_host_emit_cc_run(
+        &driver_exe, &lib_dir, &runtime_dir, &fixture, &tmp_root, "shroute",
+    ) {
+        Ok(stdout) => assert_eq!(
+            stdout, "s = alpha\nv0 = mutated",
+            "self-host output mismatch on the imported-&-arg shape"
+        ),
+        Err(outcome) => panic!("self-host emit/cc/run failed: {outcome:?}"),
+    }
+}

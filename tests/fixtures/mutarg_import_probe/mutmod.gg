@@ -1,0 +1,6 @@
+# Imported module for the F1 redirect-resolution probe: `poke` is
+# registered by the loader under its MANGLED name (mod_prefix + name),
+# so the caller's CoW scan only finds its `&`-param signature after
+# resolving call_redirects (the p1-R2 shape).
+void poke(Vector[String] &v):
+    v.set(0, "mutated")

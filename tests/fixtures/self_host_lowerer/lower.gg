@@ -783,6 +783,50 @@ bool method_mutates_receiver(SpannedExpr recv, String mname, GirModule &gmod):
     # (3) CONSERVATIVE DEFAULT: unknown ⇒ assume mutating (safe over-clone).
     return true
 
+# ── call_arg_lets_callee_mutate — typed `&`/`!`-arg signature read ───
+#
+# Does the `arg_idx`-th parameter of callee `fname` let the callee
+# MUTATE (or consume/drop) the caller's argument? True iff the param is
+# declared `&T` (fn_borrow_params) or `!T` (fn_move_params). The parser
+# DISCARDS `&`/`!` sigils on call arguments (parser.gg
+# skip_ownership_markers in parse_call_args) — the AST carries no
+# EMutableBorrow/EMove wrapper at a call-arg position — so the callee's
+# TYPED signature maps are the only sound source of this invariant.
+# Mirrors Rust's prescan `&`-arg / `!`-move handling
+# (src/ir/lowering/functions.rs, compute_cow_reassigned_after).
+#
+# `fname` must already be redirect-resolved: the self-host loader
+# MANGLES imported fn names (loader.gg, mod_prefix + name), keying the
+# signature maps by the mangled name while the AST callee is bare —
+# callers mirror lower_call's resolution order (redirects first).
+bool call_arg_lets_callee_mutate(GirModule &gmod, String fname, int arg_idx):
+    if gmod.fn_borrow_params.contains(fname):
+        Vector[bool] cab_flags = gmod.fn_borrow_params.get(fname).unwrap()
+        if arg_idx >= 0 and arg_idx < cab_flags.len() and cab_flags.get(arg_idx).unwrap():
+            return true
+    if gmod.fn_move_params.contains(fname):
+        Vector[bool] cam_flags = gmod.fn_move_params.get(fname).unwrap()
+        if arg_idx >= 0 and arg_idx < cam_flags.len() and cam_flags.get(arg_idx).unwrap():
+            return true
+    return false
+
+# Sibling of `method_mutates_receiver` for NON-receiver method args:
+# does the `arg_idx`-th (0-based, self excluded) argument of
+# `recv.mname(...)` reach a `&T`/`!T` callee param? Resolves the
+# receiver type to the same short `Type__mname` key the populate
+# pre-pass writes (lower.gg, the fn_borrow_params section) and reads
+# param index `arg_idx + 1` (index 0 is self). Builtin collection
+# methods never appear under this key — their owning val args CLONE
+# from (never mutate) the argument, so a miss is the correct `false`.
+bool method_arg_lets_callee_mutate(SpannedExpr recv, String mname, int arg_idx, GirModule &gmod):
+    int marg_recv_tid = lookup_expr_gir_type(recv, &gmod)
+    if marg_recv_tid < 0:
+        return false
+    String marg_recv_tname = type_id_to_name(marg_recv_tid, &gmod)
+    if marg_recv_tname.len() == 0:
+        return false
+    return call_arg_lets_callee_mutate(&gmod, marg_recv_tname + "__" + mname, arg_idx + 1)
+
 void emit(LowerCtx &ctx, Instruction inst):
     ctx.block_insts.get(ctx.current_block).unwrap().push(inst)
 

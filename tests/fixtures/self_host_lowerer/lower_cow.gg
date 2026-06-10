@@ -15,7 +15,7 @@
 from std.collections import Vector, Dict
 from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch, EquipBlock, StructDef, EnumDef, EnumVariant, Type, MatchArm
 from gir import GirModule, GirFunction, GirLocal
-from lower import LowerCtx, method_mutates_receiver
+from lower import LowerCtx, method_mutates_receiver, call_arg_lets_callee_mutate, method_arg_lets_callee_mutate
 
 # ── CoW resource-bind forward-scan (substrate ii) ───────────────────
 #
@@ -108,8 +108,20 @@ void cow_scan_expr(LowerCtx &ctx, GirModule &gmod, SpannedExpr e, bool in_closur
             if method_mutates_receiver(*recv_box, mname, &gmod):
                 cow_mark_if_ident(&ctx, *recv_box, e.span.start, in_closure)
             cow_scan_expr(&ctx, &gmod, *recv_box, in_closure)
+            # F1 soundness (method half): the parser DISCARDS `&`/`!`
+            # sigils on call args (parser.gg skip_ownership_markers), so
+            # the EMutableBorrow/EMove arms below are dead code at arg
+            # positions — `w.helper(&v)` mutations were invisible to this
+            # scan. Recover the lost invariant from the callee's TYPED
+            # signature (method_arg_lets_callee_mutate; `Type__mname`
+            # key, param index ai+1). Mirrors Rust's prescan sig-arg
+            # handling (functions.rs, compute_cow_reassigned_after).
+            int scan_mai = 0
             for ma in margs:
+                if method_arg_lets_callee_mutate(*recv_box, mname, scan_mai, &gmod):
+                    cow_mark_if_ident(&ctx, ma, ma.span.start, in_closure)
                 cow_scan_expr(&ctx, &gmod, ma, in_closure)
+                scan_mai = scan_mai + 1
         case EMutableBorrow(inner_box):
             cow_mark_if_ident(&ctx, *inner_box, e.span.start, in_closure)
             cow_scan_expr(&ctx, &gmod, *inner_box, in_closure)
@@ -118,6 +130,33 @@ void cow_scan_expr(LowerCtx &ctx, GirModule &gmod, SpannedExpr e, bool in_closur
             cow_scan_expr(&ctx, &gmod, *inner_box, in_closure)
         case ECall(callee_box, cargs, _):
             cow_scan_expr(&ctx, &gmod, *callee_box, in_closure)
+            # F1 soundness (free-call half): the parser DISCARDS `&`/`!`
+            # sigils on call args (parser.gg skip_ownership_markers), so
+            # `f(&v)` / `f(!v)` mutations were invisible to this scan —
+            # the bind gate mis-flipped BorrowAlias on mutated-via-call
+            # collections (RUN-proven: mutarg_probe printed the mutated
+            # element through a flipped alias). Recover the lost
+            # invariant from the TYPED callee signature maps. The callee
+            # name must be redirect-resolved FIRST: the loader registers
+            # imported fns under mod-prefixed MANGLED names (loader.gg),
+            # keying fn_borrow_params/fn_move_params by the mangled name
+            # while the AST callee is bare — mirror lower_call's
+            # resolution order. (Explicit-targ generic callees mangle
+            # before the redirect in lower_call; the scan keys the bare
+            # name only — a miss stays `false`, i.e. detection is purely
+            # additive. Rust's prescan has the same raw-name shape.)
+            match (*callee_box).expr:
+                case EIdentifier(scan_fname):
+                    String scan_resolved = scan_fname
+                    if gmod.call_redirects.contains(scan_resolved):
+                        scan_resolved = gmod.call_redirects.get(scan_resolved).unwrap()
+                    int scan_ai = 0
+                    for ca_sig in cargs:
+                        if call_arg_lets_callee_mutate(&gmod, scan_resolved, scan_ai):
+                            cow_mark_if_ident(&ctx, ca_sig, ca_sig.span.start, in_closure)
+                        scan_ai = scan_ai + 1
+                else:
+                    pass
             for ca in cargs:
                 cow_scan_expr(&ctx, &gmod, ca, in_closure)
         case EBinaryOp(lhs_box, _, rhs_box):

@@ -1,0 +1,16 @@
+# F1 soundness probe (the #37 Phase-2 scout's repro shape): `poke(&v)`
+# mutates the source collection through a `&` call arg. The parser drops
+# the `&` sigil on call args (skip_ownership_markers), so a CoW scan that
+# only walks EMutableBorrow nodes never sees this mutation — the bind
+# gate would mis-flip `s` to a borrow alias into v[0] and the set() would
+# overwrite it. Signature-driven scan detection (fn_borrow_params) keeps
+# the bind an eager clone: s must print the PRE-mutation value.
+void poke(Vector[String] &v):
+    v.set(0, "mutated")
+
+void main():
+    Vector[String] v = ["alpha", "beta"]
+    String s = v.get(0).unwrap()
+    poke(&v)
+    print(f"s = {s}")
+    print(f"v0 = {v.get(0).unwrap()}")

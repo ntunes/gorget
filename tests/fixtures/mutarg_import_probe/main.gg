@@ -1,0 +1,13 @@
+# F1 soundness probe, TWO-MODULE variant (p1-R2): the imported `poke`'s
+# `&`-param signature lives in fn_borrow_params under the loader-MANGLED
+# name while the AST callee is bare — the scan must resolve
+# call_redirects first or the mutation stays invisible and `s` aliases
+# the overwritten element. Expected: s prints the PRE-mutation value.
+from mutmod import poke
+
+void main():
+    Vector[String] c = ["alpha", "beta"]
+    String s = c.get(0).unwrap()
+    poke(&c)
+    print(f"s = {s}")
+    print(f"v0 = {c.get(0).unwrap()}")

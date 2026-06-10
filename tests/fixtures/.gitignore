@@ -13,6 +13,8 @@
 !fstring_cross_module/**
 !imported_call_arg_type_check/
 !imported_call_arg_type_check/**
+!mutarg_import_probe/
+!mutarg_import_probe/*.gg
 !imported_nonexhaustive_match/
 !imported_nonexhaustive_match/**
 !imported_body_type_error/
