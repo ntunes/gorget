@@ -1,8 +1,16 @@
 # BRIEF — Chain A: executable guard for the lazy-CoW view-producer enumeration
 
-Status: v1 (orchestrator draft from scout report 2026-06-10; scout worktree
-`agent-ae71cddc8f9c3e894`, all inventories regenerated at tip `f5cd6aad`,
-code tip `1e55511b`).
+Status: v2 (pass-1 review folded 2026-06-10: `GORGET_SLIT` name fix [R1]; W1
+adjustment (v) added — fn-def scanner resets attribution on unparsed col-0
+signature starts so brace-on-next-line defs go loud-unattributed instead of
+silently mis-attributing [R2, the real drift-route hole]; GIR-axis wording
+14=12+2 [R3]; arm-b message history claim corrected [R4]; backend-emit callee
+rewrites added to the honest-residual list [R5]; lint-3 lower-the-budget clause
+[footnote b]; W1 (iv) resolved — `regex` is a regular dependency, lints.rs:72
+already uses it. Pass 1 independently recounted ALL inventories (14/12/2×1/41/
+7/14/34 — exact) and re-ran the prototype + all FIVE drift simulations green/
+red as documented. v1 was the orchestrator draft from scout
+`agent-ae71cddc8f9c3e894`; inventories regenerated at tip `f5cd6aad`.)
 
 ## Mission
 
@@ -31,7 +39,8 @@ baselines at execution time)
 - **The grep-rule BYPASS (scout finding #2):** `gorget_string_borrow_view`
   (`runtime_string.c:236-239`) manufactures the cap=0 header via a DIRECT
   struct literal, not via `gorget_str_view_region` — invisible to the devbook
-  grep. Benign direct literals: `GORGET_EMPTY_STR` :56, `GORGET_STR_LIT` :61,
+  grep. Benign direct literals: `GORGET_EMPTY_STR` :56, the `GORGET_SLIT`
+  macro body :61 (defined :60 — NOT "GORGET_STR_LIT"; pass-1 verified),
   `replacen` locals (extended :556/:564), `find_from` local (:665) — total
   direct-manufacture baseline **7** (incl. the view_region definition itself
   and borrow_view). Lint 3 fences this route.
@@ -44,8 +53,9 @@ baselines at execution time)
   `sig_fresh(` (a view tagged fresh lets `is_fresh_string` elide needed clone
   guards → dangling alias). All 14 producers verified `sig(` today
   (runtime.rs:283-355).
-- **GIR axis:** 14 `returns_view: true` decls (`builtins.rs:720-744`) route to
-  callees ∈ the producer set (+2 `None` for the `str`/`as_str` identity copy).
+- **GIR axis:** 14 `returns_view: true` decls TOTAL (`builtins.rs:720-744`):
+  12 route to callees ∈ the producer set, 2 are `None` (the `str`/`as_str`
+  identity header copy).
 - **LIR-rewrite mention baseline: 41** (run-verified): 14 registry decl lines +
   6 `RuntimeFn::` variant refs in the arity-overload rewrite (runtime.rs:702-704,
   view→view) + 14 type-table mentions (`lir/types.rs:487,:498-506`) + 3
@@ -58,8 +68,14 @@ baselines at execution time)
   commented-out calls correctly ignored.
 - **Honest residual (stays prose in devbook/11):** dynamically-constructed
   callee names; passes that move/duplicate an existing view call breaking hook
-  dominance (semantic, not greppable); same-commit budget-slot reuse. The
-  ratchet converts "silent" into "loud" for the textual ~90%.
+  dominance (semantic, not greppable); same-commit budget-slot reuse;
+  **backend-emit-layer callee rewrites (`src/backend`)** — name-level view
+  substitutions exist there today (`llvm/mod.rs:1595/:5653`,
+  `c_lir/emit_call_extern.rs:164`, `backend/mod.rs:288`, all view→view) and a
+  NEW backend rewrite targeting a view callee spells no `view_region` and is
+  outside lint 2's `src/lir` root (extending the root would add ~10+ noisy
+  LLVM arity-rewrite baseline mentions — deliberately not fenced; pass-1 R5).
+  The ratchet converts "silent" into "loud" for the textual ~90%.
 
 ## The work
 
@@ -85,8 +101,19 @@ the tree moved; (ii) tighten the cap=0 regex to be field-ORDER-INDEPENDENT
 #2); (iii) verify arm (d)'s `returns_view` decl regex against the REAL current
 format of `builtins.rs:720-744` (the scout ran it green, but confirm the
 capture groups match the live decl shape and fail closed on unparseable
-lines); (iv) confirm `regex` is already a dev-dependency used by lints (if
-not, prefer plain string scanning over adding a dependency).
+lines); (iv) RESOLVED by pass 1 — `regex` is a regular `[dependencies]` entry
+(Cargo.toml:19) and `lints.rs:72` already uses it, nothing to do; (v) [pass-1
+R2 — the real drift-route hole] in `runtime_c_view_region_callers`, RESET
+`current_fn = String::new()` on any column-0 alpha-start line that contains
+`(` but fails the def regex and is not a `;`-terminated declaration:
+brace-on-next-line / multi-line C signatures exist in the scanned corpus
+(`tls_server_runtime.c:13-17`), and without the reset a NEW producer written
+in that style directly after an existing producer would silently
+mis-attribute its calls into the expected set; with the reset they go
+`<unattributed>` → loud. Harmless on the current corpus (statements are
+indented; the only col-0 alpha non-def lines are multi-line signature
+starts). (vi) [pass-1 footnote b] add the "if the count went DOWN, lower
+BUDGET" clause to lint 3's failure message for sibling consistency.
 
 ### W2 — make the docs point at the guard
 - `docs/devbook/11-copy-on-write.md` §view-producer enumeration rule: add that
@@ -139,7 +166,7 @@ fixed_point needed)
   (the ASan-blindness warning included).
 
 ## Appendix B — the scout's run-proven prototype source (verbatim; executor
-applies W1 adjustments (i)-(iv) on top; insert before
+applies W1 adjustments (i)-(vi) on top; insert before
 `cow_after_stmt_covers_block_bearing_variants` in `tests/lints.rs`)
 
 ```rust
@@ -370,7 +397,8 @@ fn str_view_producer_enumeration_is_closed() {
          A new emitter writes a view-manufacturing call into generated C — that is a \
          new view producer (the W3d `gorget_str_codepoint_at` class: synthetic callees \
          never appear in the runtime .c, which is exactly how the route was missed \
-         twice pre-#37). Cover its GIR producer with a materialize hook, add the \
+         pre-#37 — the enumeration rule needed two corrections in total). Cover \
+         its GIR producer with a materialize hook, add the \
          producer row to STR_VIEW_PRODUCERS, and update VIEW_REGION_RS_EMITTERS + \
          devbook/11. Comment-line citations don't count — only live emit lines.",
     );
@@ -519,7 +547,7 @@ fn no_growth_in_lir_view_callee_rewrites() {
 ///
 /// Baseline 2026-06-10: 7 —
 ///   runtime_string.c:56  GORGET_EMPTY_STR (static, .rodata, never freed)
-///   runtime_string.c:61  GORGET_STR_LIT macro (static literal views)
+///   runtime_string.c:61  GORGET_SLIT macro body (static literal views)
 ///   runtime_string.c:238 gorget_string_borrow_view (blessed producer, W3a)
 ///   runtime_string.c:744 gorget_str_view_region itself (THE blessed constructor)
 ///   runtime_string_extended.c:556/:564 replacen locals (ephemeral, bytes
