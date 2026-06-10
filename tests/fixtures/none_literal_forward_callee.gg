@@ -2,8 +2,10 @@
 # callee (caller textually BEFORE the callee, single module). The self-host
 # lowerer's `get_fn_param_types` scans only already-lowered `gmod.functions`,
 # so the expected-type lookup misses and the bare `None` lowers to a zeroed
-# `(Option__T){0}` — tag 0 reads as Some → silent miscompile (self-host
-# prints 0 where Rust prints 7). Rust gg registers fn sigs in a typed
+# `(Option__T){0}` — tag 0 reads as Some → miscompile (OBSERVED through the
+# self-host runtime_diff: mis-runs/CRASHes on this shape; the scout's earlier
+# minimal variant printed 0 — same zeroed-tag class. Rust prints 7 — correct).
+# Rust gg registers fn sigs in a typed
 # pre-pass (`src/ir/lowering/functions.rs:659-669`), so lowering order does
 # not matter there. Expected output below is the CORRECT (Rust) behavior;
 # the self-host gap is tracked in TODO.md ("param-type pre-pass" fix).

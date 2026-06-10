@@ -22817,7 +22817,8 @@ fn none_literal_at_call_arg_resource() {
 
 // Latent silent-None class: bare `None` to a NOT-YET-LOWERED callee (caller
 // textually before callee, single module). Correct under Rust gg (asserted
-// here); the self-host still miscompiles it (prints 0 — tag-0 Some), so it
+// here); the self-host still miscompiles it (tag-0 Some; observed via
+// runtime_diff as a mis-run/CRASH on this shape), so it
 // is deliberately NOT snapshotted. TODO.md tracks the "param-type pre-pass"
 // fix mirroring Rust's typed fn-sig registration (functions.rs:659-669).
 #[test]
