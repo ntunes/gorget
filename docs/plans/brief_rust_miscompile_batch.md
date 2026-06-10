@@ -1,9 +1,21 @@
 # BRIEF — Chain C: Rust-side miscompile burn-down (6 fixes + 1 retirement)
 
-Status: v1 (orchestrator draft from scout report 2026-06-10; scout worktree
-`agent-a0663aa9d5dc19f5e` at tip `6894cb6a`; every repro freshly run there;
-repros under the scout's `/tmp/scoutC/` are EPHEMERAL — the fixture shapes
-below are the durable record).
+Status: v2 (pass-1 review folded 2026-06-10: item-1 fixtures MUST use the
+`v.get(i).unwrap()` bind shape [R1]; item-6 ICE hardening cites BOTH sibling
+fall-through loops [R2]; item-6 scope includes the §7.9 language-reference
+amendment — the spec currently lists String among mutable-borrow subscripts,
+contradicting the new error [R3]; per-commit `GG_BACKEND=llvm` fixture runs
+added to gates [R4]; item-2 widening is CALLER-side in `lower_static_decl`
+(the predicate is type-blind) with `synthesize_static_init_fn` reuse making
+the DCE warning auto-satisfied [R5]; item-3 producer suppress must be
+BRANCH-C-SPECIFIC, never keyed on AssignMode::Borrow generally — Branch A
+also returns Borrow with a load-bearing trailing assign [R6]. Pass 1
+RUN-PROVED items 1, 2, 3(b), 5 end-to-end, EMPIRICALLY confirmed the item-1
+landing-order warning (prescan-arm-alone = UAF garbage), and confirmed the
+cast-name class is real (`int8(3)`/`byte(65)`/`float32(2)` all
+check-pass+link-fail). v1.1 locked the OWNER decision: str(x) = rejection
+(b). v1 was the orchestrator draft from scout `agent-a0663aa9d5dc19f5e` at
+tip `6894cb6a`.)
 
 ## Mission
 
@@ -66,6 +78,10 @@ one validator-panic class (5), two accepted-but-meaningless-surface holes
 - FIXTURES (each expecting `alpha`): `cow_move_bind_element_borrow.gg`,
   `cow_move_reassign_element_borrow.gg`, `cow_move_clear_element_borrow.gg`,
   `cow_move_realloc_element_borrow.gg` (the SIGSEGV witness).
+  ⚠ [p1-R1] the element bind MUST be the `v.get(i).unwrap()` shape — `v[i]`
+  binds take a different, ALREADY-SAFE path at tip (run-verified: all four
+  shapes print `alpha` pre-fix with `v[i]`), so `v[i]` fixtures would be
+  green-before-fix nets guarding nothing.
 - This fix REMOVES the basis for Chain B's move-shape oracle exception —
   note in the handoff (Chain B's EMove fixtures can be snapshotted in a
   follow-up once both land; do NOT touch Chain B's zone).
@@ -88,8 +104,12 @@ one validator-panic class (5), two accepted-but-meaningless-surface holes
   extraction (FieldPtr(1)+load) into the pointer slot → deref of payload as
   pointer → SIGSEGV.
 - FIX (both layers, producer primary per devbook/24): (a) suppress the
-  redundant trailing assign when Branch C fired (same mechanism as the
-  `lazy_handled` skip at `stmts/mod.rs:944`); (b) consumer hardening: in
+  redundant trailing assign when Branch C fired — ⚠ [p1-R6] the suppress
+  must be BRANCH-C-SPECIFIC (a flag set in that arm, same mechanism as the
+  `lazy_handled` skip at `stmts/mod.rs:944`), NEVER keyed on
+  `AssignMode::Borrow` generally: Branch A (`stmts/mod.rs:1240-1247`,
+  SharedHeap string aliasing) also returns Borrow mode and its trailing
+  assign IS load-bearing; (b) consumer hardening: in
   `try_enum_payload_extract`, bail when `mode == AssignMode::Borrow` (the
   caller has `mode` in scope — typed metadata currently ignored) AND unwrap
   `Ptr(inner)` in the dst comparison. If nervous, (b) lands first; both
@@ -104,12 +124,15 @@ one validator-panic class (5), two accepted-but-meaningless-surface holes
   `red`. Emitted C: `= {0}` with no init; Option's Some = tag 0.
 - ROOT CAUSE: `eval_static_init` (`src/ir/lowering/mod.rs:2459`) has no arm
   for NoneLiteral/enum-variant ctors → `GlobalInit::Zeroed` silently.
-- FIX: widen `initializer_needs_synthetic_fn` (`mod.rs:2396`) to enum-typed
-  statics — the proven Bug-B synthetic `__gg_static_init_<name>()` runtime
-  path (anticipated by `docs/plans/bugB_static_collection_init.md` §3);
-  NoneLiteral-with-expected-type lowering (`eb5b10a9`) handles the body.
-  ⚠ DCE seeding must follow the Bug-B pattern (`src/lir/optimize.rs:213`)
-  or the init fn gets pruned. Optional later: compile-time tag-only
+- FIX [p1-R5 corrected]: the widening is CALLER-SIDE — the predicate
+  `initializer_needs_synthetic_fn(expr)` (`mod.rs:2392`) is type-blind;
+  enum-ness comes from `type_id` + registry in `lower_static_decl`
+  (`mod.rs:2340`, both in scope; pass-1 prototyped this shape, RUN-proven
+  `none`/`some:5`/`blue`). Reuse `synthesize_static_init_fn` — the
+  `__gg_static_init_` prefix is ALREADY DCE-seeded (`optimize.rs:217`), so
+  the Bug-B pruning warning is auto-satisfied on that path. Commit message
+  notes the bugB §3 init-ordering caveat now also covers enum statics whose
+  variant args read other statics. Optional later: compile-time tag-only
   GlobalInit for payload-less variants → TODO.
 - FIXTURE: `static_enum_init.gg` (None / Some(5) / user-enum non-first
   variant / `public static`; expected `none`, `some:5`, `blue`).
@@ -127,7 +150,14 @@ one validator-panic class (5), two accepted-but-meaningless-surface holes
   "strings are not index-assignable: `s[i]` is a read-only codepoint view —
   build a new string instead (e.g. `s.replace(...)`, slicing +
   concatenation)". Must NOT fire for Vector/Dict/user types with setters.
-  Defense-in-depth: make the `assigns.rs` fall-through a hard ICE.
+  Defense-in-depth: make BOTH sibling set-candidate fall-throughs hard ICEs
+  [p1-R2] — `lower_index_assign`'s loop (`assigns.rs:~892-897`, fn `:755`,
+  the PLAIN-assign no-op site) AND `lower_compound_assign`'s
+  (`:1443-1461`). ALSO in this commit [p1-R3]: amend
+  `docs/language-reference.md` §7.9 (`:1631-1633`) — it currently lists
+  String among resource types whose subscript "returns a mutable borrow",
+  contradicting the new error; remove/qualify String there so spec and
+  compiler agree (the `:3141-3144` view table is the correct story).
 - THE `str()` GAP (found while probing the REFUTED item 4): `String s =
   str(3)` passes `gg check` (`str` listed in `is_builtin`,
   `resolve.rs:1966`) but has NO lowering → I64-typed result → the
@@ -176,7 +206,11 @@ one validator-panic class (5), two accepted-but-meaningless-surface holes
 
 ## Gates
 - Per-commit: `cargo build` + `cargo test --lib` + the commit's fixtures +
-  `cargo test --test lints` (10 expected; item 7 especially).
+  `cargo test --test lints` (10 expected; item 7 especially) +
+  **`GG_BACKEND=llvm` single-test runs of the commit's new fixtures**
+  [p1-R4] — every fix lands in shared GIR/LIR consumed by both backends,
+  and item 1 is memory-unsafety; single-test LLVM runs are cheap at default
+  threads.
 - Items 1/5/7 touch CoW/lazy machinery: the full `cow_lazy_*` + `witness_*`
   battery per commit touching them (stdout = primary net), ASan sweep with a
   pre-change baseline for item 1.
