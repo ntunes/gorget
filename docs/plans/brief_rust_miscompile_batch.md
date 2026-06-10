@@ -132,8 +132,13 @@ one validator-panic class (5), two accepted-but-meaningless-surface holes
   str(3)` passes `gg check` (`str` listed in `is_builtin`,
   `resolve.rs:1966`) but has NO lowering → I64-typed result → the
   `emit_types.rs:753` ICE or CC error. The language documents no free
-  `str()` (conversions = `as` casts + std.conv). FIX: check-time rejection
-  of `str(...)` as a call (suggest f-string / `int_to_str`); AUDIT the other
+  `str()` (conversions = `as` casts + std.conv). FIX — **OWNER-DECIDED
+  2026-06-10, not up for re-litigation in reviews**: check-time REJECTION
+  with a teaching error (option (b); implementing `str(x)` was considered
+  and declined — it would be a third way beside f-strings/`.to_string()`,
+  against the one-obvious-way design target). Suggested message shape:
+  "no builtin `str(...)` call: use an f-string `f\"{x}\"`, `.to_string()`,
+  or `std.conv`"; AUDIT the other
   `is_builtin` cast-names (`int8`…`uint64`, `byte`) for the same
   accepted-but-unlowered hole — fix the CLASS (one gate, all names).
 - ITEM 4 RETIREMENT: the TODO:232 String-ABI-ICE entry is REFUTED at tip
