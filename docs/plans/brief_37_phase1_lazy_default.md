@@ -1,19 +1,23 @@
 # BRIEF — #37 Phase 1: Full lazy CoW materialization (incl. loops) as the PRODUCTION DEFAULT in Rust `gg`
 
-Status: v4 (pass-3 review folded 2026-06-10: ⚠ **W3b RE-PROMOTED to in-scope — the
-pass-2 demotion is RUN-REFUTED**: two 12-line idiomatic programs produce garbage
-under the lazy default (view-of-lazy-view temp as call arg + `&v`-mutating callee;
-same in a binary-op expression), and the UAF is ASan-SILENT [p3-R1, BLOCKING];
-ASan eager-baseline procedure added as Step 0 [p3-R2]; ASan-coverage caveat
-extended to the UAF class [p3-R3]; the H2 `CollectionId::Local` eligibility check
-made an explicit W1 item [p3-R4]; compound-assign fixture added [p3-R5];
-commit-ordering + prototype-comment rewording notes folded [p3-notes]. Pass 3 also
-re-verified the W3b-premise (View-tag site IS post-call → pre-call is the only
-effective hook), all W4 sites, branch structure, and the lock-in test feasibility.
-v3 folded pass 2 (W3a PROTOTYPED + RUN-PROVEN: d1 fixtures flip to correct at eager
-clone-parity, gate-ON sweep 1193/9 all-D2); v2 folded pass 1; v1 was the
-orchestrator draft from the scout; scout worktree `agent-ae10a3b18c5a97df7`;
-numbers regenerated at tip `a044a10f`.)
+Status: v5 (pass-4 review folded 2026-06-10: ⚠ **W3c ADDED — the W3b choke point
+is NOT singular** [p4-R1, BLOCKING]: string INDEX/SLICE syntax (`s[0..5]`, `s[0]`)
+produces the same cap=0 view class via `lower_index_access` →
+`gorget_str_slice`/`gorget_str_index` (both return `gorget_str_view_region` views,
+`runtime_string.c:714/:739`), bypassing `builtin_returns_view` entirely — and the
+NAMED index bind `String t = s[0..5]` is NOT Branch-E-protected (index results
+carry no View tag). Three failing programs RUN-PROVEN, all ASan-silent; the v4
+sibling-grep instruction ("grep returns_view consumers") was itself the trap —
+v5 rewords it to enumerate view-PRODUCING runtime emitters. Pass 4 PROTOTYPED
+BOTH W3b and W3c at located hook points and RUN-PROVED them (all probes flip to
+eager-identical at exact clone parity; witnesses stay 0/1/0; in-loop returns_view
+4v4 with the flag guard doing real once-only work; substring named bind 2v2
+undisturbed; commit-ordering green-by-construction verified incl. the ungated W2
+additive parts; Step-0 `--sanitize` feasibility confirmed `src/main.rs:2414/2566`
+→ `:866-867`). Line-ref drift fixed [p4-R2]. v4 folded pass 3 (W3b re-promoted —
+demotion RUN-REFUTED); v3 folded pass 2 (W3a PROTOTYPED + RUN-PROVEN, gate-ON
+sweep 1193/9 all-D2); v2 folded pass 1; v1 = orchestrator draft from the scout;
+scout worktree `agent-ae10a3b18c5a97df7`; numbers regenerated at tip `a044a10f`.)
 
 ## Mission
 
@@ -103,8 +107,18 @@ numbers from the UNPATCHED tip — re-grep before editing)
   `s` itself (correct) but not the temp → `gorget_array_set` frees the old buffer
   → stale temp read. Both probes ASan-SILENT. Bounding probes PASS (direct
   `f"{s} {poke(&v)}"` — formatting copies bytes immediately; direct
-  `show(s, &v)` — header-move insight): the failing class is exactly and only
-  view-of-lazy-view temps. Fixed in scope by W3b (promoted).
+  `show(s, &v)` — header-move insight): the failing class is exactly
+  view-of-lazy-view temps AND named view binds with no View tag. **The class has
+  TWO compiler emit routes (pass-4 finding):** (1) `returns_view` builtin methods
+  (sole consumer dispatch `methods.rs:2645`); (2) string INDEX/SLICE syntax —
+  `Expr::Index` → `lower_index_access` (`exprs/mod.rs:226` → `methods.rs:3170+`),
+  LIR rewrite `Str[range]→gorget_str_slice` / `Str[int]→gorget_str_index`
+  (`src/lir/lower/insts.rs:895-955`), both returning `gorget_str_view_region`
+  views — which NEVER consults `returns_view`, and whose results carry NO View
+  tag (so even the NAMED bind `String t = s[0..5]` fails: run-proven garbage,
+  plus `show(s[0..5], &v)` and `show(s[0], &v)`). Fixed in scope by W3b + W3c.
+  Note the false comment at `methods.rs:3291` ("returns a new Str value (not a
+  borrow)" — it returns a view region); fix it as part of W3c.
 - `gorget_string_copy_cow` is view-preserving (`runtime_string.c:214-219` — cap==0
   in → view out). `gorget_string_borrow_view` is currently NOT a registered runtime
   callee; the typed registry + `AbiKind::Ptr` + `Inst::AddressOf` (`lir/mod.rs:762`)
@@ -195,23 +209,46 @@ at 1v1 eager clone-parity; witnesses 0/1/0; `cow_materialization_points`
 byte-identical to eager; full gate-ON sweep 1193/9 (all 9 = D2).
 
 **W3b (PROMOTED back in scope — the pass-2 demotion was RUN-REFUTED by pass 3's
-probes; shipping with no mitigation is not a defensible production default):**
-at the builtin-method lowering site in `src/ir/lowering/exprs/methods.rs`, when a
-`returns_view` method's RECEIVER resolves to a projection-free local present in
-`cow_lazy_mat_flag`, emit `cow_materialize_view_lazy_in_place` on the receiver
-**BEFORE the call captures the header** (the POST-call View-tag site at
-`methods.rs:2641-2665` is too late — pass-2/pass-3 both confirmed the temp
-captures the raw buffer pointer at call time; the pre-call receiver-preparation
-point is the only effective hook). Scoping to `builtin_returns_view` methods
-keeps the cost argument moot: non-view methods copy bytes immediately and are
-safe (pass-3 bounding probes), the materialize is flag-guarded and never worse
-than eager (same invariant as W3a), and the full lazy win is kept for all code
-not taking views of the lazy local. Validation = the probe-1/probe-2 stdout
-fixtures (W5) — ASan is blind to this class, so the fixtures are the proof.
-Reuse the SAME helper as W3a (one `materialize_lazy_source_if_needed`, two call
-sites: the var-decl bind and the returns_view receiver — cite both in the PR per
-the sibling-site rule, and grep for any OTHER place a `returns_view` call is
-lowered to confirm the choke point is singular).
+probes; pass-4 PROTOTYPED + RUN-PROVED the fix at a located hook point):**
+in `src/ir/lowering/exprs/methods.rs`, when a `returns_view` method's RECEIVER
+resolves to a projection-free local present in `cow_lazy_mat_flag`, emit
+`cow_materialize_view_lazy_in_place` on the receiver **BEFORE the call captures
+the header**. The proven hook location (pass 4; executor follows it): immediately
+after the third `needs_mut` CoW block (`cow_before_field_mutation`, unpatched
+`methods.rs:1696`) and before the receiver-borrow construction (`:1698+`) —
+upstream of the receiver `emit_borrow` and ALL call-emission arms. Condition:
+`ctx.builtin_returns_view(&type_name, method_name)` && recv is a projection-free
+`Operand::Copy/Move` local && present in `cow_lazy_mat_flag` → call the helper
+with the local + its flag. (The POST-call View-tag site at `methods.rs:2645-2665`
+is too late — the temp captures the raw buffer pointer at call time.) Proven:
+probe 1 → `a = hello`, probe 2 → `t = hello!`, clone counts 1v1 eager; hook
+reverted reproduces the garbage; in-loop `returns_view` call = 4v4 with the flag
+guard firing once, not per iteration; Branch-E substring named bind 2v2
+undisturbed.
+
+**W3c (NEW — pass-4 BLOCKING finding, fix PROTOTYPED + RUN-PROVEN): the string
+INDEX/SLICE syntax route.** `s[0..5]` / `s[0]` lower via `lower_index_access`
+(NOT via `returns_view` dispatch) to `gorget_str_slice`/`gorget_str_index`, both
+returning cap=0 views; index results carry NO View tag, so even named binds
+break. Third call site for the SAME helper: top of the place-arm in
+`lower_index_access` (unpatched `methods.rs:3229`), same condition
+(projection-free base local in `cow_lazy_mat_flag` → materialize in place).
+Proven: `show(s[0..5], &v)`, `show(s[0], &v)`, and named `String t = s[0..5]` +
+mutate all flip to eager-identical output at exact eager clone parity (1v1,
+`GG_CLONE_TRACE`); witnesses stay 0/1/0; default mode untouched. Also fix the
+false comment at `methods.rs:3291` as part of this hook.
+
+**Sibling-completeness rule (rewritten — the v4 instruction was itself the
+trap):** do NOT verify by grepping `returns_view` CONSUMERS (that comes back
+singular and misses W3c). Enumerate view-PRODUCING runtime emitters instead:
+every caller of `gorget_str_view_region` in the runtime (`str_index`,
+`str_slice`, `str_byte_slice`, `str_char_at`, + any others found) and every
+compiler emit site that can produce one (the `returns_view` method dispatch, the
+`lower_index_access` place-arm, the LIR rewrites at `lir/lower/insts.rs:895-955`)
+— confirm each site is covered by one of the THREE hooks (W3a bind / W3b
+receiver / W3c index base) or is provably reachable only with a non-lazy base.
+Cite the full enumeration in the PR. ONE shared helper
+(`materialize_lazy_source_if_needed`), three call sites.
 
 Rejected alternative (record why in the commit/PR): propagating CollectionElement
 provenance to the alias — preserves more laziness but multiplies loop-placement and
@@ -262,7 +299,9 @@ alias-chain cases; revisit as Phase 1b if profiles justify.
   repro; label it so), **W3b probe 1** (`show(s.substring(0,5), &v)`, callee
   `v.set(0,…)` then prints the param) and **W3b probe 2**
   (`String t = s.substring(0,5) + poke(&v)`, callee mutates v) — the PRIMARY
-  validation for W3b, an ASan-blind class,
+  validation for W3b, an ASan-blind class, **W3c index-temp-as-arg**
+  (`show(s[0..5], &v)`) and **W3c named index bind** (`String t = s[0..5]` then
+  mutate source) — the PRIMARY validation for W3c, same ASan-blind class,
   H2 shape (FieldPath source — asserts correct output under the EXCLUSION),
   multisite (two conditional mutation sites, first dynamically dead), escape
   (return of a still-view + caller destroys source), reassign-source (`v = w`),
@@ -283,9 +322,10 @@ alias-chain cases; revisit as Phase 1b if profiles justify.
 ### W6 — Docs & TODO
 - Update `docs/devbook/11-copy-on-write.md`: the materialization-points section
   gains the lazy loop-carried mechanism (bind = cap0 view + pre-loop flag; mutation
-  = flag-guarded in-place materialize; the W3a source-materialize rule; the
+  = flag-guarded in-place materialize; the THREE materialize-at-derived-view hooks
+  W3a/W3b/W3c + the view-PRODUCER enumeration rule for future hook siblings; the
   multi-site dominance argument; the String-only `borrow_view_fn` registry axis;
-  the ASan-blind-on-wrong-output caveat for future debuggers).
+  the ASan-blind-on-wrong-output-and-view-UAF caveat for future debuggers).
 - TODO.md entries (executor adds, exact wording owner-reviewable): FieldPath lazy
   (1b) incl. `cow_before_field_mutation` lazy routing + `lower_field_assign`
   descendant-FieldPath severance walk (latent gap, file:line); EIndex inclusion +
