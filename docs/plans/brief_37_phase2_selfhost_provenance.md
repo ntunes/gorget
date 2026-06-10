@@ -1,6 +1,22 @@
 # BRIEF — #37 Phase 2: lazy CoW in the SELF-HOST, provenance-direct (the documented `ViewOf` design)
 
-Status: v3 (pass-2 review folded 2026-06-10: ⚠ the EMove class executes at
+Status: v4 (pass-3 review folded 2026-06-10: ⚠ **MOVE-SHAPE ORACLE EXCEPTION
+added** [p3-R1, the load-bearing one]: Rust gg is VALUE-WRONG on both EMove
+shapes (re-proven fresh), so EMove-row fixtures assert the EAGER-SEMANTICS
+stdout through the SELF-HOST route (gate-ON == gate-OFF, run-proven equal),
+are listed EXPECTED-WRONG in runtime_diff and EXCLUDED from the Gate-4 flip
+arithmetic, and get snapshots only after the Rust HIGH TODO lands — never
+bake Rust's wrong output (Don't redesign around compiler gaps); W2 hook list
+regrammared — FIVE hooks, EMove covered by EXCLUSION not hook [p3-R2];
+per-source-NAME whole-fn granularity stated honestly + the borrow-checker
+narrowing note [p3-R3]; the per-position-hooks laziness-upgrade TODO added to
+W3's list [p3-R4]. Pass 3 RUN-PROVED the v3 exclusion end-to-end: both move
+shapes garbage→eager-correct; exotics (`return !v`, `[!v]`, `match !v`) all
+fall back eager (scan walks all three); witnesses/d1/battery non-interference
+exact; stage2 gate-ON self-compile cc-clean with the SAME 7 live lazy binds
+(exclusion costs zero on the compiler's own code); N-member family guard
+chain run-proven; the materialize clone fn is `clone_to_owned`
+(deep-copies views), not `copy_cow`. v3 was pass-2 folded 2026-06-10: ⚠ the EMove class executes at
 MULTIPLE lowering positions (no choke point — move-REASSIGN `w = !v` to an
 existing local is a run-proven UAF even WITH the v2 move-bind hook) → the
 PRIMARY fix is now the **`cow_moved_names` EXCLUSION** (one scan side-channel
@@ -165,8 +181,9 @@ emission; ONE shared `cow_lazy_materialize_family` guard emitter
 (`lower.gg:1313`); mutation hooks = method-receiver (in `lower_method_call`'s mutating-receiver
 arm), SAssign target root (in `lower_assign`), free-call `&`/`!` args (in
 `lower_call`'s arg loop, redirect-resolved per W1) + ADD SCompoundAssign,
-method non-receiver `&`/`!` args, AND ⚠ the **EMove class** (p1-R1 + p2-R1,
-both run-proven lazy UAFs, ASan-silent): `EMove` survives the parser at EVERY
+method non-receiver `&`/`!` args — FIVE hooks total. The SIXTH scan arm, the
+**EMove class**, is covered by ELIGIBILITY EXCLUSION, NOT a hook
+(p1-R1 + p2-R1, both run-proven lazy UAFs, ASan-silent): `EMove` survives the parser at EVERY
 expression position except call args (decl-init `w = !v` move-BIND;
 assign-RHS move-REASSIGN to an existing local — which defeats the
 SAssign-target-root hook since the family is keyed by the SOURCE name;
@@ -177,8 +194,13 @@ the scan's EMove arm (the existing `cow_mark_name` records only
 name+position, NOT kind — "the scan already knows" was refuted), checked at
 `decide_svardecl_emission`: a bind whose source collection ∈
 `cow_moved_names` is NOT lazy-eligible (falls back eager). ONE predicate
-term, sound for the entire EMove position class including the exotics;
-laziness lost only on move shapes (rare). The pass-2-PROTOTYPED per-position
+term, sound for the entire EMove position class including the exotics.
+HONEST granularity [p3-R3]: the exclusion is WHOLE-FN per-source-NAME — one
+`!v` anywhere (even on a never-taken branch; run-proven 1 clone where lazy
+would be 0) makes every bind from `v` in that fn eager. Acceptable: the
+borrow checker independently rejects conditional-move-then-use shapes
+("use of moved value"), so the practical loss window is narrow; document the
+trade in devbook/11. The pass-2-PROTOTYPED per-position
 hooks (materialize-family-before-move at the SVarDecl-EMove and
 SAssign-EMove-RHS sites — both run-proven printing the eager value) are the
 future laziness UPGRADE → TODO entry, not Phase-2 scope.
@@ -221,11 +243,23 @@ W2 commit message during W2, LANDED here [p2-R4]); language-design.md cross
 -reference (the ViewOf spec is now implemented in the self-host). Snapshots:
 every NEW class-table route fixture AND every pre-existing fixture that
 flips to MATCH (route fixtures that pass identically in both modes are still
-wired + snapshotted as gate-ON regression guards [p2-R5]). TODO/DONE
+wired + snapshotted as gate-ON regression guards [p2-R5]) — **EXCEPT the
+MOVE-SHAPE ORACLE EXCEPTION [p3-R1]: Rust gg is VALUE-WRONG on both EMove
+shapes (the HIGH Rust TODO), so EMove-row fixtures (a) assert the
+EAGER-SEMANTICS stdout (the self-host's gate-ON == gate-OFF output,
+run-proven equal) via `run_gg`-style tests against the SELF-HOST route, NOT
+the Rust oracle; (b) are listed EXPECTED-WRONG in runtime_diff and EXCLUDED
+from Gate-4's flip arithmetic; (c) are NOT snapshotted until the Rust HIGH
+TODO lands (the snapshot regen mechanism seeds only self==Rust matches, and
+baking Rust's wrong output is forbidden per Don't-redesign-around-gaps)**.
+TODO/DONE
 per Task Continuity (pending-phrased only; the Rust 1b back-port entry with
 the scout's §9 sketch — slot-address alias at Branch C + family-keyed
 cow_lazy_mat_flag + hooks become joins; F2/F3 entries; parser typed
-arg-ownership field entry; W4-clearing-port low-pri entry;
+arg-ownership field entry; W4-clearing-port low-pri entry; the EMove
+per-position-hooks laziness UPGRADE (pass-2-prototyped, run-proven at the
+SVarDecl-EMove and SAssign-EMove-RHS sites — replaces the exclusion with
+materialize-family-before-move if move-shape laziness ever matters) [p3-R4];
 ⚠ **HIGH-pri RUST entry [p1-R1/p2-R6]: Rust Phase 1 is VALUE-WRONG vs eager
 semantics on BOTH move shapes** — move-BIND (`Vector[String] w = !v`) AND
 move-REASSIGN (`w = !v` to an existing local), each followed by `w.set(0,…)`
@@ -249,17 +283,20 @@ integrated tree)
    **self-compile RSS baseline via `scripts/self_host_mem_baseline.sh`**
    (CLAUDE.md: perf work measures MEMORY — avoided clones become real memory
    at self-compile scale; fixture-scale RSS is noise).
-1. Per-commit: `cargo test --lib` + `--test lints` (Chain A may land 3 new
-   lints in tests/lints.rs before you finish — they scan src/ only, your work
-   is in tests/fixtures/, no interaction; run whatever count is current);
-   battery + canaries stdout-diff vs Rust (THE primary net); gate-OFF
-   emitted-C cmp (W2 commits).
+1. Per-commit: `cargo test --lib` + `--test lints` (Chain A's 3 lints are
+   LANDED at `e22183fb` — 10 total; they scan src/ only, no interaction);
+   battery + canaries stdout-diff vs Rust (THE primary net) — EXCEPT the
+   EMove-row fixtures, which diff against the EAGER-SEMANTICS expected output
+   per the move-shape oracle exception [p3-R1]; gate-OFF emitted-C cmp (W2
+   commits).
 2. fixed_point GREEN per landed commit (`GG_BUILD_TIMEOUT_SECS=600`; ~450-540s).
 3. `self_host_runtime` 0-regress; comparisons baseline-relative (0 new
    mismatches among pre-existing fixtures).
 4. Post-flip: runtime_diff — expect ≥ baseline PLUS the flipped rows
-   (move_consume, w3b pair, mutarg_probe, the new probes); report the exact
-   row movements.
+   (move_consume, w3b pair, mutarg_probe, the d1 probes); the EMove-row
+   fixtures are EXPECTED-WRONG rows (Rust oracle is the buggy side — list
+   them explicitly, excluded from the flip arithmetic [p3-R1]); report the
+   exact row movements.
 5. Post-flip ASan sweep vs the Step-0 eager table (no NEW findings;
    supplementary only).
 6. Post-flip self-compile RSS vs Step-0 (report the delta; a regression needs
