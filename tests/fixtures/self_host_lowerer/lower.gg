@@ -328,8 +328,6 @@ struct LowerCtx:
 
 # ── Helpers ──────────────────────────────────────────────
 
-Option[String] NO_NAME = None
-
 # named_locals helpers — kept as a thin layer over the Dict so we can
 # swap the storage shape without touching call sites.
 bool nl_contains(LowerCtx &ctx, String name):
@@ -2774,7 +2772,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         tctx.block_terms.push(GTNone())
                         # Phase 2: function-scope drop frame for test bodies.
                         push_drop_scope(&tctx.drop_elab, DSK_FUNCTION)
-                        add_local(&tctx, UNIT_TYPE, NO_NAME)
+                        add_local(&tctx, UNIT_TYPE, None)
                         compute_cow_scan(&tctx, &gmod, test_body)
                         lower_stmts(&tctx, test_body, &gmod, false)
                         Terminator tterm = tctx.block_terms.get(tctx.current_block).unwrap()
@@ -2798,14 +2796,14 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             case ISuiteSetup(setup_body):
                 if not has_main:
                     Vector[int] sp = []
-                    Vector[GirLocal] sl = [GirLocal(UNIT_TYPE, NO_NAME, LoOwned(), BoNone(), false)]
+                    Vector[GirLocal] sl = [GirLocal(UNIT_TYPE, None, LoOwned(), BoNone(), false)]
                     Vector[BasicBlock] sb = [BasicBlock([], GTReturn(OpConstUnit()))]
                     gmod.functions.push(GirFunction("__suite_setup", !sp, UNIT_TYPE, !sl, !sb))
                     test_idx += 1
             case ISuiteTeardown(teardown_body):
                 if not has_main:
                     Vector[int] tp = []
-                    Vector[GirLocal] tl = [GirLocal(UNIT_TYPE, NO_NAME, LoOwned(), BoNone(), false)]
+                    Vector[GirLocal] tl = [GirLocal(UNIT_TYPE, None, LoOwned(), BoNone(), false)]
                     Vector[BasicBlock] tb = [BasicBlock([], GTReturn(OpConstUnit()))]
                     gmod.functions.push(GirFunction("__suite_teardown", !tp, UNIT_TYPE, !tl, !tb))
                     test_idx += 1
@@ -3263,7 +3261,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             # Phase-1 stub: _0 = return place, _1 = env ptr, then one local
             # per closure param (implicit-it: a single `it` local). Shape is
             # byte-identical to the old scan's stub (explicit + implicit-it).
-            Vector[GirLocal] stub_locals = [GirLocal(d_ret, NO_NAME, LoOwned(), BoNone(), false), GirLocal(d_self_ptr, NO_NAME, LoParam(), BoParam(-1), false)]
+            Vector[GirLocal] stub_locals = [GirLocal(d_ret, None, LoOwned(), BoNone(), false), GirLocal(d_self_ptr, None, LoParam(), BoParam(-1), false)]
             int spi = 0
             while spi < d_body_pt.len():
                 int spt = d_body_pt.get(spi).unwrap()
