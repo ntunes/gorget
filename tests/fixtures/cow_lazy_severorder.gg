@@ -1,0 +1,13 @@
+# W4 sever-audit: collection alias + lazy element ref + collection reassign.
+# `v = w` routes through cow_sever_all_aliases_from (v has an Alias-alias)
+# BEFORE the assigns.rs cow_before_mutation dispatch — that sever path must
+# also materialize the lazy-tagged ref.
+void main():
+    Vector[String] v = ["hello", "world"]
+    Vector[String] w = ["x", "y"]
+    Vector[String] a = v
+    String s = v.get(0).unwrap()
+    v = w
+    print(f"s = {s}")
+    print(f"a.len() = {a.len()}")
+    print(f"v.len() = {v.len()}")

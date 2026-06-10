@@ -1,0 +1,14 @@
+# W3b PRIMARY validation (probe 1, ASan-blind class): unnamed view-temp of a
+# lazy view passed as a call arg, callee mutates the source through &v then
+# reads the param. Without the W3b receiver hook the temp captures the raw
+# element buffer pointer and prints garbage under lazy.
+void show(String a, Vector[String] &v):
+    v.set(0, "mutated")
+    print(f"a = {a}")
+
+void main():
+    Vector[String] v = ["hello", "world"]
+    String s = v.get(0).unwrap()
+    show(s.substring(0, 5), &v)
+    print(f"s = {s}")
+    print(f"v0 = {v.get(0).unwrap()}")

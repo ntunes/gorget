@@ -1,0 +1,10 @@
+# Regression NET (expected to pass even pre-W3 via Branch E's View-tag clone):
+# named bind of a view-returning method on a lazy view + source mutation.
+void main():
+    Vector[String] v = ["hello!", "world"]
+    String s = v.get(0).unwrap()
+    String t = s.substring(0, 3)
+    v.push("filler")
+    print(f"t = {t}")
+    print(f"s = {s}")
+    print(f"v.len() = {v.len()}")

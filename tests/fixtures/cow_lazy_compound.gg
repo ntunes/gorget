@@ -1,0 +1,10 @@
+# W4 second write site: compound assign on the lazy local, then source mutation.
+# Locks the clearing at lower_compound_assign incl. its string-concat
+# early-return fast path, and the no-leak-via-Move-assign claim.
+void main():
+    Vector[String] v = ["hello", "world"]
+    String s = v.get(0).unwrap()
+    s += "!"
+    v.push("filler")
+    print(f"s = {s}")
+    print(f"v.len() = {v.len()}")

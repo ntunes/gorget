@@ -22834,3 +22834,245 @@ fn none_literal_forward_callee() {
 fn none_literal_sigiled_arg() {
     run_gg("none_literal_sigiled_arg.gg", "5:none\n6:x");
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Lazy loop-carried CoW materialization (#37 Phase 1,
+// docs/plans/brief_37_phase1_lazy_default.md; devbook/11 "Lazy loop-carried
+// materialization"). A String bound from a CoW element borrow whose source
+// collection is mutated on a forward path binds as a cap=0 VIEW + pre-loop
+// flag; the deep clone is deferred to a flag-guarded in-place materialize at
+// the mutation site (dead mutation path = 0 clones) and to the W3a-W3d
+// lazy-source READ hooks. These stdout assertions are the PRIMARY correctness
+// net: the D1 wrong-output class AND the W3b/W3c/W3d view-UAF class are both
+// proven ASan-SILENT — a green sanitizer says nothing here.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Witness: loop-body conditional source-mutation, branch never taken.
+// Lazy: 0 clones (eager lowering spent 1 at the bind). Output unchanged.
+#[test]
+fn witness_never() {
+    run_gg("witness_never.gg", "s = hello\nv.len() = 2");
+}
+
+// Witness: loop-body conditional source-mutation taken on one iteration.
+// Lazy: exactly 1 clone, fired by the in-loop flag guard. No UAF.
+#[test]
+fn witness_taken() {
+    run_gg("witness_taken.gg", "s = hello\nv.len() = 3");
+}
+
+// Witness: NON-loop conditional source-mutation, condition false at runtime.
+// Lazy: 0 clones (the guarded materialize is dynamically dead).
+#[test]
+fn witness_cond_straightline() {
+    run_gg("witness_cond_straightline.gg", "s = hello\nv.len() = 2");
+}
+
+// D1 class (W3a): plain alias of a lazy view + source mutation.
+#[test]
+fn cow_lazy_d1_alias() {
+    run_gg("cow_lazy_d1_alias.gg", "s = hello\nx = hello\nv.len() = 3");
+}
+
+// D1 class (W3a, Branches F/G): alias + steal + source mutation.
+#[test]
+fn cow_lazy_d1_movesteal() {
+    run_gg("cow_lazy_d1_movesteal.gg", "s = other\nx = hello\nv0 = replaced");
+}
+
+// W4 write-site clearing: reassign the lazy local, then mutate the source.
+#[test]
+fn cow_lazy_staletag() {
+    run_gg("cow_lazy_staletag.gg", "s = fresh\nv.len() = 3");
+}
+
+// W4 sever-audit: collection alias + lazy ref + collection reassign routes
+// through cow_sever_all_aliases_from, which must materialize the lazy ref.
+#[test]
+fn cow_lazy_severorder() {
+    run_gg("cow_lazy_severorder.gg", "s = hello\na.len() = 2\nv.len() = 2");
+}
+
+// W4 second write site: compound assign (string-concat early-return fast
+// path) then source mutation. Also locks the no-leak-via-Move-assign claim.
+#[test]
+fn cow_lazy_compound() {
+    run_gg("cow_lazy_compound.gg", "s = hello!\nv.len() = 3");
+}
+
+// Regression NET, not a repro: named substring bind was ALREADY SAFE pre-W3
+// via Branch E's View-tag clone. Locks that path against drift.
+#[test]
+fn cow_lazy_substring_named_bind() {
+    run_gg(
+        "cow_lazy_substring_named_bind.gg",
+        "t = hel\ns = hello!\nv.len() = 3",
+    );
+}
+
+// W3b PRIMARY validation (ASan-blind): view-temp as call arg, callee mutates
+// the source through &v then reads the param.
+#[test]
+fn cow_lazy_w3b_arg_temp() {
+    run_gg("cow_lazy_w3b_arg_temp.gg", "a = hello\ns = hello\nv0 = mutated");
+}
+
+// W3b PRIMARY validation (ASan-blind): view-temp consumed by a concat whose
+// right operand mutates the source collection.
+#[test]
+fn cow_lazy_w3b_concat_temp() {
+    run_gg("cow_lazy_w3b_concat_temp.gg", "t = hello!\ns = hello");
+}
+
+// W3c PRIMARY validation (ASan-blind): index/slice temp as call arg.
+#[test]
+fn cow_lazy_w3c_arg_temp() {
+    run_gg("cow_lazy_w3c_arg_temp.gg", "a = hello\ns = hello");
+}
+
+// W3c PRIMARY validation: NAMED index/slice binds carry no View tag.
+#[test]
+fn cow_lazy_w3c_named_bind() {
+    run_gg(
+        "cow_lazy_w3c_named_bind.gg",
+        "t = hello\nc = e\ns = hello\nv.len() = 3",
+    );
+}
+
+// W3d PRIMARY validation (ASan-blind): `for c in s:` char iteration with a
+// source-collection mutation in the first iteration.
+#[test]
+fn cow_lazy_w3d_for_string() {
+    run_gg(
+        "cow_lazy_w3d_for_string.gg",
+        "h\ne\nl\nl\no\n!\ns = hello!",
+    );
+}
+
+// W4 boundary-clone lock: f(&s) mutates the lazy local, then the source
+// collection is mutated. Run-verified at exact clone parity.
+#[test]
+fn cow_lazy_mut_borrow_write() {
+    run_gg("cow_lazy_mut_borrow_write.gg", "s = hello more\nv.len() = 3");
+}
+
+// H2 shape: FieldPath collection sources are EXCLUDED from lazy (stay
+// eager) — asserts correct output under the exclusion.
+#[test]
+fn cow_lazy_fieldpath_excluded() {
+    run_gg("cow_lazy_fieldpath_excluded.gg", "s = hello\nlen = 3");
+}
+
+// Multi-mutation-site: two conditional sites, first dynamically dead —
+// restore_locals re-finds the tag per arm; exactly 1 runtime clone.
+#[test]
+fn cow_lazy_multisite() {
+    run_gg("cow_lazy_multisite.gg", "s = hello\nv.len() = 3");
+}
+
+// Escape: return of a STILL-VIEW lazy local — ensure_owned_at_boundary
+// clones at the return before the callee-local source is destroyed.
+#[test]
+fn cow_lazy_escape_return() {
+    run_gg("cow_lazy_escape_return.gg", "r = hello");
+}
+
+// Reassign-source: `v = w` — the assigns.rs cow_before_mutation dispatch
+// materializes the lazy ref before the old buffer drops.
+#[test]
+fn cow_lazy_reassign_source() {
+    run_gg("cow_lazy_reassign_source.gg", "s = hello\nv.len() = 2");
+}
+
+// Move: consume(!v) straight-line — the !-move dispatch materializes the
+// lazy ref before v moves out.
+#[test]
+fn cow_lazy_move_consume() {
+    run_gg("cow_lazy_move_consume.gg", "consumed 2\ns = hello");
+}
+
+// Self-referential RHS that mutates the source mid-expression — locks the
+// W4 clear-AFTER-RHS ordering (`&v` dispatch must still find the tag).
+#[test]
+fn cow_lazy_selfref_concat_poke() {
+    run_gg("cow_lazy_selfref_concat_poke.gg", "s = hello!\nv0 = mutated");
+}
+
+// Clone-count lock-in (the property stdout tests can't see): in
+// witness_never's emitted C, `main` must (a) bind via
+// gorget_string_borrow_view, (b) contain EXACTLY ONE
+// gorget_string_clone_to_owned callsite — the flag-guarded materialize
+// inside the loop, statically present, dynamically dead — and (c) the
+// borrow_view bind must textually precede it. The eager lowering had the
+// clone in the bind block and no borrow_view. Narrow on purpose (one
+// fixture) so it doesn't rot.
+#[test]
+fn witness_never_emitted_c_clone_shape() {
+    // C-backend artifact inspection: the LLVM backend emits no .c file, so
+    // there is nothing to assert there (its behavioral twins witness_* run
+    // under both backends).
+    if skip_under_llvm() {
+        return;
+    }
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures/witness_never.gg");
+    assert!(fixture_path.exists());
+
+    // Build a uniquely-named COPY in the temp dir so this test cannot race
+    // the witness_never stdout test's build/cleanup of the same artifact
+    // paths under --test-threads=4.
+    let work_dir = std::env::temp_dir().join(format!(
+        "gg_witness_clone_shape_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&work_dir).unwrap();
+    let gg_path = work_dir.join("witness_never_clone_shape.gg");
+    std::fs::copy(&fixture_path, &gg_path).unwrap();
+    let c_path = work_dir.join("witness_never_clone_shape.c");
+    let exe_path = work_dir.join("witness_never_clone_shape");
+
+    let build = build_with_timeout(
+        gg_command("build").arg(&gg_path),
+        "witness_never.gg (clone-shape)",
+    );
+    assert!(
+        build.status.success(),
+        "Build failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr),
+    );
+
+    let c_src = std::fs::read_to_string(&c_path)
+        .expect("emitted C artifact missing for witness_never");
+    let main_start = c_src
+        .find("int main(int argc, char** argv) {")
+        .expect("main definition in emitted C");
+    let main_end = c_src[main_start..]
+        .find("\n}")
+        .map(|e| main_start + e)
+        .expect("main closing brace");
+    let main_src = &c_src[main_start..main_end];
+
+    let bv = main_src.find("gorget_string_borrow_view(");
+    assert!(bv.is_some(), "lazy bind must call gorget_string_borrow_view in main");
+    let cto_sites: Vec<usize> = main_src
+        .match_indices("gorget_string_clone_to_owned(")
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(
+        cto_sites.len(),
+        1,
+        "main must contain exactly one clone_to_owned callsite (the \
+         flag-guarded in-loop materialize); found {}",
+        cto_sites.len()
+    );
+    assert!(
+        bv.unwrap() < cto_sites[0],
+        "borrow_view bind must precede the guarded materialize"
+    );
+
+    let _ = std::fs::remove_file(&c_path);
+    let _ = std::fs::remove_file(&exe_path);
+    let _ = std::fs::remove_file(&gg_path);
+    let _ = std::fs::remove_dir(&work_dir);
+}

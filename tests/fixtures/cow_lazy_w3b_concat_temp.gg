@@ -1,0 +1,12 @@
+# W3b PRIMARY validation (probe 2, ASan-blind class): view-temp consumed by a
+# concat whose right operand mutates the source collection.
+String poke(Vector[String] &v):
+    v.set(0, "mutated")
+    return "!"
+
+void main():
+    Vector[String] v = ["hello", "world"]
+    String s = v.get(0).unwrap()
+    String t = s.substring(0, 5) + poke(&v)
+    print(f"t = {t}")
+    print(f"s = {s}")

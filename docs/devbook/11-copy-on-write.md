@@ -267,6 +267,102 @@ named-local guard was masking.
 `cow_sever_all_aliases_from` (`context.rs:2782`) handles the reassign case
 (aliases keep the *old* value).
 
+## Lazy loop-carried materialization (the default since #37 Phase 1)
+
+A String bound from a CoW element borrow whose source collection **is mutated
+on a forward path** (`source_mut_unsafe`, prescan
+`compute_cow_reassigned_after`) used to EAGER-clone at the bind — paying the
+clone even when the mutating branch never ran. The default lowering is now
+**fully lazy** (`stmts/mod.rs`, the `emit_lazy_loopcarried_borrow` branch):
+
+- **Bind** = a pre-loop String VALUE slot holding a cap=0 view
+  (`gorget_string_borrow_view`: shallow header copy with cap FORCED to 0 —
+  drop-safe, the cap-driven free no-ops) + a pre-loop `__cow_mat = false`
+  flag, the pair recorded in `FunctionState::cow_lazy_mat_flag`.
+- **Mutation site** = `cow_materialize_view_lazy_in_place`: a flag-guarded
+  IN-PLACE `clone_to_owned` of the slot (clone at most once, from the
+  still-valid borrow, written back into the SAME slot — no fresh local, no
+  name rebind, so it survives `restore_locals`). Dispatched from Case 3 of
+  `cow_before_mutation`, from `cow_sever_all_aliases_from`'s
+  collection-ref walk, and from the four read hooks below.
+- Both slots are created BEFORE the loop (lid < the loop's `save_locals`
+  boundary), so LIR-SSA phis them at the header and the post-loop read of
+  `s` is correct in both the materialized and never-materialized branches.
+  Dead mutation path → **0 clones**; taken path → exactly 1.
+
+**Multi-site dominance argument.** `restore_locals` reverts per-branch
+ownership, so each branch-arm mutation site re-finds the tag and emits its
+own guard — two guard callsites, first dynamically dead, exactly one runtime
+clone. Same-straight-line later sites are dominated by the first guard's
+continuation block, so their guards are runtime no-ops.
+
+**The four lazy-source READ hooks (W3a-W3d).** A read that captures the lazy
+view's VALUE or ADDRESS into another binding loses provenance to the
+collection — Case 3 can no longer fix the captured copy. One shared helper
+(`materialize_lazy_source_if_needed`: projection-free Copy/Move local present
+in `cow_lazy_mat_flag` → flag-guarded in-place materialize), four call sites:
+
+| Hook | Site | Covers |
+|------|------|--------|
+| W3a | `lower_var_decl` trailing-assign entry (`stmts/mod.rs`) | `String x = s` alias (Branch C) and move-steal (F/G) binds |
+| W3b | `returns_view` method receivers, PRE-call (`exprs/methods.rs`) | `s.substring(..)` temps and named binds — the call copies the header at call time; the post-call View tag is too late |
+| W3c | `lower_index_access` place-arm (`exprs/methods.rs`) | `s[i]` / `s[a..b]` — the index route never consults `returns_view`; results carry NO View tag |
+| W3d | `lower_for_string` source (`stmts/for_loops.rs`) | `for c in s:` — the synthetic `gorget_str_codepoint_at` is emitted as a `gorget_str_view_region` view by both backends |
+
+**View-producer enumeration rule (for future hook siblings).** Before adding
+any new view-returning path, grep `gorget_str_view_region` across **all of
+`src/`** — the runtime `.c` files AND the backend `.rs` emitters (synthetic
+callees like `gorget_str_codepoint_at` never appear in the runtime source) —
+and walk each hit to its GIR producer. Every producer must be covered by one
+of the four hooks, provably safe (owned elements, immediate byte reads,
+boundary clones), or unreachable. The v7 brief
+(`docs/plans/brief_37_phase1_lazy_default.md`, Appendix A) holds the full
+23-row enumeration this default shipped against. The sibling-site lesson was
+paid for twice: a consumer-side grep missed the index/slice route (W3c), and
+a runtime-only producer grep missed the synthetic for-string route (W3d).
+
+**Write sites clear the pair.** `lower_assign`'s Identifier arm and
+`lower_compound_assign` (BOTH its string-concat early-return fast path and
+its generic tail) remove the `cow_lazy_mat_flag` entry and the
+`Borrowed{CollectionElement}` tag AFTER the RHS is lowered — after, not
+before, because a self-referential RHS that mutates the source
+mid-expression (`s = s + poke(&v)`) needs the `&v` dispatch to still find
+the tag. A stale pair would emit a pointless guarded clone at the next
+collection mutation and leak the new buffer via the materialize's
+Move-assign overwrite. `consume(!s)` needs no clearing: the string-`!`
+short-circuit (`exprs/calls.rs`) passes a const-Ptr borrow with no MoveZero.
+
+**Typed eligibility (devbook/24).** The bind is eligible only when:
+
+- `TypeMetadata.borrow_view_fn` is `Some` — the new metadata axis (sibling
+  of `clone_fn`/`materialize_fn`, mirrored on
+  `BuiltinTypeProtocol::borrow_view_fn`), read via
+  `LoweringContext::borrow_view_fn_for`. Phase 1: **String only**.
+  Collections cannot join until their frees are view-aware —
+  `gorget_array_free` runs `elem_drop` whenever `data != NULL` regardless of
+  cap, so a cap=0 array view would double-drop every element (Dict/Set
+  similar; user structs have no view discriminator).
+- the source is a **`CollectionId::Local`** collection. FieldPath sources
+  stay eager: `cow_before_field_mutation` has no lazy routing, and
+  `lower_field_assign` does not walk descendant FieldPath refs on
+  root-struct mutation (the `empty_literal_struct_field` UAF shape).
+
+**ASan is NOT the safety net here.** The D1 wrong-output class (alias of a
+pre-materialize slot) and the W3b/W3c/W3d view-UAF class are both proven
+ASan-SILENT (the latter even with real heap UAFs — likely a pool-allocator
+free path). The stdout fixture battery (`witness_*`, `cow_lazy_*` in
+`tests/fixtures/`) is the PRIMARY net; the sanitizer is defense-in-depth
+only. Future debuggers of this machinery: do not interpret a clean sanitizer
+run as absence of a lazy-CoW bug.
+
+**Mechanical safety insight** (why `push`/`insert`/`sort` don't need a hook):
+the cap=0 view copies the element's 32-byte `Str` header — `data` points at
+the element's character buffer, not the array backing store. Operations that
+move headers cannot invalidate it. Only element-destroying ops can (element
+overwrite/`set`, `remove`/`clear`/`pop` via `elem_drop`, collection
+drop/reassign/move) — and each routes through the `cow_before_mutation`
+family, which materializes first.
+
 ## `MoveZero` and post-call ownership transfer
 
 When a consuming position is move-eligible (the source owns the data and is dead

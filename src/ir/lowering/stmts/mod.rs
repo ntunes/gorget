@@ -812,14 +812,12 @@ fn lower_var_decl(
                         //   FieldPath refs on root-struct mutation (the
                         //   empty_literal_struct_field UAF shape). FieldPath
                         //   lazy = Phase 1b.
-                        let lazy_loop_enabled = std::env::var("GG_COW_LAZY_LOOP")
-                            .map_or(false, |v| v == "1");
                         let lazy_collection = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
                             ctx.cow_borrow_source(p.local)
                                 .filter(|c| matches!(c, crate::ir::lowering::context::CollectionId::Local(_)))
                                 .cloned()
                         } else { None };
-                        if lazy_loop_enabled && source_is_cow_borrow && source_mut_unsafe
+                        if source_is_cow_borrow && source_mut_unsafe
                             && ctx.type_registry.is_resource_type(_inner)
                             && ctx.borrow_view_fn_for(_inner).is_some()
                             && lazy_collection.is_some()

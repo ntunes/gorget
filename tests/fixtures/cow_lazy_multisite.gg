@@ -1,0 +1,14 @@
+# Multi-mutation-site: two conditional mutation sites, the first dynamically
+# dead. restore_locals re-finds the tag per branch arm; dominance covers
+# same-straight-line later sites. Exactly 1 runtime clone expected under lazy.
+void main():
+    Vector[String] v = ["hello", "world"]
+    String s = v.get(0).unwrap()
+    bool a = false
+    bool b = true
+    if a:
+        v.push("first")
+    if b:
+        v.push("second")
+    print(f"s = {s}")
+    print(f"v.len() = {v.len()}")

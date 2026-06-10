@@ -1,0 +1,12 @@
+# W3c PRIMARY validation (ASan-blind class): string INDEX/SLICE syntax route —
+# `s[0..5]` lowers via lower_index_access (NOT returns_view dispatch), result
+# carries NO View tag. Temp-as-arg with callee mutating the source.
+void show(String a, Vector[String] &v):
+    v.set(0, "mutated")
+    print(f"a = {a}")
+
+void main():
+    Vector[String] v = ["hello", "world"]
+    String s = v.get(0).unwrap()
+    show(s[0..5], &v)
+    print(f"s = {s}")

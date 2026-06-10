@@ -1,0 +1,13 @@
+# Self-referential RHS that mutates the source mid-expression:
+# `s = s + poke(&v)` — the &v dispatch must materialize s IN PLACE before the
+# concat reads it. Locks the W4 clear-AFTER-RHS ordering decision.
+String poke(Vector[String] &v):
+    v.set(0, "mutated")
+    return "!"
+
+void main():
+    Vector[String] v = ["hello", "world"]
+    String s = v.get(0).unwrap()
+    s = s + poke(&v)
+    print(f"s = {s}")
+    print(f"v0 = {v.get(0).unwrap()}")

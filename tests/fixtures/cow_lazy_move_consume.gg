@@ -1,0 +1,10 @@
+# Move: `consume(!v)` straight-line — the !-move dispatch routes through
+# cow_before_mutation, materializing the lazy ref before v moves out.
+void consume(Vector[String] !v):
+    print(f"consumed {v.len()}")
+
+void main():
+    Vector[String] v = ["hello", "world"]
+    String s = v.get(0).unwrap()
+    consume(!v)
+    print(f"s = {s}")

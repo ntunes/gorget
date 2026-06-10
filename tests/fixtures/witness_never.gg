@@ -1,0 +1,14 @@
+# WITNESS: loop-body conditional source-mutation, DEAD branch.
+# `s` borrows v[0]; the push is gated on a condition that is NEVER true.
+# Eager-clone today: 1 clone in the bind block (before the loop). LAZY target: 0.
+# Output must be unchanged: s = hello, v.len() = 2.
+void main():
+    Vector[String] v = ["hello", "world"]
+    String s = v.get(0).unwrap()
+    int i = 0
+    while i < 2:
+        if i == 999999:
+            v.push("filler")
+        i = i + 1
+    print(f"s = {s}")
+    print(f"v.len() = {v.len()}")

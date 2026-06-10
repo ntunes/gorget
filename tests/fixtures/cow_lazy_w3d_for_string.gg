@@ -1,0 +1,13 @@
+# W3d PRIMARY validation (ASan-blind class): `for c in s:` char iteration emits
+# the synthetic gorget_str_codepoint_at — a view into the element buffer, on
+# none of the W3a/W3b/W3c paths. Body mutates the source on the first char.
+void main():
+    Vector[String] v = ["hello!", "world"]
+    String s = v.get(0).unwrap()
+    int i = 0
+    for c in s:
+        if i == 0:
+            v.set(0, "LATER!")
+        print(c)
+        i = i + 1
+    print(f"s = {s}")

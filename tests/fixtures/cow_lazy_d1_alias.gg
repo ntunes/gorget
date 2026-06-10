@@ -1,0 +1,11 @@
+# D1 regression: plain alias of a lazy view + source mutation.
+# Mirrors cow_materialization_points p1a. Without the W3a bind hook the alias
+# captures the PRE-materialize slot address and prints garbage under lazy.
+void main():
+    Vector[String] v = ["hello", "world"]
+    String s = v.get(0).unwrap()
+    String x = s
+    v.push("filler")
+    print(f"s = {s}")
+    print(f"x = {x}")
+    print(f"v.len() = {v.len()}")

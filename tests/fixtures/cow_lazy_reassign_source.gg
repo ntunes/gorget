@@ -1,0 +1,9 @@
+# Reassign-source: `v = w` replaces the borrowed buffer — the assigns.rs
+# cow_before_mutation dispatch must materialize the lazy ref first.
+void main():
+    Vector[String] v = ["hello", "world"]
+    Vector[String] w = ["x", "y"]
+    String s = v.get(0).unwrap()
+    v = w
+    print(f"s = {s}")
+    print(f"v.len() = {v.len()}")

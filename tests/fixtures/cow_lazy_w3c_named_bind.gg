@@ -1,0 +1,12 @@
+# W3c PRIMARY validation: NAMED binds of index/slice results carry no View tag,
+# so even `String t = s[0..5]` breaks without the W3c place-arm hook.
+void main():
+    Vector[String] v = ["hello", "world"]
+    String s = v.get(0).unwrap()
+    String t = s[0..5]
+    String c = s[1]
+    v.push("filler")
+    print(f"t = {t}")
+    print(f"c = {c}")
+    print(f"s = {s}")
+    print(f"v.len() = {v.len()}")

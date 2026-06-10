@@ -1,0 +1,12 @@
+# W4 boundary-clone lock: `f(&s)` mutates the lazy local through a mut borrow,
+# then the source collection is mutated. Pass-6 run-verified at exact clone parity.
+void grow(String &s):
+    s += " more"
+
+void main():
+    Vector[String] v = ["hello", "world"]
+    String s = v.get(0).unwrap()
+    grow(&s)
+    v.push("filler")
+    print(f"s = {s}")
+    print(f"v.len() = {v.len()}")

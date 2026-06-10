@@ -1,0 +1,11 @@
+# D1 regression: alias + steal (`s = "other"`) + source mutation.
+# Distinct lowering path (Branches F/G) from cow_lazy_d1_alias's Branch C.
+void main():
+    Vector[String] v = ["hello", "world"]
+    String s = v.get(0).unwrap()
+    String x = s
+    s = "other"
+    v.set(0, "replaced")
+    print(f"s = {s}")
+    print(f"x = {x}")
+    print(f"v0 = {v.get(0).unwrap()}")

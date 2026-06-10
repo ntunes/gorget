@@ -1,0 +1,14 @@
+# Escape: return of a STILL-VIEW lazy local (the conditional mutation never
+# ran) — ensure_owned_at_boundary clones at the return; the callee-local
+# source collection is destroyed at function exit.
+String make():
+    Vector[String] v = ["hello", "world"]
+    String s = v.get(0).unwrap()
+    bool cond = false
+    if cond:
+        v.push("filler")
+    return s
+
+void main():
+    String r = make()
+    print(f"r = {r}")

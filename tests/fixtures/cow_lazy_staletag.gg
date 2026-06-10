@@ -1,0 +1,10 @@
+# W4 clearing: reassign the lazy local, then mutate the source collection.
+# A stale tag+flag would emit a pointless guarded clone at the push (and leak
+# the reassigned buffer via the Move-assign).
+void main():
+    Vector[String] v = ["hello", "world"]
+    String s = v.get(0).unwrap()
+    s = "fresh"
+    v.push("filler")
+    print(f"s = {s}")
+    print(f"v.len() = {v.len()}")

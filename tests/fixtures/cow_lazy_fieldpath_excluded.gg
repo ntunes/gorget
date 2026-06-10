@@ -1,0 +1,12 @@
+# H2 shape: FieldPath collection source — EXCLUDED from lazy (stays eager).
+# Asserts correct output under the exclusion (the empty_literal_struct_field
+# UAF class: lower_field_assign does not walk descendant FieldPath refs).
+struct Holder:
+    Vector[String] items
+
+void main():
+    Holder h = Holder(["hello", "world"])
+    String s = h.items.get(0).unwrap()
+    h.items.push("filler")
+    print(f"s = {s}")
+    print(f"len = {h.items.len()}")
