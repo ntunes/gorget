@@ -1,6 +1,15 @@
 # BRIEF — #37 Phase 2: lazy CoW in the SELF-HOST, provenance-direct (the documented `ViewOf` design)
 
-Status: v4 (pass-3 review folded 2026-06-10: ⚠ **MOVE-SHAPE ORACLE EXCEPTION
+Status: v5 (pass-4 review folded 2026-06-10: ⚠ the Scope "typed axis" bullet
+REWRITTEN [p4-R1, blocking]: the v1 `borrow_view_fn` schema field-add was not
+executable in-zone (shared schema `include_str!`'d into Rust with an arity
+assert) AND unnecessary — the EXISTING `materialize_fn` presence via
+`resource_meta_for` is the typed discriminator (Some for exactly
+GorgetString); ViewOf cite :2236→:2247 [p4-N1]; oracle-exception harness
+helpers named [p4-N2]. Pass 4 verified the oracle-exception clause is
+internally consistent at all four sites, implementable in the harness, the
+snapshot-regen skip-on-mismatch premise solid, no v2/v3 remnants. v4 was
+pass-3 folded 2026-06-10: ⚠ **MOVE-SHAPE ORACLE EXCEPTION
 added** [p3-R1, the load-bearing one]: Rust gg is VALUE-WRONG on both EMove
 shapes (re-proven fresh), so EMove-row fixtures assert the EAGER-SEMANTICS
 stdout through the SELF-HOST route (gate-ON == gate-OFF, run-proven equal),
@@ -58,7 +67,7 @@ materialize hooks. Identical observable outputs; strictly lazier than Rust
 (d1_alias dead-path: SH-lazy **0** executed clones vs Rust Phase 1 **2**).
 Also lands the F1 parser/scan soundness fix UNGATED (it is a correctness fix
 independent of lazy). Owner-directed design goal; doc-grounded:
-`docs/language-design.md:2236` specifies "compile-time **ViewOf(source)
+`docs/language-design.md:2247` specifies "compile-time **ViewOf(source)
 provenance tracking** to auto-materialize views when the source is mutated" —
 provenance IS the documented spec; Rust Phase 1's four hooks are the
 deviation, and the Rust 1b back-port becomes a TODO informed by this chain.
@@ -143,11 +152,23 @@ never by the numbers)
   SCOPE and REQUIRED pre-flip (w3d regresses gate-ON without it).
 - **F1 fix lands UNGATED and FIRST** (its own commit; it corrects eager-mode
   wrong outputs — possible runtime_diff parity WINS; measure).
-- **Typed axis, no name-matching:** replace the prototype's
-  `runtime_name == "GorgetString"` read with `borrow_view_fn: Option[String]`
-  on the self-host `ResourceMetadata` (set in `lir_lower.gg`'s
-  `build_resource_metadata`, mirroring Rust's typed axis; read via one
-  accessor).
+- **Typed axis, no name-matching [REWRITTEN per p4-R1 — the v1 field-add was
+  NOT executable in-zone]:** replace the prototype's
+  `runtime_name == "GorgetString"` read with a PRESENCE-CHECK of the
+  EXISTING typed discriminator `ResourceMetadata.materialize_fn` via the
+  existing `resource_meta_for` accessor — `materialize_fn` is `Some` for
+  exactly GorgetString (the canonical table's own comment: "the only resource
+  with a view discriminator today", `compiler/data/resources.gg:62/:73`;
+  schema doc `schema.gg:82`). Zero schema edits, no name-matching, one source
+  of truth. ⚠ The field's PRESENCE is the eligibility discriminator ONLY —
+  the lazy materialize still calls `clone_to_owned` via the already-typed
+  `pointee_clone_fn`; do NOT wire `gorget_string_materialize_inplace` into
+  the lazy path. (Rationale for abandoning the v1 `borrow_view_fn` field-add:
+  the schema struct is SHARED with Rust — `compiler/data/schema.gg:74` is
+  `include_str!`'d into the Rust binary with a 13-arity hard assert
+  `src/resources.rs:355` — so the field-add would force out-of-zone `src/` +
+  schema/owner-gated edits; and `build_resource_metadata`'s table-first
+  lookup makes the lir_lower fallback row DEAD for String anyway.)
 
 ## The work
 
@@ -219,8 +240,9 @@ derivation JOINS = for-string source (`lower_loops.gg:326-334`, one site —
 REQUIRED) and `returns_view` results at the single choke point
 (`lower_expr.gg:1578-1583`, receiver-is-member → result joins the family
 with its own flag — this also flips the pre-existing `cow_lazy_w3b_*`
-WRONG-OUTPUTs to MATCH while keeping them lazy); the typed `borrow_view_fn`
-axis; drop-tracking via a typed override (the prototype pushes the DropEntry
+WRONG-OUTPUTs to MATCH while keeping them lazy); the typed eligibility read
+(`materialize_fn` presence via `resource_meta_for`, per the rewritten Scope
+bullet — NOT a schema field-add); drop-tracking via a typed override (the prototype pushes the DropEntry
 directly because `register_local_for_drop` skips LoView — productionize,
 don't hack); statement-scope retirement for temp family members (avoid dead
 guards). Every intermediate commit green with the gate OFF (gate-OFF emitted
@@ -247,8 +269,13 @@ wired + snapshotted as gate-ON regression guards [p2-R5]) — **EXCEPT the
 MOVE-SHAPE ORACLE EXCEPTION [p3-R1]: Rust gg is VALUE-WRONG on both EMove
 shapes (the HIGH Rust TODO), so EMove-row fixtures (a) assert the
 EAGER-SEMANTICS stdout (the self-host's gate-ON == gate-OFF output,
-run-proven equal) via `run_gg`-style tests against the SELF-HOST route, NOT
-the Rust oracle; (b) are listed EXPECTED-WRONG in runtime_diff and EXCLUDED
+run-proven equal) via tests against the SELF-HOST route, NOT the Rust oracle
+— directly expressible in the harness [p4-N2]: compose
+`build_gg_dir_cached("self_host_lowerer", "driver.gg")` (OnceLock-cached,
+`integration.rs:~9483`) + `self_host_emit_cc_run(...)` (`:~15676`) under
+`#[serial(self_host_lowerer_driver)]`, asserting the literal expected
+string; (W1's two-module fixture similarly needs `run_gg_dir`, not
+`run_gg`); (b) are listed EXPECTED-WRONG in runtime_diff and EXCLUDED
 from Gate-4's flip arithmetic; (c) are NOT snapshotted until the Rust HIGH
 TODO lands (the snapshot regen mechanism seeds only self==Rust matches, and
 baking Rust's wrong output is forbidden per Don't-redesign-around-gaps)**.
