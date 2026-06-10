@@ -1,15 +1,24 @@
 # TODO
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE THIS BLOCK IN PLACE each session; completed work → DONE.md, do NOT accumulate "superseded" blocks)
-**gorget-1 code tip `b00797d2` (lazy bare-form terminal SExpr method-targ recording, +1 `stdlib_iter_map_filter`; on top of
-Rust-gg CoW `.get().unwrap()`-bind correctness fix `2ffa8882` [parity-neutral; ⭐ the REFERENCE for self-host tier-2] +
-lazy `iter_map_inference` +2 `caf102fd` + closure-ABI `6e856ce8` [+1] + CoW P3 TIER-1 `488534d3` [sound borrow-flip core,
-parity-NEUTRAL] + adapter-mono `518dc364` [+1] + 1b `d8807885` + CoW P2 `f19ce0dd` + 1a `f0e4064c` [+11]). Docs on top,
-`git log -1` for the live tip; owner ff's main→gorget-1). RE-MEASURE PARITY (never trust a dated number) via: `GG_RUNTIME_DIFF=1
-GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration --release self_host_runtime_diff -- --nocapture` → read the
-`PARITY = MATCH/(...)` line. Last RUN-CONFIRMED count THIS SESSION (2026-06-09, CoW tier-2 L1 `3cde4913`): **473/957 ≈ 49.4%**
-(runtime_diff-confirmed; RE-MEASURE for the exact live number). ⚠ denominator shifted (corpus grew); only the
-freshly-printed count means anything. ✅ The 2 budget lints are now GREEN (`cargo test --test lints` 8/0; phase_d bumped, name-prefix split into Phase-A@69 + an Option/Result burn-down ratchet) — `--test lints` is now part of the gate.**
+**gorget-1 code tip `1e55511b` (2026-06-10 session: ① #37 PHASE 1 — lazy loop-carried CoW materialization is the Rust-gg
+PRODUCTION DEFAULT [`ecd46cfc`+`09030b7f`+`1e55511b`: one shared `materialize_lazy_source_if_needed` helper at FOUR
+GIR-level hooks W3a bind / W3b returns_view receiver / W3c index place-arm / W3d for-string source; typed `borrow_view_fn`
+axis on `TypeMetadata`; H2 FieldPath excluded; 21 `cow_lazy_*`/witness fixtures + emitted-C clone-shape lock-in;
+devbook/11 §lazy-materialize incl. the 23-row view-producer enumeration]; ② lower.gg 9-MODULE SPLIT re-landed
+[`eb5b10a9` None-arg expected-type peel fix + 3 `none_literal_*` fixtures, `ef28a497` split, `a2f7a7f4` NO_NAME retired]
+— see DONE.md for both chains' details; docs on top, `git log -1` for the live tip; owner ff's main→gorget-1).
+RE-MEASURE PARITY (never trust a dated number) via: `GG_RUNTIME_DIFF=1 GG_BUILD_TIMEOUT_SECS=600 cargo test --test
+integration --release self_host_runtime_diff -- --nocapture` → read the `PARITY = MATCH/(...)` line. Last RUN-CONFIRMED
+(2026-06-10, post-split tree): **475/960** — RE-MEASURE for the live number; the denominator grows with the corpus
+(runtime_diff takes ~130s on this host, NOT 13 min). Gate battery for any lower.gg/CoW work = `cargo test --lib` +
+`--test lints` + `fixed_point` (GG_BUILD_TIMEOUT_SECS=600) + full integration + for CoW changes an ASan sweep with an
+eager/pre-change Step-0 baseline (⚠ THRICE-PROVEN this session: ASan is BLIND to the wrong-output AND view-UAF classes —
+stdout fixtures are the primary net; see devbook/11 caveat).**
+**⬅ NEXT: #37 PHASE 2 — port the lazy mechanism to the self-host (`lower_expr.gg`/`lower_cow.gg` post-split modules; flat
+named_locals so the rebind persists; `lir_ssa` must carry slot+flag across the back-edge; the Rust implementation at the
+four hook sites is the reference). Then the parity north-star chains (#34/#39) + the queued enum_category Phase 2 —
+ALL pre-split `lower.gg:NNNN` citations in queued briefs are STALE: re-grep via the MODULE MAP note below.**
 **Recent landed work lives in DONE.md, NOT here — keep this block free of COMPLETE/DONE/LANDED breadcrumbs (state + NEXT only).**
 
 🔄 **IN-FLIGHT (2026-06-09 session, on tip `44d96f92`+; briefs in `/tmp` are EPHEMERAL — mechanisms captured here for reconstruction):**
