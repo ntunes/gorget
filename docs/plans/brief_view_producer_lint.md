@@ -1,6 +1,10 @@
 # BRIEF — Chain A: executable guard for the lazy-CoW view-producer enumeration
 
-Status: v3 (pass-2 review folded 2026-06-10: W1 adjustment (vii) — arm a detects
+Status: v4 (pass-3 review folded 2026-06-10: gate-3 gains the SIXTH simulation
+— the only gate that proves the clean-tree-neutral adjustments (v)+(vii) were
+actually applied [p3-R1]; pass 3 also re-proved (vii) both ways from the brief
+text alone and verified the four-item residual + devbook/25 note. v3 was
+pass-2 folded 2026-06-10: W1 adjustment (vii) — arm a detects
 calls via `gorget_str_view_region\s*\(` regex, closing the RUN-PROVEN
 spaced-paren bypass [p2-R1; arm b already paren-free, unaffected]; W2's
 devbook/11 residual list corrected to FOUR items incl. backend-emit rewrites
@@ -157,11 +161,24 @@ fixed_point needed)
 
 1. `cargo build` + `cargo test --lib` (compile sanity; expect 1072/0).
 2. `cargo test --test lints` — **10/10** (7 existing + 3 new), < 10s.
-3. Re-run ALL FIVE simulated-drift demonstrations from the scout's run-proof
-   table (new runtime producer / new .rs emitter / sig_fresh flip / LIR
-   mention 42>41 / direct literal 8>7), confirm each fails with its message,
-   REVERT each, confirm green again. Paste the five failure messages in the
-   handoff (they are the guard's UX — reviewers approved their wording).
+3. Re-run ALL SIX simulated-drift demonstrations — the scout's five (new
+   runtime producer / new .rs emitter / sig_fresh flip / LIR mention 42>41 /
+   direct literal 8>7) PLUS the pass-3 sixth, which is the ONLY gate that
+   proves adjustments (v)+(vii) were actually applied (both are
+   clean-tree-neutral — an executor who skipped them would otherwise pass
+   every gate with the proven bypass intact): append to
+   `runtime_string_extended.c` a NEW function in Allman style with a
+   GNU-spaced call —
+   `static inline Str gorget_str_first_byte(Str s)` / `{` /
+   `    return gorget_str_view_region ((const char*)s.data, 1);` / `}` —
+   expected failure = arm a's "could not attribute…" assert ((v) proof; the
+   spaced call is only SEEN at all because of (vii)). NOTE: placing the
+   spaced call INSIDE an existing table producer correctly stays green
+   (function-set granularity — that producer is already covered); the
+   simulation must use a NEW function. Confirm each of the six fails with
+   its message, REVERT each, confirm green again. Paste the six failure
+   messages in the handoff (they are the guard's UX — reviewers approved
+   their wording).
 4. Commented-out-call check: a comment containing a verbatim
    `gorget_str_view_region(` call must NOT trip any arm.
 
