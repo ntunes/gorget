@@ -1,6 +1,15 @@
 # BRIEF — Chain C: Rust-side miscompile burn-down (6 fixes + 1 retirement)
 
-Status: v2 (pass-1 review folded 2026-06-10: item-1 fixtures MUST use the
+Status: v3 (pass-2 review folded 2026-06-10: cast-name audit enumeration
+corrected — `float32`/`float64` IN, `int`/`float`/`bool` OUT (have real
+lowerings, run-verified) [p2-R1]; TODO hygiene completed — :728 moves to
+DONE in commit 1, :732/:730 move in commits 5/6 [p2-R2]; the §7.9 amendment
+is ADDITIVE (String-exception sentence), the lead sentence + write doctrine
+stay generic [p2-R3]. Pass 2 RUN-PROVED the item-3 PRODUCER half (Branch-C
+flag; emitted-C coherent — `emit_borrow` initializes the Ptr slot, the
+garbage store gone; 365 targeted tests green incl. string/Branch-A 90;
+self-host driver smoke-runs) — producer (a) ALONE fixes the class. v2 was
+pass-1 folded 2026-06-10: item-1 fixtures MUST use the
 `v.get(i).unwrap()` bind shape [R1]; item-6 ICE hardening cites BOTH sibling
 fall-through loops [R2]; item-6 scope includes the §7.9 language-reference
 amendment — the spec currently lists String among mutable-borrow subscripts,
@@ -39,7 +48,9 @@ one validator-panic class (5), two accepted-but-meaningless-surface holes
   never tags its `tuple_init` dst → Untracked → destructure picks Copy →
   validator correctly flags the whole-tuple resource copy. The TODO:728
   "clone at the tuple ctor" proposal is WRONG-SITE (element clones already
-  happen via `ensure_owned_at_boundary`); CORRECT the TODO entry.
+  happen via `ensure_owned_at_boundary`); since commit 1 FIXES the bug, MOVE
+  TODO:728 to DONE.md IN COMMIT 1 with the corrected root-cause note
+  [p2-R2] — never leave a fixed bug "corrected in place" in TODO.
 - FIX: one line — `ctx.set_owned(builder, dst);` after `builder.tuple_init`
   (`exprs/mod.rs:~556`). Destructure then takes Move + existing MoveZero.
 - FIXTURE: `tuple_destructure_literal_strings.gg` (literal, named-local, and
@@ -156,8 +167,12 @@ one validator-panic class (5), two accepted-but-meaningless-surface holes
   (`:1443-1461`). ALSO in this commit [p1-R3]: amend
   `docs/language-reference.md` §7.9 (`:1631-1633`) — it currently lists
   String among resource types whose subscript "returns a mutable borrow",
-  contradicting the new error; remove/qualify String there so spec and
-  compiler agree (the `:3141-3144` view table is the correct story).
+  contradicting the new error. [p2-R3] The amendment is ADDITIVE, not just a
+  deletion: §7.9's lead sentence (`:1626`) and the subscript-write doctrine
+  (`:1649-1653`) stay generic, so add ONE String-exception sentence to §7.9
+  pointing at the §Strings view table (`:3141-3144`, the correct story).
+  Pass 2 grepped reference+book+design: no OTHER doc site teaches string
+  index-assign.
 - THE `str()` GAP (found while probing the REFUTED item 4): `String s =
   str(3)` passes `gg check` (`str` listed in `is_builtin`,
   `resolve.rs:1966`) but has NO lowering → I64-typed result → the
@@ -169,12 +184,18 @@ one validator-panic class (5), two accepted-but-meaningless-surface holes
   against the one-obvious-way design target). Suggested message shape:
   "no builtin `str(...)` call: use an f-string `f\"{x}\"`, `.to_string()`,
   or `std.conv`"; AUDIT the other
-  `is_builtin` cast-names (`int8`…`uint64`, `byte`) for the same
-  accepted-but-unlowered hole — fix the CLASS (one gate, all names).
+  `is_builtin` cast-names — `int8`…`uint64`, `float32`/`float64`, `byte`
+  [p2-R1: `float32(2)` run-verified link-fails] — for the same
+  accepted-but-unlowered hole; NOT `int`/`float`/`bool`, which HAVE real
+  lowerings (run-verified working). Fix the CLASS (one gate, all unlowered
+  names).
 - ITEM 4 RETIREMENT: the TODO:232 String-ABI-ICE entry is REFUTED at tip
   (all 6 probed sibling shapes work; intervening auto-prop/aggregate work
   fixed it) — DELETE it citing this scout; the `str()` gap entry replaces
-  it. Also CORRECT TODO:728 (item 5's wrong-site proposal).
+  it. TODO:728 is handled in commit 1 (moved to DONE — see item 5). ALSO
+  [p2-R2]: MOVE TODO:732 (the `s[i] +=` entry, fixed by this commit) and
+  TODO:730 (the comprehension entry, fixed by commit 6) to DONE.md in their
+  respective commits — fixed bugs never stay in TODO.
 - FIXTURES: `check_gg_fails` negatives for `s[i] =`, `s[i] +=`, `str(3)`
   (+ any cast-name siblings found unlowered).
 
