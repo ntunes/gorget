@@ -21,7 +21,9 @@ clean, all named leaks exact pre-fix → ZERO post-fix, stdout byte-identical
 mark_moved = exactly one free; double-USE rejected by the validator),
 site-B's single pusher/drain straight-line, the 5-site enumeration complete
 ('b' is the only String-producing format arm), fixed_point GREEN 494.91s,
-LLVM spot-checks ASan-clean, RSS direction 10MB→1MB on the print loop. v1
+LLVM spot-checks stdout-clean (pass-1's "ASan-clean" reading was VACUOUS per
+p2-R2 — sanitize never links on the LLVM path), RSS direction 10MB→1MB on
+the print loop. v1
 was the orchestrator draft from scout `agent-ab272cfd08b23d4d4` at
 `6894cb6a`; the RUN-PROVEN prototype is committed at
 `docs/plans/print_temp_leak_fix.diff` — 65 insertions, 3 files.)
