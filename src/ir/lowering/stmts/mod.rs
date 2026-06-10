@@ -527,6 +527,12 @@ fn lower_var_decl(
                 || gir_type_is_box_callable
                 || gir_type_is_lazy_generic
             );
+            // Set by the lazy loop-carried CoW branch when it has fully
+            // emitted the bind (borrow_view into `s` + flag). The
+            // unconditional trailing `builder.assign_mode(.., local_id,
+            // operand)` MUST be skipped, else it re-clobbers `s`'s value slot
+            // with the raw element struct (a double-free).
+            let mut lazy_handled = false;
             if needs_reinfer {
                 let inferred = infer_operand_type_with_builder(ctx, &operand, builder);
                 if inferred != gir_type {
@@ -774,7 +780,57 @@ fn lower_var_decl(
                                 path.map_or(false, |p| ctx.is_source_mut_unsafe_at(&p, stmt_span.start))
                             } else { false }
                         } else { false };
-                        if source_is_cow_borrow && safe_in_loop && !source_mut_unsafe
+                        // FULL LAZY materialization (devbook/11 "Lazy
+                        // loop-carried materialization"). The source IS
+                        // mutated on a forward path (`source_mut_unsafe`), so
+                        // the pre-lazy lowering EAGER-cloned at this bind (the
+                        // clone callsite lands in the bind block before the
+                        // loop header). Instead, emit the lazy loop-carried
+                        // shape: keep `s` as a pre-loop String VALUE slot
+                        // holding a shallow borrow + a pre-loop `s_mat=false`
+                        // flag; defer the deep clone to a flag-guarded
+                        // IN-PLACE materialize at the mutation site (clone
+                        // once, from the still-valid borrow). Dead mutation
+                        // path → 0 clones. Both slots are pre-loop locals
+                        // (lid < the loop's save_locals boundary) so the
+                        // materialize survives restore_locals AND becomes
+                        // loop-carried (LIR-SSA phis them at the header). This
+                        // is the centerpiece the a12333a0 attempt got wrong
+                        // (it cloned every iteration from a stale ptr with no
+                        // flag).
+                        //
+                        // Eligibility:
+                        // - `borrow_view_fn_for` (typed metadata axis): the
+                        //   pointee's runtime must support drop-safe cap=0
+                        //   views. Phase 1: String only — collection frees are
+                        //   not view-aware (`gorget_array_free` runs
+                        //   `elem_drop` regardless of cap).
+                        // - `CollectionId::Local` sources only: FieldPath
+                        //   sources are EXCLUDED because
+                        //   `cow_before_field_mutation` has no lazy routing
+                        //   and `lower_field_assign` does not walk descendant
+                        //   FieldPath refs on root-struct mutation (the
+                        //   empty_literal_struct_field UAF shape). FieldPath
+                        //   lazy = Phase 1b.
+                        let lazy_loop_enabled = std::env::var("GG_COW_LAZY_LOOP")
+                            .map_or(false, |v| v == "1");
+                        let lazy_collection = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
+                            ctx.cow_borrow_source(p.local)
+                                .filter(|c| matches!(c, crate::ir::lowering::context::CollectionId::Local(_)))
+                                .cloned()
+                        } else { None };
+                        if lazy_loop_enabled && source_is_cow_borrow && source_mut_unsafe
+                            && ctx.type_registry.is_resource_type(_inner)
+                            && ctx.borrow_view_fn_for(_inner).is_some()
+                            && lazy_collection.is_some()
+                        {
+                            let collection = lazy_collection.unwrap();
+                            ctx.emit_lazy_loopcarried_borrow(
+                                builder, name, local_id, _inner, inferred,
+                                operand.clone(), collection, value.span,
+                            );
+                            lazy_handled = true;
+                        } else if source_is_cow_borrow && safe_in_loop && !source_mut_unsafe
                             && ctx.type_registry.is_resource_type(_inner)
                         {
                             // Propagate CowBorrow as CollectionRef — typed binding
@@ -882,6 +938,12 @@ fn lower_var_decl(
             use crate::ir::instructions::AssignMode;
             let actual_var_type = builder.local_type(local_id);
 
+            // The lazy loop-carried CoW branch already emitted the bind
+            // (borrow_view → `s`, flag init) and set `s`'s
+            // ownership/drop-tracking. Skip the trailing assign +
+            // ownership-propagation + move-zero, which would re-clobber `s`'s
+            // value slot with the raw element struct (a double-free).
+            if !lazy_handled {
             // Phase D4 typed signals — see TODO entry "Phase D4 —
             // lower_var_decl decision tree refactor" and
             // `docs/devbook/13-ownership-in-ir.md` (Phase D, §6.7). The decision tree below is
@@ -973,6 +1035,7 @@ fn lower_var_decl(
                     }
                 }
             }
+            } // end `if !lazy_handled`
         }
 
         Pattern::Tuple(parts) => {

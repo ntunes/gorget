@@ -103,6 +103,17 @@ pub struct BuiltinTypeProtocol {
     /// CoW materialize function (`void(*)(void*)`) — view → owned in place.
     /// e.g., "gorget_string_materialize_inplace". None = no view/owner distinction.
     pub materialize_fn: Option<&'static str>,
+    /// Borrow-as-view function (`T(*)(const T*)`) — shallow copy with the
+    /// ownership discriminator forced to "view", drop-safe in a drop-tracked
+    /// value slot. The lazy loop-carried CoW bind eligibility axis (mirrors
+    /// `TypeMetadata::borrow_view_fn`, where the read happens). None for every
+    /// collection protocol today: their frees are not view-aware
+    /// (`gorget_array_free` runs `elem_drop` regardless of cap — a cap=0
+    /// array view would double-drop every element). Phase 1b can populate
+    /// this once view-safe frees exist. String (no protocol — its metadata is
+    /// set directly in `TypeMapper::new`) carries
+    /// `Some("gorget_string_borrow_view")`.
+    pub borrow_view_fn: Option<&'static str>,
     /// Collection kind for metadata-based dispatch. None = not a collection.
     pub collection_kind: Option<CollectionKind>,
     /// C runtime struct name this type aliases to (e.g. "GorgetClosure" for
@@ -241,6 +252,7 @@ pub static VECTOR: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_fn: Some("gorget_array_clone"),
     clone_inplace_fn: Some("gorget_array_clone_inplace"),
     materialize_fn: None,
+    borrow_view_fn: None,
     collection_kind: Some(CollectionKind::Array),
     c_runtime_alias: None,
     methods: &[
@@ -333,6 +345,7 @@ pub static DEQUE: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_fn: Some("gorget_array_clone"),
     clone_inplace_fn: Some("gorget_array_clone_inplace"),
     materialize_fn: None,
+    borrow_view_fn: None,
     collection_kind: Some(CollectionKind::Array),
     c_runtime_alias: None,
     methods: VECTOR.methods, // Same interface as Vector
@@ -346,6 +359,7 @@ pub static DICT: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_fn: Some("gorget_map_clone"),
     clone_inplace_fn: Some("gorget_map_clone_inplace"),
     materialize_fn: None,
+    borrow_view_fn: None,
     collection_kind: Some(CollectionKind::OrderedMap),
     c_runtime_alias: None,
     methods: &[
@@ -404,6 +418,7 @@ pub static HASHMAP: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_fn: Some("gorget_map_clone"),
     clone_inplace_fn: Some("gorget_map_clone_inplace"),
     materialize_fn: None,
+    borrow_view_fn: None,
     collection_kind: Some(CollectionKind::Map),
     c_runtime_alias: None,
     methods: DICT.methods, // Same interface as Dict
@@ -417,6 +432,7 @@ pub static SET: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_fn: Some("gorget_set_clone"),
     clone_inplace_fn: Some("gorget_set_clone_inplace"),
     materialize_fn: None,
+    borrow_view_fn: None,
     collection_kind: Some(CollectionKind::OrderedSet),
     c_runtime_alias: None,
     methods: &[
@@ -465,6 +481,7 @@ pub static HASHSET: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_fn: Some("gorget_set_clone"),
     clone_inplace_fn: Some("gorget_set_clone_inplace"),
     materialize_fn: None,
+    borrow_view_fn: None,
     collection_kind: Some(CollectionKind::Set),
     c_runtime_alias: None,
     methods: SET.methods, // Same interface as Set
@@ -478,6 +495,7 @@ pub static CHANNEL: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_fn: None,
     clone_inplace_fn: None,
     materialize_fn: None,
+    borrow_view_fn: None,
     collection_kind: None,
     c_runtime_alias: None,
     methods: &[
@@ -500,6 +518,7 @@ pub static SHARED: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_fn: None,
     clone_inplace_fn: None,
     materialize_fn: None,
+    borrow_view_fn: None,
     collection_kind: None,
     c_runtime_alias: None,
     methods: &[
@@ -527,6 +546,7 @@ pub static WEAK: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_fn: None,
     clone_inplace_fn: None,
     materialize_fn: None,
+    borrow_view_fn: None,
     collection_kind: None,
     c_runtime_alias: None,
     methods: &[
@@ -547,6 +567,7 @@ pub static MUTEX: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_fn: None,
     clone_inplace_fn: None,
     materialize_fn: None,
+    borrow_view_fn: None,
     collection_kind: None,
     c_runtime_alias: None,
     methods: &[
@@ -566,6 +587,7 @@ pub static GUARD: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_fn: None,
     clone_inplace_fn: None,
     materialize_fn: None,
+    borrow_view_fn: None,
     collection_kind: None,
     c_runtime_alias: None,
     methods: &[
@@ -582,6 +604,7 @@ pub static RWLOCK: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_fn: None,
     clone_inplace_fn: None,
     materialize_fn: None,
+    borrow_view_fn: None,
     collection_kind: None,
     c_runtime_alias: None,
     methods: &[
@@ -604,6 +627,7 @@ pub static READ_GUARD: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_fn: None,
     clone_inplace_fn: None,
     materialize_fn: None,
+    borrow_view_fn: None,
     collection_kind: None,
     c_runtime_alias: None,
     methods: &[
@@ -619,6 +643,7 @@ pub static WRITE_GUARD: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_fn: None,
     clone_inplace_fn: None,
     materialize_fn: None,
+    borrow_view_fn: None,
     collection_kind: None,
     c_runtime_alias: None,
     methods: &[
@@ -635,6 +660,7 @@ pub static THREAD: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_fn: None,
     clone_inplace_fn: None,
     materialize_fn: None,
+    borrow_view_fn: None,
     collection_kind: None,
     c_runtime_alias: None,
     methods: &[
@@ -651,6 +677,7 @@ pub static HEAP: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_fn: None,
     clone_inplace_fn: None,
     materialize_fn: None,
+    borrow_view_fn: None,
     collection_kind: None,
     c_runtime_alias: None,
     methods: &[
@@ -670,6 +697,7 @@ pub static GORGET_STRING_VIEW: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_fn: None,
     clone_inplace_fn: None,
     materialize_fn: None,
+    borrow_view_fn: None,
     collection_kind: None,
     c_runtime_alias: None,
     methods: &[
@@ -733,6 +761,7 @@ pub static OPTION: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_fn: None,
     clone_inplace_fn: None,
     materialize_fn: None,
+    borrow_view_fn: None,
     collection_kind: None,
     c_runtime_alias: None,
     methods: &[
@@ -765,6 +794,7 @@ pub static RESULT: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_fn: None,
     clone_inplace_fn: None,
     materialize_fn: None,
+    borrow_view_fn: None,
     collection_kind: None,
     c_runtime_alias: None,
     methods: &[
@@ -792,6 +822,7 @@ pub static ATOMIC_INT: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_fn: None,
     clone_inplace_fn: None,
     materialize_fn: None,
+    borrow_view_fn: None,
     collection_kind: None,
     c_runtime_alias: None,
     methods: &[
@@ -811,6 +842,7 @@ pub static ATOMIC_BOOL: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_fn: None,
     clone_inplace_fn: None,
     materialize_fn: None,
+    borrow_view_fn: None,
     collection_kind: None,
     c_runtime_alias: None,
     methods: &[
@@ -829,6 +861,7 @@ pub static BARRIER: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_fn: None,
     clone_inplace_fn: None,
     materialize_fn: None,
+    borrow_view_fn: None,
     collection_kind: None,
     c_runtime_alias: None,
     methods: &[
@@ -844,6 +877,7 @@ pub static WAIT_GROUP: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_fn: None,
     clone_inplace_fn: None,
     materialize_fn: None,
+    borrow_view_fn: None,
     collection_kind: None,
     c_runtime_alias: None,
     methods: &[
@@ -861,6 +895,7 @@ pub static SEMAPHORE: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_fn: None,
     clone_inplace_fn: None,
     materialize_fn: None,
+    borrow_view_fn: None,
     collection_kind: None,
     c_runtime_alias: None,
     methods: &[
@@ -878,6 +913,7 @@ pub static ONCE_FLAG: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_fn: None,
     clone_inplace_fn: None,
     materialize_fn: None,
+    borrow_view_fn: None,
     collection_kind: None,
     c_runtime_alias: None,
     methods: &[
@@ -894,6 +930,7 @@ pub static TASK_GROUP: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_fn: None,
     clone_inplace_fn: None,
     materialize_fn: None,
+    borrow_view_fn: None,
     collection_kind: None,
     c_runtime_alias: None,
     methods: &[
@@ -927,6 +964,7 @@ pub static CALLABLE: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_fn: Some("gorget_closure_clone_to_owned"),
     clone_inplace_fn: Some("gorget_closure_clone_inplace"),
     materialize_fn: None,
+    borrow_view_fn: None,
     collection_kind: None,
     c_runtime_alias: Some("GorgetClosure"),
     methods: &[],
@@ -940,6 +978,7 @@ pub static MUT_CALLABLE: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_fn: Some("gorget_closure_clone_to_owned"),
     clone_inplace_fn: Some("gorget_closure_clone_inplace"),
     materialize_fn: None,
+    borrow_view_fn: None,
     collection_kind: None,
     c_runtime_alias: Some("GorgetClosure"),
     methods: &[],
@@ -953,6 +992,7 @@ pub static CONSUME_CALLABLE: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_fn: Some("gorget_closure_clone_to_owned"),
     clone_inplace_fn: Some("gorget_closure_clone_inplace"),
     materialize_fn: None,
+    borrow_view_fn: None,
     collection_kind: None,
     c_runtime_alias: Some("GorgetClosure"),
     methods: &[],
@@ -966,6 +1006,7 @@ pub static GORGET_CLOSURE: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_fn: Some("gorget_closure_clone_to_owned"),
     clone_inplace_fn: Some("gorget_closure_clone_inplace"),
     materialize_fn: None,
+    borrow_view_fn: None,
     collection_kind: None,
     c_runtime_alias: Some("GorgetClosure"),
     methods: &[],

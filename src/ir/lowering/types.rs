@@ -42,6 +42,10 @@ impl TypeMapper {
                 clone_fn: Some("gorget_string_clone_to_owned".to_string()),
                 clone_inplace_fn: Some("gorget_string_clone_inplace".to_string()),
                 materialize_fn: Some("gorget_string_materialize_inplace".to_string()),
+                // String is the only Phase-1 type whose runtime supports
+                // drop-safe cap=0 views — the lazy loop-carried CoW bind
+                // eligibility axis (see `TypeMetadata::borrow_view_fn`).
+                borrow_view_fn: Some("gorget_string_borrow_view".to_string()),
                 ..Default::default()
             },
         });
@@ -351,6 +355,7 @@ impl TypeMapper {
                             td.metadata.clone_fn = clone_fn_name;
                             td.metadata.clone_inplace_fn = protocol.clone_inplace_fn.map(String::from);
                             td.metadata.materialize_fn = protocol.materialize_fn.map(String::from);
+                            td.metadata.borrow_view_fn = protocol.borrow_view_fn.map(String::from);
                             td.metadata.collection_kind = protocol.collection_kind;
                             td.metadata.c_runtime_alias = protocol.c_runtime_alias.map(String::from);
                         }
@@ -821,6 +826,7 @@ pub(super) fn register_collection_alias(
                 clone_fn: protocol.clone_fn.map(String::from),
                 clone_inplace_fn: protocol.clone_inplace_fn.map(String::from),
                 materialize_fn: protocol.materialize_fn.map(String::from),
+                borrow_view_fn: protocol.borrow_view_fn.map(String::from),
                 collection_kind: protocol.collection_kind,
                 enum_category: None,
                 c_runtime_alias: protocol.c_runtime_alias.map(String::from),
@@ -926,6 +932,7 @@ pub(super) fn register_callable_alias(
             clone_fn: protocol.clone_fn.map(String::from),
             clone_inplace_fn: protocol.clone_inplace_fn.map(String::from),
             materialize_fn: protocol.materialize_fn.map(String::from),
+            borrow_view_fn: protocol.borrow_view_fn.map(String::from),
             collection_kind: protocol.collection_kind,
             enum_category: None,
             c_runtime_alias: protocol.c_runtime_alias.map(String::from),

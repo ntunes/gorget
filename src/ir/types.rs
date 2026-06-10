@@ -182,6 +182,16 @@ pub struct TypeMetadata {
     /// view/owner distinction. Replaces the `elem_materialize_fn_for_c_type`
     /// lookup table.
     pub materialize_fn: Option<String>,
+    /// Borrow-as-view function (`T(*)(const T*)`) — shallow copy with the
+    /// ownership discriminator forced to "view" (cap=0 for Str), drop-safe in
+    /// a drop-tracked value slot. e.g., "gorget_string_borrow_view". The
+    /// typed eligibility axis for the lazy loop-carried CoW bind
+    /// (`emit_lazy_loopcarried_borrow`): `None` = the type's runtime cannot
+    /// represent a drop-safe view, so element binds eager-clone. Phase 1:
+    /// String only — collections need view-aware frees first
+    /// (`gorget_array_free` runs `elem_drop` regardless of cap).
+    /// Mirrors `BuiltinTypeProtocol::borrow_view_fn`.
+    pub borrow_view_fn: Option<String>,
     /// Collection kind for metadata-based dispatch (replaces name-prefix matching).
     pub collection_kind: Option<CollectionKind>,
     /// Enum category for Option/Result detection (replaces starts_with("Option__") matching).
@@ -220,6 +230,7 @@ impl Default for TypeMetadata {
             clone_fn: None,
             clone_inplace_fn: None,
             materialize_fn: None,
+            borrow_view_fn: None,
             collection_kind: None,
             enum_category: None,
             c_runtime_alias: None,

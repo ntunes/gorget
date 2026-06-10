@@ -225,6 +225,19 @@ static inline GorgetString gorget_string_borrow(const GorgetString* src) {
     return *src;
 }
 
+// Borrow as a TRUE view — shallow struct copy with cap FORCED to 0 so the
+// result is drop-safe (gorget_string_free no-ops cap=0) even when stored in a
+// drop-tracked VALUE slot that shares the source's heap buffer. Used by the
+// lazy loop-carried element borrow: `s` holds this view until the
+// flag-guarded in-place materialize deep-clones it (cap>0) on the first
+// mutating use. Distinct from gorget_string_borrow (which copies cap as-is —
+// fine for a Ref local the compiler never frees, but a double-free when the
+// borrow lives in a freed value slot).
+static inline GorgetString gorget_string_borrow_view(const GorgetString* src) {
+    if (src->len == 0) return GORGET_EMPTY_STR;
+    return (Str){ .data = src->data, .cap = 0, .len = src->len, .alloc = NULL };
+}
+
 // Materialize an in-slot Str value. If it's a view (cap == 0), clone it into
 // an owned buffer so the enclosing container can safely outlive the original
 // source. If already owned, no-op.

@@ -289,6 +289,9 @@ pub fn lower_module(
                 clone_fn: Some("gorget_array_clone".to_string()),
                 clone_inplace_fn: Some("gorget_array_clone_inplace".to_string()),
                 materialize_fn: None,
+                // No view-safe free for collections yet (Phase 1b) — see
+                // TypeMetadata::borrow_view_fn.
+                borrow_view_fn: None,
                 collection_kind: Some(CollectionKind::Array),
                 enum_category: None,
                 c_runtime_alias: None,
@@ -312,6 +315,9 @@ pub fn lower_module(
                 clone_fn: Some("gorget_map_clone".to_string()),
                 clone_inplace_fn: Some("gorget_map_clone_inplace".to_string()),
                 materialize_fn: None,
+                // No view-safe free for collections yet (Phase 1b) — see
+                // TypeMetadata::borrow_view_fn.
+                borrow_view_fn: None,
                 collection_kind: Some(CollectionKind::Map),
                 enum_category: None,
                 c_runtime_alias: None,
@@ -335,6 +341,9 @@ pub fn lower_module(
                 clone_fn: Some("gorget_set_clone".to_string()),
                 clone_inplace_fn: Some("gorget_set_clone_inplace".to_string()),
                 materialize_fn: None,
+                // No view-safe free for collections yet (Phase 1b) — see
+                // TypeMetadata::borrow_view_fn.
+                borrow_view_fn: None,
                 collection_kind: Some(CollectionKind::Set),
                 enum_category: None,
                 c_runtime_alias: None,
@@ -410,6 +419,7 @@ pub fn lower_module(
                         clone_fn: protocol.clone_fn.map(String::from),
                         clone_inplace_fn: protocol.clone_inplace_fn.map(String::from),
                         materialize_fn: protocol.materialize_fn.map(String::from),
+                        borrow_view_fn: protocol.borrow_view_fn.map(String::from),
                         collection_kind: protocol.collection_kind,
                         enum_category: None,
                         c_runtime_alias: protocol.c_runtime_alias.map(String::from),
@@ -452,6 +462,7 @@ pub fn lower_module(
                             clone_fn: vector_protocol.clone_fn.map(String::from),
                             clone_inplace_fn: vector_protocol.clone_inplace_fn.map(String::from),
                             materialize_fn: vector_protocol.materialize_fn.map(String::from),
+                            borrow_view_fn: vector_protocol.borrow_view_fn.map(String::from),
                             collection_kind: vector_protocol.collection_kind,
                             enum_category: None,
                             c_runtime_alias: vector_protocol.c_runtime_alias.map(String::from),

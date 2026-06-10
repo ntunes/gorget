@@ -484,6 +484,7 @@ fn infer_call_extern_type(
         "gorget_set_new" | "gorget_set_clone" | "gorget_set_new_like" | "gorget_set_new_str"
         | "gorget_ordered_set_new" | "gorget_ordered_set_new_str" => Some("GorgetSet"),
         "gorget_string_new" | "gorget_string_adopt" | "gorget_string_from_concat"
+        | "gorget_string_borrow_view"
         | "gorget_str_cat" | "gorget_string_format"
         | "gorget_string_format_alloc"
         | "gorget_string_clone"

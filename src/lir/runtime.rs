@@ -347,6 +347,12 @@ runtime_table! {
 
     // ── String (gorget_string_*) — owned-string via pointer ───────────────
     StringAppend        => "gorget_string_append",         sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::Ptr)], T::Void, F::Mutates);
+    // gorget_string_borrow_view: shallow copy with cap forced to 0 — the lazy
+    // loop-carried CoW bind (emit_lazy_loopcarried_borrow). F::Allocates is
+    // the uniform coarse tag for view-returners that build cap=0 views (see
+    // the registry doc above); the view-vs-fresh axis is `returns_fresh`
+    // (false via `sig`).
+    StringBorrowView    => "gorget_string_borrow_view",    sig(&[(T::Ptr, A::Ptr)], T::Str, F::Allocates);
     StringClone         => "gorget_string_clone",          sig(&[(T::Ptr, A::Ptr)], T::Str, F::Allocates);
     StringCloneToOwned  => "gorget_string_clone_to_owned", sig(&[(T::Ptr, A::Ptr)], T::Str, F::Allocates);
     StringConcat        => "gorget_string_concat",         sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::Ptr)], T::Str, F::Allocates);
