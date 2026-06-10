@@ -213,7 +213,20 @@ one validator-panic class (5), two accepted-but-meaningless-surface holes
   clone-at-boundary push body. Reuses the synthetic-codepoint emission that
   hook W3d already dominates → lazy-source materialize comes free and NO new
   view-producer emit sites → **all three lints stay green at current
-  budgets**. The index-walk fallback design is O(n²) + new hook plumbing —
+  budgets**. ⚠ [p3-R1, load-bearing] Type + drop-register the ACCUMULATOR as
+  the mangled `Vector__GorgetString` via `ctx.ensure_collection_type` (the
+  dict-comprehension precedent, `collections.rs:704-705`) — NOT the bare
+  erased `GorgetArray` of the existing list-comp arm (`:517`), which BOTH
+  in-file precedents would mislead toward: the typechecker returns
+  `error_id` for all comprehensions (`typecheck.rs:2566`), so the GIR acc
+  type ALONE carries the element story for the push consume-clone machinery
+  (`methods.rs:1884-1924` dispatches on the `Vector__T` name shape),
+  downstream element inference, and element drops. Mechanical note:
+  `lower_for_string` is private — needs a `pub(in crate::ir::lowering)`
+  bump to be callable from `exprs/collections.rs`. (Pass-3 verified: the
+  filter variant rejoins before the `byte_pos` increment at
+  `for_loops.rs:380-382` → correct termination; the `for ch in s:
+  stack.push(ch)` clone-at-boundary shape is run-proven in-tree.) The index-walk fallback design is O(n²) + new hook plumbing —
   rejected.
 - LINT-FAILURE PROTOCOL (the guard's first real exercise — follow it, don't
   fight it): if the implementation DOES add a view-callee mention in
