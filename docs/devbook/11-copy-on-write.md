@@ -321,6 +321,29 @@ boundary clones), or unreachable. The v7 brief
 paid for twice: a consumer-side grep missed the index/slice route (W3c), and
 a runtime-only producer grep missed the synthetic for-string route (W3d).
 
+**The rule is now EXECUTABLE** (`tests/lints.rs`, fatal from day one):
+`str_view_producer_enumeration_is_closed` (exact-set, four arms: runtime-C
+callers of `gorget_str_view_region` == the `STR_VIEW_PRODUCERS` table; `.rs`
+files spelling it on non-comment lines == the emitter allowlist; every
+producer declared `sig(`, never `sig_fresh(`, in `src/lir/runtime.rs`; every
+`returns_view: true` decl in `builtins.rs` routes to a table producer),
+`no_growth_in_lir_view_callee_rewrites` (budget fence over view-callee
+mentions in `src/lir` — the IndexLoad-rewrite class), and
+`no_growth_in_runtime_c_direct_view_manufacture` (budget fence over raw
+single-line `{ .data = ..., .cap = 0 }` literals, field-order-independent).
+The third lint exists because the grep alone was INCOMPLETE:
+`gorget_string_borrow_view` manufactures its cap=0 header via a DIRECT
+struct literal, never spelling `gorget_str_view_region` — invisible to the
+grep rule above. What the guard CANNOT see stays a prose obligation of this
+section — four residuals: (1) dynamically-constructed callee names;
+(2) passes that move/duplicate an existing view call so a hook no longer
+dominates it (semantic, not greppable); (3) same-commit budget-slot reuse
+(retiring one mention frees a slot a new unsound site could silently spend);
+(4) backend-emit-layer callee rewrites (`src/backend` name-level
+substitutions — all view→view today; a NEW backend rewrite targeting a view
+callee spells no `view_region` and sits outside the LIR fence's
+`src/lir` root).
+
 **Write sites clear the pair.** `lower_assign`'s Identifier arm and
 `lower_compound_assign` (BOTH its string-concat early-return fast path and
 its generic tail) remove the `cow_lazy_mat_flag` entry and the

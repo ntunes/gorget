@@ -741,6 +741,470 @@ fn no_growth_in_self_host_prelude_optionlike_routing() {
     );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// #37 lazy-CoW view-producer enumeration guard
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Which route manufactures the view, deciding which detection arm must see it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ViewRoute {
+    /// A runtime `.c` function whose body calls `gorget_str_view_region`.
+    RuntimeC,
+    /// A runtime `.c` function that manufactures the cap=0 header DIRECTLY
+    /// (a blessed constructor; policed by the direct-manufacture ratchet).
+    RuntimeCDirect,
+    /// A SYNTHETIC callee: no `.c` body — backend `.rs` emitters write the
+    /// `gorget_str_view_region` call into generated C.
+    BackendSynthetic,
+}
+
+/// THE ENUMERATION. Every "view producer" — anything that manufactures a
+/// cap=0 `Str` view aliasing another buffer — with its manufacture route and
+/// the GIR-level mechanism that keeps the lazy-CoW default sound for it
+/// (the four materialize hooks W3a/W3b/W3c/W3d, per
+/// `docs/devbook/11-copy-on-write.md` §"View-producer enumeration rule" and
+/// `docs/plans/brief_37_phase1_lazy_default.md` Appendix A).
+///
+/// **Adding a new view producer?** It is UNSOUND under the lazy-CoW default
+/// unless a GIR materialize hook dominates every capture of its result while
+/// the source is a lazy view. Cover it with one of the four hooks (or a new
+/// sibling call site of `materialize_lazy_source_if_needed`), add the row
+/// here AND to devbook/11's enumeration, and cite both in the PR.
+const STR_VIEW_PRODUCERS: &[(&str, ViewRoute, &str)] = &[
+    ("gorget_str_index",          ViewRoute::RuntimeC, "W3c index-base hook (lower_index_access)"),
+    ("gorget_str_slice",          ViewRoute::RuntimeC, "W3c index-base hook + W3b receiver hook"),
+    ("gorget_str_byte_slice",     ViewRoute::RuntimeC, "W3b receiver hook (returns_view dispatch)"),
+    ("gorget_str_char_at",        ViewRoute::RuntimeC, "W3b receiver hook (returns_view dispatch)"),
+    ("gorget_str_trim",           ViewRoute::RuntimeC, "W3b receiver hook (returns_view dispatch)"),
+    ("gorget_str_lstrip_ws",      ViewRoute::RuntimeC, "W3b receiver hook (returns_view dispatch)"),
+    ("gorget_str_rstrip_ws",      ViewRoute::RuntimeC, "W3b receiver hook (returns_view dispatch)"),
+    ("gorget_str_strip",          ViewRoute::RuntimeC, "W3b receiver hook (returns_view dispatch)"),
+    ("gorget_str_lstrip",         ViewRoute::RuntimeC, "W3b receiver hook (returns_view dispatch)"),
+    ("gorget_str_rstrip",         ViewRoute::RuntimeC, "W3b receiver hook (returns_view dispatch)"),
+    ("gorget_str_removeprefix",   ViewRoute::RuntimeC, "W3b receiver hook (returns_view dispatch)"),
+    ("gorget_str_removesuffix",   ViewRoute::RuntimeC, "W3b receiver hook (returns_view dispatch)"),
+    ("gorget_str_codepoint_at",   ViewRoute::BackendSynthetic, "W3d for-string hook (lower_for_string)"),
+    ("gorget_string_borrow_view", ViewRoute::RuntimeCDirect, "W3a bind hook (the lazy bind producer itself)"),
+];
+
+/// `.rs` files allowed to spell `gorget_str_view_region` on a NON-comment
+/// line, with the expected occurrence count. These are the backend emitters
+/// of the synthetic `gorget_str_codepoint_at` shim (the C-emit boundary —
+/// the name IS the contract with the runtime there). Comment-line mentions
+/// (devbook citations in ir/lowering) are skipped, so docs stay free.
+const VIEW_REGION_RS_EMITTERS: &[(&str, usize)] = &[
+    ("src/backend/c_lir/emit_call_extern.rs", 1),
+    ("src/backend/c_lir/emit_types.rs", 1),
+];
+
+/// Scan `src/backend/c/runtime/*.c` and return, for each non-comment call of
+/// `gorget_str_view_region(`, the enclosing C function name (with file:line
+/// for diagnostics). Function-definition and forward-declaration lines of
+/// `gorget_str_view_region` itself are excluded — the definition is the
+/// blessed constructor, not a producer.
+fn runtime_c_view_region_callers() -> Vec<(String, String)> {
+    let mut callers: Vec<(String, String)> = Vec::new();
+    let fn_def = regex::Regex::new(
+        // A C function definition at column 0: `static inline Str name(args) {`
+        r"^[A-Za-z_][A-Za-z0-9_ \*]*?([A-Za-z_][A-Za-z0-9_]*)\s*\([^;{]*\)\s*\{\s*$"
+    ).unwrap();
+    // [W1 (vii)] The call detector tolerates whitespace between the callee
+    // name and `(` — `return gorget_str_view_region ((const char*)..., 1);`
+    // (GNU spacing) is RUN-PROVEN to slip past a glued-paren `contains`
+    // check on all three lints silently.
+    let call = regex::Regex::new(r"gorget_str_view_region\s*\(").unwrap();
+    visit("src/backend/c/runtime", &mut |path| {
+        if path.extension().map_or(true, |e| e != "c") {
+            return;
+        }
+        let content = match fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        let mut current_fn = String::new();
+        for (idx, line) in content.lines().enumerate() {
+            let trimmed = line.trim_start();
+            // Skip comment lines: a commented-out call is documentation,
+            // not a live producer (matches the comment-skip convention of
+            // the sidecar / proxy-read lints above).
+            if trimmed.starts_with("//") || trimmed.starts_with("*") || trimmed.starts_with("/*") {
+                continue;
+            }
+            let is_def_line = if line.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') {
+                if let Some(cap) = fn_def.captures(line) {
+                    current_fn = cap[1].to_string();
+                    true
+                } else {
+                    // [W1 (v)] A column-0 signature START the def regex
+                    // cannot parse — brace-on-next-line / multi-line C
+                    // signatures exist in this corpus
+                    // (`tls_server_runtime.c:13-17`). Without a reset, a
+                    // call inside such a function would silently
+                    // MIS-ATTRIBUTE to the previous parsed function; if
+                    // that one is already in the table, a NEW producer
+                    // would pass unseen. Reset so its calls surface as
+                    // `<unattributed>` → loud. (`;`-terminated lines are
+                    // declarations, not signature starts.)
+                    if line.contains('(') && !line.trim_end().ends_with(';') {
+                        current_fn = String::new();
+                    }
+                    false
+                }
+            } else {
+                false
+            };
+            if is_def_line {
+                continue; // the def line of view_region itself is not a call
+            }
+            // Forward declarations (`static inline Str f(...);`) are not calls.
+            if trimmed.starts_with("static") && trimmed.trim_end().ends_with(';') {
+                continue;
+            }
+            if call.is_match(line) {
+                if current_fn == "gorget_str_view_region" {
+                    continue; // inside the blessed constructor's own body
+                }
+                let loc = format!("{}:{}", path.display(), idx + 1);
+                if current_fn.is_empty() {
+                    callers.push((format!("<unattributed at {loc}>"), loc));
+                } else {
+                    callers.push((current_fn.clone(), loc));
+                }
+            }
+        }
+    });
+    callers
+}
+
+/// Per-file count of NON-comment `gorget_str_view_region` mentions in
+/// `src/**/*.rs` — the backend-synthetic emitter arm.
+fn rs_view_region_mentions() -> Vec<(String, usize)> {
+    let mut counts: Vec<(String, usize)> = Vec::new();
+    visit("src", &mut |path| {
+        if path.extension().map_or(true, |e| e != "rs") {
+            return;
+        }
+        let content = match fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        let mut n = 0;
+        for line in content.lines() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") {
+                continue;
+            }
+            n += line.matches("gorget_str_view_region").count();
+        }
+        if n > 0 {
+            counts.push((path.to_string_lossy().replace('\\', "/"), n));
+        }
+    });
+    counts.sort();
+    counts
+}
+
+/// The enumeration guard: every view producer is detected on its manufacture
+/// route AND maps to a covering mechanism in `STR_VIEW_PRODUCERS`.
+///
+/// **Arm a (runtime C):** the set of runtime `.c` functions whose bodies call
+/// `gorget_str_view_region` must EXACTLY equal the `RuntimeC` rows.
+/// **Arm b (backend synthetic):** the `.rs` files spelling
+/// `gorget_str_view_region` on non-comment lines must EXACTLY match
+/// `VIEW_REGION_RS_EMITTERS` (file + count).
+/// **Arm c (typed-registry reconciliation):** every producer must be present
+/// in `src/lir/runtime.rs` and declared via `sig(` — NEVER `sig_fresh(`. A
+/// view tagged `returns_fresh: true` would let the CoW machinery elide the
+/// clone guards that keep views from dangling (see `is_fresh_string`).
+/// **Arm d (GIR axis reconciliation):** every `returns_view: true` method in
+/// `src/ir/lowering/builtins.rs` must route to a producer in the table (or
+/// `None` for the identity header copy `str`/`as_str`).
+///
+/// **If this fails**: you added (or re-routed) a view producer. Read the
+/// table doc above — cover the producer with a GIR materialize hook
+/// (W3a/W3b/W3c/W3d sibling), then add its row here and to
+/// `docs/devbook/11-copy-on-write.md`'s enumeration. Do NOT just extend the
+/// allowlist: an uncovered producer is a use-after-free generator under the
+/// lazy-CoW default (and the class is proven ASan-blind — stdout fixtures
+/// are the only net).
+#[test]
+fn str_view_producer_enumeration_is_closed() {
+    // Arm a — runtime C producers.
+    let callers = runtime_c_view_region_callers();
+    let mut found: Vec<&str> = callers.iter().map(|(f, _)| f.as_str()).collect();
+    found.sort();
+    found.dedup();
+    let mut expected: Vec<&str> = STR_VIEW_PRODUCERS
+        .iter()
+        .filter(|(_, route, _)| *route == ViewRoute::RuntimeC)
+        .map(|(name, _, _)| *name)
+        .collect();
+    expected.sort();
+    let unattributed: Vec<&(String, String)> =
+        callers.iter().filter(|(f, _)| f.starts_with('<')).collect();
+    assert!(
+        unattributed.is_empty(),
+        "could not attribute these gorget_str_view_region calls to an enclosing \
+         C function (the def-line scanner in runtime_c_view_region_callers needs \
+         updating for a new code shape): {unattributed:?}"
+    );
+    let missing: Vec<&&str> = expected.iter().filter(|e| !found.contains(*e)).collect();
+    let new_producers: Vec<(&str, &str)> = callers
+        .iter()
+        .filter(|(f, _)| !expected.contains(&f.as_str()))
+        .map(|(f, loc)| (f.as_str(), loc.as_str()))
+        .collect();
+    assert!(
+        new_producers.is_empty() && missing.is_empty(),
+        "View-producer enumeration drifted (runtime-C arm).\n\
+         NEW producers (functions calling gorget_str_view_region, not in the table): {new_producers:?}\n\
+         VANISHED producers (in the table, no longer calling it): {missing:?}\n\n\
+         A function returning a cap=0 view aliasing another buffer is UNSOUND under \
+         the lazy-CoW default unless a GIR materialize hook dominates every capture \
+         of its result (docs/devbook/11-copy-on-write.md §\"View-producer enumeration \
+         rule\"; docs/plans/brief_37_phase1_lazy_default.md Appendix A).\n\
+         For a NEW producer: wire a hook (sibling call site of \
+         materialize_lazy_source_if_needed — W3a bind / W3b receiver / W3c index \
+         base / W3d for-string source), add a row to STR_VIEW_PRODUCERS in this \
+         file naming the hook, and extend devbook/11's enumeration.\n\
+         For a VANISHED producer: remove its row here and in devbook/11.",
+    );
+
+    // Arm b — backend-synthetic emitters.
+    let rs_mentions = rs_view_region_mentions();
+    let mut expected_rs: Vec<(String, usize)> = VIEW_REGION_RS_EMITTERS
+        .iter()
+        .map(|(f, n)| (f.to_string(), *n))
+        .collect();
+    expected_rs.sort();
+    assert_eq!(
+        rs_mentions, expected_rs,
+        "View-producer enumeration drifted (backend-synthetic arm): the set of .rs \
+         files spelling `gorget_str_view_region` on non-comment lines changed.\n\
+         found:    {rs_mentions:?}\n\
+         expected: {expected_rs:?}\n\n\
+         A new emitter writes a view-manufacturing call into generated C — that is a \
+         new view producer (the W3d `gorget_str_codepoint_at` class: synthetic callees \
+         never appear in the runtime .c, which is exactly how the route was missed \
+         pre-#37 — the enumeration rule needed two corrections in total). Cover \
+         its GIR producer with a materialize hook, add the \
+         producer row to STR_VIEW_PRODUCERS, and update VIEW_REGION_RS_EMITTERS + \
+         devbook/11. Comment-line citations don't count — only live emit lines.",
+    );
+
+    // Arm c — LIR registry reconciliation.
+    let registry = fs::read_to_string("src/lir/runtime.rs")
+        .expect("src/lir/runtime.rs must exist (typed runtime registry)");
+    for (name, _, mechanism) in STR_VIEW_PRODUCERS {
+        let decl = registry
+            .lines()
+            .find(|l| l.contains(&format!("=> \"{name}\",")));
+        let decl = decl.unwrap_or_else(|| {
+            panic!(
+                "view producer `{name}` ({mechanism}) has no entry in \
+                 src/lir/runtime.rs — every producer must be a typed registry \
+                 entry (devbook/24 rule 2: typed metadata, not name-matching)"
+            )
+        });
+        assert!(
+            decl.contains("sig(") && !decl.contains("sig_fresh("),
+            "view producer `{name}` is declared `sig_fresh` in src/lir/runtime.rs:\n  {decl}\n\
+             A cap=0 view MUST carry `returns_fresh: false` — `returns_fresh: true` \
+             lets CoW elide the self-referential-reassignment clone guard and the \
+             return-clone-elision check (`is_fresh_string`), turning the view into a \
+             dangling alias. Change the declaration back to `sig(`.",
+        );
+    }
+
+    // Arm d — GIR `returns_view` axis reconciliation.
+    let builtins = fs::read_to_string("src/ir/lowering/builtins.rs")
+        .expect("src/ir/lowering/builtins.rs must exist");
+    let view_decl = regex::Regex::new(
+        r#"name: "([A-Za-z_]+)", runtime_callee: (?:Some\("([a-z_]+)"\)|None)"#
+    ).unwrap();
+    let producer_names: Vec<&str> = STR_VIEW_PRODUCERS.iter().map(|(n, _, _)| *n).collect();
+    for line in builtins.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("//") || !line.contains("returns_view: true") {
+            continue;
+        }
+        let cap = view_decl.captures(line).unwrap_or_else(|| {
+            panic!("unparseable returns_view decl line in builtins.rs: {line}")
+        });
+        if let Some(callee) = cap.get(2) {
+            assert!(
+                producer_names.contains(&callee.as_str()),
+                "builtins.rs declares method `{}` with `returns_view: true` routing \
+                 to runtime callee `{}`, which is NOT in STR_VIEW_PRODUCERS. Either \
+                 the callee is a new view producer (cover it with a hook + add the \
+                 row) or the `returns_view` tag is wrong.",
+                &cap[1],
+                callee.as_str(),
+            );
+        }
+        // `None` callees (str/as_str identity header copy) are W3b-covered
+        // through the same returns_view dispatch — nothing to reconcile.
+    }
+}
+
+/// Ratchet (the LIR-rewrite fence — the partially-fenceable blind spot): the
+/// count of view-producer callee MENTIONS in `src/lir/**/*.rs` must not grow.
+///
+/// The four GIR materialize hooks are keyed UPSTREAM (bind / receiver / index
+/// base / for-string source). An LIR-level rewrite that changes a callee to a
+/// view-returning one (the `IndexLoad → gorget_str_slice/str_index` precedent,
+/// `src/lir/lower/insts.rs`) bypasses them unless the GIR shape it rewrites
+/// was already hooked. This ratchet can't prove dominance, but it CAN make a
+/// new mention of a view callee in the LIR layer fail loudly so the author
+/// reconciles it against the enumeration before shipping.
+///
+/// Counted (non-comment lines): exact-quoted producer names
+/// (`"gorget_str_slice"`, ...) and `RuntimeFn::` variant references
+/// (`RuntimeFn::StrSlice`, ...) in src/lir/. Baseline 2026-06-10: 41 —
+/// 14 registry decl lines (runtime.rs) + 6 variant refs in the arity-overload
+/// rewrite (runtime.rs, strip→trim_ws family, view→view so W3b-covered) +
+/// 14 return-type-table mentions (types.rs) + 3 GIR-name fixups (lower/calls.rs,
+/// W3b-covered upstream) + 4 IndexLoad-rewrite mentions (lower/insts.rs,
+/// W3c-covered upstream).
+///
+/// **If this fails (count went UP):** you added an LIR site naming a
+/// view-returning callee. If it REWRITES some inst into a call of that
+/// callee, verify a GIR materialize hook dominates every such rewritten
+/// shape (or add the missing hook), reconcile against devbook/11's
+/// enumeration, THEN bump with a justification comment. If it's registry /
+/// type-table plumbing, bump with a one-liner.
+#[test]
+fn no_growth_in_lir_view_callee_rewrites() {
+    const BUDGET: usize = 41;
+
+    let names: Vec<&str> = STR_VIEW_PRODUCERS.iter().map(|(n, _, _)| *n).collect();
+    let quoted = names
+        .iter()
+        .map(|n| format!(r#""{n}""#))
+        .collect::<Vec<_>>()
+        .join("|");
+    // RuntimeFn variant spellings of the same producers (CamelCase of the
+    // gorget_* names as declared in runtime.rs).
+    let variants = [
+        "StrIndex", "StrSlice", "StrByteSlice", "StrCharAt", "StrTrim",
+        "StrLstripWs", "StrRstripWs", "StrStrip", "StrLstrip", "StrRstrip",
+        "StrRemoveprefix", "StrRemovesuffix", "StrCodepointAt", "StringBorrowView",
+    ];
+    let variant_alt = variants
+        .iter()
+        .map(|v| format!(r"RuntimeFn::{v}\b"))
+        .collect::<Vec<_>>()
+        .join("|");
+    let pattern = regex::Regex::new(&format!("{quoted}|{variant_alt}")).unwrap();
+
+    let mut count = 0;
+    visit("src/lir", &mut |path| {
+        if path.extension().map_or(true, |e| e != "rs") {
+            return;
+        }
+        let content = match fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        for line in content.lines() {
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            count += pattern.find_iter(line).count();
+        }
+    });
+    assert!(
+        count <= BUDGET,
+        "View-producer callee mentions in src/lir/ grew beyond budget: {count} > {BUDGET}.\n\n\
+         A new src/lir site names a view-returning callee (string literal or \
+         RuntimeFn variant). The GIR materialize hooks (W3a-W3d) are keyed \
+         upstream of LIR — a NEW rewrite targeting a view callee can bypass them \
+         (the IndexLoad→str_slice/str_index precedent was exactly this shape and \
+         needed its own hook, W3c).\n\n\
+         Verify a GIR materialize hook dominates the rewritten shape (or add one — \
+         sibling call site of materialize_lazy_source_if_needed), reconcile against \
+         docs/devbook/11-copy-on-write.md's enumeration, then bump BUDGET with a \
+         justification comment. If the count went DOWN, lower BUDGET.",
+    );
+}
+
+/// Ratchet (the bypass fence): direct cap=0 `Str` header manufacture in the
+/// runtime `.c` files must not grow. A view built with a raw struct literal
+/// (`{ .data = ..., .cap = 0, ... }`) instead of `gorget_str_view_region`
+/// is INVISIBLE to the enumeration guard's runtime-C arm — this ratchet is
+/// what stops that bypass.
+///
+/// Matching is field-ORDER-INDEPENDENT [W1 (ii)]: a single-line brace group
+/// counts when it contains BOTH `.data =` and `.cap = 0` (the `\b` keeps
+/// `.cap = 01` from matching), in either order, so a reordered literal
+/// cannot slip past the fence.
+///
+/// Baseline 2026-06-10: 7 —
+///   runtime_string.c:56  GORGET_EMPTY_STR (static, .rodata, never freed)
+///   runtime_string.c:61  GORGET_SLIT macro body (static literal views)
+///   runtime_string.c:238 gorget_string_borrow_view (blessed producer, W3a)
+///   runtime_string.c:744 gorget_str_view_region itself (THE blessed constructor)
+///   runtime_string_extended.c:556/:564 replacen locals (ephemeral, bytes
+///     copied into a fresh result before return)
+///   runtime_string_extended.c:665 find_from local (ephemeral, search only)
+///
+/// **If this fails (count went UP):** a new direct cap=0 view literal was
+/// added. If the view is RETURNED (or stored), route it through
+/// `gorget_str_view_region` so the enumeration guard sees the producer, and
+/// cover it per `str_view_producer_enumeration_is_closed`'s table. If it is
+/// genuinely ephemeral (consumed before any caller-visible mutation), bump
+/// with a justification comment naming the function.
+/// NOTE: the pattern is single-line; a multi-line struct literal would evade
+/// it. Keep view literals on one line (current style throughout).
+#[test]
+fn no_growth_in_runtime_c_direct_view_manufacture() {
+    const BUDGET: usize = 7;
+
+    // [W1 (ii)] Field-order-independent: find each single-line brace group,
+    // then require BOTH fields inside it (in any order).
+    let brace_group = regex::Regex::new(r"\{[^{}]*\}").unwrap();
+    let data_field = regex::Regex::new(r"\.data\s*=").unwrap();
+    let cap_zero = regex::Regex::new(r"\.cap\s*=\s*0\b").unwrap();
+    let mut count = 0;
+    let mut sites: Vec<String> = Vec::new();
+    visit("src/backend/c/runtime", &mut |path| {
+        if path.extension().map_or(true, |e| e != "c") {
+            return;
+        }
+        let content = match fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        for (idx, line) in content.lines().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") || trimmed.starts_with("*") || trimmed.starts_with("/*") {
+                continue;
+            }
+            let n = brace_group
+                .find_iter(line)
+                .filter(|g| data_field.is_match(g.as_str()) && cap_zero.is_match(g.as_str()))
+                .count();
+            if n > 0 {
+                count += n;
+                sites.push(format!("{}:{}", path.display(), idx + 1));
+            }
+        }
+    });
+    assert!(
+        count <= BUDGET,
+        "Direct cap=0 Str view manufacture in runtime .c grew beyond budget: \
+         {count} > {BUDGET}.\nSites: {sites:?}\n\n\
+         A raw `{{ .data = ..., .cap = 0 }}` struct literal manufactures a view \
+         the enumeration guard cannot see (it only attributes \
+         `gorget_str_view_region` callers). If the new view is returned or \
+         stored, build it with `gorget_str_view_region` instead and cover the \
+         producer per STR_VIEW_PRODUCERS. If it is ephemeral (consumed before \
+         any caller-visible mutation, like the replacen/find_from locals), bump \
+         BUDGET with a justification naming the function. If the count went \
+         DOWN, lower BUDGET.",
+    );
+}
+
 /// Every RUNTIME (post-meta-expansion) block-bearing `Stmt` variant. The CoW
 /// reassignment prescan `cow_after_stmt` (src/ir/lowering/functions.rs) MUST
 /// recurse into each of these bodies — a source-mutation inside a block that is
