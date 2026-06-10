@@ -1,13 +1,20 @@
 # BRIEF — #37 Phase 1: Full lazy CoW materialization (incl. loops) as the PRODUCTION DEFAULT in Rust `gg`
 
-Status: v6 (pass-5 review folded 2026-06-10: ⚠ **W3d ADDED — pass 5's
+Status: v7 (pass-5 review folded 2026-06-10: ⚠ **W3d ADDED — pass 5's
 fourth-route hunt FOUND ONE** [p5-R1, BLOCKING]: `for c in s:` char iteration
 emits the SYNTHETIC callee `gorget_str_codepoint_at` (`for_loops.rs:349`; both
 backends materialize it as a `gorget_str_view_region` view —
 `c_lir/emit_call_extern.rs:86`, `c_lir/emit_types.rs:2409`) — on NO prior hook's
 path; probe garbage + ASan-silent; **fix PROTOTYPED + RUN-PROVEN** (fourth call
 site of the shared helper at the top of `lower_for_string`, `for_loops.rs:246`).
-The enumeration rule was corrected AGAIN [p5-R2]: grep `gorget_str_view_region`
+v7 (pass-6 fold): the `F::Allocates` "stale tag" instruction REMOVED — the tag
+is correct by design (see W3d); W6 hook count fixed; false-comment cite extended;
+row-2 path disambiguated; sim TODO line added. Pass 6 independently RE-RAN the
+enumeration (all-of-src grep + broader-than-grep sweep incl. LLVM backend, cap=0
+manufacture sites, sim interpreter): **Appendix A CONFIRMED, NO new producer**;
+W3d re-proven from brief text alone; ~40 file:line cites spot-checked accurate;
+the `f(&s)` mut-borrow write probe passed at exact clone parity.
+The enumeration rule was corrected at v6 [p5-R2]: grep `gorget_str_view_region`
 across ALL of `src/` (runtime .c AND backend .rs emitters — synthetic callees
 don't live in the runtime), walk each hit to its GIR producer; the COMPLETE
 23-row enumeration is now Appendix A (pass-5-produced; the soundness baseline).
@@ -125,9 +132,13 @@ numbers from the UNPATCHED tip — re-grep before editing)
   mutates v. Fixed in scope by W3b + W3c + W3d. False comments to fix alongside:
   `methods.rs:3271` (pre-W3b-insertion numbering; "returns a new Str value (not
   a borrow)" — it returns a view region) and `for_loops.rs:345-347` ("returns an
-  owned Str (allocates)" — both backends emit a view; also the stale
-  `F::Allocates` tag on `StrCodepointAt` at `src/lir/runtime.rs:291` — typed
-  metadata, fix at the source per devbook/24).
+  owned Str (allocates)" — both backends emit a view). The `F::Allocates` tag on
+  `StrCodepointAt` (`src/lir/runtime.rs:291`) is CORRECT BY DESIGN — do NOT
+  change it: per the registry's own doc (`runtime.rs:163-167`),
+  `SideEffects::Allocates` is the coarse may-allocate tag deliberately covering
+  view-returners that build cap=0 views; all 13 view-returning entries carry it
+  uniformly, and the view-vs-fresh axis is `returns_fresh` (already correctly
+  `false`).
 - `gorget_string_copy_cow` is view-preserving (`runtime_string.c:214-219` — cap==0
   in → view out). `gorget_string_borrow_view` is currently NOT a registered runtime
   callee; the typed registry + `AbiKind::Ptr` + `Inst::AddressOf` (`lir/mod.rs:762`)
@@ -257,12 +268,14 @@ the element buffer, on none of the W3a/W3b/W3c paths. Probe: lazy bind then
 `h,e,l,l,o,!`, lazy `L,e,l,l,o,!` (ASan-silent). FOURTH call site of the shared
 helper: top of `lower_for_string` (after `let owned_string_type = …`,
 `for_loops.rs:246`, before the source-aware picker); condition: `iter_op` is a
-projection-free Copy/Move local in `cow_lazy_mat_flag`. Proven: lazy output
-identical to eager, clone parity EXACT 1v1, witnesses stay 0/1/0,
-`cargo test --lib` 1072/0; the flag-guard keeps nested-loop and
-never-reached-loop cases correct/0-clone. Fix the false comment at
-`for_loops.rs:345-347` and the stale `F::Allocates` tag on `StrCodepointAt`
-(`src/lir/runtime.rs:291`) as part of this hook.
+projection-free Copy/Move local in `cow_lazy_mat_flag`. Proven (pass 5; pass 6
+re-proved it independently from the brief text alone): lazy output identical to
+eager, clone parity EXACT 1v1, witnesses stay 0/1/0, `cargo test --lib` 1072/0;
+the flag-guard keeps nested-loop and never-reached-loop cases correct/0-clone.
+Fix the FALSE COMMENTS at `for_loops.rs:345-347` AND `:355-360` (comment text
+only — the `set_owned_fresh` tag itself stays, pre-existing and run-proven; the
+collection-put materialize hooks handle the view) as part of this hook. Do NOT
+touch the `F::Allocates` registry tag (correct by design — see Ground Truth).
 
 **Sibling-completeness rule (corrected TWICE — v4's consumer-grep missed W3c,
 v5's runtime-only producer-grep missed W3d):** grep `gorget_str_view_region`
@@ -331,7 +344,9 @@ alias-chain cases; revisit as Phase 1b if profiles justify.
   mutate source) — the PRIMARY validation for W3c, same ASan-blind class,
   **W3d for-string probe** (lazy bind then `for c in s:` with `v.set(0,…)` at
   i==0, printing each `c`) — the PRIMARY validation for W3d, same ASan-blind
-  class,
+  class, mut-borrow write shape (`f(&s)` mutates `s`, then source-collection
+  mutation — locks the W4 boundary-clone claim; pass-6 run-verified at exact
+  clone parity),
   H2 shape (FieldPath source — asserts correct output under the EXCLUSION),
   multisite (two conditional mutation sites, first dynamically dead), escape
   (return of a still-view + caller destroys source), reassign-source (`v = w`),
@@ -352,10 +367,11 @@ alias-chain cases; revisit as Phase 1b if profiles justify.
 ### W6 — Docs & TODO
 - Update `docs/devbook/11-copy-on-write.md`: the materialization-points section
   gains the lazy loop-carried mechanism (bind = cap0 view + pre-loop flag; mutation
-  = flag-guarded in-place materialize; the THREE materialize-at-derived-view hooks
-  W3a/W3b/W3c + the view-PRODUCER enumeration rule for future hook siblings; the
-  multi-site dominance argument; the String-only `borrow_view_fn` registry axis;
-  the ASan-blind-on-wrong-output-and-view-UAF caveat for future debuggers).
+  = flag-guarded in-place materialize; the FOUR materialize hooks
+  W3a/W3b/W3c/W3d + the view-PRODUCER enumeration rule (Appendix A) for future
+  hook siblings; the multi-site dominance argument; the String-only
+  `borrow_view_fn` registry axis; the ASan-blind-on-wrong-output-and-view-UAF
+  caveat for future debuggers).
 - TODO.md entries (executor adds, exact wording owner-reviewable): FieldPath lazy
   (1b) incl. `cow_before_field_mutation` lazy routing + `lower_field_assign`
   descendant-FieldPath severance walk (latent gap, file:line); EIndex inclusion +
@@ -383,7 +399,13 @@ alias-chain cases; revisit as Phase 1b if profiles justify.
   `builder.index_load` `assigns.rs:1321` bypasses W3c; the write-back finds no
   String setter and is silently dropped) — recommend rejecting string
   index-assign semantically; under lazy the stale read is never observable
-  (value always discarded), noted as why-acceptable in Appendix A row 1b.
+  (value always discarded), noted as why-acceptable in Appendix A row 1b;
+  (c) sim interpreter: `gorget_string_borrow_view` is absent from the sim's
+  CoW-helper lists (`sim/runtime.rs:712-716`, `sim/dispatch.rs:2726-2730` →
+  `SimError::Unimplemented`) — NOT a regression (the sim already fails on every
+  lazy-eligible bind shape via a pre-existing get/unwrap gap, RUN-proven
+  identical both modes; sim is not gate-wired) — extend the sim helper lists
+  when that gap is fixed.
 - DONE.md entry on completion; remove the #37 Phase-1 portion from TODO.md.
 
 ## Gates (in order; executor runs 0-5, parent re-runs 5-8 on the integrated tree)
@@ -437,7 +459,7 @@ alias-chain cases; revisit as Phase 1b if profiles justify.
 |---|---|---|---|
 | 1a | `gorget_str_index` (unpatched `runtime_string.c:692`) | `s[int]` → `lower_index_access` place-arm → LIR IndexLoad rewrite (`insts.rs:~941-958`) | **W3c** (run-verified) |
 | 1b | same, via compound `s[i] += rhs` read (`assigns.rs:1321`, direct index_load) | bypasses W3c | uncovered but result ALWAYS discarded (the write-back is a pre-existing silent no-op, see W6 TODO (b)) — acceptable; revisit if index-assign is ever implemented |
-| 2 | `gorget_str_slice` (`:717`) | (a) `s[range]` → place-arm → `insts.rs:~895-940`; (b) substring/slice `returns_view` dispatch (+ name fixup `calls.rs:397`) | (a) **W3c**; (b) **W3b** |
+| 2 | `gorget_str_slice` (`:717`) | (a) `s[range]` → place-arm → `insts.rs:~895-940`; (b) substring/slice `returns_view` dispatch (+ name fixup `src/lir/lower/calls.rs:397` — NOT the ir/lowering/exprs one) | (a) **W3c**; (b) **W3b** |
 | 3-4 | `gorget_str_byte_slice` (`:745`), `gorget_str_char_at` (`:753`) | `returns_view` dispatch only | **W3b** |
 | 5-12 | `runtime_string_extended.c`: trim `:257`, lstrip_ws `:268`, rstrip_ws `:278`, strip `:306`, lstrip `:317`, rstrip `:327`, removeprefix `:332-333`, removesuffix `:338-339` | `returns_view` dispatch only (sole consumer `methods.rs:2645` region) | **W3b** |
 | 13 | `gorget_str_codepoint_at` (SYNTHETIC: `c_lir/emit_call_extern.rs:86` / `c_lir/emit_types.rs:2409`) | `for c in s:` — `for_loops.rs:349`, sole GIR producer | **W3d** (run-proven) |
