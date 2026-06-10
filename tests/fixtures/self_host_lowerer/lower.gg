@@ -325,6 +325,15 @@ struct LowerCtx:
     # position-AGNOSTIC, matching tier-1's whole-fn refusal — straight-
     # line / loop sources stay position-aware.
     Dict[String, bool] cow_closure_mutated
+    # Scan-time DECLARED-type side channel: binding name → declared type
+    # name, written by the CoW scan's SVarDecl walk + the param loop in
+    # compute_cow_scan. The typechecker side table (tc_types.expr_types)
+    # does NOT key bare-ident method receivers, so scan-time signature
+    # resolution (`h.poke_vec(&v)` → the `Holder__poke_vec` borrow
+    # flags) reads the declared type from here. A miss only UNDER-marks
+    # (the flip gate sees fewer mutations) — the same pre-existing
+    # scan-time blindness the parser typed-arg-ownership TODO retires.
+    Dict[String, String] cow_decl_types
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -818,11 +827,24 @@ bool call_arg_lets_callee_mutate(GirModule &gmod, String fname, int arg_idx):
 # param index `arg_idx + 1` (index 0 is self). Builtin collection
 # methods never appear under this key — their owning val args CLONE
 # from (never mutate) the argument, so a miss is the correct `false`.
-bool method_arg_lets_callee_mutate(SpannedExpr recv, String mname, int arg_idx, GirModule &gmod):
-    int marg_recv_tid = lookup_expr_gir_type(recv, &gmod)
-    if marg_recv_tid < 0:
-        return false
-    String marg_recv_tname = type_id_to_name(marg_recv_tid, &gmod)
+#
+# Receiver-type resolution at SCAN time: the typechecker side table
+# (lookup_expr_gir_type) does NOT key bare-ident receivers (RUN-proven
+# tid<0 for every `h.m(...)` receiver during the pre-lowering scan), so
+# the primary source is the scan's own declared-type side channel
+# (`ctx.cow_decl_types`), with the side table as the secondary read.
+bool method_arg_lets_callee_mutate(LowerCtx &ctx, SpannedExpr recv, String mname, int arg_idx, GirModule &gmod):
+    String marg_recv_tname = ""
+    match recv.expr:
+        case EIdentifier(marg_recv_idn):
+            if ctx.cow_decl_types.contains(marg_recv_idn):
+                marg_recv_tname = ctx.cow_decl_types.get(marg_recv_idn).unwrap()
+        else:
+            pass
+    if marg_recv_tname.len() == 0:
+        int marg_recv_tid = lookup_expr_gir_type(recv, &gmod)
+        if marg_recv_tid >= 0:
+            marg_recv_tname = type_id_to_name(marg_recv_tid, &gmod)
     if marg_recv_tname.len() == 0:
         return false
     return call_arg_lets_callee_mutate(&gmod, marg_recv_tname + "__" + mname, arg_idx + 1)
@@ -2810,14 +2832,15 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         Dict[String, bool] _cow_mut3 = {}
                         Dict[String, int] _cow_span3 = {}
                         Dict[String, bool] _cow_clo3 = {}
-                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone(), DropElaborator(!_de_scopes3), !_de_queue3, -1, !_on_err_blocks3, false, !_cow_mut3, !_cow_span3, !_cow_clo3)
+                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone(), DropElaborator(!_de_scopes3), !_de_queue3, -1, !_on_err_blocks3, false, !_cow_mut3, !_cow_span3, !_cow_clo3, {})
                         Vector[Instruction] tinit = []
                         tctx.block_insts.push(!tinit)
                         tctx.block_terms.push(GTNone())
                         # Phase 2: function-scope drop frame for test bodies.
                         push_drop_scope(&tctx.drop_elab, DSK_FUNCTION)
                         add_local(&tctx, UNIT_TYPE, None)
-                        compute_cow_scan(&tctx, &gmod, test_body)
+                        Vector[Param] _cs_no_params_t = []
+                        compute_cow_scan(&tctx, &gmod, _cs_no_params_t, test_body)
                         lower_stmts(&tctx, test_body, &gmod, false)
                         Terminator tterm = tctx.block_terms.get(tctx.current_block).unwrap()
                         match tterm:

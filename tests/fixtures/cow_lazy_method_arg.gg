@@ -1,0 +1,20 @@
+# Method non-receiver `&`-arg row (#37 Phase 2 class table):
+# `h.poke_vec(&v)` mutates `v` through a METHOD argument. The parser
+# drops the sigil, so both the scan (method_arg_lets_callee_mutate) and
+# the lazy mutation hook in the EMethodCall arg loop are
+# signature-driven off the Type__method key. `s` must print the
+# PRE-mutation value in both modes (eager clone / lazy materialize).
+struct Holder:
+    int n
+
+equip Holder:
+    void poke_vec(self, Vector[String] &v):
+        v.set(0, "mutated")
+
+void main():
+    Vector[String] v = ["hello", "world"]
+    String s = v.get(0).unwrap()
+    Holder h = Holder(1)
+    h.poke_vec(&v)
+    print(f"s = {s}")
+    print(f"v0 = {v.get(0).unwrap()}")

@@ -23126,3 +23126,8 @@ fn mutarg_import_probe_self_host() {
         Err(outcome) => panic!("self-host emit/cc/run failed: {outcome:?}"),
     }
 }
+
+#[test]
+fn cow_lazy_method_arg() {
+    run_gg("cow_lazy_method_arg.gg", "s = hello\nv0 = mutated");
+}

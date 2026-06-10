@@ -118,7 +118,7 @@ void cow_scan_expr(LowerCtx &ctx, GirModule &gmod, SpannedExpr e, bool in_closur
             # handling (functions.rs, compute_cow_reassigned_after).
             int scan_mai = 0
             for ma in margs:
-                if method_arg_lets_callee_mutate(*recv_box, mname, scan_mai, &gmod):
+                if method_arg_lets_callee_mutate(&ctx, *recv_box, mname, scan_mai, &gmod):
                     cow_mark_if_ident(&ctx, ma, ma.span.start, in_closure)
                 cow_scan_expr(&ctx, &gmod, ma, in_closure)
                 scan_mai = scan_mai + 1
@@ -264,7 +264,8 @@ void cow_scan_expr(LowerCtx &ctx, GirModule &gmod, SpannedExpr e, bool in_closur
 void cow_scan_stmts(LowerCtx &ctx, GirModule &gmod, Vector[Stmt] stmts, bool in_closure):
     for st in stmts:
         match st:
-            case SVarDecl(_, _, init_e, _, _, _):
+            case SVarDecl(sv_stype, sv_name, init_e, _, _, _):
+                cow_record_decl_type(&ctx, sv_stype, sv_name, init_e)
                 cow_scan_expr(&ctx, &gmod, init_e, in_closure)
             case SAssign(lhs_e, rhs_e):
                 # `x = …` reassigns x; `x[i] = …` / `x.f = …` mutates the
@@ -385,10 +386,49 @@ bool cow_pristine_after(LowerCtx &ctx, String name, int pos):
         last = ctx.cow_mut_max_span.get(name).unwrap()
     return last < pos
 
+# Record `name`'s DECLARED type name into the scan-time side channel
+# (`ctx.cow_decl_types`) so signature resolution for method args
+# (`method_arg_lets_callee_mutate`) can form the `Type__mname` key —
+# the typechecker side table does not key bare-ident receivers at scan
+# time. `auto` resolves through a direct constructor init
+# (`auto h = Holder(1)`); other `auto` shapes stay unrecorded — a miss
+# only UNDER-marks, the same pre-existing scan-time blindness the
+# parser typed-arg-ownership TODO retires for good.
+void cow_record_decl_type(LowerCtx &ctx, SpannedType stype, String name, SpannedExpr init_e):
+    String cdt_name = ""
+    match stype.ty:
+        case TNamed(cdt_tn, _):
+            cdt_name = cdt_tn
+        case TPrimitive(cdt_tp):
+            cdt_name = cdt_tp
+        else:
+            pass
+    if cdt_name == "auto" or cdt_name == "":
+        match init_e.expr:
+            case ECall(cdt_callee_box, _, _):
+                match (*cdt_callee_box).expr:
+                    case EIdentifier(cdt_ctor):
+                        cdt_name = cdt_ctor
+                    else:
+                        pass
+            else:
+                pass
+    if cdt_name != "" and cdt_name != "auto":
+        ctx.cow_decl_types.put(name, cdt_name)
+
 # Run the forward-scan over a whole function body, populating
 # `ctx.cow_mutated_names`. Called once per function before the
-# statement-lowering loop.
-void compute_cow_scan(LowerCtx &ctx, GirModule &gmod, Vector[Stmt] body):
+# statement-lowering loop. `params` seeds the declared-type side
+# channel so param receivers resolve too (closures pass []).
+void compute_cow_scan(LowerCtx &ctx, GirModule &gmod, Vector[Param] params, Vector[Stmt] body):
+    for cs_p in params:
+        match cs_p.param_type.ty:
+            case TNamed(cs_tn, _):
+                ctx.cow_decl_types.put(cs_p.param_name, cs_tn)
+            case TPrimitive(cs_tp):
+                ctx.cow_decl_types.put(cs_p.param_name, cs_tp)
+            else:
+                pass
     cow_scan_stmts(&ctx, &gmod, body, false)
 
 # Peel the read-chain of a resource-bind init expression down to its
