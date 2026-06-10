@@ -1,6 +1,10 @@
 # BRIEF — Chain A: executable guard for the lazy-CoW view-producer enumeration
 
-Status: v4 (pass-3 review folded 2026-06-10: gate-3 gains the SIXTH simulation
+Status: v5 (pass-4 review folded 2026-06-10: Appendix-B heading range fixed
+(i)-(vi)→(i)-(vii) — a v3-fold remnant that contradicted W1+gate-3 [p4-R1];
+pass 4 also confirmed the "only gate" claim — both (v)/(vii) are
+clean-tree-neutral on the current corpus — and reproduced all
+inventories/budgets exact. v4 was pass-3 folded 2026-06-10: gate-3 gains the SIXTH simulation
 — the only gate that proves the clean-tree-neutral adjustments (v)+(vii) were
 actually applied [p3-R1]; pass 3 also re-proved (vii) both ways from the brief
 text alone and verified the four-item residual + devbook/25 note. v3 was
@@ -199,7 +203,7 @@ fixed_point needed)
   (the ASan-blindness warning included).
 
 ## Appendix B — the scout's run-proven prototype source (verbatim; executor
-applies W1 adjustments (i)-(vi) on top; insert before
+applies W1 adjustments (i)-(vii) on top; insert before
 `cow_after_stmt_covers_block_bearing_variants` in `tests/lints.rs`)
 
 ```rust
