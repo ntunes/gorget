@@ -1,23 +1,23 @@
 # BRIEF — #37 Phase 1: Full lazy CoW materialization (incl. loops) as the PRODUCTION DEFAULT in Rust `gg`
 
-Status: v5 (pass-4 review folded 2026-06-10: ⚠ **W3c ADDED — the W3b choke point
-is NOT singular** [p4-R1, BLOCKING]: string INDEX/SLICE syntax (`s[0..5]`, `s[0]`)
-produces the same cap=0 view class via `lower_index_access` →
-`gorget_str_slice`/`gorget_str_index` (both return `gorget_str_view_region` views,
-`runtime_string.c:714/:739`), bypassing `builtin_returns_view` entirely — and the
-NAMED index bind `String t = s[0..5]` is NOT Branch-E-protected (index results
-carry no View tag). Three failing programs RUN-PROVEN, all ASan-silent; the v4
-sibling-grep instruction ("grep returns_view consumers") was itself the trap —
-v5 rewords it to enumerate view-PRODUCING runtime emitters. Pass 4 PROTOTYPED
-BOTH W3b and W3c at located hook points and RUN-PROVED them (all probes flip to
-eager-identical at exact clone parity; witnesses stay 0/1/0; in-loop returns_view
-4v4 with the flag guard doing real once-only work; substring named bind 2v2
-undisturbed; commit-ordering green-by-construction verified incl. the ungated W2
-additive parts; Step-0 `--sanitize` feasibility confirmed `src/main.rs:2414/2566`
-→ `:866-867`). Line-ref drift fixed [p4-R2]. v4 folded pass 3 (W3b re-promoted —
-demotion RUN-REFUTED); v3 folded pass 2 (W3a PROTOTYPED + RUN-PROVEN, gate-ON
-sweep 1193/9 all-D2); v2 folded pass 1; v1 = orchestrator draft from the scout;
-scout worktree `agent-ae10a3b18c5a97df7`; numbers regenerated at tip `a044a10f`.)
+Status: v6 (pass-5 review folded 2026-06-10: ⚠ **W3d ADDED — pass 5's
+fourth-route hunt FOUND ONE** [p5-R1, BLOCKING]: `for c in s:` char iteration
+emits the SYNTHETIC callee `gorget_str_codepoint_at` (`for_loops.rs:349`; both
+backends materialize it as a `gorget_str_view_region` view —
+`c_lir/emit_call_extern.rs:86`, `c_lir/emit_types.rs:2409`) — on NO prior hook's
+path; probe garbage + ASan-silent; **fix PROTOTYPED + RUN-PROVEN** (fourth call
+site of the shared helper at the top of `lower_for_string`, `for_loops.rs:246`).
+The enumeration rule was corrected AGAIN [p5-R2]: grep `gorget_str_view_region`
+across ALL of `src/` (runtime .c AND backend .rs emitters — synthetic callees
+don't live in the runtime), walk each hit to its GIR producer; the COMPLETE
+23-row enumeration is now Appendix A (pass-5-produced; the soundness baseline).
+Patched-vs-unpatched line refs fixed [p5-R3]; route-4 false comment + stale
+`F::Allocates` typed metadata folded into W3d [p5-R4]; two pre-existing gaps →
+W6 TODO [p5-R5]. v5 folded pass 4 (W3c index/slice route, run-proven); v4 folded
+pass 3 (W3b re-promoted — demotion RUN-REFUTED); v3 folded pass 2 (W3a PROTOTYPED
++ RUN-PROVEN, gate-ON sweep 1193/9 all-D2); v2 folded pass 1; v1 = orchestrator
+draft from the scout; scout worktree `agent-ae10a3b18c5a97df7`; numbers
+regenerated at tip `a044a10f`.)
 
 ## Mission
 
@@ -109,16 +109,25 @@ numbers from the UNPATCHED tip — re-grep before editing)
   `f"{s} {poke(&v)}"` — formatting copies bytes immediately; direct
   `show(s, &v)` — header-move insight): the failing class is exactly
   view-of-lazy-view temps AND named view binds with no View tag. **The class has
-  TWO compiler emit routes (pass-4 finding):** (1) `returns_view` builtin methods
-  (sole consumer dispatch `methods.rs:2645`); (2) string INDEX/SLICE syntax —
-  `Expr::Index` → `lower_index_access` (`exprs/mod.rs:226` → `methods.rs:3170+`),
-  LIR rewrite `Str[range]→gorget_str_slice` / `Str[int]→gorget_str_index`
+  THREE compiler emit routes (pass-4 + pass-5 findings; Appendix A is the full
+  enumeration):** (1) `returns_view` builtin methods (sole consumer dispatch
+  `methods.rs:2645`); (2) string INDEX/SLICE syntax — `Expr::Index` →
+  `lower_index_access` (`exprs/mod.rs:226` → `methods.rs:3170+`), LIR rewrite
+  `Str[range]→gorget_str_slice` / `Str[int]→gorget_str_index`
   (`src/lir/lower/insts.rs:895-955`), both returning `gorget_str_view_region`
-  views — which NEVER consults `returns_view`, and whose results carry NO View
-  tag (so even the NAMED bind `String t = s[0..5]` fails: run-proven garbage,
-  plus `show(s[0..5], &v)` and `show(s[0], &v)`). Fixed in scope by W3b + W3c.
-  Note the false comment at `methods.rs:3291` ("returns a new Str value (not a
-  borrow)" — it returns a view region); fix it as part of W3c.
+  views (unpatched `runtime_string.c:692/:717`) — never consults `returns_view`,
+  results carry NO View tag (so even the NAMED bind `String t = s[0..5]` fails:
+  run-proven garbage, plus `show(s[0..5], &v)` and `show(s[0], &v)`);
+  (3) `for c in s:` char iteration — `lower_for_string` (`for_loops.rs:237`)
+  emits SYNTHETIC `gorget_str_codepoint_at` (`:349`), which both backends
+  materialize as a view (`c_lir/emit_call_extern.rs:86`,
+  `c_lir/emit_types.rs:2409`); run-proven garbage first char when the loop body
+  mutates v. Fixed in scope by W3b + W3c + W3d. False comments to fix alongside:
+  `methods.rs:3271` (pre-W3b-insertion numbering; "returns a new Str value (not
+  a borrow)" — it returns a view region) and `for_loops.rs:345-347` ("returns an
+  owned Str (allocates)" — both backends emit a view; also the stale
+  `F::Allocates` tag on `StrCodepointAt` at `src/lir/runtime.rs:291` — typed
+  metadata, fix at the source per devbook/24).
 - `gorget_string_copy_cow` is view-preserving (`runtime_string.c:214-219` — cap==0
   in → view out). `gorget_string_borrow_view` is currently NOT a registered runtime
   callee; the typed registry + `AbiKind::Ptr` + `Inst::AddressOf` (`lir/mod.rs:762`)
@@ -226,29 +235,47 @@ reverted reproduces the garbage; in-loop `returns_view` call = 4v4 with the flag
 guard firing once, not per iteration; Branch-E substring named bind 2v2
 undisturbed.
 
-**W3c (NEW — pass-4 BLOCKING finding, fix PROTOTYPED + RUN-PROVEN): the string
+**W3c (pass-4 BLOCKING finding, fix PROTOTYPED + RUN-PROVEN): the string
 INDEX/SLICE syntax route.** `s[0..5]` / `s[0]` lower via `lower_index_access`
 (NOT via `returns_view` dispatch) to `gorget_str_slice`/`gorget_str_index`, both
 returning cap=0 views; index results carry NO View tag, so even named binds
-break. Third call site for the SAME helper: top of the place-arm in
-`lower_index_access` (unpatched `methods.rs:3229`), same condition
+break. Third call site for the SAME helper: the place-arm guard in
+`lower_index_access` (unpatched `methods.rs:3209`), same condition
 (projection-free base local in `cow_lazy_mat_flag` → materialize in place).
 Proven: `show(s[0..5], &v)`, `show(s[0], &v)`, and named `String t = s[0..5]` +
 mutate all flip to eager-identical output at exact eager clone parity (1v1,
 `GG_CLONE_TRACE`); witnesses stay 0/1/0; default mode untouched. Also fix the
-false comment at `methods.rs:3291` as part of this hook.
+false comment at `methods.rs:3271` as part of this hook.
 
-**Sibling-completeness rule (rewritten — the v4 instruction was itself the
-trap):** do NOT verify by grepping `returns_view` CONSUMERS (that comes back
-singular and misses W3c). Enumerate view-PRODUCING runtime emitters instead:
-every caller of `gorget_str_view_region` in the runtime (`str_index`,
-`str_slice`, `str_byte_slice`, `str_char_at`, + any others found) and every
-compiler emit site that can produce one (the `returns_view` method dispatch, the
-`lower_index_access` place-arm, the LIR rewrites at `lir/lower/insts.rs:895-955`)
-— confirm each site is covered by one of the THREE hooks (W3a bind / W3b
-receiver / W3c index base) or is provably reachable only with a non-lazy base.
-Cite the full enumeration in the PR. ONE shared helper
-(`materialize_lazy_source_if_needed`), three call sites.
+**W3d (NEW — pass-5 BLOCKING finding, fix PROTOTYPED + RUN-PROVEN): the
+`for c in s:` char-iteration route.** `lower_for_string`
+(`src/ir/lowering/stmts/for_loops.rs:237`) emits the SYNTHETIC callee
+`gorget_str_codepoint_at` (`:349`) — not in any runtime `.c`; both backends emit
+it as a `gorget_str_view_region` view — so the per-iteration `c` is a view into
+the element buffer, on none of the W3a/W3b/W3c paths. Probe: lazy bind then
+`for c in s:` with `v.set(0,…)` at i==0 then `print(c)` → eager
+`h,e,l,l,o,!`, lazy `L,e,l,l,o,!` (ASan-silent). FOURTH call site of the shared
+helper: top of `lower_for_string` (after `let owned_string_type = …`,
+`for_loops.rs:246`, before the source-aware picker); condition: `iter_op` is a
+projection-free Copy/Move local in `cow_lazy_mat_flag`. Proven: lazy output
+identical to eager, clone parity EXACT 1v1, witnesses stay 0/1/0,
+`cargo test --lib` 1072/0; the flag-guard keeps nested-loop and
+never-reached-loop cases correct/0-clone. Fix the false comment at
+`for_loops.rs:345-347` and the stale `F::Allocates` tag on `StrCodepointAt`
+(`src/lir/runtime.rs:291`) as part of this hook.
+
+**Sibling-completeness rule (corrected TWICE — v4's consumer-grep missed W3c,
+v5's runtime-only producer-grep missed W3d):** grep `gorget_str_view_region`
+across **ALL of `src/`** — the runtime `.c` files AND the backend `.rs` emitters
+(synthetic callees like `gorget_str_codepoint_at` are emitted into generated C
+and never appear in the runtime source) — and walk EACH hit to its GIR
+producer(s). Appendix A below is the pass-5-produced complete enumeration
+(23 rows): every producer is covered by one of the FOUR hooks (W3a bind / W3b
+receiver / W3c index base / W3d for-string source), provably safe (owned
+elements, immediate byte reads, boundary clones), or unreachable — the executor
+RE-RUNS the grep at execution time and reconciles any new hit against the
+table before flipping the default. Cite the enumeration in the PR. ONE shared
+helper (`materialize_lazy_source_if_needed`), FOUR call sites.
 
 Rejected alternative (record why in the commit/PR): propagating CollectionElement
 provenance to the alias — preserves more laziness but multiplies loop-placement and
@@ -302,6 +329,9 @@ alias-chain cases; revisit as Phase 1b if profiles justify.
   validation for W3b, an ASan-blind class, **W3c index-temp-as-arg**
   (`show(s[0..5], &v)`) and **W3c named index bind** (`String t = s[0..5]` then
   mutate source) — the PRIMARY validation for W3c, same ASan-blind class,
+  **W3d for-string probe** (lazy bind then `for c in s:` with `v.set(0,…)` at
+  i==0, printing each `c`) — the PRIMARY validation for W3d, same ASan-blind
+  class,
   H2 shape (FieldPath source — asserts correct output under the EXCLUSION),
   multisite (two conditional mutation sites, first dynamically dead), escape
   (return of a still-view + caller destroys source), reassign-source (`v = w`),
@@ -344,7 +374,16 @@ alias-chain cases; revisit as Phase 1b if profiles justify.
   needed): tuple-destructure of a collection-element borrow
   (`auto (a,b) = (s,"z")` after `String s = v.get(0).unwrap()`) fails GIR
   resource-move validation ("shallow copy of resource
-  Tuple__GorgetString__GorgetString", `lowering/mod.rs:1636`).
+  Tuple__GorgetString__GorgetString", `lowering/mod.rs:1636`);
+  TWO more pre-existing gaps (pass 5, identical both modes, NOT lazy
+  regressions): (a) `[c for c in s]` string comprehension fails to BUILD
+  (`collections.rs:645` infers I64 elem → C error `int64_t = Str` at
+  `gorget_str_index`) — unreachable today, becomes a W3d sibling if ever fixed;
+  (b) `s[i] += rhs` compiles as a SILENT NO-OP (read via direct
+  `builder.index_load` `assigns.rs:1321` bypasses W3c; the write-back finds no
+  String setter and is silently dropped) — recommend rejecting string
+  index-assign semantically; under lazy the stale read is never observable
+  (value always discarded), noted as why-acceptable in Appendix A row 1b.
 - DONE.md entry on completion; remove the #37 Phase-1 portion from TODO.md.
 
 ## Gates (in order; executor runs 0-5, parent re-runs 5-8 on the integrated tree)
@@ -391,3 +430,24 @@ alias-chain cases; revisit as Phase 1b if profiles justify.
   land atomically). Messages cite this brief + the scout; end with the Claude
   Co-Authored-By trailer.
 - The brief's line numbers are from `a044a10f` — re-grep before editing.
+
+## Appendix A — complete view-producer enumeration (pass-5, the soundness baseline; executor RE-RUNS the all-of-src grep and reconciles)
+
+| # | View producer | Emit path(s) | Coverage |
+|---|---|---|---|
+| 1a | `gorget_str_index` (unpatched `runtime_string.c:692`) | `s[int]` → `lower_index_access` place-arm → LIR IndexLoad rewrite (`insts.rs:~941-958`) | **W3c** (run-verified) |
+| 1b | same, via compound `s[i] += rhs` read (`assigns.rs:1321`, direct index_load) | bypasses W3c | uncovered but result ALWAYS discarded (the write-back is a pre-existing silent no-op, see W6 TODO (b)) — acceptable; revisit if index-assign is ever implemented |
+| 2 | `gorget_str_slice` (`:717`) | (a) `s[range]` → place-arm → `insts.rs:~895-940`; (b) substring/slice `returns_view` dispatch (+ name fixup `calls.rs:397`) | (a) **W3c**; (b) **W3b** |
+| 3-4 | `gorget_str_byte_slice` (`:745`), `gorget_str_char_at` (`:753`) | `returns_view` dispatch only | **W3b** |
+| 5-12 | `runtime_string_extended.c`: trim `:257`, lstrip_ws `:268`, rstrip_ws `:278`, strip `:306`, lstrip `:317`, rstrip `:327`, removeprefix `:332-333`, removesuffix `:338-339` | `returns_view` dispatch only (sole consumer `methods.rs:2645` region) | **W3b** |
+| 13 | `gorget_str_codepoint_at` (SYNTHETIC: `c_lir/emit_call_extern.rs:86` / `c_lir/emit_types.rs:2409`) | `for c in s:` — `for_loops.rs:349`, sole GIR producer | **W3d** (run-proven) |
+| 14 | `gorget_string_borrow_view` (the lazy bind itself) | lazy bind + aliases | **W3a** + boundary clones |
+| 15 | `gorget_string_copy_cow` | plain assign `x = s` | `assigns.rs:178-196` clone guard |
+| 16 | `str`/`as_str` (identity header copy) | `returns_view` dispatch | **W3b** |
+| 17 | for-in-VECTOR `index_load_borrow` (`for_loops.rs:423/:544`) | base is the collection; loop vars never lazy-tagged | out of scope (collection, not string base) |
+| 18 | comprehension index_load (`collections.rs:645`) | string base does not compile (both modes) | unreachable — W6 TODO (a) |
+| 19 | cross-fn `return x[0..5]` from borrowed param | callee return boundary | covered — return clones (run-verified both modes) |
+| 20 | f-string / comparisons / match-on-string / find / len | immediate byte reads, no stored view | safe |
+| 21 | `show(s, &v)` by-value + `&v` | call-site Case-3 dispatch materializes s | safe (run-verified) |
+| 22 | `.chars()/.bytes()/.codepoints()/split/splitn/lines` | elements OWNED (`gorget_str_own_region`/scalars) | safe |
+| 23 | Group-B allocating methods (to_upper/replace/…) | receiver borrowed as Ptr, deref at call inst after args | safe; W3b's before-args placement also covers `s.substring(0, poke(&v))` |
