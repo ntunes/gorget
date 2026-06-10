@@ -1695,6 +1695,19 @@ pub(super) fn lower_method_call(
             }
         }
 
+        // Lazy loop-carried CoW, hook W3b (`returns_view` RECEIVER): a
+        // view-returning method on a lazy-view receiver copies the receiver's
+        // header AT CALL TIME — the produced view aliases the element buffer,
+        // not the receiver's slot, so the post-call View tag (the
+        // `set_view_of` site at the result handling below) is too late and
+        // the later materialize of `s` cannot fix the temp. Materialize the
+        // receiver in place BEFORE the receiver borrow is built (upstream of
+        // `emit_borrow` and ALL call-emission arms). Before-args placement
+        // also covers args that mutate the source (`s.substring(0, poke(&v))`).
+        if ctx.builtin_returns_view(&type_name, method_name) {
+            ctx.materialize_lazy_source_if_needed(builder, &recv, receiver.span);
+        }
+
         // If receiver is a field access, borrow the field in-place instead of
         // borrowing a copy (which would mutate the copy, not the original).
         // Exception: if the field's type is already `Ptr(T)` / `MutPtr(T)` —
@@ -3207,6 +3220,14 @@ pub(super) fn lower_index_access(
     }
 
     if let Operand::Copy(ref place) | Operand::Move(ref place) = obj {
+        // Lazy loop-carried CoW, hook W3c (INDEX/SLICE base): `s[i]` /
+        // `s[a..b]` lower to gorget_str_index / gorget_str_slice — cap=0
+        // views into the base's buffer. This route never consults
+        // `returns_view`, so the result carries NO View tag and even a NAMED
+        // bind (`String t = s[0..5]`) would dangle once the source
+        // collection mutates. If the base is a lazy-tagged local,
+        // materialize it in place BEFORE the read captures the buffer.
+        ctx.materialize_lazy_source_if_needed(builder, &obj, object.span);
         // Infer element type from the base collection type
         let base_type = infer_operand_type_full(ctx, &obj, builder);
 
@@ -3268,7 +3289,10 @@ pub(super) fn lower_index_access(
         // Auto-clone happens at Ptr→T boundaries (call args, VarDecl, return, etc.).
         let is_task = matches!(ctx.type_registry.get(elem_type),
             Some(GirType::Named(n)) if n.starts_with("Task__"));
-        // String character indexing: returns a new Str value (not a borrow).
+        // String character indexing: returns a cap=0 VIEW REGION into the
+        // base's buffer (gorget_str_index → gorget_str_view_region), not an
+        // owned copy — collection-put materialize hooks / boundary clones own
+        // it when it escapes; the W3c hook above handles lazy-view bases.
         let is_string_base = ctx.type_mapper.is_string_type(resolved_base);
         // Range slicing (`v[a..b]`, `s[a..b]`) returns a fresh container
         // of the same type as the base, NOT an element. Detect via the

@@ -944,6 +944,19 @@ fn lower_var_decl(
             // ownership-propagation + move-zero, which would re-clobber `s`'s
             // value slot with the raw element struct (a double-free).
             if !lazy_handled {
+            // Lazy loop-carried CoW, hook W3a (bind from a lazy-view SOURCE):
+            // `String x = s` where `s` is a lazy view would otherwise capture
+            // the PRE-materialize slot version (Branch C Ptr alias) or steal
+            // the view bytes (Branches F/G) — provenance to the collection is
+            // lost and the later mutation-site materialize cannot fix `x`.
+            // Materialize `s` in place FIRST; the bind below then sees the
+            // eager-world owned+live source states (Branch A / F). Defined by
+            // SOURCE, not by lowering branch — a single site upstream of
+            // Branches A-G and the trailing assign path. Rejected
+            // alternative: propagating CollectionElement provenance to the
+            // alias preserves more laziness but multiplies loop-placement and
+            // alias-chain cases (Phase 1b if profiles justify).
+            ctx.materialize_lazy_source_if_needed(builder, &operand, value.span);
             // Phase D4 typed signals — see TODO entry "Phase D4 —
             // lower_var_decl decision tree refactor" and
             // `docs/devbook/13-ownership-in-ir.md` (Phase D, §6.7). The decision tree below is

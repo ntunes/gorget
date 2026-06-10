@@ -2612,7 +2612,10 @@ impl<'a> LoweringContext<'a> {
         // MUST be drop-tracked. The runtime free is cap-driven: an
         // unmaterialized cap=0 view frees nothing, a materialized cap>0 owned
         // copy frees its buffer. Sound in both loop-carried branches.
-        self.drops.register_local(local_id, inner_string_type, &self.type_registry);
+        // update-not-reregister: the VarDecl path may have already registered
+        // this local (a plain `register_local` here emitted TWO exit-block
+        // frees — benign for String's zeroing free, still wrong).
+        self.drops.update_or_register_type(local_id, inner_string_type, &self.type_registry);
 
         // 2) Pre-loop `s_mat = false` flag. Created HERE (before the loop) so it
         //    is a loop-carried local (lid < the loop's save_locals boundary).
@@ -2639,6 +2642,13 @@ impl<'a> LoweringContext<'a> {
     /// the post-loop read of `s` (which resolves to this same loop-carried slot)
     /// is correct in BOTH the materialized and never-materialized branches.
     /// The flag guard makes the clone fire at most once.
+    ///
+    /// Multi-mutation-site soundness: `restore_locals` reverts per-branch
+    /// ownership, so each branch-arm mutation site re-finds the tag and
+    /// emits its own guard (two guard callsites, first dynamically dead →
+    /// exactly one runtime clone). Same-straight-line later sites are
+    /// covered by dominance: the first guard's `cont_bb` dominates them, so
+    /// the flag is true and their guards are runtime no-ops.
     pub fn cow_materialize_view_lazy_in_place(
         &mut self,
         builder: &mut crate::ir::builder::FunctionBuilder,
@@ -2695,6 +2705,43 @@ impl<'a> LoweringContext<'a> {
         // `s` is now Owned (on the materialized path) — keep drop-tracking; the
         // cap-driven free handles the unmaterialized branch.
         self.set_owned(builder, s_local);
+    }
+
+    /// Shared lazy-source READ hook: if `operand` is a projection-free
+    /// Copy/Move of a local present in `cow_lazy_mat_flag`, emit the
+    /// flag-guarded in-place materialize on it (no-op otherwise).
+    ///
+    /// A read that captures a lazy view's VALUE or ADDRESS into another
+    /// binding loses provenance to the source collection — Case 3 of
+    /// `cow_before_mutation` can then no longer materialize the captured
+    /// copy. Materializing the SOURCE first means the captured
+    /// bytes/pointer target the local's own owned buffer. FOUR call sites —
+    /// the complete view-producer read set (devbook/11 "view-producer
+    /// enumeration"; grep `gorget_str_view_region` across ALL of src/ and
+    /// walk each hit to its GIR producer before adding a sibling):
+    ///   - W3a `lower_var_decl` trailing-assign entry (alias / move-steal
+    ///     binds: `String x = s`),
+    ///   - W3b `returns_view` method receivers, BEFORE the call captures the
+    ///     header (`s.substring(..)` as temp or named bind),
+    ///   - W3c `lower_index_access` place-arm (`s[i]` / `s[a..b]` — never
+    ///     consult `returns_view`, carry NO View tag),
+    ///   - W3d `lower_for_string` source (`for c in s:` — synthetic
+    ///     `gorget_str_codepoint_at` views).
+    /// The map entry survives the materialize (see `cow_lazy_mat_flag` doc);
+    /// the runtime flag keeps the clone at-most-once.
+    pub fn materialize_lazy_source_if_needed(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        operand: &Operand,
+        span: crate::span::Span,
+    ) {
+        if let Operand::Copy(p) | Operand::Move(p) = operand {
+            if p.projections.is_empty() {
+                if let Some(&flag) = self.func_state.cow_lazy_mat_flag.get(&p.local) {
+                    self.cow_materialize_view_lazy_in_place(builder, p.local, flag, span);
+                }
+            }
+        }
     }
 
     /// Derive `slot_kind` for every local at the GIR/LIR boundary.
@@ -3041,10 +3088,22 @@ impl<'a> LoweringContext<'a> {
         if self.is_bare_param(builder, source_local) {
             self.unset_ownership(builder, source_local);
         }
-        // Remove collection refs pointing to this source
+        // Remove collection refs pointing to this source.
+        // Lazy loop-carried refs MATERIALIZE first (sibling of Case 3 in
+        // `cow_before_mutation` — this sever runs BEFORE that dispatch when
+        // the reassigned collection also has Alias-aliases, so without the
+        // routing here the lazy view would never materialize and would
+        // dangle once the old buffer is dropped). Then unset as before; the
+        // flag-map entry stays (the slot still holds the now-owned value;
+        // a later W3 read hook's guarded clone is a runtime no-op).
         let refs = self.cow_collection_refs_for(builder, source_local);
         for r in refs {
             self.unset_ownership(builder, r);
+            // (unset first so the materialize's trailing `set_owned` is the
+            // final state — the slot really does own its buffer afterwards.)
+            if let Some(&flag) = self.func_state.cow_lazy_mat_flag.get(&r) {
+                self.cow_materialize_view_lazy_in_place(builder, r, flag, span);
+            }
         }
         // Materialize string views borrowing from this source
         let views = self.views_of_source(builder, source_local);

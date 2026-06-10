@@ -79,7 +79,12 @@ pub(super) fn emit_call_extern(
                 return;
             }
             if name == "gorget_str_codepoint_at" && args.len() == 2 {
-                // gorget_str_codepoint_at(Str s, int64_t byte_pos) → Str (owned copy)
+                // gorget_str_codepoint_at(Str s, int64_t byte_pos) → Str: a
+                // cap=0 VIEW REGION into s's buffer (no allocation) — sibling
+                // of the emit_types.rs helper-fn emission. Owning consumers
+                // upgrade the view via the collection-put materialize hooks /
+                // boundary clones; lazy-view sources are materialized first
+                // by lower_for_string's W3d hook.
                 if let Some(d) = dst {
                     let s = format!("((Str*){})", v(args[0]));
                     let pos = v(args[1]);

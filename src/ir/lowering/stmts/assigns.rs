@@ -387,6 +387,24 @@ pub(super) fn lower_assign(
                         }
                     }
                 }
+                // Lazy loop-carried CoW (W4 write-site clearing): the local
+                // was REASSIGNED wholesale, so its collection-element
+                // provenance no longer holds. Remove the flag-map entry — a
+                // stale tag+flag pair would emit a pointless guarded clone at
+                // the next collection mutation / W3 read hook and leak the
+                // new buffer via the materialize's Move-assign overwrite.
+                // Cleared AFTER the RHS is lowered (deliberate): clearing up
+                // front would break self-referential RHS that mutates the
+                // source mid-expression (`s = s + poke(&v)` — the `&v`
+                // dispatch must still find the tag to materialize `s` before
+                // the concat reads it). If the write-back didn't already
+                // re-tag the slot, drop the stale
+                // Borrowed{CollectionElement} tag too.
+                if ctx.func_state.cow_lazy_mat_flag.remove(&local_id).is_some()
+                    && ctx.collection_ref_source(builder, local_id).is_some()
+                {
+                    ctx.unset_ownership(builder, local_id);
+                }
             } else if ctx.global_names.contains(name.as_str()) {
                 // Module-level static variable — emit GlobalAssign
                 let operand = lower_expr(ctx, builder, value);
@@ -1036,6 +1054,16 @@ pub(super) fn lower_compound_assign(
                 // Mark the temp as moved so the drop elaborator doesn't free it
                 // (the destination variable now owns the GorgetString)
                 ctx.move_zero_and_mark(builder, tmp);
+            // Lazy loop-carried CoW (W4 write-site clearing): compound assign
+            // writes the local wholesale — same clearing as `lower_assign`'s
+            // Identifier arm (which see), AFTER the RHS ran. This is the
+            // string-concat fast path's sibling clear: the path RETURNS
+            // EARLY, so the generic-tail clear below never runs for it.
+            if ctx.func_state.cow_lazy_mat_flag.remove(&local_id).is_some()
+                && ctx.collection_ref_source(builder, local_id).is_some()
+            {
+                ctx.unset_ownership(builder, local_id);
+            }
                 return;
             }
 
@@ -1118,6 +1146,14 @@ pub(super) fn lower_compound_assign(
                 crate::ir::instructions::AssignMode::Copy
             };
             builder.assign_mode(cmp_mode, dst, FunctionBuilder::copy(tmp));
+            // Lazy loop-carried CoW (W4 write-site clearing): generic compound
+            // tail — see the fast-path clear above and `lower_assign`'s
+            // Identifier arm for the rationale.
+            if ctx.func_state.cow_lazy_mat_flag.remove(&local_id).is_some()
+                && ctx.collection_ref_source(builder, local_id).is_some()
+            {
+                ctx.unset_ownership(builder, local_id);
+            }
         } else if ctx.global_names.contains(name.as_str()) {
             // Module-level static variable — read via GlobalRef, compute, write via GlobalAssign
             let cur_val = Operand::Constant(Constant::GlobalRef(name.clone()));

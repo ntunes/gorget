@@ -239,11 +239,21 @@ fn lower_for_string(
     builder: &mut FunctionBuilder,
     var_name: &str,
     iter_op: Operand,
-    _iterable_expr: &Spanned<Expr>,
+    iterable_expr: &Spanned<Expr>,
     body: &Block,
     else_arm: Option<&Block>,
 ) {
     let owned_string_type = ctx.type_mapper.owned_string_type;
+
+    // Lazy loop-carried CoW, hook W3d (for-string SOURCE): `for c in s:`
+    // emits the synthetic `gorget_str_codepoint_at`, which both backends
+    // materialize as a `gorget_str_view_region` view into the source buffer
+    // (c_lir/emit_call_extern.rs / c_lir/emit_types.rs) — on none of the
+    // W3a/W3b/W3c paths. If the iterated source is a lazy-tagged local,
+    // materialize it in place before the picker below captures it. The flag
+    // guard keeps nested-loop / never-reached-loop cases correct and
+    // zero-clone.
+    ctx.materialize_lazy_source_if_needed(builder, &iter_op, iterable_expr.span);
 
     // §6.8 Stage 5 — source-aware picker (option (c) from the prior
     // comment). Three iter_op shapes existed:
@@ -342,9 +352,11 @@ fn lower_for_string(
 
     // ch = (Str){ .data = iter.data + byte_pos, .len = cplen }
     // We'll construct this as a StructInit with computed fields via extern.
-    // `gorget_str_codepoint_at` returns an owned Str (allocates via
-    // `gorget_str_own_region`), so drop-register the local for the loop body
-    // scope — without this, every iteration leaked one codepoint copy.
+    // Both backends emit `gorget_str_codepoint_at` as a cap=0
+    // `gorget_str_view_region` view into the source buffer (it does NOT
+    // allocate). Drop-registering the local is still correct — the
+    // cap-driven free no-ops on views — and keeps the slot sound if a
+    // future backend materializes an owned copy here.
     let ch_local = builder.call_extern(
         "gorget_str_codepoint_at",
         vec![FunctionBuilder::copy(iter_local), FunctionBuilder::copy(byte_pos)],
@@ -352,12 +364,14 @@ fn lower_for_string(
     );
     ctx.register_local(var_name, ch_local, owned_string_type);
     ctx.drops.register_local(ch_local, owned_string_type, &ctx.type_registry);
-    // `gorget_str_codepoint_at` allocates a fresh owned String for each
-    // codepoint — tag FreshOwned so the consume-site validator sees a
-    // concrete state at downstream sinks (e.g., `stack.push(ch)` in
-    // `string_algorithms::is_balanced`). Without this the local stays
-    // at default Untracked, surfaced by the Tier 2a `consume_externs`
-    // promotion 2026-05-12.
+    // Tag FreshOwned so the consume-site validator sees a concrete state at
+    // downstream sinks (e.g., `stack.push(ch)` in
+    // `string_algorithms::is_balanced`). Without this the local stays at
+    // default Untracked, surfaced by the Tier 2a `consume_externs`
+    // promotion 2026-05-12. NOTE the value is actually a cap=0 VIEW (see
+    // above) — the tag is run-proven sound because every owning consume
+    // site routes through the collection-put materialize hooks / boundary
+    // clones, which upgrade cap=0 views on entry.
     ctx.set_owned_fresh(builder, ch_local);
 
     // Lower the body
