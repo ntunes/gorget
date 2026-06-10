@@ -1,0 +1,346 @@
+diff --git a/src/backend/c/runtime/runtime_string.c b/src/backend/c/runtime/runtime_string.c
+index cfc028cd..cdb5c15c 100644
+--- a/src/backend/c/runtime/runtime_string.c
++++ b/src/backend/c/runtime/runtime_string.c
+@@ -204,6 +204,15 @@ static inline GorgetString gorget_string_clone(const GorgetString* src) {
+ // globals lives elsewhere (GIR clone-on-access elides the call entirely
+ // when the global is a known literal-view; see `clone_resource_global_ref`).
+ static inline GorgetString gorget_string_clone_to_owned(const GorgetString* src) {
++    /* PROTOTYPE INSTRUMENTATION (cow_loopcarried scout): per-call clone count.
++       Env-gated so normal builds/tests are unaffected. The ONLY trustworthy
++       clone counter for this scout — --clones=stats/total_allocs do NOT count
++       this fn. Remove before any production merge. */
++    if (getenv("GG_CLONE_TRACE")) {
++        static long __cto_n = 0;
++        __cto_n++;
++        fprintf(stderr, "[clone_to_owned] call #%ld len=%zu\n", __cto_n, (size_t)src->len);
++    }
+     if (src->len == 0) return GORGET_EMPTY_STR;
+     return str_alloc_copy((const char*)src->data, src->len, __gorget_current_alloc);
+ }
+@@ -225,6 +234,19 @@ static inline GorgetString gorget_string_borrow(const GorgetString* src) {
+     return *src;
+ }
+ 
++// PROTOTYPE (cow_loopcarried scout): borrow as a TRUE view — shallow copy with
++// cap FORCED to 0 so the result is drop-safe (gorget_string_free no-ops cap=0)
++// even when stored in a drop-tracked VALUE slot that shares the source's heap
++// buffer. Used by the lazy loop-carried element borrow: `s` holds this view
++// until the flag-guarded in-place materialize deep-clones it (cap>0) on the
++// first mutating iteration. Distinct from gorget_string_borrow (which copies
++// cap as-is — fine for a Ref local the compiler never frees, but a double-free
++// when the borrow lives in a freed value slot).
++static inline GorgetString gorget_string_borrow_view(const GorgetString* src) {
++    if (src->len == 0) return GORGET_EMPTY_STR;
++    return (Str){ .data = src->data, .cap = 0, .len = src->len, .alloc = NULL };
++}
++
+ // Materialize an in-slot Str value. If it's a view (cap == 0), clone it into
+ // an owned buffer so the enclosing container can safely outlive the original
+ // source. If already owned, no-op.
+diff --git a/src/ir/lowering/context.rs b/src/ir/lowering/context.rs
+index 3b863bfd..61961364 100644
+--- a/src/ir/lowering/context.rs
++++ b/src/ir/lowering/context.rs
+@@ -247,6 +247,18 @@ pub struct FunctionState {
+     /// to `false`) inside `lower_expr` before lowering, so nested sub-expressions
+     /// auto-prop normally. See `maybe_auto_propagate` for the routing.
+     pub suppress_auto_prop: bool,
++    /// PROTOTYPE (cow_loopcarried scout): lazy loop-carried materialize.
++    /// Maps a lazy-CoW element-borrow value local (`s`, a pre-loop String value
++    /// slot holding a shallow borrow) → its `materialized?` flag local (`s_mat`,
++    /// a pre-loop bool slot, init false). Both locals are allocated BEFORE the
++    /// loop (lid < the loop's save_locals boundary) so they survive
++    /// restore_locals and become loop-carried (LIR-SSA phis them at the header).
++    /// The mutation-site materialize (`cow_materialize_view_lazy_in_place`)
++    /// reads this to emit a flag-guarded IN-PLACE clone (clone once, from the
++    /// still-valid borrow, write into `s`'s own slot) instead of a fresh-local
++    /// rebind that wouldn't survive the loop boundary. Gated on
++    /// `GG_COW_LAZY_LOOP=1` at lowering time.
++    pub cow_lazy_mat_flag: FxHashMap<LocalId, LocalId>,
+ }
+ 
+ /// Tracks lowering state within a function.
+@@ -2495,6 +2507,144 @@ impl<'a> LoweringContext<'a> {
+         }
+     }
+ 
++    /// PROTOTYPE (cow_loopcarried scout): emit the lazy loop-carried element
++    /// borrow. `local_id` is the declared String-typed var (`s`); `operand` is
++    /// the `Ptr(String)` element borrow (`coll.get(i).unwrap()`); `collection`
++    /// is the source. Instead of the eager clone the legacy path would emit
++    /// (clone in the bind block before the loop header), this materializes `s`
++    /// as a pre-loop String VALUE slot holding a SHALLOW borrow (cap=0 view) +
++    /// allocates a pre-loop `s_mat=false` flag, and records the pair in
++    /// `cow_lazy_mat_flag`. The deep clone is deferred to the mutation site
++    /// (`cow_materialize_view_lazy_in_place`, dispatched from Case 3 of
++    /// `cow_before_mutation`), flag-guarded so it fires at most once from the
++    /// still-valid borrow. Both new slots are pre-loop locals (created here,
++    /// before the loop's save_locals) so they survive restore_locals and become
++    /// loop-carried (LIR-SSA phis them at the header) — the rebind-survival
++    /// problem the a12333a0 attempt and the cow_borrow_outlives_push fixture
++    /// comment describe.
++    pub fn emit_lazy_loopcarried_borrow(
++        &mut self,
++        builder: &mut crate::ir::builder::FunctionBuilder,
++        name: &str,
++        local_id: LocalId,
++        inner_string_type: TypeId,
++        _ptr_type: TypeId,
++        operand: Operand,
++        collection: CollectionId,
++        span: crate::span::Span,
++    ) {
++        use crate::ir::instructions::{AssignMode, Place};
++        // 1) Shallow borrow of the element into `s`'s value slot. The runtime
++        //    `gorget_string_borrow` is a 32-byte struct copy (cap=0 view) — NO
++        //    heap alloc, NO clone. Valid as long as `coll` isn't reallocated;
++        //    the mutation-site materialize severs that dependency.
++        let borrowed = builder.call(
++            "gorget_string_borrow_view",
++            vec![operand],
++            inner_string_type,
++        );
++        // Retype `s` to the String VALUE type (was Ptr) and write the borrow in.
++        builder.locals[local_id.0 as usize].type_id = inner_string_type;
++        builder.assign_mode(
++            AssignMode::Move,
++            Place::local(local_id),
++            crate::ir::builder::FunctionBuilder::copy(borrowed),
++        );
++        self.register_local(name, local_id, inner_string_type);
++        self.func_state.named_locals.insert(local_id);
++        // Tag as a CollectionElement borrow so `cow_before_mutation` Case 3
++        // (`cow_collection_refs_for`) finds it when `coll` is mutated. The
++        // lazy-flag side-map routes it to the in-place materialize there.
++        self.set_collection_ref(builder, local_id, collection);
++        // `s` carries a (possibly heap-owning after materialize) String — it
++        // MUST be drop-tracked. The runtime free is cap-driven: an
++        // unmaterialized cap=0 view frees nothing, a materialized cap>0 owned
++        // copy frees its buffer. Sound in both loop-carried branches.
++        self.drops.register_local(local_id, inner_string_type, &self.type_registry);
++
++        // 2) Pre-loop `s_mat = false` flag. Created HERE (before the loop) so it
++        //    is a loop-carried local (lid < the loop's save_locals boundary).
++        let flag = builder.add_local(crate::ir::types::BOOL_TYPE, Some("__cow_mat"));
++        builder.assign(
++            Place::local(flag),
++            crate::ir::builder::FunctionBuilder::const_bool(false),
++        );
++        self.func_state.cow_lazy_mat_flag.insert(local_id, flag);
++        let _ = span;
++    }
++
++    /// PROTOTYPE (cow_loopcarried scout): flag-guarded IN-PLACE materialize of a
++    /// lazy loop-carried element borrow. Emits:
++    ///
++    ///     if !s_mat:
++    ///         s = clone_to_owned(&s)   // in-place: overwrite s's OWN slot
++    ///         s_mat = true
++    ///
++    /// `s` is a String VALUE slot already holding the shallow borrow; the clone
++    /// reads `s`'s current (still-valid on the first mutating iteration) value
++    /// and writes the deep-owned copy back into the SAME slot. No fresh local,
++    /// no name rebind — so it survives the enclosing loop's restore_locals and
++    /// the post-loop read of `s` (which resolves to this same loop-carried slot)
++    /// is correct in BOTH the materialized and never-materialized branches.
++    /// The flag guard makes the clone fire at most once.
++    pub fn cow_materialize_view_lazy_in_place(
++        &mut self,
++        builder: &mut crate::ir::builder::FunctionBuilder,
++        s_local: LocalId,
++        flag_local: LocalId,
++        span: crate::span::Span,
++    ) {
++        use crate::ir::instructions::{AssignMode, Place};
++        use crate::ir::types::BOOL_TYPE;
++        let s_type = builder.local_type(s_local);
++        let clone_fn = match self.clone_fn_for_ptr(s_type) {
++            Some(f) => f,
++            None => return,
++        };
++        self.warn_implicit_clone(span, s_type, crate::ir::ImplicitCloneReason::CoWMaterialization);
++
++        // if !s_mat goto mat_bb else cont_bb
++        let mat_bb = builder.new_block();
++        let cont_bb = builder.new_block();
++        let not_mat = builder.un_op(
++            crate::ir::instructions::UnOp::Not,
++            BOOL_TYPE,
++            crate::ir::builder::FunctionBuilder::copy(flag_local),
++        );
++        builder.branch(
++            crate::ir::builder::FunctionBuilder::copy(not_mat),
++            mat_bb,
++            cont_bb,
++        );
++
++        // mat_bb: s = clone_to_owned(&s); s_mat = true; goto cont_bb
++        builder.switch_to(mat_bb);
++        // The clone fn takes `const GorgetString*` — pass `s` by value; the C
++        // emit takes its address (same shape as every other clone_to_owned
++        // callsite: `gorget_string_clone_to_owned(&__vN)`).
++        let cloned = builder.call(
++            &clone_fn,
++            vec![crate::ir::builder::FunctionBuilder::copy(s_local)],
++            s_type,
++        );
++        builder.assign_mode(
++            AssignMode::Move,
++            Place::local(s_local),
++            crate::ir::builder::FunctionBuilder::copy(cloned),
++        );
++        builder.assign(
++            Place::local(flag_local),
++            crate::ir::builder::FunctionBuilder::const_bool(true),
++        );
++        builder.jump(cont_bb);
++
++        // continue
++        builder.switch_to(cont_bb);
++        // `s` is now Owned (on the materialized path) — keep drop-tracking; the
++        // cap-driven free handles the unmaterialized branch.
++        self.set_owned(builder, s_local);
++    }
++
+     /// Derive `slot_kind` for every local at the GIR/LIR boundary.
+     /// Phase D4.5 step 5d: `Local.ownership` is the sole live store; the
+     /// legacy `func_state.local_ownership: FxHashMap` was retired. This
+@@ -2723,6 +2873,16 @@ impl<'a> LoweringContext<'a> {
+         let refs = self.cow_collection_refs_for(builder, local);
+         if !refs.is_empty() {
+             for ref_local in refs {
++                // PROTOTYPE (cow_loopcarried scout): a lazy loop-carried element
++                // borrow routes to the flag-guarded IN-PLACE materialize instead
++                // of the legacy fresh-local rebind (which wouldn't survive the
++                // enclosing loop's restore_locals). Detection: the ref appears in
++                // `cow_lazy_mat_flag`. The flag + slot are pre-loop locals so the
++                // materialize is loop-carried.
++                if let Some(&flag) = self.func_state.cow_lazy_mat_flag.get(&ref_local) {
++                    self.cow_materialize_view_lazy_in_place(builder, ref_local, flag, span);
++                    continue;
++                }
+                 // Only sever if the ref is still live (not already moved/reassigned)
+                 if self.is_ref_local(builder, ref_local) {
+                     self.cow_materialize_collection_ref(builder, ref_local, span);
+diff --git a/src/ir/lowering/stmts/mod.rs b/src/ir/lowering/stmts/mod.rs
+index e5a9c329..a26ebd12 100644
+--- a/src/ir/lowering/stmts/mod.rs
++++ b/src/ir/lowering/stmts/mod.rs
+@@ -527,6 +527,12 @@ fn lower_var_decl(
+                 || gir_type_is_box_callable
+                 || gir_type_is_lazy_generic
+             );
++            // PROTOTYPE (cow_loopcarried scout): set by the lazy loop-carried
++            // branch when it has fully emitted the bind (borrow_view into `s` +
++            // flag). The unconditional trailing `builder.assign_mode(.., local_id,
++            // operand)` MUST be skipped, else it re-clobbers `s`'s value slot
++            // with the raw element struct (the double-free).
++            let mut lazy_handled = false;
+             if needs_reinfer {
+                 let inferred = infer_operand_type_with_builder(ctx, &operand, builder);
+                 if inferred != gir_type {
+@@ -774,7 +780,38 @@ fn lower_var_decl(
+                                 path.map_or(false, |p| ctx.is_source_mut_unsafe_at(&p, stmt_span.start))
+                             } else { false }
+                         } else { false };
+-                        if source_is_cow_borrow && safe_in_loop && !source_mut_unsafe
++                        // PROTOTYPE (cow_loopcarried scout, GG_COW_LAZY_LOOP=1):
++                        // FULL LAZY materialization. The source IS mutated on a
++                        // forward path (`source_mut_unsafe`), so the legacy path
++                        // EAGER-clones at this bind (the clone callsite lands in
++                        // the bind block before the loop header — verified by
++                        // reading the emitted C). Instead, emit the lazy
++                        // loop-carried shape: keep `s` as a pre-loop String VALUE
++                        // slot holding a shallow borrow + a pre-loop `s_mat=false`
++                        // flag; defer the deep clone to a flag-guarded IN-PLACE
++                        // materialize at the mutation site (clone once, from the
++                        // still-valid borrow). Dead mutation path → 0 clones.
++                        // Both slots are pre-loop locals (lid < the loop's
++                        // save_locals boundary) so the materialize survives
++                        // restore_locals AND becomes loop-carried (LIR-SSA phis
++                        // them at the header). This is the centerpiece the a12333a0
++                        // attempt got wrong (it cloned every iteration from a stale
++                        // ptr with no flag).
++                        let lazy_loop_enabled = std::env::var("GG_COW_LAZY_LOOP")
++                            .map_or(false, |v| v == "1");
++                        if lazy_loop_enabled && source_is_cow_borrow && source_mut_unsafe
++                            && ctx.type_registry.is_resource_type(_inner)
++                            && _inner == ctx.type_mapper.owned_string_type
++                        {
++                            let collection = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
++                                ctx.cow_borrow_source(p.local).cloned().unwrap()
++                            } else { unreachable!() };
++                            ctx.emit_lazy_loopcarried_borrow(
++                                builder, name, local_id, _inner, inferred,
++                                operand.clone(), collection, value.span,
++                            );
++                            lazy_handled = true;
++                        } else if source_is_cow_borrow && safe_in_loop && !source_mut_unsafe
+                             && ctx.type_registry.is_resource_type(_inner)
+                         {
+                             // Propagate CowBorrow as CollectionRef — typed binding
+@@ -882,6 +919,12 @@ fn lower_var_decl(
+             use crate::ir::instructions::AssignMode;
+             let actual_var_type = builder.local_type(local_id);
+ 
++            // PROTOTYPE (cow_loopcarried scout): the lazy loop-carried branch
++            // already emitted the bind (borrow_view → `s`, flag init) and set
++            // `s`'s ownership/drop-tracking. Skip the trailing assign +
++            // ownership-propagation + move-zero, which would re-clobber `s`'s
++            // value slot with the raw element struct (the double-free we hit).
++            if !lazy_handled {
+             // Phase D4 typed signals — see TODO entry "Phase D4 —
+             // lower_var_decl decision tree refactor" and
+             // `docs/devbook/13-ownership-in-ir.md` (Phase D, §6.7). The decision tree below is
+@@ -973,6 +1016,7 @@ fn lower_var_decl(
+                     }
+                 }
+             }
++            } // end `if !lazy_handled`
+         }
+ 
+         Pattern::Tuple(parts) => {
+=== NEW FILE: tests/fixtures/witness_never.gg ===
+# WITNESS (cow_loopcarried scout): loop-body conditional source-mutation, DEAD branch.
+# `s` borrows v[0]; the push is gated on a condition that is NEVER true.
+# Eager-clone today: 1 clone in the bind block (before the loop). LAZY target: 0.
+# Output must be unchanged: s = hello, v.len() = 2.
+void main():
+    Vector[String] v = ["hello", "world"]
+    String s = v.get(0).unwrap()
+    int i = 0
+    while i < 2:
+        if i == 999999:
+            v.push("filler")
+        i = i + 1
+    print(f"s = {s}")
+    print(f"v.len() = {v.len()}")
+=== NEW FILE: tests/fixtures/witness_taken.gg ===
+# WITNESS (cow_loopcarried scout): loop-body conditional source-mutation, TAKEN once.
+# `s` borrows v[0]; the push fires on exactly one iteration (i==1).
+# LAZY target: exactly 1 clone (the first/only mutating iteration), no UAF.
+# Output: s = hello, v.len() = 3.
+void main():
+    Vector[String] v = ["hello", "world"]
+    String s = v.get(0).unwrap()
+    int i = 0
+    while i < 2:
+        if i == 1:
+            v.push("filler")
+        i = i + 1
+    print(f"s = {s}")
+    print(f"v.len() = {v.len()}")
+=== NEW FILE: tests/fixtures/witness_cond_straightline.gg ===
+# WITNESS (cow_loopcarried scout): NON-loop conditional source-mutation, cond FALSE.
+# `s` borrows v[0]; the push is gated on a false condition, NO loop.
+# Eager-clone today: 1 clone at the bind. LAZY target: 0 (push never runs).
+# Output unchanged: s = hello, v.len() = 2.
+void main():
+    Vector[String] v = ["hello", "world"]
+    String s = v.get(0).unwrap()
+    bool cond = false
+    if cond:
+        v.push("filler")
+    print(f"s = {s}")
+    print(f"v.len() = {v.len()}")
