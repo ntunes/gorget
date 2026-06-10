@@ -1,0 +1,1087 @@
+# ── GIR backward-dataflow liveness (split out of lower.gg) ───────────
+# The GIR-level backward-dataflow liveness pass (use/def, fixpoint,
+# last-use recording) and the operand-mode rewrite that wires the
+# liveness result into per-operand move/clone modes. Moved verbatim from
+# lower.gg as part of the lower.gg module split (output-neutral pure
+# function move). The LIVE_MAX_* bit-layout consts move with the cluster.
+from std.collections import Vector, Dict
+from std.conv import int_to_str, float_to_str
+from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch, EquipBlock, StructDef, EnumDef, EnumVariant, Type, MatchArm, Pattern, SpannedPattern
+from scope import ScopeTable, DefInfo
+from types import TypeTable, ResolvedType
+from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Terminator, Operand, GirType, GirExtern, GirTypeInfo, GirFieldInfo, GirEnumVariantInfo, LiftedClosure, ClosureCapture, ResourceMetadata, CollectionKind, ConsumeKind
+from gir import BOOL_TYPE, I8_TYPE, I16_TYPE, I32_TYPE, I64_TYPE, U8_TYPE, U16_TYPE, U32_TYPE, U64_TYPE, F32_TYPE, F64_TYPE, UNIT_TYPE, PRIM_COUNT
+from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM, OP_MOD
+from gir import OP_ADD_WRAP, OP_SUB_WRAP, OP_MUL_WRAP
+from gir import OP_BITAND, OP_BITOR, OP_BITXOR, OP_SHL, OP_SHR
+from gir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
+from gir import UNOP_NEG, UNOP_NOT, UNOP_BITNOT
+from gir import CkAssign, CkReturn, CkCallArgBorrow, CkCallArgOwning, CkFieldWrite, CkBinOpArg, CkFormatArg, CkMatchPtr
+from gir import CkVector, CkDeque, CkHeap, CkDict, CkSet, CkNotCollection
+from lir_lower import resource_meta_for
+from lower import LowerCtx
+from lower import lower_fail, diag_bug, diag_warn, emit, new_block, switch_to, set_terminator
+from lower import add_local, add_local_with
+
+# ── GIR backward-dataflow liveness (Phase 1 of GIR-liveness redesign) ──
+#
+# Computes, for every owned-local operand READ at position (block, inst,
+# op_idx), whether that read is the **last use** of the source local —
+# i.e. whether the local is NOT live anywhere downstream in the CFG.
+# Result is recorded in `LivenessAnalysis.last_use_of_op`, keyed by an
+# encoded (block, inst, op_idx) triple, value true = last use.
+#
+# This pass is the architectural successor to `tighten_owned_operand_modes`
+# (the linear-order, loop-blind post-hoc demoter at line ~790). Where the
+# old pass walks instructions in storage order and uses the highest-
+# numbered read as "last", this pass operates on the explicit BB CFG with
+# proper backward dataflow + fixpoint — correct for loops, branch merges,
+# and exception paths.
+#
+# **Phase 1 status (2026-05-20): pass computes decisions but nothing
+# consumes them yet.** `tighten_owned_operand_modes` still drives actual
+# OpMove → OpClone demotion. Phase 2 will wire the consumer.
+#
+# Architectural reference. Rust's GIR-level liveness lives in
+# `src/ir/liveness.rs` (~900 lines, used by Tier 2a consume-site
+# validation in `validate_consume_sites`). This self-host port matches
+# the Rust algorithm shape — backward dataflow, dense per-local bitset,
+# worklist fixpoint — but in self-host's cost model. Key adaptation:
+# the Rust impl uses a packed-word `LocalBitSet` for set ops; self-host
+# uses `Vector[bool]` indexed by local_id. Local count per function is
+# typically a few dozen to a few hundred, so the linear scan is
+# manageable; switching to a packed-int bitset is a follow-up perf if
+# fixpoint dominates.
+#
+# Why NOT a literal port of `src/ir/lowering/liveness.rs` (AST-level)?
+# Two prior agent attempts (`ae77618e`, `ac3595ea`) hit a hard perf
+# wall: Rust's AST liveness uses `FxHashSet<&'a str>` borrowed from AST
+# `Expr::Identifier(name)`, so per-branch save/restore is a 16-byte
+# slice-header copy. Self-host has no `&str` equivalent; the same code
+# in Gorget allocates a new `Dict[String, bool]` and deep-clones every
+# String key per branch-save. For ~50 live-identifiers × 20 branch
+# points × 1500 functions = ~1.5M String allocations. `self_host_
+# bootstrap` ran 6:50 with no progress, RSS climbed 870→948 MB. Killed.
+#
+# DONE.md line 109 (perf(ir/lowering) 2026-05-18) records that Rust
+# *itself* hit this exact issue at the AST layer and fixed it via
+# `FxHashSet<&'a str>` (internal) + `FxHashSet<Rc<str>>` with an interner
+# (cross-function). Both fixes depend on language features self-host
+# lacks. The GIR-level pass IS the right shape for self-host because:
+#   • The CFG is explicit (basic blocks + terminators) — no walking
+#     AST recursively, no branch-merge name juggling.
+#   • Working set is per-function local count (~50-200), not per-
+#     function identifier-string count (~500-2000 with shadowing).
+#   • Keys are `int local_id`, so `Vector[bool] live_clone(...)` is a
+#     plain memcpy with no String allocation.
+#   • The pass naturally handles loops (back-edge fixpoint) where the
+#     AST walker is correct-but-conservative.
+#
+# Algorithm (standard textbook backward liveness):
+#   USE[B]  = locals read in B before being assigned in B
+#   DEF[B]  = locals assigned anywhere in B
+#   OUT[B]  = ∪ IN[S] for each successor S of B
+#   IN[B]   = (OUT[B] - DEF[B]) ∪ USE[B]
+# Iterate to fixpoint via worklist. Then for each instruction in each
+# block, walk backward computing per-instruction `live_after`: a local
+# read at position p is "last use" iff (a) the local is not in
+# `live_after[p]` AND (b) it isn't read again at this same instruction
+# at a later op_idx. The "same-instruction" guard handles `OpMove(x)
+# OpMove(x)` correctly — the SECOND read is the last use; the first is
+# NOT last (the local is still needed for the second read).
+#
+# Decision encoding. `last_use_of_op` keys are
+# `(block << 20) | (inst << 4) | op_idx`. Block count per function rarely
+# exceeds 2^12 (4096); inst count per block rarely exceeds 2^16 (64k);
+# op_idx per inst is bounded by GICallExtern arg count (rare > 32). The
+# 20/16/4 layout is comfortable.
+
+# Encoded-key helpers. Keep MAX_INST_PER_BB / MAX_OPS_PER_INST as named
+# constants; the bit layout shifts on these.
+const int LIVE_MAX_INST_PER_BB = 65536      # 2^16
+const int LIVE_MAX_OPS_PER_INST = 16        # 2^4
+
+int liveness_encode_key(int block_idx, int inst_idx, int op_idx):
+    return (block_idx * LIVE_MAX_INST_PER_BB + inst_idx) * LIVE_MAX_OPS_PER_INST + op_idx
+
+# A per-function liveness result. The single typed field
+# `last_use_of_op` is the contract consumed by Phase 2. Computation-
+# internal state (per-block IN/OUT sets, predecessors) lives in locals
+# of `compute_liveness` — not exposed.
+struct LivenessAnalysis:
+    Dict[int, bool] last_use_of_op
+
+LivenessAnalysis empty_liveness():
+    Dict[int, bool] m = {}
+    return LivenessAnalysis(!m)
+
+# Helper: clone a Vector[bool]. Preallocates via `Vector.fill(n, false)`
+# then overwrites individual bits. Skips ~10 doubling reallocations.
+# Hot path: called once per block in `liveness_fixpoint` initial seeding
+# and once per block in `liveness_record_last_uses`.
+Vector[bool] live_bitset_clone(Vector[bool] src):
+    Vector[bool] out = []
+    int n = src.len()
+    out.fill(n, false)
+    int i = 0
+    while i < n:
+        if src.get(i).unwrap():
+            out.set(i, true)
+        i += 1
+    return out
+
+# Helper: bitset equality. Returns true iff the two sets agree at every
+# position (both sets are sized to nlocals, so a length check is
+# defensive — should never fire).
+bool live_bitset_eq(Vector[bool] a, Vector[bool] b):
+    if a.len() != b.len():
+        return false
+    int i = 0
+    int n = a.len()
+    while i < n:
+        if a.get(i).unwrap() != b.get(i).unwrap():
+            return false
+        i += 1
+    return true
+
+# Helper: in-place set union (a |= b). a is the destination; b is unchanged.
+void live_bitset_union(Vector[bool] &a, Vector[bool] b):
+    int i = 0
+    int n = a.len()
+    int m = b.len()
+    int up_to = n
+    if m < up_to:
+        up_to = m
+    while i < up_to:
+        if b.get(i).unwrap():
+            a.set(i, true)
+        i += 1
+
+# Helper: initialise an empty bitset sized for nlocals. Uses
+# `Vector.fill(n, false)` which preallocates capacity and memcpys —
+# avoids ~10 doubling reallocations during nlocals pushes. Hot path:
+# `liveness_fixpoint` allocates 2 of these per worklist pop.
+Vector[bool] live_bitset_empty(int nlocals):
+    Vector[bool] out = []
+    out.fill(nlocals, false)
+    return out
+
+# Note the local-IDs an Operand reads (marks them live for the backward
+# dataflow). OpCopy/OpMove/OpClone AND OpBorrow all carry a source local that
+# is READ here — a borrow reads its source, so the source must be live at the
+# borrow point. Mirrors Rust's `compute_function_liveness`
+# (`src/ir/lowering/liveness.rs:154`): every `Expr::Identifier` read — whatever
+# it lowers to — marks the name live and feeds `is_last_use_at` at consuming
+# positions; corroborated by `src/ir/liveness.rs:407-408`, which counts the
+# borrow base. The `else: pass` drops only the OpConst*/OpSizeOf variants, which
+# carry no source local.
+#
+# HISTORY — do not re-exclude OpBorrow: a 2026-05-21 "H1" change excluded it
+# here to suppress what looked like spurious clones ("demotes every OpMove of a
+# later-borrowed local to OpClone, defeating move-elision"). That WAS the bug,
+# not an optimization — those demotions are correct clone-if-live. Excluding
+# OpBorrow under-counted liveness, so a consuming position (push / struct-init /
+# enum-init) followed by a later `&x` read was mis-flagged last-use → MOVE
+# instead of clone → alias/leak (Rust gg clones there). Re-including OpBorrow
+# restores parity; the differential touches only borrow-after-consume CoW sites,
+# each moving toward Rust's clone count. Used to compute USE[B] /
+# `live_in_after_inst` updates.
+void liveness_operand_uses(Operand op, Vector[bool] &acc):
+    match op:
+        case OpCopy(lid):
+            if lid >= 0 and lid < acc.len():
+                acc.set(lid, true)
+        case OpMove(lid):
+            if lid >= 0 and lid < acc.len():
+                acc.set(lid, true)
+        case OpClone(lid):
+            if lid >= 0 and lid < acc.len():
+                acc.set(lid, true)
+        case OpBorrow(lid):
+            # Borrow reads its source — count it (see header note). Mirrors
+            # `liveness_operand_local_id`, which already counts OpBorrow.
+            if lid >= 0 and lid < acc.len():
+                acc.set(lid, true)
+        else:
+            pass
+
+# Note the local-ID an Instruction writes (defines). Returns -1 if the
+# instruction doesn't write a local (GIDrop / GIDropIfAlive / GIMoveZero /
+# GINop). For backward dataflow, "defined" means "killed in the live set
+# at this instruction" — the local's earlier liveness is irrelevant past
+# this point.
+#
+# Every Instruction variant in `gir.gg`'s enum is handled explicitly — no
+# `_` catch-all, per CLAUDE.md Layering "no name matching" / instruction-
+# variant exhaustiveness.
+int liveness_inst_def(Instruction inst):
+    match inst:
+        case GIAssign(dst, _):
+            return dst
+        case GIBinOp(dst, _, _, _, _):
+            return dst
+        case GIUnOp(dst, _, _, _):
+            return dst
+        case GICmp(dst, _, _, _, _):
+            return dst
+        case GICall(dst, _, _):
+            return dst
+        case GICallExtern(dst, _, _):
+            return dst
+        case GIDeref(dst, _, _):
+            return dst
+        case GIDrop(_):
+            return -1
+        case GIDropIfAlive(_):
+            return -1
+        case GIMoveZero(_):
+            return -1
+        case GINop():
+            return -1
+        case GIFieldLoad(dst, _, _):
+            # A.1 — typed field-load defines its dst local. Same shape as
+            # GIDeref / GIAssign (dst is a fresh local id, base is read).
+            return dst
+        case GIDerefStore(_, _, _):
+            # Store-through-pointer (`*ptr = value`) DEFINES no value local —
+            # it writes the pointee. Same no-def shape as GIDrop / GIMoveZero.
+            return -1
+    return -1
+
+# Walk all operand reads in an Instruction, adding each into `acc`.
+# Mirrors the explicit-variant discipline of `liveness_inst_def`. Used
+# to compute per-instruction operand-uses for both USE[B] construction
+# and the backward per-inst walk that populates `last_use_of_op`.
+#
+# GIDeref reads a single src_local; GIDrop / GIDropIfAlive / GIMoveZero
+# each read a single local id (the local being dropped / moved-zero'd).
+# All explicit; no `_` catch-alls.
+void liveness_inst_operand_uses(Instruction inst, Vector[bool] &acc):
+    match inst:
+        case GIAssign(_, op):
+            liveness_operand_uses(op, &acc)
+        case GIBinOp(_, _, _, lhs, rhs):
+            liveness_operand_uses(lhs, &acc)
+            liveness_operand_uses(rhs, &acc)
+        case GIUnOp(_, _, _, src):
+            liveness_operand_uses(src, &acc)
+        case GICmp(_, _, _, lhs, rhs):
+            liveness_operand_uses(lhs, &acc)
+            liveness_operand_uses(rhs, &acc)
+        case GICall(_, _, args):
+            for a in args:
+                liveness_operand_uses(a, &acc)
+        case GICallExtern(_, _, args):
+            for a in args:
+                liveness_operand_uses(a, &acc)
+        case GIDeref(_, src_lid, _):
+            if src_lid >= 0 and src_lid < acc.len():
+                acc.set(src_lid, true)
+        # Drops / MoveZero are NOT reads — they're scope-exit side effects on the
+        # OWNED local (drop) or definitions that zero the source (MoveZero).
+        # Counting them as reads would extend the live range past the move and
+        # demote the OpMove decision to OpClone. Mirror of Rust
+        # src/ir/liveness.rs:431-432 (explicit exclusion). See its doc-comment
+        # at :346-351 for the rationale.
+        case GIDrop(_):
+            pass
+        case GIDropIfAlive(_):
+            pass
+        case GIMoveZero(_):
+            pass
+        case GINop():
+            pass
+        case GIFieldLoad(_, base_lid, _):
+            # A.1 — typed field-load reads its base local (the struct/aggregate
+            # being projected into). Same shape as GIDeref: a single raw local
+            # id, not an Operand. Field index is a const, not a local read.
+            if base_lid >= 0 and base_lid < acc.len():
+                acc.set(base_lid, true)
+        case GIDerefStore(ptr_lid, val_op, _):
+            # Store-through-pointer reads BOTH: the pointer local (raw int,
+            # like GIDeref's src) AND the value operand (like GIAssign's op).
+            if ptr_lid >= 0 and ptr_lid < acc.len():
+                acc.set(ptr_lid, true)
+            liveness_operand_uses(val_op, &acc)
+
+# Walk all operand reads in a Terminator, adding to `acc`. GTNone /
+# GTJump have no operands. GTReturn reads its operand; GTBranch reads
+# its condition. Explicit-variant discipline.
+void liveness_term_operand_uses(Terminator term, Vector[bool] &acc):
+    match term:
+        case GTNone():
+            pass
+        case GTJump(_):
+            pass
+        case GTReturn(op):
+            liveness_operand_uses(op, &acc)
+        case GTBranch(op, _, _):
+            liveness_operand_uses(op, &acc)
+
+# Direct-lid extractor for a Terminator's single operand (0-1 source
+# locals). Returns -1 if no operand or operand is a const. Used by
+# `liveness_compute_use_def` to skip the bitset allocation in the
+# common single-operand terminator case.
+int liveness_term_operand_local_id(Terminator term):
+    match term:
+        case GTNone():
+            return -1
+        case GTJump(_):
+            return -1
+        case GTReturn(op):
+            return liveness_operand_local_id(op)
+        case GTBranch(op, _, _):
+            return liveness_operand_local_id(op)
+
+# Collect the successor block ids of a Terminator. GTNone / GTReturn
+# have no successors (terminator absent or function exit). GTJump has
+# one successor; GTBranch has two.
+Vector[int] liveness_term_successors(Terminator term):
+    Vector[int] out = []
+    match term:
+        case GTNone():
+            pass
+        case GTReturn(_):
+            pass
+        case GTJump(target):
+            out.push(target)
+        case GTBranch(_, t_bb, e_bb):
+            out.push(t_bb)
+            if e_bb != t_bb:
+                out.push(e_bb)
+    return out
+
+# Compute USE[B] (locals read before any def in B) and DEF[B] (locals
+# defined in B). Both are flat Vector[bool] sized to nlocals. For
+# DEF[B], we set the bit at the index of every instruction's dst (and
+# the terminator's dst, which is always -1 since terminators don't
+# write). For USE[B], we walk B forward and for each instruction:
+#   • record reads in `cur_use` (add to USE[B] only if NOT already in
+#     DEF[B]'s "killed-so-far" view — but the textbook way is "USE only
+#     counts the first read before a def in the same block").
+#   • record this instruction's def in DEF[B].
+# For the terminator, its operand reads count as USE (terminators have
+# no def). Returns the pair via two out-Vectors.
+void liveness_compute_use_def(Vector[Instruction] insts, Terminator term, int nlocals, Vector[bool] &use_set, Vector[bool] &def_set):
+    int ii = 0
+    int n = insts.len()
+    while ii < n:
+        Instruction inst = insts.get(ii).unwrap()
+        # Reads: an operand read is in USE[B] iff the local hasn't been
+        # killed (defined) earlier in this block.
+        #
+        # Iterate operand lids directly (typically 1-5 per inst) instead
+        # of allocating a fresh nlocals-sized bitset and sweeping the
+        # full range. Eliminates per-inst O(nlocals) overhead — Phase 1
+        # perf hunt 2026-05-20.
+        Vector[int] op_lids = liveness_inst_operand_local_ids(inst)
+        int ok = 0
+        while ok < op_lids.len():
+            int lid_u = op_lids.get(ok).unwrap()
+            if lid_u >= 0 and lid_u < nlocals and not def_set.get(lid_u).unwrap():
+                use_set.set(lid_u, true)
+            ok += 1
+        # Def: kill in def_set after the reads. This way `x = x + 1`
+        # correctly counts the RHS x as a USE (read happens before
+        # def).
+        int def_lid = liveness_inst_def(inst)
+        if def_lid >= 0 and def_lid < nlocals:
+            def_set.set(def_lid, true)
+        ii += 1
+    # Terminator reads are post-all-block-defs, so they're USE unless
+    # killed by an earlier inst in this block. Direct-lid path mirrors
+    # the per-inst optimisation above — terminators have 0-1 operand
+    # so per-terminator allocation was wasted.
+    int term_lid = liveness_term_operand_local_id(term)
+    if term_lid >= 0 and term_lid < nlocals and not def_set.get(term_lid).unwrap():
+        use_set.set(term_lid, true)
+
+# Worklist backward-dataflow fixpoint.
+#
+# Computes per-block live_in / live_out. Worklist algorithm: seed every
+# block in the queue; repeatedly pop a block, recompute its OUT (from
+# successors' IN), recompute its IN (OUT - DEF ∪ USE), and if IN
+# changed, push all its predecessors back into the queue. Terminates
+# when the queue is empty.
+#
+# Successor relation is reconstructed from terminators (no precomputed
+# successor table). Predecessor relation is computed once up-front.
+#
+# `block_live_in[b]` is the set of locals live at B's entry — the
+# answer queried by the per-instruction backward walk below.
+void liveness_fixpoint(Vector[Vector[Instruction]] block_insts, Vector[Terminator] block_terms, int nlocals, Vector[Vector[bool]] &block_live_in, Vector[Vector[bool]] &block_live_out):
+    int n = block_insts.len()
+    if n == 0:
+        return
+    # Precompute USE[B] / DEF[B] for each block.
+    Vector[Vector[bool]] use_sets = []
+    Vector[Vector[bool]] def_sets = []
+    int bi = 0
+    while bi < n:
+        Vector[bool] us = live_bitset_empty(nlocals)
+        Vector[bool] ds = live_bitset_empty(nlocals)
+        liveness_compute_use_def(block_insts.get(bi).unwrap(), block_terms.get(bi).unwrap(), nlocals, &us, &ds)
+        use_sets.push(!us)
+        def_sets.push(!ds)
+        bi += 1
+    # Precompute predecessor map (Vector[Vector[int]] indexed by block).
+    Vector[Vector[int]] preds = []
+    int pi = 0
+    while pi < n:
+        Vector[int] empty_preds = []
+        preds.push(!empty_preds)
+        pi += 1
+    int si = 0
+    while si < n:
+        Vector[int] succs = liveness_term_successors(block_terms.get(si).unwrap())
+        for sb in succs:
+            if sb >= 0 and sb < n:
+                Vector[int] pv = preds.get(sb).unwrap()
+                pv.push(si)
+                preds.set(sb, !pv)
+        si += 1
+    # Initialise live_in[B] = USE[B], live_out[B] = ∅. (Standard seed —
+    # the first iteration will populate live_out properly.)
+    block_live_in.clear()
+    block_live_out.clear()
+    int ii = 0
+    while ii < n:
+        block_live_in.push(live_bitset_clone(use_sets.get(ii).unwrap()))
+        block_live_out.push(live_bitset_empty(nlocals))
+        ii += 1
+    # Worklist: seed with every block (process in reverse-postorder
+    # if we cared about iteration count; for self-host's small fns,
+    # naive seeding converges in ~3-5 iterations).
+    Vector[int] worklist = []
+    int wi = n - 1
+    while wi >= 0:
+        worklist.push(wi)
+        wi -= 1
+    while worklist.len() > 0:
+        int b = worklist.get(worklist.len() - 1).unwrap()
+        worklist.pop()
+        # OUT[b] = ∪ IN[s] for s in successors(b)
+        Vector[bool] new_out = live_bitset_empty(nlocals)
+        Vector[int] succs2 = liveness_term_successors(block_terms.get(b).unwrap())
+        for s in succs2:
+            if s >= 0 and s < n:
+                live_bitset_union(&new_out, block_live_in.get(s).unwrap())
+        # IN[b] = (OUT[b] - DEF[b]) ∪ USE[b]
+        Vector[bool] new_in = live_bitset_empty(nlocals)
+        Vector[bool] ds_b = def_sets.get(b).unwrap()
+        int li2 = 0
+        while li2 < nlocals:
+            if new_out.get(li2).unwrap() and not ds_b.get(li2).unwrap():
+                new_in.set(li2, true)
+            li2 += 1
+        live_bitset_union(&new_in, use_sets.get(b).unwrap())
+        # Compare against the previous IN[b]; if changed, push all
+        # predecessors back onto the worklist.
+        Vector[bool] old_in = block_live_in.get(b).unwrap()
+        if not live_bitset_eq(new_in, old_in):
+            block_live_in.set(b, !new_in)
+            block_live_out.set(b, !new_out)
+            Vector[int] preds_b = preds.get(b).unwrap()
+            for pb in preds_b:
+                worklist.push(pb)
+        else:
+            # Keep new_out fresh anyway — OUT may have shifted even
+            # when IN converged (rare, possible if a successor's IN
+            # changed between worklist pops).
+            block_live_out.set(b, !new_out)
+
+# Walk each block backward computing per-instruction `live_after`
+# (= live_in of the position immediately AFTER the instruction). For
+# every operand read in the instruction, if the source local is NOT in
+# `live_after` AND not used again at a later op_idx in the same
+# instruction, this read is the local's last use across the whole CFG.
+# Record into `last_use_of_op` keyed by `liveness_encode_key(b, i, op_idx)`.
+#
+# Same-instruction multi-read handling: walk operands LEFT-TO-RIGHT,
+# track which locals have already been seen at later op_idx via the
+# `seen_later` bitset accumulated by a right-to-left pre-walk over
+# operands. A read at op_idx k is "last across CFG" iff (a) source not
+# in `live_after_inst` AND (b) source not in `seen_later[k]`. This
+# correctly handles `f(x, x)` — the SECOND x is the last use; the FIRST
+# is not.
+void liveness_record_last_uses(Vector[Vector[Instruction]] block_insts, Vector[Terminator] block_terms, int nlocals, Vector[Vector[bool]] block_live_out, Dict[int, bool] &last_use_of_op):
+    int n = block_insts.len()
+    if n == 0:
+        return
+    int b = 0
+    while b < n:
+        Vector[Instruction] insts = block_insts.get(b).unwrap()
+        Terminator term = block_terms.get(b).unwrap()
+        # live_after_term = block_live_out[b].
+        # live_after_inst at inst i = live_in of position right after
+        # inst i. Compute by walking backward from the terminator.
+        # Terminator's "live_after" is block_live_out[b]; its uses get
+        # added back in (and its def is -1, so no kill there).
+        Vector[bool] live_now = live_bitset_clone(block_live_out.get(b).unwrap())
+        # ─ Terminator phase. Walk its operand reads. For GTReturn(op)
+        # and GTBranch(op, _, _), record their op_idx=0 last-use status
+        # against `live_now` BEFORE adding the term's reads back in.
+        liveness_record_term_last_uses(term, b, insts.len(), live_now, &last_use_of_op)
+        liveness_term_operand_uses(term, &live_now)
+        # ─ Instruction phase, walk backward.
+        int i = insts.len() - 1
+        while i >= 0:
+            Instruction inst = insts.get(i).unwrap()
+            # Apply the per-inst rules:
+            #   1. Record each operand read's last-use status against
+            #      `live_now` (= live AFTER this inst) AND a per-inst
+            #      `seen_later` (= operands later in the same inst
+            #      that read this local).
+            liveness_record_inst_last_uses(inst, b, i, live_now, &last_use_of_op)
+            #   2. Kill the inst's def (if any) — for ALL subsequent
+            #      backward steps, the local is dead at this point.
+            int def_lid = liveness_inst_def(inst)
+            if def_lid >= 0 and def_lid < nlocals:
+                live_now.set(def_lid, false)
+            #   3. Add this inst's operand reads to `live_now` — the
+            #      live set BEFORE this instruction.
+            liveness_inst_operand_uses(inst, &live_now)
+            i -= 1
+        b += 1
+
+# Per-instruction last-use recorder. Walks the operands left-to-right
+# but uses a right-to-left precomputed `seen_later` to know which locals
+# are read again at a later op_idx in this same instruction. The
+# per-operand decision: last use iff (a) source not in `live_after`
+# AND (b) source not in `seen_later`.
+void liveness_record_inst_last_uses(Instruction inst, int b, int i, Vector[bool] live_after, Dict[int, bool] &last_use_of_op):
+    # Collect (op_idx, src_local) pairs in left-to-right order. We
+    # build a flat Vector[int] of source local IDs (or -1 for non-
+    # source-bearing operand variants like consts); the index into
+    # this Vector IS the op_idx.
+    Vector[int] op_srcs = liveness_inst_operand_local_ids(inst)
+    int nops = op_srcs.len()
+    if nops == 0:
+        return
+    # Precompute `seen_later[k]` = whether any op_idx > k reads the
+    # same local as op_srcs[k]. Right-to-left scan: maintain a set of
+    # locals already seen; for each op from the right, if its local is
+    # in `seen` we set seen_later[k] = true, then add its local to
+    # `seen`. Linear in nops.
+    Vector[bool] seen_later = []
+    int sl = 0
+    while sl < nops:
+        seen_later.push(false)
+        sl += 1
+    # Build the `seen` set as a Dict[int, bool] — typical nops is 1-5,
+    # so the alloc cost is fine.
+    Dict[int, bool] seen = {}
+    int k = nops - 1
+    while k >= 0:
+        int lid = op_srcs.get(k).unwrap()
+        if lid >= 0:
+            if seen.contains(lid):
+                seen_later.set(k, true)
+            seen.put(lid, true)
+        k -= 1
+    # Forward pass: emit last_use_of_op[encode(b, i, op_idx)] = true
+    # for each op_idx where source is not in live_after AND not in
+    # seen_later. Skip non-source operands (lid == -1).
+    int op_idx = 0
+    while op_idx < nops:
+        int lid2 = op_srcs.get(op_idx).unwrap()
+        if lid2 >= 0:
+            bool is_last = true
+            if lid2 < live_after.len() and live_after.get(lid2).unwrap():
+                is_last = false
+            if seen_later.get(op_idx).unwrap():
+                is_last = false
+            if is_last:
+                int key = liveness_encode_key(b, i, op_idx)
+                last_use_of_op.put(key, true)
+        op_idx += 1
+
+# Per-terminator last-use recorder. Same rules as the inst case but
+# terminator op_idx layout: GTReturn → one operand at op_idx 0;
+# GTBranch → one operand at op_idx 0. Inst index for terminators is
+# the special value insts.len() (one past the last inst in the block);
+# this keys distinguish them from the last real instruction.
+void liveness_record_term_last_uses(Terminator term, int b, int insts_count, Vector[bool] live_after, Dict[int, bool] &last_use_of_op):
+    match term:
+        case GTReturn(op):
+            int lid = liveness_operand_local_id(op)
+            if lid >= 0:
+                bool not_live = true
+                if lid < live_after.len() and live_after.get(lid).unwrap():
+                    not_live = false
+                if not_live:
+                    int key = liveness_encode_key(b, insts_count, 0)
+                    last_use_of_op.put(key, true)
+        case GTBranch(op, _, _):
+            int lid = liveness_operand_local_id(op)
+            if lid >= 0:
+                bool not_live = true
+                if lid < live_after.len() and live_after.get(lid).unwrap():
+                    not_live = false
+                if not_live:
+                    int key = liveness_encode_key(b, insts_count, 0)
+                    last_use_of_op.put(key, true)
+        case GTNone():
+            pass
+        case GTJump(_):
+            pass
+
+# Extract the source local id from an operand. Returns -1 for const
+# variants. Mirror of `liveness_operand_uses`'s single-source view.
+int liveness_operand_local_id(Operand op):
+    match op:
+        case OpCopy(l):
+            return l
+        case OpMove(l):
+            return l
+        case OpClone(l):
+            return l
+        case OpBorrow(l):
+            return l
+        else:
+            return -1
+
+# Extract per-operand source local IDs from an Instruction in left-to-
+# right order. Used by `liveness_record_inst_last_uses` to determine
+# op_idx layout per inst variant. Returns -1 for non-source-bearing
+# slots (consts, the implicit "this is a single-source" inst slot).
+#
+# Explicit-variant discipline — no `_` catch-all. Every Instruction
+# variant maps to a deterministic operand-list shape. For multi-arg
+# variants (GICall, GICallExtern), the args Vector's order IS the
+# op_idx order.
+Vector[int] liveness_inst_operand_local_ids(Instruction inst):
+    Vector[int] out = []
+    match inst:
+        case GIAssign(_, op):
+            out.push(liveness_operand_local_id(op))
+        case GIBinOp(_, _, _, lhs, rhs):
+            out.push(liveness_operand_local_id(lhs))
+            out.push(liveness_operand_local_id(rhs))
+        case GIUnOp(_, _, _, src):
+            out.push(liveness_operand_local_id(src))
+        case GICmp(_, _, _, lhs, rhs):
+            out.push(liveness_operand_local_id(lhs))
+            out.push(liveness_operand_local_id(rhs))
+        case GICall(_, _, args):
+            for a in args:
+                out.push(liveness_operand_local_id(a))
+        case GICallExtern(_, _, args):
+            for a in args:
+                out.push(liveness_operand_local_id(a))
+        case GIDeref(_, src_lid, _):
+            out.push(src_lid)
+        case GIDrop(_):
+            # Drops / MoveZero are NOT operand reads — they are scope-exit
+            # side effects on the OWNED local (drop) or definitions that
+            # zero the source (MoveZero). Counting them as USES (a) inflates
+            # USE[B] in `liveness_fixpoint` so a local stays "live" across
+            # the scope-exit GIDropIfAlive at a CF merge, which demotes the
+            # consume-branch OpMove → OpClone (the `drop_loop_reinit`
+            # conditional-consume double-drop), and (b) would suppress the
+            # very last-use this pass exists to find. Push -1 (a non-source
+            # placeholder, skipped by both the USE-set builder's `lid >= 0`
+            # guard and the last-use recorder) so the op_idx LAYOUT stays
+            # identical to the wire pass's `rewrite_inst_modes` — only the
+            # source identity is dropped. Mirrors the sibling
+            # `liveness_inst_operand_uses` (lower.gg:2099-2110) and Rust
+            # `src/ir/liveness.rs:431-432`.
+            out.push(-1)
+        case GIDropIfAlive(_):
+            out.push(-1)
+        case GIMoveZero(_):
+            out.push(-1)
+        case GINop():
+            pass
+        case GIFieldLoad(_, base_lid, _):
+            # A.1 — base local is the single operand-read; field index is a
+            # const (not a local). Mirrors GIDeref's shape.
+            out.push(base_lid)
+        case GIDerefStore(ptr_lid, val_op, _):
+            # Two operand reads in left-to-right order: the pointer local
+            # (raw int, op_idx 0) then the value (Operand, op_idx 1). The
+            # op_idx layout MUST match the wire order in `rewrite_inst_modes`
+            # (the value is wired at op_idx 1 there).
+            out.push(ptr_lid)
+            out.push(liveness_operand_local_id(val_op))
+    return out
+
+# Top-level entry. Compute the full per-function liveness analysis,
+# returning a `LivenessAnalysis` with `last_use_of_op` populated.
+LivenessAnalysis compute_liveness(LowerCtx &ctx):
+    int nlocals = ctx.locals.len()
+    Dict[int, bool] last_use = {}
+    LivenessAnalysis result = LivenessAnalysis(!last_use)
+    if nlocals == 0:
+        return result
+    if ctx.block_insts.len() == 0:
+        return result
+    Vector[Vector[bool]] live_in_sets = []
+    Vector[Vector[bool]] live_out_sets = []
+    liveness_fixpoint(ctx.block_insts, ctx.block_terms, nlocals, &live_in_sets, &live_out_sets)
+    liveness_record_last_uses(ctx.block_insts, ctx.block_terms, nlocals, live_out_sets, &result.last_use_of_op)
+    return result
+
+# ── Instrumentation diff: GIR-liveness vs tighten_owned_operand_modes ──
+#
+# Phase 1 validation. For each OpMove(lid) operand-read in the function,
+# compare:
+#   • Old pass (`tighten_owned_operand_modes`): keeps OpMove iff
+#     `last_pos[lid] == this_pos`, i.e. this is the storage-LAST read.
+#   • New pass (`compute_liveness`): keeps OpMove iff
+#     `last_use_of_op[encode(b, i, op_idx)] == true`, i.e. this is
+#     the CFG-LAST read across all paths.
+#
+# Discrepancies fall into:
+#   (A) New pass says "not last", old pass says "last" — old pass
+#       missed a downstream read because storage order disagrees with
+#       CFG order. Caller is typically in a loop body, or before an
+#       early-exit branch with a later use after the merge.
+#   (B) New pass says "last", old pass says "not last" — old pass
+#       found a later storage-position read that's NOT reachable in
+#       the CFG. Rare; happens when a block becomes unreachable mid-
+#       lowering and its instructions still sit in `block_insts`.
+#
+# Both shapes are "new pass more accurate." Phase 1 reports the count
+# via a diag_warn so the parent run captures it in stage-0 stdout.
+# After Phase 2 wires the consumer, the old pass is removed and this
+# instrumentation goes too.
+
+# Compute the discrepancy count. Defensive: bounded by total OpMove
+# operand-reads in the function (typically dozens, never millions).
+# We DO NOT mutate any state — purely an inspection pass.
+int liveness_instrumentation_diff(LowerCtx &ctx, LivenessAnalysis &liveness):
+    int n = ctx.block_insts.len()
+    if n == 0:
+        return 0
+    # Re-derive the old pass's last_pos table (mirrors
+    # `tighten_owned_operand_modes`'s Pass 1).
+    int MAX_PER_BB = 1000000
+    Dict[int, int] last_pos = {}
+    int bi = 0
+    while bi < n:
+        Vector[Instruction] insts = ctx.block_insts.get(bi).unwrap()
+        int ii = 0
+        while ii < insts.len():
+            int pos = bi * MAX_PER_BB + ii
+            update_last_pos_for_inst(insts.get(ii).unwrap(), pos, &last_pos)
+            ii += 1
+        int term_pos = bi * MAX_PER_BB + (MAX_PER_BB - 1)
+        update_last_pos_for_term(ctx.block_terms.get(bi).unwrap(), term_pos, &last_pos)
+        bi += 1
+    # Now walk each OpMove operand-read and compare verdicts.
+    int diff_count = 0
+    int bj = 0
+    while bj < n:
+        Vector[Instruction] insts2 = ctx.block_insts.get(bj).unwrap()
+        int ij = 0
+        while ij < insts2.len():
+            int pos = bj * MAX_PER_BB + ij
+            Instruction inst = insts2.get(ij).unwrap()
+            Vector[int] op_srcs = liveness_inst_operand_local_ids(inst)
+            int op_idx = 0
+            while op_idx < op_srcs.len():
+                int lid = op_srcs.get(op_idx).unwrap()
+                if lid >= 0:
+                    # Old pass verdict: lid is last-use here iff
+                    # last_pos[lid] == pos. (Storage-last test.)
+                    bool old_last = false
+                    if last_pos.contains(lid):
+                        old_last = (last_pos.get(lid).unwrap() == pos)
+                    # New pass verdict: encoded key in last_use_of_op?
+                    int key = liveness_encode_key(bj, ij, op_idx)
+                    bool new_last = liveness.last_use_of_op.contains(key)
+                    if old_last != new_last:
+                        diff_count += 1
+                op_idx += 1
+            ij += 1
+        bj += 1
+    return diff_count
+
+# ── CFG-aware operand-mode post-pass (Path A Phase 2a) ──────────
+#
+# Runs AFTER `compute_liveness` and consumes `LivenessAnalysis.
+# last_use_of_op` — the per-operand "last-use across the CFG" verdict
+# — to choose OpMove vs OpClone at every consuming operand read.
+# Replaces the legacy `tighten_owned_operand_modes` (retired below),
+# whose linear-storage-order criterion produced 52K disagreements
+# against the CFG-accurate verdict (Phase 1 instrumentation diff).
+#
+# Scope. The pass is **pure label correctness**: every operand mode
+# in {OpMove, OpClone} today lowers to the same `ISlotLoad`
+# placeholder at LIR (lir_lower.gg:2362-2376). Rewriting OpMove ↔
+# OpClone here does NOT change emission. The win is that the labels
+# become CFG-accurate, so when Phase 2c (the bundled emission flip)
+# lands, the labels already reflect the right move/clone decision —
+# no double-frees from mislabelled loop bodies or branch merges.
+#
+# Decision per operand read at position (b, i, op_idx):
+#   • OpMove(lid) or OpClone(lid) — the operand is "in a consuming
+#     position" today. Decide:
+#       - lookup `loc = ctx.locals.get(lid)`
+#       - lookup `last_use_of_op[(b, i, op_idx)]` → bool last_use
+#       - if `loc.ownership == LoOwned` AND last_use → OpMove(lid),
+#         and call `mark_local_moved(&ctx.drop_elab, lid)` so the
+#         eventual drop_elab (Phase 2c) skips dropping this slot.
+#       - else → OpClone(lid). Source either doesn't own its data
+#         (LoBorrowed / LoView / LoParam / LoMaybeOwned) or is read
+#         again later on some CFG path — both cases require a clone
+#         today, and Phase 2c will emit the runtime clone call here.
+#   • OpCopy / OpBorrow / OpConst* — left untouched. These come from
+#     positions that explicitly chose a non-consuming mode (e.g.
+#     primitive operands of GIBinOp, pointer aliases at field-write
+#     bases, scrutinee reads in match tests). Phase 2b refactors the
+#     "what counts as consuming" boundary via a typed `ConsumeKind`
+#     enum — Phase 2a defers that question by simply preserving the
+#     mode chosen by the producer.
+#
+# Why we drop LoParam / LoMaybeOwned from the OpMove eligibility set.
+# These ownership labels denote slots whose ownership escape the
+# function's stack frame: LoParam is the caller's responsibility;
+# LoMaybeOwned is a join over conflicting branches. Treating them as
+# move-eligible would compile but spuriously drop someone else's
+# data once Phase 2c flips emission. The strict reading (LoOwned only)
+# matches Rust's `AssignMode::Move` discipline at consume sites.
+#
+# Idempotent: a second run sees the same operands and applies the
+# same rule, producing identical output.
+
+void wire_liveness_into_modes(LowerCtx &ctx, GirModule &gmod, LivenessAnalysis &liveness):
+    int n = ctx.block_insts.len()
+    if n == 0:
+        return
+    int bi = 0
+    while bi < n:
+        Vector[Instruction] insts = ctx.block_insts.get(bi).unwrap()
+        Vector[Instruction] new_insts = []
+        int ii = 0
+        while ii < insts.len():
+            # Side-channel: each call to `wire_one_operand` that
+            # finalizes an OpMove(lid) decision pushes `lid` into
+            # `moved_lids`. After we push the rewritten inst we emit
+            # one `GIMoveZero(lid)` immediately after for each entry,
+            # so the LIR `IMoveSlot` annotation lands at the actual
+            # move site — exactly where Rust's drop_elab needs it to
+            # mark the slot uninitialized. Clear after each inst so
+            # zeros stay anchored to their producing instruction
+            # (COMMIT 3 step 1).
+            Vector[int] moved_lids = []
+            Instruction rewritten = rewrite_inst_modes(&ctx, &gmod, insts.get(ii).unwrap(), bi, ii, &liveness, &moved_lids)
+            new_insts.push(rewritten)
+            int mi = 0
+            while mi < moved_lids.len():
+                new_insts.push(GIMoveZero(moved_lids.get(mi).unwrap()))
+                mi += 1
+            ii += 1
+        # Terminators live at op_idx 0 with inst_idx = insts.len()
+        # (matches `liveness_record_term_last_uses` keying — see the
+        # liveness pass's per-block walker). A terminator-level OpMove
+        # (return/branch operand) also gets a `GIMoveZero` emitted
+        # — but it has to land BEFORE the terminator in the block
+        # stream, so we append into `new_insts` first, then set the
+        # rewritten terminator. The slot is dead after the block ends
+        # anyway, but the annotation lets drop_elab's dataflow
+        # propagate "uninitialized" into successor blocks correctly.
+        int term_inst_idx = insts.len()
+        Vector[int] term_moved_lids = []
+        Terminator new_term = rewrite_term_modes(&ctx, &gmod, ctx.block_terms.get(bi).unwrap(), bi, term_inst_idx, &liveness, &term_moved_lids)
+        int tmi = 0
+        while tmi < term_moved_lids.len():
+            new_insts.push(GIMoveZero(term_moved_lids.get(tmi).unwrap()))
+            tmi += 1
+        ctx.block_insts.set(bi, !new_insts)
+        ctx.block_terms.set(bi, new_term)
+        bi += 1
+
+# Per-operand decision logic. `b` / `i` / `op_idx` form the
+# liveness key; ctx supplies ownership state + the drop_elab
+# the mark_local_moved call writes into. `moved_lids` is the
+# side-channel into which we push every lid that this call
+# finalizes as OpMove — the caller (`wire_liveness_into_modes`)
+# walks it after the inst to emit `GIMoveZero(lid)` insts at
+# the exact move site (COMMIT 3 step 1).
+#
+# Phase 2.2: this is now a thin shim around
+# `decide_operand_at_consuming_arg`. The shim identifies
+# consume-position reads (OpMove/OpClone), resolves the source
+# local's GirType from `ctx.locals[lid].type_id` via
+# `gmod.type_table`, consults `liveness.last_use_of_op`, and
+# delegates the OpMove-vs-OpClone (vs OpCopy / clone-through-Ptr)
+# verdict to the helper. The helper IS the decision tree; this
+# function does the call-site bookkeeping (early-out, lid
+# bounds-check, mark_local_moved on a finalised OpMove,
+# moved_lids push for the GIMoveZero emitter).
+#
+# Behaviour-preservation note. The current callers only hand us
+# OpMove/OpClone for by-value resource locals — initial lowering
+# never emits OpMove/OpClone for Ptr(T) operands or primitives,
+# so the helper's Ptr-clone-through and OpCopy-on-primitive
+# branches are observationally unreachable from this entry point.
+# They sit dormant for Phase 2.3.a wire-ups at other call sites.
+Operand wire_one_operand(LowerCtx &ctx, GirModule &gmod, Operand op, int b, int i, int op_idx, LivenessAnalysis &liveness, Vector[int] &moved_lids):
+    int lid = -1
+    bool is_consuming_mode = false
+    match op:
+        case OpMove(l):
+            lid = l
+            is_consuming_mode = true
+        case OpClone(l):
+            lid = l
+            is_consuming_mode = true
+        else:
+            return op
+    if not is_consuming_mode:
+        return op
+    if lid < 0 or lid >= ctx.locals.len():
+        # Defensive: malformed local ID — leave the operand untouched
+        # rather than rewriting it to a bogus mode.
+        return op
+    # Resolve the source local's GirType from the type table. If the
+    # type_id is out-of-range (shouldn't happen — locals are typed at
+    # registration), fall back to OpClone: a clone is always sound,
+    # whereas an unverified OpMove would be a use-after-free if the
+    # local actually owns its data.
+    GirLocal loc = ctx.locals.get(lid).unwrap()
+    if loc.type_id < 0 or loc.type_id >= gmod.type_table.len():
+        return OpClone(lid)
+    GirType src_ty = gmod.type_table.get(loc.type_id).unwrap()
+    int key = liveness_encode_key(b, i, op_idx)
+    bool last_use = liveness.last_use_of_op.contains(key)
+    Operand result = decide_operand_at_consuming_arg(&ctx, &gmod, lid, src_ty, "wire_pass: consuming operand", last_use)
+    # On a finalised OpMove, the slot is logically dead from this
+    # point on. Tell drop_elab (so the scope-drop emitter skips it)
+    # and record the lid so `wire_liveness_into_modes` can emit a
+    # `GIMoveZero(lid)` immediately after the producing instruction.
+    match result:
+        case OpMove(_):
+            mark_local_moved(&ctx, lid)
+            moved_lids.push(lid)
+        else:
+            pass
+    return result
+
+# Rewrite all consuming-mode operand reads in an instruction.
+# `b` / `i` come from the caller's per-block / per-inst walk. The
+# op_idx layout matches `liveness_inst_operand_local_ids` — the
+# left-to-right order of operand reads in this instruction shape.
+# `moved_lids` is the side-channel for per-inst GIMoveZero
+# emission — see `wire_one_operand`.
+Instruction rewrite_inst_modes(LowerCtx &ctx, GirModule &gmod, Instruction inst, int b, int i, LivenessAnalysis &liveness, Vector[int] &moved_lids):
+    match inst:
+        case GIAssign(dst, op):
+            return GIAssign(dst, wire_one_operand(&ctx, &gmod, op, b, i, 0, &liveness, &moved_lids))
+        case GIBinOp(dst, opc, ty, lhs, rhs):
+            Operand new_lhs = wire_one_operand(&ctx, &gmod, lhs, b, i, 0, &liveness, &moved_lids)
+            Operand new_rhs = wire_one_operand(&ctx, &gmod, rhs, b, i, 1, &liveness, &moved_lids)
+            return GIBinOp(dst, opc, ty, new_lhs, new_rhs)
+        case GIUnOp(dst, opc, ty, src):
+            return GIUnOp(dst, opc, ty, wire_one_operand(&ctx, &gmod, src, b, i, 0, &liveness, &moved_lids))
+        case GICmp(dst, opc, ty, lhs, rhs):
+            Operand new_lhs = wire_one_operand(&ctx, &gmod, lhs, b, i, 0, &liveness, &moved_lids)
+            Operand new_rhs = wire_one_operand(&ctx, &gmod, rhs, b, i, 1, &liveness, &moved_lids)
+            return GICmp(dst, opc, ty, new_lhs, new_rhs)
+        case GICall(dst, name, args):
+            Vector[Operand] new_args = []
+            int ai = 0
+            while ai < args.len():
+                new_args.push(wire_one_operand(&ctx, &gmod, args.get(ai).unwrap(), b, i, ai, &liveness, &moved_lids))
+                ai += 1
+            return GICall(dst, name, !new_args)
+        case GICallExtern(dst, name, args):
+            Vector[Operand] new_args = []
+            int ai = 0
+            while ai < args.len():
+                new_args.push(wire_one_operand(&ctx, &gmod, args.get(ai).unwrap(), b, i, ai, &liveness, &moved_lids))
+                ai += 1
+            return GICallExtern(dst, name, !new_args)
+        case GIDerefStore(ptr_lid, val_op, inner_ty):
+            # Promote the VALUE operand's OpClone→OpMove at last-use, exactly
+            # like the GIAssign arm. The ptr_local is a raw int (op_idx 0, not
+            # a consuming Operand — nothing to rewrite); the value is op_idx 1,
+            # matching `liveness_inst_operand_local_ids`' push order. For SCALAR
+            # `&`-writes op_consume returns OpCopy (never promoted → no-op); for
+            # RESOURCE `&`-writes (`String &s = s + "!"`) it returns OpClone,
+            # which this promotes to OpMove at last-use so resource `&`-writes
+            # move like Rust gg instead of leaving a stray clone.
+            return GIDerefStore(ptr_lid, wire_one_operand(&ctx, &gmod, val_op, b, i, 1, &liveness, &moved_lids), inner_ty)
+        else:
+            # GIDeref / GIDrop / GIDropIfAlive / GIMoveZero / GINop —
+            # operand-read shape is fixed (single lid / no operands).
+            # Per the liveness encoder, the lid is already a known
+            # local; these instructions are not consuming operand-mode
+            # carriers (they take raw local IDs, not Operand variants),
+            # so there's nothing to rewrite.
+            return inst
+
+Terminator rewrite_term_modes(LowerCtx &ctx, GirModule &gmod, Terminator term, int b, int i, LivenessAnalysis &liveness, Vector[int] &moved_lids):
+    match term:
+        case GTReturn(op):
+            return GTReturn(wire_one_operand(&ctx, &gmod, op, b, i, 0, &liveness, &moved_lids))
+        case GTBranch(op, t_bb, e_bb):
+            return GTBranch(wire_one_operand(&ctx, &gmod, op, b, i, 0, &liveness, &moved_lids), t_bb, e_bb)
+        else:
+            return term
+
+# ── Legacy linear-storage-order helpers (retained for instrumentation
+# diff only) ──
+#
+# These three helpers used to back `tighten_owned_operand_modes`, the
+# linear-storage-order pass retired in Phase 2a. They are kept solely
+# so `liveness_instrumentation_diff` can reconstruct the OLD pass's
+# `last_pos[lid]` view at runtime and compare it against the new
+# CFG-accurate verdict. Once we've validated the diff stays at ~zero
+# for a few release cycles, these helpers + the diff function retire
+# together.
+
+# Update `last_pos[lid]` for every operand-read in this instruction
+# (positions are monotonic across the pass, so `.put` overwrites with
+# the larger position automatically).
+void update_last_pos_for_inst(Instruction inst, int pos, Dict[int, int] &last_pos):
+    match inst:
+        case GIAssign(_, op):
+            note_operand_pos(op, pos, &last_pos)
+        case GIBinOp(_, _, _, lhs, rhs):
+            note_operand_pos(lhs, pos, &last_pos)
+            note_operand_pos(rhs, pos, &last_pos)
+        case GIUnOp(_, _, _, src):
+            note_operand_pos(src, pos, &last_pos)
+        case GICmp(_, _, _, lhs, rhs):
+            note_operand_pos(lhs, pos, &last_pos)
+            note_operand_pos(rhs, pos, &last_pos)
+        case GICall(_, _, args):
+            for a in args:
+                note_operand_pos(a, pos, &last_pos)
+        case GICallExtern(_, _, args):
+            for a in args:
+                note_operand_pos(a, pos, &last_pos)
+        else:
+            pass
+
+void update_last_pos_for_term(Terminator term, int pos, Dict[int, int] &last_pos):
+    match term:
+        case GTReturn(op):
+            note_operand_pos(op, pos, &last_pos)
+        case GTBranch(op, _, _):
+            note_operand_pos(op, pos, &last_pos)
+        else:
+            pass
+
+# Legacy linear-order helper for `liveness_instrumentation_diff` regression
+# net. Mirrors `liveness_operand_uses` — counts OpBorrow as a source read too
+# (a borrow reads its source), so the two passes stay in agreement at OpBorrow
+# positions. (The earlier H1 exclusion here mirrored that function's wrong
+# exclusion; both now correctly count the borrow read — see the header note on
+# `liveness_operand_uses`.) The `else: pass` drops only no-local-id variants.
+void note_operand_pos(Operand op, int pos, Dict[int, int] &last_pos):
+    match op:
+        case OpCopy(l):
+            last_pos.put(l, pos)
+        case OpMove(l):
+            last_pos.put(l, pos)
+        case OpClone(l):
+            last_pos.put(l, pos)
+        case OpBorrow(l):
+            last_pos.put(l, pos)
+        else:
+            pass
+

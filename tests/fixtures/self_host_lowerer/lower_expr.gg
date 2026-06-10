@@ -1,0 +1,3105 @@
+# ── Expression lowering (split out of lower.gg) ──────────────────────
+# The core expression lowerer: block-as-expression / tail-value lowering,
+# if-chain expressions, `lower_expr` / `lower_expr_inner`, `lower_call`,
+# and the ctor-arg container-hint helper. Moved verbatim from lower.gg as
+# part of the lower.gg module split (output-neutral pure function move).
+from std.collections import Vector, Dict
+from std.conv import int_to_str, float_to_str
+from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch, EquipBlock, StructDef, EnumDef, EnumVariant, Type, MatchArm, Pattern, SpannedPattern
+from scope import ScopeTable, DefInfo
+from types import TypeTable, ResolvedType
+from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Terminator, Operand, GirType, GirExtern, GirTypeInfo, GirFieldInfo, GirEnumVariantInfo, LiftedClosure, ClosureCapture, ResourceMetadata, CollectionKind, ConsumeKind
+from gir import BOOL_TYPE, I8_TYPE, I16_TYPE, I32_TYPE, I64_TYPE, U8_TYPE, U16_TYPE, U32_TYPE, U64_TYPE, F32_TYPE, F64_TYPE, UNIT_TYPE, PRIM_COUNT
+from gir import CAP_BY_VALUE, CAP_BY_MUT_REF
+from gir import init_type_table, register_type, lookup_or_register_named, register_ptr
+from gir import GirGlobal, GirGlobalField, gir_mod_add_global, GGINIT_FN_REF, GGINIT_STRUCT
+from gir import GGSTATIC_RUNTIME, GGSTATIC_BYTES, static_put_bytes
+from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM, OP_MOD
+from gir import OP_ADD_WRAP, OP_SUB_WRAP, OP_MUL_WRAP
+from gir import OP_BITAND, OP_BITOR, OP_BITXOR, OP_SHL, OP_SHR
+from gir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
+from gir import UNOP_NEG, UNOP_NOT, UNOP_BITNOT
+from gir import CkAssign, CkReturn, CkCallArgBorrow, CkCallArgOwning, CkFieldWrite, CkBinOpArg, CkFormatArg, CkMatchPtr
+from gir import CkVector, CkDeque, CkHeap, CkDict, CkSet, CkNotCollection
+from compiler.data.resources import STRING_BUILTIN_METHODS, COLLECTION_BUILTIN_METHODS, BUILTIN_METHOD_MUTATES
+from compiler.data.schema import BuiltinMethodDecl, BuiltinMethodEntry
+from compiler.data.schema import BuiltinRetKind, BrkString, BrkInfer
+from lir_lower import resource_meta_for
+from lower import LowerCtx, ResultPayloadTypes, DictKvNames, ClosureSig, CaptureCollector, FieldBorrowPair, SVarDeclEmission
+from lower import lower_fail, diag_bug, diag_warn, emit, new_block, switch_to, set_terminator
+from lower import add_local, add_local_with, add_local_inheriting, nl_get, nl_put, nl_contains
+from lower import expr_kind, pat_kind, stmt_kind
+from lower import collection_kind_of, collection_kind_eq, int_vec_contains, method_mutates_receiver
+from lower import inherit_borrow_from, set_field_borrow, cow_register_alias, decide_svardecl_emission
+from lower import classify_call_arg, is_consume_kind, op_consume, decide_operand_at_consuming_arg, decide_ptr_consume
+from lower_drops import init_drop_elab, push_drop_scope, emit_scope_drops, pop_drop_scope, pop_drop_scope_no_emit, is_droppable_type, register_local_for_drop, register_owning_param, mark_local_moved, restore_moved, union_moved, emit_drops_for_early_exit, flush_drop_queue
+from lower_liveness import LivenessAnalysis, compute_liveness, wire_liveness_into_modes, liveness_instrumentation_diff, update_last_pos_for_inst, update_last_pos_for_term, note_operand_pos, empty_liveness
+from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, is_comparison, map_cmpop
+
+# ── Block-as-expression / tail-value lowering ───────────
+#
+# These three helpers implement the block-as-value path that any
+# `if`/`elif`/`else` (or, in follow-up rounds, `match` / `do:` block)
+# used in expression position needs. Mirrors Rust gg's
+# `lower_block_expr` (`src/ir/lowering/exprs/mod.rs:3203`),
+# `lower_stmt_as_tail_value` (`:3236`), and `build_if_chain_expr`
+# (`:3414`).
+
+# Return true iff the current block already has a real terminator
+# (return / break / jump / branch). Used to suppress the
+# assign-result + jump-to-merge when a branch body already diverged
+# (e.g. ended in `return`). Mirrors Rust's `!builder.is_terminated()`.
+bool block_terminated(LowerCtx &ctx):
+    Terminator cur = ctx.block_terms.get(ctx.current_block).unwrap()
+    match cur:
+        case GTNone():
+            return false
+        else:
+            return true
+
+# Lower a block of statements as an EXPRESSION, returning the local id
+# of its tail value. Mirrors Rust `lower_block_expr` (`:3203`):
+#   • empty block → a fresh Unit local (Rust returns Constant::Unit;
+#     the `is_empty()` guard avoids a `len()-1` underflow);
+#   • otherwise lower all-but-last as statements, then the LAST stmt as
+#     a tail value via `lower_stmt_as_tail_value`. A -1 (no tail value —
+#     the SMatch/else deferral) becomes a Unit local so the caller still
+#     has a valid local to read.
+int lower_block_expr(LowerCtx &ctx, Vector[Stmt] block_stmts, GirModule &gmod):
+    if block_stmts.len() == 0:
+        int unit_dst = add_local(&ctx, UNIT_TYPE, None)
+        emit(&ctx, GIAssign(unit_dst, OpConstUnit()))
+        return unit_dst
+    int last_idx = block_stmts.len() - 1
+    int si = 0
+    while si < last_idx:
+        lower_stmt(&ctx, block_stmts.get(si).unwrap(), &gmod, false)
+        si = si + 1
+    int tail = lower_stmt_as_tail_value(&ctx, block_stmts.get(last_idx).unwrap(), &gmod)
+    if tail < 0:
+        int unit_dst2 = add_local(&ctx, UNIT_TYPE, None)
+        emit(&ctx, GIAssign(unit_dst2, OpConstUnit()))
+        return unit_dst2
+    return tail
+
+# Lower the LAST statement of a block as a tail value. Mirrors Rust
+# `lower_stmt_as_tail_value` (`:3236`): recognises the tail-value
+# shapes and returns the producing local; for any other statement form
+# lowers it as a regular statement and returns -1 ("no tail value").
+#
+# This round handles `SExpr` (bare trailing expression), `SIf`
+# (if-chain used as a value, sharing `lower_if_chain_expr` with the
+# EIf-in-`lower_expr` case), and `SMatch` (match used as a value,
+# sharing `lower_match_expr` with the EMatch-in-`lower_expr` case —
+# mirrors Rust `lower_stmt_as_tail_value` `exprs/mod.rs:3246-3248`).
+int lower_stmt_as_tail_value(LowerCtx &ctx, Stmt last_stmt, GirModule &gmod):
+    match last_stmt:
+        case SExpr(e):
+            return lower_expr(&ctx, e, &gmod)
+        case SIf(cond_expr, then_body, elif_branches):
+            return lower_if_chain_expr(&ctx, cond_expr, then_body, elif_branches, &gmod)
+        case SMatch(scrutinee, arms):
+            return lower_match_expr(&ctx, scrutinee, arms, &gmod)
+        else:
+            lower_stmt(&ctx, last_stmt, &gmod, false)
+            return -1
+
+# Lower an `if`/`elif`/`else` chain in EXPRESSION position, producing a
+# single `result` local that every reaching branch assigns. Mirrors Rust
+# `build_if_chain_expr` (`src/ir/lowering/exprs/mod.rs:3414-3500`).
+#
+# Shape: the self-host AST folds elif + else into one `Vector[ElseBranch]`
+# (`ElseBranch.condition` = Some(cond) → elif, None → explicit else).
+# We materialise `result` up front (so the merge sees a single def — SSA
+# inserts the phi), lower cond → GTBranch(then, else), then in the then
+# block lift `then_body` via `lower_block_expr`, assign it into `result`
+# via `op_consume(CkAssign)` (clone-or-move per ownership — resource
+# branches need the clone), and jump to merge. Each elif spins a fresh
+# branch (cond → elif_then / next_else); the explicit else lifts its
+# block + assigns. If NO explicit-else (None-condition) branch exists,
+# the terminal else block assigns the typed default (`OpConstI64(0)`,
+# mirroring Rust `:3494`) so `result` is assigned on EVERY path to merge.
+# Every assign+jump is guarded on `not block_terminated` — a branch that
+# ended in `return`/`break` must not also jump to merge.
+#
+# Result-type refinement: start from `ctx.expected_type` (set by the
+# enclosing SVarDecl/SAssign/SReturn writer) when valid; otherwise refine
+# from the FIRST non-Unit branch value's type (mirrors Rust's
+# `infer_operand_type_full` + the `result_type_refined` latch).
+int lower_if_chain_expr(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] then_body, Vector[ElseBranch] else_branches, GirModule &gmod):
+    # The condition is bool-typed, NOT the if-expression's result type —
+    # clear the enclosing `expected_type` (the if-RESULT's) around the cond so
+    # the centralized auto-prop hook's capture-form check doesn't suppress a
+    # throws-call condition's peel; restore it before the result_type seeding.
+    int saved_expected_ifc = ctx.expected_type
+    ctx.expected_type = -1
+    int cond = lower_expr(&ctx, cond_expr, &gmod)
+    ctx.expected_type = saved_expected_ifc
+    # Auto-propagate a `throws` call used as the if-expression condition.
+    cond = maybe_auto_propagate(&ctx, cond, &gmod)
+    # Seed result type from expected_type when the writer set a concrete
+    # one; else I64 (refined below from the first non-Unit branch).
+    int result_type_init = I64_TYPE
+    bool result_type_refined = false
+    if ctx.expected_type >= 0 and ctx.expected_type < gmod.type_table.len():
+        result_type_init = ctx.expected_type
+        result_type_refined = true
+    int result = add_local(&ctx, result_type_init, None)
+    int merge_bb = new_block(&ctx)
+    int then_bb = new_block(&ctx)
+    int else_bb = new_block(&ctx)
+    set_terminator(&ctx, GTBranch(OpCopy(cond), then_bb, else_bb))
+    # Then branch.
+    switch_to(&ctx, then_bb)
+    int then_val = lower_block_expr(&ctx, then_body, &gmod)
+    if not block_terminated(&ctx):
+        if not result_type_refined:
+            int tty = ctx.locals.get(then_val).unwrap().type_id
+            if tty != UNIT_TYPE:
+                refine_local_type(&ctx, result, tty)
+                result_type_refined = true
+        emit(&ctx, GIAssign(result, op_consume(&ctx, &gmod, then_val, CkAssign())))
+        set_terminator(&ctx, GTJump(merge_bb))
+    # Elif chain + explicit else, walking the folded ElseBranch vector.
+    int current_else_bb = else_bb
+    bool saw_else = false
+    int ebi = 0
+    while ebi < else_branches.len():
+        ElseBranch eb = else_branches.get(ebi).unwrap()
+        match eb.condition:
+            case Some(elif_cond):
+                switch_to(&ctx, current_else_bb)
+                int elif_cond_val = lower_expr(&ctx, elif_cond, &gmod)
+                int elif_then_bb = new_block(&ctx)
+                int next_else_bb = new_block(&ctx)
+                set_terminator(&ctx, GTBranch(OpCopy(elif_cond_val), elif_then_bb, next_else_bb))
+                switch_to(&ctx, elif_then_bb)
+                int elif_val = lower_block_expr(&ctx, eb.body, &gmod)
+                if not block_terminated(&ctx):
+                    if not result_type_refined:
+                        int ety = ctx.locals.get(elif_val).unwrap().type_id
+                        if ety != UNIT_TYPE:
+                            refine_local_type(&ctx, result, ety)
+                            result_type_refined = true
+                    emit(&ctx, GIAssign(result, op_consume(&ctx, &gmod, elif_val, CkAssign())))
+                    set_terminator(&ctx, GTJump(merge_bb))
+                current_else_bb = next_else_bb
+            case None:
+                # Explicit else — terminal branch.
+                saw_else = true
+                switch_to(&ctx, current_else_bb)
+                int else_val = lower_block_expr(&ctx, eb.body, &gmod)
+                if not block_terminated(&ctx):
+                    if not result_type_refined:
+                        int sty = ctx.locals.get(else_val).unwrap().type_id
+                        if sty != UNIT_TYPE:
+                            refine_local_type(&ctx, result, sty)
+                            result_type_refined = true
+                    emit(&ctx, GIAssign(result, op_consume(&ctx, &gmod, else_val, CkAssign())))
+                    set_terminator(&ctx, GTJump(merge_bb))
+        ebi = ebi + 1
+    # No explicit else → the all-conditions-false path lands in the
+    # terminal else block with `result` unassigned. Assign the typed
+    # default (I64(0), mirroring Rust `:3494`) so EVERY path to merge
+    # writes `result`.
+    if not saw_else:
+        switch_to(&ctx, current_else_bb)
+        if not block_terminated(&ctx):
+            emit(&ctx, GIAssign(result, OpConstI64(0)))
+            set_terminator(&ctx, GTJump(merge_bb))
+    switch_to(&ctx, merge_bb)
+    return result
+
+# Overwrite a local's recorded type_id in place (used by the if-chain
+# result-type refinement: the result slot is allocated with a seed type,
+# then narrowed to the first non-Unit branch value's type). Mirrors Rust's
+# `builder.locals[result_id.0].type_id = ty` — in-place field mutation.
+void refine_local_type(LowerCtx &ctx, int lid, int new_type):
+    ctx.locals.get(lid).unwrap().type_id = new_type
+
+# ── Expression lowering ─────────────────────────────────
+
+# Centralized producer-side Result→T auto-propagation hook (mirrors Rust
+# gg's `lower_expr` wrapper, `src/ir/lowering/exprs/mod.rs:73-86`, landed at
+# `90d09414`). When the expression is a `Call` or `MethodCall` — the only
+# expression shapes that PRODUCE a `throws`-fn's `Result[T,E]` via the
+# throws-sugar — apply `maybe_auto_propagate` at the tail: in a propagating
+# context (enclosing fn is `throws` / returns `Result`) and where the
+# surrounding destination doesn't itself want a `Result`, peel `Result→T`
+# (forwarding the `Error` branch to the function's Result return slot).
+#
+# This subsumes the former CONSUMER-targeted design (N explicit call sites)
+# with ONE producer-side decision, mirroring the now-canonical Rust shape —
+# and closes the same per-position gaps Rust closed: binop operands, method
+# args, aggregate-literal elements, if-expr / match-expr arm tails, and
+# inline match scrutinees whose arms discriminate USER variants (snag48).
+# The decision is purely typed (operand IR type + enclosing-fn return type),
+# no name-matching beyond the `Result__` mangled-name prefix already used by
+# `maybe_auto_propagate`.
+#
+# Sites that need the RAW `Result` even at a Call/MethodCall position set
+# `ctx.suppress_auto_prop = true` before calling `lower_expr`: match
+# scrutinees whose arms match `Ok`/`Error`/`Some`/`None` (so the user can
+# discriminate the Result), `catch` inner, and `rethrow` inner (which
+# extract the Ok/Error payloads themselves). The flag is a ONE-SHOT —
+# consumed (reset to false) at entry — so nested sub-expressions still
+# auto-prop normally.
+int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
+    # Consume the one-shot suppress flag for THIS expression.
+    bool suppress = ctx.suppress_auto_prop
+    ctx.suppress_auto_prop = false
+    # Only Call / MethodCall produce a throws-Result via the throws sugar.
+    bool is_producer = false
+    match sexpr.expr:
+        case ECall(_, _, _):
+            is_producer = true
+        case EMethodCall(_, _, _, _):
+            is_producer = true
+        else:
+            pass
+    int v = lower_expr_inner(&ctx, sexpr, &gmod)
+    if suppress or not is_producer:
+        return v
+    return maybe_auto_propagate(&ctx, v, &gmod)
+
+int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
+    match sexpr.expr:
+        case EIntLiteral(v):
+            int dst = add_local(&ctx, I64_TYPE, None)
+            emit(&ctx, GIAssign(dst, OpConstI64(v)))
+            return dst
+        case EFloatLiteral(v):
+            int dst = add_local(&ctx, F64_TYPE, None)
+            emit(&ctx, GIAssign(dst, OpConstF64(v)))
+            return dst
+        case EBoolLiteral(v):
+            int dst = add_local(&ctx, BOOL_TYPE, None)
+            emit(&ctx, GIAssign(dst, OpConstBool(v)))
+            return dst
+        case EStringLiteral(s, _):
+            int gs_tid = lookup_or_register_named(&gmod, "GorgetString")
+            int dst = add_local(&ctx, gs_tid, None)
+            emit(&ctx, GIAssign(dst, OpConstStr(s)))
+            return dst
+        case EFString(s, fexprs):
+            int gs_tid = lookup_or_register_named(&gmod, "GorgetString")
+            if fexprs.len() == 0:
+                # No interpolation — just a string literal
+                int dst = add_local(&ctx, gs_tid, None)
+                emit(&ctx, GIAssign(dst, OpConstStr(s)))
+                return dst
+            # Walk template, replacing each "{}" placeholder with the printf
+            # specifier for the corresponding fexprs[i]'s type, and build the
+            # arg list in parallel. Emit `gorget_string_format(fmt, ...args)`
+            # which returns a fresh, null-terminated GorgetString. Mirrors
+            # Rust gg's `lower_string_interpolation` at
+            # `src/ir/lowering/exprs/mod.rs:3505`.
+            #
+            # Without this fix, EFString emitted only the raw template
+            # (with literal `{}` placeholders), so `print(f"{x}")` printed
+            # "{}" — the dominant OutputMismatch cluster in self_host_e2e
+            # (46 fixtures at baseline 94/995). [filed: 2026-05-19]
+            Vector[Operand] gsf_args = []
+            gsf_args.push(OpConstStr(""))  # placeholder for fmt at index 0; overwritten below
+            String fmt = ""
+            int fi = 0
+            int byte_i = 0
+            int byte_n = s.byte_len()
+            while byte_i < byte_n:
+                # `{}` placeholder bytes are 0x7B 0x7D.
+                bool is_placeholder = false
+                if byte_i + 1 < byte_n:
+                    if s.byte_at(byte_i) == 0x7B and s.byte_at(byte_i + 1) == 0x7D:
+                        is_placeholder = true
+                if is_placeholder:
+                    if fi >= fexprs.len():
+                        # Mismatched placeholder count — emit literal `{}`
+                        fmt = fmt + "{}"
+                    else:
+                        SpannedExpr farg = fexprs.get(fi).unwrap()
+                        int aloc = lower_expr(&ctx, farg, &gmod)
+                        int aty = I64_TYPE
+                        if aloc >= 0 and aloc < ctx.locals.len():
+                            aty = ctx.locals.get(aloc).unwrap().type_id
+                        # Borrowed string (`Ptr(GorgetString)` from a struct
+                        # String-field read / match-payload binding) — deref to
+                        # a NON-OWNING value GorgetString so the `%s` branch
+                        # below fires (the `aty == gs_tid` check misses the Ptr,
+                        # else the f-string prints the pointer via `%lld`).
+                        if is_ptr_to_string_type_id(aty, &gmod):
+                            int saloc = add_local_with(&ctx, gs_tid, None, LoBorrowed(), BoNone())
+                            emit(&ctx, GIDeref(saloc, aloc, gs_tid))
+                            aloc = saloc
+                            aty = gs_tid
+                        if aty == F64_TYPE or aty == F32_TYPE:
+                            fmt = fmt + "%f"
+                            gsf_args.push(op_consume(&ctx, &gmod, aloc, CkFormatArg()))
+                        elif aty == gs_tid:
+                            # String → %.*s with (int)len,data (the printf-style
+                            # emitter for gorget_string_format decomposes a
+                            # GorgetString value arg into `(int)len, data`).
+                            # %.*s bounds the read to len bytes — required for
+                            # non-NUL-terminated cap=0 views (trim/strip/slice).
+                            fmt = fmt + "%.*s"
+                            gsf_args.push(op_consume(&ctx, &gmod, aloc, CkFormatArg()))
+                        elif aty == BOOL_TYPE:
+                            # Bool → "true"/"false" via gorget_bool_to_str.
+                            int bstr = add_local(&ctx, gs_tid, None)
+                            Vector[Operand] bargs = [OpCopy(aloc)]
+                            emit(&ctx, GICallExtern(bstr, "gorget_bool_to_str", bargs))
+                            # FRESH-OWNED-TEMP drop registration (#7-style):
+                            # gorget_bool_to_str allocates a fresh `GorgetString`
+                            # (LoOwned) that is only BORROWED by the surrounding
+                            # gorget_string_format below (CkFormatArg → OpBorrow),
+                            # so it is orphaned and leaks. Register at creation so
+                            # the scope-exit GIDropIfAlive frees it once. Borrow-
+                            # only consume ⇒ never moved ⇒ no double-free.
+                            register_local_for_drop(&ctx, bstr, gs_tid, &gmod)
+                            fmt = fmt + "%.*s"
+                            gsf_args.push(op_consume(&ctx, &gmod, bstr, CkFormatArg()))
+                        else:
+                            # Default: int64_t printf via %lld. Narrow ints
+                            # are auto-promoted by C's variadic ABI to
+                            # `int` (4 bytes) — but vsnprintf with `%lld`
+                            # reads 8 bytes. Acceptable for I64; narrow
+                            # ints may render incorrectly until a typed
+                            # specifier table is added.
+                            fmt = fmt + "%lld"
+                            gsf_args.push(op_consume(&ctx, &gmod, aloc, CkFormatArg()))
+                        fi += 1
+                    byte_i += 2
+                else:
+                    # Copy literal byte
+                    fmt = fmt + s.slice(byte_i, byte_i + 1)
+                    byte_i += 1
+            # Overwrite fmt placeholder at position 0 with the built format string.
+            gsf_args.set(0, OpConstStr(fmt))
+            int gsdst = add_local(&ctx, gs_tid, None)
+            emit(&ctx, GICallExtern(gsdst, "gorget_string_format", gsf_args))
+            # FRESH-OWNED-TEMP drop registration (#7-style): gorget_string_format
+            # allocates a fresh `GorgetString` (LoOwned). When this f-string
+            # EXPRESSION flows into a print/format arg it is BORROWED only
+            # (CkFormatArg → is_consume_kind=false → OpBorrow), so the assembled
+            # buffer is orphaned and leaks (O(1) end-of-program residue per
+            # f-string). Registering at creation makes the scope-exit
+            # GIDropIfAlive free it exactly once. SAFE-BY-CONSTRUCTION: when the
+            # result is instead MOVED into a binding (`String s = f"…"`) or
+            # RETURNED, op_consume/wire-liveness emits OpMove → GIMoveZero →
+            # drop_elab marks the slot uninitialized and statically deletes the
+            # guard, so no double-free. GorgetString is a runtime resource
+            # (LoOwned, droppable) → register_local_for_drop's
+            # LoView/LoBorrowed/non-droppable gates pass it through.
+            register_local_for_drop(&ctx, gsdst, gs_tid, &gmod)
+            return gsdst
+        case EIdentifier(name):
+            if nl_contains(&ctx, name):
+                int eid_lid = nl_get(&ctx, name)
+                # `&`/`!`-param value READ. A `GtMutPtr(inner)`-typed slot
+                # holds a `T*`; a bare read returns the POINTER bits, so a
+                # later `x + 10` does arithmetic on the pointer instead of
+                # `*ptr`. Deref-load the pointee into a fresh value temp and
+                # return THAT — mirrors Rust gg's Deref projection into a
+                # `pointee_type` temp (src/ir/lowering/exprs/mod.rs:140-164).
+                #
+                # Gate ONLY on NON-resource inner: resource slots ARE pointer-
+                # valued by ABI and their consumers already deref, so a deref
+                # here would double-deref the working `&String` read path. This
+                # is the exact precedent shipped at lower.gg (the
+                # Option[Ref[T]] getter): resource inner → return the local
+                # unchanged; primitive inner → GIDeref into a value temp.
+                int eid_tid = ctx.locals.get(eid_lid).unwrap().type_id
+                if eid_tid >= PRIM_COUNT and eid_tid < gmod.type_table.len():
+                    match gmod.type_table.get(eid_tid).unwrap():
+                        case GtMutPtr(eid_inner):
+                            if not is_resource_type_name(type_id_to_name(eid_inner, &gmod), &gmod):
+                                int eid_value_local = add_local(&ctx, eid_inner, None)
+                                emit(&ctx, GIDeref(eid_value_local, eid_lid, eid_inner))
+                                return eid_value_local
+                        else:
+                            pass
+                return eid_lid
+            # Module-level `const int` — inline the evaluated value.
+            # Without this, the self-compiled parser's KW_* / PREC_*
+            # constants all become 0 and check_kw(0, 0) hangs.
+            if gmod.const_decls.contains(name):
+                int cv = gmod.const_decls.get(name).unwrap()
+                int cdst = add_local(&ctx, I64_TYPE, None)
+                emit(&ctx, GIAssign(cdst, OpConstI64(cv)))
+                return cdst
+            # Module-level float constants — `float EPSILON = 0.000001`
+            # in lib/xtd/math3d.gg etc. Mirrors Rust's unified
+            # `module_constants` table where float consts inline as
+            # `Operand::Constant(Constant::F64(value))` rather than
+            # falling through to the unknown-identifier `[bug]`. The
+            # check / emission lives in a helper to avoid growing
+            # `lower_expr`'s stack frame — that frame is already
+            # ~148 KB (see assembly), and recursion through deeply
+            # nested expressions hits ~50 levels on `driver.gg`,
+            # putting us right at the 8 MB stack limit. Adding even
+            # a couple of locals to `lower_expr` overflows.
+            int fdst_or_neg = lower_float_const_ident(&ctx, &gmod, name)
+            if fdst_or_neg >= 0:
+                return fdst_or_neg
+            # Function-as-value: `filter(is_even)` / `.map(double)` etc.
+            # — bare fn name passed where a Callable is expected. Helper
+            # lives in its own function to keep `lower_expr`'s already-
+            # massive stack frame from growing.
+            int adst_or_neg = lower_fn_addr_ident(&ctx, &gmod, name)
+            if adst_or_neg >= 0:
+                return adst_or_neg
+            # Module-level static with runtime-call init — `stdout` /
+            # `stderr` / `stdin` from lib/std/io.gg etc. Mirrors Rust
+            # gg's `Operand::Constant(Constant::GlobalRef(name))`
+            # (`src/ir/lowering/exprs/mod.rs:128-130`). Helper emits a
+            # `__global_ref__<name>` synthetic GICallExtern that
+            # `lir_lower` rewrites to `IGlobalAddr`. Same out-of-line
+            # rationale as the float-const / fn-addr helpers above.
+            int sdst_or_neg = lower_static_ref_ident(&ctx, &gmod, name)
+            if sdst_or_neg >= 0:
+                return sdst_or_neg
+            # Meta-op token (`meta +`, `meta /`, …) encoded as
+            # `EIdentifier("__metaop__add")` etc. — compile-time only;
+            # never has a runtime value. Mirrors Rust gg's
+            # `MetaOpToken` filtering at call-arg lowering
+            # (`src/ir/lowering/exprs/calls.rs:882`). Helper is
+            # out-of-line for stack-frame reasons.
+            int mdst_or_neg = lower_metaop_ident(&ctx, name)
+            if mdst_or_neg >= 0:
+                return mdst_or_neg
+            # Module-level `Option[T] X = None` (e.g. None) — emit a
+            # properly-TYPED `None`: a local typed as the const's concrete
+            # Option struct, filled by the prelude-variant `None` ctor. That
+            # routes through lir_lower's `try_lower_prelude_variant` →
+            # `IEnumInit(slot, struct_id, tag=1, [])`, giving a full-size
+            # (e.g. 40-byte Option__GorgetString) value. The former
+            # `OpConstUnit()` produced an 8-byte I32-0 slot, which add_local's
+            # drop-emission clone over-read as a 40-byte Option (tag 0 == Some
+            # → bogus Str payload → stack-buffer-overflow). Mirrors Rust gg's
+            # `__lir_g1 = {0}` None global: what matters is the 40-byte
+            # SIZE, not the tag (cloning an empty/None Option copies nothing).
+            if gmod.none_decls.contains(name):
+                int opt_tid = gmod.none_decls.get(name).unwrap()
+                int ndst = add_local(&ctx, opt_tid, None)
+                Vector[Operand] none_args = []
+                emit(&ctx, GICallExtern(ndst, "None", none_args))
+                return ndst
+            # Bare nullary enum-variant used as a value (see
+            # lower_nullary_variant_ident). Runs after all the resolution
+            # categories above and immediately before the [bug] fallback —
+            # a variant name can't legitimately collide with any of them.
+            # Cures the `push(IDropGuardClose)` 208-vs-8-byte overflow.
+            int evdst_or_neg = lower_nullary_variant_ident(&ctx, &gmod, name)
+            if evdst_or_neg >= 0:
+                return evdst_or_neg
+            # HARD BUG: silently returning `OpConstI64(0)` for an unknown
+            # identifier lies about both value and type — every downstream
+            # use thinks it's holding an int64 with value 0. Stage-1 has
+            # been running with `gmod`, `self`, and similar getting this
+            # fallback and cascading into PConstructor failures. Emit a
+            # diagnostic so each miss is visible.
+            diag_bug("EIdentifier", "in fn '" + ctx.current_fn_name + "': unknown identifier '" + name + "' — returning OpConstI64(0) placeholder (WRONG)")
+            int unk = add_local(&ctx, I64_TYPE, None)
+            emit(&ctx, GIAssign(unk, OpConstI64(0)))
+            return unk
+        case EBinaryOp(lhs_box, op, rhs_box):
+            # Short-circuit `and` / `or` — `a and b` is NOT `a + b`. Lower
+            # to a branch-and-merge so the rhs isn't evaluated when the
+            # lhs already determines the result. Previously fell through
+            # to map_binop("and") = OP_ADD, and both sides always ran —
+            # crashed in the self-host lexer on guards like
+            # `self.lex_pos < byte_len and self.lex_peek() == b'\n'`
+            # when lex_pos was at/past end.
+            if op == "and" or op == "or":
+                int lhs_sc = lower_expr(&ctx, *lhs_box, &gmod)
+                int result_local = add_local(&ctx, BOOL_TYPE, None)
+                # Initialize result to short-circuit constant so the
+                # early-exit path lands on the right value.
+                if op == "and":
+                    emit(&ctx, GIAssign(result_local, OpConstBool(false)))
+                else:
+                    emit(&ctx, GIAssign(result_local, OpConstBool(true)))
+                int rhs_bb = new_block(&ctx)
+                int merge_bb = new_block(&ctx)
+                # `and`: if lhs: jump to rhs else merge. `or`: opposite.
+                if op == "and":
+                    set_terminator(&ctx, GTBranch(OpCopy(lhs_sc), rhs_bb, merge_bb))
+                else:
+                    set_terminator(&ctx, GTBranch(OpCopy(lhs_sc), merge_bb, rhs_bb))
+                switch_to(&ctx, rhs_bb)
+                int rhs_sc = lower_expr(&ctx, *rhs_box, &gmod)
+                emit(&ctx, GIAssign(result_local, OpCopy(rhs_sc)))
+                set_terminator(&ctx, GTJump(merge_bb))
+                switch_to(&ctx, merge_bb)
+                return result_local
+            # `x in collection` membership operator → `collection.contains(x)`.
+            # Lower as a Type__contains call on the rhs (the collection)
+            # rather than letting it fall through to `map_binop("in")`
+            # which would silently mis-compile as `x + collection`.
+            # Handles Vector / Set / Dict / String — all expose `contains`
+            # in the runtime via collection_runtime_name → gorget_*_contains.
+            if op == "in":
+                int in_lhs = lower_expr(&ctx, *lhs_box, &gmod)
+                int in_rhs = lower_expr(&ctx, *rhs_box, &gmod)
+                String coll_tname = local_type_name(in_rhs, &ctx, &gmod)
+                String contains_method = coll_tname + "__contains"
+                # `x in coll` → coll.contains(x): collection is the receiver
+                # (OpMove first arg), x is just read by contains — borrow.
+                Vector[Operand] in_args = [OpMove(in_rhs), op_consume(&ctx, &gmod, in_lhs, CkCallArgBorrow())]
+                int in_dst = add_local(&ctx, BOOL_TYPE, None)
+                emit(&ctx, GICallExtern(in_dst, contains_method, in_args))
+                return in_dst
+            # A binop's OPERANDS are scalar/string-typed by the operator, not
+            # by the binop's destination. Clear the enclosing `expected_type`
+            # so a Result-typed surrounding context (e.g. `return to_n(x) + 5`
+            # from a `throws` fn, where SReturn set expected_type to the
+            # function's `Result[T,E]` slot) doesn't make the centralized
+            # auto-prop hook's capture-form check SUPPRESS the peel on a
+            # throws-call operand — leaving a `Result + int` mismatch at C.
+            # Mirrors Rust gg's `operators.rs:46-60`.
+            int prev_expected_binop = ctx.expected_type
+            ctx.expected_type = -1
+            int lhs = lower_expr(&ctx, *lhs_box, &gmod)
+            int rhs = lower_expr(&ctx, *rhs_box, &gmod)
+            ctx.expected_type = prev_expected_binop
+            if is_comparison(op):
+                # Comparable operator overload: `a < b` etc. on user types →
+                # TypeName__compare(&a, b) OP 0.
+                String lhs_cmp_name = local_type_name(lhs, &ctx, &gmod)
+                if gmod.type_infos.contains(lhs_cmp_name) and (op == "<" or op == "<=" or op == ">" or op == ">="):
+                    String cmp_method = lhs_cmp_name + "__compare"
+                    if gmod.fn_sigs.contains(cmp_method):
+                        # `a < b` → Type__compare(a, b): comparison reads only.
+                        Vector[Operand] cmp_args = [OpMove(lhs), op_consume(&ctx, &gmod, rhs, CkCallArgBorrow())]
+                        int cmp_val = add_local(&ctx, I64_TYPE, None)
+                        emit(&ctx, GICallExtern(cmp_val, cmp_method, cmp_args))
+                        int zero = add_local(&ctx, I64_TYPE, None)
+                        emit(&ctx, GIAssign(zero, OpConstI64(0)))
+                        int cmp_dst = add_local(&ctx, BOOL_TYPE, None)
+                        emit(&ctx, GICmp(cmp_dst, map_cmpop(op), I64_TYPE, OpCopy(cmp_val), OpCopy(zero)))
+                        return cmp_dst
+                # Equatable operator overload for ==/!=: `a == b` → a.eq(b) / !a.eq(b).
+                if (op == "==" or op == "!=") and gmod.type_infos.contains(lhs_cmp_name):
+                    String eq_method = lhs_cmp_name + "__eq"
+                    if gmod.fn_sigs.contains(eq_method):
+                        # `a == b` → Type__eq(a, b): equality reads only.
+                        Vector[Operand] eq_args = [OpMove(lhs), op_consume(&ctx, &gmod, rhs, CkCallArgBorrow())]
+                        int eq_dst = add_local(&ctx, BOOL_TYPE, None)
+                        emit(&ctx, GICallExtern(eq_dst, eq_method, eq_args))
+                        if op == "==":
+                            return eq_dst
+                        int neq_dst = add_local(&ctx, BOOL_TYPE, None)
+                        emit(&ctx, GIUnOp(neq_dst, UNOP_NOT, BOOL_TYPE, OpCopy(eq_dst)))
+                        return neq_dst
+                # String ==/!=: content equality via gorget_str_eq(Str, Str).
+                # Mirrors Rust src/ir/lowering/exprs/operators.rs:87-95. Without
+                # this, String ==/!= falls to the GICmp(I64_TYPE) below — a raw
+                # pointer/int compare that breaks for two distinct String
+                # instances (and for GtPtr(String) operands from .get().unwrap()).
+                # is_string_local unwraps GtPtr/GtMutPtr, so a Ref[String]
+                # operand is detected; gorget_str_eq takes operands by pointer
+                # and compares CONTENT, so borrow operands are correct whether
+                # the operand is a value String or a GtPtr(String).
+                if (op == "==" or op == "!=") and (is_string_local(lhs, &ctx, &gmod) or is_string_local(rhs, &ctx, &gmod)):
+                    int eqd = add_local(&ctx, BOOL_TYPE, None)
+                    Vector[Operand] str_eq_args = [op_consume(&ctx, &gmod, lhs, CkCallArgBorrow()), op_consume(&ctx, &gmod, rhs, CkCallArgBorrow())]
+                    emit(&ctx, GICallExtern(eqd, "gorget_str_eq", str_eq_args))
+                    if op == "==":
+                        return eqd
+                    int nd = add_local(&ctx, BOOL_TYPE, None)
+                    emit(&ctx, GIUnOp(nd, UNOP_NOT, BOOL_TYPE, OpCopy(eqd)))
+                    return nd
+                int dst = add_local(&ctx, BOOL_TYPE, None)
+                emit(&ctx, GICmp(dst, map_cmpop(op), I64_TYPE, op_consume(&ctx, &gmod, lhs, CkBinOpArg()), op_consume(&ctx, &gmod, rhs, CkBinOpArg())))
+                return dst
+            # String concatenation: + on string operands → gorget_str_cat(Str, Str)
+            if op == "+" and (is_string_local(lhs, &ctx, &gmod) or is_string_local(rhs, &ctx, &gmod)):
+                int gs_tid = lookup_or_register_named(&gmod, "GorgetString")
+                int dst = add_local(&ctx, gs_tid, None)
+                Vector[Operand] concat_args = []
+                # `a + b` (string) → gorget_str_cat(a, b): allocates new
+                # String, reads both operands — borrow.
+                concat_args.push(op_consume(&ctx, &gmod, lhs, CkCallArgBorrow()))
+                concat_args.push(op_consume(&ctx, &gmod, rhs, CkCallArgBorrow()))
+                emit(&ctx, GICallExtern(dst, "gorget_str_cat", concat_args))
+                # FRESH-OWNED-TEMP drop registration (#7): `gorget_str_cat`
+                # allocates a fresh `GorgetString` (LoOwned). In a NESTED
+                # concat `a + b + c`, the inner `a + b` result is borrowed by
+                # the outer `+` (CkCallArgBorrow) and orphaned — its heap
+                # leaks (ASan: 1400 bytes / 200 str_cat allocs over a 200-iter
+                # loop). Registering it at creation makes the scope-exit
+                # GIDropIfAlive free it exactly once. SAFE-BY-CONSTRUCTION:
+                # when the result is instead MOVED into a named binding
+                # (`String s = a + b`), op_consume emits OpMove → GIMoveZero →
+                # drop_elab marks the slot IS_UNINITIALIZED and statically
+                # deletes the guard, so no double-free; a GorgetString is a
+                # runtime resource (LoOwned, droppable), so register_local_for_
+                # drop's LoView/LoBorrowed/non-droppable gates pass it through.
+                # NOTE (#7 scope): the SISTER leak — a fresh STRUCT/ENUM
+                # constructor temp passed to a bare param (`take(Node([1,2,3]))`)
+                # — is NOT registered here. That class is entangled with the
+                # named-binding move/clone path whose correct (move) resolution
+                # unmasks the pre-existing `!`-param-no-drop gap; see TODO.md.
+                register_local_for_drop(&ctx, dst, gs_tid, &gmod)
+                return dst
+            # Operator overload on user types: if lhs is a user struct/enum,
+            # route `a + b` → a.add(b), `a - b` → a.sub(b), etc.
+            String op_method = binop_method_name(op)
+            if op_method != "":
+                String lhs_tname = local_type_name(lhs, &ctx, &gmod)
+                bool lhs_is_user = gmod.type_infos.contains(lhs_tname)
+                # Also consider monomorphized names (Wrapper__int64_t has
+                # template Wrapper in type_infos).
+                if not lhs_is_user and lhs_tname.contains("__"):
+                    int dd = lhs_tname.index_of("__").unwrap()
+                    if dd > 0:
+                        String tp = lhs_tname.slice(0, dd)
+                        if gmod.type_infos.contains(tp):
+                            lhs_is_user = true
+                if lhs_is_user:
+                    String method_full = lhs_tname + "__" + op_method
+                    # User op overload `a OP b` → Type__OP(a, b): consult
+                    # callee signature for the rhs (lhs is the receiver,
+                    # always OpMove). bare `T` → borrow; `!T` → owning.
+                    Vector[Operand] op_args = [OpMove(lhs), op_consume(&ctx, &gmod, rhs, classify_call_arg(&gmod, method_full, 1))]
+                    int op_ret = I64_TYPE
+                    if gmod.fn_sigs.contains(method_full):
+                        op_ret = gmod.fn_sigs.get(method_full).unwrap()
+                    else:
+                        # Assume op returns lhs type (common for Add/Sub/Mul/Div).
+                        int lhs_tid = ctx.locals.get(lhs).unwrap().type_id
+                        if lhs_tid != I64_TYPE:
+                            op_ret = lhs_tid
+                    int op_dst = add_local(&ctx, op_ret, None)
+                    emit(&ctx, GICallExtern(op_dst, method_full, op_args))
+                    return op_dst
+            # Result type of + - * / follows the operand type, not hardcoded
+            # I64. Mirrors Rust infer_operand_type_full + bin_op
+            # (src/ir/lowering/exprs/operators.rs:54,288). Without this, float
+            # arithmetic lowered as I64 → wrong C type, the print-format pick
+            # below, and the integer IDiv path (div-by-zero guard) for floats.
+            int op_ty = ctx.locals.get(lhs).unwrap().type_id
+            int dst = add_local(&ctx, op_ty, None)
+            emit(&ctx, GIBinOp(dst, map_binop(op), op_ty, op_consume(&ctx, &gmod, lhs, CkBinOpArg()), op_consume(&ctx, &gmod, rhs, CkBinOpArg())))
+            return dst
+        case EUnaryOp(op, inner_box):
+            int inner = lower_expr(&ctx, *inner_box, &gmod)
+            int inner_type = ctx.locals.get(inner).unwrap().type_id
+            match op:
+                case "-":
+                    # Operator overload: -user_struct → user_struct.neg()
+                    String inner_tname = local_type_name(inner, &ctx, &gmod)
+                    if gmod.type_infos.contains(inner_tname):
+                        String neg_method = inner_tname + "__neg"
+                        Vector[Operand] neg_args = [OpMove(inner)]
+                        int neg_ret = inner_type
+                        if gmod.fn_sigs.contains(neg_method):
+                            neg_ret = gmod.fn_sigs.get(neg_method).unwrap()
+                        int neg_dst = add_local(&ctx, neg_ret, None)
+                        emit(&ctx, GICallExtern(neg_dst, neg_method, neg_args))
+                        return neg_dst
+                    int dst = add_local(&ctx, inner_type, None)
+                    emit(&ctx, GIUnOp(dst, UNOP_NEG, inner_type, OpCopy(inner)))
+                    return dst
+                case "not":
+                    int dst = add_local(&ctx, BOOL_TYPE, None)
+                    emit(&ctx, GIUnOp(dst, UNOP_NOT, BOOL_TYPE, OpCopy(inner)))
+                    return dst
+                case "~":
+                    # Bitwise NOT — result keeps the operand's integer type
+                    # (mirrors Rust src/ir/lowering/exprs/operators.rs:407,410
+                    # where BitNot's result_type == operand_type). Without this
+                    # case the `~` was silently dropped (fell through to
+                    # `return inner`), corrupting e.g. `cur & ~(mask)` masks.
+                    int dst = add_local(&ctx, inner_type, None)
+                    emit(&ctx, GIUnOp(dst, UNOP_BITNOT, inner_type, OpCopy(inner)))
+                    return dst
+                else:
+                    pass
+            return inner
+        case ECall(callee_box, args, targs):
+            SpannedExpr callee = *callee_box
+            match callee.expr:
+                case EIdentifier(fname):
+                    # Check if fname is a local variable (callable parameter or closure).
+                    # If so, dispatch through closure protocol instead of direct call.
+                    # Skip if fname is a known function (fn_sigs) or redirect target.
+                    if nl_contains(&ctx, fname) and not gmod.fn_sigs.contains(fname) and not gmod.call_redirects.contains(fname):
+                        int callable_local = nl_get(&ctx, fname)
+                        # Lower args
+                        Vector[Operand] cl_args = []
+                        # Closure/__callable_N dispatch: the callable
+                        # itself is a Ptr (op_consume returns OpCopy
+                        # regardless of kind for Ptr slots). Args go
+                        # through dynamic dispatch — callee signature
+                        # isn't available here, so default to borrow
+                        # per CLAUDE.md "Ownership at Consuming Positions".
+                        cl_args.push(op_consume(&ctx, &gmod, callable_local, CkCallArgBorrow()))  # closure/callable as first arg
+                        for carg in args:
+                            int cval = lower_expr(&ctx, carg, &gmod)
+                            cl_args.push(op_consume(&ctx, &gmod, cval, CkCallArgBorrow()))
+                        # Emit as __callable_N (codegen handles this as void*[2] dispatch)
+                        int arity = args.len()
+                        String cl_call = "__callable_" + int_to_str(arity)
+                        # Infer return type from the callable's type (function pointer return type)
+                        int cl_ret_type = I64_TYPE
+                        # Set true ONLY when an FnPtr-signature arm below reads a
+                        # real return tid. When the callable's static type is the
+                        # ERASED `GorgetClosure` named struct (a mono'd adapter's
+                        # `F` field), NO FnPtr arm fires → `cl_ret_found` stays
+                        # false → the typed `expected_type` the WRITER set is read
+                        # through below. CLAUDE.md #2 (typed-metadata-read-through,
+                        # NOT mangled-name reconstruction).
+                        bool cl_ret_found = false
+                        int callable_tid = ctx.locals.get(callable_local).unwrap().type_id
+                        if callable_tid >= 0 and callable_tid < gmod.type_table.len():
+                            GirType ct = gmod.type_table.get(callable_tid).unwrap()
+                            match ct:
+                                case GtFnPtr(_, ret_tid):
+                                    cl_ret_type = ret_tid
+                                    cl_ret_found = true
+                                case GtPtr(inner_tid):
+                                    # Callable params are Ptr(FnPtr(...)) — unwrap
+                                    if inner_tid >= 0 and inner_tid < gmod.type_table.len():
+                                        GirType inner_ct = gmod.type_table.get(inner_tid).unwrap()
+                                        match inner_ct:
+                                            case GtFnPtr(_, ret_tid2):
+                                                cl_ret_type = ret_tid2
+                                                cl_ret_found = true
+                                            else:
+                                                pass
+                                case GtMutPtr(inner_tid):
+                                    if inner_tid >= 0 and inner_tid < gmod.type_table.len():
+                                        GirType inner_ct = gmod.type_table.get(inner_tid).unwrap()
+                                        match inner_ct:
+                                            case GtFnPtr(_, ret_tid2):
+                                                cl_ret_type = ret_tid2
+                                                cl_ret_found = true
+                                            else:
+                                                pass
+                                else:
+                                    pass
+                        # Fallback: the callable is the erased `GorgetClosure`
+                        # struct (no FnPtr sig) — read the WRITER-set
+                        # `ctx.expected_type` (the result slot's real type, e.g.
+                        # `U`=GorgetString set at SReturn / the Some-payload arg
+                        # loop). GUARD pinned to `>= PRIM_COUNT` ONLY (NOT the
+                        # writer-idiom `!= I64 and != UNIT`): `expected_type` is
+                        # frequently `-1` (e.g. `lower_if` clears it before the
+                        # cond — the fixture's own `filter(is_even)` `if cb(x):`
+                        # hits this), and `-1 != I64 and -1 != UNIT` → true →
+                        # `cl_ret_type=-1` (INVALID tid). `>= PRIM_COUNT` rejects
+                        # -1, BOOL(0), F64(10); the defensive `< len()` bound
+                        # mirrors the FnPtr-arm checks above.
+                        if not cl_ret_found and ctx.expected_type >= PRIM_COUNT and ctx.expected_type < gmod.type_table.len():
+                            cl_ret_type = ctx.expected_type
+                        int cl_dst = add_local(&ctx, cl_ret_type, None)
+                        emit(&ctx, GICallExtern(cl_dst, cl_call, cl_args))
+                        return cl_dst
+                    return lower_call(&ctx, &fname, &args, &targs, &gmod)
+                case EFieldAccess(_, method_name):
+                    # Method-style call: obj.method(args) parsed as ECall(EFieldAccess(...))
+                    # Lower args but return unit (method calls are complex)
+                    for marg in args:
+                        lower_expr(&ctx, marg, &gmod)
+                    int mdst = add_local(&ctx, UNIT_TYPE, None)
+                    emit(&ctx, GIAssign(mdst, OpConstUnit()))
+                    return mdst
+                case EClosure(_, _):
+                    # closure Phase 2 Step A: an immediately-invoked closure
+                    # `((p…): body)(args)` (IIFE). Route the callee through
+                    # lower_expr so the make-site EClosure arm RECORDS the
+                    # closure (the post-pass then pushes its __Closure_N__call).
+                    # The old scan reached this via ECall→callee recursion; the
+                    # make-site ECall arm dropped non-ident/non-field callees,
+                    # so this case restores closure-recording parity. Lower the
+                    # args for side effects; return UNIT (matching the old IIFE
+                    # value behavior — real IIFE call wiring is Phase 1.5).
+                    lower_expr(&ctx, callee, &gmod)
+                    for iife_arg in args:
+                        lower_expr(&ctx, iife_arg, &gmod)
+                    int iife_dst = add_local(&ctx, UNIT_TYPE, None)
+                    emit(&ctx, GIAssign(iife_dst, OpConstUnit()))
+                    return iife_dst
+                case ENoneLiteral():
+                    # `None()` call form (e.g. `Dict[String,Option[int]] d = {"b":None()}`).
+                    # Route through lower_call as the bare-`None` ctor: lower_call's
+                    # fname=="None" + expected_type starts_with "Option__" branch
+                    # adopts Option__T and emits IEnumInit(tag=1). Without this the
+                    # call fell to `else: pass` → add_local(UNIT_TYPE), ignoring
+                    # expected_type and yielding a unit value at an Option boundary.
+                    String none_name = "None"
+                    return lower_call(&ctx, &none_name, &args, &targs, &gmod)
+                else:
+                    pass
+            return add_local(&ctx, UNIT_TYPE, None)
+        case EMethodCall(recv_box, mname, margs, mtargs_proto):
+            # Static method call: receiver is a TYPE name (e.g. Point.default()
+            # or int.parse(s)). Route to TypeName__method with no self argument.
+            #
+            # Parameterised-type receiver: `Heap[int].new()` /
+            # `SparseSet[int].new()` parse as EMethodCall on EIndex, NOT
+            # EIdentifier. Detect that pattern and rewrite the receiver
+            # as if it were `Heap__int64_t.new()` — the static-method
+            # path below will then dispatch to `Heap__int64_t__new()`.
+            # Without this, the lowerer would walk into EIndex and
+            # lower `Heap` as a bare value identifier, emitting [bug].
+            SpannedExpr recv_for_match = *recv_box
+            match (*recv_box).expr:
+                case EIndex(eix_base_box, eix_idx_box):
+                    String eix_base_name = ""
+                    String eix_idx_name = ""
+                    match (*eix_base_box).expr:
+                        case EIdentifier(b):
+                            eix_base_name = b
+                        else:
+                            pass
+                    match (*eix_idx_box).expr:
+                        case EIdentifier(i):
+                            eix_idx_name = i
+                        else:
+                            pass
+                    if eix_base_name.len() > 0 and eix_idx_name.len() > 0:
+                        # Substitute through `gmod.type_subs` (T → int64_t).
+                        if gmod.type_subs.contains(eix_idx_name):
+                            int sub_tid = gmod.type_subs.get(eix_idx_name).unwrap()
+                            String sub_name = type_id_to_name(sub_tid, &gmod)
+                            if sub_name.len() > 0:
+                                eix_idx_name = sub_name
+                        # Map surface type names to their C-level form
+                        # so the mangled mono name matches what's
+                        # registered in `type_infos`.
+                        if eix_idx_name == "int":
+                            eix_idx_name = "int64_t"
+                        elif eix_idx_name == "float":
+                            eix_idx_name = "double"
+                        elif eix_idx_name == "String":
+                            eix_idx_name = "GorgetString"
+                        String mono_name = eix_base_name + "__" + eix_idx_name
+                        # Synthesise an EIdentifier-shaped receiver so
+                        # the existing static-method path picks it up.
+                        recv_for_match = SpannedExpr(EIdentifier(mono_name), (*recv_box).span)
+                else:
+                    pass
+            match recv_for_match.expr:
+                case EIdentifier(ident_name_raw):
+                    # Generic type-param substitution. In monomorphized
+                    # bodies like `equip [T] SetIter[T] with Iterator[T]:
+                    # Option[T] next(...): T out = T.default()`, the `T`
+                    # of `T.default()` is a type-parameter name. After
+                    # `setup_type_subs(T → int)`, look it up before the
+                    # is_type check so `T.default()` dispatches to
+                    # `int64_t__default()` rather than falling through to
+                    # the EIdentifier-on-`T` value path (which has no
+                    # binding and emits a [bug] placeholder).
+                    String ident_name = ident_name_raw
+                    if gmod.type_subs.contains(ident_name):
+                        int sub_tid = gmod.type_subs.get(ident_name).unwrap()
+                        String sub_name = type_id_to_name(sub_tid, &gmod)
+                        if sub_name.len() > 0:
+                            ident_name = sub_name
+                    # Named locals shadow type names. Without this guard,
+                    # a synth local whose name happens to contain `__`
+                    # (e.g. `__for_coll_N` from a desugared SFor) gets
+                    # picked up by the `__`-infix fallback below and
+                    # misrouted to static-method dispatch
+                    # (`__for_coll_N.get(i)` → `__for_coll_N__get(i)`,
+                    # undefined symbol). The named-local check is also
+                    # the safe answer in general: if a binding exists in
+                    # scope, it's a value, regardless of name shape.
+                    # (Self-host snag #5, 2026-05-14.)
+                    bool is_local = nl_contains(&ctx, ident_name_raw)
+                    bool is_type = false
+                    if not is_local:
+                        is_type = gmod.type_infos.contains(ident_name)
+                    # Also treat primitive type names as types.
+                    if not is_type and not is_local:
+                        if ident_name == "int" or ident_name == "float" or ident_name == "bool":
+                            is_type = true
+                        elif ident_name == "String" or ident_name == "byte" or ident_name == "char":
+                            is_type = true
+                        elif ident_name == "int8" or ident_name == "int16" or ident_name == "int32" or ident_name == "int64":
+                            is_type = true
+                        elif ident_name == "uint8" or ident_name == "uint16" or ident_name == "uint32" or ident_name == "uint64":
+                            is_type = true
+                        elif ident_name == "float32" or ident_name == "float64":
+                            is_type = true
+                        # C-level primitive names — these arrive after
+                        # `gmod.type_subs` substitution where `T → int64_t`
+                        # (the C type name, not the Gorget surface `int`).
+                        elif ident_name == "int64_t" or ident_name == "int32_t" or ident_name == "int16_t" or ident_name == "int8_t":
+                            is_type = true
+                        elif ident_name == "uint64_t" or ident_name == "uint32_t" or ident_name == "uint16_t" or ident_name == "uint8_t":
+                            is_type = true
+                        elif ident_name == "double" or ident_name == "GorgetString":
+                            is_type = true
+                        # Generic prelude types — `Box.new(x)` /
+                        # `Heap.new()` etc. show up as static-method
+                        # calls in surface syntax. The unparameterised
+                        # name isn't in `type_infos` (only mono'd
+                        # `Box__T` is), so it'd fall through to the
+                        # bare-EIdentifier path and emit `[bug]`.
+                        elif ident_name == "Box" or ident_name == "Heap":
+                            is_type = true
+                        elif ident_name == "Vector" or ident_name == "Deque":
+                            is_type = true
+                        elif ident_name == "Dict" or ident_name == "HashMap":
+                            is_type = true
+                        elif ident_name == "Set" or ident_name == "HashSet":
+                            is_type = true
+                        elif ident_name == "Channel" or ident_name == "Shared" or ident_name == "Weak":
+                            is_type = true
+                        elif ident_name == "Option" or ident_name == "Result":
+                            is_type = true
+                        # Monomorphized generic types — `Container__Foo`,
+                        # `Heap__int64_t`, `SparseSet__int64_t`, etc. arrive
+                        # here after the EIndex rewrite above. They may not
+                        # be in `type_infos` yet (registration happens lazily
+                        # during lowering, sometimes after the call site),
+                        # but a `__` separator in an identifier is reliable
+                        # signal it's a mangled type — Gorget's surface
+                        # syntax doesn't allow identifiers to contain `__`.
+                        elif ident_name.contains("__"):
+                            is_type = true
+                    if is_type:
+                        # Static method / variant ctor: dispatch via
+                        # classify_call_arg against the mangled callee
+                        # name. Built early enough that the callee name
+                        # may not yet be in fn_move_params (lazy
+                        # registration); classify_call_arg defaults to
+                        # CkCallArgBorrow when the lookup misses — correct
+                        # per the docs.
+                        Vector[Operand] static_args = []
+                        # Compute the mangled callee name once for
+                        # classify_call_arg lookups. Mirrors the post-loop
+                        # `static_name` build below.
+                        String _static_call = ident_name
+                        if ident_name == "int":
+                            _static_call = "int64_t"
+                        elif ident_name == "float":
+                            _static_call = "double"
+                        elif ident_name == "String":
+                            _static_call = "GorgetString"
+                        _static_call = _static_call + "__" + mname
+                        int _sai = 0
+                        for sma in margs:
+                            int sma_val = lower_expr(&ctx, sma, &gmod)
+                            static_args.push(op_consume(&ctx, &gmod, sma_val, classify_call_arg(&gmod, _static_call, _sai)))
+                            _sai += 1
+                        # Primitive method names need C-runtime mangling.
+                        String type_prefix = ident_name
+                        if ident_name == "int":
+                            type_prefix = "int64_t"
+                        elif ident_name == "float":
+                            type_prefix = "double"
+                        elif ident_name == "String":
+                            type_prefix = "GorgetString"
+                        String static_name = type_prefix + "__" + mname
+                        int static_ret = I64_TYPE
+                        # Qualified enum variant constructor: `EnumName.Variant(args)`
+                        # is parsed as EMethodCall(EIdentifier(EnumName), "Variant",
+                        # args). The static-method path mangles to
+                        # `EnumName__Variant` — for variants this is a constructor,
+                        # not a real method, so the return type is the enum struct
+                        # itself. Without this, `static_ret` falls through to
+                        # I64_TYPE and the destination local lands at int64_t —
+                        # the C codegen then tries to assign a 100+ byte enum
+                        # struct literal into a scalar slot and barfs with
+                        # "incompatible types when assigning to type 'int64_t'
+                        # from type '__gg_Foo'". Mirrors Rust gg's enum-variant
+                        # branch in `src/ir/lowering/exprs/methods.rs` (snag #51).
+                        bool is_variant_ctor = false
+                        if gmod.type_infos.contains(ident_name):
+                            GirTypeInfo enum_info = gmod.type_infos.get(ident_name).unwrap()
+                            if enum_info.is_enum:
+                                for evv in enum_info.variants:
+                                    if evv.name == mname:
+                                        is_variant_ctor = true
+                                        break
+                        if is_variant_ctor:
+                            static_ret = lookup_or_register_named(&gmod, ident_name)
+                        elif gmod.fn_sigs.contains(static_name):
+                            static_ret = gmod.fn_sigs.get(static_name).unwrap()
+                        elif mname == "default":
+                            if gmod.type_infos.contains(ident_name):
+                                static_ret = lookup_or_register_named(&gmod, ident_name)
+                            else:
+                                # int.default() → int, float.default() → double, etc.
+                                int pt = prim_name_to_type(ident_name)
+                                if pt >= 0:
+                                    static_ret = pt
+                        elif mname == "parse":
+                            # int.parse(s) returns Option[int]
+                            int pt = prim_name_to_type(ident_name)
+                            if pt >= 0:
+                                String opt_name = "Option__" + type_id_to_name(pt, &gmod)
+                                static_ret = lookup_or_register_named(&gmod, opt_name)
+                                record_enum_category(&gmod, static_ret, ENUM_CAT_OPTION, pt, -1)
+                        else:
+                            int binfer = builtin_call_return_type(static_name, &gmod)
+                            if binfer >= 0:
+                                static_ret = binfer
+                        int sdst = add_local(&ctx, static_ret, None)
+                        emit(&ctx, GICallExtern(sdst, static_name, static_args))
+                        return sdst
+                else:
+                    pass
+            # unwrap() / unwrap_or() — extract the payload field from the
+            # Option/Result receiver. Previously a no-op GIAssign copy with
+            # a re-typed target, which silently mishandled aggregate receivers:
+            # `.unwrap_or(0)` on a `Result[int, ParseError]` emits "0" via
+            # emit_variant_arg's aggregate-arg/scalar-expected fallback,
+            # losing the actual Ok_0 value. Now emits a real field read
+            # through the `__field_read_<enum>_<Variant>_0` helper, same as
+            # PConstructor destructure.
+            #
+            # Place base — a method receiver is passed as `self` BY POINTER,
+            # so a `&`/`!`-param (`GtMutPtr`) receiver must stay the pointer
+            # (else the method mutates a discarded dereffed copy, not the
+            # caller's value). `lower_place_base` bypasses Edit-1's value-read
+            # deref for a bare identifier; non-identifier receivers (chained
+            # calls etc.) fall back to `lower_expr` unchanged.
+            int recv = lower_place_base(&ctx, *recv_box, &gmod)
+            if mname == "unwrap" or mname == "unwrap_or":
+                # Lower the default value first (for unwrap_or) and
+                # capture its local id — needed if we synthesize a
+                # tag check below. unwrap (no args) leaves this at -1.
+                int default_local = -1
+                int uoi = 0
+                while uoi < margs.len():
+                    int lo = lower_expr(&ctx, margs.get(uoi).unwrap(), &gmod)
+                    if uoi == 0:
+                        default_local = lo
+                    uoi += 1
+                # Determine the wrapper type, inner type name, and variant.
+                String recv_tn = local_type_name(recv, &ctx, &gmod)
+                String variant_name = ""
+                String inner_name_str = ""
+                # option_ref_borrow Phase 3 (typed path, no name-matching):
+                # for a borrowing-getter result `Option[Ref[T]]`, the payload
+                # is a real `GtPtr(T)` recorded at registration. Read it from
+                # the typed `option_ref_payload` channel keyed on the receiver
+                # Option's GIR id — the unwrap then mints the pointer directly,
+                # never slicing the `Ref__` infix out of recv_tn. The
+                # downstream emit_payload_read GtPtr guard returns the pointer
+                # (no clone); field-access auto-derefs; op_consume clones the
+                # pointee only at owning positions (§2 table).
+                int recv_type_id = ctx.locals.get(recv).unwrap().type_id
+                int ref_payload_tid = option_ref_payload_of(&gmod, recv_type_id)
+                # `enum_category_of` peels Ptr/MutPtr internally, so a raw
+                # `recv_type_id` that is a `GtPtr(Option__…)` (projected/borrowed
+                # recv) still classifies correctly.
+                EnumCategory recv_ec = enum_category_of(&gmod, recv_type_id)
+                if recv_ec.category == ENUM_CAT_OPTION:
+                    variant_name = "Some"
+                    inner_name_str = recv_tn.slice(8, recv_tn.len())
+                elif recv_ec.category == ENUM_CAT_RESULT:
+                    variant_name = "Ok"
+                    # Ok type: longest-prefix scan for first `__` splits
+                    # Result__<OkT>__<ErrT>.
+                    String rest = recv_tn.slice(8, recv_tn.len())
+                    int split = rest.index_of("__").unwrap_or(-1)
+                    if split > 0:
+                        inner_name_str = rest.slice(0, split)
+                int inner_tid = -1
+                if inner_name_str != "":
+                    int prim_t = prim_name_to_type(inner_name_str)
+                    if prim_t >= 0:
+                        inner_tid = prim_t
+                    elif inner_name_str == "int64_t":
+                        inner_tid = I64_TYPE
+                    elif inner_name_str == "int32_t":
+                        inner_tid = I32_TYPE
+                    elif inner_name_str == "int16_t":
+                        inner_tid = I16_TYPE
+                    elif inner_name_str == "int8_t":
+                        inner_tid = I8_TYPE
+                    elif inner_name_str == "uint64_t":
+                        inner_tid = U64_TYPE
+                    elif inner_name_str == "uint32_t":
+                        inner_tid = U32_TYPE
+                    elif inner_name_str == "uint16_t":
+                        inner_tid = U16_TYPE
+                    elif inner_name_str == "uint8_t":
+                        inner_tid = U8_TYPE
+                    elif inner_name_str == "double":
+                        inner_tid = F64_TYPE
+                    elif inner_name_str == "float":
+                        inner_tid = F32_TYPE
+                    elif inner_name_str == "Str":
+                        inner_tid = lookup_or_register_named(&gmod, "GorgetString")
+                    elif inner_name_str.starts_with("Ref__"):
+                        # option_ref_borrow: an `Option__Ref__T` payload name
+                        # `Ref__T` must resolve to a real `GtPtr(T)` via the
+                        # bridge — NOT `lookup_or_register_named` (which would
+                        # register a `GtNamed("Ref__T")` → empty C struct that
+                        # poisons resolve_field_lir_type's LT_PTR fallback,
+                        # making Some_0 a value struct → shallow-copy/memcpy
+                        # type-error). Mirrors the guard at the infer site
+                        # (~3461) + the resolve_field_gir_type bridge (~3070).
+                        # The typed override below sets the same GtPtr; this
+                        # just avoids the GtNamed registration SIDE EFFECT.
+                        inner_tid = resolve_field_gir_type(inner_name_str, &gmod)
+                    else:
+                        inner_tid = lookup_or_register_named(&gmod, inner_name_str)
+                # option_ref_borrow Phase 3: override with the typed GtPtr
+                # payload when this is an Option[Ref[T]] — the name-slice above
+                # produced a GtNamed("Ref__T"); we want the real GtPtr(T).
+                if ref_payload_tid >= 0:
+                    inner_tid = ref_payload_tid
+                if inner_tid >= 0 and variant_name != "":
+                    int scr_ptr = match_scrutinee_ptr(&ctx, &gmod, recv)
+                    # `.unwrap_or(default)`: emit a real tag check so
+                    # None/Error returns the default instead of dereffing
+                    # a NULL pointer (closes showcase blocker #4 — the
+                    # `sr_lookup` workaround in lir_lower.gg:35 can now
+                    # inline as `sr.get(name).unwrap_or(-1)`).
+                    if mname == "unwrap_or" and default_local >= 0:
+                        # option_ref_borrow Phase 6 (R1, site #4 — extended
+                        # 2026-05-28 for NEXT BLOCKER #4): the result SLOT
+                        # (`uo_dst`) needs a SEPARATE type from `inner_tid`.
+                        # ⚠ `inner_tid` MUST stay `GtPtr` — it is reused at
+                        # the `emit_payload_read` field reads (Some-arm ~below
+                        # AND the plain-unwrap path) where the site-#1 guard
+                        # fires and emits the GIDeref. The two slot types are
+                        # ALREADY decoupled here; the `uo_slot_tid` override
+                        # only changes the result-slot, not the field-read dst.
+                        #
+                        # For BOTH primitive and resource pointees, the slot
+                        # type is the VALUE pointee — the Some-arm clones the
+                        # GtPtr payload (`op_consume(payload, CkAssign)` →
+                        # OpClone → `<T>__clone(ptr)` → fresh value) and stores
+                        # the value; the None-arm moves the value-typed default
+                        # into the same value slot. The caller's
+                        # `op_consume(uo_dst, CkReturn)` then sees a value-typed
+                        # owned local — OpMove → direct return.
+                        #
+                        # Pre-2026-05-28: this gated the override on
+                        # `not is_resource_type_name(...)` so resource pointees
+                        # kept `uo_slot_tid = inner_tid` (GtPtr). The Some-arm
+                        # then hit lir_codegen's "Ptr-slot ← aggregate-value →
+                        # NULL" give-up branch (`__s33 = NULL`), and the merge's
+                        # downstream `clone_to_owned` SIGSEGV'd. The resource
+                        # case wants the SAME value-typed slot as primitives;
+                        # the GtPtr requirement was only about `inner_tid`, not
+                        # `uo_slot_tid`.
+                        int uo_slot_tid = inner_tid
+                        if ref_payload_tid >= 0 and ref_payload_tid < gmod.type_table.len():
+                            GirType rp_gt = gmod.type_table.get(ref_payload_tid).unwrap()
+                            match rp_gt:
+                                case GtPtr(rp_inner):
+                                    uo_slot_tid = rp_inner
+                                else:
+                                    pass
+                        # Materialise the result slot up front; both arms
+                        # store into it so the merge block sees a single
+                        # def (SSA construction inserts the phi).
+                        int uo_dst = add_local(&ctx, uo_slot_tid, None)
+                        int tag = emit_tag_read(&ctx, scr_ptr, recv_tn, &gmod)
+                        # tag == 0 → Some / Ok arm.
+                        int cmp_dst = add_local(&ctx, BOOL_TYPE, None)
+                        emit(&ctx, GICmp(cmp_dst, CMP_EQ, I64_TYPE, OpCopy(tag), OpConstI64(0)))
+                        int some_bb = new_block(&ctx)
+                        int none_bb = new_block(&ctx)
+                        int uo_merge_bb = new_block(&ctx)
+                        set_terminator(&ctx, GTBranch(OpCopy(cmp_dst), some_bb, none_bb))
+                        # Some arm: read payload, store to uo_dst.
+                        switch_to(&ctx, some_bb)
+                        int payload = emit_payload_read(&ctx, scr_ptr, recv_tn, variant_name, 0, inner_tid, &gmod)
+                        emit(&ctx, GIAssign(uo_dst, op_consume(&ctx, &gmod, payload, CkAssign())))
+                        set_terminator(&ctx, GTJump(uo_merge_bb))
+                        # None arm: store the default.
+                        switch_to(&ctx, none_bb)
+                        emit(&ctx, GIAssign(uo_dst, op_consume(&ctx, &gmod, default_local, CkAssign())))
+                        set_terminator(&ctx, GTJump(uo_merge_bb))
+                        switch_to(&ctx, uo_merge_bb)
+                        return uo_dst
+                    # Plain unwrap: emit a real field read through the
+                    # scrutinee-ptr helper, matching PConstructor destructure.
+                    int field_val = emit_payload_read(&ctx, scr_ptr, recv_tn, variant_name, 0, inner_tid, &gmod)
+                    # Prereq B-extension (2026-05-21): when the receiver
+                    # was a borrow (e.g., `coll.get(i).unwrap()` where
+                    # `.get()` returned LoBorrowed/BoCollectionElement,
+                    # or a SVarDecl-bound borrow propagated via Prereq
+                    # B), demote `field_val` to LoBorrowed so the
+                    # COMMIT 3 drop emission doesn't double-free the
+                    # underlying aggregate data. emit_payload_read tags
+                    # `dst` LoBorrowed/BoField when no clone fn is
+                    # available (the common case for user enums whose
+                    # payload types aren't runtime resources); the
+                    # inherit shim leaves LoOwned dst's alone (those
+                    # were explicitly cloned and need their own drop).
+                    inherit_borrow_from(&ctx, field_val, recv)
+                    return field_val
+                # Fall back to re-cast if we couldn't identify the variant.
+                # Phase 3 (Class 8): inherit recv's borrow tag onto ud so a
+                # chained `coll.get(i).unwrap()` doesn't byte-copy the alias
+                # into a fresh LoOwned slot.
+                if inner_tid >= 0:
+                    int ud = add_local_inheriting(&ctx, inner_tid, None, recv)
+                    emit(&ctx, GIAssign(ud, op_consume(&ctx, &gmod, recv, CkAssign())))
+                    return ud
+                return recv
+            # clone() — return a copy of the receiver
+            if mname == "clone":
+                # Phase D step 3: explicit `.clone()` produces an owned
+                # copy of the receiver. Emit OpClone so downstream layers
+                # (LIR codegen, Phase C validators) know this read is a
+                # deliberate refcount bump / deep copy, not an alias.
+                #
+                # Phase 2.3.5 (2026-05-22) — the dst's type is the
+                # POINTEE when recv is Ptr(T)/MutPtr(T): clone produces
+                # an owned T value, not a pointer. Without this unwrap,
+                # the clone_dst slot is typed as Ptr(T); the lir_lower
+                # OpClone handler treats the slot as a Ptr-to-resource
+                # at every later consume position, emitting an EXTRA
+                # `gorget_<T>__clone_to_owned` that takes the prior
+                # clone's Str RESULT as a pointer — type-mismatch at
+                # cc (`Str` arg vs `const GorgetString*` expected) and
+                # a guaranteed crash if it ever ran. Writer-site fix:
+                # unwrap the Ptr/MutPtr so clone_dst's GIR type matches
+                # the actual runtime value being stored.
+                int recv_tid = ctx.locals.get(recv).unwrap().type_id
+                if recv_tid >= 0 and recv_tid < gmod.type_table.len():
+                    GirType recv_gt = gmod.type_table.get(recv_tid).unwrap()
+                    match recv_gt:
+                        case GtPtr(inner_tid):
+                            recv_tid = inner_tid
+                        case GtMutPtr(inner_tid):
+                            recv_tid = inner_tid
+                        else:
+                            pass
+                int clone_dst = add_local(&ctx, recv_tid, None)
+                emit(&ctx, GIAssign(clone_dst, OpClone(recv)))
+                return clone_dst
+            # Detect mutating-method-on-field-access pattern *before*
+            # lowering args, so we capture wb_base / wb_field while the
+            # recv_box AST is still in scope. `self.field.push(x)` and
+            # similar mutators are lowered as:
+            #   copy = __field_read_(base, idx)
+            #   method(&copy, args)
+            # …the mutation lives on `copy`; without a follow-up write-back,
+            # the original field never sees the change. Writing back after
+            # the call persists the mutation. Classic symptom: lex_emit's
+            # `self.lex_tokens.push(...)` silently drops every token and the
+            # self-compiled lexer returns 0 tokens.
+            # TYPED (CLAUDE.md #4, "one fix all siblings"): route the
+            # writeback mutator test through the SAME typed source of truth
+            # as the CoW scan — `builtin_method_mutates` reads the
+            # `is_mutating` column off BUILTIN_METHOD_MUTATES. This is a
+            # NAME-table scan only (no per-call type resolution) so it does
+            # NOT add a type lookup to this O(N²)-sensitive parser-lexing
+            # hot loop. The old hand-list (push/put/set/pop/remove/clear)
+            # is a subset of the typed `is_mutating=true` rows; widening to
+            # the full mutator set is sound (a read-only method correctly
+            # skips the writeback; the field-writeback only fires for an
+            # EFieldAccess receiver that is NOT a Ptr-borrow, the genuine
+            # by-value-copy mutator shape). Conservative default for an
+            # unknown name = NOT a known builtin mutator ⇒ no writeback,
+            # matching the old list's "absent ⇒ false".
+            # TODO(P3-tier1, /tmp/p3_tier1_brief.md §2): if any future
+            # parser self-lex perf regression is traced here, this is the
+            # site — but the typed table marks all 6 original names true,
+            # so behavior for them is unchanged.
+            bool is_mutating = false
+            match builtin_method_mutates(mname):
+                case Some(wb_decl):
+                    is_mutating = wb_decl.is_mutating
+                case None:
+                    pass
+            # Detect whether the field-read receiver is Ptr-typed (A.2,
+            # 2026-05-22: GIFieldLoad emits Ptr-typed locals for resource
+            # field reads). If so, the mutating call goes through the
+            # field POINTER directly and mutates the field in place — no
+            # writeback needed. Pre-A.2 the field-read produced a by-value
+            # copy and writeback was the only way to persist mutations.
+            # Today the writeback is not just redundant: emit_field_write_
+            # from_local routes the value through CkFieldWrite → OpClone,
+            # triggering an O(N) gorget_array_clone of the WHOLE collection
+            # after every push. That's O(N²) overall — pathological on
+            # parser.gg's ~25k-token lexing run (5min+ per file).
+            bool recv_is_ptr_borrow = false
+            GirLocal recv_loc_for_check = ctx.locals.get(recv).unwrap()
+            match recv_loc_for_check.ownership:
+                case LoBorrowed():
+                    recv_is_ptr_borrow = is_ptr_type(recv_loc_for_check.type_id, &gmod)
+                else:
+                    pass
+            bool need_writeback = false
+            SpannedExpr wb_base = (*recv_box)
+            String wb_field = ""
+            # option_ref_borrow Phase 4b: the `coll.get(i).unwrap()
+            # .mut_method(args)` chain needs NO writeback. `.get()` now
+            # returns `Option[Ref[T]]`, so the unwrapped receiver is a
+            # `GtPtr(T)` borrow whose pointer IS the collection element's
+            # address — the mutating call goes THROUGH the pointer and
+            # mutates the real element in place. The old `coll.set(idx,
+            # !recv)` chain-writeback (retired here) would store a pointer
+            # into the collection's own element slot → corruption. This
+            # also retires the `feedback_nested_vector_get_set` workaround.
+            if is_mutating:
+                match (*recv_box).expr:
+                    case EFieldAccess(wb_base_box, wb_f):
+                        # Skip writeback when recv is a Ptr-borrow (A.2 path):
+                        # the push goes through the field pointer directly,
+                        # so the field is already mutated in place. The
+                        # writeback would trigger a spurious whole-field
+                        # clone (CkFieldWrite → OpClone).
+                        if not recv_is_ptr_borrow:
+                            need_writeback = true
+                            wb_base = *wb_base_box
+                            wb_field = wb_f
+                    else:
+                        pass
+            # Method call: lower receiver as first arg (&self), then args.
+            # Most collection/object methods take self by pointer.
+            #
+            # Phase C step 5b + Path A receiver-dispatch (2026-05-21):
+            # pick operand mode by consulting the callee's signature for
+            # param 0 (the implicit self slot):
+            #   • `!self` (OWN_MOVE) → CkCallArgOwning → OpMove
+            #   • `&self` / bare `self` → CkCallArgBorrow → OpBorrow
+            # A LoBorrowed receiver (most commonly a field-loaded local
+            # — `self.columns.get(...)`) must always be OpBorrow — moving
+            # a borrow is a use-after-free shape, irrespective of the
+            # callee's declared ownership. For LoOwned / LoParam sources
+            # we let the callee signature drive the decision rather than
+            # hardcoding OpMove: that hardcode is the dominant source of
+            # over-consumption (Phase 2c COMMIT 2 blocker, scout
+            # `a38eb352`). Methods not pre-registered in fn_move_params
+            # default to CkCallArgBorrow — correct per CLAUDE.md
+            # "Ownership at Consuming Positions" (bare-T propagates the
+            # Ptr alias at zero cost). At the LIR layer OpBorrow lowers
+            # identically to OpMove for pass-by-ptr method args (commit
+            # `af687f3d`); validators downstream get the typed signal.
+            #
+            # Build the mangled method name once — used both for the
+            # receiver dispatch and the per-arg classify_call_arg.
+            String recv_type_name = local_type_name(recv, &ctx, &gmod)
+            String full_name = recv_type_name + "__" + mname
+            # PROTO phase-1b: method-level-generic call — append the
+            # mangled method-targs so the call dispatches to the
+            # per-call-site mono'd body (VectorIter__int64_t__map__int64_t__GorgetClosure).
+            String _proto_mtarg_suffix = ""
+            if mtargs_proto.len() > 0:
+                # Explicit turbofish form: mangle from the syntactic AST types.
+                for _mt in mtargs_proto:
+                    _proto_mtarg_suffix = _proto_mtarg_suffix + "__" + type_to_c_name(_mt, &gmod)
+            else:
+                # Lazy-iterator phase 1b bare form: no turbofish written, so
+                # read the typechecker's inferred method-targs side-table for
+                # this call's span and mangle from the recorded rtids. This
+                # feeds the SAME symbol the body-emit + fn_sigs pre-reg path
+                # produce, so the call dispatches to a DEFINED userland
+                # adapter method (never a bare CALLED-but-undefined symbol).
+                Vector[int] _bare_mtargs = bare_method_targ_rtids(sexpr.span.start, mname, &gmod)
+                for _bmt in _bare_mtargs:
+                    _proto_mtarg_suffix = _proto_mtarg_suffix + "__" + bare_method_targ_c_name(_bmt, &gmod)
+            full_name = full_name + _proto_mtarg_suffix
+            String sig_lookup_name = full_name.clone()   # R10: pre-redirect mangled name for fn_sigs
+            # Extern-method redirect: an `extern int _m(...) = "gorget_sym"`
+            # method inside an equip block (e.g. File's `_write_bytes_buf`)
+            # is registered by the loader as a call_redirect keyed on the
+            # mangled `<Target>__<method>` name. Resolve it here so the call
+            # emits the C runtime symbol DIRECTLY (mirroring Rust gg inlining
+            # `self._m(args)` → `gorget_sym(self, args)`), rather than calling
+            # a degenerate stub body. Only extern-equip methods land in
+            # call_redirects under this Type__method shape, so this never
+            # perturbs ordinary user-method dispatch.
+            if gmod.call_redirects.contains(full_name):
+                full_name = gmod.call_redirects.get(full_name).unwrap()
+            Vector[Operand] call_args = []
+            GirLocal recv_loc = ctx.locals.get(recv).unwrap()
+            match recv_loc.ownership:
+                case LoBorrowed():
+                    # A LoBorrowed receiver (field-loaded local, or the
+                    # `GtPtr(T)` unwrap of an `Option[Ref[T]]` from
+                    # `coll.get(i).unwrap()`) is always OpBorrow: the call
+                    # passes the pointer, mutating the real element in place.
+                    call_args.push(OpBorrow(recv))
+                else:
+                    # Receiver is param index 0 in the callee's
+                    # signature. Dispatch via classify_call_arg:
+                    # `!self` → OpMove, otherwise OpBorrow.
+                    call_args.push(op_consume(&ctx, &gmod, recv, classify_call_arg(&gmod, full_name, 0)))
+            # STEP 1 / Option C — collection mutators (push/set/insert on
+            # Vector, put/set on Dict, add/insert on Set) take OWNERSHIP of
+            # the value they store (and, for Dict, the key). classify_call_arg
+            # defaults these to CkCallArgBorrow (the mangled method name isn't
+            # in fn_move_params), which makes op_consume return OpBorrow
+            # unconditionally → neither a paired GIMoveZero nor a clone fires,
+            # so the stored value shallow-aliases the source local and both
+            # free the same heap at scope exit (the meta_expand_for_match
+            # double-free). Promote the owning value/key arg to CkCallArgOwning
+            # so op_consume emits OpMove (owned last-use source) or OpClone
+            # (Ptr-to-resource source via decide_ptr_consume; LoBorrowed
+            # sources await a-5's clone-on-borrow arm). The runtime ABI ALREADY
+            # address-takes these args via lir_lower's needs_ptr_arg keyed on
+            # the mapped runtime name, so an OpMove operand is passed by pointer
+            # cleanly — NO lir_lower change is needed (the original "wrong ABI"
+            # diagnosis was inverted; see docs/plans/drop_emission.md).
+            CollectionKind _recv_ck = collection_kind_of(&gmod, recv_type_name)
+            int _ma_idx = 0
+            for ma in margs:
+                # closure Phase 2 Step A: a method-call arg that CONTAINS a
+                # raw `it` (e.g. `.map(it*2)`, where the self-host parser does
+                # NOT always wrap it in EImplicitClosure) is an implicit-it
+                # closure body — record it (the OLD scan did the same via
+                # expr_has_it → emit_it_closure). Otherwise lower normally.
+                int ma_val = -1
+                if expr_has_it(ma):
+                    ma_val = record_implicit_it_closure(&ctx, ma, &gmod)
+                else:
+                    # Clear the enclosing `expected_type` around the arg so a
+                    # Result-typed surrounding context (e.g. `return a.add(to_n(sel))`
+                    # from a `throws` fn) doesn't make the centralized auto-prop
+                    # hook's capture-form check suppress the peel on a throws-call
+                    # arg — leaving a `Result` where the param wants `T`. (The
+                    # method-arg path never set a per-arg expected_type, so -1 is
+                    # the prior behaviour for non-throws args.) Mirrors the
+                    # free-call arg loop and Rust gg's per-arg expected_type clear.
+                    int prev_expected_ma = ctx.expected_type
+                    ctx.expected_type = -1
+                    ma_val = lower_expr(&ctx, ma, &gmod)
+                    ctx.expected_type = prev_expected_ma
+                ConsumeKind ma_kind = classify_call_arg(&gmod, full_name, _ma_idx + 1)
+                # Owning-mutator promotion: a collection mutator takes
+                # ownership of the value (and, for Dict, the key) at the
+                # `owning_arg_positions` indices carried by its typed decl
+                # (COLLECTION_BUILTIN_METHODS, keyed by the RESOLVED kind).
+                # None (non-collection receiver or non-mutator method) → no
+                # promotion, exactly as the old `is_owning_mutator_arg` false.
+                match collection_builtin_method(_recv_ck, mname):
+                    case Some(cdecl):
+                        if int_vec_contains(cdecl.owning_arg_positions, _ma_idx):
+                            ma_kind = CkCallArgOwning()
+                    case None:
+                        pass
+                call_args.push(op_consume(&ctx, &gmod, ma_val, ma_kind))
+                _ma_idx += 1
+            # Return-type resolution priority — single source of truth
+            # at each step (Layering rule 3):
+            #
+            #   1. fn_sigs (the lowerer's own registrations: Option B
+            #      pre-pass for mono'd generic-equip methods + the
+            #      non-generic-equip pre-pass at line ~6201). Fast,
+            #      authoritative for the cases it covers.
+            #   2. Typechecker side-table (`tc_types.expr_types`) —
+            #      covers method-generic call sites (`v.iter().
+            #      take_while[P](pred)`, `.map[U,F](f)`, full iterator
+            #      chains, etc.) where the typechecker already resolved
+            #      the mono'd return type. The architectural single
+            #      source of truth for "what type does this expression
+            #      have?" (Phase 1 + 2 of Gap #2). Returns a fully-
+            #      mangled GIR type id via `resolved_to_gir_type`.
+            #   3. Name-based heuristic (`infer_method_return_type`) —
+            #      last resort for built-in collection runtime methods
+            #      the typechecker doesn't model (raw runtime symbols
+            #      like `gorget_array_get`); returns I64 when truly
+            #      unknown.
+            int ret_tid = I64_TYPE
+            if gmod.fn_sigs.contains(sig_lookup_name):
+                # R10: fn_sigs is keyed by the Gorget-level mangled method name
+                # (Target__method, see lower.gg:~10190). For a call_redirect'd
+                # extern method, full_name was rewritten to the C symbol above,
+                # which is never a fn_sigs key — so the void extern-method return
+                # type (registered under the mangled name by loader.gg) is found here.
+                ret_tid = gmod.fn_sigs.get(sig_lookup_name).unwrap()
+            elif gmod.fn_sigs.contains(full_name):
+                ret_tid = gmod.fn_sigs.get(full_name).unwrap()
+            else:
+                int tc_ret = lookup_expr_gir_type(sexpr, &gmod)
+                if tc_ret >= 0:
+                    ret_tid = tc_ret
+                else:
+                    ret_tid = infer_method_return_type(mname, recv, &ctx, &gmod)
+            if ret_tid == UNIT_TYPE:
+                # Void-returning method — no destination
+                emit(&ctx, GICallExtern(-1, full_name, call_args))
+                if need_writeback:
+                    emit_field_write_from_local(&ctx, wb_base, wb_field, recv, &gmod)
+                int void_dst = add_local(&ctx, UNIT_TYPE, None)
+                emit(&ctx, GIAssign(void_dst, OpConstUnit()))
+                return void_dst
+            # Phase D step 2: borrowing collection getters (.get / .first /
+            # .last / .safe_get) return `Option[Ref[V]]` whose payload is a
+            # borrow into the collection element, not an owned copy. Tag the
+            # destination LoBorrowed/BoCollectionElement so validators
+            # downstream can distinguish "owned wrapper around a borrow" from
+            # "wrapper around an owned value." Detection is by RETURN-TYPE
+            # SHAPE (typed) — `option_ref_payload_of(&gmod, ret_tid) >= 0`
+            # iff `ret_tid` is the `Option__Ref__T` shape recorded on the
+            # `option_ref_payload` channel; mirrors Rust's
+            # `ret_option_ref_or_val_elem` discriminator at
+            # `src/ir/lowering/builtins.rs:172-185`. Consuming getters
+            # (`pop`/`remove`) return `Option[T]` (owned, ownership transfers
+            # OUT) and correctly fall through to the default `add_local`
+            # (LoOwned) path. Receiver-type gate still avoids false positives
+            # when the user shadows these names on a non-collection type.
+            int mdst = -1
+            bool recv_is_string = recv_type_name == "String" or recv_type_name == "GorgetString" or recv_type_name == "Str"
+            # Does this String method return a non-owning VIEW into the
+            # receiver's buffer? Read the typed `returns_view` column off the
+            # String builtin table (STRING_BUILTIN_METHODS) instead of the
+            # old `is_string_view_method` name match. None (not a String
+            # builtin) → false, same as the old list's fall-through.
+            bool mname_is_view = false
+            match string_builtin_method(mname):
+                case Some(sdecl):
+                    mname_is_view = sdecl.returns_view
+                case None:
+                    pass
+            if option_ref_payload_of(&gmod, ret_tid) >= 0:
+                bool recv_is_collection = false
+                match resource_meta_for(&gmod, recv_type_name):
+                    case Some(rmeta):
+                        match rmeta.collection_kind:
+                            case CkNotCollection():
+                                recv_is_collection = false
+                            else:
+                                recv_is_collection = true
+                    case None:
+                        recv_is_collection = false
+                if recv_is_collection:
+                    mdst = add_local_with(&ctx, ret_tid, None, LoBorrowed(), BoCollectionElement(-1))
+                else:
+                    mdst = add_local(&ctx, ret_tid, None)
+            elif recv_is_string and mname_is_view:
+                # View-returning String method: result aliases the receiver's
+                # buffer (cap==0). Tag LoView so op_consume materializes it
+                # (OpClone) at any owning consume position — otherwise the
+                # view is moved-by-value into owned storage and dangles.
+                mdst = add_local_with(&ctx, ret_tid, None, LoView(), BoNone())
+            else:
+                mdst = add_local(&ctx, ret_tid, None)
+            # FRESH-OWNED-TEMP drop registration (#19, sibling of #17 at the
+            # lower_call return-temp site lower.gg:~7405): an owning String
+            # method (`.upper()`/`.lower()`/`.replace()`/`.repeat()`/`.trim()`/
+            # `.strip()`/`.reverse()`/`.center()`/`.ljust()`/`.rjust()`/
+            # `.zfill()`/`.removeprefix()`/`.removesuffix()`) materializes a
+            # fresh OWNED GorgetString in the default `add_local` (LoOwned)
+            # branch above. When this CALL EXPRESSION flows directly into a
+            # non-consuming position (`print(s.upper())`, `f"{s.replace("a","b")}"`)
+            # it is BORROWED only (CkFormatArg/CkCallArgBorrow → is_consume_kind=
+            # false → OpBorrow), so the result is orphaned and leaks (O(1) per
+            # occurrence). Registering at creation makes the scope-exit
+            # GIDropIfAlive free it exactly once.
+            #
+            # SCOPE — NARROW (owning-String methods only), NOT the general "any
+            # owned method result". The general one-liner (register every
+            # `mdst`) RED'd `self_host_runtime` (stdlib_iter_drain): it woke a
+            # PRE-EXISTING LATENT ownership bug — `equip [T] Vector[T] with
+            # Drainable[T]: VectorDrain[T] drain(!self)` is a GENERIC-equip
+            # `!self`-consuming method, so `Vector__int64_t__drain` is NEVER put
+            # in `fn_move_params` (the generic-equip `!`-param gap documented at
+            # lower.gg:~12934). classify_call_arg therefore returns
+            # CkCallArgBorrow → op_consume does NOT move-zero the receiver, so
+            # the SOURCE Vector buffer is logically owned by BOTH the `drain()`
+            # result (which now drops it, post-registration) AND the source
+            # local / `!`-param `g` (whose own exit-drop also frees it) →
+            # double-free (ASan: __gorget_dtor_VectorDrain frees the array, then
+            # gorget_array_free on the same region from the `!`-param drop). The
+            # leak this registration was masking was the SAFE side of that latent
+            # bug. The CORRECT general fix is to close the generic-equip
+            # `fn_move_params` gap (separate, larger — logged in TODO); until
+            # then we register ONLY owning-String-method results, which all take
+            # `&self` (a borrow, never `!self`) so there is no receiver-move to
+            # mis-track. View-returning String methods are excluded by
+            # `not mname_is_view` (and would self-skip via register_local_for_drop's
+            # LoView gate anyway).
+            #
+            # SELF-GATING beyond the String gate: primitive/non-droppable returns
+            # are skipped by register_local_for_drop's is_droppable_type gate
+            # (lower.gg:1230); LoView results self-skip (lower.gg:1244).
+            # SAFE-BY-CONSTRUCTION when MOVED instead (`String s = obj.upper()`,
+            # `return s.trim()`, pushed/field-init'd): op_consume/wire-liveness
+            # emits OpMove → GIMoveZero zeros the moved-out slot, so the
+            # unconditional memcmp-guarded scope-exit GIDropIfAlive finds a zeroed
+            # slot and suppresses the drop (drop_elab further elides statically);
+            # the SReturn path separately move-zeros + excludes the returned local.
+            # Placed BEFORE the emit so the `need_writeback` path is covered too.
+            # Mirrors Rust's call_extern_tracked `needs_drop` registration.
+            # #19-GENERAL (prototype, separable from the generic-equip fix):
+            # register EVERY owned, droppable method-call result for drop, not
+            # just owning-String methods. `register_local_for_drop` self-gates:
+            # is_droppable_type skips primitives/non-resource returns, and the
+            # LoView/LoBorrowed tag self-skips view/element-borrow results. This
+            # was previously gated to `recv_is_string` because the general form
+            # woke the generic-equip `!self` double-free (drain) — now that the
+            # generic-equip `fn_move_params` pre-pass move-zeroes the drain
+            # SOURCE, registering the drain RESULT here drops the buffer exactly
+            # once. Mirrors Rust's `call_extern_tracked` `needs_drop`.
+            if not mname_is_view:
+                register_local_for_drop(&ctx, mdst, ret_tid, &gmod)
+            emit(&ctx, GICallExtern(mdst, full_name, call_args))
+            if need_writeback:
+                emit_field_write_from_local(&ctx, wb_base, wb_field, recv, &gmod)
+            return mdst
+        case EFieldAccess(base_box, field_name):
+            # Place base — keep a `&`/`!`-param (`GtMutPtr`) or bare-resource
+            # param (`GtPtr`) base as the POINTER (the field codegen wants
+            # `((T*)base)->field`). `lower_place_base` bypasses Edit-1's
+            # value-read deref for a bare identifier; nested bases fall back
+            # to `lower_expr`.
+            int base = lower_place_base(&ctx, *base_box, &gmod)
+            # Resolve the base's struct type to find the field
+            int base_tid = ctx.locals.get(base).unwrap().type_id
+            String base_type_name = type_id_to_name(base_tid, &gmod)
+            # Unwrap Ptr/MutPtr to get the inner type name
+            int inner_tid = base_tid
+            if base_tid >= 0 and base_tid < gmod.type_table.len():
+                GirType bt = gmod.type_table.get(base_tid).unwrap()
+                match bt:
+                    case GtPtr(inner):
+                        base_type_name = type_id_to_name(inner, &gmod)
+                        inner_tid = inner
+                    case GtMutPtr(inner):
+                        base_type_name = type_id_to_name(inner, &gmod)
+                        inner_tid = inner
+                    else:
+                        pass
+            # Box auto-deref: `box.field` is sugar for `(*box).field` — peel
+            # the Box wrapper so the field lookup hits the inner struct's
+            # fields, not Box's (which has no user fields). Without this,
+            # `expr.span` where `expr` is `Box[SpannedExpr]` (auto-boxed
+            # parameter, etc.) silently fell into the [bug] OpConstI64(0)
+            # placeholder. The inner-name extraction mirrors `case EDeref`'s
+            # prefix-slice.
+            # Phase A — typed-metadata classification (BkRegularBox) via
+            # resource_meta_for; the inner name is the post-`Box__` suffix
+            # (rmeta doesn't carry parsed inner names, so slice the prefix).
+            bool base_is_regular_box = false
+            match resource_meta_for(&gmod, base_type_name):
+                case Some(rmeta):
+                    match rmeta.box_kind:
+                        case BkRegularBox():
+                            base_is_regular_box = true
+                        else:
+                            pass
+                case None:
+                    pass
+            if base_is_regular_box:
+                String inner_name = base_type_name.slice(5, base_type_name.len())
+                int box_inner_tid = resolve_field_gir_type(inner_name, &gmod)
+                # Phase 3 (Class 8): the box-deref's inner local aliases
+                # into the box's heap allocation — when `base` itself was
+                # already a borrow (chained field access on a borrowed
+                # aggregate), the derefed inner inherits that borrow tag.
+                # For an LoOwned box, dropping the box still frees the
+                # inner heap, but the inner deref still aliases into it
+                # for the duration of base's scope — leaving derefed as
+                # LoOwned would risk a double-free when COMMIT 3 drops
+                # both base and derefed on the same heap. Inheritance is
+                # the safe default.
+                int derefed = add_local_inheriting(&ctx, box_inner_tid, None, base)
+                emit(&ctx, GIDeref(derefed, base, box_inner_tid))
+                base = derefed
+                base_tid = box_inner_tid
+                base_type_name = inner_name
+                inner_tid = box_inner_tid
+            # Special case: GorgetString.data — return the GorgetString
+            # itself (identity). GorgetString has no registered `data` field
+            # in type_infos (it's an opaque runtime struct), so the field
+            # lookup below would fall through to the [bug] I64(0) placeholder.
+            # Accessing `.data` is valid for printf (`%.*s` handles it). For a
+            # value receiver `base` is already a value GorgetString; for a
+            # `&String`/`!String` borrow it is a Ptr(GorgetString) — both are
+            # returned AS-IS (the borrowed-String formatter deref handles the
+            # Ptr at the format site). Mirrors Rust
+            # `src/ir/lowering/exprs/mod.rs:2108` (`return obj;`).
+            if base_type_name == "GorgetString" and field_name == "data":
+                return base
+            # Tuple-index reconciliation: the parser produces field-name `"_0"`
+            # for `t._0` but a BARE DIGIT `"0"/"1"/…` for `t.0` (parser.gg:
+            # 1802-1816). Tuple structs register their fields ONLY as `_N`
+            # (Rust parity — `register_tuple_type`), so a bare-digit access
+            # must normalize digit→`_N` to hit the field. Without this, `t.0`
+            # / `nested.1.0` / `p.0` miss the lookup and fall through to the
+            # `[bug] I64(0) placeholder` (4 of the tuple targets). All-digit
+            # (and non-empty) is the trigger; a normal `.field` is untouched.
+            String tuple_lookup_name = field_name
+            bool fld_all_digits = field_name.byte_len() > 0
+            int fld_di = 0
+            while fld_di < field_name.byte_len():
+                int fld_b = field_name.byte_at(fld_di)
+                if fld_b < 0x30 or fld_b > 0x39:
+                    fld_all_digits = false
+                    break
+                fld_di += 1
+            if fld_all_digits:
+                tuple_lookup_name = "_" + field_name
+            # Look up field info from type_infos. Resolve to
+            # (field_name, field_type_name, field_index) tuples without
+            # cloning the whole GirTypeInfo — the Vector clone path
+            # double-frees nested heap data on the self-host.
+            int found_fi = -1
+            String found_type_name = ""
+            if gmod.type_infos.contains(base_type_name):
+                GirTypeInfo info = gmod.type_infos.get(base_type_name).unwrap()
+                int fi = 0
+                while fi < info.fields.len():
+                    GirFieldInfo finfo = info.fields.get(fi).unwrap()
+                    if finfo.name == tuple_lookup_name:
+                        found_fi = fi
+                        found_type_name = finfo.type_name.clone()
+                        break
+                    fi += 1
+            if found_fi >= 0:
+                int field_type = resolve_field_gir_type(found_type_name, &gmod)
+                # A.2 (2026-05-22) — emit GIFieldLoad with Ptr-typed dst
+                # for resource fields; value-typed dst for non-resource
+                # fields. Mirrors Rust `Instruction::FieldLoad` lowering
+                # at `src/lir/lower/insts.rs:800-869`. The Ptr-typed-dst
+                # variant lets the LIR dispatch pick the POINTER-ALIAS
+                # path (no byte-copy) for collection-/string-/struct-
+                # holding fields — eliminating the silent
+                # `field.push(...)` writeback class of bugs that motivated
+                # the EMethodCall writeback hack at line ~4154.
+                #
+                # For non-resource fields (int, bool, simple structs)
+                # the dst stays value-typed and the LIR emits a byte-copy
+                # ILoad — observationally identical to the previous
+                # `__field_read_*` GICallExtern path.
+                #
+                # `set_field_borrow(&ctx, fdst, base, found_fi)` writes
+                # the BoField(base, field_idx) origin payload that C.1
+                # provisioned but no caller wired. E.1 reads it back
+                # in the return-path validator; Phase C validators read
+                # it to flag escaping borrows. Replaces the
+                # `BoField(-1, -1)` sentinel from Phase D step 2.
+                bool field_is_resource = is_resource_type_name(found_type_name, &gmod)
+                int dst_type_id = field_type
+                if field_is_resource:
+                    dst_type_id = register_ptr(&gmod, field_type)
+                int fdst = add_local_with(&ctx, dst_type_id, None, LoBorrowed(), BoNone())
+                set_field_borrow(&ctx, fdst, base, found_fi)
+                emit(&ctx, GIFieldLoad(fdst, base, found_fi))
+                return fdst
+            # HARD BUG: unknown field access fell through to I64/0
+            # placeholder, losing both the struct identity and the field
+            # type. Every downstream read of the "field value" sees 0 and
+            # is typed int64 — responsible for the cascade of PConstructor
+            # failures in stage-1 output. Report each miss with the base
+            # type name and field name so the root cause is visible.
+            diag_bug("EFieldAccess", "in fn '" + ctx.current_fn_name + "': unknown field '" + field_name + "' on base type '" + base_type_name + "' — returning I64(0) placeholder (WRONG)")
+            int fdst = add_local(&ctx, I64_TYPE, None)
+            emit(&ctx, GIAssign(fdst, OpConstI64(0)))
+            return fdst
+        case EIndex(base_box, idx_box):
+            # `base[idx]` value-READ → collection getter call. Mirrors
+            # `lower_index_assign` (the LHS-write twin, ~:7662): dispatch
+            # the getter on the base's collection_kind, NOT a name match.
+            # Vector/Deque → gorget_array_get, Dict → gorget_map_get.
+            # The base (a collection) + index (int/key) are independently
+            # typed, NOT the EIndex's destination — clear the enclosing
+            # `expected_type` so a Result-typed surrounding context (e.g.
+            # `return v[pick()]` from a `throws` fn) doesn't make the
+            # centralized auto-prop hook's capture-form check suppress the peel
+            # on a throws-call index (snag49c). Mirrors the binop-operand clear.
+            int prev_expected_eix = ctx.expected_type
+            ctx.expected_type = -1
+            int eix_base = lower_expr(&ctx, *base_box, &gmod)
+            int eix_idx = lower_expr(&ctx, *idx_box, &gmod)
+            ctx.expected_type = prev_expected_eix
+            eix_idx = maybe_auto_propagate(&ctx, eix_idx, &gmod)
+            # Base type name, unwrapping a Ptr/MutPtr param/static base.
+            int eix_base_tid = ctx.locals.get(eix_base).unwrap().type_id
+            String eix_base_name = type_id_to_name(eix_base_tid, &gmod)
+            if eix_base_tid >= 0 and eix_base_tid < gmod.type_table.len():
+                GirType eix_bt = gmod.type_table.get(eix_base_tid).unwrap()
+                match eix_bt:
+                    case GtPtr(eix_inner):
+                        eix_base_name = type_id_to_name(eix_inner, &gmod)
+                    case GtMutPtr(eix_inner2):
+                        eix_base_name = type_id_to_name(eix_inner2, &gmod)
+                    else:
+                        pass
+            String eix_getter = ""
+            match resource_meta_for(&gmod, eix_base_name):
+                case Some(eix_rmeta):
+                    match eix_rmeta.collection_kind:
+                        case CkVector():
+                            eix_getter = "gorget_array_get"
+                        case CkDeque():
+                            eix_getter = "gorget_array_get"
+                        case CkDict():
+                            eix_getter = "gorget_map_get"
+                        else:
+                            pass
+                case None:
+                    pass
+            if eix_getter == "":
+                # Unsupported base (Set has no index-read, unknown type):
+                # keep the legacy I64/0 placeholder rather than crash.
+                int idst = add_local(&ctx, I64_TYPE, None)
+                emit(&ctx, GIAssign(idst, OpConstI64(0)))
+                return idst
+            # Element type NAME — Vector/Deque via collection_element_type,
+            # Dict via the value-type suffix (mirrors infer_method_return_type
+            # ~:4063-4072). Empty → fall back to the I64/0 placeholder.
+            String eix_elem_name = collection_element_type(eix_base_name)
+            if eix_elem_name == "":
+                if eix_base_name.starts_with("Dict__GorgetString__"):
+                    eix_elem_name = eix_base_name.slice(20, eix_base_name.len())
+                elif eix_base_name.starts_with("Dict__int64_t__"):
+                    eix_elem_name = eix_base_name.slice(15, eix_base_name.len())
+                elif eix_base_name.starts_with("HashMap__GorgetString__"):
+                    eix_elem_name = eix_base_name.slice(23, eix_base_name.len())
+                elif eix_base_name.starts_with("HashMap__int64_t__"):
+                    eix_elem_name = eix_base_name.slice(18, eix_base_name.len())
+            if eix_elem_name == "":
+                int idst = add_local(&ctx, I64_TYPE, None)
+                emit(&ctx, GIAssign(idst, OpConstI64(0)))
+                return idst
+            String eix_elem_norm = eix_elem_name
+            if eix_elem_name == "Str":
+                eix_elem_norm = "GorgetString"
+            int eix_elem_tid = resolve_field_gir_type(eix_elem_norm, &gmod)
+            # MANDATORY 3-way dst split (a 2-way split regresses
+            # leak_game_loop):
+            #   (a) scalar elem (< PRIM_COUNT): BARE element type — the
+            #       lir_lower scalar-deref ILoad derefs the void*.
+            #   (b) runtime-RESOURCE elem (String/Array/Map/…): GtPtr(elem)
+            #       LoBorrowed — op_consume clones at owning boundaries.
+            #   (c) NON-resource non-scalar elem (a plain struct): BARE
+            #       element type BY VALUE — lir_lower emits an aggregate
+            #       `*(StructT*)(void*)` copy-out for the raw
+            #       gorget_array_get/gorget_map_get getter.
+            #   (d) truly-UNREGISTERED elem (< 0): FALL BACK to the I64/0
+            #       stub.
+            int idst = -1
+            if eix_elem_tid < PRIM_COUNT:
+                idst = add_local(&ctx, eix_elem_tid, None)
+            elif is_resource_type_name(eix_elem_norm, &gmod):
+                int eix_ptr_tid = register_ptr(&gmod, eix_elem_tid)
+                idst = add_local_with(&ctx, eix_ptr_tid, None, LoBorrowed(), BoNone())
+            elif eix_elem_tid >= 0:
+                idst = add_local(&ctx, eix_elem_tid, None)
+            else:
+                idst = add_local(&ctx, I64_TYPE, None)
+                emit(&ctx, GIAssign(idst, OpConstI64(0)))
+                return idst
+            # index/key MUST be OpBorrow (NOT OpCopy — OpCopy on a String
+            # dict key trips validate_resource_moves → lowerer crashes).
+            Vector[Operand] eix_args = [OpBorrow(eix_base), OpBorrow(eix_idx)]
+            emit(&ctx, GICallExtern(idst, eix_getter, eix_args))
+            return idst
+        case EIf(cond_box, then_body, else_branches):
+            # If-as-EXPRESSION (`int x = if c: a else: b`). Mirrors Rust
+            # `build_if_chain_expr` via the shared helper: lower each
+            # branch's block as a tail value and assign it into a single
+            # `result` local at the merge. The same helper backs the
+            # SIf-as-tail-value case in `lower_stmt_as_tail_value`, so a
+            # nested `if` ending a branch body becomes a value too.
+            return lower_if_chain_expr(&ctx, *cond_box, then_body, else_branches, &gmod)
+        case ENoneLiteral():
+            # Bare `None` literal — when expected_type is a typed
+            # `Option__T`, emit a properly-TYPED `None` ctor call
+            # that routes through `try_lower_prelude_variant`'s
+            # canonical `IEnumInit(slot, struct_id, tag=1, [])` at
+            # LIR. Mirrors Rust gg's
+            # `materialise_none_for_expected_type` at
+            # `src/ir/lowering/exprs/mod.rs:2504-2529`. Without
+            # expected_type set, fall back to the legacy
+            # UNIT/OpConstUnit shape — `Constant::Null` in Rust —
+            # which the SVarDecl/SAssign Assign handler may rewrite
+            # downstream if it sees a typed dst slot.
+            if ctx.expected_type >= 0 and ctx.expected_type < gmod.type_table.len():
+                if enum_category_of(&gmod, ctx.expected_type).category == ENUM_CAT_OPTION and option_ref_payload_of(&gmod, ctx.expected_type) < 0:
+                    int ndst_nl = add_local(&ctx, ctx.expected_type, None)
+                    Vector[Operand] none_args_nl = []
+                    emit(&ctx, GICallExtern(ndst_nl, "None", none_args_nl))
+                    return ndst_nl
+            int dst = add_local(&ctx, UNIT_TYPE, None)
+            emit(&ctx, GIAssign(dst, OpConstUnit()))
+            return dst
+        case ECharLiteral(ch):
+            int gs_tid = lookup_or_register_named(&gmod, "GorgetString")
+            int dst = add_local(&ctx, gs_tid, None)
+            emit(&ctx, GIAssign(dst, OpConstStr(ch)))
+            return dst
+        case EArrayLiteral(elems):
+            # Consume element-type hint set by SVarDecl (`Vector[T] x = []`).
+            # An empty hint means the declared type was not a concrete
+            # Vector[T] — fall back to pointer size, which is correct for
+            # scalar-element Vectors used as temporaries.
+            String vec_tyname = ctx.pending_vec_elem_tyname
+            ctx.pending_vec_elem_tyname = ""
+            # ADD-only fallback: when no pending hint was set, try
+            # deriving elem type from `ctx.expected_type` (Rust counterpart
+            # `src/ir/lowering/exprs/collections.rs:27,46-49,62` — the
+            # empty-array branch reads expected_type to size the array
+            # buffer). This closes empty-array literals at writer sites
+            # that already set expected_type but didn't set the
+            # `pending_vec_elem_tyname` side-channel (e.g. EStructLiteral's
+            # field-init port above; the call-arg loop's per-arg expected
+            # type). NOT a replacement for the pending-name protocol —
+            # that wins when set; this is the fallback for when it isn't.
+            if vec_tyname == "" and ctx.expected_type >= 0:
+                String eali_outer_name = type_id_to_name(ctx.expected_type, &gmod)
+                String eali_elem_name = collection_element_type(eali_outer_name)
+                if eali_elem_name != "":
+                    vec_tyname = eali_elem_name
+            # Lower each element — we'll push them in order after the
+            # array is constructed. Need to keep the value locals around
+            # so we can reference them in the subsequent push calls.
+            # Per-element expected_type propagation (Rust counterpart
+            # `src/ir/lowering/exprs/collections.rs:49-63`): when the
+            # outer is a collection (Vector/Deque/Set/HashSet — same
+            # wider gate as STEP 2.4 elem-size fallback above; type-
+            # checker rejects non-array shapes upstream), propagate the
+            # element type INTO each element's lower_expr via
+            # ctx.expected_type. This resolves e.g.
+            # `Vector[Option[int]] v = [None(), Some(1)]` per-element
+            # None() to Option__int instead of bare Constant::Null.
+            # Restored unconditionally after the loop. Same I64/UNIT
+            # guard as SVarDecl / SAssign / SReturn / call-arg sites.
+            int prev_eali_et = ctx.expected_type
+            String eali_outer_name2 = ""
+            String eali_elem_name2 = ""
+            if ctx.expected_type >= 0:
+                eali_outer_name2 = type_id_to_name(ctx.expected_type, &gmod)
+                eali_elem_name2 = collection_element_type(eali_outer_name2)
+            if elems.len() > 0 and eali_elem_name2 != "":
+                int eali_et_new = lookup_or_register_named(&gmod, eali_elem_name2)
+                if eali_et_new != I64_TYPE and eali_et_new != UNIT_TYPE:
+                    ctx.expected_type = eali_et_new
+            Vector[int] elem_locals = []
+            for elem in elems:
+                int elem_val = lower_expr(&ctx, elem, &gmod)
+                elem_locals.push(elem_val)
+            ctx.expected_type = prev_eali_et
+            # Call gorget_array_new(elem_size) so the resulting array has a
+            # valid `alloc` pointer from __gorget_current_alloc. Without
+            # this, subsequent `.push()` on a zero-init'd GorgetArray
+            # segfaults dereferencing arr->alloc->realloc(...).
+            # With a type hint we emit a magic call `__gorget_array_new_sized_<T>()`
+            # which the C codegen expands to `gorget_array_new(sizeof(T))` —
+            # that's the only way for the size to track the real aggregate
+            # footprint (e.g. 128 bytes for LirStructDef). Without the hint
+            # we fall back to 8, which still works for pointer-/int-sized
+            # element types (the common case for local temporaries).
+            int adst = add_local(&ctx, lookup_or_register_named(&gmod, "GorgetArray"), None)
+            if vec_tyname != "":
+                String magic_name = "__gorget_array_new_sized_" + vec_tyname
+                Vector[Operand] an_args_typed = []
+                emit(&ctx, GICallExtern(adst, magic_name, an_args_typed))
+            else:
+                Vector[Operand] an_args = [OpConstI64(8)]
+                emit(&ctx, GICallExtern(adst, "gorget_array_new", an_args))
+            # Push each element into the just-created Vector. Without
+            # this, `[!init_insts]` and similar "array literal with
+            # explicit elements" produced an EMPTY array, and any
+            # subsequent `.get(0)` returned NULL.
+            # `gorget_array_push` mutates the array in place THROUGH a
+            # pointer — the receiver is a borrow, NOT a consumed value. It
+            # must use OpBorrow(adst): `adst` is live past every push (the
+            # next iteration pushes again, and `return adst` hands the
+            # filled array out). Passing OpMove(adst) tripped drop-emission's
+            # "owned but live-past → clone before call" rule, so each push
+            # mutated a throwaway CLONE while the original `adst` stayed
+            # empty — `[!init_insts]` then returned a 0-length array and the
+            # first `emit()` paniced (index 0, length 0). Follows the
+            # gorget_array_push pass-self-by-pointer (OpBorrow) convention.
+            # The element keeps OpMove — it IS consumed into the array.
+            for el in elem_locals:
+                Vector[Operand] push_args = [OpBorrow(adst), OpMove(el)]
+                emit(&ctx, GICallExtern(-1, "gorget_array_push", push_args))
+            return adst
+        case ETupleLiteral(elems):
+            # A tuple literal is a positional struct value. Mirror Rust
+            # `Expr::TupleLiteral` (`src/ir/lowering/exprs/mod.rs:469`):
+            #   1. lower each element (per-element `expected_type` peel),
+            #   2. register the `Tuple__…` struct type from the element types,
+            #   3. emit a struct-ctor `GICall` that `try_lower_user_struct_ctor`
+            #      (`lir_lower.gg:2476`) lowers to `IStructInit`.
+            #
+            # Per-element `expected_type` (Rust exprs/mod.rs:484-505): when the
+            # enclosing destination declares a tuple (possibly wrapped in the
+            # `throws`/Result return slot, which we peel), set each element's
+            # `expected_type` to the corresponding declared field type before
+            # lowering it — else CLEAR it. This is load-bearing for the
+            # `Result→T` auto-prop of a throwing-call element
+            # (`throws_autoprop_tuple_element`): leaving the function's
+            # `Result[Tuple.., E]` slot in place suppresses
+            # `maybe_auto_propagate`'s peel (it skips when the destination
+            # expects a `Result`), so the raw `Result` would be memcpy'd into
+            # the element's int slot (reads back as a zero-init default).
+            int tup_saved_et = ctx.expected_type
+            # Peel a Result wrapper, then keep only a Tuple destination.
+            int tup_dest = -1
+            if tup_saved_et >= 0 and tup_saved_et < gmod.type_table.len():
+                int tup_dest_try = tup_saved_et
+                EnumCategory tup_ec = enum_category_of(&gmod, tup_saved_et)
+                if tup_ec.category == ENUM_CAT_RESULT:
+                    tup_dest_try = tup_ec.ok_type
+                if tup_dest_try >= 0 and type_id_to_name(tup_dest_try, &gmod).starts_with("Tuple__"):
+                    tup_dest = tup_dest_try
+            Vector[int] tup_elem_locals = []
+            int tup_ei = 0
+            for te in elems:
+                # Per-element expected_type: the destination tuple's i-th
+                # field type (peeled above), else clear so a nested literal
+                # / bare ctor doesn't inherit the whole-tuple slot.
+                int tup_elem_et = -1
+                if tup_dest >= 0:
+                    String tup_dest_name = type_id_to_name(tup_dest, &gmod)
+                    if gmod.type_infos.contains(tup_dest_name):
+                        GirTypeInfo tup_dti = gmod.type_infos.get(tup_dest_name).unwrap()
+                        if tup_ei < tup_dti.fields.len():
+                            tup_elem_et = resolve_field_gir_type(tup_dti.fields.get(tup_ei).unwrap().type_name, &gmod)
+                ctx.expected_type = tup_elem_et
+                int tup_ev = lower_expr(&ctx, te, &gmod)
+                ctx.expected_type = tup_saved_et
+                # Auto-prop a throwing-call element to its payload (the peel
+                # above cleared the Result-suppress for this element).
+                tup_ev = maybe_auto_propagate(&ctx, tup_ev, &gmod)
+                tup_elem_locals.push(tup_ev)
+                tup_ei += 1
+            ctx.expected_type = tup_saved_et
+            # Re-infer element types AFTER lowering (a nested tuple element is
+            # typed as its inner `Tuple__…`, an auto-prop'd element as its
+            # peeled payload — facet 4: nested-element typing flows through
+            # here, not a hardcoded i64).
+            Vector[int] tup_elem_types = []
+            for tel in tup_elem_locals:
+                tup_elem_types.push(ctx.locals.get(tel).unwrap().type_id)
+            int tup_tid = register_tuple_type(tup_elem_types, &gmod)
+            # Build the struct-ctor args. Route EACH element through the
+            # OWNING consume position `CkFieldWrite` (clone-or-move): the tuple
+            # OWNS its element, so a borrow/view/live-owned resource element
+            # CLONES (facet 5 — CoW consume-position rule; raw OpCopy would
+            # shallow-alias a String/Vector element and trip
+            # validate_resource_moves / double-free), a dead-owned resource
+            # MOVES, and a primitive byte-copies. Mirrors the closure
+            # env-ctor at `:6778` and the struct-field-init path.
+            Vector[Operand] tup_ctor_args = []
+            for tel2 in tup_elem_locals:
+                tup_ctor_args.push(op_consume(&ctx, &gmod, tel2, CkFieldWrite()))
+            String tup_ctor_name = type_id_to_name(tup_tid, &gmod)
+            int tdst = add_local(&ctx, tup_tid, None)
+            emit(&ctx, GICall(tdst, tup_ctor_name, tup_ctor_args))
+            # FRESH-OWNED-TEMP drop registration: a tuple holding a resource
+            # element is itself droppable (its drop recurses into the element).
+            # Register it so a scope-exit drop frees the owned element exactly
+            # once (the OpMove/MoveZero on a later consume suppresses it).
+            register_local_for_drop(&ctx, tdst, tup_tid, &gmod)
+            return tdst
+        case EStructLiteral(sname, fnames, fvals):
+            # Expected-type propagation per field (Rust counterpart
+            # `src/ir/lowering/exprs/mod.rs:1867-1890`). For each positional
+            # field-init expr, set `ctx.expected_type` to that field's
+            # declared type via `gmod.type_infos` BEFORE lowering — so reader
+            # sites (bare prelude-variant ctors, bare `None`, empty array
+            # literals consuming elem-size from expected_type, EIdentifier)
+            # resolve to the field's declared shape instead of an
+            # 8-byte default. Mirrors `apply_container_hint_for_ctor_arg`'s
+            # GirTypeInfo lookup at `lower.gg:~5432-5441`. Restored
+            # unconditionally after each lower_expr. Same I64/UNIT guard as
+            # SVarDecl / SAssign / SReturn / call-arg sites.
+            # CoW for-element BORROW scan (no SpannedExpr__clone): sv is only
+            # read by lower_expr's immutable-borrow param; enumerate() preserves
+            # the positional index sli_i used for the field-type pairing.
+            for (sli_i, sv) in fvals.enumerate():
+                int prev_expected_sli = ctx.expected_type
+                if gmod.type_infos.contains(sname):
+                    GirTypeInfo sli_ti = gmod.type_infos.get(sname).unwrap()
+                    if not sli_ti.is_enum and sli_i < sli_ti.fields.len():
+                        String sli_fty_name = sli_ti.fields.get(sli_i).unwrap().type_name.clone()
+                        if sli_fty_name != "":
+                            int sli_fty = lookup_or_register_named(&gmod, sli_fty_name)
+                            if sli_fty != I64_TYPE and sli_fty != UNIT_TYPE:
+                                ctx.expected_type = sli_fty
+                lower_expr(&ctx, sv, &gmod)
+                ctx.expected_type = prev_expected_sli
+            int sdst = add_local(&ctx, lookup_or_register_named(&gmod, sname), None)
+            emit(&ctx, GIAssign(sdst, OpConstI64(0)))
+            return sdst
+        case EClosure(cparams, cbody):
+            # closure Phase 2 Step A/B: the make-site is the SOLE closure-id
+            # source + recorder. Take the cid from gmod_next_closure_id, build
+            # the GorgetClosure value, AND push a LiftedClosure record. The
+            # post-pass (sole pusher of __Closure_N__call) drains
+            # lifted_closures after the lower_function loop.
+            int cid = gmod_next_closure_id(&gmod)
+            String closure_name = "__Closure_" + int_to_str(cid)
+            # The closure value at the GIR level is a GorgetClosure struct
+            # (not __Closure_N which is the captured-vars env struct).
+            int closure_tid = lookup_or_register_named(&gmod, "GorgetClosure")
+            ClosureSig cl_sig = compute_closure_sig(cid, cparams, cbody, &gmod)
+            # ── Step B (§4a/§4b): collect + classify ByValue captures. ──
+            # The collector mirrors the Phase-1 detector's walk EXACTLY (same
+            # capture-shaped criterion, scoping, nested-skip); `unliftable` is
+            # the safety net (a capture-shaped var that is NOT a genuine outer
+            # local → STUB, as Phase 1 would). This is now the SOLE lowering-
+            # decision input for the EClosure make-site; the Phase-1 inverted
+            # `closure_body_captures` is no longer consulted HERE (still used
+            # at the inline-spawn make-site, so it stays defined).
+            CaptureCollector cl_cc = collect_closure_captures(&ctx, cparams, cbody, &gmod)
+            # Bind the collector result into owned locals so the `!cl_caps`
+            # move at the LiftedClosure push below doesn't invalidate `cl_cc`
+            # mid-use (a field move is a whole-value move at the BC layer).
+            bool cl_unliftable = cl_cc.unliftable
+            Vector[ClosureCapture] cl_caps = cl_cc.caps.clone()
+            # 2a guard (§4b): lift ONLY IF — (a) no UNLIFTABLE capture-shaped
+            # var; AND (b) every capture's type_id ∈ {BOOL,I64,F64} (the
+            # type_id_to_name-faithful primitive subset) OR a byte-copyable
+            # COPY struct OR a RESOURCE (Phase 2b: String/Vector/resource-
+            # struct — env owns an independent snapshot via op_consume's
+            # clone-or-move, body reads through a Ptr-alias field-load);
+            # AND (c) no captured local is mutated in the body; AND (d) no
+            # nested closure.
+            bool cl_caps_ok = not cl_unliftable
+            int cl_ci = 0
+            while cl_ci < cl_caps.len():
+                int cl_ctid = cl_caps.get(cl_ci).unwrap().type_id
+                if cl_ctid != BOOL_TYPE and cl_ctid != I64_TYPE and cl_ctid != F64_TYPE:
+                    # 2b-1: accept a byte-copyable COPY struct — a
+                    # registered non-resource non-enum struct (e.g.
+                    # `Config{int,int}`). The env-field build + IStructInit /
+                    # GIFieldLoad byte-copy paths already handle it (no
+                    # clone/drop machinery).
+                    # 2b-2 (Phase 2b): ALSO accept a RESOURCE capture
+                    # (String/Vector/resource-struct — is_resource_type_name).
+                    # The make-site env-ctor arg routes through
+                    # op_consume(CkFieldWrite) so a LIVE owned source CLONES
+                    # and a DEAD owned source MOVES — the env owns an
+                    # INDEPENDENT snapshot. The body field-loads it as a
+                    # Ptr-alias (see lower_closure_body §4e) so it borrows
+                    # the env's storage and auto-clones at owning boundaries
+                    # (no body-side double-free). A NON-resource enum (a plain
+                    # user enum, or a primitive-payload optionlike like
+                    # `Option[int]`) still STUBs (no enum clone-through wired at
+                    # the ctor arg yet); a RESOURCE-payload optionlike
+                    # (`Option[String]`, droppable per optionlike_resource_types)
+                    # IS admitted here via `cl_is_resource` and handled by the
+                    # resource clone path above.
+                    String cl_tname = type_id_to_name(cl_ctid, &gmod)
+                    bool cl_is_resource = is_resource_type_name(cl_tname, &gmod)
+                    bool cl_is_copy_struct = gmod.type_infos.contains(cl_tname) and not cl_is_resource and not gmod.type_infos.get(cl_tname).unwrap().is_enum
+                    if not (cl_is_resource or cl_is_copy_struct):
+                        cl_caps_ok = false
+                cl_ci += 1
+            # (c) mutation check — build the capture-name set, then scan.
+            if cl_caps_ok and cl_caps.len() > 0:
+                Dict[String, bool] cl_cap_names = {}
+                int cl_cni = 0
+                while cl_cni < cl_caps.len():
+                    cl_cap_names.put(cl_caps.get(cl_cni).unwrap().name.clone(), true)
+                    cl_cni += 1
+                if stmts_mutate_any(cbody, cl_cap_names):
+                    cl_caps_ok = false
+            # (d) nested-closure guard (retain the Phase-1 guard).
+            bool cl_nested = stmts_have_nested_closure(cbody)
+            bool cl_lowerable = cl_caps_ok and not cl_nested
+            bool cl_has_caps = cl_caps.len() > 0
+            int cdst = add_local(&ctx, closure_tid, None)
+            if cl_lowerable and cl_has_caps:
+                # ── §4c: register __Closure_N's FIELDS at the MAKE-SITE. ──
+                # type_id_to_name is FAITHFUL for the §4b-restricted set
+                # (bool/int64_t/double); the guard above guarantees no capture
+                # reaches a width it would mis-name as int64_t. LIR Pass-2
+                # then fills LirStructDef.fields → codegen stops emitting the
+                # `char __pad` placeholder. (NOT in compute_closure_sig, which
+                # also runs for stub closures.)
+                Vector[GirFieldInfo] cl_env_fields = []
+                int cl_fi = 0
+                while cl_fi < cl_caps.len():
+                    ClosureCapture cl_cap = cl_caps.get(cl_fi).unwrap()
+                    # §4c-2 (Phase 2b): the env field OWNS the pointee T, never
+                    # a Ptr. If a ByValue capture's type_id is a Ptr(T)/MutPtr(T)
+                    # CoW-alias (mirrors Rust closures.rs:128-130 "Resolve
+                    # Ptr(T) → T for CoW aliases"), name the field by the OWNED
+                    # pointee T — op_consume's clone-through (decide_ptr_consume)
+                    # materialises the owned value into it. Value-typed
+                    # resource/COPY captures keep their own name. (Self-host's
+                    # SVarDecl Branch-C-pre already keeps most CoW aliases
+                    # value-typed, so this is mostly defensive parity; it makes
+                    # the field-owns-pointee invariant explicit at the source.)
+                    int cl_field_tid = cl_cap.type_id
+                    if cl_field_tid >= 0 and cl_field_tid < gmod.type_table.len():
+                        match gmod.type_table.get(cl_field_tid).unwrap():
+                            case GtPtr(cl_pointee):
+                                cl_field_tid = cl_pointee
+                            case GtMutPtr(cl_pointee2):
+                                cl_field_tid = cl_pointee2
+                            else:
+                                pass
+                    cl_env_fields.push(GirFieldInfo(cl_cap.name.clone(), type_id_to_name(cl_field_tid, &gmod)))
+                    cl_fi += 1
+                # ② closure ENV-FIELD leak fix — compute "does the heap env own
+                # >=1 RESOURCE field" BEFORE the `!cl_env_fields` move below.
+                # `cl_env_fields[i].type_name` is the OWNED pointee name
+                # (Ptr->pointee already resolved at §4c-2), so a resource check
+                # on it is the exact "this field needs freeing on drop" signal.
+                bool cl_env_owns_resource = false
+                int cl_ri = 0
+                while cl_ri < cl_env_fields.len():
+                    if is_resource_type_name(cl_env_fields.get(cl_ri).unwrap().type_name, &gmod):
+                        cl_env_owns_resource = true
+                    cl_ri += 1
+                Vector[GirEnumVariantInfo] cl_no_variants = []
+                gmod.type_infos.put(closure_name.clone(), GirTypeInfo(closure_name.clone(), !cl_env_fields, !cl_no_variants, false))
+                # ── §4d: build a struct-ctor of __Closure_N (capture sources
+                # as field args) → the user-struct-ctor intercept turns it
+                # into an IStructInit (a STACK env). Use GICall (NOT
+                # GICallExtern) so try_lower_user_struct_ctor fires. Then
+                # assign that __Closure_N value into the GorgetClosure slot —
+                # the step-5 LIR closure-pack promotion packs it onto the heap.
+                int cl_env_tmp = add_local(&ctx, lookup_or_register_named(&gmod, closure_name), None)
+                Vector[Operand] cl_ctor_args = []
+                int cl_ai = 0
+                while cl_ai < cl_caps.len():
+                    # §4d-2 (Phase 2b): route the capture source through
+                    # op_consume at an OWNING (CkFieldWrite) position — the
+                    # env field OWNS its data. A LIVE owned resource → OpClone
+                    # (the wire pass keeps it for live sources; e.g.
+                    # `String s` printed after the make-site MUST clone, not
+                    # move); a DEAD owned resource → OpMove (refined by the
+                    # liveness wire pass); a Ptr/borrow-alias → OpClone through
+                    # the pointer (decide_ptr_consume). Primitives / COPY
+                    # structs fall to OpCopy inside op_consume, identical to
+                    # the prior raw OpCopy. So the env always holds an
+                    # INDEPENDENT snapshot, never a shared alias.
+                    cl_ctor_args.push(op_consume(&ctx, &gmod, cl_caps.get(cl_ai).unwrap().local_id, CkFieldWrite()))
+                    cl_ai += 1
+                emit(&ctx, GICall(cl_env_tmp, closure_name.clone(), cl_ctor_args))
+                emit(&ctx, GIAssign(cdst, OpCopy(cl_env_tmp)))
+                # ② closure ENV-FIELD leak fix — record the GorgetClosure value's
+                # `cdst` local -> `__Closure_N` ONLY when the heap env owns >=1
+                # RESOURCE field (a droppable SNAPSHOT — flag computed above,
+                # before `cl_env_fields` was moved). A pure-primitive / COPY-
+                # struct env has no `__Closure_N__drop` generated, so recording
+                # it would be a harmless no-op — but we gate to keep the
+                # channel's invariant tight (an entry => a real per-field dtor
+                # exists). The SVarDecl MoveDirect arm copies this onto the fresh
+                # dropped `var_local`; the read site at the GorgetClosure
+                # GIDropIfAlive routes through `__Closure_N__drop`.
+                if cl_env_owns_resource:
+                    gmod.closure_env_type.put(ctx.current_fn_name + "\0" + int_to_str(cdst), closure_name.clone())
+            else:
+                # lowerable+no-captures OR stubbed → keep the Step-A
+                # __make_closure_N NULL-env path. (Stubbed stays WRONG as
+                # today; 2b/2c fix.)
+                String make_fn = "__make_closure_" + int_to_str(cid)
+                Vector[Operand] make_args = []
+                gmod.fn_sigs.put(make_fn, closure_tid)
+                emit(&ctx, GICallExtern(cdst, make_fn, make_args))
+            # Record the closure for the post-pass, carrying the captures so
+            # the post-pass field-loads them before lowering the body.
+            gmod.lifted_closures.push(LiftedClosure(cid, closure_name + "__call", cl_sig.self_ptr, cl_sig.abi_param_types, cl_sig.body_param_types, cl_sig.body_param_names, cl_sig.return_type, cbody, false, cl_lowerable, !cl_caps))
+            # CLOSURE LEAK Class B — register the freshly-packed GorgetClosure
+            # value (`cdst`, LoOwned) for drop at the MAKE-SITE. A capturing
+            # closure owns a HEAP env-box (`__gorget_closure_env_alloc`); when
+            # the make-site value flows DIRECTLY into a non-consuming position —
+            # an INLINE callable arg (`apply_mut((int n): n+base, 5)`, borrowed
+            # → never registered) — it is orphaned and the env-box leaks
+            # (closure_mutable_capture: 16B). Registering at creation makes the
+            # scope-exit GIDropIfAlive(GorgetClosure) free it exactly once via
+            # `gorget_closure_free` (+ the per-field `__Closure_N__drop` when a
+            # `closure_env_type` entry exists). SAFE-BY-CONSTRUCTION for the
+            # directly-bound case (`auto f = (int y): y+k`): the SVarDecl
+            # MoveDirect arm mints a fresh registered `var_local` and op_consume
+            # emits OpMove → GIMoveZero zeros `cdst`, so its scope-exit memcmp-
+            # guarded drop finds a zeroed slot and is suppressed (drop_elab
+            # further elides it) — the var_local drops the env exactly once, no
+            # double-free. A no-capture / stubbed closure has a NULL env, and
+            # `gorget_closure_free` no-ops on NULL (`if (c->env)`), so this is
+            # harmless there too. Mirrors the FRESH-OWNED-TEMP registration the
+            # String/resource call-results already use (lower.gg:7464).
+            register_local_for_drop(&ctx, cdst, closure_tid, &gmod)
+            return cdst
+        case EAs(inner_box, _):
+            return lower_expr(&ctx, *inner_box, &gmod)
+        case EMove(inner_box):
+            return lower_expr(&ctx, *inner_box, &gmod)
+        case EMutableBorrow(inner_box):
+            return lower_expr(&ctx, *inner_box, &gmod)
+        case EDeref(inner_box):
+            # `*box` — actually load the inner value. The inner AST is
+            # lowered to a local of type `Box[T]` (void* at C level). We
+            # need to emit a load so downstream code that passes the
+            # result to a function expecting `T` works.
+            int dsrc = lower_expr(&ctx, *inner_box, &gmod)
+            int dsrc_tid = ctx.locals.get(dsrc).unwrap().type_id
+            String dsrc_tname = type_id_to_name(dsrc_tid, &gmod)
+            # Phase A typed read: BkRegularBox identifies parameterised
+            # Box[T]; the bare trait Box's no-suffix name doesn't reach
+            # an EDeref site (a trait box deref goes through vtable
+            # dispatch, not raw pointer load).
+            bool dsrc_is_box = false
+            match resource_meta_for(&gmod, dsrc_tname):
+                case Some(rmeta):
+                    match rmeta.box_kind:
+                        case BkRegularBox():
+                            dsrc_is_box = true
+                        else:
+                            pass
+                case None:
+                    pass
+            if dsrc_is_box:
+                # The inner name is the post-`Box__` suffix of the mangled
+                # name (e.g. "Box__SpannedExpr" -> "SpannedExpr").
+                String d_inner_name = dsrc_tname.slice(5, dsrc_tname.len())
+                int d_inner_tid = resolve_field_gir_type(d_inner_name, &gmod)
+                # Phase 3 (Class 8): see EFieldAccess box-deref site
+                # at line ~4246 for the architectural rationale —
+                # the deref-inner aliases the box's heap, inherit
+                # source's borrow tag rather than freshly LoOwn.
+                int ddst = add_local_inheriting(&ctx, d_inner_tid, None, dsrc)
+                emit(&ctx, GIDeref(ddst, dsrc, d_inner_tid))
+                return ddst
+            return dsrc
+        case ETry(inner_box):
+            return lower_expr(&ctx, *inner_box, &gmod)
+        case EDotShorthand(variant, sargs):
+            for da in sargs:
+                lower_expr(&ctx, da, &gmod)
+            int ddst = add_local(&ctx, I64_TYPE, None)
+            return ddst
+        case EBlock(block_stmts):
+            # Block in value position — lower via `lower_block_expr` and return
+            # its tail value (was dropping it into a fresh UNIT local). Mirrors
+            # Rust `lower_expr` Block dispatch (`exprs/mod.rs` → lower_block_expr
+            # `:3203`), sibling of the EMatch/EIf value-position cases.
+            return lower_block_expr(&ctx, block_stmts, &gmod)
+        case EDo(do_stmts):
+            # `do:` block in value position — same as EBlock: lower the block
+            # and return its tail value (was falling to the UNIT `else`). Also
+            # covers multi-line `catch` recovery bodies (parser.gg:1700-1713).
+            return lower_block_expr(&ctx, do_stmts, &gmod)
+        case ESelfExpr():
+            if nl_contains(&ctx, "self"):
+                return nl_get(&ctx, "self")
+            int sdst = add_local(&ctx, UNIT_TYPE, None)
+            return sdst
+        case EDefaultOp(lhs_box, rhs_box):
+            lower_expr(&ctx, *lhs_box, &gmod)
+            return lower_expr(&ctx, *rhs_box, &gmod)
+        case EIs(inner_box, negated, pattern):
+            # `x is Pattern` — test the scrutinee against the pattern and
+            # bind any sub-pattern names into the function-scope named
+            # locals. Mirrors Rust gg's `Expr::Is` lowering (src/ir/lowering/
+            # exprs/mod.rs:649) + `emit_is_bindings` (stmts/mod.rs:2643)
+            # collapsed into one site — `lower_pattern_match` does both
+            # the tag-test and the field-extract, and `nl_put` is
+            # function-scoped so the bindings remain visible in the
+            # then-branch of any enclosing `if x is Some(k):`.
+            int scrutinee = lower_expr(&ctx, *inner_box, &gmod)
+            int scr_tid = ctx.locals.get(scrutinee).unwrap().type_id
+            String type_name = type_id_to_name(scr_tid, &gmod)
+            # Unwrap Ptr/MutPtr — borrowed scrutinees show up as Ptr(T).
+            if scr_tid >= 0 and scr_tid < gmod.type_table.len():
+                GirType bt = gmod.type_table.get(scr_tid).unwrap()
+                match bt:
+                    case GtPtr(inner):
+                        type_name = type_id_to_name(inner, &gmod)
+                    case GtMutPtr(inner):
+                        type_name = type_id_to_name(inner, &gmod)
+                    else:
+                        pass
+            String enum_name = match_enum_type(type_name, &gmod)
+            int match_bb = new_block(&ctx)
+            int no_match_bb = new_block(&ctx)
+            int merge_bb = new_block(&ctx)
+            int isdst = add_local(&ctx, BOOL_TYPE, None)
+            lower_pattern_match(&ctx, scrutinee, *pattern, enum_name, match_bb, no_match_bb, &gmod)
+            # Match path: scrutinee matched the pattern. Bindings already
+            # emitted in lower_pattern_match's bind_bb upstream.
+            switch_to(&ctx, match_bb)
+            bool match_val = true
+            if negated:
+                match_val = false
+            emit(&ctx, GIAssign(isdst, OpConstBool(match_val)))
+            set_terminator(&ctx, GTJump(merge_bb))
+            # No-match path.
+            switch_to(&ctx, no_match_bb)
+            bool no_match_val = false
+            if negated:
+                no_match_val = true
+            emit(&ctx, GIAssign(isdst, OpConstBool(no_match_val)))
+            set_terminator(&ctx, GTJump(merge_bb))
+            switch_to(&ctx, merge_bb)
+            return isdst
+        case EAwait(inner_box):
+            return lower_expr(&ctx, *inner_box, &gmod)
+        case ESpawn(inner_box):
+            # closure Phase 2 Step A: inline-spawn `spawn ((): body)(args)`.
+            # The ECall make-site arm only handles EIdentifier/EFieldAccess
+            # callees, so an EClosure callee would otherwise be DROPPED. Peek
+            # for the inline-closure shape: if found, take the cid, push the
+            # `__spawn_wrap___Closure_N` stub (the exact stub the old scan
+            # pushed), record a LiftedClosure (so the post-pass pushes its
+            # `__Closure_N__call`), lower the args (so capturing-closure args
+            # aren't silently dropped), and return a value local. Else fall
+            # back to the bare passthrough. (Real spawn/await wiring is out of
+            # scope — fn-count parity is the gate.)
+            match (*inner_box).expr:
+                case ECall(spawn_callee_box, spawn_args, _):
+                    match (*spawn_callee_box).expr:
+                        case EClosure(sp_params, sp_body):
+                            int sp_cid = gmod_next_closure_id(&gmod)
+                            String sp_closure_name = "__Closure_" + int_to_str(sp_cid)
+                            # Push the inline-spawn wrapper stub (unconditional,
+                            # matching the old scan's inline-spawn wrapper push).
+                            String sp_wrap_name = "__spawn_wrap_" + sp_closure_name
+                            Vector[int] sp_wp = []
+                            Vector[GirLocal] sp_wl = [GirLocal(UNIT_TYPE, None, LoOwned(), BoNone(), false)]
+                            Vector[BasicBlock] sp_wb = [BasicBlock([], GTReturn(OpConstUnit()))]
+                            gmod.functions.push(GirFunction(sp_wrap_name, !sp_wp, UNIT_TYPE, !sp_wl, !sp_wb))
+                            # Record the closure (lowerable guard identical to
+                            # the EClosure arm) so the post-pass pushes its
+                            # __Closure_N__call.
+                            ClosureSig sp_sig = compute_closure_sig(sp_cid, sp_params, sp_body, &gmod)
+                            bool sp_lowerable = not (closure_body_captures(sp_params, sp_body, &gmod) or stmts_have_nested_closure(sp_body))
+                            # inline-SPAWN closures: capture support is DEFERRED
+                            # (stay stubbed-if-capturing). Pass empty captures.
+                            Vector[ClosureCapture] sp_no_caps = []
+                            gmod.lifted_closures.push(LiftedClosure(sp_cid, sp_closure_name + "__call", sp_sig.self_ptr, sp_sig.abi_param_types, sp_sig.body_param_types, sp_sig.body_param_names, sp_sig.return_type, sp_body, false, sp_lowerable, !sp_no_caps))
+                            # Lower the spawn-call args for side effects (don't
+                            # drop them, as the old ECall else:pass did).
+                            for sp_arg in spawn_args:
+                                lower_expr(&ctx, sp_arg, &gmod)
+                            int sp_dst = add_local(&ctx, UNIT_TYPE, None)
+                            emit(&ctx, GIAssign(sp_dst, OpConstUnit()))
+                            return sp_dst
+                        else:
+                            return lower_expr(&ctx, *inner_box, &gmod)
+                else:
+                    return lower_expr(&ctx, *inner_box, &gmod)
+        case ESpawnBlocking(inner_box):
+            return lower_expr(&ctx, *inner_box, &gmod)
+        case EDictLiteral(dkeys, dvals):
+            # `{}` / `{k: v, …}` — lower each key/value for side effects,
+            # then call the appropriate constructor to produce a map with
+            # valid `alloc`. Dict[K,V] → insertion-order-preserving
+            # (gorget_dict_new*); HashMap[K,V] → unordered (gorget_map_new*).
+            # Without a hint from SVarDecl the sizes fall back to 8
+            # (pointer/int); with the hint we emit a magic sentinel name
+            # `__gorget_{dict,map}_new_sized_K__<K>__V__<V>` which the
+            # codegen expands to `gorget_{dict,map}_new(sizeof(K), sizeof(V))`
+            # — required whenever K or V is an aggregate (LirStructDef et al.).
+            String dict_kname = ctx.pending_dict_key_tyname
+            String dict_vname = ctx.pending_dict_val_tyname
+            bool dict_ordered = ctx.pending_dict_ordered
+            ctx.pending_dict_key_tyname = ""
+            ctx.pending_dict_val_tyname = ""
+            ctx.pending_dict_ordered = false
+            # Lower each (key, value) pair into fresh locals so we can
+            # `gorget_map_put` them into the constructed map below. The
+            # previous code lowered keys/values for side effects ONLY and
+            # DISCARDED the locals, so a `static Dict[K,V] M={"a":1}`
+            # produced an EMPTY map (the entries were never inserted).
+            # Mirrors Rust `lower_dict_literal` (src/ir/lowering/exprs/
+            # collections.rs:338-388): lower the KEY first (keys are not
+            # value-typed), then set the value-override expected_type from
+            # the declared V before lowering the VALUE, then restore.
+            # Single paired loop — a separate value loop would double-lower
+            # (double side effects + double owning temps).
+            Vector[int] dict_key_locals = []
+            Vector[int] dict_val_locals = []
+            int dict_pair_n = dkeys.len()
+            int dict_pi = 0
+            int prev_dict_et = ctx.expected_type
+            while dict_pi < dict_pair_n:
+                # Keys + values are independently typed, NOT the dict's
+                # destination type — clear the enclosing `expected_type` so a
+                # Result-typed surrounding context (e.g. `return {"a": to_n(sel)}`
+                # from a `throws` fn, where SReturn set expected_type to the
+                # function's `Result[Dict..,E]` slot) doesn't make the
+                # centralized auto-prop hook's capture-form check suppress the
+                # peel on a throws-call value — leaving a raw `Result` memcpy'd
+                # into the int slot (zero-init garbage). Mirrors the tuple/dict
+                # per-element expected_type override+clear documented on the
+                # throws_autoprop_dict_value fixture.
+                ctx.expected_type = -1
+                # Key first: keys can be any type, not V — lower BEFORE the
+                # value-override (Rust collections.rs:338-340).
+                int dict_key_local = lower_expr(&ctx, dkeys.get(dict_pi).unwrap(), &gmod)
+                # Value-override from `dict_vname` when known (else -1 — let the
+                # value type itself, e.g. the auto-prop'd Ok payload, decide).
+                if dict_vname != "":
+                    int dict_v_et = lookup_or_register_named(&gmod, dict_vname)
+                    if dict_v_et != I64_TYPE and dict_v_et != UNIT_TYPE:
+                        ctx.expected_type = dict_v_et
+                int dict_val_local = lower_expr(&ctx, dvals.get(dict_pi).unwrap(), &gmod)
+                dict_key_locals.push(dict_key_local)
+                dict_val_locals.push(dict_val_local)
+                dict_pi = dict_pi + 1
+            ctx.expected_type = prev_dict_et
+            int ddst = add_local(&ctx, lookup_or_register_named(&gmod, "GorgetMap"), None)
+            if dict_kname != "" and dict_vname != "":
+                # Sentinel `__GGSEP__` separates K and V type names — zero
+                # collision risk with real type names (no "GGSEP" pattern
+                # appears in any monomorphized Gorget type).
+                String magic_prefix = "__gorget_map_new_sized_"
+                if dict_ordered:
+                    magic_prefix = "__gorget_dict_new_sized_"
+                String magic_dict = magic_prefix + dict_kname + "__GGSEP__" + dict_vname
+                Vector[Operand] dn_args_typed = []
+                emit(&ctx, GICallExtern(ddst, magic_dict, dn_args_typed))
+            else:
+                if dict_ordered:
+                    Vector[Operand] dn_args_ord = [OpConstI64(8), OpConstI64(8)]
+                    emit(&ctx, GICallExtern(ddst, "gorget_dict_new", dn_args_ord))
+                else:
+                    Vector[Operand] dn_args = [OpConstI64(8), OpConstI64(8)]
+                    emit(&ctx, GICallExtern(ddst, "gorget_map_new", dn_args))
+            # Insert each lowered (key, value) pair into the freshly-built
+            # map. Mirrors `lower_index_assign:7392` and Rust `insert_pair`
+            # (collections.rs:380-388/398-417). Both Dict (ordered) and
+            # HashMap (unordered) use the SAME runtime mutator
+            # `gorget_map_put` — no ordered/unordered split here.
+            # `OpBorrow(ddst)` is REQUIRED: `ddst` is owned, live past every
+            # put (the next iteration puts again) AND returned, so OpMove
+            # would trip drop-emission's "owned but live-past → clone before
+            # call" rule and each put would mutate a throwaway clone while
+            # `ddst` stayed empty (same hazard the array arm documents at
+            # :5804-5814). Both key AND value → CkCallArgOwning: gorget_map_put
+            # is the NO-CLONE ownership-transfer variant — the map TAKES
+            # ownership of both at this consuming position. Passing the key as
+            # CkCallArgBorrow double-freed an owned String key (the put-loop
+            # never zeroed the source, so drop-emission dropped it AND the map
+            # later dropped its stored copy).
+            int dict_put_i = 0
+            while dict_put_i < dict_pair_n:
+                Vector[Operand] put_args = [OpBorrow(ddst), op_consume(&ctx, &gmod, dict_key_locals.get(dict_put_i).unwrap(), CkCallArgOwning()), op_consume(&ctx, &gmod, dict_val_locals.get(dict_put_i).unwrap(), CkCallArgOwning())]
+                emit(&ctx, GICallExtern(-1, "gorget_map_put", put_args))
+                dict_put_i = dict_put_i + 1
+            return ddst
+        case ECatch(inner_box, error_binding, recovery_box):
+            return lower_catch_expr(&ctx, *inner_box, error_binding, *recovery_box, &gmod)
+        case ERethrow(inner_box, error_binding, _err_ty, transform_box):
+            return lower_rethrow_expr(&ctx, *inner_box, error_binding, *transform_box, &gmod)
+        case EMatch(scrut_box, arms):
+            # `match` in value position — lower into one result local that
+            # every reaching arm assigns. Mirrors Rust `lower_expr` EMatch
+            # dispatch (`exprs/mod.rs:391`).
+            return lower_match_expr(&ctx, *scrut_box, arms, &gmod)
+        case EImplicitClosure(ic_body_box):
+            # closure Phase 2 Step A: implicit `it` closure (`.map(it*2)`).
+            # Make-site = sole id source + recorder, exactly like EClosure.
+            # Subsumes the deleted emit_it_closure via the shared helper.
+            return record_implicit_it_closure(&ctx, *ic_body_box, &gmod)
+        case EIt():
+            # closure Phase 2 Step A: `it` is a VALUE (the live implicit
+            # param), NOT a closure. Mirror Rust exprs/mod.rs:417 — resolve
+            # `it` to the in-scope param when present, else a UNIT local.
+            # No cid bump, no record. When an implicit-it body is lowered in
+            # the post-pass, "it" is registered as a named local so this
+            # resolves to the param.
+            if nl_contains(&ctx, "it"):
+                return nl_get(&ctx, "it")
+            int it_dst = add_local(&ctx, UNIT_TYPE, None)
+            emit(&ctx, GIAssign(it_dst, OpConstUnit()))
+            return it_dst
+        else:
+            # Remaining: ESetComp, EDictComp, EListComp, ERange
+            int fallback = add_local(&ctx, UNIT_TYPE, None)
+            emit(&ctx, GIAssign(fallback, OpConstUnit()))
+            return fallback
+
+# ── Call lowering ────────────────────────────────────────
+
+# Set ctx.pending_*_tyname hints for a container-literal arg at a struct
+# constructor call site. Early-exits when arg is NOT an empty container
+# literal — the normal-case fast path — so per-arg overhead stays O(1)
+# in the common case. Only when we've identified a container literal do
+# we pay for the `gmod.type_infos.get(ctor_name)` lookup (a Dict probe +
+# GirTypeInfo copy).
+void apply_container_hint_for_ctor_arg(LowerCtx &ctx, String ctor_name, int ai, SpannedExpr arg, GirModule &gmod):
+    # Fast reject for non-container-literal args (the common case).
+    bool is_arr_lit = false
+    bool is_dict_lit = false
+    match arg.expr:
+        case EArrayLiteral(_):
+            is_arr_lit = true
+        case EDictLiteral(_, _):
+            is_dict_lit = true
+        else:
+            return
+    # Look up the ctor's field type. Avoid value-copying GirTypeInfo
+    # (its nested Vectors don't survive a shallow clone in stage-1).
+    String fty_name = ""
+    if gmod.type_infos.contains(ctor_name):
+        GirTypeInfo cti_info = gmod.type_infos.get(ctor_name).unwrap()
+        if cti_info.is_enum:
+            return
+        if ai >= cti_info.fields.len():
+            return
+        fty_name = cti_info.fields.get(ai).unwrap().type_name.clone()
+    if fty_name == "":
+        return
+    if is_arr_lit:
+        if fty_name.starts_with("Vector__"):
+            # `.slice(...)` returns a view (cap=0) into fty_name's buffer;
+            # fty_name is dropped at function exit and the view becomes
+            # dangling. Materialize to an owned String before storing on
+            # the LowerCtx field — the downstream magic-name concat would
+            # otherwise read stale bytes and emit garbage like
+            # `sizeof(��0XA./)` in stage-1's C.
+            String elem_slice = fty_name.slice(8, fty_name.len())
+            ctx.pending_vec_elem_tyname = elem_slice.clone()
+    elif is_dict_lit:
+        # Dict__<K>__<V> / HashMap__<K>__<V>. Simple first-split only;
+        # nested generics (Dict__Vector__int64_t__int64_t) stay unhinted
+        # and fall back to size 8.
+        int d_prefix_len = -1
+        bool d_ordered = false
+        if fty_name.starts_with("Dict__"):
+            d_prefix_len = 6
+            d_ordered = true
+        elif fty_name.starts_with("HashMap__"):
+            d_prefix_len = 9
+        elif fty_name.starts_with("Map__"):
+            d_prefix_len = 5
+        elif fty_name.starts_with("OrderedDict__"):
+            d_prefix_len = 13
+            d_ordered = true
+        if d_prefix_len > 0:
+            String d_rest = fty_name.slice(d_prefix_len, fty_name.len())
+            int d_sep = d_rest.index_of("__").unwrap_or(-1)
+            if d_sep > 0:
+                String k_only = d_rest.slice(0, d_sep)
+                String v_only = d_rest.slice(d_sep + 2, d_rest.len())
+                if not k_only.contains("__") and not v_only.contains("__"):
+                    # Same view-lifetime concern as the Vector case —
+                    # clone to owned before storing.
+                    ctx.pending_dict_key_tyname = k_only.clone()
+                    ctx.pending_dict_val_tyname = v_only.clone()
+                    ctx.pending_dict_ordered = d_ordered
+
+int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[SpannedType] &targs, GirModule &gmod):
+    int result = -1
+    bool is_print = fname == "print"
+    if is_print:
+        # print() → printf
+        if args.len() > 0:
+            SpannedExpr parg = args.get(0).unwrap()
+            int val = lower_expr(&ctx, parg, &gmod)
+            int val_type = I64_TYPE
+            if val >= 0 and val < ctx.locals.len():
+                val_type = ctx.locals.get(val).unwrap().type_id
+            int gs_tid = lookup_or_register_named(&gmod, "GorgetString")
+            # Borrowed string (`Ptr(GorgetString)` from a struct String-field
+            # read or a match/`is` enum-payload binding) — deref to a NON-OWNING
+            # value GorgetString so the `%s`/`.data` path fires. The exact
+            # `val_type == gs_tid` check below otherwise misses the Ptr and
+            # falls through to `%lld`, printing the pointer as an int. The deref
+            # local is LoBorrowed so drop-elab won't free the aliased buffer.
+            if is_ptr_to_string_type_id(val_type, &gmod):
+                int sval = add_local_with(&ctx, gs_tid, None, LoBorrowed(), BoNone())
+                emit(&ctx, GIDeref(sval, val, gs_tid))
+                val = sval
+                val_type = gs_tid
+            String fmt = "%lld\n"
+            if val_type == F64_TYPE:
+                fmt = "%f\n"
+            elif val_type == BOOL_TYPE:
+                # bool → gorget_bool_to_str → GorgetString, print as "%s\n".
+                # Mirrors Rust format_for_printf BOOL_TYPE→"%s"
+                # (src/ir/lowering/exprs/calls.rs:1915) + bool→gorget_bool_to_str
+                # (src/lir/lower/calls.rs:50-53). Without this, print(true)
+                # emits printf("%lld\n", true) → "1".
+                int bdst = add_local(&ctx, gs_tid, None)
+                emit(&ctx, GICallExtern(bdst, "gorget_bool_to_str", [op_consume(&ctx, &gmod, val, CkFormatArg())]))
+                # FRESH-OWNED-TEMP drop registration (#7-style):
+                # gorget_bool_to_str allocates a fresh `GorgetString` (LoOwned)
+                # that is only BORROWED by the printf below (CkFormatArg →
+                # OpBorrow), so it is orphaned and leaks. Register at creation
+                # so the scope-exit GIDropIfAlive frees it once. Borrow-only
+                # consume ⇒ never moved ⇒ no double-free.
+                register_local_for_drop(&ctx, bdst, gs_tid, &gmod)
+                val = bdst
+                val_type = gs_tid
+                fmt = "%.*s\n"
+            if val_type == gs_tid:
+                # %.*s + (int)len,data so a non-NUL-terminated cap=0 view
+                # (trim/strip/slice) prints exactly len bytes, not over-reading.
+                # The printf emitter decomposes the Str value arg (ai != 0).
+                fmt = "%.*s\n"
+            Vector[Operand] printf_args = [OpConstStr(fmt), op_consume(&ctx, &gmod, val, CkFormatArg())]
+            int pdst = add_local(&ctx, I32_TYPE, None)
+            emit(&ctx, GICallExtern(pdst, "printf", printf_args))
+            result = pdst
+    elif (fname == "Str" or fname == "String" or fname == "GorgetString") and args.len() == 1:
+        # Identity coercion: Str(x) / String(x) returns x (already a string).
+        # Lower the inner arg and pass its type through.
+        SpannedExpr inner = args.get(0).unwrap()
+        result = lower_expr(&ctx, inner, &gmod)
+    elif allocator_constructor_runtime_name(fname) != "":
+        # R9 FIDELITY — scoped-allocator constructor (`Arena(8192)`,
+        # `PoolAllocator(sz, n)`, `TrackingAllocator()`, …). These are NOT
+        # user-struct instantiations: the runtime returns an opaque handle
+        # pointer (`GorgetArena*` etc.), so emit a runtime `gorget_<kind>_new`
+        # CallExtern instead of routing through the user-struct constructor
+        # path (which would build `Arena{_handle=...}` and deref garbage).
+        # Mirrors Rust gg `src/ir/lowering/exprs/calls.rs:708-744`.
+        #
+        # ⚠ The dst MUST be a POINTER-to-named slot, NOT a bare named type:
+        # the runtime fn returns a `GorgetArena*`, and a bare `Arena` slot
+        # (C `struct __gg_Arena`) can't hold it (C type error). Rust
+        # pre-registers allocators as `MutPtr(Named(...))`; the self-host has
+        # no such pre-registration, so we register the Ptr explicitly here.
+        # `type_id_to_base_name` unwraps `GtPtr`→"Arena" so later method
+        # dispatch (`pool.bytes_used()`) still resolves on the type name.
+        String alloc_new_fn = allocator_constructor_runtime_name(fname)
+        Vector[Operand] alloc_args = []
+        # CoW for-element BORROW scan (no SpannedExpr__clone): aarg is only read
+        # by lower_expr's immutable-borrow param.
+        for aarg in args:
+            int aval = lower_expr(&ctx, aarg, &gmod)
+            # Allocator constructor args are plain scalars (capacity/count);
+            # pass by value (CkCallArgBorrow yields OpCopy for a primitive).
+            alloc_args.push(op_consume(&ctx, &gmod, aval, CkCallArgBorrow()))
+        int alloc_ptr_ty = register_ptr(&gmod, lookup_or_register_named(&gmod, fname))
+        int alloc_dst = add_local(&ctx, alloc_ptr_ty, None)
+        emit(&ctx, GICallExtern(alloc_dst, alloc_new_fn, alloc_args))
+        result = alloc_dst
+    elif sync_constructor_runtime_name(fname) != "":
+        # SYNC FIDELITY — non-generic sync-primitive constructor
+        # (`AtomicInt(0)`, `OnceFlag()`, `Semaphore(n)`, …). Same shape as the
+        # allocator branch above: the runtime returns an opaque handle pointer
+        # (`GorgetAtomicInt*` etc.), so emit `gorget_<kind>_new` and register
+        # the dst as a POINTER-to-named slot (a bare value slot can't hold the
+        # `GorgetAtomicInt*`). Mirrors Rust gg calls.rs:851 / exprs/mod.rs:1652.
+        String sync_new_fn = sync_constructor_runtime_name(fname)
+        Vector[Operand] sync_args = []
+        # CoW for-element BORROW scan (no SpannedExpr__clone): sarg is only read
+        # by lower_expr's immutable-borrow param.
+        for sarg in args:
+            int sval = lower_expr(&ctx, sarg, &gmod)
+            sync_args.push(op_consume(&ctx, &gmod, sval, CkCallArgBorrow()))
+        int sync_ptr_ty = register_ptr(&gmod, lookup_or_register_named(&gmod, fname))
+        int sync_dst = add_local(&ctx, sync_ptr_ty, None)
+        emit(&ctx, GICallExtern(sync_dst, sync_new_fn, sync_args))
+        result = sync_dst
+    else:
+        # Compute mangled name for generic calls
+        String call_name = fname
+        if targs.len() > 0:
+            for ta in targs:
+                call_name = call_name + "__" + type_to_c_name(ta, &gmod)
+        # Resolve call redirects (bare → module-prefixed name).
+        if gmod.call_redirects.contains(call_name):
+            call_name = gmod.call_redirects.get(call_name).unwrap()
+        # User function call
+        Vector[Operand] gir_args = []
+        # Look up borrow params from pre-scanned ownership info
+        Vector[bool] borrow_flags = []
+        if gmod.fn_borrow_params.contains(call_name):
+            borrow_flags = gmod.fn_borrow_params.get(call_name).unwrap()
+        # Resolve callee param types ONCE for the call-arg expected_type
+        # propagation. Mirrors Rust gg's call-arg path at
+        # `src/ir/lowering/exprs/calls.rs:1228-1255` — set
+        # `ctx.expected_type = param_types[i]` BEFORE recursing into
+        # `lower_expr` for each arg, then restore. Reader sites
+        # (bare prelude-variant ctors, bare `None`, EIdentifier) thus
+        # type their result to the parameter's declared shape rather
+        # than to the bare variant name — fixes the NULL-give-up class
+        # for `f(Ok(x))` / `f(None)` / etc. at non-return user-level
+        # consume positions.
+        Vector[int] callee_param_types = get_fn_param_types(call_name, &gmod)
+        # Prelude-variant ctor arg expected-type, off the typed enum-category
+        # channel. `Ok`/`Error`/`Some` aren't real fns (no `callee_param_types`),
+        # so a nested ctor arg like `Ok(None())` / `Some(Box(x))` would lower
+        # its inner with no expected type and mis-slot it (`None()` typed
+        # `int64_t` instead of `Option__int64_t`). When the ENCLOSING
+        # `expected_type` is a recorded `Result__`/`Option__`, the arg's
+        # expected type IS that enum's Ok/Error/Some payload — read it from the
+        # channel (CLAUDE.md "No name matching"; the same typed fact the field
+        # shape and match-destructure read). -1 when not a variant ctor / no
+        # record / no enclosing expectation.
+        int variant_arg_expected = -1
+        if fname == "Ok" or fname == "Error" or fname == "Some":
+            EnumCategory pvec = enum_category_of(&gmod, ctx.expected_type)
+            if pvec.category == ENUM_CAT_RESULT:
+                if fname == "Ok":
+                    variant_arg_expected = pvec.ok_type
+                elif fname == "Error":
+                    variant_arg_expected = pvec.err_type
+            elif pvec.category == ENUM_CAT_OPTION and fname == "Some":
+                variant_arg_expected = pvec.ok_type
+        int first_arg_type = -1
+        # Ownership at Consuming Positions: a struct/enum CONSTRUCTOR's
+        # field-init is a consuming position — the destination field must
+        # OWN, so each arg routes through `CkFieldWrite` (clone-if-live,
+        # move-if-dead). A plain function call instead borrows bare `T`
+        # args (CoW-default-borrow) via `classify_call_arg`. The TWO-ARM
+        # ctor discriminator is the canonical idiom this fn already uses at
+        # the ret_type block (`:7823`+`:7832`): `is_type_constructor` for
+        # plain user-struct / prelude-variant ctors, `type_infos.contains`
+        # for the MONOMORPHIZED ctor whose mangled name contains `__` (which
+        # `is_type_constructor` explicitly excludes `:3661`) — e.g. the
+        # lazy-adapter `MapIter__…__GorgetClosure`, registered in
+        # `type_infos` under its mangled name. Both arms are TYPED (no name
+        # match). Without CkFieldWrite the ctor's resource arg is a borrow →
+        # shallow memcpy into the field → the source and the field alias one
+        # buffer → both drop → double-free (the adapter `inner`/`f` fields).
+        bool is_ctor_call = is_type_constructor(call_name, &gmod) or gmod.type_infos.contains(call_name)
+        # CoW for-element BORROW scan (no SpannedExpr__clone): arg is only read
+        # (apply_container_hint/lower_expr/match arg.expr — all immutable-borrow
+        # uses); enumerate() preserves the positional arg index ai.
+        for (ai, arg) in args.enumerate():
+            # For struct-constructor calls, hint the container-literal
+            # element size for each positional arg using the target field's
+            # declared type. Look up type_infos inline (per-arg) — keeping
+            # the GirTypeInfo as a local across iterations tripped a
+            # field-move issue in the self-host compiler; querying anew
+            # each time sidesteps it. Without this, `LowerCtx([], ..., {},
+            # ...)` keeps scalar-sized allocators for the Vector/Dict
+            # fields and later pushes corrupt adjacent slots.
+            apply_container_hint_for_ctor_arg(&ctx, call_name, ai, arg, &gmod)
+            # Expected-type propagation per arg (Rust calls.rs:1239-1255).
+            # The arg's destination is the PARAM type, NOT the surrounding
+            # context — so START by clearing any leaked `expected_type` (e.g. a
+            # `Result[T,E]` from an enclosing `throws` return, `return f(g(x))`).
+            # Otherwise the centralized auto-prop hook's capture-form check
+            # would see that leaked Result and wrongly suppress the peel on a
+            # throws-call arg passed to a NON-Result (e.g. `int`) param — the
+            # case (3) `double_it(might(x))` regression. Then set the param type
+            # for non-primitive params (so bare None/Ok reader sites resolve).
+            int prev_expected_arg = ctx.expected_type
+            ctx.expected_type = -1
+            if ai < callee_param_types.len():
+                int pt = callee_param_types.get(ai).unwrap()
+                # Peel the bare-resource-param ABI wrapper. `lower_function`
+                # Ptr-wraps bare resource params (by-pointer ABI) and that
+                # WRAPPED tid is what GirFunction.param_types records — but
+                # the arg EXPRESSION's expected type is the VALUE type; the
+                # pointer-ness is the call's ABI concern (OpBorrow at the
+                # consume site), not the arg producer's. Without the peel, a
+                # bare `None` arg against an `Option[String]` param types its
+                # dst local as the Ptr tid → scalar LIR slot → the
+                # prelude-variant intercept falls back → cc-invalid
+                # `(Option__T){.tag=1}` assigned into an int64 temp (the
+                # split-attempt's stage-1 cc failure, 146 sites). GtMutPtr
+                # (`&`/`!` params) stays unpeeled: those args are explicitly
+                # sigiled at source.
+                if pt >= PRIM_COUNT and pt < gmod.type_table.len():
+                    match gmod.type_table.get(pt).unwrap():
+                        case GtPtr(pt_inner):
+                            pt = pt_inner
+                        else:
+                            pass
+                if pt != I64_TYPE and pt != UNIT_TYPE:
+                    ctx.expected_type = pt
+            # Prelude-variant ctor (Ok/Error/Some): no callee_param_types, so
+            # use the channel-derived payload type as the arg's expectation
+            # (the `ai == 0` payload position). This is what makes a nested
+            # `Ok(None())` type its inner `None()` to the Ok payload.
+            elif ai == 0 and variant_arg_expected >= 0:
+                ctx.expected_type = variant_arg_expected
+            int arg_local = lower_expr(&ctx, arg, &gmod)
+            ctx.expected_type = prev_expected_arg
+            # Auto-propagate a `throws` call passed as an argument
+            # (`f(might())` unwraps; `f(r)` where the param is Result keeps the
+            # raw Result). Skip when the callee's param IS a Result__ — don't
+            # unwrap into a parameter that wants the Result. Ctor args flow
+            # through this same loop, so struct/enum-field ctors are covered.
+            bool arg_param_is_result = false
+            if ai < callee_param_types.len():
+                # `callee_param_types` wraps `&`/`!` params in GtMutPtr and bare
+                # by-value resource-payload Result params in GtPtr (see
+                # `lower_function`); `enum_category_of` peels internally, so a
+                # borrowed/by-ptr Result param still classifies as a Result and
+                # `maybe_auto_propagate` is correctly skipped.
+                arg_param_is_result = enum_category_of(&gmod, callee_param_types.get(ai).unwrap()).category == ENUM_CAT_RESULT
+            if not arg_param_is_result:
+                arg_local = maybe_auto_propagate(&ctx, arg_local, &gmod)
+            if ai == 0 and arg_local >= 0 and arg_local < ctx.locals.len():
+                first_arg_type = ctx.locals.get(arg_local).unwrap().type_id
+            # Detect &arg (borrow) or pre-scanned borrow param
+            bool is_borrow = false
+            match arg.expr:
+                case EMutableBorrow(_):
+                    is_borrow = true
+                else:
+                    pass
+            if not is_borrow and ai < borrow_flags.len():
+                is_borrow = borrow_flags.get(ai).unwrap()
+            if is_borrow:
+                # Phase C step 5b + Path A receiver-dispatch (2026-05-21):
+                # the callee declared this param as `&T` (OWN_MUTABLE)
+                # OR the caller wrote `&x` syntactically. Either way it
+                # is a borrow position: the local stays alive past the
+                # call. A LoBorrowed source must propagate as OpBorrow
+                # (moving a borrow is a use-after-free); for owned
+                # sources, route through classify_call_arg — for a
+                # borrow-declared param this naturally returns
+                # CkCallArgBorrow → OpBorrow, never OpMove. The previous
+                # hardcoded OpMove for owned sources was a Path A bug
+                # (over-consumption: turned alias reads into moves at
+                # call boundaries).
+                GirLocal arg_loc = ctx.locals.get(arg_local).unwrap()
+                match arg_loc.ownership:
+                    case LoBorrowed():
+                        gir_args.push(OpBorrow(arg_local))
+                    else:
+                        if is_ctor_call:
+                            gir_args.push(op_consume(&ctx, &gmod, arg_local, CkFieldWrite()))
+                        else:
+                            gir_args.push(op_consume(&ctx, &gmod, arg_local, classify_call_arg(&gmod, call_name, ai)))
+            else:
+                # Phase C step 5c + Path A bugfix (2026-05-21): pick the
+                # ConsumeKind from the callee's param ownership. bare `T`
+                # → CkCallArgBorrow (Ptr alias propagation, no clone);
+                # `!T` → CkCallArgOwning (drives OpMove/OpClone). The
+                # outer `is_borrow` branch already handled `&T` params.
+                # A constructor field-init is a CONSUME position (the field
+                # must own) → CkFieldWrite; see `is_ctor_call` above.
+                if is_ctor_call:
+                    gir_args.push(op_consume(&ctx, &gmod, arg_local, CkFieldWrite()))
+                else:
+                    gir_args.push(op_consume(&ctx, &gmod, arg_local, classify_call_arg(&gmod, call_name, ai)))
+        # Look up return type from module's fn_sigs, or from function definitions
+        int ret_type = I64_TYPE
+        # Expected-type read for bare prelude-variant ctors (Rust gg's
+        # `resolve_option_result_variant` at `src/ir/lowering/exprs/mod.rs:1452-1551`).
+        # When the caller (SVarDecl / SAssign / SReturn / call-arg / struct-field-init)
+        # has set `ctx.expected_type` to a typed `Option__T` / `Result__T__E` enum,
+        # adopt it as ret_type. This makes the dst slot struct-typed upstream so
+        # `try_lower_prelude_variant` fires at LIR (emits canonical `IEnumInit`).
+        # Subsumes the Some-with-non-primitive-inner hack at the end of this
+        # block at non-return user-level consume positions (the SReturn site
+        # used to retype after-the-fact; that path remains as a defensive
+        # backstop, see `case SReturn:`).
+        if (fname == "Ok" or fname == "Error" or fname == "Some" or fname == "None") and ctx.expected_type >= 0:
+            int et = ctx.expected_type
+            if et < gmod.type_table.len():
+                # `enum_category_of`/`option_ref_payload_of` peel Ptr/MutPtr
+                # internally, so `et` (possibly a borrowed/param `GtPtr(Result__…)`)
+                # classifies correctly while staying raw for the dst-slot
+                # `add_local`/`ret_type` uses below, which want the real type.
+                EnumCategory et_ec = enum_category_of(&gmod, et)
+                bool et_is_option = et_ec.category == ENUM_CAT_OPTION and option_ref_payload_of(&gmod, et) < 0
+                bool et_is_result = et_ec.category == ENUM_CAT_RESULT
+                bool variant_matches_option = (fname == "Some" or fname == "None") and et_is_option
+                bool variant_matches_result = (fname == "Ok" or fname == "Error") and et_is_result
+                if variant_matches_option or variant_matches_result:
+                    ret_type = et
+        if ret_type == I64_TYPE and gmod.fn_sigs.contains(call_name):
+            ret_type = gmod.fn_sigs.get(call_name).unwrap()
+        # Also check call_redirects for the original name.
+        if ret_type == I64_TYPE and gmod.call_redirects.contains(fname):
+            String redir = gmod.call_redirects.get(fname).unwrap()
+            if gmod.fn_sigs.contains(redir):
+                ret_type = gmod.fn_sigs.get(redir).unwrap()
+        # Check function definitions for return type
+        if ret_type == I64_TYPE:
+            int i = 0
+            while i < gmod.functions.len():
+                if gmod.functions.get(i).unwrap().name == call_name:
+                    ret_type = gmod.functions.get(i).unwrap().return_type
+                    break
+                i += 1
+        # Collection/struct constructors: return the named type
+        if ret_type == I64_TYPE and is_type_constructor(call_name, &gmod):
+            # If call_name is an enum variant, route to the parent enum type.
+            String parent = enum_variant_parent(call_name, &gmod)
+            if parent != "":
+                ret_type = lookup_or_register_named(&gmod, parent)
+            else:
+                ret_type = lookup_or_register_named(&gmod, call_name)
+        # Monomorphized user-struct constructors (e.g. Wrapper__int64_t) —
+        # detect via type_infos lookup even if name contains "__".
+        if ret_type == I64_TYPE and gmod.type_infos.contains(call_name):
+            ret_type = lookup_or_register_named(&gmod, call_name)
+        # Template-name constructor: Wrapper__int64_t has template Wrapper
+        # in type_infos. Route to the monomorphized named type.
+        if ret_type == I64_TYPE:
+            if call_name.contains("__"):
+                int dunder = call_name.index_of("__").unwrap()
+                if dunder > 0:
+                    String tmpl_name = call_name.slice(0, dunder)
+                    if gmod.type_infos.contains(tmpl_name):
+                        ret_type = lookup_or_register_named(&gmod, call_name)
+        # Builtin calls (args, read_file, int_to_str, ...)
+        if ret_type == I64_TYPE:
+            int builtin_ret = builtin_call_return_type(fname, &gmod)
+            if builtin_ret >= 0:
+                ret_type = builtin_ret
+        # Prelude variant constructor `Some(x)` → `Option__<inner>`. The
+        # block above can't route it (Option is a prelude enum, absent from
+        # gmod.type_infos → enum_variant_parent "" → typed by the BARE
+        # variant name `Some`), which resolves to an LT_PTR MIS-SLOT at LIR
+        # (8 bytes for a 16-byte Option) — wrong-sized AND defeats
+        # by-pointer-param address-taking (blocks the reference-grade
+        # by-pointer Option ABI). The inner type is taken from the LOWERED
+        # ARGUMENT's local type — reliable, unlike guess_return_type (which
+        # collapses Box/struct inners to I64 → Option__int64_t ≠ the actual
+        # Option__Box__SpannedExpr) and unlike the typechecker side-table
+        # (which misses arg-position calls here). Unwrap any Ptr: a borrowed
+        # arg is typed `*T`, but the Option OWNS its payload (value type).
+        # Gate on a NON-PRIMITIVE inner: a resource/struct payload (String,
+        # user structs) is what needs the precise Option__T slot for the
+        # by-pointer ABI. Primitive-typed inners (incl. a `Box.new(...)` arg
+        # currently mistyped as I64 — a separate pre-existing gap) keep the
+        # legacy bare-`Some` typing, which coerces fine into int-typed fields
+        # (e.g. ERange); retyping them to Option__int64_t would MISMATCH
+        # those fields. This is the minimal correct scope to unblock A
+        # without depending on the orthogonal Box-typing fix.
+        if (fname == "Some") and first_arg_type >= PRIM_COUNT:
+            int some_inner = first_arg_type
+            if some_inner >= 0 and some_inner < gmod.type_table.len():
+                match gmod.type_table.get(some_inner).unwrap():
+                    case GtPtr(p_inner):
+                        some_inner = p_inner
+                    case GtMutPtr(p_inner):
+                        some_inner = p_inner
+                    else:
+                        pass
+            ret_type = lookup_or_register_named(&gmod, "Option__" + type_id_to_name(some_inner, &gmod))
+            record_enum_category(&gmod, ret_type, ENUM_CAT_OPTION, some_inner, -1)
+        # CLOSURE LEAK Class A — a closure-returning fn (`int(int) make_adder(...)`)
+        # has a DECLARED return type that resolves to a `GtFnPtr` (`fn(i64)->i64`),
+        # but its RUNTIME value is a `GorgetClosure` (the producer literally returns
+        # a 16-byte {fn_ptr, env} struct and `__gorget_closure_env_alloc`s a heap
+        # env-box). The `GtFnPtr` typing is the lossy abstraction; the concrete
+        # runtime representation is `GorgetClosure` — resolve it here (layering
+        # rule 1/4: fix at the writer). Without this the call-result local stays
+        # `GtFnPtr`, `is_droppable_type` returns false for it, the FRESH-OWNED-TEMP
+        # registration below is a no-op, and the escaping env-box is NEVER freed
+        # (closure_escape/closure_returning_closure 32B, closure_partial_application
+        # 48B — SELF-HOST-ONLY; Rust gg is clean). Retyping to `GorgetClosure`
+        # makes `dst` droppable so it registers below, AND makes op_consume route
+        # the var-decl binding through the resource path (owned last-use → OpMove →
+        # GIMoveZero), so the call-result's drop is move-elided and the VAR-LOCAL
+        # drops the env exactly once — identical to a directly-bound closure
+        # (`auto add_x = (int y): x+y` lowers its make-site value as GorgetClosure
+        # and binds with `move`). No double-free: exactly one live owner at a time.
+        # Borrowed callable PARAMS are `GtPtr`/`GtMutPtr` (not GtFnPtr) so they are
+        # unaffected; a bare top-level fn-ref return would carry a NULL env, which
+        # `gorget_closure_free` no-ops on — safe either way.
+        if ret_type >= PRIM_COUNT and ret_type < gmod.type_table.len():
+            match gmod.type_table.get(ret_type).unwrap():
+                case GtFnPtr(_, _):
+                    ret_type = lookup_or_register_named(&gmod, "GorgetClosure")
+                else:
+                    pass
+        int dst = add_local(&ctx, ret_type, None)
+        emit(&ctx, GICall(dst, call_name, gir_args))
+        # FRESH-OWNED-TEMP drop registration (#7-style): a resource/String-
+        # returning free-fn/builtin/user call (`int_to_str`/`chr`/`read_file`/
+        # `getenv`/`args`/user `String f()`) yields a fresh OWNED value (LoOwned).
+        # When this CALL EXPRESSION flows directly into a non-consuming position
+        # (`print(int_to_str(x))`, `f"{int_to_str(x)}"`) it is BORROWED only
+        # (CkFormatArg/CkCallArgBorrow → is_consume_kind=false → OpBorrow), so the
+        # result is orphaned and leaks (O(1) per occurrence). Registering at
+        # creation makes the scope-exit GIDropIfAlive free it exactly once.
+        # SAFE-BY-CONSTRUCTION: when the result is instead MOVED into a binding
+        # (`String s = int_to_str(x)`), RETURNED, or pushed/field-init'd,
+        # op_consume/wire-liveness emits OpMove → GIMoveZero zeros the moved-out
+        # slot, so the unconditional scope-exit GIDropIfAlive — which lowers to a
+        # memcmp-guarded drop — finds a zeroed slot and SUPPRESSES the drop at
+        # runtime (and the LIR drop_elab pass further elides the guard statically
+        # when init is provable). SReturn separately excludes the moved local from
+        # early-exit drops. Either way the value is dropped exactly once; no
+        # double-free.
+        # register_local_for_drop's is_droppable_type gate makes this a no-op for
+        # primitive returns (int/bool/F64) and its LoView/LoBorrowed gates pass
+        # only genuine fresh owners; `dst` is LoOwned here. Mirrors Rust's
+        # call_tracked/call_extern_tracked `needs_drop` registration (context.rs).
+        register_local_for_drop(&ctx, dst, ret_type, &gmod)
+        result = dst
+    return result
+

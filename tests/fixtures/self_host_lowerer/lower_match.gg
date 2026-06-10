@@ -1,0 +1,1263 @@
+# ── Match & error-handling lowering (split out of lower.gg) ──────────
+# Match lowering (tag/payload reads, pattern matching, ctor patterns),
+# Option[Ref] lift, Result/Option auto-propagation, and throw/catch/
+# rethrow error-handling lowering. Moved verbatim from lower.gg as part
+# of the lower.gg module split (output-neutral pure function move).
+from std.collections import Vector, Dict
+from std.conv import int_to_str, float_to_str
+from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch, EquipBlock, StructDef, EnumDef, EnumVariant, Type, MatchArm, Pattern, SpannedPattern
+from scope import ScopeTable, DefInfo
+from types import TypeTable, ResolvedType
+from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Terminator, Operand, GirType, GirExtern, GirTypeInfo, GirFieldInfo, GirEnumVariantInfo, LiftedClosure, ClosureCapture, ResourceMetadata, CollectionKind, ConsumeKind
+from gir import BOOL_TYPE, I8_TYPE, I16_TYPE, I32_TYPE, I64_TYPE, U8_TYPE, U16_TYPE, U32_TYPE, U64_TYPE, F32_TYPE, F64_TYPE, UNIT_TYPE, PRIM_COUNT
+from gir import CAP_BY_VALUE, CAP_BY_MUT_REF
+from gir import init_type_table, register_type, lookup_or_register_named, register_ptr
+from gir import GirGlobal, GirGlobalField, gir_mod_add_global, GGINIT_FN_REF, GGINIT_STRUCT
+from gir import GGSTATIC_RUNTIME, GGSTATIC_BYTES, static_put_bytes
+from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM, OP_MOD
+from gir import OP_ADD_WRAP, OP_SUB_WRAP, OP_MUL_WRAP
+from gir import OP_BITAND, OP_BITOR, OP_BITXOR, OP_SHL, OP_SHR
+from gir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
+from gir import UNOP_NEG, UNOP_NOT, UNOP_BITNOT
+from gir import CkAssign, CkReturn, CkCallArgBorrow, CkCallArgOwning, CkFieldWrite, CkBinOpArg, CkFormatArg, CkMatchPtr
+from gir import CkVector, CkDeque, CkHeap, CkDict, CkSet, CkNotCollection
+from compiler.data.resources import STRING_BUILTIN_METHODS, COLLECTION_BUILTIN_METHODS, BUILTIN_METHOD_MUTATES
+from compiler.data.schema import BuiltinMethodDecl, BuiltinMethodEntry
+from compiler.data.schema import BuiltinRetKind, BrkString, BrkInfer
+from lir_lower import resource_meta_for
+from lower import LowerCtx, ResultPayloadTypes, DictKvNames, ClosureSig, CaptureCollector, FieldBorrowPair, SVarDeclEmission
+from lower import lower_fail, diag_bug, diag_warn, emit, new_block, switch_to, set_terminator
+from lower import add_local, add_local_with, add_local_inheriting, nl_get, nl_put, nl_contains
+from lower import expr_kind, pat_kind, stmt_kind
+from lower import collection_kind_of, collection_kind_eq, int_vec_contains, method_mutates_receiver
+from lower import inherit_borrow_from, set_field_borrow, cow_register_alias, decide_svardecl_emission
+from lower import classify_call_arg, is_consume_kind, op_consume, decide_operand_at_consuming_arg, decide_ptr_consume
+from lower_drops import init_drop_elab, push_drop_scope, emit_scope_drops, pop_drop_scope, pop_drop_scope_no_emit, is_droppable_type, register_local_for_drop, register_owning_param, mark_local_moved, restore_moved, union_moved, emit_drops_for_early_exit, flush_drop_queue
+from lower_liveness import LivenessAnalysis, compute_liveness, wire_liveness_into_modes, liveness_instrumentation_diff, update_last_pos_for_inst, update_last_pos_for_term, note_operand_pos, empty_liveness
+from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, is_comparison, map_cmpop
+from lower_expr import block_terminated, lower_block_expr, lower_stmt_as_tail_value, lower_if_chain_expr, refine_local_type, lower_expr, lower_expr_inner, apply_container_hint_for_ctor_arg, lower_call
+from lower_stmt import lower_stmt, lower_place_base, lower_field_write, emit_field_write_from_local, lower_stmts, lower_if, lower_index_assign
+
+# Look up the parent enum name for a type. If `type_name` itself is an
+# enum (GirTypeInfo.is_enum), returns it. Otherwise returns "".
+String match_enum_type(String type_name, GirModule &gmod):
+    # Check the enum registry first (populated from EnumDef pass).
+    if gmod.enum_registry.contains(type_name):
+        return type_name
+    if gmod.type_infos.contains(type_name):
+        GirTypeInfo ti = gmod.type_infos.get(type_name).unwrap()
+        if ti.is_enum:
+            return type_name
+    # Prelude mono'd enums (Option__X / Result__X__Y) aren't in
+    # type_infos — they're synthesized in lir_lower's Pass 3. But
+    # `match opt: case Some(x): ...` needs a real enum name here or
+    # lower_ctor_pattern falls through to an always-match `GTJump`, so
+    # every arm body runs unconditionally (which is why stage-1 tokenized
+    # "main" as TkKeyword — the `else:` branch of the Option match was
+    # never reached). Return the type_name itself for these; paired with
+    # match_variant_index's hardcoded Some/None/Ok/Error indices below.
+    if has_enum_category(&gmod, gmod.named_types.get(type_name).unwrap_or(-1)):
+        return type_name
+    return ""
+
+# Find the variant's index in its enum's variant list. Returns -1 if
+# the enum or variant isn't registered.
+int match_variant_index(String enum_name, String variant_name, GirModule &gmod):
+    # Prelude enums: hardcode variant indices that match lir_lower's
+    # VariantInfo table (prelude_variant_info) and Pass 3's field layout.
+    # Match both the mono'd form (`Option__T`) AND the bare prelude name
+    # (`Option`) — the latter is the synthetic name used by
+    # `lower_ctor_pattern`'s last-resort fallback when the scrutinee's
+    # type couldn't be recovered.
+    if enum_name == "Option" or enum_category_of(&gmod, gmod.named_types.get(enum_name).unwrap_or(-1)).category == ENUM_CAT_OPTION:
+        if variant_name == "Some":
+            return 0
+        if variant_name == "None":
+            return 1
+        return -1
+    if enum_name == "Result" or enum_category_of(&gmod, gmod.named_types.get(enum_name).unwrap_or(-1)).category == ENUM_CAT_RESULT:
+        if variant_name == "Ok":
+            return 0
+        if variant_name == "Error":
+            return 1
+        return -1
+    # Check the enum registry first; fall back to type_infos.
+    int reg_idx = enum_variant_index(&gmod, enum_name, variant_name)
+    if reg_idx >= 0:
+        return reg_idx
+    if not gmod.type_infos.contains(enum_name):
+        return -1
+    GirTypeInfo ti = gmod.type_infos.get(enum_name).unwrap()
+    int i = 0
+    while i < ti.variants.len():
+        GirEnumVariantInfo v = ti.variants.get(i).unwrap()
+        if v.name == variant_name:
+            return i
+        i += 1
+    return -1
+
+# Convert `Option[Ref[T]] → Option[T]` by tag-branching and cloning /
+# dereffing the Some payload. Mirrors Rust gg's `try_lift_option_ref`
+# (`src/ir/lowering/stmts/mod.rs:2934-3065`).
+#
+# `val` is a local holding an `Option__Ref__T` value (a borrow-Option
+# produced by a borrowing getter like `coll.get(i)`); `dst_type` is the
+# `Option__T` (non-Ref) return-place / binding type. Returns the local id
+# of a freshly-filled merge holding the owned `Option[T]`, or -1 if the
+# shapes don't match (caller passes `val` through untouched — the no-op
+# fallback that preserves `return Some(x)` / `return x` / `return
+# coll.pop()` / nested-Option).
+#
+# The shape gate is the TYPED `option_ref_payload` channel — `ptr_tid =
+# option_ref_payload_of(&gmod, src_type) >= 0` iff this Option tid was
+# RECORDED by a borrowing-getter lowering (`record_option_ref_payload`).
+# That recorded-ness (not a structural `Ref__`-name re-parse) is what
+# makes the gate sound: a hand-built `Option__Ref__T` that bypassed a
+# getter has no channel entry and is left alone (CLAUDE.md "No name
+# matching"). The dst must be `Option__` (NOT `Option__Ref__`) — mirrors
+# Rust `:2966-2968`.
+#
+# Structured on the `unwrap_or` template (`:4894-4912`): tag-read +
+# GICmp + GTBranch into a Some / None / merge BB trio. The Some arm reads
+# the GtPtr payload via `emit_payload_read` (whose own `GtPtr` guard,
+# `:6965-6968`, returns the bare ptr for a resource pointee and `GIDeref`s
+# a primitive pointee), then lets `op_consume(CkCallArgOwning)` pick
+# clone-vs-copy — `GtPtr(resource)` → OpClone (deep clone), primitive
+# value → OpCopy (`decide_ptr_consume`, `:1634`). The SAME `is_resource`
+# decision `emit_payload_read` used, so there is no second predicate to
+# keep in sync. Each arm stores its built Option into `merge` via
+# `op_consume(CkAssign)` — AUTO-Move for an owned resource Option
+# (mirrors Rust `assign_mode(Move) when is_resource_type(dst)`,
+# `:3038-3046`); a plain `GIAssign(merge, OpCopy(res))` would shallow-alias
+# the freshly-built resource Option → double-free.
+int try_lift_option_ref(LowerCtx &ctx, int val, int dst_type, GirModule &gmod):
+    if val < 0 or val >= ctx.locals.len():
+        return -1
+    int src_type = ctx.locals.get(val).unwrap().type_id
+    # Shape gate (typed channel): src must be a RECORDED Option[Ref[T]],
+    # and the recorded payload is the GtPtr(inner) tid we read the Some
+    # field through.
+    int ptr_tid = option_ref_payload_of(&gmod, src_type)
+    if ptr_tid < 0:
+        return -1
+    # dst must be `Option__T` (non-Ref).
+    String dst_name = type_id_to_name(dst_type, &gmod)
+    if not dst_name.starts_with("Option__"):
+        return -1
+    if dst_name.starts_with("Option__Ref__"):
+        return -1
+    String src_name = type_id_to_name(src_type, &gmod)
+    # Materialise the result slot up front; both arms store into it so the
+    # merge block sees a single def (SSA construction inserts the phi).
+    int merge = add_local(&ctx, dst_type, None)
+    int scr_ptr = match_scrutinee_ptr(&ctx, &gmod, val)
+    int tag = emit_tag_read(&ctx, scr_ptr, src_name, &gmod)
+    # tag == 0 → Some arm.
+    int cmp_dst = add_local(&ctx, BOOL_TYPE, None)
+    emit(&ctx, GICmp(cmp_dst, CMP_EQ, I64_TYPE, OpCopy(tag), OpConstI64(0)))
+    int some_bb = new_block(&ctx)
+    int none_bb = new_block(&ctx)
+    int lift_merge_bb = new_block(&ctx)
+    set_terminator(&ctx, GTBranch(OpCopy(cmp_dst), some_bb, none_bb))
+    # Some arm: read the GtPtr payload (emit_payload_read's GtPtr guard
+    # returns the bare ptr for a resource pointee, GIDerefs a primitive),
+    # build Some(owned), let op_consume clone-or-copy.
+    switch_to(&ctx, some_bb)
+    int payload = emit_payload_read(&ctx, scr_ptr, src_name, "Some", 0, ptr_tid, &gmod)
+    int some_res = add_local(&ctx, dst_type, None)
+    Vector[Operand] some_args = [op_consume(&ctx, &gmod, payload, CkCallArgOwning())]
+    emit(&ctx, GICallExtern(some_res, "Some", some_args))
+    emit(&ctx, GIAssign(merge, op_consume(&ctx, &gmod, some_res, CkAssign())))
+    set_terminator(&ctx, GTJump(lift_merge_bb))
+    # None arm: build None directly.
+    switch_to(&ctx, none_bb)
+    int none_res = add_local(&ctx, dst_type, None)
+    Vector[Operand] none_args = []
+    emit(&ctx, GICallExtern(none_res, "None", none_args))
+    emit(&ctx, GIAssign(merge, op_consume(&ctx, &gmod, none_res, CkAssign())))
+    set_terminator(&ctx, GTJump(lift_merge_bb))
+    switch_to(&ctx, lift_merge_bb)
+    return merge
+
+# Emit a tag-read against the scrutinee. Returns the local id holding
+# the int32 tag value. The enum_name must be a plain identifier (no
+# `__` separator); Option/Result variants aren't yet supported by this
+# routing because the name-based __field_read_ parser splits on the
+# first `_` and confuses `Option__int64_t` with the `Option` type.
+int emit_tag_read(LowerCtx &ctx, int scrutinee_ptr, String enum_name, GirModule &gmod):
+    String read_fn = "__field_read_" + enum_name + "_tag"
+    Vector[Operand] args = [op_consume(&ctx, &gmod, scrutinee_ptr, CkMatchPtr()), OpConstI64(0)]
+    int tag = add_local(&ctx, I64_TYPE, None)
+    emit(&ctx, GICallExtern(tag, read_fn, args))
+    return tag
+
+# Resolve the runtime clone function for a payload type, or "" if no
+# safe clone is available at this site. Routes through
+# `build_resource_metadata` for builtin runtime types
+# (GorgetString/Array/Map/Set/Closure and their parameterised forms);
+# user-defined resource structs/enums would use `T__clone` but the
+# C codegen emits that symbol only for types in
+# `recursive_drop_structs`/`recursive_drop_enums`, populated later
+# in the LIR-lower pass. Emitting `T__clone` here for a type that
+# never gets registered produces a stage-1 link error; until the
+# user-type clone emission is wired through `gmod.resource_types`
+# unconditionally, restrict the clone path to builtins.
+#
+# `gorget_string_clone_to_owned` and `gorget_closure_clone_to_owned`
+# override `build_resource_metadata`'s `clone_fn` because their
+# `_to_owned` variants are what `infer_runtime_return_type` registers
+# as returning the struct type by value (vs the in-place variants
+# that return void).
+# True iff `clone_fn` is a DEEP (recursive, subtree-copying) clone — a user
+# `T__clone` or a collection `gorget_{array,map,set}_clone`. These are the
+# clone-bomb types whose per-descent invocation compounds O(tree^2) in the
+# recursive AST walkers, so they are the ones the CoW borrow-elision skips.
+# String/Closure clones (`gorget_string_clone_to_owned` /
+# `gorget_closure_clone_to_owned`) are single-level + have a value-slot
+# consume ABI that the borrow path can't satisfy — they keep eager cloning.
+bool is_deep_clone_fn(String clone_fn):
+    if clone_fn == "":
+        return false
+    if clone_fn == "gorget_array_clone" or clone_fn == "gorget_map_clone" or clone_fn == "gorget_set_clone":
+        return true
+    if clone_fn == "gorget_string_clone_to_owned" or clone_fn == "gorget_closure_clone_to_owned":
+        return false
+    # Any other resolved clone fn is a user-type `T__clone` (deep).
+    return clone_fn.ends_with("__clone")
+
+String resolve_payload_clone_fn(String tname, GirModule &gmod):
+    if tname == "":
+        return ""
+    match resource_meta_for(&gmod, tname):
+        case Some(rmeta):
+            match rmeta.clone_fn:
+                case Some(fn):
+                    if rmeta.runtime_name == "GorgetString":
+                        return "gorget_string_clone_to_owned"
+                    if rmeta.runtime_name == "GorgetClosure":
+                        return "gorget_closure_clone_to_owned"
+                    return fn
+                case None:
+                    pass
+        case None:
+            pass
+    # §7 row 1 (2026-05-13; de-gated 2026-05-27): user-type fallback.
+    # `T__clone` is emitted by `populate_drop_metadata` in `lir_lower.gg`
+    # for EVERY type registered as a resource — the `__imported_type__`
+    # skip there was REMOVED in cluster (a) 2026-05-24 (lir_lower.gg:3562),
+    # because whole-program compilation emits all user types in one C file
+    # and double-definition is guarded by `fn_exists()`, not by suppression.
+    # We mirror that here: return `T__clone` for any registered resource
+    # user type, imported or not — the LIR layer always defines it. The
+    # old imported-type gate left Branch C-pre (lower.gg:805-814) skipping
+    # the deref+clone for imported types, so `Item item = m.items.get(i)
+    # .unwrap()` bound a BorrowAlias into m.items[i] → the meta-expansion
+    # recursive get-mutate-set aliased the slot → stage-2 double-free.
+    if gmod.resource_types.contains(tname) and gmod.type_infos.contains(tname):
+        return tname + "__clone"
+    return ""
+
+# Emit a variant-payload read. `variant_name` + `field_idx` determines
+# which struct field to read; result binds into `dst_type`.
+# `borrow_only` (CoW for-element default): when true, return the
+# LoBorrowed/BoField field-read alias WITHOUT materialising a clone.
+# Used by the for-loop element extract (`for x in coll`), where the
+# element is a borrow into the collection per the CoW default
+# (CLAUDE.md "Ownership at Consuming Positions": collection element
+# reads propagate Ptr aliases at zero cost). A read-only loop body
+# then costs zero clones; a body that CONSUMES/MUTATES the element
+# clones on demand via op_consume's a-5 LoBorrowed arm at that
+# consume site. Match-arm payload binds pass false → keep the eager
+# clone (their binding semantics own the payload).
+int emit_payload_read(LowerCtx &ctx, int scrutinee_ptr, String enum_name, String variant_name, int field_idx, int dst_type, GirModule &gmod):
+    return emit_payload_read_mode_full(&ctx, scrutinee_ptr, enum_name, variant_name, field_idx, dst_type, &gmod, false, false)
+
+int emit_payload_read_mode(LowerCtx &ctx, int scrutinee_ptr, String enum_name, String variant_name, int field_idx, int dst_type, GirModule &gmod, bool borrow_only):
+    return emit_payload_read_mode_full(&ctx, scrutinee_ptr, enum_name, variant_name, field_idx, dst_type, &gmod, borrow_only, false)
+
+# `borrow_all` (owned-whole-dropped scrutinee): when true, elide the clone for
+# EVERY payload type — String/Closure included — not just the DEEP-clone
+# aggregates the `borrow_only` path covers. The scrutinee OWNS the payload and
+# is registered for a whole-scrutinee `Result__/Option____drop` (is_droppable_
+# type via the structural decompose), which frees the payload exactly once at
+# scope exit. Binding `dst` (the LoBorrowed field-read alias) avoids a second
+# heap (no leak) and the second drop (no double-free). The arm's consume sites
+# clone on demand (op_consume LoBorrowed → OpClone), so a consuming arm stays
+# sound: the consumer gets a fresh independent copy, the whole-drop frees the
+# original. Mirrors Rust EnumFieldLoadMode::Borrow (devbook ch.13).
+int emit_payload_read_mode_full(LowerCtx &ctx, int scrutinee_ptr, String enum_name, String variant_name, int field_idx, int dst_type, GirModule &gmod, bool borrow_only, bool borrow_all):
+    String field = variant_name + "_" + int_to_str(field_idx)
+    String read_fn = "__field_read_" + enum_name + "_" + field
+    Vector[Operand] args = [op_consume(&ctx, &gmod, scrutinee_ptr, CkMatchPtr()), OpConstI64(field_idx)]
+    # The field read produces a byte-copy of the variant's payload
+    # bytes — for resource payloads (Vector, Dict, String, user enums
+    # with resource sub-fields), those bytes alias the scrutinee's
+    # interior. Returning that alias directly means downstream
+    # value-passing (e.g., `type_check_item(item, ...)`) byte-copies the
+    # alias into the callee's frame; the callee destructures, mutates
+    # state, and the alias's storage invalidates → SIGSEGV (showcase
+    # blocker #2). Fix: when the payload type has a clone fn, emit a
+    # real clone so the extracted value is independently owned.
+    #
+    # Borrow-mode arg + slot-addr at the call boundary handles the
+    # signature (`T T__clone(T*)` / `T gorget_string_clone_to_owned(T*)`)
+    # — Phase D step 3's OpBorrow lowering at lir_lower.gg already
+    # threads SlotAddr for pass-by-ptr args.
+    int dst = add_local_with(&ctx, dst_type, None, LoBorrowed(), BoField(-1, -1))
+    emit(&ctx, GICallExtern(dst, read_fn, args))
+    # option_ref_borrow Phase 3 (RES-2 guard): a `GtPtr(T)` payload (the
+    # Some_0 of an `Option__Ref__T` borrowing-getter result) IS the element
+    # pointer — never clone-extract it. dst_tname collapses GtPtr(T)→"T", so
+    # without this guard resolve_payload_clone_fn("T") would find T__clone and
+    # the direct `match coll.get(i)` case (owned Option temp, borrow_only
+    # false) would clone-extract a POINTER (corruption). The guard is ADDITIVE
+    # — it precedes BOTH the borrow_only elision (still needed for the
+    # value-payload for-element path, D5) and the clone arm. Read the typed
+    # GIR type, not the name (the name collapsed).
+    if dst_type >= 0 and dst_type < gmod.type_table.len():
+        GirType dst_gt = gmod.type_table.get(dst_type).unwrap()
+        match dst_gt:
+            case GtPtr(inner):
+                # option_ref_borrow Phase 6 (R1 fix): gate on the POINTEE.
+                # A `GtPtr(inner)` extracted from an `Option[Ref[inner]]` is,
+                # at a value-consuming position, EITHER a borrow we keep
+                # (resource pointee — field-access auto-derefs, consume
+                # clones the pointee: Phase 3/4 behavior, NO CHANGE) OR a
+                # primitive borrow that is semantically pointless (Copy types
+                # copy — book ch11) and must be DEREF-LOADED. Without this,
+                # `int key = vec.get(i).unwrap()` OpCopy's the 8-byte POINTER
+                # into the int slot → `key` holds the element's address.
+                #
+                # Leak 1 (#8-residual): a DROPPABLE USER AGGREGATE pointee
+                # (`Option[String]`/`Result[_,_]`/resource-struct — in
+                # `resource_types`/`optionlike_resource_types` per
+                # `is_droppable_type`, but NOT a runtime resource so
+                # `is_resource_type_name` is false) is ALSO kept as a borrow:
+                # deref-loading it byte-copies the 40-byte payload, shallow-
+                # ALIASING the element's inner heap (the `back = coll.get(i)
+                # .unwrap()` shape), so a scope-exit whole-drop double-frees
+                # against the array-free elem_drop. Keeping the `GtPtr` borrow
+                # lets `decide_svardecl_emission` Branch A flip the read bind
+                # to a non-owning Ptr alias — the array owns + frees the
+                # element exactly once. The pointee is read via a Ptr (match
+                # auto-derefs the scrutinee ptr; field-access auto-derefs;
+                # op_consume clones only at an owning consume). Typed
+                # droppability check, not a name match.
+                if is_resource_type_name(type_id_to_name(inner, &gmod), &gmod) or is_droppable_type(inner, &gmod):
+                    return dst
+                else:
+                    # Primitive pointee: deref `*dst` into a fresh
+                    # value-typed local of the pointee type. GIDeref lowers
+                    # to a sized load (gir.gg:117).
+                    int value_local = add_local(&ctx, inner, None)
+                    emit(&ctx, GIDeref(value_local, dst, inner))
+                    return value_local
+            else:
+                pass
+    String dst_tname = type_id_to_name(dst_type, &gmod)
+    String clone_fn = resolve_payload_clone_fn(dst_tname, &gmod)
+    # CoW borrow-elision (for-element + nonowning-scrutinee match-destructure):
+    # return the borrow alias WITHOUT cloning — but ONLY for DEEP-clone
+    # payloads (user structs / Vectors / Dicts whose `__clone`/`gorget_*_clone`
+    # recursively copies a subtree). Those are the O(tree^2) clone-bomb types.
+    # String/Closure payloads keep their eager single-clone path: their clone
+    # is cheap (not the bomb) AND the borrow→clone-on-consume ABI for a
+    # value-typed `Str` slot mismatches `gorget_string_clone_to_owned(const
+    # GorgetString*)` at the consume site (cc "incompatible type" in
+    # derive___format_type_inner). Scoping the elision to aggregate payloads
+    # kills the bomb without disturbing the String/Closure consume path.
+    if borrow_only and is_deep_clone_fn(clone_fn):
+        return dst
+    # Owned-whole-dropped scrutinee: elide the clone for ALL payload types,
+    # String/Closure included. `dst` is the LoBorrowed field-read alias into
+    # the scrutinee's payload — the whole-scrutinee drop frees it exactly once.
+    if borrow_all:
+        return dst
+    if clone_fn != "":
+        int cloned = add_local(&ctx, dst_type, None)
+        Vector[Operand] clone_args = [OpBorrow(dst)]
+        emit(&ctx, GICallExtern(cloned, clone_fn, clone_args))
+        return cloned
+    return dst
+
+# Take the address of scrutinee's local so we can pass a pointer to the
+# field_read helpers (arg 0 is Ptr-typed by needs_ptr_arg convention).
+#
+# Phase 3 (2026-05-22, Class 8 keystone): when `scrutinee` is itself a
+# borrow (LoBorrowed/LoView) — e.g. the scrutinee is an EFieldAccess
+# (`match ty.ty:`) whose result is LoBorrowed/BoField — the temp local
+# we allocate to take the address of MUST inherit that borrow tag.
+# Without inheritance, `tmp = add_local + GIAssign(tmp, OpCopy(scrutinee))`
+# binds tmp as LoOwned, and downstream sites (drop emission, clone
+# emission at consume sites) treat tmp as a real owner whose bytes alias
+# into the borrowed source — double-free or use-after-free.
+#
+# This is the chain `__s2 = __v3 = (*p0).ty` in stage1.c's
+# `loader___type_mentions_iter`: the field read tags __v3 LoBorrowed,
+# match_scrutinee_ptr rebinds it into __s2, and pre-Phase 3 __s2 was
+# LoOwned. Phase 3 propagates the LoBorrowed tag through.
+int match_scrutinee_ptr(LowerCtx &ctx, GirModule &gmod, int scrutinee):
+    # Move the value into a temp local so we can take its address —
+    # scrutinee may already be an identifier with a stable slot, but
+    # this extra copy keeps the address path uniform.
+    int scr_tid = ctx.locals.get(scrutinee).unwrap().type_id
+    int tmp = add_local_inheriting(&ctx, scr_tid, None, scrutinee)
+    # a-7: a match does NOT consume its scrutinee — it borrows (the tag/field
+    # reads take the scrutinee's ADDRESS). CkMatchPtr is a borrow kind, so
+    # op_consume yields OpBorrow (Ptr alias), not OpClone. CkAssign here forced
+    # a clone for resource enums, and the clone result is a value — the
+    # downstream tag-read `((Enum*)tmp)->tag` then can't cast it to a pointer.
+    emit(&ctx, GIAssign(tmp, op_consume(&ctx, &gmod, scrutinee, CkMatchPtr())))
+    return tmp
+
+# Lower a single match arm's pattern-match test. Emits branches to
+# either `match_bb` (pattern matched, possibly with bindings) or
+# `no_match_bb` (pattern didn't match, try next arm).
+void lower_pattern_match(LowerCtx &ctx, int scrutinee, SpannedPattern spat, String enum_name, int match_bb, int no_match_bb, GirModule &gmod):
+    match spat.pat:
+        case PWildcard:
+            set_terminator(&ctx, GTJump(match_bb))
+        case PBinding(name):
+            # The parser produces PBinding for any bare identifier — both
+            # real variable bindings (`case x:`) AND unit enum variants
+            # (`case KwInt:`). If `name` is a known variant of the current
+            # enum, treat it as a zero-arg PConstructor so we emit a proper
+            # tag check instead of an always-true catch-all.
+            if enum_name != "" and match_variant_index(enum_name, name, &gmod) >= 0:
+                Vector[SpannedPattern] no_sub_pats = []
+                lower_ctor_pattern(&ctx, scrutinee, name, no_sub_pats, enum_name, match_bb, no_match_bb, &gmod)
+            else:
+                # Real binding: always match; bind scrutinee into a fresh
+                # local under `name`.
+                int scr_tid = ctx.locals.get(scrutinee).unwrap().type_id
+                # Phase 3 (Class 8): inherit scrutinee's borrow tag onto
+                # the binding local. When scrutinee is LoBorrowed/LoView
+                # (e.g. arrived via .get().unwrap() chain or field-read),
+                # the named binding must alias rather than byte-copy into
+                # a fresh owner that COMMIT 3 would later double-free.
+                Option[String] name_opt = Some(name)
+                int bound = add_local_inheriting(&ctx, scr_tid, name_opt, scrutinee)
+                emit(&ctx, GIAssign(bound, op_consume(&ctx, &gmod, scrutinee, CkAssign())))
+                nl_put(&ctx, name, bound)
+                set_terminator(&ctx, GTJump(match_bb))
+        case PConstructor(variant_name, sub_pats):
+            lower_ctor_pattern(&ctx, scrutinee, variant_name, sub_pats, enum_name, match_bb, no_match_bb, &gmod)
+        case PDotShorthand(variant_name, sub_pats):
+            # `.VariantName(pats)` — same semantics as PConstructor with
+            # enum name inferred from the scrutinee's type.
+            lower_ctor_pattern(&ctx, scrutinee, variant_name, sub_pats, enum_name, match_bb, no_match_bb, &gmod)
+        case PLiteral(lit_expr):
+            # `case N:` / `case "x":` / `case true:` — emit an equality
+            # check against the literal value. Without this every literal
+            # pattern fell through to the unconditional `GTJump(match_bb)`
+            # below, making `match tid: case 0: ...; case 4: ...` always
+            # take the first arm (every call to `type_id_to_name` returned
+            # "bool" regardless of tid).
+            #
+            # `case None:` is parsed as `PLiteral(ENoneLiteral)` by the
+            # parser (not PConstructor), so route None patterns through the
+            # ctor-pattern path — None is a variant constructor, not a
+            # comparable value, and Option types don't support `==` at the
+            # GIR level.
+            match lit_expr.expr:
+                case ENoneLiteral():
+                    Vector[SpannedPattern] no_sub_pats = []
+                    lower_ctor_pattern(&ctx, scrutinee, "None", no_sub_pats, enum_name, match_bb, no_match_bb, &gmod)
+                else:
+                    int scr_tid = ctx.locals.get(scrutinee).unwrap().type_id
+                    int lit_val = lower_expr(&ctx, lit_expr, &gmod)
+                    int cmp_tid = I64_TYPE
+                    if scr_tid == BOOL_TYPE:
+                        cmp_tid = BOOL_TYPE
+                    int is_match = add_local(&ctx, BOOL_TYPE, None)
+                    emit(&ctx, GICmp(is_match, CMP_EQ, cmp_tid, op_consume(&ctx, &gmod, scrutinee, CkBinOpArg()), op_consume(&ctx, &gmod, lit_val, CkBinOpArg())))
+                    set_terminator(&ctx, GTBranch(OpCopy(is_match), match_bb, no_match_bb))
+        case POr(alts):
+            # `case A | B | C:` — match if any alternative matches. Each
+            # alternative tries to match, branches to match_bb on success
+            # or to the next alternative's attempt block on failure. The
+            # last alternative's no-match goes to no_match_bb.
+            #
+            # Previously fell through to the unconditional `GTJump(match_bb)`
+            # below — every POr arm unconditionally matched regardless of
+            # the scrutinee, which broke the 32 uses of `a | b` patterns
+            # in the self-host sources.
+            if alts.len() == 0:
+                set_terminator(&ctx, GTJump(no_match_bb))
+            else:
+                int ai = 0
+                while ai < alts.len():
+                    SpannedPattern alt = alts.get(ai).unwrap()
+                    int next_alt_bb = no_match_bb
+                    if ai + 1 < alts.len():
+                        next_alt_bb = new_block(&ctx)
+                    lower_pattern_match(&ctx, scrutinee, alt, enum_name, match_bb, next_alt_bb, &gmod)
+                    if ai + 1 < alts.len():
+                        switch_to(&ctx, next_alt_bb)
+                    ai += 1
+        else:
+            # Unsupported pattern shape (PTuple, PRest) — fall through
+            # with a permissive match rather than silently dropping the arm
+            # body. Future fixes: add proper patterns.
+            lower_fail("unsupported pattern variant in match arm")
+            set_terminator(&ctx, GTJump(match_bb))
+
+void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vector[SpannedPattern] sub_pats, String enum_name, int match_bb, int no_match_bb, GirModule &gmod):
+    # Mirrors Rust's `patterns.rs:388-397`: prefer enum_name from the
+    # scrutinee's type, but fall back to the pattern's qualified name,
+    # and finally scan all registered enums for a variant with this name.
+    # `case ParseError.Empty()` arrives as variant_name="ParseError.Empty"
+    # — even without scrutinee type info, we recover the enum from the
+    # pattern's qualifier. Bare variants like `case EBinaryOp(...)` don't
+    # carry enum info, so we scan for a unique enum that declares this
+    # variant.
+    String effective_enum = enum_name
+    String effective_variant = variant_name
+    if variant_name.contains("."):
+        int dot_pos = variant_name.index_of(".").unwrap()
+        String qual_enum = variant_name.slice(0, dot_pos)
+        String bare_variant = variant_name.slice(dot_pos + 1, variant_name.len())
+        if effective_enum == "":
+            effective_enum = qual_enum
+        effective_variant = bare_variant
+    # If still unresolved, scan the enum registry for a matching variant.
+    # This mirrors Rust's `ctx.resolve_enum_variant(...)` fallback.
+    if effective_enum == "":
+        String guessed = find_enum_by_variant(&gmod, effective_variant)
+        if guessed.len() > 0:
+            effective_enum = guessed
+    # Scrutinee-type fallback: when `match_enum_type` returned empty
+    # (e.g. `auto`-inferred scrutinee with prelude variants), recover
+    # the enum directly from the scrutinee's local type. The `__`
+    # mangling keeps `Option__T` / `Result__T__E` distinguishable, and
+    # the existing `match_variant_index` / `__field_read_<enum>_<field>`
+    # machinery already handles those prefixes (see line 2667-2678 +
+    # `lir_codegen.gg:3445` longest-prefix split). Required for
+    # `case Ok(v):` / `case Some(v):` cascades — without this, `v` was
+    # never bound as a local.
+    if effective_enum == "":
+        int scr_tid = ctx.locals.get(scrutinee).unwrap().type_id
+        if scr_tid >= 0 and scr_tid < gmod.type_table.len():
+            int peeled_tid = scr_tid
+            GirType bt = gmod.type_table.get(scr_tid).unwrap()
+            match bt:
+                case GtPtr(inner):
+                    peeled_tid = inner
+                case GtMutPtr(inner):
+                    peeled_tid = inner
+                else:
+                    pass
+            String scr_type_name = type_id_to_name(peeled_tid, &gmod)
+            if has_enum_category(&gmod, peeled_tid):
+                effective_enum = scr_type_name
+    # Last-resort prelude fallback: when the scrutinee's type was lost
+    # entirely (`auto` binding mis-typed to I64, generic-context T not
+    # yet substituted), the variant name itself disambiguates Result vs
+    # Option. We can't reconstruct the mangled `Option__T` name here
+    # without the scrutinee type, but emitting a synthetic enum name
+    # `Option` / `Result` is enough to register the binding(s) in the
+    # match arm — `match_variant_index` and `emit_tag_read` learn to
+    # accept the bare prelude names below. Without this, every
+    # mis-typed match arm fell through to the unconditional `GTJump`
+    # path and bound nothing — every Ok/Error/Some bare-name use
+    # cascaded into a `[bug] EIdentifier` placeholder, then 0-typed.
+    if effective_enum == "":
+        if effective_variant == "Ok" or effective_variant == "Error":
+            effective_enum = "Result"
+        elif effective_variant == "Some" or effective_variant == "None":
+            effective_enum = "Option"
+    if effective_enum == "":
+        # Truly nothing we can do. Hits on monomorphized Option / Result
+        # which use `__` separators the __field_read_ parser can't split
+        # cleanly, or on variants we never registered.
+        lower_fail("PConstructor on non-enum scrutinee — enum_name empty (variant='" + variant_name + "')")
+        set_terminator(&ctx, GTJump(match_bb))
+        return
+    int expected_tag = match_variant_index(effective_enum, effective_variant, &gmod)
+    if expected_tag < 0:
+        lower_fail("PConstructor variant not in enum: enum='" + effective_enum + "' variant='" + effective_variant + "'")
+        set_terminator(&ctx, GTJump(match_bb))
+        return
+    int scrutinee_ptr = match_scrutinee_ptr(&ctx, &gmod, scrutinee)
+    int tag = emit_tag_read(&ctx, scrutinee_ptr, effective_enum, &gmod)
+    int expected = add_local(&ctx, I64_TYPE, None)
+    emit(&ctx, GIAssign(expected, OpConstI64(expected_tag)))
+    int is_match = add_local(&ctx, BOOL_TYPE, None)
+    emit(&ctx, GICmp(is_match, CMP_EQ, I64_TYPE, OpCopy(tag), OpCopy(expected)))
+    # Unit variants (no sub_pats): skip the intermediate bind_bb — branch
+    # straight to match_bb on success. Saves 1 block per arm, which matters
+    # for matches on big imported enums (Keyword has ~60 variants; without
+    # this the GIR block count explodes and stage-0 OOMs during self-host
+    # compile).
+    if sub_pats.len() == 0:
+        set_terminator(&ctx, GTBranch(OpCopy(is_match), match_bb, no_match_bb))
+        return
+    int bind_bb = new_block(&ctx)
+    set_terminator(&ctx, GTBranch(OpCopy(is_match), bind_bb, no_match_bb))
+    switch_to(&ctx, bind_bb)
+    # Bind payload sub-patterns. For each sub_pat, emit a payload read
+    # then match that sub-pattern. If a sub-pat doesn't match the whole
+    # arm fails — but we simplify: PBinding/PWildcard sub-pats always
+    # match, so just bind linearly here.
+    int fi = 0
+    while fi < sub_pats.len():
+        SpannedPattern sp = sub_pats.get(fi).unwrap()
+        match sp.pat:
+            case PWildcard:
+                pass
+            case PBinding(bname):
+                # Look up field type from the enum's variant's field info.
+                int fty = lookup_ctor_field_type(effective_enum, effective_variant, fi, &gmod)
+                # option_ref_borrow Phase 3 (typed path): if the scrutinee is a
+                # borrowing-getter result `Option[Ref[T]]` (e.g. `match
+                # coll.get(i): case Some(p):`), bind `p` as the real `GtPtr(T)`
+                # payload recorded in the typed option_ref_payload channel —
+                # NOT the name-derived type. Keyed on the scrutinee Option's
+                # GIR id; zero `Ref__` string inspection. The downstream
+                # emit_payload_read_mode GtPtr guard returns the pointer.
+                int scr_opt_tid = ctx.locals.get(scrutinee).unwrap().type_id
+                int scr_ref_payload = option_ref_payload_of(&gmod, scr_opt_tid)
+                if scr_ref_payload >= 0 and fi == 0 and effective_variant == "Some":
+                    fty = scr_ref_payload
+                # CoW match-destructure: when the SCRUTINEE is a borrow alias
+                # (a by-value param / borrowed local being matched read-only —
+                # e.g. the generic-discovery walkers `match sexpr.expr: case
+                # ECall(callee_box, args, targs):`), bind the payload as a
+                # borrow alias into the scrutinee WITHOUT deep-cloning it. The
+                # arm body reads it as a borrow; any consume/mutation clones on
+                # demand (op_consume a-5). This kills the second clone bomb:
+                # cloning `args`/`targs` Vectors at every ECall match-bind
+                # compounded O(tree^2) through the recursive walkers. When the
+                # scrutinee OWNS its data, keep the eager clone (independent
+                # owner — matches the original Class-8 double-free fix).
+                bool scrut_borrow = scrutinee_nonowning(&ctx, &gmod, scrutinee)
+                # Owned-whole-dropped scrutinee (Result/Option local whose own
+                # whole-drop frees the payload once): borrow the payload instead
+                # of deep-cloning it — for ALL payload types incl. String. This
+                # is the oracle's EnumFieldLoadMode::Borrow (devbook ch.13): no
+                # second heap (Prototype A's leak), no second drop (Prototype B's
+                # double-free). The bound alias is read-only here; a consuming arm
+                # clones on demand via op_consume LoBorrowed→OpClone.
+                bool scrut_owned_dropped = scrutinee_owned_whole_dropped(&ctx, &gmod, scrutinee)
+                # Leak 1 (#8-residual): a borrow-flipped read bind (`T back =
+                # coll.get(i).unwrap()`, Branch A-agg) is a `Ptr(T)` LoBorrowed
+                # alias into a collection element the COLLECTION owns + frees
+                # (via the array-free elem_drop). Matching it (`match back: case
+                # Some(s):`) must borrow the payload for ALL types — INCLUDING
+                # String — exactly like the owned-whole-dropped case: the array
+                # frees the element's inner String once at array-free, so a
+                # cloned `s` (the String `borrow_only` path's eager clone, since
+                # String isn't a deep-clone type) would be a block-scoped LEAK
+                # (never registered for its own drop). Route through `borrow_all`
+                # so `s` is a read-only LoBorrowed alias; a consuming arm clones
+                # on demand (op_consume LoBorrowed→OpClone). Typed test on the
+                # `Ptr`-pointee droppability, not a name match.
+                if scrutinee_borrow_into_owning_collection(&ctx, &gmod, scrutinee):
+                    scrut_owned_dropped = true
+                int field_val = emit_payload_read_mode_full(&ctx, scrutinee_ptr, effective_enum, effective_variant, fi, fty, &gmod, scrut_borrow, scrut_owned_dropped)
+                Option[String] bname_opt = Some(bname)
+                # option_ref_borrow Phase 6 (R1, site #3): KEEP `fty`(=GtPtr for
+                # an Option[Ref[T]] scrutinee) as the `dst_type` arg above so the
+                # site-#1 guard fires and derefs primitive pointees. But type the
+                # BOUND local from the RETURNED `field_val`'s ACTUAL type — site
+                # #1 returns a value-typed local for a primitive pointee (the
+                # deref result) and the GtPtr for a resource pointee. Binding to
+                # `fty` would force a pointer slot for a primitive (the bug). No
+                # primitive-pointee `match coll.get(i): case Some(p):` site exists
+                # in the current self-host (all chain `.unwrap()` first), so the
+                # primitive case is unexercised by the bootstrap — but it's now
+                # sound; the exercised resource-match case keeps `bound: GtPtr`.
+                int bound = add_local_inheriting(&ctx, ctx.locals.get(field_val).unwrap().type_id, bname_opt, field_val)
+                ConsumeKind bk = CkAssign()
+                # Borrow-bind (alias, no clone) when the field-read returned a
+                # LoBorrowed alias — both the nonowning-scrutinee path AND the
+                # owned-whole-dropped path (Prototype C). CkCallArgBorrow is a
+                # NON-consume kind, so op_consume yields OpBorrow (pure alias);
+                # CkAssign would route LoBorrowed→OpClone and re-clone the very
+                # payload we just elided.
+                if (scrut_borrow or scrut_owned_dropped) and local_is_borrow_alias(&ctx, field_val):
+                    bk = CkCallArgBorrow()
+                emit(&ctx, GIAssign(bound, op_consume(&ctx, &gmod, field_val, bk)))
+                nl_put(&ctx, bname, bound)
+            case PLiteral(lit_expr):
+                # Literal sub-pattern: read the payload field, compare against
+                # the literal, branch to no_match_bb on mismatch. Used by
+                # `case Ok(0):` / `case Some(true):` shapes — without this,
+                # the arm match'd on tag alone and the literal check was
+                # silently dropped (broken behaviour: `case Ok(0)` matched
+                # ALL Ok values). Only primitives (int / bool / char / float)
+                # are wired here; string literal sub-patterns would need a
+                # `gorget_str_eq` call and aren't exercised today.
+                int lit_fty = lookup_ctor_field_type(effective_enum, effective_variant, fi, &gmod)
+                # option_ref_borrow Phase 6 (R1, site #5): gate the GICmp operand
+                # type on the pointee. For an `Option[Ref[T]]` scrutinee with a
+                # literal sub-pattern (`case Some(0):` on a getter result),
+                # `lit_fty` resolves through the `Ref__` bridge to `GtPtr(T)`.
+                # emit_payload_read routes through site #1, which for a PRIMITIVE
+                # pointee derefs `*ptr` and returns a VALUE-typed `lit_field_val`
+                # — so the GICmp must compare against the VALUE pointee type, not
+                # the `GtPtr`. (Resource pointee keeps `GtPtr` for both. No
+                # primitive-pointee literal-match on a getter exists today — all
+                # chain `.unwrap()` first — so this is unexercised, but gated for
+                # completeness rather than shipping a silently-wrong instruction.)
+                int lit_cmp_ty = lit_fty
+                if lit_fty >= 0 and lit_fty < gmod.type_table.len():
+                    GirType lit_gt = gmod.type_table.get(lit_fty).unwrap()
+                    match lit_gt:
+                        case GtPtr(lit_inner):
+                            if not is_resource_type_name(type_id_to_name(lit_inner, &gmod), &gmod):
+                                lit_cmp_ty = lit_inner
+                        else:
+                            pass
+                int lit_field_val = emit_payload_read(&ctx, scrutinee_ptr, effective_enum, effective_variant, fi, lit_fty, &gmod)
+                int lit_val = lower_expr(&ctx, lit_expr, &gmod)
+                int lit_eq = add_local(&ctx, BOOL_TYPE, None)
+                emit(&ctx, GICmp(lit_eq, CMP_EQ, lit_cmp_ty, OpCopy(lit_field_val), OpCopy(lit_val)))
+                int lit_continue_bb = new_block(&ctx)
+                set_terminator(&ctx, GTBranch(OpCopy(lit_eq), lit_continue_bb, no_match_bb))
+                switch_to(&ctx, lit_continue_bb)
+            else:
+                lower_fail("nested non-binding pattern in PConstructor — using wildcard fallback (got: " + pat_kind(sp.pat) + ")")
+        fi += 1
+    set_terminator(&ctx, GTJump(match_bb))
+
+int lookup_ctor_field_type(String enum_name, String variant_name, int field_idx, GirModule &gmod):
+    # Prelude mono'd enum payload type — read off the typed `enum_category`
+    # channel (recorded at the MINT site), not re-parsed from the mangled
+    # name. `Option__T.Some(0)` → T; `Result__T__E.Ok(0)` → T / `.Error(0)`
+    # → E. The enum's GIR id is the name-deduped `named_types` entry, so it
+    # matches the id recorded at mint time. This RETIRES the old leftmost-/
+    # smart-`__` split (mis-split on nested-generic payloads) — CLAUDE.md
+    # "No name matching".
+    if enum_name.starts_with("Option__") or enum_name.starts_with("Result__"):
+        int enum_tid = gmod.named_types.get(enum_name).unwrap_or(-1)
+        EnumCategory ec = enum_category_of(&gmod, enum_tid)
+        if ec.category == ENUM_CAT_OPTION:
+            if variant_name == "Some" and field_idx == 0:
+                return ec.ok_type
+            return I64_TYPE
+        if ec.category == ENUM_CAT_RESULT:
+            if variant_name == "Ok" and field_idx == 0:
+                return ec.ok_type
+            if variant_name == "Error" and field_idx == 0:
+                return ec.err_type
+            return I64_TYPE
+        # Channel MISS on an `Option__`/`Result__`-named enum: its mint site
+        # failed to `record_enum_category` (a completeness bug — the payload
+        # is now mistyped as I64). Surface it loudly via the idiomatic
+        # non-fatal `diag_bug` (a `/* [bug] … */` in the emitted C), not a
+        # silent sentinel. The fix is to record at the new mint — never to
+        # re-introduce a name-split here (CLAUDE.md "No name matching"). This
+        # rides the existing semantic `starts_with` gate above, so it fires
+        # ONLY on a genuine miss. (`option_result_field_store` was one such
+        # miss, caught during development.)
+        diag_bug("lookup_ctor_field_type", "Option__/Result__ channel miss for '" + enum_name + "' — mint missed record_enum_category; payload mistyped as I64 (WRONG)")
+        return I64_TYPE
+    String found_field_type = ""
+    if gmod.type_infos.contains(enum_name):
+        GirTypeInfo ti = gmod.type_infos.get(enum_name).unwrap()
+        for v in ti.variants:
+            if v.name == variant_name:
+                if field_idx < v.fields.len():
+                    GirFieldInfo f = v.fields.get(field_idx).unwrap()
+                    found_field_type = f.type_name.clone()
+                break
+    if found_field_type != "":
+        return resolve_field_gir_type(found_field_type, &gmod)
+    return I64_TYPE
+
+# ── Error-handling lowering (SThrow / SOnError / ECatch / ERethrow) ──
+#
+# Mirrors Rust gg's `lower_throw` (`src/ir/lowering/stmts/mod.rs:2244`),
+# `lower_catch_expr` (`src/ir/lowering/exprs/mod.rs:3056`),
+# `lower_rethrow_expr` (`exprs/mod.rs:2918`), and the `Stmt::OnError`
+# registration (`stmts/mod.rs:339`). The self-host re-expresses these
+# with the local block/branch/tag-read/payload-read vocabulary.
+
+# Read the Ok and Error payload GIR type ids of a monomorphized
+# `Result__<OkT>__<ErrT>` enum off the typed `enum_category` channel
+# (recorded at the MINT site — `record_enum_category` — where the typed
+# payload tids were in hand). Mirrors Rust's `extract_result_field_types`
+# (`exprs/mod.rs:2845`), which reads the Ok/Error variant field types off
+# the enum's TypeDef; the self-host's mono'd `Result__T__E` is not in
+# `type_infos`, so we carry the same typed fact on `enum_category` instead.
+# This RETIRES the former L→R `__`-boundary "smart split" of the mangled
+# name (genuinely ambiguous on nested generics like
+# `Result__Option__int64_t__GorgetString`) — CLAUDE.md "No name matching",
+# Layering rule 3. `result_tid` is the GIR id of the Result enum (the
+# scrutinee/inner-expr lowered local type, with `GtPtr` already peeled by
+# the caller's `type_id_to_name`-style lookup). Returns (ok_tid, err_tid);
+# both default to `I64_TYPE` if `result_tid` carries no recorded category.
+ResultPayloadTypes result_payload_types(int result_tid, GirModule &gmod):
+    # Peel a leading GtPtr/GtMutPtr (a borrowed call result's local type)
+    # to the underlying Result enum id — the channel is keyed by the enum
+    # id, exactly as `type_id_to_name` peels the pointer to the enum name.
+    int enum_tid = result_tid
+    if enum_tid >= 0 and enum_tid < gmod.type_table.len():
+        match gmod.type_table.get(enum_tid).unwrap():
+            case GtPtr(inner):
+                enum_tid = inner
+            case GtMutPtr(inner):
+                enum_tid = inner
+            else:
+                pass
+    EnumCategory ec = enum_category_of(&gmod, enum_tid)
+    if ec.category == ENUM_CAT_RESULT:
+        return ResultPayloadTypes(ec.ok_type, ec.err_type)
+    # Channel MISS. A non-Result tid here is a legitimate no-op (catch /
+    # rethrow are semantically Result-only, but the self-host's own
+    # inference can still hand us a placeholder tid). A `Result__`-named
+    # enum reaching here, though, means its mint missed
+    # `record_enum_category` — Ok/Error payloads silently mistyped as I64.
+    # Surface THAT loudly; the name test gates only the diagnostic, never
+    # the (I64,I64) result (so it stays a diagnostic, not a semantic
+    # name-match).
+    if type_id_to_name(enum_tid, &gmod).starts_with("Result__"):
+        diag_bug("result_payload_types", "Result__ channel miss — mint missed record_enum_category; Ok/Error payloads mistyped as I64 (WRONG)")
+    return ResultPayloadTypes(I64_TYPE, I64_TYPE)
+
+# Emit the registered `on error:` cleanup blocks, LIFO, into the current
+# block. Mirrors Rust's `emit_on_error_cleanups` (`stmts/mod.rs:357`),
+# called from the throw / rethrow error-return paths BEFORE drop
+# elaboration. No-op when nothing is registered.
+void emit_on_error_cleanups(LowerCtx &ctx, GirModule &gmod):
+    int bi = ctx.on_error_blocks.len() - 1
+    while bi >= 0:
+        Vector[Stmt] body = ctx.on_error_blocks.get(bi).unwrap()
+        lower_stmts(&ctx, body, &gmod, false)
+        bi -= 1
+
+# Lower `throw expr` inside a throws function: wrap `expr` in the
+# enclosing function's `Result.Error(expr)`, run on-error cleanups, emit
+# the function-scope drop set (excluding the return place), and return.
+# Mirrors Rust's `lower_throw` (`stmts/mod.rs:2244`) — the throws-fn
+# branch only (the non-throws `gorget_throw` branch is a parser/semantic
+# error in valid programs, so the self-host omits it and lower_fails).
+void lower_throw_stmt(LowerCtx &ctx, SpannedExpr expr, GirModule &gmod):
+    # The enclosing function's Result__T__E return type lives at local 0
+    # (the return place), exactly as SReturn reads it (`:6018`).
+    int result_type = ctx.locals.get(0).unwrap().type_id
+    String result_tn = type_id_to_name(result_type, &gmod)
+    if not (enum_category_of(&gmod, result_type).category == ENUM_CAT_RESULT):
+        lower_fail("throw in non-throws function (ret type not Result__): " + result_tn)
+        return
+    # Expected-type so the bare `Error` ctor below types its dst to the
+    # full mono'd Result enum (mirrors the SReturn expected_type set).
+    int prev_expected = ctx.expected_type
+    ctx.expected_type = result_type
+    int val = lower_expr(&ctx, expr, &gmod)
+    ctx.expected_type = prev_expected
+    # Build `Result.Error(val)` with the BARE variant name (so the LIR
+    # rewrite `try_lower_prelude_variant` recognizes it) and the dst slot
+    # typed to the concrete Result enum (so the same rewrite's
+    # `slot_ty >= LT_STRUCT_BASE` gate passes). A fully-mangled name
+    # would fall through to a raw extern call → stage-1 link error.
+    int err_dst = add_local(&ctx, result_type, None)
+    Vector[Operand] err_args = [op_consume(&ctx, &gmod, val, CkCallArgOwning())]
+    emit(&ctx, GICallExtern(err_dst, "Error", err_args))
+    # Assign into the return place, run cleanups + drops, then return.
+    emit(&ctx, GIAssign(0, op_consume(&ctx, &gmod, err_dst, CkReturn())))
+    emit_on_error_cleanups(&ctx, &gmod)
+    emit_drops_for_early_exit(&ctx, DSK_FUNCTION, Some(0))
+    set_terminator(&ctx, GTReturn(op_consume(&ctx, &gmod, 0, CkReturn())))
+    # Dead block for any statements after the throw.
+    int dead_bb = new_block(&ctx)
+    switch_to(&ctx, dead_bb)
+
+# Lower `inner catch (name): recovery` — always succeeds. On Ok, the
+# value is the unwrapped Ok payload; on Error, bind `name` to the Error
+# payload, evaluate `recovery`, use that. Mirrors Rust's
+# `lower_catch_expr` (`exprs/mod.rs:3056`). Returns the local holding
+# the merged (Ok-typed) result.
+int lower_catch_expr(LowerCtx &ctx, SpannedExpr inner, String error_binding, SpannedExpr recovery, GirModule &gmod):
+    # Suppress the centralized auto-prop hook — catch operates on the RAW
+    # `Result[T, E]` (it extracts the Ok/Error payloads itself).
+    ctx.suppress_auto_prop = true
+    int val = lower_expr(&ctx, inner, &gmod)
+    int val_tid = ctx.locals.get(val).unwrap().type_id
+    # The inner expr's type is the Result; peel any GtPtr (borrowed call
+    # result) to get the mono'd Result__T__E name for the tag/payload
+    # reads (mirrors the scrutinee-fallback peel at `:6730-6744`).
+    String result_tn = type_id_to_name(val_tid, &gmod)
+    ResultPayloadTypes pt = result_payload_types(val_tid, &gmod)
+    int ok_tid = pt.ok_type
+    int err_tid = pt.err_type
+    # Read the Result tag (0=Ok, 1=Error) via the monomorphized enum
+    # name — `lir_codegen`'s longest-prefix split handles `Result__T__E`
+    # (`:6722-6727`), so the stale "Result not supported" comment on
+    # emit_tag_read (`:6408`) does not apply to the mangled name.
+    int scrutinee_ptr = match_scrutinee_ptr(&ctx, &gmod, val)
+    int tag = emit_tag_read(&ctx, scrutinee_ptr, result_tn, &gmod)
+    int zero = add_local(&ctx, I64_TYPE, None)
+    emit(&ctx, GIAssign(zero, OpConstI64(0)))
+    int is_ok = add_local(&ctx, BOOL_TYPE, None)
+    emit(&ctx, GICmp(is_ok, CMP_EQ, I64_TYPE, OpCopy(tag), OpCopy(zero)))
+    int ok_bb = new_block(&ctx)
+    int err_bb = new_block(&ctx)
+    int merge_bb = new_block(&ctx)
+    # The merged result local is Ok-typed.
+    int result_local = add_local(&ctx, ok_tid, None)
+    set_terminator(&ctx, GTBranch(OpCopy(is_ok), ok_bb, err_bb))
+    # Ok path: extract Ok payload (clone-extract via emit_payload_read_mode),
+    # store into result.
+    switch_to(&ctx, ok_bb)
+    int ok_val = emit_payload_read_mode(&ctx, scrutinee_ptr, result_tn, "Ok", 0, ok_tid, &gmod, false)
+    emit(&ctx, GIAssign(result_local, op_consume(&ctx, &gmod, ok_val, CkAssign())))
+    set_terminator(&ctx, GTJump(merge_bb))
+    # Error path: bind error to `error_binding`, evaluate recovery, store.
+    switch_to(&ctx, err_bb)
+    int err_val = emit_payload_read_mode(&ctx, scrutinee_ptr, result_tn, "Error", 0, err_tid, &gmod, false)
+    Option[String] errn_opt = Some(error_binding)
+    int err_local = add_local_inheriting(&ctx, ctx.locals.get(err_val).unwrap().type_id, errn_opt, err_val)
+    emit(&ctx, GIAssign(err_local, op_consume(&ctx, &gmod, err_val, CkAssign())))
+    nl_put(&ctx, error_binding, err_local)
+    int recovery_val = lower_expr(&ctx, recovery, &gmod)
+    emit(&ctx, GIAssign(result_local, op_consume(&ctx, &gmod, recovery_val, CkAssign())))
+    set_terminator(&ctx, GTJump(merge_bb))
+    switch_to(&ctx, merge_bb)
+    return result_local
+
+# Lower `inner rethrow [(Type name)]: transform` — like auto-propagation,
+# but the error path evaluates `transform` and throws THAT from the
+# enclosing throws-fn. On Ok, continue with the unwrapped Ok value.
+# Mirrors Rust's `lower_rethrow_expr` (`exprs/mod.rs:2918`). Returns the
+# local holding the unwrapped Ok value.
+int lower_rethrow_expr(LowerCtx &ctx, SpannedExpr inner, Option[String] error_binding, SpannedExpr transform, GirModule &gmod):
+    # Suppress the centralized auto-prop hook — rethrow operates on the RAW
+    # `Result[T, E]` (it extracts the Ok/Error payloads itself).
+    ctx.suppress_auto_prop = true
+    int val = lower_expr(&ctx, inner, &gmod)
+    int val_tid = ctx.locals.get(val).unwrap().type_id
+    String result_tn = type_id_to_name(val_tid, &gmod)
+    ResultPayloadTypes pt = result_payload_types(val_tid, &gmod)
+    int ok_tid = pt.ok_type
+    int err_tid = pt.err_type
+    # The enclosing function's Result__T__E return type (local 0).
+    int fn_result_type = ctx.locals.get(0).unwrap().type_id
+    int scrutinee_ptr = match_scrutinee_ptr(&ctx, &gmod, val)
+    int tag = emit_tag_read(&ctx, scrutinee_ptr, result_tn, &gmod)
+    int zero = add_local(&ctx, I64_TYPE, None)
+    emit(&ctx, GIAssign(zero, OpConstI64(0)))
+    int is_ok = add_local(&ctx, BOOL_TYPE, None)
+    emit(&ctx, GICmp(is_ok, CMP_EQ, I64_TYPE, OpCopy(tag), OpCopy(zero)))
+    int ok_bb = new_block(&ctx)
+    int err_bb = new_block(&ctx)
+    int merge_bb = new_block(&ctx)
+    # Ok-typed result for the unwrapped value.
+    int ok_result = add_local(&ctx, ok_tid, None)
+    set_terminator(&ctx, GTBranch(OpCopy(is_ok), ok_bb, err_bb))
+    # Ok path: extract Ok payload, continue.
+    switch_to(&ctx, ok_bb)
+    int ok_val = emit_payload_read_mode(&ctx, scrutinee_ptr, result_tn, "Ok", 0, ok_tid, &gmod, false)
+    emit(&ctx, GIAssign(ok_result, op_consume(&ctx, &gmod, ok_val, CkAssign())))
+    set_terminator(&ctx, GTJump(merge_bb))
+    # Error path: optionally bind the error, evaluate transform, wrap that
+    # in the enclosing fn's Result.Error and return.
+    switch_to(&ctx, err_bb)
+    match error_binding:
+        case Some(err_name):
+            int err_val = emit_payload_read_mode(&ctx, scrutinee_ptr, result_tn, "Error", 0, err_tid, &gmod, false)
+            Option[String] errn_opt = Some(err_name)
+            int err_local = add_local_inheriting(&ctx, ctx.locals.get(err_val).unwrap().type_id, errn_opt, err_val)
+            emit(&ctx, GIAssign(err_local, op_consume(&ctx, &gmod, err_val, CkAssign())))
+            nl_put(&ctx, err_name, err_local)
+        case None:
+            pass
+    int prev_expected_rt = ctx.expected_type
+    ctx.expected_type = fn_result_type
+    int new_err = lower_expr(&ctx, transform, &gmod)
+    ctx.expected_type = prev_expected_rt
+    int err_dst = add_local(&ctx, fn_result_type, None)
+    Vector[Operand] err_args = [op_consume(&ctx, &gmod, new_err, CkCallArgOwning())]
+    emit(&ctx, GICallExtern(err_dst, "Error", err_args))
+    emit(&ctx, GIAssign(0, op_consume(&ctx, &gmod, err_dst, CkReturn())))
+    emit_on_error_cleanups(&ctx, &gmod)
+    emit_drops_for_early_exit(&ctx, DSK_FUNCTION, Some(0))
+    set_terminator(&ctx, GTReturn(op_consume(&ctx, &gmod, 0, CkReturn())))
+    switch_to(&ctx, merge_bb)
+    return ok_result
+
+# Result→T auto-propagation. Given a local `val` that may hold a
+# `throws`-call's `Result__<ok>__E`, unwrap it the way Rust's
+# `maybe_auto_propagate` (`exprs/mod.rs:73-86`) does: on Ok → continue with
+# the Ok payload; on Error → forward the RAW error payload re-wrapped in the
+# enclosing fn's `Result.Error` and early-return (with on-error cleanups +
+# drops). This is `lower_rethrow_expr` MINUS the user `transform` — the
+# error is forwarded unchanged.
+#
+# CENTRALIZED producer-side hook (mirrors Rust gg's `90d09414`): invoked
+# from `lower_expr`'s tail for `Call`/`MethodCall` producers (see the
+# `lower_expr` wrapper docstring). The earlier consumer-targeted design
+# (N explicit call sites) had the SAME per-position gaps the Rust side fixed
+# (binop operands, method args, aggregate-literal elements, inline match
+# scrutinees) — the central hook closes the class at the producer. Raw-Result
+# sites set `ctx.suppress_auto_prop` (match scrutinee with Ok/Error/Some/None
+# arms, catch inner, rethrow inner); dest-is-Result is suppressed here via
+# the `ctx.expected_type` check.
+#
+# Idempotent no-op (returns `val` unchanged) unless BOTH gates hold:
+#  1. `val`'s type name (GtPtr-peeled by type_id_to_name) starts_with
+#     "Result__" — it actually IS a Result.
+#  2. The enclosing fn can propagate: local-0 (the return place, which
+#     the `throws` lowering types to the mono'd Result) starts_with
+#     "Result__" — subsumes Rust's should_auto_propagate/expected_type.
+# A non-throws caller (gate 2 fails) keeps the raw Result unchanged.
+int maybe_auto_propagate(LowerCtx &ctx, int val, GirModule &gmod):
+    if val < 0 or val >= ctx.locals.len():
+        return val
+    # Capture-form suppress (mirrors Rust gg's `maybe_auto_propagate`
+    # expected-type check, `exprs/mod.rs:2937-2943`): when the surrounding
+    # destination expects a `Result` (e.g. `Result[int,E] r = risky()`, a
+    # `throws`-fn return forwarding the raw Result, a Result-typed param /
+    # field), keep the raw Result — don't unwrap into a slot that wants it.
+    # The writer sites set `ctx.expected_type` to the destination type
+    # immediately before recursing into `lower_expr`, so the centralized hook
+    # observes it here. Per-site callers that already cleared expected_type
+    # rely on gate 1/2 below (this check is a no-op when expected_type is -1
+    # or non-Result).
+    if ctx.expected_type >= 0 and ctx.expected_type < gmod.type_table.len():
+        if enum_category_of(&gmod, ctx.expected_type).category == ENUM_CAT_RESULT:
+            return val
+    int val_tid = ctx.locals.get(val).unwrap().type_id
+    String result_tn = type_id_to_name(val_tid, &gmod)
+    # Gate 1: val must be a Result. `enum_category_of` peels Ptr/MutPtr
+    # internally, so a borrowed/resource-param Result local (`GtPtr(Result__…)`)
+    # classifies correctly — exactly as `result_payload_types` peels this same
+    # `val_tid` below at the payload split.
+    if not (enum_category_of(&gmod, val_tid).category == ENUM_CAT_RESULT):
+        return val
+    # Gate 2: the enclosing fn must itself be `throws` (local 0 = Result).
+    int fn_result_type = ctx.locals.get(0).unwrap().type_id
+    if not (enum_category_of(&gmod, fn_result_type).category == ENUM_CAT_RESULT):
+        return val
+    # Split the consumed Result's payload types.
+    ResultPayloadTypes pt = result_payload_types(val_tid, &gmod)
+    int ok_tid = pt.ok_type
+    int err_tid = pt.err_type
+    int scrutinee_ptr = match_scrutinee_ptr(&ctx, &gmod, val)
+    int tag = emit_tag_read(&ctx, scrutinee_ptr, result_tn, &gmod)
+    int zero = add_local(&ctx, I64_TYPE, None)
+    emit(&ctx, GIAssign(zero, OpConstI64(0)))
+    int is_ok = add_local(&ctx, BOOL_TYPE, None)
+    emit(&ctx, GICmp(is_ok, CMP_EQ, I64_TYPE, OpCopy(tag), OpCopy(zero)))
+    int ok_bb = new_block(&ctx)
+    int err_bb = new_block(&ctx)
+    int merge_bb = new_block(&ctx)
+    # Ok-typed result for the unwrapped value.
+    int ok_result = add_local(&ctx, ok_tid, None)
+    set_terminator(&ctx, GTBranch(OpCopy(is_ok), ok_bb, err_bb))
+    # Ok path: extract Ok payload (clone-extract), continue.
+    switch_to(&ctx, ok_bb)
+    int ok_val = emit_payload_read_mode(&ctx, scrutinee_ptr, result_tn, "Ok", 0, ok_tid, &gmod, false)
+    emit(&ctx, GIAssign(ok_result, op_consume(&ctx, &gmod, ok_val, CkAssign())))
+    set_terminator(&ctx, GTJump(merge_bb))
+    # Error path: forward the RAW error payload re-wrapped in the
+    # enclosing fn's Result.Error and early-return (no user transform).
+    switch_to(&ctx, err_bb)
+    int err_val = emit_payload_read_mode(&ctx, scrutinee_ptr, result_tn, "Error", 0, err_tid, &gmod, false)
+    int err_dst = add_local(&ctx, fn_result_type, None)
+    Vector[Operand] err_args = [op_consume(&ctx, &gmod, err_val, CkCallArgOwning())]
+    emit(&ctx, GICallExtern(err_dst, "Error", err_args))
+    emit(&ctx, GIAssign(0, op_consume(&ctx, &gmod, err_dst, CkReturn())))
+    emit_on_error_cleanups(&ctx, &gmod)
+    emit_drops_for_early_exit(&ctx, DSK_FUNCTION, Some(0))
+    set_terminator(&ctx, GTReturn(op_consume(&ctx, &gmod, 0, CkReturn())))
+    switch_to(&ctx, merge_bb)
+    return ok_result
+
+# True iff any arm pattern discriminates a `Result`/`Option` variant —
+# `Ok`/`Error`/`Some`/`None`, or their qualified `Result.Ok` / `Option.Some`
+# forms. Mirrors Rust gg's `arms_match_result_or_option_item`
+# (`src/ir/lowering/stmts/patterns.rs:155-172`). When true, the match
+# scrutinee must stay a RAW `Result`/`Option` so the arms can discriminate
+# it — the centralized auto-prop hook is suppressed for the scrutinee. When
+# false (arms match USER variants like `Tagged.StringV`, e.g. snag48), the
+# scrutinee SHOULD auto-prop so a `throws`-call scrutinee peels to its
+# payload before the user-variant match.
+bool arms_match_result_or_option(Vector[MatchArm] arms):
+    for arm in arms:
+        match arm.pattern.pat:
+            case PConstructor(variant_name, _):
+                if pattern_head_is_result_or_option(variant_name):
+                    return true
+            case PDotShorthand(variant_name, _):
+                if pattern_head_is_result_or_option(variant_name):
+                    return true
+            case PLiteral(lit_expr):
+                # The parser renders bare `case None:` as PLiteral(ENoneLiteral).
+                match lit_expr.expr:
+                    case ENoneLiteral():
+                        return true
+                    else:
+                        pass
+            else:
+                pass
+    return false
+
+bool pattern_head_is_result_or_option(String variant_name):
+    # Bare prelude variant (`Ok` / `Error` / `Some` / `None`) or its
+    # qualified `Result.Ok` / `Option.Some` form (the head before the dot).
+    String head = variant_name
+    if variant_name.contains("."):
+        int dot_pos = variant_name.index_of(".").unwrap()
+        String qual = variant_name.slice(0, dot_pos)
+        # `Result.Ok` / `Option.None` — the qualifier names the wrapper.
+        if qual == "Result" or qual == "Option":
+            return true
+        head = qual
+    if head == "Ok" or head == "Error":
+        return true
+    if head == "Some" or head == "None":
+        return true
+    return false
+
+void lower_match_stmt(LowerCtx &ctx, SpannedExpr scrutinee_expr, Vector[MatchArm] arms, GirModule &gmod, bool is_main):
+    # Suppress the centralized auto-prop on the scrutinee when the arms
+    # discriminate a Result/Option (keep it raw); otherwise let a throws-call
+    # scrutinee peel to its payload (snag48). Take expected_type so a
+    # Result-typed surrounding context (the match's destination) doesn't make
+    # the hook's capture-form check suppress the scrutinee peel — the
+    # scrutinee's expectation is independent of the match result's.
+    int saved_expected_ms = ctx.expected_type
+    ctx.expected_type = -1
+    ctx.suppress_auto_prop = arms_match_result_or_option(arms)
+    int scrutinee = lower_expr(&ctx, scrutinee_expr, &gmod)
+    ctx.expected_type = saved_expected_ms
+    int scr_tid = ctx.locals.get(scrutinee).unwrap().type_id
+    String type_name = type_id_to_name(scr_tid, &gmod)
+    # Unwrap Ptr if the scrutinee came through a borrow.
+    if scr_tid >= 0 and scr_tid < gmod.type_table.len():
+        GirType bt = gmod.type_table.get(scr_tid).unwrap()
+        match bt:
+            case GtPtr(inner):
+                type_name = type_id_to_name(inner, &gmod)
+            case GtMutPtr(inner):
+                type_name = type_id_to_name(inner, &gmod)
+            else:
+                pass
+    String enum_name = match_enum_type(type_name, &gmod)
+    int merge_bb = new_block(&ctx)
+    for arm in arms:
+        int arm_body_bb = new_block(&ctx)
+        int next_arm_bb = new_block(&ctx)
+        lower_pattern_match(&ctx, scrutinee, arm.pattern, enum_name, arm_body_bb, next_arm_bb, &gmod)
+        # Arm body lowering in the match-bound block.
+        # Phase 2: per-arm Block scope so payload bindings + arm-local
+        # SVarDecls get cleaned up at the merge edge.
+        switch_to(&ctx, arm_body_bb)
+        push_drop_scope(&ctx.drop_elab, DSK_BLOCK)
+        lower_stmts(&ctx, arm.body, &gmod, is_main)
+        Terminator arm_term = ctx.block_terms.get(ctx.current_block).unwrap()
+        match arm_term:
+            case GTNone():
+                pop_drop_scope(&ctx)
+                set_terminator(&ctx, GTJump(merge_bb))
+            else:
+                pop_drop_scope_no_emit(&ctx)
+        switch_to(&ctx, next_arm_bb)
+    # No arm matched — jump to merge (unreachable in practice when the
+    # match is exhaustive; the self-host's typechecker doesn't enforce
+    # exhaustiveness yet so we keep a safe fall-through).
+    set_terminator(&ctx, GTJump(merge_bb))
+    switch_to(&ctx, merge_bb)
+
+# Lower a `match` in EXPRESSION position, producing a single `result`
+# local that every reaching (non-diverging) arm assigns. Mirrors Rust
+# `lower_match_expr` (`src/ir/lowering/exprs/mod.rs:2569`, dispatched
+# from `lower_expr` at `:391`; same merge algorithm as
+# `lower_match_stmt_as_expr` `:3257`).
+#
+# Structure = `lower_match_stmt` (`:7822`, scrutinee staging + per-arm
+# branching via `lower_pattern_match`) fused with `lower_if_chain_expr`
+# (`:4167`, the value-merge skeleton): each arm body is lowered to a
+# value via `lower_block_expr` and — ONLY when the arm did not diverge
+# (`not block_terminated`) — assigned into one result local and jumped to
+# `merge_bb`. A diverging arm (body ends in `return` / `exit()` / noreturn)
+# keeps its own terminator and contributes no merge edge — the gate is
+# LOAD-BEARING (Rust documents the same gated-jump as its Snag #33,
+# `mod.rs:3384-3395`).
+#
+# Result type: seed from `ctx.expected_type` when the enclosing writer set
+# a concrete one, else `I64_TYPE`; otherwise refine in place from the FIRST
+# non-Unit arm value (same latch as `lower_if_chain_expr`).
+#
+# No-else / fall-through: emit ONLY `GTJump(merge_bb)` after the last arm —
+# NO result-default assignment (unlike `lower_if_chain_expr`'s inlined
+# `OpConstI64(0)` no-else default at `:4234-4238`). For an exhaustive match
+# (e.g. `Ok`/`Error` returning a struct with no `else:`) the unmatched
+# fall-through is dynamically unreachable, so `result` legitimately stays
+# unassigned there; a default `GIAssign(result, OpConstI64(0))` into a
+# struct/String slot would be a C `incompatible types` error (dead code is
+# still C-typechecked). Mirrors Rust `lower_match_expr` (no default) and
+# the self-host `lower_match_stmt` fall-through (`:7856-7859`).
+#
+# Guards (`MatchArm.guard`) are NOT handled — matches `lower_match_stmt`'s
+# existing (no-guard) behavior; logged as a follow-up. Per-arm name-map
+# snapshot/restore (Rust Snag #50) is likewise omitted, matching
+# `lower_match_stmt`'s per-arm drop-scope behavior (logged follow-up).
+int lower_match_expr(LowerCtx &ctx, SpannedExpr scrutinee_expr, Vector[MatchArm] arms, GirModule &gmod):
+    # Same scrutinee discipline as lower_match_stmt: suppress the centralized
+    # auto-prop when the arms discriminate a Result/Option (keep it raw);
+    # otherwise let a throws-call scrutinee peel to its payload. Take
+    # expected_type (the match RESULT's expected type) around the SCRUTINEE
+    # lowering only — it must not leak into the scrutinee's auto-prop
+    # capture-form check — then restore it so the result_type seeding below
+    # still sees it.
+    int saved_expected_me = ctx.expected_type
+    ctx.expected_type = -1
+    ctx.suppress_auto_prop = arms_match_result_or_option(arms)
+    int scrutinee = lower_expr(&ctx, scrutinee_expr, &gmod)
+    ctx.expected_type = saved_expected_me
+    int scr_tid = ctx.locals.get(scrutinee).unwrap().type_id
+    String type_name = type_id_to_name(scr_tid, &gmod)
+    # Unwrap Ptr if the scrutinee came through a borrow.
+    if scr_tid >= 0 and scr_tid < gmod.type_table.len():
+        GirType bt = gmod.type_table.get(scr_tid).unwrap()
+        match bt:
+            case GtPtr(inner):
+                type_name = type_id_to_name(inner, &gmod)
+            case GtMutPtr(inner):
+                type_name = type_id_to_name(inner, &gmod)
+            else:
+                pass
+    String enum_name = match_enum_type(type_name, &gmod)
+    # Seed result type from expected_type when the writer set a concrete
+    # one; else I64 (refined below from the first non-Unit arm value).
+    int result_type_init = I64_TYPE
+    bool result_type_refined = false
+    if ctx.expected_type >= 0 and ctx.expected_type < gmod.type_table.len():
+        result_type_init = ctx.expected_type
+        result_type_refined = true
+    int result = add_local(&ctx, result_type_init, None)
+    int merge_bb = new_block(&ctx)
+    for arm in arms:
+        int arm_body_bb = new_block(&ctx)
+        int next_arm_bb = new_block(&ctx)
+        lower_pattern_match(&ctx, scrutinee, arm.pattern, enum_name, arm_body_bb, next_arm_bb, &gmod)
+        # Arm body lowering in the match-bound block. Per-arm Block scope so
+        # payload bindings + arm-local SVarDecls get cleaned up at the merge
+        # edge (same as lower_match_stmt; lower_pattern_match already emitted
+        # the pattern bindings into this block).
+        switch_to(&ctx, arm_body_bb)
+        push_drop_scope(&ctx.drop_elab, DSK_BLOCK)
+        int arm_val = lower_block_expr(&ctx, arm.body, &gmod)
+        if not block_terminated(&ctx):
+            if not result_type_refined:
+                int aty = ctx.locals.get(arm_val).unwrap().type_id
+                if aty != UNIT_TYPE:
+                    refine_local_type(&ctx, result, aty)
+                    result_type_refined = true
+            emit(&ctx, GIAssign(result, op_consume(&ctx, &gmod, arm_val, CkAssign())))
+            pop_drop_scope(&ctx)
+            set_terminator(&ctx, GTJump(merge_bb))
+        else:
+            # Diverging arm (body ended in return / exit / noreturn): its
+            # terminator stands — no assign, no merge jump.
+            pop_drop_scope_no_emit(&ctx)
+        switch_to(&ctx, next_arm_bb)
+    # No arm matched (dynamically unreachable for an exhaustive match) —
+    # jump to merge with NO result default. See the header note.
+    set_terminator(&ctx, GTJump(merge_bb))
+    switch_to(&ctx, merge_bb)
+    return result
+

@@ -1,0 +1,911 @@
+# ── Generic monomorphization (split out of lower.gg) ─────────────────
+# Generic-instance discovery (proto-method walk, meta expansion,
+# generic-call discovery, transitive discovery), monomorphic function/
+# equip lowering, type-substitution setup, and the spawn-wrapper scan.
+# Moved verbatim from lower.gg as part of the lower.gg module split
+# (output-neutral pure function move). The GenericInstance / ProtoMethInst
+# structs move with the cluster.
+from std.collections import Vector, Dict
+from std.conv import int_to_str, float_to_str
+from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch, EquipBlock, StructDef, EnumDef, EnumVariant, Type, MatchArm, Pattern, SpannedPattern
+from scope import ScopeTable, DefInfo
+from types import TypeTable, ResolvedType
+from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Terminator, Operand, GirType, GirExtern, GirTypeInfo, GirFieldInfo, GirEnumVariantInfo, LiftedClosure, ClosureCapture, ResourceMetadata, CollectionKind, ConsumeKind
+from gir import BOOL_TYPE, I8_TYPE, I16_TYPE, I32_TYPE, I64_TYPE, U8_TYPE, U16_TYPE, U32_TYPE, U64_TYPE, F32_TYPE, F64_TYPE, UNIT_TYPE, PRIM_COUNT
+from gir import CAP_BY_VALUE, CAP_BY_MUT_REF
+from gir import init_type_table, register_type, lookup_or_register_named, register_ptr
+from gir import GirGlobal, GirGlobalField, gir_mod_add_global, GGINIT_FN_REF, GGINIT_STRUCT
+from gir import GGSTATIC_RUNTIME, GGSTATIC_BYTES, static_put_bytes
+from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM, OP_MOD
+from gir import OP_ADD_WRAP, OP_SUB_WRAP, OP_MUL_WRAP
+from gir import OP_BITAND, OP_BITOR, OP_BITXOR, OP_SHL, OP_SHR
+from gir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
+from gir import UNOP_NEG, UNOP_NOT, UNOP_BITNOT
+from gir import CkAssign, CkReturn, CkCallArgBorrow, CkCallArgOwning, CkFieldWrite, CkBinOpArg, CkFormatArg, CkMatchPtr
+from gir import CkVector, CkDeque, CkHeap, CkDict, CkSet, CkNotCollection
+from compiler.data.resources import STRING_BUILTIN_METHODS, COLLECTION_BUILTIN_METHODS, BUILTIN_METHOD_MUTATES
+from compiler.data.schema import BuiltinMethodDecl, BuiltinMethodEntry
+from compiler.data.schema import BuiltinRetKind, BrkString, BrkInfer
+from lir_lower import resource_meta_for
+from lower import LowerCtx, ResultPayloadTypes, DictKvNames, ClosureSig, CaptureCollector, FieldBorrowPair, SVarDeclEmission
+from lower import lower_fail, diag_bug, diag_warn, emit, new_block, switch_to, set_terminator
+from lower import add_local, add_local_with, add_local_inheriting, nl_get, nl_put, nl_contains
+from lower import expr_kind, pat_kind, stmt_kind
+from lower import collection_kind_of, collection_kind_eq, int_vec_contains, method_mutates_receiver
+from lower import inherit_borrow_from, set_field_borrow, cow_register_alias, decide_svardecl_emission
+from lower import classify_call_arg, is_consume_kind, op_consume, decide_operand_at_consuming_arg, decide_ptr_consume
+from lower_drops import init_drop_elab, push_drop_scope, emit_scope_drops, pop_drop_scope, pop_drop_scope_no_emit, is_droppable_type, register_local_for_drop, register_owning_param, mark_local_moved, restore_moved, union_moved, emit_drops_for_early_exit, flush_drop_queue
+from lower_liveness import LivenessAnalysis, compute_liveness, wire_liveness_into_modes, liveness_instrumentation_diff, update_last_pos_for_inst, update_last_pos_for_term, note_operand_pos, empty_liveness
+from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, is_comparison, map_cmpop
+from lower_expr import block_terminated, lower_block_expr, lower_stmt_as_tail_value, lower_if_chain_expr, refine_local_type, lower_expr, lower_expr_inner, apply_container_hint_for_ctor_arg, lower_call
+from lower_stmt import lower_stmt, lower_place_base, lower_field_write, emit_field_write_from_local, lower_stmts, lower_if, lower_index_assign
+from lower_match import match_enum_type, match_variant_index, try_lift_option_ref, emit_tag_read, is_deep_clone_fn, resolve_payload_clone_fn, emit_payload_read, emit_payload_read_mode, emit_payload_read_mode_full, match_scrutinee_ptr, lower_pattern_match, lower_ctor_pattern, lookup_ctor_field_type, result_payload_types, emit_on_error_cleanups, lower_throw_stmt, lower_catch_expr, lower_rethrow_expr, maybe_auto_propagate, arms_match_result_or_option, pattern_head_is_result_or_option, lower_match_stmt, lower_match_expr
+from lower_loops import lower_for, lower_for_vector, lower_for_string, parse_dict_kv_types, for_pat_binding_name, lower_for_dict, lower_for_range, lower_for_iterator, bind_tuple_field, bind_tuple_destructure, bind_for_local, local_is_borrow_alias, scrutinee_nonowning, scrutinee_owned_whole_dropped, scrutinee_borrow_into_owning_collection, resolve_elem_type_id, lower_while
+from lower_closures import lower_function, mangle_prim_type, mangle_trait_name, is_builtin_trait, is_iterator_protocol_trait, method_has_self, lower_equip_block, guess_return_type, expr_has_it, closure_ident_module_resolvable, closure_collect_pattern_bindings, closure_expr_has_capture, closure_stmt_has_capture, closure_stmts_have_capture, closure_body_captures, implicit_closure_body_captures, cc_callee_is_free_fn, cc_classify_ident, cc_collect_expr, cc_collect_stmt, cc_collect_stmts, collect_closure_captures, stmts_mutate_any, expr_target_mutates_any, stmt_mutates_any, expr_has_nested_closure, stmt_has_nested_closure, stmts_have_nested_closure, compute_closure_sig, compute_implicit_closure_sig, record_implicit_it_closure, lower_closure_body
+
+# ── Generic monomorphization ─────────────────────────────
+
+struct GenericInstance:
+    String base_name
+    Vector[SpannedType] type_args
+    String mangled_name
+
+# PROTO phase-1b: a discovered method-level-generic call site.
+#
+# A site is recorded in ONE of two forms:
+#  * TURBOFISH form — `method_targs` (the syntactic AST types) is non-empty,
+#    `method_targ_tids` is empty. Used by the explicit `v.iter().fold[A,F](…)`.
+#  * BARE form (lazy-iterator phase 1b) — `method_targ_tids` (the inferred
+#    resolved-type ids from the typechecker side-table) is non-empty,
+#    `method_targs` is empty. Used by `v.iter().fold(0, f)` with no turbofish.
+# The two are mutually exclusive; `proto_inst_targ_count` returns the
+# effective arity and `proto_inst_targ_tid` resolves the i-th targ from
+# whichever representation is populated.
+struct ProtoMethInst:
+    String recv_instance     # mangled receiver instance, e.g. VectorIter__int64_t
+    String method_name       # e.g. map / filter / fold
+    Vector[SpannedType] method_targs   # the turbofish args (turbofish form)
+    Vector[int] method_targ_tids       # the inferred rtids (bare form)
+    String mangled_symbol    # recv_instance__method__<targs...>
+
+# PROTO phase-1b: map a method-level type-arg to its GIR type-id, with a
+# function type binding to GorgetClosure (the closure value carried in the
+# adapter struct's F field), not Ptr(FnPtr).
+int proto_method_targ_tid(SpannedType t, GirModule &gmod):
+    match t.ty:
+        case TFunction(_, _, _):
+            return lookup_or_register_named(&gmod, "GorgetClosure")
+        else:
+            return map_ast_type(t, &gmod)
+
+# Effective method-targ arity of a discovered instance, independent of which
+# representation (turbofish SpannedType vs inferred rtid) is populated.
+int proto_inst_targ_count(ProtoMethInst pmi):
+    if pmi.method_targs.len() > 0:
+        return pmi.method_targs.len()
+    return pmi.method_targ_tids.len()
+
+# Resolve the i-th method-targ of a discovered instance to its GIR type-id,
+# selecting the populated representation. The RTFunction→GorgetClosure rule
+# is threaded through both paths (proto_method_targ_tid for the AST form,
+# resolved_to_gir_type's RTFunction arm for the rtid form) so the bound subs
+# are byte-identical regardless of how the site was discovered.
+int proto_inst_targ_tid(ProtoMethInst pmi, int i, GirModule &gmod):
+    if pmi.method_targs.len() > 0:
+        return proto_method_targ_tid(pmi.method_targs.get(i).unwrap(), &gmod)
+    return resolved_to_gir_type(pmi.method_targ_tids.get(i).unwrap(), gmod.tc_types, gmod.tc_scopes, &gmod)
+
+# PROTO: walk an expression collecting method-generic call sites.
+void proto_walk_expr(SpannedExpr sexpr, GirModule &gmod, Vector[ProtoMethInst] &out, Dict[String, bool] &seen):
+    match sexpr.expr:
+        case EMethodCall(recv_box, mname, margs, mtargs):
+            proto_walk_expr(*recv_box, &gmod, &out, &seen)
+            for a in margs:
+                proto_walk_expr(a, &gmod, &out, &seen)
+            if mtargs.len() > 0:
+                # TURBOFISH form: mangle from the syntactic AST types.
+                # Resolve the receiver instance via the typecheck side-table.
+                int recv_tid = lookup_expr_gir_type(*recv_box, &gmod)
+                if recv_tid >= 0:
+                    String recv_name = type_id_to_name(recv_tid, &gmod)
+                    if recv_name.len() > 0 and recv_name.contains("__"):
+                        String sym = recv_name + "__" + mname
+                        for mt in mtargs:
+                            sym = sym + "__" + type_to_c_name(mt, &gmod)
+                        if not seen.contains(sym):
+                            seen.put(sym.clone(), true)
+                            out.push(ProtoMethInst(recv_name, mname, mtargs, [], sym))
+            else:
+                # BARE form (lazy-iterator phase 1b): no turbofish written.
+                # If the typechecker recorded inferred method-targs for this
+                # call's span, record the SAME instance the call-site mangle
+                # produces — this drives BOTH the fn_sigs pre-reg AND the
+                # body-emit, so the bare symbol is DEFINED (not just called).
+                Vector[int] bm_tids = bare_method_targ_rtids(sexpr.span.start, mname, &gmod)
+                if bm_tids.len() > 0:
+                    int recv_tid_b = lookup_expr_gir_type(*recv_box, &gmod)
+                    if recv_tid_b >= 0:
+                        String recv_name_b = type_id_to_name(recv_tid_b, &gmod)
+                        if recv_name_b.len() > 0 and recv_name_b.contains("__"):
+                            String sym_b = recv_name_b + "__" + mname
+                            for bmt in bm_tids:
+                                sym_b = sym_b + "__" + bare_method_targ_c_name(bmt, &gmod)
+                            if not seen.contains(sym_b):
+                                seen.put(sym_b.clone(), true)
+                                out.push(ProtoMethInst(recv_name_b, mname, [], bm_tids, sym_b))
+        case ECall(callee_box, cargs, _):
+            proto_walk_expr(*callee_box, &gmod, &out, &seen)
+            for a in cargs:
+                proto_walk_expr(a, &gmod, &out, &seen)
+        case EFieldAccess(obj, _):
+            proto_walk_expr(*obj, &gmod, &out, &seen)
+        case EBinaryOp(l, _, r):
+            proto_walk_expr(*l, &gmod, &out, &seen)
+            proto_walk_expr(*r, &gmod, &out, &seen)
+        case EUnaryOp(_, inner):
+            proto_walk_expr(*inner, &gmod, &out, &seen)
+        case EIndex(b, i):
+            proto_walk_expr(*b, &gmod, &out, &seen)
+            proto_walk_expr(*i, &gmod, &out, &seen)
+        else:
+            pass
+
+void proto_walk_stmts(Vector[Stmt] stmts, GirModule &gmod, Vector[ProtoMethInst] &out, Dict[String, bool] &seen):
+    for stmt in stmts:
+        match stmt:
+            case SVarDecl(_, _, init, _, _, _):
+                proto_walk_expr(init, &gmod, &out, &seen)
+            case SExpr(e):
+                proto_walk_expr(e, &gmod, &out, &seen)
+            case SReturn(opt):
+                match opt:
+                    case Some(e):
+                        proto_walk_expr(e, &gmod, &out, &seen)
+                    case None:
+                        pass
+            case SAssign(_, e):
+                proto_walk_expr(e, &gmod, &out, &seen)
+            case SIf(c, tb, elifs):
+                proto_walk_expr(c, &gmod, &out, &seen)
+                proto_walk_stmts(tb, &gmod, &out, &seen)
+                for el in elifs:
+                    proto_walk_stmts(el.body, &gmod, &out, &seen)
+            case SWhile(c, b):
+                proto_walk_expr(c, &gmod, &out, &seen)
+                proto_walk_stmts(b, &gmod, &out, &seen)
+            case SFor(_, p_iter, b, _, eb):
+                proto_walk_expr(p_iter, &gmod, &out, &seen)
+                proto_walk_stmts(b, &gmod, &out, &seen)
+                proto_walk_stmts(eb, &gmod, &out, &seen)
+            else:
+                pass
+
+# Expand generic calls inside meta for bodies to the 4 standard types.
+# meta for T in type_variants(...): generates code for int, float, String, bool.
+void expand_meta_for_generics(Vector[Stmt] stmts, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
+    # Standard column types that type_variants typically expands to.
+    # Deliberately excludes 'bool' — variant_payloads() expands to enum payload
+    # types (typically int/float/String), not bool.  Adding bool causes spurious
+    # monomorphizations for fixtures like meta_variant_payloads.
+    Vector[SpannedType] std_types = []
+    std_types.push(SpannedType(TPrimitive("int"), -1))
+    std_types.push(SpannedType(TPrimitive("float"), -1))
+    std_types.push(SpannedType(TPrimitive("String"), -1))
+    # Scan for generic calls with type variable args
+    for stmt in stmts:
+        expand_meta_for_stmt(stmt, &seen, &instances, std_types)
+
+void expand_meta_for_stmt(Stmt stmt, Dict[String, bool] &seen, Vector[GenericInstance] &instances, Vector[SpannedType] std_types):
+    match stmt:
+        case SVarDecl(_, _, init, _, _, _):
+            expand_meta_for_expr(init, &seen, &instances, std_types)
+        case SExpr(expr):
+            expand_meta_for_expr(expr, &seen, &instances, std_types)
+        case SReturn(opt):
+            match opt:
+                case Some(expr):
+                    expand_meta_for_expr(expr, &seen, &instances, std_types)
+                case None:
+                    pass
+        case SIf(cond, then_body, branches):
+            expand_meta_for_expr(cond, &seen, &instances, std_types)
+            for ts in then_body:
+                expand_meta_for_stmt(ts, &seen, &instances, std_types)
+            for eb in branches:
+                for ebs in eb.body:
+                    expand_meta_for_stmt(ebs, &seen, &instances, std_types)
+        case SMatch(scrutinee, arms):
+            expand_meta_for_expr(scrutinee, &seen, &instances, std_types)
+            for arm in arms:
+                for abs in arm.body:
+                    expand_meta_for_stmt(abs, &seen, &instances, std_types)
+        else:
+            pass
+
+void expand_meta_for_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Vector[GenericInstance] &instances, Vector[SpannedType] std_types):
+    match sexpr.expr:
+        case ECall(callee_box, args, targs):
+            if targs.len() > 0 and has_type_variable(targs):
+                SpannedExpr callee = *callee_box
+                match callee.expr:
+                    case EIdentifier(fname):
+                        # Expand each type variable to the 4 standard types
+                        int ti = 0
+                        while ti < std_types.len():
+                            SpannedType concrete = std_types.get(ti).unwrap()
+                            Vector[SpannedType] expanded = []
+                            int tai = 0
+                            while tai < targs.len():
+                                SpannedType ta = targs.get(tai).unwrap()
+                                bool is_var = false
+                                match ta.ty:
+                                    case TNamed(n, inner):
+                                        if inner.len() == 0 and n.len() <= 2:
+                                            is_var = true
+                                    else:
+                                        pass
+                                if is_var:
+                                    expanded.push(concrete.clone())
+                                else:
+                                    expanded.push(ta)
+                                tai += 1
+                            String mangled = compute_mangled_name(expanded, fname)
+                            if not seen.contains(mangled):
+                                seen.put(mangled.clone(), true)
+                                instances.push(GenericInstance(fname.clone(), !expanded, mangled))
+                            ti += 1
+                    else:
+                        pass
+            for arg in args:
+                expand_meta_for_expr(arg, &seen, &instances, std_types)
+        case EMethodCall(obj, _, margs, _):
+            expand_meta_for_expr(*obj, &seen, &instances, std_types)
+            for ma in margs:
+                expand_meta_for_expr(ma, &seen, &instances, std_types)
+        else:
+            pass
+
+# Discover generic call sites in an expression
+void discover_generic_calls_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
+    match sexpr.expr:
+        case ECall(callee_box, args, targs):
+            if targs.len() > 0 and not has_type_variable(targs):
+                SpannedExpr callee = *callee_box
+                match callee.expr:
+                    case EIdentifier(fname):
+                        String mangled = compute_mangled_name(targs, fname)
+                        if not seen.contains(mangled):
+                            seen.put(mangled.clone(), true)
+                            GenericInstance gi = GenericInstance(fname, targs, mangled)
+                            instances.push(!gi)
+                    else:
+                        pass
+            # Recurse into call args
+            for arg in args:
+                discover_generic_calls_expr(arg, &seen, &instances)
+            discover_generic_calls_expr(*callee_box, &seen, &instances)
+        case EMethodCall(obj, _, args, _):
+            discover_generic_calls_expr(*obj, &seen, &instances)
+            for arg in args:
+                discover_generic_calls_expr(arg, &seen, &instances)
+        case EBinaryOp(lhs, _, rhs):
+            discover_generic_calls_expr(*lhs, &seen, &instances)
+            discover_generic_calls_expr(*rhs, &seen, &instances)
+        case EUnaryOp(_, inner):
+            discover_generic_calls_expr(*inner, &seen, &instances)
+        case EIf(cond, then_body, branches):
+            discover_generic_calls_expr(*cond, &seen, &instances)
+            discover_generic_calls_stmts(then_body, &seen, &instances)
+        case EFieldAccess(obj, _):
+            discover_generic_calls_expr(*obj, &seen, &instances)
+        case EIndex(obj, idx):
+            discover_generic_calls_expr(*obj, &seen, &instances)
+            discover_generic_calls_expr(*idx, &seen, &instances)
+        case EClosure(_, body):
+            discover_generic_calls_stmts(body, &seen, &instances)
+        case EFString(_, fexprs):
+            for fx in fexprs:
+                discover_generic_calls_expr(fx, &seen, &instances)
+        else:
+            pass
+
+void discover_generic_calls_stmt(Stmt stmt, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
+    match stmt:
+        case SVarDecl(stype, _, init, _, _, _):
+            # Also discover type instances from type annotations (e.g., Stack[int] s = ...)
+            match stype.ty:
+                case TNamed(tname, targs):
+                    if targs.len() > 0 and not has_type_variable(targs):
+                        String mangled = compute_mangled_name(targs, tname)
+                        if not seen.contains(mangled):
+                            seen.put(mangled.clone(), true)
+                            GenericInstance gi = GenericInstance(tname, targs, mangled)
+                            instances.push(!gi)
+                else:
+                    pass
+            discover_generic_calls_expr(init, &seen, &instances)
+        case SAssign(target, value):
+            discover_generic_calls_expr(target, &seen, &instances)
+            discover_generic_calls_expr(value, &seen, &instances)
+        case SExpr(expr):
+            discover_generic_calls_expr(expr, &seen, &instances)
+        case SReturn(opt_expr):
+            match opt_expr:
+                case Some(expr):
+                    discover_generic_calls_expr(expr, &seen, &instances)
+                case None:
+                    pass
+        case SIf(cond, then_body, branches):
+            discover_generic_calls_expr(cond, &seen, &instances)
+            discover_generic_calls_stmts(then_body, &seen, &instances)
+            for eb in branches:
+                match eb.condition:
+                    case Some(elif_cond):
+                        discover_generic_calls_expr(elif_cond, &seen, &instances)
+                    case None:
+                        pass
+                discover_generic_calls_stmts(eb.body, &seen, &instances)
+        case SWhile(cond, body):
+            discover_generic_calls_expr(cond, &seen, &instances)
+            discover_generic_calls_stmts(body, &seen, &instances)
+        case SFor(_, iter_expr, body, _, _):
+            discover_generic_calls_expr(iter_expr, &seen, &instances)
+            discover_generic_calls_stmts(body, &seen, &instances)
+        case SMatch(scrutinee, arms):
+            discover_generic_calls_expr(scrutinee, &seen, &instances)
+            for arm in arms:
+                discover_generic_calls_stmts(arm.body, &seen, &instances)
+        case SMetaFor(meta_body):
+            # Meta for type_variants: expand type-variable generic calls
+            # to the 4 standard column types (int, float, String, bool).
+            # The meta for header is lost, so we heuristically expand
+            # any generic call with a type variable arg.
+            expand_meta_for_generics(meta_body, &seen, &instances)
+        else:
+            pass
+
+void discover_generic_calls_stmts(Vector[Stmt] stmts, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
+    for stmt in stmts:
+        discover_generic_calls_stmt(stmt, &seen, &instances)
+
+# Lightweight type-to-C-name without GirModule (used during discovery before gmod exists)
+String spanned_type_to_c_name(SpannedType stype):
+    match stype.ty:
+        case TPrimitive(name):
+            return prim_to_c_name(name)
+        case TNamed(name, targs):
+            if name == "String":
+                return "GorgetString"
+            int pt = prim_name_to_type(name)
+            if pt >= 0:
+                return spanned_type_to_c_name(SpannedType(TPrimitive(name), -1))
+            if targs.len() == 0:
+                return name
+            String result = name
+            for ta in targs:
+                result = result + "__" + spanned_type_to_c_name(ta)
+            return result
+        case TFunction(_, _, _):
+            # PROTO phase-1b: function-typed generic arg → GorgetClosure
+            # (same as type_to_c_name), so the adapter struct instance name
+            # agrees with the method-mono body + call-site symbol.
+            return "GorgetClosure"
+        else:
+            pass
+    return "int64_t"
+
+# Check if any type arg is an unresolved type variable (e.g., T, A, B)
+# rather than a concrete type (e.g., int, String, Vector[int])
+bool has_type_variable(Vector[SpannedType] targs):
+    for ta in targs:
+        match ta.ty:
+            case TNamed(name, inner_targs):
+                if inner_targs.len() == 0:
+                    # Single name with no type args — could be a type variable
+                    # Known concrete types: int, float, bool, void, String
+                    int pt = prim_name_to_type(name)
+                    if pt < 0 and name != "String":
+                        # Not a primitive — check if it looks like a type var
+                        # Type vars are typically short uppercase names
+                        if name.len() <= 2:
+                            return true
+                else:
+                    # Recurse into type args
+                    if has_type_variable(inner_targs):
+                        return true
+            case TPrimitive(name):
+                # Primitives are always concrete
+                pass
+            else:
+                pass
+    return false
+
+String compute_mangled_name(Vector[SpannedType] targs, String base_name):
+    String mangled = base_name
+    for ta in targs:
+        mangled = mangled + "__" + spanned_type_to_c_name(ta)
+    return mangled
+
+# Set up type substitutions for a generic instance.
+void setup_type_subs(GirModule &gmod, Vector[String] type_params, Vector[SpannedType] type_args):
+    gmod.type_subs = {}
+    int i = 0
+    while i < type_params.len() and i < type_args.len():
+        String param_name = type_params.get(i).unwrap()
+        SpannedType arg_type = type_args.get(i).unwrap()
+        # Lazy-iterator mangle-unification (KEYSTONE): a function-typed
+        # generic targ (the `F` of `MapIter[Iter,T,U,F]` / `FilterIter`)
+        # is carried at runtime as a `GorgetClosure` (16-byte fn-ptr+env),
+        # so its substitution must bind the `GorgetClosure` NAMED tid — the
+        # same decision the ctor/struct/for-loop path makes (`type_to_c_name`
+        # TFunction arm `:3160`) and the ResolvedType→GIR mapper makes
+        # (`resolved_to_gir_type` RTFunction arm `:3386`). The general
+        # `map_ast_type(TFunction)` instead returns a `Ptr(FnPtr)` tid, which
+        # `type_id_to_name` derefs to no `GtNamed` and collapses to the
+        # `int64_t` default — diverging the equip-`next`-body mono symbol
+        # (`MapIter__…__int64_t__next` with an empty `{char __pad}` struct +
+        # orphaned `unknown field 'inner'/'f'`) from the for-loop dispatcher's
+        # `MapIter__…__GorgetClosure__next`. Narrowed to TFunction targs only
+        # (no collateral on other generic equips). One funnel → centralized.
+        int tid = -1
+        match arg_type.ty:
+            case TFunction(_, _, _):
+                tid = lookup_or_register_named(&gmod, "GorgetClosure")
+            else:
+                tid = map_ast_type(arg_type, &gmod)
+        gmod.type_subs.put(param_name, tid)
+        i += 1
+
+void clear_type_subs(GirModule &gmod):
+    gmod.type_subs = {}
+
+# Lower a monomorphized instance of a generic function
+void lower_generic_function(FunctionDef fdef, String mangled_name, Vector[String] type_params, Vector[SpannedType] type_args, GirModule &gmod):
+    setup_type_subs(&gmod, type_params, type_args)
+    GirFunction gfn = lower_function(fdef, &gmod)
+
+    # Detect bare Move-type params that are directly returned.
+    # If return type is resource AND body is `return param_name` or just `param_name`,
+    # upgrade that param from Ptr to MutPtr (matches Rust lowerer behavior).
+    int ret_tid = gfn.return_type
+    String ret_name = type_id_to_name(ret_tid, &gmod)
+    if is_resource_type_name(ret_name, &gmod):
+        # Check if body is a single return of a param identifier
+        String returned_param = ""
+        if fdef.is_expr_body and fdef.body.len() == 1:
+            Stmt body_stmt = fdef.body.get(0).unwrap()
+            match body_stmt:
+                case SExpr(sexpr):
+                    match sexpr.expr:
+                        case EIdentifier(name):
+                            returned_param = name
+                        else:
+                            pass
+                case SReturn(opt_ret):
+                    match opt_ret:
+                        case Some(rexpr):
+                            match rexpr.expr:
+                                case EIdentifier(name):
+                                    returned_param = name
+                                else:
+                                    pass
+                        case None:
+                            pass
+                else:
+                    pass
+        elif fdef.body.len() == 1:
+            Stmt body_stmt = fdef.body.get(0).unwrap()
+            match body_stmt:
+                case SReturn(opt_ret):
+                    match opt_ret:
+                        case Some(rexpr):
+                            match rexpr.expr:
+                                case EIdentifier(name):
+                                    returned_param = name
+                                else:
+                                    pass
+                        case None:
+                            pass
+                else:
+                    pass
+        # Upgrade matching param from Ptr to MutPtr
+        if returned_param.len() > 0:
+            int pi = 0
+            while pi < fdef.params.len():
+                Param p = fdef.params.get(pi).unwrap()
+                if p.param_name == returned_param and p.ownership == 0:
+                    # Param local is at index pi+1 (local 0 is return place)
+                    int local_idx = pi + 1
+                    if local_idx < gfn.locals.len():
+                        GirLocal loc = gfn.locals.get(local_idx).unwrap()
+                        int old_tid = loc.type_id
+                        # Check if it's currently Ptr(T) — upgrade to MutPtr(T)
+                        if old_tid >= PRIM_COUNT:
+                            GirType gt = gmod.type_table.get(old_tid).unwrap()
+                            match gt:
+                                case GtPtr(inner):
+                                    int new_tid = register_type(&gmod, GtMutPtr(inner))
+                                    gfn.locals.set(local_idx, GirLocal(new_tid, loc.name_hint, loc.ownership, loc.borrow_origin, loc.owning_param))
+                                    gfn.param_types.set(pi, new_tid)
+                                else:
+                                    pass
+                pi += 1
+
+    # Override the function name with the mangled name
+    gmod.functions.push(GirFunction(mangled_name, gfn.param_types, gfn.return_type, gfn.locals, gfn.blocks))
+    clear_type_subs(&gmod)
+
+# Extract type parameter names from equip target's generic args
+# e.g., Stack[T] → ["T"], Pair[A, B] → ["A", "B"]
+Vector[String] extract_equip_type_params(EquipBlock eqblk):
+    # First try explicit type_params
+    if eqblk.type_params.len() > 0:
+        return eqblk.type_params
+    # Otherwise extract from target type args
+    Vector[String] params = []
+    match eqblk.target.ty:
+        case TNamed(_, targs):
+            for ta in targs:
+                match ta.ty:
+                    case TNamed(tname, _):
+                        params.push(tname)
+                    case TPrimitive(tname):
+                        params.push(tname)
+                    else:
+                        pass
+        else:
+            pass
+    return params
+
+# Lower monomorphized instances of generic equip methods
+void lower_generic_equip(EquipBlock eqblk, Vector[SpannedType] type_args, GirModule &gmod):
+    Vector[String] type_params = extract_equip_type_params(eqblk)
+    setup_type_subs(&gmod, type_params, type_args)
+    # For generic equip, Rust uses Type__method naming (no trait prefix) and concrete self types.
+    # Strip the trait_name so lower_equip_block uses plain Type__method naming.
+    Option[String] no_trait = None
+    EquipBlock plain_eqblk = EquipBlock(eqblk.target, eqblk.type_params, no_trait, eqblk.methods, eqblk.via_field, eqblk.trait_generic_args)
+    lower_equip_block(plain_eqblk, &gmod)
+    clear_type_subs(&gmod)
+
+# ── Spawn wrapper scanning ───────────────────────────────
+
+# Extract the base type name from a SpannedType (e.g. TNamed("Worker",[]) → "Worker").
+String spawn_type_base_name(SpannedType ty):
+    match ty.ty:
+        case TNamed(n, _):
+            return n
+        case TPrimitive(n):
+            return n
+        else:
+            return ""
+
+# Collect shared variable names from a list of statements
+void collect_shared_vars(Vector[Stmt] stmts, Dict[String, bool] &shared_vars):
+    for s in stmts:
+        match s:
+            case SVarDecl(_, name, _, _, sk, _):
+                # Only auto-mutex (sk=1) gets __shared_token_ wrappers.
+                # Atomic (sk=3) and rwlock (sk=2) use different patterns.
+                if sk == 1:
+                    shared_vars.put(name, true)
+            else:
+                pass
+
+# Scan for ESpawn expressions and emit wrapper function stubs
+# borrow_params: names of &-qualified params of the enclosing function;
+# passing them to a spawn implies shared-derived ownership (inner shared spawn).
+void scan_spawn_wrappers(Vector[Stmt] stmts, Dict[String, bool] &shared_vars, Dict[String, bool] &async_fns, Dict[String, bool] &emitted, GirModule &gmod, Dict[String, String] &var_types, Dict[String, bool] &borrow_params):
+    for s in stmts:
+        match s:
+            case SVarDecl(ty, name, init, _, sk, _):
+                if sk == 1:
+                    shared_vars.put(name, true)
+                # Track variable types for method-spawn wrapper generation
+                String tname = spawn_type_base_name(ty)
+                if tname != "":
+                    var_types.put(name, tname)
+                scan_expr_for_spawn(init, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
+            case SExpr(expr):
+                scan_expr_for_spawn(expr, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
+            case SAssign(_, val):
+                scan_expr_for_spawn(val, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
+            case SWhile(cond, body):
+                scan_expr_for_spawn(cond, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
+                scan_spawn_wrappers(body, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
+            case SIf(cond, then_body, branches):
+                scan_expr_for_spawn(cond, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
+                scan_spawn_wrappers(then_body, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
+                for eb in branches:
+                    scan_spawn_wrappers(eb.body, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
+            case SFor(_, iter_expr, body, _, _):
+                scan_expr_for_spawn(iter_expr, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
+                scan_spawn_wrappers(body, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
+            case SReturn(opt):
+                match opt:
+                    case Some(rexpr):
+                        scan_expr_for_spawn(rexpr, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
+                    case None:
+                        pass
+            else:
+                pass
+
+void scan_expr_for_spawn(SpannedExpr sexpr, Dict[String, bool] &shared_vars, Dict[String, bool] &async_fns, Dict[String, bool] &emitted, GirModule &gmod, Dict[String, String] &var_types, Dict[String, bool] &borrow_params):
+    match sexpr.expr:
+        case ESpawn(inner_box):
+            match (*inner_box).expr:
+                case ECall(callee_box, args, _):
+                    match (*callee_box).expr:
+                        case EIdentifier(callee_name):
+                            # Check if any arg is:
+                            # (a) a directly shared variable (shared_vars), or
+                            # (b) a &-param of the enclosing function (borrow_params) —
+                            #     skip_ownership_markers strips '&' in call args so
+                            #     &counter arrives as EIdentifier("counter"), not EMutableBorrow.
+                            bool has_shared = false
+                            for arg in args:
+                                match arg.expr:
+                                    case EIdentifier(aname):
+                                        if shared_vars.contains(aname) or borrow_params.contains(aname):
+                                            has_shared = true
+                                    case EMutableBorrow(inner):
+                                        # Safety net: if &-prefix somehow survives into arg
+                                        has_shared = true
+                                    else:
+                                        pass
+                            if has_shared and not emitted.contains(callee_name):
+                                # Determine prefix: __shared_async_ for async, __shared_token_ otherwise
+                                String prefix = "__shared_token_"
+                                if async_fns.contains(callee_name):
+                                    prefix = "__shared_async_"
+                                String wrapper_name = prefix + callee_name
+                                # Emit a stub function
+                                Vector[int] wp = [I64_TYPE]
+                                Vector[GirLocal] wl = [GirLocal(UNIT_TYPE, None, LoOwned(), BoNone(), false), GirLocal(I64_TYPE, None, LoParam(), BoParam(-1), false)]
+                                Vector[BasicBlock] wb = [BasicBlock([], GTReturn(OpConstUnit()))]
+                                gmod.functions.push(GirFunction(wrapper_name, !wp, UNIT_TYPE, !wl, !wb))
+                                emitted.put(callee_name, true)
+                        else:
+                            pass
+                case EMethodCall(obj_box, method_name, _, _):
+                    # spawn obj.method() → emit __spawn_method_wrap_TypeName__method_name
+                    match (*obj_box).expr:
+                        case EIdentifier(var_name):
+                            Option[String] opt_type = var_types.get(var_name)
+                            match opt_type:
+                                case Some(type_name):
+                                    String wrapper_name = "__spawn_method_wrap_" + type_name + "__" + method_name
+                                    if not emitted.contains(wrapper_name):
+                                        emitted.put(wrapper_name.clone(), true)
+                                        Vector[int] wp = [I64_TYPE]
+                                        Vector[GirLocal] wl = [GirLocal(I64_TYPE, None, LoOwned(), BoNone(), false), GirLocal(I64_TYPE, None, LoParam(), BoParam(-1), false)]
+                                        Vector[BasicBlock] wb = [BasicBlock([], GTReturn(OpConstUnit()))]
+                                        gmod.functions.push(GirFunction(wrapper_name, !wp, UNIT_TYPE, !wl, !wb))
+                                case None:
+                                    pass
+                        else:
+                            pass
+                else:
+                    pass
+        case EAwait(inner):
+            scan_expr_for_spawn(*inner, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
+        case EMethodCall(obj, _, margs, _):
+            scan_expr_for_spawn(*obj, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
+            for ma in margs:
+                scan_expr_for_spawn(ma, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
+        case ECall(callee, cargs, _):
+            scan_expr_for_spawn(*callee, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
+            for ca in cargs:
+                scan_expr_for_spawn(ca, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
+        else:
+            pass
+
+# ── Named-closure spawn wrapper emission ─────────────────
+# Emits __spawn_wrap___Closure_N stubs for `spawn var()` where var holds a closure.
+
+# closure Phase 2 Step A: `fn_name` keys into gmod.closure_var_cids
+# (`<fn_name>\0<varname>` → `__Closure_<cid>`), recorded at the make-site
+# (SVarDecl lowering). A `spawn varname()` whose varname holds a closure in
+# THIS function emits the `__spawn_wrap___Closure_<cid>` stub.
+void emit_named_closure_spawn_expr(SpannedExpr sexpr, String fn_name, Dict[String, bool] &emitted, GirModule &gmod):
+    match sexpr.expr:
+        case ESpawn(inner_box):
+            match (*inner_box).expr:
+                case ECall(callee_box, _, _):
+                    match (*callee_box).expr:
+                        case EIdentifier(callee_name):
+                            String cvc_key = fn_name + "\0" + callee_name
+                            if gmod.closure_var_cids.contains(cvc_key):
+                                String ctype = gmod.closure_var_cids.get(cvc_key).unwrap()
+                                String wrap = "__spawn_wrap_" + ctype
+                                if not emitted.contains(wrap):
+                                    emitted.put(wrap.clone(), true)
+                                    Vector[int] ncwp = []
+                                    Vector[GirLocal] ncwl = [GirLocal(UNIT_TYPE, None, LoOwned(), BoNone(), false)]
+                                    Vector[BasicBlock] ncwb = [BasicBlock([], GTReturn(OpConstUnit()))]
+                                    gmod.functions.push(GirFunction(wrap, !ncwp, UNIT_TYPE, !ncwl, !ncwb))
+                        else:
+                            pass
+                else:
+                    pass
+            emit_named_closure_spawn_expr(*inner_box, fn_name, &emitted, &gmod)
+        case ECall(callee, args, _):
+            emit_named_closure_spawn_expr(*callee, fn_name, &emitted, &gmod)
+            for arg in args:
+                emit_named_closure_spawn_expr(arg, fn_name, &emitted, &gmod)
+        case EMethodCall(obj, _, margs, _):
+            emit_named_closure_spawn_expr(*obj, fn_name, &emitted, &gmod)
+            for ma in margs:
+                emit_named_closure_spawn_expr(ma, fn_name, &emitted, &gmod)
+        else:
+            pass
+
+void emit_named_closure_spawn_stmts(Vector[Stmt] stmts, String fn_name, Dict[String, bool] &emitted, GirModule &gmod):
+    for ncs in stmts:
+        match ncs:
+            case SVarDecl(_, _, init, _, _, _):
+                emit_named_closure_spawn_expr(init, fn_name, &emitted, &gmod)
+            case SExpr(expr):
+                emit_named_closure_spawn_expr(expr, fn_name, &emitted, &gmod)
+            case SReturn(opt):
+                match opt:
+                    case Some(re):
+                        emit_named_closure_spawn_expr(re, fn_name, &emitted, &gmod)
+                    case None:
+                        pass
+            case SIf(cond, then_body, branches):
+                emit_named_closure_spawn_expr(cond, fn_name, &emitted, &gmod)
+                emit_named_closure_spawn_stmts(then_body, fn_name, &emitted, &gmod)
+                for nceb in branches:
+                    emit_named_closure_spawn_stmts(nceb.body, fn_name, &emitted, &gmod)
+            case SWhile(_, body):
+                emit_named_closure_spawn_stmts(body, fn_name, &emitted, &gmod)
+            case SFor(_, iter_expr, body, _, _):
+                emit_named_closure_spawn_expr(iter_expr, fn_name, &emitted, &gmod)
+                emit_named_closure_spawn_stmts(body, fn_name, &emitted, &gmod)
+            else:
+                pass
+
+# ── Transitive generic discovery ─────────────────────────
+# Substitute type variables in a SpannedType using a name→type map.
+
+SpannedType substitute_type(SpannedType stype, Dict[String, SpannedType] &type_sub_map):
+    match stype.ty:
+        case TNamed(name, inner_targs):
+            if inner_targs.len() == 0:
+                if type_sub_map.contains(name):
+                    return type_sub_map.get(name).unwrap()
+            if inner_targs.len() > 0:
+                Vector[SpannedType] new_inner = []
+                for ita in inner_targs:
+                    SpannedType sub = substitute_type(ita, &type_sub_map)
+                    new_inner.push(sub)
+                return SpannedType(TNamed(name, new_inner), stype.span)
+            return stype
+        else:
+            return stype
+
+# Extract meta-op suffix from a call argument list.
+# Looks for EIdentifier("__metaop__<op>") produced by the parser's meta-op handling.
+String extract_meta_op_suffix(Vector[SpannedExpr] args):
+    for arg in args:
+        match arg.expr:
+            case EIdentifier(aname):
+                if aname == "__metaop__add":
+                    return "__add"
+                elif aname == "__metaop__sub":
+                    return "__sub"
+                elif aname == "__metaop__mul":
+                    return "__mul"
+                elif aname == "__metaop__div":
+                    return "__div"
+                elif aname == "__metaop__mod":
+                    return "__mod"
+                elif aname == "__metaop__eq":
+                    return "__eq"
+                elif aname == "__metaop__ne":
+                    return "__ne"
+                elif aname == "__metaop__lt":
+                    return "__lt"
+                elif aname == "__metaop__gt":
+                    return "__gt"
+                elif aname == "__metaop__le":
+                    return "__le"
+                elif aname == "__metaop__ge":
+                    return "__ge"
+                else:
+                    pass
+            else:
+                pass
+    return ""
+
+int discover_transitive_expr(SpannedExpr sexpr, Dict[String, SpannedType] &type_sub_map, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
+    int added = 0
+    match sexpr.expr:
+        case ECall(callee_box, args, targs):
+            if targs.len() > 0 and has_type_variable(targs):
+                Vector[SpannedType] resolved = []
+                for ta in targs:
+                    resolved.push(substitute_type(ta, &type_sub_map))
+                if not has_type_variable(resolved):
+                    String meta_suffix = extract_meta_op_suffix(args)
+                    match (*callee_box).expr:
+                        case EIdentifier(fname):
+                            String mangled = compute_mangled_name(resolved, fname) + meta_suffix
+                            if not seen.contains(mangled):
+                                seen.put(mangled.clone(), true)
+                                instances.push(GenericInstance(fname, resolved, mangled))
+                                added += 1
+                        else:
+                            pass
+            for arg in args:
+                added += discover_transitive_expr(arg, &type_sub_map, &seen, &instances)
+            added += discover_transitive_expr(*callee_box, &type_sub_map, &seen, &instances)
+        case EMethodCall(obj, _, margs, _):
+            added += discover_transitive_expr(*obj, &type_sub_map, &seen, &instances)
+            for ma in margs:
+                added += discover_transitive_expr(ma, &type_sub_map, &seen, &instances)
+        case EBinaryOp(lhs, _, rhs):
+            added += discover_transitive_expr(*lhs, &type_sub_map, &seen, &instances)
+            added += discover_transitive_expr(*rhs, &type_sub_map, &seen, &instances)
+        case EUnaryOp(_, inner):
+            added += discover_transitive_expr(*inner, &type_sub_map, &seen, &instances)
+        case EIf(cond, then_body, branches):
+            added += discover_transitive_expr(*cond, &type_sub_map, &seen, &instances)
+            added += discover_transitive_stmts(then_body, &type_sub_map, &seen, &instances)
+            for eb in branches:
+                added += discover_transitive_stmts(eb.body, &type_sub_map, &seen, &instances)
+        case EFieldAccess(obj, _):
+            added += discover_transitive_expr(*obj, &type_sub_map, &seen, &instances)
+        case EIndex(obj, idx):
+            added += discover_transitive_expr(*obj, &type_sub_map, &seen, &instances)
+            added += discover_transitive_expr(*idx, &type_sub_map, &seen, &instances)
+        case EClosure(_, body):
+            added += discover_transitive_stmts(body, &type_sub_map, &seen, &instances)
+        case EFString(_, fexprs):
+            for fx in fexprs:
+                added += discover_transitive_expr(fx, &type_sub_map, &seen, &instances)
+        else:
+            pass
+    return added
+
+int discover_transitive_stmt(Stmt stmt, Dict[String, SpannedType] &type_sub_map, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
+    int added = 0
+    match stmt:
+        case SVarDecl(_, _, init, _, _, _):
+            added += discover_transitive_expr(init, &type_sub_map, &seen, &instances)
+        case SAssign(_, value):
+            added += discover_transitive_expr(value, &type_sub_map, &seen, &instances)
+        case SExpr(expr):
+            added += discover_transitive_expr(expr, &type_sub_map, &seen, &instances)
+        case SReturn(opt_expr):
+            match opt_expr:
+                case Some(expr):
+                    added += discover_transitive_expr(expr, &type_sub_map, &seen, &instances)
+                case None:
+                    pass
+        case SIf(cond, then_body, branches):
+            added += discover_transitive_expr(cond, &type_sub_map, &seen, &instances)
+            added += discover_transitive_stmts(then_body, &type_sub_map, &seen, &instances)
+            for eb in branches:
+                added += discover_transitive_stmts(eb.body, &type_sub_map, &seen, &instances)
+        case SWhile(cond, body):
+            added += discover_transitive_expr(cond, &type_sub_map, &seen, &instances)
+            added += discover_transitive_stmts(body, &type_sub_map, &seen, &instances)
+        case SFor(_, iter_expr, body, _, _):
+            added += discover_transitive_expr(iter_expr, &type_sub_map, &seen, &instances)
+            added += discover_transitive_stmts(body, &type_sub_map, &seen, &instances)
+        case SMatch(scrutinee, arms):
+            added += discover_transitive_expr(scrutinee, &type_sub_map, &seen, &instances)
+            for arm in arms:
+                added += discover_transitive_stmts(arm.body, &type_sub_map, &seen, &instances)
+        else:
+            pass
+    return added
+
+int discover_transitive_stmts(Vector[Stmt] stmts, Dict[String, SpannedType] &type_sub_map, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
+    int added = 0
+    for stmt in stmts:
+        added += discover_transitive_stmt(stmt, &type_sub_map, &seen, &instances)
+    return added
+

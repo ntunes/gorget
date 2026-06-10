@@ -1,0 +1,463 @@
+# ── Drop elaboration (split out of lower.gg) ─────────────────────────
+# Drop-scope stack management, droppable-type classification, and the
+# per-scope / early-exit drop emission. Moved verbatim from lower.gg as
+# part of the lower.gg module split (output-neutral pure function move).
+from std.collections import Vector, Dict
+from std.conv import int_to_str, float_to_str
+from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch, EquipBlock, StructDef, EnumDef, EnumVariant, Type, MatchArm, Pattern, SpannedPattern
+from scope import ScopeTable, DefInfo
+from types import TypeTable, ResolvedType
+from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Terminator, Operand, GirType, GirExtern, GirTypeInfo, GirFieldInfo, GirEnumVariantInfo, LiftedClosure, ClosureCapture, ResourceMetadata, CollectionKind, ConsumeKind
+from gir import BOOL_TYPE, I8_TYPE, I16_TYPE, I32_TYPE, I64_TYPE, U8_TYPE, U16_TYPE, U32_TYPE, U64_TYPE, F32_TYPE, F64_TYPE, UNIT_TYPE, PRIM_COUNT
+from gir import CAP_BY_VALUE, CAP_BY_MUT_REF
+from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM, OP_MOD
+from gir import OP_ADD_WRAP, OP_SUB_WRAP, OP_MUL_WRAP
+from gir import OP_BITAND, OP_BITOR, OP_BITXOR, OP_SHL, OP_SHR
+from gir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
+from gir import UNOP_NEG, UNOP_NOT, UNOP_BITNOT
+from gir import CkAssign, CkReturn, CkCallArgBorrow, CkCallArgOwning, CkFieldWrite, CkBinOpArg, CkFormatArg, CkMatchPtr
+from gir import CkVector, CkDeque, CkHeap, CkDict, CkSet, CkNotCollection
+from lir_lower import resource_meta_for
+from lower import LowerCtx, DropEntry, DropScope, DropElaborator, DropEmission
+from lower import DSK_FUNCTION, DSK_LOOP, DSK_BLOCK
+from lower import lower_fail, diag_bug, diag_warn, emit, new_block, switch_to, set_terminator
+from lower import add_local, add_local_with
+
+# ── Drop elaboration (mirrors src/ir/lowering/drops.rs) ─────
+#
+# A drop scope corresponds to a language construct that owns locals
+# (function / loop body / if-branch / match-arm / etc.). At scope
+# entry we push a fresh DropScope; at scope exit we pop and emit a
+# `GIDropIfAlive(local_id)` for every owned, resource-typed local
+# registered in that scope, LIFO order.
+#
+# Early exits (return / break / continue) walk the scope stack
+# innermost-out and emit drops without popping — the surrounding
+# scope's later pop_drop_scope is responsible for cleanup if the
+# early exit branch is the only path through the scope.
+#
+# Why GIDropIfAlive (not GIDrop)?  The LIR-side handler in
+# `lir_lower.gg:2989-3015` wraps the runtime drop call in an
+# `IDropGuardOpen(byte_size+1) / IDropGuardClose` pair, which the
+# C codegen materialises as `if (memcmp(&slot, zeros, size) != 0)
+# <drop>`. That's a safe, defensive guard: function-entry slots
+# are calloc-zeroed, runtime drop fns are NULL-safe, so worst
+# case for a possibly-uninit slot is one memcmp returning 0 and
+# the drop suppressed. Rust's DropElaborator (`drops.rs:506,542`)
+# also emits DropIfAlive unconditionally post-Snag #30 (2026-05-10
+# nested-match double-free); we follow the same defensive shape.
+# The downstream LIR `drop_elab` pass statically elides the
+# memcmp when slot init is provably unconditional, recovering
+# the unconditional-drop codegen quality.
+#
+# Resource classification: `is_droppable_type` checks the local's
+# GIR type against `build_resource_metadata` (the single source of
+# truth shared with lir_lower.gg) AND `gmod.resource_types` (for
+# user-defined struct/enum types with resource fields, populated at
+# `lower_module` entry before any function is lowered). Primitives
+# and Ptr/MutPtr/FnPtr types are not droppable. Mirrors Rust's
+# `needs_drop` in `src/ir/types.rs`.
+
+void init_drop_elab(DropElaborator &de):
+    de.scopes = []
+
+void push_drop_scope(DropElaborator &de, int kind):
+    Vector[DropEntry] entries = []
+    de.scopes.push(DropScope(kind, !entries))
+
+# Emit drops for every entry in the given scope, LIFO order, using
+# GIDropIfAlive (see top-of-section docstring for the unconditional-
+# DropIfAlive rationale).
+#
+# **Status: ACTIVE.** Emission runs unconditionally — for each entry
+# registered in the scope we emit `GIDropIfAlive(entry.local_id)` in
+# reverse registration order. A String/Vector/Dict/Box (or a user
+# resource-containing struct, see `is_droppable_type`) bound in a scope
+# IS dropped at scope exit today. (The earlier "Phase 2 emission is
+# DISABLED / would double-free" note was retired once the move-out side
+# matured: `SReturn` move-zeros the returned local and excludes it from
+# the scope-exit drops (:7227-7229), and the LIR `IDropGuardOpen` memcmp
+# gate suppresses drops of moved-out / zeroed slots — so a moved value is
+# dropped exactly once, by its receiver, not double-freed here. The
+# scope-tracking + register-local infrastructure is the live drop path,
+# not a standalone foundation.)
+#
+# `bootstrap_fixed_point` (stage-1==stage-2 byte-identical) is the
+# strongest regression net here: the driver self-compiles its own scopes
+# and re-converges.
+void emit_scope_drops(LowerCtx &ctx, Vector[DropEntry] entries):
+    # Cluster (a) probe: emit GIDropIfAlive unconditionally in LIFO order.
+    int i = entries.len() - 1
+    while i >= 0:
+        DropEntry entry = entries.get(i).unwrap()
+        emit(&ctx, GIDropIfAlive(entry.local_id))
+        i = i - 1
+
+# Pop the innermost scope and emit its drops at the current block IF
+# the current block's terminator is still GTNone (i.e. we're on the
+# natural fall-through exit). When the terminator is already set
+# (explicit return / break / continue already emitted their own
+# drops via emit_drops_for_early_exit), pop without re-emitting to
+# avoid stranding dead instructions after a finalised terminator.
+void pop_drop_scope(LowerCtx &ctx):
+    if ctx.drop_elab.scopes.len() == 0:
+        return
+    DropScope scope = ctx.drop_elab.scopes.get(ctx.drop_elab.scopes.len() - 1).unwrap()
+    Terminator cur_term = ctx.block_terms.get(ctx.current_block).unwrap()
+    bool fall_through = false
+    match cur_term:
+        case GTNone():
+            fall_through = true
+        else:
+            pass
+    if fall_through:
+        emit_scope_drops(&ctx, scope.entries)
+    ctx.drop_elab.scopes.pop()
+
+# Pop the innermost scope WITHOUT emitting drops. Used at the loop-
+# entry/exit pairing in `lower_loop`/`lower_while`/`lower_for_*` — the
+# loop body's terminator is either a back-edge jump (no drops needed —
+# the same locals re-enter the body next iteration) or a break/continue
+# (which already emitted its own drops via emit_drops_for_early_exit).
+void pop_drop_scope_no_emit(LowerCtx &ctx):
+    if ctx.drop_elab.scopes.len() == 0:
+        return
+    ctx.drop_elab.scopes.pop()
+
+# Check whether a GIR type id refers to a droppable type. Used at every
+# SVarDecl / param-registration site to decide whether to add the local
+# to the current drop scope. Primitives, Ptr/MutPtr/FnPtr, and POD user
+# types (no resource field) are non-droppable.
+#
+# Two droppable classes qualify:
+#   1. RUNTIME resource types (`resource_meta_for`/`build_resource_metadata`
+#      returns Some) — GorgetString, GorgetArray, Vector__T, Dict__K__V,
+#      Box__T, Mutex__/Shared__/Channel__/etc. — always have a runtime
+#      `gorget_*_free` in the C preamble, so the emitted `<drop_fn>(&slot)`
+#      resolves at link time.
+#   2. USER struct/enum types that transitively contain a resource field
+#      (collected into `gmod.resource_types` by the fixpoint at :11779-11809).
+#      `populate_drop_metadata` (lir_lower.gg:3658) emits a `<Type>__drop`
+#      for each via the recursive_drop_structs/recursive_drop_enums tables
+#      (the old `__imported_type__` skip that produced "0 defs" was removed
+#      2026-05-24), so `Def__drop`/`Stage__drop`/etc. ARE defined and the
+#      drop calls link. A value-typed local of such a type leaked before it
+#      was registered (leak_method_return_loop).
+#
+# Mirror of Rust's `needs_drop` (`src/ir/types.rs`) which delegates to
+# TypeRegistry.needs_drop — same split: runtime resource OR user
+# resource-containing struct/enum = yes, POD = no.
+bool is_droppable_type(int type_id, GirModule &gmod):
+    if type_id < 0 or type_id < PRIM_COUNT:
+        return false
+    if type_id >= gmod.type_table.len():
+        return false
+    GirType gt = gmod.type_table.get(type_id).unwrap()
+    String tname = ""
+    match gt:
+        case GtNamed(n):
+            tname = n
+        case GtPtr(_):
+            # Ptr/MutPtr are non-owning aliases — the pointee's
+            # owner is responsible for dropping it.
+            return false
+        case GtMutPtr(_):
+            return false
+        case GtFnPtr(_, _):
+            return false
+        else:
+            return false
+    # Runtime resource types (GorgetString/GorgetArray/Vector__T/Dict__K__V/
+    # Box__T/Mutex__/etc.) have a `gorget_*_free` defined in the C preamble —
+    # `resource_meta_for` returns Some for them.
+    match resource_meta_for(&gmod, tname):
+        case Some(_):
+            return true
+        case None:
+            pass
+    # User struct/enum types that transitively contain a resource field are
+    # collected into `gmod.resource_types` (the fixpoint at :11779-11809), and
+    # `populate_drop_metadata` (lir_lower.gg:3658) emits a `<Type>__drop` for
+    # each. So a value-typed local of such a type IS droppable. (Only GtNamed
+    # reaches here — GtPtr/GtMutPtr/GtFnPtr returned false above. Mangled
+    # Option/Result names live in the SEPARATE optionlike_resource_types dict,
+    # so this check stays clean and never matches them.)
+    if gmod.resource_types.contains(tname):
+        return true
+    # Mono'd Option__X / Result__X__E whose payload owns a resource and that
+    # appears as a LOCAL / return-value / scrutinee type (the field-position
+    # instances ARE in optionlike_resource_types, but locals/returns are NOT —
+    # register_optionlike_resource only walks struct/enum fields). We must NOT
+    # add these to optionlike_resource_types: that dict ALSO drives the
+    # clone/borrow ABI (is_resource_type_name), and flipping a by-value
+    # Result__int__String param to "resource" breaks its pass-by-value ABI
+    # (variant_auto_ok_inference: `show(r)` passed `&r` to a by-value param).
+    # Instead decompose the mangled name structurally and check payload
+    # droppability — a pure DROP-axis decision, no ABI side-effect. lir_lower's
+    # drop_fn_for_type mirrors this so the GIDropIfAlive resolves <Type>__drop.
+    if gmod.optionlike_resource_types.contains(tname):
+        return true
+    # Mono'd Option/Result droppability: read the payload tids off the
+    # typed `enum_category` channel (no mangled-name re-parse). A recorded
+    # `Option__Ref__T` carries its `GtPtr(T)` payload here, which
+    # `is_droppable_type` correctly rejects (a borrow alias isn't dropped),
+    # so the former `Option__Ref__` carve-out is subsumed.
+    EnumCategory ec = enum_category_of(&gmod, type_id)
+    if ec.category == ENUM_CAT_RESULT:
+        if is_droppable_type(ec.ok_type, &gmod) or is_droppable_type(ec.err_type, &gmod):
+            return true
+    elif ec.category == ENUM_CAT_OPTION:
+        if is_droppable_type(ec.ok_type, &gmod):
+            return true
+    return false
+
+# Register a local in the innermost drop scope. Skips non-droppable
+# types so callers can call this blindly after add_local. Skips when
+# no scope is open (defensive — should never happen during normal
+# function lowering, but cheap to guard).
+void register_local_for_drop(LowerCtx &ctx, int local_id, int type_id, GirModule &gmod):
+    if not is_droppable_type(type_id, &gmod):
+        return
+    if ctx.drop_elab.scopes.len() == 0:
+        return
+    # a-1 (the root fix): only OWNERS get dropped. A local that aliases a
+    # borrow (LoBorrowed) or a CoW view (LoView) does NOT own its data —
+    # registering it for drop double-frees the real owner's heap (the
+    # over-drop that made stage-1's array_free/map_free counts exceed Rust's).
+    # Mirrors Rust's register_local, which only registers owned resource
+    # locals. (Owning `!T` params arrive here already filtered by the
+    # p.ownership==2 gate and are LoParam/LoOwned, so they are unaffected.)
+    match ctx.locals.get(local_id).unwrap().ownership:
+        case LoBorrowed():
+            return
+        case LoView():
+            return
+        else:
+            pass
+    int top = ctx.drop_elab.scopes.len() - 1
+    DropScope scope = ctx.drop_elab.scopes.get(top).unwrap()
+    scope.entries.push(DropEntry(local_id, type_id, false))
+    ctx.drop_elab.scopes.set(top, scope)
+
+# ── Tier E §8.1: owning `!`-param exit drop ──────────────────────
+#
+# Register an owning `!`-move resource PARAMETER (sigil ownership==2) for
+# drop at function exit. DEDICATED — NOT a reuse of `register_local_for_drop`
+# — for two load-bearing reasons:
+#
+#   (1) It must SET `owning_param=true` on the param's GirLocal. The shared
+#       fn doesn't, and that flag is read at the consume-mode decision (D)
+#       and the GIDropIfAlive emission (C). Without it the `!`-param is
+#       never moved-on-transfer and the drop arg derefs the wrong cell.
+#   (2) The param slot is `GtMutPtr(inner)` — `is_droppable_type` REJECTS
+#       GtMutPtr (a pointer alias isn't dropped), so passing the wrapper to
+#       the shared fn is a silent no-op (the original bug). We deref to
+#       `inner` and gate on `is_droppable_type(inner)` so the registration
+#       gate passes for a droppable pointee (resource struct, mono'd
+#       Option/Result) and skips a non-droppable one (e.g. `!int`).
+#
+# `maybe_moved` stays false: the §8.1 drop-flag dataflow (the LIR memcmp
+# guard, statically resolvable once self-host grows a drop_elab) handles
+# transfer — a consumed param flips its slot to UNINITIALIZED via the
+# GIMoveZero the move-on-consume (D) emits, and the guard suppresses the
+# re-drop. We do NOT pre-mark maybe_moved here (that would suppress the
+# drop on the NO-transfer path — the very leak we are fixing).
+#
+# Caller: the two param-setup loops (`lower_function` free-fn and the
+# method loop) call this in place of `register_local_for_drop` at the
+# `p.ownership == 2` gate. `&`-borrows (ownership==1) never reach here —
+# they are NOT registered (the caller's gate is ownership==2 only), so
+# their GirLocal keeps `owning_param=false` and is never moved/derefed.
+void register_owning_param(LowerCtx &ctx, int local_id, int type_id, GirModule &gmod):
+    if ctx.drop_elab.scopes.len() == 0:
+        return
+    if local_id < 0 or local_id >= ctx.locals.len():
+        return
+    # Deref the GtMutPtr(inner) wrapper to the underlying pointee T. The
+    # `!`-param slot holds a `T*`; the drop axis cares about T's dropability.
+    int inner_tid = type_id
+    if type_id >= 0 and type_id < gmod.type_table.len():
+        match gmod.type_table.get(type_id).unwrap():
+            case GtMutPtr(inner):
+                inner_tid = inner
+            case GtPtr(inner):
+                inner_tid = inner
+            else:
+                pass
+    if not is_droppable_type(inner_tid, &gmod):
+        return
+    # Set owning_param=true on the param's GirLocal (rebuild-and-set; the
+    # GirLocal is a value type — mirror the ctx.locals.set idiom).
+    GirLocal ploc = ctx.locals.get(local_id).unwrap()
+    ctx.locals.set(local_id, GirLocal(ploc.type_id, ploc.name_hint, ploc.ownership, ploc.borrow_origin, true))
+    # Register the inner T for exit drop. Only local_id is load-bearing at
+    # emission (GIDropIfAlive resolves the type from the local's own slot),
+    # but we record inner_tid for consistency with register_local_for_drop.
+    int top = ctx.drop_elab.scopes.len() - 1
+    DropScope oscope = ctx.drop_elab.scopes.get(top).unwrap()
+    oscope.entries.push(DropEntry(local_id, inner_tid, false))
+    ctx.drop_elab.scopes.set(top, oscope)
+
+# Mark a local as "maybe moved" — used at consume sites that transfer
+# ownership out of the local. Walks the scope stack innermost-out;
+# matches the first entry with the given local_id and sets its
+# maybe_moved flag. No-op if the local isn't registered (e.g. it's a
+# borrow / non-resource / wasn't tracked).
+void mark_local_moved(LowerCtx &ctx, int local_id):
+    int si = ctx.drop_elab.scopes.len() - 1
+    while si >= 0:
+        DropScope scope = ctx.drop_elab.scopes.get(si).unwrap()
+        int ei = 0
+        while ei < scope.entries.len():
+            DropEntry entry = scope.entries.get(ei).unwrap()
+            if entry.local_id == local_id:
+                entry.maybe_moved = true
+                scope.entries.set(ei, entry)
+                ctx.drop_elab.scopes.set(si, scope)
+                return
+            ei += 1
+        si -= 1
+
+# Snapshot `maybe_moved` flags across every live scope. Used by branch
+# lowerings (lower_if, lower_match) to restore the pre-branch view
+# before lowering each alternative branch — otherwise a mark_local_moved
+# in the then-branch pollutes the elif-branch's view. Mirrors Rust's
+# `DropElaborator::snapshot_moved` (`drops.rs:300-308`).
+#
+# Storage shape: flat Vector[bool] indexed by (sidx * MAX_PER_SCOPE +
+# eidx). MAX_PER_SCOPE is conservatively large; self-host functions
+# rarely exceed ~50 droppable locals per scope.
+const int SNAPSHOT_MAX_PER_SCOPE = 4096
+
+Vector[bool] snap_moved_state(DropElaborator &de):
+    Vector[bool] out = []
+    int si = 0
+    while si < de.scopes.len():
+        DropScope scope = de.scopes.get(si).unwrap()
+        int ei = 0
+        while ei < scope.entries.len():
+            DropEntry entry = scope.entries.get(ei).unwrap()
+            # Pad to (si+1)*MAX_PER_SCOPE so flat indexing works:
+            # entries beyond the current scope's entry count are
+            # implicit false (not yet recorded). We push entries
+            # for THIS scope at their (ei + base) position; reads
+            # default-to-false for missing indices in restore.
+            int target_pos = si * SNAPSHOT_MAX_PER_SCOPE + ei
+            while out.len() <= target_pos:
+                out.push(false)
+            out.set(target_pos, entry.maybe_moved)
+            ei += 1
+        si += 1
+    return out
+
+# Restore `maybe_moved` flags from a snapshot. Entries added since the
+# snapshot keep their current `maybe_moved` (they're newer than the
+# snapshot frame, occupying positions beyond the snapshot's len).
+void restore_moved(DropElaborator &de, Vector[bool] snap):
+    int si = 0
+    while si < de.scopes.len():
+        DropScope scope = de.scopes.get(si).unwrap()
+        int ei = 0
+        while ei < scope.entries.len():
+            int pos = si * SNAPSHOT_MAX_PER_SCOPE + ei
+            if pos < snap.len():
+                DropEntry entry = scope.entries.get(ei).unwrap()
+                bool was = snap.get(pos).unwrap()
+                entry.maybe_moved = was
+                scope.entries.set(ei, entry)
+            ei += 1
+        de.scopes.set(si, scope)
+        si += 1
+
+# Union `maybe_moved` flags from a branch snapshot into the current
+# state — conservative join. If any branch moved a local, the post-
+# join state treats it as maybe-moved. Mirrors Rust's `union_moved`
+# (`drops.rs:328-337`).
+void union_moved(DropElaborator &de, Vector[bool] branch_snap):
+    int si = 0
+    while si < de.scopes.len():
+        DropScope scope = de.scopes.get(si).unwrap()
+        int ei = 0
+        while ei < scope.entries.len():
+            int pos = si * SNAPSHOT_MAX_PER_SCOPE + ei
+            if pos < branch_snap.len():
+                bool branch_moved = branch_snap.get(pos).unwrap()
+                if branch_moved:
+                    DropEntry entry = scope.entries.get(ei).unwrap()
+                    entry.maybe_moved = true
+                    scope.entries.set(ei, entry)
+            ei += 1
+        de.scopes.set(si, scope)
+        si += 1
+
+# Emit cleanup drops for an early exit (return / break / continue).
+# Walks scopes innermost-out, would emit GIDropIfAlive for every entry,
+# until (and INCLUDING) the target scope kind. For return, target=
+# DSK_FUNCTION (drop everything up through Function). For break /
+# continue, target=DSK_LOOP. `exclude_local` optionally skips a
+# specific local (e.g. _0 — the return place being moved out).
+#
+# Does NOT pop scopes — that's the surrounding scope's responsibility
+# at its natural exit point.
+#
+# **Phase 2 status: emission is DISABLED.** See `emit_scope_drops`
+# docstring for the gap analysis. Scope walking is preserved for
+# Phase 3 / future drop_elab to hook into. When the self-host gains
+# proper move-out / drop semantics, the no-op walk below becomes a
+# one-line `emit(&ctx, GIDropIfAlive(entry.local_id))` inside the
+# skip-check.
+void emit_drops_for_early_exit(LowerCtx &ctx, int target_kind, Option[int] exclude_local):
+    int si = ctx.drop_elab.scopes.len() - 1
+    while si >= 0:
+        DropScope scope = ctx.drop_elab.scopes.get(si).unwrap()
+        int ei = scope.entries.len() - 1
+        while ei >= 0:
+            DropEntry entry = scope.entries.get(ei).unwrap()
+            bool skip = false
+            match exclude_local:
+                case Some(excl):
+                    if entry.local_id == excl:
+                        skip = true
+                case None:
+                    pass
+            if not skip:
+                emit(&ctx, GIDropIfAlive(entry.local_id))
+            ei -= 1
+        if scope.kind == target_kind:
+            return
+        si -= 1
+
+# Phase 2c COMMIT 3 Prereq C — flush the deferred drop queue.
+#
+# Called AFTER `wire_liveness_into_modes` populates `maybe_moved`
+# on every DropEntry. Walks `ctx.drop_queue` and, for each pending
+# emission, decides whether to emit a real `GIDropIfAlive` at the
+# recorded position gated on `not entry.maybe_moved`.
+#
+# **Prereq C status**: this is a no-op. The queue is still empty
+# because `emit_scope_drops` and `emit_drops_for_early_exit` are
+# also still no-ops (they don't push to the queue yet). The
+# infrastructure ships standalone so COMMIT 3 can plug in the two
+# halves — queue-write at scope-pop / early-exit sites + real
+# `GIDropIfAlive` emission here — without further plumbing churn.
+#
+# When COMMIT 3 enables emission, this body becomes the canonical
+# "read maybe_moved, insert GIDropIfAlive at target_block /
+# insert_at_inst_idx if the flag says drop is live" loop. The
+# scope/entry indices on each `DropEmission` are exactly what the
+# read-side needs to look up `maybe_moved` from the captured
+# `drop_elab` state — `dse_scope_idx` indexes the scopes snapshot
+# (note: scopes have been popped by now, so we'd need to snapshot
+# them at queue-record time or pre-flatten the entry directly into
+# `DropEmission`. The follow-up commit will pick the right shape).
+void flush_drop_queue(LowerCtx &ctx):
+    # Prereq C: queue is empty (no recorders), so this loop is a
+    # no-op. Touch each entry to keep the field exercised — the
+    # release build's dead-field elimination would otherwise hide
+    # any constructor-site omissions until COMMIT 3 ships.
+    int qi = 0
+    while qi < ctx.drop_queue.len():
+        DropEmission _em = ctx.drop_queue.get(qi).unwrap()
+        int _lid = _em.local_id
+        qi += 1
+

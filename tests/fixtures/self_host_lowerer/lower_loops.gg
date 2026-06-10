@@ -1,0 +1,1045 @@
+# ── Loop lowering (split out of lower.gg) ────────────────────────────
+# `for` lowering over Vector/Deque/Dict/String/range/iterator, the
+# tuple-destructure / for-binding helpers, scrutinee-ownership probes,
+# and `while` lowering. Moved verbatim from lower.gg as part of the
+# lower.gg module split (output-neutral pure function move).
+from std.collections import Vector, Dict
+from std.conv import int_to_str, float_to_str
+from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch, EquipBlock, StructDef, EnumDef, EnumVariant, Type, MatchArm, Pattern, SpannedPattern
+from scope import ScopeTable, DefInfo
+from types import TypeTable, ResolvedType
+from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Terminator, Operand, GirType, GirExtern, GirTypeInfo, GirFieldInfo, GirEnumVariantInfo, LiftedClosure, ClosureCapture, ResourceMetadata, CollectionKind, ConsumeKind
+from gir import BOOL_TYPE, I8_TYPE, I16_TYPE, I32_TYPE, I64_TYPE, U8_TYPE, U16_TYPE, U32_TYPE, U64_TYPE, F32_TYPE, F64_TYPE, UNIT_TYPE, PRIM_COUNT
+from gir import CAP_BY_VALUE, CAP_BY_MUT_REF
+from gir import init_type_table, register_type, lookup_or_register_named, register_ptr
+from gir import GirGlobal, GirGlobalField, gir_mod_add_global, GGINIT_FN_REF, GGINIT_STRUCT
+from gir import GGSTATIC_RUNTIME, GGSTATIC_BYTES, static_put_bytes
+from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM, OP_MOD
+from gir import OP_ADD_WRAP, OP_SUB_WRAP, OP_MUL_WRAP
+from gir import OP_BITAND, OP_BITOR, OP_BITXOR, OP_SHL, OP_SHR
+from gir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
+from gir import UNOP_NEG, UNOP_NOT, UNOP_BITNOT
+from gir import CkAssign, CkReturn, CkCallArgBorrow, CkCallArgOwning, CkFieldWrite, CkBinOpArg, CkFormatArg, CkMatchPtr
+from gir import CkVector, CkDeque, CkHeap, CkDict, CkSet, CkNotCollection
+from compiler.data.resources import STRING_BUILTIN_METHODS, COLLECTION_BUILTIN_METHODS, BUILTIN_METHOD_MUTATES
+from compiler.data.schema import BuiltinMethodDecl, BuiltinMethodEntry
+from compiler.data.schema import BuiltinRetKind, BrkString, BrkInfer
+from lir_lower import resource_meta_for
+from lower import LowerCtx, ResultPayloadTypes, DictKvNames, ClosureSig, CaptureCollector, FieldBorrowPair, SVarDeclEmission
+from lower import lower_fail, diag_bug, diag_warn, emit, new_block, switch_to, set_terminator
+from lower import add_local, add_local_with, add_local_inheriting, nl_get, nl_put, nl_contains
+from lower import expr_kind, pat_kind, stmt_kind
+from lower import collection_kind_of, collection_kind_eq, int_vec_contains, method_mutates_receiver
+from lower import inherit_borrow_from, set_field_borrow, cow_register_alias, decide_svardecl_emission
+from lower import classify_call_arg, is_consume_kind, op_consume, decide_operand_at_consuming_arg, decide_ptr_consume
+from lower_drops import init_drop_elab, push_drop_scope, emit_scope_drops, pop_drop_scope, pop_drop_scope_no_emit, is_droppable_type, register_local_for_drop, register_owning_param, mark_local_moved, restore_moved, union_moved, emit_drops_for_early_exit, flush_drop_queue
+from lower_liveness import LivenessAnalysis, compute_liveness, wire_liveness_into_modes, liveness_instrumentation_diff, update_last_pos_for_inst, update_last_pos_for_term, note_operand_pos, empty_liveness
+from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, is_comparison, map_cmpop
+from lower_expr import block_terminated, lower_block_expr, lower_stmt_as_tail_value, lower_if_chain_expr, refine_local_type, lower_expr, lower_expr_inner, apply_container_hint_for_ctor_arg, lower_call
+from lower_stmt import lower_stmt, lower_place_base, lower_field_write, emit_field_write_from_local, lower_stmts, lower_if, lower_index_assign
+from lower_match import match_enum_type, match_variant_index, try_lift_option_ref, emit_tag_read, is_deep_clone_fn, resolve_payload_clone_fn, emit_payload_read, emit_payload_read_mode, emit_payload_read_mode_full, match_scrutinee_ptr, lower_pattern_match, lower_ctor_pattern, lookup_ctor_field_type, result_payload_types, emit_on_error_cleanups, lower_throw_stmt, lower_catch_expr, lower_rethrow_expr, maybe_auto_propagate, arms_match_result_or_option, pattern_head_is_result_or_option, lower_match_stmt, lower_match_expr
+
+# Lower `for pat in iter_expr: body` over Vector / Deque collections.
+#
+# Architecturally: ONE arm in `lower_stmt`, ONE scaffold here, parameterised
+# by collection type only at the element-extract step. This is intentionally
+# unified — the Rust frontend currently has SEVEN separate `lower_for_*`
+# functions (one each for array, dict, set, string, iterable, enumerate,
+# range) that duplicate ~80% scaffold; self-host's reference-grade answer
+# is the single-scaffold + per-type extractor split documented below.
+# See TODO `lower_for: iterator-protocol fallback for non-Vector iterables`
+# for the path to extending this beyond Vector/Deque.
+#
+# Desugar shape (matches the manual idiom users write today):
+#
+#   for x in coll:                       int idx = 0
+#       <body>                           int len = coll.len()
+#                                  →     while idx < len:
+#                                            auto x = coll.get(idx).unwrap()
+#                                            <body>
+#                                            idx = idx + 1
+#
+#   for (i, x) in coll.enumerate():      <same scaffold, additionally>
+#       <body>                       →   bind `i` to a fresh copy of idx
+#                                        per iteration (immutable snapshot)
+#
+# Element extract: routed through the canonical `coll.get(idx).unwrap()`
+# chain via `emit_payload_read` (the resource auto-clone makes the binding
+# independent of the collection — same semantics as the manual idiom). No
+# AST synthesis, no recursive `lower_stmt` round-trip.
+#
+# Drop discipline: `coll_local` is owned by the caller (we don't consume
+# it); `OpBorrow(coll_local)` is passed to `__len` and `__get`. The element
+# binding owns its cloned copy; standard scope-exit drops handle release.
+#
+# Continue/break: continue jumps to `incr_bb` (so idx advances); break to
+# `exit_bb`. Stacks pushed/popped around `lower_stmts(body, ...)`.
+#
+# for-else (else_body): rare in self-host; emits a `lower_fail` diagnostic
+# rather than silently dropping. Wire the Python-semantics version (runs
+# only when the loop completes without break) when a self-host site
+# actually needs it.
+void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[Stmt] body, Vector[Stmt] else_body, GirModule &gmod, bool is_main):
+    if else_body.len() > 0:
+        lower_fail("SFor with else-body not yet implemented")
+        return
+    # Range fast path — `for i in start..end` over a literal `ERange`.
+    # Mirrors Rust's `lower_for` first branch (src/ir/lowering/stmts/
+    # for_loops.rs:118-128 → lower_for_range :1003): when the pattern is a
+    # bare binding AND the iterable is a both-bounded range, emit a counter
+    # loop directly instead of routing through the iterator protocol (the
+    # iterator path would `lower_fail` — `int64_t` has no iter()/next() chain
+    # — silently dropping the whole loop body). The self-host `ERange` AST
+    # (ast.gg:66) carries only `start`/`end` (no `inclusive` field) and the
+    # parser only produces exclusive `..`, so the comparison is always `<`.
+    match pat.pat:
+        case PBinding(loop_name):
+            match iter_expr.expr:
+                case ERange(start_opt, end_opt):
+                    match start_opt:
+                        case Some(start_box):
+                            match end_opt:
+                                case Some(end_box):
+                                    SpannedExpr start_e = *start_box
+                                    SpannedExpr end_e = *end_box
+                                    lower_for_range(&ctx, loop_name, start_e, end_e, body, &gmod, is_main)
+                                    return
+                                case None:
+                                    pass
+                        case None:
+                            pass
+                else:
+                    pass
+        else:
+            pass
+    # Detect `.enumerate()` and strip it for the Vector/Deque fast path —
+    # if `recv` turns out to be Vector/Deque, the idx-based scaffold can
+    # bind both the index and the element directly. For non-Vector
+    # receivers we DON'T strip (the strip would be wrong: on user-defined
+    # iterables `coll.enumerate()` is just a regular method call returning
+    # a wrapper iterator). The probe is purely speculative; we commit to
+    # the strip only after type-checking `recv`.
+    SpannedExpr probe_coll = iter_expr
+    bool probe_is_enumerate = false
+    match iter_expr.expr:
+        case EMethodCall(recv_box, mname, margs, _):
+            if mname == "enumerate" and margs.len() == 0:
+                probe_coll = SpannedExpr((*recv_box).expr, (*recv_box).span)
+                probe_is_enumerate = true
+        else:
+            pass
+    # Lower the probe receiver once. If it's Vector/Deque, the
+    # `probe_is_enumerate` strip was correct and we take the fast path.
+    # Otherwise the strip was wrong, but for non-Vector enumeration
+    # self-host has no in-tree use case today — fail loudly with a
+    # diagnostic and let the iterator-protocol path handle the
+    # non-enumerate variant.
+    # The iterable is collection-typed, not the surrounding context — clear
+    # any leaked `expected_type` so a Result-typed expectation doesn't make
+    # the centralized auto-prop hook's capture-form check suppress a
+    # throws-call iterable's peel (`for x in might():`).
+    int saved_expected_for = ctx.expected_type
+    ctx.expected_type = -1
+    int coll_local = lower_expr(&ctx, probe_coll, &gmod)
+    ctx.expected_type = saved_expected_for
+    # Auto-propagate a `throws` call used as the iterable (`for x in might()`).
+    coll_local = maybe_auto_propagate(&ctx, coll_local, &gmod)
+    String coll_tn = local_type_name(coll_local, &ctx, &gmod)
+    # Phase A — typed-metadata classification (CkVector/CkDeque) via
+    # the lazy `resource_meta_for` accessor; retires the legacy
+    # `starts_with("Vector__")` cascade per
+    # docs/devbook/18-runtime-abi.md (the resource table) and
+    # docs/devbook/26-self-host-frontend.md §3.
+    bool coll_is_vec_like = false
+    bool coll_is_dict = false
+    match resource_meta_for(&gmod, coll_tn):
+        case Some(rmeta):
+            match rmeta.collection_kind:
+                case CkVector():
+                    coll_is_vec_like = true
+                case CkDeque():
+                    coll_is_vec_like = true
+                case CkDict():
+                    coll_is_dict = true
+                else:
+                    pass
+        case None:
+            pass
+    if coll_is_vec_like:
+        lower_for_vector(&ctx, pat, coll_local, coll_tn, probe_is_enumerate, body, &gmod, is_main)
+        return
+    # Dict/HashMap fast path: `for (k, v) in <Dict>` (entry pairs) or
+    # `for k in <Dict>` (keys only). The iterator-protocol fallback below
+    # would `lower_fail` — a mono'd `Dict__K__V` has no `__iter`/`__next`
+    # chain — silently dropping the whole loop body. Mirrors Rust's
+    # `lower_for_dict` (src/ir/lowering/stmts/for_loops.rs:574). The
+    # `.enumerate()` strip never applies to a Dict (no Vector/Deque kind),
+    # so `probe_is_enumerate` is false here.
+    if coll_is_dict:
+        lower_for_dict(&ctx, pat, coll_local, coll_tn, body, &gmod, is_main)
+        return
+    # String fast path: `for c in <String>` iterates UTF-8 CODEPOINTS. The
+    # iterator-protocol fallback below would `lower_fail` (GorgetString has no
+    # __iter/__next), silently dropping the body. `coll_tn == "GorgetString"`
+    # also covers a Ptr-to-String param — type_id_to_name(GtPtr(GorgetString))
+    # collapses to "GorgetString" (lower.gg:877-879).
+    if coll_tn == "GorgetString":
+        lower_for_string(&ctx, pat, coll_local, body, &gmod, is_main)
+        return
+    if probe_is_enumerate:
+        # Non-Vector `.enumerate()` — would need either (a) an iterator-
+        # protocol path that also threads an index counter, or (b) a
+        # surface-language rewrite to `coll.iter().enumerate()`. Neither
+        # is exercised in self-host today; fail with a precise message.
+        lower_fail("SFor enumerate over non-Vector/Deque iterable not yet implemented (coll type: " + coll_tn + ")")
+        return
+    # Iterator-protocol fallback — universal path for Dict/Set/String/
+    # Range/user-iterables. Calls `coll.iter()` (or treats `coll` as the
+    # iterator if no iter() exists) and loops on `next() → Option[T]`
+    # until None.
+    lower_for_iterator(&ctx, pat, coll_local, coll_tn, body, &gmod, is_main)
+
+# Vector/Deque fast path: idx-based scaffold matching the manual idiom
+# users write today (`int i = 0; while i < x.len(): T v = x.get(i).unwrap();
+# ...; i += 1`). Direct GIR emission, no recursive lower_stmt round-trip.
+void lower_for_vector(LowerCtx &ctx, SpannedPattern pat, int coll_local, String coll_tn, bool is_enumerate, Vector[Stmt] body, GirModule &gmod, bool is_main):
+    String elem_name = collection_element_type(coll_tn)
+    if elem_name == "":
+        lower_fail("SFor: could not resolve element type for " + coll_tn)
+        return
+    int elem_tid = resolve_elem_type_id(elem_name, &gmod)
+    # ── Iteration state ──────────────────────────────────────
+    int idx_local = add_local(&ctx, I64_TYPE, None)
+    emit(&ctx, GIAssign(idx_local, OpConstI64(0)))
+    int len_local = add_local(&ctx, I64_TYPE, None)
+    Vector[Operand] len_args = [OpBorrow(coll_local)]
+    emit(&ctx, GICallExtern(len_local, coll_tn + "__len", len_args))
+    # ── Block layout ─────────────────────────────────────────
+    int header_bb = new_block(&ctx)
+    int body_bb = new_block(&ctx)
+    int incr_bb = new_block(&ctx)
+    int exit_bb = new_block(&ctx)
+    set_terminator(&ctx, GTJump(header_bb))
+    # Header: `idx < len ? body : exit`
+    switch_to(&ctx, header_bb)
+    int cond_local = add_local(&ctx, BOOL_TYPE, None)
+    emit(&ctx, GICmp(cond_local, CMP_LT, I64_TYPE, OpCopy(idx_local), OpCopy(len_local)))
+    set_terminator(&ctx, GTBranch(OpCopy(cond_local), body_bb, exit_bb))
+    # Body: extract element via `coll.get(idx).unwrap()`, bind pattern.
+    ctx.loop_continue_stack.push(incr_bb)
+    ctx.loop_break_stack.push(exit_bb)
+    # Phase 2: Loop drop scope around the body (per-iteration locals
+    # like the element binding need to be cleaned up before each
+    # back-edge / break).
+    push_drop_scope(&ctx.drop_elab, DSK_LOOP)
+    switch_to(&ctx, body_bb)
+    String opt_name = "Option__" + elem_name
+    int opt_tid = lookup_or_register_named(&gmod, opt_name)
+    record_enum_category(&gmod, opt_tid, ENUM_CAT_OPTION, elem_tid, -1)
+    # CoW for-element: tag the get-result with the SOURCE collection local
+    # (BoCollectionElement(coll_local), a non-negative id) — distinct from
+    # the general `.get()` path (BoCollectionElement(-1)). The non-negative
+    # origin signals lir_lower's void*→Option lift to shallow-alias the
+    # element instead of deep-cloning it (the for-element clone bomb). The
+    # for-loop fully controls the element's lifecycle: the body reads it as
+    # a borrow and any consume/mutation clones on demand (a-5), so the alias
+    # is safe. The general `.get()` keeps the eager clone because its result
+    # may be bound to a user local and mutated in place (get-mutate-set).
+    int got_local = add_local_with(&ctx, opt_tid, None, LoBorrowed(), BoCollectionElement(coll_local))
+    Vector[Operand] get_args = [OpBorrow(coll_local), OpCopy(idx_local)]
+    emit(&ctx, GICallExtern(got_local, coll_tn + "__get", get_args))
+    int scr_ptr = match_scrutinee_ptr(&ctx, &gmod, got_local)
+    # CoW for-element: bind the element as a borrow alias into the
+    # collection (no clone). Body consume/mutation sites clone on demand.
+    int elem_local = emit_payload_read_mode(&ctx, scr_ptr, opt_name, "Some", 0, elem_tid, &gmod, true)
+    if is_enumerate:
+        match pat.pat:
+            case PTuple(parts):
+                if parts.len() == 2:
+                    bind_for_local(&ctx, parts.get(0).unwrap(), idx_local, I64_TYPE, &gmod)
+                    bind_for_local(&ctx, parts.get(1).unwrap(), elem_local, elem_tid, &gmod)
+                else:
+                    lower_fail("SFor enumerate: expected 2-tuple pattern, got " + int_to_str(parts.len()) + " parts")
+            else:
+                lower_fail("SFor enumerate: expected tuple pattern")
+    else:
+        bind_for_local(&ctx, pat, elem_local, elem_tid, &gmod)
+    lower_stmts(&ctx, body, &gmod, is_main)
+    Terminator body_term = ctx.block_terms.get(ctx.current_block).unwrap()
+    match body_term:
+        case GTNone():
+            pop_drop_scope(&ctx)
+            set_terminator(&ctx, GTJump(incr_bb))
+        else:
+            pop_drop_scope_no_emit(&ctx)
+    ctx.loop_continue_stack.pop()
+    ctx.loop_break_stack.pop()
+    # Incr: `idx = idx + 1; goto header`.
+    switch_to(&ctx, incr_bb)
+    int new_idx = add_local(&ctx, I64_TYPE, None)
+    emit(&ctx, GIBinOp(new_idx, OP_ADD, I64_TYPE, OpCopy(idx_local), OpConstI64(1)))
+    emit(&ctx, GIAssign(idx_local, OpCopy(new_idx)))
+    set_terminator(&ctx, GTJump(header_bb))
+    switch_to(&ctx, exit_bb)
+
+# String fast path: `for c in <String>` iterates UTF-8 CODEPOINTS (one owned
+# String per iteration), mirroring Rust's `lower_for_string`
+# (src/ir/lowering/stmts/for_loops.rs:237). Same header/body/incr/exit block
+# scaffold as `lower_for_vector`, but the iteration state is a `byte_pos`
+# counter (NOT a logical index) bounded by the BYTE length — per iteration the
+# stride is `gorget_utf8_codepoint_len_at(coll, byte_pos)`, NOT 1, so a
+# multibyte codepoint (e.g. `é`) is consumed whole rather than split into bytes.
+#
+# The loop var `ch` is a cap=0 VIEW into the source string
+# (`gorget_str_codepoint_at` → `gorget_str_view_region`, free is a no-op), so
+# it is bound LoBorrowed with BoCollectionElement(coll_local) like the
+# vector for-element — NO owned-drop registration. (The Rust oracle's
+# drop-register at :347-354 is STALE: its comment predates the runtime
+# returning a view.)
+#
+# `coll` operand: passed as `OpBorrow(coll_local)` like the vector __len/__get
+# calls. `gorget_str_byte_len` / `gorget_str_codepoint_at` /
+# `gorget_utf8_codepoint_len_at` all take `Str` BY VALUE; a Ptr-source `coll`
+# (bare String param's void* ABI) is auto-deref'd `*(Str*)` at C-emit via the
+# `runtime_takes_str_by_value` + `runtime_arg_is_str` registrations
+# (lir_codegen.gg).
+void lower_for_string(LowerCtx &ctx, SpannedPattern pat, int coll_local, Vector[Stmt] body, GirModule &gmod, bool is_main):
+    int gstr_tid = lookup_or_register_named(&gmod, "GorgetString")
+    # ── Iteration state ──────────────────────────────────────
+    # byte_pos counter (seeded 0) + the BYTE-length bound (NOT codepoint count).
+    int bytepos_local = add_local(&ctx, I64_TYPE, None)
+    emit(&ctx, GIAssign(bytepos_local, OpConstI64(0)))
+    int len_local = add_local(&ctx, I64_TYPE, None)
+    Vector[Operand] len_args = [OpBorrow(coll_local)]
+    emit(&ctx, GICallExtern(len_local, "gorget_str_byte_len", len_args))
+    # ── Block layout ─────────────────────────────────────────
+    int header_bb = new_block(&ctx)
+    int body_bb = new_block(&ctx)
+    int incr_bb = new_block(&ctx)
+    int exit_bb = new_block(&ctx)
+    set_terminator(&ctx, GTJump(header_bb))
+    # Header: `byte_pos < len ? body : exit`
+    switch_to(&ctx, header_bb)
+    int cond_local = add_local(&ctx, BOOL_TYPE, None)
+    emit(&ctx, GICmp(cond_local, CMP_LT, I64_TYPE, OpCopy(bytepos_local), OpCopy(len_local)))
+    set_terminator(&ctx, GTBranch(OpCopy(cond_local), body_bb, exit_bb))
+    # Body: `ch = gorget_str_codepoint_at(coll, byte_pos)` — a cap=0 view into
+    # the source string; bind as a borrow alias (no clone, no owned drop).
+    ctx.loop_continue_stack.push(incr_bb)
+    ctx.loop_break_stack.push(exit_bb)
+    push_drop_scope(&ctx.drop_elab, DSK_LOOP)
+    switch_to(&ctx, body_bb)
+    int ch_local = add_local_with(&ctx, gstr_tid, None, LoBorrowed(), BoCollectionElement(coll_local))
+    Vector[Operand] cp_args = [OpBorrow(coll_local), OpCopy(bytepos_local)]
+    emit(&ctx, GICallExtern(ch_local, "gorget_str_codepoint_at", cp_args))
+    bind_for_local(&ctx, pat, ch_local, gstr_tid, &gmod)
+    lower_stmts(&ctx, body, &gmod, is_main)
+    Terminator body_term = ctx.block_terms.get(ctx.current_block).unwrap()
+    match body_term:
+        case GTNone():
+            pop_drop_scope(&ctx)
+            set_terminator(&ctx, GTJump(incr_bb))
+        else:
+            pop_drop_scope_no_emit(&ctx)
+    ctx.loop_continue_stack.pop()
+    ctx.loop_break_stack.pop()
+    # Incr: `cplen = gorget_utf8_codepoint_len_at(coll, byte_pos)` (byte_pos is
+    # unchanged from the body, so the same codepoint is measured); advance
+    # `byte_pos += cplen` — stride by cplen, NOT 1. Computed HERE (not in the
+    # body) to avoid threading `cplen` across the body/incr block boundary.
+    switch_to(&ctx, incr_bb)
+    int cplen_local = add_local(&ctx, I64_TYPE, None)
+    Vector[Operand] cplen_args = [OpBorrow(coll_local), OpCopy(bytepos_local)]
+    emit(&ctx, GICallExtern(cplen_local, "gorget_utf8_codepoint_len_at", cplen_args))
+    int new_pos = add_local(&ctx, I64_TYPE, None)
+    emit(&ctx, GIBinOp(new_pos, OP_ADD, I64_TYPE, OpCopy(bytepos_local), OpCopy(cplen_local)))
+    emit(&ctx, GIAssign(bytepos_local, OpCopy(new_pos)))
+    set_terminator(&ctx, GTJump(header_bb))
+    switch_to(&ctx, exit_bb)
+
+# Split a mono'd Dict/HashMap type name into its KEY and VALUE GIR type
+# names. Mirrors Rust's `parse_dict_kv_types` + `find_kv_split`
+# (src/ir/lowering/stmts/for_loops.rs:949/979). The naive "first `__`
+# after the prefix" split (used by the dict-literal element-hint path at
+# :6883) mis-splits when the KEY is itself a mangled generic (e.g.
+# `Dict__Vector__int64_t__int64_t` → key `Vector`, not `Vector__int64_t`),
+# so we try known one-segment primitive prefixes (`int64_t`, …,
+# `GorgetString`) FIRST and only fall back to the first interior `__`.
+# Returns ("int64_t", "int64_t") when no split is found (the same scalar
+# default Rust uses).
+DictKvNames parse_dict_kv_types(String type_name):
+    int prefix_len = -1
+    if type_name.starts_with("Dict__"):
+        prefix_len = 6
+    elif type_name.starts_with("HashMap__"):
+        prefix_len = 9
+    elif type_name.starts_with("GorgetDict__"):
+        prefix_len = 12
+    elif type_name.starts_with("GorgetMap__"):
+        prefix_len = 11
+    if prefix_len < 0:
+        return DictKvNames("int64_t", "int64_t")
+    String rest = type_name.slice(prefix_len, type_name.len())
+    # Known single-segment primitive key prefixes — split right after one
+    # when `rest` begins with it followed by `__` (so the value is whatever
+    # trails, however mangled). Order is longest-safe-first; each is checked
+    # for the trailing `__` boundary.
+    Vector[String] prims = ["int64_t", "int32_t", "int16_t", "int8_t", "uint64_t", "uint32_t", "uint16_t", "uint8_t", "double", "float", "bool", "GorgetString"]
+    int pi = 0
+    while pi < prims.len():
+        String prim = prims.get(pi).unwrap()
+        if rest.starts_with(prim):
+            String after = rest.slice(prim.len(), rest.len())
+            if after.starts_with("__"):
+                String v_only = after.slice(2, after.len())
+                return DictKvNames(prim, v_only)
+        pi += 1
+    # Fallback: first interior `__` with a non-empty key AND value.
+    int sep = rest.index_of("__").unwrap_or(-1)
+    if sep > 0 and sep + 2 < rest.len():
+        String k_only = rest.slice(0, sep)
+        String v_only = rest.slice(sep + 2, rest.len())
+        return DictKvNames(k_only, v_only)
+    return DictKvNames("int64_t", "int64_t")
+
+# Extract the binding name from a for-loop sub-pattern, defaulting to
+# `fallback` for non-`PBinding` shapes (wildcard / nested). Mirrors the
+# k_name/v_name extraction in Rust's `lower_for_dict` (:636-637).
+String for_pat_binding_name(SpannedPattern p, String fallback):
+    match p.pat:
+        case PBinding(name):
+            return name
+        else:
+            return fallback
+
+# Dict/HashMap fast path: `for (k, v) in <Dict>` (entry pairs) or
+# `for k in <Dict>` (keys only). Mirrors Rust's `lower_for_dict`
+# (src/ir/lowering/stmts/for_loops.rs:574). Iterates the map's slot array
+# directly — `oi` walks `[0, cap)`, a per-slot `state == USED(1)` filter
+# (`emit_state_filter`) skips empty/tombstone slots, and `gorget_map_iter_key`
+# / `gorget_map_iter_value` write OWNED copies of the key/value into freshly
+# bound locals via void out-param calls.
+#
+# OWNERSHIP (differs from `lower_for_vector`): the runtime accessors CLONE
+# resource-typed keys/values (`key_clone`/`val_clone` in runtime_map.c) into
+# the out slot, so each bound K/V is a fresh OWNER — bound LoOwned (via
+# `add_local`) and `register_local_for_drop`'d so the per-iteration DSK_LOOP
+# scope frees it (no leak — the snag_6 canary). For `int64_t` keys/values
+# `register_local_for_drop` is a no-op (non-droppable). The vector path binds
+# a LoBorrowed view with NO drop reg because its `__get` returns an alias, not
+# a clone; mixing the two models would either leak (no drop on a clone) or
+# double-free (drop on a view).
+#
+# Block scaffold (header/body/incr/exit, loop stacks, per-iteration drop
+# scope) is the same shape as `lower_for_vector` — see the duplication note at
+# `lower_for_iterator`. The differences are: the bound is `gorget_map_iter_cap`
+# (slot capacity, not logical len, because we walk raw slots); the body opens
+# with the state filter; and the binds are owned-clone out-params.
+void lower_for_dict(LowerCtx &ctx, SpannedPattern pat, int coll_local, String coll_tn, Vector[Stmt] body, GirModule &gmod, bool is_main):
+    DictKvNames kv = parse_dict_kv_types(coll_tn)
+    String key_name = kv.key_name
+    String val_name = kv.val_name
+    int key_tid = resolve_elem_type_id(key_name, &gmod)
+    int val_tid = resolve_elem_type_id(val_name, &gmod)
+    # ── Iteration state ──────────────────────────────────────
+    # oi walks [0, cap); cap is the SLOT capacity (not logical len) — empty
+    # and tombstone slots are skipped per-iteration by the state filter.
+    int oi_local = add_local(&ctx, I64_TYPE, None)
+    emit(&ctx, GIAssign(oi_local, OpConstI64(0)))
+    int cap_local = add_local(&ctx, I64_TYPE, None)
+    Vector[Operand] cap_args = [OpBorrow(coll_local)]
+    emit(&ctx, GICallExtern(cap_local, "gorget_map_iter_cap", cap_args))
+    # ── Block layout ─────────────────────────────────────────
+    int header_bb = new_block(&ctx)
+    int body_bb = new_block(&ctx)
+    int incr_bb = new_block(&ctx)
+    int exit_bb = new_block(&ctx)
+    set_terminator(&ctx, GTJump(header_bb))
+    # Header: `oi < cap ? body : exit`
+    switch_to(&ctx, header_bb)
+    int cond_local = add_local(&ctx, BOOL_TYPE, None)
+    emit(&ctx, GICmp(cond_local, CMP_LT, I64_TYPE, OpCopy(oi_local), OpCopy(cap_local)))
+    set_terminator(&ctx, GTBranch(OpCopy(cond_local), body_bb, exit_bb))
+    # Body: filter empty/tombstone slots, bind k/v, lower body.
+    ctx.loop_continue_stack.push(incr_bb)
+    ctx.loop_break_stack.push(exit_bb)
+    push_drop_scope(&ctx.drop_elab, DSK_LOOP)
+    switch_to(&ctx, body_bb)
+    # State filter: `state = gorget_map_iter_state(&coll, oi)`; skip to incr
+    # (next slot) unless USED(1). On a hit, fall into a fresh `elem_bb`.
+    int state_local = add_local(&ctx, I64_TYPE, None)
+    Vector[Operand] state_args = [OpBorrow(coll_local), OpCopy(oi_local)]
+    emit(&ctx, GICallExtern(state_local, "gorget_map_iter_state", state_args))
+    int state_ok = add_local(&ctx, BOOL_TYPE, None)
+    emit(&ctx, GICmp(state_ok, CMP_EQ, I64_TYPE, OpCopy(state_local), OpConstI64(1)))
+    int elem_bb = new_block(&ctx)
+    set_terminator(&ctx, GTBranch(OpCopy(state_ok), elem_bb, incr_bb))
+    switch_to(&ctx, elem_bb)
+    # Bind the key (and value for a tuple pattern). The accessors write OWNED
+    # copies into the bound slots via the void* out-param (arg 2), so each
+    # local is a fresh owner — bound LoOwned (add_local) + registered for the
+    # per-iteration drop. `OpBorrow(<local>)` at arg 2 becomes a SlotAddr
+    # (pointer to the local's slot) at C-emit via `needs_ptr_arg`.
+    match pat.pat:
+        case PTuple(parts):
+            if parts.len() == 2:
+                String kname = for_pat_binding_name(parts.get(0).unwrap(), "__k")
+                String vname = for_pat_binding_name(parts.get(1).unwrap(), "__v")
+                int k_local = add_local(&ctx, key_tid, Some(kname))
+                Vector[Operand] k_args = [OpBorrow(coll_local), OpCopy(oi_local), OpBorrow(k_local)]
+                emit(&ctx, GICallExtern(-1, "gorget_map_iter_key", k_args))
+                nl_put(&ctx, kname, k_local)
+                register_local_for_drop(&ctx, k_local, key_tid, &gmod)
+                int v_local = add_local(&ctx, val_tid, Some(vname))
+                Vector[Operand] v_args = [OpBorrow(coll_local), OpCopy(oi_local), OpBorrow(v_local)]
+                emit(&ctx, GICallExtern(-1, "gorget_map_iter_value", v_args))
+                nl_put(&ctx, vname, v_local)
+                register_local_for_drop(&ctx, v_local, val_tid, &gmod)
+            else:
+                lower_fail("SFor over Dict: expected 2-tuple pattern, got " + int_to_str(parts.len()) + " parts")
+        case PBinding(kname):
+            # Key-only iteration: `for k in <Dict>`.
+            int k_local = add_local(&ctx, key_tid, Some(kname))
+            Vector[Operand] k_args = [OpBorrow(coll_local), OpCopy(oi_local), OpBorrow(k_local)]
+            emit(&ctx, GICallExtern(-1, "gorget_map_iter_key", k_args))
+            nl_put(&ctx, kname, k_local)
+            register_local_for_drop(&ctx, k_local, key_tid, &gmod)
+        else:
+            lower_fail("SFor over Dict: only (k, v) tuple or bare key binding supported")
+    lower_stmts(&ctx, body, &gmod, is_main)
+    Terminator body_term = ctx.block_terms.get(ctx.current_block).unwrap()
+    match body_term:
+        case GTNone():
+            pop_drop_scope(&ctx)
+            set_terminator(&ctx, GTJump(incr_bb))
+        else:
+            pop_drop_scope_no_emit(&ctx)
+    ctx.loop_continue_stack.pop()
+    ctx.loop_break_stack.pop()
+    # Incr: `oi = oi + 1; goto header`.
+    switch_to(&ctx, incr_bb)
+    int new_oi = add_local(&ctx, I64_TYPE, None)
+    emit(&ctx, GIBinOp(new_oi, OP_ADD, I64_TYPE, OpCopy(oi_local), OpConstI64(1)))
+    emit(&ctx, GIAssign(oi_local, OpCopy(new_oi)))
+    set_terminator(&ctx, GTJump(header_bb))
+    switch_to(&ctx, exit_bb)
+
+# Range fast path: `for i in start..end` → an i64 counter loop, matching
+# Rust's `lower_for_range` (src/ir/lowering/stmts/for_loops.rs:1003). The
+# loop var is a freshly-OWNED i64 (not an Option-extracted borrow alias, so
+# `add_local`/`nl_put` — NOT `bind_for_local`). Same block scaffold as
+# `lower_for_vector` (header/body/incr/exit, loop stacks, per-iteration drop
+# scope); the only differences are the counter is seeded from the lowered
+# `start` (instead of 0) and the bound is the lowered `end` (instead of
+# `coll.len()`). Exclusive `<` only — the self-host `ERange` has no inclusive
+# form. Continue → incr_bb (advance the counter); break → exit_bb.
+void lower_for_range(LowerCtx &ctx, String loop_name, SpannedExpr start_e, SpannedExpr end_e, Vector[Stmt] body, GirModule &gmod, bool is_main):
+    # ── Iteration state ──────────────────────────────────────
+    # Loop var: a fresh OWNED i64 seeded from `start`. `nl_put` reads
+    # `loop_name` again below, so it is LIVE here — the bare `Some(loop_name)`
+    # name-hint clones-if-live (CoW), no explicit `.clone()` needed.
+    int loop_var = add_local(&ctx, I64_TYPE, Some(loop_name))
+    int start_local = lower_expr(&ctx, start_e, &gmod)
+    emit(&ctx, GIAssign(loop_var, OpCopy(start_local)))
+    nl_put(&ctx, loop_name, loop_var)
+    # End bound, lowered once (the cond re-reads this fixed value each iter).
+    int end_local = lower_expr(&ctx, end_e, &gmod)
+    # ── Block layout ─────────────────────────────────────────
+    int header_bb = new_block(&ctx)
+    int body_bb = new_block(&ctx)
+    int incr_bb = new_block(&ctx)
+    int exit_bb = new_block(&ctx)
+    set_terminator(&ctx, GTJump(header_bb))
+    # Header: `loop_var < end ? body : exit`
+    switch_to(&ctx, header_bb)
+    int cond_local = add_local(&ctx, BOOL_TYPE, None)
+    emit(&ctx, GICmp(cond_local, CMP_LT, I64_TYPE, OpCopy(loop_var), OpCopy(end_local)))
+    set_terminator(&ctx, GTBranch(OpCopy(cond_local), body_bb, exit_bb))
+    # Body: lower the loop body in a fresh loop/drop scope. Continue jumps
+    # to incr (advance the counter); break jumps to exit.
+    ctx.loop_continue_stack.push(incr_bb)
+    ctx.loop_break_stack.push(exit_bb)
+    push_drop_scope(&ctx.drop_elab, DSK_LOOP)
+    switch_to(&ctx, body_bb)
+    lower_stmts(&ctx, body, &gmod, is_main)
+    Terminator body_term = ctx.block_terms.get(ctx.current_block).unwrap()
+    match body_term:
+        case GTNone():
+            pop_drop_scope(&ctx)
+            set_terminator(&ctx, GTJump(incr_bb))
+        else:
+            pop_drop_scope_no_emit(&ctx)
+    ctx.loop_continue_stack.pop()
+    ctx.loop_break_stack.pop()
+    # Incr: `loop_var = loop_var + 1; goto header`.
+    switch_to(&ctx, incr_bb)
+    int new_var = add_local(&ctx, I64_TYPE, None)
+    emit(&ctx, GIBinOp(new_var, OP_ADD, I64_TYPE, OpCopy(loop_var), OpConstI64(1)))
+    emit(&ctx, GIAssign(loop_var, OpCopy(new_var)))
+    set_terminator(&ctx, GTJump(header_bb))
+    switch_to(&ctx, exit_bb)
+
+# Iterator-protocol fallback — universal path for any type with the
+# `iter()` / `next() → Option[T]` chain. Covers Dict, Set, String, Range,
+# and user-defined iterables (anything that equips `Iterator[T]` per
+# `lib/std/iter.gg`).
+#
+# Architectural choice: this is one helper, not seven (Rust frontend has
+# `lower_for_string` / `lower_for_dict` / `lower_for_set` / `lower_for_range`
+# / `lower_for_iterable` etc., each duplicating ~80% scaffold). Self-host's
+# single-scaffold-plus-extractor design works because we let the user-
+# defined `Iterator[T]` trait protocol carry the per-type knowledge — the
+# loop just calls `iter()` and `next()` by name and reads `Option[T]`.
+# Whatever T is, however .next() decides when to yield None, the scaffold
+# is identical.
+#
+# Lowered shape:
+#   auto __iter = coll.iter()       # or `__iter = coll` if coll IS already
+#                                   # an iterator (next() but no iter())
+#   while true:
+#       Option[T] step = __iter.next()
+#       <if step is Some(x):
+#           <pattern binding>
+#           <body>
+#           continue → header>
+#       <if step is None:
+#           break → exit>
+#
+# Continue jumps to the header (re-call next()); break to exit.
+void lower_for_iterator(LowerCtx &ctx, SpannedPattern pat, int coll_local, String coll_tn, Vector[Stmt] body, GirModule &gmod, bool is_main):
+    # Locate iter() and next() in fn_sigs. If coll has `iter()`, we call it
+    # and loop on the returned iterator. If coll has `next()` but no
+    # `iter()`, it IS an iterator — skip the iter() call.
+    String iter_fn = coll_tn + "__iter"
+    bool has_iter = gmod.fn_sigs.contains(iter_fn)
+    int iter_type_tid = -1
+    String iter_type_name = ""
+    if has_iter:
+        iter_type_tid = gmod.fn_sigs.get(iter_fn).unwrap()
+        iter_type_name = type_id_to_name(iter_type_tid, &gmod)
+    else:
+        iter_type_tid = ctx.locals.get(coll_local).unwrap().type_id
+        iter_type_name = coll_tn
+    String next_fn = iter_type_name + "__next"
+    if not gmod.fn_sigs.contains(next_fn):
+        lower_fail("SFor: no iter()/next() chain on type " + coll_tn + " (looked for " + iter_fn + " or " + next_fn + ")")
+        return
+    int opt_ret_tid = gmod.fn_sigs.get(next_fn).unwrap()
+    String opt_type_name = type_id_to_name(opt_ret_tid, &gmod)
+    if not (enum_category_of(&gmod, opt_ret_tid).category == ENUM_CAT_OPTION):
+        lower_fail("SFor: " + next_fn + " return type isn't Option__T (got " + opt_type_name + ")")
+        return
+    String elem_name = opt_type_name.slice(8, opt_type_name.len())
+    int elem_tid = resolve_elem_type_id(elem_name, &gmod)
+    # Materialise the iterator. For `has_iter`, call coll.iter() once; the
+    # returned iterator is what every subsequent next() reads from. For
+    # the self-iterator case (`coll` IS an iterator), reuse coll_local.
+    int iter_local = coll_local
+    if has_iter:
+        iter_local = add_local(&ctx, iter_type_tid, None)
+        Vector[Operand] iter_args = [OpBorrow(coll_local)]
+        emit(&ctx, GICallExtern(iter_local, iter_fn, iter_args))
+    # ── Block layout ────────────────────────────────────────
+    # No incr_bb — `.next()` advances internally, so continue goes back
+    # to the header (which re-calls next()).
+    int header_bb = new_block(&ctx)
+    int body_bb = new_block(&ctx)
+    int exit_bb = new_block(&ctx)
+    set_terminator(&ctx, GTJump(header_bb))
+    # Header: step = iter.next(); branch on Some/None tag.
+    switch_to(&ctx, header_bb)
+    int step_local = add_local(&ctx, opt_ret_tid, None)
+    Vector[Operand] next_args = [OpBorrow(iter_local)]
+    emit(&ctx, GICallExtern(step_local, next_fn, next_args))
+    int scr_ptr = match_scrutinee_ptr(&ctx, &gmod, step_local)
+    int tag_local = emit_tag_read(&ctx, scr_ptr, opt_type_name, &gmod)
+    int cmp_local = add_local(&ctx, BOOL_TYPE, None)
+    # Option tag layout: 0 = Some, 1 = None (matches emit_tag_read's contract,
+    # mirroring the unwrap_or path at lines ~2055-2076).
+    emit(&ctx, GICmp(cmp_local, CMP_EQ, I64_TYPE, OpCopy(tag_local), OpConstI64(0)))
+    set_terminator(&ctx, GTBranch(OpCopy(cmp_local), body_bb, exit_bb))
+    # Body: extract payload, bind pattern, lower body, jump back to header.
+    ctx.loop_continue_stack.push(header_bb)
+    ctx.loop_break_stack.push(exit_bb)
+    # Phase 2: Loop drop scope around the body.
+    push_drop_scope(&ctx.drop_elab, DSK_LOOP)
+    # Register the OWNED `step_local` (the whole `Option[U]` returned by
+    # `next()`) for drop in THIS loop scope, so `pop_drop_scope` emits a
+    # per-iteration `GIDropIfAlive(step_local)` before the back-edge. This frees
+    # the Option WRAPPER's own payload (the String the adapter yielded): a
+    # resource-yielding adapter (`Option__GorgetString`) drops it each
+    # iteration; a primitive one (`Option__int64_t`) is a no-op. SELF-GATES via
+    # the typed `enum_category` channel in `is_droppable_type` — NO name match
+    # (CLAUDE.md #3 register-at-creation; #2 typed metadata). This is DISTINCT
+    # from the for-element binding `bound`: for a String/Closure (shallow-clone)
+    # payload, `emit_payload_read_mode` CLONES `step_local`'s payload into a
+    # SEPARATE owned allocation for the loop var `s` — that second allocation is
+    # registered+dropped at the `bind_for_local` producer (see there). Two
+    # distinct allocations, two distinct drops, no double-free. (For a DEEP-clone
+    # aggregate payload `emit_payload_read_mode` instead borrow-aliases, and
+    # `bind_for_local`'s registration self-skips that alias.)
+    register_local_for_drop(&ctx, step_local, opt_ret_tid, &gmod)
+    switch_to(&ctx, body_bb)
+    # CoW for-element: borrow alias (see lower_for_vector).
+    int elem_local = emit_payload_read_mode(&ctx, scr_ptr, opt_type_name, "Some", 0, elem_tid, &gmod, true)
+    bind_for_local(&ctx, pat, elem_local, elem_tid, &gmod)
+    lower_stmts(&ctx, body, &gmod, is_main)
+    Terminator body_term = ctx.block_terms.get(ctx.current_block).unwrap()
+    match body_term:
+        case GTNone():
+            pop_drop_scope(&ctx)
+            set_terminator(&ctx, GTJump(header_bb))
+        else:
+            pop_drop_scope_no_emit(&ctx)
+    ctx.loop_continue_stack.pop()
+    ctx.loop_break_stack.pop()
+    switch_to(&ctx, exit_bb)
+
+# Bind a for-loop pattern part to a GIR local. The element binding is a
+# BORROW ALIAS into the collection per the CoW default (CLAUDE.md
+# "Ownership at Consuming Positions": collection element reads propagate
+# Ptr aliases at zero cost; clones happen only at ownership boundaries).
+# When `src_local` is a LoBorrowed/LoView element (from the for-element
+# extract, see lower_for_vector / lower_for_iterator), inherit that tag
+# onto the bound local and assign with a NON-consume operand (OpBorrow,
+# via CkCallArgBorrow) so no clone is emitted. A loop body that consumes
+# or mutates the element materialises a fresh copy at THAT site via
+# op_consume's a-5 LoBorrowed→OpClone arm. Owned/primitive elements
+# (LoOwned) keep the original move/copy binding shape.
+# Bind a tuple-destructure pattern: project each sub-name to its `_N` field
+# of `tuple_local` via GIFieldLoad + clone-or-move. Shared by the VarDecl
+# destructure (facet 2 — `auto a, b = expr`) and the generic for-loop tuple
+# pattern (facet 3 — `for (a, b) in vec_of_tuples`). The tuple OWNS its
+# fields, so each binding takes an INDEPENDENT value: the field-load yields a
+# value (primitive) or a `GtPtr(field)` borrow (resource), and
+# `op_consume(…, CkAssign)` byte-copies the primitive or deref-CLONEs the
+# resource (CoW consume-position rule — the tuple stays live and drops its own
+# copy, so a clone, not a borrow, is required to avoid a dangling bind). A `_`
+# sub-name is skipped. Mirrors Rust's tuple-pattern desugar to per-field
+# `T name = tuple._N` VarDecls.
+# Project tuple field `idx` of `tuple_local` and bind it to `sub_name`
+# (independent owned value). The tuple OWNS its fields, so the field-load
+# yields a value (primitive) or a `GtPtr(field)` borrow (resource), and
+# `op_consume(…, CkAssign)` byte-copies the primitive or deref-CLONEs the
+# resource — a clone, not a borrow, because the tuple stays live and drops
+# its own copy (CoW consume-position rule). Mirrors the EFieldAccess
+# field-load at `:6460`.
+void bind_tuple_field(LowerCtx &ctx, int tuple_local, int idx, String sub_name, GirModule &gmod):
+    int tuple_tid = ctx.locals.get(tuple_local).unwrap().type_id
+    String tuple_tname = type_id_to_name(tuple_tid, &gmod)
+    int field_type = I64_TYPE
+    if gmod.type_infos.contains(tuple_tname):
+        GirTypeInfo tup_info = gmod.type_infos.get(tuple_tname).unwrap()
+        if idx < tup_info.fields.len():
+            field_type = resolve_field_gir_type(tup_info.fields.get(idx).unwrap().type_name, &gmod)
+    bool field_is_resource = is_resource_type_name(type_id_to_name(field_type, &gmod), &gmod)
+    int fdst_type = field_type
+    if field_is_resource:
+        fdst_type = register_ptr(&gmod, field_type)
+    int fdst = add_local_with(&ctx, fdst_type, None, LoBorrowed(), BoNone())
+    set_field_borrow(&ctx, fdst, tuple_local, idx)
+    emit(&ctx, GIFieldLoad(fdst, tuple_local, idx))
+    int bound = add_local(&ctx, field_type, Some(sub_name))
+    emit(&ctx, GIAssign(bound, op_consume(&ctx, &gmod, fdst, CkAssign())))
+    nl_put(&ctx, sub_name, bound)
+    register_local_for_drop(&ctx, bound, field_type, &gmod)
+
+# Bind a tuple-destructure pattern's sub-names to their `_N` fields. Shared by
+# the VarDecl destructure (facet 2 — `auto a, b = expr`). A `_` sub-name is
+# skipped. Mirrors Rust's tuple-pattern desugar to per-field `T name =
+# tuple._N` VarDecls.
+void bind_tuple_destructure(LowerCtx &ctx, int tuple_local, Vector[String] sub_names, GirModule &gmod):
+    int bi = 0
+    while bi < sub_names.len():
+        String sub_name = sub_names.get(bi).unwrap()
+        if sub_name != "_":
+            bind_tuple_field(&ctx, tuple_local, bi, sub_name, &gmod)
+        bi += 1
+
+void bind_for_local(LowerCtx &ctx, SpannedPattern pat, int src_local, int tid, GirModule &gmod):
+    match pat.pat:
+        case PBinding(name):
+            int bound = add_local_inheriting(&ctx, tid, Some(name), src_local)
+            # If the element is a borrow alias, bind it as a borrow (no
+            # clone). add_local_inheriting tagged `bound` LoBorrowed/LoView
+            # iff src is; in that case CkCallArgBorrow keeps op_consume at
+            # OpBorrow. Otherwise (LoOwned/primitive) CkAssign moves/copies.
+            ConsumeKind bind_kind = CkAssign()
+            if local_is_borrow_alias(&ctx, bound):
+                bind_kind = CkCallArgBorrow()
+            emit(&ctx, GIAssign(bound, op_consume(&ctx, &gmod, src_local, bind_kind)))
+            nl_put(&ctx, name, bound)
+            # Register the owned for-element binding for per-iteration drop
+            # (register-at-creation, CLAUDE.md #3). For SHALLOW-clone resource
+            # payloads (String/Closure) `emit_payload_read_mode` returns a FRESH
+            # OWNED clone (it elides the clone only for DEEP-clone aggregate
+            # payloads, lower.gg:9872) — so `src_local` is owned, `bound`
+            # inherits LoOwned, and the CkAssign above MOVES it in: an owned
+            # value that leaks per iteration unless dropped at the loop-scope
+            # back-edge (the `for name in Vector[String]` P3 leak, and the
+            # iterator-adapter target). SELF-GATES via `is_droppable_type`:
+            # borrow-alias for-elements (LoBorrowed/LoView — the deep-clone
+            # aggregate path) and primitive elements are skipped, so this is a
+            # no-op there (NO double-free: a borrow alias isn't owned; the
+            # collection/scrutinee whole-drop frees the real owner once).
+            # Mirrors Rust's `register_local` for the owned for-binding.
+            register_local_for_drop(&ctx, bound, tid, &gmod)
+        case PWildcard:
+            pass
+        case PTuple(parts):
+            # Facet 3 — generic for-loop tuple pattern `for (a, b) in
+            # <vec-of-tuples>`. `src_local` is the loop element (a tuple
+            # value/borrow typed `Tuple__…`). Project each part to its `_N`
+            # field. (The `enumerate()` and dict for-loops bind from iterator
+            # ACCESSORS, not `_N` projection — they have dedicated PTuple
+            # handlers at the for-loop level [`:10284` / dict path] and never
+            # reach here.) Each part is a PBinding (project + bind) or
+            # PWildcard (skip); a deeper nested pattern isn't a tuple target.
+            int ptp_i = 0
+            while ptp_i < parts.len():
+                SpannedPattern ptp = parts.get(ptp_i).unwrap()
+                match ptp.pat:
+                    case PBinding(pname):
+                        # Project the part's `_ptp_i` field and bind it.
+                        bind_tuple_field(&ctx, src_local, ptp_i, pname, &gmod)
+                    case PWildcard:
+                        pass
+                    else:
+                        lower_fail("SFor: nested tuple-element pattern not supported (got " + pat_kind(ptp.pat) + ")")
+                ptp_i += 1
+        else:
+            lower_fail("SFor: only PBinding / PWildcard / PTuple supported in for-loop pattern (got nested pattern)")
+
+# True iff `lid`'s ownership tag is a borrow alias (LoBorrowed/LoView).
+bool local_is_borrow_alias(LowerCtx &ctx, int lid):
+    if lid < 0 or lid >= ctx.locals.len():
+        return false
+    match ctx.locals.get(lid).unwrap().ownership:
+        case LoBorrowed():
+            return true
+        case LoView():
+            return true
+        else:
+            return false
+
+# True iff `lid` does NOT own its data — a match scrutinee we may destructure
+# into BORROW-aliased payload binds (CoW match-destructure, no deep clone).
+# Covers (a) explicit borrow aliases (LoBorrowed/LoView) and (b) bare
+# by-value resource PARAMS, which lower to GtPtr(T)/LoParam: the caller owns,
+# the callee borrows (CLAUDE.md CoW default — bare params are borrows). A
+# `&`/`!` param is GtMutPtr (excluded here): `!` the callee owns, `&` is a
+# mutable borrow whose payload binds keep their existing clone-on-consume
+# path. Owned locals (LoOwned) return false → eager clone, preserving the
+# Class-8 double-free fix for genuinely-owned scrutinees written back into a
+# collection. Used by lower_ctor_pattern's PBinding payload bind.
+bool scrutinee_nonowning(LowerCtx &ctx, GirModule &gmod, int lid):
+    if lid < 0 or lid >= ctx.locals.len():
+        return false
+    GirLocal loc = ctx.locals.get(lid).unwrap()
+    match loc.ownership:
+        case LoBorrowed():
+            return true
+        case LoView():
+            return true
+        case LoParam():
+            # Bare by-value resource param == GtPtr(T) slot (caller owns,
+            # callee borrows). `&`/`!` params are GtMutPtr → not borrow here.
+            if loc.type_id < 0 or loc.type_id >= gmod.type_table.len():
+                return false
+            match gmod.type_table.get(loc.type_id).unwrap():
+                case GtPtr(_):
+                    return true
+                else:
+                    return false
+        else:
+            return false
+
+# True iff `lid` is an OWNED match scrutinee whose own type is whole-droppable
+# (registered for drop by register_local_for_drop). For such a scrutinee the
+# whole-scrutinee `Result__/Option____drop` (discriminant switch) frees the
+# payload exactly once at scope exit — so a payload BIND must NOT deep-clone
+# (would leak the clone, since the bind is block-scoped) and must NOT register
+# the bind for its own drop (would double-free the SAME heap the whole drop
+# frees). Instead bind the payload as a LoBorrowed alias into the scrutinee.
+# Mirrors Rust's EnumFieldLoadMode::Borrow on a read-only / owner-retained
+# extraction (devbook ch.13). Pure TYPED ownership + droppability test — no
+# name matching. LoOwned and LoMaybeOwned both reach the owned whole-drop path
+# (a merged-arm scrutinee is treated as an owner here, conservatively binding
+# a borrow — sound because the whole-scrutinee drop still owns the free).
+bool scrutinee_owned_whole_dropped(LowerCtx &ctx, GirModule &gmod, int lid):
+    if lid < 0 or lid >= ctx.locals.len():
+        return false
+    GirLocal loc = ctx.locals.get(lid).unwrap()
+    match loc.ownership:
+        case LoOwned():
+            pass
+        case LoMaybeOwned():
+            pass
+        else:
+            return false
+    # Peel a Ptr/MutPtr wrapper (a borrowed-but-owned-pointee case is excluded
+    # above by the ownership gate; this peel only matters for the rare LoOwned
+    # value held behind a pointer slot) and test the underlying type.
+    int tid = loc.type_id
+    if tid >= 0 and tid < gmod.type_table.len():
+        match gmod.type_table.get(tid).unwrap():
+            case GtPtr(_):
+                return false
+            case GtMutPtr(_):
+                return false
+            else:
+                pass
+    return is_droppable_type(tid, &gmod)
+
+# Leak 1 (#8-residual): true iff `lid` is a borrow-flipped read bind — a
+# LoBorrowed `Ptr(T)`/`MutPtr(T)` alias whose pointee `T` is a DROPPABLE USER
+# AGGREGATE (the `T back = coll.get(i).unwrap()` shape flipped by
+# `decide_svardecl_emission` Branch A-agg). The collection that the pointer
+# aliases into OWNS + frees the element (array-free elem_drop), so a payload
+# match-bind must BORROW (not clone) — even String — exactly like the
+# owned-whole-dropped case. Distinct from `scrutinee_owned_whole_dropped`
+# (which is the OWNED-VALUE scrutinee whose own whole-drop frees the payload):
+# here the scrutinee is a borrow and the OWNER is the collection one hop away.
+bool scrutinee_borrow_into_owning_collection(LowerCtx &ctx, GirModule &gmod, int lid):
+    if lid < 0 or lid >= ctx.locals.len():
+        return false
+    GirLocal loc = ctx.locals.get(lid).unwrap()
+    bool is_borrow = false
+    match loc.ownership:
+        case LoBorrowed():
+            is_borrow = true
+        case LoView():
+            is_borrow = true
+        else:
+            pass
+    if not is_borrow:
+        return false
+    if loc.type_id < 0 or loc.type_id >= gmod.type_table.len():
+        return false
+    match gmod.type_table.get(loc.type_id).unwrap():
+        case GtPtr(inner):
+            return is_droppable_type(inner, &gmod)
+        case GtMutPtr(inner_m):
+            return is_droppable_type(inner_m, &gmod)
+        else:
+            return false
+
+# Map a collection element type name (as produced by collection_element_type)
+# to a GIR type id. Mirrors the resolution chain in the EMethodCall unwrap
+# path (lines ~2014-2042) — primitive C-level names first, named-type fallback
+# second.
+int resolve_elem_type_id(String elem_name, GirModule &gmod):
+    int prim = prim_name_to_type(elem_name)
+    if prim >= 0:
+        return prim
+    if elem_name == "int64_t":
+        return I64_TYPE
+    if elem_name == "int32_t":
+        return I32_TYPE
+    if elem_name == "int16_t":
+        return I16_TYPE
+    if elem_name == "int8_t":
+        return I8_TYPE
+    if elem_name == "uint64_t":
+        return U64_TYPE
+    if elem_name == "uint32_t":
+        return U32_TYPE
+    if elem_name == "uint16_t":
+        return U16_TYPE
+    if elem_name == "uint8_t":
+        return U8_TYPE
+    if elem_name == "double":
+        return F64_TYPE
+    if elem_name == "float":
+        return F32_TYPE
+    if elem_name == "Str":
+        return lookup_or_register_named(&gmod, "GorgetString")
+    return lookup_or_register_named(&gmod, elem_name)
+
+void lower_while(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] body, GirModule &gmod, bool is_main):
+    int header_bb = new_block(&ctx)
+    int body_bb = new_block(&ctx)
+    int exit_bb = new_block(&ctx)
+    set_terminator(&ctx, GTJump(header_bb))
+    # Header: evaluate condition
+    switch_to(&ctx, header_bb)
+    # The condition is bool-typed and independent of any enclosing
+    # destination — clear `expected_type` around it so a leaked Result-typed
+    # expectation doesn't make the centralized auto-prop hook's capture-form
+    # check suppress a throws-call condition's peel (`while might():`).
+    int saved_expected_wh = ctx.expected_type
+    ctx.expected_type = -1
+    int cond = lower_expr(&ctx, cond_expr, &gmod)
+    ctx.expected_type = saved_expected_wh
+    # Auto-propagate a `throws` call used as the condition (`while might():`).
+    cond = maybe_auto_propagate(&ctx, cond, &gmod)
+    set_terminator(&ctx, GTBranch(OpCopy(cond), body_bb, exit_bb))
+    # Body. Push loop targets so SBreak/SContinue know where to jump.
+    ctx.loop_continue_stack.push(header_bb)
+    ctx.loop_break_stack.push(exit_bb)
+    # Phase 2: open a Loop drop scope around the body.
+    push_drop_scope(&ctx.drop_elab, DSK_LOOP)
+    switch_to(&ctx, body_bb)
+    lower_stmts(&ctx, body, &gmod, is_main)
+    Terminator body_term = ctx.block_terms.get(ctx.current_block).unwrap()
+    match body_term:
+        case GTNone():
+            pop_drop_scope(&ctx)
+            set_terminator(&ctx, GTJump(header_bb))
+        else:
+            pop_drop_scope_no_emit(&ctx)
+    # Pop — targets only apply to this loop's direct body.
+    ctx.loop_continue_stack.pop()
+    ctx.loop_break_stack.pop()
+    switch_to(&ctx, exit_bb)
+
+# ── Function lowering ────────────────────────────────────
+
+# Shared body-finalization core, factored out of `lower_function` (and
+# reused verbatim by the closure-call synthesis in `lower_closure_body`,
+# mirroring why Rust gg shares its single body path
+# across normal functions and `emit_closure_call_function`). The boundary
+# is: pop the function-scope drop frame → compute_liveness +
+# liveness_instrumentation_diff/diag_warn → wire_liveness_into_modes →
+# flush_drop_queue → assemble `ctx.block_insts`/`block_terms` into
+# `Vector[BasicBlock]`. RETURNS the assembled blocks ONLY — the caller
+# owns naming + constructing + pushing/returning its own GirFunction, and
+# any caller-specific implicit-return synthesis (main's `return 0`, the
+# closure's tail-value→_0 funnel) runs BEFORE this call. Skipping these
+# post-passes leaves every consuming operand read at its DEFAULT mode →
+# a SILENT MISCOMPILE (UAF / double-free) for any body that touches a
+# resource, which is why this is mandatory shared reuse and not an inline
+# partial copy. `fn_name` is threaded purely for the gir_liveness_diff
+# diagnostic attribution (callers pass fdef.name / call_name / ic_call).
+Vector[BasicBlock] finalize_body_blocks(LowerCtx &ctx, GirModule &gmod, String fn_name):
+    # Pop the function-scope drop frame. If the natural exit was a
+    # fall-through with no implicit-return synthesis, emit drops.
+    # Otherwise the explicit return / break / continue / implicit-return
+    # paths have already emitted theirs.
+    pop_drop_scope(&ctx)
+
+    # GIR-liveness — backward-dataflow liveness on the BB CFG, then the
+    # CFG-aware operand-mode post-pass `wire_liveness_into_modes` which
+    # decides OpMove vs OpClone at every consuming operand read. The
+    # instrumentation diff vs the legacy linear pass is a regression net.
+    LivenessAnalysis liveness = compute_liveness(&ctx)
+    int diff = liveness_instrumentation_diff(&ctx, &liveness)
+    if diff > 0:
+        diag_warn("gir_liveness_diff", fn_name + ": " + int_to_str(diff) + " sites")
+    wire_liveness_into_modes(&ctx, &gmod, &liveness)
+
+    # Flush the deferred drop queue — `maybe_moved` is now populated by
+    # `wire_liveness_into_modes`, so pending `GIDropIfAlive` records gate
+    # correctly.
+    flush_drop_queue(&ctx)
+
+    # Assemble BasicBlocks from separate instruction and terminator vectors.
+    Vector[BasicBlock] blocks = []
+    int bi = 0
+    while bi < ctx.block_insts.len():
+        Vector[Instruction] insts = ctx.block_insts.get(bi).unwrap()
+        Terminator term = ctx.block_terms.get(bi).unwrap()
+        blocks.push(BasicBlock(insts, term))
+        bi += 1
+    return blocks
+

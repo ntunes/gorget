@@ -1,0 +1,1727 @@
+# ── Function, equip & closure lowering (split out of lower.gg) ───────
+# `lower_function`, trait/equip-block lowering, return-type guessing, and
+# the whole closure-capture analysis cluster (capture detection, nested-
+# closure scan, closure-sig computation, `lower_closure_body`). Moved
+# verbatim from lower.gg as part of the lower.gg module split (output-
+# neutral pure function move). The STRING_MARKER sentinel (a private
+# global used only by guess_return_type/compute_closure_sig) moves with
+# the cluster.
+from std.collections import Vector, Dict
+from std.conv import int_to_str, float_to_str
+from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch, EquipBlock, StructDef, EnumDef, EnumVariant, Type, MatchArm, Pattern, SpannedPattern
+from scope import ScopeTable, DefInfo
+from types import TypeTable, ResolvedType
+from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Terminator, Operand, GirType, GirExtern, GirTypeInfo, GirFieldInfo, GirEnumVariantInfo, LiftedClosure, ClosureCapture, ResourceMetadata, CollectionKind, ConsumeKind
+from gir import BOOL_TYPE, I8_TYPE, I16_TYPE, I32_TYPE, I64_TYPE, U8_TYPE, U16_TYPE, U32_TYPE, U64_TYPE, F32_TYPE, F64_TYPE, UNIT_TYPE, PRIM_COUNT
+from gir import CAP_BY_VALUE, CAP_BY_MUT_REF
+from gir import init_type_table, register_type, lookup_or_register_named, register_ptr
+from gir import GirGlobal, GirGlobalField, gir_mod_add_global, GGINIT_FN_REF, GGINIT_STRUCT
+from gir import GGSTATIC_RUNTIME, GGSTATIC_BYTES, static_put_bytes
+from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM, OP_MOD
+from gir import OP_ADD_WRAP, OP_SUB_WRAP, OP_MUL_WRAP
+from gir import OP_BITAND, OP_BITOR, OP_BITXOR, OP_SHL, OP_SHR
+from gir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
+from gir import UNOP_NEG, UNOP_NOT, UNOP_BITNOT
+from gir import CkAssign, CkReturn, CkCallArgBorrow, CkCallArgOwning, CkFieldWrite, CkBinOpArg, CkFormatArg, CkMatchPtr
+from gir import CkVector, CkDeque, CkHeap, CkDict, CkSet, CkNotCollection
+from compiler.data.resources import STRING_BUILTIN_METHODS, COLLECTION_BUILTIN_METHODS, BUILTIN_METHOD_MUTATES
+from compiler.data.schema import BuiltinMethodDecl, BuiltinMethodEntry
+from compiler.data.schema import BuiltinRetKind, BrkString, BrkInfer
+from lir_lower import resource_meta_for
+from lower import LowerCtx, ResultPayloadTypes, DictKvNames, ClosureSig, CaptureCollector, FieldBorrowPair, SVarDeclEmission
+from lower import lower_fail, diag_bug, diag_warn, emit, new_block, switch_to, set_terminator
+from lower import add_local, add_local_with, add_local_inheriting, nl_get, nl_put, nl_contains
+from lower import expr_kind, pat_kind, stmt_kind
+from lower import collection_kind_of, collection_kind_eq, int_vec_contains, method_mutates_receiver
+from lower import inherit_borrow_from, set_field_borrow, cow_register_alias, decide_svardecl_emission
+from lower import classify_call_arg, is_consume_kind, op_consume, decide_operand_at_consuming_arg, decide_ptr_consume
+from lower_drops import init_drop_elab, push_drop_scope, emit_scope_drops, pop_drop_scope, pop_drop_scope_no_emit, is_droppable_type, register_local_for_drop, register_owning_param, mark_local_moved, restore_moved, union_moved, emit_drops_for_early_exit, flush_drop_queue
+from lower_liveness import LivenessAnalysis, compute_liveness, wire_liveness_into_modes, liveness_instrumentation_diff, update_last_pos_for_inst, update_last_pos_for_term, note_operand_pos, empty_liveness
+from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, is_comparison, map_cmpop
+from lower_expr import block_terminated, lower_block_expr, lower_stmt_as_tail_value, lower_if_chain_expr, refine_local_type, lower_expr, lower_expr_inner, apply_container_hint_for_ctor_arg, lower_call
+from lower_stmt import lower_stmt, lower_place_base, lower_field_write, emit_field_write_from_local, lower_stmts, lower_if, lower_index_assign
+from lower_match import match_enum_type, match_variant_index, try_lift_option_ref, emit_tag_read, is_deep_clone_fn, resolve_payload_clone_fn, emit_payload_read, emit_payload_read_mode, emit_payload_read_mode_full, match_scrutinee_ptr, lower_pattern_match, lower_ctor_pattern, lookup_ctor_field_type, result_payload_types, emit_on_error_cleanups, lower_throw_stmt, lower_catch_expr, lower_rethrow_expr, maybe_auto_propagate, arms_match_result_or_option, pattern_head_is_result_or_option, lower_match_stmt, lower_match_expr
+from lower_loops import lower_for, lower_for_vector, lower_for_string, parse_dict_kv_types, for_pat_binding_name, lower_for_dict, lower_for_range, lower_for_iterator, bind_tuple_field, bind_tuple_destructure, bind_for_local, local_is_borrow_alias, scrutinee_nonowning, scrutinee_owned_whole_dropped, scrutinee_borrow_into_owning_collection, resolve_elem_type_id, lower_while
+
+GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
+    bool is_main = fdef.name == "main"
+    int ret_type = I64_TYPE
+    if is_main:
+        # Check if main has throws — if so, return Result__void__T
+        match fdef.throws_type:
+            case Some(throws_ty):
+                int err_type = map_ast_type(throws_ty, &gmod)
+                String err_c = type_id_to_name(err_type, &gmod)
+                String result_name = "Result__void__" + err_c
+                ret_type = lookup_or_register_named(&gmod, result_name)
+                record_enum_category(&gmod, ret_type, ENUM_CAT_RESULT, UNIT_TYPE, err_type)
+            case None:
+                ret_type = I32_TYPE
+    else:
+        ret_type = map_fn_return_type(fdef.return_type, &gmod)
+        # Wrap return type in Result[T, E] for throws functions
+        match fdef.throws_type:
+            case Some(throws_ty):
+                int ok_payload = ret_type
+                int err_type = map_ast_type(throws_ty, &gmod)
+                String ret_c = type_id_to_name(ret_type, &gmod)
+                String err_c = type_id_to_name(err_type, &gmod)
+                String result_name = "Result__" + ret_c + "__" + err_c
+                ret_type = lookup_or_register_named(&gmod, result_name)
+                record_enum_category(&gmod, ret_type, ENUM_CAT_RESULT, ok_payload, err_type)
+            case None:
+                pass
+
+    Vector[Instruction] init_insts = []
+    Vector[Vector[Instruction]] block_insts = [!init_insts]
+    Vector[Terminator] block_terms = [GTNone()]
+    Vector[int] _lc_stk = []
+    Vector[int] _lb_stk = []
+    Dict[String, int] _named_locals = {}
+    Vector[DropScope] _de_scopes = []
+    Vector[DropEmission] _de_queue = []
+    Vector[Vector[Stmt]] _on_err_blocks = []
+    Dict[String, bool] _cow_mut = {}
+    Dict[String, int] _cow_span = {}
+    Dict[String, bool] _cow_clo = {}
+    LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, !_named_locals, !_lc_stk, !_lb_stk, "", "", "", false, fdef.name.clone(), DropElaborator(!_de_scopes), !_de_queue, -1, !_on_err_blocks, false, !_cow_mut, !_cow_span, !_cow_clo)
+
+    # Push the function-scope drop frame. Pop emits GIDropIfAlive for
+    # every owned resource local registered during lowering (param or
+    # SVarDecl), unless the natural exit was an explicit GTReturn (in
+    # which case SReturn's emit_drops_for_early_exit already emitted
+    # them). See the DropElaborator section docstring.
+    push_drop_scope(&ctx.drop_elab, DSK_FUNCTION)
+
+    # _0 = return place
+    add_local(&ctx, ret_type, None)
+
+    # _1.._N = params — non-primitive bare params become Ptr(T)
+    Vector[int] param_types = []
+    for p in fdef.params:
+        int pt = map_ast_type(p.param_type, &gmod)
+        # Bare params of resource types (strings, collections, structs with resource fields) → Ptr
+        # Small types (enums, simple structs) are passed by value
+        if p.ownership == 0 and pt >= PRIM_COUNT:
+            String type_c_name = type_to_c_name(p.param_type, &gmod)
+            if is_resource_type_name(type_c_name, &gmod):
+                pt = register_ptr(&gmod, pt)
+        # Mutable borrow (&) and move (!) params → MutPtr
+        # OWN_MUTABLE=1, OWN_MOVE=2 in self-host parser
+        if p.ownership == 1 or p.ownership == 2:
+            pt = register_type(&gmod, GtMutPtr(pt))
+        param_types.push(pt)
+        int plid = add_local_with(&ctx, pt, Some(p.param_name.clone()), LoParam(), BoParam(-1))
+        nl_put(&ctx, p.param_name, plid)
+        # Phase 2 param drop registration: only bare-by-value resource
+        # params (ownership==0 with the Ptr wrapping applied above) and
+        # the inner Ptr() do NOT own the pointee — the caller does. So
+        # we register the local for drop only when ownership==0 AND
+        # the original (pre-Ptr-wrap) type is a resource. The wrapper
+        # type is GtPtr(inner) — is_droppable_type returns false on
+        # GtPtr — so we'd otherwise miss this. Pass the inner type to
+        # register_local_for_drop instead.
+        # FIXME: by-value owning params have ABI-controlled lifetime;
+        # whether the callee drops vs. the caller drops depends on
+        # the param ownership rules (`!` = callee, `&` = neither, bare
+        # = caller for the boxed alias). For Phase 2 we keep the
+        # registration conservative: only `!arg` (ownership==2) params
+        # — the canonical "callee owns and must drop" shape — are
+        # registered. `&arg` (ownership==1) and bare params are owned
+        # by the caller.
+        if p.ownership == 2:
+            # `!arg` — callee owns the pointee. The slot here is a
+            # MutPtr(T); register via the DEDICATED owning-param path
+            # (Tier E §8.1): it derefs the GtMutPtr wrapper to gate on the
+            # inner T's dropability AND sets owning_param=true so the
+            # consume-mode (D) + GIDropIfAlive emission (C) treat the slot
+            # as holding a `T*`. (`register_local_for_drop(pt)` was a silent
+            # no-op — is_droppable_type rejects GtMutPtr — the original leak.)
+            register_owning_param(&ctx, plid, pt, &gmod)
+
+
+
+    # CoW resource-bind forward-scan (substrate ii): populate the
+    # whole-function mutation set BEFORE lowering, so each SVarDecl's
+    # Branch C-pre flip decision can consult it. See compute_cow_scan.
+    compute_cow_scan(&ctx, &gmod, fdef.body)
+
+    # Lower body statements
+    for stmt in fdef.body:
+        lower_stmt(&ctx, stmt, &gmod, is_main)
+
+    # If main and no explicit return, add return 0. The drop frame's
+    # natural-exit emission needs to run BEFORE this: emit drops at
+    # the natural fall-through point, then synthesise the implicit
+    # `return 0`. Otherwise the GTReturn would close the block before
+    # we get a chance to emit the drops.
+    if is_main:
+        Terminator last_term = ctx.block_terms.get(ctx.current_block).unwrap()
+        match last_term:
+            case GTNone():
+                # Emit drops for the function scope FIRST (exclude _0
+                # since the return value is being moved out).
+                emit_drops_for_early_exit(&ctx, DSK_FUNCTION, Some(0))
+                emit(&ctx, GIAssign(0, OpConstI32(0)))
+                set_terminator(&ctx, GTReturn(OpConstI32(0)))
+            else:
+                pass
+
+    # Finalize: pop the function-scope drop frame, run the GIR-liveness
+    # + operand-mode post-pass + drop-queue flush, and assemble the
+    # BasicBlocks. Shared verbatim with the closure-call synthesis — see
+    # `finalize_body_blocks`. These post-passes are MANDATORY (they set
+    # OpMove/OpClone modes + emit drops); skipping them is a silent
+    # miscompile for any resource-touching body.
+    Vector[BasicBlock] blocks = finalize_body_blocks(&ctx, &gmod, fdef.name)
+    return GirFunction(fdef.name, param_types, ret_type, ctx.locals, !blocks)
+
+# ── Trait name mangling ──────────────────────────────────
+
+String mangle_prim_type(String name):
+    match name:
+        case "int":
+            return "int64_t"
+        case "float":
+            return "double"
+        case "bool":
+            return "bool"
+        case "String":
+            return "GorgetString"
+        else:
+            return name
+
+String mangle_trait_name(String raw):
+    # Parse "TraitName[Type1, Type2]" → "TraitName__type1__type2"
+    # Note: use contains() guard because find() returns 0 (not -1) when not found
+    # due to sentinel-to-Option unwrap bug in the compiler.
+    if not raw.contains("["):
+        return raw
+    int bracket = raw.index_of("[").unwrap()
+    String base = raw.slice(0, bracket)
+    String args_str = raw.slice(bracket + 1, raw.len() - 1)
+    # Split args by ", " and mangle each
+    String result = base
+    int pos = 0
+    String current = ""
+    while pos < args_str.len():
+        String ch = args_str.slice(pos, pos + 1)
+        if ch == "," and pos + 1 < args_str.len():
+            result = result + "__" + mangle_prim_type(current)
+            current = ""
+            pos = pos + 2
+        else:
+            current = current + ch
+            pos = pos + 1
+    if current.len() > 0:
+        result = result + "__" + mangle_prim_type(current)
+    return result
+
+# ── Equip block lowering ─────────────────────────────────
+
+# Predicate: is this trait name a built-in derive-generated trait?
+# These traits use the short mangled form (Type__method) rather than the
+# explicit form (Trait_for_Type__method). Centralises the check so adding
+# a new built-in trait touches ONE place, not the 5 callsites that had
+# identical inline boolean chains before this helper was extracted.
+bool is_builtin_trait(String tname):
+    if tname == "Equatable" or tname == "Displayable" or tname == "Cloneable":
+        return true
+    if tname == "Hashable" or tname == "Serializable" or tname == "Deserializable":
+        return true
+    if tname == "Ordinal" or tname == "Drop":
+        return true
+    if tname == "Add" or tname == "Sub" or tname == "Mul" or tname == "Div":
+        return true
+    if tname.starts_with("Iterable"):
+        return true
+    if tname.starts_with("Add[") or tname.starts_with("Sub["):
+        return true
+    if tname.starts_with("Mul[") or tname.starts_with("Div["):
+        return true
+    return false
+
+# Lazy-iterator Phase 1a — the for-loop iterator PROTOCOL dispatches the
+# core methods by SHORT name (`Type__next` / `Type__iter` / `Type__drain`,
+# see `lower_for_iterator` `next_fn = iter_type_name + "__next"`). So a
+# concrete `equip Counter with Iterator[int]:`'s `next` MUST be emitted
+# under the short `Counter__next` name — NOT the user-trait-prefixed
+# `Iterator_for_Counter__next` — or the for-loop's call dangles → C
+# implicit-int → `Option__int64_t from int`. Mirrors Rust gg, which emits
+# `Counter__next` short for the concrete Iterator impl. A1 dropped
+# `Iterator` from `is_builtin_trait` (so its DEFAULTS now emit), which
+# flipped the naming to prefixed — this predicate restores the protocol's
+# short naming WITHOUT re-adding `Iterator` to the default-emit gate. The
+# trait name IS the protocol contract here (the C-emit-boundary exception).
+bool is_iterator_protocol_trait(String tname):
+    if tname.starts_with("Iterator") or tname.starts_with("Iterable"):
+        return true
+    if tname.starts_with("Drainable"):
+        return true
+    return false
+
+# Predicate: is this an instance method (first param's TYPE is `TSelf()`)?
+# FIDELITY Phase 4 — vtable globals carry one FuncAddr slot per INSTANCE
+# trait method; static methods are not vtable slots. Mirrors Rust gg's
+# `register_trait_types` has_self check (`src/ir/lowering/traits.rs:88-93`)
+# and the inline pattern at lower_equip_block (`lower.gg:7603-7607`).
+# Matches on the TYPE being `TSelf()`, NOT on `param_name == "self"`.
+bool method_has_self(FunctionDef mdef):
+    if mdef.params.len() == 0:
+        return false
+    Param first_p = mdef.params.get(0).unwrap()
+    match first_p.param_type.ty:
+        case TSelf():
+            return true
+        else:
+            return false
+
+void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
+    # Get the target type name
+    String target_name = type_to_c_name(eqblk.target, &gmod)
+    int target_tid = lookup_or_register_named(&gmod, target_name)
+    int self_ptr_tid = register_ptr(&gmod, target_tid)
+
+    for mdef in eqblk.methods:
+        # Mangled name: Type__method or Trait_for_Type__method
+        String mangled = target_name + "__" + mdef.name
+        match eqblk.trait_name:
+            case Some(tname):
+                # Derive-generated traits use short form (Type__method)
+                # Explicit trait impls use prefix (Trait_for_Type__method).
+                # Iterator/Iterable/Drainable use SHORT form too — the for-loop
+                # protocol dispatches `Type__next`/`__iter`/`__drain` by name
+                # (see is_iterator_protocol_trait).
+                bool is_derive = is_builtin_trait(tname) or is_iterator_protocol_trait(tname)
+                if not is_derive:
+                    String mangled_trait = mangle_trait_name(tname)
+                    mangled = mangled_trait + "_for_" + target_name + "__" + mdef.name
+            case None:
+                pass
+
+        bool is_main = false
+        int ret_type = map_fn_return_type(mdef.return_type, &gmod)
+
+        Vector[int] _lc_stk2 = []
+        Vector[int] _lb_stk2 = []
+        Dict[String, int] _named_locals2 = {}
+        Vector[DropScope] _de_scopes2 = []
+        Vector[DropEmission] _de_queue2 = []
+        Vector[Vector[Stmt]] _on_err_blocks2 = []
+        Dict[String, bool] _cow_mut2 = {}
+        Dict[String, int] _cow_span2 = {}
+        Dict[String, bool] _cow_clo2 = {}
+        LowerCtx ctx = LowerCtx([], [], [], 0, !_named_locals2, !_lc_stk2, !_lb_stk2, "", "", "", false, mangled.clone(), DropElaborator(!_de_scopes2), !_de_queue2, -1, !_on_err_blocks2, false, !_cow_mut2, !_cow_span2, !_cow_clo2)
+        # bb0
+        Vector[Instruction] init_insts = []
+        ctx.block_insts.push(!init_insts)
+        ctx.block_terms.push(GTNone())
+
+        # Phase 2: open the function-scope drop frame.
+        push_drop_scope(&ctx.drop_elab, DSK_FUNCTION)
+
+        # _0 = return place
+        add_local(&ctx, ret_type, None)
+
+        # Check if method has a self parameter
+        bool has_self = false
+        if mdef.params.len() > 0:
+            Param first_p = mdef.params.get(0).unwrap()
+            match first_p.param_type.ty:
+                case TSelf():
+                    has_self = true
+                else:
+                    pass
+
+        # Check if this is an explicit (non-derive) trait impl. Iterator/
+        # Iterable/Drainable are NOT treated as explicit here — their `self`
+        # uses the plain concrete-pointer convention (NOT the `*unit` vtable
+        # cast), matching pristine behaviour (when they were is_builtin_trait)
+        # AND the for-loop protocol's direct `self.field` access in `next`.
+        bool is_explicit_trait = false
+        match eqblk.trait_name:
+            case Some(tname):
+                bool is_derive_trait = is_builtin_trait(tname) or is_iterator_protocol_trait(tname)
+                if not is_derive_trait:
+                    is_explicit_trait = true
+            case None:
+                pass
+
+        Vector[int] param_types = []
+        # For explicit trait impls (`equip X with T:`) the param type is
+        # `*unit` (Rust vtable convention). Field access on `self`
+        # then fails because `unit` has no fields — we recover the
+        # concrete pointer type via a copy-aliased local. Defer the
+        # alias addition until after the rest of the params so the
+        # `local_to_slot[pci+1]` param→slot mapping in lir_lower
+        # stays correct (params at locals 1..N).
+        bool needs_concrete_self_alias = false
+        int concrete_self_tid_saved = UNIT_TYPE
+        int self_lid_saved = -1
+        if has_self:
+            # _1 = self — determine pointer type from ownership
+            # self (bare) → *T, &self → *mut T, !self → *mut T
+            int self_tid = self_ptr_tid
+            int self_ownership = 0
+            Param sp = mdef.params.get(0).unwrap()
+            self_ownership = sp.ownership
+            # OWN_MUTABLE=1 (&self), OWN_MOVE=2 (!self) → *mut T
+            if self_ownership == 1 or self_ownership == 2:
+                self_tid = register_type(&gmod, GtMutPtr(target_tid))
+            # Explicit trait impls use *unit self (Rust convention)
+            int concrete_self_tid = self_tid
+            if is_explicit_trait:
+                if self_ownership == 1 or self_ownership == 2:
+                    self_tid = register_type(&gmod, GtMutPtr(UNIT_TYPE))
+                else:
+                    self_tid = register_ptr(&gmod, UNIT_TYPE)
+            param_types.push(self_tid)
+            int self_lid = add_local(&ctx, self_tid, Some("self_void"))
+            if is_explicit_trait:
+                # Defer alias creation; bind `self` to the alias once
+                # all params have been added.
+                needs_concrete_self_alias = true
+                concrete_self_tid_saved = concrete_self_tid
+                self_lid_saved = self_lid
+            else:
+                nl_put(&ctx, "self", self_lid)
+
+        # _2.._N = explicit params (skip self — already added above)
+        for p in mdef.params:
+            # Skip self parameter
+            match p.param_type.ty:
+                case TSelf():
+                    continue
+                else:
+                    pass
+            int pt = map_ast_type(p.param_type, &gmod)
+            # Bare params of resource types → Ptr
+            if p.ownership == 0 and pt >= PRIM_COUNT:
+                String type_c_name = type_to_c_name(p.param_type, &gmod)
+                if is_resource_type_name(type_c_name, &gmod):
+                    pt = register_ptr(&gmod, pt)
+            if p.ownership == 1 or p.ownership == 2:
+                pt = register_type(&gmod, GtMutPtr(pt))
+            param_types.push(pt)
+            int plid = add_local_with(&ctx, pt, Some(p.param_name.clone()), LoParam(), BoParam(-1))
+            nl_put(&ctx, p.param_name, plid)
+            # Phase 2: only !-sigil resource params are callee-owned
+            # and must be dropped at function exit. Same rationale as
+            # lower_function above — use the dedicated owning-param path
+            # (Tier E §8.1) so the GtMutPtr wrapper is deref'd, the inner
+            # T's dropability gates registration, and owning_param=true.
+            if p.ownership == 2:
+                register_owning_param(&ctx, plid, pt, &gmod)
+
+        # Add the explicit-trait `self` concrete-cast alias here, AFTER
+        # all params, so locals 1..N are pure params (lir_lower's
+        # `local_to_slot[pci+1]` param→slot mapping requires this).
+        # The alias's GIAssign goes into the entry block before any
+        # body statements, so `self.field` accesses in the body see
+        # the cast pointer.
+        if needs_concrete_self_alias:
+            int concrete_self_lid = add_local(&ctx, concrete_self_tid_saved, Some("self"))
+            emit(&ctx, GIAssign(concrete_self_lid, OpCopy(self_lid_saved)))
+            nl_put(&ctx, "self", concrete_self_lid)
+
+        # CoW resource-bind forward-scan (substrate ii) — same as the
+        # free-fn lower_function path. See compute_cow_scan.
+        compute_cow_scan(&ctx, &gmod, mdef.body)
+
+        # Lower body
+        lower_stmts(&ctx, mdef.body, &gmod, is_main)
+
+        # Phase 2: pop function-scope drop frame. If body fell through
+        # without an explicit return, this emits cleanup drops.
+        pop_drop_scope(&ctx)
+
+        # GIR-liveness Phase 2a (Path A part 1). Same wiring as
+        # `lower_function` above — see `wire_liveness_into_modes`
+        # docstring for the rewriter contract.
+        LivenessAnalysis liveness2 = compute_liveness(&ctx)
+        int diff2 = liveness_instrumentation_diff(&ctx, &liveness2)
+        if diff2 > 0:
+            diag_warn("gir_liveness_diff", mangled + ": " + int_to_str(diff2) + " sites")
+        wire_liveness_into_modes(&ctx, &gmod, &liveness2)
+
+        # Phase 2c COMMIT 3 Prereq C — flush the deferred drop
+        # queue. See the matching call site in `lower_function`
+        # for the architectural contract.
+        flush_drop_queue(&ctx)
+
+        # Assemble blocks
+        Vector[BasicBlock] blocks = []
+        int bi = 0
+        while bi < ctx.block_insts.len():
+            Vector[Instruction] insts = ctx.block_insts.get(bi).unwrap()
+            Terminator term = ctx.block_terms.get(bi).unwrap()
+            blocks.push(BasicBlock(insts, term))
+            bi += 1
+
+        # Dup-def dedup (lazy-adapter pre-existing bug): an explicit
+        # `MapIter[…]` annotation + the `.map()` chain both reach here for the
+        # same mono'd receiver method (`Vector__int64_t__iter` etc.) → a C
+        # `redefinition`. Skip the re-push when this mangled name was already
+        # emitted from THIS path; record it on first emit. (Localized to the
+        # `lower_equip_block` push — the typed `emitted_fns` membership set.)
+        if not gmod.emitted_fns.contains(mangled):
+            gmod.emitted_fns.put(mangled.clone(), true)
+            gmod.functions.push(GirFunction(mangled, !param_types, ret_type, ctx.locals, !blocks))
+
+# ── Simple expression type inference ─────────────────────
+
+int STRING_MARKER = -2
+
+int guess_return_type(SpannedExpr sexpr, GirModule &gmod):
+    match sexpr.expr:
+        case EIntLiteral(_):
+            return I64_TYPE
+        case EFloatLiteral(_):
+            return F64_TYPE
+        case EBoolLiteral(_):
+            return BOOL_TYPE
+        case EStringLiteral(_, _):
+            return STRING_MARKER
+        case EFString(_, _):
+            return STRING_MARKER
+        case EBinaryOp(lhs_box, op, rhs_box):
+            match op:
+                case "==" | "!=" | "<" | "<=" | ">" | ">=" | "and" | "or":
+                    return BOOL_TYPE
+                else:
+                    # Check for string concatenation or float arithmetic
+                    # by inspecting the immediate operand expressions
+                    match (*lhs_box).expr:
+                        case EStringLiteral(_, _):
+                            return STRING_MARKER
+                        case EFloatLiteral(_):
+                            return F64_TYPE
+                        else:
+                            pass
+                    match (*rhs_box).expr:
+                        case EStringLiteral(_, _):
+                            return STRING_MARKER
+                        case EFloatLiteral(_):
+                            return F64_TYPE
+                        else:
+                            pass
+                    return I64_TYPE
+        case EUnaryOp(op, _):
+            match op:
+                case "not":
+                    return BOOL_TYPE
+                else:
+                    return I64_TYPE
+        case ENoneLiteral():
+            return UNIT_TYPE
+        case ECall(callee_box, args, targs):
+            match (*callee_box).expr:
+                case EIdentifier(fname):
+                    if fname == "print" or fname == "pass":
+                        return UNIT_TYPE
+                    # Enum variant constructors: Some(x) → Option__T, Ok(x)/Error(x) → Result
+                    if fname == "Some" and args.len() == 1:
+                        SpannedExpr inner_arg = args.get(0).unwrap()
+                        int inner_t = guess_return_type(inner_arg, &gmod)
+                        if inner_t == STRING_MARKER:
+                            inner_t = lookup_or_register_named(&gmod, "GorgetString")
+                        String inner_name = type_id_to_name(inner_t, &gmod)
+                        int gss_opt = lookup_or_register_named(&gmod, "Option__" + inner_name)
+                        record_enum_category(&gmod, gss_opt, ENUM_CAT_OPTION, inner_t, -1)
+                        return gss_opt
+                    if fname == "None":
+                        return UNIT_TYPE
+                    if fname == "Ok" or fname == "Error":
+                        # Result constructor — look at argument type to infer Result__T__E
+                        if args.len() > 0:
+                            SpannedExpr r_arg = args.get(0).unwrap()
+                            int r_t = guess_return_type(r_arg, &gmod)
+                            if r_t == STRING_MARKER:
+                                r_t = lookup_or_register_named(&gmod, "GorgetString")
+                            String r_name = type_id_to_name(r_t, &gmod)
+                            # Can't fully infer Result__T__E from one variant,
+                            # but return int64_t as a safe default
+                            return I64_TYPE
+                    # Look up return type from fn_sigs (also check call_redirects)
+                    String call_name = fname
+                    if targs.len() > 0:
+                        call_name = compute_mangled_name(targs, fname)
+                    if gmod.call_redirects.contains(call_name):
+                        call_name = gmod.call_redirects.get(call_name).unwrap()
+                    if gmod.fn_sigs.contains(call_name):
+                        return gmod.fn_sigs.get(call_name).unwrap()
+                else:
+                    pass
+        case EMethodCall(recv, mname, margs, _):
+            # Known void methods
+            if mname == "push" or mname == "set" or mname == "put" or mname == "clear" or mname == "pop" or mname == "sort" or mname == "append" or mname == "insert" or mname == "remove":
+                return UNIT_TYPE
+            # Known string-returning methods
+            if mname == "upper" or mname == "lower" or mname == "trim" or mname == "strip" or mname == "replace" or mname == "slice" or mname == "join" or mname == "repeat" or mname == "to_string" or mname == "reverse" or mname == "format" or mname == "as_str" or mname == "display" or mname == "describe" or mname == "to_lower" or mname == "to_upper" or mname == "removeprefix" or mname == "removesuffix" or mname == "center" or mname == "ljust" or mname == "rjust" or mname == "zfill":
+                return STRING_MARKER
+            # Known int-returning methods
+            if mname == "len" or mname == "find" or mname == "count" or mname == "hash" or mname == "index_of":
+                return I64_TYPE
+            # Known float-returning methods
+            if mname == "measure" or mname == "abs" or mname == "sqrt":
+                return F64_TYPE
+            # Known bool-returning methods
+            if mname == "contains" or mname == "starts_with" or mname == "ends_with" or mname == "is_empty" or mname == "has" or mname == "eq":
+                return BOOL_TYPE
+            # unwrap/unwrap_or: return type matches the receiver's inner type
+            if mname == "unwrap" or mname == "unwrap_or":
+                int recv_t = guess_return_type(*recv, &gmod)
+                return recv_t
+        case EIdentifier(name):
+            # Look up from fn_sigs (could be a variable holding a closure)
+            if gmod.fn_sigs.contains(name):
+                return gmod.fn_sigs.get(name).unwrap()
+        case EIf(_, then_body, _):
+            # Use return type of last statement in then body
+            if then_body.len() > 0:
+                Stmt last = then_body.get(then_body.len() - 1).unwrap()
+                match last:
+                    case SExpr(inner_expr):
+                        return guess_return_type(inner_expr, &gmod)
+                    case SReturn(opt_ret):
+                        match opt_ret:
+                            case Some(ret_expr):
+                                return guess_return_type(ret_expr, &gmod)
+                            case None:
+                                return UNIT_TYPE
+                    else:
+                        pass
+        else:
+            pass
+    return I64_TYPE
+
+# ── Closure scanning ─────────────────────────────────────
+
+# Check if an expression tree contains the implicit `it` parameter.
+# Unlike the parser's expr_contains_it (which only checks top-level to
+# avoid borrow issues), this traverses owned values — safe to recurse.
+bool expr_has_it(SpannedExpr sexpr):
+    match sexpr.expr:
+        case EIt():
+            return true
+        case EIdentifier(name):
+            return name == "it"
+        case EBinaryOp(lhs, _, rhs):
+            return expr_has_it(*lhs) or expr_has_it(*rhs)
+        case EUnaryOp(_, inner):
+            return expr_has_it(*inner)
+        case ECall(callee, args, _):
+            if expr_has_it(*callee):
+                return true
+            for a in args:
+                if expr_has_it(a):
+                    return true
+            return false
+        case EMethodCall(obj, _, args, _):
+            if expr_has_it(*obj):
+                return true
+            for a in args:
+                if expr_has_it(a):
+                    return true
+            return false
+        case EIf(cond, _, _):
+            return expr_has_it(*cond)
+        case EFString(_, fexprs):
+            for fx in fexprs:
+                if expr_has_it(fx):
+                    return true
+            return false
+        else:
+            return false
+
+# ── Phase 1 closure-body lowering: free-var (capture) guard ──
+#
+# The closure post-pass (the `lifted_closures` drain in `lower_module`)
+# synthesizes each `__Closure_N__call` function from the MODULE level — it
+# has `&gmod` but NO enclosing-function local scope. So we CANNOT mirror
+# Rust's POSITIVE free-var test (`collect_free_vars` consults
+# `ctx.lookup_local`,
+# `closures.rs:636` — "resolves to an OUTER local"; that outer scope does
+# not exist here). The guard is therefore INVERTED: walk the closure body
+# tracking the set of in-scope NON-capture names; a bare `EIdentifier`
+# name is a CAPTURE iff it is NONE of:
+#   1. a closure param (or the implicit `"it"`);
+#   2. a body-local declared earlier in the body via SVarDecl / for-loop
+#      pattern / match-arm pattern (tracked as we walk — mirrors Rust
+#      `local_names.insert` on VarDecl, `closures.rs:730-744`; we also
+#      track for/match pattern bindings, a strict superset, since those
+#      ARE legitimately in scope inside the body and flagging them would
+#      wrongly stub a Phase-1-valid closure);
+#   3. module-resolvable via `&gmod` — ALL the categories `lower_expr`'s
+#      EIdentifier chain resolves before the [bug] fallback:
+#      const_decls, float_const_decls, fn_sigs, statics, none_decls,
+#      and nullary enum variants.
+# A body with ANY capture → Phase 1 leaves the STUB (Phase 2 handles
+# captures/env). Phase 1 lowers ONLY non-capturing closure bodies. The
+# walk does NOT descend into a NESTED closure's body (mirror Rust which
+# skips `Expr::Closure` in the collector, `closures.rs:722-725`) — else
+# an outer closure would see the inner closure's params as "captures".
+#
+# Scoping: sub-blocks (if/match/for/while bodies, match arms) recurse
+# with a CLONED in-scope set so a binding introduced in one sub-block
+# does NOT leak to a sibling (which could mask a real capture there).
+# Within a linear statement sequence, SVarDecl bindings accumulate.
+
+# True iff `name` resolves to a module-level entity (any category the
+# EIdentifier arm of `lower_expr` handles before the [bug] fallback).
+bool closure_ident_module_resolvable(String name, GirModule &gmod):
+    if gmod.const_decls.contains(name):
+        return true
+    if gmod.float_const_decls.contains(name):
+        return true
+    if gmod.fn_sigs.contains(name):
+        return true
+    if static_contains(&gmod, name):
+        return true
+    if gmod.none_decls.contains(name):
+        return true
+    if enum_variant_parent(name, &gmod) != "":
+        return true
+    return false
+
+# Collect the binding names introduced by a pattern (PBinding /
+# PConstructor / PDotShorthand / PTuple / POr sub-patterns) into the
+# in-scope set. PWildcard / PLiteral / PRest bind nothing.
+void closure_collect_pattern_bindings(SpannedPattern sp, Dict[String, bool] &in_scope):
+    match sp.pat:
+        case PBinding(bname):
+            in_scope.put(bname.clone(), true)
+        case PConstructor(_, subs):
+            for s in subs:
+                closure_collect_pattern_bindings(s, &in_scope)
+        case PDotShorthand(_, subs):
+            for s in subs:
+                closure_collect_pattern_bindings(s, &in_scope)
+        case PTuple(subs):
+            for s in subs:
+                closure_collect_pattern_bindings(s, &in_scope)
+        case POr(subs):
+            for s in subs:
+                closure_collect_pattern_bindings(s, &in_scope)
+        else:
+            pass
+
+# Walk an expression; return true if it references any free variable
+# (a capture) given the current in-scope name set. Does NOT descend into
+# nested closures.
+bool closure_expr_has_capture(SpannedExpr sexpr, Dict[String, bool] in_scope, GirModule &gmod):
+    match sexpr.expr:
+        case EIdentifier(name):
+            if in_scope.contains(name):
+                return false
+            if closure_ident_module_resolvable(name, &gmod):
+                return false
+            return true
+        case EBinaryOp(lhs, _, rhs):
+            if closure_expr_has_capture(*lhs, in_scope, &gmod):
+                return true
+            return closure_expr_has_capture(*rhs, in_scope, &gmod)
+        case EUnaryOp(_, inner):
+            return closure_expr_has_capture(*inner, in_scope, &gmod)
+        case ECall(callee, args, _):
+            if closure_expr_has_capture(*callee, in_scope, &gmod):
+                return true
+            for a in args:
+                if closure_expr_has_capture(a, in_scope, &gmod):
+                    return true
+            return false
+        case EMethodCall(obj, _, args, _):
+            if closure_expr_has_capture(*obj, in_scope, &gmod):
+                return true
+            for a in args:
+                if closure_expr_has_capture(a, in_scope, &gmod):
+                    return true
+            return false
+        case EFieldAccess(obj, _):
+            return closure_expr_has_capture(*obj, in_scope, &gmod)
+        case EIndex(obj, idx):
+            if closure_expr_has_capture(*obj, in_scope, &gmod):
+                return true
+            return closure_expr_has_capture(*idx, in_scope, &gmod)
+        case ERange(lo_opt, hi_opt):
+            match lo_opt:
+                case Some(lo):
+                    if closure_expr_has_capture(*lo, in_scope, &gmod):
+                        return true
+                case None:
+                    pass
+            match hi_opt:
+                case Some(hi):
+                    return closure_expr_has_capture(*hi, in_scope, &gmod)
+                case None:
+                    return false
+        case EIf(cond, then_body, branches):
+            if closure_expr_has_capture(*cond, in_scope, &gmod):
+                return true
+            if closure_stmts_have_capture(then_body, in_scope, &gmod):
+                return true
+            for eb in branches:
+                match eb.condition:
+                    case Some(ec):
+                        if closure_expr_has_capture(ec, in_scope, &gmod):
+                            return true
+                    case None:
+                        pass
+                if closure_stmts_have_capture(eb.body, in_scope, &gmod):
+                    return true
+            return false
+        case EMatch(scrut, arms):
+            if closure_expr_has_capture(*scrut, in_scope, &gmod):
+                return true
+            for arm in arms:
+                # Arm pattern bindings are in scope ONLY in that arm — clone
+                # the set so they don't leak to a sibling arm.
+                Dict[String, bool] arm_scope = in_scope.clone()
+                closure_collect_pattern_bindings(arm.pattern, &arm_scope)
+                match arm.guard:
+                    case Some(g):
+                        if closure_expr_has_capture(g, arm_scope, &gmod):
+                            return true
+                    case None:
+                        pass
+                if closure_stmts_have_capture(arm.body, arm_scope, &gmod):
+                    return true
+            return false
+        case EArrayLiteral(elems):
+            for e in elems:
+                if closure_expr_has_capture(e, in_scope, &gmod):
+                    return true
+            return false
+        case ETupleLiteral(elems):
+            for e in elems:
+                if closure_expr_has_capture(e, in_scope, &gmod):
+                    return true
+            return false
+        case EDictLiteral(keys, vals):
+            for k in keys:
+                if closure_expr_has_capture(k, in_scope, &gmod):
+                    return true
+            for v in vals:
+                if closure_expr_has_capture(v, in_scope, &gmod):
+                    return true
+            return false
+        case EStructLiteral(_, _, field_vals):
+            for fv in field_vals:
+                if closure_expr_has_capture(fv, in_scope, &gmod):
+                    return true
+            return false
+        case EDotShorthand(_, args):
+            for a in args:
+                if closure_expr_has_capture(a, in_scope, &gmod):
+                    return true
+            return false
+        case ETry(inner):
+            return closure_expr_has_capture(*inner, in_scope, &gmod)
+        case EMove(inner):
+            return closure_expr_has_capture(*inner, in_scope, &gmod)
+        case EMutableBorrow(inner):
+            return closure_expr_has_capture(*inner, in_scope, &gmod)
+        case EDeref(inner):
+            return closure_expr_has_capture(*inner, in_scope, &gmod)
+        case EAs(inner, _):
+            return closure_expr_has_capture(*inner, in_scope, &gmod)
+        case EDefaultOp(lhs, rhs):
+            if closure_expr_has_capture(*lhs, in_scope, &gmod):
+                return true
+            return closure_expr_has_capture(*rhs, in_scope, &gmod)
+        case EAwait(inner):
+            return closure_expr_has_capture(*inner, in_scope, &gmod)
+        case EBlock(stmts):
+            return closure_stmts_have_capture(stmts, in_scope, &gmod)
+        case EDo(stmts):
+            return closure_stmts_have_capture(stmts, in_scope, &gmod)
+        case EFString(_, fexprs):
+            for fx in fexprs:
+                if closure_expr_has_capture(fx, in_scope, &gmod):
+                    return true
+            return false
+        case ESelfExpr():
+            # `self` is neither a param nor module-resolvable → a capture
+            # (Phase 2 / env). Stub it.
+            return true
+        case EClosure(_, _):
+            # Do NOT descend into a nested closure's body — it has its own
+            # capture analysis. Conservatively treat the presence of a
+            # nested closure as non-capturing here (the nested closure's
+            # own make-site entry guards it); over-stubbing the OUTER one on
+            # account of the inner's params would be wrong.
+            return false
+        case EImplicitClosure(_):
+            return false
+        else:
+            # Literals (int/float/bool/string/char/none), EIt, comprehensions,
+            # spawn, catch/rethrow, etc. — no bare free-var identifier to
+            # capture at THIS node; conservative non-recursion is fine for
+            # the literals, and the recursive forms above cover the shapes
+            # the candidate fixtures use. Any unhandled compound shape errs
+            # toward "no capture" → the body lowers; if it secretly held a
+            # capture the EIdentifier [bug] fallback still fires loudly (no
+            # silent collapse beyond the documented Phase-1 hazard, which
+            # this guard is the primary defense against for the COMMON
+            # shapes). Extend as new fixtures demand.
+            return false
+
+# Walk a statement; return true if it references any capture against the
+# given in-scope set. Read-only on `in_scope` (the SVarDecl-binding
+# accumulation across sequential statements lives in
+# `closure_stmts_have_capture`). Nested scoped blocks (for/match/if/while
+# bodies) recurse via `closure_stmts_have_capture`, which clones the set
+# so their internal bindings don't leak to siblings; for/match additionally
+# fold their pattern bindings into a cloned set before recursing.
+bool closure_stmt_has_capture(Stmt stmt, Dict[String, bool] in_scope, GirModule &gmod):
+    match stmt:
+        case SVarDecl(_, _, init, _, _, _):
+            # The init is evaluated BEFORE the binding exists, so it is
+            # checked against the current scope. (The binding is added to
+            # the running scope by `closure_stmts_have_capture` for the
+            # SUBSEQUENT sibling statements.)
+            return closure_expr_has_capture(init, in_scope, &gmod)
+        case SAssign(target, value):
+            if closure_expr_has_capture(target, in_scope, &gmod):
+                return true
+            return closure_expr_has_capture(value, in_scope, &gmod)
+        case SCompoundAssign(target, _, value):
+            if closure_expr_has_capture(target, in_scope, &gmod):
+                return true
+            return closure_expr_has_capture(value, in_scope, &gmod)
+        case SExpr(e):
+            return closure_expr_has_capture(e, in_scope, &gmod)
+        case SReturn(opt_e):
+            match opt_e:
+                case Some(e):
+                    return closure_expr_has_capture(e, in_scope, &gmod)
+                case None:
+                    return false
+        case SThrow(e):
+            return closure_expr_has_capture(e, in_scope, &gmod)
+        case SBreak(opt_e):
+            match opt_e:
+                case Some(e):
+                    return closure_expr_has_capture(e, in_scope, &gmod)
+                case None:
+                    return false
+        case SIf(cond, then_body, branches):
+            if closure_expr_has_capture(cond, in_scope, &gmod):
+                return true
+            if closure_stmts_have_capture(then_body, in_scope, &gmod):
+                return true
+            for eb in branches:
+                match eb.condition:
+                    case Some(ec):
+                        if closure_expr_has_capture(ec, in_scope, &gmod):
+                            return true
+                    case None:
+                        pass
+                if closure_stmts_have_capture(eb.body, in_scope, &gmod):
+                    return true
+            return false
+        case SWhile(cond, body):
+            if closure_expr_has_capture(cond, in_scope, &gmod):
+                return true
+            return closure_stmts_have_capture(body, in_scope, &gmod)
+        case SLoop(body):
+            return closure_stmts_have_capture(body, in_scope, &gmod)
+        case SFor(pat, iter_expr, body, _, _):
+            if closure_expr_has_capture(iter_expr, in_scope, &gmod):
+                return true
+            # Loop-pattern binding is in scope ONLY within the body — clone.
+            Dict[String, bool] body_scope = in_scope.clone()
+            closure_collect_pattern_bindings(pat, &body_scope)
+            return closure_stmts_have_capture(body, body_scope, &gmod)
+        case SMatch(scrut, arms):
+            if closure_expr_has_capture(scrut, in_scope, &gmod):
+                return true
+            for arm in arms:
+                Dict[String, bool] arm_scope = in_scope.clone()
+                closure_collect_pattern_bindings(arm.pattern, &arm_scope)
+                match arm.guard:
+                    case Some(g):
+                        if closure_expr_has_capture(g, arm_scope, &gmod):
+                            return true
+                    case None:
+                        pass
+                if closure_stmts_have_capture(arm.body, arm_scope, &gmod):
+                    return true
+            return false
+        case SAssert(e, _):
+            return closure_expr_has_capture(e, in_scope, &gmod)
+        case SAssertReturn(e, _):
+            return closure_expr_has_capture(e, in_scope, &gmod)
+        else:
+            # SPass / SContinue / meta forms / SItem / etc. — no free-var
+            # identifier at this statement. (The candidate fixtures don't
+            # use these inside a closure body.)
+            return false
+
+# Walk a statement list, threading a CLONED in-scope set (so bindings
+# from this block don't leak to the caller's sibling scopes) seeded from
+# `in_scope`, accumulating SVarDecl bindings left-to-right so later
+# statements see earlier body-locals.
+bool closure_stmts_have_capture(Vector[Stmt] stmts, Dict[String, bool] in_scope, GirModule &gmod):
+    Dict[String, bool] scope = in_scope.clone()
+    for stmt in stmts:
+        if closure_stmt_has_capture(stmt, scope, &gmod):
+            return true
+        # Accumulate an SVarDecl binding into the running scope for the
+        # SUBSEQUENT statements in THIS block.
+        match stmt:
+            case SVarDecl(_, vname, _, _, _, _):
+                scope.put(vname.clone(), true)
+            else:
+                pass
+    return false
+
+# Phase-1 entry guard for the `Vector[Stmt]` (EClosure) body shape: build
+# the param-name in-scope set, then check whether the body captures.
+bool closure_body_captures(Vector[Param] params, Vector[Stmt] body, GirModule &gmod):
+    Dict[String, bool] in_scope = {}
+    for p in params:
+        in_scope.put(p.param_name.clone(), true)
+    return closure_stmts_have_capture(body, in_scope, &gmod)
+
+# Phase-1 entry guard for the implicit-`it` (EImplicitClosure) body shape:
+# the single implicit param is `"it"`.
+bool implicit_closure_body_captures(SpannedExpr body, GirModule &gmod):
+    Dict[String, bool] in_scope = {}
+    in_scope.put("it", true)
+    return closure_expr_has_capture(body, in_scope, &gmod)
+
+# ── closure Phase 2 Step B: capture COLLECTOR + CLASSIFIER ───────────
+#
+# Built on the EXACT structure of the Phase-1 DETECTOR
+# (`closure_*_has_capture`): the SAME capture-shaped criterion (a bare
+# `EIdentifier` that is NOT a closure param / body-local / module-
+# resolvable), the SAME lexical-scope discipline (cloned sub-block sets,
+# SVarDecl/for-pattern/match-arm-pattern bindings, EIf-branch coverage),
+# the SAME nested-closure skip. The ONLY difference is the leaf: instead
+# of returning bool at a capture-shaped var, it CLASSIFIES it:
+#   • a genuine outer LOCAL (`nl_contains`) → record a ClosureCapture
+#     (deduped via `seen`), in walk order;
+#   • capture-shaped but NOT an outer local (unresolvable / `self`) →
+#     mark UNLIFTABLE (the safety net — Phase 1 would STUB here, 2a too).
+# The accumulated `caps` vector ORDER is the single source of truth:
+# env-field == struct-ctor-arg == body GIFieldLoad-index order.
+
+# True iff `callee` is a bare-identifier FUNCTION reference (a builtin or
+# top-level fn name), NOT a value capture. The discriminator: a bare
+# `EIdentifier` that is neither in the closure's lexical `in_scope` set NOR
+# an outer LOCAL (`nl_contains`) names something in the FUNCTION namespace
+# (`print`, a top-level helper, an enum-variant ctor) — calling it captures
+# nothing. A callee that IS an outer local (a captured closure value, `f()`)
+# returns false here so the walk records it as a genuine capture.
+bool cc_callee_is_free_fn(LowerCtx &ctx, SpannedExpr callee, Dict[String, bool] in_scope, GirModule &gmod):
+    match callee.expr:
+        case EIdentifier(name):
+            if in_scope.contains(name):
+                return false
+            if nl_contains(&ctx, name):
+                return false
+            return true
+        else:
+            return false
+
+# Classify a single capture-shaped free var (the EIdentifier leaf).
+void cc_classify_ident(LowerCtx &ctx, String name, GirModule &gmod, CaptureCollector &cc):
+    if nl_contains(&ctx, name):
+        # A genuine outer LOCAL → record it (deduped). Walk order is
+        # the single source of truth.
+        if not cc.seen.contains(name):
+            cc.seen.put(name.clone(), true)
+            int cap_lid = nl_get(&ctx, name)
+            int cap_tid = ctx.locals.get(cap_lid).unwrap().type_id
+            cc.caps.push(ClosureCapture(name.clone(), cap_tid, cap_lid, CAP_BY_VALUE))
+    else:
+        # Capture-shaped but NOT an outer local (unresolvable) → STUB.
+        cc.unliftable = true
+
+# Walk an expression, recording captures against `in_scope`. Mirrors
+# `closure_expr_has_capture` (does NOT descend into nested closures).
+void cc_collect_expr(LowerCtx &ctx, SpannedExpr sexpr, Dict[String, bool] in_scope, GirModule &gmod, CaptureCollector &cc):
+    match sexpr.expr:
+        case EIdentifier(name):
+            if in_scope.contains(name):
+                return
+            if closure_ident_module_resolvable(name, &gmod):
+                return
+            cc_classify_ident(&ctx, name, &gmod, &cc)
+        case EBinaryOp(lhs, _, rhs):
+            cc_collect_expr(&ctx, *lhs, in_scope, &gmod, &cc)
+            cc_collect_expr(&ctx, *rhs, in_scope, &gmod, &cc)
+        case EUnaryOp(_, inner):
+            cc_collect_expr(&ctx, *inner, in_scope, &gmod, &cc)
+        case ECall(callee, args, _):
+            # A bare-identifier CALLEE is a FUNCTION reference, not a value
+            # capture — `print(s)` / `helper(x)` name a builtin/top-level fn
+            # in the function namespace, NOT an outer local. Recursing into
+            # it would mis-classify `print` (absent from fn_sigs/const/etc.)
+            # as an UNLIFTABLE capture and STUB the whole closure. Only a
+            # callee that IS an outer LOCAL is a genuine capture (calling a
+            # captured closure value, `f()`); route THAT through the walk so
+            # it's recorded. Mirrors Rust `collect_free_vars`, which resolves
+            # call targets in the function namespace and never captures them.
+            if not cc_callee_is_free_fn(&ctx, *callee, in_scope, &gmod):
+                cc_collect_expr(&ctx, *callee, in_scope, &gmod, &cc)
+            for a in args:
+                cc_collect_expr(&ctx, a, in_scope, &gmod, &cc)
+        case EMethodCall(obj, _, args, _):
+            cc_collect_expr(&ctx, *obj, in_scope, &gmod, &cc)
+            for a in args:
+                cc_collect_expr(&ctx, a, in_scope, &gmod, &cc)
+        case EFieldAccess(obj, _):
+            cc_collect_expr(&ctx, *obj, in_scope, &gmod, &cc)
+        case EIndex(obj, idx):
+            cc_collect_expr(&ctx, *obj, in_scope, &gmod, &cc)
+            cc_collect_expr(&ctx, *idx, in_scope, &gmod, &cc)
+        case ERange(lo_opt, hi_opt):
+            match lo_opt:
+                case Some(lo):
+                    cc_collect_expr(&ctx, *lo, in_scope, &gmod, &cc)
+                case None:
+                    pass
+            match hi_opt:
+                case Some(hi):
+                    cc_collect_expr(&ctx, *hi, in_scope, &gmod, &cc)
+                case None:
+                    pass
+        case EIf(cond, then_body, branches):
+            cc_collect_expr(&ctx, *cond, in_scope, &gmod, &cc)
+            cc_collect_stmts(&ctx, then_body, in_scope, &gmod, &cc)
+            for eb in branches:
+                match eb.condition:
+                    case Some(ec):
+                        cc_collect_expr(&ctx, ec, in_scope, &gmod, &cc)
+                    case None:
+                        pass
+                cc_collect_stmts(&ctx, eb.body, in_scope, &gmod, &cc)
+        case EMatch(scrut, arms):
+            cc_collect_expr(&ctx, *scrut, in_scope, &gmod, &cc)
+            for arm in arms:
+                Dict[String, bool] arm_scope = in_scope.clone()
+                closure_collect_pattern_bindings(arm.pattern, &arm_scope)
+                match arm.guard:
+                    case Some(g):
+                        cc_collect_expr(&ctx, g, arm_scope, &gmod, &cc)
+                    case None:
+                        pass
+                cc_collect_stmts(&ctx, arm.body, arm_scope, &gmod, &cc)
+        case EArrayLiteral(elems):
+            for e in elems:
+                cc_collect_expr(&ctx, e, in_scope, &gmod, &cc)
+        case ETupleLiteral(elems):
+            for e in elems:
+                cc_collect_expr(&ctx, e, in_scope, &gmod, &cc)
+        case EDictLiteral(keys, vals):
+            for k in keys:
+                cc_collect_expr(&ctx, k, in_scope, &gmod, &cc)
+            for vv in vals:
+                cc_collect_expr(&ctx, vv, in_scope, &gmod, &cc)
+        case EStructLiteral(_, _, field_vals):
+            for fv in field_vals:
+                cc_collect_expr(&ctx, fv, in_scope, &gmod, &cc)
+        case EDotShorthand(_, args):
+            for a in args:
+                cc_collect_expr(&ctx, a, in_scope, &gmod, &cc)
+        case ETry(inner):
+            cc_collect_expr(&ctx, *inner, in_scope, &gmod, &cc)
+        case EMove(inner):
+            cc_collect_expr(&ctx, *inner, in_scope, &gmod, &cc)
+        case EMutableBorrow(inner):
+            cc_collect_expr(&ctx, *inner, in_scope, &gmod, &cc)
+        case EDeref(inner):
+            cc_collect_expr(&ctx, *inner, in_scope, &gmod, &cc)
+        case EAs(inner, _):
+            cc_collect_expr(&ctx, *inner, in_scope, &gmod, &cc)
+        case EDefaultOp(lhs, rhs):
+            cc_collect_expr(&ctx, *lhs, in_scope, &gmod, &cc)
+            cc_collect_expr(&ctx, *rhs, in_scope, &gmod, &cc)
+        case EAwait(inner):
+            cc_collect_expr(&ctx, *inner, in_scope, &gmod, &cc)
+        case EBlock(stmts):
+            cc_collect_stmts(&ctx, stmts, in_scope, &gmod, &cc)
+        case EDo(stmts):
+            cc_collect_stmts(&ctx, stmts, in_scope, &gmod, &cc)
+        case EFString(_, fexprs):
+            for fx in fexprs:
+                cc_collect_expr(&ctx, fx, in_scope, &gmod, &cc)
+        case ESelfExpr():
+            # `self` is capture-shaped but not an outer local → UNLIFTABLE
+            # (2a targets don't capture self).
+            cc.unliftable = true
+        case EClosure(_, _):
+            # Do NOT descend into a nested closure (mirror the detector +
+            # Rust collector). The nested-closure guard (b/d) keeps the
+            # whole outer closure stubbed anyway.
+            pass
+        case EImplicitClosure(_):
+            pass
+        else:
+            pass
+
+# Walk a statement, recording captures against `in_scope`. Mirrors
+# `closure_stmt_has_capture`.
+void cc_collect_stmt(LowerCtx &ctx, Stmt stmt, Dict[String, bool] in_scope, GirModule &gmod, CaptureCollector &cc):
+    match stmt:
+        case SVarDecl(_, _, init, _, _, _):
+            cc_collect_expr(&ctx, init, in_scope, &gmod, &cc)
+        case SAssign(target, value):
+            cc_collect_expr(&ctx, target, in_scope, &gmod, &cc)
+            cc_collect_expr(&ctx, value, in_scope, &gmod, &cc)
+        case SCompoundAssign(target, _, value):
+            cc_collect_expr(&ctx, target, in_scope, &gmod, &cc)
+            cc_collect_expr(&ctx, value, in_scope, &gmod, &cc)
+        case SExpr(e):
+            cc_collect_expr(&ctx, e, in_scope, &gmod, &cc)
+        case SReturn(opt_e):
+            match opt_e:
+                case Some(e):
+                    cc_collect_expr(&ctx, e, in_scope, &gmod, &cc)
+                case None:
+                    pass
+        case SThrow(e):
+            cc_collect_expr(&ctx, e, in_scope, &gmod, &cc)
+        case SBreak(opt_e):
+            match opt_e:
+                case Some(e):
+                    cc_collect_expr(&ctx, e, in_scope, &gmod, &cc)
+                case None:
+                    pass
+        case SIf(cond, then_body, branches):
+            cc_collect_expr(&ctx, cond, in_scope, &gmod, &cc)
+            cc_collect_stmts(&ctx, then_body, in_scope, &gmod, &cc)
+            for eb in branches:
+                match eb.condition:
+                    case Some(ec):
+                        cc_collect_expr(&ctx, ec, in_scope, &gmod, &cc)
+                    case None:
+                        pass
+                cc_collect_stmts(&ctx, eb.body, in_scope, &gmod, &cc)
+        case SWhile(cond, body):
+            cc_collect_expr(&ctx, cond, in_scope, &gmod, &cc)
+            cc_collect_stmts(&ctx, body, in_scope, &gmod, &cc)
+        case SLoop(body):
+            cc_collect_stmts(&ctx, body, in_scope, &gmod, &cc)
+        case SFor(pat, iter_expr, body, _, _):
+            cc_collect_expr(&ctx, iter_expr, in_scope, &gmod, &cc)
+            Dict[String, bool] body_scope = in_scope.clone()
+            closure_collect_pattern_bindings(pat, &body_scope)
+            cc_collect_stmts(&ctx, body, body_scope, &gmod, &cc)
+        case SMatch(scrut, arms):
+            cc_collect_expr(&ctx, scrut, in_scope, &gmod, &cc)
+            for arm in arms:
+                Dict[String, bool] arm_scope = in_scope.clone()
+                closure_collect_pattern_bindings(arm.pattern, &arm_scope)
+                match arm.guard:
+                    case Some(g):
+                        cc_collect_expr(&ctx, g, arm_scope, &gmod, &cc)
+                    case None:
+                        pass
+                cc_collect_stmts(&ctx, arm.body, arm_scope, &gmod, &cc)
+        case SAssert(e, _):
+            cc_collect_expr(&ctx, e, in_scope, &gmod, &cc)
+        case SAssertReturn(e, _):
+            cc_collect_expr(&ctx, e, in_scope, &gmod, &cc)
+        else:
+            pass
+
+# Walk a statement list, threading a CLONED in-scope set and accumulating
+# SVarDecl bindings left-to-right. Mirrors `closure_stmts_have_capture`.
+void cc_collect_stmts(LowerCtx &ctx, Vector[Stmt] stmts, Dict[String, bool] in_scope, GirModule &gmod, CaptureCollector &cc):
+    Dict[String, bool] scope = in_scope.clone()
+    for stmt in stmts:
+        cc_collect_stmt(&ctx, stmt, scope, &gmod, &cc)
+        match stmt:
+            case SVarDecl(_, vname, _, _, _, _):
+                scope.put(vname.clone(), true)
+            else:
+                pass
+
+# Entry point: collect the EClosure body's ByValue captures. Builds the
+# param-name in-scope set, then walks. Returns the CaptureCollector (an
+# ordered deduped capture list + the `unliftable` safety flag).
+CaptureCollector collect_closure_captures(LowerCtx &ctx, Vector[Param] params, Vector[Stmt] body, GirModule &gmod):
+    Dict[String, bool] in_scope = {}
+    for p in params:
+        in_scope.put(p.param_name.clone(), true)
+    Vector[ClosureCapture] caps0 = []
+    Dict[String, bool] seen0 = {}
+    CaptureCollector cc = CaptureCollector(!caps0, !seen0, false)
+    cc_collect_stmts(&ctx, body, in_scope, &gmod, &cc)
+    return cc
+
+# closure Phase 2 Step B: a closure body MUTATES a capture if it
+# assigns / compound-assigns to a captured name. Block-bodies only
+# (mirror Rust `detect_mutations`). Captures that are mutated → 2c, so
+# the 2a guard keeps them STUBBED. Conservative: any assign whose target
+# is a bare `EIdentifier` matching a capture name counts.
+bool stmts_mutate_any(Vector[Stmt] stmts, Dict[String, bool] cap_names):
+    for stmt in stmts:
+        if stmt_mutates_any(stmt, cap_names):
+            return true
+    return false
+
+bool expr_target_mutates_any(SpannedExpr target, Dict[String, bool] cap_names):
+    match target.expr:
+        case EIdentifier(name):
+            return cap_names.contains(name)
+        else:
+            return false
+
+bool stmt_mutates_any(Stmt stmt, Dict[String, bool] cap_names):
+    match stmt:
+        case SAssign(target, _):
+            return expr_target_mutates_any(target, cap_names)
+        case SCompoundAssign(target, _, _):
+            return expr_target_mutates_any(target, cap_names)
+        case SIf(_, then_body, branches):
+            if stmts_mutate_any(then_body, cap_names):
+                return true
+            for eb in branches:
+                if stmts_mutate_any(eb.body, cap_names):
+                    return true
+            return false
+        case SWhile(_, body):
+            return stmts_mutate_any(body, cap_names)
+        case SLoop(body):
+            return stmts_mutate_any(body, cap_names)
+        case SFor(_, _, body, _, _):
+            return stmts_mutate_any(body, cap_names)
+        case SMatch(_, arms):
+            for arm in arms:
+                if stmts_mutate_any(arm.body, cap_names):
+                    return true
+            return false
+        else:
+            return false
+
+# Phase-1 SAFETY guard, distinct from capture detection: a closure body
+# that CONTAINS a nested `EClosure` keeps the STUB rather than being lowered.
+# Nested closures are a Phase-2 concern (proper capture/env re-architecture).
+# Note: under the Step-A make-site design the make-site is the SOLE closure-id
+# source (`gmod_next_closure_id`), so lowering a nested closure during the
+# post-pass drain does NOT desync ids — the nested closure takes a fresh cid
+# and is appended to `lifted_closures` (drain-until-empty picks it up). The
+# guard is retained because (a) Step B (captures/env) isn't landed, and (b) a
+# nested closure inside a STUBBED outer (whose body is never lowered) would
+# otherwise be lost (§5a′ in the Step-A brief). No current candidate fixture
+# nests closures inside a stubbed outer, so this stays belt-and-braces.
+bool expr_has_nested_closure(SpannedExpr sexpr):
+    match sexpr.expr:
+        case EClosure(_, _):
+            return true
+        case EBinaryOp(lhs, _, rhs):
+            return expr_has_nested_closure(*lhs) or expr_has_nested_closure(*rhs)
+        case EUnaryOp(_, inner):
+            return expr_has_nested_closure(*inner)
+        case ECall(callee, args, _):
+            if expr_has_nested_closure(*callee):
+                return true
+            for a in args:
+                if expr_has_nested_closure(a):
+                    return true
+            return false
+        case EMethodCall(obj, _, args, _):
+            if expr_has_nested_closure(*obj):
+                return true
+            for a in args:
+                if expr_has_nested_closure(a):
+                    return true
+            return false
+        case EFieldAccess(obj, _):
+            return expr_has_nested_closure(*obj)
+        case EIndex(obj, idx):
+            return expr_has_nested_closure(*obj) or expr_has_nested_closure(*idx)
+        case ERange(lo_opt, hi_opt):
+            match lo_opt:
+                case Some(lo):
+                    if expr_has_nested_closure(*lo):
+                        return true
+                case None:
+                    pass
+            match hi_opt:
+                case Some(hi):
+                    return expr_has_nested_closure(*hi)
+                case None:
+                    return false
+        case EIf(cond, then_body, branches):
+            if expr_has_nested_closure(*cond):
+                return true
+            if stmts_have_nested_closure(then_body):
+                return true
+            for eb in branches:
+                if stmts_have_nested_closure(eb.body):
+                    return true
+            return false
+        case EMatch(scrut, arms):
+            if expr_has_nested_closure(*scrut):
+                return true
+            for arm in arms:
+                if stmts_have_nested_closure(arm.body):
+                    return true
+            return false
+        case EArrayLiteral(elems):
+            for e in elems:
+                if expr_has_nested_closure(e):
+                    return true
+            return false
+        case ETupleLiteral(elems):
+            for e in elems:
+                if expr_has_nested_closure(e):
+                    return true
+            return false
+        case EDictLiteral(keys, vals):
+            for k in keys:
+                if expr_has_nested_closure(k):
+                    return true
+            for v in vals:
+                if expr_has_nested_closure(v):
+                    return true
+            return false
+        case EStructLiteral(_, _, field_vals):
+            for fv in field_vals:
+                if expr_has_nested_closure(fv):
+                    return true
+            return false
+        case EDotShorthand(_, args):
+            for a in args:
+                if expr_has_nested_closure(a):
+                    return true
+            return false
+        case ETry(inner):
+            return expr_has_nested_closure(*inner)
+        case EMove(inner):
+            return expr_has_nested_closure(*inner)
+        case EMutableBorrow(inner):
+            return expr_has_nested_closure(*inner)
+        case EDeref(inner):
+            return expr_has_nested_closure(*inner)
+        case EAs(inner, _):
+            return expr_has_nested_closure(*inner)
+        case EDefaultOp(lhs, rhs):
+            return expr_has_nested_closure(*lhs) or expr_has_nested_closure(*rhs)
+        case EAwait(inner):
+            return expr_has_nested_closure(*inner)
+        case EBlock(stmts):
+            return stmts_have_nested_closure(stmts)
+        case EDo(stmts):
+            return stmts_have_nested_closure(stmts)
+        case EFString(_, fexprs):
+            for fx in fexprs:
+                if expr_has_nested_closure(fx):
+                    return true
+            return false
+        else:
+            return false
+
+bool stmt_has_nested_closure(Stmt stmt):
+    match stmt:
+        case SVarDecl(_, _, init, _, _, _):
+            return expr_has_nested_closure(init)
+        case SAssign(target, value):
+            return expr_has_nested_closure(target) or expr_has_nested_closure(value)
+        case SCompoundAssign(target, _, value):
+            return expr_has_nested_closure(target) or expr_has_nested_closure(value)
+        case SExpr(e):
+            return expr_has_nested_closure(e)
+        case SReturn(opt_e):
+            match opt_e:
+                case Some(e):
+                    return expr_has_nested_closure(e)
+                case None:
+                    return false
+        case SThrow(e):
+            return expr_has_nested_closure(e)
+        case SBreak(opt_e):
+            match opt_e:
+                case Some(e):
+                    return expr_has_nested_closure(e)
+                case None:
+                    return false
+        case SIf(cond, then_body, branches):
+            if expr_has_nested_closure(cond):
+                return true
+            if stmts_have_nested_closure(then_body):
+                return true
+            for eb in branches:
+                if stmts_have_nested_closure(eb.body):
+                    return true
+            return false
+        case SWhile(cond, body):
+            return expr_has_nested_closure(cond) or stmts_have_nested_closure(body)
+        case SLoop(body):
+            return stmts_have_nested_closure(body)
+        case SFor(_, iter_expr, body, _, _):
+            return expr_has_nested_closure(iter_expr) or stmts_have_nested_closure(body)
+        case SMatch(scrut, arms):
+            if expr_has_nested_closure(scrut):
+                return true
+            for arm in arms:
+                if stmts_have_nested_closure(arm.body):
+                    return true
+            return false
+        case SAssert(e, _):
+            return expr_has_nested_closure(e)
+        case SAssertReturn(e, _):
+            return expr_has_nested_closure(e)
+        else:
+            return false
+
+bool stmts_have_nested_closure(Vector[Stmt] stmts):
+    for stmt in stmts:
+        if stmt_has_nested_closure(stmt):
+            return true
+    return false
+
+# ── closure Phase 2 Step A: make-site signature computation ──
+#
+# Compute the full closure signature for an EXPLICIT closure (`(p…): body`),
+# lifting the EXACT logic the deleted `scan_expr_for_closures` EClosure arm
+# used (env-type+self_ptr, param-type mapping, return-type inference incl.
+# the float-param + multi-stmt-void heuristics + STRING_MARKER resolve).
+# Takes `cid` because `self_ptr` is derived from the env type `__Closure_<cid>`.
+# The make-site and the post-pass both store/read these via a LiftedClosure
+# record, so the recorded sig == what `lower_closure_body` expects.
+ClosureSig compute_closure_sig(int cid, Vector[Param] params, Vector[Stmt] body, GirModule &gmod):
+    String closure_name = "__Closure_" + int_to_str(cid)
+    int closure_tid = lookup_or_register_named(&gmod, closure_name)
+    int self_ptr = register_ptr(&gmod, closure_tid)
+
+    # Build ABI param types: *__Closure_N + explicit params; and the
+    # closure's OWN param types/names in parallel.
+    Vector[int] abi_param_types = [self_ptr]
+    Vector[int] body_param_types = []
+    Vector[String] body_param_names = []
+    for p in params:
+        int pt = map_ast_type(p.param_type, &gmod)
+        abi_param_types.push(pt)
+        body_param_types.push(pt)
+        body_param_names.push(p.param_name.clone())
+
+    # Infer return type from body (verbatim from the old scan).
+    int ret_type = I64_TYPE
+    if body.len() > 0:
+        Stmt last_stmt = body.get(body.len() - 1).unwrap()
+        match last_stmt:
+            case SReturn(opt_expr):
+                match opt_expr:
+                    case Some(rexpr):
+                        ret_type = guess_return_type(rexpr, &gmod)
+                    case None:
+                        ret_type = UNIT_TYPE
+            case SExpr(expr):
+                ret_type = guess_return_type(expr, &gmod)
+            else:
+                ret_type = UNIT_TYPE
+    # Single-param float-only closure → float return.
+    if ret_type == I64_TYPE and abi_param_types.len() == 2:
+        int only_pt = abi_param_types.get(1).unwrap()
+        if only_pt == F64_TYPE:
+            ret_type = F64_TYPE
+    # Multi-statement body with non-expr/non-return last stmt → void.
+    if body.len() > 1 and ret_type == I64_TYPE:
+        Stmt last = body.get(body.len() - 1).unwrap()
+        match last:
+            case SExpr(_):
+                pass
+            case SReturn(_):
+                pass
+            else:
+                ret_type = UNIT_TYPE
+    if ret_type == STRING_MARKER:
+        ret_type = lookup_or_register_named(&gmod, "GorgetString")
+
+    return ClosureSig(!abi_param_types, self_ptr, !body_param_types, !body_param_names, ret_type)
+
+# closure Phase 2 Step A: signature for an IMPLICIT `it` closure
+# (`EImplicitClosure` / `.map(it*2)`), lifting the `emit_it_closure` shape:
+# a single implicit `it` param typed I64, return inferred by guess_return_type.
+ClosureSig compute_implicit_closure_sig(int cid, SpannedExpr body, GirModule &gmod):
+    String closure_name = "__Closure_" + int_to_str(cid)
+    int closure_tid = lookup_or_register_named(&gmod, closure_name)
+    int self_ptr = register_ptr(&gmod, closure_tid)
+    Vector[int] abi_param_types = [self_ptr, I64_TYPE]
+    Vector[int] body_param_types = [I64_TYPE]
+    Vector[String] body_param_names = ["it"]
+    int ret_type = guess_return_type(body, &gmod)
+    if ret_type == STRING_MARKER:
+        ret_type = lookup_or_register_named(&gmod, "GorgetString")
+    return ClosureSig(!abi_param_types, self_ptr, !body_param_types, !body_param_names, ret_type)
+
+# closure Phase 2 Step A: record an implicit `it` closure whose BODY is
+# `ic_body` (a raw arg expression containing `it`, e.g. `it*2` in
+# `.map(it*2)`), emit its GorgetClosure value, and return the value local.
+# Shared by lower_expr's EImplicitClosure arm AND the call/method-call arg
+# loops (which detect a raw `it` via expr_has_it — the OLD scan handled both
+# the same way via emit_it_closure). The post-pass pushes its
+# __Closure_<cid>__call by draining the record.
+int record_implicit_it_closure(LowerCtx &ctx, SpannedExpr ic_body, GirModule &gmod):
+    int ic_cid = gmod_next_closure_id(&gmod)
+    String ic_closure_name = "__Closure_" + int_to_str(ic_cid)
+    int ic_gc_tid = lookup_or_register_named(&gmod, "GorgetClosure")
+    String ic_make_fn = "__make_closure_" + int_to_str(ic_cid)
+    int ic_cdst = add_local(&ctx, ic_gc_tid, None)
+    Vector[Operand] ic_make_args = []
+    gmod.fn_sigs.put(ic_make_fn, ic_gc_tid)
+    emit(&ctx, GICallExtern(ic_cdst, ic_make_fn, ic_make_args))
+    ClosureSig ic_sig = compute_implicit_closure_sig(ic_cid, ic_body, &gmod)
+    # Lowerable guard byte-identical to the old scan's implicit-it guard:
+    # non-capturing AND nests no closure.
+    bool ic_lowerable = not (implicit_closure_body_captures(ic_body, &gmod) or expr_has_nested_closure(ic_body))
+    Vector[Stmt] ic_body_stmts = [SExpr(ic_body)]
+    # implicit-it closures: capture support is DEFERRED (stay stubbed-if-
+    # capturing). Pass empty captures.
+    Vector[ClosureCapture] ic_no_caps = []
+    gmod.lifted_closures.push(LiftedClosure(ic_cid, ic_closure_name + "__call", ic_sig.self_ptr, ic_sig.abi_param_types, ic_sig.body_param_types, ic_sig.body_param_names, ic_sig.return_type, ic_body_stmts, true, ic_lowerable, !ic_no_caps))
+    return ic_cdst
+
+# ── Phase 1 closure-body lowering: fresh-ctx body lowering ──
+#
+# Lower a NON-CAPTURING closure body into a real `Vector[BasicBlock]` for
+# the synthesized `__Closure_N__call` function, then CONSTRUCT and PUSH
+# the `GirFunction`. Mirrors Rust gg's `emit_closure_call_function`
+# (`closures.rs:349`): a fresh LowerCtx, local 0 = return place, local 1 =
+# env `void*`/`*__Closure_N` ptr (present for the `__callable_N` ABI,
+# UNUSED in Phase 1 — no captures), locals 2..N+1 = the closure's declared
+# params by name, `expected_type` = the closure's return type, lower the
+# body, funnel the tail value into `_0`, then run the SHARED
+# `finalize_body_blocks` post-passes and emit `GirFunction(call_name,
+# abi_param_types, ret_type, cctx.locals, blocks)`.
+#
+# The GirFunction's locals MUST be `cctx.locals` (which includes _0, the
+# env ptr, the named params, AND every body temp the lowering allocated) —
+# building a separate hand-rolled locals vector would omit the body temps
+# and the blocks would reference undefined locals. So this helper owns the
+# construction (the locals only exist inside `cctx`).
+#
+# `abi_param_types` is the FULL param-type list (env ptr first, then the
+# closure params), matching the registered `__Closure_N__call` signature.
+# `param_types_in` / `param_names_in` are the closure's OWN params (NOT
+# including the env ptr — this fn registers the env ptr as local _1 itself).
+# `body_stmts` is the body as a Vector[Stmt] (an expr-body closure passes a
+# single `[SExpr(expr)]`). `self_ptr` is the registered `*__Closure_N` type.
+void lower_closure_body(String call_name, Vector[int] !abi_param_types, int self_ptr, Vector[int] param_types_in, Vector[String] param_names_in, int ret_type, Vector[Stmt] body_stmts, Vector[ClosureCapture] captures, GirModule &gmod):
+    Vector[Instruction] cinit = []
+    Vector[Vector[Instruction]] cblock_insts = [!cinit]
+    Vector[Terminator] cblock_terms = [GTNone()]
+    Vector[int] _clc = []
+    Vector[int] _clb = []
+    Dict[String, int] _cnamed = {}
+    Vector[DropScope] _cde_scopes = []
+    Vector[DropEmission] _cde_queue = []
+    Vector[Vector[Stmt]] _con_err = []
+    Dict[String, bool] _cow_mut_c = {}
+    Dict[String, int] _cow_span_c = {}
+    Dict[String, bool] _cow_clo_c = {}
+    LowerCtx cctx = LowerCtx([], !cblock_insts, !cblock_terms, 0, !_cnamed, !_clc, !_clb, "", "", "", false, call_name.clone(), DropElaborator(!_cde_scopes), !_cde_queue, ret_type, !_con_err, false, !_cow_mut_c, !_cow_span_c, !_cow_clo_c)
+
+    push_drop_scope(&cctx.drop_elab, DSK_FUNCTION)
+
+    # _0 = return place
+    add_local(&cctx, ret_type, None)
+    # _1 = env ptr (the `*__Closure_N` self/env pointer) — the env-field
+    # base for Step-B capture loads (GIFieldLoad(fdst, _1, idx)).
+    add_local_with(&cctx, self_ptr, None, LoParam(), BoParam(-1))
+    # _2.._N+1 = the closure's declared params, by name.
+    int pi = 0
+    while pi < param_types_in.len():
+        int pt = param_types_in.get(pi).unwrap()
+        String pname = param_names_in.get(pi).unwrap()
+        int plid = add_local_with(&cctx, pt, Some(pname.clone()), LoParam(), BoParam(-1))
+        nl_put(&cctx, pname, plid)
+        pi = pi + 1
+
+    # ── Step B (§4e): field-load each ByValue capture from the env BEFORE
+    # lowering the body, binding cap.name → the loaded value local so a bare
+    # EIdentifier(cap.name) in the body resolves to the load (NOT the [bug]
+    # EIdentifier fallback). Capture vector ORDER == env-field / GIFieldLoad
+    # index order (the single source of truth, set at the make-site). The
+    # env base is local _1. 2a captures are value-typed primitives →
+    # GIFieldLoad's byte-copy path. Mirrors Rust `emit_closure_call_function`.
+    int ci = 0
+    while ci < captures.len():
+        ClosureCapture cap = captures.get(ci).unwrap()
+        # §4e-2 (Phase 2b): RESOURCE captures (String/Vector/resource-struct)
+        # load as a Ptr-ALIAS into the env's storage, NOT a value byte-copy.
+        # Mirrors Rust `emit_closure_call_function` (closures.rs:395-411) and
+        # the EFieldAccess resource-field path (lower.gg:~6119-6125): the env
+        # OWNS the snapshot across calls; the body reads THROUGH a borrow, and
+        # op_consume auto-clones at any owning boundary (call args / returns /
+        # field-init). A VALUE field-load here would byte-copy the owned
+        # String/Vector struct out of the env — the loaded local would then
+        # alias the env's heap buffer and a double-free follows if either side
+        # frees it. The Ptr-alias + LoBorrowed + set_field_borrow shape is the
+        # same one EFieldAccess uses for owned-base struct fields. Primitive /
+        # COPY-struct captures keep the value byte-copy (sound, no heap).
+        String cap_tname = type_id_to_name(cap.type_id, &gmod)
+        int fdst = -1
+        if is_resource_type_name(cap_tname, &gmod):
+            # Deref a Ptr-typed CoW-alias capture to its OWNED pointee T —
+            # matching Site-3's env-field type — BEFORE register_ptr, so the
+            # body-load dst is `Ptr(T)`, NOT `Ptr(Ptr(T))`. SVarDecl Branch C
+            # retypes a CoW alias (`Vector[int] snap = nums`) to `Ptr(T)`;
+            # without this deref `register_ptr(Ptr(T))=Ptr(Ptr(T))`, and an
+            # OWNING body consume of the capture would hit decide_ptr_consume's
+            # OpCopy-of-pointer arm (alias / dormant double-free) instead of
+            # OpClone. Value-typed captures (fresh literal / `.clone()`) are
+            # unaffected (no GtPtr → cap_value_tid == cap.type_id). Keeps
+            # Site-3 (field=T) and Site-4 (body-load=Ptr(T)) consistent.
+            int cap_value_tid = cap.type_id
+            if cap_value_tid >= 0 and cap_value_tid < gmod.type_table.len():
+                match gmod.type_table.get(cap_value_tid).unwrap():
+                    case GtPtr(cap_pointee):
+                        cap_value_tid = cap_pointee
+                    case GtMutPtr(cap_pointee2):
+                        cap_value_tid = cap_pointee2
+                    else:
+                        pass
+            int cap_ptr_tid = register_ptr(&gmod, cap_value_tid)
+            fdst = add_local_with(&cctx, cap_ptr_tid, Some(cap.name.clone()), LoBorrowed(), BoNone())
+            set_field_borrow(&cctx, fdst, 1, ci)
+        else:
+            fdst = add_local(&cctx, cap.type_id, Some(cap.name.clone()))
+        emit(&cctx, GIFieldLoad(fdst, 1, ci))
+        nl_put(&cctx, cap.name, fdst)
+        ci = ci + 1
+
+    # CoW resource-bind forward-scan (substrate ii) over the closure body.
+    compute_cow_scan(&cctx, &gmod, body_stmts)
+
+    # Lower the body as an expression block; funnel its tail value into the
+    # return place `_0`, then terminate with `return _0` — mirrors how
+    # `lower_function` finalizes a normal function's return value.
+    int tail = lower_block_expr(&cctx, body_stmts, &gmod)
+    if not block_terminated(&cctx):
+        # Mirror SReturn's Some(val) arm (lower.gg:7895-7912): emit the
+        # function-scope GIDropIfAlive for every body temp BEFORE setting the
+        # GTReturn terminator. The closure body ALWAYS sets a terminator here,
+        # so `finalize_body_blocks`→`pop_drop_scope` sees a terminated block
+        # and skips its fall-through drop emission — without this explicit
+        # early-exit emission, every owned body temp (an f-string
+        # `gorget_string_format` result, a CoW clone, …) LEAKS, since a regular
+        # void function falls through and gets drops from `pop_drop_scope`
+        # while the closure body never does. When the tail value is MOVED into
+        # `_0` (`(): f"..."` — the f-string IS the return value), `op_consume`
+        # yields OpMove(src); we move-zero `src` and EXCLUDE it from the
+        # early-exit drops (Some(excl)) so the moved-out value is dropped once
+        # by the receiver, not double-freed here — identical to SReturn's a-6
+        # move-out handling.
+        Operand cret_op = op_consume(&cctx, &gmod, tail, CkReturn())
+        int cexcl = 0
+        match cret_op:
+            case OpMove(csrc):
+                cexcl = csrc
+            else:
+                pass
+        emit(&cctx, GIAssign(0, cret_op))
+        if cexcl != 0:
+            emit(&cctx, GIMoveZero(cexcl))
+        emit_drops_for_early_exit(&cctx, DSK_FUNCTION, Some(cexcl))
+        set_terminator(&cctx, GTReturn(op_consume(&cctx, &gmod, 0, CkReturn())))
+
+    Vector[BasicBlock] cblocks = finalize_body_blocks(&cctx, &gmod, call_name)
+    gmod.functions.push(GirFunction(call_name, !abi_param_types, ret_type, cctx.locals, !cblocks))
+
