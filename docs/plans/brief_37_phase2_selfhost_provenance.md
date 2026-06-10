@@ -1,6 +1,21 @@
 # BRIEF — #37 Phase 2: lazy CoW in the SELF-HOST, provenance-direct (the documented `ViewOf` design)
 
-Status: v2 (pass-1 review folded 2026-06-10: ⚠ TWO run-proven BLOCKING holes —
+Status: v3 (pass-2 review folded 2026-06-10: ⚠ the EMove class executes at
+MULTIPLE lowering positions (no choke point — move-REASSIGN `w = !v` to an
+existing local is a run-proven UAF even WITH the v2 move-bind hook) → the
+PRIMARY fix is now the **`cow_moved_names` EXCLUSION** (one scan side-channel
++ one eligibility term, sound for the entire EMove class at every position
+incl. `return !v`/literal-element/scrutinee exotics); the run-proven
+per-position hooks (bind + reassign, pass-2-prototyped) are recorded as the
+future laziness upgrade [p2-R1+R2]; class-rule producer list corrected to the
+ACTUAL six scan arms, SWith/spawn/comprehension = no-distinct-route rows
+[p2-R3]; table drafted in W2, lands in devbook/11 in W3 [p2-R4]; snapshot
+wording covers route fixtures that never flip [p2-R5]; the Rust HIGH entry
+names BOTH move shapes [p2-R6]; inline-closure-spawn-arg pre-existing gap →
+TODO [p2-note]. Pass 2 also CLOSED the self-compile gap: stage2-lazy 386s,
+exactly 7 live lazy binds, 3/3 stage2-compiled fixtures oracle-exact; RSS
+script runs (JSON peak_rss_kb + clone_stats + --compare). v2 was pass-1
+folded 2026-06-10: ⚠ TWO run-proven BLOCKING holes —
 (1) the `w = !v` MOVE-BIND mutation route escapes the family (lazy UAF,
 ASan-silent; AND Rust Phase 1 is VALUE-WRONG on the same shape vs eager —
 filed as a Rust TODO) → W2 gains the move-bind hook + the SCAN-ARM↔HOOK 1:1
@@ -150,21 +165,34 @@ emission; ONE shared `cow_lazy_materialize_family` guard emitter
 (`lower.gg:1313`); mutation hooks = method-receiver (in `lower_method_call`'s mutating-receiver
 arm), SAssign target root (in `lower_assign`), free-call `&`/`!` args (in
 `lower_call`'s arg loop, redirect-resolved per W1) + ADD SCompoundAssign,
-method non-receiver `&`/`!` args, AND ⚠ p1-R1 (run-proven lazy UAF,
-ASan-silent): the **SVarDecl move-bind site** (`Vector[String] w = !v` — the
-scan's EMove arm marks `v` non-pristine so `LazyViewBind` fires, but
-post-move mutations key the NEW name `w` and the family never materializes;
-probe gate-ON printed garbage). Hook = materialize the family BEFORE the move
-executes (preferred — keeps laziness up to the move), or, if awkward,
-EXCLUDE binds whose source collection is later EMove'd from lazy eligibility
-(the forward scan already knows; sound, loses laziness only on move shapes).
-**THE CLASS RULE (p1-R1, the load-bearing generalization):** enumerate EVERY
-`cow_mark_*`-producing scan arm in `lower_cow.gg` (method-receiver,
-EMutableBorrow, EMove incl. move-BIND, ECall sig-args, SAssign /
-SCompoundAssign targets, SWith/spawn/comprehension arms) and require a 1:1
-LOWERING hook or eligibility exclusion for each, recorded as a table in
-devbook/11's Phase-2 section (the mutation-route analogue of Appendix A) with
-ONE FIXTURE PER SHAPE — the executor cites the complete table in the PR;
+method non-receiver `&`/`!` args, AND ⚠ the **EMove class** (p1-R1 + p2-R1,
+both run-proven lazy UAFs, ASan-silent): `EMove` survives the parser at EVERY
+expression position except call args (decl-init `w = !v` move-BIND;
+assign-RHS move-REASSIGN to an existing local — which defeats the
+SAssign-target-root hook since the family is keyed by the SOURCE name;
+`return !v`; literal elements; match scrutinee) and has NO lowering choke
+point (`lower_expr`'s EMove arm is a passthrough). **PRIMARY fix [p2-R2]:
+the `cow_moved_names` EXCLUSION** — a new scan side-channel set written by
+the scan's EMove arm (the existing `cow_mark_name` records only
+name+position, NOT kind — "the scan already knows" was refuted), checked at
+`decide_svardecl_emission`: a bind whose source collection ∈
+`cow_moved_names` is NOT lazy-eligible (falls back eager). ONE predicate
+term, sound for the entire EMove position class including the exotics;
+laziness lost only on move shapes (rare). The pass-2-PROTOTYPED per-position
+hooks (materialize-family-before-move at the SVarDecl-EMove and
+SAssign-EMove-RHS sites — both run-proven printing the eager value) are the
+future laziness UPGRADE → TODO entry, not Phase-2 scope.
+**THE CLASS RULE (p1-R1/p2-R1, the load-bearing generalization):** the
+`cow_mark_*`-producing scan arms are EXACTLY SIX (pass-2 ground truth):
+EMethodCall-mutating-receiver, EMutableBorrow, EMove, the W1 ECall sig-args
+arm, SAssign target, SCompoundAssign target. The devbook table enumerates
+**(scan arm × lowering position)** — per-arm alone is insufficient for arms
+without a lowering choke point (EMove proved it) — and requires a 1:1
+lowering hook OR eligibility exclusion per row, with ONE FIXTURE PER ROW;
+SWith/spawn/comprehension are recorded as no-distinct-route rows (they only
+recurse; their lowerings route through hooked paths — pass-2-verified), and
+excluded/unreachable rows (`return !v` = no post-read possible) carry their
+justification. The executor cites the complete table in the PR;
 derivation JOINS = for-string source (`lower_loops.gg:326-334`, one site —
 REQUIRED) and `returns_view` results at the single choke point
 (`lower_expr.gg:1578-1583`, receiver-is-member → result joins the family
@@ -187,22 +215,31 @@ for every fixture that flips to MATCH (move_consume, w3b pair, the new
 probes). REVERT any transient GG_CLONE_TRACE instrumentation. Docs: devbook/11
 gains the Phase-2 section (provenance-by-slot-aliasing; the family model; the
 single returns_view choke point; the pristine-gate trade; the self-host vs
-Rust mechanism comparison + the beats-Rust deltas); language-design.md cross
--reference (the ViewOf spec is now implemented in the self-host). TODO/DONE
+Rust mechanism comparison + the beats-Rust deltas; **the (scan-arm ×
+lowering-position) mutation-route table** — drafted as code comments + the
+W2 commit message during W2, LANDED here [p2-R4]); language-design.md cross
+-reference (the ViewOf spec is now implemented in the self-host). Snapshots:
+every NEW class-table route fixture AND every pre-existing fixture that
+flips to MATCH (route fixtures that pass identically in both modes are still
+wired + snapshotted as gate-ON regression guards [p2-R5]). TODO/DONE
 per Task Continuity (pending-phrased only; the Rust 1b back-port entry with
 the scout's §9 sketch — slot-address alias at Branch C + family-keyed
 cow_lazy_mat_flag + hooks become joins; F2/F3 entries; parser typed
 arg-ownership field entry; W4-clearing-port low-pri entry;
-⚠ **HIGH-pri RUST entry [p1-R1 corollary]: Rust Phase 1 is VALUE-WRONG vs
-eager semantics on the move-bind shape** — `Vector[String] w = !v` then
-`w.set(0,…)` then read the lazy-bound `s`: eager prints the pre-mutation
-value, Rust-lazy prints the post-mutation value (read-through; memory-safe
-but a Phase-1 behavior regression that slipped through all 21 fixtures —
-the W5 list had `consume(!v)` but not the move-BIND); fix in the Rust 1b
-chain or as a fast-follow, same fixture shape; ALSO the pre-existing
-bare-alias gap (`w = v` collection alias then mutate — WRONG vs Rust
-identically in both modes, a pristine-flip name-keying gap, NOT
-lazy-introduced [p1-note])).
+⚠ **HIGH-pri RUST entry [p1-R1/p2-R6]: Rust Phase 1 is VALUE-WRONG vs eager
+semantics on BOTH move shapes** — move-BIND (`Vector[String] w = !v`) AND
+move-REASSIGN (`w = !v` to an existing local), each followed by `w.set(0,…)`
+then a read of the lazy-bound `s`: eager prints the pre-mutation value,
+Rust-lazy prints the post-mutation value (read-through; memory-safe but a
+Phase-1 behavior regression that slipped through all 21 fixtures — the W5
+list had `consume(!v)` but neither move shape; re-confirmed fresh at the
+current tip by pass 2); fix in the Rust 1b chain or as a fast-follow, same
+fixture shapes; ALSO the pre-existing bare-alias gap (`w = v` collection
+alias then mutate — WRONG vs Rust identically in both modes, a pristine-flip
+name-keying gap, NOT lazy-introduced [p1-note]); ALSO the pre-existing
+inline-closure-spawn-arg gap (`spawn ((…):…)(&v)` is scan-invisible AND
+hook-less but mode-INDEPENDENT — breaks the pristine flip in eager
+identically [p2-note])).
 
 ## Gates (executor runs 0-6; parent re-runs the battery + full suite on the
 integrated tree)
