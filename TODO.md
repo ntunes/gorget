@@ -1,17 +1,21 @@
 # TODO
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE THIS BLOCK IN PLACE each session; completed work → DONE.md, do NOT accumulate "superseded" blocks)
-**gorget-1 code tip `1e55511b` (2026-06-10 session: ① #37 PHASE 1 — lazy loop-carried CoW materialization is the Rust-gg
-PRODUCTION DEFAULT [`ecd46cfc`+`09030b7f`+`1e55511b`: one shared `materialize_lazy_source_if_needed` helper at FOUR
-GIR-level hooks W3a bind / W3b returns_view receiver / W3c index place-arm / W3d for-string source; typed `borrow_view_fn`
-axis on `TypeMetadata`; H2 FieldPath excluded; 21 `cow_lazy_*`/witness fixtures + emitted-C clone-shape lock-in;
-devbook/11 §lazy-materialize incl. the 23-row view-producer enumeration]; ② lower.gg 9-MODULE SPLIT re-landed
-[`eb5b10a9` None-arg expected-type peel fix + 3 `none_literal_*` fixtures, `ef28a497` split, `a2f7a7f4` NO_NAME retired]
-— see DONE.md for both chains' details; docs on top, `git log -1` for the live tip; owner ff's main→gorget-1).
+**gorget-1 code tip `8022bccc` (2026-06-10 session, four chains: ① #37 PHASE 1 — lazy loop-carried CoW is the Rust-gg
+PRODUCTION DEFAULT [`1e55511b` tip: shared `materialize_lazy_source_if_needed` at FOUR GIR hooks W3a-W3d; typed
+`borrow_view_fn` axis; 21 fixtures + emitted-C lock-in; devbook/11 + 23-row enumeration]; ② lower.gg 9-MODULE SPLIT
+re-landed [None-arg peel fix `eb5b10a9` + split `ef28a497`]; ③ the view-producer enumeration is now an EXECUTABLE
+GUARD [`e22183fb`: 3 lints in tests/lints.rs, FATAL day one — suite count is now 10]; ④ #37 PHASE 2 self-host
+provenance port landed GATED [`620169ff`/`ff1c2abb` F1 soundness UNGATED + `43250db5` mechanism behind GG_COW_LAZY=1 +
+`8022bccc` lock-in; DEFAULT FLIP BLOCKED — see NEXT] — see DONE.md for all four; docs on top, `git log -1` for the
+live tip; owner ff's main→gorget-1. ⏸ PARKED ON OWNER HOLD: Chain C (Rust miscompile batch,
+`docs/plans/brief_rust_miscompile_batch.md` v3.1, one confirming pass from executor-ready) and Chain D (print-temp
+leak class, `docs/plans/brief_print_temp_leak_fix.md` v3.1 + run-proven diff, same state; D executes BEFORE C —
+insts.rs region overlap).**
 RE-MEASURE PARITY (never trust a dated number) via: `GG_RUNTIME_DIFF=1 GG_BUILD_TIMEOUT_SECS=600 cargo test --test
 integration --release self_host_runtime_diff -- --nocapture` → read the `PARITY = MATCH/(...)` line. Last RUN-CONFIRMED
-(2026-06-10, post-split tree): **475/960** — RE-MEASURE for the live number; the denominator grows with the corpus
-(runtime_diff takes ~130s on this host, NOT 13 min). Gate battery for any lower.gg/CoW work = `cargo test --lib` +
+(2026-06-10, post-Phase-2 tree): **498/987 ≈ 50.5%** — RE-MEASURE for the live number; the denominator grows with the
+corpus (runtime_diff takes ~130s on this host, NOT 13 min). `self_host_runtime` snapshot net = 498. Gate battery for any lower.gg/CoW work = `cargo test --lib` +
 `--test lints` + `fixed_point` (GG_BUILD_TIMEOUT_SECS=600) + full integration + for CoW changes an ASan sweep with an
 eager/pre-change Step-0 baseline (⚠ THRICE-PROVEN this session: ASan is BLIND to the wrong-output AND view-UAF classes —
 stdout fixtures are the primary net; see devbook/11 caveat).**
