@@ -4,6 +4,7 @@
 
 from std.collections import Vector, Dict
 from std.conv import int_to_str, float_to_str
+from std.os import getenv
 from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch, EquipBlock, StructDef, EnumDef, EnumVariant, Type, MatchArm
 from scope import ScopeTable, DefInfo
 from types import TypeTable, ResolvedType
@@ -196,6 +197,36 @@ struct CaptureCollector:
     Dict[String, bool] seen
     bool unliftable
 
+# ── #37 Phase 2 (lazy CoW, provenance-direct) ───────────────────────
+#
+# One lazy CoW family member: a String VALUE slot holding a cap=0
+# `gorget_string_borrow_view` of a collection element, plus its
+# materialized-flag bool slot. `root` is the source-collection root
+# identifier name the family is keyed by (the flat named_locals name
+# the mutation hooks re-find). `clone_fn` is the typed clone fn for the
+# flag-guarded in-place materialize — the resource registry's DEEP-COPY
+# `clone_to_owned` (resolve_payload_clone_fn), never `copy_cow` (which
+# passes cap=0 views through unchanged) and never the registry's
+# `materialize_fn` (whose PRESENCE is the eligibility discriminator
+# only). `slot_type` is the owned value type. `stmt_scoped` marks a
+# derivation-join TEMP (a view-returning method result that joined the
+# family): it retires at the end of the enclosing statement
+# (cow_lazy_retire_stmt_temps) so later mutation sites don't emit
+# guards for a dead slot; named binds persist for the whole function.
+struct LazyMember:
+    String root
+    int slot
+    int flag
+    int slot_type
+    String clone_fn
+    bool stmt_scoped
+
+# #37 Phase 2 gate: the lazy mechanism is env-gated while the port
+# stabilizes; GG_COW_LAZY=1 turns it on. The default flip (W3) removes
+# this gate.
+bool cow_lazy_enabled():
+    return getenv("GG_COW_LAZY") == "1"
+
 struct LowerCtx:
     Vector[GirLocal] locals
     Vector[Vector[Instruction]] block_insts
@@ -334,6 +365,26 @@ struct LowerCtx:
     # (the flip gate sees fewer mutations) — the same pre-existing
     # scan-time blindness the parser typed-arg-ownership TODO retires.
     Dict[String, String] cow_decl_types
+    # #37 Phase 2: the lazy CoW family — every live (slot, flag) pair
+    # keyed by source-collection root name. Written by the SVarDecl
+    # LazyViewBind arm and the returns_view derivation join; read by
+    # the mutation-site hooks via cow_lazy_materialize_family. The
+    # mutation-route class table lives at cow_lazy_emit_guard.
+    Vector[LazyMember] cow_lazy_members
+    # #37 Phase 2: source names consumed by an EMove (`!name`) at a
+    # NON-call expression position (decl-init / assign-RHS / return /
+    # literal element / match scrutinee — call args strip the sigil in
+    # the parser). The EMove class executes at MULTIPLE lowering
+    # positions with NO choke point (lower_expr's EMove arm is a
+    # passthrough), so it is covered by ELIGIBILITY EXCLUSION rather
+    # than a hook: a bind whose source collection is in this set is
+    # never lazy-eligible (falls back to the eager clone). Whole-fn,
+    # per-source-NAME granularity: one `!v` anywhere — even on a
+    # never-taken branch — makes every bind from `v` in the fn eager.
+    # Acceptable: the borrow checker independently rejects
+    # conditional-move-then-use, so the practical loss window is
+    # narrow (trade documented in devbook/11 §Phase 2).
+    Dict[String, bool] cow_moved_names
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -1058,6 +1109,10 @@ enum SVarDeclEmission:
     BorrowAlias()                  # mark dst LoBorrowed/BoAlias, no drop register
     CloneAndMove(String)           # emit `<clone_fn>(&src)` then Move into dst
     MoveDirect()                   # existing path — direct Move via op_consume
+    # #37 Phase 2 — lazy loop-carried element borrow: value slot = cap=0
+    # borrow_view + pre-set materialized flag; the carried String is the
+    # typed deep-copy clone fn for the flag-guarded in-place materialize.
+    LazyViewBind(String)
 
 # Decide which of the three emission strategies SVarDecl should use
 # for `var_type x = val`. Returns an `SVarDeclEmission` variant; the
@@ -1257,6 +1312,45 @@ SVarDeclEmission decide_svardecl_emission(LowerCtx &ctx, GirModule &gmod, int va
                     # keeps tier-1's eager deref+clone.
                     if source_root != "" and cow_pristine_after(&ctx, bound_name, bind_pos) and cow_pristine_after(&ctx, source_root, bind_pos):
                         return BorrowAlias()
+                    # #37 Phase 2 — LAZY loop-carried bind (the ViewOf
+                    # provenance design, docs/language-design.md "compile-
+                    # time ViewOf(source) provenance tracking"). The source
+                    # collection IS mutated at/after the bind (the pristine
+                    # flip above declined), so the legacy default was the
+                    # eager deref+clone — paying the clone even when the
+                    # mutating branch never runs. Instead the bind becomes
+                    # a cap=0 borrow_view slot + materialized-flag,
+                    # materialized in place at every mutation site of the
+                    # source (cow_lazy_materialize_family). Eligibility:
+                    #   • the BOUND NAME is pristine — never written, so no
+                    #     write-site tag clearing is needed (the pristine-
+                    #     gate trade, devbook/11 §Phase 2);
+                    #   • the source's mutations are not CLOSURE-deferred
+                    #     (a closure body cannot host the enclosing fn's
+                    #     materialize guard);
+                    #   • the source is never EMove-consumed at a non-call
+                    #     position (cow_moved_names): the EMove class has
+                    #     no lowering choke point, so it is EXCLUDED from
+                    #     laziness rather than hooked;
+                    #   • the element type carries the typed view
+                    #     discriminator — ResourceMetadata.materialize_fn
+                    #     present (Some for exactly GorgetString, the only
+                    #     resource whose free is view-aware; a cap=0
+                    #     collection view would double-drop its elements).
+                    #     The materialize itself still calls the typed
+                    #     deep-copy clone fn (pointee_clone_fn →
+                    #     clone_to_owned); presence is the eligibility
+                    #     axis only.
+                    if cow_lazy_enabled() and source_root != "" and cow_pristine_after(&ctx, bound_name, bind_pos) and (not ctx.cow_closure_mutated.contains(source_root)) and (not ctx.cow_moved_names.contains(source_root)):
+                        match resource_meta_for(&gmod, pointee_tname):
+                            case Some(lv_meta):
+                                match lv_meta.materialize_fn:
+                                    case Some(_):
+                                        return LazyViewBind(pointee_clone_fn)
+                                    case None:
+                                        pass
+                            case None:
+                                pass
                     return CloneAndMove(pointee_clone_fn)
             case GtMutPtr(inner_tid):
                 # `&`/`!`-param-derived MutPtr sources are NOT flipped: a bare
@@ -1312,6 +1406,153 @@ SVarDeclEmission decide_svardecl_emission(LowerCtx &ctx, GirModule &gmod, int va
     # identity-by-bytes for primitives; for resources, op_consume
     # returns OpMove and the wire pass refines based on liveness.
     return MoveDirect()
+
+# ── #37 Phase 2: the lazy-CoW mutation-site materialize ─────────────
+#
+# THE MUTATION-ROUTE CLASS TABLE (scan arm × lowering position). Every
+# `cow_mark_*`-producing scan arm needs a 1:1 lowering hook OR an
+# eligibility exclusion per lowering position it can execute at — a
+# per-arm view alone is insufficient because one arm (EMove) lowers at
+# many positions with no choke point. One fixture per row; the prose
+# version lives in devbook/11 §Phase 2.
+#
+#  scan arm                      lowering position(s)       coverage / fixture
+#  1 EMethodCall mut-receiver    EMethodCall arm            hook 1 (lower_expr)
+#                                                           witness_* / cow_lazy_multisite
+#  2 ECall sig-args (&/!)        lower_call arg loop        hook 2 (lower_expr)
+#                                                           mutarg_probe / cow_lazy_move_consume
+#  3 EMethodCall sig-args (&/!)  EMethodCall marg loop      hook 3 (lower_expr)
+#                                                           cow_lazy_method_arg
+#  4 SAssign target root         lower_stmt SAssign         hook 4 (lower_stmt)
+#                                                           cow_lazy_reassign_source
+#  5 SCompoundAssign target      lower_stmt SCompound       hook 5 (lower_stmt; collection-root
+#                                                           compound (`v[i] += x`) is lower_fail
+#                                                           today, so the hook is class-rule
+#                                                           completeness; `s += x` on the MEMBER
+#                                                           is excluded by the bound-name-
+#                                                           pristine gate) cow_lazy_compound
+#  6 EMove (non-call `!name`)    decl-init / assign-RHS /   ELIGIBILITY EXCLUSION
+#                                return / literal element / (cow_moved_names; no choke point)
+#                                match scrutinee            cow_lazy_move_bind /
+#                                                           cow_lazy_move_reassign
+#  – EMutableBorrow (`&name`)    call args strip the sigil  rows 2/3 carry the sig-driven
+#                                (parser); survivors lower  routes; `&s` on the MEMBER itself
+#                                as passthroughs            is excluded by the bound-name-
+#                                                           pristine gate
+#                                                           cow_lazy_mut_borrow_write
+#  – SWith / spawn / compreh.    no distinct route — they only recurse; their
+#                                lowerings route through the hooked paths above.
+#                                (Known PRE-EXISTING mode-independent gaps, both
+#                                in TODO: inline-closure-spawn-arg; bare
+#                                collection alias `w = v` then mutate.)
+#
+#  derivation JOINS (reads that re-derive a view from a member):
+#  a returns_view results        lower_expr LoView choke    JOIN with own flag
+#                                point (the ONE String-view  cow_lazy_w3b_*
+#                                tag site)
+#  b for-string source           lower_for_string entry     materialize-at-entry
+#                                                           cow_lazy_w3d_for_string
+#  c same-type alias `x = s`     Branch A slot alias        NO CODE — the alias derefs the
+#                                                           SLOT at read time (provenance by
+#                                                           slot-aliasing)
+#                                                           cow_lazy_d1_alias*
+#  d index/slice `s[i]`/`s[a..b]` DEFERRED behind F2 (string index/slice
+#                                miscompiles before CoW matters; cow_lazy_w3c_*
+#                                stay expected-wrong until F2)
+#
+# Flag-guarded in-place materialize of ONE lazy family member, emitted
+# BEFORE the mutation executes: `if not flag: slot = <clone_fn>(&slot);
+# flag = true` — clone at most once, from the still-valid cap=0 view,
+# written back into the SAME slot (no fresh local, no name rebind — the
+# flat named_locals binding stays pointed at the slot, and LIR-SSA phis
+# slot+flag across loop back-edges because both are defined before the
+# loop header; `lir_ssa.gg` needs ZERO changes). Multiple static sites
+# each emit their own guard; dominance makes all but the first
+# dynamically dead — clone-once at runtime. Mirrors Rust's
+# `cow_materialize_view_lazy_in_place` (devbook/11 §lazy-materialize).
+void cow_lazy_emit_guard(LowerCtx &ctx, LazyMember lzm):
+    int lz_mat_bb = new_block(&ctx)
+    int lz_join_bb = new_block(&ctx)
+    # flag true → already materialized → skip to join.
+    set_terminator(&ctx, GTBranch(OpCopy(lzm.flag), lz_join_bb, lz_mat_bb))
+    switch_to(&ctx, lz_mat_bb)
+    int lz_tmp = add_local(&ctx, lzm.slot_type, None)
+    Vector[Operand] lz_args = [OpBorrow(lzm.slot)]
+    emit(&ctx, GICallExtern(lz_tmp, lzm.clone_fn, lz_args))
+    emit(&ctx, GIAssign(lzm.slot, OpMove(lz_tmp)))
+    emit(&ctx, GIAssign(lzm.flag, OpConstBool(true)))
+    set_terminator(&ctx, GTJump(lz_join_bb))
+    switch_to(&ctx, lz_join_bb)
+
+# Materialize every live lazy member keyed by `root` (the mutated
+# collection's root identifier name) — the family-wide form every
+# mutation hook calls. "" (unidentifiable root) is a no-op: families
+# are only ever keyed by plain identifiers (cow_source_root_name).
+void cow_lazy_materialize_family(LowerCtx &ctx, String root):
+    if root == "":
+        return
+    int lzf_i = 0
+    while lzf_i < ctx.cow_lazy_members.len():
+        LazyMember lzf_m = ctx.cow_lazy_members.get(lzf_i).unwrap()
+        if lzf_m.root == root:
+            cow_lazy_emit_guard(&ctx, lzf_m)
+        lzf_i = lzf_i + 1
+
+# Materialize the ONE member whose value slot is `slot` (the for-string
+# derivation join: the loop's per-iteration codepoint views alias the
+# source slot's buffer, so a lazy source materializes AT LOOP ENTRY).
+void cow_lazy_materialize_slot(LowerCtx &ctx, int slot):
+    int lzs_i = 0
+    while lzs_i < ctx.cow_lazy_members.len():
+        LazyMember lzs_m = ctx.cow_lazy_members.get(lzs_i).unwrap()
+        if lzs_m.slot == slot:
+            cow_lazy_emit_guard(&ctx, lzs_m)
+        lzs_i = lzs_i + 1
+
+# Derivation join (a) — the returns_view choke point's bookkeeping. A
+# view RESULT whose receiver slot is a lazy family member aliases the
+# same not-yet-materialized element buffer the member does, so it JOINS
+# the family with its OWN flag (seeded false here, at the result's
+# birth): a later mutation of the family root materializes the member
+# AND every view derived from it in place. The joined temp is
+# STATEMENT-scoped (stmt_scoped=true) — it retires after the enclosing
+# statement (cow_lazy_retire_stmt_temps below). Chained view methods
+# join transitively (the first temp becomes a member, so the next
+# receiver check finds it). Returns true iff the receiver was a member,
+# so the call site can apply the typed drop override
+# (register_lazy_slot_for_drop) to the joined slot.
+#
+# ⚠ Lives HERE as a standalone helper, not inline at the lower_expr.gg
+# tag site: the while+`.get(i).unwrap()` struct-borrow-bind shape is
+# MISCOMPILED by the self-host when emitted inside the deeply nested
+# EMethodCall arm of lower_expr_inner (block-param threading of the
+# containing function breaks; bootstrap stage-1 then corrupts and
+# crashes) — the identical shape in a small top-level function compiles
+# and runs correctly self-host-compiled. See TODO "self-host miscompile:
+# loop+struct-borrow-bind in deeply nested arms".
+bool cow_lazy_join_view_result(LowerCtx &ctx, int recv_slot, int result_slot, int result_type):
+    int lzj_i = 0
+    int lzj_n = ctx.cow_lazy_members.len()
+    while lzj_i < lzj_n:
+        LazyMember lzj_m = ctx.cow_lazy_members.get(lzj_i).unwrap()
+        if lzj_m.slot == recv_slot:
+            int lzj_flag = add_local(&ctx, BOOL_TYPE, None)
+            emit(&ctx, GIAssign(lzj_flag, OpConstBool(false)))
+            ctx.cow_lazy_members.push(LazyMember(lzj_m.root.clone(), result_slot, lzj_flag, result_type, lzj_m.clone_fn.clone(), true))
+            return true
+        lzj_i = lzj_i + 1
+    return false
+
+# Retire statement-scoped family TEMPS (derivation-join view temps die
+# with their statement; a later guard for a dead slot is dead weight).
+# Called from lower_stmts after each statement.
+void cow_lazy_retire_stmt_temps(LowerCtx &ctx):
+    int lzr_i = 0
+    while lzr_i < ctx.cow_lazy_members.len():
+        if ctx.cow_lazy_members.get(lzr_i).unwrap().stmt_scoped:
+            ctx.cow_lazy_members.remove(lzr_i)
+        else:
+            lzr_i = lzr_i + 1
 
 # ── Operand-mode dispatch (Phase C step 5c + Path A Phase 2b) ───
 #
@@ -2832,7 +3073,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         Dict[String, bool] _cow_mut3 = {}
                         Dict[String, int] _cow_span3 = {}
                         Dict[String, bool] _cow_clo3 = {}
-                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone(), DropElaborator(!_de_scopes3), !_de_queue3, -1, !_on_err_blocks3, false, !_cow_mut3, !_cow_span3, !_cow_clo3, {})
+                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone(), DropElaborator(!_de_scopes3), !_de_queue3, -1, !_on_err_blocks3, false, !_cow_mut3, !_cow_span3, !_cow_clo3, {}, [], {})
                         Vector[Instruction] tinit = []
                         tctx.block_insts.push(!tinit)
                         tctx.block_terms.push(GTNone())

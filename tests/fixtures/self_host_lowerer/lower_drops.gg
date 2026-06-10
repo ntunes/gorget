@@ -211,6 +211,23 @@ bool is_droppable_type(int type_id, GirModule &gmod):
             return true
     return false
 
+# #37 Phase 2 — drop registration for a LAZY-MATERIALIZE slot
+# (LazyViewBind binds + returns_view derivation-join temps). The slot
+# is tagged LoView so op_consume's escape funnel deep-copies it at any
+# owning consume, but unlike a true borrow it OWNS its buffer once a
+# mutation-site guard materializes it in place — register_local_for_drop
+# (below) correctly skips LoView aliases, so lazy slots register through
+# this typed sibling instead. An UNCONDITIONAL DropEntry is safe in
+# BOTH states: pre-materialize the slot is a cap=0 view whose cap-driven
+# free no-ops; post-materialize it is the sole owner of a fresh buffer.
+void register_lazy_slot_for_drop(LowerCtx &ctx, int local_id, int type_id):
+    if ctx.drop_elab.scopes.len() == 0:
+        return
+    int lzd_top = ctx.drop_elab.scopes.len() - 1
+    DropScope lzd_scope = ctx.drop_elab.scopes.get(lzd_top).unwrap()
+    lzd_scope.entries.push(DropEntry(local_id, type_id, false))
+    ctx.drop_elab.scopes.set(lzd_top, lzd_scope)
+
 # Register a local in the innermost drop scope. Skips non-droppable
 # types so callers can call this blindly after add_local. Skips when
 # no scope is open (defensive — should never happen during normal

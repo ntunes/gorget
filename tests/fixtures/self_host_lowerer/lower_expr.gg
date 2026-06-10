@@ -32,7 +32,8 @@ from lower import expr_kind, pat_kind, stmt_kind
 from lower import collection_kind_of, collection_kind_eq, int_vec_contains, method_mutates_receiver
 from lower import inherit_borrow_from, set_field_borrow, cow_register_alias, decide_svardecl_emission
 from lower import classify_call_arg, is_consume_kind, op_consume, decide_operand_at_consuming_arg, decide_ptr_consume
-from lower_drops import init_drop_elab, push_drop_scope, emit_scope_drops, pop_drop_scope, pop_drop_scope_no_emit, is_droppable_type, register_local_for_drop, register_owning_param, mark_local_moved, restore_moved, union_moved, emit_drops_for_early_exit, flush_drop_queue
+from lower import LazyMember, cow_lazy_materialize_family, call_arg_lets_callee_mutate, cow_lazy_join_view_result
+from lower_drops import init_drop_elab, push_drop_scope, emit_scope_drops, pop_drop_scope, pop_drop_scope_no_emit, is_droppable_type, register_local_for_drop, register_lazy_slot_for_drop, register_owning_param, mark_local_moved, restore_moved, union_moved, emit_drops_for_early_exit, flush_drop_queue
 from lower_liveness import LivenessAnalysis, compute_liveness, wire_liveness_into_modes, liveness_instrumentation_diff, update_last_pos_for_inst, update_last_pos_for_term, note_operand_pos, empty_liveness
 from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, is_comparison, map_cmpop
 
@@ -833,6 +834,16 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     pass
             return add_local(&ctx, UNIT_TYPE, None)
         case EMethodCall(recv_box, mname, margs, mtargs_proto):
+            # #37 Phase 2 hook 1 (mutating method receiver): `v.push(..)` /
+            # `v.set(..)` / a `&self`/`!self` user method on a lazy-family
+            # source collection is a mutation site — emit the flag-guarded
+            # in-place materialize for every family member BEFORE the
+            # receiver/args lower (the guards' blocks precede the call's
+            # block; the call lands in the join block). Typed dispatch via
+            # method_mutates_receiver — the same accessor the cow scan uses.
+            if ctx.cow_lazy_members.len() > 0:
+                if method_mutates_receiver(*recv_box, mname, &gmod):
+                    cow_lazy_materialize_family(&ctx, cow_source_root_name(*recv_box))
             # Static method call: receiver is a TYPE name (e.g. Point.default()
             # or int.parse(s)). Route to TypeName__method with no self argument.
             #
@@ -1461,6 +1472,17 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     ctx.expected_type = -1
                     ma_val = lower_expr(&ctx, ma, &gmod)
                     ctx.expected_type = prev_expected_ma
+                # #37 Phase 2 hook 3 (method non-receiver `&`/`!` args):
+                # `h.poke_vec(&v)` lets the callee mutate `v` through a
+                # method arg whose sigil the parser stripped — the hook is
+                # signature-driven off the same resolved `full_name` the
+                # arg classification below uses. The collection-mutator
+                # owning-promotion is NOT a mutation of the ARG (push/put
+                # CLONE from a live source), so only the declared `&`/`!`
+                # flags fire the materialize. Guards emit BEFORE the call.
+                if ctx.cow_lazy_members.len() > 0:
+                    if call_arg_lets_callee_mutate(&gmod, full_name, _ma_idx + 1):
+                        cow_lazy_materialize_family(&ctx, cow_source_root_name(ma))
                 ConsumeKind ma_kind = classify_call_arg(&gmod, full_name, _ma_idx + 1)
                 # Owning-mutator promotion: a collection mutator takes
                 # ownership of the value (and, for Dict, the key) at the
@@ -1569,6 +1591,15 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 # (OpClone) at any owning consume position — otherwise the
                 # view is moved-by-value into owned storage and dangles.
                 mdst = add_local_with(&ctx, ret_tid, None, LoView(), BoNone())
+                # #37 Phase 2 derivation join (a) — the ONE String-view
+                # tag site: a view result derived from a lazy family
+                # member joins the family (cow_lazy_join_view_result,
+                # statement-scoped) and gets the typed drop override —
+                # once a guard materializes it in place it OWNS its
+                # buffer (the cap=0 pre-materialize free no-ops).
+                if ctx.cow_lazy_members.len() > 0:
+                    if cow_lazy_join_view_result(&ctx, recv, mdst, ret_tid):
+                        register_lazy_slot_for_drop(&ctx, mdst, ret_tid)
             else:
                 mdst = add_local(&ctx, ret_tid, None)
             # FRESH-OWNED-TEMP drop registration (#19, sibling of #17 at the
@@ -2917,6 +2948,20 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                     pass
             if not is_borrow and ai < borrow_flags.len():
                 is_borrow = borrow_flags.get(ai).unwrap()
+            # #37 Phase 2 hook 2 (free-call `&`/`!` args): a `&v` / `!v`
+            # call arg lets the callee mutate (or drop) the collection —
+            # a mutation site for the lazy family. The parser DISCARDS
+            # the sigils (skip_ownership_markers), so the hook is
+            # SIGNATURE-driven (`is_borrow` from fn_borrow_params; `!`
+            # via classify_call_arg → CkCallArgOwning) on the
+            # redirect-RESOLVED `call_name`, mirroring the scan's F1 arm.
+            # Guards emit BEFORE the call.
+            if ctx.cow_lazy_members.len() > 0:
+                bool lz_arg_mut = is_borrow
+                if not lz_arg_mut:
+                    lz_arg_mut = is_consume_kind(classify_call_arg(&gmod, call_name, ai))
+                if lz_arg_mut:
+                    cow_lazy_materialize_family(&ctx, cow_source_root_name(arg))
             if is_borrow:
                 # Phase C step 5b + Path A receiver-dispatch (2026-05-21):
                 # the callee declared this param as `&T` (OWN_MUTABLE)

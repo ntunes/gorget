@@ -74,6 +74,20 @@ void cow_mark_name(LowerCtx &ctx, String idn, int pos, bool in_closure):
         if pos > prev:
             ctx.cow_mut_max_span.put(idn, pos)
 
+# Record the root identifier of an EMove operand in `cow_moved_names`
+# (the #37 Phase 2 lazy-bind eligibility exclusion). Same structural
+# root walk as cow_mark_if_ident.
+void cow_mark_moved_root(LowerCtx &ctx, SpannedExpr e):
+    match e.expr:
+        case EIdentifier(mvr_idn):
+            ctx.cow_moved_names.put(mvr_idn, true)
+        case EFieldAccess(mvr_base, _):
+            cow_mark_moved_root(&ctx, *mvr_base)
+        case EIndex(mvr_base, _):
+            cow_mark_moved_root(&ctx, *mvr_base)
+        else:
+            pass
+
 void cow_mark_if_ident(LowerCtx &ctx, SpannedExpr e, int pos, bool in_closure):
     match e.expr:
         case EIdentifier(idn):
@@ -127,6 +141,15 @@ void cow_scan_expr(LowerCtx &ctx, GirModule &gmod, SpannedExpr e, bool in_closur
             cow_scan_expr(&ctx, &gmod, *inner_box, in_closure)
         case EMove(inner_box):
             cow_mark_if_ident(&ctx, *inner_box, e.span.start, in_closure)
+            # #37 Phase 2 EMove EXCLUSION side-channel: an EMove that
+            # SURVIVES in the AST is a non-call-position move (call args
+            # strip the sigil) — decl-init `w = !v`, assign-RHS,
+            # `return !v`, literal element, match scrutinee. These lower
+            # at many positions with no choke point, so the lazy bind
+            # gate (decide_svardecl_emission) excludes any bind whose
+            # source root lands in this set, instead of hooking each
+            # position.
+            cow_mark_moved_root(&ctx, *inner_box)
             cow_scan_expr(&ctx, &gmod, *inner_box, in_closure)
         case ECall(callee_box, cargs, _):
             cow_scan_expr(&ctx, &gmod, *callee_box, in_closure)

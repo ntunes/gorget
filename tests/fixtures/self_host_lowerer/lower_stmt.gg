@@ -32,7 +32,8 @@ from lower import expr_kind, pat_kind, stmt_kind
 from lower import collection_kind_of, collection_kind_eq, int_vec_contains, method_mutates_receiver
 from lower import inherit_borrow_from, set_field_borrow, cow_register_alias, decide_svardecl_emission
 from lower import classify_call_arg, is_consume_kind, op_consume, decide_operand_at_consuming_arg, decide_ptr_consume
-from lower_drops import init_drop_elab, push_drop_scope, emit_scope_drops, pop_drop_scope, pop_drop_scope_no_emit, is_droppable_type, register_local_for_drop, register_owning_param, mark_local_moved, restore_moved, union_moved, emit_drops_for_early_exit, flush_drop_queue
+from lower import LazyMember, cow_lazy_materialize_family, cow_lazy_retire_stmt_temps
+from lower_drops import init_drop_elab, push_drop_scope, emit_scope_drops, pop_drop_scope, pop_drop_scope_no_emit, is_droppable_type, register_local_for_drop, register_lazy_slot_for_drop, register_owning_param, mark_local_moved, restore_moved, union_moved, emit_drops_for_early_exit, flush_drop_queue
 from lower_liveness import LivenessAnalysis, compute_liveness, wire_liveness_into_modes, liveness_instrumentation_diff, update_last_pos_for_inst, update_last_pos_for_term, note_operand_pos, empty_liveness
 from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, is_comparison, map_cmpop
 from lower_expr import block_terminated, lower_block_expr, lower_stmt_as_tail_value, lower_if_chain_expr, refine_local_type, lower_expr, lower_expr_inner, apply_container_hint_for_ctor_arg, lower_call
@@ -425,6 +426,46 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     String cevt_src_key = ctx.current_fn_name + "\0" + int_to_str(val)
                     if gmod.closure_env_type.contains(cevt_src_key):
                         gmod.closure_env_type.put(ctx.current_fn_name + "\0" + int_to_str(var_local), gmod.closure_env_type.get(cevt_src_key).unwrap())
+                case LazyViewBind(lv_clone_fn):
+                    # #37 Phase 2 — lazy loop-carried element borrow. `val`
+                    # is the GtPtr(GorgetString) element address. The bind
+                    # is a VALUE slot holding a cap=0
+                    # `gorget_string_borrow_view` (drop-safe: the
+                    # cap-driven free no-ops) plus a materialized-flag
+                    # seeded false. Mutation sites of the source collection
+                    # run the flag-guarded in-place materialize
+                    # (cow_lazy_materialize_family). The slot is tagged
+                    # LoView so every consuming read (return / push / ctor)
+                    # routes through op_consume's LoView→OpClone arm — a
+                    # still-view escape always deep-copies (escape-safe) —
+                    # while a same-type decl bind (`String x = s`) takes
+                    # Branch A's SLOT alias: the alias derefs the slot at
+                    # READ time and observes the materialized value.
+                    # Provenance propagation by slot-aliasing — the ViewOf
+                    # design from docs/language-design.md, with no view
+                    # header copy to go stale.
+                    int lv_owned_type = var_type
+                    GirLocal lv_src = ctx.locals.get(val).unwrap()
+                    if lv_src.type_id >= 0 and lv_src.type_id < gmod.type_table.len():
+                        match gmod.type_table.get(lv_src.type_id).unwrap():
+                            case GtPtr(lv_inner):
+                                lv_owned_type = lv_inner
+                            case GtMutPtr(lv_inner):
+                                lv_owned_type = lv_inner
+                            else:
+                                pass
+                    var_local = add_local_with(&ctx, lv_owned_type, Some(name), LoView(), BoRuntimeView(val))
+                    Vector[Operand] lv_args = [OpBorrow(val)]
+                    emit(&ctx, GICallExtern(var_local, "gorget_string_borrow_view", lv_args))
+                    int lv_flag = add_local(&ctx, BOOL_TYPE, None)
+                    emit(&ctx, GIAssign(lv_flag, OpConstBool(false)))
+                    nl_put(&ctx, name, var_local)
+                    # Typed drop override: the slot OWNS its buffer
+                    # post-materialize (register_local_for_drop would skip
+                    # the LoView tag; the cap=0 pre-materialize state makes
+                    # the unconditional entry safe in both states).
+                    register_lazy_slot_for_drop(&ctx, var_local, lv_owned_type)
+                    ctx.cow_lazy_members.push(LazyMember(cow_src_root.clone(), var_local, lv_flag, lv_owned_type, lv_clone_fn, false))
         case SReturn(opt_expr):
             # Phase 2: emit cleanup drops for every scope back to the
             # function frame BEFORE assigning the return value /
@@ -518,6 +559,14 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
         case SWhile(cond_expr, body):
             lower_while(&ctx, cond_expr, body, &gmod, is_main)
         case SAssign(target_expr, value_expr):
+            # #37 Phase 2 hook 4 (SAssign target root): reassign `v = w`,
+            # index-store `v[i] = x`, field-store `v.f = x` destroy or
+            # replace elements of the target's root collection —
+            # materialize its lazy family BEFORE the mutation lowers (the
+            # sever-on-reassign analogue of Rust's
+            # cow_sever_all_aliases_from lazy routing).
+            if ctx.cow_lazy_members.len() > 0:
+                cow_lazy_materialize_family(&ctx, cow_source_root_name(target_expr))
             match target_expr.expr:
                 case EIdentifier(name):
                     if nl_contains(&ctx, name):
@@ -718,6 +767,15 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             ctx.loop_break_stack.pop()
             switch_to(&ctx, loop_exit_bb)
         case SCompoundAssign(target_expr, op, value_expr):
+            # #37 Phase 2 hook 5 (SCompoundAssign target root): same
+            # materialize-before-mutate as the SAssign hook. Note: a
+            # compound on a family MEMBER (`s += x`) never reaches a lazy
+            # state (a written bound name fails the bound-name-pristine
+            # eligibility gate), and a collection-root compound
+            # (`v[i] += x`) is lower_fail today — the hook is class-rule
+            # completeness for when index-compound support lands.
+            if ctx.cow_lazy_members.len() > 0:
+                cow_lazy_materialize_family(&ctx, cow_source_root_name(target_expr))
             # x <op>= y  →  x = x <op> y. Lower per target shape: local
             # identifier goes through GIAssign, field access goes through
             # __field_read + binop + __field_write.
@@ -1028,6 +1086,10 @@ void emit_field_write_from_local(LowerCtx &ctx, SpannedExpr base_expr, String fi
 void lower_stmts(LowerCtx &ctx, Vector[Stmt] stmts, GirModule &gmod, bool is_main):
     for stmt in stmts:
         lower_stmt(&ctx, stmt, &gmod, is_main)
+        # #37 Phase 2: derivation-join view TEMPS die with their
+        # statement — retire them so later mutation sites don't emit
+        # guards for dead slots.
+        cow_lazy_retire_stmt_temps(&ctx)
 
 void lower_if(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] then_body, Vector[ElseBranch] elif_branches, GirModule &gmod, bool is_main):
     # The condition is bool-typed and independent of any enclosing
