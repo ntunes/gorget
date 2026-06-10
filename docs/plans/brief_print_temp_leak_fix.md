@@ -1,6 +1,17 @@
 # BRIEF — Chain D: print-temp String leak family (one class, five producer sites)
 
-Status: v2 (pass-1 review folded 2026-06-10: the sweep LIST embedded — the
+Status: v3 (pass-2 review folded 2026-06-10: the FIVE named leaks embedded in
+Gate 0 — their TODO name-sources get deleted by this very task [p2-R1];
+Gate 5 gates on STDOUT PARITY — `--sanitize` is SILENTLY DROPPED on the LLVM
+path (`compile_llvm_pipeline` never reads `options.sanitize`; zero asan
+symbols, empirically) → TODO filed [p2-R2]; LLVM loop probes capped <100k
+prints — pre-existing in-loop sret-alloca stack exhaustion at ~399k,
+fix-neutral, TODO filed to hoist allocas to entry block [p2-R3]; counting
+parenthetical [p2-R4]. Pass 2 also re-proved the loop shape end-to-end both
+backends (2000-iter: 58,000B/8,000 allocs → 0, stdout identical; the drain
+visible in the emitted .ll) and settled the self-host fn-count question
+(emitted-C function set IDENTICAL pre/post, only +4 body-level frees). v2
+was pass-1 folded 2026-06-10: the sweep LIST embedded — the
 scout worktree is gone and the list existed nowhere durable [R1]; all 11
 probe shapes enumerated [R2]; gate counts replaced by filter COMMANDS per the
 no-un-regenerated-numbers rule [R3]; the site-C ungated sub-shape TODO added
@@ -76,7 +87,12 @@ the conservative post-call free avoids that. Owner may revisit.
    witness` name removed; ADD the site-C ungated sub-shape TODO [p1-R4]
    (Clone-of-NON-string-aggregate interp temps stay unregistered — the
    pre-existing shallow-Clone gap; registering would double-free until the
-   Clone lowering deep-copies aggregates); DONE.md entry states the
+   Clone lowering deep-copies aggregates); ADD two LLVM-backend TODOs
+   [p2-R2/R3]: (i) `--sanitize` silently dropped on the LLVM path — warn at
+   minimum (`compile_llvm_pipeline`, `src/main.rs:~1162`); (ii) hoist
+   sret/temp allocas to the entry block — the in-loop `alloca %GorgetString`
+   per iteration stack-exhausts at ~399k prints (pre-existing, fix-neutral);
+   DONE.md entry states the
    known-exempt basis for
    the 2 cow canary leaks is RETIRED (future ASan tables over the cow
    battery expect ZERO leaks) — the Phase-1 brief/DONE historical mentions
@@ -86,7 +102,15 @@ the conservative post-call free avoids that. Owner may revisit.
 
 ## Gates (executor; parent re-runs the full battery on the integrated tree)
 
-0. Step-0 pre-change ASan table over: the 5 named leaks + the 11 probe
+0. Step-0 pre-change ASan table over: **THE FIVE NAMED LEAKS [p2-R1,
+   embedded — their TODO name-sources are deleted by this task]:**
+   (1) `print(struct.field)` on an OWNED-heap String field (copy_cow temp);
+   (2) `print(bool)` (`gorget_bool_to_str`→`gorget_string_adopt` chain);
+   (3) nested `f"{outer.get(0).unwrap().get(0).unwrap()}"` on
+   `Vector[Vector[String]]`; (4) the `cow_borrow_outlives_push` fixture
+   (its `print(f"v[0] = {v.get(0).unwrap()}")` statement); (5) the
+   `dict_get_unwrap_push_chain` fixture (its two `f"  {eng.get(N).unwrap()}"`
+   prints) — PLUS the 11 probe
    shapes + **THE SWEEP LIST [p1-R1, embedded — the durable record]:**
    fstring_expressions, string_builder, string_builder_loop,
    string_chained_methods, string_concat, string_fstring_stress,
@@ -111,9 +135,19 @@ the conservative post-call free avoids that. Owner may revisit.
    `cargo test --test integration witness` — gate on 0 failures with the
    freshly printed totals, NOT on a baked count [p1-R3].
 4. `self_host_bootstrap_fixed_point` GREEN (`GG_BUILD_TIMEOUT_SECS=600`).
-5. LLVM spot-checks (`--backend=llvm`): bool-print + field-print.
-6. Perf per the Performance pillar: the 300k-iteration print-loop wall-clock
-   (expect identical) + peak RSS (expect the ~3× improvement direction).
+5. LLVM spot-checks (`--backend=llvm`): bool-print + field-print +
+   loop-accumulation — gating on **STDOUT PARITY with the C backend**
+   [p2-R2]: `--sanitize` is SILENTLY DROPPED on the LLVM path
+   (`compile_llvm_pipeline` never reads `options.sanitize`) so an "LLVM
+   ASan" run is vacuous. ⚠ [p2-R3] LLVM loop probes stay UNDER ~100k prints
+   — pre-existing in-loop sret-alloca stack exhaustion SIGSEGVs at ~399k
+   bool-prints, fix-neutral (bisected both ways).
+6. Perf per the Performance pillar (C backend): the 300k-iteration
+   print-loop wall-clock (expect identical) + peak RSS (expect the ~3×
+   improvement direction). (Mission's "15 of 22 (+4)" vs Gate-1's "17 clean
+   / 5 improved" count differently — 2 of the 17 were never leaky and
+   print_trait_object sits at ≤-equality; YOUR Step-0 table is the
+   contract [p2-R4].)
 
 ## Constraints
 
