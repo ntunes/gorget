@@ -1,0 +1,17 @@
+# EMove class-table row, move-BIND shape (#37 Phase 2): `!v` at a decl-init
+# position. The EMove class lowers at many positions with no choke point, so
+# laziness is ELIGIBILITY-EXCLUDED for its source (cow_moved_names): the
+# `s` bind falls back to the eager clone and prints the PRE-mutation value.
+#
+# ⚠ MOVE-SHAPE ORACLE EXCEPTION: Rust gg Phase 1 is VALUE-WRONG on this
+# shape (lazy read-through prints the post-mutation value — the HIGH Rust
+# TODO), so this fixture asserts the EAGER-SEMANTICS stdout through the
+# SELF-HOST route, is EXPECTED-WRONG in runtime_diff, and gets NO snapshot
+# until the Rust fix lands.
+void main():
+    Vector[String] v = ["hello", "world"]
+    String s = v.get(0).unwrap()
+    Vector[String] w = !v
+    w.set(0, "mutated")
+    print(f"s = {s}")
+    print(f"w0 = {w.get(0).unwrap()}")

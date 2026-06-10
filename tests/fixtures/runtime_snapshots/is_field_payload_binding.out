@@ -1,0 +1,10 @@
+num 42
+msg hi
+ins there
+has-num
+no-num
+no-msg
+no-ins
+nope
+local local-payload
+local-none

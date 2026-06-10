@@ -1,0 +1,16 @@
+# D1 probe, TAKEN path (#37 Phase 2): same shape as
+# cow_lazy_d1_alias_deadpath but the mutating branch RUNS. The family
+# materializes exactly once at the mutation site (clone-once: the member's
+# flag-guarded in-place materialize), and the alias reads the materialized
+# slot: 1 executed clone via the self-host lazy path (Rust Phase 1: 1).
+# Output is mode-independent (Rust oracle).
+void main():
+    Vector[String] v = ["hello", "world"]
+    String s = v.get(0).unwrap()
+    String x = s
+    int i = 0
+    if i == 0:
+        v.push("filler")
+    print(f"s = {s}")
+    print(f"x = {x}")
+    print(f"v.len() = {v.len()}")

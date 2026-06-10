@@ -1,0 +1,11 @@
+consume r1
+drop r1
+after-match
+---
+keep r2
+after-match
+drop r2
+---
+default r3
+after-match
+drop r3

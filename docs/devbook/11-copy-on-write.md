@@ -506,14 +506,13 @@ match loc.ownership:
 `ensure_owned_at_consuming_arg`'s `Ptr` arm — clone-through, never
 shallow-alias.
 
-View tagging is the one notable **divergence from Rust**: the self-host
-identifies view-returning string methods by **name match** in
-`is_string_view_method` (`lower.gg:475` — `slice`/`substring`/`trim`/…) rather
-than reading a typed `returns_view` flag off a protocol table the way Rust does
-(`builtin_returns_view`). This is a smell by the project's own "No name matching"
-rule, and it is load-bearing: the comment at `lower.gg:462` records that a
-mis-tagged slice view (tagged owned instead of `LoView`) move-elided a `.clone()`
-and injected NUL bytes into the multi-MB `generate_c` output. There is also a
+View tagging reads the typed `returns_view` column off the String builtin
+table (`STRING_BUILTIN_METHODS` via `string_builtin_method`, consumed at the
+single LoView tag site in `lower_expr.gg`'s method-call arm) — the old
+`is_string_view_method` name-match this paragraph once documented has been
+retired. The tag is load-bearing: a mis-tagged slice view (tagged owned
+instead of `LoView`) once move-elided a `.clone()` and injected NUL bytes
+into the multi-MB `generate_c` output. There is also a
 fuller `decide_operand_at_consuming_arg` (defined at `lower.gg:1542`, doc-comment
 block from `lower.gg:1473`) that splits the decide/emit concerns. It is now wired
 in: `wire_one_operand` (`lower.gg:2479`) delegates to it at `lower.gg:2508`, and
@@ -535,3 +534,124 @@ diagnostic-always-pass (a green run asserts nothing about parity). The C/LLVM
 **backends** are not self-hosted, so the `cap==0` runtime materialize hooks and
 the `MoveZero`-to-zero-slot codegen have **no self-host coverage** — they exist
 only in `src/backend/`.
+
+## Phase 2 in the self-host — provenance-direct lazy CoW
+
+The self-host's lowering for a lazy-eligible String-element bind is
+**provenance-direct** — the documented `ViewOf(source)` design from
+`docs/language-design.md` §23, implemented literally rather than through
+Rust Phase 1's four per-read-site materialize hooks. ⚠ Currently
+**env-gated (`GG_COW_LAZY=1`)**: the default flip is BLOCKED on two
+run-proven at-scale findings — the fully-lazy self-compile bootstrap
+corrupts stage-1 (stack-overflow in `lower_expr_inner`; small fixtures
+incl. the join shapes stay oracle-exact through the SAME lazy-lowered
+binary) and the lazy emission of `driver.gg` is ~7x slower than eager
+(~363s vs ~50s; suspected per-mutation-site guard-block growth in giant
+functions). Both are filed HIGH in TODO ("#37 Phase 2 default flip
+BLOCKED") with repro commands. Everything below describes the gate-ON
+behavior, which the lock-in tests drive explicitly. The bind becomes
+a cap=0 `gorget_string_borrow_view` VALUE slot plus a materialized-flag bool
+(`LazyViewBind` in `decide_svardecl_emission` → the emission arm in
+`lower_stmt.gg`), the pair recorded as a `LazyMember{root, slot, flag,
+slot_type, clone_fn, stmt_scoped}` on `LowerCtx.cow_lazy_members`, keyed by
+the source collection's root name. Every mutation site of that root emits the
+shared flag-guarded in-place materialize (`cow_lazy_emit_guard` /
+`cow_lazy_materialize_family` in `lower.gg`): `if not flag: slot =
+clone_to_owned(&slot); flag = true` — clone at most once, from the
+still-valid view, written back into the SAME slot. The flat `named_locals`
+memory-slot model means no name ever rebinds, and LIR-SSA phis the slot+flag
+across loop back-edges with zero `lir_ssa.gg` changes.
+
+**Provenance-by-slot-aliasing** is what makes the direct design sound on this
+substrate where it was unsound on Rust's SSA-versioned locals: a same-type
+alias (`String x = s`) lowers to a POINTER TO THE SLOT, so the alias derefs
+at read time and observes the materialized value — the derivation route that
+needed Rust's W3a hook needs NO code here. The two derivation routes that DO
+copy a view header out of the slot each have one JOIN:
+
+- **returns_view results** (join a, the ONE String-view tag site in
+  `lower_expr.gg`'s method-call arm): a view result whose receiver is a
+  family member joins the family with its OWN flag, `stmt_scoped=true` — it
+  retires after the enclosing statement (`cow_lazy_retire_stmt_temps`).
+  Covers the `cow_lazy_w3b_*` shapes (view-temp arg / concat operand
+  computed before a mutating call in the same statement). The join's loop
+  lives in the standalone helper `cow_lazy_join_view_result` (`lower.gg`),
+  NOT inline at the tag site — inlining a `while` +
+  `.get(i).unwrap()` struct-borrow-bind into `lower_expr_inner`'s deeply
+  nested arm trips a self-host miscompile (block-param threading of the
+  containing function breaks; the bootstrap stage-1 binary then corrupts) —
+  see the TODO entry "SELF-HOST MISCOMPILE CLASS".
+- **for-string source** (join b, `lower_for_string` entry): the loop's
+  per-iteration codepoint views alias the source buffer for the whole loop,
+  so a lazy source materializes AT LOOP ENTRY (`cow_lazy_materialize_slot`,
+  keyed by slot). Covers `cow_lazy_w3d_for_string`.
+- **index/slice** (`s[i]` / `s[a..b]`) is DEFERRED behind F2: string
+  index/slice currently miscompiles in the self-host before CoW matters
+  (`cow_lazy_w3c_*` are expected-wrong in both modes; TODO).
+
+**Typed eligibility** (devbook/24): the element type must carry the typed
+view discriminator — `ResourceMetadata.materialize_fn` present, read via
+`resource_meta_for` (`Some` for exactly `GorgetString`, the only resource
+whose free is view-aware; a cap=0 collection view would double-drop its
+elements). Presence is the eligibility axis ONLY — the materialize itself
+calls the typed deep-copy `pointee_clone_fn` (`clone_to_owned`), never
+`copy_cow` (which passes cap=0 views through) and never `materialize_fn`
+itself. Drop registration uses the typed override
+`register_lazy_slot_for_drop` (`lower_drops.gg`): `register_local_for_drop`
+correctly skips `LoView` aliases, but a lazy slot OWNS its buffer once
+materialized — the unconditional `DropEntry` is safe in both states because
+the pre-materialize cap=0 free no-ops.
+
+**The mutation-route class table** (scan arm × lowering position; the
+sibling-site rule made executable as a table — one fixture per row; the
+code-comment twin lives at `cow_lazy_emit_guard` in `lower.gg`):
+
+| # | scan arm (`cow_mark_*` producer) | lowering position(s) | coverage | fixture |
+|---|----------------------------------|----------------------|----------|---------|
+| 1 | EMethodCall mutating receiver | EMethodCall arm (`lower_expr.gg`) | hook 1 | `witness_*`, `cow_lazy_multisite` |
+| 2 | ECall sig-args (`&`/`!`, F1 signature-driven, redirect-resolved) | `lower_call` arg loop | hook 2 | `mutarg_probe`, `cow_lazy_move_consume` |
+| 3 | EMethodCall sig-args (`&`/`!`) | EMethodCall marg loop | hook 3 | `cow_lazy_method_arg` |
+| 4 | SAssign target root | `lower_stmt` SAssign | hook 4 | `cow_lazy_reassign_source` |
+| 5 | SCompoundAssign target | `lower_stmt` SCompoundAssign | hook 5 (collection-root compound is `lower_fail` today — class-rule completeness; member compound is excluded by the pristine gate) | `cow_lazy_compound` |
+| 6 | EMove (non-call `!name`) | decl-init / assign-RHS / return / literal element / match scrutinee — NO choke point | **eligibility EXCLUSION** (`cow_moved_names`) | `cow_lazy_move_bind`, `cow_lazy_move_reassign` |
+| – | EMutableBorrow (`&name`) | call args strip the sigil in the parser; survivors lower as passthroughs | rows 2/3 carry the signature-driven routes; `&s` on the member itself is excluded by the pristine gate | `cow_lazy_mut_borrow_write` |
+| – | SWith / spawn / comprehension | no distinct route — they only recurse; their lowerings route through the hooked paths | (two PRE-EXISTING mode-independent gaps in TODO: inline-closure-spawn-arg; bare collection alias `w = v` then mutate) | — |
+
+**The EMove exclusion, honestly.** `cow_moved_names` is whole-fn,
+per-source-NAME: one `!v` anywhere — even on a never-taken branch — makes
+every bind from `v` in that fn eager (run-proven 1 clone where lazy would be
+0). Acceptable because the borrow checker independently rejects
+conditional-move-then-use ("use of moved value"), so the practical loss
+window is narrow. The pass-2-prototyped per-position hooks
+(materialize-family-before-move at the SVarDecl-EMove and SAssign-EMove-RHS
+sites) are the recorded laziness upgrade if move-shape laziness ever matters
+(TODO). ⚠ Rust gg Phase 1 is VALUE-WRONG on both EMove shapes (lazy
+read-through prints the post-mutation value) — the move-shape fixtures
+assert eager semantics through the SELF-HOST route and are expected-wrong
+rows in `runtime_diff` until the HIGH Rust TODO lands.
+
+**The pristine-gate trade** (vs Rust's W4 write-site clearing): eligibility
+requires the BOUND NAME pristine — never written — so no tag-clearing
+machinery exists. Member reassignment shapes (`cow_lazy_staletag`,
+`cow_lazy_compound`'s member half) stay eager at 1 clone where Rust pays 0;
+outputs identical, invariant simpler. Porting W4-style clearing is a
+possible later optimization (TODO, low). Mutations reached only through a
+CLOSURE body are also excluded (`cow_closure_mutated`): a closure body
+cannot host the enclosing function's materialize guard.
+
+**Beats-Rust deltas** (executed clones, regenerated 2026-06-10 via the
+transient `GG_CLONE_TRACE` runtime instrumentation, gate-ON):
+`cow_lazy_d1_alias_deadpath` self-host **0** vs Rust Phase 1 **1** — the
+slot-alias provenance never pays for the alias, and the dead path never
+pays at all; `cow_lazy_d1_alias_takenpath` 1 vs 1 (parity). Witness family:
+0/1/0 (never/taken/cond-straightline), matching Rust. The emitted-C shape
+is locked in by `witness_never_self_host_emitted_c_clone_shape`
+(borrow_view bind + exactly one dynamically-dead guarded `clone_to_owned`
+in main, driven via `GG_COW_LAZY=1`), mirroring the Rust-side
+`witness_never_emitted_c_clone_shape`.
+
+**ASan is NOT the safety net here either** — the same warning as Phase 1:
+the D1 wrong-output class and the view-UAF classes are proven ASan-silent.
+The stdout battery through the SELF-HOST driver (gate-OFF emitted-C
+byte-identity during the port; oracle-diff sweeps; the `self_host_runtime`
+snapshot net) is the primary net.

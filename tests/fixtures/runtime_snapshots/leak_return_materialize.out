@@ -1,0 +1,10 @@
+words: 4
+hello
+bar
+long: 3
+quick
+rows: 2
+[0][1]: b
+[1][0]: d
+leak: false
+done

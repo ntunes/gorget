@@ -1,0 +1,3 @@
+t = hel
+s = hello!
+v.len() = 3

@@ -23131,3 +23131,167 @@ fn mutarg_import_probe_self_host() {
 fn cow_lazy_method_arg() {
     run_gg("cow_lazy_method_arg.gg", "s = hello\nv0 = mutated");
 }
+
+// ── #37 Phase 2 — the lazy-CoW lock-in set ───────────────────────────
+//
+// The self-host's lazy CoW (provenance-direct, the ViewOf design from
+// docs/language-design.md) lowers eligible String-element binds as a cap=0
+// borrow_view slot + materialized-flag, materialized in place at mutation
+// sites of the source family (devbook/11 §Phase 2 has the (scan arm ×
+// lowering position) table). Currently env-gated (GG_COW_LAZY=1): the
+// DEFAULT flip is BLOCKED on two run-proven at-scale findings — the lazy
+// self-compile bootstrap corrupts stage-1 and the lazy emission of
+// driver.gg is ~7x slower (TODO "#37 Phase 2 default flip BLOCKED").
+
+/// Beats-Rust delta, DEAD path: alias of a lazy member + never-taken
+/// mutation = 0 executed clones through the self-host lazy path
+/// (GG_COW_LAZY=1; Rust Phase 1 pays 1). Output is mode-independent —
+/// Rust-oracle.
+#[test]
+fn cow_lazy_d1_alias_deadpath() {
+    run_gg(
+        "cow_lazy_d1_alias_deadpath.gg",
+        "s = hello\nx = hello\nv.len() = 2",
+    );
+}
+
+/// Beats-Rust delta, TAKEN path: the family materializes exactly once at
+/// the mutation site = 1 executed clone through the self-host lazy path
+/// (GG_COW_LAZY=1; Rust Phase 1: 1). Output is mode-independent —
+/// Rust-oracle.
+#[test]
+fn cow_lazy_d1_alias_takenpath() {
+    run_gg(
+        "cow_lazy_d1_alias_takenpath.gg",
+        "s = hello\nx = hello\nv.len() = 3",
+    );
+}
+
+/// MOVE-SHAPE ORACLE EXCEPTION: Rust gg Phase 1 is VALUE-WRONG on the EMove
+/// move-BIND shape (`Vector[String] w = !v` then `w.set(...)` — its lazy
+/// bind reads through to the post-mutation value; the HIGH Rust TODO), so
+/// this asserts the EAGER-SEMANTICS stdout through the SELF-HOST route.
+/// The self-host's cow_moved_names eligibility EXCLUSION keeps the bind
+/// eager. EXPECTED-WRONG row in runtime_diff (the Rust oracle is the buggy
+/// side); NOT snapshotted until the Rust fix lands.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn cow_lazy_move_bind_self_host() {
+    if skip_under_llvm() {
+        return;
+    }
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let fixture = manifest_dir.join("tests/fixtures/cow_lazy_move_bind.gg");
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_cow_lazy_move_bind_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+    match self_host_emit_cc_run(
+        &driver_exe, &lib_dir, &runtime_dir, &fixture, &tmp_root, "shroute",
+    ) {
+        Ok(stdout) => assert_eq!(
+            stdout, "s = hello\nw0 = mutated",
+            "self-host output must keep eager semantics on the move-bind shape"
+        ),
+        Err(outcome) => panic!("self-host emit/cc/run failed: {outcome:?}"),
+    }
+}
+
+/// MOVE-SHAPE ORACLE EXCEPTION, move-REASSIGN shape (`w = !v` to an existing
+/// local — the shape that defeats per-position move hooks and motivates the
+/// cow_moved_names EXCLUSION). Same contract as cow_lazy_move_bind_self_host.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn cow_lazy_move_reassign_self_host() {
+    if skip_under_llvm() {
+        return;
+    }
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let fixture = manifest_dir.join("tests/fixtures/cow_lazy_move_reassign.gg");
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_cow_lazy_move_reassign_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+    match self_host_emit_cc_run(
+        &driver_exe, &lib_dir, &runtime_dir, &fixture, &tmp_root, "shroute",
+    ) {
+        Ok(stdout) => assert_eq!(
+            stdout, "s = hello\nw0 = mutated",
+            "self-host output must keep eager semantics on the move-reassign shape"
+        ),
+        Err(outcome) => panic!("self-host emit/cc/run failed: {outcome:?}"),
+    }
+}
+
+/// Emitted-C clone-shape lock-in for the SELF-HOST driver output, mirroring
+/// the Rust-side `witness_never_emitted_c_clone_shape`: the lazy bind is a
+/// borrow_view, and main carries exactly ONE clone_to_owned callsite (the
+/// flag-guarded materialize on the never-taken branch — dynamically dead;
+/// the witness_never stdout test proves the 0-executed-clone behavior).
+/// Unlike the Rust twin there is NO textual-order assert: the self-host's
+/// block layout legitimately places the bind's basic block AFTER the guard
+/// block in the C text (the bind still dominates the guard in control flow).
+/// The lazy path is driven explicitly via GG_COW_LAZY=1 — the self-host
+/// DEFAULT flip is BLOCKED on two run-proven at-scale findings (see TODO
+/// "#37 Phase 2 default flip BLOCKED"); this test keeps the gated mechanism
+/// honest until the flip lands.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn witness_never_self_host_emitted_c_clone_shape() {
+    if skip_under_llvm() {
+        return;
+    }
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let fixture = manifest_dir.join("tests/fixtures/witness_never.gg");
+    let emit = run_with_timeout(
+        Command::new(&driver_exe)
+            .env("GG_COW_LAZY", "1")
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--emit-c")
+            .arg(format!("--runtime-dir={}", runtime_dir.display())),
+        "witness_never.gg (self-host clone-shape)",
+    );
+    assert!(
+        emit.status.success(),
+        "self-host emit failed: {}",
+        String::from_utf8_lossy(&emit.stderr)
+    );
+    let c_src = String::from_utf8_lossy(&emit.stdout).to_string();
+    let main_start = c_src
+        .find("int main(int argc, char** argv) {")
+        .expect("main definition in self-host emitted C");
+    let main_end = c_src[main_start..]
+        .find("\n}")
+        .map(|e| main_start + e)
+        .expect("main closing brace");
+    let main_src = &c_src[main_start..main_end];
+
+    let bv = main_src.find("gorget_string_borrow_view(");
+    assert!(
+        bv.is_some(),
+        "lazy bind must call gorget_string_borrow_view in self-host main"
+    );
+    let cto_sites: Vec<usize> = main_src
+        .match_indices("gorget_string_clone_to_owned(")
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(
+        cto_sites.len(),
+        1,
+        "self-host main must contain exactly one clone_to_owned callsite (the \
+         flag-guarded materialize); found {}",
+        cto_sites.len()
+    );
+}

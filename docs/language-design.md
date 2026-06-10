@@ -2244,7 +2244,7 @@ Vector[float] row = matrix[0]   # calls matrix.get(0)
 
 Gorget has a single `String` type — a 32-byte struct `{ data, cap, len, alloc }`. The `cap` field distinguishes **views** (`cap == 0` — zero allocation, backed by a pointer into existing data like `.rodata` or another string's buffer) from **owned** strings (`cap > 0` — heap-allocated, growable). Programmers write `String` everywhere; the compiler infers which operations produce views and which produce owned copies.
 
-This is similar to how Swift's `String` unifies owned and borrowed representations behind a single type. Gorget uses compile-time `ViewOf(source)` provenance tracking to auto-materialize views when the source is mutated — a targeted, lazy copy-on-write that avoids unnecessary allocations.
+This is similar to how Swift's `String` unifies owned and borrowed representations behind a single type. Gorget uses compile-time `ViewOf(source)` provenance tracking to auto-materialize views when the source is mutated — a targeted, lazy copy-on-write that avoids unnecessary allocations. (The self-host lowerer implements this provenance design directly — see the compiler internals book, [`devbook/11` §"Phase 2 in the self-host"](devbook/11-copy-on-write.md#phase-2-in-the-self-host--provenance-direct-lazy-cow); the Rust lowerer reaches the same observable behavior through per-read-site materialize hooks.)
 
 **Provenance inference rules:**
 - String literals (`"hello"`) are views into static data — zero allocation.

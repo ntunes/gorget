@@ -1,0 +1,18 @@
+# EMove class-table row, move-REASSIGN shape (#37 Phase 2): `w = !v` to an
+# EXISTING local — this is the shape that defeats a per-position move-bind
+# hook (the family is keyed by the SOURCE name `v`, but the later mutation
+# goes through `w`), which is why the EMove class is covered by the
+# cow_moved_names ELIGIBILITY EXCLUSION rather than hooks: the `s` bind
+# falls back to the eager clone and prints the PRE-mutation value.
+#
+# ⚠ MOVE-SHAPE ORACLE EXCEPTION: Rust gg Phase 1 is VALUE-WRONG on this
+# shape (the HIGH Rust TODO) — asserted through the SELF-HOST route,
+# EXPECTED-WRONG in runtime_diff, NO snapshot until the Rust fix lands.
+void main():
+    Vector[String] v = ["hello", "world"]
+    Vector[String] w = ["seed"]
+    String s = v.get(0).unwrap()
+    w = !v
+    w.set(0, "mutated")
+    print(f"s = {s}")
+    print(f"w0 = {w.get(0).unwrap()}")

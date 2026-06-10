@@ -1,0 +1,17 @@
+# D1 beats-Rust probe, DEAD path (#37 Phase 2): alias of a lazy member +
+# source mutation on a never-taken branch. Provenance-by-slot-aliasing means
+# the alias derefs the member's SLOT at read time, so neither the bind nor
+# the alias pays a clone, and the guarded materialize on the dead branch
+# never executes: 0 executed clones via the self-host lazy path
+# (GG_COW_LAZY=1), vs 1 through Rust Phase 1's W3a read hook.
+# Output is mode-independent (Rust oracle).
+void main():
+    Vector[String] v = ["hello", "world"]
+    String s = v.get(0).unwrap()
+    String x = s
+    int i = 0
+    if i == 999999:
+        v.push("filler")
+    print(f"s = {s}")
+    print(f"x = {x}")
+    print(f"v.len() = {v.len()}")
