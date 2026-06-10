@@ -1,6 +1,14 @@
 # BRIEF — Chain A: executable guard for the lazy-CoW view-producer enumeration
 
-Status: v2 (pass-1 review folded 2026-06-10: `GORGET_SLIT` name fix [R1]; W1
+Status: v3 (pass-2 review folded 2026-06-10: W1 adjustment (vii) — arm a detects
+calls via `gorget_str_view_region\s*\(` regex, closing the RUN-PROVEN
+spaced-paren bypass [p2-R1; arm b already paren-free, unaffected]; W2's
+devbook/11 residual list corrected to FOUR items incl. backend-emit rewrites
+[p2-R2, a v2 fold remnant]; note added to generalize devbook/25's count-stale
+"three companion guards" sentence [p2-nit]. Pass 2 also proved adjustment (v)
+both ways — the Allman-style silent mis-attribution hole is real without it,
+loud with it — and re-verified budgets/inventories/gates at tip. v2 was
+pass-1 folded 2026-06-10: `GORGET_SLIT` name fix [R1]; W1
 adjustment (v) added — fn-def scanner resets attribution on unparsed col-0
 signature starts so brace-on-next-line defs go loud-unattributed instead of
 silently mis-attributing [R2, the real drift-route hole]; GIR-axis wording
@@ -114,18 +122,26 @@ mis-attribute its calls into the expected set; with the reset they go
 indented; the only col-0 alpha non-def lines are multi-line signature
 starts). (vi) [pass-1 footnote b] add the "if the count went DOWN, lower
 BUDGET" clause to lint 3's failure message for sibling consistency.
+(vii) [pass-2 R1, RUN-PROVEN bypass] in `runtime_c_view_region_callers`,
+detect calls with the regex `gorget_str_view_region\s*\(` instead of the
+glued-paren `contains` — `return gorget_str_view_region ((const char*)…)`
+(GNU spacing) currently passes ALL THREE lints silently; arm b is already
+paren-free and needs no change.
 
 ### W2 — make the docs point at the guard
 - `docs/devbook/11-copy-on-write.md` §view-producer enumeration rule: add that
   the rule is now EXECUTABLE (`tests/lints.rs` — the three test names), note
   the direct-manufacture bypass finding (the grep alone was incomplete:
   `gorget_string_borrow_view` builds its header directly — lint 3 fences this
-  route), and keep the honest-residual list (dynamic names, dominance moves,
-  slot reuse) as the remaining prose obligations.
+  route), and keep the honest-residual list — FOUR items: dynamic names,
+  dominance moves, slot reuse, backend-emit callee rewrites (`src/backend`,
+  per the Ground-truth bullet) — as the remaining prose obligations.
 - `docs/devbook/25-structural-guards.md`: add the guard family entry following
   the doc's existing format (class → guard → escalation state: these land
   FATAL from day one, no env-gate burn-down needed — the enumeration is closed
-  today).
+  today). While there, generalize the count-stale "The three companion
+  meta-invariant guards live as Rust lint tests in tests/lints.rs" sentence
+  (7 today, 10 after this chain) so it stops rotting [pass-2 nit].
 
 ### W3 — bookkeeping
 - TODO.md: ADD one Low-priority entry for the scout's optional forcing
