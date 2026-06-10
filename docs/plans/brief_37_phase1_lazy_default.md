@@ -1,6 +1,7 @@
 # BRIEF — #37 Phase 1: Full lazy CoW materialization (incl. loops) as the PRODUCTION DEFAULT in Rust `gg`
 
-Status: v7 (pass-5 review folded 2026-06-10: ⚠ **W3d ADDED — pass 5's
+Status: v7 — REVIEW-CLEAN (pass 7 SIGN OFF 2026-06-10; cosmetic nits folded as
+v7.1 without instruction changes). History: v6 (pass-5 review folded 2026-06-10: ⚠ **W3d ADDED — pass 5's
 fourth-route hunt FOUND ONE** [p5-R1, BLOCKING]: `for c in s:` char iteration
 emits the SYNTHETIC callee `gorget_str_codepoint_at` (`for_loops.rs:349`; both
 backends materialize it as a `gorget_str_view_region` view —
@@ -180,7 +181,7 @@ remove the `GG_COW_LAZY_LOOP` env-gate (the lazy arm becomes the default branch 
 but see Constraints: the gate removal lands in the FINAL commit so intermediate
 commits stay green); **add the `CollectionId::Local`-only eligibility check** per
 the H2 scope decision (the prototype has NO such check —
-`CollectionId::{Local,FieldPath}` at `stmts/mod.rs:769-771`; without this line the
+`CollectionId::Local` at `stmts/mod.rs:769-771`, FieldPath arm `:772`; without this line the
 default ships the `empty_literal_struct_field` UAF); delete the `GG_CLONE_TRACE`
 fprintf block from `gorget_string_clone_to_owned` (`runtime_string.c`); keep
 `gorget_string_borrow_view` but REWORD its comment and the
@@ -274,8 +275,10 @@ eager, clone parity EXACT 1v1, witnesses stay 0/1/0, `cargo test --lib` 1072/0;
 the flag-guard keeps nested-loop and never-reached-loop cases correct/0-clone.
 Fix the FALSE COMMENTS at `for_loops.rs:345-347` AND `:355-360` (comment text
 only — the `set_owned_fresh` tag itself stays, pre-existing and run-proven; the
-collection-put materialize hooks handle the view) as part of this hook. Do NOT
-touch the `F::Allocates` registry tag (correct by design — see Ground Truth).
+collection-put materialize hooks handle the view), plus the sibling at
+`c_lir/emit_call_extern.rs:82` ("→ Str (owned copy)" two lines above the `:86`
+view emit), as part of this hook. Do NOT touch the `F::Allocates` registry tag
+(correct by design — see Ground Truth).
 
 **Sibling-completeness rule (corrected TWICE — v4's consumer-grep missed W3c,
 v5's runtime-only producer-grep missed W3d):** grep `gorget_str_view_region`
@@ -310,7 +313,8 @@ alias-chain cases; revisit as Phase 1b if profiles justify.
   Phase-1 strings: `calls.rs:318-327` short-circuits named string locals with `!`
   to a const-Ptr borrow with no MoveZero, so `s` is unchanged and the tag stays
   accurate — document that in the code comment (the generic move path needs the
-  clear only if that short-circuit is ever retired). A stale tag+flag otherwise
+  clear only if that short-circuit is ever retired; path:
+  `ir/lowering/exprs/calls.rs`, NOT the lir/lower one). A stale tag+flag otherwise
   emits a pointless guarded clone on a later `v` mutation (and can leak the old
   buffer via the Move-assign).
 - **Audit `cow_sever_all_aliases_from`** (`context.rs:2822-2825`): it unsets
@@ -391,8 +395,8 @@ alias-chain cases; revisit as Phase 1b if profiles justify.
   (`auto (a,b) = (s,"z")` after `String s = v.get(0).unwrap()`) fails GIR
   resource-move validation ("shallow copy of resource
   Tuple__GorgetString__GorgetString", `lowering/mod.rs:1636`);
-  TWO more pre-existing gaps (pass 5, identical both modes, NOT lazy
-  regressions): (a) `[c for c in s]` string comprehension fails to BUILD
+  THREE more pre-existing gaps ((a)/(b) pass 5, (c) pass 6 — identical both
+  modes, NOT lazy regressions): (a) `[c for c in s]` string comprehension fails to BUILD
   (`collections.rs:645` infers I64 elem → C error `int64_t = Str` at
   `gorget_str_index`) — unreachable today, becomes a W3d sibling if ever fixed;
   (b) `s[i] += rhs` compiles as a SILENT NO-OP (read via direct
