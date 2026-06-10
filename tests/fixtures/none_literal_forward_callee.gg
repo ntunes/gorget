@@ -1,0 +1,25 @@
+# Latent silent-None class: a bare `None` argument to a NOT-YET-LOWERED
+# callee (caller textually BEFORE the callee, single module). The self-host
+# lowerer's `get_fn_param_types` scans only already-lowered `gmod.functions`,
+# so the expected-type lookup misses and the bare `None` lowers to a zeroed
+# `(Option__T){0}` — tag 0 reads as Some → silent miscompile (self-host
+# prints 0 where Rust prints 7). Rust gg registers fn sigs in a typed
+# pre-pass (`src/ir/lowering/functions.rs:659-669`), so lowering order does
+# not matter there. Expected output below is the CORRECT (Rust) behavior;
+# the self-host gap is tracked in TODO.md ("param-type pre-pass" fix).
+#
+# Sibling fixtures: none_literal_at_call_arg.gg (primitive payload),
+# none_literal_at_call_arg_resource.gg (resource payload, callee-first).
+
+public struct Tag:
+    Option[String] label
+
+void main():
+    print(reach(None))
+
+int reach(Option[String] o):
+    match o:
+        case Some(s):
+            return s.len()
+        case None:
+            return 7

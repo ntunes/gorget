@@ -1,5 +1,5 @@
---- /workspace/gorget/.claude/worktrees/agent-a6756e70babfe0633/tests/fixtures/self_host_lowerer/lower_expr.gg	2026-06-09 21:22:22.672292200 +0000
-+++ tests/fixtures/self_host_lowerer/lower_expr.gg	2026-06-10 07:14:57.877349563 +0000
+--- a/tests/fixtures/self_host_lowerer/lower_expr.gg
++++ b/tests/fixtures/self_host_lowerer/lower_expr.gg
 @@ -2862,6 +2862,25 @@
              ctx.expected_type = -1
              if ai < callee_param_types.len():

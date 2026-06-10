@@ -22797,3 +22797,39 @@ fn gorget_js_snag_7_view_through_struct_literal() {
         "tok[0]=hello\ntok[1]=world",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Bare-`None`-at-call-arg expected-type fixtures (self-host peel fix chain;
+// see docs/plans/brief_lowergg_split_retry.md and docs/plans/none_peel_fix.patch).
+// Sibling of `none_literal_at_call_arg` (Option[int] — primitive payload).
+// ---------------------------------------------------------------------------
+
+// Resource payload (`Option[String]` registered via a struct field): the
+// self-host lowerer Ptr-wraps the bare param, and the call-arg expected-type
+// writer must peel the wrapper back to the value type for the bare `None`
+// arg to materialize as a tagged Option (the lower.gg-split's stage-1 cc
+// failure class, 146 sites). Snapshotted in runtime_snapshots/ — the fixed
+// self-host must keep passing it.
+#[test]
+fn none_literal_at_call_arg_resource() {
+    run_gg("none_literal_at_call_arg_resource.gg", "5\nnone\nsome hi");
+}
+
+// Latent silent-None class: bare `None` to a NOT-YET-LOWERED callee (caller
+// textually before callee, single module). Correct under Rust gg (asserted
+// here); the self-host still miscompiles it (prints 0 — tag-0 Some), so it
+// is deliberately NOT snapshotted. TODO.md tracks the "param-type pre-pass"
+// fix mirroring Rust's typed fn-sig registration (functions.rs:659-669).
+#[test]
+fn none_literal_forward_callee() {
+    run_gg("none_literal_forward_callee.gg", "7");
+}
+
+// `!None` at a move-sigiled resource-Option param. Correct under Rust gg
+// (asserted here); the self-host peel deliberately excludes GtMutPtr, so
+// this shape still CC-FAILs through the self-host — deliberately NOT
+// snapshotted. TODO.md tracks the GtMutPtr residual gap.
+#[test]
+fn none_literal_sigiled_arg() {
+    run_gg("none_literal_sigiled_arg.gg", "5:none\n6:x");
+}

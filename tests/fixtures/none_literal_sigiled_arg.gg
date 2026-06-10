@@ -1,0 +1,27 @@
+# `!None` at a move-sigiled resource-Option param. The self-host lowerer
+# MutPtr-wraps `&`/`!` resource params, and the call-arg expected-type
+# writer deliberately peels only GtPtr (bare params) — GtMutPtr stays
+# unpeeled because sigiled args are explicit at source. Consequence: this
+# Rust-correct program still CC-FAILs through the self-host (the sigiled
+# `!None` reaches the same raw-tid dst via the GtMutPtr wrapper). Bare
+# `None` at `&`/`!` params is rejected by semantics ("ownership mismatch"),
+# so only this sigiled shape is affected. Tracked in TODO.md (GtMutPtr
+# residual gap). Expected output below is the CORRECT (Rust) behavior.
+#
+# Sibling fixtures: none_literal_at_call_arg.gg (primitive payload),
+# none_literal_at_call_arg_resource.gg (bare-param peel, fixed).
+
+public struct Tag:
+    Option[String] label
+
+String pick3(int n, Option[String] !label):
+    match label:
+        case Some(s):
+            return f"{n}:{s}"
+        case None:
+            return f"{n}:none"
+
+void main():
+    print(pick3(5, !None))
+    Option[String] lbl = Some("x")
+    print(pick3(6, !lbl))
