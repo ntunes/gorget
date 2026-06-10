@@ -1,8 +1,19 @@
 # BRIEF — Chain D: print-temp String leak family (one class, five producer sites)
 
-Status: v1 (orchestrator draft from scout report 2026-06-10; scout worktree
-`agent-ab272cfd08b23d4d4` at tip `6894cb6a`; the RUN-PROVEN prototype is
-committed at `docs/plans/print_temp_leak_fix.diff` — 65 insertions, 3 files).
+Status: v2 (pass-1 review folded 2026-06-10: the sweep LIST embedded — the
+scout worktree is gone and the list existed nowhere durable [R1]; all 11
+probe shapes enumerated [R2]; gate counts replaced by filter COMMANDS per the
+no-un-regenerated-numbers rule [R3]; the site-C ungated sub-shape TODO added
+to the Work-item-3 list [R4]. Pass 1 independently re-proved: diff applies
+clean, all named leaks exact pre-fix → ZERO post-fix, stdout byte-identical
+×14, the site-C no-double-free argument re-derived from source (move_zero +
+mark_moved = exactly one free; double-USE rejected by the validator),
+site-B's single pusher/drain straight-line, the 5-site enumeration complete
+('b' is the only String-producing format arm), fixed_point GREEN 494.91s,
+LLVM spot-checks ASan-clean, RSS direction 10MB→1MB on the print loop. v1
+was the orchestrator draft from scout `agent-ab272cfd08b23d4d4` at
+`6894cb6a`; the RUN-PROVEN prototype is committed at
+`docs/plans/print_temp_leak_fix.diff` — 65 insertions, 3 files.)
 
 ## Mission
 
@@ -47,10 +58,13 @@ the conservative post-call free avoids that. Owner may revisit.
 1. Apply/productionize the committed diff (comments per house style — state
    the constraint, not the history). One commit is acceptable; two (GIR
    sites, then LIR site) also fine.
-2. Fixtures: commit the probe shapes as integration fixtures with embedded
-   stdout — field-print (TODO:746 names `print_struct_string_field_leak.gg`),
-   bool-print, f-string-bool, `f"{expr}"` Move shape, display, `'b'` spec,
-   loop accumulation, view-source `trim()` probe.
+2. Fixtures: commit ALL ELEVEN probe shapes as integration fixtures with
+   embedded stdout [p1-R2] — field-print (TODO:746 names
+   `print_struct_string_field_leak.gg`; use an OWNED-heap field, not a
+   literal-initialized one — literal fields are static views and leak-free),
+   bool-print, f-string-bool, format-assign (`String t = f"{b}"`),
+   `f"{expr}"` Move shape, display, `'b'` spec, loop accumulation,
+   match-arm-early-return interp, if-block interp, view-source `trim()`.
 3. Doc/TODO updates (per the scout's §6, verbatim targets): handover-block
    exemption note (TODO:31) deleted; TODO:737 rephrased to the perf-only
    residual; TODO:746 + TODO:843 → DONE; TODO:738 REWRITTEN to the real
@@ -59,7 +73,11 @@ the conservative post-call free avoids that. Owner may revisit.
    extern, print_trait_object Box+trait-dispatch — note the trait-dispatch
    result is a COUSIN of this class in trait-call lowering → its own entry,
    fstring_method_chain closure-env) and the stale `cow_elem_overwrite_
-   witness` name removed; DONE.md entry states the known-exempt basis for
+   witness` name removed; ADD the site-C ungated sub-shape TODO [p1-R4]
+   (Clone-of-NON-string-aggregate interp temps stay unregistered — the
+   pre-existing shallow-Clone gap; registering would double-free until the
+   Clone lowering deep-copies aggregates); DONE.md entry states the
+   known-exempt basis for
    the 2 cow canary leaks is RETIRED (future ASan tables over the cow
    battery expect ZERO leaks) — the Phase-1 brief/DONE historical mentions
    stay as records.
@@ -69,14 +87,29 @@ the conservative post-call free avoids that. Owner may revisit.
 ## Gates (executor; parent re-runs the full battery on the integrated tree)
 
 0. Step-0 pre-change ASan table over: the 5 named leaks + the 11 probe
-   shapes + the 28-fixture sweep list (capture stdout with
-   `detect_leaks=0` — LSan's exit path can skip stdio flush on pipes).
-1. Post-change: same table — the named/probe set ZERO; the sweep ≥ the
-   scout's 15-clean/4-improved result; NO fixture worse.
+   shapes + **THE SWEEP LIST [p1-R1, embedded — the durable record]:**
+   fstring_expressions, string_builder, string_builder_loop,
+   string_chained_methods, string_concat, string_fstring_stress,
+   char_methods, chars, json_parse, csv_stringify, dict_string_keys,
+   cow_escape_boundaries, string_struct_complex, leak_string_heavy,
+   leak_string_ops, snag30_field_alias_in_match_arm, fstring_format,
+   yaml_parse, string_conversions, cli_basic, fstring_method_chain,
+   print_trait_object, datetime_format (+ bench_string_methods is a
+   KNOWN pre-existing link-fail both ways — record, don't gate).
+   Capture stdout with `detect_leaks=0` — LSan's exit path can skip stdio
+   flush on pipes.
+1. Post-change vs YOUR Step-0 table (absolute bytes are shape/tree-specific
+   — the LIST + per-fixture direction is the contract): the named/probe set
+   ZERO; the first 17 sweep names CLEAN; yaml_parse / string_conversions /
+   cli_basic / fstring_method_chain / print_trait_object IMPROVED (≤ Step-0,
+   residuals are the documented other-class cohort); datetime_format may be
+   unchanged; **NO fixture worse than Step-0**.
 2. stdout byte-diff pre/post over the whole affected set.
-3. `cargo test --lib` (1072/0), `cargo test --test lints` (10/0 incl. the
-   emitted-C clone-shape lock-in), the cow battery + witnesses + canaries
-   (46/0).
+3. `cargo test --lib` and `cargo test --test lints` (quote the freshly
+   printed counts); the cow/witness batteries via
+   `cargo test --test integration cow_ -- --test-threads=4` and
+   `cargo test --test integration witness` — gate on 0 failures with the
+   freshly printed totals, NOT on a baked count [p1-R3].
 4. `self_host_bootstrap_fixed_point` GREEN (`GG_BUILD_TIMEOUT_SECS=600`).
 5. LLVM spot-checks (`--backend=llvm`): bool-print + field-print.
 6. Perf per the Performance pillar: the 300k-iteration print-loop wall-clock
