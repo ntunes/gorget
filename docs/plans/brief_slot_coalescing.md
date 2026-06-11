@@ -73,22 +73,25 @@ block-live-sets are provably disjoint).
    `lir_codegen.gg` value-decl loop (~`:4917-4936`) keys on `c_type_name(...)`
    (with `void → void*`). Do NOT key the self-host coalescing on the Rust
    decl-ctype shape; key on the self-host's own.
-   ⚠⚠ **CORRECTION (the v1 executor's `fixed_point` FAILURE, 2026-06-11): the
-   self-host is NOT a "no-CStr-branch simpler subset" — that claim was WRONG and
-   caused a stage-2 cc type-mismatch (a `const char*`-context value coalesced
-   into a `Str` slot → `gorget_str_from_cstr` arg-type error).** The self-host
-   HAS a `const char*`/cstr value class via `is_cstr_returning_fn`
-   (`lir_codegen.gg:~1889`) + the `cstr_ret`/`gorget_str_from_cstr` call-emission
-   path (`~:4296-4308`, `~:4633`) and the `gorget_str_from_cstr`-as-callee path
-   (`~:1995`). `coal_decl_ctype` keying purely on `c_type_name(val_types)` does
-   NOT distinguish a value emitted/used as `const char*` from a `Str` value →
-   they wrongly coalesce. **FIX:** `coal_decl_ctype` must reproduce the EXACT
-   per-value emitted decl/use type INCLUDING the cstr class (so a `const char*`
-   value never shares a slot with a `Str`) — OR, conservatively, EXCLUDE the
-   cstr/const-char* value class from coalescing entirely (give them un-shared
-   slots, like the baseline) until the exact type can be reproduced. Symmetric
-   check on the Rust side: `coalesce_assign_exact` must key on the full decl-ctype
-   incl. `ValueOrigin::CStr` (`src/lir/types.rs:~823`) too.
+   ✅ **RESOLVED 2026-06-11 (`e2859be3`) — the REAL root cause was ADDRESS-ESCAPE,
+   not cstr-keying (an earlier cstr "correction" here was a symptom-level
+   misread).** The base coalescing broke `fixed_point` with a slot-aliasing
+   CLOBBER that surfaced DOWNSTREAM as a spurious `gorget_str_from_cstr`
+   double-wrap (stage-2 cc error). Root cause: the self-host block-param copy
+   `emit_block_param_copies` (`lir_codegen.gg:~4914`, the `bp_ptr and arg_agg`
+   arm) takes the ADDRESS of an aggregate block-arg (`__bp{param} = &__v{arg}`),
+   so that value's storage outlives its SSA value-liveness across the block
+   boundary (dereferenced in the SUCCESSOR) — an aliasing the liveness can't see.
+   Coalescing such an address-escaped value reuses its storage → clobber. The
+   Rust emitter does NOT have this (its `emit_jump_args` is always a plain by-VALUE
+   `__bp = __v`, `mod.rs:~3402`), so the Rust side needed no change. FIX:
+   `coal_addr_escaped_args` excludes address-escaped block-args from coalescing
+   (private `__vN`), mirroring the `bp_ptr and arg_agg` predicate 1:1, guarded by
+   the `coal_term_arg_lists_arms_count` lint. The synchronous call-arg `&__v`
+   sites (`:4776`/`:4810`) need NO exclusion (the value is an `inst_uses` operand
+   at the call → live there → per-block granularity already prevents the merge).
+   Longer-term: converge the self-host block-arg ABI onto Rust's by-value shape so
+   the asymmetry + the exclusion disappear (TODO codegen note).
 
 ## Both-emitter symmetry
 - Rust: `c_lir/mod.rs` (prototype lives here). Determinism recommended (Rust
