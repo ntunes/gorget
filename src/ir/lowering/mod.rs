@@ -2348,7 +2348,29 @@ fn lower_static_decl(
     // function whose body materializes the RHS, register it as a runtime-init
     // (`Extern { name, args: [] }`), and seed it as a DCE root (see
     // `src/lir/optimize.rs`). The prologue emits `__lir_g<N> = name();`.
-    if initializer_needs_synthetic_fn(&decl.value.node) {
+    // Chain C item 2: enum-typed statics (`static Option[String] G = None`,
+    // `static Color C = Color.Blue()`) — `eval_static_init` has no arm for
+    // NoneLiteral / enum-variant ctors, so EVERY enum-typed static fell
+    // through to `GlobalInit::Zeroed` SILENTLY (Option's Some = tag 0, so
+    // `Some(5)` read as Some with a zeroed payload; user enums read as
+    // their first variant). Route them through the same synthetic-init-fn
+    // path as collection literals. Widening is CALLER-side by design: the
+    // `initializer_needs_synthetic_fn` predicate is type-blind (an
+    // expression test), while enum-ness is typed registry metadata
+    // available here. The `__gg_static_init_` prefix is already DCE-seeded
+    // (`src/lir/optimize.rs`). NOTE: the bugB §3 init-ordering caveat now
+    // also covers enum statics whose variant args read other statics.
+    // Optional later: compile-time tag-only GlobalInit for payload-less
+    // variants (see TODO).
+    let is_enum_typed = matches!(
+        ctx.type_registry.get(type_id),
+        Some(GirType::Named(n))
+            if matches!(
+                ctx.type_registry.get_type_def(n).map(|d| &d.kind),
+                Some(TypeDefKind::Enum(_))
+            )
+    );
+    if initializer_needs_synthetic_fn(&decl.value.node) || is_enum_typed {
         let synth_name = format!("__gg_static_init_{}", name);
         synthesize_static_init_fn(ctx, &synth_name, decl);
         // Mirror `module.globals.push` below, changing ONLY `init`: the global

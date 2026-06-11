@@ -332,6 +332,25 @@ extra_0=7",
 }
 
 #[test]
+fn static_enum_init() {
+    // Chain C item 2: enum-typed statics were silently ZEROED —
+    // eval_static_init had no arm for NoneLiteral / enum-variant ctors, so
+    // `Option[String] G = None` printed "some:" (Some = tag 0),
+    // `Option[int] H = Some(5)` printed "some:0", and a user enum read as
+    // its first variant ("red" for Color.Blue()). Enum-typed statics now
+    // route through the synthesized __gg_static_init_<name>() path
+    // (caller-side widening of the Bug-B mechanism in lower_static_decl).
+    run_gg(
+        "static_enum_init.gg",
+        "\
+none
+some:5
+blue
+blue",
+    );
+}
+
+#[test]
 fn static_vec_index_load() {
     run_gg("static_vec_index_load.gg", "i0=alpha:10\ni2=gamma:30");
 }

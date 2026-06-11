@@ -1,0 +1,29 @@
+# Enum-typed STATIC initializers used to be silently ZEROED: eval_static_init
+# had no arm for NoneLiteral / enum-variant ctors, so every enum-typed static
+# fell through to GlobalInit::Zeroed (`Option[String] G = None` printed
+# "some:" since Some = tag 0; `Some(5)` printed "some:0"; a user enum read as
+# its first variant). Enum-typed statics now route through the synthesized
+# `__gg_static_init_<name>()` runtime-init path (caller-side widening in
+# lower_static_decl).
+enum Color:
+    Red()
+    Blue()
+
+static Option[String] G = None
+static Option[int] H = Some(5)
+static Color C = Color.Blue()
+public static Color P = Color.Blue()
+
+void main():
+    match G:
+        case Some(s): print(f"some:{s}")
+        case None: print("none")
+    match H:
+        case Some(v): print(f"some:{v}")
+        case None: print("none")
+    match C:
+        case Color.Red(): print("red")
+        case Color.Blue(): print("blue")
+    match P:
+        case Color.Red(): print("red")
+        case Color.Blue(): print("blue")
