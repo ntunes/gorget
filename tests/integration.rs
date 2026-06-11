@@ -22994,6 +22994,32 @@ fn cow_lazy_mut_borrow_write() {
     run_gg("cow_lazy_mut_borrow_write.gg", "s = hello more\nv.len() = 3");
 }
 
+// Chain C item 1: `!`-move of a collection with a LIVE element borrow
+// (`.get(i).unwrap()` bind shape — `v[i]` binds are already-safe). The
+// Expr::Move lowering must cow_before_mutation ANY local source (was
+// bare-params-only — sibling-site drift vs the call-arg move). Pre-fix:
+// move-bind/reassign read-through ("gamma"), clear read an empty string,
+// realloc was a SIGSEGV (exit 139).
+#[test]
+fn cow_move_bind_element_borrow() {
+    run_gg("cow_move_bind_element_borrow.gg", "alpha\ngamma");
+}
+
+#[test]
+fn cow_move_reassign_element_borrow() {
+    run_gg("cow_move_reassign_element_borrow.gg", "alpha\ngamma");
+}
+
+#[test]
+fn cow_move_clear_element_borrow() {
+    run_gg("cow_move_clear_element_borrow.gg", "alpha\n0");
+}
+
+#[test]
+fn cow_move_realloc_element_borrow() {
+    run_gg("cow_move_realloc_element_borrow.gg", "alpha\n66");
+}
+
 // H2 shape: FieldPath collection sources are EXCLUDED from lazy (stay
 // eager) — asserts correct output under the exclusion.
 #[test]

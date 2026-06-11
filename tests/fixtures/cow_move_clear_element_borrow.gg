@@ -1,0 +1,11 @@
+# `!`-move of a collection with a LIVE element borrow, then `w.clear()`.
+# Pre-fix the deferred CollectionRef survived the move and the clear freed
+# the element storage out from under `first` (empty-string read).
+# Bind shape MUST be `.get(i).unwrap()` — `v[i]` is already-safe.
+void main():
+    Vector[String] v = ["alpha", "beta"]
+    String first = v.get(0).unwrap()
+    Vector[String] w = !v
+    w.clear()
+    print(first)
+    print(w.len())
