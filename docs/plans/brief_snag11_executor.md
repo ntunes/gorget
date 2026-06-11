@@ -1,10 +1,18 @@
 # EXECUTOR BRIEF — Chain F: snag #11 (cross-error-type auto-propagation) → From-mediated, BOTH compilers symmetric
 
-Status: v1 (orchestrator draft, 2026-06-11, on gorget-1 tip `543344c2`).
+Status: v2 (pass-1 brief-review folded, 2026-06-11, on gorget-1 tip `fdcf57bd`).
 Provenance: scout `agent-a65eb1d6506b83c2f` (GO; end-to-end-proven the Rust
 gate + both lowerings; corpus fallout = 0 → land-direct, no migration). Owner
 decision 2026-06-11: **SYMMETRIC** — both compilers REJECT and CONVERT
-identically in this change. NEEDS ≥3 fresh brief-reviews before launch.
+identically in this change. Pass-1 fold (fresh reviewer, all 6 reservations,
+none a wrong root cause): reframed "one decision"→"shared helper at TWO
+chokepoints" (Route B's 12 guards already funnel through `is_auto_propagation_compatible`);
+flagged the reject-must-emit-at-decision-point trap (false-return reroutes to a
+misleading `unify` mismatch since OK-types match); flagged the span-plumbing
+(choke point carries no span, `from_conversions` is span-keyed); made the
+self-host From-lookup concrete + flagged its AST-arg-resolution difficulty;
+relabeled the `:2188` Index site; dropped the `span` field from the error kind.
+NEEDS ≥2 more fresh brief-reviews (until a pass raises no reservations).
 
 ## Mission
 Close the cross-error-type auto-propagation miscompile (a real out-of-bounds
@@ -35,7 +43,7 @@ instance; a lowering-only guard link-errors on it):
   | Site | Args | Role | Needs the E-check |
   |---|---|---|---|
   | ~1484 | (param_type, arg_type) | call-arg into Result-param (capture) | YES |
-  | ~2221 | (expected, found) | generic coercion | audit (only when peeling a throws/Result value) |
+  | ~2188 | (expected, found) | Index-position auto-prop (`Result[K,E]`→index type) | audit (only when peeling a throws/Result value) |
   | ~3028 | (declared_type, value_type) | VarDecl | YES (proven leak route) |
   | ~3086 | (target_type, value_type) | assignment target | YES |
   | ~3137 | (ret_type, expr_type) | Return | YES |
@@ -58,8 +66,14 @@ instance; a lowering-only guard link-errors on it):
   `fn_result_type`). Identical hole.
 
 ## Design — centralize, write through typed metadata (devbook/24)
-**The E-check belongs at ONE shared peel decision, not scattered across 14
-guards.** Centralize so Route A and Route B cannot diverge.
+**The E-check belongs in a shared helper invoked at TWO chokepoints — NOT one
+mythical single site, and NOT scattered across the guards.** Route B is ALREADY
+one site: all 12 Route-B guards funnel through the single function
+`is_auto_propagation_compatible` (`typecheck.rs:~4248`), so the E-check goes in
+its body. Route A is the second site: the producer-peel (`typecheck.rs:~1572`).
+Both invoke the SAME shared helper, which classifies a propagation position as
+{not-a-propagation / same-type-OK / convert-via-From(DefId) / REJECT} so Route A
+and Route B cannot diverge.
 
 1. **Typed-metadata axis (Rust).** Add `from_conversions: FxHashMap<Span,
    DefId>` to the analysis output (`AnalysisResult` in `src/semantic/mod.rs` —
@@ -83,16 +97,38 @@ guards.** Centralize so Route A and Route B cannot diverge.
      `traits.rs:89-113`; lookup via the trait/equip registry) and RECORD its
      `DefId` in `from_conversions` keyed by the call span.
    - **different + no `From`** → **reject** with a dedicated
-     `SemanticErrorKind::UnconvertibleErrorPropagation { caller_err, callee_err,
-     span }` (add the variant + its render; do NOT reuse `TypeMismatch`).
-     Message: suggest `equip CallerE with From[CalleeE]:` or `rethrow`, cite
-     §36.3. Model registration/rendering on an existing kind (e.g.
-     `wrong_arg_count_error`).
+     `SemanticErrorKind::UnconvertibleErrorPropagation { caller_err, callee_err }`
+     (add the variant + its render; NO `span` FIELD — siblings like
+     `TypeMismatch`/`WrongArgCount` carry none; the span is passed via
+     `self.error(kind, span)`. Do NOT reuse `TypeMismatch`). Message: suggest
+     `equip CallerE with From[CalleeE]:` or `rethrow`, cite §36.3. Model
+     registration/rendering on an existing kind (e.g. `wrong_arg_count_error`,
+     `src/semantic/errors.rs`).
+     ⚠ **EMIT THE ERROR AT THE DECISION POINT — do NOT just return `false`.**
+     For the cross-type-no-From case the OK-types MATCH (e.g. `bool` vs `bool`),
+     so today `is_auto_propagation_compatible` returns `true` and the program
+     slips through; if the new E-check merely returns `false`, the caller falls
+     through to `unify(Result[bool,E], bool)` and emits a MISLEADING
+     `expected bool, found Result` `TypeMismatch` instead of the teaching error.
+     The shared helper must EMIT `UnconvertibleErrorPropagation` itself (it needs
+     `&mut self` / the error sink) and signal the caller to STOP — not re-unify.
+     (This means the helper is NOT a pure `&self` predicate like today's
+     `is_auto_propagation_compatible`; plan the signature accordingly — e.g.
+     return an enum {NotProp, Ok, Convert(DefId), Rejected} and let the caller
+     skip the unify on `Rejected`.)
 3. **Lowering conversion (Rust).** At `emit_result_auto_propagate` err path:
    read `from_conversions` for the call span; if present, emit a call to the
    recorded `From::from` (DefId → mono symbol) on `err_val`, then `enum_init`
    the caller Error with the CONVERTED value; else today's path. DCE seeds
    automatically off the emitted call reference (scout-confirmed).
+   ⚠ **Span plumbing is real, unmentioned work:** `maybe_auto_propagate` /
+   `emit_result_auto_propagate` carry NO span today (signature
+   `(ctx, builder, operand)`), but `from_conversions` is span-KEYED. The
+   propagation span IS available at the centralized `lower_expr` hook
+   (`src/ir/lowering/exprs/mod.rs:~84`, `expr.span` ~:95) — add a span parameter
+   and thread it through `maybe_auto_propagate` → `emit_result_auto_propagate`
+   across its ~15 call sites (calls.rs, methods.rs, stmts/*, mod.rs). Required,
+   not optional — it's the metadata key.
 4. **From-only.** Auto-propagation uses infallible `From` only. A `TryFrom`
    (fallible) conversion is NOT auto-applied — the user must `rethrow`/`catch`.
    Do NOT synthesize a conversion without a `From` impl (owner directive;
@@ -112,8 +148,17 @@ self-host TYPECHECK gate. Implement it RUN-verified, incrementally:
    call-typing for a throws/`Result`-returning callee in a propagating context,
    compute callee-E vs caller-E; same → peel as today; different + `From` on
    callerE → record (self-host metadata side-table, mirror the Rust axis);
-   different + no `From` → emit the teaching error. The self-host needs its own
-   equip/From lookup (confirm the self-host's trait-equip registry exposes it).
+   different + no `From` → emit the teaching error. **Self-host From-lookup —
+   concrete + HARDER than Rust:** use `EquipInfo` (`types.gg:~76`:
+   `trait_name`/`self_type`/`trait_generic_args`/`method_def_ids`) for the impl
+   data, and mirror the existing span-keyed side-table `types.expr_types`
+   (`infer.gg:~437`) for the self-host `from_conversions`. ⚠ The self-host
+   `TraitRegistry.trait_impls` (`types.gg:~104`) is keyed on `self_type` ONLY
+   (no resolved composite `(trait,type,args)` key like Rust's), so the From
+   match must SCAN candidate impls for `self_type==callerE`, filter
+   `trait_name=="From"`, and RESOLVE the AST `trait_generic_args[0]` Type to a
+   TypeId to compare against calleeE — AST-type-resolution work the Rust direct
+   lookup avoids. Same emit-at-decision-point rule (don't silently fall through).
 3. **RUN-verify the self-host gate:** build the self-host typechecker driver,
    run a cross-type repro through it, confirm it REJECTS; run a From-mediated
    positive through the self-host lowerer, confirm correct output. This part
