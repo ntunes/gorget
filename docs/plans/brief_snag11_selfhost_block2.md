@@ -5,7 +5,12 @@ prototype `b81f4ee6` / `docs/plans/snag11_selfhost_block2_prototype.diff`,
 2026-06-11). Owner: SHIP Block 2 (the reject-gate Block 1 is DEFERRED — see the
 SELF-HOST snag #11 remainder entry in TODO; gorget-js is NOT blocked by snag
 #11). **SELF-HOST ONLY** — the Rust side already mangles correctly (it is the
-reference); do NOT touch Rust. NEEDS ≥3 fresh brief-reviews before launch.
+reference); do NOT touch Rust. Pass-1 fold (fresh reviewer, all 5 claims PASS,
+2 sharpenings): corrected the sibling-site map (line numbers had drifted) + the
+centralization is REQUIRED-for-consistency framing (vtable FnRef dangles
+otherwise); EXCLUDE the two `_VTable` struct-name sites from the helper (per-
+trait, not per-instantiation). NEEDS a fresh confirming pass (pass-1 raised
+reservations → cannot stop).
 
 ## Mission
 Bring the self-host's trait-equip `From` mangling up to Rust parity so the
@@ -30,25 +35,50 @@ two instances.**
   symbol (not only the short `BigErr__from`) so the conversion lookup +
   `maybe_emit_from_conversion`'s `gmod.fn_sigs.contains("From__…")` match.
 
-## Fix the CLASS (CLAUDE.md "fix the class, not the instance") — REQUIRED
-The prototype fixed the 2 sites on `From`'s path (the `not did_split` route).
-The scout found **5 sibling `_for_` mangling sites** on the `did_split`
-vtable/default-method path (`lower.gg:~3268/3319/3322/3360` — re-grep, one line
-may host two) that ALSO call `mangle_trait_name(tname)` WITHOUT appending
-`trait_generic_args`. For `From` they don't fire (it takes the `not did_split`
-route — that's why the 2-site fix proved sufficient), but a generic-arg trait
-with a registered `TraitDef` + instance/default methods WOULD hit them → the
-identical drop-the-arg drift. REQUIRED:
+## Fix the CLASS (CLAUDE.md "fix the class, not the instance") — REQUIRED for consistency, not just hygiene
+The prototype fixes the 2 sites on `From`'s path. `From` itself does NOT reach
+the `did_split` route (it's a builtin-method trait, `traits.gg:~437`, not a
+bodied `trait From:`, so `trait_defs.contains("From")` is false → the 2-site fix
+is provably sufficient FOR `From`). But the SAME drop-the-arg drift lives at the
+`did_split` vtable/default-method sites, and centralizing is **required for
+internal consistency** (not optional): site 1 already changes the own-method
+body name for a generic-arg trait, so the vtable slot FnRef would DANGLE unless
+spelled by the same helper. The actual equip-`_for_`-symbol sites (pass-1
+reviewer-verified — earlier line numbers had drifted):
+
+| # | Site | Builds | Action |
+|---|------|--------|--------|
+| 1 | `lower_closures.gg:~297` | `lower_equip_block` body mangling (From / not-did_split) | prototype fixes |
+| 2 | `lower.gg:~2771` | IEquip fn_sigs short symbol | prototype fixes (register prefixed) |
+| 3 | `lower.gg:~3248` | did_split own-trait default-method body | route through helper |
+| 4 | `lower.gg:~3300` | did_split vtable slot FnRef (`_for_…__slot`) | route through helper |
+| 5 | `lower.gg:~3303` | did_split vtable global name (`_for_…_vtable`) | route through helper |
+| 6 | `lower.gg:~3340` | not-did_split default-method body | route through helper |
+
+(The `did_split` own-method BODIES are NOT a separate site — they route through
+site 1 via `lower.gg:~3219` calling `lower_equip_block(own_eqblk)`.)
+
+REQUIRED:
 1. **Centralize:** add ONE `mangle_trait_equip_name(tname, trait_generic_args)`
-   helper (mirror Rust's `src/ir/lowering/traits.rs:~1614`) that appends the
-   args, and route EVERY equip-symbol-mangling site — the 2 on `From`'s path +
-   the ~5 `did_split` siblings — through it. One source of truth (devbook/24
-   rule 3).
-2. **Re-grep** all `mangle_trait_name(` / `_for_` equip-symbol constructions;
-   ensure NONE builds the equip symbol without the args after centralization.
-3. **Site-count lint** (`tests/lints.rs`, cf. `container_literal_arms_count`) if
-   the pattern supports it, so a new equip-mangle site is forced through the
-   helper.
+   helper (mirror Rust `src/ir/lowering/traits.rs:~1614`) that appends the args,
+   and route sites 1, 3, 4, 5, 6 (the `_for_<type>__<method>` and
+   `_for_<type>_vtable` symbols) through it. One source of truth (devbook/24
+   rule 3) — keeps the FnRef + body + vtable-slot mutually consistent.
+2. ⚠ **EXCLUDE the `_VTable` STRUCT-name sites** (`lower.gg:~2947` and the
+   did_split `_VTable` at `~:3295`, `mangle_trait_name(...)+"_VTable"`) — these
+   spell a TYPE name, kept PER-TRAIT (not per-instantiation) by Rust, so they
+   must NOT get the generic-arg suffix. The helper applies ONLY to
+   `_for_<type>__<method>` / `_for_<type>_vtable` symbols, NOT `_VTable` type
+   names. A naive "route every `mangle_trait_name(` call" would wrongly suffix
+   these — do NOT.
+3. **Site-count lint** (`tests/lints.rs`, cf. `container_literal_arms_count` /
+   `snag11_auto_prop_gate_site_count`) so a new equip-symbol-mangle site is
+   forced through the helper.
+
+(Empty-arg traits — Writer/Reader/Serializer/Deserializer — are byte-identical
+through the helper since it appends nothing; only generic-arg traits reaching
+`did_split` shift, and that shift is TOWARD Rust parity. The full-corpus
+emit-diff gate must confirm each delta is intended; STOP on an unexpected one.)
 
 ## Snapshot
 Regen the `snag11_from_mediated_propagation` runtime snapshot
