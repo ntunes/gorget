@@ -6,11 +6,13 @@ the DEFAULT in Rust gg (Phase 1, four hooks) AND the self-host (Phase 2 provenan
 elision both emitters, target-gated 64MB pthread mains + 2 pinned stack guards, the stack-cliff/7x "blockers" were
 REFUTED myths — see DONE.md 2026-06-10/11 for the five landed chains: Phase-1 default, lower.gg split, enumeration
 lints, Phase-2 gated, Chain-E flip). Docs on top, `git log -1` for the live tip; owner ff's main→gorget-1.
-⏸ PARKED ON OWNER HOLD: Chain C (Rust miscompile batch, `docs/plans/brief_rust_miscompile_batch.md` v3.1) and
-Chain D (print-temp leak class, `docs/plans/brief_print_temp_leak_fix.md` v3.1 + run-proven diff) — each ONE
-confirming pass from executor-ready; C RESUMED 2026-06-11 (executes FIRST); D rebases over C at its resume (shared insts.rs regions). HIGH backlog from this session:
-Fix C (lir_codegen per-extern-call LirFunction clone-bomb, ~10x emission lever), self-host driver RELATIVE-PATH
-miscompile, `gg fmt` long-chain data loss, Rust EMove value-bug (in Chain C item 1).**
+Chain C (Rust miscompile batch, `docs/plans/brief_rust_miscompile_batch.md` v3.2) EXECUTED 2026-06-11 — 7 commits
+on executor branch `worktree-agent-a4c6893e7ce6d3292` (`b1f6e779`..`9b3fed57`), pending parent output-review +
+integration; the EMove pair flipped WRONG→MATCH on that tree (snapshot follow-up in the LAZY-CoW block below).
+⏸ STILL PARKED: Chain D (print-temp leak class, `docs/plans/brief_print_temp_leak_fix.md` v3.1 + run-proven diff)
+— D rebases over C at its resume (shared insts.rs regions; C touched only the `:25` extract-caller region). HIGH
+backlog from this session: Fix C (lir_codegen per-extern-call LirFunction clone-bomb, ~10x emission lever),
+self-host driver RELATIVE-PATH miscompile, `gg fmt` long-chain data loss.**
 RE-MEASURE PARITY (never trust a dated number) via: `GG_RUNTIME_DIFF=1 GG_BUILD_TIMEOUT_SECS=600 cargo test --test
 integration --release self_host_runtime_diff -- --nocapture` → read the `PARITY = MATCH/(...)` line. Last RUN-CONFIRMED
 (2026-06-10, post-Phase-2 tree): **498/987 ≈ 50.5%** — RE-MEASURE for the live number; the denominator grows with the
@@ -20,7 +22,8 @@ eager/pre-change Step-0 baseline (⚠ THRICE-PROVEN this session: ASan is BLIND 
 stdout fixtures are the primary net; see devbook/11 caveat).**
 **⬅ NEXT: ① the #37 follow-ups (HIGH — see the 🔥 LAZY-CoW FOLLOW-UPS block below: Fix C driver-emission
 clone-bomb [~10x lever] + the SELF-HOST relative-input-path miscompile [deterministic, breaks the bootstrap when the
-driver is invoked with a relative source path] + the Rust EMove value-bug); ② the parity north-star chains (#34/#39) +
+driver is invoked with a relative source path] + the EMove-pair snapshot/oracle-exception retirement once Chain C
+integrates); ② the parity north-star chains (#34/#39) +
 the queued enum_category Phase 2 — ALL pre-split `lower.gg:NNNN` citations in queued briefs are STALE: re-grep via
 the MODULE MAP note below.**
 **Recent landed work lives in DONE.md, NOT here — keep this block free of COMPLETE/DONE/LANDED breadcrumbs (state + NEXT only).**
