@@ -1,12 +1,17 @@
 # EXECUTOR BRIEF — Chain F: snag #11 (cross-error-type auto-propagation) → From-mediated, BOTH compilers symmetric
 
-Status: v3 (pass-1 + pass-2 brief-reviews folded, 2026-06-11, on gorget-1 tip
-`5d7be65a`). Pass-2 fold (fresh reviewer, all claims PASS, 4 minor scoping
-refinements): reuse `FunctionInfo.throws_type_id` for caller-E (not a new
-field); flag the self-host lowering span-plumbing symmetry (~13 sites); name
-the self-host AST-Type→TypeId resolver `ast_type_to_resolved` (types.gg:278);
-drop the literal parity baseline → capture it at session start. NEEDS ≥1 more
-fresh brief-review (until a pass raises no reservations).
+Status: v4 (pass-1..3 brief-reviews folded, 2026-06-11, on gorget-1 tip
+`371586e6`). Pass-3 (fresh reviewer) caught a BACKWARDS fold introduced in v2:
+the v2/v3 "reuse `FunctionInfo.throws_type_id` for caller-E" was WRONG —
+`throws_type_id` at `typecheck.rs:1572` is the CALLEE's, and `check_function`
+stores only the boolean `current_function_throws` (the resolved caller-E is
+discarded). v4 corrects both compilers: throws-caller needs a NEW
+`current_fn_throws_type_id` field (Rust ~:5689; self-host resolve
+`func.throws_type.ty` via `ast_type_to_resolved`); Result-return caller derives
+caller-E from `current_return_type` args[1]. (Earlier folds, all verified PASS:
+two-chokepoints framing; reject-emit-at-decision-point; span-plumbing both
+compilers; named self-host resolver; parity baseline captured not dated.) NEEDS
+a fresh confirming pass (pass-3 raised reservations → cannot stop here).
 Provenance: scout `agent-a65eb1d6506b83c2f` (GO; end-to-end-proven the Rust
 gate + both lowerings; corpus fallout = 0 → land-direct, no migration). Owner
 decision 2026-06-11: **SYMMETRIC** — both compilers REJECT and CONVERT
@@ -92,12 +97,20 @@ and Route B cannot diverge.
    other resolved calls do.
 2. **Typecheck gate (Rust), at the shared decision.** Resolve callee-E (the
    `Result`'s E — `err_ty` at the Route-A peel; the discarded `_err_type` for
-   Route B) and caller-E. For the caller's error type, REUSE the existing
-   `FunctionInfo.throws_type_id` (the resolved caller-E already read at the
-   Route-A peel `typecheck.rs:1572`; fn-entry hook ~`:5688`) rather than
-   re-resolving `func.throws` from AST — one source of truth. Only add a new
-   `current_*` field if a `Result`-typed (non-`throws`) return needs deriving
-   that `throws_type_id` doesn't already cover; prefer the existing field.
+   Route B) and caller-E. ⚠ **caller-E is NOT free — acquire it correctly
+   (pass-3 caught a backwards fold here):** the `throws_type_id` read at
+   `typecheck.rs:1572` is the CALLEE's (`func_info` = the function being
+   *called*), NOT the caller's; the caller's `FunctionInfo` is never looked up
+   at the propagation sites, and `check_function` (~`:5689`) stores only the
+   BOOLEAN `current_function_throws` — the resolved caller error TypeId is
+   discarded. So:
+     - **`throws E` caller (the primary repro path):** add a new
+       `current_fn_throws_type_id: Option<TypeId>` set alongside
+       `current_function_throws` at `check_function` (~`:5689`, reset at
+       ~`:5749`) — that is caller-E.
+     - **`Result[T,E]`-returning (non-throws) caller:** caller-E is `args[1]`
+       of `current_return_type` (~`:5688`, which already holds the full
+       `Result[T,E]`) — no new field needed there.
    Three cases at every propagation position:
    - **same type** → accept, no metadata (today's path — MUST stay
      byte-identical; the scout proved this).
@@ -162,6 +175,14 @@ self-host TYPECHECK gate. Implement it RUN-verified, incrementally:
    call-typing for a throws/`Result`-returning callee in a propagating context,
    compute callee-E vs caller-E; same → peel as today; different + `From` on
    callerE → record (self-host metadata side-table, mirror the Rust axis);
+   ⚠ **caller-E is NOT free here either (same gap as the Rust side):** the
+   self-host stashes only the boolean `ctx.current_function_throws`
+   (`typecheck.gg:~384`), not the resolved caller-E TypeId. Add a new
+   `ctx.current_fn_throws_type_id` (int, -1 = none) populated by resolving
+   `func.throws_type.ty` via `ast_type_to_resolved` (`types.gg:~278`) at the
+   fn-entry hook (mirror where `current_function_throws` is set); for a
+   `Result`-returning non-throws caller, derive caller-E from the resolved
+   return type's `args[1]`.
    different + no `From` → emit the teaching error. **Self-host From-lookup —
    concrete + HARDER than Rust:** use `EquipInfo` (`types.gg:~76`:
    `trait_name`/`self_type`/`trait_generic_args`/`method_def_ids`) for the impl
