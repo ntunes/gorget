@@ -147,6 +147,55 @@ Vector[int] term_successors(LirTerm term):
             result.push(default_bb)
     return result
 
+# All ValueIds USED (read) by a terminator. The block-arg/phi liveness lives
+# HERE — `TJump`/`TBranch`/`TSwitch` args are the values flowing into the
+# successor's block params (the "arg live at end of pred" semantics). Ported
+# ARM-FOR-ARM against the Rust gold reference `Term::uses()`
+# (`src/lir/mod.rs:~1238`); the `LirTerm` operand positions come from the
+# `lir.gg` decl (POSITIONAL). A missing arg here = an under-live range = a
+# slot-aliasing clobber the emit-diff CANNOT catch (only the RUN gate would),
+# so the arm set is cross-checked 1:1 by `term_uses_arms_count` in
+# tests/lints.rs. MIND: don't forget the branch/switch ARGS.
+Vector[int] term_uses(LirTerm term):
+    Vector[int] result = []
+    match term:
+        case TRet(value):
+            result.push(value)
+        case TRetVoid():
+            pass
+        case TUnreachable():
+            pass
+        case TJump(_, args):
+            int ji = 0
+            while ji < args.len():
+                result.push(args.get(ji).unwrap())
+                ji += 1
+        case TBranch(cond, _, then_args, _, else_args):
+            result.push(cond)
+            int ti = 0
+            while ti < then_args.len():
+                result.push(then_args.get(ti).unwrap())
+                ti += 1
+            int ei = 0
+            while ei < else_args.len():
+                result.push(else_args.get(ei).unwrap())
+                ei += 1
+        case TSwitch(value, cases, _, default_args):
+            result.push(value)
+            int ci = 0
+            while ci < cases.len():
+                SwitchCase sc = cases.get(ci).unwrap()
+                int ai = 0
+                while ai < sc.args.len():
+                    result.push(sc.args.get(ai).unwrap())
+                    ai += 1
+                ci += 1
+            int di = 0
+            while di < default_args.len():
+                result.push(default_args.get(di).unwrap())
+                di += 1
+    return result
+
 # ── SSA Builder ─────────────────────────────────────────────
 
 # Key-encode (block_id, slot_id) as a single int for Dict lookup.

@@ -20,6 +20,9 @@ from lir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
 from lir import EK_NOT_ENUM, EK_OPTION, EK_RESULT, EK_GENERAL
 from lir import GINIT_ZEROED, GINIT_FUNC_ADDR, GINIT_RUNTIME_CALL, GINIT_STRUCT, GINIT_BYTES
 from lir import SCHED_POOL, SCHED_THREAD, SCHED_INLINE, SCHED_SINGLE
+# Slot-coalescing reads the CFG successors and terminator operands from lir_ssa
+# (the new `term_uses` lives next to `term_successors`).
+from lir_ssa import term_successors, term_uses
 from std.collections import Vector, Dict
 from std.conv import int_to_str
 # Chain 2: the full-program preamble reads the shared runtime .c files at
@@ -2944,6 +2947,200 @@ int inst_dst(LirInst &inst):
         case INop:
             return -1
 
+# All ValueIds USED (read) by an instruction — the operand enumerator the
+# liveness pass reads (parallel to `inst_dst` above). ⚠ THE SINGLE HIGHEST-RISK
+# SITE in slot-coalescing: a SINGLE missing operand here → an under-live range →
+# a slot-aliasing CLOBBER that `c_emit_comparison` AND the emit-diff CANNOT
+# catch (only the RUN gate would). Ported ARM-FOR-ARM against the Rust gold
+# reference `Inst::uses()` (`src/lir/mod.rs:~1099`); the `LirInst` is POSITIONAL
+# (`ICall(dst, func_id, args)`), so the operand POSITIONS come from the `lir.gg`
+# decl — NOT Rust field names. The arm set is cross-checked 1:1 against
+# `Inst::uses()` by `inst_uses_arms_count` in tests/lints.rs, so a future
+# LirInst variant is forced through here. MIND: dst-less arms still have uses
+# (IStore/IMemset/IMemcpy/IStructInit/IEnumInit/IPrintf/IBoundsCheck/…) and
+# Vector[int] arg-lists (ICall*/IPrintf/IFprintf/IClosure*).
+Vector[int] inst_uses(LirInst &inst):
+    Vector[int] result = []
+    match inst:
+        # Slot access — SlotStore reads `value`; SlotLoad/SlotAddr read nothing.
+        case ISlotStore(_, value, _):
+            result.push(value)
+        case ISlotLoad(_, _, _):
+            pass
+        case ISlotAddr(_, _):
+            pass
+        # Constants — no uses.
+        case IIConst(_, _, _):
+            pass
+        case IFConst(_, _, _):
+            pass
+        case IBoolConst(_, _):
+            pass
+        case INullPtr(_):
+            pass
+        case IFuncAddr(_, _):
+            pass
+        case IGlobalAddr(_, _):
+            pass
+        case IStrLit(_, _):
+            pass
+        case IParamRef(_, _, _):
+            pass
+        # Arithmetic — binary ops read [lhs, rhs]; unary read [operand].
+        case IAdd(_, _, lhs, rhs, _):
+            result.push(lhs)
+            result.push(rhs)
+        case ISub(_, _, lhs, rhs, _):
+            result.push(lhs)
+            result.push(rhs)
+        case IMul(_, _, lhs, rhs, _):
+            result.push(lhs)
+            result.push(rhs)
+        case IDiv(_, _, lhs, rhs):
+            result.push(lhs)
+            result.push(rhs)
+        case IRem(_, _, lhs, rhs):
+            result.push(lhs)
+            result.push(rhs)
+        case IMod(_, _, lhs, rhs):
+            result.push(lhs)
+            result.push(rhs)
+        case INeg(_, _, operand):
+            result.push(operand)
+        # Bitwise.
+        case IBitAnd(_, _, lhs, rhs):
+            result.push(lhs)
+            result.push(rhs)
+        case IBitOr(_, _, lhs, rhs):
+            result.push(lhs)
+            result.push(rhs)
+        case IBitXor(_, _, lhs, rhs):
+            result.push(lhs)
+            result.push(rhs)
+        case IBitNot(_, _, operand):
+            result.push(operand)
+        case IShl(_, _, lhs, rhs):
+            result.push(lhs)
+            result.push(rhs)
+        case IShr(_, _, lhs, rhs):
+            result.push(lhs)
+            result.push(rhs)
+        # Comparison & logic.
+        case ICmp(_, _, lhs, rhs):
+            result.push(lhs)
+            result.push(rhs)
+        case INot(_, operand):
+            result.push(operand)
+        # Type conversions — read the single source `value`.
+        case IIntCast(_, value, _):
+            result.push(value)
+        case IFloatCast(_, value, _):
+            result.push(value)
+        case IIntToFloat(_, value, _):
+            result.push(value)
+        case IFloatToInt(_, value, _):
+            result.push(value)
+        case IPtrCast(_, value):
+            result.push(value)
+        case IBitcast(_, value, _):
+            result.push(value)
+        # Memory.
+        case ILoad(_, ptr, _):
+            result.push(ptr)
+        case IStore(ptr, value):
+            result.push(ptr)
+            result.push(value)
+        case IFieldPtr(_, base, _, _):
+            result.push(base)
+        case IElemPtr(_, base, index, _):
+            result.push(base)
+            result.push(index)
+        case IMemset(ptr, byte, size):
+            result.push(ptr)
+            result.push(byte)
+            result.push(size)
+        case IMemcpy(dst_ptr, src_ptr, size):
+            result.push(dst_ptr)
+            result.push(src_ptr)
+            result.push(size)
+        # Box alloc / address-of read the single `value`.
+        case IBoxAlloc(_, _, value):
+            result.push(value)
+        case IAddressOf(_, value, _):
+            result.push(value)
+        # Struct / enum init: read `target` then each field's value.
+        case IStructInit(target, _, fields):
+            result.push(target)
+            int sfi = 0
+            while sfi < fields.len():
+                result.push(fields.get(sfi).unwrap().value)
+                sfi += 1
+        case IEnumInit(target, _, _, fields):
+            result.push(target)
+            int efi = 0
+            while efi < fields.len():
+                result.push(fields.get(efi).unwrap().value)
+                efi += 1
+        # Calls — read every arg; CallPtr also reads the callee value.
+        case ICall(_, _, args):
+            int ci = 0
+            while ci < args.len():
+                result.push(args.get(ci).unwrap())
+                ci += 1
+        case ICallExtern(_, _, args, _, _):
+            int cei = 0
+            while cei < args.len():
+                result.push(args.get(cei).unwrap())
+                cei += 1
+        case ICallPtr(_, callee, args):
+            result.push(callee)
+            int cpi = 0
+            while cpi < args.len():
+                result.push(args.get(cpi).unwrap())
+                cpi += 1
+        # Runtime checks.
+        case IBoundsCheck(index, len):
+            result.push(index)
+            result.push(len)
+        case IDivCheck(divisor):
+            result.push(divisor)
+        case ITrap(_):
+            pass
+        # Printf family — read every arg; Fprintf also reads the fd value.
+        case IPrintf(_, args):
+            int pi = 0
+            while pi < args.len():
+                result.push(args.get(pi).unwrap())
+                pi += 1
+        case IFprintf(fd, _, args):
+            result.push(fd)
+            int fpi = 0
+            while fpi < args.len():
+                result.push(args.get(fpi).unwrap())
+                fpi += 1
+        # Inline C — no SSA operands.
+        case IInlineC(_, _):
+            pass
+        # Closure pack reads env_ptr; closure dispatch reads closure + args.
+        case IClosurePack(_, env_ptr, _, _):
+            result.push(env_ptr)
+        case ICallClosure(_, _, closure, args, _, _):
+            result.push(closure)
+            int cci = 0
+            while cci < args.len():
+                result.push(args.get(cci).unwrap())
+                cci += 1
+        # Drop guard open reads its guarded value; close has no uses.
+        case IDropGuardOpen(_, value):
+            result.push(value)
+        case IDropGuardClose:
+            pass
+        case IMoveSlot(_):
+            pass
+        case INop:
+            pass
+    return result
+
 # ── Instruction emission ───────────────────────────────────
 
 String v(int id): "__v" + int_to_str(id)
@@ -4787,6 +4984,267 @@ void mark_used_value_ids(String body, Vector[bool] &v_used, Vector[bool] &s_used
         else:
             mu_i += 1
 
+# ── Liveness-based value-slot coalescing (the frame fix; rustc-equivalent) ──
+#
+# gg emits each function as ONE flat C scope: all `__v{N}` SSA value-locals up
+# front. At -O0 the C compiler gives each its own stack slot, so the frame is the
+# SUM of all (mutually-exclusive) match arms' locals. We compute SSA value
+# liveness over the block CFG (block-args as phi) and greedily coalesce values
+# with disjoint live ranges + an IDENTICAL C decl-type onto one C local, emitted
+# as `#define __vN __coalK` aliases (ZERO body rewrite) + `#undef` after the
+# function close.
+#
+# DETERMINISM (load-bearing for `fixed_point` byte-identity — the self-host must
+# self-reproduce stage-2==stage-3==stage-4): the assignment is a SINGLE pass over
+# value ids ASCENDING (0..max_val), placing each used value in the FIRST existing
+# slot whose recorded decl-type STRING matches AND whose live-set is disjoint,
+# else a fresh slot. Slot numbering is therefore identical run-to-run with NO
+# dependence on Dict iteration order. A value reuses a slot ONLY when its
+# block-live-set is provably disjoint from every value already in it — no two
+# simultaneously-live values ever share a slot.
+#
+# This is the symmetric twin of the Rust `coalesce_assign_exact` /
+# `compute_live_blocks` in src/backend/c_lir/mod.rs (the Rust side groups by
+# decl-ctype via a sorted BTreeMap; both are internally deterministic — the slot
+# NUMBERS need not match cross-emitter since each keys on its OWN decl-ctype
+# shape and emits different bytes anyway).
+
+# The EXACT C decl-type string the self-host value-decl loop emits for value `vi`
+# (`void*` default; `c_type_name` with "void"→"void*" otherwise). The self-host
+# has NO CStr/value_origins branch — this is the SIMPLER SUBSET, keyed on the
+# self-host's OWN shape (NOT Rust's). Two values coalesce only if this string is
+# identical, so they declare identically.
+String coal_decl_ctype(int vi, Dict[int, int] &val_types, Vector[String] &sn):
+    if val_types.contains(vi):
+        int vty = val_types.get(vi).unwrap()
+        String ts = c_type_name(vty, &sn)
+        if ts == "void":
+            return "void*"
+        return ts
+    return "void*"
+
+# Per-value block-live-set: the block indices where each used value is live.
+# Standard SSA value liveness — backward dataflow over the block CFG with
+# block-args modelled as phi (an arg is live at the end of the predecessor via
+# the terminator's `term_uses`; a block param is a def at the start of the
+# successor). Reads exactly block params (defs), `inst_uses`/`inst_dst`, and
+# `term_uses` — the COMPLETE operand surface. Per-block granularity (a LOWER
+# BOUND on the achievable yield) keeps it sound: a value reported live in a block
+# is conservatively treated as live across the whole block. `live_blocks` is
+# indexed by value id; each entry is the ascending list of block indices.
+Vector[Vector[int]] coal_compute_live_blocks(LirFunction &func, Vector[bool] &v_used):
+    int nval = v_used.len()
+    int nblocks = func.blocks.len()
+
+    # def[b] / upward_use[b] as Dict[int,bool] sets (sparse; nval can be large).
+    Vector[Dict[int, bool]] def_sets = []
+    Vector[Dict[int, bool]] use_sets = []
+    int bi = 0
+    while bi < nblocks:
+        Dict[int, bool] d = {}
+        Dict[int, bool] u = {}
+        def_sets.push(d)
+        use_sets.push(u)
+        bi += 1
+
+    # successors per block (mirrors compute_predecessors' use of term_successors).
+    Vector[Vector[int]] succ = []
+    bi = 0
+    while bi < nblocks:
+        LirBlock blk = func.blocks.get(bi).unwrap()
+        Vector[int] ss = term_successors(blk.term)
+        succ.push(ss)
+        bi += 1
+
+    bi = 0
+    while bi < nblocks:
+        LirBlock blk = func.blocks.get(bi).unwrap()
+        # Block params are defs at the very top of the block.
+        int ppi = 0
+        while ppi < blk.params.len():
+            BlockParam bp = blk.params.get(ppi).unwrap()
+            if bp.value_id >= 0 and bp.value_id < nval:
+                def_sets.get(bi).unwrap().put(bp.value_id, true)
+            ppi += 1
+        # Instruction uses (upward-exposed: used before any def in this block),
+        # then the instruction's dst as a def.
+        int ii = 0
+        while ii < blk.insts.len():
+            LirInst inst = blk.insts.get(ii).unwrap()
+            Vector[int] uses = inst_uses(&inst)
+            int ui = 0
+            while ui < uses.len():
+                int k = uses.get(ui).unwrap()
+                if k >= 0 and k < nval and not def_sets.get(bi).unwrap().contains(k):
+                    use_sets.get(bi).unwrap().put(k, true)
+                ui += 1
+            int dst = inst_dst(&inst)
+            if dst >= 0 and dst < nval:
+                def_sets.get(bi).unwrap().put(dst, true)
+            ii += 1
+        # Terminator uses (incl. block-args) — live at the end of the block.
+        Vector[int] tuses = term_uses(blk.term)
+        int ti = 0
+        while ti < tuses.len():
+            int k = tuses.get(ti).unwrap()
+            if k >= 0 and k < nval and not def_sets.get(bi).unwrap().contains(k):
+                use_sets.get(bi).unwrap().put(k, true)
+            ti += 1
+        bi += 1
+
+    # Backward fixpoint: live_in = use ∪ (live_out − def); live_out = ∪ succ live_in.
+    # live_in[b] / live_out[b] as Dict[int,bool] sets.
+    Vector[Dict[int, bool]] live_in = []
+    Vector[Dict[int, bool]] live_out = []
+    bi = 0
+    while bi < nblocks:
+        Dict[int, bool] li = {}
+        Dict[int, bool] lo = {}
+        live_in.push(li)
+        live_out.push(lo)
+        bi += 1
+
+    bool changed = true
+    while changed:
+        changed = false
+        int b = nblocks - 1
+        while b >= 0:
+            # new_out = union of live_in of successors.
+            Dict[int, bool] new_out = {}
+            Vector[int] ss = succ.get(b).unwrap()
+            int si = 0
+            while si < ss.len():
+                int s = ss.get(si).unwrap()
+                Vector[int] sk = live_in.get(s).unwrap().keys()
+                int ki = 0
+                while ki < sk.len():
+                    new_out.put(sk.get(ki).unwrap(), true)
+                    ki += 1
+                si += 1
+            # new_in = use ∪ (new_out − def).
+            Dict[int, bool] new_in = {}
+            Vector[int] uk = use_sets.get(b).unwrap().keys()
+            int uki = 0
+            while uki < uk.len():
+                new_in.put(uk.get(uki).unwrap(), true)
+                uki += 1
+            Vector[int] ok = new_out.keys()
+            int oki = 0
+            while oki < ok.len():
+                int k = ok.get(oki).unwrap()
+                if not def_sets.get(b).unwrap().contains(k):
+                    new_in.put(k, true)
+                oki += 1
+            # Compare-and-update (set equality via length + containment).
+            if not coal_set_eq(&new_out, &live_out.get(b).unwrap()):
+                live_out.set(b, new_out)
+                changed = true
+            if not coal_set_eq(&new_in, &live_in.get(b).unwrap()):
+                live_in.set(b, new_in)
+                changed = true
+            b -= 1
+
+    # live_blocks[k] = ascending block indices where value k is live.
+    Vector[Vector[int]] live_blocks = []
+    int vk = 0
+    while vk < nval:
+        Vector[int] empty = []
+        live_blocks.push(empty)
+        vk += 1
+    bi = 0
+    while bi < nblocks:
+        int k2 = 0
+        while k2 < nval:
+            if v_used.get(k2).unwrap():
+                bool live = live_in.get(bi).unwrap().contains(k2)
+                if not live:
+                    live = live_out.get(bi).unwrap().contains(k2)
+                if not live:
+                    live = def_sets.get(bi).unwrap().contains(k2)
+                if not live:
+                    live = use_sets.get(bi).unwrap().contains(k2)
+                if live:
+                    live_blocks.get(k2).unwrap().push(bi)
+            k2 += 1
+        bi += 1
+    return live_blocks
+
+# Set equality for Dict[int,bool] used as a set: same length and every key of
+# `a` present in `b` (lengths equal ⇒ subset both ways).
+bool coal_set_eq(Dict[int, bool] &a, Dict[int, bool] &b):
+    if a.len() != b.len():
+        return false
+    Vector[int] ak = a.keys()
+    int i = 0
+    while i < ak.len():
+        if not b.contains(ak.get(i).unwrap()):
+            return false
+        i += 1
+    return true
+
+# Whether two ascending block-index lists are DISJOINT (share no element).
+bool coal_disjoint(Vector[int] &a, Dict[int, bool] &b_set):
+    int i = 0
+    while i < a.len():
+        if b_set.contains(a.get(i).unwrap()):
+            return false
+        i += 1
+    return true
+
+# Liveness-based coalescing keyed on the EXACT self-host decl-ctype string.
+# Returns, per value id (0..max_val), the coalesced slot index it maps to, or -1
+# for unused values. Returns an EMPTY vector when there are no blocks (the caller
+# falls back to one-local-per-value). DETERMINISTIC single ascending pass (see
+# the block comment above coal_decl_ctype).
+Vector[int] coalesce_assign(LirFunction &func, int max_val, Vector[bool] &v_used, Dict[int, int] &val_types, Vector[String] &sn):
+    Vector[int] assign = []
+    if func.blocks.len() == 0:
+        return assign
+    int vk = 0
+    while vk < max_val:
+        assign.push(-1)
+        vk += 1
+
+    Vector[Vector[int]] live_blocks = coal_compute_live_blocks(&func, &v_used)
+
+    # Slots, in creation order. Parallel vectors: type string + accumulated
+    # live-set (Dict[int,bool] for O(1) disjointness probe).
+    Vector[String] slot_type = []
+    Vector[Dict[int, bool]] slot_live = []
+
+    int k = 0
+    while k < max_val:
+        if v_used.get(k).unwrap():
+            String ty = coal_decl_ctype(k, &val_types, &sn)
+            Vector[int] lb = live_blocks.get(k).unwrap()
+            int placed = -1
+            int s = 0
+            while s < slot_type.len():
+                if slot_type.get(s).unwrap() == ty:
+                    if coal_disjoint(&lb, &slot_live.get(s).unwrap()):
+                        # Merge lb into this slot's live-set and place here.
+                        int li = 0
+                        while li < lb.len():
+                            slot_live.get(s).unwrap().put(lb.get(li).unwrap(), true)
+                            li += 1
+                        placed = s
+                        s = slot_type.len()
+                if placed < 0:
+                    s += 1
+            if placed < 0:
+                # New slot.
+                Dict[int, bool] live = {}
+                int li2 = 0
+                while li2 < lb.len():
+                    live.put(lb.get(li2).unwrap(), true)
+                    li2 += 1
+                placed = slot_type.len()
+                slot_type.push(ty)
+                slot_live.push(live)
+            assign.set(k, placed)
+        k += 1
+    return assign
+
 String emit_function(LirFunction &func, LirModule &m, Vector[String] &sn, Dict[String, int] &slit_map):
     # Mirrors src/backend/c_lir/mod.rs:emit_function — accumulate into a
     # single growing buffer via in-place push instead of `out = out + ...`
@@ -4914,26 +5372,70 @@ String emit_function(LirFunction &func, LirModule &m, Vector[String] &sn, Dict[S
         sb_push(&buf, ";\n")
         si += 1
 
-    # Value declarations (referenced only)
-    int vi = 0
-    while vi < max_val:
-        if not v_used.get(vi).unwrap():
+    # Value declarations — liveness-based slot coalescing (the frame fix; see
+    # coalesce_assign above). One C local per coalesced slot + `#define __vN
+    # __coalK` aliases (ZERO body rewrite); `#undef` after the function close.
+    Vector[int] coal_assign = coalesce_assign(&func, max_val, &v_used, &val_types, &sn)
+    if coal_assign.len() == 0:
+        # No blocks → fall back to one C local per used value.
+        int vi = 0
+        while vi < max_val:
+            if not v_used.get(vi).unwrap():
+                vi += 1
+                continue
+            sb_push(&buf, "    ")
+            sb_push(&buf, coal_decl_ctype(vi, &val_types, &sn))
+            sb_push(&buf, " __v")
+            sb_push(&buf, int_to_str(vi))
+            sb_push(&buf, ";\n")
             vi += 1
-            continue
-        String ty_str = "void*"
-        if val_types.contains(vi):
-            int vty = val_types.get(vi).unwrap()
-            String ts = c_type_name(vty, &sn)
-            if ts == "void":
-                ty_str = "void*"
-            else:
-                ty_str = ts
-        sb_push(&buf, "    ")
-        sb_push(&buf, ty_str)
-        sb_push(&buf, " __v")
-        sb_push(&buf, int_to_str(vi))
-        sb_push(&buf, ";\n")
-        vi += 1
+    else:
+        # One C local per coalesced slot. The slot's decl type is the decl-ctype
+        # of the LOWEST value id mapped to it (every value in the slot shares the
+        # identical type string by construction). Slot ids are dense and assigned
+        # in ascending-value-id order, so scan ascending and emit on first sight.
+        int n_slots = 0
+        int ci = 0
+        while ci < coal_assign.len():
+            int s = coal_assign.get(ci).unwrap()
+            if s + 1 > n_slots:
+                n_slots = s + 1
+            ci += 1
+        Vector[String] slot_type_str = []
+        Vector[bool] slot_seen = []
+        int sti = 0
+        while sti < n_slots:
+            slot_type_str.push("")
+            slot_seen.push(false)
+            sti += 1
+        int vi2 = 0
+        while vi2 < coal_assign.len():
+            int s = coal_assign.get(vi2).unwrap()
+            if s >= 0 and not slot_seen.get(s).unwrap():
+                slot_type_str.set(s, coal_decl_ctype(vi2, &val_types, &sn))
+                slot_seen.set(s, true)
+            vi2 += 1
+        int s2 = 0
+        while s2 < n_slots:
+            if slot_seen.get(s2).unwrap():
+                sb_push(&buf, "    ")
+                sb_push(&buf, slot_type_str.get(s2).unwrap())
+                sb_push(&buf, " __coal")
+                sb_push(&buf, int_to_str(s2))
+                sb_push(&buf, ";\n")
+            s2 += 1
+        # #define each used value to its coalesced slot. The body still
+        # references `__vN` literally; the macro rewrites it to `__coalK`.
+        int vi3 = 0
+        while vi3 < coal_assign.len():
+            int s = coal_assign.get(vi3).unwrap()
+            if s >= 0:
+                sb_push(&buf, "    #define __v")
+                sb_push(&buf, int_to_str(vi3))
+                sb_push(&buf, " __coal")
+                sb_push(&buf, int_to_str(s))
+                sb_push(&buf, "\n")
+            vi3 += 1
 
     # Block parameter move variables
     bi = 0
@@ -4981,6 +5483,18 @@ String emit_function(LirFunction &func, LirModule &m, Vector[String] &sn, Dict[S
     sb_push(&buf, fnbody.s)
 
     sb_push(&buf, "}\n")
+
+    # Coalescing: #undef the per-value aliases so the function-local macro names
+    # don't leak into the next function (each function re-derives its own
+    # value→slot map; a leaked `#define __v3 __coal0` would corrupt the next
+    # function's `__v3`).
+    int undef_i = 0
+    while undef_i < coal_assign.len():
+        if coal_assign.get(undef_i).unwrap() >= 0:
+            sb_push(&buf, "#undef __v")
+            sb_push(&buf, int_to_str(undef_i))
+            sb_push(&buf, "\n")
+        undef_i += 1
 
     # Fix B (#37 flip): append the pthread main runner after the user
     # main body.

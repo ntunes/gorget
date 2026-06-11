@@ -1456,3 +1456,154 @@ fn cow_after_stmt_covers_block_bearing_variants() {
          drop it from COW_PRESCAN_BLOCK_BEARING_STMTS in this file.",
     );
 }
+
+// ── Slot-coalescing operand-enumerator coverage (the frame fix) ──────────────
+//
+// The liveness pass that drives stack-slot coalescing reads operand value-ids
+// from the self-host `inst_uses` (over `LirInst`) and `term_uses` (over
+// `LirTerm`). A SINGLE missing operand arm → an under-live range → a slot-
+// aliasing CLOBBER that `c_emit_comparison` AND the emit byte-diff are BLIND to
+// (only the RUN gate would catch it). Per CLAUDE.md "Sibling-site drift — fix
+// the class, not the instance" (rule 4 + the arm-count lint), these ratchets
+// force EVERY `LirInst`/`LirTerm` variant through the operand enumerators so a
+// future variant can't silently fall through (Gorget enforces match
+// exhaustiveness, so a missing `case` already fails `gg check`; these lints ALSO
+// trip if someone adds an `else: pass` catch-all that dodges the enumeration, by
+// pinning the explicit per-variant arm count to the enum's variant count).
+
+/// Count `enum <Name>:` body variants (lines indented under the enum whose
+/// first non-space token is a CamelCase identifier — the variant name, with or
+/// without a `(...)` payload).
+fn count_self_host_enum_variants(path: &str, enum_name: &str) -> usize {
+    let content = fs::read_to_string(path).unwrap_or_default();
+    let header = format!("enum {enum_name}:");
+    let mut in_enum = false;
+    let mut count = 0;
+    for line in content.lines() {
+        if line.starts_with(&header) {
+            in_enum = true;
+            continue;
+        }
+        if !in_enum {
+            continue;
+        }
+        // The enum body is the indented block; a non-indented non-empty line
+        // ends it. Blank lines and comments inside the body are skipped.
+        if !line.starts_with(' ') {
+            if line.trim().is_empty() {
+                continue;
+            }
+            break;
+        }
+        let t = line.trim_start();
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        // A variant line starts with an uppercase ASCII letter (the variant
+        // name); field/comment continuation lines do not appear in these enums
+        // (variants are one-per-line with inline `(...)` payloads).
+        if t.as_bytes().first().is_some_and(|b| b.is_ascii_uppercase()) {
+            count += 1;
+        }
+    }
+    count
+}
+
+/// Count `case <Prefix>...` arms inside a named self-host function body. The
+/// function body runs from its `<ret> <name>(` signature line to the next
+/// top-level (column-0) `<ret> <name>(` definition.
+fn count_case_arms_in_fn(path: &str, fn_sig_prefix: &str, case_prefix: &str) -> usize {
+    let content = fs::read_to_string(path).unwrap_or_default();
+    let mut in_fn = false;
+    let mut count = 0;
+    for line in content.lines() {
+        if line.starts_with(fn_sig_prefix) {
+            in_fn = true;
+            continue;
+        }
+        if !in_fn {
+            continue;
+        }
+        // A new column-0 definition (non-space, non-comment line that isn't a
+        // continuation) ends the function. Comments and blanks don't.
+        if !line.starts_with(' ') && !line.trim().is_empty() && !line.starts_with('#') {
+            break;
+        }
+        let t = line.trim_start();
+        if t.starts_with(&format!("case {case_prefix}")) {
+            count += 1;
+        }
+    }
+    count
+}
+
+/// Ratchet: the self-host `inst_uses` operand enumerator must cover EVERY
+/// `LirInst` variant 1:1 — the same closed arm set as `inst_dst` and as the
+/// `LirInst` enum itself. A new variant added without an `inst_uses` arm (or a
+/// dodge via `else: pass`) drops its operands from the liveness pass → an
+/// uncatchable slot-aliasing clobber.
+#[test]
+fn inst_uses_arms_count() {
+    let lir = "tests/fixtures/self_host_lowerer/lir.gg";
+    let codegen = "tests/fixtures/self_host_lowerer/lir_codegen.gg";
+    let n_variants = count_self_host_enum_variants(lir, "LirInst");
+    let n_dst = count_case_arms_in_fn(codegen, "int inst_dst(", "I");
+    let n_uses = count_case_arms_in_fn(codegen, "Vector[int] inst_uses(", "I");
+    assert!(
+        n_variants > 0 && n_dst > 0 && n_uses > 0,
+        "inst_uses_arms_count: failed to locate one of LirInst / inst_dst / \
+         inst_uses (variants={n_variants}, dst={n_dst}, uses={n_uses}). Did a file \
+         move or a signature change?",
+    );
+    assert_eq!(
+        n_uses, n_variants,
+        "self-host `inst_uses` arm count ({n_uses}) != `LirInst` variant count \
+         ({n_variants}).\n\n\
+         Slot-coalescing liveness reads operand value-ids from `inst_uses`. EVERY \
+         `LirInst` variant must have an explicit `case` arm enumerating its operand \
+         value-ids (port arm-for-arm vs the Rust gold `Inst::uses()` in \
+         src/lir/mod.rs, reading operand POSITIONS from the lir.gg decl). A missing \
+         operand = an under-live range = a slot-aliasing CLOBBER the emit-diff and \
+         c_emit_comparison CANNOT catch (only the RUN gate would). Add the arm; do \
+         NOT use `else: pass`.",
+    );
+    assert_eq!(
+        n_uses, n_dst,
+        "self-host `inst_uses` arm count ({n_uses}) != `inst_dst` arm count \
+         ({n_dst}). The two enumerators must cover the identical `LirInst` arm set.",
+    );
+}
+
+/// Ratchet: the self-host `term_uses` operand enumerator must cover EVERY
+/// `LirTerm` variant 1:1 — the same closed arm set as `term_successors` and the
+/// `LirTerm` enum. The terminator is where block-arg/phi liveness lives
+/// (`TJump`/`TBranch`/`TSwitch` ARGS); a missing one is the SAME uncatchable
+/// clobber class.
+#[test]
+fn term_uses_arms_count() {
+    let lir = "tests/fixtures/self_host_lowerer/lir.gg";
+    let ssa = "tests/fixtures/self_host_lowerer/lir_ssa.gg";
+    let n_variants = count_self_host_enum_variants(lir, "LirTerm");
+    let n_succ = count_case_arms_in_fn(ssa, "Vector[int] term_successors(", "T");
+    let n_uses = count_case_arms_in_fn(ssa, "Vector[int] term_uses(", "T");
+    assert!(
+        n_variants > 0 && n_succ > 0 && n_uses > 0,
+        "term_uses_arms_count: failed to locate one of LirTerm / term_successors / \
+         term_uses (variants={n_variants}, succ={n_succ}, uses={n_uses}).",
+    );
+    assert_eq!(
+        n_uses, n_variants,
+        "self-host `term_uses` arm count ({n_uses}) != `LirTerm` variant count \
+         ({n_variants}).\n\n\
+         Slot-coalescing liveness reads terminator operand value-ids (incl. the \
+         block-arg/phi values in TJump/TBranch/TSwitch ARGS) from `term_uses`. EVERY \
+         `LirTerm` variant must have an explicit `case` arm (port vs the Rust gold \
+         `Term::uses()` in src/lir/mod.rs). A missing terminator arg = a slot-aliasing \
+         clobber the emit-diff CANNOT catch.",
+    );
+    assert_eq!(
+        n_uses, n_succ,
+        "self-host `term_uses` arm count ({n_uses}) != `term_successors` arm count \
+         ({n_succ}). The two enumerators must cover the identical `LirTerm` arm set.",
+    );
+}
