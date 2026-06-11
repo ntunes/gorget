@@ -2457,6 +2457,29 @@ fn tuple_literal_resource_value() {
 }
 
 #[test]
+fn tuple_destructure_literal_strings() {
+    // Regression for the tuple-literal resource-destructure panic: the
+    // `Expr::TupleLiteral` lowering never tagged its `tuple_init` dst as
+    // Owned, so `auto (a, b) = ("x", "z")` left the tuple Untracked, the
+    // destructure picked Copy, and GIR resource-move validation panicked
+    // ("shallow copy of resource Tuple__GorgetString__GorgetString").
+    // Covers pure-literal, named-local (live + last-use), and
+    // collection-element-borrow element variants.
+    run_gg(
+        "tuple_destructure_literal_strings.gg",
+        "\
+x
+z
+hello
+world
+hello
+alpha
+gamma
+alpha",
+    );
+}
+
+#[test]
 fn tuple_index_nested() {
     // Nested tuple-index access via the bare `.N` form (no `._N` required).
     // Pre-fix, `nested.1.0` lexed `1.0` as a single FloatLiteral so only the

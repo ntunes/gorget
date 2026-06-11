@@ -742,8 +742,6 @@ cluster) — parallelize the ORCHESTRATION (scout next + PERF/CLEANUP on Rust `s
 
 ## Medium
 
-- **🐛 Tuple-destructure of a collection-element borrow fails GIR resource-move validation (pre-existing, BOTH CoW modes, no mutation needed — found by #37 Phase-1 review pass 2).** `String s = v.get(0).unwrap()` then `auto (a, b) = (s, "z")` → "shallow copy of resource Tuple__GorgetString__GorgetString" (`src/ir/lowering/mod.rs:1636`). The tuple-init consume site should clone the borrowed element like every other ctor boundary.
-
 - **🐛 `[c for c in s]` string comprehension fails to BUILD (pre-existing, both modes — found by #37 Phase-1 review pass 5).** `collections.rs:645` infers an I64 element for a string base → C error `int64_t = Str` at the `gorget_str_index` read. When fixed, the comprehension index_load becomes a lazy-CoW read-hook SIBLING: it MUST route through `materialize_lazy_source_if_needed` per the devbook/11 view-producer enumeration rule.
 
 - **🐛 `s[i] += rhs` on a String compiles as a SILENT NO-OP (pre-existing, both modes — found by #37 Phase-1 review pass 5).** The read goes through direct `builder.index_load` (`assigns.rs:1321`, bypassing the W3c hook); the write-back finds no String index-setter and is silently dropped. RECOMMENDED FIX: reject string index-assign at `check` time (strings are not index-mutable). Under lazy-by-default the stale read is never observable (the result is always discarded) — why-acceptable is recorded in the brief's Appendix A row 1b.

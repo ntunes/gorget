@@ -539,6 +539,13 @@ fn lower_expr_inner(
                 .collect();
             let type_id = register_tuple_type(ctx, &elem_types);
             let dst = builder.tuple_init(operands, type_id);
+            // Register ownership at the value's birth (CLAUDE.md rule 3,
+            // struct-literal precedent in `lower_struct_literal`): the
+            // freshly-materialized tuple owns its elements (the boundary
+            // passes above cloned/owned each one). Without this tag the dst
+            // is Untracked and a destructure consume picks Copy — a shallow
+            // copy of a resource tuple that the GIR validator rejects.
+            ctx.set_owned(builder, dst);
             // Phase D §6.3: tag each element local as TupleElement of dst.
             // Perf gate on `needs_drop(elem_ty)`: the return-path reader
             // (`tuple_element_sources`) only MoveZero's droppable element

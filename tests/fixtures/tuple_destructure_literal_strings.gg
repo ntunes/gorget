@@ -1,0 +1,27 @@
+# Tuple-destructure of an INLINE tuple literal with resource (String)
+# elements. The `Expr::TupleLiteral` lowering must tag its `tuple_init` dst
+# as Owned at birth (CLAUDE.md rule 3; struct-literal precedent) so the
+# destructure takes Move — an Untracked dst made the destructure pick Copy,
+# tripping GIR resource-move validation ("shallow copy of resource
+# Tuple__GorgetString__GorgetString") even for pure literals.
+void main():
+    # Pure-literal elements.
+    auto (a, b) = ("x", "z")
+    print(a)
+    print(b)
+    # Named-local elements; s1 stays live past the tuple ctor (clone path),
+    # s2 is at last use (move-eligible).
+    String s1 = "hello"
+    String s2 = "world"
+    auto (c, d) = (s1, s2)
+    print(c)
+    print(d)
+    print(s1)
+    # Collection-element-borrow element (the TODO repro shape): the element
+    # bind is a borrow, the tuple ctor must clone it; v stays intact.
+    Vector[String] v = ["alpha", "beta"]
+    String e0 = v.get(0).unwrap()
+    auto (e, f) = (e0, "gamma")
+    print(e)
+    print(f)
+    print(v.get(0).unwrap())
