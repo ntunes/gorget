@@ -1326,6 +1326,39 @@ impl<'a> TypeChecker<'a> {
                 let callee_type = self.infer_expr(callee);
                 let resolved = self.resolve_type(callee_type);
 
+                // Unlowered builtin "cast call" names (Chain C item 6+):
+                // the resolver's `is_builtin` accepts these so `gg check`
+                // passed, but they have NO lowering — the emitted C gets a
+                // raw extern call (`undefined reference to 'int8'`). Only
+                // `int` / `float` / `bool` have real cast lowerings
+                // (`src/lir/lower/insts.rs`); `str(x)` is rejected by
+                // OWNER DECISION (2026-06-10) — a free `str()` would be a
+                // third conversion way beside f-strings / `.display()`,
+                // against the one-obvious-way target. Gate the CLASS at
+                // check time with a teaching error; a user-DEFINED fn of
+                // the same name resolves and is not gated.
+                if let Expr::Identifier(cname) = &callee.node {
+                    if matches!(
+                        cname.as_str(),
+                        "str" | "byte"
+                            | "int8" | "int16" | "int32" | "int64"
+                            | "uint" | "uint8" | "uint16" | "uint32" | "uint64"
+                            | "float32" | "float64"
+                    ) && self.resolve_name(callee.span.start, cname).is_none()
+                    {
+                        self.error(
+                            SemanticErrorKind::UnloweredBuiltinCall {
+                                name: cname.clone(),
+                            },
+                            expr.span,
+                        );
+                        for arg in args {
+                            self.infer_expr(&arg.node.value);
+                        }
+                        return self.types.error_id;
+                    }
+                }
+
                 // Validate `alloc=` named arg on builtin constructors
                 if let Expr::Identifier(cname) = &callee.node {
                     let is_builtin_ctor = matches!(cname.as_str(),
@@ -3006,6 +3039,7 @@ impl<'a> TypeChecker<'a> {
             }
 
             Stmt::Assign { target, value } => {
+                self.check_string_index_assign(target);
                 let target_type = self.infer_expr(target);
                 let prev_hint = self.decl_type_hint;
                 self.decl_type_hint = Some(target_type);
@@ -3024,6 +3058,7 @@ impl<'a> TypeChecker<'a> {
             }
 
             Stmt::CompoundAssign { target, value, .. } => {
+                self.check_string_index_assign(target);
                 let target_type = self.infer_expr(target);
                 let prev_hint = self.decl_type_hint;
                 self.decl_type_hint = Some(target_type);
@@ -3813,6 +3848,28 @@ impl<'a> TypeChecker<'a> {
     /// Check if this is an assignment from an array/comprehension to a
     /// collection type (e.g. `Vector[int] v = [1, 2, 3]`), which should
     /// be allowed without type unification.
+    /// Chain C item 6: reject `s[i] = x` / `s[i] += x` (incl. range index)
+    /// when the indexed OBJECT is a String. `s[i]` is a documented
+    /// read-only codepoint view (language-reference SStrings); the
+    /// lowering has no String index-setter, so these compiled as SILENT
+    /// NO-OPS. Vector/Dict/user types with setters are untouched — the
+    /// gate keys on the object's String-ness only. The object is inferred
+    /// here (before the normal target inference); for an index-assign
+    /// target that is itself erroneous this can re-report an inner error,
+    /// which is acceptable at a hard-error site.
+    fn check_string_index_assign(&mut self, target: &Spanned<Expr>) {
+        if let Expr::Index { object, .. } = &target.node {
+            let obj_type = self.infer_expr(object);
+            let resolved = self.resolve_type(obj_type);
+            if matches!(
+                self.types.get(resolved),
+                ResolvedType::Primitive(PrimitiveType::StringType)
+            ) {
+                self.error(SemanticErrorKind::StringIndexAssign, target.span);
+            }
+        }
+    }
+
     fn is_collection_assignment(&self, declared: TypeId, value: TypeId) -> bool {
         let declared_resolved = self.resolve_type(declared);
         let value_resolved = self.resolve_type(value);

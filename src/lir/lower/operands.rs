@@ -651,10 +651,21 @@ impl<'a> FuncLowering<'a> {
     /// emitting FieldPtr(field=1) + Load on the source enum struct.
     pub(super) fn try_enum_payload_extract(
         &mut self,
+        mode: crate::ir::instructions::AssignMode,
         dst: &Place,
         value: &Operand,
         bb: BlockId,
     ) -> Option<ValueId> {
+        // A Borrow-mode assign is an aliasing bind, never an implicit
+        // payload unwrap — the GIR producer hands us typed metadata
+        // (`mode`) that says so. Extracting the payload into a
+        // pointer-typed destination would make downstream deref the
+        // payload as a pointer — SIGSEGV (Chain C item 3, consumer
+        // hardening; the producer-side Branch-C suppress is the primary
+        // fix per devbook/24).
+        if matches!(mode, crate::ir::instructions::AssignMode::Borrow) {
+            return None;
+        }
         // Only applies to Copy/Move of a simple local (no projections on source).
         let src_local = match value {
             Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => p.local,
@@ -674,6 +685,20 @@ impl<'a> FuncLowering<'a> {
         // would trigger the payload-extract path and silently drop the discriminant.
         // Snag #4b (2026-05-01).
         let dst_type_id = self.effective_place_type(dst);
+        // For the SAME-ENUM comparison only, see through one Ptr level: a
+        // Branch-C bind retypes the dst to Ptr(enum), and a pointer to the
+        // SAME enum is still "same enum" (a `GirType::Named`-only match let
+        // Ptr(enum) fall through to the payload-extract — item 3's
+        // mis-classification). The Ptr-unwrap must NOT feed the
+        // another-Option/Result skip below: `Option[Ref[T]]` lifts emit a
+        // LEGITIMATE extract into a `Ptr(Option__T)` dst (src
+        // `Option__Ref__Option__T`), and unwrapping there made the skip
+        // swallow it (test_collections_nested regression, caught by the
+        // full suite 2026-06-11).
+        let dst_same_cmp_type = match self.gir_types.get(dst_type_id) {
+            Some(GirType::Ptr(inner)) => *inner,
+            _ => dst_type_id,
+        };
 
         // Check: source is Option__* or Result__*, destination is NOT.
         // Read typed `enum_category` from TypeMetadata (Phase A) instead of
@@ -691,8 +716,8 @@ impl<'a> FuncLowering<'a> {
             _ => return None,
         };
 
-        // Destination must not be the same enum type.
-        let dst_is_same = match self.gir_types.get(dst_type_id) {
+        // Destination must not be the same enum type (through one Ptr).
+        let dst_is_same = match self.gir_types.get(dst_same_cmp_type) {
             Some(GirType::Named(n)) => *n == src_name,
             _ => false,
         };

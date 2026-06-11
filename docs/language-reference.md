@@ -1630,7 +1630,7 @@ arr[0]              # borrows element at index 0
 map["key"]          # borrows value for "key"
 ```
 
-For resource types (Vector, Dict, Set, String), the subscript returns a **mutable borrow** — a reference into the collection's storage. Use `.clone()` for an owned copy:
+For resource collection types (Vector, Dict, Set), the subscript returns a **mutable borrow** — a reference into the collection's storage. Use `.clone()` for an owned copy. **Strings are the exception:** `s[i]` is a **read-only codepoint view**, and strings are not index-assignable (`s[i] = x` and `s[i] += x` are compile errors) — string mutation is rebuild-based (`replace(...)`, slicing + concatenation). See the indexing, slicing, and iteration table in the Strings section for the full view semantics:
 
 ```gorget
 Vector[Vector[int]] matrix = [[1, 2], [3, 4]]

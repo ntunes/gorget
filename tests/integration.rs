@@ -332,6 +332,25 @@ extra_0=7",
 }
 
 #[test]
+fn static_enum_init() {
+    // Chain C item 2: enum-typed statics were silently ZEROED —
+    // eval_static_init had no arm for NoneLiteral / enum-variant ctors, so
+    // `Option[String] G = None` printed "some:" (Some = tag 0),
+    // `Option[int] H = Some(5)` printed "some:0", and a user enum read as
+    // its first variant ("red" for Color.Blue()). Enum-typed statics now
+    // route through the synthesized __gg_static_init_<name>() path
+    // (caller-side widening of the Bug-B mechanism in lower_static_decl).
+    run_gg(
+        "static_enum_init.gg",
+        "\
+none
+some:5
+blue
+blue",
+    );
+}
+
+#[test]
 fn static_vec_index_load() {
     run_gg("static_vec_index_load.gg", "i0=alpha:10\ni2=gamma:30");
 }
@@ -754,6 +773,37 @@ dict done",
 }
 
 #[test]
+fn string_comprehension() {
+    // Chain C item 7: `[c for c in s]` used to CC-FAIL (`int64_t = Str` at
+    // a byte-indexed gorget_str_index read; OOB on multi-byte even typed
+    // right). Routed through the lower_for_string loop shape (single UTF-8
+    // pass, codepoint Strings) with a Vector__GorgetString-typed
+    // accumulator and clone-at-boundary pushes. Covers ASCII, MULTI-BYTE
+    // ("héllo" = 5 codepoints), filtered, and lazy-eligible-base (source
+    // mutated after) variants.
+    run_gg(
+        "string_comprehension.gg",
+        "\
+a
+b
+c
+5
+h
+é
+l
+l
+o
+3
+h
+é
+o
+5
+é
+MUTATED",
+    );
+}
+
+#[test]
 fn test_comprehensions() {
     run_gg(
         "test_comprehensions.gg",
@@ -931,6 +981,41 @@ fn fn_mut_once() {
 16
 18
 done");
+}
+
+// Chain C item 6 + the str() gap: check-time rejections for surface forms
+// that previously check-passed but were silent no-ops (string index-assign)
+// or link errors (unlowered builtin cast-name calls).
+#[test]
+fn string_index_assign_error() {
+    check_gg_fails(
+        "string_index_assign_error.gg",
+        "strings are not index-assignable",
+    );
+}
+
+#[test]
+fn string_index_compound_assign_error() {
+    check_gg_fails(
+        "string_index_compound_assign_error.gg",
+        "strings are not index-assignable",
+    );
+}
+
+#[test]
+fn str_builtin_call_error() {
+    check_gg_fails(
+        "str_builtin_call_error.gg",
+        "no builtin `str(...)` call",
+    );
+}
+
+#[test]
+fn cast_name_call_error() {
+    check_gg_fails(
+        "cast_name_call_error.gg",
+        "no builtin `int8(...)` conversion call: use an `as` cast",
+    );
 }
 
 #[test]
@@ -2301,6 +2386,21 @@ none is none",
 }
 
 #[test]
+fn result_whole_bind_identifier() {
+    // Chain C item 3: `Result[int, String] x = src` / `Option[String] y = osrc`
+    // (whole-enum identifier bind) used to SIGSEGV — var-decl Branch C
+    // retypes the dst to Ptr(enum) and the LIR try_enum_payload_extract
+    // mis-classified the trailing Borrow assign as a payload unwrap into
+    // the pointer slot. The (3)(b) chain's parked regression fixture.
+    run_gg(
+        "result_whole_bind_identifier.gg",
+        "\
+5
+hello",
+    );
+}
+
+#[test]
 fn result_methods() {
     run_gg(
         "result_methods.gg",
@@ -2453,6 +2553,29 @@ fn tuple_literal_resource_value() {
         "\
 3
 42",
+    );
+}
+
+#[test]
+fn tuple_destructure_literal_strings() {
+    // Regression for the tuple-literal resource-destructure panic: the
+    // `Expr::TupleLiteral` lowering never tagged its `tuple_init` dst as
+    // Owned, so `auto (a, b) = ("x", "z")` left the tuple Untracked, the
+    // destructure picked Copy, and GIR resource-move validation panicked
+    // ("shallow copy of resource Tuple__GorgetString__GorgetString").
+    // Covers pure-literal, named-local (live + last-use), and
+    // collection-element-borrow element variants.
+    run_gg(
+        "tuple_destructure_literal_strings.gg",
+        "\
+x
+z
+hello
+world
+hello
+alpha
+gamma
+alpha",
     );
 }
 
@@ -22969,6 +23092,32 @@ fn cow_lazy_w3d_for_string() {
 #[test]
 fn cow_lazy_mut_borrow_write() {
     run_gg("cow_lazy_mut_borrow_write.gg", "s = hello more\nv.len() = 3");
+}
+
+// Chain C item 1: `!`-move of a collection with a LIVE element borrow
+// (`.get(i).unwrap()` bind shape — `v[i]` binds are already-safe). The
+// Expr::Move lowering must cow_before_mutation ANY local source (was
+// bare-params-only — sibling-site drift vs the call-arg move). Pre-fix:
+// move-bind/reassign read-through ("gamma"), clear read an empty string,
+// realloc was a SIGSEGV (exit 139).
+#[test]
+fn cow_move_bind_element_borrow() {
+    run_gg("cow_move_bind_element_borrow.gg", "alpha\ngamma");
+}
+
+#[test]
+fn cow_move_reassign_element_borrow() {
+    run_gg("cow_move_reassign_element_borrow.gg", "alpha\ngamma");
+}
+
+#[test]
+fn cow_move_clear_element_borrow() {
+    run_gg("cow_move_clear_element_borrow.gg", "alpha\n0");
+}
+
+#[test]
+fn cow_move_realloc_element_borrow() {
+    run_gg("cow_move_realloc_element_borrow.gg", "alpha\n66");
 }
 
 // H2 shape: FieldPath collection sources are EXCLUDED from lazy (stay

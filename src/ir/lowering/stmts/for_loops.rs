@@ -234,7 +234,10 @@ pub(super) fn lower_for(
 }
 
 /// Lower `for ch in str_value: body` — iterate UTF-8 codepoints.
-fn lower_for_string(
+/// `pub(in crate::ir::lowering)`: also the loop shape behind String-based
+/// list comprehensions (`exprs/collections.rs::lower_string_comprehension`,
+/// Chain C item 7) — single UTF-8 pass, W3d lazy-source hook included.
+pub(in crate::ir::lowering) fn lower_for_string(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     var_name: &str,

@@ -1,0 +1,9 @@
+# NEGATIVE: the unlowered builtin cast-name CALLS must be rejected at
+# check time. `int8`…`uint64`, `uint`, `float32`/`float64`, `byte` are in
+# the resolver's `is_builtin` list but have NO lowering — the emitted C
+# got raw extern calls (`undefined reference to 'int8'`). The supported
+# conversion is the `as` cast (`x as int8`). `int`/`float`/`bool` HAVE
+# real cast lowerings and stay callable.
+void main():
+    int8 x = int8(3)
+    print(x)

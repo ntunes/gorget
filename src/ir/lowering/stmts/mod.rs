@@ -1,5 +1,7 @@
 mod assigns;
-mod for_loops;
+// Visible inside `ir::lowering` so the string-comprehension lowering in
+// `exprs/collections.rs` can reuse `lower_for_string` (Chain C item 7).
+pub(in crate::ir::lowering) mod for_loops;
 mod patterns;
 use assigns::*;
 use for_loops::*;
@@ -967,6 +969,19 @@ fn lower_var_decl(
             let target_resource = ctx.type_registry.is_resource_type(actual_var_type);
             let source_live = ctx.source_live_past(&operand, stmt_span, builder);
             let source_own = ctx.source_ownership(&operand, builder);
+            // Branch-C-SPECIFIC suppress flag (same mechanism as the
+            // `lazy_handled` skip above): Branch C fully establishes the
+            // bind itself — it retypes the dst to Ptr(rhs) and emits the
+            // Borrow. The trailing assign below would then store the enum
+            // VALUE into the Ptr slot; for Vector the LIR coerces that to
+            // a benign slot_addr re-store, but for Result/Option the LIR
+            // `try_enum_payload_extract` intercepted it and emitted a
+            // payload extraction into the pointer slot — deref of the
+            // payload as a pointer, SIGSEGV. Keyed on the BRANCH, never on
+            // `AssignMode::Borrow` generally: Branch A (SharedHeap string
+            // aliasing) also returns Borrow and its trailing assign IS
+            // load-bearing.
+            let mut branch_c_bound = false;
             let assign_mode = lower_var_decl_assign_mode(
                 ctx,
                 builder,
@@ -979,10 +994,13 @@ fn lower_var_decl(
                 source_live,
                 source_own,
                 &mut operand,
+                &mut branch_c_bound,
             );
 
 
-            builder.assign_mode(assign_mode, Place::local(local_id), operand.clone());
+            if !branch_c_bound {
+                builder.assign_mode(assign_mode, Place::local(local_id), operand.clone());
+            }
 
             // Propagate ownership to the destination.
             //
@@ -1177,6 +1195,7 @@ fn lower_var_decl_assign_mode(
     source_live: bool,
     source_own: Option<crate::ir::LocalOwnership>,
     operand: &mut Operand,
+    branch_c_bound: &mut bool,
 ) -> AssignMode {
     use crate::ir::LocalOwnership;
     let mut assign_mode = AssignMode::Copy;
@@ -1293,6 +1312,13 @@ fn lower_var_decl_assign_mode(
             ctx.register_local(&hint, local_id, ptr_type);
         }
         assign_mode = AssignMode::Borrow;
+        // The bind is fully established here (Ptr retype + emit_borrow).
+        // Tell the caller to suppress its trailing assign — a value-into-
+        // Ptr-slot store that the LIR enum payload-extract path
+        // mis-classified for Result/Option sources (SIGSEGV). Branch-C-
+        // specific BY DESIGN: Branch A also returns Borrow and its
+        // trailing assign is load-bearing.
+        *branch_c_bound = true;
     }
     // Branch D — live resource source, CoW-unsafe → clone fallback.
     // Migrated 2026-05-10 (D-PROBE-OPT-B+RETIRE): legacy `is_named_local`

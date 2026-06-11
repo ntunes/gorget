@@ -241,9 +241,19 @@ fn lower_expr_inner(
             // (once at exit, once by the recipient's drop).
             let owning_param_source: Option<LocalId> = if let Expr::Identifier(name) = &inner.node {
                 if let Some((local_id, _)) = ctx.lookup_local(name) {
-                    if ctx.is_bare_param(builder, local_id) {
-                        ctx.cow_before_mutation(builder, local_id, inner.span);
-                    }
+                    // CoW: a move transfers ownership — sever aliases FIRST,
+                    // for ANY local source (mirrors the call-arg move sibling
+                    // in calls.rs "sever aliases first"; was bare-params-only,
+                    // textbook sibling-site drift). Without this, a live
+                    // element borrow (e.g. `String s = v.get(0).unwrap()`
+                    // then `Vector[String] w = !v`) stays a deferred
+                    // CollectionRef into the moved buffer: mutating `w`
+                    // read-through-corrupts `s`, and a realloc (push past
+                    // cap) leaves `s` dangling — SIGSEGV. cow_before_mutation
+                    // dispatches the lazy in-place materialize and the legacy
+                    // ref/alias/view severs; the stale-refs unset_ownership
+                    // loop below stays (harmless post-materialize).
+                    ctx.cow_before_mutation(builder, local_id, inner.span);
                     let idx = local_id.0 as usize;
                     if idx < builder.locals.len() && builder.locals[idx].is_owning_param {
                         Some(local_id)
@@ -539,6 +549,13 @@ fn lower_expr_inner(
                 .collect();
             let type_id = register_tuple_type(ctx, &elem_types);
             let dst = builder.tuple_init(operands, type_id);
+            // Register ownership at the value's birth (CLAUDE.md rule 3,
+            // struct-literal precedent in `lower_struct_literal`): the
+            // freshly-materialized tuple owns its elements (the boundary
+            // passes above cloned/owned each one). Without this tag the dst
+            // is Untracked and a destructure consume picks Copy — a shallow
+            // copy of a resource tuple that the GIR validator rejects.
+            ctx.set_owned(builder, dst);
             // Phase D §6.3: tag each element local as TupleElement of dst.
             // Perf gate on `needs_drop(elem_ty)`: the return-path reader
             // (`tuple_element_sources`) only MoveZero's droppable element

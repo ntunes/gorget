@@ -1,0 +1,14 @@
+# `!`-move of a collection with a LIVE element borrow, then 64 pushes
+# (forces a realloc). THE SIGSEGV WITNESS: pre-fix the deferred
+# CollectionRef pointed into the old buffer after realloc — reading
+# `first` was a use-after-free (exit 139). Post-fix the move site
+# materializes `first` and this prints "alpha".
+# Bind shape MUST be `.get(i).unwrap()` — `v[i]` is already-safe.
+void main():
+    Vector[String] v = ["alpha", "beta"]
+    String first = v.get(0).unwrap()
+    Vector[String] w = !v
+    for i in 0..64:
+        w.push("filler")
+    print(first)
+    print(w.len())

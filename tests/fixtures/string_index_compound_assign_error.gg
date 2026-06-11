@@ -1,0 +1,7 @@
+# NEGATIVE: `s[i] += x` on a String must be rejected at check time —
+# sibling of string_index_assign_error.gg (the compound write-back also
+# compiled as a SILENT NO-OP pre-gate).
+void main():
+    String s = "hello"
+    s[0] += "x"
+    print(s)

@@ -3,7 +3,7 @@
 use crate::ir::builder::FunctionBuilder;
 use crate::ir::instructions::*;
 use crate::ir::types::*;
-use crate::parser::ast::{Expr, Pattern};
+use crate::parser::ast::{self, Block, Expr, Pattern, Stmt};
 use crate::span::Spanned;
 
 use super::super::context::LoweringContext;
@@ -588,6 +588,21 @@ pub(super) fn lower_list_comprehension(
         // Non-range iterables (e.g. vector variables): iterate by index
         let iter_op = lower_expr(ctx, builder, iterable);
         let iter_type = infer_operand_type_full(ctx, &iter_op, builder);
+        // String base (Chain C item 7): `[c for c in s]` routes through the
+        // `lower_for_string` loop shape — the index-walk below is BYTE-
+        // indexed while `gorget_str_index` is CODEPOINT-indexed (OOB on
+        // multi-byte), and `infer_collection_element_type` knows only
+        // collection name shapes (String fell to I64 → `int64_t = Str` CC
+        // error).
+        {
+            let pointee = ctx.pointee_type(iter_type).unwrap_or(iter_type);
+            if ctx.type_mapper.is_string_type(pointee) {
+                return lower_string_comprehension(
+                    ctx, builder, comp_expr, variable, iterable, condition,
+                    iter_op,
+                );
+            }
+        }
         let iter_local = builder.add_local(iter_type, None);
         // Phase C: iter_local is non-owning view of the source — Borrow.
         let iter_mode = if ctx.type_registry.is_resource_type(iter_type) {
@@ -677,6 +692,98 @@ pub(super) fn lower_list_comprehension(
         builder.switch_to(exit_bb);
         FunctionBuilder::copy(acc_local)
     }
+}
+
+/// Lower `[expr for c in s if cond]` where the iterable is a String.
+///
+/// Docs-grounded shape (language-reference §Strings: `for ch in s:` yields
+/// codepoint Strings in a single UTF-8 pass): reuse `lower_for_string` with
+/// a SYNTHESIZED `acc.push(expr)` body. The push routes through the normal
+/// method-call consume machinery, so the clone-at-ownership-boundary of the
+/// cap=0 codepoint view comes for free (the `for ch in s: stack.push(ch)`
+/// shape is run-proven in-tree), and `lower_for_string`'s W3d hook covers
+/// lazy-eligible bases — NO new view-producer emit sites.
+///
+/// The ACCUMULATOR is typed as the mangled `Vector__GorgetString` via
+/// `ctx.ensure_collection_type` (the dict-comprehension precedent above) —
+/// NOT the bare erased `GorgetArray` of the list-comp arm: the typechecker
+/// returns `error_id` for comprehensions, so the GIR acc type ALONE carries
+/// the element story for the push consume-clone machinery, downstream
+/// element inference, and element drops.
+fn lower_string_comprehension(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    comp_expr: &Spanned<Expr>,
+    variable: &Spanned<Pattern>,
+    iterable: &Spanned<Expr>,
+    condition: Option<&Spanned<Expr>>,
+    iter_op: Operand,
+) -> Operand {
+    let owned_string_type = ctx.type_mapper.owned_string_type;
+    let acc_type = ctx.ensure_collection_type("Vector__GorgetString");
+    let acc_local = builder.call_extern(
+        "gorget_array_new",
+        vec![Operand::Constant(Constant::SizeOf(owned_string_type))],
+        acc_type,
+    );
+    ctx.set_owned(builder, acc_local);
+    ctx.drops.register_local(acc_local, acc_type, &ctx.type_registry);
+    // Collision-free synthetic name so the synthesized AST body below can
+    // reference the accumulator through normal name resolution.
+    let acc_name = format!("__strcomp_acc_{}", acc_local.0);
+    ctx.register_local(&acc_name, acc_local, acc_type);
+
+    let var_name = match &variable.node {
+        Pattern::Binding(name) => name.clone(),
+        _ => "_comp_var".to_string(),
+    };
+
+    // Synthesize `acc.push(comp_expr)`, wrapped in `if condition:` for the
+    // filtered variant. `lower_for_string` rejoins the body to the
+    // `byte_pos += cplen` increment, so the filter cannot skip the
+    // position advance (termination stays correct).
+    let span = comp_expr.span;
+    let push_stmt = Stmt::Expr(Spanned::new(
+        Expr::MethodCall {
+            receiver: Box::new(Spanned::new(
+                Expr::Identifier(acc_name.clone()),
+                span,
+            )),
+            method: Spanned::new("push".to_string(), span),
+            generic_args: None,
+            args: vec![Spanned::new(
+                ast::CallArg {
+                    name: None,
+                    ownership: ast::Ownership::Borrow,
+                    value: comp_expr.clone(),
+                },
+                span,
+            )],
+        },
+        span,
+    ));
+    let body_stmts = if let Some(cond_expr) = condition {
+        vec![Spanned::new(
+            Stmt::If {
+                condition: cond_expr.clone(),
+                then_body: Block {
+                    stmts: vec![Spanned::new(push_stmt, span)],
+                    span,
+                },
+                elif_branches: vec![],
+                else_body: None,
+            },
+            span,
+        )]
+    } else {
+        vec![Spanned::new(push_stmt, span)]
+    };
+    let body = Block { stmts: body_stmts, span };
+
+    crate::ir::lowering::stmts::for_loops::lower_for_string(
+        ctx, builder, &var_name, iter_op, iterable, &body, None,
+    );
+    FunctionBuilder::copy(acc_local)
 }
 
 // ---- Dict and Set Comprehensions ----

@@ -1,0 +1,32 @@
+# String-based list comprehension `[c for c in s]` — used to CC-FAIL
+# (`int64_t = Str` at a byte-indexed `gorget_str_index` read; OOB on
+# multi-byte even if typed right). Now routed through the
+# `lower_for_string` loop shape: single UTF-8 pass, codepoint Strings,
+# clone-at-boundary pushes into a `Vector__GorgetString`-typed
+# accumulator.
+void main():
+    # ASCII literal base.
+    Vector[String] a = [c for c in "abc"]
+    for c in a:
+        print(c)
+    # MULTI-BYTE base: é is 2 UTF-8 bytes — codepoint count must be 5.
+    String s = "héllo"
+    Vector[String] m = [c for c in s]
+    print(m.len())
+    for c in m:
+        print(c)
+    # Filtered variant (the filter must not skip the byte_pos advance).
+    Vector[String] f = [c for c in "héllo" if c != "l"]
+    print(f.len())
+    for c in f:
+        print(c)
+    # Lazy-eligible base: element borrow, source collection mutated AFTER
+    # the comprehension — the W3d hook materializes the lazy view at loop
+    # entry; the pushed clones must hold the ORIGINAL codepoints.
+    Vector[String] v = ["héllo", "world"]
+    String e = v.get(0).unwrap()
+    Vector[String] z = [c for c in e]
+    v.set(0, "MUTATED")
+    print(z.len())
+    print(z.get(1).unwrap())
+    print(v.get(0).unwrap())

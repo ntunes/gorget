@@ -357,6 +357,17 @@ pub enum SemanticErrorKind {
         param_name: String,
     },
 
+    /// `s[i] = x` / `s[i] += x` on a String — strings are not
+    /// index-assignable (`s[i]` is a read-only codepoint view; mutation is
+    /// rebuild-based). See language-reference §Strings.
+    StringIndexAssign,
+
+    /// Call to a builtin name that `is_builtin` accepts but that has NO
+    /// lowering (`str`, `int8`…`uint64`, `uint`, `float32`/`float64`,
+    /// `byte`) — would emit a raw undefined extern call into the C.
+    /// `int`/`float`/`bool` have real cast lowerings and are NOT gated.
+    UnloweredBuiltinCall { name: String },
+
     /// Match expression is not exhaustive — some enum variants are not covered.
     NonExhaustiveMatch { missing_variants: Vec<String> },
 
@@ -706,6 +717,30 @@ impl std::fmt::Display for SemanticError {
                     "non-exhaustive match: missing variants: {}",
                     missing_variants.join(", ")
                 )
+            }
+            SemanticErrorKind::StringIndexAssign => {
+                write!(
+                    f,
+                    "strings are not index-assignable: `s[i]` is a read-only \
+                     codepoint view — build a new string instead (e.g. \
+                     `s.replace(...)`, slicing + concatenation)"
+                )
+            }
+            SemanticErrorKind::UnloweredBuiltinCall { name } => {
+                if name == "str" {
+                    write!(
+                        f,
+                        "no builtin `str(...)` call: convert with an f-string \
+                         `f\"{{x}}\"`, `.display()`, or `std.conv` (e.g. \
+                         `int_to_str`)"
+                    )
+                } else {
+                    write!(
+                        f,
+                        "no builtin `{name}(...)` conversion call: use an \
+                         `as` cast (`x as {name}`)"
+                    )
+                }
             }
             SemanticErrorKind::UnknownNamedArg { name } => {
                 write!(f, "unknown named argument `{name}`")

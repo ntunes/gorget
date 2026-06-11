@@ -1,0 +1,15 @@
+# `!`-move of a collection with a LIVE element borrow, move-BIND shape.
+# `String first = v.get(0).unwrap()` binds a deferred CollectionRef into
+# v's buffer; `Vector[String] w = !v` must sever it (materialize `first`)
+# BEFORE the transfer — the Expr::Move lowering used to call
+# cow_before_mutation only for bare params, so mutating `w` read-through
+# corrupted `first` (printed "gamma" instead of "alpha").
+# NOTE: the bind MUST be the `.get(i).unwrap()` shape — `v[i]` binds take a
+# different, already-safe path and would guard nothing.
+void main():
+    Vector[String] v = ["alpha", "beta"]
+    String first = v.get(0).unwrap()
+    Vector[String] w = !v
+    w.set(0, "gamma")
+    print(first)
+    print(w.get(0).unwrap())

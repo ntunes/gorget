@@ -1,0 +1,13 @@
+# `!`-move of a collection with a LIVE element borrow, move-REASSIGN shape
+# (`w = !v` into an existing slot). Same class as the move-BIND fixture:
+# the element borrow must be materialized at the move site or the
+# post-move mutation reads through ("gamma" instead of "alpha").
+# Bind shape MUST be `.get(i).unwrap()` — `v[i]` is already-safe.
+void main():
+    Vector[String] v = ["alpha", "beta"]
+    String first = v.get(0).unwrap()
+    Vector[String] w = ["zeta"]
+    w = !v
+    w.set(0, "gamma")
+    print(first)
+    print(w.get(0).unwrap())
