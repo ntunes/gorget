@@ -1,6 +1,6 @@
 # BRIEF — Slot-coalescing in the SSA→C emitter (the frame fix; macOS-path keystone)
 
-Status: v1 (orchestrator draft from scout `agent-ae36233658b60182e`, GO, proven
+Status: v3 (pass-1+pass-2 folds; orchestrator draft from scout `agent-ae36233658b60182e`, GO, proven
 prototype `docs/plans/coalesce_slots_prototype.diff`, 2026-06-11). Owner chose
 the codegen route ("2 then 3"); the scout found Option 2 unsound for the SSA
 backend → **this is Option 3, the rustc-equivalent**, the only viable codegen
@@ -10,7 +10,11 @@ PER-EMITTER (the self-host `decl_ctype` is a simpler subset, no CStr branch —
 don't key it on Rust's shape); `inst_uses` is a 57-arm enumerator = the SINGLE
 HIGHEST-RISK site (a missing operand → an uncatchable slot-aliasing clobber),
 port arm-for-arm vs Rust `Inst::uses()` + a 1:1 arm-count gate; line numbers
-drift (anchor by name). NEEDS a fresh confirming pass (pass-1 raised reservations).
+drift (anchor by name). Pass-2 fold (fresh reviewer, all 3 v1 folds verified
+PASS): added the FORGOTTEN `term_uses` over `LirTerm` (liveness reads terminator
+uses too — block-arg/phi liveness; same uncatchable-clobber class as `inst_uses`)
++ `lir_ssa.gg` to the zone + the cross-check gate. NEEDS a fresh confirming pass
+(pass-2 raised a reservation).
 
 ## Mission
 Add liveness-based stack-slot coalescing to gg's SSA→C emitter so the self-host
@@ -84,9 +88,20 @@ block-live-sets are provably disjoint).
   against the Rust gold reference `Inst::uses()` (`src/lir/mod.rs:~1099`),
   reading each self-host variant's operand POSITIONS from the `lir.gg` decl (NOT
   Rust field names). GATE: cross-check the `inst_uses` ↔ `Inst::uses()` arm set
-  1:1 (add an arm-count lint, per "fix the class"). The self-host coalescing
-  MUST be deterministic (it's what `fixed_point` exercises) and runs the SAME
-  algorithm as Rust (clean symmetric port).
+  1:1 (add an arm-count lint, per "fix the class").
+- ⚠ **ALSO needs `term_uses` over `LirTerm` — the brief's first cut FORGOT it
+  (pass-2 catch):** liveness reads BOTH `inst.uses()` AND `terminator.uses()`
+  (Rust `Term::uses()` `src/lir/mod.rs:~1238`). The self-host has `term_successors`
+  (CFG edges only, `lir_ssa.gg:~127`) but NO terminator-operand accessor — and
+  the TERMINATOR is exactly where the block-arg/phi liveness lives (`TBranch`
+  cond + then_args + else_args, `TJump` args, `TRet` value, `TSwitch` value +
+  case-args = the "arg live at end of pred" semantics). A missing terminator arg
+  is the SAME uncatchable-by-emit-diff clobber class as a missing `inst_uses`
+  operand. Add `term_uses` (~5-arm `LirTerm` match, near `term_successors` in
+  `lir_ssa.gg`) ported arm-for-arm vs `Term::uses()`, with the SAME 1:1
+  cross-check / arm-count gate.
+- The self-host coalescing MUST be deterministic (it's what `fixed_point`
+  exercises) and runs the SAME algorithm as Rust (clean symmetric port).
 - ⚠ `c_emit_comparison` is BLIND to this change (it counts only `user_fn_count`
   = function-body `) {` openers, `tests/integration.rs` ~`:14030` — re-grep by
   name, all cited line numbers drift, NOT local
@@ -122,8 +137,10 @@ caught by an emit byte-diff. The gate must RUN:
   premise (esp. a non-deterministic emit, a slot-aliasing run-diff, or
   `fixed_point` regressing).
 - Zone: `src/backend/c_lir/mod.rs`, `tests/fixtures/self_host_lowerer/lir_codegen.gg`
-  (+ the new `inst_uses` helper there), possibly `src/lir/mod.rs` (if a `uses()`
-  accessor is missing), `tests/lints.rs`, TODO/DONE. Disjoint from the snag #11
+  (+ the new `inst_uses` helper there), `tests/fixtures/self_host_lowerer/lir_ssa.gg`
+  (the new `term_uses` helper, near `term_successors`), possibly `src/lir/mod.rs`
+  (only if a `uses()` accessor is missing — `Inst::uses()`/`Term::uses()` already
+  exist), `tests/lints.rs`, TODO/DONE. Disjoint from the snag #11
   Block-2 zone (self-host `lower.gg`/`lower_closures.gg`) — but BOTH gate on
   `fixed_point`, so serialize execution (this runs AFTER Block 2 integrates).
 - AFTER this lands, the plain-main revert (`docs/plans/lean_runtime_prototype.diff`
