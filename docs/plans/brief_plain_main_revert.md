@@ -9,8 +9,14 @@ verification-hardenings): void→exit-0 is ALREADY guaranteed at the GIR layer
 early-returning mains) + prove by running bare-return/no-return void mains; add
 `stack_guard_self_host_driver_deep_lowering` to the fast gate (the ulimit-8MB
 proxy doesn't cover its deeper recursion) + rewrite its stale "Fix B regressed"
-message; corrected names/lines; LLVM is already plain (out of scope). NEEDS a
-fresh confirming pass (pass-1 raised reservations).
+message; corrected names/lines; LLVM is already plain (out of scope).
+✅ REVIEW-CLEAN: pass-2 (fresh) DESIGN SIGN OFF — re-verified void→exit-0 by
+RUNNING a void-main with a non-collapsible early return (both arms emit
+`return 0`, zero bare `return;`) + confirmed all v2 folds + the design. Its one
+reservation was NON-BLOCKING (elegance): retire Fix B's now-false pthread
+comments (folded as the "Retire Fix B's now-FALSE comments" section — comment-
+only). 2 fresh passes (substantive folds → design sign-off). READY for the
+executor.
 
 ## Mission
 Revert the forced 64MB-pthread `main` (Fix B, `79842a7f`) back to a PLAIN
@@ -74,6 +80,28 @@ Emit a PLAIN `int main(int argc, char** argv)` that runs the user body on thread
 native binary (since Fix B). KEEP it (the Task/async scheduler + spawn still use
 pthreads; it's harmless for non-threaded programs). Do NOT make it conditional
 in this change.
+
+## Retire Fix B's now-FALSE comments (CLAUDE.md "stale justification = tech debt")
+Fix B left several comments justifying pthreads via "the native main runner runs
+the body on a pthread" — FALSE after this revert (the things must STAY, but for
+the SCHEDULER/async/sync reason, not the reverted main runner). Rewrite each
+(pass-2-found; re-grep exact lines):
+- `src/backend/c/runtime/runtime_preamble.c:~34` — the unconditional
+  `#include <pthread.h>` (added by Fix B). KEEP it (the Task/async scheduler +
+  sync runtime need `pthread.h`); rewrite its comment (~`:25-30`) to cite the
+  scheduler, not the main runner.
+- `src/main.rs:~204-206` — the `add_thread_flags` doc comment ("Since the Fix B
+  … pthread main runner, EVERY native binary needs pthreads") → rewrite to cite
+  the scheduler/spawn/sync.
+- `tests/integration.rs:~23519-23522` — the `stack_guard_self_host_driver_deep_lowering`
+  DOCSTRING (says "its body runs on the 64MB pthread") → rewrite (it now
+  validates SLOT-COALESCING on a plain 8MB main).
+- `src/backend/llvm/mod.rs:~2157-2165` — the LLVM `@main` TODO ("port the runner
+  shape here to close the gap") → the gap CEASES to exist post-revert (LLVM
+  `@main` on the host stack IS the intended plain-main behavior now); revisit/
+  close it (no LLVM code change — comment only).
+These are comment-only edits (no behavior change); they keep the revert from
+leaving the same false-history debt Fix B is being reverted out of.
 
 ## stack_guard tests (Option A) — there are EXACTLY TWO (pass-1-verified)
 - **`stack_guard_runtime_deep_recursion`** (test fn at `tests/integration.rs:~23599`;
