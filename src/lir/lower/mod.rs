@@ -121,6 +121,12 @@ pub(super) struct FuncLowering<'a> {
     /// instructions (param load-in, etc.) that don't correspond to user
     /// source.
     pub(super) current_span: Option<crate::span::Span>,
+    /// String temps synthesized by `lower_printf_args` (e.g. the
+    /// `gorget_bool_to_str` result slot for a bool printf arg). These are
+    /// born at the LIR layer — below GIR drop registration — so the
+    /// printf-like call emitter frees them (`gorget_string_free`) right
+    /// after the consuming call. Drained per call.
+    pub(super) printf_str_temps: Vec<SlotId>,
 }
 
 /// Signature snapshot for a closure's `__call` function, used to
@@ -1500,6 +1506,7 @@ impl<'a> FuncLowering<'a> {
             return_abi_kinds,
             closure_call_sigs,
             current_span: None,
+            printf_str_temps: Vec::new(),
         }
     }
 

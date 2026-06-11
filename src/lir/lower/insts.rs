@@ -690,6 +690,26 @@ impl<'a> FuncLowering<'a> {
                     }
                 }
                 bb = self.emit_extern_call(func, &emit_name, dst, args, lir_args, bb);
+                // Free the String temps `lower_printf_args` synthesized for
+                // this call (bool→str conversions). The call has consumed
+                // their bytes (printf wrote them / string_format copied
+                // them), so the free is sound and closes the print-temp
+                // leak class at the temp's birth layer.
+                if !self.printf_str_temps.is_empty() {
+                    let temps = std::mem::take(&mut self.printf_str_temps);
+                    self.ensure_extern("gorget_string_free", &[LirType::Ptr], &LirType::Void);
+                    let abis = self.lookup_arg_abis("gorget_string_free");
+                    for slot in temps {
+                        let addr = self.lir_func.next_value();
+                        self.push_inst(bb, Inst::SlotAddr { dst: addr, slot });
+                        self.push_inst(bb, Inst::CallExtern {
+                            dst: None,
+                            name: "gorget_string_free".to_string(),
+                            args: vec![addr],
+                            arg_abis: abis.clone(),
+                        });
+                    }
+                }
                 }
             }
 
@@ -4276,6 +4296,11 @@ impl<'a> FuncLowering<'a> {
                     value: str_result,
                     is_move: true,
                 });
+                // The slot owns a fresh heap allocation ("true"/"false" copy,
+                // gorget_string_adopt). It is born here — below GIR drop
+                // registration — so record it for the post-call free emitted
+                // by the printf-like call path (print-temp leak class).
+                self.printf_str_temps.push(str_slot);
 
                 // Decompose: load .len (field 2 under 32-byte layout) → i32, load .data (field 0) → ptr
                 let str_sid = self.struct_reg.lookup("GorgetString").unwrap();

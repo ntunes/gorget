@@ -1,0 +1,9 @@
+# Print-temp leak class, format-assign shape: `String t = f"{b}"` goes
+# through `gorget_string_format` (not printf), which COPIES the bool-str
+# temp's bytes into the result — the temp itself must still be freed after
+# the call (same `printf_str_temps` drain as the printf path).
+void main():
+    bool b = true
+    String t = f"value: {b}"
+    print(t)
+    print(t.len())

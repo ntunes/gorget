@@ -1,0 +1,10 @@
+# Print-temp leak class, 'b' format-spec shape: `{x:b}` calls
+# `gorget_int_to_binary`, which returns an owned heap Str — the only
+# String-producing format-spec arm. The result must be drop-registered at
+# the producer (apply_format_spec 'b' arm).
+void main():
+    int x = 10
+    print(f"bin={x:b}")
+    print(f"alt={x:#b}")
+    int z = 0
+    print(f"zero={z:b}")

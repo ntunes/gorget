@@ -1830,6 +1830,19 @@ pub(super) fn lower_interp_segment(
         if let Some(src) = move_source {
             ctx.move_zero_and_mark(builder, src);
         }
+        // Register the interp temp at its birth: under Move it now owns the
+        // heap the (retired) source owned; under Clone-of-a-String it owns a
+        // fresh deep copy (`gorget_string_copy_cow` at the SlotStore).
+        // Without this the printf/format consumer reads it and nobody frees
+        // it (print-temp leak class). Clone of a NON-string aggregate is a
+        // shallow memcpy today (the Assign lowering only distinguishes
+        // Move) — registering that alias would double-free, so it stays
+        // unregistered until Clone lowers deep for aggregates.
+        if mode == AssignMode::Move
+            || (mode == AssignMode::Clone && ctx.type_mapper.is_string_type(type_id))
+        {
+            ctx.drops.register_local(tmp, type_id, &ctx.type_registry);
+        }
         let (spec, args) = format_for_printf(ctx, builder, type_id, FunctionBuilder::copy(tmp), fmt_spec);
         format_str.push_str(&spec);
         printf_args.extend(args);
@@ -1857,6 +1870,13 @@ pub(super) fn lower_interp_segment(
         builder.assign_mode(mode, Place::local(tmp), val);
         if let Some(src) = move_source {
             ctx.move_zero_and_mark(builder, src);
+        }
+        // Register the interp temp at its birth — see branch (2) above
+        // (same owning-modes-only gate).
+        if mode == AssignMode::Move
+            || (mode == AssignMode::Clone && ctx.type_mapper.is_string_type(type_id))
+        {
+            ctx.drops.register_local(tmp, type_id, &ctx.type_registry);
         }
         let (spec, args) = format_for_printf(ctx, builder, type_id, FunctionBuilder::copy(tmp), fmt_spec);
         format_str.push_str(&spec);
@@ -1897,6 +1917,12 @@ fn format_for_printf(
         let str_ty = ctx.type_mapper.owned_string_type;
         let tmp = builder.add_local(str_ty, None);
         builder.assign(builder.local(tmp), operand);
+        // Register the materialized copy at its birth: the backend emits
+        // `gorget_string_copy_cow` for this Ptr→String store (deep clone for
+        // owned sources, 32-byte view copy for cap=0 views — the free no-ops
+        // on views), so the temp owns its heap and must be dropped.
+        // Print-temp leak class: `print(s.field)`, `f"{v.get(i).unwrap()}"`.
+        ctx.drops.register_local(tmp, str_ty, &ctx.type_registry);
         ("%.*s".to_string(), vec![FunctionBuilder::copy(tmp)])
     } else if let Some(pointee) = ctx.pointee_type(type_id) {
         // Ptr(T) / MutPtr(T) for primitives or user types — auto-deref to the
@@ -1944,6 +1970,10 @@ fn format_for_printf(
             }
             let owned_string_type = ctx.type_mapper.owned_string_type;
             let result = builder.call(effective_method, vec![FunctionBuilder::copy(self_ptr)], owned_string_type);
+            // Register the display result at its birth: `display` returns an
+            // owned String (return position = ownership boundary); literal
+            // returns are cap=0 views whose free no-ops. Print-temp leak class.
+            ctx.drops.register_local(result, owned_string_type, &ctx.type_registry);
             ("%.*s".to_string(), vec![FunctionBuilder::copy(result)])
         } else {
             // No display method — fall through to default formatting
@@ -2098,6 +2128,9 @@ fn apply_format_spec(
                 vec![op, alt_arg],
                 owned_string_type,
             );
+            // Register the conversion result at its birth: the runtime
+            // returns an owned Str (heap buffer). Print-temp leak class.
+            ctx.drops.register_local(result, owned_string_type, &ctx.type_registry);
             Some(("%.*s".to_string(), vec![FunctionBuilder::copy(result)]))
         }
 

@@ -1,0 +1,28 @@
+# Print-temp leak class, display shape: printing a struct with a
+# Displayable impl calls `Type__display` and prints the returned String.
+# A display body that BUILDS its result (f-string) returns an owned heap
+# String — the call result must be drop-registered at the producer
+# (format_for_printf Displayable branch). A literal-returning display is a
+# cap=0 view whose free no-ops — `Lit` pins that the registration is also
+# safe on views.
+struct Point:
+    int x
+    int y
+
+equip Point with Displayable:
+    String display(self):
+        return f"Point({self.x}, {self.y})"
+
+struct Lit:
+    int n
+
+equip Lit with Displayable:
+    String display(self):
+        return "lit"
+
+void main():
+    Point p = Point(3, 4)
+    print(p)
+    print(f"p={p}")
+    Lit l = Lit(1)
+    print(l)
