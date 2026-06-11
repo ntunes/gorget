@@ -952,6 +952,41 @@ fn fn_mut_once() {
 done");
 }
 
+// Chain C item 6 + the str() gap: check-time rejections for surface forms
+// that previously check-passed but were silent no-ops (string index-assign)
+// or link errors (unlowered builtin cast-name calls).
+#[test]
+fn string_index_assign_error() {
+    check_gg_fails(
+        "string_index_assign_error.gg",
+        "strings are not index-assignable",
+    );
+}
+
+#[test]
+fn string_index_compound_assign_error() {
+    check_gg_fails(
+        "string_index_compound_assign_error.gg",
+        "strings are not index-assignable",
+    );
+}
+
+#[test]
+fn str_builtin_call_error() {
+    check_gg_fails(
+        "str_builtin_call_error.gg",
+        "no builtin `str(...)` call",
+    );
+}
+
+#[test]
+fn cast_name_call_error() {
+    check_gg_fails(
+        "cast_name_call_error.gg",
+        "no builtin `int8(...)` conversion call: use an `as` cast",
+    );
+}
+
 #[test]
 fn closure_kind_error() {
     check_gg_fails(

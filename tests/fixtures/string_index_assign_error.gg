@@ -1,0 +1,8 @@
+# NEGATIVE: `s[i] = x` on a String must be rejected at check time —
+# `s[i]` is a read-only codepoint view (language-reference §7.9 /
+# §Strings); the lowering has no String index-setter, so pre-gate this
+# compiled as a SILENT NO-OP.
+void main():
+    String s = "hello"
+    s[0] = "H"
+    print(s)

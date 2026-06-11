@@ -1,0 +1,8 @@
+# NEGATIVE: `str(x)` must be rejected at check time (OWNER DECISION
+# 2026-06-10): `str` is in the resolver's `is_builtin` list but has NO
+# lowering — the emitted C got a raw `str(...)` extern call (link error).
+# The language's conversions are f-strings, `.display()`, and `std.conv`;
+# a free `str()` would be a third way, against one-obvious-way.
+void main():
+    String s = str(3)
+    print(s)

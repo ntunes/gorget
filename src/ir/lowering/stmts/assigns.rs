@@ -905,9 +905,20 @@ pub(super) fn lower_index_assign(
                     return;
                 }
             }
+            // HARD ICE, never a silent no-op (Chain C item 6): every
+            // index-assign target the typechecker accepts must dispatch
+            // to a setter here. Strings are rejected at check time
+            // (`SemanticErrorKind::StringIndexAssign`); a type with no
+            // setter reaching this point means typecheck and lowering
+            // disagree — dropping the write silently was how
+            // `s[0] = "x"` compiled as a no-op.
+            panic!(
+                "BUG: index-assign on `{type_name}` found no setter \
+                 (tried {candidates:?}) — typecheck accepted an \
+                 index-assign the lowering cannot dispatch"
+            );
         }
     }
-    // String index assignment not supported (strings are immutable views)
 }
 
 /// Lower a compound assignment (e.g., `x += 1`).
@@ -1445,6 +1456,7 @@ pub(super) fn lower_compound_assign(
                     format!("IndexMut_for_{type_name}__set"),
                     format!("{type_name}____setitem__"),
                 ];
+                let mut dispatched = false;
                 for set_name in &set_candidates {
                     if ctx.fn_sigs.contains_key(set_name.as_str()) {
                         let ptr_type = ctx.register_mut_ptr_type(obj_type);
@@ -1454,8 +1466,22 @@ pub(super) fn lower_compound_assign(
                             set_name.clone(),
                             vec![FunctionBuilder::copy(ptr_local), FunctionBuilder::copy(idx_local), result],
                         );
+                        dispatched = true;
                         break;
                     }
+                }
+                // HARD ICE sibling of `lower_index_assign`'s fall-through
+                // (Chain C item 6): the write-back of `x[i] += v` must
+                // dispatch — this silent fall-through was how
+                // `s[0] += "x"` compiled as a no-op. Strings are rejected
+                // at check time (`SemanticErrorKind::StringIndexAssign`).
+                if !dispatched {
+                    panic!(
+                        "BUG: compound index-assign on `{type_name}` found \
+                         no setter (tried {set_candidates:?}) — typecheck \
+                         accepted an index-assign the lowering cannot \
+                         dispatch"
+                    );
                 }
             }
         }
