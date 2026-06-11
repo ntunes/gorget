@@ -1,6 +1,13 @@
 # BRIEF — Chain C: Rust-side miscompile burn-down (6 fixes + 1 retirement)
 
-Status: v3 (pass-2 review folded 2026-06-10: cast-name audit enumeration
+Status: v3.2 — REVIEW-CLEAN (pass-4 SIGN OFF 2026-06-11 at tip `ee4f59d4`:
+ALL SEVEN repros re-confirmed on the moved tree, all anchors live, tree-move
+benign — zero brief-cited files touched by the #37 landings; two mandatory
+folds applied: the C-first sequencing inversion [fold-1] and the
+`language-reference.md` file-zone addition [fold-2]. TODO anchors drifted
+:728→:745, :730→:747, :732→:749, :232→:249 — re-grep per the standing
+caveat. v3.1 added the pass-3 accumulator-typing fold; v3 was pass-2 folded
+2026-06-10: cast-name audit enumeration
 corrected — `float32`/`float64` IN, `int`/`float`/`bool` OUT (have real
 lowerings, run-verified) [p2-R1]; TODO hygiene completed — :728 moves to
 DONE in commit 1, :732/:730 move in commits 5/6 [p2-R2]; the §7.9 amendment
@@ -29,8 +36,11 @@ tip `6894cb6a`.)
 ## Mission
 
 One executor, six sequenced commits, all Rust `src/` + plain fixtures —
-file-disjoint from Chain B (self-host lowerer) and Chain D (backend leak
-emit paths; coordinate only if D's fix lands in `src/ir` drop-registration).
+file-disjoint from the landed #37 work (self-host lowerer). [p4-fold-1]
+SHARES `src/lir/lower/insts.rs` with PARKED Chain D (C: the `:25`
+extract-caller region; D: printf arms ~`:690`/`:4251`) — **C executes
+FIRST; D rebases over C when it resumes** (the prior D-first order inverted
+when the owner resumed C alone; update Chain-D's brief + TODO at D-resume).
 Fixes two memory-safety bugs (items 1, 3), one whole-class miscompile (2),
 one validator-panic class (5), two accepted-but-meaningless-surface holes
 (6, the `str()` gap), and retires one refuted TODO entry (4). Commit order:
@@ -263,7 +273,8 @@ one validator-panic class (5), two accepted-but-meaningless-surface holes
 - File zone: `src/ir/lowering/**`, `src/lir/lower/**`, `src/semantic/**`,
   `src/lir/optimize.rs` (DCE seed), new `tests/fixtures/*.gg`,
   `tests/integration.rs` (append), `tests/lints.rs` ONLY under the
-  lint-failure protocol, TODO.md, DONE.md. Do NOT touch
+  lint-failure protocol, `docs/language-reference.md` (the item-6 §7.9
+  amendment ONLY [p4-fold-2]), TODO.md, DONE.md. Do NOT touch
   `tests/fixtures/self_host_lowerer/**` (Chain B) or the backend print/leak
   emit paths (Chain D); `docs/plans/brief_rust_oracle_static_index_read.md`
   is a ready brief touching `exprs/methods.rs` `lower_index_access` — no

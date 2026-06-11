@@ -8,7 +8,7 @@ REFUTED myths — see DONE.md 2026-06-10/11 for the five landed chains: Phase-1 
 lints, Phase-2 gated, Chain-E flip). Docs on top, `git log -1` for the live tip; owner ff's main→gorget-1.
 ⏸ PARKED ON OWNER HOLD: Chain C (Rust miscompile batch, `docs/plans/brief_rust_miscompile_batch.md` v3.1) and
 Chain D (print-temp leak class, `docs/plans/brief_print_temp_leak_fix.md` v3.1 + run-proven diff) — each ONE
-confirming pass from executor-ready; D executes BEFORE C (insts.rs region overlap). HIGH backlog from this session:
+confirming pass from executor-ready; C RESUMED 2026-06-11 (executes FIRST); D rebases over C at its resume (shared insts.rs regions). HIGH backlog from this session:
 Fix C (lir_codegen per-extern-call LirFunction clone-bomb, ~10x emission lever), self-host driver RELATIVE-PATH
 miscompile, `gg fmt` long-chain data loss, Rust EMove value-bug (in Chain C item 1).**
 RE-MEASURE PARITY (never trust a dated number) via: `GG_RUNTIME_DIFF=1 GG_BUILD_TIMEOUT_SECS=600 cargo test --test
