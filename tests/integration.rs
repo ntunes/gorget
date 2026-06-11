@@ -773,6 +773,37 @@ dict done",
 }
 
 #[test]
+fn string_comprehension() {
+    // Chain C item 7: `[c for c in s]` used to CC-FAIL (`int64_t = Str` at
+    // a byte-indexed gorget_str_index read; OOB on multi-byte even typed
+    // right). Routed through the lower_for_string loop shape (single UTF-8
+    // pass, codepoint Strings) with a Vector__GorgetString-typed
+    // accumulator and clone-at-boundary pushes. Covers ASCII, MULTI-BYTE
+    // ("héllo" = 5 codepoints), filtered, and lazy-eligible-base (source
+    // mutated after) variants.
+    run_gg(
+        "string_comprehension.gg",
+        "\
+a
+b
+c
+5
+h
+é
+l
+l
+o
+3
+h
+é
+o
+5
+é
+MUTATED",
+    );
+}
+
+#[test]
 fn test_comprehensions() {
     run_gg(
         "test_comprehensions.gg",

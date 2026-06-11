@@ -1,5 +1,7 @@
 mod assigns;
-mod for_loops;
+// Visible inside `ir::lowering` so the string-comprehension lowering in
+// `exprs/collections.rs` can reuse `lower_for_string` (Chain C item 7).
+pub(in crate::ir::lowering) mod for_loops;
 mod patterns;
 use assigns::*;
 use for_loops::*;
