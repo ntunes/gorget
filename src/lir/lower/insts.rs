@@ -22,7 +22,9 @@ impl<'a> FuncLowering<'a> {
                     }
                 }
                 // Special-case: Option/Result source → non-Option/Result dest.
-                if let Some(val) = self.try_enum_payload_extract(dst, value, bb) {
+                // `*mode` is threaded so Borrow-mode aliasing binds are never
+                // mis-classified as payload unwraps (Chain C item 3).
+                if let Some(val) = self.try_enum_payload_extract(*mode, dst, value, bb) {
                     self.store_to_place(dst, val, bb);
                     return bb;
                 }

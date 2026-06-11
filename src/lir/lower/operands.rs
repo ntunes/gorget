@@ -651,10 +651,21 @@ impl<'a> FuncLowering<'a> {
     /// emitting FieldPtr(field=1) + Load on the source enum struct.
     pub(super) fn try_enum_payload_extract(
         &mut self,
+        mode: crate::ir::instructions::AssignMode,
         dst: &Place,
         value: &Operand,
         bb: BlockId,
     ) -> Option<ValueId> {
+        // A Borrow-mode assign is an aliasing bind, never an implicit
+        // payload unwrap — the GIR producer hands us typed metadata
+        // (`mode`) that says so. Extracting the payload into a
+        // pointer-typed destination would make downstream deref the
+        // payload as a pointer — SIGSEGV (Chain C item 3, consumer
+        // hardening; the producer-side Branch-C suppress is the primary
+        // fix per devbook/24).
+        if matches!(mode, crate::ir::instructions::AssignMode::Borrow) {
+            return None;
+        }
         // Only applies to Copy/Move of a simple local (no projections on source).
         let src_local = match value {
             Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => p.local,
@@ -673,7 +684,18 @@ impl<'a> FuncLowering<'a> {
         // this, an Option-typed field whose enclosing struct isn't itself an Option
         // would trigger the payload-extract path and silently drop the discriminant.
         // Snag #4b (2026-05-01).
-        let dst_type_id = self.effective_place_type(dst);
+        // Unwrap a Ptr destination: a Branch-C bind retypes the dst to
+        // Ptr(enum); a pointer to the SAME enum is still "same enum" for
+        // the comparisons below (a `GirType::Named`-only match let
+        // Ptr(enum) fall through to the payload-extract — item 3's
+        // mis-classification).
+        let dst_type_id = {
+            let direct = self.effective_place_type(dst);
+            match self.gir_types.get(direct) {
+                Some(GirType::Ptr(inner)) => *inner,
+                _ => direct,
+            }
+        };
 
         // Check: source is Option__* or Result__*, destination is NOT.
         // Read typed `enum_category` from TypeMetadata (Phase A) instead of

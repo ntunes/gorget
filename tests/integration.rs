@@ -2301,6 +2301,21 @@ none is none",
 }
 
 #[test]
+fn result_whole_bind_identifier() {
+    // Chain C item 3: `Result[int, String] x = src` / `Option[String] y = osrc`
+    // (whole-enum identifier bind) used to SIGSEGV — var-decl Branch C
+    // retypes the dst to Ptr(enum) and the LIR try_enum_payload_extract
+    // mis-classified the trailing Borrow assign as a payload unwrap into
+    // the pointer slot. The (3)(b) chain's parked regression fixture.
+    run_gg(
+        "result_whole_bind_identifier.gg",
+        "\
+5
+hello",
+    );
+}
+
+#[test]
 fn result_methods() {
     run_gg(
         "result_methods.gg",
