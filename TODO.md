@@ -1,18 +1,16 @@
 # TODO
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE THIS BLOCK IN PLACE each session; completed work → DONE.md, do NOT accumulate "superseded" blocks)
-**gorget-1 code tip `8022bccc` (2026-06-10 session, four chains: ① #37 PHASE 1 — lazy loop-carried CoW is the Rust-gg
-PRODUCTION DEFAULT [`1e55511b` tip: shared `materialize_lazy_source_if_needed` at FOUR GIR hooks W3a-W3d; typed
-`borrow_view_fn` axis; 21 fixtures + emitted-C lock-in; devbook/11 + 23-row enumeration]; ② lower.gg 9-MODULE SPLIT
-re-landed [None-arg peel fix `eb5b10a9` + split `ef28a497`]; ③ the view-producer enumeration is now an EXECUTABLE
-GUARD [`e22183fb`: 3 lints in tests/lints.rs, FATAL day one — suite count is now 10]; ④ #37 PHASE 2 self-host
-provenance port landed [`620169ff`/`ff1c2abb` F1 soundness + `43250db5` mechanism + `8022bccc` lock-in] and is the
-SELF-HOST DEFAULT since Chain E (2026-06-11, DONE.md: Fix A dead-decl elision + Fix B pthread main + the flip — both
-recorded flip "blockers" REFUTED as a stack cliff + a measurement artifact) — see DONE.md; docs on top, `git log -1`
-for the live tip; owner ff's main→gorget-1. ⏸ PARKED ON OWNER HOLD: Chain C (Rust miscompile batch,
-`docs/plans/brief_rust_miscompile_batch.md` v3.1, one confirming pass from executor-ready) and Chain D (print-temp
-leak class, `docs/plans/brief_print_temp_leak_fix.md` v3.1 + run-proven diff, same state; D executes BEFORE C —
-insts.rs region overlap).**
+**gorget-1 code tip `9b31eaeb` (2026-06-10/11 session: the #37 KILLER FEATURE is COMPLETE BOTH COMPILERS — lazy CoW is
+the DEFAULT in Rust gg (Phase 1, four hooks) AND the self-host (Phase 2 provenance-direct + Chain-E flip: dead-decl
+elision both emitters, target-gated 64MB pthread mains + 2 pinned stack guards, the stack-cliff/7x "blockers" were
+REFUTED myths — see DONE.md 2026-06-10/11 for the five landed chains: Phase-1 default, lower.gg split, enumeration
+lints, Phase-2 gated, Chain-E flip). Docs on top, `git log -1` for the live tip; owner ff's main→gorget-1.
+⏸ PARKED ON OWNER HOLD: Chain C (Rust miscompile batch, `docs/plans/brief_rust_miscompile_batch.md` v3.1) and
+Chain D (print-temp leak class, `docs/plans/brief_print_temp_leak_fix.md` v3.1 + run-proven diff) — each ONE
+confirming pass from executor-ready; D executes BEFORE C (insts.rs region overlap). HIGH backlog from this session:
+Fix C (lir_codegen per-extern-call LirFunction clone-bomb, ~10x emission lever), self-host driver RELATIVE-PATH
+miscompile, `gg fmt` long-chain data loss, Rust EMove value-bug (in Chain C item 1).**
 RE-MEASURE PARITY (never trust a dated number) via: `GG_RUNTIME_DIFF=1 GG_BUILD_TIMEOUT_SECS=600 cargo test --test
 integration --release self_host_runtime_diff -- --nocapture` → read the `PARITY = MATCH/(...)` line. Last RUN-CONFIRMED
 (2026-06-10, post-Phase-2 tree): **498/987 ≈ 50.5%** — RE-MEASURE for the live number; the denominator grows with the
