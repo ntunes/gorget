@@ -14,7 +14,15 @@ from Rust. v3 corrects: suffix the unregistered path only (site 1 gated on
 3/4/5) + `_VTable` BARE; the prototype's unconditional site-1 suffix is made
 route-aware. (Prototype From-core is correct and unchanged; the class-fix beyond
 From is LATENT — no corpus delta — so REVIEW vs Rust's two-path mangling is the
-gate, not emit-diff.) NEEDS a fresh confirming pass (pass-2 raised reservations).
+gate, not emit-diff.)
+✅ REVIEW-CLEAN: pass-3 (fresh) SIGN OFF — independently verified the Rust
+two-path mangling against `traits.rs` (unregistered `:1614` suffixes;
+registered/vtable body/FnRef/global/`_VTable` all bare) + confirmed v3 fixes the
+v2 inversion + re-confirmed all-latent-beyond-From (`BoundedRange[T]` is the only
+generic user trait, never equipped). 3 sequential fresh passes (2 → inversion →
+clean). READY for the executor. (Pass-3 non-blocking note: site 6's suffix
+direction is debatable-in-principle but provably UNREACHABLE/zero-delta — if
+uncertain, leave it bare and review-match Rust; do not let it block.)
 
 ## Mission
 Bring the self-host's trait-equip `From` mangling up to Rust parity so the
