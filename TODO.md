@@ -9,7 +9,7 @@ lints, Phase-2 gated, Chain-E flip). Docs on top, `git log -1` for the live tip;
 Chain C (Rust miscompile batch, `docs/plans/brief_rust_miscompile_batch.md` v3.2) EXECUTED 2026-06-11 — 7 commits
 on executor branch `worktree-agent-a4c6893e7ce6d3292` (`b1f6e779`..`9b3fed57`), pending parent output-review +
 integration; the EMove pair flipped WRONG→MATCH and is now snapshot-locked (oracle exception fully retired).
-⏸ STILL PARKED: Chain D (print-temp leak class, `docs/plans/brief_print_temp_leak_fix.md` v3.1 + run-proven diff)
+▶ RESUMED 2026-06-11 (owner go): Chain D (print-temp leak class, `docs/plans/brief_print_temp_leak_fix.md` v4 + run-proven diff; pass-4 confirming review in flight → executor on sign-off)
 — D rebases over C at its resume (shared insts.rs regions; C touched only the `:25` extract-caller region). HIGH
 backlog from this session: Fix C (lir_codegen per-extern-call LirFunction clone-bomb, ~10x emission lever),
 self-host driver RELATIVE-PATH miscompile, `gg fmt` long-chain data loss.**
