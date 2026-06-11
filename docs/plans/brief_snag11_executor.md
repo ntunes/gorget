@@ -1,6 +1,12 @@
 # EXECUTOR BRIEF — Chain F: snag #11 (cross-error-type auto-propagation) → From-mediated, BOTH compilers symmetric
 
-Status: v2 (pass-1 brief-review folded, 2026-06-11, on gorget-1 tip `fdcf57bd`).
+Status: v3 (pass-1 + pass-2 brief-reviews folded, 2026-06-11, on gorget-1 tip
+`5d7be65a`). Pass-2 fold (fresh reviewer, all claims PASS, 4 minor scoping
+refinements): reuse `FunctionInfo.throws_type_id` for caller-E (not a new
+field); flag the self-host lowering span-plumbing symmetry (~13 sites); name
+the self-host AST-Type→TypeId resolver `ast_type_to_resolved` (types.gg:278);
+drop the literal parity baseline → capture it at session start. NEEDS ≥1 more
+fresh brief-review (until a pass raises no reservations).
 Provenance: scout `agent-a65eb1d6506b83c2f` (GO; end-to-end-proven the Rust
 gate + both lowerings; corpus fallout = 0 → land-direct, no migration). Owner
 decision 2026-06-11: **SYMMETRIC** — both compilers REJECT and CONVERT
@@ -86,9 +92,12 @@ and Route B cannot diverge.
    other resolved calls do.
 2. **Typecheck gate (Rust), at the shared decision.** Resolve callee-E (the
    `Result`'s E — `err_ty` at the Route-A peel; the discarded `_err_type` for
-   Route B) and caller-E. You will need the caller's error type: add
-   `current_throws_type: Option<TypeId>` (set/clear at fn entry/exit) +
-   derive from a `Result`-typed return; expose `current_fn_error_type()`.
+   Route B) and caller-E. For the caller's error type, REUSE the existing
+   `FunctionInfo.throws_type_id` (the resolved caller-E already read at the
+   Route-A peel `typecheck.rs:1572`; fn-entry hook ~`:5688`) rather than
+   re-resolving `func.throws` from AST — one source of truth. Only add a new
+   `current_*` field if a `Result`-typed (non-`throws`) return needs deriving
+   that `throws_type_id` doesn't already cover; prefer the existing field.
    Three cases at every propagation position:
    - **same type** → accept, no metadata (today's path — MUST stay
      byte-identical; the scout proved this).
@@ -137,6 +146,11 @@ and Route B cannot diverge.
 ## Self-host — SYMMETRIC (owner decision; the higher-risk, UN-PROTOTYPED part)
 The scout proved the Rust gate + BOTH lowerings, but did NOT prototype the
 self-host TYPECHECK gate. Implement it RUN-verified, incrementally:
+   ⚠ **Self-host lowering span-plumbing is the SAME burden as Rust (step 3):**
+   the self-host `maybe_auto_propagate(LowerCtx &ctx, int val, GirModule &gmod)`
+   carries NO span either, at ~13 call sites (lower_loops/lower_expr/lower_stmt/
+   lower_match) — thread a span through to read its `from_conversions` side-table,
+   exactly as the Rust step 3. Scope it up front.
 1. **Lowering conversion (self-host)** `lower_match.gg:1058` — mirror the Rust
    lowering: when the metadata says convert, emit the `From` conversion on
    `err_val` before the Error re-wrap; else today's path.
@@ -157,8 +171,12 @@ self-host TYPECHECK gate. Implement it RUN-verified, incrementally:
    (no resolved composite `(trait,type,args)` key like Rust's), so the From
    match must SCAN candidate impls for `self_type==callerE`, filter
    `trait_name=="From"`, and RESOLVE the AST `trait_generic_args[0]` Type to a
-   TypeId to compare against calleeE — AST-type-resolution work the Rust direct
-   lookup avoids. Same emit-at-decision-point rule (don't silently fall through).
+   TypeId via the EXISTING self-host resolver
+   `ast_type_to_resolved(Type ast_ty, Span span, ScopeTable scopes, TypeTable &types) -> int`
+   (`types.gg:~278`) to compare against calleeE — AST-type-resolution work the
+   Rust direct lookup avoids (this is the highest-risk, un-prototyped part;
+   `ast_type_to_resolved` is the tool that does it). Same emit-at-decision-point
+   rule (don't silently fall through).
 3. **RUN-verify the self-host gate:** build the self-host typechecker driver,
    run a cross-type repro through it, confirm it REJECTS; run a From-mediated
    positive through the self-host lowerer, confirm correct output. This part
@@ -202,8 +220,10 @@ the count; comment why.
   always-pass); confirm the self-host typecheck change does not regress parity.
 - Parity re-measure: `GG_RUNTIME_DIFF=1 GG_BUILD_TIMEOUT_SECS=600 cargo test
   --test integration --release self_host_runtime_diff -- --nocapture` (read the
-  `PARITY = …` line; baseline 518/1008 = 51.4% at `543344c2` — expect ≥, the
-  fix can only add MATCHes by emitting correct conversions).
+  `PARITY = …` line). CAPTURE the baseline by running this command at session
+  start on the unmodified tree — do NOT trust a dated figure; then expect the
+  post-fix number ≥ baseline (the fix can only add MATCHes by emitting correct
+  conversions, never remove them).
 
 ## Constraints
 - Standard worktree preamble: `pwd` + `git rev-parse --show-toplevel` inside
