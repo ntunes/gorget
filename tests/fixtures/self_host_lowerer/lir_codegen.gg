@@ -5001,8 +5001,16 @@ String emit_function(LirFunction &func, LirModule &m, Vector[String] &sn, Dict[S
 # byte-identical (the `c_emit_comparison` user_fn_count gate counts
 # these `) {` lines on both sides).
 void emit_pthread_main_runner(StrBuf &buf, bool user_main_is_void):
+    # Signal routing: the wrapper thread blocks ALL signals BEFORE
+    # creating the user thread (which inherits the block and then
+    # restores the original mask) — process-directed signals are
+    # therefore delivered to the USER thread exactly as in the old
+    # single-threaded main (a self-directed kill() stays synchronous;
+    # signal_wait's pause() keeps waking).
+    sb_push(&buf, "static sigset_t __gorget_main_sigmask;\n")
     sb_push(&buf, "static void* __gorget_main_trampoline(void* __gg_unused) {\n")
     sb_push(&buf, "    (void)__gg_unused;\n")
+    sb_push(&buf, "    pthread_sigmask(SIG_SETMASK, &__gorget_main_sigmask, 0);\n")
     if user_main_is_void:
         sb_push(&buf, "    __gorget_user_main();\n")
         sb_push(&buf, "    return 0;\n")
@@ -5011,6 +5019,9 @@ void emit_pthread_main_runner(StrBuf &buf, bool user_main_is_void):
     sb_push(&buf, "}\n")
     sb_push(&buf, "int main(int argc, char** argv) {\n")
     sb_push(&buf, "    gorget_init_args(argc, argv);\n")
+    sb_push(&buf, "    sigset_t __gg_sig_all;\n")
+    sb_push(&buf, "    sigfillset(&__gg_sig_all);\n")
+    sb_push(&buf, "    pthread_sigmask(SIG_SETMASK, &__gg_sig_all, &__gorget_main_sigmask);\n")
     sb_push(&buf, "    pthread_attr_t __gg_main_attr;\n")
     sb_push(&buf, "    pthread_t __gg_main_tid;\n")
     sb_push(&buf, "    void* __gg_main_ret = 0;\n")

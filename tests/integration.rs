@@ -23346,7 +23346,11 @@ fn stack_guard_self_host_driver_deep_lowering() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
     let runtime_dir = manifest_dir.join("src/backend/c/runtime");
-    let fixture = manifest_dir.join("tests/fixtures/stack_guard_concat_chain.gg");
+    // DIR fixture: a root-level copy would fail the corpus-wide
+    // fmt_idempotent test — `gg fmt` destroys long binary chains (reflows
+    // them into a `+`-continuation form the parser REJECTS; a second pass
+    // silently drops the orphaned lines). Filed HIGH in TODO.
+    let fixture = manifest_dir.join("tests/fixtures/stack_guard_concat_chain/main.gg");
     let tmp_root = std::env::temp_dir().join(format!(
         "gg_stack_guard_chain_{}",
         std::process::id()

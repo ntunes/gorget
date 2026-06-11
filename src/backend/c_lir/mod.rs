@@ -1974,8 +1974,17 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     // keep the emitted text byte-identical (the `c_emit_comparison`
     // user_fn_count gate counts these `) {` lines on both sides).
     if func.name == "main" && is_native_target {
+        // Signal routing: the wrapper thread blocks ALL signals BEFORE
+        // creating the user thread (which inherits the block and then
+        // restores the original mask) — process-directed signals are
+        // therefore delivered to the USER thread exactly as in the old
+        // single-threaded main. Without this, a self-directed kill() could
+        // race the parked wrapper thread (signal_basic) and signal_wait's
+        // pause() could hang waiting on a signal the wrapper consumed.
+        out.push_str("static sigset_t __gorget_main_sigmask;\n");
         out.push_str("static void* __gorget_main_trampoline(void* __gg_unused) {\n");
         out.push_str("    (void)__gg_unused;\n");
+        out.push_str("    pthread_sigmask(SIG_SETMASK, &__gorget_main_sigmask, 0);\n");
         if matches!(func.return_type, LirType::Void) {
             out.push_str("    __gorget_user_main();\n");
             out.push_str("    return 0;\n");
@@ -1989,6 +1998,9 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
             let escaped = trace_path.replace('\\', "\\\\").replace('"', "\\\"");
             writeln!(out, "    __gorget_trace_init(\"{escaped}\");").unwrap();
         }
+        out.push_str("    sigset_t __gg_sig_all;\n");
+        out.push_str("    sigfillset(&__gg_sig_all);\n");
+        out.push_str("    pthread_sigmask(SIG_SETMASK, &__gg_sig_all, &__gorget_main_sigmask);\n");
         out.push_str("    pthread_attr_t __gg_main_attr;\n");
         out.push_str("    pthread_t __gg_main_tid;\n");
         out.push_str("    void* __gg_main_ret = 0;\n");
