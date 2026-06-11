@@ -1702,68 +1702,23 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
         }
     }
 
-    // Slot declarations (emitted after cross-type fix-ups so slot_overrides are applied).
-    for (i, slot) in func.slots.iter().enumerate() {
-        let effective_ty = slot_overrides.get(&(i as u32)).unwrap_or(&slot.ty);
-        let ty_str = if let Some(c_override) = slot_c_overrides.get(&(i as u32)) {
-            c_override.to_string()
-        } else {
-            let ts = c_type_named(effective_ty, sn);
-            if ts == "void" { "void*".to_string() } else { ts }
-        };
-
-        write!(out, "    {ty_str} __s{i}").unwrap();
-        // Zero-initialize
-        if slot_c_overrides.contains_key(&(i as u32)) {
-            // C type override is always a struct — use aggregate init.
-            write!(out, " = {{0}}").unwrap();
-        } else if effective_ty.is_scalar() {
-            write!(out, " = 0").unwrap();
-        } else {
-            write!(out, " = {{0}}").unwrap();
-        }
-        writeln!(out, ";").unwrap();
-    }
-
-    for (i, ty) in val_types.iter().enumerate() {
-        // Use C type override if available (for runtime structs not in module.structs).
-        if let Some(Some(c_override)) = val_c_type_override.get(i) {
-            writeln!(out, "    {} __v{i};", c_override).unwrap();
-            continue;
-        }
-        // CStr-origin values are const char* — declare as such to avoid
-        // const-discard warnings. Reads `func.value_origins` directly.
-        if matches!(func.value_origins.get(i).and_then(|o| o.as_ref()), Some(ValueOrigin::CStr { .. })) {
-            writeln!(out, "    const char* __v{i};").unwrap();
-            continue;
-        }
-        match ty {
-            Some(ty) => {
-                let ts = c_type_named(ty, sn);
-                if ts == "void" {
-                    // Void-typed values are used as opaque pointers — declare as void*.
-                    writeln!(out, "    void* __v{i};").unwrap();
-                } else {
-                    writeln!(out, "    {} __v{i};", ts).unwrap();
-                }
-            }
-            None => {
-                // No type inferred — value is referenced but type couldn't be determined.
-                // Declare as void* to avoid undeclared variable errors.
-                writeln!(out, "    void* __v{i};").unwrap();
-            }
-        }
-    }
-
-    // Block parameter move variables (for parallel copy semantics).
-    // Each block param needs a temporary for parallel moves.
-    for block in &func.blocks {
-        for (vid, ty) in &block.params {
-            writeln!(out, "    {} __bp{};", c_type_named(ty, sn), vid.0).unwrap();
-        }
-    }
-
-    writeln!(out).unwrap();
+    // Fix A (#37 flip): emit the BODY (main-globals init + blocks) into a
+    // side buffer FIRST, then declare only the `__v` ids / `__s` slots the
+    // emitted body actually references (`mark_used_value_ids` — exact-token
+    // scan of the body text, the one choke point every reference flows
+    // through: block-param head copies, terminator-arg copies/returns,
+    // slot carriers, InlineC-rewritten locals and test-cleanup glue all
+    // surface there, which no typed inst-operand walk can see).
+    // Declaring all 0..max_val ids left thousands of dead decls per giant
+    // function; at -O0 each costs frame bytes, and the self-host
+    // `lower_expr_inner` frame sat within <1KB of the recursion stack
+    // cliff that killed the bootstrap on stock ulimits (the mirror fix
+    // lives in lir_codegen.gg emit_function).
+    let mut fnbody = String::new();
+    {
+    // Shadow `out` with the side buffer so the body-emission code below is
+    // byte-identical to the pre-Fix-A emission (only the destination moved).
+    let out = &mut fnbody;
 
     // For the main function, emit runtime call initializers for globals.
     if func.name == "main" {
@@ -1909,8 +1864,127 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
         emit_term(out, &block.terminator, func, module, sn, &val_types);
         writeln!(out).unwrap();
     }
+    } // end of the `out`-shadow scope — `out` is the real sink again
+
+    // Fix A: scan the emitted body for the ids it actually references.
+    let mut v_used = vec![false; max_val as usize];
+    let mut s_used = vec![false; func.slots.len()];
+    mark_used_value_ids(&fnbody, &mut v_used, &mut s_used);
+
+    // Slot declarations (referenced only; emitted after cross-type fix-ups so slot_overrides are applied).
+    for (i, slot) in func.slots.iter().enumerate() {
+        if !s_used[i] {
+            continue;
+        }
+        let effective_ty = slot_overrides.get(&(i as u32)).unwrap_or(&slot.ty);
+        let ty_str = if let Some(c_override) = slot_c_overrides.get(&(i as u32)) {
+            c_override.to_string()
+        } else {
+            let ts = c_type_named(effective_ty, sn);
+            if ts == "void" { "void*".to_string() } else { ts }
+        };
+
+        write!(out, "    {ty_str} __s{i}").unwrap();
+        // Zero-initialize
+        if slot_c_overrides.contains_key(&(i as u32)) {
+            // C type override is always a struct — use aggregate init.
+            write!(out, " = {{0}}").unwrap();
+        } else if effective_ty.is_scalar() {
+            write!(out, " = 0").unwrap();
+        } else {
+            write!(out, " = {{0}}").unwrap();
+        }
+        writeln!(out, ";").unwrap();
+    }
+
+    // Value declarations (referenced only).
+    for (i, ty) in val_types.iter().enumerate() {
+        if !v_used.get(i).copied().unwrap_or(false) {
+            continue;
+        }
+        // Use C type override if available (for runtime structs not in module.structs).
+        if let Some(Some(c_override)) = val_c_type_override.get(i) {
+            writeln!(out, "    {} __v{i};", c_override).unwrap();
+            continue;
+        }
+        // CStr-origin values are const char* — declare as such to avoid
+        // const-discard warnings. Reads `func.value_origins` directly.
+        if matches!(func.value_origins.get(i).and_then(|o| o.as_ref()), Some(ValueOrigin::CStr { .. })) {
+            writeln!(out, "    const char* __v{i};").unwrap();
+            continue;
+        }
+        match ty {
+            Some(ty) => {
+                let ts = c_type_named(ty, sn);
+                if ts == "void" {
+                    // Void-typed values are used as opaque pointers — declare as void*.
+                    writeln!(out, "    void* __v{i};").unwrap();
+                } else {
+                    writeln!(out, "    {} __v{i};", ts).unwrap();
+                }
+            }
+            None => {
+                // No type inferred — value is referenced but type couldn't be determined.
+                // Declare as void* to avoid undeclared variable errors.
+                writeln!(out, "    void* __v{i};").unwrap();
+            }
+        }
+    }
+
+    // Block parameter move variables (for parallel copy semantics).
+    // Each block param needs a temporary for parallel moves.
+    for block in &func.blocks {
+        for (vid, ty) in &block.params {
+            writeln!(out, "    {} __bp{};", c_type_named(ty, sn), vid.0).unwrap();
+        }
+    }
+
+    writeln!(out).unwrap();
+
+    // The pre-emitted body (main-globals init + blocks).
+    out.push_str(&fnbody);
 
     writeln!(out, "}}").unwrap();
+}
+
+/// Fix A (#37 flip): mark every `__v<N>` / `__s<N>` token the emitted body
+/// text references. EXACT-TOKEN semantics: after `__v`/`__s` the full digit
+/// run is consumed, so the token ends at the first non-digit by construction
+/// and a live `__v12` can never retain a dead `__v1`. Scanning the EMITTED
+/// BODY is the load-bearing design choice: a typed inst-operand walk cannot
+/// see block-param head copies (`__vN = __bpN`), terminator-arg
+/// copies/returns, slot carriers, InlineC-rewritten locals, or test-cleanup
+/// glue — the body text is the single choke point every reference flows
+/// through. If an enumerator-based derivation is ever preferred, its
+/// contract must cover ALL those routes (docs/plans/brief_37_flip_enable.md
+/// W1). The self-host twin is `mark_used_value_ids` in lir_codegen.gg.
+fn mark_used_value_ids(body: &str, v_used: &mut [bool], s_used: &mut [bool]) {
+    let b = body.as_bytes();
+    let n = b.len();
+    let mut i = 0usize;
+    while i + 3 < n {
+        if b[i] == b'_' && b[i + 1] == b'_' && (b[i + 2] == b'v' || b[i + 2] == b's') {
+            let mut j = i + 3;
+            let mut num = 0usize;
+            let mut saw = false;
+            while j < n && b[j].is_ascii_digit() {
+                num = num.saturating_mul(10).saturating_add((b[j] - b'0') as usize);
+                saw = true;
+                j += 1;
+            }
+            if saw {
+                let used = if b[i + 2] == b'v' { &mut *v_used } else { &mut *s_used };
+                if num < used.len() {
+                    used[num] = true;
+                }
+                i = j;
+            } else {
+                i += 3;
+            }
+        } else {
+            i += 1;
+        }
+    }
 }
 
 fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext, loc: &(String, u32, u32)) {

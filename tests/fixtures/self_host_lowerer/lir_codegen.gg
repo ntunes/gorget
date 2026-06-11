@@ -4742,6 +4742,51 @@ String emit_jump_args(int target, Vector[int] &args, LirFunction &func, Vector[S
 
 # ── Function emission ──────────────────────────────────────
 
+# Fix A (#37 flip): dead-decl elision support. Mark every `__v<N>` /
+# `__s<N>` token the emitted body text references so emit_function can
+# declare ONLY the ids the body actually uses (~29% of `__v` and ~58% of
+# `__s` decls in the biggest functions are dead, and at -O0 every dead
+# decl costs frame bytes — the lower_expr_inner frame sat within <1KB of
+# the stack cliff that killed the bootstrap on stock ulimits).
+# EXACT-TOKEN semantics: after `__v`/`__s` the full digit run is
+# consumed, so the token ends at the first non-digit by construction and
+# a live `__v12` can never retain a dead `__v1`. Scanning the EMITTED
+# BODY is the load-bearing design choice (mirrors Rust gg's
+# emit_function): a typed inst-operand walk cannot see block-param head
+# copies (`__vN = __bpN`), terminator-arg copies/returns, slot carriers
+# (SlotLoad/SlotStore/SlotAddr/MoveSlot/ClosurePack), or InlineC-
+# rewritten locals — the body text is the single choke point every
+# reference flows through. If an enumerator-based derivation is ever
+# preferred, its contract must cover ALL those routes (see
+# docs/plans/brief_37_flip_enable.md W1).
+void mark_used_value_ids(String body, Vector[bool] &v_used, Vector[bool] &s_used):
+    int mu_n = body.byte_len()
+    int mu_i = 0
+    while mu_i + 3 < mu_n:
+        if body.byte_at(mu_i) == b'_' and body.byte_at(mu_i + 1) == b'_' and (body.byte_at(mu_i + 2) == b'v' or body.byte_at(mu_i + 2) == b's'):
+            int mu_j = mu_i + 3
+            int mu_num = 0
+            bool mu_saw = false
+            while mu_j < mu_n:
+                byte mu_c = body.byte_at(mu_j)
+                if mu_c < b'0' or mu_c > b'9':
+                    break
+                mu_num = mu_num * 10 + (mu_c as int - b'0')
+                mu_saw = true
+                mu_j += 1
+            if mu_saw:
+                if body.byte_at(mu_i + 2) == b'v':
+                    if mu_num < v_used.len():
+                        v_used.set(mu_num, true)
+                else:
+                    if mu_num < s_used.len():
+                        s_used.set(mu_num, true)
+                mu_i = mu_j
+            else:
+                mu_i = mu_i + 3
+        else:
+            mu_i += 1
+
 String emit_function(LirFunction &func, LirModule &m, Vector[String] &sn, Dict[String, int] &slit_map):
     # Mirrors src/backend/c_lir/mod.rs:emit_function — accumulate into a
     # single growing buffer via in-place push instead of `out = out + ...`
@@ -4800,25 +4845,7 @@ String emit_function(LirFunction &func, LirModule &m, Vector[String] &sn, Dict[S
                 pi += 1
         sb_push(&buf, ") {\n")
 
-    # Slot declarations
-    int si = 0
-    while si < func.slots.len():
-        LirSlot slot = func.slots.get(si).unwrap()
-        String ty_str = c_type_name(slot.ty, &sn)
-        if ty_str == "void":
-            ty_str = "void*"
-        sb_push(&buf, "    ")
-        sb_push(&buf, ty_str)
-        sb_push(&buf, " __s")
-        sb_push(&buf, int_to_str(si))
-        if lir_is_scalar(slot.ty):
-            sb_push(&buf, " = 0")
-        else:
-            sb_push(&buf, " = {0}")
-        sb_push(&buf, ";\n")
-        si += 1
-
-    # Value declarations — find max value id (scan block params, inst dsts, and func.next_value)
+    # Value-id ceiling — find max value id (scan block params, inst dsts, and func.next_value)
     int max_val = func.next_value
     int bi = 0
     while bi < func.blocks.len():
@@ -4836,8 +4863,55 @@ String emit_function(LirFunction &func, LirModule &m, Vector[String] &sn, Dict[S
             ii += 1
         bi += 1
 
+    # Fix A (#37 flip): emit the blocks into a SIDE buffer FIRST, then
+    # declare only the `__v` ids / `__s` slots the emitted body actually
+    # references (mark_used_value_ids above — exact-token scan of the
+    # body text, the one choke point every reference flows through).
+    # Declaring all 0..max_val ids left thousands of dead decls per giant
+    # function; at -O0 each costs frame bytes and lower_expr_inner's
+    # frame sat within <1KB of the recursion stack cliff.
+    StrBuf fnbody = sb_new()
+    emit_function_body(&fnbody, &func, &m, &sn, &slit_map, &val_types, &val_to_slot)
+
+    Vector[bool] v_used = []
+    int vu_i = 0
+    while vu_i < max_val:
+        v_used.push(false)
+        vu_i += 1
+    Vector[bool] s_used = []
+    int su_i = 0
+    while su_i < func.slots.len():
+        s_used.push(false)
+        su_i += 1
+    mark_used_value_ids(fnbody.s, &v_used, &s_used)
+
+    # Slot declarations (referenced only)
+    int si = 0
+    while si < func.slots.len():
+        if not s_used.get(si).unwrap():
+            si += 1
+            continue
+        LirSlot slot = func.slots.get(si).unwrap()
+        String ty_str = c_type_name(slot.ty, &sn)
+        if ty_str == "void":
+            ty_str = "void*"
+        sb_push(&buf, "    ")
+        sb_push(&buf, ty_str)
+        sb_push(&buf, " __s")
+        sb_push(&buf, int_to_str(si))
+        if lir_is_scalar(slot.ty):
+            sb_push(&buf, " = 0")
+        else:
+            sb_push(&buf, " = {0}")
+        sb_push(&buf, ";\n")
+        si += 1
+
+    # Value declarations (referenced only)
     int vi = 0
     while vi < max_val:
+        if not v_used.get(vi).unwrap():
+            vi += 1
+            continue
         String ty_str = "void*"
         if val_types.contains(vi):
             int vty = val_types.get(vi).unwrap()
@@ -4895,8 +4969,17 @@ String emit_function(LirFunction &func, LirModule &m, Vector[String] &sn, Dict[S
 
     sb_push(&buf, "\n")
 
-    # Blocks
-    bi = 0
+    # Blocks — pre-emitted into the side buffer (Fix A above).
+    sb_push(&buf, fnbody.s)
+
+    sb_push(&buf, "}\n")
+    return buf.s
+
+# The per-block body emitter (block label + block-param head copies +
+# instructions + terminator), split out of emit_function so Fix A can emit
+# the body into a side buffer BEFORE the declarations are written.
+void emit_function_body(StrBuf &out, LirFunction &func, LirModule &m, Vector[String] &sn, Dict[String, int] &slit_map, Dict[int, int] &val_types, Dict[int, int] &val_to_slot):
+    int bi = 0
     while bi < func.blocks.len():
         # Read each block/param/inst/term through a BORROW — do NOT value-bind
         # `LirBlock blk = …` / `LirInst inst = …` / `BlockParam bp = …`, which
@@ -4906,38 +4989,35 @@ String emit_function(LirFunction &func, LirModule &m, Vector[String] &sn, Dict[S
         # borrow, not copy (CoW contract). These leaked LirBlock/LirInst
         # clones were the dominant generate_c OOM consumer; mirrors Rust
         # c_lir iterating `&func.blocks[..]` to emit.
-        sb_push(&buf, "__bb")
-        sb_push(&buf, int_to_str(func.blocks.get(bi).unwrap().id))
-        sb_push(&buf, ":\n")
+        sb_push(&out, "__bb")
+        sb_push(&out, int_to_str(func.blocks.get(bi).unwrap().id))
+        sb_push(&out, ":\n")
 
         # Move block params from temporaries
         int pi = 0
         while pi < func.blocks.get(bi).unwrap().params.len():
-            sb_push(&buf, "    __v")
-            sb_push(&buf, int_to_str(func.blocks.get(bi).unwrap().params.get(pi).unwrap().value_id))
-            sb_push(&buf, " = __bp")
-            sb_push(&buf, int_to_str(func.blocks.get(bi).unwrap().params.get(pi).unwrap().value_id))
-            sb_push(&buf, ";\n")
+            sb_push(&out, "    __v")
+            sb_push(&out, int_to_str(func.blocks.get(bi).unwrap().params.get(pi).unwrap().value_id))
+            sb_push(&out, " = __bp")
+            sb_push(&out, int_to_str(func.blocks.get(bi).unwrap().params.get(pi).unwrap().value_id))
+            sb_push(&out, ";\n")
             pi += 1
 
         # Instructions
         int ii = 0
         while ii < func.blocks.get(bi).unwrap().insts.len():
             String code = emit_inst(&func.blocks.get(bi).unwrap().insts.get(ii).unwrap(), &m, &func, &sn, &val_types, &slit_map, &val_to_slot)
-            sb_push(&buf, "    ")
-            sb_push(&buf, code)
-            sb_push(&buf, "\n")
+            sb_push(&out, "    ")
+            sb_push(&out, code)
+            sb_push(&out, "\n")
             ii += 1
 
         # Terminator
         String tcode = emit_term(&func.blocks.get(bi).unwrap().term, &func, &sn, &val_types)
-        sb_push(&buf, "    ")
-        sb_push(&buf, tcode)
-        sb_push(&buf, "\n")
+        sb_push(&out, "    ")
+        sb_push(&out, tcode)
+        sb_push(&out, "\n")
         bi += 1
-
-    sb_push(&buf, "}\n")
-    return buf.s
 
 # ── Drop/Clone function emission ──────────────────────────
 
