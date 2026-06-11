@@ -13,8 +13,14 @@ port arm-for-arm vs Rust `Inst::uses()` + a 1:1 arm-count gate; line numbers
 drift (anchor by name). Pass-2 fold (fresh reviewer, all 3 v1 folds verified
 PASS): added the FORGOTTEN `term_uses` over `LirTerm` (liveness reads terminator
 uses too — block-arg/phi liveness; same uncatchable-clobber class as `inst_uses`)
-+ `lir_ssa.gg` to the zone + the cross-check gate. NEEDS a fresh confirming pass
-(pass-2 raised a reservation).
++ `lir_ssa.gg` to the zone + the cross-check gate.
+✅ REVIEW-CLEAN: pass-3 (fresh) SIGN OFF — verified the `term_uses` fold against
+source (the `LirTerm` operand set vs `Term::uses()`) AND confirmed there is NO
+THIRD missing operand-accessor (`compute_live_blocks` reads exactly block-params
+/`inst.uses()`/`inst.dst()`/`terminator.uses()` → `inst_uses`+`term_uses` is the
+COMPLETE missing surface). 3 sequential fresh passes (3 → missing-term_uses →
+clean). READY for the executor (run AFTER Block-2's battery clears — both gate
+`fixed_point`; the executor wants solo CPU for byte-identity).
 
 ## Mission
 Add liveness-based stack-slot coalescing to gg's SSA→C emitter so the self-host
