@@ -25,6 +25,12 @@
 #include <math.h>
 #include <errno.h>
 #include <sys/ioctl.h>
+// Unconditional: the NATIVE main runner executes the program body on a
+// pthread with an explicit 64MB stack reserve (Fix B, #37 flip) — every
+// hosted binary needs pthreads now, not just std.async/spawn users. The
+// freestanding target never reaches this preamble (emit_types.rs
+// early-returns onto lib/freestanding/runtime.c).
+#include <pthread.h>
 
 // ── Allocator ───────────────────────────────────────────────
 typedef struct GorgetAllocator {

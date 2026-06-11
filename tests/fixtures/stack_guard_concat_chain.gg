@@ -1,0 +1,10 @@
+# Stack-cliff guard fixture (#37 flip, Fix B — see the stack_guard_*
+# tests in tests/integration.rs): lowering this single 200-term concat
+# chain drives ~200 levels of lower_expr <-> lower_expr_inner recursion
+# in the COMPILER (~180-220KB per frame at -O0), far past a stock 8MB
+# main-thread stack. The pthread main runner (64MB explicit reserve) is
+# what makes compiling this fixture host-ulimit-independent.
+void main():
+    String a = "x"
+    String s = a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a
+    print(s.len())

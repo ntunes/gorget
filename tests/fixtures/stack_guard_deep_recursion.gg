@@ -1,0 +1,12 @@
+# Runtime-stack guard fixture (#37 flip, Fix B — see the stack_guard_*
+# tests in tests/integration.rs): deep recursion in the PRODUCED BINARY.
+# depth x frame must exceed a pinned stock 8MB stack and fit the pthread
+# main runner's 64MB explicit reserve — the test pins RLIMIT_STACK on
+# the binary's execution, so this is deterministic both ways.
+int deep(int n):
+    if n == 0:
+        return 0
+    return deep(n - 1) + 1
+
+void main():
+    print(deep(200000))

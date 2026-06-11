@@ -23044,13 +23044,16 @@ fn witness_never_emitted_c_clone_shape() {
 
     let c_src = std::fs::read_to_string(&c_path)
         .expect("emitted C artifact missing for witness_never");
+    // The program body lives in `__gorget_user_main` since the Fix B
+    // pthread main runner (#37 flip); the wrapper `int main` only does
+    // init + thread setup.
     let main_start = c_src
-        .find("int main(int argc, char** argv) {")
-        .expect("main definition in emitted C");
+        .find("static int __gorget_user_main(void) {")
+        .expect("user-main definition in emitted C");
     let main_end = c_src[main_start..]
         .find("\n}")
         .map(|e| main_start + e)
-        .expect("main closing brace");
+        .expect("user-main closing brace");
     let main_src = &c_src[main_start..main_end];
 
     let bv = main_src.find("gorget_string_borrow_view(");
@@ -23269,13 +23272,16 @@ fn witness_never_self_host_emitted_c_clone_shape() {
         String::from_utf8_lossy(&emit.stderr)
     );
     let c_src = String::from_utf8_lossy(&emit.stdout).to_string();
+    // The program body lives in `__gorget_user_main` since the Fix B
+    // pthread main runner (#37 flip); the wrapper `int main` only does
+    // init + thread setup.
     let main_start = c_src
-        .find("int main(int argc, char** argv) {")
-        .expect("main definition in self-host emitted C");
+        .find("static int __gorget_user_main(void) {")
+        .expect("user-main definition in self-host emitted C");
     let main_end = c_src[main_start..]
         .find("\n}")
         .map(|e| main_start + e)
-        .expect("main closing brace");
+        .expect("user-main closing brace");
     let main_src = &c_src[main_start..main_end];
 
     let bv = main_src.find("gorget_string_borrow_view(");
@@ -23294,4 +23300,150 @@ fn witness_never_self_host_emitted_c_clone_shape() {
          flag-guarded materialize); found {}",
         cto_sites.len()
     );
+}
+
+// ── #37 flip — Fix B stack guards (CLAUDE.md rule 6: the silent
+// environment-coupled stack cliff becomes a loud, deterministic test) ──
+//
+// The NATIVE pthread main runner (Fix B) runs every program body on a
+// pthread with a 64MB explicit stack reserve. Explicit
+// pthread_attr_setstacksize stacks are mmap'd, NOT RLIMIT_STACK-bound,
+// so pinning RLIMIT_STACK to a stock 8MB in-test makes both guards
+// deterministic BOTH WAYS: without the runner the pinned process
+// SIGSEGVs (re-verified at W2: both legs rc=139 pre-fix), with it both
+// pass on any host ulimit. Two legs, two processes (p2-R2):
+//   (i)  the COMPILER's recursion — the pinned budget binds the DRIVER
+//        process lowering a 200-term concat chain (~200 levels of
+//        lower_expr<->lower_expr_inner at ~180-220KB/frame at -O0);
+//   (ii) the PRODUCED BINARY's runtime recursion — the pinned budget
+//        binds the binary executing a depth-200000 recursive fn
+//        (~112B/frame ≈ 22MB > 8MB budget, < 64MB reserve).
+
+/// Guard (i): the self-host route's compiler-recursion leg. The driver
+/// process is pinned to an 8MB stack (`ulimit -S -s 8192`); it must
+/// still lower the 200-term concat chain (its body runs on the 64MB
+/// pthread), and the produced binary must print the chain's length.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn stack_guard_self_host_driver_deep_lowering() {
+    if skip_under_llvm() {
+        return;
+    }
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let fixture = manifest_dir.join("tests/fixtures/stack_guard_concat_chain.gg");
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_stack_guard_chain_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+    let c_path = tmp_root.join("stack_guard_concat_chain.c");
+    let bin_path = tmp_root.join("stack_guard_concat_chain");
+
+    // Pin RLIMIT_STACK (soft) to a stock 8MB on the DRIVER process via a
+    // `sh -c 'ulimit && exec'` wrapper — the budget the pthread reserve
+    // must beat. Soft-limit lowering is always permitted, so the pin
+    // never fails on hosts with smaller hard limits.
+    let emit = run_with_timeout(
+        Command::new("sh")
+            .arg("-c")
+            .arg("ulimit -S -s 8192 && exec \"$0\" \"$1\" \"$2\" --emit-c \"$3\"")
+            .arg(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg(format!("--runtime-dir={}", runtime_dir.display())),
+        "stack_guard_concat_chain.gg (driver pinned to 8MB)",
+    );
+    assert!(
+        emit.status.success(),
+        "self-host driver overflowed a pinned 8MB stack lowering the \
+         200-term concat chain — the Fix B pthread main runner regressed \
+         (status={:?}, stderr: {})",
+        emit.status.code(),
+        String::from_utf8_lossy(&emit.stderr)
+    );
+    std::fs::write(&c_path, &emit.stdout).expect("write emitted C");
+    let cc_out = Command::new("cc")
+        .arg("-O0").arg("-w")
+        .arg("-o").arg(&bin_path)
+        .arg(&c_path)
+        .arg("-lm")
+        .arg("-lpthread")
+        .output()
+        .expect("spawn cc");
+    assert!(
+        cc_out.status.success(),
+        "cc failed on the guard fixture: {}",
+        String::from_utf8_lossy(&cc_out.stderr)
+    );
+    let run = run_with_timeout(&mut Command::new(&bin_path), "stack_guard_concat_chain");
+    assert!(run.status.success(), "guard binary failed");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout).trim_end(),
+        "200",
+        "200-term chain length"
+    );
+}
+
+/// Guard (ii): the runtime-recursion leg through the Rust `gg build`
+/// route. The PRODUCED BINARY's execution is pinned to an 8MB stack; its
+/// depth-200000 recursion (~22MB) must run on the 64MB pthread reserve.
+/// A concat chain would be VACUOUS here — the emitted C evaluates it in
+/// one frame; only genuine runtime recursion exercises the binary's
+/// stack. (LLVM leg scoped out: the LLVM @main still runs the body on
+/// the host stack — TODO at src/backend/llvm/mod.rs emit @main.)
+#[test]
+fn stack_guard_runtime_deep_recursion() {
+    if skip_under_llvm() {
+        return;
+    }
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest_dir.join("tests/fixtures/stack_guard_deep_recursion.gg");
+    let work_dir = std::env::temp_dir().join(format!(
+        "gg_stack_guard_deep_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&work_dir).expect("failed to create work_dir");
+    let gg_path = work_dir.join("stack_guard_deep_recursion.gg");
+    std::fs::copy(&fixture, &gg_path).expect("copy fixture");
+    let exe_path = work_dir.join("stack_guard_deep_recursion");
+
+    let build = build_with_timeout(
+        gg_command("build").arg(&gg_path),
+        "stack_guard_deep_recursion.gg",
+    );
+    assert!(
+        build.status.success(),
+        "Build failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr),
+    );
+
+    // Pin RLIMIT_STACK (soft) to a stock 8MB on the BINARY's execution.
+    let run = run_with_timeout(
+        Command::new("sh")
+            .arg("-c")
+            .arg("ulimit -S -s 8192 && exec \"$0\"")
+            .arg(&exe_path),
+        "stack_guard_deep_recursion (binary pinned to 8MB)",
+    );
+    assert!(
+        run.status.success(),
+        "deep-recursion binary overflowed a pinned 8MB stack — the Fix B \
+         pthread main runner regressed (status={:?}, stderr: {})",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout).trim_end(),
+        "200000",
+        "depth-200000 recursion result"
+    );
+
+    let _ = std::fs::remove_file(&exe_path);
+    let _ = std::fs::remove_file(&gg_path);
+    let _ = std::fs::remove_file(work_dir.join("stack_guard_deep_recursion.c"));
+    let _ = std::fs::remove_dir(&work_dir);
 }

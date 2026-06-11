@@ -1059,13 +1059,28 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     });
     let ret_type_str = if is_throws_main { "int".to_string() } else { c_type_named(&func.return_type, sn) };
 
+    // Fix B (#37 flip): on the NATIVE target the program body runs on a
+    // pthread with a 64MB explicit stack reserve (`__gorget_user_main` +
+    // trampoline + wrapper `main`, emitted after the body below) — user
+    // recursion depth scales with program nesting and must not depend on
+    // host ulimits (a stock 8MB stack killed the GREEN self-host bootstrap).
+    // FREESTANDING keeps today's plain main: it has no pthreads and swaps
+    // the preamble before the pthread include (emit_types.rs freestanding
+    // early-return). Gate on the TYPED `LirModule.target` — never a name
+    // heuristic.
+    let is_native_target = !module.target.starts_with("freestanding");
+
     // Signature — special-case main() to accept argc/argv for sys.argv support.
     if func.name == "main" {
-        writeln!(out, "int main(int argc, char** argv) {{").unwrap();
-        writeln!(out, "    gorget_init_args(argc, argv);").unwrap();
-        if let Some(ref trace_path) = module.trace_filename {
-            let escaped = trace_path.replace('\\', "\\\\").replace('"', "\\\"");
-            writeln!(out, "    __gorget_trace_init(\"{escaped}\");").unwrap();
+        if is_native_target {
+            writeln!(out, "static int __gorget_user_main(void) {{").unwrap();
+        } else {
+            writeln!(out, "int main(int argc, char** argv) {{").unwrap();
+            writeln!(out, "    gorget_init_args(argc, argv);").unwrap();
+            if let Some(ref trace_path) = module.trace_filename {
+                let escaped = trace_path.replace('\\', "\\\\").replace('"', "\\\"");
+                writeln!(out, "    __gorget_trace_init(\"{escaped}\");").unwrap();
+            }
         }
     } else {
         write!(out, "{} {}(", ret_type_str, c_func_name(&func.name)).unwrap();
@@ -1945,6 +1960,47 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     out.push_str(&fnbody);
 
     writeln!(out, "}}").unwrap();
+
+    // Fix B (#37 flip): the NATIVE pthread main runner. The user main body
+    // (emitted above as `static int __gorget_user_main(void)`) runs on a
+    // pthread with a 64MB explicit stack reserve; explicit
+    // pthread_attr_setstacksize stacks are mmap'd, NOT RLIMIT_STACK-bound,
+    // so the binary's recursion budget is host-ulimit-independent. On any
+    // pthread setup failure the trampoline runs on the host stack
+    // (best-effort fallback, today's behavior). The trampoline pins the
+    // exit-code contract: a void-returning Gorget main exits 0 (the old
+    // `int main { return; }` shape read an UNDEFINED register value).
+    // The self-host twin is `emit_pthread_main_runner` in lir_codegen.gg —
+    // keep the emitted text byte-identical (the `c_emit_comparison`
+    // user_fn_count gate counts these `) {` lines on both sides).
+    if func.name == "main" && is_native_target {
+        out.push_str("static void* __gorget_main_trampoline(void* __gg_unused) {\n");
+        out.push_str("    (void)__gg_unused;\n");
+        if matches!(func.return_type, LirType::Void) {
+            out.push_str("    __gorget_user_main();\n");
+            out.push_str("    return 0;\n");
+        } else {
+            out.push_str("    return (void*)(intptr_t)__gorget_user_main();\n");
+        }
+        out.push_str("}\n");
+        out.push_str("int main(int argc, char** argv) {\n");
+        out.push_str("    gorget_init_args(argc, argv);\n");
+        if let Some(ref trace_path) = module.trace_filename {
+            let escaped = trace_path.replace('\\', "\\\\").replace('"', "\\\"");
+            writeln!(out, "    __gorget_trace_init(\"{escaped}\");").unwrap();
+        }
+        out.push_str("    pthread_attr_t __gg_main_attr;\n");
+        out.push_str("    pthread_t __gg_main_tid;\n");
+        out.push_str("    void* __gg_main_ret = 0;\n");
+        out.push_str("    if (pthread_attr_init(&__gg_main_attr) != 0 ||\n");
+        out.push_str("        pthread_attr_setstacksize(&__gg_main_attr, (size_t)64 * 1024 * 1024) != 0 ||\n");
+        out.push_str("        pthread_create(&__gg_main_tid, &__gg_main_attr, __gorget_main_trampoline, 0) != 0) {\n");
+        out.push_str("        return (int)(intptr_t)__gorget_main_trampoline(0);\n");
+        out.push_str("    }\n");
+        out.push_str("    pthread_join(__gg_main_tid, &__gg_main_ret);\n");
+        out.push_str("    return (int)(intptr_t)__gg_main_ret;\n");
+        out.push_str("}\n");
+    }
 }
 
 /// Fix A (#37 flip): mark every `__v<N>` / `__s<N>` token the emitted body
