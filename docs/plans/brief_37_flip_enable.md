@@ -200,7 +200,12 @@ premises with fresh evidence. File zone: `tests/fixtures/self_host_lowerer/
 `src/lir/` (the Rust walker), `tests/lints.rs` (the arm-count pairing lint),
 new fixtures, `tests/integration.rs` (append), devbook/11,
 language-design.md, TODO.md, DONE.md, `src/main.rs` (the R4 unconditional
-pthread link) + `src/backend/c/c_runtime.rs` (the include). [p1-R9]
+pthread link) + `src/backend/c/c_runtime.rs` (the include) +
+`src/backend/llvm/mod.rs` IF the LLVM main leg is fixed rather than
+scoped-out [p3-note]. [p3-note-2] The SELF-HOST emitter has no target
+concept (`lir_codegen.gg:6042` documents freestanding ABSENT → default
+hosted) — the target gate applies at the Rust/LLVM sites only; the
+self-host site emits the pthread main unconditionally, correctly. [p1-R9]
 Cross-chain precision: any Rust-side typed support lands in
 `src/lir/mod.rs` (the `dst()`/`uses()` home) — DISJOINT from parked Chain
 C's `src/lir/lower/{operands,insts}.rs`+`optimize.rs` and Chain D's
