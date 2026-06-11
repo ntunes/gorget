@@ -684,17 +684,20 @@ impl<'a> FuncLowering<'a> {
         // this, an Option-typed field whose enclosing struct isn't itself an Option
         // would trigger the payload-extract path and silently drop the discriminant.
         // Snag #4b (2026-05-01).
-        // Unwrap a Ptr destination: a Branch-C bind retypes the dst to
-        // Ptr(enum); a pointer to the SAME enum is still "same enum" for
-        // the comparisons below (a `GirType::Named`-only match let
+        let dst_type_id = self.effective_place_type(dst);
+        // For the SAME-ENUM comparison only, see through one Ptr level: a
+        // Branch-C bind retypes the dst to Ptr(enum), and a pointer to the
+        // SAME enum is still "same enum" (a `GirType::Named`-only match let
         // Ptr(enum) fall through to the payload-extract — item 3's
-        // mis-classification).
-        let dst_type_id = {
-            let direct = self.effective_place_type(dst);
-            match self.gir_types.get(direct) {
-                Some(GirType::Ptr(inner)) => *inner,
-                _ => direct,
-            }
+        // mis-classification). The Ptr-unwrap must NOT feed the
+        // another-Option/Result skip below: `Option[Ref[T]]` lifts emit a
+        // LEGITIMATE extract into a `Ptr(Option__T)` dst (src
+        // `Option__Ref__Option__T`), and unwrapping there made the skip
+        // swallow it (test_collections_nested regression, caught by the
+        // full suite 2026-06-11).
+        let dst_same_cmp_type = match self.gir_types.get(dst_type_id) {
+            Some(GirType::Ptr(inner)) => *inner,
+            _ => dst_type_id,
         };
 
         // Check: source is Option__* or Result__*, destination is NOT.
@@ -713,8 +716,8 @@ impl<'a> FuncLowering<'a> {
             _ => return None,
         };
 
-        // Destination must not be the same enum type.
-        let dst_is_same = match self.gir_types.get(dst_type_id) {
+        // Destination must not be the same enum type (through one Ptr).
+        let dst_is_same = match self.gir_types.get(dst_same_cmp_type) {
             Some(GirType::Named(n)) => *n == src_name,
             _ => false,
         };
