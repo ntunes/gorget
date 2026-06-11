@@ -20,7 +20,7 @@ Long-term objectives grouped by pillar. These targets and anti-targets guide eve
 | Move semantics with an explicit operator (`!`) — transfers visible at call sites | Hidden heap allocation with no way to control or redirect it |
 | Borrow checking without lifetime annotations in API signatures | Rust-style lifetime annotations leaking into public APIs |
 | Scope-guarded references with generation tokens as a safety fallback | Null pointers as a default value for any type |
-| Scoped allocator control — `with Arena() as pool:` redirects all allocations in a block; `alloc=` on constructors for one-shot control; copy-on-write alias + last-use move analysis eliminates unnecessary copies | Use-after-free and double-free reachable from safe code |
+| Scoped allocator control — `with Arena() as pool:` redirects all allocations in a block; `alloc=` on constructors for one-shot control; copy-on-write aliasing with lazy materialization (the copy happens at the mutation that demands it, never speculatively) + last-use move analysis eliminates unnecessary copies | Use-after-free and double-free reachable from safe code |
 | Stale-condition warnings when shared data crosses suspension points | Silent memory corruption from undefined behavior |
 | Distinct newtype / semantic types (UserId ≠ int at compile time) | C-style pointer arithmetic accessible without explicit opt-in |
 
@@ -405,7 +405,9 @@ Both `auto` and an explicit type give the fast path (borrow); `.clone()` gives a
 For Resource types (String, Vector, etc.), bare-identifier assignment **borrows** by
 default — it creates a second alias (a Ptr) to the same data at zero cost. The aliases
 share storage until one of them mutates, at which point the compiler clones so each
-side owns an independent copy. This is copy-on-write; the source stays valid:
+side owns an independent copy. This is copy-on-write, and it is fully lazy: the copy
+is placed at the mutation itself, so a mutating path that never runs never pays for
+one. The source stays valid:
 ```gorget
 String s1 = "hello"
 String s2 = s1           # borrow — both names valid, no allocation
@@ -2244,7 +2246,7 @@ Vector[float] row = matrix[0]   # calls matrix.get(0)
 
 Gorget has a single `String` type — a 32-byte struct `{ data, cap, len, alloc }`. The `cap` field distinguishes **views** (`cap == 0` — zero allocation, backed by a pointer into existing data like `.rodata` or another string's buffer) from **owned** strings (`cap > 0` — heap-allocated, growable). Programmers write `String` everywhere; the compiler infers which operations produce views and which produce owned copies.
 
-This is similar to how Swift's `String` unifies owned and borrowed representations behind a single type. Gorget uses compile-time `ViewOf(source)` provenance tracking to auto-materialize views when the source is mutated — a targeted, lazy copy-on-write that avoids unnecessary allocations. (The self-host lowerer implements this provenance design directly — see the compiler internals book, [`devbook/11` §"Phase 2 in the self-host"](devbook/11-copy-on-write.md#phase-2-in-the-self-host--provenance-direct-lazy-cow); the Rust lowerer reaches the same observable behavior through per-read-site materialize hooks.)
+This is similar to how Swift's `String` unifies owned and borrowed representations behind a single type. Gorget uses compile-time `ViewOf(source)` provenance tracking to auto-materialize views when the source is mutated — **full lazy copy-on-write**: the copy is deferred to the mutation itself, and a mutation that never executes never allocates. This is implemented as the default in both compilers (the self-host lowerer realizes the provenance design directly; the Rust lowerer reaches the same observable behavior through read-site materialize hooks) — see the compiler internals book, [`devbook/11` §"Full lazy materialization"](devbook/11-copy-on-write.md#full-lazy-materialization-37--the-lazy-cow-default).
 
 **Provenance inference rules:**
 - String literals (`"hello"`) are views into static data — zero allocation.

@@ -326,10 +326,40 @@ and a `return` all behave identically. You never write `.clone()` to
 make a constructor work — borrow-by-default and clone-when-needed is
 one mental model across the whole language.
 
+### When does Gorget copy?
+
+Almost never — and never speculatively. You write plain value
+semantics; binding a value, reading it, and passing it to functions
+don't copy anything. The compiler inserts a copy at exactly one
+moment: when something you still hold would otherwise be changed
+underneath you. And if that moment never arrives while the program
+runs, no copy ever happens:
+
+```gorget
+Vector[String] names = ["ann", "bob"]
+String first = names.get(0).unwrap()   # no copy — first refers to the element
+
+if should_log:
+    names.push("carol")   # the only moment first could be disturbed —
+                          # right here, first quietly gets its own copy
+
+print(first)              # "ann" either way
+```
+
+If `should_log` is false on a given run, this code performs zero
+copies — not at the bind, not at the print. If it's true, exactly one
+copy happens, at the `push`, and `first` still prints what you read
+into it. The meaning of the program is plain value semantics either
+way; the copies are just as few as if you had placed them by hand.
+
+`.clone()` exists for one purpose only: to *force* an independent copy
+up front, before any mutation. You never need it for correctness —
+only when you explicitly want to pay for the copy now.
+
 The compiler handles all of this automatically. You don't need to think
 about when clones happen — the rule is simple: borrows are free,
-ownership costs a clone, and clones only happen when they're actually
-needed.
+ownership costs a clone, and a clone happens only at the moment it's
+actually needed.
 
 ---
 
