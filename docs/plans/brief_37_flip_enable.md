@@ -1,6 +1,15 @@
 # BRIEF — Chain E: enable the #37 Phase-2 default flip (Fix A + Fix B + flip)
 
-Status: v2 (pass-1 review folded 2026-06-11: Fix-A "referenced" derivation
+Status: v3 (pass-2 review folded 2026-06-11: ⚠ the pthread main is GATED on
+the typed `LirModule.target` — FREESTANDING keeps the plain main (shares
+the emission site, has no pthreads, zero gate coverage) [p2-R1]; guard
+process-binding pinned — leg (i) budget binds the DRIVER, leg (ii) the
+produced binary [p2-R2]; exact-token scan mandated (`__[vs]\d+\b`) [p2-R3];
+TODO moves cited precisely (:32 + :34 move, :33 stays) + stale-prose sweep
+[p2-R4]; LLVM link already `-pthread` on non-macOS noted. Pass 2 verified
+all five false-elision routes at file:line, buffer-then-scan feasibility in
+both emitters, the sole `cow_lazy_enabled()` use, and post-Fix-B
+determinism. v2 was pass-1 folded 2026-06-11: Fix-A "referenced" derivation
 pinned to EMITTED-BODY scanning — the typed-walker alternative cannot see
 block-param head copies, terminator args, slots, InlineC-rewritten locals,
 or cleanup glue [R1]; reuse Rust's existing `Inst::dst()`/`uses()` + add a
@@ -72,8 +81,13 @@ dead decls): declare only `__v` ids and `__s` slots actually REFERENCED,
 not `0..max_val`. ⚠ [p1-R1, the load-bearing spec point] "REFERENCED" is
 derived from the **EMITTED BODY** — emit the blocks to a side buffer, scan
 for `__v`/`__s` tokens, then emit decls + buffer (the prototype's PROVEN
-semantics, `chainE_artifacts/strip_dead_decls.py`). A typed inst-operand
-walker is INSUFFICIENT and would FALSE-ELIDE needed decls: it cannot see
+semantics, `chainE_artifacts/strip_dead_decls.py`). [p2-R3] The token scan
+MUST be EXACT-TOKEN (digit-boundary: after `__v<digits>`/`__s<digits>` the
+next char is a non-digit — the prototype's `__[vs]\d+\b` semantics,
+`strip_dead_decls.py:23`); a substring-`contains` scan is correctness-safe
+but retains every id that prefixes a longer live id (`__v1` vs `__v12`),
+materially blunting the frame win the W1 gate measures. A typed
+inst-operand walker is INSUFFICIENT and would FALSE-ELIDE needed decls: it cannot see
 (a) block-param head copies `__vN = __bpN` (`mod.rs:1855` /
 `lir_codegen.gg:4915`), (b) terminator-arg copies/returns
 (`lir_codegen.gg:4717-4739`, `mod.rs:3032`), (c) slots (SlotLoad/SlotStore/
@@ -97,29 +111,45 @@ fixed_point + `self_host_runtime` 0-regress + comparisons baseline-relative
 ### W2 — Fix B: big-stack main runner + the executable guard
 THREE main-emission sites [p1-R3]: `src/backend/c_lir/mod.rs:1062+`,
 `lir_codegen.gg:4754`, AND the LLVM backend's own `define i32 @main`
-(`src/backend/llvm/mod.rs:2154-2157`) — fix all three or explicitly scope
+(`src/backend/llvm/mod.rs:2157`) — fix all three or explicitly scope
 LLVM out with a TODO + the GG_BACKEND=llvm-sweep implication stated. Shape:
 run the program body on a pthread with a large explicit stack reserve
-(e.g. 64MB), minimal and identical across emitters. ⚠ [p1-R4
+(e.g. 64MB via `pthread_attr_setstacksize`), minimal and identical across
+emitters. ⚠ [p2-R1, BLOCKER-class] GATE THE RUNNER SHAPE ON THE TYPED
+`LirModule.target` (`src/lir/mod.rs:1752-1754`): NATIVE gets the pthread
+main; **FREESTANDING keeps today's plain main** — it shares the same main
+emission (no target branch at `mod.rs:1064`), swaps the preamble at
+`emit_types.rs:1864-1868`, builds `-ffreestanding` with `uefi_stub.c`
+(`src/main.rs:988-1063`), has NO pthreads, and has ZERO integration
+coverage to catch the break. The `<pthread.h>` include lands in the NATIVE
+`RUNTIME_PREAMBLE` only (the freestanding branch early-returns before it). ⚠ [p1-R4
 build-breaker]: pthread include+link is CONDITIONAL today (`-lpthread`
 gated on `std.async`/`has_spawn` — `src/main.rs:874/1120`,
 `add_thread_flags :206`; the preamble has no `<pthread.h>` for non-spawn
 programs, `c_runtime.rs:68`). Fix B MUST make both UNCONDITIONAL in the
-`gg build` path — otherwise every non-async program link-fails while the
-TEST HARNESS (which already passes `-lpthread`, `integration.rs:14099/
-14246`) stays green and MASKS it; verify with a bare `gg build hello.gg`
-outside the harness. This is the CLASS fix — recursion depth scales with
+NATIVE `gg build` C path — otherwise every non-async program link-fails
+while the TEST HARNESS (which already passes `-lpthread`,
+`integration.rs:14099/14246` and `:15714`) stays green and MASKS it; verify
+with a bare `gg build hello.gg` OUTSIDE the harness. [p2-note] The LLVM
+link already passes `-pthread` unconditionally on non-macOS
+(`src/main.rs:~1416`) — only the C paths at `:874/:1120` are conditional.
+The freestanding link path early-returns before `:1120` — naturally scoped. This is the CLASS fix — recursion depth scales with
 user-program nesting, and the bootstrap must not depend on host ulimits (a
 stock 8MB kills today's GREEN stage-0). Guards per CLAUDE.md rule 6, BOTH
-deterministic [p1-R5/R6]: (i) the ~200-term concat-chain fixture through
-the SELF-HOST route (`self_host_emit_cc_run`) — this stresses the
-COMPILER's recursion — run under a PINNED budget
-(`bash -c 'ulimit -s 8192; exec …'` or setrlimit in the runner): FAILS
-pre-Fix-B, PASSES post (pthread stacks are mmap'd, not RLIMIT_STACK-bound
-→ deterministic); (ii) the `run_gg` leg is a RUNTIME-deep-recursion
-fixture (a recursive Gorget fn whose depth × frame exceeds the pinned
-budget) — a concat chain is VACUOUS there (the emitted C evaluates it in
-one frame). Gates: fixed_point, runtime net, both guards both ways.
+deterministic [p1-R5/R6, process-binding pinned per p2-R2]: (i) the
+~200-term concat-chain fixture through the SELF-HOST route — this stresses
+the COMPILER's recursion, so the pinned budget must bind the **DRIVER
+process** (`self_host_emit_cc_run` spawns driver `integration.rs:15691` →
+cc `:15709` → binary `:15738`; the helper has no rlimit hook today — add a
+wrapped variant or `pre_exec` setrlimit around the DRIVER spawn): FAILS
+pre-Fix-B, PASSES post (explicit `pthread_attr_setstacksize` stacks are
+mmap'd, not RLIMIT_STACK-bound → deterministic); (ii) the `run_gg` leg is
+a RUNTIME-deep-recursion fixture (recursive Gorget fn, depth × frame >
+budget) whose pinned budget binds the **PRODUCED BINARY's execution**
+(wrapping the whole pipeline is acceptable — Rust gg itself is fine on
+8MB; rlimits inherit) — a concat chain is VACUOUS there (the emitted C
+evaluates it in one frame). Gates: fixed_point, runtime net, both guards
+both ways.
 
 ### W3 — the flip + bookkeeping
 Remove the `cow_lazy_enabled()` conjunct (`lower.gg:1344` area; re-grep).
@@ -139,11 +169,15 @@ ulimit-dependence). [p1-R7] ALSO: rewrite the now-false-record comment at
 the true rationale is that out-of-line keeps the cliff-critical frame
 small) and update the lock-in test's `.env("GG_COW_LAZY","1")` + comments
 (`integration.rs:23141-23259`) to default-behavior framing when the gate is
-removed. TODO/DONE: move the two blocker entries + the
-miscompile-class entry to DONE with the corrected root cause (they were
-refuted/superseded — never leave refuted diagnoses in TODO); ADD Fix C
-(HIGH, the clone-bomb, with the scout's numbers + file:line); keep the
-GG_COW_LAZY env-var REMOVED from the code (no dead gates).
+removed. TODO/DONE [p2-R4, precise]: the entries to MOVE to DONE with the
+corrected root cause are **TODO.md:32** (the umbrella "FLIP BLOCKER, 2
+findings" entry) and **TODO.md:34** (the miscompile-class entry) — both
+refuted/superseded; **TODO.md:33 (Rust EMove) STAYS**. Then a stale-prose
+sweep: `grep -n "GG_COW_LAZY\|FLIP BLOCKER\|BLOCKED" TODO.md` — the
+umbrella header at `:31` and the gate-status prose at `:9`/`:24` also go
+stale at flip; update each. ADD Fix C (HIGH, the clone-bomb, with the
+scout's numbers + `lir_codegen.gg:4601-4603`); keep the GG_COW_LAZY env-var
+REMOVED from the code (no dead gates).
 
 ## Gates summary (executor 0-5; parent re-runs battery + full suite)
 0. Step-0 pristine: runtime_diff PARITY, comparisons counts, eager ASan
