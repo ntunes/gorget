@@ -3,7 +3,14 @@
 Status: v1 (orchestrator draft, 2026-06-11). GATED on slot-coalescing being
 integrated + `fixed_point` GREEN (now merged `6a5f7251`; the coalescing makes
 the self-host fit a plain ~8MB stack — the scout/executor proved a `ulimit -s
-8192` self-compile works). NEEDS ≥2 fresh brief-reviews before launch.
+8192` self-compile works). Pass-1 fold (fresh reviewer, core design PASS, 4
+verification-hardenings): void→exit-0 is ALREADY guaranteed at the GIR layer
+(i32-main predates Fix B) → NO explicit return 0, NO tail-append (wrong for
+early-returning mains) + prove by running bare-return/no-return void mains; add
+`stack_guard_self_host_driver_deep_lowering` to the fast gate (the ulimit-8MB
+proxy doesn't cover its deeper recursion) + rewrite its stale "Fix B regressed"
+message; corrected names/lines; LLVM is already plain (out of scope). NEEDS a
+fresh confirming pass (pass-1 raised reservations).
 
 ## Mission
 Revert the forced 64MB-pthread `main` (Fix B, `79842a7f`) back to a PLAIN
@@ -19,25 +26,37 @@ EXPECT-FAIL/documented (a plain binary overflows it like C/Rust).
 
 ## The current emission to revert (BOTH emitters — keep them byte-identical)
 - Rust: `src/backend/c_lir/mod.rs` — the `is_native_target` gate (~`:1071`) +
-  the `func.name == "main" && is_native_target` block (~`:1976-2015`): emits
-  `static int __gorget_user_main(void)` (the body) + `__gorget_main_trampoline`
-  + the `int main(argc,argv)` wrapper that does `sigfillset`/`pthread_sigmask`
-  routing + `pthread_attr_setstacksize(64MB)` + `pthread_create`/`pthread_join`.
+  the `func.name == "main" && is_native_target` pthread-main block (~`:2040-2079`
+  — pass-1-verified; re-grep): emits `static int __gorget_user_main(void)` (the
+  body, ~`:1076`) + `__gorget_main_trampoline` (~`:2049`) + the `int
+  main(argc,argv)` wrapper that does `sigfillset`/`pthread_sigmask` routing
+  (~`:2065`) + `pthread_attr_setstacksize(64MB)` (~`:2072`) +
+  `pthread_create`/`pthread_join` (~`:2073`/`:2076`).
 - Self-host twin: `tests/fixtures/self_host_lowerer/lir_codegen.gg`
-  `emit_pthread_main_runner` (~`:5003-5035`) — the identical emitted text.
-  ⚠ `c_emit_comparison` counts the `) {` body-openers on both sides, so the
-  revert MUST change both emitters IDENTICALLY.
+  `emit_pthread_main_runner` (~`:5611`, invoked ~`:5595`; main signature
+  ~`:5350` — pass-1-verified) — the identical emitted text.
+  ⚠ `c_emit_comparison`'s `user_fn_count` counts `) {` body-openers
+  (`tests/integration.rs:~14053`): the pthread shape emits **3**
+  (`__gorget_user_main` + `__gorget_main_trampoline` + `int main`), plain main
+  emits **1** — so the revert MUST change both emitters IDENTICALLY or parity
+  diverges by 2/fixture.
 
 ## The revert (the plain main to emit)
 Emit a PLAIN `int main(int argc, char** argv)` that runs the user body on thread
 0 — the pre-Fix-B shape, PLUS the one real improvement Fix B added (keep it):
 - `gorget_init_args(argc, argv);` + the trace-init (if `module.trace_filename`).
-- Run the user body on thread 0 directly. KEEP the **void-main → exit-0
-  contract** (Fix B's legit fix: a void Gorget main returns 0, not an undefined
-  register) — for a void-returning main emit the body then `return 0;`; for an
-  int-returning main `return <body result>;`. (The LIR already injects a
-  synthetic `return 0` tail for void mains per the lean-runtime scout — confirm
-  whether an explicit `return 0` is still needed or already present.)
+- Run the user body on thread 0 directly. **void-main → exit-0 is ALREADY
+  GUARANTEED at the GIR layer (pass-1-verified by source-read AND running 4
+  void-main shapes):** `main` is given an `I32_TYPE` return type
+  (`src/ir/lowering/functions.rs:~638`, which PRE-DATES Fix B), the implicit
+  tail injects `const_i32(0)`, and explicit/bare void returns are unit→i32-0
+  coerced — so EVERY void-main return path emits `return 0` and the C-backend
+  `Term::RetVoid → "return;"` is NEVER reached for main (main arrives non-void).
+  So: emit a plain `int main` running the body — **do NOT add an explicit
+  `return 0`, and do NOT tail-append one** (a single tail-append would be WRONG
+  for an EARLY-returning void main; the body already returns 0 at every path).
+  PROVE it: build+run a void main ending in a bare `return` AND a void main with
+  no `return` → confirm ZERO bare `return;` in the emitted body and exit 0.
 - DROP entirely: `__gorget_main_trampoline`, the `__gorget_main_sigmask` +
   `sigfillset`/`pthread_sigmask` routing (only needed because user code ran on a
   secondary thread — plain main makes signals hit thread 0 naturally), the
@@ -56,19 +75,24 @@ native binary (since Fix B). KEEP it (the Task/async scheduler + spawn still use
 pthreads; it's harmless for non-threaded programs). Do NOT make it conditional
 in this change.
 
-## stack_guard tests (Option A)
-- `tests/fixtures/stack_guard_deep_recursion.gg` (`deep(200000)`, non-tail,
-  ~22MB) — currently passes ONLY via the 64MB main. After plain main it
-  SIGSEGVs at the OS default. Per Option A: make its integration test
-  EXPECT-FAILURE (expect the overflow / non-zero exit) OR retire the fixture,
-  with a comment that a plain binary overflows deep non-tail recursion at the OS
-  stack (like C/Rust); TCO (`## Low`) is the eventual cure for the tail subset.
-- `tests/fixtures/stack_guard_self_host_driver_deep_lowering*` — this guards the
-  COMPILER's deep lowering, which COALESCING fixed → it must STILL PASS on plain
-  main (it's the positive validation that the frame fix works). Confirm.
-- Re-grep ALL `stack_guard_*` integration tests (`tests/integration.rs`) and
-  adjust each per its intent (compiler-recursion guard = pass; runtime-recursion
-  guard = expect-fail).
+## stack_guard tests (Option A) — there are EXACTLY TWO (pass-1-verified)
+- **`stack_guard_runtime_deep_recursion`** (test fn at `tests/integration.rs:~23599`;
+  fixture `stack_guard_deep_recursion.gg`, `deep(200000)` non-tail ~22MB; asserts
+  SUCCESS ~`:23633`) — RUNTIME-recursion, passes ONLY via the 64MB main. Per
+  Option A → make it EXPECT-FAILURE (expect the overflow / non-zero exit) OR
+  retire the fixture, with a comment that a plain binary overflows deep non-tail
+  recursion at the OS stack (like C/Rust); TCO (`## Low`) is the eventual cure
+  for the tail subset.
+- **`stack_guard_self_host_driver_deep_lowering`** (test fn at `~:23525`; driver
+  under `ulimit -s 8192` lowering a 200-term concat chain; asserts SUCCESS
+  ~`:23560`) — COMPILER-recursion, which COALESCING fixed → it must STILL PASS on
+  plain main (the positive validation that the frame fix works). ⚠ Its
+  failure-assertion MESSAGE (`~:23562`) still says "the Fix B pthread main runner
+  regressed" — REWRITE it: this test now validates SLOT-COALESCING on a plain
+  8MB main, NOT the 64MB pthread reserve.
+- Both `skip_under_llvm()`. Re-grep ALL `stack_guard_*` tests to confirm these
+  are the only two; adjust each per intent (compiler-recursion = pass +
+  message-rewrite; runtime-recursion = expect-fail).
 
 ## Gates (executor: build + lib + a FAST self-compile check, then COMMIT; the
 ## PARENT runs fixed_point — do NOT run fixed_point yourself, you will park ~8min)
@@ -81,13 +105,32 @@ in this change.
   and run it self-compiling its OWN source under `ulimit -s 8192` → it must
   succeed (no stack overflow) — this proves the coalesced self-host fits a plain
   8MB stack on plain main. (Do NOT run the full multi-stage `fixed_point`.)
-- `stack_guard_*` tests adjusted + passing/expect-failing per Option A.
+- **ALSO run `cargo test --test integration stack_guard_self_host_driver_deep_lowering`**
+  (a single fast targeted test) — the `ulimit -s 8192` self-compile above does
+  NOT cover the DEEPER 200-term-concat-chain recursion this test exercises;
+  catching a residual frame problem here is cheap vs. the parent's ~8min
+  `fixed_point`. It must PASS on plain main.
+- `stack_guard_runtime_deep_recursion` adjusted to expect-fail per Option A; the
+  full `stack_guard_*` set passing/expect-failing as classified above.
 - COMMIT after the above. The PARENT runs `self_host_bootstrap_fixed_point`
   (GREEN on plain main is THE load-bearing proof) + the full battery +
   `c_emit_comparison` (the main shape changed in both emitters → must stay
   matched).
 
 ## Constraints
+- ⚠ **LLVM backend is OUT OF SCOPE — already plain (pass-1-verified):** `@main`
+  (`src/backend/llvm/mod.rs:~2166`) already emits a plain `define i32 @main` on
+  thread 0; Fix B explicitly scoped LLVM out and never gave it the pthread
+  runner, and the `stack_guard_*` tests `skip_under_llvm()`. So the LLVM leg is
+  already consistent with the new plain-C behavior — NO change there; don't go
+  hunting.
+- The `is_native_target` local (`mod.rs:~1071`) is used in exactly 3 sites, all
+  in `emit_function` (pass-1-verified): the pthread block (delete), the
+  main-signature branch (collapse — both native and freestanding emit the
+  identical plain `int main` + `gorget_init_args` + trace-init the freestanding
+  branch already emits), leaving `is_native_target` UNUSED → remove it. The
+  freestanding preamble split lives in `emit_types.rs` keyed on `module.target`
+  (NOT this local), so it's undisturbed.
 - Worktree preamble; explicit-file `git add`; no push; STOP-and-report on a
   contradicted premise (esp. the self-host NOT fitting 8MB on plain main, or a
   `c_emit_comparison` mismatch from asymmetric emitter edits).
