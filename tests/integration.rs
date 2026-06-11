@@ -23613,3 +23613,140 @@ fn stack_guard_runtime_deep_recursion() {
     let _ = std::fs::remove_file(work_dir.join("stack_guard_deep_recursion.c"));
     let _ = std::fs::remove_dir(&work_dir);
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// Print-temp leak class (docs/plans/brief_print_temp_leak_fix.md): a String
+// temp freshly materialized to feed a printf/format consumer is registered
+// for drop at its birth — five producer sites (format_for_printf Ptr(String)
+// + Displayable branches, lower_interp_segment branches 2/3, apply_format_spec
+// 'b' arm, and the LIR-layer bool-str temp drained after the consuming call).
+// These fixtures pin stdout AND the no-double-free of the registration (a
+// double-registration crashes/aborts the binary); the leak direction itself
+// is verified by the ASan battery (`gg build --sanitize` + detect_leaks=1).
+
+#[test]
+fn print_struct_string_field_leak() {
+    run_gg(
+        "print_struct_string_field_leak.gg",
+        "\
+world
+world",
+    );
+}
+
+#[test]
+fn print_bool_temp_leak() {
+    run_gg(
+        "print_bool_temp_leak.gg",
+        "\
+true
+false
+false",
+    );
+}
+
+#[test]
+fn fstring_bool_interp_leak() {
+    run_gg(
+        "fstring_bool_interp_leak.gg",
+        "\
+flag=true
+both: true and false",
+    );
+}
+
+#[test]
+fn fstring_bool_assign_leak() {
+    run_gg(
+        "fstring_bool_assign_leak.gg",
+        "\
+value: true
+11",
+    );
+}
+
+#[test]
+fn fstring_move_interp_leak() {
+    run_gg(
+        "fstring_move_interp_leak.gg",
+        "\
+name=gorget
+again=gorget!",
+    );
+}
+
+#[test]
+fn print_display_temp_leak() {
+    run_gg(
+        "print_display_temp_leak.gg",
+        "\
+Point(3, 4)
+p=Point(3, 4)
+lit",
+    );
+}
+
+#[test]
+fn fstring_binary_spec_leak() {
+    run_gg(
+        "fstring_binary_spec_leak.gg",
+        "\
+bin=1010
+alt=0b1010
+zero=0",
+    );
+}
+
+#[test]
+fn print_temp_loop_accumulation() {
+    run_gg(
+        "print_temp_loop_accumulation.gg",
+        "\
+4500
+true
+false
+true",
+    );
+}
+
+#[test]
+fn fstring_match_early_return_leak() {
+    run_gg(
+        "fstring_match_early_return_leak.gg",
+        "\
+first: alpha
+second: beta
+len: 2",
+    );
+}
+
+#[test]
+fn fstring_if_block_leak() {
+    run_gg(
+        "fstring_if_block_leak.gg",
+        "\
+got hello
+still hello",
+    );
+}
+
+#[test]
+fn print_trim_view_temp() {
+    run_gg(
+        "print_trim_view_temp.gg",
+        "\
+padded
+[padded]
+10",
+    );
+}
+
+#[test]
+fn fstring_nested_vector_get_leak() {
+    run_gg(
+        "fstring_nested_vector_get_leak.gg",
+        "\
+abc
+xyz",
+    );
+}
