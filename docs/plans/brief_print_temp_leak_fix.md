@@ -1,6 +1,26 @@
 # BRIEF — Chain D: print-temp String leak family (one class, five producer sites)
 
-Status: v3 (pass-2 review folded 2026-06-10: the FIVE named leaks embedded in
+Status: v4 (RESUME-fold 2026-06-11, owner go after the explicit hold. The
+SEQUENCING IS NOW INVERTED vs v3: Chain C landed FIRST (merge `e498381f`,
+tip `bb9bc35d`) — D rebases over C, not the reverse. Verified at resume on
+tip `bb9bc35d`: (a) `git apply --check docs/plans/print_temp_leak_fix.diff`
+is CLEAN — C's sole `src/lir/lower/insts.rs` touch was item 3's +3/−1 in
+the `try_enum_payload_extract` caller region (`0298e1da`), disjoint from
+D's printf arms (`__bool_str` now at `insts.rs:4261`); (b) the leak class
+was INDEPENDENTLY re-confirmed live post-C — Chain C's new
+`string_comprehension.gg` shows a 3B `gorget_string_copy_cow` leak bisected
+to a plain `print(z.get(1).unwrap())` (DONE.md 2026-06-11 entry) — ADD it
+to the sweep as a confirming member; (c) ALL TODO line numbers cited below
+have DRIFTED post-C — re-derive by CONTENT, never by the cited number:
+field-print leak entry now ~`TODO:766`, perf-only residual ~`:757` (the old
+`:843` Rust-bool-leak entry no longer stands alone — it is the trailing
+"⚠ Two SEPARATE Rust-`src/` leak chains … remain OPEN" sentence INSIDE
+`:757`, and BOTH chains named there are fixed by this task → rewrite that
+sentence at landing), escape-clone cohort ~`:758` (still contains the stale
+`cow_elem_overwrite_witness` name to remove), cow-canary exemption note
+~`:50`, and the handover "⏸ STILL PARKED: Chain D" line ~`:12` (DELETE at
+landing). Parent battery context at resume: lib 1072, lints 10, snapshot
+net 508, fixed_point GREEN solo ~465s. v3 was pass-2 folded 2026-06-10: the FIVE named leaks embedded in
 Gate 0 — their TODO name-sources get deleted by this very task [p2-R1];
 Gate 5 gates on STDOUT PARITY — `--sanitize` is SILENTLY DROPPED on the LLVM
 path (`compile_llvm_pipeline` never reads `options.sanitize`; zero asan
@@ -120,8 +140,10 @@ the conservative post-call free avoids that. Owner may revisit.
    cow_escape_boundaries, string_struct_complex, leak_string_heavy,
    leak_string_ops, snag30_field_alias_in_match_arm, fstring_format,
    yaml_parse, string_conversions, cli_basic, fstring_method_chain,
-   print_trait_object, datetime_format (+ bench_string_methods is a
-   KNOWN pre-existing link-fail both ways — record, don't gate).
+   print_trait_object, datetime_format, string_comprehension [v4 — Chain C's
+   new fixture; its 3B `copy_cow` leak is THIS class, expected → 0]
+   (+ bench_string_methods is a KNOWN pre-existing link-fail both ways —
+   record, don't gate).
    Capture stdout with `detect_leaks=0` — LSan's exit path can skip stdio
    flush on pipes.
 1. Post-change vs YOUR Step-0 table (absolute bytes are shape/tree-specific
@@ -158,11 +180,13 @@ the conservative post-call free avoids that. Owner may revisit.
   STOP on contradicted premises.
 - File zone: `src/ir/lowering/exprs/calls.rs`, `src/lir/lower/insts.rs`,
   `src/lir/lower/mod.rs`, new fixtures, `tests/integration.rs` (append),
-  TODO.md, DONE.md. ⚠ SEQUENCING vs Chain C: C's item 3 also edits
-  `src/lir/lower/insts.rs` (different region — `try_enum_payload_extract`
-  caller at the top vs the printf arms ~:690/:4251). Chain D executes FIRST
-  (smaller, prototype-complete); C rebases over it. Do NOT touch Chain B's
-  zone (`tests/fixtures/self_host_lowerer/**`) or Chain C's other files.
+  TODO.md, DONE.md. ⚠ SEQUENCING vs Chain C [v4]: Chain C has ALREADY
+  LANDED (merge `e498381f`); D rebases over it. C's item 3 edited
+  `src/lir/lower/insts.rs` in a different region (`try_enum_payload_extract`
+  caller at the top, +3/−1) vs the printf arms (~:690 drain site /
+  `__bool_str` now ~:4261) — the committed diff applies clean on tip
+  `bb9bc35d` (verified at resume). Do NOT touch Chain B's zone
+  (`tests/fixtures/self_host_lowerer/**`).
 - The scout's risk #1 (the Move-mode registration no-double-free argument
   for interp branches 2/3) is the one thing reviewers must re-derive from
   source rather than trust.
