@@ -222,10 +222,25 @@ where
     let n_workers = (cpus / 2).clamp(2, 8).min(fixtures.len());
     let chunk_size = fixtures.len().div_ceil(n_workers);
     let f = &f;
+    // Explicit 64MB worker stacks (mmap'd — cheap when untouched): several
+    // consumers run the RUST front-end IN-PROCESS over every fixture
+    // (parser/type/check comparisons), and deep-nesting fixtures are an
+    // officially supported class since the #37-flip stack guards (a
+    // 200-term concat chain recurses the debug-build parser/typechecker
+    // far past the 2MB default thread stack). Mirrors the Fix B pthread
+    // main's 64MB budget so the harness can do in-process whatever a real
+    // `gg` process can.
     std::thread::scope(|s| {
         let handles: Vec<_> = fixtures
             .chunks(chunk_size)
-            .map(|chunk| s.spawn(move || chunk.iter().map(|p| f(p.as_path())).collect::<Vec<R>>()))
+            .map(|chunk| {
+                std::thread::Builder::new()
+                    .stack_size(64 * 1024 * 1024)
+                    .spawn_scoped(s, move || {
+                        chunk.iter().map(|p| f(p.as_path())).collect::<Vec<R>>()
+                    })
+                    .expect("failed to spawn fixture worker")
+            })
             .collect();
         handles
             .into_iter()
