@@ -81,7 +81,10 @@ pub fn lower_expr(
     if suppress || !is_producer {
         op
     } else {
-        maybe_auto_propagate(ctx, builder, op)
+        // Snag #11: key the auto-prop on the producing call expr's span — the
+        // same key the typechecker's Route-A producer-peel records under, so a
+        // recorded `From` conversion is found and emitted on the error value.
+        maybe_auto_propagate(ctx, builder, op, expr.span)
     }
 }
 
@@ -1870,7 +1873,7 @@ fn lower_struct_literal(
                 }
                 let op = lower_expr(ctx, builder, arg);
                 // Snag #46: auto-propagate Result→T at the variant-field boundary.
-                let op = maybe_auto_propagate(ctx, builder, op);
+                let op = maybe_auto_propagate(ctx, builder, op, arg.span);
                 ctx.func_state.expected_type = prev;
                 op
             })
@@ -1905,7 +1908,7 @@ fn lower_struct_literal(
                 }
                 let op = lower_expr(ctx, builder, arg);
                 // Snag #46: auto-propagate Result→T at the variant-field boundary.
-                let op = maybe_auto_propagate(ctx, builder, op);
+                let op = maybe_auto_propagate(ctx, builder, op, arg.span);
                 ctx.func_state.expected_type = prev;
                 op
             })
@@ -1936,7 +1939,7 @@ fn lower_struct_literal(
             // — auto-propagate Result → T at the boundary so the field receives
             // the unwrapped value rather than a memcpy of the Result struct
             // (which the field then reads as the type's zero-init default).
-            let op = maybe_auto_propagate(ctx, builder, op);
+            let op = maybe_auto_propagate(ctx, builder, op, arg.span);
             ctx.func_state.expected_type = prev;
             op
         })
@@ -2661,7 +2664,7 @@ fn lower_match_expr(
     } else {
         // Idempotent: no-op on Call/MethodCall (the hook already fired)
         // or on non-Result operands.
-        maybe_auto_propagate(ctx, builder, scrut_op)
+        maybe_auto_propagate(ctx, builder, scrut_op, scrutinee.span)
     };
     ctx.func_state.expected_type = saved_expected;
     let scrut_type = infer_operand_type_full(ctx, &scrut_op, builder);
@@ -2786,6 +2789,7 @@ pub fn emit_result_auto_propagate(
     builder: &mut FunctionBuilder,
     result_operand: Operand,
     result_type: TypeId,
+    prop_span: crate::span::Span,
 ) -> Operand {
     // Tier 1c: when result_operand is a place operand on a resource
     // Result, use Move semantics so val_local owns the data without
@@ -2864,9 +2868,34 @@ pub fn emit_result_auto_propagate(
             None
         }
     });
+    // Snag #11: if the typechecker recorded a `From` conversion for this
+    // propagation site (the callee-E differs from the caller-E but is
+    // convertible), convert the loaded error value to the caller's error type
+    // BEFORE re-wrapping it. Without this, the `enum_init` below memcpy's a
+    // `sizeof(calleeE)` value into a `sizeof(callerE)` Error slot — the
+    // type-confused over-read. The same-error-type case never records anything
+    // here, so this is a true no-op then (byte-identical emitted C).
+    //
+    // The conversion produces a FRESH, owned caller-error value; that owned
+    // local — not the original callee-error `err_val` — is what gets moved into
+    // the Error slot, so it is the one we mark moved below (preventing its drop
+    // from freeing the heap data now shared with the return slot — a double-free
+    // the original code never hit because the un-converted `err_val` carried no
+    // independent owned allocation). The original `err_val` (consumed by the
+    // From call as a borrow) is still move-zeroed at its load site.
+    let err_val_for_wrap = if let Some(fn_res_type) = fn_result_type {
+        if ctx.analysis.from_conversions.contains_key(&prop_span) {
+            let (_ok_caller, caller_err_type) = extract_result_field_types(ctx, fn_res_type);
+            maybe_emit_from_conversion(ctx, builder, err_val, err_field_type, caller_err_type)
+        } else {
+            err_val
+        }
+    } else {
+        err_val
+    };
     if let Some(fn_res_type) = fn_result_type {
         let type_name = ctx.type_registry.type_name(fn_res_type).unwrap_or_else(|| "Result".to_string());
-        let err_dst = builder.enum_init(type_name, "Error", fn_res_type, vec![FunctionBuilder::copy(err_val)]);
+        let err_dst = builder.enum_init(type_name, "Error", fn_res_type, vec![FunctionBuilder::copy(err_val_for_wrap)]);
         // Tier 1c: Move + MoveZero — err_dst is freshly built (Owned)
         // and dead immediately after; Copy would shallow-alias the
         // return slot and double-free at scope exit now that
@@ -2882,10 +2911,12 @@ pub fn emit_result_auto_propagate(
             builder.assign(Place::local(LocalId(0)), FunctionBuilder::copy(err_dst));
         }
     } else {
-        builder.assign(Place::local(LocalId(0)), FunctionBuilder::copy(err_val));
+        builder.assign(Place::local(LocalId(0)), FunctionBuilder::copy(err_val_for_wrap));
     }
-    // Mark consumed error value as moved to prevent double-free during early-exit drops
-    ctx.move_zero_and_mark(builder, err_val);
+    // Mark consumed error value as moved to prevent double-free during early-exit drops.
+    // This is the value that flowed into the Error slot: the From-converted owned
+    // local when a conversion fired, else the original loaded `err_val`.
+    ctx.move_zero_and_mark(builder, err_val_for_wrap);
     super::stmts::emit_on_error_cleanups(ctx, builder);
     ctx.drops.emit_early_exit_drops(builder, &ctx.type_registry, super::drops::DropScopeKind::Function, None);
     builder.ret(FunctionBuilder::copy(LocalId(0)));
@@ -2899,6 +2930,64 @@ pub fn emit_result_auto_propagate(
 /// a per-element/per-value `expected_type` into an aggregate literal.
 fn extract_result_ok_type(ctx: &LoweringContext, result_type: TypeId) -> TypeId {
     extract_result_field_types(ctx, result_type).0
+}
+
+/// Snag #11 — emit a `From[CalleeE]` conversion on a propagated error value.
+/// Given the loaded callee-error operand (`err_val` of type `callee_err_type`)
+/// and the caller's error type (`caller_err_type`), call the equipped
+/// `CallerE from(CalleeE)` static method and return the converted operand. The
+/// typechecker already proved the impl exists (and recorded it in
+/// `from_conversions`); this resolves the emitted symbol the same way an
+/// explicit `CallerE.from(e)` call does — via the `_for_<CallerE>__from`
+/// `fn_sigs` suffix, disambiguated by the callee-error arg type. If the symbol
+/// can't be found (e.g. nothing got emitted), fall back to the raw value so the
+/// build doesn't regress (the typecheck error is the real guard).
+fn maybe_emit_from_conversion(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    err_val: LocalId,
+    callee_err_type: TypeId,
+    caller_err_type: TypeId,
+) -> LocalId {
+    // No-op when the error types already match (defensive; the metadata is
+    // only recorded for genuinely-differing types).
+    if callee_err_type == caller_err_type {
+        return err_val;
+    }
+    let Some(caller_name) = ctx.type_name_for_id(caller_err_type).map(|s| s.to_string()) else {
+        return err_val;
+    };
+    let suffix = format!("_for_{caller_name}__from");
+    let candidates: Vec<String> = ctx
+        .fn_sigs
+        .keys()
+        .filter(|k| k.ends_with(&suffix))
+        .cloned()
+        .collect();
+    // Pick the overload whose single param matches the callee error type.
+    let symbol = if candidates.len() == 1 {
+        Some(candidates[0].clone())
+    } else {
+        candidates.into_iter().find(|k| {
+            ctx.fn_sigs
+                .get(k.as_str())
+                .map(|(params, _)| params.len() == 1 && params[0] == callee_err_type)
+                .unwrap_or(false)
+        })
+    };
+    let Some(symbol) = symbol else {
+        return err_val;
+    };
+    // Call `CallerE from(CalleeE)`: pass the loaded error value, get the
+    // converted caller-error value back. `call_tracked` registers the result
+    // for drop the same way the explicit `.from()` path does.
+    let converted = ctx.call_tracked(
+        builder,
+        symbol,
+        vec![FunctionBuilder::copy(err_val)],
+        caller_err_type,
+    );
+    converted
 }
 
 /// Extract Ok and Error field types from a Result type definition.
@@ -2952,6 +3041,7 @@ pub fn maybe_auto_propagate(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     operand: Operand,
+    prop_span: crate::span::Span,
 ) -> Operand {
     // If the destination expects a Result, don't unwrap
     if let Some(expected) = ctx.func_state.expected_type {
@@ -2962,7 +3052,7 @@ pub fn maybe_auto_propagate(
     }
     let op_type = infer_operand_type_full(ctx, &operand, builder);
     if let Some(result_type) = should_auto_propagate(ctx, builder, op_type) {
-        emit_result_auto_propagate(ctx, builder, operand, result_type)
+        emit_result_auto_propagate(ctx, builder, operand, result_type, prop_span)
     } else {
         operand
     }
@@ -3340,7 +3430,7 @@ fn lower_match_stmt_as_expr(
     let scrut_op = if user_matches_result_option {
         scrut_op
     } else {
-        maybe_auto_propagate(ctx, builder, scrut_op)
+        maybe_auto_propagate(ctx, builder, scrut_op, scrutinee.span)
     };
     ctx.func_state.expected_type = saved_expected;
     let scrut_type = infer_operand_type_full(ctx, &scrut_op, builder);

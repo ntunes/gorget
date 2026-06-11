@@ -1,0 +1,36 @@
+# Snag #11 positive: cross-error-type auto-propagation IS allowed when a
+# `From[CalleeE]` conversion is equipped on the caller's error type. The
+# callee throws `String`; the caller throws `BigErr`; `equip BigErr with
+# From[String]:` makes the propagation legal, and the compiler inserts the
+# conversion so the caught error is a well-formed BigErr (not a type-confused
+# over-read).
+
+struct BigErr:
+    String msg
+    int code
+
+equip BigErr with From[String]:
+    BigErr from(String s):
+        return BigErr(s, 42)
+
+bool inner(int x) throws String:
+    if x < 0:
+        throw "boom"
+    return x > 0
+
+int outer(int x) throws BigErr:
+    bool b = inner(x)        # cross-error propagation via From[String]
+    if b:
+        return 1
+    return 0
+
+Result[int, BigErr] try_outer(int x):
+    int r = outer(x)
+    return Ok(r)
+
+void main():
+    match try_outer(-5):
+        case Ok(v):
+            print(f"ok: {v}")
+        case Error(e):
+            print(f"caught BigErr: msg='{e.msg}' code={e.code}")

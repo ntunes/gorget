@@ -221,7 +221,7 @@ pub(super) fn lower_method_call(
                         // boundary so the variant slot receives the unwrapped value
                         // rather than a memcpy of the Result struct (which read as
                         // the type's zero-init default).
-                        let op = maybe_auto_propagate(ctx, builder, op);
+                        let op = maybe_auto_propagate(ctx, builder, op, arg.node.value.span);
                         ctx.func_state.expected_type = prev;
                         op
                     })

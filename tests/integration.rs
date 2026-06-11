@@ -4079,6 +4079,41 @@ arg-capture: 10",
     );
 }
 
+// Snag #11 (gorget-js): cross-error-type auto-propagation. A `throws A` callee
+// auto-propagated into a `throws B` caller (A != B) with no `From[A]` on B is a
+// memory-unsafety miscompile (memcpy of sizeof(B) over a sizeof(A) value — an
+// out-of-bounds read). The gate makes it From-mediated: same-E ok; different+From
+// converts; different+no-From is a teaching error. Both Route A (throws-fn call)
+// and Route B (explicit Result-returning callee) are gated; the lowering emits the
+// `From` conversion on the error value so the caught error is well-formed.
+#[test]
+fn snag11_cross_error_propagation_error() {
+    check_gg_fails(
+        "snag11_cross_error_propagation.gg",
+        "cannot auto-propagate error of type `String` into a function that throws `BigErr`",
+    );
+}
+
+#[test]
+fn snag11_route_b_error() {
+    check_gg_fails(
+        "snag11_route_b_error.gg",
+        "no `From[String]` conversion is equipped on `BigErr`",
+    );
+}
+
+#[test]
+fn snag11_from_mediated_propagation() {
+    // With `equip BigErr with From[String]:` the propagation is legal AND the
+    // compiler inserts the conversion: the caught BigErr has the converted
+    // `code=42` (not the `code=1` garbage a raw bit-copy produced), proving the
+    // From ran. No `-Wstringop-overread` (asserted by the build harness).
+    run_gg(
+        "snag11_from_mediated_propagation.gg",
+        "caught BigErr: msg='boom' code=42",
+    );
+}
+
 #[test]
 fn throws_call_in_tail_return() {
     run_gg(

@@ -601,6 +601,70 @@ fn count_container_literal_arms() -> usize {
     count
 }
 
+/// Snag #11 sibling-guard ratchet (CLAUDE.md rule 4). Every auto-propagation
+/// position in the typechecker must route through the SHARED error-type gate so
+/// a cross-error-type propagation can't slip the (memory-unsafe) memcpy
+/// miscompile. There are exactly two ways to reach the gate:
+///   - the Route-B consumer guards call `self.auto_prop_skips_unify(...)` (which
+///     internally calls `auto_prop_error_gate`), and
+///   - the Route-A producer-peel calls `self.auto_prop_error_gate(...)` directly.
+/// The total count of these gated propagation positions is pinned here; the next
+/// propagation site added without going through one of them changes the count and
+/// trips this lint, forcing it onto the shared E-checked path.
+///
+/// Baseline 2026-06-11: 14 `auto_prop_skips_unify` consumer sites + 1 Route-A
+/// `auto_prop_error_gate` producer site = 15. (`auto_prop_error_gate`'s OTHER
+/// in-source mention is its single call inside `auto_prop_skips_unify`, which is
+/// the plumbing, not a propagation site — it's excluded by counting only `self.`
+/// receiver calls and subtracting that one internal call.)
+#[test]
+fn snag11_auto_prop_gate_site_count() {
+    const EXPECTED_SKIPS_UNIFY: usize = 14;
+    const EXPECTED_ROUTE_A_GATE: usize = 1;
+
+    let content = fs::read_to_string("src/semantic/typecheck.rs").unwrap_or_default();
+    let mut skips_unify = 0usize;
+    let mut route_a_gate = 0usize;
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("//") {
+            continue;
+        }
+        // Consumer-guard calls (Route B) — the `self.` receiver form, not the
+        // `fn auto_prop_skips_unify(` definition.
+        skips_unify += line.matches(".auto_prop_skips_unify(").count();
+        // Route-A producer-peel direct gate call. The call INSIDE
+        // `auto_prop_skips_unify`'s body (`self.auto_prop_error_gate(callee_err,
+        // prop_span)`) is the plumbing, not a propagation position — exclude it
+        // by name of its argument.
+        for _ in 0..line.matches(".auto_prop_error_gate(").count() {
+            if line.contains(".auto_prop_error_gate(callee_err,") {
+                continue; // the internal plumbing call
+            }
+            route_a_gate += 1;
+        }
+    }
+    assert_eq!(
+        skips_unify, EXPECTED_SKIPS_UNIFY,
+        "auto_prop_skips_unify call-site count changed: {skips_unify} vs {EXPECTED_SKIPS_UNIFY}.\n\n\
+         If you added an auto-propagation consumer position (push/put/return/arg/\
+         field-init/cond/index), it MUST call `auto_prop_skips_unify(declared, value, \
+         span)` — NOT the bare `unify` — so the snag #11 cross-error-type gate runs. \
+         Then bump EXPECTED_SKIPS_UNIFY here.\n\
+         If you removed one, lower it. Never reach the auto-prop choke point without \
+         the shared E-check.",
+    );
+    assert_eq!(
+        route_a_gate, EXPECTED_ROUTE_A_GATE,
+        "Route-A `auto_prop_error_gate` producer-peel site count changed: \
+         {route_a_gate} vs {EXPECTED_ROUTE_A_GATE}.\n\n\
+         The producer-peel (the `throws`-fn-call `Result[T,E] -> T` peel) must gate the \
+         discarded `err_ty` via `auto_prop_error_gate(err_ty, span)`. A second peel site \
+         without it re-opens the snag #11 hole. Bump only if you intentionally added \
+         another producer-peel that ALSO gates.",
+    );
+}
+
 /// Ratchet: the number of container-literal arms in `infer_expr` must
 /// stay at the expected baseline. New arms require an audit for
 /// `decl_type_hint` propagation (see DictLiteral / TupleLiteral fixes

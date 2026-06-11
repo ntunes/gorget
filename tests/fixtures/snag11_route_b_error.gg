@@ -1,0 +1,33 @@
+# Snag #11 negative, Route B: an explicit `Result[T, E]`-returning callee (no
+# `throws`) auto-propagated into a caller whose error type differs, with no
+# `From` conversion. Like Route A this must REJECT — the auto-propagation gate
+# is keyed on the propagation position, not on `throws` specifically, so both
+# routes share the teaching error. (Route A's repro is the throwing-fn variant
+# in docs/plans/snag11_cross_error_propagation.gg.)
+
+struct BigErr:
+    String msg
+    int a
+    int b
+
+Result[bool, String] inner(int x):
+    if x < 0:
+        return Error("the-string-error")
+    return Ok(x > 0)
+
+int outer(int x) throws BigErr:
+    bool b = inner(x)        # String error propagated into BigErr channel — no From
+    if b:
+        return 1
+    return 0
+
+void main():
+    match try_outer(-5):
+        case Ok(v):
+            print(f"ok: {v}")
+        case Error(e):
+            print(f"caught: {e.msg}")
+
+Result[int, BigErr] try_outer(int x):
+    int r = outer(x)
+    return Ok(r)

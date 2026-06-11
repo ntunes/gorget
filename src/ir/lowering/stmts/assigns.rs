@@ -113,7 +113,7 @@ pub(super) fn lower_assign(
                 // `clone_resource_global_ref`.
                 let operand = super::clone_resource_global_ref(ctx, builder, operand, value.span);
                 // Auto-propagate: if RHS is Result-typed but target is not, unwrap
-                let mut operand = maybe_auto_propagate(ctx, builder, operand);
+                let mut operand = maybe_auto_propagate(ctx, builder, operand, value.span);
                 ctx.func_state.expected_type = prev_expected;
                 // Auto-deref Ref[T] → T at reassignment when target is bare T.
                 // `int ai = 1; ai = a.get(da).unwrap()` — declared int but RHS
