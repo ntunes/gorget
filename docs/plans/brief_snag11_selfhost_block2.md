@@ -5,12 +5,16 @@ prototype `b81f4ee6` / `docs/plans/snag11_selfhost_block2_prototype.diff`,
 2026-06-11). Owner: SHIP Block 2 (the reject-gate Block 1 is DEFERRED — see the
 SELF-HOST snag #11 remainder entry in TODO; gorget-js is NOT blocked by snag
 #11). **SELF-HOST ONLY** — the Rust side already mangles correctly (it is the
-reference); do NOT touch Rust. Pass-1 fold (fresh reviewer, all 5 claims PASS,
-2 sharpenings): corrected the sibling-site map (line numbers had drifted) + the
-centralization is REQUIRED-for-consistency framing (vtable FnRef dangles
-otherwise); EXCLUDE the two `_VTable` struct-name sites from the helper (per-
-trait, not per-instantiation). NEEDS a fresh confirming pass (pass-1 raised
-reservations → cannot stop).
+reference); do NOT touch Rust. Pass-2 fold (fresh reviewer) caught an INVERTED
+class-fix that pass-1 introduced: Rust uses TWO mangling paths — UNREGISTERED
+(From etc.) suffixes, REGISTERED/vtable (bodied/`did_split` traits) stays BARE —
+so v2's "route sites 3/4/5 through a suffix helper" would DIVERGE the self-host
+from Rust. v3 corrects: suffix the unregistered path only (site 1 gated on
+`not trait_defs.contains`, site 2, site 6); keep registered/`did_split` (sites
+3/4/5) + `_VTable` BARE; the prototype's unconditional site-1 suffix is made
+route-aware. (Prototype From-core is correct and unchanged; the class-fix beyond
+From is LATENT — no corpus delta — so REVIEW vs Rust's two-path mangling is the
+gate, not emit-diff.) NEEDS a fresh confirming pass (pass-2 raised reservations).
 
 ## Mission
 Bring the self-host's trait-equip `From` mangling up to Rust parity so the
@@ -35,50 +39,57 @@ two instances.**
   symbol (not only the short `BigErr__from`) so the conversion lookup +
   `maybe_emit_from_conversion`'s `gmod.fn_sigs.contains("From__…")` match.
 
-## Fix the CLASS (CLAUDE.md "fix the class, not the instance") — REQUIRED for consistency, not just hygiene
-The prototype fixes the 2 sites on `From`'s path. `From` itself does NOT reach
-the `did_split` route (it's a builtin-method trait, `traits.gg:~437`, not a
-bodied `trait From:`, so `trait_defs.contains("From")` is false → the 2-site fix
-is provably sufficient FOR `From`). But the SAME drop-the-arg drift lives at the
-`did_split` vtable/default-method sites, and centralizing is **required for
-internal consistency** (not optional): site 1 already changes the own-method
-body name for a generic-arg trait, so the vtable slot FnRef would DANGLE unless
-spelled by the same helper. The actual equip-`_for_`-symbol sites (pass-1
-reviewer-verified — earlier line numbers had drifted):
+## Fix the CLASS — mirror Rust's TWO mangling paths (⚠ pass-2 correction: the v2 "route everything through a suffix helper" direction was INVERTED)
+Rust mangles trait-equip symbols via TWO paths (verified `src/ir/lowering/traits.rs`):
+- **UNREGISTERED path** (`mangle_trait_equip_name` `:1614`, used for
+  From/TryFrom/Default/operators — NON-bodied traits): appends a `generic_suffix`
+  (`__<args>`) → `From__GorgetString_for_BigErr__from`.
+- **REGISTERED/vtable path** (bodied traits with a `TraitDef`): keeps the trait
+  name **BARE** — the body (`:271-273`/`:516-518`), the vtable slot FnRef
+  (`:1019`), and the vtable global (`:1011`) are ALL `{trait_name}_for_{type}…`
+  with **NO suffix**.
+The self-host `did_split` gate (`lower.gg:~3200`, `trait_defs.contains(tname)`)
+**IS** Rust's registered path → it must stay BARE. So the fix is **suffix on the
+UNREGISTERED path only; keep the registered/`did_split` path BARE** — NOT "route
+every site through a suffix helper" (the v2 error: that would make the self-host
+DIVERGE from Rust for bodied generic-arg traits). `From` is unregistered
+(`trait_defs.contains("From")` is false, `traits.gg:~437`) → the prototype's
+2-site fix is correct for From.
 
-| # | Site | Builds | Action |
-|---|------|--------|--------|
-| 1 | `lower_closures.gg:~297` | `lower_equip_block` body mangling (From / not-did_split) | prototype fixes |
-| 2 | `lower.gg:~2771` | IEquip fn_sigs short symbol | prototype fixes (register prefixed) |
-| 3 | `lower.gg:~3248` | did_split own-trait default-method body | route through helper |
-| 4 | `lower.gg:~3300` | did_split vtable slot FnRef (`_for_…__slot`) | route through helper |
-| 5 | `lower.gg:~3303` | did_split vtable global name (`_for_…_vtable`) | route through helper |
-| 6 | `lower.gg:~3340` | not-did_split default-method body | route through helper |
-
-(The `did_split` own-method BODIES are NOT a separate site — they route through
-site 1 via `lower.gg:~3219` calling `lower_equip_block(own_eqblk)`.)
+| # | Site | Rust path | Correct action |
+|---|------|-----------|----------------|
+| 1 | `lower_closures.gg:~297` (`lower_equip_block`, route-AGNOSTIC today) | both | suffix ONLY when `not trait_defs.contains(tname)`; **BARE on the did_split route** |
+| 2 | `lower.gg:~2771` (IEquip fn_sigs) | matches site 1 | register the spelling matching the body (suffixed unregistered / bare registered) |
+| 6 | `lower.gg:~3340` (not-did_split default-method body) | UNREGISTERED | suffix (Rust-faithful) |
+| 3 | `lower.gg:~3248` (did_split own-method body) | REGISTERED | **keep BARE — NO change** |
+| 4 | `lower.gg:~3300` (did_split vtable slot FnRef) | REGISTERED | **keep BARE — NO change** |
+| 5 | `lower.gg:~3303` (did_split vtable global) | REGISTERED | **keep BARE — NO change** |
 
 REQUIRED:
-1. **Centralize:** add ONE `mangle_trait_equip_name(tname, trait_generic_args)`
-   helper (mirror Rust `src/ir/lowering/traits.rs:~1614`) that appends the args,
-   and route sites 1, 3, 4, 5, 6 (the `_for_<type>__<method>` and
-   `_for_<type>_vtable` symbols) through it. One source of truth (devbook/24
-   rule 3) — keeps the FnRef + body + vtable-slot mutually consistent.
-2. ⚠ **EXCLUDE the `_VTable` STRUCT-name sites** (`lower.gg:~2947` and the
-   did_split `_VTable` at `~:3295`, `mangle_trait_name(...)+"_VTable"`) — these
-   spell a TYPE name, kept PER-TRAIT (not per-instantiation) by Rust, so they
-   must NOT get the generic-arg suffix. The helper applies ONLY to
-   `_for_<type>__<method>` / `_for_<type>_vtable` symbols, NOT `_VTable` type
-   names. A naive "route every `mangle_trait_name(` call" would wrongly suffix
-   these — do NOT.
+1. Add ONE `mangle_trait_equip_name(tname, trait_generic_args)` helper (mirror
+   Rust `:1614`) that appends `__<args>`. Use it on the UNREGISTERED path ONLY:
+   site 1 GATED on `not gmod.trait_defs.contains(tname)`, site 2 (matching
+   spelling), site 6. ⚠ **The prototype's site-1 suffix is currently
+   UNCONDITIONAL** → make it route-aware (the gate) so it does NOT suffix
+   `did_split` own-method bodies — a latent Rust-divergence the prototype
+   introduces (no corpus trait exercises it, so it's emit-diff-INVISIBLE; fix it
+   for showcase faithfulness — "self-host = elegance showcase" + devbook/24
+   "resolve once, write through toward the reference").
+2. Sites 3/4/5 (registered/`did_split`) stay BARE — **do NOT route them through
+   the suffix helper** (that was the v2 error). The two `_VTable` STRUCT-name
+   sites (`lower.gg:~2947`/`~3295`, `mangle_trait_name(...)+"_VTable"`) also stay
+   BARE — Rust keeps `_VTable` PER-TRAIT (`traits.rs:179`), not per-instantiation.
 3. **Site-count lint** (`tests/lints.rs`, cf. `container_literal_arms_count` /
-   `snag11_auto_prop_gate_site_count`) so a new equip-symbol-mangle site is
-   forced through the helper.
+   `snag11_auto_prop_gate_site_count`) over the equip-symbol-mangle sites.
 
-(Empty-arg traits — Writer/Reader/Serializer/Deserializer — are byte-identical
-through the helper since it appends nothing; only generic-arg traits reaching
-`did_split` shift, and that shift is TOWARD Rust parity. The full-corpus
-emit-diff gate must confirm each delta is intended; STOP on an unexpected one.)
+⚠ **ALL of this beyond the From path is LATENT** (pass-2-verified): the ONLY
+bodied generic trait in the corpus is `BoundedRange[T]` (never equipped), and no
+not-did_split default method takes generic args — so sites 2/3/4/5/6 produce
+ZERO emit-diff delta today; the only observable change is the From symbol via
+site-1-unregistered. **The emit-diff gate therefore CANNOT catch a wrong
+direction here** (no fixture produces the delta) — the GATE is matching Rust's
+two-path mangling by REVIEW, not the corpus. (Empty-arg registered traits —
+Writer/Reader/Serializer/Deserializer — already stay bare on both sides; no change.)
 
 ## Snapshot
 Regen the `snag11_from_mediated_propagation` runtime snapshot
