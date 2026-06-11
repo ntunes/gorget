@@ -1,18 +1,34 @@
 # TODO
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE THIS BLOCK IN PLACE each session; completed work → DONE.md, do NOT accumulate "superseded" blocks)
-**gorget-1 code tip `9b31eaeb` (2026-06-10/11 session: the #37 KILLER FEATURE is COMPLETE BOTH COMPILERS — lazy CoW is
+**gorget-1 code tip `ff5643e7`+ (`git log -1` for live; 2026-06-10/11 session: the #37 KILLER FEATURE is COMPLETE BOTH COMPILERS — lazy CoW is
 the DEFAULT in Rust gg (Phase 1, four hooks) AND the self-host (Phase 2 provenance-direct + Chain-E flip: dead-decl
 elision both emitters, target-gated 64MB pthread mains + 2 pinned stack guards, the stack-cliff/7x "blockers" were
 REFUTED myths — see DONE.md 2026-06-10/11 for the five landed chains: Phase-1 default, lower.gg split, enumeration
 lints, Phase-2 gated, Chain-E flip). Docs on top, `git log -1` for the live tip; owner ff's main→gorget-1.
-Chain C (Rust miscompile batch, `docs/plans/brief_rust_miscompile_batch.md` v3.2) EXECUTED 2026-06-11 — 7 commits
-on executor branch `worktree-agent-a4c6893e7ce6d3292` (`b1f6e779`..`9b3fed57`), pending parent output-review +
-integration; the EMove pair flipped WRONG→MATCH and is now snapshot-locked (oracle exception fully retired).
-▶ RESUMED 2026-06-11 (owner go): Chain D (print-temp leak class, `docs/plans/brief_print_temp_leak_fix.md` v4 + run-proven diff; pass-4 confirming review in flight → executor on sign-off)
-— D rebases over C at its resume (shared insts.rs regions; C touched only the `:25` extract-caller region). HIGH
-backlog from this session: Fix C (lir_codegen per-extern-call LirFunction clone-bomb, ~10x emission lever),
-self-host driver RELATIVE-PATH miscompile, `gg fmt` long-chain data loss.**
+Chain C (Rust miscompile batch) LANDED 2026-06-11 (merge `e498381f` + snapshot/exception retirement `bb9bc35d`).
+⚠⚠ **HOST /tmp FILESYSTEM DIED (EIO on read AND write) 2026-06-11 mid-session — both in-flight agents were
+gracefully TaskStop'd; fix = restart the container/Docker VM (/tmp is ephemeral, comes back empty = also the purge
+the owner wanted). NOTHING durable was lost; resume BOTH items below after the restart:**
+**(1) Chain D (print-temp leak class) — EXECUTED, all gates green, pending OUTPUT-REVIEW + INTEGRATION.** Brief
+`docs/plans/brief_print_temp_leak_fix.md` v4 (4 review passes); executor branch `worktree-agent-ad39cfe9f24ae25f4`
+(base `43a58519`; commits `a367f2c3` fix+12 fixtures+12 tests, `d24d2862` TODO/DONE; full gate report in the
+2026-06-11 session transcript: all named leaks→0, no fixture worse, stdout byte-identical, fixed_point GREEN solo
+501s, LLVM stdout-parity ×4, 300k-print RSS 10,464→1,120 KB). RESUME = relaunch the FRESH output-review (worktree;
+merge gorget-1 tip THEN the executor branch — expect a trivial TODO.md conflict vs the snag-#11 entry; checklist:
+zone fidelity, site-C no-double-free re-derivation, breadcrumb-check, independent ASan toggle ≥4 shapes both
+directions, lib/lints/cow_/witness batteries) → on SIGN OFF parent merges + runs the full-suite battery.
+**(2) Chain F (gorget-js snag #11, owner-FUNDED 2026-06-11) — SCOUT was relaunch-from-scratch when /tmp died (no
+findings produced).** Spec = the 🔥 snag-#11 entry in ## High Priority below (repro
+`docs/plans/snag11_cross_error_propagation.gg`); RESUME = relaunch the scout per that entry: docs-grounded design
+(§36.3 From-mediated), end-to-end prototype (check-reject + From-conversion emit), MEASURE corpus fallout (every
+fixture + self-host sources + lib/std through the new check; bootstrap-viability is the blocking question), deliver
+diff INLINE → then brief → ≥3 fresh reviews → executor (only AFTER D integrates: integration.rs/TODO/DONE collide).
+Chain F design note (owner question 2026-06-11, answer pending the scout's fallout numbers): keep §36.3 semantics —
+From-equip = implicit conversion, rethrow = per-site escape hatch, neither = teaching error; do NOT synthesize
+conversions without From (payload-carrying errors make Zig-style implicit coercion unsound; the gorget-js wrong
+`throws String` annotation is the cautionary tale). HIGH backlog: Fix C (lir_codegen per-extern-call LirFunction
+clone-bomb, ~10x emission lever), self-host driver RELATIVE-PATH miscompile, `gg fmt` long-chain data loss.**
 RE-MEASURE PARITY (never trust a dated number) via: `GG_RUNTIME_DIFF=1 GG_BUILD_TIMEOUT_SECS=600 cargo test --test
 integration --release self_host_runtime_diff -- --nocapture` → read the `PARITY = MATCH/(...)` line. Last RUN-CONFIRMED
 (2026-06-10, post-Phase-2 tree): **498/987 ≈ 50.5%** — RE-MEASURE for the live number; the denominator grows with the
