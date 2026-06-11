@@ -288,6 +288,16 @@ pub enum SemanticErrorKind {
     /// `main()` can only throw `int` (the process exit code).
     MainThrowsNonInt,
 
+    /// A throwing/`Result`-returning call auto-propagates an error of type
+    /// `callee_err` into an enclosing function whose error type is
+    /// `caller_err`, but the two differ and no `From[callee_err]` impl is
+    /// equipped on `caller_err`. Auto-propagation across error types requires
+    /// an infallible `From` conversion (language-design §36.3). Without the
+    /// gate this miscompiled to a `memcpy(sizeof(caller_err))` over a
+    /// `sizeof(callee_err)` value — a type-confused out-of-bounds read
+    /// (gorget-js snag #11).
+    UnconvertibleErrorPropagation { caller_err: String, callee_err: String },
+
     /// `await` used outside an `async` function.
     AwaitOutsideAsync,
 
@@ -626,6 +636,17 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::MainThrowsNonInt => {
                 write!(f, "`main()` can only throw `int` (the process exit code)")
+            }
+            SemanticErrorKind::UnconvertibleErrorPropagation { caller_err, callee_err } => {
+                write!(
+                    f,
+                    "cannot auto-propagate error of type `{callee_err}` into a function \
+                     that throws `{caller_err}`: the error types differ and no \
+                     `From[{callee_err}]` conversion is equipped on `{caller_err}`. \
+                     Add `equip {caller_err} with From[{callee_err}]:` (defining \
+                     `{caller_err} from({callee_err} e)`), or handle the error \
+                     explicitly with `rethrow`/`catch` (language-design §36.3)"
+                )
             }
             SemanticErrorKind::AwaitOutsideAsync => {
                 write!(f, "`await` can only be used inside an `async` function")

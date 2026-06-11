@@ -406,6 +406,11 @@ struct TypeChecker<'a> {
     current_return_type: Option<TypeId>,
     /// Whether the current function has `throws`.
     current_function_throws: bool,
+    /// The resolved error TypeId the current function declares via `throws E`
+    /// (the CALLER's error type), or `None` for a non-throws function. Snag
+    /// #11: needed at the auto-propagation chokepoints to gate cross-error
+    /// propagation — `current_function_throws` only records the boolean.
+    current_fn_throws_type_id: Option<TypeId>,
     /// Whether the current function is `async`.
     current_function_is_async: bool,
     /// Type variable for implicit `it` parameter inside ImplicitClosure.
@@ -414,6 +419,13 @@ struct TypeChecker<'a> {
     expr_types: FxHashMap<Span, TypeId>,
     /// Map from method call span start → DefId of resolved method (for borrow checker).
     method_resolutions: FxHashMap<usize, DefId>,
+    /// Snag #11: for each cross-error-type auto-propagation site that resolves
+    /// to a `From[CalleeE]` impl on the caller's `CallerE`, the resolved
+    /// `From::from` method DefId, keyed by the producing call expression's
+    /// span. The lowering reads this to emit the `From` conversion on the
+    /// error value before re-wrapping it in the caller's `Result`. Empty when
+    /// every propagation is same-error-type (the byte-identical fast path).
+    from_conversions: FxHashMap<Span, DefId>,
     /// The self type of the current equip block (if any).
     current_self_type: Option<TypeId>,
     /// Declared type hint for integer literal coercion (e.g., uint8 x = 5).
@@ -494,10 +506,12 @@ impl<'a> TypeChecker<'a> {
             next_type_var: 0,
             current_return_type: None,
             current_function_throws: false,
+            current_fn_throws_type_id: None,
             current_function_is_async: false,
             implicit_it_type: None,
             expr_types: FxHashMap::default(),
             method_resolutions: FxHashMap::default(),
+            from_conversions: FxHashMap::default(),
             current_self_type: None,
             decl_type_hint: None,
             suppress_auto_prop: false,
@@ -1475,7 +1489,7 @@ impl<'a> TypeChecker<'a> {
                                 // false-positive at every auto-prop call-arg
                                 // site (`f(throws_call())` from inside a
                                 // throws function).
-                                if !self.is_auto_propagation_compatible(param_type, arg_type)
+                                if !self.auto_prop_skips_unify(param_type, arg_type, arg.node.value.span)
                                     && !self.is_result_capture_compatible(param_type, arg_type)
                                 {
                                     // Gorget-js snag #2: when unify produces a
@@ -1620,6 +1634,16 @@ impl<'a> TypeChecker<'a> {
                                         && !dest_is_result
                                         && self.current_fn_can_propagate()
                                     {
+                                        // Snag #11: this is Route A — the
+                                        // producer-peel actually fires here.
+                                        // Gate the callee-E (`err_ty`) against
+                                        // the caller-E before discarding it:
+                                        // same → no-op; convertible → record a
+                                        // `From`; otherwise emit the teaching
+                                        // error. Keyed on the call expr span so
+                                        // the lowering's `lower_expr` hook reads
+                                        // the same key.
+                                        self.auto_prop_error_gate(err_ty, expr.span);
                                         return_type
                                     } else {
                                         raw_result
@@ -2184,16 +2208,17 @@ impl<'a> TypeChecker<'a> {
                 // function can propagate. Skip the strict unify in that case
                 // so IR-lowering's centralized auto-prop hook handles the
                 // unwrap.
-                let try_index_unify = |this: &Self, expected: TypeId, found: TypeId| -> bool {
-                    !this.is_auto_propagation_compatible(expected, found)
-                };
+                // Snag #11: the index-position auto-prop now routes through the
+                // shared E-checked gate (was a `&Self` closure; the gate needs
+                // `&mut self` to record/emit). Keyed on the index expr span —
+                // the producing call when `obj[throws_call()]` propagates.
                 // str[int] → str (codepoint view), str[Range] → str (codepoint range)
                 if resolved_obj == self.types.string_id {
                     if matches!(&index.node, Expr::Range { .. }) {
                         // Range bounds already inferred recursively
                         self.types.string_id
                     } else {
-                        if try_index_unify(self, self.types.int_id, index_type) {
+                        if !self.auto_prop_skips_unify(self.types.int_id, index_type, index.span) {
                             self.unify(index_type, self.types.int_id, expr.span);
                         }
                         self.types.string_id
@@ -2214,7 +2239,7 @@ impl<'a> TypeChecker<'a> {
                         if matches!(&index.node, Expr::Range { .. }) {
                             resolved_obj
                         } else {
-                            if try_index_unify(self, self.types.int_id, index_type) {
+                            if !self.auto_prop_skips_unify(self.types.int_id, index_type, index.span) {
                                 self.unify(index_type, self.types.int_id, expr.span);
                             }
                             elem_tid
@@ -2232,7 +2257,7 @@ impl<'a> TypeChecker<'a> {
                             None
                         };
                         if let Some((key_tid, val_tid)) = map_info {
-                            if try_index_unify(self, key_tid, index_type) {
+                            if !self.auto_prop_skips_unify(key_tid, index_type, index.span) {
                                 self.unify(index_type, key_tid, index.span);
                             }
                             val_tid
@@ -2523,10 +2548,17 @@ impl<'a> TypeChecker<'a> {
                 // frame rather than inside the closure body.
                 let saved_throws = self.current_function_throws;
                 self.current_function_throws = false;
+                // Snag #11: the closure body is a separate fn — clear the
+                // enclosing caller-E so a propagation inside the closure isn't
+                // gated against the wrong error type. (`current_return_type`
+                // is already set to the closure's return var above.)
+                let saved_throws_tid = self.current_fn_throws_type_id;
+                self.current_fn_throws_type_id = None;
 
                 let body_type = self.infer_expr(body);
 
                 self.current_function_throws = saved_throws;
+                self.current_fn_throws_type_id = saved_throws_tid;
                 self.current_return_type = saved_return_type;
 
                 // Determine the closure's return type: use the body's type for
@@ -2905,6 +2937,20 @@ impl<'a> TypeChecker<'a> {
                 if !self.current_function_throws {
                     self.error(SemanticErrorKind::RethrowInNonThrowingFunction, expr.span);
                 }
+                // Snag #35 / #11: a `rethrow` resolves the inner Result itself —
+                // its Ok path yields `T`, its Error path transforms `E` and
+                // re-throws — so the EXPRESSION's value type is `T`, not
+                // `Result[T, E]` (mirrors `catch` below). Returning the raw
+                // Result made consumer positions (`int v = call() rethrow …`)
+                // mis-classify it as an auto-propagation of the INNER error type
+                // and trip the snag #11 cross-error gate, even though the
+                // rethrow already converts the error. Peel to `T`.
+                let resolved = self.resolve_type(inner_type);
+                if let ResolvedType::Generic(def_id, ref args) = self.types.get(resolved).clone() {
+                    if args.len() == 2 && self.scopes.get_def(def_id).name == "Result" {
+                        return args[0];
+                    }
+                }
                 inner_type
             }
             Expr::Catch { expr: inner, error_binding, recovery } => {
@@ -2992,7 +3038,7 @@ impl<'a> TypeChecker<'a> {
                             // Allow assigning array literals to collection types
                             // (e.g. Vector[int] v = [1, 2, 3])
                             if !self.is_collection_assignment(declared_type, value_type)
-                                && !self.is_auto_propagation_compatible(declared_type, value_type)
+                                && !self.auto_prop_skips_unify(declared_type, value_type, value.span)
                                 && !self.is_result_capture_compatible(declared_type, value_type)
                             {
                                 self.unify(declared_type, value_type, value.span);
@@ -3050,7 +3096,7 @@ impl<'a> TypeChecker<'a> {
                 // a bare collection literal, exactly as the VarDecl-init
                 // form does.
                 if !self.is_collection_assignment(target_type, value_type)
-                    && !self.is_auto_propagation_compatible(target_type, value_type)
+                    && !self.auto_prop_skips_unify(target_type, value_type, value.span)
                     && !self.is_result_capture_compatible(target_type, value_type)
                 {
                     self.unify(target_type, value_type, value.span);
@@ -3101,7 +3147,7 @@ impl<'a> TypeChecker<'a> {
                         // literal types as `int[N]` and fails to unify
                         // with the declared collection return type.
                         if !self.is_collection_assignment(ret_type, expr_type)
-                            && !self.is_auto_propagation_compatible(ret_type, expr_type)
+                            && !self.auto_prop_skips_unify(ret_type, expr_type, expr.span)
                             && !self.is_result_capture_compatible(ret_type, expr_type)
                         {
                             self.unify(ret_type, expr_type, expr.span);
@@ -3234,7 +3280,7 @@ impl<'a> TypeChecker<'a> {
                 // the enclosing function can propagate. Skip the strict unify
                 // in that case so IR-lowering's centralized auto-prop hook
                 // handles the unwrap.
-                if !self.is_auto_propagation_compatible(self.types.bool_id, cond_type) {
+                if !self.auto_prop_skips_unify(self.types.bool_id, cond_type, condition.span) {
                     self.unify(cond_type, self.types.bool_id, condition.span);
                 }
                 // Assign types to all `is` pattern bindings (including compound conditions)
@@ -3261,7 +3307,7 @@ impl<'a> TypeChecker<'a> {
             } => {
                 let cond_type = self.infer_expr(condition);
                 // Snag #49 family: see `Stmt::While` above.
-                if !self.is_auto_propagation_compatible(self.types.bool_id, cond_type) {
+                if !self.auto_prop_skips_unify(self.types.bool_id, cond_type, condition.span) {
                     self.unify(cond_type, self.types.bool_id, condition.span);
                 }
                 // Assign types to all `is` pattern bindings (including compound conditions)
@@ -3270,7 +3316,7 @@ impl<'a> TypeChecker<'a> {
 
                 for (cond, body) in elif_branches {
                     let ct = self.infer_expr(cond);
-                    if !self.is_auto_propagation_compatible(self.types.bool_id, ct) {
+                    if !self.auto_prop_skips_unify(self.types.bool_id, ct, cond.span) {
                         self.unify(ct, self.types.bool_id, cond.span);
                     }
                     self.assign_compound_is_types(cond);
@@ -4059,7 +4105,7 @@ impl<'a> TypeChecker<'a> {
                     // at line ~1361: skip `unify` when auto-prop or
                     // Result-capture is satisfied.
                     if !self.is_collection_assignment(ftid, arg_ty)
-                        && !self.is_auto_propagation_compatible(ftid, arg_ty)
+                        && !self.auto_prop_skips_unify(ftid, arg_ty, arg.span)
                         && !self.is_result_capture_compatible(ftid, arg_ty)
                     {
                         self.unify(ftid, arg_ty, arg.span);
@@ -4160,7 +4206,7 @@ impl<'a> TypeChecker<'a> {
                 // context unwraps it to `T`. Skip `unify` when auto-prop
                 // or Result-capture covers the apparent mismatch.
                 if !self.is_collection_assignment(ftid, arg_ty)
-                    && !self.is_auto_propagation_compatible(ftid, arg_ty)
+                    && !self.auto_prop_skips_unify(ftid, arg_ty, arg.span)
                     && !self.is_result_capture_compatible(ftid, arg_ty)
                 {
                     self.unify(ftid, arg_ty, arg.span);
@@ -4285,6 +4331,137 @@ impl<'a> TypeChecker<'a> {
         }
 
         false
+    }
+
+    /// The error type (`E`) the CURRENT function propagates into: the resolved
+    /// `throws E` type for a throws function, or the `E` of its `Result[T, E]`
+    /// return type for a non-throws Result-returning function. `None` when the
+    /// current function is not a propagating context. (Snag #11.)
+    fn current_caller_error_type(&self) -> Option<TypeId> {
+        if let Some(tid) = self.current_fn_throws_type_id {
+            return Some(tid);
+        }
+        // Non-throws Result-returning caller: caller-E is args[1] of the
+        // declared `Result[T, E]` return type.
+        if let Some(ret_type) = self.current_return_type {
+            let ret_resolved = self.resolve_type(ret_type);
+            if let ResolvedType::Generic(ret_def_id, ref args) =
+                self.types.get(ret_resolved).clone()
+            {
+                if args.len() == 2 && self.scopes.get_def(ret_def_id).name == "Result" {
+                    return Some(args[1]);
+                }
+            }
+        }
+        None
+    }
+
+    /// Look up an `equip CallerE with From[CalleeE]:` impl and return its
+    /// `from` method DefId. The semantic `TraitRegistry` keys trait impls on
+    /// the resolved `(trait_def_id, self_type, [trait_args])` triple, so this
+    /// is a direct lookup — no name reconstruction (devbook/24). (Snag #11.)
+    fn lookup_from_conversion(&self, caller_err: TypeId, callee_err: TypeId) -> Option<DefId> {
+        let from_def_id = self.scopes.lookup("From")?;
+        // Resolve both error types to the same canonical form the registry
+        // used at impl-registration time (`ast_type_to_resolved`).
+        let caller_resolved = self.resolve_type(caller_err);
+        let callee_resolved = self.resolve_type(callee_err);
+        let idx = *self.traits.trait_impls.get(&(
+            from_def_id,
+            caller_resolved,
+            vec![callee_resolved],
+        ))?;
+        self.traits.impls[idx]
+            .methods
+            .get("from")
+            .map(|(def_id, _)| *def_id)
+    }
+
+    /// Snag #11 — the shared error-type gate at BOTH auto-propagation
+    /// chokepoints (Route B's consumer guards here; Route A's producer-peel
+    /// calls `auto_prop_error_gate` directly). Drop-in replacement for the old
+    /// `is_auto_propagation_compatible` predicate: returns `true` exactly when
+    /// the caller should SKIP `unify` (the value auto-propagates), but ALSO,
+    /// when the propagation crosses error types, either records a `From`
+    /// conversion or EMITS the teaching error.
+    ///
+    /// `prop_span` is the producing call expression's span — the key into
+    /// `from_conversions` (it must be the same span the lowering's
+    /// `lower_expr` hook reads). When this returns `true` for the reject case
+    /// the error is already emitted; the caller skips `unify` so it does not
+    /// also surface a misleading `expected T, found Result` mismatch.
+    fn auto_prop_skips_unify(
+        &mut self,
+        declared: TypeId,
+        value: TypeId,
+        prop_span: Span,
+    ) -> bool {
+        // First, is this an auto-propagation position at all? (Same predicate
+        // as before: value is `Result[T, E]`, ok-type matches declared, and
+        // the current fn can propagate.) If not, the caller unifies as usual.
+        if !self.is_auto_propagation_compatible(declared, value) {
+            return false;
+        }
+        // It IS a propagation position. Pull the callee-E and gate it against
+        // the caller-E. The OK-type already matched, so without this gate the
+        // error types could silently diverge → the snag #11 miscompile.
+        let value_resolved = self.resolve_type(value);
+        let callee_err = match self.types.get(value_resolved).clone() {
+            ResolvedType::Generic(def_id, ref args)
+                if args.len() == 2 && self.scopes.get_def(def_id).name == "Result" =>
+            {
+                args[1]
+            }
+            _ => return true, // not a Result; predicate already vetted it
+        };
+        self.auto_prop_error_gate(callee_err, prop_span);
+        true
+    }
+
+    /// The error-type half of the gate, factored out so Route A (producer-peel)
+    /// and Route B (consumer guards) share ONE decision. Given the callee's
+    /// error type and the producing call span, compare against the caller-E:
+    ///   - caller not a propagating context → nothing to do (shouldn't happen
+    ///     at a gated site, but harmless);
+    ///   - same error type → no metadata, byte-identical fast path;
+    ///   - different + `From[callee]` on caller → record the conversion DefId;
+    ///   - different + no `From` → emit `UnconvertibleErrorPropagation`.
+    /// (Snag #11.)
+    fn auto_prop_error_gate(&mut self, callee_err: TypeId, prop_span: Span) {
+        let Some(caller_err) = self.current_caller_error_type() else {
+            return;
+        };
+        let caller_resolved = self.resolve_type(caller_err);
+        let callee_resolved = self.resolve_type(callee_err);
+        // Same error type — the fast path. Must stay metadata-free so the
+        // lowering emits byte-identical C (the gate is a true no-op here).
+        if caller_resolved == callee_resolved {
+            return;
+        }
+        // An unresolved type variable on either side means inference hasn't
+        // pinned the error type yet (generic propagation); don't gate — a
+        // later, more-resolved position will. Likewise skip the error
+        // sentinel (a prior error already reported).
+        let is_unsettled = |checker: &Self, tid: TypeId| {
+            matches!(checker.types.get(tid), ResolvedType::Var(_)) || tid == checker.types.error_id
+        };
+        if is_unsettled(self, caller_resolved) || is_unsettled(self, callee_resolved) {
+            return;
+        }
+        // Different concrete error types: require a `From[callee]` on caller.
+        if let Some(from_def_id) = self.lookup_from_conversion(caller_resolved, callee_resolved) {
+            self.from_conversions.insert(prop_span, from_def_id);
+        } else {
+            let caller_name = self.describe_resolved_type(caller_resolved);
+            let callee_name = self.describe_resolved_type(callee_resolved);
+            self.error(
+                SemanticErrorKind::UnconvertibleErrorPropagation {
+                    caller_err: caller_name,
+                    callee_err: callee_name,
+                },
+                prop_span,
+            );
+        }
     }
 
     /// When `resolve_method`/`resolve_method_by_name` returns a sig owned by
@@ -4848,7 +5025,7 @@ impl<'a> TypeChecker<'a> {
                     self.decl_type_hint = prev_hint;
                     if pos < param_types.len() {
                         // Snag #35: skip unify for auto-prop / capture-compatible throws-call args.
-                        if !self.is_auto_propagation_compatible(param_types[pos], arg_type)
+                        if !self.auto_prop_skips_unify(param_types[pos], arg_type, arg.node.value.span)
                             && !self.is_result_capture_compatible(param_types[pos], arg_type)
                         {
                             self.unify(param_types[pos], arg_type, arg.span);
@@ -4878,7 +5055,7 @@ impl<'a> TypeChecker<'a> {
                     self.decl_type_hint = prev_hint;
                     if i < param_types.len() {
                         // Snag #35: skip unify for auto-prop / capture-compatible throws-call args.
-                        if !self.is_auto_propagation_compatible(param_types[i], arg_type)
+                        if !self.auto_prop_skips_unify(param_types[i], arg_type, arg.node.value.span)
                             && !self.is_result_capture_compatible(param_types[i], arg_type)
                         {
                             self.unify(param_types[i], arg_type, arg.span);
@@ -5687,6 +5864,13 @@ impl<'a> TypeChecker<'a> {
 
         self.current_return_type = Some(return_type);
         self.current_function_throws = func.throws.is_some();
+        // Snag #11: resolve the CALLER's error type (`throws E`) so the
+        // auto-propagation chokepoints can gate cross-error propagation. The
+        // boolean `current_function_throws` is not enough — we need the
+        // resolved TypeId of E to compare against the callee's error type.
+        self.current_fn_throws_type_id = func.throws.as_ref().and_then(|t| {
+            super::types::ast_type_to_resolved(&t.node, t.span, self.scopes, self.types).ok()
+        });
         self.current_function_is_async = func.qualifiers.is_async;
         self.loop_depth = 0;
 
@@ -5747,6 +5931,7 @@ impl<'a> TypeChecker<'a> {
 
         self.current_return_type = None;
         self.current_function_throws = false;
+        self.current_fn_throws_type_id = None;
         self.current_fn_scope = None;
         self.current_trait_bounds = Vec::new();
     }
@@ -5812,7 +5997,7 @@ pub fn check_module(
     function_body_scopes: &FxHashMap<(String, usize), ScopeId>,
     struct_generic_bounds: &FxHashMap<DefId, (Vec<String>, Vec<(String, Vec<String>)>)>,
     errors: &mut Vec<SemanticError>,
-) -> (FxHashMap<Span, TypeId>, FxHashMap<usize, DefId>, FxHashMap<usize, Vec<Type>>, FxHashMap<usize, Vec<Type>>) {
+) -> (FxHashMap<Span, TypeId>, FxHashMap<usize, DefId>, FxHashMap<usize, Vec<Type>>, FxHashMap<usize, Vec<Type>>, FxHashMap<Span, DefId>) {
     let mut checker = TypeChecker::new(scopes, types, traits, resolution_map, function_info, enum_variants, struct_fields, function_body_scopes, struct_generic_bounds);
 
     // Pre-pass: register function signatures so callers can infer return types.
@@ -5835,7 +6020,7 @@ pub fn check_module(
     }
 
     errors.extend(checker.errors);
-    (checker.expr_types, checker.method_resolutions, checker.inferred_method_targs, checker.inferred_call_targs)
+    (checker.expr_types, checker.method_resolutions, checker.inferred_method_targs, checker.inferred_call_targs, checker.from_conversions)
 }
 
 /// Walk the module AST and patch every `MethodCall` whose `span.start` is a

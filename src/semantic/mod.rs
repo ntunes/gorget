@@ -57,6 +57,13 @@ pub struct AnalysisResult {
     /// Threaded from typechecker through borrow checker to codegen for
     /// ownership-aware move-zeroing at call sites.
     pub method_resolutions: FxHashMap<usize, DefId>,
+    /// Snag #11: for each cross-error-type auto-propagation site whose error
+    /// is convertible via an equipped `From[CalleeE]` on the caller's
+    /// `CallerE`, the resolved `From::from` method DefId, keyed by the
+    /// producing call expression's span. The IR lowering reads this to emit
+    /// the conversion on the error value before re-wrapping it in the caller's
+    /// `Result`. Empty when all propagations are same-error-type.
+    pub from_conversions: FxHashMap<Span, DefId>,
     /// CFA decisions for `shared` bindings: DefId → resolved sync strategy.
     pub shared_bindings: FxHashMap<DefId, SharedStrategy>,
     /// Non-fatal warnings (e.g., unnecessary `shared`).
@@ -288,7 +295,7 @@ pub fn analyze_with_source_dir(
     });
 
     // Pass 4: Type check everything
-    let (expr_types, method_resolutions, inferred_method_targs, inferred_call_targs) = time_pass(&mut pass_times, "typecheck_module", || {
+    let (expr_types, method_resolutions, inferred_method_targs, inferred_call_targs, from_conversions) = time_pass(&mut pass_times, "typecheck_module", || {
         typecheck::check_module(
             module,
             &mut scopes,
@@ -370,6 +377,7 @@ pub fn analyze_with_source_dir(
         expr_types,
         function_body_scopes: resolve_ctx.function_body_scopes,
         method_resolutions,
+        from_conversions,
         shared_bindings,
         warnings,
         fn_purity,

@@ -370,7 +370,7 @@ pub(super) fn lower_match_stmt(
                     op
                 } else {
                     let saved_expected = ctx.func_state.expected_type.take();
-                    let op = maybe_auto_propagate(ctx, builder, op);
+                    let op = maybe_auto_propagate(ctx, builder, op, scrutinee.span);
                     ctx.func_state.expected_type = saved_expected;
                     op
                 };

@@ -148,7 +148,7 @@ pub(super) fn lower_call_arg(
     // it uniformly; the `expected_type` gate (set by the caller when
     // the param type is itself a Result, e.g. `Vector[Result[T,E]]
     // .push(Ok(...))`) prevents over-unwrapping.
-    let val = super::maybe_auto_propagate(ctx, builder, val);
+    let val = super::maybe_auto_propagate(ctx, builder, val, arg.node.value.span);
     match arg.node.ownership {
         Ownership::MutableBorrow => {
             // GlobalRef → GlobalRefPtr: emit &global_name directly.
@@ -1081,7 +1081,7 @@ pub(super) fn lower_call(
                     }
                     let op = lower_expr(ctx, builder, &arg.node.value);
                     // Snag #46: auto-propagate Result→T at the variant-field boundary.
-                    let op = super::maybe_auto_propagate(ctx, builder, op);
+                    let op = super::maybe_auto_propagate(ctx, builder, op, arg.node.value.span);
                     ctx.func_state.expected_type = prev;
                     op
                 })
@@ -1116,7 +1116,7 @@ pub(super) fn lower_call(
                     }
                     let op = lower_expr(ctx, builder, &arg.node.value);
                     // Snag #46: auto-propagate Result→T at the variant-field boundary.
-                    let op = super::maybe_auto_propagate(ctx, builder, op);
+                    let op = super::maybe_auto_propagate(ctx, builder, op, arg.node.value.span);
                     ctx.func_state.expected_type = prev;
                     op
                 })
@@ -1258,7 +1258,7 @@ pub(super) fn lower_call(
                 // maybe_auto_propagate's `expected_type` check returns the
                 // operand unchanged for the capture case and emits the
                 // Result-unwrap-or-return chain for the propagation case.
-                let op = super::maybe_auto_propagate(ctx, builder, op);
+                let op = super::maybe_auto_propagate(ctx, builder, op, arg.node.value.span);
                 ctx.func_state.expected_type = prev_expected;
                 op
             })

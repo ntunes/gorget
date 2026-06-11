@@ -1002,6 +1002,57 @@ int lower_rethrow_expr(LowerCtx &ctx, SpannedExpr inner, Option[String] error_bi
 #     the `throws` lowering types to the mono'd Result) starts_with
 #     "Result__" — subsumes Rust's should_auto_propagate/expected_type.
 # A non-throws caller (gate 2 fails) keeps the raw Result unchanged.
+# Snag #11 (gorget-js): the self-host twin of the Rust lowering's From-mediated
+# error conversion. When a `throws A` value auto-propagates into a `throws B`
+# caller with A != B, the raw `Error(err_val)` re-wrap below memcpy's a
+# `sizeof(A)` value into a `sizeof(B)` Error slot — a type-confused over-read.
+# If an `equip B with From[A]:` impl was emitted (its mangled
+# `From__<A>_for_<B>__from` symbol is in `fn_sigs`), convert the loaded error
+# value to the caller's error type with that `From` before the re-wrap; else
+# return the value unchanged (same-error-type or genuinely no conversion —
+# byte-identical to the old path). The Rust typecheck gate already rejects the
+# no-From cross-type case, so by lowering time a surviving cross-type
+# propagation always has a `From` to find.
+#
+# `callee_err_tid` = the loaded error value's type (A); `caller_err_tid` = the
+# enclosing fn's Result error field (B). Mirrors
+# `maybe_emit_from_conversion` in `src/ir/lowering/exprs/mod.rs`.
+int maybe_emit_from_conversion(LowerCtx &ctx, int err_val, int callee_err_tid, int caller_err_tid, GirModule &gmod):
+    if callee_err_tid == caller_err_tid:
+        return err_val
+    # Build the From symbol from the resolved type names, mirroring the equip
+    # lowering's mangling (`From[A]` on B → `From__<A>_for_<B>__from`).
+    # `type_id_to_name` already yields the runtime-form name for named types
+    # (`GorgetString` for `String`); map the bare-`String` form defensively so
+    # the symbol matches `mangle_trait_name`'s `From__GorgetString` prefix.
+    String callee_raw = type_id_to_name(callee_err_tid, &gmod)
+    String callee_name = callee_raw
+    if callee_raw == "String":
+        callee_name = "GorgetString"
+    String caller_name = type_id_to_name(caller_err_tid, &gmod)
+    # The reference (Rust) mangling carries the trait generic arg
+    # (`From__<A>_for_<B>__from`). The self-host equip lowering currently drops
+    # the `[A]` arg (`From_for_<B>__from`) — a known divergence (see TODO). Try
+    # both spellings so this conversion lights up under either, the moment the
+    # self-host actually emits a user `From` impl for this pair.
+    String from_sym = "From__" + callee_name + "_for_" + caller_name + "__from"
+    String from_sym_alt = "From_for_" + caller_name + "__from"
+    String chosen = ""
+    if gmod.fn_sigs.contains(from_sym):
+        chosen = from_sym
+    elif gmod.fn_sigs.contains(from_sym_alt):
+        chosen = from_sym_alt
+    else:
+        # No emitted `From` impl to call (same-error-type path, or the
+        # self-host hasn't emitted the equip block — see TODO). Leave the value
+        # unchanged: byte-identical to the pre-snag-#11 lowering.
+        return err_val
+    # Call `B from(A)`: consume the loaded error, get the converted B back.
+    int converted = add_local(&ctx, caller_err_tid, None)
+    Vector[Operand] from_args = [op_consume(&ctx, &gmod, err_val, CkCallArgOwning())]
+    emit(&ctx, GICall(converted, chosen, from_args))
+    return converted
+
 int maybe_auto_propagate(LowerCtx &ctx, int val, GirModule &gmod):
     if val < 0 or val >= ctx.locals.len():
         return val
@@ -1051,12 +1102,17 @@ int maybe_auto_propagate(LowerCtx &ctx, int val, GirModule &gmod):
     int ok_val = emit_payload_read_mode(&ctx, scrutinee_ptr, result_tn, "Ok", 0, ok_tid, &gmod, false)
     emit(&ctx, GIAssign(ok_result, op_consume(&ctx, &gmod, ok_val, CkAssign())))
     set_terminator(&ctx, GTJump(merge_bb))
-    # Error path: forward the RAW error payload re-wrapped in the
-    # enclosing fn's Result.Error and early-return (no user transform).
+    # Error path: forward the error payload re-wrapped in the enclosing fn's
+    # Result.Error and early-return (no user transform).
     switch_to(&ctx, err_bb)
     int err_val = emit_payload_read_mode(&ctx, scrutinee_ptr, result_tn, "Error", 0, err_tid, &gmod, false)
+    # Snag #11: convert the callee's error type to the caller's via an equipped
+    # `From` when they differ (cross-error-type auto-propagation). No-op (and
+    # byte-identical) when the error types match.
+    ResultPayloadTypes caller_pt = result_payload_types(fn_result_type, &gmod)
+    int err_val_conv = maybe_emit_from_conversion(&ctx, err_val, err_tid, caller_pt.err_type, &gmod)
     int err_dst = add_local(&ctx, fn_result_type, None)
-    Vector[Operand] err_args = [op_consume(&ctx, &gmod, err_val, CkCallArgOwning())]
+    Vector[Operand] err_args = [op_consume(&ctx, &gmod, err_val_conv, CkCallArgOwning())]
     emit(&ctx, GICallExtern(err_dst, "Error", err_args))
     emit(&ctx, GIAssign(0, op_consume(&ctx, &gmod, err_dst, CkReturn())))
     emit_on_error_cleanups(&ctx, &gmod)
