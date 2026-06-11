@@ -1,0 +1,396 @@
+diff --git a/src/backend/c_lir/mod.rs b/src/backend/c_lir/mod.rs
+index 44379d32..a313bcbe 100644
+--- a/src/backend/c_lir/mod.rs
++++ b/src/backend/c_lir/mod.rs
+@@ -1886,6 +1886,15 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
+     let mut s_used = vec![false; func.slots.len()];
+     mark_used_value_ids(&fnbody, &mut v_used, &mut s_used);
+ 
++    // ── PROTOTYPE: liveness-based value-slot coalescing probe (GG_COALESCE_PROBE) ──
++    // Throwaway scout instrumentation. Computes SSA value liveness over the
++    // block CFG and reports, per function, how many `__v` C-locals we'd save
++    // by reusing one slot for values with disjoint live ranges + matching C
++    // type. Prints to stderr; does NOT change emission.
++    if std::env::var("GG_COALESCE_PROBE").is_ok() {
++        coalesce_probe(func, &val_types, &v_used, sn, &val_c_type_override);
++    }
++
+     // Slot declarations (referenced only; emitted after cross-type fix-ups so slot_overrides are applied).
+     for (i, slot) in func.slots.iter().enumerate() {
+         if !s_used[i] {
+@@ -1912,39 +1921,51 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
+         writeln!(out, ";").unwrap();
+     }
+ 
+-    // Value declarations (referenced only).
+-    for (i, ty) in val_types.iter().enumerate() {
+-        if !v_used.get(i).copied().unwrap_or(false) {
+-            continue;
+-        }
+-        // Use C type override if available (for runtime structs not in module.structs).
+-        if let Some(Some(c_override)) = val_c_type_override.get(i) {
+-            writeln!(out, "    {} __v{i};", c_override).unwrap();
+-            continue;
+-        }
+-        // CStr-origin values are const char* — declare as such to avoid
+-        // const-discard warnings. Reads `func.value_origins` directly.
++    // Exact C declaration type string per used value (single source of truth
++    // for both the per-value decl path and the coalescing prototype).
++    let decl_ctype = |i: usize| -> String {
++        if let Some(Some(c_override)) = val_c_type_override.get(i) { return c_override.clone(); }
+         if matches!(func.value_origins.get(i).and_then(|o| o.as_ref()), Some(ValueOrigin::CStr { .. })) {
+-            writeln!(out, "    const char* __v{i};").unwrap();
+-            continue;
++            return "const char*".to_string();
+         }
+-        match ty {
+-            Some(ty) => {
+-                let ts = c_type_named(ty, sn);
+-                if ts == "void" {
+-                    // Void-typed values are used as opaque pointers — declare as void*.
+-                    writeln!(out, "    void* __v{i};").unwrap();
+-                } else {
+-                    writeln!(out, "    {} __v{i};", ts).unwrap();
+-                }
+-            }
+-            None => {
+-                // No type inferred — value is referenced but type couldn't be determined.
+-                // Declare as void* to avoid undeclared variable errors.
+-                writeln!(out, "    void* __v{i};").unwrap();
+-            }
++        match val_types.get(i).and_then(|t| t.as_ref()) {
++            Some(ty) => { let ts = c_type_named(ty, sn); if ts == "void" { "void*".to_string() } else { ts } }
++            None => "void*".to_string(),
+         }
+-    }
++    };
++
++    // ── PROTOTYPE: GG_COALESCE — emit ONE C local per coalesced slot + #define
++    // aliases. Keys coalescing on the EXACT decl type string (soundness: two
++    // values sharing a slot must declare identically). #define/#undef keeps the
++    // body emission byte-identical (zero rewrite). ──
++    let coalesce_on = std::env::var("GG_COALESCE").is_ok();
++    let coalesce_assign_for_undef: Vec<Option<usize>> = if coalesce_on {
++        // Re-key the assignment on the exact decl type string.
++        let assign = coalesce_assign_exact(func, &v_used, &decl_ctype);
++        // Declare one local per slot (slot type = decl type of its repr value).
++        let mut slot_type: Vec<Option<String>> = Vec::new();
++        for (i, slot) in assign.iter().enumerate() {
++            if let Some(s) = slot {
++                while slot_type.len() <= *s { slot_type.push(None); }
++                if slot_type[*s].is_none() { slot_type[*s] = Some(decl_ctype(i)); }
++            }
++        }
++        for (s, ty) in slot_type.iter().enumerate() {
++            if let Some(ty) = ty { writeln!(out, "    {ty} __coal{s};").unwrap(); }
++        }
++        // #define each used value to its slot.
++        for (i, slot) in assign.iter().enumerate() {
++            if let Some(s) = slot { writeln!(out, "    #define __v{i} __coal{s}").unwrap(); }
++        }
++        assign
++    } else {
++        // Value declarations (referenced only).
++        for i in 0..val_types.len() {
++            if !v_used.get(i).copied().unwrap_or(false) { continue; }
++            writeln!(out, "    {} __v{i};", decl_ctype(i)).unwrap();
++        }
++        Vec::new()
++    };
+ 
+     // Block parameter move variables (for parallel copy semantics).
+     // Each block param needs a temporary for parallel moves.
+@@ -1961,6 +1982,14 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
+ 
+     writeln!(out, "}}").unwrap();
+ 
++    // PROTOTYPE GG_COALESCE: undef the per-value aliases so they don't leak
++    // into the next function (the macro names are function-local).
++    if !coalesce_assign_for_undef.is_empty() {
++        for (i, slot) in coalesce_assign_for_undef.iter().enumerate() {
++            if slot.is_some() { writeln!(out, "#undef __v{i}").unwrap(); }
++        }
++    }
++
+     // Fix B (#37 flip): the NATIVE pthread main runner. The user main body
+     // (emitted above as `static int __gorget_user_main(void)`) runs on a
+     // pthread with a 64MB explicit stack reserve; explicit
+@@ -2055,6 +2084,278 @@ fn mark_used_value_ids(body: &str, v_used: &mut [bool], s_used: &mut [bool]) {
+     }
+ }
+ 
++/// THROWAWAY SCOUT — liveness-based value-slot coalescing.
++/// Computes standard SSA value liveness (backward dataflow over the block CFG,
++/// block-args modelled as phi: arg live at end of pred, param live at start of
++/// successor), then greedily reuses one C local per (C-type) for values whose
++/// block-live-sets are disjoint. Returns, per value id, the coalesced slot
++/// index it maps to (None for unused), plus the per-slot (ctype, repr-value).
++/// COARSE per-block granularity = a LOWER BOUND on the real yield.
++fn coalesce_assign(
++    func: &LirFunction,
++    val_types: &[Option<LirType>],
++    v_used: &[bool],
++    sn: &HashMap<u32, String>,
++    val_c_type_override: &[Option<String>],
++) -> (Vec<Option<usize>>, Vec<(String, usize)>) {
++    let nval = v_used.len();
++    let nblocks = func.blocks.len();
++    let mut assign: Vec<Option<usize>> = vec![None; nval];
++    let mut slot_meta: Vec<(String, usize)> = Vec::new();
++    if nblocks == 0 { return (assign, slot_meta); }
++    let live_blocks = compute_live_blocks(func, v_used);
++    let ctype_of = |k: usize| -> String {
++        if let Some(Some(ovr)) = val_c_type_override.get(k) { return ovr.clone(); }
++        match val_types.get(k).and_then(|t| t.as_ref()) {
++            Some(ty) => { let ts = c_type_named(ty, sn); if ts == "void" { "void*".to_string() } else { ts } }
++            None => "void*".to_string(),
++        }
++    };
++    // Group by C type, greedily color within each group.
++    let mut by_type: HashMap<String, Vec<usize>> = HashMap::new();
++    for k in 0..nval {
++        if !v_used[k] { continue; }
++        by_type.entry(ctype_of(k)).or_default().push(k);
++    }
++    for (ty, vals) in &by_type {
++        let mut slots: Vec<(std::collections::HashSet<usize>, usize)> = Vec::new(); // (live-set, global slot idx)
++        for &k in vals {
++            let lb: std::collections::HashSet<usize> = live_blocks[k].iter().copied().collect();
++            let mut placed = None;
++            for (sl, gidx) in &mut slots {
++                if sl.is_disjoint(&lb) { sl.extend(lb.iter().copied()); placed = Some(*gidx); break; }
++            }
++            let gidx = match placed {
++                Some(g) => g,
++                None => {
++                    let g = slot_meta.len();
++                    slot_meta.push((ty.clone(), k));
++                    slots.push((lb, g));
++                    g
++                }
++            };
++            assign[k] = Some(gidx);
++        }
++    }
++    (assign, slot_meta)
++}
++
++/// THROWAWAY SCOUT — coalescing keyed on the EXACT C decl type string supplied
++/// by `decl_ctype` (so two values sharing a slot declare identically). Returns
++/// per-value slot index (None for unused).
++fn coalesce_assign_exact(
++    func: &LirFunction,
++    v_used: &[bool],
++    decl_ctype: &dyn Fn(usize) -> String,
++) -> Vec<Option<usize>> {
++    let nval = v_used.len();
++    let mut assign: Vec<Option<usize>> = vec![None; nval];
++    if func.blocks.is_empty() { return assign; }
++    let live_blocks = compute_live_blocks(func, v_used);
++    let mut by_type: HashMap<String, Vec<usize>> = HashMap::new();
++    for k in 0..nval { if v_used[k] { by_type.entry(decl_ctype(k)).or_default().push(k); } }
++    let mut next_slot = 0usize;
++    for (_ty, vals) in &by_type {
++        let mut slots: Vec<(std::collections::HashSet<usize>, usize)> = Vec::new();
++        for &k in vals {
++            let lb: std::collections::HashSet<usize> = live_blocks[k].iter().copied().collect();
++            let mut placed = None;
++            for (sl, gidx) in &mut slots {
++                if sl.is_disjoint(&lb) { sl.extend(lb.iter().copied()); placed = Some(*gidx); break; }
++            }
++            let gidx = placed.unwrap_or_else(|| { let g = next_slot; next_slot += 1; slots.push((lb.clone(), g)); g });
++            assign[k] = Some(gidx);
++        }
++    }
++    assign
++}
++
++/// Per-value block-live-set (the block indices where each used value is live).
++fn compute_live_blocks(func: &LirFunction, v_used: &[bool]) -> Vec<Vec<usize>> {
++    let nval = v_used.len();
++    let nblocks = func.blocks.len();
++    let mut idx_of: HashMap<u32, usize> = HashMap::new();
++    for (i, b) in func.blocks.iter().enumerate() { idx_of.insert(b.id.0, i); }
++    let mut succ: Vec<Vec<usize>> = vec![Vec::new(); nblocks];
++    for (i, b) in func.blocks.iter().enumerate() {
++        for s in b.terminator.successors() {
++            if let Some(&j) = idx_of.get(&s.0) { succ[i].push(j); }
++        }
++    }
++    let mut def: Vec<Vec<bool>> = vec![vec![false; nval]; nblocks];
++    let mut upward_use: Vec<Vec<bool>> = vec![vec![false; nval]; nblocks];
++    for (i, b) in func.blocks.iter().enumerate() {
++        let d = &mut def[i];
++        let u = &mut upward_use[i];
++        for (vid, _) in &b.params { if (vid.0 as usize) < nval { d[vid.0 as usize] = true; } }
++        for inst in &b.insts {
++            for used in inst.uses() { let k = used.0 as usize; if k < nval && !d[k] { u[k] = true; } }
++            if let Some(dst) = inst.dst() { let k = dst.0 as usize; if k < nval { d[k] = true; } }
++        }
++        for used in b.terminator.uses() { let k = used.0 as usize; if k < nval && !d[k] { u[k] = true; } }
++    }
++    let mut live_in: Vec<Vec<bool>> = vec![vec![false; nval]; nblocks];
++    let mut live_out: Vec<Vec<bool>> = vec![vec![false; nval]; nblocks];
++    let mut changed = true;
++    while changed {
++        changed = false;
++        for i in (0..nblocks).rev() {
++            let mut new_out = vec![false; nval];
++            for &s in &succ[i] { for k in 0..nval { if live_in[s][k] { new_out[k] = true; } } }
++            let mut new_in = vec![false; nval];
++            for k in 0..nval { if upward_use[i][k] || (new_out[k] && !def[i][k]) { new_in[k] = true; } }
++            if new_out != live_out[i] { live_out[i] = new_out; changed = true; }
++            if new_in != live_in[i] { live_in[i] = new_in; changed = true; }
++        }
++    }
++    let mut live_blocks: Vec<Vec<usize>> = vec![Vec::new(); nval];
++    for i in 0..nblocks {
++        for k in 0..nval {
++            if !v_used[k] { continue; }
++            if live_in[i][k] || live_out[i][k] || def[i][k] || upward_use[i][k] { live_blocks[k].push(i); }
++        }
++    }
++    live_blocks
++}
++
++/// THROWAWAY SCOUT PROBE — print per-function decl-count savings to stderr.
++fn coalesce_probe(
++    func: &LirFunction,
++    val_types: &[Option<LirType>],
++    v_used: &[bool],
++    sn: &HashMap<u32, String>,
++    val_c_type_override: &[Option<String>],
++) {
++    let nblocks = func.blocks.len();
++    if nblocks == 0 { return; }
++    // block index by BlockId.0
++    let mut idx_of: HashMap<u32, usize> = HashMap::new();
++    for (i, b) in func.blocks.iter().enumerate() { idx_of.insert(b.id.0, i); }
++
++    // succ/pred adjacency
++    let mut succ: Vec<Vec<usize>> = vec![Vec::new(); nblocks];
++    for (i, b) in func.blocks.iter().enumerate() {
++        for s in b.terminator.successors() {
++            if let Some(&j) = idx_of.get(&s.0) { succ[i].push(j); }
++        }
++    }
++
++    // Per-block use/def sets at value granularity, plus phi handling.
++    // def[b] = block params defined in b + inst dsts in b.
++    // use[b] (upward-exposed) = values used before any def in b (within b),
++    //   PLUS terminator block-args are treated as used at end of b (phi).
++    let nval = v_used.len();
++    let mut def: Vec<Vec<bool>> = vec![vec![false; nval]; nblocks];
++    let mut upward_use: Vec<Vec<bool>> = vec![vec![false; nval]; nblocks];
++
++    for (i, b) in func.blocks.iter().enumerate() {
++        let d = &mut def[i];
++        let u = &mut upward_use[i];
++        // block params are defs at the very top
++        for (vid, _) in &b.params {
++            if (vid.0 as usize) < nval { d[vid.0 as usize] = true; }
++        }
++        for inst in &b.insts {
++            for used in inst.uses() {
++                let k = used.0 as usize;
++                if k < nval && !d[k] { u[k] = true; }
++            }
++            if let Some(dst) = inst.dst() {
++                let k = dst.0 as usize;
++                if k < nval { d[k] = true; }
++            }
++        }
++        // terminator uses (incl. block-args): used at end, after all defs
++        for used in b.terminator.uses() {
++            let k = used.0 as usize;
++            if k < nval && !d[k] { u[k] = true; }
++        }
++    }
++
++    // live_in/live_out fixpoint (backward)
++    let mut live_in: Vec<Vec<bool>> = vec![vec![false; nval]; nblocks];
++    let mut live_out: Vec<Vec<bool>> = vec![vec![false; nval]; nblocks];
++    let mut changed = true;
++    while changed {
++        changed = false;
++        for i in (0..nblocks).rev() {
++            // live_out = union of live_in of successors
++            let mut new_out = vec![false; nval];
++            for &s in &succ[i] {
++                for k in 0..nval { if live_in[s][k] { new_out[k] = true; } }
++            }
++            // live_in = use ∪ (live_out − def)
++            let mut new_in = vec![false; nval];
++            for k in 0..nval {
++                if upward_use[i][k] || (new_out[k] && !def[i][k]) { new_in[k] = true; }
++            }
++            if new_out != live_out[i] { live_out[i] = new_out; changed = true; }
++            if new_in != live_in[i] { live_in[i] = new_in; changed = true; }
++        }
++    }
++
++    // Compute a global "live range" per value as the SET OF BLOCKS where it is
++    // live (live_in OR defined-in OR used-in OR live_out). Two values may share
++    // a C slot only if their block-live-sets are DISJOINT and their C types
++    // match. This is a COARSE (per-block) approximation — finer (per-inst)
++    // coalescing would save more, so this is a LOWER BOUND on the real yield.
++    let mut live_blocks: Vec<Vec<usize>> = vec![Vec::new(); nval];
++    for i in 0..nblocks {
++        for k in 0..nval {
++            if !v_used[k] { continue; }
++            if live_in[i][k] || live_out[i][k] || def[i][k] || upward_use[i][k] {
++                live_blocks[k].push(i);
++            }
++        }
++    }
++
++    // C type string per value (mirrors the real decl logic, coarsely).
++    let ctype_of = |k: usize| -> String {
++        if let Some(Some(ovr)) = val_c_type_override.get(k) { return ovr.clone(); }
++        match val_types.get(k).and_then(|t| t.as_ref()) {
++            Some(ty) => { let ts = c_type_named(ty, sn); if ts == "void" { "void*".to_string() } else { ts } }
++            None => "void*".to_string(),
++        }
++    };
++
++    // Greedy interval-graph coloring per C type: a value reuses an existing
++    // slot iff its block-live-set is disjoint from every value already in it.
++    let mut total_used = 0usize;
++    let mut by_type: HashMap<String, Vec<usize>> = HashMap::new();
++    for k in 0..nval {
++        if !v_used[k] { continue; }
++        total_used += 1;
++        by_type.entry(ctype_of(k)).or_default().push(k);
++    }
++    let mut coalesced_decls = 0usize;
++    for (_ty, vals) in &by_type {
++        // each "slot" holds a union of block-indices already assigned
++        let mut slots: Vec<std::collections::HashSet<usize>> = Vec::new();
++        for &k in vals {
++            let lb: std::collections::HashSet<usize> = live_blocks[k].iter().copied().collect();
++            let mut placed = false;
++            for slot in &mut slots {
++                if slot.is_disjoint(&lb) {
++                    slot.extend(lb.iter().copied());
++                    placed = true;
++                    break;
++                }
++            }
++            if !placed { slots.push(lb); }
++        }
++        coalesced_decls += slots.len();
++    }
++
++    if total_used >= 200 {
++        eprintln!(
++            "[coalesce] {} : used_locals={} coalesced_locals={} saved={} ({:.0}%)",
++            func.name, total_used, coalesced_decls,
++            total_used.saturating_sub(coalesced_decls),
++            if total_used > 0 { 100.0 * (total_used - coalesced_decls) as f64 / total_used as f64 } else { 0.0 },
++        );
++    }
++}
++
+ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext, loc: &(String, u32, u32)) {
+     let func = ctx.func;
+     let module = ctx.module;
