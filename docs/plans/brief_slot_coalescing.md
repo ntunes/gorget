@@ -70,12 +70,25 @@ block-live-sets are provably disjoint).
    OWN `decl_ctype`** (the exact string it emits at its own value-decl site):
    Rust `c_lir/mod.rs` value-decl loop (~`:1915-1947`, incl. the `CStr → const
    char*` ~`:1927` and `void → void*` ~`:1934` specials); the self-host
-   `lir_codegen.gg` value-decl loop (~`:4917-4936`) is a SIMPLER SUBSET (only
-   `void*` or `c_type_name(...)` — NO CStr branch today). Do NOT key the
-   self-host coalescing on the Rust decl-ctype shape — it would split values the
-   self-host declares identically (lost yield) or key them wrong. The
-   prototype's `coalesce_assign_exact` does this for Rust — keep it; the
-   self-host port keys on the self-host decl loop's own ctype.
+   `lir_codegen.gg` value-decl loop (~`:4917-4936`) keys on `c_type_name(...)`
+   (with `void → void*`). Do NOT key the self-host coalescing on the Rust
+   decl-ctype shape; key on the self-host's own.
+   ⚠⚠ **CORRECTION (the v1 executor's `fixed_point` FAILURE, 2026-06-11): the
+   self-host is NOT a "no-CStr-branch simpler subset" — that claim was WRONG and
+   caused a stage-2 cc type-mismatch (a `const char*`-context value coalesced
+   into a `Str` slot → `gorget_str_from_cstr` arg-type error).** The self-host
+   HAS a `const char*`/cstr value class via `is_cstr_returning_fn`
+   (`lir_codegen.gg:~1889`) + the `cstr_ret`/`gorget_str_from_cstr` call-emission
+   path (`~:4296-4308`, `~:4633`) and the `gorget_str_from_cstr`-as-callee path
+   (`~:1995`). `coal_decl_ctype` keying purely on `c_type_name(val_types)` does
+   NOT distinguish a value emitted/used as `const char*` from a `Str` value →
+   they wrongly coalesce. **FIX:** `coal_decl_ctype` must reproduce the EXACT
+   per-value emitted decl/use type INCLUDING the cstr class (so a `const char*`
+   value never shares a slot with a `Str`) — OR, conservatively, EXCLUDE the
+   cstr/const-char* value class from coalescing entirely (give them un-shared
+   slots, like the baseline) until the exact type can be reproduced. Symmetric
+   check on the Rust side: `coalesce_assign_exact` must key on the full decl-ctype
+   incl. `ValueOrigin::CStr` (`src/lir/types.rs:~823`) too.
 
 ## Both-emitter symmetry
 - Rust: `c_lir/mod.rs` (prototype lives here). Determinism recommended (Rust
