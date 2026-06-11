@@ -5191,11 +5191,89 @@ bool coal_disjoint(Vector[int] &a, Dict[int, bool] &b_set):
         i += 1
     return true
 
+# Value-ids whose STORAGE ADDRESS escapes into a successor block via a
+# by-pointer block argument. ⚠ SOUNDNESS-CRITICAL for coalescing.
+#
+# Unlike the Rust emitter (whose `emit_jump_args` is ALWAYS a plain
+# `__bp = __v` value copy), the self-host's block-param head-copy
+# (`emit_block_param_copies`, the `bp_ptr and arg_agg` arm) emits
+# `__bp{param} = &__v{arg}` — it takes the ADDRESS of an aggregate arg when the
+# successor's block param is a pointer (the `!Aggregate`-consuming-param ABI).
+# That pointer is held in the successor's param and dereferenced there, so the
+# arg's storage must stay live THROUGH the successor — an aliasing the SSA
+# value-liveness CANNOT see (it sees only `arg` USED at the jump, then dead).
+# Coalescing such an arg with another value live in the successor produces a
+# use-after-coalesce: the successor reads stale data through the dangling
+# pointer. (This is exactly how `fixed_point` broke — a clobbered codegen
+# decision emitted a spurious `gorget_str_from_cstr` double-wrap.)
+#
+# Fix: never coalesce an address-escaped value — give it a PRIVATE slot. We
+# mirror the EXACT `bp_ptr and arg_agg` predicate from the head-copy emitter so
+# the escaped set matches the `&__v` sites 1:1.
+Dict[int, bool] coal_addr_escaped_args(LirFunction &func, Dict[int, int] &val_types):
+    Dict[int, bool] escaped = {}
+    int bi = 0
+    while bi < func.blocks.len():
+        LirBlock blk = func.blocks.get(bi).unwrap()
+        Vector[int] succs = term_successors(blk.term)
+        # The terminator's per-successor arg lists, in successor order
+        # (matching term_successors): TJump=[args]; TBranch=[then_args,
+        # else_args]; TSwitch=[case0.args, …, default_args].
+        Vector[Vector[int]] arg_lists = coal_term_arg_lists(blk.term)
+        int si = 0
+        while si < succs.len() and si < arg_lists.len():
+            int succ = succs.get(si).unwrap()
+            Vector[int] args = arg_lists.get(si).unwrap()
+            LirBlock tblk = func.blocks.get(succ).unwrap()
+            int i = 0
+            while i < args.len() and i < tblk.params.len():
+                BlockParam bp = tblk.params.get(i).unwrap()
+                int arg = args.get(i).unwrap()
+                int bp_ty = bp.ty
+                int arg_ty = LT_VOID
+                if val_types.contains(arg):
+                    arg_ty = val_types.get(arg).unwrap()
+                bool bp_ptr = (bp_ty == LT_PTR) or (bp_ty >= LT_PTR_TO_BASE and bp_ty < LT_STRUCT_BASE)
+                bool arg_agg = lir_is_aggregate(arg_ty)
+                if bp_ptr and arg_agg:
+                    escaped.put(arg, true)
+                i += 1
+            si += 1
+        bi += 1
+    return escaped
+
+# Per-successor block-arg lists in the SAME order as term_successors (so
+# arg_lists[i] is the arg vector flowing to succs[i]). Exhaustive over LirTerm
+# (Gorget enforces match exhaustiveness, so a new terminator variant is forced
+# through here too); pinned by `coal_term_arg_lists_arms_count` in tests/lints.rs.
+Vector[Vector[int]] coal_term_arg_lists(LirTerm term):
+    Vector[Vector[int]] result = []
+    match term:
+        case TRet(_):
+            pass
+        case TRetVoid():
+            pass
+        case TUnreachable():
+            pass
+        case TJump(_, args):
+            result.push(args)
+        case TBranch(_, _, then_args, _, else_args):
+            result.push(then_args)
+            result.push(else_args)
+        case TSwitch(_, cases, _, default_args):
+            int ci = 0
+            while ci < cases.len():
+                result.push(cases.get(ci).unwrap().args)
+                ci += 1
+            result.push(default_args)
+    return result
+
 # Liveness-based coalescing keyed on the EXACT self-host decl-ctype string.
 # Returns, per value id (0..max_val), the coalesced slot index it maps to, or -1
-# for unused values. Returns an EMPTY vector when there are no blocks (the caller
-# falls back to one-local-per-value). DETERMINISTIC single ascending pass (see
-# the block comment above coal_decl_ctype).
+# for unused values AND for address-escaped values (which get a PRIVATE `__vN`
+# decl — see coal_addr_escaped_args). Returns an EMPTY vector when there are no
+# blocks (the caller falls back to one-local-per-value). DETERMINISTIC single
+# ascending pass (see the block comment above coal_decl_ctype).
 Vector[int] coalesce_assign(LirFunction &func, int max_val, Vector[bool] &v_used, Dict[int, int] &val_types, Vector[String] &sn):
     Vector[int] assign = []
     if func.blocks.len() == 0:
@@ -5204,6 +5282,10 @@ Vector[int] coalesce_assign(LirFunction &func, int max_val, Vector[bool] &v_used
     while vk < max_val:
         assign.push(-1)
         vk += 1
+
+    # Values whose address escapes via a by-pointer block arg are NOT
+    # coalescable (their storage is aliased past their SSA live range).
+    Dict[int, bool] escaped = coal_addr_escaped_args(&func, &val_types)
 
     Vector[Vector[int]] live_blocks = coal_compute_live_blocks(&func, &v_used)
 
@@ -5214,7 +5296,7 @@ Vector[int] coalesce_assign(LirFunction &func, int max_val, Vector[bool] &v_used
 
     int k = 0
     while k < max_val:
-        if v_used.get(k).unwrap():
+        if v_used.get(k).unwrap() and not escaped.contains(k):
             String ty = coal_decl_ctype(k, &val_types, &sn)
             Vector[int] lb = live_blocks.get(k).unwrap()
             int placed = -1
@@ -5424,7 +5506,19 @@ String emit_function(LirFunction &func, LirModule &m, Vector[String] &sn, Dict[S
                 sb_push(&buf, int_to_str(s2))
                 sb_push(&buf, ";\n")
             s2 += 1
-        # #define each used value to its coalesced slot. The body still
+        # PRIVATE decls: used values NOT coalesced (coal_assign == -1) — the
+        # address-escaped values that must keep their own storage. Emit a plain
+        # `__vN` decl and NO `#define` (the body references `__vN` directly).
+        int vp = 0
+        while vp < max_val:
+            if v_used.get(vp).unwrap() and coal_assign.get(vp).unwrap() < 0:
+                sb_push(&buf, "    ")
+                sb_push(&buf, coal_decl_ctype(vp, &val_types, &sn))
+                sb_push(&buf, " __v")
+                sb_push(&buf, int_to_str(vp))
+                sb_push(&buf, ";\n")
+            vp += 1
+        # #define each COALESCED used value to its slot. The body still
         # references `__vN` literally; the macro rewrites it to `__coalK`.
         int vi3 = 0
         while vi3 < coal_assign.len():

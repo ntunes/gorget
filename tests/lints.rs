@@ -1606,4 +1606,20 @@ fn term_uses_arms_count() {
         "self-host `term_uses` arm count ({n_uses}) != `term_successors` arm count \
          ({n_succ}). The two enumerators must cover the identical `LirTerm` arm set.",
     );
+
+    // `coal_term_arg_lists` (the per-successor block-arg vectors used by the
+    // coalescing address-escape soundness analysis, in lir_codegen.gg) must ALSO
+    // cover every LirTerm variant — a missing arm would silently drop a
+    // successor's block args from the escape scan → an address-escaped value
+    // could be coalesced anyway → a use-after-coalesce clobber.
+    let codegen = "tests/fixtures/self_host_lowerer/lir_codegen.gg";
+    let n_arglists =
+        count_case_arms_in_fn(codegen, "Vector[Vector[int]] coal_term_arg_lists(", "T");
+    assert_eq!(
+        n_arglists, n_variants,
+        "self-host `coal_term_arg_lists` arm count ({n_arglists}) != `LirTerm` variant \
+         count ({n_variants}). It must enumerate every terminator's block-arg lists in \
+         successor order (matching term_successors) so the coalescing address-escape \
+         scan sees every by-pointer block arg.",
+    );
 }
