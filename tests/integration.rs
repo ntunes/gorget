@@ -23335,13 +23335,12 @@ fn cow_lazy_d1_alias_takenpath() {
     );
 }
 
-/// MOVE-SHAPE ORACLE EXCEPTION: Rust gg Phase 1 is VALUE-WRONG on the EMove
-/// move-BIND shape (`Vector[String] w = !v` then `w.set(...)` — its lazy
-/// bind reads through to the post-mutation value; the HIGH Rust TODO), so
-/// this asserts the EAGER-SEMANTICS stdout through the SELF-HOST route.
-/// The self-host's cow_moved_names eligibility EXCLUSION keeps the bind
-/// eager. EXPECTED-WRONG row in runtime_diff (the Rust oracle is the buggy
-/// side); NOT snapshotted until the Rust fix lands.
+/// EMove move-BIND shape (`Vector[String] w = !v` then `w.set(...)`):
+/// asserts the eager-semantics stdout through the SELF-HOST route. The
+/// self-host's cow_moved_names eligibility EXCLUSION keeps the bind eager.
+/// Both compilers now agree (the Rust Expr::Move read-through bug was
+/// fixed by Chain C item 1), so the fixture is also snapshot-locked; this
+/// self-host-route twin stays as the direct driver-path regression net.
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn cow_lazy_move_bind_self_host() {
@@ -23369,9 +23368,10 @@ fn cow_lazy_move_bind_self_host() {
     }
 }
 
-/// MOVE-SHAPE ORACLE EXCEPTION, move-REASSIGN shape (`w = !v` to an existing
-/// local — the shape that defeats per-position move hooks and motivates the
-/// cow_moved_names EXCLUSION). Same contract as cow_lazy_move_bind_self_host.
+/// EMove move-REASSIGN shape (`w = !v` to an existing local — the shape
+/// that defeats per-position move hooks and motivates the cow_moved_names
+/// EXCLUSION). Same contract as cow_lazy_move_bind_self_host: self-host
+/// route + snapshot-locked now that both compilers agree.
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn cow_lazy_move_reassign_self_host() {

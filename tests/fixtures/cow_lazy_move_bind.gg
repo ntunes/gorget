@@ -3,11 +3,8 @@
 # laziness is ELIGIBILITY-EXCLUDED for its source (cow_moved_names): the
 # `s` bind falls back to the eager clone and prints the PRE-mutation value.
 #
-# ⚠ MOVE-SHAPE ORACLE EXCEPTION: Rust gg Phase 1 is VALUE-WRONG on this
-# shape (lazy read-through prints the post-mutation value — the HIGH Rust
-# TODO), so this fixture asserts the EAGER-SEMANTICS stdout through the
-# SELF-HOST route, is EXPECTED-WRONG in runtime_diff, and gets NO snapshot
-# until the Rust fix lands.
+# Both compilers agree on the eager semantics (the Rust Expr::Move
+# read-through bug was fixed by Chain C item 1); snapshotted.
 void main():
     Vector[String] v = ["hello", "world"]
     String s = v.get(0).unwrap()
