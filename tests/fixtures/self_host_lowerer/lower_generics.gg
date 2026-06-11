@@ -565,7 +565,9 @@ void lower_generic_equip(EquipBlock eqblk, Vector[SpannedType] type_args, GirMod
     # Strip the trait_name so lower_equip_block uses plain Type__method naming.
     Option[String] no_trait = None
     EquipBlock plain_eqblk = EquipBlock(eqblk.target, eqblk.type_params, no_trait, eqblk.methods, eqblk.via_field, eqblk.trait_generic_args)
-    lower_equip_block(plain_eqblk, &gmod)
+    # trait_name stripped to None → the equip-symbol-suffix branch is never
+    # reached; the registration flag is moot. Pass false (Snag #11).
+    lower_equip_block(plain_eqblk, &gmod, false)
     clear_type_subs(&gmod)
 
 # ── Spawn wrapper scanning ───────────────────────────────

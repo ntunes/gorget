@@ -48,7 +48,7 @@ from lower_expr import block_terminated, lower_block_expr, lower_stmt_as_tail_va
 from lower_stmt import lower_stmt, lower_place_base, lower_field_write, emit_field_write_from_local, lower_stmts, lower_if, lower_index_assign
 from lower_match import match_enum_type, match_variant_index, try_lift_option_ref, emit_tag_read, is_deep_clone_fn, resolve_payload_clone_fn, emit_payload_read, emit_payload_read_mode, emit_payload_read_mode_full, match_scrutinee_ptr, lower_pattern_match, lower_ctor_pattern, lookup_ctor_field_type, result_payload_types, emit_on_error_cleanups, lower_throw_stmt, lower_catch_expr, lower_rethrow_expr, maybe_auto_propagate, arms_match_result_or_option, pattern_head_is_result_or_option, lower_match_stmt, lower_match_expr
 from lower_loops import lower_for, lower_for_vector, lower_for_string, parse_dict_kv_types, for_pat_binding_name, lower_for_dict, lower_for_range, lower_for_iterator, bind_tuple_field, bind_tuple_destructure, bind_for_local, local_is_borrow_alias, scrutinee_nonowning, scrutinee_owned_whole_dropped, scrutinee_borrow_into_owning_collection, resolve_elem_type_id, lower_while
-from lower_closures import lower_function, mangle_prim_type, mangle_trait_name, is_builtin_trait, is_iterator_protocol_trait, method_has_self, lower_equip_block, guess_return_type, expr_has_it, closure_ident_module_resolvable, closure_collect_pattern_bindings, closure_expr_has_capture, closure_stmt_has_capture, closure_stmts_have_capture, closure_body_captures, implicit_closure_body_captures, cc_callee_is_free_fn, cc_classify_ident, cc_collect_expr, cc_collect_stmt, cc_collect_stmts, collect_closure_captures, stmts_mutate_any, expr_target_mutates_any, stmt_mutates_any, expr_has_nested_closure, stmt_has_nested_closure, stmts_have_nested_closure, compute_closure_sig, compute_implicit_closure_sig, record_implicit_it_closure, lower_closure_body
+from lower_closures import lower_function, mangle_prim_type, mangle_trait_name, mangle_trait_equip_name, is_builtin_trait, is_iterator_protocol_trait, method_has_self, lower_equip_block, guess_return_type, expr_has_it, closure_ident_module_resolvable, closure_collect_pattern_bindings, closure_expr_has_capture, closure_stmt_has_capture, closure_stmts_have_capture, closure_body_captures, implicit_closure_body_captures, cc_callee_is_free_fn, cc_classify_ident, cc_collect_expr, cc_collect_stmt, cc_collect_stmts, collect_closure_captures, stmts_mutate_any, expr_target_mutates_any, stmt_mutates_any, expr_has_nested_closure, stmt_has_nested_closure, stmts_have_nested_closure, compute_closure_sig, compute_implicit_closure_sig, record_implicit_it_closure, lower_closure_body
 from lower_generics import GenericInstance, ProtoMethInst, proto_method_targ_tid, proto_inst_targ_count, proto_inst_targ_tid, proto_walk_expr, proto_walk_stmts, expand_meta_for_generics, expand_meta_for_stmt, expand_meta_for_expr, discover_generic_calls_expr, discover_generic_calls_stmt, discover_generic_calls_stmts, spanned_type_to_c_name, has_type_variable, compute_mangled_name, setup_type_subs, clear_type_subs, lower_generic_function, lower_generic_equip, spawn_type_base_name, collect_shared_vars, scan_spawn_wrappers, scan_expr_for_spawn, emit_named_closure_spawn_expr, emit_named_closure_spawn_stmts, substitute_type, extract_meta_op_suffix, discover_transitive_expr, discover_transitive_stmt, discover_transitive_stmts
 # Typed builtin-method declaration tables — the single source of truth
 # for the String-view / collection-owning-arg / String-return facts the
@@ -2721,6 +2721,20 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             if has_resource:
                 gmod.resource_types.put(mrinst.mangled_name.clone(), true)
 
+    # Snag #11: a registered (bodied) trait keeps its equip-symbol prefix BARE
+    # (Rust's vtable route); an UNREGISTERED trait (From/operators) carries the
+    # generic suffix. The authoritative `trait_defs` map is built later (~:2858),
+    # after this fn_sigs pre-pass, so scan the trait names up front here so the
+    # IEquip fn_sigs registration below spells the SAME symbol as the body
+    # (lower_equip_block). Mirrors that map's `tdef.name` keys.
+    Dict[String, bool] registered_trait_names = {}
+    for rtn_item in m.items:
+        match rtn_item:
+            case ITrait(rtn_tdef):
+                registered_trait_names.put(rtn_tdef.name.clone(), true)
+            else:
+                pass
+
     # Populate fn_sigs for non-generic functions using map_ast_type now that
     # gmod.type_table is accessible. Pre-scan only handled TPrimitive return
     # types; this pass captures TNamed (String, Vector[T], …).
@@ -2770,6 +2784,27 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                 if em_ret >= 0:
                                     String em_full = target_name + "__" + em.name
                                     gmod.fn_sigs.put(em_full, em_ret)
+                                    # Snag #11: a non-derive explicit trait equip
+                                    # (`equip BigErr with From[String]:`) emits its
+                                    # method body under the PREFIXED symbol (see
+                                    # lower_equip_block). Register that spelling too
+                                    # — BARE `Trait_for_Type__m` on the REGISTERED/
+                                    # vtable route, suffixed `Trait__<A>_for_Type__m`
+                                    # on the UNREGISTERED route (From/operators) —
+                                    # so the auto-prop From-conversion lookup
+                                    # (lower_match.gg maybe_emit_from_conversion)
+                                    # finds it. Mirrors the body mangling EXACTLY.
+                                    match ieqblk.trait_name:
+                                        case Some(etn):
+                                            bool em_is_derive = is_builtin_trait(etn) or is_iterator_protocol_trait(etn)
+                                            if not em_is_derive:
+                                                String em_trait = mangle_trait_name(etn)
+                                                if not registered_trait_names.contains(etn):
+                                                    em_trait = mangle_trait_equip_name(etn, ieqblk.trait_generic_args)
+                                                String em_pref = em_trait + "_for_" + target_name + "__" + em.name
+                                                gmod.fn_sigs.put(em_pref, em_ret)
+                                        case None:
+                                            pass
             else:
                 pass
 
@@ -3188,7 +3223,10 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                         if not is_simple_arg:
                                             needs_template = true
                         if needs_template:
-                            lower_equip_block(eqblk, &gmod)
+                            # Reached only under `not has_explicit_trait` (above) →
+                            # trait_name is None or a derive trait, never a bodied
+                            # registered TraitDef → unregistered route (Snag #11).
+                            lower_equip_block(eqblk, &gmod, false)
                 if not is_generic_equip:
                     # For explicit non-derive trait equip: split methods by whether
                     # they're in the trait's OWN vtable vs inherited from a parent.
@@ -3218,12 +3256,17 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                 # Emit own-vtable methods with Trait_for_Type naming
                                 if own_methods.len() > 0:
                                     EquipBlock own_eqblk = EquipBlock(eqblk.target, eqblk.type_params, eqblk.trait_name, own_methods, eqblk.via_field, eqblk.trait_generic_args)
-                                    lower_equip_block(own_eqblk, &gmod)
+                                    # did_split (`trait_defs.contains(tname)` true above)
+                                    # = Rust's REGISTERED/vtable route → BARE trait
+                                    # prefix, NO generic suffix (Snag #11).
+                                    lower_equip_block(own_eqblk, &gmod, true)
                                 # Emit inherited overrides with Type__ naming (no trait prefix)
                                 if inherited_methods.len() > 0:
                                     Option[String] inh_no_trait = None
                                     EquipBlock inh_eqblk = EquipBlock(eqblk.target, eqblk.type_params, inh_no_trait, inherited_methods, eqblk.via_field, eqblk.trait_generic_args)
-                                    lower_equip_block(inh_eqblk, &gmod)
+                                    # trait_name stripped to None → suffix branch
+                                    # unreachable; flag is moot (Snag #11).
+                                    lower_equip_block(inh_eqblk, &gmod, false)
                                 # Collect all overridden method names
                                 Dict[String, bool] overridden = {}
                                 for om in eqblk.methods:
@@ -3305,7 +3348,11 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         case None:
                             pass
                     if not did_split:
-                        lower_equip_block(eqblk, &gmod)
+                        # `not did_split` = NOT(non-derive registered TraitDef) →
+                        # the trait is derive (no suffix branch) or UNREGISTERED
+                        # (From/operators → carries the generic suffix). Either way
+                        # this is the unregistered route (Snag #11).
+                        lower_equip_block(eqblk, &gmod, false)
                         # Generate default trait methods not overridden by the equip
                         match eqblk.trait_name:
                             case Some(tname):
@@ -3362,7 +3409,11 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                                 stub_meths.push(via_meth)
                                                 Option[String] stub_via = None
                                                 EquipBlock stub_eqblk = EquipBlock(eqblk.target, eqblk.type_params, eqblk.trait_name, stub_meths, stub_via, eqblk.trait_generic_args)
-                                                lower_equip_block(stub_eqblk, &gmod)
+                                                # via-delegation stub for a registered
+                                                # trait (`trait_defs.contains(via_tname)`
+                                                # true above) = REGISTERED route → BARE
+                                                # prefix, no suffix (Snag #11).
+                                                lower_equip_block(stub_eqblk, &gmod, true)
                                                 via_done.put(via_meth.name.clone(), true)
                                 case None:
                                     pass

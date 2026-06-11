@@ -709,6 +709,95 @@ fn container_literal_arms_count() {
     );
 }
 
+/// Snag #11 sibling-guard ratchet (CLAUDE.md rule 4 / "Sibling-site drift")
+/// over the self-host trait-equip SYMBOL-MANGLE sites. The self-host mangles an
+/// equip method's symbol via TWO routes, mirroring Rust gg
+/// (`src/ir/lowering/traits.rs`):
+///   - REGISTERED/vtable (a bodied `TraitDef`, the `did_split` path): BARE
+///     `{trait}_for_{type}__method` via `mangle_trait_name` — NO generic suffix.
+///   - UNREGISTERED (From/operators — no bodied TraitDef): the generic suffix
+///     `{trait}__<arg>_for_{type}__method` via the CENTRALIZED
+///     `mangle_trait_equip_name` helper (`traits.rs:1614`).
+/// The unregistered route MUST go through `mangle_trait_equip_name` so the body
+/// symbol matches Rust + the auto-prop From-conversion lookup
+/// (`lower_match.gg maybe_emit_from_conversion`). A new equip-symbol site that
+/// hand-rolls the suffix (or forgets it) re-opens the snag #11 OOB-read class.
+///
+/// Two counts are pinned so a new site is forced through the shared helper/gate:
+///   (a) `mangle_trait_equip_name(` CALL sites — the unregistered-path mangle.
+///       Baseline 2026-06-11: 2 (lower_closures.gg site 1 body +
+///       lower.gg site 2 IEquip fn_sigs registration). The third occurrence is
+///       the `fn` definition in lower_closures.gg (excluded — it's a `String `
+///       return-typed signature line, not a call).
+///   (b) `lower_equip_block(` CALL sites — each must pass the
+///       `trait_is_registered` route flag so the gate inside picks BARE vs
+///       suffixed. Baseline 2026-06-11: 6 (5 in lower.gg + 1 in lower_generics.gg;
+///       the `void lower_equip_block(` definition in lower_closures.gg is
+///       excluded).
+///
+/// **If this fails:** you added/removed an equip-mangle site. For (a) a new
+/// unregistered-path mangle MUST call `mangle_trait_equip_name(tname, args)` —
+/// never inline `mangle_trait_name(...) + "__" + ...`. For (b) a new
+/// `lower_equip_block` caller MUST decide the route (`trait_is_registered` =
+/// `trait_defs.contains(tname)` at the call site). Then bump the matching
+/// baseline with a one-line justification.
+#[test]
+fn snag11_equip_symbol_mangle_site_count() {
+    const EXPECTED_HELPER_CALLS: usize = 2;
+    const EXPECTED_EQUIP_BLOCK_CALLS: usize = 6;
+
+    // Self-host lowerer source. lower.gg / lower_closures.gg / lower_generics.gg
+    // live ONLY in self_host_lowerer (not symlinked), so no double-count guard
+    // is needed here.
+    let files = [
+        "tests/fixtures/self_host_lowerer/lower.gg",
+        "tests/fixtures/self_host_lowerer/lower_closures.gg",
+        "tests/fixtures/self_host_lowerer/lower_generics.gg",
+    ];
+
+    let mut helper_calls = 0usize;
+    let mut equip_block_calls = 0usize;
+    for f in &files {
+        let content = fs::read_to_string(f).unwrap_or_default();
+        for line in content.lines() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("#") {
+                continue; // .gg comments
+            }
+            // (a) helper CALL sites — exclude the `fn` definition (a `String `
+            // return-typed signature, not a call expression).
+            if !trimmed.starts_with("String mangle_trait_equip_name(") {
+                helper_calls += line.matches("mangle_trait_equip_name(").count();
+            }
+            // (b) lower_equip_block CALL sites — exclude the `void` definition.
+            if !trimmed.starts_with("void lower_equip_block(") {
+                equip_block_calls += line.matches("lower_equip_block(").count();
+            }
+        }
+    }
+
+    assert_eq!(
+        helper_calls, EXPECTED_HELPER_CALLS,
+        "Self-host `mangle_trait_equip_name` CALL-site count changed: \
+         {helper_calls} vs {EXPECTED_HELPER_CALLS}.\n\n\
+         The UNREGISTERED trait-equip route (From/operators) must mangle its \
+         symbol through the centralized `mangle_trait_equip_name(tname, args)` \
+         helper so the body matches Rust gg + the auto-prop From lookup. Do NOT \
+         hand-roll the generic suffix. Bump EXPECTED_HELPER_CALLS only when you \
+         add/remove a genuine unregistered-path mangle site.",
+    );
+    assert_eq!(
+        equip_block_calls, EXPECTED_EQUIP_BLOCK_CALLS,
+        "Self-host `lower_equip_block` CALL-site count changed: \
+         {equip_block_calls} vs {EXPECTED_EQUIP_BLOCK_CALLS}.\n\n\
+         Every `lower_equip_block` caller MUST pass the `trait_is_registered` \
+         route flag (`trait_defs.contains(tname)` at the call site) so the gate \
+         inside picks BARE (registered/vtable) vs suffixed (unregistered). A new \
+         caller that omits the route decision re-opens the snag #11 mangling \
+         divergence. Bump EXPECTED_EQUIP_BLOCK_CALLS with a justification.",
+    );
+}
+
 /// Baseline 2026-05-10: 52 (after Phase A.1–A.4 + 12/N migrations).
 /// Bumped 52 → 69 (2026-05-12): MANGLED_PREFIXES extended with
 /// concurrency/atomic/threading prefixes (`AtomicInt`, `AtomicBool`,

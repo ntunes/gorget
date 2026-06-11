@@ -217,6 +217,28 @@ String mangle_trait_name(String raw):
         result = result + "__" + mangle_prim_type(current)
     return result
 
+# Snag #11 — the trait-equip symbol prefix for an UNREGISTERED trait impl
+# (`From`/`TryFrom`/`Default`/operators — traits with no bodied `TraitDef`).
+# Mirrors Rust gg's `mangle_trait_equip_name` (`src/ir/lowering/traits.rs:1614`):
+# the trait name carries a `__<arg>` GENERIC SUFFIX, one per trait generic arg
+# (`equip BigErr with From[String]:` → `From__GorgetString`), so the conversion
+# lookup at the auto-prop From site (lower_match.gg `maybe_emit_from_conversion`)
+# spells the same symbol. The parser stores the bare `"From"` in `trait_name`
+# with the args separate in `trait_generic_args` (parser.gg:~3596), so
+# `mangle_trait_name` alone (a bracketed-string parser) would drop them; append
+# them explicitly. Callers add the `_for_<target>__<method>` tail.
+#
+# CENTRALIZED so a new equip-symbol-mangle site routes through ONE helper (cf.
+# the site-count lint in tests/lints.rs). USE ON THE UNREGISTERED PATH ONLY: the
+# REGISTERED/vtable path (a bodied `TraitDef`, the `did_split` route in
+# lower.gg) keeps the trait name BARE — Rust's body/FnRef/global/`_VTable` all
+# stay `{trait}_for_{type}…` with NO suffix (`traits.rs:271/1011/1019/179`).
+String mangle_trait_equip_name(String tname, Vector[SpannedType] trait_generic_args):
+    String mangled = mangle_trait_name(tname)
+    for tga in trait_generic_args:
+        mangled = mangled + "__" + spanned_type_to_name(tga)
+    return mangled
+
 # ── Equip block lowering ─────────────────────────────────
 
 # Predicate: is this trait name a built-in derive-generated trait?
@@ -276,7 +298,13 @@ bool method_has_self(FunctionDef mdef):
         else:
             return false
 
-void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
+# `trait_is_registered` = the trait has a bodied `TraitDef` (the caller's
+# `trait_defs.contains(tname)`, mirroring Rust's REGISTERED/vtable path). On
+# that path the trait prefix stays BARE (`{trait}_for_{type}__method`) to match
+# Rust's body/FnRef/global mangling (`traits.rs:271/1011/1019`). On the
+# UNREGISTERED path (From/operators — no bodied TraitDef) the prefix carries the
+# generic suffix via `mangle_trait_equip_name` (`traits.rs:1614`). Snag #11.
+void lower_equip_block(EquipBlock eqblk, GirModule &gmod, bool trait_is_registered):
     # Get the target type name
     String target_name = type_to_c_name(eqblk.target, &gmod)
     int target_tid = lookup_or_register_named(&gmod, target_name)
@@ -294,7 +322,15 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
                 # (see is_iterator_protocol_trait).
                 bool is_derive = is_builtin_trait(tname) or is_iterator_protocol_trait(tname)
                 if not is_derive:
+                    # Snag #11: UNREGISTERED trait impls (no bodied TraitDef —
+                    # From/operators) carry the trait generic suffix so the body
+                    # symbol matches Rust gg + the auto-prop From-conversion
+                    # lookup (lower_match.gg). REGISTERED/vtable traits (the
+                    # caller's did_split route) keep the prefix BARE — Rust does
+                    # NOT suffix the registered path.
                     String mangled_trait = mangle_trait_name(tname)
+                    if not trait_is_registered:
+                        mangled_trait = mangle_trait_equip_name(tname, eqblk.trait_generic_args)
                     mangled = mangled_trait + "_for_" + target_name + "__" + mdef.name
             case None:
                 pass
