@@ -10,8 +10,12 @@ discarded). v4 corrects both compilers: throws-caller needs a NEW
 `func.throws_type.ty` via `ast_type_to_resolved`); Result-return caller derives
 caller-E from `current_return_type` args[1]. (Earlier folds, all verified PASS:
 two-chokepoints framing; reject-emit-at-decision-point; span-plumbing both
-compilers; named self-host resolver; parity baseline captured not dated.) NEEDS
-a fresh confirming pass (pass-3 raised reservations → cannot stop here).
+compilers; named self-host resolver; parity baseline captured not dated.)
+✅ REVIEW-CLEAN: pass-4 (fresh) SIGN OFF — the v4 caller-E correction verified
+accurate against source on all 4 items, whole-brief internally consistent, no
+stale remnant. 4 sequential fresh passes (6→4→2 reservations → clean). READY
+for the executor (QUEUED behind the lean-runtime work per owner priority — they
+collide on TODO/DONE + the self_host_lowerer dir + CPU; launch after it lands).
 Provenance: scout `agent-a65eb1d6506b83c2f` (GO; end-to-end-proven the Rust
 gate + both lowerings; corpus fallout = 0 → land-direct, no migration). Owner
 decision 2026-06-11: **SYMMETRIC** — both compilers REJECT and CONVERT
