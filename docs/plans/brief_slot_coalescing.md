@@ -4,8 +4,13 @@ Status: v1 (orchestrator draft from scout `agent-ae36233658b60182e`, GO, proven
 prototype `docs/plans/coalesce_slots_prototype.diff`, 2026-06-11). Owner chose
 the codegen route ("2 then 3"); the scout found Option 2 unsound for the SSA
 backend → **this is Option 3, the rustc-equivalent**, the only viable codegen
-fix. NEEDS ≥3 fresh brief-reviews before launch. Unblocks the plain-main revert
-(macOS fix for gorget-arena).
+fix. Unblocks the plain-main revert (macOS fix for gorget-arena). Pass-1 fold
+(fresh reviewer, core claims PASS, 3 reservations): EXACT-TYPE keying is
+PER-EMITTER (the self-host `decl_ctype` is a simpler subset, no CStr branch —
+don't key it on Rust's shape); `inst_uses` is a 57-arm enumerator = the SINGLE
+HIGHEST-RISK site (a missing operand → an uncatchable slot-aliasing clobber),
+port arm-for-arm vs Rust `Inst::uses()` + a 1:1 arm-count gate; line numbers
+drift (anchor by name). NEEDS a fresh confirming pass (pass-1 raised reservations).
 
 ## Mission
 Add liveness-based stack-slot coalescing to gg's SSA→C emitter so the self-host
@@ -50,10 +55,17 @@ block-live-sets are provably disjoint).
    deterministic ordered grouping: sort the C-decl-type keys, iterate value ids
    ASCENDING, assign slots in that fixed order. Verify by emitting the same
    fixture twice → byte-identical.
-2. **EXACT-TYPE keying.** Coalesce only values whose EXACT C-decl-type string
-   matches (incl. the `CStr → const char*` and `void → void*` special cases at
-   `c_lir/mod.rs:~1936-1953`), so two slot-sharing values declare identically.
-   The prototype's `coalesce_assign_exact` does this — keep it.
+2. **EXACT-TYPE keying — PER-EMITTER, NOT symmetric.** Coalesce only values
+   whose EXACT C-decl-type string matches — but **each emitter must key on ITS
+   OWN `decl_ctype`** (the exact string it emits at its own value-decl site):
+   Rust `c_lir/mod.rs` value-decl loop (~`:1915-1947`, incl. the `CStr → const
+   char*` ~`:1927` and `void → void*` ~`:1934` specials); the self-host
+   `lir_codegen.gg` value-decl loop (~`:4917-4936`) is a SIMPLER SUBSET (only
+   `void*` or `c_type_name(...)` — NO CStr branch today). Do NOT key the
+   self-host coalescing on the Rust decl-ctype shape — it would split values the
+   self-host declares identically (lost yield) or key them wrong. The
+   prototype's `coalesce_assign_exact` does this for Rust — keep it; the
+   self-host port keys on the self-host decl loop's own ctype.
 
 ## Both-emitter symmetry
 - Rust: `c_lir/mod.rs` (prototype lives here). Determinism recommended (Rust
@@ -61,12 +73,23 @@ block-live-sets are provably disjoint).
   pre-existing wart, not introduced here — but don't make it worse).
 - Self-host: `lir_codegen.gg` value-decl loop ~`:4917`. The self-host has the
   CFG infra (`lir_ssa.gg:~46/127` `compute_predecessors`/`term_successors`) but
-  needs an inst-`uses()` enumerator ADDED (it currently only has `inst_dst()`
-  ~`lir_codegen.gg:2830`) — mechanical, ~1 helper. The self-host coalescing MUST
-  be deterministic (it's what `fixed_point` exercises) and should run the SAME
+  needs an inst-`uses()` enumerator ADDED (it has `inst_dst()` ~`:2830` but no
+  uses). ⚠ **This is the SINGLE HIGHEST-RISK site in the task — NOT "~1
+  mechanical helper":** `inst_dst` is a 57-variant match, and the parallel
+  `inst_uses` must enumerate EVERY operand value-id in EVERY arm — a SINGLE
+  missing operand → an under-live range → a slot-aliasing CLOBBER that
+  `c_emit_comparison` AND the emit-diff CANNOT catch (only the RUN gate would).
+  The self-host `LirInst` is POSITIONAL (`ICall(dst, fid, args)`) vs Rust's
+  named-field structs, so it CANNOT be copied blindly — port it ARM-FOR-ARM
+  against the Rust gold reference `Inst::uses()` (`src/lir/mod.rs:~1099`),
+  reading each self-host variant's operand POSITIONS from the `lir.gg` decl (NOT
+  Rust field names). GATE: cross-check the `inst_uses` ↔ `Inst::uses()` arm set
+  1:1 (add an arm-count lint, per "fix the class"). The self-host coalescing
+  MUST be deterministic (it's what `fixed_point` exercises) and runs the SAME
   algorithm as Rust (clean symmetric port).
 - ⚠ `c_emit_comparison` is BLIND to this change (it counts only `user_fn_count`
-  = function-body `) {` openers, `tests/integration.rs:~13995`, NOT local
+  = function-body `) {` openers, `tests/integration.rs` ~`:14030` — re-grep by
+  name, all cited line numbers drift, NOT local
   declarations) → it stays matched trivially. **The real symmetry/correctness
   gate is `fixed_point` byte-identity** (the self-host emitter's determinism +
   self-consistency) — NOT c_emit_comparison.
