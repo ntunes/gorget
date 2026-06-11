@@ -1,11 +1,27 @@
 # BRIEF — Chain E: enable the #37 Phase-2 default flip (Fix A + Fix B + flip)
 
-Status: v1 (orchestrator draft from scout report 2026-06-11; scout worktree
-`agent-a07fcfddc870f61c5`; artifacts rescued to
-`docs/plans/chainE_artifacts/` — `strip_dead_decls.py` is the run-proven
-Fix-A simulation, `measurements.log` carries every number + command,
-`scout_stage1.sh` is the stage-1 repro harness, `bp_check.py` the
-edge/param checker that refuted the corruption theory).
+Status: v2 (pass-1 review folded 2026-06-11: Fix-A "referenced" derivation
+pinned to EMITTED-BODY scanning — the typed-walker alternative cannot see
+block-param head copies, terminator args, slots, InlineC-rewritten locals,
+or cleanup glue [R1]; reuse Rust's existing `Inst::dst()`/`uses()` + add a
+`slots()` sibling rather than a fourth walker; the self-host pairing lint
+requires rewriting `substitute_inst`'s silent else into explicit arms [R2];
+LLVM's own `@main` named as the third main-emission site [R3]; pthread
+include+link made UNCONDITIONAL in `gg build` — today gated on
+std.async/has_spawn, and the harness's own `-lpthread` would MASK the break
+[R4]; the stack guard pins RLIMIT_STACK in-test (post-Fix-B pthread stacks
+are mmap'd → PASS-after deterministic) [R5]; the run_gg guard leg is
+RUNTIME deep recursion, not a concat chain (which stresses the compiler,
+not the program) [R6]; the false-record comment at `lower.gg:1524-1532` and
+the lock-in test's env/comments updated at flip [R7]; fixed_point runs SOLO
+— its stage deadlines are HARDCODED 600s, the env knob doesn't reach them
+[R8]; cross-chain contention stated precisely [R9]; counts not ratios
+[R10]. Pass 1 RE-PROVED the stack-cliff causality BOTH directions
+(`ulimit -s 11000` kills the green baseline; 12500 passes), the frame size
+to the byte (230,976B), the strip end-to-end (124,206 decls elided,
+stage-2 byte-identical), and the Fix-C structural 11x. v1 was the
+orchestrator draft from scout `agent-a07fcfddc870f61c5`; artifacts at
+`docs/plans/chainE_artifacts/`.)
 
 ## Mission
 
@@ -22,8 +38,10 @@ root cause; Fix C (below) gets its own HIGH entry.
 
 ## Scout ground truth (all measured 2026-06-11; commands in measurements.log)
 
-- Stack math: emitted `lower_expr_inner` frame at -O0 = 230,976B (~14,000
-  function-scope C locals; 29% of `__v` and 58% of `__s` decls DEAD);
+- Stack math: emitted `lower_expr_inner` frame at -O0 = 230,976B
+  (pass-1-verified to the byte; ~14,000 function-scope C locals; DEAD decl
+  COUNTS [p1-R10 — carry counts, not ratios]: 3,140 `__v` + 1,902 `__s`
+  self-host, 6,308 Rust-emitted);
   legitimate ~51-deep `lower_expr↔lower_expr_inner` recursion from the
   51-term `+` concat chain at `derive.gg:172`; 51 × ~231KB ≈ 11.8MB vs
   12.2MB ulimit. ANY +960B crashes; the 2 lazy binds in `lower_expr_inner`
@@ -48,32 +66,60 @@ root cause; Fix C (below) gets its own HIGH entry.
 ## The work
 
 ### W1 — Fix A: dead-decl elision in BOTH emitters (the flip enabler)
-In `lir_codegen.gg emit_function` (self-host) and the Rust twin
-(`src/backend/c_lir`, same disease — 6,308/15,691 dead decls): declare only
-`__v` ids and `__s` slots actually REFERENCED in the emitted body, not
-`0..max_val`. Per devbook/24 rule 3: derive "referenced" from ONE shared
-typed operand enumerator — add `lir_inst_operands` (or equivalent) to
-`lir.gg`/`src/lir`, shared with `lir_ssa`'s `substitute_inst`
-walker, and add an arm-count lint pairing the two (a new LIR instruction
-arm added to one walker must fail the suite until added to both).
-`docs/plans/chainE_artifacts/strip_dead_decls.py` is the exact semantics to
-reproduce (it ran the proofs). Gates: fixed_point (eager) GREEN; full
+In `lir_codegen.gg emit_function` (self-host, decls at `:4803-4853`) and
+the Rust twin (`src/backend/c_lir/mod.rs:1706-1765`, same disease — 6,308
+dead decls): declare only `__v` ids and `__s` slots actually REFERENCED,
+not `0..max_val`. ⚠ [p1-R1, the load-bearing spec point] "REFERENCED" is
+derived from the **EMITTED BODY** — emit the blocks to a side buffer, scan
+for `__v`/`__s` tokens, then emit decls + buffer (the prototype's PROVEN
+semantics, `chainE_artifacts/strip_dead_decls.py`). A typed inst-operand
+walker is INSUFFICIENT and would FALSE-ELIDE needed decls: it cannot see
+(a) block-param head copies `__vN = __bpN` (`mod.rs:1855` /
+`lir_codegen.gg:4915`), (b) terminator-arg copies/returns
+(`lir_codegen.gg:4717-4739`, `mod.rs:3032`), (c) slots (SlotLoad/SlotStore/
+SlotAddr/MoveSlot/ClosurePack carry them; `substitute_inst` substitutes
+ValueIds only), (d) InlineC-rewritten locals (`mod.rs:2919-2935` →
+`rewrite_inline_c_locals`; the protective dummy SlotAddrs are DCE-bait —
+latent, no live callers, but the emit arm is live), (e) test-cleanup glue
+(`helpers.rs:1959/1969/1976`). If an enumerator-based derivation is ever
+preferred later, its contract must cover ALL FIVE — file that as a note,
+implement body-scan now. [p1-R2] On the Rust side REUSE the existing
+`Inst::dst()` (`src/lir/mod.rs:1031`) / `Inst::uses()` (~`:1099`) if any
+typed support is needed — do NOT add a fourth walker. The self-host
+arm-count pairing lint (new LIR arm must hit both `substitute_inst` and any
+shared enumerator) requires first rewriting `substitute_inst`'s silent
+`else: return inst` into explicit arms. Gates: fixed_point (eager) GREEN; full
 gate-OFF byte-identity is NOT expected (decl lines vanish) — instead gate on
 fixed_point + `self_host_runtime` 0-regress + comparisons baseline-relative
 + the full lazy gated battery + frame-size measurement (report
 `lower_expr_inner` frame before/after via the scout's method).
 
 ### W2 — Fix B: big-stack main runner + the executable guard
-Both backends' emitted `main` (`src/backend/c_lir/mod.rs:1064`;
-`lir_codegen.gg` main arm): run the program body on a thread with a large
-explicit stack reserve (pthread, e.g. 64MB; keep the shape minimal and
-identical in both emitters). This is the CLASS fix — recursion depth scales
-with user-program expression nesting, and the bootstrap must not depend on
-host ulimits (a stock 8MB kills today's GREEN stage-0). Guard per CLAUDE.md
-rule 6: a ~200-term concat-chain fixture compiled through the SELF-HOST
-driver (the `self_host_emit_cc_run` route) that crashes pre-Fix-B on an
-8MB-equivalent budget and passes post — plus the same fixture as a plain
-Rust-gg `run_gg` test. Gates: fixed_point, runtime net, the new guard.
+THREE main-emission sites [p1-R3]: `src/backend/c_lir/mod.rs:1062+`,
+`lir_codegen.gg:4754`, AND the LLVM backend's own `define i32 @main`
+(`src/backend/llvm/mod.rs:2154-2157`) — fix all three or explicitly scope
+LLVM out with a TODO + the GG_BACKEND=llvm-sweep implication stated. Shape:
+run the program body on a pthread with a large explicit stack reserve
+(e.g. 64MB), minimal and identical across emitters. ⚠ [p1-R4
+build-breaker]: pthread include+link is CONDITIONAL today (`-lpthread`
+gated on `std.async`/`has_spawn` — `src/main.rs:874/1120`,
+`add_thread_flags :206`; the preamble has no `<pthread.h>` for non-spawn
+programs, `c_runtime.rs:68`). Fix B MUST make both UNCONDITIONAL in the
+`gg build` path — otherwise every non-async program link-fails while the
+TEST HARNESS (which already passes `-lpthread`, `integration.rs:14099/
+14246`) stays green and MASKS it; verify with a bare `gg build hello.gg`
+outside the harness. This is the CLASS fix — recursion depth scales with
+user-program nesting, and the bootstrap must not depend on host ulimits (a
+stock 8MB kills today's GREEN stage-0). Guards per CLAUDE.md rule 6, BOTH
+deterministic [p1-R5/R6]: (i) the ~200-term concat-chain fixture through
+the SELF-HOST route (`self_host_emit_cc_run`) — this stresses the
+COMPILER's recursion — run under a PINNED budget
+(`bash -c 'ulimit -s 8192; exec …'` or setrlimit in the runner): FAILS
+pre-Fix-B, PASSES post (pthread stacks are mmap'd, not RLIMIT_STACK-bound
+→ deterministic); (ii) the `run_gg` leg is a RUNTIME-deep-recursion
+fixture (a recursive Gorget fn whose depth × frame exceeds the pinned
+budget) — a concat chain is VACUOUS there (the emitted C evaluates it in
+one frame). Gates: fixed_point, runtime net, both guards both ways.
 
 ### W3 — the flip + bookkeeping
 Remove the `cow_lazy_enabled()` conjunct (`lower.gg:1344` area; re-grep).
@@ -88,7 +134,12 @@ multiplier produced the 7x myth); self-compile RSS vs Step-0. Docs:
 devbook/11 §Phase-2 updated to DEFAULT (remove the env-gated framing),
 language-design §23 parenthetical removed (`bb338f10` added it), devbook/11
 gains the stack-cliff + measurement-hygiene lessons (sequential timing;
-ulimit-dependence). TODO/DONE: move the two blocker entries + the
+ulimit-dependence). [p1-R7] ALSO: rewrite the now-false-record comment at
+`lower.gg:1524-1532` ("MISCOMPILED by the self-host… See TODO" — refuted;
+the true rationale is that out-of-line keeps the cliff-critical frame
+small) and update the lock-in test's `.env("GG_COW_LAZY","1")` + comments
+(`integration.rs:23141-23259`) to default-behavior framing when the gate is
+removed. TODO/DONE: move the two blocker entries + the
 miscompile-class entry to DONE with the corrected root cause (they were
 refuted/superseded — never leave refuted diagnoses in TODO); ADD Fix C
 (HIGH, the clone-bomb, with the scout's numbers + file:line); keep the
@@ -99,9 +150,11 @@ GG_COW_LAZY env-var REMOVED from the code (no dead gates).
    table, RSS baseline, frame-size baseline.
 1. Per-commit: lib + lints (10) + targeted fixtures; W1 also fixed_point.
 2. W2: fixed_point + the new stack guard both routes.
-3. W3 flipped: fixed_point GREEN (GG_BUILD_TIMEOUT_SECS=900 first run),
-   runtime net, runtime_diff, battery, ASan, sequential emission timing,
-   RSS.
+3. W3 flipped: fixed_point GREEN — run it SOLO [p1-R8]: its stage-emission
+   deadlines are HARDCODED 600s (`integration.rs:14058/14218/14259/14340`),
+   the env knob does not reach them, and the flip's ~11% on a ~350s
+   emission fits solo but NOT under parallel-cargo thrash; runtime net,
+   runtime_diff, battery, ASan, sequential emission timing, RSS.
 4. LLVM spot-checks: stdout parity only (sanitize is dropped on LLVM —
    known).
 5. Final: full integration suite on the executor tree.
@@ -112,8 +165,13 @@ premises with fresh evidence. File zone: `tests/fixtures/self_host_lowerer/
 {lir_codegen.gg,lir.gg,lir_ssa.gg,lower.gg}`, `src/backend/c_lir/`,
 `src/lir/` (the Rust walker), `tests/lints.rs` (the arm-count pairing lint),
 new fixtures, `tests/integration.rs` (append), devbook/11,
-language-design.md, TODO.md, DONE.md. Chains C/D are PARKED (C touches
-`src/lir/lower/` — different files than the Rust walker zone; the parent
-serializes if both run). Commit order: W1 → W2 → W3 (each gated). Messages
+language-design.md, TODO.md, DONE.md, `src/main.rs` (the R4 unconditional
+pthread link) + `src/backend/c/c_runtime.rs` (the include). [p1-R9]
+Cross-chain precision: any Rust-side typed support lands in
+`src/lir/mod.rs` (the `dst()`/`uses()` home) — DISJOINT from parked Chain
+C's `src/lir/lower/{operands,insts}.rs`+`optimize.rs` and Chain D's
+`src/lir/lower/` + `src/main.rs:~1162`; the REAL contention with C/D is
+`tests/integration.rs` appends + `src/main.rs` + TODO/DONE — the parent
+merges/serializes at integration (D before C per the standing order). Commit order: W1 → W2 → W3 (each gated). Messages
 cite this brief + the scout; Co-Authored-By trailer. Line numbers are
 scout-fresh at `814f6857` — re-grep.
