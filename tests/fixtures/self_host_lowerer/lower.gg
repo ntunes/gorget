@@ -4,7 +4,6 @@
 
 from std.collections import Vector, Dict
 from std.conv import int_to_str, float_to_str
-from std.os import getenv
 from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch, EquipBlock, StructDef, EnumDef, EnumVariant, Type, MatchArm
 from scope import ScopeTable, DefInfo
 from types import TypeTable, ResolvedType
@@ -220,12 +219,6 @@ struct LazyMember:
     int slot_type
     String clone_fn
     bool stmt_scoped
-
-# #37 Phase 2 gate: the lazy mechanism is env-gated while the port
-# stabilizes; GG_COW_LAZY=1 turns it on. The default flip (W3) removes
-# this gate.
-bool cow_lazy_enabled():
-    return getenv("GG_COW_LAZY") == "1"
 
 struct LowerCtx:
     Vector[GirLocal] locals
@@ -1341,7 +1334,7 @@ SVarDeclEmission decide_svardecl_emission(LowerCtx &ctx, GirModule &gmod, int va
                     #     deep-copy clone fn (pointee_clone_fn →
                     #     clone_to_owned); presence is the eligibility
                     #     axis only.
-                    if cow_lazy_enabled() and source_root != "" and cow_pristine_after(&ctx, bound_name, bind_pos) and (not ctx.cow_closure_mutated.contains(source_root)) and (not ctx.cow_moved_names.contains(source_root)):
+                    if source_root != "" and cow_pristine_after(&ctx, bound_name, bind_pos) and (not ctx.cow_closure_mutated.contains(source_root)) and (not ctx.cow_moved_names.contains(source_root)):
                         match resource_meta_for(&gmod, pointee_tname):
                             case Some(lv_meta):
                                 match lv_meta.materialize_fn:
@@ -1522,14 +1515,17 @@ void cow_lazy_materialize_slot(LowerCtx &ctx, int slot):
 # so the call site can apply the typed drop override
 # (register_lazy_slot_for_drop) to the joined slot.
 #
-# ⚠ Lives HERE as a standalone helper, not inline at the lower_expr.gg
-# tag site: the while+`.get(i).unwrap()` struct-borrow-bind shape is
-# MISCOMPILED by the self-host when emitted inside the deeply nested
-# EMethodCall arm of lower_expr_inner (block-param threading of the
-# containing function breaks; bootstrap stage-1 then corrupts and
-# crashes) — the identical shape in a small top-level function compiles
-# and runs correctly self-host-compiled. See TODO "self-host miscompile:
-# loop+struct-borrow-bind in deeply nested arms".
+# Lives HERE as a standalone helper, not inline at the lower_expr.gg
+# tag site: lower_expr_inner is the CLIFF-CRITICAL frame of the
+# bootstrap's deepest recursion (lower_expr <-> lower_expr_inner on long
+# concat chains), and at -O0 every function-scope C local costs frame
+# bytes — inlining this loop's locals there once pushed the frame over
+# the stack cliff and crashed stage-1. That crash was originally
+# misdiagnosed as a block-param-threading MISCOMPILE; the Chain-E scout
+# REFUTED that (0 bp-edge mismatches; output byte-identical under a
+# raised ulimit — a pure stack-capacity cliff, since closed by dead-decl
+# elision [Fix A] + the 64MB pthread main [Fix B]). Out-of-line remains
+# the right shape: it keeps the hot frame small.
 bool cow_lazy_join_view_result(LowerCtx &ctx, int recv_slot, int result_slot, int result_type):
     int lzj_i = 0
     int lzj_n = ctx.cow_lazy_members.len()

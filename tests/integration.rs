@@ -23141,14 +23141,15 @@ fn cow_lazy_method_arg() {
 // docs/language-design.md) lowers eligible String-element binds as a cap=0
 // borrow_view slot + materialized-flag, materialized in place at mutation
 // sites of the source family (devbook/11 §Phase 2 has the (scan arm ×
-// lowering position) table). Currently env-gated (GG_COW_LAZY=1): the
-// DEFAULT flip is BLOCKED on two run-proven at-scale findings — the lazy
-// self-compile bootstrap corrupts stage-1 and the lazy emission of
-// driver.gg is ~7x slower (TODO "#37 Phase 2 default flip BLOCKED").
+// lowering position) table). The mechanism is the self-host DEFAULT since
+// the #37 flip — the two recorded flip "blockers" were REFUTED by the
+// Chain-E scout (a stack-capacity cliff, closed by Fix A dead-decl elision
+// + Fix B's 64MB pthread main, and a parallel-cargo measurement artifact —
+// not a 7x slowdown; see devbook/11 §Phase 2).
 
 /// Beats-Rust delta, DEAD path: alias of a lazy member + never-taken
 /// mutation = 0 executed clones through the self-host lazy path
-/// (GG_COW_LAZY=1; Rust Phase 1 pays 1). Output is mode-independent —
+/// (the default since the #37 flip; Rust Phase 1 pays 1). Output is mode-independent —
 /// Rust-oracle.
 #[test]
 fn cow_lazy_d1_alias_deadpath() {
@@ -23160,7 +23161,7 @@ fn cow_lazy_d1_alias_deadpath() {
 
 /// Beats-Rust delta, TAKEN path: the family materializes exactly once at
 /// the mutation site = 1 executed clone through the self-host lazy path
-/// (GG_COW_LAZY=1; Rust Phase 1: 1). Output is mode-independent —
+/// (the default since the #37 flip; Rust Phase 1: 1). Output is mode-independent —
 /// Rust-oracle.
 #[test]
 fn cow_lazy_d1_alias_takenpath() {
@@ -23242,10 +23243,8 @@ fn cow_lazy_move_reassign_self_host() {
 /// Unlike the Rust twin there is NO textual-order assert: the self-host's
 /// block layout legitimately places the bind's basic block AFTER the guard
 /// block in the C text (the bind still dominates the guard in control flow).
-/// The lazy path is driven explicitly via GG_COW_LAZY=1 — the self-host
-/// DEFAULT flip is BLOCKED on two run-proven at-scale findings (see TODO
-/// "#37 Phase 2 default flip BLOCKED"); this test keeps the gated mechanism
-/// honest until the flip lands.
+/// Lazy is the self-host DEFAULT since the #37 flip — no env gate; this
+/// test keeps the default-path clone shape honest.
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn witness_never_self_host_emitted_c_clone_shape() {
@@ -23259,7 +23258,6 @@ fn witness_never_self_host_emitted_c_clone_shape() {
     let fixture = manifest_dir.join("tests/fixtures/witness_never.gg");
     let emit = run_with_timeout(
         Command::new(&driver_exe)
-            .env("GG_COW_LAZY", "1")
             .arg(&fixture)
             .arg(&lib_dir)
             .arg("--emit-c")

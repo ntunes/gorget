@@ -540,16 +540,10 @@ only in `src/backend/`.
 The self-host's lowering for a lazy-eligible String-element bind is
 **provenance-direct** — the documented `ViewOf(source)` design from
 `docs/language-design.md` §23, implemented literally rather than through
-Rust Phase 1's four per-read-site materialize hooks. ⚠ Currently
-**env-gated (`GG_COW_LAZY=1`)**: the default flip is BLOCKED on two
-run-proven at-scale findings — the fully-lazy self-compile bootstrap
-corrupts stage-1 (stack-overflow in `lower_expr_inner`; small fixtures
-incl. the join shapes stay oracle-exact through the SAME lazy-lowered
-binary) and the lazy emission of `driver.gg` is ~7x slower than eager
-(~363s vs ~50s; suspected per-mutation-site guard-block growth in giant
-functions). Both are filed HIGH in TODO ("#37 Phase 2 default flip
-BLOCKED") with repro commands. Everything below describes the gate-ON
-behavior, which the lock-in tests drive explicitly. The bind becomes
+Rust Phase 1's four per-read-site materialize hooks. It is the
+**self-host DEFAULT** (the #37 flip removed the transitional
+`GG_COW_LAZY` gate; both recorded "flip blockers" were refuted — see
+"The stack cliff" below). The bind becomes
 a cap=0 `gorget_string_borrow_view` VALUE slot plus a materialized-flag bool
 (`LazyViewBind` in `decide_svardecl_emission` → the emission arm in
 `lower_stmt.gg`), the pair recorded as a `LazyMember{root, slot, flag,
@@ -576,11 +570,11 @@ copy a view header out of the slot each have one JOIN:
   Covers the `cow_lazy_w3b_*` shapes (view-temp arg / concat operand
   computed before a mutating call in the same statement). The join's loop
   lives in the standalone helper `cow_lazy_join_view_result` (`lower.gg`),
-  NOT inline at the tag site — inlining a `while` +
-  `.get(i).unwrap()` struct-borrow-bind into `lower_expr_inner`'s deeply
-  nested arm trips a self-host miscompile (block-param threading of the
-  containing function breaks; the bootstrap stage-1 binary then corrupts) —
-  see the TODO entry "SELF-HOST MISCOMPILE CLASS".
+  NOT inline at the tag site — `lower_expr_inner` is the cliff-critical
+  frame of the bootstrap's deepest recursion, and inlining the loop's
+  locals there once pushed its -O0 frame over the stack cliff (originally
+  misdiagnosed as a block-param-threading miscompile; refuted — see "The
+  stack cliff" below). Out-of-line keeps the hot frame small.
 - **for-string source** (join b, `lower_for_string` entry): the loop's
   per-iteration codepoint views alias the source buffer for the whole loop,
   so a lazy source materializes AT LOOP ENTRY (`cow_lazy_materialize_slot`,
@@ -647,8 +641,41 @@ pays at all; `cow_lazy_d1_alias_takenpath` 1 vs 1 (parity). Witness family:
 0/1/0 (never/taken/cond-straightline), matching Rust. The emitted-C shape
 is locked in by `witness_never_self_host_emitted_c_clone_shape`
 (borrow_view bind + exactly one dynamically-dead guarded `clone_to_owned`
-in main, driven via `GG_COW_LAZY=1`), mirroring the Rust-side
+in the user-main body, on the default path), mirroring the Rust-side
 `witness_never_emitted_c_clone_shape`.
+
+**The stack cliff — how the default flip was un-blocked.** Two
+at-scale findings blocked the flip when Phase 2 landed; both were
+REFUTED by the Chain-E scout
+(`docs/plans/brief_37_flip_enable.md` + `chainE_artifacts/`):
+
+1. *"The fully-lazy bootstrap corrupts stage-1"* was a pure
+   STACK-CAPACITY CLIFF, not a miscompile: the bootstrap's deepest
+   recursion (~51 levels of `lower_expr` ↔ `lower_expr_inner` lowering
+   `derive.gg`'s 51-term `+` chain, ~226KB/frame at -O0) consumed
+   ~11.8MB of a 12.2MB host ulimit. ANY +960B of frame crossed the
+   cliff; the 2 lazy binds in `lower_expr_inner` added +9KB. Under a
+   raised ulimit every "corrupt" variant ran green with BYTE-IDENTICAL
+   output, and `ulimit -s 11000` killed the GREEN eager baseline —
+   causality both ways. Closed structurally by **Fix A** (dead-decl
+   elision via emitted-body scan in both C emitters — ~124K dead decls
+   module-wide; the `__v`-decl set used to be `0..max_val` regardless of
+   use) and **Fix B** (the NATIVE pthread main runner: the program body
+   runs on a pthread with a 64MB explicit stack reserve — mmap'd, not
+   RLIMIT_STACK-bound — so neither the compiler nor produced binaries
+   depend on host ulimits; `stack_guard_*` tests pin an 8MB budget and
+   prove it both ways).
+2. *"~7x lazy-emission slowdown"* did not reproduce under controlled
+   conditions: sequential, idle-box timing pairs measured 1.11x at -O2
+   and 0.98x at -O0. The 363s-vs-50s figure compared a lazy run under
+   parallel-cargo CPU thrash (the documented 4-8x wall multiplier)
+   against an idle eager baseline.
+
+**Measurement hygiene lessons** (both cost a full diagnosis cycle):
+emission timings are only comparable SEQUENTIAL ON AN IDLE BOX — never
+under parallel cargo; and any bootstrap-scale conclusion must state the
+stack ulimit it was measured under (the bootstrap silently depended on a
+raised `ulimit -s` for months — the guard tests now pin it).
 
 **ASan is NOT the safety net here either** — the same warning as Phase 1:
 the D1 wrong-output class and the view-UAF classes are proven ASan-silent.

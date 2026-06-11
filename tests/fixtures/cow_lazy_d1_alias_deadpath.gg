@@ -2,8 +2,8 @@
 # source mutation on a never-taken branch. Provenance-by-slot-aliasing means
 # the alias derefs the member's SLOT at read time, so neither the bind nor
 # the alias pays a clone, and the guarded materialize on the dead branch
-# never executes: 0 executed clones via the self-host lazy path
-# (GG_COW_LAZY=1), vs 1 through Rust Phase 1's W3a read hook.
+# never executes: 0 executed clones via the self-host lazy path (the
+# default since the #37 flip), vs 1 through Rust Phase 1's W3a read hook.
 # Output is mode-independent (Rust oracle).
 void main():
     Vector[String] v = ["hello", "world"]
