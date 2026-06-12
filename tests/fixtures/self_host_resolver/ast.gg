@@ -165,6 +165,7 @@ struct Param:
     SpannedType param_type
     String param_name
     int ownership
+    Option[SpannedExpr] default_value
 
 struct FunctionDef:
     String name

@@ -2996,6 +2996,56 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                     gir_args.push(op_consume(&ctx, &gmod, arg_local, CkFieldWrite()))
                 else:
                     gir_args.push(op_consume(&ctx, &gmod, arg_local, classify_call_arg(&gmod, call_name, ai)))
+        # P0 default-arg FILL: an explicit call may leave trailing param slots
+        # unsupplied. For each such slot whose declared param has a parsed
+        # default expr (`fn_defaults[call_name][idx]`), lower the default with
+        # the param's expected type and APPEND its operand to `gir_args` —
+        # routing through the SAME expected-type + op_consume path the arg loop
+        # uses above. Mirrors Rust gg's trailing-slot fill in `resolve_call_args`
+        # (`src/ir/lowering/exprs/calls.rs:386-445`) reading `ctx.fn_defaults`.
+        # APPEND-only (the loop already pushed the explicit args) — no mutation
+        # of `args`. Keyed on the redirect-resolved `call_name`; the
+        # template-name `fname` is the fallback for a mono'd call whose mangled
+        # name isn't itself registered (defaults live under the template name).
+        if args.len() < callee_param_types.len():
+            Vector[Option[SpannedExpr]] call_defaults = []
+            if gmod.fn_defaults.contains(call_name):
+                call_defaults = gmod.fn_defaults.get(call_name).unwrap()
+            elif gmod.fn_defaults.contains(fname):
+                call_defaults = gmod.fn_defaults.get(fname).unwrap()
+            int df_idx = args.len()
+            while df_idx < callee_param_types.len():
+                if df_idx < call_defaults.len():
+                    Option[SpannedExpr] df_opt = call_defaults.get(df_idx).unwrap()
+                    match df_opt:
+                        case Some(df_expr):
+                            # Container-size hint for a ctor default arg.
+                            apply_container_hint_for_ctor_arg(&ctx, call_name, df_idx, df_expr, &gmod)
+                            # Expected-type = the param's declared type, peeling
+                            # the by-pointer ABI wrapper exactly as the arg loop.
+                            int df_prev_expected = ctx.expected_type
+                            ctx.expected_type = -1
+                            int df_pt = callee_param_types.get(df_idx).unwrap()
+                            if df_pt >= PRIM_COUNT and df_pt < gmod.type_table.len():
+                                match gmod.type_table.get(df_pt).unwrap():
+                                    case GtPtr(df_pt_inner):
+                                        df_pt = df_pt_inner
+                                    else:
+                                        pass
+                            if df_pt != I64_TYPE and df_pt != UNIT_TYPE:
+                                ctx.expected_type = df_pt
+                            int df_local = lower_expr(&ctx, df_expr, &gmod)
+                            ctx.expected_type = df_prev_expected
+                            bool df_param_is_result = enum_category_of(&gmod, callee_param_types.get(df_idx).unwrap()).category == ENUM_CAT_RESULT
+                            if not df_param_is_result:
+                                df_local = maybe_auto_propagate(&ctx, df_local, &gmod)
+                            if is_ctor_call:
+                                gir_args.push(op_consume(&ctx, &gmod, df_local, CkFieldWrite()))
+                            else:
+                                gir_args.push(op_consume(&ctx, &gmod, df_local, classify_call_arg(&gmod, call_name, df_idx)))
+                        else:
+                            pass
+                df_idx += 1
         # Look up return type from module's fn_sigs, or from function definitions
         int ret_type = I64_TYPE
         # Expected-type read for bare prelude-variant ctors (Rust gg's

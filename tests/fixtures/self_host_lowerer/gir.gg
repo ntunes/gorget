@@ -3,7 +3,7 @@
 
 from std.collections import Vector, Dict
 from std.conv import int_to_str
-from ast import Stmt
+from ast import Stmt, SpannedExpr
 from types import TypeTable
 from scope import ScopeTable
 from compiler.data.schema import ResourceMetadata
@@ -585,6 +585,17 @@ struct GirModule:
     # not emit-status, so a fresh set is needed). Appended AT END to avoid
     # shifting positional ctor call sites.
     Dict[String, bool] emitted_fns
+    # P0 default-arg fill: per-fn, the parsed default expression for each
+    # param (None if the param has no default). Parallel to fn_borrow_params /
+    # fn_move_params, registered at every `.put` sibling in the pre-scan +
+    # mono'd-ctor + equip-short-key paths. The call-site fill in
+    # lower_call (lower_expr.gg) reads `fn_defaults[call_name][idx]` for the
+    # trailing param slots an explicit call left unfilled and lowers the
+    # default expr with the param's expected type. Mirrors Rust gg's
+    # `ctx.fn_defaults` (`src/ir/lowering/mod.rs:680-688`) read by
+    # `resolve_call_args` (`src/ir/lowering/exprs/calls.rs:386-445`). Appended
+    # AT END to avoid shifting positional ctor call sites.
+    Dict[String, Vector[Option[SpannedExpr]]] fn_defaults
 
 # ── Helpers ──────────────────────────────────────────────
 

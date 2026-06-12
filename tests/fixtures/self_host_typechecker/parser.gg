@@ -1005,6 +1005,18 @@ struct Parser:
     # Binding stmts prepended to a closure body from tuple-destructure params.
     # Reset at the start of each parse_closure_expr call.
     Vector[Stmt] desugar_stmts
+    # Parse-time expression-nesting depth guard. Incremented on each
+    # `parse_expr_bp` recursive descent (catches `(((…)))` / `-(-(-…))`
+    # nesting) and tracked as a left-spine count in `parse_expr_bp_with_lhs`
+    # (catches the FLAT `a+a+…+a` chain, parsed iteratively). Over the limit
+    # → a clean teaching error instead of a later-pass SIGSEGV on the deep
+    # tree. See docs/plans/brief_expr_depth_limit_and_run_with_stack.md §B.
+    int expr_depth
+
+# MAX nesting for a single expression's AST tree (parens/unary recursion OR
+# a flat operator chain's left spine). 128 ≈ 2.46× the deepest real-code
+# expression and well under the ~88-frame true-8MB stack crash.
+const int MAX_EXPR_DEPTH = 128
 
 # ── Parser methods ───────────────────────────────────────────
 
@@ -1069,6 +1081,12 @@ equip Parser:
     void expect_kw(&self, int kw, String msg):
         if not self.match_kw(kw):
             self.errors.push(msg)
+
+    # Emit the expression-too-deep diagnostic (the depth-guard sites call this
+    # the moment they cross MAX_EXPR_DEPTH, then bail to recover). This copy
+    # uses the `Vector[String] errors` channel (no Diagnostic machinery).
+    void report_expr_too_deep(&self):
+        self.errors.push("expression nesting too deep (max 128); split into intermediate variables")
 
     # Extract a name from a token that may be an identifier or a keyword used as a name
     String extract_name(&self, SpannedToken tok):
@@ -1565,12 +1583,32 @@ equip Parser:
         return self.parse_expr_bp_with_lhs(0, lhs)
 
     SpannedExpr parse_expr_bp(&self, int min_bp):
+        # Recursion-depth guard: every nested level (`(((…)))`, `-(-(-…))`)
+        # passes through exactly one parse_expr_bp → parse_prefix, so this
+        # chokepoint bounds AST-tree depth from parens/unary. The FLAT chain
+        # is bounded separately by the spine count below.
+        self.expr_depth = self.expr_depth + 1
+        if self.expr_depth > MAX_EXPR_DEPTH:
+            self.expr_depth = self.expr_depth - 1
+            self.report_expr_too_deep()
+            SpannedToken dtok = self.advance()
+            return SpannedExpr(EIntLiteral(0), Span(dtok.lex_start, dtok.lex_end))
         SpannedExpr lhs = self.parse_prefix()
-        return self.parse_expr_bp_with_lhs(min_bp, lhs)
+        SpannedExpr bp_result = self.parse_expr_bp_with_lhs(min_bp, lhs)
+        self.expr_depth = self.expr_depth - 1
+        return bp_result
 
     SpannedExpr parse_expr_bp_with_lhs(&self, int min_bp, SpannedExpr !lhs):
 
+        # Left-spine count for the FLAT-chain depth guard. Each loop turn wraps
+        # `lhs` one level deeper without growing the parser call stack, so the
+        # parse_expr_bp recursion guard never sees it. Bound it here.
+        int spine_depth = 0
         while not self.at_end():
+            spine_depth = spine_depth + 1
+            if spine_depth > MAX_EXPR_DEPTH:
+                self.report_expr_too_deep()
+                break
             # Postfix: field access, method call, index, function call, ?, as
             int ptag = self.peek_tag()
 
@@ -2013,12 +2051,12 @@ equip Parser:
             SpannedType pt = self.parse_type()
             SpannedToken pn = self.advance()
             String pname = token_ident(pn.lex_token)
-            return Param(pt, pname, OWN_BORROW)
+            return Param(pt, pname, OWN_BORROW, None())
         # Untyped param — just an identifier, use auto as type
         SpannedToken pn = self.advance()
         String pname = token_ident(pn.lex_token)
         SpannedType auto_type = SpannedType(TInferred(), Span(pn.lex_start, pn.lex_end))
-        return Param(auto_type, pname, OWN_BORROW)
+        return Param(auto_type, pname, OWN_BORROW, None())
 
     # Parse one closure param, desugaring tuple destructure patterns.
     # `(T1 a, T2 b)` → synthetic `__dp_N: (T1,T2)` param + binds pushed to desugar_stmts.
@@ -2059,7 +2097,7 @@ equip Parser:
                     self.desugar_stmts.push(SVarDecl(cty, cname, field_acc, OWN_BORROW, 0, -1))
                     ci = ci + 1
                 SpannedType dp_type = SpannedType(TTuple(comp_types), Span(0, 0))
-                return Param(dp_type, dp_name, OWN_BORROW)
+                return Param(dp_type, dp_name, OWN_BORROW, None())
         return self.parse_closure_param()
 
     # Parse a closure expression: (params): body
@@ -2139,7 +2177,7 @@ equip Parser:
                                     int interp_base = self.next_interp_offset
                                     self.next_interp_offset = interp_base + 1048576
                                     Vector[SpannedToken] sub_tokens = lex_tokenize_with_offset(expr_text, interp_base)
-                                    Parser sub = Parser(sub_tokens, 0, Vector[String](), 0, 1099511627776, Vector[Stmt]())
+                                    Parser sub = Parser(sub_tokens, 0, Vector[String](), 0, 1099511627776, Vector[Stmt](), 0)
                                     SpannedExpr parsed_expr = sub.parse_expr()
                                     fexprs.push(parsed_expr)
                             fsi = fsi + 1
@@ -3356,21 +3394,21 @@ equip Parser:
         if self.check_kw(KW_SELF_LOWER):
             self.advance()
             SpannedType self_ty = SpannedType(TSelf(), self.current_span())
-            return Param(self_ty, "self", OWN_BORROW)
+            return Param(self_ty, "self", OWN_BORROW, None())
 
         if self.check_tok(TOK_AMP):
             if keyword_tag(self.peek_at(1).lex_token) == KW_SELF_LOWER:
                 self.advance()
                 self.advance()
                 SpannedType self_ty = SpannedType(TSelf(), self.current_span())
-                return Param(self_ty, "self", OWN_MUTABLE)
+                return Param(self_ty, "self", OWN_MUTABLE, None())
 
         if self.check_tok(TOK_BANG):
             if keyword_tag(self.peek_at(1).lex_token) == KW_SELF_LOWER:
                 self.advance()
                 self.advance()
                 SpannedType self_ty = SpannedType(TSelf(), self.current_span())
-                return Param(self_ty, "self", OWN_MOVE)
+                return Param(self_ty, "self", OWN_MOVE, None())
 
         if self.check_kw(KW_MOVE):
             own = OWN_MOVE
@@ -3413,11 +3451,12 @@ equip Parser:
                         pname = non_type_keyword_name(kw)
                 else:
                     pass
-        # Skip optional default value: = expr
+        # Capture optional default value: = expr
+        Option[SpannedExpr] dflt = None()
         if self.check_tok(TOK_EQ):
             self.advance()
-            self.parse_expr()
-        return Param(ty, pname, own)
+            dflt = Some(self.parse_expr())
+        return Param(ty, pname, own, dflt)
 
     Item parse_struct_item(&self, Vector[String] !derives):
         self.expect_kw(KW_STRUCT, "expected 'struct'")
@@ -3445,7 +3484,7 @@ equip Parser:
                             fname = type_keyword_name(fname_kw)
                     else:
                         pass
-            fields.push(Param(ftype, fname, OWN_BORROW))
+            fields.push(Param(ftype, fname, OWN_BORROW, None()))
             self.skip_newlines()
         self.match_tok(TOK_DEDENT)
         return IStruct(StructDef(name, fields, type_params, derives))
@@ -4134,6 +4173,6 @@ Module parse_source_with_offset(String source, int base_offset):
         if tag != TOK_COMMENT and tag != TOK_DOCCOMMENT:
             tokens.push(tok)
         ti = ti + 1
-    Parser p = Parser(tokens, 0, Vector[String](), 0, INTERP_OFFSET_BASE, Vector[Stmt]())
+    Parser p = Parser(tokens, 0, Vector[String](), 0, INTERP_OFFSET_BASE, Vector[Stmt](), 0)
     Module m = p.parse_module()
     return m

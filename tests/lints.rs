@@ -1623,3 +1623,110 @@ fn term_uses_arms_count() {
          scan sees every by-pointer block arg.",
     );
 }
+
+/// Sibling-site ratchet (CLAUDE.md rule 4 / "Sibling-site drift") over the
+/// self-host `Param(` AST-constructor call sites. P0 (default-arg support) added
+/// a 4th field `Option[SpannedExpr] default_value` to `struct Param` in all three
+/// distinct `ast.gg` copies — so EVERY `Param(...)` constructor must now supply
+/// the default (a captured `dflt` at the parse site, `None()` everywhere else).
+/// A NEW `Param(` site that forgets the field would either fail to compile
+/// (arity error) OR — worse, if someone "fixes" it by reordering — silently drop
+/// a parsed default. Pin the count so a new construction site is forced through
+/// the 4-field shape.
+///
+/// `Param(` is matched case-sensitively, so the lowercase `parse_param(` /
+/// `parse_closure_param(` method calls do NOT collide. The `Param parse_param(`
+/// method-definition lines use `Param ` (with a space) and are also excluded.
+///
+/// Baseline 2026-06-12: 22 (parser 7 + resolver 7 + typechecker 8). Each capture
+/// site (one per copy: parser/resolver/typechecker `parse_param`) passes the
+/// captured `dflt`; the other 19 pass `None()`.
+#[test]
+fn self_host_param_ctor_site_count() {
+    const EXPECTED: usize = 22;
+
+    // The three DISTINCT parser.gg copies (check + lowerer SYMLINK typechecker,
+    // so they are not listed — counting them would double-count).
+    let files = [
+        "tests/fixtures/self_host_parser/parser.gg",
+        "tests/fixtures/self_host_resolver/parser.gg",
+        "tests/fixtures/self_host_typechecker/parser.gg",
+    ];
+
+    let mut count = 0usize;
+    for f in &files {
+        let content = fs::read_to_string(f).unwrap_or_default();
+        for line in content.lines() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with('#') {
+                continue; // .gg comments
+            }
+            count += line.matches("Param(").count();
+        }
+    }
+
+    assert_eq!(
+        count, EXPECTED,
+        "Self-host `Param(` constructor-call count changed: {count} vs {EXPECTED}.\n\n\
+         `struct Param` carries a 4th field `Option[SpannedExpr] default_value` \
+         (P0 default-arg support). EVERY `Param(...)` site must supply it — the \
+         per-copy `parse_param` capture site passes the parsed `dflt`, all others \
+         pass `None()`. If you added a construction site, give it the default \
+         (capture the `= expr` if it's the param-parse path, else `None()`) and \
+         bump EXPECTED. If you removed one, lower EXPECTED. Never reorder the \
+         fields to dodge the arity — that silently drops parsed defaults.",
+    );
+}
+
+/// Sibling-site ratchet (CLAUDE.md rule 4 / "Sibling-site drift") over the
+/// self-host param-ownership registration sites in `lower.gg`. The pre-scan
+/// builds three PARALLEL per-fn Dicts — `fn_borrow_params`, `fn_move_params`,
+/// `fn_defaults` — keyed identically. P0 (default-arg fill) added `fn_defaults`
+/// and registers it at EVERY `fn_move_params.put` sibling (function, equip,
+/// struct/enum/prelude ctors, mono'd ctor, equip-short-key) so the call-site
+/// fill (`lower_expr.gg lower_call`) can read `fn_defaults[call_name][idx]` for
+/// any callable whose move-flags it already trusts. A new `.put` move site that
+/// FORGETS to register defaults would leave `fn_defaults` short an entry → a
+/// default-arg call to that callable would silently drop the default.
+///
+/// Pin `fn_defaults.put` == `fn_move_params.put`. (`fn_borrow_params.put` is
+/// intentionally a SUBSET — only param-bearing fns/equips register borrow flags;
+/// synthetic ctors are move-only — so it is NOT pinned equal here.)
+///
+/// Baseline 2026-06-12: 11 each.
+#[test]
+fn self_host_fn_defaults_registration_parity() {
+    let content =
+        fs::read_to_string("tests/fixtures/self_host_lowerer/lower.gg").unwrap_or_default();
+
+    let mut move_puts = 0usize;
+    let mut default_puts = 0usize;
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('#') {
+            continue; // .gg comments
+        }
+        move_puts += line.matches("fn_move_params.put(").count();
+        default_puts += line.matches("fn_defaults.put(").count();
+    }
+
+    assert!(
+        move_puts > 0 && default_puts > 0,
+        "self_host_fn_defaults_registration_parity: failed to locate the \
+         fn_move_params / fn_defaults `.put` sites (move={move_puts}, \
+         default={default_puts}).",
+    );
+    assert_eq!(
+        default_puts, move_puts,
+        "Self-host `fn_defaults.put` count ({default_puts}) != `fn_move_params.put` \
+         count ({move_puts}).\n\n\
+         The three per-fn param Dicts (fn_borrow_params / fn_move_params / \
+         fn_defaults) must stay in lockstep: every `.put` that registers a \
+         callable's move-flags MUST also register its default-arg vector (the \
+         parsed defaults for a real param-bearing fn/equip, or an all-`None()` \
+         vector for a synthetic ctor). A new move-registration `.put` without a \
+         `fn_defaults.put` sibling would make a default-arg call to that callable \
+         silently drop the default. Add the `fn_defaults.put` and the counts \
+         re-balance.",
+    );
+}

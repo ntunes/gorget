@@ -20458,6 +20458,18 @@ fn default_params_basic() {
     );
 }
 
+// P0 self-host default-arg fill proof. `f(5)` synthesizes the `b = 10`
+// default at the call site → 15; `f(5, 20)` → 25. Mirrors the Rust default
+// fill in `resolve_call_args`; the self-host now fills the trailing slot too
+// (see docs/plans/brief_expr_depth_limit_and_run_with_stack.md §P0).
+#[test]
+fn default_param_selfhost() {
+    run_gg(
+        "default_param_selfhost.gg",
+        "15\n25",
+    );
+}
+
 #[test]
 fn method_chaining_builder() {
     run_gg(

@@ -1994,16 +1994,23 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     # CkCallArgOwning vs CkCallArgBorrow at call-arg lowering sites via
     # `classify_call_arg`. See enum ConsumeKind / op_consume docstring.
     Dict[String, Vector[bool]] fn_move_params = {}
+    # P0 default-arg fill: parallel to the two scans above — per-fn vector of
+    # the parsed default expr for each param (None if none). Keyed identically;
+    # registered at EVERY `.put` sibling so the three Dicts stay in lockstep.
+    Dict[String, Vector[Option[SpannedExpr]]] fn_defaults = {}
     for bp_item in m.items:
         match bp_item:
             case IFunction(fdef):
                 Vector[bool] borrows = []
                 Vector[bool] moves = []
+                Vector[Option[SpannedExpr]] defaults = []
                 for p in fdef.params:
                     borrows.push(p.ownership == 1)  # 1 = OWN_MUTABLE (&)
                     moves.push(p.ownership == 2)    # 2 = OWN_MOVE (!)
+                    defaults.push(p.default_value)
                 fn_borrow_params.put(fdef.name.clone(), borrows)
-                fn_move_params.put(fdef.name, moves)
+                fn_move_params.put(fdef.name.clone(), moves)
+                fn_defaults.put(fdef.name, defaults)
             case IEquip(bp_eqblk):
                 # Equip-method `!`-params must register too, otherwise a
                 # `self.m(!arg)`-shaped call (a bare local passed to a `!T`
@@ -2042,12 +2049,15 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         for bpe_m in bp_eqblk.methods:
                             Vector[bool] em_borrows = []
                             Vector[bool] em_moves = []
+                            Vector[Option[SpannedExpr]] em_defaults = []
                             for ep in bpe_m.params:
                                 em_borrows.push(ep.ownership == 1)
                                 em_moves.push(ep.ownership == 2)
+                                em_defaults.push(ep.default_value)
                             String bpe_full = bpe_target + "__" + bpe_m.name
                             fn_borrow_params.put(bpe_full.clone(), em_borrows)
-                            fn_move_params.put(bpe_full, em_moves)
+                            fn_move_params.put(bpe_full.clone(), em_moves)
+                            fn_defaults.put(bpe_full, em_defaults)
             else:
                 pass
 
@@ -2218,6 +2228,11 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
         match fd_item:
             case IStruct(fd_sdef):
                 Vector[bool] fd_moves = []
+                # Struct ctors are synthetic consume positions with no user
+                # default args — register an all-None defaults vector so the
+                # three parallel param Dicts stay in lockstep (the call-site
+                # fill never finds a Some here, which is correct).
+                Vector[Option[SpannedExpr]] fd_defaults = []
                 for fd_fld in fd_sdef.fields:
                     # Use the structured, recursive `is_resource_field_type`
                     # (the same predicate that builds resource_types) rather
@@ -2230,7 +2245,9 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                     # CkCallArgOwning → op_consume clones the borrow.
                     bool fd_is_resource = is_resource_field_type(fd_fld.param_type, resource_types)
                     fd_moves.push(fd_is_resource)
-                fn_move_params.put(fd_sdef.name, fd_moves)
+                    fd_defaults.push(None())
+                fn_move_params.put(fd_sdef.name.clone(), fd_moves)
+                fn_defaults.put(fd_sdef.name, fd_defaults)
             case IEnum(fd_edef):
                 # Enum-variant constructors are ALSO consume positions — the
                 # constructed node OWNS its payload fields. Without this, a
@@ -2244,13 +2261,19 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                 # register both.
                 for fd_var in fd_edef.variants:
                     Vector[bool] fd_vmoves = []
+                    # Synthetic variant ctor — no user defaults; all-None to
+                    # keep the parallel param Dicts in lockstep.
+                    Vector[Option[SpannedExpr]] fd_vdefaults = []
                     for fd_vfld in fd_var.fields:
                         # Structured detection (see the IStruct branch) —
                         # catches Option/Result-of-resource variant payloads.
                         bool fd_v_is_resource = is_resource_field_type(fd_vfld, resource_types)
                         fd_vmoves.push(fd_v_is_resource)
+                        fd_vdefaults.push(None())
                     fn_move_params.put(fd_var.name.clone(), fd_vmoves.clone())
                     fn_move_params.put(fd_edef.name + "__" + fd_var.name, !fd_vmoves)
+                    fn_defaults.put(fd_var.name.clone(), fd_vdefaults.clone())
+                    fn_defaults.put(fd_edef.name + "__" + fd_var.name, !fd_vdefaults)
             else:
                 pass
     # Prelude enum variant constructors (Option.Some, Result.Ok/Error) own
@@ -2279,6 +2302,14 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     fn_move_params.put("Ok", !ok_mv)
     Vector[bool] error_mv = [true]
     fn_move_params.put("Error", !error_mv)
+    # Parallel all-None defaults for the prelude ctors (no user defaults).
+    # Typed local so the Vector gets the right elem_size (see the bool note).
+    Vector[Option[SpannedExpr]] some_df = [None()]
+    fn_defaults.put("Some", !some_df)
+    Vector[Option[SpannedExpr]] ok_df = [None()]
+    fn_defaults.put("Ok", !ok_df)
+    Vector[Option[SpannedExpr]] error_df = [None()]
+    fn_defaults.put("Error", !error_df)
     # `Box(x)` is the sibling prelude ctor: `Box[T]` is a SINGLE-OWNER
     # heap allocation (language-reference.md §"Box[T]") — it OWNS its
     # payload, exactly like Some/Ok/Error own theirs. Without this,
@@ -2295,6 +2326,8 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     # bare `[true]` (elem_size trap — see above).
     Vector[bool] box_mv = [true]
     fn_move_params.put("Box", !box_mv)
+    Vector[Option[SpannedExpr]] box_df = [None()]
+    fn_defaults.put("Box", !box_df)
     Dict[String, int] const_decls = {}
     Dict[String, int] none_decls = {}
     Dict[String, float] float_const_decls = {}
@@ -2305,7 +2338,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     Dict[String, GirStaticInfo] statics = {}
     Dict[String, ResourceMetadata] resource_metadata = {}
     Dict[int, int] option_ref_payload = {}
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, !const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types, !option_ref_payload, [], !enum_variant_parent_idx, false, [], {}, {}, {}, {}, {})
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, !const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types, !option_ref_payload, [], !enum_variant_parent_idx, false, [], {}, {}, {}, {}, {}, !fn_defaults)
 
     # R11: extract the `strip-asserts` directive so the SAssert case in
     # lower_stmt can emit a no-op instead of a conditional panic. Mirrors
@@ -2670,6 +2703,9 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             # below). A field is "owning" (CkCallArgOwning → clone-or-move
             # at the ctor arg) iff its SUBSTITUTED type is a resource.
             Vector[bool] mono_ctor_moves = []
+            # Parallel all-None defaults for the mono'd ctor (synthetic — no
+            # user defaults). Keeps fn_defaults in lockstep with fn_move_params.
+            Vector[Option[SpannedExpr]] mono_ctor_defaults = []
             for fld in sdef.fields:
                 int ft = map_ast_type(fld.param_type, &gmod)
                 String ft_name = type_id_to_name(ft, &gmod)
@@ -2694,6 +2730,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                 mono_fields.push(GirFieldInfo(fld.param_name.clone(), ft_name.clone()))
                 bool fld_is_res = is_resource_type_name(ft_name, &gmod)
                 mono_ctor_moves.push(fld_is_res)
+                mono_ctor_defaults.push(None())
                 if fld_is_res:
                     has_resource = true
             # Register only when the mono'd name isn't already there
@@ -2717,6 +2754,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             # mono-vs-template registration gap as the fn_sigs / Gap-B class.)
             if not gmod.fn_move_params.contains(mrinst.mangled_name):
                 gmod.fn_move_params.put(mrinst.mangled_name.clone(), mono_ctor_moves)
+                gmod.fn_defaults.put(mrinst.mangled_name.clone(), mono_ctor_defaults)
             clear_type_subs(&gmod)
             if has_resource:
                 gmod.resource_types.put(mrinst.mangled_name.clone(), true)
@@ -2881,12 +2919,15 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                             # is `self`, aligned with classify_call_arg(_, 0).
                             Vector[bool] eqs_borrows = []
                             Vector[bool] eqs_moves = []
+                            Vector[Option[SpannedExpr]] eqs_defaults = []
                             for eqs_p in eqs_mdef.params:
                                 eqs_borrows.push(eqs_p.ownership == 1)
                                 eqs_moves.push(eqs_p.ownership == 2)
+                                eqs_defaults.push(eqs_p.default_value)
                             String eqs_mv_key = eqs_mono_target + "__" + eqs_mdef.name
                             gmod.fn_borrow_params.put(eqs_mv_key.clone(), eqs_borrows)
-                            gmod.fn_move_params.put(eqs_mv_key, eqs_moves)
+                            gmod.fn_move_params.put(eqs_mv_key.clone(), eqs_moves)
+                            gmod.fn_defaults.put(eqs_mv_key, eqs_defaults)
                     clear_type_subs(&gmod)
 
     # Build trait lookup map for default method generation
