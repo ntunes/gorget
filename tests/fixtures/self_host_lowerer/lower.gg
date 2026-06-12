@@ -2245,7 +2245,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                     # CkCallArgOwning → op_consume clones the borrow.
                     bool fd_is_resource = is_resource_field_type(fd_fld.param_type, resource_types)
                     fd_moves.push(fd_is_resource)
-                    fd_defaults.push(None())
+                    fd_defaults.push(None)
                 fn_move_params.put(fd_sdef.name.clone(), fd_moves)
                 fn_defaults.put(fd_sdef.name, fd_defaults)
             case IEnum(fd_edef):
@@ -2269,7 +2269,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         # catches Option/Result-of-resource variant payloads.
                         bool fd_v_is_resource = is_resource_field_type(fd_vfld, resource_types)
                         fd_vmoves.push(fd_v_is_resource)
-                        fd_vdefaults.push(None())
+                        fd_vdefaults.push(None)
                     fn_move_params.put(fd_var.name.clone(), fd_vmoves.clone())
                     fn_move_params.put(fd_edef.name + "__" + fd_var.name, !fd_vmoves)
                     fn_defaults.put(fd_var.name.clone(), fd_vdefaults.clone())
@@ -2304,11 +2304,11 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     fn_move_params.put("Error", !error_mv)
     # Parallel all-None defaults for the prelude ctors (no user defaults).
     # Typed local so the Vector gets the right elem_size (see the bool note).
-    Vector[Option[SpannedExpr]] some_df = [None()]
+    Vector[Option[SpannedExpr]] some_df = [None]
     fn_defaults.put("Some", !some_df)
-    Vector[Option[SpannedExpr]] ok_df = [None()]
+    Vector[Option[SpannedExpr]] ok_df = [None]
     fn_defaults.put("Ok", !ok_df)
-    Vector[Option[SpannedExpr]] error_df = [None()]
+    Vector[Option[SpannedExpr]] error_df = [None]
     fn_defaults.put("Error", !error_df)
     # `Box(x)` is the sibling prelude ctor: `Box[T]` is a SINGLE-OWNER
     # heap allocation (language-reference.md §"Box[T]") — it OWNS its
@@ -2326,7 +2326,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     # bare `[true]` (elem_size trap — see above).
     Vector[bool] box_mv = [true]
     fn_move_params.put("Box", !box_mv)
-    Vector[Option[SpannedExpr]] box_df = [None()]
+    Vector[Option[SpannedExpr]] box_df = [None]
     fn_defaults.put("Box", !box_df)
     Dict[String, int] const_decls = {}
     Dict[String, int] none_decls = {}
@@ -2730,7 +2730,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                 mono_fields.push(GirFieldInfo(fld.param_name.clone(), ft_name.clone()))
                 bool fld_is_res = is_resource_type_name(ft_name, &gmod)
                 mono_ctor_moves.push(fld_is_res)
-                mono_ctor_defaults.push(None())
+                mono_ctor_defaults.push(None)
                 if fld_is_res:
                     has_resource = true
             # Register only when the mono'd name isn't already there

@@ -2033,12 +2033,12 @@ equip Parser:
             SpannedType pt = self.parse_type()
             SpannedToken pn = self.advance()
             String pname = token_ident(pn.lex_token)
-            return Param(pt, pname, OWN_BORROW, None())
+            return Param(pt, pname, OWN_BORROW, None)
         # Untyped param — just an identifier, use auto as type
         SpannedToken pn = self.advance()
         String pname = token_ident(pn.lex_token)
         SpannedType auto_type = SpannedType(TInferred(), Span(pn.lex_start, pn.lex_end))
-        return Param(auto_type, pname, OWN_BORROW, None())
+        return Param(auto_type, pname, OWN_BORROW, None)
 
     # Parse a closure expression: (params): body
     SpannedExpr parse_closure_expr(&self, int start):
@@ -3193,21 +3193,21 @@ equip Parser:
         if self.check_kw(KW_SELF_LOWER):
             self.advance()
             SpannedType self_ty = SpannedType(TSelf(), self.current_span())
-            return Param(self_ty, "self", OWN_BORROW, None())
+            return Param(self_ty, "self", OWN_BORROW, None)
 
         if self.check_tok(TOK_AMP):
             if keyword_tag(self.peek_at(1).lex_token) == KW_SELF_LOWER:
                 self.advance()
                 self.advance()
                 SpannedType self_ty = SpannedType(TSelf(), self.current_span())
-                return Param(self_ty, "self", OWN_MUTABLE, None())
+                return Param(self_ty, "self", OWN_MUTABLE, None)
 
         if self.check_tok(TOK_BANG):
             if keyword_tag(self.peek_at(1).lex_token) == KW_SELF_LOWER:
                 self.advance()
                 self.advance()
                 SpannedType self_ty = SpannedType(TSelf(), self.current_span())
-                return Param(self_ty, "self", OWN_MOVE, None())
+                return Param(self_ty, "self", OWN_MOVE, None)
 
         if self.check_kw(KW_MOVE):
             own = OWN_MOVE
@@ -3233,7 +3233,7 @@ equip Parser:
         SpannedToken name_tok = self.advance()
         String pname = token_ident(name_tok.lex_token)
         # Capture optional default value: = expr
-        Option[SpannedExpr] dflt = None()
+        Option[SpannedExpr] dflt = None
         if self.check_tok(TOK_EQ):
             self.advance()
             dflt = Some(self.parse_expr())
@@ -3262,7 +3262,7 @@ equip Parser:
                 fname = non_type_keyword_name(fname_kw)
                 if fname == "":
                     fname = type_keyword_name(fname_kw)
-            fields.push(Param(ftype, fname, OWN_BORROW, None()))
+            fields.push(Param(ftype, fname, OWN_BORROW, None))
             self.skip_newlines()
         self.match_tok(TOK_DEDENT)
         return IStruct(StructDef(name, fields, type_params, derives))
