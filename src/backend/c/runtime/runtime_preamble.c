@@ -25,12 +25,12 @@
 #include <math.h>
 #include <errno.h>
 #include <sys/ioctl.h>
-// Unconditional: the NATIVE main runner executes the program body on a
-// pthread with an explicit 64MB stack reserve (Fix B, #37 flip) — every
-// hosted binary needs pthreads now, not just std.async/spawn users; the
-// wrapper main also routes process-directed signals onto the user thread
-// (sigfillset/pthread_sigmask). The freestanding target never reaches
-// this preamble (emit_types.rs early-returns onto lib/freestanding/runtime.c).
+// Unconditional: the Task/async scheduler, spawn, and the sync runtime
+// (Mutex/Channel/WaitGroup/etc.) all use pthreads, so every hosted binary
+// links pthread regardless of whether the program spawns. `main` itself
+// now runs the user body on thread 0 (a plain `int main`), not a secondary
+// thread. The freestanding target never reaches this preamble
+// (emit_types.rs early-returns onto lib/freestanding/runtime.c).
 #include <pthread.h>
 #include <signal.h>
 

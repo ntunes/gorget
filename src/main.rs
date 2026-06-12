@@ -201,9 +201,11 @@ fn add_crypto_flags(cmd: &mut Command, needs_crypto: bool) {
     }
 }
 
-/// Add pthread linker flags. Since the Fix B (#37 flip) pthread main
-/// runner, EVERY native C-backend binary needs pthreads (both call sites
-/// pass `true`); the parameter survives for explicitness at the call sites.
+/// Add pthread linker flags. EVERY native C-backend binary links pthread
+/// (both call sites pass `true`): the Task/async scheduler, spawn, and the
+/// sync runtime (Mutex/Channel/WaitGroup/etc.) use pthreads, so the link is
+/// unconditional even though `main` itself now runs on thread 0 (plain
+/// `int main`). The parameter survives for explicitness at the call sites.
 /// On macOS, pthreads are part of libc — no extra flag needed.
 fn add_thread_flags(_cmd: &mut Command, needs_threads: bool) {
     if !needs_threads { return; }
@@ -873,12 +875,12 @@ fn try_build_ir(
             add_sdl_flags(&mut cc_cmd, concat_source.contains("xtd.sdl") || concat_source.contains("xtd.gfx"), &shared_c_code);
             add_tls_flags(&mut cc_cmd, concat_source.contains("std.net.tls") || concat_source.contains("xtd.http"));
             add_crypto_flags(&mut cc_cmd, concat_source.contains("xtd.crypto") || concat_source.contains("xtd.p2p"));
-            // Fix B (#37 flip): UNCONDITIONAL — the emitted NATIVE main runs the
-            // program body on a pthread (big-stack runner), so every C-backend
-            // binary needs pthreads, not just std.async/p2p users. (The test
-            // harness passes -lpthread itself, which would MASK a conditional-
-            // link break — keep this unconditional; the freestanding path
-            // early-returns before reaching here.)
+            // UNCONDITIONAL — the Task/async scheduler, spawn, and the sync
+            // runtime use pthreads, so every C-backend binary links pthread,
+            // not just std.async/p2p users (`main` itself runs on thread 0).
+            // (The test harness passes -lpthread itself, which would MASK a
+            // conditional-link break — keep this unconditional; the
+            // freestanding path early-returns before reaching here.)
             add_thread_flags(&mut cc_cmd, true);
             let status = cc_cmd.status();
             return match status {
@@ -1125,12 +1127,12 @@ fn try_build_ir(
         add_metal_flags(&mut cc_cmd, needs_metal);
         add_tls_flags(&mut cc_cmd, concat_source.contains("std.net.tls") || concat_source.contains("xtd.http"));
         add_crypto_flags(&mut cc_cmd, concat_source.contains("xtd.crypto") || concat_source.contains("xtd.p2p"));
-        // Fix B (#37 flip): UNCONDITIONAL — the emitted NATIVE main runs the
-        // program body on a pthread (big-stack runner), so every C-backend
-        // binary needs pthreads, not just std.async/p2p users. (The test
-        // harness passes -lpthread itself, which would MASK a conditional-
-        // link break — keep this unconditional; the freestanding path
-        // early-returns before reaching here.)
+        // UNCONDITIONAL — the Task/async scheduler, spawn, and the sync
+        // runtime use pthreads, so every C-backend binary links pthread,
+        // not just std.async/p2p users (`main` itself runs on thread 0).
+        // (The test harness passes -lpthread itself, which would MASK a
+        // conditional-link break — keep this unconditional; the
+        // freestanding path early-returns before reaching here.)
         add_thread_flags(&mut cc_cmd, true);
 
         let status = cc_cmd.status();

@@ -23243,16 +23243,17 @@ fn witness_never_emitted_c_clone_shape() {
 
     let c_src = std::fs::read_to_string(&c_path)
         .expect("emitted C artifact missing for witness_never");
-    // The program body lives in `__gorget_user_main` since the Fix B
-    // pthread main runner (#37 flip); the wrapper `int main` only does
-    // init + thread setup.
+    // The program body is the plain `int main` on thread 0 — the Fix B
+    // 64MB-pthread main runner (#37 flip) was reverted (the gorget-arena
+    // macOS fix), so the user body lives directly in `int main` after the
+    // `gorget_init_args` init line.
     let main_start = c_src
-        .find("static int __gorget_user_main(void) {")
-        .expect("user-main definition in emitted C");
+        .find("int main(int argc, char** argv) {")
+        .expect("main definition in emitted C");
     let main_end = c_src[main_start..]
         .find("\n}")
         .map(|e| main_start + e)
-        .expect("user-main closing brace");
+        .expect("main closing brace");
     let main_src = &c_src[main_start..main_end];
 
     let bv = main_src.find("gorget_string_borrow_view(");
@@ -23469,16 +23470,17 @@ fn witness_never_self_host_emitted_c_clone_shape() {
         String::from_utf8_lossy(&emit.stderr)
     );
     let c_src = String::from_utf8_lossy(&emit.stdout).to_string();
-    // The program body lives in `__gorget_user_main` since the Fix B
-    // pthread main runner (#37 flip); the wrapper `int main` only does
-    // init + thread setup.
+    // The program body is the plain `int main` on thread 0 — the Fix B
+    // 64MB-pthread main runner (#37 flip) was reverted (the gorget-arena
+    // macOS fix), so the user body lives directly in `int main` after the
+    // `gorget_init_args` init line.
     let main_start = c_src
-        .find("static int __gorget_user_main(void) {")
-        .expect("user-main definition in self-host emitted C");
+        .find("int main(int argc, char** argv) {")
+        .expect("main definition in self-host emitted C");
     let main_end = c_src[main_start..]
         .find("\n}")
         .map(|e| main_start + e)
-        .expect("user-main closing brace");
+        .expect("main closing brace");
     let main_src = &c_src[main_start..main_end];
 
     let bv = main_src.find("gorget_string_borrow_view(");
@@ -23499,27 +23501,37 @@ fn witness_never_self_host_emitted_c_clone_shape() {
     );
 }
 
-// ── #37 flip — Fix B stack guards (CLAUDE.md rule 6: the silent
-// environment-coupled stack cliff becomes a loud, deterministic test) ──
+// ── stack guards (CLAUDE.md rule 6: the silent environment-coupled stack
+// cliff becomes a loud, deterministic test) ──
 //
-// The NATIVE pthread main runner (Fix B) runs every program body on a
-// pthread with a 64MB explicit stack reserve. Explicit
-// pthread_attr_setstacksize stacks are mmap'd, NOT RLIMIT_STACK-bound,
-// so pinning RLIMIT_STACK to a stock 8MB in-test makes both guards
-// deterministic BOTH WAYS: without the runner the pinned process
-// SIGSEGVs (re-verified at W2: both legs rc=139 pre-fix), with it both
-// pass on any host ulimit. Two legs, two processes (p2-R2):
+// `main` now runs the program body on thread 0 (a plain `int main`, the
+// macOS/Cocoa fix) — the old 64MB-pthread main runner (Fix B) was reverted
+// once slot-coalescing let the self-host bootstrap fit a plain ~8MB stack.
+// Two legs, two processes, two verdicts on a plain main:
 //   (i)  the COMPILER's recursion — the pinned budget binds the DRIVER
-//        process lowering a 200-term concat chain (~200 levels of
-//        lower_expr<->lower_expr_inner at ~180-220KB/frame at -O0);
-//   (ii) the PRODUCED BINARY's runtime recursion — the pinned budget
-//        binds the binary executing a depth-200000 recursive fn
-//        (~112B/frame ≈ 22MB > 8MB budget, < 64MB reserve).
+//        process self-compiling its OWN full source (driver.gg + the
+//        self_host_lowerer modules). Slot-coalescing shrank the lowerer
+//        per-call frame enough that REAL self-host code lowers under a plain
+//        8MB compiler stack — the honest frame-bloat regression net. (A
+//        pathological 200-deep single expression still needs ~32MB, but that
+//        is NOT the contract: like clang/gcc, deeply nested exprs can
+//        overflow the compiler stack. The old synthetic 200-term-chain
+//        fixture was retired with the 64MB pthread that made it pass.)
+//   (ii) the PRODUCED BINARY's runtime recursion — depth-200000 non-tail
+//        recursion (~112B/frame ≈ 22MB > 8MB). A plain binary overflows the
+//        OS stack here, exactly like C/Rust, so this is EXPECT-FAIL until
+//        TCO lands for the tail subset (## Low in TODO).
 
-/// Guard (i): the self-host route's compiler-recursion leg. The driver
-/// process is pinned to an 8MB stack (`ulimit -S -s 8192`); it must
-/// still lower the 200-term concat chain (its body runs on the 64MB
-/// pthread), and the produced binary must print the chain's length.
+/// Guard (i): the self-host route's compiler-recursion leg, pinned to a
+/// stock 8MB stack (`ulimit -S -s 8192`). The driver self-compiles its OWN
+/// full source (driver.gg + the self_host_lowerer modules, ~900K
+/// concatenated lines) with `--lir-c` and must lower it WITHOUT overflowing
+/// — slot-coalescing shrank the lowerer frame so real self-host code fits a
+/// plain 8MB compiler stack. This is the honest frame-bloat regression net
+/// (Option A, 2026-06-11): if a future change re-bloats the per-call
+/// lowering frame past what real code can self-compile under 8MB, this fails
+/// loudly. (The retired form fed a synthetic 200-term concat chain that
+/// needs ~32MB — a pathological depth that is NOT the plain-main contract.)
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn stack_guard_self_host_driver_deep_lowering() {
@@ -23529,72 +23541,57 @@ fn stack_guard_self_host_driver_deep_lowering() {
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
-    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
-    // DIR fixture: a root-level copy would fail the corpus-wide
-    // fmt_idempotent test — `gg fmt` destroys long binary chains (reflows
-    // them into a `+`-continuation form the parser REJECTS; a second pass
-    // silently drops the orphaned lines). Filed HIGH in TODO.
-    let fixture = manifest_dir.join("tests/fixtures/stack_guard_concat_chain/main.gg");
-    let tmp_root = std::env::temp_dir().join(format!(
-        "gg_stack_guard_chain_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
-    let c_path = tmp_root.join("stack_guard_concat_chain.c");
-    let bin_path = tmp_root.join("stack_guard_concat_chain");
+    let driver_gg = manifest_dir
+        .join("tests/fixtures/self_host_lowerer/driver.gg");
 
     // Pin RLIMIT_STACK (soft) to a stock 8MB on the DRIVER process via a
-    // `sh -c 'ulimit && exec'` wrapper — the budget the pthread reserve
-    // must beat. Soft-limit lowering is always permitted, so the pin
-    // never fails on hosts with smaller hard limits.
-    let emit = run_with_timeout(
+    // `sh -c 'ulimit && exec'` wrapper, then self-compile with `--lir-c`
+    // (full lowering — the deepest lower_expr<->lower_expr_inner recursion
+    // the self-host exercises, over its own ~900K concatenated lines).
+    // Soft-limit lowering is always permitted, so the pin never fails on
+    // hosts with smaller hard limits. 600s deadline: the solo self-compile
+    // is ~30s–1min user, but wall-clock under parallel cargo-test load is
+    // 4-8× user (matches self_host_bootstrap).
+    let emit = run_with_deadline(
         Command::new("sh")
             .arg("-c")
-            .arg("ulimit -S -s 8192 && exec \"$0\" \"$1\" \"$2\" --emit-c \"$3\"")
+            .arg("ulimit -S -s 8192 && exec \"$0\" \"$1\" \"$2\" --lir-c")
             .arg(&driver_exe)
-            .arg(&fixture)
-            .arg(&lib_dir)
-            .arg(format!("--runtime-dir={}", runtime_dir.display())),
-        "stack_guard_concat_chain.gg (driver pinned to 8MB)",
+            .arg(&driver_gg)
+            .arg(&lib_dir),
+        "self-host driver self-compiling its own source (pinned 8MB)",
+        Duration::from_secs(600),
     );
     assert!(
         emit.status.success(),
-        "self-host driver overflowed a pinned 8MB stack lowering the \
-         200-term concat chain — the Fix B pthread main runner regressed \
-         (status={:?}, stderr: {})",
+        "self-host driver overflowed a pinned 8MB stack self-compiling its \
+         own source — the lowerer per-call frame regressed (real self-host \
+         code no longer fits a plain 8MB compiler stack; the slot-coalescing \
+         budget was blown) (status={:?}, stderr: {})",
         emit.status.code(),
         String::from_utf8_lossy(&emit.stderr)
     );
-    std::fs::write(&c_path, &emit.stdout).expect("write emitted C");
-    let cc_out = Command::new("cc")
-        .arg("-O0").arg("-w")
-        .arg("-o").arg(&bin_path)
-        .arg(&c_path)
-        .arg("-lm")
-        .arg("-lpthread")
-        .output()
-        .expect("spawn cc");
+    // Sanity: it actually lowered the whole module (the real self-host C
+    // body is multi-megabyte), not bailed early with a tiny stub or an
+    // empty body on a silently-swallowed error.
     assert!(
-        cc_out.status.success(),
-        "cc failed on the guard fixture: {}",
-        String::from_utf8_lossy(&cc_out.stderr)
-    );
-    let run = run_with_timeout(&mut Command::new(&bin_path), "stack_guard_concat_chain");
-    assert!(run.status.success(), "guard binary failed");
-    assert_eq!(
-        String::from_utf8_lossy(&run.stdout).trim_end(),
-        "200",
-        "200-term chain length"
+        emit.stdout.len() > 100_000,
+        "self-compile output suspiciously small ({} bytes) — did the driver \
+         actually lower the full source, or exit early?",
+        emit.stdout.len()
     );
 }
 
 /// Guard (ii): the runtime-recursion leg through the Rust `gg build`
-/// route. The PRODUCED BINARY's execution is pinned to an 8MB stack; its
-/// depth-200000 recursion (~22MB) must run on the 64MB pthread reserve.
-/// A concat chain would be VACUOUS here — the emitted C evaluates it in
-/// one frame; only genuine runtime recursion exercises the binary's
-/// stack. (LLVM leg scoped out: the LLVM @main still runs the body on
-/// the host stack — TODO at src/backend/llvm/mod.rs emit @main.)
+/// route — EXPECT-FAIL (Option A, 2026-06-11). `main` now runs the body on
+/// thread 0 with the honest OS-default stack (no 64MB pthread reserve), so
+/// depth-200000 non-tail recursion (~22MB) OVERFLOWS a pinned 8MB stack
+/// exactly like an equivalent C/Rust program. We assert the OVERFLOW (the
+/// binary builds fine but crashes / exits non-zero under the pin) so this
+/// documents the honest contract rather than silently flipping to a pass if
+/// some host has a huge default stack. TCO (## Low in TODO) is the eventual
+/// cure for the tail subset. (LLVM leg scoped out — also runs on the host
+/// stack; the test skip_under_llvm()s.)
 #[test]
 fn stack_guard_runtime_deep_recursion() {
     if skip_under_llvm() {
@@ -23630,17 +23627,17 @@ fn stack_guard_runtime_deep_recursion() {
             .arg(&exe_path),
         "stack_guard_deep_recursion (binary pinned to 8MB)",
     );
+    // EXPECT-FAIL: a plain thread-0 main on the honest OS stack overflows
+    // depth-200000 non-tail recursion (~22MB > 8MB), like C/Rust. If this
+    // ever SUCCEEDS, either the recursion got TCO'd (good — update this
+    // test) or the host stack is huge (then the pin didn't take).
     assert!(
-        run.status.success(),
-        "deep-recursion binary overflowed a pinned 8MB stack — the Fix B \
-         pthread main runner regressed (status={:?}, stderr: {})",
+        !run.status.success(),
+        "deep-200000 non-tail recursion UNEXPECTEDLY succeeded on a pinned \
+         8MB stack — TCO landed (update this test) or the ulimit pin didn't \
+         take (status={:?}, stdout: {})",
         run.status.code(),
-        String::from_utf8_lossy(&run.stderr)
-    );
-    assert_eq!(
-        String::from_utf8_lossy(&run.stdout).trim_end(),
-        "200000",
-        "depth-200000 recursion result"
+        String::from_utf8_lossy(&run.stdout)
     );
 
     let _ = std::fs::remove_file(&exe_path);

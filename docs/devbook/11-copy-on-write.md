@@ -566,15 +566,24 @@ artifact. Both are closed structurally:
    structurally by **dead-decl elision** (emitted-body scan in both C
    emitters: only referenced `__v`/`__s` ids are declared — the decl set
    used to be `0..max_val` regardless of use, ~124K dead decls
-   module-wide) and the **native pthread main runner**
-   (`src/backend/c_lir/mod.rs`: target-gated for NATIVE, the program body
-   runs as `__gorget_user_main` on a pthread with a 64MB explicit stack
-   reserve — mmap'd, not RLIMIT_STACK-bound — so neither the compiler nor
-   produced binaries depend on host ulimits). The cliff is pinned by two
+   module-wide) and **slot coalescing** (backward-liveness
+   interval-coloring in both C emitters: SSA temps whose live ranges never
+   overlap share one C decl, shrinking the per-call lowering frame). A
+   stopgap 64MB-pthread main runner (Fix B) was the original fix but was
+   REVERTED 2026-06-12 — it ran the program body on a secondary thread,
+   breaking macOS/Cocoa UI init (which must be on thread 0). Coalescing made
+   it unnecessary: the program runs as a plain `int main` on thread 0, and
+   real self-host code self-compiles under a plain ~8MB stack. The honest
+   OS-default stack (Option A — no big-stack opt-in) is pinned by two
    executable guards in `tests/integration.rs`:
-   `stack_guard_self_host_driver_deep_lowering` (the DRIVER at an 8MB
-   ulimit lowering a 200-term chain) and `stack_guard_runtime_deep_recursion`
-   (a PRODUCED BINARY at recursion depth 200000 ≈ 22MB of frames).
+   `stack_guard_self_host_driver_deep_lowering` (the DRIVER self-compiling
+   its OWN source under an 8MB ulimit — the frame-bloat regression net) and
+   `stack_guard_runtime_deep_recursion` (EXPECT-FAIL: a PRODUCED BINARY at
+   recursion depth 200000 ≈ 22MB overflows a plain 8MB stack exactly like
+   C/Rust; TCO is the eventual cure for the tail subset). A pathological
+   200-deep single expression still needs ~32MB to lower, but that is not
+   the contract — like clang/gcc, deeply nested exprs can overflow the
+   compiler stack.
 2. **Measurement hygiene.** A reported "~7x lazy emission slowdown" did not
    reproduce under controlled conditions — sequential idle-box timing pairs
    measured 1.11x at -O2 and 0.98x at -O0; the original figure compared a

@@ -2154,15 +2154,12 @@ fn emit_function(
     let is_main = func.name == "main";
     let has_sret = !is_main && needs_sret(&func.return_type, &module.structs);
     if is_main {
-        // TODO(#37 flip, Fix B — LLVM leg SCOPED OUT): the C backend's NATIVE
-        // main now runs the program body on a pthread with a 64MB explicit
-        // stack reserve (src/backend/c_lir/mod.rs emit_function tail); this
-        // @main still runs the body on the host stack, so under
-        // GG_BACKEND=llvm sweeps deep-recursion programs remain
-        // host-ulimit-dependent and the stack_guard_* integration tests
-        // skip_under_llvm(). Port the runner shape (user-main + trampoline +
-        // pthread wrapper) here to close the gap — the link already passes
-        // -pthread unconditionally on non-macOS (src/main.rs llvm pipeline).
+        // @main runs the program body on thread 0 (the host stack) — the
+        // intended plain-main behavior, matching the C backend now that the
+        // 64MB-pthread main runner (Fix B) was reverted (src/backend/c_lir/mod.rs
+        // emit_function). Deep user recursion overflowing the OS stack is
+        // shared with C/Rust (TCO is the eventual cure); the stack_guard_*
+        // integration tests skip_under_llvm() since they probe the C runner.
         writeln!(out, "define i32 @main(i32 %argc, ptr %argv) {{").unwrap();
     } else if has_sret {
         // Aggregate return: sret convention (hidden first parameter)

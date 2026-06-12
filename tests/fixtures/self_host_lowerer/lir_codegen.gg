@@ -5337,17 +5337,19 @@ String emit_function(LirFunction &func, LirModule &m, Vector[String] &sn, Dict[S
     Dict[int, int] val_to_slot = build_slot_read_map(&func)
 
     # Function signature.
-    # Fix B (#37 flip): the program body is emitted as
-    # `static int __gorget_user_main(void)` and runs on a pthread with a
-    # 64MB explicit stack reserve (emit_pthread_main_runner below) — user
-    # recursion depth scales with program nesting and must not depend on
-    # host ulimits (a stock 8MB stack killed the GREEN self-host
-    # bootstrap). Unconditional here: the self-host emitter has no target
-    # concept (freestanding ABSENT → always hosted, see
-    # emit_runtime_preamble); the Rust twin gates on the typed
-    # `LirModule.target` (NATIVE only — freestanding keeps a plain main).
+    # `main` runs the user body on thread 0 (the OS main thread) — a plain
+    # `int main(argc, argv)`. Running on thread 0 is the macOS/Cocoa
+    # requirement; slot-coalescing lets the self-host bootstrap fit a plain
+    # ~8MB stack, so the old 64MB-pthread main runner (Fix B) is gone.
+    # void-main → exit-0 is guaranteed at the GIR layer (main is given an
+    # I32_TYPE return type, predating Fix B; bare/implicit void returns
+    # coerce to `return 0`), so no explicit `return 0` is emitted here. Keep
+    # this byte-identical to the Rust twin (`src/backend/c_lir/mod.rs`
+    # emit_function — the `c_emit_comparison` user_fn_count gate counts the
+    # `) {` openers on both sides).
     if func.name == "main":
-        sb_push(&buf, "static int __gorget_user_main(void) {\n")
+        sb_push(&buf, "int main(int argc, char** argv) {\n")
+        sb_push(&buf, "    gorget_init_args(argc, argv);\n")
         # Module-level statics with runtime-call init — `stdout` /
         # `stderr` / `stdin` from lib/std/io.gg etc. The global is
         # declared zero-initialized by `emit_globals`; the actual
@@ -5590,57 +5592,7 @@ String emit_function(LirFunction &func, LirModule &m, Vector[String] &sn, Dict[S
             sb_push(&buf, "\n")
         undef_i += 1
 
-    # Fix B (#37 flip): append the pthread main runner after the user
-    # main body.
-    if func.name == "main":
-        emit_pthread_main_runner(&buf, func.return_type == LT_VOID)
     return buf.s
-
-# Fix B (#37 flip): the pthread main runner. The user main body (emitted
-# as `static int __gorget_user_main(void)`) runs on a pthread with a 64MB
-# explicit stack reserve; explicit pthread_attr_setstacksize stacks are
-# mmap'd, NOT RLIMIT_STACK-bound, so the binary's recursion budget is
-# host-ulimit-independent. On any pthread setup failure the trampoline
-# runs on the host stack (best-effort fallback, today's behavior). The
-# trampoline pins the exit-code contract: a void-returning Gorget main
-# exits 0 (the old `int main { return; }` shape read an UNDEFINED
-# register value). The Rust twin lives at the tail of
-# src/backend/c_lir/mod.rs emit_function — keep the emitted text
-# byte-identical (the `c_emit_comparison` user_fn_count gate counts
-# these `) {` lines on both sides).
-void emit_pthread_main_runner(StrBuf &buf, bool user_main_is_void):
-    # Signal routing: the wrapper thread blocks ALL signals BEFORE
-    # creating the user thread (which inherits the block and then
-    # restores the original mask) — process-directed signals are
-    # therefore delivered to the USER thread exactly as in the old
-    # single-threaded main (a self-directed kill() stays synchronous;
-    # signal_wait's pause() keeps waking).
-    sb_push(&buf, "static sigset_t __gorget_main_sigmask;\n")
-    sb_push(&buf, "static void* __gorget_main_trampoline(void* __gg_unused) {\n")
-    sb_push(&buf, "    (void)__gg_unused;\n")
-    sb_push(&buf, "    pthread_sigmask(SIG_SETMASK, &__gorget_main_sigmask, 0);\n")
-    if user_main_is_void:
-        sb_push(&buf, "    __gorget_user_main();\n")
-        sb_push(&buf, "    return 0;\n")
-    else:
-        sb_push(&buf, "    return (void*)(intptr_t)__gorget_user_main();\n")
-    sb_push(&buf, "}\n")
-    sb_push(&buf, "int main(int argc, char** argv) {\n")
-    sb_push(&buf, "    gorget_init_args(argc, argv);\n")
-    sb_push(&buf, "    sigset_t __gg_sig_all;\n")
-    sb_push(&buf, "    sigfillset(&__gg_sig_all);\n")
-    sb_push(&buf, "    pthread_sigmask(SIG_SETMASK, &__gg_sig_all, &__gorget_main_sigmask);\n")
-    sb_push(&buf, "    pthread_attr_t __gg_main_attr;\n")
-    sb_push(&buf, "    pthread_t __gg_main_tid;\n")
-    sb_push(&buf, "    void* __gg_main_ret = 0;\n")
-    sb_push(&buf, "    if (pthread_attr_init(&__gg_main_attr) != 0 ||\n")
-    sb_push(&buf, "        pthread_attr_setstacksize(&__gg_main_attr, (size_t)64 * 1024 * 1024) != 0 ||\n")
-    sb_push(&buf, "        pthread_create(&__gg_main_tid, &__gg_main_attr, __gorget_main_trampoline, 0) != 0) {\n")
-    sb_push(&buf, "        return (int)(intptr_t)__gorget_main_trampoline(0);\n")
-    sb_push(&buf, "    }\n")
-    sb_push(&buf, "    pthread_join(__gg_main_tid, &__gg_main_ret);\n")
-    sb_push(&buf, "    return (int)(intptr_t)__gg_main_ret;\n")
-    sb_push(&buf, "}\n")
 
 # The per-block body emitter (block label + block-param head copies +
 # instructions + terminator), split out of emit_function so Fix A can emit
