@@ -1,0 +1,15 @@
+# Over-limit expression-depth fixture (B-rust, brief_expr_depth_limit_and_run_with_stack.md).
+# A 150-term flat `1 + 1 + ... + 1` chain nests ~149 levels deep on the AST
+# left spine -- well past MAX_EXPR_DEPTH (128). The parse-time depth guard
+# (src/parser/expr.rs) must REJECT this with a clean teaching error instead
+# of letting the lowering recursion overflow the stack (SIGSEGV). Wired into
+# the negative `check_gg_fails` harness in tests/integration.rs; the error
+# message is the load-bearing artifact.
+#
+# Lives in a subdirectory so the corpus-wide `fmt_idempotent` test (which only
+# scans tests/fixtures/*.gg, non-recursively) does not reflow it: `gg fmt`
+# corrupts long binary-op chains into a parser-rejected `+`-continuation form
+# (TODO.md documented bug, 2026-06-11).
+void main():
+    int s = 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1
+    print(s)

@@ -5,6 +5,14 @@ use super::ast::*;
 use super::Parser;
 use crate::errors::ParseError;
 
+/// Maximum AST-tree nesting depth for a single expression. A deeper expression
+/// overflows the lowering recursion (SIGSEGV on the gg compiler's own stack);
+/// the parser rejects it first with a clean teaching error. The limit is
+/// gg-specific: rustc's `recursion_limit` is also 128, which is 2.46× over the
+/// deepest expression in any real fixture (52) and comfortably under the
+/// sized-stack-widened crash wall. See `ExprDepthGuard`.
+pub(crate) const MAX_EXPR_DEPTH: usize = 128;
+
 /// RAII guard that increments `call_arg_depth` on creation and decrements on drop,
 /// ensuring the counter stays consistent even if parsing returns early.
 struct CallArgGuard<'a> {
@@ -21,6 +29,36 @@ impl<'a> CallArgGuard<'a> {
 impl Drop for CallArgGuard<'_> {
     fn drop(&mut self) {
         self.parser.call_arg_depth -= 1;
+    }
+}
+
+/// RAII guard for the AST-tree expression depth. Increments `expr_depth` on
+/// creation and decrements on drop (even on an early `?` return). Construction
+/// returns `Err(ExpressionTooDeep)` when the bumped depth exceeds
+/// `MAX_EXPR_DEPTH`, so a pathologically nested expression (deep parens / unary)
+/// is rejected before lowering recurses. Mirrors `CallArgGuard`; all parsing in
+/// the guarded scope goes through `guard.parser`.
+struct ExprDepthGuard<'a> {
+    parser: &'a mut Parser,
+}
+
+impl<'a> ExprDepthGuard<'a> {
+    fn new(parser: &'a mut Parser) -> Result<Self, ParseError> {
+        parser.expr_depth += 1;
+        if parser.expr_depth > MAX_EXPR_DEPTH {
+            // Decrement back out so the counter is consistent for the error
+            // unwind, then report. (Drop won't run — we never built the guard.)
+            let depth = parser.expr_depth;
+            parser.expr_depth -= 1;
+            return Err(parser.error_expr_too_deep(depth));
+        }
+        Ok(ExprDepthGuard { parser })
+    }
+}
+
+impl Drop for ExprDepthGuard<'_> {
+    fn drop(&mut self) {
+        self.parser.expr_depth -= 1;
     }
 }
 
@@ -351,12 +389,25 @@ impl Parser {
 
     /// Pratt parser infix/postfix loop from a given LHS.
     fn parse_expr_bp_with_lhs(&mut self, min_bp: u8, mut lhs: Spanned<Expr>) -> Result<Spanned<Expr>, ParseError> {
+        // Each infix/postfix node built here extends the LEFT SPINE by one tree
+        // level. A flat operator chain (`a + a + … + a`) is parsed iteratively —
+        // the parser's call stack stays ~2 deep — so a recursion-depth counter
+        // (or the `parse_prefix` guard) would miss it; this accumulated count is
+        // the complementary check. We compose it with `self.expr_depth` (the
+        // prefix nesting we're already inside, e.g. deep parens around a chain)
+        // so the two guards add up rather than each having its own slack. See
+        // `MAX_EXPR_DEPTH`.
+        let mut spine_depth = self.expr_depth;
 
         loop {
             // Check for postfix operators
             if let Some(bp) = self.postfix_bp() {
                 if bp < min_bp {
                     break;
+                }
+                spine_depth += 1;
+                if spine_depth > MAX_EXPR_DEPTH {
+                    return Err(self.error_expr_too_deep(spine_depth));
                 }
                 lhs = self.parse_postfix(lhs)?;
                 continue;
@@ -366,6 +417,10 @@ impl Parser {
             if let Some(ibp) = self.infix_bp() {
                 if ibp.left < min_bp {
                     break;
+                }
+                spine_depth += 1;
+                if spine_depth > MAX_EXPR_DEPTH {
+                    return Err(self.error_expr_too_deep(spine_depth));
                 }
                 lhs = self.parse_infix(lhs, ibp)?;
                 continue;
@@ -379,7 +434,21 @@ impl Parser {
 
     // ── Prefix Parsing ────────────────────────────────────────
 
+    /// Parse a prefix expression (atom / unary / parenthesised group).
+    ///
+    /// Thin wrapper that tracks AST-tree depth via `ExprDepthGuard`: each prefix
+    /// entry is one tree level, so nested parens/unary (`((((…))))`, `!!!…`)
+    /// accumulate depth here. The guard rejects an over-deep nest at parse time
+    /// (clean error) instead of letting it SIGSEGV in lowering. The flat
+    /// `a + a + …` operator chain is parsed iteratively (parser stack stays ~2
+    /// deep), so it's caught by the complementary left-spine check in
+    /// `parse_expr_bp_with_lhs`, not here.
     fn parse_prefix(&mut self) -> Result<Spanned<Expr>, ParseError> {
+        let guard = ExprDepthGuard::new(self)?;
+        guard.parser.parse_prefix_inner()
+    }
+
+    fn parse_prefix_inner(&mut self) -> Result<Spanned<Expr>, ParseError> {
         let start = self.peek_span();
 
         match self.peek().clone() {

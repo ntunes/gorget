@@ -17,6 +17,13 @@
 !mutarg_import_probe/*.gg
 !stack_guard_concat_chain/
 !stack_guard_concat_chain/*.gg
+# Parse-time expr-depth-limit fixtures (B-rust): long flat `1 + 1 + ... + 1`
+# chains kept in subdirs so the corpus-wide `fmt_idempotent` test (top-level
+# tests/fixtures/*.gg only) doesn't reflow them (`gg fmt` corrupts long chains).
+!expr_nesting_too_deep_error/
+!expr_nesting_too_deep_error/*.gg
+!expr_nesting_max_depth/
+!expr_nesting_max_depth/*.gg
 !imported_nonexhaustive_match/
 !imported_nonexhaustive_match/**
 !imported_body_type_error/

@@ -23647,6 +23647,35 @@ fn stack_guard_runtime_deep_recursion() {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// Parse-time expression-depth guard (B-rust,
+// docs/plans/brief_expr_depth_limit_and_run_with_stack.md). A pathologically
+// deep single expression overflows the lowering recursion (SIGSEGV); the parser
+// rejects it first with a clean teaching error (MAX_EXPR_DEPTH = 128, à la clang
+// `-fbracket-depth` / rustc `recursion_limit`). Both fixtures use long flat
+// `1 + 1 + ... + 1` chains, parsed iteratively in the Pratt loop — the
+// load-bearing case the left-spine check (not the prefix-depth counter) catches.
+// They live in subdirectories so the corpus-wide `fmt_idempotent` test (which
+// scans tests/fixtures/*.gg non-recursively) doesn't reflow them: `gg fmt`
+// corrupts long binary-op chains (TODO.md documented bug, 2026-06-11).
+
+/// A 150-term chain (149 `+` ops, ~149 spine levels) is past the 128 limit and
+/// must produce the clean parse error instead of crashing or miscompiling.
+#[test]
+fn expr_nesting_too_deep_error() {
+    check_gg_fails(
+        "expr_nesting_too_deep_error/main.gg",
+        "expression nesting too deep",
+    );
+}
+
+/// A 127-term chain (126 spine levels) is under the 128 limit, so the guard is
+/// count-neutral here: it compiles and runs, printing 127.
+#[test]
+fn expr_nesting_max_depth() {
+    run_gg("expr_nesting_max_depth/main.gg", "127");
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // Print-temp leak class (docs/plans/brief_print_temp_leak_fix.md): a String
 // temp freshly materialized to feed a printf/format consumer is registered
 // for drop at its birth — five producer sites (format_for_printf Ptr(String)

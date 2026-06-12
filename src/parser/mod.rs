@@ -41,6 +41,14 @@ pub struct Parser {
     /// Nesting depth for call-arg parsing. Used to auto-wrap `it` only at the
     /// outermost call-arg level and prevent double-wrapping in nested calls.
     call_arg_depth: usize,
+    /// AST-tree nesting depth for the current expression. Bumped on each
+    /// `parse_prefix` entry (parens/unary/atoms) and checked against
+    /// `MAX_EXPR_DEPTH` both there and on the accumulated left-spine inside the
+    /// Pratt precedence loop. A pathologically deep expression overflows the
+    /// lowering recursion (SIGSEGV); this guard rejects it at parse time with a
+    /// clean teaching error (à la clang `-fbracket-depth` / rustc
+    /// `recursion_limit`). See `ExprDepthGuard` / `MAX_EXPR_DEPTH` in `expr.rs`.
+    expr_depth: usize,
     /// Comments extracted from the token stream, for use by the formatter.
     pub comments: Vec<Spanned<String>>,
     /// True when parsing inside an `extern "C":` block or `extern "C"` inline declaration.
@@ -97,6 +105,7 @@ impl Parser {
             errors: Vec::new(),
             warnings: Vec::new(),
             call_arg_depth: 0,
+            expr_depth: 0,
             in_extern_c: false,
             comments,
             next_interp_offset: interp_base,
@@ -266,6 +275,18 @@ impl Parser {
             kind: crate::errors::ParseErrorKind::UnexpectedToken {
                 expected: expected.to_string(),
                 got: format!("{}", self.peek()),
+            },
+            span: self.peek_span(),
+        }
+    }
+
+    /// Build the `ExpressionTooDeep` parse error for the current position.
+    /// `depth` is the offending nesting depth; the limit is `MAX_EXPR_DEPTH`.
+    pub fn error_expr_too_deep(&self, depth: usize) -> ParseError {
+        ParseError {
+            kind: crate::errors::ParseErrorKind::ExpressionTooDeep {
+                depth,
+                limit: crate::parser::expr::MAX_EXPR_DEPTH,
             },
             span: self.peek_span(),
         }

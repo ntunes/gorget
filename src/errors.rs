@@ -81,6 +81,14 @@ pub enum ParseErrorKind {
     ExpectedIdentifier,
     InvalidAssignmentTarget,
     PositionalAfterNamedArg,
+    /// A single expression nests deeper than `MAX_EXPR_DEPTH` (parens, unary, or
+    /// a flat operator chain). Rejected at parse time so the compiler emits a
+    /// clean teaching error instead of overflowing the lowering recursion stack
+    /// (SIGSEGV). See `MAX_EXPR_DEPTH` / `ExprDepthGuard` in `src/parser/expr.rs`.
+    ExpressionTooDeep {
+        depth: usize,
+        limit: usize,
+    },
 }
 
 impl std::fmt::Display for ParseError {
@@ -98,6 +106,13 @@ impl std::fmt::Display for ParseError {
             ParseErrorKind::InvalidAssignmentTarget => write!(f, "invalid assignment target"),
             ParseErrorKind::PositionalAfterNamedArg => {
                 write!(f, "positional argument after named argument")
+            }
+            ParseErrorKind::ExpressionTooDeep { depth, limit } => {
+                write!(
+                    f,
+                    "expression nesting too deep (depth {depth} exceeds the limit of {limit}); \
+                     help: break the expression into intermediate variables (let bindings)"
+                )
             }
         }
     }
