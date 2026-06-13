@@ -15,14 +15,36 @@ converges WITH the A opt-in + full integration / lib / lints / all `*_comparison
 passed — re-run the gate battery below for live counts; do NOT trust this line as a number.
 **OWNER ACTION: ff main→gorget-1 (your manual step — do NOT advance main yourself). The gorget-arena macOS regression is closed
 by the plain-main revert (DONE.md 2026-06-12) — rebuild gorget-arena on macOS to confirm the menu-on-thread-0 fix.**
-**⬅ NEXT (back to the parity north-star — #14 was a side-quest off the plain-main revert):**
-① the parity chains under "🟢 ACTIVE FOCUS #1" below (#39 bare-form lazy-iterator default-method discovery/emit; CoW tier-2 L1
-the position-gated borrow-flip; the queued enum_category Phase 2). ② the HIGH backlog: Fix C (the `lir_codegen` per-extern-call
-LirFunction clone-bomb, ~10x driver-emission lever), the self-host driver RELATIVE-INPUT-PATH miscompile (deterministic; breaks
-the bootstrap when the driver is invoked with a relative source path), `gg fmt` long-chain data loss, the self-host
-sync-primitive method-dispatch gaps (4 thread fixtures CC-FAIL), and the NEW variant-ctor QUALIFIED-path elem-size sibling gap
-(latent, logged in High Priority below). ⚠ ALL pre-split `lower.gg:NNNN` citations in queued briefs are STALE: the lowerer is
-split into `lower*.gg` modules — re-grep each cited site across them (MODULE MAP note in High Priority).
+**⬅ NEXT = TWO PARALLEL CHAINS (owner-directed 2026-06-13; file-disjoint → run concurrently). Each runs the FULL discipline
+INDEPENDENTLY: scout (re-verify EVERY premise against CURRENT post-split source with file:line + RUN/measure END-TO-END, never
+source-read) → brief → ≥3 fresh SEQUENTIAL brief-reviews → executor (worktree; `git merge --ff-only gorget-1` on entry; stage by
+explicit file name) → fresh output-review. The ORCHESTRATOR owns a single merged-tree integration + a COMBINED gate
+(`self_host_bootstrap_fixed_point` + full integration on the COMBINED result — gating can't be per-isolated-diff for self-host
+work). Zones are disjoint (below); brief each executor on the OTHER chain's zone as cheap insurance.**
+**① TASK #39 (parity north-star — the most DIRECT parity mover): bare-form `Iterator[T]` default-method discovery + emit.**
+The adapter/default-method symbols (`VectorIter__…__{for_each,last,nth,zip,any}` / `DictIter` / `FilterIter` / `TakeIter`) are
+CALLED but never DEFINED → C implicit-int return (`incompatible types … from int`). A multi-step chain (NOT one site): (1)
+non-generic defaults via full inference (fn_sig pre-pass, gated `type_params==0` + `all_return_nominals_registered`); (2)
+method-generic defaults (`for_each[F]`/`zip[U]`/`any[F]`) whose typecheck side-table `gmod.tc_types.expr_method_targs` is EMPTY
+for the bare-form spans; (3) adapter-on-adapter receivers (`DictIter`/`TakeIter`/`FilterIter`); (4) `proto_walk_stmts` has NO
+`SMatch` case → match-arm-buried calls invisible. ZONE: `lower*.gg` + the SYMLINKED typecheck driver
+(`infer.gg`/`typecheck.gg`/`traits.gg` → edit the `self_host_typechecker` copy + re-gate it). Ground in `docs/devbook/12`
+§"Generic monomorphization" + `lib/std/iter.gg`. Full entry under "🟢 ACTIVE FOCUS #1 → TRACK 1" below — ⚠ re-grep its STALE
+pre-split `lower.gg:NNNN` citations across `lower*.gg` (MODULE MAP in High Priority). NON-NEGOTIABLE direction (owner): GENERIC,
+USERLAND (stdlib), LAZY — ZERO compiler-side eager `HofExpand`/`gorget_array_map` fallback.
+**② FIX C (perf force-multiplier — ~10x driver-emission lever; speeds up EVERY future iteration, INCLUDING ①'s gate): the
+`generate_c` per-extern-call whole-`LirFunction` DEEP-CLONE clone-bomb.** Scout-measured `generate_c` ≈97% of driver
+self-compile, dominated by a Rust-gg `Option[Ref]`-lift clone branch firing on every `.get().unwrap()` of the functions vector
+(suspect `lir_codegen.gg:~4601` `emit_call_extern_with` — RE-VERIFY the drifted line). FIX = a Rust `src/` borrow improvement in
+the `Option[Ref]`-lift (PREFERRED) OR a self-host source reshape (bind the callee params BY BORROW, not a value bind). ZONE: Rust
+`src/` (the lift) OR self-host `lir_codegen.gg` — DISJOINT from ①'s `lower*.gg`/typecheck. ⚠ PERF-CHAIN MANDATE: the scout MUST
+RE-MEASURE the CURRENT self-compile profile FIRST (peak RSS + `--clones=stats` array_clone/array_new + wall; the dated
+"30.1s vs 356.9s / 97%" figures are STALE) AND PROTOTYPE + MEASURE the real speedup end-to-end (compile + run + new profile +
+`fixed_point` still converges) — never source-read the yield. Full entry: the "🔥 LAZY-CoW FOLLOW-UPS" HIGH block below
+(measurements.log under `docs/plans/chainE_artifacts/`).
+**DEFERRED behind ①②** (the next picks once these land): CoW tier-2 L1 (the position-gated borrow-flip), enum_category Phase 2,
+the self-host driver RELATIVE-INPUT-PATH miscompile, `gg fmt` long-chain data loss, the self-host sync-primitive dispatch gaps
+(4 thread fixtures CC-FAIL), and the NEW variant-ctor QUALIFIED-path elem-size sibling gap (all logged in High Priority below).
 RE-MEASURE PARITY (never trust a dated number; the `*_comparison`/`runtime_diff` tests are diagnostic-always-pass — only the
 printed counts mean anything) via: `GG_RUNTIME_DIFF=1 GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration --release
 self_host_runtime_diff -- --nocapture` → read the `PARITY = MATCH/(...)` line (runtime_diff takes ~130s on this host). The last
