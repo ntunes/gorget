@@ -1700,6 +1700,9 @@ pub struct ThreadSpawnedFn {
     pub fn_name: String,
     /// C type name for the return type (e.g., "int64_t"), or "void".
     pub ret_c_type: String,
+    /// Requested pthread stack size in bytes. 0 = OS default (plain wrapper,
+    /// byte-identical to the pre-stack-size emit); non-zero = a pthread_attr-sized wrapper.
+    pub stack_size: i64,
 }
 
 pub struct LirModule {

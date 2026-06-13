@@ -408,6 +408,19 @@ struct EnumCategory:
     int ok_type
     int err_type
 
+# A thread_spawn(fn[, stack_size]) registration. Mirrors Rust gg's
+# `module.runtime.thread_spawned_fns: Vec<(String, TypeId, i64)>`
+# (`src/ir/mod.rs:103`) — carried as a GIR-level channel from the
+# `thread_spawn` intrinsic in lower_call to the per-fn wrapper emit
+# in lir_codegen. `ret_c_type` is the C return type name ("void" for a
+# unit-returning fn, "int64_t" etc. otherwise); `stack_size` is the
+# requested pthread stack in bytes (0 = OS default = plain wrapper,
+# byte-identical to Rust's pre-stack-size emit). One size per fn.
+struct ThreadSpawnRec:
+    String fn_name
+    String ret_c_type
+    int stack_size
+
 struct GirModule:
     Vector[GirFunction] functions
     Vector[GirExtern] externs
@@ -596,6 +609,14 @@ struct GirModule:
     # `resolve_call_args` (`src/ir/lowering/exprs/calls.rs:386-445`). Appended
     # AT END to avoid shifting positional ctor call sites.
     Dict[String, Vector[Option[SpannedExpr]]] fn_defaults
+    # thread_spawn(fn[, stack_size]) registrations. Populated by the
+    # `thread_spawn` intrinsic in lower_call (lower_expr.gg); flows to
+    # `LirModule.thread_spawned_fns` in lower_gir_to_lir, then to the
+    # per-fn wrapper emit in lir_codegen. Mirrors Rust gg's
+    # `module.runtime.thread_spawned_fns` (`src/ir/mod.rs:103`).
+    # First-write-wins per fn_name (one stack size per fn). Appended AT END
+    # to avoid shifting positional ctor call sites.
+    Vector[ThreadSpawnRec] thread_spawned_fns
 
 # ── Helpers ──────────────────────────────────────────────
 

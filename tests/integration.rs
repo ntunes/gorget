@@ -11930,6 +11930,12 @@ fn thread_atomic() {
 }
 
 #[test]
+fn thread_stack_size() {
+    // thread_spawn(work, stack_size = 64MB) → sized-pthread wrapper; prints 42.
+    run_gg("thread_stack_size.gg", "42");
+}
+
+#[test]
 fn thread_mutex() {
     run_gg("thread_mutex.gg", "2");
 }

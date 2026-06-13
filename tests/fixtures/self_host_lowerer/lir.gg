@@ -371,6 +371,9 @@ struct LirSpawnedFn:
 struct LirThreadSpawnedFn:
     String fn_name
     String ret_c_type
+    # Requested pthread stack size in bytes. 0 = OS default (plain wrapper,
+    # byte-identical to the pre-stack-size emit); non-zero = a sized wrapper.
+    int stack_size
 
 # ── Test/Bench Metadata ────────────────────────────────────────
 

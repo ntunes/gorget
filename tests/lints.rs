@@ -818,9 +818,18 @@ fn snag11_equip_symbol_mangle_site_count() {
 /// folding them into one budget here would (a) hide Phase-A regressions under
 /// the prelude headroom and (b) wrongly bless name-matched enum-meaning as a
 /// permanent floor. Splitting keeps THIS class pinned at its true floor.
+/// Bumped 69 → 70 (2026-06-13): the self-host `thread_spawn`/Thread-method
+/// port added ONE `thr_recv_tn.starts_with("Thread__")` site in
+/// `lower_expr.gg`'s EMethodCall handler — the `Thread[T].join()`/`.id()`
+/// intrinsic. This is a faithful mirror of Rust gg's identical dispatch
+/// (`src/ir/lowering/exprs/methods.rs:1062` `ttn.starts_with("Thread__")`):
+/// the receiver IS a `Thread__{ret_c}` opaque handle whose element C-type
+/// rides in the name suffix (the `Thread__T__join` C symbol is the runtime
+/// contract), so suffix-parsing here is the explicitly-allowed "extract T
+/// from Vector__T" name-parsing case, not a classification-routing dodge.
 #[test]
 fn no_growth_in_self_host_name_prefix_routing() {
-    const BUDGET: usize = 69;
+    const BUDGET: usize = 70;
 
     // Phase-A classification-routing class only: all MANGLED_PREFIXES EXCEPT
     // the prelude option-like ones (those are the sibling lint's burn-down).

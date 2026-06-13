@@ -578,10 +578,20 @@ pub(super) fn emit_thread_helpers(out: &mut String, module: &LirModule) {
         }
         writeln!(out, "    return NULL;\n}}").unwrap();
 
-        // Spawn function
+        // Spawn function. stack_size 0 => plain pthread_create (byte-identical to the
+        // pre-stack-size emit); non-zero => a pthread_attr-sized wrapper.
         writeln!(out, "static inline {thread_name} __gorget_thread_spawn_{fn_name}(void) {{").unwrap();
         writeln!(out, "    {ctx_type}* __ctx = ({ctx_type}*)GORGET_CALLOC(1, sizeof({ctx_type}));").unwrap();
-        writeln!(out, "    pthread_create(&__ctx->_thr, NULL, __gorget_thread_entry_{fn_name}, __ctx);").unwrap();
+        if tsf.stack_size != 0 {
+            let stack_size = tsf.stack_size;
+            writeln!(out, "    pthread_attr_t __attr;").unwrap();
+            writeln!(out, "    pthread_attr_init(&__attr);").unwrap();
+            writeln!(out, "    pthread_attr_setstacksize(&__attr, {stack_size});").unwrap();
+            writeln!(out, "    pthread_create(&__ctx->_thr, &__attr, __gorget_thread_entry_{fn_name}, __ctx);").unwrap();
+            writeln!(out, "    pthread_attr_destroy(&__attr);").unwrap();
+        } else {
+            writeln!(out, "    pthread_create(&__ctx->_thr, NULL, __gorget_thread_entry_{fn_name}, __ctx);").unwrap();
+        }
         writeln!(out, "    return __ctx;\n}}").unwrap();
         writeln!(out).unwrap();
     }

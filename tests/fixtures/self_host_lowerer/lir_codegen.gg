@@ -8,7 +8,7 @@
 
 from lir import LirModule, LirFunction, LirBlock, LirInst, LirTerm, LirSlot
 from lir import SlotProvenance
-from lir import LirStructDef, LirExtern, LirGlobal, LirGlobalField, LirSpawnedFn, LirTestFn, LirBenchFn
+from lir import LirStructDef, LirExtern, LirGlobal, LirGlobalField, LirSpawnedFn, LirTestFn, LirBenchFn, LirThreadSpawnedFn
 from lir import StructField, BlockParam, SwitchCase, FieldDrop, EnumVariantDrop, TypeDropInfo, FieldInit
 from lir import LT_I8, LT_I16, LT_I32, LT_I64, LT_U8, LT_U16, LT_U32, LT_U64
 from lir import LT_F32, LT_F64, LT_BOOL, LT_PTR, LT_VOID
@@ -1016,6 +1016,18 @@ Vector[bool] compute_reachable_fns(LirModule &m):
             worklist.push(fi)
         fi += 1
 
+    # Thread-spawn roots: a `thread_spawn(work)` target is called only from
+    # the emitted `__gorget_thread_entry_work` wrapper TEXT (not visible in
+    # the LIR call graph), so DCE would strip `work` and the entry would
+    # link-fail. Seed each spawned fn as a reachability root.
+    for tsf_root in m.thread_spawned_fns:
+        int tf = 0
+        while tf < n:
+            if m.functions.get(tf).unwrap().name == tsf_root.fn_name and not reachable.get(tf).unwrap():
+                reachable.set(tf, true)
+                worklist.push(tf)
+            tf += 1
+
     # Hashable-key roots: Dict[UserStruct, V] / Set[UserStruct] uses a
     # runtime hash-bucket bridge (`__gorget_ktable_hash__T(void*)` /
     # `__gorget_ktable_eq__T`) that calls `T__hash` / `T__eq` via fn
@@ -1710,6 +1722,77 @@ String emit_adapter_functions(LirModule &m, Vector[String] &sn, Dict[int, bool] 
         fi += 1
     if targets.len() > 0:
         out = out + "\n"
+    return out
+
+# Thread[T] spawn/join wrappers. Byte-identical port of Rust gg's
+# `emit_thread_helpers` (`src/backend/c_lir/emit_types.rs:528-597`):
+# per-unique-ret_c typedefs (the __GorgetThread__T ctx struct + Thread__T
+# pointer typedef + id/join inline helpers) then per-fn entry + spawn.
+# `stack_size` 0 => plain pthread_create (byte-identical to the pre-stack-size
+# emit); non-zero => a pthread_attr-sized wrapper.
+String emit_thread_helpers(LirModule &m):
+    if m.thread_spawned_fns.len() == 0:
+        return ""
+    String out = "\n/* ── Thread[T] wrappers ── */\n"
+
+    # Per-unique-return-type typedefs + id/join helpers.
+    Vector[String] emitted_thread_types = []
+    for tsf in m.thread_spawned_fns:
+        String ret_c = tsf.ret_c_type
+        bool is_void = ret_c == "void"
+        String thread_name = "Thread__" + ret_c
+        bool already = false
+        for et in emitted_thread_types:
+            if et == thread_name:
+                already = true
+        if already:
+            continue
+        emitted_thread_types.push(thread_name.clone())
+        String ctx_type = "__GorgetThread__" + ret_c
+        if is_void:
+            out = out + "typedef struct { pthread_t _thr; } " + ctx_type + ";\n"
+        else:
+            out = out + "typedef struct { pthread_t _thr; " + ret_c + " _result; } " + ctx_type + ";\n"
+        out = out + "typedef " + ctx_type + "* " + thread_name + ";\n"
+        out = out + "static inline int64_t " + thread_name + "__id(" + thread_name + " self) { return (int64_t)(uintptr_t)self->_thr; }\n"
+        if is_void:
+            out = out + "static inline void " + thread_name + "__join(" + thread_name + " self) { pthread_join(self->_thr, NULL); GORGET_FREE(self, sizeof(*self)); }\n"
+        else:
+            out = out + "static inline " + ret_c + " " + thread_name + "__join(" + thread_name + " self) { pthread_join(self->_thr, NULL); " + ret_c + " _r = self->_result; GORGET_FREE(self, sizeof(*self)); return _r; }\n"
+        out = out + "\n"
+
+    # Per-function thread entry + spawn helpers.
+    for tsf in m.thread_spawned_fns:
+        String fn_name = tsf.fn_name
+        String safe_fn_name = c_func_name(fn_name)
+        String ret_c = tsf.ret_c_type
+        bool is_void = ret_c == "void"
+        String thread_name = "Thread__" + ret_c
+        String ctx_type = "__GorgetThread__" + ret_c
+
+        # Thread entry
+        out = out + "static void* __gorget_thread_entry_" + fn_name + "(void* __arg) {\n"
+        out = out + "    " + ctx_type + "* __ctx = (" + ctx_type + "*)__arg;\n"
+        if is_void:
+            out = out + "    " + safe_fn_name + "();\n"
+        else:
+            out = out + "    __ctx->_result = " + safe_fn_name + "();\n"
+        out = out + "    return NULL;\n}\n"
+
+        # Spawn function. stack_size 0 => plain pthread_create; non-zero => sized.
+        out = out + "static inline " + thread_name + " __gorget_thread_spawn_" + fn_name + "(void) {\n"
+        out = out + "    " + ctx_type + "* __ctx = (" + ctx_type + "*)GORGET_CALLOC(1, sizeof(" + ctx_type + "));\n"
+        if tsf.stack_size != 0:
+            out = out + "    pthread_attr_t __attr;\n"
+            out = out + "    pthread_attr_init(&__attr);\n"
+            out = out + "    pthread_attr_setstacksize(&__attr, " + int_to_str(tsf.stack_size) + ");\n"
+            out = out + "    pthread_create(&__ctx->_thr, &__attr, __gorget_thread_entry_" + fn_name + ", __ctx);\n"
+            out = out + "    pthread_attr_destroy(&__attr);\n"
+        else:
+            out = out + "    pthread_create(&__ctx->_thr, NULL, __gorget_thread_entry_" + fn_name + ", __ctx);\n"
+        out = out + "    return __ctx;\n}\n"
+        out = out + "\n"
+
     return out
 
 # ── Value type inference (simplified) ──────────────────────
@@ -6258,6 +6341,13 @@ String emit_type_drop_fns(LirModule &m, Vector[String] &sn):
 String emit_mono_typedefs(LirModule &m):
     StrBuf buf = sb_new()
     Dict[String, bool] seen = {}
+    # The Thread__{ret_c} types are defined in full by emit_thread_helpers
+    # (the real `typedef __GorgetThread__T* Thread__T;`). Suppress the generic
+    # `typedef void* Thread__T;` here so the two don't collide at cc time —
+    # Rust gg likewise emits these ONLY in emit_thread_helpers. Keyed off the
+    # typed thread_spawned_fns set (not a `Thread__` name substring).
+    for tsf_pre in m.thread_spawned_fns:
+        seen.put("Thread__" + tsf_pre.ret_c_type, true)
     # CoW for-element BORROW scan (no LirStructDef__clone): reads sdef.name only.
     for sdef in m.structs:
         if m.type_runtime_map.contains(sdef.name):
@@ -6468,6 +6558,11 @@ String generate_c(LirModule &m):
     # reference already-forward-declared functions. Mirrors Rust gg's
     # deferred-global emission in `src/backend/c_lir/mod.rs:857-864`.
     out = out + emit_deferred_globals(&m, &sn)
+
+    # Thread[T] spawn/join wrappers. Emitted BEFORE adapter functions to
+    # match Rust gg's section order (`src/backend/c_lir/mod.rs:882` — thread
+    # helpers come after spawn helpers and before adapters).
+    out = out + emit_thread_helpers(&m)
 
     # Adapter functions (FuncAddr → closure protocol)
     Dict[int, bool] fa_targets = collect_func_addr_targets(&m)

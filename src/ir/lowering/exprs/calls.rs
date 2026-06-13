@@ -912,10 +912,24 @@ pub(super) fn lower_call(
         }
 
         // thread_spawn(fn_name) → __gorget_thread_spawn_fn_name()
+        // thread_spawn(fn_name, stack_size) → same symbol, stack_size rides as a typed
+        // field (one size per fn; 0 = OS default = byte-identical to the 1-arg emit).
+        // The intrinsic runs on RAW args BEFORE the default-fill, so a 1-arg call arrives
+        // as 1 arg (stack_size 0) and a 2-arg call as 2 args; handle both arities.
         // V1: only bare function references supported. Closures are a follow-up (see TODO.md).
-        if name == "thread_spawn" && args.len() == 1 {
+        if name == "thread_spawn" && (args.len() == 1 || args.len() == 2) {
             if let ast::Expr::Identifier(fn_name) = &args[0].node.value.node {
                 let fn_name = fn_name.clone();
+                // stack_size: 0 for the 1-arg form; for the 2-arg form, const-fold the
+                // 2nd arg (a 0 or non-foldable value also routes to the plain wrapper).
+                let stack_size = if args.len() == 2 {
+                    match super::super::eval_const_expr(&args[1].node.value.node, &Default::default()) {
+                        Some(Constant::I64(v)) => v,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
                 let fn_ret_type = ctx.fn_sigs.get(fn_name.as_str())
                     .map(|(_, r)| *r)
                     .unwrap_or(I64_TYPE);
@@ -928,7 +942,7 @@ pub(super) fn lower_call(
                     format!("Thread__{ret_c}")
                 };
                 let thread_type = get_or_register_type(ctx, &thread_name, None);
-                ctx.spawn.thread_fns.entry(fn_name.clone()).or_insert(fn_ret_type);
+                ctx.spawn.thread_fns.entry(fn_name.clone()).or_insert((fn_ret_type, stack_size));
                 let spawn_fn = format!("__gorget_thread_spawn_{fn_name}");
                 let dst = builder.call(&spawn_fn, vec![], thread_type);
                 return FunctionBuilder::copy(dst);

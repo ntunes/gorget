@@ -8,7 +8,7 @@ from std.conv import int_to_str, float_to_str
 from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch, EquipBlock, StructDef, EnumDef, EnumVariant, Type, MatchArm, Pattern, SpannedPattern
 from scope import ScopeTable, DefInfo
 from types import TypeTable, ResolvedType
-from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Terminator, Operand, GirType, GirExtern, GirTypeInfo, GirFieldInfo, GirEnumVariantInfo, LiftedClosure, ClosureCapture, ResourceMetadata, CollectionKind, ConsumeKind
+from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Terminator, Operand, GirType, GirExtern, GirTypeInfo, GirFieldInfo, GirEnumVariantInfo, LiftedClosure, ClosureCapture, ResourceMetadata, CollectionKind, ConsumeKind, ThreadSpawnRec
 from gir import BOOL_TYPE, I8_TYPE, I16_TYPE, I32_TYPE, I64_TYPE, U8_TYPE, U16_TYPE, U32_TYPE, U64_TYPE, F32_TYPE, F64_TYPE, UNIT_TYPE, PRIM_COUNT
 from gir import CAP_BY_VALUE, CAP_BY_MUT_REF
 from gir import init_type_table, register_type, lookup_or_register_named, register_ptr
@@ -35,7 +35,7 @@ from lower import classify_call_arg, is_consume_kind, op_consume, decide_operand
 from lower import LazyMember, cow_lazy_materialize_family, call_arg_lets_callee_mutate, cow_lazy_join_view_result
 from lower_drops import init_drop_elab, push_drop_scope, emit_scope_drops, pop_drop_scope, pop_drop_scope_no_emit, is_droppable_type, register_local_for_drop, register_lazy_slot_for_drop, register_owning_param, mark_local_moved, restore_moved, union_moved, emit_drops_for_early_exit, flush_drop_queue
 from lower_liveness import LivenessAnalysis, compute_liveness, wire_liveness_into_modes, liveness_instrumentation_diff, update_last_pos_for_inst, update_last_pos_for_term, note_operand_pos, empty_liveness
-from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, is_comparison, map_cmpop
+from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, is_comparison, map_cmpop, eval_const_int_expr
 
 # ── Block-as-expression / tail-value lowering ───────────
 #
@@ -1282,6 +1282,39 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 int clone_dst = add_local(&ctx, recv_tid, None)
                 emit(&ctx, GIAssign(clone_dst, OpClone(recv)))
                 return clone_dst
+            # Thread[T] methods — join / id. The receiver is a `Thread__{ret_c}`
+            # opaque handle with NO registered fn body, so `fn_sigs` has no
+            # `Thread__T__join` return type and the generic dispatch would
+            # mis-type the result. Intercept here and derive the return type
+            # from the `Thread__` suffix, mirroring Rust gg's intrinsic
+            # (`src/ir/lowering/exprs/methods.rs:1058-1092`). `__join` returns
+            # the spawned fn's T (void → unit); `__id` returns int64_t.
+            String thr_recv_tn = local_type_name(recv, &ctx, &gmod)
+            if thr_recv_tn.starts_with("Thread__") and (mname == "join" or mname == "id"):
+                String thr_suffix = thr_recv_tn.slice(8, thr_recv_tn.len())
+                String thr_join_fn = thr_recv_tn + "__" + mname
+                if mname == "id":
+                    int thr_id_dst = add_local(&ctx, I64_TYPE, None)
+                    emit(&ctx, GICall(thr_id_dst, thr_join_fn, [op_consume(&ctx, &gmod, recv, CkCallArgBorrow())]))
+                    return thr_id_dst
+                # join: void suffix → unit (no dst); else the suffix's type.
+                if thr_suffix == "void":
+                    emit(&ctx, GICall(-1, thr_join_fn, [op_consume(&ctx, &gmod, recv, CkCallArgOwning())]))
+                    int thr_void_dst = add_local(&ctx, UNIT_TYPE, None)
+                    emit(&ctx, GIAssign(thr_void_dst, OpConstUnit()))
+                    return thr_void_dst
+                int thr_ret_tid = I64_TYPE
+                if thr_suffix == "double":
+                    thr_ret_tid = F64_TYPE
+                elif thr_suffix == "bool":
+                    thr_ret_tid = BOOL_TYPE
+                elif thr_suffix == "int32_t":
+                    thr_ret_tid = I32_TYPE
+                elif thr_suffix != "int64_t":
+                    thr_ret_tid = lookup_or_register_named(&gmod, thr_suffix)
+                int thr_join_dst = add_local(&ctx, thr_ret_tid, None)
+                emit(&ctx, GICall(thr_join_dst, thr_join_fn, [op_consume(&ctx, &gmod, recv, CkCallArgOwning())]))
+                return thr_join_dst
             # Detect mutating-method-on-field-access pattern *before*
             # lowering args, so we capture wb_base / wb_field while the
             # recv_box AST is still in scope. `self.field.push(x)` and
@@ -2757,6 +2790,56 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         # Lower the inner arg and pass its type through.
         SpannedExpr inner = args.get(0).unwrap()
         result = lower_expr(&ctx, inner, &gmod)
+    elif fname == "thread_spawn" and (args.len() == 1 or args.len() == 2):
+        # thread_spawn(fn[, stack_size]) → __gorget_thread_spawn_{fn}().
+        # Mirrors Rust gg's intrinsic (`src/ir/lowering/exprs/calls.rs:914`).
+        # The intrinsic runs on the RAW args BEFORE the default-fill, so a
+        # 1-arg call arrives as 1 arg (stack_size 0) and a 2-arg call as 2.
+        # V1: only bare function references supported (closures are a follow-up).
+        # The emitted wrapper text is byte-identical to Rust's (`emit_types.rs`):
+        # the symbol is fn-name-keyed (`__gorget_thread_spawn_{fn}`), with the
+        # stack_size riding as the typed `ThreadSpawnRec.stack_size` field —
+        # 0 = OS default (plain pthread_create), non-zero = a sized wrapper.
+        int ts_result = -1
+        match args.get(0).unwrap().expr:
+            case EIdentifier(spawn_fn_name):
+                # Return type of the spawned fn (Thread__{ret_c}). `fn_sigs`
+                # maps fn name → return type id; default to int64_t if absent.
+                int ts_ret_type = I64_TYPE
+                if gmod.fn_sigs.contains(spawn_fn_name):
+                    ts_ret_type = gmod.fn_sigs.get(spawn_fn_name).unwrap()
+                # C return type name — "void" for a unit-returning fn (Rust
+                # special-cases UNIT_TYPE → Thread__void), else the type's C name.
+                String ts_ret_c = "void"
+                if ts_ret_type != UNIT_TYPE:
+                    ts_ret_c = type_id_to_name(ts_ret_type, &gmod)
+                String ts_thread_name = "Thread__" + ts_ret_c
+                # stack_size: 0 for the 1-arg form; for the 2-arg form, const-fold
+                # the 2nd arg (a non-foldable value also routes to the plain wrapper).
+                int ts_stack_size = 0
+                if args.len() == 2:
+                    match eval_const_int_expr(args.get(1).unwrap(), &gmod):
+                        case Some(sz):
+                            ts_stack_size = sz
+                        case None:
+                            ts_stack_size = 0
+                # Register the spawned fn (first-write-wins — one size per fn).
+                bool ts_already = false
+                for tsf_rec in gmod.thread_spawned_fns:
+                    if tsf_rec.fn_name == spawn_fn_name:
+                        ts_already = true
+                if not ts_already:
+                    gmod.thread_spawned_fns.push(ThreadSpawnRec(spawn_fn_name.clone(), ts_ret_c.clone(), ts_stack_size))
+                # Register the Thread__{ret_c} named type for the dst local and
+                # emit the spawn call (no args — the wrapper is `(void)`).
+                int ts_thread_ty = lookup_or_register_named(&gmod, ts_thread_name)
+                int ts_dst = add_local(&ctx, ts_thread_ty, None)
+                Vector[Operand] ts_args = []
+                emit(&ctx, GICall(ts_dst, "__gorget_thread_spawn_" + spawn_fn_name, ts_args))
+                ts_result = ts_dst
+            else:
+                pass
+        result = ts_result
     elif allocator_constructor_runtime_name(fname) != "":
         # R9 FIDELITY — scoped-allocator constructor (`Arena(8192)`,
         # `PoolAllocator(sz, n)`, `TrackingAllocator()`, …). These are NOT

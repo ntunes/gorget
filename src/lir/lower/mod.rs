@@ -463,11 +463,12 @@ impl<'a> LoweringContext<'a> {
         }
 
         // Populate thread_spawned_fns from GIR runtime.
-        for (fn_name, ret_type) in &self.gir.runtime.thread_spawned_fns {
+        for (fn_name, ret_type, stack_size) in &self.gir.runtime.thread_spawned_fns {
             let ret_c = gir_type_to_c(*ret_type, &self.gir.type_registry);
             self.module.thread_spawned_fns.push(crate::lir::ThreadSpawnedFn {
                 fn_name: fn_name.clone(),
                 ret_c_type: ret_c,
+                stack_size: *stack_size,
             });
         }
 

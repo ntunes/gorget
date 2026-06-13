@@ -1,0 +1,7 @@
+from std.thread import Thread, thread_spawn
+
+void work():
+    print(42)
+
+void main():
+    thread_spawn(work, stack_size = 64 * 1024 * 1024).join()

@@ -5,14 +5,14 @@
 # explicit LIR instructions.
 
 from gir import GirModule, GirFunction, GirLocal, GirType, GirExtern, BasicBlock, Instruction, Terminator, Operand
-from gir import GirTypeInfo, GirFieldInfo, GirEnumVariantInfo
+from gir import GirTypeInfo, GirFieldInfo, GirEnumVariantInfo, ThreadSpawnRec
 from gir import BOOL_TYPE, I8_TYPE, I16_TYPE, I32_TYPE, I64_TYPE
 from gir import U8_TYPE, U16_TYPE, U32_TYPE, U64_TYPE, F32_TYPE, F64_TYPE, UNIT_TYPE, PRIM_COUNT
 from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM, OP_MOD
 from gir import OP_ADD_WRAP, OP_SUB_WRAP, OP_MUL_WRAP
 from gir import OP_BITAND, OP_BITOR, OP_BITXOR, OP_SHL, OP_SHR
 from gir import UNOP_NEG, UNOP_NOT, UNOP_BITNOT
-from lir import LirModule, LirFunction, LirBlock, LirInst, LirTerm, LirSlot, LirStructDef, LirExtern, LirGlobal
+from lir import LirModule, LirFunction, LirBlock, LirInst, LirTerm, LirSlot, LirStructDef, LirExtern, LirGlobal, LirThreadSpawnedFn
 from lir import SlotProvenance
 from lir import StructField, BlockParam, SwitchCase, FieldDrop, EnumVariantDrop, TypeDropInfo, FieldInit
 from lir import LT_I8, LT_I16, LT_I32, LT_I64, LT_U8, LT_U16, LT_U32, LT_U64
@@ -4223,6 +4223,11 @@ LirModule lower_gir_to_lir(GirModule &gmod):
     for gfn in gmod.functions:
         LirFunction lf = lir_lower_function(gfn, &gmod, &sr, &func_index, &m)
         lir_mod_add_function(&m, lf)
+
+    # Thread-spawned fn metadata (thread_spawn intrinsic → per-fn wrapper emit).
+    # Mirrors Rust gg's GIR→LIR copy (`src/lir/lower/mod.rs:465-471`).
+    for tsf_rec in gmod.thread_spawned_fns:
+        m.thread_spawned_fns.push(LirThreadSpawnedFn(tsf_rec.fn_name.clone(), tsf_rec.ret_c_type.clone(), tsf_rec.stack_size))
 
     return m
 

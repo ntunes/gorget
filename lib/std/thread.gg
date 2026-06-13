@@ -7,7 +7,7 @@ equip Thread:
     T join(!self)
     int id()
 
-Thread[T] thread_spawn(T() fn)
+Thread[T] thread_spawn(T() fn, int stack_size = 0)
 
 extern "C":
     extern int current_thread_id() = "gorget_current_thread_id"
