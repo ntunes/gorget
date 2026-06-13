@@ -437,6 +437,65 @@ fn lower_for_array(
 
     // elem = iter[idx] — borrow element from array (view for strings, clone for collections).
     let elem_type = super::super::exprs::infer_collection_element_type(ctx, iter_type);
+
+    // PROTOTYPE (Fix C scout): for a recursive-drop *user-struct* element that is
+    // NOT itself a direct collection, bind the for-element as a Ptr(elem) BORROW
+    // ALIAS into the array (no deep `{Type}__clone` per iteration, no drop reg) —
+    // mirroring the self-host's `lower_for_vector` LoBorrowed/BoCollectionElement
+    // element. The IndexLoad `Ptr`-dst early path returns the raw element pointer,
+    // and FieldLoad auto-derefs a Ptr base, so body reads work unchanged.
+    // Tuple-destructuring and direct-collection elements keep the old path.
+    //
+    // Restricted to plain `TypeDefKind::Struct` elements: enums (Option/Result/
+    // user enums) reach method dispatch (`r.is_ok()`, match scrutinees) that
+    // does not deref a Ptr receiver the way struct FieldLoad does, so a borrow
+    // alias mis-reads the enum tag. Enums keep the eager-clone path (a smaller
+    // sibling class — see scout report). The self-host handles enum borrows via
+    // its op_consume deref machinery; porting that is the follow-up.
+    let is_string = ctx.type_mapper.is_string_type(elem_type);
+    let elem_is_plain_struct = ctx.type_registry
+        .get(elem_type)
+        .and_then(|gt| if let GirType::Named(n) = gt { Some(n.clone()) } else { None })
+        .and_then(|name| ctx.type_registry.get_type_def(&name)
+            .map(|td| matches!(td.kind, crate::ir::types::TypeDefKind::Struct(_))))
+        .unwrap_or(false);
+    let is_recursive_struct = !is_string
+        && elem_is_plain_struct
+        && ctx.type_registry.is_resource_type(elem_type)
+        && !ctx.type_registry.is_collection_type(elem_type);
+    let elem_is_binding = matches!(pattern.node, Pattern::Binding(_));
+
+    if is_recursive_struct && elem_is_binding {
+        let ptr_type = ctx.register_ptr_type(elem_type);
+        let elem = builder.index_load_borrow(
+            Place::local(iter_local),
+            FunctionBuilder::copy(idx),
+            ptr_type,
+        );
+        ctx.register_local(var_name, elem, ptr_type);
+        ctx.set_cow_borrow(builder, elem);
+        // Borrow alias — collection owns the data; do NOT register for drop.
+        lower_block(ctx, builder, body);
+
+        ctx.drops.pop_scope(builder, &ctx.type_registry);
+        ctx.pop_loop();
+        ctx.restore_locals(builder, saved_arr);
+
+        builder.jump(incr_bb);
+        builder.switch_to(incr_bb);
+        let new_idx = builder.bin_op(
+            BinOp::Add, I64_TYPE,
+            FunctionBuilder::copy(idx),
+            Operand::Constant(Constant::I64(1)),
+        );
+        builder.assign(Place::local(idx), FunctionBuilder::copy(new_idx));
+        builder.jump(header_bb);
+
+        emit_else_arm_tail(ctx, builder, else_arm, &blocks);
+        builder.switch_to(exit_bb);
+        return;
+    }
+
     let elem = builder.index_load_borrow(Place::local(iter_local), FunctionBuilder::copy(idx), elem_type);
     ctx.register_local(var_name, elem, elem_type);
     // String borrows are pointer copies — do NOT register for drops.
