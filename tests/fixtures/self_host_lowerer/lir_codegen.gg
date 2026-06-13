@@ -2561,6 +2561,24 @@ int infer_inst_type_with_ret(LirInst &inst, LirModule &m, Dict[int, int] &val_ty
             return LT_VOID
         case ICallExtern(dst, name, args_ce, _, _):
             if dst >= 0:
+                # thread_spawn wrapper: `__gorget_thread_spawn_<fn>` returns a
+                # `Thread__{ret_c}` handle, which is an OPAQUE POINTER (8-byte
+                # `void*`) — NOT the I64 the name-unknown fall-through below would
+                # default to. The wrapper is emitted as a `static inline` (not a
+                # registered LirExtern), so the extern-lookup can't find its return
+                # type; type it here from the typed `m.thread_spawned_fns` set
+                # (mirrors the emit-side keying at line ~6349, NOT a `Thread__`
+                # name substring). This brings the self-host's handle value-type to
+                # PARITY with Rust gg, where `emit_extern_call` registers the spawn
+                # extern with the dst local's `Thread__void`→Ptr type
+                # (`src/lir/lower/insts.rs`) so `infer_call_extern_type` resolves
+                # Ptr via the extern lookup. (Necessary but NOT sufficient to
+                # unblock the #14-A driver opt-in: a separate self-host SSA-promotion
+                # self-instability still mis-resolves the handle's reaching-def under
+                # self-compile — see the TODO entry for the full root cause.)
+                for tsf_inf in m.thread_spawned_fns:
+                    if name == "__gorget_thread_spawn_" + tsf_inf.fn_name:
+                        return LT_PTR
                 # Enum variant constructor: returns parent enum struct.
                 if m.enum_variant_parent.contains(name):
                     String parent = m.enum_variant_parent.get(name).unwrap()
