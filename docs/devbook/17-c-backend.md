@@ -142,6 +142,54 @@ from the typed `enum_kind` field — e.g. the "throws-`int`-`main`" override
 checks `s.enum_kind == EnumKind::Result` rather than matching the type name
 (`mod.rs:1050-1052`).
 
+### Vtable globals as DCE roots
+
+Step 6's "Globals" (above) includes a class worth calling out: **per-impl
+vtable globals**, the mechanism that keeps trait-impl method bodies alive even
+when nothing in the program instantiates the implementing type.
+
+`emit_vtable_globals` (`src/ir/lowering/traits.rs:985`) emits one
+`__gg_<Trait>_VTable` global for **every** non-generic trait impl,
+*unconditionally* — there is no use-site gate. Each global is a
+struct-of-FuncAddr: its initializer is `GlobalInit::Struct { fields:
+[GlobalInit::FnRef(<impl-method>), …] }` (`src/ir/mod.rs`), one slot per trait
+instance method in declaration order, lowering to
+`LirGlobalInit::Struct { fields: [LirGlobalInit::FuncAddr(fid), …] }`. The C
+backend emits the field as a bare `(void*)&<mangled_impl_fn>` cast — *not* the
+`__adapt_` closure-adapter wrapper that an `Inst::FuncAddr` instruction uses; a
+vtable slot is a plain function address.
+
+Two ordering/lifetime consequences fall out of this, and both are
+load-bearing:
+
+- **Deferred emission.** A vtable global references functions, so it must be
+  emitted *after* the function forward declarations, not in the early global
+  block. The backend splits globals: plain (scalar/runtime-call) globals emit
+  before forward-decls, FuncAddr-bearing globals after.
+- **The vtable global is the DCE root.** The dead-function pass seeds
+  reachability from every global's FuncAddr fields
+  (`collect_global_func_refs`, `src/lir/optimize.rs:364`, driven from the root
+  scan at `:268`) and follows `Inst::FuncAddr` transitively. Because the global
+  is emitted unconditionally, this keeps an entire trait-impl method island
+  reachable with no call site — e.g. the `lib/std/io.gg`
+  Writer/Reader/Serializer/Deserializer impls survive in a fixture that uses
+  `String` formatting but never builds one of those types. Dead-*global*
+  elimination has the matching carve-out: a global is kept if its init contains
+  FuncAddrs (`global_has_func_addrs`, `src/lir/optimize.rs:486`), independent of
+  whether any `GlobalAddr` instruction references it.
+
+This is the intended shape, not over-emission to prune later: keeping every
+non-generic impl's methods live is the contract. A whole-program DCE that
+pruned truly-unused impls would have to land in both the C path and the
+reachability seeding together to stay self-consistent. The self-host backend
+mirrors all of the above — its lowerer registers a `<Trait>_VTable` typedef and
+emits the struct-of-FuncAddr global (`GGINIT_STRUCT`, the `_VTable` pre-pass in
+`tests/fixtures/self_host_lowerer/lower.gg`), with the same deferred-emit and
+DCE-root-seeding edges in `lir_codegen.gg`. A self-host that emits no vtable
+global has nothing for its C-emit DCE to follow and silently prunes the whole
+trait-impl island — the historical c_emit parity gap on `json_parse.gg`
+(self-host emitted 28 of Rust's 67 user functions).
+
 ## The runtime is a menu
 
 `emit_runtime_modules` (`emit_types.rs:1791`) does **not** paste a fixed

@@ -469,9 +469,9 @@ boundary clones), or unreachable. Before adding any new view-returning
 path, grep `gorget_str_view_region` across **all of `src/`** — the runtime
 `.c` files AND the backend `.rs` emitters (synthetic callees like
 `gorget_str_codepoint_at` never appear in the runtime source) — and walk
-each hit to its GIR producer. The v7 brief
-(`docs/plans/brief_37_phase1_lazy_default.md`, Appendix A) holds the full
-23-row enumeration the default shipped against. The sibling-site lesson was
+each hit to its GIR producer. The live source of truth for the producer set
+is the `STR_VIEW_PRODUCERS` table asserted by the lint below, not any prose
+snapshot. The sibling-site lesson was
 paid for twice: a consumer-side grep missed the index/slice route (W3c), and
 a runtime-only producer grep missed the synthetic for-string route (W3d).
 
@@ -548,9 +548,8 @@ as absence of a lazy-CoW bug.
 
 ### At-scale lessons — the stack cliff and measurement hygiene
 
-Running lazy-by-default through the bootstrap surfaced two at-scale facts
-(scout record: `docs/plans/brief_37_flip_enable.md` + the
-`docs/plans/chainE_artifacts/` measurement logs). Both initially presented
+Running lazy-by-default through the bootstrap surfaced two at-scale facts.
+Both initially presented
 as lazy-mode defects; neither was one — the first was a real host-resource
 limit misattributed to the lazy lowering, the second a measurement
 artifact. Both are closed structurally:

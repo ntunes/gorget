@@ -1,6 +1,0 @@
-bool f(int y):
-    if y == 0 or ((y + 1) == 0 and y == 0):
-        return true
-    return false
-void main():
-    print(int_to_str(f(0) as int))

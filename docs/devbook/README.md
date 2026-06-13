@@ -16,7 +16,7 @@ This book is for *compiler developers*, not application programmers. It assumes 
 
 **Freshness.** Chapters describing fast-moving internals carry a "verified against `<commit>`" stamp. Treat an un-stamped fast-moving claim as suspect and re-verify against source.
 
-> This book was grown by folding the former `internals/` deep-dives into chapters and repointing their source citations here; the former `internals/` tree has since been deleted. See [`docs/plans/devbook_plan.md`](../plans/devbook_plan.md) for the migration plan and the documentation-honesty audit.
+> This book was grown by folding the former `internals/` deep-dives into chapters and repointing their source citations here; the former `internals/` tree has since been deleted.
 
 ---
 

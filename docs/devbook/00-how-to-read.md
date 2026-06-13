@@ -3,8 +3,7 @@
 This chapter is the *contract* between this book and its readers: what the book
 owns, what it defers to the code, how its claims are kept honest, and the
 conventions every later chapter follows. It is a meta-chapter — it cites the
-book's own scaffolding ([`README.md`](README.md), the migration plan at
-[`docs/plans/devbook_plan.md`](../plans/devbook_plan.md)) rather than compiler
+book's own scaffolding ([`README.md`](README.md)) rather than compiler
 source. Read it once; the conventions it states are assumed everywhere else.
 
 This is a **how-it-is-implemented** reference for *compiler developers*. It
