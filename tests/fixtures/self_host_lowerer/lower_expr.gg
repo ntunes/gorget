@@ -2691,6 +2691,37 @@ void apply_container_hint_for_ctor_arg(LowerCtx &ctx, String ctor_name, int ai, 
         if ai >= cti_info.fields.len():
             return
         fty_name = cti_info.fields.get(ai).unwrap().type_name.clone()
+    else:
+        # ENUM-VARIANT constructor (e.g. `GICall(int, String, Vector[Operand])`).
+        # `ctor_name` is the VARIANT name, so `type_infos` (keyed by the ENUM
+        # name) misses above. Resolve the parent enum, find the matching
+        # variant, and read its field[ai] type — the EXACT struct-ctor logic,
+        # one indirection deeper. Without this the container-literal arg
+        # (`[op]`) of a variant ctor gets NO element-size hint and falls back
+        # to the hardcoded 8 (`OpConstI64(8)` in the EArrayLiteral lowering) —
+        # which TRUNCATES every >8-byte element (e.g. a 16-byte `Operand`
+        # enum, whose `OpMove(int)` payload was silently dropped on push →
+        # read back as `OpMove(0)`). This was the bootstrap-SIGSEGV root for
+        # `GICall(-1, join_fn, [OpMove(handle)])` (#14 A): the join arg's
+        # local id became 0 → `pthread_join(NULL)` in the self-compiled stage.
+        # struct ctors are unaffected (they take the `is_enum`-true `return`
+        # path's sibling above). Mirrors Rust gg, whose per-arg
+        # `expected_type` is set from the variant's field type uniformly.
+        String parent_enum = enum_variant_parent(ctor_name, &gmod)
+        if parent_enum == "":
+            return
+        if not gmod.type_infos.contains(parent_enum):
+            return
+        GirTypeInfo penum_info = gmod.type_infos.get(parent_enum).unwrap()
+        int vci = 0
+        while vci < penum_info.variants.len():
+            GirEnumVariantInfo cti_var = penum_info.variants.get(vci).unwrap()
+            if cti_var.name == ctor_name:
+                if ai < cti_var.fields.len():
+                    fty_name = cti_var.fields.get(ai).unwrap().type_name.clone()
+                vci = penum_info.variants.len()
+            else:
+                vci += 1
     if fty_name == "":
         return
     if is_arr_lit:
