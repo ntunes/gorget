@@ -2355,6 +2355,26 @@ fn cmd_remove(name: &str) {
 }
 
 fn main() {
+    // (A) #14: run the whole compiler on a sized stack (rustc's pattern — it runs
+    // compilation on a `std::thread` with a configurable stack), so deep expression
+    // lowering doesn't overflow the OS-default main-thread stack before the (B)
+    // parse-time depth limit (128) can reject pathological input. The compiler is a
+    // build tool (not a GUI app), so running off thread 0 is fine — unrelated to the
+    // gorget-arena macOS fix (that was about *compiled user programs*' main thread).
+    // env GG_MIN_STACK (bytes) overrides; default 512MB (mmap'd, lazily faulted → cheap).
+    let stack_size = env::var("GG_MIN_STACK")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(512 * 1024 * 1024);
+    let child = std::thread::Builder::new()
+        .stack_size(stack_size)
+        .name("gg-main".into())
+        .spawn(real_main)
+        .expect("failed to spawn gg main thread");
+    child.join().expect("gg main thread panicked");
+}
+
+fn real_main() {
     let args: Vec<String> = env::args().collect();
 
     // No args → launch interactive TUI

@@ -23,8 +23,18 @@ from std.collections import Vector, Dict
 from std.time import time_ms
 from std.conv import int_to_str
 from std.io import stderr
+from std.thread import thread_spawn, Thread
 
+# A (#14): run the compile on a 512MB opt-in stack so the compiler tolerates
+# deep expression lowering without overflowing the OS-default ~8MB main thread
+# (the (B) parse-time limit caps input at 128; this gives the lowerer headroom).
+# `run_with_stack` was consolidated into `thread_spawn(fn, stack_size)`.
+# compile_main reads its inputs from the global `args()`, so the relocated body
+# works (gorget_init_args runs in this wrapper main first).
 void main():
+    thread_spawn(compile_main, 512 * 1024 * 1024).join()
+
+void compile_main():
     Vector[String] cmd_args = args()
     String path = cmd_args.get(1).unwrap()
     String lib_dir = "lib"
