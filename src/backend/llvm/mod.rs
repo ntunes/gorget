@@ -1892,6 +1892,19 @@ fn c_sizeof_name(name: &str) -> usize {
         "int16_t" | "uint16_t" => 2,
         "int8_t" | "uint8_t" | "bool" | "char" => 1,
         "Str" | "GorgetString" => 32,
+        // Runtime collection handle structs — element-size operands of a
+        // static collection constructor (`gorget_dict_new(sizeof(GorgetArray))`
+        // for `Dict[int, Vector[int]]`). The GIR routes the surface type
+        // (`Vector`/`Set`/…) to these handle-struct names via
+        // `collection_arg_sizeof_c_type`; without these arms the `_ => 8`
+        // default truncates the handle to size 8 → bounds panic.
+        "GorgetArray" => 64,
+        // 152 is the authoritative GorgetMap struct size (19 × 8-byte fields,
+        // `runtime_preamble.c:328-349`; GorgetSet is `typedef GorgetMap`), used
+        // everywhere on the C side (`src/lir/types.rs:150`
+        // `computed_c_size: Some(152)`). NOT 160 — `sizeof_struct_by_name`'s
+        // 160 (above) is a separate pre-existing over-size to be cleaned up.
+        "GorgetMap" | "GorgetSet" => 152,
         _ => 8, // default
     }
 }

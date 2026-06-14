@@ -17215,6 +17215,41 @@ fn static_collection() {
     );
 }
 
+// Bug 1 (conformance): a module-level `static Dict[K, Vector/Set[...]]` must
+// spell its value element-size as the runtime handle struct
+// (`sizeof(GorgetArray)` / `sizeof(GorgetMap)`), not the surface type name
+// (`Vector`/`Set`, undeclared C types). The GIR `collection_arg_sizeof_c_type`
+// routes via the typed `BuiltinTypeProtocol.collection_kind`; the LLVM
+// `c_sizeof_name` supplies the matching size (GorgetArray=64, GorgetMap/Set=152).
+// Both fixtures read the value back so they exercise real storage.
+//
+// Per-backend (MEASURED 2026-06-14): both fixtures pass on C AND LLVM. The
+// LLVM run is the one that verifies the 152/64 constants — C resolves
+// `sizeof()` at cc-time so it would not catch a wrong constant; the LLVM IR
+// emits the integer literal (`gorget_dict_new(..., i64 152)` for the Set value,
+// `i64 64` for the Vector value).
+#[test]
+fn static_dict_vector_value() {
+    run_gg(
+        "static_dict_vector_value.gg",
+        "\
+3
+10
+30",
+    );
+}
+
+#[test]
+fn static_dict_set_value() {
+    run_gg(
+        "static_dict_set_value.gg",
+        "\
+2
+has 22
+no 99",
+    );
+}
+
 #[test]
 fn static_ref_param() {
     run_gg(

@@ -1,0 +1,24 @@
+# Regression: a module-level `static Dict[int, Set[int]]` must spell its
+# value element-size as the runtime handle struct (`sizeof(GorgetSet)` = 152),
+# not the surface type name `Set`. Exercises the GorgetSet branch of the GIR
+# `collection_arg_sizeof_c_type` routing (sibling of the GorgetArray case).
+# Bug 1 (conformance). Measured 2026-06-14: passes on BOTH C and LLVM — the
+# LLVM run is what verifies the 152 constant (C resolves `sizeof` at cc-time;
+# the LLVM IR emits the literal `gorget_dict_new(..., i64 152)`).
+from std.conv import int_to_str
+from std.collections import Dict, Set
+
+static Dict[int, Set[int]] TAGS = Dict[int, Set[int]]()
+
+void main():
+    Set[int] s = Set[int]()
+    s.add(11)
+    s.add(22)
+    s.add(11)
+    TAGS.put(3, !s)
+    Set[int] got = TAGS.get(3).unwrap()
+    print(int_to_str(got.len()))
+    if got.contains(22):
+        print("has 22")
+    if got.contains(99) == false:
+        print("no 99")

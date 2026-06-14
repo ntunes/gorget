@@ -2612,8 +2612,12 @@ fn eval_static_init(
         }
         // Collections: Dict, HashMap, Vector need runtime heap allocation.
         "Dict" if callee_name == "Dict" => {
-            let key_c = generic_elem_c_type(ty);
-            let val_c = generic_nth_c_type(ty, 1);
+            // Collection-valued keys/values (`Dict[int, Vector[int]]`) spell
+            // their element size as the runtime handle struct, not the surface
+            // type name (which is not a declared C type). See
+            // `collection_arg_sizeof_c_type`.
+            let key_c = collection_arg_sizeof_c_type(ty, 0);
+            let val_c = collection_arg_sizeof_c_type(ty, 1);
             if key_c == "GorgetString" {
                 GlobalInit::Extern {
                     name: "gorget_dict_new_str".to_string(),
@@ -2627,8 +2631,8 @@ fn eval_static_init(
             }
         }
         "HashMap" if callee_name == "HashMap" => {
-            let key_c = generic_elem_c_type(ty);
-            let val_c = generic_nth_c_type(ty, 1);
+            let key_c = collection_arg_sizeof_c_type(ty, 0);
+            let val_c = collection_arg_sizeof_c_type(ty, 1);
             if key_c == "GorgetString" {
                 GlobalInit::Extern {
                     name: "gorget_map_new_str".to_string(),
@@ -2642,7 +2646,7 @@ fn eval_static_init(
             }
         }
         "Vector" if callee_name == "Vector" => {
-            let elem_c = generic_elem_c_type(ty);
+            let elem_c = collection_arg_sizeof_c_type(ty, 0);
             GlobalInit::Extern {
                 name: "gorget_array_new".to_string(),
                 args: vec![GlobalInitArg::Sizeof(elem_c)],
@@ -2746,6 +2750,45 @@ fn literal_to_global_init(expr: &crate::parser::ast::Expr) -> Option<crate::ir::
 // a string `RuntimeCall(...)`. The new `literal_to_global_init`
 // returns `None` directly for non-literals — the caller checks via
 // `Option::collect` instead, which makes `is_literal_arg` dead code.
+
+/// Spell the C type name for the Nth generic arg of `ty` when that arg is
+/// used as the element-size operand of a runtime collection constructor
+/// (`gorget_dict_new(sizeof(K), sizeof(V))`, `gorget_array_new(sizeof(E))`).
+///
+/// A nested collection value (`Dict[int, Vector[int]]`'s `Vector[int]`) is a
+/// `Type::Named { name: "Vector", .. }`; `generic_nth_c_type` would return the
+/// surface name `"Vector"` verbatim, which is not a declared C type — the
+/// emitted `sizeof(Vector)` is a C compile error (and on LLVM a silent
+/// size-8 truncation). The runtime stores every collection by its heap
+/// handle struct, so the element size is the size of that struct.
+///
+/// The collection→runtime-struct mapping reads the TYPED
+/// `BuiltinTypeProtocol.collection_kind` (the same axis
+/// `register_collection_alias` uses, `src/ir/lowering/types.rs:772`) — NOT a
+/// name-prefix test. Non-collection heads fall through to
+/// `generic_nth_c_type`, which already handles primitives and plain named
+/// types. (`generic_elem_c_type`'s Mutex/RWLock mangled-symbol path is a
+/// DIFFERENT axis and is intentionally left untouched.)
+fn collection_arg_sizeof_c_type(ty: &crate::parser::ast::Type, n: usize) -> String {
+    use crate::parser::ast::Type;
+    if let Type::Named { generic_args, .. } = ty {
+        if let Some(arg) = generic_args.get(n) {
+            if let Type::Named { name, .. } = &arg.node {
+                if let Some(protocol) = builtins::lookup_protocol(name.node.as_str()) {
+                    if let Some(kind) = protocol.collection_kind {
+                        return match kind {
+                            CollectionKind::Array => "GorgetArray",
+                            CollectionKind::Map | CollectionKind::OrderedMap => "GorgetMap",
+                            CollectionKind::Set | CollectionKind::OrderedSet => "GorgetSet",
+                        }
+                        .to_string();
+                    }
+                }
+            }
+        }
+    }
+    generic_nth_c_type(ty, n)
+}
 
 /// Extract the Nth generic argument's C type name (0-indexed).
 fn generic_nth_c_type(ty: &crate::parser::ast::Type, n: usize) -> String {

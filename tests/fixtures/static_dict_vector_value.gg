@@ -1,0 +1,20 @@
+# Regression: a module-level `static Dict[int, Vector[int]]` must spell its
+# value element-size as the runtime handle struct (`sizeof(GorgetArray)`),
+# not the surface type name `Vector` (an undeclared C type → cc error on C,
+# size-8 truncation → bounds panic on LLVM). Reads the value back so it
+# exercises real storage, not just construction. Bug 1 (conformance).
+from std.conv import int_to_str
+from std.collections import Dict, Vector
+
+static Dict[int, Vector[int]] CACHE = Dict[int, Vector[int]]()
+
+void main():
+    Vector[int] v = Vector[int]()
+    v.push(10)
+    v.push(20)
+    v.push(30)
+    CACHE.put(7, !v)
+    Vector[int] got = CACHE.get(7).unwrap()
+    print(int_to_str(got.len()))
+    print(int_to_str(got.get(0).unwrap()))
+    print(int_to_str(got.get(2).unwrap()))
