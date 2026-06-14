@@ -1,0 +1,18 @@
+# Conformance Bug 2 (Vector sibling): reassigning a `static Vector` with an
+# owned local Vector must transfer ownership. Vector was the most visibly
+# corrupt sibling (the read returned garbage). Same write-site fix covers it.
+
+from std.conv import int_to_str
+
+static Vector[int] NUMS = Vector[int]()
+
+void fill(int n):
+    Vector[int] v = Vector[int]()
+    v.push(n)
+    NUMS = v
+
+void main():
+    fill(10)
+    print(int_to_str(NUMS.get(0).unwrap()))
+    fill(20)
+    print(int_to_str(NUMS.get(0).unwrap()))

@@ -1,0 +1,27 @@
+# Conformance Bug 2: reassigning a `static Dict` (store an owned local Dict
+# into the static) must TRANSFER OWNERSHIP, not shallow-alias the local's
+# heap buffer. Before the fix, `CACHE = d` shallow-copied d's buffer pointer
+# into the static; d's scope-exit drop freed it; the next read of CACHE was a
+# use-after-free (garbage / segfault). The fix routes the store through the
+# consuming-position discipline (clone-or-move + MoveZero + drop-old).
+
+from std.conv import int_to_str
+
+static Dict[String, int] CACHE = Dict[String, int]()
+
+void rebuild():
+    # Build a fresh owned Dict in a local, then store it into the static.
+    # The local `d` dies when `rebuild` returns; the static must own a LIVE
+    # buffer afterwards.
+    Dict[String, int] d = Dict[String, int]()
+    d.put("answer", 42)
+    CACHE = d
+
+void main():
+    rebuild()
+    # First read: the static must still own a live buffer (no UAF).
+    print(int_to_str(CACHE.get("answer").unwrap()))
+    # Reassign again to prove the OLD buffer is dropped (no leak/double-free)
+    # and the NEW one is owned.
+    rebuild()
+    print(int_to_str(CACHE.get("answer").unwrap()))

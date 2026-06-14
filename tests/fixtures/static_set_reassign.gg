@@ -1,0 +1,20 @@
+# Conformance Bug 2 (Set sibling): reassigning a `static Set` with an owned
+# local Set must transfer ownership. This PROVES the "Set fixed" claim: the
+# write-site fix gates on the typed `is_resource_or_contains_resource`
+# predicate (no name-matching), uniform across Dict/Vector/Set. The static's
+# initial empty value (Zeroed) drops safely; the reassignment stores the
+# properly-built owned set, which the read-back must find live.
+
+static Set[int] SEEN = Set[int]()
+
+void mark(int x):
+    Set[int] s = Set[int]()
+    s.insert(x)
+    SEEN = s
+
+void main():
+    mark(7)
+    print(SEEN.contains(7))
+    mark(9)
+    print(SEEN.contains(9))
+    print(SEEN.contains(7))

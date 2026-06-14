@@ -456,6 +456,21 @@ fn sec_29_unwrap_pattern() {
     security_safe("attack_29_unwrap_pattern", "alpha");
 }
 
+#[test]
+fn sec_92_static_collection_reassign_uaf() {
+    // Conformance Bug 2. Storing an owned local collection into a `static`
+    // (`CACHE = d`) is a consuming position; before the fix it shallow-aliased
+    // the local's heap buffer, which the local's scope-exit drop freed → a
+    // heap-use-after-free on the next read of the static (silent in release:
+    // garbage value, exit 0). Fixed in src/ir/lowering/stmts/assigns.rs — the
+    // store-to-static path now clones-or-moves the RHS, MoveZeros the moved
+    // source, and drops the static's prior value. Covers Dict/Vector/Set.
+    security_safe(
+        "attack_92_static_collection_reassign_uaf",
+        "42\n42\n10\n20\ntrue\ntrue\nfalse",
+    );
+}
+
 // ── Runtime traps that must use the Gorget panic path, not C UB ──
 
 #[test]

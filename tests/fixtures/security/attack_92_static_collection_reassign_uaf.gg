@@ -1,0 +1,54 @@
+# Conformance Bug 2 (use-after-free): storing an OWNED local collection into a
+# `static` (`CACHE = d`) used to shallow-alias the local's heap buffer. When
+# the helper returned, the local's scope-exit drop freed that buffer and the
+# next read of the static was a use-after-free — under ASan a heap-use-after-
+# free; in release a garbage value or segfault. The fix routes the store
+# through the consuming-position discipline (clone-or-move + MoveZero of the
+# moved source + drop of the static's prior value), so the static owns a LIVE
+# buffer and the old buffer is freed exactly once.
+#
+# This is a SILENT class: the un-sanitized release binary exits 0 while reading
+# freed memory, so a plain stdout diff can pass even when memory is corrupt.
+# The ASan sweep is the real guard — a regression to the shallow store trips
+# heap-use-after-free here, not just a value mismatch.
+#
+# Covers all three resource collections (Dict / Vector / Set) reassigned, and
+# a double-reassign to also exercise drop-of-old (no leak / double-free).
+
+from std.conv import int_to_str
+
+static Dict[String, int] CACHE = Dict[String, int]()
+static Vector[int] NUMS = Vector[int]()
+static Set[int] SEEN = Set[int]()
+
+void rebuild_dict():
+    Dict[String, int] d = Dict[String, int]()
+    d.put("answer", 42)
+    CACHE = d
+
+void refill_vec(int n):
+    Vector[int] v = Vector[int]()
+    v.push(n)
+    NUMS = v
+
+void mark(int x):
+    Set[int] s = Set[int]()
+    s.insert(x)
+    SEEN = s
+
+void main():
+    rebuild_dict()
+    print(int_to_str(CACHE.get("answer").unwrap()))
+    rebuild_dict()
+    print(int_to_str(CACHE.get("answer").unwrap()))
+
+    refill_vec(10)
+    print(int_to_str(NUMS.get(0).unwrap()))
+    refill_vec(20)
+    print(int_to_str(NUMS.get(0).unwrap()))
+
+    mark(7)
+    print(SEEN.contains(7))
+    mark(9)
+    print(SEEN.contains(9))
+    print(SEEN.contains(7))

@@ -17250,6 +17250,43 @@ no 99",
     );
 }
 
+// Conformance Bug 2: storing an OWNED local collection into a `static`
+// (`CACHE = d`) is a consuming position — the static must own its value, not
+// shallow-alias the local's heap buffer. Before the fix the local's
+// scope-exit drop freed the buffer the static aliased → use-after-free on the
+// next read (garbage / segfault). The write-site fix clones-or-moves the RHS,
+// MoveZeros the moved source, and drops the static's prior value.
+#[test]
+fn static_dict_reassign() {
+    run_gg(
+        "static_dict_reassign.gg",
+        "\
+42
+42",
+    );
+}
+
+#[test]
+fn static_vector_reassign() {
+    run_gg(
+        "static_vector_reassign.gg",
+        "\
+10
+20",
+    );
+}
+
+#[test]
+fn static_set_reassign() {
+    run_gg(
+        "static_set_reassign.gg",
+        "\
+true
+true
+false",
+    );
+}
+
 #[test]
 fn static_ref_param() {
     run_gg(

@@ -406,9 +406,88 @@ pub(super) fn lower_assign(
                     ctx.unset_ownership(builder, local_id);
                 }
             } else if ctx.global_names.contains(name.as_str()) {
-                // Module-level static variable — emit GlobalAssign
+                // Module-level static variable — store into a static is a
+                // CONSUMING POSITION (the static must OWN its value), exactly
+                // like a collection put / struct-field init / return. The old
+                // plain `global_assign` did a shallow memcpy with no
+                // clone/move/drop, so `CACHE = d` (owned local Dict → static
+                // Dict) shallow-aliased `d`'s heap buffer; when the function
+                // returned, `d`'s scope-exit drop freed that buffer and the
+                // next read of `CACHE` was a use-after-free (Conformance Bug 2).
+                // Mirror the consuming-position discipline the local-assign
+                // path and `lower_index_assign` already run:
+                //   1. clone-or-move the RHS (`ensure_owned_at_consuming_arg`),
+                //   2. snapshot the static's OLD value into a temp (an EAGER
+                //      Load — `Constant::GlobalRef` lowers to GlobalAddr+Load
+                //      at the point it's consumed, so the snapshot MUST be
+                //      materialized BEFORE the store or it would read the NEW
+                //      value and double-free it),
+                //   3. store the new value (this is the consuming use of the
+                //      source),
+                //   4. MoveZero the moved source so its scope-exit drop can't
+                //      double-free the buffer the static now owns — emitted
+                //      AFTER the store, exactly like `lower_index_assign` runs
+                //      `maybe_move_zero` AFTER the consuming `call_void`,
+                //   5. drop the OLD-value snapshot.
+                // Ordering is load-bearing — compute-new → snapshot-old →
+                // store-new → move-zero-source → drop-old — which makes a
+                // self-referential RHS (`CACHE = grow(CACHE)`) safe.
                 let operand = lower_expr(ctx, builder, value);
+                // (1) Clone a borrowed/live source; leave an owned-dead temp
+                //     to move (the canonical decision tree).
+                let operand = ctx.ensure_owned_at_consuming_arg(
+                    builder, operand, value,
+                    crate::ir::ImplicitCloneReason::ConsumingArg);
+                // Capture the move-zero target BEFORE the store consumes the
+                // operand. Gate on resource-or-contains-resource (the wide
+                // `needs_drop` predicate, not the narrow is_resource_type),
+                // skip Ptr wrappers (already materialized) and already-moved
+                // slots.
+                let move_zero_target = match &operand {
+                    Operand::Copy(place) | Operand::Move(place)
+                        if place.projections.is_empty()
+                            && ctx.type_registry.is_resource_or_contains_resource(
+                                builder.local_type(place.local))
+                            && !ctx.drops.is_moved(place.local)
+                            && !matches!(
+                                ctx.type_registry.get(builder.local_type(place.local)),
+                                Some(crate::ir::types::GirType::Ptr(_))
+                                    | Some(crate::ir::types::GirType::MutPtr(_))) =>
+                    {
+                        Some(place.local)
+                    }
+                    _ => None,
+                };
+                // (2) EAGER-snapshot the OLD static value into a temp BEFORE
+                //     the store — ONLY for resource statics. The snapshot's
+                //     type comes from `global_type_names` (same lookup the
+                //     static compound-assign path uses). A primitive static
+                //     (`static int counter`) needs no drop-on-overwrite, and
+                //     emitting a `Drop` on a non-droppable type fails GIR
+                //     validation — gate on `is_resource_or_contains_resource`.
+                let old_type = ctx.global_type_names.get(name)
+                    .and_then(|tn| ctx.type_mapper.lookup_named(tn))
+                    .unwrap_or(I64_TYPE);
+                let snap = if ctx.type_registry.is_resource_or_contains_resource(old_type) {
+                    let snap = builder.add_local(old_type, None);
+                    builder.assign(
+                        Place::local(snap),
+                        Operand::Constant(Constant::GlobalRef(name.clone())));
+                    Some(snap)
+                } else {
+                    None
+                };
+                // (3) Store the new value (consuming use of the source).
                 builder.global_assign(name.clone(), operand);
+                // (4) MoveZero the moved source — AFTER the store has read it.
+                if let Some(src) = move_zero_target {
+                    ctx.move_zero_and_mark(builder, src);
+                }
+                // (5) Drop the OLD-value snapshot (frees the prior buffer while
+                //     the static holds the new one).
+                if let Some(snap) = snap {
+                    builder.drop(Place::local(snap));
+                }
             }
         }
         Expr::FieldAccess { object, field } => {
