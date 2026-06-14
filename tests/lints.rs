@@ -487,7 +487,16 @@ fn no_growth_in_phase_d_proxy_reads() {
     /// typed-accessor equivalent — same write-side-discipline class as the
     /// 64→70→77 bumps. Not migratable without first making the drop
     /// accountant queryable off `Local`. Locking in the floor.
-    const BUDGET: usize = 82;
+    /// Bumped 82 → 83 (2026-06-14): one new proxy read from Conformance
+    /// Bug 2 (`store-to-static is a consuming position`, `assigns.rs:451`):
+    /// the `!ctx.drops.is_moved(place.local)` idempotence guard before
+    /// `move_zero_and_mark` in the static-assign branch. SAME write-side-
+    /// discipline class as the 64→70→77→78→82 bumps — `move_zero_and_mark`
+    /// is non-idempotent (it asserts), and `is_moved` is drop-accountant
+    /// state with no `LocalOwnership` accessor, so it is not migratable
+    /// without first making the drop accountant queryable off `Local`.
+    /// Locking in the floor.
+    const BUDGET: usize = 83;
 
     let count = count_phase_d_proxy_reads();
     assert!(
