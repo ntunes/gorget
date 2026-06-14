@@ -620,8 +620,64 @@ fn lower_for_enumerate(
         ctx.register_local(idx_name, idx_local, I64_TYPE);
     }
 
-    // Bind element variable (second tuple element) — load from array
+    // Bind element variable (second tuple element) — load from array.
     let elem_type = super::super::exprs::infer_collection_element_type(ctx, iter_type);
+
+    // SCOUT PROTOTYPE (Fix-C enumerate sibling): for a recursive-drop user
+    // struct/enum element bound to a plain identifier, bind it as a Ptr borrow
+    // alias into the array — mirroring `lower_for_array`'s borrow path — so the
+    // per-iteration `{Type}__clone` is elided. Read-only scans (the dominant
+    // `m.structs.enumerate()` consumers in the self-host lir_codegen) only read
+    // fields through the alias; FieldLoad auto-derefs a Ptr base, enum
+    // method/match dispatch resolves through a Ptr receiver, so body reads work.
+    let is_string = ctx.type_mapper.is_string_type(elem_type);
+    let elem_is_struct_or_enum = ctx.type_registry
+        .get(elem_type)
+        .and_then(|gt| if let GirType::Named(n) = gt { Some(n.clone()) } else { None })
+        .and_then(|name| ctx.type_registry.get_type_def(&name)
+            .map(|td| matches!(td.kind,
+                crate::ir::types::TypeDefKind::Struct(_)
+                | crate::ir::types::TypeDefKind::Enum(_))))
+        .unwrap_or(false);
+    let is_recursive_struct = !is_string
+        && elem_is_struct_or_enum
+        && ctx.type_registry.is_resource_type(elem_type)
+        && !ctx.type_registry.is_collection_type(elem_type);
+    let elem_is_binding = matches!(parts[1].node, Pattern::Binding(_));
+
+    if is_recursive_struct && elem_is_binding {
+        let ptr_type = ctx.register_ptr_type(elem_type);
+        let elem = builder.index_load_borrow(
+            Place::local(iter_local),
+            FunctionBuilder::copy(idx),
+            ptr_type,
+        );
+        if let Pattern::Binding(elem_name) = &parts[1].node {
+            ctx.register_local(elem_name, elem, ptr_type);
+        }
+        ctx.set_cow_borrow(builder, elem);
+        // Borrow alias — collection owns the data; do NOT register for drop.
+        lower_block(ctx, builder, body);
+
+        ctx.drops.pop_scope(builder, &ctx.type_registry);
+        ctx.pop_loop();
+        ctx.restore_locals(builder, saved_enum);
+
+        builder.jump(incr_bb);
+        builder.switch_to(incr_bb);
+        let new_idx = builder.bin_op(
+            BinOp::Add, I64_TYPE,
+            FunctionBuilder::copy(idx),
+            Operand::Constant(Constant::I64(1)),
+        );
+        builder.assign(Place::local(idx), FunctionBuilder::copy(new_idx));
+        builder.jump(header_bb);
+
+        emit_else_arm_tail(ctx, builder, else_arm, &blocks);
+        builder.switch_to(exit_bb);
+        return;
+    }
+
     let elem = builder.index_load_borrow(Place::local(iter_local), FunctionBuilder::copy(idx), elem_type);
     if let Pattern::Binding(elem_name) = &parts[1].node {
         ctx.register_local(elem_name, elem, elem_type);
