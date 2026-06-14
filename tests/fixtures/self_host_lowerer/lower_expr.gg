@@ -5,7 +5,7 @@
 # part of the lower.gg module split (output-neutral pure function move).
 from std.collections import Vector, Dict
 from std.conv import int_to_str, float_to_str
-from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch, EquipBlock, StructDef, EnumDef, EnumVariant, Type, MatchArm, Pattern, SpannedPattern
+from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch, EquipBlock, StructDef, EnumDef, EnumVariant, Type, MatchArm, Pattern, SpannedPattern, Span
 from scope import ScopeTable, DefInfo
 from types import TypeTable, ResolvedType
 from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Terminator, Operand, GirType, GirExtern, GirTypeInfo, GirFieldInfo, GirEnumVariantInfo, LiftedClosure, ClosureCapture, ResourceMetadata, CollectionKind, ConsumeKind, ThreadSpawnRec
@@ -25,6 +25,7 @@ from compiler.data.resources import STRING_BUILTIN_METHODS, COLLECTION_BUILTIN_M
 from compiler.data.schema import BuiltinMethodDecl, BuiltinMethodEntry
 from compiler.data.schema import BuiltinRetKind, BrkString, BrkInfer
 from lir_lower import resource_meta_for
+from lower_loops import lower_for_string, lower_for_range, lower_for_vector
 from lower import LowerCtx, ResultPayloadTypes, DictKvNames, ClosureSig, CaptureCollector, FieldBorrowPair, SVarDeclEmission
 from lower import lower_fail, diag_bug, diag_warn, emit, new_block, switch_to, set_terminator
 from lower import add_local, add_local_with, add_local_inheriting, nl_get, nl_put, nl_contains
@@ -2656,11 +2657,134 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             int it_dst = add_local(&ctx, UNIT_TYPE, None)
             emit(&ctx, GIAssign(it_dst, OpConstUnit()))
             return it_dst
+        case EListComp(lc_comp_box, lc_var, lc_iter_box, lc_filt_opt):
+            return lower_list_comprehension(&ctx, *lc_comp_box, lc_var, *lc_iter_box, lc_filt_opt, &gmod)
         else:
-            # Remaining: ESetComp, EDictComp, EListComp, ERange
+            # Remaining: ESetComp, EDictComp, ERange
             int fallback = add_local(&ctx, UNIT_TYPE, None)
             emit(&ctx, GIAssign(fallback, OpConstUnit()))
             return fallback
+
+# ── List comprehension lowering ──────────────────────────
+# `[comp_expr for var in iterable if filter]` → a loop that builds an
+# array accumulator. Mirrors Rust `lower_list_comprehension`
+# (src/ir/lowering/exprs/collections.rs:509), but reuses the self-host's
+# existing run-proven `lower_for_*` loop machinery instead of re-emitting
+# the loop scaffold: synthesize an `acc.push(comp_expr)` body (wrapped in
+# `if filter:` for the filtered variant) and route it through
+# `lower_for_string` (String base — single UTF-8 codepoint pass, matches
+# `for c in s:` semantics), `lower_for_range` (both-bounded `start..end`),
+# or `lower_for_vector` (general indexed collection). All three already
+# handle the loop var binding, the borrow-alias element read, and the
+# per-iteration drop scope — so the only new emit is the accumulator
+# alloc + the synthesized push.
+#
+# The accumulator for the String base is typed as the mangled
+# `Vector__GorgetString` (Rust's `ensure_collection_type` precedent): the
+# typechecker returns error for comprehensions, so the GIR acc type ALONE
+# carries the element story for the push consume-clone machinery, drops,
+# and downstream element inference. The codepoint view (`ch`) is a cap=0
+# borrow alias; the synthesized `acc.push(ch)` clones it at the ownership
+# boundary via the normal method-call consume machinery (run-proven by
+# the `for c in s: stack.push(c)` idiom).
+int lower_list_comprehension(LowerCtx &ctx, SpannedExpr comp_expr, String var_name, SpannedExpr iterable, Option[Box[SpannedExpr]] filt_opt, GirModule &gmod):
+    Span span = comp_expr.span
+    # ── RANGE base: `[x for x in start..end]` (exclusive `..` only — the
+    # parser produces no inclusive range). Mirrors collections.rs:520.
+    match iterable.expr:
+        case ERange(start_opt, end_opt):
+            match start_opt:
+                case Some(start_box):
+                    match end_opt:
+                        case Some(end_box):
+                            # Range elements are scalar (the loop var is I64,
+                            # and the comp body is typically int) — a bare
+                            # GorgetArray (elem_size 8) accumulator suffices.
+                            int racc_tid = lookup_or_register_named(&gmod, "GorgetArray")
+                            int racc = comp_make_acc(&ctx, racc_tid, "", &gmod)
+                            String racc_name = "__listcomp_acc_" + int_to_str(racc)
+                            nl_put(&ctx, racc_name, racc)
+                            Vector[Stmt] rbody = comp_synth_body(racc_name, comp_expr, filt_opt, span)
+                            lower_for_range(&ctx, var_name, *start_box, *end_box, rbody, &gmod, false)
+                            return racc
+                        case None:
+                            pass
+                case None:
+                    pass
+        else:
+            pass
+    # Lower the iterable once; clear any leaked expected_type (the iterable
+    # is collection-typed, not the surrounding context).
+    int saved_et = ctx.expected_type
+    ctx.expected_type = -1
+    int coll_local = lower_expr(&ctx, iterable, &gmod)
+    ctx.expected_type = saved_et
+    coll_local = maybe_auto_propagate(&ctx, coll_local, &gmod)
+    String coll_tn = local_type_name(coll_local, &ctx, &gmod)
+    SpannedPattern var_pat = SpannedPattern(PBinding(var_name), span)
+    # ── STRING base: `[c for c in s]` — UTF-8 codepoint pass via
+    # `lower_for_string`. Accumulator typed `Vector__GorgetString` so the
+    # synthesized push clones the cap=0 codepoint view at the boundary.
+    if coll_tn == "GorgetString":
+        int sacc_tid = lookup_or_register_named(&gmod, "Vector__GorgetString")
+        int sacc = comp_make_acc(&ctx, sacc_tid, "GorgetString", &gmod)
+        String sacc_name = "__listcomp_acc_" + int_to_str(sacc)
+        nl_put(&ctx, sacc_name, sacc)
+        Vector[Stmt] sbody = comp_synth_body(sacc_name, comp_expr, filt_opt, span)
+        lower_for_string(&ctx, var_pat, coll_local, sbody, &gmod, false)
+        return sacc
+    # ── VECTOR base: idx-walk via `lower_for_vector`. Accumulator element
+    # type recovered from the collection name so the push clones correctly.
+    String elem_name = collection_element_type(coll_tn)
+    int vacc_tid = lookup_or_register_named(&gmod, "GorgetArray")
+    int vacc = comp_make_acc(&ctx, vacc_tid, elem_name, &gmod)
+    String vacc_name = "__listcomp_acc_" + int_to_str(vacc)
+    nl_put(&ctx, vacc_name, vacc)
+    Vector[Stmt] vbody = comp_synth_body(vacc_name, comp_expr, filt_opt, span)
+    lower_for_vector(&ctx, var_pat, coll_local, coll_tn, false, vbody, &gmod, false)
+    return vacc
+
+# Allocate a comprehension accumulator array. When `elem_tyname` names a
+# concrete element type, emit the `__gorget_array_new_sized_<T>` magic (it
+# expands at C-emit to gorget_array_new(sizeof(T)) + the T
+# elem_drop/elem_clone/elem_materialize fn-ptr registration, exactly like
+# the typed EArrayLiteral path) so non-scalar elements (e.g. GorgetString
+# codepoint views) are sized, freed, and cloned correctly. An empty name
+# falls back to the scalar `gorget_array_new(8)`.
+int comp_make_acc(LowerCtx &ctx, int acc_tid, String elem_tyname, GirModule &gmod):
+    int acc_local = add_local(&ctx, acc_tid, None)
+    if elem_tyname != "":
+        Vector[Operand] an_args = []
+        emit(&ctx, GICallExtern(acc_local, "__gorget_array_new_sized_" + elem_tyname, an_args))
+    else:
+        Vector[Operand] an_args = [OpConstI64(8)]
+        emit(&ctx, GICallExtern(acc_local, "gorget_array_new", an_args))
+    register_local_for_drop(&ctx, acc_local, acc_tid, &gmod)
+    return acc_local
+
+# Synthesize the loop body `[if filter:] acc.push(comp_expr)` referencing
+# the accumulator through `EIdentifier(acc_name)`. The push routes through
+# the normal method-call consume machinery (clone-at-boundary for live /
+# borrowed sources). For the filtered variant the push is guarded by an
+# `if filter:` — `lower_for_*` rejoins the body to the position-advance, so
+# a filtered-out element never skips the loop's increment.
+Vector[Stmt] comp_synth_body(String acc_name, SpannedExpr comp_expr, Option[Box[SpannedExpr]] filt_opt, Span span):
+    SpannedExpr acc_ref = SpannedExpr(EIdentifier(acc_name), span)
+    Vector[SpannedExpr] push_args = [comp_expr.clone()]
+    Vector[SpannedType] no_targs = []
+    SpannedExpr push_call = SpannedExpr(EMethodCall(Box(acc_ref), "push", push_args, no_targs), span)
+    Stmt push_stmt = SExpr(push_call)
+    Vector[Stmt] body = []
+    match filt_opt:
+        case Some(filt_box):
+            Vector[Stmt] then_body = [push_stmt]
+            Vector[ElseBranch] no_elifs = []
+            SpannedExpr filt_expr = (*filt_box).clone()
+            Stmt if_stmt = SIf(filt_expr, then_body, no_elifs)
+            body.push(if_stmt)
+        case None:
+            body.push(push_stmt)
+    return body
 
 # ── Call lowering ────────────────────────────────────────
 
