@@ -1700,6 +1700,29 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 emit_field_write_from_local(&ctx, wb_base, wb_field, recv, &gmod)
             return mdst
         case EFieldAccess(base_box, field_name):
+            # Qualified nullary enum variant used as a VALUE: `Color.Red`,
+            # `E.A`. The parser models these as EFieldAccess(EIdentifier(Type),
+            # Variant) — NOT ECall — so without this they fall through to
+            # `lower_place_base` (which lowers `Color` as a bare value ident →
+            # the [bug] OpConstI64(0)) and then the EFieldAccess give-up below
+            # (`unknown field 'Red' on base type 'int64_t'` → another I64(0)),
+            # losing the enum value entirely. Detect via the TYPED
+            # `enum_variant_parent` accessor — `field_name`'s enclosing enum ==
+            # `name` — and route to the SAME `lower_nullary_variant_ident`
+            # helper the bare-EIdentifier nullary-variant path uses (lower_expr
+            # :493). Guard `not nl_contains` so a struct local named after an
+            # enum type keeps the field-access path. Mirrors Rust
+            # `lower_field_access`'s leading qualified-variant check
+            # (src/ir/lowering/exprs/mod.rs:2036-2058).
+            match (*base_box).expr:
+                case EIdentifier(qual_base_name):
+                    if not nl_contains(&ctx, qual_base_name):
+                        if enum_variant_parent(field_name, &gmod) == qual_base_name:
+                            int qv_dst = lower_nullary_variant_ident(&ctx, &gmod, field_name)
+                            if qv_dst >= 0:
+                                return qv_dst
+                else:
+                    pass
             # Place base — keep a `&`/`!`-param (`GtMutPtr`) or bare-resource
             # param (`GtPtr`) base as the POINTER (the field codegen wants
             # `((T*)base)->field`). `lower_place_base` bypasses Edit-1's
