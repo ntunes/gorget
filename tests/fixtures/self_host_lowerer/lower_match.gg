@@ -140,11 +140,16 @@ int try_lift_option_ref(LowerCtx &ctx, int val, int dst_type, GirModule &gmod):
     int ptr_tid = option_ref_payload_of(&gmod, src_type)
     if ptr_tid < 0:
         return -1
-    # dst must be `Option__T` (non-Ref).
-    String dst_name = type_id_to_name(dst_type, &gmod)
-    if not dst_name.starts_with("Option__"):
-        return -1
-    if dst_name.starts_with("Option__Ref__"):
+    # dst must be a non-Ref `Option[T]` — read the typed channel (CLAUDE.md
+    # "No name matching"): `enum_category_of` peels Ptr/MutPtr and classifies
+    # via the recorded `EnumCategory`; `option_ref_payload_of(...) < 0`
+    # distinguishes a value Option from a borrowing `Option[Ref[T]]`.
+    # Equivalent to the former name-prefix test (Option-mangled and not
+    # Ref-Option-mangled), probe-verified identical over the full
+    # driver self-emit + Option/Result corpus. Same idiom as
+    # lower_expr.gg's ENone-with-expected-type arm and the return-site gate
+    # in lower_stmt.gg.
+    if not (enum_category_of(&gmod, dst_type).category == ENUM_CAT_OPTION and option_ref_payload_of(&gmod, dst_type) < 0):
         return -1
     String src_name = type_id_to_name(src_type, &gmod)
     # Materialise the result slot up front; both arms store into it so the
