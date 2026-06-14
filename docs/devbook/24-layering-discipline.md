@@ -156,88 +156,84 @@ your diagnosis, not less.
 
 ## Worked examples
 
-### Snag #17 — the `self_conv` flag (a Rule-4 write-site bug masquerading as a Rule-1 read-site fix)
+### A receiver convention honoured too loosely (Rule 4, and the heuristic)
 
-**Symptom.** Chained `text.substring(...)` corrupted a later `parse_float(text)`.
-It *looked* like the CoW materialize-alias machinery was rebinding a variable
-across a control-flow merge, and the candidate fixes ran 50+ lines: save/restore
-the rebind across branches, repair the merge. That is exactly the "complex fix at
-the read site" tell.
+A builtin method declares how it takes its receiver: `self_conv:
+SelfConvention` records `Borrow` (immutable, by pointer), `MutBorrow` (mutable,
+by pointer), `ByValue` (consumed), or `Static` (no self). That is the single
+source of truth for the receiver convention, written once on the
+`BuiltinMethodDecl` (`src/ir/lowering/builtins.rs:65`).
 
-**Real bug.** The writer was lossy. When the GIR registered a builtin method's
-signature, it derived the receiver's pointer kind from the method's
-`self_conv` — and `resolve_builtin_method_return_type` was treating
-*every* method as a mutable borrow. `substring`/`slice` are
-`SelfConvention::Borrow` (immutable), but they were being registered as
-`MutPtr`. The doc-comment that now sits at the fixed site,
-`src/ir/lowering/context.rs:733-746`, narrates the whole failure: a method
-registered as `MutPtr` makes `lower_method_call`'s `needs_mut` check fire
-`cow_before_mutation`, which materializes (clones + rebinds the variable name)
-the receiver — *"and the rebind then leaked across control-flow merges, causing
-later reads of the same name to come from a local that was only initialized in
-one branch."*
+A return-type resolver that ignores `self_conv` and assumes *every* call mutates
+its receiver is the canonical write-site lossiness. An immutable view-returning
+method like `substring` — declared `Borrow` — is then modeled as if it
+*consumed* its receiver, triggering a copy-on-write materialization of a value
+that was never mutated; the corruption surfaces far downstream when the
+materialization's rebind leaks across a control-flow merge. The tempting fix
+lives at that read site — save and restore the rebind across the branch, repair
+the merge — and its very complexity is the diagnosis: the value should never have
+been materialized at all. Reading the typed `self_conv` faithfully at the
+resolver (`Borrow → Ptr`, `MutBorrow → MutPtr`, `ByValue → the type`, `Static →
+no self`) is a few lines at the *writer*, after which the materialization never
+fires and the whole read-site fix is never-taken code. The same `self_conv` flag
+drives `runtime_callees.self_by_ptr` — one source of truth, read everywhere the
+receiver convention matters. (Full case study: the contributor playbook,
+[Ch. 29](29-contributor-playbook.md).)
 
-**Fix.** Read the typed `self_conv` and register the self-param's pointer kind
-faithfully — `Borrow → Ptr`, `MutBorrow → MutPtr`, `ByValue → the type`,
-`Static → no self param` (`src/ir/lowering/context.rs:751-760`). With the writer
-faithful, the bogus materialization never triggers and the entire "rebind across
-merge" read-site fix is never-taken code. A five-line change at the writer
-dissolved a fifty-line change at the reader. The `self_conv` flag is the single
-source of truth for receiver convention; it is read identically when populating
-`runtime_callees.self_by_ptr` (`src/ir/lowering/context.rs:770`,
-`:628`, `:647`).
+### Box inner-type metadata (Rules 2 & 4)
 
-### Snag #13 — Box inner-type metadata (a Rule-2 / Rule-4 fix)
+The C backend emitting code for a `Box[T]` needs the inner type `T` twice over:
+to spell the `__gorget_box_alloc_<inner>` / `_free_<inner>` helpers and the
+`Box__<inner>__drop` wrapper. The inner type is *known* at LIR Box-struct
+registration, so it is a resolved fact — and the temptation, if the layer
+boundary drops it, is to recover it at the backend by parsing it back out of the
+`Box__<inner>`-prefixed name. That is the litmus-test smell exactly: a downstream
+pass reconstructing meaning from a name, which means the metadata is missing one
+layer up.
 
-**Symptom.** A `Box`-recursive enum linked against an undefined
-`__gorget_box_alloc_<T>` symbol. The tempting fix was to scan the recursive-drop
-tables for `Box__X__drop` entries and parse the inner type back out of the name —
-i.e. name-matching, a Rule-2 violation.
-
-**Real bug.** The `StructDef` for `Box[T]` had the inner-type information at
-registration time but did not expose it to the C backend. The fix added the
-typed field `StructDef.box_inner_type: Option<String>`
-(`src/lir/mod.rs:1541`), set it at every Box-struct registration, and had the C
-emitter read it (`src/backend/c_lir/emit_types.rs:1404`) instead of fishing the
-inner type out of the `Box__` prefix. The field's doc-comment states the
-contract directly: it is read *"to emit the matching `__gorget_box_alloc_<inner>`
-/ `_free_<inner>` helpers and the `Box__<inner>__drop` wrapper without re-deriving
-the inner from the `Box__` name prefix"* (`src/lir/mod.rs:1535-1540`). Trait-object
-boxes deliberately leave it `None` and carry their own typed discriminator
-(`is_trait_box`, `src/lir/mod.rs` adjacent), so the two Box shapes are
-distinguished by *typed fields*, not by parsing names.
+The disciplined shape is Rule 4 applied at the runtime-symbol boundary. Resolve
+once: the inner type is captured at registration and written through onto a typed
+field, `StructDef.box_inner_type: Option<String>` (`src/lir/mod.rs:1544`). Read
+once: the C emitter reads that field (`src/backend/c_lir/emit_types.rs`) and
+never touches the name. Trait-object boxes deliberately leave `box_inner_type`
+`None` and carry their own typed discriminator, `is_trait_box`
+(`src/lir/mod.rs:1549`), so the two Box shapes are told apart by *typed fields*,
+never by parsing identifiers. (Full case study: the contributor playbook,
+[Ch. 29](29-contributor-playbook.md).)
 
 ### A read mode honoured too narrowly (Rule 1)
 
-**Symptom.** A `for` loop over a recursive-drop user struct deep-clones the
-element every iteration via `{Type}__clone`, even when the body only reads
-through it. The cost hides one layer below the surface: a hot self-compile loop
-that walks large collections pays the clone on every element, so the visible
-symptom is a slow compile while the disease is a dropped invariant downstream.
+The invariant: a `for`-loop element's *read mode* is a layer fact. When the body
+only reads through the element, the GIR producer records that it is a view, and
+no consumer downstream is licensed to deep-clone it. The cost of dropping that
+fact hides one layer below the surface — a hot self-compile loop walking a large
+collection that pays a `{Type}__clone` on every element looks like a slow
+compile, while the disease is the dropped invariant.
 
-**Real bug.** The GIR producer (`lower_for_array`, `src/ir/lowering/stmts/for_loops.rs`)
-set the typed invariant correctly: `index_load_borrow` emits `read:
-ReadMode::Borrow` — "this element is a view, don't clone it." The LIR
-collection-element lowering (`src/lir/lower/insts.rs:1063-1100`) then honoured
-that mode **only for strings**: the borrow branch was gated on `clone_fn_name ==
-"gorget_string_clone_to_owned"` (`insts.rs:1066-1071`), so a recursive-drop
-struct element fell through to the `{Type}__clone` arm
-(`insts.rs:1083-1100`) regardless of the `Borrow` mode upstream had set. The
-read-mode invariant — a Rule-1 fact (read mode, named in "The two jobs of a
-layer") — was silently dropped at the GIR→LIR boundary because the consumer's
-branch was narrower than the invariant it was meant to carry.
+The GIR producer (`lower_for_array`, `src/ir/lowering/stmts/for_loops.rs`) sets
+the invariant faithfully: `index_load_borrow` emits `read: ReadMode::Borrow` —
+"this element is a view, don't clone it." A consumer carries the invariant
+correctly only if its branch is *as wide as* the invariant. The LIR
+collection-element lowering (`src/lir/lower/insts.rs:1063-1100`) once honoured
+the borrow mode **only for strings** — its borrow branch is gated on
+`clone_fn_name == "gorget_string_clone_to_owned"` (`insts.rs:1066-1071`), so a
+recursive-drop struct element falls through to the `{Type}__clone` arm
+(`insts.rs:1083-1100`) regardless of the `Borrow` mode upstream set. A Rule-1
+fact (read mode, named in "The two jobs of a layer") is silently dropped at the
+GIR→LIR boundary whenever the consumer's branch is narrower than the invariant it
+is meant to carry.
 
-**Fix.** Bind the for-element as a `Ptr(elem)` borrow alias at the *producer*
-(`for_loops.rs`, gated on typed `TypeDefKind` + `is_resource_type` +
-`!is_collection_type`, no name matching) rather than re-deriving the borrow intent
-in the LIR reader. Body reads auto-deref the `Ptr`; the owning boundaries clone
-through it via `ensure_owned_at_boundary` / `ensure_owned_at_consuming_arg`, the
-same apparatus that makes a borrowed `Vector[T]` param safe. The full mechanism,
-the enum extension (`build_enum_recv_ptr`), and the soundness argument are in
+The disciplined repair is at the producer, not the narrow reader: bind the
+for-element as a `Ptr(elem)` borrow alias in `for_loops.rs`, gated on typed
+`TypeDefKind` + `is_resource_type` + `!is_collection_type` (no name matching).
+Body reads auto-deref the `Ptr`; the owning boundaries clone through it via
+`ensure_owned_at_boundary` / `ensure_owned_at_consuming_arg`, the same apparatus
+that makes a borrowed `Vector[T]` param safe. The full mechanism, the enum
+extension (`build_enum_recv_ptr`), and the soundness argument are in
 [Chapter 11](11-copy-on-write.md) — "For-loop elements: borrow the element, don't
-clone it." The cleaner follow-up generalizes the `insts.rs:1083` branch to honour
-`ReadMode::Borrow` for any recursive-drop element, so the LIR reader stops being
-the place the invariant is (under-)interpreted (TODO).
+clone it." The cleaner generalization widens the `insts.rs:1083` branch to honour
+`ReadMode::Borrow` for *any* recursive-drop element, so the LIR reader stops being
+the place the invariant is (under-)interpreted at all.
 
 ### Trait-method symbols: agree on the name, don't reconstruct it (Rules 2 & 4)
 
