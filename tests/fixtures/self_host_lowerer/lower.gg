@@ -2759,17 +2759,24 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             if has_resource:
                 gmod.resource_types.put(mrinst.mangled_name.clone(), true)
 
-    # Snag #11: a registered (bodied) trait keeps its equip-symbol prefix BARE
-    # (Rust's vtable route); an UNREGISTERED trait (From/operators) carries the
-    # generic suffix. The authoritative `trait_defs` map is built later (~:2858),
-    # after this fn_sigs pre-pass, so scan the trait names up front here so the
-    # IEquip fn_sigs registration below spells the SAME symbol as the body
-    # (lower_equip_block). Mirrors that map's `tdef.name` keys.
+    # Snag #11 / Root #1: a registered (bodied) trait keeps its equip-symbol
+    # prefix BARE (Rust's vtable route); an UNREGISTERED trait (From/operators)
+    # carries the generic suffix. The authoritative `trait_defs` map is built
+    # later (~:2964), after this fn_sigs pre-pass, so scan the trait DEFS up
+    # front here. `registered_trait_names` drives the bare-vs-suffixed prefix
+    # choice; `pre_trait_defs` additionally yields each trait's OWN-vtable
+    # method set (`tdef.methods`) so the IEquip registration can DROP the
+    # spurious bare `Type__method` for own-vtable methods (their bodies are
+    # emitted under `Trait_for_Type__method`). Both maps are built from the same
+    # `m.items` ITrait entries as `trait_defs` (:2964), so the own-vtable gate
+    # here matches the body-emit `did_split` gate exactly.
     Dict[String, bool] registered_trait_names = {}
+    Dict[String, TraitDef] pre_trait_defs = {}
     for rtn_item in m.items:
         match rtn_item:
             case ITrait(rtn_tdef):
                 registered_trait_names.put(rtn_tdef.name.clone(), true)
+                pre_trait_defs.put(rtn_tdef.name.clone(), rtn_tdef)
             else:
                 pass
 
@@ -2816,12 +2823,55 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         else:
                             pass
                     if target_name != "":
+                        # Root #1 — own-vtable vs inherited registration split,
+                        # mirroring the body-emit split (lower.gg lower_module
+                        # `did_split` path) and Rust gg's `register_trait_equip_sigs`
+                        # (`src/ir/lowering/traits.rs:269-344`). The body of an
+                        # own-vtable trait method is emitted under the trait-prefixed
+                        # symbol `Trait_for_Type__method`; the bare `Type__method`
+                        # has NO definition, so registering it (the old
+                        # unconditional `gmod.fn_sigs.put(em_full, ...)`) was a
+                        # layering rule-2/4 violation: it let the call site spell a
+                        # CALLED-but-undefined symbol (→ C implicit-int /
+                        # undefined-reference). We DROP the bare entry for own-vtable
+                        # methods on the registered (non-derive) route; the call site
+                        # then suffix-redirects to the trait-prefixed symbol.
+                        #
+                        # `is_own_vtable` mirrors the body's gate EXACTLY:
+                        # non-derive (not builtin/iterator-protocol) AND a bodied
+                        # TraitDef is in scope (`pre_trait_defs` is built from the
+                        # same `m.items` ITrait entries as `trait_defs` at :2964).
+                        # Method membership = the trait's OWN vtable (`tdef.methods`),
+                        # the same set the body builds at :3283-3285.
+                        Dict[String, bool] _own_vtable_methods = {}
+                        bool _is_registered_trait = false
+                        match ieqblk.trait_name:
+                            case Some(otn):
+                                bool _ot_derive = is_builtin_trait(otn) or is_iterator_protocol_trait(otn)
+                                if not _ot_derive and pre_trait_defs.contains(otn):
+                                    _is_registered_trait = true
+                                    TraitDef _otdef = pre_trait_defs.get(otn).unwrap()
+                                    for _ovm in _otdef.methods:
+                                        _own_vtable_methods.put(_ovm.name.clone(), true)
+                            case None:
+                                pass
                         for em in ieqblk.methods:
                             if em.type_params.len() == 0:
                                 int em_ret = map_fn_return_type(em.return_type, &gmod)
                                 if em_ret >= 0:
                                     String em_full = target_name + "__" + em.name
-                                    gmod.fn_sigs.put(em_full, em_ret)
+                                    # Own-vtable method on the registered route: its
+                                    # body is `Trait_for_Type__method`, so register
+                                    # ONLY that and DROP the spurious bare entry
+                                    # (Rust `traits.rs:277-292`). Inherited overrides,
+                                    # derive/iterator methods, and unregistered-trait
+                                    # instance methods keep the bare entry (body uses
+                                    # `Type__method` there — Rust `traits.rs:293-324`
+                                    # + `register_unregistered_trait_equip_sigs`
+                                    # `:1125-1133`).
+                                    bool _em_own_vtable = _is_registered_trait and _own_vtable_methods.contains(em.name)
+                                    if not _em_own_vtable:
+                                        gmod.fn_sigs.put(em_full, em_ret)
                                     # Snag #11: a non-derive explicit trait equip
                                     # (`equip BigErr with From[String]:`) emits its
                                     # method body under the PREFIXED symbol (see
@@ -2843,6 +2893,29 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                                 gmod.fn_sigs.put(em_pref, em_ret)
                                         case None:
                                             pass
+                        # Register fn_sigs for trait DEFAULT methods the equip block
+                        # does NOT override. Their bodies are emitted under
+                        # `Trait_for_Type__method` (lower.gg lower_module default
+                        # arm) but the call site has no fn_sigs entry to redirect to.
+                        # Mirrors Rust gg's default-method sig registration
+                        # (`src/ir/lowering/traits.rs:328-344`).
+                        match ieqblk.trait_name:
+                            case Some(dtn):
+                                bool d_is_derive = is_builtin_trait(dtn) or is_iterator_protocol_trait(dtn)
+                                if not d_is_derive and pre_trait_defs.contains(dtn):
+                                    TraitDef _dtdef = pre_trait_defs.get(dtn).unwrap()
+                                    Dict[String, bool] _overridden = {}
+                                    for _om in ieqblk.methods:
+                                        _overridden.put(_om.name.clone(), true)
+                                    String _d_trait = mangle_trait_name(dtn)
+                                    for _dm in _dtdef.methods:
+                                        if _dm.body.len() > 0 and not _overridden.contains(_dm.name) and _dm.type_params.len() == 0:
+                                            int _dm_ret = map_fn_return_type(_dm.return_type, &gmod)
+                                            if _dm_ret >= 0:
+                                                String _dm_pref = _d_trait + "_for_" + target_name + "__" + _dm.name
+                                                gmod.fn_sigs.put(_dm_pref, _dm_ret)
+                            case None:
+                                pass
             else:
                 pass
 

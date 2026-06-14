@@ -1441,6 +1441,34 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     _proto_mtarg_suffix = _proto_mtarg_suffix + "__" + bare_method_targ_c_name(_bmt, &gmod)
             full_name = full_name + _proto_mtarg_suffix
             String sig_lookup_name = full_name.clone()   # R10: pre-redirect mangled name for fn_sigs
+            # Trait-method symbol redirect (Root #1). An own-vtable trait
+            # method's BODY is emitted under the trait-prefixed mangling
+            # `Trait_for_Type__method` (lower.gg lower_equip_block), NOT the
+            # bare `Type__method` the call site reconstructs from the receiver
+            # type — a layering rule-2/4 hazard (the definition spells one
+            # symbol, the call site another). The registration pass now drops
+            # the spurious bare entry for own-vtable methods, so the bare
+            # `full_name` genuinely has no fn_sigs entry; redirect it to the
+            # trait-prefixed symbol. Mirrors Rust gg's
+            # `src/ir/lowering/exprs/methods.rs:298-326`: try the BARE name
+            # first; only if it is NOT a registered sig, suffix-search
+            # `fn_sigs` for a `*_for_<Type>__<method>` key (the trait name
+            # isn't known at the call site, so we match on the `_for_` suffix).
+            # Inherited / parent-trait / non-trait methods keep the bare entry,
+            # so this gate leaves them untouched (no mis-redirect).
+            if not gmod.fn_sigs.contains(full_name):
+                String _trait_for_suffix = "_for_" + recv_type_name + "__" + mname + _proto_mtarg_suffix
+                Vector[String] _fs_keys = gmod.fn_sigs.keys()
+                String _trait_redirect = ""
+                int _fsk = 0
+                while _fsk < _fs_keys.len():
+                    String _cand = _fs_keys.get(_fsk).unwrap()
+                    if _cand.ends_with(_trait_for_suffix):
+                        _trait_redirect = _cand
+                    _fsk += 1
+                if _trait_redirect != "":
+                    full_name = _trait_redirect.clone()
+                    sig_lookup_name = _trait_redirect.clone()
             # Extern-method redirect: an `extern int _m(...) = "gorget_sym"`
             # method inside an equip block (e.g. File's `_write_bytes_buf`)
             # is registered by the loader as a call_redirect keyed on the
