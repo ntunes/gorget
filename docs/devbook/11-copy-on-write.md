@@ -754,10 +754,9 @@ the classes):
 - **Rust 1b provenance back-port**: the self-host's provenance-direct
   design beats the hook design on alias shapes; porting it to Rust gg is
   the recorded laziness upgrade there.
-- **Driver-emission cost lever ("Fix C")**: `generate_c` dominates driver
-  self-compile time in both CoW modes via a Rust-gg-compiled per-extern-call
-  `LirFunction` deep-clone — a CoW consumer bug, not a lazy-materialization
-  one, but discovered by this feature's gates.
+- **Driver-emission cost lever**: `generate_c` dominates driver self-compile
+  time in both CoW modes via a per-extern-call `LirFunction` deep-clone — a CoW
+  consumer cost, not a lazy-materialization one.
 
 ## `MoveZero` and post-call ownership transfer
 
@@ -890,9 +889,9 @@ alias — `lower_for_vector` (`lower_loops.gg:206`) tags the element
 `LoBorrowed` with `BoCollectionElement(coll_local)` and *no* owned-drop
 registration (`lower_loops.gg:240-267`), and `lower_for_string`
 (`lower_loops.gg:307`) does the same for codepoints. That is, the for-element
-elision documented above was the *Rust* compiler catching up to behaviour the
-self-host already had — "Fix C" (and its enum extension) was a pure Rust↔self-host
-backend-parity gap, not a new idea. The dict/set self-host loops mirror Rust:
+elision documented above is the *Rust* compiler matching behaviour the
+self-host already had — it closes a Rust↔self-host backend-parity gap rather
+than introducing a new idea. The dict/set self-host loops mirror Rust:
 their runtime accessors hand back a clone, bound owned and drop-registered
 (`lower_loops.gg:431-442`).
 

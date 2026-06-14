@@ -207,12 +207,13 @@ boxes deliberately leave it `None` and carry their own typed discriminator
 (`is_trait_box`, `src/lir/mod.rs` adjacent), so the two Box shapes are
 distinguished by *typed fields*, not by parsing names.
 
-### Fix C — `ReadMode::Borrow` honoured for strings only (a Rule-1 invariant dropped at a layer boundary)
+### A read mode honoured too narrowly (Rule 1)
 
-**Symptom.** `for x in vec:` over a recursive-drop user struct deep-cloned the
-element every iteration via `{Type}__clone`, even when the body only read through
-it. On the self-host self-compile this was a ~3.26-billion-clone clone-bomb —
-the slow compile (~421s) was the *symptom*, not the disease.
+**Symptom.** A `for` loop over a recursive-drop user struct deep-clones the
+element every iteration via `{Type}__clone`, even when the body only reads
+through it. The cost hides one layer below the surface: a hot self-compile loop
+that walks large collections pays the clone on every element, so the visible
+symptom is a slow compile while the disease is a dropped invariant downstream.
 
 **Real bug.** The GIR producer (`lower_for_array`, `src/ir/lowering/stmts/for_loops.rs`)
 set the typed invariant correctly: `index_load_borrow` emits `read:
