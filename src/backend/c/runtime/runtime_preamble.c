@@ -3,6 +3,15 @@
 #ifdef __APPLE__
 #define _DARWIN_C_SOURCE
 #else
+// glibc gates strptime() behind __USE_XOPEN (i.e. _XOPEN_SOURCE / _GNU_SOURCE),
+// NOT __USE_MISC — so _DEFAULT_SOURCE alone leaves it implicitly declared, and an
+// implicit decl is assumed to return `int`, truncating its 64-bit char* result to
+// 32 bits (garbage `rest` in gorget_parse_time). macOS declares it unconditionally,
+// which is why this only bites on Linux. _XOPEN_SOURCE 700 is the standards-based
+// (non-_GNU_SOURCE) fix; kept alongside _DEFAULT_SOURCE so we get the union of both.
+#ifndef _XOPEN_SOURCE
+#define _XOPEN_SOURCE 700
+#endif
 #ifndef _DEFAULT_SOURCE
 #define _DEFAULT_SOURCE
 #endif
