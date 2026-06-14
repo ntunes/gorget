@@ -709,6 +709,65 @@ fn container_literal_arms_count() {
     );
 }
 
+/// Ratchet: the comprehension dispatch in the SELF-HOST `lower_expr_inner`
+/// (`tests/fixtures/self_host_lowerer/lower_expr.gg`) is a 3-arm enumerated
+/// class — `EListComp` / `ESetComp` / `EDictComp`. Each routes through the
+/// shared `lower_*_comprehension` + `comp_make_*_acc` + `comp_synth_*_body`
+/// helpers (which reuse the run-proven `lower_for_range`/`lower_for_string`/
+/// `lower_for_vector` loop machinery). A future `E…Comp` variant that lands
+/// in the `else:` fallback would SILENTLY miscompile to a Unit stub (the
+/// pre-port behavior that made set/dict comps CRASH through the self-host),
+/// so this lint forces the next comprehension variant through the shared path.
+///
+/// This is DISTINCT from `container_literal_arms_count` above: that lint scans
+/// the RUST `infer_expr` (typecheck) and already lists Set/Dict comprehension;
+/// THIS one scans the SELF-HOST Gorget-source `lower_expr_inner` dispatch
+/// (GIR lowering). The two layers are pinned independently.
+///
+/// **If this fails because a new arm was added:** the new `case E…Comp(...)`
+/// MUST call a shared `lower_*_comprehension` helper (not inline the loop, not
+/// fall into the `else:` Unit stub) AND — for a set-shaped comp — convert the
+/// raw `Box[SpannedExpr]` filter SENTINEL (`EIntLiteral(0)` = no `if`) to an
+/// `Option` via `setcomp_filter_opt` before feeding the synth body, else an
+/// unfiltered comp becomes `if 0:` → empty result. Then bump EXPECTED.
+/// **If an arm was removed:** lower EXPECTED to lock the new floor.
+#[test]
+fn self_host_comprehension_dispatch_arms_count() {
+    /// Baseline 2026-06-14: 3 (EListComp + ESetComp + EDictComp).
+    const EXPECTED: usize = 3;
+
+    // lower_expr.gg lives ONLY in self_host_lowerer (real file, not symlinked),
+    // so no double-count guard is needed.
+    let content =
+        fs::read_to_string("tests/fixtures/self_host_lowerer/lower_expr.gg").unwrap_or_default();
+    let mut arms = 0usize;
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('#') {
+            continue; // .gg comments
+        }
+        if trimmed.starts_with("case EListComp(")
+            || trimmed.starts_with("case ESetComp(")
+            || trimmed.starts_with("case EDictComp(")
+        {
+            arms += 1;
+        }
+    }
+
+    assert_eq!(
+        arms, EXPECTED,
+        "Self-host `lower_expr_inner` comprehension dispatch-arm count changed: \
+         {arms} vs {EXPECTED}.\n\n\
+         The comprehension dispatch (EListComp/ESetComp/EDictComp) is an enumerated \
+         class. A new `E…Comp` variant MUST route through a shared \
+         `lower_*_comprehension` helper — NOT fall into the `else:` Unit stub (which \
+         silently miscompiles to a Unit local and CRASHES the comp through the \
+         self-host). Set-shaped comps must also convert the raw `Box[SpannedExpr]` \
+         filter SENTINEL (`EIntLiteral(0)`) to an `Option` via `setcomp_filter_opt`. \
+         Bump EXPECTED with a justification, or lower it if an arm was removed.",
+    );
+}
+
 /// Snag #11 sibling-guard ratchet (CLAUDE.md rule 4 / "Sibling-site drift")
 /// over the self-host trait-equip SYMBOL-MANGLE sites. The self-host mangles an
 /// equip method's symbol via TWO routes, mirroring Rust gg

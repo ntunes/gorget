@@ -1,0 +1,50 @@
+squares len: 5
+0
+1
+4
+9
+16
+doubled len: 5
+2
+4
+6
+8
+10
+evens len: 5
+0
+2
+4
+6
+8
+odd_squares len: 4
+1
+9
+25
+49
+set len: 4
+set2 len: 4
+dict len: 4
+d[3]: 9
+empty len: 0
+shifted len: 4
+100
+101
+102
+103
+multiples len: 8
+0
+7
+14
+21
+28
+35
+42
+49
+from_vec len: 3
+20
+40
+60
+filtered len: 2
+20
+30
+done

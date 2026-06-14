@@ -2710,8 +2710,23 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             return it_dst
         case EListComp(lc_comp_box, lc_var, lc_iter_box, lc_filt_opt):
             return lower_list_comprehension(&ctx, *lc_comp_box, lc_var, *lc_iter_box, lc_filt_opt, &gmod)
+        case ESetComp(sc_comp_box, sc_var, sc_iter_box, sc_cond_box):
+            # Set comprehension `{expr for x in iter [if cond]}`. The 4th
+            # AST field is a RAW `Box[SpannedExpr]` (NOT `Option`): the
+            # parser stores a sentinel `EIntLiteral(0)` when there is no
+            # `if` (parser.gg:2419). Convert the sentinel to `Option` here
+            # (the `format.gg:288-299` pattern) so the filter feeds the
+            # same `Some`-guarded synth body as the list comp.
+            Option[Box[SpannedExpr]] sc_filt = setcomp_filter_opt(*sc_cond_box)
+            return lower_set_comprehension(&ctx, *sc_comp_box, sc_var, *sc_iter_box, sc_filt, &gmod)
+        case EDictComp(dc_key_box, dc_val_box, dc_var, dc_iter_box):
+            # Dict comprehension `{k: v for x in iter}`. The self-host AST
+            # has NO filter field (the parser parses-and-DISCARDS `if cond`
+            # at parser.gg:2434-2437), so the dict comp is always
+            # unfiltered.
+            return lower_dict_comprehension(&ctx, *dc_key_box, *dc_val_box, dc_var, *dc_iter_box, &gmod)
         else:
-            # Remaining: ESetComp, EDictComp, ERange
+            # Remaining: ERange
             int fallback = add_local(&ctx, UNIT_TYPE, None)
             emit(&ctx, GIAssign(fallback, OpConstUnit()))
             return fallback
@@ -2835,6 +2850,169 @@ Vector[Stmt] comp_synth_body(String acc_name, SpannedExpr comp_expr, Option[Box[
             body.push(if_stmt)
         case None:
             body.push(push_stmt)
+    return body
+
+# ── Set comprehension lowering ───────────────────────────
+# `{comp_expr for var in iterable [if filter]}` → a loop that builds a
+# `Set__int64_t`-typed accumulator. Same philosophy as
+# `lower_list_comprehension`: synthesize an `acc.add(comp_expr)` body
+# (wrapped in `if filter:` for the filtered variant) and route it through
+# the run-proven `lower_for_range` loop machinery. The destination VarDecl
+# lowers to a `Set__int64_t` LOCAL, so the accumulator is typed with that
+# same MANGLED element-carrying name (NOT the raw `GorgetSet`): the
+# mangled name carries the element metadata `resource_meta_for`/
+# `coll_elem_type_map` need (it routes to the `GorgetSet` runtime category
+# in `lir_lower.gg`) AND makes the comprehension result type match the
+# destination at the CoW/assignment boundary. This deliberately DIVERGES
+# from Rust's raw-`GorgetSet` set-comp shape (collections.rs:872), which
+# is correct for Rust but not for the self-host's mangled-name CoW layer.
+#
+# Range-only is sufficient (both corpus fixtures iterate `start..end`);
+# non-range falls back to Unit, the SAME as Rust (collections.rs:932).
+int lower_set_comprehension(LowerCtx &ctx, SpannedExpr comp_expr, String var_name, SpannedExpr iterable, Option[Box[SpannedExpr]] filt_opt, GirModule &gmod):
+    Span span = comp_expr.span
+    match iterable.expr:
+        case ERange(start_opt, end_opt):
+            match start_opt:
+                case Some(start_box):
+                    match end_opt:
+                        case Some(end_box):
+                            int sacc = comp_make_set_acc(&ctx, &gmod)
+                            String sacc_name = "__setcomp_acc_" + int_to_str(sacc)
+                            nl_put(&ctx, sacc_name, sacc)
+                            Vector[Stmt] sbody = comp_synth_set_body(sacc_name, comp_expr, filt_opt, span)
+                            lower_for_range(&ctx, var_name, *start_box, *end_box, sbody, &gmod, false)
+                            return sacc
+                        case None:
+                            pass
+                case None:
+                    pass
+        else:
+            pass
+    # Non-range base: fall back to Unit, matching Rust (collections.rs:932).
+    int sfallback = add_local(&ctx, UNIT_TYPE, None)
+    emit(&ctx, GIAssign(sfallback, OpConstUnit()))
+    return sfallback
+
+# Allocate a set comprehension accumulator. Typed as the MANGLED
+# `Set__int64_t` (8-byte int elements) so it matches the destination at
+# the CoW boundary and routes to the `GorgetSet` runtime category. Do NOT
+# reuse `comp_make_acc` — that hardcodes a `gorget_array_new`/sized-array
+# alloc (a 64-byte GorgetArray), which downstream code would treat as a
+# GorgetSet → heap corruption. Emit `gorget_set_new` directly with an
+# `OpConstI64(8)` element-size arg (mirror Rust collections.rs:884-888).
+int comp_make_set_acc(LowerCtx &ctx, GirModule &gmod):
+    int acc_tid = lookup_or_register_named(&gmod, "Set__int64_t")
+    int acc_local = add_local(&ctx, acc_tid, None)
+    Vector[Operand] sn_args = [OpConstI64(8)]
+    emit(&ctx, GICallExtern(acc_local, "gorget_set_new", sn_args))
+    register_local_for_drop(&ctx, acc_local, acc_tid, &gmod)
+    return acc_local
+
+# Synthesize the set-comp loop body `[if filter:] acc.add(comp_expr)`.
+# Identical shape to `comp_synth_body` but emits `.add` (the set inserter)
+# instead of `.push`. `comp_expr` is passed DIRECTLY (a `SpannedExpr`
+# param) — never threaded through a `Vector[SpannedExpr]` PARAM, which the
+# self-host miscompiles when the element type carries a `Box` (logged in
+# TODO). For the filtered variant the `.add` is guarded by `if filter:` so
+# a filtered-out element never skips the loop's position-advance.
+Vector[Stmt] comp_synth_set_body(String acc_name, SpannedExpr comp_expr, Option[Box[SpannedExpr]] filt_opt, Span span):
+    SpannedExpr acc_ref = SpannedExpr(EIdentifier(acc_name), span)
+    Vector[SpannedExpr] add_args = [comp_expr.clone()]
+    Vector[SpannedType] no_targs = []
+    SpannedExpr add_call = SpannedExpr(EMethodCall(Box(acc_ref), "add", add_args, no_targs), span)
+    Stmt add_stmt = SExpr(add_call)
+    Vector[Stmt] body = []
+    match filt_opt:
+        case Some(filt_box):
+            Vector[Stmt] then_body = [add_stmt]
+            Vector[ElseBranch] no_elifs = []
+            SpannedExpr filt_expr = (*filt_box).clone()
+            Stmt if_stmt = SIf(filt_expr, then_body, no_elifs)
+            body.push(if_stmt)
+        case None:
+            body.push(add_stmt)
+    return body
+
+# Convert the set-comp filter SENTINEL to an `Option`. The `ESetComp` 4th
+# field is a RAW `Box[SpannedExpr]`: the parser stores `EIntLiteral(0)`
+# (span 0,0) when there is no `if` (parser.gg:2419). `EIntLiteral(0)`
+# → `None`; any other expression → `Some`. Without this an UNFILTERED set
+# comp would be wrapped in `if 0:` → an EMPTY set (e.g.
+# `{x * 10 for x in 0..4}` would emit `set len: 0`, not `4`). Canonical
+# sentinel detection mirrors `format.gg:288-299`.
+Option[Box[SpannedExpr]] setcomp_filter_opt(SpannedExpr cond):
+    match cond.expr:
+        case EIntLiteral(n):
+            if n != 0:
+                return Some(Box(cond.clone()))
+            return None
+        else:
+            return Some(Box(cond.clone()))
+
+# ── Dict comprehension lowering ──────────────────────────
+# `{key_expr: val_expr for var in iterable}` → a loop that builds a
+# `Dict__int64_t__int64_t`-typed accumulator. Same philosophy as the list
+# and set comps. The self-host AST has NO filter field for `EDictComp`
+# (the parser discards `if cond`, parser.gg:2434-2437) so the dict comp is
+# always unfiltered. The accumulator is typed with the MANGLED
+# `Dict__int64_t__int64_t` name (matching the destination VarDecl at the
+# CoW boundary + routing to the `GorgetMap` runtime category). Rust's
+# dict-comp ALSO mangles (collections.rs:812), so only the SET channel
+# diverges from Rust. Range-only; non-range → Unit (Rust collections.rs:863).
+int lower_dict_comprehension(LowerCtx &ctx, SpannedExpr key_expr, SpannedExpr val_expr, String var_name, SpannedExpr iterable, GirModule &gmod):
+    Span span = key_expr.span
+    match iterable.expr:
+        case ERange(start_opt, end_opt):
+            match start_opt:
+                case Some(start_box):
+                    match end_opt:
+                        case Some(end_box):
+                            int dacc = comp_make_dict_acc(&ctx, &gmod)
+                            String dacc_name = "__dictcomp_acc_" + int_to_str(dacc)
+                            nl_put(&ctx, dacc_name, dacc)
+                            Vector[Stmt] dbody = comp_synth_dict_body(dacc_name, key_expr, val_expr, span)
+                            lower_for_range(&ctx, var_name, *start_box, *end_box, dbody, &gmod, false)
+                            return dacc
+                        case None:
+                            pass
+                case None:
+                    pass
+        else:
+            pass
+    # Non-range base: fall back to Unit, matching Rust (collections.rs:863).
+    int dfallback = add_local(&ctx, UNIT_TYPE, None)
+    emit(&ctx, GIAssign(dfallback, OpConstUnit()))
+    return dfallback
+
+# Allocate a dict comprehension accumulator. Typed as the MANGLED
+# `Dict__int64_t__int64_t` (8-byte key + 8-byte value). Mirrors the
+# `EDictLiteral` path (lower_expr.gg:2645-2662): `gorget_dict_new` with
+# `[OpConstI64(8), OpConstI64(8)]`. Do NOT reuse `comp_make_acc` (it
+# allocs a GorgetArray → heap corruption when treated as a GorgetMap).
+int comp_make_dict_acc(LowerCtx &ctx, GirModule &gmod):
+    int acc_tid = lookup_or_register_named(&gmod, "Dict__int64_t__int64_t")
+    int acc_local = add_local(&ctx, acc_tid, None)
+    Vector[Operand] dn_args = [OpConstI64(8), OpConstI64(8)]
+    emit(&ctx, GICallExtern(acc_local, "gorget_dict_new", dn_args))
+    register_local_for_drop(&ctx, acc_local, acc_tid, &gmod)
+    return acc_local
+
+# Synthesize the dict-comp loop body `acc.put(key_expr, val_expr)`. Both
+# `key_expr` and `val_expr` are passed as DIRECT `SpannedExpr` params
+# (deref'd from the `EDictComp` boxes at the call site) — NEVER threaded
+# through a `Vector[SpannedExpr]` PARAM (which the self-host miscompiles
+# for Box-bearing elements). `comp_synth_body` only emits single-arg
+# push/add, so this 2-arg `.put` helper is distinct. The `.put` routes
+# through the normal method-call consume machinery (clone-at-boundary for
+# live/borrowed sources) → `gorget_map_put` (map_dict_method).
+Vector[Stmt] comp_synth_dict_body(String acc_name, SpannedExpr key_expr, SpannedExpr val_expr, Span span):
+    SpannedExpr acc_ref = SpannedExpr(EIdentifier(acc_name), span)
+    Vector[SpannedExpr] put_args = [key_expr.clone(), val_expr.clone()]
+    Vector[SpannedType] no_targs = []
+    SpannedExpr put_call = SpannedExpr(EMethodCall(Box(acc_ref), "put", put_args, no_targs), span)
+    Stmt put_stmt = SExpr(put_call)
+    Vector[Stmt] body = [put_stmt]
     return body
 
 # ── Call lowering ────────────────────────────────────────
