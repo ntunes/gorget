@@ -238,10 +238,68 @@ clone it." The cleaner follow-up generalizes the `insts.rs:1083` branch to honou
 `ReadMode::Borrow` for any recursive-drop element, so the LIR reader stops being
 the place the invariant is (under-)interpreted (TODO).
 
-Both Snags #17/#13 reduce to the same lesson, and so does Fix C: the bug was a
-missing or mis-read typed field — or, here, a typed mode honoured too narrowly —
-one layer up, and the "obvious" fix at the consumer was complexity that the
-correct write-site fix erased.
+### Root #1 — trait-method symbol mangling (a Rule-2 / Rule-4 violation at the symbol-name boundary)
+
+**Symptom.** In the self-host, a trait-impl method call miscompiled at the very
+bottom of the pipeline: the C either failed to link (`undefined reference to
+X__method`) or assigned a call's result into the wrong type
+(`"Str/GorgetArray from int"` — the classic C *implicit-int* fallout of calling
+a symbol the compiler never declared). The whole biggest CC-FAIL cluster in the
+runtime-parity backlog traced back here.
+
+**Real bug.** Two sites disagreed on the *name* of one function. The definition
+side emits an own-vtable trait method's **body** under the trait-prefixed
+mangling `Trait_for_Type__method` (`lower.gg`'s `lower_equip_block`, called with
+the `did_split` flag at `lower.gg:3376`). But the call side —
+`EMethodCall` in `lower_expr.gg` — reconstructed the symbol *from the receiver
+type alone*, building the bare `recv_type_name + "__" + mname`
+(`lower_expr.gg:1422` binds `recv_type_name`). The trait name isn't visible at
+the call site, so the two spellings could never agree: the body lived at
+`Trait_for_Type__method`, the call referenced `Type__method`, and nothing
+defined the latter. That is Rule 2 and Rule 4 in one: a semantic fact (which
+function this call resolves to) was being *reconstructed from a name* at the
+read site instead of written through from the resolver — and the litmus test
+fires verbatim, "a downstream pass reconstructs information from names → the
+boundary upstream was drawn wrong."
+
+**The tell.** A name-match workaround had already grown downstream to paper over
+the symptom: dead-code elimination in `lir_codegen.gg:1228-1235` special-cases
+trait dispatch, matching a bare `target_name` against any `*_for_Type__method`
+key (`cand.ends_with("_for_" + target_name)`) so the trait-impl function isn't
+pruned as unreachable. Its own comment states the disagreement plainly —
+*"Self-host emits the bare form at LIR but the function is registered under the
+trait-prefixed form."* That a *reachability* pass had to suffix-match names to
+keep a called function alive was the signal the call/definition boundary was
+drawn wrong: DCE was compensating for a symbol the call site had spelled but no
+definition owned.
+
+**Fix.** Make the definition and the call site agree on **one** name via the
+registry, not by parallel reconstruction. (1) **Write-through at registration**
+(`lower.gg:2826`, fed by a `pre_trait_defs` pre-scan at `:2774`): the fn-sig
+registration is gated on the *same* own-vtable predicate the body-emit uses, so
+an own-vtable method registers **only** `Trait_for_Type__method` and **drops**
+the spurious bare `Type__method` entry; inherited/derive/unregistered methods
+keep the bare entry (their bodies genuinely use it), and non-overridden default
+methods register the trait-prefixed sig. After this, `fn_sigs` is the single
+source of truth and the bare name truly has no entry. (2) **Redirect at the call
+site** (`lower_expr.gg:1444`): try the bare name first; only if `fn_sigs` has no
+such key, suffix-search its keys for the `*_for_<recv>__<method>` form and
+redirect both `full_name` and `sig_lookup_name` to it. The call site no longer
+*invents* a symbol — it looks one up. Both halves mirror Rust gg exactly: the
+call-site redirect is `src/ir/lowering/exprs/methods.rs:298-326` (bare-first,
+then the `_for_<name>__<method>` suffix search), and the own-vtable registration
+split is `src/ir/lowering/traits.rs:269-344` (`register_trait_equip_sigs`).
+RUN-verified +8 parity flips, 0 regressions (commit `3775d8d5`; the DONE.md
+2026-06-14 entry has the per-fixture list). The DCE suffix-match in
+`lir_codegen.gg` survives as a defensive backstop, but it is no longer
+load-bearing now that the symbol the call site spells is the symbol the registry
+holds.
+
+Snags #17/#13, Fix C, and Root #1 reduce to the same lesson: the bug was a
+missing or mis-read typed field — a typed mode honoured too narrowly (Fix C), or
+a resolved symbol reconstructed instead of written through (Root #1) — one layer
+up, and the "obvious" fix at the consumer (a save/restore, a name-prefix parse,
+a DCE suffix-match) was complexity that the correct write-site fix erased.
 
 ## How to apply this when extending the compiler
 
