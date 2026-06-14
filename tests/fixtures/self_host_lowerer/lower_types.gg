@@ -1615,48 +1615,19 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
             # Typed enum-category channel (value-payload Option/Result):
             # `.unwrap()` yields the Some_0 / Ok_0 payload recorded at the
             # mint site — no mangled-name re-parse. (`Option__Ref__` results
-            # already returned above via `option_ref_payload`.) The name
-            # arms below remain as a fallback for any path the channel
-            # hasn't recorded yet.
+            # already returned above via `option_ref_payload`.) This is the
+            # SOLE classifier for the unwrap payload type now: the former
+            # `recv_name`-prefix Option/Result name
+            # fallback (which re-derived the payload by slicing the mangled
+            # name) was probe-DEAD — 0 fires over the full driver self-emit +
+            # the Option/Result corpus, because the channel covers every
+            # mono'd Option/Result that reaches here (and most `.unwrap()`
+            # sites resolve their return type via the typechecker side-table
+            # before `infer_method_return_type` is consulted at all). Retired
+            # per CLAUDE.md "No name matching" (Layering rule 2).
             EnumCategory uec = enum_category_of(&gmod, recv_tid)
             if uec.category == ENUM_CAT_OPTION or uec.category == ENUM_CAT_RESULT:
                 return uec.ok_type
-        if recv_name.starts_with("Option__"):
-            String inner = recv_name.slice(8, recv_name.len())
-            int prim = prim_name_to_type(inner)
-            if prim >= 0:
-                return prim
-            if inner == "int64_t":
-                return I64_TYPE
-            if inner == "double":
-                return F64_TYPE
-            if inner == "GorgetString" or inner == "Str":
-                return lookup_or_register_named(&gmod, "GorgetString")
-            # BRIDGE (option_ref_borrow Phase 5): an `Option__Ref__T` whose
-            # payload escaped the typed `option_ref_payload` channel (the
-            # channel lookup at the top of this arm catches the common case)
-            # must still mint a real `GtPtr(T)`, NOT a `GtNamed("Ref__T")`.
-            # `resolve_field_gir_type` strip-prefixes `Ref__`→GtPtr (the one
-            # name-matching site; mirrors Rust methods.rs:612-615). Delete
-            # once every getter is on the typed channel.
-            if inner.starts_with("Ref__"):
-                return resolve_field_gir_type(inner, &gmod)
-            return lookup_or_register_named(&gmod, inner)
-        if recv_name.starts_with("Result__"):
-            String rest = recv_name.slice(8, recv_name.len())
-            int split = rest.index_of("__").unwrap_or(-1)
-            if split > 0:
-                String ok = rest.slice(0, split)
-                int prim_ok = prim_name_to_type(ok)
-                if prim_ok >= 0:
-                    return prim_ok
-                if ok == "int64_t":
-                    return I64_TYPE
-                if ok == "double":
-                    return F64_TYPE
-                if ok == "GorgetString" or ok == "Str":
-                    return lookup_or_register_named(&gmod, "GorgetString")
-                return lookup_or_register_named(&gmod, ok)
         # Fallback: pass through receiver type for non-Option/Result
         # receivers — keeps legacy behaviour for already-typed values.
         if recv_name != "":

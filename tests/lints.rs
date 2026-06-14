@@ -878,7 +878,7 @@ fn no_growth_in_self_host_name_prefix_routing() {
 /// **As you migrate:** LOWER `BUDGET` toward 0 in the same commit that retires sites.
 #[test]
 fn no_growth_in_self_host_prelude_optionlike_routing() {
-    // Floor as of 2026-06-13: 15 (counted per-OCCURRENCE — a single line can
+    // Floor as of 2026-06-14: 9 (counted per-OCCURRENCE — a single line can
     // hold two, e.g. `Option__ or Result__`). Phase 1 (37 -> 17) retired the
     // 20 output-neutral classification sites. Phase 2a (-2: 17 -> 15)
     // migrated the two DROP-PATH `Option[Ref[T]] -> Option[T]` lift
@@ -889,25 +889,35 @@ fn no_growth_in_self_host_prelude_optionlike_routing() {
     // identical to the former name-prefix test over the full driver
     // self-emit + Option/Result corpus, 4623 agreements / 0 disagreements;
     // ASan-clean on the drop-path fixtures; fixed_point re-converged).
+    // Phase 2b (-6: 15 -> 9) retired the three further-migratable cohort
+    // members the 2a comment flagged: (1) lir_lower.gg Pass-2 enum-kind
+    // selector — PROBE-DEAD (prelude monos never enter `type_infos`, so the
+    // arm fired 0 times over the full driver self-emit + Option/Result
+    // corpus) -> deleted, leaving the plain `if tinfo.variants.len() > 0:
+    // ek = 3`; (2) lir_lower.gg Pass-3 placeholder enum-kind branch SELECTOR
+    // -> migrated to `pec.category == ENUM_CAT_OPTION` / `ENUM_CAT_RESULT`
+    // (probe: channel category and the name prefix AGREE on all 3150
+    // placeholder-struct fires, 0 disagreements); (3) lower_types.gg
+    // `infer_method_return_type` unwrap name-prefix fallback -> deleted
+    // (PROBE-DEAD: 0 fires; the typed channel + the typechecker side-table
+    // cover every `.unwrap()` payload-type query that reaches the arm).
+    // Probe-verified output-neutral (the P2a method: instrument old name-test
+    // vs new typed-channel test, run over the full driver self-emit + corpus,
+    // assert 0 disagreements / 0 dead-arm fires); fixed_point re-converged,
+    // driver-emitted C byte-identical.
     //
-    // The 15 remaining (per-occurrence): lir_lower.gg 476 x2
-    // (`is_generic_placeholder_name` name-shape predicate, no tid/gmod in
-    // hand), 957/961 (Pass-2 enum-kind selector — PROBE-DEAD: prelude monos
-    // never enter `type_infos`, so this arm never fires; flagged for a
-    // separate dead-code retire), 1021/1068 (Pass-3 placeholder enum-kind
-    // selector — channel-FIRST inside with a documented name-split fallback
-    // for un-recorded monos); lower_match.gg 737 x2 (`lookup_ctor_field_type`
-    // Class-D diag-gate, fires the loud miss diagnostic), 820
-    // (`result_payload_types` Class-D diag-gate); lower_types.gg 894/897
-    // (`record_field_enum_category`, THE blessed name->category registrar —
-    // the channel SOURCE, not a reader), 1624/1645 (`infer_method_return_type`
-    // unwrap arm — channel-FIRST fallback), 1766/1769
-    // (`collection_element_type` — genuine name-PARSING, same shape as the
-    // blessed Vector__/Set__ extractors). Migration target: floor ~9 (the
-    // Class-D registrar/diag-gates + genuine name-parsing) is the irreducible
-    // cohort short of upstream typed-field registration; 957/961/1021/1068/
-    // 1624/1645 are further-migratable (see TODO).
-    const BUDGET: usize = 15;
+    // The 9 remaining (per-occurrence) are the IRREDUCIBLE cohort:
+    // lir_lower.gg 476 x2 (`is_generic_placeholder_name` name-shape
+    // predicate, no tid/gmod in hand); lower_match.gg 737 x2
+    // (`lookup_ctor_field_type` Class-D diag-gate, fires the loud miss
+    // diagnostic), 820 (`result_payload_types` Class-D diag-gate);
+    // lower_types.gg 894/897 (`record_field_enum_category`, THE blessed
+    // name->category registrar — the channel SOURCE, not a reader),
+    // 1737/1740 (`collection_element_type` — genuine name-PARSING, same
+    // shape as the blessed Vector__/Set__ extractors). Migration to 0 from
+    // here requires upstream typed-field registration (the registrar) /
+    // structured-payload reads (the name-parser), not inline migration.
+    const BUDGET: usize = 9;
 
     let count = count_name_prefix_sites_self_host(PRELUDE_OPTIONLIKE_PREFIXES);
     assert!(

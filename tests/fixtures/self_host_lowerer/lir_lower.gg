@@ -953,15 +953,16 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
                     max_variant_size = variant_bytes
             # Match Rust backend: union layout when field count > 4 (tag + >3 payload).
             bool is_union = efields.len() > 4
+            # Pass 2 only iterates `gmod.type_infos` keys (USER struct/enum/
+            # mono-record names); the prelude monos `Option__T` / `Result__T__E`
+            # are never registered there — they're synthesized in Pass 3 below
+            # ("they don't appear in gmod.type_infos by name"). So the former
+            # `tname`-prefix Option/Result enum-kind arms here
+            # were probe-DEAD (0 fires over the full driver self-emit + the
+            # Option/Result corpus) — retired. A user enum gets ek=3; an empty
+            # one ek=0. (No name-matching: Layering rule 2.)
             int ek = 0
-            if tname.starts_with("Option__"):
-                ek = 1
-                # Phase A: register in type_runtime_map for typed dispatch downstream.
-                m.type_runtime_map.put(tname.clone(), "Option")
-            elif tname.starts_with("Result__"):
-                ek = 2
-                m.type_runtime_map.put(tname.clone(), "Result")
-            elif tinfo.variants.len() > 0:
+            if tinfo.variants.len() > 0:
                 ek = 3
             # Both layouts pad to the struct's alignof (max of field
             # alignments), matching C's rule. Union: tag(4) rounded to
@@ -1016,9 +1017,19 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
         # names registered without a channel record (a `Result__`/`Option__`
         # field-type-name resolved by `resolve_field_gir_type`'s `else` arm,
         # which lacks the structured payloads to record).
+        #
+        # The Option-vs-Result BRANCH SELECTOR reads the typed `EnumCategory`
+        # channel (`pec.category`), not the mangled `pname` prefix — migrated
+        # off the `pname`-prefix test after a probe over
+        # the full driver self-emit + Option/Result corpus showed the channel
+        # category and the name prefix AGREE on every one of 3150 placeholder-
+        # struct fires (0 disagreements). The inner name-slice initializers
+        # remain as a now-unreachable declaration fallback (always overridden
+        # by the `if pec.category == ...` branch below); they are not on the
+        # budget (no `starts_with`). Layering rule 2: typed metadata, not names.
         int pname_tid = gmod.named_types.get(pname).unwrap_or(-1)
         EnumCategory pec = enum_category_of(&gmod, pname_tid)
-        if pname.starts_with("Option__"):
+        if pec.category == ENUM_CAT_OPTION:
             String inner = pname.slice(8, pname.len())
             int inner_ty = resolve_field_lir_type(inner, &sr)
             # Typed channel (primary): the recorded Some_0 payload tid drives
@@ -1065,7 +1076,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
                 m.type_drop_fns.put(pname.clone(), TypeDropInfo(pname + "__drop", opt_nofd, "", opt_vd2))
             LirStructDef opt_sdef = LirStructDef(pname, ofields, 1, false, -1, -1)
             m.structs.set(psi, opt_sdef)
-        elif pname.starts_with("Result__"):
+        elif pec.category == ENUM_CAT_RESULT:
             String ok_name = ""
             String err_name = ""
             int ok_ty = -1
