@@ -8,6 +8,7 @@ from parser import parse_source, parse_source_with_offset
 from ast import Module, Item, ImportStmt, FunctionDef, EquipBlock, EnumDef, StructDef, SpannedExpr, SpannedType, SpannedPattern, Stmt, ElseBranch, MatchArm, SelectArm, SelectOp, Expr, Type, Pattern, TraitDef, Param
 from derive import expand_derives
 from std.fs import read_file, file_exists, is_dir
+from std.path import path_absolute
 from std.collections import Vector, Dict
 from std.conv import int_to_str
 
@@ -525,7 +526,19 @@ String mangle_prefix(String module_path):
 # ── Import loading ───────────────────────────────────────
 
 Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, Dict[String, bool] &imported_fns, int entry_source_len):
-    String base_dir = parent_dir(entry_path)
+    # Canonicalize the entry path to an absolute path BEFORE deriving
+    # `base_dir`. Mirrors Rust's `ModuleLoader::load_all` (src/loader.rs:581
+    # `entry.canonicalize()` → `canonical.parent()`). Without this, a
+    # relative entry path (`driver.gg`, cwd=self_host_lowerer) gives
+    # `base_dir = "."`, and the project-root namespace walk for
+    # `compiler.*` (find_project_root_for) cannot ascend past "." — so
+    # `compiler.data.resources` is silently dropped, losing the RESOURCES /
+    # *_BUILTIN_METHODS globals + their types/monos → bare-`Option`
+    # type-loss in the emitted C. Absolute spelling worked by accident;
+    # this makes module identity path-spelling-independent (devbook/24:
+    # one canonical key, not a raw path string).
+    String abs_entry = path_absolute(entry_path)
+    String base_dir = parent_dir(abs_entry)
     # PROOF-OF-FIX: this used to be `Vector[String] loaded = []` with a
     # linear-scan `loaded_contains` helper, working around an alleged
     # "Dict[String, bool] state-loss" — `std.collections` getting
