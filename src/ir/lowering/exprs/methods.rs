@@ -36,6 +36,58 @@ fn gorget_name_for_type_id(ctx: &LoweringContext, type_id: TypeId) -> String {
     }
 }
 
+/// Build the `Ptr(enum)` argument for an Option/Result builtin extern
+/// (`__option_is_some`, `__option_unwrap`, `__result_unwrap_error`, …).
+///
+/// The enum builtins take the Option/Result BY POINTER. The default path
+/// `emit_borrow`s the receiver place to take its address — this is correct
+/// for value receivers AND for `Field`-origin field-borrows (`&w.name`),
+/// whose underlying struct is owned and WILL drop, so the unwrap must
+/// invalidate the source.
+///
+/// THE CARVE-OUT: a for-loop element bound as a *collection-element borrow
+/// alias* by `lower_for_array` (origin `CowBorrowPending` /
+/// `CollectionElement`, i.e. `is_cow_borrow`) is a `Ptr(enum)` aimed into a
+/// collection THIS scope does not own. Two things must change for it:
+///   1. Pass the pointer THROUGH (it already IS the `Ptr(enum)` arg) rather
+///      than re-borrowing to `Ptr(Ptr(enum))`.
+///   2. NEVER invalidate / MoveZero the source — the collection owns the
+///      element; zeroing it would corrupt the collection.
+/// The returned `is_collection_borrow` flag tells the unwrap callers to skip
+/// the `Move` signal and the `move_zero_and_mark`.
+///
+/// `Field`-origin borrows are deliberately EXCLUDED from the carve-out so
+/// the long-standing `w.name.unwrap()` (struct-field-Option) path keeps its
+/// source-invalidating behavior — that's load-bearing for the Snag #25d
+/// double-free guard (`test_option_resource_field`).
+fn build_enum_recv_ptr(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    recv: &Operand,
+    place: &Place,
+) -> (Operand, bool) {
+    let recv_type = infer_operand_type_full(ctx, recv, builder);
+    let recv_is_ptr = matches!(
+        ctx.type_registry.get(recv_type),
+        Some(GirType::Ptr(_) | GirType::MutPtr(_))
+    );
+    // Only the genuine collection-element borrow alias (for-loop element)
+    // gets the pass-through + no-invalidate treatment. A bare-local Ptr that
+    // is a collection borrow has projections=[] and is_cow_borrow=true.
+    let is_collection_borrow = recv_is_ptr
+        && place.projections.is_empty()
+        && ctx.is_cow_borrow(builder, place.local);
+    if is_collection_borrow {
+        // Receiver slot already holds the enum pointer — pass it directly.
+        (FunctionBuilder::copy(place.local), true)
+    } else {
+        let ptr_type = ctx.register_ptr_type(recv_type);
+        let borrow = builder.add_local(ptr_type, None);
+        builder.emit_borrow(borrow, place.clone());
+        (FunctionBuilder::copy(borrow), false)
+    }
+}
+
 pub(super) fn lower_method_call(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
@@ -673,11 +725,12 @@ pub(super) fn lower_method_call(
             };
 
             if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
-                let ptr_type = ctx.register_ptr_type(
-                    infer_operand_type_full(ctx, &recv, builder),
-                );
-                let borrow = builder.add_local(ptr_type, None);
-                builder.emit_borrow(borrow, place.clone());
+                // Ptr-receiver guard: a borrowed enum element (for-loop
+                // collection-element borrow alias) is already `Ptr(enum)` — pass
+                // it through and skip source-invalidation (the collection owns
+                // it). All other receivers (values, `&self` params, field
+                // borrows) keep the original `emit_borrow` + invalidate path.
+                let (borrow_arg, recv_is_collection_borrow) = build_enum_recv_ptr(ctx, builder, &recv, place);
 
                 // Decide once at the GIR layer: resource payloads require the
                 // source Option/Result to be invalidated after extraction to
@@ -685,11 +738,16 @@ pub(super) fn lower_method_call(
                 // Signal this to the LIR by passing the borrow as Operand::Move;
                 // the LIR __option_unwrap special-case reads the operand kind
                 // instead of re-deriving the fact from the drop registry.
+                //
+                // EXCEPTION: when the receiver is a Ptr borrow alias (the data
+                // is owned by the collection / caller, not this slot), NEVER
+                // signal Move — invalidating the source would zero a collection
+                // element. Pass Copy and skip the MoveZero/unregister below.
                 let inner_is_resource = ctx.type_registry.is_resource_type(inner_type);
-                let borrow_op = if inner_is_resource {
-                    FunctionBuilder::mov(borrow)
+                let borrow_op = if inner_is_resource && !recv_is_collection_borrow {
+                    if let Operand::Copy(p) = &borrow_arg { FunctionBuilder::mov(p.local) } else { borrow_arg.clone() }
                 } else {
-                    FunctionBuilder::copy(borrow)
+                    borrow_arg.clone()
                 };
 
                 if method_name == "unwrap_or" {
@@ -741,7 +799,9 @@ pub(super) fn lower_method_call(
                     );
                     // Move-if-dead: unwrap consumes the Option/Result.
                     // Unregister + MoveZero to transfer ownership.
-                    if inner_is_resource {
+                    // Skip for Ptr borrow aliases — the slot is a non-owning view;
+                    // zeroing it would corrupt the collection element / caller value.
+                    if inner_is_resource && !recv_is_collection_borrow {
                         ctx.drops.unregister(place.local);
                         ctx.move_zero_and_mark(builder, place.local);
                     }
@@ -769,7 +829,9 @@ pub(super) fn lower_method_call(
                     );
                     // Move-if-dead: unwrap consumes the Option/Result.
                     // Unregister + MoveZero to transfer ownership.
-                    if inner_is_resource {
+                    // Skip for Ptr borrow aliases — the slot is a non-owning view;
+                    // zeroing it would corrupt the collection element / caller value.
+                    if inner_is_resource && !recv_is_collection_borrow {
                         ctx.drops.unregister(place.local);
                         ctx.move_zero_and_mark(builder, place.local);
                     }
@@ -818,16 +880,16 @@ pub(super) fn lower_method_call(
                 let err_type = resolve_inner_type(ctx, err_name);
 
                 if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
-                    let ptr_type = ctx.register_ptr_type(
-                        infer_operand_type_full(ctx, &recv, builder),
-                    );
-                    let borrow = builder.add_local(ptr_type, None);
-                    builder.emit_borrow(borrow, place.clone());
+                    // Ptr-receiver guard: a borrowed enum element (for-loop
+                    // collection-element borrow alias) is already `Ptr(enum)` —
+                    // pass it through and skip source-invalidation. Other
+                    // receivers keep the original emit_borrow + invalidate path.
+                    let (borrow_arg, recv_is_collection_borrow) = build_enum_recv_ptr(ctx, builder, &recv, place);
                     let err_is_resource = ctx.type_registry.is_resource_type(err_type);
-                    let borrow_op = if err_is_resource {
-                        FunctionBuilder::mov(borrow)
+                    let borrow_op = if err_is_resource && !recv_is_collection_borrow {
+                        if let Operand::Copy(p) = &borrow_arg { FunctionBuilder::mov(p.local) } else { borrow_arg.clone() }
                     } else {
-                        FunctionBuilder::copy(borrow)
+                        borrow_arg.clone()
                     };
                     let dst = ctx.call_extern_tracked(builder,
                         "__result_unwrap_error",
@@ -843,7 +905,7 @@ pub(super) fn lower_method_call(
                     // reads while drop-tracking takes ownership; for temps
                     // there are no later reads but MoveZero costs nothing and
                     // closes any aliased-read window.
-                    if err_is_resource {
+                    if err_is_resource && !recv_is_collection_borrow {
                         ctx.drops.unregister(place.local);
                         if !ctx.is_named_local(place.local) {
                             ctx.move_zero_and_mark(builder, place.local);
@@ -1187,18 +1249,18 @@ pub(super) fn lower_method_call(
         }
         // Tag check: is_some/is_ok → tag == 0; is_none/is_err → tag != 0
         if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
-            let ptr_type = ctx.register_ptr_type(
-                infer_operand_type_full(ctx, &recv, builder),
-            );
-            let borrow = builder.add_local(ptr_type, None);
-            builder.emit_borrow(borrow, place.clone());
+            // Ptr-receiver guard: a borrowed enum element (for-loop collection-
+            // element borrow alias) is already `Ptr(enum)` — pass it through
+            // instead of re-borrowing it to `Ptr(Ptr(enum))`. Other receivers
+            // (values, `&self` params, field borrows) keep the emit_borrow path.
+            let (arg, _recv_is_collection_borrow) = build_enum_recv_ptr(ctx, builder, &recv, place);
             let extern_name = match method_name {
                 "is_some" | "is_ok" => "__option_is_some",
                 _ => "__option_is_none",
             };
             let dst = builder.call_extern(
                 extern_name,
-                vec![FunctionBuilder::copy(borrow)],
+                vec![arg],
                 BOOL_TYPE,
             );
             return FunctionBuilder::copy(dst);

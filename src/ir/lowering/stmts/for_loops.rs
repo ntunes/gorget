@@ -446,21 +446,26 @@ fn lower_for_array(
     // and FieldLoad auto-derefs a Ptr base, so body reads work unchanged.
     // Tuple-destructuring and direct-collection elements keep the old path.
     //
-    // Restricted to plain `TypeDefKind::Struct` elements: enums (Option/Result/
-    // user enums) reach method dispatch (`r.is_ok()`, match scrutinees) that
-    // does not deref a Ptr receiver the way struct FieldLoad does, so a borrow
-    // alias mis-reads the enum tag. Enums keep the eager-clone path (a smaller
-    // sibling class — see scout report). The self-host handles enum borrows via
-    // its op_consume deref machinery; porting that is the follow-up.
+    // Covers plain `TypeDefKind::Struct` AND `TypeDefKind::Enum` elements
+    // (Option/Result/user enums). Enum method dispatch (`r.is_ok()`,
+    // `r.unwrap()`, `r.unwrap_error()`) and match scrutinees now deref a Ptr
+    // receiver: the `is_some`/`unwrap`/`unwrap_error` fast-paths gained an
+    // `is_ptr` guard (`exprs/methods.rs::build_enum_recv_ptr`), and the match
+    // path's `TagOf`/`EnumFieldLoad` already resolve through a Ptr base
+    // (`resolve_struct_id` unwraps Ptr; `EnumFieldLoad` auto-derefs at
+    // `lir/lower/insts.rs:1311`). So a borrow alias reads the enum tag/payload
+    // correctly — no per-iter `{Type}__clone`, no drop reg.
     let is_string = ctx.type_mapper.is_string_type(elem_type);
-    let elem_is_plain_struct = ctx.type_registry
+    let elem_is_struct_or_enum = ctx.type_registry
         .get(elem_type)
         .and_then(|gt| if let GirType::Named(n) = gt { Some(n.clone()) } else { None })
         .and_then(|name| ctx.type_registry.get_type_def(&name)
-            .map(|td| matches!(td.kind, crate::ir::types::TypeDefKind::Struct(_))))
+            .map(|td| matches!(td.kind,
+                crate::ir::types::TypeDefKind::Struct(_)
+                | crate::ir::types::TypeDefKind::Enum(_))))
         .unwrap_or(false);
     let is_recursive_struct = !is_string
-        && elem_is_plain_struct
+        && elem_is_struct_or_enum
         && ctx.type_registry.is_resource_type(elem_type)
         && !ctx.type_registry.is_collection_type(elem_type);
     let elem_is_binding = matches!(pattern.node, Pattern::Binding(_));
