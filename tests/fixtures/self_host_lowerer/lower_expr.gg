@@ -643,6 +643,30 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 # unmasks the pre-existing `!`-param-no-drop gap; see TODO.md.
                 register_local_for_drop(&ctx, dst, gs_tid, &gmod)
                 return dst
+            # Vector + Vector concat: `a + b` → clone(a) then extend(&result, b).
+            # Mirrors Rust gg's LIR `is_vector_add` arm
+            # (src/lir/lower/insts.rs:75-101), gated on the receiver's typed
+            # `collection_kind == Array` (CkVector / CkDeque) — NOT a name
+            # match. Must run BEFORE the user-op-overload arm below, since
+            # `Vector` lives in `type_infos` and would otherwise be routed to
+            # the non-existent `Vector__T__add` user method.
+            if op == "+":
+                String lhs_ckname = local_type_name(lhs, &ctx, &gmod)
+                CollectionKind lhs_ck = collection_kind_of(&gmod, lhs_ckname)
+                if collection_kind_eq(lhs_ck, CkVector()) or collection_kind_eq(lhs_ck, CkDeque()):
+                    int arr_tid = ctx.locals.get(lhs).unwrap().type_id
+                    # result = gorget_array_clone(&lhs)
+                    int cdst = add_local(&ctx, arr_tid, None)
+                    Vector[Operand] clone_args = [op_consume(&ctx, &gmod, lhs, CkCallArgBorrow())]
+                    emit(&ctx, GICallExtern(cdst, "gorget_array_clone", clone_args))
+                    # gorget_array_extend(&result, &rhs) — void, no dst (-1).
+                    # Self (the cloned result) is borrowed (mutated in place via
+                    # the by-pointer ABI), NOT copied — OpCopy on a resource trips
+                    # validate_resource_moves. rhs is read-only (CkCallArgBorrow).
+                    Vector[Operand] ext_args = [OpBorrow(cdst), op_consume(&ctx, &gmod, rhs, CkCallArgBorrow())]
+                    emit(&ctx, GICallExtern(-1, "gorget_array_extend", ext_args))
+                    register_local_for_drop(&ctx, cdst, arr_tid, &gmod)
+                    return cdst
             # Operator overload on user types: if lhs is a user struct/enum,
             # route `a + b` → a.add(b), `a - b` → a.sub(b), etc.
             String op_method = binop_method_name(op)

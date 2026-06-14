@@ -7259,6 +7259,39 @@ String emit_lir_helpers(LirModule &m):
     sb_push(&buf, "static int gorget_int_compare(const void* a, const void* b) { int64_t va = *(const int64_t*)a, vb = *(const int64_t*)b; return (va > vb) - (va < vb); }\n")
     sb_push(&buf, "static int gorget_float_compare(const void* a, const void* b) { double da = *(const double*)a, db = *(const double*)b; return (da > db) - (da < db); }\n")
     sb_push(&buf, "static int gorget_str_compare(const void* a, const void* b) { Str sa = *(const Str*)a, sb = *(const Str*)b; size_t la = sa.len, lb = sb.len; size_t ml = la < lb ? la : lb; int r = ml > 0 ? memcmp(sa.data, sb.data, ml) : 0; if (r) return r; return (la > lb) - (la < lb); }\n")
+    # Typed sort/sorted/unique/reversed array helpers — ports Rust gg's
+    # `emit_types.rs:2605-2651` (`has_extern`-gated). Element-type suffix
+    # picks the right qsort comparator; `gorget_array_clone`/`_dedup`/`_reverse`
+    # come from the runtime_array/runtime_sort modules emitted earlier. Gated
+    # on actual use via cn_has_eq so fixtures that never sort do not reference
+    # gorget_array_clone when it isn't emitted (the un-gated version broke the
+    # whole corpus with "invalid initializer").
+    if cn_has_eq(&n, "gorget_array_sort_int"):
+        sb_push(&buf, "static inline void gorget_array_sort_int(void* __p) { GorgetArray* a = (GorgetArray*)__p; qsort(a->data, a->len, a->elem_size, gorget_int_compare); }\n")
+    if cn_has_eq(&n, "gorget_array_sort_float"):
+        sb_push(&buf, "static inline void gorget_array_sort_float(void* __p) { GorgetArray* a = (GorgetArray*)__p; qsort(a->data, a->len, a->elem_size, gorget_float_compare); }\n")
+    if cn_has_eq(&n, "gorget_array_sort_str"):
+        sb_push(&buf, "static inline void gorget_array_sort_str(void* __p) { GorgetArray* a = (GorgetArray*)__p; qsort(a->data, a->len, a->elem_size, gorget_str_compare); }\n")
+    if cn_has_eq(&n, "gorget_array_sort_generic"):
+        sb_push(&buf, "static inline void gorget_array_sort_generic(void* __p) { GorgetArray* a = (GorgetArray*)__p; qsort(a->data, a->len, a->elem_size, gorget_generic_compare); }\n")
+    if cn_has_eq(&n, "gorget_array_sorted_int"):
+        sb_push(&buf, "static inline GorgetArray gorget_array_sorted_int(void* __p) { GorgetArray* a = (GorgetArray*)__p; GorgetArray r = gorget_array_clone(a); qsort(r.data, r.len, r.elem_size, gorget_int_compare); return r; }\n")
+    if cn_has_eq(&n, "gorget_array_sorted_float"):
+        sb_push(&buf, "static inline GorgetArray gorget_array_sorted_float(void* __p) { GorgetArray* a = (GorgetArray*)__p; GorgetArray r = gorget_array_clone(a); qsort(r.data, r.len, r.elem_size, gorget_float_compare); return r; }\n")
+    if cn_has_eq(&n, "gorget_array_sorted_str"):
+        sb_push(&buf, "static inline GorgetArray gorget_array_sorted_str(void* __p) { GorgetArray* a = (GorgetArray*)__p; GorgetArray r = gorget_array_clone(a); qsort(r.data, r.len, r.elem_size, gorget_str_compare); return r; }\n")
+    if cn_has_eq(&n, "gorget_array_sorted_generic"):
+        sb_push(&buf, "static inline GorgetArray gorget_array_sorted_generic(void* __p) { GorgetArray* a = (GorgetArray*)__p; GorgetArray r = gorget_array_clone(a); qsort(r.data, r.len, r.elem_size, gorget_generic_compare); return r; }\n")
+    if cn_has_eq(&n, "gorget_array_reversed"):
+        sb_push(&buf, "static inline GorgetArray gorget_array_reversed(void* __p) { GorgetArray* a = (GorgetArray*)__p; GorgetArray r = gorget_array_clone(a); gorget_array_reverse(&r); return r; }\n")
+    if cn_has_eq(&n, "gorget_array_unique_int"):
+        sb_push(&buf, "static inline GorgetArray gorget_array_unique_int(void* __p) { GorgetArray* a = (GorgetArray*)__p; GorgetArray r = gorget_array_clone(a); qsort(r.data, r.len, r.elem_size, gorget_int_compare); gorget_array_dedup(&r); return r; }\n")
+    if cn_has_eq(&n, "gorget_array_unique_float"):
+        sb_push(&buf, "static inline GorgetArray gorget_array_unique_float(void* __p) { GorgetArray* a = (GorgetArray*)__p; GorgetArray r = gorget_array_clone(a); qsort(r.data, r.len, r.elem_size, gorget_float_compare); gorget_array_dedup(&r); return r; }\n")
+    if cn_has_eq(&n, "gorget_array_unique_str"):
+        sb_push(&buf, "static inline GorgetArray gorget_array_unique_str(void* __p) { GorgetArray* a = (GorgetArray*)__p; GorgetArray r = gorget_array_clone(a); qsort(r.data, r.len, r.elem_size, gorget_str_compare); gorget_array_dedup(&r); return r; }\n")
+    if cn_has_eq(&n, "gorget_array_unique_generic"):
+        sb_push(&buf, "static inline GorgetArray gorget_array_unique_generic(void* __p) { GorgetArray* a = (GorgetArray*)__p; GorgetArray r = gorget_array_clone(a); qsort(r.data, r.len, r.elem_size, gorget_generic_compare); gorget_array_dedup(&r); return r; }\n")
     sb_push(&buf, "static inline int64_t int64_t__one(void) { return 1; }\n")
     sb_push(&buf, "static inline int64_t int__one(void) { return 1; }\n")
     sb_push(&buf, "static inline double double__one(void) { return 1.0; }\n")

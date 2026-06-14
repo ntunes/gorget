@@ -895,9 +895,18 @@ fn snag11_equip_symbol_mangle_site_count() {
 /// rides in the name suffix (the `Thread__T__join` C symbol is the runtime
 /// contract), so suffix-parsing here is the explicitly-allowed "extract T
 /// from Vector__T" name-parsing case, not a classification-routing dodge.
+/// Bumped 70 → 71 (2026-06-14): the self-host Vector sort-family port added ONE
+/// `name.starts_with("Vector__")` site in `lir_lower.gg`'s `array_elem_for_sort`
+/// — it strips the `Vector__` prefix + `__method` suffix to extract the element
+/// type, choosing the typed qsort comparator suffix (`gorget_array_sort_int` /
+/// `_float` / `_str` / `_generic`). This is the explicitly-allowed "extract T
+/// from Vector__T" name-parsing case (the per-element C symbol IS the runtime
+/// contract, mirroring Rust gg's `map_monomorphized_to_runtime`,
+/// src/lir/lower/calls.rs:318), not a classification-routing dodge — the FAMILY
+/// classification still goes through `type_category_for_name` upstream.
 #[test]
 fn no_growth_in_self_host_name_prefix_routing() {
-    const BUDGET: usize = 70;
+    const BUDGET: usize = 71;
 
     // Phase-A classification-routing class only: all MANGLED_PREFIXES EXCEPT
     // the prelude option-like ones (those are the sibling lint's burn-down).

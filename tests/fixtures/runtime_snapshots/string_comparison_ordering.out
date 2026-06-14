@@ -1,0 +1,31 @@
+eq: true
+ne: true
+lt: true
+gt: true
+le: true
+ge: true
+empty eq: true
+empty lt any: true
+any gt empty: true
+empty le empty: true
+prefix lt: true
+longer gt: true
+case: true
+upper lt lower: true
+mixed: true
+9 < 10: false
+2 > 19: true
+a < b: true
+z > a: true
+0 < 9: true
+apple
+banana
+cherry
+date
+elderberry
+min: apple
+max: elderberry
+binary search cherry: true
+test < testing: true
+test == test: true
+testing > test: true

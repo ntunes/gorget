@@ -1321,7 +1321,20 @@ String map_runtime_name(String name, LirModule &m, GirModule &gmod):
     # Phase A: collection method dispatch via type_runtime_map + coll_ctor_fn_map.
     String coll_cat = type_category_for_name(name, &m)
     if coll_cat == "GorgetArray":
-        return map_array_method(extract_method_name(name))
+        String arr_method = extract_method_name(name)
+        # sorted/unique/sort dispatch to typed stubs keyed by element type so
+        # qsort uses the right comparator (mirrors Rust gg
+        # `map_monomorphized_to_runtime`, src/lir/lower/calls.rs:318).
+        if arr_method == "sorted" or arr_method == "unique" or arr_method == "sort":
+            String elem = array_elem_for_sort(name, arr_method)
+            String suffix = "generic"
+            if elem != "":
+                suffix = cmp_suffix_for_elem(elem)
+            return "gorget_array_" + arr_method + "_" + suffix
+        # reversed: clone + reverse, one stub for all element types.
+        if arr_method == "reversed":
+            return "gorget_array_reversed"
+        return map_array_method(arr_method)
     if coll_cat == "GorgetMap":
         String method = extract_method_name(name)
         if method == "new":
@@ -1546,10 +1559,12 @@ String map_array_method(String method):
             return "gorget_array_slice"
         case "sort":
             return "gorget_array_sort"
+        case "binary_search":
+            return "gorget_array_binary_search"
         case "last":
-            return "gorget_array_safe_last"
+            return "gorget_array_last"
         case "first":
-            return "gorget_array_safe_first"
+            return "gorget_array_first"
         case "is_empty":
             return "gorget_array_is_empty"
         case "capacity":
@@ -1994,9 +2009,26 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
             return true
         if fn_name == "gorget_array_safe_last" or fn_name == "gorget_array_safe_first":
             return true
+        # first/last return `void*` into the array element; self by const ptr.
+        if fn_name == "gorget_array_first" or fn_name == "gorget_array_last":
+            return true
+        # In-place typed sort (gorget_array_sort_{int,float,str,generic}):
+        # self (arg 0) is a `void* __p` pointer to the array it mutates.
+        if fn_name.starts_with("gorget_array_sort_"):
+            return true
         if fn_name == "gorget_array_safe_pop" or fn_name == "gorget_array_index_of":
             return true
         if fn_name == "gorget_array_clone" or fn_name == "gorget_array_slice":
+            return true
+        # sorted/reversed/unique: clone-and-transform runtime stubs whose
+        # self (arg 0) is a `void* __p` pointer to the source GorgetArray
+        # (mirrors Rust gg's by-pointer ABI for these synthesised stubs).
+        if fn_name.starts_with("gorget_array_sorted_") or fn_name == "gorget_array_reversed":
+            return true
+        if fn_name.starts_with("gorget_array_unique_"):
+            return true
+        # binary_search(const GorgetArray* a, const void* key): self by ptr.
+        if fn_name == "gorget_array_binary_search":
             return true
         if fn_name == "gorget_map_get" or fn_name == "gorget_map_len":
             return true
@@ -2042,6 +2074,10 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
             return true
     # Element args passed by pointer
     if fn_name == "gorget_array_push" and arg_idx == 1:
+        return true
+    # binary_search key (arg 1): `const void* key` — pass the search key's
+    # slot address, exactly like the push element above.
+    if fn_name == "gorget_array_binary_search" and arg_idx == 1:
         return true
     if fn_name == "gorget_array_set" and arg_idx == 2:
         return true
@@ -2358,6 +2394,30 @@ int extract_elem_size_from_name_in_mod(String name, Dict[String, int] &sr, LirMo
     if elem != "":
         return type_elem_size_in_mod(elem, &sr, &m)
     return 8
+
+# Map a monomorphized element-type name to a qsort comparator suffix.
+# Mirrors Rust gg's `cmp_suffix_for_elem` (src/lir/lower/calls.rs:176).
+String cmp_suffix_for_elem(String elem):
+    if elem == "int64_t" or elem == "int32_t" or elem == "int16_t" or elem == "int8_t":
+        return "int"
+    if elem == "uint64_t" or elem == "uint32_t" or elem == "uint16_t" or elem == "uint8_t":
+        return "int"
+    if elem == "double" or elem == "float":
+        return "float"
+    if elem == "Str" or elem == "GorgetString":
+        return "str"
+    return "generic"
+
+# Extract the element type from a `Vector__ELEM__method` mangled name
+# (strip the `Vector__` prefix and the trailing `__method`).
+String array_elem_for_sort(String name, String method):
+    String rest = name
+    if name.starts_with("Vector__"):
+        rest = name.slice(8, name.len())
+    String tail = "__" + method
+    if rest.ends_with(tail):
+        return rest.slice(0, rest.len() - tail.len())
+    return ""
 
 String extract_method_name(String name):
     # Find the last "__" and return everything after it
