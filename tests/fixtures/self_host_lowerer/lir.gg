@@ -521,6 +521,36 @@ void lir_push_inst(LirFunction &f, int bb, LirInst inst):
 void lir_set_term(LirFunction &f, int bb, LirTerm term):
     f.blocks.get(bb).unwrap().term = term
 
+# SINGLE SOURCE OF TRUTH for the "this runtime fn returns a raw C string
+# (`const char*`) and a `GorgetString`-typed slot needs the
+# `gorget_str_from_cstr` wrap" axis. Two complementary wrap mechanisms read
+# this set: EMIT (`is_cstr_returning_fn`, lir_codegen.gg — wraps the raw call
+# when its LIR result type is already GorgetString) and LOWERING
+# (`is_cstr_returning_call`, lower_types.gg — inserts the coercion at SVarDecl
+# when the raw result stays cstr). They were two hand-synced name-lists that
+# nearly diverged during the loader work; both now delegate here. STOPGAP: the
+# durable end-state is TYPED cstr provenance on the call (mirror Rust's
+# `ValueOrigin::CStr` / `AbiKind::CStr` return ABI, src/lir/types.rs:982),
+# retiring this name-list entirely. Until then, add new cstr-returning runtime
+# fns HERE ONLY — `tests/lints.rs cstr_return_registry_single_source` enforces
+# the two siblings stay pure delegations.
+bool runtime_fn_returns_cstr(String name):
+    if name == "gorget_getenv" or name == "gorget_getcwd" or name == "gorget_platform":
+        return true
+    if name == "gorget_parse_last_error":
+        return true
+    if name == "gorget_path_join" or name == "gorget_path_parent" or name == "gorget_path_basename":
+        return true
+    if name == "gorget_path_extension" or name == "gorget_path_stem":
+        return true
+    if name == "gorget_path_normalize" or name == "gorget_path_absolute":
+        return true
+    if name == "gorget_input" or name == "gorget_readline":
+        return true
+    if name == "gorget_format_time":
+        return true
+    return false
+
 # ── LirModule helpers ───────────────────────────────────────────
 
 int lir_mod_add_struct(LirModule &m, LirStructDef sdef):

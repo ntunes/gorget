@@ -24,6 +24,7 @@ from gir import CkVector, CkDeque, CkHeap, CkDict, CkSet, CkNotCollection
 from compiler.data.resources import STRING_BUILTIN_METHODS, COLLECTION_BUILTIN_METHODS, BUILTIN_METHOD_MUTATES
 from compiler.data.schema import BuiltinMethodDecl, BuiltinMethodEntry
 from compiler.data.schema import BuiltinRetKind, BrkString, BrkInfer
+from lir import runtime_fn_returns_cstr
 from lir_lower import resource_meta_for
 from lower import LowerCtx, ResultPayloadTypes, DictKvNames
 from lower import lower_fail, diag_bug, diag_warn, emit, new_block, switch_to, set_terminator
@@ -1760,23 +1761,15 @@ bool is_cstr_returning_call(SpannedExpr init_expr, GirModule &gmod):
                     String resolved = fname
                     if gmod.call_redirects.contains(fname):
                         resolved = gmod.call_redirects.get(fname).unwrap()
-                    # Current allow-list is narrow: only externs that
-                    # return raw `const char*` via their C signature.
-                    # `gorget_int_to_str` / `_float_to_str` / `_bool_to_str`
-                    # / `_char_chr` all return `Str` (by-value struct), not
-                    # cstr — do NOT include them here.
-                    if resolved == "gorget_parse_last_error":
-                        return true
-                    # path_* externs also return raw `const char*` — keep this
-                    # list in agreement with the sibling emit registry
-                    # `is_cstr_returning_fn` (lir_codegen.gg), else a SVarDecl
-                    # like `String p = path_absolute(...)` skips the cstr->Str
-                    # coercion and types as I64 (broke fixed_point when the
-                    # loader started canonicalizing the entry path).
-                    # TODO: unify the two cstr registries into one source of truth.
-                    if resolved == "gorget_path_normalize" or resolved == "gorget_path_absolute":
-                        return true
-                    return false
+                    # Delegate the terminal name-set test to the single source
+                    # of truth (`runtime_fn_returns_cstr`, lir.gg) — do NOT
+                    # re-inline a name list here. The LOWERING coercion fires
+                    # only when the raw result stays cstr; the companion guard
+                    # at lower_stmt.gg (var_type != gs_tid_decl) prevents the
+                    # double-wrap of fns the EMIT side already types as
+                    # GorgetString (e.g. getenv). New cstr-returning runtime
+                    # fns go in lir.gg ONLY (enforced by tests/lints.rs).
+                    return runtime_fn_returns_cstr(resolved)
                 else:
                     return false
         else:

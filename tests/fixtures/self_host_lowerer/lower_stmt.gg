@@ -166,7 +166,16 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             # `gorget_str_from_cstr` when the slot is Str-typed and the
             # source is a cstr-returning extern call.
             int gs_tid_decl = lookup_or_register_named(&gmod, "GorgetString")
-            if declared_ty == gs_tid_decl and is_cstr_returning_call(init_expr, &gmod):
+            # `var_type != gs_tid_decl` is the companion guard for the unified
+            # cstr registry (runtime_fn_returns_cstr, lir.gg): the LOWERING
+            # coercion fires ONLY when the raw init result is still cstr. When
+            # the raw result is already GorgetString (e.g. getenv, which
+            # runtime_fn_return_type types as GorgetString → the EMIT side
+            # wraps it), this guard skips LOWERING so the value is wrapped by
+            # exactly one mechanism. Without it, feeding the full 14-name set
+            # to both sites double-wraps getenv → cc error "expected
+            # 'const char *' but argument is of type 'Str'".
+            if declared_ty == gs_tid_decl and var_type != gs_tid_decl and is_cstr_returning_call(init_expr, &gmod):
                 int coerced = add_local(&ctx, gs_tid_decl, None)
                 # gorget_str_from_cstr reads the cstr pointer to build a
                 # new GorgetString — borrow.

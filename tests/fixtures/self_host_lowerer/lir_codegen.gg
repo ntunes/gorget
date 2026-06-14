@@ -20,6 +20,7 @@ from lir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
 from lir import EK_NOT_ENUM, EK_OPTION, EK_RESULT, EK_GENERAL
 from lir import GINIT_ZEROED, GINIT_FUNC_ADDR, GINIT_RUNTIME_CALL, GINIT_STRUCT, GINIT_BYTES
 from lir import SCHED_POOL, SCHED_THREAD, SCHED_INLINE, SCHED_SINGLE
+from lir import runtime_fn_returns_cstr
 # Slot-coalescing reads the CFG successors and terminator operands from lir_ssa
 # (the new `term_uses` lives next to `term_successors`).
 from lir_ssa import term_successors, term_uses
@@ -1972,22 +1973,12 @@ bool runtime_arg_is_cstr(String name, int arg_idx):
 # Without this, self-host emits `Str __v3 = gorget_getenv(...)` — a direct
 # assignment of `const char*` to a 32-byte Str struct slot, which fails
 # C type-checking with `incompatible types when assigning to type 'Str'`.
+#
+# Pure delegation to the single source of truth (`runtime_fn_returns_cstr`,
+# lir.gg) — do NOT re-inline the name list here. New cstr-returning runtime
+# fns go in lir.gg ONLY (enforced by tests/lints.rs).
 bool is_cstr_returning_fn(String name):
-    if name == "gorget_getenv" or name == "gorget_getcwd" or name == "gorget_platform":
-        return true
-    if name == "gorget_parse_last_error":
-        return true
-    if name == "gorget_path_join" or name == "gorget_path_parent" or name == "gorget_path_basename":
-        return true
-    if name == "gorget_path_extension" or name == "gorget_path_stem":
-        return true
-    if name == "gorget_path_normalize" or name == "gorget_path_absolute":
-        return true
-    if name == "gorget_input" or name == "gorget_readline":
-        return true
-    if name == "gorget_format_time":
-        return true
-    return false
+    return runtime_fn_returns_cstr(name)
 
 bool runtime_takes_str_by_value(String name):
     if name == "gorget_str_char_at" or name == "gorget_str_byte_at":

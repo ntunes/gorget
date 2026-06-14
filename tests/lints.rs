@@ -1827,3 +1827,119 @@ fn self_host_fn_defaults_registration_parity() {
          re-balance.",
     );
 }
+
+/// Collect the NON-comment body lines of a named self-host function. The body
+/// runs from its `<sig_prefix>` signature line to the next top-level (column-0)
+/// definition. Comment-only lines (after trim, starting with `#`) and blanks do
+/// NOT end the function and are STRIPPED from the returned body — mirrors
+/// `count_case_arms_in_fn`'s comment-skipping (tests/lints.rs:1553) so a future
+/// explanatory comment mentioning a `gorget_…` name can't false-trip a
+/// divergence check. Returns the matched body lines (trimmed of leading ws).
+fn self_host_fn_body_noncomment(content: &str, sig_prefix: &str) -> Vec<String> {
+    let mut in_fn = false;
+    let mut body = Vec::new();
+    for line in content.lines() {
+        if line.starts_with(sig_prefix) {
+            in_fn = true;
+            continue;
+        }
+        if !in_fn {
+            continue;
+        }
+        // A new column-0 definition (non-space, non-comment, non-blank line)
+        // ends the function. Comments and blanks don't.
+        if !line.starts_with(' ') && !line.trim().is_empty() && !line.starts_with('#') {
+            break;
+        }
+        let t = line.trim_start();
+        if t.is_empty() || t.starts_with('#') {
+            continue; // strip comments and blanks
+        }
+        body.push(t.to_string());
+    }
+    body
+}
+
+/// Single-source-of-truth ratchet for the "this runtime fn returns a raw C
+/// string (`const char*`) and a GorgetString-typed slot needs the
+/// `gorget_str_from_cstr` wrap" axis. The set lives in ONE function,
+/// `runtime_fn_returns_cstr` (lir.gg); the two complementary wrap mechanisms —
+/// EMIT `is_cstr_returning_fn` (lir_codegen.gg) and LOWERING
+/// `is_cstr_returning_call` (lower_types.gg) — must be PURE delegations to it,
+/// never re-inlined name lists.
+///
+/// History: the two were hand-synced inline lists that nearly diverged during
+/// the loader work (a SVarDecl `String p = path_absolute(...)` skipped the
+/// cstr->Str coercion and mistyped as I64). Feeding the full set to both sites
+/// naively double-wraps getenv (`expected 'const char *' but argument is of
+/// type 'Str'`); the companion guard (`var_type != gs_tid_decl` at
+/// lower_stmt.gg) is what makes ONE registry safe for BOTH. STOPGAP: the
+/// durable end-state is typed cstr provenance (Rust `ValueOrigin::CStr` /
+/// `AbiKind::CStr`, src/lir/types.rs); until then this lint keeps the list
+/// single-sourced.
+#[test]
+fn cstr_return_registry_single_source() {
+    let lir = "tests/fixtures/self_host_lowerer/lir.gg";
+    let codegen = "tests/fixtures/self_host_lowerer/lir_codegen.gg";
+    let types = "tests/fixtures/self_host_lowerer/lower_types.gg";
+
+    let lir_src = fs::read_to_string(lir).unwrap_or_default();
+    let codegen_src = fs::read_to_string(codegen).unwrap_or_default();
+    let types_src = fs::read_to_string(types).unwrap_or_default();
+
+    // 1. EXACTLY one definition of the single source across self_host_lowerer.
+    let defs = lir_src.matches("bool runtime_fn_returns_cstr(").count()
+        + codegen_src.matches("bool runtime_fn_returns_cstr(").count()
+        + types_src.matches("bool runtime_fn_returns_cstr(").count();
+    assert_eq!(
+        defs, 1,
+        "Expected EXACTLY one definition of `runtime_fn_returns_cstr` across \
+         self_host_lowerer (found {defs}). The cstr-return ABI is single-sourced \
+         in lir.gg; do NOT define a second copy.",
+    );
+
+    // 2. Both siblings must be PURE delegations — zero `gorget_` literals in
+    //    their (comment-stripped) bodies. A re-inlined name list trips this.
+    let emit_body =
+        self_host_fn_body_noncomment(&codegen_src, "bool is_cstr_returning_fn(");
+    let lowering_body =
+        self_host_fn_body_noncomment(&types_src, "bool is_cstr_returning_call(");
+    assert!(
+        !emit_body.is_empty() && !lowering_body.is_empty(),
+        "cstr_return_registry_single_source: failed to locate one of \
+         `is_cstr_returning_fn` (lir_codegen.gg) / `is_cstr_returning_call` \
+         (lower_types.gg). Did a file move or a signature change?",
+    );
+    let emit_gorget = emit_body.iter().filter(|l| l.contains("gorget_")).count();
+    let lowering_gorget = lowering_body.iter().filter(|l| l.contains("gorget_")).count();
+    assert_eq!(
+        emit_gorget, 0,
+        "`is_cstr_returning_fn` (lir_codegen.gg) contains {emit_gorget} `gorget_` \
+         literal(s) in its body — it must be a PURE delegation to \
+         `runtime_fn_returns_cstr` (lir.gg).\n\n\
+         The cstr-return ABI is single-sourced in lir.gg. Add new cstr-returning \
+         runtime fns THERE, not by re-inlining a name list here — two hand-synced \
+         lists nearly diverged once (double-wrap saga; see lir.gg comment).",
+    );
+    assert_eq!(
+        lowering_gorget, 0,
+        "`is_cstr_returning_call` (lower_types.gg) contains {lowering_gorget} \
+         `gorget_` literal(s) in its body — it must delegate the terminal \
+         name-set test to `runtime_fn_returns_cstr` (lir.gg).\n\n\
+         The cstr-return ABI is single-sourced in lir.gg. Add new cstr-returning \
+         runtime fns THERE, not by re-inlining a name list here — two hand-synced \
+         lists nearly diverged once (double-wrap saga; see lir.gg comment).",
+    );
+
+    // 3. Each delegation body actually calls the single source.
+    assert!(
+        emit_body.iter().any(|l| l.contains("runtime_fn_returns_cstr(")),
+        "`is_cstr_returning_fn` (lir_codegen.gg) must delegate to \
+         `runtime_fn_returns_cstr(...)`.",
+    );
+    assert!(
+        lowering_body.iter().any(|l| l.contains("runtime_fn_returns_cstr(")),
+        "`is_cstr_returning_call` (lower_types.gg) must delegate to \
+         `runtime_fn_returns_cstr(...)`.",
+    );
+}
