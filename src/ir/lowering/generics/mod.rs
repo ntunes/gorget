@@ -256,9 +256,36 @@ impl GenericCollector {
                     }
                 }
                 Item::Equip(equip) if equip.generic_params.is_none() => {
+                    // The equip's target may carry *target-implicit* generic
+                    // params, e.g. `equip Tensor[T]:` where `[T]` comes from
+                    // the struct decl rather than an explicit `equip [T]`
+                    // prefix. Those names must be treated as unresolved while
+                    // scanning the method bodies, otherwise a method like
+                    // `Tensor[T] reshape(self, ...)` registers the phantom
+                    // concrete instance `Tensor__T` (its drop then references
+                    // the never-defined `Shared__Vector__T__drop`).
+                    let equip_params: Vec<String> = match &equip.type_.node {
+                        Type::Named { generic_args, .. } => generic_args
+                            .iter()
+                            .filter_map(|a| match &a.node {
+                                Type::Named { name, generic_args }
+                                    if generic_args.is_empty() =>
+                                {
+                                    Some(name.node.clone())
+                                }
+                                _ => None,
+                            })
+                            .collect(),
+                        _ => Vec::new(),
+                    };
+                    let prev = self.current_generic_params.take();
+                    if !equip_params.is_empty() {
+                        self.current_generic_params = Some(equip_params);
+                    }
                     for method in &equip.items {
                         self.scan_function(&method.node);
                     }
+                    self.current_generic_params = prev;
                 }
                 _ => {}
             }
@@ -343,13 +370,22 @@ impl GenericCollector {
 
     /// Scan a function definition for generic usages.
     fn scan_function(&mut self, func: &ast::FunctionDef) {
-        // Track generic params so we can skip unresolved type-arg usages
+        // Track generic params so we can skip unresolved type-arg usages.
+        // Preserve any params set by the caller (e.g. an equip block's
+        // target-implicit `[T]`, see `discover_usages`) and MERGE the
+        // function's own generic params on top — a method like
+        // `Tensor[T] reshape(self, ...)` inside `equip Tensor[T]:` must
+        // still see `T` as unresolved so it isn't registered as the phantom
+        // concrete instance `Tensor__T`.
         let prev = self.current_generic_params.take();
+        let mut names: Vec<String> = prev.clone().unwrap_or_default();
         if let Some(ref gp) = func.generic_params {
-            let names: Vec<String> = gp.node.params.iter().map(|p| match &p.node {
+            names.extend(gp.node.params.iter().map(|p| match &p.node {
                 GenericParam::Type { name, .. } => name.node.clone(),
                 GenericParam::Const { name: s, .. } => s.node.clone(),
-            }).collect();
+            }));
+        }
+        if !names.is_empty() {
             self.current_generic_params = Some(names);
         }
 
