@@ -3404,6 +3404,20 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                         if emit_dm2:
                                             String dm_trait2 = mangle_trait_name(tname)
                                             String dm_mangled2 = dm_trait2 + "_for_" + eq_target_sp + "__" + tmeth2.name
+                                            # Root #2: bind `Self` → *Target so `lower_function`'s
+                                            # param loop types the default body's `self` param as
+                                            # the concrete struct pointer (map_ast_type(TSelf())
+                                            # resolves through type_subs["Self"]), not the I64
+                                            # default. The body sees `Target*` directly (no *unit
+                                            # cast needed) and the call site address-takes the
+                                            # receiver (lir_lower is_ptr_type → pass_by_ptr).
+                                            # Mirrors Rust gg lower_trait_method_body's concrete
+                                            # self-ptr binding (traits.rs:860). Save/restore so
+                                            # the binding doesn't leak to sibling defaults.
+                                            if not tc_gate_sp:
+                                                int _dm2_self_target = lookup_or_register_named(&gmod, eq_target_sp)
+                                                int _dm2_self_ptr = register_ptr(&gmod, _dm2_self_target)
+                                                gmod.type_subs.put("Self", _dm2_self_ptr)
                                             gmod.functions.push(lower_function(tmeth2, &gmod))
                                             int last_idx2 = gmod.functions.len() - 1
                                             GirFunction last_fn2 = gmod.functions.get(last_idx2).unwrap()
@@ -3419,6 +3433,13 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                                     emit_pt = pt_meth.type_params.len() == 0 and all_return_nominals_registered(pt_meth.return_type, &gmod)
                                                 if emit_pt:
                                                     String pt_mangled = eq_target_sp + "__" + pt_meth.name
+                                                    # Root #2: same concrete-self-ptr binding as the
+                                                    # own-trait default loop above (parent-trait
+                                                    # defaults have the identical I64-self bug).
+                                                    if not tc_gate_sp:
+                                                        int _pt_self_target = lookup_or_register_named(&gmod, eq_target_sp)
+                                                        int _pt_self_ptr = register_ptr(&gmod, _pt_self_target)
+                                                        gmod.type_subs.put("Self", _pt_self_ptr)
                                                     gmod.functions.push(lower_function(pt_meth, &gmod))
                                                     int pt_last = gmod.functions.len() - 1
                                                     GirFunction pt_last_fn = gmod.functions.get(pt_last).unwrap()
@@ -3500,6 +3521,12 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                                 String eq_target = type_to_c_name(eqblk.target, &gmod)
                                                 String dm_trait = mangle_trait_name(tname)
                                                 String dm_mangled = dm_trait + "_for_" + eq_target + "__" + tmeth.name
+                                                # Root #2: concrete-self-ptr binding (non-split
+                                                # unregistered route — same I64-self bug).
+                                                if not tc_gate:
+                                                    int _dm_self_target = lookup_or_register_named(&gmod, eq_target)
+                                                    int _dm_self_ptr = register_ptr(&gmod, _dm_self_target)
+                                                    gmod.type_subs.put("Self", _dm_self_ptr)
                                                 gmod.functions.push(lower_function(tmeth, &gmod))
                                                 int last_idx = gmod.functions.len() - 1
                                                 GirFunction last_fn = gmod.functions.get(last_idx).unwrap()
