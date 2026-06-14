@@ -233,15 +233,17 @@ default-borrow path now, not a clone site.
 ## For-loop elements: borrow the element, don't clone it
 
 `for x in vec:` is a collection read, so by the CoW default the loop variable
-`x` should be a borrow alias into the collection, not a fresh per-iteration
-clone. For string elements that has always held — `index_load_borrow` emits
-`ReadMode::Borrow` and the loop reads a zero-copy `cap==0` view. For
-**recursive-drop user structs and enums** it did *not*: every iteration deep-cloned
-the element via `{Type}__clone`, even when the body only reads through it. That is
-both a clone the user never asked for and a leak risk, and on the self-host
-self-compile it was the dominant cost — a per-iteration whole-`LirFunction`
-deep clone behind two `returns_void` scans that read only `.name` /
-`.return_type` (Fix C, see below).
+`x` is a borrow alias into the collection, not a fresh per-iteration clone. The
+element is read in place; a copy is made only if the body carries it past an
+owning boundary. This holds uniformly across element types — a string element
+reads as a zero-copy `cap==0` view, and a recursive-drop struct or enum element
+reads through a pointer alias. The distinction matters on a hot read-only loop:
+the body that only inspects its elements pays one deep clone per iteration if
+the element is copied, versus none if it is borrowed. On the self-host
+self-compile — where the compiler repeatedly walks large `LirFunction`
+collections — that per-iteration clone is the dominant allocation cost, so
+borrowing the element rather than copying it is what keeps the self-compile
+cheap.
 
 `lower_for_array` (`src/ir/lowering/stmts/for_loops.rs:397`) binds such an
 element as a `Ptr(elem)` borrow alias instead. The gate is fully typed — no
@@ -319,8 +321,8 @@ tells the four enum-extern call sites (`methods.rs:733,887,1256`, and the
 The one shape deliberately **excluded** from the carve-out is a `Field`-origin
 borrow (`w.name.unwrap()` — a struct-field Option). Its underlying struct *is*
 owned and *will* drop, so the unwrap must keep its source-invalidating
-behaviour; that is load-bearing for the Snag #25d double-free guard
-(`test_option_resource_field`). The discriminator is `place.projections.is_empty()
+behaviour — that is what prevents a double-free when a struct-field Option is
+unwrapped (guarded by `test_option_resource_field`). The discriminator is `place.projections.is_empty()
 && is_cow_borrow` — a field borrow has a non-empty projection and is not in the
 `is_cow_borrow` set, so it falls to the default `emit_borrow` + invalidate path.
 
@@ -328,54 +330,36 @@ behaviour; that is load-bearing for the Snag #25d double-free guard
 
 | Loop kind | Element handling | Status |
 |-----------|------------------|--------|
-| `for x in array` — string element | `index_load_borrow` zero-copy `cap==0` view | borrow (always) |
-| `for x in array` — recursive struct element | `Ptr(elem)` alias, no clone, no drop reg | **borrow** (Fix C, 2026-06-13) |
-| `for x in array` — enum element (Option/Result/user) | `Ptr(elem)` alias + `build_enum_recv_ptr` | **borrow** (2026-06-14, `3a8459b1`) |
-| `for x in array` — tuple-destructure / direct-collection element | clone | eager (unchanged) |
-| `for (i, x) in array.enumerate()` — recursive struct/enum element | `Ptr(elem)` alias, no clone, no drop reg (same gate as `lower_for_array`) | **borrow** (2026-06-14, `4c681f3f`; −12% wall / −69% clones on the driver self-compile, since the self-host's `m.structs.enumerate()` scans are the dominant `LirStructDef__clone` site) |
-| `for k, v in dict` | out-param accessors write resource-cloned, drop-registered locals | eager (`lower_for_dict`, `for_loops.rs:655`) |
-| `for x in set` | out-param accessor writes a resource-cloned, drop-registered local | eager (`lower_for_set`, `for_loops.rs:775`) |
+| `for x in array` — string element | `index_load_borrow` zero-copy `cap==0` view | borrow |
+| `for x in array` — recursive struct element | `Ptr(elem)` alias, no clone, no drop reg | borrow |
+| `for x in array` — enum element (Option/Result/user) | `Ptr(elem)` alias + `build_enum_recv_ptr` | borrow |
+| `for (i, x) in array.enumerate()` — recursive struct/enum element | `Ptr(elem)` alias, same gate as the plain array loop | borrow |
+| `for x in array` — tuple-destructure / direct-collection element | clone | eager |
+| `for k, v in dict` | out-param accessors write resource-cloned, drop-registered locals | eager (`lower_for_dict`) |
+| `for x in set` | out-param accessor writes a resource-cloned, drop-registered local | eager (`lower_for_set`) |
 
-The dict/set and enumerate loops still materialize an owned per-iteration copy
-(via `gorget_map_iter_key`/`_value` out-params that hand back a clone, registered
-for drop to avoid the per-iteration leak). Carrying the borrow alias to those
-siblings — plus an arm-count lint forcing the next loop-kind through the shared
-elision — is the pending follow-up that ties into the perf track (TODO).
+The dict and set loops still materialize an owned per-iteration copy: their
+`gorget_map_iter_key`/`_value` out-params hand back a clone, registered for drop
+so the per-iteration value does not leak. Carrying the borrow alias to those
+siblings — behind one shared element-binding helper, so a new loop kind cannot
+silently fall back to cloning — is the natural next step.
 
-### Measured wins (measured-at-landing, re-derive before quoting)
+### Read mode is a layer invariant
 
-The numbers below were measured when each change landed; they are *not* live
-figures. Re-run `scripts/self_host_mem_baseline.sh` / a `--clones=stats` build
-for current values before quoting (see `CLAUDE.md` "Performance work measures
-MEMORY, not just time").
-
-- **Fix C — recursive-struct element** (DONE.md 2026-06-13): the self-host
-  driver self-compile dropped from ~421s to ~45s (**~9.4x wall**), `array_clone`
-  from 3.26 B to 30.4 M (~107x), emitted C **byte-identical**. Peak RSS stayed
-  ~1.71 GB — the RSS balloon was the still-cloning enum elements.
-- **Enum element** (DONE.md 2026-06-14, `3a8459b1`): peak RSS **1.71 GB → ~405
-  MB** (~4.3x), `live_bytes` ~1.21 GB → ~25 MB, `array_clone` 30.4 M → 25.9 M;
-  enum-element `__clone` calls in the emitted `main` dropped 10 → 3 (the 3 are
-  legitimate consuming-boundary payload clones); the struct path stayed
-  byte-identical to Fix C.
-
-### Layering note: the read-mode erosion that hid this
-
-The root cause that *Fix C* fixed was a layering violation, worth flagging here
-and cross-referenced from [Chapter 24](24-layering-discipline.md). The
-`ReadMode::Borrow` set on the `IndexLoad` at the GIR layer
-(`for_loops.rs`) is the typed invariant "this element is a view, don't clone it."
-The LIR collection-element lowering (`src/lir/lower/insts.rs:1063-1100`) honoured
-that intent **only for strings** — the borrow branch was gated on
-`clone_fn_name == "gorget_string_clone_to_owned"` (`insts.rs:1066-1071`), so a
-recursive-drop struct element fell through to the `{Type}__clone` arm
-(`insts.rs:1083-1100`) regardless of the borrow mode the upstream had set. That
-is a Rule-1 invariant (read mode) dropped at a layer boundary; the
-narrower-than-necessary string-only branch made the for-element borrow intent
-unobservable downstream. Fix C bound the alias at the GIR producer
-(`for_loops.rs`) rather than re-deriving it in the LIR reader; the cleaner fix —
-generalizing the `insts.rs:1083` branch to honour `ReadMode::Borrow` for any
-recursive-drop element — is the noted LIR-layer follow-up (TODO).
+The borrow alias rests on a layering rule (see
+[Chapter 24](24-layering-discipline.md)). The `ReadMode::Borrow` set on the
+`IndexLoad` at the GIR layer (`for_loops.rs`) is a typed invariant — *this
+element is a view, do not clone it* — and the LIR reader is obliged to honour it
+for every element type, not just strings. The hazard is a
+narrower-than-necessary reader: if the collection-element lowering
+(`src/lir/lower/insts.rs`) honours the borrow only when the clone function is the
+string one, a recursive-drop struct element falls through to the `{Type}__clone`
+arm regardless of the read mode the producer set — a typed invariant silently
+dropped at the layer boundary. The alias is therefore bound at the GIR producer,
+where the read mode is known, and the LIR reader returns the raw element pointer
+for a `Ptr`-typed destination; the general form of that reader — honouring
+`ReadMode::Borrow` for any recursive-drop element — is the shape the boundary is
+meant to take.
 
 ## Mutation severs the alias: `cow_before_mutation`
 

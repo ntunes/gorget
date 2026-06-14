@@ -238,14 +238,13 @@ clone it." The cleaner follow-up generalizes the `insts.rs:1083` branch to honou
 `ReadMode::Borrow` for any recursive-drop element, so the LIR reader stops being
 the place the invariant is (under-)interpreted (TODO).
 
-### Root #1 — trait-method symbol mangling (a Rule-2 / Rule-4 violation at the symbol-name boundary)
+### Trait-method symbols: agree on the name, don't reconstruct it (Rules 2 & 4)
 
-**Symptom.** In the self-host, a trait-impl method call miscompiled at the very
-bottom of the pipeline: the C either failed to link (`undefined reference to
-X__method`) or assigned a call's result into the wrong type
+**Symptom.** A trait-impl method call can miscompile at the very bottom of the
+pipeline: the emitted C either fails to link (`undefined reference to
+X__method`) or assigns a call's result into the wrong type
 (`"Str/GorgetArray from int"` — the classic C *implicit-int* fallout of calling
-a symbol the compiler never declared). The whole biggest CC-FAIL cluster in the
-runtime-parity backlog traced back here.
+a symbol the compiler never declared).
 
 **Real bug.** Two sites disagreed on the *name* of one function. The definition
 side emits an own-vtable trait method's **body** under the trait-prefixed
@@ -288,18 +287,17 @@ redirect both `full_name` and `sig_lookup_name` to it. The call site no longer
 *invents* a symbol — it looks one up. Both halves mirror Rust gg exactly: the
 call-site redirect is `src/ir/lowering/exprs/methods.rs:298-326` (bare-first,
 then the `_for_<name>__<method>` suffix search), and the own-vtable registration
-split is `src/ir/lowering/traits.rs:269-344` (`register_trait_equip_sigs`).
-RUN-verified +8 parity flips, 0 regressions (commit `3775d8d5`; the DONE.md
-2026-06-14 entry has the per-fixture list). The DCE suffix-match in
+split is `src/ir/lowering/traits.rs:269-344` (`register_trait_equip_sigs`). The
+call site no longer *invents* a symbol — it looks one up. The DCE suffix-match in
 `lir_codegen.gg` survives as a defensive backstop, but it is no longer
-load-bearing now that the symbol the call site spells is the symbol the registry
+load-bearing once the symbol the call site spells is the symbol the registry
 holds.
 
-Snags #17/#13, Fix C, and Root #1 reduce to the same lesson: the bug was a
-missing or mis-read typed field — a typed mode honoured too narrowly (Fix C), or
-a resolved symbol reconstructed instead of written through (Root #1) — one layer
-up, and the "obvious" fix at the consumer (a save/restore, a name-prefix parse,
-a DCE suffix-match) was complexity that the correct write-site fix erased.
+All of these examples reduce to the same lesson: the bug is a missing or
+mis-read typed field — a typed mode honoured too narrowly, or a resolved symbol
+reconstructed instead of written through — one layer up, and the "obvious" fix at
+the consumer (a save/restore, a name-prefix parse, a DCE suffix-match) is
+complexity that the correct write-site fix erases.
 
 ## How to apply this when extending the compiler
 
