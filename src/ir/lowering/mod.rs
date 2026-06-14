@@ -2652,6 +2652,42 @@ fn eval_static_init(
                 args: vec![GlobalInitArg::Sizeof(elem_c)],
             }
         }
+        // Set / HashSet: a `static Set[T] S = Set[T]()` previously fell
+        // through to `GlobalInit::Zeroed` (no arm existed) → null header →
+        // SEGFAULT on the first runtime `.add` on BOTH backends. Match the
+        // local-ctor convention (`src/lir/lower/calls.rs`): `Set` → ordered
+        // (`gorget_ordered_set_new`), `HashSet` → unordered
+        // (`gorget_set_new`); the `_str` variants (zero-arg) for String
+        // elements. The element-size operand uses the collection handle
+        // struct name for collection-valued elements (same as Vector/Dict).
+        "Set" if callee_name == "Set" => {
+            let elem_c = collection_arg_sizeof_c_type(ty, 0);
+            if elem_c == "GorgetString" {
+                GlobalInit::Extern {
+                    name: "gorget_ordered_set_new_str".to_string(),
+                    args: vec![],
+                }
+            } else {
+                GlobalInit::Extern {
+                    name: "gorget_ordered_set_new".to_string(),
+                    args: vec![GlobalInitArg::Sizeof(elem_c)],
+                }
+            }
+        }
+        "HashSet" if callee_name == "HashSet" => {
+            let elem_c = collection_arg_sizeof_c_type(ty, 0);
+            if elem_c == "GorgetString" {
+                GlobalInit::Extern {
+                    name: "gorget_set_new_str".to_string(),
+                    args: vec![],
+                }
+            } else {
+                GlobalInit::Extern {
+                    name: "gorget_set_new".to_string(),
+                    args: vec![GlobalInitArg::Sizeof(elem_c)],
+                }
+            }
+        }
         // Standard-handle getters from std.io — zero-arg externs that the
         // backends call at main()'s prologue to give the `File` global a
         // live `GorgetFile` handle.

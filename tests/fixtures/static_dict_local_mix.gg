@@ -1,0 +1,24 @@
+from std.collections import Dict
+
+# Gap (a): the LLVM decl-scan dedup bug. `gorget_dict_new` IS in the canonical
+# `runtime_init_fns` list, but the static-init decl loop only emitted it when
+# `!existing_externs.contains(name)` while the seen-block force-skipped it in
+# `module.externs` — so when BOTH a `static Dict` init AND a non-static local
+# `Dict()`/`.put` call reference `gorget_dict_new`, BOTH paths skipped it →
+# `llc: use of undefined value '@gorget_dict_new'`. This fixture deliberately
+# pairs a static Dict with a local Dict to put `gorget_dict_new` in
+# `module.externs` (the only way to trigger the bug). The fix makes
+# `runtime_init_fns` the single source of truth (emit regardless of externs,
+# record `runtime_init_seen`, drive the seen-block off it).
+static Dict[int, int] C = Dict[int, int]()
+
+void main():
+    # Local (non-static) Dict — puts gorget_dict_new into module.externs.
+    Dict[int, int] d = Dict[int, int]()
+    d.put(1, 100)
+    d.put(2, 200)
+    print(d.get(1).unwrap())
+    print(d.get(2).unwrap())
+    # Static Dict, populated through a mutable ref (no reassign).
+    C.put(7, 42)
+    print(C.get(7).unwrap())

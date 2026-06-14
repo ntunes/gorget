@@ -1056,3 +1056,18 @@ fn sec_91_callable_clone_outlives_source() {
         "101\n101\n101",
     );
 }
+
+#[test]
+fn sec_92_static_set_runtime() {
+    // Gap (c) — static `Set`/`HashSet` populated at runtime. Before the GIR
+    // Set arm existed, the static slot stayed a null header (`GlobalInit::
+    // Zeroed`) → the first `.add` dereferenced null → SIGSEGV (exit 139) on
+    // BOTH backends. This is the silent-crash class CLAUDE.md #7 flags: the
+    // always-pass `*_comparison` diagnostics never see it. Under ASan the
+    // fixed program must build clean and run exit-0; a regression to the
+    // null-header state trips a SEGV report here instead of passing silently.
+    security_safe(
+        "attack_92_static_set_runtime",
+        "true\nfalse\ntrue\nfalse\n4",
+    );
+}

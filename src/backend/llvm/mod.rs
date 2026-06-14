@@ -1334,10 +1334,20 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     // (LirGlobalInit::Extern). Only declare if not already in module.externs
     // or already declared above in hof_decls.
     let has_runtime_init = module.globals.iter().any(|g| matches!(&g.init, crate::lir::LirGlobalInit::Extern { .. }));
+    // Track exactly which runtime-init ctors we emitted here, so the
+    // `module.externs` loop below (seen-set seeding) can skip precisely
+    // those — never more, never fewer. This is the single source of truth
+    // for which runtime-init decls exist. The old code hardcoded a 4-name
+    // subset ({map,dict}_new[_str]) into the seen-block, which BOTH
+    // double-counted (those four were already emitted unconditionally only
+    // when absent from externs) and silently MISSED set_new/ordered_set_new
+    // — a `static Dict` init that ALSO appears in module.externs (a real
+    // `Dict()`/`.put` call references it) hit BOTH skip guards and got
+    // declared nowhere → `llc: use of undefined value '@gorget_dict_new'`.
+    let mut runtime_init_seen: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
     if has_runtime_init {
-        let existing_externs: std::collections::HashSet<&str> = module.externs.iter().map(|e| e.name.as_str()).collect();
         let hof_names: std::collections::HashSet<&str> = hof_decls.iter().map(|(n, _)| *n).collect();
-        let runtime_init_fns: &[(&str, &str)] = &[
+        let runtime_init_fns: &[(&'static str, &'static str)] = &[
             ("gorget_array_new",      "declare void @gorget_array_new(ptr sret(%GorgetArray), i64)"),
             ("gorget_array_extend",   "declare void @gorget_array_extend(ptr, ptr)"),
             ("gorget_map_new",        "declare void @gorget_map_new(ptr sret(%GorgetMap), i64, i64)"),
@@ -1346,16 +1356,29 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
             ("gorget_dict_new_str",   "declare void @gorget_dict_new_str(ptr sret(%GorgetMap), i64)"),
             ("gorget_set_new",        "declare void @gorget_set_new(ptr sret(%GorgetSet), i64)"),
             ("gorget_set_new_str",    "declare void @gorget_set_new_str(ptr sret(%GorgetSet))"),
+            // Ordered Set ctors (`Set[T]()` / `Set[String]()`) — used by
+            // static `Set` inits (`eval_static_init` Set arm) and any
+            // `Set()` constructor. Mirror the unordered set_new signatures.
+            ("gorget_ordered_set_new",     "declare void @gorget_ordered_set_new(ptr sret(%GorgetSet), i64)"),
+            ("gorget_ordered_set_new_str", "declare void @gorget_ordered_set_new_str(ptr sret(%GorgetSet))"),
             // String-from-literal: takes (const char* data, size_t len) and
             // returns a 32-byte GorgetString via sret. Used by
             // `static String s = "..."` inits.
             ("gorget_str_from_literal", "declare void @gorget_str_from_literal(ptr sret(%GorgetString), ptr, i64)"),
         ];
+        // Emit each runtime-init decl REGARDLESS of `existing_externs` (the
+        // canonical hardcoded decl is the single source of truth — these are
+        // de-staticified to link-visible symbols, see `src/main.rs`). Keep the
+        // `!hof_names` exclusion: gorget_array_new/array_extend/set_new/
+        // set_new_str live in BOTH hof_decls and runtime_init_fns, and
+        // hof_decls already emitted them above → emitting here too = double-decl.
         for (fn_name, decl) in runtime_init_fns {
-            if !existing_externs.contains(*fn_name) && !hof_names.contains(*fn_name) {
+            if !hof_names.contains(*fn_name) {
                 writeln!(out, "{decl}").unwrap();
+                runtime_init_seen.insert(*fn_name);
             }
         }
+        let existing_externs: std::collections::HashSet<&str> = module.externs.iter().map(|e| e.name.as_str()).collect();
         // Declare any other extern referenced in `Extern { name, args }`
         // (gorget_mutex_new, gorget_atomic_int_new, gorget_str_from_literal,
         // …). Default signature: `i64 fn(...args)` — backends downstream
@@ -1412,14 +1435,17 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     if !module.externs.iter().any(|e| e.name == "gorget_str_from_cstr") {
         seen.insert("gorget_str_from_cstr".to_string());
     }
-    // Also add runtime_init_fns if they were declared
-    if has_runtime_init {
-        for (fn_name, _) in &[
-            ("gorget_map_new", ""), ("gorget_map_new_str", ""),
-            ("gorget_dict_new", ""), ("gorget_dict_new_str", ""),
-        ] {
-            seen.insert(fn_name.to_string());
-        }
+    // Skip every runtime-init ctor we actually emitted above — driven off
+    // `runtime_init_seen` (the single source of truth), NOT a hardcoded
+    // subset. The old 4-name list ({map,dict}_new[_str]) silently missed
+    // set_new/ordered_set_new and, combined with the now-removed
+    // `existing_externs` guard on the emit loop, let a ctor that was BOTH a
+    // static-init AND a module.externs reference get skipped in both places
+    // → `llc: undefined value`. (hof-owned names — array_new/array_extend/
+    // set_new/set_new_str — are NOT in `runtime_init_seen`; they are already
+    // seeded via the `hof_decls` filter at the top of this block.)
+    for fn_name in &runtime_init_seen {
+        seen.insert(fn_name.to_string());
     }
     for ext in &module.externs {
         if !seen.insert(ext.name.clone()) {
@@ -1784,7 +1810,7 @@ fn emit_global_runtime_init(
     // else flows as an immediate operand.
     let mut arg_strs: Vec<String> = Vec::new();
     for (i, arg) in args.iter().enumerate() {
-        emit_global_init_arg_llvm(out, gid, i, arg, snames, str_globals, &mut arg_strs);
+        emit_global_init_arg_llvm(out, gid, i, arg, snames, module, str_globals, &mut arg_strs);
     }
 
     // Determine return type from function name. Aggregate-returning ctors
@@ -1798,6 +1824,11 @@ fn emit_global_runtime_init(
         "gorget_dict_new" | "gorget_dict_new_str"
         | "gorget_map_new"  | "gorget_map_new_str"
         | "gorget_set_new"  | "gorget_set_new_str"
+        // Ordered Set ctors return GorgetSet (a `typedef GorgetMap` in C —
+        // same 152-byte layout). Without this arm a `static Set` init falls
+        // to the scalar `i64` path below → the 152-byte handle is truncated
+        // to a corrupt pointer-sized value → segfault on first `.add`.
+        | "gorget_ordered_set_new" | "gorget_ordered_set_new_str"
     ) {
         ("GorgetMap", "%GorgetMap")
     } else if matches!(fn_name,
@@ -1837,7 +1868,8 @@ fn emit_global_init_arg_llvm(
     gid: usize,
     i: usize,
     arg: &crate::lir::LirGlobalInitArg,
-    _snames: &HashMap<u32, String>,
+    snames: &HashMap<u32, String>,
+    module: &LirModule,
     str_globals: &mut StrGlobals,
     arg_strs: &mut Vec<String>,
 ) {
@@ -1846,7 +1878,25 @@ fn emit_global_init_arg_llvm(
         LirGlobalInitArg::Int(n) => arg_strs.push(format!("i64 {n}")),
         LirGlobalInitArg::Float(x) => arg_strs.push(format!("double 0x{:016X}", x.to_bits())),
         LirGlobalInitArg::Bool(b) => arg_strs.push(format!("i64 {}", if *b { 1 } else { 0 })),
-        LirGlobalInitArg::Sizeof(t) => arg_strs.push(format!("i64 {}", c_sizeof_name(t))),
+        LirGlobalInitArg::Sizeof(t) => {
+            // A user-struct VALUE in a static collection (`static Dict[int,
+            // Point]`) spells its element size as `Sizeof("Point")`.
+            // `c_sizeof_name` only knows primitives + runtime handle structs,
+            // so a user struct hits its `_ => 8` default → the value slot
+            // truncates to one field (C is correct: it emits literal
+            // `sizeof(Point)` resolved at cc-time). Compute the real size from
+            // `module.structs` when the name resolves there; otherwise fall to
+            // `c_sizeof_name` (primitives, and collection handle structs —
+            // `"GorgetMap"`/`"GorgetSet"` → 152, `"GorgetArray"` → 64 — owned
+            // by Bug 1). The `t ∈ module.structs` gate routes ONLY user
+            // structs here; no GorgetMap/Set exclusion is needed.
+            let sz = if module.structs.iter().any(|s| s.name == *t) {
+                sizeof_struct_by_name(t, module, snames)
+            } else {
+                c_sizeof_name(t)
+            };
+            arg_strs.push(format!("i64 {sz}"));
+        }
         LirGlobalInitArg::StrLit(s) => {
             // Intern into the module-level `@.str.N` table — it's already
             // emitted at module-scope by `emit_string_globals`. Pass the

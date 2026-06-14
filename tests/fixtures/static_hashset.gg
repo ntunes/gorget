@@ -1,0 +1,12 @@
+from std.collections import HashSet
+
+# Gap (c): a `static HashSet[int]` (unordered) populated at runtime. HashSet
+# routes to `gorget_set_new` (vs ordered Set → `gorget_ordered_set_new`).
+static HashSet[int] H = HashSet[int]()
+
+void main():
+    H.add(1)
+    H.add(2)
+    print(H.contains(1))
+    print(H.contains(7))
+    print(H.len())

@@ -1,0 +1,28 @@
+from std.collections import Dict
+
+# Gap (b): a `static Dict[int, Point]` whose VALUE is a 3-field user struct.
+# On LLVM the value element-size was lowered via `c_sizeof_name("Point")`,
+# which only knows primitives + runtime handle structs → its `_ => 8` default
+# truncated the 24-byte Point value to its first field (LLVM printed `5\n1`).
+# C is correct (emits literal `sizeof(Point)` resolved at cc-time). The fix
+# routes user structs through `sizeof_struct_by_name` (real size from
+# `module.structs`) so the LLVM IR emits `gorget_dict_new(..., i64 24)`.
+struct Point:
+    int x
+    int y
+    int z
+
+int read_sum(Dict[int, Point] &m, int k):
+    match m.get(k):
+        case Some(p):
+            return p.x + p.y * 10 + p.z * 100
+        else:
+            return -1
+
+static Dict[int, Point] M = Dict[int, Point]()
+
+void main():
+    M.put(2, Point(5, 6, 7))
+    M.put(3, Point(1, 2, 3))
+    print(read_sum(&M, 2))
+    print(read_sum(&M, 3))

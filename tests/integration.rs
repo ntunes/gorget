@@ -17287,6 +17287,85 @@ false",
     );
 }
 
+// Conformance: full static-storage parity on the LLVM backend (gaps a+b+c).
+// One `run_gg` validates BOTH backends — the harness auto-appends
+// `--backend=llvm` when `GG_BACKEND=llvm` is set (`tests/integration.rs:94`).
+//
+// Gap (a) — decl-scan dedup. A `static Dict` init AND a non-static local
+// `Dict()` both reference `gorget_dict_new`; the old LLVM decl-scan skipped it
+// in BOTH the static-init loop (only when absent from `module.externs`) and
+// the `module.externs` seen-block (force-skipped) → `llc: undefined value`.
+// The fixture deliberately pairs a static + local Dict to put `gorget_dict_new`
+// in `module.externs` (the only way to trigger the bug — a static-only fixture
+// would pass even unfixed). Fix: `runtime_init_fns` is the single source of
+// truth (emit regardless of externs; drive the seen-block off `runtime_init_seen`).
+#[test]
+fn static_dict_local_mix() {
+    run_gg(
+        "static_dict_local_mix.gg",
+        "\
+100
+200
+42",
+    );
+}
+
+// Gap (b) — static `Dict[int, Point]` value-size truncation on LLVM. The value
+// element-size was lowered via `c_sizeof_name("Point")` (knows only primitives
+// + handle structs) → its `_ => 8` default truncated the 24-byte Point to its
+// first field (LLVM printed `5\n1`). C is correct (literal `sizeof(Point)`).
+// Fix: route user structs through `sizeof_struct_by_name` (real size from
+// `module.structs`) → LLVM emits `gorget_dict_new(..., i64 24)`.
+#[test]
+fn static_dict_struct_value() {
+    run_gg(
+        "static_dict_struct_value.gg",
+        "\
+765
+321",
+    );
+}
+
+// Gap (c) — static `Set`/`HashSet` SEGFAULT on BOTH backends. `eval_static_init`
+// had no Set/HashSet arm → the slot fell to `GlobalInit::Zeroed` (null header)
+// → SIGSEGV (exit 139) on the first runtime `.add`. Fix (both halves land
+// together): GIR Set/HashSet arm (`Set` → `gorget_ordered_set_new`, `HashSet`
+// → `gorget_set_new`, `_str` zero-arg variants for String) + LLVM decls/ret-
+// classifier so the ctors link AND return via sret (not a truncated scalar).
+#[test]
+fn static_set_runtime() {
+    run_gg(
+        "static_set_runtime.gg",
+        "\
+true
+true
+false
+2",
+    );
+}
+
+#[test]
+fn static_hashset() {
+    run_gg(
+        "static_hashset.gg",
+        "\
+true
+false
+2",
+    );
+}
+
+#[test]
+fn static_set_str() {
+    run_gg(
+        "static_set_str.gg",
+        "\
+true
+false
+2",
+    );
+}
+
 #[test]
 fn static_ref_param() {
     run_gg(

@@ -1,0 +1,15 @@
+from std.collections import Set
+
+# Gap (c): a `static Set[int]` populated at runtime. Before the fix the GIR
+# had no Set arm in `eval_static_init` → the slot fell to Zeroed (null header)
+# → SEGFAULT on the first `.add` on BOTH backends. The ordered-set ctor now
+# initializes the static slot.
+static Set[int] S = Set[int]()
+
+void main():
+    S.add(5)
+    S.add(9)
+    print(S.contains(5))
+    print(S.contains(9))
+    print(S.contains(3))
+    print(S.len())

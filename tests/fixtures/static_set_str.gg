@@ -1,0 +1,12 @@
+from std.collections import Set
+
+# Gap (c): a `static Set[String]` populated at runtime. String elements route
+# to the zero-arg `gorget_ordered_set_new_str` ctor (no element-size operand).
+static Set[String] S = Set[String]()
+
+void main():
+    S.add("a")
+    S.add("b")
+    print(S.contains("a"))
+    print(S.contains("z"))
+    print(S.len())

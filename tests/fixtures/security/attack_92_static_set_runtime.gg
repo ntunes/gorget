@@ -1,0 +1,23 @@
+from std.collections import Set, HashSet
+
+# Gap (c) — the static-Set SEGFAULT class. A `static Set[T]`/`HashSet[T]`
+# previously fell through `eval_static_init` to `GlobalInit::Zeroed`, leaving
+# the static slot a null header. The first runtime `.add` dereferenced that
+# null → SIGSEGV (exit 139) on BOTH C and LLVM — the silent-crash class the
+# always-pass diagnostics miss (CLAUDE.md core invariant #7). The GIR Set arm
+# now initializes the slot via the ordered/unordered set ctor. Under ASan this
+# must build clean and run exit-0: any regression to the null-header state
+# trips a SEGV / use-of-uninitialized report, not a silent pass.
+static Set[int] S = Set[int]()
+static HashSet[String] H = HashSet[String]()
+
+void main():
+    S.add(5)
+    S.add(9)
+    H.add("x")
+    H.add("y")
+    print(S.contains(5))
+    print(S.contains(3))
+    print(H.contains("x"))
+    print(H.contains("z"))
+    print(S.len() + H.len())
