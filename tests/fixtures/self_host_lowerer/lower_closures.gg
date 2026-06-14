@@ -166,6 +166,24 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
                 set_terminator(&ctx, GTReturn(OpConstI32(0)))
             else:
                 pass
+    else:
+        # Non-main value fall-off: a `V throws E` fn had its ret_type widened
+        # to Result__V__E above, so the natural GTNone fall-off would emit a
+        # bare `return;` from a struct-returning C fn (UB → garbage tag →
+        # match misses Ok). Return the zero-inited _0 (tag 0 = Ok). This fires
+        # for any non-UNIT fall-off (also a non-throws value fn whose if/else
+        # arms all return, leaving an orphaned GTNone merge block); returns the
+        # zero-inited _0, Rust-aligned (src/ir/lowering/functions.rs:846, final
+        # else → ret(copy(_0))). Gate on ret_type != UNIT_TYPE so genuinely-void
+        # fns keep the GTNone → "return;" route. Typed metadata, not name-matching.
+        if ret_type != UNIT_TYPE:
+            Terminator nm_last_term = ctx.block_terms.get(ctx.current_block).unwrap()
+            match nm_last_term:
+                case GTNone():
+                    emit_drops_for_early_exit(&ctx, DSK_FUNCTION, Some(0))
+                    set_terminator(&ctx, GTReturn(op_consume(&ctx, &gmod, 0, CkReturn())))
+                else:
+                    pass
 
     # Finalize: pop the function-scope drop frame, run the GIR-liveness
     # + operand-mode post-pass + drop-queue flush, and assemble the

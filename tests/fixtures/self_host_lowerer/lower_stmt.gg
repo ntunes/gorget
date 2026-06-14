@@ -568,8 +568,18 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     emit_drops_for_early_exit(&ctx, DSK_FUNCTION, Some(excl))
                     set_terminator(&ctx, GTReturn(op_consume(&ctx, &gmod, 0, CkReturn())))
                 case None:
+                    # Explicit bare `return` in a value fn whose ret_type was
+                    # widened to Result__V__E (a `void throws E`) must return the
+                    # zero-inited _0 (tag 0 = Ok), not a bare unit — else the
+                    # struct-returning C fn returns garbage. Genuinely-void fns
+                    # (ret_type UNIT, non-Result) keep the OpConstUnit route.
+                    # Typed metadata (enum_category_of), not name-matching.
+                    int none_ret_place_ty = ctx.locals.get(0).unwrap().type_id
                     emit_drops_for_early_exit(&ctx, DSK_FUNCTION, Some(0))
-                    set_terminator(&ctx, GTReturn(OpConstUnit()))
+                    if enum_category_of(&gmod, none_ret_place_ty).category == ENUM_CAT_RESULT:
+                        set_terminator(&ctx, GTReturn(op_consume(&ctx, &gmod, 0, CkReturn())))
+                    else:
+                        set_terminator(&ctx, GTReturn(OpConstUnit()))
         case SExpr(sexpr):
             lower_expr(&ctx, sexpr, &gmod)
         case SIf(cond_expr, then_body, elif_branches):
