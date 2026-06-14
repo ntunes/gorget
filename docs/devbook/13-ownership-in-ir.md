@@ -78,9 +78,13 @@ share one rule:
   unified vocabulary for free.
 - `IndexLoad.read: ReadMode` (`instructions.rs:158-171`) — how an element
   flows out of a collection: `Borrow` for a zero-copy view (string
-  for-loop iteration), `Clone` (the default) everywhere else. `Copy` and
-  `Move` are reserved here — the LIR currently only routes Borrow vs
-  Clone for collection reads.
+  for-loop iteration, and — since Fix C — recursive-struct / enum
+  for-loop elements bound as `Ptr` aliases; see Chapter 11's "For-loop
+  elements: borrow the element, don't clone it"), `Clone` (the default)
+  everywhere else. `Copy` and `Move` are reserved here — the LIR currently
+  only routes Borrow vs Clone for collection reads. The LIR honoured the
+  `Borrow` mode for *strings only* until Fix C — a read-mode invariant
+  erosion at the layer boundary, the worked example below in Chapter 24.
 - `EnumFieldLoadMode { Move, Borrow }` (`instructions.rs:133-137`) is the
   one mode enum that stayed separate, because it carries a narrower
   semantics — see [Move-vs-borrow on enum payload extraction](#move-vs-borrow-on-enum-payload-extraction)

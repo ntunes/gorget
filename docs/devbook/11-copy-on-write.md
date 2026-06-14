@@ -120,7 +120,7 @@ All clone-at-boundary logic funnels through **two** methods on `LoweringContext`
 emission; per the layering doctrine, the decision lives in one place and the
 diagnostic (`warn_implicit_clone`) fires from the same chokepoint.
 
-### `ensure_owned_at_boundary` (`context.rs:1756`)
+### `ensure_owned_at_boundary` (`context.rs:1792`)
 
 Unconditional "clone if this is any kind of borrow." Used at boundaries that
 have **no concept of last-use** — the function body is leaving the value behind
@@ -130,28 +130,28 @@ regardless. Its decision tree:
   through `GlobalRefPtr` (the LIR `GlobalAddr+Load` is a shallow struct copy
   that aliases the global's heap buffer). Skipped for
   `string_literal_view_globals` — those are immortal `.rodata` `cap==0` views,
-  so the consumer's drop is a no-op (`context.rs:1782`).
+  so the consumer's drop is a no-op (`context.rs:1823`).
 - **`Ptr(T)`** → clone the pointee via `clone_fn_for_ptr(T)`. Cannot move
   through a `Ptr` (the callee can't know whether the caller still needs it); the
   param is recorded via `record_param_cloned` so the caller can later suggest
-  `!` at last-use sites (`context.rs:1830`).
+  `!` at last-use sites (`context.rs:1868`).
 - **By-value resource that is a borrow** (`is_ref_local || is_bare_param ||
   is_cow_borrow`, or an `Untracked` resource) → clone via `clone_fn_for_ptr`
-  (`context.rs:1865`). One carve-out: a *last-use* bare-param borrow that is
-  drop-tracked moves instead of cloning (`context.rs:1882`).
+  (`context.rs:1901`). One carve-out: a *last-use* bare-param borrow that is
+  drop-tracked moves instead of cloning (`context.rs:1915`).
 - **Owned drop-tracked locals and non-resource locals** → pass through unchanged.
 
-### `ensure_owned_at_consuming_arg` (`context.rs:1927`)
+### `ensure_owned_at_consuming_arg` (`context.rs:1963`)
 
 Last-use-*aware* "clone if borrow OR not last-use." Used at consuming positions
 where the caller *might* still use the local after the call, so the helper takes
 the AST argument expression to call `is_last_use_at(name, span)`
-(`context.rs:1028`) on named-local identifiers. Its rule:
+(`context.rs:1043`) on named-local identifiers. Its rule:
 
-1. `Ptr(T)` borrow → always clone through the pointer (`context.rs:1942`).
+1. `Ptr(T)` borrow → always clone through the pointer (`context.rs:1977`).
 2. By-value resource:
    - non-identifier expression (a temp, owning by construction) → no clone, the
-     caller will `MoveZero` after the call (`context.rs:1992`);
+     caller will `MoveZero` after the call (`context.rs:2029`);
    - named local that is a borrow (bare param / ref-state / cow-borrow) → clone;
    - named local **not** at its last use → clone (source still live);
    - last-use, drop-tracked, owned named local → no clone (caller `MoveZero`s).
@@ -229,6 +229,153 @@ doc is gone (it was unified 2026-05-05 per the comment at `assigns.rs:623`).
 (`String x = expr`) defaults to **borrow** like everything else and clones only
 on later mutation — the internals doc's "point 1 (assignment)" is the CoW
 default-borrow path now, not a clone site.
+
+## For-loop elements: borrow the element, don't clone it
+
+`for x in vec:` is a collection read, so by the CoW default the loop variable
+`x` should be a borrow alias into the collection, not a fresh per-iteration
+clone. For string elements that has always held — `index_load_borrow` emits
+`ReadMode::Borrow` and the loop reads a zero-copy `cap==0` view. For
+**recursive-drop user structs and enums** it did *not*: every iteration deep-cloned
+the element via `{Type}__clone`, even when the body only reads through it. That is
+both a clone the user never asked for and a leak risk, and on the self-host
+self-compile it was the dominant cost — a per-iteration whole-`LirFunction`
+deep clone behind two `returns_void` scans that read only `.name` /
+`.return_type` (Fix C, see below).
+
+`lower_for_array` (`src/ir/lowering/stmts/for_loops.rs:397`) binds such an
+element as a `Ptr(elem)` borrow alias instead. The gate is fully typed — no
+name matching:
+
+```rust
+let is_recursive_struct = !is_string
+    && elem_is_struct_or_enum                       // TypeDefKind::Struct | Enum
+    && ctx.type_registry.is_resource_type(elem_type)
+    && !ctx.type_registry.is_collection_type(elem_type);
+let elem_is_binding = matches!(pattern.node, Pattern::Binding(_));
+```
+
+(`for_loops.rs:458-471`). When it fires, the element is read through
+`index_load_borrow` (which returns the raw element pointer on a `Ptr`-typed dst,
+`src/lir/lower/insts.rs:1014-1024`) and tagged `set_cow_borrow`
+(`context.rs:2397`), with **no** `drops.register_local` — the collection owns the
+buffer, so a per-element drop would double-free it. The element's
+`BorrowOrigin` is `CollectionElement` / `CowBorrowPending`, recognised
+downstream by `is_cow_borrow` (`context.rs:2420`). Tuple-destructuring patterns
+and direct-collection elements keep the old clone path.
+
+**Why this is sound.** The loop body can only do three things with `x`, and each
+is already handled:
+
+- **Read through it.** `x.field` auto-derefs the `Ptr` base (`FieldLoad`'s
+  `is_ref_local` skip); enum tag/payload reads (`r.is_ok()`, `r.unwrap()`,
+  match scrutinees) resolve through a `Ptr` base too — see the enum extension
+  below. No copy needed.
+- **Carry it past an owning boundary** (`out.push(x)`, `return Some(x)`, struct
+  field init, closure capture). Every such boundary deep-clones a `Ptr` source
+  *unconditionally*: `ensure_owned_at_boundary` Case 1 (`context.rs:1854`) and
+  `ensure_owned_at_consuming_arg` rule 1 (`context.rs:1963`) both clone through
+  the pointer via `clone_fn_for_ptr`. This is the exact mechanism that makes a
+  borrowed `Vector[T]` parameter safe — the for-element alias is no different.
+- **Consume it** (`consume(!x)`). Statically rejected by the safety pass:
+  `check_move` (`src/semantic/safety/origins.rs:495-502`) emits `MoveInLoop` for
+  a `!`-move of a non-loop-local inside a loop body, and the for-pattern binding
+  is *not* a loop-local — it carries the iterable's borrow origin
+  (`check_stmt.rs:736-741`). So the one shape that would alias a moved-out
+  element away from the collection can't be written.
+
+The clone-on-boundary apparatus is therefore the safety net; eliding the
+*per-iteration* clone just defers each clone to the (often-not-taken) boundary,
+the same lazy-CoW logic as everywhere else in this chapter.
+
+### Enum elements: the `build_enum_recv_ptr` carve-out
+
+Extending the alias from structs to **enums** (Option / Result / user enums)
+needed one more piece, because the Option/Result builtins
+(`__option_is_some` / `__option_unwrap` / `__result_unwrap_error`, …) take their
+receiver *by pointer* and the default path `emit_borrow`s the receiver place to
+get its address. For a value receiver that is correct; for a for-element that is
+*already* a `Ptr(enum)` it would produce `Ptr(Ptr(enum))` — a double indirection
+that mis-reads the tag — and it would invalidate the source (`Move` +
+`drops.unregister` + `move_zero_and_mark`), zeroing a collection element.
+
+`build_enum_recv_ptr` (`src/ir/lowering/exprs/methods.rs:63`) is the chokepoint
+that distinguishes the two. The carve-out is, again, fully typed:
+
+```rust
+let is_collection_borrow = recv_is_ptr
+    && place.projections.is_empty()
+    && ctx.is_cow_borrow(builder, place.local);
+```
+
+(`methods.rs:77-79`). When true it passes the pointer **through** (the slot
+already holds the `Ptr(enum)`) and returns an `is_collection_borrow` flag that
+tells the four enum-extern call sites (`methods.rs:733,887,1256`, and the
+`unwrap_or`/`unwrap` pair at `:794`/`:824`) to skip the `Move` signal and the
+`move_zero_and_mark`. Match scrutinees need no migration: `TagOf` /
+`EnumFieldLoad` already auto-deref a `Ptr` base (`resolve_struct_id` peels the
+`Ptr`; `EnumFieldLoad`'s Ptr-base `Load`, `src/lir/lower/insts.rs:1315-1323`).
+
+The one shape deliberately **excluded** from the carve-out is a `Field`-origin
+borrow (`w.name.unwrap()` — a struct-field Option). Its underlying struct *is*
+owned and *will* drop, so the unwrap must keep its source-invalidating
+behaviour; that is load-bearing for the Snag #25d double-free guard
+(`test_option_resource_field`). The discriminator is `place.projections.is_empty()
+&& is_cow_borrow` — a field borrow has a non-empty projection and is not in the
+`is_cow_borrow` set, so it falls to the default `emit_borrow` + invalidate path.
+
+### Per-loop-kind status
+
+| Loop kind | Element handling | Status |
+|-----------|------------------|--------|
+| `for x in array` — string element | `index_load_borrow` zero-copy `cap==0` view | borrow (always) |
+| `for x in array` — recursive struct element | `Ptr(elem)` alias, no clone, no drop reg | **borrow** (Fix C, 2026-06-13) |
+| `for x in array` — enum element (Option/Result/user) | `Ptr(elem)` alias + `build_enum_recv_ptr` | **borrow** (2026-06-14, `3a8459b1`) |
+| `for x in array` — tuple-destructure / direct-collection element | clone | eager (unchanged) |
+| `for (i, x) in array.enumerate()` | clone | eager (`lower_for_enumerate`, `for_loops.rs:540`) |
+| `for k, v in dict` | out-param accessors write resource-cloned, drop-registered locals | eager (`lower_for_dict`, `for_loops.rs:655`) |
+| `for x in set` | out-param accessor writes a resource-cloned, drop-registered local | eager (`lower_for_set`, `for_loops.rs:775`) |
+
+The dict/set and enumerate loops still materialize an owned per-iteration copy
+(via `gorget_map_iter_key`/`_value` out-params that hand back a clone, registered
+for drop to avoid the per-iteration leak). Carrying the borrow alias to those
+siblings — plus an arm-count lint forcing the next loop-kind through the shared
+elision — is the pending follow-up that ties into the perf track (TODO).
+
+### Measured wins (measured-at-landing, re-derive before quoting)
+
+The numbers below were measured when each change landed; they are *not* live
+figures. Re-run `scripts/self_host_mem_baseline.sh` / a `--clones=stats` build
+for current values before quoting (see `CLAUDE.md` "Performance work measures
+MEMORY, not just time").
+
+- **Fix C — recursive-struct element** (DONE.md 2026-06-13): the self-host
+  driver self-compile dropped from ~421s to ~45s (**~9.4x wall**), `array_clone`
+  from 3.26 B to 30.4 M (~107x), emitted C **byte-identical**. Peak RSS stayed
+  ~1.71 GB — the RSS balloon was the still-cloning enum elements.
+- **Enum element** (DONE.md 2026-06-14, `3a8459b1`): peak RSS **1.71 GB → ~405
+  MB** (~4.3x), `live_bytes` ~1.21 GB → ~25 MB, `array_clone` 30.4 M → 25.9 M;
+  enum-element `__clone` calls in the emitted `main` dropped 10 → 3 (the 3 are
+  legitimate consuming-boundary payload clones); the struct path stayed
+  byte-identical to Fix C.
+
+### Layering note: the read-mode erosion that hid this
+
+The root cause that *Fix C* fixed was a layering violation, worth flagging here
+and cross-referenced from [Chapter 24](24-layering-discipline.md). The
+`ReadMode::Borrow` set on the `IndexLoad` at the GIR layer
+(`for_loops.rs`) is the typed invariant "this element is a view, don't clone it."
+The LIR collection-element lowering (`src/lir/lower/insts.rs:1063-1100`) honoured
+that intent **only for strings** — the borrow branch was gated on
+`clone_fn_name == "gorget_string_clone_to_owned"` (`insts.rs:1066-1071`), so a
+recursive-drop struct element fell through to the `{Type}__clone` arm
+(`insts.rs:1083-1100`) regardless of the borrow mode the upstream had set. That
+is a Rule-1 invariant (read mode) dropped at a layer boundary; the
+narrower-than-necessary string-only branch made the for-element borrow intent
+unobservable downstream. Fix C bound the alias at the GIR producer
+(`for_loops.rs`) rather than re-deriving it in the LIR reader; the cleaner fix —
+generalizing the `insts.rs:1083` branch to honour `ReadMode::Borrow` for any
+recursive-drop element — is the noted LIR-layer follow-up (TODO).
 
 ## Mutation severs the alias: `cow_before_mutation`
 
@@ -753,6 +900,17 @@ match loc.ownership:
 defined at `lower.gg:1904`), the self-host equivalent of
 `ensure_owned_at_consuming_arg`'s `Ptr` arm — clone-through, never
 shallow-alias.
+
+The self-host's for-loop lowering already binds the for-element as a borrow
+alias — `lower_for_vector` (`lower_loops.gg:206`) tags the element
+`LoBorrowed` with `BoCollectionElement(coll_local)` and *no* owned-drop
+registration (`lower_loops.gg:240-267`), and `lower_for_string`
+(`lower_loops.gg:307`) does the same for codepoints. That is, the for-element
+elision documented above was the *Rust* compiler catching up to behaviour the
+self-host already had — "Fix C" (and its enum extension) was a pure Rust↔self-host
+backend-parity gap, not a new idea. The dict/set self-host loops mirror Rust:
+their runtime accessors hand back a clone, bound owned and drop-registered
+(`lower_loops.gg:431-442`).
 
 View tagging reads the typed `returns_view` column off the String builtin
 table (`STRING_BUILTIN_METHODS` via `string_builtin_method`, consumed at the

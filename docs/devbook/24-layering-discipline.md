@@ -207,8 +207,40 @@ boxes deliberately leave it `None` and carry their own typed discriminator
 (`is_trait_box`, `src/lir/mod.rs` adjacent), so the two Box shapes are
 distinguished by *typed fields*, not by parsing names.
 
-Both snags reduce to the same lesson: the bug was a missing or mis-read typed
-field one layer up, and the "obvious" fix at the consumer was complexity that the
+### Fix C — `ReadMode::Borrow` honoured for strings only (a Rule-1 invariant dropped at a layer boundary)
+
+**Symptom.** `for x in vec:` over a recursive-drop user struct deep-cloned the
+element every iteration via `{Type}__clone`, even when the body only read through
+it. On the self-host self-compile this was a ~3.26-billion-clone clone-bomb —
+the slow compile (~421s) was the *symptom*, not the disease.
+
+**Real bug.** The GIR producer (`lower_for_array`, `src/ir/lowering/stmts/for_loops.rs`)
+set the typed invariant correctly: `index_load_borrow` emits `read:
+ReadMode::Borrow` — "this element is a view, don't clone it." The LIR
+collection-element lowering (`src/lir/lower/insts.rs:1063-1100`) then honoured
+that mode **only for strings**: the borrow branch was gated on `clone_fn_name ==
+"gorget_string_clone_to_owned"` (`insts.rs:1066-1071`), so a recursive-drop
+struct element fell through to the `{Type}__clone` arm
+(`insts.rs:1083-1100`) regardless of the `Borrow` mode upstream had set. The
+read-mode invariant — a Rule-1 fact (read mode, named in "The two jobs of a
+layer") — was silently dropped at the GIR→LIR boundary because the consumer's
+branch was narrower than the invariant it was meant to carry.
+
+**Fix.** Bind the for-element as a `Ptr(elem)` borrow alias at the *producer*
+(`for_loops.rs`, gated on typed `TypeDefKind` + `is_resource_type` +
+`!is_collection_type`, no name matching) rather than re-deriving the borrow intent
+in the LIR reader. Body reads auto-deref the `Ptr`; the owning boundaries clone
+through it via `ensure_owned_at_boundary` / `ensure_owned_at_consuming_arg`, the
+same apparatus that makes a borrowed `Vector[T]` param safe. The full mechanism,
+the enum extension (`build_enum_recv_ptr`), and the soundness argument are in
+[Chapter 11](11-copy-on-write.md) — "For-loop elements: borrow the element, don't
+clone it." The cleaner follow-up generalizes the `insts.rs:1083` branch to honour
+`ReadMode::Borrow` for any recursive-drop element, so the LIR reader stops being
+the place the invariant is (under-)interpreted (TODO).
+
+Both Snags #17/#13 reduce to the same lesson, and so does Fix C: the bug was a
+missing or mis-read typed field — or, here, a typed mode honoured too narrowly —
+one layer up, and the "obvious" fix at the consumer was complexity that the
 correct write-site fix erased.
 
 ## How to apply this when extending the compiler
