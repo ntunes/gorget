@@ -332,7 +332,7 @@ behaviour; that is load-bearing for the Snag #25d double-free guard
 | `for x in array` — recursive struct element | `Ptr(elem)` alias, no clone, no drop reg | **borrow** (Fix C, 2026-06-13) |
 | `for x in array` — enum element (Option/Result/user) | `Ptr(elem)` alias + `build_enum_recv_ptr` | **borrow** (2026-06-14, `3a8459b1`) |
 | `for x in array` — tuple-destructure / direct-collection element | clone | eager (unchanged) |
-| `for (i, x) in array.enumerate()` | clone | eager (`lower_for_enumerate`, `for_loops.rs:540`) |
+| `for (i, x) in array.enumerate()` — recursive struct/enum element | `Ptr(elem)` alias, no clone, no drop reg (same gate as `lower_for_array`) | **borrow** (2026-06-14, `4c681f3f`; −12% wall / −69% clones on the driver self-compile, since the self-host's `m.structs.enumerate()` scans are the dominant `LirStructDef__clone` site) |
 | `for k, v in dict` | out-param accessors write resource-cloned, drop-registered locals | eager (`lower_for_dict`, `for_loops.rs:655`) |
 | `for x in set` | out-param accessor writes a resource-cloned, drop-registered local | eager (`lower_for_set`, `for_loops.rs:775`) |
 
