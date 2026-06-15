@@ -1430,7 +1430,15 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
                 {
                     let n_args = args.len();
                     let params: Vec<&str> = (0..n_args).map(|_| "i64").collect();
-                    writeln!(out, "declare i64 @{name}({})", params.join(", ")).unwrap();
+                    // Return type is the GLOBAL's own type (the single source of
+                    // truth for the scalar init's ABI), NOT a hardcoded i64.
+                    // A `float`-returning runtime ctor (`gorget_math_infinity`,
+                    // `gorget_math_nan`) declared as `i64` is read from the wrong
+                    // register on x86_64 SysV (rax vs xmm0) → garbage 0.0; a
+                    // pointer-sized integer handle keeps `i64`. Aggregate globals
+                    // never reach here (sret-routed via known_init_fns above).
+                    let ret = llvm_type_full(&global.ty, snames);
+                    writeln!(out, "declare {ret} @{name}({})", params.join(", ")).unwrap();
                 }
             }
         }
@@ -1832,6 +1840,7 @@ fn emit_global_runtime_init(
     gid: usize,
     fn_name: &str,
     args: &[crate::lir::LirGlobalInitArg],
+    global_ty: &LirType,
     snames: &HashMap<u32, String>,
     module: &LirModule,
     str_globals: &mut StrGlobals,
@@ -1903,9 +1912,16 @@ fn emit_global_runtime_init(
     ) {
         ("GorgetString", "%GorgetString")
     } else {
-        // Pointer-sized scalar return (handle, atomic, mutex, …).
-        writeln!(out, "  %__ginit_{gid}_raw = call i64 @{fn_name}({})", arg_strs.join(", ")).unwrap();
-        writeln!(out, "  store i64 %__ginit_{gid}_raw, ptr @__lir_g{gid}").unwrap();
+        // Scalar return (handle, atomic, mutex, float constant, …). The
+        // return type is the GLOBAL's own type — NOT a hardcoded i64. A
+        // `float`-returning runtime ctor (`gorget_math_infinity` /
+        // `gorget_math_nan`) called as `i64` reads rax instead of xmm0 on
+        // x86_64 SysV → garbage 0.0 (the `static_init_imported`/`math_*`
+        // bug). Pointer-sized integer handles keep `i64` since their global
+        // type is I64/Ptr. Aggregate globals never reach here (sret-routed).
+        let ret_llvm = llvm_arg_type(global_ty, snames);
+        writeln!(out, "  %__ginit_{gid}_raw = call {ret_llvm} @{fn_name}({})", arg_strs.join(", ")).unwrap();
+        writeln!(out, "  store {ret_llvm} %__ginit_{gid}_raw, ptr @__lir_g{gid}").unwrap();
         return;
     };
 
@@ -2517,7 +2533,7 @@ fn emit_function(
                 ) {
                     continue;
                 }
-                emit_global_runtime_init(out, gid, name, args, snames, module, str_globals);
+                emit_global_runtime_init(out, gid, name, args, &global.ty, snames, module, str_globals);
             }
         }
     }
@@ -5691,7 +5707,15 @@ fn emit_inst(
                         if call_ret == "%GorgetString" {
                             writeln!(out, "  %v{} = alloca %GorgetString", d.0).unwrap();
                             let sret_all = format!("ptr sret(%GorgetString) %v{}, {all_args}", d.0);
-                            writeln!(out, "  call void @{call_name}({sret_all})").unwrap();
+                            // Restate the VARARGS function type on the call. Without
+                            // the `(ptr, ptr, ...)` signature LLVM lowers this as a
+                            // call to a fixed-arity prototype and omits the x86_64
+                            // SysV vararg vector-register count in %al → variadic
+                            // `%f`/double args are read as 0.0 by an -O2 runtime
+                            // (`Vec2(dx=0.0…)` / struct-derive float-field bug).
+                            // Matches the printf/fprintf siblings below; the sret
+                            // first param keeps the 32-byte GorgetString return ABI.
+                            writeln!(out, "  call void (ptr, ptr, ...) @{call_name}({sret_all})").unwrap();
                         } else {
                             writeln!(out, "  %v{} = call {call_ret} (ptr, ...) @{call_name}({all_args})", d.0).unwrap();
                         }
