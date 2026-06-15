@@ -3620,6 +3620,34 @@ fn emit_inst(
                 // or a typed FuncRef (Tier E §8.6). Mirrors c_lir's path — without admitting
                 // FuncRef here, FuncAddr→GorgetClosure-field stores collapse to an 8-byte
                 // pointer write, leaving `env` uninitialized → SIGSEGV.
+                //
+                // NULL-ZERO SIZING (move-out field zero): a drop-elaboration move-out
+                // zeroes the moved-from struct/enum field via a `store <Null>` into a
+                // pointer that is a `Cast`/byte-`getelementptr` result (NOT an
+                // `Inst::FieldPtr` dst), so the `dest_field_ty` FieldPtr-scan returns
+                // `None` and the fallback would emit an 8-byte `store ptr null` — only
+                // the enum tag, leaving the heap String pointer at offset 8 live →
+                // double-free. The C oracle (`c_lir/mod.rs:2729-2737`) sizes this from
+                // the canonical `ptr_pointee[ptr]` (`func.pointee_types`, recomputed
+                // post-optimization). Mirror it: when the value is Null and the
+                // canonical pointee of `ptr` is a `Struct(sid)`, `memset` the full
+                // struct so the two backends are byte-size-identical. Match
+                // `Struct(sid)` ONLY — genuine `Ptr`/`PtrTo` pointer fields stay on the
+                // 8-byte path (matching `PtrTo` here would over-zero and diverge from C).
+                let null_zero_struct_sid: Option<crate::lir::StructId> = if value_is_null {
+                    func.pointee_types.get(ptr.0 as usize)
+                        .and_then(|p| p.as_ref())
+                        .and_then(|pt| match pt {
+                            LirType::Struct(sid) => Some(*sid),
+                            _ => None,
+                        })
+                } else {
+                    None
+                };
+                if let Some(sid) = null_zero_struct_sid {
+                    let sz = sizeof_lir_type(&LirType::Struct(sid), &module.structs, snames);
+                    writeln!(out, "  call ptr @memset(ptr %v{}, i32 0, i64 {sz})", ptr.0).unwrap();
+                } else {
                 // If the destination is a FieldPtr to an aggregate field, the ptr is actually
                 // a pointer to that struct's data → emit memcpy instead of store ptr.
                 match dest_field_ty.clone() {
@@ -3644,6 +3672,7 @@ fn emit_inst(
                         // Unknown or ptr field type — plain ptr store
                         writeln!(out, "  store ptr %v{}, ptr %v{}", value.0, ptr.0).unwrap();
                     }
+                }
                 }
             } else {
                 // Generic-iterator-erasure widening (paired with CallClosure's
