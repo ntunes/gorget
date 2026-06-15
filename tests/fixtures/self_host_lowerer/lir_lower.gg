@@ -3312,29 +3312,66 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
             if func_name.starts_with("__global_ref__") and dst_local >= 0:
                 String gr_target = func_name.slice(14, func_name.len())
                 int gr_gid = -1
+                int gr_global_ty = LT_VOID
+                int gr_init_kind = -1
                 # CoW for-element BORROW scan (no LirGlobal__clone): reads
-                # gr_g.name only; enumerate() preserves the global index gri.
+                # gr_g.name / gr_g.ty / gr_g.init_kind only; enumerate()
+                # preserves the global index gri.
                 for (gri, gr_g) in m.globals.enumerate():
                     if gr_g.name == gr_target:
                         gr_gid = gri
+                        gr_global_ty = gr_g.ty
+                        gr_init_kind = gr_g.init_kind
                 if gr_gid >= 0:
                     int gr_dst = lir_fn_next_value(&f)
                     lir_push_inst(&f, bb, IGlobalAddr(gr_dst, gr_gid))
                     int gr_dst_slot = local_to_slot.get(dst_local).unwrap()
                     int gr_dst_slot_ty = f.slots.get(gr_dst_slot).unwrap().ty
-                    # `IGlobalAddr` yields the global's ADDRESS. For a VALUE-typed
-                    # destination (scalar like `float INFINITY` / `int`), the
-                    # reader wants the VALUE, not the address — load it first.
-                    # Mirrors Rust gg's `Constant::GlobalRef` → GlobalAddr+Load
-                    # (src/lir/lower/operands.rs:128-134). Without the load the
-                    # body emits `&__lir_gN` (a pointer) where a `double` is
-                    # expected → float prints 0.0 / `void* > double` cc-fails.
-                    # Resource statics (`stdout`/`stderr`/`stdin` — pointer-kind
-                    # slots) WANT the address, so gate on a scalar value slot.
+                    # `IGlobalAddr` yields the global's ADDRESS. The reader of a
+                    # `GlobalRef` sometimes wants the VALUE (load) and sometimes
+                    # the ADDRESS (no load). Mirrors Rust gg's `Constant::GlobalRef`
+                    # → GlobalAddr+Load vs `GlobalRefPtr` → GlobalAddr-only
+                    # (src/lir/lower/operands.rs:128-134). The self-host has no
+                    # GlobalRef/GlobalRefPtr split, so we reconstruct the intent
+                    # from two TYPED facts (devbook/24, no name test):
+                    #
+                    #   (1) SCALAR VALUE READ — `float INFINITY` / a `print(count)`
+                    #       read of `static int count`. The dst SLOT is the scalar
+                    #       value (`lir_is_scalar(slot_ty) and not ptr-kind`); load
+                    #       the scalar. WRITE TARGETS (`count = count + 1`) reuse
+                    #       the same `__global_ref__` but land in a PTR-kind dst
+                    #       slot (the slot holds `&__lir_gN` to store through), so
+                    #       `not gr_slot_is_ptr_kind` correctly SKIPS the load there
+                    #       — loading would emit `*(T*)value = …` (store through a
+                    #       value, not a pointer → cc-fail / crash). This is the
+                    #       ORIGINAL gate, preserved verbatim.
+                    #
+                    #   (2) POINTER-HANDLE VALUE READ — a RUNTIME-ALLOCATED opaque
+                    #       sync handle (`static AtomicInt counter` → the GLOBAL is
+                    #       declared `void* __lir_gN`, GINIT_RUNTIME_CALL). The dst
+                    #       slot is PTR-kind (it receives the handle for
+                    #       `counter.add(1)`); the global HOLDS the handle pointer,
+                    #       so load it — passing `&__lir_gN` (a `GorgetAtomicInt**`)
+                    #       would mangle `int64_t__add` / cc-fail. Gated on the
+                    #       GLOBAL's OWN type being a pointer AND GINIT_RUNTIME_CALL,
+                    #       which separates a sync handle from a `&self`-method
+                    #       receiver on a STRUCT global (`static File stdout` /
+                    #       `static Counter c` — those globals are aggregate STRUCTS,
+                    #       `lir_is_ptr(global_ty)` is false, so NO load; the slot
+                    #       already holds `&__lir_gN`, the correct receiver address).
                     bool gr_slot_is_ptr_kind = (gr_dst_slot_ty == LT_PTR) or (gr_dst_slot_ty >= LT_PTR_TO_BASE and gr_dst_slot_ty < LT_STRUCT_BASE)
+                    bool gr_global_is_ptr = (gr_global_ty == LT_PTR) or (gr_global_ty >= LT_PTR_TO_BASE and gr_global_ty < LT_STRUCT_BASE)
+                    bool gr_do_load = false
+                    int gr_load_ty = gr_dst_slot_ty
                     if lir_is_scalar(gr_dst_slot_ty) and not gr_slot_is_ptr_kind:
+                        # (1) scalar value read — load the scalar value.
+                        gr_do_load = true
+                    elif gr_slot_is_ptr_kind and gr_global_is_ptr and gr_init_kind == GINIT_RUNTIME_CALL:
+                        # (2) runtime-allocated pointer handle — load the handle.
+                        gr_do_load = true
+                    if gr_do_load:
                         int gr_loaded = lir_fn_next_value(&f)
-                        lir_push_inst(&f, bb, ILoad(gr_loaded, gr_dst, gr_dst_slot_ty))
+                        lir_push_inst(&f, bb, ILoad(gr_loaded, gr_dst, gr_load_ty))
                         lir_push_inst(&f, bb, ISlotStore(gr_dst_slot, gr_loaded, false))
                     else:
                         lir_push_inst(&f, bb, ISlotStore(gr_dst_slot, gr_dst, false))

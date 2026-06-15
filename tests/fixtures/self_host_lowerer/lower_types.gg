@@ -1359,6 +1359,69 @@ bool try_register_struct_ctor_static(GirModule &gmod, SpannedType sd_ty, String 
         else:
             return false
 
+# Detect + register a SYNC-PRIMITIVE-constructor static (`AtomicInt counter
+# = AtomicInt(0)`, `Barrier b = Barrier(2)`, `CondVar cv = CondVar()`, …).
+# These are module-level sync GLOBALS — the language spec
+# (`docs/language-reference.md:3592`) lets them be declared without the
+# `static` keyword. The runtime ctor (`gorget_atomic_int_new` etc.) returns
+# an OPAQUE HANDLE POINTER (`GorgetAtomicInt*`), allocated at runtime — NOT a
+# compile-time constant. So register it as a GINIT_RUNTIME_CALL static whose
+# init_expr is the `gorget_<kind>_new(<args>)` C call (run once at the main
+# prologue, `lir_codegen.gg:5535`), with the static TYPED as a
+# `Ptr(Named(cname))` slot so:
+#   (a) `emit_globals` declares it `GorgetAtomicInt* __lir_gN;` (a pointer
+#       slot can hold the handle — a bare value slot can't), and
+#   (b) a later `EIdentifier(counter)` read takes the GlobalRef→GlobalAddr
+#       +Load path (`lir_lower.gg`) which now loads the handle VALUE for a
+#       pointer-handle slot, then `local_type_name`→`type_id_to_base_name`
+#       unwraps the Ptr to "AtomicInt" so `counter.add(1)` dispatches
+#       `gorget_atomic_int_add` (not the `int64_t__add` placeholder bug).
+# Mirrors Rust gg's `eval_static_init` sync arms emitting `GlobalInit::Extern
+# { name, args }` (`src/ir/lowering/mod.rs:2650-2674`) — the SAME runtime-call
+# global Rust produces. Keyed on the TYPED `sync_constructor_runtime_name`
+# map (NOT a name-match here — that map IS the typed registry, the same
+# Rust-blessed constructor-name-is-the-runtime-contract exception the
+# allocator/sync ctor branches at the expr path already use). Returns true on
+# hit; false (not a sync ctor / arg not a scalar literal) to fall through.
+bool try_register_sync_ctor_static(GirModule &gmod, SpannedType sd_ty, String sd_name, SpannedExpr sd_val):
+    match sd_val.expr:
+        case ECall(callee_box, args, targs):
+            if targs.len() != 0:
+                return false
+            match (*callee_box).expr:
+                case EIdentifier(cname):
+                    String sync_new_fn = sync_constructor_runtime_name(cname)
+                    if sync_new_fn == "":
+                        return false
+                    # Build the `gorget_<kind>_new(<arg literals>)` init expr.
+                    # Sync-ctor args are scalar literals (count / initial
+                    # value): `AtomicInt(0)` / `Barrier(2)` / `CondVar()`.
+                    # `scalar_static_c_literal` renders int→`<n>LL`,
+                    # bool→`1`/`0` (the C `gorget_atomic_bool_new` takes an
+                    # int 0/1 — bool literal already renders compatibly).
+                    String init_expr = sync_new_fn + "("
+                    int ai = 0
+                    while ai < args.len():
+                        String al = scalar_static_c_literal(args.get(ai).unwrap())
+                        if al == "":
+                            return false
+                        if ai > 0:
+                            init_expr = init_expr + ", "
+                        init_expr = init_expr + al
+                        ai += 1
+                    init_expr = init_expr + ")"
+                    # Type the static as `Ptr(Named(cname))` — the runtime
+                    # returns a `GorgetAtomicInt*`; a bare value slot can't
+                    # hold it. `type_id_to_base_name` unwraps the Ptr→cname
+                    # so method dispatch still resolves on the type name.
+                    int sync_ptr_ty = register_ptr(&gmod, lookup_or_register_named(&gmod, cname))
+                    static_put(&gmod, sd_name, init_expr, sync_ptr_ty)
+                    return true
+                else:
+                    return false
+        else:
+            return false
+
 # Register a LITERAL-init static (case 1) under `gmod.statics`; the
 # matching `FunctionDef` is built by `build_static_init_fn` and lowered in
 # the main function loop. Mirrors Rust pushing a `Global { init:
