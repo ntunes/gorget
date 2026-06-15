@@ -5670,6 +5670,103 @@ fn assert_fmt_idempotent(fixture: &str) {
     );
 }
 
+/// Guard for the formatter data-loss class: `gg fmt` output MUST round-trip
+/// (re-parse with zero parse errors) AND be idempotent (a second pass is
+/// byte-identical, losing no code).
+///
+/// History: long binary-op chains (`a + a + ... + a`) used to break into a
+/// bare leading-operator continuation form (`a\n        + a\n        + a`),
+/// which the parser REJECTS — and a second `gg fmt` pass then silently DROPPED
+/// the orphaned `+ a` lines, LOSING code on round-trip. The fix wraps broken
+/// chains in parentheses (`(a\n        + a)`), the only multi-line form the
+/// lexer accepts (NEWLINE is suppressed only inside brackets). This guard
+/// makes that whole class non-silently-reopenable: any formatter output that
+/// fails to re-parse, or that changes on a second pass, fails here.
+fn assert_fmt_round_trips(label: &str, source: &str) {
+    use gorget::parser::Parser;
+
+    // Pass 1: format the source.
+    let first = gorget::formatter::format_source(source);
+
+    // Round-trip: the formatted output MUST re-parse cleanly. A leading-operator
+    // continuation (the old data-loss bug) shows up here as parse errors.
+    let mut p1 = Parser::new(&first);
+    let _ = p1.parse_module();
+    assert!(
+        p1.errors.is_empty(),
+        "Formatter output for `{label}` does NOT re-parse \
+         ({} parse error(s)) — this is the data-loss class.\n\
+         === Formatted (pass 1) ===\n{first}\n=== First parse error ===\n{:?}",
+        p1.errors.len(),
+        p1.errors.first(),
+    );
+
+    // Idempotence: a second pass must be byte-identical (nothing dropped/reshaped).
+    let second = gorget::formatter::format_source(&first);
+    assert_eq!(
+        first, second,
+        "Formatter is NOT idempotent for `{label}`.\n\
+         === First pass ===\n{first}\n=== Second pass ===\n{second}"
+    );
+
+    // The second pass must also still re-parse cleanly (belt-and-suspenders:
+    // catches a fixpoint that converged onto an invalid shape).
+    let mut p2 = Parser::new(&second);
+    let _ = p2.parse_module();
+    assert!(
+        p2.errors.is_empty(),
+        "Second formatter pass for `{label}` does NOT re-parse \
+         ({} parse error(s)).\n=== Formatted (pass 2) ===\n{second}",
+        p2.errors.len(),
+    );
+}
+
+/// Round-trip + idempotence guard for `gg fmt`, focused on the long binary-op
+/// chain data-loss bug (chains long enough to trip the line-breaker were being
+/// reflowed into a parser-INVALID `+`-continuation form, and a second fmt pass
+/// then dropped the orphaned lines, losing code). Also covers a couple of other
+/// chain shapes so the class can't silently reopen on a sibling operator.
+#[test]
+fn fmt_binary_chain_round_trips() {
+    // The headline case: a long `+` chain that forces the line-breaker to wrap.
+    // 100 terms is comfortably over the ~25-term break threshold and under the
+    // parser's MAX_EXPR_DEPTH cap (which intentionally rejects ~129+ term
+    // chains to avoid lowering-recursion overflow — a separate guard).
+    let long_add = "a".to_string()
+        + &" + a".repeat(99);
+    let long_chain = format!(
+        "void main():\n    String a = \"x\"\n    String s = {long_add}\n    print(s.len())\n"
+    );
+    assert_fmt_round_trips("long_add_chain", &long_chain);
+
+    // A long boolean `and` chain (distinct operator, distinct precedence path).
+    let mut bool_src = String::from("void main():\n");
+    let names: Vec<String> = (0..40).map(|i| format!("flag_{i}")).collect();
+    for n in &names {
+        bool_src.push_str(&format!("    bool {n} = true\n"));
+    }
+    bool_src.push_str(&format!("    bool result = {}\n", names.join(" and ")));
+    bool_src.push_str("    print(result)\n");
+    assert_fmt_round_trips("long_and_chain", &bool_src);
+
+    // A long arithmetic chain inside a `return` (chain as a statement tail).
+    let ret_terms = "1".to_string() + &" + 1".repeat(59);
+    let ret_src = format!(
+        "int total():\n    return {ret_terms}\n\nvoid main():\n    print(total())\n"
+    );
+    assert_fmt_round_trips("long_return_chain", &ret_src);
+
+    // A short chain that fits on one line: must NOT gain spurious parens and
+    // must round-trip (the flat-mode path of the same code).
+    let short_src =
+        "void main():\n    int x = 1 + 2 + 3\n    print(x)\n";
+    assert_fmt_round_trips("short_chain_flat", short_src);
+    assert!(
+        !gorget::formatter::format_source(short_src).contains("(1 + 2 + 3)"),
+        "short binary chain that fits should NOT be parenthesized"
+    );
+}
+
 // ══════════════════════════════════════════════════════════════
 // Semantic error tests (expected check failures)
 // ══════════════════════════════════════════════════════════════

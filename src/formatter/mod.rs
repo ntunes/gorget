@@ -1000,9 +1000,23 @@ impl Formatter {
             docs.push(doc::text(s));
         }
 
+        // When this chain breaks across lines, the continuation lines start with
+        // the operator (`+ a`). Bare leading-operator continuations are NOT valid
+        // Gorget — the parser rejects them, and a second `gg fmt` pass then drops
+        // the orphaned lines, silently LOSING code on round-trip. The lexer only
+        // suppresses NEWLINE/INDENT/DEDENT inside brackets (`bracket_depth > 0`,
+        // src/lexer/mod.rs:22), so the multi-line form is only parser-valid when
+        // wrapped in parentheses. Emit `(` / `)` via `if_break` so the parens
+        // appear ONLY in broken mode (flat mode stays `a + b + c`, no noise), and
+        // the wrapped form re-parses to the same bare BinaryOp → re-formats to the
+        // same parenthesized shape (idempotent). Parens are semantically
+        // transparent, so adding them never changes meaning. See the
+        // `fmt_binary_chain_round_trips` guard in tests/integration.rs.
         let bin_doc = doc::group(doc::concat(vec![
+            doc::if_break(doc::text(""), doc::text("(")),
             docs.remove(0), // first operand
             doc::indent(doc::concat(docs)),
+            doc::if_break(doc::text(""), doc::text(")")),
         ]));
         self.write_doc(&bin_doc);
     }
