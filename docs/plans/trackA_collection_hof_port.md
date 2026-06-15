@@ -31,9 +31,11 @@ to reuse its list-comprehension lowering:
 - `v.fold(init, f)` ≡ accumulate over a loop; `v.reduce(f)` ≡ fold without an init (first elem seeds)
 - `v.collect()` on a VectorIter ≡ drain to array
 Reuses `comp_make_acc` + `comp_synth_body` (`lower_expr.gg:~2855/2872`) +
-`lower_for_vector` (`lower_loops.gg:~206`), closure invoked via the existing
-`__callable_N` indirect dispatch. A single `try_lower_collection_hof` + a 1-call
-hook in the EMethodCall path.
+`lower_for_vector` (`lower_loops.gg:~206`). The closure is **inlined via AST
+substitution** (the `4158530b` `closure_extract` approach: the closure's param
+name binds the loop var and its body expr is reused verbatim — NOT a `__callable_N`
+indirect dispatch). `fold`'s accumulator type is threaded from the init expr's
+`type_id`. A single `try_lower_collection_hof` + a 1-call hook in the EMethodCall path.
 
 ## START FROM THE PARKED T2 COMMIT `4158530b` (reviewed SIGN OFF, round 1)
 It already implements this approach for Vector `map`/`filter`/`fold`/`reduce`/
