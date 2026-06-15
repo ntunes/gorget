@@ -137,13 +137,23 @@ a broad rewrite that regresses the bootstrap is not.
    the orchestrator must catch it at serial integration + re-gate. Integrate the
    two tracks SERIALLY (re-gate between), not in one merge.
 
-4. **Oracle wire-in point (resolve in step 2a, gate on fixed_point).** Decide
-   explicitly: does `lookup_expr_gir_type` (`lower_types.gg` ~`482-507`) call the
-   recursive oracle INTERNALLY for chain-link method calls (cleanest — callers at
-   `lower_generics.gg` ~`108/126` are unchanged), or do those callers dispatch to
-   the oracle directly? Prefer the internal-to-`lookup_expr_gir_type` wire-in so
-   the span-table read becomes the FALLBACK (non-chain exprs) and the oracle is
-   the path for method-chain links — but verify line-by-line that existing
-   single-link callers still get the right type, and gate `fixed_point` on the
-   choice. This is the one concrete ambiguity flagged by brief-review pass-2
-   (`a03b6293`, SIGN OFF) — not a blocker, but settle it first.
+4. **Oracle wire-in point (resolve in step 2a).** Pass-3 (`ab152a65`) verified
+   that **EVERY caller of `lookup_expr_gir_type` is already a method-call context**
+   (`lower_generics.gg` ~`108/126` receivers, `lower_expr.gg` method-return-type,
+   `lower.gg` receiver-mutability) — there are NO non-method callers needing a
+   "fallback". So make `lookup_expr_gir_type` route through the recursive oracle as
+   the SOLE path for method-chain links; the `span.start`-table read is at most a
+   theoretical-future fallback, not a live one. Still verify line-by-line that
+   each existing single-link caller gets the SAME type it does today before
+   widening. (Recursion terminates: `infer_expr_ast_type` base-cases on
+   `Identifier`/`SelfExpr`.)
+
+5. **THE #1 BOOTSTRAP RISK (pass-3 `ab152a65`): the oracle must return IDENTICAL
+   types during the proto-discovery snapshot/restore as in the main flow.** The
+   snapshot/restore (`typecheck.gg` ~`1041-1046`) saves/restores `expr_types` to
+   isolate method-targ recording. If the oracle path makes `lookup_expr_gir_type`
+   return a DIFFERENT type during snapshot vs main flow, proto-discovery silently
+   records wrong method-targs → the lowerer mangles wrong symbols → a SUBTLE
+   bootstrap regression (green build, wrong output). Mitigation is mandatory and
+   already in step 2b ("verify line-by-line") — do NOT merge stages 2a→2b→2c; gate
+   `self_host_bootstrap_fixed_point` after EACH of 2a, 2b, 2c (not only at the end).
