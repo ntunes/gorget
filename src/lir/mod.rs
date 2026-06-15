@@ -1863,7 +1863,17 @@ impl LirModule {
                 // Try to compute — may fail if a referenced struct is not yet sized.
                 // c_sizeof_struct_def reads other structs' sizes from their fields,
                 // not from computed_c_size, so this always works.
-                let size = lower::types::c_sizeof_struct_def(&self.structs[i], &self.structs);
+                let field_sum = lower::types::c_sizeof_struct_def(&self.structs[i], &self.structs);
+                // Cover structs under-declare their layout (e.g. `struct File: int handle`
+                // covers the 16B GorgetFile). Take the runtime ABI size when it exceeds the
+                // field-derived sum so all downstream ABI decisions (sret return, memcpy
+                // width, trailing pad) reflect the real layout. `opaque_runtime_size` returns
+                // None for ordinary user structs (no change) and Some(==field_sum) for
+                // already-agreeing runtime singletons (no-op).
+                let size = match lower::types::opaque_runtime_size(&self.structs[i].name) {
+                    Some(rt) => field_sum.max(rt),
+                    None => field_sum,
+                };
                 let align = lower::types::c_alignof_lir_type(&LirType::Struct(StructId(i as u32)), &self.structs);
                 self.structs[i].computed_c_size = Some(size);
                 self.structs[i].computed_c_align = Some(align);

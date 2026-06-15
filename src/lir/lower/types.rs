@@ -380,7 +380,8 @@ pub fn opaque_runtime_size(name: &str) -> Option<usize> {
             || name.starts_with("Weak__") || name.starts_with("Thread__") => 8,
         // Sockets / files / process — runtime uses fixed layouts.
         "Socket" | "ServerSocket" | "UdpSocket" => 8,
-        "TlsSocket" | "TlsServerSocket" => 24,  // fd + SSL_CTX* + SSL*/ctx
+        "TlsSocket" => 24,        // {int64_t fd; SSL_CTX* ctx; SSL* ssl}
+        "TlsServerSocket" => 16,  // {int64_t fd; SSL_CTX* ctx}
         "UdpAddr" => 40,   // {Str host, int64_t port} = 32 + 8
         "UdpPacket" => 104,// {GorgetArray data, UdpAddr sender} = 64 + 40
         "File" | "GorgetFile" => 16,
@@ -409,8 +410,10 @@ pub fn opaque_runtime_size(name: &str) -> Option<usize> {
         "Ed25519KeyPair" | "X25519KeyPair" => 8,
         // SDL.
         "SDLWindow" | "SDLRenderer" | "SDLTexture" | "SDLFont" | "SDLEvent" => 8,
-        // Audio.
-        "AudioChunk" => 16,
+        // Audio. GorgetAudioChunk is `{Mix_Chunk*}` = 8B, passed by value to
+        // gorget_audio_play_channel; a 16B size would let `max()` activate a
+        // latent 8B over-read past the slot.
+        "AudioChunk" => 8,
         _ => return None,
     };
     Some(sz)
