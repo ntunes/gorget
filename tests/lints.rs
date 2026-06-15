@@ -1961,3 +1961,95 @@ fn cstr_return_registry_single_source() {
          `runtime_fn_returns_cstr(...)`.",
     );
 }
+
+/// Sibling-site ratchet (CLAUDE.md rule 4 / "Sibling-site drift") over the
+/// await-dispatch value-route fallback. The `.await()` dispatcher exists in TWO
+/// hand-synced copies — the postfix method-call form
+/// (`src/ir/lowering/exprs/methods.rs`) and the prefix `Expr::Await` form
+/// (`src/ir/lowering/exprs/mod.rs`). When the named `__gorget_await_<fn>` path
+/// can't resolve a single producer fn (a collection-sourced Task[void] whose
+/// TypeId maps to >1 distinct producer), BOTH must fall through to the
+/// value-route helper `Task__void__await` — otherwise the await is silently
+/// dropped and the task is only joined by its scope-end drop (nondeterministic
+/// wrong output, the bug this fixed).
+///
+/// Pin the value-route call-site count at exactly 2 (one per await form). A new
+/// third await form (or a refactor that drops one copy's fallback) trips this,
+/// forcing it through the same `Task__void__await` value-route. If you instead
+/// CENTRALIZE the resolve+fallback into one shared helper both forms call,
+/// update this to assert the single call site.
+#[test]
+fn await_value_route_sibling_count() {
+    const EXPECTED: usize = 2;
+
+    let files = [
+        "src/ir/lowering/exprs/methods.rs",
+        "src/ir/lowering/exprs/mod.rs",
+    ];
+
+    let mut call_sites = 0usize;
+    let mut zero_after = 0usize;
+    for f in &files {
+        let content = fs::read_to_string(f).unwrap_or_default();
+        for line in content.lines() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") {
+                continue;
+            }
+            // The GIR emit of the value-route helper call. The emit_types.rs C
+            // definition uses a different spelling (quoted struct param), so
+            // restricting to these two GIR-lowering files counts only the
+            // dispatch call sites.
+            call_sites += line.matches("call_void(\"Task__void__await\"").count();
+        }
+    }
+
+    // Each value-route call MUST be paired with a move_zero_and_mark on the
+    // receiver local (double-join guard); count those across the same files so a
+    // future copy that forgets the zero also trips.
+    for f in &files {
+        let content = fs::read_to_string(f).unwrap_or_default();
+        let call_idx: Vec<usize> = content
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| {
+                let t = l.trim_start();
+                !t.starts_with("//") && l.contains("call_void(\"Task__void__await\"")
+            })
+            .map(|(i, _)| i)
+            .collect();
+        let lines: Vec<&str> = content.lines().collect();
+        for idx in call_idx {
+            // The move_zero_and_mark guard is within a few lines after the call.
+            let window_end = (idx + 4).min(lines.len());
+            if lines[idx..window_end]
+                .iter()
+                .any(|l| l.contains("move_zero_and_mark"))
+            {
+                zero_after += 1;
+            }
+        }
+    }
+
+    assert_eq!(
+        call_sites, EXPECTED,
+        "Await value-route `Task__void__await` call-site count changed: \
+         {call_sites} vs {EXPECTED}.\n\n\
+         The `.await()` dispatcher has two hand-synced forms (postfix \
+         methods.rs + prefix Expr::Await mod.rs). BOTH must fall through to the \
+         `Task__void__await` value-route when the named `__gorget_await_<fn>` \
+         path can't resolve a single producer fn — else a collection-sourced \
+         Task[void] silently drops its await. If you added a third await form, \
+         route it through the same value-route fallback and bump EXPECTED. If \
+         you CENTRALIZED the two into one shared helper, set EXPECTED = 1.",
+    );
+    assert_eq!(
+        zero_after, EXPECTED,
+        "Await value-route `move_zero_and_mark` double-join guard count changed: \
+         {zero_after} vs {EXPECTED} (call sites = {call_sites}).\n\n\
+         Every `Task__void__await` value-route call MUST zero the receiver local \
+         (`move_zero_and_mark`) right after, so scope-end `Task__void__drop` is a \
+         no-op and the task isn't joined twice. A value-route site missing the \
+         zero re-opens the double-free. Keep every fallback paired with its zero.",
+    );
+}

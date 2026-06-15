@@ -707,7 +707,16 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
             || ext.name.starts_with("Weak__") || ext.name.starts_with("Mutex__")
             || ext.name.starts_with("RWLock__") || ext.name.starts_with("Guard__")
             || ext.name.starts_with("ReadGuard__") || ext.name.starts_with("WriteGuard__")
-            || ext.name.starts_with("Box__") {
+            || ext.name.starts_with("Box__")
+            || ext.name.starts_with("Task__") {
+            // Task__T__drop / Task__void__await are emitted as `static inline`
+            // helpers by emit_spawn_helpers; a non-static forward decl here
+            // would conflict with the static definition (the GIR
+            // call_void("Task__void__await", …) → ensure_extern would otherwise
+            // emit one). `is_runtime_fn` doesn't match `Task__` (only
+            // gorget_/GORGET_/__gorget_), so this prefix skip is genuinely
+            // needed. Safe: every Task__* C symbol is static inline; the
+            // spawn/await helpers are __gorget_/__spawn_-prefixed, not Task__.
             continue;
         }
         write!(out, "{} {}(", c_type_named(&ext.return_type, &struct_names), ext.name).unwrap();

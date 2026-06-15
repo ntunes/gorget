@@ -1,0 +1,40 @@
+# DEFERRED-GAP FIXTURE (#[ignore]'d — silently MISCOMPILES; see TODO.md).
+#
+# Non-void analogue of vector_task_mixed_await.gg: a Vector[Task[int]] holding
+# tasks from TWO DIFFERENT async fns. Both produce the SAME Task[int] type, so
+# the TypeId->fn await table maps to >1 distinct producer fn and cannot pick a
+# single __gorget_await_<fn>. The VOID case routes through the value's __drop
+# pointer; the NON-VOID case needs the task's carried __await/result pointer,
+# which is not yet wired (scout abff0e7fa3afcea8a). It COMPILES today but
+# silently DROPS the value-routed awaits (the result-returning analogue of the
+# original void bug): the dropped awaits return uninitialized garbage and the
+# task is only joined by its scope-end drop, so the sum is nondeterministic
+# garbage instead of 48 — hence #[ignore] (the test would FAIL on the garbage).
+#
+# Expected output is the language-CORRECT sum (book-reference usage,
+# docs/book/13-async.md:149-163,385-405), NOT current behavior:
+#   sq(2)+sq(3)+cube(2)+cube(3) = 4 + 9 + 8 + 27 = 48
+from std.conv import int_to_str
+
+async int sq(int x):
+    return x * x
+
+async int cube(int x):
+    return x * x * x
+
+async void main():
+    Vector[Task[int]] tasks = Vector[Task[int]]()
+    tasks.push(!spawn sq(2))
+    tasks.push(!spawn cube(2))
+    tasks.push(!spawn sq(3))
+    tasks.push(!spawn cube(3))
+    Task[int] t3 = tasks.remove(3).unwrap()
+    Task[int] t2 = tasks.remove(2).unwrap()
+    Task[int] t1 = tasks.remove(1).unwrap()
+    Task[int] t0 = tasks.remove(0).unwrap()
+    int total = 0
+    total = total + t0.await()
+    total = total + t1.await()
+    total = total + t2.await()
+    total = total + t3.await()
+    print(int_to_str(total))

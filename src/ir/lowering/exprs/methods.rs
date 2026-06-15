@@ -466,6 +466,34 @@ pub(super) fn lower_method_call(
             }
             return result;
         }
+        // Value-routed fallback: a collection-sourced Task[void] whose static
+        // TypeId maps to >1 DISTINCT producer fn (so no single
+        // __gorget_await_<fn> name is resolvable). For a VOID task,
+        // await == join+destroy+free == the per-instance __drop the value
+        // already carries, so we dispatch through the value via
+        // Task__void__await (per-value provenance, NOT name matching).
+        // The named path's `recv_local` is scoped inside the resolved block
+        // above, so RE-EXTRACT the receiver local here (mirror of :447-451).
+        let recv_local = match &recv {
+            Operand::Copy(place) | Operand::Move(place)
+                if place.projections.is_empty() => Some(place.local),
+            _ => None,
+        };
+        if let Some(local_id) = recv_local {
+            let tid = builder.local_type(local_id);
+            // Equality against the registered type name the producer wrote at
+            // spawn (read through the typed accessor) — the documented
+            // C-emit-symbol-boundary idiom (docs/devbook/24 exception), NOT a
+            // substring/prefix heuristic. There is no typed "is Task[void]"
+            // discriminator (Task is a plain Named struct-def).
+            if ctx.type_name_for_id(tid) == Some("Task__void") {
+                builder.call_void("Task__void__await", vec![recv]);
+                // Zero the slot so scope-exit Task__void__drop (null-guarded)
+                // is a no-op — prevents double-join. See emit_types.rs.
+                ctx.move_zero_and_mark(builder, local_id);
+                return Operand::Constant(Constant::Unit);
+            }
+        }
         return recv; // fallback pass-through (no known spawn source)
     }
 

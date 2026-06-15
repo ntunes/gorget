@@ -130,7 +130,16 @@ impl SpawnState {
     /// Register a Task TypeId → spawned fn_name mapping for await dispatch
     /// on tasks stored in collections (where result_locals doesn't apply).
     pub fn register_task_type_fn(&mut self, task_type: TypeId, fn_name: String) {
-        self.task_type_fns.entry(task_type).or_default().push(fn_name);
+        // Dedup: the only consumers of `task_type_fns` are the await-dispatch
+        // `fns.len() == 1` gates (methods.rs / exprs/mod.rs). N spawns of the
+        // SAME fn must collapse to len 1 so the named `__gorget_await_<fn>` path
+        // resolves; without dedup, N same-type spawns push N entries and the
+        // gate falls through, silently dropping the await. Nothing relies on the
+        // Vec reflecting spawn count — only DISTINCT producer fns matter here.
+        let v = self.task_type_fns.entry(task_type).or_default();
+        if !v.contains(&fn_name) {
+            v.push(fn_name);
+        }
     }
 }
 

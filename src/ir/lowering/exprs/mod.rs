@@ -1080,6 +1080,28 @@ fn lower_expr_inner(
 
                 return result;
             }
+            // Value-routed fallback for a collection-sourced Task[void] whose
+            // TypeId maps to >1 DISTINCT producer fn (SIBLING of the postfix
+            // `.await()` site in methods.rs — fix the class, not the instance).
+            // Dispatch through the value's own carried __drop pointer via
+            // Task__void__await. `inner_local` is in scope here (declared at the
+            // top of the arm).
+            if let Some(local_id) = inner_local {
+                let tid = builder.local_type(local_id);
+                // Equality against the registered type name (typed accessor) —
+                // the C-emit-symbol-boundary idiom, not a prefix heuristic.
+                if ctx.type_name_for_id(tid) == Some("Task__void") {
+                    builder.call_void("Task__void__await", vec![inner]);
+                    ctx.move_zero_and_mark(builder, local_id);
+                    // Prefix-ONLY: refresh `with shared_var:` bindings after the
+                    // value-route, mirroring the named path (:1079). The postfix
+                    // `.await()` site has no such refresh, so it stays absent
+                    // there. Keeps the named/value routes consistent for a
+                    // `.await()` inside a `with shared:` block.
+                    emit_with_shared_refresh(ctx, builder);
+                    return Operand::Constant(Constant::Unit);
+                }
+            }
             inner
         }
 

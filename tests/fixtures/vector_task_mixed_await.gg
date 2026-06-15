@@ -1,0 +1,27 @@
+# Test: Vector[Task[void]] holding tasks from TWO DIFFERENT async fns.
+# Same Task[void] type for both, so a TypeId->fn table cannot pick the await
+# helper; correct await resolves via the task's own carried fn pointer.
+from std.conv import int_to_str
+
+async void inc_a(AtomicInt counter):
+    counter.add(1)
+
+async void inc_b(AtomicInt counter):
+    counter.add(10)
+
+async void main():
+    shared(atomic) int counter = 0
+    Vector[Task[void]] tasks = Vector[Task[void]]()
+    tasks.push(!spawn inc_a(counter))
+    tasks.push(!spawn inc_b(counter))
+    tasks.push(!spawn inc_a(counter))
+    tasks.push(!spawn inc_b(counter))
+    Task[void] t3 = tasks.remove(3).unwrap()
+    Task[void] t2 = tasks.remove(2).unwrap()
+    Task[void] t1 = tasks.remove(1).unwrap()
+    Task[void] t0 = tasks.remove(0).unwrap()
+    t0.await()
+    t1.await()
+    t2.await()
+    t3.await()
+    print(int_to_str(counter))

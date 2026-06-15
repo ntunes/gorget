@@ -11978,6 +11978,22 @@ fn vector_task_get() {
 }
 
 #[test]
+fn vector_task_mixed_await() {
+    // Vector[Task[void]] holding tasks from two DIFFERENT async fns. The
+    // Task[void] TypeId maps to >1 producer fn, so await must be value-routed
+    // (via the task's carried __drop pointer), not name-resolved.
+    // inc_a adds 1 (x2), inc_b adds 10 (x2): 1+10+1+10 = 22.
+    run_gg("vector_task_mixed_await.gg", "22");
+}
+
+#[test]
+#[ignore] // non-void ambiguous Task[T] collection gap — compiles but silently drops value-routed awaits (nondeterministic garbage); see TODO.md (scout abff0e7fa3afcea8a)
+fn vector_task_mixed_await_int() {
+    // sq(2)+sq(3)+cube(2)+cube(3) = 4+9+8+27 = 48 (language-correct sum).
+    run_gg("vector_task_mixed_await_int.gg", "48");
+}
+
+#[test]
 fn shared_closure_capture_error() {
     check_gg_fails("shared_closure_capture_error.gg", "cannot capture shared variable");
 }

@@ -523,6 +523,26 @@ pub(super) fn emit_spawn_helpers(out: &mut String, module: &LirModule) {
         writeln!(out, "}}").unwrap();
         writeln!(out, "static void (*__unused_{task_name}__drop)({task_name}*) __attribute__((unused)) = {task_name}__drop;").unwrap();
         writeln!(out).unwrap();
+
+        // Task__void__await — value-routed await for VOID tasks pulled out of a
+        // collection, where the GIR await dispatcher cannot resolve a single
+        // monomorphic __gorget_await_<fn> name (because the Task[void] TypeId
+        // maps to multiple DISTINCT producer fns). For a void task, await ==
+        // join + destroy + free, which is byte-identical to the per-instance
+        // __drop the task already carries. So we route through the value's own
+        // __drop pointer (per-value provenance, no name matching). Takes the
+        // Task by value (await consumes it; the GIR move-zeroes the source so
+        // scope-exit won't re-drop). Emitted INSIDE this loop so it reuses the
+        // per-type `emitted_task_drops` dedup (exactly once), gated on the void
+        // Task type. See methods.rs / exprs/mod.rs await dispatch.
+        if task_name == "Task__void" {
+            writeln!(out, "static inline void Task__void__await(Task__void task) {{").unwrap();
+            writeln!(out, "    if (task.__task && task.__drop) {{").unwrap();
+            writeln!(out, "        task.__drop(task.__task);").unwrap();
+            writeln!(out, "    }}").unwrap();
+            writeln!(out, "}}").unwrap();
+            writeln!(out).unwrap();
+        }
     }
 }
 pub(super) fn emit_thread_helpers(out: &mut String, module: &LirModule) {
