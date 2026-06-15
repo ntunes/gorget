@@ -377,6 +377,18 @@ fn static_struct_field_store() {
 }
 
 #[test]
+fn static_struct_resource_field() {
+    // Bug #1 + Bug #2: `static Box2 B = Box2(Vector[int]())`. Bug #2 (init):
+    // the non-literal ctor arg `Vector[int]()` fell to GlobalInit::Zeroed —
+    // `B.items` was a NULL collection and `push` no-op'd. Fixed by routing the
+    // non-literal-arg struct ctor through the synthesized __gg_static_init_B().
+    // Bug #1 (addressing): `B.items.push(7)` needs an addressable place at the
+    // global. Asserts the pushed value (7) and .len() after a second push (2).
+    // See docs/plans/brief_static_struct_field.md + bugB_static_collection_init.md.
+    run_gg("static_struct_resource_field.gg", "first=7\nlen=2\nsecond=11");
+}
+
+#[test]
 fn compound_and_method_chain_miscompile() {
     // Regression for the compound-`and`-with-method-chain miscompile fixed
     // 2026-05-21 in lower_short_circuit (src/ir/lowering/exprs/operators.rs).

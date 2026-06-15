@@ -1,0 +1,26 @@
+# Bug #1 + Bug #2 (static-struct RESOURCE field access) regression.
+#
+# `static Box2 B = Box2(Vector[int]())` exercises BOTH bugs:
+#   - Bug #2 (init): the ctor arg `Vector[int]()` is NOT a compile-time literal,
+#     so `eval_static_init`'s catch-all fell to `GlobalInit::Zeroed` → `B.items`
+#     was a NULL GorgetArray and every `push` no-op'd. Fixed by routing the
+#     non-literal-arg struct ctor through the synthesized `__gg_static_init_B()`.
+#   - Bug #1 (addressing): even once initialized, `B.items.push(7)` needs an
+#     addressable place at the global to borrow `B.items` in place. Fixed by
+#     materializing the global into a MutPtr local.
+#
+# A LOCAL `Box2 b = Box2(Vector[int]())` already worked (prints 7); only the
+# `static` form was broken (printed 0). Also asserts `.len()` after two pushes → 2.
+
+struct Box2:
+    Vector[int] items
+
+static Box2 B = Box2(Vector[int]())
+
+int main():
+    B.items.push(7)
+    print(f"first={B.items.get(0).unwrap()}")
+    B.items.push(11)
+    print(f"len={B.items.len()}")
+    print(f"second={B.items.get(1).unwrap()}")
+    return 0

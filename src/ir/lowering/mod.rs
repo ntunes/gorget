@@ -2370,7 +2370,16 @@ fn lower_static_decl(
                 Some(TypeDefKind::Enum(_))
             )
     );
-    if initializer_needs_synthetic_fn(&decl.value.node) || is_enum_typed {
+    // Bug #2: a `static Struct = Ctor(non-literal args...)` (e.g.
+    // `static Box2 B = Box2(Vector[int]())`) cannot be encoded as a compile-time
+    // `GlobalInit` — `eval_static_init`'s catch-all falls to `GlobalInit::Zeroed`,
+    // leaving resource fields (`B.items`) NULL so `push` no-ops. Route those
+    // through the same synthetic-init-fn machinery. R1-BLOCKING: literal-arg
+    // ctors (`Point(3,4)`/`Counter(0)`) are EXCLUDED by the predicate so they
+    // stay on the compile-time `GlobalInit::Struct` path (no regression of
+    // `static_global_method_call.gg`; output-neutral on every literal-arg static).
+    let needs_struct_ctor_init = struct_ctor_needs_synthetic_fn(ctx, type_id, &decl.value.node);
+    if initializer_needs_synthetic_fn(&decl.value.node) || is_enum_typed || needs_struct_ctor_init {
         let synth_name = format!("__gg_static_init_{}", name);
         synthesize_static_init_fn(ctx, &synth_name, decl);
         // Mirror `module.globals.push` below, changing ONLY `init`: the global
@@ -2414,6 +2423,73 @@ fn lower_static_decl(
 fn initializer_needs_synthetic_fn(expr: &crate::parser::ast::Expr) -> bool {
     use crate::parser::ast::Expr;
     matches!(expr, Expr::ArrayLiteral(_) | Expr::DictLiteral(_))
+}
+
+/// Bug #2: does this static-initializer RHS construct a USER STRUCT whose ctor
+/// args are NOT all compile-time literals? Such a static (`static Box2 B =
+/// Box2(Vector[int]())`) cannot be encoded as a compile-time `GlobalInit::Struct`
+/// — `eval_static_init`'s catch-all (`literal_to_global_init` per arg) falls to
+/// `GlobalInit::Zeroed`, leaving `B.items` a NULL collection (`push` no-ops).
+/// Route those through the synthetic-init-fn path instead.
+///
+/// ⚠ R1 BLOCKING: scope by LITERAL-NESS of the ctor args, NOT just "is a struct
+/// ctor". Literal-arg ctors (`Point(3,4)`, `Counter(0)`) MUST stay on the
+/// compile-time `GlobalInit::Struct` path (`eval_static_init` `_` arm) — diverting
+/// them to the runtime synthetic fn regresses `static_global_method_call.gg` and is
+/// non-neutral C for the scalar fixtures. The literal-ness test here MIRRORS that
+/// catch-all exactly: `callee_name == type_name`, non-empty args, and at least one
+/// arg that `literal_to_global_init` rejects. (Collection/sync ctors — `Vector(..)`,
+/// `Mutex(..)`, etc. — are handled by their own `eval_static_init` arms and never
+/// reach the catch-all; the `type_id`-is-Struct guard excludes them here too.)
+fn struct_ctor_needs_synthetic_fn(
+    ctx: &LoweringContext,
+    type_id: TypeId,
+    expr: &crate::parser::ast::Expr,
+) -> bool {
+    use crate::parser::ast::Expr;
+
+    // The static's declared type must be a registered user struct. This excludes
+    // builtin collections / sync primitives (handled by dedicated arms above) and
+    // enums (routed via `is_enum_typed`).
+    let Some(type_name) = ctx.type_name_for_id(type_id) else {
+        return false;
+    };
+    let is_struct = matches!(
+        ctx.type_registry.get_type_def(type_name).map(|d| &d.kind),
+        Some(TypeDefKind::Struct(_))
+    );
+    if !is_struct {
+        return false;
+    }
+
+    // Match the ctor shape `<type_name>(args...)` and test literal-ness the SAME
+    // way `eval_static_init`'s catch-all does (`literal_to_global_init` per arg).
+    // We only need the synthetic fn when there is at least one NON-LITERAL arg —
+    // i.e. exactly the inputs that would otherwise hit `GlobalInit::Zeroed`.
+    // All-literal ctors (and the no-arg case) stay on the compile-time path:
+    //   - `Point(3,4)` / `Counter(0)` → catch-all builds `GlobalInit::Struct`,
+    //   - `T()` (no args) → catch-all leaves `GlobalInit::Zeroed` (unchanged).
+    let (callee_name, has_nonliteral_arg): (&str, bool) = match expr {
+        Expr::StructLiteral { name, args, .. } => (
+            name.node.as_str(),
+            args.iter().any(|a| literal_to_global_init(&a.node).is_none()),
+        ),
+        Expr::Call { callee, args, .. } => {
+            let cname = match &callee.node {
+                Expr::Identifier(n) => n.as_str(),
+                _ => return false,
+            };
+            (
+                cname,
+                args.iter()
+                    .any(|a| literal_to_global_init(&a.node.value.node).is_none()),
+            )
+        }
+        _ => return false,
+    };
+
+    // Only a ctor naming the static's own struct type, with ≥1 non-literal arg.
+    callee_name == type_name && has_nonliteral_arg
 }
 
 /// Bug B: build a synthetic `<T> __gg_static_init_<name>(): <T> __r = RHS; return __r`
