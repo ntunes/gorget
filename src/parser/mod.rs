@@ -302,6 +302,15 @@ impl Parser {
         }
     }
 
+    /// Build the `MissingInitializer` parse error for a `Type name` declaration
+    /// that has no `=` initializer. `span` is the binding name's span.
+    pub fn error_missing_init(&self, span: Span) -> ParseError {
+        ParseError {
+            kind: crate::errors::ParseErrorKind::MissingInitializer,
+            span,
+        }
+    }
+
     /// Skip tokens until we find a synchronization point.
     pub fn synchronize(&mut self) {
         loop {

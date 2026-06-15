@@ -5819,12 +5819,14 @@ init
 fn variable_no_initializer_errors() {
     // Negative counterpart: declaring a variable of any type WITHOUT an
     // initializer is a compile error — there is no uninitialized-variable form.
-    // NOTE: the diagnostic is currently the misleading "undefined name" (the
-    // no-`=` form falls through to expression parsing); when the logged TODO
-    // papercut lands (a clearer "requires an initializer" message), update this
-    // expected substring. The invariant under test — no-init decls are rejected
-    // at `gg check` — is what matters.
-    check_gg_fails("variable_no_initializer_errors.gg", "undefined name");
+    // The parser rejects the no-`=` shape at the declaration site with a clear
+    // diagnostic (rather than letting `int x` fall through to expression parsing,
+    // which used to produce the misleading "undefined name"). The invariant under
+    // test — no-init decls are rejected — is what matters.
+    check_gg_fails(
+        "variable_no_initializer_errors.gg",
+        "variable declaration requires an initializer",
+    );
 }
 
 #[test]

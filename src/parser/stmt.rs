@@ -19,6 +19,13 @@ enum DeclName {
         span: Span,
         kw: Keyword,
     },
+    /// A type-first declaration with no `=` initializer (`int x`). Carries the
+    /// name's span so the non-speculative caller can raise a clear "requires an
+    /// initializer" diagnostic instead of letting `int x` fall through to
+    /// expression parsing (where `x` would resolve as an undefined name).
+    MissingInit {
+        span: Span,
+    },
 }
 
 fn make_var_decl(
@@ -683,8 +690,17 @@ impl Parser {
             match p.peek() {
                 Token::Identifier(_) => {
                     let name = p.expect_identifier().ok()?;
-                    p.match_token(&Token::Eq)
-                        .then(|| DeclName::Name { is_mutable, type_, name })
+                    if p.match_token(&Token::Eq) {
+                        Some(DeclName::Name { is_mutable, type_, name })
+                    } else {
+                        // `<type> <name>` with no `=`. There is no expression
+                        // statement of this shape (Gorget has no juxtaposition),
+                        // so this is unambiguously a declaration missing its
+                        // initializer. Carry the name span out so the caller can
+                        // raise a clear diagnostic rather than falling through to
+                        // expression parsing (where `name` reads as undefined).
+                        Some(DeclName::MissingInit { span: name.span })
+                    }
                 }
                 // A keyword immediately followed by `=` is a keyword used as a
                 // variable name. The `peek_ahead(1) == Eq` guard is load-bearing:
@@ -714,6 +730,7 @@ impl Parser {
                     kw.as_name()
                 ),
             )),
+            Some(DeclName::MissingInit { span }) => Err(self.error_missing_init(span)),
             None => self.parse_expr_or_assign_stmt(),
         }
     }

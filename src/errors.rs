@@ -89,6 +89,11 @@ pub enum ParseErrorKind {
         depth: usize,
         limit: usize,
     },
+    /// A type-first declaration (`int x`) with no `=` initializer. Gorget has no
+    /// uninitialized-variable form, so every declaration must bind a value. Caught
+    /// at the declaration site (rather than letting `int x` fall through to
+    /// expression parsing, where `x` would resolve as an undefined name).
+    MissingInitializer,
 }
 
 impl std::fmt::Display for ParseError {
@@ -112,6 +117,13 @@ impl std::fmt::Display for ParseError {
                     f,
                     "expression nesting too deep (depth {depth} exceeds the limit of {limit}); \
                      help: break the expression into intermediate variables (let bindings)"
+                )
+            }
+            ParseErrorKind::MissingInitializer => {
+                write!(
+                    f,
+                    "variable declaration requires an initializer; \
+                     help: write `Type name = value` (Gorget has no uninitialized-variable form)"
                 )
             }
         }
