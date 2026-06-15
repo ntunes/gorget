@@ -314,6 +314,20 @@ String resolved_to_c_name(int rtid, TypeTable types, ScopeTable scopes, GirModul
             return resolved_to_c_name(elem_rtid, types, scopes, &gmod)
         case RTSlice(elem_rtid):
             return resolved_to_c_name(elem_rtid, types, scopes, &gmod)
+        case RTFunction(_, _, _):
+            # Lazy-iterator chain-link parity: a function-typed adapter targ
+            # (the `F` of `filter[F]`/`map[U,F]`, inferred from a bare-form
+            # closure/free-fn arg) is carried as a `GorgetClosure`, exactly as
+            # `resolved_to_gir_type`'s RTFunction arm and `resolved_to_spanned_type`
+            # (TFunction→GorgetClosure) already mangle it. Without this arm `F`
+            # fell to the `else` `int64_t` default, so a BARE-form chain-link
+            # VAR type (e.g. `FilterIter__TakeIter__VectorIter__int64_t…`)
+            # diverged from the method-mono symbol (`…__GorgetClosure`) and the
+            # `for x in chain:` SFor CC-failed on incompatible struct types.
+            # The turbofish form was unaffected (its AST `TFunction` already
+            # routes through GorgetClosure). One source of truth: all three
+            # RTFunction-mangle paths now agree.
+            return "GorgetClosure"
         else:
             return "int64_t"
 
@@ -547,23 +561,23 @@ int lookup_expr_gir_type(SpannedExpr sexpr, GirModule &gmod):
     return resolved_to_gir_type(rtid, gmod.tc_types, gmod.tc_scopes, &gmod)
 
 # Lazy-iterator phase 1b: the inferred method-level type-args recorded by
-# the typechecker for a bare-form (no-turbofish) Iterator terminal call,
-# keyed on the EMethodCall span.start. Returns the resolved-type ids exactly
+# the typechecker for a bare-form (no-turbofish) Iterator method call, keyed
+# on the EMethodCall UNIQUE span.END. Returns the resolved-type ids exactly
 # as `infer_method_targs` produced them (an `F` targ is an RTFunction id, an
 # `A` targ a primitive id). Empty vector when nothing recorded.
 #
-# ⚠ The parser shares one span.start across a whole method chain, so the
-# inner `.iter()` and outer `.fold()` of `v.iter().fold(0,f)` collide on the
-# key. We guard with the recorded method NAME: a reader only gets the entry
-# when its own method name matches the writer's, so `.iter()` never picks up
-# `.fold`'s targs (which would mangle a bogus
-# `Vector__int64_t__iter__int64_t__GorgetClosure`).
-Vector[int] bare_method_targ_rtids(int span_start, String mname, GirModule &gmod):
-    if gmod.tc_types.expr_method_targs.contains(span_start):
-        if gmod.tc_types.expr_method_targs_name.contains(span_start):
-            String recorded = gmod.tc_types.expr_method_targs_name.get(span_start).unwrap()
+# Keyed on span.END (not span.start) so a chain with multiple method-generic
+# links (`v.iter().take(N).filter(p).map(f)`) keeps EACH link's targs — the
+# parser shares one span.start across the whole chain, which collided away all
+# but one link's entry. span.end is unique per link (same invariant
+# `expr_link_types` uses). The recorded method NAME is still cross-checked as
+# a cheap belt-and-suspenders guard.
+Vector[int] bare_method_targ_rtids(int span_end, String mname, GirModule &gmod):
+    if gmod.tc_types.expr_method_targs.contains(span_end):
+        if gmod.tc_types.expr_method_targs_name.contains(span_end):
+            String recorded = gmod.tc_types.expr_method_targs_name.get(span_end).unwrap()
             if recorded == mname:
-                return gmod.tc_types.expr_method_targs.get(span_start).unwrap()
+                return gmod.tc_types.expr_method_targs.get(span_end).unwrap()
     return []
 
 # Mangle one recorded method-targ rtid to its C name, threading the

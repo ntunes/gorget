@@ -411,13 +411,21 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                                 if bt < 0 or bt == types.error_id:
                                     all_bound = false
                             if all_bound:
-                                types.expr_method_targs.put(span_start, bound)
-                                # Record the method name too: the parser shares
-                                # one span.start across a whole method chain, so
-                                # readers must verify the name to avoid an inner
-                                # non-generic call (`.iter()`) consuming this
-                                # outer entry (`.fold`). See the side-table doc.
-                                types.expr_method_targs_name.put(span_start, method_name)
+                                # Key on the call's UNIQUE span.END, not span.start.
+                                # The parser shares ONE span.start across a whole
+                                # method chain, so a chain with TWO method-generic
+                                # links (`v.iter().take(N).filter(p).map(f)` — both
+                                # `.filter[F]` AND `.map[U,F]`) collides on
+                                # span.start: only the last `put` survives, so the
+                                # other link's bare-form proto records NO targs and
+                                # its adapter-constructor method is CALLED-but-never-
+                                # DEFINED (CC-fail). span.end is unique per link
+                                # (same invariant `expr_link_types` already relies
+                                # on), so every method-generic link in the chain
+                                # keeps its own targs. The method NAME is still
+                                # recorded as a cheap cross-check for the reader.
+                                types.expr_method_targs.put(sexpr.span.end, bound)
+                                types.expr_method_targs_name.put(sexpr.span.end, method_name)
                     # Receiver-generic substitution: if the method's return
                     # type is `T` and the receiver is `Vector[T]`-shaped,
                     # bind T to the receiver's i-th type arg. We piggy-back

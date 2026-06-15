@@ -121,7 +121,7 @@ void proto_walk_expr(SpannedExpr sexpr, GirModule &gmod, Vector[ProtoMethInst] &
                 # call's span, record the SAME instance the call-site mangle
                 # produces — this drives BOTH the fn_sigs pre-reg AND the
                 # body-emit, so the bare symbol is DEFINED (not just called).
-                Vector[int] bm_tids = bare_method_targ_rtids(sexpr.span.start, mname, &gmod)
+                Vector[int] bm_tids = bare_method_targ_rtids(sexpr.span.end, mname, &gmod)
                 if bm_tids.len() > 0:
                     int recv_tid_b = lookup_expr_gir_type(*recv_box, &gmod)
                     if recv_tid_b >= 0:

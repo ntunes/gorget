@@ -1492,7 +1492,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 # feeds the SAME symbol the body-emit + fn_sigs pre-reg path
                 # produce, so the call dispatches to a DEFINED userland
                 # adapter method (never a bare CALLED-but-undefined symbol).
-                Vector[int] _bare_mtargs = bare_method_targ_rtids(sexpr.span.start, mname, &gmod)
+                Vector[int] _bare_mtargs = bare_method_targ_rtids(sexpr.span.end, mname, &gmod)
                 for _bmt in _bare_mtargs:
                     _proto_mtarg_suffix = _proto_mtarg_suffix + "__" + bare_method_targ_c_name(_bmt, &gmod)
             full_name = full_name + _proto_mtarg_suffix
