@@ -761,7 +761,16 @@ String emit_box_allocators_from_lir(LirModule &m):
                     else:
                         pass
                 String suffix = ""
-                if inst_name.starts_with(box_prefix) and inst_name.len() > box_plen:
+                # A `Box__<inner>(x)` CONSTRUCTOR call needs its allocator
+                # emitted. A `Box__<inner>__get`/`__set` METHOD call does NOT —
+                # it dispatches to an inline get/set wrapper, and slicing
+                # `<inner>__get` here would emit a bogus
+                # `__gorget_box_alloc_<inner>__get(__gg_<inner>__get)` →
+                # cc-fail (unknown type). Discriminate via the typed
+                # `type_runtime_map`: a genuine box-ctor `inst_name` is
+                # registered as a "Box" type; a method-call name is not
+                # (no name-matching on the method suffix — CLAUDE.md rule 2).
+                if inst_name.starts_with(box_prefix) and inst_name.len() > box_plen and m.type_runtime_map.get(inst_name).unwrap_or("") == "Box":
                     suffix = inst_name.slice(box_plen, inst_name.len())
                 elif inst_name.starts_with(emit_prefix) and inst_name.len() > emit_prefix.len():
                     suffix = inst_name.slice(emit_prefix.len(), inst_name.len())
@@ -801,6 +810,68 @@ String emit_box_allocators_from_lir(LirModule &m):
             out = out + box_alloc_for_field_type(evds.get(vk).unwrap().field_type_name, &seen, emit_prefix, &m)
             vk += 1
         ek += 1
+    if out != "":
+        out = out + "\n"
+    return out
+
+# Emit the inline `Box__<inner>__get`/`Box__<inner>__set` wrapper functions for
+# every `b.get()`/`b.set(v)` call site. Mirrors Rust gg's `emit_box_wrapper`
+# (`src/backend/c_lir/helpers.rs:304-315`): get reads `*(elem*)self`, set
+# writes `*(elem*)self = val`. Box is `typedef void* Box__<inner>` so `self`
+# IS the heap pointer; the cast-and-deref reaches the boxed value. There is no
+# `gorget_box_get`/`gorget_box_set` runtime symbol — these wrappers are the
+# generated dispatch target the LIR box-method map now returns.
+String emit_box_method_wrappers(LirModule &m):
+    Vector[String] seen_get = []
+    Vector[String] seen_set = []
+    String out = ""
+    String box_prefix = "Box__"
+    int box_plen = box_prefix.len()
+    int fi = 0
+    while fi < m.functions.len():
+        int bi = 0
+        while bi < m.functions.get(fi).unwrap().blocks.len():
+            int ii = 0
+            while ii < m.functions.get(fi).unwrap().blocks.get(bi).unwrap().insts.len():
+                String inst_name = ""
+                match m.functions.get(fi).unwrap().blocks.get(bi).unwrap().insts.get(ii).unwrap():
+                    case ICallExtern(_, name, _, _, _):
+                        inst_name = name
+                    case ICall(_, fid, _):
+                        if fid >= 0 and fid < m.functions.len():
+                            inst_name = m.functions.get(fid).unwrap().name
+                    else:
+                        pass
+                if inst_name.starts_with(box_prefix) and inst_name.len() > box_plen:
+                    String rest = inst_name.slice(box_plen, inst_name.len())
+                    # Split off the trailing `__get` / `__set` method suffix.
+                    if rest.ends_with("__get"):
+                        String inner = rest.slice(0, rest.len() - 5)
+                        bool already = false
+                        int sg = 0
+                        while sg < seen_get.len():
+                            if seen_get.get(sg).unwrap() == inner:
+                                already = true
+                            sg += 1
+                        if not already and inner.len() > 0:
+                            seen_get.push(inner.clone())
+                            String elem = box_alloc_c_type(inner)
+                            out = out + "static inline " + elem + " Box__" + inner + "__get(Box__" + inner + " self) { return *(" + elem + "*)self; }\n"
+                    elif rest.ends_with("__set"):
+                        String inner = rest.slice(0, rest.len() - 5)
+                        bool already_s = false
+                        int ss = 0
+                        while ss < seen_set.len():
+                            if seen_set.get(ss).unwrap() == inner:
+                                already_s = true
+                            ss += 1
+                        if not already_s and inner.len() > 0:
+                            seen_set.push(inner.clone())
+                            String elem = box_alloc_c_type(inner)
+                            out = out + "static inline void Box__" + inner + "__set(Box__" + inner + " self, " + elem + " val) { *(" + elem + "*)self = val; }\n"
+                ii += 1
+            bi += 1
+        fi += 1
     if out != "":
         out = out + "\n"
     return out
@@ -6666,6 +6737,8 @@ String generate_c(LirModule &m):
     # strings, leaving the box allocators undefined at link time. The
     # LIR-based scan is robust regardless.
     out = out + emit_box_allocators_from_lir(&m)
+    # `b.get()`/`b.set(v)` inline wrappers (no `gorget_box_get` runtime symbol).
+    out = out + emit_box_method_wrappers(&m)
 
     out = out + body
     return out

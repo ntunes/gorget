@@ -997,6 +997,22 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         elif ident_name.contains("__"):
                             is_type = true
                     if is_type:
+                        # `Box.new(x)` / `Heap.new()` etc. parse as a static
+                        # method call, but `Box.new(value)` is semantically the
+                        # bare-name `Box(value)` constructor (heap-alloc). Rust
+                        # gg normalises both entry points to identical IR
+                        # (`src/ir/lowering/exprs/methods.rs:128` mirrors the
+                        # `Box(value)` ctor at `exprs/mod.rs:1638`). Route the
+                        # self-host `Box.new(x)` through `lower_call("Box", …)`
+                        # so it hits the canonical `func_name == "Box"`
+                        # IBoxAlloc path in lir_lower (emit_box_alloc) — instead
+                        # of the generic static path, which mangles `Box__new`
+                        # and (via the box-alloc generator) emits a bogus
+                        # `__gorget_box_alloc_new(__gg_new)` → cc-fail.
+                        if ident_name == "Box" and mname == "new" and margs.len() == 1:
+                            String _box_ctor = "Box"
+                            Vector[SpannedType] _box_no_targs = []
+                            return lower_call(&ctx, &_box_ctor, &margs, &_box_no_targs, &gmod)
                         # Static method / variant ctor: dispatch via
                         # classify_call_arg against the mangled callee
                         # name. Built early enough that the callee name

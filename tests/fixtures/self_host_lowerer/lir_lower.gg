@@ -1431,10 +1431,17 @@ String map_runtime_name(String name, LirModule &m, GirModule &gmod):
     if type_category_for_name(name, &m) == "Box":
         String method = extract_method_name(name)
         match method:
-            case "new":
-                return "gorget_box_new"
             case "get":
-                return "gorget_box_get"
+                # `b.get()` → the generated `Box__<inner>__get(self)` inline
+                # wrapper (emitted by emit_box_method_wrappers). Mirrors Rust
+                # gg, which dispatches to the generated `Box__T__get` function
+                # (`src/backend/c_lir/helpers.rs:310`), NOT a runtime symbol —
+                # there is no `gorget_box_get` in the C runtime.
+                return name
+            case "set":
+                # `b.set(v)` → the generated `Box__<inner>__set(self, val)`
+                # inline wrapper. Same rationale as `get`.
+                return name
             case "free" | "drop":
                 return "gorget_box_free"
             case "clone":
@@ -2154,6 +2161,25 @@ bool is_ptr_type(int tid, GirModule &gmod):
             return true
         else:
             return false
+
+# True iff the LIR type-id names a `Box__<inner>` struct. Box types register as
+# structs (`>= LT_STRUCT_BASE`) but are `typedef void*` in C (pointer-
+# represented). A box VALUE therefore lives in a slot whose `slot_ty` is a
+# struct id even though the slot HOLDS a pointer — the by-pointer-ABI arg path
+# must LOAD that pointer (ISlotLoad), not address-take the slot (ISlotAddr).
+# Reads the typed `type_runtime_map` (no name-matching). This is the
+# `lir_type_is_box` twin (defined in lir_codegen.gg, not importable here) —
+# kept in sync with the inlined copy in the GIDropIfAlive Box-drop path below.
+bool lir_slot_is_box(int ty, LirModule &m):
+    if ty < LT_STRUCT_BASE:
+        return false
+    int sid = ty - LT_STRUCT_BASE
+    if sid < 0 or sid >= m.structs.len():
+        return false
+    String nm = m.structs.get(sid).unwrap().name
+    if not m.type_runtime_map.contains(nm):
+        return false
+    return m.type_runtime_map.get(nm).unwrap_or("") == "Box"
 
 # Check if a function name starts with a scalar type prefix (e.g. int64_t__push).
 # These come from the self-host GIR where T__method is used instead of Vector__T__method.
@@ -3090,8 +3116,14 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                         case OpCopy(local_id):
                             int slot = local_to_slot.get(local_id).unwrap()
                             int slot_ty = f.slots.get(slot).unwrap().ty
-                            if slot_ty == LT_PTR or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE):
-                                # Slot already holds a pointer — load value.
+                            if slot_ty == LT_PTR or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE) or lir_slot_is_box(slot_ty, &m):
+                                # Slot already holds a pointer (incl. a Box,
+                                # which is `typedef void*` even though its slot
+                                # type is `>= LT_STRUCT_BASE`) — load the pointer
+                                # value, NOT `&slot`. Passing `&slot` for a Box
+                                # param sends the box-slot ADDRESS (`void**`) so
+                                # `*b` in the callee reads garbage → segfault
+                                # (snag41_audit_box_string_deref).
                                 int arg_val = lower_operand(arg, &f, bb, &local_to_slot, &m)
                                 lir_args.push(arg_val)
                             else:
@@ -3101,7 +3133,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                         case OpMove(local_id):
                             int slot = local_to_slot.get(local_id).unwrap()
                             int slot_ty = f.slots.get(slot).unwrap().ty
-                            if slot_ty == LT_PTR or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE):
+                            if slot_ty == LT_PTR or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE) or lir_slot_is_box(slot_ty, &m):
                                 int arg_val = lower_operand(arg, &f, bb, &local_to_slot, &m)
                                 lir_args.push(arg_val)
                             else:
@@ -3124,7 +3156,9 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                             # address (the canonical borrow shape).
                             int slot = local_to_slot.get(local_id).unwrap()
                             int slot_ty = f.slots.get(slot).unwrap().ty
-                            if slot_ty == LT_PTR or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE):
+                            if slot_ty == LT_PTR or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE) or lir_slot_is_box(slot_ty, &m):
+                                # Box / pointer-holding slot — pass the pointer
+                                # value, not `&slot` (see the OpCopy arm above).
                                 int arg_val = lower_operand(arg, &f, bb, &local_to_slot, &m)
                                 lir_args.push(arg_val)
                             else:
@@ -3315,11 +3349,13 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                             int slot = local_to_slot.get(local_id).unwrap()
                             int slot_ty = f.slots.get(slot).unwrap().ty
                             # If the slot already holds a pointer (e.g. `&self`
-                            # params lowered as void*/Ptr-to-struct), LOAD the
-                            # pointer value instead of taking the slot's address
-                            # — otherwise downstream `(T*)&__slot` reads slot
-                            # storage as a struct and gets stack garbage.
-                            if slot_ty == LT_PTR or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE):
+                            # params lowered as void*/Ptr-to-struct, OR a Box —
+                            # `typedef void*` though its slot type is
+                            # `>= LT_STRUCT_BASE`), LOAD the pointer value instead
+                            # of taking the slot's address — otherwise downstream
+                            # `(T*)&__slot` reads slot storage as a struct and
+                            # gets stack garbage (the Box-as-param segfault class).
+                            if slot_ty == LT_PTR or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE) or lir_slot_is_box(slot_ty, &m):
                                 int arg_val = lower_operand(arg, &f, bb, &local_to_slot, &m)
                                 lir_args.push(arg_val)
                             else:
@@ -3329,7 +3365,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                         case OpMove(local_id):
                             int slot = local_to_slot.get(local_id).unwrap()
                             int slot_ty = f.slots.get(slot).unwrap().ty
-                            if slot_ty == LT_PTR or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE):
+                            if slot_ty == LT_PTR or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE) or lir_slot_is_box(slot_ty, &m):
                                 int arg_val = lower_operand(arg, &f, bb, &local_to_slot, &m)
                                 lir_args.push(arg_val)
                             else:
@@ -3351,7 +3387,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                             # Phase D step 3: borrow → slot address shape.
                             int slot = local_to_slot.get(local_id).unwrap()
                             int slot_ty = f.slots.get(slot).unwrap().ty
-                            if slot_ty == LT_PTR or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE):
+                            if slot_ty == LT_PTR or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE) or lir_slot_is_box(slot_ty, &m):
                                 int arg_val = lower_operand(arg, &f, bb, &local_to_slot, &m)
                                 lir_args.push(arg_val)
                             else:
