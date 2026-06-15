@@ -3952,3 +3952,113 @@ void main():
         assert!(warning.to_string().contains("unused import `helper`"));
     }
 
+    // ─── Arena borrow-escape (non-Copy `.get()` aliasing into arena buffer) ───
+
+    #[test]
+    fn arena_borrow_escape_assign_outer_rejected() {
+        // Binding a non-Copy `.get().unwrap()` borrow of an arena-scoped Vector
+        // to an OUTER variable aliases into the arena buffer → UAF at scope exit.
+        let source = "\
+struct Arena:
+    int cap
+
+void main():
+    String peek = \"init\"
+    with Arena(4096) as pool:
+        Vector[String] v = [\"payload\"]
+        peek = v.get(0).unwrap()
+    print(peek)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(
+                k,
+                SemanticErrorKind::ArenaEscape {
+                    kind: crate::semantic::errors::ArenaEscapeKind::AssignOuter { .. },
+                    ..
+                }
+            )),
+            "expected ArenaEscape::AssignOuter for arena borrow-escape, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn arena_borrow_escape_return_rejected() {
+        // Returning a non-Copy `.get().unwrap()` borrow of an arena-scoped Vector
+        // escapes the arena scope → the returned borrow dangles after destroy.
+        let source = "\
+struct Arena:
+    int cap
+
+String first():
+    with Arena(4096) as pool:
+        Vector[String] v = [\"payload\"]
+        return v.get(0).unwrap()
+    return \"fallback\"
+
+void main():
+    print(first())
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(
+                k,
+                SemanticErrorKind::ArenaEscape {
+                    kind: crate::semantic::errors::ArenaEscapeKind::Return,
+                    ..
+                }
+            )),
+            "expected ArenaEscape::Return for arena borrow-escape, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn arena_copy_element_escape_ok() {
+        // A Copy element (`int`) is value-copied out — no aliasing into the arena.
+        // Both the AssignOuter and Return shapes must stay ACCEPTED.
+        let source = "\
+struct Arena:
+    int cap
+
+int first():
+    with Arena(4096) as pool:
+        Vector[int] v = [42]
+        return v.get(0).unwrap()
+    return 0
+
+void main():
+    int peek = 0
+    with Arena(4096) as pool:
+        Vector[int] v = [42]
+        peek = v.get(0).unwrap()
+    print(peek)
+    print(first())
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::ArenaEscape { .. })),
+            "unexpected ArenaEscape for Copy-element arena `.get()`, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn arena_borrow_inner_binding_ok() {
+        // Binding the `.get()` borrow to an INNER (in-scope) variable is safe:
+        // the borrow does not outlive the arena. Must stay ACCEPTED.
+        let source = "\
+struct Arena:
+    int cap
+
+void main():
+    with Arena(4096) as pool:
+        Vector[String] v = [\"payload\"]
+        String inner = v.get(0).unwrap()
+        print(inner)
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::ArenaEscape { .. })),
+            "unexpected ArenaEscape for in-scope arena borrow binding, got: {:?}", errors
+        );
+    }
+

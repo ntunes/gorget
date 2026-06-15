@@ -1,16 +1,13 @@
-# Struct with a Vector field. Extract a borrow of the field, move/drop the struct,
-# keep the borrow.
+# Arena borrow-escape: bind a non-Copy `.get()` borrow of an arena-scoped Vector
+# to an OUTER-scope variable. The borrow aliases into the arena's backing buffer,
+# which `gorget_arena_destroy` frees at `with`-scope exit, so `peek` dangles —
+# a heap-use-after-free at `print(peek)`. `gg check` must REJECT this.
 
-struct Holder:
-    Vector[int] data
-
+from std.alloc import Arena
+from std.collections import Vector
 void main():
-    Holder h = Holder([1, 2, 3, 4, 5])
-    Option[int] peek = h.data.get(2)
-    # Consume h completely.
-    Holder h2 = h
-    # If peek is a borrow into h.data, and h.data was moved into h2, the borrow is dangling.
-    match peek:
-        case Some(v): print(v)
-        case None(): print(-1)
-    print(h2.data.get(2).unwrap())
+    String peek = "init"
+    with Arena(4096) as pool:
+        Vector[String] v = ["payload-in-arena-memory"]
+        peek = v.get(0).unwrap()
+    print(peek)

@@ -439,6 +439,32 @@ impl<'a> BorrowChecker<'a> {
                                         value.span,
                                     );
                                 }
+                            } else if !self.arena_scoped_vars.contains(&target_def_id) {
+                                // Borrow-producing RHS (`.get()`/`.unwrap()`/index/field
+                                // chain) escaping to an outer variable. Trace the borrow
+                                // to its root collection; if the root is arena-scoped and
+                                // the BOUND value's type is non-Copy, this aliases into the
+                                // arena buffer and dangles when the arena is destroyed.
+                                if let Some((root, _)) =
+                                    self.find_collection_source_with_path(value)
+                                {
+                                    let bound_is_resource = self.scopes.get_def(target_def_id)
+                                        .type_id
+                                        .map_or(false, |tid| {
+                                            !is_copy_type(tid, self.types, self.scopes)
+                                        });
+                                    if bound_is_resource && self.arena_scoped_vars.contains(&root) {
+                                        self.error(
+                                            SemanticErrorKind::ArenaEscape {
+                                                name: self.scopes.get_def(root).name.clone(),
+                                                kind: ArenaEscapeKind::AssignOuter {
+                                                    target: target_name.clone(),
+                                                },
+                                            },
+                                            value.span,
+                                        );
+                                    }
+                                }
                             }
                         }
                     }
@@ -641,12 +667,38 @@ impl<'a> BorrowChecker<'a> {
 
                     // Arena escape check: cannot return arena-scoped values
                     if self.arena_depth > 0 {
+                        let mut bare_id_fired = false;
                         if let Expr::Identifier(name) = &expr.node {
                             if let Some(&def_id) = self.resolution_map.get(&expr.span.start) {
                                 if self.arena_scoped_vars.contains(&def_id) {
                                     self.error(
                                         SemanticErrorKind::ArenaEscape {
                                             name: name.clone(),
+                                            kind: ArenaEscapeKind::Return,
+                                        },
+                                        expr.span,
+                                    );
+                                    bare_id_fired = true;
+                                }
+                            }
+                        }
+                        if !bare_id_fired {
+                            // Borrow-producing return (`return v.get(0).unwrap()`/index/
+                            // field chain) escaping the arena scope. Trace the borrow to
+                            // its root collection; if the root is arena-scoped and the
+                            // returned element type is non-Copy, the returned borrow
+                            // dangles once the arena is destroyed at scope exit.
+                            if let Some((root, _)) =
+                                self.find_collection_source_with_path(expr)
+                            {
+                                let ret_is_resource = self.current_return_type_id
+                                    .map_or(false, |tid| {
+                                        !is_copy_type(tid, self.types, self.scopes)
+                                    });
+                                if ret_is_resource && self.arena_scoped_vars.contains(&root) {
+                                    self.error(
+                                        SemanticErrorKind::ArenaEscape {
+                                            name: self.scopes.get_def(root).name.clone(),
                                             kind: ArenaEscapeKind::Return,
                                         },
                                         expr.span,
