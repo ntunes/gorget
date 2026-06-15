@@ -250,6 +250,18 @@ at authoring time and stamped "verified against `<commit>`"
 ([Chapter 0](00-how-to-read.md)), precisely because a transcribed figure is
 presumed stale.
 
+The cheapest re-verify is checking whether the work *already landed*. Two recent
+saves: a Vector-`.slice()`/`.substr()` return-type fix was re-confirmed
+present-in-current-source before being acted on as "open" — the commit was
+already an ancestor of `HEAD` and its snapshot already existed (DONE.md `07b058c9`,
+re-verified by scout); and an LLVM-backend batch (FIX A `85d9fecd`, FIX B
+`2d720077`) was re-checked under `--backend=llvm` and found *passing* before
+anyone re-implemented it (DONE.md / TODO.md "LLVM BACKEND → GREEN"). Re-running
+the failing case for thirty seconds is always cheaper than re-deriving a fix that
+already shipped. The corollary: a "live bug" or "open task" inherited from a
+dated note is a *hypothesis*, not a fact — reproduce it on the current tip
+first.
+
 A corollary specific to *this* book and the self-host: **the comparison scores
 are not facts you can quote.** The next section is why.
 
@@ -371,6 +383,31 @@ estimates in this tree were ~0 real because they were source-read. "It looks lik
 this fixes ~14 fixtures" is worthless until you have built the change and watched
 14 fixtures flip. A scout that estimates a number without running the code has not
 scouted.
+
+The discipline catches over-claims in *both* directions — a yield estimated too
+high, and an approach that *measures negative*. A higher-order-function port was
+floated as "~9 → ~1 remaining"; the honest staged landing flipped one Vector-HOF
+fixture and explicitly down-scoped the optimistic count (`vector_higher_order`,
+self-host commit `4158530b`, see DONE.md / `docs/plans/trackA_collection_hof_port.md`).
+And a "cheap composite-span-key" re-key proposed for the lazy-`Iterator[T]` chain
+fix (TODO item #39) was *measured at **−4*** — it regressed four fixtures — so the
+shipped fix used a per-link `span.end` oracle instead (DONE.md "TASK #39"). A
+prototype that comes back negative is one of the most valuable scout outcomes
+there is: it kills a plausible-looking plan before it costs a brief-and-execute
+cycle.
+
+A scout's premise can be wrong even when its conclusion is "go" — so verify the
+*shape* of the claim, not just the number. A Track-A collection-HOF brief was
+told to "start from the parked commit `4158530b`"; a brief-reviewer flagged it as
+a retired branch, having **conflated it with `eb730d49`** — a *different* commit,
+in the Rust C-backend (`src/backend/c_lir/emit_types.rs`), two months earlier,
+that *deleted* inline-C HOF helpers in favor of `HofExpand`. `git` refuted the
+conflation in seconds: `4158530b` is a *self-host* commit doing inline expansion,
+parked (not retired), and aligned with Rust's current direction
+(`docs/plans/trackA_collection_hof_port.md:84-90`). Two commits that "sound like
+the same change" can be on opposite sides of the compiler and months apart —
+cross-check the hash, the files it touches, and the date before you let a
+review-pass conclusion ("that's already retired") kill or redirect a plan.
 
 **Then review in sequential fresh passes.** A fresh agent reviews the artifact;
 you fold its findings; a *new* fresh agent reviews the corrected version; repeat

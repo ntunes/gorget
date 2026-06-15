@@ -295,6 +295,50 @@ The valid `(CopySemantics, DropStrategy)` combinations and what each
 encodes are tabulated in the `TypeMetadata` doc comment
 (`src/ir/types.rs:118-141`).
 
+## Global materialization: rooting a `Place` at a local
+
+A `Place` roots only at a `LocalId` plus a projection path
+(`src/ir/instructions.rs:5`); there is no `Place` base for a module-level
+`static`. So a global has no place to *project into* — and a naive
+field access or index read on one degrades silently. Field reads on a
+static struct fall through to `const unit`/0 and field *stores* emit zero
+instructions (the write is silently dropped); an index read on a static
+const-folds to 0. The bug is invisible at the surface: `P.x` returns
+garbage, `P.x = 99` does nothing, and nothing errors.
+
+The fix is a single pattern — **materialize the global identifier into an
+addressable pointer local, then let the existing pointer-deref place path
+project through it.** The helper `materialize_global_field_base`
+(`src/ir/lowering/exprs/mod.rs:2321`) detects an `Expr::Identifier`
+naming a global, emits `&NAME` via `Constant::GlobalRefPtr` (a real
+`*mut <T>`) into a fresh local typed `MutPtr(<struct>)` through
+`register_mut_ptr_type`, and returns `Operand::Copy` of that pointer
+local. The existing field path then appends a `Projection::Deref` and
+walks through it, so reads, resource-field borrows, and write-through
+stores all work unchanged. Crucially the pointer local is typed
+`MutPtr(base)` — *not* `GlobalRefPtr`'s own type inference, which returns
+the bare base type — because the typed pointee is what drives the
+downstream `Deref` projection.
+
+This mirrors the index-load precedent (`lower_index_access`,
+`src/ir/lowering/exprs/methods.rs:3272-3282`), which materializes a
+`GlobalRef`-typed index base into a local before the place path emits the
+real `index_load`. But the two diverge deliberately on read mode: the
+index path materializes with `AssignMode::Borrow`/`Copy` (a read of a
+value local — a resource collection borrows zero-cost, a value type
+copies), whereas the field path uses `MutPtr`+`Deref` because the *store*
+path (`P.x = 99`) must write **through** to the global, not to a stack
+copy. Read-only materialization can copy; a mutable place root cannot.
+
+Because the same defect lives at every field entry point, the helper is
+wired into all three (sibling-site discipline, Ch. 24): the place
+resolver `try_resolve_field_place` (`exprs/mod.rs:2362`, which covers the
+field-store callers and the nested-recursion case),
+`lower_field_access` (`exprs/mod.rs:2069`), and the field-store fallback
+in `assigns.rs` (`src/ir/lowering/stmts/assigns.rs:638`). One helper,
+three call sites, so a future fourth field entry point is forced through
+the shared path rather than re-growing the silent-drop hole.
+
 ## Closure lowering and capture
 
 > Note: an earlier internals doc `closure-capture.md`

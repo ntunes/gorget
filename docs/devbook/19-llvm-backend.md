@@ -300,6 +300,20 @@ the C backend / shared LIR layer:
   name-pattern parsers, but they recognize the same monomorphized-symbol forms the
   C backend's glue emits, so the two ends of the link stay consistent.
 
+The discipline here is **read the canonical table; never re-derive a value the LIR
+layer already stored.** Both backends share the *table*, not a re-computation.
+The size, pointee-type, and ABI-classification facts the backend needs are
+written once into canonical fields (`computed_c_size`, `func.pointee_types`) and
+read identically by `c_lir` and `llvm`. When the LLVM backend instead reconstructs
+one of these locally — a move-out null-zero size from a fragile `FieldPtr` scan,
+or a cover-struct size from a field-sum — it diverges from C and miscompiles
+(double-free, or a wrong `sret` classification → SIGSEGV). Both bugs are the same
+layering smell, and the worked examples are in
+[Chapter 24 — "A backend re-deriving a canonical value"](24-layering-discipline.md#a-backend-re-deriving-a-canonical-value-rule-3-at-the-backend-boundary).
+This is exactly why a regression on one backend but not the other (next section)
+almost always means a change touched a backend-specific *re-derivation* rather
+than the shared table.
+
 Note: the LLVM backend carries a dead-code `infer_inst_type`
 (`#[allow(dead_code)]` at `src/backend/llvm/mod.rs:534`, fn at `535`) — it has
 zero callers and makes no emit decisions. The live value-type recovery for

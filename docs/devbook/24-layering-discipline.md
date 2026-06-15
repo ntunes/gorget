@@ -290,11 +290,68 @@ call site no longer *invents* a symbol — it looks one up. The DCE suffix-match
 load-bearing once the symbol the call site spells is the symbol the registry
 holds.
 
+### A backend re-deriving a canonical value (Rule 3, at the backend boundary)
+
+The same lesson has a backend-specific shape: **a backend that re-derives a value
+the canonical post-optimization table already holds is a layering smell — read
+the table.** By the time a backend runs, the LIR layer has computed and stored the
+facts the backend needs (sizes, pointee types, ABI classifications) into
+canonical fields. A backend that reconstructs one of those — from a local scan,
+a field-sum, a name — is redoing a resolved decision it is not licensed to
+disagree with (Rule 3, one source of truth; Rule 4, resolve once / write
+through). Two live instances, both in the LLVM backend, both where the
+re-derivation *got it wrong*:
+
+- **Move-out field null-zero sized by a fragile scan, not the pointee table.** A
+  drop-elaboration move-out zeroes the moved-from struct/enum field by storing
+  `Null` into a pointer. The LLVM `Store` handler sized that zero by scanning the
+  module for an `Inst::FieldPtr` whose `dst` was the store pointer
+  (`src/backend/llvm/mod.rs:3601`, `dest_field_ty`) — but a move-out store's `ptr`
+  is a `Cast`/byte-`getelementptr` result, *not* a `FieldPtr` dst, so the scan
+  returned `None` and the fallback emitted an 8-byte `store ptr null` (only the
+  enum tag). The moved-from field's heap-`String` pointer at offset 8 survived
+  the partial zero and was *also* copied into the destination → both copies
+  dropped at scope exit → double-free. The C backend never had the bug because it
+  sizes this from the canonical `func.pointee_types` table (the C oracle is at
+  `src/backend/c_lir/mod.rs:2729-2737`). The fix reads the *same* table: when the
+  value is `Null` and `func.pointee_types[ptr]` is a `Struct(sid)`, emit a
+  full-struct `memset` (`src/backend/llvm/mod.rs:3640-3652`), making the two
+  backends byte-size-identical at the site. It matches `Struct(sid)` *only* —
+  genuine `Ptr`/`PtrTo` fields stay on the 8-byte path, because over-zeroing a
+  pointer field would itself diverge from C.
+
+- **Cover-struct size taken as a field-sum, not the runtime ABI size.** A *cover
+  struct* declares a small field that stands in for a larger runtime layout
+  (`struct File: int handle` is an 8-byte gorget-visible cover for the 16-byte
+  runtime `GorgetFile`; `struct TlsSocket: int _handle` covers a 24-byte
+  handle). Layout queries (`is_small_aggregate`, `sizeof_lir_type`) read
+  `computed_c_size`, so if that field holds the 8-byte field-sum, every
+  downstream ABI decision is wrong: a register-return where the runtime returns
+  by `sret` (callee reads garbage → SIGSEGV), or a `File f = !x` move-out that
+  memcpy's 8 bytes into a 16-byte slot (upper half uninitialized → corrupt
+  handle). The fix is at the *one* canonical write — `compute_struct_sizes`
+  (`src/lir/mod.rs:1852-1884`) sets `computed_c_size =
+  field_sum.max(opaque_runtime_size(name))`. `opaque_runtime_size` returns `None`
+  for ordinary user structs (no change) and `Some(==field_sum)` for already-agreeing
+  singletons (no-op), so only the genuine cover-struct divergence is corrected —
+  and because it's at the canonical write, it flips every downstream ABI decision
+  *consistently on both backends* at once. (Chapter 19 documents the matching
+  `%File`/`%GorgetFile` LLVM struct override; once `computed_c_size` is correct
+  the `needs_sret` path follows it.)
+
+The tell in both cases is identical to the index/trait examples above: the
+backend is reconstructing a fact (a field size, a struct size) instead of reading
+the typed table one layer up. The disciplined fix is never "make the backend's
+scan smarter" — it is "read the canonical field," and if the canonical field is
+itself wrong, fix it at its single write site so *both* backends inherit the
+correction.
+
 All of these examples reduce to the same lesson: the bug is a missing or
-mis-read typed field — a typed mode honoured too narrowly, or a resolved symbol
-reconstructed instead of written through — one layer up, and the "obvious" fix at
-the consumer (a save/restore, a name-prefix parse, a DCE suffix-match) is
-complexity that the correct write-site fix erases.
+mis-read typed field — a typed mode honoured too narrowly, a resolved symbol
+reconstructed instead of written through, or a backend re-deriving a canonical
+size instead of reading the table — one layer up, and the "obvious" fix at the
+consumer (a save/restore, a name-prefix parse, a DCE suffix-match, a smarter
+scan) is complexity that the correct write-site fix erases.
 
 ## How to apply this when extending the compiler
 

@@ -367,3 +367,20 @@ printed counts do. C-emit is the largest remaining self-host parity gap. Because
 the self-host fuses expansion into emission rather than routing through a BIR
 layer, any canonical-op divergence surfaces in this codegen comparison, not in a
 BIR-specific comparison test — there is none.
+
+**Porting BIR to the self-host is an architectural-fidelity gap, not a
+correctness one.** The fusion is a *deliberate* simplification: it produces
+identical C, so it costs the self-host **zero runtime parity** — there is no
+fixture the BIR layer would make the self-host compile *correctly* that the fused
+path compiles wrong. What the self-host gives up is the *property* BIR exists for:
+the newtype that makes "the backend never sees an unlowered canonical op"
+unforgeable at the type level ([above](#why-a-layer-not-just-a-pass)), the
+primitives-only validator as a structural guard ([Ch. 25](25-structural-guards.md)),
+and the once-per-shape synthesis pool. Adding a `bir.gg` layer to the self-host —
+a newtype over its LIR, an expansion pass mirroring `lower.rs`, and a
+primitives-only validator — would make the self-host's pipeline shape match
+Rust's, reinforcing the self-host's role as the language's elegance showcase
+([Ch. 26](26-self-host-frontend.md); `CLAUDE.md` § "Self-host as the elegance
+showcase"). Because it buys no north-star parity (the metric is *runtime* parity
+with Rust), it is a future *owner-funded* fidelity/showcase item, prioritized as
+elegance rather than against the parity backlog.
