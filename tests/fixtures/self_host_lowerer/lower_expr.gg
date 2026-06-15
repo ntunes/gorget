@@ -1460,6 +1460,22 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # Build the mangled method name once — used both for the
             # receiver dispatch and the per-arg classify_call_arg.
             String recv_type_name = local_type_name(recv, &ctx, &gmod)
+            # ── Vector higher-order-function (HOF) inline-loop intercept ──
+            # `v.map/filter/fold/reduce/any/all((closure))` has no userland
+            # `Vector__T__method` body — Rust gg desugars these to inline
+            # loops (src/lir/lower/insts.rs `try_emit_vector_each_hof`). Mirror
+            # that in the self-host by synthesizing a `for x in v:` loop with an
+            # accumulator (the SAME machinery `lower_list_comprehension` reuses),
+            # inlining the explicit closure body via AST substitution. Gated on
+            # the TYPED receiver kind (collection_kind_of → CkVector, no name
+            # matching) so it never hijacks a user method of the same name on a
+            # non-Vector type. Returns -1 (fall through to the normal extern
+            # dispatch) when the receiver isn't a Vector, the method isn't a HOF,
+            # or the closure arg isn't an inlinable explicit non-capturing form.
+            if collection_kind_eq(collection_kind_of(&gmod, recv_type_name), CkVector()):
+                int hof_result = try_lower_vector_hof(&ctx, recv, recv_type_name, mname, margs, sexpr, &gmod)
+                if hof_result >= 0:
+                    return hof_result
             String full_name = recv_type_name + "__" + mname
             # PROTO phase-1b: method-level-generic call — append the
             # mangled method-targs so the call dispatches to the
@@ -2765,6 +2781,249 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             int fallback = add_local(&ctx, UNIT_TYPE, None)
             emit(&ctx, GIAssign(fallback, OpConstUnit()))
             return fallback
+
+# ── Vector higher-order-function (HOF) inline-loop lowering ──────────
+# Desugar `v.map/filter/fold/reduce/any/all((explicit closure))` into an
+# inline `for x in v:` loop with an accumulator, mirroring Rust gg's
+# `try_emit_vector_each_hof` (src/lir/lower/insts.rs). The self-host has
+# NO BIR, so we desugar directly to the AST-loop form the run-proven
+# `lower_for_vector` already handles (the SAME machinery
+# `lower_list_comprehension` reuses) — there is no `Vector__T__map` body.
+#
+# The closure is INLINED via AST substitution rather than dispatched: we
+# name the synthesized loop var (and, for fold/reduce, the accumulator)
+# after the closure's own PARAMETER names, so the closure's body
+# expression — used verbatim — references those bindings directly. This
+# sidesteps the erased-`GorgetClosure` closure-call return-type fallback
+# and produces GIR byte-identical in shape to a hand-written loop.
+#
+# Scope (per the task): explicit NON-CAPTURING closures with a single
+# expression body (`(int x): x*2`) and scalar elements only. Anything
+# else (implicit `it`, capturing, block body without a tail expr,
+# aggregate elements) returns -1 → the caller falls through to the normal
+# extern dispatch (no behavioural change for those cases).
+#
+# Returns the result local id (>= 0) when handled, or -1 to fall through.
+int try_lower_vector_hof(LowerCtx &ctx, int recv, String recv_type_name, String mname, Vector[SpannedExpr] margs, SpannedExpr sexpr, GirModule &gmod):
+    Span span = sexpr.span
+    String elem_name = collection_element_type(recv_type_name)
+    if elem_name == "":
+        return -1
+    # ── map / filter: build a NEW Vector via an accumulator ──────────
+    if mname == "map" or mname == "filter":
+        if margs.len() != 1:
+            return -1
+        Vector[String] cparams = []
+        SpannedExpr cbody = sexpr
+        if not closure_extract(margs.get(0).unwrap(), &cparams, &cbody):
+            return -1
+        if cparams.len() != 1:
+            return -1
+        String var_name = cparams.get(0).unwrap()
+        SpannedPattern var_pat = SpannedPattern(PBinding(var_name), span)
+        # map's output element type = the input element type for the
+        # scalar-preserving fixtures in scope; filter keeps the input type.
+        int acc_tid = lookup_or_register_named(&gmod, "GorgetArray")
+        int acc = comp_make_acc(&ctx, acc_tid, elem_name, &gmod)
+        String acc_name = "__hof_acc_" + int_to_str(acc)
+        nl_put(&ctx, acc_name, acc)
+        Vector[Stmt] body = []
+        SpannedExpr acc_ref = SpannedExpr(EIdentifier(acc_name), span)
+        Vector[SpannedType] no_targs = []
+        if mname == "map":
+            # `acc.push(<closure body>)`
+            Vector[SpannedExpr] push_args = [cbody.clone()]
+            SpannedExpr push_call = SpannedExpr(EMethodCall(Box(acc_ref), "push", push_args, no_targs), span)
+            body.push(SExpr(push_call))
+        else:
+            # `if <closure body>: acc.push(<element>)`
+            SpannedExpr elem_ref = SpannedExpr(EIdentifier(var_name), span)
+            Vector[SpannedExpr] push_args = [elem_ref]
+            SpannedExpr push_call = SpannedExpr(EMethodCall(Box(acc_ref), "push", push_args, no_targs), span)
+            Vector[Stmt] then_body = [SExpr(push_call)]
+            Vector[ElseBranch] no_elifs = []
+            body.push(SIf(cbody.clone(), then_body, no_elifs))
+        lower_for_vector(&ctx, var_pat, recv, recv_type_name, false, body, &gmod, false)
+        return acc
+    # ── fold: seeded scalar accumulator threaded through the closure ──
+    if mname == "fold":
+        if margs.len() != 2:
+            return -1
+        Vector[String] cparams = []
+        SpannedExpr cbody = sexpr
+        if not closure_extract(margs.get(1).unwrap(), &cparams, &cbody):
+            return -1
+        if cparams.len() != 2:
+            return -1
+        String acc_param = cparams.get(0).unwrap()
+        String elem_param = cparams.get(1).unwrap()
+        return lower_vector_fold(&ctx, recv, recv_type_name, margs.get(0).unwrap(), acc_param, elem_param, cbody, span, &gmod)
+    # ── reduce: acc = first element, then thread the rest ────────────
+    if mname == "reduce":
+        if margs.len() != 1:
+            return -1
+        Vector[String] cparams = []
+        SpannedExpr cbody = sexpr
+        if not closure_extract(margs.get(0).unwrap(), &cparams, &cbody):
+            return -1
+        if cparams.len() != 2:
+            return -1
+        String acc_param = cparams.get(0).unwrap()
+        String elem_param = cparams.get(1).unwrap()
+        return lower_vector_reduce(&ctx, recv, recv_type_name, acc_param, elem_param, cbody, span, &gmod)
+    # ── any / all: boolean short-circuit accumulator ─────────────────
+    if mname == "any" or mname == "all":
+        if margs.len() != 1:
+            return -1
+        Vector[String] cparams = []
+        SpannedExpr cbody = sexpr
+        if not closure_extract(margs.get(0).unwrap(), &cparams, &cbody):
+            return -1
+        if cparams.len() != 1:
+            return -1
+        String var_name = cparams.get(0).unwrap()
+        bool is_all = mname == "all"
+        return lower_vector_any_all(&ctx, recv, recv_type_name, var_name, cbody, is_all, span, &gmod)
+    # ── each: side-effecting iteration, no result ────────────────────
+    # `v.each((x): f(x))` → `for x in v: f(x)`. Void HOF — the closure
+    # body is emitted as a statement; the call expression yields unit.
+    if mname == "each":
+        if margs.len() != 1:
+            return -1
+        Vector[String] cparams = []
+        SpannedExpr cbody = sexpr
+        if not closure_extract(margs.get(0).unwrap(), &cparams, &cbody):
+            return -1
+        if cparams.len() != 1:
+            return -1
+        String var_name = cparams.get(0).unwrap()
+        SpannedPattern var_pat = SpannedPattern(PBinding(var_name), span)
+        Vector[Stmt] body = [SExpr(cbody.clone())]
+        lower_for_vector(&ctx, var_pat, recv, recv_type_name, false, body, &gmod, false)
+        int unit_dst = add_local(&ctx, UNIT_TYPE, None)
+        emit(&ctx, GIAssign(unit_dst, OpConstUnit()))
+        return unit_dst
+    return -1
+
+# Extract an explicit non-capturing closure's parameter names and its
+# single result expression from `EClosure(params, body)`. Supports the two
+# in-scope body shapes: an inline expression body (`[SExpr(e)]`) and a
+# block whose tail is `return e` or a bare expression `[…, SExpr(e)]`.
+# A multi-statement body with non-trivial leading stmts, or any other
+# closure form (implicit `it`, no usable tail expr), returns false → the
+# caller falls through. Writes the param names into `out_params` and the
+# result expression into `out_body` (cloned), returning true on success.
+bool closure_extract(SpannedExpr arg, Vector[String] &out_params, SpannedExpr &out_body):
+    match arg.expr:
+        case EClosure(params, cbody):
+            # Only single-statement bodies are in scope: an inline
+            # expression closure parses to exactly `[SExpr(e)]`, and the
+            # multi-line `return e` form to `[SReturn(Some(e))]`. A longer
+            # body (locals, control flow) is out of scope — fall through.
+            if cbody.len() != 1:
+                return false
+            int pi = 0
+            while pi < params.len():
+                out_params.push(params.get(pi).unwrap().param_name)
+                pi += 1
+            match cbody.get(0).unwrap():
+                case SExpr(e):
+                    out_body = e.clone()
+                    return true
+                case SReturn(ret_opt):
+                    match ret_opt:
+                        case Some(re):
+                            out_body = re.clone()
+                            return true
+                        case None:
+                            return false
+                else:
+                    return false
+        else:
+            return false
+
+# `fold(init, (acc, x): body)` → `acc = init; for x in v: acc = body`.
+# The accumulator is a scalar local seeded with the lowered `init`,
+# bound under the closure's FIRST param name so the closure body
+# references it directly; the loop var carries the SECOND param name.
+int lower_vector_fold(LowerCtx &ctx, int recv, String recv_type_name, SpannedExpr init_expr, String acc_param, String elem_param, SpannedExpr cbody, Span span, GirModule &gmod):
+    # Seed the accumulator with the lowered init value. The accumulator
+    # type follows the init's type (fold's result type = the acc type).
+    int init_local = lower_expr(&ctx, init_expr, &gmod)
+    int acc_tid = ctx.locals.get(init_local).unwrap().type_id
+    int acc = add_local(&ctx, acc_tid, None)
+    emit(&ctx, GIAssign(acc, OpCopy(init_local)))
+    nl_put(&ctx, acc_param, acc)
+    # Body: `acc = <closure body>` — a reassign of the accumulator local.
+    SpannedExpr acc_lhs = SpannedExpr(EIdentifier(acc_param), span)
+    Vector[Stmt] body = [SAssign(acc_lhs, cbody.clone())]
+    SpannedPattern var_pat = SpannedPattern(PBinding(elem_param), span)
+    lower_for_vector(&ctx, var_pat, recv, recv_type_name, false, body, &gmod, false)
+    return acc
+
+# `reduce((a, b): body)` → seed the accumulator from the FIRST element,
+# then thread the rest. To reuse the run-proven `lower_for_vector` (which
+# always starts at index 0) instead of re-emitting the loop scaffold, the
+# first-vs-rest split is a `seen` boolean inside the body:
+#   acc = <placeholder>; seen = false
+#   for x in v:
+#       if not seen: acc = x; seen = true
+#       else:        acc = body(acc, x)
+# The accumulator carries the closure's first param name and the loop var
+# its second, so the closure body references both directly. Scalar-element
+# only (the placeholder seed is `0`/false-overwritten on the first
+# iteration); aggregate reduce is out of scope and never reaches here.
+int lower_vector_reduce(LowerCtx &ctx, int recv, String recv_type_name, String acc_param, String elem_param, SpannedExpr cbody, Span span, GirModule &gmod):
+    # Accumulator: scalar slot seeded with a placeholder (overwritten on
+    # the first iteration). Reduce on an empty Vector is UB in the source
+    # language (Rust gg panics), matching this placeholder-leak behaviour.
+    int acc = add_local(&ctx, I64_TYPE, None)
+    emit(&ctx, GIAssign(acc, OpConstI64(0)))
+    nl_put(&ctx, acc_param, acc)
+    int seen = add_local(&ctx, BOOL_TYPE, None)
+    emit(&ctx, GIAssign(seen, OpConstBool(false)))
+    String seen_name = "__hof_seen_" + int_to_str(seen)
+    nl_put(&ctx, seen_name, seen)
+    SpannedExpr acc_lhs = SpannedExpr(EIdentifier(acc_param), span)
+    SpannedExpr elem_ref = SpannedExpr(EIdentifier(elem_param), span)
+    SpannedExpr seen_lhs = SpannedExpr(EIdentifier(seen_name), span)
+    # then (first element): `acc = x; seen = true`
+    Vector[Stmt] first_body = [SAssign(acc_lhs.clone(), elem_ref), SAssign(seen_lhs, SpannedExpr(EBoolLiteral(true), span))]
+    # else (subsequent): `acc = body(acc, x)`
+    Vector[Stmt] rest_body = [SAssign(acc_lhs.clone(), cbody.clone())]
+    SpannedExpr seen_cond = SpannedExpr(EUnaryOp("not", Box(SpannedExpr(EIdentifier(seen_name), span))), span)
+    Vector[ElseBranch] else_arms = [ElseBranch(None, rest_body)]
+    Vector[Stmt] body = [SIf(seen_cond, first_body, else_arms)]
+    SpannedPattern var_pat = SpannedPattern(PBinding(elem_param), span)
+    lower_for_vector(&ctx, var_pat, recv, recv_type_name, false, body, &gmod, false)
+    return acc
+
+# `any((x): p)` / `all((x): p)` → a boolean accumulator with early break.
+# any: `acc = false; for x in v: if p: acc = true; break`.
+# all: `acc = true;  for x in v: if not p: acc = false; break`.
+# The predicate is the closure body; the loop var carries the closure's
+# param name so the body references it directly.
+int lower_vector_any_all(LowerCtx &ctx, int recv, String recv_type_name, String var_name, SpannedExpr cbody, bool is_all, Span span, GirModule &gmod):
+    int acc = add_local(&ctx, BOOL_TYPE, None)
+    if is_all:
+        emit(&ctx, GIAssign(acc, OpConstBool(true)))
+    else:
+        emit(&ctx, GIAssign(acc, OpConstBool(false)))
+    nl_put(&ctx, "__hof_pred_acc_" + int_to_str(acc), acc)
+    String acc_name = "__hof_pred_acc_" + int_to_str(acc)
+    SpannedPattern var_pat = SpannedPattern(PBinding(var_name), span)
+    # Guard expression: `p` for any, `not p` for all.
+    SpannedExpr guard = cbody.clone()
+    if is_all:
+        guard = SpannedExpr(EUnaryOp("not", Box(cbody.clone())), span)
+    # then-body: `acc = <bool>; break`.
+    SpannedExpr acc_lhs = SpannedExpr(EIdentifier(acc_name), span)
+    SpannedExpr setval = SpannedExpr(EBoolLiteral(not is_all), span)
+    Vector[Stmt] then_body = [SAssign(acc_lhs, setval), SBreak(None)]
+    Vector[ElseBranch] no_elifs = []
+    Vector[Stmt] body = [SIf(guard, then_body, no_elifs)]
+    lower_for_vector(&ctx, var_pat, recv, recv_type_name, false, body, &gmod, false)
+    return acc
 
 # ── List comprehension lowering ──────────────────────────
 # `[comp_expr for var in iterable if filter]` → a loop that builds an
