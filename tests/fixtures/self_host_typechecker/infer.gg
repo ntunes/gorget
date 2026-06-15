@@ -337,6 +337,33 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                             sh = resolve_method_shape_for_generic_receiver(types.trait_registry, sh_recv_name, method_name)
                     if sh.found:
                         Vector[int] bound = infer_method_targs(sh.shape, reg_arg_types, scopes, types)
+                        # EXPLICIT TURBOFISH OVERRIDES INFERENCE. When the call
+                        # site wrote turbofish args (`filter_map[int, Option[int](int)]`),
+                        # those are the AUTHORITATIVE bindings for the method's
+                        # generic params — they win over whatever `infer_method_targs`
+                        # guessed. This is load-bearing for the `[U, F]` adapters
+                        # (`filter_map`) whose `next` return mentions `U` but whose
+                        # only PARAM is `F`: with no `U`-bearing param, the inference
+                        # fallback (traits.gg:842) binds `U` from the closure's
+                        # RETURN type (`Option[int]`) — but the user wrote `U=int`
+                        # (the yielded element type). Honoring the turbofish keeps
+                        # the struct instance recorded in `expr_link_types` (→ the
+                        # SFor loop-var type + its mono'd `next`) IN AGREEMENT with
+                        # the constructor's return type, which already honors the
+                        # turbofish. Positional, resolved through the same
+                        # `ast_type_to_resolved` the struct ctor uses, so the bound
+                        # tid is byte-identical — no name-matching. Only overrides
+                        # positions the turbofish actually supplied; a cleanly
+                        # resolved tid replaces the inferred one (a partial /
+                        # unresolved turbofish leaves the inferred value intact).
+                        if targs.len() > 0:
+                            int tfi = 0
+                            while tfi < targs.len() and tfi < bound.len():
+                                SpannedType tf_arg = targs.get(tfi).unwrap()
+                                int tf_tid = ast_type_to_resolved(tf_arg.ty, tf_arg.span, scopes, &types)
+                                if tf_tid >= 0 and tf_tid != types.error_id:
+                                    bound.set(tfi, tf_tid)
+                                tfi = tfi + 1
                         # For a GENERIC adapter receiver (RTGeneric, e.g.
                         # `TakeIter[VectorIter[int], int]`), a method-generic
                         # trait-default whose return type mentions `Self`/impl-`T`
