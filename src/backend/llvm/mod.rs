@@ -3500,6 +3500,9 @@ fn emit_inst(
                     // Float → Integer: convert value
                     let op = if is_signed(to) { "fptosi" } else { "fptoui" };
                     writeln!(out, "  %v{} = {op} {src_ty_str} %v{} to {to_ty}", dst.0, value.0).unwrap();
+                } else if matches!(to, LirType::Bool) {
+                    // int → bool is truthiness (nonzero→true), NOT bit-0 truncation. Matches C's (bool)(x).
+                    writeln!(out, "  %v{} = icmp ne {src_ty_str} %v{}, 0", dst.0, value.0).unwrap();
                 } else if src_bits == to_bits {
                     writeln!(out, "  %v{} = add {to_ty} 0, %v{}", dst.0, value.0).unwrap();
                 } else if to_bits > src_bits {
