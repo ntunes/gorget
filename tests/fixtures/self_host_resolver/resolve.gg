@@ -59,9 +59,6 @@ int sexpr_vec_len(Vector[SpannedExpr] v):
 
 # ── Dict set helpers (codegen workaround for Dict.set through mutable borrows) ──
 
-void res_map_set(ResolveContext &ctx, int key, int val):
-    ctx.resolution_map.put(key, val)
-
 void fn_scope_set(ResolveContext &ctx, String name, int scope_id):
     ctx.function_body_scopes.put(name, scope_id)
 
@@ -459,7 +456,7 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
             # Emit RES entry for bindings that captured their name span
             # (shared vars and select recv vars)
             if def_id >= 0 and name_span >= 0:
-                res_map_set(&ctx, name_span, def_id)
+                ctx.resolution_map.put(name_span, def_id)
 
         case SExpr(expr):
             resolve_expr(expr, &scopes, &ctx)
@@ -571,7 +568,7 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
                         resolve_expr(channel, &scopes, &ctx)
                         int def_id = scopes.define(name, DkVariable(), Span(0, 0))
                         if def_id >= 0 and name_span >= 0:
-                            res_map_set(&ctx, name_span, def_id)
+                            ctx.resolution_map.put(name_span, def_id)
                     case SOSend(channel, value):
                         resolve_expr(channel, &scopes, &ctx)
                         resolve_expr(value, &scopes, &ctx)
@@ -649,7 +646,7 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
         case EIdentifier(name):
             int def_id = scopes.lookup(name)
             if def_id >= 0:
-                res_map_set(&ctx, expr.span.start, def_id)
+                ctx.resolution_map.put(expr.span.start, def_id)
             elif not is_builtin(name):
                 ctx.diagnostics.push(Diagnostic.error(expr.span, DkUndefinedName(), "undefined name `" + name + "`"))
 
@@ -844,7 +841,7 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
         case EStructLiteral(name, _, args):
             int def_id = scopes.lookup(name)
             if def_id >= 0:
-                res_map_set(&ctx, expr.span.start, def_id)
+                ctx.resolution_map.put(expr.span.start, def_id)
             elif not is_builtin(name):
                 ctx.diagnostics.push(Diagnostic.error(expr.span, DkUndefinedName(), "undefined struct `" + name + "`"))
             int ai = 0
@@ -888,7 +885,7 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
             else:
                 def_id = scopes.define(name, DkVariable(), Span(0, 0))
             if sk > 0 and def_id >= 0 and name_span >= 0:
-                res_map_set(&ctx, name_span, def_id)
+                ctx.resolution_map.put(name_span, def_id)
 
         case SExpr(expr):
             resolve_expr(expr, &scopes, &ctx)
@@ -990,7 +987,7 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
                         resolve_expr(channel, &scopes, &ctx)
                         int def_id = scopes.define(name, DkVariable(), Span(0, 0))
                         if def_id >= 0 and name_span >= 0:
-                            res_map_set(&ctx, name_span, def_id)
+                            ctx.resolution_map.put(name_span, def_id)
                     case SOSend(channel, value):
                         resolve_expr(channel, &scopes, &ctx)
                         resolve_expr(value, &scopes, &ctx)
