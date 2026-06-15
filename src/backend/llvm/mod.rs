@@ -739,6 +739,21 @@ fn sizeof_lir_type(ty: &LirType, structs: &[StructDef], snames: &HashMap<u32, St
                 if def.is_trait_box {
                     return 16;
                 }
+                // 0-field opaque handle (TaskGroup, Socket, AtomicInt, …):
+                // its gorget-visible decl has no fields, so `compute_struct_sizes`
+                // leaves `computed_c_size == Some(0)`, but the runtime layout is
+                // pointer-shaped (8). `emit_struct_types` (~`:969`) already emits
+                // the 8-byte `opaque_runtime_size` for these via its
+                // `def.fields.is_empty()` branch — honoring `computed_c_size`(0)
+                // here would disagree, yielding `memcpy(_, _, i64 0)` and an
+                // uninitialized handle (→ SIGSEGV). Typed (field-count) guard;
+                // shares the `opaque_runtime_size` source of truth with
+                // `emit_struct_types` (keep the two in sync — see that fn).
+                if def.fields.is_empty() && def.computed_c_size == Some(0) {
+                    if let Some(sz) = crate::lir::lower::types::opaque_runtime_size(&def.name) {
+                        return sz;
+                    }
+                }
                 // Typed read: `computed_c_size` is the canonical source of
                 // truth, set at registration for runtime singletons
                 // (GorgetArray = 64, GorgetMap = 152, GorgetClosure = 16,
@@ -969,6 +984,13 @@ fn emit_struct_types(out: &mut String, module: &LirModule, snames: &HashMap<u32,
         } else if def.fields.is_empty() {
             // Known opaque types whose C runtime layout is fixed. The shared
             // table lives in src/lir/lower/types.rs so all backends agree.
+            // SHARED SOURCE OF TRUTH: `sizeof_lir_type` (~`:732`) mirrors this
+            // 0-field/`opaque_runtime_size` branch for its byte-size; keep the
+            // two in sync so the type decl (here) and the `memcpy` size (there)
+            // never disagree on an opaque handle's layout. (A genuinely-empty
+            // USER struct with no `opaque_runtime_size` entry still pads to
+            // `{i8}`=1 here but `sizeof`s to 0 there — a pre-existing latent
+            // inconsistency the field-count guard does not address.)
             if let Some(layout) = crate::lir::lower::types::opaque_runtime_layout(name) {
                 // Structs that cross C ABI boundaries by value need their real
                 // field types declared so AArch64's HFA / register-return rules
@@ -1330,6 +1352,15 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     if !module.externs.iter().any(|e| e.name == "gorget_channel_recv_timeout") {
         writeln!(out, "declare i32 @gorget_channel_recv_timeout(ptr, ptr, i64)").unwrap();
     }
+    // Names of functions DEFINED in this module (skip forward declarations).
+    // Hoisted above the `has_runtime_init` block so the runtime-init extern-decl
+    // guard (~`:1410`) can skip locally-defined synthesized fns (e.g.
+    // `__gg_static_init_*`) — those get a real `define`, so a `declare` here
+    // would be an `llc: invalid redefinition`. Also reused by the
+    // `module.externs` loop (~`:1481`, `:1650`). Single source of truth.
+    let defined_fns: std::collections::HashSet<&str> = module.functions.iter()
+        .map(|f| f.name.as_str())
+        .collect();
     // Runtime constructors — used for static global initialization
     // (LirGlobalInit::Extern). Only declare if not already in module.externs
     // or already declared above in hof_decls.
@@ -1390,6 +1421,12 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
                 if !existing_externs.contains(name.as_str())
                     && !hof_names.contains(name.as_str())
                     && !known_init_fns.contains(name.as_str())
+                    // A LOCALLY-DEFINED synthesized init (`__gg_static_init_*`,
+                    // for a static with a literal/aggregate initializer) gets a
+                    // real `define` later — declaring it here too is an
+                    // `llc: invalid redefinition`. Typed guard (is it in
+                    // `module.functions`?), not a name test on `__gg_static_init_`.
+                    && !defined_fns.contains(name.as_str())
                 {
                     let n_args = args.len();
                     let params: Vec<&str> = (0..n_args).map(|_| "i64").collect();
@@ -1400,11 +1437,6 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     }
     writeln!(out, "@stderr = external global ptr").unwrap();
     writeln!(out).unwrap();
-
-    // Collect names of functions defined in this module (skip forward declarations)
-    let defined_fns: std::collections::HashSet<&str> = module.functions.iter()
-        .map(|f| f.name.as_str())
-        .collect();
 
     // Module externs
     writeln!(out, "; -- runtime externs --").unwrap();
@@ -1811,6 +1843,37 @@ fn emit_global_runtime_init(
     let mut arg_strs: Vec<String> = Vec::new();
     for (i, arg) in args.iter().enumerate() {
         emit_global_init_arg_llvm(out, gid, i, arg, snames, module, str_globals, &mut arg_strs);
+    }
+
+    // A LOCALLY-DEFINED init (`__gg_static_init_*`, synthesized for a static
+    // with a literal/aggregate initializer) carries a TYPED return signature in
+    // `module.functions` — drive its ABI off that, not the name allow-list
+    // below. Use the SAME `needs_sret` predicate the `define` site uses
+    // (~`:2250`) so caller and callee always agree; aggregate returns are sret
+    // (alloca + `call void @f(ptr sret(T), …)` + memcpy into the global),
+    // scalars are a direct `call T @f(…)` + store. Keeps the allow-list as the
+    // fallback for real runtime ctors (`gorget_array_new` …), which are NOT in
+    // `module.functions`.
+    if let Some(target_fn) = module.functions.iter().find(|f| f.name == fn_name) {
+        let sym = c_func_name(fn_name);
+        if needs_sret(&target_fn.return_type, &module.structs) {
+            let ret_llvm = llvm_type_full(&target_fn.return_type, snames);
+            let sz = sizeof_lir_type(&target_fn.return_type, &module.structs, snames);
+            writeln!(out, "  %__ginit_{gid} = alloca {ret_llvm}").unwrap();
+            let sret_arg = format!("ptr sret({ret_llvm}) %__ginit_{gid}");
+            let all_args = if arg_strs.is_empty() {
+                sret_arg
+            } else {
+                format!("{sret_arg}, {}", arg_strs.join(", "))
+            };
+            writeln!(out, "  call void @{sym}({all_args})").unwrap();
+            writeln!(out, "  call ptr @memcpy(ptr @__lir_g{gid}, ptr %__ginit_{gid}, i64 {sz})").unwrap();
+        } else {
+            let ret_llvm = llvm_type_full(&target_fn.return_type, snames);
+            writeln!(out, "  %__ginit_{gid}_raw = call {ret_llvm} @{sym}({})", arg_strs.join(", ")).unwrap();
+            writeln!(out, "  store {ret_llvm} %__ginit_{gid}_raw, ptr @__lir_g{gid}").unwrap();
+        }
+        return;
     }
 
     // Determine return type from function name. Aggregate-returning ctors
