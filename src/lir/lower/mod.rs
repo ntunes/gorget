@@ -453,6 +453,48 @@ impl<'a> LoweringContext<'a> {
                 }
                 None
             }).collect();
+            // Cross the ABI boundary into LIR for the spawn ENTRY extern.
+            //
+            // The spawn entry `__gorget_spawn_<fn>` is generated as C (see
+            // `emit_types.rs::emit_async_helpers`) and, in the LLVM build, that
+            // C is compiled with `static inline` stripped — so it becomes a
+            // real cross-function ABI taking each param BY VALUE (`Str path`,
+            // `GorgetArray v`, …). The C backend inlines the same function, so
+            // it never sees the boundary; only LLVM does.
+            //
+            // `ensure_extern` registered this extern from the *call-site* arg
+            // LIR types. For aggregates whose SSA operand is already a struct
+            // value (Vector → `Struct(GorgetArray)`), that is faithful and the
+            // existing large-aggregate byval path fires. But a String arg's SSA
+            // operand is a `Ptr` (address of a GorgetString), so the extern got
+            // `params[i] = Ptr` / `abi = Auto` and NO byval — on x86_64 SysV the
+            // C entry reads the 32-byte Str off the outgoing stack (memory
+            // class) while LLVM passed a register pointer → garbage / segfault.
+            //
+            // `spawned_fns` is the source of truth for the entry's real param
+            // types (resolve-once / write-through, devbook/24). Write the
+            // `GorgetString` ABI tag through onto the matching extern so the
+            // declaration- and call-site byval machinery (mod.rs ~1586 / ~6009,
+            // keyed on `AbiKind::GorgetString`) emits `ptr byval(%GorgetString)`
+            // on x86_64 and bare `ptr` per-AAPCS64 on aarch64 — arch-safe via
+            // `large_agg_byval_attr`'s existing target gate. The spawn-extern
+            // name IS the registry key (built from this same `fn_name`), so the
+            // lookup is a typed link, not a name heuristic.
+            let entry_name = format!("__gorget_spawn_{fn_name}");
+            if let Some(ext) = self.module.externs.iter_mut().find(|e| e.name == entry_name) {
+                // `ensure_extern` may have left `param_abis` empty (no entry in
+                // `extern_abi_kinds` for synthetic spawn externs). Grow it to
+                // the param count, defaulting to `Auto`, before writing tags.
+                if ext.param_abis.len() < ext.params.len() {
+                    ext.param_abis.resize(ext.params.len(), crate::ir::abi::AbiKind::Auto);
+                }
+                for (i, (_name, c_ty)) in lir_params.iter().enumerate() {
+                    if matches!(c_ty.as_str(), "GorgetString" | "Str") && i < ext.param_abis.len() {
+                        ext.param_abis[i] = crate::ir::abi::AbiKind::GorgetString;
+                    }
+                }
+            }
+
             self.module.spawned_fns.push(SpawnedFn {
                 fn_name: fn_name.clone(),
                 params: lir_params,
