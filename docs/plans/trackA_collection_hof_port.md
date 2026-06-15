@@ -79,3 +79,22 @@ Stage Vector-first. A partial landing (Vector map/filter/fold/reduce/collect)
 that flips +N cleanly with fixed_point green is a VALID landing; do NOT force
 Set/Dict if they balloon. If a stage regresses fixed_point or introduces a new
 failure, STOP and report.
+
+## Brief-review pass-1 folds (a6dfc6b3 — mostly verified; one reservation REFUTED)
+1. **`4158530b` is NOT a "retired branch" (reviewer conflation, git-refuted).** The
+   reviewer conflated it with `eb730d49`, which touches ONLY `src/backend/c_lir/emit_types.rs`
+   (the RUST C-backend) and removed inline-C *helper-FUNCTION* generators in favor of
+   HofExpand. `4158530b` is a SELF-HOST commit doing INLINE expansion via `comp_make_acc`
+   + `lower_for_vector` (8 call sites, no helper-function generation) — i.e. the SAME inline
+   approach as Rust's CURRENT HofExpand direction. It was parked by the round-1 T2 deferral,
+   not retired. Reusing it is ALIGNED with Rust's current strategy. Proceed.
+2. **Staging clarity for UNTYPED closures (valid).** Stage 1 (the `4158530b` foundation,
+   typed closures) will NOT flip fixtures whose closures are untyped (`(x): x`) or over
+   struct elements (`test_vector_bool`, `test_vector_of_structs`) — those need the Stage-3
+   closure-param-type-hints. That is EXPECTED, not a regression: don't count those fixtures
+   in Stage 1's flip-set, and don't treat their continued CC-FAIL as a Stage-1 failure. If a
+   high-value Stage-1/2 fixture turns out to need param-hints, pull the hint plumbing forward.
+3. Measure flip count PER STAGE (already mandated). The `/tmp/parity-baseline-15966.log`
+   cite is a measurement artifact (not a repo file) — re-measure from `self_host_runtime_diff`.
+4. Verify `__callable_N` indirect dispatch threads `fold`'s accumulator type correctly
+   (`4158530b` implements fold — flip-prove it on the current tree before extending).
