@@ -1035,6 +1035,17 @@ fn string_index_compound_assign_error() {
     );
 }
 
+// A bare `return` in a non-void `T throws E` function (here `int throws`)
+// must error as a missing return value — it previously lowered silently to
+// `Ok(0)`. The `void throws E` bare-return remains valid (raw return = void).
+#[test]
+fn bare_return_nonvoid_throws_error() {
+    check_gg_fails(
+        "bare_return_nonvoid_throws_error.gg",
+        "type mismatch",
+    );
+}
+
 #[test]
 fn str_builtin_call_error() {
     check_gg_fails(

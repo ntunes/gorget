@@ -1,0 +1,16 @@
+# A bare `return` (no value) inside a NON-VOID `throws` function must be a
+# semantic error — it previously slipped through `gg check` and silently
+# lowered to `Ok(0)`. The legitimate `void throws E` bare-return stays
+# accepted (its raw return type is void). See typecheck.rs `Stmt::Return`.
+struct ParseError:
+    String msg
+
+int parse_one(String s) throws ParseError:
+    if s == "":
+        return        # ERROR: expected int, found unit (missing return value)
+    return 1
+
+void main():
+    match parse_one("x"):
+        case Ok(n): print(n)
+        case Error(e): print(e.msg)

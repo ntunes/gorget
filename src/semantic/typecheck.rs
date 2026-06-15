@@ -3117,6 +3117,28 @@ impl<'a> TypeChecker<'a> {
                 if self.current_return_type.is_none() {
                     self.error(SemanticErrorKind::ReturnOutsideFunction, stmt.span);
                 }
+                if expr.is_none() {
+                    // Bare `return;` is only valid when the function returns
+                    // void — including `void throws E`, whose RAW declared
+                    // return type (`current_return_type`) is void (the `E`
+                    // lives separately in `func.throws`). In a non-void
+                    // function (`int`, `int throws E`, …) a bare return
+                    // previously slipped through unchecked and silently
+                    // lowered to a zero-initialized value (e.g. `Ok(0)` for
+                    // `T throws E`); reject it as a missing return value,
+                    // symmetric with a non-void non-throwing function.
+                    if let Some(ret_type) = self.current_return_type {
+                        if self.resolve_type(ret_type) != self.types.void_id {
+                            self.error(
+                                SemanticErrorKind::TypeMismatch {
+                                    expected: self.describe_resolved_type(ret_type),
+                                    found: "()".to_string(),
+                                },
+                                stmt.span,
+                            );
+                        }
+                    }
+                }
                 if let Some(expr) = expr {
                     let prev_hint = self.decl_type_hint;
                     self.decl_type_hint = self.current_return_type;
