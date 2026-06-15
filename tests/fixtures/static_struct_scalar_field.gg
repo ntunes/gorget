@@ -1,0 +1,21 @@
+# Bug #1 (static-struct field access returns garbage) regression — SCALAR field read.
+#
+# `static Point P = Point(3,4)` initializes correctly (literal-arg ctor → compile-time
+# GlobalInit::Struct), but reading `P.x` / `P.y` used to return 0: a static base has no
+# `Place` to project into, so the field read degraded to `const unit` and const-folded to 0
+# (while `Point q = P; q.x` read correctly). Fixed by materializing the global into an
+# addressable MutPtr local before projecting. Isolates Bug #1 — passes independent of Bug #2.
+
+struct Point:
+    int x
+    int y
+
+static Point P = Point(3, 4)
+
+int main():
+    print(f"P.x={P.x}")
+    print(f"P.y={P.y}")
+    # cross-check: copying the static to a local still works (was already correct)
+    Point q = P
+    print(f"q.x={q.x}")
+    return 0

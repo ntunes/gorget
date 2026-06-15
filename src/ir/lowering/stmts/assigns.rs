@@ -13,7 +13,7 @@ use super::super::exprs::{
     emit_shared_mutex_lock_get, emit_shared_mutex_lock_set,
     atomic_type_name_for, emit_atomic_load, emit_atomic_store,
     emit_rwlock_write_get, emit_rwlock_write_set, emit_rwlock_write_finish,
-    try_resolve_field_place, extract_field_path_string,
+    try_resolve_field_place, materialize_global_field_base, extract_field_path_string,
     infer_collection_element_type,
 };
 
@@ -635,6 +635,12 @@ pub(super) fn lower_field_assign(
             } else {
                 lower_expr(ctx, builder, object)
             }
+        } else if let Some(global_ptr) = materialize_global_field_base(ctx, builder, object) {
+            // Bug #1: a module-level static base — materialize into an addressable
+            // MutPtr local so the field-store writes THROUGH to the global. Without
+            // this the global lowers to a GlobalRef constant, the place-guard below
+            // is skipped, and the store is silently dropped.
+            global_ptr
         } else {
             lower_expr(ctx, builder, object)
         }

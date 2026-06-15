@@ -1,0 +1,20 @@
+# Bug #1 (static-struct field access returns garbage) regression — SCALAR field STORE.
+#
+# `P.x = 99` on a module-level static used to emit ZERO instructions: the store path
+# couldn't root a `Place` at the global, so the write was silently dropped and the read
+# afterward still saw the init value (0 after the read-side degradation). Fixed by
+# materializing the global into an addressable MutPtr local so the store writes THROUGH
+# to the global (NOT a stack copy). Isolates Bug #1's store class.
+
+struct Point:
+    int x
+    int y
+
+static Point P = Point(3, 4)
+
+int main():
+    P.x = 99
+    print(f"P.x={P.x}")
+    P.y = P.y + 100
+    print(f"P.y={P.y}")
+    return 0

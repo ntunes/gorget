@@ -356,6 +356,27 @@ fn static_vec_index_load() {
 }
 
 #[test]
+fn static_struct_scalar_field() {
+    // Bug #1 (static-struct field access returns garbage): reading `P.x` /
+    // `P.y` on a module-level `static Point P = Point(3,4)` returned 0 — a
+    // static base has no `Place` to project into, so the field read degraded
+    // to `const unit`. Fixed by materializing the global into an addressable
+    // MutPtr local before projecting. Isolates Bug #1 (no Bug #2 needed —
+    // literal-arg ctors stay on the compile-time GlobalInit::Struct path).
+    // See docs/plans/brief_static_struct_field.md.
+    run_gg("static_struct_scalar_field.gg", "P.x=3\nP.y=4\nq.x=3");
+}
+
+#[test]
+fn static_struct_field_store() {
+    // Bug #1 (store class): `P.x = 99` on a static used to emit ZERO
+    // instructions (the store couldn't root a Place at the global), so the
+    // write was silently dropped. Fixed by the same global-materialization
+    // helper, typed MutPtr so the store writes THROUGH to the global.
+    run_gg("static_struct_field_store.gg", "P.x=99\nP.y=104");
+}
+
+#[test]
 fn compound_and_method_chain_miscompile() {
     // Regression for the compound-`and`-with-method-chain miscompile fixed
     // 2026-05-21 in lower_short_circuit (src/ir/lowering/exprs/operators.rs).

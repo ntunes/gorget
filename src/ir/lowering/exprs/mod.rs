@@ -2066,6 +2066,12 @@ fn lower_field_access(
             } else {
                 lower_expr(ctx, builder, object)
             }
+        } else if let Some(global_ptr) = materialize_global_field_base(ctx, builder, object) {
+            // Bug #1: a module-level static base lowers to Operand::Constant(GlobalRef)
+            // which the place-guard below would skip → returns Constant::Unit and
+            // silently drops the read. Materialize the global into an addressable
+            // MutPtr local so the pointer-deref field path below fires.
+            global_ptr
         } else {
             lower_expr(ctx, builder, object)
         }
@@ -2290,6 +2296,55 @@ pub(super) fn extract_field_path_string(expr: &Expr) -> Option<String> {
     }
 }
 
+/// If `object` is a bare identifier naming a module-level `static`, materialize
+/// the global into a fresh addressable `MutPtr(<struct>)` local and return an
+/// `Operand::Copy` of that pointer local.
+///
+/// Bug #1 (static-struct field access returns garbage): `Place` roots only at a
+/// LOCAL (`src/ir/instructions.rs`), so a static base has no `Place` to project
+/// into — field reads degrade to `const unit`/0 and field stores are silently
+/// dropped. The fix makes the static addressable: emit `&NAME` via
+/// `Constant::GlobalRefPtr` (→ `Inst::GlobalAddr`, a real `*mut <T>` pointer,
+/// `src/lir/lower/operands.rs`) into a fresh local typed `MutPtr(<struct>)`, then
+/// let the EXISTING pointer-deref field path (`pointee_type` → `Projection::Deref`)
+/// project through it. Resource fields still get the `Ptr(field)` borrow wrap, so
+/// `B.items.push()` borrows in place.
+///
+/// This MIRRORS the shipped index-load precedent (`lower_index_access`,
+/// `methods.rs`, 2026-06-04) but DIVERGES deliberately: index-load uses
+/// `Borrow`/`Copy` of a value local; field access uses `MutPtr`+`Deref` because
+/// the STORE path (`P.x = 99`) must write THROUGH to the global, not to a copy.
+/// The local is typed via `register_mut_ptr_type` — NOT `GlobalRefPtr`'s type
+/// inference (`type_reg.rs`), which returns the BASE type, not `MutPtr(base)`.
+///
+/// Returns `None` for non-globals (the caller proceeds with its existing path).
+pub(super) fn materialize_global_field_base(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    object: &Spanned<Expr>,
+) -> Option<Operand> {
+    let Expr::Identifier(name) = &object.node else {
+        return None;
+    };
+    // A local of the same name shadows the global; only materialize true globals.
+    if ctx.lookup_local(name).is_some() || !ctx.global_names.contains(name.as_str()) {
+        return None;
+    }
+    // Look up the global's struct type so the pointer local is typed
+    // `MutPtr(<struct>)` — the pointee type drives the existing Deref field path.
+    let base_type = ctx
+        .global_type_names
+        .get(name)
+        .and_then(|tn| lookup_global_type(ctx, tn))?;
+    let ptr_type = ctx.register_mut_ptr_type(base_type);
+    let ptr_local = builder.add_local(ptr_type, None);
+    builder.assign(
+        Place::local(ptr_local),
+        Operand::Constant(Constant::GlobalRefPtr(name.clone())),
+    );
+    Some(Operand::Copy(Place::local(ptr_local)))
+}
+
 /// Resolve a field access expression to a Place (with projections) and the field's type,
 /// WITHOUT copying the field to a temp. This allows borrowing the field in-place.
 /// Returns `Some((place, field_type_id))` if the expression is a resolvable field access.
@@ -2304,6 +2359,12 @@ pub(super) fn try_resolve_field_place(
         Expr::Identifier(name) => {
             if let Some((local_id, _)) = ctx.lookup_local(name) {
                 Operand::Copy(Place::local(local_id))
+            } else if let Some(global_ptr) =
+                materialize_global_field_base(ctx, builder, object)
+            {
+                // Bug #1: a module-level static base — materialize into an
+                // addressable MutPtr local; the place walk below appends Deref.
+                global_ptr
             } else {
                 return None;
             }
