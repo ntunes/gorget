@@ -1583,6 +1583,17 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
                 if param_abi == crate::ir::abi::AbiKind::Ptr && p.is_aggregate() {
                     return "ptr".to_string();
                 }
+                // CStr: the C runtime takes a bare `const char*`, NOT a 32-byte
+                // Str-by-value. The matching call site already marshals via
+                // gorget_str_to_cstr → a raw `ptr` (`is_str_to_cstr`). Without
+                // this branch a CStr-tagged aggregate param falls through to the
+                // is_aggregate() byval branch below, so on x86_64 SysV the declare
+                // byval's 32 bytes while the call passes a pointer → the runtime
+                // reads garbage/empty. Bare `ptr` on both arches (aarch64 already
+                // emitted bare ptr via the empty byval attr — why this was x86_64-only).
+                if param_abi == crate::ir::abi::AbiKind::CStr {
+                    return "ptr".to_string();
+                }
                 // AbiKind::GorgetString or ByValue: the C side takes a Str
                 // (32-byte aggregate) by value, even though the LIR type may
                 // be Ptr (the SSA operand is the address of a strlit struct).
