@@ -1,0 +1,11 @@
+# `gg check` must reject an undefined type name in a variable declaration.
+# Previously `Floobar x = 5` silently degraded to `error_id` → defaulted to
+# unit, so `gg check` reported "OK" and the program either ran wrong or hit a
+# C "void value not ignored" link error. The Rust-style numeric shorthand `u8`
+# (not a Gorget keyword — `uint8`/`byte` are) gets a "did you mean?" hint.
+# See docs/plans/trackB_T4_unknown_type_error.md.
+
+void main():
+    Floobar x = 5
+    u8 n = 2
+    print("unreachable")

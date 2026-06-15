@@ -542,3 +542,135 @@ pub fn ast_type_to_resolved(
         }
     }
 }
+
+/// Map a Rust-style numeric shorthand (`u8`, `i32`, `f64`, …) to the Gorget
+/// keyword it most likely meant (`uint8`, `int32`, `float64`). Returns `None`
+/// for names that don't match the `[iuf]<bits>` shape. Used only to enrich the
+/// "did you mean?" hint on an undefined type — it does NOT make these spellings
+/// valid (that's an owner's language-design call).
+fn numeric_shorthand_suggestion(name: &str) -> Option<String> {
+    let (prefix, bits) = name.split_at(1);
+    let canonical = match (prefix, bits) {
+        ("i", "8") => "int8",
+        ("i", "16") => "int16",
+        ("i", "32") => "int32",
+        ("i", "64") => "int64",
+        ("u", "8") => "uint8",
+        ("u", "16") => "uint16",
+        ("u", "32") => "uint32",
+        ("u", "64") => "uint64",
+        ("f", "32") => "float32",
+        ("f", "64") => "float64",
+        _ => return None,
+    };
+    Some(canonical.to_string())
+}
+
+/// If `ast_ty` is a top-level `Type::Named` whose name is genuinely undefined
+/// in scope, return that name node plus a "did you mean?" suggestion. Returns
+/// `None` for any resolvable name, for the compiler-magic callable builtins
+/// (`Callable`/`MutCallable`/`ConsumeCallable[sig]`), and for every non-Named
+/// type shape.
+///
+/// This mirrors the exact lookup `ast_type_to_resolved` performs for
+/// `Type::Named` — the only AST shape that can silently degrade to
+/// `error_id` via the unknown-name (`None`) branch — so a caller can surface
+/// `UndefinedName` instead of swallowing the unknown type. It is deliberately
+/// scoped to the top-level name (not generic args / nested types): the
+/// typecheck-pass VarDecl site is the only sound place to hard-error today
+/// (see `docs/plans/trackB_T4_unknown_type_error.md`).
+///
+/// `fn_scope` is the enclosing function's body scope (the typechecker's
+/// `current_fn_scope`). It must be consulted IN ADDITION to plain
+/// `scopes.lookup` because the typecheck pass reaches in-scope generic params
+/// via two different scope trees depending on the enclosing construct (see the
+/// two-root comment in the body). A name is unknown only when BOTH roots miss.
+pub fn unknown_named_type<'a>(
+    ast_ty: &'a ast::Type,
+    scopes: &ScopeTable,
+    fn_scope: Option<super::ids::ScopeId>,
+) -> Option<(&'a crate::span::Spanned<String>, Option<String>)> {
+    let ast::Type::Named { name, generic_args } = ast_ty else {
+        return None;
+    };
+
+    // Compiler-magic callable builtins short-circuit before the scope lookup
+    // in `ast_type_to_resolved`; they are never "unknown names".
+    if generic_args.len() == 1
+        && matches!(name.node.as_str(), "Callable" | "MutCallable" | "ConsumeCallable")
+    {
+        return None;
+    }
+
+    // Resolvable name → not unknown. Only a `None` lookup hits the
+    // `Ok(error_id)` degrade branch we want to reject. We check the in-scope
+    // lookup from TWO roots (the typecheck pass reaches in-scope generic params
+    // via different trees depending on the enclosing construct):
+    //   1. `scopes.current` (what plain `scopes.lookup` walks) — a free
+    //      FUNCTION's own generics are NOT here (the pass never navigates into
+    //      the fn body), but an EQUIP block's explicit `[T]` generic params ARE.
+    //   2. `fn_scope` (the resolve-time function body scope) + its ancestor
+    //      chain — this is where a free function's own generic params live.
+    if scopes.lookup(&name.node).is_some() {
+        return None;
+    }
+    if let Some(scope) = fn_scope {
+        if scopes.lookup_from_scope(scope, &name.node).is_some() {
+            return None;
+        }
+    }
+
+    // Gate A: a name defined somewhere in the program but just not in the
+    // current lexical scope — a yet-to-be-merged cross-module type, or a type
+    // referenced before its (later) import is fully wired — is a REAL type that
+    // degrades to `error_id` benignly today. The VarDecl site must NOT hard-error
+    // on it (that would be a separate "type not in scope, forgot to import?"
+    // diagnostic, out of scope here). `name_index`-backed, so it sees defs that
+    // the lexical `lookup` misses.
+    if scopes.name_defined_anywhere(&name.node) {
+        return None;
+    }
+
+    // Gate B: runtime-provided type names that have NO semantic declaration at
+    // all (no struct/import def, not in `name_index`) but ARE valid annotations
+    // the runtime materializes — `GorgetClosure`, the un-imported `std.sync`
+    // guards, etc. These legitimately resolve to `error_id` at the semantic
+    // layer today; flagging them as undefined would regress real code. This is
+    // the documented runtime-symbol-boundary exception to "no name matching":
+    // the name IS the contract with the runtime, and the semantic layer has no
+    // typed decl to consult (see `docs/devbook/24-layering-discipline.md`).
+    if is_runtime_provided_type_name(&name.node) {
+        return None;
+    }
+
+    let suggestion = numeric_shorthand_suggestion(&name.node)
+        .or_else(|| scopes.suggest_name(&name.node));
+    Some((name, suggestion))
+}
+
+/// Runtime-provided type names that the semantic layer does NOT register as
+/// scope defs but the lowering/runtime materializes from the name itself. A
+/// VarDecl annotated with one of these resolves to `error_id` at the semantic
+/// layer today (a benign degrade the lowering fixes up by name), so the
+/// unknown-type check must treat them as known, not as typos.
+///
+/// This is the runtime-symbol-boundary carve-out the layering rules permit:
+/// these names have no typed semantic decl to consult, and the name itself is
+/// the contract with the runtime. Sourced from the LIR resource aliases
+/// (`src/lir/types.rs`) and the `std.sync` guard types (`lib/std/sync.gg`,
+/// usable without an explicit import via the `shared`/RWLock magic).
+fn is_runtime_provided_type_name(name: &str) -> bool {
+    matches!(
+        name,
+        "GorgetClosure"
+            | "GorgetArray"
+            | "GorgetString"
+            | "GorgetMap"
+            | "GorgetSet"
+            | "GorgetRange"
+            | "GorgetFile"
+            | "GorgetTlsSocket"
+            | "ReadGuard"
+            | "WriteGuard"
+    )
+}

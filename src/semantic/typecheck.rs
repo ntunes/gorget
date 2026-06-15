@@ -10,6 +10,45 @@ use super::scope::{DefKind, ScopeKind, ScopeTable};
 use super::traits::TraitRegistry;
 use super::types::{self, ResolvedType, TypeTable};
 
+/// Collect the generic-param names an `equip` block brings into scope for its
+/// method bodies. Two sources:
+///   1. The explicit `[T]` prefix (`equip [T] X[T]:` / `equip [K,V] X[K,V]:`).
+///   2. The TARGET-IMPLICIT generics of `equip X[T]:` — the bare `Named { _, [] }`
+///      args of the target type. These flow from the struct's own decl and are
+///      NOT registered as scope defs, so a `T`-typed local in a method silently
+///      resolves to `error_id` today. The unknown-type VarDecl check consults
+///      this list so it doesn't flag such legit generics as undefined.
+/// Collecting concrete-named args too (e.g. `equip X[SomeType]:`) is harmless:
+/// those names resolve normally and would never be an unknown-type error anyway.
+fn equip_generic_names(impl_block: &EquipBlock) -> Vec<String> {
+    let mut names = Vec::new();
+    if let Some(generics) = &impl_block.generic_params {
+        for param in &generics.node.params {
+            if let GenericParam::Type { name, .. } = &param.node {
+                names.push(name.node.clone());
+            }
+        }
+    }
+    collect_bare_named_args(&impl_block.type_.node, &mut names);
+    names
+}
+
+/// Push every bare `Named { name, [] }` arg name found in the generic-arg
+/// positions of `ty` (recursing through nested generics like `Pair[K, V]`).
+fn collect_bare_named_args(ty: &Type, names: &mut Vec<String>) {
+    if let Type::Named { generic_args, .. } = ty {
+        for arg in generic_args {
+            if let Type::Named { name, generic_args: inner } = &arg.node {
+                if inner.is_empty() {
+                    names.push(name.node.clone());
+                } else {
+                    collect_bare_named_args(&arg.node, names);
+                }
+            }
+        }
+    }
+}
+
 /// Return the valid (min, max) range for an integer primitive type.
 /// Walk an AST `Type` and return true if any `Type::Named { name, [] }`
 /// nested anywhere inside has the given name. Used by shape-2 inference
@@ -428,6 +467,14 @@ struct TypeChecker<'a> {
     from_conversions: FxHashMap<Span, DefId>,
     /// The self type of the current equip block (if any).
     current_self_type: Option<TypeId>,
+    /// Generic-param names in scope for the current equip block. Populated from
+    /// BOTH the explicit `[T]` prefix (`equip [T] X[T]:`) AND the TARGET-IMPLICIT
+    /// generics of `equip X[T]:` (where `T` flows from the struct's own decl and
+    /// is NOT registered as a scope def — it silently resolves to `error_id`).
+    /// The unknown-type check at the VarDecl site consults this so a `T`-typed
+    /// local inside such a method isn't mistaken for an undefined type. Empty
+    /// outside an equip block.
+    current_equip_generics: Vec<String>,
     /// Declared type hint for integer literal coercion (e.g., uint8 x = 5).
     decl_type_hint: Option<TypeId>,
     /// One-shot flag, mirror of IR-lowering's `func_state.suppress_auto_prop`
@@ -513,6 +560,7 @@ impl<'a> TypeChecker<'a> {
             method_resolutions: FxHashMap::default(),
             from_conversions: FxHashMap::default(),
             current_self_type: None,
+            current_equip_generics: Vec::new(),
             decl_type_hint: None,
             suppress_auto_prop: false,
             function_body_scopes,
@@ -3005,12 +3053,43 @@ impl<'a> TypeChecker<'a> {
                 // Resolve declared type first so we can set the hint for literal coercion
                 let declared_type = match &type_.node {
                     Type::Inferred => None,
-                    _ => super::types::ast_type_to_resolved(
-                        &type_.node,
-                        type_.span,
-                        self.scopes,
-                        self.types,
-                    ).ok(),
+                    _ => {
+                        // By the typecheck pass every DEFINED type is in scope —
+                        // cross-module (resolve fixup done) AND the enclosing fn's
+                        // generic params (free fns via `current_fn_scope`, equip
+                        // blocks via the equip-generics list). So a `Type::Named`
+                        // still unknown after all those checks is genuinely
+                        // undefined: surface it instead of letting
+                        // `ast_type_to_resolved` degrade it to `error_id`
+                        // (→ silently defaulted to unit downstream).
+                        // See docs/plans/trackB_T4_unknown_type_error.md.
+                        if let Some((name_node, suggestion)) =
+                            super::types::unknown_named_type(
+                                &type_.node,
+                                self.scopes,
+                                self.current_fn_scope,
+                            )
+                        {
+                            // Suppress for an equip block's target-implicit
+                            // generic params (`equip X[T]:` — `T` is never a
+                            // scope def, so it can't be found by lookup).
+                            if !self.current_equip_generics.contains(&name_node.node) {
+                                self.error(
+                                    SemanticErrorKind::UndefinedName {
+                                        name: name_node.node.clone(),
+                                        suggestion,
+                                    },
+                                    name_node.span,
+                                );
+                            }
+                        }
+                        super::types::ast_type_to_resolved(
+                            &type_.node,
+                            type_.span,
+                            self.scopes,
+                            self.types,
+                        ).ok()
+                    }
                 };
 
                 // Check generic type parameter trait bounds (e.g. Dict[K: Hashable, V])
@@ -6677,10 +6756,12 @@ fn check_items_recursive_tc(checker: &mut TypeChecker, items: &[Spanned<Item>]) 
                     checker.scopes,
                     checker.types,
                 ).ok();
+                checker.current_equip_generics = equip_generic_names(impl_block);
                 for method in &impl_block.items {
                     checker.check_function(&method.node);
                 }
                 checker.current_self_type = None;
+                checker.current_equip_generics = Vec::new();
                 if has_generics {
                     checker.scopes.pop_scope();
                 }

@@ -1054,6 +1054,26 @@ fn str_builtin_call_error() {
     );
 }
 
+// `gg check` must reject an undefined type name in a VarDecl annotation,
+// instead of silently degrading it to `error_id` → unit. The Rust-style
+// numeric shorthand `u8` (not a Gorget keyword) gets a "did you mean `uint8`?"
+// hint. See docs/plans/trackB_T4_unknown_type_error.md.
+#[test]
+fn unknown_type_error() {
+    check_gg_fails(
+        "unknown_type_error.gg",
+        "undefined name `Floobar`",
+    );
+}
+
+#[test]
+fn unknown_type_numeric_shorthand_hint() {
+    check_gg_fails(
+        "unknown_type_error.gg",
+        "undefined name `u8`; did you mean `uint8`?",
+    );
+}
+
 #[test]
 fn cast_name_call_error() {
     check_gg_fails(

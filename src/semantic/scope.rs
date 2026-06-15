@@ -413,6 +413,17 @@ impl ScopeTable {
         scope.values.get(name).copied().or_else(|| scope.types.get(name).copied())
     }
 
+    /// True if any definition with this name exists ANYWHERE in the program —
+    /// in scope or not, any namespace, any kind. Backed by the per-name
+    /// `name_index`, so it sees cross-module / un-imported types (e.g. an
+    /// `std.sync` `ReadGuard` referenced without an explicit import, or a
+    /// runtime struct decl) that the lexical-scope `lookup` misses. Used to
+    /// distinguish a genuinely-undefined type name (a typo) from a real type
+    /// that simply isn't in the current lexical scope.
+    pub fn name_defined_anywhere(&self, name: &str) -> bool {
+        self.name_index.get(name).is_some_and(|ids| !ids.is_empty())
+    }
+
     /// True if `name` is the name of at least one enum variant defined anywhere
     /// in this module (in scope or not). Used by the resolver to suppress the
     /// `undefined name` diagnostic for bare-variant constructor calls whose
