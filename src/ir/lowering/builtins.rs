@@ -116,6 +116,19 @@ pub struct BuiltinTypeProtocol {
     pub borrow_view_fn: Option<&'static str>,
     /// Collection kind for metadata-based dispatch. None = not a collection.
     pub collection_kind: Option<CollectionKind>,
+    /// True when this type is a non-collection handle that nonetheless OWNS a
+    /// heap buffer into which a mutating, element-ingesting method copies/moves
+    /// the passed element (Channel's `send`, Heap's `push`). That buffer
+    /// survives independently of the current `with Arena` scope (it is freed by
+    /// the handle's own drop, not by `gorget_arena_destroy`), so an
+    /// arena-borrowed non-Copy element ingested into it dangles when the arena
+    /// is destroyed — the same heap-use-after-free class as `collection_kind`
+    /// collections. The borrow checker's arena-escape gate
+    /// (`is_buffer_owning_receiver`) treats `collection_kind.is_some()` OR this
+    /// flag uniformly. Mutex/Shared/Guard/Atomic/Barrier/... do NOT ingest an
+    /// element into a self-owned surviving buffer, so they stay `false` (a
+    /// typed gate — no name-matching `send`/`Channel`).
+    pub owns_buffered_elements: bool,
     /// C runtime struct name this type aliases to (e.g. "GorgetClosure" for
     /// Callable[T(...)]). When set, the C backend should emit a typedef to
     /// this runtime struct instead of a fresh `__gg_X` struct definition.
@@ -254,6 +267,7 @@ pub static VECTOR: BuiltinTypeProtocol = BuiltinTypeProtocol {
     materialize_fn: None,
     borrow_view_fn: None,
     collection_kind: Some(CollectionKind::Array),
+    owns_buffered_elements: false,
     c_runtime_alias: None,
     methods: &[
         // Mutating
@@ -347,6 +361,7 @@ pub static DEQUE: BuiltinTypeProtocol = BuiltinTypeProtocol {
     materialize_fn: None,
     borrow_view_fn: None,
     collection_kind: Some(CollectionKind::Array),
+    owns_buffered_elements: false,
     c_runtime_alias: None,
     methods: VECTOR.methods, // Same interface as Vector
 };
@@ -361,6 +376,7 @@ pub static DICT: BuiltinTypeProtocol = BuiltinTypeProtocol {
     materialize_fn: None,
     borrow_view_fn: None,
     collection_kind: Some(CollectionKind::OrderedMap),
+    owns_buffered_elements: false,
     c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "put", runtime_callee: Some("gorget_map_put"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: key_val_params, return_type: ret_void },
@@ -420,6 +436,7 @@ pub static HASHMAP: BuiltinTypeProtocol = BuiltinTypeProtocol {
     materialize_fn: None,
     borrow_view_fn: None,
     collection_kind: Some(CollectionKind::Map),
+    owns_buffered_elements: false,
     c_runtime_alias: None,
     methods: DICT.methods, // Same interface as Dict
 };
@@ -434,6 +451,7 @@ pub static SET: BuiltinTypeProtocol = BuiltinTypeProtocol {
     materialize_fn: None,
     borrow_view_fn: None,
     collection_kind: Some(CollectionKind::OrderedSet),
+    owns_buffered_elements: false,
     c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "add", runtime_callee: Some("gorget_set_add"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_void },
@@ -483,6 +501,7 @@ pub static HASHSET: BuiltinTypeProtocol = BuiltinTypeProtocol {
     materialize_fn: None,
     borrow_view_fn: None,
     collection_kind: Some(CollectionKind::Set),
+    owns_buffered_elements: false,
     c_runtime_alias: None,
     methods: SET.methods, // Same interface as Set
 };
@@ -497,6 +516,7 @@ pub static CHANNEL: BuiltinTypeProtocol = BuiltinTypeProtocol {
     materialize_fn: None,
     borrow_view_fn: None,
     collection_kind: None,
+    owns_buffered_elements: true,
     c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "send", runtime_callee: None, self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_void },
@@ -520,6 +540,7 @@ pub static SHARED: BuiltinTypeProtocol = BuiltinTypeProtocol {
     materialize_fn: None,
     borrow_view_fn: None,
     collection_kind: None,
+    owns_buffered_elements: false,
     c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "clone", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_self },
@@ -548,6 +569,7 @@ pub static WEAK: BuiltinTypeProtocol = BuiltinTypeProtocol {
     materialize_fn: None,
     borrow_view_fn: None,
     collection_kind: None,
+    owns_buffered_elements: false,
     c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "clone", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_self },
@@ -569,6 +591,7 @@ pub static MUTEX: BuiltinTypeProtocol = BuiltinTypeProtocol {
     materialize_fn: None,
     borrow_view_fn: None,
     collection_kind: None,
+    owns_buffered_elements: false,
     c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "lock", runtime_callee: Some("gorget_mutex_lock"), self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: |a, ctx| {
@@ -589,6 +612,7 @@ pub static GUARD: BuiltinTypeProtocol = BuiltinTypeProtocol {
     materialize_fn: None,
     borrow_view_fn: None,
     collection_kind: None,
+    owns_buffered_elements: false,
     c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "get", runtime_callee: Some("gorget_guard_get"), self_conv: SelfConvention::MutBorrow, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_elem },
@@ -606,6 +630,7 @@ pub static RWLOCK: BuiltinTypeProtocol = BuiltinTypeProtocol {
     materialize_fn: None,
     borrow_view_fn: None,
     collection_kind: None,
+    owns_buffered_elements: false,
     c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "read", runtime_callee: Some("gorget_rwlock_read"), self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: |a, ctx| {
@@ -629,6 +654,7 @@ pub static READ_GUARD: BuiltinTypeProtocol = BuiltinTypeProtocol {
     materialize_fn: None,
     borrow_view_fn: None,
     collection_kind: None,
+    owns_buffered_elements: false,
     c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "get", runtime_callee: Some("gorget_read_guard_get"), self_conv: SelfConvention::MutBorrow, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_elem },
@@ -645,6 +671,7 @@ pub static WRITE_GUARD: BuiltinTypeProtocol = BuiltinTypeProtocol {
     materialize_fn: None,
     borrow_view_fn: None,
     collection_kind: None,
+    owns_buffered_elements: false,
     c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "get", runtime_callee: Some("gorget_write_guard_get"), self_conv: SelfConvention::MutBorrow, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_elem },
@@ -662,6 +689,7 @@ pub static THREAD: BuiltinTypeProtocol = BuiltinTypeProtocol {
     materialize_fn: None,
     borrow_view_fn: None,
     collection_kind: None,
+    owns_buffered_elements: false,
     c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "join", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_void },
@@ -679,6 +707,7 @@ pub static HEAP: BuiltinTypeProtocol = BuiltinTypeProtocol {
     materialize_fn: None,
     borrow_view_fn: None,
     collection_kind: None,
+    owns_buffered_elements: true,
     c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "push", runtime_callee: Some("gorget_heap_push"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_void },
@@ -699,6 +728,7 @@ pub static GORGET_STRING_VIEW: BuiltinTypeProtocol = BuiltinTypeProtocol {
     materialize_fn: None,
     borrow_view_fn: None,
     collection_kind: None,
+    owns_buffered_elements: false,
     c_runtime_alias: None,
     methods: &[
         // Mutating (StringBuilder-style)
@@ -763,6 +793,7 @@ pub static OPTION: BuiltinTypeProtocol = BuiltinTypeProtocol {
     materialize_fn: None,
     borrow_view_fn: None,
     collection_kind: None,
+    owns_buffered_elements: false,
     c_runtime_alias: None,
     methods: &[
         // Combinator methods: return the same Option type (self)
@@ -796,6 +827,7 @@ pub static RESULT: BuiltinTypeProtocol = BuiltinTypeProtocol {
     materialize_fn: None,
     borrow_view_fn: None,
     collection_kind: None,
+    owns_buffered_elements: false,
     c_runtime_alias: None,
     methods: &[
         // Combinator methods: return the same Result type (self)
@@ -824,6 +856,7 @@ pub static ATOMIC_INT: BuiltinTypeProtocol = BuiltinTypeProtocol {
     materialize_fn: None,
     borrow_view_fn: None,
     collection_kind: None,
+    owns_buffered_elements: false,
     c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "load", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_int },
@@ -844,6 +877,7 @@ pub static ATOMIC_BOOL: BuiltinTypeProtocol = BuiltinTypeProtocol {
     materialize_fn: None,
     borrow_view_fn: None,
     collection_kind: None,
+    owns_buffered_elements: false,
     c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "load", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_bool },
@@ -863,6 +897,7 @@ pub static BARRIER: BuiltinTypeProtocol = BuiltinTypeProtocol {
     materialize_fn: None,
     borrow_view_fn: None,
     collection_kind: None,
+    owns_buffered_elements: false,
     c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "wait", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_void },
@@ -879,6 +914,7 @@ pub static WAIT_GROUP: BuiltinTypeProtocol = BuiltinTypeProtocol {
     materialize_fn: None,
     borrow_view_fn: None,
     collection_kind: None,
+    owns_buffered_elements: false,
     c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "add", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: int_param, return_type: ret_void },
@@ -897,6 +933,7 @@ pub static SEMAPHORE: BuiltinTypeProtocol = BuiltinTypeProtocol {
     materialize_fn: None,
     borrow_view_fn: None,
     collection_kind: None,
+    owns_buffered_elements: false,
     c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "acquire", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_void },
@@ -915,6 +952,7 @@ pub static ONCE_FLAG: BuiltinTypeProtocol = BuiltinTypeProtocol {
     materialize_fn: None,
     borrow_view_fn: None,
     collection_kind: None,
+    owns_buffered_elements: false,
     c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "do_once", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_bool },
@@ -932,6 +970,7 @@ pub static TASK_GROUP: BuiltinTypeProtocol = BuiltinTypeProtocol {
     materialize_fn: None,
     borrow_view_fn: None,
     collection_kind: None,
+    owns_buffered_elements: false,
     c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "spawn", runtime_callee: Some("gorget_task_group_submit"), self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_void },
@@ -966,6 +1005,7 @@ pub static CALLABLE: BuiltinTypeProtocol = BuiltinTypeProtocol {
     materialize_fn: None,
     borrow_view_fn: None,
     collection_kind: None,
+    owns_buffered_elements: false,
     c_runtime_alias: Some("GorgetClosure"),
     methods: &[],
 };
@@ -980,6 +1020,7 @@ pub static MUT_CALLABLE: BuiltinTypeProtocol = BuiltinTypeProtocol {
     materialize_fn: None,
     borrow_view_fn: None,
     collection_kind: None,
+    owns_buffered_elements: false,
     c_runtime_alias: Some("GorgetClosure"),
     methods: &[],
 };
@@ -994,6 +1035,7 @@ pub static CONSUME_CALLABLE: BuiltinTypeProtocol = BuiltinTypeProtocol {
     materialize_fn: None,
     borrow_view_fn: None,
     collection_kind: None,
+    owns_buffered_elements: false,
     c_runtime_alias: Some("GorgetClosure"),
     methods: &[],
 };
@@ -1008,6 +1050,7 @@ pub static GORGET_CLOSURE: BuiltinTypeProtocol = BuiltinTypeProtocol {
     materialize_fn: None,
     borrow_view_fn: None,
     collection_kind: None,
+    owns_buffered_elements: false,
     c_runtime_alias: Some("GorgetClosure"),
     methods: &[],
 };
@@ -1122,6 +1165,38 @@ mod tests {
                 protocol.clone_inplace_fn.is_some(),
                 "collection protocol {} missing clone_inplace_fn — \
                  Phase A consumers (elem_clone_fn_for_type) read this field",
+                protocol.base_name,
+            );
+        }
+    }
+
+    /// Arena-escape invariant: `owns_buffered_elements` marks a NON-collection
+    /// handle (Channel/Heap) whose mutating element-ingesting method copies the
+    /// element into a self-owned, arena-surviving buffer — the second typed
+    /// shape the borrow checker's `is_buffer_owning_type` gate treats like a
+    /// collection. It is a DISJOINT axis from `collection_kind` (a `Some(_)`
+    /// collection already qualifies via that field; double-flagging would be a
+    /// modelling error), and a handle that ingests nothing (no mutating method)
+    /// can't alias an element into a buffer. This locks both so a future
+    /// protocol can't set the flag incorrectly and silently mis-gate the
+    /// arena-borrow-escape safety check.
+    #[test]
+    fn owns_buffered_elements_invariant() {
+        for protocol in ALL_PROTOCOLS {
+            if !protocol.owns_buffered_elements {
+                continue;
+            }
+            assert!(
+                protocol.collection_kind.is_none(),
+                "protocol {} sets owns_buffered_elements AND collection_kind — \
+                 these are disjoint axes (collections already qualify via \
+                 collection_kind); pick one",
+                protocol.base_name,
+            );
+            assert!(
+                protocol.methods.iter().any(|m| m.is_mutating),
+                "protocol {} sets owns_buffered_elements but has no mutating \
+                 (element-ingesting) method — nothing aliases into the buffer",
                 protocol.base_name,
             );
         }

@@ -1,0 +1,23 @@
+# N2 sibling of attack_19 / attack_93: arena borrow-escape via a CONSTRUCTOR /
+# wrapper arg. `outer` OUTLIVES the arena; wrapping a non-Copy
+# `.get().unwrap()` borrow of the arena-scoped Vector `v` into `Some(...)` and
+# binding it to `outer` copies the arena-backed String into the Some payload
+# WHILE the in-scope allocator is still the arena, so the payload is
+# arena-allocated and dangles when `gorget_arena_destroy` frees the arena at
+# `with`-scope exit — a heap-use-after-free (RUN-confirmed under ASan: READ in
+# gorget_string_free, freed by gorget_arena_destroy). The same gate also catches
+# positional struct constructors (`Wrapper(v.get(0).unwrap())`).
+# `gg check` must REJECT this.
+
+from std.alloc import Arena
+from std.collections import Vector
+void main():
+    Option[String] outer = None
+    with Arena(4096) as pool:
+        Vector[String] v = ["payload-in-arena-memory"]
+        outer = Some(v.get(0).unwrap())
+    match outer:
+        case Some(s):
+            print(s)
+        else:
+            print("none")

@@ -1,0 +1,20 @@
+# N2 sibling of attack_19 / attack_93: arena borrow-escape at a Channel `send`
+# consume position. `ch` OUTLIVES the arena; `send`-ing a non-Copy
+# `.get().unwrap()` borrow of the arena-scoped Vector `v` aliases the
+# arena-backed String into the channel's buffer. `gorget_arena_destroy` frees
+# that String at `with`-scope exit, so the later `ch.recv()` reads freed memory
+# — a heap-use-after-free (RUN-confirmed under ASan: READ in gorget_string_free,
+# freed by gorget_arena_destroy). Channel carries `collection_kind: None` but
+# `owns_buffered_elements: true` (a typed gate — not a name-match of `send`).
+# `gg check` must REJECT this.
+
+from std.alloc import Arena
+from std.channel import Channel
+from std.collections import Vector
+void main():
+    Channel[String] ch = Channel[String](4)
+    with Arena(4096) as pool:
+        Vector[String] v = ["payload-in-arena-memory"]
+        ch.send(v.get(0).unwrap())
+    String got = ch.recv()
+    print(got)

@@ -158,14 +158,21 @@ impl<'a> BorrowChecker<'a> {
                     }
                 }
 
-                // Track non-Copy variables declared inside arena scope
+                // Track non-Copy variables declared inside arena scope. Also
+                // track buffer-owning HANDLE types (Channel/Heap): a Channel is
+                // `is_copy_type`-Copy (opaque pointer) yet owns a heap buffer
+                // freed at arena exit, so an arena-scoped channel must be marked
+                // here or the arena-escape gate would wrongly flag a send into a
+                // channel that does NOT outlive the arena (false positive).
                 if self.arena_depth > 0 {
                     if let Pattern::Binding(name) = &pattern.node {
                         if let Some(def_id) = self.scopes.lookup_def_by_span(name, pattern.span)
                             .or_else(|| self.find_def_by_name(name))
                         {
                             if let Some(type_id) = self.scopes.get_def(def_id).type_id {
-                                if !is_copy_type(type_id, self.types, self.scopes) {
+                                if !is_copy_type(type_id, self.types, self.scopes)
+                                    || self.is_buffer_owning_type(type_id)
+                                {
                                     self.arena_scoped_vars.insert(def_id);
                                 }
                             }
@@ -464,6 +471,29 @@ impl<'a> BorrowChecker<'a> {
                                             value.span,
                                         );
                                     }
+                                }
+                            }
+                            // Subset (b): constructor / wrapper RHS
+                            // (`outer = Some(v.get(0).unwrap())` /
+                            // `outer = Wrapper(...)`) escaping to an outer
+                            // binding. The ctor copies the arena-borrowed element
+                            // into the built value, which then dangles when the
+                            // arena is destroyed. Fires only when the target
+                            // outlives the arena (checked by the enclosing
+                            // `!arena_scoped_vars.contains(target)`).
+                            if !self.arena_scoped_vars.contains(&target_def_id) {
+                                if let Some((src_root, arg_span)) =
+                                    self.ctor_arg_arena_escape(value)
+                                {
+                                    self.error(
+                                        SemanticErrorKind::ArenaEscape {
+                                            name: self.scopes.get_def(src_root).name.clone(),
+                                            kind: ArenaEscapeKind::AssignOuter {
+                                                target: target_name.clone(),
+                                            },
+                                        },
+                                        arg_span,
+                                    );
                                 }
                             }
                         }

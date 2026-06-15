@@ -489,18 +489,27 @@ impl<'a> BorrowChecker<'a> {
         }
     }
 
-    /// True when `recv` has a buffer-owning builtin collection type — i.e. its
-    /// protocol carries `collection_kind: Some(_)` (Vector/Deque/Dict/HashMap/
-    /// Set/HashSet). These own a heap buffer that a pushed/inserted element is
-    /// copied INTO, so an arena-borrowed non-Copy element aliased there dangles
-    /// when the arena is freed. Channel/Mutex/Shared/Guard etc. carry
-    /// `collection_kind: None` (by-value handles with distinct escape
-    /// semantics) and are deliberately excluded — a TYPED gate, no name-match.
-    pub(super) fn is_buffer_owning_collection_receiver(
+    /// True when `recv` has a buffer-owning builtin type whose mutating,
+    /// element-ingesting method copies/moves the passed element INTO a
+    /// self-owned heap buffer that the arena does NOT free at `with`-scope
+    /// exit. Two typed shapes qualify (uniformly — same heap-use-after-free
+    /// class), read off the protocol:
+    ///   - `collection_kind: Some(_)` — Vector/Deque/Dict/HashMap/Set/HashSet,
+    ///     whose `push`/`put`/`insert` copy the element into the collection's
+    ///     heap buffer.
+    ///   - `owns_buffered_elements: true` — Channel (`send`) and Heap (`push`):
+    ///     non-collection handles that nonetheless own a heap buffer the
+    ///     ingested element is copied into.
+    /// An arena-borrowed non-Copy element aliased into either buffer dangles
+    /// when the arena is destroyed. Mutex/Shared/Guard/Atomic/Barrier/... carry
+    /// `collection_kind: None` AND `owns_buffered_elements: false` (no
+    /// element-ingesting owned buffer) and are correctly excluded — a TYPED
+    /// gate on the protocol, no name-matching of `send`/`push`/`Channel`.
+    pub(super) fn is_buffer_owning_receiver(
         &self, recv: &Spanned<Expr>,
     ) -> bool {
         // Resolve the receiver's type (inferred result or, for a bare binding,
-        // its declared type), then map its base name to a builtin protocol.
+        // its declared type), then test it via the typed predicate.
         let tid = self.expr_types.get(&recv.span).copied().or_else(|| {
             self.find_root_def_id_with_path(recv)
                 .and_then(|(root, path)| {
@@ -511,14 +520,146 @@ impl<'a> BorrowChecker<'a> {
                     }
                 })
         });
-        let Some(tid) = tid else { return false };
-        let base_def = match self.types.get(tid) {
+        tid.map_or(false, |t| self.is_buffer_owning_type(t))
+    }
+
+    /// Typed predicate underlying `is_buffer_owning_receiver`: does `type_id`
+    /// name a builtin protocol whose mutating element-ingesting method copies
+    /// the element into a self-owned heap buffer (`collection_kind.is_some()`
+    /// OR `owns_buffered_elements`)? Single source of truth so the arena-escape
+    /// gate AND the arena-scoped-binding tracker agree on which receivers own a
+    /// surviving buffer. Critically, a buffer-owning handle declared INSIDE the
+    /// arena scope (e.g. a `Channel`, which `is_copy_type` treats as a Copy
+    /// pointer) must be tracked as arena-scoped so the gate's "receiver
+    /// outlives the arena" test is correct — `is_copy_type` alone would miss it.
+    pub(super) fn is_buffer_owning_type(
+        &self, type_id: crate::semantic::ids::TypeId,
+    ) -> bool {
+        let base_def = match self.types.get(type_id) {
             ResolvedType::Defined(d) | ResolvedType::Generic(d, _) => *d,
             _ => return false,
         };
         let base_name = &self.scopes.get_def(base_def).name;
         crate::ir::lowering::builtins::lookup_protocol(base_name)
-            .map_or(false, |p| p.collection_kind.is_some())
+            .map_or(false, |p| p.collection_kind.is_some() || p.owns_buffered_elements)
+    }
+
+    /// Centralized arena-escape source predicate (the "fix the class" core,
+    /// shared by every consume/ingest position: collection `push`/`put`/...,
+    /// Channel `send` / Heap `push`, and constructor/wrapper args at an
+    /// escaping destination).
+    ///
+    /// Returns the arena-scoped collection ROOT def-id when `arg` is a
+    /// borrow-producing read (`v.get(0).unwrap()` / `v[i]` / `v.first()`)
+    /// whose source collection is arena-scoped AND whose bound element type is
+    /// non-Copy — i.e. the precise shape that, when ingested into a buffer that
+    /// outlives the arena, becomes a heap-use-after-free at arena destruction.
+    /// Copy elements (value-copied out, no aliasing) and non-arena sources
+    /// return `None`. Caller is responsible for the destination-escapes test
+    /// (the receiver / target / channel handle outliving the arena).
+    pub(super) fn arena_escaping_borrow_source(
+        &self, arg: &Spanned<Expr>,
+    ) -> Option<DefId> {
+        let (src_root, _) = self.find_collection_source_with_path(arg)?;
+        if !self.arena_scoped_vars.contains(&src_root) {
+            return None;
+        }
+        let elem_non_copy = self
+            .arena_borrowed_element_type(arg)
+            .map_or(false, |elem_tid| {
+                !super::type_utils::is_copy_type(elem_tid, self.types, self.scopes)
+            });
+        if elem_non_copy { Some(src_root) } else { None }
+    }
+
+    /// Subset (b) of the arena borrow-escape class: a CONSTRUCTOR / wrapper call
+    /// (`Some(...)` / `Ok(...)` / `Error(...)` / a struct or newtype ctor like
+    /// `Wrapper(...)`) whose argument is an arena-escaping source. The
+    /// constructor copies/moves the arena element into the newly built value;
+    /// when that value then flows to an escaping destination (outer binding /
+    /// return), the in-arena element it aliases dangles at arena destruction —
+    /// a heap-use-after-free (RUN-confirmed under ASan).
+    ///
+    /// Returns `(arena_source_root, arg_span)` for the first escaping arg.
+    /// Recurses through nested constructors (`Some(Wrapper(v.get(0)...))`).
+    /// `Expr::Call` covers `Some`/`Ok`/`Error` (prelude variants), enum variant
+    /// constructors, newtype constructors, and positional struct constructors —
+    /// the callee must resolve to a `Variant`/`Newtype`/`Struct`. The caller
+    /// owns the destination-escapes test (target outliving the arena). A bare
+    /// (unwrapped) RHS — borrow-read or arena identifier — is handled by the
+    /// existing AssignOuter paths in `check_stmt`, not here.
+    ///
+    /// Two arena-escaping arg shapes are caught (uniformly — same UAF class):
+    ///   - a borrow-producing read of an arena collection
+    ///     (`v.get(0).unwrap()` — `arena_escaping_borrow_source`), and
+    ///   - a bare arena-scoped non-Copy identifier (`Some(arenaStr)`, also via
+    ///     `!arenaStr`) — the ctor copies/moves that arena-allocated value into
+    ///     the built value, which dangles past the arena.
+    pub(super) fn ctor_arg_arena_escape(
+        &self, value: &Spanned<Expr>,
+    ) -> Option<(DefId, Span)> {
+        match &value.node {
+            // `Some(...)` / `Ok(...)` / `Error(...)` (prelude variants), enum
+            // variant constructors, newtype constructors. (A positional struct
+            // constructor `Wrapper(...)` is desugared to `Expr::StructLiteral`
+            // by resolution, handled in the arm below.)
+            Expr::Call { callee, args, .. } => {
+                let is_constructor = self
+                    .resolve_callee_def_id(callee)
+                    .map_or(false, |id| matches!(
+                        self.scopes.get_def(id).kind,
+                        DefKind::Variant | DefKind::Newtype | DefKind::Struct
+                    ));
+                if !is_constructor {
+                    return None;
+                }
+                for arg in args {
+                    if let Some(hit) = self.ctor_single_arg_escape(&arg.node.value) {
+                        return Some(hit);
+                    }
+                }
+                None
+            }
+            // Positional/named struct constructor — `Wrapper(...)` desugars here.
+            // StructLiteral args are bare `Spanned<Expr>` (no CallArg wrapper).
+            Expr::StructLiteral { args, .. } => {
+                for arg in args {
+                    if let Some(hit) = self.ctor_single_arg_escape(arg) {
+                        return Some(hit);
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// One constructor argument: is it an arena-escaping source (borrow-read of
+    /// an arena collection, a bare arena-scoped non-Copy identifier, or `!` of
+    /// one), or a nested constructor wrapping such a source? Shared by both the
+    /// `Expr::Call` and `Expr::StructLiteral` ctor arms of
+    /// `ctor_arg_arena_escape`.
+    fn ctor_single_arg_escape(
+        &self, arg: &Spanned<Expr>,
+    ) -> Option<(DefId, Span)> {
+        // Borrow-producing read of an arena collection (`v.get(0).unwrap()`).
+        if let Some(src_root) = self.arena_escaping_borrow_source(arg) {
+            return Some((src_root, arg.span));
+        }
+        // Bare arena-scoped non-Copy identifier (`Some(arenaStr)`), incl. `!arenaStr`.
+        let id_expr = match &arg.node {
+            Expr::Move { expr: inner } => inner.as_ref(),
+            _ => arg,
+        };
+        if let Expr::Identifier(_) = &id_expr.node {
+            if let Some(&did) = self.resolution_map.get(&id_expr.span.start) {
+                if self.arena_scoped_vars.contains(&did) {
+                    return Some((did, arg.span));
+                }
+            }
+        }
+        // Nested constructor (`Some(Wrapper(v.get(0).unwrap()))`).
+        self.ctor_arg_arena_escape(arg)
     }
 
     /// For a borrow-producing collection-read expression, return the receiver

@@ -392,7 +392,55 @@ fn sec_93_arena_borrow_escape_push() {
     security_rejected("attack_93_arena_borrow_escape_push", "cannot assign arena-scoped value");
 }
 
+#[test]
+fn sec_94_arena_borrow_escape_channel_send() {
+    // N2 subset (a): Channel `send` ingests an arena-borrowed non-Copy element
+    // into the channel's buffer; the channel OUTLIVES the arena, so the element
+    // dangles at `gorget_arena_destroy`. RUN-confirmed UAF under ASan before the
+    // typed `owns_buffered_elements` gate. Channel `collection_kind: None` —
+    // gated on the typed flag, not a name-match of `send`.
+    security_rejected("attack_94_arena_borrow_escape_channel_send", "cannot assign arena-scoped value");
+}
+
+#[test]
+fn sec_95_arena_borrow_escape_heap_push() {
+    // N2 subset (a) sibling: Heap `push` is the SAME element-owning-sink class as
+    // Channel `send` (also `owns_buffered_elements: true`, also
+    // `collection_kind: None`). RUN-confirmed UAF under ASan. Proves the gate is
+    // the CLASS, not a Channel-only instance ("fix the class, not the instance").
+    security_rejected("attack_95_arena_borrow_escape_heap_push", "cannot assign arena-scoped value");
+}
+
+#[test]
+fn sec_96_arena_borrow_escape_ctor_arg() {
+    // N2 subset (b): constructor/wrapper arg (`outer = Some(arenaVec.get(0).unwrap())`)
+    // assigned to an outer binding. The ctor copies the arena-borrowed element
+    // into the built value under the in-scope arena allocator, so it dangles at
+    // arena destruction. RUN-confirmed UAF under ASan. Also covers positional
+    // struct constructors (desugared to `Expr::StructLiteral`).
+    security_rejected("attack_96_arena_borrow_escape_ctor_arg", "cannot assign arena-scoped value");
+}
+
+#[test]
+fn sec_98_arena_borrow_escape_ctor_bareid() {
+    // N2 subset (b) sibling: the ctor arg is a BARE arena-scoped non-Copy
+    // identifier (`Some(arenaStr)` / `!arenaStr`), not a `.get()` borrow-read —
+    // the same UAF class, caught by the same `ctor_arg_arena_escape` predicate.
+    // RUN-confirmed UAF under ASan.
+    security_rejected("attack_98_arena_borrow_escape_ctor_bareid", "cannot assign arena-scoped value");
+}
+
 // ── Accepted well-typed programs that must run safely under --sanitize ──
+
+#[test]
+fn sec_97_arena_channel_send_inner_ok() {
+    // Negative control for sec_94: the arena-escape gate must NOT over-fire when
+    // the buffer-owning handle does NOT outlive the arena (Channel declared
+    // INSIDE the `with`). Must build, run clean under --sanitize, and print the
+    // payload. Guards against a false positive on a Copy-typed handle that the
+    // arena-scoped-binding tracker must still recognize via is_buffer_owning_type.
+    security_safe("attack_97_arena_channel_send_inner_ok", "payload");
+}
 
 #[test]
 fn sec_03_cow_mutate_while_borrowed() {

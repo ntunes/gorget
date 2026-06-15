@@ -1,0 +1,21 @@
+# N2 subset (b) sibling of attack_96: constructor/wrapper arg escape where the
+# wrapped value is a BARE arena-scoped non-Copy identifier (not a `.get()`
+# borrow-read). `outer` OUTLIVES the arena; `Some(arenaStr)` copies/moves the
+# arena-allocated String into the Some payload, which dangles when
+# `gorget_arena_destroy` frees the arena at `with`-scope exit — a
+# heap-use-after-free (RUN-confirmed under ASan: READ in gorget_string_free).
+# The bare-id form (and `!arenaStr`) is the same class as the borrow-read form,
+# caught by the same `ctor_arg_arena_escape` predicate ("fix the class").
+# `gg check` must REJECT this.
+
+from std.alloc import Arena
+void main():
+    Option[String] outer = None
+    with Arena(4096) as pool:
+        String arenaStr = "payload-in-arena-memory"
+        outer = Some(arenaStr)
+    match outer:
+        case Some(s):
+            print(s)
+        else:
+            print("none")

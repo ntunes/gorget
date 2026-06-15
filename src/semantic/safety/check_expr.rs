@@ -467,31 +467,34 @@ impl<'a> BorrowChecker<'a> {
                     false
                 };
 
-                // Arena escape check — collection-MUTATION consume positions
+                // Arena escape check — element-INGEST consume positions
                 // (sibling of the AssignOuter / Return checks in check_stmt).
                 //
-                // `outer.push(v.get(0).unwrap())` where `outer` OUTLIVES the
-                // arena and the pushed element is a borrow into an arena-scoped
-                // collection `v` is a heap-use-after-free: the borrowed
-                // arena-String is aliased into `outer`'s buffer, then dangles
-                // when the arena is destroyed at `with` exit. `gg check` must
-                // reject it (mirrors the AssignOuter borrow-escape path; the
-                // self_host has no such pattern). Fires only when ALL hold:
+                // `outer.push(v.get(0).unwrap())` (collection), `ch.send(...)`
+                // (Channel), or `heap.push(...)` (Heap) where the receiver
+                // OUTLIVES the arena and the ingested element is a borrow into
+                // an arena-scoped collection `v` is a heap-use-after-free: the
+                // borrowed arena-String is aliased into the receiver's
+                // self-owned buffer, then dangles when the arena is destroyed
+                // at `with` exit. `gg check` must reject it (mirrors the
+                // AssignOuter borrow-escape path; the self_host has no such
+                // pattern). Fires only when ALL hold:
                 //   1. inside a `with Arena` scope (`arena_depth > 0`),
-                //   2. METHOD is a typed mutating collection method
+                //   2. METHOD is a typed mutating builtin method
                 //      (`is_mutating_builtin_method` — no name-matching),
-                //   3a. the RECEIVER is a buffer-owning collection (typed
-                //      `collection_kind.is_some()` on its protocol) — this is
-                //      what makes the pushed element ALIAS into a self-owned
-                //      buffer that the arena later frees. Channel `send`, Mutex,
-                //      Shared, Guard etc. are NOT buffer-owning collections
-                //      (`collection_kind: None`) and have distinct producer/
-                //      consumer escape semantics → out of scope (filed in TODO),
-                //   3b. the receiver collection's root OUTLIVES the arena
+                //   3a. the RECEIVER is a buffer-owning receiver: typed
+                //      `collection_kind.is_some()` (Vector/Dict/Set/...) OR
+                //      `owns_buffered_elements` (Channel `send`, Heap `push`) —
+                //      this is what makes the ingested element ALIAS into a
+                //      self-owned buffer that the arena later frees. Mutex,
+                //      Shared, Guard, Atomic etc. carry neither flag (no
+                //      element-ingesting owned buffer) → correctly excluded,
+                //   3b. the receiver handle's root OUTLIVES the arena
                 //      (root ∉ arena_scoped_vars),
-                //   4. some arg traces to an arena-scoped source collection, and
-                //   5. that arg's BOUND ELEMENT type is non-Copy (a Copy
-                //      element is value-copied out, no aliasing).
+                //   4. some arg traces to an arena-scoped source collection
+                //      whose bound element type is non-Copy
+                //      (`arena_escaping_borrow_source` — Copy elements are
+                //      value-copied out, no aliasing).
                 // Reuses the existing ArenaEscape/AssignOuter diagnostic (no new
                 // variant); `.clone()` is NOT suggested — cloning into the
                 // in-scope arena UAFs too.
@@ -499,36 +502,24 @@ impl<'a> BorrowChecker<'a> {
                     && crate::ir::lowering::builtins::is_mutating_builtin_method(
                         method.node.as_str(),
                     )
-                    && self.is_buffer_owning_collection_receiver(receiver)
+                    && self.is_buffer_owning_receiver(receiver)
                 {
                     if let Some((recv_root, _)) = self.find_root_def_id_with_path(receiver) {
                         if !self.arena_scoped_vars.contains(&recv_root) {
                             let dest_name = self.scopes.get_def(recv_root).name.clone();
                             for arg in args {
-                                if let Some((src_root, _)) =
-                                    self.find_collection_source_with_path(&arg.node.value)
+                                if let Some(src_root) =
+                                    self.arena_escaping_borrow_source(&arg.node.value)
                                 {
-                                    if !self.arena_scoped_vars.contains(&src_root) {
-                                        continue;
-                                    }
-                                    let elem_non_copy = self
-                                        .arena_borrowed_element_type(&arg.node.value)
-                                        .map_or(false, |elem_tid| {
-                                            !super::type_utils::is_copy_type(
-                                                elem_tid, self.types, self.scopes,
-                                            )
-                                        });
-                                    if elem_non_copy {
-                                        self.error(
-                                            SemanticErrorKind::ArenaEscape {
-                                                name: self.scopes.get_def(src_root).name.clone(),
-                                                kind: crate::semantic::errors::ArenaEscapeKind::AssignOuter {
-                                                    target: dest_name.clone(),
-                                                },
+                                    self.error(
+                                        SemanticErrorKind::ArenaEscape {
+                                            name: self.scopes.get_def(src_root).name.clone(),
+                                            kind: crate::semantic::errors::ArenaEscapeKind::AssignOuter {
+                                                target: dest_name.clone(),
                                             },
-                                            arg.node.value.span,
-                                        );
-                                    }
+                                        },
+                                        arg.node.value.span,
+                                    );
                                 }
                             }
                         }

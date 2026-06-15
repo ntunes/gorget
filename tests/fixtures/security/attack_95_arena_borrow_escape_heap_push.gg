@@ -1,0 +1,20 @@
+# N2 sibling of attack_19 / attack_93 / attack_94: arena borrow-escape at a Heap
+# `push` consume position. `pq` (a Heap, NOT a `collection_kind` collection)
+# OUTLIVES the arena; pushing a non-Copy `.get().unwrap()` borrow of the
+# arena-scoped Vector `v` aliases the arena-backed String into the heap's
+# self-owned buffer, which dangles when `gorget_arena_destroy` frees the arena
+# at `with`-scope exit — a heap-use-after-free (RUN-confirmed under ASan: READ
+# in gorget_string_clone_to_owned via Heap__GorgetString__peek). Heap carries
+# `owns_buffered_elements: true` (the same typed gate that catches Channel
+# `send`, proving the gate is the CLASS, not a Channel-only instance).
+# `gg check` must REJECT this.
+
+from std.alloc import Arena
+from std.heap import Heap
+from std.collections import Vector
+void main():
+    Heap[String] pq = Heap[String](Vector[String]())
+    with Arena(4096) as pool:
+        Vector[String] v = ["payload-in-arena-memory"]
+        pq.push(v.get(0).unwrap())
+    print(pq.peek().unwrap())

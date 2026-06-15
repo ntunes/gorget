@@ -1,0 +1,20 @@
+# Negative control for attack_94: the arena borrow-escape gate must NOT
+# over-fire when the buffer-owning handle does NOT outlive the arena. Here the
+# Channel `ch` is declared INSIDE the `with Arena` scope, so it (and its buffer)
+# are freed together with the arena-allocated String at scope exit, and the
+# `recv()` happens BEFORE the arena is destroyed — no use-after-free. A Channel
+# is `is_copy_type`-Copy (opaque pointer), so the arena-scoped-binding tracker
+# must mark it via `is_buffer_owning_type` or the gate would wrongly reject this
+# (a false positive). `gg check` must ACCEPT, and it must run clean under
+# --sanitize.
+
+from std.alloc import Arena
+from std.channel import Channel
+from std.collections import Vector
+void main():
+    with Arena(4096) as pool:
+        Channel[String] ch = Channel[String](4)
+        Vector[String] v = ["payload"]
+        ch.send(v.get(0).unwrap())
+        String got = ch.recv()
+        print(got)
