@@ -1400,10 +1400,43 @@ bool try_register_struct_ctor_static(GirModule &gmod, SpannedType sd_ty, String 
 bool try_register_sync_ctor_static(GirModule &gmod, SpannedType sd_ty, String sd_name, SpannedExpr sd_val):
     match sd_val.expr:
         case ECall(callee_box, args, targs):
-            if targs.len() != 0:
-                return false
             match (*callee_box).expr:
                 case EIdentifier(cname):
+                    # GENERIC sync ctor: `Mutex[T] g = Mutex[T](v)` / `RWLock`.
+                    # The runtime ctor `gorget_mutex_new(size_t, void* init)`
+                    # returns a `GorgetMutex*` handle. Rust's GlobalInit::Extern
+                    # emits a MANGLED `Mutex__<elem_c>__new` (mod.rs:2675) that
+                    # the LIR then remaps to `gorget_mutex_new(sizeof(T), &init)`
+                    # — but the self-host static path emits the init_expr as a
+                    # RAW C STRING (no GIR-call / LIR-remap hop), so we spell the
+                    # FINAL resolved runtime call directly:
+                    #   `gorget_mutex_new(sizeof(<elem_c>), &(<elem_c>){<val>})`
+                    # (the size + by-address-value shape `runtime.rs:472`). This
+                    # mirrors how the non-generic sync ctors above already emit
+                    # their resolved `gorget_<kind>_new(...)` string verbatim.
+                    # `Mutex[T]` is GENERIC so it never reaches the bare-name
+                    # `sync_constructor_runtime_name` arm below.
+                    if cname == "Mutex" or cname == "RWLock":
+                        if targs.len() == 0:
+                            return false
+                        String gen_run_fn = "gorget_mutex_new"
+                        if cname == "RWLock":
+                            gen_run_fn = "gorget_rwlock_new"
+                        String gen_elem_c = type_to_c_name(targs.get(0).unwrap(), &gmod)
+                        # Initial value literal (defaults to 0 — Rust
+                        # `arg_inits.first().unwrap_or(Int(0))`).
+                        String gen_val = "0"
+                        if args.len() > 0:
+                            gen_val = scalar_static_c_literal(args.get(0).unwrap())
+                            if gen_val == "":
+                                return false
+                        String gen_init = gen_run_fn + "(sizeof(" + gen_elem_c + "), &(" + gen_elem_c + "){" + gen_val + "})"
+                        String gen_mangled = mangle_type_name(cname, targs, &gmod)
+                        int gen_ptr_ty = register_ptr(&gmod, lookup_or_register_named(&gmod, gen_mangled))
+                        static_put(&gmod, sd_name, gen_init, gen_ptr_ty)
+                        return true
+                    if targs.len() != 0:
+                        return false
                     String sync_new_fn = sync_constructor_runtime_name(cname)
                     if sync_new_fn == "":
                         return false
@@ -1853,6 +1886,21 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
                         recv_name = name
                     else:
                         pass
+        # Guard `.get()` returns the guarded VALUE directly (the runtime
+        # `gorget_guard_get` yields `*(T*)g->ptr`), NOT an Option — unlike a
+        # collection getter. `Guard[bool].get()` must type as `bool` (else it
+        # prints `1`, not `true`, and the deref reads 8 bytes off a 1-byte
+        # bool). The elem is the suffix after the Guard family prefix. Mirrors
+        # Rust's `gorget_guard_get` inline yielding the concrete inner type.
+        String guard_elem = ""
+        if recv_name.starts_with("WriteGuard__"):
+            guard_elem = recv_name.slice(12, recv_name.len())
+        elif recv_name.starts_with("ReadGuard__"):
+            guard_elem = recv_name.slice(11, recv_name.len())
+        elif recv_name.starts_with("Guard__"):
+            guard_elem = recv_name.slice(7, recv_name.len())
+        if guard_elem != "":
+            return resolve_field_gir_type(guard_elem, &gmod)
         String elem = collection_element_type(recv_name)
         if elem == "":
             if recv_name.starts_with("Dict__GorgetString__"):

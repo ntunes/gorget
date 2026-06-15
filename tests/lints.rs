@@ -904,9 +904,22 @@ fn snag11_equip_symbol_mangle_site_count() {
 /// contract, mirroring Rust gg's `map_monomorphized_to_runtime`,
 /// src/lir/lower/calls.rs:318), not a classification-routing dodge — the FAMILY
 /// classification still goes through `type_category_for_name` upstream.
+/// Bumped 71 → 74 (2026-06-15): the self-host Mutex/Guard ABI port added THREE
+/// `recv_name.starts_with("Guard__"/"ReadGuard__"/"WriteGuard__")` sites in
+/// `lower_types.gg`'s `infer_method_return_type` `get`-arm — they strip the
+/// guard family prefix to recover the guarded element type T so `g.get()` types
+/// as T (e.g. `Guard[bool].get()` → `bool`, not the I64 default that printed
+/// `1` instead of `true`). This is the explicitly-allowed "extract T from
+/// Mangled__T" name-parsing case (the per-element value type IS the runtime
+/// contract for `gorget_guard_get`'s deref, mirroring Rust's inlined
+/// FieldPtr+Load yielding the concrete inner type, src/lir/lower/insts.rs:3301),
+/// NOT a classification-routing dodge — the Guard FAMILY classification still
+/// goes through `resource_meta_for`/`type_runtime_map` upstream. (The sibling
+/// `concurrency_elem_size_in_mod` size-extractor uses a VARIABLE prefix loop,
+/// not a literal `starts_with`, so it is correctly not counted here.)
 #[test]
 fn no_growth_in_self_host_name_prefix_routing() {
-    const BUDGET: usize = 71;
+    const BUDGET: usize = 74;
 
     // Phase-A classification-routing class only: all MANGLED_PREFIXES EXCEPT
     // the prelude option-like ones (those are the sibling lint's burn-down).

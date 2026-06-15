@@ -2334,9 +2334,13 @@ bool is_void_runtime_fn(String name):
         return true
     if name == "gorget_shared_set" or name == "gorget_shared_free":
         return true
-    if name == "gorget_mutex_lock" or name == "gorget_mutex_unlock" or name == "gorget_mutex_free":
+    # NOTE: gorget_mutex_lock / gorget_rwlock_read / gorget_rwlock_write are
+    # NOT void — they return a `gorget_guard_t` struct by value (the acquired
+    # guard). Their dst-store + struct-copy-into-`g` chain must run, so they
+    # are intentionally absent here and typed in `runtime_fn_return_type`.
+    if name == "gorget_mutex_unlock" or name == "gorget_mutex_free":
         return true
-    if name == "gorget_rwlock_read" or name == "gorget_rwlock_write" or name == "gorget_rwlock_free":
+    if name == "gorget_rwlock_free":
         return true
     if name == "gorget_guard_release":
         return true
@@ -2414,8 +2418,20 @@ String runtime_category_to_c_type(String runtime):
         return "GorgetSet"
     elif runtime == "GorgetString":
         return "GorgetString"
-    elif runtime == "Ptr" or runtime == "Box" or runtime == "Guard":
+    elif runtime == "Ptr" or runtime == "Box":
         return "void*"
+    elif runtime == "Guard":
+        # A `Guard__T` / `ReadGuard__T` / `WriteGuard__T` is the runtime's
+        # 16-byte `{GorgetMutex* owner, void* ptr}` guard struct, NOT a bare
+        # `void*`. Rust gg emits `typedef gorget_guard_t Guard__int64_t;`
+        # (src/backend/c_lir — the guard typedef). The self-host already
+        # registers the matching 16-byte `{owner, ptr}` LIR struct
+        # (lir_lower.gg is_guard_struct_type arm), so routing the C typedef +
+        # sizeof to `gorget_guard_t` keeps the layout consistent. A `void*`
+        # typedef truncated `gorget_mutex_lock`'s by-value 16-byte return
+        # (and made `gorget_guard_get(&__s)` pass an 8-byte slot where a
+        # `gorget_guard_t*` was expected).
+        return "gorget_guard_t"
     elif runtime == "Task":
         return "TaskHandle"
     return ""

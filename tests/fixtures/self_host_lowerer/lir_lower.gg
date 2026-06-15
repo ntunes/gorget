@@ -2012,6 +2012,18 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
             return true
         if fn_name == "gorget_channel_recv" or fn_name == "gorget_channel_try_recv":
             return true
+        # Guard set/get/release/get_ptr: arg 0 (the guard) is a
+        # `gorget_guard_t*` — pass the guard slot's ADDRESS, not the 16-byte
+        # struct by value. Without this, cc rejects "incompatible type for
+        # argument 1" (the runtime wants a pointer to the guard struct).
+        if fn_name == "gorget_guard_set" or fn_name == "gorget_write_guard_set":
+            return true
+        if fn_name == "gorget_guard_get" or fn_name == "gorget_guard_get_ptr":
+            return true
+        if fn_name == "gorget_read_guard_get" or fn_name == "gorget_write_guard_get":
+            return true
+        if fn_name == "gorget_guard_release":
+            return true
         # Read-only methods also take self by const pointer
         if fn_name == "gorget_array_safe_get" or fn_name == "gorget_array_len":
             return true
@@ -2135,6 +2147,19 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
         return true
     if fn_name == "gorget_channel_send" and arg_idx == 1:
         return true
+    # Guard set value (arg 1): `gorget_guard_set(g, void* val, size)` — the
+    # value is passed BY ADDRESS (the runtime memcpy's `size` bytes from it
+    # into the guarded data). Mirrors Rust's `&(T){val}` (A::VoidElem ABI,
+    # runtime.rs:468). The size (arg 2) is appended by the post-mapping fixup.
+    if (fn_name == "gorget_guard_set" or fn_name == "gorget_write_guard_set") and arg_idx == 1:
+        return true
+    # `cv.wait(g)` → `gorget_condvar_wait_guard(void* cv, gorget_guard_t* g)`
+    # (the std.sync extern binding). The guard (arg 1) must be the guard slot
+    # ADDRESS — the runtime needs `&guard->mutex->lock` for pthread_cond_wait.
+    # With Guard typedef'd as the 16-byte `gorget_guard_t` struct, a by-value
+    # pass would be a struct-vs-pointer type error.
+    if fn_name == "gorget_condvar_wait_guard" and arg_idx == 1:
+        return true
     if fn_name == "gorget_array_extend" and arg_idx == 1:
         return true
     if fn_name == "gorget_array_index_of" and arg_idx == 1:
@@ -2232,6 +2257,13 @@ bool returns_ptr_to_element(String name):
     if name == "gorget_array_safe_last" or name == "gorget_array_safe_first" or name == "gorget_array_safe_pop":
         return true
     if name == "gorget_map_remove" or name == "gorget_array_remove_opt":
+        return true
+    # `gorget_guard_get(g)` returns `g->ptr` — a `void*` AT the guarded data,
+    # not the value. A scalar `g.get()` dst slot needs ONE deref (`*(T*)ptr`)
+    # to read the value. Rust inlines this as FieldPtr+Load+Load; the
+    # self-host calls the runtime getter (which returns the data ptr) and
+    # then derefs it once via the shared ptr-to-element ILoad path below.
+    if name == "gorget_guard_get" or name == "gorget_read_guard_get" or name == "gorget_write_guard_get":
         return true
     return false
 
@@ -2435,6 +2467,28 @@ int extract_elem_size_from_name_in_mod(String name, Dict[String, int] &sr, LirMo
     String elem = coll_elem_type_for_name(name, &m)
     if elem != "":
         return type_elem_size_in_mod(elem, &sr, &m)
+    return 8
+
+# Extract the inner-type sizeof from a monomorphized concurrency ctor /
+# guard-set name (`Mutex__int64_t__new`, `RWLock__T__new`, `Guard__T__set`,
+# `WriteGuard__T__set`). The type sits between the family prefix and the
+# trailing `__method`. Mirrors Rust gg's `concurrency_elem_size`
+# (src/lir/lower/types.rs:36). Returns 8 (a pointer-size default) on miss.
+int concurrency_elem_size_in_mod(String name, Dict[String, int] &sr, LirModule &m):
+    Vector[String] prefixes = ["Mutex__", "RWLock__", "Shared__", "Guard__", "ReadGuard__", "WriteGuard__"]
+    for pfx in prefixes:
+        if name.starts_with(pfx):
+            String rest = name.slice(pfx.len(), name.len())
+            # Find the LAST `__` (the `__method` boundary); the elem is before it.
+            int last = -1
+            int ci = 0
+            while ci < rest.len() - 1:
+                if rest.slice(ci, ci + 2) == "__":
+                    last = ci
+                ci += 1
+            if last > 0:
+                String elem = rest.slice(0, last)
+                return type_elem_size_in_mod(elem, &sr, &m)
     return 8
 
 # Map a monomorphized element-type name to a qsort comparator suffix.
@@ -3464,6 +3518,16 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                 int esv = lir_fn_next_value(&f)
                 lir_push_inst(&f, bb, IIConst(esv, LT_I64, es))
                 lir_args.push(esv)
+            # gorget_guard_set(g, &val, size) / gorget_write_guard_set: append
+            # sizeof(elem) as the 3rd arg (the runtime memcpy's `size` bytes).
+            # arg 0 (guard) + arg 1 (value) already passed by-address via
+            # needs_ptr_arg. The elem size comes from the UNMAPPED `func_name`
+            # (`Guard__int64_t__set`). Mirrors Rust insts.rs:3463.
+            if call_name == "gorget_guard_set" or call_name == "gorget_write_guard_set":
+                int ges = concurrency_elem_size_in_mod(func_name, &sr, &m)
+                int gesv = lir_fn_next_value(&f)
+                lir_push_inst(&f, bb, IIConst(gesv, LT_I64, ges))
+                lir_args.push(gesv)
             # gorget_channel_recv(ch, &out): needs output slot address as 2nd arg.
             # gorget_channel_recv_timeout(ch, &out, timeout_ms): needs output + timeout.
             if call_name == "gorget_channel_recv" or call_name == "gorget_channel_try_recv":
@@ -4009,6 +4073,15 @@ String drop_fn_for_type(String type_name, Dict[String, bool] &resource_types, Di
         return "gorget_set_free"
     elif runtime == "Ptr" or runtime == "Box":
         return "free"
+    elif runtime == "Guard":
+        # A `Guard__T`/`ReadGuard__T`/`WriteGuard__T` local drops by RELEASING
+        # the held lock (`gorget_guard_release(gorget_guard_t* g)` — unlocks the
+        # mutex + wakes one waiter). Rust gg emits a per-type wrapper
+        # `Guard__T__drop(self) { gorget_guard_release(self); }`; the self-host
+        # routes the GIDrop straight to the runtime release (the GIDrop arm
+        # passes `&slot`, matching the `gorget_guard_t*` param). WITHOUT this a
+        # mutex-Guard scope-exit emitted no release → the next locker DEADLOCKS.
+        return "gorget_guard_release"
     elif runtime == "Task":
         return ""
     if resource_types.contains(type_name):
