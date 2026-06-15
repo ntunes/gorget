@@ -929,11 +929,13 @@ fn sec_79_weak_clone_sanity() {
 
 #[test]
 fn sec_80_char_construction_edges() {
-    // `chr(0)` → empty String (0 bytes — Gorget refuses to embed NUL).
-    // `chr(1114111)` → U+10FFFF, 1 grapheme, 4 UTF-8 bytes (len counts
-    // codepoints here). `chr(1200000)` (invalid) → U+FFFD replacement.
-    // All deterministic — no invalid UTF-8 is ever produced.
-    security_safe("attack_80_char_edge_cases", "0\n1\n1");
+    // `chr(0)` → 1-byte NUL String (len 1 codepoint). Gorget String is
+    // length-prefixed and carries interior NULs (NOT NUL-terminated); the
+    // empty-String behavior was deliberately removed in commit 11e3abb0
+    // (gorget-js snag #6, codepoint_to_str(0)). `chr(1114111)` → U+10FFFF,
+    // 1 codepoint (4 UTF-8 bytes). `chr(1200000)` (invalid) → U+FFFD
+    // replacement, 1 codepoint. All deterministic; no invalid UTF-8 is produced.
+    security_safe("attack_80_char_edge_cases", "1\n1\n1");
 }
 
 // ── Round 7 attacks: self-ref, closures-in-vector, atomic races, etc. ────
