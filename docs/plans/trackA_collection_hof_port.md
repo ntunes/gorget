@@ -98,5 +98,7 @@ failure, STOP and report.
    high-value Stage-1/2 fixture turns out to need param-hints, pull the hint plumbing forward.
 3. Measure flip count PER STAGE (already mandated). The `/tmp/parity-baseline-15966.log`
    cite is a measurement artifact (not a repo file) — re-measure from `self_host_runtime_diff`.
-4. Verify `__callable_N` indirect dispatch threads `fold`'s accumulator type correctly
-   (`4158530b` implements fold — flip-prove it on the current tree before extending).
+4. Flip-prove `fold` end-to-end on the current tree before extending — `4158530b`
+   binds the closure param via `closure_extract`/`nl_put` and threads the
+   accumulator type from the init expr's `type_id` (AST inlining, no `__callable_N`
+   dispatch). Confirm it still produces correct output.
