@@ -189,6 +189,29 @@ struct TypeTable:
     # and mangle a bogus `Vector__int64_t__iter__int64_t__GorgetClosure`.
     Dict[int, Vector[int]] expr_method_targs
     Dict[int, String] expr_method_targs_name
+    # Per-CHAIN-LINK resolved type side-table — key: SpannedExpr.span.END,
+    # value: index into `types` (a ResolvedType id). Written by
+    # `infer_expr_type`'s registry-resolved EMethodCall path alongside
+    # `expr_types`.
+    #
+    # WHY a SECOND table keyed on span.END: the parser gives the OUTER and
+    # every INNER call of a method chain the SAME `span.start` (the chain's
+    # receiver start) — `v.iter().take(4).filter(p)` makes `.iter()`,
+    # `.take()`, `.filter()` all start at `v`. So `expr_types` (keyed on
+    # span.start) collapses the whole chain onto one slot (last-writer-wins =
+    # the OUTERMOST type), and an INNER link reads the wrong (output) type →
+    # the lowerer emits `FilterIter__…__take(...)` and CC-fails. `span.END`
+    # is UNIQUE per link (each link ends at a different token), so this table
+    # preserves EACH link's own resolved type. The lowerer's
+    # `lookup_expr_gir_type` prefers this per-link table for method-chain
+    # links and falls back to `expr_types` for non-chain exprs. This is the
+    # self-host analog of Rust's recursive span-table-free `infer_expr_ast_type`
+    # oracle: the typechecker's recursive `infer_expr_type` already RE-DERIVES
+    # each link's type from the trait registry; we just persist its per-link
+    # output here instead of letting the span.start collision discard it.
+    # Distinct key-space from `expr_method_targs` (span.start + name-guard), so
+    # the bare-form terminal-recording / name-guard contract is untouched.
+    Dict[int, int] expr_link_types
 
 equip TypeTable:
 
@@ -217,7 +240,8 @@ equip TypeTable:
         Dict[int, int] empty_expr_types = Dict[int, int]()
         Dict[int, Vector[int]] empty_expr_method_targs = Dict[int, Vector[int]]()
         Dict[int, String] empty_expr_method_targs_name = Dict[int, String]()
-        return TypeTable(types, Dict[int, int](), 0, 1, 2, 3, 4, 5, 6, 7, 8, -1, Dict[String, int](), 0, 0, Dict[String, String](), 1, empty_reg, Dict[int, bool](), -1, empty_expr_types, empty_expr_method_targs, empty_expr_method_targs_name)
+        Dict[int, int] empty_expr_link_types = Dict[int, int]()
+        return TypeTable(types, Dict[int, int](), 0, 1, 2, 3, 4, 5, 6, 7, 8, -1, Dict[String, int](), 0, 0, Dict[String, String](), 1, empty_reg, Dict[int, bool](), -1, empty_expr_types, empty_expr_method_targs, empty_expr_method_targs_name, empty_expr_link_types)
 
     int add_type(&self, ResolvedType !ty):
         int id = self.types.len()

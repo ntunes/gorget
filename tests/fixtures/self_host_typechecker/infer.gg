@@ -24,6 +24,7 @@ from diagnostic import Diagnostic, DkControlFlow
 from traits import resolve_method_by_name, resolve_method_shape
 from traits import resolve_method_full, resolve_method_for_generic_receiver
 from traits import infer_method_targs, substitute_return_type, type_name_of
+from traits import substitute_shape_return_generic_receiver
 from traits import intrinsic_resolve
 
 # ── Statement return type inference (for closure bodies) ──────
@@ -336,7 +337,25 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                             sh = resolve_method_shape_for_generic_receiver(types.trait_registry, sh_recv_name, method_name)
                     if sh.found:
                         Vector[int] bound = infer_method_targs(sh.shape, reg_arg_types, scopes, types)
-                        int subst_ret = substitute_return_type(sh.shape, bound, scopes, &types)
+                        # For a GENERIC adapter receiver (RTGeneric, e.g.
+                        # `TakeIter[VectorIter[int], int]`), a method-generic
+                        # trait-default whose return type mentions `Self`/impl-`T`
+                        # (the adapter constructors `filter[F]`/`map[U,F]`/…)
+                        # needs the FULL binding set (Self + impl + trait + method),
+                        # not just the method generics — otherwise `Self`/`T` stay
+                        # unbound and the lazy chain mis-types to `FilterIter[int,…]`.
+                        # Try the full-binding path first; fall back to the plain
+                        # method-only substitution for base / non-adapter receivers.
+                        int subst_ret = -1
+                        ResolvedType subst_recv_rt = get_rtype_at(types.types, reg_obj_type)
+                        match subst_recv_rt:
+                            case RTGeneric(subst_rdef, subst_recv_args):
+                                String subst_recv_name = scopes.get_def(subst_rdef).name
+                                subst_ret = substitute_shape_return_generic_receiver(types.trait_registry, subst_recv_name, subst_recv_args, reg_obj_type, sh.shape, bound, scopes, &types)
+                            else:
+                                pass
+                        if subst_ret < 0 or subst_ret == types.error_id:
+                            subst_ret = substitute_return_type(sh.shape, bound, scopes, &types)
                         if subst_ret >= 0 and subst_ret != types.error_id:
                             reg_ret = subst_ret
                         # Lazy-iterator phase 1b: record the inferred
@@ -435,6 +454,19 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                         # fn_sigs (Gap #2 Phase 1 — single source of truth
                         # for method-generic return types).
                         types.expr_types.put(span_start, reg_ret)
+                        # Lazy-iterator chain-link oracle: ALSO record this
+                        # link's resolved type keyed on the call's UNIQUE
+                        # span.END. The parser shares one span.start across a
+                        # whole chain, so `expr_types` (keyed on span.start)
+                        # collapses every link onto the outermost type — an
+                        # inner `.take()` then reads the outer `FilterIter`
+                        # type and the lowerer CC-fails. span.END is unique
+                        # per link, so this preserves each link's own type.
+                        # This persists the per-link output of the recursive
+                        # `infer_expr_type` oracle (the receiver was inferred
+                        # at the top of this arm via `reg_obj_type`), the
+                        # self-host analog of Rust's `infer_expr_ast_type`.
+                        types.expr_link_types.put(sexpr.span.end, reg_ret)
                         return reg_ret
             # Infer return type from well-known methods
             if method_name == "len" or method_name == "count":

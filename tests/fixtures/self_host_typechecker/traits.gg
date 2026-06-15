@@ -867,3 +867,77 @@ Vector[int] infer_method_targs(MethodSigShape shape, Vector[int] arg_types, Scop
 
 int substitute_return_type(MethodSigShape shape, Vector[int] bind_tids, ScopeTable scopes, TypeTable &types):
     return resolve_with_bindings(shape.return_type, shape.generic_params, bind_tids, scopes, &types)
+
+# Lazy-iterator chain support: substitute a METHOD-GENERIC trait-default's
+# return type for a GENERIC adapter receiver, binding the FULL set:
+#   Self            → recv_type_id (the concrete receiver, e.g.
+#                     TakeIter[VectorIter[int], int])
+#   impl generics   → recv's type args, positionally (e.g. [I, T] → the
+#                     receiver's [TakeIter-inner, elem])
+#   trait generics  → the impl's trait clause args resolved against the impl
+#                     bindings (e.g. `T` in `Iterator[T]`)
+#   method generics → the inferred method-level targs (`bound`, e.g. `F`)
+#
+# WHY: `substitute_return_type` above binds ONLY `shape.generic_params` (the
+# method-level `[F]`/`[U,F]`). For an ADAPTER constructor default like
+# `FilterIter[Self, T, F] filter[F](self, F p)`, the return type ALSO mentions
+# `Self` and the impl's `T` — those stay UNBOUND under the plain path and
+# `resolve_with_bindings` falls them through to the bare placeholder def
+# (`FilterIter[int, int, F]` — wrong Self/T). For a single-step `.filter` on
+# a base `VectorIter` the turbofish form sidesteps this; but a BARE-form
+# `.filter` on an adapter receiver in a chain
+# (`v.iter().take(4).filter(p)`) hits it and the lowerer then CC-fails on the
+# mis-named `FilterIter__int64_t__…`. Binding the full set yields the correct
+# `FilterIter[TakeIter[VectorIter[int],int], int, F]`. Mirrors the Self+impl+
+# trait binding `substitute_default_return_generic` already does for the
+# NON-method-generic defaults, plus the method-level `bound`.
+#
+# Returns -1 if no impl matches the receiver name (caller keeps its prior
+# `reg_ret`), so the base/non-adapter cases are untouched.
+int substitute_shape_return_generic_receiver(TraitRegistry registry, String recv_name, Vector[int] recv_args, int recv_type_id, MethodSigShape shape, Vector[int] bound, ScopeTable scopes, TypeTable &types):
+    for impl in registry.impls:
+        if impl.self_type_name == recv_name and impl.trait_def_id != NO_DEF:
+            # Impl-generic bindings from the receiver's type args (positional).
+            Vector[String] impl_bind_names = Vector[String]()
+            Vector[int] impl_bind_tids = Vector[int]()
+            int n = impl.impl_generic_params.len()
+            if recv_args.len() < n:
+                n = recv_args.len()
+            int bi = 0
+            while bi < n:
+                impl_bind_names.push(impl.impl_generic_params.get(bi).unwrap())
+                impl_bind_tids.push(recv_args.get(bi).unwrap())
+                bi = bi + 1
+            # Full binding set: Self + trait-generics + impl-generics + method-generics.
+            Vector[String] bind_names = Vector[String]()
+            Vector[int] bind_tids = Vector[int]()
+            bind_names.push("Self")
+            bind_tids.push(recv_type_id)
+            for tinfo in registry.traits:
+                if tinfo.def_id == impl.trait_def_id:
+                    int tn = tinfo.trait_generic_params.len()
+                    if impl.trait_generic_args.len() < tn:
+                        tn = impl.trait_generic_args.len()
+                    int ti = 0
+                    while ti < tn:
+                        String tgp = tinfo.trait_generic_params.get(ti).unwrap()
+                        Type targ_ast = impl.trait_generic_args.get(ti).unwrap()
+                        int targ_tid = resolve_with_bindings(targ_ast, impl_bind_names, impl_bind_tids, scopes, &types)
+                        if targ_tid >= 0:
+                            bind_names.push(tgp)
+                            bind_tids.push(targ_tid)
+                        ti = ti + 1
+            # Impl locals (e.g. [I, T]) — may appear directly in the return AST.
+            for (ii, ibn) in impl_bind_names.enumerate():
+                bind_names.push(ibn)
+                bind_tids.push(impl_bind_tids.get(ii).unwrap())
+            # Method-level generics (e.g. [F]) from the inferred `bound`.
+            int mi = 0
+            while mi < shape.generic_params.len() and mi < bound.len():
+                int mtid = bound.get(mi).unwrap()
+                if mtid >= 0 and mtid != types.error_id:
+                    bind_names.push(shape.generic_params.get(mi).unwrap())
+                    bind_tids.push(mtid)
+                mi = mi + 1
+            return resolve_with_bindings(shape.return_type, bind_names, bind_tids, scopes, &types)
+    return -1

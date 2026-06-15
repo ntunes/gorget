@@ -474,12 +474,72 @@ int resolved_to_gir_type(int rtid, TypeTable types, ScopeTable scopes, GirModule
         else:
             return I64_TYPE
 
+# Lazy-iterator transitive discovery: reconstruct an AST `SpannedType` from a
+# typechecker `ResolvedType` id. Used to register an adapter chain link's
+# RESULT type (e.g. `TakeIter[VectorIter[int], int]`) as a `GenericInstance`
+# so the existing generic-equip + method-mono emission loops emit its methods
+# (`next`/`take`/`count`/…). Mirrors the AST types Rust's `scan_type` registers
+# from the substituted default-method return type. Closures become `TFunction`
+# (→ `GorgetClosure` via `spanned_type_to_c_name`), nested adapters recurse as
+# `TNamed`, primitives as `TPrimitive` — so the reconstructed instance's
+# mangled name agrees byte-for-byte with the proto symbol + the call site.
+SpannedType resolved_to_spanned_type(int rtid, TypeTable types, ScopeTable scopes):
+    if rtid < 0 or rtid >= types.types.len():
+        return SpannedType(TPrimitive("int"), -1)
+    ResolvedType rt = types.types.get(rtid).unwrap()
+    match rt:
+        case RTPrimitive(pname):
+            return SpannedType(TPrimitive(pname), -1)
+        case RTDefined(def_id):
+            DefInfo di = scopes.get_def(def_id)
+            return SpannedType(TNamed(di.name, []), -1)
+        case RTGeneric(def_id, type_args):
+            DefInfo di = scopes.get_def(def_id)
+            Vector[SpannedType] args = []
+            for at in type_args:
+                args.push(resolved_to_spanned_type(at, types, scopes))
+            return SpannedType(TNamed(di.name, args), -1)
+        case RTTuple(elem_rtids):
+            Vector[SpannedType] telems = []
+            for et in elem_rtids:
+                telems.push(resolved_to_spanned_type(et, types, scopes))
+            return SpannedType(TTuple(telems), -1)
+        case RTRef(inner_rtid):
+            return resolved_to_spanned_type(inner_rtid, types, scopes)
+        case RTFunction(fparams, fowns, fret):
+            # Function-typed arg (`F` of `filter[F]`/`map[U,F]`). The concrete
+            # params/return don't affect the mangle (TFunction → GorgetClosure),
+            # so a minimally-shaped TFunction is sufficient and avoids re-walking.
+            Vector[SpannedType] fp = []
+            Vector[int] fo = []
+            return SpannedType(TFunction(Box(SpannedType(TPrimitive("int"), -1)), fp, fo), -1)
+        else:
+            return SpannedType(TPrimitive("int"), -1)
+    return SpannedType(TPrimitive("int"), -1)
+
 # Convenience: query the typechecker's per-expression type for a given
 # SpannedExpr (by span.start) and translate to GIR. Returns -1 if no
 # entry is recorded; callers should fall back to their existing path.
 # Reads the typechecker side-tables stashed on `gmod` at lower_module
 # entry (single accessor — typed-metadata write-through, Layering rule 2).
 int lookup_expr_gir_type(SpannedExpr sexpr, GirModule &gmod):
+    # Chain-link oracle (lazy iterators): for an EMethodCall, prefer the
+    # per-link table keyed on the UNIQUE span.end. The parser shares one
+    # span.start across a whole method chain, so the span.start-keyed
+    # `expr_types` collapses every link onto the OUTERMOST type — reading it
+    # for an inner `.take()` returns the chain's final `FilterIter` type and
+    # the lowerer emits a type-mismatched local. `expr_link_types` (keyed on
+    # span.end, unique per link) preserves each link's own resolved type, the
+    # self-host analog of Rust's recursive span-table-free `infer_expr_ast_type`.
+    # Non-chain exprs fall through to the span.start `expr_types` table.
+    match sexpr.expr:
+        case EMethodCall(_, _, _, _):
+            int link_end = sexpr.span.end
+            if gmod.tc_types.expr_link_types.contains(link_end):
+                int link_rtid = gmod.tc_types.expr_link_types.get(link_end).unwrap()
+                return resolved_to_gir_type(link_rtid, gmod.tc_types, gmod.tc_scopes, &gmod)
+        else:
+            pass
     int span_start = sexpr.span.start
     if not gmod.tc_types.expr_types.contains(span_start):
         return -1

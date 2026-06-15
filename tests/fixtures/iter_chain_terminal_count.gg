@@ -1,0 +1,35 @@
+# Multi-link lazy adapter chain ending in a scalar terminal.
+#
+# `v.iter().take(N).filter(p).count()` composes two lazy adapters past the
+# first step and finishes with a scalar terminal. Each chain link's receiver
+# type is resolved INDEPENDENTLY (the parser shares one `span.start` across the
+# whole chain, so a per-link `span.end`-keyed type oracle is required) and each
+# adapter-on-adapter instance (`TakeIter[VectorIter[int], int]`,
+# `FilterIter[TakeIter[...], int, _]`) is monomorphized so its methods are
+# emitted, not just called.
+#
+# This is the self-host's counterpart to Rust gg's recursive
+# `infer_expr_ast_type` chain-link oracle + `try_register_default_return_type`
+# transitive adapter-instance discovery.
+
+from std.iter import VectorIter
+
+bool is_even(int x):
+    return x % 2 == 0
+
+bool gt_one(int x):
+    return x > 1
+
+int main():
+    Vector[int] v = [1, 2, 3, 4, 5, 6]
+
+    # take(4) → [1,2,3,4]; filter(is_even) → [2,4]; count → 2
+    print(v.iter().take(4).filter(is_even).count())
+
+    # skip(1) → [2,3,4,5,6]; filter(gt_one) → [2,3,4,5,6]; count → 5
+    print(v.iter().skip(1).filter(gt_one).count())
+
+    # take(5) → [1,2,3,4,5]; filter(is_even) → [2,4]; count → 2
+    print(v.iter().take(5).filter(is_even).count())
+
+    return 0

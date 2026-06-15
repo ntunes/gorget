@@ -36,7 +36,7 @@ from lower import inherit_borrow_from, set_field_borrow, cow_register_alias, dec
 from lower import classify_call_arg, is_consume_kind, op_consume, decide_operand_at_consuming_arg, decide_ptr_consume
 from lower_drops import init_drop_elab, push_drop_scope, emit_scope_drops, pop_drop_scope, pop_drop_scope_no_emit, is_droppable_type, register_local_for_drop, register_owning_param, mark_local_moved, restore_moved, union_moved, emit_drops_for_early_exit, flush_drop_queue
 from lower_liveness import LivenessAnalysis, compute_liveness, wire_liveness_into_modes, liveness_instrumentation_diff, update_last_pos_for_inst, update_last_pos_for_term, note_operand_pos, empty_liveness
-from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, is_comparison, map_cmpop
+from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, resolved_to_spanned_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, is_comparison, map_cmpop
 from lower_expr import block_terminated, lower_block_expr, lower_stmt_as_tail_value, lower_if_chain_expr, refine_local_type, lower_expr, lower_expr_inner, apply_container_hint_for_ctor_arg, lower_call
 from lower_stmt import lower_stmt, lower_place_base, lower_field_write, emit_field_write_from_local, lower_stmts, lower_if, lower_index_assign
 from lower_match import match_enum_type, match_variant_index, try_lift_option_ref, emit_tag_read, is_deep_clone_fn, resolve_payload_clone_fn, emit_payload_read, emit_payload_read_mode, emit_payload_read_mode_full, match_scrutinee_ptr, lower_pattern_match, lower_ctor_pattern, lookup_ctor_field_type, result_payload_types, emit_on_error_cleanups, lower_throw_stmt, lower_catch_expr, lower_rethrow_expr, maybe_auto_propagate, arms_match_result_or_option, pattern_head_is_result_or_option, lower_match_stmt, lower_match_expr
@@ -177,6 +177,107 @@ void proto_walk_stmts(Vector[Stmt] stmts, GirModule &gmod, Vector[ProtoMethInst]
                 proto_walk_expr(p_iter, &gmod, &out, &seen)
                 proto_walk_stmts(b, &gmod, &out, &seen)
                 proto_walk_stmts(eb, &gmod, &out, &seen)
+            else:
+                pass
+
+# ── Lazy-iterator transitive adapter-instance discovery ──────────
+#
+# Walk method chains and register the RESULT type of each adapter chain link
+# as a `GenericInstance`. For `v.iter().take(4).filter(p).count()`, the inner
+# adapter results `TakeIter[VectorIter[int], int]` and
+# `FilterIter[TakeIter[…], int, F]` are produced INSIDE default-method bodies
+# (`take`/`filter` return `AdapterIter[Self, …]`), so the up-front
+# `discover_generic_calls_*` walk — which only sees explicit type annotations
+# and turbofish constructors — never registers them. Without registration the
+# generic-equip emission loop (lower.gg) skips them and their methods
+# (`next`/`count`/`filter`/…) are CALLED-but-never-DEFINED → CC-fail.
+#
+# This is the self-host analog of Rust's `try_register_default_return_type`
+# (`src/ir/lowering/generics/mod.rs`): it consumes the per-link resolved type
+# the typechecker recorded in `expr_link_types` (keyed by the call's UNIQUE
+# span.end — the chain-link oracle), reconstructs its AST `SpannedType`, and
+# pushes a `GenericInstance` so the existing emission machinery monomorphizes
+# the adapter struct + its methods. Demand-gated: only result types whose base
+# is a generic-equip adapter (`equip_generic_names`) are registered — builtin
+# collections / Option / Result are left to their own paths.
+void discover_adapter_chain_expr(SpannedExpr sexpr, GirModule &gmod, Dict[String, bool] equip_generic_names, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
+    match sexpr.expr:
+        case EMethodCall(recv_box, _, margs, _):
+            # Walk the receiver chain + args first (inner links / nested chains).
+            discover_adapter_chain_expr(*recv_box, &gmod, equip_generic_names, &seen, &instances)
+            for a in margs:
+                discover_adapter_chain_expr(a, &gmod, equip_generic_names, &seen, &instances)
+            # Register THIS link's result type if it is a generic-equip adapter.
+            int link_end = sexpr.span.end
+            if gmod.tc_types.expr_link_types.contains(link_end):
+                int link_rtid = gmod.tc_types.expr_link_types.get(link_end).unwrap()
+                if link_rtid >= 0 and link_rtid < gmod.tc_types.types.len():
+                    match gmod.tc_types.types.get(link_rtid).unwrap():
+                        case RTGeneric(def_id, _):
+                            String base = gmod.tc_scopes.get_def(def_id).name
+                            if equip_generic_names.contains(base):
+                                SpannedType inst_ty = resolved_to_spanned_type(link_rtid, gmod.tc_types, gmod.tc_scopes)
+                                match inst_ty.ty:
+                                    case TNamed(_, inst_args):
+                                        if inst_args.len() > 0 and not has_type_variable(inst_args):
+                                            String mangled = compute_mangled_name(inst_args, base)
+                                            if not seen.contains(mangled):
+                                                seen.put(mangled.clone(), true)
+                                                instances.push(GenericInstance(base, inst_args, mangled))
+                                    else:
+                                        pass
+                        else:
+                            pass
+        case ECall(callee_box, cargs, _):
+            discover_adapter_chain_expr(*callee_box, &gmod, equip_generic_names, &seen, &instances)
+            for a in cargs:
+                discover_adapter_chain_expr(a, &gmod, equip_generic_names, &seen, &instances)
+        case EFieldAccess(obj, _):
+            discover_adapter_chain_expr(*obj, &gmod, equip_generic_names, &seen, &instances)
+        case EBinaryOp(l, _, r):
+            discover_adapter_chain_expr(*l, &gmod, equip_generic_names, &seen, &instances)
+            discover_adapter_chain_expr(*r, &gmod, equip_generic_names, &seen, &instances)
+        case EUnaryOp(_, inner):
+            discover_adapter_chain_expr(*inner, &gmod, equip_generic_names, &seen, &instances)
+        case EIndex(b, i):
+            discover_adapter_chain_expr(*b, &gmod, equip_generic_names, &seen, &instances)
+            discover_adapter_chain_expr(*i, &gmod, equip_generic_names, &seen, &instances)
+        case EClosure(_, cbody):
+            discover_adapter_chain_stmts(cbody, &gmod, equip_generic_names, &seen, &instances)
+        else:
+            pass
+
+void discover_adapter_chain_stmts(Vector[Stmt] stmts, GirModule &gmod, Dict[String, bool] equip_generic_names, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
+    for stmt in stmts:
+        match stmt:
+            case SVarDecl(_, _, init, _, _, _):
+                discover_adapter_chain_expr(init, &gmod, equip_generic_names, &seen, &instances)
+            case SExpr(e):
+                discover_adapter_chain_expr(e, &gmod, equip_generic_names, &seen, &instances)
+            case SReturn(opt):
+                match opt:
+                    case Some(e):
+                        discover_adapter_chain_expr(e, &gmod, equip_generic_names, &seen, &instances)
+                    case None:
+                        pass
+            case SAssign(_, e):
+                discover_adapter_chain_expr(e, &gmod, equip_generic_names, &seen, &instances)
+            case SIf(c, tb, elifs):
+                discover_adapter_chain_expr(c, &gmod, equip_generic_names, &seen, &instances)
+                discover_adapter_chain_stmts(tb, &gmod, equip_generic_names, &seen, &instances)
+                for el in elifs:
+                    discover_adapter_chain_stmts(el.body, &gmod, equip_generic_names, &seen, &instances)
+            case SWhile(c, b):
+                discover_adapter_chain_expr(c, &gmod, equip_generic_names, &seen, &instances)
+                discover_adapter_chain_stmts(b, &gmod, equip_generic_names, &seen, &instances)
+            case SFor(_, p_iter, b, _, eb):
+                discover_adapter_chain_expr(p_iter, &gmod, equip_generic_names, &seen, &instances)
+                discover_adapter_chain_stmts(b, &gmod, equip_generic_names, &seen, &instances)
+                discover_adapter_chain_stmts(eb, &gmod, equip_generic_names, &seen, &instances)
+            case SMatch(scrut, arms):
+                discover_adapter_chain_expr(scrut, &gmod, equip_generic_names, &seen, &instances)
+                for arm in arms:
+                    discover_adapter_chain_stmts(arm.body, &gmod, equip_generic_names, &seen, &instances)
             else:
                 pass
 
