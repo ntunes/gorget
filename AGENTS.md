@@ -40,10 +40,10 @@ cargo test                                           # all tests
 cargo test --test integration -- --test-threads=4 2>&1 | tee /tmp/integration-$RANDOM.log
 ```
 
-**LLVM backend.** Set `GG_BACKEND=llvm` to append `--backend=llvm` to every `gg build` (all-or-nothing per run; see `tests/integration.rs:29-48`). Use `--test-threads=1` for full sweeps — the parallel runner hits cargo-level rebuild races (~28 min sequential vs ~13 min parallel for C). Single-test runs with the default `--test-threads=4` are fine.
+**LLVM backend.** Set `GG_BACKEND=llvm` to append `--backend=llvm` to every `gg build` (all-or-nothing per run; the backend dispatch is `gg_backend`/`gg_command`, `tests/integration.rs:52-103`). Full sweeps run fine at `--test-threads=4` (measured 2026-06-15: 1289/0 in ~5 min vs ~18 min sequential). The former `--test-threads=1` requirement was stale: it predated the harness switching to invoke the pre-built `gg` binary directly via `CARGO_BIN_EXE_gg` (`tests/integration.rs:84`), which eliminated the `cargo run` build-lock contention that used to race under parallelism.
 
 ```bash
-GG_BACKEND=llvm cargo test --test integration --release -- --test-threads=1 2>&1 | tee /tmp/llvm-$RANDOM.log
+GG_BACKEND=llvm GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration --release -- --test-threads=4 2>&1 | tee /tmp/llvm-$RANDOM.log
 GG_BACKEND=llvm cargo test --test integration --release dict_user_key_hashable
 ```
 
