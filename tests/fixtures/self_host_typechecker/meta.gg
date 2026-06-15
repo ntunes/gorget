@@ -4,11 +4,12 @@
 
 from ast import Module, Item, IMetaConst, IMetaType, IMetaTypeFunc, IFunction, IEquip
 from ast import MetaTypeRhs, MtrPlain, MtrConditional, MtrCall, MtrUnresolved
-from ast import SpannedType, Type, TPrimitive, TNamed, SpannedExpr, Expr
+from ast import SpannedType, Type, TPrimitive, TNamed, TInferred, SpannedExpr, Expr, Span, Param
 from ast import EIntLiteral, EFloatLiteral, EBoolLiteral, EStringLiteral
 from ast import EIdentifier, EBinaryOp, EUnaryOp, ECall
+from ast import EMethodCall, EFieldAccess, EIndex, EFString, EArrayLiteral
 from ast import Stmt, SMatch, SMetaForMatch, SIf, SWhile, SFor, SReturn, SExpr
-from ast import SVarDecl, SAssign, SMetaFor, SMetaIf
+from ast import SVarDecl, SAssign, SCompoundAssign, SMetaFor, SMetaIf
 from ast import MatchArm, ElseBranch, EnumDef, EnumVariant, FunctionDef, EquipBlock
 from ast import SpannedPattern, Pattern, PConstructor, PWildcard, PBinding
 from types import TypeTable
@@ -102,6 +103,473 @@ String eval_type_func_call(String callee, Vector[SpannedExpr] &call_args,
         return "int64"
     return ""
 
+# ── [PROTOTYPE] sizeof / typename builtins ────────────────────
+
+int meta_type_byte_size(String tn):
+    if tn == "int" or tn == "int64" or tn == "uint64" or tn == "float" or tn == "float64":
+        return 8
+    elif tn == "bool" or tn == "int8" or tn == "uint8":
+        return 1
+    elif tn == "int16" or tn == "uint16":
+        return 2
+    elif tn == "int32" or tn == "uint32" or tn == "float32":
+        return 4
+    elif tn == "String":
+        return 32
+    elif tn == "cstr":
+        return 8
+    return 8
+
+int meta_type_align(String tn):
+    int sz = meta_type_byte_size(tn)
+    if tn == "String":
+        return 8
+    return sz
+
+String meta_typename(Type ty):
+    match ty:
+        case TPrimitive(name):
+            if name == "str":
+                return "String"
+            return name
+        case TNamed(name, args):
+            if args.len() == 0:
+                return name
+            String inner = ""
+            int ai = 0
+            while ai < args.len():
+                if ai > 0:
+                    inner = inner + ", "
+                inner = inner + meta_typename(args.get(ai).unwrap().ty)
+                ai = ai + 1
+            return name + "[" + inner + "]"
+        else:
+            return ""
+
+# ── [PROTOTYPE] M7 user-function meta evaluator ───────────────
+# Interprets a pure primitive-typed function body at compile time so
+# `meta int X = square(2)` resolves. Mirrors Rust eval_meta_fn_call.
+
+FunctionDef find_meta_fn(Module &m, String name, bool &found):
+    int i = 0
+    while i < m.items.len():
+        match m.items.get(i).unwrap():
+            case IFunction(fdef):
+                if fdef.name == name:
+                    found = true
+                    return fdef
+            else:
+                pass
+        i = i + 1
+    found = false
+    return FunctionDef("", Vector[Param](), SpannedType(TInferred(), Span(0, 0)), Vector[String](), Vector[Stmt](), false, None)
+
+# Evaluate an int expr, recursing into user-fn calls and sizeof/alignof.
+int eval_int_ex(Expr e, Dict[String, int] &env, Module &m, int depth, bool &ok):
+    if depth > 256:
+        ok = false
+        return 0
+    match e:
+        case EIntLiteral(n):
+            return n
+        case EIdentifier(name):
+            if env.contains(name):
+                return env[name]
+            ok = false
+            return 0
+        case EBinaryOp(left, op, right):
+            int lv = eval_int_ex((*left).expr, &env, &m, depth, &ok)
+            int rv = eval_int_ex((*right).expr, &env, &m, depth, &ok)
+            if op == "+":
+                return lv + rv
+            elif op == "-":
+                return lv - rv
+            elif op == "*":
+                return lv * rv
+            elif op == "/":
+                if rv != 0:
+                    return lv / rv
+                return 0
+            elif op == "%":
+                if rv != 0:
+                    return lv % rv
+                return 0
+            ok = false
+            return 0
+        case EUnaryOp(op, operand):
+            int v = eval_int_ex((*operand).expr, &env, &m, depth, &ok)
+            if op == "-":
+                return 0 - v
+            return v
+        case ECall(callee, args, targs):
+            match (*callee).expr:
+                case EIdentifier(fn_name):
+                    if fn_name == "sizeof" and args.len() == 1:
+                        return meta_type_byte_size(meta_typename(arg_as_type(args.get(0).unwrap())))
+                    elif fn_name == "alignof" and args.len() == 1:
+                        return meta_type_align(meta_typename(arg_as_type(args.get(0).unwrap())))
+                    elif fn_name == "arch_word_bits" and args.len() == 0:
+                        return 64
+                    # User meta-fn call
+                    bool fnd = false
+                    FunctionDef fdef = find_meta_fn(&m, fn_name, &fnd)
+                    if fnd:
+                        Dict[String, int] callenv = Dict[String, int]()
+                        int pi = 0
+                        while pi < fdef.params.len() and pi < args.len():
+                            int av = eval_int_ex(args.get(pi).unwrap().expr, &env, &m, depth + 1, &ok)
+                            callenv[fdef.params.get(pi).unwrap().param_name] = av
+                            pi = pi + 1
+                        bool ret = false
+                        int rv = eval_meta_fn_body(fdef, &callenv, &m, depth + 1, &ret, &ok)
+                        return rv
+                    ok = false
+                    return 0
+                else:
+                    ok = false
+                    return 0
+        else:
+            ok = false
+            return 0
+
+# Interpret a function body's statements, returning the int value of the
+# first `return` reached. Supports if/elif/else, while, var-decl, assign.
+int eval_meta_fn_body(FunctionDef fdef, Dict[String, int] &env, Module &m, int depth, bool &returned, bool &ok):
+    if fdef.is_expr_body and fdef.body.len() == 1:
+        match fdef.body.get(0).unwrap():
+            case SExpr(e):
+                returned = true
+                return eval_int_ex(e.expr, &env, &m, depth, &ok)
+            case SReturn(oe):
+                match oe:
+                    case Some(e):
+                        returned = true
+                        return eval_int_ex(e.expr, &env, &m, depth, &ok)
+                    case None:
+                        returned = true
+                        return 0
+            else:
+                pass
+    return eval_stmts(fdef.body, &env, &m, depth, &returned, &ok)
+
+int eval_stmts(Vector[Stmt] stmts, Dict[String, int] &env, Module &m, int depth, bool &returned, bool &ok):
+    int si = 0
+    int iters = 0
+    while si < stmts.len():
+        Stmt s = stmts.get(si).unwrap()
+        match s:
+            case SReturn(oe):
+                match oe:
+                    case Some(e):
+                        returned = true
+                        return eval_int_ex(e.expr, &env, &m, depth, &ok)
+                    case None:
+                        returned = true
+                        return 0
+            case SVarDecl(ty, name, val, _, _, _):
+                env[name] = eval_int_ex(val.expr, &env, &m, depth, &ok)
+            case SAssign(lhs, rhs):
+                match lhs.expr:
+                    case EIdentifier(nm):
+                        env[nm] = eval_int_ex(rhs.expr, &env, &m, depth, &ok)
+                    else:
+                        pass
+            case SCompoundAssign(lhs, op, rhs):
+                match lhs.expr:
+                    case EIdentifier(nm):
+                        int cur = 0
+                        if env.contains(nm):
+                            cur = env[nm]
+                        int delta = eval_int_ex(rhs.expr, &env, &m, depth, &ok)
+                        if op == "+=":
+                            env[nm] = cur + delta
+                        elif op == "-=":
+                            env[nm] = cur - delta
+                        elif op == "*=":
+                            env[nm] = cur * delta
+                        elif op == "/=":
+                            if delta != 0:
+                                env[nm] = cur / delta
+                    else:
+                        pass
+            case SIf(cond, then_b, else_branches):
+                if eval_bool_ex(cond.expr, &env, &m, depth, &ok):
+                    int rv = eval_stmts(then_b, &env, &m, depth, &returned, &ok)
+                    if returned:
+                        return rv
+                else:
+                    bool took = false
+                    int ei = 0
+                    while ei < else_branches.len() and not took:
+                        ElseBranch eb = else_branches.get(ei).unwrap()
+                        bool run_it = false
+                        match eb.condition:
+                            case Some(c):
+                                run_it = eval_bool_ex(c.expr, &env, &m, depth, &ok)
+                            case None:
+                                run_it = true
+                        if run_it:
+                            took = true
+                            int rv = eval_stmts(eb.body, &env, &m, depth, &returned, &ok)
+                            if returned:
+                                return rv
+                        ei = ei + 1
+            case SWhile(cond, body):
+                while eval_bool_ex(cond.expr, &env, &m, depth, &ok):
+                    iters = iters + 1
+                    if iters > 100000:
+                        ok = false
+                        return 0
+                    int rv = eval_stmts(body, &env, &m, depth, &returned, &ok)
+                    if returned:
+                        return rv
+            else:
+                pass
+        si = si + 1
+    return 0
+
+# Evaluate a meta bool const RHS. Handles bool literals/identifiers, int
+# comparisons (BITS == 64), and/or/not, and feature()/debug() (false by
+# default — no --feature flags under the runtime-diff harness).
+bool eval_meta_bool(Expr e, Dict[String, int] &iv, Dict[String, bool] &bv, Module &m, bool &ok):
+    match e:
+        case EBoolLiteral(b):
+            return b
+        case EIdentifier(name):
+            if bv.contains(name):
+                return bv[name]
+            ok = false
+            return false
+        case ECall(callee, args, _):
+            match (*callee).expr:
+                case EIdentifier(fn_name):
+                    if fn_name == "feature":
+                        return false
+                    elif fn_name == "debug":
+                        return false
+                    ok = false
+                    return false
+                else:
+                    ok = false
+                    return false
+        case EUnaryOp(op, operand):
+            if op == "not":
+                return not eval_meta_bool((*operand).expr, &iv, &bv, &m, &ok)
+            ok = false
+            return false
+        case EBinaryOp(left, op, right):
+            if op == "and":
+                return eval_meta_bool((*left).expr, &iv, &bv, &m, &ok) and eval_meta_bool((*right).expr, &iv, &bv, &m, &ok)
+            elif op == "or":
+                return eval_meta_bool((*left).expr, &iv, &bv, &m, &ok) or eval_meta_bool((*right).expr, &iv, &bv, &m, &ok)
+            bool iok = true
+            int lv = eval_int_ex((*left).expr, &iv, &m, 0, &iok)
+            int rv = eval_int_ex((*right).expr, &iv, &m, 0, &iok)
+            if iok:
+                if op == "==":
+                    return lv == rv
+                elif op == "!=":
+                    return lv != rv
+                elif op == "<":
+                    return lv < rv
+                elif op == ">":
+                    return lv > rv
+                elif op == "<=":
+                    return lv <= rv
+                elif op == ">=":
+                    return lv >= rv
+            ok = false
+            return false
+        else:
+            ok = false
+            return false
+
+bool eval_bool_ex(Expr e, Dict[String, int] &env, Module &m, int depth, bool &ok):
+    match e:
+        case EBoolLiteral(b):
+            return b
+        case EBinaryOp(left, op, right):
+            if op == "and":
+                return eval_bool_ex((*left).expr, &env, &m, depth, &ok) and eval_bool_ex((*right).expr, &env, &m, depth, &ok)
+            elif op == "or":
+                return eval_bool_ex((*left).expr, &env, &m, depth, &ok) or eval_bool_ex((*right).expr, &env, &m, depth, &ok)
+            int lv = eval_int_ex((*left).expr, &env, &m, depth, &ok)
+            int rv = eval_int_ex((*right).expr, &env, &m, depth, &ok)
+            if op == "<":
+                return lv < rv
+            elif op == ">":
+                return lv > rv
+            elif op == "<=":
+                return lv <= rv
+            elif op == ">=":
+                return lv >= rv
+            elif op == "==":
+                return lv == rv
+            elif op == "!=":
+                return lv != rv
+            return false
+        case EUnaryOp(op, operand):
+            if op == "not":
+                return not eval_bool_ex((*operand).expr, &env, &m, depth, &ok)
+            return false
+        else:
+            return false
+
+# Extract the Type from a sizeof/alignof/typename argument expression.
+# The argument parses as an expression (EIdentifier for `int`, ECall for
+# `Vector[int]` etc.); reconstruct a Type for typename rendering.
+Type arg_as_type(SpannedExpr arg):
+    match arg.expr:
+        case EIdentifier(name):
+            if name == "int" or name == "bool" or name == "float" or name == "String" or name == "cstr" or name == "int8" or name == "int16" or name == "int32" or name == "int64" or name == "uint8" or name == "uint16" or name == "uint32" or name == "uint64" or name == "float32" or name == "float64" or name == "str":
+                return TPrimitive(name)
+            return TNamed(name, Vector[SpannedType]())
+        case ECall(callee, args, targs):
+            match (*callee).expr:
+                case EIdentifier(name):
+                    Vector[SpannedType] tas = Vector[SpannedType]()
+                    int i = 0
+                    while i < args.len():
+                        tas.push(SpannedType(arg_as_type(args.get(i).unwrap()), arg.span))
+                        i = i + 1
+                    return TNamed(name, tas)
+                else:
+                    return TInferred()
+        case EIndex(base, idx):
+            match (*base).expr:
+                case EIdentifier(name):
+                    Vector[SpannedType] tas = Vector[SpannedType]()
+                    tas.push(SpannedType(arg_as_type(*idx), arg.span))
+                    return TNamed(name, tas)
+                else:
+                    return TInferred()
+        else:
+            return TInferred()
+
+# ── [PROTOTYPE] meta-const substitution into the AST ──────────
+# After collecting const values, replace every EIdentifier reference to
+# a known meta const with its literal value, mirroring Rust Phase 2
+# `substitute_item`. Only int/bool/str consts are substituted.
+
+SpannedExpr subst_expr(SpannedExpr se, Dict[String, int] &iv, Dict[String, bool] &bv, Dict[String, String] &sv):
+    match se.expr:
+        case EIdentifier(name):
+            if iv.contains(name):
+                return SpannedExpr(EIntLiteral(iv[name]), se.span)
+            elif bv.contains(name):
+                return SpannedExpr(EBoolLiteral(bv[name]), se.span)
+            elif sv.contains(name):
+                return SpannedExpr(EStringLiteral(sv[name], false), se.span)
+            return se
+        case EBinaryOp(l, op, r):
+            return SpannedExpr(EBinaryOp(Box(subst_expr(*l, &iv, &bv, &sv)), op, Box(subst_expr(*r, &iv, &bv, &sv))), se.span)
+        case EUnaryOp(op, operand):
+            return SpannedExpr(EUnaryOp(op, Box(subst_expr(*operand, &iv, &bv, &sv))), se.span)
+        case ECall(callee, args, targs):
+            Vector[SpannedExpr] na = Vector[SpannedExpr]()
+            int i = 0
+            while i < args.len():
+                na.push(subst_expr(args.get(i).unwrap(), &iv, &bv, &sv))
+                i = i + 1
+            return SpannedExpr(ECall(Box(subst_expr(*callee, &iv, &bv, &sv)), na, targs), se.span)
+        case EMethodCall(recv, mname, args, targs):
+            Vector[SpannedExpr] na = Vector[SpannedExpr]()
+            int i = 0
+            while i < args.len():
+                na.push(subst_expr(args.get(i).unwrap(), &iv, &bv, &sv))
+                i = i + 1
+            return SpannedExpr(EMethodCall(Box(subst_expr(*recv, &iv, &bv, &sv)), mname, na, targs), se.span)
+        case EFieldAccess(base, fname):
+            return SpannedExpr(EFieldAccess(Box(subst_expr(*base, &iv, &bv, &sv)), fname), se.span)
+        case EIndex(base, idx):
+            return SpannedExpr(EIndex(Box(subst_expr(*base, &iv, &bv, &sv)), Box(subst_expr(*idx, &iv, &bv, &sv))), se.span)
+        case EFString(raw, parts):
+            Vector[SpannedExpr] np = Vector[SpannedExpr]()
+            int i = 0
+            while i < parts.len():
+                np.push(subst_expr(parts.get(i).unwrap(), &iv, &bv, &sv))
+                i = i + 1
+            return SpannedExpr(EFString(raw, np), se.span)
+        case EArrayLiteral(elems):
+            Vector[SpannedExpr] ne = Vector[SpannedExpr]()
+            int i = 0
+            while i < elems.len():
+                ne.push(subst_expr(elems.get(i).unwrap(), &iv, &bv, &sv))
+                i = i + 1
+            return SpannedExpr(EArrayLiteral(ne), se.span)
+        else:
+            return se
+
+Vector[Stmt] subst_stmts(Vector[Stmt] stmts, Dict[String, int] &iv, Dict[String, bool] &bv, Dict[String, String] &sv):
+    Vector[Stmt] out = Vector[Stmt]()
+    int i = 0
+    while i < stmts.len():
+        Stmt s = stmts.get(i).unwrap()
+        match s:
+            case SExpr(e):
+                out.push(SExpr(subst_expr(e, &iv, &bv, &sv)))
+            case SReturn(oe):
+                match oe:
+                    case Some(e):
+                        out.push(SReturn(Some(subst_expr(e, &iv, &bv, &sv))))
+                    case None:
+                        out.push(s)
+            case SVarDecl(ty, name, val, a, b, c):
+                out.push(SVarDecl(ty, name, subst_expr(val, &iv, &bv, &sv), a, b, c))
+            case SAssign(lhs, rhs):
+                out.push(SAssign(subst_expr(lhs, &iv, &bv, &sv), subst_expr(rhs, &iv, &bv, &sv)))
+            case SCompoundAssign(lhs, op, rhs):
+                out.push(SCompoundAssign(subst_expr(lhs, &iv, &bv, &sv), op, subst_expr(rhs, &iv, &bv, &sv)))
+            case SIf(cond, then_b, else_branches):
+                Vector[ElseBranch] nb = Vector[ElseBranch]()
+                int ei = 0
+                while ei < else_branches.len():
+                    ElseBranch eb = else_branches.get(ei).unwrap()
+                    Option[SpannedExpr] nc = None
+                    match eb.condition:
+                        case Some(c):
+                            nc = Some(subst_expr(c, &iv, &bv, &sv))
+                        case None:
+                            nc = None
+                    nb.push(ElseBranch(nc, subst_stmts(eb.body, &iv, &bv, &sv)))
+                    ei = ei + 1
+                out.push(SIf(subst_expr(cond, &iv, &bv, &sv), subst_stmts(then_b, &iv, &bv, &sv), nb))
+            case SWhile(cond, body):
+                out.push(SWhile(subst_expr(cond, &iv, &bv, &sv), subst_stmts(body, &iv, &bv, &sv)))
+            case SFor(pat, iter_e, body, own, else_b):
+                out.push(SFor(pat, subst_expr(iter_e, &iv, &bv, &sv), subst_stmts(body, &iv, &bv, &sv), own, subst_stmts(else_b, &iv, &bv, &sv)))
+            case SMatch(scrut, arms):
+                Vector[MatchArm] na = Vector[MatchArm]()
+                int ai = 0
+                while ai < arms.len():
+                    MatchArm a = arms.get(ai).unwrap()
+                    na.push(MatchArm(a.pattern, a.guard, subst_stmts(a.body, &iv, &bv, &sv)))
+                    ai = ai + 1
+                out.push(SMatch(subst_expr(scrut, &iv, &bv, &sv), na))
+            else:
+                out.push(s)
+        i = i + 1
+    return out
+
+void substitute_meta_consts(Module &m, Dict[String, int] &iv, Dict[String, bool] &bv, Dict[String, String] &sv):
+    int i = 0
+    while i < m.items.len():
+        match m.items.get(i).unwrap():
+            case IFunction(fdef):
+                Vector[Stmt] nb = subst_stmts(fdef.body, &iv, &bv, &sv)
+                m.items.set(i, IFunction(FunctionDef(fdef.name, fdef.params, fdef.return_type, fdef.type_params, nb, fdef.is_expr_body, fdef.throws_type)))
+            case IEquip(eqblk):
+                Vector[FunctionDef] nm = Vector[FunctionDef]()
+                int mi = 0
+                while mi < eqblk.methods.len():
+                    FunctionDef meth = eqblk.methods.get(mi).unwrap()
+                    nm.push(FunctionDef(meth.name, meth.params, meth.return_type, meth.type_params, subst_stmts(meth.body, &iv, &bv, &sv), meth.is_expr_body, meth.throws_type))
+                    mi = mi + 1
+                m.items.set(i, IEquip(EquipBlock(eqblk.target, eqblk.type_params, eqblk.trait_name, nm, eqblk.via_field, eqblk.trait_generic_args)))
+            else:
+                pass
+        i = i + 1
+
 # ── Main expansion entry point ────────────────────────────────
 
 void expand_meta_types(Module &m, TypeTable &types):
@@ -115,13 +583,24 @@ void expand_meta_types(Module &m, TypeTable &types):
             case IMetaConst(mc_type, mc_name, mc_expr):
                 String type_name = meta_type_to_name(mc_type.ty)
                 if type_name == "int":
-                    int_consts[mc_name] = eval_int(mc_expr.expr, &int_consts)
+                    bool ok = true
+                    int v = eval_int_ex(mc_expr.expr, &int_consts, &m, 0, &ok)
+                    if ok:
+                        int_consts[mc_name] = v
                 elif type_name == "bool":
-                    bool_consts[mc_name] = eval_bool(mc_expr.expr, &bool_consts)
+                    bool ok = true
+                    bool_consts[mc_name] = eval_meta_bool(mc_expr.expr, &int_consts, &bool_consts, &m, &ok)
                 elif type_name == "str" or type_name == "String":
                     match mc_expr.expr:
                         case EStringLiteral(s, _):
                             str_consts[mc_name] = s
+                        case ECall(callee, cargs, _):
+                            match (*callee).expr:
+                                case EIdentifier(fn_name):
+                                    if fn_name == "typename" and cargs.len() == 1:
+                                        str_consts[mc_name] = meta_typename(arg_as_type(cargs.get(0).unwrap()))
+                                else:
+                                    pass
                         else:
                             pass
             else:
@@ -129,6 +608,9 @@ void expand_meta_types(Module &m, TypeTable &types):
 
     # Add platform builtins
     int_consts["arch_word_bits"] = 64
+
+    # [PROTOTYPE] Phase 2: substitute collected const values into all bodies.
+    substitute_meta_consts(&m, &int_consts, &bool_consts, &str_consts)
 
     # Pass 2: resolve meta type aliases
     for item in m.items:
