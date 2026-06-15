@@ -2065,9 +2065,19 @@ fn lower_return(
         ctx.drops.emit_early_exit_drops(builder, &ctx.type_registry, DropScopeKind::Function, returned_local);
         builder.ret(FunctionBuilder::copy(LocalId(0)));
     } else {
-        // P2.6: Emit cleanup drops for all scopes being exited
-        ctx.drops.emit_early_exit_drops(builder, &ctx.type_registry, DropScopeKind::Function, None);
-        builder.ret(FunctionBuilder::const_unit());
+        // Bare `return` in a throws-widened fn: ret_type is Result__V__E, not unit.
+        // Return the zero-inited _0 (tag 0 = Ok), not const_unit() (an int32 → C type
+        // mismatch). Typed metadata (enum_category), not name-matching. Mirrors the
+        // self-host fix 167cb1b6 and the fall-off path (which returns copy(_0)).
+        let ret_type = builder.locals[0].type_id;
+        if ctx.type_registry.enum_category(ret_type) == Some(EnumCategory::Result) {
+            ctx.drops.emit_early_exit_drops(builder, &ctx.type_registry, DropScopeKind::Function, Some(LocalId(0)));
+            builder.ret(FunctionBuilder::copy(LocalId(0)));
+        } else {
+            // P2.6: Emit cleanup drops for all scopes being exited
+            ctx.drops.emit_early_exit_drops(builder, &ctx.type_registry, DropScopeKind::Function, None);
+            builder.ret(FunctionBuilder::const_unit());
+        }
     }
 }
 

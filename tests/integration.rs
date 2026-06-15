@@ -3449,6 +3449,27 @@ fn void_throws() {
 }
 
 #[test]
+fn void_throws_bare_return() {
+    // An EXPLICIT bare `return` in a `void X() throws E` fn miscompiled:
+    // `lower_return`'s bare-return `else` branch emitted `const_unit()`
+    // (an int32 0) where the throws-widened return type is
+    // `Result__void__E`, producing a C type error
+    // (`incompatible types when returning type 'int32_t' but
+    // '__gg_Result__void__RuntimeException' was expected`). The FALL-OFF
+    // path already returned `copy(_0)` correctly; only the explicit
+    // bare-return path was wrong.
+    //
+    // Fix (`src/ir/lowering/stmts/mod.rs`): gate the bare-return branch on
+    // typed `enum_category(ret_type) == Some(EnumCategory::Result)` →
+    // `ret(copy(_0))` (the zero-inited Ok), else keep `const_unit()`.
+    // Shared GIR→LIR lowering → fixes both backends.
+    run_gg(
+        "void_throws_bare_return.gg",
+        "set foo on obj 1\nok path\nbare-return ok\ndone",
+    );
+}
+
+#[test]
 fn panic_builtin() {
     // Deferred TODO from gorget-js critique #5: `panic(msg)` was
     // hardcoded only via `assert` lowering's `call_extern("gorget_
