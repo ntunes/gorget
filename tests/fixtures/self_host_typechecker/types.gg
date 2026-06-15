@@ -168,7 +168,7 @@ struct TypeTable:
     # expression types, the lowerer reads them. (Gap #2 Phase 1.)
     Dict[int, int] expr_types
     # Per-method-call inferred method-level type-args side-table — key:
-    # EMethodCall.span.start, value: the Vector of inferred method-targ
+    # EMethodCall.span.END, value: the Vector of inferred method-targ
     # TypeIds (parallel to `expr_types`). Written by `infer_expr_type`
     # when a method-level-generic equip method (e.g. Iterator's
     # `fold[A,F]`/`any[F]`) is called WITHOUT an explicit turbofish, so
@@ -178,15 +178,19 @@ struct TypeTable:
     # (lazy-iterator phase 1b). Layering rule 3: the typechecker infers
     # the method-targs once; the lowerer reads them.
     #
-    # ⚠ KEY COLLISION: the parser gives the OUTER and every INNER call of a
-    # method chain the SAME `span.start` (the chain's receiver start) —
-    # `v.iter().fold(0,f)` makes both the `.iter()` and `.fold()` EMethodCall
-    # nodes start at `v`. So a single span.start can be shared by a writer
-    # (the method-generic `.fold`) and a non-generic reader (`.iter()`). The
-    # parallel `expr_method_targs_name` records the METHOD NAME of the writer
-    # so readers (call-site + discovery walk) only consume the entry when the
-    # method name matches — otherwise `.iter()` would pick up `.fold`'s targs
-    # and mangle a bogus `Vector__int64_t__iter__int64_t__GorgetClosure`.
+    # ⚠ WHY span.END (not span.start): the parser gives the OUTER and every
+    # INNER call of a method chain the SAME `span.start` (the chain's receiver
+    # start) — `v.iter().fold(0,f)` makes both the `.iter()` and `.fold()`
+    # EMethodCall nodes start at `v`. Keying on span.start collapsed the chain
+    # onto one slot (last-`put`-wins), so a chain with two method-generic links
+    # (`.filter[F]` AND `.map[U,F]`) lost one link's targs — its adapter ctor
+    # was CALLED-but-never-DEFINED (CC-fail). `span.end` is UNIQUE per link
+    # (each link ends at a distinct token — the same invariant `expr_link_types`
+    # uses), so the KEY ALONE keeps every link's targs separate. The parallel
+    # `expr_method_targs_name` still records the writer's METHOD NAME, and the
+    # readers (call-site + discovery walk) cross-check it as a cheap
+    # belt-and-suspenders guard — it is no longer the load-bearing disambiguator
+    # (the unique key is), just a guard against a stale entry.
     Dict[int, Vector[int]] expr_method_targs
     Dict[int, String] expr_method_targs_name
     # Per-CHAIN-LINK resolved type side-table — key: SpannedExpr.span.END,
@@ -209,8 +213,10 @@ struct TypeTable:
     # oracle: the typechecker's recursive `infer_expr_type` already RE-DERIVES
     # each link's type from the trait registry; we just persist its per-link
     # output here instead of letting the span.start collision discard it.
-    # Distinct key-space from `expr_method_targs` (span.start + name-guard), so
-    # the bare-form terminal-recording / name-guard contract is untouched.
+    # `expr_method_targs` now keys on the SAME unique span.end, but it is a
+    # SEPARATE Dict storing different values (inferred method-targs, not link
+    # types), so the two tables never interfere — the bare-form
+    # terminal-recording contract there is untouched.
     Dict[int, int] expr_link_types
 
 equip TypeTable:

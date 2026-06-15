@@ -976,12 +976,15 @@ void resolve_param_type_var(int old_type_id, int new_type_id, int scope_id, Scop
 #     entries — `walk_expr_closures` then re-derives `expr_types` exactly as it
 #     would have without this walk. (RUN-confirmed both directions.)
 #
-# ⚠ The same shared-span.start also collides the `expr_method_targs` key of the
-# OUTER terminal (`.fold`) with the INNER receiver (`.iter()`). The recorded
-# method NAME (`expr_method_targs_name`) disambiguates at the READ sites
-# (lower.gg's call-site + discovery walk), so `.iter()` never consumes
-# `.fold`'s targs (which would mangle a bogus
-# `Vector__int64_t__iter__int64_t__GorgetClosure`).
+# NOTE: `expr_method_targs` is keyed on the call's UNIQUE `span.end`, NOT the
+# shared span.start. So the OUTER terminal (`.fold`) and the INNER receiver
+# (`.iter()`) land in DISTINCT slots automatically — each chain link ends at a
+# different token, so the key alone keeps every link's targs separate (a chain
+# with two method-generic links, `.filter[F]` AND `.map[U,F]`, no longer
+# collides away one of them). The recorded method NAME (`expr_method_targs_name`)
+# is still checked at the READ sites (lower.gg's call-site + discovery walk) as
+# a cheap belt-and-suspenders cross-check — it is no longer the load-bearing
+# disambiguator (`span.end` is), it just guards against a stale entry.
 void record_method_targs_in_expr(SpannedExpr sexpr, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
     match sexpr.expr:
         case EMethodCall(recv_box, _, margs, _):
