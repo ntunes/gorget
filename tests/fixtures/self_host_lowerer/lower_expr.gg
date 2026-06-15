@@ -2823,7 +2823,15 @@ int try_lower_vector_hof(LowerCtx &ctx, int recv, String recv_type_name, String 
         SpannedPattern var_pat = SpannedPattern(PBinding(var_name), span)
         # map's output element type = the input element type for the
         # scalar-preserving fixtures in scope; filter keeps the input type.
-        int acc_tid = lookup_or_register_named(&gmod, "GorgetArray")
+        # Type the accumulator with the ELEMENT-CARRYING `Vector__<elem>`
+        # name (not bare `GorgetArray`) so the result is a self-describing
+        # Vector: a CHAINED HOF (`v.filter(…).map(…).fold(…)`) sees a
+        # `Vector__<elem>` receiver and re-resolves the element type via
+        # `collection_element_type`, instead of hitting a bare `GorgetArray`
+        # that `lower_for_vector` can't iterate. The runtime layout is the
+        # same `GorgetArray` struct (resource_meta_for maps both), so the
+        # push/extend/get/len calls and the C-emit assignment are unchanged.
+        int acc_tid = lookup_or_register_named(&gmod, "Vector__" + elem_name)
         int acc = comp_make_acc(&ctx, acc_tid, elem_name, &gmod)
         String acc_name = "__hof_acc_" + int_to_str(acc)
         nl_put(&ctx, acc_name, acc)
@@ -2843,6 +2851,38 @@ int try_lower_vector_hof(LowerCtx &ctx, int recv, String recv_type_name, String 
             Vector[Stmt] then_body = [SExpr(push_call)]
             Vector[ElseBranch] no_elifs = []
             body.push(SIf(cbody.clone(), then_body, no_elifs))
+        lower_for_vector(&ctx, var_pat, recv, recv_type_name, false, body, &gmod, false)
+        return acc
+    # ── flat_map: concatenate the Vector the closure returns per element ──
+    # `v.flat_map(f)` ≡ `acc = []; for x in v: acc.extend(f(x))`. Mirrors
+    # Rust gg's `expand_flat_map` (src/bir/lower.rs:2297) — per element call
+    # the closure (a Vector of the SAME element type, flat_map preserves the
+    # element type) and append its elements into the accumulator via
+    # `gorget_array_extend`. The synthesized `acc.extend(<closure body>)`
+    # routes through the normal method dispatch (`extend` → gorget_array_extend,
+    # lir_lower.gg:1559) — NOT the HOF intercept, since `extend` isn't a HOF.
+    if mname == "flat_map":
+        if margs.len() != 1:
+            return -1
+        Vector[String] cparams = []
+        SpannedExpr cbody = sexpr
+        if not closure_extract(margs.get(0).unwrap(), &cparams, &cbody):
+            return -1
+        if cparams.len() != 1:
+            return -1
+        String var_name = cparams.get(0).unwrap()
+        SpannedPattern var_pat = SpannedPattern(PBinding(var_name), span)
+        int acc_tid = lookup_or_register_named(&gmod, "Vector__" + elem_name)
+        int acc = comp_make_acc(&ctx, acc_tid, elem_name, &gmod)
+        String acc_name = "__hof_acc_" + int_to_str(acc)
+        nl_put(&ctx, acc_name, acc)
+        SpannedExpr acc_ref = SpannedExpr(EIdentifier(acc_name), span)
+        Vector[SpannedType] no_targs = []
+        # `acc.extend(<closure body>)` — the closure body is a Vector
+        # expression; extend appends all its elements into acc.
+        Vector[SpannedExpr] ext_args = [cbody.clone()]
+        SpannedExpr ext_call = SpannedExpr(EMethodCall(Box(acc_ref), "extend", ext_args, no_targs), span)
+        Vector[Stmt] body = [SExpr(ext_call)]
         lower_for_vector(&ctx, var_pat, recv, recv_type_name, false, body, &gmod, false)
         return acc
     # ── fold: seeded scalar accumulator threaded through the closure ──
@@ -2952,7 +2992,16 @@ int lower_vector_fold(LowerCtx &ctx, int recv, String recv_type_name, SpannedExp
     int init_local = lower_expr(&ctx, init_expr, &gmod)
     int acc_tid = ctx.locals.get(init_local).unwrap().type_id
     int acc = add_local(&ctx, acc_tid, None)
-    emit(&ctx, GIAssign(acc, OpCopy(init_local)))
+    # Seed via the consume machinery (CkAssign), NOT a raw OpCopy: a raw
+    # OpCopy of a resource init (`fold("", …)` — a GorgetString) trips
+    # `validate_resource_moves` (no resource may be byte-copied). CkAssign
+    # byte-copies a scalar init and move/clones a resource init, mirroring a
+    # resource VarDecl seed. Register the acc for drop when its type is
+    # droppable so the seed AND the per-iteration `acc = body` reassigns
+    # (which the SAssign path drop-on-overwrites) are leak/UAF-correct.
+    emit(&ctx, GIAssign(acc, op_consume(&ctx, &gmod, init_local, CkAssign())))
+    if is_droppable_type(acc_tid, &gmod):
+        register_local_for_drop(&ctx, acc, acc_tid, &gmod)
     nl_put(&ctx, acc_param, acc)
     # Body: `acc = <closure body>` — a reassign of the accumulator local.
     SpannedExpr acc_lhs = SpannedExpr(EIdentifier(acc_param), span)
