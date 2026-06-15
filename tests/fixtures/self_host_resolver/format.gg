@@ -389,19 +389,18 @@ String format_expr(SpannedExpr se):
             String lb = r"{"
             String rb = r"}"
             String sc_result = lb + format_expr(*expr) + " for " + var + " in " + format_expr(*iter)
-            # Check if cond is a non-dummy expression (dummy = EIntLiteral(0) at span 0,0)
-            match (*cond).expr:
-                case EIntLiteral(n):
-                    if n != 0:
-                        sc_result = sc_result + " if " + format_expr(*cond)
-                else:
-                    sc_result = sc_result + " if " + format_expr(*cond)
+            if has_opt_boxed_expr(cond):
+                sc_result = sc_result + " if " + format_expr(get_opt_boxed_expr(cond))
             sc_result = sc_result + rb
             return sc_result
-        case EDictComp(key, val, var, iter):
+        case EDictComp(key, val, var, iter, cond):
             String lb = r"{"
             String rb = r"}"
-            return lb + format_expr(*key) + ": " + format_expr(*val) + " for " + var + " in " + format_expr(*iter) + rb
+            String dc_result = lb + format_expr(*key) + ": " + format_expr(*val) + " for " + var + " in " + format_expr(*iter)
+            if has_opt_boxed_expr(cond):
+                dc_result = dc_result + " if " + format_expr(get_opt_boxed_expr(cond))
+            dc_result = dc_result + rb
+            return dc_result
         case EDefaultOp(l, r):
             return "(" + format_expr(*l) + " ?? " + format_expr(*r) + ")"
         case EIs(expr, negated, pat):

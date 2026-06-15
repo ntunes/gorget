@@ -263,14 +263,23 @@ void cow_scan_expr(LowerCtx &ctx, GirModule &gmod, SpannedExpr e, bool in_closur
                     cow_scan_expr(&ctx, &gmod, *filt_box, in_closure)
                 case None:
                     pass
-        case ESetComp(selem_box, _, siter_box, sfilt_box):
+        case ESetComp(selem_box, _, siter_box, sfilt_opt):
             cow_scan_expr(&ctx, &gmod, *selem_box, in_closure)
             cow_scan_expr(&ctx, &gmod, *siter_box, in_closure)
-            cow_scan_expr(&ctx, &gmod, *sfilt_box, in_closure)
-        case EDictComp(dk_box, dv_box, _, diter_box):
+            match sfilt_opt:
+                case Some(sfilt_box):
+                    cow_scan_expr(&ctx, &gmod, *sfilt_box, in_closure)
+                case None:
+                    pass
+        case EDictComp(dk_box, dv_box, _, diter_box, dfilt_opt):
             cow_scan_expr(&ctx, &gmod, *dk_box, in_closure)
             cow_scan_expr(&ctx, &gmod, *dv_box, in_closure)
             cow_scan_expr(&ctx, &gmod, *diter_box, in_closure)
+            match dfilt_opt:
+                case Some(dfilt_box):
+                    cow_scan_expr(&ctx, &gmod, *dfilt_box, in_closure)
+                case None:
+                    pass
         case ERethrow(re_inner, _, _, re_handler):
             cow_scan_expr(&ctx, &gmod, *re_inner, in_closure)
             cow_scan_expr(&ctx, &gmod, *re_handler, in_closure)

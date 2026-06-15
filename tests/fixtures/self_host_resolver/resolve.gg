@@ -799,20 +799,23 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
                 resolve_expr(*b, &scopes, &ctx)
             scopes.pop_scope()
 
-        case ESetComp(comp_expr, var_name, iterable, cond):
+        case ESetComp(comp_expr, var_name, iterable, opt_cond):
             resolve_expr(*iterable, &scopes, &ctx)
             scopes.push_scope(SkForLoop())
             scopes.define(var_name, DkVariable(), Span(0, 0))
             resolve_expr(*comp_expr, &scopes, &ctx)
-            resolve_expr(*cond, &scopes, &ctx)
+            if opt_cond is Some(b):
+                resolve_expr(*b, &scopes, &ctx)
             scopes.pop_scope()
 
-        case EDictComp(key, value, var_name, iterable):
+        case EDictComp(key, value, var_name, iterable, opt_cond):
             resolve_expr(*iterable, &scopes, &ctx)
             scopes.push_scope(SkForLoop())
             scopes.define(var_name, DkVariable(), Span(0, 0))
             resolve_expr(*key, &scopes, &ctx)
             resolve_expr(*value, &scopes, &ctx)
+            if opt_cond is Some(b):
+                resolve_expr(*b, &scopes, &ctx)
             scopes.pop_scope()
 
         case EArrayLiteral(elements):

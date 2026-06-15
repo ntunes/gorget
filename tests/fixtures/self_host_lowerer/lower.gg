@@ -497,7 +497,7 @@ String expr_kind(Expr e):
             return "EListComp"
         case ESetComp(_, _, _, _):
             return "ESetComp"
-        case EDictComp(_, _, _, _):
+        case EDictComp(_, _, _, _, _):
             return "EDictComp"
         case EDefaultOp(_, _):
             return "EDefaultOp"

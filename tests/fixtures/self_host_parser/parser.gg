@@ -2298,12 +2298,14 @@ equip Parser:
                     String var_name = token_ident(var_tok.lex_token)
                     self.expect_kw(KW_IN, "expected 'in' in set comprehension")
                     SpannedExpr iterable = self.parse_expr()
-                    SpannedExpr cond = SpannedExpr(EIntLiteral(0), Span(0, 0))
+                    # Optional 'if cond' filter
+                    Option[Box[SpannedExpr]] cond = None
                     if self.check_kw(KW_IF):
                         self.advance()
-                        cond = self.parse_expr()
+                        SpannedExpr cond_expr = self.parse_expr()
+                        cond = Some(Box(cond_expr))
                     self.expect_tok(TOK_RBRACE, "expected '}' after set comprehension")
-                    return SpannedExpr(ESetComp(Box(first), var_name, Box(iterable), Box(cond)), Span(start, self.peek().lex_start))
+                    return SpannedExpr(ESetComp(Box(first), var_name, Box(iterable), cond), Span(start, self.peek().lex_start))
                 self.expect_tok(TOK_COLON, "expected ':' in dict literal")
                 SpannedExpr v = self.parse_expr()
                 # Dict comprehension: {key: value for var in iter}
@@ -2313,12 +2315,14 @@ equip Parser:
                     String dvar_name = token_ident(dvar_tok.lex_token)
                     self.expect_kw(KW_IN, "expected 'in' in dict comprehension")
                     SpannedExpr diterable = self.parse_expr()
-                    # Skip optional 'if cond'
+                    # Optional 'if cond' filter
+                    Option[Box[SpannedExpr]] dcond = None
                     if self.check_kw(KW_IF):
                         self.advance()
-                        self.parse_expr()
+                        SpannedExpr dcond_expr = self.parse_expr()
+                        dcond = Some(Box(dcond_expr))
                     self.expect_tok(TOK_RBRACE, "expected '}' after dict comprehension")
-                    return SpannedExpr(EDictComp(Box(first), Box(v), dvar_name, Box(diterable)), Span(start, self.peek().lex_start))
+                    return SpannedExpr(EDictComp(Box(first), Box(v), dvar_name, Box(diterable), dcond), Span(start, self.peek().lex_start))
                 keys.push(first)
                 vals.push(v)
                 while self.match_tok(TOK_COMMA):
