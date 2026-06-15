@@ -394,6 +394,29 @@ fn option_payload_offset(payload_ty_str: &str) -> u64 {
     }
 }
 
+/// Emit an inter-field / trailing struct padding member of `pad` bytes.
+///
+/// **Must use an integer scalar (`iN`) for power-of-two sizes, NOT `[N x i8]`.**
+/// On x86-64 SysV, LLVM 18's aggregate-ABI classifier treats a struct field of
+/// array type `[N x i8]` as forcing the whole struct toward the MEMORY class —
+/// so a 16-byte enum like `Option__Box__Expr` emitted as `{ i32, [4 x i8], ptr }`
+/// is *returned via sret* (hidden pointer in RDI), while the C runtime declares
+/// the same struct as `{ int32_t; void* }` and returns it in registers (RAX:RDX).
+/// That ABI mismatch makes the C callee read the sret slot pointer as its `__p`
+/// argument → dereference a stack address → SIGABRT/SIGSEGV (only at `llc -O0`;
+/// `-O2` happens to optimize the bad reload away). Padding with `i32`/`i64`/…
+/// keeps each eightbyte INTEGER-classed, matching the C natural-padding layout.
+/// Non-power-of-two gaps (rare; e.g. a 3-byte hole) fall back to `[N x i8]`.
+fn llvm_struct_padding(pad: usize) -> String {
+    match pad {
+        1 => "i8".to_string(),
+        2 => "i16".to_string(),
+        4 => "i32".to_string(),
+        8 => "i64".to_string(),
+        _ => format!("[{pad} x i8]"),
+    }
+}
+
 /// Compute the payload offset in an Option struct from a LirType.
 fn lir_payload_offset(fty: &LirType) -> u64 {
     match fty {
@@ -1054,7 +1077,10 @@ fn emit_struct_types(out: &mut String, module: &LirModule, snames: &HashMap<u32,
                 let aligned_offset = (offset + c_align - 1) & !(c_align - 1);
                 if aligned_offset > offset {
                     let pad = aligned_offset - offset;
-                    fields.push(format!("[{pad} x i8]"));
+                    // Integer-typed padding (not `[N x i8]`) so x86-64 SysV
+                    // keeps each eightbyte INTEGER-classed and matches the C
+                    // runtime's register-return ABI. See `llvm_struct_padding`.
+                    fields.push(llvm_struct_padding(pad));
                     offset = aligned_offset;
                 }
                 fields.push(field_llvm);
@@ -1067,7 +1093,7 @@ fn emit_struct_types(out: &mut String, module: &LirModule, snames: &HashMap<u32,
                 if let Some(c_size) = def.computed_c_size {
                     if c_size > offset {
                         let pad = c_size - offset;
-                        fields.push(format!("[{pad} x i8]"));
+                        fields.push(llvm_struct_padding(pad));
                     }
                 }
             }
