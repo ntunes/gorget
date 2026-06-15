@@ -888,6 +888,109 @@ SpannedType substitute_type(SpannedType stype, Dict[String, SpannedType] &type_s
         else:
             return stype
 
+# PROTO method-instance discovery in a MONOMORPHIZED generic-fn body.
+#
+# When `hash_of[Key]` (template `hash_of[Hashable T](T v)`) is monomorphized
+# with `type_sub_map = {T -> Key}`, its body contains `v.hash[FxHasher](&h)`.
+# The receiver `v` is a parameter of declared type `T`; substituting through
+# the mono map gives the CONCRETE equip target `Key`, so the call needs the
+# per-call-site method instance `Key__hash__FxHasher` defined. The up-front
+# `proto_walk_expr` can't reach this — it runs on the un-substituted template
+# where `v: T` (no concrete receiver) — so we mirror Rust's
+# `try_register_method_instance` here, in the transitive-fixpoint context
+# where the substitution is known.
+#
+# Scope (bounded prototype): only PARAMETER receivers with a turbofish are
+# discovered (covers `hash_of`'s `v.hash[FxHasher]`). Local/chain receivers
+# need the full LocalTypeEnv inference Rust carries and are out of scope here.
+void discover_mono_method_insts(Vector[Stmt] stmts, Dict[String, SpannedType] params_by_name, Dict[String, SpannedType] &type_sub_map, GirModule &gmod, Vector[ProtoMethInst] &out, Dict[String, bool] &seen):
+    for stmt in stmts:
+        discover_mono_method_insts_stmt(stmt, params_by_name, &type_sub_map, &gmod, &out, &seen)
+
+void discover_mono_method_insts_stmt(Stmt stmt, Dict[String, SpannedType] params_by_name, Dict[String, SpannedType] &type_sub_map, GirModule &gmod, Vector[ProtoMethInst] &out, Dict[String, bool] &seen):
+    match stmt:
+        case SVarDecl(_, _, init, _, _, _):
+            discover_mono_method_insts_expr(init, params_by_name, &type_sub_map, &gmod, &out, &seen)
+        case SExpr(e):
+            discover_mono_method_insts_expr(e, params_by_name, &type_sub_map, &gmod, &out, &seen)
+        case SAssign(_, e):
+            discover_mono_method_insts_expr(e, params_by_name, &type_sub_map, &gmod, &out, &seen)
+        case SReturn(opt):
+            match opt:
+                case Some(e):
+                    discover_mono_method_insts_expr(e, params_by_name, &type_sub_map, &gmod, &out, &seen)
+                case None:
+                    pass
+        case SIf(c, tb, elifs):
+            discover_mono_method_insts_expr(c, params_by_name, &type_sub_map, &gmod, &out, &seen)
+            discover_mono_method_insts(tb, params_by_name, &type_sub_map, &gmod, &out, &seen)
+            for el in elifs:
+                discover_mono_method_insts(el.body, params_by_name, &type_sub_map, &gmod, &out, &seen)
+        case SWhile(c, b):
+            discover_mono_method_insts_expr(c, params_by_name, &type_sub_map, &gmod, &out, &seen)
+            discover_mono_method_insts(b, params_by_name, &type_sub_map, &gmod, &out, &seen)
+        case SFor(_, iter_e, b, _, eb):
+            discover_mono_method_insts_expr(iter_e, params_by_name, &type_sub_map, &gmod, &out, &seen)
+            discover_mono_method_insts(b, params_by_name, &type_sub_map, &gmod, &out, &seen)
+            discover_mono_method_insts(eb, params_by_name, &type_sub_map, &gmod, &out, &seen)
+        else:
+            pass
+
+void discover_mono_method_insts_expr(SpannedExpr sexpr, Dict[String, SpannedType] params_by_name, Dict[String, SpannedType] &type_sub_map, GirModule &gmod, Vector[ProtoMethInst] &out, Dict[String, bool] &seen):
+    match sexpr.expr:
+        case EMethodCall(recv_box, mname, margs, mtargs):
+            discover_mono_method_insts_expr(*recv_box, params_by_name, &type_sub_map, &gmod, &out, &seen)
+            for a in margs:
+                discover_mono_method_insts_expr(a, params_by_name, &type_sub_map, &gmod, &out, &seen)
+            if mtargs.len() > 0:
+                # Receiver must be a bare parameter identifier whose declared
+                # type substitutes to a CONCRETE named type (the equip base).
+                match (*recv_box).expr:
+                    case EIdentifier(rname):
+                        if params_by_name.contains(rname):
+                            SpannedType decl_ty = params_by_name.get(rname).unwrap()
+                            SpannedType conc_ty = substitute_type(decl_ty, &type_sub_map)
+                            String recv_name = ""
+                            match conc_ty.ty:
+                                case TNamed(cn, cargs):
+                                    if cargs.len() == 0:
+                                        recv_name = cn
+                                else:
+                                    pass
+                            if recv_name.len() > 0:
+                                # Substitute the turbofish targs too (they may
+                                # reference the fn's own type params; here they
+                                # are concrete like FxHasher, substitute is a
+                                # no-op but kept for correctness).
+                                Vector[SpannedType] sub_targs = []
+                                for mt in mtargs:
+                                    sub_targs.push(substitute_type(mt, &type_sub_map))
+                                if not has_type_variable(sub_targs):
+                                    String sym = recv_name + "__" + mname
+                                    for st in sub_targs:
+                                        sym = sym + "__" + type_to_c_name(st, &gmod)
+                                    if not seen.contains(sym):
+                                        seen.put(sym.clone(), true)
+                                        out.push(ProtoMethInst(recv_name, mname, sub_targs, [], sym))
+                    else:
+                        pass
+        case ECall(callee_box, cargs, _):
+            discover_mono_method_insts_expr(*callee_box, params_by_name, &type_sub_map, &gmod, &out, &seen)
+            for a in cargs:
+                discover_mono_method_insts_expr(a, params_by_name, &type_sub_map, &gmod, &out, &seen)
+        case EFieldAccess(obj, _):
+            discover_mono_method_insts_expr(*obj, params_by_name, &type_sub_map, &gmod, &out, &seen)
+        case EBinaryOp(l, _, r):
+            discover_mono_method_insts_expr(*l, params_by_name, &type_sub_map, &gmod, &out, &seen)
+            discover_mono_method_insts_expr(*r, params_by_name, &type_sub_map, &gmod, &out, &seen)
+        case EUnaryOp(_, inner):
+            discover_mono_method_insts_expr(*inner, params_by_name, &type_sub_map, &gmod, &out, &seen)
+        case EIndex(b, i):
+            discover_mono_method_insts_expr(*b, params_by_name, &type_sub_map, &gmod, &out, &seen)
+            discover_mono_method_insts_expr(*i, params_by_name, &type_sub_map, &gmod, &out, &seen)
+        else:
+            pass
+
 # Extract meta-op suffix from a call argument list.
 # Looks for EIdentifier("__metaop__<op>") produced by the parser's meta-op handling.
 String extract_meta_op_suffix(Vector[SpannedExpr] args):
