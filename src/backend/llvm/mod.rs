@@ -2298,7 +2298,14 @@ fn emit_function(
         .map(|(i, p)| {
             let ty = if *p == LirType::Void { "ptr".to_string() } else { llvm_type_full(p, snames) };
             if is_spawn_wrapper && p.is_aggregate() && !is_small_aggregate(p, &module.structs) {
-                return format!("ptr %p{i}");
+                // x86_64 SysV: a >16-byte by-value aggregate is MEMORY class (a stack
+                // copy), so the C run-fn passes the Str/struct BY VALUE. Without byval the
+                // wrapper-def would take a register pointer while its body memcpy's the
+                // stack-passed bytes as if `%pN` were an address -> SEGV. byval on x86_64
+                // (via the x86_64-gated large_agg_byval_attr); "" on aarch64 -> bare
+                // `ptr %pN`, byte-identical to before (AAPCS64 passes by implicit ptr).
+                let byval = large_agg_byval_attr(p, snames);
+                return format!("ptr {byval}%p{i}").trim_end().to_string();
             }
             format!("{ty} %p{i}")
         })
