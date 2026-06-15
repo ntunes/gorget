@@ -1,0 +1,16 @@
+# Box[int]-local construction + deref regression (bugs #1 & #2).
+#
+# A `Box[int]` local is constructed and read back via `*b`. Pre-fix the
+# self-host miscompiled both the construction store (bug #1: the IBoxAlloc
+# result `memcpy`'d the payload bytes into the box slot → garbage pointer
+# → `*b` SIGSEGV) and the drop (bug #2: `free(&slot)` aborts with
+# `munmap_chunk(): invalid pointer`). Box is `typedef void*` but its slot
+# is `Box__int`-typed (aggregate), which `lir_is_aggregate` misclassified.
+#
+# Expected (CORRECT) behavior:
+#   5
+from std.collections import Box
+
+void main():
+    Box[int] b = Box(5)
+    print(f"{*b}")

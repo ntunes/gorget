@@ -1,0 +1,21 @@
+# Box[struct]-local construction + deref regression (bug #2, struct-inner).
+#
+# A `Box[P]` local with a struct inner is constructed and read back via
+# `*b`. For struct-inner boxes the IBoxAlloc result is typed `Box__P`, the
+# construction store falls to a correct plain copy (so bug #1 doesn't fire),
+# but the drop still emitted `free(&slot)` (the stack-slot ADDRESS, not the
+# heap pointer) → `munmap_chunk(): invalid pointer`. The bug #2 fix loads the
+# pointer value and frees that, like an owning `!`-param.
+#
+# Expected (CORRECT) behavior:
+#   3 7
+from std.collections import Box
+
+struct P:
+    int a
+    int b
+
+void main():
+    Box[P] b = Box(P(3, 7))
+    P x = *b
+    print(f"{x.a} {x.b}")

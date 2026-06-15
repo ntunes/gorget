@@ -3582,6 +3582,28 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                         int dia_loaded = lir_fn_next_value(&f)
                         lir_push_inst(&f, bb, ISlotLoad(dia_loaded, dia_slot, LT_PTR))
                         dia_drop_arg = dia_loaded
+                    # Box[T] local: a Box is `typedef void*` (pointer-represented)
+                    # but its slot is `Box__T`-typed (aggregate). drop_fn_for_type
+                    # maps Box→`free`, which wants the HEAP pointer the box holds —
+                    # NOT `&slot` (the stack-slot address), which `free(&slot)` would
+                    # abort on with `munmap_chunk(): invalid pointer`. Pass the LOADED
+                    # pointer, like an owning `!`-param. The GUARD above stays on
+                    # `&slot` (ISlotAddr) per drop_elab's build_val_to_slot — only the
+                    # drop-fn ARG changes. Inlined `lir_type_is_box(dia_slot_ty)`
+                    # (m.structs + m.type_runtime_map, both in scope). Mirrors Rust
+                    # src/lir/lower/drops.rs:264-275 (SlotLoad{Ptr} → free the value).
+                    bool dia_is_box = false
+                    if dia_slot_ty >= LT_STRUCT_BASE:
+                        int dia_box_sid = dia_slot_ty - LT_STRUCT_BASE
+                        if dia_box_sid >= 0 and dia_box_sid < m.structs.len():
+                            String dia_box_nm = m.structs.get(dia_box_sid).unwrap().name
+                            if m.type_runtime_map.contains(dia_box_nm):
+                                if m.type_runtime_map.get(dia_box_nm).unwrap_or("") == "Box":
+                                    dia_is_box = true
+                    if dia_is_box and not dia_owns_ptr:
+                        int dia_box_loaded = lir_fn_next_value(&f)
+                        lir_push_inst(&f, bb, ISlotLoad(dia_box_loaded, dia_slot, LT_PTR))
+                        dia_drop_arg = dia_box_loaded
                     # ② closure ENV-FIELD leak fix — for a resource/CoW-capturing
                     # `GorgetClosure` value, `gorget_closure_free` frees only the
                     # env BLOCK, leaking the captured String/Vector/struct field

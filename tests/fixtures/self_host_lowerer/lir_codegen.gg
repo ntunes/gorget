@@ -3335,6 +3335,16 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Vector[String] 
             int vty = LT_VOID
             if val_types.contains(value):
                 vty = val_types.get(value).unwrap()
+            # Box slot (typedef void*): a Box is pointer-represented even
+            # though its LIR type-id classifies as aggregate (>= LT_STRUCT_BASE).
+            # Hoisted ABOVE the aggregate branch so the IBoxAlloc result stored
+            # into a `Box__T`-typed slot is a plain pointer copy, not the bogus
+            # `memcpy(&slot, value, sizeof(Box))` that copied the payload bytes
+            # into the slot (garbage pointer → `*b` SIGSEGV). The `:3367`
+            # guard below is dead for an aggregate-typed Box slot because it's
+            # gated on `slot_ty == LT_PTR`. Mirrors Rust's plain `slot = value`.
+            if lir_type_is_box(slot_ty, &m):
+                return s(slot) + " = " + v(value) + ";"
             if lir_is_aggregate(slot_ty):
                 if vty == LT_PTR or (vty >= LT_PTR_TO_BASE and vty < LT_STRUCT_BASE):
                     String ty_name = c_type_name(slot_ty, &sn)
