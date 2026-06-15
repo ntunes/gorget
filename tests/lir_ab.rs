@@ -112,7 +112,7 @@ fn run_gir_with_args(fixture_path: &std::path::Path, args: &[&str]) -> Option<St
         return None;
     }
 
-    let mut child = Command::new(&exe_path)
+    let child = Command::new(&exe_path)
         .args(args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -144,7 +144,7 @@ fn run_lir_with_args(fixture_path: &std::path::Path, args: &[&str]) -> Option<St
         return None;
     }
 
-    let mut child = Command::new(&exe_path)
+    let child = Command::new(&exe_path)
         .args(args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

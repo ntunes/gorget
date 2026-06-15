@@ -13939,7 +13939,7 @@ fn check_comparison() {
         // Returns None on loader errors (treat as crash).
         use std::panic::AssertUnwindSafe;
         let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            let mut module = Parser::new(source).parse_module();
+            let module = Parser::new(source).parse_module();
             let mut loader = gorget::loader::ModuleLoader::new();
             let modules = loader
                 .load_all(fixture_path, source.to_string(), module)
