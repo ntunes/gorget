@@ -1576,6 +1576,15 @@ String map_array_method(String method):
             return "gorget_array_is_empty"
         case "capacity":
             return "gorget_array_capacity"
+        case "reserve":
+            # `Vector[T].reserve(n)` — grow allocation to hold at least n
+            # elements. Rust gg emits a direct `gorget_array_reserve(arr, n)`
+            # call (src/ir/lowering/exprs/calls.rs:1003). The self-host's
+            # mangled `Vector__T__reserve` arrives here and routes to the
+            # same mutating runtime symbol; arg 0 (self) is by pointer per
+            # `needs_ptr_arg`. Without this arm, link fails with
+            # "undefined reference to Vector__T__reserve".
+            return "gorget_array_reserve"
         case "swap":
             return "gorget_array_swap"
         case "index_of":
@@ -2005,6 +2014,13 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
             return true
         # Read-only methods also take self by const pointer
         if fn_name == "gorget_array_safe_get" or fn_name == "gorget_array_len":
+            return true
+        # `gorget_array_reserve(GorgetArray* arr, size_t n)` mutates the
+        # array's allocation; `gorget_array_capacity(const GorgetArray* arr)`
+        # reads it. Both take self (arg 0) by pointer. Sibling of the
+        # push/len/get rows above — without these, the self-arg passes by
+        # value and cc rejects "incompatible type for argument 1".
+        if fn_name == "gorget_array_reserve" or fn_name == "gorget_array_capacity":
             return true
         # `gorget_array_get(const GorgetArray* arr, size_t idx)` — the
         # EIndex value-read getter (`v[i]`). Self (arg 0) is the array by
