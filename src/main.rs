@@ -858,6 +858,7 @@ fn try_build_ir(
                 .arg("-fPIC")
                 .arg("-Wall")
                 .arg("-Wextra")
+                .arg("-Werror=implicit-function-declaration")
                 .arg("-Wno-unused-parameter")
                 .arg("-Wno-unused-variable")
                 .arg("-Wno-unused-function")
@@ -946,6 +947,7 @@ fn try_build_ir(
             guest_cmd
                 .arg("-std=c11").arg("-shared").arg("-fPIC")
                 .arg("-Wall").arg("-Wextra")
+                .arg("-Werror=implicit-function-declaration")
                 .arg("-Wno-unused-parameter").arg("-Wno-unused-variable").arg("-Wno-unused-function")
                 .arg("-Wno-unused-but-set-variable")
                 .arg("-o").arg(&guest_lib_path)
@@ -966,6 +968,7 @@ fn try_build_ir(
             let mut host_cmd = Command::new(&cc);
             host_cmd.arg("-std=c11")
                 .arg("-Wall").arg("-Wextra")
+                .arg("-Werror=implicit-function-declaration")
                 .arg("-Wno-unused-parameter").arg("-Wno-unused-variable").arg("-Wno-unused-function")
                 .arg("-Wno-unused-but-set-variable")
                 .arg("-o").arg(&exe_path)
@@ -1033,6 +1036,10 @@ fn try_build_ir(
             }
             cc_cmd
                 .arg("-Wall")
+                // NOTE: no -Werror=implicit-function-declaration here. This is the
+                // freestanding/UEFI build (-ffreestanding -nostdlib, no libc); it
+                // intentionally lives in a different no-libc world where libc
+                // prototypes are absent by design, so the flag is N/A.
                 .arg("-Wno-unused-parameter")
                 .arg("-Wno-unused-variable")
                 .arg("-Wno-unused-function")
@@ -1079,6 +1086,7 @@ fn try_build_ir(
             .arg("-std=c11")
             .arg("-Wall")
             .arg("-Wextra")
+            .arg("-Werror=implicit-function-declaration") // hard-fail on calls to undeclared fns (caught the strptime bug -w was hiding)
             .arg("-Wno-unused-parameter")
             .arg("-Wno-unused-variable")
             .arg("-Wno-unused-function")
@@ -1376,7 +1384,9 @@ fn compile_llvm_pipeline(
         .arg("-c")
         .arg("-O2")
         .arg("-std=c11")
-        .arg("-w")  // suppress all warnings from runtime
+        // dropped blanket -w (it hid the strptime implicit-decl); keep the
+        // implicit-decl class as a hard error without -Wall's benign flood.
+        .arg("-Werror=implicit-function-declaration")
         .arg("-o").arg(&runtime_o_path)
         .arg(&runtime_c_path)
         .arg("-lm");
