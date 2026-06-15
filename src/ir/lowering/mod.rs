@@ -733,8 +733,17 @@ pub fn lower_module(
                     };
                     let abis: Vec<AbiKind> = func.params.iter().map(|p| {
                         let tid = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+                        // See the ExternBlock path below: `Ref[T]`/`MutRef[T]` borrow
+                        // params are aggregate-by-pointer and must pin to AbiKind::Ptr
+                        // (is_resource_type can't see through the Ptr wrapper).
+                        let is_borrow_named = matches!(&p.node.type_.node,
+                            ast::Type::Named { name, generic_args }
+                                if (name.node == "Ref" || name.node == "MutRef")
+                                    && generic_args.len() == 1);
                         if matches!(p.node.type_.node, ast::Type::Primitive(ast::PrimitiveType::CStr)) {
                             AbiKind::CStr
+                        } else if is_borrow_named {
+                            AbiKind::Ptr
                         } else if ctx.type_mapper.is_string_type(tid) {
                             string_abi
                         } else if ctx.type_registry.is_resource_type(tid) && !ctx.type_mapper.is_string_type(tid) {
@@ -843,7 +852,19 @@ pub fn lower_module(
                 // String param in extern "C" → CStr (backward compat until all migrated to explicit cstr).
                 {
                     let abis: Vec<AbiKind> = func.params.iter().zip(param_types.iter()).map(|(p, &tid)| {
-                        if matches!(p.node.type_.node, ast::Type::Pointer(_)) {
+                        // `Ref[T]` / `MutRef[T]` extern params lower to GirType::Ptr/MutPtr
+                        // (a borrow of an aggregate the C runtime takes by pointer). The
+                        // resolved tid is a Ptr, which `is_resource_type` does NOT classify
+                        // as a resource (it only matches GirType::Named), so without this
+                        // branch the param falls through to AbiKind::Auto — and on x86_64
+                        // the LLVM backend then byval's the aggregate (corruption) instead
+                        // of passing the pointer. Detect the borrow at the AST level and
+                        // pin it to AbiKind::Ptr.
+                        let is_borrow_named = matches!(&p.node.type_.node,
+                            ast::Type::Named { name, generic_args }
+                                if (name.node == "Ref" || name.node == "MutRef")
+                                    && generic_args.len() == 1);
+                        if matches!(p.node.type_.node, ast::Type::Pointer(_)) || is_borrow_named {
                             AbiKind::Ptr
                         } else if matches!(p.node.type_.node, ast::Type::Primitive(ast::PrimitiveType::CStr)) {
                             AbiKind::CStr
@@ -1049,8 +1070,16 @@ pub fn lower_module(
                         }
                         abis.extend(method_def.params.iter().map(|p| {
                             let tid = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+                            // `Ref[T]`/`MutRef[T]` borrow params are aggregate-by-pointer
+                            // → AbiKind::Ptr (is_resource_type can't see the Ptr wrapper).
+                            let is_borrow_named = matches!(&p.node.type_.node,
+                                ast::Type::Named { name, generic_args }
+                                    if (name.node == "Ref" || name.node == "MutRef")
+                                        && generic_args.len() == 1);
                             if matches!(p.node.type_.node, ast::Type::Primitive(ast::PrimitiveType::CStr)) {
                                 AbiKind::CStr
+                            } else if is_borrow_named {
+                                AbiKind::Ptr
                             } else if string_abi != AbiKind::Auto && ctx.type_mapper.is_string_type(tid) {
                                 string_abi
                             } else if ctx.type_registry.is_resource_type(tid) && !ctx.type_mapper.is_string_type(tid) {
