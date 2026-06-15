@@ -38,3 +38,6 @@ perf.data*
 **/__gorget_runtime*.o
 **/__gorget_user*.o
 *.ll
+
+# LLVM backend emits *.ll into fixture dirs on manual --emit-llvm runs; never tracked.
+tests/fixtures/**/*.ll
