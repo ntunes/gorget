@@ -81,6 +81,61 @@ This is the layout fact the backend depends on, and the reason the field order
 was chosen — `{data, cap, len, alloc}` puts `cap` where `GorgetArray`/`GorgetMap`
 already had it (`src/backend/c/c_runtime.rs:1437`).
 
+## Cover structs: under-declared Gorget layout over a larger C struct
+
+Some Gorget structs deliberately **under-declare** their layout to "cover" a
+larger C runtime struct. The Gorget-visible declaration carries fewer (or
+smaller) fields than the real runtime ABI struct, and the compiler treats the
+Gorget value as an opaque handle of the runtime's size. Examples:
+
+- `struct File: int handle` (`lib/std/io.gg:23`) covers the 16-byte
+  `GorgetFile` `{ int handle; bool owned; ... }`. The Gorget-visible 8-byte
+  `int` spans the C struct's first word; the runtime owns both halves.
+- `struct TlsSocket: int _handle` (`lib/std/tls.gg:8`) covers the 24-byte
+  `GorgetTlsSocket` `{ int64_t fd; SSL_CTX* ctx; SSL* ssl }`.
+- `struct ArenaCheckpoint` (`lib/std/alloc.gg:6`) covers a 16-byte
+  `{ GorgetArenaBlock* block; size_t used }`.
+- Zero-field opaque handles (`TaskGroup`, the allocator handles) cover an
+  8-byte pointer.
+
+The raw field-sum of a cover struct is therefore **smaller than its real
+runtime size**, and that wrong-small size is poison if it reaches an ABI
+decision: the sret-vs-register return choice, a move-out `memcpy` width, or a
+trailing-pad calculation all read `computed_c_size`, and a size that is too
+small returns the struct through the wrong path or copies only part of it →
+SIGSEGV or a truncated value.
+
+The fix is **one source of truth per axis** (`docs/devbook/24-layering-discipline.md`
+Rule 3): a cover struct's `computed_c_size` is fixed ONCE, at registration, in
+`compute_struct_sizes` (`src/lir/mod.rs`):
+
+```rust
+let size = match lower::types::opaque_runtime_size(&self.structs[i].name) {
+    Some(rt) => field_sum.max(rt),
+    None     => field_sum,
+};
+```
+
+`opaque_runtime_size` (`src/lir/lower/types.rs:358`) is the runtime-ABI floor:
+it returns `None` for ordinary user structs (no change), `Some(==field_sum)` for
+already-agreeing runtime singletons (no-op), and `Some(>field_sum)` exactly for
+cover structs — where the `max()` lifts the cached size to the real layout. Once
+`computed_c_size` is set this way, **every downstream ABI consumer reads it** and
+none re-derives the size from the field list. Re-deriving the size at a read site
+is the bug: it discards the floor the writer applied.
+
+This class has bitten three times — each a cover struct whose `computed_c_size`
+fell to its field-sum and leaked into an ABI decision: (1) `091faaef`,
+zero-field `TaskGroup` (`computed_c_size = 0` vs `opaque_runtime_size = 8`);
+(2,3), one-field `TlsSocket` (8 vs 24, `GorgetTlsSocket`) and `File` (8 vs 16,
+`GorgetFile`), fixed by the `max()` in `2d720077`. Per core-invariant #6
+("convert a recurring bug class into an executable guard"), the invariant is now
+enforced by a runtime guard — `cover_struct_size_never_below_runtime_abi` in
+`src/lir/mod.rs`'s test module builds a minimal cover struct under each
+cover-struct name, runs `compute_struct_sizes`, and asserts the cached size never
+drops below `opaque_runtime_size`. A reverted/weakened `max()` fails it. The
+war-story lives in `docs/devbook/29-contributor-playbook.md`.
+
 ## The clone / copy / materialize ABI
 
 Copy-on-write is realized through three runtime entry points whose ABI is part

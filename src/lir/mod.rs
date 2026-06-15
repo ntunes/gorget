@@ -2096,6 +2096,94 @@ mod tests {
         assert_eq!(module.struct_def(point_id).fields.len(), 2);
     }
 
+    /// Structural guard (CLAUDE.md core-invariant #6;
+    /// `docs/devbook/25-structural-guards.md`; one-source-of-truth per
+    /// `docs/devbook/24-layering-discipline.md`).
+    ///
+    /// "Cover structs" deliberately under-declare their Gorget layout to cover
+    /// a larger C runtime struct (e.g. `struct File: int handle` covers 16-byte
+    /// `GorgetFile`; `struct TlsSocket: int _handle` covers 24-byte
+    /// `GorgetTlsSocket`; zero-field `TaskGroup` covers an 8-byte handle). Their
+    /// `computed_c_size` MUST be fixed ONCE at registration
+    /// (`compute_struct_sizes`) to `max(field_sum, opaque_runtime_size(name))`
+    /// so every downstream ABI decision (sret-vs-register return, move-out
+    /// memcpy width, trailing pad) reflects the real runtime layout — never
+    /// re-derived at a read site.
+    ///
+    /// This guard fails if someone reverts/weakens that `max()` so a cover
+    /// struct's `computed_c_size` drops below its `opaque_runtime_size`. It is a
+    /// runtime invariant, not a source scan: it builds a minimal cover struct
+    /// (a single small `Bool` field, mimicking the real under-declared shape)
+    /// under each cover-struct name, runs the real `compute_struct_sizes`, and
+    /// asserts the cached size is at least the runtime ABI size.
+    ///
+    /// The class has bitten three times: (1) `091faaef` zero-field TaskGroup
+    /// (0 vs 8); (2,3) one-field `TlsSocket` (8 vs 24, `GorgetTlsSocket`) and
+    /// `File` (8 vs 16, `GorgetFile`). Fix landed in `2d720077`. See
+    /// `docs/devbook/29-contributor-playbook.md`.
+    #[test]
+    fn cover_struct_size_never_below_runtime_abi() {
+        use crate::lir::lower::types::opaque_runtime_size;
+
+        // Cover-struct names: each is a genuinely-registered StructDef whose
+        // Gorget declaration under-declares its layout (one small field, or
+        // zero), so its raw field-sum is smaller than the real runtime size.
+        // (Pure opaque-pointer typedefs like `Mutex__T` are NOT in this list —
+        // they never get a StructDef, so there is no `computed_c_size` to fix.)
+        // Driving the assertion from `opaque_runtime_size` itself means a
+        // reverted `max()` is caught for every one of them.
+        let cover_structs = [
+            "File",
+            "TlsSocket",
+            "TlsServerSocket",
+            "Process",
+            "ExecResult",
+            "UdpAddr",
+            "UdpPacket",
+            "Arena",
+            "ArenaCheckpoint",
+            "TaskGroup",
+        ];
+
+        for name in cover_structs {
+            let rt = opaque_runtime_size(name).unwrap_or_else(|| {
+                panic!(
+                    "cover struct {name:?} lost its opaque_runtime_size entry — \
+                     the runtime ABI floor is the source of truth for cover-struct \
+                     sizes (docs/devbook/18-runtime-abi.md)"
+                )
+            });
+            // Sanity: a cover struct only exists because its runtime size
+            // genuinely exceeds the small field we mimic below. (1-byte field.)
+            assert!(
+                rt > 1,
+                "cover struct {name:?} has runtime size {rt}; pick a name whose \
+                 runtime layout actually exceeds a single small field"
+            );
+
+            // Mimic the under-declared Gorget shape: one tiny field.
+            let mut module = LirModule::new();
+            module.add_struct(StructDef::new(
+                name.to_string(),
+                vec![("_cover".into(), LirType::Bool)],
+            ));
+            module.compute_struct_sizes();
+
+            let computed = module.structs[0]
+                .computed_c_size
+                .expect("compute_struct_sizes must cache a size");
+            assert!(
+                computed >= rt,
+                "cover struct {name:?} computed_c_size {computed} dropped below \
+                 its runtime ABI size {rt}. compute_struct_sizes() must fix \
+                 cover-struct sizes ONCE to max(field_sum, opaque_runtime_size) \
+                 — a smaller size leaks into sret-vs-register return / memcpy \
+                 width decisions and SIGSEGVs at the C ABI boundary. See \
+                 docs/devbook/18-runtime-abi.md and core-invariant #6."
+            );
+        }
+    }
+
     #[test]
     fn inst_dst_and_uses() {
         let v0 = ValueId(0);
