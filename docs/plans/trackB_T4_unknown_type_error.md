@@ -64,3 +64,32 @@ full integration.
 If the before/after sweep shows ANY legitimate currently-passing fixture newly
 failing (forward-ref or otherwise), do NOT ship the broad version — scope tighter
 (typecheck-pass only, exclude the failing pattern) and report what failed and why.
+
+## Brief-review pass-1 RE-SCOPE (aaa86c6d — DO NOT proceed on the broad version)
+Pass-1 refuted the scout's "clean, all-sites" framing with two real findings:
+1. **Generic-param timing.** Function PARAMETER types are resolved in `collect_item`
+   (Pass 1, `resolve.rs:~372-384`) BEFORE generic params are registered in scope
+   (`resolve_function`, Pass 2, `resolve.rs:~911-920`). So a hard error at the
+   resolve-pass param/field sites would SPURIOUSLY fire on legit generics like
+   `T foo[T](T a)` (the `T` isn't in scope yet at collect_item). `numeric_trait_ops.gg`
+   currently works — almost certainly because such unresolved generics silently
+   become `error_id` today and that's benign downstream. Hard-erroring there breaks them.
+2. **Typecheck-pass-only is INSUFFICIENT for full coverage:** it catches VarDecl
+   annotations but MISSES param types (resolve pass) and struct/enum FIELD types
+   (`populate_def_field_types` pass) — both resolved before typecheck.
+
+**RE-SCOPED PLAN (the shippable, SOUND subset):** fire the error ONLY at the
+**typecheck-pass VarDecl site** (`typecheck.rs:~3008`). This:
+- Catches the REPORTED footgun (`Floobar x = 5`, `u8 n = 2` — both VarDecls).
+- Is SAFE: by the typecheck pass, ALL types are in scope — cross-module types
+  (resolve fixup done) AND the enclosing fn's generic params (registered in Pass 2)
+  — so `T x = …` inside `fn foo[T]` resolves fine; no spurious generic/forward-ref error.
+- Is verified by the before/after per-fixture `gg check` sweep (must be 0 newly-failing).
+
+**FILE AS FOLLOW-UP (do NOT attempt this round — deeper semantic-ordering work):**
+unknown-type errors at PARAM and struct/enum FIELD positions. That needs the
+generic-param-timing fixed (register generics before param resolution, or gate the
+error on "not a possible generic param") + cross-module forward-ref tolerance at the
+resolve pass. Also investigate/confirm the `numeric_trait_ops.gg` mechanism (do generic
+param types currently resolve to `error_id` silently?). This is a real second footgun,
+but it's a project, not a slot.
