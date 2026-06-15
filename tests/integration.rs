@@ -11264,6 +11264,42 @@ fn arena_escape_assign() {
     );
 }
 
+// ── N2: arena borrow-escape at collection-MUTATION consume positions ──
+
+#[test]
+fn arena_escape_push() {
+    check_gg_fails(
+        "arena_escape_push.gg",
+        "cannot assign arena-scoped value",
+    );
+}
+
+#[test]
+fn arena_escape_dict_insert() {
+    check_gg_fails(
+        "arena_escape_dict_insert.gg",
+        "cannot assign arena-scoped value",
+    );
+}
+
+#[test]
+fn arena_escape_set_add() {
+    check_gg_fails(
+        "arena_escape_set_add.gg",
+        "cannot assign arena-scoped value",
+    );
+}
+
+#[test]
+fn arena_push_copy_element_ok() {
+    run_gg("arena_push_copy_element_ok.gg", "42");
+}
+
+#[test]
+fn arena_push_inner_collection_ok() {
+    run_gg("arena_push_inner_collection_ok.gg", "payload");
+}
+
 #[test]
 fn alloc_keyword() {
     run_gg(

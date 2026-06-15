@@ -1,0 +1,15 @@
+# N2 sibling of attack_19: arena borrow-escape at a collection-MUTATION consume
+# position. `outer` outlives the arena; pushing a non-Copy `.get().unwrap()`
+# borrow of the arena-scoped Vector `v` aliases the arena-backed String into
+# `outer`'s buffer. `gorget_arena_destroy` frees that buffer at `with`-scope
+# exit, so `outer.get(0).unwrap()` reads freed memory — a heap-use-after-free
+# (RUN-confirmed under ASan before the fix). `gg check` must REJECT this.
+
+from std.alloc import Arena
+from std.collections import Vector
+void main():
+    Vector[String] outer = Vector[String]()
+    with Arena(4096) as pool:
+        Vector[String] v = ["payload-in-arena-memory"]
+        outer.push(v.get(0).unwrap())
+    print(outer.get(0).unwrap())

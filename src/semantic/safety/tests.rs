@@ -4062,3 +4062,106 @@ void main():
         );
     }
 
+    // ─── Arena borrow-escape sibling N2: collection-MUTATION consume positions ───
+
+    #[test]
+    fn arena_borrow_escape_push_outer_rejected() {
+        // Pushing a non-Copy `.get().unwrap()` borrow of an arena-scoped Vector
+        // into an OUTER collection aliases into the arena buffer → UAF at exit.
+        let source = "\
+struct Arena:
+    int cap
+
+void main():
+    Vector[String] outer = Vector[String]()
+    with Arena(4096) as pool:
+        Vector[String] v = [\"payload\"]
+        outer.push(v.get(0).unwrap())
+    print(outer.get(0).unwrap())
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(
+                k,
+                SemanticErrorKind::ArenaEscape {
+                    kind: crate::semantic::errors::ArenaEscapeKind::AssignOuter { .. },
+                    ..
+                }
+            )),
+            "expected ArenaEscape for arena borrow pushed into outer collection, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn arena_borrow_escape_dict_insert_outer_rejected() {
+        // Inserting a non-Copy arena-Vector element as a Dict VALUE into an
+        // OUTER Dict aliases into the arena buffer → UAF at exit.
+        let source = "\
+struct Arena:
+    int cap
+
+void main():
+    Dict[String, String] outerDict = Dict[String, String]()
+    with Arena(4096) as pool:
+        Vector[String] v = [\"payload\"]
+        outerDict.insert(\"k\", v.get(0).unwrap())
+    print(outerDict.get(\"k\").unwrap())
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(
+                k,
+                SemanticErrorKind::ArenaEscape {
+                    kind: crate::semantic::errors::ArenaEscapeKind::AssignOuter { .. },
+                    ..
+                }
+            )),
+            "expected ArenaEscape for arena borrow inserted into outer dict, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn arena_push_copy_element_outer_ok() {
+        // A Copy element (`int`) is value-copied out — no aliasing into the
+        // arena. Pushing into an outer collection must stay ACCEPTED.
+        let source = "\
+struct Arena:
+    int cap
+
+void main():
+    Vector[int] outer = Vector[int]()
+    with Arena(4096) as pool:
+        Vector[int] v = [42]
+        outer.push(v.get(0).unwrap())
+    print(outer.get(0).unwrap())
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::ArenaEscape { .. })),
+            "unexpected ArenaEscape for Copy-element push into outer collection, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn arena_push_into_inner_collection_ok() {
+        // Pushing into an INNER (arena-scoped) collection is safe: both the
+        // source borrow and the destination die with the arena. Must stay
+        // ACCEPTED (the destination does NOT outlive the arena).
+        let source = "\
+struct Arena:
+    int cap
+
+void main():
+    with Arena(4096) as pool:
+        Vector[String] v = [\"payload\"]
+        Vector[String] inner = Vector[String]()
+        inner.push(v.get(0).unwrap())
+        print(inner.get(0).unwrap())
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::ArenaEscape { .. })),
+            "unexpected ArenaEscape for push into in-scope arena collection, got: {:?}", errors
+        );
+    }
+

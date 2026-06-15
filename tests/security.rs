@@ -384,6 +384,14 @@ fn sec_19_field_borrow_escape() {
     security_rejected("attack_19_field_borrow_escape", "");
 }
 
+#[test]
+fn sec_93_arena_borrow_escape_push() {
+    // N2 sibling of sec_19: the SAME arena borrow-escape UAF at a
+    // collection-MUTATION consume position (`outer.push(arenaVec.get(0).unwrap())`).
+    // RUN-confirmed UAF under ASan before the check existed.
+    security_rejected("attack_93_arena_borrow_escape_push", "cannot assign arena-scoped value");
+}
+
 // ── Accepted well-typed programs that must run safely under --sanitize ──
 
 #[test]

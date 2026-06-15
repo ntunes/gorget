@@ -1,0 +1,12 @@
+from std.alloc import Arena
+from std.collections import Vector
+
+# N2 false-positive net: pushing a non-Copy arena borrow into an INNER (also
+# arena-scoped) collection is SAFE — both source and destination die together
+# with the arena. Must remain ACCEPTED + run correctly.
+void main():
+    with Arena(4096) as pool:
+        Vector[String] v = ["payload"]
+        Vector[String] inner = Vector[String]()
+        inner.push(v.get(0).unwrap())
+        print(inner.get(0).unwrap())

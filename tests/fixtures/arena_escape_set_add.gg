@@ -1,0 +1,13 @@
+from std.alloc import Arena
+from std.collections import Vector, Set
+
+# N2 sibling: adding a non-Copy arena-Vector element into an OUTER Set aliases
+# into the arena buffer → UAF at scope exit. Reject.
+void leak_via_add():
+    Set[String] outer = Set[String]()
+    with Arena(4096) as pool:
+        Vector[String] v = ["payload"]
+        outer.add(v.get(0).unwrap())
+
+void main():
+    print("done")

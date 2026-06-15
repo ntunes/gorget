@@ -1,0 +1,12 @@
+from std.alloc import Arena
+from std.collections import Vector
+
+# N2 false-positive net: a Copy element (int) is value-copied out of the arena
+# Vector — no aliasing into the arena buffer. Pushing it into an OUTER Vector
+# is SAFE and must remain ACCEPTED + run correctly.
+void main():
+    Vector[int] outer = Vector[int]()
+    with Arena(4096) as pool:
+        Vector[int] v = [42]
+        outer.push(v.get(0).unwrap())
+    print(outer.get(0).unwrap())

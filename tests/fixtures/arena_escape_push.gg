@@ -1,0 +1,14 @@
+from std.alloc import Arena
+from std.collections import Vector
+
+# N2 sibling of arena_escape_assign: pushing a non-Copy `.get().unwrap()`
+# borrow of an arena-scoped Vector into an OUTER collection aliases into the
+# arena buffer and dangles when the arena is destroyed. `gg check` must reject.
+void leak_via_push():
+    Vector[String] outer = Vector[String]()
+    with Arena(4096) as pool:
+        Vector[String] v = ["payload"]
+        outer.push(v.get(0).unwrap())
+
+void main():
+    print("done")

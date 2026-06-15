@@ -443,6 +443,106 @@ impl<'a> BorrowChecker<'a> {
         }
     }
 
+    /// For a borrow-producing collection-read expression (`v.get(0).unwrap()`,
+    /// `dict.get(k).unwrap()`, `v[i]`, `v.first()`/`.last()`), return the
+    /// **bound element type** the borrow aliases — i.e. the type of the value
+    /// being read OUT of the collection, peeled of the borrow-view `Ref`
+    /// wrapper. Used by the arena-escape sibling check at collection-mutation
+    /// consume positions: the in-buffer element is what dangles when the arena
+    /// is destroyed, so the Copy/non-Copy decision MUST be on this element
+    /// type (`Vector[String]` → `String` non-Copy → fires; `Vector[int]` →
+    /// `int` Copy → must NOT fire), NOT on the whole source-collection type.
+    ///
+    /// Primary source: the type checker records the read result as
+    /// `Ref(elem)` (a borrow view) in `expr_types`; peeling the `Ref` recovers
+    /// the bound element type precisely (and uniformly across Vector/Set/Dict —
+    /// a Dict read binds the *value* type, which `expr_types` already resolved).
+    /// Fallback: derive from the source collection's declared generic args
+    /// (last arg: `Vector[T]`→`T`, `Set[T]`→`T`, `Dict[K,V]`→`V`).
+    pub(super) fn arena_borrowed_element_type(
+        &self, arg: &Spanned<Expr>,
+    ) -> Option<crate::semantic::ids::TypeId> {
+        // Primary: peel the borrow-view `Ref` off the recorded read result.
+        if let Some(&tid) = self.expr_types.get(&arg.span) {
+            if let ResolvedType::Ref(inner) = self.types.get(tid) {
+                return Some(*inner);
+            }
+            // Already a non-Ref concrete type (some reads aren't wrapped) — use
+            // it directly only when it isn't the collection itself. Fall through
+            // to the generic-arg derivation if it doesn't look like an element.
+        }
+        // Fallback: derive the element from the source collection's generic args.
+        let recv = self.collection_read_receiver(arg)?;
+        let coll_tid = self.expr_types.get(&recv.span).copied()
+            .or_else(|| {
+                // Direct binding: use the declared type of the root def.
+                self.find_root_def_id_with_path(recv)
+                    .and_then(|(root, _)| self.scopes.get_def(root).type_id)
+            })?;
+        match self.types.get(coll_tid) {
+            ResolvedType::Generic(_, args) if !args.is_empty() => {
+                // Vector[T]/Set[T] → T; Dict[K,V] → V (the read binds the value).
+                args.last().copied()
+            }
+            ResolvedType::Array(elem, _) | ResolvedType::Slice(elem) => Some(*elem),
+            _ => None,
+        }
+    }
+
+    /// True when `recv` has a buffer-owning builtin collection type — i.e. its
+    /// protocol carries `collection_kind: Some(_)` (Vector/Deque/Dict/HashMap/
+    /// Set/HashSet). These own a heap buffer that a pushed/inserted element is
+    /// copied INTO, so an arena-borrowed non-Copy element aliased there dangles
+    /// when the arena is freed. Channel/Mutex/Shared/Guard etc. carry
+    /// `collection_kind: None` (by-value handles with distinct escape
+    /// semantics) and are deliberately excluded — a TYPED gate, no name-match.
+    pub(super) fn is_buffer_owning_collection_receiver(
+        &self, recv: &Spanned<Expr>,
+    ) -> bool {
+        // Resolve the receiver's type (inferred result or, for a bare binding,
+        // its declared type), then map its base name to a builtin protocol.
+        let tid = self.expr_types.get(&recv.span).copied().or_else(|| {
+            self.find_root_def_id_with_path(recv)
+                .and_then(|(root, path)| {
+                    if path.is_empty() {
+                        self.scopes.get_def(root).type_id
+                    } else {
+                        None
+                    }
+                })
+        });
+        let Some(tid) = tid else { return false };
+        let base_def = match self.types.get(tid) {
+            ResolvedType::Defined(d) | ResolvedType::Generic(d, _) => *d,
+            _ => return false,
+        };
+        let base_name = &self.scopes.get_def(base_def).name;
+        crate::ir::lowering::builtins::lookup_protocol(base_name)
+            .map_or(false, |p| p.collection_kind.is_some())
+    }
+
+    /// For a borrow-producing collection-read expression, return the receiver
+    /// expression that is the collection being read (peeling `.unwrap()`/
+    /// `.expect()` and the `.get()`/`.first()`/`.last()`/index layers).
+    fn collection_read_receiver<'e>(
+        &self, expr: &'e Spanned<Expr>,
+    ) -> Option<&'e Spanned<Expr>> {
+        match &expr.node {
+            Expr::Index { object, .. } => Some(object),
+            Expr::MethodCall { receiver, method, .. }
+                if matches!(method.node.as_str(), "unwrap" | "expect") =>
+            {
+                self.collection_read_receiver(receiver)
+            }
+            Expr::MethodCall { receiver, method, .. }
+                if matches!(method.node.as_str(), "get" | "first" | "last") =>
+            {
+                Some(receiver)
+            }
+            _ => None,
+        }
+    }
+
     /// If `expr`'s root is a `&` (MutableBorrow) parameter, mark it as mutated.
     pub(super) fn mark_mut_param_if_applicable(&mut self, expr: &Spanned<Expr>) {
         if let Some(def_id) = self.find_root_def_id(expr) {

@@ -1,0 +1,13 @@
+from std.alloc import Arena
+from std.collections import Vector, Dict
+
+# N2 sibling: inserting a non-Copy arena-Vector element as a Dict VALUE into an
+# OUTER Dict aliases into the arena buffer → UAF at scope exit. Reject.
+void leak_via_insert():
+    Dict[String, String] outer = Dict[String, String]()
+    with Arena(4096) as pool:
+        Vector[String] v = ["payload"]
+        outer.insert("k", v.get(0).unwrap())
+
+void main():
+    print("done")
