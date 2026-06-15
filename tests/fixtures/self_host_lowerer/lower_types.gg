@@ -1485,8 +1485,9 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
     # OWN type — Rust has two separate slice decls (collection
     # `builtins.rs:294` ret_self vs string `:723` ret_owned_string), and the
     # self-host already picks `gorget_array_slice` (lir_lower.gg) for arrays;
-    # only the result/slot TYPE was wrong. Mirrors the `remove`/`items`
-    # receiver-aware arms above (mangled-name idiom = the contract here).
+    # only the result/slot TYPE was wrong. Mirrors the `remove`
+    # receiver-aware arm above — classifies the receiver via the TYPED
+    # `resource_meta_for`/`collection_kind` metadata, not a name prefix.
     if method == "slice" or method == "substr":
         int slice_recv_t = -1
         if recv >= 0 and recv < ctx.locals.len():
@@ -1504,8 +1505,23 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
             GirType slice_gt = gmod.type_table.get(slice_recv_t).unwrap()
             match slice_gt:
                 case GtNamed(slice_n):
-                    if slice_n == "GorgetArray" or slice_n.starts_with("Vector__") or slice_n.starts_with("Deque__"):
-                        return slice_recv_t
+                    # Phase A typed read (mirrors the `remove` arm above):
+                    # `build_resource_metadata` classifies the receiver via
+                    # `collection_kind`. Array-backed kinds (`CkVector` —
+                    # GorgetArray/Vector__*; `CkDeque` — Deque__*) return the
+                    # receiver's OWN type; String (`CkNotCollection`) and
+                    # user types (None) fall through to the string table → Str.
+                    match resource_meta_for(&gmod, slice_n):
+                        case Some(slice_rmeta):
+                            match slice_rmeta.collection_kind:
+                                case CkVector():
+                                    return slice_recv_t
+                                case CkDeque():
+                                    return slice_recv_t
+                                else:
+                                    pass
+                        case None:
+                            pass
                 else:
                     pass
     # String-returning methods — declared in STRING_BUILTIN_METHODS
