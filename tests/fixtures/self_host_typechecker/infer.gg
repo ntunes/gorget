@@ -439,7 +439,24 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             # Infer return type from well-known methods
             if method_name == "len" or method_name == "count":
                 return types.int_id
-            if method_name == "to_string" or method_name == "to_str" or method_name == "to_lower" or method_name == "to_upper" or method_name == "trim" or method_name == "lower" or method_name == "upper" or method_name == "strip" or method_name == "replace" or method_name == "join" or method_name == "repeat" or method_name == "slice" or method_name == "substr" or method_name == "format" or method_name == "concat" or method_name == "trim_start" or method_name == "trim_end":
+            if method_name == "to_string" or method_name == "to_str" or method_name == "to_lower" or method_name == "to_upper" or method_name == "trim" or method_name == "lower" or method_name == "upper" or method_name == "strip" or method_name == "replace" or method_name == "join" or method_name == "repeat" or method_name == "format" or method_name == "concat" or method_name == "trim_start" or method_name == "trim_end":
+                return types.string_id
+            # `slice` / `substr` are RECEIVER-AWARE: on a `Vector` they return
+            # the receiver's own type; on a String (or anything else) they
+            # return `String`. Mirrors the lowerer's receiver-aware arm.
+            if method_name == "slice" or method_name == "substr":
+                ResolvedType slice_recv_rt = get_rtype_at(types.types, reg_obj_type)
+                match slice_recv_rt:
+                    case RTGeneric(slice_def, slice_targs):
+                        DefInfo slice_d = scopes.get_def(slice_def)
+                        if slice_d.name == "Vector":
+                            return reg_obj_type
+                    case RTDefined(slice_def2):
+                        DefInfo slice_d2 = scopes.get_def(slice_def2)
+                        if slice_d2.name == "Vector":
+                            return reg_obj_type
+                    else:
+                        pass
                 return types.string_id
             if method_name == "split":
                 if scopes.lookup("Vector") is Some(vec_def):

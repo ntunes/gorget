@@ -1479,6 +1479,35 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
         return BOOL_TYPE
     if method == "is_alpha" or method == "is_digit" or method == "is_alphanumeric" or method == "is_whitespace" or method == "is_upper" or method == "is_lower" or method == "is_ascii" or method == "is_hex_digit":
         return BOOL_TYPE
+    # `slice` / `substr` are RECEIVER-AWARE: on a String they return Str
+    # (BrkString via the table below); on an array-shaped receiver
+    # (`GorgetArray` / `Vector__*` / `Deque__*`) they return the receiver's
+    # OWN type — Rust has two separate slice decls (collection
+    # `builtins.rs:294` ret_self vs string `:723` ret_owned_string), and the
+    # self-host already picks `gorget_array_slice` (lir_lower.gg) for arrays;
+    # only the result/slot TYPE was wrong. Mirrors the `remove`/`items`
+    # receiver-aware arms above (mangled-name idiom = the contract here).
+    if method == "slice" or method == "substr":
+        int slice_recv_t = -1
+        if recv >= 0 and recv < ctx.locals.len():
+            slice_recv_t = ctx.locals.get(recv).unwrap().type_id
+            if slice_recv_t >= 0 and slice_recv_t < gmod.type_table.len():
+                GirType slice_gt0 = gmod.type_table.get(slice_recv_t).unwrap()
+                match slice_gt0:
+                    case GtPtr(slice_inner):
+                        slice_recv_t = slice_inner
+                    case GtMutPtr(slice_inner2):
+                        slice_recv_t = slice_inner2
+                    else:
+                        pass
+        if slice_recv_t >= 0 and slice_recv_t < gmod.type_table.len():
+            GirType slice_gt = gmod.type_table.get(slice_recv_t).unwrap()
+            match slice_gt:
+                case GtNamed(slice_n):
+                    if slice_n == "GorgetArray" or slice_n.starts_with("Vector__") or slice_n.starts_with("Deque__"):
+                        return slice_recv_t
+                else:
+                    pass
     # String-returning methods — declared in STRING_BUILTIN_METHODS
     # (compiler/data/resources.gg) with `ret_kind == BrkString`. NOTE the
     # ordering contract: `reverse` is classified UNIT by the earlier arm
