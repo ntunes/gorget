@@ -3656,6 +3656,33 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                     variant_arg_expected = pvec.err_type
             elif pvec.category == ENUM_CAT_OPTION and fname == "Some":
                 variant_arg_expected = pvec.ok_type
+        # User struct/enum-variant ctor arg expected-type (mirrors Rust gg
+        # `calls.rs:1080-1137`: resolve the ctor's declared field types and set
+        # `expected_type = field_types[i]` per arg before lowering it).
+        # `get_fn_param_types` returns [] for a struct/variant ctor (neither is
+        # a real function), so without this an `Option[Box[T]]`/`Option[...]`
+        # field arg like `If(.., .., None())` or `R(.., None())` lowers its
+        # inner `None()` with no expectation → mis-slotted `int64_t` instead of
+        # the registered `Option__Box__T`/`Option__Box__R` (cc-fail
+        # "incompatible types assigning to int64_t"). Read the field type off
+        # the type_infos field channel — for a struct ctor directly, for a
+        # variant ctor one indirection deeper via the parent enum — the same
+        # typed source `apply_container_hint_for_ctor_arg` reads (no name
+        # matching). `user_ctor_enum` empty when `call_name` isn't a resolved
+        # ctor / has primitive (I64) field types only.
+        String user_ctor_enum = ""
+        String user_ctor_variant = ""
+        if callee_param_types.len() == 0 and variant_arg_expected < 0:
+            if gmod.type_infos.contains(call_name) and not gmod.type_infos.get(call_name).unwrap().is_enum:
+                # Struct ctor: type_infos keyed by the struct name; the variant
+                # arg of lookup_ctor_field_type is unused for structs.
+                user_ctor_enum = call_name
+                user_ctor_variant = ""
+            else:
+                String _uce_parent = enum_variant_parent(call_name, &gmod)
+                if _uce_parent != "" and gmod.type_infos.contains(_uce_parent):
+                    user_ctor_enum = _uce_parent
+                    user_ctor_variant = call_name
         int first_arg_type = -1
         # Ownership at Consuming Positions: a struct/enum CONSTRUCTOR's
         # field-init is a consuming position — the destination field must
@@ -3726,6 +3753,23 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
             # `Ok(None())` type its inner `None()` to the Ok payload.
             elif ai == 0 and variant_arg_expected >= 0:
                 ctx.expected_type = variant_arg_expected
+            # User struct/enum-variant ctor: each arg's expectation is the
+            # ctor's declared field type at this index (Rust gg `calls.rs:1093`
+            # / `:1128`). Struct → the type's `fields[ai]`; variant → the parent
+            # enum's matching-variant `fields[ai]` (lookup_ctor_field_type).
+            elif user_ctor_enum != "":
+                int _ucft = I64_TYPE
+                if user_ctor_variant == "":
+                    String _ucft_name = ""
+                    GirTypeInfo _ucti = gmod.type_infos.get(user_ctor_enum).unwrap()
+                    if ai < _ucti.fields.len():
+                        _ucft_name = _ucti.fields.get(ai).unwrap().type_name.clone()
+                    if _ucft_name != "":
+                        _ucft = resolve_field_gir_type(_ucft_name, &gmod)
+                else:
+                    _ucft = lookup_ctor_field_type(user_ctor_enum, user_ctor_variant, ai, &gmod)
+                if _ucft != I64_TYPE and _ucft != UNIT_TYPE:
+                    ctx.expected_type = _ucft
             int arg_local = lower_expr(&ctx, arg, &gmod)
             ctx.expected_type = prev_expected_arg
             # Auto-propagate a `throws` call passed as an argument
