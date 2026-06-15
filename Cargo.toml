@@ -22,3 +22,14 @@ regex = "1"
 insta = "1"
 pretty_assertions = "1"
 serial_test = "3.4.0"
+
+[lints.rust]
+# Warnings are errors (owner-directed 2026-06-15). The 3 pre-existing
+# `unused_mut` warnings (3mo/7wk old) were burned to 0 in `f29ee38b`; this
+# locks the floor so a NEW warning is a hard build error instead of silently
+# riding along until its target next rebuilds (CLAUDE.md core-invariant #6 —
+# convert a recurring class into an executable guard; docs/devbook/25).
+# Caveat: a future rustc that adds a default lint surfaces as a build error
+# here — fix it at the root (or scope that one lint with #[allow(<lint>)] +
+# a cited reason), do NOT relax this blanket deny.
+warnings = "deny"
