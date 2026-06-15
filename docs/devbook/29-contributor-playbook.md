@@ -258,9 +258,25 @@ re-verified by scout); and an LLVM-backend batch (FIX A `85d9fecd`, FIX B
 `2d720077`) was re-checked under `--backend=llvm` and found *passing* before
 anyone re-implemented it (DONE.md / TODO.md "LLVM BACKEND → GREEN"). Re-running
 the failing case for thirty seconds is always cheaper than re-deriving a fix that
-already shipped. The corollary: a "live bug" or "open task" inherited from a
-dated note is a *hypothesis*, not a fact — reproduce it on the current tip
-first.
+already shipped. A third from the same round: a "static-literal initializers
+miscompile under LLVM" lead turned out *already fixed* — the synthesized
+`__gg_static_init_*` ABI guess had been replaced with the typed
+`needs_sret(return_type)` predicate by commit `091faaef` ("LLVM static-init
+ABI / TaskGroup opaque-handle sizeof"), so the bug the note described no longer
+reproduced. The corollary: a "live bug" or "open task" inherited from a dated
+note is a *hypothesis*, not a fact — reproduce it on the current tip first.
+
+Re-verifying cuts the *other* way too: a "this is dead code, just delete it"
+premise can be as stale as a "this is a live bug" one, and the cheap check is the
+same — *try the delete and see what the suite says.* A scout was handed the
+premise that `is_unmonomorphized_wrapper` was unreachable and could simply be
+removed; a bare delete was **refuted** — it re-introduced 14 spurious
+`ReadGuard__T` / `WriteGuard__T` typedefs, because the predicate is still live
+through the opaque-`TypeDef` registration path that suppresses those generic
+placeholder emissions (scout `ae8738a0`, which does not resolve in this worktree
+— it was a read-only audit, not committed here). "Obviously dead, delete it" is a
+claim to verify by deleting and rebuilding, not a fact to act on; a function with
+no *direct* call can still be reached through a registration or dispatch table.
 
 A corollary specific to *this* book and the self-host: **the comparison scores
 are not facts you can quote.** The next section is why.
@@ -395,6 +411,18 @@ shipped fix used a per-link `span.end` oracle instead (DONE.md "TASK #39"). A
 prototype that comes back negative is one of the most valuable scout outcomes
 there is: it kills a plausible-looking plan before it costs a brief-and-execute
 cycle.
+
+Two scouts from the same session put numbers on exactly that collapse. The HOF
+"~9" above came from a source read of the remaining `.map`/`.filter` corpus; the
+scout that actually *built* each candidate and diffed whole output measured it
+down to **~1 real** — the rest already matched, or failed for an unrelated reason
+(scout `aadc8516`; it was a read-only audit and does not resolve in this
+worktree). And an "O1 closure-ABI" lead projected, again from reading the
+closure-call paths, that an ABI tweak would flip a batch of `~18` closure
+fixtures; the end-to-end scout built it and measured **0 of 18** — the change
+moved no output at all (scout `adc3d8c7`, likewise unresolved in-tree). In both,
+the number that survived running the code was a fraction of the source-read
+promise, and neither gap would have closed by reading harder — only by running.
 
 A scout's premise can be wrong even when its conclusion is "go" — so verify the
 *shape* of the claim, not just the number. A Track-A collection-HOF brief was
