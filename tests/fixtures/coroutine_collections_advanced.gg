@@ -1,9 +1,9 @@
 # Test collection inline methods in coroutine poll context.
 # Dict keys/values/items, Set algebra, Vector sorted/reversed/unique.
-from std.async import sleep
+from std.async import async_sleep
 
 async int test_dict_methods():
-    sleep(1)
+    async_sleep(1)
 
     Dict[String, int] d = Dict[String, int]()
     d["a"] = 10
@@ -35,7 +35,7 @@ async int test_dict_methods():
     return 0
 
 async int test_set_algebra():
-    sleep(1)
+    async_sleep(1)
 
     Set[int] a = Set[int]()
     a.add(1)
@@ -69,7 +69,7 @@ async int test_set_algebra():
     return 0
 
 async int test_vector_methods():
-    sleep(1)
+    async_sleep(1)
 
     Vector[int] v = Vector[int]()
     v.push(3)

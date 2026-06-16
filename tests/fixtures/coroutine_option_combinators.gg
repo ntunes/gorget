@@ -1,9 +1,9 @@
 # Test Option combinators in coroutine poll context.
 # These methods have separate poll-path codegen that needs end-to-end verification.
-from std.async import sleep
+from std.async import async_sleep
 
 async int test_option_combinators():
-    sleep(1)
+    async_sleep(1)
 
     Option[int] some_val = Some(42)
     Option[int] none_val = None

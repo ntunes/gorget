@@ -1,11 +1,11 @@
-from std.async import sleep
+from std.async import async_sleep
 
 # Test collection methods inside coroutine (async function with internal await).
 # Higher-order methods (filter/map/fold) and inline methods (pop/sort)
 # must correctly use frame-field access (f->_N) in the poll function.
 
 async int compute(Vector[int] data):
-    sleep(1)
+    async_sleep(1)
 
     # Higher-order: filter
     Vector[int] evens = data.filter((x): x % 2 == 0)

@@ -13,8 +13,7 @@
 
 from std.collections import Vector, Dict, Set, HashMap, HashSet
 from std.channel import Channel
-from std.async import spawn
-from std.sync import Mutex, RwLock, Guard, AtomicInt, Shared
+from std.sync import Mutex, RWLock, Guard, AtomicInt, Shared
 from std.time import sleep, time_ms
 from std.net.socket import ServerSocket, Socket, server_socket_bind, socket_connect
 from std.math import sqrt, abs, INFINITY, NAN
@@ -33,7 +32,7 @@ async void use_async():
     Guard[int] g = mu.lock()
     int gv = g.get()
 
-    RwLock[int] rw = RwLock[int](0)
+    RWLock[int] rw = RWLock[int](0)
 
     AtomicInt a = AtomicInt(0)
     a.add(1)

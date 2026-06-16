@@ -1,11 +1,11 @@
 # Test Dict and Set operations inside a coroutine (async function with await).
 # Higher-order methods (filter/fold) on the original collection must correctly
 # use frame-field access (f->_N) in the poll function.
-from std.async import sleep
+from std.async import async_sleep
 from std.collections import Dict, Set
 
 async int test_dict():
-    sleep(1)
+    async_sleep(1)
 
     # --- put / contains / len ---
     Dict[String, int] d = Dict[String, int]()
@@ -33,7 +33,7 @@ async int test_dict():
     return total
 
 async int test_set():
-    sleep(1)
+    async_sleep(1)
 
     # --- add / contains / len ---
     Set[int] s = Set[int]()

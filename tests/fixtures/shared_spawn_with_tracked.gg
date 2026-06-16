@@ -3,7 +3,7 @@
 # spawned task runs outside the `with` block's lock scope.
 # The warning is non-fatal — program still compiles and runs.
 
-from std.async import sleep
+from std.async import async_sleep
 
 async void printer(int val):
     print(val)

@@ -3,7 +3,7 @@
 # releases the lock — another task could modify the collection between
 # iterations. The warning is non-fatal.
 
-from std.async import sleep
+from std.async import async_sleep
 
 async void worker(Vector[int] &items):
     items.push(99)
@@ -13,6 +13,6 @@ async void main():
     Task[void] t = spawn worker(&items)
     with items:
         for item in items:
-            sleep(1)
+            async_sleep(1)
     t.await()
     print("done")

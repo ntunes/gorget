@@ -2,7 +2,7 @@
 # reader() receives a shared param and spawns modifier() which also
 # takes a mutable reference to the same variable.
 
-from std.async import sleep
+from std.async import async_sleep
 
 async void modifier(int &val):
     val = 99

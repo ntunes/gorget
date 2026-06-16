@@ -10,6 +10,17 @@ use super::types::{self, TypeTable};
 
 pub use crate::parser::ast::Ownership;
 
+/// Built-in generic types that are always available (no `import` needed) and
+/// resolve through the builtin-generic `base_name` machinery in IR lowering
+/// rather than a real struct def. Registered as dummy-span Import placeholders
+/// at resolution start; recognized by the unresolved-import check so that a
+/// redundant `from std.sync import Channel` (where `Channel` is a builtin, not a
+/// std.sync export) is not flagged.
+const BUILTIN_GENERIC_TYPES: &[&str] = &[
+    "Vector", "Dict", "HashMap", "Set", "HashSet", "Box", "Future", "Task",
+    "Channel", "Shared", "Weak", "Mutex", "Guard", "TaskGroup", "FxHasher",
+];
+
 /// Side table for struct field info.
 #[derive(Debug, Clone)]
 pub struct StructFieldInfo {
@@ -135,7 +146,7 @@ pub fn collect_top_level(
     // Register built-in collection types as Import placeholders so they're always
     // available for type resolution (e.g. Result[Vector[uint8], str] in synthetic modules).
     // The real struct definitions from std.collections replace these when imported.
-    for type_name in &["Vector", "Dict", "HashMap", "Set", "HashSet", "Box", "Future", "Task", "Channel", "Shared", "Weak", "Mutex", "Guard", "TaskGroup", "FxHasher"] {
+    for type_name in BUILTIN_GENERIC_TYPES {
         let _ = scopes.define(type_name.to_string(), DefKind::Import, Span::dummy());
     }
     // Register built-in Option[T] and Result[T,E] enum types with their variants.
@@ -267,6 +278,7 @@ pub fn collect_top_level(
         }
     }
 
+
     // Fixup: re-resolve function return types that failed during collection.
     // In cross-module scenarios, entry file items come before imported module items
     // in the merged AST, so a function whose return type is an imported type gets
@@ -299,6 +311,103 @@ pub fn collect_top_level(
     }
 
     ctx
+}
+
+/// Collect the names of every type alias declared anywhere in `module`
+/// (recursively, across the per-file FileModule wrappers). Must be called
+/// BEFORE the meta pass (`evaluate_meta_consts`), which inlines aliases to
+/// their targets and removes the `type X = …` declarations from the AST.
+/// The returned set feeds `check_unresolved_imports` so a valid alias import
+/// (`from xtd.ecs import Entity`, where `Entity = SlotKey`) is not flagged.
+pub fn collect_type_alias_names(module: &Module) -> FxHashSet<String> {
+    let mut out = FxHashSet::default();
+    for it in module.all_items() {
+        if let Item::TypeAlias(a) = it {
+            out.insert(a.name.node.clone());
+        }
+    }
+    out
+}
+
+/// Validate `from X import Y`: report `Y` when no loaded module defines it.
+///
+/// The authoritative "is this name defined" set is built directly from the
+/// merged AST (`module.all_items()` unwraps the per-file FileModule wrappers)
+/// plus the built-in generics and the pre-meta `alias_names` (type aliases are
+/// erased by the meta pass before this runs, so they must be passed in). This
+/// is intentionally NOT a scope lookup: non-generic enum variants and imported
+/// type aliases never enter a scope's value/type maps (variants resolve lazily
+/// at use sites via qualified paths; aliases are inlined at the import
+/// boundary), so a `name_index` / namespace lookup would miss them and produce
+/// false positives.
+///
+/// Catches the wrong-import footgun — `from std.async import sleep` when
+/// std.async only exports `async_sleep`: the unresolved `sleep` otherwise
+/// lowers to a bare C `sleep(...)` call that silently links against libc's
+/// seconds-granularity `sleep`. Leaves resolvable imports untouched: builtin
+/// generics (`Channel`), type aliases (`Entity`), bare enum-variant imports
+/// (`from colors import Red`).
+///
+/// NOTE: must run on the fully-merged module (all loaded files concatenated).
+/// A single non-entry source file analyzed in isolation (siblings not loaded)
+/// can still report a false positive for a sibling import; that's acceptable
+/// because the pipeline always analyzes via the project entry point.
+pub fn check_unresolved_imports(
+    module: &Module,
+    alias_names: &FxHashSet<String>,
+    errors: &mut Vec<SemanticError>,
+) {
+    let mut defined: FxHashSet<&str> = FxHashSet::default();
+    for n in BUILTIN_GENERIC_TYPES {
+        defined.insert(n);
+    }
+    for n in alias_names {
+        defined.insert(n.as_str());
+    }
+    for it in module.all_items() {
+        match it {
+            Item::Function(f) => { defined.insert(f.name.node.as_str()); }
+            Item::Struct(s) => { defined.insert(s.name.node.as_str()); }
+            Item::Enum(e) => {
+                defined.insert(e.name.node.as_str());
+                for v in &e.variants {
+                    defined.insert(v.node.name.node.as_str());
+                }
+            }
+            Item::Trait(t) => { defined.insert(t.name.node.as_str()); }
+            Item::TypeAlias(a) => { defined.insert(a.name.node.as_str()); }
+            Item::Newtype(nt) => { defined.insert(nt.name.node.as_str()); }
+            Item::ConstDecl(c) => { defined.insert(c.name.node.as_str()); }
+            Item::StaticDecl(s) => { defined.insert(s.name.node.as_str()); }
+            Item::ExternBlock(eb) => {
+                for decl in &eb.items {
+                    defined.insert(decl.node.name.node.as_str());
+                }
+            }
+            _ => {}
+        }
+    }
+    for item in &module.items {
+        if let Item::Import(ImportStmt::From { path, names, wildcard, .. }) = &item.node {
+            if *wildcard {
+                continue;
+            }
+            for n in names {
+                // Validate the SOURCE name (what the module must export), not the
+                // local alias: `from std.math import sin as msin` is checked on
+                // `sin`. The alias `msin` is only the local binding.
+                if !defined.contains(n.name.node.as_str()) {
+                    errors.push(SemanticError {
+                        kind: SemanticErrorKind::UnresolvedImport {
+                            name: n.name.node.clone(),
+                            module: path.iter().map(|s| s.node.as_str()).collect::<Vec<_>>().join("."),
+                        },
+                        span: n.name.span,
+                    });
+                }
+            }
+        }
+    }
 }
 
 fn collect_top_level_inner(
@@ -2087,6 +2196,9 @@ void main():
 
     #[test]
     fn import_defines_names() {
+        // The unresolved-import check lives in `analyze` (after the module is
+        // loaded), not in `collect_top_level`, so collecting an import in
+        // isolation registers the in-scope placeholders without error.
         let (scopes, _, errors) =
             parse_and_collect("from std.fmt import Formatter, format\n");
         assert!(errors.is_empty(), "errors: {:?}", errors);
@@ -2236,6 +2348,127 @@ struct Point:
         );
         // public_fn should be accessible
         assert!(scopes.lookup("public_fn").is_some());
+    }
+
+    #[test]
+    fn unresolved_import_flags_missing_name() {
+        use crate::span::Span;
+        let dummy = Span::new(0, 0);
+
+        // Module defines `present_fn` but the import asks for `missing_fn` too.
+        let mut parser = Parser::new("int present_fn(): 1\n");
+        let inner_module = parser.parse_module();
+        assert!(parser.errors.is_empty());
+
+        let import_item = Spanned {
+            node: Item::Import(ImportStmt::From {
+                path: vec![Spanned { node: "mymod".to_string(), span: dummy }],
+                names: vec![
+                    ImportName { name: Spanned { node: "present_fn".to_string(), span: Span::new(1, 2) }, alias: None },
+                    ImportName { name: Spanned { node: "missing_fn".to_string(), span: Span::new(3, 4) }, alias: None },
+                ],
+                glob_types: vec![],
+                wildcard: false,
+                span: dummy,
+            }),
+            span: dummy,
+        };
+        let module_item = Spanned {
+            node: Item::Module { path: vec!["mymod".to_string()], items: inner_module.items },
+            span: dummy,
+        };
+        let module = Module { items: vec![import_item, module_item], span: dummy };
+
+        let alias_names = collect_type_alias_names(&module);
+        let mut errors = Vec::new();
+        check_unresolved_imports(&module, &alias_names, &mut errors);
+
+        // Exactly one UnresolvedImport, for `missing_fn` — `present_fn` resolves.
+        let unresolved: Vec<_> = errors.iter().filter_map(|e| match &e.kind {
+            SemanticErrorKind::UnresolvedImport { name, .. } => Some(name.as_str()),
+            _ => None,
+        }).collect();
+        assert_eq!(unresolved, vec!["missing_fn"], "errors: {:?}", errors);
+    }
+
+    #[test]
+    fn unresolved_import_allows_alias_target() {
+        use crate::span::Span;
+        let dummy = Span::new(0, 0);
+
+        // `from mymod import real_fn as r` — the SOURCE name must resolve, not the alias.
+        let mut parser = Parser::new("int real_fn(): 1\n");
+        let inner_module = parser.parse_module();
+        assert!(parser.errors.is_empty());
+
+        let import_item = Spanned {
+            node: Item::Import(ImportStmt::From {
+                path: vec![Spanned { node: "mymod".to_string(), span: dummy }],
+                names: vec![ImportName {
+                    name: Spanned { node: "real_fn".to_string(), span: Span::new(1, 2) },
+                    alias: Some(Spanned { node: "r".to_string(), span: Span::new(3, 4) }),
+                }],
+                glob_types: vec![],
+                wildcard: false,
+                span: dummy,
+            }),
+            span: dummy,
+        };
+        let module_item = Spanned {
+            node: Item::Module { path: vec!["mymod".to_string()], items: inner_module.items },
+            span: dummy,
+        };
+        let module = Module { items: vec![import_item, module_item], span: dummy };
+
+        let alias_names = collect_type_alias_names(&module);
+        let mut errors = Vec::new();
+        check_unresolved_imports(&module, &alias_names, &mut errors);
+        assert!(
+            !errors.iter().any(|e| matches!(e.kind, SemanticErrorKind::UnresolvedImport { .. })),
+            "aliased import of a real name should not flag: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn unresolved_import_allows_type_alias() {
+        use crate::span::Span;
+        let dummy = Span::new(0, 0);
+
+        // `from mymod import MyAlias` where `type MyAlias = int` — must not flag.
+        let mut parser = Parser::new("type MyAlias = int\n");
+        let inner_module = parser.parse_module();
+        assert!(parser.errors.is_empty());
+
+        let import_item = Spanned {
+            node: Item::Import(ImportStmt::From {
+                path: vec![Spanned { node: "mymod".to_string(), span: dummy }],
+                names: vec![ImportName {
+                    name: Spanned { node: "MyAlias".to_string(), span: Span::new(1, 2) },
+                    alias: None,
+                }],
+                glob_types: vec![],
+                wildcard: false,
+                span: dummy,
+            }),
+            span: dummy,
+        };
+        let module_item = Spanned {
+            node: Item::Module { path: vec!["mymod".to_string()], items: inner_module.items },
+            span: dummy,
+        };
+        let module = Module { items: vec![import_item, module_item], span: dummy };
+
+        // Capture alias names while the `type` decl is still in the AST (mirrors
+        // the real pipeline, where this runs before the meta pass erases aliases).
+        let alias_names = collect_type_alias_names(&module);
+        let mut errors = Vec::new();
+        check_unresolved_imports(&module, &alias_names, &mut errors);
+        assert!(
+            !errors.iter().any(|e| matches!(e.kind, SemanticErrorKind::UnresolvedImport { .. })),
+            "imported type alias should not flag: {:?}",
+            errors
+        );
     }
 
     #[test]

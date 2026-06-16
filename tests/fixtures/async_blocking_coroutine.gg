@@ -1,10 +1,10 @@
-from std.async import sleep
+from std.async import async_sleep
 from std.fs import read_file, write_file
 
 # This function has BOTH an await (sleep) and a blocking call (read_file).
 # The sleep makes it a coroutine; the read_file gets enter/exit guards.
 async String read_after_sleep(String path, int delay_ms):
-    sleep(delay_ms)
+    async_sleep(delay_ms)
     String content = read_file(path)
     return content
 

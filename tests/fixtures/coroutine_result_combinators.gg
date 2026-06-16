@@ -1,9 +1,9 @@
 # Test Result combinators in coroutine poll context.
 # or_else, map_err, unwrap_or_else, or — all have poll-path codegen.
-from std.async import sleep
+from std.async import async_sleep
 
 async int test_result_combinators():
-    sleep(1)
+    async_sleep(1)
 
     Result[int, String] ok_val = Ok(10)
     Result[int, String] err_val = Error("bad")

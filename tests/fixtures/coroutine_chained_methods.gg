@@ -1,7 +1,7 @@
-from std.async import sleep
+from std.async import async_sleep
 
 async int test_chains():
-    sleep(1)
+    async_sleep(1)
 
     # Vector chain: filter → map → fold
     Vector[int] v = Vector[int]()

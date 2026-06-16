@@ -2365,6 +2365,11 @@ bool is_void_runtime_fn(String name):
         return true
     if name == "gorget_atomic_int_free" or name == "gorget_atomic_bool_free":
         return true
+    # Reactor sleeps: `void gorget_reactor_sleep_ms(int64_t)` /
+    # `void gorget_reactor_sleep_seconds(double)` back `std.async.async_sleep` /
+    # `std.time.sleep` — void return, suppress the dst-assignment.
+    if name == "gorget_reactor_sleep_ms" or name == "gorget_reactor_sleep_seconds":
+        return true
     if name == "gorget_shared_drop" or name == "gorget_rc_drop" or name == "gorget_arc_drop":
         return true
     if name == "gorget_box_drop":

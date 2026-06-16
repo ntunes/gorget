@@ -1,4 +1,4 @@
-from std.async import sleep
+from std.async import async_sleep
 
 struct Counter:
     int value
@@ -14,7 +14,7 @@ equip Counter:
         return self.value == 0
 
 async int test_struct_ops():
-    sleep(1)
+    async_sleep(1)
 
     Counter c = Counter(0)
     print(c.get())

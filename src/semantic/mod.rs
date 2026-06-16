@@ -111,6 +111,11 @@ pub fn analyze_with_source_dir(
     let mut errors = Vec::new();
     let mut pass_times: FxHashMap<&'static str, Duration> = FxHashMap::default();
 
+    // Capture type-alias names BEFORE the meta pass inlines them and removes the
+    // `type X = …` declarations — `check_unresolved_imports` needs them to avoid
+    // flagging a valid alias import (e.g. `from xtd.ecs import Entity`).
+    let alias_names = resolve::collect_type_alias_names(module);
+
     // Pass 0: Evaluate and substitute meta constants
     time_pass(&mut pass_times, "meta_consts", || {
         errors.extend(meta::evaluate_meta_consts_with_source_dir(module, features, source_dir));
@@ -241,6 +246,11 @@ pub fn analyze_with_source_dir(
     // Pass 1: Collect top-level definitions
     let mut resolve_ctx = time_pass(&mut pass_times, "collect_top_level", || {
         resolve::collect_top_level(module, &mut scopes, &mut types, &mut errors)
+    });
+
+    // Validate `from X import Y` against what the loaded program actually defines.
+    time_pass(&mut pass_times, "check_unresolved_imports", || {
+        resolve::check_unresolved_imports(module, &alias_names, &mut errors);
     });
 
     // Pass 1.5: Rewrite import-alias names back to their source names.

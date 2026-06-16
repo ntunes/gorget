@@ -487,6 +487,9 @@ pub enum SemanticErrorKind {
     /// Attempt to import a private item from a module.
     PrivateImport { name: String, module: String },
 
+    /// Attempt to import a name a module does not export (typo / wrong name).
+    UnresolvedImport { name: String, module: String },
+
     /// Public function exposes a private type in its signature.
     PrivateTypeInPublicSignature { type_name: String, fn_name: String, position: String },
 
@@ -862,6 +865,9 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::PrivateImport { name, module } => {
                 write!(f, "cannot import private item `{name}` from module `{module}`")
+            }
+            SemanticErrorKind::UnresolvedImport { name, module } => {
+                write!(f, "module `{module}` does not export `{name}`")
             }
             SemanticErrorKind::PrivateTypeInPublicSignature { type_name, fn_name, position } => {
                 write!(f, "public function `{fn_name}` has private type `{type_name}` in its {position}")

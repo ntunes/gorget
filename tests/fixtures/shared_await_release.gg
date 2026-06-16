@@ -2,11 +2,11 @@
 # The spawned function has an await point inside — the token should be
 # released before the await and reacquired after.
 
-from std.async import sleep
+from std.async import async_sleep
 
 async void delayed_add(int &counter, int amount):
     counter = counter + amount
-    sleep(10)
+    async_sleep(10)
     counter = counter + amount
 
 async void main():

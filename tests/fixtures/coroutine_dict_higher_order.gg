@@ -1,7 +1,7 @@
-from std.async import sleep
+from std.async import async_sleep
 
 async int test_dict_ops():
-    sleep(1)
+    async_sleep(1)
 
     Dict[String, int] d = Dict[String, int]()
     d["a"] = 10

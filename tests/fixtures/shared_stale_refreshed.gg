@@ -4,7 +4,7 @@
 
 directive scheduler=single
 
-from std.async import sleep
+from std.async import async_sleep
 
 async void worker(int &counter):
     counter = counter + 1

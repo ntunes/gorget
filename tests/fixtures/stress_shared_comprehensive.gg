@@ -1,12 +1,12 @@
 # Comprehensive shared variable stress test — thousands of concurrent tasks.
 #
-# Exercises: multi-token ordering, nested spawns, with-refresh after sleep,
+# Exercises: multi-token ordering, nested spawns, with-refresh after async_sleep,
 # mixed read/write, early return, await-based token release/reacquire,
 # and high-contention concurrent mutation.
 #
 # Architecture (1300 tasks total):
 #   - 500 writer tasks: each increments both a and b 10 times = 5000 each
-#   - 500 reader tasks: each reads a and b inside `with` blocks after sleep(0)
+#   - 500 reader tasks: each reads a and b inside `with` blocks after async_sleep(0)
 #   - 200 nested tasks: each spawns an inner adder adding 5 to both = 1000 each
 #   - 100 conditional tasks: half write 10 to both (do_write=true), half skip
 #     = 50 * 10 = 500 each
@@ -14,7 +14,7 @@
 #
 # Final output: "6500\n6500\ndone"
 
-from std.async import sleep
+from std.async import async_sleep
 
 # --- Writer: increment both counters n times ---
 async void writer(int &a, int &b, int n):
@@ -24,14 +24,14 @@ async void writer(int &a, int &b, int n):
         b = b + 1
         i = i + 1
 
-# --- Reader: uses `with` to get fresh reads after sleep ---
+# --- Reader: uses `with` to get fresh reads after async_sleep ---
 async void reader(int &a, int &b):
     with a:
         with b:
             int snap_a = a
             int snap_b = b
-            sleep(0)
-            # with auto-refreshes after sleep
+            async_sleep(0)
+            # with auto-refreshes after async_sleep
             int fresh_a = a
             int fresh_b = b
 

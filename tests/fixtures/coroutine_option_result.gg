@@ -1,10 +1,10 @@
 # Test Option and Result method operations inside async (coroutine) functions.
 # These methods must work correctly in the poll function where locals become
 # frame fields (f->_N).
-from std.async import sleep
+from std.async import async_sleep
 
 async int do_option_work():
-    sleep(1)
+    async_sleep(1)
 
     # --- Creation after yield point ---
     Option[int] some_val = Some(42)
@@ -50,7 +50,7 @@ async int do_option_work():
     return 1
 
 async int do_result_work():
-    sleep(1)
+    async_sleep(1)
 
     # --- Creation after yield point ---
     Result[int, String] ok_val = Ok(10)

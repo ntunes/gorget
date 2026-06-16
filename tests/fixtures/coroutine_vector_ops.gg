@@ -1,10 +1,10 @@
-from std.async import sleep
+from std.async import async_sleep
 
 # Test Vector operations in async context: clone, slice, extend.
 # These are not covered by coroutine_collections or coroutine_collections_advanced.
 
 async int test_vector_ops():
-    sleep(1)
+    async_sleep(1)
 
     Vector[int] v = Vector[int]()
     v.push(5)
