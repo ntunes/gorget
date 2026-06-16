@@ -12,7 +12,7 @@ from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM, OP_MOD
 from gir import OP_ADD_WRAP, OP_SUB_WRAP, OP_MUL_WRAP
 from gir import OP_BITAND, OP_BITOR, OP_BITXOR, OP_SHL, OP_SHR
 from gir import UNOP_NEG, UNOP_NOT, UNOP_BITNOT
-from lir import LirModule, LirFunction, LirBlock, LirInst, LirTerm, LirSlot, LirStructDef, LirExtern, LirGlobal, LirThreadSpawnedFn, DictGetOrReq
+from lir import LirModule, LirFunction, LirBlock, LirInst, LirTerm, LirSlot, LirStructDef, LirExtern, LirGlobal, LirThreadSpawnedFn, DictGetOrReq, BoxWrapperReq
 from lir import SlotProvenance
 from lir import StructField, BlockParam, SwitchCase, FieldDrop, EnumVariantDrop, TypeDropInfo, FieldInit
 from lir import LT_I8, LT_I16, LT_I32, LT_I64, LT_U8, LT_U16, LT_U32, LT_U64
@@ -634,6 +634,12 @@ void register_field_type_in_sr(String tname, Dict[String, int] &sr, LirModule &m
         int box_id = lir_mod_add_struct(&m, LirStructDef(box_name_ctor, box_fields, 0, false, 8, -1))
         sr.put(tname, box_id)
         m.type_runtime_map.put(tname.clone(), "Box")
+        # Write-through (sibling of the Pass-1 BkRegularBox arm in
+        # lower_type_defs): both Box registrars must populate the typed inner
+        # channel so the allocator/wrapper generators read it instead of
+        # name-matching. rmeta proved `tname` is a `Box__<inner>` regular box;
+        # `5` is the `Box__` mangling-contract length (name PARSING).
+        m.coll_elem_type_map.put(tname.clone(), tname.slice(5, tname.len()))
         return
     if is_opaque_pointer_type(tname, &gmod):
         m.type_runtime_map.put(tname.clone(), "Ptr")
@@ -840,6 +846,18 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
                                         int box_id = lir_mod_add_struct(&m, LirStructDef(box_name, box_fields, 0, false, 8, -1))
                                         sr.put(name, box_id)
                                         m.type_runtime_map.put(name.clone(), "Box")
+                                        # Write-through (Layering rule 4): we are inside the
+                                        # TYPED `case BkRegularBox()` arm — rmeta proved this
+                                        # `name` is a `Box__<inner>` regular box (the
+                                        # build_resource_metadata Box arm is the sole producer
+                                        # of BkRegularBox). Record the inner C type on the same
+                                        # typed channel Vector/Set/Deque use (coll_elem_type_map),
+                                        # so the box allocator + get/set wrapper generators read
+                                        # it via coll_elem_type_for_name (a `__`-split scan, NOT
+                                        # a Box mangled-prefix meaning-decision). `5` is the
+                                        # `Box__` mangling-contract length (name PARSING at the
+                                        # producer, same as Vector__'s `slice(8,..)` above).
+                                        m.coll_elem_type_map.put(name.clone(), name.slice(5, name.len()))
                                         dispatched = true
                                     else:
                                         pass
@@ -1459,10 +1477,20 @@ String map_runtime_name(String name, LirModule &m, GirModule &gmod):
                 # gg, which dispatches to the generated `Box__T__get` function
                 # (`src/backend/c_lir/helpers.rs:310`), NOT a runtime symbol —
                 # there is no `gorget_box_get` in the C runtime.
+                #
+                # Resolve-once / write-through (Layering rule 4): this arm is
+                # the TYPED classification site — `type_category_for_name ==
+                # "Box"` (via type_runtime_map) and `method == "get"` already
+                # proved "this is a Box get". RECORD a wrapper REQUEST, reading
+                # the inner C type from the TYPED coll_elem_type_map (no name
+                # parse), so emit_box_method_wrappers never re-derives meaning
+                # from a Box mangled-prefix + `__get`-suffix test on the call name.
+                record_box_wrapper_req(&m, coll_elem_type_for_name(name, &m), false)
                 return name
             case "set":
                 # `b.set(v)` → the generated `Box__<inner>__set(self, val)`
-                # inline wrapper. Same rationale as `get`.
+                # inline wrapper. Same rationale + write-through as `get`.
+                record_box_wrapper_req(&m, coll_elem_type_for_name(name, &m), true)
                 return name
             case "free" | "drop":
                 return "gorget_box_free"
@@ -1773,6 +1801,20 @@ String coll_val_type_for_name(String name, LirModule &m):
                 return m.coll_val_type_map.get(prefix).unwrap_or("")
         i += 1
     return ""
+
+# Record a `b.get()`/`b.set(v)` inline-wrapper REQUEST onto the typed
+# box_wrapper_requests registry, deduped by (inner_c, is_set). Called from
+# the typed Box get/set classification arm in map_runtime_name; the codegen
+# drain (emit_box_method_wrappers) emits one wrapper per recorded request.
+# A blank `inner_c` (coll_elem_type_for_name miss) is skipped — the legacy
+# scan likewise emitted nothing for a zero-length inner.
+void record_box_wrapper_req(LirModule &m, String inner_c, bool is_set):
+    if inner_c == "":
+        return
+    for r in m.box_wrapper_requests:
+        if r.inner_c == inner_c and r.is_set == is_set:
+            return
+    m.box_wrapper_requests.push(BoxWrapperReq(inner_c.clone(), is_set))
 
 # Return the base constructor fn name for Dict/HashMap/Set/HashSet.
 # "Dict__K__V" → "gorget_dict_new", "HashMap__K__V" → "gorget_map_new",

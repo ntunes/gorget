@@ -8,7 +8,7 @@
 
 from lir import LirModule, LirFunction, LirBlock, LirInst, LirTerm, LirSlot
 from lir import SlotProvenance
-from lir import LirStructDef, LirExtern, LirGlobal, LirGlobalField, LirSpawnedFn, LirTestFn, LirBenchFn, LirThreadSpawnedFn, DictGetOrReq
+from lir import LirStructDef, LirExtern, LirGlobal, LirGlobalField, LirSpawnedFn, LirTestFn, LirBenchFn, LirThreadSpawnedFn, DictGetOrReq, BoxWrapperReq
 from lir import StructField, BlockParam, SwitchCase, FieldDrop, EnumVariantDrop, TypeDropInfo, FieldInit
 from lir import LT_I8, LT_I16, LT_I32, LT_I64, LT_U8, LT_U16, LT_U32, LT_U64
 from lir import LT_F32, LT_F64, LT_BOOL, LT_PTR, LT_VOID
@@ -727,9 +727,14 @@ String box_alloc_for_field_type(String ftn, Vector[String] &seen, String emit_pr
     if m.type_runtime_map.contains(ftn):
         if m.type_runtime_map.get(ftn).unwrap_or("") == "Box":
             is_box = true
-    if not is_box or ftn.len() <= 5 or ftn.slice(0, 5) != "Box__":
+    # Read the inner C type from the TYPED coll_elem_type_map (written through at
+    # the Box registration site), NOT by slicing `Box__<inner>` from the field
+    # type name. A non-box field, or a box with no recorded inner, emits nothing.
+    if not is_box or not m.coll_elem_type_map.contains(ftn):
         return ""
-    String inner = ftn.slice(5, ftn.len())
+    String inner = m.coll_elem_type_map.get(ftn).unwrap_or("")
+    if inner == "":
+        return ""
     int si = 0
     while si < seen.len():
         if seen.get(si).unwrap() == inner:
@@ -743,8 +748,6 @@ String emit_box_allocators_from_lir(LirModule &m):
     Vector[String] seen = []
     String out = ""
     String emit_prefix = "__gorget_box_alloc_"
-    String box_prefix = "Box__"
-    int box_plen = box_prefix.len()
     int fi = 0
     while fi < m.functions.len():
         int bi = 0
@@ -763,15 +766,17 @@ String emit_box_allocators_from_lir(LirModule &m):
                 String suffix = ""
                 # A `Box__<inner>(x)` CONSTRUCTOR call needs its allocator
                 # emitted. A `Box__<inner>__get`/`__set` METHOD call does NOT —
-                # it dispatches to an inline get/set wrapper, and slicing
-                # `<inner>__get` here would emit a bogus
-                # `__gorget_box_alloc_<inner>__get(__gg_<inner>__get)` →
-                # cc-fail (unknown type). Discriminate via the typed
-                # `type_runtime_map`: a genuine box-ctor `inst_name` is
-                # registered as a "Box" type; a method-call name is not
-                # (no name-matching on the method suffix — CLAUDE.md rule 2).
-                if inst_name.starts_with(box_prefix) and inst_name.len() > box_plen and m.type_runtime_map.get(inst_name).unwrap_or("") == "Box":
-                    suffix = inst_name.slice(box_plen, inst_name.len())
+                # it dispatches to an inline get/set wrapper. Discriminate via
+                # the typed `type_runtime_map`: a genuine box-ctor `inst_name`
+                # is registered as a "Box" TYPE (the full ctor name == the box
+                # type name), so it carries an inner on the typed
+                # coll_elem_type_map channel; a method-call name (`Box__T__get`)
+                # is NOT a registered Box type and has no channel entry. Read
+                # the inner from coll_elem_type_map — NO Box mangled-prefix
+                # meaning-decision, NO suffix slice (CLAUDE.md rule 2 / layering
+                # rule 4: the inner was resolved-once at registration).
+                if m.type_runtime_map.get(inst_name).unwrap_or("") == "Box" and m.coll_elem_type_map.contains(inst_name):
+                    suffix = m.coll_elem_type_map.get(inst_name).unwrap_or("")
                 elif inst_name.starts_with(emit_prefix) and inst_name.len() > emit_prefix.len():
                     suffix = inst_name.slice(emit_prefix.len(), inst_name.len())
                 if suffix.len() > 0:
@@ -822,56 +827,20 @@ String emit_box_allocators_from_lir(LirModule &m):
 # `gorget_box_get`/`gorget_box_set` runtime symbol — these wrappers are the
 # generated dispatch target the LIR box-method map now returns.
 String emit_box_method_wrappers(LirModule &m):
-    Vector[String] seen_get = []
-    Vector[String] seen_set = []
+    # Drain the TYPED monomorphization-request registry (populated upstream at
+    # the classified `type_category_for_name == "Box"` + get/set site in
+    # map_runtime_name). NO instruction scan, NO Box mangled-prefix +
+    # `__get`/`__set`-suffix routing — the "this is a Box get/set"
+    # decision was already typed; this only SPELLS each request's C symbol
+    # (the legitimate emit-boundary spelling). Mirrors emit_dict_get_or_wrappers.
     String out = ""
-    String box_prefix = "Box__"
-    int box_plen = box_prefix.len()
-    int fi = 0
-    while fi < m.functions.len():
-        int bi = 0
-        while bi < m.functions.get(fi).unwrap().blocks.len():
-            int ii = 0
-            while ii < m.functions.get(fi).unwrap().blocks.get(bi).unwrap().insts.len():
-                String inst_name = ""
-                match m.functions.get(fi).unwrap().blocks.get(bi).unwrap().insts.get(ii).unwrap():
-                    case ICallExtern(_, name, _, _, _):
-                        inst_name = name
-                    case ICall(_, fid, _):
-                        if fid >= 0 and fid < m.functions.len():
-                            inst_name = m.functions.get(fid).unwrap().name
-                    else:
-                        pass
-                if inst_name.starts_with(box_prefix) and inst_name.len() > box_plen:
-                    String rest = inst_name.slice(box_plen, inst_name.len())
-                    # Split off the trailing `__get` / `__set` method suffix.
-                    if rest.ends_with("__get"):
-                        String inner = rest.slice(0, rest.len() - 5)
-                        bool already = false
-                        int sg = 0
-                        while sg < seen_get.len():
-                            if seen_get.get(sg).unwrap() == inner:
-                                already = true
-                            sg += 1
-                        if not already and inner.len() > 0:
-                            seen_get.push(inner.clone())
-                            String elem = box_alloc_c_type(inner)
-                            out = out + "static inline " + elem + " Box__" + inner + "__get(Box__" + inner + " self) { return *(" + elem + "*)self; }\n"
-                    elif rest.ends_with("__set"):
-                        String inner = rest.slice(0, rest.len() - 5)
-                        bool already_s = false
-                        int ss = 0
-                        while ss < seen_set.len():
-                            if seen_set.get(ss).unwrap() == inner:
-                                already_s = true
-                            ss += 1
-                        if not already_s and inner.len() > 0:
-                            seen_set.push(inner.clone())
-                            String elem = box_alloc_c_type(inner)
-                            out = out + "static inline void Box__" + inner + "__set(Box__" + inner + " self, " + elem + " val) { *(" + elem + "*)self = val; }\n"
-                ii += 1
-            bi += 1
-        fi += 1
+    for req in m.box_wrapper_requests:
+        String inner = req.inner_c
+        String elem = box_alloc_c_type(inner)
+        if req.is_set:
+            out = out + "static inline void Box__" + inner + "__set(Box__" + inner + " self, " + elem + " val) { *(" + elem + "*)self = val; }\n"
+        else:
+            out = out + "static inline " + elem + " Box__" + inner + "__get(Box__" + inner + " self) { return *(" + elem + "*)self; }\n"
     if out != "":
         out = out + "\n"
     return out

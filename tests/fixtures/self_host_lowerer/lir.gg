@@ -396,6 +396,24 @@ struct DictGetOrReq:
     String key_c
     String val_c
 
+# A `b.get()` / `b.set(v)` inline-wrapper REQUEST. The Box analogue of
+# DictGetOrReq: a TYPED monomorphization-request recorded at the CLASSIFIED
+# LIR call-mapping site (map_runtime_name's `type_category_for_name(name) ==
+# "Box"` + `method == "get"/"set"` arm), consumed by emit_box_method_wrappers
+# at codegen. There is no `gorget_box_get`/`gorget_box_set` runtime symbol —
+# the wrapper IS the generated dispatch target the LIR box-method routing
+# returns by name. Recording the request UPSTREAM (where the receiver is
+# already typed "Box" via type_runtime_map, with the inner type on the typed
+# coll_elem_type_map channel) lets codegen emit each wrapper without
+# re-deriving "this is a Box get/set" from a Box mangled-prefix test on the
+# call name (a wrong-layer read). `inner_c` is the boxed element's C type name read from
+# the TYPED coll_elem_type_map (NOT parsed from the symbol); `is_set`
+# distinguishes the get vs set body. Deduped by (inner_c, is_set) at the
+# write site (one wrapper per inner type per accessor).
+struct BoxWrapperReq:
+    String inner_c
+    bool is_set
+
 # ── Test/Bench Metadata ────────────────────────────────────────
 
 struct LirTestFn:
@@ -508,6 +526,15 @@ struct LirModule:
     # through"). Empty for modules with no get_or call. Appended AT END to
     # avoid shifting positional ctor call sites.
     Vector[DictGetOrReq] dict_get_or_requests
+    # `b.get()` / `b.set(v)` inline-wrapper REQUESTS — the Box analogue of
+    # dict_get_or_requests. Populated by map_runtime_name's classified Box
+    # get/set arm (the typed `type_category_for_name == "Box"` site, inner
+    # type read from coll_elem_type_map), drained by emit_box_method_wrappers
+    # at codegen. Replaces the read-side Box mangled-prefix +
+    # `__get`/`__set`-suffix instruction scan with a write-through typed
+    # channel (Layering rule 4). Empty for modules with no Box get/set call.
+    # Appended AT END to avoid shifting positional ctor call sites.
+    Vector[BoxWrapperReq] box_wrapper_requests
 
 # ── LirFunction helpers ─────────────────────────────────────────
 
@@ -621,4 +648,5 @@ LirModule new_lir_module():
     Dict[String, String] cvt = {}
     Dict[String, String] ccf = {}
     Vector[DictGetOrReq] dgor = []
-    return LirModule(structs, globals, functions, externs, "", spawned, thread_spawned, tests, benches, false, false, SCHED_POOL, "", false, false, "", 0, false, rec_drop_s, rec_drop_e, drop_coll, type_drops, imported_t, evp, evt, trt, tmpm, cet, ckt, cvt, ccf, dgor)
+    Vector[BoxWrapperReq] bwr = []
+    return LirModule(structs, globals, functions, externs, "", spawned, thread_spawned, tests, benches, false, false, SCHED_POOL, "", false, false, "", 0, false, rec_drop_s, rec_drop_e, drop_coll, type_drops, imported_t, evp, evt, trt, tmpm, cet, ckt, cvt, ccf, dgor, bwr)
