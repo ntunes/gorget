@@ -2773,13 +2773,13 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     Dict[String, bool] equip_generic_names = {}
     Dict[String, bool] seen_instances = {}
     Vector[GenericInstance] generic_instances = []
-    # PROTO: method instances discovered inside MONOMORPHIZED generic-fn
+    # method instances discovered inside MONOMORPHIZED generic-fn
     # bodies (e.g. `Key__hash__FxHasher` from `hash_of[Key]`'s
     # `v.hash[FxHasher]`). Collected in the transitive-fixpoint loop where the
     # mono substitution is known; merged into proto_minsts before body emit.
     Vector[ProtoMethInst] mono_method_insts = []
     Dict[String, bool] mono_method_seen = {}
-    # PROTO: ALL equip blocks (incl. non-generic ones like `equip Key with
+    # ALL equip blocks (incl. non-generic ones like `equip Key with
     # Hashable`), used to find the body of an equip-overridden method-level-
     # generic for a concrete non-generic receiver. The `equip_templates`
     # vector above only holds GENERIC equip blocks, so it misses these.
@@ -2897,7 +2897,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                     discover_transitive_stmts(tfix_tmpl.body, &type_sub_map, &seen_instances, &generic_instances)
                     if generic_instances.len() > prev_count:
                         transitive_changed = true
-                    # PROTO: method-instance discovery in this mono'd body.
+                    # method-instance discovery in this mono'd body.
                     # Build a param-name -> declared-type map for receiver
                     # resolution, then walk for turbofish method calls.
                     Dict[String, SpannedType] tfix_params = {}
@@ -3449,7 +3449,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                     proto_walk_stmts(pmdef.body, &gmod, &proto_minsts, &proto_seen)
             else:
                 pass
-    # PROTO: merge method instances discovered in mono'd generic-fn bodies
+    # merge method instances discovered in mono'd generic-fn bodies
     # (e.g. Key__hash__FxHasher from hash_of[Key]) into the per-call-site set.
     for mmi in mono_method_insts:
         if not proto_seen.contains(mmi.mangled_symbol):
@@ -3462,7 +3462,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             if pgi0.mangled_name == pmi0.recv_instance:
                 p0_base = pgi0.base_name
                 p0_eq_targs = pgi0.type_args
-        # PROTO: non-generic receiver (e.g. `Key`) has no GenericInstance
+        # non-generic receiver (e.g. `Key`) has no GenericInstance
         # entry — the instance name IS the base, with no equip type args.
         if p0_base.len() == 0:
             p0_base = pmi0.recv_instance
@@ -4013,7 +4013,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         case None:
                             pass
 
-    # PROTO: equip-OVERRIDDEN method-level-generic body emit for the
+    # equip-OVERRIDDEN method-level-generic body emit for the
     # mono'd-body discovered instances on CONCRETE non-generic receivers
     # (e.g. `equip Key with Hashable: void hash[Hasher H]`, discovered from
     # `hash_of[Key]`'s `v.hash[FxHasher]`). The body lives in a NON-GENERIC
@@ -4131,7 +4131,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             if pgi.mangled_name == pmi.recv_instance:
                 p_base = pgi.base_name
                 p_eq_targs = pgi.type_args
-        # PROTO: non-generic receiver (`Key`) — instance IS the base.
+        # non-generic receiver (`Key`) — instance IS the base.
         if p_base.len() == 0:
             p_base = pmi.recv_instance
         if p_base.len() == 0:
