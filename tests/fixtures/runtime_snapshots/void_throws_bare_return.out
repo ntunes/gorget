@@ -1,0 +1,4 @@
+set foo on obj 1
+ok path
+bare-return ok
+done

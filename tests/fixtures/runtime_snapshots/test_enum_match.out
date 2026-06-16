@@ -1,0 +1,33 @@
+--- basic enum ---
+north
+south
+east
+west
+--- single payload ---
+int:42
+str:hello
+float:3.140000
+--- multi payload ---
+78.500000
+24.000000
+6.000000
+--- else branch ---
+not north
+--- return enum ---
+south
+east
+--- equality ---
+high == high
+high != low
+--- nested match ---
+ten inside wrapper
+--- vector of enum ---
+3
+north
+east
+south
+--- multi enum ---
+medium rect 10.000000x5.000000
+--- payload compute ---
+diameter=20.000000
+done

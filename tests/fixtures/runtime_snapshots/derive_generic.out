@@ -1,0 +1,8 @@
+pair equal
+Pair(first=10, second=20)
+Pair(first=10, second=20)
+wrapper equal
+wrapper not equal
+Value(42)
+Empty()
+hash ok

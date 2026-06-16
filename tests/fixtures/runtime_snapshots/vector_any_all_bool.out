@@ -1,0 +1,7 @@
+any_even: true
+all_pos:  true
+any_neg:  false
+all_even: false
+any_long: false
+all_long: true
+done
