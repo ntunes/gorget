@@ -2913,6 +2913,23 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         for em in ieqblk.methods:
                             if em.type_params.len() == 0:
                                 int em_ret = map_fn_return_type(em.return_type, &gmod)
+                                # Honour throws_type for Result[T, E] wrapping,
+                                # mirroring the IFunction arm above (`:2854`) and
+                                # the body-build wrap in lower_equip_block. A
+                                # `T m(...) throws E` equip method returns
+                                # `Result__T__E`; registering the bare `T` here
+                                # mis-types every catch/match call site.
+                                match em.throws_type:
+                                    case Some(em_throws):
+                                        int em_ok = em_ret
+                                        int em_err = map_ast_type(em_throws, &gmod)
+                                        if em_ret >= 0 and em_err >= 0:
+                                            String em_ret_c = type_id_to_name(em_ret, &gmod)
+                                            String em_err_c = type_id_to_name(em_err, &gmod)
+                                            em_ret = lookup_or_register_named(&gmod, "Result__" + em_ret_c + "__" + em_err_c)
+                                            record_enum_category(&gmod, em_ret, ENUM_CAT_RESULT, em_ok, em_err)
+                                    case None:
+                                        pass
                                 if em_ret >= 0:
                                     String em_full = target_name + "__" + em.name
                                     # Own-vtable method on the registered route: its

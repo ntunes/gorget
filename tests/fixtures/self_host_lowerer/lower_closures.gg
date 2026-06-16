@@ -355,6 +355,22 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod, bool trait_is_register
 
         bool is_main = false
         int ret_type = map_fn_return_type(mdef.return_type, &gmod)
+        # Wrap the return type in Result[T, E] for `throws` equip methods,
+        # mirroring lower_function (`:62-73`). Without this the emitted C
+        # function signature is the BARE `T` (`int64_t Parser_for_IntParser__parse`)
+        # instead of `Result__T__E`, and the return-place type is not a
+        # Result category so SReturn never wraps the value in `Ok(...)`.
+        match mdef.throws_type:
+            case Some(em_throws_ty):
+                int em_ok_payload = ret_type
+                int em_err_type = map_ast_type(em_throws_ty, &gmod)
+                String em_ret_c = type_id_to_name(ret_type, &gmod)
+                String em_err_c = type_id_to_name(em_err_type, &gmod)
+                String em_result_name = "Result__" + em_ret_c + "__" + em_err_c
+                ret_type = lookup_or_register_named(&gmod, em_result_name)
+                record_enum_category(&gmod, ret_type, ENUM_CAT_RESULT, em_ok_payload, em_err_type)
+            case None:
+                pass
 
         Vector[int] _lc_stk2 = []
         Vector[int] _lb_stk2 = []
