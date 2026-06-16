@@ -799,9 +799,9 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             # materialize-before-mutate as the SAssign hook. Note: a
             # compound on a family MEMBER (`s += x`) never reaches a lazy
             # state (a written bound name fails the bound-name-pristine
-            # eligibility gate), and a collection-root compound
-            # (`v[i] += x`) is lower_fail today — the hook is class-rule
-            # completeness for when index-compound support lands.
+            # eligibility gate); a collection-root compound (`v[i] += x`)
+            # now lowers via lower_index_compound_assign (the EIndex arm
+            # below) and the hook fires for it too (class-rule completeness).
             if ctx.cow_lazy_members.len() > 0:
                 cow_lazy_materialize_family(&ctx, cow_source_root_name(target_expr))
             # x <op>= y  →  x = x <op> y. Lower per target shape: local
