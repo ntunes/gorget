@@ -1985,6 +1985,163 @@ GirFunction lower_suite_body(String fn_name, Vector[Stmt] body, GirModule &gmod)
 
 # ── Module lowering ──────────────────────────────────────
 
+# ── Pass 2.6: LHS-type-driven `.collect()` target selection ───────────
+#
+# Mirrors Rust gg's `apply_collect_target_rewrites`
+# (src/semantic/typecheck.rs:6496, wired at src/semantic/mod.rs:283 as
+# "Pass 2.6", after resolve, before lowering). A pure-AST rewrite: when a
+# VarDecl's declared type is `Set[T]` (or `HashSet[T]`) and its RHS is a
+# `.collect()` method call, the method name is swapped to `to_set` so IR
+# lowering dispatches the Set-targeted `Iterator[T]::to_set(&self)` trait
+# default (lib/std/iter.gg:115) instead of the Vector-targeted
+# `collect(&self)`. The `Dict[K, V]` / `HashMap[K, V]` case swaps to
+# `to_dict` and lifts K,V from the LHS onto the call's generic args
+# (lib/std/iter.gg:131). The decision reads the declared type off the
+# AST directly (TYPED metadata, no name-matching of the receiver) — no
+# resolved TypeId needed, so this runs before typecheck.
+#
+# Self-host runs this at the top of lower_module (the only consumer of
+# the rewritten AST). The Rust ordering (rewrite → typecheck → lower) is
+# preserved in effect: the self-host typecheck takes `Module` by value
+# and does not feed its (un-rewritten) copy forward, so rewriting before
+# the GIR lowering that lower_module performs is equivalent.
+void apply_collect_target_rewrites(Module &m):
+    int i = 0
+    while i < m.items.len():
+        match m.items.get(i).unwrap():
+            case IFunction(fdef):
+                Vector[Stmt] nb = collect_rewrite_stmts(fdef.body)
+                m.items.set(i, IFunction(FunctionDef(fdef.name, fdef.params, fdef.return_type, fdef.type_params, nb, fdef.is_expr_body, fdef.throws_type)))
+            case IEquip(eqblk):
+                Vector[FunctionDef] nm = Vector[FunctionDef]()
+                int mi = 0
+                while mi < eqblk.methods.len():
+                    FunctionDef method = eqblk.methods.get(mi).unwrap()
+                    Vector[Stmt] mnb = collect_rewrite_stmts(method.body)
+                    nm.push(FunctionDef(method.name, method.params, method.return_type, method.type_params, mnb, method.is_expr_body, method.throws_type))
+                    mi = mi + 1
+                m.items.set(i, IEquip(EquipBlock(eqblk.target, eqblk.type_params, eqblk.trait_name, nm, eqblk.via_field, eqblk.trait_generic_args)))
+            case ITrait(tdef):
+                Vector[FunctionDef] tnm = Vector[FunctionDef]()
+                int ti = 0
+                while ti < tdef.methods.len():
+                    FunctionDef tmethod = tdef.methods.get(ti).unwrap()
+                    Vector[Stmt] tnb = collect_rewrite_stmts(tmethod.body)
+                    tnm.push(FunctionDef(tmethod.name, tmethod.params, tmethod.return_type, tmethod.type_params, tnb, tmethod.is_expr_body, tmethod.throws_type))
+                    ti = ti + 1
+                m.items.set(i, ITrait(TraitDef(tdef.name, tdef.type_params, tnm, tdef.parent_traits)))
+            else:
+                pass
+        i = i + 1
+
+# Recursively rebuild a statement list, applying the collect-target
+# rewrite to every SVarDecl and descending into nested control-flow
+# bodies (mirrors Rust `walk_stmt`/`walk_block`).
+Vector[Stmt] collect_rewrite_stmts(Vector[Stmt] stmts):
+    Vector[Stmt] result = Vector[Stmt]()
+    int i = 0
+    while i < stmts.len():
+        Stmt s = stmts.get(i).unwrap()
+        match s:
+            case SVarDecl(stype, name, init_expr, a, b, c):
+                SpannedExpr new_init = collect_rewrite_vardecl_rhs(stype, init_expr)
+                result.push(SVarDecl(stype, name, SpannedExpr(collect_rewrite_expr(new_init.expr), new_init.span), a, b, c))
+            case SIf(cond, then_b, else_branches):
+                Vector[Stmt] nt = collect_rewrite_stmts(then_b)
+                Vector[ElseBranch] nbr = Vector[ElseBranch]()
+                int ei = 0
+                while ei < else_branches.len():
+                    ElseBranch eb = else_branches.get(ei).unwrap()
+                    nbr.push(ElseBranch(eb.condition, collect_rewrite_stmts(eb.body)))
+                    ei = ei + 1
+                result.push(SIf(cond, nt, nbr))
+            case SWhile(cond, body):
+                result.push(SWhile(cond, collect_rewrite_stmts(body)))
+            case SLoop(body):
+                result.push(SLoop(collect_rewrite_stmts(body)))
+            case SFor(pat, iter_expr, body, own, else_b):
+                result.push(SFor(pat, iter_expr, collect_rewrite_stmts(body), own, collect_rewrite_stmts(else_b)))
+            case SMatch(scrut, arms):
+                Vector[MatchArm] narms = Vector[MatchArm]()
+                int ai = 0
+                while ai < arms.len():
+                    MatchArm arm = arms.get(ai).unwrap()
+                    narms.push(MatchArm(arm.pattern, arm.guard, collect_rewrite_stmts(arm.body)))
+                    ai = ai + 1
+                result.push(SMatch(scrut, narms))
+            case SWith(wexpr, wname, body):
+                result.push(SWith(wexpr, wname, collect_rewrite_stmts(body)))
+            case SNamedScope(sname, body):
+                result.push(SNamedScope(sname, collect_rewrite_stmts(body)))
+            else:
+                result.push(s)
+        i = i + 1
+    return result
+
+# Apply the rewrite to a single VarDecl: if the declared type is a Set /
+# HashSet (one generic arg) and the RHS is a top-level `.collect()`,
+# swap the method to `to_set`. If the type is Dict / HashMap (two generic
+# args), swap to `to_dict` and lift the K,V generic args onto the call.
+SpannedExpr collect_rewrite_vardecl_rhs(SpannedType stype, SpannedExpr init_expr):
+    Span ispan = init_expr.span
+    match init_expr.expr:
+        case EMethodCall(recv, mname, margs, mtargs):
+            # The declared-type discriminator. Compute the target method
+            # name from the LHS type; default to the original method (no
+            # rewrite) so every other shape is reconstructed unchanged.
+            String new_name = mname
+            Vector[SpannedType] new_targs = mtargs
+            if mname == "collect":
+                match stype.ty:
+                    case TNamed(tn, targs):
+                        if (tn == "Set" or tn == "HashSet") and targs.len() == 1:
+                            new_name = "to_set"
+                        elif (tn == "Dict" or tn == "HashMap") and targs.len() == 2:
+                            new_name = "to_dict"
+                            new_targs = targs
+                        else:
+                            pass
+                    else:
+                        pass
+            # Rebox the receiver via deref (`*recv`) — the ownership-decided
+            # reconstruction idiom (cf. meta.gg `subst_expr`:481). Moving the
+            # Box binding directly (`!recv`) reads as an untracked source at the
+            # EnumInit consume site.
+            return SpannedExpr(EMethodCall(Box(*recv), new_name, margs, new_targs), ispan)
+        else:
+            return init_expr
+
+# Recurse into the value-position expression forms that carry statement
+# lists (closures / blocks / do / if-expr / match-expr), where nested
+# VarDecls can live. Pure-expression sub-trees hold no VarDecls in the
+# self-host AST, so we only descend through the statement-bearing arms.
+Expr collect_rewrite_expr(Expr e):
+    match e:
+        case EClosure(params, body):
+            return EClosure(params, collect_rewrite_stmts(body))
+        case EBlock(body):
+            return EBlock(collect_rewrite_stmts(body))
+        case EDo(body):
+            return EDo(collect_rewrite_stmts(body))
+        case EIf(cond, then_b, else_branches):
+            Vector[ElseBranch] nbr = Vector[ElseBranch]()
+            int ei = 0
+            while ei < else_branches.len():
+                ElseBranch eb = else_branches.get(ei).unwrap()
+                nbr.push(ElseBranch(eb.condition, collect_rewrite_stmts(eb.body)))
+                ei = ei + 1
+            return EIf(Box(*cond), collect_rewrite_stmts(then_b), nbr)
+        case EMatch(scrut, arms):
+            Vector[MatchArm] narms = Vector[MatchArm]()
+            int ai = 0
+            while ai < arms.len():
+                MatchArm arm = arms.get(ai).unwrap()
+                narms.push(MatchArm(arm.pattern, arm.guard, collect_rewrite_stmts(arm.body)))
+                ai = ai + 1
+            return EMatch(Box(*scrut), narms)
+        else:
+            return e
+
 GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String, String] call_redirects, Dict[String, bool] imported_fns):
     Vector[GirType] type_table = init_type_table()
 

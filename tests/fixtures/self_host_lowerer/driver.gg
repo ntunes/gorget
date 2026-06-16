@@ -6,7 +6,7 @@ from resolve import resolve_module, ResolveContext
 from typecheck import type_check_module
 from derive import expand_derives
 from meta import expand_meta_types, expand_meta_for_match
-from lower import lower_module
+from lower import lower_module, apply_collect_target_rewrites
 from loader import load_imports
 from gir import GirModule
 from format_gir import format_module
@@ -111,6 +111,16 @@ void compile_main():
     _t1 = time_ms()
     if _timing: print("PHASE resolve_module " + int_to_str(_t1 - _tp) + " ms", file=stderr)
     _tp = _t1
+    # Pass 2.6: LHS-type-driven `.collect()` target selection. Mirrors Rust
+    # gg's `apply_collect_target_rewrites` (src/semantic/mod.rs:283 — after
+    # resolve, before typecheck). A pure-AST rewrite: `Set[T] x = it.collect()`
+    # becomes `it.to_set()` (and `Dict[K, V]` → `it.to_dict[K, V]()`), so IR
+    # lowering dispatches the Set/Dict-targeted Iterator trait default
+    # (lib/std/iter.gg) instead of the Vector-targeted `collect`. Mutates the
+    # driver-local `m` (the proven `&m` mutation context, like
+    # `expand_meta_for_match(&m)`); the rewritten `m` then flows into both
+    # typecheck and lower_module.
+    apply_collect_target_rewrites(&m)
     type_check_module(m, &scopes, &types, &ctx)
     _t1 = time_ms()
     if _timing: print("PHASE type_check " + int_to_str(_t1 - _tp) + " ms", file=stderr)
