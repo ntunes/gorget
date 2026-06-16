@@ -3832,6 +3832,28 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         int alloc_dst = add_local(&ctx, alloc_ptr_ty, None)
         emit(&ctx, GICallExtern(alloc_dst, alloc_new_fn, alloc_args))
         result = alloc_dst
+    elif (fname == "Mutex" or fname == "RWLock") and targs.len() == 1 and args.len() == 1:
+        # SYNC FIDELITY — GENERIC sync-primitive ctor `Mutex[T](v)` /
+        # `RWLock[T](v)`. These are PARAMETERISED opaque handles: the runtime
+        # ctor `gorget_mutex_new(size_t, void* init)` returns a `GorgetMutex*`.
+        # Emit a mangled `Mutex__<elem_c>__new` GICall: `map_runtime_name`'s
+        # opaque-method-prefix dispatch remaps it to `gorget_mutex_new`, and the
+        # generalized concurrency-ctor reorder in lir_lower.gg computes
+        # `sizeof(T)` and swaps the args to `gorget_mutex_new(size, &val)`. The
+        # dst is a POINTER-to-named slot (a bare value slot can't hold the
+        # handle). Mirrors Rust gg `src/ir/lowering/exprs/mod.rs:1791-1806`
+        # (Mutex) and `:1840-1857` (RWLock) — both route through
+        # `<kind>__<inner>__new(val)` → LIR `gorget_<kind>_new(sizeof, &val)`
+        # (insts.rs:3437-3446).
+        String gen_elem_c = type_to_c_name(targs.get(0).unwrap(), &gmod)
+        String gen_mangled = fname + "__" + gen_elem_c
+        String gen_new_fn = gen_mangled + "__new"
+        int gen_val = lower_expr(&ctx, args.get(0).unwrap(), &gmod)
+        Vector[Operand] gen_args = [op_consume(&ctx, &gmod, gen_val, CkCallArgBorrow())]
+        int gen_ptr_ty = register_ptr(&gmod, lookup_or_register_named(&gmod, gen_mangled))
+        int gen_dst = add_local(&ctx, gen_ptr_ty, None)
+        emit(&ctx, GICall(gen_dst, gen_new_fn, gen_args))
+        result = gen_dst
     elif sync_constructor_runtime_name(fname) != "":
         # SYNC FIDELITY — non-generic sync-primitive constructor
         # (`AtomicInt(0)`, `OnceFlag()`, `Semaphore(n)`, …). Same shape as the

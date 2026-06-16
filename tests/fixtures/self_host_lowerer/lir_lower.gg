@@ -3369,12 +3369,25 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                         int size_val = lir_fn_next_value(&f)
                         lir_push_inst(&f, bb, IIConst(size_val, LT_I64, elem_size))
                         lir_args.push(size_val)
-                # Shared__X constructor re-ordering: gorget_shared_new(size, *val).
-                # Replace existing lir_args [val, size] with [size, &val_slot].
-                # We cheat by reaching into the last arg emission's lower_operand
-                # result — it was a value, but we need its slot's address.
-                # Phase A: use call_name (already mapped to gorget_shared_new) instead of starts_with.
-                if call_name == "gorget_shared_new" and args.len() >= 1 and lir_args.len() >= 2:
+                # Concurrency ctor re-ordering: gorget_{shared,mutex,rwlock}_new(size, &val).
+                # The runtime ABI is `gorget_<kind>_new(size_t size, void* init)` —
+                # so the final args are `[sizeof(T), &init_val]`.
+                # SIBLING-SITE FIX (was `gorget_shared_new`-only): Mutex/RWLock
+                # share the identical (size, &init) runtime ABI — Rust handles all
+                # three uniformly at `src/lir/lower/insts.rs:3437-3446`
+                # (`matches!(emit_name, "gorget_mutex_new" | "gorget_shared_new" |
+                # "gorget_rwlock_new")`). Phase A: dispatch on the MAPPED call_name.
+                #
+                # Two callers reach here with different `lir_args` shapes:
+                #   • bare `Shared__T`     → is_collection_constructor TRUE  →
+                #     size already APPENDED above → lir_args = [val, size].
+                #   • `Mutex__T__new` /    → is_collection_constructor FALSE →
+                #     `RWLock__T__new`        no size appended → lir_args = [val].
+                # Normalise both to `[size, &val]` by computing the size from
+                # `func_name` (the UNMAPPED ctor name) via concurrency_elem_size
+                # when it was not already appended (mirrors Rust reading
+                # `original_name` for `concurrency_elem_size`).
+                if (call_name == "gorget_shared_new" or call_name == "gorget_mutex_new" or call_name == "gorget_rwlock_new") and args.len() >= 1 and lir_args.len() >= 1:
                     # Find the caller's user-arg 0 source (GIR arg 0, OpCopy/OpMove)
                     Operand user0 = args.get(0).unwrap()
                     int src_slot = -1
@@ -3392,9 +3405,17 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                     if src_slot >= 0:
                         int addr_val = lir_fn_next_value(&f)
                         lir_push_inst(&f, bb, ISlotAddr(addr_val, src_slot))
-                        # lir_args[0] = user val (discard), lir_args[1] = size_val
-                        int size_val_last = lir_args.get(lir_args.len() - 1).unwrap()
-                        Vector[int] new_args = [size_val_last, addr_val]
+                        int size_val_cc = -1
+                        if lir_args.len() >= 2:
+                            # Size already appended (bare `Shared__T` collection-ctor path).
+                            size_val_cc = lir_args.get(lir_args.len() - 1).unwrap()
+                        else:
+                            # `__new` path: no size appended — compute it from the
+                            # UNMAPPED ctor name (e.g. `Mutex__int64_t__new`).
+                            int cc_sz = concurrency_elem_size_in_mod(func_name, &sr, &m)
+                            size_val_cc = lir_fn_next_value(&f)
+                            lir_push_inst(&f, bb, IIConst(size_val_cc, LT_I64, cc_sz))
+                        Vector[int] new_args = [size_val_cc, addr_val]
                         lir_args = new_args
                 int dst = -1
                 if dst_local >= 0:
