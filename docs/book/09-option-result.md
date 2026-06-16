@@ -44,6 +44,48 @@ if result is Some(age):
     print(f"found: {age}")
 ```
 
+### Return `Option`, Not a Sentinel
+
+When a function might not produce a value, return `Option[T]` — not a *sentinel*
+like `-1`, `""`, or some other "magic" value that stands for "absent." A sentinel
+is a real, valid value of its type: nothing stops a caller from forgetting the
+check and using it as data, and the compiler can't warn them. Worse, the magic
+value often collides with a legitimate one — is `""` an unset config key, or a key
+that's genuinely empty? `Option` puts absence *in the type*, so callers can't
+ignore it and the ambiguity disappears.
+
+The cost of a sentinel shows up at the call site, where the caller has to know the
+magic value and often check it twice — once to decide, once to use:
+
+```gorget
+# "" means "not set" — but "" is also a valid config value. Ambiguous, and the
+# caller spells the sentinel out, then re-reads it to use it:
+String config_value(String key):
+    if settings.contains(key):
+        return settings.get(key).unwrap()
+    return ""
+
+if config_value("theme") != "":
+    print(config_value("theme"))     # called again just to use the value
+```
+
+Return `Option` instead, and the caller binds the value once with `is Some`:
+
+```gorget
+Option[String] config_value(String key):
+    return settings.get(key)         # Dict.get already returns Option[String]
+
+if config_value("theme") is Some(theme):
+    print(theme)                     # bound once — no sentinel, no re-call
+```
+
+This is also the answer to a question that trips up people coming from C:
+*"How do I assign a value inside the condition?"* Gorget has no
+`if (x = f()) != SENTINEL` — and it doesn't need one. **Reaching for
+assignment-in-condition is usually a sign the function should return `Option`:**
+`is Some(x)` gives you the binding, and `Option` gives you the safety. The feature
+you thought was missing is already here, spelled differently.
+
 ### Common Methods
 
 ```gorget
