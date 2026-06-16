@@ -2665,6 +2665,19 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             else:
                 pass
 
+    # Collect generic ENUM templates so a mono'd `Wrapper[int]` can be
+    # registered as a REAL enum (substituted variant payloads) below, mirroring
+    # struct_templates. USER generic enums only — the prelude Option/Result path
+    # is synthesized separately (lir_lower Pass 3) and MUST NOT be touched here.
+    Dict[String, EnumDef] enum_templates = {}
+    for et_item in m.items:
+        match et_item:
+            case IEnum(edef):
+                if edef.type_params.len() > 0:
+                    enum_templates.put(edef.name.clone(), edef)
+            else:
+                pass
+
     # Discover generic call sites and type instances from all function/equip bodies
     for ditem in m.items:
         match ditem:
@@ -2857,6 +2870,51 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             clear_type_subs(&gmod)
             if has_resource:
                 gmod.resource_types.put(mrinst.mangled_name.clone(), true)
+
+    # Register monomorphized USER generic ENUM types with substituted
+    # variant payloads, mirroring the struct arm above + Rust gg's
+    # `monomorphize_enum` (src/ir/lowering/generics/mod.rs:2422). Without this a
+    # mono'd `Wrapper[int]` falls through to a degenerate `struct { char __pad }`
+    # with no variants → the derived `hash` body's `case Value(a0): a0.hash(&h)`
+    # can't resolve `a0`'s payload type to int64_t → it dispatches the generic
+    # `T__hash` (undefined symbol → CC-fail). Registering the mono'd enum in
+    # `type_infos` (is_enum, subbed variant payloads), `enum_registry`, and
+    # `enum_variant_parent_idx` lets `lookup_ctor_field_type` /
+    # `match_enum_type` / `match_variant_index` resolve the bind as int64_t,
+    # so `.hash(&h)` lowers to the primitive `FxHasher__write_int`.
+    # USER enums ONLY — Option/Result are synthesized in lir_lower Pass 3 and
+    # are NOT in `enum_templates`, so this loop never touches the prelude path.
+    for meinst in generic_instances:
+        if enum_templates.contains(meinst.base_name):
+            EnumDef edef = enum_templates.get(meinst.base_name).unwrap()
+            setup_type_subs(&gmod, edef.type_params, meinst.type_args)
+            Vector[GirEnumVariantInfo] mono_variants = []
+            Vector[String] mono_variant_names = []
+            bool enum_has_resource = false
+            for evar in edef.variants:
+                Vector[GirFieldInfo] vfields = []
+                int vfi = 0
+                while vfi < evar.fields.len():
+                    SpannedType vft = evar.fields.get(vfi).unwrap()
+                    int vft_tid = map_ast_type(vft, &gmod)
+                    String vft_name = type_id_to_name(vft_tid, &gmod)
+                    vfields.push(GirFieldInfo("_" + int_to_str(vfi), vft_name.clone()))
+                    if is_resource_type_name(vft_name, &gmod):
+                        enum_has_resource = true
+                    vfi += 1
+                mono_variants.push(GirEnumVariantInfo(evar.name.clone(), vfields))
+                mono_variant_names.push(evar.name.clone())
+            clear_type_subs(&gmod)
+            if not gmod.type_infos.contains(meinst.mangled_name):
+                Vector[GirFieldInfo] mono_enum_no_fields = []
+                gmod.type_infos.put(meinst.mangled_name.clone(), GirTypeInfo(meinst.mangled_name.clone(), mono_enum_no_fields, mono_variants, true))
+            if not gmod.enum_registry.contains(meinst.mangled_name):
+                gmod.enum_registry.put(meinst.mangled_name.clone(), mono_variant_names.clone())
+            for mevn in mono_variant_names:
+                if not gmod.enum_variant_parent_idx.contains(mevn):
+                    gmod.enum_variant_parent_idx.put(mevn.clone(), meinst.mangled_name.clone())
+            if enum_has_resource:
+                gmod.resource_types.put(meinst.mangled_name.clone(), true)
 
     # Snag #11 / Root #1: a registered (bodied) trait keeps its equip-symbol
     # prefix BARE (Rust's vtable route); an UNREGISTERED trait (From/operators)

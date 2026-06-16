@@ -4149,6 +4149,24 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                 bool variant_matches_result = (fname == "Ok" or fname == "Error") and et_is_result
                 if variant_matches_option or variant_matches_result:
                     ret_type = et
+        # USER generic-enum variant ctor expected-type adoption. A bare
+        # `Value(42)` / `Empty()` whose enclosing `expected_type` is a MONO'd
+        # user enum (`Wrapper__int64_t`, registered in type_infos with `fname`
+        # as a variant) adopts that mono type — so the ctor slot AND the LIR
+        # IEnumInit literal agree on `Wrapper__int64_t` (else the GIR slot routes
+        # via the template-keyed `enum_variant_parent` → `Wrapper` while the LIR
+        # init mints the mono layout → C type mismatch). Mirrors the prelude
+        # adoption above; gated on `expected_type` being a type_infos enum that
+        # actually OWNS this variant (typed membership, no name matching).
+        if ret_type == I64_TYPE and ctx.expected_type >= 0 and ctx.expected_type < gmod.type_table.len():
+            String et_name = type_id_to_name(ctx.expected_type, &gmod)
+            if gmod.type_infos.contains(et_name):
+                GirTypeInfo et_ti = gmod.type_infos.get(et_name).unwrap()
+                if et_ti.is_enum:
+                    for et_v in et_ti.variants:
+                        if et_v.name == fname:
+                            ret_type = ctx.expected_type
+                            break
         if ret_type == I64_TYPE and gmod.fn_sigs.contains(call_name):
             ret_type = gmod.fn_sigs.get(call_name).unwrap()
         # Also check call_redirects for the original name.
