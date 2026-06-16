@@ -1344,6 +1344,13 @@ String map_runtime_name(String name, LirModule &m, GirModule &gmod):
             if is_string_keyed(name, &m):
                 return ctor_fn + "_str"
             return ctor_fn
+        # `d.get_or(k, default)` → the generated `Dict__K__V__get_or(map, key,
+        # default)` inline wrapper (emitted by emit_dict_get_or_wrappers).
+        # There is no `gorget_map_get_or` runtime symbol — keep the mangled
+        # name unmapped so it dispatches to the wrapper. Mirrors the Box
+        # get/set inline-wrapper routing above.
+        if method == "get_or":
+            return name
         return map_dict_method(method)
     if coll_cat == "GorgetSet":
         String method = extract_method_name(name)

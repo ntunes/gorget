@@ -888,6 +888,81 @@ String box_alloc_c_type(String suffix):
     # Struct name — reference as typedef
     return "__gg_" + suffix
 
+# Emit the inline `Dict__<K>__<V>__get_or(map, key, default)` wrapper functions
+# for every `d.get_or(k, default)` call site. Mirrors Rust gg's
+# `try_emit_dict_get_or` (src/lir/lower/insts.rs:2793): `gorget_map_get(&map,
+# &key)` then a null-check — on a hit return the slot value (`*(V*)p`), on a
+# miss return `default`. String-typed values are independently owned via
+# `gorget_string_clone_to_owned` (the raw slot is a shallow alias of the map's
+# storage). There is no `gorget_map_get_or` runtime symbol — like the Box
+# get/set wrappers, these are the generated dispatch target the LIR map-method
+# routing returns by name. `map`/`key`/`default` arrive by value (the call ABI
+# passes the GorgetMap struct + scalar key + scalar/Str default), so `&map` and
+# `&key` reach valid addresses for the runtime `const void*` ABI.
+String emit_dict_get_or_wrappers(LirModule &m):
+    Vector[String] seen = []
+    String out = ""
+    int fi = 0
+    while fi < m.functions.len():
+        int bi = 0
+        while bi < m.functions.get(fi).unwrap().blocks.len():
+            int ii = 0
+            while ii < m.functions.get(fi).unwrap().blocks.get(bi).unwrap().insts.len():
+                String inst_name = ""
+                match m.functions.get(fi).unwrap().blocks.get(bi).unwrap().insts.get(ii).unwrap():
+                    case ICallExtern(_, name, _, _, _):
+                        inst_name = name
+                    case ICall(_, fid, _):
+                        if fid >= 0 and fid < m.functions.len():
+                            inst_name = m.functions.get(fid).unwrap().name
+                    else:
+                        pass
+                String body = dict_get_or_wrapper_for(inst_name, &seen)
+                if body != "":
+                    out = out + body
+                ii += 1
+            bi += 1
+        fi += 1
+    if out != "":
+        out = out + "\n"
+    return out
+
+# Emit one `Dict__K__V__get_or` / `HashMap__K__V__get_or` wrapper for the given
+# call name, or "" if the name isn't a get_or call (or already emitted). The
+# `__get_or` suffix is split off; the remaining `<K>__<V>` is split at the FIRST
+# `__` (simple K/V type names never nest `__`, matching Rust's `find("__")`).
+String dict_get_or_wrapper_for(String inst_name, Vector[String] &seen):
+    String base = ""
+    if inst_name.starts_with("Dict__") and inst_name.ends_with("__get_or"):
+        base = inst_name.slice(6, inst_name.len() - 8)
+    elif inst_name.starts_with("HashMap__") and inst_name.ends_with("__get_or"):
+        base = inst_name.slice(9, inst_name.len() - 8)
+    else:
+        return ""
+    # Split base into K__V at the first `__`.
+    int sep = base.index_of("__").unwrap_or(-1)
+    if sep < 0:
+        return ""
+    String key_c = base.slice(0, sep)
+    String val_c = base.slice(sep + 2, base.len())
+    # Dedup by the full mangled name (Dict and HashMap of the same K/V share a body).
+    int si = 0
+    while si < seen.len():
+        if seen.get(si).unwrap() == inst_name:
+            return ""
+        si += 1
+    seen.push(inst_name.clone())
+    String kty = box_alloc_c_type(key_c)
+    String vty = box_alloc_c_type(val_c)
+    bool val_is_str = val_c == "GorgetString" or val_c == "Str"
+    String hit = ""
+    if val_is_str:
+        hit = "gorget_string_clone_to_owned(__p)"
+    else:
+        hit = "*(" + vty + "*)__p"
+    String out = "static inline " + vty + " " + inst_name + "(GorgetMap __m, " + kty + " __k, " + vty + " __d) { void* __p = (void*)gorget_map_get(&__m, &__k); if (__p == NULL) return __d; return " + hit + "; }\n"
+    return out
+
 # ── Globals ────────────────────────────────────────────────
 
 String emit_globals(LirModule &m, Vector[String] &sn):
@@ -6822,6 +6897,8 @@ String generate_c(LirModule &m):
     out = out + emit_box_allocators_from_lir(&m)
     # `b.get()`/`b.set(v)` inline wrappers (no `gorget_box_get` runtime symbol).
     out = out + emit_box_method_wrappers(&m)
+    # `d.get_or(k, default)` inline wrappers (no `gorget_map_get_or` runtime symbol).
+    out = out + emit_dict_get_or_wrappers(&m)
 
     out = out + body
     return out

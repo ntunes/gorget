@@ -917,9 +917,22 @@ fn snag11_equip_symbol_mangle_site_count() {
 /// goes through `resource_meta_for`/`type_runtime_map` upstream. (The sibling
 /// `concurrency_elem_size_in_mod` size-extractor uses a VARIABLE prefix loop,
 /// not a literal `starts_with`, so it is correctly not counted here.)
+/// ⚠ TEMPORARY 74 → 76 (2026-06-16, owner-approved): the Dict `get_or`
+/// inline-wrapper generator (`lir_codegen.gg`'s `dict_get_or_wrapper_for`)
+/// added TWO literal `inst_name.starts_with("Dict__"/"HashMap__")` sites
+/// (mirroring the Box get/set wrapper sibling). Unlike the bumps above this is
+/// NOT a blessed permanent emit-boundary floor — it is a WRONG-LAYER read-site:
+/// the "this call is a Dict/HashMap get_or" fact is ALREADY TYPED upstream at
+/// the `collection_kind_of → CkDict/CkHashMap` classification in `lower_expr.gg`
+/// (where the `.get_or()` call is lowered). The proper fix sets typed metadata
+/// upstream — a monomorphization-request registry populated at that classified
+/// site and consumed at codegen — so the generator never re-derives meaning from
+/// the symbol name. COMMITTED burn-down follow-up: TODO "typed get_or wrapper
+/// registry" (retires this +2 back to 74, generalizes to the Box/sort siblings).
 #[test]
 fn no_growth_in_self_host_name_prefix_routing() {
-    const BUDGET: usize = 74;
+    // ⚠ TEMPORARY 76 (was 74) — see the doc comment's burn-down follow-up.
+    const BUDGET: usize = 76;
 
     // Phase-A classification-routing class only: all MANGLED_PREFIXES EXCEPT
     // the prelude option-like ones (those are the sibling lint's burn-down).

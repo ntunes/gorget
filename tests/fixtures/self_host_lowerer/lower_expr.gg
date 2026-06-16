@@ -25,7 +25,7 @@ from compiler.data.resources import STRING_BUILTIN_METHODS, COLLECTION_BUILTIN_M
 from compiler.data.schema import BuiltinMethodDecl, BuiltinMethodEntry
 from compiler.data.schema import BuiltinRetKind, BrkString, BrkInfer
 from lir_lower import resource_meta_for
-from lower_loops import lower_for_string, lower_for_range, lower_for_vector
+from lower_loops import lower_for_string, lower_for_range, lower_for_vector, lower_for_dict, parse_dict_kv_types
 from lower import LowerCtx, ResultPayloadTypes, DictKvNames, ClosureSig, CaptureCollector, FieldBorrowPair, SVarDeclEmission
 from lower import lower_fail, diag_bug, diag_warn, emit, new_block, switch_to, set_terminator
 from lower import add_local, add_local_with, add_local_inheriting, nl_get, nl_put, nl_contains
@@ -37,6 +37,34 @@ from lower import LazyMember, cow_lazy_materialize_family, call_arg_lets_callee_
 from lower_drops import init_drop_elab, push_drop_scope, emit_scope_drops, pop_drop_scope, pop_drop_scope_no_emit, is_droppable_type, register_local_for_drop, register_lazy_slot_for_drop, register_owning_param, mark_local_moved, restore_moved, union_moved, emit_drops_for_early_exit, flush_drop_queue
 from lower_liveness import LivenessAnalysis, compute_liveness, wire_liveness_into_modes, liveness_instrumentation_diff, update_last_pos_for_inst, update_last_pos_for_term, note_operand_pos, empty_liveness
 from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, is_comparison, map_cmpop, eval_const_int_expr
+
+# ── Displayable dispatch for `print(x)` / f-string `{x}` ─────────────
+#
+# Return the `display` method symbol to call for a value of type `tid`
+# if its type derives / equips Displayable, else "". Mirrors the
+# Displayable branch of Rust gg's `format_for_printf`
+# (src/ir/lowering/exprs/calls.rs:1964-1996): a `Named(T)` type with a
+# `T__display` entry in `fn_sigs` (either the short `Type__display` key
+# or the trait-qualified `Displayable_for_Type__display` key, both
+# registered at lower.gg:~2990 / :~3008) → call it and format the
+# returned String with %.*s. TYPED gate (core-invariant #2): the check
+# is a `fn_sigs` Dict lookup of the actually-emitted symbol, NOT a
+# name-shape test on the type.
+String fstr_displayable_display_method(int tid, GirModule &gmod):
+    # Only user struct/enum types (Named) have a display method; the
+    # primitive ids (bool/int/double) and pointer wrappers never do.
+    # type_id_to_name unwraps GtPtr/GtMutPtr to the pointee name, but a
+    # Displayable value local is a bare value (the Ptr cases are handled
+    # by the borrowed-String deref above), so the bare-name lookup is
+    # the right one here.
+    String tyname = type_id_to_name(tid, &gmod)
+    String short_key = tyname + "__display"
+    if gmod.fn_sigs.contains(short_key):
+        return short_key
+    String trait_key = "Displayable_for_" + tyname + "__display"
+    if gmod.fn_sigs.contains(trait_key):
+        return trait_key
+    return ""
 
 # ── Block-as-expression / tail-value lowering ───────────
 #
@@ -359,6 +387,37 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             register_local_for_drop(&ctx, bstr, gs_tid, &gmod)
                             fmt = fmt + "%.*s"
                             gsf_args.push(op_consume(&ctx, &gmod, bstr, CkFormatArg()))
+                        elif fstr_displayable_display_method(aty, &gmod) != "":
+                            # Displayable dispatch: `{x}` where x is a struct/enum
+                            # with a `display` method (user `equip … with
+                            # Displayable` or `@derive(Displayable)`) → call
+                            # `Type__display(&x)` → String, then %.*s. Without
+                            # this the value falls to the `%lld` int default
+                            # below, printing the struct/enum's raw bits (a
+                            # pointer or 0) instead of the formatted text.
+                            # Mirrors Rust gg's format_for_printf Displayable
+                            # branch (src/ir/lowering/exprs/calls.rs:1964-1996).
+                            # TYPED gate: the method's presence in `fn_sigs`
+                            # (a Dict lookup of the actually-emitted symbol),
+                            # not a name-shape test.
+                            String disp_fn = fstr_displayable_display_method(aty, &gmod)
+                            int disp_dst = add_local(&ctx, gs_tid, None)
+                            # `display(self)` takes `&self` (a borrow) — pass
+                            # the value local by OpBorrow, exactly as the
+                            # explicit `.display()` method-call path does.
+                            emit(&ctx, GICallExtern(disp_dst, disp_fn, [OpBorrow(aloc)]))
+                            # FRESH-OWNED-TEMP drop registration (#7-style):
+                            # `display` returns an OWNED GorgetString (return
+                            # position = ownership boundary) that is only
+                            # BORROWED by the surrounding gorget_string_format
+                            # (CkFormatArg → OpBorrow), so it is orphaned and
+                            # would leak. A literal-returning display body is a
+                            # cap=0 view whose free no-ops, so the registration
+                            # is safe on views too. Mirrors Rust
+                            # `ctx.drops.register_local(result, …)` (calls.rs:1990).
+                            register_local_for_drop(&ctx, disp_dst, gs_tid, &gmod)
+                            fmt = fmt + "%.*s"
+                            gsf_args.push(op_consume(&ctx, &gmod, disp_dst, CkFormatArg()))
                         else:
                             # Default: int64_t printf via %lld. Narrow ints
                             # are auto-promoted by C's variadic ABI to
@@ -1460,6 +1519,24 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # Build the mangled method name once — used both for the
             # receiver dispatch and the per-arg classify_call_arg.
             String recv_type_name = local_type_name(recv, &ctx, &gmod)
+            # ── `.mod(divisor)` → Euclidean modulo (GIBinOp OP_MOD) ──────
+            # `(-7).mod(3)` / `(-7.0).mod(3.0)` has no userland
+            # `int64_t__mod` / `double__mod` body — Rust gg lowers it
+            # directly to an inline `BinOp::Mod` of (receiver, divisor)
+            # (src/ir/lowering/exprs/methods.rs:502). Mirror that here: the
+            # result type follows the receiver's local type (int → integer
+            # Euclidean `%`, float → fmod-based), which the downstream
+            # IMod codegen (lir_codegen.gg:3577) branches on. Without this
+            # the method falls through to `recv_type_name + "__" + mname`
+            # and emits a call to the nonexistent `int64_t__mod` → link
+            # error. Fires for the numeric `mod` method (the built-in `Mod`
+            # trait's dispatch key), unconditional like the Rust reference.
+            if mname == "mod" and margs.len() == 1:
+                int _mod_op_ty = ctx.locals.get(recv).unwrap().type_id
+                int _mod_div = lower_expr(&ctx, margs.get(0).unwrap(), &gmod)
+                int _mod_dst = add_local(&ctx, _mod_op_ty, None)
+                emit(&ctx, GIBinOp(_mod_dst, OP_MOD, _mod_op_ty, op_consume(&ctx, &gmod, recv, CkBinOpArg()), op_consume(&ctx, &gmod, _mod_div, CkBinOpArg())))
+                return _mod_dst
             # ── Primitive `.hash(&h)` → direct Hasher write ──────────────
             # `x.hash(&h)` on a scalar / bool / String / byte / char receiver
             # has no userland `int64_t__hash` body — Rust gg lowers it
@@ -1528,6 +1605,22 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 int hof_result = try_lower_vector_hof(&ctx, recv, recv_type_name, mname, margs, sexpr, &gmod)
                 if hof_result >= 0:
                     return hof_result
+            # ── Dict/HashMap higher-order-function inline-loop intercept ──
+            # `d.fold(init, (acc, k, v): body)` has no userland
+            # `Dict__K__V__fold` body and no `gorget_*` runtime symbol — Rust
+            # gg desugars it inline at LIR (`try_emit_dict_hof`, HofOp::DictFold,
+            # src/lir/lower/insts.rs:2436). Mirror that in the self-host by
+            # synthesizing `acc = init; for k, v in d: acc = body`, reusing the
+            # run-proven `lower_for_dict` k/v-iteration machinery (the same
+            # philosophy as the Vector HOF intercept above and `lower_vector_fold`).
+            # Gated on the TYPED receiver kind (collection_kind_of → CkDict, no
+            # name matching). Returns -1 (fall through to the normal extern
+            # dispatch) when the method isn't a Dict HOF or the closure arg isn't
+            # an inlinable explicit non-capturing form.
+            if collection_kind_eq(collection_kind_of(&gmod, recv_type_name), CkDict()):
+                int dhof_result = try_lower_dict_hof(&ctx, recv, recv_type_name, mname, margs, sexpr, &gmod)
+                if dhof_result >= 0:
+                    return dhof_result
             String full_name = recv_type_name + "__" + mname
             # PROTO phase-1b: method-level-generic call — append the
             # mangled method-targs so the call dispatches to the
@@ -3126,6 +3219,67 @@ int lower_vector_any_all(LowerCtx &ctx, int recv, String recv_type_name, String 
     lower_for_vector(&ctx, var_pat, recv, recv_type_name, false, body, &gmod, false)
     return acc
 
+# ── Dict/HashMap HOF inline-loop intercept ───────────────────
+# `d.fold(init, (acc, k, v): body)` desugars to an accumulator threaded
+# through a `for k, v in d:` loop, reusing `lower_for_dict` (which binds
+# OWNED k/v copies + handles the slot-state filter and per-iteration drop).
+# Mirrors Rust gg's `try_emit_dict_hof` (HofOp::DictFold, src/lir/lower/
+# insts.rs:2436) at a higher level — the SAME AST-rewrite strategy the
+# Vector HOF intercept uses (`try_lower_vector_hof` / `lower_vector_fold`).
+# Returns -1 (fall through to the normal extern dispatch) when the method
+# isn't an inlinable Dict HOF or the closure arg isn't an explicit
+# non-capturing form.
+int try_lower_dict_hof(LowerCtx &ctx, int recv, String recv_type_name, String mname, Vector[SpannedExpr] margs, SpannedExpr sexpr, GirModule &gmod):
+    Span span = sexpr.span
+    # ── fold: seeded accumulator threaded through `(acc, k, v)` ──
+    if mname == "fold":
+        if margs.len() != 2:
+            return -1
+        Vector[String] cparams = []
+        SpannedExpr cbody = sexpr
+        if not closure_extract(margs.get(1).unwrap(), &cparams, &cbody):
+            return -1
+        if cparams.len() != 3:
+            return -1
+        String acc_param = cparams.get(0).unwrap()
+        String key_param = cparams.get(1).unwrap()
+        String val_param = cparams.get(2).unwrap()
+        return lower_dict_fold(&ctx, recv, recv_type_name, margs.get(0).unwrap(), acc_param, key_param, val_param, cbody, span, &gmod)
+    return -1
+
+# `d.fold(init, (acc, k, v): body)` →
+#   acc = init
+#   for k, v in d: acc = body
+# The accumulator is a scalar/resource local seeded with the lowered `init`
+# (via the consume machinery — clone/move-at-boundary, drop-registered when
+# droppable), bound under the closure's FIRST param name so the body
+# references it directly. The closure's 2nd/3rd params carry the iteration
+# key/value names — fed to `lower_for_dict` as a 2-tuple binding pattern.
+# Exact mirror of `lower_vector_fold` on the Dict k/v axis.
+int lower_dict_fold(LowerCtx &ctx, int recv, String recv_type_name, SpannedExpr init_expr, String acc_param, String key_param, String val_param, SpannedExpr cbody, Span span, GirModule &gmod):
+    # Seed the accumulator with the lowered init value. The accumulator type
+    # follows the init's type (fold's result type = the acc type). CkAssign
+    # byte-copies a scalar init and move/clones a resource init (a raw OpCopy
+    # of a resource init would trip validate_resource_moves) — same seed shape
+    # as lower_vector_fold.
+    int init_local = lower_expr(&ctx, init_expr, &gmod)
+    int acc_tid = ctx.locals.get(init_local).unwrap().type_id
+    int acc = add_local(&ctx, acc_tid, None)
+    emit(&ctx, GIAssign(acc, op_consume(&ctx, &gmod, init_local, CkAssign())))
+    if is_droppable_type(acc_tid, &gmod):
+        register_local_for_drop(&ctx, acc, acc_tid, &gmod)
+    nl_put(&ctx, acc_param, acc)
+    # Body: `acc = <closure body>`. The (k, v) tuple binding makes the closure's
+    # key/value params available; lower_for_dict binds them as OWNED locals.
+    SpannedExpr acc_lhs = SpannedExpr(EIdentifier(acc_param), span)
+    Vector[Stmt] body = [SAssign(acc_lhs, cbody.clone())]
+    SpannedPattern k_pat = SpannedPattern(PBinding(key_param), span)
+    SpannedPattern v_pat = SpannedPattern(PBinding(val_param), span)
+    Vector[SpannedPattern] kv_parts = [k_pat, v_pat]
+    SpannedPattern kv_pat = SpannedPattern(PTuple(kv_parts), span)
+    lower_for_dict(&ctx, kv_pat, recv, recv_type_name, body, &gmod, false)
+    return acc
+
 # ── List comprehension lowering ──────────────────────────
 # `[comp_expr for var in iterable if filter]` → a loop that builds an
 # array accumulator. Mirrors Rust `lower_list_comprehension`
@@ -3549,6 +3703,27 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                 # consume ⇒ never moved ⇒ no double-free.
                 register_local_for_drop(&ctx, bdst, gs_tid, &gmod)
                 val = bdst
+                val_type = gs_tid
+                fmt = "%.*s\n"
+            elif fstr_displayable_display_method(val_type, &gmod) != "":
+                # Displayable dispatch: `print(x)` where x is a struct/enum
+                # with a `display` method → call `Type__display(&x)` → String,
+                # then route through the `%.*s\n` String branch below. Without
+                # this `print(p)` falls to the `%lld\n` default and prints the
+                # struct/enum's raw bits (pointer / 0) instead of the formatted
+                # text. Mirrors Rust gg's format_for_printf Displayable branch
+                # (src/ir/lowering/exprs/calls.rs:1964-1996); sibling of the
+                # EFString-arg Displayable branch above. TYPED gate: the
+                # method's presence in `fn_sigs`, not a name-shape test.
+                String pdisp_fn = fstr_displayable_display_method(val_type, &gmod)
+                int pdisp_dst = add_local(&ctx, gs_tid, None)
+                emit(&ctx, GICallExtern(pdisp_dst, pdisp_fn, [OpBorrow(val)]))
+                # FRESH-OWNED-TEMP drop registration (#7-style): `display`
+                # returns an OWNED GorgetString that is only BORROWED by the
+                # printf below, so register at creation. A literal-returning
+                # display body is a cap=0 view whose free no-ops.
+                register_local_for_drop(&ctx, pdisp_dst, gs_tid, &gmod)
+                val = pdisp_dst
                 val_type = gs_tid
                 fmt = "%.*s\n"
             if val_type == gs_tid:

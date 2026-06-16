@@ -1933,6 +1933,47 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
         int opt_pop_tid = lookup_or_register_named(&gmod, opt_name)
         record_enum_category(&gmod, opt_pop_tid, ENUM_CAT_OPTION, resolve_field_gir_type(elem_norm, &gmod), -1)
         return opt_pop_tid
+    # `Dict[K,V].get_or(k, default)` → V (the OWNED value type). Unlike the
+    # borrowing `.get()` above (which returns Option[Ref[V]]), get_or yields a
+    # bare owned V — the inline `Dict__K__V__get_or` wrapper clones String
+    # values / copies scalars. Without this arm the call falls through to the
+    # I64 default, so a String-valued get_or assigns a `Str` into an `int64_t`
+    # slot (cc type error). Mirrors the `.get()` Dict V-suffix extraction.
+    if method == "get_or":
+        String gor_recv_name = ""
+        if recv >= 0 and recv < ctx.locals.len():
+            int gor_recv_tid = ctx.locals.get(recv).unwrap().type_id
+            if gor_recv_tid >= 0 and gor_recv_tid < gmod.type_table.len():
+                GirType gor_gt0 = gmod.type_table.get(gor_recv_tid).unwrap()
+                match gor_gt0:
+                    case GtPtr(gor_inner):
+                        gor_recv_tid = gor_inner
+                    case GtMutPtr(gor_inner2):
+                        gor_recv_tid = gor_inner2
+                    else:
+                        pass
+            if gor_recv_tid >= 0 and gor_recv_tid < gmod.type_table.len():
+                GirType gor_gt = gmod.type_table.get(gor_recv_tid).unwrap()
+                match gor_gt:
+                    case GtNamed(gor_name):
+                        gor_recv_name = gor_name
+                    else:
+                        pass
+        String gor_elem = ""
+        if gor_recv_name.starts_with("Dict__GorgetString__"):
+            gor_elem = gor_recv_name.slice(20, gor_recv_name.len())
+        elif gor_recv_name.starts_with("Dict__int64_t__"):
+            gor_elem = gor_recv_name.slice(15, gor_recv_name.len())
+        elif gor_recv_name.starts_with("HashMap__GorgetString__"):
+            gor_elem = gor_recv_name.slice(23, gor_recv_name.len())
+        elif gor_recv_name.starts_with("HashMap__int64_t__"):
+            gor_elem = gor_recv_name.slice(18, gor_recv_name.len())
+        if gor_elem != "":
+            String gor_elem_norm = gor_elem
+            if gor_elem == "Str":
+                gor_elem_norm = "GorgetString"
+            return resolve_field_gir_type(gor_elem_norm, &gmod)
+        return I64_TYPE
     # clone: return receiver type
     if method == "clone":
         if recv >= 0 and recv < ctx.locals.len():

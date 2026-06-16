@@ -570,6 +570,21 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                                         return types.add_type(RTGeneric(option_def, opt_args))
                         else:
                             pass
+            # .get_or(k, default) on Dict[K,V] → V (the OWNED value type, not a
+            # Ref — the inline wrapper clones String values / copies scalars).
+            # Without this arm the result slot defaults to I64 and a String-valued
+            # get_or assigns a `Str` into an `int64_t` slot (cc type error).
+            if method_name == "get_or":
+                int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, &ctx)
+                if obj_type >= 0 and obj_type < types.types.len():
+                    ResolvedType ort = get_rtype_at(types.types, obj_type)
+                    match ort:
+                        case RTGeneric(def_id, type_args):
+                            DefInfo d = scopes.get_def(def_id)
+                            if (d.name == "Dict" or d.name == "HashMap") and type_args.len() >= 2:
+                                return get_int_at(type_args, 1)
+                        else:
+                            pass
             # .keys() / .values() on Dict[K,V] → Vector[K] / Vector[V]
             if method_name == "keys":
                 int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, &ctx)
