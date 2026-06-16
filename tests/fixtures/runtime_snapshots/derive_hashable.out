@@ -1,0 +1,6 @@
+int hash consistent
+str hash nonzero
+same fields same hash
+diff fields diff hash
+red != green
+red != blue

@@ -319,25 +319,15 @@ String gen_struct_cloneable(String name, String gs, String gp, Vector[Param] fie
     src = src + "        return " + name + gs + "(" + args + ")\n"
     return src
 
-# Emit the per-field Hashable body line. For primitive field types we
-# specialise to a direct `h.write_X(self.field)` — the generic
-# `self.field.hash(&h)` form lowers to `int64_t__hash` (or
-# `bool__hash` etc.) which has no runtime symbol; the resulting C link-
-# fails. Mirrors Rust's primitive-aware derive.
+# Emit the per-field Hashable body line. Uniform `self.field.hash(&h)`
+# for EVERY field — matches Rust's derive.rs:407 (`self.{name}.hash(&h)`).
+# The call-site primitive-`.hash` special case in lower_expr.gg lowers a
+# `.hash(&h)` on a primitive receiver (int/String/bool/byte/char) directly
+# to the matching `FxHasher__write_int/write_string`, resolving the hasher
+# type from the `&h` arg (defaulting to FxHasher when `H` is the unbound
+# method generic of the derived `hash[Hasher H]`). Non-primitive fields
+# route through the field type's own Hashable impl, same as before.
 String hashable_field_line(String access, String ftype):
-    if ftype == "int" or ftype == "int64_t" or ftype == "int32_t" or ftype == "int16_t" or ftype == "int8_t":
-        return "        h.write_int(" + access + ")\n"
-    if ftype == "uint64_t" or ftype == "uint32_t" or ftype == "uint16_t" or ftype == "uint8_t":
-        return "        h.write_int(" + access + " as int)\n"
-    if ftype == "byte":
-        return "        h.write_int(" + access + " as int)\n"
-    if ftype == "bool":
-        return "        h.write_int(" + access + " as int)\n"
-    if ftype == "String":
-        return "        h.write_string(" + access + ")\n"
-    if ftype == "char":
-        return "        h.write_int(" + access + " as int)\n"
-    # Non-primitive: route through the type's own Hashable impl.
     return "        " + access + ".hash(&h)\n"
 
 String gen_struct_hashable(String name, String gs, String gp, Vector[Param] fields):

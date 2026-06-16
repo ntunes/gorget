@@ -1460,6 +1460,58 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # Build the mangled method name once — used both for the
             # receiver dispatch and the per-arg classify_call_arg.
             String recv_type_name = local_type_name(recv, &ctx, &gmod)
+            # ── Primitive `.hash(&h)` → direct Hasher write ──────────────
+            # `x.hash(&h)` on a scalar / bool / String / byte / char receiver
+            # has no userland `int64_t__hash` body — Rust gg lowers it
+            # directly to the matching `FxHasher.write_*` (src/ir/lowering/
+            # exprs/methods.rs:489). The hasher type is read from the `&h`
+            # arg's local type; when the enclosing fn is the derived
+            # `hash[Hasher H]` template, `h` is typed `H` (no `H__write_int`
+            # in fn_sigs) so we fall back to the default `FxHasher`. This is
+            # the SAME mechanism for the derived-struct/enum field hashes
+            # (`self.field.hash(&h)`) AND `hash_of[primitive]`'s
+            # `v.hash[FxHasher](&h)`. Typed: receiver kind from
+            # `recv_type_name`, hasher fn resolved via `fn_sigs` membership
+            # (no name-prefix test on the symbol decides meaning).
+            if mname == "hash" and margs.len() == 1:
+                bool _rh_is_int = recv_type_name == "int" or recv_type_name == "int64_t" or recv_type_name == "int32_t" or recv_type_name == "int16_t" or recv_type_name == "int8_t"
+                bool _rh_is_uint = recv_type_name == "uint64_t" or recv_type_name == "uint32_t" or recv_type_name == "uint16_t" or recv_type_name == "uint8_t" or recv_type_name == "byte"
+                bool _rh_is_str = recv_type_name == "String" or recv_type_name == "GorgetString" or recv_type_name == "Str"
+                bool _rh_is_other_prim = recv_type_name == "bool" or recv_type_name == "char"
+                if _rh_is_int or _rh_is_uint or _rh_is_str or _rh_is_other_prim:
+                    # Lower the hasher arg (`&h`) as a PLACE (the pointer),
+                    # not a value read. A bare `lower_expr` on the `&`-param
+                    # `h` (a `GtMutPtr(FxHasher)` slot) deref-loads a VALUE
+                    # COPY (the EIdentifier `&`/`!`-param value-read at :415),
+                    # so each field write would mutate a discarded copy and
+                    # the hasher state never accumulates. `lower_place_base`
+                    # on the borrow's inner returns the pointer slot directly
+                    # (same reason the receiver dispatch uses it at :1113).
+                    SpannedExpr _rh_arg_expr = margs.get(0).unwrap()
+                    SpannedExpr _rh_place_expr = _rh_arg_expr
+                    match _rh_arg_expr.expr:
+                        case EMutableBorrow(_rh_inner):
+                            _rh_place_expr = *_rh_inner
+                        else:
+                            pass
+                    int _rh_arg = lower_place_base(&ctx, _rh_place_expr, &gmod)
+                    String _rh_hasher = local_type_name(_rh_arg, &ctx, &gmod)
+                    # The inherent `H__write_int` is what primitive lowerings
+                    # call; fall back to FxHasher when the resolved hasher
+                    # name has no inherent write fn (unbound generic `H`).
+                    String _rh_wi = _rh_hasher + "__write_int"
+                    String _rh_ws = _rh_hasher + "__write_string"
+                    if not gmod.fn_sigs.contains(_rh_wi):
+                        _rh_wi = "FxHasher__write_int"
+                    if not gmod.fn_sigs.contains(_rh_ws):
+                        _rh_ws = "FxHasher__write_string"
+                    if _rh_is_str:
+                        emit(&ctx, GICallExtern(-1, _rh_ws, [OpBorrow(_rh_arg), op_consume(&ctx, &gmod, recv, CkCallArgBorrow())]))
+                    else:
+                        emit(&ctx, GICallExtern(-1, _rh_wi, [OpBorrow(_rh_arg), op_consume(&ctx, &gmod, recv, CkCallArgBorrow())]))
+                    int _rh_unit = add_local(&ctx, UNIT_TYPE, None)
+                    emit(&ctx, GIAssign(_rh_unit, OpConstUnit()))
+                    return _rh_unit
             # ── Vector higher-order-function (HOF) inline-loop intercept ──
             # `v.map/filter/fold/reduce/any/all((closure))` has no userland
             # `Vector__T__method` body — Rust gg desugars these to inline
