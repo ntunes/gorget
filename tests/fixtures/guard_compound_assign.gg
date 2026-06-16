@@ -1,0 +1,24 @@
+from std.sync import RWLock
+
+struct Point:
+    int x
+    int y
+
+struct Config:
+    int port
+
+void main():
+    # Compound-assign THROUGH a Mutex Guard: read-modify-write the inner value.
+    Mutex[Point] m = Mutex[Point](Point(10, 20))
+    Guard[Point] g = m.lock()
+    print(g.x)
+    g.x += 5
+    print(g.x)
+    g.y -= 3
+    print(g.y)
+
+    # Compound-assign THROUGH a RWLock WriteGuard.
+    RWLock[Config] lock = RWLock[Config](Config(8080))
+    WriteGuard[Config] wg = lock.write()
+    wg.port += 10
+    print(wg.port)

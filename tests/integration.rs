@@ -11939,6 +11939,11 @@ fn guard_rwlock_field() {
 }
 
 #[test]
+fn guard_compound_assign() {
+    run_gg("guard_compound_assign.gg", "10\n15\n17\n8090");
+}
+
+#[test]
 fn mutex_async_contention() {
     run_gg("mutex_async_contention.gg", "400");
 }

@@ -2459,6 +2459,55 @@ pub(super) fn try_resolve_field_place(
                 }
             }
 
+            // Guard[T] auto-deref for writes: guard.field → (*get_ptr(&guard)).field.
+            // The guard wraps a pointer to the guarded value; field access goes
+            // THROUGH the inner pointer (docs/devbook/11-copy-on-write.md, Guard
+            // single-owner carve-out). Centralized here so EVERY field-place
+            // consumer — plain assign (lower_assign:613), compound assign
+            // (lower_compound_assign:1284), and index-base resolution — projects
+            // through the guard identically. Typed detection via guard_inner_suffix
+            // (reads the typed Guard__/ReadGuard__/WriteGuard__ wrapper name), not
+            // name-matching of meaning; the SAME emit_guard_get_ptr helper the
+            // read path (lower_field_access:2113) and the plain-assign fallback
+            // (lower_assign:666) use.
+            if let Some(guard_type_name) = ctx.type_name_for_id(current_type) {
+                let guard_type_name = guard_type_name.to_string();
+                if let Some((inner_suffix, is_read_only)) = guard_inner_suffix(&guard_type_name) {
+                    if is_read_only {
+                        // ReadGuard: writes are forbidden — don't resolve a write
+                        // place (type checker should reject in future). Returning
+                        // None matches the plain-assign guard arm's early-out.
+                        return None;
+                    }
+                    let (inner_ptr_local, inner_type) = emit_guard_get_ptr(
+                        ctx, builder, place, current_type, &guard_type_name, inner_suffix,
+                    );
+                    let deref_place = Place {
+                        local: inner_ptr_local,
+                        projections: vec![Projection::Deref],
+                    };
+                    if let Some(inner_type_name) = ctx.type_name_for_id(inner_type) {
+                        let inner_type_name = inner_type_name.to_string();
+                        if let Some((field_idx, field_type)) = ctx.lookup_field(&inner_type_name, field_name) {
+                            let mut target_place = deref_place;
+                            target_place.projections.push(Projection::Field(field_idx));
+                            return Some((target_place, field_type));
+                        }
+                        if let Some(type_def) = ctx.type_registry.get_type_def(&inner_type_name) {
+                            if let TypeDefKind::Struct(ref s) = type_def.kind {
+                                for (i, field) in s.fields.iter().enumerate() {
+                                    if field.name == field_name {
+                                        let mut target_place = deref_place;
+                                        target_place.projections.push(Projection::Field(i as u32));
+                                        return Some((target_place, field.type_id));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // If the resolved type is a pointer, dereference it
             let (effective_type_id, mut base_place) =
                 if let Some(pointee) = ctx.pointee_type(current_type) {
