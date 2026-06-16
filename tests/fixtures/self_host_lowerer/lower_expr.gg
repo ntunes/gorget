@@ -2672,10 +2672,20 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
         case ETry(inner_box):
             return lower_expr(&ctx, *inner_box, &gmod)
         case EDotShorthand(variant, sargs):
-            for da in sargs:
-                lower_expr(&ctx, da, &gmod)
-            int ddst = add_local(&ctx, I64_TYPE, None)
-            return ddst
+            # `.Variant` / `.Variant(args)` in value position. The variant name
+            # alone is the constructor; delegate to `lower_call`, which resolves
+            # the parent enum via the typed `enum_variant_parent` index and adopts
+            # `ctx.expected_type` for the dst slot, emitting a full-size enum
+            # aggregate `(Inst){.tag = N, ...}`. The prior stub lowered `sargs`
+            # for side-effects then returned a bare `add_local(I64_TYPE)` — it
+            # dropped the variant AND the expected-type, so every dot-shorthand
+            # collapsed to a zero-init tag-0 value. Mirrors Rust `EDotShorthand`
+            # lowering (exprs/mod.rs:1472-1503) and `lower_nullary_variant_ident`
+            # (lower_types.gg), which delegate the qualified `.Variant` ident form
+            # through the same typed path.
+            String ds_name = variant.clone()
+            Vector[SpannedType] ds_no_targs = []
+            return lower_call(&ctx, &ds_name, &sargs, &ds_no_targs, &gmod)
         case EBlock(block_stmts):
             # Block in value position — lower via `lower_block_expr` and return
             # its tail value (was dropping it into a fresh UNIT local). Mirrors
