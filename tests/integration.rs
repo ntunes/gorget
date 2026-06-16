@@ -2573,6 +2573,20 @@ red != blue",
 }
 
 #[test]
+fn derive_generic_struct() {
+    run_gg(
+        "derive_generic_struct.gg",
+        "\
+same value same hash
+diff value diff hash
+string box same hash
+string box nonzero
+pair same hash
+pair diff hash",
+    );
+}
+
+#[test]
 fn dict_user_key_hashable() {
     run_gg(
         "dict_user_key_hashable.gg",

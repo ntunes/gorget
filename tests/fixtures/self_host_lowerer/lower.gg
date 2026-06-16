@@ -3754,6 +3754,76 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                     gmod.fn_sigs.put(mm_pmi.mangled_symbol.clone(), mm_lf.return_type)
                     clear_type_subs(&gmod)
 
+    # R1(b): equip-OVERRIDDEN method-level-generic body emit for the mono'd-body
+    # discovered instances on GENERIC receivers (e.g. derived
+    # `equip [T] Wrapper[T] with Hashable: void hash[Hasher H]`, discovered from
+    # `hash_of[Wrapper[int]]`'s `v.hash[FxHasher]`). Unlike the `mm` loop above,
+    # the body lives in a GENERIC equip TEMPLATE (`equip_templates`, target args
+    # > 0), so it needs the equip-level `[T->int]` subs bound (recovered from
+    # `generic_instances`) on top of Self + method-level `[H->FxHasher]`. The
+    # `proto_minsts` trait-default loop below can't cover this: it's guarded by
+    # `not is_builtin_trait(...)`, and Hashable IS a builtin trait — plus the
+    # body is an OVERRIDE, not a trait-default. Mirrors Rust's
+    # `lower_method_instance` (equip-override arm) with equip + Self + trait-T +
+    # method-level subs merged.
+    for gm_pmi in mono_method_insts:
+        # The recv_instance is the mangled generic instance (`Wrapper__int64_t`);
+        # recover the equip base + SpannedType targs from generic_instances.
+        String gm_base = ""
+        Vector[SpannedType] gm_eq_targs = []
+        for gm_gi in generic_instances:
+            if gm_gi.mangled_name == gm_pmi.recv_instance:
+                gm_base = gm_gi.base_name
+                gm_eq_targs = gm_gi.type_args
+        # No generic-instance entry → this is the non-generic-receiver case
+        # already handled by the `mm` loop above; skip.
+        if gm_base.len() == 0:
+            continue
+        for gm_eqtmpl in equip_templates:
+            String gm_eqtarget = ""
+            match gm_eqtmpl.target.ty:
+                case TNamed(gmtn, _):
+                    gm_eqtarget = gmtn
+                else:
+                    pass
+            if gm_eqtarget != gm_base:
+                continue
+            match gm_eqtmpl.trait_name:
+                case Some(gm_tname):
+                    # Only emit when the method is OVERRIDDEN in the equip block
+                    # (the derived `hash` body lives here). Trait-DEFAULT bodies
+                    # are emitted by the `proto_minsts` loop below.
+                    for gm_em in gm_eqtmpl.methods:
+                        if gm_em.name == gm_pmi.method_name and gm_em.body.len() > 0 and gm_em.type_params.len() == proto_inst_targ_count(gm_pmi) and gm_em.type_params.len() > 0:
+                            Vector[String] gm_eqparams = extract_equip_type_params(gm_eqtmpl)
+                            setup_type_subs(&gmod, gm_eqparams, gm_eq_targs)
+                            int gm_self_tid = lookup_or_register_named(&gmod, gm_pmi.recv_instance)
+                            gmod.type_subs.put("Self", gm_self_tid)
+                            # Bind the trait's own generic params (T) to the trait args.
+                            if trait_defs.contains(gm_tname):
+                                TraitDef gm_tdef = trait_defs.get(gm_tname).unwrap()
+                                int gm_tpi = 0
+                                while gm_tpi < gm_tdef.type_params.len() and gm_tpi < gm_eqtmpl.trait_generic_args.len():
+                                    String gm_tp = gm_tdef.type_params.get(gm_tpi).unwrap()
+                                    SpannedType gm_ta = gm_eqtmpl.trait_generic_args.get(gm_tpi).unwrap()
+                                    int gm_ta_tid = map_ast_type(gm_ta, &gmod)
+                                    gmod.type_subs.put(gm_tp, gm_ta_tid)
+                                    gm_tpi += 1
+                            # Method-level subs ([H->FxHasher]).
+                            int gm_mpi = 0
+                            while gm_mpi < gm_em.type_params.len() and gm_mpi < proto_inst_targ_count(gm_pmi):
+                                int gm_mta_tid = proto_inst_targ_tid(gm_pmi, gm_mpi, &gmod)
+                                gmod.type_subs.put(gm_em.type_params.get(gm_mpi).unwrap(), gm_mta_tid)
+                                gm_mpi += 1
+                            gmod.functions.push(lower_function(gm_em, &gmod))
+                            int gm_li = gmod.functions.len() - 1
+                            GirFunction gm_lf = gmod.functions.get(gm_li).unwrap()
+                            gmod.functions.set(gm_li, GirFunction(gm_pmi.mangled_symbol, gm_lf.param_types, gm_lf.return_type, gm_lf.locals, gm_lf.blocks))
+                            gmod.fn_sigs.put(gm_pmi.mangled_symbol.clone(), gm_lf.return_type)
+                            clear_type_subs(&gmod)
+                case None:
+                    pass
+
     # PROTO phase-1b: per-call-site method-level-generic body emit.
     # Re-uses proto_minsts discovered in the pre-pass above; emits the
     # method-generic trait-default body with equip + Self + method-level

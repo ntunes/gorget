@@ -1,0 +1,39 @@
+from std.hash import hash_of
+
+@derive(Hashable)
+struct Box2[T]:
+    T value
+
+@derive(Hashable)
+struct Pair2[A, B]:
+    A first
+    B second
+
+void main():
+    # Same value, same hash (consistency over the monomorphized instance).
+    Box2[int] a = Box2[int](7)
+    Box2[int] b = Box2[int](7)
+    if hash_of[Box2[int]](a) == hash_of[Box2[int]](b):
+        print("same value same hash")
+
+    # Different value, different hash.
+    Box2[int] c = Box2[int](42)
+    if hash_of[Box2[int]](a) != hash_of[Box2[int]](c):
+        print("diff value diff hash")
+
+    # A second monomorphization of the SAME generic template (String arg).
+    Box2[String] s1 = Box2[String]("hi")
+    Box2[String] s2 = Box2[String]("hi")
+    if hash_of[Box2[String]](s1) == hash_of[Box2[String]](s2):
+        print("string box same hash")
+    if hash_of[Box2[String]](s1) != 0:
+        print("string box nonzero")
+
+    # A multi-param generic struct exercises the same emit path.
+    Pair2[int, int] p1 = Pair2[int, int](1, 2)
+    Pair2[int, int] p2 = Pair2[int, int](1, 2)
+    Pair2[int, int] p3 = Pair2[int, int](3, 4)
+    if hash_of[Pair2[int, int]](p1) == hash_of[Pair2[int, int]](p2):
+        print("pair same hash")
+    if hash_of[Pair2[int, int]](p1) != hash_of[Pair2[int, int]](p3):
+        print("pair diff hash")

@@ -955,6 +955,17 @@ void discover_mono_method_insts_expr(SpannedExpr sexpr, Dict[String, SpannedType
                                 case TNamed(cn, cargs):
                                     if cargs.len() == 0:
                                         recv_name = cn
+                                    else:
+                                        # Generic receiver (`Wrapper[int]`): the
+                                        # method instance lives on the MONO'd
+                                        # instance, so the recv_instance is the
+                                        # mangled name `Wrapper__int64_t`. Skip if
+                                        # any concrete arg is still a type variable
+                                        # (deferred to a later mono pass).
+                                        if not has_type_variable(cargs):
+                                            recv_name = cn
+                                            for ca in cargs:
+                                                recv_name = recv_name + "__" + type_to_c_name(ca, &gmod)
                                 else:
                                     pass
                             if recv_name.len() > 0:
