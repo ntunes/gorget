@@ -1,0 +1,7 @@
+Running 4 tests...
+  test: passes ... PASS (0ms)
+  test: skipped with reason ... SKIP (not implemented yet)
+  test: skipped without reason ... SKIP
+  test: also passes ... PASS (0ms)
+
+2 passed, 0 failed, 2 skipped (0ms)

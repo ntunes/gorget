@@ -1,0 +1,6 @@
+Running 3 tests...
+  test: addition works ... PASS (0ms)
+  test: string equality ... PASS (0ms)
+  test: boolean logic ... PASS (0ms)
+
+3 passed, 0 failed (0ms)

@@ -1939,6 +1939,50 @@ Operand decide_ptr_consume(GirModule &gmod, int src_lid, int inner_tid):
         else:
             return OpCopy(src_lid)
 
+# Lower a `suite setup` / `suite teardown` block body into a void GIR
+# function (`__suite_setup` / `__suite_teardown`). Mirrors the test-body
+# lowering path (the `ITest` case): same LowerCtx setup, function-scope drop
+# frame, CoW scan, statement lowering, and unit-return finalization. The
+# previous stub emitted an EMPTY body, so a `suite setup: print("SETUP")`
+# never ran. Mirrors Rust gg's suite-setup/teardown lowering
+# (`src/ir/lowering/mod.rs:3030`/`:3055`).
+GirFunction lower_suite_body(String fn_name, Vector[Stmt] body, GirModule &gmod):
+    Vector[int] _sb_lc_stk = []
+    Vector[int] _sb_lb_stk = []
+    Dict[String, int] _sb_named_locals = {}
+    Vector[DropScope] _sb_de_scopes = []
+    Vector[DropEmission] _sb_de_queue = []
+    Vector[Vector[Stmt]] _sb_on_err_blocks = []
+    Dict[String, bool] _sb_cow_mut = {}
+    Dict[String, int] _sb_cow_span = {}
+    Dict[String, bool] _sb_cow_clo = {}
+    LowerCtx sctx = LowerCtx([], [], [], 0, !_sb_named_locals, !_sb_lc_stk, !_sb_lb_stk, "", "", "", false, fn_name.clone(), DropElaborator(!_sb_de_scopes), !_sb_de_queue, -1, !_sb_on_err_blocks, false, !_sb_cow_mut, !_sb_cow_span, !_sb_cow_clo, {}, [], {})
+    Vector[Instruction] sinit = []
+    sctx.block_insts.push(!sinit)
+    sctx.block_terms.push(GTNone())
+    push_drop_scope(&sctx.drop_elab, DSK_FUNCTION)
+    add_local(&sctx, UNIT_TYPE, None)
+    Vector[Param] _sb_no_params = []
+    compute_cow_scan(&sctx, &gmod, _sb_no_params, body)
+    lower_stmts(&sctx, body, &gmod, false)
+    Terminator sterm = sctx.block_terms.get(sctx.current_block).unwrap()
+    match sterm:
+        case GTNone():
+            emit_drops_for_early_exit(&sctx, DSK_FUNCTION, Some(0))
+            set_terminator(&sctx, GTReturn(OpConstUnit()))
+        else:
+            pass
+    pop_drop_scope(&sctx)
+    Vector[BasicBlock] sblocks = []
+    int sbi = 0
+    while sbi < sctx.block_insts.len():
+        Vector[Instruction] sinsts = sctx.block_insts.get(sbi).unwrap()
+        Terminator st = sctx.block_terms.get(sbi).unwrap()
+        sblocks.push(BasicBlock(sinsts, st))
+        sbi += 1
+    Vector[int] sparams = []
+    return GirFunction(fn_name.clone(), !sparams, UNIT_TYPE, sctx.locals, !sblocks)
+
 # ── Module lowering ──────────────────────────────────────
 
 GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String, String] call_redirects, Dict[String, bool] imported_fns):
@@ -2338,7 +2382,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     Dict[String, GirStaticInfo] statics = {}
     Dict[String, ResourceMetadata] resource_metadata = {}
     Dict[int, int] option_ref_payload = {}
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, !const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types, !option_ref_payload, [], !enum_variant_parent_idx, false, [], {}, {}, {}, {}, {}, !fn_defaults, [])
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, !const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types, !option_ref_payload, [], !enum_variant_parent_idx, false, [], {}, {}, {}, {}, {}, !fn_defaults, [], [])
 
     # R11: extract the `strip-asserts` directive so the SAssert case in
     # lower_stmt can emit a no-op instead of a conditional panic. Mirrors
@@ -3284,11 +3328,28 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                 # Skip test blocks when main() exists (normal build mode).
                 # Emit __test_N for test-only files (no main).
                 if not has_main:
-                    # Check for @skip — parser sets "__skip__" sentinel in tags
+                    # Decode the test-attribute sentinels the parser threaded
+                    # through `tags` (`with_names`): "__skip__",
+                    # "__skip_reason__=<r>", "__should_panic__",
+                    # "__should_panic_msg__=<m>".
                     bool is_skipped = false
+                    String t_skip_reason = ""
+                    bool t_should_panic = false
+                    String t_panic_msg = ""
                     for tag_val in tags:
                         if tag_val == "__skip__":
                             is_skipped = true
+                        elif tag_val.starts_with("__skip_reason__="):
+                            t_skip_reason = tag_val.slice(16, tag_val.len())
+                        elif tag_val == "__should_panic__":
+                            t_should_panic = true
+                        elif tag_val.starts_with("__should_panic_msg__="):
+                            t_panic_msg = tag_val.slice(21, tag_val.len())
+                    if is_skipped:
+                        # Skipped tests have NO `__test_N` body — register the
+                        # entry (fn_name "") so the runner reports SKIP in source
+                        # order. Mirrors Rust gg (`src/ir/lowering/mod.rs:3120`).
+                        gmod.test_fns.push(GirTestFn("", tname.clone(), t_should_panic, t_panic_msg.clone(), true, t_skip_reason.clone()))
                     if not is_skipped:
                         String test_fn_name = "__test_" + int_to_str(test_idx)
                         Vector[int] _lc_stk3 = []
@@ -3327,20 +3388,22 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                             tbi += 1
                         Vector[int] tparams = []
                         gmod.functions.push(GirFunction(test_fn_name, !tparams, UNIT_TYPE, tctx.locals, !tblocks))
+                        # Register the full test metadata for the runner-main
+                        # synthesis (mirrors Rust `module.runtime.test_fns`).
+                        gmod.test_fns.push(GirTestFn(test_fn_name.clone(), tname.clone(), t_should_panic, t_panic_msg.clone(), false, ""))
                 test_idx += 1
             case ISuiteSetup(setup_body):
                 if not has_main:
-                    Vector[int] sp = []
-                    Vector[GirLocal] sl = [GirLocal(UNIT_TYPE, None, LoOwned(), BoNone(), false)]
-                    Vector[BasicBlock] sb = [BasicBlock([], GTReturn(OpConstUnit()))]
-                    gmod.functions.push(GirFunction("__suite_setup", !sp, UNIT_TYPE, !sl, !sb))
+                    # Lower the suite-setup body as a void fn (mirrors the test
+                    # body path; was a STUB that dropped the body → the `SETUP`
+                    # print never ran). Mirrors Rust gg's suite-setup lowering
+                    # (`src/ir/lowering/mod.rs:3040`). The runner-main synthesis
+                    # calls `__suite_setup()` when present.
+                    gmod.functions.push(lower_suite_body("__suite_setup", setup_body, &gmod))
                     test_idx += 1
             case ISuiteTeardown(teardown_body):
                 if not has_main:
-                    Vector[int] tp = []
-                    Vector[GirLocal] tl = [GirLocal(UNIT_TYPE, None, LoOwned(), BoNone(), false)]
-                    Vector[BasicBlock] tb = [BasicBlock([], GTReturn(OpConstUnit()))]
-                    gmod.functions.push(GirFunction("__suite_teardown", !tp, UNIT_TYPE, !tl, !tb))
+                    gmod.functions.push(lower_suite_body("__suite_teardown", teardown_body, &gmod))
                     test_idx += 1
             case IEquip(eqblk):
                 # Generic equip blocks: emit template for imported types

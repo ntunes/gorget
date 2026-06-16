@@ -617,6 +617,27 @@ struct GirModule:
     # First-write-wins per fn_name (one stack size per fn). Appended AT END
     # to avoid shifting positional ctor call sites.
     Vector[ThreadSpawnRec] thread_spawned_fns
+    # Test-runner registry: one ordered entry per `test` block (in SOURCE
+    # order, including `@skip`ped tests which emit NO `__test_N` body). Mirrors
+    # Rust gg's `module.runtime.test_fns: Vec<TestFnInfo>` (`src/ir/mod.rs:30`),
+    # populated at test-body lowering (`src/ir/lowering/mod.rs:3086`). Copied
+    # 1:1 into `LirModule.test_fns` at GIR→LIR; the runner-`main` synthesis in
+    # lir_codegen iterates it to print the human-readable test name + drive
+    # skip / should_panic reporting — matching the Rust oracle. Empty for
+    # non-test modules. Appended AT END to avoid shifting positional ctor call
+    # sites.
+    Vector[GirTestFn] test_fns
+
+# Per-test metadata mirroring Rust's `TestFnInfo` (`src/ir/mod.rs:30`).
+# `fn_name` is the emitted `__test_N` symbol ("" for a skipped test, which
+# has no body). `display_name` is the source `test "name"` string.
+struct GirTestFn:
+    String fn_name
+    String display_name
+    bool should_panic
+    String expected_panic_msg   # "" if none
+    bool skipped
+    String skip_reason          # "" if none
 
 # ── Helpers ──────────────────────────────────────────────
 

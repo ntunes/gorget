@@ -1,0 +1,6 @@
+Running 3 tests...
+  test: assert fails as expected ... PASS (0ms)
+  test: assert with message match ... PASS (0ms)
+  test: normal test passes ... PASS (0ms)
+
+3 passed, 0 failed (0ms)

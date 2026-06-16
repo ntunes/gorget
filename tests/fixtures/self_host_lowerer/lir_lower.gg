@@ -4438,6 +4438,14 @@ LirModule lower_gir_to_lir(GirModule &gmod):
     for tsf_rec in gmod.thread_spawned_fns:
         m.thread_spawned_fns.push(LirThreadSpawnedFn(tsf_rec.fn_name.clone(), tsf_rec.ret_c_type.clone(), tsf_rec.stack_size))
 
+    # Test-runner metadata: copy the ordered GIR test registry (built at
+    # test-body lowering, in source order, including skipped tests) 1:1 into
+    # `LirModule.test_fns`. Mirrors Rust gg's `runtime.test_fns →
+    # module.test_fns` copy (`src/lir/lower/mod.rs:518`). The runner-main
+    # synthesis iterates `m.test_fns` directly for label / skip / should_panic.
+    for gtf in gmod.test_fns:
+        m.test_fns.push(LirTestFn(gtf.fn_name.clone(), gtf.display_name.clone(), gtf.should_panic, gtf.expected_panic_msg.clone(), gtf.skipped, gtf.skip_reason.clone(), -1))
+
     return m
 
 # ── Dead Global Elimination ─────────────────────────────────────

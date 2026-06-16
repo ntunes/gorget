@@ -1,0 +1,5 @@
+Running 2 tests...
+  test: arithmetic ... PASS (0ms)
+  test: strings ... PASS (0ms)
+
+2 passed, 0 failed (0ms)

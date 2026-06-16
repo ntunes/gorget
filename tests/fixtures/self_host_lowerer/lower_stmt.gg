@@ -967,7 +967,17 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                 int assert_fail_bb = new_block(&ctx)
                 set_terminator(&ctx, GTBranch(OpCopy(assert_cv), assert_pass_bb, assert_fail_bb))
                 switch_to(&ctx, assert_fail_bb)
+                # Default panic message. For a comparison condition with no
+                # user message, mirror Rust's rich form `assertion failed:
+                # left <op> right` (generate_assert_static_msg,
+                # stmts/mod.rs:2712) so `@should_panic("left == right")` matches.
                 String assert_msg = "assertion failed"
+                match assert_cond.expr:
+                    case EBinaryOp(_a_lhs, a_op, _a_rhs):
+                        if a_op == "==" or a_op == "!=" or a_op == "<" or a_op == ">" or a_op == "<=" or a_op == ">=":
+                            assert_msg = "assertion failed: left " + a_op + " right"
+                    else:
+                        pass
                 match assert_msg_opt:
                     case Some(am):
                         assert_msg = am

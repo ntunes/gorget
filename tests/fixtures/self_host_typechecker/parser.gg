@@ -2760,7 +2760,7 @@ equip Parser:
         if self.check_kw(KW_EXTERN):
             return SItem(self.parse_extern_block())
         if self.check_kw(KW_TEST):
-            return SItem(self.parse_test_item(false))
+            return SItem(self.parse_test_item(false, "", false, ""))
         if self.check_kw(KW_BENCH):
             return SItem(self.parse_bench_item())
         if self.check_kw(KW_SUITE):
@@ -3912,7 +3912,7 @@ equip Parser:
                 self.advance()
         return IExternBlock(fns)
 
-    Item parse_test_item(&self, bool is_skip):
+    Item parse_test_item(&self, bool is_skip, String skip_reason, bool should_panic, String panic_msg):
         self.expect_kw(KW_TEST, "expected 'test'")
         SpannedToken name_tok = self.advance()
         String name = token_string_val(name_tok.lex_token)
@@ -3938,9 +3938,18 @@ equip Parser:
                     break
         self.expect_tok(TOK_COLON, "expected ':' after test name")
         Vector[Stmt] body = self.parse_block()
-        # Pass @skip flag via with_names sentinel — the lowerer checks for "__skip__".
+        # Pass test-attribute flags via with_names sentinels — the lowerer
+        # checks for "__skip__" / "__skip_reason__=" / "__should_panic__" /
+        # "__should_panic_msg__=". These are appended AFTER the real `with`
+        # bindings (which the lowerer ignores for plain tests).
         if is_skip:
             with_names.push("__skip__")
+            if skip_reason != "":
+                with_names.push("__skip_reason__=" + skip_reason)
+        if should_panic:
+            with_names.push("__should_panic__")
+            if panic_msg != "":
+                with_names.push("__should_panic_msg__=" + panic_msg)
         return ITest(name, with_exprs, with_names, body)
 
     Item parse_bench_item(&self):
@@ -3971,9 +3980,17 @@ equip Parser:
             if self.at_end():
                 break
 
-            # Parse @attributes — capture @derive(...) trait names + @skip flag
+            # Parse @attributes — capture @derive(...) trait names, @skip
+            # (flag + optional "reason"), and @should_panic (flag + optional
+            # "expected-message"). The test-attribute flags thread to the
+            # test-body lowering via sentinel entries in the `ITest` `with_names`
+            # field (see parse_test_item): "__skip__", "__skip_reason__=<r>",
+            # "__should_panic__", "__should_panic_msg__=<m>".
             Vector[String] pending_derives = Vector[String]()
             bool pending_skip = false
+            String pending_skip_reason = ""
+            bool pending_should_panic = false
+            String pending_panic_msg = ""
             while self.check_tok(TOK_AT):
                 self.advance()
                 String attr_name = ""
@@ -3994,7 +4011,23 @@ equip Parser:
                 elif attr_name == "skip":
                     pending_skip = true
                     if self.check_tok(TOK_LPAREN):
-                        self.skip_paren_contents()
+                        self.advance()
+                        if self.check_tok(TOK_STRING):
+                            SpannedToken rt = self.advance()
+                            pending_skip_reason = token_string_val(rt.lex_token)
+                        while not self.check_tok(TOK_RPAREN) and not self.at_end():
+                            self.advance()
+                        self.match_tok(TOK_RPAREN)
+                elif attr_name == "should_panic":
+                    pending_should_panic = true
+                    if self.check_tok(TOK_LPAREN):
+                        self.advance()
+                        if self.check_tok(TOK_STRING):
+                            SpannedToken pt = self.advance()
+                            pending_panic_msg = token_string_val(pt.lex_token)
+                        while not self.check_tok(TOK_RPAREN) and not self.at_end():
+                            self.advance()
+                        self.match_tok(TOK_RPAREN)
                 elif self.check_tok(TOK_LPAREN):
                     self.skip_paren_contents()
                 self.skip_trivia()
@@ -4028,7 +4061,7 @@ equip Parser:
             elif self.check_kw(KW_EXTERN):
                 items.push(self.parse_extern_block())
             elif self.check_kw(KW_TEST):
-                items.push(self.parse_test_item(pending_skip))
+                items.push(self.parse_test_item(pending_skip, pending_skip_reason, pending_should_panic, pending_panic_msg))
             elif self.check_kw(KW_BENCH):
                 items.push(self.parse_bench_item())
             elif self.check_kw(KW_SUITE):

@@ -6525,7 +6525,7 @@ String mono_wrapper_runtime_type(String name, LirModule &m):
 # run as a plain pass/fail test. The signature line is emitted verbatim
 # (`int main(int argc, char** argv) {` — ending `) {`) so the comparison
 # harness's `user_fn_count` gate counts it.
-String emit_test_runner_main(Vector[String] &test_names):
+String emit_test_runner_main(Vector[LirTestFn] &test_fns, bool has_setup, bool has_teardown):
     StrBuf buf = sb_new()
     sb_push(&buf, "int main(int argc, char** argv) {\n")
     sb_push(&buf, "    gorget_init_args(argc, argv);\n")
@@ -6534,20 +6534,38 @@ String emit_test_runner_main(Vector[String] &test_names):
     sb_push(&buf, "    struct timespec __total_start, __total_end;\n")
     sb_push(&buf, "    clock_gettime(CLOCK_MONOTONIC, &__total_start);\n")
     sb_push(&buf, "    __gorget_snapshot_open();\n")
+    # `__test_total` counts ALL registered tests, including skipped ones
+    # (Rust `test_fns.len()`).
     sb_push(&buf, "    int __test_total = ")
-    sb_push(&buf, int_to_str(test_names.len()))
+    sb_push(&buf, int_to_str(test_fns.len()))
     sb_push(&buf, ";\n")
     sb_push(&buf, "    printf(\"Running %d tests...\\n\", __test_total);\n")
 
+    if has_setup:
+        sb_push(&buf, "    __suite_setup();\n")
+
     int ti = 0
-    while ti < test_names.len():
-        String fn_name = test_names.get(ti).unwrap()
-        # Per-test label: the emitted `__test_N` symbol. The self-host
-        # does not carry the test's source display name onto LirFunction
-        # (display_name is "" for lowered test bodies), so we print the
-        # function name rather than fish a name we don't have.
+    while ti < test_fns.len():
+        LirTestFn tf = test_fns.get(ti).unwrap()
+        # Per-test label: the source `test "display name"` string (mirror of
+        # Rust `module.test_fns[i].display_name`, helpers.rs:1207/1213).
+        String disp = escape_c_string(tf.display_name)
+        if tf.skipped:
+            # Skipped test: report but don't run (Rust helpers.rs:1190-1199).
+            sb_push(&buf, "    printf(\"  test: ")
+            sb_push(&buf, disp)
+            sb_push(&buf, " ... \");\n")
+            if tf.skip_reason != "":
+                sb_push(&buf, "    printf(\"SKIP (")
+                sb_push(&buf, escape_c_string(tf.skip_reason))
+                sb_push(&buf, ")\\n\");\n")
+            else:
+                sb_push(&buf, "    printf(\"SKIP\\n\");\n")
+            sb_push(&buf, "    __test_skipped++;\n")
+            ti += 1
+            continue
         sb_push(&buf, "    printf(\"  test: ")
-        sb_push(&buf, fn_name)
+        sb_push(&buf, disp)
         sb_push(&buf, " ... \");\n")
         sb_push(&buf, "    fflush(stdout);\n")
         sb_push(&buf, "    {\n")
@@ -6555,7 +6573,7 @@ String emit_test_runner_main(Vector[String] &test_names):
         sb_push(&buf, "        __gorget_test_fail_msg = NULL;\n")
         sb_push(&buf, "        __gorget_test_timed_out = 0;\n")
         sb_push(&buf, "        __gorget_current_test = \"")
-        sb_push(&buf, fn_name)
+        sb_push(&buf, disp)
         sb_push(&buf, "\";\n")
         sb_push(&buf, "        int __cleanup_mark = __gorget_cleanup_top;\n")
         sb_push(&buf, "        struct timespec __t_start, __t_end;\n")
@@ -6565,7 +6583,7 @@ String emit_test_runner_main(Vector[String] &test_names):
         sb_push(&buf, "        int __jmp_val = setjmp(__gorget_test_jmp);\n")
         sb_push(&buf, "        if (__jmp_val == 0) {\n")
         sb_push(&buf, "            ")
-        sb_push(&buf, fn_name)
+        sb_push(&buf, tf.fn_name)
         sb_push(&buf, "();\n")
         sb_push(&buf, "            __gorget_cleanup_top = __cleanup_mark;\n")
         sb_push(&buf, "        }\n")
@@ -6575,21 +6593,53 @@ String emit_test_runner_main(Vector[String] &test_names):
         sb_push(&buf, "        const char *__cap_buf = __gorget_capture_end(&__cap_len);\n")
         sb_push(&buf, "        clock_gettime(CLOCK_MONOTONIC, &__t_end);\n")
         sb_push(&buf, "        long __t_ms = (__t_end.tv_sec - __t_start.tv_sec) * 1000 + (__t_end.tv_nsec - __t_start.tv_nsec) / 1000000;\n")
-        sb_push(&buf, "        if (!__gorget_test_fail_msg) {\n")
-        sb_push(&buf, "            __test_passed++;\n")
-        sb_push(&buf, "            printf(\"PASS (%ldms)\\n\", __t_ms);\n")
-        sb_push(&buf, "        } else {\n")
-        sb_push(&buf, "            __test_failed++;\n")
-        sb_push(&buf, "            printf(\"FAIL: %s (%ldms)\\n\", __gorget_test_fail_msg, __t_ms);\n")
-        sb_push(&buf, "            if (__cap_len > 0) {\n")
-        sb_push(&buf, "                printf(\"    --- captured output ---\\n\");\n")
-        sb_push(&buf, "                fwrite(__cap_buf, 1, __cap_len, stdout);\n")
-        sb_push(&buf, "                if (__cap_buf[__cap_len - 1] != '\\n') printf(\"\\n\");\n")
-        sb_push(&buf, "                printf(\"    ---\\n\");\n")
-        sb_push(&buf, "            }\n")
-        sb_push(&buf, "        }\n")
+        if tf.should_panic:
+            # @should_panic: a panic (fail_msg set) is the EXPECTED outcome.
+            # With an expected-message, the panic must contain it (Rust
+            # helpers.rs:1257-1278).
+            if tf.expected_panic_msg != "":
+                String emsg = escape_c_string(tf.expected_panic_msg)
+                sb_push(&buf, "        if (__gorget_test_fail_msg && strstr(__gorget_test_fail_msg, \"")
+                sb_push(&buf, emsg)
+                sb_push(&buf, "\")) {\n")
+                sb_push(&buf, "            __test_passed++;\n")
+                sb_push(&buf, "            printf(\"PASS (%ldms)\\n\", __t_ms);\n")
+                sb_push(&buf, "        } else if (__gorget_test_fail_msg) {\n")
+                sb_push(&buf, "            __test_failed++;\n")
+                sb_push(&buf, "            printf(\"FAIL: expected panic containing \\\"")
+                sb_push(&buf, emsg)
+                sb_push(&buf, "\\\", got: %s (%ldms)\\n\", __gorget_test_fail_msg, __t_ms);\n")
+                sb_push(&buf, "        } else {\n")
+                sb_push(&buf, "            __test_failed++;\n")
+                sb_push(&buf, "            printf(\"FAIL: expected panic but test passed (%ldms)\\n\", __t_ms);\n")
+                sb_push(&buf, "        }\n")
+            else:
+                sb_push(&buf, "        if (__gorget_test_fail_msg) {\n")
+                sb_push(&buf, "            __test_passed++;\n")
+                sb_push(&buf, "            printf(\"PASS (%ldms)\\n\", __t_ms);\n")
+                sb_push(&buf, "        } else {\n")
+                sb_push(&buf, "            __test_failed++;\n")
+                sb_push(&buf, "            printf(\"FAIL: expected panic but test passed (%ldms)\\n\", __t_ms);\n")
+                sb_push(&buf, "        }\n")
+        else:
+            sb_push(&buf, "        if (!__gorget_test_fail_msg) {\n")
+            sb_push(&buf, "            __test_passed++;\n")
+            sb_push(&buf, "            printf(\"PASS (%ldms)\\n\", __t_ms);\n")
+            sb_push(&buf, "        } else {\n")
+            sb_push(&buf, "            __test_failed++;\n")
+            sb_push(&buf, "            printf(\"FAIL: %s (%ldms)\\n\", __gorget_test_fail_msg, __t_ms);\n")
+            sb_push(&buf, "            if (__cap_len > 0) {\n")
+            sb_push(&buf, "                printf(\"    --- captured output ---\\n\");\n")
+            sb_push(&buf, "                fwrite(__cap_buf, 1, __cap_len, stdout);\n")
+            sb_push(&buf, "                if (__cap_buf[__cap_len - 1] != '\\n') printf(\"\\n\");\n")
+            sb_push(&buf, "                printf(\"    ---\\n\");\n")
+            sb_push(&buf, "            }\n")
+            sb_push(&buf, "        }\n")
         sb_push(&buf, "    }\n")
         ti += 1
+
+    if has_teardown:
+        sb_push(&buf, "    __suite_teardown();\n")
 
     sb_push(&buf, "    clock_gettime(CLOCK_MONOTONIC, &__total_end);\n")
     sb_push(&buf, "    long __total_ms = (__total_end.tv_sec - __total_start.tv_sec) * 1000 + (__total_end.tv_nsec - __total_start.tv_nsec) / 1000000;\n")
@@ -6711,15 +6761,12 @@ String generate_c(LirModule &m):
     # indices that `@skip` produces. `has_test_runner` is true ⟺ any
     # `__test_*` is emitted ⟺ (per lower.gg's `if not has_main` gate) the
     # module has NO user `main`.
-    Vector[String] test_names = []
-    int tfi = 0
-    while tfi < m.functions.len():
-        if reachable_body.get(tfi).unwrap():
-            String tfname = m.functions.get(tfi).unwrap().name
-            if tfname.starts_with("__test_"):
-                test_names.push(tfname.clone())
-        tfi += 1
-    bool has_test_runner = test_names.len() > 0
+    # The test-runner registry (`m.test_fns`, mirror of Rust `module.test_fns`)
+    # is the SOURCE OF TRUTH for the runner: ordered per `test` block (source
+    # order, including skipped tests). All `__test_N` bodies are seeded as DCE
+    # roots (compute_reachable_fns) so they're always reachable — the registry
+    # never references a pruned body.
+    bool has_test_runner = m.test_fns.len() > 0
 
     StrBuf body_buf = StrBuf(body)
     sb_push(&body_buf, "// ── Function Definitions ──\n")
@@ -6747,7 +6794,22 @@ String generate_c(LirModule &m):
     # the `user_fn_count` gate counts from). Calls each emitted
     # `__test_*` in emission order.
     if has_test_runner:
-        sb_push(&body_buf, emit_test_runner_main(&test_names))
+        # Suite setup/teardown presence — detect by the emitted symbol (the
+        # self-host's `LirModule.has_suite_setup`/`has_suite_teardown` are never
+        # populated), mirroring the `__test_*` test-detection convention. The
+        # runner calls `__suite_setup()` once before the tests and
+        # `__suite_teardown()` once after (Rust helpers.rs:1177/1307).
+        bool has_setup = false
+        bool has_teardown = false
+        int sti = 0
+        while sti < m.functions.len():
+            String sfn = m.functions.get(sti).unwrap().name
+            if sfn == "__suite_setup":
+                has_setup = true
+            elif sfn == "__suite_teardown":
+                has_teardown = true
+            sti += 1
+        sb_push(&body_buf, emit_test_runner_main(&m.test_fns, has_setup, has_teardown))
         sb_push(&body_buf, "\n")
 
     body = body_buf.s
@@ -6953,6 +7015,28 @@ bool needs_spawn_pred(Vector[String] &n):
 #     name-prefix disjuncts survive.
 #   - emit-once is open-coded with plain function-local bools (a `bool &flag`
 #     helper would miscompile — see file header on the StrBuf idiom).
+# Test-mode detection (metadata-free): the self-host's `LirModule.test_fns`
+# / `bench_fns` / `is_test_module` are NEVER populated (constructed empty in
+# lir_lower.gg), so the panic-handler / alloc-report / error-runtime splice
+# can't key on them. Scan the module functions for emitted `__test_*` /
+# `__bench_*` bodies — the SAME source-of-truth the runner synthesis uses in
+# `generate_c` (`test_names`, collected from `m.functions`). When present the
+# preamble must splice `panic_test.c` (which declares `__gorget_in_test`,
+# `__gorget_test_jmp`, `__gorget_current_test`, …) instead of `panic_normal.c`,
+# or the synthesized runner references undeclared symbols → CC-FAIL.
+bool module_has_test_runner(LirModule &m):
+    # The GIR→LIR test registry is the primary signal (it includes all-skipped
+    # modules whose only tests have no `__test_N` body).
+    if m.test_fns.len() > 0 or m.bench_fns.len() > 0:
+        return true
+    int i = 0
+    while i < m.functions.len():
+        String fname = m.functions.get(i).unwrap().name
+        if fname.starts_with("__test_") or fname.starts_with("__bench_"):
+            return true
+        i += 1
+    return false
+
 String emit_runtime_preamble(LirModule &m, String runtime_dir):
     String rdir = runtime_dir
     Vector[String] n = build_all_call_names(&m)
@@ -6986,7 +7070,7 @@ String emit_runtime_preamble(LirModule &m, String runtime_dir):
     sb_push(&buf, read_runtime(rdir, "runtime_string_base_ops.c"))
 
     # ── Alloc report (test/bench mode only) ──
-    bool is_test_or_bench = m.test_fns.len() > 0 or m.bench_fns.len() > 0 or m.is_test_module
+    bool is_test_or_bench = m.test_fns.len() > 0 or m.bench_fns.len() > 0 or m.is_test_module or module_has_test_runner(&m)
     if is_test_or_bench:
         sb_push(&buf, read_runtime(rdir, "runtime_alloc_report.c"))
 

@@ -1,0 +1,8 @@
+Running 5 tests...
+  test: factorial computes correctly ... PASS (0ms)
+  test: fibonacci sequence ... PASS (0ms)
+  test: gcd finds greatest common divisor ... PASS (0ms)
+  test: sum of ranges ... PASS (0ms)
+  test: classify integers ... PASS (0ms)
+
+5 passed, 0 failed (0ms)
