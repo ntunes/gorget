@@ -1000,6 +1000,15 @@ struct FieldBorrowPair:
     int base
     int field
 
+# Result of a Guard[T] field-access auto-deref (lower_expr
+# `guard_field_deref_base`): the inner-data pointer local + the guarded
+# type name. Both read (lower_expr EFieldAccess) and write
+# (lower_stmt lower_field_write / emit_field_write_from_local) paths
+# re-point `base`/`base_type_name` to these before the field projection.
+struct FieldDerefResult:
+    int inner_ptr_local
+    String inner_name
+
 # Write `BoField(base, field)` as `dst`'s borrow_origin. Mirrors Rust's
 # `set_field_borrow` (`src/ir/lowering/context.rs:2255`).
 #

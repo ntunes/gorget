@@ -6511,6 +6511,22 @@ String mono_wrapper_runtime_type(String name, LirModule &m):
     if not m.type_runtime_map.contains(name):
         return ""
     String runtime = m.type_runtime_map.get(name).unwrap_or("")
+    # Guard family: the C struct typedef MUST match what the acquiring runtime
+    # fn returns. `Guard__T` ← `gorget_mutex_lock` returns `gorget_guard_t`,
+    # but `ReadGuard__T`/`WriteGuard__T` ← `gorget_rwlock_read`/`_write` return
+    # `gorget_read_guard_t`/`gorget_write_guard_t`. All three are layout-
+    # identical 16-byte `{ptr, ptr}`, so routing the typedef per-variant is
+    # safe (and keeps sizeof consistent). The variant comes from the TYPED
+    # `type_method_prefix_map` (`gorget_guard`/`gorget_read_guard`/
+    # `gorget_write_guard`, written at lir_lower.gg:658) + `_t` — NOT a
+    # `ReadGuard__` name substring. Without this the `gorget_rwlock_read()`
+    # return assigns into a `gorget_guard_t`-typedef'd slot → cc type error.
+    if runtime == "Guard":
+        if m.type_method_prefix_map.contains(name):
+            String gpfx = m.type_method_prefix_map.get(name).unwrap_or("")
+            if gpfx != "":
+                return gpfx + "_t"
+        return "gorget_guard_t"
     return runtime_category_to_c_type(runtime)
 
 # ── Test runner main ───────────────────────────────────────

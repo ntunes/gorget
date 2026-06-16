@@ -24,9 +24,9 @@ from gir import CkVector, CkDeque, CkHeap, CkDict, CkSet, CkNotCollection
 from compiler.data.resources import STRING_BUILTIN_METHODS, COLLECTION_BUILTIN_METHODS, BUILTIN_METHOD_MUTATES
 from compiler.data.schema import BuiltinMethodDecl, BuiltinMethodEntry
 from compiler.data.schema import BuiltinRetKind, BrkString, BrkInfer
-from lir_lower import resource_meta_for
+from lir_lower import resource_meta_for, is_guard_struct_type, guard_method_prefix
 from lower_loops import lower_for_string, lower_for_range, lower_for_vector, lower_for_dict, parse_dict_kv_types
-from lower import LowerCtx, ResultPayloadTypes, DictKvNames, ClosureSig, CaptureCollector, FieldBorrowPair, SVarDeclEmission
+from lower import LowerCtx, ResultPayloadTypes, DictKvNames, ClosureSig, CaptureCollector, FieldBorrowPair, FieldDerefResult, SVarDeclEmission
 from lower import lower_fail, diag_bug, diag_warn, emit, new_block, switch_to, set_terminator
 from lower import add_local, add_local_with, add_local_inheriting, nl_get, nl_put, nl_contains
 from lower import expr_kind, pat_kind, stmt_kind
@@ -276,6 +276,51 @@ void refine_local_type(LowerCtx &ctx, int lid, int new_type):
 # extract the Ok/Error payloads themselves). The flag is a ONE-SHOT —
 # consumed (reset to false) at entry — so nested sub-expressions still
 # auto-prop normally.
+
+# ── Guard[T] field-access auto-deref (shared read+write helper) ─────
+# `g.field` where `g: Guard[T]` / `ReadGuard[T]` / `WriteGuard[T]` is sugar
+# for `(*get_ptr(&g)).field`: the guard wraps a `{owner/rwlock, void* ptr}`
+# struct (single-owner carve-out, docs/devbook/11), so the field projection
+# must go THROUGH the guard's inner data pointer, not the guard's own
+# `owner`/`ptr` fields. Mirrors Rust `lower_field_access`'s leading guard
+# arm (src/ir/lowering/exprs/mod.rs:2109-2162 — `guard_inner_suffix` +
+# `emit_guard_get_ptr` + a `Deref`-projected field place).
+#
+# Returns Some((inner_ptr_local, inner_name)) when `base` is a guard:
+#   - `inner_ptr_local` is a `GtPtr(inner)`-typed local holding the result
+#     of `gorget_{guard,read_guard,write_guard}_get_ptr(&g)` (= `g->ptr`).
+#     Pointer-typed so the downstream GIFieldLoad / __field_write_ codegen
+#     loads the pointer and projects the field THROUGH it (mutating the
+#     real guarded data in place — correct for both reads and writes).
+#   - `inner_name` is the guarded type name (`Point` / `int64_t` / ...),
+#     resolved from the typed `is_guard_struct_type` / `guard_method_prefix`
+#     channels (NO name-matching for the semantic decision — the Guard-ness
+#     comes from `resource_meta_for(...).runtime_name == "Guard"`, exactly
+#     like the Box arm reads `box_kind == BkRegularBox`).
+# Returns None for a non-guard base (caller falls through to the normal
+# struct field path).
+Option[FieldDerefResult] guard_field_deref_base(LowerCtx &ctx, int base, String base_type_name, GirModule &gmod):
+    if not is_guard_struct_type(base_type_name, &gmod):
+        return None
+    # Recover the guarded type name = everything after the family-prefix
+    # boundary (the FIRST `__`). Uniform across `Guard__`/`ReadGuard__`/
+    # `WriteGuard__` (`ReadGuard__Point` → `Point`, `Guard__Box__Foo` →
+    # `Box__Foo`), so NO per-variant `starts_with` name-routing — the
+    # Guard-ness was already decided by the typed `is_guard_struct_type`
+    # above; this just strips the prefix to its `__` boundary.
+    int gd_sep = base_type_name.index_of("__").unwrap_or(-1)
+    if gd_sep < 0:
+        return None
+    String gd_inner_name = base_type_name.slice(gd_sep + 2, base_type_name.len())
+    int gd_inner_tid = resolve_field_gir_type(gd_inner_name, &gmod)
+    int gd_inner_ptr_tid = register_ptr(&gmod, gd_inner_tid)
+    # gorget_{guard,read_guard,write_guard}_get_ptr(&g) → void* at the
+    # guarded data. The runtime fn name is the typed method prefix + _get_ptr.
+    String gd_get_ptr_fn = guard_method_prefix(base_type_name, &gmod) + "_get_ptr"
+    int gd_inner_ptr = add_local(&ctx, gd_inner_ptr_tid, None)
+    emit(&ctx, GICallExtern(gd_inner_ptr, gd_get_ptr_fn, [OpBorrow(base)]))
+    return Some(FieldDerefResult(gd_inner_ptr, gd_inner_name))
+
 int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
     # Consume the one-shot suppress flag for THIS expression.
     bool suppress = ctx.suppress_auto_prop
@@ -2016,6 +2061,25 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 base_tid = box_inner_tid
                 base_type_name = inner_name
                 inner_tid = box_inner_tid
+            # Guard[T] auto-deref: `g.field` where `g: Guard[T]` /
+            # `ReadGuard[T]` / `WriteGuard[T]` projects THROUGH the guard's
+            # inner-data pointer (`get_ptr(&g)` = `g->ptr`), not the guard's
+            # own owner/ptr fields. Sibling of the Box arm above — same
+            # write-site shape, just a runtime get_ptr call instead of a
+            # GIDeref (a guard is a 16-byte struct, not a bare pointer). The
+            # resulting `base` is a Ptr(inner)-typed local, so GIFieldLoad's
+            # auto-deref loads the pointer and the field-load projects through
+            # it (also makes the WRITE path mutate the real data — see
+            # lower_stmt lower_field_write). Mirrors Rust
+            # src/ir/lowering/exprs/mod.rs:2109-2162.
+            match guard_field_deref_base(&ctx, base, base_type_name, &gmod):
+                case Some(gdr):
+                    base = gdr.inner_ptr_local
+                    base_tid = ctx.locals.get(base).unwrap().type_id
+                    base_type_name = gdr.inner_name
+                    inner_tid = base_tid
+                case None:
+                    pass
             # Special case: GorgetString.data — return the GorgetString
             # itself (identity). GorgetString has no registered `data` field
             # in type_infos (it's an opaque runtime struct), so the field

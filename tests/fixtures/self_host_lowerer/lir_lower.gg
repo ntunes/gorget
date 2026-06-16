@@ -1076,7 +1076,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
             # Mirrors Pass 2's recursive_drop_enums + type_drop_fns wiring.
             String opt_inner_drop = ""
             if not opt_is_borrow:
-                opt_inner_drop = drop_fn_for_type(inner, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types, &m.drop_collision_types)
+                opt_inner_drop = drop_fn_for_type(inner, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types, &m.drop_collision_types, &m.type_method_prefix_map)
             if opt_inner_drop != "":
                 Vector[EnumVariantDrop] opt_vd = []
                 opt_vd.push(EnumVariantDrop(0, "Some", "Some_0", opt_inner_drop.clone(), inner.clone()))
@@ -1126,10 +1126,10 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
                 # variant-drop for whichever payload(s) are resources.
                 String res_ok_drop = ""
                 if not res_ok_borrow:
-                    res_ok_drop = drop_fn_for_type(ok_name, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types, &m.drop_collision_types)
+                    res_ok_drop = drop_fn_for_type(ok_name, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types, &m.drop_collision_types, &m.type_method_prefix_map)
                 String res_err_drop = ""
                 if not res_err_borrow:
-                    res_err_drop = drop_fn_for_type(err_name, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types, &m.drop_collision_types)
+                    res_err_drop = drop_fn_for_type(err_name, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types, &m.drop_collision_types, &m.type_method_prefix_map)
                 if res_ok_drop != "" or res_err_drop != "":
                     Vector[EnumVariantDrop] res_vd = []
                     Vector[EnumVariantDrop] res_vd2 = []
@@ -2092,6 +2092,11 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
         if fn_name == "gorget_guard_get" or fn_name == "gorget_guard_get_ptr":
             return true
         if fn_name == "gorget_read_guard_get" or fn_name == "gorget_write_guard_get":
+            return true
+        # get_ptr variants for the RWLock guard family (used by the Guard[T]
+        # field-access auto-deref) — same by-address rule as the Mutex
+        # `gorget_guard_get_ptr` above.
+        if fn_name == "gorget_read_guard_get_ptr" or fn_name == "gorget_write_guard_get_ptr":
             return true
         if fn_name == "gorget_guard_release":
             return true
@@ -3748,7 +3753,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
             # `src/lir/lower/drops.rs::lower_drop`.
             String drop_tn = gir_local_type_name(local_id, &gir_locals, &gmod)
             if drop_tn != "":
-                String drop_fn = drop_fn_for_type(drop_tn, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types, &m.drop_collision_types)
+                String drop_fn = drop_fn_for_type(drop_tn, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types, &m.drop_collision_types, &m.type_method_prefix_map)
                 if drop_fn != "":
                     int slot = local_to_slot.get(local_id).unwrap()
                     int addr = lir_fn_next_value(&f)
@@ -3769,7 +3774,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
             # matching Rust's pre-elaboration shape.
             String dia_tn = gir_local_type_name(local_id, &gir_locals, &gmod)
             if dia_tn != "":
-                String dia_drop_fn = drop_fn_for_type(dia_tn, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types, &m.drop_collision_types)
+                String dia_drop_fn = drop_fn_for_type(dia_tn, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types, &m.drop_collision_types, &m.type_method_prefix_map)
                 # Mono'd Option/Result locals/scrutinees whose payload owns a
                 # resource are NOT in optionlike_resource_types (that dict is
                 # field-position-only AND drives the by-value ABI, so we must not
@@ -4129,7 +4134,7 @@ LirFunction lir_lower_function(GirFunction gfn, GirModule &gmod, Dict[String, in
 
 # Determine the drop function name for a given type name.
 # Returns "" if the type doesn't need dropping.
-String drop_fn_for_type(String type_name, Dict[String, bool] &resource_types, Dict[String, String] &type_runtime_map, Dict[String, bool] &optionlike, Dict[String, bool] &collision_types):
+String drop_fn_for_type(String type_name, Dict[String, bool] &resource_types, Dict[String, String] &type_runtime_map, Dict[String, bool] &optionlike, Dict[String, bool] &collision_types, Dict[String, String] &method_prefix_map):
     # option_ref_borrow RES-5: a `Ref__T` payload is a BORROW (a pointer
     # into a collection the caller owns), never dropped (§2 invariant: only
     # the owner frees). An `Option__Ref__T` is likewise a borrow wrapper.
@@ -4167,12 +4172,22 @@ String drop_fn_for_type(String type_name, Dict[String, bool] &resource_types, Di
         return "free"
     elif runtime == "Guard":
         # A `Guard__T`/`ReadGuard__T`/`WriteGuard__T` local drops by RELEASING
-        # the held lock (`gorget_guard_release(gorget_guard_t* g)` — unlocks the
-        # mutex + wakes one waiter). Rust gg emits a per-type wrapper
-        # `Guard__T__drop(self) { gorget_guard_release(self); }`; the self-host
+        # the held lock. The release fn is PER-VARIANT — a Mutex guard unlocks
+        # via `gorget_guard_release` (pthread_mutex_unlock), but a RWLock
+        # ReadGuard/WriteGuard unlocks via `gorget_read_guard_release`/
+        # `gorget_write_guard_release` (pthread_rwlock_unlock). Routing ALL
+        # three to `gorget_guard_release` left the rwlock LOCKED on scope exit
+        # → the next reader/writer DEADLOCKS. The variant comes from the TYPED
+        # `type_method_prefix_map` (`gorget_guard`/`gorget_read_guard`/
+        # `gorget_write_guard`, written at lir_lower.gg:658) + `_release` —
+        # NOT a `ReadGuard__` name substring. Rust gg emits a per-type wrapper
+        # `Guard__T__drop(self) { <prefix>_release(self); }`; the self-host
         # routes the GIDrop straight to the runtime release (the GIDrop arm
-        # passes `&slot`, matching the `gorget_guard_t*` param). WITHOUT this a
-        # mutex-Guard scope-exit emitted no release → the next locker DEADLOCKS.
+        # passes `&slot`, matching the `*_guard_t*` param).
+        if method_prefix_map.contains(type_name):
+            String gdrop_pfx = method_prefix_map.get(type_name).unwrap_or("")
+            if gdrop_pfx != "":
+                return gdrop_pfx + "_release"
         return "gorget_guard_release"
     elif runtime == "Task":
         return ""
@@ -4225,7 +4240,7 @@ void populate_drop_metadata(LirModule &m, GirModule &gmod):
         int fi = 0
         while fi < info.fields.len():
             GirFieldInfo finfo = info.fields.get(fi).unwrap()
-            String drop_fn = drop_fn_for_type(finfo.type_name, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types, &m.drop_collision_types)
+            String drop_fn = drop_fn_for_type(finfo.type_name, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types, &m.drop_collision_types, &m.type_method_prefix_map)
             if drop_fn != "":
                 field_drops.push(FieldDrop(finfo.name, drop_fn, finfo.type_name))
             fi += 1
@@ -4288,7 +4303,7 @@ void populate_drop_metadata(LirModule &m, GirModule &gmod):
         # the variant index vi used in EnumVariantDrop.
         for (vi, vinfo) in info.variants.enumerate():
             for finfo in vinfo.fields:
-                String drop_fn = drop_fn_for_type(finfo.type_name, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types, &m.drop_collision_types)
+                String drop_fn = drop_fn_for_type(finfo.type_name, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types, &m.drop_collision_types, &m.type_method_prefix_map)
                 if drop_fn != "":
                     # Field name in the C struct is VariantName_N (e.g., Literal_0)
                     # finfo.name is "_N" (e.g., "_0"), so strip the leading underscore
