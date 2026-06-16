@@ -1616,21 +1616,23 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
                         recv_n = rname
                     else:
                         pass
-        # Phase A typed read: Dict/Set `.remove(k)` returns bool at the
-        # runtime, but every self-host caller discards the result; so
-        # we type the binding as void.
+        # Phase A typed read: `Set.remove(k)` returns bool at the runtime
+        # (`gorget_set_remove`), so the binding is void. `Dict.remove(k)`,
+        # however, returns `Option[V]` (runtime `gorget_map_remove_opt`
+        # transfers the removed value out) — it falls through to the shared
+        # consuming-getter path below (~line 1868), which mints `Option__V`
+        # off the receiver's V suffix exactly like `.get()`/`.pop()`. Mirrors
+        # Rust gg (`typecheck.rs:5458` Dict.remove → Option[V !]).
         match resource_meta_for(&gmod, recv_n):
             case Some(rmeta):
                 match rmeta.collection_kind:
-                    case CkDict():
-                        return UNIT_TYPE
                     case CkSet():
                         return UNIT_TYPE
                     else:
                         pass
             case None:
                 pass
-        # Vector/Deque/etc. — fall through to receiver-aware path below.
+        # Dict/Vector/Deque/etc. — fall through to receiver-aware path below.
     if method == "clear" or method == "insert" or method == "extend" or method == "reverse":
         return UNIT_TYPE
     # `Vector[T].reserve(n)` — grows the allocation in place; void return

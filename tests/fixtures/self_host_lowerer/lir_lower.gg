@@ -1635,7 +1635,14 @@ String map_dict_method(String method):
         case "contains" | "has":
             return "gorget_map_contains"
         case "remove":
-            return "gorget_map_remove"
+            # `Dict[K,V].remove(k)` → `Option[V]` (the removed value; None if
+            # absent). Routes to `gorget_map_remove_opt`, which returns a
+            # pointer to a thread-local copy of the removed value (NULL when
+            # absent) and transfers value-ownership to the caller — mirrors
+            # Rust gg (`calls.rs:356`, `builtins.rs:387` ret_option_val). The
+            # bool-returning `gorget_map_remove` is NOT used: it cannot back an
+            # `Option[V]` binding (`d.remove(k).unwrap()` → garbage).
+            return "gorget_map_remove_opt"
         case "len":
             return "gorget_map_len"
         case "keys":
@@ -2022,7 +2029,7 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
             return true
         if fn_name == "gorget_array_free":
             return true
-        if fn_name == "gorget_map_put" or fn_name == "gorget_map_remove":
+        if fn_name == "gorget_map_put" or fn_name == "gorget_map_remove" or fn_name == "gorget_map_remove_opt":
             return true
         if fn_name == "gorget_map_clear" or fn_name == "gorget_map_free":
             return true
@@ -2159,7 +2166,7 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
         return true
     if fn_name == "gorget_map_contains" and arg_idx == 1:
         return true
-    if fn_name == "gorget_map_remove" and arg_idx == 1:
+    if (fn_name == "gorget_map_remove" or fn_name == "gorget_map_remove_opt") and arg_idx == 1:
         return true
     if fn_name == "gorget_set_add" and arg_idx == 1:
         return true
@@ -2278,7 +2285,7 @@ bool returns_ptr_to_element(String name):
         return true
     if name == "gorget_array_safe_last" or name == "gorget_array_safe_first" or name == "gorget_array_safe_pop":
         return true
-    if name == "gorget_map_remove" or name == "gorget_array_remove_opt":
+    if name == "gorget_map_remove_opt" or name == "gorget_array_remove_opt":
         return true
     # `gorget_guard_get(g)` returns `g->ptr` — a `void*` AT the guarded data,
     # not the value. A scalar `g.get()` dst slot needs ONE deref (`*(T*)ptr`)

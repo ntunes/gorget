@@ -662,7 +662,9 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                                 return parse_ret
                     else:
                         pass
-            # .pop() / .remove() on Vector[T] → Option[T]
+            # .pop() / .remove() on Vector[T] → Option[T]; Dict[K,V].remove(k)
+            # → Option[V] (mirrors Rust gg typecheck.rs:5458 — the removed
+            # value transfers out, None when absent).
             if method_name == "pop" or method_name == "remove":
                 int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, &ctx)
                 if obj_type >= 0 and obj_type < types.types.len():
@@ -675,6 +677,11 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                                     Vector[int] opt_args = Vector[int]()
                                     opt_args.push(get_int_at(type_args, 0))
                                     return types.add_type(RTGeneric(option_def, opt_args))
+                            if method_name == "remove" and (d.name == "Dict" or d.name == "HashMap") and type_args.len() >= 2:
+                                if scopes.lookup("Option") is Some(dict_option_def):
+                                    Vector[int] dict_opt_args = Vector[int]()
+                                    dict_opt_args.push(get_int_at(type_args, 1))
+                                    return types.add_type(RTGeneric(dict_option_def, dict_opt_args))
                         else:
                             pass
             return NO_TYPE
