@@ -35,7 +35,7 @@ from lower import classify_call_arg, is_consume_kind, op_consume, decide_operand
 from lower import LazyMember, cow_lazy_materialize_family, cow_lazy_retire_stmt_temps
 from lower_drops import init_drop_elab, push_drop_scope, emit_scope_drops, pop_drop_scope, pop_drop_scope_no_emit, is_droppable_type, register_local_for_drop, register_lazy_slot_for_drop, register_owning_param, mark_local_moved, restore_moved, union_moved, emit_drops_for_early_exit, flush_drop_queue
 from lower_liveness import LivenessAnalysis, compute_liveness, wire_liveness_into_modes, liveness_instrumentation_diff, update_last_pos_for_inst, update_last_pos_for_term, note_operand_pos, empty_liveness
-from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, is_comparison, map_cmpop
+from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, index_value_type_name, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, is_comparison, map_cmpop
 from lower_expr import block_terminated, lower_block_expr, lower_stmt_as_tail_value, lower_if_chain_expr, refine_local_type, lower_expr, lower_expr_inner, apply_container_hint_for_ctor_arg, lower_call, guard_field_deref_base
 
 # ── Statement lowering ───────────────────────────────────
@@ -872,8 +872,13 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     # Wrap op_dst in a synthetic SpannedExpr to feed the
                     # same field-write path used above.
                     emit_field_write_from_local(&ctx, *base_box, field_name, op_dst, &gmod)
+                case EIndex(base_box, idx_box):
+                    # v[i] OP= x / d[k] OP= x — desugar to read-binop-write on
+                    # the collection, evaluating base+idx once. Mirrors Rust
+                    # lower_compound_assign's Expr::Index arm (assigns.rs:1345).
+                    lower_index_compound_assign(&ctx, *base_box, *idx_box, op, value_expr, &gmod)
                 else:
-                    lower_fail("SCompoundAssign target is neither EIdentifier nor EFieldAccess")
+                    lower_fail("SCompoundAssign target is neither EIdentifier, EFieldAccess, nor EIndex (got: " + expr_kind(target_expr.expr) + ")")
         case SFor(pat, iter_expr, body, _own, else_body):
             lower_for(&ctx, pat, iter_expr, body, else_body, &gmod, is_main)
         case SThrow(throw_expr):
@@ -1270,4 +1275,90 @@ void lower_index_assign(LowerCtx &ctx, SpannedExpr base_expr, SpannedExpr idx_ex
     # CkCallArgOwning (unchanged).
     Vector[Operand] set_args = [base_op, op_consume(&ctx, &gmod, idx, CkCallArgOwning()), op_consume(&ctx, &gmod, val, CkCallArgOwning())]
     emit(&ctx, GICallExtern(-1, setter, set_args))
+
+# Lower `base[idx] OP= value` (compound index-assign on a collection).
+# Desugars to: `cur = base[idx]; result = cur OP value; base[idx] = result`,
+# evaluating `base` and `idx` exactly ONCE (so `v[pick()] += x` calls
+# `pick()` once). Mirrors Rust `lower_compound_assign`'s `Expr::Index`
+# arm (src/ir/lowering/stmts/assigns.rs:1345-1560): save the index into a
+# local, read the current element via the collection getter, run the
+# binop, then write the result back via the same setter `lower_index_assign`
+# uses. Collection dispatch is the TYPED `resource_meta_for(...).collection_kind`
+# (Vector/Deque → gorget_array_get/set, Dict → gorget_map_get/put) — no name
+# matching. Previously every `v[i] += x` / `d[k] += x` hit the
+# `SCompoundAssign` `else: lower_fail` and was silently dropped.
+void lower_index_compound_assign(LowerCtx &ctx, SpannedExpr base_expr, SpannedExpr idx_expr, String op, SpannedExpr value_expr, GirModule &gmod):
+    int base = lower_place_base(&ctx, base_expr, &gmod)
+    int base_tid = ctx.locals.get(base).unwrap().type_id
+    String base_tname = type_id_to_name(base_tid, &gmod)
+    # Unwrap a Ptr/MutPtr base (param/static/self.field) to the collection name.
+    if base_tid >= 0 and base_tid < gmod.type_table.len():
+        GirType ica_bt = gmod.type_table.get(base_tid).unwrap()
+        match ica_bt:
+            case GtPtr(ica_inner):
+                base_tname = type_id_to_name(ica_inner, &gmod)
+            case GtMutPtr(ica_inner2):
+                base_tname = type_id_to_name(ica_inner2, &gmod)
+            else:
+                pass
+    # idx + value are independently typed (clear any leaked expected_type,
+    # mirroring lower_index_assign).
+    int saved_expected_ica = ctx.expected_type
+    ctx.expected_type = -1
+    int idx = lower_expr(&ctx, idx_expr, &gmod)
+    ctx.expected_type = saved_expected_ica
+    idx = maybe_auto_propagate(&ctx, idx, &gmod)
+    # Typed getter/setter dispatch on collection_kind (same mapping as
+    # lower_index_assign + the EIndex read arm).
+    String ica_getter = ""
+    String ica_setter = ""
+    match resource_meta_for(&gmod, base_tname):
+        case Some(ica_rmeta):
+            match ica_rmeta.collection_kind:
+                case CkVector():
+                    ica_getter = "gorget_array_get"
+                    ica_setter = "gorget_array_set"
+                case CkDeque():
+                    ica_getter = "gorget_array_get"
+                    ica_setter = "gorget_array_set"
+                case CkDict():
+                    ica_getter = "gorget_map_get"
+                    ica_setter = "gorget_map_put"
+                else:
+                    pass
+        case None:
+            pass
+    if ica_setter == "":
+        lower_fail("lower_index_compound_assign: unsupported base type " + base_tname)
+        return
+    # Element/value type via the shared `index_value_type_name` helper (the
+    # SAME one the EIndex read arm uses — one source of truth for the Dict/
+    # HashMap value-suffix split). Falls back to I64 for scalars / unresolved.
+    String ica_elem_name = index_value_type_name(base_tname)
+    String ica_elem_norm = ica_elem_name
+    if ica_elem_name == "Str":
+        ica_elem_norm = "GorgetString"
+    int ica_elem_tid = I64_TYPE
+    if ica_elem_norm != "":
+        int resolved = resolve_field_gir_type(ica_elem_norm, &gmod)
+        if resolved >= 0:
+            ica_elem_tid = resolved
+    # Read current = getter(base, idx). Both base + idx are BORROWED (the
+    # read never consumes), matching the EIndex read arm (idx must be
+    # OpBorrow — OpCopy on a String dict key trips validate_resource_moves).
+    int ica_cur = add_local(&ctx, ica_elem_tid, None)
+    Vector[Operand] ica_get_args = [OpBorrow(base), OpBorrow(idx)]
+    emit(&ctx, GICallExtern(ica_cur, ica_getter, ica_get_args))
+    # result = cur OP value, at the element type.
+    int ica_rhs = lower_expr(&ctx, value_expr, &gmod)
+    int ica_result = add_local(&ctx, ica_elem_tid, None)
+    emit_compound_arith(&ctx, op, ica_result, ica_cur, ica_rhs, ica_elem_tid, &gmod)
+    # Write back base[idx] = result via the setter. A compound index-assign
+    # never consumes the base — borrow it (Ptr base → OpCopy), exactly as
+    # lower_index_assign does.
+    Operand ica_base_op = OpBorrow(base)
+    if is_ptr_type(base_tid, &gmod):
+        ica_base_op = OpCopy(base)
+    Vector[Operand] ica_set_args = [ica_base_op, op_consume(&ctx, &gmod, idx, CkCallArgOwning()), op_consume(&ctx, &gmod, ica_result, CkCallArgOwning())]
+    emit(&ctx, GICallExtern(-1, ica_setter, ica_set_args))
 

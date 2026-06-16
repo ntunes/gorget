@@ -2021,6 +2021,28 @@ String collection_element_type(String name):
         return name.slice(8, name.len())
     return ""
 
+# Element/value type NAME for an index target `base[idx]`: Vector/Deque/Set
+# element via `collection_element_type`, Dict/HashMap VALUE-type via the
+# mangled-name value suffix (`Dict__<key>__<value>` → `<value>`). Returns ""
+# if unresolved. SINGLE SOURCE OF TRUTH for the Dict/HashMap value-suffix
+# recovery — shared by the EIndex read arm (lower_expr) and the compound
+# index-assign (lower_stmt) so the `starts_with` value-suffix split lives in
+# exactly ONE place (was duplicated). At GIR-lowering time the LIR
+# `coll_elem_type_map` typed channel isn't populated yet, so the suffix split
+# is the available mechanism here (same as `infer_method_return_type`).
+String index_value_type_name(String base_name):
+    String elem = collection_element_type(base_name)
+    if elem == "":
+        if base_name.starts_with("Dict__GorgetString__"):
+            elem = base_name.slice(20, base_name.len())
+        elif base_name.starts_with("Dict__int64_t__"):
+            elem = base_name.slice(15, base_name.len())
+        elif base_name.starts_with("HashMap__GorgetString__"):
+            elem = base_name.slice(23, base_name.len())
+        elif base_name.starts_with("HashMap__int64_t__"):
+            elem = base_name.slice(18, base_name.len())
+    return elem
+
 # Return true when the init expression is a call to a known
 # `cstr`-returning runtime/extern function. Used at SVarDecl to
 # insert a `gorget_str_from_cstr` coercion before storing into a
