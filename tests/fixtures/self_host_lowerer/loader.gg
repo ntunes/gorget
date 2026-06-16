@@ -497,6 +497,51 @@ bool module_imports_std_iter(Module m):
         i += 1
     return false
 
+# Auto-load std.hash when the module uses @derive(Hashable) on any
+# struct or enum — the derived `equip T with Hashable: void hash(self,
+# FxHasher &h)` references FxHasher's write_int / write_string / finish
+# methods from std.hash. Without the auto-load those symbols are never
+# loaded into the GIR module and the derived `T__hash` body link-fails
+# against undefined `FxHasher__write_*`. Mirrors Rust gg's
+# `module_uses_hashable_derive` (src/loader.rs:117) + the auto-load at
+# src/loader.rs:623. Derives are pre-collapsed to `Vector[String]` on
+# StructDef / EnumDef, so this is a direct membership scan (typed; no
+# attribute re-parse).
+bool module_uses_hashable_derive(Module m):
+    int i = 0
+    while i < m.items.len():
+        Item item = m.items.get(i).unwrap()
+        match item:
+            case IStruct(sdef):
+                int di = 0
+                while di < sdef.derives.len():
+                    if sdef.derives.get(di).unwrap() == "Hashable":
+                        return true
+                    di += 1
+            case IEnum(edef):
+                int dei = 0
+                while dei < edef.derives.len():
+                    if edef.derives.get(dei).unwrap() == "Hashable":
+                        return true
+                    dei += 1
+            else:
+                pass
+        i += 1
+    return false
+
+bool module_imports_std_hash(Module m):
+    int i = 0
+    while i < m.items.len():
+        Item item = m.items.get(i).unwrap()
+        match item:
+            case IImport(imp):
+                if imp.module_path == "std.hash":
+                    return true
+            else:
+                pass
+        i += 1
+    return false
+
 bool ast_mentions_std_iter_need(Module m):
     int i = 0
     while i < m.items.len():
@@ -589,6 +634,21 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
             import_paths.push(auto_iter.clone())
             import_mod_paths.push(auto_iter.clone())
             loaded.put(auto_iter.clone(), true)
+
+    # Auto-load `std.hash` when the entry module uses @derive(Hashable)
+    # and doesn't already import it. Mirrors Rust gg's auto-load at
+    # src/loader.rs:623. Without this the derived `T__hash` body calls
+    # `FxHasher__write_int` / `FxHasher__write_string` whose definitions
+    # are never loaded → declared-but-undefined at link (the
+    # `dict_user_key_auto` reachability gap). Gated on the derive so it
+    # NEVER fires for the String-keyed-Dict driver (no @derive(Hashable)
+    # in any self-host dir) → fixed_point emit stays byte-identical.
+    if module_uses_hashable_derive(m) and not module_imports_std_hash(m):
+        String auto_hash = "std.hash"
+        if not loaded.contains(auto_hash):
+            import_paths.push(auto_hash.clone())
+            import_mod_paths.push(auto_hash.clone())
+            loaded.put(auto_hash.clone(), true)
 
     # Load each imported module
     int pi = 0
