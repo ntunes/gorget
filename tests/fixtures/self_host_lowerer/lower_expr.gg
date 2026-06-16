@@ -50,21 +50,23 @@ from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_nam
 # returned String with %.*s. TYPED gate (core-invariant #2): the check
 # is a `fn_sigs` Dict lookup of the actually-emitted symbol, NOT a
 # name-shape test on the type.
-String fstr_displayable_display_method(int tid, GirModule &gmod):
+Option[String] fstr_displayable_display_method(int tid, GirModule &gmod):
     # Only user struct/enum types (Named) have a display method; the
     # primitive ids (bool/int/double) and pointer wrappers never do.
     # type_id_to_name unwraps GtPtr/GtMutPtr to the pointee name, but a
     # Displayable value local is a bare value (the Ptr cases are handled
     # by the borrowed-String deref above), so the bare-name lookup is
-    # the right one here.
+    # the right one here. Returns the display symbol as `Some` (so the
+    # caller binds it once via `if … is Some(fn):` — no sentinel, no
+    # re-lookup), `None` when the type isn't Displayable.
     String tyname = type_id_to_name(tid, &gmod)
     String short_key = tyname + "__display"
     if gmod.fn_sigs.contains(short_key):
-        return short_key
+        return Some(short_key)
     String trait_key = "Displayable_for_" + tyname + "__display"
     if gmod.fn_sigs.contains(trait_key):
-        return trait_key
-    return ""
+        return Some(trait_key)
+    return None()
 
 # ── Block-as-expression / tail-value lowering ───────────
 #
@@ -387,7 +389,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             register_local_for_drop(&ctx, bstr, gs_tid, &gmod)
                             fmt = fmt + "%.*s"
                             gsf_args.push(op_consume(&ctx, &gmod, bstr, CkFormatArg()))
-                        elif fstr_displayable_display_method(aty, &gmod) != "":
+                        elif fstr_displayable_display_method(aty, &gmod) is Some(disp_fn):
                             # Displayable dispatch: `{x}` where x is a struct/enum
                             # with a `display` method (user `equip … with
                             # Displayable` or `@derive(Displayable)`) → call
@@ -399,8 +401,9 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             # branch (src/ir/lowering/exprs/calls.rs:1964-1996).
                             # TYPED gate: the method's presence in `fn_sigs`
                             # (a Dict lookup of the actually-emitted symbol),
-                            # not a name-shape test.
-                            String disp_fn = fstr_displayable_display_method(aty, &gmod)
+                            # not a name-shape test. `is Some(disp_fn)` binds
+                            # the symbol once in the condition — no sentinel, no
+                            # second lookup.
                             int disp_dst = add_local(&ctx, gs_tid, None)
                             # `display(self)` takes `&self` (a borrow) — pass
                             # the value local by OpBorrow, exactly as the
@@ -3705,7 +3708,7 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                 val = bdst
                 val_type = gs_tid
                 fmt = "%.*s\n"
-            elif fstr_displayable_display_method(val_type, &gmod) != "":
+            elif fstr_displayable_display_method(val_type, &gmod) is Some(pdisp_fn):
                 # Displayable dispatch: `print(x)` where x is a struct/enum
                 # with a `display` method → call `Type__display(&x)` → String,
                 # then route through the `%.*s\n` String branch below. Without
@@ -3715,7 +3718,7 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                 # (src/ir/lowering/exprs/calls.rs:1964-1996); sibling of the
                 # EFString-arg Displayable branch above. TYPED gate: the
                 # method's presence in `fn_sigs`, not a name-shape test.
-                String pdisp_fn = fstr_displayable_display_method(val_type, &gmod)
+                # `is Some(pdisp_fn)` binds the symbol once in the condition.
                 int pdisp_dst = add_local(&ctx, gs_tid, None)
                 emit(&ctx, GICallExtern(pdisp_dst, pdisp_fn, [OpBorrow(val)]))
                 # FRESH-OWNED-TEMP drop registration (#7-style): `display`
