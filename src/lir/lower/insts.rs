@@ -2062,19 +2062,11 @@ impl<'a> FuncLowering<'a> {
                         }
                     }
                 }
-                // Legacy prefix fallback: covers names that don't yet appear in
-                // resources.gg (the spike is 9 entries; the full ~30 lands as
-                // item 8 of the SSoT plan). Safe to remove once the table is
-                // fully populated.
-                if n.starts_with("Vector__") || n.starts_with("Deque__") {
-                    return ElemMeta::Resource(ResourceKind::GorgetArray);
-                }
-                if n.starts_with("Dict__") || n.starts_with("HashMap__") {
-                    return ElemMeta::Resource(ResourceKind::GorgetMap);
-                }
-                if n.starts_with("Set__") || n.starts_with("HashSet__") {
-                    return ElemMeta::Resource(ResourceKind::GorgetSet);
-                }
+                // The Phase A SSoT table above (resources.gg) is fully
+                // populated for the Vector__/Deque__/Dict__/HashMap__/Set__/
+                // HashSet__ collection prefixes, so the former legacy
+                // prefix-fallback arms were dead and have been removed.
+                // An unmatched name falls through to UserType / struct lookup.
                 if let Some(sid) = self.struct_reg.lookup(n) {
                     // Callable variants (Callable__T_args, MutCallable__T_args, …) are
                     // registered with `c_runtime_alias = "GorgetClosure"`. Read the typed

@@ -375,6 +375,27 @@ struct LirThreadSpawnedFn:
     # byte-identical to the pre-stack-size emit); non-zero = a sized wrapper.
     int stack_size
 
+# A `d.get_or(k, default)` inline-wrapper REQUEST. Mirrors the
+# thread_spawned_fns channel: a TYPED monomorphization-request recorded at
+# the CLASSIFIED LIR call-mapping site (map_runtime_name's `coll_cat ==
+# "GorgetMap"` + `method == "get_or"` arm), consumed by
+# emit_dict_get_or_wrappers at codegen. There is no `gorget_map_get_or`
+# runtime symbol — the wrapper IS the generated dispatch target the LIR
+# map-method routing returns by name. Recording the request UPSTREAM (where
+# the receiver is already typed CkDict via type_runtime_map) lets codegen
+# emit each wrapper without re-deriving "this call is a Dict/HashMap get_or"
+# from `inst_name.starts_with("Dict__"/"HashMap__")` (a wrong-layer read).
+# `mangled_name` is the `Dict__K__V__get_or` / `HashMap__K__V__get_or` C
+# symbol (the emit-boundary contract with the LIR call). `key_c` / `val_c`
+# are the K and V type names read from the TYPED `coll_key_type_map` /
+# `coll_val_type_map` (NOT parsed from the symbol). Deduped by mangled_name
+# at the write site (Dict and HashMap of the same K/V share a body — the
+# names differ so both are recorded).
+struct DictGetOrReq:
+    String mangled_name
+    String key_c
+    String val_c
+
 # ── Test/Bench Metadata ────────────────────────────────────────
 
 struct LirTestFn:
@@ -478,6 +499,15 @@ struct LirModule:
     # "Set__T" → "gorget_ordered_set_new", "HashSet__T" → "gorget_set_new".
     # Populated at registration time for O(1) lookup without starts_with.
     Dict[String, String] coll_ctor_fn_map
+    # `d.get_or(k, default)` inline-wrapper REQUESTS — the typed
+    # monomorphization-request registry. Populated by map_runtime_name's
+    # classified get_or arm (the typed CkDict site), drained by
+    # emit_dict_get_or_wrappers at codegen. Replaces the read-side
+    # `inst_name.starts_with("Dict__"/"HashMap__")` instruction scan with a
+    # write-through typed channel (Layering rule 4, "resolve once, write
+    # through"). Empty for modules with no get_or call. Appended AT END to
+    # avoid shifting positional ctor call sites.
+    Vector[DictGetOrReq] dict_get_or_requests
 
 # ── LirFunction helpers ─────────────────────────────────────────
 
@@ -590,4 +620,5 @@ LirModule new_lir_module():
     Dict[String, String] ckt = {}
     Dict[String, String] cvt = {}
     Dict[String, String] ccf = {}
-    return LirModule(structs, globals, functions, externs, "", spawned, thread_spawned, tests, benches, false, false, SCHED_POOL, "", false, false, "", 0, false, rec_drop_s, rec_drop_e, drop_coll, type_drops, imported_t, evp, evt, trt, tmpm, cet, ckt, cvt, ccf)
+    Vector[DictGetOrReq] dgor = []
+    return LirModule(structs, globals, functions, externs, "", spawned, thread_spawned, tests, benches, false, false, SCHED_POOL, "", false, false, "", 0, false, rec_drop_s, rec_drop_e, drop_coll, type_drops, imported_t, evp, evt, trt, tmpm, cet, ckt, cvt, ccf, dgor)

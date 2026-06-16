@@ -8,7 +8,7 @@
 
 from lir import LirModule, LirFunction, LirBlock, LirInst, LirTerm, LirSlot
 from lir import SlotProvenance
-from lir import LirStructDef, LirExtern, LirGlobal, LirGlobalField, LirSpawnedFn, LirTestFn, LirBenchFn, LirThreadSpawnedFn
+from lir import LirStructDef, LirExtern, LirGlobal, LirGlobalField, LirSpawnedFn, LirTestFn, LirBenchFn, LirThreadSpawnedFn, DictGetOrReq
 from lir import StructField, BlockParam, SwitchCase, FieldDrop, EnumVariantDrop, TypeDropInfo, FieldInit
 from lir import LT_I8, LT_I16, LT_I32, LT_I64, LT_U8, LT_U16, LT_U32, LT_U64
 from lir import LT_F32, LT_F64, LT_BOOL, LT_PTR, LT_VOID
@@ -900,67 +900,35 @@ String box_alloc_c_type(String suffix):
 # passes the GorgetMap struct + scalar key + scalar/Str default), so `&map` and
 # `&key` reach valid addresses for the runtime `const void*` ABI.
 String emit_dict_get_or_wrappers(LirModule &m):
-    Vector[String] seen = []
+    # Read the TYPED monomorphization-request registry (populated upstream at
+    # the classified `coll_cat == "GorgetMap"` + get_or site in
+    # map_runtime_name). NO instruction scan, NO `starts_with` routing — the
+    # "this is a Dict/HashMap get_or" decision was already typed; this only
+    # SPELLS each request's C symbol (the legitimate emit-boundary spelling).
+    # Mirrors the thread_spawned_fns / test_fns codegen read pattern.
     String out = ""
-    int fi = 0
-    while fi < m.functions.len():
-        int bi = 0
-        while bi < m.functions.get(fi).unwrap().blocks.len():
-            int ii = 0
-            while ii < m.functions.get(fi).unwrap().blocks.get(bi).unwrap().insts.len():
-                String inst_name = ""
-                match m.functions.get(fi).unwrap().blocks.get(bi).unwrap().insts.get(ii).unwrap():
-                    case ICallExtern(_, name, _, _, _):
-                        inst_name = name
-                    case ICall(_, fid, _):
-                        if fid >= 0 and fid < m.functions.len():
-                            inst_name = m.functions.get(fid).unwrap().name
-                    else:
-                        pass
-                String body = dict_get_or_wrapper_for(inst_name, &seen)
-                if body != "":
-                    out = out + body
-                ii += 1
-            bi += 1
-        fi += 1
+    for dgor_req in m.dict_get_or_requests:
+        out = out + dict_get_or_wrapper_for(dgor_req)
     if out != "":
         out = out + "\n"
     return out
 
-# Emit one `Dict__K__V__get_or` / `HashMap__K__V__get_or` wrapper for the given
-# call name, or "" if the name isn't a get_or call (or already emitted). The
-# `__get_or` suffix is split off; the remaining `<K>__<V>` is split at the FIRST
-# `__` (simple K/V type names never nest `__`, matching Rust's `find("__")`).
-String dict_get_or_wrapper_for(String inst_name, Vector[String] &seen):
-    String base = ""
-    if inst_name.starts_with("Dict__") and inst_name.ends_with("__get_or"):
-        base = inst_name.slice(6, inst_name.len() - 8)
-    elif inst_name.starts_with("HashMap__") and inst_name.ends_with("__get_or"):
-        base = inst_name.slice(9, inst_name.len() - 8)
-    else:
-        return ""
-    # Split base into K__V at the first `__`.
-    int sep = base.index_of("__").unwrap_or(-1)
-    if sep < 0:
-        return ""
-    String key_c = base.slice(0, sep)
-    String val_c = base.slice(sep + 2, base.len())
-    # Dedup by the full mangled name (Dict and HashMap of the same K/V share a body).
-    int si = 0
-    while si < seen.len():
-        if seen.get(si).unwrap() == inst_name:
-            return ""
-        si += 1
-    seen.push(inst_name.clone())
-    String kty = box_alloc_c_type(key_c)
-    String vty = box_alloc_c_type(val_c)
-    bool val_is_str = val_c == "GorgetString" or val_c == "Str"
+# Emit one `Dict__K__V__get_or` / `HashMap__K__V__get_or` wrapper from a typed
+# request. The mangled symbol is the request's `mangled_name` (the call ABI
+# contract); the K/V C types come from the request's TYPED `key_c` / `val_c`
+# (read from coll_key/val_type_map upstream — never parsed from the symbol).
+# Dedup happened at the write site (one request per mangled name), so every
+# request emits exactly one wrapper.
+String dict_get_or_wrapper_for(DictGetOrReq req):
+    String kty = box_alloc_c_type(req.key_c)
+    String vty = box_alloc_c_type(req.val_c)
+    bool val_is_str = req.val_c == "GorgetString" or req.val_c == "Str"
     String hit = ""
     if val_is_str:
         hit = "gorget_string_clone_to_owned(__p)"
     else:
         hit = "*(" + vty + "*)__p"
-    String out = "static inline " + vty + " " + inst_name + "(GorgetMap __m, " + kty + " __k, " + vty + " __d) { void* __p = (void*)gorget_map_get(&__m, &__k); if (__p == NULL) return __d; return " + hit + "; }\n"
+    String out = "static inline " + vty + " " + req.mangled_name + "(GorgetMap __m, " + kty + " __k, " + vty + " __d) { void* __p = (void*)gorget_map_get(&__m, &__k); if (__p == NULL) return __d; return " + hit + "; }\n"
     return out
 
 # ── Globals ────────────────────────────────────────────────

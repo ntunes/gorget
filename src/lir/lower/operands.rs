@@ -245,9 +245,10 @@ impl<'a> FuncLowering<'a> {
         // Phase A SSoT: the kind-detection arm previously matched six prefix
         // patterns to decide "is this a collection method?". The same decision
         // now reads from `compiler/data/resources.gg`'s typed
-        // `collection_kind` (per layering-discipline rule 2). The prefix arms
-        // remain as a defensive fallback for names not yet in the spike (item
-        // 8 fills out the table).
+        // `collection_kind` (per layering-discipline rule 2). The table is
+        // fully populated (Vector__/Deque__/Dict__/HashMap__/Set__/HashSet__
+        // all have MkPrefix entries), so the former prefix fallback was dead
+        // and has been removed — an unknown name is simply not a collection.
         {
             use crate::ir::abi::AbiKind;
             use crate::resource_schema::CollectionKind as SchemaCollectionKind;
@@ -255,11 +256,7 @@ impl<'a> FuncLowering<'a> {
                 .map(|m| matches!(m.collection_kind,
                     SchemaCollectionKind::Vector | SchemaCollectionKind::Deque
                     | SchemaCollectionKind::Dict | SchemaCollectionKind::Set))
-                .unwrap_or_else(|| {
-                    name.starts_with("Vector__") || name.starts_with("Deque__")
-                    || name.starts_with("Dict__") || name.starts_with("HashMap__")
-                    || name.starts_with("Set__") || name.starts_with("HashSet__")
-                });
+                .unwrap_or(false);
             let is_higher_order = is_collection_name
                 && name.rfind("__").map_or(false, |pos| {
                     let method = &name[pos + 2..];

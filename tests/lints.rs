@@ -209,7 +209,18 @@ fn no_growth_in_name_prefix_routing() {
     /// dispatchers in c_lir/c_runtime registration that the previous
     /// MANGLED_PREFIXES list silently undercounted — bringing them
     /// into the ratchet so future name-prefix additions are caught.
-    const BUDGET: usize = 309;
+    /// Lowered 309 → 257 (2026-06-16): two changes, no behaviour change.
+    /// (1) Tightened the loose floor: the re-derived count had been 269
+    /// (budget was 40 above the actual site count); locked to the floor.
+    /// (2) Retired 12 dead "Legacy prefix fallback" sites — the
+    /// Vector__/Deque__/Dict__/HashMap__/Set__/HashSet__ prefix arms in
+    /// `lir/lower/operands.rs` (6) and `lir/lower/insts.rs` (6) that fired
+    /// only when `resources::table().lookup(name)` returned None for those
+    /// names. The table now carries MkPrefix entries for all six, so the
+    /// fallbacks were unreachable (proven by panic-instrumenting both
+    /// blocks and running the collection-fixture corpus + the full
+    /// self-host self-compile — never hit).
+    const BUDGET: usize = 257;
 
     let count = count_name_prefix_sites();
     assert!(
@@ -917,22 +928,19 @@ fn snag11_equip_symbol_mangle_site_count() {
 /// goes through `resource_meta_for`/`type_runtime_map` upstream. (The sibling
 /// `concurrency_elem_size_in_mod` size-extractor uses a VARIABLE prefix loop,
 /// not a literal `starts_with`, so it is correctly not counted here.)
-/// ⚠ TEMPORARY 74 → 76 (2026-06-16, owner-approved): the Dict `get_or`
-/// inline-wrapper generator (`lir_codegen.gg`'s `dict_get_or_wrapper_for`)
-/// added TWO literal `inst_name.starts_with("Dict__"/"HashMap__")` sites
-/// (mirroring the Box get/set wrapper sibling). Unlike the bumps above this is
-/// NOT a blessed permanent emit-boundary floor — it is a WRONG-LAYER read-site:
-/// the "this call is a Dict/HashMap get_or" fact is ALREADY TYPED upstream at
-/// the `collection_kind_of → CkDict/CkHashMap` classification in `lower_expr.gg`
-/// (where the `.get_or()` call is lowered). The proper fix sets typed metadata
-/// upstream — a monomorphization-request registry populated at that classified
-/// site and consumed at codegen — so the generator never re-derives meaning from
-/// the symbol name. COMMITTED burn-down follow-up: TODO "typed get_or wrapper
-/// registry" (retires this +2 back to 74, generalizes to the Box/sort siblings).
+/// Retired the 2026-06-16 temporary 74 → 76 bump back to 74: the Dict `get_or`
+/// inline-wrapper generator's TWO `inst_name.starts_with("Dict__"/"HashMap__")`
+/// read-sites are GONE. The "this call is a Dict/HashMap get_or" fact is now
+/// recorded UPSTREAM as a TYPED monomorphization-request registry
+/// (`LirModule.dict_get_or_requests`, populated at the classified
+/// `coll_cat == "GorgetMap"` + `method == "get_or"` arm in
+/// `lir_lower.gg`'s `map_runtime_name`, with K/V read from the typed
+/// `coll_key/val_type_map`) and DRAINED by `emit_dict_get_or_wrappers` at
+/// codegen — no instruction scan, no name routing (Layering rule 4,
+/// "resolve once, write through").
 #[test]
 fn no_growth_in_self_host_name_prefix_routing() {
-    // ⚠ TEMPORARY 76 (was 74) — see the doc comment's burn-down follow-up.
-    const BUDGET: usize = 76;
+    const BUDGET: usize = 74;
 
     // Phase-A classification-routing class only: all MANGLED_PREFIXES EXCEPT
     // the prelude option-like ones (those are the sibling lint's burn-down).

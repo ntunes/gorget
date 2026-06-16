@@ -12,7 +12,7 @@ from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM, OP_MOD
 from gir import OP_ADD_WRAP, OP_SUB_WRAP, OP_MUL_WRAP
 from gir import OP_BITAND, OP_BITOR, OP_BITXOR, OP_SHL, OP_SHR
 from gir import UNOP_NEG, UNOP_NOT, UNOP_BITNOT
-from lir import LirModule, LirFunction, LirBlock, LirInst, LirTerm, LirSlot, LirStructDef, LirExtern, LirGlobal, LirThreadSpawnedFn
+from lir import LirModule, LirFunction, LirBlock, LirInst, LirTerm, LirSlot, LirStructDef, LirExtern, LirGlobal, LirThreadSpawnedFn, DictGetOrReq
 from lir import SlotProvenance
 from lir import StructField, BlockParam, SwitchCase, FieldDrop, EnumVariantDrop, TypeDropInfo, FieldInit
 from lir import LT_I8, LT_I16, LT_I32, LT_I64, LT_U8, LT_U16, LT_U32, LT_U64
@@ -1349,7 +1349,22 @@ String map_runtime_name(String name, LirModule &m, GirModule &gmod):
         # There is no `gorget_map_get_or` runtime symbol — keep the mangled
         # name unmapped so it dispatches to the wrapper. Mirrors the Box
         # get/set inline-wrapper routing above.
+        #
+        # Resolve-once / write-through (Layering rule 4): this arm is the TYPED
+        # classification site — `coll_cat == "GorgetMap"` (via type_runtime_map)
+        # and `method == "get_or"` already proved "this call is a Dict/HashMap
+        # get_or". RECORD a wrapper REQUEST here, reading K/V from the TYPED
+        # coll_key/val_type_map (no name parse), so emit_dict_get_or_wrappers
+        # never re-derives meaning from the mangled Dict/HashMap symbol prefix.
         if method == "get_or":
+            String dgor_key = coll_key_type_for_name(name, &m)
+            String dgor_val = coll_val_type_for_name(name, &m)
+            bool dgor_seen = false
+            for dgor_r in m.dict_get_or_requests:
+                if dgor_r.mangled_name == name:
+                    dgor_seen = true
+            if not dgor_seen:
+                m.dict_get_or_requests.push(DictGetOrReq(name.clone(), dgor_key.clone(), dgor_val.clone()))
             return name
         return map_dict_method(method)
     if coll_cat == "GorgetSet":
