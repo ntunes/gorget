@@ -36,7 +36,7 @@ from lower import LazyMember, cow_lazy_materialize_family, cow_lazy_retire_stmt_
 from lower_drops import init_drop_elab, push_drop_scope, emit_scope_drops, pop_drop_scope, pop_drop_scope_no_emit, is_droppable_type, register_local_for_drop, register_lazy_slot_for_drop, register_owning_param, mark_local_moved, restore_moved, union_moved, emit_drops_for_early_exit, flush_drop_queue
 from lower_liveness import LivenessAnalysis, compute_liveness, wire_liveness_into_modes, liveness_instrumentation_diff, update_last_pos_for_inst, update_last_pos_for_term, note_operand_pos, empty_liveness
 from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, index_value_type_name, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, is_comparison, map_cmpop
-from lower_expr import block_terminated, lower_block_expr, lower_stmt_as_tail_value, lower_if_chain_expr, refine_local_type, lower_expr, lower_expr_inner, apply_container_hint_for_ctor_arg, lower_call, guard_field_deref_base
+from lower_expr import block_terminated, lower_block_expr, lower_stmt_as_tail_value, lower_if_chain_expr, refine_local_type, lower_expr, lower_expr_inner, apply_container_hint_for_ctor_arg, lower_call, guard_field_deref_base, box_deref_inner_name
 
 # ── Statement lowering ───────────────────────────────────
 
@@ -727,8 +727,48 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     # type name. The self-host uses this for Dict[K,V] put
                     # (int_consts[name] = val) and Vector[T] set patterns.
                     lower_index_assign(&ctx, *base_box, *idx_box, value_expr, &gmod)
+                case EDeref(inner_box):
+                    # `*b = X` — write X THROUGH the box pointer into the heap
+                    # pointee (Snag #26). The box VALUE is itself the heap
+                    # pointer (Box__T is `typedef void*`), so `GIDerefStore`
+                    # loads that pointer (ISlotLoad LT_PTR) and stores X
+                    # through it — `*(T*)box = X`. Without this arm the write
+                    # fell into `else: lower_fail` and was SILENTLY DROPPED.
+                    #
+                    # Mirrors Rust gg's `Expr::Deref` lvalue arm
+                    # (src/ir/lowering/stmts/assigns.rs:504-557): lower the
+                    # inner box to a place, project a `Deref`, propagate the
+                    # pointee type as expected_type for the RHS, route the RHS
+                    # through the consuming-position CoW helper, then store.
+                    # Here `op_consume(..CkAssign())` IS that CoW helper — a
+                    # borrowed/live resource source (box_deref_borrowed_string:
+                    # `*b = original` where `original` is read again) becomes
+                    # OpClone (independent heap, no double-free), a fresh owned
+                    # temp (`*b = Inner(99)`) stays OpMove/OpCopy. The
+                    # is_resource_type(pointee) gate Rust applies is subsumed by
+                    # op_consume's per-source move/clone decision (it never
+                    # clones a non-resource fresh value). Same machinery as the
+                    # EIdentifier `&`/`!`-param GtMutPtr arm above (:637).
+                    int dbox = lower_expr(&ctx, *inner_box, &gmod)
+                    int dbox_tid = ctx.locals.get(dbox).unwrap().type_id
+                    String dbox_tname = type_id_to_name(dbox_tid, &gmod)
+                    match box_deref_inner_name(dbox_tname, &gmod):
+                        case Some(dbox_inner_name):
+                            int dbox_inner_tid = resolve_field_gir_type(dbox_inner_name, &gmod)
+                            # Propagate the pointee type as expected_type so a
+                            # bare `None` / variant-ctor RHS materialises at the
+                            # destination shape (mirror the EIdentifier-write +
+                            # Rust assigns.rs:536-539 expected_type propagation).
+                            int prev_expected_db = ctx.expected_type
+                            if dbox_inner_tid != I64_TYPE and dbox_inner_tid != UNIT_TYPE:
+                                ctx.expected_type = dbox_inner_tid
+                            int dbox_val = lower_expr(&ctx, value_expr, &gmod)
+                            ctx.expected_type = prev_expected_db
+                            emit(&ctx, GIDerefStore(dbox, op_consume(&ctx, &gmod, dbox_val, CkAssign()), dbox_inner_tid))
+                        case None:
+                            lower_fail("SAssign *deref target is not a Box (got: " + dbox_tname + ")")
                 else:
-                    lower_fail("SAssign target is neither EIdentifier, EFieldAccess, nor EIndex (got: " + expr_kind(target_expr.expr) + ")")
+                    lower_fail("SAssign target is neither EIdentifier, EFieldAccess, EIndex, nor EDeref (got: " + expr_kind(target_expr.expr) + ")")
         case SBreak(_):
             # Jump to the innermost loop's break target. Silently dropped
             # before, which caused while-loops in the self-host lexer to
@@ -1026,6 +1066,26 @@ int lower_place_base(LowerCtx &ctx, SpannedExpr base_expr, GirModule &gmod):
                 Vector[Operand] no_args = []
                 emit(&ctx, GICallExtern(pdst, "__global_ref__" + name, no_args))
                 return pdst
+        case EDeref(inner_box):
+            # `(*b).field = X` place-base. The box VALUE is itself the heap
+            # pointer (Box__T is `typedef void*`); returning the box LOCAL
+            # (NOT `lower_expr(*b)` which emits a GIDeref value-LOAD into a
+            # stack copy → the field-write mutated the copy, Snag #26) keeps
+            # the place a POINTER. `lower_field_write` then re-points
+            # `base_type_name` to the inner via `box_deref_inner_name` and the
+            # `__field_write_` arg-prep loads the box pointer (lir_slot_is_box,
+            # lir_lower.gg:3265) → `((T*)box)->field = X`, in place. Mirrors
+            # Rust assigns.rs:504-557 (the `Expr::Deref` lvalue place, a
+            # `Projection::Deref` on the inner box place).
+            int dpb_box = lower_expr(&ctx, *inner_box, &gmod)
+            int dpb_tid = ctx.locals.get(dpb_box).unwrap().type_id
+            String dpb_tname = type_id_to_name(dpb_tid, &gmod)
+            match box_deref_inner_name(dpb_tname, &gmod):
+                case Some(_):
+                    return dpb_box
+                case None:
+                    pass
+            return dpb_box
         else:
             pass
     return lower_expr(&ctx, base_expr, &gmod)
@@ -1046,6 +1106,19 @@ void lower_field_write(LowerCtx &ctx, SpannedExpr base_expr, String field_name, 
                 base_type_name = type_id_to_name(inner, &gmod)
             else:
                 pass
+    # Box[T] field write: `(*b).field = v` — the place-base returned the box
+    # LOCAL (Box__T = `typedef void*`, holding the heap pointer). Re-point
+    # `base_type_name` to the inner T so `write_fn` is `__field_write_T_field`
+    # and the `__field_write_` arg-prep loads the box pointer (lir_slot_is_box,
+    # lir_lower.gg:3265) → `((T*)box)->field = v`, mutating the heap in place.
+    # `base` itself stays the box local. Sibling of the Guard re-point below;
+    # Box-ness via the typed box_kind channel (box_deref_inner_name), NOT a
+    # name-prefix test. Mirrors Rust assigns.rs:504-557.
+    match box_deref_inner_name(base_type_name, &gmod):
+        case Some(bx_inner):
+            base_type_name = bx_inner
+        case None:
+            pass
     # Guard[T] field write: `g.field = v` where `g: Guard[T]` /
     # `ReadGuard[T]` / `WriteGuard[T]` must mutate the GUARDED data, not the
     # guard's own owner/ptr fields. Re-point `base` to the inner-data pointer
@@ -1118,6 +1191,15 @@ void emit_field_write_from_local(LowerCtx &ctx, SpannedExpr base_expr, String fi
                 base_type_name = type_id_to_name(inner, &gmod)
             else:
                 pass
+    # Box[T] field write (compound-assign `(*b).x += 1` and other pre-lowered-
+    # value field stores). Same in-place box re-point as lower_field_write —
+    # re-point base_type_name to the inner so the store projects through the
+    # box pointer, mutating the heap pointee not a stack copy.
+    match box_deref_inner_name(base_type_name, &gmod):
+        case Some(bx_inner):
+            base_type_name = bx_inner
+        case None:
+            pass
     # Guard[T] field write (compound-assign `g.x += 1` and other pre-lowered-
     # value field stores). Same in-place guard-deref as lower_field_write —
     # re-point base to the guarded-data pointer so the store mutates the real

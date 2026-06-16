@@ -321,6 +321,31 @@ Option[FieldDerefResult] guard_field_deref_base(LowerCtx &ctx, int base, String 
     emit(&ctx, GICallExtern(gd_inner_ptr, gd_get_ptr_fn, [OpBorrow(base)]))
     return Some(FieldDerefResult(gd_inner_ptr, gd_inner_name))
 
+# ── Box[T] deref-as-PLACE inner-name (shared write helper) ──────────
+# `box_deref_inner_name(name)` returns Some(inner) when `name` is a
+# parameterised `Box__<inner>` struct (`BkRegularBox`), else None.
+# Box-ness is decided by the TYPED `box_kind` channel (the same
+# `resource_meta_for(...).box_kind == BkRegularBox()` discriminator the
+# read-side `*b` / `b.field` arms use), NOT a name-prefix test — the
+# slice past the `Box__` prefix below only RUNS once the typed channel
+# has already classified the value as a regular box (so it carries no
+# routing decision; mirrors the read-side arms' prefix-slice).
+# Used by the deref-as-PLACE write sites (`*b = x`, `(*b).f = x`) where
+# the box VALUE is itself the heap pointer and the write must project
+# THROUGH it (Rust assigns.rs:504-557 — the `Expr::Deref` lvalue arm
+# pushes a `Projection::Deref`; the self-host's pointer-in-the-tid
+# representation makes "the box value IS the pointer" the equivalent).
+Option[String] box_deref_inner_name(String base_type_name, GirModule &gmod):
+    match resource_meta_for(&gmod, base_type_name):
+        case Some(rmeta):
+            match rmeta.box_kind:
+                case BkRegularBox():
+                    return Some(base_type_name.slice(5, base_type_name.len()))
+                else:
+                    return None
+        case None:
+            return None
+
 int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
     # Consume the one-shot suppress flag for THIS expression.
     bool suppress = ctx.suppress_auto_prop
@@ -2690,6 +2715,28 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
         case EMove(inner_box):
             return lower_expr(&ctx, *inner_box, &gmod)
         case EMutableBorrow(inner_box):
+            # `&*b` — a mutable borrow of a box deref must yield a pointer to
+            # the HEAP pointee, not to a stack value-copy. `lower_expr(*b)`
+            # emits a GIDeref value-LOAD (copies the pointee into a fresh
+            # stack local), so `mutate(&*b)` would mutate the copy (Snag #26,
+            # box_deref_write's `mutate(&*b2)` shape). The box VALUE is itself
+            # the heap pointer (Box__T = `typedef void*`), so return the box
+            # LOCAL directly — the call arg-prep's `lir_slot_is_box` path
+            # (lir_lower.gg:3265) then passes the loaded box pointer as the
+            # `&`-borrow arg = a pointer straight to the heap pointee. Mirrors
+            # Rust gg modelling `&*b` as a borrow of `Place{box,[Deref]}`.
+            match (*inner_box).expr:
+                case EDeref(mb_box):
+                    int mb_box_local = lower_expr(&ctx, *mb_box, &gmod)
+                    int mb_box_tid = ctx.locals.get(mb_box_local).unwrap().type_id
+                    String mb_box_tname = type_id_to_name(mb_box_tid, &gmod)
+                    match box_deref_inner_name(mb_box_tname, &gmod):
+                        case Some(_):
+                            return mb_box_local
+                        case None:
+                            pass
+                else:
+                    pass
             return lower_expr(&ctx, *inner_box, &gmod)
         case EDeref(inner_box):
             # `*box` — actually load the inner value. The inner AST is
@@ -4089,7 +4136,42 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                     _ucft = lookup_ctor_field_type(user_ctor_enum, user_ctor_variant, ai, &gmod)
                 if _ucft != I64_TYPE and _ucft != UNIT_TYPE:
                     ctx.expected_type = _ucft
-            int arg_local = lower_expr(&ctx, arg, &gmod)
+            # `&*b` / `!*b` at a by-pointer param — pass the box POINTER, not
+            # a value-load. The parser stripped the `&`/`!` sigil, so the arg
+            # is a bare `EDeref(box)` here; the callee's param is by-pointer
+            # (`&T`/`!T` → borrow_flags / GtMutPtr). `lower_expr(*box)` would
+            # value-LOAD the pointee into a stack copy → the callee mutates the
+            # copy (box_deref_write `mutate(&*b2)` shape, Snag #26). The box
+            # VALUE is itself the heap pointer; lower the BOX directly so the
+            # arg-prep's `lir_slot_is_box` (lir_lower.gg:3265) passes the box
+            # pointer = a pointer straight to the heap pointee. Mirrors Rust gg
+            # modelling `&*b` as a borrow of `Place{box,[Deref]}`.
+            bool ad_param_by_ptr = false
+            if ai < borrow_flags.len() and borrow_flags.get(ai).unwrap():
+                ad_param_by_ptr = true
+            if not ad_param_by_ptr and ai < callee_param_types.len():
+                match gmod.type_table.get(callee_param_types.get(ai).unwrap()).unwrap():
+                    case GtMutPtr(_):
+                        ad_param_by_ptr = true
+                    else:
+                        pass
+            int arg_local = -1
+            bool ad_handled = false
+            if ad_param_by_ptr:
+                match arg.expr:
+                    case EDeref(ad_box):
+                        int ad_box_local = lower_expr(&ctx, *ad_box, &gmod)
+                        int ad_box_tid = ctx.locals.get(ad_box_local).unwrap().type_id
+                        match box_deref_inner_name(type_id_to_name(ad_box_tid, &gmod), &gmod):
+                            case Some(_):
+                                arg_local = ad_box_local
+                                ad_handled = true
+                            case None:
+                                pass
+                    else:
+                        pass
+            if not ad_handled:
+                arg_local = lower_expr(&ctx, arg, &gmod)
             ctx.expected_type = prev_expected_arg
             # Auto-propagate a `throws` call passed as an argument
             # (`f(might())` unwraps; `f(r)` where the param is Result keeps the
