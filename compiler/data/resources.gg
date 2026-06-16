@@ -346,7 +346,7 @@ public static Vector[ResourceEntry] RESOURCES = [
             "Ptr", 8, LtPtr(),
             None, None, None,
             CsRefCounted(), CkNotCollection(), BkNotBox(),
-            true, Some("gorget_once_flag"), None, false)),
+            true, Some("gorget_onceflag"), None, false)),
 
     # WaitGroup__ — opaque, ref-counted, factory.
     ResourceEntry(
@@ -355,7 +355,7 @@ public static Vector[ResourceEntry] RESOURCES = [
             "Ptr", 8, LtPtr(),
             None, None, None,
             CsRefCounted(), CkNotCollection(), BkNotBox(),
-            true, Some("gorget_wait_group"), None, false)),
+            true, Some("gorget_waitgroup"), None, false)),
 
     # TaskGroup__ — opaque, ref-counted, factory.
     ResourceEntry(
@@ -375,13 +375,59 @@ public static Vector[ResourceEntry] RESOURCES = [
             CsRefCounted(), CkNotCollection(), BkNotBox(),
             true, None, None, false)),
 
-    # Bare-name opaque cluster — Barrier / CondVar / AtomicInt / AtomicBool /
-    # Process / Thread / Semaphore / WaitGroup / OnceFlag. Method-prefix
-    # wiring for these went through direct method-name dispatch (no prefix).
+    # Bare-name opaque cluster. These carry the SAME method_prefix as their
+    # `T__`-parameterised siblings above so a method call on a bare-typed
+    # receiver (e.g. an `AtomicInt counter` PARAMETER → `counter.add(1)` →
+    # `AtomicInt__add`) routes to the runtime symbol (`gorget_atomic_int_add`)
+    # via the type_method_prefix_map prefix-scan, instead of falling through
+    # to the undefined mangled call. The `T__`-parameterised forms reached
+    # the right prefix already; the bare param/local forms (spawned async
+    # bodies typed `AtomicInt`) did not — hence the split below.
     ResourceEntry(
-        [MkExact("Barrier"), MkExact("CondVar"), MkExact("AtomicInt"),
-         MkExact("AtomicBool"), MkExact("Process"), MkExact("Thread"),
-         MkExact("Semaphore"), MkExact("WaitGroup"), MkExact("OnceFlag")],
+        [MkExact("AtomicInt")],
+        ResourceMetadata(
+            "Ptr", 8, LtPtr(),
+            None, None, None,
+            CsRefCounted(), CkNotCollection(), BkNotBox(),
+            true, Some("gorget_atomic_int"), None, false)),
+    ResourceEntry(
+        [MkExact("AtomicBool")],
+        ResourceMetadata(
+            "Ptr", 8, LtPtr(),
+            None, None, None,
+            CsRefCounted(), CkNotCollection(), BkNotBox(),
+            true, Some("gorget_atomic_bool"), None, false)),
+    ResourceEntry(
+        [MkExact("Semaphore")],
+        ResourceMetadata(
+            "Ptr", 8, LtPtr(),
+            None, None, None,
+            CsRefCounted(), CkNotCollection(), BkNotBox(),
+            true, Some("gorget_semaphore"), None, false)),
+    ResourceEntry(
+        [MkExact("Barrier")],
+        ResourceMetadata(
+            "Ptr", 8, LtPtr(),
+            None, None, None,
+            CsRefCounted(), CkNotCollection(), BkNotBox(),
+            true, Some("gorget_barrier"), None, false)),
+    ResourceEntry(
+        [MkExact("OnceFlag")],
+        ResourceMetadata(
+            "Ptr", 8, LtPtr(),
+            None, None, None,
+            CsRefCounted(), CkNotCollection(), BkNotBox(),
+            true, Some("gorget_onceflag"), None, false)),
+    ResourceEntry(
+        [MkExact("WaitGroup")],
+        ResourceMetadata(
+            "Ptr", 8, LtPtr(),
+            None, None, None,
+            CsRefCounted(), CkNotCollection(), BkNotBox(),
+            true, Some("gorget_waitgroup"), None, false)),
+    # CondVar / Process / Thread have no prefix-scan method dispatch.
+    ResourceEntry(
+        [MkExact("CondVar"), MkExact("Process"), MkExact("Thread")],
         ResourceMetadata(
             "Ptr", 8, LtPtr(),
             None, None, None,

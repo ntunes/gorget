@@ -431,7 +431,7 @@ mod tests {
         let t = table();
 
         assert_eq!(t.schema_version, SCHEMA_VERSION_EXPECTED);
-        assert_eq!(t.resources.len(), 31, "expected 31 ResourceEntry rows after fill-in");
+        assert_eq!(t.resources.len(), 37, "expected 37 ResourceEntry rows after fill-in");
         assert_eq!(t.runtime_fns.len(), 299, "expected 299 RuntimeFn rows after fill-in");
 
         // Spot-check: GorgetString multi-alias Exact entry.
