@@ -2932,6 +2932,15 @@ fn iter_collect_set() {
 }
 
 #[test]
+fn collect_target_positions() {
+    // Locks in the Rust-gg fix: `.collect()` into a Set/Dict in return /
+    // assignment / call-arg positions (was a hard type error before the
+    // all-positions rewrite). The self-host path is locked via the
+    // collect_target_positions.out runtime snapshot.
+    run_gg("collect_target_positions.gg", "4\n4\n4");
+}
+
+#[test]
 fn iter_collect_dict() {
     run_gg(
         "iter_collect_dict.gg",

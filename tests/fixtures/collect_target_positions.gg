@@ -1,0 +1,35 @@
+# LHS-type-driven `.collect()` target selection in NON-VarDecl positions.
+#
+# `Set[T] x = it.collect()` (a VarDecl RHS) already routes to the
+# Set-targeted `Iterator[T]::to_set(&self)` trait default. This fixture
+# exercises the SAME rewrite in the other expression positions a
+# `.collect()` can appear in — a `return`, a bare assignment, and a
+# call argument — proving each one deduplicates (builds a Set, not a
+# Vector). The deterministic stdout is the SET length: with dedup the
+# duplicates collapse, so the printed lengths are smaller than the
+# source Vector lengths.
+
+# `.collect()` in a RETURN position, against the function's Set return type.
+Set[int] uniq_via_return(Vector[int] v):
+    return v.iter().collect()
+
+# `.collect()` as a CALL ARGUMENT, against a Set parameter type.
+int set_size(Set[int] s):
+    return s.len()
+
+int main():
+    Vector[int] v = [1, 2, 3, 2, 1, 4, 3, 4, 4]
+
+    # 1. return position: 9 elements, 4 distinct -> len 4.
+    Set[int] r = uniq_via_return(v)
+    print(r.len())
+
+    # 2. assignment position: declare first, then assign `.collect()`.
+    Set[int] a = Set[int]()
+    a = v.iter().collect()
+    print(a.len())
+
+    # 3. call-argument position: pass `.collect()` straight into a Set param.
+    print(set_size(v.iter().collect()))
+
+    return 0

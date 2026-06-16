@@ -2006,18 +2006,37 @@ GirFunction lower_suite_body(String fn_name, Vector[Stmt] body, GirModule &gmod)
 # and does not feed its (un-rewritten) copy forward, so rewriting before
 # the GIR lowering that lower_module performs is equivalent.
 void apply_collect_target_rewrites(Module &m):
+    # One source of truth for the rewrite's expected-type knowledge: build a
+    # free-function signature map (fn name → param SpannedTypes) so the
+    # call-argument position can recover the param's declared type without a
+    # resolver query. The Set/Dict generic args travel intact as SpannedTypes
+    # (the very thing the swap needs), so the SAME `collect_rewrite_expr_expected`
+    # decision serves EVERY position — VarDecl RHS, return, assignment, and
+    # call-arg — instead of the VarDecl-only rewrite Rust's AST-walk performs.
+    Dict[String, Vector[SpannedType]] fn_param_types = {}
+    int fi = 0
+    while fi < m.items.len():
+        match m.items.get(fi).unwrap():
+            case IFunction(sigdef):
+                Vector[SpannedType] ptys = Vector[SpannedType]()
+                for p in sigdef.params:
+                    ptys.push(p.param_type)
+                fn_param_types.put(sigdef.name.clone(), ptys)
+            else:
+                pass
+        fi = fi + 1
     int i = 0
     while i < m.items.len():
         match m.items.get(i).unwrap():
             case IFunction(fdef):
-                Vector[Stmt] nb = collect_rewrite_stmts(fdef.body)
+                Vector[Stmt] nb = collect_rewrite_stmts(fdef.body, fdef.return_type, &fn_param_types)
                 m.items.set(i, IFunction(FunctionDef(fdef.name, fdef.params, fdef.return_type, fdef.type_params, nb, fdef.is_expr_body, fdef.throws_type)))
             case IEquip(eqblk):
                 Vector[FunctionDef] nm = Vector[FunctionDef]()
                 int mi = 0
                 while mi < eqblk.methods.len():
                     FunctionDef method = eqblk.methods.get(mi).unwrap()
-                    Vector[Stmt] mnb = collect_rewrite_stmts(method.body)
+                    Vector[Stmt] mnb = collect_rewrite_stmts(method.body, method.return_type, &fn_param_types)
                     nm.push(FunctionDef(method.name, method.params, method.return_type, method.type_params, mnb, method.is_expr_body, method.throws_type))
                     mi = mi + 1
                 m.items.set(i, IEquip(EquipBlock(eqblk.target, eqblk.type_params, eqblk.trait_name, nm, eqblk.via_field, eqblk.trait_generic_args)))
@@ -2026,7 +2045,7 @@ void apply_collect_target_rewrites(Module &m):
                 int ti = 0
                 while ti < tdef.methods.len():
                     FunctionDef tmethod = tdef.methods.get(ti).unwrap()
-                    Vector[Stmt] tnb = collect_rewrite_stmts(tmethod.body)
+                    Vector[Stmt] tnb = collect_rewrite_stmts(tmethod.body, tmethod.return_type, &fn_param_types)
                     tnm.push(FunctionDef(tmethod.name, tmethod.params, tmethod.return_type, tmethod.type_params, tnb, tmethod.is_expr_body, tmethod.throws_type))
                     ti = ti + 1
                 m.items.set(i, ITrait(TraitDef(tdef.name, tdef.type_params, tnm, tdef.parent_traits)))
@@ -2034,65 +2053,23 @@ void apply_collect_target_rewrites(Module &m):
                 pass
         i = i + 1
 
-# Recursively rebuild a statement list, applying the collect-target
-# rewrite to every SVarDecl and descending into nested control-flow
-# bodies (mirrors Rust `walk_stmt`/`walk_block`).
-Vector[Stmt] collect_rewrite_stmts(Vector[Stmt] stmts):
-    Vector[Stmt] result = Vector[Stmt]()
-    int i = 0
-    while i < stmts.len():
-        Stmt s = stmts.get(i).unwrap()
-        match s:
-            case SVarDecl(stype, name, init_expr, a, b, c):
-                SpannedExpr new_init = collect_rewrite_vardecl_rhs(stype, init_expr)
-                result.push(SVarDecl(stype, name, SpannedExpr(collect_rewrite_expr(new_init.expr), new_init.span), a, b, c))
-            case SIf(cond, then_b, else_branches):
-                Vector[Stmt] nt = collect_rewrite_stmts(then_b)
-                Vector[ElseBranch] nbr = Vector[ElseBranch]()
-                int ei = 0
-                while ei < else_branches.len():
-                    ElseBranch eb = else_branches.get(ei).unwrap()
-                    nbr.push(ElseBranch(eb.condition, collect_rewrite_stmts(eb.body)))
-                    ei = ei + 1
-                result.push(SIf(cond, nt, nbr))
-            case SWhile(cond, body):
-                result.push(SWhile(cond, collect_rewrite_stmts(body)))
-            case SLoop(body):
-                result.push(SLoop(collect_rewrite_stmts(body)))
-            case SFor(pat, iter_expr, body, own, else_b):
-                result.push(SFor(pat, iter_expr, collect_rewrite_stmts(body), own, collect_rewrite_stmts(else_b)))
-            case SMatch(scrut, arms):
-                Vector[MatchArm] narms = Vector[MatchArm]()
-                int ai = 0
-                while ai < arms.len():
-                    MatchArm arm = arms.get(ai).unwrap()
-                    narms.push(MatchArm(arm.pattern, arm.guard, collect_rewrite_stmts(arm.body)))
-                    ai = ai + 1
-                result.push(SMatch(scrut, narms))
-            case SWith(wexpr, wname, body):
-                result.push(SWith(wexpr, wname, collect_rewrite_stmts(body)))
-            case SNamedScope(sname, body):
-                result.push(SNamedScope(sname, collect_rewrite_stmts(body)))
-            else:
-                result.push(s)
-        i = i + 1
-    return result
-
-# Apply the rewrite to a single VarDecl: if the declared type is a Set /
-# HashSet (one generic arg) and the RHS is a top-level `.collect()`,
-# swap the method to `to_set`. If the type is Dict / HashMap (two generic
-# args), swap to `to_dict` and lift the K,V generic args onto the call.
-SpannedExpr collect_rewrite_vardecl_rhs(SpannedType stype, SpannedExpr init_expr):
-    Span ispan = init_expr.span
-    match init_expr.expr:
+# Rewrite a single value-position expression against its EXPECTED type. The
+# ONE decision the whole rewrite turns on: when the expression is a top-level
+# `.collect()` whose enclosing context demands a Set/Dict, swap the method —
+# `Set[T]` / `HashSet[T]` (one arg) → `to_set`; `Dict[K, V]` / `HashMap[K, V]`
+# (two args) → `to_dict[K, V]` with K,V lifted from the expected type. Reading
+# the expected type's generic args directly (TYPED metadata, no name-matching
+# of the receiver) is why this one function serves ALL positions — VarDecl RHS,
+# return, assignment, and call-arg. Then descend into the statement-bearing
+# sub-forms so nested VarDecls / returns are reached.
+SpannedExpr collect_rewrite_expr_expected(SpannedExpr sexpr, SpannedType expected, Dict[String, Vector[SpannedType]] &fn_param_types):
+    Span ispan = sexpr.span
+    match sexpr.expr:
         case EMethodCall(recv, mname, margs, mtargs):
-            # The declared-type discriminator. Compute the target method
-            # name from the LHS type; default to the original method (no
-            # rewrite) so every other shape is reconstructed unchanged.
             String new_name = mname
             Vector[SpannedType] new_targs = mtargs
             if mname == "collect":
-                match stype.ty:
+                match expected.ty:
                     case TNamed(tn, targs):
                         if (tn == "Set" or tn == "HashSet") and targs.len() == 1:
                             new_name = "to_set"
@@ -2109,38 +2086,138 @@ SpannedExpr collect_rewrite_vardecl_rhs(SpannedType stype, SpannedExpr init_expr
             # EnumInit consume site.
             return SpannedExpr(EMethodCall(Box(*recv), new_name, margs, new_targs), ispan)
         else:
-            return init_expr
+            return SpannedExpr(collect_rewrite_expr(sexpr.expr, &fn_param_types), ispan)
 
-# Recurse into the value-position expression forms that carry statement
-# lists (closures / blocks / do / if-expr / match-expr), where nested
-# VarDecls can live. Pure-expression sub-trees hold no VarDecls in the
-# self-host AST, so we only descend through the statement-bearing arms.
-Expr collect_rewrite_expr(Expr e):
+# Recursively rebuild a statement list. `ret_ty` is the enclosing function's
+# declared return type (the expected type for an `SReturn`); `locals` tracks
+# declared types of in-scope `SVarDecl`s so an `SAssign` to a typed local
+# recovers its expected type. Descends into nested control-flow bodies
+# (mirrors Rust `walk_stmt`/`walk_block`) — but unlike Rust, the rewrite fires
+# in EVERY value position, not only VarDecl RHS.
+Vector[Stmt] collect_rewrite_stmts(Vector[Stmt] stmts, SpannedType ret_ty, Dict[String, Vector[SpannedType]] &fn_param_types):
+    Vector[Stmt] result = Vector[Stmt]()
+    Dict[String, SpannedType] locals = {}
+    int i = 0
+    while i < stmts.len():
+        Stmt s = stmts.get(i).unwrap()
+        match s:
+            case SVarDecl(stype, name, init_expr, a, b, c):
+                SpannedExpr new_init = collect_rewrite_expr_expected(init_expr, stype, &fn_param_types)
+                locals.put(name.clone(), stype)
+                result.push(SVarDecl(stype, name, new_init, a, b, c))
+            case SReturn(opt):
+                match opt:
+                    case Some(re):
+                        result.push(SReturn(Some(collect_rewrite_expr_expected(re, ret_ty, &fn_param_types))))
+                    case None:
+                        result.push(s)
+            case SAssign(tgt, val):
+                # Assignment to a bare local whose declared type we tracked is
+                # the local's type; otherwise no expectation (descend only).
+                bool asn_done = false
+                match tgt.expr:
+                    case EIdentifier(tname):
+                        if locals.contains(tname):
+                            result.push(SAssign(tgt, collect_rewrite_expr_expected(val, locals.get(tname).unwrap(), &fn_param_types)))
+                            asn_done = true
+                    else:
+                        pass
+                if not asn_done:
+                    result.push(SAssign(tgt, SpannedExpr(collect_rewrite_expr(val.expr, &fn_param_types), val.span)))
+            case SExpr(e):
+                result.push(SExpr(SpannedExpr(collect_rewrite_expr(e.expr, &fn_param_types), e.span)))
+            case SIf(cond, then_b, else_branches):
+                Vector[Stmt] nt = collect_rewrite_stmts(then_b, ret_ty, &fn_param_types)
+                Vector[ElseBranch] nbr = Vector[ElseBranch]()
+                int ei = 0
+                while ei < else_branches.len():
+                    ElseBranch eb = else_branches.get(ei).unwrap()
+                    nbr.push(ElseBranch(eb.condition, collect_rewrite_stmts(eb.body, ret_ty, &fn_param_types)))
+                    ei = ei + 1
+                result.push(SIf(cond, nt, nbr))
+            case SWhile(cond, body):
+                result.push(SWhile(cond, collect_rewrite_stmts(body, ret_ty, &fn_param_types)))
+            case SLoop(body):
+                result.push(SLoop(collect_rewrite_stmts(body, ret_ty, &fn_param_types)))
+            case SFor(pat, iter_expr, body, own, else_b):
+                result.push(SFor(pat, iter_expr, collect_rewrite_stmts(body, ret_ty, &fn_param_types), own, collect_rewrite_stmts(else_b, ret_ty, &fn_param_types)))
+            case SMatch(scrut, arms):
+                Vector[MatchArm] narms = Vector[MatchArm]()
+                int ai = 0
+                while ai < arms.len():
+                    MatchArm arm = arms.get(ai).unwrap()
+                    narms.push(MatchArm(arm.pattern, arm.guard, collect_rewrite_stmts(arm.body, ret_ty, &fn_param_types)))
+                    ai = ai + 1
+                result.push(SMatch(scrut, narms))
+            case SWith(wexpr, wname, body):
+                result.push(SWith(wexpr, wname, collect_rewrite_stmts(body, ret_ty, &fn_param_types)))
+            case SNamedScope(sname, body):
+                result.push(SNamedScope(sname, collect_rewrite_stmts(body, ret_ty, &fn_param_types)))
+            else:
+                result.push(s)
+        i = i + 1
+    return result
+
+# Recurse into expression sub-trees, applying the call-argument rewrite (each
+# arg expected against the callee's resolved param type) and descending through
+# every statement-bearing form (closures / blocks / do / if-expr / match-expr).
+# No expected type is in scope here, so a `.collect()` is only rewritten where a
+# nested position re-establishes one (a call arg, or a statement-list arm).
+Expr collect_rewrite_expr(Expr e, Dict[String, Vector[SpannedType]] &fn_param_types):
     match e:
+        case ECall(callee_box, cargs, ctargs):
+            # Free-call args: rewrite each against the callee's declared param
+            # type when the callee is a known free function.
+            String callee_name = ""
+            match (*callee_box).expr:
+                case EIdentifier(cn):
+                    callee_name = cn
+                else:
+                    pass
+            Vector[SpannedExpr] nargs = Vector[SpannedExpr]()
+            int ci = 0
+            while ci < cargs.len():
+                SpannedExpr arg = cargs.get(ci).unwrap()
+                bool arg_done = false
+                if callee_name != "" and fn_param_types.contains(callee_name):
+                    Vector[SpannedType] ptys = fn_param_types.get(callee_name).unwrap()
+                    if ci < ptys.len():
+                        nargs.push(collect_rewrite_expr_expected(arg, ptys.get(ci).unwrap(), &fn_param_types))
+                        arg_done = true
+                if not arg_done:
+                    nargs.push(SpannedExpr(collect_rewrite_expr(arg.expr, &fn_param_types), arg.span))
+                ci = ci + 1
+            return ECall(Box(*callee_box), nargs, ctargs)
         case EClosure(params, body):
-            return EClosure(params, collect_rewrite_stmts(body))
+            return EClosure(params, collect_rewrite_stmts(body, no_type(), &fn_param_types))
         case EBlock(body):
-            return EBlock(collect_rewrite_stmts(body))
+            return EBlock(collect_rewrite_stmts(body, no_type(), &fn_param_types))
         case EDo(body):
-            return EDo(collect_rewrite_stmts(body))
+            return EDo(collect_rewrite_stmts(body, no_type(), &fn_param_types))
         case EIf(cond, then_b, else_branches):
             Vector[ElseBranch] nbr = Vector[ElseBranch]()
             int ei = 0
             while ei < else_branches.len():
                 ElseBranch eb = else_branches.get(ei).unwrap()
-                nbr.push(ElseBranch(eb.condition, collect_rewrite_stmts(eb.body)))
+                nbr.push(ElseBranch(eb.condition, collect_rewrite_stmts(eb.body, no_type(), &fn_param_types)))
                 ei = ei + 1
-            return EIf(Box(*cond), collect_rewrite_stmts(then_b), nbr)
+            return EIf(Box(*cond), collect_rewrite_stmts(then_b, no_type(), &fn_param_types), nbr)
         case EMatch(scrut, arms):
             Vector[MatchArm] narms = Vector[MatchArm]()
             int ai = 0
             while ai < arms.len():
                 MatchArm arm = arms.get(ai).unwrap()
-                narms.push(MatchArm(arm.pattern, arm.guard, collect_rewrite_stmts(arm.body)))
+                narms.push(MatchArm(arm.pattern, arm.guard, collect_rewrite_stmts(arm.body, no_type(), &fn_param_types)))
                 ai = ai + 1
             return EMatch(Box(*scrut), narms)
         else:
             return e
+
+# A sentinel "no expectation" SpannedType for sub-expression walks where no
+# enclosing target type applies. `TInferred` never matches the Set/Dict arms in
+# `collect_rewrite_expr_expected`, so it is a safe no-op expectation.
+SpannedType no_type():
+    return SpannedType(TInferred(), Span(0, 0))
 
 GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String, String] call_redirects, Dict[String, bool] imported_fns):
     Vector[GirType] type_table = init_type_table()

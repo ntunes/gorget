@@ -6494,20 +6494,65 @@ pub fn apply_inferred_call_targs(
 /// destructuring (trait's `T = (K, V)`) that the current signature
 /// shape doesn't accommodate.
 pub fn apply_collect_target_rewrites(module: &mut Module) {
-    fn walk_items(items: &mut [Spanned<Item>]) {
+    use std::collections::HashMap;
+
+    // One source of truth for the rewrite's expected-type knowledge: a
+    // free-function signature map (fn name → param declared types) so the
+    // call-argument position can recover a param's type from the AST without a
+    // typecheck-resolved TypeId. The Set/Dict generic args travel intact as
+    // AST `Type`s — the very thing the swap needs — so the SAME decision
+    // (`rewrite_collect`) serves EVERY position: VarDecl RHS, return,
+    // assignment, and call-arg. Earlier this rewrite fired only at VarDecl,
+    // leaving `return it.collect()` / `x = it.collect()` / `f(it.collect())`
+    // into a Set/Dict as a type error; threading the expected type closes that
+    // gap in all positions.
+    fn collect_sigs(items: &[Spanned<Item>], sigs: &mut HashMap<String, Vec<Type>>) {
+        for item in items {
+            match &item.node {
+                Item::Module { items: inner, .. } => collect_sigs(inner, sigs),
+                Item::Function(f) => {
+                    let ptys = f.params.iter().map(|p| p.node.type_.node.clone()).collect();
+                    sigs.insert(f.name.node.clone(), ptys);
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut sigs: HashMap<String, Vec<Type>> = HashMap::new();
+    collect_sigs(&module.items, &mut sigs);
+
+    // The single decision: if `value` is a top-level `.collect()` and the
+    // expected type is `Set[T]` / `HashSet[T]` (→ `to_set`) or `Dict[K, V]` /
+    // `HashMap[K, V]` (→ `to_dict[K, V]`, lifting K,V), swap the method. Reads
+    // the expected type's generic args directly (typed metadata, no
+    // name-matching of the receiver).
+    fn rewrite_collect(value: &mut Spanned<Expr>, expected: &Type) {
+        if let Expr::MethodCall { method, generic_args, .. } = &mut value.node {
+            if method.node == "collect" {
+                if is_set_type(expected) {
+                    method.node = "to_set".to_string();
+                } else if let Some(kv) = dict_kv_args(expected) {
+                    method.node = "to_dict".to_string();
+                    *generic_args = Some(kv);
+                }
+            }
+        }
+    }
+
+    fn walk_items(items: &mut [Spanned<Item>], sigs: &HashMap<String, Vec<Type>>) {
         for item in items {
             match &mut item.node {
-                Item::Module { items: inner, .. } => walk_items(inner),
-                Item::Function(f) => walk_function(f),
+                Item::Module { items: inner, .. } => walk_items(inner, sigs),
+                Item::Function(f) => walk_function(f, sigs),
                 Item::Equip(eq) => {
                     for m in &mut eq.items {
-                        walk_function(&mut m.node);
+                        walk_function(&mut m.node, sigs);
                     }
                 }
                 Item::Trait(td) => {
                     for ti in &mut td.items {
                         if let TraitItem::Method(m) = &mut ti.node {
-                            walk_function(m);
+                            walk_function(m, sigs);
                         }
                     }
                 }
@@ -6515,134 +6560,169 @@ pub fn apply_collect_target_rewrites(module: &mut Module) {
             }
         }
     }
-    fn walk_function(f: &mut FunctionDef) {
+    fn walk_function(f: &mut FunctionDef, sigs: &HashMap<String, Vec<Type>>) {
+        let ret_ty = f.return_type.node.clone();
         match &mut f.body {
-            FunctionBody::Block(b) => walk_block(b),
-            FunctionBody::Expression(e) => walk_expr(e),
+            FunctionBody::Block(b) => walk_block(b, &ret_ty, sigs),
+            FunctionBody::Expression(e) => {
+                // An expression-body fn's value IS its return — expect the
+                // declared return type.
+                rewrite_collect(e, &ret_ty);
+                walk_expr(e, sigs);
+            }
             FunctionBody::Declaration | FunctionBody::Extern(_) => {}
         }
     }
-    fn walk_block(b: &mut Block) {
+    fn walk_block(b: &mut Block, ret_ty: &Type, sigs: &HashMap<String, Vec<Type>>) {
+        // Track declared types of in-scope locals so an `Assign` to a typed
+        // local recovers its expected type.
+        let mut locals: HashMap<String, Type> = HashMap::new();
         for stmt in &mut b.stmts {
-            walk_stmt(&mut stmt.node);
+            walk_stmt(&mut stmt.node, ret_ty, &mut locals, sigs);
         }
     }
-    fn walk_stmt(s: &mut Stmt) {
+    fn walk_stmt(
+        s: &mut Stmt,
+        ret_ty: &Type,
+        locals: &mut HashMap<String, Type>,
+        sigs: &HashMap<String, Vec<Type>>,
+    ) {
         match s {
-            Stmt::VarDecl { type_, value, .. } => {
-                // If the declared type is `Set[T]`, rewrite an inner
-                // `.collect()` call to `.to_set()`. If it's
-                // `Dict[K, V]`, rewrite to `.to_dict[K, V]()` (type
-                // args lifted from the LHS). Check AST directly — no
-                // typecheck-resolved TypeId needed.
-                if let Expr::MethodCall { method, generic_args, .. } = &mut value.node {
-                    if method.node == "collect" {
-                        if is_set_type(&type_.node) {
-                            method.node = "to_set".to_string();
-                        } else if let Some(kv) = dict_kv_args(&type_.node) {
-                            method.node = "to_dict".to_string();
-                            *generic_args = Some(kv);
-                        }
+            Stmt::VarDecl { type_, pattern, value, .. } => {
+                rewrite_collect(value, &type_.node);
+                if let Pattern::Binding(name) = &pattern.node {
+                    locals.insert(name.clone(), type_.node.clone());
+                }
+                walk_expr(value, sigs);
+            }
+            Stmt::Return(Some(e)) | Stmt::Break(Some(e)) => {
+                rewrite_collect(e, ret_ty);
+                walk_expr(e, sigs);
+            }
+            Stmt::Assign { target, value } => {
+                // Assignment to a bare local whose declared type we tracked is
+                // the local's type; otherwise no expectation (descend only).
+                if let Expr::Identifier(name) = &target.node {
+                    if let Some(ty) = locals.get(name) {
+                        rewrite_collect(value, &ty.clone());
                     }
                 }
-                walk_expr(value);
+                walk_expr(target, sigs);
+                walk_expr(value, sigs);
             }
-            Stmt::Expr(e) | Stmt::Throw(e) => walk_expr(e),
-            Stmt::Return(Some(e)) | Stmt::Break(Some(e)) => walk_expr(e),
-            Stmt::Assign { target, value } | Stmt::CompoundAssign { target, value, .. } => {
-                walk_expr(target);
-                walk_expr(value);
+            Stmt::Expr(e) | Stmt::Throw(e) => walk_expr(e, sigs),
+            Stmt::CompoundAssign { target, value, .. } => {
+                walk_expr(target, sigs);
+                walk_expr(value, sigs);
             }
             Stmt::If { condition, then_body, elif_branches, else_body } => {
-                walk_expr(condition);
-                walk_block(then_body);
+                walk_expr(condition, sigs);
+                walk_block(then_body, ret_ty, sigs);
                 for (cond, body) in elif_branches.iter_mut() {
-                    walk_expr(cond);
-                    walk_block(body);
+                    walk_expr(cond, sigs);
+                    walk_block(body, ret_ty, sigs);
                 }
-                if let Some(eb) = else_body { walk_block(eb); }
+                if let Some(eb) = else_body { walk_block(eb, ret_ty, sigs); }
             }
             Stmt::While { condition, body, else_body } => {
-                walk_expr(condition);
-                walk_block(body);
-                if let Some(eb) = else_body { walk_block(eb); }
+                walk_expr(condition, sigs);
+                walk_block(body, ret_ty, sigs);
+                if let Some(eb) = else_body { walk_block(eb, ret_ty, sigs); }
             }
             Stmt::For { iterable, body, else_body, .. } => {
-                walk_expr(iterable);
-                walk_block(body);
-                if let Some(eb) = else_body { walk_block(eb); }
+                walk_expr(iterable, sigs);
+                walk_block(body, ret_ty, sigs);
+                if let Some(eb) = else_body { walk_block(eb, ret_ty, sigs); }
             }
             Stmt::Match { scrutinee, arms, else_arm } => {
-                walk_expr(scrutinee);
+                walk_expr(scrutinee, sigs);
                 for item in arms {
                     if let crate::parser::ast::MatchItem::Arm(arm) = item {
-                        walk_expr(&mut arm.body);
-                        if let Some(g) = &mut arm.guard { walk_expr(g); }
+                        walk_expr(&mut arm.body, sigs);
+                        if let Some(g) = &mut arm.guard { walk_expr(g, sigs); }
                     }
                 }
-                if let Some(b) = else_arm { walk_block(b); }
+                if let Some(b) = else_arm { walk_block(b, ret_ty, sigs); }
             }
             Stmt::With { bindings, body } => {
-                for binding in bindings { walk_expr(&mut binding.expr); }
-                walk_block(body);
+                for binding in bindings { walk_expr(&mut binding.expr, sigs); }
+                walk_block(body, ret_ty, sigs);
             }
             Stmt::Loop { body } | Stmt::Unsafe { body } | Stmt::NamedScope { body, .. } => {
-                walk_block(body);
+                walk_block(body, ret_ty, sigs);
             }
             _ => {}
         }
     }
-    fn walk_expr(e: &mut Spanned<Expr>) {
+    fn walk_expr(e: &mut Spanned<Expr>, sigs: &HashMap<String, Vec<Type>>) {
         match &mut e.node {
             Expr::MethodCall { receiver, args, .. } => {
-                walk_expr(receiver);
-                for a in args { walk_expr(&mut a.node.value); }
+                walk_expr(receiver, sigs);
+                for a in args { walk_expr(&mut a.node.value, sigs); }
             }
             Expr::Call { callee, args, .. } => {
-                walk_expr(callee);
-                for a in args { walk_expr(&mut a.node.value); }
+                // Free-call args: each arg's expected type is the callee's
+                // declared param type when the callee is a known free function.
+                let callee_sig = if let Expr::Identifier(name) = &callee.node {
+                    sigs.get(name).cloned()
+                } else {
+                    None
+                };
+                walk_expr(callee, sigs);
+                for (i, a) in args.iter_mut().enumerate() {
+                    if let Some(ptys) = &callee_sig {
+                        if let Some(pty) = ptys.get(i) {
+                            rewrite_collect(&mut a.node.value, pty);
+                        }
+                    }
+                    walk_expr(&mut a.node.value, sigs);
+                }
             }
             Expr::StructLiteral { args, .. } => {
-                for a in args { walk_expr(a); }
+                for a in args { walk_expr(a, sigs); }
             }
             Expr::BinaryOp { left, right, .. } => {
-                walk_expr(left);
-                walk_expr(right);
+                walk_expr(left, sigs);
+                walk_expr(right, sigs);
             }
-            Expr::UnaryOp { operand, .. } => walk_expr(operand),
+            Expr::UnaryOp { operand, .. } => walk_expr(operand, sigs),
             Expr::FieldAccess { object, .. } | Expr::TupleFieldAccess { object, .. } => {
-                walk_expr(object);
+                walk_expr(object, sigs);
             }
             Expr::Index { object, index } => {
-                walk_expr(object);
-                walk_expr(index);
+                walk_expr(object, sigs);
+                walk_expr(index, sigs);
             }
             Expr::If { condition, then_branch, elif_branches, else_branch } => {
-                walk_expr(condition);
-                walk_expr(then_branch);
+                walk_expr(condition, sigs);
+                walk_expr(then_branch, sigs);
                 for (cond, body) in elif_branches.iter_mut() {
-                    walk_expr(cond);
-                    walk_expr(body);
+                    walk_expr(cond, sigs);
+                    walk_expr(body, sigs);
                 }
-                if let Some(eb) = else_branch { walk_expr(eb); }
+                if let Some(eb) = else_branch { walk_expr(eb, sigs); }
             }
             Expr::Range { start, end, .. } => {
-                if let Some(s) = start { walk_expr(s); }
-                if let Some(e) = end { walk_expr(e); }
+                if let Some(s) = start { walk_expr(s, sigs); }
+                if let Some(e) = end { walk_expr(e, sigs); }
             }
             Expr::Move { expr: inner } | Expr::MutableBorrow { expr: inner }
-            | Expr::OptionalChain { object: inner, .. } => walk_expr(inner),
+            | Expr::OptionalChain { object: inner, .. } => walk_expr(inner, sigs),
             Expr::DefaultOp { lhs, rhs } => {
-                walk_expr(lhs);
-                walk_expr(rhs);
+                walk_expr(lhs, sigs);
+                walk_expr(rhs, sigs);
             }
-            Expr::Closure { body, .. } | Expr::ImplicitClosure { body } => walk_expr(body),
+            Expr::Closure { body, .. } | Expr::ImplicitClosure { body } => walk_expr(body, sigs),
             Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems) => {
-                for e in elems { walk_expr(e); }
+                for e in elems { walk_expr(e, sigs); }
             }
-            Expr::Block(b) => walk_block(b),
+            Expr::Block(b) => {
+                // A bare nested block carries no return expectation of its own;
+                // an `Inferred` sentinel never matches the Set/Dict arms.
+                walk_block(b, &Type::Inferred, sigs);
+            }
             Expr::StringLiteral(_, interp_exprs) => {
-                for ie in interp_exprs.iter_mut() { walk_expr(ie); }
+                for ie in interp_exprs.iter_mut() { walk_expr(ie, sigs); }
             }
             _ => {}
         }
@@ -6666,7 +6746,7 @@ pub fn apply_collect_target_rewrites(module: &mut Module) {
         }
         None
     }
-    walk_items(&mut module.items);
+    walk_items(&mut module.items, &sigs);
 }
 
 /// Recursively register function signatures, descending into `Item::Module` wrappers
