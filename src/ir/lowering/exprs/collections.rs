@@ -33,7 +33,6 @@ pub(super) fn lower_array_literal(
             return lower_set_literal_from_array(ctx, builder, elems);
         }
     }
-    let array_type = ctx.type_mapper.lookup_named("GorgetArray").unwrap_or(UNIT_TYPE);
 
     // If the surrounding context has an expected type like Vector[Option[T]],
     // propagate `Option[T]` as the per-element expected type so bare
@@ -66,18 +65,25 @@ pub(super) fn lower_array_literal(
     let elem_type = if !elems.is_empty() {
         let first = lower_expr(ctx, builder, &elems[0]);
         let etype = infer_operand_type_full(ctx, &first, builder);
+        // Type the fresh local as the monomorphized `Vector__<elem>` (carries
+        // the element type for a downstream `v[i]` / `for x in v` / element-drop)
+        // rather than the bare `GorgetArray`. Mirrors `lower_dict_literal`'s
+        // `Dict__K__V` typing — the producer is the source of truth for the
+        // element invariant, written through to the local here so an `auto`
+        // re-infer recovers it.
+        let vec_type = collection_accumulator_type(ctx, "Vector", etype);
         // Create the array
         let arr_local = builder.call_extern(
             "gorget_array_new",
             vec![Operand::Constant(Constant::SizeOf(etype))],
-            array_type,
+            vec_type,
         );
         // The literal owns a fresh allocation. Without this tag, downstream
         // ownership-sensitive sinks (Some(arr), struct field init, return)
         // see Untracked → emit clone-then-leak: the literal's buffer is
         // cloned into the consumer and the original is orphaned.
         ctx.set_owned(builder, arr_local);
-        ctx.drops.register_local(arr_local, array_type, &ctx.type_registry);
+        ctx.drops.register_local(arr_local, vec_type, &ctx.type_registry);
         // Phase C: pick mode by source — owned call results / unnamed
         // temps (e.g., nested vector literals) get Move; primitives stay
         // Copy. Mirrors the broadened predicate in lower_return /
@@ -126,7 +132,7 @@ pub(super) fn lower_array_literal(
             }
         }
         let ref_local = builder.borrow(Place::local(elem_local), ctx.register_ptr_type(etype));
-        let arr_ref = builder.borrow_mut(Place::local(arr_local), ctx.register_mut_ptr_type(array_type));
+        let arr_ref = builder.borrow_mut(Place::local(arr_local), ctx.register_mut_ptr_type(vec_type));
         builder.call_extern(
             "gorget_array_push",
             vec![FunctionBuilder::copy(arr_ref), FunctionBuilder::copy(ref_local)],
@@ -150,7 +156,7 @@ pub(super) fn lower_array_literal(
                 }
             }
             let el_ref = builder.borrow(Place::local(el), ctx.register_ptr_type(etype));
-            let ar_ref = builder.borrow_mut(Place::local(arr_local), ctx.register_mut_ptr_type(array_type));
+            let ar_ref = builder.borrow_mut(Place::local(arr_local), ctx.register_mut_ptr_type(vec_type));
             builder.call_extern(
                 "gorget_array_push",
                 vec![FunctionBuilder::copy(ar_ref), FunctionBuilder::copy(el_ref)],
@@ -165,13 +171,18 @@ pub(super) fn lower_array_literal(
         let elem_size_type = ctx.func_state.expected_type
             .map(|et| infer_collection_element_type(ctx, et))
             .unwrap_or(I64_TYPE);
+        // Type the local with the monomorphized `Vector__<elem>` so an `auto`
+        // re-infer recovers the element. With an expected type the element is
+        // known; without one (`auto v = []`) it falls to I64 — a safe
+        // empty-literal fallback (there is no element to refine it here).
+        let vec_type = collection_accumulator_type(ctx, "Vector", elem_size_type);
         let arr_local = builder.call_extern(
             "gorget_array_new",
             vec![Operand::Constant(Constant::SizeOf(elem_size_type))],
-            array_type,
+            vec_type,
         );
         ctx.set_owned(builder, arr_local);
-        ctx.drops.register_local(arr_local, array_type, &ctx.type_registry);
+        ctx.drops.register_local(arr_local, vec_type, &ctx.type_registry);
         FunctionBuilder::copy(arr_local)
     };
     ctx.func_state.expected_type = saved_expected;
@@ -479,6 +490,26 @@ fn stage_dict_arg(
         }
     }
     FunctionBuilder::copy(elem_local)
+}
+
+/// Build the monomorphized collection TypeId (`Vector__<elem>`) for a
+/// freshly-built array runtime local, carrying the element type so a
+/// downstream `v[i]` / `for x in v` / element-drop can recover it. Without
+/// this the producer types the local with the BARE runtime struct
+/// (`GorgetArray`), which `infer_collection_element_type` cannot decompose
+/// (it works by `Vector__`-name-prefix) → the element falls to I64 (Layering
+/// rule 4: the element type is a typed invariant resolved here and written
+/// through to the local). Mirrors `lower_dict_literal`'s `Dict__K__V` typing
+/// and the self-host `collection_accumulator_tid` helper (gorget-1 2fc65622).
+///
+/// Backend-NEUTRAL: the `ensure_collection_type("Vector__<elem>")` TypeDef
+/// carries `c_runtime_alias: None`; layout-neutrality comes from the LIR
+/// `Vector__`-prefix-strip-to-runtime mapping (`src/lir/lower/types.rs:18`,
+/// `src/lir/lower/mod.rs`), NOT a `c_runtime_alias`. `base` is the protocol
+/// base ("Vector").
+fn collection_accumulator_type(ctx: &mut LoweringContext, base: &str, elem_type: TypeId) -> TypeId {
+    let elem_c = type_id_to_mangle_name(ctx, elem_type);
+    ctx.ensure_collection_type(&format!("{base}__{elem_c}"))
 }
 
 /// Map a TypeId to a C-compatible mangle fragment for dict/set type names.

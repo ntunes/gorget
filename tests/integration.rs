@@ -7374,6 +7374,44 @@ found",
     );
 }
 
+// Core invariant #8 (Rust half): `auto`-bound array literals must type the
+// fresh runtime local with the element-carrying `Vector__<elem>` collection
+// name rather than the bare `GorgetArray`, so a downstream `for x in v` /
+// `v[i]` / element-drop recovers the element type. Before the fix the String
+// case link-failed (`undefined reference to int64_t__len`) and the nested-int
+// case returned garbage — the inferred-element path dropped the element type
+// at the producer.
+#[test]
+fn auto_string_vector_for() {
+    run_gg(
+        "auto_string_vector_for.gg",
+        "\
+2
+3",
+    );
+}
+
+#[test]
+fn auto_nested_int_index() {
+    run_gg(
+        "auto_nested_int_index.gg",
+        "\
+2
+3",
+    );
+}
+
+#[test]
+fn auto_struct_vector() {
+    run_gg(
+        "auto_struct_vector.gg",
+        "\
+3
+7
+11",
+    );
+}
+
 #[test]
 fn vector_concat() {
     run_gg(

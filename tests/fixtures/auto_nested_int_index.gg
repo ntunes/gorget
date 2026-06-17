@@ -1,0 +1,4 @@
+void main():
+    auto v = [[1, 2], [3, 4]]
+    print(v[0][1])
+    print(v[1][0])

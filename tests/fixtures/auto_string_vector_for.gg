@@ -1,0 +1,4 @@
+void main():
+    auto v = ["ab", "cde"]
+    for s in v:
+        print(s.len())
