@@ -17,8 +17,9 @@ from lir_ssa import construct_ssa
 from lir import LirModule, LirFunction
 from lir_codegen import generate_c, emit_runtime_preamble
 from drop_elab import elaborate_drops
+from diagnostic import has_errors, report_diagnostics
 from std.fs import read_file
-from std.os import args, getenv
+from std.os import args, getenv, exit
 from std.collections import Vector, Dict
 from std.time import time_ms
 from std.conv import int_to_str
@@ -125,6 +126,17 @@ void compile_main():
     _t1 = time_ms()
     if _timing: print("PHASE type_check " + int_to_str(_t1 - _tp) + " ms", file=stderr)
     _tp = _t1
+    # Diagnostic gate (snag #11 item 4): the resolve + typecheck passes push
+    # typed `Diagnostic`s onto `ctx.diagnostics`. If any are ERROR-severity,
+    # render them all (source-grounded: path:line:col + the offending line +
+    # a caret under the span) and HALT before lowering — an invalid program
+    # must be REJECTED, not miscompiled. Warnings/suggestions do not halt.
+    # Spurious-diagnostic risk is ~0: a full-corpus sweep found the self-host
+    # typecheck emits ZERO diagnostics on every Rust-accepted fixture, and
+    # zero on its own source (so bootstrap fixed_point stays clean).
+    if has_errors(ctx.diagnostics):
+        report_diagnostics(ctx.diagnostics, source, path)
+        exit(1)
     GirModule gir = lower_module(m, scopes, types, call_redirects, imported_fns)
     _t1 = time_ms()
     if _timing: print("PHASE lower_module(GIR) " + int_to_str(_t1 - _tp) + " ms", file=stderr)

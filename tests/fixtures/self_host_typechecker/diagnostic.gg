@@ -19,6 +19,7 @@
 
 from std.collections import Vector
 from std.conv import int_to_str
+from std.io import stderr
 from ast import Span
 
 # ── Severity ────────────────────────────────────────────────
@@ -118,3 +119,151 @@ String diag_kind_str(DiagKind kind):
 # stays byte-stable; type_comparison reads only stdout.
 String format_diagnostic(Diagnostic d):
     return "DIAG " + severity_str(d.sev) + " " + diag_kind_str(d.kind) + " " + int_to_str(d.span.start) + ":" + int_to_str(d.span.end) + " " + d.message
+
+# ── Source-grounded rendering (user-facing) ─────────────────
+#
+# The one-line `format_diagnostic` above is the machine contract used by
+# the comparison harness (it must stay byte-stable). What a *user* sees is
+# this richer rendering: the design rationale (docs/language-design.md §:
+# "errors should point to source, not generated C"; "explain, locate,
+# suggest") asks for a Rust-quality message — a `path:line:col` header, the
+# offending source line, and a caret run under the exact span.
+#
+# One renderer, driven entirely off the typed `Diagnostic` value + the
+# source text. No phase re-derives line/col; no external crate; the same
+# value every phase already pushes is the only input.
+
+# A resolved source position. Byte spans are the storage form (one int
+# pair, zero-cost to push); line/col is derived on demand, only when a
+# diagnostic is actually rendered — so the hot path pays nothing.
+struct LineCol:
+    int line   # 1-based
+    int col    # 1-based (counts bytes within the line; ASCII source)
+
+# Map a byte offset into `source` to a 1-based (line, col). Single forward
+# scan counting newlines — the self-host has no precomputed line index and
+# rendering is cold (runs once, at the halt), so a linear scan is the
+# simplest correct thing. Clamps an out-of-range offset to the source end
+# (imported-module spans are shifted past the entry source; we render them
+# against the entry text rather than crash).
+LineCol span_to_line_col(String source, int offset):
+    int n = source.byte_len()
+    int clamped = offset
+    if clamped < 0:
+        clamped = 0
+    if clamped > n:
+        clamped = n
+    int line = 1
+    int line_start = 0
+    int i = 0
+    while i < clamped:
+        if source.byte_at(i) == b'\n':
+            line = line + 1
+            line_start = i + 1
+        i = i + 1
+    return LineCol(line, (clamped - line_start) + 1)
+
+# Extract the full source line (no trailing newline) containing `offset`.
+String source_line_at(String source, int offset):
+    int n = source.byte_len()
+    int clamped = offset
+    if clamped < 0:
+        clamped = 0
+    if clamped > n:
+        clamped = n
+    int start = clamped
+    while start > 0 and source.byte_at(start - 1) != b'\n':
+        start = start - 1
+    int end = clamped
+    while end < n and source.byte_at(end) != b'\n':
+        end = end + 1
+    return source.byte_slice(start, end).clone()
+
+# `n` copies of `s`.
+String repeat_str(String s, int n):
+    String out = ""
+    int i = 0
+    while i < n:
+        out = out + s
+        i = i + 1
+    return out
+
+# Render ONE diagnostic, source-grounded:
+#
+#   path:line:col: severity: message
+#       <the offending source line>
+#       <spaces>^^^^   (caret run under the span)
+#
+# The caret length is the span width (>=1), clamped to the visible line.
+String render_diagnostic(Diagnostic d, String source, String path):
+    LineCol lc = span_to_line_col(source, d.span.start)
+    String src_line = source_line_at(source, d.span.start)
+    # Column of the span start within its line (0-based for the pad).
+    int col0 = lc.col - 1
+    # Caret width = span width, clamped so it never runs past the line.
+    int width = d.span.end - d.span.start
+    if width < 1:
+        width = 1
+    int line_len = src_line.byte_len()
+    if col0 + width > line_len:
+        width = line_len - col0
+    if width < 1:
+        width = 1
+    String header = path + ":" + int_to_str(lc.line) + ":" + int_to_str(lc.col) + ": " + severity_str(d.sev) + ": " + d.message
+    String body = "    " + src_line
+    String caret = "    " + repeat_str(" ", col0) + repeat_str("^", width)
+    return header + "\n" + body + "\n" + caret
+
+# ── Collection-level helpers (the severity gate) ────────────
+
+int count_errors(Vector[Diagnostic] diags):
+    int c = 0
+    for d in diags:
+        match d.sev:
+            case SevError():
+                c = c + 1
+            else:
+                pass
+    return c
+
+bool has_errors(Vector[Diagnostic] diags):
+    return count_errors(diags) > 0
+
+# Sort diagnostics by span start (stable insertion sort — same ordering
+# the typechecker comparison driver already uses, lifted here so every
+# consumer shares ONE deterministic order). Returns an index permutation.
+Vector[int] diag_order_by_span(Vector[Diagnostic] diags):
+    Vector[int] order = Vector[int]()
+    int i = 0
+    while i < diags.len():
+        order.push(i)
+        i = i + 1
+    int oi = 1
+    while oi < order.len():
+        int key = order.get(oi).unwrap()
+        int key_start = diags.get(key).unwrap().span.start
+        int oj = oi - 1
+        while oj >= 0:
+            int other = order.get(oj).unwrap()
+            if diags.get(other).unwrap().span.start <= key_start:
+                break
+            order.set(oj + 1, other)
+            oj = oj - 1
+        order.set(oj + 1, key)
+        oi = oi + 1
+    return order
+
+# Render every diagnostic to stderr, span-sorted, with a final summary
+# line. Returns the error count so the driver can decide to halt.
+int report_diagnostics(Vector[Diagnostic] diags, String source, String path):
+    Vector[int] order = diag_order_by_span(diags)
+    int k = 0
+    while k < order.len():
+        Diagnostic d = diags.get(order.get(k).unwrap()).unwrap()
+        print(render_diagnostic(d, source, path), file=stderr)
+        k = k + 1
+    int errs = count_errors(diags)
+    if errs > 0:
+        print("", file=stderr)
+        print(int_to_str(errs) + " error(s) found", file=stderr)
+    return errs
