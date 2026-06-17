@@ -306,6 +306,74 @@ fn run_gg(fixture: &str, expected: &str) {
     let _ = std::fs::remove_file(&exe_path);
 }
 
+/// Build and run a `.gg` fixture whose *correct* behavior is a compile-time
+/// WARNING on a deliberately racy program — assert the WARNING (on stderr) and
+/// that the build/binary both succeed, NOT the program's stdout.
+///
+/// Some fixtures exist to demonstrate a hazard the compiler diagnoses (e.g. the
+/// §3.5 check-then-act warning): the program is *intentionally* nondeterministic
+/// — that nondeterminism is the very thing the warning is about. Pinning such a
+/// program's stdout with `run_gg` is the bug, not the test: the asserted output
+/// is a race winner that flips under timing (x86_64 CI flake), and the warning —
+/// the actual feature under test — lives on stderr where `run_gg` never looks.
+///
+/// This helper instead asserts the load-bearing invariants:
+///   - the build SUCCEEDS (the warning is non-fatal: exit 0, binary emitted),
+///   - the build stderr CONTAINS `warning_substr` (the warning fired), and
+///   - the compiled binary RUNS to a clean exit.
+/// It makes NO stdout assertion, so it is immune to the program's race.
+fn build_gg_expect_warning(fixture: &str, warning_substr: &str) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
+
+    assert!(
+        fixture_path.exists(),
+        "Fixture not found: {}",
+        fixture_path.display()
+    );
+
+    let stem = fixture_path.file_stem().unwrap().to_str().unwrap();
+    let dir = fixture_path.parent().unwrap();
+    let c_path = dir.join(format!("{stem}.c"));
+    let exe_path = dir.join(stem);
+
+    // 1. Build: gg build <fixture>. The warning is non-fatal, so the build
+    //    must still succeed (exit 0, binary emitted).
+    let build = build_with_timeout(gg_command("build").arg(&fixture_path), fixture);
+
+    let build_stdout = String::from_utf8_lossy(&build.stdout);
+    let build_stderr = String::from_utf8_lossy(&build.stderr);
+
+    assert!(
+        build.status.success(),
+        "Build failed for {fixture} (the warning must be non-fatal):\nstdout: {build_stdout}\nstderr: {build_stderr}",
+    );
+
+    // 2. Assert the warning fired (on stderr — the feature under test).
+    assert!(
+        build_stderr.contains(warning_substr),
+        "Expected build stderr to contain warning '{warning_substr}' for {fixture}:\nstdout: {build_stdout}\nstderr: {build_stderr}",
+    );
+
+    // 3. Execute the compiled binary — it must run to a clean exit. We do NOT
+    //    assert its stdout: the program is intentionally racy (that race is what
+    //    the warning is about), so any stdout pin would be a flaky non-invariant.
+    let run = run_with_timeout(&mut Command::new(&exe_path), fixture);
+
+    let run_stdout = String::from_utf8_lossy(&run.stdout);
+    let run_stderr = String::from_utf8_lossy(&run.stderr);
+
+    assert!(
+        run.status.success(),
+        "Binary exited with error for {fixture}: status={:?}\nstdout:\n{run_stdout}\nstderr:\n{run_stderr}",
+        run.status.code(),
+    );
+
+    // 4. Clean up generated files.
+    let _ = std::fs::remove_file(&c_path);
+    let _ = std::fs::remove_file(&exe_path);
+}
+
 #[test]
 fn hello() {
     run_gg("hello.gg", "Hello, World!");
@@ -12076,7 +12144,17 @@ fn shared_stale_refreshed() {
 
 #[test]
 fn shared_with_check_then_act() {
-    run_gg("shared_with_check_then_act.gg", "was zero\nafter sleep\n1");
+    // §3.5 check-then-act WARNING regression net. The fixture is an
+    // intentionally racy program (a `with`-guarded branch yields at `sleep`,
+    // so the spawned worker may mutate the shared `x` mid-branch); the compiler
+    // WARNS that the condition may no longer hold. The warning IS the feature
+    // under test — and it is non-fatal (the program still builds and runs).
+    //
+    // The old assertion pinned the program's stdout (`was zero\nafter sleep\n1`),
+    // which is a race winner that flips under timing (x86_64 CI: `Got: 1`) and
+    // never checked the warning at all (it's on stderr). We assert the warning +
+    // clean build/run instead, and leave the racy stdout unpinned.
+    build_gg_expect_warning("shared_with_check_then_act.gg", "condition may no longer hold");
 }
 
 #[test]

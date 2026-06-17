@@ -197,6 +197,30 @@ fn ab_test(fixture: &str) {
     );
 }
 
+/// A/B smoke test that only asserts BOTH backends BUILD + RUN successfully,
+/// WITHOUT comparing their stdouts. For fixtures that are intentionally racy
+/// (e.g. the §3.5 check-then-act warning demo: a `with`-guarded branch yields,
+/// so a spawned worker may mutate the shared state mid-branch), each backend's
+/// run can win the race differently — pinning GIR stdout == LIR stdout is a
+/// latent flake of the same class the integration test was fixed for. We still
+/// want the cross-backend compile-and-run smoke coverage, so we assert both
+/// `run_gir`/`run_lir` return `Some(_)` (they return `None` on build/run failure
+/// or timeout) and drop the stdout equality check.
+fn ab_test_build_only(fixture: &str) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
+    assert!(fixture_path.exists(), "Fixture not found: {}", fixture_path.display());
+
+    assert!(
+        run_gir(&fixture_path).is_some(),
+        "GIR backend failed to build/run {fixture}",
+    );
+    assert!(
+        run_lir(&fixture_path).is_some(),
+        "LIR backend failed to build/run {fixture}",
+    );
+}
+
 // ── Fixtures known to match between GIR and LIR backends ─────────────────
 
 #[test] fn lir_ab_hello() { ab_test("hello.gg"); }
@@ -610,7 +634,10 @@ fn ab_test(fixture: &str) {
 #[test] fn lir_ab_shared_vector_elem() { ab_test("shared_vector_elem.gg"); }
 #[test] fn lir_ab_shared_weak() { ab_test("shared_weak.gg"); }
 #[test] fn lir_ab_shared_with_blocking_refresh() { ab_test("shared_with_blocking_refresh.gg"); }
-#[test] fn lir_ab_shared_with_check_then_act() { ab_test("shared_with_check_then_act.gg"); }
+// Intentionally racy (§3.5 check-then-act warning demo) — each backend's run can
+// win the spawn→check race differently, so we only assert both BUILD + RUN, not
+// that their stdouts match. See `ab_test_build_only`.
+#[test] fn lir_ab_shared_with_check_then_act() { ab_test_build_only("shared_with_check_then_act.gg"); }
 #[test] fn lir_ab_shared_with_refresh() { ab_test("shared_with_refresh.gg"); }
 #[test] fn lir_ab_shared_with_spawned_refresh() { ab_test("shared_with_spawned_refresh.gg"); }
 #[test] fn lir_ab_signal_basic() { ab_test("signal_basic.gg"); }
