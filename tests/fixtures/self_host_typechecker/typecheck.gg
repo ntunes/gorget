@@ -365,7 +365,7 @@ void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes,
             else:
                 pass
         if not is_int:
-            ctx.diagnostics.push(Diagnostic.error(throws_st.span, DkTypeMismatch(), "main can only throw `int` (the process exit code)"))
+            ctx.diagnostics.push(Diagnostic.error(throws_st.span, DkTypeMismatch(), "`main()` can only throw `int` (the process exit code)"))
 
     # Walk body for VarDecl types
     Option[int] body_scope_opt = find_body_scope(func.name, parent_scope, scopes, &ctx)
@@ -769,7 +769,7 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
             # driven on the former; the latter currently only walks).
             match (*inner).expr:
                 case EAwait(_):
-                    ctx.diagnostics.push(Diagnostic.error(sexpr.span, DkControlFlow(), "`await` applied twice — the inner expression is already awaited"))
+                    ctx.diagnostics.push(Diagnostic.error(sexpr.span, DkControlFlow(), "expression is awaited twice — use either `await expr` or `expr.await()`, not both"))
                 else:
                     pass
             walk_expr_closures(*inner, scope_id, &scopes, &types, &ctx)
@@ -1203,7 +1203,7 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
                 Span ret_span = Span(0, 0)
                 if opt_expr is Some(rsp):
                     ret_span = rsp.span
-                ctx.diagnostics.push(Diagnostic.error(ret_span, DkControlFlow(), "`return` outside of a function"))
+                ctx.diagnostics.push(Diagnostic.error(ret_span, DkControlFlow(), "return outside of function"))
             if opt_expr is Some(sexpr):
                 walk_expr_closures(sexpr, scope_id, &scopes, &types, &ctx)
 
@@ -1216,7 +1216,7 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
                 Span br_span = Span(0, 0)
                 if opt_expr is Some(bsp):
                     br_span = bsp.span
-                ctx.diagnostics.push(Diagnostic.error(br_span, DkControlFlow(), "`break` outside of a loop"))
+                ctx.diagnostics.push(Diagnostic.error(br_span, DkControlFlow(), "break outside of loop"))
             if opt_expr is Some(bexpr):
                 walk_expr_closures(bexpr, scope_id, &scopes, &types, &ctx)
 
@@ -1227,14 +1227,14 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
             # statement spans onto containers (the enclosing fn/block), so
             # this matches the resolution offered for other span-less stmts.
             if ctx.loop_depth == 0:
-                ctx.diagnostics.push(Diagnostic.error(Span(0, 0), DkControlFlow(), "`continue` outside of a loop"))
+                ctx.diagnostics.push(Diagnostic.error(Span(0, 0), DkControlFlow(), "continue outside of loop"))
 
         case SThrow(expr):
             # ThrowInNonThrowingFunction — mirrors src/semantic/typecheck.rs:2866
             # (SemanticErrorKind::ThrowInNonThrowingFunction). The enclosing
             # function must declare `throws T` for `throw` to be valid.
             if not ctx.current_function_throws:
-                ctx.diagnostics.push(Diagnostic.error(expr.span, DkControlFlow(), "`throw` in a function that does not declare `throws`"))
+                ctx.diagnostics.push(Diagnostic.error(expr.span, DkControlFlow(), "throw in function that doesn't declare `throws`"))
             walk_expr_closures(expr, scope_id, &scopes, &types, &ctx)
 
         case SSelect(arms):

@@ -188,13 +188,57 @@ String repeat_str(String s, int n):
         i = i + 1
     return out
 
-# Render ONE diagnostic, source-grounded:
+# Number of decimal digits in a non-negative line number (≥1), used to
+# size the left gutter so the box rule lines up under the line number.
+int digit_count(int n):
+    if n < 10:
+        return 1
+    int d = 0
+    int v = n
+    while v > 0:
+        d = d + 1
+        v = v / 10
+    return d
+
+# ── ANSI styling (rustc / codespan palette) ─────────────────
 #
-#   path:line:col: severity: message
-#       <the offending source line>
-#       <spaces>^^^^   (caret run under the span)
+# The user-facing rendering reproduces `gg check`'s codespan-reporting
+# output byte-for-byte, colors included. ESC is byte 0x1b. The palette:
+# the `error` word is bold + 256-colour red (index 9); box-drawing rules
+# and line numbers are blue; the highlighted span and its caret run are
+# red. Each styled token is wrapped RESET-first (codespan resets before
+# every span) so the bytes match exactly.
+String ANSI_RESET  = "\u{1b}[0m"
+String ANSI_BOLD   = "\u{1b}[1m"
+String ANSI_RED256 = "\u{1b}[38;5;9m"    # `error` headline
+String ANSI_YEL256 = "\u{1b}[38;5;11m"   # `warning` / `suggestion` headline
+String ANSI_BLUE   = "\u{1b}[34m"        # box rules + line numbers
+String ANSI_RED    = "\u{1b}[31m"        # span highlight + carets
+
+# Headline colour for a severity (codespan: red-9 for errors, yellow-11
+# for warnings / notes). The box rules and caret run keep the error
+# palette (blue / red) — the diagnostic gate only renders errors.
+String severity_color(Severity sev):
+    match sev:
+        case SevError():
+            return ANSI_RED256
+        case SevWarning():
+            return ANSI_YEL256
+        case SevSuggestion():
+            return ANSI_YEL256
+
+# Render ONE diagnostic, source-grounded, in rustc / codespan layout:
 #
-# The caret length is the span width (>=1), clamped to the visible line.
+#   error: <message>
+#     ┌─ <path>:<line>:<col>
+#     │
+#   N │ <before><span><after>
+#     │        ^^^^   (caret run under the span)
+#
+# The span text is highlighted inline (red) on the source line and the
+# caret run sits directly beneath it. The caret length is the span width
+# (>=1), clamped to the visible line. The gutter is `lw+1` wide, where
+# `lw` is the digit count of the line number, so the box rule aligns.
 String render_diagnostic(Diagnostic d, String source, String path):
     LineCol lc = span_to_line_col(source, d.span.start)
     String src_line = source_line_at(source, d.span.start)
@@ -209,10 +253,36 @@ String render_diagnostic(Diagnostic d, String source, String path):
         width = line_len - col0
     if width < 1:
         width = 1
-    String header = path + ":" + int_to_str(lc.line) + ":" + int_to_str(lc.col) + ": " + severity_str(d.sev) + ": " + d.message
-    String body = "    " + src_line
-    String caret = "    " + repeat_str(" ", col0) + repeat_str("^", width)
-    return header + "\n" + body + "\n" + caret
+
+    # Split the source line so the span shows red inline. The slice END is
+    # capped at the line length: the `width >= 1` floor above can push
+    # `col0 + width` one past the line when the span starts AT end-of-line
+    # (`col0 == line_len`), and an out-of-range `byte_slice` panics (it does
+    # not clamp). The caret run still uses the un-capped `width` (a caret can
+    # point one past the last column, like codespan). Output-neutral for every
+    # in-line span (`col0 + width <= line_len`), where `span_end == col0 + width`.
+    int span_end = col0 + width
+    if span_end > line_len:
+        span_end = line_len
+    String before = src_line.byte_slice(0, col0).clone()
+    String spantext = src_line.byte_slice(col0, span_end).clone()
+    String after = src_line.byte_slice(span_end, line_len).clone()
+
+    String line_no = int_to_str(lc.line)
+    String gutter = repeat_str(" ", digit_count(lc.line) + 1)  # blank left margin
+
+    # 1) headline: `error: <message>`
+    String headline = ANSI_RESET + ANSI_BOLD + severity_color(d.sev) + severity_str(d.sev) + ANSI_RESET + ANSI_BOLD + ": " + d.message + ANSI_RESET
+    # 2) location: `  ┌─ path:line:col`
+    String location = gutter + ANSI_RESET + ANSI_BLUE + "\u{250c}\u{2500}" + ANSI_RESET + " " + path + ":" + line_no + ":" + int_to_str(lc.col)
+    # 3) empty gutter rule: `  │`
+    String rule = gutter + ANSI_RESET + ANSI_BLUE + "\u{2502}" + ANSI_RESET
+    # 4) source line: `N │ <before><span><after>`
+    String body = ANSI_RESET + ANSI_BLUE + line_no + ANSI_RESET + " " + ANSI_RESET + ANSI_BLUE + "\u{2502}" + ANSI_RESET + " " + before + ANSI_RESET + ANSI_RED + spantext + ANSI_RESET + after
+    # 5) caret line: `  │   ^^^^`
+    String caret = gutter + ANSI_RESET + ANSI_BLUE + "\u{2502}" + ANSI_RESET + " " + repeat_str(" ", col0) + ANSI_RESET + ANSI_RED + repeat_str("^", width) + ANSI_RESET
+
+    return headline + "\n" + location + "\n" + rule + "\n" + body + "\n" + caret
 
 # ── Collection-level helpers (the severity gate) ────────────
 
@@ -255,12 +325,18 @@ Vector[int] diag_order_by_span(Vector[Diagnostic] diags):
 
 # Render every diagnostic to stderr, span-sorted, with a final summary
 # line. Returns the error count so the driver can decide to halt.
+#
+# Codespan separates consecutive diagnostics with a blank line, and the
+# summary is preceded by one further blank line. Each diagnostic block is
+# therefore trailed by one blank line here; the extra blank before the
+# summary completes the `…\n\n\nN error(s) found` tail `gg check` emits.
 int report_diagnostics(Vector[Diagnostic] diags, String source, String path):
     Vector[int] order = diag_order_by_span(diags)
     int k = 0
     while k < order.len():
         Diagnostic d = diags.get(order.get(k).unwrap()).unwrap()
         print(render_diagnostic(d, source, path), file=stderr)
+        print("", file=stderr)
         k = k + 1
     int errs = count_errors(diags)
     if errs > 0:

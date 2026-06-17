@@ -15697,10 +15697,17 @@ fn self_host_driver_rejects_invalid_program() {
         out.status.code(),
     );
 
-    // 2. It MUST render a diagnostic to stderr (source-grounded `error:`).
+    // 2. It MUST render a codespan diagnostic to stderr (the rustc-style
+    //    output `gg check` emits, byte-for-byte — see
+    //    self_host_typechecker/diagnostic.gg::render_diagnostic). The `error`
+    //    headline and `: ` are split by ANSI styling, so we assert on the
+    //    headline word, the message text, and the box rule — together they
+    //    prove the diagnostic rendered with content rather than crashing.
     assert!(
-        stderr.contains("error:"),
-        "self-host driver exited non-zero but emitted no `error:` diagnostic \
+        stderr.contains("error")
+            && stderr.contains("throw in function that doesn't declare `throws`")
+            && stderr.contains('\u{250c}'),
+        "self-host driver exited non-zero but emitted no codespan diagnostic \
          to stderr — the reject path must render, not crash silently.\n\
          stderr:\n{stderr}",
     );
