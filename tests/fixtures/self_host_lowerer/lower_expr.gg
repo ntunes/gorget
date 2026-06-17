@@ -36,7 +36,7 @@ from lower import classify_call_arg, is_consume_kind, op_consume, decide_operand
 from lower import LazyMember, cow_lazy_materialize_family, call_arg_lets_callee_mutate, cow_lazy_join_view_result
 from lower_drops import init_drop_elab, push_drop_scope, emit_scope_drops, pop_drop_scope, pop_drop_scope_no_emit, is_droppable_type, register_local_for_drop, register_lazy_slot_for_drop, register_owning_param, mark_local_moved, restore_moved, union_moved, emit_drops_for_early_exit, flush_drop_queue
 from lower_liveness import LivenessAnalysis, compute_liveness, wire_liveness_into_modes, liveness_instrumentation_diff, update_last_pos_for_inst, update_last_pos_for_term, note_operand_pos, empty_liveness
-from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, index_value_type_name, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, is_comparison, map_cmpop, eval_const_int_expr
+from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, index_value_type_name, collection_accumulator_tid, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, is_comparison, map_cmpop, eval_const_int_expr
 
 # ── Displayable dispatch for `print(x)` / f-string `{x}` ─────────────
 #
@@ -2370,6 +2370,20 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 int elem_val = lower_expr(&ctx, elem, &gmod)
                 elem_locals.push(elem_val)
             ctx.expected_type = prev_eali_et
+            # ELEMENT-TYPE WRITE-THROUGH (Layering rule 4 — resolve once,
+            # write through): when no SVarDecl/expected_type hint named the
+            # element type (`auto v = [1,2,3]`), recover it from the first
+            # lowered element's local type. Mirrors Rust
+            # `lower_array_literal`'s `infer_operand_type_full(ctx,&first,…)`
+            # (collections.rs:68). Carrying `vec_tyname` here is what lets
+            # the array's dst local below be typed the ELEMENT-CARRYING
+            # `Vector__<elem>` instead of decaying to a bare `GorgetArray`
+            # that drops the element type — the loss that makes a downstream
+            # `v[i]` read / `for x in v` / `v.map(..)` unable to recover T.
+            if vec_tyname == "" and elem_locals.len() > 0:
+                int eali_first = elem_locals.get(0).unwrap()
+                int eali_first_tid = ctx.locals.get(eali_first).unwrap().type_id
+                vec_tyname = type_id_to_name(eali_first_tid, &gmod)
             # Call gorget_array_new(elem_size) so the resulting array has a
             # valid `alloc` pointer from __gorget_current_alloc. Without
             # this, subsequent `.push()` on a zero-init'd GorgetArray
@@ -2380,7 +2394,18 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # footprint (e.g. 128 bytes for LirStructDef). Without the hint
             # we fall back to 8, which still works for pointer-/int-sized
             # element types (the common case for local temporaries).
-            int adst = add_local(&ctx, lookup_or_register_named(&gmod, "GorgetArray"), None)
+            #
+            # Type the dst with the ELEMENT-CARRYING `Vector__<elem>` name
+            # when the element type is known, so the value is self-describing
+            # (a `v[i]` read / for-loop / HOF re-resolves the element type via
+            # `collection_element_type`). The runtime layout is the same
+            # `GorgetArray` struct (resource_meta_for maps both), so the
+            # push/get/len calls and C-emit are unchanged. Routed through the
+            # centralized `collection_accumulator_tid` helper (the single
+            # source of truth for collection-accumulator typing) — an empty
+            # `vec_tyname` yields the bare `GorgetArray` fallback.
+            int eali_arr_tid = collection_accumulator_tid(&gmod, "array", vec_tyname, "", "")
+            int adst = add_local(&ctx, eali_arr_tid, None)
             if vec_tyname != "":
                 String magic_name = "__gorget_array_new_sized_" + vec_tyname
                 Vector[Operand] an_args_typed = []
@@ -2970,7 +2995,30 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 dict_val_locals.push(dict_val_local)
                 dict_pi = dict_pi + 1
             ctx.expected_type = prev_dict_et
-            int ddst = add_local(&ctx, lookup_or_register_named(&gmod, "GorgetMap"), None)
+            # ELEMENT-TYPE WRITE-THROUGH (Layering rule 4): when no SVarDecl
+            # hint named K/V (`auto d = {"x": 1}`), recover them from the
+            # first lowered key/value locals. Mirrors Rust `lower_dict_literal`
+            # inferring key/val types from the first pair. Carrying both names
+            # lets the dst local below be typed the VALUE-CARRYING
+            # `Dict__<k>__<v>` instead of decaying to a bare `GorgetMap` that
+            # drops the value type — the loss that makes a downstream `d[k]`
+            # read unable to recover V (`index_value_type_name("GorgetMap")`
+            # is "" → the read stubs to OpConstI64(0)).
+            if (dict_kname == "" or dict_vname == "") and dict_key_locals.len() > 0:
+                int ddl_first_k = dict_key_locals.get(0).unwrap()
+                int ddl_first_v = dict_val_locals.get(0).unwrap()
+                if dict_kname == "":
+                    dict_kname = type_id_to_name(ctx.locals.get(ddl_first_k).unwrap().type_id, &gmod)
+                if dict_vname == "":
+                    dict_vname = type_id_to_name(ctx.locals.get(ddl_first_v).unwrap().type_id, &gmod)
+            # Centralized collection-accumulator typing (one source of truth):
+            # ordered → `Dict__K__V`, unordered → `HashMap__K__V`, bare
+            # `GorgetMap` fallback when either K or V is unknown.
+            String ddst_kind = "map_unordered"
+            if dict_ordered:
+                ddst_kind = "map_ordered"
+            int ddst_tid = collection_accumulator_tid(&gmod, ddst_kind, "", dict_kname, dict_vname)
+            int ddst = add_local(&ctx, ddst_tid, None)
             if dict_kname != "" and dict_vname != "":
                 # Sentinel `__GGSEP__` separates K and V type names — zero
                 # collision risk with real type names (no "GGSEP" pattern
@@ -3103,7 +3151,9 @@ int try_lower_vector_hof(LowerCtx &ctx, int recv, String recv_type_name, String 
         # that `lower_for_vector` can't iterate. The runtime layout is the
         # same `GorgetArray` struct (resource_meta_for maps both), so the
         # push/extend/get/len calls and the C-emit assignment are unchanged.
-        int acc_tid = lookup_or_register_named(&gmod, "Vector__" + elem_name)
+        # Routed through the centralized `collection_accumulator_tid` helper
+        # (one source of truth for collection-accumulator typing).
+        int acc_tid = collection_accumulator_tid(&gmod, "array", elem_name, "", "")
         int acc = comp_make_acc(&ctx, acc_tid, elem_name, &gmod)
         String acc_name = "__hof_acc_" + int_to_str(acc)
         nl_put(&ctx, acc_name, acc)
@@ -3144,7 +3194,9 @@ int try_lower_vector_hof(LowerCtx &ctx, int recv, String recv_type_name, String 
             return -1
         String var_name = cparams.get(0).unwrap()
         SpannedPattern var_pat = SpannedPattern(PBinding(var_name), span)
-        int acc_tid = lookup_or_register_named(&gmod, "Vector__" + elem_name)
+        # Centralized collection-accumulator typing (flat_map preserves the
+        # element type — the closure returns a Vector of the same element).
+        int acc_tid = collection_accumulator_tid(&gmod, "array", elem_name, "", "")
         int acc = comp_make_acc(&ctx, acc_tid, elem_name, &gmod)
         String acc_name = "__hof_acc_" + int_to_str(acc)
         nl_put(&ctx, acc_name, acc)
@@ -3439,11 +3491,25 @@ int lower_list_comprehension(LowerCtx &ctx, SpannedExpr comp_expr, String var_na
                 case Some(start_box):
                     match end_opt:
                         case Some(end_box):
-                            # Range elements are scalar (the loop var is I64,
-                            # and the comp body is typically int) — a bare
-                            # GorgetArray (elem_size 8) accumulator suffices.
-                            int racc_tid = lookup_or_register_named(&gmod, "GorgetArray")
-                            int racc = comp_make_acc(&ctx, racc_tid, "", &gmod)
+                            # Range elements are scalar I64 (the loop var is
+                            # I64); the comp body is overwhelmingly int-typed,
+                            # so the result element type is `int64_t`. Type the
+                            # accumulator LOCAL with the element-carrying
+                            # `Vector__int64_t` (via the centralized helper) —
+                            # NOT a bare GorgetArray. Otherwise `auto v = [x*x
+                            # for x in 0..5]` decays `v` to a bare GorgetArray
+                            # and a downstream `v[i]` / `for e in v` can't
+                            # recover the element type (the read stubs / the
+                            # iteration finds no element shape). The runtime
+                            # alloc stays the 8-byte sized-int form, layout-
+                            # identical to before. (A range comp whose body
+                            # changes the element type, e.g. `[float(x) for x
+                            # in 0..n]`, is a known edge — same scalar-8-byte
+                            # limitation the Rust gg range-comp accumulator has,
+                            # collections.rs:520. The element type is recovered
+                            # from a TYPED VarDecl when one is present.)
+                            int racc_tid = collection_accumulator_tid(&gmod, "array", "int64_t", "", "")
+                            int racc = comp_make_acc(&ctx, racc_tid, "int64_t", &gmod)
                             String racc_name = "__listcomp_acc_" + int_to_str(racc)
                             nl_put(&ctx, racc_name, racc)
                             Vector[Stmt] rbody = comp_synth_body(racc_name, comp_expr, filt_opt, span)
@@ -3468,7 +3534,7 @@ int lower_list_comprehension(LowerCtx &ctx, SpannedExpr comp_expr, String var_na
     # `lower_for_string`. Accumulator typed `Vector__GorgetString` so the
     # synthesized push clones the cap=0 codepoint view at the boundary.
     if coll_tn == "GorgetString":
-        int sacc_tid = lookup_or_register_named(&gmod, "Vector__GorgetString")
+        int sacc_tid = collection_accumulator_tid(&gmod, "array", "GorgetString", "", "")
         int sacc = comp_make_acc(&ctx, sacc_tid, "GorgetString", &gmod)
         String sacc_name = "__listcomp_acc_" + int_to_str(sacc)
         nl_put(&ctx, sacc_name, sacc)
@@ -3476,9 +3542,16 @@ int lower_list_comprehension(LowerCtx &ctx, SpannedExpr comp_expr, String var_na
         lower_for_string(&ctx, var_pat, coll_local, sbody, &gmod, false)
         return sacc
     # ── VECTOR base: idx-walk via `lower_for_vector`. Accumulator element
-    # type recovered from the collection name so the push clones correctly.
+    # type recovered from the SOURCE collection name (the element-preserving
+    # common case — `[x for x in v]`, `[x*2 for x in v]`); a body that
+    # changes the element type recovers it from a TYPED VarDecl when present.
+    # Type the accumulator LOCAL with the element-carrying `Vector__<elem>`
+    # (via the centralized helper) — NOT a bare GorgetArray — so an
+    # auto-bound result is self-describing for a downstream `v[i]` / `for x
+    # in v`. The sized alloc (driven by `elem_name`) clones correctly at the
+    # push boundary, unchanged.
     String elem_name = collection_element_type(coll_tn)
-    int vacc_tid = lookup_or_register_named(&gmod, "GorgetArray")
+    int vacc_tid = collection_accumulator_tid(&gmod, "array", elem_name, "", "")
     int vacc = comp_make_acc(&ctx, vacc_tid, elem_name, &gmod)
     String vacc_name = "__listcomp_acc_" + int_to_str(vacc)
     nl_put(&ctx, vacc_name, vacc)
@@ -3578,7 +3651,9 @@ int lower_set_comprehension(LowerCtx &ctx, SpannedExpr comp_expr, String var_nam
 # GorgetSet → heap corruption. Emit `gorget_set_new` directly with an
 # `OpConstI64(8)` element-size arg (mirror Rust collections.rs:884-888).
 int comp_make_set_acc(LowerCtx &ctx, GirModule &gmod):
-    int acc_tid = lookup_or_register_named(&gmod, "Set__int64_t")
+    # Centralized collection-accumulator typing — Set comprehensions iterate
+    # `start..end`, so the element is scalar `int64_t` (`Set__int64_t`).
+    int acc_tid = collection_accumulator_tid(&gmod, "set", "int64_t", "", "")
     int acc_local = add_local(&ctx, acc_tid, None)
     Vector[Operand] sn_args = [OpConstI64(8)]
     emit(&ctx, GICallExtern(acc_local, "gorget_set_new", sn_args))
@@ -3651,7 +3726,10 @@ int lower_dict_comprehension(LowerCtx &ctx, SpannedExpr key_expr, SpannedExpr va
 # `[OpConstI64(8), OpConstI64(8)]`. Do NOT reuse `comp_make_acc` (it
 # allocs a GorgetArray → heap corruption when treated as a GorgetMap).
 int comp_make_dict_acc(LowerCtx &ctx, GirModule &gmod):
-    int acc_tid = lookup_or_register_named(&gmod, "Dict__int64_t__int64_t")
+    # Centralized collection-accumulator typing — dict comprehensions iterate
+    # `start..end`, so key + value are scalar `int64_t`
+    # (`Dict__int64_t__int64_t`, ordered to match the destination VarDecl).
+    int acc_tid = collection_accumulator_tid(&gmod, "map_ordered", "", "int64_t", "int64_t")
     int acc_local = add_local(&ctx, acc_tid, None)
     Vector[Operand] dn_args = [OpConstI64(8), OpConstI64(8)]
     emit(&ctx, GICallExtern(acc_local, "gorget_dict_new", dn_args))

@@ -788,6 +788,92 @@ fn self_host_comprehension_dispatch_arms_count() {
     );
 }
 
+/// Sibling-site-drift ratchet (CLAUDE.md invariant #4 "one fix, all siblings"
+/// + #6 "convert a recurring bug class into an executable guard"; devbook/24
+/// rule 3 "one source of truth per axis"): every freshly-built collection
+/// LOCAL (the dst of an array/dict/set LITERAL or a list/set/dict
+/// COMPREHENSION / HOF accumulator) in the self-host GIR lowerer
+/// (`lower_expr.gg`) must be typed through the CENTRALIZED
+/// `collection_accumulator_tid` helper (`lower_types.gg`), NOT by a bare
+/// `lookup_or_register_named(&gmod, "GorgetArray"|"GorgetMap"|"GorgetSet")`.
+///
+/// A bare runtime-struct name drops the element type (`Vector__T` →
+/// `GorgetArray`), so a downstream `v[i]` read / `for x in v` / chained HOF
+/// can't recover `T` (`collection_element_type` / `index_value_type_name`
+/// return `""` → the read stubs / the iteration finds no element shape). This
+/// was a confirmed sibling hole: the literal sites were fixed but the
+/// comprehension accumulators (`racc`/`vacc`) were not, so `auto v = [x*10 for
+/// x in src]; v[0]` printed `0` instead of `10`. Routing every producer
+/// through one helper closes the whole class — and this lint forces the NEXT
+/// producer through it too.
+///
+/// Scope: `lower_expr.gg` ONLY. The bare `lookup_or_register_named(&gmod,
+/// "GorgetArray"/...)` calls in `lower_types.gg` are a DIFFERENT axis —
+/// `resolved_to_gir_type` AST-type→runtime-type mapping and
+/// `infer_method_return_type` / `builtin_call_return_type` method-return-type
+/// inference (`split`/`lines`/`chars`/`args`), plus the helper's own fallbacks
+/// — never an accumulator dst. They are intentionally not scanned.
+///
+/// **If this fails because the count went UP:** a new (or reintroduced)
+/// producer site is typing a collection accumulator with a bare runtime
+/// struct name. Route it through `collection_accumulator_tid(&gmod, kind,
+/// elem, key, val)` instead, then this lint passes at 0 again. **If a bare
+/// call genuinely is NOT an accumulator dst** (e.g. a return-type inference
+/// arm migrated into `lower_expr.gg`), bump EXPECTED with a one-line
+/// justification naming the non-accumulator use.
+#[test]
+fn no_bare_collection_accumulator_outside_helper() {
+    /// Baseline 2026-06-17: 0. After the producer-class centralization, every
+    /// collection-accumulator dst in `lower_expr.gg` routes through
+    /// `collection_accumulator_tid`; there are no bare runtime-struct
+    /// accumulator lookups left in this file.
+    const EXPECTED: usize = 0;
+
+    // lower_expr.gg lives ONLY in self_host_lowerer (real file, not symlinked),
+    // so no double-count guard is needed.
+    let content =
+        fs::read_to_string("tests/fixtures/self_host_lowerer/lower_expr.gg").unwrap_or_default();
+
+    let mut count = 0usize;
+    let mut hits: Vec<(usize, String)> = Vec::new();
+    for (i, line) in content.lines().enumerate() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('#') {
+            continue; // .gg comments
+        }
+        // Match the bare collection-accumulator lookups specifically — only
+        // the three runtime-struct names that drop the element type. The
+        // element-carrying forms (`"Vector__" + ...`, `"Set__" + ...`,
+        // `"Dict__" + ...`) and the centralized helper call itself are not
+        // matched.
+        for bare in ["\"GorgetArray\"", "\"GorgetMap\"", "\"GorgetSet\""] {
+            let needle = format!("lookup_or_register_named(&gmod, {bare})");
+            if line.contains(&needle) {
+                count += 1;
+                hits.push((i + 1, trimmed.to_string()));
+            }
+        }
+    }
+
+    assert_eq!(
+        count, EXPECTED,
+        "Bare collection-accumulator lookups in self-host `lower_expr.gg`: \
+         {count} vs expected {EXPECTED}.\n\n\
+         A freshly-built collection LOCAL must be typed through the centralized \
+         `collection_accumulator_tid(&gmod, kind, elem, key, val)` helper \
+         (lower_types.gg) — NOT a bare \
+         `lookup_or_register_named(&gmod, \"GorgetArray\"/\"GorgetMap\"/\"GorgetSet\")`, \
+         which drops the element type and makes a downstream `v[i]` / `for x in v` \
+         / chained HOF unable to recover it. Route the new producer through the \
+         helper, or — if the bare call is genuinely NOT an accumulator dst — bump \
+         EXPECTED with a justification.\n\nHits:\n{}",
+        hits.iter()
+            .map(|(ln, src)| format!("  lower_expr.gg:{ln}: {src}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+}
+
 /// Snag #11 sibling-guard ratchet (CLAUDE.md rule 4 / "Sibling-site drift")
 /// over the self-host trait-equip SYMBOL-MANGLE sites. The self-host mangles an
 /// equip method's symbol via TWO routes, mirroring Rust gg

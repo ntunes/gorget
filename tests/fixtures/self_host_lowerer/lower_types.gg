@@ -2043,6 +2043,55 @@ String index_value_type_name(String base_name):
             elem = base_name.slice(18, base_name.len())
     return elem
 
+# ── Centralized collection-accumulator typing (Layering rules 3+4) ──────
+# THE single source of truth for typing a freshly-built collection LOCAL
+# (the dst of an array/dict/set LITERAL or a list/set/dict COMPREHENSION /
+# HOF accumulator). It maps the recovered element / key / value type NAMES
+# to the ELEMENT-CARRYING mangled type id (`Vector__<T>` / `Dict__K__V` /
+# `HashMap__K__V` / `Set__<T>`), falling back to the bare runtime struct
+# (`GorgetArray` / `GorgetMap` / `GorgetSet`) only when the element type is
+# unknown.
+#
+# WHY this is centralized (CLAUDE.md invariant #4 "one fix, all siblings"
+# + devbook/24 rule 3 "one source of truth per axis"): the runtime layout
+# is identical for the mangled and bare names (resource_meta_for maps both
+# to the same GorgetArray/Map/Set category in lir_lower.gg), so the alloc /
+# push / put / get / len calls and the C-emit are BYTE-UNCHANGED — only the
+# GIR type NAME gains element info. That extra info is load-bearing
+# downstream: a `v[i]` value-read, a `for x in v` iteration, and a chained
+# HOF all re-resolve the element type from the local's NAME (via
+# `collection_element_type` / `index_value_type_name`). A bare
+# `GorgetArray`/`GorgetMap` decays that name → the reader recovers `""` and
+# stubs the result. Routing EVERY producer through this one helper means a
+# new producer site cannot reintroduce the element-type loss (the
+# `no_bare_collection_accumulator_outside_helper` lint in tests/lints.rs
+# forces the next one through here).
+#
+# `kind`: "array" → Vector__<elem>; "set" → Set__<elem>;
+#         "map_ordered" → Dict__<key>__<val>; "map_unordered" → HashMap__<key>__<val>.
+# An empty element / key / value name (couldn't recover the type) yields
+# the bare fallback for that `kind` — never a half-mangled name.
+int collection_accumulator_tid(GirModule &gmod, String kind, String elem_name, String key_name, String val_name):
+    if kind == "array":
+        if elem_name != "":
+            return lookup_or_register_named(&gmod, "Vector__" + elem_name)
+        return lookup_or_register_named(&gmod, "GorgetArray")
+    if kind == "set":
+        if elem_name != "":
+            return lookup_or_register_named(&gmod, "Set__" + elem_name)
+        return lookup_or_register_named(&gmod, "GorgetSet")
+    if kind == "map_ordered":
+        if key_name != "" and val_name != "":
+            return lookup_or_register_named(&gmod, "Dict__" + key_name + "__" + val_name)
+        return lookup_or_register_named(&gmod, "GorgetMap")
+    if kind == "map_unordered":
+        if key_name != "" and val_name != "":
+            return lookup_or_register_named(&gmod, "HashMap__" + key_name + "__" + val_name)
+        return lookup_or_register_named(&gmod, "GorgetMap")
+    # Unknown kind — defensive bare-array fallback (never reached for the
+    # four producer kinds above).
+    return lookup_or_register_named(&gmod, "GorgetArray")
+
 # Return true when the init expression is a call to a known
 # `cstr`-returning runtime/extern function. Used at SVarDecl to
 # insert a `gorget_str_from_cstr` coercion before storing into a
