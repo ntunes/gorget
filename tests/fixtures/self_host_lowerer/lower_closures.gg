@@ -584,7 +584,7 @@ int guess_return_type(SpannedExpr sexpr, GirModule &gmod):
                     return I64_TYPE
         case ENoneLiteral():
             return UNIT_TYPE
-        case ECall(callee_box, args, targs):
+        case ECall(callee_box, args, _, targs):
             match (*callee_box).expr:
                 case EIdentifier(fname):
                     if fname == "print" or fname == "pass":
@@ -622,7 +622,7 @@ int guess_return_type(SpannedExpr sexpr, GirModule &gmod):
                         return gmod.fn_sigs.get(call_name).unwrap()
                 else:
                     pass
-        case EMethodCall(recv, mname, margs, _):
+        case EMethodCall(recv, mname, margs, _, _):
             # Known void methods
             if mname == "push" or mname == "set" or mname == "put" or mname == "clear" or mname == "pop" or mname == "sort" or mname == "append" or mname == "insert" or mname == "remove":
                 return UNIT_TYPE
@@ -680,14 +680,14 @@ bool expr_has_it(SpannedExpr sexpr):
             return expr_has_it(*lhs) or expr_has_it(*rhs)
         case EUnaryOp(_, inner):
             return expr_has_it(*inner)
-        case ECall(callee, args, _):
+        case ECall(callee, args, _, _):
             if expr_has_it(*callee):
                 return true
             for a in args:
                 if expr_has_it(a):
                     return true
             return false
-        case EMethodCall(obj, _, args, _):
+        case EMethodCall(obj, _, args, _, _):
             if expr_has_it(*obj):
                 return true
             for a in args:
@@ -793,14 +793,14 @@ bool closure_expr_has_capture(SpannedExpr sexpr, Dict[String, bool] in_scope, Gi
             return closure_expr_has_capture(*rhs, in_scope, &gmod)
         case EUnaryOp(_, inner):
             return closure_expr_has_capture(*inner, in_scope, &gmod)
-        case ECall(callee, args, _):
+        case ECall(callee, args, _, _):
             if closure_expr_has_capture(*callee, in_scope, &gmod):
                 return true
             for a in args:
                 if closure_expr_has_capture(a, in_scope, &gmod):
                     return true
             return false
-        case EMethodCall(obj, _, args, _):
+        case EMethodCall(obj, _, args, _, _):
             if closure_expr_has_capture(*obj, in_scope, &gmod):
                 return true
             for a in args:
@@ -1124,7 +1124,7 @@ void cc_collect_expr(LowerCtx &ctx, SpannedExpr sexpr, Dict[String, bool] in_sco
             cc_collect_expr(&ctx, *rhs, in_scope, &gmod, &cc)
         case EUnaryOp(_, inner):
             cc_collect_expr(&ctx, *inner, in_scope, &gmod, &cc)
-        case ECall(callee, args, _):
+        case ECall(callee, args, _, _):
             # A bare-identifier CALLEE is a FUNCTION reference, not a value
             # capture — `print(s)` / `helper(x)` name a builtin/top-level fn
             # in the function namespace, NOT an outer local. Recursing into
@@ -1138,7 +1138,7 @@ void cc_collect_expr(LowerCtx &ctx, SpannedExpr sexpr, Dict[String, bool] in_sco
                 cc_collect_expr(&ctx, *callee, in_scope, &gmod, &cc)
             for a in args:
                 cc_collect_expr(&ctx, a, in_scope, &gmod, &cc)
-        case EMethodCall(obj, _, args, _):
+        case EMethodCall(obj, _, args, _, _):
             cc_collect_expr(&ctx, *obj, in_scope, &gmod, &cc)
             for a in args:
                 cc_collect_expr(&ctx, a, in_scope, &gmod, &cc)
@@ -1387,14 +1387,14 @@ bool expr_has_nested_closure(SpannedExpr sexpr):
             return expr_has_nested_closure(*lhs) or expr_has_nested_closure(*rhs)
         case EUnaryOp(_, inner):
             return expr_has_nested_closure(*inner)
-        case ECall(callee, args, _):
+        case ECall(callee, args, _, _):
             if expr_has_nested_closure(*callee):
                 return true
             for a in args:
                 if expr_has_nested_closure(a):
                     return true
             return false
-        case EMethodCall(obj, _, args, _):
+        case EMethodCall(obj, _, args, _, _):
             if expr_has_nested_closure(*obj):
                 return true
             for a in args:

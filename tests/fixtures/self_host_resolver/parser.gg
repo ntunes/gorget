@@ -638,7 +638,7 @@ bool expr_contains_it(Expr e):
         case EUnaryOp(_, operand):
             SpannedExpr op = *operand
             return expr_contains_it(op.expr)
-        case ECall(callee, args, _):
+        case ECall(callee, args, _, _):
             SpannedExpr c = *callee
             if expr_contains_it(c.expr):
                 return true
@@ -649,7 +649,7 @@ bool expr_contains_it(Expr e):
                     return true
                 i = i + 1
             return false
-        case EMethodCall(obj, _, args, _):
+        case EMethodCall(obj, _, args, _, _):
             SpannedExpr o = *obj
             if expr_contains_it(o.expr):
                 return true
@@ -1031,6 +1031,15 @@ struct Parser:
     # → a clean teaching error instead of a later-pass SIGSEGV on the deep
     # tree. See docs/plans/brief_expr_depth_limit_and_run_with_stack.md §B.
     int expr_depth
+    # Out-param for parse_call_args: the parallel arg-NAME vector for the
+    # most-recently-parsed call. Index i holds the keyword for value i
+    # ("" for a positional arg). Written by parse_call_args, READ by each
+    # ECall/EMethodCall construction site immediately after. Mirrors Rust
+    # gg's `CallArg.name: Option<Spanned<String>>` (src/parser/ast.rs:758) —
+    # the self-host AST keeps names in a parallel `Vector[String]` (the same
+    # name+value shape EStructLiteral already uses), so `cap=`/`alloc=`
+    # survive to lowering instead of being discarded.
+    Vector[String] last_arg_names
 
 # MAX nesting for a single expression's AST tree (parens/unary recursion OR
 # a flat operator chain's left spine). 128 ≈ 2.46× the deepest real-code
@@ -1622,8 +1631,9 @@ equip Parser:
                     if self.check_tok(TOK_LPAREN):
                         # Generic constructor: Name[T](args)
                         Vector[SpannedExpr] call_args = self.parse_call_args()
+                        Vector[String] call_names = self.last_arg_names
 
-                        lhs = SpannedExpr(ECall(Box(lhs), call_args, targs), Span(bp_start, self.peek().lex_start))
+                        lhs = SpannedExpr(ECall(Box(lhs), call_args, call_names, targs), Span(bp_start, self.peek().lex_start))
                         continue
                     # Not a generic constructor — restore and parse as index
                     self.pos = saved
@@ -1637,7 +1647,8 @@ equip Parser:
             if ptag == TOK_LPAREN:
                 int bp_start = lhs.span.start
                 Vector[SpannedExpr] call_args = self.parse_call_args()
-                lhs = SpannedExpr(ECall(Box(lhs), call_args, Vector[SpannedType]()), Span(bp_start, self.peek().lex_start))
+                Vector[String] call_names = self.last_arg_names
+                lhs = SpannedExpr(ECall(Box(lhs), call_args, call_names, Vector[SpannedType]()), Span(bp_start, self.peek().lex_start))
                 continue
 
             # Try: expr?
@@ -1816,11 +1827,13 @@ equip Parser:
                 Vector[SpannedType] mtargs = self.parse_type_args()
                 if self.check_tok(TOK_LPAREN):
                     Vector[SpannedExpr] call_args = self.parse_call_args()
-                    return SpannedExpr(EMethodCall(Box(lhs), name, call_args, mtargs), Span(start, self.peek().lex_start))
+                    Vector[String] call_names = self.last_arg_names
+                    return SpannedExpr(EMethodCall(Box(lhs), name, call_args, call_names, mtargs), Span(start, self.peek().lex_start))
                 self.pos = saved
             if self.check_tok(TOK_LPAREN):
                 Vector[SpannedExpr] call_args = self.parse_call_args()
-                return SpannedExpr(EMethodCall(Box(lhs), name, call_args, Vector[SpannedType]()), Span(start, self.peek().lex_start))
+                Vector[String] call_names = self.last_arg_names
+                return SpannedExpr(EMethodCall(Box(lhs), name, call_args, call_names, Vector[SpannedType]()), Span(start, self.peek().lex_start))
             return SpannedExpr(EFieldAccess(Box(lhs), name), Span(start, self.peek().lex_start))
         # Numeric field access for tuples: t.0, t.1
         if self.check_tok(TOK_INT):
@@ -1841,16 +1854,35 @@ equip Parser:
 
     Vector[SpannedExpr] parse_call_args(&self):
         Vector[SpannedExpr] args = Vector[SpannedExpr]()
+        # Parallel arg-NAME vector (written to self.last_arg_names): index i
+        # holds the keyword for value i ("" for a positional arg). The name is
+        # detected HERE (peek `IDENT =`) so the value parse in parse_call_arg
+        # stays unchanged; the caller reads self.last_arg_names right after.
+        Vector[String] names = Vector[String]()
         self.expect_tok(TOK_LPAREN, "expected '(' for call args")
         if not self.check_tok(TOK_RPAREN):
             # Skip ownership markers before args
             self.skip_ownership_markers()
+            names.push(self.peek_arg_name())
             args.push(self.parse_call_arg())
             while self.match_tok(TOK_COMMA):
                 self.skip_ownership_markers()
+                names.push(self.peek_arg_name())
                 args.push(self.parse_call_arg())
         self.expect_tok(TOK_RPAREN, "expected ')' after call args")
+        self.last_arg_names = names
         return args
+
+    # Peek for a `name =` named-arg prefix WITHOUT consuming. Returns the
+    # keyword string, or "" for a positional arg. parse_call_arg consumes the
+    # `name =` tokens; this only reports the name so the parallel vector lines
+    # up. Mirrors Rust gg recording `CallArg.name` (src/parser/ast.rs:758).
+    String peek_arg_name(&self):
+        if self.check_tok(TOK_IDENT) and self.pos + 1 < self.tokens.len():
+            SpannedToken next_arg = self.tokens.get(self.pos + 1).unwrap()
+            if token_tag(next_arg.lex_token) == TOK_EQ:
+                return token_ident(self.peek().lex_token)
+        return ""
 
     void skip_ownership_markers(&self):
         # Skip &, !, move, mutable before args
@@ -2043,7 +2075,7 @@ equip Parser:
                                     int interp_base = self.next_interp_offset
                                     self.next_interp_offset = interp_base + 1048576
                                     Vector[SpannedToken] sub_tokens = lex_tokenize_with_offset(expr_text, interp_base)
-                                    Parser sub = Parser(sub_tokens, 0, Vector[String](), 0, 1099511627776, 0)
+                                    Parser sub = Parser(sub_tokens, 0, Vector[String](), 0, 1099511627776, 0, Vector[String]())
                                     SpannedExpr parsed_expr = sub.parse_expr()
                                     fexprs.push(parsed_expr)
                             fsi = fsi + 1
@@ -2097,7 +2129,8 @@ equip Parser:
             SpannedExpr callee = SpannedExpr(EIdentifier("panic"), Span(t.lex_start, t.lex_end))
             if self.check_tok(TOK_LPAREN):
                 Vector[SpannedExpr] call_args = self.parse_call_args()
-                return SpannedExpr(ECall(Box(callee), call_args, Vector[SpannedType]()), Span(start, self.peek().lex_start))
+                Vector[String] call_names = self.last_arg_names
+                return SpannedExpr(ECall(Box(callee), call_args, call_names, Vector[SpannedType]()), Span(start, self.peek().lex_start))
             return callee
 
         # Unary minus
@@ -2360,11 +2393,13 @@ equip Parser:
                 Vector[SpannedType] targs = self.parse_type_args()
                 if self.check_tok(TOK_LPAREN):
                     Vector[SpannedExpr] call_args = self.parse_call_args()
-                    return SpannedExpr(ECall(Box(callee), call_args, targs), Span(start, self.peek().lex_start))
+                    Vector[String] call_names = self.last_arg_names
+                    return SpannedExpr(ECall(Box(callee), call_args, call_names, targs), Span(start, self.peek().lex_start))
                 self.pos = saved
             if self.check_tok(TOK_LPAREN):
                 Vector[SpannedExpr] call_args = self.parse_call_args()
-                return SpannedExpr(ECall(Box(callee), call_args, Vector[SpannedType]()), Span(start, self.peek().lex_start))
+                Vector[String] call_names = self.last_arg_names
+                return SpannedExpr(ECall(Box(callee), call_args, call_names, Vector[SpannedType]()), Span(start, self.peek().lex_start))
             return callee
 
         # Identifier (variable, function name, type constructor)
@@ -3048,7 +3083,7 @@ equip Parser:
             SpannedExpr recv_expr = self.parse_expr()
             # Extract channel from MethodCall(.recv())
             match recv_expr.expr:
-                case EMethodCall(receiver, method, _, _):
+                case EMethodCall(receiver, method, _, _, _):
                     if method == "recv":
                         return SORecv(name, name_span, *receiver)
                 else:
@@ -3059,7 +3094,7 @@ equip Parser:
         # Try send: channel.send(value)
         SpannedExpr send_expr = self.parse_expr()
         match send_expr.expr:
-            case EMethodCall(receiver, method, args, _):
+            case EMethodCall(receiver, method, args, _, _):
                 if method == "send" and sexpr_vec_len(args) == 1:
                     SpannedExpr value = get_sexpr_at(args, 0)
                     return SOSend(*receiver, value)
@@ -3757,6 +3792,6 @@ Module parse_source(String source):
             tokens.push(tok)
         ti = ti + 1
     # 1099511627776 = 1<<40 — base offset for f-string interp sub-parses.
-    Parser p = Parser(tokens, 0, Vector[String](), 0, 1099511627776, 0)
+    Parser p = Parser(tokens, 0, Vector[String](), 0, 1099511627776, 0, Vector[String]())
     Module m = p.parse_module()
     return m

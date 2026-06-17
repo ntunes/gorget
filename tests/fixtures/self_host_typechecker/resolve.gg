@@ -594,12 +594,12 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
         case EUnaryOp(_, operand):
             resolve_expr(*operand, &scopes, &ctx)
 
-        case ECall(callee, args, _):
+        case ECall(callee, args, _, _):
             resolve_expr(*callee, &scopes, &ctx)
             for arg in args:
                 resolve_expr(arg, &scopes, &ctx)
 
-        case EMethodCall(receiver, _, args, _):
+        case EMethodCall(receiver, _, args, _, _):
             resolve_expr(*receiver, &scopes, &ctx)
             for arg in args:
                 resolve_expr(arg, &scopes, &ctx)

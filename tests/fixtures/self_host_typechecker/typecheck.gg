@@ -675,7 +675,7 @@ void walk_expr_closures(SpannedExpr sexpr, int scope_id, ScopeTable &scopes, Typ
 
 void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
     match sexpr.expr:
-        case ECall(callee, args, targs):
+        case ECall(callee, args, _, targs):
             walk_expr_closures(*callee, scope_id, &scopes, &types, &ctx)
             # Infer callee type to extract expected param types for closure args
             Vector[int] call_param_types = Vector[int]()
@@ -693,7 +693,7 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
                 else:
                     walk_expr_closures(arg, scope_id, &scopes, &types, &ctx)
 
-        case EMethodCall(obj, method_name, args, targs):
+        case EMethodCall(obj, method_name, args, _, targs):
             walk_expr_closures(*obj, scope_id, &scopes, &types, &ctx)
             # Infer receiver element type for collection higher-order methods
             int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, &ctx)
@@ -867,7 +867,7 @@ void resolve_call_in_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &t
 
 void resolve_call_in_expr(SpannedExpr sexpr, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
     match sexpr.expr:
-        case ECall(callee, args, targs):
+        case ECall(callee, args, _, targs):
             # Check if callee is an identifier with a function type containing type vars
             match (*callee).expr:
                 case EIdentifier(name):
@@ -987,12 +987,12 @@ void resolve_param_type_var(int old_type_id, int new_type_id, int scope_id, Scop
 # disambiguator (`span.end` is), it just guards against a stale entry.
 void record_method_targs_in_expr(SpannedExpr sexpr, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
     match sexpr.expr:
-        case EMethodCall(recv_box, _, margs, _):
+        case EMethodCall(recv_box, _, margs, _, _):
             # Infer the whole method call (side effect: records the method
             # targs into `expr_method_targs`). `infer_expr_type` already walks
             # the receiver + args, so we do NOT descend manually here.
             int _ignore = infer_expr_type(sexpr, scopes, &types, &ctx)
-        case ECall(callee_box, cargs, _):
+        case ECall(callee_box, cargs, _, _):
             record_method_targs_in_expr(*callee_box, &scopes, &types, &ctx)
             for a in cargs:
                 record_method_targs_in_expr(a, &scopes, &types, &ctx)
@@ -1015,9 +1015,9 @@ void record_method_targs_in_expr(SpannedExpr sexpr, ScopeTable &scopes, TypeTabl
 # bindings — array literals, identifiers, … — touch nothing).
 bool expr_has_method_call(SpannedExpr sexpr):
     match sexpr.expr:
-        case EMethodCall(_, _, _, _):
+        case EMethodCall(_, _, _, _, _):
             return true
-        case ECall(callee_box, cargs, _):
+        case ECall(callee_box, cargs, _, _):
             if expr_has_method_call(*callee_box):
                 return true
             for a in cargs:
@@ -1122,7 +1122,7 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
             # Check for .enumerate() — assign (int, T) to tuple pattern
             bool is_enumerate = false
             match iter_expr.expr:
-                case EMethodCall(obj, method_name, args, targs):
+                case EMethodCall(obj, method_name, args, _, targs):
                     if method_name == "enumerate":
                         is_enumerate = true
                         int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, &ctx)

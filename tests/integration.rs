@@ -5015,6 +5015,19 @@ true",
 }
 
 #[test]
+fn vector_cap_arg() {
+    // `cap=` named constructor arg pre-allocates capacity without inserting
+    // elements: len() stays at the pushed count, capacity() >= the requested
+    // size. Exercises the self-host named-arg → reserve lowering path.
+    run_gg(
+        "vector_cap_arg.gg",
+        "\
+2
+true",
+    );
+}
+
+#[test]
 fn vector_higher_order() {
     run_gg(
         "vector_higher_order.gg",

@@ -98,7 +98,7 @@ int proto_inst_targ_tid(ProtoMethInst pmi, int i, GirModule &gmod):
 # walk an expression collecting method-generic call sites.
 void proto_walk_expr(SpannedExpr sexpr, GirModule &gmod, Vector[ProtoMethInst] &out, Dict[String, bool] &seen):
     match sexpr.expr:
-        case EMethodCall(recv_box, mname, margs, mtargs):
+        case EMethodCall(recv_box, mname, margs, _, mtargs):
             proto_walk_expr(*recv_box, &gmod, &out, &seen)
             for a in margs:
                 proto_walk_expr(a, &gmod, &out, &seen)
@@ -133,7 +133,7 @@ void proto_walk_expr(SpannedExpr sexpr, GirModule &gmod, Vector[ProtoMethInst] &
                             if not seen.contains(sym_b):
                                 seen.put(sym_b.clone(), true)
                                 out.push(ProtoMethInst(recv_name_b, mname, [], bm_tids, sym_b))
-        case ECall(callee_box, cargs, _):
+        case ECall(callee_box, cargs, _, _):
             proto_walk_expr(*callee_box, &gmod, &out, &seen)
             for a in cargs:
                 proto_walk_expr(a, &gmod, &out, &seen)
@@ -202,7 +202,7 @@ void proto_walk_stmts(Vector[Stmt] stmts, GirModule &gmod, Vector[ProtoMethInst]
 # collections / Option / Result are left to their own paths.
 void discover_adapter_chain_expr(SpannedExpr sexpr, GirModule &gmod, Dict[String, bool] equip_generic_names, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
     match sexpr.expr:
-        case EMethodCall(recv_box, _, margs, _):
+        case EMethodCall(recv_box, _, margs, _, _):
             # Walk the receiver chain + args first (inner links / nested chains).
             discover_adapter_chain_expr(*recv_box, &gmod, equip_generic_names, &seen, &instances)
             for a in margs:
@@ -228,7 +228,7 @@ void discover_adapter_chain_expr(SpannedExpr sexpr, GirModule &gmod, Dict[String
                                         pass
                         else:
                             pass
-        case ECall(callee_box, cargs, _):
+        case ECall(callee_box, cargs, _, _):
             discover_adapter_chain_expr(*callee_box, &gmod, equip_generic_names, &seen, &instances)
             for a in cargs:
                 discover_adapter_chain_expr(a, &gmod, equip_generic_names, &seen, &instances)
@@ -325,7 +325,7 @@ void expand_meta_for_stmt(Stmt stmt, Dict[String, bool] &seen, Vector[GenericIns
 
 void expand_meta_for_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Vector[GenericInstance] &instances, Vector[SpannedType] std_types):
     match sexpr.expr:
-        case ECall(callee_box, args, targs):
+        case ECall(callee_box, args, _, targs):
             if targs.len() > 0 and has_type_variable(targs):
                 SpannedExpr callee = *callee_box
                 match callee.expr:
@@ -359,7 +359,7 @@ void expand_meta_for_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Vector[Ge
                         pass
             for arg in args:
                 expand_meta_for_expr(arg, &seen, &instances, std_types)
-        case EMethodCall(obj, _, margs, _):
+        case EMethodCall(obj, _, margs, _, _):
             expand_meta_for_expr(*obj, &seen, &instances, std_types)
             for ma in margs:
                 expand_meta_for_expr(ma, &seen, &instances, std_types)
@@ -369,7 +369,7 @@ void expand_meta_for_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Vector[Ge
 # Discover generic call sites in an expression
 void discover_generic_calls_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
     match sexpr.expr:
-        case ECall(callee_box, args, targs):
+        case ECall(callee_box, args, _, targs):
             if targs.len() > 0 and not has_type_variable(targs):
                 SpannedExpr callee = *callee_box
                 match callee.expr:
@@ -385,7 +385,7 @@ void discover_generic_calls_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Ve
             for arg in args:
                 discover_generic_calls_expr(arg, &seen, &instances)
             discover_generic_calls_expr(*callee_box, &seen, &instances)
-        case EMethodCall(obj, _, args, _):
+        case EMethodCall(obj, _, args, _, _):
             discover_generic_calls_expr(*obj, &seen, &instances)
             for arg in args:
                 discover_generic_calls_expr(arg, &seen, &instances)
@@ -737,7 +737,7 @@ void scan_expr_for_spawn(SpannedExpr sexpr, Dict[String, bool] &shared_vars, Dic
     match sexpr.expr:
         case ESpawn(inner_box):
             match (*inner_box).expr:
-                case ECall(callee_box, args, _):
+                case ECall(callee_box, args, _, _):
                     match (*callee_box).expr:
                         case EIdentifier(callee_name):
                             # Check if any arg is:
@@ -770,7 +770,7 @@ void scan_expr_for_spawn(SpannedExpr sexpr, Dict[String, bool] &shared_vars, Dic
                                 emitted.put(callee_name, true)
                         else:
                             pass
-                case EMethodCall(obj_box, method_name, _, _):
+                case EMethodCall(obj_box, method_name, _, _, _):
                     # spawn obj.method() → emit __spawn_method_wrap_TypeName__method_name
                     match (*obj_box).expr:
                         case EIdentifier(var_name):
@@ -792,11 +792,11 @@ void scan_expr_for_spawn(SpannedExpr sexpr, Dict[String, bool] &shared_vars, Dic
                     pass
         case EAwait(inner):
             scan_expr_for_spawn(*inner, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
-        case EMethodCall(obj, _, margs, _):
+        case EMethodCall(obj, _, margs, _, _):
             scan_expr_for_spawn(*obj, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
             for ma in margs:
                 scan_expr_for_spawn(ma, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
-        case ECall(callee, cargs, _):
+        case ECall(callee, cargs, _, _):
             scan_expr_for_spawn(*callee, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
             for ca in cargs:
                 scan_expr_for_spawn(ca, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
@@ -814,7 +814,7 @@ void emit_named_closure_spawn_expr(SpannedExpr sexpr, String fn_name, Dict[Strin
     match sexpr.expr:
         case ESpawn(inner_box):
             match (*inner_box).expr:
-                case ECall(callee_box, _, _):
+                case ECall(callee_box, _, _, _):
                     match (*callee_box).expr:
                         case EIdentifier(callee_name):
                             String cvc_key = fn_name + "\0" + callee_name
@@ -832,11 +832,11 @@ void emit_named_closure_spawn_expr(SpannedExpr sexpr, String fn_name, Dict[Strin
                 else:
                     pass
             emit_named_closure_spawn_expr(*inner_box, fn_name, &emitted, &gmod)
-        case ECall(callee, args, _):
+        case ECall(callee, args, _, _):
             emit_named_closure_spawn_expr(*callee, fn_name, &emitted, &gmod)
             for arg in args:
                 emit_named_closure_spawn_expr(arg, fn_name, &emitted, &gmod)
-        case EMethodCall(obj, _, margs, _):
+        case EMethodCall(obj, _, margs, _, _):
             emit_named_closure_spawn_expr(*obj, fn_name, &emitted, &gmod)
             for ma in margs:
                 emit_named_closure_spawn_expr(ma, fn_name, &emitted, &gmod)
@@ -938,7 +938,7 @@ void discover_mono_method_insts_stmt(Stmt stmt, Dict[String, SpannedType] params
 
 void discover_mono_method_insts_expr(SpannedExpr sexpr, Dict[String, SpannedType] params_by_name, Dict[String, SpannedType] &type_sub_map, GirModule &gmod, Vector[ProtoMethInst] &out, Dict[String, bool] &seen):
     match sexpr.expr:
-        case EMethodCall(recv_box, mname, margs, mtargs):
+        case EMethodCall(recv_box, mname, margs, _, mtargs):
             discover_mono_method_insts_expr(*recv_box, params_by_name, &type_sub_map, &gmod, &out, &seen)
             for a in margs:
                 discover_mono_method_insts_expr(a, params_by_name, &type_sub_map, &gmod, &out, &seen)
@@ -985,7 +985,7 @@ void discover_mono_method_insts_expr(SpannedExpr sexpr, Dict[String, SpannedType
                                         out.push(ProtoMethInst(recv_name, mname, sub_targs, [], sym))
                     else:
                         pass
-        case ECall(callee_box, cargs, _):
+        case ECall(callee_box, cargs, _, _):
             discover_mono_method_insts_expr(*callee_box, params_by_name, &type_sub_map, &gmod, &out, &seen)
             for a in cargs:
                 discover_mono_method_insts_expr(a, params_by_name, &type_sub_map, &gmod, &out, &seen)
@@ -1039,7 +1039,7 @@ String extract_meta_op_suffix(Vector[SpannedExpr] args):
 int discover_transitive_expr(SpannedExpr sexpr, Dict[String, SpannedType] &type_sub_map, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
     int added = 0
     match sexpr.expr:
-        case ECall(callee_box, args, targs):
+        case ECall(callee_box, args, _, targs):
             if targs.len() > 0 and has_type_variable(targs):
                 Vector[SpannedType] resolved = []
                 for ta in targs:
@@ -1058,7 +1058,7 @@ int discover_transitive_expr(SpannedExpr sexpr, Dict[String, SpannedType] &type_
             for arg in args:
                 added += discover_transitive_expr(arg, &type_sub_map, &seen, &instances)
             added += discover_transitive_expr(*callee_box, &type_sub_map, &seen, &instances)
-        case EMethodCall(obj, _, margs, _):
+        case EMethodCall(obj, _, margs, _, _):
             added += discover_transitive_expr(*obj, &type_sub_map, &seen, &instances)
             for ma in margs:
                 added += discover_transitive_expr(ma, &type_sub_map, &seen, &instances)

@@ -1,0 +1,9 @@
+from std.collections import Vector
+
+void main():
+    # `cap=` named arg — pre-allocates capacity without inserting elements.
+    Vector[int] v = Vector[int](cap=8)
+    v.push(10)
+    v.push(20)
+    print(v.len())
+    print(v.capacity() >= 8)

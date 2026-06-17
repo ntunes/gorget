@@ -547,7 +547,7 @@ int lookup_expr_gir_type(SpannedExpr sexpr, GirModule &gmod):
     # self-host analog of Rust's recursive span-table-free `infer_expr_ast_type`.
     # Non-chain exprs fall through to the span.start `expr_types` table.
     match sexpr.expr:
-        case EMethodCall(_, _, _, _):
+        case EMethodCall(_, _, _, _, _):
             int link_end = sexpr.span.end
             if gmod.tc_types.expr_link_types.contains(link_end):
                 int link_rtid = gmod.tc_types.expr_link_types.get(link_end).unwrap()
@@ -1099,8 +1099,9 @@ int lower_nullary_variant_ident(LowerCtx &ctx, GirModule &gmod, String name):
     if parent == "":
         return -1
     Vector[SpannedExpr] no_args = []
+    Vector[String] no_arg_names = []
     Vector[SpannedType] no_targs = []
-    return lower_call(&ctx, &name, &no_args, &no_targs, &gmod)
+    return lower_call(&ctx, &name, &no_args, &no_arg_names, &no_targs, &gmod)
 
 # Meta-op token (`meta +`, `meta /`, …): the parser encodes these
 # as `EIdentifier("__metaop__add")` / `__metaop__div` / etc. and
@@ -1149,7 +1150,7 @@ int lower_metaop_ident(LowerCtx &ctx, String name):
 # IStaticDecl-arm dispatch site small.
 bool try_register_static_runtime_call(GirModule &gmod, SpannedType sd_ty, String sd_name, SpannedExpr sd_val):
     match sd_val.expr:
-        case ECall(callee_box, args, _):
+        case ECall(callee_box, args, _, _):
             if args.len() != 0:
                 return false
             SpannedExpr callee = *callee_box
@@ -1295,7 +1296,7 @@ String collection_ctor_init_expr(SpannedType sd_ty, GirModule &gmod):
 # fall through to the literal / None cascade.
 bool try_register_collection_ctor_static(GirModule &gmod, SpannedType sd_ty, String sd_name, SpannedExpr sd_val):
     match sd_val.expr:
-        case ECall(callee_box, args, _):
+        case ECall(callee_box, args, _, _):
             if args.len() != 0:
                 return false
             match (*callee_box).expr:
@@ -1325,7 +1326,7 @@ bool try_register_collection_ctor_static(GirModule &gmod, SpannedType sd_ty, Str
 # through to the literal / None cascade with NO regression.
 bool try_register_struct_ctor_static(GirModule &gmod, SpannedType sd_ty, String sd_name, SpannedExpr sd_val):
     match sd_val.expr:
-        case ECall(callee_box, args, targs):
+        case ECall(callee_box, args, _, targs):
             if targs.len() != 0:
                 return false
             if args.len() == 0:
@@ -1399,7 +1400,7 @@ bool try_register_struct_ctor_static(GirModule &gmod, SpannedType sd_ty, String 
 # hit; false (not a sync ctor / arg not a scalar literal) to fall through.
 bool try_register_sync_ctor_static(GirModule &gmod, SpannedType sd_ty, String sd_name, SpannedExpr sd_val):
     match sd_val.expr:
-        case ECall(callee_box, args, targs):
+        case ECall(callee_box, args, _, targs):
             match (*callee_box).expr:
                 case EIdentifier(cname):
                     # GENERIC sync ctor: `Mutex[T] g = Mutex[T](v)` / `RWLock`.
@@ -2102,7 +2103,7 @@ int collection_accumulator_tid(GirModule &gmod, String kind, String elem_name, S
 # change as the Rust-side `fn_return_abis` registration.
 bool is_cstr_returning_call(SpannedExpr init_expr, GirModule &gmod):
     match init_expr.expr:
-        case ECall(callee_box, _, _):
+        case ECall(callee_box, _, _, _):
             match (*callee_box).expr:
                 case EIdentifier(fname):
                     # Resolve through call_redirects so both the Gorget

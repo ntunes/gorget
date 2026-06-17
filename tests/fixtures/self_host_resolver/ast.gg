@@ -59,8 +59,8 @@ enum Expr:
     EIt
     EBinaryOp(Box[SpannedExpr], String, Box[SpannedExpr])
     EUnaryOp(String, Box[SpannedExpr])
-    ECall(Box[SpannedExpr], Vector[SpannedExpr], Vector[SpannedType])
-    EMethodCall(Box[SpannedExpr], String, Vector[SpannedExpr], Vector[SpannedType])
+    ECall(Box[SpannedExpr], Vector[SpannedExpr], Vector[String], Vector[SpannedType])
+    EMethodCall(Box[SpannedExpr], String, Vector[SpannedExpr], Vector[String], Vector[SpannedType])
     EFieldAccess(Box[SpannedExpr], String)
     EIndex(Box[SpannedExpr], Box[SpannedExpr])
     ERange(Option[Box[SpannedExpr]], Option[Box[SpannedExpr]])

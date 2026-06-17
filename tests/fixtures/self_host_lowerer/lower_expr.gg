@@ -353,9 +353,9 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
     # Only Call / MethodCall produce a throws-Result via the throws sugar.
     bool is_producer = false
     match sexpr.expr:
-        case ECall(_, _, _):
+        case ECall(_, _, _, _):
             is_producer = true
-        case EMethodCall(_, _, _, _):
+        case EMethodCall(_, _, _, _, _):
             is_producer = true
         else:
             pass
@@ -874,7 +874,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 else:
                     pass
             return inner
-        case ECall(callee_box, args, targs):
+        case ECall(callee_box, args, arg_names, targs):
             SpannedExpr callee = *callee_box
             match callee.expr:
                 case EIdentifier(fname):
@@ -953,7 +953,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         int cl_dst = add_local(&ctx, cl_ret_type, None)
                         emit(&ctx, GICallExtern(cl_dst, cl_call, cl_args))
                         return cl_dst
-                    return lower_call(&ctx, &fname, &args, &targs, &gmod)
+                    return lower_call(&ctx, &fname, &args, &arg_names, &targs, &gmod)
                 case EFieldAccess(_, method_name):
                     # Method-style call: obj.method(args) parsed as ECall(EFieldAccess(...))
                     # Lower args but return unit (method calls are complex)
@@ -986,11 +986,11 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     # call fell to `else: pass` → add_local(UNIT_TYPE), ignoring
                     # expected_type and yielding a unit value at an Option boundary.
                     String none_name = "None"
-                    return lower_call(&ctx, &none_name, &args, &targs, &gmod)
+                    return lower_call(&ctx, &none_name, &args, &arg_names, &targs, &gmod)
                 else:
                     pass
             return add_local(&ctx, UNIT_TYPE, None)
-        case EMethodCall(recv_box, mname, margs, mtargs_proto):
+        case EMethodCall(recv_box, mname, margs, _marg_names, mtargs_proto):
             # #37 Phase 2 hook 1 (mutating method receiver): `v.push(..)` /
             # `v.set(..)` / a `&self`/`!self` user method on a lazy-family
             # source collection is a mutation site — emit the flag-guarded
@@ -1144,7 +1144,8 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         if ident_name == "Box" and mname == "new" and margs.len() == 1:
                             String _box_ctor = "Box"
                             Vector[SpannedType] _box_no_targs = []
-                            return lower_call(&ctx, &_box_ctor, &margs, &_box_no_targs, &gmod)
+                            Vector[String] _box_no_names = []
+                            return lower_call(&ctx, &_box_ctor, &margs, &_box_no_names, &_box_no_targs, &gmod)
                         # Static method / variant ctor: dispatch via
                         # classify_call_arg against the mangled callee
                         # name. Built early enough that the callee name
@@ -2824,7 +2825,8 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # through the same typed path.
             String ds_name = variant.clone()
             Vector[SpannedType] ds_no_targs = []
-            return lower_call(&ctx, &ds_name, &sargs, &ds_no_targs, &gmod)
+            Vector[String] ds_no_names = []
+            return lower_call(&ctx, &ds_name, &sargs, &ds_no_names, &ds_no_targs, &gmod)
         case EBlock(block_stmts):
             # Block in value position — lower via `lower_block_expr` and return
             # its tail value (was dropping it into a fresh UNIT local). Mirrors
@@ -2903,7 +2905,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # back to the bare passthrough. (Real spawn/await wiring is out of
             # scope — fn-count parity is the gate.)
             match (*inner_box).expr:
-                case ECall(spawn_callee_box, spawn_args, _):
+                case ECall(spawn_callee_box, spawn_args, _, _):
                     match (*spawn_callee_box).expr:
                         case EClosure(sp_params, sp_body):
                             int sp_cid = gmod_next_closure_id(&gmod)
@@ -3160,16 +3162,17 @@ int try_lower_vector_hof(LowerCtx &ctx, int recv, String recv_type_name, String 
         Vector[Stmt] body = []
         SpannedExpr acc_ref = SpannedExpr(EIdentifier(acc_name), span)
         Vector[SpannedType] no_targs = []
+        Vector[String] no_arg_names = []
         if mname == "map":
             # `acc.push(<closure body>)`
             Vector[SpannedExpr] push_args = [cbody.clone()]
-            SpannedExpr push_call = SpannedExpr(EMethodCall(Box(acc_ref), "push", push_args, no_targs), span)
+            SpannedExpr push_call = SpannedExpr(EMethodCall(Box(acc_ref), "push", push_args, no_arg_names, no_targs), span)
             body.push(SExpr(push_call))
         else:
             # `if <closure body>: acc.push(<element>)`
             SpannedExpr elem_ref = SpannedExpr(EIdentifier(var_name), span)
             Vector[SpannedExpr] push_args = [elem_ref]
-            SpannedExpr push_call = SpannedExpr(EMethodCall(Box(acc_ref), "push", push_args, no_targs), span)
+            SpannedExpr push_call = SpannedExpr(EMethodCall(Box(acc_ref), "push", push_args, no_arg_names, no_targs), span)
             Vector[Stmt] then_body = [SExpr(push_call)]
             Vector[ElseBranch] no_elifs = []
             body.push(SIf(cbody.clone(), then_body, no_elifs))
@@ -3202,10 +3205,11 @@ int try_lower_vector_hof(LowerCtx &ctx, int recv, String recv_type_name, String 
         nl_put(&ctx, acc_name, acc)
         SpannedExpr acc_ref = SpannedExpr(EIdentifier(acc_name), span)
         Vector[SpannedType] no_targs = []
+        Vector[String] no_arg_names = []
         # `acc.extend(<closure body>)` — the closure body is a Vector
         # expression; extend appends all its elements into acc.
         Vector[SpannedExpr] ext_args = [cbody.clone()]
-        SpannedExpr ext_call = SpannedExpr(EMethodCall(Box(acc_ref), "extend", ext_args, no_targs), span)
+        SpannedExpr ext_call = SpannedExpr(EMethodCall(Box(acc_ref), "extend", ext_args, no_arg_names, no_targs), span)
         Vector[Stmt] body = [SExpr(ext_call)]
         lower_for_vector(&ctx, var_pat, recv, recv_type_name, false, body, &gmod, false)
         return acc
@@ -3587,7 +3591,8 @@ Vector[Stmt] comp_synth_body(String acc_name, SpannedExpr comp_expr, Option[Box[
     SpannedExpr acc_ref = SpannedExpr(EIdentifier(acc_name), span)
     Vector[SpannedExpr] push_args = [comp_expr.clone()]
     Vector[SpannedType] no_targs = []
-    SpannedExpr push_call = SpannedExpr(EMethodCall(Box(acc_ref), "push", push_args, no_targs), span)
+    Vector[String] no_arg_names = []
+    SpannedExpr push_call = SpannedExpr(EMethodCall(Box(acc_ref), "push", push_args, no_arg_names, no_targs), span)
     Stmt push_stmt = SExpr(push_call)
     Vector[Stmt] body = []
     match filt_opt:
@@ -3671,7 +3676,8 @@ Vector[Stmt] comp_synth_set_body(String acc_name, SpannedExpr comp_expr, Option[
     SpannedExpr acc_ref = SpannedExpr(EIdentifier(acc_name), span)
     Vector[SpannedExpr] add_args = [comp_expr.clone()]
     Vector[SpannedType] no_targs = []
-    SpannedExpr add_call = SpannedExpr(EMethodCall(Box(acc_ref), "add", add_args, no_targs), span)
+    Vector[String] no_arg_names = []
+    SpannedExpr add_call = SpannedExpr(EMethodCall(Box(acc_ref), "add", add_args, no_arg_names, no_targs), span)
     Stmt add_stmt = SExpr(add_call)
     Vector[Stmt] body = []
     match filt_opt:
@@ -3751,7 +3757,8 @@ Vector[Stmt] comp_synth_dict_body(String acc_name, SpannedExpr key_expr, Spanned
     SpannedExpr acc_ref = SpannedExpr(EIdentifier(acc_name), span)
     Vector[SpannedExpr] put_args = [key_expr.clone(), val_expr.clone()]
     Vector[SpannedType] no_targs = []
-    SpannedExpr put_call = SpannedExpr(EMethodCall(Box(acc_ref), "put", put_args, no_targs), span)
+    Vector[String] no_arg_names = []
+    SpannedExpr put_call = SpannedExpr(EMethodCall(Box(acc_ref), "put", put_args, no_arg_names, no_targs), span)
     Stmt put_stmt = SExpr(put_call)
     Vector[Stmt] body = []
     match filt_opt:
@@ -3866,7 +3873,17 @@ void apply_container_hint_for_ctor_arg(LowerCtx &ctx, String ctor_name, int ai, 
                     ctx.pending_dict_val_tyname = v_only.clone()
                     ctx.pending_dict_ordered = d_ordered
 
-int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[SpannedType] &targs, GirModule &gmod):
+# NAMED-ARG MODELING helper — does this collection ctor's arg list carry a
+# capacity (named `cap=` OR a lone positional int) or allocator (`alloc=`)
+# argument that must be split out of the `__new` call? Returns false for the
+# bare `Vector[int]()` zero-arg case (the common path, unchanged) so the
+# interception only fires when there is actually something to split.
+bool collection_ctor_has_cap_alloc_or_positional(Vector[SpannedExpr] &args, Vector[String] &arg_names):
+    if args.len() == 0:
+        return false
+    return true
+
+int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[String] &arg_names, Vector[SpannedType] &targs, GirModule &gmod):
     int result = -1
     bool is_print = fname == "print"
     if is_print:
@@ -3995,6 +4012,64 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
             else:
                 pass
         result = ts_result
+    elif (fname == "Vector" or fname == "Deque") and targs.len() == 1 and collection_ctor_has_cap_alloc_or_positional(&args, &arg_names):
+        # NAMED-ARG MODELING — Vector/Deque capacity/allocator constructors.
+        # Mirrors Rust gg `src/ir/lowering/exprs/calls.rs:972-1019`:
+        #   • `cap=N`         → `__new()` + `reserve(&arr, N)`
+        #   • positional int  → `Vector[int](10)` is a capacity hint → reserve too
+        #   • `alloc=X`       → push_allocator(X); `__new()`; pop_allocator()
+        # The parser keeps the value but DISCARDED the name, so `cap=`/`alloc=`/
+        # positional `10` all arrived as ONE positional arg → the LIR appended
+        # elem_size → `gorget_array_new(10, 8)` (CC-FAIL: too many args). With
+        # `arg_names` carried on the AST we now split the args by name HERE: the
+        # `__new` GICall is emitted with NO user args (so the LIR appends only
+        # elem_size → `gorget_array_new(elem_size)`), then reserve/allocator
+        # calls wrap it. The collection mangled name routes through the existing
+        # `is_collection_constructor` LIR path that picks `gorget_array_new`.
+        String coll_mangled = fname
+        for cta in targs:
+            coll_mangled = coll_mangled + "__" + type_to_c_name(cta, &gmod)
+        int coll_ret = lookup_or_register_named(&gmod, coll_mangled)
+        # Split the args into cap (named "cap" OR a lone positional) and alloc
+        # (named "alloc"). `arg_names` is parallel to `args` ("" = positional).
+        int cap_idx = -1
+        int alloc_idx = -1
+        int csa_i = 0
+        while csa_i < args.len():
+            String an = ""
+            if csa_i < arg_names.len():
+                an = arg_names.get(csa_i).unwrap()
+            if an == "cap":
+                cap_idx = csa_i
+            elif an == "alloc":
+                alloc_idx = csa_i
+            elif an == "":
+                # A lone positional arg on a collection ctor is a capacity hint.
+                cap_idx = csa_i
+            csa_i += 1
+        # alloc= → push the active thread-local allocator before __new.
+        if alloc_idx >= 0:
+            int alloc_val = lower_expr(&ctx, args.get(alloc_idx).unwrap(), &gmod)
+            Vector[Operand] push_args = [op_consume(&ctx, &gmod, alloc_val, CkCallArgBorrow())]
+            emit(&ctx, GICallExtern(-1, "__gorget_push_allocator", push_args))
+        # __new() — NO user args; the LIR collection-ctor path appends elem_size.
+        int coll_dst = add_local(&ctx, coll_ret, None)
+        Vector[Operand] coll_new_args = []
+        emit(&ctx, GICall(coll_dst, coll_mangled, coll_new_args))
+        register_local_for_drop(&ctx, coll_dst, coll_ret, &gmod)
+        # alloc= → pop the allocator immediately after __new (one-shot, matches
+        # Rust: only the allocation inside the ctor uses the arena).
+        if alloc_idx >= 0:
+            emit(&ctx, GICallExtern(-1, "__gorget_pop_allocator", []))
+        # cap= / positional → reserve(&arr, N). gorget_array_reserve takes the
+        # array by pointer (arg 0, needs_ptr_arg) — OpBorrow(coll_dst) supplies
+        # the pointer (OpCopy would FATAL validate_resource_moves on a resource
+        # copy). The capacity scalar passes by value.
+        if cap_idx >= 0:
+            int cap_val = lower_expr(&ctx, args.get(cap_idx).unwrap(), &gmod)
+            Vector[Operand] reserve_args = [OpBorrow(coll_dst), op_consume(&ctx, &gmod, cap_val, CkCallArgBorrow())]
+            emit(&ctx, GICallExtern(-1, "gorget_array_reserve", reserve_args))
+        result = coll_dst
     elif allocator_constructor_runtime_name(fname) != "":
         # R9 FIDELITY — scoped-allocator constructor (`Arena(8192)`,
         # `PoolAllocator(sz, n)`, `TrackingAllocator()`, …). These are NOT

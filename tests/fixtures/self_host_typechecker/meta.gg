@@ -201,7 +201,7 @@ int eval_int_ex(Expr e, Dict[String, int] &env, Module &m, int depth, bool &ok):
             if op == "-":
                 return 0 - v
             return v
-        case ECall(callee, args, targs):
+        case ECall(callee, args, _, targs):
             match (*callee).expr:
                 case EIdentifier(fn_name):
                     if fn_name == "sizeof" and args.len() == 1:
@@ -340,7 +340,7 @@ bool eval_meta_bool(Expr e, Dict[String, int] &iv, Dict[String, bool] &bv, Modul
                 return bv[name]
             ok = false
             return false
-        case ECall(callee, args, _):
+        case ECall(callee, args, _, _):
             match (*callee).expr:
                 case EIdentifier(fn_name):
                     if fn_name == "feature":
@@ -424,7 +424,7 @@ Type arg_as_type(SpannedExpr arg):
             if name == "int" or name == "bool" or name == "float" or name == "String" or name == "cstr" or name == "int8" or name == "int16" or name == "int32" or name == "int64" or name == "uint8" or name == "uint16" or name == "uint32" or name == "uint64" or name == "float32" or name == "float64" or name == "str":
                 return TPrimitive(name)
             return TNamed(name, Vector[SpannedType]())
-        case ECall(callee, args, targs):
+        case ECall(callee, args, _, targs):
             match (*callee).expr:
                 case EIdentifier(name):
                     Vector[SpannedType] tas = Vector[SpannedType]()
@@ -465,20 +465,20 @@ SpannedExpr subst_expr(SpannedExpr se, Dict[String, int] &iv, Dict[String, bool]
             return SpannedExpr(EBinaryOp(Box(subst_expr(*l, &iv, &bv, &sv)), op, Box(subst_expr(*r, &iv, &bv, &sv))), se.span)
         case EUnaryOp(op, operand):
             return SpannedExpr(EUnaryOp(op, Box(subst_expr(*operand, &iv, &bv, &sv))), se.span)
-        case ECall(callee, args, targs):
+        case ECall(callee, args, arg_names, targs):
             Vector[SpannedExpr] na = Vector[SpannedExpr]()
             int i = 0
             while i < args.len():
                 na.push(subst_expr(args.get(i).unwrap(), &iv, &bv, &sv))
                 i = i + 1
-            return SpannedExpr(ECall(Box(subst_expr(*callee, &iv, &bv, &sv)), na, targs), se.span)
-        case EMethodCall(recv, mname, args, targs):
+            return SpannedExpr(ECall(Box(subst_expr(*callee, &iv, &bv, &sv)), na, arg_names, targs), se.span)
+        case EMethodCall(recv, mname, args, arg_names, targs):
             Vector[SpannedExpr] na = Vector[SpannedExpr]()
             int i = 0
             while i < args.len():
                 na.push(subst_expr(args.get(i).unwrap(), &iv, &bv, &sv))
                 i = i + 1
-            return SpannedExpr(EMethodCall(Box(subst_expr(*recv, &iv, &bv, &sv)), mname, na, targs), se.span)
+            return SpannedExpr(EMethodCall(Box(subst_expr(*recv, &iv, &bv, &sv)), mname, na, arg_names, targs), se.span)
         case EFieldAccess(base, fname):
             return SpannedExpr(EFieldAccess(Box(subst_expr(*base, &iv, &bv, &sv)), fname), se.span)
         case EIndex(base, idx):
@@ -594,7 +594,7 @@ void expand_meta_types(Module &m, TypeTable &types):
                     match mc_expr.expr:
                         case EStringLiteral(s, _):
                             str_consts[mc_name] = s
-                        case ECall(callee, cargs, _):
+                        case ECall(callee, cargs, _, _):
                             match (*callee).expr:
                                 case EIdentifier(fn_name):
                                     if fn_name == "typename" and cargs.len() == 1:
@@ -641,7 +641,7 @@ void expand_meta_types(Module &m, TypeTable &types):
                             SpannedExpr arg = call_args.get(j).unwrap()
                             # If arg is a call to a builtin like arch_word_bits()
                             match arg.expr:
-                                case ECall(callee_expr, inner_args, _):
+                                case ECall(callee_expr, inner_args, _, _):
                                     match (*callee_expr).expr:
                                         case EIdentifier(fn_name):
                                             if fn_name == "arch_word_bits" and inner_args.len() == 0:
@@ -717,7 +717,7 @@ MatchArm substitute_arm(MatchArm template, String var_name, String concrete_name
 # expected shape.
 String extract_variant_payloads_target(SpannedExpr range):
     match range.expr:
-        case ECall(callee, args, _):
+        case ECall(callee, args, _, _):
             match (*callee).expr:
                 case EIdentifier(callee_name):
                     if callee_name == "variant_payloads" and args.len() == 1:

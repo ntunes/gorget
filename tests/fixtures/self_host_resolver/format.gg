@@ -228,7 +228,7 @@ String format_expr(SpannedExpr se):
         case EUnaryOp(op, operand):
             String os = format_expr(*operand)
             return "(" + op + " " + os + ")"
-        case ECall(callee, args, targs):
+        case ECall(callee, args, _, targs):
             String cs = format_expr(*callee)
             String result = cs + "("
             int i = 0
@@ -240,7 +240,7 @@ String format_expr(SpannedExpr se):
                 i = i + 1
             result = result + ")"
             return result
-        case EMethodCall(obj, name, args, targs):
+        case EMethodCall(obj, name, args, _, targs):
             String os = format_expr(*obj)
             String result = os + "." + name + "("
             int i = 0
