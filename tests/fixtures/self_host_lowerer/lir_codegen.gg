@@ -2064,49 +2064,34 @@ bool is_cstr_returning_fn(String name):
     return runtime_fn_returns_cstr(name)
 
 bool runtime_takes_str_by_value(String name):
-    if name == "gorget_str_char_at" or name == "gorget_str_byte_at":
+    # Nearly EVERY `gorget_str_*` runtime fn declares its receiver (arg 0) as
+    # `Str` BY VALUE — there is no `Str*`-receiver variant in the C runtime
+    # (`src/backend/c/runtime/runtime_string*.c`). The receiver-position
+    # predicate `runtime_arg_is_str(name, 0)` already keys off this SAME
+    # `gorget_str_` prefix (line ~1944), so the two predicates agree by
+    # construction. Driving by the prefix (instead of a hand-maintained parallel
+    # name list) is the layering-discipline win: a new `gorget_str_<m>` method
+    # gets the `*(Str*)` borrowed-receiver deref for free, with no list to keep
+    # in sync. `gorget_str_ord` (self-host emits it inline as `static inline
+    # int64_t gorget_str_ord(Str s)`) is covered by the prefix.
+    #
+    # The carve-out: a handful of `gorget_str_*` CONSTRUCTORS take a
+    # `const char*` (NOT `Str`) at arg 0 — `from_cstr` / `from_literal` /
+    # `own_region` / `view_region`, and the legacy `gorget_str_concat`
+    # (`const char*`; the live Str-by-value concat is `gorget_str_cat`). For
+    # those a `*(Str*)` deref would wrongly cast a cstr arg to a Str struct, so
+    # they must report by-value=false.
+    if name == "gorget_str_from_cstr" or name == "gorget_str_from_literal":
+        return false
+    if name == "gorget_str_own_region" or name == "gorget_str_view_region":
+        return false
+    if name == "gorget_str_concat":
+        return false
+    if name.starts_with("gorget_str_"):
         return true
-    if name == "gorget_str_byte_len" or name == "gorget_str_byte_slice":
-        return true
-    # for-over-String codepoint iteration: both take `Str s` by value
-    # (lir_codegen.gg:6249/6251); a Ptr-source coll needs the *(Str*) deref.
-    if name == "gorget_str_codepoint_at" or name == "gorget_utf8_codepoint_len_at":
-        return true
-    if name == "gorget_str_cat" or name == "gorget_str_concat":
-        return true
-    if name == "gorget_str_eq" or name == "gorget_str_cmp":
-        return true
-    if name == "gorget_str_ne" or name == "gorget_str_lt" or name == "gorget_str_le":
-        return true
-    if name == "gorget_str_gt" or name == "gorget_str_ge":
-        return true
-    if name == "gorget_str_slice" or name == "gorget_str_trim":
-        return true
-    if name == "gorget_str_replace" or name == "gorget_str_upper" or name == "gorget_str_lower":
-        return true
-    if name == "gorget_str_to_upper" or name == "gorget_str_to_lower":
-        return true
-    if name == "gorget_str_repeat" or name == "gorget_str_join":
-        return true
-    if name == "gorget_str_strip" or name == "gorget_str_lstrip" or name == "gorget_str_rstrip":
-        return true
-    if name == "gorget_str_removeprefix" or name == "gorget_str_removesuffix":
-        return true
-    if name == "gorget_str_center" or name == "gorget_str_ljust" or name == "gorget_str_rjust":
-        return true
-    if name == "gorget_str_zfill" or name == "gorget_str_reverse":
-        return true
-    if name == "gorget_str_find" or name == "gorget_str_index_of" or name == "gorget_str_count":
-        return true
-    if name == "gorget_str_contains" or name == "gorget_str_starts_with" or name == "gorget_str_ends_with":
-        return true
-    if name == "gorget_str_hash" or name == "gorget_str_len" or name == "gorget_str_codepoint_count":
-        return true
-    if name == "gorget_str_split" or name == "gorget_str_split_n":
-        return true
-    if name == "gorget_str_lines" or name == "gorget_str_chars":
-        return true
-    if name == "gorget_str_bytes":
+    # for-over-String codepoint iteration: takes `Str s` by value but lacks the
+    # `gorget_str_` prefix (a Ptr-source coll needs the *(Str*) deref).
+    if name == "gorget_utf8_codepoint_len_at":
         return true
     return false
 
