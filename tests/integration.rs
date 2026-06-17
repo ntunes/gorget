@@ -15645,6 +15645,78 @@ fn self_host_e2e() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Diagnostic-gate regression guard (snag #11 item 4).
+//
+// The self-host lowerer driver (`self_host_lowerer/driver.gg`) consumes
+// `ctx.diagnostics` after type_check and HALTS (renders + exit(1)) before
+// `lower_module` if any are error-severity — so the self-host REJECTS an
+// invalid program instead of miscompiling it.
+//
+// Nothing else in the suite covers this: Rust-rejected fixtures (the only
+// inputs the gate fires on) are classified `RustNotBuildable` and excluded
+// from `self_host_runtime` / `self_host_e2e`, so the self-host's reject
+// behavior is otherwise untested. Delete the `if has_errors(...)` block in
+// the driver and every default-running self-host test stays green.
+//
+// This guard runs the driver standalone on a STABLE in-repo Rust-rejected
+// fixture (`throw_in_non_throwing_error.gg`: a bare `throw` in a function
+// that doesn't declare `throws`) and asserts the contract: non-zero exit,
+// a source-grounded diagnostic on stderr, and NO C emitted on stdout (the
+// halt is BEFORE lowering).
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_rejects_invalid_program() {
+    if skip_under_llvm() { return; }
+
+    // Cached — shared with lowerer_comparison / bootstrap / e2e.
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir
+        .join("tests/fixtures/throw_in_non_throwing_error.gg");
+    assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
+
+    // Invoke the driver exactly as the e2e harness does: `driver F lib --lir-c`.
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "self_host_driver_rejects_invalid_program",
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    // 1. The driver MUST exit non-zero (the diagnostic gate's exit(1)).
+    assert!(
+        !out.status.success(),
+        "self-host driver accepted a Rust-REJECTED program (the diagnostic \
+         gate in self_host_lowerer/driver.gg was removed or stopped firing). \
+         exit={:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+
+    // 2. It MUST render a diagnostic to stderr (source-grounded `error:`).
+    assert!(
+        stderr.contains("error:"),
+        "self-host driver exited non-zero but emitted no `error:` diagnostic \
+         to stderr — the reject path must render, not crash silently.\n\
+         stderr:\n{stderr}",
+    );
+
+    // 3. It MUST NOT emit C (the gate halts BEFORE lower_module). The `--lir-c`
+    //    body goes to stdout; on a rejected program stdout must be empty.
+    assert!(
+        stdout.trim().is_empty(),
+        "self-host driver emitted C for a rejected program — the gate must \
+         halt BEFORE lowering. stdout bytes={}\nstdout head:\n{}",
+        stdout.len(),
+        &stdout.chars().take(200).collect::<String>(),
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Chain 2 gate: the self-host emits a FULL, standalone program.
 //
 // Proves `driver F lib --emit-c --runtime-dir=<abs runtime> | cc | run`
