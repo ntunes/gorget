@@ -2727,6 +2727,14 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # Rust gg modelling `&*b` as a borrow of `Place{box,[Deref]}`.
             match (*inner_box).expr:
                 case EDeref(mb_box):
+                    # Lower the inner ONCE and reuse the local on both the box
+                    # and the (defensive) non-box path. `&*<non-box>` is now a
+                    # `gg check` error (typecheck DerefNonBox), so the `None`
+                    # branch is unreachable from valid source — but if a non-box
+                    # deref ever reaches the lowerer, re-lowering `*inner_box`
+                    # here would EXECUTE the inner expression a SECOND time (the
+                    # EDeref arm at the bottom of this match re-lowers `*mb_box`).
+                    # Reuse `mb_box_local` so the inner is evaluated exactly once.
                     int mb_box_local = lower_expr(&ctx, *mb_box, &gmod)
                     int mb_box_tid = ctx.locals.get(mb_box_local).unwrap().type_id
                     String mb_box_tname = type_id_to_name(mb_box_tid, &gmod)
@@ -2734,7 +2742,9 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         case Some(_):
                             return mb_box_local
                         case None:
-                            pass
+                            # Non-box `&*x` — invalid per typecheck. Reuse the
+                            # already-lowered inner local; do NOT re-lower.
+                            return mb_box_local
                 else:
                     pass
             return lower_expr(&ctx, *inner_box, &gmod)
@@ -4160,6 +4170,13 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
             if ad_param_by_ptr:
                 match arg.expr:
                     case EDeref(ad_box):
+                        # Lower the inner box ONCE; reuse the local on both the
+                        # box and the (defensive) non-box path. `&*<non-box>` is
+                        # a `gg check` error (typecheck DerefNonBox), so `None`
+                        # is unreachable from valid source — but if it ever
+                        # reaches here, falling through to `lower_expr(arg)`
+                        # below re-lowers the whole `EDeref`, EXECUTING the inner
+                        # a SECOND time. Reuse `ad_box_local` to lower once.
                         int ad_box_local = lower_expr(&ctx, *ad_box, &gmod)
                         int ad_box_tid = ctx.locals.get(ad_box_local).unwrap().type_id
                         match box_deref_inner_name(type_id_to_name(ad_box_tid, &gmod), &gmod):
@@ -4167,7 +4184,10 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                                 arg_local = ad_box_local
                                 ad_handled = true
                             case None:
-                                pass
+                                # Non-box `&*x` — invalid per typecheck. Reuse
+                                # the already-lowered inner; do NOT re-lower.
+                                arg_local = ad_box_local
+                                ad_handled = true
                     else:
                         pass
             if not ad_handled:

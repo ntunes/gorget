@@ -2344,12 +2344,41 @@ impl<'a> TypeChecker<'a> {
 
             Expr::Deref { expr: inner } => {
                 let inner_type = self.infer_expr(inner);
-                let resolved = self.resolve_type(inner_type);
-                // *expr unwraps Box[T] → T
+                // Peel any ownership wrappers (`&box`, `!box`) before checking
+                // for the smart-pointer shape, so `*(&b)` / `*(!b)` still unwrap.
+                let mut resolved = self.resolve_type(inner_type);
+                while let ResolvedType::Ref(t) | ResolvedType::Owned(t) =
+                    self.types.get(resolved).clone()
+                {
+                    resolved = self.resolve_type(t);
+                }
+                // *expr unwraps Box[T] → T (the only smart-pointer type `*` is
+                // valid on — see docs/language-reference.md §7.4: `*` operand is
+                // "Pointer/smart ptr", and Box is the lone such type in the
+                // language; deref-coercion §9 / Box[T] §«Box methods»).
                 if let ResolvedType::Generic(def_id, args) = self.types.get(resolved).clone() {
                     if self.scopes.get_def(def_id).name == "Box" && args.len() == 1 {
                         return args[0];
                     }
+                }
+                // Any OTHER concretely-resolved type is not deref-able. Without
+                // an error here the type checker returned `inner_type` unchanged
+                // (a silent no-op) and the IR lowering emitted a garbage pointer
+                // dereference (`*(int64_t*)(*(void**)&value)`) that segfaults at
+                // runtime. Mirror the `unwrap`-on-non-Option guard above
+                // (`UnwrapOnNonOptional`): suppress the error for types whose
+                // inference is still incomplete (`Var`) or already errored, to
+                // avoid spurious diagnostics on otherwise-valid code.
+                if !matches!(self.types.get(resolved), ResolvedType::Var(_) | ResolvedType::Error)
+                    && resolved != self.types.error_id
+                {
+                    self.error(
+                        SemanticErrorKind::DerefNonBox {
+                            type_: self.describe_resolved_type(inner_type),
+                        },
+                        expr.span,
+                    );
+                    return self.types.error_id;
                 }
                 inner_type
             }

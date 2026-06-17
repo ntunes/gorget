@@ -215,6 +215,14 @@ pub enum SemanticErrorKind {
     /// here makes the failure a clean type error at `gg check`.
     UnwrapOnNonOptional { method: String, type_: String },
 
+    /// `*expr` (dereference) applied to a value whose type is not a smart
+    /// pointer (`Box[T]`). On any other type the type checker used to return
+    /// the inner type unchanged (a silent no-op), and the IR lowering then
+    /// emitted `*(int64_t*)(*(void**)&value)` — interpreting the value's bits
+    /// as a pointer and dereferencing garbage, which segfaults at runtime.
+    /// Surfacing it here makes the failure a clean type error at `gg check`.
+    DerefNonBox { type_: String },
+
     /// A method-level generic param couldn't be inferred from the
     /// call's arg types. Emitted by Phase 2c inference (see
     /// `docs/devbook/09-type-checking.md`, method-level generic inference)
@@ -559,6 +567,13 @@ impl std::fmt::Display for SemanticError {
                     f,
                     "method `{method}` requires an `Option` or `Result` receiver, \
                      but `{type_}` is neither"
+                )
+            }
+            SemanticErrorKind::DerefNonBox { type_ } => {
+                write!(
+                    f,
+                    "cannot dereference `*` a value of type `{type_}` — \
+                     `*` requires a `Box[T]`"
                 )
             }
             SemanticErrorKind::MethodGenericInferenceFailed { method, type_, unresolved, reason } => {

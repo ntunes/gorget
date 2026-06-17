@@ -16,11 +16,11 @@ from scope import DkFunction, DkStruct, DkEnum, DkVariant, DkTrait
 from scope import DkVariable, DkConst, DkStatic
 from types import TypeTable, ResolvedType, get_stype_at, get_rtype_at, get_int_at
 from types import RTFunction, RTVoid, RTPrimitive, RTDefined, RTGeneric
-from types import RTTuple, RTArray, RTSlice, RTError, RTNever, RTRef
+from types import RTTuple, RTArray, RTSlice, RTError, RTNever, RTRef, RTVar
 from types import ast_type_to_resolved
 from types import FunctionSig, MethodSigShape, MethodResolution, ShapeResolution, EquipInfo
 from resolve import ResolveContext
-from diagnostic import Diagnostic, DkControlFlow
+from diagnostic import Diagnostic, DkControlFlow, DkTypeMismatch
 from traits import resolve_method_by_name, resolve_method_shape
 from traits import resolve_method_full, resolve_method_for_generic_receiver
 from traits import infer_method_targs, substitute_return_type, type_name_of
@@ -793,7 +793,51 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             return infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, &ctx)
 
         case EDeref(inner):
-            return infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, &ctx)
+            # `*expr` is valid only on a smart pointer (`Box[T]` → `T`). Mirror
+            # Rust src/semantic/typecheck.rs `Expr::Deref`: unwrap `Box[T]`, and
+            # reject any other concretely-resolved operand (a non-Box deref
+            # lowers to `*(int64_t*)(*(void**)&value)` — a garbage pointer
+            # dereference that SEGFAULTs at runtime). Suppress the diagnostic
+            # for still-inferring (RTVar) or already-errored operands to avoid
+            # spurious errors, exactly like Rust's `Var`/`error_id` guards.
+            # See docs/language-reference.md §7.4 (`*` operand: "Pointer/smart
+            # ptr") and AGENTS.md Core invariant #8 (reject UB, don't propagate
+            # garbage).  ⚠ The self-host LOWERER driver currently ignores
+            # `ctx.diagnostics` (snag #11), so this push makes the typecheck
+            # TWIN symmetric with Rust but does NOT yet halt the self-host build
+            # — full self-host rejection is gated on the snag #11 driver change.
+            int deref_inner_type = infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, &ctx)
+            int deref_resolved = deref_inner_type
+            # Peel a single `RTRef` wrapper (`*(&box)`); the self-host has no
+            # RTOwned variant, so RTRef is the only ownership wrapper to peel.
+            if deref_resolved >= 0 and deref_resolved < types.types.len():
+                ResolvedType deref_wrap = get_rtype_at(types.types, deref_resolved)
+                match deref_wrap:
+                    case RTRef(pointee):
+                        deref_resolved = pointee
+                    else:
+                        pass
+            if deref_resolved >= 0 and deref_resolved < types.types.len():
+                ResolvedType deref_rt = get_rtype_at(types.types, deref_resolved)
+                match deref_rt:
+                    case RTGeneric(box_def_id, box_args):
+                        DefInfo box_def = scopes.get_def(box_def_id)
+                        if box_def.name == "Box" and box_args.len() == 1:
+                            # *Box[T] → T
+                            return get_int_at(box_args, 0)
+                        else:
+                            ctx.diagnostics.push(Diagnostic.error((*inner).span, DkTypeMismatch(), "cannot dereference `*` a non-`Box[T]` value"))
+                            return types.error_id
+                    case RTVar(_unresolved):
+                        # inference incomplete — suppress (mirrors Rust's Var guard)
+                        return deref_inner_type
+                    case RTError():
+                        return deref_inner_type
+                    else:
+                        # Any other concretely-resolved type is not deref-able.
+                        ctx.diagnostics.push(Diagnostic.error((*inner).span, DkTypeMismatch(), "cannot dereference `*` a non-`Box[T]` value"))
+                        return types.error_id
+            return deref_inner_type
 
 
         case EIs(inner, negated, pattern):

@@ -1,0 +1,15 @@
+# Negative fixture: `*x` (dereference) on a non-`Box` value must be REJECTED
+# at `gg check`. `*` is only valid on a smart pointer (`Box[T]`) — see
+# docs/language-reference.md §7.4 ("Pointer/smart ptr → Inner type").
+#
+# Before the fix, the type checker returned the inner type unchanged for a
+# non-Box operand (a silent no-op), `gg check` passed clean, and the IR
+# lowering emitted `*(int64_t*)(*(void**)&x)` — reinterpreting the integer
+# value `5` as a pointer and dereferencing address 5, which SEGFAULTS at
+# runtime (exit 139). The language MUST reject this program, not miscompile
+# it. (AGENTS.md Core invariant #8: reference-grade is the bar — both
+# backends agreeing on UB/garbage is ≥2 bugs, not parity.)
+void main():
+    int x = 5
+    int y = *x
+    print(y)

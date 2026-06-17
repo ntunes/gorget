@@ -5911,6 +5911,21 @@ fn method_resolution_unwrap_or_on_int_errors() {
     );
 }
 
+// `*x` (dereference) is valid only on a smart pointer (`Box[T]`). On any
+// other type the type checker used to return the inner type unchanged (a
+// silent no-op); `gg check` passed clean and the IR lowering emitted a
+// garbage pointer dereference that segfaults at runtime (exit 139). The
+// language must REJECT the program at check time (AGENTS.md Core invariant
+// #8 — reference-grade, not parity-on-garbage). Excluded from the runtime
+// parity denominator (Rust-rejected); this test asserts the rejection.
+#[test]
+fn deref_non_box_is_rejected() {
+    check_gg_fails(
+        "deref_non_box_rejected.gg",
+        "cannot dereference `*` a value of type `int` — `*` requires a `Box[T]`",
+    );
+}
+
 #[test]
 fn method_resolution_valid_unwrap_still_compiles() {
     // The positive companion: valid Option/Result unwrap/expect/unwrap_or
