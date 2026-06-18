@@ -3591,7 +3591,25 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                     gmod.fn_sigs.put(pmi0.mangled_symbol.clone(), p0_ret_tid)
                                     clear_type_subs(&gmod)
                 case None:
-                    pass
+                    # INHERENT equip (no trait): pre-register the return type of
+                    # a method-level-generic method defined directly in the equip
+                    # block (`zip[U]` in `equip [T] VectorIter[T]:`), so the
+                    # call-site ret_tid lookup resolves to the adapter struct
+                    # instead of the I64 fallback. Body emitted below.
+                    for p0_im in p0_eqtmpl.methods:
+                        if p0_im.name == pmi0.method_name and p0_im.body.len() > 0 and p0_im.type_params.len() == proto_inst_targ_count(pmi0) and p0_im.type_params.len() > 0:
+                            Vector[String] p0_ieqparams = extract_equip_type_params(p0_eqtmpl)
+                            setup_type_subs(&gmod, p0_ieqparams, p0_eq_targs)
+                            int p0_iself_tid = lookup_or_register_named(&gmod, pmi0.recv_instance)
+                            gmod.type_subs.put("Self", p0_iself_tid)
+                            int p0_impi = 0
+                            while p0_impi < p0_im.type_params.len() and p0_impi < proto_inst_targ_count(pmi0):
+                                int p0_imta_tid = proto_inst_targ_tid(pmi0, p0_impi, &gmod)
+                                gmod.type_subs.put(p0_im.type_params.get(p0_impi).unwrap(), p0_imta_tid)
+                                p0_impi += 1
+                            int p0_iret_tid = map_ast_type(p0_im.return_type, &gmod)
+                            gmod.fn_sigs.put(pmi0.mangled_symbol.clone(), p0_iret_tid)
+                            clear_type_subs(&gmod)
 
     # Lower each non-generic function, equip method, and test block
     int test_idx = 0
@@ -4204,6 +4222,9 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                             clear_type_subs(&gmod)
                 case None:
                     pass
+                    # gm-inherent-generic-equip DEFERRED — method-generic body on a generic
+                    # receiver; needs a fn_sigs.contains dedup guard (avoids double-emit with
+                    # the proto_minsts None arm) + a repro fixture before fixing. See TODO.md.
 
     # PROTO phase-1b: per-call-site method-level-generic body emit.
     # Re-uses proto_minsts discovered in the pre-pass above; emits the
@@ -4275,7 +4296,31 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                     gmod.fn_sigs.put(pmi.mangled_symbol.clone(), p_lf.return_type)
                                     clear_type_subs(&gmod)
                 case None:
-                    pass
+                    # INHERENT equip (no trait): the method-level-generic body
+                    # lives directly in the equip block (e.g. `zip[U]` in
+                    # `equip [T] VectorIter[T]:`). Match the method by name +
+                    # method-targ arity in the equip block itself, bind
+                    # equip-[T->...] + Self + method-[U->...] subs, emit the body
+                    # under the mangled symbol. Mirrors Rust's
+                    # lower_method_instance equip-block-match arm (no trait_).
+                    for p_im in p_eqtmpl.methods:
+                        if p_im.name == pmi.method_name and p_im.body.len() > 0 and p_im.type_params.len() == proto_inst_targ_count(pmi) and p_im.type_params.len() > 0:
+                            Vector[String] p_ieqparams = extract_equip_type_params(p_eqtmpl)
+                            setup_type_subs(&gmod, p_ieqparams, p_eq_targs)
+                            int p_iself_tid = lookup_or_register_named(&gmod, pmi.recv_instance)
+                            gmod.type_subs.put("Self", p_iself_tid)
+                            int p_impi = 0
+                            while p_impi < p_im.type_params.len() and p_impi < proto_inst_targ_count(pmi):
+                                String p_imp = p_im.type_params.get(p_impi).unwrap()
+                                int p_imta_tid = proto_inst_targ_tid(pmi, p_impi, &gmod)
+                                gmod.type_subs.put(p_imp, p_imta_tid)
+                                p_impi += 1
+                            gmod.functions.push(lower_function(p_im, &gmod))
+                            int p_ili = gmod.functions.len() - 1
+                            GirFunction p_ilf = gmod.functions.get(p_ili).unwrap()
+                            gmod.functions.set(p_ili, GirFunction(pmi.mangled_symbol, p_ilf.param_types, p_ilf.return_type, p_ilf.locals, p_ilf.blocks))
+                            gmod.fn_sigs.put(pmi.mangled_symbol.clone(), p_ilf.return_type)
+                            clear_type_subs(&gmod)
 
     # closure Phase 2 Step A: the post-pass — SOLE pusher of
     # __Closure_N__call. Drain gmod.lifted_closures (recorded at the

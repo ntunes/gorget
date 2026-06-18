@@ -1129,6 +1129,75 @@ fn no_growth_in_self_host_prelude_optionlike_routing() {
     );
 }
 
+/// Sibling-site ratchet (CLAUDE.md rule 4 / "Sibling-site drift") over the
+/// THREE method-generic equip-instance `match …trait_name:` arms in
+/// `lower.gg`'s `lower_module`. Each arm dispatches a method-level-generic
+/// method instance onto either the TRAIT-default body (`case Some(tname)`) or
+/// the INHERENT equip-block body (`case None`). Two of the three `case None`
+/// arms now lower the inherent path (the `proto_minsts` fn-sig pre-reg arm and
+/// the `proto_minsts` body-emit arm — fixed alongside `iter_enumerate_zip`,
+/// where `zip[U]` is a method-generic in `equip [T] VectorIter[T]:`). The third
+/// (`gm_` loop, body-emit on a GENERIC receiver) is DEFERRED with a stated
+/// blocker (needs a `fn_sigs.contains` dedup guard to avoid double-emit with the
+/// `proto_minsts` arm, plus a repro fixture) and KEEPS its bare `pass`.
+///
+/// The ratchet counts the TWO-LINE textual pattern `case None:` immediately
+/// followed by a line whose TRIMMED content is exactly `pass`, scanning
+/// `tests/fixtures/self_host_lowerer/lower.gg`. A whole-function `case None:`
+/// counter would be vacuous (the file has many `case None:` lines across
+/// unrelated matches). This textual pattern reacts precisely: dropping an arm's
+/// `pass` body (i.e. IMPLEMENTING the inherent path) decreases the count.
+///
+/// Pre-count was 20 (review-measured, re-derived here before pinning). Arms 1+2
+/// (the two `proto_minsts` None arms) dropped their `pass` bodies → 18. The
+/// deferred `gm_` `:4205` site stays counted (its `pass` is still immediately
+/// after `case None:`, with the explanatory comment placed AFTER the `pass` so
+/// adjacency is preserved). Pin BUDGET = 18.
+///
+/// **If this fails (count went UP):** a new bare `case None:`→`pass` was added.
+/// If it is the next sibling in the method-generic class (e.g. a future `gm_`
+/// inherent fix), implement it through the shared inherent-lowering shape
+/// (mirror Arm 2) rather than leaving a stub, and LOWER `BUDGET` in the same
+/// commit. Any other new `case None:`→`pass` should likewise be justified or
+/// implemented — never bump the budget to dodge review.
+#[test]
+fn no_growth_in_self_host_lower_case_none_pass_stubs() {
+    const BUDGET: usize = 18;
+
+    let content =
+        fs::read_to_string("tests/fixtures/self_host_lowerer/lower.gg").unwrap_or_default();
+
+    // Count `case None:` immediately followed by a line whose TRIMMED content
+    // is exactly `pass`.
+    let lines: Vec<&str> = content.lines().collect();
+    let mut count = 0usize;
+    for w in lines.windows(2) {
+        if w[0].trim() == "case None:" && w[1].trim() == "pass" {
+            count += 1;
+        }
+    }
+
+    assert!(
+        count > 0,
+        "no_growth_in_self_host_lower_case_none_pass_stubs: failed to locate any \
+         `case None:`→`pass` pattern in lower.gg — the scan or the file moved.",
+    );
+    assert!(
+        count <= BUDGET,
+        "Self-host `lower.gg` bare `case None:`→`pass` stub count grew beyond budget: \
+         {count} > {BUDGET}.\n\n\
+         A new unimplemented `case None:`→`pass` arm was added. If it is the next \
+         method-generic equip-instance sibling (the deferred `gm_` inherent path, \
+         lower.gg:~4205, or any new dispatch arm in the class), do NOT leave it a \
+         stub: lower the inherent equip-block body through the shared shape (mirror \
+         the `proto_minsts` body-emit None arm — match the method in the equip \
+         block's own `methods`, bind equip-[T] + Self + method-[U] subs, emit under \
+         the mangled symbol; the `gm_` arm additionally needs a `fn_sigs.contains` \
+         dedup guard to avoid double-emit). Then LOWER BUDGET in the same commit. \
+         Don't bump the budget to dodge review.",
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // #37 lazy-CoW view-producer enumeration guard
 // ─────────────────────────────────────────────────────────────────────────────
