@@ -35,7 +35,7 @@ from std.conv import float_to_bits
 from gir import ResourceMetadata
 from gir import BorrowOrigin, BoCollectionElement
 from gir import CopySemantics, CsTrivial, CsResource, CsRefCounted
-from gir import CollectionKind, CkNotCollection, CkVector, CkDeque, CkHeap, CkDict, CkSet
+from gir import CollectionKind, CkNotCollection, CkVector, CkDeque, CkHeap, CkDict, CkOrderedSet, CkHashSet
 from gir import BoxKind, BkNotBox, BkRegularBox, BkTraitBox
 from compiler.data.resources import RESOURCES
 from compiler.data.schema import ResourceEntry, MatchKind, MkExact, MkPrefix
@@ -233,10 +233,13 @@ Option[ResourceMetadata] build_resource_metadata(String name):
             Some("gorget_map_free"), Some("gorget_map_clone"), None,
             CsResource(), CkDict(), BkNotBox(), false, None, None, false))
     if name == "GorgetSet":
+        # Bare runtime name → CkHashSet (the unordered/runtime kind; ordered-
+        # ness is a property of the user-visible `Set__` type, mirroring Rust
+        # src/ir/types.rs:972 GorgetSet→CollectionKind::Set).
         return Some(ResourceMetadata(
             "GorgetSet", 184, LtStructBase(),
             Some("gorget_set_free"), Some("gorget_set_clone"), None,
-            CsResource(), CkSet(), BkNotBox(), false, None, None, false))
+            CsResource(), CkHashSet(), BkNotBox(), false, None, None, false))
     if name == "GorgetClosure":
         return Some(ResourceMetadata(
             "GorgetClosure", 16, LtStructBase(),
@@ -277,18 +280,28 @@ Option[ResourceMetadata] build_resource_metadata(String name):
             Some("gorget_map_free"), Some("gorget_map_clone"), None,
             CsResource(), CkDict(), BkNotBox(), false, None, None, false))
 
-    # Set__T / HashSet__T — user-code constructors (true);
-    # GorgetSet__ is the self-host mangled form (false).
-    if name.starts_with("Set__") or name.starts_with("HashSet__"):
+    # Set__T / HashSet__T — user-code constructors (true). This is the SINGLE
+    # PRODUCER that maps the user-visible type name → typed CollectionKind
+    # (mirrors Rust's per-protocol assignment at builtins.rs:453/503). The
+    # prefix match here is the ALLOWED name→kind mapping at the source; every
+    # downstream consumer reads the resolved CkOrderedSet/CkHashSet variant,
+    # never re-probes the prefix. Set__ = ORDERED, HashSet__ = UNORDERED.
+    if name.starts_with("Set__"):
         return Some(ResourceMetadata(
             "GorgetSet", 184, LtStructBase(),
             Some("gorget_set_free"), Some("gorget_set_clone"), None,
-            CsResource(), CkSet(), BkNotBox(), false, None, None, true))
+            CsResource(), CkOrderedSet(), BkNotBox(), false, None, None, true))
+    if name.starts_with("HashSet__"):
+        return Some(ResourceMetadata(
+            "GorgetSet", 184, LtStructBase(),
+            Some("gorget_set_free"), Some("gorget_set_clone"), None,
+            CsResource(), CkHashSet(), BkNotBox(), false, None, None, true))
+    # GorgetSet__ is the self-host mangled form (false) → CkHashSet (runtime kind).
     if name.starts_with("GorgetSet__"):
         return Some(ResourceMetadata(
             "GorgetSet", 184, LtStructBase(),
             Some("gorget_set_free"), Some("gorget_set_clone"), None,
-            CsResource(), CkSet(), BkNotBox(), false, None, None, false))
+            CsResource(), CkHashSet(), BkNotBox(), false, None, None, false))
 
     # Box[T] — constructed via runtime alloc helper, not T() shape.
     if name.starts_with("Box__"):
@@ -789,17 +802,36 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
                                     # fills `heap_data` from gmod.type_infos.
                                     if name.starts_with("Heap__"):
                                         m.coll_elem_type_map.put(name.clone(), name.slice(7, name.len()))
-                                case CkSet():
+                                case CkOrderedSet():
+                                    # Ordered set (`Set__T`) → gorget_ordered_set_new.
+                                    # The ctor fn is now chosen by the TYPED kind
+                                    # (CkOrderedSet), not a `Set__`-prefix
+                                    # probe — retiring the fossil. The element-name
+                                    # slice still parses the prefix length (string
+                                    # parsing, not a meaning decision): `Set__` = 5.
                                     int rt_sid = sr.get(rmeta.runtime_name).unwrap_or(-1)
                                     if rt_sid >= 0:
                                         sr.put(name, rt_sid)
                                     m.type_runtime_map.put(name.clone(), rmeta.runtime_name.clone())
                                     if name.starts_with("Set__"):
                                         m.coll_elem_type_map.put(name.clone(), name.slice(5, name.len()))
-                                        m.coll_ctor_fn_map.put(name.clone(), "gorget_ordered_set_new")
-                                    elif name.starts_with("HashSet__") or name.starts_with("GorgetSet__"):
+                                    m.coll_ctor_fn_map.put(name.clone(), "gorget_ordered_set_new")
+                                    dispatched = true
+                                case CkHashSet():
+                                    # Unordered set (`HashSet__T` / mangled
+                                    # `GorgetSet__T`) → gorget_set_new, by TYPED
+                                    # kind. Element-name slice: `HashSet__` = 9,
+                                    # `GorgetSet__` = 11 (the old shared slice(9)
+                                    # mis-sliced GorgetSet__ — fixed per-prefix).
+                                    int rt_sid_h = sr.get(rmeta.runtime_name).unwrap_or(-1)
+                                    if rt_sid_h >= 0:
+                                        sr.put(name, rt_sid_h)
+                                    m.type_runtime_map.put(name.clone(), rmeta.runtime_name.clone())
+                                    if name.starts_with("HashSet__"):
                                         m.coll_elem_type_map.put(name.clone(), name.slice(9, name.len()))
-                                        m.coll_ctor_fn_map.put(name.clone(), "gorget_set_new")
+                                    elif name.starts_with("GorgetSet__"):
+                                        m.coll_elem_type_map.put(name.clone(), name.slice(11, name.len()))
+                                    m.coll_ctor_fn_map.put(name.clone(), "gorget_set_new")
                                     dispatched = true
                                 case CkDict():
                                     int rt_sid = sr.get(rmeta.runtime_name).unwrap_or(-1)
@@ -2154,6 +2186,10 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
         # void*)`, `gorget_map_iter_state(const void*, idx)`,
         # `gorget_map_iter_key/value(const void*, idx, void* out)`.
         if fn_name == "gorget_map_iter_cap" or fn_name == "gorget_map_iter_state":
+            return true
+        # Ordered-set for-loop accessors (lower_for_set): `gorget_map_iter_order_len
+        # (const void*)`, `gorget_map_iter_order(const void*, i)`.
+        if fn_name == "gorget_map_iter_order_len" or fn_name == "gorget_map_iter_order":
             return true
         if fn_name == "gorget_map_iter_key" or fn_name == "gorget_map_iter_value":
             return true

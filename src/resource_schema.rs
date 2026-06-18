@@ -33,7 +33,10 @@ pub enum CollectionKind {
     Deque,
     Heap,
     Dict,
-    Set,
+    /// `Set[T]` — ORDERED unique elements (insertion-order preserving).
+    OrderedSet,
+    /// `HashSet[T]` / `GorgetSet` — UNORDERED unique elements.
+    HashSet,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

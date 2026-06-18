@@ -20,7 +20,7 @@ from gir import OP_BITAND, OP_BITOR, OP_BITXOR, OP_SHL, OP_SHR
 from gir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
 from gir import UNOP_NEG, UNOP_NOT, UNOP_BITNOT
 from gir import CkAssign, CkReturn, CkCallArgBorrow, CkCallArgOwning, CkFieldWrite, CkBinOpArg, CkFormatArg, CkMatchPtr
-from gir import CkVector, CkDeque, CkHeap, CkDict, CkSet, CkNotCollection
+from gir import CkVector, CkDeque, CkHeap, CkDict, CkOrderedSet, CkHashSet, CkNotCollection
 from compiler.data.resources import STRING_BUILTIN_METHODS, COLLECTION_BUILTIN_METHODS, BUILTIN_METHOD_MUTATES
 from compiler.data.schema import BuiltinMethodDecl, BuiltinMethodEntry
 from compiler.data.schema import BuiltinRetKind, BrkString, BrkInfer
@@ -1318,7 +1318,7 @@ void lower_index_assign(LowerCtx &ctx, SpannedExpr base_expr, SpannedExpr idx_ex
     val = maybe_auto_propagate(&ctx, val, &gmod)
     String setter = ""
     # Phase A typed read: dispatch on the receiver's collection_kind.
-    # CkSet / CkHeap have no meaningful index-assign — fall through to lower_fail.
+    # CkOrderedSet / CkHashSet / CkHeap have no meaningful index-assign — fall through to lower_fail.
     match resource_meta_for(&gmod, base_tname):
         case Some(rmeta):
             match rmeta.collection_kind:

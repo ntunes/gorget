@@ -16,7 +16,7 @@ from gir import OP_BITAND, OP_BITOR, OP_BITXOR, OP_SHL, OP_SHR
 from gir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
 from gir import UNOP_NEG, UNOP_NOT, UNOP_BITNOT
 from gir import CkAssign, CkReturn, CkCallArgBorrow, CkCallArgOwning, CkFieldWrite, CkBinOpArg, CkFormatArg, CkMatchPtr
-from gir import CkVector, CkDeque, CkHeap, CkDict, CkSet, CkNotCollection
+from gir import CkVector, CkDeque, CkHeap, CkDict, CkOrderedSet, CkHashSet, CkNotCollection
 from lir_lower import resource_meta_for
 from lower import LowerCtx, DropEntry, DropScope, DropElaborator, DropEmission
 from lower import DSK_FUNCTION, DSK_LOOP, DSK_BLOCK

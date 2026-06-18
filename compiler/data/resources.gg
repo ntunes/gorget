@@ -23,7 +23,7 @@
 from compiler.data.schema import ResourceEntry, ResourceMetadata
 from compiler.data.schema import MatchKind, MkExact, MkPrefix
 from compiler.data.schema import CopySemantics, CsResource, CsRefCounted
-from compiler.data.schema import CollectionKind, CkNotCollection, CkVector, CkDeque, CkHeap, CkDict, CkSet
+from compiler.data.schema import CollectionKind, CkNotCollection, CkVector, CkDeque, CkHeap, CkDict, CkOrderedSet, CkHashSet
 from compiler.data.schema import BoxKind, BkNotBox, BkRegularBox, BkTraitBox
 from compiler.data.schema import LirType, LtStructBase, LtPtr
 from compiler.data.schema import RuntimeFn, RuntimeParam
@@ -35,7 +35,7 @@ from compiler.data.schema import BuiltinMethodDecl, BuiltinMethodEntry
 from compiler.data.schema import BuiltinRetKind, BrkString, BrkInfer
 
 
-public static int SCHEMA_VERSION = 1
+public static int SCHEMA_VERSION = 2
 
 
 # ── RESOURCES ───────────────────────────────────────────────────────
@@ -144,18 +144,32 @@ public static Vector[ResourceEntry] RESOURCES = [
             CsResource(), CkDict(), BkNotBox(),
             false, Some("gorget_map"), None, true)),
 
-    # Set__T / HashSet__T — Prefix alias cluster; CkSet.
-    # method_prefix="gorget_set" routes Set/HashSet through the gorget_set_*
-    # runtime. Set__-specific overrides (Set.new()/new_str() → gorget_ordered_set_*
-    # for ordered semantics) stay inside the dispatch arm.
+    # Set__T — ORDERED set; Prefix; CkOrderedSet. The typed kind (NOT a
+    # `starts_with("Set__")` prefix probe downstream) steers iteration order
+    # and the ordered ctor fn (gorget_ordered_set_new). method_prefix=
+    # "gorget_set" still routes the shared add/contains/len/… runtime.
     ResourceEntry(
-        [MkPrefix("Set__"), MkPrefix("HashSet__")],
+        [MkPrefix("Set__")],
         ResourceMetadata(
             "GorgetSet", 184, LtStructBase(),
             Some("gorget_set_free"),
             Some("gorget_set_clone"),
             None,
-            CsResource(), CkSet(), BkNotBox(),
+            CsResource(), CkOrderedSet(), BkNotBox(),
+            false, Some("gorget_set"), None, true)),
+
+    # HashSet__T — UNORDERED set; Prefix; CkHashSet. Same GorgetSet runtime
+    # as the ordered Set above, distinguished by the typed kind so the
+    # unordered ctor fn (gorget_set_new) and the states[]-walk iteration are
+    # selected without a name prefix probe.
+    ResourceEntry(
+        [MkPrefix("HashSet__")],
+        ResourceMetadata(
+            "GorgetSet", 184, LtStructBase(),
+            Some("gorget_set_free"),
+            Some("gorget_set_clone"),
+            None,
+            CsResource(), CkHashSet(), BkNotBox(),
             false, Some("gorget_set"), None, true)),
 
     # Box__T — Prefix; BkRegularBox; LtPtr (8-byte pointer, not struct).
@@ -209,8 +223,11 @@ public static Vector[ResourceEntry] RESOURCES = [
             CsResource(), CkDict(), BkNotBox(),
             false, Some("gorget_map"), None, false)),
 
-    # GorgetSet — Exact singleton; backing runtime for Set/HashSet.
-    # method_prefix="gorget_set" matches the Set__/HashSet__ family.
+    # GorgetSet — Exact singleton; backing runtime for Set/HashSet. The bare
+    # runtime name carries CkHashSet (the unordered/runtime kind, mirroring
+    # Rust's `("GorgetSet", CollectionKind::Set, …)` at src/ir/types.rs:972);
+    # ordered-ness is a property of the user-visible `Set__` type, not the
+    # backing runtime struct. method_prefix="gorget_set" matches the family.
     ResourceEntry(
         [MkExact("GorgetSet")],
         ResourceMetadata(
@@ -218,7 +235,7 @@ public static Vector[ResourceEntry] RESOURCES = [
             Some("gorget_set_free"),
             Some("gorget_set_clone"),
             None,
-            CsResource(), CkSet(), BkNotBox(),
+            CsResource(), CkHashSet(), BkNotBox(),
             false, Some("gorget_set"), None, false)),
 
     # GorgetClosure — Exact singleton; 16-byte closure struct.
@@ -249,8 +266,9 @@ public static Vector[ResourceEntry] RESOURCES = [
             CsResource(), CkDict(), BkNotBox(),
             false, Some("gorget_map"), None, false)),
 
-    # GorgetSet__ — self-host mangled monomorphised form.
-    # method_prefix="gorget_set" matches the Set family.
+    # GorgetSet__ — self-host mangled monomorphised form; CkHashSet (the
+    # mangled/runtime form is the unordered kind, like the bare GorgetSet
+    # singleton above). method_prefix="gorget_set" matches the Set family.
     ResourceEntry(
         [MkPrefix("GorgetSet__")],
         ResourceMetadata(
@@ -258,7 +276,7 @@ public static Vector[ResourceEntry] RESOURCES = [
             Some("gorget_set_free"),
             Some("gorget_set_clone"),
             None,
-            CsResource(), CkSet(), BkNotBox(),
+            CsResource(), CkHashSet(), BkNotBox(),
             false, Some("gorget_set"), None, false)),
 
     # RWLock__ — opaque, ref-counted, typed_constructor.
@@ -2858,7 +2876,14 @@ public static Vector[BuiltinMethodEntry] COLLECTION_BUILTIN_METHODS = [
         BuiltinMethodDecl("put", false, [0, 1], BrkInfer(), true),
         BuiltinMethodDecl("set", false, [0, 1], BrkInfer(), true),
     ]),
-    BuiltinMethodEntry(CkSet(), [
+    # Set add/insert own their single element arg (idx 0). Both the ordered
+    # (Set) and unordered (HashSet) kinds share the same mutator surface, so
+    # the typed split lists identical rows under each variant.
+    BuiltinMethodEntry(CkOrderedSet(), [
+        BuiltinMethodDecl("add", false, [0], BrkInfer(), true),
+        BuiltinMethodDecl("insert", false, [0], BrkInfer(), true),
+    ]),
+    BuiltinMethodEntry(CkHashSet(), [
         BuiltinMethodDecl("add", false, [0], BrkInfer(), true),
         BuiltinMethodDecl("insert", false, [0], BrkInfer(), true),
     ]),

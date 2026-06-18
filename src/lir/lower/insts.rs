@@ -2041,7 +2041,7 @@ impl<'a> FuncLowering<'a> {
                             return ElemMeta::Resource(ResourceKind::GorgetArray),
                         SchemaCollectionKind::Dict =>
                             return ElemMeta::Resource(ResourceKind::GorgetMap),
-                        SchemaCollectionKind::Set =>
+                        SchemaCollectionKind::OrderedSet | SchemaCollectionKind::HashSet =>
                             return ElemMeta::Resource(ResourceKind::GorgetSet),
                         SchemaCollectionKind::NotCollection
                         | SchemaCollectionKind::Heap => {

@@ -147,7 +147,8 @@ pub(super) fn emit_wrapper_typedef(out: &mut String, name: &str, module: &LirMod
         use crate::resource_schema::CollectionKind;
         let is_collection = matches!(meta.collection_kind,
             CollectionKind::Vector | CollectionKind::Deque | CollectionKind::Heap
-            | CollectionKind::Dict | CollectionKind::Set);
+            | CollectionKind::Dict
+            | CollectionKind::OrderedSet | CollectionKind::HashSet);
         if is_collection {
             writeln!(out, "typedef {} {name};", meta.runtime_name).unwrap();
             return;

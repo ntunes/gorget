@@ -2456,6 +2456,19 @@ equip Parser:
                         cond = Some(Box(cond_expr))
                     self.expect_tok(TOK_RBRACE, "expected '}' after set comprehension")
                     return SpannedExpr(ESetComp(Box(first), var_name, Box(iterable), cond), Span(start, self.peek().lex_start))
+                # Set literal: `{a, b, c}` (no `:` after first element). Reuses
+                # EArrayLiteral — semantic analysis distinguishes set vs array by
+                # the declared type context. Mirrors Rust's `parse_dict_or_set`
+                # fall-through (src/parser/expr.rs:1803-1814).
+                if not self.check_tok(TOK_COLON):
+                    Vector[SpannedExpr] set_elems = Vector[SpannedExpr]()
+                    set_elems.push(first)
+                    while self.match_tok(TOK_COMMA):
+                        if self.check_tok(TOK_RBRACE):
+                            break
+                        set_elems.push(self.parse_expr())
+                    self.expect_tok(TOK_RBRACE, "expected '}' after set literal")
+                    return SpannedExpr(EArrayLiteral(set_elems), Span(start, self.peek().lex_start))
                 self.expect_tok(TOK_COLON, "expected ':' in dict literal")
                 SpannedExpr v = self.parse_expr()
                 # Dict comprehension: {key: value for var in iter}

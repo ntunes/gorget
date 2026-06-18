@@ -33,7 +33,7 @@ from gir import CkBinOpArg, CkFormatArg, CkMatchPtr
 # CollectionKind variants — needed to type/construct the kind in
 # `collection_kind_of` and to key the collection owning-arg lookup
 # (`collection_builtin_method`, reading COLLECTION_BUILTIN_METHODS).
-from gir import CollectionKind, CkVector, CkDeque, CkHeap, CkDict, CkSet, CkNotCollection
+from gir import CollectionKind, CkVector, CkDeque, CkHeap, CkDict, CkOrderedSet, CkHashSet, CkNotCollection
 # Phase A — typed-metadata classifier shared with lir_lower.gg. The
 # `name.starts_with("X__")` cascade lives there as the single source
 # of truth for which monomorphised type names belong to which runtime
@@ -726,9 +726,15 @@ bool collection_kind_eq(CollectionKind a, CollectionKind b):
                     return true
                 else:
                     return false
-        case CkSet():
+        case CkOrderedSet():
             match b:
-                case CkSet():
+                case CkOrderedSet():
+                    return true
+                else:
+                    return false
+        case CkHashSet():
+            match b:
+                case CkHashSet():
                     return true
                 else:
                     return false

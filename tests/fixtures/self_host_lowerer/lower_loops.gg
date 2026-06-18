@@ -20,7 +20,7 @@ from gir import OP_BITAND, OP_BITOR, OP_BITXOR, OP_SHL, OP_SHR
 from gir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
 from gir import UNOP_NEG, UNOP_NOT, UNOP_BITNOT
 from gir import CkAssign, CkReturn, CkCallArgBorrow, CkCallArgOwning, CkFieldWrite, CkBinOpArg, CkFormatArg, CkMatchPtr
-from gir import CkVector, CkDeque, CkHeap, CkDict, CkSet, CkNotCollection
+from gir import CkVector, CkDeque, CkHeap, CkDict, CkOrderedSet, CkHashSet, CkNotCollection
 from compiler.data.resources import STRING_BUILTIN_METHODS, COLLECTION_BUILTIN_METHODS, BUILTIN_METHOD_MUTATES
 from compiler.data.schema import BuiltinMethodDecl, BuiltinMethodEntry
 from compiler.data.schema import BuiltinRetKind, BrkString, BrkInfer
@@ -153,6 +153,8 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
     # docs/devbook/26-self-host-frontend.md §3.
     bool coll_is_vec_like = false
     bool coll_is_dict = false
+    bool coll_is_set = false
+    bool coll_set_ordered = false
     match resource_meta_for(&gmod, coll_tn):
         case Some(rmeta):
             match rmeta.collection_kind:
@@ -162,6 +164,12 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
                     coll_is_vec_like = true
                 case CkDict():
                     coll_is_dict = true
+                case CkOrderedSet():
+                    coll_is_set = true
+                    coll_set_ordered = true
+                case CkHashSet():
+                    coll_is_set = true
+                    coll_set_ordered = false
                 else:
                     pass
         case None:
@@ -178,6 +186,15 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
     # so `probe_is_enumerate` is false here.
     if coll_is_dict:
         lower_for_dict(&ctx, pat, coll_local, coll_tn, body, &gmod, is_main)
+        return
+    # Set/HashSet fast path: `for x in <Set>`. The iterator-protocol fallback
+    # below would `lower_fail` — a mono'd `Set__T` has no `__iter`/`__next`
+    # chain — silently dropping the whole loop body. Mirrors Rust's
+    # `lower_for_set` (src/ir/lowering/stmts/for_loops.rs:831). Ordered-ness
+    # comes from the TYPED kind (CkOrderedSet vs CkHashSet) resolved above,
+    # passed as `coll_set_ordered` — NOT a `Set__`-prefix probe.
+    if coll_is_set:
+        lower_for_set(&ctx, pat, coll_local, coll_tn, coll_set_ordered, body, &gmod, is_main)
         return
     # String fast path: `for c in <String>` iterates UTF-8 CODEPOINTS. The
     # iterator-protocol fallback below would `lower_fail` (GorgetString has no
@@ -529,6 +546,95 @@ void lower_for_dict(LowerCtx &ctx, SpannedPattern pat, int coll_local, String co
     int new_oi = add_local(&ctx, I64_TYPE, None)
     emit(&ctx, GIBinOp(new_oi, OP_ADD, I64_TYPE, OpCopy(oi_local), OpConstI64(1)))
     emit(&ctx, GIAssign(oi_local, OpCopy(new_oi)))
+    set_terminator(&ctx, GTJump(header_bb))
+    switch_to(&ctx, exit_bb)
+
+# Set/HashSet fast path: `for x in <Set>` binds the set element (the map key,
+# values unused). Mirrors Rust's `lower_for_set` (for_loops.rs:831): an ordered
+# Set indexes through `order[]` (insertion order), an unordered HashSet walks
+# `states[]` slots directly. Both still apply the state-USED filter (ordered:
+# stale tombstones can linger in `order[]`). `is_ordered` is the TYPED
+# discriminator resolved by the caller from CkOrderedSet vs CkHashSet — NOT a
+# `coll_tn` Set-prefix probe (Rust reads the same typed
+# `collection_kind == OrderedSet`, for_loops.rs:852).
+void lower_for_set(LowerCtx &ctx, SpannedPattern pat, int coll_local, String coll_tn, bool is_ordered, Vector[Stmt] body, GirModule &gmod, bool is_main):
+    String elem_name = collection_element_type(coll_tn)
+    if elem_name == "":
+        lower_fail("SFor over Set: could not resolve element type for " + coll_tn)
+        return
+    int elem_tid = resolve_elem_type_id(elem_name, &gmod)
+    # ── Iteration state ──────────────────────────────────────
+    # i walks [0, limit): ordered uses order_len (logical order array length),
+    # unordered uses slot cap. Empty/tombstone slots are skipped per-iteration
+    # by the state filter.
+    int i_local = add_local(&ctx, I64_TYPE, None)
+    emit(&ctx, GIAssign(i_local, OpConstI64(0)))
+    int limit_local = add_local(&ctx, I64_TYPE, None)
+    Vector[Operand] limit_args = [OpBorrow(coll_local)]
+    if is_ordered:
+        emit(&ctx, GICallExtern(limit_local, "gorget_map_iter_order_len", limit_args))
+    else:
+        emit(&ctx, GICallExtern(limit_local, "gorget_map_iter_cap", limit_args))
+    # ── Block layout ─────────────────────────────────────────
+    int header_bb = new_block(&ctx)
+    int body_bb = new_block(&ctx)
+    int incr_bb = new_block(&ctx)
+    int exit_bb = new_block(&ctx)
+    set_terminator(&ctx, GTJump(header_bb))
+    # Header: `i < limit ? body : exit`
+    switch_to(&ctx, header_bb)
+    int cond_local = add_local(&ctx, BOOL_TYPE, None)
+    emit(&ctx, GICmp(cond_local, CMP_LT, I64_TYPE, OpCopy(i_local), OpCopy(limit_local)))
+    set_terminator(&ctx, GTBranch(OpCopy(cond_local), body_bb, exit_bb))
+    # Body: resolve the slot index (ordered: order[i]; unordered: i), filter
+    # empty/tombstone slots, bind element, lower body.
+    ctx.loop_continue_stack.push(incr_bb)
+    ctx.loop_break_stack.push(exit_bb)
+    push_drop_scope(&ctx.drop_elab, DSK_LOOP)
+    switch_to(&ctx, body_bb)
+    # Slot index: ordered sets index through `order[]`, unordered walk i directly.
+    int key_idx = i_local
+    if is_ordered:
+        int real_i = add_local(&ctx, I64_TYPE, None)
+        Vector[Operand] order_args = [OpBorrow(coll_local), OpCopy(i_local)]
+        emit(&ctx, GICallExtern(real_i, "gorget_map_iter_order", order_args))
+        key_idx = real_i
+    # State filter: skip to incr (next slot) unless USED(1). On a hit, fall into
+    # a fresh `elem_bb`.
+    int state_local = add_local(&ctx, I64_TYPE, None)
+    Vector[Operand] state_args = [OpBorrow(coll_local), OpCopy(key_idx)]
+    emit(&ctx, GICallExtern(state_local, "gorget_map_iter_state", state_args))
+    int state_ok = add_local(&ctx, BOOL_TYPE, None)
+    emit(&ctx, GICmp(state_ok, CMP_EQ, I64_TYPE, OpCopy(state_local), OpConstI64(1)))
+    int elem_bb = new_block(&ctx)
+    set_terminator(&ctx, GTBranch(OpCopy(state_ok), elem_bb, incr_bb))
+    switch_to(&ctx, elem_bb)
+    # Bind the element (set's "key"). The accessor writes an OWNED copy into the
+    # bound slot via the void* out-param (arg 3); register for per-iteration drop.
+    match pat.pat:
+        case PBinding(ename):
+            int e_local = add_local(&ctx, elem_tid, Some(ename))
+            Vector[Operand] e_args = [OpBorrow(coll_local), OpCopy(key_idx), OpBorrow(e_local)]
+            emit(&ctx, GICallExtern(-1, "gorget_map_iter_key", e_args))
+            nl_put(&ctx, ename, e_local)
+            register_local_for_drop(&ctx, e_local, elem_tid, &gmod)
+        else:
+            lower_fail("SFor over Set: only a bare element binding is supported")
+    lower_stmts(&ctx, body, &gmod, is_main)
+    Terminator body_term = ctx.block_terms.get(ctx.current_block).unwrap()
+    match body_term:
+        case GTNone():
+            pop_drop_scope(&ctx)
+            set_terminator(&ctx, GTJump(incr_bb))
+        else:
+            pop_drop_scope_no_emit(&ctx)
+    ctx.loop_continue_stack.pop()
+    ctx.loop_break_stack.pop()
+    # Incr: `i = i + 1; goto header`.
+    switch_to(&ctx, incr_bb)
+    int new_i = add_local(&ctx, I64_TYPE, None)
+    emit(&ctx, GIBinOp(new_i, OP_ADD, I64_TYPE, OpCopy(i_local), OpConstI64(1)))
+    emit(&ctx, GIAssign(i_local, OpCopy(new_i)))
     set_terminator(&ctx, GTJump(header_bb))
     switch_to(&ctx, exit_bb)
 

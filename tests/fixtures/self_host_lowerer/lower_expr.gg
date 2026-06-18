@@ -20,7 +20,7 @@ from gir import OP_BITAND, OP_BITOR, OP_BITXOR, OP_SHL, OP_SHR
 from gir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
 from gir import UNOP_NEG, UNOP_NOT, UNOP_BITNOT
 from gir import CkAssign, CkReturn, CkCallArgBorrow, CkCallArgOwning, CkFieldWrite, CkBinOpArg, CkFormatArg, CkMatchPtr
-from gir import CkVector, CkDeque, CkHeap, CkDict, CkSet, CkNotCollection
+from gir import CkVector, CkDeque, CkHeap, CkDict, CkOrderedSet, CkHashSet, CkNotCollection
 from compiler.data.resources import STRING_BUILTIN_METHODS, COLLECTION_BUILTIN_METHODS, BUILTIN_METHOD_MUTATES
 from compiler.data.schema import BuiltinMethodDecl, BuiltinMethodEntry
 from compiler.data.schema import BuiltinRetKind, BrkString, BrkInfer
@@ -2321,6 +2321,69 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             emit(&ctx, GIAssign(dst, OpConstStr(ch)))
             return dst
         case EArrayLiteral(elems):
+            # Set-literal disambiguation: the parser produces EArrayLiteral for
+            # BOTH `[a, b, c]` (Vector) AND `{a, b, c}` (Set) — semantic
+            # analysis distinguishes them by the declared type context. When the
+            # surrounding `expected_type` is a Set/HashSet, the literal must
+            # build a GorgetSet, not a GorgetArray (a memcpy of array bytes into
+            # a Set slot is silent UB). Mirrors Rust's `lower_array_literal`
+            # set-dispatch (src/ir/lowering/exprs/collections.rs:27-35 →
+            # lower_set_literal_from_array :196). Ordered-ness comes from the
+            # TYPED `collection_kind` variant (CkOrderedSet vs CkHashSet) read
+            # off `expected_type`, NOT a `Set__`-prefix probe.
+            if ctx.expected_type >= 0:
+                String eali_set_outer = type_id_to_name(ctx.expected_type, &gmod)
+                bool eali_is_set = false
+                bool eali_set_ordered = false
+                match resource_meta_for(&gmod, eali_set_outer):
+                    case Some(set_rmeta):
+                        match set_rmeta.collection_kind:
+                            case CkOrderedSet():
+                                eali_is_set = true
+                                eali_set_ordered = true
+                            case CkHashSet():
+                                eali_is_set = true
+                                eali_set_ordered = false
+                            else:
+                                pass
+                    case None:
+                        pass
+                if eali_is_set:
+                    # Element type from the SVarDecl hint (set above for Set/
+                    # HashSet at lower_stmt.gg:80), else from `collection_element_type`
+                    # of the declared Set type name, else int64_t fallback.
+                    String set_elem = ctx.pending_vec_elem_tyname
+                    ctx.pending_vec_elem_tyname = ""
+                    if set_elem == "":
+                        set_elem = collection_element_type(eali_set_outer)
+                    if set_elem == "":
+                        set_elem = "int64_t"
+                    # Ordered → gorget_ordered_set_new; unordered → gorget_set_new,
+                    # chosen by the typed `eali_set_ordered` (matches the
+                    # CkOrderedSet/CkHashSet ctor split in lir_lower.gg and Rust's
+                    # OrderedSet/Set CollectionKind discriminator).
+                    int set_acc_tid = collection_accumulator_tid(&gmod, "set", set_elem, "", "")
+                    int set_acc = add_local(&ctx, set_acc_tid, None)
+                    Vector[Operand] set_new_args = [OpConstI64(8)]
+                    if eali_set_ordered:
+                        emit(&ctx, GICallExtern(set_acc, "gorget_ordered_set_new", set_new_args))
+                    else:
+                        emit(&ctx, GICallExtern(set_acc, "gorget_set_new", set_new_args))
+                    register_local_for_drop(&ctx, set_acc, set_acc_tid, &gmod)
+                    # Lower + add each element. Elements are independently typed
+                    # (clear the Set destination expected_type around each).
+                    int set_prev_et = ctx.expected_type
+                    int set_elem_et = lookup_or_register_named(&gmod, set_elem)
+                    for set_el in elems:
+                        if set_elem_et != I64_TYPE and set_elem_et != UNIT_TYPE:
+                            ctx.expected_type = set_elem_et
+                        else:
+                            ctx.expected_type = -1
+                        int set_el_local = lower_expr(&ctx, set_el, &gmod)
+                        ctx.expected_type = set_prev_et
+                        Vector[Operand] set_add_args = [OpBorrow(set_acc), OpMove(set_el_local)]
+                        emit(&ctx, GICallExtern(-1, "gorget_set_add", set_add_args))
+                    return set_acc
             # Consume element-type hint set by SVarDecl (`Vector[T] x = []`).
             # An empty hint means the declared type was not a concrete
             # Vector[T] — fall back to pointer size, which is correct for
@@ -3661,7 +3724,27 @@ int comp_make_set_acc(LowerCtx &ctx, GirModule &gmod):
     int acc_tid = collection_accumulator_tid(&gmod, "set", "int64_t", "", "")
     int acc_local = add_local(&ctx, acc_tid, None)
     Vector[Operand] sn_args = [OpConstI64(8)]
-    emit(&ctx, GICallExtern(acc_local, "gorget_set_new", sn_args))
+    # The accumulator type (`Set__int64_t`) is the ORDERED kind (a `Set[T]`
+    # comprehension preserves insertion order). Drive the ctor fn from the
+    # TYPED `collection_kind` of acc_tid so the runtime alloc matches the
+    # declared kind — emitting the unordered `gorget_set_new` for an ordered
+    # `Set__` accumulator was a latent type/runtime mismatch (the typedef said
+    # ordered, the alloc was unordered).
+    String acc_tn = type_id_to_name(acc_tid, &gmod)
+    bool acc_ordered = false
+    match resource_meta_for(&gmod, acc_tn):
+        case Some(acc_rmeta):
+            match acc_rmeta.collection_kind:
+                case CkOrderedSet():
+                    acc_ordered = true
+                else:
+                    pass
+        case None:
+            pass
+    if acc_ordered:
+        emit(&ctx, GICallExtern(acc_local, "gorget_ordered_set_new", sn_args))
+    else:
+        emit(&ctx, GICallExtern(acc_local, "gorget_set_new", sn_args))
     register_local_for_drop(&ctx, acc_local, acc_tid, &gmod)
     return acc_local
 

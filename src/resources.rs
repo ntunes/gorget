@@ -25,7 +25,7 @@ use crate::parser::ast::{CallArg, Expr, Item};
 use crate::parser::Parser;
 use crate::span::Spanned;
 
-pub const SCHEMA_VERSION_EXPECTED: u32 = 1;
+pub const SCHEMA_VERSION_EXPECTED: u32 = 2;
 
 static TABLE: OnceLock<ResourceTable> = OnceLock::new();
 
@@ -257,7 +257,8 @@ fn build_collection_kind(e: &Expr) -> WalkResult<CollectionKind> {
         "CkDeque" => Ok(CollectionKind::Deque),
         "CkHeap" => Ok(CollectionKind::Heap),
         "CkDict" => Ok(CollectionKind::Dict),
-        "CkSet" => Ok(CollectionKind::Set),
+        "CkOrderedSet" => Ok(CollectionKind::OrderedSet),
+        "CkHashSet" => Ok(CollectionKind::HashSet),
         other => Err(format!("unknown CollectionKind variant: {}", other)),
     }
 }
@@ -431,7 +432,7 @@ mod tests {
         let t = table();
 
         assert_eq!(t.schema_version, SCHEMA_VERSION_EXPECTED);
-        assert_eq!(t.resources.len(), 37, "expected 37 ResourceEntry rows after fill-in");
+        assert_eq!(t.resources.len(), 38, "expected 38 ResourceEntry rows after fill-in (Set__/HashSet__ split into two typed-kind entries)");
         assert_eq!(t.runtime_fns.len(), 299, "expected 299 RuntimeFn rows after fill-in");
 
         // Spot-check: GorgetString multi-alias Exact entry.

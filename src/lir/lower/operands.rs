@@ -255,7 +255,8 @@ impl<'a> FuncLowering<'a> {
             let is_collection_name = crate::resources::table().lookup(name)
                 .map(|m| matches!(m.collection_kind,
                     SchemaCollectionKind::Vector | SchemaCollectionKind::Deque
-                    | SchemaCollectionKind::Dict | SchemaCollectionKind::Set))
+                    | SchemaCollectionKind::Dict
+                    | SchemaCollectionKind::OrderedSet | SchemaCollectionKind::HashSet))
                 .unwrap_or(false);
             let is_higher_order = is_collection_name
                 && name.rfind("__").map_or(false, |pos| {

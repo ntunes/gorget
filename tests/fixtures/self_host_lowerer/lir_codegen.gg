@@ -2198,6 +2198,10 @@ int runtime_fn_return_type(String name, LirModule &m):
     # registered in is_void_runtime_fn below.)
     if name == "gorget_map_iter_cap" or name == "gorget_map_iter_state":
         return LT_I64
+    # Ordered-set for-loop iteration scalars (lower_for_set): order_len = logical
+    # order-array length, order = slot index at order position i.
+    if name == "gorget_map_iter_order_len" or name == "gorget_map_iter_order":
+        return LT_I64
     if name == "gorget_str_len" or name == "gorget_str_codepoint_count":
         return LT_I64
     if name == "gorget_str_find" or name == "gorget_str_index_of" or name == "gorget_str_count":

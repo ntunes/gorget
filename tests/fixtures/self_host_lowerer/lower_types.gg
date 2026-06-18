@@ -20,7 +20,7 @@ from gir import init_type_table, register_type, lookup_or_register_named, regist
 from gir import GirGlobal, GirGlobalField, gir_mod_add_global, GGINIT_FN_REF, GGINIT_STRUCT
 from gir import GGSTATIC_RUNTIME, GGSTATIC_BYTES, static_put_bytes
 from gir import CkAssign, CkReturn, CkCallArgBorrow, CkCallArgOwning, CkFieldWrite, CkBinOpArg, CkFormatArg, CkMatchPtr
-from gir import CkVector, CkDeque, CkHeap, CkDict, CkSet, CkNotCollection
+from gir import CkVector, CkDeque, CkHeap, CkDict, CkOrderedSet, CkHashSet, CkNotCollection
 from compiler.data.resources import STRING_BUILTIN_METHODS, COLLECTION_BUILTIN_METHODS, BUILTIN_METHOD_MUTATES
 from compiler.data.schema import BuiltinMethodDecl, BuiltinMethodEntry
 from compiler.data.schema import BuiltinRetKind, BrkString, BrkInfer
@@ -1627,7 +1627,9 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
         match resource_meta_for(&gmod, recv_n):
             case Some(rmeta):
                 match rmeta.collection_kind:
-                    case CkSet():
+                    case CkOrderedSet():
+                        return UNIT_TYPE
+                    case CkHashSet():
                         return UNIT_TYPE
                     else:
                         pass

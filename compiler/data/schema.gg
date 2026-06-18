@@ -57,7 +57,15 @@ enum CollectionKind:
     CkDeque                 # Deque — push/pop both ends; same GorgetArray runtime
     CkHeap                  # Heap — priority queue; same GorgetArray runtime
     CkDict                  # Dict / HashMap / GorgetMap
-    CkSet                   # Set / HashSet / GorgetSet
+    CkOrderedSet            # Set — ORDERED unique elements (insertion-order preserving)
+    CkHashSet               # HashSet / GorgetSet — UNORDERED unique elements
+    # NOTE: the former single `CkSet` was split into the two typed variants
+    # above so the ordered-vs-unordered decision reads a typed discriminator,
+    # never a `starts_with("Set__")` name prefix (CLAUDE.md "No name matching").
+    # Mirrors Rust's IR-level `CollectionKind::OrderedSet`/`Set` split
+    # (src/ir/types.rs:162/164, assigned at the single producer
+    # src/ir/lowering/builtins.rs:453/503). Both back the same `GorgetSet`
+    # runtime; the variant only steers iteration order + the ctor fn.
 
 enum BoxKind:
     BkNotBox

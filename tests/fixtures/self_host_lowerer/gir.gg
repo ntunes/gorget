@@ -8,7 +8,7 @@ from types import TypeTable
 from scope import ScopeTable
 from compiler.data.schema import ResourceMetadata
 from compiler.data.schema import CopySemantics, CsTrivial, CsResource, CsRefCounted
-from compiler.data.schema import CollectionKind, CkNotCollection, CkVector, CkDeque, CkHeap, CkDict, CkSet
+from compiler.data.schema import CollectionKind, CkNotCollection, CkVector, CkDeque, CkHeap, CkDict, CkOrderedSet, CkHashSet
 from compiler.data.schema import BoxKind, BkNotBox, BkRegularBox, BkTraitBox
 
 # ── Pre-allocated primitive type IDs ───────────────────────
