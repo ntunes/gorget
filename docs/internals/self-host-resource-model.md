@@ -95,7 +95,8 @@ enum CollectionKind:
     CkNotCollection
     CkVector
     CkDict
-    CkSet
+    CkOrderedSet
+    CkHashSet
     CkDeque
     CkHeap
 
