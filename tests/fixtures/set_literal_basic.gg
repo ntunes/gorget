@@ -14,9 +14,19 @@
 # + gorget_set_add with per-element Move + MoveZero discipline (parallel
 # to lower_array_literal). Surfaced 2026-05-12 during the post-Tier-2a
 # audit of container-literal hint propagation.
+#
+# Un-dodged 2026-06-19: was `.len()`-only (a "Don't redesign around compiler
+# gaps" smell — iteration was broken before gorget_ordered_set_new fix).
+# Now exercises iteration directly.
 void main():
     Set[int] s = {1, 2, 3}
     print(s.len())          # expected: 3
+
+    # Iterate the set (ordered insertion order)
+    int total = 0
+    for x in s:
+        total = total + x
+    print(f"{total}")       # expected: 6  (1+2+3)
 
     Set[String] strs = {"a", "b", "c", "a"}
     print(strs.len())       # expected: 3 (duplicate "a" deduped)

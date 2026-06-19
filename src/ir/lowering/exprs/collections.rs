@@ -200,13 +200,23 @@ fn lower_set_literal_from_array(
 ) -> Operand {
     let set_type = ctx.type_mapper.lookup_named("GorgetSet").unwrap_or(UNIT_TYPE);
 
+    // Determine ordering BEFORE any mutation of ctx.func_state.expected_type.
+    // The non-empty branch below overrides expected_type to the element type
+    // at :224 (before the :231 call site), so reading after that yields
+    // collection_kind(int)==None → unordered → silent bug.  Capturing here
+    // at function entry is the only safe read point.
+    let is_ordered = ctx.func_state.expected_type
+        .and_then(|et| ctx.type_registry.collection_kind(et))
+        == Some(CollectionKind::OrderedSet);
+    let new_fn = if is_ordered { "gorget_ordered_set_new" } else { "gorget_set_new" };
+
     if elems.is_empty() {
         // Empty set — infer element size from expected type if available.
         let elem_size_type = ctx.func_state.expected_type
             .map(|et| infer_collection_element_type(ctx, et))
             .unwrap_or(I64_TYPE);
         let set_local = builder.call_extern(
-            "gorget_set_new",
+            new_fn,
             vec![Operand::Constant(Constant::SizeOf(elem_size_type))],
             set_type,
         );
@@ -228,7 +238,7 @@ fn lower_set_literal_from_array(
     let etype = infer_operand_type_full(ctx, &first, builder);
 
     let set_local = builder.call_extern(
-        "gorget_set_new",
+        new_fn,
         vec![Operand::Constant(Constant::SizeOf(etype))],
         set_type,
     );
@@ -910,10 +920,16 @@ pub(super) fn lower_set_comprehension(
         .or_else(|| ctx.type_mapper.lookup_named("GorgetArray"))
         .unwrap_or(UNIT_TYPE);
 
+    // Determine ordering from expected_type before any mutation.
+    let is_ordered = ctx.func_state.expected_type
+        .and_then(|et| ctx.type_registry.collection_kind(et))
+        == Some(CollectionKind::OrderedSet);
+    let new_fn = if is_ordered { "gorget_ordered_set_new" } else { "gorget_set_new" };
+
     // Only handle range iterables for now
     if let Expr::Range { start: Some(start), end: Some(end), inclusive } = &iterable.node {
         let acc_local = builder.call_extern(
-            "gorget_set_new",
+            new_fn,
             vec![Operand::Constant(Constant::SizeOf(I64_TYPE))],
             set_type,
         );

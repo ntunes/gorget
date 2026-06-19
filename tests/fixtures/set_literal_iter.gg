@@ -1,0 +1,18 @@
+# Fixture: Set[int] literal iteration (ordered) and HashSet[int] literal
+# membership/count (unordered — order not tested).
+#
+# Exercises gorget_ordered_set_new dispatch for Set[int] literals and
+# gorget_set_new for HashSet[int] literals (caae326c CollectionKind split).
+# Locked in 2026-06-19.
+void main():
+    # Ordered Set literal — iterates in insertion order.
+    Set[int] s = {10, 20, 30}
+    print(s.len())           # expected: 3
+    for x in s:
+        print(f"{x}")        # expected: 10, 20, 30
+
+    # HashSet literal — unordered; test membership and count only.
+    HashSet[int] h = {4, 5, 6}
+    print(h.len())           # expected: 3
+    print(h.contains(4))     # expected: true
+    print(h.contains(7))     # expected: false

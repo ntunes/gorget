@@ -2681,8 +2681,44 @@ fn set_literal_basic() {
         "set_literal_basic.gg",
         "\
 3
+6
 3
 0",
+    );
+}
+
+#[test]
+fn set_literal_iter() {
+    // Ordered Set[int] literal iterates in insertion order (gorget_ordered_set_new).
+    // HashSet[int] literal tested for membership/count only (unordered).
+    // Locks in the gorget_ordered_set_new dispatch for Set literals landed in
+    // the CollectionKind::OrderedSet fix (2026-06-19).
+    run_gg(
+        "set_literal_iter.gg",
+        "\
+3
+10
+20
+30
+3
+true
+false",
+    );
+}
+
+#[test]
+fn set_comprehension_iter() {
+    // Set[int] comprehension over a range → gorget_ordered_set_new → iterates
+    // in insertion order. Locks in the lower_set_comprehension ordered dispatch.
+    run_gg(
+        "set_comprehension_iter.gg",
+        "\
+5
+0
+2
+4
+6
+8",
     );
 }
 

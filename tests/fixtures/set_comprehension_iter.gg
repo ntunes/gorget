@@ -1,0 +1,9 @@
+# Fixture: Set[int] comprehension with range → iterate in order.
+#
+# Exercises gorget_ordered_set_new dispatch in lower_set_comprehension
+# for a Set[int] expected type. Locked in 2026-06-19.
+void main():
+    Set[int] s = {x*2 for x in 0..5}
+    print(s.len())           # expected: 5  (0*2=0, 1*2=2, 2*2=4, 3*2=6, 4*2=8)
+    for v in s:
+        print(f"{v}")        # expected: 0, 2, 4, 6, 8 (insertion order)
