@@ -3998,7 +3998,11 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Vector[String] 
             out = out + "((" + cl_ret_c + "(*)(void*"
             int ai = 0
             while ai < cl_args.len():
-                out = out + ", void*"
+                int cl_arg_id = cl_args.get(ai).unwrap()
+                String cl_arg_ty = "void*"
+                if val_types.contains(cl_arg_id):
+                    cl_arg_ty = c_type_name(val_types.get(cl_arg_id).unwrap(), &sn)
+                out = out + ", " + cl_arg_ty
                 ai = ai + 1
             out = out + "))(" + fp + "))(" + ep
             ai = 0

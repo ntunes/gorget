@@ -486,6 +486,15 @@ String spanned_type_to_c_name(SpannedType stype):
             for ta in targs:
                 result = result + "__" + spanned_type_to_c_name(ta)
             return result
+        case TTuple(elems):
+            # Tuple types mangle as "Tuple__<elem1>__<elem2>..." matching
+            # lower_types.gg:spanned_type_to_name and the Rust reference.
+            if elems.len() == 0:
+                return "void"
+            String result = "Tuple"
+            for te in elems:
+                result = result + "__" + spanned_type_to_c_name(te)
+            return result
         case TFunction(_, _, _):
             # PROTO phase-1b: function-typed generic arg → GorgetClosure
             # (same as type_to_c_name), so the adapter struct instance name

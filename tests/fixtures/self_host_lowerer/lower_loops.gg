@@ -81,9 +81,6 @@ from lower_match import match_enum_type, match_variant_index, try_lift_option_re
 # only when the loop completes without break) when a self-host site
 # actually needs it.
 void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[Stmt] body, Vector[Stmt] else_body, GirModule &gmod, bool is_main):
-    if else_body.len() > 0:
-        lower_fail("SFor with else-body not yet implemented")
-        return
     # Range fast path — `for i in start..end` over a literal `ERange`.
     # Mirrors Rust's `lower_for` first branch (src/ir/lowering/stmts/
     # for_loops.rs:118-128 → lower_for_range :1003): when the pattern is a
@@ -176,6 +173,8 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
             pass
     if coll_is_vec_like:
         lower_for_vector(&ctx, pat, coll_local, coll_tn, probe_is_enumerate, body, &gmod, is_main)
+        if else_body.len() > 0:
+            lower_fail("SFor Vector with else-body not yet implemented")
         return
     # Dict/HashMap fast path: `for (k, v) in <Dict>` (entry pairs) or
     # `for k in <Dict>` (keys only). The iterator-protocol fallback below
@@ -186,6 +185,8 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
     # so `probe_is_enumerate` is false here.
     if coll_is_dict:
         lower_for_dict(&ctx, pat, coll_local, coll_tn, body, &gmod, is_main)
+        if else_body.len() > 0:
+            lower_fail("SFor Dict with else-body not yet implemented")
         return
     # Set/HashSet fast path: `for x in <Set>`. The iterator-protocol fallback
     # below would `lower_fail` — a mono'd `Set__T` has no `__iter`/`__next`
@@ -194,7 +195,7 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
     # comes from the TYPED kind (CkOrderedSet vs CkHashSet) resolved above,
     # passed as `coll_set_ordered` — NOT a `Set__`-prefix probe.
     if coll_is_set:
-        lower_for_set(&ctx, pat, coll_local, coll_tn, coll_set_ordered, body, &gmod, is_main)
+        lower_for_set(&ctx, pat, coll_local, coll_tn, coll_set_ordered, body, else_body, &gmod, is_main)
         return
     # String fast path: `for c in <String>` iterates UTF-8 CODEPOINTS. The
     # iterator-protocol fallback below would `lower_fail` (GorgetString has no
@@ -557,7 +558,7 @@ void lower_for_dict(LowerCtx &ctx, SpannedPattern pat, int coll_local, String co
 # discriminator resolved by the caller from CkOrderedSet vs CkHashSet — NOT a
 # `coll_tn` Set-prefix probe (Rust reads the same typed
 # `collection_kind == OrderedSet`, for_loops.rs:852).
-void lower_for_set(LowerCtx &ctx, SpannedPattern pat, int coll_local, String coll_tn, bool is_ordered, Vector[Stmt] body, GirModule &gmod, bool is_main):
+void lower_for_set(LowerCtx &ctx, SpannedPattern pat, int coll_local, String coll_tn, bool is_ordered, Vector[Stmt] body, Vector[Stmt] else_body, GirModule &gmod, bool is_main):
     String elem_name = collection_element_type(coll_tn)
     if elem_name == "":
         lower_fail("SFor over Set: could not resolve element type for " + coll_tn)
@@ -576,18 +577,28 @@ void lower_for_set(LowerCtx &ctx, SpannedPattern pat, int coll_local, String col
     else:
         emit(&ctx, GICallExtern(limit_local, "gorget_map_iter_cap", limit_args))
     # ── Block layout ─────────────────────────────────────────
+    # for-else: `else_bb` sits between the header's false-exit and the
+    # true `exit_bb`. The header branches to `else_bb` (not `exit_bb`)
+    # when the loop exhausts normally. `break` points to `exit_bb`
+    # directly — skipping `else_bb` (Python for-else semantics: else runs
+    # only when no break fired). When `else_body` is empty, `else_bb` is
+    # unused and the header branches straight to `exit_bb`.
     int header_bb = new_block(&ctx)
     int body_bb = new_block(&ctx)
     int incr_bb = new_block(&ctx)
     int exit_bb = new_block(&ctx)
+    int else_bb = exit_bb
+    if else_body.len() > 0:
+        else_bb = new_block(&ctx)
     set_terminator(&ctx, GTJump(header_bb))
-    # Header: `i < limit ? body : exit`
+    # Header: `i < limit ? body : else_bb (or exit_bb if no else)`
     switch_to(&ctx, header_bb)
     int cond_local = add_local(&ctx, BOOL_TYPE, None)
     emit(&ctx, GICmp(cond_local, CMP_LT, I64_TYPE, OpCopy(i_local), OpCopy(limit_local)))
-    set_terminator(&ctx, GTBranch(OpCopy(cond_local), body_bb, exit_bb))
+    set_terminator(&ctx, GTBranch(OpCopy(cond_local), body_bb, else_bb))
     # Body: resolve the slot index (ordered: order[i]; unordered: i), filter
     # empty/tombstone slots, bind element, lower body.
+    # break → exit_bb (skips else body); continue → incr_bb.
     ctx.loop_continue_stack.push(incr_bb)
     ctx.loop_break_stack.push(exit_bb)
     push_drop_scope(&ctx.drop_elab, DSK_LOOP)
@@ -636,6 +647,17 @@ void lower_for_set(LowerCtx &ctx, SpannedPattern pat, int coll_local, String col
     emit(&ctx, GIBinOp(new_i, OP_ADD, I64_TYPE, OpCopy(i_local), OpConstI64(1)))
     emit(&ctx, GIAssign(i_local, OpCopy(new_i)))
     set_terminator(&ctx, GTJump(header_bb))
+    # else block: runs only when loop exhausted without break.
+    # If else_body is empty, else_bb == exit_bb and this is a no-op.
+    if else_body.len() > 0:
+        switch_to(&ctx, else_bb)
+        lower_stmts(&ctx, else_body, &gmod, is_main)
+        Terminator else_term = ctx.block_terms.get(ctx.current_block).unwrap()
+        match else_term:
+            case GTNone():
+                set_terminator(&ctx, GTJump(exit_bb))
+            else:
+                pass
     switch_to(&ctx, exit_bb)
 
 # Range fast path: `for i in start..end` → an i64 counter loop, matching

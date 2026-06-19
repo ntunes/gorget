@@ -939,16 +939,13 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         # Fallback: the callable is the erased `GorgetClosure`
                         # struct (no FnPtr sig) — read the WRITER-set
                         # `ctx.expected_type` (the result slot's real type, e.g.
-                        # `U`=GorgetString set at SReturn / the Some-payload arg
-                        # loop). GUARD pinned to `>= PRIM_COUNT` ONLY (NOT the
-                        # writer-idiom `!= I64 and != UNIT`): `expected_type` is
-                        # frequently `-1` (e.g. `lower_if` clears it before the
-                        # cond — the fixture's own `filter(is_even)` `if cb(x):`
-                        # hits this), and `-1 != I64 and -1 != UNIT` → true →
-                        # `cl_ret_type=-1` (INVALID tid). `>= PRIM_COUNT` rejects
-                        # -1, BOOL(0), F64(10); the defensive `< len()` bound
-                        # mirrors the FnPtr-arm checks above.
-                        if not cl_ret_found and ctx.expected_type >= PRIM_COUNT and ctx.expected_type < gmod.type_table.len():
+                        # `U`=GorgetString set at SReturn / a double accumulator in
+                        # fold[double, F]). GUARD: `>= 0` rejects the -1 sentinel
+                        # (cleared by lower_if before the cond), allows all valid
+                        # type IDs including primitives (F64_TYPE=10 < PRIM_COUNT=12
+                        # but IS a valid return type for cross-type folds).
+                        # The defensive `< type_table.len()` bounds-checks struct ids.
+                        if not cl_ret_found and ctx.expected_type >= 0:
                             cl_ret_type = ctx.expected_type
                         int cl_dst = add_local(&ctx, cl_ret_type, None)
                         emit(&ctx, GICallExtern(cl_dst, cl_call, cl_args))
