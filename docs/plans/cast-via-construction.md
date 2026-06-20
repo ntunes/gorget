@@ -367,3 +367,130 @@ for the owner (below).**
 machinery are real, but §6 under-scopes it (from-scratch fallible-conversion
 subsystem + a new constructor-effect/overload facility), and forks 1–3 need owner
 calls before a scout/brief. Until then this stays a DRAFT.
+
+### 7.4 KNOWN SEAMS — honest caveats to carry into implementation
+Two places where "just write `T(x)`, the type rule reports failability" does NOT
+hold cleanly. Neither is fatal; both are "document + specify the edge," not
+"the design collapses." Record them so they aren't discovered mid-build.
+
+**Seam A — float→int has no clean "exact" default.** `int(3.7)` is lossy in a
+DIFFERENT way than integer narrowing: it's not range overflow, it's fractional
+loss. If `int(aFloat)` "throws when not representable," then *almost every* float
+throws (3.7, 0.1, …) — miserable, and it pushes every float→int through a
+handler. If it truncates silently, we've reintroduced the silent-lossy default we
+banned. **Resolution:** float→int has **no bare `int(x)` form at all** — the user
+MUST pick a rounding mode via a source method: `x.truncated(int)` (toward zero) /
+`x.rounded(int)` / `x.floored(int)` / `x.ceiled(int)`. The bare-constructor `int(f)`
+is a TYPECHECK ERROR with a fix-it suggesting the methods. (Swift's `Int(3.7)`
+truncates-by-default — we deliberately diverge: no silent lossy default, ever.)
+The throwing bare `T(x)` form is therefore **integer-narrowing-only**; float→int
+is method-only; int→float widening (`float(i)`) is total. So the "one rule"
+is really: *integer→integer* narrows-throws/widens-total; *float→integer* is
+method-only; *→float* widens-total. Three clauses, still typed, still no name-match.
+
+**Seam B — generics RELOCATE the From/TryFrom distinction, they don't delete it.**
+In monomorphized code `T(x)`'s effect is statically known (the `(src,tgt)` pair is
+concrete → `is_safe_integer_widening` decides). But to TYPECHECK *generic* code
+over a numeric/convertible `T`, the checker must know whether `T(x)` throws BEFORE
+monomorphization — which forces a **bound** that carries the effect:
+`[T: WidensFrom[U]]` (the conversion is total) vs `[T: ConvertsFrom[U]]` (it may
+throw). That is the `From`/`TryFrom` distinction surviving *in bound form*. So the
+RFC's "delete the two traits" is true **at the call site** (the common case — a
+real win) but NOT end-to-end: the two-way distinction reappears the moment you
+write generic conversion code, just relocated from `impl`-surface to bound-surface.
+Rust/Swift have the same seam (you pick `From` vs `TryFrom` at the bound); the
+difference is they're honest about it up front and C hides it until generics.
+**Resolution:** keep ONE surface trait name for the bound — `From[T]` — and let
+the bound additionally constrain the effect (`[T: From[U]]` allows throwing
+conversion in the body; a `total`-qualified bound or a separate `WidensFrom`
+demands the non-throwing one). Spec the exact bound spelling during the scout; do
+not pretend the distinction is gone.
+
+## 8. CROSS-LANGUAGE SURVEY & THE SYNTHESIS (why From stays, Into/Try* dissolve)
+
+The owner's instinct — "keep `From[T]`, but `Into[T]` and the `Try*` forms feel
+like too much" — is **correct, and there's a precise reason.** A 9-language survey:
+
+| Lang | Spelling | Default narrowing | Recover | Lossy/total | Extensible? |
+|------|----------|-------------------|---------|-------------|-------------|
+| **Python** | `int(x)` ctor | **raises** ValueError | try/except | (bignum: no overflow) | dunders `__int__`/`__index__` |
+| **Go** | `T(x)` syntax | **silent truncate** ⚠ | — | silent | no (write a func) |
+| **Rust** | `as` / `.into()` / `try_from()?` | `as`=silent ⚠ / TryFrom=`Result` | `?`/match | `as` silent / methods | `From`/`TryFrom` traits |
+| **Swift** | `Int8(x)` ctor | **traps** | `Int8(exactly:)`→`?` | labeled inits | failable/throwing inits |
+| **C#** | `(T)x` / op | `checked`=throws, `unchecked`=trunc | `TryParse(out)` ⚠ | `implicit`/`explicit` op | conversion operators |
+| **Kotlin** | `x.toByte()` method | **silent truncate** ⚠ | `.toIntOrNull()` | silent | extension fns |
+| **Scala** | `x.toInt` method | silent | `.toIntOption` | `implicit def` ⚠(gated) | implicits (cautionary) |
+| **Ada** | `Integer(X)` ctor | **raises** Constraint_Error | exception handler | range-checked | type conversions |
+| **Haskell** | `fromIntegral` | **silent wrap** ⚠ | — | one footgun fn | `Integral` class |
+
+**Four lessons fall straight out:**
+
+1. **Conversion-as-construction is the MAINSTREAM-GOOD model, not exotic.** Python,
+   Go, Swift, C#, Ada all spell conversion as `T(x)`. Gorget is squarely in proven
+   company. **Ada (1983) is the deep pedigree:** `Integer(X)` raising
+   `Constraint_Error` on out-of-range is *exactly* "conversion = construction +
+   throws on overflow," shipping for 40 years. Throws-on-narrow is not a gamble.
+
+2. **The silent-lossy DEFAULT is the universal footgun** — Go `T(x)`, Rust `as`,
+   Kotlin `.toByte()`, Haskell `fromIntegral`, Go's `string(int)`. Every language
+   that made the *default* conversion silently lossy bolted on a warning afterward
+   (go vet, clippy, Scala gating implicits). **C's "no silent lossy default; lossy
+   is a NAMED method" is the distilled lesson-learned, backed by 5 languages' scar
+   tissue.** This is C's strongest *safety* claim.
+
+3. **The safety distinction (lossless/lossy ≡ widening/narrowing) keeps getting
+   encoded — the only question is WHERE.** C#: `implicit`/`explicit` keyword on the
+   operator (author-declared). Python: `__index__` (lossless) vs `__int__`
+   (coercing) — separate protocols. Swift: failable `init?` vs plain. **Gorget's
+   gorgeous move: for builtins, DERIVE it from the numeric lattice
+   (`is_safe_integer_widening`); for user types, the author's existing `throws`
+   annotation on the constructor IS the implicit/explicit distinction.** `MyType(Foo)`
+   = lossless/implicit (C#); `MyType(Foo) throws` = lossy/explicit (C#). **No new
+   keyword** — `throws` already carries it. That is the single most elegant point in
+   the whole design.
+
+4. **Implicit/automatic coercion (`Into` auto-bounds, Scala implicits, C# implicit
+   ops) is contentious-to-harmful.** Scala 3 GATED implicit conversions behind a
+   language import after years of pain. This is direct ammunition for dropping
+   `Into[T]` — its only real value is ergonomic auto-coercion at call sites, which
+   is precisely the implicit magic that bites.
+
+### 8.1 So: From stays, Into/TryFrom/TryInto/`as` DISSOLVE — and exactly why
+The decisive realization: **`TryFrom` exists ONLY because Rust's `From` is
+hardcoded-infallible** (`fn from(T) -> Self`, no failure channel). Gorget's
+constructors can be `throws`. So the moment a constructor can throw, the
+fallible/infallible split stops needing two traits:
+
+| Rust | What it really is | Gorget |
+|------|-------------------|--------|
+| `From[T]` (infallible) | "build Self from T" | **non-throws ctor `Self(T)`** ✅ keep the capability/name |
+| `TryFrom[T]` (fallible) | "From, but Rust's From can't fail" | **`throws` ctor `Self(T)`** — the `throws` IS the "Try" |
+| `Into[T]` | `From` read backwards, for bounds | **deleted** (use `From` in the bound) |
+| `TryInto[T]` | `TryFrom` read backwards | **deleted** |
+| `as` (silent lossy) | unchecked truncation | **deleted** (lossy = named method `x.truncated(T)`) |
+
+**Five conversion concepts → ONE constructor form + the `throws` effect we already
+have.** `From[T]` survives only as the *name of the capability* a 1-arg
+constructor grants (and the bound-position name, per Seam B); `Into`/`Try*`/`as`
+genuinely evaporate. The owner's "Into and Try* are too much" is exactly right —
+**Into is From-backwards (redundant), and Try* is a workaround for a limitation
+Gorget doesn't have.** Crediting them less is the correct judgment, not a
+knowledge gap.
+
+### 8.2 The "fast" leg (the owner asked for fast too)
+Conversion-as-construction here is **as fast as Rust, with Python's ergonomics** —
+a combination you rarely get:
+- The widening/narrowing decision is **static** (compile-time, from the type
+  lattice) → widening = a sign/zero-extend (free); narrowing-throws = ONE
+  compare + a predictable branch to the throw path; lossy methods = a truncate
+  (free). No dynamic dispatch.
+- The From-dispatch for user types is **monomorphized** (resolved at compile time,
+  no vtable) — same cost model as Rust's `TryFrom`.
+- Contrast Python's `int(x)`: same lovely spelling, but DYNAMIC (type lookup +
+  `__int__` dispatch at runtime). C gets Python's surface with Rust's codegen.
+
+**So: gorgeous (one spelling), ergonomic (construction, the model millions already
+know from Python/Go/Swift), fast (static + monomorphized, zero-overhead widening),
+safe (no silent lossy default — the 5-language lesson — + recoverable narrowing
+via `throws`, the Ada/Python pedigree). Yes — we are moving in that direction;
+this section is the evidence that the destination is right.**
