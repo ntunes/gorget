@@ -1024,9 +1024,18 @@ fn snag11_equip_symbol_mangle_site_count() {
 /// `coll_key/val_type_map`) and DRAINED by `emit_dict_get_or_wrappers` at
 /// codegen — no instruction scan, no name routing (Layering rule 4,
 /// "resolve once, write through").
+/// Bumped 74 → 75 (2026-06-20): the box-drop box-inner-drop fix (`8476d64e`) added
+/// ONE `dia_box_nm.starts_with("Box__")` site in `lir_lower.gg`'s GIDropIfAlive box
+/// arm — it slices the inner type from `Box__<inner>` to find the inner's drop fn
+/// (the box ptr points straight at the inner value). The MEANING decision
+/// (is-this-a-Box) is the TYPED `type_runtime_map=="Box"` probe; the `Box__` parse
+/// is the established "extract T from Mangled__T" contract (siblings at
+/// :307/:655/:828/:903 + emit_box_alloc), NOT a classification dodge. FOLLOW-UP
+/// (TODO): the typed `box_inner_type` field on the self-host `LirStructDef` retires
+/// this parse — drop BUDGET back to 74 when it lands.
 #[test]
 fn no_growth_in_self_host_name_prefix_routing() {
-    const BUDGET: usize = 74;
+    const BUDGET: usize = 75;
 
     // Phase-A classification-routing class only: all MANGLED_PREFIXES EXCEPT
     // the prelude option-like ones (those are the sibling lint's burn-down).
