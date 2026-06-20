@@ -5,8 +5,9 @@
 > `From`/`Into`/`TryFrom` trait trio for the conversion use case.
 >
 > **Core decision (v2):** fallibility is the **`throws` effect**, not a return
-> type. A conversion constructor returns `Self` and *throws* `CastError`; the
-> compiler **elides the throw** when it can prove the conversion can't fail.
+> type, and it is decided by **types**, not values — a widening constructor is
+> simply not `throws`; a narrowing one is. No argument-dependent "throw elision."
+> Enforcement is throw-site (a declared throw you must handle), not compile-site.
 
 ## 1. The problem
 
@@ -53,10 +54,19 @@ int n = int(3.7)                 # 3
 A conversion constructor **returns `Self`** and may **`throw CastError`**. Two
 things make that ergonomic instead of viral:
 
-1. **The compiler elides the throw when it can prove the conversion can't fail.**
-   Widening (`float(int)`, `long(int)`), and narrowings the value is
-   `meta`/literal/range-provably within — these are infallible, return the value
-   directly, and are callable from a non-`throws` function with zero ceremony.
+1. **Failability is TYPE-level — there is no argument-dependent "throw
+   elision."** A conversion whose source type *fits* in the target (widening:
+   `float(int)`, `long(byte)`, `i64(i32)`) is simply **not `throws`** — an
+   ordinary non-throwing function picked by type-directed resolution, callable
+   anywhere with zero ceremony. `i64(i32)` doesn't throw for the same reason
+   `2 + 2` doesn't. A conversion that *can* exceed the target (narrowing:
+   `byte(i64)`, `int(float)`) **is `throws`** — always. Compile-time-constant
+   narrowings (`byte(200)`) are checked by ordinary `meta` const-evaluation
+   (fits → ok; `byte(300)` → compile error). The only residual — "this *runtime*
+   value fits but its type is wider" (`byte(x % 256)`) — uses a total flavor
+   (§3.3), **not** a value-flow analysis. (We deliberately do NOT introduce
+   call-site-argument-dependent effect; whether a cast throws is decided by its
+   types, statically.)
 2. **When it genuinely can fail** (narrowing a runtime value, parsing,
    NaN/∞→int), it throws. In a `throws` function it **propagates** — widening its
    `CastError` into the function's error type *via the target error's
@@ -98,7 +108,7 @@ byte b = byte(bits = signed_x)    # reinterpret bit-pattern — explicit, never 
 
 | form | int → narrower int | float → int | widening / struct |
 |---|---|---|---|
-| `T(x)` | returns `T`, **throws** Overflow (elided if provably fits) | returns `int`, truncates fraction, **throws** on NaN/∞/out-of-range | infallible, no `throws` |
+| `T(x)` | narrowing ctor: returns `T`, **throws** Overflow (constants const-checked) | returns `int`, truncates fraction, **throws** on NaN/∞/out-of-range | widening ctor: not `throws` |
 | `T(clamping = x)` | saturate (total) | saturate (total) | — |
 | `T(truncating = x)` | wrap (total) | — | — |
 | `T(rounding = x)` | — | round (total) | — |
@@ -171,21 +181,21 @@ So builtin numerics, newtype conversion, and error widening all go through
 - **`as` removed entirely (owner-decided 2026-06-20).** `T(x)` is the *sole*
   conversion spelling; the `as` operator is gone — no second way to convert, no
   lossless-`as` carve-out. Every existing `as` becomes a constructor call.
+- **Enforcement → throw-site (owner-decided 2026-06-20, Knob 1a).** A narrowing
+  `T(x)` on a non-provable value compiles and *throws* `CastError`; the compiler
+  enforces that the throw is handled (propagate in a `throws` fn, `catch`, or use
+  a total flavor) — it is NOT a compile error. The Zig compile-site alternative
+  was considered and declined.
+- **No throw-elision (owner-decided 2026-06-20, Knob 2).** Failability is
+  type-level (§3.2): widening ctors are not `throws`, narrowing ctors are — no
+  argument-dependent analysis to make a narrowing call "not throw." Constants are
+  `meta`-const-evaluated; the "runtime value fits but its type is wider" case
+  uses a total flavor. So "elision precision" is moot — there is no elision to
+  tune. (This deliberately avoids introducing call-argument-dependent effect.)
 
 **Still open:**
 
-1. **Throw-site vs compile-site enforcement (the one real knob).** This RFC
-   defaults to "throws, handle it (or use a flavor)," with elision keeping the
-   provably-safe casts ceremony-free. The alternative is Zig-style: make a
-   non-provable narrowing a **compile error** that forces you to pick
-   `clamping`/`truncating`/`catch` *syntactically*. Trade-off: `throws` is more
-   ergonomic and uniform; compile-forcing is louder and non-viral. Default:
-   throws+elision. Revisit if the viral-`throws` property bites in practice.
-2. **Elision precision.** How far does "provably can't fail" reach — literals and
-   `meta` constants for sure, but also value-range analysis (`x % 256` → fits a
-   `byte`)? Spec needs to pin the guaranteed-elided set so the ergonomics are
-   predictable.
-3. **Marking a user conversion.** A user type defines `Self(T)` or
+1. **Marking a user conversion.** A user type defines `Self(T)` or
    `Self(T) throws`. Do we need a marker so a 1-arg constructor is recognized as
    *the* conversion from `T` (for `?`-widening discovery / tooling), or is "any
    1-arg constructor whose param is `T`" enough? Lean: the latter.
@@ -198,14 +208,15 @@ A **both-compilers, language-surface** change (Rust gg + self-host + spec + book
 1. **Spec first** (this doc → `docs/language-design.md` + `docs/book` once
    settled). Ratify §5.1 (resolved) and the §5.2 elision-precision spec — they
    gate the ergonomics.
-2. **Numeric constructors + flavors + `CastError` + throw-elision** in both
-   compilers (the elision analysis is the substantive new compiler piece).
-3. **Deprecate then remove `as`.** Lossy `as` → its throwing constructor
-   (`float as int` → `int(f)`, which throws on the un-representable edges and is
-   elided when provably finite/in-range); lossless `as` → the infallible
-   constructor. Per CLAUDE.md core invariant #8, the outcome is that a lossy
-   conversion can no longer happen *silently* — it's either elided-safe,
-   handled, or a flavor — in **both** compilers, with negative fixtures.
+2. **Numeric constructors (widening = non-`throws`, narrowing = `throws`) +
+   flavors + `CastError`** in both compilers, with constant-narrowing checked at
+   compile time (`meta`). No new value-flow analysis.
+3. **Remove `as` entirely.** Widening `as` → the non-throwing constructor;
+   narrowing/`float→int` `as` → the throwing constructor (`float as int` →
+   `int(f)`, which throws on the un-representable edges). Per CLAUDE.md core
+   invariant #8, the outcome is that a lossy conversion can no longer happen
+   *silently* — it's handled (throw), a flavor, or a compile-checked constant —
+   in **both** compilers, with negative fixtures.
 4. **Fold `From`/`TryFrom` into constructors; delete `Into`;** rewire `?`/`throws`
    error-widening to the target constructor.
 
