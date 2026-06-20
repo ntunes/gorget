@@ -8,6 +8,17 @@
 > type, and it is decided by **types**, not values — a widening constructor is
 > simply not `throws`; a narrowing one is. No argument-dependent "throw elision."
 > Enforcement is throw-site (a declared throw you must handle), not compile-site.
+>
+> **⚠ §7 IS THE AUTHORITATIVE RESOLUTION LAYER** (the doc-consistency review +
+> the owner's final decisions) and **SUPERSEDES §3–§6 where they differ** — notably:
+> overflow → THROW (off the strict-panic stance); `T(x)` is the SURFACE over an
+> INTERNAL conversion-dispatch (the `From` registry survives under the hood; the
+> surface trait names vanish); **flavors are source METHODS** (`x.clamped(byte)`),
+> NOT named-arg ctor variants (those reintroduce value-dependent effect); recover a
+> Result via the **typed destination** (`Result[T,CastError] r = byte(x)`), NOT
+> `catch byte(x)`; value→String is **`String(T)`** (= `Displayable.display()`),
+> `str(x)` stays rejected. §3–§4 below are the original v2 sketch; read §7 for the
+> final shape. A consolidating rewrite happens when the impl track is funded.
 
 ## 1. The problem
 
@@ -319,28 +330,38 @@ for the owner (below).**
   only `int`/`float`/`bool` lower (and only to I64/F64/Bool, no narrowing emit).
   §6.2 is a from-scratch fallible-conversion subsystem, not a tweak.
 
-### 7.3 OPEN FORKS — owner decisions before implementing
-1. **Overflow on narrowing: panic vs throw vs (current) saturate?** THREE behaviors
-   are in tension: today the cast OPS **saturate** (Rust-`as`: NaN→0, clamp;
-   `c_lir/mod.rs:2631`), the docs say integer overflow **panics**
-   (`language-design.md:191/1298`, rule "caller could prevent → panic", `:1312`),
-   and this RFC says **throw** `CastError`. Pick one, and reconcile with the
-   arithmetic-overflow rule (why would `byte(x)` throw while `a + b` panics?).
-2. **The constructor mechanism for throwing/overloaded conversions.** It does NOT
-   exist: `T(args)` is a body-less `Expr::StructLiteral` (`semantic/mod.rs:272`)
-   with no return slot, no effect channel, field-count-only checks; `throws` lives
-   only on `FunctionDef`; there is NO constructor overloading by arg type. So
-   "ctor returns `Self` and throws `CastError`" + "widening ctor non-throws,
-   narrowing throws" needs one of: (a) constructors gain a real function form with
-   an effect slot + overload resolution (big new feature); (b) numeric conversions
-   are real `throws` *functions* merely SPELLED `T(x)` (typecheck/resolution
-   change, not StructLiteral); or (c) `T(x)` stays sugar over a conversion TRAIT
-   that survives under the hood (reuses `From`/`is_safe_integer_widening`; least
-   new machinery, but doesn't fully "delete the trait"). This is the central call.
-3. **`str(x)`: re-open, or keep rejected?** "`T(x)` is the sole conversion
-   spelling" reverses the standing OWNER DECISION 2026-06-10 that `str(x)` is
-   rejected (f-strings / `.display()` are THE String conversion, one-obvious-way).
-   Keep that carve-out, or reverse it?
+### 7.3 The 3 forks — RESOLVED (owner-decided 2026-06-20)
+1. **Overflow → THROW (recoverable), not panic, not saturate.** A narrowing
+   `T(x)` overflow throws `CastError(Overflow)`; the user can recover. This moves
+   Gorget OFF the strict overflow-panics stance (`language-design.md:191/1298`).
+   ⚠ **OPEN SUB-DECISION (scope):** should *arithmetic* overflow (`a + b`, `a*b`)
+   ALSO become a recoverable throw (the consistent answer — else "why does
+   `byte(x)` throw while `a+b` panics?"), or stays panic? The general intent
+   ("overflow should be recoverable") points to YES, but arithmetic-overflow→throw
+   is a much bigger migration (every arith op potentially-throwing, `throws`
+   ripples widely). Recorded for the cast: **conversion overflow throws.** Confirm
+   the arithmetic-overflow scope separately.
+2. **Constructor mechanism → option (c): `T(x)` is the SURFACE; the conversion
+   dispatch survives UNDER THE HOOD** (the `From` registry + `is_safe_integer_widening`).
+   A 1-arg ctor `Self(T)` auto-registers the internal "from T" (no user-written
+   trait — `From`/`Into`/`TryFrom` vanish from the *surface*). **NO default-param
+   flavors** — they'd make throws-ness depend on an ARGUMENT VALUE (`byte(x, mode=Clamp)`
+   total vs `byte(x)` throws), reintroducing the value-dependent effect Knob 2
+   removed. Instead the flavors are SEPARATE TOTAL OPERATIONS (methods on the
+   source: `x.clamped(byte)`/`x.truncated(byte)`/`x.rounded(int)`), so `T(x)` stays
+   the SINGLE constructor (throwing for narrowing, non-throwing for widening,
+   type-level). Builtin numeric conversions are compiler-native (`int(<any numeric>)`,
+   throws-ness from the typed widening table) — **no user overloading**; only USER
+   types convertible from multiple sources use the (internal) multi-impl dispatch
+   that `From[T]` already provides. **§3.3 must be revised: drop the named-arg
+   flavors; move clamp/truncate/round to source methods.**
+3. **`str(x)` stays rejected; the value→String conversion is `String(T)`.** `str`
+   was never a type; `String` is. `String(x)` is the type's constructor doing the
+   conversion — the constructor SPELLING of `Displayable.display()` (infallible →
+   non-`throws`), uniform with `int(x)`. `f"{x}"` / `x.display()` / `String(x)` are
+   ONE mechanism (`Displayable`), three syntaxes — so "one obvious way" holds;
+   `String(x)` is the canonical conversion spelling, f-strings the interpolation
+   ergonomic. (The 2026-06-10 `str(x)` rejection is preserved.)
 
 **Bottom line:** the design is worth doing and the backbone (O1) + interim
 machinery are real, but §6 under-scopes it (from-scratch fallible-conversion
