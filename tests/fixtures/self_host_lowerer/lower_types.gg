@@ -2004,6 +2004,12 @@ int builtin_call_return_type(String fname, GirModule &gmod):
         return F64_TYPE
     if fname == "time_now" or fname == "monotonic_ns":
         return I64_TYPE
+    if fname == "sqrt" or fname == "pow" or fname == "floor" or fname == "ceil" or fname == "round":
+        return F64_TYPE
+    if fname == "sin" or fname == "cos" or fname == "tan" or fname == "asin" or fname == "acos" or fname == "atan" or fname == "atan2":
+        return F64_TYPE
+    if fname == "log" or fname == "log2" or fname == "log10":
+        return F64_TYPE
     return -1
 
 # Extract element type from a collection name: Vector__int64_t → int64_t

@@ -2294,6 +2294,25 @@ int runtime_fn_return_type(String name, LirModule &m):
             int sid = find_struct_type(type_name, &m)
             if sid >= 0:
                 return sid
+    # Float-returning math functions. Mirrors Rust gg's return-type
+    # inference for gorget_sqrt/gorget_floor etc. (src/lir/types.rs).
+    if name == "gorget_sqrt" or name == "gorget_pow" or name == "gorget_floor" or name == "gorget_ceil" or name == "gorget_round":
+        return LT_F64
+    if name == "gorget_log" or name == "gorget_log2" or name == "gorget_log10":
+        return LT_F64
+    if name == "gorget_sin" or name == "gorget_cos" or name == "gorget_tan":
+        return LT_F64
+    if name == "gorget_asin" or name == "gorget_acos" or name == "gorget_atan" or name == "gorget_atan2":
+        return LT_F64
+    if name == "gorget_fabs" or name == "gorget_fmin" or name == "gorget_fmax":
+        return LT_F64
+    if name == "gorget_int_to_float":
+        return LT_F64
+    if name == "gorget_float_to_bits":
+        # Rust runtime.rs:275: FloatToBits returns T::I64 (the raw bit pattern), not a float.
+        return LT_I64
+    if name == "gorget_math_infinity" or name == "gorget_math_nan":
+        return LT_F64
     return LT_VOID
 
 # Known void-returning runtime functions (used to suppress assignment in emit).

@@ -1316,6 +1316,42 @@ String map_runtime_name(String name, LirModule &m, GirModule &gmod):
         return "gorget_file_exists"
     if name == "chr":
         return "gorget_char_chr"
+    if name == "min":
+        return "gorget_min"
+    if name == "max":
+        return "gorget_max"
+    if name == "abs":
+        return "gorget_abs"
+    if name == "sqrt":
+        return "gorget_sqrt"
+    if name == "pow":
+        return "gorget_pow"
+    if name == "floor":
+        return "gorget_floor"
+    if name == "ceil":
+        return "gorget_ceil"
+    if name == "round":
+        return "gorget_round"
+    if name == "log":
+        return "gorget_log"
+    if name == "log2":
+        return "gorget_log2"
+    if name == "log10":
+        return "gorget_log10"
+    if name == "sin":
+        return "gorget_sin"
+    if name == "cos":
+        return "gorget_cos"
+    if name == "tan":
+        return "gorget_tan"
+    if name == "asin":
+        return "gorget_asin"
+    if name == "acos":
+        return "gorget_acos"
+    if name == "atan":
+        return "gorget_atan"
+    if name == "atan2":
+        return "gorget_atan2"
     if name == "__bytes_to_str_raw":
         return "gorget_bytes_to_str"
     # Bare type constructors for opaque pointer types: TaskGroup() → gorget_task_group_new().
@@ -3371,6 +3407,37 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                 String call_name = func_name
                 if mapped != "":
                     call_name = mapped
+                # Float-arg dispatch: gorget_abs/gorget_min/gorget_max → float variants
+                # when any GIR arg's slot is LT_F64/LT_F32. Mirrors Rust gg
+                # `src/lir/lower/insts.rs:505-517`.
+                if call_name == "gorget_abs" or call_name == "gorget_min" or call_name == "gorget_max":
+                    bool has_float_arg = false
+                    for fad_op in args:
+                        int fad_lid = -1
+                        match fad_op:
+                            case OpCopy(fl):
+                                fad_lid = fl
+                            case OpMove(fl):
+                                fad_lid = fl
+                            case OpClone(fl):
+                                fad_lid = fl
+                            case OpBorrow(fl):
+                                fad_lid = fl
+                            else:
+                                pass
+                        if fad_lid >= 0 and fad_lid < local_to_slot.len():
+                            int fad_slot = local_to_slot.get(fad_lid).unwrap()
+                            if fad_slot >= 0 and fad_slot < f.slots.len():
+                                int fad_ty = f.slots.get(fad_slot).unwrap().ty
+                                if fad_ty == LT_F64 or fad_ty == LT_F32:
+                                    has_float_arg = true
+                    if has_float_arg:
+                        if call_name == "gorget_abs":
+                            call_name = "gorget_fabs"
+                        elif call_name == "gorget_min":
+                            call_name = "gorget_fmin"
+                        elif call_name == "gorget_max":
+                            call_name = "gorget_fmax"
                 # Collection constructors need element size argument(s)
                 if is_collection_constructor(func_name, &m, &gmod):
                     # Phase A: dispatch on type_runtime_map category; avoids starts_with.

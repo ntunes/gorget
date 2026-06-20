@@ -4635,6 +4635,13 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
             int builtin_ret = builtin_call_return_type(fname, &gmod)
             if builtin_ret >= 0:
                 ret_type = builtin_ret
+        # Float-arg dispatch for abs/min/max: when the first arg is F64,
+        # the return is F64. Mirrors Rust gg `src/lir/lower/insts.rs:505-517`
+        # (the LIR-level gorget_min→gorget_fmin remap) on the GIR side —
+        # the GIR local must also be typed F64 so the f-string format
+        # selection (EFString arm) picks `%f` not `%lld`.
+        if (fname == "abs" or fname == "min" or fname == "max") and first_arg_type == F64_TYPE:
+            ret_type = F64_TYPE
         # Prelude variant constructor `Some(x)` → `Option__<inner>`. The
         # block above can't route it (Option is a prelude enum, absent from
         # gmod.type_infos → enum_variant_parent "" → typed by the BARE
