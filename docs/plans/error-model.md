@@ -11,7 +11,7 @@
 > source (overflow DOES panic today; `throws` is sugar for `Result`; the
 > `From`-widening machinery is real; precedents all accurate). Two findings folded
 > below: **§0.5** — this RFC *reverses a documented, rule-backed safety decision*
-> (`language-design.md:1311`), the #1 blocking item; and **§6 reality-check** —
+> (`language-design.md:1312`), the #1 blocking item; and **§6 reality-check** —
 > the fault-unwind leg is greenfield (production panic = `exit(1)`), not reuse.
 
 ## 0. The question that spawned this
@@ -152,8 +152,11 @@ user-definable `Drop` (`language-reference.md:2841`: `drop(!self): close_fd(self
 paths"). So the unwind ITSELF invokes user destructors that read fields, and a
 multi-field mutation that faulted partway leaves invariant-linked state inconsistent
 for a `drop(!self)` to read. The honest safety claim is therefore: **(i)** the
-overflowing scalar is **never committed** (the checked trap fires *before* the
-store, `runtime_checked_arith.c:8`); **(ii)** **no application code past the
+overflowing scalar is **never committed** to observable user state (the helper
+traps before returning, `runtime_checked_arith.c:8`; the inline emitter writes an
+SSA temp then `exit(1)`s before any `IStore`, `c_lir/mod.rs:2438` — equivalent
+under today's abort, and the value-commit question is what Q9 must settle for the
+proposed longjmp); **(ii)** **no application code past the
 boundary** reads the unit's corrupted outputs; **(iii)** the unwind is
 **memory-safe** — no leak/double-free — *if* Q9 is solved. It is **not** "no
 destructor observes inconsistent state." This is exactly the exposure Rust's
@@ -211,7 +214,7 @@ not reuse.** The *contract* leg already matches the runtime — `throws` lowers 
 (`src/ir/lowering/exprs/mod.rs:44-62`) + early `Error(val)` return
 (`stmts/mod.rs:2380`). But production **panic = `exit(1)`**
 (`src/backend/c/runtime/panic_normal.c:3-9`); overflow/bounds/div0 all hard-abort
-(`calls.rs:82` `Overflow::Trap`; `runtime_array.c:31`; `c_lir/mod.rs:2476`). A
+(`src/lir/lower/calls.rs:82` `Overflow::Trap`; `runtime_array.c:31`; `c_lir/mod.rs:2476`). A
 setjmp/longjmp substrate exists (`runtime_error.c`: `__gorget_jmp_stack`,
 `GORGET_TRY`) but is **gated to test/`throws` mode and wired to neither panics nor
 `Task`/`TaskGroup`** (no scheduler has a panic-catch path — verified across
