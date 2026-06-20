@@ -135,16 +135,32 @@ corrupted state is worse than stopping."* The overflowing op already produced an
 undefined value — is it safe to recover and keep going? **The answer is YES, but
 ONLY because recovery is at a COARSE boundary — and that must be LOCKED IN, not
 left open.** When a fault is caught at a task/request/supervisor boundary, the
-*entire unit of work* (the request, the task) is **failed and unwound** — the
-corrupted intermediate is **discarded, never read**. That is exactly the
-Erlang/Midori "abandon the unit of work" answer (§8), and it is safe in a way that
-"`catch Overflow` *inline* and keep using the result" is **not**. So the safety
-property hangs entirely on **boundary-only catch**: §9 Q1's "catchable *anywhere*?"
-option, answered "anywhere," **resurrects the exact footgun the docs warn against**
-(recover mid-computation, keep using the corrupted value). **Design invariant:
-faults are catchable ONLY at a declared coarse boundary that discards-and-unwinds
-the unit of work — never inline.** This is no longer an open toss-up; Q1 is updated
-to carry it as the safety-preserving constraint.
+*entire unit of work* (the request, the task) is **failed and unwound**, and **no
+application logic past the boundary observes its outputs** (the unit's results are
+discarded). That is the Erlang/Midori "abandon the unit of work" answer (§8), and
+it is safe in a way that "`catch Overflow` *inline* and keep using the result" is
+**not**. So the safety property hangs on **boundary-only catch**: §9 Q1's
+"catchable *anywhere*?" answered "anywhere" **resurrects the exact footgun the docs
+warn against** (recover mid-computation, keep using the corrupted value). **Design
+invariant: faults are catchable ONLY at a declared coarse boundary that
+discards-and-unwinds the unit of work — never inline.**
+
+⚠ **Precision (review pass 2): "discarded" is NOT "never observed."** Gorget has a
+user-definable `Drop` (`language-reference.md:2841`: `drop(!self): close_fd(self.fd)`
+— the destructor reads `self.fd`) that **runs on the failure path**
+(`language-reference.md:4743` — `drop()` "is called on both the success and failure
+paths"). So the unwind ITSELF invokes user destructors that read fields, and a
+multi-field mutation that faulted partway leaves invariant-linked state inconsistent
+for a `drop(!self)` to read. The honest safety claim is therefore: **(i)** the
+overflowing scalar is **never committed** (the checked trap fires *before* the
+store, `runtime_checked_arith.c:8`); **(ii)** **no application code past the
+boundary** reads the unit's corrupted outputs; **(iii)** the unwind is
+**memory-safe** — no leak/double-free — *if* Q9 is solved. It is **not** "no
+destructor observes inconsistent state." This is exactly the exposure Rust's
+`panic=unwind` carries (Drop runs during unwind, can see partial state; mitigated by
+exception-safety discipline / `Mutex` poisoning) — a known, bounded class, not a
+novel hole. **Q9 is widened to cover value-observation by user `drop()` across the
+unwind, not just leak/double-free.**
 
 ## 4. The two kinds, side by side
 
@@ -195,11 +211,12 @@ not reuse.** The *contract* leg already matches the runtime — `throws` lowers 
 (`src/ir/lowering/exprs/mod.rs:44-62`) + early `Error(val)` return
 (`stmts/mod.rs:2380`). But production **panic = `exit(1)`**
 (`src/backend/c/runtime/panic_normal.c:3-9`); overflow/bounds/div0 all hard-abort
-(`calls.rs:81` `Overflow::Trap`; `runtime_array.c:31`; `c_lir/mod.rs:2476`). A
+(`calls.rs:82` `Overflow::Trap`; `runtime_array.c:31`; `c_lir/mod.rs:2476`). A
 setjmp/longjmp substrate exists (`runtime_error.c`: `__gorget_jmp_stack`,
 `GORGET_TRY`) but is **gated to test/`throws` mode and wired to neither panics nor
-`Task`/`TaskGroup`** (`task_group_runtime.c:60`; both schedulers `exit(1)` on a
-task panic). So delivering "recover a fault at a boundary" requires NEW
+`Task`/`TaskGroup`** (no scheduler has a panic-catch path — verified across
+`scheduler_{inline,pool,thread,single}_runtime.c`; a task panic reaches
+`gorget_panic`→`exit(1)`, `panic_normal.c:6`). So delivering "recover a fault at a boundary" requires NEW
 infrastructure: (a) make `gorget_panic` longjmp (not `exit(1)`) for fault-typed
 panics; (b) install per-task setjmp frames in the inline *and* pool schedulers;
 (c) run drop/cleanup unwinding across the longjmp (§9 Q9); (d) thread the fault
@@ -301,12 +318,17 @@ the RFC must argue against.
    load-bearing validation and the top risk. The new error-channel/inference pass
    lands in BOTH Rust gg and the self-host's own typechecker. Staged plan + guards
    (`tests/lints.rs`) + the self-host parity story come BEFORE any code.
-9. **Drop/CoW correctness across a fault unwind (scout).** Gorget's ownership model
-   (drop insertion, `MoveZero`, `on error` cleanup, CoW) assumes normal return or
-   `exit(1)`. A longjmp-based fault unwind that *continues execution* must run drops
-   correctly for every live owned value across the unwound frames; the cleanup-stack
-   is test-only today (`panic_test.c`). Collides with the CLAUDE.md ownership
-   invariants — needs a design before any code.
+9. **Drop/CoW correctness across a fault unwind (scout; WIDENED review pass 2).**
+   Gorget's ownership model (drop insertion, `MoveZero`, `on error` cleanup, CoW)
+   assumes normal return or `exit(1)`. A longjmp-based fault unwind that *continues
+   execution* must run drops correctly for every live owned value across the unwound
+   frames; the cleanup-stack is test-only today (`panic_test.c`). **Beyond
+   memory-correctness (no leak/double-free), this must ALSO cover value-observation:**
+   user `Drop` runs on the failure path (`language-reference.md:4743`), so a
+   `drop(!self)` can read invariant-linked state left inconsistent by the
+   partially-completed faulting unit (§3.1). The design must say what a destructor may
+   assume across a fault unwind (Rust's answer: exception-safety + poisoning). Collides
+   with the CLAUDE.md ownership invariants — needs a design before any code.
 10. **The fault-unwind infrastructure cost (scout).** See §6 reality-check:
     production panic is `exit(1)`; fault-recovery needs new per-task setjmp/longjmp +
     drop-unwind in BOTH schedulers + fault-value threading out of `join`. Likely the
@@ -337,6 +359,18 @@ the RFC must argue against.
     preference. This choice decides whether half the RFC's machinery (fault
     classification metadata, `catch`-by-type) even exists. Argue it on merits, or
     adopt untyped-panic-with-supervisor.
+15. **FFI / `extern`-boundary fault unwind (review pass 2).** A longjmp-based fault
+    unwind (§6) that jumps over a foreign C frame skips C-side cleanup and is UB on
+    many ABIs. The doc has zero treatment of a fault crossing an `extern` boundary.
+    For a longjmp design this is load-bearing: either faults cannot unwind across FFI
+    (they abort at the boundary) or the boundary installs a catch. Spec it.
+16. **`main` / single-threaded top-level fault boundary (review pass 2).** §4 says
+    uncaught faults "abort"; §3.1 says faults are catchable ONLY at a coarse boundary.
+    But is `main` (or a single-threaded CLI with no Task/request) itself such a
+    boundary? If NOT, the most basic program shape has no boundary → every fault
+    aborts → "recoverable overflow," the owner's GOAL, is unreachable without a
+    Task/server. Define the default top-level boundary. (The existing `main() throws int`
+    → exit-code path, `language-reference.md:2480`, is *contract*-channel, orthogonal.)
 
 ## 10. Bottom line
 
