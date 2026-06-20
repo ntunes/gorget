@@ -3981,7 +3981,19 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
     int result = -1
     bool is_print = fname == "print"
     if is_print:
-        # print() → printf
+        # print() → printf. The CALL's result is UNIT (mirrors Rust gg, which
+        # returns `Operand::Constant(Constant::Unit)`, src/ir/lowering/exprs/
+        # calls.rs:511-513), NOT the I32 printf byte-count. The printf
+        # side-effect still happens below; only the value the caller reads is
+        # unit. Setting `result` here (for the WHOLE arm) also covers the
+        # no-arg `print()` case, which would otherwise leave `result = -1`.
+        # Without this, `void main(): print("hi")` (expr-body, pre-desugared to
+        # `return print(...)`) and `void main(): return print("hi")` flow the
+        # byte-count into main's i32 return slot → the binary exits with the
+        # byte count (3 for "hi\n") instead of 0. OpConstUnit() → IIConst(LT_I32,0).
+        int unit_dst = add_local(&ctx, UNIT_TYPE, None)
+        emit(&ctx, GIAssign(unit_dst, OpConstUnit()))
+        result = unit_dst
         if args.len() > 0:
             SpannedExpr parg = args.get(0).unwrap()
             int val = lower_expr(&ctx, parg, &gmod)
@@ -4050,7 +4062,8 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
             Vector[Operand] printf_args = [OpConstStr(fmt), op_consume(&ctx, &gmod, val, CkFormatArg())]
             int pdst = add_local(&ctx, I32_TYPE, None)
             emit(&ctx, GICallExtern(pdst, "printf", printf_args))
-            result = pdst
+            # `result` is already the UNIT local set at the top of the is_print
+            # arm; the printf byte-count `pdst` is intentionally discarded.
     elif (fname == "Str" or fname == "String" or fname == "GorgetString") and args.len() == 1:
         # Identity coercion: Str(x) / String(x) returns x (already a string).
         # Lower the inner arg and pass its type through.

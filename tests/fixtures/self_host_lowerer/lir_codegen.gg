@@ -5569,12 +5569,16 @@ String emit_function(LirFunction &func, LirModule &m, Vector[String] &sn, Dict[S
     # `int main(argc, argv)`. Running on thread 0 is the macOS/Cocoa
     # requirement; slot-coalescing lets the self-host bootstrap fit a plain
     # ~8MB stack, so the old 64MB-pthread main runner (Fix B) is gone.
-    # void-main → exit-0 is guaranteed at the GIR layer (main is given an
-    # I32_TYPE return type, predating Fix B; bare/implicit void returns
-    # coerce to `return 0`), so no explicit `return 0` is emitted here. Keep
-    # this byte-identical to the Rust twin (`src/backend/c_lir/mod.rs`
-    # emit_function — the `c_emit_comparison` user_fn_count gate counts the
-    # `) {` openers on both sides).
+    # `main` is given an I32_TYPE return type (predating Fix B). A bare /
+    # implicit void return coerces to `return 0`, so no explicit `return 0` is
+    # emitted here. NOTE: a VALUE-returning tail does NOT auto-coerce to 0 — its
+    # value flows into main's i32 slot and becomes the exit code. This is why
+    # `print` must lower to a UNIT result (→ literal i32 0), not the printf
+    # byte-count (see lower_expr.gg is_print arm); otherwise `void main():
+    # print("hi")` would exit with the byte count. Keep this byte-identical to
+    # the Rust twin (`src/backend/c_lir/mod.rs` emit_function — the
+    # `c_emit_comparison` user_fn_count gate counts the `) {` openers on both
+    # sides).
     if func.name == "main":
         sb_push(&buf, "int main(int argc, char** argv) {\n")
         sb_push(&buf, "    gorget_init_args(argc, argv);\n")

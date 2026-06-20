@@ -24172,6 +24172,80 @@ fn mutarg_import_probe_self_host() {
     }
 }
 
+/// Regression for the `print`→unit lowering fix. A `print(...)` call in
+/// tail/return position must NOT leak the printf byte-count into `main`'s i32
+/// exit slot. The self-host `is_print` arm (`lower_expr.gg`) sets the call's
+/// result to a UNIT local (mirroring Rust gg's `Constant::Unit`), so `void
+/// main(): print("x")` and `void main(): return print("x")` both exit 0.
+/// Pre-fix the byte-count flowed through and these mains exited with the line
+/// length (14 / 15). `self_host_emit_cc_run` returns `Err(Crashed)` on a
+/// non-zero binary exit, so the `Ok(_)` arm of these asserts only fires when
+/// the binary exited 0 — the load-bearing check. The expected stdout is also
+/// asserted via the Rust-`gg`-run oracle to keep them honest.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn print_tail_exit_expr_body_self_host() {
+    if skip_under_llvm() {
+        return;
+    }
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let fixture = manifest_dir.join("tests/fixtures/print_tail_exit_expr_body.gg");
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_print_tail_exit_expr_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+    match self_host_emit_cc_run(
+        &driver_exe, &lib_dir, &runtime_dir, &fixture, &tmp_root, "shroute",
+    ) {
+        // Reaching the Ok arm at all means the binary exited 0 (a non-zero exit
+        // is classified Crashed by self_host_emit_cc_run); the stdout assert is
+        // the secondary check.
+        Ok(stdout) => assert_eq!(
+            stdout, "tail-print-ok",
+            "expr-body `print` tail must exit 0 with correct stdout"
+        ),
+        Err(outcome) => panic!(
+            "expr-body tail-print main must build+exit-0 via self-host, got: {outcome:?}"
+        ),
+    }
+}
+
+/// Sibling of `print_tail_exit_expr_body_self_host` for the explicit
+/// block-body `return print(...)` shape (Core-#8 sibling). Same write site,
+/// same exit-0 contract.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn print_tail_exit_block_return_self_host() {
+    if skip_under_llvm() {
+        return;
+    }
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let fixture = manifest_dir.join("tests/fixtures/print_tail_exit_block_return.gg");
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_print_tail_exit_block_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+    match self_host_emit_cc_run(
+        &driver_exe, &lib_dir, &runtime_dir, &fixture, &tmp_root, "shroute",
+    ) {
+        Ok(stdout) => assert_eq!(
+            stdout, "tail-return-ok",
+            "block-body `return print` tail must exit 0 with correct stdout"
+        ),
+        Err(outcome) => panic!(
+            "block-return tail-print main must build+exit-0 via self-host, got: {outcome:?}"
+        ),
+    }
+}
+
 #[test]
 fn cow_lazy_method_arg() {
     run_gg("cow_lazy_method_arg.gg", "s = hello\nv0 = mutated");

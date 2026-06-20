@@ -18,8 +18,9 @@ from lir import LirModule, LirFunction
 from lir_codegen import generate_c, emit_runtime_preamble
 from drop_elab import elaborate_drops
 from diagnostic import has_errors, report_diagnostics
-from std.fs import read_file
+from std.fs import read_file, write_file
 from std.os import args, getenv, exit
+from std.process import exec
 from std.collections import Vector, Dict
 from std.time import time_ms
 from std.conv import int_to_str
@@ -37,6 +38,23 @@ void main():
 
 void compile_main():
     Vector[String] cmd_args = args()
+    # ── Build/run subcommand (new standalone-compiler CLI) ──────────────────
+    # GG_IMPL=selfhost installs this binary as `gg`. When invoked as:
+    #   gg build <input.gg> [-o <output>] [--runtime-dir=<dir>] [--lib-dir=<dir>]
+    #   gg run   <input.gg>               [--runtime-dir=<dir>] [--lib-dir=<dir>]
+    # delegate to run_build_mode / run_run_mode and return.  The legacy path
+    # (driver <path> <lib_dir> [--emit-c|--lir-c|…]) is unchanged so all
+    # existing test-harness callers (self_host_bootstrap_fixed_point,
+    # c_emit_comparison, lowerer_comparison, …) continue to work.
+    if cmd_args.len() >= 2:
+        String _subcmd = cmd_args.get(1).unwrap()
+        if _subcmd == "build":
+            run_build_mode(cmd_args, false)
+            return
+        if _subcmd == "run":
+            run_build_mode(cmd_args, true)
+            return
+    # ── Legacy path ─────────────────────────────────────────────────────────
     String path = cmd_args.get(1).unwrap()
     String lib_dir = "lib"
     if cmd_args.len() > 2:
@@ -221,6 +239,111 @@ void compile_main():
     else:
         # Default (no dump flag): GIR text, matching prior driver behavior.
         print(format_module(&gir))
+
+# ── build/run subcommand implementation ─────────────────────────────────────
+# Handles `gg build <input.gg> [-o <output>] [opts]` and
+#          `gg run   <input.gg>               [opts]`
+# where opts are:
+#   --runtime-dir=<abs>   path to src/backend/c/runtime (default: $GG_RUNTIME_DIR
+#                         or repo-relative "src/backend/c/runtime")
+#   --lib-dir=<abs>       path to the lib/ standard library (default: $GG_LIB_DIR
+#                         or repo-relative "lib")
+# The runtime-dir and lib-dir are required for a standalone install; the
+# GG_IMPL orchestrator (build.sh) always passes them as absolute paths.
+void run_build_mode(Vector[String] cmd_args, bool do_run):
+    # Arg parsing: skip argv[0] (binary name) and argv[1] ("build"/"run").
+    String input_path = ""
+    String output_path = ""
+    # Defaults: env vars (set by the orchestrator) then repo-relative fallbacks.
+    String runtime_dir = getenv("GG_RUNTIME_DIR")
+    String lib_dir = getenv("GG_LIB_DIR")
+    if runtime_dir == "":
+        runtime_dir = "src/backend/c/runtime"
+    if lib_dir == "":
+        lib_dir = "lib"
+
+    int ai = 2
+    while ai < cmd_args.len():
+        String arg = cmd_args.get(ai).unwrap()
+        if arg == "-o":
+            ai += 1
+            if ai < cmd_args.len():
+                output_path = cmd_args.get(ai).unwrap()
+        elif arg.starts_with("--runtime-dir="):
+            runtime_dir = arg.slice(14, arg.len())
+        elif arg.starts_with("--lib-dir="):
+            lib_dir = arg.slice(10, arg.len())
+        elif not arg.starts_with("-"):
+            input_path = arg
+        ai += 1
+
+    if input_path == "":
+        print("error: no input file given", file=stderr)
+        print("usage: gg build <input.gg> [-o <output>] [--runtime-dir=<dir>] [--lib-dir=<dir>]", file=stderr)
+        exit(1)
+
+    # Derive default output path from input: strip ".gg" suffix.
+    if output_path == "":
+        if input_path.ends_with(".gg"):
+            output_path = input_path.slice(0, input_path.len() - 3)
+        else:
+            output_path = input_path + "_out"
+
+    # Unique temp file for the emitted C (use timestamp to avoid collisions
+    # when multiple gg invocations run concurrently).
+    String c_path = "/tmp/gg_selfhost_build_" + int_to_str(time_ms()) + ".c"
+
+    # ── Compile pipeline ─────────────────────────────────────────────────────
+    String source = read_file(input_path)
+    Module m = parse_source(source)
+    Dict[String, bool] imported_fns = {}
+    Dict[String, String] call_redirects = load_imports(&m, input_path, lib_dir, &imported_fns, source.byte_len())
+    expand_derives(&m)
+    ScopeTable scopes = ScopeTable.new_scope_table()
+    scopes.init()
+    TypeTable types = TypeTable.new_type_table()
+    expand_meta_types(&m, &types)
+    expand_meta_for_match(&m)
+    ResolveContext ctx = resolve_module(m, &scopes, &types)
+    apply_collect_target_rewrites(&m)
+    type_check_module(m, &scopes, &types, &ctx)
+    if has_errors(ctx.diagnostics):
+        report_diagnostics(ctx.diagnostics, source, input_path)
+        exit(1)
+    GirModule gir = lower_module(m, scopes, types, call_redirects, imported_fns)
+    validate_gir_after("gir-lowering", &gir)
+    run_validators(&gir)
+    LirModule lir = lower_gir_to_lir(&gir)
+    validate_lir_after("lir-lowering", &lir)
+    eliminate_dead_globals(&lir)
+    run_ssa(&lir)
+    validate_lir_after("ssa-construction", &lir)
+    elaborate_drops(&lir)
+    validate_lir_after("drop-elaboration", &lir)
+    # Emit full C (runtime preamble + body).
+    String full_c = emit_runtime_preamble(&lir, runtime_dir) + generate_c(&lir)
+
+    # ── Write C → temp file ──────────────────────────────────────────────────
+    write_file(c_path, full_c)
+
+    # ── Invoke C compiler ────────────────────────────────────────────────────
+    # Mirror the test harness's cc recipe (tests/integration.rs:16411-16417):
+    #   cc -O0 -w -o <output> <c_file> -lm -lpthread
+    # Respect $CC (same convention as the Rust gg; src/main.rs:1005).
+    String cc = getenv("CC")
+    if cc == "":
+        cc = "cc"
+    String cc_cmd = cc + " -O0 -w -o " + output_path + " " + c_path + " -lm -lpthread"
+    int cc_exit = exec(cc_cmd)
+    if cc_exit != 0:
+        print("error: C compiler failed (exit " + int_to_str(cc_exit) + "): " + cc_cmd, file=stderr)
+        exit(cc_exit)
+    print("Built: " + output_path, file=stderr)
+
+    # ── run mode: execute the compiled binary ────────────────────────────────
+    if do_run:
+        int run_exit = exec(output_path)
+        exit(run_exit)
 
 void run_ssa(LirModule &m):
     int fi = 0

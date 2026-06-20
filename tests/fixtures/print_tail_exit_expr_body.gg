@@ -1,0 +1,6 @@
+# Regression: a `print` in tail/return position must NOT leak the printf
+# byte-count into main's i32 exit slot. `print` lowers to a UNIT result
+# (mirrors Rust gg's `Constant::Unit`), so this expr-body main exits 0, not 3
+# (the byte length of "tail-print-ok\n"). See the self-host is_print arm in
+# tests/fixtures/self_host_lowerer/lower_expr.gg.
+void main(): print("tail-print-ok")

@@ -1,0 +1,6 @@
+# Regression sibling of print_tail_exit_expr_body: the explicit block-body
+# `return print(...)` shape. `print` yields UNIT, so this main exits 0, not 13
+# (the byte length of "tail-return-ok\n"). Both shapes funnel through the same
+# self-host is_print write site.
+void main():
+    return print("tail-return-ok")
