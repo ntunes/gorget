@@ -2068,17 +2068,20 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             if base_is_regular_box:
                 String inner_name = base_type_name.slice(5, base_type_name.len())
                 int box_inner_tid = resolve_field_gir_type(inner_name, &gmod)
-                # Phase 3 (Class 8): the box-deref's inner local aliases
-                # into the box's heap allocation — when `base` itself was
-                # already a borrow (chained field access on a borrowed
-                # aggregate), the derefed inner inherits that borrow tag.
-                # For an LoOwned box, dropping the box still frees the
-                # inner heap, but the inner deref still aliases into it
-                # for the duration of base's scope — leaving derefed as
-                # LoOwned would risk a double-free when COMMIT 3 drops
-                # both base and derefed on the same heap. Inheritance is
-                # the safe default.
-                int derefed = add_local_inheriting(&ctx, box_inner_tid, None, base)
+                # Phase 3 (Class 8): the box-deref's inner local ALWAYS
+                # aliases into the box's heap allocation — for an LoOwned
+                # box, `add_local_inheriting` would fall through to a fresh
+                # LoOwned derefed, and a consume of `box.field` (into a
+                # store / collection / field-init) would then shallow-alias
+                # the box heap → double-free when COMMIT 3 drops both. Tag
+                # LoBorrowed unconditionally (the deref-inner is a borrow
+                # view regardless of who owns the box), matching the EDeref
+                # write-site above and Rust's AssignMode::Borrow rvalue tag.
+                # Defense-in-depth: `box.field`-into-a-store currently
+                # mis-CCs on Rust gg too (a separate pre-existing Rust bug,
+                # out of scope), but this keeps the two box-deref sites
+                # consistent so the next fixture can't hit the LoOwned hole.
+                int derefed = add_local_with(&ctx, box_inner_tid, None, LoBorrowed(), BoRuntimeView(base))
                 emit(&ctx, GIDeref(derefed, base, box_inner_tid))
                 base = derefed
                 base_tid = box_inner_tid
@@ -2863,9 +2866,20 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 int d_inner_tid = resolve_field_gir_type(d_inner_name, &gmod)
                 # Phase 3 (Class 8): see EFieldAccess box-deref site
                 # at line ~4246 for the architectural rationale —
-                # the deref-inner aliases the box's heap, inherit
-                # source's borrow tag rather than freshly LoOwn.
-                int ddst = add_local_inheriting(&ctx, d_inner_tid, None, dsrc)
+                # the deref-inner aliases the box's heap. An OWNED box's
+                # `dsrc` is LoOwned, so `add_local_inheriting` would fall
+                # through to a FRESH LoOwned ddst (the bug): at a consume
+                # position (`*b = *b`, `*b = (*b).f`) op_consume then
+                # returns OpMove and shallow-aliases the box's heap buffer
+                # — the drop-on-overwrite below would dangle it (a UAF, the
+                # exact defect the prior read-site patch 05a40cbf shipped).
+                # Tag LoBorrowed unconditionally: the deref-inner is ALWAYS
+                # a borrow alias into the box heap regardless of who owns
+                # the box, so a consume must CLONE (op_consume LoBorrowed →
+                # OpClone → gorget_string_clone_to_owned, an independent
+                # buffer). Mirrors Rust's EDeref rvalue tag AssignMode::Borrow
+                # (src/ir/lowering/exprs/mod.rs:690-700).
+                int ddst = add_local_with(&ctx, d_inner_tid, None, LoBorrowed(), BoRuntimeView(dsrc))
                 emit(&ctx, GIDeref(ddst, dsrc, d_inner_tid))
                 return ddst
             return dsrc

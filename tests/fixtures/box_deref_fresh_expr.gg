@@ -1,0 +1,6 @@
+from std.collections import Box
+
+void main():
+    Box[String] b = Box.new("hello" + " world")
+    *b = "new" + " value"
+    print(*b)

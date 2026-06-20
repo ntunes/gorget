@@ -16781,6 +16781,156 @@ fn self_host_runtime() {
     );
 }
 
+/// Build a fixture through the self-host driver → C → `cc -fsanitize=address`
+/// → run, and assert the binary exits cleanly (no LeakSanitizer / ASan report)
+/// AND its stdout byte-matches the Rust `gg run` oracle.
+///
+/// This is the load-bearing gate for the `Box[String]` deref-store leak/UAF
+/// class (lower_expr.gg EDeref write-site clone + lir_lower.gg GIDerefStore
+/// drop-on-overwrite + GIDropIfAlive box-inner-drop). The leaks/UAFs are
+/// stdout-INVISIBLE, so a plain stdout check (`self_host_runtime`) cannot see
+/// them — only the sanitizer can. The prior read-site patch (05a40cbf) was
+/// rejected for introducing a `*b=*b` UAF that a stdout-only test missed; this
+/// helper would have caught it (ASan reports the use-after-free), which is why
+/// the gate is sanitizer-checked, not stdout-only.
+///
+/// `ASAN_OPTIONS=detect_leaks=1` makes LeakSanitizer (on by default under ASan
+/// on Linux) a hard failure; `exitcode=99` makes any ASan/LSan error a nonzero
+/// exit so we don't rely on string-scraping alone.
+fn assert_box_deref_asan_clean(stem: &str) {
+    if skip_under_llvm() {
+        return;
+    }
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let fixture = manifest_dir.join("tests/fixtures").join(format!("{stem}.gg"));
+    assert!(fixture.exists(), "fixture not found: {}", fixture.display());
+
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_box_asan_{}_{}_{}",
+        stem,
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+
+    // ---- Rust oracle: `gg run <fixture>` ----
+    let rust = run_with_timeout(gg_command("run").arg(&fixture), stem);
+    assert!(
+        rust.status.success(),
+        "{stem}: Rust gg run failed (oracle must be correct):\n{}",
+        String::from_utf8_lossy(&rust.stderr),
+    );
+    let rust_out = String::from_utf8_lossy(&rust.stdout).trim_end().to_string();
+
+    // ---- self-host: emit C ----
+    let c_path = tmp_root.join(format!("{stem}.c"));
+    let emit = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--emit-c")
+            .arg(format!("--runtime-dir={}", runtime_dir.display())),
+        stem,
+    );
+    assert!(
+        emit.status.success(),
+        "{stem}: self-host driver --emit-c failed:\n{}",
+        String::from_utf8_lossy(&emit.stderr),
+    );
+    std::fs::write(&c_path, &emit.stdout).expect("write .c");
+
+    // ---- compile WITH AddressSanitizer ----
+    let asan_bin = tmp_root.join(format!("{stem}_asan"));
+    let cc = Command::new("cc")
+        .arg("-O0")
+        .arg("-g")
+        .arg("-fsanitize=address")
+        .arg("-o")
+        .arg(&asan_bin)
+        .arg(&c_path)
+        .arg("-lm")
+        .arg("-lpthread")
+        .output()
+        .expect("spawn cc -fsanitize=address");
+    assert!(
+        cc.status.success(),
+        "{stem}: cc -fsanitize=address failed:\n{}",
+        String::from_utf8_lossy(&cc.stderr),
+    );
+
+    // ---- run under ASan ----
+    let mut run_cmd = Command::new(&asan_bin);
+    run_cmd.env("ASAN_OPTIONS", "detect_leaks=1:abort_on_error=0:exitcode=99");
+    let run = run_with_timeout(&mut run_cmd, stem);
+    let asan_stderr = String::from_utf8_lossy(&run.stderr).to_string();
+    let asan_stdout = String::from_utf8_lossy(&run.stdout).trim_end().to_string();
+
+    let _ = std::fs::remove_dir_all(&tmp_root);
+
+    // ASan-clean: zero exit AND no sanitizer report on stderr.
+    let has_report = asan_stderr.contains("LeakSanitizer")
+        || asan_stderr.contains("AddressSanitizer")
+        || asan_stderr.contains("ERROR:")
+        || asan_stderr.contains("SUMMARY:");
+    assert!(
+        run.status.success() && !has_report,
+        "{stem}: self-host ASan FAILED (exit={:?}). Leak/UAF report:\n{}",
+        run.status.code(),
+        asan_stderr,
+    );
+
+    // stdout must byte-match the Rust oracle (the exact check that caught the
+    // prior `*b=*b` rejection — ASan-clean alone is not sufficient).
+    assert_eq!(
+        asan_stdout, rust_out,
+        "{stem}: self-host stdout != Rust gg stdout",
+    );
+}
+
+/// `*b = *b` — the self-alias UAF trigger. Without the write-site clone
+/// (lower_expr.gg EDeref → LoBorrowed → op_consume OpClone), `*b` lands in the
+/// store as a shallow alias of the box heap; the drop-on-overwrite then dangles
+/// it. This is the precise shape the rejected read-site patch (05a40cbf) UAF'd
+/// on. Must be ASan-clean: the clone makes the new value an independent buffer.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn box_deref_self_alias() {
+    assert_box_deref_asan_clean("box_deref_self_alias");
+}
+
+/// `*b = *c` — store a deref of one box into another. The cloned RHS is
+/// independent; the old `b` pointee is dropped before the store.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn box_deref_two_box() {
+    assert_box_deref_asan_clean("box_deref_two_box");
+}
+
+/// `*b = s; print(s)` — the RHS local `s` is LIVE past the store, so it must be
+/// CLONED (not moved) into the box; `print(s)` afterwards must still see a valid
+/// String. ASan-clean confirms no UAF of `s` and no leak of the old box pointee.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn box_deref_live_string() {
+    assert_box_deref_asan_clean("box_deref_live_string");
+}
+
+/// `*b = "new" + " value"` — a fresh heap temp on the RHS (owned by
+/// construction). The old box pointee is dropped before the store; the box
+/// inner is dropped through the box pointer at scope exit. ASan-clean confirms
+/// no double-free of the moved temp and no leak.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn box_deref_fresh_expr() {
+    assert_box_deref_asan_clean("box_deref_fresh_expr");
+}
+
 /// Snapshot regeneration (GG_REGEN_RUNTIME_SNAPSHOT=1). For every non-excluded
 /// fixture, runs the stability gate (self-host binary twice + oracle `gg run`
 /// twice, all identical) and — only on a STABLE MATCH — writes the trimmed Rust

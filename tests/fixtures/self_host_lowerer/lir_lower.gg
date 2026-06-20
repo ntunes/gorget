@@ -3991,6 +3991,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                     # (m.structs + m.type_runtime_map, both in scope). Mirrors Rust
                     # src/lir/lower/drops.rs:264-275 (SlotLoad{Ptr} → free the value).
                     bool dia_is_box = false
+                    String dia_box_inner_name = ""
                     if dia_slot_ty >= LT_STRUCT_BASE:
                         int dia_box_sid = dia_slot_ty - LT_STRUCT_BASE
                         if dia_box_sid >= 0 and dia_box_sid < m.structs.len():
@@ -3998,10 +3999,38 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                             if m.type_runtime_map.contains(dia_box_nm):
                                 if m.type_runtime_map.get(dia_box_nm).unwrap_or("") == "Box":
                                     dia_is_box = true
+                                    # Inner type = post-`Box__` suffix of the
+                                    # mangled struct name. The self-host LirStructDef
+                                    # has NO typed box_inner_type field yet (Rust gg
+                                    # carries one — src/lir/mod.rs:1544, devbook/29
+                                    # Snag #13), so the `Box__` mangling is the only
+                                    # contract available at THIS drop site, the same
+                                    # one emit_box_alloc:2869 and the dia_is_box probe
+                                    # above already rely on. Typed-field port is a
+                                    # TODO follow-up.
+                                    if dia_box_nm.starts_with("Box__"):
+                                        dia_box_inner_name = dia_box_nm.slice(5, dia_box_nm.len())
                     if dia_is_box and not dia_owns_ptr:
                         int dia_box_loaded = lir_fn_next_value(&f)
                         lir_push_inst(&f, bb, ISlotLoad(dia_box_loaded, dia_slot, LT_PTR))
                         dia_drop_arg = dia_box_loaded
+                        # Box-inner-drop. The box drop_fn below resolves to
+                        # `free` (runtime=="Box"), which releases ONLY the box
+                        # allocation — leaking the inner String/Array/struct
+                        # buffer. Mirror Rust's generated `Box__<Inner>__drop`
+                        # (src/backend/c_lir/emit_types.rs:1491-1493): drop the
+                        # inner value THROUGH the box pointer (which points
+                        # straight at the inner) BEFORE the `free`. dia_box_loaded
+                        # IS that heap pointer. POD inner → drop fn "" → no-op.
+                        if dia_box_inner_name != "":
+                            String dia_inner_drop = drop_fn_for_type(dia_box_inner_name, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types, &m.drop_collision_types, &m.type_method_prefix_map)
+                            if dia_inner_drop == "" and m.type_drop_fns.contains(dia_box_inner_name):
+                                dia_inner_drop = m.type_drop_fns.get(dia_box_inner_name).unwrap().drop_fn_name
+                            if dia_inner_drop != "":
+                                Vector[int] dia_in_args = []
+                                dia_in_args.push(dia_box_loaded)
+                                Vector[int] dia_in_abis = []
+                                lir_push_inst(&f, bb, ICallExtern(-1, dia_inner_drop, dia_in_args, dia_inner_drop, dia_in_abis))
                     # ② closure ENV-FIELD leak fix — for a resource/CoW-capturing
                     # `GorgetClosure` value, `gorget_closure_free` frees only the
                     # env BLOCK, leaking the captured String/Vector/struct field
@@ -4088,6 +4117,26 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
             int ds_ptr_val = lir_fn_next_value(&f)
             lir_push_inst(&f, bb, ISlotLoad(ds_ptr_val, ds_ptr_slot, LT_PTR))
             int ds_val = lower_operand(ds_value, &f, bb, &local_to_slot, &m)
+            # Drop-on-overwrite: `*ptr = X` must free the OLD heap pointee
+            # before the store, else `*b = X` (Box[String]) leaks the
+            # previous buffer. Order mirrors Rust's emit_field_store_with_
+            # cleanup (src/ir/lowering/stmts/assigns.rs:763-790): materialise
+            # the new value FIRST (ds_val above), drop the OLD pointee, THEN
+            # store. This is SAFE *only because* the write-site (lower_expr.gg
+            # EDeref) now tags the `*b` rvalue LoBorrowed → op_consume clones
+            # it → ds_val is an INDEPENDENT buffer, so freeing the old pointee
+            # can never dangle the new value (`*b = *b` deep-clones first).
+            # Primitives/POD inner → drop_fn_for_type returns "" → no-op.
+            # gorget_string_free is double-free safe (if(cap==0)return) for a
+            # static/zeroed old value.
+            String ds_inner_tn = gir_type_id_to_base_name(ds_inner_ty, &gmod)
+            if ds_inner_tn != "":
+                String ds_old_drop = drop_fn_for_type(ds_inner_tn, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types, &m.drop_collision_types, &m.type_method_prefix_map)
+                if ds_old_drop != "":
+                    Vector[int] ds_od_args = []
+                    ds_od_args.push(ds_ptr_val)
+                    Vector[int] ds_od_abis = []
+                    lir_push_inst(&f, bb, ICallExtern(-1, ds_old_drop, ds_od_args, ds_old_drop, ds_od_abis))
             lir_push_inst(&f, bb, IStore(ds_ptr_val, ds_val))
 
         case GINop():

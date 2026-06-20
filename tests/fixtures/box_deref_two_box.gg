@@ -1,0 +1,7 @@
+from std.collections import Box
+
+void main():
+    Box[String] b = Box.new("hello" + " world")
+    Box[String] c = Box.new("xy" + "zw")
+    *b = *c
+    print(*b)
