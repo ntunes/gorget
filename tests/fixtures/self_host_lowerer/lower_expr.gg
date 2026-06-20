@@ -560,6 +560,25 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 int cdst = add_local(&ctx, I64_TYPE, None)
                 emit(&ctx, GIAssign(cdst, OpConstI64(cv)))
                 return cdst
+            # Module-level `const bool` — inline OpConstBool(value). Without
+            # this a `const bool ENABLED = true` reads as OpConstI64(0)
+            # (false), so `if ENABLED:` never fires and `print(ENABLED)`
+            # shows 0. Mirrors Rust's Constant::Bool inlining.
+            if gmod.bool_const_decls.contains(name):
+                bool bcv = gmod.bool_const_decls.get(name).unwrap()
+                int bcdst = add_local(&ctx, BOOL_TYPE, None)
+                emit(&ctx, GIAssign(bcdst, OpConstBool(bcv)))
+                return bcdst
+            # Module-level `const String` — inline OpConstStr(value) into a
+            # fresh GorgetString local. Mirrors Rust's Constant::Str. The
+            # value is a static-literal-backed String (cap=0 view), same as
+            # an inline `"hello"` literal at lower_expr's EStringLiteral arm.
+            if gmod.string_const_decls.contains(name):
+                String scv = gmod.string_const_decls.get(name).unwrap()
+                int gs_tid_sc = lookup_or_register_named(&gmod, "GorgetString")
+                int scdst = add_local(&ctx, gs_tid_sc, None)
+                emit(&ctx, GIAssign(scdst, OpConstStr(scv)))
+                return scdst
             # Module-level float constants — `float EPSILON = 0.000001`
             # in lib/xtd/math3d.gg etc. Mirrors Rust's unified
             # `module_constants` table where float consts inline as

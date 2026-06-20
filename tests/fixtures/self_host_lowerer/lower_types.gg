@@ -1592,6 +1592,77 @@ Option[float] eval_const_float_expr(SpannedExpr spe, GirModule &gmod):
         else:
             return None
 
+# Constant-fold a `const bool` initializer (`const bool ENABLED = true`).
+# Mirrors Rust's `eval_const_expr` BoolLiteral arm (Constant::Bool) +
+# the `not` unary fold + int-comparison fold (`a > b` etc. → Bool).
+# Used by the module-const registration loop to populate
+# `gmod.bool_const_decls`, which the EIdentifier arm reads before the
+# [bug] fallback. Without this, a module-level bool const falls through
+# int/float eval and is dropped → reads as OpConstI64(0).
+Option[bool] eval_const_bool_expr(SpannedExpr spe, GirModule &gmod):
+    match spe.expr:
+        case EBoolLiteral(v):
+            return Some(v)
+        case EIdentifier(name):
+            if gmod.bool_const_decls.contains(name):
+                return Some(gmod.bool_const_decls.get(name).unwrap())
+            return None
+        case EUnaryOp(op, inner_box):
+            if op == "not" or op == "!":
+                Option[bool] bv = eval_const_bool_expr(*inner_box, &gmod)
+                match bv:
+                    case Some(ba):
+                        return Some(not ba)
+                    case None:
+                        return None
+            return None
+        case EBinaryOp(lhs_box, op, rhs_box):
+            # Int-comparison fold (`const bool X = A > B`). Mirrors Rust's
+            # `eval_const_expr` (mod.rs:3731-3736): a comparison of two
+            # int consts → Constant::Bool. Both sides must const-fold to
+            # ints; non-comparison ops (or non-int operands) → None.
+            Option[int] lv = eval_const_int_expr(*lhs_box, &gmod)
+            Option[int] rv = eval_const_int_expr(*rhs_box, &gmod)
+            match lv:
+                case Some(la):
+                    match rv:
+                        case Some(ra):
+                            if op == ">":
+                                return Some(la > ra)
+                            if op == "<":
+                                return Some(la < ra)
+                            if op == ">=":
+                                return Some(la >= ra)
+                            if op == "<=":
+                                return Some(la <= ra)
+                            if op == "==":
+                                return Some(la == ra)
+                            if op == "!=":
+                                return Some(la != ra)
+                            return None
+                        case None:
+                            return None
+                case None:
+                    return None
+        else:
+            return None
+
+# Constant-fold a `const String` initializer (`const String G = "hi"`).
+# Mirrors Rust's `eval_const_expr` StringLiteral arm (Constant::Str),
+# limited to NON-interpolated string literals (same restriction Rust
+# applies). Used by the module-const registration loop to populate
+# `gmod.string_const_decls`, read by the EIdentifier arm.
+Option[String] eval_const_string_expr(SpannedExpr spe, GirModule &gmod):
+    match spe.expr:
+        case EStringLiteral(s, _):
+            return Some(s)
+        case EIdentifier(name):
+            if gmod.string_const_decls.contains(name):
+                return Some(gmod.string_const_decls.get(name).unwrap())
+            return None
+        else:
+            return None
+
 Option[int] eval_const_int_expr(SpannedExpr spe, GirModule &gmod):
     match spe.expr:
         case EIntLiteral(v):

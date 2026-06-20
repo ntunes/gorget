@@ -445,6 +445,14 @@ struct GirModule:
     Dict[String, Vector[bool]] fn_move_params
     # Module-level int constants and None-typed sentinel decls.
     Dict[String, int] const_decls
+    # Module-level bool constants — `const bool ENABLED = true`. Mirrors
+    # Rust's unified `module_constants` storing `Constant::Bool`. Read by
+    # the EIdentifier arm to inline `OpConstBool(value)`.
+    Dict[String, bool] bool_const_decls
+    # Module-level String constants — `const String GREETING = "hello"`.
+    # Mirrors Rust's `Constant::Str`. Read by the EIdentifier arm to inline
+    # `OpConstStr(value)` into a fresh GorgetString local.
+    Dict[String, String] string_const_decls
     # `Option[T] X = None` module consts → the const's concrete Option
     # type_id, so an EIdentifier reference emits a properly-typed `None`
     # (IEnumInit, tag 1) instead of an 8-byte OpConstUnit() — the latter is

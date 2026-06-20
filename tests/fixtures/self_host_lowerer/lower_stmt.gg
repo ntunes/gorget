@@ -1035,6 +1035,27 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                 # equivalent, mirroring the merge-jump idiom at lower.gg:4285).
                 set_terminator(&ctx, GTJump(assert_pass_bb))
                 switch_to(&ctx, assert_pass_bb)
+        case SItem(item):
+            # Function-LOCAL `const` declarations parse as
+            # `SItem(IConstDecl(ty, name, val))` (parser.gg:2802/3844). Before
+            # this arm they hit `else: lower_fail("…SItem")` and were SILENTLY
+            # DROPPED — every later reference to the const name then fell
+            # through EIdentifier to the `OpConstI64(0)` placeholder (WRONG),
+            # so `const int LOCAL = 42; print(LOCAL)` printed 0.
+            #
+            # A local const is an immutable local binding: lower its literal
+            # init to a value and bind the NAME to that local id (the same
+            # nl_put mechanism SVarDecl / SWith use). The init is always a
+            # compile-time literal/const-expr, so lower_expr handles every
+            # value kind (int/bool/float/String/char) directly. Mirrors Rust's
+            # local-const = `DefKind::Const` folded at use; here we materialize
+            # the value once and alias the name to it.
+            match item:
+                case IConstDecl(_, lc_name, lc_val):
+                    int lc_local = lower_expr(&ctx, lc_val, &gmod)
+                    nl_put(&ctx, lc_name, lc_local)
+                else:
+                    lower_fail("unhandled Item in lower_stmt SItem")
         else:
             lower_fail("unhandled in lower_stmt: " + stmt_kind(stmt))
 

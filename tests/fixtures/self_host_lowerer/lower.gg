@@ -2622,6 +2622,8 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     Vector[Option[SpannedExpr]] box_df = [None]
     fn_defaults.put("Box", !box_df)
     Dict[String, int] const_decls = {}
+    Dict[String, bool] bool_const_decls = {}
+    Dict[String, String] string_const_decls = {}
     Dict[String, int] none_decls = {}
     Dict[String, float] float_const_decls = {}
     # Module-level statics with runtime-call init (`stdout` / `stderr` /
@@ -2631,7 +2633,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     Dict[String, GirStaticInfo] statics = {}
     Dict[String, ResourceMetadata] resource_metadata = {}
     Dict[int, int] option_ref_payload = {}
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, !const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types, !option_ref_payload, [], !enum_variant_parent_idx, false, [], {}, {}, {}, {}, {}, !fn_defaults, [], [])
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, !const_decls, !bool_const_decls, !string_const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types, !option_ref_payload, [], !enum_variant_parent_idx, false, [], {}, {}, {}, {}, {}, !fn_defaults, [], [])
 
     # R11: extract the `strip-asserts` directive so the SAssert case in
     # lower_stmt can emit a no-op instead of a conditional panic. Mirrors
@@ -2772,7 +2774,19 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                             case Some(cfv):
                                 gmod.float_const_decls.put(cd_name.clone(), cfv)
                             case None:
-                                pass
+                                # Bool fallback: `const bool ENABLED = true`.
+                                Option[bool] cd_beval = eval_const_bool_expr(cd_val, &gmod)
+                                match cd_beval:
+                                    case Some(cbv):
+                                        gmod.bool_const_decls.put(cd_name.clone(), cbv)
+                                    case None:
+                                        # String fallback: `const String G = "hi"`.
+                                        Option[String] cd_seval = eval_const_string_expr(cd_val, &gmod)
+                                        match cd_seval:
+                                            case Some(csv):
+                                                gmod.string_const_decls.put(cd_name.clone(), csv)
+                                            case None:
+                                                pass
             case IStaticDecl(sd_ty, sd_name, sd_val):
                 # A `static` is MUTABLE module-level storage, NOT a `const`.
                 # A scalar-literal init (`static int x = 0`, `static float
