@@ -2818,8 +2818,40 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # String/resource call-results already use (lower.gg:7464).
             register_local_for_drop(&ctx, cdst, closure_tid, &gmod)
             return cdst
-        case EAs(inner_box, _):
-            return lower_expr(&ctx, *inner_box, &gmod)
+        case EAs(inner_box, type_box):
+            # `expr as T` — numeric scalar conversion. Lower the inner, read
+            # its GIR type, resolve the target type, and emit a GICast when
+            # BOTH endpoints are DISTINCT numeric scalars (int-family or
+            # float-family). Mirrors Rust's EAs lowering
+            # (src/ir/lowering/exprs/mod.rs:446) which emits `builder.cast`
+            # then routes to the right LIR cast op by source/target family
+            # (insts.rs:393-402).
+            #
+            # Scalar-only guard — `from_ty`/`to_ty` in [I8_TYPE, F64_TYPE]
+            # (ids 1..10) so BOTH are int- or float-family:
+            #   • int↔float / float↔float / int↔int(width) → routed (the fix).
+            #   • `int as bool` (to_ty == BOOL_TYPE = 0, outside the range) →
+            #     falls through to the no-op, preserving the truthy-by-no-op
+            #     semantics the `if (x as bool)` one-liners rely on.
+            #   • `char as int` (char is an aggregate, not a prim id) → falls
+            #     through → stays a `gg check` / cc reject like Rust.
+            #   • `"x" as String`, Ref-deref casts, same-type casts → fall
+            #     through to the existing no-op (out of scope; pre-existing).
+            int eas_loc = lower_expr(&ctx, *inner_box, &gmod)
+            int eas_from = I64_TYPE
+            if eas_loc >= 0 and eas_loc < ctx.locals.len():
+                eas_from = ctx.locals.get(eas_loc).unwrap().type_id
+            int eas_to = map_ast_type(*type_box, &gmod)
+            bool eas_from_num = eas_from >= I8_TYPE and eas_from <= F64_TYPE
+            bool eas_to_num = eas_to >= I8_TYPE and eas_to <= F64_TYPE
+            if eas_from_num and eas_to_num and eas_from != eas_to:
+                # Mint the dst with `to_ty` so the formatter renders the
+                # target type (and downstream type inference sees the cast
+                # result correctly).
+                int eas_dst = add_local(&ctx, eas_to, None)
+                emit(&ctx, GICast(eas_dst, eas_loc, eas_from, eas_to))
+                return eas_dst
+            return eas_loc
         case EMove(inner_box):
             return lower_expr(&ctx, *inner_box, &gmod)
         case EMutableBorrow(inner_box):

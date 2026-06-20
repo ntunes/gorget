@@ -4111,6 +4111,37 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
             lir_push_inst(&f, bb, IIConst(size_val, LT_I64, size_bytes))
             lir_push_inst(&f, bb, IMemcpy(dst_addr_val, src_ptr_val, size_val))
 
+        case GICast(cast_dst_local, cast_src_local, cast_from_ty, cast_to_ty):
+            # Numeric `as`-cast — load the scalar source, emit the family-
+            # appropriate LIR cast, store to the dst slot. Mirrors Rust's
+            # LIR Cast lowering (src/lir/lower/insts.rs:393-402).
+            #
+            # ENCODING (load-bearing): GICast carries GIR type ids (F32=9,
+            # F64=10), but lir_is_integer/lir_is_float operate on LIR ids
+            # (LT_F32=8, LT_F64=9). Map BOTH endpoints GIR→LIR FIRST (model
+            # the GIBinOp arm's `map_gir_type` at :3291), THEN apply the
+            # int/float family predicate uniformly. The LIR-mapped `to_ty`
+            # is also what the LIR cast op + c_type_name expect.
+            int cast_from_lir = map_gir_type(cast_from_ty, &gmod, &sr)
+            int cast_to_lir = map_gir_type(cast_to_ty, &gmod, &sr)
+            int cast_src_slot = local_to_slot.get(cast_src_local).unwrap()
+            int cast_src_slot_ty = f.slots.get(cast_src_slot).unwrap().ty
+            int cast_val = lir_fn_next_value(&f)
+            lir_push_inst(&f, bb, ISlotLoad(cast_val, cast_src_slot, cast_src_slot_ty))
+            int cast_dst = lir_fn_next_value(&f)
+            bool cast_src_float = lir_is_float(cast_from_lir)
+            bool cast_to_float = lir_is_float(cast_to_lir)
+            if cast_src_float and not cast_to_float:
+                lir_push_inst(&f, bb, IFloatToInt(cast_dst, cast_val, cast_to_lir))
+            elif cast_src_float and cast_to_float:
+                lir_push_inst(&f, bb, IFloatCast(cast_dst, cast_val, cast_to_lir))
+            elif not cast_src_float and cast_to_float:
+                lir_push_inst(&f, bb, IIntToFloat(cast_dst, cast_val, cast_to_lir))
+            else:
+                lir_push_inst(&f, bb, IIntCast(cast_dst, cast_val, cast_to_lir))
+            int cast_dst_slot = local_to_slot.get(cast_dst_local).unwrap()
+            lir_push_inst(&f, bb, ISlotStore(cast_dst_slot, cast_dst, false))
+
         case GIDerefStore(ds_ptr_local, ds_value, ds_inner_ty):
             # *ptr = value — store `value` THROUGH the pointer held in
             # `ds_ptr_local`'s slot. Used for whole-value writes to a `&`/`!`

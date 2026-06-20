@@ -187,6 +187,8 @@ String format_instruction(Instruction inst, GirModule &gmod):
             return f"        move_zero _{lid}"
         case GIDeref(dst, src, _):
             return f"        _{dst} = deref _{src}"
+        case GICast(dst, src, from_ty, to_ty):
+            return f"        _{dst} = cast {format_type_id(from_ty, &gmod)} _{src} to {format_type_id(to_ty, &gmod)}"
         case GIDerefStore(ptr, val, _):
             return f"        *_{ptr} = {format_operand(val, &gmod)}"
         case GIFieldLoad(dst, base, field):

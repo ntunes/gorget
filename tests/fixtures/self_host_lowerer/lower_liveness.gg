@@ -230,6 +230,10 @@ int liveness_inst_def(Instruction inst):
             return dst
         case GIDeref(dst, _, _):
             return dst
+        case GICast(dst, _, _, _):
+            # Numeric cast defines its dst local (fresh value, src is read).
+            # Same shape as GIDeref / GIFieldLoad.
+            return dst
         case GIDrop(_):
             return -1
         case GIDropIfAlive(_):
@@ -275,6 +279,10 @@ void liveness_inst_operand_uses(Instruction inst, Vector[bool] &acc):
             for a in args:
                 liveness_operand_uses(a, &acc)
         case GIDeref(_, src_lid, _):
+            if src_lid >= 0 and src_lid < acc.len():
+                acc.set(src_lid, true)
+        case GICast(_, src_lid, _, _):
+            # Numeric cast reads its src local (raw int, like GIDeref).
             if src_lid >= 0 and src_lid < acc.len():
                 acc.set(src_lid, true)
         # Drops / MoveZero are NOT reads — they're scope-exit side effects on the
@@ -670,6 +678,10 @@ Vector[int] liveness_inst_operand_local_ids(Instruction inst):
             for a in args:
                 out.push(liveness_operand_local_id(a))
         case GIDeref(_, src_lid, _):
+            out.push(src_lid)
+        case GICast(_, src_lid, _, _):
+            # Numeric cast: single raw-local operand-read (the src), like
+            # GIDeref. Cast types are consts, not local reads.
             out.push(src_lid)
         case GIDrop(_):
             # Drops / MoveZero are NOT operand reads — they are scope-exit

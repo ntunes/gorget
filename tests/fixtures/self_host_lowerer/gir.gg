@@ -130,6 +130,16 @@ enum Instruction:
     GIDropIfAlive(int)
     GIMoveZero(int)
     GIDeref(int, int, int)    # dst_local, src_local (ptr/Box), inner_ty_id
+    # Numeric `as`-cast — convert the scalar value in `src` to `to_ty`.
+    # Mirrors Rust's `Instruction::Cast { dst, target_type, value }`
+    # (src/ir/instructions.rs:227). `src` is a RAW LOCAL ID (the single-
+    # source-conversion shape, modelled on GIDeref above), NOT an Operand —
+    # the prim-scalar source is always a plain Copy of a local, so there is
+    # no clone/borrow mode to carry. `from_ty`/`to_ty` are GIR type ids
+    # (F32=9, F64=10); the LIR translation (lir_lower.gg `lower_instruction`)
+    # maps BOTH to LIR first, then routes to IIntCast/IFloatCast/IIntToFloat/
+    # IFloatToInt per the int/float families (mirrors insts.rs:393-402).
+    GICast(int, int, int, int)    # dst_local, src_local, from_ty_id, to_ty_id
     GINop()
     # A.1 (2026-05-22) — typed field-load. Mirrors Rust's
     # `Instruction::FieldLoad { dst, base, field }` in
