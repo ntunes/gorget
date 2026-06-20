@@ -30,7 +30,8 @@ design **deliberately and explicitly** classifies overflow, bounds, div0,
 unwrap-on-`None`, `assert`, and OOM as **panics**, by a *stated rule*:
 
 > *"Can the caller prevent this failure by writing correct code? **Yes → panic.
-> No → Result.**"* — `docs/language-design.md:1311` (§6 Panic vs Result)
+> No → Result.**"* — `docs/language-design.md:1312` (§6 Panic vs Result — heading
+> `:1295`, panic list `:1297-1303`; verified review pass 1)
 
 By that rule overflow is unambiguously a panic (the caller *can* prevent it: wider
 type, `checked_*`, `+%`). `language-design.md:191` frames overflow-panics as a
@@ -125,7 +126,25 @@ sound *given the premise* "faults are typed and live in the error channel"; it d
 not refute untyped-panic-with-supervision. This RFC *prefers* typed-and-catchable-
 by-type (so you can `catch Overflow` distinctly from `catch Bounds`), but it must
 **argue that preference on its merits, not by omission.** Open: justify typed
-faults over untyped-panic-with-supervisor recovery.
+faults over untyped-panic-with-supervisor recovery (now §9 Q14).
+
+### 3.1 Is recovering from a fault even SAFE? (the corrupted-state objection — review pass 1)
+
+The docs' objection is explicit (`book/10-errors.md:13-14`): *"continuing with
+corrupted state is worse than stopping."* The overflowing op already produced an
+undefined value — is it safe to recover and keep going? **The answer is YES, but
+ONLY because recovery is at a COARSE boundary — and that must be LOCKED IN, not
+left open.** When a fault is caught at a task/request/supervisor boundary, the
+*entire unit of work* (the request, the task) is **failed and unwound** — the
+corrupted intermediate is **discarded, never read**. That is exactly the
+Erlang/Midori "abandon the unit of work" answer (§8), and it is safe in a way that
+"`catch Overflow` *inline* and keep using the result" is **not**. So the safety
+property hangs entirely on **boundary-only catch**: §9 Q1's "catchable *anywhere*?"
+option, answered "anywhere," **resurrects the exact footgun the docs warn against**
+(recover mid-computation, keep using the corrupted value). **Design invariant:
+faults are catchable ONLY at a declared coarse boundary that discards-and-unwinds
+the unit of work — never inline.** This is no longer an open toss-up; Q1 is updated
+to carry it as the safety-preserving constraint.
 
 ## 4. The two kinds, side by side
 
@@ -163,7 +182,8 @@ The two kinds have opposite access profiles, so they should lower differently:
 
 - **Contract errors** — frequent-enough-to-handle, locally caught → a **value-union
   return** (Zig `!T`): explicit, cheap, threaded through the value channel. Catching
-  is a branch you wrote on purpose.
+  is a branch you wrote on purpose. (In Gorget today this leg ALREADY exists — it is
+  the existing `Result`-tagged-enum return, not a new shape.)
 - **Faults** — rare to actually fire, recovered only at coarse boundaries → an
   **unwind/abort path**. The common (no-fault) path does **not** thread a fault
   value through every call, so it stays branch-free of error-union plumbing; the
@@ -237,11 +257,23 @@ making `throws` universal-and-meaningless.
 - **Rust** — overflow-checks debug-only, defined wrapping in release; `checked_*` /
   `wrapping_*` / `saturating_*` for explicit intent. Motivates the §6 "fast" knob.
 
+**⚠ Honest tension (review pass 1):** the two strongest precedents here — **Zig and
+Midori — have UNTYPED faults** (Zig's overflow is a panic, not an `error{}` member;
+Midori's bugs are untyped abandonment). They robustly support *"faults are not
+contract errors"* (the split, which this RFC has) but they lean *away* from *"faults
+are typed and catchable-by-type"* (which this RFC prefers, §9 Q14). Do not cite them
+as if they back typed faults — they are evidence for the untyped-panic alternative
+the RFC must argue against.
+
 ## 9. Open questions (for the scout/brief, before any implementation)
 
-1. **Fault catch syntax & scope.** Catchable *anywhere*, or only at declared
-   task/request/`supervisor` boundaries? What's the spelling (`catch Overflow:` at a
-   boundary block)? How does it relate to Gorget's existing postfix `catch`?
+1. **Fault catch syntax & scope — LEANS boundary-only (review pass 1, §3.1).**
+   Faults are catchable ONLY at a declared coarse boundary that discards-and-unwinds
+   the unit of work — NOT inline/anywhere (anywhere-catch resurrects the corrupted-
+   state footgun, `book/10-errors.md:13-14`). The boundary-only constraint is now a
+   design INVARIANT, not an open toss-up. Still open: the *spelling* (`catch Overflow:`
+   at a boundary block) and how it relates to the existing postfix `catch` (which is
+   for *contract* errors).
 2. **The "fast" tension** (§6) — debug-checked/release-wrapping vs checked-always;
    the type-vs-runtime-promise reconciliation. **LOAD-BEARING, not a minor knob:**
    it determines whether `catch Overflow` is even *meaningful* — if release wraps
@@ -258,8 +290,8 @@ making `throws` universal-and-meaningless.
    today's explicit `throws E` becomes the *declared* form of the inferred contract
    channel; `Result[T,E]` stays the reified value.) Reconcile, don't duplicate.
 7. **Which runtime conditions are faults vs contract — AND reconcile the existing
-   rule.** ⚠ The docs ALREADY answer this, the *opposite* way: `language-design.md:1311`
-   ("caller can prevent → panic") + the §6 panic list classify overflow/bounds/div0/
+   rule.** ⚠ The docs ALREADY answer this, the *opposite* way: `language-design.md:1312`
+   ("caller can prevent → panic") + the §6 panic list (`:1297-1303`) classify overflow/bounds/div0/
    unwrap/assert/OOM as PANIC. So this is not "enumerate the set" — it's "we are
    *reversing* a documented, rule-backed decision; justify it and rewrite
    `language-design.md` §2.2+§6 and `book/10-errors.md`." See **§0.5** (the #1 item).
@@ -279,6 +311,32 @@ making `throws` universal-and-meaningless.
     production panic is `exit(1)`; fault-recovery needs new per-task setjmp/longjmp +
     drop-unwind in BOTH schedulers + fault-value threading out of `join`. Likely the
     largest single implementation item — size it explicitly, don't hand-wave it.
+11. **Compile-time / `meta` / const-eval overflow (review pass 1 — a real divergence).**
+    Const-eval arithmetic currently **wraps silently** (`src/semantic/meta.rs:1278-1280`,
+    `wrapping_add`/`sub`/`mul`). If runtime overflow becomes a recoverable fault, the
+    RFC creates a THREE-way split (compile-time wraps / debug-runtime faults /
+    release-runtime wraps per §6) with no story — and a fault cannot "recover at a
+    boundary" at compile time (there is no boundary). Decide: does `meta` overflow
+    become a compile error, wrap, or stay as-is?
+12. **`rethrow` / `on error` under the inferred channel (review pass 1).** Both are
+    compile-errors today *unless the fn is declared `throws`* (`language-reference.md:2439,2518`).
+    With the contract channel INFERRED (not declared), that rule must be redefined in
+    terms of the inferred channel. And: do `on error` cleanup blocks (errdefer-shaped)
+    run on a **fault** unwind, or only a **contract**-error unwind? Collides with Q9
+    (drop/CoW correctness) — answer them together.
+13. **`Never`-default inference across generics/trait methods (review pass 1).** A
+    generic fn calling a type-parameter's method whose fault/contract set is unknown
+    pre-monomorphization has an unknown inferred channel → forces an effect-carrying
+    BOUND. This is the *same* "Seam B" the cast RFC hit (`cast-via-construction.md` §7.4),
+    inherited for the WHOLE error channel. Spec the bound.
+14. **Typed faults vs untyped-panic-with-supervisor — the CENTRAL unargued premise
+    (review pass 1, promoted from §3).** The RFC *prefers* typed-catchable-by-type
+    faults (`catch Overflow` distinct from `catch Bounds`) over the simpler Erlang/
+    Midori untyped-panic-with-supervisor model — but §3 only *asserts* this, and the
+    RFC's OWN §8 precedents (Zig/Midori faults are *untyped*) cut AGAINST the typed
+    preference. This choice decides whether half the RFC's machinery (fault
+    classification metadata, `catch`-by-type) even exists. Argue it on merits, or
+    adopt untyped-panic-with-supervisor.
 
 ## 10. Bottom line
 
