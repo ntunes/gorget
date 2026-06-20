@@ -334,13 +334,18 @@ for the owner (below).**
 1. **Overflow → THROW (recoverable), not panic, not saturate.** A narrowing
    `T(x)` overflow throws `CastError(Overflow)`; the user can recover. This moves
    Gorget OFF the strict overflow-panics stance (`language-design.md:191/1298`).
-   ⚠ **OPEN SUB-DECISION (scope):** should *arithmetic* overflow (`a + b`, `a*b`)
-   ALSO become a recoverable throw (the consistent answer — else "why does
-   `byte(x)` throw while `a+b` panics?"), or stays panic? The general intent
-   ("overflow should be recoverable") points to YES, but arithmetic-overflow→throw
-   is a much bigger migration (every arith op potentially-throwing, `throws`
-   ripples widely). Recorded for the cast: **conversion overflow throws.** Confirm
-   the arithmetic-overflow scope separately.
+   ⚠ **OPEN SUB-DECISION (scope) → now has its own doc:
+   [`error-model.md`](error-model.md).** Should *arithmetic* overflow (`a + b`)
+   also be recoverable? **Resolution under the error model: YES, but as a FAULT,
+   not a contract error.** `byte(x)` is a **contract error** (validating external
+   data → typed, mandatory-handle, on the API surface); `a + b` overflow is a
+   **fault** (a bug/wrong-width → typed, auto-propagate, recover at a task/request
+   boundary, OFF the API surface, default-abort). Both recoverable, both typed;
+   they differ by KIND, not by an arbitrary panic-vs-throw split. This dissolves
+   "why does `byte(x)` throw while `a+b` panics?" — see `error-model.md` §3 (the
+   impossibility argument: recoverable-default-overflow + informative-row +
+   universal-typed = pick two) and §7. Recorded for the cast: **conversion
+   overflow throws (contract error).**
 2. **Constructor mechanism → option (c): `T(x)` is the SURFACE; the conversion
    dispatch survives UNDER THE HOOD** (the `From` registry + `is_safe_integer_widening`).
    A 1-arg ctor `Self(T)` auto-registers the internal "from T" (no user-written
