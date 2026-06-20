@@ -250,3 +250,99 @@ no-op stub emitting garbage today). Two coherent paths:
 
 Owner's call. (The const-read parity track is independent and proceeds
 regardless.)
+
+## 7. Doc-consistency review (2026-06-20)
+
+Three read-only reviewers checked this RFC against `language-design.md`,
+`docs/book/`, and `docs/devbook/` + the actual `src/` internals
+(`a88a07ca` / `ab22c7ab` / `a02477f7`). Verdict: **directionally sound — the
+philosophy fits and the backbone exists — but it is a LARGER change than §6
+implied, three premises were inaccurate, and there are 3 genuine design FORKS
+for the owner (below).**
+
+### 7.1 Confirmed sound (no change)
+- **Philosophy fit is excellent.** "No silent narrowing / explicit conversion"
+  is already the docs' voice (`language-design.md:43/48/401/471`,
+  `book/02-types.md:132`, `book/09-option-result.md:47-87`). Removing silent-lossy
+  `as` *strengthens* a value the docs already preach.
+- **The type-level-failability BACKBONE already exists, layering-clean.**
+  `is_safe_integer_widening` (`src/semantic/typecheck.rs:159-181`) decides
+  widening-vs-narrowing from the `(src,tgt)` PrimitiveType pair as typed metadata
+  (not name-matching) — this is exactly what should drive throws-ness. Use it.
+- **The interim EAs (#1) machinery is genuinely reusable.** `int(x)`/`byte(x)`
+  constructors lower through the same LIR cast ops (`IntCast`/`FloatCast`/
+  `FloatToInt`/`IntToFloat`, `src/lir/lower/insts.rs:213-407`) that `Expr::As`/
+  `Instruction::Cast` and the existing `int(x)` builtin both emit. Only the
+  `as`-syntax hookup is interim; ideally unify `int(x)` onto `Instruction::Cast`
+  (retiring the name-matched `emit_name=="int"` LIR special-case, `insts.rs:3896`).
+- **Named args + flavor names are clear.** `clamping`/`truncating`/`rounding`/
+  `bits` clash with no keyword and don't trip "once named, rest named". `bits`
+  is even a live param name today.
+- **`@derive(From)` → ctor is a small refactor** — `src/semantic/derive.rs:674`
+  already generates `T from(U v): return T(v)`; the body IS the ctor call.
+
+### 7.2 Corrections to APPLY (not forks — clear fixes for when this is implemented)
+- **Scope the `as` removal to the CAST `as_expr` only.** `as` is a reserved
+  KEYWORD with live non-cast uses that MUST stay: `with X as Y` (the `with`-form
+  disambiguator, `language-reference.md:1354`), `import X as Y` (`:841`), and the
+  unsafe pointer/Ref reinterpret `raw_pointer as int&` (`language-design.md:1779`).
+  "Remove `as` entirely" read literally breaks all three. Decide the unsafe-ptr
+  cast separately (keep raw-cast / `bits=` reinterpret / leave in `unsafe`).
+- **Drop `catch byte(x)` → use TYPED-DESTINATION capture.** Gorget's `catch` is a
+  POSTFIX recovery operator yielding the success type (`book/10-errors.md:169`),
+  NOT a prefix → `Result`. The existing idiom for "capture as Result" is a typed
+  destination: `Result[byte, CastError] r = byte(x)` (`book/10-errors.md:105`).
+  Use it; `.ok()` (Result→Option) doesn't exist today — specify it or rely on the
+  typed dest + match.
+- **`Into` deletion is a NO-OP; `Numeric` "stays" = no work.** `Into` is not
+  implemented (not in the trait registry, zero `.into()` call-sites) — only the
+  `language-design.md` text (`:848/874/944`) mentions it; fix those. `Numeric`
+  ALREADY exists (`src/semantic/traits.rs:413/816`) — it's in the book but NOT
+  language-design's registry §40.3, so ADD it there (don't "keep" it).
+- **Preserve `!` (move) on conversion ctors.** Today's `AppError from(IoError !e)`
+  MOVES; the RFC's bare `AppError(IoError e)` would CLONE under CoW. Write `!e`.
+- **Reconcile `Parseable`** — the built-in, NEVER-panics `String→numeric`
+  (`language-reference.md:2935`, `Option`-returning) is the documented String path
+  alongside `int.parse`/`parse_int`. `int(String) throws CastError(Parse)` makes a
+  THIRD spelling; fold/relate them (the RFC's "one mechanism" goal demands it).
+- **The error-widening rewire is TWO layers, not one** — typecheck keys on the
+  `From` trait def-id (`lookup_from_conversion`, `typecheck.rs:4493`) AND lowering
+  resolves by name-matching the `_for_<E>__from` symbol suffix (`exprs/mod.rs:3092`,
+  a layering-rule smell). BOTH move to constructor resolution. (Confirms the
+  From-based auto-widening IS real in the compiler; the book just never teaches it
+  — add a book section.)
+- **The const-narrowing compile-check (`byte(300)`→error) is NEW logic**, not free
+  `meta` — no existing const-evaluator rejects an out-of-range narrowing literal.
+  Frame it as an extension.
+- **Numeric `T(x)` is REJECTED today for most types.** `typecheck.rs:1391-1422`
+  emits `UnloweredBuiltinCall` for `byte`/`int8..64`/`uint*`/`float32/64`/`str` —
+  only `int`/`float`/`bool` lower (and only to I64/F64/Bool, no narrowing emit).
+  §6.2 is a from-scratch fallible-conversion subsystem, not a tweak.
+
+### 7.3 OPEN FORKS — owner decisions before implementing
+1. **Overflow on narrowing: panic vs throw vs (current) saturate?** THREE behaviors
+   are in tension: today the cast OPS **saturate** (Rust-`as`: NaN→0, clamp;
+   `c_lir/mod.rs:2631`), the docs say integer overflow **panics**
+   (`language-design.md:191/1298`, rule "caller could prevent → panic", `:1312`),
+   and this RFC says **throw** `CastError`. Pick one, and reconcile with the
+   arithmetic-overflow rule (why would `byte(x)` throw while `a + b` panics?).
+2. **The constructor mechanism for throwing/overloaded conversions.** It does NOT
+   exist: `T(args)` is a body-less `Expr::StructLiteral` (`semantic/mod.rs:272`)
+   with no return slot, no effect channel, field-count-only checks; `throws` lives
+   only on `FunctionDef`; there is NO constructor overloading by arg type. So
+   "ctor returns `Self` and throws `CastError`" + "widening ctor non-throws,
+   narrowing throws" needs one of: (a) constructors gain a real function form with
+   an effect slot + overload resolution (big new feature); (b) numeric conversions
+   are real `throws` *functions* merely SPELLED `T(x)` (typecheck/resolution
+   change, not StructLiteral); or (c) `T(x)` stays sugar over a conversion TRAIT
+   that survives under the hood (reuses `From`/`is_safe_integer_widening`; least
+   new machinery, but doesn't fully "delete the trait"). This is the central call.
+3. **`str(x)`: re-open, or keep rejected?** "`T(x)` is the sole conversion
+   spelling" reverses the standing OWNER DECISION 2026-06-10 that `str(x)` is
+   rejected (f-strings / `.display()` are THE String conversion, one-obvious-way).
+   Keep that carve-out, or reverse it?
+
+**Bottom line:** the design is worth doing and the backbone (O1) + interim
+machinery are real, but §6 under-scopes it (from-scratch fallible-conversion
+subsystem + a new constructor-effect/overload facility), and forks 1–3 need owner
+calls before a scout/brief. Until then this stays a DRAFT.
