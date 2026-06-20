@@ -3423,6 +3423,16 @@ String emit_field_store(String target_v, int struct_id, int field, int value, Li
     if lir_is_aggregate(field_ty):
         String ft_name = c_type_name(field_ty, &sn)
         return "memcpy(&" + lval + ", " + v(value) + ", sizeof(" + ft_name + "));"
+    # Pointer field with aggregate value: this is the `Ref[T]` field case.
+    # `Ref[T]` lowers to `void*` in the struct layout; the constructor receives
+    # the borrowed aggregate (a Set, Vector, etc.) by value. We need to store
+    # the ADDRESS of the aggregate into the void* field, not memcpy it.
+    # Mirrors Rust: `(SetIter*)target->source = (void*)&__s_local`.
+    # Must come BEFORE the generic aggregate-vty arm below which would emit
+    # `memcpy(&field, &value, sizeof(GorgetSet))` — writing 184 bytes into
+    # an 8-byte void* slot, corrupting stack memory.
+    if (field_ty == LT_PTR or (field_ty >= LT_PTR_TO_BASE and field_ty < LT_STRUCT_BASE)) and lir_is_aggregate(vty):
+        return lval + " = (void*)&" + v(value) + ";"
     # Aggregate value but scalar/ptr field (rare — usually means the
     # self-host lost type info). Write zeros to keep cc happy.
     if lir_is_aggregate(vty):

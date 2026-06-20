@@ -4043,6 +4043,14 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             FunctionDef tmpl = fn_templates.get(fn_key).unwrap()
             # Monomorphized generics use bare names (no module prefix)
             lower_generic_function(tmpl, inst.mangled_name, tmpl.type_params, inst.type_args, &gmod)
+        elif gmod.call_redirects.contains(inst.base_name):
+            # Generic extern alias: `extern int __set_iter_order_len[T](...) = "gorget_map_iter_order_len"`.
+            # The redirect maps base-name → C-symbol; propagate that mapping to the MANGLED call
+            # name so lir_lower/map_runtime_name can translate it at the call site.
+            # Mirrors Rust gg's extern_bindings propagation (src/ir/lowering/mod.rs:925-948):
+            # every monomorphized instance of a generic extern fn maps mangled→c_symbol.
+            String c_sym = gmod.call_redirects.get(inst.base_name).unwrap()
+            gmod.call_redirects.put(inst.mangled_name.clone(), c_sym.clone())
 
     # Emit monomorphized generic equip blocks for discovered type instances
     for einst in generic_instances:

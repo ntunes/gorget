@@ -696,6 +696,17 @@ int resolve_field_lir_type(String type_name, Dict[String, int] &sr):
         return LT_BOOL
     elif type_name == "void":
         return LT_VOID
+    # Ref[T] monomorphs (`Ref__T_mangled`) are borrow pointers — always void*.
+    # The GIR represents them as GtNamed("Ref__T") because map_ast_type
+    # falls into the TNamed arm for TNamed("Ref",[T]) rather than GtPtr.
+    # Regardless, the ABI is a raw pointer (the runtime never allocates a
+    # Ref struct; the value IS the address). Return LT_PTR so field defs,
+    # Option/Result payload slots, and out-param copies all emit `void*`
+    # rather than the 1-byte placeholder struct `{ char __pad; }` that
+    # Pass 1 registers when Ref__T appears in the type table.
+    # Mirrors Rust lir_lower which routes GtPtr/GtMutPtr to LT_PTR.
+    if type_name.starts_with("Ref__"):
+        return LT_PTR
     # Named types — look up in struct registry
     int sid = sr.get(type_name).unwrap_or(-1)
     if sid >= 0:
@@ -1089,6 +1100,12 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
                         opt_is_borrow = true
                     case GtMutPtr(_):
                         opt_is_borrow = true
+                    case GtNamed(ref_name):
+                        # Ref[T] monomorphs appear as GtNamed("Ref__T") (not GtPtr)
+                        # because map_ast_type routes TNamed("Ref",[T]) via the
+                        # generic-mangle path. They are borrow pointers (no drop).
+                        if ref_name.starts_with("Ref__"):
+                            opt_is_borrow = true
                     else:
                         pass
             Vector[StructField] ofields = []
@@ -1135,6 +1152,9 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
                         res_ok_borrow = true
                     case GtMutPtr(_):
                         res_ok_borrow = true
+                    case GtNamed(ok_ref_name):
+                        if ok_ref_name.starts_with("Ref__"):
+                            res_ok_borrow = true
                     else:
                         pass
             if pec.err_type >= 0 and pec.err_type < gmod.type_table.len():
@@ -1143,6 +1163,9 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
                         res_err_borrow = true
                     case GtMutPtr(_):
                         res_err_borrow = true
+                    case GtNamed(err_ref_name):
+                        if err_ref_name.starts_with("Ref__"):
+                            res_err_borrow = true
                     else:
                         pass
             if ok_name != "":
@@ -1279,6 +1302,16 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
 # ── Runtime function name mapping ───────────────────────────
 
 String map_runtime_name(String name, LirModule &m, GirModule &gmod):
+    # Generic-extern binding propagation: lower.gg propagates mangled→c_symbol for
+    # instances of generic extern fns (e.g. `__set_iter_order_len__int64_t →
+    # gorget_map_iter_order_len`), mirroring Rust's extern_bindings pass.
+    # Only use entries that resolve to a C runtime symbol (starts with `gorget_`
+    # or `__gorget_`) — not Gorget-to-Gorget module redirects (those are resolved
+    # by lower.gg's fn-template lookup before lir_lower runs).
+    if gmod.call_redirects.contains(name):
+        String ext_redir = gmod.call_redirects.get(name).unwrap_or("")
+        if ext_redir.starts_with("gorget_") or ext_redir.starts_with("__gorget_"):
+            return ext_redir
     # Hardcoded aliases for extern-method stubs whose method name carries
     # the File/stream receiver type (lost to `int64_t__` fallback when the
     # self-host type inference can't keep the receiver as a named type).
@@ -2235,6 +2268,10 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
             return true
         if fn_name == "gorget_set_clone" or fn_name == "gorget_set_is_empty":
             return true
+        # Drain accessor: `gorget_set_drain_entry(const void* s, idx, void* out)`
+        # arg 0 (s) is the Set by const pointer — same ABI as iter accessors.
+        if fn_name == "gorget_set_drain_entry":
+            return true
         # `gorget_bytes_to_str(const GorgetArray* arr)` — reads a Vector[byte]
         # by const pointer (`__bytes_to_str_raw` / `.to_str()` on a byte
         # buffer). Without this, the array self-arg is passed by value and cc
@@ -2278,6 +2315,11 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
     if fn_name == "gorget_map_iter_key" and arg_idx == 2:
         return true
     if fn_name == "gorget_map_iter_value" and arg_idx == 2:
+        return true
+    # Drain accessor: arg 2 is `void* out_key` written by the callee (output slot).
+    # Must be passed as ISlotAddr so the callee can write the drained key into the slot.
+    # Mirrors gorget_map_iter_key/value arg 2 — same by-address out-param ABI.
+    if fn_name == "gorget_set_drain_entry" and arg_idx == 2:
         return true
     if fn_name == "gorget_array_contains" and arg_idx == 1:
         return true
@@ -2335,6 +2377,9 @@ bool out_param_arg(String fn_name, int arg_idx):
     if fn_name == "gorget_map_iter_key" and arg_idx == 2:
         return true
     if fn_name == "gorget_map_iter_value" and arg_idx == 2:
+        return true
+    # Drain accessor: arg 2 is `void* out_key` written by the callee.
+    if fn_name == "gorget_set_drain_entry" and arg_idx == 2:
         return true
     return false
 
