@@ -206,8 +206,9 @@ A **both-compilers, language-surface** change (Rust gg + self-host + spec + book
 + negative fixtures), staged:
 
 1. **Spec first** (this doc → `docs/language-design.md` + `docs/book` once
-   settled). Ratify §5.1 (resolved) and the §5.2 elision-precision spec — they
-   gate the ergonomics.
+   settled). The design knobs are now resolved; the remaining spec work is the
+   per-type-pair widening/narrowing table + the `CastError` enum + the
+   constant-narrowing compile-check rule.
 2. **Numeric constructors (widening = non-`throws`, narrowing = `throws`) +
    flavors + `CastError`** in both compilers, with constant-narrowing checked at
    compile time (`meta`). No new value-flow analysis.
@@ -229,8 +230,12 @@ no-op stub emitting garbage today). Two coherent paths:
   `as` (+3 parity, removes garbage), and treat this RFC as the replacement. Risk:
   briefly cements the silent-lossy behavior we plan to retire.
 - **Direct (B):** skip the truncate fix; start §6.2/§6.3 — numeric constructors
-  with throw-elision + reject lossy `as` — in both compilers. Bigger, but it's
-  the reference-grade target and avoids shipping-then-reverting.
+  (widening = non-`throws`, narrowing = `throws` + `CastError`) and remove `as` —
+  in both compilers. Bigger, but it's the reference-grade target and avoids
+  shipping-then-reverting. (Note: the cast-EMISSION machinery the interim fix
+  builds — GIR `GICast` → the existing LIR int/float cast ops — is exactly what
+  the `int(x)`/`byte(x)` constructors lower through, so it is reusable either way;
+  only the `as`-syntax hookup is interim.)
 
 Owner's call. (The const-read parity track is independent and proceeds
 regardless.)
