@@ -6,6 +6,13 @@
 > scout → brief → ≥3 fresh reviews cycle before any code moves. Companion to
 > [`cast-via-construction.md`](cast-via-construction.md) — conversion-overflow and
 > arithmetic-overflow are the two worked examples that fall out of this model.
+>
+> **Scout pass 1 complete (2026-06-20):** premises P1–P8 verified against current
+> source (overflow DOES panic today; `throws` is sugar for `Result`; the
+> `From`-widening machinery is real; precedents all accurate). Two findings folded
+> below: **§0.5** — this RFC *reverses a documented, rule-backed safety decision*
+> (`language-design.md:1311`), the #1 blocking item; and **§6 reality-check** —
+> the fault-unwind leg is greenfield (production panic = `exit(1)`), not reuse.
 
 ## 0. The question that spawned this
 
@@ -15,6 +22,32 @@ hard-panic — and if so, how, without taxing every function?* Owner's deeper pr
 *would it be that bad to give EVERY function a typed error channel (like every
 function having `stdout` + `stderr`, both typed) — most throwing `Never`, but
 auto-propagating?* This doc answers both, and the answer is one model.
+
+## 0.5 ⚠ THIS REVERSES A DOCUMENTED, RULE-BACKED DECISION (scout-verified 2026-06-20)
+
+The single most important caveat — the doc must not bury it. The existing language
+design **deliberately and explicitly** classifies overflow, bounds, div0,
+unwrap-on-`None`, `assert`, and OOM as **panics**, by a *stated rule*:
+
+> *"Can the caller prevent this failure by writing correct code? **Yes → panic.
+> No → Result.**"* — `docs/language-design.md:1311` (§6 Panic vs Result)
+
+By that rule overflow is unambiguously a panic (the caller *can* prevent it: wider
+type, `checked_*`, `+%`). `language-design.md:191` frames overflow-panics as a
+safety stance ("catches bugs that silently corrupt data in C/Go");
+`book/10-errors.md:6-14` teaches users that overflow/bounds/unwrap "**panic
+immediately, because continuing with corrupted state is worse than stopping**" —
+which is *exactly* the "recover-and-keep-serving" this RFC proposes for faults.
+
+So this RFC does not merely *add* a fault kind — **it overturns a deliberate,
+documented, implemented-with-a-flag (`--overflow=wrap/checked`, `main.rs:2456`)
+design decision.** That reversal must be argued on its merits, and the docs
+(`language-design.md` §2.2 + §6, `book/10-errors.md`) rewritten as part of the
+work. It cannot be slipped in as "just a classification." This is the scout's #1
+reservation and it gates a brief. (The owner *has* signalled the intent — "early
+gorget was very strict on overflow; the user should be able to recover" — so the
+reversal may well be wanted; the point is it must be made *explicitly*, rule and
+docs and all, not by omission.)
 
 ## 1. Vocabulary (read first — there are TWO axes, don't conflate them)
 
@@ -82,6 +115,18 @@ so it does not impose handling and is off the compat surface, leaving the
 informative contract row sparse (goal #2). Recoverable-but-not-contract is exactly
 what "fault kind" means.
 
+**One alternative the argument must NOT define out (scout):** "faults stay
+*untyped panics*, recovered only at a coarse process/task boundary" — the
+Erlang/Midori model §8 cites approvingly — *also* satisfies "recoverable overflow"
+without a typed channel at all, and is arguably **simpler** (no second "kind," no
+`catch`-by-type, no classification metadata, and it's closer to what the runtime
+can almost do — test-mode already longjmps panics). The impossibility argument is
+sound *given the premise* "faults are typed and live in the error channel"; it does
+not refute untyped-panic-with-supervision. This RFC *prefers* typed-and-catchable-
+by-type (so you can `catch Overflow` distinctly from `catch Bounds`), but it must
+**argue that preference on its merits, not by omission.** Open: justify typed
+faults over untyped-panic-with-supervisor recovery.
+
 ## 4. The two kinds, side by side
 
 | | **Contract error** | **Fault** |
@@ -123,6 +168,23 @@ The two kinds have opposite access profiles, so they should lower differently:
   **unwind/abort path**. The common (no-fault) path does **not** thread a fault
   value through every call, so it stays branch-free of error-union plumbing; the
   unwind only runs when a fault actually fires.
+
+**⚠ Reality check (scout-verified 2026-06-20): the fault-unwind leg is GREENFIELD,
+not reuse.** The *contract* leg already matches the runtime — `throws` lowers to a
+`Result`-value return + the `Result→T` auto-prop hook
+(`src/ir/lowering/exprs/mod.rs:44-62`) + early `Error(val)` return
+(`stmts/mod.rs:2380`). But production **panic = `exit(1)`**
+(`src/backend/c/runtime/panic_normal.c:3-9`); overflow/bounds/div0 all hard-abort
+(`calls.rs:81` `Overflow::Trap`; `runtime_array.c:31`; `c_lir/mod.rs:2476`). A
+setjmp/longjmp substrate exists (`runtime_error.c`: `__gorget_jmp_stack`,
+`GORGET_TRY`) but is **gated to test/`throws` mode and wired to neither panics nor
+`Task`/`TaskGroup`** (`task_group_runtime.c:60`; both schedulers `exit(1)` on a
+task panic). So delivering "recover a fault at a boundary" requires NEW
+infrastructure: (a) make `gorget_panic` longjmp (not `exit(1)`) for fault-typed
+panics; (b) install per-task setjmp frames in the inline *and* pool schedulers;
+(c) run drop/cleanup unwinding across the longjmp (§9 Q9); (d) thread the fault
+value out of `join`. Plausibly the single largest implementation item in the RFC —
+§9 Q10 tracks it; do not let the one-liner above stand in for it.
 
 **Caveat (honest):** the unwind lowering makes *propagation* cheap, but the
 overflow *check* itself is still per-op and still inhibits auto-vectorization. So
@@ -181,7 +243,9 @@ making `throws` universal-and-meaningless.
    task/request/`supervisor` boundaries? What's the spelling (`catch Overflow:` at a
    boundary block)? How does it relate to Gorget's existing postfix `catch`?
 2. **The "fast" tension** (§6) — debug-checked/release-wrapping vs checked-always;
-   the type-vs-runtime-promise reconciliation.
+   the type-vs-runtime-promise reconciliation. **LOAD-BEARING, not a minor knob:**
+   it determines whether `catch Overflow` is even *meaningful* — if release wraps
+   (`--overflow=wrap`) but the type says "may fault Overflow," the type lies.
 3. **How `fault` is declared** on an error type — a marker on the enum/type decl
    (typed metadata, never name-matching), so the classification is read via an
    accessor, not a name list.
@@ -193,12 +257,28 @@ making `throws` universal-and-meaningless.
    thing* as today's `Result`/`throws`, or a generalization? (Almost certainly:
    today's explicit `throws E` becomes the *declared* form of the inferred contract
    channel; `Result[T,E]` stays the reified value.) Reconcile, don't duplicate.
-7. **Which runtime conditions are faults vs contract** — overflow/bounds/div0/OOM =
-   fault is clear; what about `None.unwrap()`, explicit `assert`, allocation failure
-   in a no-abort context? Enumerate the full set.
-8. **Migration / blast radius** — this touches the whole language. Staged plan,
-   guards (`tests/lints.rs`), and a parity story for the self-host (which is
-   wall-to-wall arithmetic) before committing.
+7. **Which runtime conditions are faults vs contract — AND reconcile the existing
+   rule.** ⚠ The docs ALREADY answer this, the *opposite* way: `language-design.md:1311`
+   ("caller can prevent → panic") + the §6 panic list classify overflow/bounds/div0/
+   unwrap/assert/OOM as PANIC. So this is not "enumerate the set" — it's "we are
+   *reversing* a documented, rule-backed decision; justify it and rewrite
+   `language-design.md` §2.2+§6 and `book/10-errors.md`." See **§0.5** (the #1 item).
+8. **Migration / blast radius — the GATING item, not the last bullet.** Touches the
+   whole language. The self-host is **95 arithmetic-dense `.gg` files** +
+   `bootstrap_fixed_point`, which must re-converge through any fault-lowering — the
+   load-bearing validation and the top risk. The new error-channel/inference pass
+   lands in BOTH Rust gg and the self-host's own typechecker. Staged plan + guards
+   (`tests/lints.rs`) + the self-host parity story come BEFORE any code.
+9. **Drop/CoW correctness across a fault unwind (scout).** Gorget's ownership model
+   (drop insertion, `MoveZero`, `on error` cleanup, CoW) assumes normal return or
+   `exit(1)`. A longjmp-based fault unwind that *continues execution* must run drops
+   correctly for every live owned value across the unwound frames; the cleanup-stack
+   is test-only today (`panic_test.c`). Collides with the CLAUDE.md ownership
+   invariants — needs a design before any code.
+10. **The fault-unwind infrastructure cost (scout).** See §6 reality-check:
+    production panic is `exit(1)`; fault-recovery needs new per-task setjmp/longjmp +
+    drop-unwind in BOTH schedulers + fault-value threading out of `join`. Likely the
+    largest single implementation item — size it explicitly, don't hand-wave it.
 
 ## 10. Bottom line
 
