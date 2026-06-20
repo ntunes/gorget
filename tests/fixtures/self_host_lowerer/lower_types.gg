@@ -1266,21 +1266,93 @@ void register_scalar_static(GirModule &gmod, SpannedType sd_ty, String sd_name, 
     String lit = scalar_static_c_literal(sd_val)
     static_put_bytes(&gmod, sd_name, lit, ty_id)
 
-# Build the `gorget_array_new(...)` / `gorget_dict_new[_str](...)` C init
-# expr for a collection-CONSTRUCTOR static (case 2). The element C-type
-# names come from the DECLARED type's args (Rust's `generic_elem_c_type`
-# reads `ty`, not the call). Returns "" if the declared type isn't a
-# recognised collection — the caller then falls through (a non-collection
-# constructor static is not handled by this path).
+# Spell the C type name used as the `sizeof(...)` element-size operand of
+# a runtime collection constructor (`gorget_dict_new(sizeof(K), sizeof(V))`,
+# `gorget_array_new(sizeof(E))`). The surface arg type is NOT always a
+# declared C type:
+#   - a NESTED COLLECTION value (`Dict[int, Vector[int]]`'s `Vector[int]`,
+#     `Dict[int, Set[int]]`'s `Set[int]`) decays to its runtime HANDLE
+#     struct (`GorgetArray`/`GorgetMap`/`GorgetSet`), read from the typed
+#     `ResourceMetadata.runtime_name` via the resolved CollectionKind — NOT
+#     a name-prefix test (layering discipline). A bare `sizeof(Vector)` /
+#     `sizeof(Set)` is an undeclared C type (cc error on C, size-8
+#     truncation on LLVM).
+#   - a USER-STRUCT value (`Dict[int, Point]`'s `Point`) must be spelled
+#     `__gg_<name>` HERE: this function builds a verbatim GIR-level init
+#     string that BYPASSES the later `build_struct_names` `__gg_` prefixing
+#     pass (`lir_codegen.gg:260`), so a bare `sizeof(Point)` is undeclared.
+#   - everything else (primitives, GorgetString) routes through
+#     `type_to_c_name`, which already spells the declared C type.
+# Mirrors Rust's `collection_arg_sizeof_c_type` (`src/ir/lowering/mod.rs:2913`,
+# reads `BuiltinTypeProtocol.collection_kind`); the user-struct `__gg_`
+# spelling mirrors the C-emit `Sizeof` remap (`src/backend/c_lir/mod.rs:193`).
+String collection_arg_sizeof_c_type(SpannedType arg_ty, GirModule &gmod):
+    match arg_ty.ty:
+        case TNamed(name, _):
+            # Nested-collection value → runtime handle struct (typed).
+            CollectionKind vkind = collection_kind_of(&gmod, name + "__")
+            match vkind:
+                case CkNotCollection():
+                    # User-struct value → spell `__gg_<name>` directly (this
+                    # fn bypasses the `build_struct_names` prefixing pass).
+                    if gmod.type_infos.contains(name):
+                        return "__gg_" + name
+                else:
+                    match resource_meta_for(&gmod, name + "__"):
+                        case Some(rm):
+                            return rm.runtime_name
+                        case None:
+                            pass
+        else:
+            pass
+    # Primitives / GorgetString / fallthrough.
+    return type_to_c_name(arg_ty, &gmod)
+
+# Build the `gorget_array_new(...)` / `gorget_ordered_set_new[_str](...)` /
+# `gorget_set_new[_str](...)` / `gorget_dict_new[_str](...)` C init expr for
+# a collection-CONSTRUCTOR static (case 2). The element C-type names come
+# from the DECLARED type's args (Rust's `eval_static_init` reads `ty`, not
+# the call). Returns "" if the declared type isn't a recognised collection
+# — the caller then falls through (a non-collection constructor static is
+# not handled by this path).
+#
+# The Set/HashSet ordered-vs-unordered axis is read from the TYPED resolved
+# CollectionKind of the mangled name (`collection_kind_of(&gmod, tn + "__")`
+# → `Set__`→CkOrderedSet, `HashSet__`→CkHashSet), NOT a name match — the
+# single producer of that axis is the RESOURCES prefix table
+# (`lir_lower.gg:289`). The lumped `gorget_array_new` arm was WRONG for
+# Set/HashSet: the global's C type is `GorgetSet`, so an array header is an
+# incompatible-types cc error (and a runtime segfault). Mirrors Rust's
+# per-type `eval_static_init` arms (`src/ir/lowering/mod.rs:2753-2795`):
+# `Vector`→`gorget_array_new`; `Set`→`gorget_ordered_set_new[_str]`;
+# `HashSet`→`gorget_set_new[_str]`. The `_str` variants (zero-arg) fire when
+# the element C type is `GorgetString`.
 String collection_ctor_init_expr(SpannedType sd_ty, GirModule &gmod):
     match sd_ty.ty:
         case TNamed(tn, targs):
-            if (tn == "Vector" or tn == "Array" or tn == "Deque" or tn == "Heap" or tn == "Set" or tn == "HashSet" or tn == "OrderedSet") and targs.len() >= 1:
-                String elem_c = type_to_c_name(targs.get(0).unwrap(), &gmod)
-                return "gorget_array_new(sizeof(" + elem_c + "))"
-            if (tn == "Dict" or tn == "HashMap" or tn == "Map" or tn == "OrderedDict") and targs.len() >= 2:
-                String key_c = type_to_c_name(targs.get(0).unwrap(), &gmod)
-                String val_c = type_to_c_name(targs.get(1).unwrap(), &gmod)
+            if targs.len() >= 1:
+                CollectionKind kind = collection_kind_of(&gmod, tn + "__")
+                String elem_c = collection_arg_sizeof_c_type(targs.get(0).unwrap(), &gmod)
+                match kind:
+                    case CkOrderedSet():
+                        if elem_c == "GorgetString":
+                            return "gorget_ordered_set_new_str()"
+                        return "gorget_ordered_set_new(sizeof(" + elem_c + "))"
+                    case CkHashSet():
+                        if elem_c == "GorgetString":
+                            return "gorget_set_new_str()"
+                        return "gorget_set_new(sizeof(" + elem_c + "))"
+                    case CkVector():
+                        return "gorget_array_new(sizeof(" + elem_c + "))"
+                    case CkDeque():
+                        return "gorget_array_new(sizeof(" + elem_c + "))"
+                    case CkHeap():
+                        return "gorget_array_new(sizeof(" + elem_c + "))"
+                    else:
+                        pass
+            if (tn == "Dict" or tn == "HashMap") and targs.len() >= 2:
+                String key_c = collection_arg_sizeof_c_type(targs.get(0).unwrap(), &gmod)
+                String val_c = collection_arg_sizeof_c_type(targs.get(1).unwrap(), &gmod)
                 if key_c == "GorgetString":
                     return "gorget_dict_new_str(sizeof(" + val_c + "))"
                 return "gorget_dict_new(sizeof(" + key_c + "), sizeof(" + val_c + "))"
