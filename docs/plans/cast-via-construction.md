@@ -168,6 +168,9 @@ So builtin numerics, newtype conversion, and error widening all go through
   conversion.)
 - **Failable-constructor mechanism → dissolved** by §3.2 (always `Self` + `throws`).
 - **`int(float)` edges → §3.5** (truncate fraction; throw on NaN/∞/out-of-range).
+- **`as` removed entirely (owner-decided 2026-06-20).** `T(x)` is the *sole*
+  conversion spelling; the `as` operator is gone — no second way to convert, no
+  lossless-`as` carve-out. Every existing `as` becomes a constructor call.
 
 **Still open:**
 
@@ -186,8 +189,6 @@ So builtin numerics, newtype conversion, and error widening all go through
    `Self(T) throws`. Do we need a marker so a 1-arg constructor is recognized as
    *the* conversion from `T` (for `?`-widening discovery / tooling), or is "any
    1-arg constructor whose param is `T`" enough? Lean: the latter.
-4. **Retire `as` entirely?** Recommendation: **yes** — `int(x)` is clearer and
-   uniform; keeping `as` re-introduces the inconsistency this RFC removes.
 
 ## 6. Migration
 
