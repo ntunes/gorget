@@ -145,8 +145,11 @@ If conversion *is* (possibly-throwing) construction:
 - `From[T]`   → a constructor `Self(T)`.
 - `TryFrom[T]` → a **throwing** constructor `Self(T) throws CastError` (`catch` for a `Result`).
 - **`Into[T]` → deleted.** You write `int(x)`, never `x.into()`.
-- The `?` / `throws` **error-widening** calls the target error type's constructor
-  (`AppError(io_err)`) instead of `From::from`.
+- **Auto-propagation error-widening** — Gorget already converts a thrown error to
+  a `throws` function's declared error type via `From[T]` (no `?`; auto-propagated:
+  `String s = read_file(p)` widens `IoError`→`AppError` through
+  `equip AppError with From[IoError]`). Now it looks up the target's **constructor**
+  `AppError(IoError)` instead of the `From[IoError]` impl.
 
 ```gorget
 # user newtype — already a constructor; nothing special:
@@ -192,13 +195,20 @@ So builtin numerics, newtype conversion, and error widening all go through
   `meta`-const-evaluated; the "runtime value fits but its type is wider" case
   uses a total flavor. So "elision precision" is moot — there is no elision to
   tune. (This deliberately avoids introducing call-argument-dependent effect.)
+- **No conversion marker (owner-decided 2026-06-20).** A 1-arg constructor
+  `Self(T)` IS the conversion from `T` — structural, no annotation. This is
+  CONTINUITY with the existing mechanism, not a new risk: today a thrown error
+  auto-widens to a `throws` fn's declared error type via an *explicit* `From[T]`
+  impl (`equip AppError with From[IoError]` / `@derive(From)`); the constructor
+  `AppError(IoError)` simply *replaces* that `From` impl, and auto-propagation
+  looks it up structurally. You still opt in by *writing the constructor*. The
+  C++ implicit-converter footgun doesn't apply — auto-conversion fires only for
+  ERROR types in `throws` contexts, so a `Meters(float)` ctor never "accidentally"
+  converts (it would require `float` to be thrown as an error). `@derive(From)`
+  (newtype-only today) → the newtype's auto-generated 1-arg constructor.
 
-**Still open:**
-
-1. **Marking a user conversion.** A user type defines `Self(T)` or
-   `Self(T) throws`. Do we need a marker so a 1-arg constructor is recognized as
-   *the* conversion from `T` (for `?`-widening discovery / tooling), or is "any
-   1-arg constructor whose param is `T`" enough? Lean: the latter.
+**All design questions are now resolved.** The remaining work is implementation
+(§6), not design.
 
 ## 6. Migration
 
@@ -218,8 +228,9 @@ A **both-compilers, language-surface** change (Rust gg + self-host + spec + book
    invariant #8, the outcome is that a lossy conversion can no longer happen
    *silently* — it's handled (throw), a flavor, or a compile-checked constant —
    in **both** compilers, with negative fixtures.
-4. **Fold `From`/`TryFrom` into constructors; delete `Into`;** rewire `?`/`throws`
-   error-widening to the target constructor.
+4. **Fold `From`/`TryFrom` into constructors; delete `Into`;** rewire the
+   `throws` auto-propagation error-widening to look up the target's constructor
+   (instead of its `From[T]` impl); `@derive(From)` → the newtype's generated ctor.
 
 ### Interaction with the in-flight `as` fix (parity track #1)
 
