@@ -2321,6 +2321,13 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
     # Mirrors gorget_map_iter_key/value arg 2 — same by-address out-param ABI.
     if fn_name == "gorget_set_drain_entry" and arg_idx == 2:
         return true
+    # Dict drain accessor: `gorget_map_drain_entry(const void* m, idx, void* out_key,
+    # void* out_val)` — args 2 (out_key) AND 3 (out_val) are out-buffers the callee
+    # writes into. Without these the borrow operands pass by value (NULL) → memcpy(NULL)
+    # → SIGSEGV. Mirrors Rust gg `helpers.rs:699 "gorget_map_drain_entry" => &[2,3]` and
+    # the gorget_set_drain_entry sibling above (set has only out_key at arg 2).
+    if fn_name == "gorget_map_drain_entry" and (arg_idx == 2 or arg_idx == 3):
+        return true
     if fn_name == "gorget_array_contains" and arg_idx == 1:
         return true
     if fn_name == "gorget_map_get" and arg_idx == 1:
@@ -2380,6 +2387,12 @@ bool out_param_arg(String fn_name, int arg_idx):
         return true
     # Drain accessor: arg 2 is `void* out_key` written by the callee.
     if fn_name == "gorget_set_drain_entry" and arg_idx == 2:
+        return true
+    # Dict drain: args 2 (out_key) and 3 (out_val) are out-buffers the callee
+    # writes into. Mirrors Rust gg `helpers.rs:699 => &[2,3]` and the set sibling.
+    # Inert for int K/V (no drop) but correct/forward-looking for resource K/V so
+    # the drained slots wire their drops (ABI_OUT_PTR tagging for #11).
+    if fn_name == "gorget_map_drain_entry" and (arg_idx == 2 or arg_idx == 3):
         return true
     return false
 

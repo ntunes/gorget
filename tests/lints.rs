@@ -874,6 +874,84 @@ fn no_bare_collection_accumulator_outside_helper() {
     );
 }
 
+/// Sibling-site-drift ratchet (CLAUDE.md invariant #4 "one fix, all siblings"
+/// + #6 "convert a recurring bug class into an executable guard") over the
+/// Dict/Set DRAIN out-param ABI in the self-host LIR lowerer
+/// (`lir_lower.gg`). The drain accessors take their drained K/V through
+/// `void*` OUT-buffers the callee writes into:
+///   - `gorget_set_drain_entry(const void* s, idx, void* out_key)` — out arg 2.
+///   - `gorget_map_drain_entry(const void* m, idx, void* out_key, void* out_val)`
+///     — out args 2 AND 3.
+/// Each must appear in BOTH parallel ABI tables (`needs_ptr_arg` — so the
+/// `borrow` operand is passed as `&slot` / `ISlotAddr` instead of by-value
+/// NULL → `memcpy(NULL)` → SIGSEGV — AND `out_param_arg`, the ABI_OUT_PTR
+/// tag that keeps the drained slot's drop alive). These are two hand-kept
+/// parallel name-match tables: the SET drain was added but the MAP drain was
+/// MISSED (`dict_drain_basic` crashed), the canonical sibling-drift hole.
+/// This lint pins the pair so the next drain sibling can't desync the tables.
+///
+/// Mirrors Rust gg `src/backend/c_lir/helpers.rs:699-700`
+/// (`"gorget_map_drain_entry" => &[2,3]`, `"gorget_set_drain_entry" => &[2]`).
+///
+/// **If this fails:** a drain accessor lost (or gained) a table entry. Every
+/// drain fn must be present in BOTH `needs_ptr_arg` and `out_param_arg` for
+/// each of its out-arg indices. Re-add the missing entry (or, if a new drain
+/// sibling was introduced, add it to this lint's `REQUIRED` list).
+#[test]
+fn self_host_drain_out_param_abi_pair() {
+    // lir_lower.gg lives ONLY in self_host_lowerer (real file, not symlinked),
+    // so no double-count guard is needed.
+    let content =
+        fs::read_to_string("tests/fixtures/self_host_lowerer/lir_lower.gg").unwrap_or_default();
+
+    // (fn_name, out-arg indices that must be tagged in BOTH ABI tables).
+    let required: &[(&str, &[usize])] =
+        &[("gorget_set_drain_entry", &[2]), ("gorget_map_drain_entry", &[2, 3])];
+
+    let mut missing: Vec<String> = Vec::new();
+    for (fn_name, out_args) in required {
+        for &arg_idx in *out_args {
+            // The drain entries are written as
+            //   `if fn_name == "gorget_map_drain_entry" and arg_idx == 2:`
+            // (or an `(arg_idx == 2 or arg_idx == 3)` combined guard). Count a
+            // NON-COMMENT line that mentions the drain fn name AND the index.
+            let idx_tok = format!("arg_idx == {arg_idx}");
+            let hits = content
+                .lines()
+                .filter(|line| {
+                    let trimmed = line.trim_start();
+                    !trimmed.starts_with('#')
+                        && trimmed.contains(&format!("\"{fn_name}\""))
+                        && trimmed.contains(&idx_tok)
+                })
+                .count();
+            // Must appear in BOTH tables (needs_ptr_arg + out_param_arg) → ≥2.
+            if hits < 2 {
+                missing.push(format!(
+                    "{fn_name} out-arg {arg_idx}: found {hits} table entr{} (need ≥2: \
+                     needs_ptr_arg AND out_param_arg)",
+                    if hits == 1 { "y" } else { "ies" },
+                ));
+            }
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "Self-host Dict/Set drain out-param ABI pair desynced in \
+         `lir_lower.gg`:\n  {}\n\n\
+         Every drain accessor's `void* out` argument must be tagged in BOTH the \
+         `needs_ptr_arg` table (so the borrow operand is passed as `ISlotAddr`/`&slot` \
+         instead of by-value NULL → `memcpy(NULL)` → SIGSEGV) AND the `out_param_arg` \
+         table (the ABI_OUT_PTR tag that keeps the drained slot's drop alive). The SET \
+         drain (out arg 2) and MAP drain (out args 2 AND 3) are siblings — adding one \
+         and forgetting the other is the exact hole that crashed `dict_drain_basic`. \
+         Mirrors Rust gg `helpers.rs:699-700`. Re-add the missing entry, or extend this \
+         lint's `required` list if a new drain sibling landed.",
+        missing.join("\n  "),
+    );
+}
+
 /// Snag #11 sibling-guard ratchet (CLAUDE.md rule 4 / "Sibling-site drift")
 /// over the self-host trait-equip SYMBOL-MANGLE sites. The self-host mangles an
 /// equip method's symbol via TWO routes, mirroring Rust gg
