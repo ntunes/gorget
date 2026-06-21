@@ -122,6 +122,12 @@ const int UNOP_BITNOT = 2
 enum Instruction:
     GIAssign(int, Operand)
     GIBinOp(int, int, int, Operand, Operand)
+    # Fault-catch checked arithmetic (error-model.md §11). Computes a BOOL
+    # flag (dst) = "lhs op rhs would fault" WITHOUT trapping or committing the
+    # result; the enclosing block is terminated by a GTBranch on the flag to
+    # the active fault-catch handler. Emitted ONLY inside an active fault scope
+    # (lower_expr's EBinaryOp gate); lowers 1:1 to LIR IFaultCheck.
+    GIFaultCheck(int, int, int, Operand, Operand)   # dst_flag, fault_op, ty, lhs, rhs
     GIUnOp(int, int, int, Operand)
     GICmp(int, int, int, Operand, Operand)
     GICall(int, String, Vector[Operand])

@@ -128,6 +128,13 @@ enum LirInst:
     IDiv(int, int, int, int)          # dst, ty, lhs, rhs
     IRem(int, int, int, int)          # dst, ty, lhs, rhs
     IMod(int, int, int, int)          # dst, ty, lhs, rhs
+    # Fault-catch checked arithmetic (error-model.md §11): dst (a bool flag)
+    # = "lhs op rhs would fault" (overflow for Add/Sub/Mul; div-by-zero for
+    # Div/Rem) WITHOUT trapping or committing the result. A Term/GTBranch on
+    # dst routes to the handler; the real op runs only on the no-fault
+    # continuation. `fault_op` is an OP_* constant. Emitted only inside an
+    # active fault scope; the panic-default arithmetic stays IAdd/IDiv etc.
+    IFaultCheck(int, int, int, int, int)   # dst_flag, fault_op, ty, lhs, rhs
     INeg(int, int, int)               # dst, ty, operand
 
     # Bitwise

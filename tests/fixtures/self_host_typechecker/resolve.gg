@@ -3,7 +3,7 @@
 # Pass 2: resolve_bodies — resolve name uses inside function/method bodies.
 
 from std.collections import Vector, Dict
-from ast import Span, Module, Item, Stmt, Expr, Type, Pattern
+from ast import Span, Module, Item, Stmt, Expr, Type, Pattern, FaultCatchPattern
 from ast import SpannedExpr, SpannedType, SpannedPattern
 from ast import FunctionDef, StructDef, EnumDef, EnumVariant, TraitDef, EquipBlock
 from ast import MatchArm, ElseBranch, Param, ImportStmt
@@ -166,6 +166,16 @@ ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable &t
     if scopes.define("Result", DkEnum(), Span(0, 0)) is Some(_):
         scopes.define("Ok", DkVariant(), Span(0, 0))
         scopes.define("Error", DkVariant(), Span(0, 0))
+
+    # Register the compiler-internal `Fault` enum (error-model.md §11). Its
+    # variants are QUALIFIED (`Fault.Overflow`) — unlike the prelude-bare
+    # Some/Ok/Error — so they register via `alloc_def` (allocated WITHOUT a
+    # bare-name scope insertion), mirroring the non-generic user-enum path
+    # below + Rust gg's resolve.rs:175-183.
+    if scopes.define("Fault", DkEnum(), Span(0, 0)) is Some(_):
+        scopes.alloc_def("Overflow", DkVariant(), Span(0, 0))
+        scopes.alloc_def("DivByZero", DkVariant(), Span(0, 0))
+        scopes.alloc_def("Bounds", DkVariant(), Span(0, 0))
 
     # Collect all top-level items
     for item in module.items:
@@ -691,6 +701,22 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
             scopes.push_scope(SkBlock())
             scopes.define(ename, DkVariable(), Span(0, 0))
             resolve_expr(*recovery, &scopes, &ctx)
+            scopes.pop_scope()
+
+        case EFaultCatch(fc_inner, fc_pattern, fc_handler):
+            # Local fault-catch (error-model.md §11). Resolve the wrapped
+            # expr; for the binding form bind the Fault value name in a fresh
+            # scope so the handler's `match f` resolves `f`. The variant form
+            # binds nothing (the qualifier/variant are literal AST strings,
+            # not name-resolved).
+            resolve_expr(*fc_inner, &scopes, &ctx)
+            scopes.push_scope(SkBlock())
+            match fc_pattern:
+                case FcpBinding(fc_name):
+                    scopes.define(fc_name, DkVariable(), Span(0, 0))
+                case FcpVariant(_, _):
+                    pass
+            resolve_expr(*fc_handler, &scopes, &ctx)
             scopes.pop_scope()
 
         case EClosure(params, body):

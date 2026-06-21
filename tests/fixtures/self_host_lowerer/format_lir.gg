@@ -187,6 +187,8 @@ String format_inst(LirInst inst):
             return f"{fmt_value(dst)}: {format_lir_type(ty)} = rem {fmt_value(lhs)}, {fmt_value(rhs)}"
         case IMod(dst, ty, lhs, rhs):
             return f"{fmt_value(dst)}: {format_lir_type(ty)} = mod {fmt_value(lhs)}, {fmt_value(rhs)}"
+        case IFaultCheck(dst, op, ty, lhs, rhs):
+            return f"{fmt_value(dst)}: bool = faultcheck {format_lir_type(ty)} {fmt_value(lhs)}, {fmt_value(rhs)}"
         case INeg(dst, ty, operand):
             return f"{fmt_value(dst)}: {format_lir_type(ty)} = neg {fmt_value(operand)}"
 

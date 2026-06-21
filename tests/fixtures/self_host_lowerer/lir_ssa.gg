@@ -369,6 +369,8 @@ LirInst substitute_inst(LirInst inst, Dict[int, int] &subst):
             return IRem(dst, ty, sub_val(lhs, &subst), sub_val(rhs, &subst))
         case IMod(dst, ty, lhs, rhs):
             return IMod(dst, ty, sub_val(lhs, &subst), sub_val(rhs, &subst))
+        case IFaultCheck(dst, op, ty, lhs, rhs):
+            return IFaultCheck(dst, op, ty, sub_val(lhs, &subst), sub_val(rhs, &subst))
         case INeg(dst, ty, op):
             return INeg(dst, ty, sub_val(op, &subst))
         case IBitAnd(dst, ty, lhs, rhs):

@@ -856,7 +856,53 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # below, and the integer IDiv path (div-by-zero guard) for floats.
             int op_ty = ctx.locals.get(lhs).unwrap().type_id
             int dst = add_local(&ctx, op_ty, None)
-            emit(&ctx, GIBinOp(dst, map_binop(op), op_ty, op_consume(&ctx, &gmod, lhs, CkBinOpArg()), op_consume(&ctx, &gmod, rhs, CkBinOpArg())))
+            # Fault-catch routing (error-model.md §11.2): inside an active fault
+            # scope, an INTEGER faultable op branches to the scope's handler on
+            # a fault instead of panicking. Overflow (+/-/*) → overflow handler;
+            # div-by-zero (/, %) → divzero handler. Typed gate (op kind +
+            # integer type), never a name check. Mirrors Rust `fault_handler_for`
+            # (`src/ir/lowering/exprs/operators.rs:332`). The scope is consulted
+            # at THIS op's own lowering site; a callee's faults stay deep (its
+            # body lowers with a fresh per-function ctx → fresh None scope).
+            int binop_code = map_binop(op)
+            bool is_int_ty = op_ty >= I8_TYPE and op_ty <= U64_TYPE
+            int fault_handler = -1
+            int commit_code = binop_code
+            if is_int_ty:
+                if binop_code == OP_ADD or binop_code == OP_SUB or binop_code == OP_MUL:
+                    match ctx.fault_overflow_handler:
+                        case Some(h):
+                            fault_handler = h
+                        case None:
+                            pass
+                    # On the no-fault path, commit the WRAP form: the FaultCheck
+                    # already caught overflow, so the wrapped value is the
+                    # correct committed result and never re-traps.
+                    if binop_code == OP_ADD:
+                        commit_code = OP_ADD_WRAP
+                    elif binop_code == OP_SUB:
+                        commit_code = OP_SUB_WRAP
+                    else:
+                        commit_code = OP_MUL_WRAP
+                elif binop_code == OP_DIV or binop_code == OP_REM:
+                    match ctx.fault_divzero_handler:
+                        case Some(h):
+                            fault_handler = h
+                        case None:
+                            pass
+                    # Div/Rem commit AS-IS: the fault branch excluded rhs==0, so
+                    # the normal IDiv/IRem div0-guard is statically dead here.
+            if fault_handler >= 0:
+                # flag = FaultCheck(op, lhs, rhs); branch flag → handler, else
+                # → continuation; commit `dst = lhs op rhs` in the continuation.
+                int flag = add_local(&ctx, BOOL_TYPE, None)
+                emit(&ctx, GIFaultCheck(flag, binop_code, op_ty, OpCopy(lhs), OpCopy(rhs)))
+                int fc_cont_bb = new_block(&ctx)
+                set_terminator(&ctx, GTBranch(OpCopy(flag), fault_handler, fc_cont_bb))
+                switch_to(&ctx, fc_cont_bb)
+                emit(&ctx, GIBinOp(dst, commit_code, op_ty, OpCopy(lhs), OpCopy(rhs)))
+                return dst
+            emit(&ctx, GIBinOp(dst, binop_code, op_ty, op_consume(&ctx, &gmod, lhs, CkBinOpArg()), op_consume(&ctx, &gmod, rhs, CkBinOpArg())))
             return dst
         case EUnaryOp(op, inner_box):
             int inner = lower_expr(&ctx, *inner_box, &gmod)
@@ -3187,6 +3233,8 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             return ddst
         case ECatch(inner_box, error_binding, recovery_box):
             return lower_catch_expr(&ctx, *inner_box, error_binding, *recovery_box, &gmod)
+        case EFaultCatch(fc_inner_box, fc_pattern, fc_handler_box):
+            return lower_fault_catch_expr(&ctx, *fc_inner_box, fc_pattern, *fc_handler_box, &gmod)
         case ERethrow(inner_box, error_binding, _err_ty, transform_box):
             return lower_rethrow_expr(&ctx, *inner_box, error_binding, *transform_box, &gmod)
         case EMatch(scrut_box, arms):

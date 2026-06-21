@@ -378,6 +378,18 @@ struct LowerCtx:
     # conditional-move-then-use, so the practical loss window is
     # narrow (trade documented in devbook/11 §Phase 2).
     Dict[String, bool] cow_moved_names
+    # ── Fault-catch scope (error-model.md §11) ───────────────────────
+    # The active fault-catch handler blocks for the wrapped subtree of a
+    # `(...) catch Fault.X:` expression. `Some(bb)` routes that fault
+    # category to handler block `bb`; `None` = not caught (the op stays
+    # panic-by-default). Pushed (save/restore) around ONLY the inner
+    # subtree by `lower_fault_catch_expr`; a faultable arithmetic op in
+    # `lower_expr`'s EBinaryOp gate consults the ACTIVE scope at its own
+    # site. Fresh `None` at function entry — a callee's faults stay deep
+    # (a separate `lower_function` pass = fresh ctx). Mirrors Rust gg's
+    # `FunctionState.fault_scope` (`src/ir/lowering/context.rs`).
+    Option[int] fault_overflow_handler
+    Option[int] fault_divzero_handler
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -511,6 +523,8 @@ String expr_kind(Expr e):
             return "ESpawn"
         case ESpawnBlocking(_):
             return "ESpawnBlocking"
+        case EFaultCatch(_, _, _):
+            return "EFaultCatch"
         else:
             return "?unknown_expr?"
 
@@ -1971,7 +1985,7 @@ GirFunction lower_suite_body(String fn_name, Vector[Stmt] body, GirModule &gmod)
     Dict[String, bool] _sb_cow_mut = {}
     Dict[String, int] _sb_cow_span = {}
     Dict[String, bool] _sb_cow_clo = {}
-    LowerCtx sctx = LowerCtx([], [], [], 0, !_sb_named_locals, !_sb_lc_stk, !_sb_lb_stk, "", "", "", false, fn_name.clone(), DropElaborator(!_sb_de_scopes), !_sb_de_queue, -1, !_sb_on_err_blocks, false, !_sb_cow_mut, !_sb_cow_span, !_sb_cow_clo, {}, [], {})
+    LowerCtx sctx = LowerCtx([], [], [], 0, !_sb_named_locals, !_sb_lc_stk, !_sb_lb_stk, "", "", "", false, fn_name.clone(), DropElaborator(!_sb_de_scopes), !_sb_de_queue, -1, !_sb_on_err_blocks, false, !_sb_cow_mut, !_sb_cow_span, !_sb_cow_clo, {}, [], {}, None, None)
     Vector[Instruction] sinit = []
     sctx.block_insts.push(!sinit)
     sctx.block_terms.push(GTNone())
@@ -2236,6 +2250,30 @@ SpannedType no_type():
 
 GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String, String] call_redirects, Dict[String, bool] imported_fns):
     Vector[GirType] type_table = init_type_table()
+
+    # Inject the compiler-internal `Fault` enum (error-model.md §11) as a
+    # synthetic non-generic user enum so it flows through EVERY registration
+    # pass below identically to a user-declared enum: `type_infos`,
+    # `enum_variant_parent_idx`, `enum_registry`, the C struct synthesis, and
+    # the nullary-variant constructor path (`Fault.Overflow()` →
+    # `lower_nullary_variant_ident` → `(Fault){.tag = N}`). Variant order is
+    # the tag order (Overflow=0, DivByZero=1, Bounds=2). Mirrors Rust gg's
+    # eager concrete-TypeDef injection (c7dd0816). Guarded so a user program
+    # that legitimately declares its own `enum Fault` is not duplicated.
+    bool fault_already = false
+    for fm_item in m.items:
+        match fm_item:
+            case IEnum(fm_edef):
+                if fm_edef.name == "Fault":
+                    fault_already = true
+            else:
+                pass
+    if not fault_already:
+        Vector[SpannedType] fault_no_fields = []
+        Vector[EnumVariant] fault_variants = [EnumVariant("Overflow", fault_no_fields), EnumVariant("DivByZero", []), EnumVariant("Bounds", [])]
+        Vector[String] fault_no_tp = []
+        Vector[String] fault_no_der = []
+        m.items.push(IEnum(EnumDef("Fault", fault_variants, fault_no_tp, fault_no_der)))
 
     # Pre-scan: detect if module has a main() function.
     # Test blocks are skipped when main exists (normal build mode),
@@ -3700,7 +3738,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         Dict[String, bool] _cow_mut3 = {}
                         Dict[String, int] _cow_span3 = {}
                         Dict[String, bool] _cow_clo3 = {}
-                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone(), DropElaborator(!_de_scopes3), !_de_queue3, -1, !_on_err_blocks3, false, !_cow_mut3, !_cow_span3, !_cow_clo3, {}, [], {})
+                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone(), DropElaborator(!_de_scopes3), !_de_queue3, -1, !_on_err_blocks3, false, !_cow_mut3, !_cow_span3, !_cow_clo3, {}, [], {}, None, None)
                         Vector[Instruction] tinit = []
                         tctx.block_insts.push(!tinit)
                         tctx.block_terms.push(GTNone())

@@ -1744,24 +1744,48 @@ equip Parser:
                 lhs = SpannedExpr(ERethrow(Box(lhs), err_name, err_type, Box(rt_val)), Span(lhs.span.start, rt_val.span.end))
                 continue
 
-            # catch: expr catch ( name ): recovery
+            # catch: ONE production, distinguished by the token after `catch`
+            # (error-model.md §11):
+            #   `(`              → Result contract-catch `catch (name):` (UNCHANGED);
+            #   `Ident . Ident`  → fault PATTERN `catch Fault.Overflow:`;
+            #   `Ident` (no dot) → fault BINDING `catch f: <body>`.
             # Multi-line body wraps in EDo (matches Rust parse_body_or_expr).
             if self.check_kw(KW_CATCH):
                 if 1 < min_bp:
                     break
                 self.advance()
-                self.expect_tok(TOK_LPAREN, "expected '(' after catch")
-                SpannedToken cn_tok = self.advance()
-                String catch_name = token_ident(cn_tok.lex_token)
-                self.expect_tok(TOK_RPAREN, "expected ')' in catch")
-                self.expect_tok(TOK_COLON, "expected ':' after catch binding")
-                SpannedExpr catch_val = SpannedExpr(EIntLiteral(0), Span(0, 0))
+                if self.check_tok(TOK_LPAREN):
+                    # ── Result contract-catch (unchanged) ──
+                    self.expect_tok(TOK_LPAREN, "expected '(' after catch")
+                    SpannedToken cn_tok = self.advance()
+                    String catch_name = token_ident(cn_tok.lex_token)
+                    self.expect_tok(TOK_RPAREN, "expected ')' in catch")
+                    self.expect_tok(TOK_COLON, "expected ':' after catch binding")
+                    SpannedExpr catch_val = SpannedExpr(EIntLiteral(0), Span(0, 0))
+                    if self.check_tok(TOK_NEWLINE):
+                        Vector[Stmt] body = self.parse_block()
+                        catch_val = SpannedExpr(EDo(body), Span(lhs.span.start, self.peek().lex_start))
+                    else:
+                        catch_val = self.parse_expr_bp(2)
+                    lhs = SpannedExpr(ECatch(Box(lhs), catch_name, Box(catch_val)), Span(lhs.span.start, catch_val.span.end))
+                    continue
+                # ── Fault-catch (NEW form) ──
+                SpannedToken fq_tok = self.advance()
+                String fc_qual = token_ident(fq_tok.lex_token)
+                FaultCatchPattern fc_pattern = FcpBinding(fc_qual)
+                if self.check_tok(TOK_DOT):
+                    self.advance()
+                    SpannedToken fv_tok = self.advance()
+                    String fc_var = token_ident(fv_tok.lex_token)
+                    fc_pattern = FcpVariant(fc_qual, fc_var)
+                self.expect_tok(TOK_COLON, "expected ':' after fault-catch pattern")
+                SpannedExpr fc_handler = SpannedExpr(EIntLiteral(0), Span(0, 0))
                 if self.check_tok(TOK_NEWLINE):
-                    Vector[Stmt] body = self.parse_block()
-                    catch_val = SpannedExpr(EDo(body), Span(lhs.span.start, self.peek().lex_start))
+                    Vector[Stmt] fc_body = self.parse_block()
+                    fc_handler = SpannedExpr(EDo(fc_body), Span(lhs.span.start, self.peek().lex_start))
                 else:
-                    catch_val = self.parse_expr_bp(2)
-                lhs = SpannedExpr(ECatch(Box(lhs), catch_name, Box(catch_val)), Span(lhs.span.start, catch_val.span.end))
+                    fc_handler = self.parse_expr_bp(2)
+                lhs = SpannedExpr(EFaultCatch(Box(lhs), fc_pattern, Box(fc_handler)), Span(lhs.span.start, fc_handler.span.end))
                 continue
 
             # mod: keyword-based binary operator (same precedence as %)

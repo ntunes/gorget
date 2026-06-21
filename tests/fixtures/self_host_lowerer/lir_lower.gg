@@ -3321,6 +3321,18 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
             int dst_slot = local_to_slot.get(dst_local).unwrap()
             lir_push_inst(&f, bb, ISlotStore(dst_slot, dst, false))
 
+        case GIFaultCheck(dst_local, op, ty, lhs_op, rhs_op):
+            # Fault-catch checked arithmetic (error-model.md §11.2): emit the
+            # bool FLAG (no trap, no result commit) → store into the flag local.
+            # The enclosing block's GTBranch (set at GIR build) reads the flag.
+            int fc_lhs = lower_operand(lhs_op, &f, bb, &local_to_slot, &m)
+            int fc_rhs = lower_operand(rhs_op, &f, bb, &local_to_slot, &m)
+            int fc_dst = lir_fn_next_value(&f)
+            int fc_ty = map_gir_type(ty, &gmod, &sr)
+            lir_push_inst(&f, bb, IFaultCheck(fc_dst, op, fc_ty, fc_lhs, fc_rhs))
+            int fc_dst_slot = local_to_slot.get(dst_local).unwrap()
+            lir_push_inst(&f, bb, ISlotStore(fc_dst_slot, fc_dst, false))
+
         case GIUnOp(dst_local, op, ty, operand):
             int val = lower_operand(operand, &f, bb, &local_to_slot, &m)
             int dst = lir_fn_next_value(&f)

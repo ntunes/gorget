@@ -5,7 +5,7 @@
 # of the lower.gg module split (output-neutral pure function move).
 from std.collections import Vector, Dict
 from std.conv import int_to_str, float_to_str
-from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch, EquipBlock, StructDef, EnumDef, EnumVariant, Type, MatchArm, Pattern, SpannedPattern
+from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch, EquipBlock, StructDef, EnumDef, EnumVariant, Type, MatchArm, Pattern, SpannedPattern, FaultCatchPattern
 from scope import ScopeTable, DefInfo
 from types import TypeTable, ResolvedType
 from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Terminator, Operand, GirType, GirExtern, GirTypeInfo, GirFieldInfo, GirEnumVariantInfo, LiftedClosure, ClosureCapture, ResourceMetadata, CollectionKind, ConsumeKind
@@ -919,6 +919,110 @@ int lower_catch_expr(LowerCtx &ctx, SpannedExpr inner, String error_binding, Spa
     int recovery_val = lower_expr(&ctx, recovery, &gmod)
     emit(&ctx, GIAssign(result_local, op_consume(&ctx, &gmod, recovery_val, CkAssign())))
     set_terminator(&ctx, GTJump(merge_bb))
+    switch_to(&ctx, merge_bb)
+    return result_local
+
+# Lower a LOCAL fault-catch `(inner) catch Fault.X: handler` /
+# `(inner) catch f: match f` (error-model.md §11). A faultable arithmetic
+# op (overflow / div-by-zero) emitted DIRECTLY into `inner`'s own blocks
+# branches to a local handler instead of panicking; the result is the
+# wrapped value on the no-fault path or the handler value on the fault
+# path. Pure local control flow — no unwinding. Mirrors Rust gg's
+# `lower_fault_catch_expr` (`src/ir/lowering/exprs/mod.rs:3499`); the CFG
+# is the `lower_catch_expr` template (handler in the GIR/LIR CFG so the
+# drop passes run over it — NEVER a C-emit goto).
+#
+# Which fault categories does this catch intercept?
+#   - binding form `catch f:`          → BOTH (Overflow + DivByZero);
+#   - pattern `catch Fault.Overflow:`  → Overflow only;
+#   - pattern `catch Fault.DivByZero:` → DivByZero only.
+# (Inc1 lowers Overflow + DivByZero catching; Bounds is self-host Inc2.)
+int lower_fault_catch_expr(LowerCtx &ctx, SpannedExpr inner, FaultCatchPattern pattern, SpannedExpr handler, GirModule &gmod):
+    bool catch_overflow = false
+    bool catch_divzero = false
+    bool is_binding = false
+    String binding_name = ""
+    match pattern:
+        case FcpBinding(bn):
+            catch_overflow = true
+            catch_divzero = true
+            is_binding = true
+            binding_name = bn
+        case FcpVariant(_, vname):
+            if vname == "Overflow":
+                catch_overflow = true
+            elif vname == "DivByZero":
+                catch_divzero = true
+            else:
+                # An unknown / Inc2 variant (e.g. Bounds): catch nothing here,
+                # so the wrapped ops stay panic-by-default. (Typecheck reports
+                # an unknown Fault variant; Bounds-catch lowering is Inc2.)
+                pass
+
+    # Per-category handler-entry blocks + the merge block, created up front so
+    # the faultable ops (lowered next) can branch to them.
+    int merge_bb = new_block(&ctx)
+    int overflow_entry = -1
+    if catch_overflow:
+        overflow_entry = new_block(&ctx)
+    int divzero_entry = -1
+    if catch_divzero:
+        divzero_entry = new_block(&ctx)
+
+    # Push the fault scope for the inner subtree. Save/restore the outer
+    # scope so a nested fault-catch composes (innermost wins). A faultable
+    # arithmetic op in `lower_expr`'s EBinaryOp gate consults the ACTIVE
+    # scope at its own site (mirror Rust `fault_handler_for`).
+    Option[int] saved_ovf = ctx.fault_overflow_handler
+    Option[int] saved_dz = ctx.fault_divzero_handler
+    if catch_overflow:
+        ctx.fault_overflow_handler = Some(overflow_entry)
+    else:
+        ctx.fault_overflow_handler = None
+    if catch_divzero:
+        ctx.fault_divzero_handler = Some(divzero_entry)
+    else:
+        ctx.fault_divzero_handler = None
+    # The wrapped expression is a plain value; suppress the throws-call
+    # auto-prop peel (a faultable `a*b` is never a Result — mirror typecheck).
+    ctx.suppress_auto_prop = true
+    int inner_val = lower_expr(&ctx, inner, &gmod)
+    # Pop the fault scope — faults outside this expression panic again.
+    ctx.fault_overflow_handler = saved_ovf
+    ctx.fault_divzero_handler = saved_dz
+
+    int result_type = ctx.locals.get(inner_val).unwrap().type_id
+    int result_local = add_local(&ctx, result_type, None)
+
+    # No-fault path: the wrapped value flows to the result, then to merge.
+    # Skip when a divergent inner already terminated the block.
+    if not block_terminated(&ctx):
+        emit(&ctx, GIAssign(result_local, op_consume(&ctx, &gmod, inner_val, CkAssign())))
+        set_terminator(&ctx, GTJump(merge_bb))
+
+    # Fill each handler-entry block. The handler body is lowered ONCE PER
+    # ENTRY so the binding form sees the right constructed `Fault` value.
+    if catch_overflow:
+        switch_to(&ctx, overflow_entry)
+        if is_binding:
+            int fault_val = lower_nullary_variant_ident(&ctx, &gmod, "Overflow")
+            if fault_val >= 0:
+                nl_put(&ctx, binding_name, fault_val)
+        int oh_val = lower_expr(&ctx, handler, &gmod)
+        if not block_terminated(&ctx):
+            emit(&ctx, GIAssign(result_local, op_consume(&ctx, &gmod, oh_val, CkAssign())))
+            set_terminator(&ctx, GTJump(merge_bb))
+    if catch_divzero:
+        switch_to(&ctx, divzero_entry)
+        if is_binding:
+            int fault_val = lower_nullary_variant_ident(&ctx, &gmod, "DivByZero")
+            if fault_val >= 0:
+                nl_put(&ctx, binding_name, fault_val)
+        int dh_val = lower_expr(&ctx, handler, &gmod)
+        if not block_terminated(&ctx):
+            emit(&ctx, GIAssign(result_local, op_consume(&ctx, &gmod, dh_val, CkAssign())))
+            set_terminator(&ctx, GTJump(merge_bb))
+
     switch_to(&ctx, merge_bb)
     return result_local
 

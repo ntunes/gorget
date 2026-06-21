@@ -220,6 +220,8 @@ int liveness_inst_def(Instruction inst):
             return dst
         case GIBinOp(dst, _, _, _, _):
             return dst
+        case GIFaultCheck(dst, _, _, _, _):
+            return dst
         case GIUnOp(dst, _, _, _):
             return dst
         case GICmp(dst, _, _, _, _):
@@ -265,6 +267,9 @@ void liveness_inst_operand_uses(Instruction inst, Vector[bool] &acc):
         case GIAssign(_, op):
             liveness_operand_uses(op, &acc)
         case GIBinOp(_, _, _, lhs, rhs):
+            liveness_operand_uses(lhs, &acc)
+            liveness_operand_uses(rhs, &acc)
+        case GIFaultCheck(_, _, _, lhs, rhs):
             liveness_operand_uses(lhs, &acc)
             liveness_operand_uses(rhs, &acc)
         case GIUnOp(_, _, _, src):
@@ -666,6 +671,9 @@ Vector[int] liveness_inst_operand_local_ids(Instruction inst):
         case GIBinOp(_, _, _, lhs, rhs):
             out.push(liveness_operand_local_id(lhs))
             out.push(liveness_operand_local_id(rhs))
+        case GIFaultCheck(_, _, _, lhs, rhs):
+            out.push(liveness_operand_local_id(lhs))
+            out.push(liveness_operand_local_id(rhs))
         case GIUnOp(_, _, _, src):
             out.push(liveness_operand_local_id(src))
         case GICmp(_, _, _, lhs, rhs):
@@ -1053,6 +1061,9 @@ void update_last_pos_for_inst(Instruction inst, int pos, Dict[int, int] &last_po
         case GIAssign(_, op):
             note_operand_pos(op, pos, &last_pos)
         case GIBinOp(_, _, _, lhs, rhs):
+            note_operand_pos(lhs, pos, &last_pos)
+            note_operand_pos(rhs, pos, &last_pos)
+        case GIFaultCheck(_, _, _, lhs, rhs):
             note_operand_pos(lhs, pos, &last_pos)
             note_operand_pos(rhs, pos, &last_pos)
         case GIUnOp(_, _, _, src):

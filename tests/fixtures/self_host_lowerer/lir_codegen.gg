@@ -21,6 +21,10 @@ from lir import EK_NOT_ENUM, EK_OPTION, EK_RESULT, EK_GENERAL
 from lir import GINIT_ZEROED, GINIT_FUNC_ADDR, GINIT_RUNTIME_CALL, GINIT_STRUCT, GINIT_BYTES
 from lir import SCHED_POOL, SCHED_THREAD, SCHED_INLINE, SCHED_SINGLE
 from lir import runtime_fn_returns_cstr
+# Fault-catch checked arithmetic (error-model.md §11): IFaultCheck's `op`
+# field carries a GIR OP_* constant; the C emit picks the overflow builtin /
+# div0 predicate from it (typed gate, never a name match).
+from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM
 # Slot-coalescing reads the CFG successors and terminator operands from lir_ssa
 # (the new `term_uses` lives next to `term_successors`).
 from lir_ssa import term_successors, term_uses
@@ -2572,6 +2576,9 @@ int infer_inst_type_with_ret(LirInst &inst, LirModule &m, Dict[int, int] &val_ty
             return ty
         case IMod(_, ty, _, _):
             return ty
+        case IFaultCheck(_, _, _, _, _):
+            # The fault-check produces a BOOL flag, not the arithmetic result.
+            return LT_BOOL
         case INeg(_, ty, _):
             return ty
         case IBitAnd(_, ty, _, _):
@@ -3070,6 +3077,8 @@ int inst_dst(LirInst &inst):
             return dst
         case IMod(dst, _, _, _):
             return dst
+        case IFaultCheck(dst, _, _, _, _):
+            return dst
         case INeg(dst, _, _):
             return dst
         case IBitAnd(dst, _, _, _):
@@ -3207,6 +3216,9 @@ Vector[int] inst_uses(LirInst &inst):
             result.push(lhs)
             result.push(rhs)
         case IMod(_, _, lhs, rhs):
+            result.push(lhs)
+            result.push(rhs)
+        case IFaultCheck(_, _, _, lhs, rhs):
             result.push(lhs)
             result.push(rhs)
         case INeg(_, _, operand):
@@ -3608,6 +3620,26 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Vector[String] 
             if lir_is_float(ty):
                 return "{ double __t = fmod(" + v(lhs) + ", " + v(rhs) + "); " + v(dst) + " = __t + (__t != 0.0 && ((__t < 0) != (" + v(rhs) + " < 0)) ? " + v(rhs) + " : 0.0); }"
             return "{ typeof(" + v(lhs) + ") __t = " + v(lhs) + " % " + v(rhs) + "; " + v(dst) + " = __t + (__t != 0 && (__t ^ " + v(rhs) + ") < 0 ? " + v(rhs) + " : 0); }"
+
+        case IFaultCheck(dst, op, ty, lhs, rhs):
+            # Fault-catch checked arithmetic (error-model.md §11.2): set the
+            # bool FLAG `dst` WITHOUT trapping and WITHOUT computing the result
+            # (the result is computed only on the no-fault continuation the
+            # GTBranch falls through to — critical for Div/Rem so no division-
+            # by-zero ever executes). For Add/Sub/Mul the `__builtin_*_overflow`
+            # return value IS the flag (its result goes to a throwaway temp).
+            # For Div/Rem the flag is the div0 predicate (`rhs == 0`); the
+            # signed INT_MIN/-1 overflow split is self-host Inc2.
+            String fc_ct = c_type_name(ty, &sn)
+            if op == OP_ADD:
+                return "{ " + fc_ct + " __fc_d; " + v(dst) + " = __builtin_add_overflow((" + fc_ct + ")" + v(lhs) + ", (" + fc_ct + ")" + v(rhs) + ", &__fc_d); }"
+            elif op == OP_SUB:
+                return "{ " + fc_ct + " __fc_d; " + v(dst) + " = __builtin_sub_overflow((" + fc_ct + ")" + v(lhs) + ", (" + fc_ct + ")" + v(rhs) + ", &__fc_d); }"
+            elif op == OP_MUL:
+                return "{ " + fc_ct + " __fc_d; " + v(dst) + " = __builtin_mul_overflow((" + fc_ct + ")" + v(lhs) + ", (" + fc_ct + ")" + v(rhs) + ", &__fc_d); }"
+            else:
+                # OP_DIV / OP_REM: div-by-zero predicate.
+                return v(dst) + " = ((" + fc_ct + ")" + v(rhs) + " == 0);"
 
         case INeg(dst, ty, operand):
             # Float negation must NOT route through the int64_t cast below —

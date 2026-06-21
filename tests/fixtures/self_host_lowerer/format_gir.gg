@@ -169,6 +169,8 @@ String format_instruction(Instruction inst, GirModule &gmod):
             return f"        _{dst} = {format_operand(val, &gmod)}"
         case GIBinOp(dst, op, tid, lhs, rhs):
             return f"        _{dst} = {binop_name(op)} {format_type_id(tid, &gmod)} {format_operand(lhs, &gmod)}, {format_operand(rhs, &gmod)}"
+        case GIFaultCheck(dst, op, tid, lhs, rhs):
+            return f"        _{dst} = faultcheck {binop_name(op)} {format_type_id(tid, &gmod)} {format_operand(lhs, &gmod)}, {format_operand(rhs, &gmod)}"
         case GIUnOp(dst, op, tid, operand):
             return f"        _{dst} = {unop_name(op)} {format_type_id(tid, &gmod)} {format_operand(operand, &gmod)}"
         case GICmp(dst, op, tid, lhs, rhs):
