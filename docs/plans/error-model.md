@@ -55,6 +55,13 @@ rule) and `book/10-errors.md:6-14` are to be **rewritten** to the new model
 restated). This is no longer an open blocker — it is committed scope. The doc
 rewrite is part of the implementation work, not a precondition to be argued.
 
+**Softened by the phased model (§9.1, 2026-06-21):** the change is **ADDITIVE, not a
+full reversal.** Overflow/bounds/div0 **stay panic-by-default** — the documented
+"continuing with corrupted state is worse than stopping" rationale still holds for
+the *uncaught/default* case. We only ADD **opt-in recovery** (local in Phase 1, deep
+in Phase 2). So the doc edit is "overflow panics by default AND is catchable," which
+is far less disruptive than overturning the rule outright.
+
 ## 1. Vocabulary (read first — there are TWO axes, don't conflate them)
 
 **Axis A — Channels (a function's output paths). Exactly two:**
@@ -442,11 +449,36 @@ settles TYPING.**
   unwinding regardless of how errors are typed. Java's unified `try/catch` IS
   stack-unwinding underneath.
 
-**OPEN — the deciding question:** must a fault be catchable from a **deep call**
-(server/request-boundary recovery), or **only at the lexical site** of the risky
-op? Deep ⇒ buy the unwind machinery (Q10). Local-only ⇒ genuinely no unwind, but no
-deep recovery. This single answer, not "in-band vs out-of-band," is what's load-
-bearing. (If adopted, the §1/§4 reframe in Q14's follow-up folds in here.)
+**✅ RESOLVED 2026-06-21 (owner): BOTH, PHASED** — ship local-only first, add deep
+later as a separate funded effort.
+
+**PHASE 1 — local catch (cheap; NO unwinding, NO ubiquity).**
+- `Fault` enum `equip Error` (unified typing — one `catch` shape for faults +
+  contract errors).
+- Faults **panic by default** (today's behavior, unchanged — fast path preserved,
+  signatures stay non-`Result`).
+- **Local catch only:** `int r = (a * b) catch Overflow: saturate()` lowers the
+  wrapped arithmetic to a **checked op that branches to the handler** — the trap
+  branches BEFORE the store, so no corrupted value ever materializes. In-band,
+  synchronous, no unwind.
+- Exhaustiveness via **implicit-panic-default** (a `non_exhaustive`-style rule: a
+  fault match may omit variants → they panic).
+- ⭐ **Phase 1 sidesteps EVERY unwind-dependent blocker:** B2 (greenfield unwind),
+  Q9 (drop-across-unwind), Q15 (FFI unwind), Q16 (`main` boundary), and the §3.1
+  partial-state/Drop-observation concern are **all Phase 2** — none apply when the
+  catch is lexical and the checked op branches before committing. Phase 1's only new
+  machinery: the `Error`-impl on `Fault`; the local-catch lowering (the SAME checked
+  op the `--overflow=checked` flag already emits, just branching to a handler instead
+  of `exit(1)`); and the panic-default match rule.
+
+**PHASE 2 — deep / boundary catch (separate funded effort; needs unwinding).**
+- Catch a fault from a deep call at a task/request boundary (server-keeps-serving).
+- Buys the full §6 greenfield unwind infra (Q10) + inherits Q9/Q15/Q16 + the §3.1
+  boundary-discards-the-unit safety argument + the boundary-only invariant.
+- Strictly **additive** over Phase 1 — same `Fault`/`Error` typing, same `catch`
+  surface; only the PROPAGATION reach extends from lexical to deep.
+
+(The §1/§4 "one channel / two kinds" reframe from Q14's follow-up lands with Phase 1.)
 
 ## 10. Bottom line
 
