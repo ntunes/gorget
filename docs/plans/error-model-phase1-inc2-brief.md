@@ -10,9 +10,9 @@
 ## 0. The goal
 Extend local fault-catch with: **(A)** `Fault.Bounds` (catch an out-of-bounds index),
 **(C)** split `INT_MIN/-1` out of `DivByZero` into `Fault.Overflow`, **(D)** reject a
-wrong enum qualifier (`Bogus.Overflow`), and **(B)** lock in the
-already-working `--overflow=wrap` behaviour. All four are in the same fault-catch
-subsystem; stage them in the §3 order.
+wrong enum qualifier (`Bogus.Overflow`), **(B)** lock in the already-working
+`--overflow=wrap` behaviour, and **(E)** fix the pre-existing plain-op `INT_MIN/-1`
+cross-backend defect (UB on LLVM today). Stage them in the §3 order.
 
 ## 1. Scope — Increment 2 (IN), by sub-task
 
@@ -129,13 +129,11 @@ A single signed Div op has TWO fault conditions; today both collapse into one fl
    right message. The `cont` op is then BARE (both conditions already handled) — do NOT also emit
    a SECOND explicit panic for an already-handled category. VERIFY each condition is handled EXACTLY
    ONCE (cont's normal `Inst::Div` re-checks are statically-false there, harmless — not a double-trap).
-   ⚠ **Pre-existing gap — CONFIRMED REAL (pass 4), FILED in TODO.md, OUT of Increment-2 scope:** the
-   PLAIN (non-fault-scope) `Inst::Div`/`Rem` LACK the `INT_MIN/-1` trap on **LLVM-Div** (`llvm:3387`
+   ⚠ **Pre-existing gap — CONFIRMED REAL (pass 4), now FOLDED IN as sub-task (E)** (owner 2026-06-21).
+   The PLAIN (non-fault-scope) `Inst::Div`/`Rem` LACK the `INT_MIN/-1` trap on **LLVM-Div** (`llvm:3387`
    bare `sdiv`), **LLVM-Rem** (`:3414` bare `srem`), and **C-Rem** (`c_lir:2512-2516`, `d=0`) — only
-   C-Div (`c_lir:2487`) panics. So `let x = INT_MIN/-1` (NO catch) is UB on LLVM today while C panics
-   — a Core-#8 cross-backend defect. Increment 2's explicit-panic covers only the IN-fault-scope case;
-   the plain-op fix is a separate TODO (both backends must panic uniformly). Do NOT pull it into this
-   increment.
+   C-Div (`c_lir:2487`) panics, so `let x = INT_MIN/-1` (NO catch) is UB on LLVM today while C panics.
+   Fix in (E) below. (C) and (E) AGREE — both panic on `INT_MIN/-1` — so no conflict.
 5. **Rem too**: `INT_MIN % -1` is the same overflow — apply the same two-condition explicit-panic
    lowering (do NOT trust the C-Rem `d=0` or the LLVM bare `srem`).
 6. **Lint**: covered by the coordinated lint change in (A) step 7 (the `FaultOp::DivOverflow` split
@@ -169,6 +167,27 @@ under `--overflow=wrap`. ⚠ **(pass 1) `run_gg_with_flags` ALREADY EXISTS** (`t
 USE it, don't duplicate. Correct the spec §11.2/§11.7 + the error-model TODO entry to "already
 correct (orthogonal to `overflow_wrap`); documented, not implemented."
 
+### (E) Fix the plain-op `INT_MIN/-1` cross-backend defect  [SMALL / surgical, but HOT-PATH]
+⚠ **Confirmed (pass 4):** the PLAIN (non-fault-scope) `Inst::Div`/`Rem` lack the `INT_MIN/-1`
+overflow trap on three of four backend×op forms — **C-Rem** silently `d=0` (`c_lir/mod.rs:2512-2516`),
+**LLVM-Div** bare `sdiv` (`llvm/mod.rs:3363-3389`, div0 trap only at `:3377`), **LLVM-Rem** bare
+`srem` (`:3390-3416`) — while **C-Div** correctly panics (`c_lir/mod.rs:2487`). So `int x = INT_MIN/-1`
+(no catch) is UB/SIGFPE on LLVM and silently 0 on C-Rem, a Core-#8 cross-backend defect.
+1. **SEMANTICS DECISION: division overflow (`INT_MIN/-1`) traps UNCONDITIONALLY, like div0** —
+   independent of `--overflow=wrap` (which governs only `+`/`-`/`*` wrapping). This matches the design
+   intent (`IDiv`/`IRem` have NO overflow field, checked unconditionally) and C-Div's current behaviour.
+   ⚠ **VERIFY** C-Div's `INT_MIN/-1` trap (`c_lir:2487`) is indeed UNCONDITIONAL (not mode-gated); if it
+   IS gated, STOP and report (the semantics decision changes).
+2. **Add the `INT_MIN/-1` guard+trap (mirror C-Div) to the three missing emits**: C-Rem
+   (`c_lir/mod.rs:2512-2516`), LLVM-Div (`llvm/mod.rs:3363-3389`), LLVM-Rem (`:3390-3416`). Panic message
+   `"integer overflow"` (match C-Div). div0 stays as-is (already unconditional on all four).
+3. **No new field / no mode-threading** — the trap is unconditional, like div0. **No interaction with
+   (C):** (C)'s explicit-panic for an uncaught `INT_MIN/-1` and (E)'s plain-op trap AGREE (both panic);
+   (C)'s `cont` `Inst::Div` (post-(E)) traps `INT_MIN` too but is reached only when both flags are
+   false, so it never fires there.
+4. ⚠ **HOT PATH:** `Inst::Div`/`Rem` emit runs for EVERY division — a mis-placed guard breaks many
+   fixtures. The full both-backend sweep is the regression gate; verify no existing fixture regresses.
+
 ## 2. Out of scope (deferred, own briefs)
 - `Fault equip Error` / `dyn Error` unified surface — Phase 2.
 - OOM — Phase 2. Deep/boundary catch + unwinding — Phase 2.
@@ -180,11 +199,14 @@ correct (orthogonal to `overflow_wrap`); documented, not implemented."
 ## 3. Staging WITHIN the worktree (build GREEN at each step)
 1. **(A) Bounds** FIRST — it changes `FaultScope`'s shape (adds `bounds_handler`); the new GIR
    variant + both backends + handler-entry + register `Bounds`. Build + `cargo test --lib`.
-2. **(C) Div-split** — the `FaultOp` split + two-branch lowering + partial-catch + both backends
+2. **(E) plain-op `INT_MIN/-1` trap** — mirror C-Div's unconditional guard to C-Rem + LLVM-Div +
+   LLVM-Rem (same `Inst::Div`/`Rem` code (C) touches; do it adjacent). Build + the both-backend sweep
+   on division fixtures (HOT PATH — confirm no regression).
+3. **(C) Div-split** — the `FaultOp` split + two-branch lowering + partial-catch + both backends
    + lint. Build + `cargo test --lib` + `cargo test --test lints`.
-3. **(D) Qualifier** — AST/parse/typecheck. Build + `cargo test --lib`.
-4. **(B) wrap-fixture** + the spec/TODO premise correction.
-5. **Fixtures** (§4) — all of them, on BOTH backends.
+4. **(D) Qualifier** — AST/parse/typecheck. Build + `cargo test --lib`.
+5. **(B) wrap-fixture** + the spec/TODO premise correction.
+6. **Fixtures** (§4) — all of them, on BOTH backends.
 
 ## 4. Test plan (executor runs; parent runs the full sweep)
 New fixtures (deterministic stdout), each on default AND `GG_BACKEND=llvm`:
@@ -204,6 +226,10 @@ New fixtures (deterministic stdout), each on default AND `GG_BACKEND=llvm`:
   op wraps outside the catch.
 - `fault_catch_bad_qualifier.gg` — `(big*2) catch Bogus.Overflow:` → typecheck error (negative
   fixture).
+- `div_intmin_plain.gg` — **(E)** UNCAUGHT `INT_MIN / -1` panics `integer overflow`, and `INT_MIN % -1`
+  panics — on BOTH backends (the pre-existing-defect regression guard; uses `run_gg_panics`). Add an
+  `--overflow=wrap` variant only if (E)'s "unconditional trap" decision is confirmed (it should still
+  panic under wrap, since division overflow is unconditional like div0).
 ⚠ **(pass 1) Harness helpers:** the panic-default / partial-catch fixtures use `run_gg_panics`
 (`integration.rs:5387`) — match the ACTUAL runtime substring (bounds is the longer `gorget: panic:
 index out of bounds: …`; div is `integer overflow` / `division by zero`); `fault_catch_overflow_wrap.gg`
@@ -245,6 +271,9 @@ on BOTH backends. NOT the full integration sweep (parent's job).
 - `Bogus.Overflow` rejected at typecheck; `Fault.Overflow`/`Fault.DivByZero`/`Fault.Bounds`
   accepted.
 - (B): the wrap fixture passes; the spec §11.2/§11.7 + TODO premise corrected to "already works".
+- (E): plain (uncaught) `INT_MIN/-1` AND `INT_MIN % -1` panic `integer overflow` on BOTH backends
+  (`div_intmin_plain.gg`); no regression to existing division fixtures (hot path); the `TODO.md`
+  Core-#8 entry is REMOVED (now done, → DONE.md with the increment).
 - Shared LIR/GIR shapes (one representation, both emitters derive); arm-count lint extended.
 - Panic-by-default unchanged for uncaught faults; `bootstrap_fixed_point` + `self_host_*`
   untouched; Result-`catch` unperturbed.
