@@ -1,4 +1,4 @@
-# Implementation Brief — Error Model Phase 1, Increment 2 (Bounds + Div-split + qualifier; wrap-override already done)
+# Implementation Brief — Error Model Phase 1, Increment 2 (Bounds + Div-split + qualifier + plain-op INT_MIN fix)
 
 > **Status: DRAFT brief for review (2026-06-21).** Spec: `docs/plans/error-model.md` §11.
 > Builds on Increment 1 (LANDED `8ab75635`, DONE.md) — read its record + the
@@ -194,7 +194,8 @@ overflow trap on three of four backend×op forms — **C-Rem** silently `d=0` (`
 - `Fault equip Error` / `dyn Error` unified surface — Phase 2.
 - OOM — Phase 2. Deep/boundary catch + unwinding — Phase 2.
 - The doc rewrite (`language-design.md`/`book`/`reference`) + the §1/§4 two-channels reframe —
-  own brief + confirming review. (This brief only corrects the §11.2/§11.7 (B) premise.)
+  own brief + confirming review. (This brief touches NO `docs/` spec — §11.2/§11.7 are rewritten by
+  the `--overflow`-retirement track, not here.)
 - Self-host fast-follow (§11.8).
 - dict-get / string-index / range-slice Bounds — future (no shared `safe_*` path).
 
@@ -244,8 +245,9 @@ on BOTH backends. NOT the full integration sweep (parent's job).
 - **Both backends at parity** — every new fixture passes on default AND `GG_BACKEND=llvm`.
 - **Do NOT touch:** self-host (`tests/fixtures/self_host_*/`); the `Result`-`catch` path; the
   existing `FaultableBinOp`/Overflow+DivByZero Increment-1 behaviour except the (C) split; the
-  non-array index paths; `docs/` EXCEPT the §11.2/§11.7 (B)-premise correction in
-  `docs/plans/error-model.md` and the error-model TODO entry.
+  non-array index paths; `Inst::Mod` (`.mod()` — a separate sibling defect, filed in TODO, NOT this
+  increment); `docs/` (NO spec edits — §11.2/§11.7 belong to the `--overflow`-retirement track). The
+  ONLY doc change here is removing the Core-#8 `INT_MIN/-1` entry from the error-model TODO (it's (E)).
 - **No name-matching for semantics** — fault routing is typed metadata on the GIR/LIR inst /
   the `FaultScope` fields, never a string check.
 - **Drop-correctness:** the Bounds handler branch lives in GIR/LIR CFG so drop passes run over
