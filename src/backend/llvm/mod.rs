@@ -2729,12 +2729,28 @@ fn emit_function(
                         counter += 1;
                     }
                     Inst::Div { ty, .. } if ty.is_integer() => {
-                        label = format!("divz.{bid}.{counter}.ok");
+                        // div0 guard always bumps + sets exit. For SIGNED, the
+                        // `TYPE_MIN/-1` overflow guard (emit_div_overflow_trap,
+                        // error-model.md §11 (E)) bumps again and moves the exit
+                        // to its own `ok` block — mirror BOTH counter bumps and
+                        // the final label exactly (layering: this pre-pass twins
+                        // the emit).
                         counter += 1;
+                        if is_signed(ty) {
+                            label = format!("ovfdiv.{bid}.{counter}.ok");
+                            counter += 1;
+                        } else {
+                            label = format!("divz.{bid}.{}.ok", counter - 1);
+                        }
                     }
                     Inst::Rem { ty, .. } if ty.is_integer() => {
-                        label = format!("remz.{bid}.{counter}.ok");
                         counter += 1;
+                        if is_signed(ty) {
+                            label = format!("ovfrem.{bid}.{counter}.ok");
+                            counter += 1;
+                        } else {
+                            label = format!("remz.{bid}.{}.ok", counter - 1);
+                        }
                     }
                     Inst::BoundsCheck { .. } => {
                         label = format!("bc.{bid}.{counter}.ok");
@@ -3383,8 +3399,16 @@ fn emit_inst(
                 writeln!(out, "  unreachable").unwrap();
                 writeln!(out, "{ok_label}:").unwrap();
                 *current_label = ok_label;
-                let op = if is_signed(ty) { "sdiv" } else { "udiv" };
-                writeln!(out, "  %v{} = {op} {lty} %v{}, %v{}", dst.0, lhs.0, rhs.0).unwrap();
+                // Signed `TYPE_MIN/-1` overflow is UB (C-Div traps it; LLVM
+                // bare `sdiv` was silent UB) — TRAP it unconditionally, like
+                // div0 (error-model.md §11 (E)). Unsigned never overflows.
+                if is_signed(ty) {
+                    emit_div_overflow_trap(out, "div", dst, lhs, rhs, ty, block_id, trap_counter, current_label, str_globals, loc);
+                    let op = "sdiv";
+                    writeln!(out, "  %v{} = {op} {lty} %v{}, %v{}", dst.0, lhs.0, rhs.0).unwrap();
+                } else {
+                    writeln!(out, "  %v{} = udiv {lty} %v{}, %v{}", dst.0, lhs.0, rhs.0).unwrap();
+                }
             }
         }
         Inst::Rem { dst, ty, lhs, rhs } => {
@@ -3410,8 +3434,15 @@ fn emit_inst(
                 writeln!(out, "  unreachable").unwrap();
                 writeln!(out, "{ok_label}:").unwrap();
                 *current_label = ok_label;
-                let op = if is_signed(ty) { "srem" } else { "urem" };
-                writeln!(out, "  %v{} = {op} {lty} %v{}, %v{}", dst.0, lhs.0, rhs.0).unwrap();
+                // Signed `TYPE_MIN % -1` overflow is UB (C-Div traps `/`; LLVM
+                // bare `srem` was silent UB) — TRAP it unconditionally, like
+                // div0 (error-model.md §11 (E)). Unsigned never overflows.
+                if is_signed(ty) {
+                    emit_div_overflow_trap(out, "rem", dst, lhs, rhs, ty, block_id, trap_counter, current_label, str_globals, loc);
+                    writeln!(out, "  %v{} = srem {lty} %v{}, %v{}", dst.0, lhs.0, rhs.0).unwrap();
+                } else {
+                    writeln!(out, "  %v{} = urem {lty} %v{}, %v{}", dst.0, lhs.0, rhs.0).unwrap();
+                }
             }
         }
         Inst::Mod { dst, ty, lhs, rhs } => {
@@ -3471,22 +3502,25 @@ fn emit_inst(
                     writeln!(out, "  %{res} = call {{ {lty}, i1 }} {intrinsic}({lty} {lhs_s}, {lty} {rhs_s})").unwrap();
                     writeln!(out, "  %v{} = extractvalue {{ {lty}, i1 }} %{res}, 1", dst.0).unwrap();
                 }
-                None => {
-                    // Div / Rem: flag = (rhs == 0) || (signed && lhs == TYPE_MIN && rhs == -1).
-                    let zero_cmp = format!("fc.{}.zero", dst.0);
-                    writeln!(out, "  %{zero_cmp} = icmp eq {lty} {rhs_s}, 0").unwrap();
+                None if matches!(op, FaultOp::DivOverflow) => {
+                    // Signed `TYPE_MIN/-1` overflow of a Div/Rem — its OWN
+                    // condition (split out of div0, error-model.md §11 (C)):
+                    // flag = (lhs == TYPE_MIN && rhs == -1). Unsigned never
+                    // overflows this way → constant false.
                     if signed {
                         let tmin = format!("-{}", 1u128 << (bits - 1)); // INT_MIN as decimal literal
                         let lmin = format!("fc.{}.lmin", dst.0);
                         let rneg1 = format!("fc.{}.rneg1", dst.0);
-                        let ovf = format!("fc.{}.ovf", dst.0);
                         writeln!(out, "  %{lmin} = icmp eq {lty} {lhs_s}, {tmin}").unwrap();
                         writeln!(out, "  %{rneg1} = icmp eq {lty} {rhs_s}, -1").unwrap();
-                        writeln!(out, "  %{ovf} = and i1 %{lmin}, %{rneg1}").unwrap();
-                        writeln!(out, "  %v{} = or i1 %{zero_cmp}, %{ovf}", dst.0).unwrap();
+                        writeln!(out, "  %v{} = and i1 %{lmin}, %{rneg1}", dst.0).unwrap();
                     } else {
-                        writeln!(out, "  %v{} = or i1 %{zero_cmp}, 0", dst.0).unwrap();
+                        writeln!(out, "  %v{} = add i1 0, 0", dst.0).unwrap();
                     }
+                }
+                None => {
+                    // Div / Rem div-by-zero ONLY: flag = (rhs == 0).
+                    writeln!(out, "  %v{} = icmp eq {lty} {rhs_s}, 0", dst.0).unwrap();
                 }
             }
         }
@@ -6845,6 +6879,54 @@ fn emit_overflow_check(
 
     // Update current_label — execution continues from the ok block
     *current_label = ok_label;
+}
+
+/// Emit the signed `TYPE_MIN / -1` (or `TYPE_MIN % -1`) overflow trap for a
+/// plain Div/Rem (error-model.md §11 (E)). Mirrors C-Div's unconditional guard:
+/// `if (lhs == TYPE_MIN && rhs == -1) panic("integer overflow")`. Branches to a
+/// trap block on overflow, else falls through to a fresh ok block (updating
+/// `current_label`) where the bare `sdiv`/`srem` is then emitted (statically
+/// safe there). Called ONLY for signed integer types after the div0 guard.
+fn emit_div_overflow_trap(
+    out: &mut String,
+    op: &str, // "div" or "rem" (label prefix only)
+    dst: &ValueId,
+    lhs: &ValueId,
+    rhs: &ValueId,
+    ty: &LirType,
+    block_id: u32,
+    trap_counter: &mut u32,
+    current_label: &mut String,
+    str_globals: &mut StrGlobals,
+    loc: &(String, u32, u32),
+) {
+    let lty = llvm_type(ty);
+    let bits = int_bits(ty);
+    let tmin = format!("-{}", 1u128 << (bits - 1)); // INT_MIN as decimal literal
+
+    let uid = *trap_counter;
+    *trap_counter += 1;
+    let lmin = format!("ovf{op}.{block_id}.{uid}.lmin");
+    let rneg1 = format!("ovf{op}.{block_id}.{uid}.rneg1");
+    let flag = format!("ovf{op}.{block_id}.{uid}.flag");
+    let trap_label = format!("ovf{op}.{block_id}.{uid}.trap");
+    let ok_label = format!("ovf{op}.{block_id}.{uid}.ok");
+
+    writeln!(out, "  %{lmin} = icmp eq {lty} %v{}, {tmin}", lhs.0).unwrap();
+    writeln!(out, "  %{rneg1} = icmp eq {lty} %v{}, -1", rhs.0).unwrap();
+    writeln!(out, "  %{flag} = and i1 %{lmin}, %{rneg1}").unwrap();
+    writeln!(out, "  br i1 %{flag}, label %{trap_label}, label %{ok_label}").unwrap();
+    writeln!(out, "{trap_label}:").unwrap();
+    let ov_se = format!("ovf{op}.{block_id}.{uid}.stderr");
+    writeln!(out, "  %{ov_se} = load ptr, ptr @stderr").unwrap();
+    let ov_msg = format!("{}:{}:{}: integer overflow\n", loc.0, loc.1, loc.2);
+    let ov_msg_idx = str_globals.intern(&ov_msg);
+    writeln!(out, "  call i32 (ptr, ptr, ...) @fprintf(ptr %{ov_se}, ptr @.str.{ov_msg_idx})").unwrap();
+    writeln!(out, "  call void @exit(i32 1)").unwrap();
+    writeln!(out, "  unreachable").unwrap();
+    writeln!(out, "{ok_label}:").unwrap();
+    *current_label = ok_label;
+    let _ = dst;
 }
 
 // ── Terminator Emission ────────────────────────────────────────────────────

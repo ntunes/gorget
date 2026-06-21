@@ -293,10 +293,26 @@ pub struct FunctionState {
 /// sets only `overflow_handler`, leaving `divzero_handler` `None`.
 #[derive(Clone, Copy, Debug)]
 pub struct FaultScope {
-    /// Add/Sub/Mul overflow faults branch here.
+    /// The USER's `Fault.Overflow` catch entry (binding or `catch
+    /// Fault.Overflow:`), or `None` if this scope doesn't catch overflow.
+    /// Add/Sub/Mul become faultable only when this is `Some`; a signed Div/Rem
+    /// `TYPE_MIN/-1` overflow routes here if `Some`, else to `div_overflow_panic`.
     pub overflow_handler: Option<BlockId>,
-    /// Div/Rem div-by-zero (+ signed TYPE_MIN/-1) faults branch here.
+    /// The USER's `Fault.DivByZero` catch entry, or `None`. A Div/Rem `rhs == 0`
+    /// routes here if `Some`, else to `div_zero_panic`.
     pub divzero_handler: Option<BlockId>,
+    /// The USER's `Fault.Bounds` catch entry, or `None`. An out-of-bounds array
+    /// index read becomes a `FaultableIndexLoad` branching here only when `Some`.
+    pub bounds_handler: Option<BlockId>,
+    /// GIR block that panics `"integer overflow"` — the UNCAUGHT-`TYPE_MIN/-1`
+    /// destination for a Div/Rem in a scope that doesn't catch `Fault.Overflow`
+    /// (partial-catch). So a Div/Rem ALWAYS has both fault categories handled
+    /// (user entry OR panic) at GIR — the LIR just branches, no LIR-level panic
+    /// (uniform across both backends, error-model.md §11 (C) partial-catch).
+    pub div_overflow_panic: BlockId,
+    /// GIR block that panics `"division by zero"` — the UNCAUGHT-div0
+    /// destination for a Div/Rem in a scope that doesn't catch `Fault.DivByZero`.
+    pub div_zero_panic: BlockId,
 }
 
 /// Tracks lowering state within a function.

@@ -5625,6 +5625,79 @@ fn fault_panic_default() {
     run_gg_panics("fault_panic_default.gg", "integer overflow");
 }
 
+// ── Error model — Increment 2 (Bounds + Div-split + qualifier + plain-op
+// INT_MIN trap, error-model.md §11). ──
+
+#[test]
+fn fault_catch_bounds() {
+    // (A) Fault.Bounds: an out-of-bounds ARRAY index read branches to the local
+    // handler (pattern + binding forms); an in-bounds read yields the element.
+    run_gg("fault_catch_bounds.gg", "-1\n20\n7");
+}
+
+#[test]
+fn fault_catch_bounds_negidx() {
+    // (A) §11.6: a negative index is a CATCHABLE Bounds inside a catch.
+    run_gg("fault_catch_bounds_negidx.gg", "-1");
+}
+
+#[test]
+fn fault_catch_bounds_drop() {
+    // (A) §5 drop-correctness: a faultable read of a Drop-bearing element
+    // (String); both the in-bounds clone and the out-of-bounds handler are
+    // ASan-clean (no leak/double-free of the Vector's owned strings).
+    run_gg("fault_catch_bounds_drop.gg", "bob\nout-of-range");
+}
+
+#[test]
+fn fault_bounds_panic_default() {
+    // (A) Panic-by-default preserved: an UNCAUGHT out-of-bounds index still
+    // panics `index out of bounds` and exit(1).
+    run_gg_panics("fault_bounds_panic_default.gg", "index out of bounds");
+}
+
+#[test]
+fn fault_catch_intmin_div() {
+    // (C) Div-split: `INT_MIN/-1` → Fault.Overflow (NOT DivByZero); `10/0` →
+    // Fault.DivByZero; `INT_MIN % -1` → Fault.Overflow. Each caught correctly.
+    run_gg("fault_catch_intmin_div.gg", "1\n11\n22\n33");
+}
+
+#[test]
+fn fault_intmin_partial() {
+    // (C) Partial-catch guard: `(INT_MIN/-1) catch Fault.DivByZero:` does NOT
+    // catch the overflow → panics `integer overflow` (uniform on both backends).
+    run_gg_panics("fault_intmin_partial.gg", "integer overflow");
+}
+
+#[test]
+fn fault_intmin_partial_divzero() {
+    // (C) Partial-catch guard, other direction: `(10/0) catch Fault.Overflow:`
+    // does NOT catch the div0 → panics `division by zero`.
+    run_gg_panics("fault_intmin_partial_divzero.gg", "division by zero");
+}
+
+#[test]
+fn fault_catch_bad_qualifier() {
+    // (D) A wrong fault-catch enum qualifier (`Bogus.Overflow`) is REJECTED at
+    // typecheck, not silently accepted as `Fault.Overflow`.
+    check_gg_fails("fault_catch_bad_qualifier.gg", "Bogus.Overflow");
+}
+
+#[test]
+fn div_intmin_plain() {
+    // (E) Plain-op cross-backend trap: an UNCAUGHT `INT_MIN / -1` panics
+    // `integer overflow` on BOTH backends (was UB on LLVM-Div).
+    run_gg_panics("div_intmin_plain.gg", "integer overflow");
+}
+
+#[test]
+fn rem_intmin_plain() {
+    // (E) Plain-op cross-backend trap: an UNCAUGHT `INT_MIN % -1` panics
+    // `integer overflow` on BOTH backends (was silent 0 on C-Rem, UB on LLVM-Rem).
+    run_gg_panics("rem_intmin_plain.gg", "integer overflow");
+}
+
 #[test]
 fn panic_location_overflow() {
     // Phase 3 stack-traces: panic message must carry `file:line:col`
@@ -10881,7 +10954,8 @@ fn format_expr_canonical(expr: &Expr) -> String {
         }
         Expr::FaultCatch { expr, pattern, handler } => {
             let pat = match pattern {
-                gorget::parser::ast::FaultCatchPattern::Variant(v) => format!("Fault.{}", v.node),
+                gorget::parser::ast::FaultCatchPattern::Variant { qualifier, variant } =>
+                    format!("{}.{}", qualifier.node, variant.node),
                 gorget::parser::ast::FaultCatchPattern::Binding(name) => name.node.clone(),
             };
             format!(

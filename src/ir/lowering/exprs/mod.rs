@@ -3506,17 +3506,19 @@ fn lower_fault_catch_expr(
     use super::context::FaultScope;
 
     // Which fault categories does this catch intercept?
-    // - binding form `catch f:` → BOTH (Overflow + DivByZero);
+    // - binding form `catch f:` → ALL (Overflow + DivByZero + Bounds);
     // - pattern form `catch Fault.Overflow:` → Overflow only;
-    // - pattern form `catch Fault.DivByZero:` → DivByZero only.
-    let (catch_overflow, catch_divzero, binding_name) = match pattern {
-        ast::FaultCatchPattern::Binding(name) => (true, true, Some(name.node.clone())),
-        ast::FaultCatchPattern::Variant(v) => match v.node.as_str() {
-            "Overflow" => (true, false, None),
-            "DivByZero" => (false, true, None),
+    // - pattern form `catch Fault.DivByZero:` → DivByZero only;
+    // - pattern form `catch Fault.Bounds:` → Bounds only.
+    let (catch_overflow, catch_divzero, catch_bounds, binding_name) = match pattern {
+        ast::FaultCatchPattern::Binding(name) => (true, true, true, Some(name.node.clone())),
+        ast::FaultCatchPattern::Variant { variant, .. } => match variant.node.as_str() {
+            "Overflow" => (true, false, false, None),
+            "DivByZero" => (false, true, false, None),
+            "Bounds" => (false, false, true, None),
             // An unknown variant was already reported at typecheck; lower it as
             // "catch nothing" so the build stays well-formed (ops panic).
-            _ => (false, false, None),
+            _ => (false, false, false, None),
         },
     };
 
@@ -3526,6 +3528,34 @@ fn lower_fault_catch_expr(
     let merge_bb = builder.new_block();
     let overflow_entry = if catch_overflow { Some(builder.new_block()) } else { None };
     let divzero_entry = if catch_divzero { Some(builder.new_block()) } else { None };
+    let bounds_entry = if catch_bounds { Some(builder.new_block()) } else { None };
+
+    // Per-category PANIC blocks for the UNCAUGHT Div/Rem fault. A single signed
+    // Div has two fault categories; in a partial-catch (`catch Fault.DivByZero:`
+    // doesn't catch the `TYPE_MIN/-1` overflow, and vice-versa) the uncaught
+    // category must PANIC — uniformly on both backends. Emit the panic at GIR
+    // (a `gorget_panic` block) so the LIR Div lowering only ever BRANCHES (no
+    // backend-specific LIR panic; error-model.md §11 (C) partial-catch). Filled
+    // below; if no Div/Rem appears in the subtree these blocks are dead and DCE
+    // removes them. (Add/Sub/Mul never reach here — they only fault when caught.)
+    let div_overflow_panic = builder.new_block();
+    let div_zero_panic = builder.new_block();
+    let saved_active = builder.current_block;
+    builder.switch_to(div_overflow_panic);
+    builder.call_extern(
+        "gorget_panic",
+        vec![Operand::Constant(Constant::Str("integer overflow".to_string()))],
+        UNIT_TYPE,
+    );
+    builder.unreachable();
+    builder.switch_to(div_zero_panic);
+    builder.call_extern(
+        "gorget_panic",
+        vec![Operand::Constant(Constant::Str("division by zero".to_string()))],
+        UNIT_TYPE,
+    );
+    builder.unreachable();
+    builder.switch_to(saved_active);
 
     // Push the fault scope for the inner expression's subtree. Save/restore the
     // outer scope so a nested fault-catch composes (innermost wins).
@@ -3533,6 +3563,9 @@ fn lower_fault_catch_expr(
     ctx.func_state.fault_scope = Some(FaultScope {
         overflow_handler: overflow_entry,
         divzero_handler: divzero_entry,
+        bounds_handler: bounds_entry,
+        div_overflow_panic,
+        div_zero_panic,
     });
     // The wrapped expression is a plain value; suppress the throws-call
     // auto-prop peel (a faultable `a*b` is never a Result — mirror typecheck).
@@ -3540,6 +3573,19 @@ fn lower_fault_catch_expr(
     let inner_val = lower_expr(ctx, builder, inner);
     // Pop the fault scope — faults outside this expression panic again.
     ctx.func_state.fault_scope = saved_scope;
+
+    // A faultable index read of a RESOURCE element (e.g. `Vector[String]`)
+    // yields a `Ptr(T)` borrow on the no-fault path, but a pattern-form handler
+    // (`catch Fault.Bounds: "fallback"`) yields an OWNED `T`. The fault-catch
+    // result ESCAPES the catch (an ownership boundary), so materialize the
+    // no-fault borrow to an owned value here — mirroring the Ptr→owned clone the
+    // outer `T x = …`/`return …` boundary would do anyway — so BOTH branches
+    // share the OWNED result type (else the C/LLVM result slot is `void*` and the
+    // handler stores a `Str` into it). Primitive int results (the common
+    // faultable-arith case) are pass-through.
+    let inner_val = ctx.ensure_owned_at_boundary(
+        builder, inner_val, inner.span, crate::ir::ImplicitCloneReason::ReturnFromBorrow,
+    );
 
     let result_type = infer_operand_type_full(ctx, &inner_val, builder);
     let result_local = builder.add_local(result_type, None);
@@ -3564,9 +3610,23 @@ fn lower_fault_catch_expr(
         } else {
             AssignMode::Copy
         };
+        // Snapshot the source BEFORE assign_mode consumes the operand so a
+        // Move-mode store can move-zero it (mirrors `lower_catch_expr`): without
+        // this, the source (e.g. a freshly-cloned owned String from the
+        // `ensure_owned_at_boundary` materialization, or a Move-staged Vector)
+        // shares heap data with `result_local` and BOTH drop at scope exit →
+        // double-free.
+        let src_local = if let Operand::Copy(ref p) | Operand::Move(ref p) = val {
+            if p.projections.is_empty() { Some(p.local) } else { None }
+        } else { None };
         builder.assign_mode(mode, Place::local(result_local), val);
         if mode == AssignMode::Move {
             ctx.set_owned(builder, result_local);
+            if let Some(src) = src_local {
+                if !ctx.drops.is_moved(src) {
+                    ctx.move_zero_and_mark(builder, src);
+                }
+            }
         }
     }
 
@@ -3599,6 +3659,9 @@ fn lower_fault_catch_expr(
     }
     if let Some(entry) = divzero_entry {
         lower_entry(ctx, builder, entry, "DivByZero");
+    }
+    if let Some(entry) = bounds_entry {
+        lower_entry(ctx, builder, entry, "Bounds");
     }
 
     builder.switch_to(merge_bb);

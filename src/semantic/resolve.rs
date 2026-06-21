@@ -169,13 +169,13 @@ pub fn collect_top_level(
     // like a non-generic user enum (see the `Item::Enum` arm) — we `alloc_def`
     // each variant WITHOUT inserting it into scope, and record them in
     // `ctx.enum_variants` so qualified access, pattern matching, and the
-    // Fault-keyed panic-default exhaustiveness rule resolve. Increment 1:
-    // Overflow + DivByZero only. (The IR-lowering twin lives in
+    // Fault-keyed panic-default exhaustiveness rule resolve. Overflow +
+    // DivByZero + Bounds. (The IR-lowering twin lives in
     // `inject_builtin_enums`, generics/substitute.rs.)
     if let Ok(fault_def_id) = scopes.define("Fault".to_string(), DefKind::Enum, Span::dummy()) {
         let mut variant_infos = Vec::new();
         let mut variant_field_types = Vec::new();
-        for vname in &["Overflow", "DivByZero"] {
+        for vname in &["Overflow", "DivByZero", "Bounds"] {
             let variant_def_id = scopes.alloc_def(vname.to_string(), DefKind::Variant, Span::dummy());
             variant_infos.push((vname.to_string(), variant_def_id));
             variant_field_types.push((vname.to_string(), Vec::new()));

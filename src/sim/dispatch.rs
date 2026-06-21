@@ -60,6 +60,7 @@ fn mark_instruction_dst(initialized: &mut HashSet<u32>, inst: &Instruction) {
         }
         Instruction::FieldLoad { dst, .. }
         | Instruction::IndexLoad { dst, .. }
+        | Instruction::FaultableIndexLoad { dst, .. }
         | Instruction::HeapAlloc { dst, .. }
         | Instruction::HeapAllocArray { dst, .. }
         | Instruction::BinOp { dst, .. }
@@ -868,7 +869,14 @@ impl<'m> Interpreter<'m> {
                 locals[idx] = field_val;
             }
 
-            Instruction::IndexLoad { dst, base, index, .. } => {
+            // The simulator drives control flow from terminators, not from a
+            // mid-block instruction, so it cannot model the bounds-fault BRANCH.
+            // It reads the element exactly like a plain `IndexLoad` (returning a
+            // SimError::IndexOutOfBounds on OOB — the sim's panic path); the
+            // fault-recovery branch is a backend concern not exercised by the
+            // sim, mirroring `FaultableBinOp` above.
+            Instruction::IndexLoad { dst, base, index, .. }
+            | Instruction::FaultableIndexLoad { dst, base, index, .. } => {
                 let base_val = self.read_place(locals, base)?;
                 let idx_val = self.eval_operand(locals, index)?;
 

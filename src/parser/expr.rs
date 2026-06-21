@@ -1109,13 +1109,14 @@ impl Parser {
                 // ── Fault-catch (NEW form) ──
                 let enum_or_name = self.expect_identifier()?;
                 let pattern = if matches!(self.peek(), Token::Dot) {
-                    // Qualified path `Enum.Variant` → fault PATTERN form. We keep
-                    // the VARIANT name (the leading `Fault` is the enum, checked
-                    // in typecheck); only the variant selects which fault arm
-                    // fires.
+                    // Qualified path `Enum.Variant` → fault PATTERN form. Keep
+                    // BOTH the qualifier (the enum prefix, e.g. `Fault`) and the
+                    // variant; the qualifier is validated at typecheck (a wrong
+                    // qualifier like `Bogus.Overflow` is rejected) and the
+                    // variant selects which fault arm fires.
                     self.advance(); // consume `.`
                     let variant = self.expect_identifier()?;
-                    FaultCatchPattern::Variant(variant)
+                    FaultCatchPattern::Variant { qualifier: enum_or_name, variant }
                 } else {
                     // Bare identifier → fault BINDING form `catch f:`.
                     FaultCatchPattern::Binding(enum_or_name)

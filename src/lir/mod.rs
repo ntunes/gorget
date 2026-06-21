@@ -292,33 +292,41 @@ pub enum Overflow {
 
 // ── Fault-catch checked arithmetic ───────────────────────────────────────────
 
-/// Which arithmetic operation a [`Inst::FaultCheck`] tests for a fault.
+/// Which arithmetic FAULT CONDITION a [`Inst::FaultCheck`] tests.
 ///
-/// `Add`/`Sub`/`Mul` test for integer overflow; `Div`/`Rem` test for the two
-/// division faults (`rhs == 0`, and the signed `TYPE_MIN / -1` overflow). The
-/// op is carried as TYPED metadata so the C/LLVM emitters pick the right check
-/// from a typed `match`, never from a name/string heuristic (layering-discipline
-/// rule 2). The corresponding fault enum variant is `Fault.Overflow` for the
-/// first three and `Fault.DivByZero` for the last two.
+/// `Add`/`Sub`/`Mul` test for integer overflow. `Div`/`Rem` test ONLY for
+/// divide-by-zero (`rhs == 0`); the signed `TYPE_MIN / -1` overflow of a
+/// division is a SEPARATE condition `DivOverflow` (error-model.md §11 Increment
+/// 2 (C) split — a single signed Div has two fault categories, routed to two
+/// different handlers: div0 → `Fault.DivByZero`, `TYPE_MIN/-1` → `Fault.Overflow`).
+/// The op is carried as TYPED metadata so the C/LLVM emitters pick the right
+/// check from a typed `match`, never from a name/string heuristic
+/// (layering-discipline rule 2). The corresponding fault enum variant is
+/// `Fault.Overflow` for Add/Sub/Mul + DivOverflow and `Fault.DivByZero` for
+/// Div/Rem.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FaultOp {
     Add,
     Sub,
     Mul,
+    /// `rhs == 0` for a Div/Rem.
     Div,
+    /// `rhs == 0` for a Div/Rem (Rem div-by-zero).
     Rem,
+    /// Signed `lhs == TYPE_MIN && rhs == -1` overflow of a Div/Rem.
+    DivOverflow,
 }
 
 impl FaultOp {
-    /// The C `__builtin_*_overflow` mnemonic for the overflow ops; `None` for
-    /// the division ops (which are checked with an explicit zero/`TYPE_MIN`
-    /// comparison rather than a builtin).
+    /// The C `__builtin_*_overflow` mnemonic for the Add/Sub/Mul overflow ops;
+    /// `None` for the division-fault conditions (`Div`/`Rem`/`DivOverflow`),
+    /// which are checked with an explicit comparison rather than a builtin.
     pub fn overflow_builtin(self) -> Option<&'static str> {
         match self {
             FaultOp::Add => Some("add"),
             FaultOp::Sub => Some("sub"),
             FaultOp::Mul => Some("mul"),
-            FaultOp::Div | FaultOp::Rem => None,
+            FaultOp::Div | FaultOp::Rem | FaultOp::DivOverflow => None,
         }
     }
 }

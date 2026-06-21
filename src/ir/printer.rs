@@ -338,16 +338,31 @@ fn print_instruction(out: &mut String, inst: &Instruction, reg: &TypeRegistry) {
             type_id,
             lhs,
             rhs,
-            fault_handler,
+            overflow_handler,
+            divzero_handler,
         } => {
+            let ovf = overflow_handler.map(|b| format!(" !overflow->bb{}", b.0)).unwrap_or_default();
+            let dz = divzero_handler.map(|b| format!(" !divzero->bb{}", b.0)).unwrap_or_default();
             write!(
                 out,
-                "_{} = {} {} {}, {} !fault->bb{}",
+                "_{} = {} {} {}, {}{}{}",
                 dst.0,
                 format_binop(*op),
                 format_type(*type_id, reg),
                 format_operand(lhs, reg),
                 format_operand(rhs, reg),
+                ovf,
+                dz,
+            )
+            .unwrap();
+        }
+        Instruction::FaultableIndexLoad { dst, base, index, fault_handler, .. } => {
+            write!(
+                out,
+                "_{} = index_load {}, {} !bounds->bb{}",
+                dst.0,
+                format_place(base),
+                format_operand(index, reg),
                 fault_handler.0,
             )
             .unwrap();

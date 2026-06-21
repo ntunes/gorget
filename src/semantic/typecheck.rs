@@ -3080,10 +3080,24 @@ impl<'a> TypeChecker<'a> {
                 self.suppress_auto_prop = true;
                 let inner_type = self.infer_expr(inner);
                 match pattern {
-                    FaultCatchPattern::Variant(variant) => {
-                        // `catch Fault.Overflow:` — validate the variant is a
-                        // real `Fault` variant; nothing is bound.
-                        self.check_fault_variant(variant);
+                    FaultCatchPattern::Variant { qualifier, variant } => {
+                        // `catch Fault.Overflow:` — the qualifier MUST be the
+                        // built-in `Fault` enum (a fault-catch can only name a
+                        // `Fault` variant). Reject a wrong qualifier
+                        // (`Bogus.Overflow`) rather than silently accepting it.
+                        if qualifier.node != "Fault" {
+                            self.error(
+                                SemanticErrorKind::UndefinedName {
+                                    name: format!("{}.{}", qualifier.node, variant.node),
+                                    suggestion: Some(format!("Fault.{}", variant.node)),
+                                },
+                                qualifier.span,
+                            );
+                        } else {
+                            // Validate the variant is a real `Fault` variant;
+                            // nothing is bound.
+                            self.check_fault_variant(variant);
+                        }
                     }
                     FaultCatchPattern::Binding(name) => {
                         // `catch f:` binds `f` to the constructed `Fault` value.

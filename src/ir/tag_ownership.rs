@@ -237,7 +237,12 @@ fn infer_func(
                 // `Borrow` mode is the zero-copy view path and is NOT
                 // tagged here. Catches the `Dict[K, V][k]` shape where
                 // the value is read by clone (default for resource Vs).
-                Instruction::IndexLoad { dst, read, .. } => {
+                // A faultable index read (Fault.Bounds) materializes the same
+                // owned element as a plain `IndexLoad` on the no-fault path —
+                // SAME ownership tag, else a Drop-bearing element leaks /
+                // double-frees under Bounds-catch.
+                Instruction::IndexLoad { dst, read, .. }
+                | Instruction::FaultableIndexLoad { dst, read, .. } => {
                     use crate::ir::instructions::ReadMode;
                     if matches!(read, ReadMode::Clone) {
                         decisions.push((*dst, LocalOwnership::Owned));

@@ -315,8 +315,8 @@ fn substitute_expr_types(expr: &mut Spanned<Expr>, subs: &[(String, Type)]) {
 
 /// Build the compiler-internal `Fault` enum (error-model.md §11.1): a
 /// non-generic closed enum of the recoverable runtime faults a local `catch`
-/// can intercept. Its variants are qualified-only (`Fault.Overflow`). Increment
-/// 1 ships `Overflow` + `DivByZero`. Single source of truth for BOTH the
+/// can intercept. Its variants are qualified-only (`Fault.Overflow`). Ships
+/// `Overflow` + `DivByZero` + `Bounds`. Single source of truth for BOTH the
 /// `enum_templates` injection here AND the concrete TypeDef registration in
 /// `ir/lowering/mod.rs` (a non-generic built-in must be materialized eagerly,
 /// unlike the lazily-monomorphized generic Option/Result).
@@ -334,6 +334,10 @@ pub fn builtin_fault_enum() -> ast::EnumDef {
             }),
             Spanned::dummy(Variant {
                 name: Spanned::dummy("DivByZero".to_string()),
+                fields: VariantFields::Unit,
+            }),
+            Spanned::dummy(Variant {
+                name: Spanned::dummy("Bounds".to_string()),
                 fields: VariantFields::Unit,
             }),
         ],

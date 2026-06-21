@@ -108,53 +108,85 @@ impl<'a> FuncLowering<'a> {
                 }
             }
 
-            // Fault-catch checked arithmetic (error-model.md §11.2). Split the
-            // block at the op: compute the fault FLAG, branch to the handler
-            // (mapped GIR→LIR via block_map) on fault, else compute `dst = lhs
-            // op rhs` in the continuation. The shared `Inst::FaultCheck` +
-            // `Term::Branch` shape both backends already emit — no goto, no
-            // backend-specific routing.
-            Instruction::FaultableBinOp { dst, op, type_id, lhs, rhs, fault_handler } => {
+            // Fault-catch checked arithmetic (error-model.md §11). Split the
+            // block at the op: compute a fault FLAG per CAUGHT category, branch
+            // to the handler (mapped GIR→LIR via block_map) on fault, else
+            // compute `dst = lhs op rhs` in the continuation. The shared
+            // `Inst::FaultCheck` + `Term::Branch` shape both backends already
+            // emit — no goto, no backend-specific routing.
+            //
+            // Add/Sub/Mul: a single overflow check → `overflow_handler`. Div/Rem
+            // have TWO fault categories (Increment 2 (C) split): the signed
+            // `TYPE_MIN/-1` overflow → `overflow_handler` (always `Some`: user
+            // catch OR the GIR panic block), and `rhs == 0` → `divzero_handler`
+            // (likewise always `Some`). Each emits its own check+branch; the
+            // continuation is reached only when ALL caught conditions are false,
+            // so the bare commit's residual checks are statically false there.
+            Instruction::FaultableBinOp { dst, op, type_id, lhs, rhs, overflow_handler, divzero_handler } => {
                 let l = self.lower_operand(lhs, bb);
                 let r = self.lower_operand(rhs, bb);
                 let ty = self.map_type(type_id);
-                let fault_op = match op {
-                    GirBinOp::Add => crate::lir::FaultOp::Add,
-                    GirBinOp::Sub => crate::lir::FaultOp::Sub,
-                    GirBinOp::Mul => crate::lir::FaultOp::Mul,
-                    GirBinOp::Div => crate::lir::FaultOp::Div,
-                    GirBinOp::Rem => crate::lir::FaultOp::Rem,
+                let is_div_rem = matches!(op, GirBinOp::Div | GirBinOp::Rem);
+                if !matches!(op, GirBinOp::Add | GirBinOp::Sub | GirBinOp::Mul | GirBinOp::Div | GirBinOp::Rem) {
                     // Only the five integer faultable ops reach here (gated at
                     // GIR build in lower_binary_op); any other op is a lowering
                     // bug — fall back to a non-faulting compute so the build is
                     // still well-formed.
-                    _ => {
-                        let result = self.lir_func.next_value();
-                        let inst = lower_binop(result, *op, l, r, ty);
-                        self.push_inst(bb, inst);
-                        self.store_to_local(*dst, result, bb);
-                        return bb;
-                    }
+                    let result = self.lir_func.next_value();
+                    let inst = lower_binop(result, *op, l, r, ty);
+                    self.push_inst(bb, inst);
+                    self.store_to_local(*dst, result, bb);
+                    return bb;
+                }
+
+                // Emit one FaultCheck + Branch for a fault condition, splitting
+                // the current block. Returns the new continuation block.
+                let emit_check = |this: &mut Self, cur: BlockId, fault_op: crate::lir::FaultOp, handler: ir::types::BlockId| -> BlockId {
+                    let flag = this.lir_func.next_value();
+                    this.push_inst(cur, Inst::FaultCheck { dst: flag, op: fault_op, ty: ty.clone(), lhs: l, rhs: r });
+                    let handler_lir = this.block_map[handler.0 as usize];
+                    let cont = this.lir_func.add_block();
+                    this.set_terminator(cur, Term::Branch {
+                        cond: flag,
+                        then_block: handler_lir,
+                        then_args: vec![],
+                        else_block: cont,
+                        else_args: vec![],
+                    });
+                    cont
                 };
-                // 1. flag = FaultCheck(op, lhs, rhs)  (no trap, no result commit)
-                let flag = self.lir_func.next_value();
-                self.push_inst(bb, Inst::FaultCheck { dst: flag, op: fault_op, ty: ty.clone(), lhs: l, rhs: r });
-                // 2. branch: fault → handler, no-fault → continuation
-                let handler_lir = self.block_map[fault_handler.0 as usize];
-                let cont_bb = self.lir_func.add_block();
-                self.set_terminator(bb, Term::Branch {
-                    cond: flag,
-                    then_block: handler_lir,
-                    then_args: vec![],
-                    else_block: cont_bb,
-                    else_args: vec![],
-                });
-                // 3. continuation: now safe to compute `dst = lhs op rhs`.
-                //    Add/Sub/Mul use WRAP mode (the FaultCheck already caught the
-                //    overflow, so the wrapped value is the correct committed
-                //    result on this path and never re-traps). Div/Rem use the
-                //    normal checked inst — its div0/TYPE_MIN traps are all
-                //    statically false here (the fault branch excluded them).
+
+                let mut cur = bb;
+                if is_div_rem {
+                    // Div/Rem: overflow (`TYPE_MIN/-1`) THEN div0 (`rhs == 0`).
+                    // Both handlers are always `Some` (user entry or panic block).
+                    if let Some(h) = overflow_handler {
+                        cur = emit_check(self, cur, crate::lir::FaultOp::DivOverflow, *h);
+                    }
+                    if let Some(h) = divzero_handler {
+                        let dz_op = if matches!(op, GirBinOp::Div) { crate::lir::FaultOp::Div } else { crate::lir::FaultOp::Rem };
+                        cur = emit_check(self, cur, dz_op, *h);
+                    }
+                } else {
+                    // Add/Sub/Mul: a single overflow check (always caught here —
+                    // the GIR build only makes these faultable when overflow is
+                    // caught).
+                    let fault_op = match op {
+                        GirBinOp::Add => crate::lir::FaultOp::Add,
+                        GirBinOp::Sub => crate::lir::FaultOp::Sub,
+                        _ => crate::lir::FaultOp::Mul,
+                    };
+                    if let Some(h) = overflow_handler {
+                        cur = emit_check(self, cur, fault_op, *h);
+                    }
+                }
+
+                // Continuation: now safe to compute `dst = lhs op rhs`.
+                //   Add/Sub/Mul use WRAP mode (the FaultCheck already caught the
+                //   overflow, so the wrapped value is the correct committed
+                //   result on this path and never re-traps). Div/Rem use the
+                //   normal checked inst — its div0/TYPE_MIN traps are all
+                //   statically false here (the fault branches excluded them).
                 let result = self.lir_func.next_value();
                 let commit_op = match op {
                     GirBinOp::Add => GirBinOp::AddWrap,
@@ -163,10 +195,10 @@ impl<'a> FuncLowering<'a> {
                     other => *other, // Div / Rem
                 };
                 let inst = lower_binop(result, commit_op, l, r, ty);
-                self.push_inst(cont_bb, inst);
-                self.store_to_local(*dst, result, cont_bb);
-                // Continue lowering subsequent instructions in the new block.
-                bb = cont_bb;
+                self.push_inst(cur, inst);
+                self.store_to_local(*dst, result, cur);
+                // Continue lowering subsequent instructions in the final block.
+                bb = cur;
             }
 
             Instruction::UnOp {
@@ -1069,125 +1101,10 @@ impl<'a> FuncLowering<'a> {
                         args: vec![base_val, idx],
                         arg_abis: abis,
                     });
-                    // gorget_array_get / gorget_map_get return void* pointing to the element.
-                    // If dst is Ptr(T), return the raw pointer (borrowed reference).
-                    let dst_gir_type = self.gir_func.locals[dst.0 as usize].type_id;
-                    if matches!(self.gir_types.get(dst_gir_type), Some(GirType::Ptr(_))) {
-                        // Mark Ptr(Str) element reads for C backend deref decisions.
-                        if let Some(GirType::Ptr(inner)) = self.gir_types.get(dst_gir_type) {
-                            if let Some(GirType::Named(name)) = self.gir_types.get(*inner) {
-                                if name == "GorgetString" {
-                                    self.lir_func.str_ptr_values.insert(ptr_val);
-                                }
-                            }
-                        }
-                        self.store_to_local(*dst, ptr_val, bb);
-                        return bb;
-                    }
-                    // Otherwise dereference to get the actual element value.
-                    let dst_slot = self.local_to_slot[dst.0 as usize];
-                    let mut elem_ty = self.lir_func.slots[dst_slot.0 as usize].ty.clone();
-                    // Closures are 16 bytes (GorgetClosure) but may be typed as I64 in LIR.
-                    // Fix: re-derive from GIR type with struct registry to get the correct
-                    // struct type, so Load reads the full closure (not just 8 bytes).
-                    // Closures are 16 bytes (GorgetClosure) but typed as I64 in GIR/LIR.
-                    // When reading from a collection of closures, the Load with I64 reads
-                    // only 8 bytes (fn_ptr), corrupting subsequent memcpy of the full closure.
-                    // Fix: detect closure-element collections by base type name and use
-                    // the GorgetClosure struct type instead, so Load reads full 16 bytes.
-                    if matches!(elem_ty, LirType::I64) && (
-                        base_type_name.contains("Callable") || base_type_name.contains("FnPtr")
-                    ) {
-                        if let Some(sid) = self.struct_reg.lookup("GorgetClosure") {
-                            elem_ty = LirType::Struct(sid);
-                        }
-                    }
-                    // Determine element type name for clone/drop decisions.
-                    let elem_type_name = base_type_name
-                        .strip_prefix("Vector__")
-                        .or_else(|| base_type_name.strip_prefix("Deque__"))
-                        .or_else(|| {
-                            // Dict__K__V → value type is everything after first "__" past key
-                            let rest = base_type_name.strip_prefix("Dict__")
-                                .or_else(|| base_type_name.strip_prefix("HashMap__"))?;
-                            let idx = rest.find("__")?;
-                            Some(&rest[idx + 2..])
-                        })
-                        .unwrap_or("");
-
-                    // For collection/string elements (Vector, Dict, Set, Str), clone
-                    // instead of move+zero so the parent collection retains the original.
-                    // Other resource types (Task, user structs) are still moved+zeroed
-                    // since they may be intentionally consumed (e.g., task.await()).
-                    let clone_fn = clone_fn_for_collection_element(elem_type_name, self.gir_types, self.module_structs);
-
-                    if let Some(clone_fn_name) = clone_fn {
-                        // Borrow mode: zero-copy view instead of clone for strings.
-                        // ReadMode::Borrow at this site == legacy `borrow: true`.
-                        let is_borrow = matches!(read, crate::ir::instructions::ReadMode::Borrow);
-                        let actual_fn = if is_borrow && clone_fn_name == "gorget_string_clone_to_owned" {
-                            "gorget_string_borrow".to_string()
-                        } else {
-                            clone_fn_name
-                        };
-                        let ret_ty = elem_ty.clone();
-                        self.ensure_extern(&actual_fn, &[LirType::Ptr], &ret_ty);
-                        let abis = self.lookup_arg_abis(&actual_fn);
-                        let result = self.lir_func.next_value();
-                        self.push_inst(bb, Inst::CallExtern {
-                            dst: Some(result),
-                            name: actual_fn,
-                            args: vec![ptr_val],
-                            arg_abis: abis,
-                        });
-                        self.store_to_local(*dst, result, bb);
-                    } else {
-                        let elem_drop = self.infer_drop_strategy(elem_type_name);
-                        if matches!(elem_drop, crate::ir::types::DropStrategy::Recursive) {
-                            // Recursive-drop struct: deep-clone via {Type}__clone(ptr)
-                            // to produce an independently-owned copy. The collection
-                            // retains its original element.
-                            let clone_fn = format!("{elem_type_name}__clone");
-                            let ret_ty = elem_ty.clone();
-                            self.ensure_extern(&clone_fn, &[LirType::Ptr], &ret_ty);
-                            let abis = self.lookup_arg_abis(&clone_fn);
-                            let result = self.lir_func.next_value();
-                            self.push_inst(bb, Inst::CallExtern {
-                                dst: Some(result),
-                                name: clone_fn,
-                                args: vec![ptr_val],
-                                arg_abis: abis,
-                            });
-                            self.store_to_local(*dst, result, bb);
-                        } else {
-                            // Other non-collection element: Load + move-zero
-                            let result = self.lir_func.next_value();
-                            self.push_inst(bb, Inst::Load {
-                                dst: result,
-                                ty: elem_ty.clone(),
-                                ptr: ptr_val,
-                            });
-                            self.store_to_local(*dst, result, bb);
-                        }
-
-                        // Zero source slot for non-Recursive move semantics.
-                        // Recursive types don't zero — the clone makes the copy independent.
-                        let elem_needs_zero = match &elem_drop {
-                            crate::ir::types::DropStrategy::None
-                            | crate::ir::types::DropStrategy::Recursive => false,
-                            _ => true,
-                        };
-                        if elem_needs_zero {
-                            let byte_size = c_sizeof_lir_type(&elem_ty, &self.module_structs) as i64;
-                            if byte_size > 0 {
-                                let zero = self.emit_i32_const(bb, 0);
-                                let sz = self.emit_i64_const(bb, byte_size);
-                                self.push_inst(bb, Inst::Memset {
-                                    ptr: ptr_val, byte: zero, size: sz,
-                                });
-                            }
-                        }
-                    }
+                    // Materialize the element from `ptr_val` (Ptr-return-vs-deref
+                    // split + clone/move-zero/str-ptr logic). SHARED with the
+                    // faultable-index path (error-model.md §11 `Fault.Bounds`).
+                    self.materialize_collection_element(*dst, ptr_val, &base_type_name, *read, bb);
                 } else {
                     // Fallback: generic element access via ElemPtr
                     let base_val = self.lower_place_addr(base, bb);
@@ -1219,6 +1136,68 @@ impl<'a> FuncLowering<'a> {
                     });
                     self.store_to_local(*dst, result, bb);
                 }
+            }
+
+            // Fault-`catch`able array element read (error-model.md §11,
+            // `Fault.Bounds`). The GIR build (`exprs/methods.rs`) emits this
+            // ONLY for an array element read inside a fault scope that catches
+            // `Bounds`. Use the non-panicking `gorget_array_safe_get` (returns
+            // NULL on OOB — signed index, so negatives are OOB too), test the
+            // returned pointer for NULL, then BRANCH: NULL → the GIR handler
+            // (block_map remapped), non-NULL → a continuation that materializes
+            // the element by SHARING the `IndexLoad` clone/move-zero/str-ptr
+            // logic (NULL is never deref'd before the branch — branch-before-
+            // deref, unwind-free). No goto, no backend-specific routing.
+            Instruction::FaultableIndexLoad { dst, base, index, read, fault_handler } => {
+                let base_type = self.effective_place_type(base);
+                let base_type_name = self.resolve_type_name(base_type);
+                // Resolve the collection pointer exactly like the IndexLoad
+                // array path (deref a Ptr-typed field-load ref that isn't a
+                // borrowed-param ref_local).
+                let mut base_val = self.lower_place_addr(base, bb);
+                let base_gir = self.gir_func.locals[base.local.0 as usize].type_id;
+                let is_ref_local = self.gir_func.locals.get(base.local.0 as usize)
+                    .map_or(false, |l| l.slot_kind == crate::ir::SlotKind::BorrowedPtr);
+                if matches!(self.gir_types.get(base_gir), Some(GirType::Ptr(_)))
+                    && base.projections.is_empty()
+                    && !is_ref_local
+                {
+                    let deref = self.lir_func.next_value();
+                    self.push_inst(bb, Inst::Load {
+                        dst: deref, ptr: base_val, ty: LirType::Ptr,
+                    });
+                    base_val = deref;
+                }
+                let idx = self.lower_operand(index, bb);
+                // gorget_array_safe_get(&arr, idx) → element ptr or NULL on OOB.
+                self.ensure_extern("gorget_array_safe_get", &[LirType::Ptr, LirType::I64], &LirType::Ptr);
+                let abis = self.lookup_arg_abis("gorget_array_safe_get");
+                let ptr_val = self.lir_func.next_value();
+                self.push_inst(bb, Inst::CallExtern {
+                    dst: Some(ptr_val),
+                    name: "gorget_array_safe_get".to_string(),
+                    args: vec![base_val, idx],
+                    arg_abis: abis,
+                });
+                // flag = (ptr_val == NULL). Branch BEFORE any deref.
+                let null = self.lower_constant(&Constant::Null, bb);
+                let flag = self.lir_func.next_value();
+                self.push_inst(bb, Inst::Cmp {
+                    dst: flag, op: CmpOp::Eq, lhs: ptr_val, rhs: null,
+                });
+                let handler_lir = self.block_map[fault_handler.0 as usize];
+                let cont_bb = self.lir_func.add_block();
+                self.set_terminator(bb, Term::Branch {
+                    cond: flag,
+                    then_block: handler_lir,
+                    then_args: vec![],
+                    else_block: cont_bb,
+                    else_args: vec![],
+                });
+                // Continuation: in-bounds — materialize the element (shared with
+                // the IndexLoad array path; ptr_val is non-NULL here).
+                self.materialize_collection_element(*dst, ptr_val, &base_type_name, *read, cont_bb);
+                bb = cont_bb;
             }
 
             // -- Enum --
@@ -1793,6 +1772,142 @@ impl<'a> FuncLowering<'a> {
             }
         }
         bb
+    }
+
+    /// Materialize a collection element from a raw element pointer (`ptr_val`,
+    /// the void* result of `gorget_array_get` / `gorget_array_safe_get` /
+    /// `gorget_map_get`). The single source of truth for the element
+    /// Ptr-return-vs-deref split, the str-ptr marking, and the clone-vs-move-zero
+    /// element handling (collection clone, recursive deep-clone, plain Load +
+    /// move-zero `Memset`). SHARED between `IndexLoad` (the array/dict path) and
+    /// `FaultableIndexLoad` (the `Fault.Bounds` path) so the faultable read gets
+    /// the exact same drop/clone semantics (error-model.md §11 — no duplication).
+    /// `ptr_val` must be a VALID element pointer here (the faultable path branches
+    /// on NULL before calling this; it is never NULL when this runs).
+    fn materialize_collection_element(
+        &mut self,
+        dst: ir::types::LocalId,
+        ptr_val: ValueId,
+        base_type_name: &str,
+        read: crate::ir::instructions::ReadMode,
+        bb: BlockId,
+    ) {
+        // gorget_array_get / gorget_map_get return void* pointing to the element.
+        // If dst is Ptr(T), return the raw pointer (borrowed reference).
+        let dst_gir_type = self.gir_func.locals[dst.0 as usize].type_id;
+        if matches!(self.gir_types.get(dst_gir_type), Some(GirType::Ptr(_))) {
+            // Mark Ptr(Str) element reads for C backend deref decisions.
+            if let Some(GirType::Ptr(inner)) = self.gir_types.get(dst_gir_type) {
+                if let Some(GirType::Named(name)) = self.gir_types.get(*inner) {
+                    if name == "GorgetString" {
+                        self.lir_func.str_ptr_values.insert(ptr_val);
+                    }
+                }
+            }
+            self.store_to_local(dst, ptr_val, bb);
+            return;
+        }
+        // Otherwise dereference to get the actual element value.
+        let dst_slot = self.local_to_slot[dst.0 as usize];
+        let mut elem_ty = self.lir_func.slots[dst_slot.0 as usize].ty.clone();
+        // Closures are 16 bytes (GorgetClosure) but may be typed as I64 in LIR.
+        // When reading from a collection of closures, the Load with I64 reads
+        // only 8 bytes (fn_ptr), corrupting subsequent memcpy of the full closure.
+        // Fix: detect closure-element collections by base type name and use
+        // the GorgetClosure struct type instead, so Load reads full 16 bytes.
+        if matches!(elem_ty, LirType::I64) && (
+            base_type_name.contains("Callable") || base_type_name.contains("FnPtr")
+        ) {
+            if let Some(sid) = self.struct_reg.lookup("GorgetClosure") {
+                elem_ty = LirType::Struct(sid);
+            }
+        }
+        // Determine element type name for clone/drop decisions.
+        let elem_type_name = base_type_name
+            .strip_prefix("Vector__")
+            .or_else(|| base_type_name.strip_prefix("Deque__"))
+            .or_else(|| {
+                // Dict__K__V → value type is everything after first "__" past key
+                let rest = base_type_name.strip_prefix("Dict__")
+                    .or_else(|| base_type_name.strip_prefix("HashMap__"))?;
+                let idx = rest.find("__")?;
+                Some(&rest[idx + 2..])
+            })
+            .unwrap_or("");
+
+        // For collection/string elements (Vector, Dict, Set, Str), clone
+        // instead of move+zero so the parent collection retains the original.
+        // Other resource types (Task, user structs) are still moved+zeroed
+        // since they may be intentionally consumed (e.g., task.await()).
+        let clone_fn = clone_fn_for_collection_element(elem_type_name, self.gir_types, self.module_structs);
+
+        if let Some(clone_fn_name) = clone_fn {
+            // Borrow mode: zero-copy view instead of clone for strings.
+            // ReadMode::Borrow at this site == legacy `borrow: true`.
+            let is_borrow = matches!(read, crate::ir::instructions::ReadMode::Borrow);
+            let actual_fn = if is_borrow && clone_fn_name == "gorget_string_clone_to_owned" {
+                "gorget_string_borrow".to_string()
+            } else {
+                clone_fn_name
+            };
+            let ret_ty = elem_ty.clone();
+            self.ensure_extern(&actual_fn, &[LirType::Ptr], &ret_ty);
+            let abis = self.lookup_arg_abis(&actual_fn);
+            let result = self.lir_func.next_value();
+            self.push_inst(bb, Inst::CallExtern {
+                dst: Some(result),
+                name: actual_fn,
+                args: vec![ptr_val],
+                arg_abis: abis,
+            });
+            self.store_to_local(dst, result, bb);
+        } else {
+            let elem_drop = self.infer_drop_strategy(elem_type_name);
+            if matches!(elem_drop, crate::ir::types::DropStrategy::Recursive) {
+                // Recursive-drop struct: deep-clone via {Type}__clone(ptr)
+                // to produce an independently-owned copy. The collection
+                // retains its original element.
+                let clone_fn = format!("{elem_type_name}__clone");
+                let ret_ty = elem_ty.clone();
+                self.ensure_extern(&clone_fn, &[LirType::Ptr], &ret_ty);
+                let abis = self.lookup_arg_abis(&clone_fn);
+                let result = self.lir_func.next_value();
+                self.push_inst(bb, Inst::CallExtern {
+                    dst: Some(result),
+                    name: clone_fn,
+                    args: vec![ptr_val],
+                    arg_abis: abis,
+                });
+                self.store_to_local(dst, result, bb);
+            } else {
+                // Other non-collection element: Load + move-zero
+                let result = self.lir_func.next_value();
+                self.push_inst(bb, Inst::Load {
+                    dst: result,
+                    ty: elem_ty.clone(),
+                    ptr: ptr_val,
+                });
+                self.store_to_local(dst, result, bb);
+            }
+
+            // Zero source slot for non-Recursive move semantics.
+            // Recursive types don't zero — the clone makes the copy independent.
+            let elem_needs_zero = match &elem_drop {
+                crate::ir::types::DropStrategy::None
+                | crate::ir::types::DropStrategy::Recursive => false,
+                _ => true,
+            };
+            if elem_needs_zero {
+                let byte_size = c_sizeof_lir_type(&elem_ty, &self.module_structs) as i64;
+                if byte_size > 0 {
+                    let zero = self.emit_i32_const(bb, 0);
+                    let sz = self.emit_i64_const(bb, byte_size);
+                    self.push_inst(bb, Inst::Memset {
+                        ptr: ptr_val, byte: zero, size: sz,
+                    });
+                }
+            }
+        }
     }
 
     pub(super) fn lower_terminator(&mut self, term: &Terminator, bb: BlockId) -> Term {

@@ -507,7 +507,16 @@ fn no_growth_in_phase_d_proxy_reads() {
     /// state with no `LocalOwnership` accessor, so it is not migratable
     /// without first making the drop accountant queryable off `Local`.
     /// Locking in the floor.
-    const BUDGET: usize = 83;
+    /// Bumped 83 → 84 (2026-06-21): one new proxy read from error-model
+    /// Increment 2 — the `!ctx.drops.is_moved(src)` idempotence guard before
+    /// `move_zero_and_mark` in `lower_fault_catch_expr`'s `store_result`
+    /// (`exprs/mod.rs`). A resource fault-catch result (e.g. a cloned String
+    /// from a `Fault.Bounds` element read) is Move-staged into the result
+    /// local; without the move-zero the source double-frees. SAME write-side-
+    /// discipline class as the 64→…→83 bumps — `move_zero_and_mark` is
+    /// non-idempotent (asserts) and `is_moved` is drop-accountant state with no
+    /// `LocalOwnership` accessor. Locking in the floor.
+    const BUDGET: usize = 84;
 
     let count = count_phase_d_proxy_reads();
     assert!(
@@ -2332,50 +2341,87 @@ fn await_value_route_sibling_count() {
 
 /// Ratchet (CLAUDE.md rule 4 — sibling-site drift): every faultable arithmetic
 /// op that a fault-`catch` can intercept MUST route through the ONE shared
-/// `Inst::FaultCheck` + `Term::Branch` lowering arm (error-model.md §11.2), so a
-/// future faultable op can't silently skip the flag-and-branch shape and fall
-/// back to the panic-by-default form (or, worse, emit a bare arithmetic with no
-/// fault check at all).
+/// `Inst::FaultCheck` + `Term::Branch` lowering shape (error-model.md §11), so a
+/// future faultable condition can't silently skip the flag-and-branch shape and
+/// fall back to the panic-by-default form (or, worse, emit a bare arithmetic /
+/// bare index-read with no fault check at all).
 ///
-/// The single source of truth is the `BinOp → FaultOp` mapping inside the
-/// `Instruction::FaultableBinOp` arm of the GIR→LIR lowering
-/// (`src/lir/lower/insts.rs`): exactly the five integer faultable ops
-/// (Add/Sub/Mul overflow, Div/Rem div-by-zero). Adding a sixth faultable op
-/// (e.g. a future `Pow` or a `Neg` of `TYPE_MIN`) must extend BOTH the
-/// `FaultOp` enum AND this mapping, then bump `EXPECTED` — which forces the new
-/// op through the shared branch path as part of the change, not after the next
-/// miscompile.
+/// The single source of truth for the faultable ARITHMETIC conditions is the
+/// `FaultOp` enum (`src/lir/mod.rs`): every member is one fault condition tested
+/// by `Inst::FaultCheck`. Increment 1 shipped Add/Sub/Mul/Div/Rem; Increment 2
+/// (C) split the signed `TYPE_MIN/-1` division overflow into `DivOverflow`, so
+/// the floor is now SIX. Adding a seventh condition (a future `Pow`, a `Neg` of
+/// `TYPE_MIN`, …) must extend the `FaultOp` enum AND give it a C/LLVM
+/// `Inst::FaultCheck` emit + the GIR→LIR mapping in the `FaultableBinOp` arm,
+/// then bump `FAULT_OP_VARIANTS` — forcing the new condition through the shared
+/// branch path as part of the change, not after the next miscompile.
 ///
-/// **If this fails because an arm was added:** confirm the new `GirBinOp::X =>
-/// FaultOp::X` arm also has a matching `FaultOp::X` variant, a C/LLVM
-/// `Inst::FaultCheck` emit path (the `op.overflow_builtin()` split), and a
-/// `fault_handler_for` category in `operators.rs`. Then bump EXPECTED.
-/// **If an arm was removed:** lower EXPECTED to lock the new floor.
+/// The faultable ARRAY-READ shape (`Fault.Bounds`) is a separate GIR variant
+/// `FaultableIndexLoad` (error-model.md §11 Increment 2 (A)) — it does NOT
+/// produce a `FaultOp` arm (it null-branches on `gorget_array_safe_get` instead
+/// of a `FaultCheck`), so it is ratcheted separately below: its presence in the
+/// GIR→LIR lowering is asserted so a future index-fault sibling can't skip the
+/// branch-before-deref shape.
+///
+/// **If `FAULT_OP_VARIANTS` fails because a variant was added:** confirm the new
+/// `FaultOp::X` has a C/LLVM `Inst::FaultCheck` emit path and a GIR→LIR mapping
+/// in the `FaultableBinOp` arm, then bump it. If removed, lower it.
 #[test]
 fn fault_op_lowering_arms_count() {
-    /// Baseline 2026-06-21: 5 (Add, Sub, Mul, Div, Rem).
-    const EXPECTED: usize = 5;
+    /// Baseline 2026-06-21: 6 (Add, Sub, Mul, Div, Rem, DivOverflow).
+    const FAULT_OP_VARIANTS: usize = 6;
 
-    let content = fs::read_to_string("src/lir/lower/insts.rs").unwrap_or_default();
-    let mut count = 0usize;
-    for line in content.lines() {
+    // Count the `FaultOp` enum variants — the single source of truth for the
+    // faultable arithmetic conditions tested by `Inst::FaultCheck`.
+    let lir = fs::read_to_string("src/lir/mod.rs").unwrap_or_default();
+    let mut in_fault_op = false;
+    let mut variant_count = 0usize;
+    for line in lir.lines() {
         let t = line.trim_start();
-        if t.starts_with("//") {
+        if t.starts_with("pub enum FaultOp") {
+            in_fault_op = true;
             continue;
         }
-        // The shared mapping arms: `GirBinOp::Add => crate::lir::FaultOp::Add,` etc.
-        if t.starts_with("GirBinOp::") && t.contains("crate::lir::FaultOp::") {
-            count += 1;
+        if in_fault_op {
+            if t.starts_with('}') {
+                break;
+            }
+            if t.starts_with("//") || t.is_empty() {
+                continue;
+            }
+            // A variant line is a bare `Identifier,` inside the enum body.
+            if t.ends_with(',') && t[..t.len() - 1].chars().all(|c| c.is_alphanumeric() || c == '_') {
+                variant_count += 1;
+            }
         }
     }
-
     assert_eq!(
-        count, EXPECTED,
-        "Fault-op lowering arm count in `FaultableBinOp` (src/lir/lower/insts.rs) \
-         changed: {count} vs expected {EXPECTED}.\n\n\
-         Every faultable op must route through the shared `Inst::FaultCheck` + \
-         `Term::Branch` path. If you added a faultable op, also add its `FaultOp` \
-         variant, its C/LLVM `Inst::FaultCheck` emit, and its `fault_handler_for` \
-         category, then bump EXPECTED. If you removed one, lower EXPECTED.",
+        variant_count, FAULT_OP_VARIANTS,
+        "`FaultOp` variant count (src/lir/mod.rs) changed: {variant_count} vs \
+         expected {FAULT_OP_VARIANTS}.\n\n\
+         Every faultable arithmetic condition must route through the shared \
+         `Inst::FaultCheck` + `Term::Branch` path. If you added a condition, also \
+         add its C/LLVM `Inst::FaultCheck` emit and its GIR→LIR mapping in the \
+         `FaultableBinOp` arm of src/lir/lower/insts.rs, then bump \
+         FAULT_OP_VARIANTS. If you removed one, lower it.",
+    );
+
+    // The faultable array-read shape must stay wired through the shared
+    // branch-before-deref lowering (`gorget_array_safe_get` + NULL-branch +
+    // shared element materialization). Assert the GIR→LIR arm + the safe-get
+    // call are present so a future index-fault sibling can't skip the shape.
+    let insts = fs::read_to_string("src/lir/lower/insts.rs").unwrap_or_default();
+    assert!(
+        insts.contains("Instruction::FaultableIndexLoad {"),
+        "the `FaultableIndexLoad` GIR→LIR lowering arm vanished from \
+         src/lir/lower/insts.rs — the `Fault.Bounds` array-read must lower \
+         through the shared null-branch-before-deref shape (error-model.md §11).",
+    );
+    assert!(
+        insts.contains("gorget_array_safe_get")
+            && insts.contains("materialize_collection_element"),
+        "the faultable array-read lowering must use `gorget_array_safe_get` + the \
+         shared `materialize_collection_element` element path — a future sibling \
+         must not duplicate or skip the clone/move-zero/str-ptr logic.",
     );
 }

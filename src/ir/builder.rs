@@ -279,13 +279,43 @@ impl FunctionBuilder {
     /// to [`Self::bin_op`] but on a fault it BRANCHES to `fault_handler` instead
     /// of panicking. Only used inside an active fault-catch for the five integer
     /// faultable ops.
-    pub fn bin_op_faultable(&mut self, op: BinOp, type_id: TypeId, lhs: Operand, rhs: Operand, fault_handler: BlockId) -> LocalId {
+    pub fn bin_op_faultable(
+        &mut self,
+        op: BinOp,
+        type_id: TypeId,
+        lhs: Operand,
+        rhs: Operand,
+        overflow_handler: Option<BlockId>,
+        divzero_handler: Option<BlockId>,
+    ) -> LocalId {
         self.emit_with_temp(type_id, |dst| Instruction::FaultableBinOp {
             dst,
             op,
             type_id,
             lhs,
             rhs,
+            overflow_handler,
+            divzero_handler,
+        })
+    }
+
+    /// Emit a fault-`catch`able array element-READ (error-model.md §11,
+    /// `Fault.Bounds`): like [`Self::index_load`] but an out-of-bounds index
+    /// BRANCHES to `fault_handler` instead of panicking. Used only inside an
+    /// active fault-catch whose `bounds_handler` is set, on array element reads.
+    pub fn index_load_faultable(
+        &mut self,
+        base: Place,
+        index: Operand,
+        type_id: TypeId,
+        read: ReadMode,
+        fault_handler: BlockId,
+    ) -> LocalId {
+        self.emit_with_temp(type_id, |dst| Instruction::FaultableIndexLoad {
+            dst,
+            base,
+            index,
+            read,
             fault_handler,
         })
     }

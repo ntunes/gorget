@@ -297,7 +297,8 @@ fn check_instruction_locals(
             check_local_id(*dst, max, ctx, errors);
             check_place_locals(base, max, ctx, errors);
         }
-        Instruction::IndexLoad { dst, base, index, .. } => {
+        Instruction::IndexLoad { dst, base, index, .. }
+        | Instruction::FaultableIndexLoad { dst, base, index, .. } => {
             check_local_id(*dst, max, ctx, errors);
             check_place_locals(base, max, ctx, errors);
             check_operand_locals(index, max, ctx, errors);
@@ -706,6 +707,7 @@ fn instruction_write_local(inst: &Instruction) -> Option<u32> {
         | Instruction::PtrCast { dst, .. }
         | Instruction::FieldLoad { dst, .. }
         | Instruction::IndexLoad { dst, .. }
+        | Instruction::FaultableIndexLoad { dst, .. }
         | Instruction::HeapAlloc { dst, .. }
         | Instruction::HeapAllocArray { dst, .. }
         | Instruction::StructInit { dst, .. }
@@ -769,7 +771,8 @@ fn collect_read_locals_for_validate(inst: &Instruction) -> Vec<u32> {
         Instruction::FieldLoad { base, .. } | Instruction::EnumFieldLoad { base, .. } => {
             push_place(&mut reads, base);
         }
-        Instruction::IndexLoad { base, index, .. } => {
+        Instruction::IndexLoad { base, index, .. }
+        | Instruction::FaultableIndexLoad { base, index, .. } => {
             push_place(&mut reads, base);
             push_op(&mut reads, index);
         }
@@ -1464,7 +1467,8 @@ fn for_each_read_site<'a, F: FnMut(ReadSite<'a>)>(
                         class: ReadSiteClass::FieldLoad { dst_local: *dst },
                     });
                 }
-                Instruction::IndexLoad { dst, base: _, index: _, read } => {
+                Instruction::IndexLoad { dst, base: _, index: _, read }
+                | Instruction::FaultableIndexLoad { dst, base: _, index: _, read, .. } => {
                     let Some(dst_ty) = func.locals.get(dst.0 as usize).map(|l| l.type_id) else { continue };
                     // Ptr-typed dst: raw element pointer == borrow.
                     let mode = if type_is_ptr(dst_ty, registry) { ReadMode::Borrow } else { *read };
@@ -2959,6 +2963,7 @@ fn preceded_by_clone(
             | Instruction::PtrCast { dst, .. }
             | Instruction::FieldLoad { dst, .. }
             | Instruction::IndexLoad { dst, .. }
+            | Instruction::FaultableIndexLoad { dst, .. }
             | Instruction::EnumFieldLoad { dst, .. }
             | Instruction::HeapAlloc { dst, .. }
             | Instruction::HeapAllocArray { dst, .. }

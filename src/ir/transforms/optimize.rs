@@ -551,7 +551,8 @@ fn substitute_operands(inst: &mut Instruction, known: &std::collections::HashMap
         | Instruction::TagOf { operand, .. } => {
             sub(operand);
         }
-        Instruction::IndexLoad { index, .. } => sub(index),
+        Instruction::IndexLoad { index, .. }
+        | Instruction::FaultableIndexLoad { index, .. } => sub(index),
         Instruction::Call { args, .. } | Instruction::CallExtern { args, .. } => {
             for a in args { sub(a); }
         }
@@ -1680,6 +1681,7 @@ fn instruction_dst(inst: &Instruction) -> Option<u32> {
         | Instruction::PtrCast { dst, .. }
         | Instruction::FieldLoad { dst, .. }
         | Instruction::IndexLoad { dst, .. }
+        | Instruction::FaultableIndexLoad { dst, .. }
         | Instruction::HeapAlloc { dst, .. }
         | Instruction::HeapAllocArray { dst, .. }
         | Instruction::StructInit { dst, .. }
@@ -1724,7 +1726,8 @@ fn collect_read_locals(inst: &Instruction) -> Vec<u32> {
         Instruction::FieldLoad { base, .. } | Instruction::EnumFieldLoad { base, .. } => {
             push_place_reads(&mut reads, base);
         }
-        Instruction::IndexLoad { base, index, .. } => {
+        Instruction::IndexLoad { base, index, .. }
+        | Instruction::FaultableIndexLoad { base, index, .. } => {
             push_place_reads(&mut reads, base);
             push_operand_reads(&mut reads, index);
         }
@@ -1859,10 +1862,18 @@ fn thread_jumps(func: &mut Function) {
         if let Some(ref mut term) = bb.terminator {
             remap_terminator_targets(term, &resolved);
         }
-        // FaultableBinOp's handler reference forwards too (error-model.md §11.2).
+        // FaultableBinOp's / FaultableIndexLoad's handler references forward too
+        // (a fault op branches to its handler block, error-model.md §11).
         for inst in &mut bb.instructions {
-            if let Instruction::FaultableBinOp { fault_handler, .. } = inst {
-                fault_handler.0 = resolved[fault_handler.0 as usize];
+            match inst {
+                Instruction::FaultableBinOp { overflow_handler, divzero_handler, .. } => {
+                    if let Some(h) = overflow_handler { h.0 = resolved[h.0 as usize]; }
+                    if let Some(h) = divzero_handler { h.0 = resolved[h.0 as usize]; }
+                }
+                Instruction::FaultableIndexLoad { fault_handler, .. } => {
+                    fault_handler.0 = resolved[fault_handler.0 as usize];
+                }
+                _ => {}
             }
         }
     }
@@ -2005,11 +2016,19 @@ fn eliminate_dead_blocks(func: &mut Function) {
         if let Some(ref mut term) = block.terminator {
             remap_terminator(term, &remap);
         }
-        // FaultableBinOp carries a block reference in its body — remap it too,
-        // else the stored handler BlockId goes stale after renumbering.
+        // FaultableBinOp / FaultableIndexLoad carry block references in their
+        // bodies — remap them too, else the stored handler BlockId goes stale
+        // after renumbering.
         for inst in &mut block.instructions {
-            if let Instruction::FaultableBinOp { fault_handler, .. } = inst {
-                fault_handler.0 = remap[fault_handler.0 as usize];
+            match inst {
+                Instruction::FaultableBinOp { overflow_handler, divzero_handler, .. } => {
+                    if let Some(h) = overflow_handler { h.0 = remap[h.0 as usize]; }
+                    if let Some(h) = divzero_handler { h.0 = remap[h.0 as usize]; }
+                }
+                Instruction::FaultableIndexLoad { fault_handler, .. } => {
+                    fault_handler.0 = remap[fault_handler.0 as usize];
+                }
+                _ => {}
             }
         }
         new_blocks.push(block);
@@ -2018,9 +2037,10 @@ fn eliminate_dead_blocks(func: &mut Function) {
 }
 
 /// Collect successor block IDs from a basic block: the terminator's targets
-/// PLUS any `FaultableBinOp.fault_handler` (a fault op branches to its handler
+/// PLUS any `FaultableBinOp` handler (`overflow_handler`/`divzero_handler`) and
+/// any `FaultableIndexLoad.fault_handler` (a fault op branches to its handler
 /// at LIR, so the handler is a real successor — must count toward reachability,
-/// error-model.md §11.2).
+/// error-model.md §11).
 fn successors(bb: &BasicBlock) -> Vec<u32> {
     let mut succs: Vec<u32> = match &bb.terminator {
         Some(Terminator::Jump(target)) => vec![target.0],
@@ -2038,8 +2058,15 @@ fn successors(bb: &BasicBlock) -> Vec<u32> {
         Some(Terminator::Return(_)) | Some(Terminator::Unreachable) | None => vec![],
     };
     for inst in &bb.instructions {
-        if let Instruction::FaultableBinOp { fault_handler, .. } = inst {
-            succs.push(fault_handler.0);
+        match inst {
+            Instruction::FaultableBinOp { overflow_handler, divzero_handler, .. } => {
+                if let Some(h) = overflow_handler { succs.push(h.0); }
+                if let Some(h) = divzero_handler { succs.push(h.0); }
+            }
+            Instruction::FaultableIndexLoad { fault_handler, .. } => {
+                succs.push(fault_handler.0);
+            }
+            _ => {}
         }
     }
     succs
@@ -2212,7 +2239,8 @@ fn mark_instruction_locals(inst: &Instruction, referenced: &mut [bool]) {
             mark_local(dst.0, referenced);
             mark_place(base, referenced);
         }
-        Instruction::IndexLoad { dst, base, index, .. } => {
+        Instruction::IndexLoad { dst, base, index, .. }
+        | Instruction::FaultableIndexLoad { dst, base, index, .. } => {
             mark_local(dst.0, referenced);
             mark_place(base, referenced);
             mark_operand(index, referenced);
@@ -2364,7 +2392,8 @@ fn remap_instruction_locals(inst: &mut Instruction, remap: &[u32]) {
             remap_local(dst, remap);
             remap_place(base, remap);
         }
-        Instruction::IndexLoad { dst, base, index, .. } => {
+        Instruction::IndexLoad { dst, base, index, .. }
+        | Instruction::FaultableIndexLoad { dst, base, index, .. } => {
             remap_local(dst, remap);
             remap_place(base, remap);
             remap_operand(index, remap);
@@ -2533,7 +2562,8 @@ fn collect_func_refs_from_instruction(inst: &Instruction, called: &mut HashSet<S
             collect_func_refs_from_operand(ptr, called);
             collect_func_refs_from_operand(allocator, called);
         }
-        Instruction::IndexLoad { index, .. } => collect_func_refs_from_operand(index, called),
+        Instruction::IndexLoad { index, .. }
+        | Instruction::FaultableIndexLoad { index, .. } => collect_func_refs_from_operand(index, called),
         Instruction::PushAllocator { allocator } => collect_func_refs_from_operand(allocator, called),
         _ => {}
     }

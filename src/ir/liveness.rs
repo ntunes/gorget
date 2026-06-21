@@ -304,6 +304,7 @@ fn collect_inst_defs_into(inst: &Instruction, defs: &mut Vec<u32>) {
         | Instruction::PtrCast { dst, .. }
         | Instruction::FieldLoad { dst, .. }
         | Instruction::IndexLoad { dst, .. }
+        | Instruction::FaultableIndexLoad { dst, .. }
         | Instruction::EnumFieldLoad { dst, .. }
         | Instruction::HeapAlloc { dst, .. }
         | Instruction::HeapAllocArray { dst, .. }
@@ -390,7 +391,8 @@ fn collect_inst_reads_into(inst: &Instruction, reads: &mut Vec<u32>) {
         Instruction::FieldLoad { base, .. } | Instruction::EnumFieldLoad { base, .. } => {
             push_place(reads, base);
         }
-        Instruction::IndexLoad { base, index, .. } => {
+        Instruction::IndexLoad { base, index, .. }
+        | Instruction::FaultableIndexLoad { base, index, .. } => {
             push_place(reads, base);
             push_op(reads, index);
         }

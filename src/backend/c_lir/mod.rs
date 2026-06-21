@@ -2499,8 +2499,11 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext, loc: &(String, u3
             if matches!(ty, LirType::F32 | LirType::F64) {
                 write!(out, "{} = fmod({}, {});", v(*dst), v(*lhs), v(*rhs)).unwrap();
             } else if matches!(ty, LirType::I64 | LirType::I32 | LirType::I16 | LirType::I8) {
-                // Signed `%` is also UB on `TYPE_MIN % -1` (C standard says so;
-                // many compilers return 0). Match the Div guard.
+                // Signed `%` is UB on `TYPE_MIN % -1` (C standard says so; many
+                // compilers silently return 0 — a cross-backend defect since
+                // LLVM-Rem and C-Div TRAP it). Match the Div guard: TRAP with
+                // `integer overflow`, unconditionally, like the div0 guard
+                // (error-model.md §11 (E)).
                 let ct = c_type_named(ty, sn);
                 let tmin = match ty {
                     LirType::I64 => "INT64_MIN",
@@ -2511,8 +2514,8 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext, loc: &(String, u3
                 };
                 write!(out,
                     "if (({ct}){r} == 0) {{ fprintf(stderr, \"{f}:{ln}:{cl}: division by zero\\n\"); exit(1); }} \
-                     if (({ct}){l} == {tmin} && ({ct}){r} == -1) {{ {d} = 0; }} else \
-                     {{ {d} = ({ct}){l} % ({ct}){r}; }}",
+                     if (({ct}){l} == {tmin} && ({ct}){r} == -1) {{ fprintf(stderr, \"{f}:{ln}:{cl}: integer overflow\\n\"); exit(1); }} \
+                     {d} = ({ct}){l} % ({ct}){r};",
                     d = v(*dst), l = v(*lhs), r = v(*rhs), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
             } else {
                 let ct = c_type_named(ty, sn);
@@ -2567,19 +2570,28 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext, loc: &(String, u3
         Inst::FaultCheck { dst, op, ty, lhs, rhs } => {
             let ct = c_type_named(ty, sn);
             if let Some(builtin) = op.overflow_builtin() {
+                // Add/Sub/Mul overflow.
                 write!(out, "{{ {ct} __fc_discard; {d} = __builtin_{builtin}_overflow(({ct}){l}, ({ct}){r}, &__fc_discard); }}",
                     d = v(*dst), l = v(*lhs), r = v(*rhs)).unwrap();
-            } else if matches!(ty, LirType::I64 | LirType::I32 | LirType::I16 | LirType::I8) {
-                let tmin = match ty {
-                    LirType::I64 => "INT64_MIN",
-                    LirType::I32 => "INT32_MIN",
-                    LirType::I16 => "INT16_MIN",
-                    LirType::I8  => "INT8_MIN",
-                    _ => unreachable!(),
-                };
-                write!(out, "{d} = (({ct}){r} == 0) || (({ct}){l} == {tmin} && ({ct}){r} == -1);",
-                    d = v(*dst), l = v(*lhs), r = v(*rhs)).unwrap();
+            } else if matches!(op, FaultOp::DivOverflow) {
+                // Signed `TYPE_MIN/-1` overflow of a Div/Rem — its OWN condition
+                // (split out of div0, error-model.md §11 (C)). Only signed
+                // integer types can overflow this way; unsigned never does.
+                if matches!(ty, LirType::I64 | LirType::I32 | LirType::I16 | LirType::I8) {
+                    let tmin = match ty {
+                        LirType::I64 => "INT64_MIN",
+                        LirType::I32 => "INT32_MIN",
+                        LirType::I16 => "INT16_MIN",
+                        LirType::I8  => "INT8_MIN",
+                        _ => unreachable!(),
+                    };
+                    write!(out, "{d} = (({ct}){l} == {tmin} && ({ct}){r} == -1);",
+                        d = v(*dst), l = v(*lhs), r = v(*rhs)).unwrap();
+                } else {
+                    write!(out, "{d} = 0;", d = v(*dst)).unwrap();
+                }
             } else {
+                // Div/Rem div-by-zero ONLY (`rhs == 0`).
                 write!(out, "{d} = (({ct}){r} == 0);", d = v(*dst), r = v(*rhs)).unwrap();
             }
         }

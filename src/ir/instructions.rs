@@ -225,6 +225,33 @@ pub enum Instruction {
         type_id: TypeId,
         lhs: Operand,
         rhs: Operand,
+        /// Where an Add/Sub/Mul overflow (or a Div/Rem signed `TYPE_MIN/-1`
+        /// overflow) branches. `None` = that fault category is not caught here
+        /// (it panics by default). A Div/Rem op may set both this and
+        /// `divzero_handler`; Add/Sub/Mul set only this.
+        overflow_handler: Option<BlockId>,
+        /// Where a Div/Rem divide-by-zero branches. `None` = not caught (panic).
+        /// Always `None` for Add/Sub/Mul (they cannot divide by zero).
+        divzero_handler: Option<BlockId>,
+    },
+    /// A faultable array element-READ inside a fault-`catch` (error-model.md
+    /// §11, Increment 2 `Fault.Bounds`): identical to `IndexLoad` on an array,
+    /// but an out-of-bounds index BRANCHES to `fault_handler` (a GIR block in
+    /// the SAME function) instead of panicking. GIR→LIR lowering calls the
+    /// non-panicking `gorget_array_safe_get` (returns NULL on OOB), tests the
+    /// pointer for NULL, terminates with `Term::Branch { null → handler, else
+    /// → continuation }`, then materializes the element in the continuation by
+    /// SHARING the `IndexLoad` clone/move-zero/str-ptr logic (NULL is never
+    /// deref'd — branch-before-deref, unwind-free). A SEPARATE variant (not a
+    /// field on `IndexLoad`) so every existing IndexLoad site — optimizer, sim,
+    /// liveness, validate — is untouched and the fault read is forced through
+    /// the one shared lowering arm. Array element reads only (the sole path
+    /// with a runtime bounds check); dict/string/range index OUT.
+    FaultableIndexLoad {
+        dst: LocalId,
+        base: Place,
+        index: Operand,
+        read: ReadMode,
         fault_handler: BlockId,
     },
     UnOp {

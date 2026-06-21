@@ -1,0 +1,7 @@
+# Panic-by-default preserved: an UNCAUGHT out-of-bounds array index still
+# panics `index out of bounds` and exit(1), exactly as today — the Fault.Bounds
+# machinery must not perturb the plain index-read path (error-model.md §11).
+void main():
+    Vector[int] xs = [10, 20, 30]
+    int r = xs[10]
+    print(f"{r}")

@@ -752,8 +752,13 @@ pub enum Expr {
 pub enum FaultCatchPattern {
     /// Pattern form `catch Fault.Overflow:` — catches exactly the named
     /// variant; faults of other variants in the wrapped expression panic.
-    /// The string is the (qualified) variant name, e.g. `"Overflow"`.
-    Variant(Spanned<String>),
+    /// `qualifier` is the enum prefix (`Fault`) — validated at typecheck so a
+    /// wrong qualifier (`Bogus.Overflow`) is rejected rather than silently
+    /// accepted; `variant` is the variant name (e.g. `"Overflow"`).
+    Variant {
+        qualifier: Spanned<String>,
+        variant: Spanned<String>,
+    },
     /// Binding form `catch f:` — catches ANY fault in the wrapped expression,
     /// constructs the corresponding `Fault` value, and binds it to the name.
     Binding(Spanned<String>),

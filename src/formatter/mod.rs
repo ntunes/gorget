@@ -2096,9 +2096,10 @@ impl Formatter {
                 self.format_expr(expr);
                 self.emitter.write(" catch ");
                 match pattern {
-                    FaultCatchPattern::Variant(v) => {
-                        self.emitter.write("Fault.");
-                        self.emitter.write(&v.node);
+                    FaultCatchPattern::Variant { qualifier, variant } => {
+                        self.emitter.write(&qualifier.node);
+                        self.emitter.write(".");
+                        self.emitter.write(&variant.node);
                     }
                     FaultCatchPattern::Binding(name) => {
                         self.emitter.write(&name.node);

@@ -307,8 +307,10 @@ pub(super) fn lower_binary_op(
             // `func_state` (hence `fault_scope`) starts fresh, so they stay
             // deep and panic (the §11.5 basic-block reach). Typed gate (op kind
             // + integer type), never a name check.
-            if let Some(handler) = fault_handler_for(ctx, operand_type, bin_op) {
-                let dst = builder.bin_op_faultable(bin_op, operand_type, lhs, rhs, handler);
+            if let Some((overflow_handler, divzero_handler)) = fault_handler_for(ctx, operand_type, bin_op) {
+                let dst = builder.bin_op_faultable(
+                    bin_op, operand_type, lhs, rhs, overflow_handler, divzero_handler,
+                );
                 return FunctionBuilder::copy(dst);
             }
             let dst = builder.bin_op(bin_op, operand_type, lhs, rhs);
@@ -318,17 +320,20 @@ pub(super) fn lower_binary_op(
 }
 
 /// Decide whether the binary op at the current site should be a fault-`catch`able
-/// op, and if so return the GIR handler block. Returns `Some(handler)` only
-/// when: a fault scope is active AND the op is one of the five integer faultable
-/// ops AND `operand_type` is an integer AND the relevant fault CATEGORY is
-/// caught by the scope (overflow for Add/Sub/Mul, div-by-zero for Div/Rem).
-/// Otherwise `None` → the op stays the panic-by-default form. (error-model.md
-/// §11.2 — typed gate, never a name check.)
+/// op, and if so return the per-category GIR handler blocks. Returns
+/// `Some((overflow_handler, divzero_handler))` only when a fault scope is active
+/// AND the op is one of the five integer faultable ops AND `operand_type` is an
+/// integer. Add/Sub/Mul populate only the overflow handler; Div/Rem populate
+/// BOTH (a single signed Div has two fault categories — `rhs == 0` → DivByZero
+/// AND `TYPE_MIN/-1` → Overflow, error-model.md §11 Increment 2 (C) split). Each
+/// returned slot is `Some` only when the scope catches that category; a slot
+/// left `None` panics by default. `None` for the whole result → the op stays the
+/// panic-by-default form (typed gate, never a name check).
 fn fault_handler_for(
     ctx: &LoweringContext,
     operand_type: TypeId,
     op: BinOp,
-) -> Option<crate::ir::types::BlockId> {
+) -> Option<(Option<crate::ir::types::BlockId>, Option<crate::ir::types::BlockId>)> {
     let scope = ctx.func_state.fault_scope?;
     // Integer types only (overflow/div0 are integer faults; floats don't trap).
     let is_integer = matches!(
@@ -340,8 +345,19 @@ fn fault_handler_for(
         return None;
     }
     match op {
-        BinOp::Add | BinOp::Sub | BinOp::Mul => scope.overflow_handler,
-        BinOp::Div | BinOp::Rem => scope.divzero_handler,
+        // Add/Sub/Mul: overflow only, and ONLY when the user catches it (else
+        // the plain panic-by-default checked op — behaviour unchanged).
+        BinOp::Add | BinOp::Sub | BinOp::Mul => {
+            scope.overflow_handler.map(|h| (Some(h), None))
+        }
+        // Div/Rem: TWO categories, BOTH always handled at GIR — `TYPE_MIN/-1` →
+        // user overflow entry OR the `"integer overflow"` panic block; `rhs == 0`
+        // → user div0 entry OR the `"division by zero"` panic block. So the LIR
+        // always branches (no LIR-level panic; uniform across both backends).
+        BinOp::Div | BinOp::Rem => Some((
+            Some(scope.overflow_handler.unwrap_or(scope.div_overflow_panic)),
+            Some(scope.divzero_handler.unwrap_or(scope.div_zero_panic)),
+        )),
         // Mod, bitwise, shifts, and the explicit `+%` wrap ops never fault.
         _ => None,
     }
