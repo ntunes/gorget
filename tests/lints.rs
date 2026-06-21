@@ -2329,3 +2329,53 @@ fn await_value_route_sibling_count() {
          zero re-opens the double-free. Keep every fallback paired with its zero.",
     );
 }
+
+/// Ratchet (CLAUDE.md rule 4 — sibling-site drift): every faultable arithmetic
+/// op that a fault-`catch` can intercept MUST route through the ONE shared
+/// `Inst::FaultCheck` + `Term::Branch` lowering arm (error-model.md §11.2), so a
+/// future faultable op can't silently skip the flag-and-branch shape and fall
+/// back to the panic-by-default form (or, worse, emit a bare arithmetic with no
+/// fault check at all).
+///
+/// The single source of truth is the `BinOp → FaultOp` mapping inside the
+/// `Instruction::FaultableBinOp` arm of the GIR→LIR lowering
+/// (`src/lir/lower/insts.rs`): exactly the five integer faultable ops
+/// (Add/Sub/Mul overflow, Div/Rem div-by-zero). Adding a sixth faultable op
+/// (e.g. a future `Pow` or a `Neg` of `TYPE_MIN`) must extend BOTH the
+/// `FaultOp` enum AND this mapping, then bump `EXPECTED` — which forces the new
+/// op through the shared branch path as part of the change, not after the next
+/// miscompile.
+///
+/// **If this fails because an arm was added:** confirm the new `GirBinOp::X =>
+/// FaultOp::X` arm also has a matching `FaultOp::X` variant, a C/LLVM
+/// `Inst::FaultCheck` emit path (the `op.overflow_builtin()` split), and a
+/// `fault_handler_for` category in `operators.rs`. Then bump EXPECTED.
+/// **If an arm was removed:** lower EXPECTED to lock the new floor.
+#[test]
+fn fault_op_lowering_arms_count() {
+    /// Baseline 2026-06-21: 5 (Add, Sub, Mul, Div, Rem).
+    const EXPECTED: usize = 5;
+
+    let content = fs::read_to_string("src/lir/lower/insts.rs").unwrap_or_default();
+    let mut count = 0usize;
+    for line in content.lines() {
+        let t = line.trim_start();
+        if t.starts_with("//") {
+            continue;
+        }
+        // The shared mapping arms: `GirBinOp::Add => crate::lir::FaultOp::Add,` etc.
+        if t.starts_with("GirBinOp::") && t.contains("crate::lir::FaultOp::") {
+            count += 1;
+        }
+    }
+
+    assert_eq!(
+        count, EXPECTED,
+        "Fault-op lowering arm count in `FaultableBinOp` (src/lir/lower/insts.rs) \
+         changed: {count} vs expected {EXPECTED}.\n\n\
+         Every faultable op must route through the shared `Inst::FaultCheck` + \
+         `Term::Branch` path. If you added a faultable op, also add its `FaultOp` \
+         variant, its C/LLVM `Inst::FaultCheck` emit, and its `fault_handler_for` \
+         category, then bump EXPECTED. If you removed one, lower EXPECTED.",
+    );
+}

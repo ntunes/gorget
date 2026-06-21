@@ -2122,6 +2122,18 @@ fn emit_intrinsic_declarations(out: &mut String, module: &LirModule, snames: &Ha
                         let signed = if is_signed(ty) { 's' } else { 'u' };
                         overflow_intrinsics.insert((signed, op, bits));
                     }
+                    // Fault-catch checked Add/Sub/Mul use the same with-overflow
+                    // intrinsic as the trap form (error-model.md §11.2); declare
+                    // it. Div/Rem use an `icmp`, no intrinsic.
+                    Inst::FaultCheck { op, ty, .. } => {
+                        if let Some(builtin) = op.overflow_builtin() {
+                            if ty.is_integer() {
+                                let bits = int_bits(ty);
+                                let signed = if is_signed(ty) { 's' } else { 'u' };
+                                overflow_intrinsics.insert((signed, builtin, bits));
+                            }
+                        }
+                    }
                     Inst::FloatToInt { value, to, .. } => {
                         if !to.is_integer() { continue; }
                         let dst_bits = int_bits(to);

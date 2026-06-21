@@ -1,0 +1,7 @@
+# Panic-by-default preserved: an overflow OUTSIDE a fault-catch still panics
+# (exit 1) exactly as today (error-model.md §11.1 item 3). The harness asserts
+# the binary exits non-zero with the `integer overflow` message.
+void main():
+    int x = 9223372036854775807
+    int y = x * 2
+    print(f"{y}")

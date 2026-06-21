@@ -1,0 +1,10 @@
+# Fault-catch: a division by zero branches to the local handler and yields the
+# fallback instead of panicking (error-model.md §11).
+void main():
+    int z = 0
+    int r = (10 / z) catch Fault.DivByZero: 999
+    print(f"{r}")
+    int ok = (20 / 4) catch Fault.DivByZero: 999
+    print(f"{ok}")
+    int m = (10 % z) catch Fault.DivByZero: 777
+    print(f"{m}")

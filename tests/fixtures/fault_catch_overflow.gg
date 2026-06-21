@@ -1,0 +1,8 @@
+# Fault-catch: an overflowing multiply branches to the local handler and
+# yields the fallback instead of panicking (error-model.md §11).
+void main():
+    int big = 9223372036854775807
+    int r = (big * 2) catch Fault.Overflow: -1
+    print(f"{r}")
+    int ok = (3 * 4) catch Fault.Overflow: -1
+    print(f"{ok}")

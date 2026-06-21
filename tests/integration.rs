@@ -5640,6 +5640,50 @@ fn overflow_wrap() {
     run_gg_with_flags("overflow_wrap.gg", &["--overflow=wrap"], "-9223372036854775808");
 }
 
+// ── Fault-catch (error-model.md §11, Phase 1 Increment 1) ──────────────────
+// A faultable op (overflow / div-by-zero) inside `(...) catch Fault.X:` branches
+// to a LOCAL handler instead of panicking; uncaught faults still panic. Both
+// backends derive the branch from the shared LIR `Inst::FaultCheck`.
+
+#[test]
+fn fault_catch_overflow() {
+    run_gg("fault_catch_overflow.gg", "-1\n12");
+}
+
+#[test]
+fn fault_catch_div0() {
+    run_gg("fault_catch_div0.gg", "999\n5\n777");
+}
+
+#[test]
+fn fault_catch_binding() {
+    run_gg("fault_catch_binding.gg", "111\n222");
+}
+
+#[test]
+fn fault_catch_compound() {
+    run_gg("fault_catch_compound.gg", "-7\n32");
+}
+
+#[test]
+fn fault_catch_contract_unchanged() {
+    // Regression: the existing Result `catch (name):` path is unperturbed.
+    run_gg("fault_catch_contract_unchanged.gg", "-1\n42\n-2");
+}
+
+#[test]
+fn fault_catch_drop() {
+    // Drop-correctness: the live owned temporary is dropped EXACTLY once on each
+    // path (fault + no-fault) — two `make()` calls → two drops, no leak/double-free.
+    run_gg("fault_catch_drop.gg", "-1\n10\ndrop counter\ndrop counter");
+}
+
+#[test]
+fn fault_panic_default() {
+    // Panic-by-default preserved: overflow OUTSIDE a fault-catch still exits 1.
+    run_gg_panics("fault_panic_default.gg", "integer overflow");
+}
+
 #[test]
 fn panic_location_overflow() {
     // Phase 3 stack-traces: panic message must carry `file:line:col`
@@ -10897,6 +10941,18 @@ fn format_expr_canonical(expr: &Expr) -> String {
                 format_expr_canonical(&expr.node),
                 error_binding.node,
                 format_expr_canonical(&recovery.node),
+            )
+        }
+        Expr::FaultCatch { expr, pattern, handler } => {
+            let pat = match pattern {
+                gorget::parser::ast::FaultCatchPattern::Variant(v) => format!("Fault.{}", v.node),
+                gorget::parser::ast::FaultCatchPattern::Binding(name) => name.node.clone(),
+            };
+            format!(
+                "{} catch {}: {}",
+                format_expr_canonical(&expr.node),
+                pat,
+                format_expr_canonical(&handler.node),
             )
         }
     }
