@@ -43,10 +43,6 @@ pub struct LoweringOptions {
     pub strip_asserts: bool,
     /// Override `directive strip-asserts` off: force-keep asserts.
     pub no_strip_asserts: bool,
-    /// Override `directive overflow wrap`: integer overflow wraps silently.
-    pub overflow_wrap: bool,
-    /// Override overflow to checked mode (abort on overflow).
-    pub overflow_checked: bool,
     /// When true, lower test items even when a `main()` exists (for `gg test`).
     pub test_mode: bool,
     /// When true, lower bench items instead of test items (for `gg test --bench`).
@@ -512,7 +508,6 @@ pub fn lower_module(
         if let Item::Directive(d) = &item.node {
             match d.name.as_str() {
                 "strip-asserts" => ctx.strip_asserts = true,
-                "overflow" if d.value.as_deref() == Some("wrap") => ctx.overflow_wrap = true,
                 "scheduler" => match d.value.as_deref() {
                     Some("pool") => ctx.spawn.scheduler_mode = crate::ir::SchedulerMode::Pool,
                     Some("thread") => ctx.spawn.scheduler_mode = crate::ir::SchedulerMode::Thread,
@@ -527,8 +522,6 @@ pub fn lower_module(
     // CLI flags override directives
     if options.strip_asserts { ctx.strip_asserts = true; }
     if options.no_strip_asserts { ctx.strip_asserts = false; }
-    if options.overflow_wrap { ctx.overflow_wrap = true; }
-    if options.overflow_checked { ctx.overflow_wrap = false; }
     if options.snapshot_mode { ctx.snapshot_mode = true; }
     if let Some(m) = options.scheduler_mode { ctx.spawn.scheduler_mode = m; }
 
@@ -2045,7 +2038,6 @@ pub fn lower_module(
 
     let __pass_t = Instant::now();
     // Propagate directive flags to module
-    module.runtime.overflow_wrap = ctx.overflow_wrap;
     module.runtime.scheduler_mode = ctx.spawn.scheduler_mode;
 
     // Trace: filename provided by options (derived from source path in main.rs)

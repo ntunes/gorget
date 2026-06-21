@@ -223,8 +223,6 @@ pub struct Interpreter<'m> {
     pub stdout: Vec<u8>,
     /// Captured stderr bytes.
     pub stderr: Vec<u8>,
-    /// Whether integer operations wrap on overflow (vs panic).
-    pub overflow_wrap: bool,
     /// Whether UB-detection checks (P4b–P4d) are enabled.
     ub_checks: bool,
     /// Name of the currently-executing function (for error context).
@@ -284,7 +282,6 @@ impl<'m> Interpreter<'m> {
             globals: HashMap::new(),
             stdout: Vec::new(),
             stderr: Vec::new(),
-            overflow_wrap: module.runtime.overflow_wrap,
             ub_checks: config.ub_checks,
             current_fn_name: String::new(),
             call_stack: Vec::new(),
@@ -5334,21 +5331,9 @@ impl<'m> Interpreter<'m> {
             let lu = l.as_u64();
             let ru = r.as_u64();
             let result = match op {
-                BinOp::Add => {
-                    if self.overflow_wrap { lu.wrapping_add(ru) } else {
-                        lu.checked_add(ru).ok_or(SimError::Overflow)?
-                    }
-                }
-                BinOp::Sub => {
-                    if self.overflow_wrap { lu.wrapping_sub(ru) } else {
-                        lu.checked_sub(ru).ok_or(SimError::Overflow)?
-                    }
-                }
-                BinOp::Mul => {
-                    if self.overflow_wrap { lu.wrapping_mul(ru) } else {
-                        lu.checked_mul(ru).ok_or(SimError::Overflow)?
-                    }
-                }
+                BinOp::Add => lu.checked_add(ru).ok_or(SimError::Overflow)?,
+                BinOp::Sub => lu.checked_sub(ru).ok_or(SimError::Overflow)?,
+                BinOp::Mul => lu.checked_mul(ru).ok_or(SimError::Overflow)?,
                 BinOp::Div => {
                     if ru == 0 { return Err(SimError::DivisionByZero); }
                     lu / ru
@@ -5383,21 +5368,9 @@ impl<'m> Interpreter<'m> {
         let li = l.as_i64();
         let ri = r.as_i64();
         let result = match op {
-            BinOp::Add => {
-                if self.overflow_wrap { li.wrapping_add(ri) } else {
-                    li.checked_add(ri).ok_or(SimError::Overflow)?
-                }
-            }
-            BinOp::Sub => {
-                if self.overflow_wrap { li.wrapping_sub(ri) } else {
-                    li.checked_sub(ri).ok_or(SimError::Overflow)?
-                }
-            }
-            BinOp::Mul => {
-                if self.overflow_wrap { li.wrapping_mul(ri) } else {
-                    li.checked_mul(ri).ok_or(SimError::Overflow)?
-                }
-            }
+            BinOp::Add => li.checked_add(ri).ok_or(SimError::Overflow)?,
+            BinOp::Sub => li.checked_sub(ri).ok_or(SimError::Overflow)?,
+            BinOp::Mul => li.checked_mul(ri).ok_or(SimError::Overflow)?,
             BinOp::Div => {
                 if ri == 0 { return Err(SimError::DivisionByZero); }
                 li / ri

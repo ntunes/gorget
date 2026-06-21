@@ -332,8 +332,6 @@ pub struct LoweringContext<'a> {
     pub strip_asserts: bool,
     /// Whether snapshot capture mode is active (`--snapshot save`).
     pub snapshot_mode: bool,
-    /// Whether `directive overflow wrap` is active (integer overflow wraps).
-    pub overflow_wrap: bool,
     /// Extern binding: Gorget name → C symbol name (e.g., "llabs_wrapper" → "llabs").
     pub extern_bindings: FxHashMap<String, String>,
     /// Default parameter values: fn_name → Vec<(param_index, default_expr)>.
@@ -508,7 +506,6 @@ impl<'a> LoweringContext<'a> {
             module_constants: FxHashMap::default(),
             strip_asserts: false,
             snapshot_mode: false,
-            overflow_wrap: false,
             extern_bindings: FxHashMap::default(),
             fn_defaults: FxHashMap::default(),
             fn_param_names: FxHashMap::default(),

@@ -92,8 +92,6 @@ pub(super) struct FuncLowering<'a> {
     pub(super) module_globals: &'a [LirGlobal],
     /// Synthetic externs discovered during lowering (for unknown Call targets).
     pub(super) pending_externs: Vec<LirExtern>,
-    /// Whether `directive overflow=wrap` is active (integer overflow wraps).
-    pub(super) overflow_wrap: bool,
     /// Types whose `{Name}__drop` collides with a user method (e.g., DataFrame.drop()).
     pub(super) drop_collision_types: &'a std::collections::HashSet<String>,
     /// Monomorphized method name → runtime callee metadata (from BuiltinTypeProtocol).
@@ -287,7 +285,6 @@ impl<'a> LoweringContext<'a> {
                     &self.module.structs,
                     &self.module.struct_aliases,
                     &self.module.globals,
-                    self.gir.runtime.overflow_wrap,
                     &self.module.drop_collision_types,
                     &self.gir.runtime_callees,
                     &self.module.recursive_drop_enums,
@@ -1481,7 +1478,6 @@ impl<'a> FuncLowering<'a> {
         module_structs: &'a [StructDef],
         module_struct_aliases: &'a std::collections::HashMap<String, StructId>,
         module_globals: &'a [LirGlobal],
-        overflow_wrap: bool,
         drop_collision_types: &'a std::collections::HashSet<String>,
         runtime_callees: &'a rustc_hash::FxHashMap<String, crate::ir::RuntimeCalleeInfo>,
         recursive_drop_enums: &'a std::collections::HashMap<String, Vec<(u32, String, String, String, String)>>,
@@ -1539,7 +1535,6 @@ impl<'a> FuncLowering<'a> {
             module_struct_aliases,
             module_globals,
             pending_externs: Vec::new(),
-            overflow_wrap,
             drop_collision_types,
             runtime_callees,
             recursive_drop_enums,

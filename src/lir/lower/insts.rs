@@ -102,7 +102,7 @@ impl<'a> FuncLowering<'a> {
                 } else {
                     let result = self.lir_func.next_value();
                     let ty = self.map_type(type_id);
-                    let inst = lower_binop(result, *op, l, r, ty, self.overflow_wrap);
+                    let inst = lower_binop(result, *op, l, r, ty);
                     self.push_inst(bb, inst);
                     self.store_to_local(*dst, result, bb);
                 }
@@ -130,7 +130,7 @@ impl<'a> FuncLowering<'a> {
                     // still well-formed.
                     _ => {
                         let result = self.lir_func.next_value();
-                        let inst = lower_binop(result, *op, l, r, ty, self.overflow_wrap);
+                        let inst = lower_binop(result, *op, l, r, ty);
                         self.push_inst(bb, inst);
                         self.store_to_local(*dst, result, bb);
                         return bb;
@@ -162,7 +162,7 @@ impl<'a> FuncLowering<'a> {
                     GirBinOp::Mul => GirBinOp::MulWrap,
                     other => *other, // Div / Rem
                 };
-                let inst = lower_binop(result, commit_op, l, r, ty, self.overflow_wrap);
+                let inst = lower_binop(result, commit_op, l, r, ty);
                 self.push_inst(cont_bb, inst);
                 self.store_to_local(*dst, result, cont_bb);
                 // Continue lowering subsequent instructions in the new block.

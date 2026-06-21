@@ -867,7 +867,6 @@ fn try_build_ir(
                 .arg(shared_path)
                 .arg(&shared_c_path)
                 .arg("-lm");
-            if options.overflow_wrap || gir_module.runtime.overflow_wrap { cc_cmd.arg("-fwrapv"); }
             if options.sanitize {
                 cc_cmd.arg("-fsanitize=address,undefined");
                 cc_cmd.arg("-fno-omit-frame-pointer");
@@ -973,7 +972,6 @@ fn try_build_ir(
                 .arg("-Wno-unused-but-set-variable")
                 .arg("-o").arg(&exe_path)
                 .arg(&host_c_path).arg("-lm").arg("-ldl");
-            if options.overflow_wrap || gir_module.runtime.overflow_wrap { host_cmd.arg("-fwrapv"); }
             if options.sanitize {
                 host_cmd.arg("-fsanitize=address,undefined");
                 host_cmd.arg("-fno-omit-frame-pointer");
@@ -994,7 +992,7 @@ fn try_build_ir(
 
         // ── LLVM backend: .ll → clang -c → link with runtime .o → binary ──
         if backend_name == "llvm" {
-            return compile_llvm_pipeline(&src_path, &exe_path, &generated_code, &concat_source, &lir_module, &options, &gir_module);
+            return compile_llvm_pipeline(&src_path, &exe_path, &generated_code, &concat_source, &lir_module);
         }
 
         // ── C backend: .c → cc → binary ──
@@ -1118,9 +1116,6 @@ fn try_build_ir(
         #[cfg(target_os = "macos")]
         cc_cmd.arg("-Wl,-dead_strip");
 
-        if options.overflow_wrap || gir_module.runtime.overflow_wrap {
-            cc_cmd.arg("-fwrapv");
-        }
         if options.sanitize {
             cc_cmd.arg("-fsanitize=address,undefined");
             cc_cmd.arg("-fno-omit-frame-pointer");
@@ -1190,8 +1185,6 @@ fn compile_llvm_pipeline(
     _ll_code: &str,
     concat_source: &str,
     lir_module: &gorget::lir::LirModule,
-    options: &gorget::ir::lowering::LoweringOptions,
-    gir_module: &gorget::ir::Module,
 ) -> Result<PathBuf, String> {
     let tmp_dir = ll_path.parent().unwrap_or(Path::new("."));
 
@@ -1440,10 +1433,6 @@ fn compile_llvm_pipeline(
 
     #[cfg(not(target_os = "macos"))]
     link_cmd.arg("-pthread");
-
-    if options.overflow_wrap || gir_module.runtime.overflow_wrap {
-        link_cmd.arg("-fwrapv");
-    }
 
     // Conditional external library flags
     let has_extern = |prefix: &str| lir_module.externs.iter().any(|e| e.name.contains(prefix));
@@ -2453,8 +2442,6 @@ fn real_main() {
         };
         let strip_asserts = args.iter().any(|a| a == "--strip-asserts");
         let no_strip_asserts = args.iter().any(|a| a == "--no-strip-asserts");
-        let overflow_wrap = args.iter().any(|a| a == "--overflow=wrap");
-        let overflow_checked = args.iter().any(|a| a == "--overflow=checked");
         let trace = args.iter().any(|a| a == "--trace");
         let no_trace = args.iter().any(|a| a == "--no-trace");
         let sanitize = args.iter().any(|a| a == "--sanitize");
@@ -2475,7 +2462,7 @@ fn real_main() {
             None
         };
         let lowering_opts = gorget::ir::lowering::LoweringOptions {
-            strip_asserts, no_strip_asserts, overflow_wrap, overflow_checked,
+            strip_asserts, no_strip_asserts,
             trace_filename, hot_reload: hot_reload_flag || source_has_hot_reload(&source),
             sanitize, scheduler_mode: parse_scheduler(&args),
             ..Default::default()
@@ -2603,8 +2590,6 @@ fn real_main() {
     let command = &args[1];
     let strip_asserts = args.iter().any(|a| a == "--strip-asserts");
     let no_strip_asserts = args.iter().any(|a| a == "--no-strip-asserts");
-    let overflow_wrap = args.iter().any(|a| a == "--overflow=wrap");
-    let overflow_checked = args.iter().any(|a| a == "--overflow=checked");
     let trace = args.iter().any(|a| a == "--trace");
     let no_trace = args.iter().any(|a| a == "--no-trace");
     let hot_reload_flag = args.iter().any(|a| a == "--hot-reload");
@@ -2933,8 +2918,6 @@ fn real_main() {
                 let lowering_opts = gorget::ir::lowering::LoweringOptions {
                     strip_asserts,
                     no_strip_asserts,
-                    overflow_wrap,
-                    overflow_checked,
                     trace_filename,
                     hot_reload: hot_reload_flag || source_has_hot_reload(&source),
                     sanitize, scheduler_mode,
@@ -2963,8 +2946,6 @@ fn real_main() {
                 let lowering_opts = gorget::ir::lowering::LoweringOptions {
                     strip_asserts,
                     no_strip_asserts,
-                    overflow_wrap,
-                    overflow_checked,
                     trace_filename,
                     hot_reload: hot_reload_flag || source_has_hot_reload(&source),
                     sanitize,
@@ -3001,8 +2982,6 @@ fn real_main() {
                 let lowering_opts = gorget::ir::lowering::LoweringOptions {
                     strip_asserts,
                     no_strip_asserts,
-                    overflow_wrap,
-                    overflow_checked,
                     ..Default::default()
                 };
                 if let Err(e) = try_profile(filename, &source, dep_paths, &features, lowering_opts) {
@@ -3030,8 +3009,6 @@ fn real_main() {
             let lowering_opts = gorget::ir::lowering::LoweringOptions {
                 strip_asserts,
                 no_strip_asserts,
-                overflow_wrap,
-                overflow_checked,
                 trace_filename,
                 hot_reload: hot_reload_flag || source_has_hot_reload(&source),
                 sanitize, scheduler_mode,
@@ -3481,16 +3458,12 @@ fn real_main() {
                 }
             }
 
-            let overflow_wrap = args.iter().any(|a| a == "--overflow=wrap");
-            let overflow_checked = args.iter().any(|a| a == "--overflow=checked");
             let lowering_opts = gorget::ir::lowering::LoweringOptions {
                 test_mode: is_test_mode,
                 bench_mode: is_bench_mode,
                 test_tags,
                 test_exclude_tags,
                 test_name_filter,
-                overflow_wrap,
-                overflow_checked,
                 scheduler_mode: parse_scheduler(&args),
                 ..Default::default()
             };

@@ -115,8 +115,6 @@ pub struct RuntimeFeatures {
     pub bench_fns: Vec<BenchFnInfo>,
 
     // ── Codegen hints ──────────────────────────────────────────────
-    /// When true, arithmetic wraps on overflow instead of aborting.
-    pub overflow_wrap: bool,
     /// When set, emit trace instrumentation and write events to this file path.
     pub trace_filename: Option<String>,
 

@@ -78,8 +78,11 @@ pub fn fix_printf_format(fmt: &str, arg_kinds: &[PrintfArgKind]) -> String {
     result
 }
 
-pub(super) fn lower_binop(dst: ValueId, op: GirBinOp, lhs: ValueId, rhs: ValueId, ty: LirType, overflow_wrap: bool) -> Inst {
-    let default_overflow = if overflow_wrap { Overflow::Wrap } else { Overflow::Trap };
+pub(super) fn lower_binop(dst: ValueId, op: GirBinOp, lhs: ValueId, rhs: ValueId, ty: LirType) -> Inst {
+    // Plain `+`/`-`/`*` always check overflow (panic, or `catch Fault.Overflow`
+    // recovers). The wrapping `+%`/`-%`/`*%` ops below emit `Overflow::Wrap`
+    // explicitly. There is no global "wrap" mode.
+    let default_overflow = Overflow::Trap;
     match op {
         GirBinOp::Add => Inst::Add { dst, ty, lhs, rhs, overflow: default_overflow },
         GirBinOp::Sub => Inst::Sub { dst, ty, lhs, rhs, overflow: default_overflow },
