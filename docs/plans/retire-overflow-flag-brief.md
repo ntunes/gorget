@@ -85,9 +85,11 @@ global. Retirement only changes which `Overflow` variant `lower_binop` emits for
   INT_MAX — it already traps under default-checked); it must go ONLY because its FIXTURE
   (`overflow_wrap.gg`) is being deleted (its `assert!(fixture_path.exists())` would then fail), NOT
   because of a directive error.
-  - **`src/parser/tests.rs:1050-1060` (pass 1 — OPTIONAL cleanup-delete):** this only checks the
-    directive *parses* (the parser is unchanged), so it would still PASS post-change — delete it as
-    cleanup if you like, but it is NOT a break; don't mis-attribute a failure to it.
+  - **`src/parser/tests.rs:1050-1060` `test_directive_overflow_wrap` (pass 3 — DELETE, mandatory):**
+    it only checks the directive *parses* (parser unchanged) so it does NOT break the build — BUT it
+    is the one non-`*Wrap` `overflow_wrap` symbol left in `src/`, so leaving it would FAIL §7's
+    "`overflow_wrap` gone from `src/`" acceptance grep. The directive is being retired anyway → delete
+    it (zero-risk cleanup).
 - **Edit:** semantic unit `valid_directives_no_error` (`src/semantic/typecheck.rs:7501-7511`) —
   remove `directive overflow=wrap` from the input string (would now be `UnknownDirective`).
   (Pass 1: this is the single most-likely SILENT test break — it actively asserts NO
