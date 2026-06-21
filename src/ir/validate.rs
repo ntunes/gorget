@@ -321,7 +321,8 @@ fn check_instruction_locals(
             check_operand_locals(ptr, max, ctx, errors);
             check_operand_locals(allocator, max, ctx, errors);
         }
-        Instruction::BinOp { dst, lhs, rhs, .. } => {
+        Instruction::BinOp { dst, lhs, rhs, .. }
+        | Instruction::FaultableBinOp { dst, lhs, rhs, .. } => {
             check_local_id(*dst, max, ctx, errors);
             check_operand_locals(lhs, max, ctx, errors);
             check_operand_locals(rhs, max, ctx, errors);
@@ -697,6 +698,7 @@ fn check_use_after_move(
 fn instruction_write_local(inst: &Instruction) -> Option<u32> {
     match inst {
         Instruction::BinOp { dst, .. }
+        | Instruction::FaultableBinOp { dst, .. }
         | Instruction::UnOp { dst, .. }
         | Instruction::Cmp { dst, .. }
         | Instruction::Cast { dst, .. }
@@ -751,7 +753,9 @@ fn collect_read_locals_for_validate(inst: &Instruction) -> Vec<u32> {
             }
             push_op(&mut reads, value);
         }
-        Instruction::BinOp { lhs, rhs, .. } | Instruction::Cmp { lhs, rhs, .. } => {
+        Instruction::BinOp { lhs, rhs, .. }
+        | Instruction::FaultableBinOp { lhs, rhs, .. }
+        | Instruction::Cmp { lhs, rhs, .. } => {
             push_op(&mut reads, lhs);
             push_op(&mut reads, rhs);
         }
@@ -2947,6 +2951,7 @@ fn preceded_by_clone(
             | Instruction::CallExtern { dst: Some(d), .. }
             | Instruction::CallIndirect { dst: Some(d), .. } => Some(*d),
             Instruction::BinOp { dst, .. }
+            | Instruction::FaultableBinOp { dst, .. }
             | Instruction::UnOp { dst, .. }
             | Instruction::Cmp { dst, .. }
             | Instruction::Cast { dst, .. }

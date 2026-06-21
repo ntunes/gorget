@@ -453,7 +453,8 @@ fn substitute_copies(inst: &mut Instruction, copies: &std::collections::HashMap<
     };
     match inst {
         Instruction::Assign { value, .. } => replace(value),
-        Instruction::BinOp { lhs, rhs, .. } => { replace(lhs); replace(rhs); }
+        Instruction::BinOp { lhs, rhs, .. }
+        | Instruction::FaultableBinOp { lhs, rhs, .. } => { replace(lhs); replace(rhs); }
         Instruction::UnOp { operand, .. } => replace(operand),
         Instruction::Cmp { lhs, rhs, .. } => { replace(lhs); replace(rhs); }
         Instruction::Cast { value, .. }
@@ -537,7 +538,9 @@ fn substitute_operands(inst: &mut Instruction, known: &std::collections::HashMap
 
     match inst {
         Instruction::Assign { value, .. } => sub(value),
-        Instruction::BinOp { lhs, rhs, .. } | Instruction::Cmp { lhs, rhs, .. } => {
+        Instruction::BinOp { lhs, rhs, .. }
+        | Instruction::FaultableBinOp { lhs, rhs, .. }
+        | Instruction::Cmp { lhs, rhs, .. } => {
             sub(lhs);
             sub(rhs);
         }
@@ -1669,6 +1672,7 @@ fn eliminate_dead_stores(func: &mut Function) {
 fn instruction_dst(inst: &Instruction) -> Option<u32> {
     match inst {
         Instruction::BinOp { dst, .. }
+        | Instruction::FaultableBinOp { dst, .. }
         | Instruction::UnOp { dst, .. }
         | Instruction::Cmp { dst, .. }
         | Instruction::Cast { dst, .. }
@@ -1704,7 +1708,9 @@ fn collect_read_locals(inst: &Instruction) -> Vec<u32> {
             }
             push_operand_reads(&mut reads, value);
         }
-        Instruction::BinOp { lhs, rhs, .. } | Instruction::Cmp { lhs, rhs, .. } => {
+        Instruction::BinOp { lhs, rhs, .. }
+        | Instruction::FaultableBinOp { lhs, rhs, .. }
+        | Instruction::Cmp { lhs, rhs, .. } => {
             push_operand_reads(&mut reads, lhs);
             push_operand_reads(&mut reads, rhs);
         }
@@ -1853,6 +1859,12 @@ fn thread_jumps(func: &mut Function) {
         if let Some(ref mut term) = bb.terminator {
             remap_terminator_targets(term, &resolved);
         }
+        // FaultableBinOp's handler reference forwards too (error-model.md §11.2).
+        for inst in &mut bb.instructions {
+            if let Instruction::FaultableBinOp { fault_handler, .. } = inst {
+                fault_handler.0 = resolved[fault_handler.0 as usize];
+            }
+        }
     }
 }
 
@@ -1993,14 +2005,24 @@ fn eliminate_dead_blocks(func: &mut Function) {
         if let Some(ref mut term) = block.terminator {
             remap_terminator(term, &remap);
         }
+        // FaultableBinOp carries a block reference in its body — remap it too,
+        // else the stored handler BlockId goes stale after renumbering.
+        for inst in &mut block.instructions {
+            if let Instruction::FaultableBinOp { fault_handler, .. } = inst {
+                fault_handler.0 = remap[fault_handler.0 as usize];
+            }
+        }
         new_blocks.push(block);
     }
     func.blocks = new_blocks;
 }
 
-/// Collect successor block IDs from a basic block's terminator.
+/// Collect successor block IDs from a basic block: the terminator's targets
+/// PLUS any `FaultableBinOp.fault_handler` (a fault op branches to its handler
+/// at LIR, so the handler is a real successor — must count toward reachability,
+/// error-model.md §11.2).
 fn successors(bb: &BasicBlock) -> Vec<u32> {
-    match &bb.terminator {
+    let mut succs: Vec<u32> = match &bb.terminator {
         Some(Terminator::Jump(target)) => vec![target.0],
         Some(Terminator::Branch { then_block, else_block, .. }) => {
             vec![then_block.0, else_block.0]
@@ -2014,7 +2036,13 @@ fn successors(bb: &BasicBlock) -> Vec<u32> {
             vec![normal.0, error.0]
         }
         Some(Terminator::Return(_)) | Some(Terminator::Unreachable) | None => vec![],
+    };
+    for inst in &bb.instructions {
+        if let Instruction::FaultableBinOp { fault_handler, .. } = inst {
+            succs.push(fault_handler.0);
+        }
     }
+    succs
 }
 
 /// Remap block IDs in a terminator using the old→new mapping.
@@ -2145,7 +2173,8 @@ fn mark_instruction_locals(inst: &Instruction, referenced: &mut [bool]) {
             mark_place(dst, referenced);
             mark_operand(value, referenced);
         }
-        Instruction::BinOp { dst, lhs, rhs, .. } => {
+        Instruction::BinOp { dst, lhs, rhs, .. }
+        | Instruction::FaultableBinOp { dst, lhs, rhs, .. } => {
             mark_local(dst.0, referenced);
             mark_operand(lhs, referenced);
             mark_operand(rhs, referenced);
@@ -2296,7 +2325,8 @@ fn remap_instruction_locals(inst: &mut Instruction, remap: &[u32]) {
             remap_place(dst, remap);
             remap_operand(value, remap);
         }
-        Instruction::BinOp { dst, lhs, rhs, .. } => {
+        Instruction::BinOp { dst, lhs, rhs, .. }
+        | Instruction::FaultableBinOp { dst, lhs, rhs, .. } => {
             remap_local(dst, remap);
             remap_operand(lhs, remap);
             remap_operand(rhs, remap);

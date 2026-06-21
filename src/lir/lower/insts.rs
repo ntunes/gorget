@@ -108,6 +108,67 @@ impl<'a> FuncLowering<'a> {
                 }
             }
 
+            // Fault-catch checked arithmetic (error-model.md §11.2). Split the
+            // block at the op: compute the fault FLAG, branch to the handler
+            // (mapped GIR→LIR via block_map) on fault, else compute `dst = lhs
+            // op rhs` in the continuation. The shared `Inst::FaultCheck` +
+            // `Term::Branch` shape both backends already emit — no goto, no
+            // backend-specific routing.
+            Instruction::FaultableBinOp { dst, op, type_id, lhs, rhs, fault_handler } => {
+                let l = self.lower_operand(lhs, bb);
+                let r = self.lower_operand(rhs, bb);
+                let ty = self.map_type(type_id);
+                let fault_op = match op {
+                    GirBinOp::Add => crate::lir::FaultOp::Add,
+                    GirBinOp::Sub => crate::lir::FaultOp::Sub,
+                    GirBinOp::Mul => crate::lir::FaultOp::Mul,
+                    GirBinOp::Div => crate::lir::FaultOp::Div,
+                    GirBinOp::Rem => crate::lir::FaultOp::Rem,
+                    // Only the five integer faultable ops reach here (gated at
+                    // GIR build in lower_binary_op); any other op is a lowering
+                    // bug — fall back to a non-faulting compute so the build is
+                    // still well-formed.
+                    _ => {
+                        let result = self.lir_func.next_value();
+                        let inst = lower_binop(result, *op, l, r, ty, self.overflow_wrap);
+                        self.push_inst(bb, inst);
+                        self.store_to_local(*dst, result, bb);
+                        return bb;
+                    }
+                };
+                // 1. flag = FaultCheck(op, lhs, rhs)  (no trap, no result commit)
+                let flag = self.lir_func.next_value();
+                self.push_inst(bb, Inst::FaultCheck { dst: flag, op: fault_op, ty: ty.clone(), lhs: l, rhs: r });
+                // 2. branch: fault → handler, no-fault → continuation
+                let handler_lir = self.block_map[fault_handler.0 as usize];
+                let cont_bb = self.lir_func.add_block();
+                self.set_terminator(bb, Term::Branch {
+                    cond: flag,
+                    then_block: handler_lir,
+                    then_args: vec![],
+                    else_block: cont_bb,
+                    else_args: vec![],
+                });
+                // 3. continuation: now safe to compute `dst = lhs op rhs`.
+                //    Add/Sub/Mul use WRAP mode (the FaultCheck already caught the
+                //    overflow, so the wrapped value is the correct committed
+                //    result on this path and never re-traps). Div/Rem use the
+                //    normal checked inst — its div0/TYPE_MIN traps are all
+                //    statically false here (the fault branch excluded them).
+                let result = self.lir_func.next_value();
+                let commit_op = match op {
+                    GirBinOp::Add => GirBinOp::AddWrap,
+                    GirBinOp::Sub => GirBinOp::SubWrap,
+                    GirBinOp::Mul => GirBinOp::MulWrap,
+                    other => *other, // Div / Rem
+                };
+                let inst = lower_binop(result, commit_op, l, r, ty, self.overflow_wrap);
+                self.push_inst(cont_bb, inst);
+                self.store_to_local(*dst, result, cont_bb);
+                // Continue lowering subsequent instructions in the new block.
+                bb = cont_bb;
+            }
+
             Instruction::UnOp {
                 dst,
                 op,

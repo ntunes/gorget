@@ -296,6 +296,7 @@ fn collect_inst_defs_into(inst: &Instruction, defs: &mut Vec<u32>) {
             }
         }
         Instruction::BinOp { dst, .. }
+        | Instruction::FaultableBinOp { dst, .. }
         | Instruction::UnOp { dst, .. }
         | Instruction::Cmp { dst, .. }
         | Instruction::Cast { dst, .. }
@@ -373,7 +374,9 @@ fn collect_inst_reads_into(inst: &Instruction, reads: &mut Vec<u32>) {
             }
             push_op(reads, value);
         }
-        Instruction::BinOp { lhs, rhs, .. } | Instruction::Cmp { lhs, rhs, .. } => {
+        Instruction::BinOp { lhs, rhs, .. }
+        | Instruction::FaultableBinOp { lhs, rhs, .. }
+        | Instruction::Cmp { lhs, rhs, .. } => {
             push_op(reads, lhs);
             push_op(reads, rhs);
         }

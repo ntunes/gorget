@@ -189,6 +189,7 @@ fn contains_it(expr: &Spanned<Expr>) -> bool {
         // Rethrow / Catch
         Expr::Rethrow { expr, transform, .. } => contains_it(expr) || contains_it(transform),
         Expr::Catch { expr, recovery, .. } => contains_it(expr) || contains_it(recovery),
+        Expr::FaultCatch { expr, handler, .. } => contains_it(expr) || contains_it(handler),
 
         // Leaves — no sub-expressions
         Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_)
@@ -1071,30 +1072,62 @@ impl Parser {
             }
             InfixOp::Catch => {
                 self.advance(); // consume `catch`
-                // Always binding form: `catch (name): recovery`. The name can
-                // be `_` (wildcard) — gorget-js critique point #1, 2026-05-13.
-                // The underscore is stored as the binding name "_"; it's not
-                // a valid expression-position identifier so the recovery body
-                // can't reference it, which gives the right "wildcard" semantic
-                // without changing the AST shape. Mirrors how match arms accept
-                // `_` as a wildcard pattern.
-                self.expect(&Token::LParen)?;
-                let error_name = if matches!(self.peek(), Token::Underscore) {
-                    let span = self.peek_span();
-                    self.advance();
-                    Spanned::new(String::from("_"), span)
+                // ONE production, three cases distinguished by the token after
+                // `catch` (LL(1), error-model.md §1.5):
+                //   `(`                 → the EXISTING Result `catch (name):`
+                //                          (welded to Result[T,E] — untouched);
+                //   `Ident . Ident`     → fault PATTERN `catch Fault.Overflow:`;
+                //   `Ident` (no dot)    → fault BINDING `catch f: <body>`.
+                if matches!(self.peek(), Token::LParen) {
+                    // ── Existing Result-catch path (unchanged contract) ──
+                    self.advance(); // consume `(`
+                    // The name can be `_` (wildcard) — gorget-js critique #1,
+                    // 2026-05-13. Stored as binding name "_"; not a valid
+                    // expression-position identifier, so the recovery body can't
+                    // reference it (the right wildcard semantic without changing
+                    // the AST shape). Mirrors match arms accepting `_`.
+                    let error_name = if matches!(self.peek(), Token::Underscore) {
+                        let span = self.peek_span();
+                        self.advance();
+                        Spanned::new(String::from("_"), span)
+                    } else {
+                        self.expect_identifier()?
+                    };
+                    self.expect(&Token::RParen)?;
+                    self.expect(&Token::Colon)?;
+                    let recovery = self.parse_body_or_expr(start)?;
+                    let end = recovery.span;
+                    return Ok(Spanned::new(
+                        Expr::Catch {
+                            expr: Box::new(lhs),
+                            error_binding: error_name,
+                            recovery: Box::new(recovery),
+                        },
+                        start.merge(end),
+                    ));
+                }
+                // ── Fault-catch (NEW form) ──
+                let enum_or_name = self.expect_identifier()?;
+                let pattern = if matches!(self.peek(), Token::Dot) {
+                    // Qualified path `Enum.Variant` → fault PATTERN form. We keep
+                    // the VARIANT name (the leading `Fault` is the enum, checked
+                    // in typecheck); only the variant selects which fault arm
+                    // fires.
+                    self.advance(); // consume `.`
+                    let variant = self.expect_identifier()?;
+                    FaultCatchPattern::Variant(variant)
                 } else {
-                    self.expect_identifier()?
+                    // Bare identifier → fault BINDING form `catch f:`.
+                    FaultCatchPattern::Binding(enum_or_name)
                 };
-                self.expect(&Token::RParen)?;
                 self.expect(&Token::Colon)?;
-                let recovery = self.parse_body_or_expr(start)?;
-                let end = recovery.span;
+                let handler = self.parse_body_or_expr(start)?;
+                let end = handler.span;
                 Ok(Spanned::new(
-                    Expr::Catch {
+                    Expr::FaultCatch {
                         expr: Box::new(lhs),
-                        error_binding: error_name,
-                        recovery: Box::new(recovery),
+                        pattern,
+                        handler: Box::new(handler),
                     },
                     start.merge(end),
                 ))

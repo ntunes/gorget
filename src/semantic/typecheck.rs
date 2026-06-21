@@ -3069,6 +3069,63 @@ impl<'a> TypeChecker<'a> {
                 }
                 inner_type
             }
+            Expr::FaultCatch { expr: inner, pattern, handler } => {
+                // The wrapped expression is a plain (non-throwing) value — its
+                // type IS the fault-catch's value type on the no-fault path.
+                // Suppress the throws-call auto-prop peel: a faultable `a*b` is
+                // never a Result, and the handler reads the raw value, not a
+                // Result. (error-model.md §11.2: a fault-catch can't swallow a
+                // contract error precisely because the auto-prop hook fires only
+                // on Call/MethodCall operands returning Result.)
+                self.suppress_auto_prop = true;
+                let inner_type = self.infer_expr(inner);
+                match pattern {
+                    FaultCatchPattern::Variant(variant) => {
+                        // `catch Fault.Overflow:` — validate the variant is a
+                        // real `Fault` variant; nothing is bound.
+                        self.check_fault_variant(variant);
+                    }
+                    FaultCatchPattern::Binding(name) => {
+                        // `catch f:` binds `f` to the constructed `Fault` value.
+                        if let Some(fault_def_id) = self.scopes.lookup("Fault") {
+                            let fault_ty = self.types.insert(ResolvedType::Defined(fault_def_id));
+                            if let Some(def_id) = self.scopes.lookup_def_by_span(
+                                &name.node, name.span,
+                            ) {
+                                self.scopes.get_def_mut(def_id).type_id = Some(fault_ty);
+                            }
+                        }
+                    }
+                }
+                // The handler runs on the fault path and must produce a value
+                // of the wrapped expression's type (the fault-catch always
+                // yields that type). Hint it so a `match`-handler's arms unify.
+                let saved_hint = self.decl_type_hint.take();
+                self.decl_type_hint = Some(inner_type);
+                self.infer_expr(handler);
+                self.decl_type_hint = saved_hint;
+                inner_type
+            }
+        }
+    }
+
+    /// Validate that `variant` names a real `Fault` enum variant (the only enum
+    /// a fault-`catch` pattern may name). Emits `UndefinedName` otherwise.
+    fn check_fault_variant(&mut self, variant: &Spanned<String>) {
+        let is_fault_variant = self
+            .scopes
+            .lookup("Fault")
+            .and_then(|def_id| self.enum_variants.get(&def_id))
+            .map(|info| info.variants.iter().any(|(n, _)| n == &variant.node))
+            .unwrap_or(false);
+        if !is_fault_variant {
+            self.error(
+                SemanticErrorKind::UndefinedName {
+                    name: format!("Fault.{}", variant.node),
+                    suggestion: None,
+                },
+                variant.span,
+            );
         }
     }
 
@@ -3633,6 +3690,16 @@ impl<'a> TypeChecker<'a> {
             _ => return,
         };
         if self.scopes.get_def(enum_def_id).kind != DefKind::Enum {
+            return;
+        }
+
+        // Panic-by-default over the closed `Fault` enum (error-model.md §11.1.5):
+        // a fault match may OMIT variants — the omitted ones fall through to a
+        // runtime panic, NOT a compile error. Keyed on the `Fault` enum ONLY, so
+        // every OTHER enum stays strictly exhaustive. (Increment 1: a fault
+        // handler usually carries an `else:`, which already covers it; this rule
+        // makes the `else`-less form legal too.)
+        if self.scopes.get_def(enum_def_id).name == "Fault" {
             return;
         }
 

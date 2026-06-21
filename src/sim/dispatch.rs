@@ -63,6 +63,7 @@ fn mark_instruction_dst(initialized: &mut HashSet<u32>, inst: &Instruction) {
         | Instruction::HeapAlloc { dst, .. }
         | Instruction::HeapAllocArray { dst, .. }
         | Instruction::BinOp { dst, .. }
+        | Instruction::FaultableBinOp { dst, .. }
         | Instruction::UnOp { dst, .. }
         | Instruction::Cmp { dst, .. }
         | Instruction::Cast { dst, .. }
@@ -962,6 +963,20 @@ impl<'m> Interpreter<'m> {
             }
 
             Instruction::BinOp { dst, op, type_id, lhs, rhs } => {
+                let l = self.eval_operand(locals, lhs)?;
+                let r = self.eval_operand(locals, rhs)?;
+                let result = self.eval_binop(*op, *type_id, &l, &r)?;
+                let i = dst.0 as usize;
+                while locals.len() <= i { locals.push(Value::Unit); }
+                locals[i] = result;
+            }
+
+            // The simulator drives control flow from terminators, not from a
+            // mid-block instruction, so it cannot model the fault BRANCH. It
+            // computes the arithmetic result like a plain BinOp (the
+            // fault-recovery path is a backend-level concern not exercised by
+            // the sim — Increment 1 has no sim fixture for fault-catch).
+            Instruction::FaultableBinOp { dst, op, type_id, lhs, rhs, .. } => {
                 let l = self.eval_operand(locals, lhs)?;
                 let r = self.eval_operand(locals, rhs)?;
                 let result = self.eval_binop(*op, *type_id, &l, &r)?;

@@ -1269,6 +1269,10 @@ fn qualify_expr(expr: &mut Spanned<Expr>, vm: &HashMap<String, String>) {
             qualify_expr(expr, vm);
             qualify_expr(recovery, vm);
         }
+        Expr::FaultCatch { expr, handler, .. } => {
+            qualify_expr(expr, vm);
+            qualify_expr(handler, vm);
+        }
     }
 }
 

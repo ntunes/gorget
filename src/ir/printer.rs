@@ -332,6 +332,26 @@ fn print_instruction(out: &mut String, inst: &Instruction, reg: &TypeRegistry) {
             )
             .unwrap();
         }
+        Instruction::FaultableBinOp {
+            dst,
+            op,
+            type_id,
+            lhs,
+            rhs,
+            fault_handler,
+        } => {
+            write!(
+                out,
+                "_{} = {} {} {}, {} !fault->bb{}",
+                dst.0,
+                format_binop(*op),
+                format_type(*type_id, reg),
+                format_operand(lhs, reg),
+                format_operand(rhs, reg),
+                fault_handler.0,
+            )
+            .unwrap();
+        }
         Instruction::UnOp {
             dst,
             op,

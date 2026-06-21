@@ -1850,6 +1850,26 @@ fn resolve_expr(
             resolve_expr(recovery, scopes, errors, resolution_map);
             scopes.pop_scope();
         }
+        Expr::FaultCatch { expr, pattern, handler } => {
+            resolve_expr(expr, scopes, errors, resolution_map);
+            // Binding form `catch f:` registers `f` (a `Fault` value) for the
+            // handler; pattern form `catch Fault.Overflow:` binds nothing. The
+            // qualified `Fault.Overflow` references in either the pattern or the
+            // handler's `match` resolve through the type system (built-in enum),
+            // not the name resolver.
+            scopes.push_scope(super::scope::ScopeKind::Block);
+            if let FaultCatchPattern::Binding(name) = pattern {
+                if let Err(e) = scopes.define(
+                    name.node.clone(),
+                    DefKind::Variable,
+                    name.span,
+                ) {
+                    errors.push(e);
+                }
+            }
+            resolve_expr(handler, scopes, errors, resolution_map);
+            scopes.pop_scope();
+        }
     }
 }
 

@@ -275,6 +275,21 @@ impl FunctionBuilder {
         })
     }
 
+    /// Emit a fault-`catch`able arithmetic op (error-model.md §11.2): identical
+    /// to [`Self::bin_op`] but on a fault it BRANCHES to `fault_handler` instead
+    /// of panicking. Only used inside an active fault-catch for the five integer
+    /// faultable ops.
+    pub fn bin_op_faultable(&mut self, op: BinOp, type_id: TypeId, lhs: Operand, rhs: Operand, fault_handler: BlockId) -> LocalId {
+        self.emit_with_temp(type_id, |dst| Instruction::FaultableBinOp {
+            dst,
+            op,
+            type_id,
+            lhs,
+            rhs,
+            fault_handler,
+        })
+    }
+
     pub fn un_op(&mut self, op: UnOp, type_id: TypeId, operand: Operand) -> LocalId {
         self.emit_with_temp(type_id, |dst| Instruction::UnOp {
             dst,

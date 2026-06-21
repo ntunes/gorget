@@ -298,9 +298,50 @@ pub(super) fn lower_binary_op(
                 AstOp::MulWrap => BinOp::MulWrap,
                 _ => BinOp::Add, // fallback
             };
+            // Fault-`catch` routing (error-model.md §11.2): inside an active
+            // fault scope, an integer faultable op (Add/Sub/Mul overflow,
+            // Div/Rem div-by-zero) BRANCHES to the scope's handler on a fault
+            // instead of panicking. The scope is cleared at Call/CallExtern
+            // boundaries (lower_call), so only ops emitted DIRECTLY into the
+            // wrapped expression are caught. Typed gate (op kind + integer
+            // type), never a name check.
+            if let Some(handler) = fault_handler_for(ctx, operand_type, bin_op) {
+                let dst = builder.bin_op_faultable(bin_op, operand_type, lhs, rhs, handler);
+                return FunctionBuilder::copy(dst);
+            }
             let dst = builder.bin_op(bin_op, operand_type, lhs, rhs);
             FunctionBuilder::copy(dst)
         }
+    }
+}
+
+/// Decide whether the binary op at the current site should be a fault-`catch`able
+/// op, and if so return the GIR handler block. Returns `Some(handler)` only
+/// when: a fault scope is active AND the op is one of the five integer faultable
+/// ops AND `operand_type` is an integer AND the relevant fault CATEGORY is
+/// caught by the scope (overflow for Add/Sub/Mul, div-by-zero for Div/Rem).
+/// Otherwise `None` → the op stays the panic-by-default form. (error-model.md
+/// §11.2 — typed gate, never a name check.)
+fn fault_handler_for(
+    ctx: &LoweringContext,
+    operand_type: TypeId,
+    op: BinOp,
+) -> Option<crate::ir::types::BlockId> {
+    let scope = ctx.func_state.fault_scope?;
+    // Integer types only (overflow/div0 are integer faults; floats don't trap).
+    let is_integer = matches!(
+        ctx.type_registry.get(operand_type),
+        Some(GirType::I8) | Some(GirType::I16) | Some(GirType::I32) | Some(GirType::I64)
+            | Some(GirType::U8) | Some(GirType::U16) | Some(GirType::U32) | Some(GirType::U64)
+    );
+    if !is_integer {
+        return None;
+    }
+    match op {
+        BinOp::Add | BinOp::Sub | BinOp::Mul => scope.overflow_handler,
+        BinOp::Div | BinOp::Rem => scope.divzero_handler,
+        // Mod, bitwise, shifts, and the explicit `+%` wrap ops never fault.
+        _ => None,
     }
 }
 

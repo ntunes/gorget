@@ -558,7 +558,8 @@ fn remap_instruction(instr: &mut Instruction, map: &FxHashMap<LocalId, LocalId>)
             remap_operand(ptr, map);
             remap_operand(allocator, map);
         }
-        Instruction::BinOp { dst, lhs, rhs, .. } => {
+        Instruction::BinOp { dst, lhs, rhs, .. }
+        | Instruction::FaultableBinOp { dst, lhs, rhs, .. } => {
             *dst = remap_local(*dst, map);
             remap_operand(lhs, map);
             remap_operand(rhs, map);

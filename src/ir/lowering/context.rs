@@ -275,6 +275,28 @@ pub struct FunctionState {
     /// guards correct (at most one runtime clone). Only a WRITE to the local
     /// (`lower_assign` / `lower_compound_assign`) removes the entry.
     pub cow_lazy_mat_flag: FxHashMap<LocalId, LocalId>,
+    /// Active fault-catch scope (error-model.md §11). When `Some`, a faultable
+    /// arithmetic op (`a*b`, `a/b`, …) emitted DIRECTLY into the wrapped
+    /// expression's basic blocks branches to a handler block instead of
+    /// panicking. CLEARED at any `Call`/`CallExtern` boundary so a callee's
+    /// faults stay deep (still panic → Phase 2). A scoped push/pop (NOT the
+    /// one-shot `suppress_auto_prop`) — it must survive the whole left-operand
+    /// subtree. Only the innermost scope is active (a nested fault-catch saves
+    /// and restores the outer one).
+    pub fault_scope: Option<FaultScope>,
+}
+
+/// The handler-block targets an active fault-`catch` routes faults to.
+/// `BlockId` is the GIR block id; GIR→LIR lowering maps it to the LIR block via
+/// the function's `block_map`. A `None` field means that fault category is NOT
+/// caught by this scope (it panics by default) — e.g. `catch Fault.Overflow:`
+/// sets only `overflow_handler`, leaving `divzero_handler` `None`.
+#[derive(Clone, Copy, Debug)]
+pub struct FaultScope {
+    /// Add/Sub/Mul overflow faults branch here.
+    pub overflow_handler: Option<BlockId>,
+    /// Div/Rem div-by-zero (+ signed TYPE_MIN/-1) faults branch here.
+    pub divzero_handler: Option<BlockId>,
 }
 
 /// Tracks lowering state within a function.

@@ -209,6 +209,24 @@ pub enum Instruction {
         lhs: Operand,
         rhs: Operand,
     },
+    /// A faultable arithmetic op inside a fault-`catch` (error-model.md §11.2):
+    /// identical to `BinOp` (`op` is one of Add/Sub/Mul/Div/Rem on an integer
+    /// type), but on a fault (overflow / div-by-zero) it BRANCHES to
+    /// `fault_handler` (a GIR block in the SAME function) instead of panicking.
+    /// GIR→LIR lowering splits the block at this inst: emit `Inst::FaultCheck`
+    /// producing a flag, terminate with `Term::Branch { flag → handler,
+    /// !flag → continuation }`, then compute `dst = lhs op rhs` in the
+    /// continuation. A SEPARATE variant (not a field on `BinOp`) so every
+    /// existing BinOp site — optimizer, sim, liveness — is untouched and the
+    /// fault op is forced through the one shared lowering arm.
+    FaultableBinOp {
+        dst: LocalId,
+        op: BinOp,
+        type_id: TypeId,
+        lhs: Operand,
+        rhs: Operand,
+        fault_handler: BlockId,
+    },
     UnOp {
         dst: LocalId,
         op: UnOp,

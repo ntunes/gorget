@@ -1515,6 +1515,9 @@ fn lower_expr_inner(
         Expr::Catch { expr: inner, error_binding, recovery } => {
             lower_catch_expr(ctx, builder, inner, error_binding, recovery)
         }
+        Expr::FaultCatch { expr: inner, pattern, handler } => {
+            lower_fault_catch_expr(ctx, builder, inner, pattern, handler)
+        }
     }
 }
 
@@ -3478,6 +3481,101 @@ fn lower_catch_expr(
     // (Ok extraction + recovery expression) are Move-mode assigns from
     // sources that own their data; the typed tag must follow.
     ctx.set_owned(builder, result_local);
+    FunctionBuilder::copy(result_local)
+}
+
+/// Lower a fault-`catch` expression (error-model.md §11): a faultable op in the
+/// wrapped expression's OWN basic blocks branches to a local handler instead of
+/// panicking; the result is the wrapped value on the no-fault path or the
+/// handler value on the fault path. Pure local control flow — no unwinding.
+///
+/// CFG (binding form catches BOTH fault categories, each constructing its own
+/// `Fault` variant; pattern form catches just the named category):
+/// ```text
+///   …faultable ops…  ── fault(overflow) ──▶ overflow_entry ─▶ handler ─▶ merge
+///        │           ── fault(div0)     ──▶ divzero_entry  ─▶ handler ─▶ merge
+///        └── no fault ──▶ store wrapped value ─▶ merge
+/// ```
+fn lower_fault_catch_expr(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    inner: &Spanned<Expr>,
+    pattern: &ast::FaultCatchPattern,
+    handler: &Spanned<Expr>,
+) -> Operand {
+    use super::context::FaultScope;
+
+    // Which fault categories does this catch intercept?
+    // - binding form `catch f:` → BOTH (Overflow + DivByZero);
+    // - pattern form `catch Fault.Overflow:` → Overflow only;
+    // - pattern form `catch Fault.DivByZero:` → DivByZero only.
+    let (catch_overflow, catch_divzero, binding_name) = match pattern {
+        ast::FaultCatchPattern::Binding(name) => (true, true, Some(name.node.clone())),
+        ast::FaultCatchPattern::Variant(v) => match v.node.as_str() {
+            "Overflow" => (true, false, None),
+            "DivByZero" => (false, true, None),
+            // An unknown variant was already reported at typecheck; lower it as
+            // "catch nothing" so the build stays well-formed (ops panic).
+            _ => (false, false, None),
+        },
+    };
+
+    // Per-category handler-entry blocks + the merge block. Created up front so
+    // the faultable ops (lowered next) can branch to them; their bodies are
+    // filled after we know the result type.
+    let merge_bb = builder.new_block();
+    let overflow_entry = if catch_overflow { Some(builder.new_block()) } else { None };
+    let divzero_entry = if catch_divzero { Some(builder.new_block()) } else { None };
+
+    // Push the fault scope for the inner expression's subtree. Save/restore the
+    // outer scope so a nested fault-catch composes (innermost wins).
+    let saved_scope = ctx.func_state.fault_scope.take();
+    ctx.func_state.fault_scope = Some(FaultScope {
+        overflow_handler: overflow_entry,
+        divzero_handler: divzero_entry,
+    });
+    // The wrapped expression is a plain value; suppress the throws-call
+    // auto-prop peel (a faultable `a*b` is never a Result — mirror typecheck).
+    ctx.func_state.suppress_auto_prop = true;
+    let inner_val = lower_expr(ctx, builder, inner);
+    // Pop the fault scope — faults outside this expression panic again.
+    ctx.func_state.fault_scope = saved_scope;
+
+    let result_type = infer_operand_type_full(ctx, &inner_val, builder);
+    let result_local = builder.add_local(result_type, None);
+
+    // No-fault path: the wrapped value flows to the result, then to merge. Skip
+    // when a divergent inner already terminated the block (mirrors lower_catch).
+    if !builder.is_terminated() {
+        builder.assign(Place::local(result_local), inner_val);
+        builder.jump(merge_bb);
+    }
+
+    // Fill each handler-entry block: (binding) construct the Fault variant and
+    // bind it; then lower the handler into the result and jump to merge. The
+    // handler body is lowered ONCE PER ENTRY so each sees the right bound value
+    // — small + correct for the two-category Increment-1 set.
+    let fault_type = ctx.type_mapper.lookup_named("Fault").unwrap_or(UNIT_TYPE);
+    let lower_entry = |ctx: &mut LoweringContext, builder: &mut FunctionBuilder, entry: BlockId, variant: &str| {
+        builder.switch_to(entry);
+        if let Some(ref name) = binding_name {
+            let fault_val = ctx.emit_enum_init_owned(builder, "Fault", variant, fault_type, vec![], None);
+            ctx.register_local(name, fault_val, fault_type);
+        }
+        let handler_val = lower_expr(ctx, builder, handler);
+        if !builder.is_terminated() {
+            builder.assign(Place::local(result_local), handler_val);
+            builder.jump(merge_bb);
+        }
+    };
+    if let Some(entry) = overflow_entry {
+        lower_entry(ctx, builder, entry, "Overflow");
+    }
+    if let Some(entry) = divzero_entry {
+        lower_entry(ctx, builder, entry, "DivByZero");
+    }
+
+    builder.switch_to(merge_bb);
     FunctionBuilder::copy(result_local)
 }
 
