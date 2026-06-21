@@ -1,0 +1,10 @@
+# INT_MIN .mod(-1) must produce 0 on BOTH backends. Unlike `/` and `%`
+# (which OVERFLOW and panic), the Euclidean `INT_MIN mod -1` is genuinely 0.
+# LLVM-Mod emitted a bare `srem` with no INT_MIN/-1 guard — UB (SIGFPE on
+# x86_64, silently 0 on aarch64). NON-CONSTANT operands so the value reaches
+# the backend Mod arm (a constant would be folded away).
+void main():
+    int imin = -9223372036854775807 - 1
+    int neg1 = -1
+    int r = imin.mod(neg1)
+    print(f"{r}")

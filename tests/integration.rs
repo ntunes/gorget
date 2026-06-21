@@ -5711,6 +5711,22 @@ fn rem_intmin_plain() {
 }
 
 #[test]
+fn mod_intmin() {
+    // `INT_MIN.mod(-1)` is Euclidean modulo — genuinely 0, NOT an overflow
+    // (unlike `/` and `%`, which panic). LLVM-Mod emitted a bare `srem` with
+    // no INT_MIN/-1 guard (UB: SIGFPE on x86_64, silent 0 on aarch64). Now
+    // BOTH backends produce 0.
+    run_gg("mod_intmin.gg", "0");
+}
+
+#[test]
+fn mod_zero() {
+    // `x.mod(0)` is division by zero — must PANIC on BOTH backends. LLVM-Mod
+    // emitted a bare `srem`/`urem` with no div0 guard (UB), now traps like C-Mod.
+    run_gg_panics("mod_zero.gg", "division by zero");
+}
+
+#[test]
 fn panic_location_overflow() {
     // Phase 3 stack-traces: panic message must carry `file:line:col`
     // for compiler-emitted overflow trap. The fixture overflows on line 3

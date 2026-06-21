@@ -2752,6 +2752,18 @@ fn emit_function(
                             label = format!("remz.{bid}.{}.ok", counter - 1);
                         }
                     }
+                    Inst::Mod { ty, .. } if ty.is_integer() => {
+                        // Mirror the emit's SINGLE counter bump (one `uid`, reused
+                        // for the div0 AND signed-overflow labels). Signed exits at
+                        // the merge `done` block; unsigned exits at the div0 `ok`.
+                        let uid = counter;
+                        counter += 1;
+                        if is_signed(ty) {
+                            label = format!("modov.{bid}.{uid}.done");
+                        } else {
+                            label = format!("modz.{bid}.{uid}.ok");
+                        }
+                    }
                     Inst::BoundsCheck { .. } => {
                         label = format!("bc.{bid}.{counter}.ok");
                         counter += 1;
@@ -3455,12 +3467,70 @@ fn emit_inst(
                 writeln!(out, "  %{tmp2} = fadd {lty} %{tmp1}, %v{}", rhs.0).unwrap();
                 writeln!(out, "  %v{} = frem {lty} %{tmp2}, %v{}", dst.0, rhs.0).unwrap();
             } else {
+                // Integer modulo: guard div0, AND (signed only) `TYPE_MIN % -1`.
+                // Mirror C-Mod (`c_lir/mod.rs`): div0 traps; the signed
+                // overflow case produces 0 (the Euclidean result is genuinely 0,
+                // unlike Div/Rem which overflow and must trap). The `srem` is
+                // UB at INT_MIN/-1 (LLVM LangRef), so we BRANCH around it — a
+                // `select` would still execute the poison `srem` on that path.
                 let rem_op = if is_signed(ty) { "srem" } else { "urem" };
-                let tmp1 = format!("mod.{}.1", dst.0);
-                let tmp2 = format!("mod.{}.2", dst.0);
-                writeln!(out, "  %{tmp1} = {rem_op} {lty} %v{}, %v{}", lhs.0, rhs.0).unwrap();
-                writeln!(out, "  %{tmp2} = add {lty} %{tmp1}, %v{}", rhs.0).unwrap();
-                writeln!(out, "  %v{} = {rem_op} {lty} %{tmp2}, %v{}", dst.0, rhs.0).unwrap();
+                let uid = *trap_counter;
+                *trap_counter += 1;
+                // div0 check (shared shape with Div/Rem).
+                let zcmp = format!("modz.{block_id}.{uid}.cmp");
+                let ztrap = format!("modz.{block_id}.{uid}.trap");
+                let zok = format!("modz.{block_id}.{uid}.ok");
+                writeln!(out, "  %{zcmp} = icmp eq {lty} %v{}, 0", rhs.0).unwrap();
+                writeln!(out, "  br i1 %{zcmp}, label %{ztrap}, label %{zok}").unwrap();
+                writeln!(out, "{ztrap}:").unwrap();
+                let mod_panic = format!("{}:{}:{}: division by zero\n", loc.0, loc.1, loc.2);
+                let mod_panic_idx = str_globals.intern(&mod_panic);
+                let zstderr = format!("modz.{block_id}.{uid}.stderr");
+                writeln!(out, "  %{zstderr} = load ptr, ptr @stderr").unwrap();
+                writeln!(out, "  call i32 (ptr, ptr, ...) @fprintf(ptr %{zstderr}, ptr @.str.{mod_panic_idx})").unwrap();
+                writeln!(out, "  call void @exit(i32 1)").unwrap();
+                writeln!(out, "  unreachable").unwrap();
+                writeln!(out, "{zok}:").unwrap();
+                *current_label = zok;
+                if is_signed(ty) {
+                    // Signed `TYPE_MIN % -1` → 0 (NOT a trap; the Euclidean
+                    // result is genuinely 0). Branch around the UB `srem`.
+                    let bits = int_bits(ty);
+                    let tmin = format!("-{}", 1u128 << (bits - 1)); // INT_MIN as decimal literal
+                    let lmin = format!("modov.{block_id}.{uid}.lmin");
+                    let rneg1 = format!("modov.{block_id}.{uid}.rneg1");
+                    let ovf = format!("modov.{block_id}.{uid}.flag");
+                    let ovlabel = format!("modov.{block_id}.{uid}.zero");
+                    let normlabel = format!("modov.{block_id}.{uid}.norm");
+                    let donelabel = format!("modov.{block_id}.{uid}.done");
+                    writeln!(out, "  %{lmin} = icmp eq {lty} %v{}, {tmin}", lhs.0).unwrap();
+                    writeln!(out, "  %{rneg1} = icmp eq {lty} %v{}, -1", rhs.0).unwrap();
+                    writeln!(out, "  %{ovf} = and i1 %{lmin}, %{rneg1}").unwrap();
+                    writeln!(out, "  br i1 %{ovf}, label %{ovlabel}, label %{normlabel}").unwrap();
+                    // Normal path: the Euclidean ((a % b) + b) % b.
+                    writeln!(out, "{normlabel}:").unwrap();
+                    let tmp1 = format!("mod.{}.1", dst.0);
+                    let tmp2 = format!("mod.{}.2", dst.0);
+                    let normres = format!("mod.{}.norm", dst.0);
+                    writeln!(out, "  %{tmp1} = {rem_op} {lty} %v{}, %v{}", lhs.0, rhs.0).unwrap();
+                    writeln!(out, "  %{tmp2} = add {lty} %{tmp1}, %v{}", rhs.0).unwrap();
+                    writeln!(out, "  %{normres} = {rem_op} {lty} %{tmp2}, %v{}", rhs.0).unwrap();
+                    writeln!(out, "  br label %{donelabel}").unwrap();
+                    // Overflow path: result is 0.
+                    writeln!(out, "{ovlabel}:").unwrap();
+                    writeln!(out, "  br label %{donelabel}").unwrap();
+                    // Merge.
+                    writeln!(out, "{donelabel}:").unwrap();
+                    writeln!(out, "  %v{} = phi {lty} [%{normres}, %{normlabel}], [0, %{ovlabel}]", dst.0).unwrap();
+                    *current_label = donelabel;
+                } else {
+                    // Unsigned: no TYPE_MIN issue once div0 is guarded.
+                    let tmp1 = format!("mod.{}.1", dst.0);
+                    let tmp2 = format!("mod.{}.2", dst.0);
+                    writeln!(out, "  %{tmp1} = {rem_op} {lty} %v{}, %v{}", lhs.0, rhs.0).unwrap();
+                    writeln!(out, "  %{tmp2} = add {lty} %{tmp1}, %v{}", rhs.0).unwrap();
+                    writeln!(out, "  %v{} = {rem_op} {lty} %{tmp2}, %v{}", dst.0, rhs.0).unwrap();
+                }
             }
         }
         // Fault-catch checked arithmetic: produce the `i1` FLAG `%v{dst}` (true

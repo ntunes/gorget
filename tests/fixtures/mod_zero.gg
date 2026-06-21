@@ -1,0 +1,9 @@
+# `x.mod(0)` is division by zero — must PANIC on BOTH backends. LLVM-Mod
+# emitted a bare `srem`/`urem` with no div0 guard (`urem x,0` / `srem x,0`
+# is UB, garbage on aarch64). NON-CONSTANT 0 divisor so the check reaches
+# the backend Mod arm rather than being constant-folded.
+void main():
+    int x = 7
+    int zero = 0
+    int r = x.mod(zero)
+    print(f"{r}")

@@ -5389,8 +5389,13 @@ impl<'m> Interpreter<'m> {
             }
             BinOp::Mod => {
                 if ri == 0 { return Err(SimError::DivisionByZero); }
-                let r = li % ri;
-                if r != 0 && ((r ^ ri) < 0) { r + ri } else { r }
+                // `li % ri` panics in Rust debug on `i64::MIN % -1` (overflow).
+                // The Euclidean result of `x mod ±1` is always 0, so short it
+                // (and the bottom-of-fn match wraps `0` per `type_id`).
+                if ri == -1 { 0 } else {
+                    let r = li % ri;
+                    if r != 0 && ((r ^ ri) < 0) { r + ri } else { r }
+                }
             }
             BinOp::Pow => {
                 if ri >= 0 { li.pow(ri as u32) } else { 0 }

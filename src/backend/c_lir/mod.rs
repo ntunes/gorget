@@ -2548,14 +2548,14 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext, loc: &(String, u3
                     out,
                     "if ({r} == 0) {{ fprintf(stderr, \"{f}:{ln}:{cl}: division by zero\\n\"); exit(1); }} \
                      if (({ct}){l} == {tmin} && ({ct}){r} == -1) {{ {d} = 0; }} else \
-                     {{ typeof({l}) __t = {l} % {r}; {d} = __t + (__t != 0 && (__t ^ {r}) < 0 ? {r} : 0); }}",
+                     {{ __typeof__({l}) __t = {l} % {r}; {d} = __t + (__t != 0 && (__t ^ {r}) < 0 ? {r} : 0); }}",
                     d = v(*dst), l = v(*lhs), r = v(*rhs), f = loc.0, ln = loc.1, cl = loc.2
                 ).unwrap();
             } else {
                 // Unsigned path — no TYPE_MIN issue.
                 write!(
                     out,
-                    "if ({r} == 0) {{ fprintf(stderr, \"{f}:{ln}:{cl}: division by zero\\n\"); exit(1); }} {{ typeof({l}) __t = {l} % {r}; {d} = __t + (__t != 0 && (__t ^ {r}) < 0 ? {r} : 0); }}",
+                    "if ({r} == 0) {{ fprintf(stderr, \"{f}:{ln}:{cl}: division by zero\\n\"); exit(1); }} {{ __typeof__({l}) __t = {l} % {r}; {d} = __t + (__t != 0 && (__t ^ {r}) < 0 ? {r} : 0); }}",
                     d = v(*dst), l = v(*lhs), r = v(*rhs), f = loc.0, ln = loc.1, cl = loc.2
                 ).unwrap();
             }
