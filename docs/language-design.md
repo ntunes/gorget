@@ -210,7 +210,7 @@ int8 w = x *% 2                # wrapping multiply
 
 Wrapping operators: `+%`, `-%`, `*%`. These mirror Zig's approach. No wrapping division (division by zero panics separately).
 
-The compiler flag `--overflow=wrap` switches the default to wrapping arithmetic for performance-critical code where overflow is expected. This is a per-build setting, not per-expression.
+Plain `+`, `-`, `*` always check overflow and panic (or recover via `catch Fault.Overflow`); the per-operator `+%`/`-%`/`*%` forms are the only way to opt into wrapping. There is no global "wrap the whole build" mode — wrapping is per-expression, by design.
 
 ### 2.3 Functions
 

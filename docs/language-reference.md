@@ -1535,7 +1535,7 @@ op = "+" | "-" | "*" | "/" | "%" | "+%" | "-%" | "*%"
 
 Arithmetic operators require matching numeric types. Comparison operators produce `bool`. Logical operators require `bool` operands. Bitwise operators require matching integer types and produce the same type.
 
-**Wrapping arithmetic operators** (`+%`, `-%`, `*%`) perform the same operation as `+`, `-`, `*` but are guaranteed to wrap on overflow rather than panic, regardless of the overflow mode. In default (checked) mode, `+` panics on overflow while `+%` wraps silently. Under `directive overflow=wrap` (or `--overflow=wrap`), all arithmetic wraps and the wrapping operators behave identically to their non-wrapping counterparts. Compound assignment forms (`+%=`, `-%=`, `*%=`) are also available.
+**Wrapping arithmetic operators** (`+%`, `-%`, `*%`) perform the same operation as `+`, `-`, `*` but are guaranteed to wrap on overflow rather than panic. Plain `+`, `-`, `*` always check overflow: `+` panics on overflow (or recovers via `catch Fault.Overflow`) while `+%` wraps silently. Wrapping is strictly per-operator — there is no global mode that changes the behavior of `+`. Compound assignment forms (`+%=`, `-%=`, `*%=`) are also available.
 
 The `+` and `+=` operators also work on strings, producing a new concatenated string:
 
@@ -4566,7 +4566,7 @@ They must appear at the top of the file before any other items.
 
 ```gorget
 directive strip-asserts
-directive overflow=wrap
+directive trace
 ```
 
 **Syntax:**
@@ -4582,7 +4582,6 @@ value     = IDENT ;
 | Directive                          | Equivalent CLI flag   | Effect                                    |
 |------------------------------------|-----------------------|-------------------------------------------|
 | `directive strip-asserts`          | `--strip-asserts`     | Remove all `assert` statements from build |
-| `directive overflow=wrap`          | `--overflow=wrap`     | Enable wrapping arithmetic (no overflow panic) |
 | `directive trace`                  | `--trace`             | Enable execution tracing for testing      |
 | `directive hot-reload`             | `--hot-reload`        | Enable hot code reload mode               |
 | `directive scheduler=X`           | `--scheduler=X`       | Select spawn scheduler: `pool` (default), `thread`, `inline`, `single` |
@@ -4610,9 +4609,6 @@ per-file options without editing source code.
 | `directive strip-asserts` | *(none)*              | asserts stripped |
 | *(none)*                  | `--strip-asserts`     | asserts stripped |
 | `directive strip-asserts` | `--no-strip-asserts`  | asserts kept     |
-| `directive overflow=wrap` | *(none)*              | wrapping         |
-| *(none)*                  | `--overflow=wrap`     | wrapping         |
-| `directive overflow=wrap` | `--overflow=checked`  | checked (panic)  |
 | `directive trace`         | *(none)*              | tracing enabled  |
 | *(none)*                  | `--trace`             | tracing enabled  |
 | `directive trace`         | `--no-trace`          | tracing disabled |
@@ -4649,8 +4645,6 @@ The Gorget compiler is invoked as `gg` with the following commands:
 |----------------------|---------------------------------------------------------|
 | `--strip-asserts`    | Remove all `assert` statements                          |
 | `--no-strip-asserts` | Keep asserts even if source has `directive strip-asserts`|
-| `--overflow=wrap`    | Enable wrapping arithmetic (no overflow panic)          |
-| `--overflow=checked` | Force checked arithmetic even if source says `wrap`     |
 | `--trace`            | Enable tracing for test execution                       |
 | `--no-trace`         | Disable tracing even if source has `directive trace`   |
 | `--report html`      | Generate HTML report after testing (implies `--trace`) |

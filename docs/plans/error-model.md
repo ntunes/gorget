@@ -41,8 +41,9 @@ immediately, because continuing with corrupted state is worse than stopping**" �
 which is *exactly* the "recover-and-keep-serving" this RFC proposes for faults.
 
 So this RFC does not merely *add* a fault kind — **it overturns a deliberate,
-documented, implemented-with-a-flag (`--overflow=wrap/checked`, `main.rs:2456`)
-design decision.** That reversal must be argued on its merits, and the docs
+documented design decision** (overflow was once switchable build-wide; that
+global mode has since been retired so plain `+`/`-`/`*` always check).
+That reversal must be argued on its merits, and the docs
 (`language-design.md` §2.2 + §6, `book/10-errors.md`) rewritten as part of the
 work. It cannot be slipped in as "just a classification." This was the scout's #1
 reservation.
@@ -327,9 +328,11 @@ the RFC must argue against.
    invariant, NOT a blanket one. Still open: the *spelling* and how it relates to the
    existing postfix `catch` (which is for *contract* errors).
 2. **The "fast" tension** (§6) — debug-checked/release-wrapping vs checked-always;
-   the type-vs-runtime-promise reconciliation. **LOAD-BEARING, not a minor knob:**
-   it determines whether `catch Overflow` is even *meaningful* — if release wraps
-   (`--overflow=wrap`) but the type says "may fault Overflow," the type lies.
+   the type-vs-runtime-promise reconciliation. This is now RESOLVED in favor of
+   checked-always: plain `+`/`-`/`*` always check (the global wrap mode was
+   retired), so `catch Overflow` is always meaningful and the type never lies.
+   Explicit per-op wrapping (`+%`/`-%`/`*%`) never faults and never enters a
+   fault contract.
 3. **How `fault` is declared** on an error type — a marker on the enum/type decl
    (typed metadata, never name-matching), so the classification is read via an
    accessor, not a name list.
@@ -635,19 +638,13 @@ examples below is ILLUSTRATIVE — the exact fault-catch syntax is open, §11.5.
   (The pattern form `catch Overflow:` needs no constructed value.) Each faulting op's
   branch targets a handler-entry that knows its own variant. Mechanically simple but
   load-bearing — spec it so it isn't discovered mid-implementation.
-- ⚠ **Overflow-mode interaction — load-bearing AND new plumbing, not flag reuse
-  (review pass 1):** the global `--overflow=wrap` flag must NOT defeat a local
-  `catch`; a `catch`-scoped expression is compiled **checked regardless of the global
-  mode**. Today `overflow_wrap` is a single **module-global** bool threaded to
-  `lower_binop` (`src/ir/lowering/mod.rs:516` → `lir/lower/mod.rs:96` → `calls.rs:82`),
-  all-or-nothing per build/file. The override therefore needs NEW plumbing: thread a
-  "force-checked" signal from the catch context down to `lower_binop`. It IS feasible —
-  the LIR `Inst::Add{…, overflow}` field is already **per-instruction**
-  (`src/lir/mod.rs:286`) — so "the SAME path the flag emits" is right at the
-  instruction level but undersells the per-expr *scoping* work. **Doc obligation
-  (§11.4):** state that `catch Overflow` forces checked semantics locally **even in a
-  wrap build** (an op that would silently wrap elsewhere fires the handler inside the
-  catch — intended).
+- ✅ **Overflow-mode interaction — MOOT (the global wrap mode was retired).** There is
+  no longer a build-wide "wrap" mode that could defeat a local `catch`: plain `+`/`-`/`*`
+  always check (`calls.rs` emits `Overflow::Trap` unconditionally). A `catch`-scoped op
+  lowers through `FaultableBinOp`, which force-checks structurally regardless — no
+  per-expr "force-checked" plumbing is needed. The only way to opt into wrapping is the
+  per-operator `+%`/`-%`/`*%` forms, which never fault and are never wrapped in a fault
+  contract.
 - ✅ **A fault-catch cannot swallow a contract error (review pass 2):** the auto-prop
   hook fires only on `Call`/`MethodCall` operands returning `Result` (`exprs/mod.rs:42-70`);
   a bare `a*b` is neither, so it never fires inside a fault-catch. The existing
@@ -710,9 +707,8 @@ in the brief; the known set (owner Q 2026-06-21 — "does the plan update all do
   (const-eval has no runtime fault to catch); decide + state it, don't leave it silent.
 - **Self-host parity** — the lowering change must keep `self_host_*` /
   `bootstrap_fixed_point` green; verify no fixture relies on the un-catchable panic
-  shape. Also verify the §11.2 force-checked override under BOTH `--overflow=wrap` and
-  the default build (whichever mode the self-host builds in exercises the per-expr
-  override path).
+  shape. (The global wrap mode was retired, so there is only the default checked build to
+  exercise — `FaultableBinOp` force-checks structurally, no per-expr override path.)
 
 ### 11.6 New fixtures to LOCK IN Phase-1 behavior (owner Q 2026-06-21 — required, not optional)
 Per CLAUDE.md (executable guards > prose; negative fixtures; the gate battery), Phase 1
@@ -724,8 +720,9 @@ ships with NEW fixtures, all deterministic-stdout:
 - **Panic-default preserved:** an UNCAUGHT overflow/div0/bounds still panics (`exit(1)`)
   exactly as today — a fixture asserting the un-catchable shape is unchanged outside a
   catch.
-- **Override:** an op inside `catch Overflow` is **checked even under `--overflow=wrap`**
-  (fires the handler where the same op would silently wrap outside the catch).
+- **Always-checked:** plain `+`/`-`/`*` always check (there is no global wrap mode), so an
+  op inside `catch Overflow` reliably fires the handler. Only `+%`/`-%`/`*%` wrap, and they
+  never fault.
 - **Negative / exhaustiveness:** an unhandled `Fault` variant falls through to panic
   (not a compile error — the `non_exhaustive`-style rule); fault-`catch` on a
   non-throwing expr typechecks; contract-error `catch` is UNCHANGED (a regression guard
@@ -740,9 +737,10 @@ ships with NEW fixtures, all deterministic-stdout:
   LIR + at least one emitter) — the AST/grammar/typecheck work produces no runnable
   output until a backend can emit the branch. Stage: **shared LIR shape → one backend →
   AST/grammar/typecheck → second backend → fixtures.**
-- **The override is ADDITIVE, never a mutation of the module-global.** The "force-checked
-  in a catch" signal is read at `lower_binop` as a per-expr override; it must NOT touch
-  the `overflow_wrap` global's existing `--overflow=wrap` consumers (`calls.rs:81-86`).
+- **No override needed — plain ops are already always-checked.** With the global wrap mode
+  retired, `lower_binop` emits `Overflow::Trap` for plain `+`/`-`/`*` unconditionally, so a
+  `catch`-scoped op is checked by construction (via `FaultableBinOp`); there is no
+  module-global to defeat and no per-expr "force-checked" signal to thread.
 - Both backends are symmetric at the LIR level (neither has a re-pointable branch today);
   drive the branch from the shared LIR per §11.2 so neither emitter is special-cased.
 

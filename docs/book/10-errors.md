@@ -530,14 +530,9 @@ int x = 9223372036854775807    # int max
 int y = x + 1                  # PANIC: integer overflow
 ```
 
-This catches subtle bugs that silently corrupt data in C. If you intentionally want
-wrapping arithmetic, use the directive:
-
-```gorget
-directive overflow=wrap
-```
-
-Or use wrapping operators for specific expressions: `+%`, `-%`, `*%`.
+This catches subtle bugs that silently corrupt data in C. When you intentionally want
+wrapping arithmetic, use the per-operator wrapping operators: `+%`, `-%`, `*%`. Wrapping
+is per-expression — plain `+`/`-`/`*` always check overflow.
 
 ---
 

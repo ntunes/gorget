@@ -201,14 +201,13 @@ The load-bearing divergences a compiler developer must keep in mind:
   catch-all for kinds it can't interpret (`src/sim/value.rs:325`). This keeps the
   interpreter running past gaps but means a type confusion that would miscompile
   or trap natively can silently produce `0` here.
-- **Overflow/division semantics follow a flag, not the target.** Integer
-  add/sub/mul use `checked_*` and raise `SimError::Overflow` unless
-  `overflow_wrap` is set (taken from `module.runtime.overflow_wrap`,
-  `src/sim/dispatch.rs:286`, applied at `src/sim/dispatch.rs:5323-5383`);
-  division by zero is always `SimError::DivisionByZero`
-  (`src/sim/dispatch.rs:5298`,`:5338`). The wrap flag comes from the
-  `--overflow=wrap` build option threaded through lowering
-  (`src/main.rs:3369-3378`).
+- **Overflow/division semantics are always checked.** Integer add/sub/mul use
+  `checked_*` and raise `SimError::Overflow` on overflow
+  (`src/sim/dispatch.rs`, the signed/unsigned `BinOp::{Add,Sub,Mul}` arms);
+  division by zero is always `SimError::DivisionByZero`. The per-operator
+  wrapping ops (`BinOp::{AddWrap,SubWrap,MulWrap}`, emitted by `+%`/`-%`/`*%`)
+  use `wrapping_*` instead. There is no global wrap mode — plain `+`/`-`/`*`
+  always check.
 - **Recursion is bounded at 500 frames** (`MAX_DEPTH`,
   `src/sim/dispatch.rs:45`), much shallower than a native stack.
 - **`Invoke`'s error edge is ignored** — exceptions are not propagated through

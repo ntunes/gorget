@@ -34,26 +34,10 @@ void main():
 
 **CLI override:** `--strip-asserts` / `--no-strip-asserts`
 
----
-
-### `directive overflow=<mode>`
-
-Control arithmetic overflow behavior.
-
-| Mode | Behavior |
-|------|----------|
-| `checked` | Panic on overflow (default) |
-| `wrap` | Wrapping arithmetic (modular) |
-
-```gorget
-directive overflow=wrap
-
-void main():
-    int8 x = 127
-    x += 1          # wraps to -128 instead of panicking
-```
-
-**CLI override:** `--overflow=wrap` / `--overflow=checked`
+> **Note:** there is no overflow directive. Plain `+`/`-`/`*` always check
+> overflow (panic, or recover via `catch Fault.Overflow`); use the per-operator
+> `+%`/`-%`/`*%` forms for explicit wrapping. Wrapping is per-expression by
+> design — there is no global mode.
 
 ---
 
@@ -128,7 +112,6 @@ When both a source directive and a CLI flag are present, the CLI flag wins:
 | Source | CLI | Result |
 |--------|-----|--------|
 | `directive strip-asserts` | `--no-strip-asserts` | Asserts kept |
-| `directive overflow=wrap` | `--overflow=checked` | Checked mode |
 | `directive trace` | `--no-trace` | No tracing |
 | (none) | `--strip-asserts` | Asserts stripped |
 | (none) | `--trace` | Tracing enabled |
@@ -143,7 +126,6 @@ for CI, profiling, and debugging.
 | Directive | Values | CLI Override | Purpose |
 |-----------|--------|:------------:|---------|
 | `strip-asserts` | — | Yes | Remove assertions |
-| `overflow` | `wrap`, `checked` | Yes | Overflow behavior |
 | `trace` | — | Yes | Execution tracing |
 | `hot-reload` | — | Yes | Hot code reloading |
 | `scheduler` | `pool`, `thread`, `inline`, `single` | Yes | Async scheduler |

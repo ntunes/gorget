@@ -201,8 +201,8 @@ x >>= 3
 
 ### Wrapping Arithmetic
 
-By default, integer overflow panics (catches bugs). If you intentionally want
-wrapping behavior:
+Integer overflow always panics (catches bugs). When you intentionally want
+wrapping behavior, use the per-operator wrapping forms:
 
 ```gorget
 x +% y         # wrapping add
@@ -210,11 +210,8 @@ x -% y         # wrapping subtract
 x *% y         # wrapping multiply
 ```
 
-Or set the directive for the whole file:
-
-```gorget
-directive overflow=wrap
-```
+Wrapping is per-expression by design — there is no whole-file or whole-build
+mode that changes what plain `+`/`-`/`*` do.
 
 ---
 

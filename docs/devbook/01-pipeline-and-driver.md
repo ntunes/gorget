@@ -179,7 +179,7 @@ sub-modes: `--shared` builds a `.dylib`/`.so` (`src/main.rs:2793`), the normal
 path produces an executable (and handles hot-reload's two-phase host+guest split
 internally, `src/main.rs:810`). On success prints `Built: <path>` unless an
 `--emit-*` flag short-circuited to a text dump. Build-shaping flags read here
-include `--strip-asserts`/`--no-strip-asserts`, `--overflow=wrap|checked`,
+include `--strip-asserts`/`--no-strip-asserts`,
 `--trace`/`--no-trace`, `--hot-reload`, `--sanitize`, `--backend=<c-lir|llvm>`,
 `--target=<native|freestanding[-arch]>`, `--feature`, `--scheduler=`, and the
 `--clones[=…]` diagnostics. The `freestanding` target cross-compiles a UEFI PE

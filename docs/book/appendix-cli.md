@@ -38,8 +38,6 @@ gg build app.gg --hot-reload       # host binary + guest dylib
 |------|-------------|
 | `--strip-asserts` | Remove all `assert` statements |
 | `--no-strip-asserts` | Keep asserts (overrides source directive) |
-| `--overflow=wrap` | Wrapping arithmetic on overflow |
-| `--overflow=checked` | Panic on overflow (default) |
 | `--trace` | Enable execution tracing (outputs `.trace.jsonl`) |
 | `--no-trace` | Disable tracing (overrides source directive) |
 | `--hot-reload` | Build for hot code reloading |
@@ -201,7 +199,6 @@ gg sim test app.gg --ub-checks
 | `--ignore-leaks` | Suppress leak reports |
 | `--disable-isolation` | Allow real I/O (otherwise sandboxed) |
 | `--backtrace=<0\|1\|full>` | Error detail level |
-| `--overflow=<mode>` | Overflow behavior (`wrap` or `checked`) |
 
 ---
 
