@@ -44,11 +44,16 @@ So this RFC does not merely *add* a fault kind — **it overturns a deliberate,
 documented, implemented-with-a-flag (`--overflow=wrap/checked`, `main.rs:2456`)
 design decision.** That reversal must be argued on its merits, and the docs
 (`language-design.md` §2.2 + §6, `book/10-errors.md`) rewritten as part of the
-work. It cannot be slipped in as "just a classification." This is the scout's #1
-reservation and it gates a brief. (The owner *has* signalled the intent — "early
-gorget was very strict on overflow; the user should be able to recover" — so the
-reversal may well be wanted; the point is it must be made *explicitly*, rule and
-docs and all, not by omission.)
+work. It cannot be slipped in as "just a classification." This was the scout's #1
+reservation.
+
+**✅ OWNER-DECIDED 2026-06-21: the reversal is ACCEPTED.** The intent ("early
+gorget was very strict on overflow; the user should be able to recover") is
+confirmed: `language-design.md` §2.2 + §6 (the `:1312` "caller can prevent → panic"
+rule) and `book/10-errors.md:6-14` are to be **rewritten** to the new model
+(overflow/bounds/div0 become recoverable faults; the Panic-vs-Result rule is
+restated). This is no longer an open blocker — it is committed scope. The doc
+rewrite is part of the implementation work, not a precondition to be argued.
 
 ## 1. Vocabulary (read first — there are TWO axes, don't conflate them)
 
@@ -354,14 +359,35 @@ the RFC must argue against.
     pre-monomorphization has an unknown inferred channel → forces an effect-carrying
     BOUND. This is the *same* "Seam B" the cast RFC hit (`cast-via-construction.md` §7.4),
     inherited for the WHOLE error channel. Spec the bound.
-14. **Typed faults vs untyped-panic-with-supervisor — the CENTRAL unargued premise
-    (review pass 1, promoted from §3).** The RFC *prefers* typed-catchable-by-type
-    faults (`catch Overflow` distinct from `catch Bounds`) over the simpler Erlang/
-    Midori untyped-panic-with-supervisor model — but §3 only *asserts* this, and the
-    RFC's OWN §8 precedents (Zig/Midori faults are *untyped*) cut AGAINST the typed
-    preference. This choice decides whether half the RFC's machinery (fault
-    classification metadata, `catch`-by-type) even exists. Argue it on merits, or
-    adopt untyped-panic-with-supervisor.
+14. **Fault representation & catch model — RESOLVED 2026-06-21 (the "typed vs
+    untyped" framing was a CONFLATION).** "Typed/untyped" was overloading three
+    distinct axes: **(A)** value representation — structured enum vs `String`;
+    **(B)** whether the fault rides the function's *static type* (the in-signature
+    `Result` row); **(C)** whether the boundary catch is *statically exhaustive* vs a
+    *dynamic match*. The reviewers' "untyped panic" meant **B = no** (not in the
+    signature), NOT **A = String**. **Owner decision:**
+    - **(A) Structured `Fault` enum, NEVER `String`** — `Fault.Overflow`,
+      `Fault.Bounds`, `Fault.DivByZero`, `Fault.OutOfMemory`, … a closed enum of all
+      non-panicking faults the user matches on. (This is what "typed" meant.)
+    - **(B) OUT-OF-BAND — the `Fault` does NOT enter any function's `Result`/static
+      type.** Signatures stay clean; faults ride the separate ambient fault channel
+      (the unwind path, §6), not `Result`. This is what avoids the §3 ubiquity
+      pollution (a fault in `Result` would put `Overflow` on ~every signature + on
+      the API surface — the thing §3/§4 rule out).
+    - **(C) DYNAMIC match at the boundary**, not static per-boundary exhaustiveness:
+      `catch fault: match fault: case Fault.Overflow: …`. The Rust `catch_unwind` /
+      Go `recover` / Erlang model. No fault-set inference up the call graph (that
+      would re-introduce a milder ubiquity problem for a thin payoff — a catch-all
+      "fail the unit of work" is the normal handler anyway).
+
+    **Retire "untyped" as a misnomer:** BOTH error paths are typed (both carry
+    structured types); they differ only in *where* the type lives — `Result[T,E]` is
+    **in the signature** (contract), the `Fault` enum is **ambient/out-of-signature**
+    (faults). ⚠ **Follow-up (structural):** §1/§4's "ONE error channel, two kinds"
+    framing should be revisited — mechanically these are **two channels** (the
+    in-signature `Result` contract channel + the ambient structured-`Fault` channel),
+    per §6's value-union-vs-unwind split. That reframe is a doc edit that should get
+    its own confirming review (don't silently overhaul the pass-3-signed-off framing).
 15. **FFI / `extern`-boundary fault unwind (review pass 2).** A longjmp-based fault
     unwind (§6) that jumps over a foreign C frame skips C-side cleanup and is UB on
     many ABIs. The doc has zero treatment of a fault crossing an `extern` boundary.
