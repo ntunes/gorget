@@ -494,3 +494,74 @@ error — contract (impose/curate, on the API surface) and fault (auto-propagate
 recover-at-boundary, off the API surface).** Conversion-overflow is a contract
 error (cast RFC, decided); arithmetic-overflow is a fault (recoverable at a
 boundary). Same model, both worked examples.
+
+## 11. PHASE 1 SPEC (the review target — owner decisions of 2026-06-21)
+
+Phase 1 is the small, shippable, **unwind-free** increment. This section is the
+consolidated spec the **Phase-1 review** evaluates; Phase 2 (deep/boundary catch)
+is OUT of scope and gets its own review cycle after Phase 1 lands. Rationale &
+decisions live in §0.5 (additive reversal), §3 (impossibility), Q14 (fault
+representation), §9.1 (phasing).
+
+### 11.1 Scope — what Phase 1 delivers
+1. A **closed `Fault` enum** — the runtime faults that become catchable:
+   `Fault.Overflow`, `Fault.DivByZero`, `Fault.Bounds`, `Fault.OutOfMemory`
+   (initial set; exact membership = Q7, settled in the brief — `UnwrapNone`/`Assert`
+   are candidates).
+2. **`Fault equip Error`** — `Fault` implements the EXISTING `Error` trait
+   (`language-reference.md:2766`), so ONE `catch`/match surface handles faults AND
+   contract errors uniformly. No new base type, no subtyping, no open enums.
+3. **Panic-by-default, unchanged.** Outside a fault `catch`, overflow/bounds/div0
+   panic exactly as today (`exit(1)`). A plain `int sum(...)` stays `int` — NO
+   signature change, NO `Result` ubiquity, the fast path is untouched.
+4. **LOCAL (lexical) catch.** `int r = (a * b) catch Overflow: saturate()` recovers a
+   fault from the faultable ops **syntactically within** the wrapped expression. It
+   does NOT catch faults that occur inside FUNCTIONS CALLED by the expression — those
+   are deep → panic → Phase 2.
+5. **Exhaustiveness via implicit-panic-default.** A fault match handles the variants
+   it names; unnamed `Fault` variants fall through to **panic** (a
+   `non_exhaustive`-style rule for fault-typed matches — you are NOT forced to
+   enumerate every fault).
+
+### 11.2 Lowering — no unwinding
+- A `catch`-wrapped expression compiles its faultable ops as **checked ops that
+  branch to the handler** — the SAME `__builtin_*_overflow` / checked path the
+  `--overflow=checked` flag already emits (`src/backend/c_lir/mod.rs:2438`,
+  `runtime_checked_arith.c`), except the overflow branch jumps to the handler block
+  instead of `gorget_panic`/`exit(1)`. The trap branches BEFORE the store → no
+  corrupted value materializes. Pure local control flow — NO setjmp/longjmp, NO
+  unwinding, NO drop-across-unwind.
+- ⚠ **Overflow-mode interaction (load-bearing):** the global `--overflow=wrap`
+  (release-fast) flag must NOT defeat a local `catch`. A `catch`-scoped expression is
+  compiled **checked regardless of the global mode** — globally you may run wrap/fast,
+  but the ops inside a `catch Overflow` are locally checked. This is the Phase-1
+  answer to the §6/Q2 "fast knob": per-expression checked override, not a global
+  commitment. The brief verifies the codegen can scope checked-ness per expression.
+
+### 11.3 Explicitly OUT of Phase 1 (→ Phase 2)
+Deep/boundary catch (a fault from a called function); the §6 greenfield unwind infra
+(B2/Q10); drop/CoW-across-unwind (Q9); FFI-boundary unwind (Q15); the `main`/task
+top-level boundary (Q16); the §3.1 partial-state/`Drop`-observation argument (MOOT in
+Phase 1 — the checked op branches before any partial mutation commits). None of these
+are touched by Phase 1.
+
+### 11.4 Doc + framing changes that land WITH Phase 1
+- **§1/§4 reframe:** "one error channel, two kinds" → **two channels** (in-signature
+  `Result` contract channel + the `Fault` channel), per Q14's follow-up.
+- **`language-design.md` §2.2/§6 + `book/10-errors.md`:** ADD "overflow panics by
+  default AND is locally catchable" (the additive change, §0.5); restate the
+  Panic-vs-Result rule to cover opt-in recovery.
+
+### 11.5 Phase-1 open questions (resolve in the brief)
+- **Exact `Fault` membership** (Q7, the Phase-1 subset).
+- **Lexical reach, precisely** — does a `catch` cover ops inside an inline block
+  expression or an inline closure body within the wrapped expr, or strictly the
+  top-level operator tree? A closure passed to `.map(…)` is invoked via a CALL — its
+  body faults are deep (Phase 2). Define the boundary unambiguously.
+- **`catch`-by-`Fault` syntax** — reuse the existing postfix `catch`
+  (`book/10-errors.md:169`): `(expr) catch Overflow: …` vs `(expr) catch f: match f`.
+- **`meta`/const-eval** — Phase-1 local catch at compile time: N/A, or does a `catch`
+  in a `meta` context force checked const-eval? (Today `meta` wraps, `meta.rs:1278-1280`.)
+- **Self-host parity** — the lowering change must keep `self_host_*` /
+  `bootstrap_fixed_point` green; verify no fixture relies on the un-catchable panic
+  shape.
