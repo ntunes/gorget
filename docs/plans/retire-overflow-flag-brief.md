@@ -23,7 +23,7 @@ Delete the flag plumbing top to bottom (all `file:line` scout-verified against c
    arm) + `:530-531` — delete.
 4. **`LoweringContext` field:** `src/ir/lowering/context.rs:336` + init `:511` — delete.
 5. **Runtime-config write + field:** `src/ir/lowering/mod.rs:2048` + `src/ir/mod.rs:118-119`
-   (`RuntimeConfig.overflow_wrap`) — delete.
+   (`RuntimeFeatures.overflow_wrap`, `ir/mod.rs:64`) — delete.
 6. **THE DECISION SITE:** `src/lir/lower/calls.rs:81-86` — `lower_binop(... overflow_wrap: bool)`:
    **drop the param**; `default_overflow` becomes the literal `Overflow::Trap`. The
    `AddWrap`/`SubWrap`/`MulWrap` arms (`calls.rs:100-102`) already hardcode `Overflow::Wrap`
@@ -55,25 +55,36 @@ global. Retirement only changes which `Overflow` variant `lower_binop` emits for
   benchmark." Do NOT build it here.
 
 ## 3. Staging (build GREEN at each step)
-1. **Core:** drop the `lower_binop` param → `default_overflow = Overflow::Trap` literal; delete
-   the `overflow_wrap` field threading (`lir/lower/{mod,insts}.rs`, `ir/mod.rs`,
-   `ir/lowering/{mod,context}.rs`); collapse the sim path. Build + `cargo test --lib`.
-2. **CLI + directive:** remove the `--overflow` parse + `LoweringOptions` fields + `-fwrapv`;
-   make `directive overflow=wrap` an `UnknownDirective` (`semantic/mod.rs`). Build.
+1. **Core + CLI together (pass 2 — they MUST land in one step to build green):** drop the
+   `lower_binop` param → `default_overflow = Overflow::Trap` literal; delete the `overflow_wrap`
+   threading (`lir/lower/{mod,insts}.rs`, `ir/mod.rs`, `ir/lowering/{mod,context}.rs`); collapse the
+   sim path; AND remove the `--overflow` CLI parse + the `LoweringOptions{...}` construction sites in
+   `main.rs` + the `-fwrapv` args **in the SAME step** — because deleting `LoweringOptions.overflow_wrap`/
+   `overflow_checked` (`ir/lowering/mod.rs:46-49`) while `main.rs` still names them would NOT compile.
+   Build + `cargo test --lib`.
+2. **Directive errors:** make `directive overflow=wrap` an `UnknownDirective` (delete the `"overflow"`
+   arm `semantic/mod.rs:143-155`). Build.
 3. **Tests:** migrate/delete/edit per §4. Build + the overflow-family integration tests.
 4. **Docs:** rewrite per §5.
 
 ## 4. Test plan (executor runs targeted; parent runs the full sweep)
 - **Migrate (the ONE output-dependent fixture):** `tests/fixtures/numeric_overflow_wrap.gg` →
   use `+%` (`int wrapped = max +% 1`), drop the directive; **assert the EXACT same output**
-  (`9223372036854775807` / `-9223372036854775808` / `true`). Repoint `lir_ab.rs:815`
-  (`lir_ab_numeric_overflow_wrap`) to it (real cross-backend wrap coverage).
+  (`9223372036854775807` / `-9223372036854775808` / `true`). Migrated IN PLACE (same path), so its
+  TWO consumers both stay green with no further edit: integration `numeric_overflow_wrap`
+  (`integration.rs:21226`, `run_gg`) and `lir_ab.rs:815` (`lir_ab_numeric_overflow_wrap`) — just
+  VERIFY both stay green (no "repoint" needed).
 - **Delete:** integration tests `overflow_wrap` (`integration.rs:5638-5641`),
-  `directive_overflow_wrap` (`:5813-5817`), `directive_cli_override_overflow_checked`
-  (`:5826-5831`); `lir_ab` tests `lir_ab.rs:257` + `:791` (⚠ RISK #1 — these build
-  `use_overflow_wrap.gg`/`overflow_wrap.gg` with NO flag, so post-retirement the directive
-  ERRORS → `run_gir` returns `None` → the test PANICS; delete them in THIS change); fixtures
-  `tests/fixtures/{overflow_wrap,use_overflow_wrap}.gg`.
+  `directive_overflow_wrap` (`:5813-5817`), `directive_cli_override_overflow_checked` (`:5826-5831`);
+  `lir_ab` tests `lir_ab.rs:257` + `:791`; fixtures `tests/fixtures/{overflow_wrap,use_overflow_wrap}.gg`.
+  ⚠ **(pass 2) two DISTINCT delete-reasons — don't conflate them (the executor is told to STOP if
+  the brief mismatches source, so this must be right):** (i) `lir_ab.rs:257` builds
+  `use_overflow_wrap.gg`, which DOES start with `directive overflow=wrap` → post-retirement that
+  directive ERRORS → `run_gir` returns `None` → the test PANICS (`lir_ab.rs:181-188`). (ii)
+  `lir_ab.rs:791` builds `overflow_wrap.gg`, which has **NO directive** (bare `int y = x + 1` at
+  INT_MAX — it already traps under default-checked); it must go ONLY because its FIXTURE
+  (`overflow_wrap.gg`) is being deleted (its `assert!(fixture_path.exists())` would then fail), NOT
+  because of a directive error.
   - **`src/parser/tests.rs:1050-1060` (pass 1 — OPTIONAL cleanup-delete):** this only checks the
     directive *parses* (the parser is unchanged), so it would still PASS post-change — delete it as
     cleanup if you like, but it is NOT a break; don't mis-attribute a failure to it.
@@ -100,13 +111,18 @@ global. Retirement only changes which `Overflow` variant `lower_binop` emits for
 - `docs/plans/error-model.md`: STRIKE the now-vacuous override discussion — §11.2 note
   **638-650** (the "global `--overflow=wrap` must not defeat a local catch" force-checked-override),
   §11.4 doc-obligation, §11.5 test bullet **727** ("checked even under `--overflow=wrap`"), §11.7
-  **743-745**, plus the stragglers at `error-model.md:44` and `:332`. (Increment 1's `FaultableBinOp`
+  **743-745**, plus the stragglers at `error-model.md:44`, `:332`, **and `:713`** (pass 2 — "verify
+  the §11.2 force-checked override under BOTH `--overflow=wrap` and the default build"). **Re-scan §11
+  broadly** for any remaining flag framing — `grep -n "overflow=wrap\|overflow_wrap" docs/plans/error-model.md`
+  must return zero after the edit. (Increment 1's `FaultableBinOp`
   already force-checks structurally regardless of any flag, `insts.rs:117-170`, so this whole worry
   is moot post-retirement.)
-- **`docs/devbook/` (pass 1 — MISSED in the first draft):** `01-pipeline-and-driver.md:182` (lists
-  `--overflow=wrap|checked` as a build-shaping flag) and `21-simulator.md:210` ("`--overflow=wrap`
-  build option threaded through lowering") — both must be removed/updated, or they violate the §7
-  acceptance ("no surviving `--overflow=wrap` reference").
+- **`docs/devbook/` (pass 1 + pass 2):** `01-pipeline-and-driver.md:182` (lists `--overflow=wrap|checked`
+  as a build-shaping flag); and `21-simulator.md` — **rewrite the WHOLE overflow bullet `:204-211`**
+  (not just `:210`): it describes the flag-driven mechanism incl. `overflow_wrap` "taken from
+  `module.runtime.overflow_wrap`" at `:206` — the simulator is now always-checked, so the whole bullet
+  must change, not one line. Both must be removed/updated, or they violate §7 ("no surviving
+  `--overflow=wrap` reference").
 
 ## 6. Constraints (NON-NEGOTIABLE)
 - **Worktree:** `pwd` + `git rev-parse --show-toplevel` FIRST; INSIDE your worktree, NEVER
