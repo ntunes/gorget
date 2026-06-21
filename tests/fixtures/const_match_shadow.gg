@@ -1,0 +1,46 @@
+# Scope precedence for `case CONST:` — a LOCAL or PARAM that shadows a
+# module-level const name must make `case <name>:` an always-match fresh
+# BINDING, NOT a value-compare against the const. This mirrors Rust gg:
+# the resolver binds `name` to the in-scope `Binding`, not the const
+# `DefKind::Const`. It is the load-bearing edge of the const-pattern fix
+# (`lower_match.gg` PBinding arm, `not nl_contains(&ctx, name)` guard).
+#
+# If the guard were dropped, `case KEY:` below would lower to
+# `scrutinee == 7` (KEY's const value), so `shadow_param(3)` would skip
+# the first arm and print "fell-through" instead of "bound=3". The
+# guard makes the param `KEY` win, so the arm always matches and binds.
+const int KEY = 7
+const int OTHER = 99
+
+# `KEY` is a PARAM here, shadowing the module const. `case KEY:` must
+# bind (always-match), NOT compare scrutinee to 7. We pass 3 (≠ 7), so a
+# value-compare would FALL THROUGH; an always-match binding takes the arm.
+String shadow_param(int KEY):
+    return match KEY:
+        case KEY: f"bound={KEY}"
+        else: "fell-through"
+
+# A LOCAL named the same as the const `OTHER` shadows it. `case OTHER:`
+# must bind (always-match) the scrutinee, NOT compare it to 99. The local
+# is read first so the shadowing is observable: `base` uses the local's
+# value, then the case re-binds `OTHER` to the scrutinee.
+String shadow_local(int x):
+    int OTHER = x + 1
+    int base = OTHER
+    return match x:
+        case OTHER: f"base={base} local-bound={OTHER}"
+        else: "no"
+
+# Control: a genuine const name (no shadowing local/param) still
+# value-compares — `case OTHER:` here compares the scrutinee to 99.
+String const_compare(int x):
+    return match x:
+        case OTHER: "is-99"
+        else: "not-99"
+
+void main():
+    print(shadow_param(3))    # bound=3   (param shadows KEY → always-match bind)
+    print(shadow_param(7))    # bound=7   (still binds the value, not a compare)
+    print(shadow_local(5))    # base=6 local-bound=5
+    print(const_compare(99))  # is-99     (real const compare)
+    print(const_compare(1))   # not-99

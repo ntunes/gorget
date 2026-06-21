@@ -415,6 +415,50 @@ int match_scrutinee_ptr(LowerCtx &ctx, GirModule &gmod, int scrutinee):
     emit(&ctx, GIAssign(tmp, op_consume(&ctx, &gmod, scrutinee, CkMatchPtr())))
     return tmp
 
+# True when `name` resolves to a module-level `const` whose folded value is
+# recorded in one of the typed const tables populated by lower_module
+# (`lower.gg:2789+`). Used by the PBinding arm to distinguish `case CONST:`
+# (a value-compare) from `case x:` (a fresh binding). A name that is NOT in
+# any const table is treated as a genuine binding, so locals / pattern vars
+# that happen to collide with nothing keep binding correctly.
+bool is_const_name(GirModule &gmod, String name):
+    if gmod.const_decls.contains(name):
+        return true
+    if gmod.bool_const_decls.contains(name):
+        return true
+    if gmod.string_const_decls.contains(name):
+        return true
+    if gmod.float_const_decls.contains(name):
+        return true
+    return false
+
+# Materialize the value of module-level const `name` into a fresh local,
+# mirroring lower_expr's EIdentifier const-inlining arm (OpConstI64 /
+# OpConstBool / OpConstStr / OpConstF64). Caller MUST have checked
+# `is_const_name` first. Returns the local holding the const value.
+int lower_const_name_value(LowerCtx &ctx, GirModule &gmod, String name):
+    if gmod.const_decls.contains(name):
+        int cv = gmod.const_decls.get(name).unwrap()
+        int cdst = add_local(&ctx, I64_TYPE, None)
+        emit(&ctx, GIAssign(cdst, OpConstI64(cv)))
+        return cdst
+    if gmod.bool_const_decls.contains(name):
+        bool bcv = gmod.bool_const_decls.get(name).unwrap()
+        int bcdst = add_local(&ctx, BOOL_TYPE, None)
+        emit(&ctx, GIAssign(bcdst, OpConstBool(bcv)))
+        return bcdst
+    if gmod.string_const_decls.contains(name):
+        String scv = gmod.string_const_decls.get(name).unwrap()
+        int gs_tid_sc = lookup_or_register_named(&gmod, "GorgetString")
+        int scdst = add_local(&ctx, gs_tid_sc, None)
+        emit(&ctx, GIAssign(scdst, OpConstStr(scv)))
+        return scdst
+    # float const
+    float fcv = gmod.float_const_decls.get(name).unwrap()
+    int fdst = add_local(&ctx, F64_TYPE, None)
+    emit(&ctx, GIAssign(fdst, OpConstF64(fcv)))
+    return fdst
+
 # Lower a single match arm's pattern-match test. Emits branches to
 # either `match_bb` (pattern matched, possibly with bindings) or
 # `no_match_bb` (pattern didn't match, try next arm).
@@ -431,6 +475,30 @@ void lower_pattern_match(LowerCtx &ctx, int scrutinee, SpannedPattern spat, Stri
             if enum_name != "" and match_variant_index(enum_name, name, &gmod) >= 0:
                 Vector[SpannedPattern] no_sub_pats = []
                 lower_ctor_pattern(&ctx, scrutinee, name, no_sub_pats, enum_name, match_bb, no_match_bb, &gmod)
+            elif not nl_contains(&ctx, name) and is_const_name(&gmod, name):
+                # `case FOO:` where `FOO` is a module-level `const` — compare the
+                # scrutinee against the const's VALUE, NOT bind a fresh variable.
+                # SCOPE PRECEDENCE: only treat `name` as a const when NO in-scope
+                # local/param of the same name shadows it (the `nl_contains` guard,
+                # mirroring the EIdentifier arm at lower_expr.gg:529). A shadowing
+                # local makes `case name:` a genuine binding (Rust resolves `name`
+                # to the local `Binding`, not the const `DefKind::Const`).
+                # Without this, every constant pattern fell through to the
+                # always-match `GTJump(match_bb)` binding path below, so the FIRST
+                # const arm always matched (every input took it) and shadowed the
+                # constant. The const's value is materialized into a local exactly
+                # as the EIdentifier arm does (OpConstI64 / OpConstBool / OpConstStr);
+                # the equality compare mirrors the PLiteral arm. Codegen's ICmp arm
+                # auto-routes a GorgetString operand through gorget_str_eq, so the
+                # one GICmp template handles int / bool / String consts uniformly.
+                int scr_tid = ctx.locals.get(scrutinee).unwrap().type_id
+                int const_val = lower_const_name_value(&ctx, &gmod, name)
+                int cmp_tid = I64_TYPE
+                if scr_tid == BOOL_TYPE:
+                    cmp_tid = BOOL_TYPE
+                int is_match = add_local(&ctx, BOOL_TYPE, None)
+                emit(&ctx, GICmp(is_match, CMP_EQ, cmp_tid, op_consume(&ctx, &gmod, scrutinee, CkBinOpArg()), op_consume(&ctx, &gmod, const_val, CkBinOpArg())))
+                set_terminator(&ctx, GTBranch(OpCopy(is_match), match_bb, no_match_bb))
             else:
                 # Real binding: always match; bind scrutinee into a fresh
                 # local under `name`.

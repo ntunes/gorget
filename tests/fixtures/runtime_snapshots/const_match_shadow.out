@@ -1,0 +1,5 @@
+bound=3
+bound=7
+base=6 local-bound=5
+is-99
+not-99
