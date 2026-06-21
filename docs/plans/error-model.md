@@ -162,8 +162,17 @@ it is safe in a way that "`catch Overflow` *inline* and keep using the result" i
 **not**. So the safety property hangs on **boundary-only catch**: §9 Q1's
 "catchable *anywhere*?" answered "anywhere" **resurrects the exact footgun the docs
 warn against** (recover mid-computation, keep using the corrupted value). **Design
-invariant: faults are catchable ONLY at a declared coarse boundary that
-discards-and-unwinds the unit of work — never inline.**
+invariant (for Phase-2 DEEP catch): a fault from a CALLED FUNCTION is catchable only
+at a declared coarse boundary that discards-and-unwinds the unit of work.**
+
+⚠ **Carve-out — superseded for Phase 1 by §9.1/§11 (final review 2026-06-21):** the
+"never inline" rule above targets the SPECIFIC footgun of *catching inline AND then
+keeping the corrupted result*. **Phase-1 *local* catch is NOT that footgun and IS
+safe:** the checked op **branches before the store** (§11.2), so the corrupted value
+is never observed — the handler computes a fresh fallback. So Phase-1 inline/local
+catch is *permitted and safe*; the boundary-only constraint applies only to the
+**Phase-2 deep (cross-call)** case, where a fault propagated up from a callee must
+discard the whole unit of work.
 
 ⚠ **Precision (review pass 2): "discarded" is NOT "never observed."** Gorget has a
 user-definable `Drop` (`language-reference.md:2841`: `drop(!self): close_fd(self.fd)`
@@ -307,13 +316,16 @@ the RFC must argue against.
 
 ## 9. Open questions (for the scout/brief, before any implementation)
 
-1. **Fault catch syntax & scope — LEANS boundary-only (review pass 1, §3.1).**
-   Faults are catchable ONLY at a declared coarse boundary that discards-and-unwinds
-   the unit of work — NOT inline/anywhere (anywhere-catch resurrects the corrupted-
-   state footgun, `book/10-errors.md:13-14`). The boundary-only constraint is now a
-   design INVARIANT, not an open toss-up. Still open: the *spelling* (`catch Overflow:`
-   at a boundary block) and how it relates to the existing postfix `catch` (which is
-   for *contract* errors).
+1. **Fault catch syntax & scope — TWO regimes (review pass 1 + phasing §9.1, §3.1).**
+   ⚠ **Phase 1 = inline/LOCAL catch (safe, permitted):** `(a*b) catch Overflow: …`
+   recovers a fault from the wrapped expression's own ops — safe because the checked op
+   **branches before the store** (§11.2/§3.1 carve-out), so the corrupted value is never
+   observed. **Phase 2 = DEEP catch** of a fault propagated from a CALLED FUNCTION —
+   that one is catchable ONLY at a declared coarse boundary that discards-and-unwinds the
+   unit of work (a deep fault caught inline mid-computation, keeping the corrupted value,
+   IS the footgun, `book/10-errors.md:13-14`). So "boundary-only" is a **Phase-2 deep**
+   invariant, NOT a blanket one. Still open: the *spelling* and how it relates to the
+   existing postfix `catch` (which is for *contract* errors).
 2. **The "fast" tension** (§6) — debug-checked/release-wrapping vs checked-always;
    the type-vs-runtime-promise reconciliation. **LOAD-BEARING, not a minor knob:**
    it determines whether `catch Overflow` is even *meaningful* — if release wraps
@@ -601,7 +613,11 @@ examples below is ILLUSTRATIVE — the exact fault-catch syntax is open, §11.5.
   CFG — implemented in the **C AND LLVM emitters** (backends-at-parity). This is the
   single largest Phase-1 item, bigger than the `Fault equip Error` impl and the
   panic-default rule combined; the brief must size it as such, not as "branch the flag's
-  trap elsewhere."
+  trap elsewhere." (Emit-level asymmetry, final review: the **LLVM** emitter ALREADY
+  produces branch-structured output — intrinsic→`%flag`→`br`→trap/ok-block, value
+  pre-committed in an SSA temp — so its side is structurally closer; the **C** emitter
+  is a flat `if(...)exit(1)`. Both nonetheless derive the branch from the SHARED LIR
+  shape per the CFG rule above, so neither is special-cased.)
 - Because that branch exists at **LIR level BEFORE the drop passes run**, the existing
   drop-insertion (`drops.rs`)/elaboration (`drop_elab.rs`) clean up live owned
   temporaries on the handler path (`(bigStruct.compute() * k) catch …`) — the template
@@ -718,3 +734,39 @@ ships with NEW fixtures, all deterministic-stdout:
   the above; `self_host_runtime`/`bootstrap_fixed_point` stay green; both backends
   (default + `GG_BACKEND=llvm`) at parity. Consider a `tests/lints.rs` ratchet for the
   new LIR fault-op arm-count.
+
+### 11.7 Sequencing for the both-backends implementation (final review 2026-06-21)
+- **The new LIR checked-op-with-handler-branch shape must land FIRST** (in the shared
+  LIR + at least one emitter) — the AST/grammar/typecheck work produces no runnable
+  output until a backend can emit the branch. Stage: **shared LIR shape → one backend →
+  AST/grammar/typecheck → second backend → fixtures.**
+- **The override is ADDITIVE, never a mutation of the module-global.** The "force-checked
+  in a catch" signal is read at `lower_binop` as a per-expr override; it must NOT touch
+  the `overflow_wrap` global's existing `--overflow=wrap` consumers (`calls.rs:81-86`).
+- Both backends are symmetric at the LIR level (neither has a re-pointable branch today);
+  drive the branch from the shared LIR per §11.2 so neither emitter is special-cased.
+
+### 11.8 SELF-HOST parity — scout-verified 2026-06-21 (Rust-first, self-host fast-follow)
+The self-host (`tests/fixtures/self_host_*/`) is in good shape; **the key prerequisite
+is already satisfied** and **Rust-gg Phase-1 alone regresses NO self-host gate.**
+- **✅ Already present (no prerequisite work):** the self-host **already emits CHECKED
+  arithmetic** by default — `a+b` → `__builtin_add_overflow(...) exit(1)`
+  (`lir_codegen.gg:3577`), with a per-instruction `overflow` field (`lir.gg:125-127`),
+  div0 always checked (`:3598`). Plus the `lower_catch_expr` err_bb/merge_bb CFG template
+  (`lower_match.gg:877`), CFG branches (`TBranch`/`TJump`, goto-label emit), enum-variant
+  construction (`Fault.Overflow()`), `equip with Error`, the `Displayable`/`Debuggable`
+  supertraits + `@derive(Debuggable)`, and the `+%` wrap operator.
+- **✅ Rust-first is safe (Q3):** the self-host's OWN source keeps panic-on-overflow (it
+  won't use fault-catch), so `bootstrap_fixed_point` and the frozen `runtime_snapshots`
+  are untouched; new fault-catch fixtures the self-host can't compile yet register as
+  not-yet-at-parity in the diagnostic `self_host_runtime_diff` — honest, not a regression.
+- **Self-host work, when it FAST-FOLLOWS (not blockers):** the SAME new
+  checked-op-with-handler-branch LIR shape (unsolved in both; mirror Rust's design once
+  proven); a new fault-catch AST/grammar/typecheck path (its `ECatch` is `Result`-welded
+  like Rust's, and `infer.gg` has NO `ECatch` handler — the typecheck path is greenfield);
+  a `lower_fault_catch` cloned from `lower_catch_expr` (branch from the checked-op, not a
+  Result tag) + handler-bb `Fault` materialization; and a per-expr force-checked signal
+  (different shape — no global wrap mode here, it's operator-driven `+`/`+%`).
+- ⚠ **Footgun to guard:** self-host `map_binop` silently defaults unknown operators to
+  `OP_ADD` with only a `diag_bug` warning (`lower_types.gg:2434`) — wire any new
+  fault-catch operator token explicitly + add a fixture/lint when the self-host side lands.
