@@ -12,16 +12,24 @@ branches to a local handler block (same function, no unwinding) instead of
 `exit(1)`; uncaught faults still panic exactly as today.
 
 ## 1. Scope — Increment 1 (IN)
-1. **`Fault` enum** (compiler-internal, available in the prelude) with variants
-   `Overflow`, `DivByZero` ONLY this increment. `equip Error` — synthesize the
-   THREE required methods (`String display(self)`, `String debug(self)`,
-   `Option[String] source(&self)`; `Error extends Displayable & Debuggable`,
-   `language-reference.md:2766`/`:2768`). (§11.1 item 2.)
+1. **`Fault` enum** (compiler-internal, no generics, variants `Overflow`,
+   `DivByZero` ONLY this increment). Register it alongside `Option`/`Result` via the
+   built-in-enum injection (`inject_builtin_enums`, `src/semantic/generics/substitute.rs:317`)
+   — direct precedent; `Fault` is a free name (no collision). **NO `equip Error` this
+   increment** (deferred → §2, review pass 1): Increment 1 binds a *concrete* `Fault`
+   and matches on it; nothing calls `.display()`/`.debug()`/`.source()`, so the `Error`
+   impl is pure Phase-2 (`dyn Error`) surface AND sits on an unsolved built-in-`equip`
+   registration problem (`Error` lives in `lib/std/io.gg:223`, not the prelude; there is
+   no machinery to inject an `equip` block for a built-in type). Keep it out.
 2. **The NEW shared LIR "checked-op-with-handler-branch" shape** — the §11.2 central
    item. A checked faultable op (`IAdd`/`ISub`/`IMul` overflow; `IDiv`/`IRem` zero)
    whose fault outcome is a real `Inst::Branch` to a handler basic block, built in
    GIR/LIR CFG (NOT a C-emit goto), so drop-insertion/elaboration see it. Template:
    `lower_catch_expr`'s `ok_bb`/`err_bb`/`merge_bb` (`src/ir/lowering/exprs/mod.rs:3338`).
+   ⚠ **(pass 1) `IDiv`/`IRem` have NO `overflow` field and are checked UNCONDITIONALLY**
+   (`c_lir/mod.rs:2467`, `llvm/mod.rs:3365`) — do NOT gate `DivByZero` on `Overflow::Trap`;
+   it is well-defined in BOTH checked and wrap builds. Only `Overflow` (Add/Sub/Mul)
+   keys off the `Trap`/`Wrap` field.
 3. **BOTH backends emit it** — C (`src/backend/c_lir/`) AND LLVM
    (`src/backend/llvm/`). Required together: a fixture must pass on the default run
    AND `GG_BACKEND=llvm`, or the LLVM sweep regresses. (LLVM emit is already
@@ -47,7 +55,24 @@ branches to a local handler block (same function, no unwinding) instead of
    `exit(1)` exactly as today; plain `int sum(...)` stays `int`, no signature change.
 9. **Fixtures** (§11.6, the Increment-1 subset) — see §4 below.
 
+## 1.5 Decisions this brief SETTLES (the §11.5 questions the spec delegated — pass 1)
+- **`equip Error` → DEFERRED to Phase 2.** (§1 item 1.) Not needed for any Increment-1
+  fixture; no built-in-`equip` precedent; `Error` not in the prelude. Phase 2 (the
+  `dyn Error` unified surface) owns it.
+- **Catch grammar / parens → NO parens required; reach = the left-operand expression.**
+  `catch` is the lowest-BP infix (`expr.rs:771`), so `a*b catch Overflow: …` already
+  binds as `(a*b) catch …` — consistent with the existing `expr catch (e):` (no parens
+  required there either). Lexical reach (§11.5) = the faultable ops emitted directly
+  into the **left-operand expression's own basic blocks**, not through any
+  `Call`/`CallExtern`. Parens are allowed for grouping but not required.
+- **`meta` / const-eval → COMPILE ERROR this increment.** `meta` arithmetic wraps
+  silently (`meta.rs:1278-1280`), so there is no runtime fault to catch; a fault-`catch`
+  in a `meta`/const-eval context is rejected with a clear diagnostic (do NOT silently
+  accept). Revisit if `meta` ever gains checked arithmetic.
+
 ## 2. Out of scope — Increment 1 (deferred, own briefs)
+- **`Fault equip Error`** (the three `Error` methods + the `dyn Error` surface) —
+  Phase 2 (where matching faults + contract errors in ONE handler actually needs it).
 - **`Fault.Bounds`** (via `gorget_array_safe_get` + inline NULL-branch) — Increment 2.
 - **`Fault.OutOfMemory`** — Phase 2 (deep).
 - **The per-expr `--overflow=wrap` force-checked override** (§11.2/§11.7). Increment 1
@@ -87,9 +112,19 @@ default AND `GG_BACKEND=llvm` runs:
   the harness's crash/exit path, mirroring the existing overflow-panic fixtures).
 - `fault_catch_contract_unchanged.gg` — a regression guard: an existing `Result`
   `catch (e):` still behaves identically (the new form didn't perturb it).
-Executor runs: `cargo build`, `cargo test --lib`, and `cargo test --test integration
--- <these fixtures>` on BOTH backends. Executor does NOT run the full integration
-sweep (that's the parent's job).
+- `fault_catch_drop.gg` — **REQUIRED, not optional (pass 1):** a faultable op whose
+  operand involves a `Drop`-bearing temporary (e.g. `(makeDroppable().n * k) catch
+  Overflow: …`), asserting via output (and ideally an ASan run) that the live owned
+  temporary is dropped exactly once on the handler path — the single subtlest
+  correctness property; do NOT substitute a manual-only check.
+- **`tests/lints.rs` arm-count ratchet — REQUIRED (pass 1, sibling-site drift):** a
+  lint that forces any new faultable LIR op through the shared checked-op-with-branch
+  path (template: `container_literal_arms_count`, `tests/lints.rs:707`), so the next
+  fault op can't silently skip it. (Runtime-snapshot lock-in, §11.6 — deferred to the
+  follow-up increment; state it, don't add now.)
+Executor runs: `cargo build`, `cargo test --lib`, `cargo test --test lints`, and
+`cargo test --test integration -- <these fixtures>` on BOTH backends. Executor does
+NOT run the full integration sweep (that's the parent's job).
 
 ## 5. Constraints (NON-NEGOTIABLE)
 - **Worktree:** run `pwd` + `git rev-parse --show-toplevel` FIRST; confirm INSIDE your
@@ -110,11 +145,15 @@ sweep (that's the parent's job).
   for the full integration sweep.
 
 ## 6. Acceptance criteria (parent verifies at output-review)
-- `cargo build` + `cargo test --lib` green.
-- All §4 fixtures pass on BOTH backends.
+- `cargo build` + `cargo test --lib` + `cargo test --test lints` green.
+- All §4 fixtures pass on BOTH backends — including `fault_catch_drop.gg`
+  (handler-path drop-correctness) and the new arm-count lint.
 - No regression in the existing `Result`-`catch` fixtures.
 - The new LIR shape is shared (one representation, both emitters derive from it) — not
   a C-emit goto, not duplicated per-backend logic.
 - Panic-by-default unchanged (uncaught fault → `exit(1)`).
 - `bootstrap_fixed_point` + `self_host_*` untouched (self-host source unchanged).
-- Diff is the scoped slice only (no Bounds/OOM/override/doc/self-host creep).
+- Diff is the scoped slice only — **no `equip Error`**, no Bounds/OOM/override/doc/
+  self-host creep. (`equip Error` is explicitly Phase 2, §2.)
+- The two §1.5 rulings honored: no-parens grammar with left-operand reach; fault-`catch`
+  in `meta` is a compile error.
