@@ -88,6 +88,14 @@ contract vs fault (a property of the error *type*). The error channel carries
 
 ## 2. The model in one paragraph
 
+⚠ **SCOPE (2026-06-21): this §2 describes the BROAD/eventual model.** The FUNDED
+near-term — **Phase 1 (§11)** — is NARROWER and does **NOT** implement the universal
+inferred error channel below: it leaves today's explicit `throws E`/`Result`
+*contract* model UNCHANGED and adds only the `Fault` enum + local catch. **No
+function becomes `throws Never` in Phase 1; no signature gains an error channel.**
+The universal-inferred-channel + boundary-annotation (§5) is an un-phased, larger
+aspiration, not on the Phase-1/2 path. See **§11.0**.
+
 Every function has a value channel and one **inferred, typed** error channel,
 `Never` by default, auto-propagated to callers (no explicit `?`/rethrow in the
 common path), with the inferred error type **annotated at public/module
@@ -314,7 +322,13 @@ the RFC must argue against.
    (typed metadata, never name-matching), so the classification is read via an
    accessor, not a name list.
 4. **`Never` spelling** and how "this function is total" is expressed/checked
-   (a `total` qualifier that demands an empty contract row?).
+   (a `total` qualifier that demands an empty contract row?). ⚠ **`Never` is NOT
+   renamed to `Fault` (owner Q 2026-06-21):** `Never` is the **bottom/uninhabited
+   type** (the type of `return`/`throw`/diverging exprs, `src/semantic/types.rs:68`) —
+   "no value, ever." `Fault` is a **closed enum of inhabited variants** (Overflow,
+   Bounds, …) — "one of these specific faults." Opposite kinds of thing; in the
+   channel model `Never` is the EMPTY error set (= *cannot* fail), the OPPOSITE of
+   "can throw a fault." Keep them distinct.
 5. **Boundary-annotation rules** — which definitions must declare their contract
    error type (all public? all crate-public?); how inference flows across modules.
 6. **Interaction with `Result[T,E]`** — is the contract error channel *the same
@@ -504,6 +518,20 @@ decisions live in §0.5 (additive reversal), §3 (impossibility), Q14 (fault
 representation), §9.1 (phasing). **(The `(expr) catch Overflow: …` spelling in the
 examples below is ILLUSTRATIVE — the exact fault-catch syntax is open, §11.5.)**
 
+### 11.0 Scope boundary — what Phase 1 does NOT touch (owner Qs 2026-06-21)
+- **Phase 1 does NOT implement the universal inferred error channel** of §2/§5/§10.
+  Today's *contract* model — explicit `throws E` = sugar for `Result[T,E]`
+  (`book/09-option-result.md:328`), declared, propagated via `?`/`rethrow`/`on error`
+  — is **UNCHANGED**. **No non-throwing function implicitly becomes `throws Never`;
+  no signature gains an error channel.** That universal/inferred-channel direction is
+  a separate, much larger effort (its own future phase), explicitly off the Phase-1/2
+  path.
+- **Faults are out-of-band, not in any signature.** A plain `int sum(...)` stays
+  `int`; overflow panics by default; you opt into recovery with a *local* catch. This
+  is the "no ubiquity" guarantee (§3, §9.1).
+- **`Never` is untouched and unrelated to `Fault`** (the bottom type vs the fault
+  enum — §9 Q4).
+
 ### 11.1 Scope — what Phase 1 delivers
 1. A **closed `Fault` enum**, scoped (review pass 1) to faults that are
    **inline-checkable at the operation site** — so the §11.2 branch-to-handler works
@@ -612,11 +640,24 @@ Phase 1 — the checked op branches before any partial mutation commits). None o
 are touched by Phase 1.
 
 ### 11.4 Doc + framing changes that land WITH Phase 1
-- **§1/§4 reframe:** "one error channel, two kinds" → **two channels** (in-signature
-  `Result` contract channel + the `Fault` channel), per Q14's follow-up.
-- **`language-design.md` §2.2/§6 + `book/10-errors.md`:** ADD "overflow panics by
-  default AND is locally catchable" (the additive change, §0.5); restate the
-  Panic-vs-Result rule to cover opt-in recovery.
+Phase 1 updates ALL the documentation surfaces it touches — enumerate the full list
+in the brief; the known set (owner Q 2026-06-21 — "does the plan update all docs?"):
+- **`docs/language-design.md` §2.2 (overflow) + §6 (Panic-vs-Result rule `:1312`):**
+  ADD "overflow/bounds/div0 panic by default AND are locally catchable" (the additive
+  change, §0.5); restate the rule to cover opt-in recovery. Add `Numeric`/`Fault` to
+  the trait/type registry if applicable.
+- **`docs/book/10-errors.md`:** a user-facing section on faults + local catch (the
+  `(a*b) catch Overflow: …` idiom) alongside the existing contract-error chapter;
+  reconcile the "continuing with corrupted state is worse than stopping" passage
+  (`:13-14`) with the now-recoverable-locally story.
+- **`docs/language-reference.md`:** the new fault-catch **grammar** (catching a fault
+  off a non-throwing expr — distinct from the `Result` `catch`, §11.5); a **`Fault`
+  enum** reference + its variants; note `Fault` implements `Error` (`:2766`).
+- **`error-model.md` itself — the §1/§4 reframe:** "one error channel, two kinds" →
+  **two channels** (in-signature `Result` contract channel + the ambient `Fault`
+  channel), per Q14's follow-up; and the §2/§10 universal-channel framing scoped per
+  §11.0. (Wants its own confirming review — it edits §1-§8.)
+- **Examples** across book/reference that assume overflow is always fatal.
 
 ### 11.5 Phase-1 open questions (resolve in the brief)
 - **Exact `Fault` membership** (Q7, the Phase-1 subset).
@@ -649,3 +690,24 @@ are touched by Phase 1.
   shape. Also verify the §11.2 force-checked override under BOTH `--overflow=wrap` and
   the default build (whichever mode the self-host builds in exercises the per-expr
   override path).
+
+### 11.6 New fixtures to LOCK IN Phase-1 behavior (owner Q 2026-06-21 — required, not optional)
+Per CLAUDE.md (executable guards > prose; negative fixtures; the gate battery), Phase 1
+ships with NEW fixtures, all deterministic-stdout:
+- **Positive (recovery works):** `(a*b) catch Overflow: fallback` yields the fallback;
+  div0 catch; Bounds catch (if Phase 1 includes it); a `catch f: match f` binding reads
+  the right `Fault.Overflow()`/`Fault.DivByZero()` variant; nested/compound expr
+  (`a*b + c/d`) catches the right op.
+- **Panic-default preserved:** an UNCAUGHT overflow/div0/bounds still panics (`exit(1)`)
+  exactly as today — a fixture asserting the un-catchable shape is unchanged outside a
+  catch.
+- **Override:** an op inside `catch Overflow` is **checked even under `--overflow=wrap`**
+  (fires the handler where the same op would silently wrap outside the catch).
+- **Negative / exhaustiveness:** an unhandled `Fault` variant falls through to panic
+  (not a compile error — the `non_exhaustive`-style rule); fault-`catch` on a
+  non-throwing expr typechecks; contract-error `catch` is UNCHANGED (a regression guard
+  that the new form didn't perturb the `Result` path).
+- **Lock-in nets:** runtime-snapshot fixtures (`tests/fixtures/runtime_snapshots/`) for
+  the above; `self_host_runtime`/`bootstrap_fixed_point` stay green; both backends
+  (default + `GG_BACKEND=llvm`) at parity. Consider a `tests/lints.rs` ratchet for the
+  new LIR fault-op arm-count.
