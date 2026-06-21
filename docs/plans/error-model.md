@@ -466,10 +466,10 @@ later as a separate funded effort.
 - ⭐ **Phase 1 sidesteps EVERY unwind-dependent blocker:** B2 (greenfield unwind),
   Q9 (drop-across-unwind), Q15 (FFI unwind), Q16 (`main` boundary), and the §3.1
   partial-state/Drop-observation concern are **all Phase 2** — none apply when the
-  catch is lexical and the checked op branches before committing. Phase 1's only new
-  machinery: the `Error`-impl on `Fault`; the local-catch lowering (the SAME checked
-  op the `--overflow=checked` flag already emits, just branching to a handler instead
-  of `exit(1)`); and the panic-default match rule.
+  catch is lexical and the checked op branches before committing. Phase 1's new
+  machinery: the `Error`-impl on `Fault`; **a NEW LIR checked-op-with-handler-branch
+  shape in BOTH backends** (the single largest item — there is no existing trap to
+  re-point; see §11.2); and the panic-default match rule.
 
 **PHASE 2 — deep / boundary catch (separate funded effort; needs unwinding).**
 - Catch a fault from a deep call at a task/request boundary (server-keeps-serving).
@@ -577,6 +577,13 @@ examples below is ILLUSTRATIVE — the exact fault-catch syntax is open, §11.5.
   wrapped result lives only in a dead SSA temp the handler never reads; **for Bounds the
   inline `if(p==NULL)` branch MUST precede any deref of `p`**). Pure local control flow —
   NO setjmp/longjmp, NO unwinding, NO drop-across-unwind.
+- **Handler-bb entry constructs the `Fault` value (review pass 3).** For the binding
+  form (`catch f: match f`), the handler block must, at entry, **materialize the
+  corresponding `Fault` variant** — `Fault.Overflow()` / `Fault.DivByZero()` /
+  `Fault.Bounds()`, the discriminant encoding WHICH op faulted — and bind it to `f`.
+  (The pattern form `catch Overflow:` needs no constructed value.) Each faulting op's
+  branch targets a handler-entry that knows its own variant. Mechanically simple but
+  load-bearing — spec it so it isn't discovered mid-implementation.
 - ⚠ **Overflow-mode interaction — load-bearing AND new plumbing, not flag reuse
   (review pass 1):** the global `--overflow=wrap` flag must NOT defeat a local
   `catch`; a `catch`-scoped expression is compiled **checked regardless of the global
