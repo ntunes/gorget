@@ -2425,3 +2425,126 @@ fn fault_op_lowering_arms_count() {
          must not duplicate or skip the clone/move-zero/str-ptr logic.",
     );
 }
+
+/// Single-source-of-truth ratchet (CLAUDE.md invariant #4 "one fix, all
+/// siblings" + devbook/24 rule 3 "one source of truth per axis"): the set of
+/// builtin GorgetArray/Map/Set-backed collection base names that the self-host
+/// lowerer must NOT register as user structs lives in exactly ONE helper —
+/// `is_builtin_collection_base` (`self_host_lowerer/lower.gg`). It gates both
+/// over-registration sites (the bare `type_infos` IStruct arm and the
+/// mono-record loop) AND the `is_type_constructor` "not-a-user-struct-ctor"
+/// subset (`lower_types.gg`, which delegates to it).
+///
+/// Registering one of these (the bare template `struct Vector[T]: pass`, or a
+/// mono `Vector__bool`) as a user `type_info` makes `emit_structs` emit invalid
+/// C — an unnamed-field struct `struct __gg_Vector { uint8_t ; };` (a `pass`
+/// body is one EMPTY-name field). Rust gg routes these to
+/// `register_collection_alias` instead (`src/ir/lowering/types.rs:699`).
+///
+/// This lint pins:
+///   1. `is_builtin_collection_base` exists in lower.gg with EXACTLY the
+///      expected base names (so a contributor who edits it has to update this).
+///   2. `is_type_constructor` (lower_types.gg) has NO inline `name == "Vector"`
+///      / `"Dict"` / ... collection-base list — it must call the helper, so a
+///      NEW collection base name added to the helper automatically flows to the
+///      constructor classifier too (no second list to drift out of sync).
+///
+/// **If this fails:** either a second hardcoded collection-base list crept back
+/// into `is_type_constructor` (route it through `is_builtin_collection_base`),
+/// or the helper's name set changed (update EXPECTED_BASES here with a
+/// justification). `Box` is intentionally NOT in the set — Box monos go through
+/// lir_lower's `BkRegularBox` arm, not the mono-record loop.
+#[test]
+fn collection_base_names_single_source() {
+    /// The collection bases declared `: pass` in lib/std/collections.gg whose
+    /// monos are runtime GorgetArray/GorgetMap/GorgetSet aliases. Box excluded.
+    const EXPECTED_BASES: &[&str] =
+        &["Vector", "Deque", "Channel", "Dict", "HashMap", "Set", "HashSet"];
+
+    // 1. The single source of truth must exist and list exactly EXPECTED_BASES.
+    let lower = fs::read_to_string("tests/fixtures/self_host_lowerer/lower.gg")
+        .expect("read self_host_lowerer/lower.gg");
+    let fn_start = lower
+        .find("bool is_builtin_collection_base(String name):")
+        .expect(
+            "is_builtin_collection_base helper missing from self_host_lowerer/lower.gg — it is \
+             the single source of truth for the GorgetArray-backed collection base names that \
+             must NOT register as user structs.",
+        );
+    // The helper body runs until the next top-level def (a line starting with a
+    // non-space, non-# char after the signature line).
+    let body: String = lower[fn_start..]
+        .lines()
+        .skip(1)
+        .take_while(|l| {
+            l.trim().is_empty()
+                || l.starts_with(' ')
+                || l.starts_with('\t')
+                || l.trim_start().starts_with('#')
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    for base in EXPECTED_BASES {
+        assert!(
+            body.contains(&format!("name == \"{base}\"")),
+            "is_builtin_collection_base is missing base name `{base}` — the EXPECTED_BASES \
+             list in this lint and the helper body must agree (one source of truth).",
+        );
+    }
+    // Reject any collection base NOT in EXPECTED_BASES (catches a silently-added
+    // name the lint doesn't know about). Scan `name == "X"` tokens in the body.
+    for line in body.lines() {
+        let mut rest = line;
+        while let Some(idx) = rest.find("name == \"") {
+            let after = &rest[idx + "name == \"".len()..];
+            if let Some(end) = after.find('"') {
+                let nm = &after[..end];
+                assert!(
+                    EXPECTED_BASES.contains(&nm),
+                    "is_builtin_collection_base lists base name `{nm}` not in this lint's \
+                     EXPECTED_BASES — if it's a genuine GorgetArray-backed collection, add it \
+                     to EXPECTED_BASES with a justification; otherwise it does not belong here.",
+                );
+                rest = &after[end + 1..];
+            } else {
+                break;
+            }
+        }
+    }
+
+    // 2. `is_type_constructor` (lower_types.gg) must NOT carry a second inline
+    //    collection-base list — it delegates to is_builtin_collection_base.
+    let lower_types = fs::read_to_string("tests/fixtures/self_host_lowerer/lower_types.gg")
+        .expect("read self_host_lowerer/lower_types.gg");
+    let ctor_start = lower_types
+        .find("bool is_type_constructor(String name, GirModule &gmod):")
+        .expect("is_type_constructor missing from lower_types.gg");
+    // Body until the next top-level def.
+    let ctor_body: String = lower_types[ctor_start..]
+        .lines()
+        .skip(1)
+        .take_while(|l| {
+            l.trim().is_empty()
+                || l.starts_with(' ')
+                || l.starts_with('\t')
+                || l.trim_start().starts_with('#')
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        ctor_body.contains("is_builtin_collection_base(name)"),
+        "is_type_constructor must delegate the collection-base subset to \
+         is_builtin_collection_base (single source of truth), not inline the list.",
+    );
+    // The collection bases (minus the ones that are ALSO legitimately listed
+    // for a different reason) must not appear as inline `name == "X"` comparisons
+    // in is_type_constructor — that would be a drifting second list.
+    for base in EXPECTED_BASES {
+        assert!(
+            !ctor_body.contains(&format!("name == \"{base}\"")),
+            "is_type_constructor has an inline `name == \"{base}\"` comparison — route the \
+             collection-base subset through is_builtin_collection_base instead of maintaining \
+             a second list that can drift (one fix, all siblings).",
+        );
+    }
+}

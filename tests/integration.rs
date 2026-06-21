@@ -16875,6 +16875,154 @@ fn self_host_runtime() {
     );
 }
 
+/// STRUCTURAL GUARD for the "GorgetArray-backed collection template registered
+/// as a user struct" bug class (fixed in lower.gg: gate the bare `type_infos`
+/// registration on `type_params.len()==0` + skip `is_builtin_collection_base`
+/// monos in the mono-record loop).
+///
+/// `lib/std/collections.gg` declares `struct Vector[T]: pass` (and Dict/HashMap/
+/// Set/HashSet/Deque/Channel). A `pass` body is ONE field with an EMPTY name
+/// and `void`/`uint8_t` type. If the self-host registers these (the bare
+/// template OR a mono like `Vector__bool`) as a user `type_info`, `emit_structs`
+/// emits INVALID C — an unnamed-field struct: `struct __gg_Vector { uint8_t ; };`
+/// or `struct __gg_Vector__bool { void* ; };`. Rust gg never registers these
+/// (it routes them to `register_collection_alias`).
+///
+/// Proven-to-bite: revert either lower.gg hunk and this test FAILS (the affected
+/// fixtures emit 5–8 unnamed-field collection structs each; measured pre-fix).
+/// The class is stdout-INVISIBLE for these fixtures (they hit deeper unrelated
+/// blockers, so `self_host_runtime` cannot see it) — only this structural scan
+/// of the emitted C catches the regression.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_no_unnamed_collection_struct() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixtures_dir = manifest_dir.join("tests/fixtures");
+
+    // Representative fixtures that heavily instantiate the collection templates
+    // (every one emitted 5–8 unnamed-field collection structs on the un-patched
+    // tree). `type_alias_struct_ctor` is the densest (8).
+    let stems = [
+        "tensor_basic",
+        "ecs_basics",
+        "type_alias_struct_ctor",
+    ];
+
+    // The collection base names declared `: pass` in lib/std/collections.gg.
+    // Their C struct tag is `__gg_<Base>` (bare template) or `__gg_<Base>__<mono>`.
+    let collection_bases = [
+        "Vector", "Dict", "HashMap", "Set", "HashSet", "Deque", "Channel",
+    ];
+
+    // A struct DEFINITION header looks like `struct __gg_Vector {` or
+    // `struct __gg_Vector__bool {`. We detect a collection struct whose body
+    // contains an UNNAMED field line — a `<type> ;` with no identifier before
+    // the `;` (the empty-name `pass`-body field). A valid field is `<type>
+    // <name>;`; an invalid one is `uint8_t ;` / `void* ;`.
+    fn struct_tag_is_collection(tag: &str, bases: &[&str]) -> bool {
+        // tag is e.g. "__gg_Vector" or "__gg_Vector__bool"
+        let Some(rest) = tag.strip_prefix("__gg_") else { return false };
+        bases.iter().any(|b| rest == *b || rest.starts_with(&format!("{b}__")))
+    }
+
+    fn line_is_unnamed_field(line: &str) -> bool {
+        let t = line.trim();
+        // Must be a field declaration terminated by `;` and not the struct's
+        // own `};` / a nested-anon-union close.
+        if !t.ends_with(';') || t == "};" || t.starts_with('}') {
+            return false;
+        }
+        let body = t.trim_end_matches(';').trim_end();
+        // A named field ends with an identifier char (`storage`, `tag`,
+        // `Ok_0`). An unnamed (empty-name) field's body ends with the type's
+        // last token — a `*` (`void*`) or a bare type word followed by nothing,
+        // which after trimming leaves the type with no following identifier.
+        // Concretely the bug emits `uint8_t ;` (body=="uint8_t", a single
+        // token = the type, no field name) or `void* ;` (body=="void*").
+        // Distinguish from a valid `uint8_t tag` (body=="uint8_t tag", two
+        // tokens). So: an unnamed field has the form `<single-type-token>` or
+        // ends in `*` with no name after it.
+        if body.is_empty() {
+            return true;
+        }
+        if body.ends_with('*') {
+            // `void* ;` — pointer type, no field name.
+            return true;
+        }
+        // Single token with no space → `uint8_t ;` (type only, no field name).
+        // A valid declaration always has at least "<type> <name>" (a space).
+        !body.contains(char::is_whitespace)
+    }
+
+    let mut violations: Vec<String> = Vec::new();
+
+    for stem in stems {
+        let fixture = fixtures_dir.join(format!("{stem}.gg"));
+        assert!(
+            fixture.exists(),
+            "self_host_no_unnamed_collection_struct: fixture {} missing",
+            fixture.display()
+        );
+
+        let out = run_with_timeout(
+            Command::new(&driver_exe)
+                .arg(&fixture)
+                .arg(&lib_dir)
+                .arg("--lir-c"),
+            stem,
+        );
+        assert!(
+            out.status.success(),
+            "self_host_no_unnamed_collection_struct: self-host driver failed on {stem}: {}",
+            String::from_utf8_lossy(&out.stderr).lines().next().unwrap_or("(no stderr)"),
+        );
+        let c = String::from_utf8_lossy(&out.stdout);
+
+        // Walk the emitted C, tracking whether we're inside a collection struct
+        // definition body, and flag any unnamed field line found there.
+        let mut cur_tag: Option<String> = None;
+        for line in c.lines() {
+            let t = line.trim();
+            if cur_tag.is_none() {
+                // struct header: `struct __gg_Vector {` or `struct Foo {`
+                if let Some(after) = t.strip_prefix("struct ") {
+                    if let Some(tag) = after.strip_suffix(" {") {
+                        if struct_tag_is_collection(tag, &collection_bases) {
+                            cur_tag = Some(tag.to_string());
+                        }
+                    }
+                }
+                continue;
+            }
+            // inside a collection struct body
+            if t == "};" || t.starts_with('}') {
+                cur_tag = None;
+                continue;
+            }
+            if line_is_unnamed_field(line) {
+                violations.push(format!(
+                    "{stem}: struct {} has unnamed field `{}`",
+                    cur_tag.as_deref().unwrap_or("?"),
+                    t,
+                ));
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "self_host emitted {} invalid unnamed-field collection struct(s) — a \
+         GorgetArray-backed collection template (Vector[T]/Dict/Set/...) was \
+         registered as a user type_info. Gate the bare type_infos registration \
+         on type_params.len()==0 and skip is_builtin_collection_base monos in \
+         the mono-record loop (lower.gg). Violations:\n  {}",
+        violations.len(),
+        violations.join("\n  "),
+    );
+}
+
 /// Build a fixture through the self-host driver → C → `cc -fsanitize=address`
 /// → run, and assert the binary exits cleanly (no LeakSanitizer / ASan report)
 /// AND its stdout byte-matches the Rust `gg run` oracle.

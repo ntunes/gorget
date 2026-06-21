@@ -30,6 +30,7 @@ from lower import LowerCtx, ResultPayloadTypes, DictKvNames
 from lower import lower_fail, diag_bug, diag_warn, emit, new_block, switch_to, set_terminator
 from lower import add_local, add_local_with, add_local_inheriting, nl_get, nl_put, nl_contains
 from lower import collection_kind_of, collection_kind_eq, int_vec_contains
+from lower import is_builtin_collection_base
 
 # ── Type mapping ─────────────────────────────────────────
 
@@ -800,9 +801,11 @@ bool is_type_constructor(String name, GirModule &gmod):
         return false
     if name == "Rc" or name == "Arc":
         return false
-    if name == "Channel" or name == "Deque" or name == "Vector":
-        return false
-    if name == "Dict" or name == "HashMap" or name == "Set" or name == "HashSet":
+    # Builtin GorgetArray/Map/Set-backed collection bases — single source of
+    # truth in `is_builtin_collection_base` (lower.gg). Routed to the runtime
+    # type, never user-struct-constructed. See tests/lints.rs
+    # `collection_base_names_single_source`.
+    if is_builtin_collection_base(name):
         return false
     if name == "Option" or name == "Result":
         return false

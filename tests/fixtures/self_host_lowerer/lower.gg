@@ -2248,6 +2248,28 @@ Expr collect_rewrite_expr(Expr e, Dict[String, Vector[SpannedType]] &fn_param_ty
 SpannedType no_type():
     return SpannedType(TInferred(), Span(0, 0))
 
+# The builtin generic collection base names. These are declared as empty-body
+# stubs in lib/std/collections.gg (`struct Vector[T]: pass`) so that
+# `Vector[T]` resolves as a name carrying equip-method blocks, but they are
+# NOT user structs — at the LIR layer their monos (`Vector__bool` etc.) ARE the
+# runtime GorgetArray/GorgetMap/GorgetSet, routed via `resource_meta_for`.
+# Mirrors the Rust dispatcher's `"Vector" | "Dict" | "HashMap" | "Set" |
+# "HashSet" | "Box" =>` special-case (src/ir/lowering/types.rs:699), which
+# routes them to `register_collection_alias` instead of monomorphizing the
+# user template. `Box` is intentionally EXCLUDED here: the self-host registers
+# `Box__<inner>` via lir_lower's BkRegularBox arm, not the mono-record loop.
+# This is the ONE source of truth for the collection-base subset — the
+# `is_type_constructor` "not-a-user-struct-ctor" set (lower_types.gg) delegates
+# here for that subset. See tests/lints.rs `collection_base_names_single_source`.
+bool is_builtin_collection_base(String name):
+    if name == "Vector" or name == "Deque" or name == "Channel":
+        return true
+    if name == "Dict" or name == "HashMap":
+        return true
+    if name == "Set" or name == "HashSet":
+        return true
+    return false
+
 GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String, String] call_redirects, Dict[String, bool] imported_fns):
     Vector[GirType] type_table = init_type_table()
 
@@ -2504,12 +2526,22 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     for tfi_item in m.items:
         match tfi_item:
             case IStruct(sdef):
-                Vector[GirFieldInfo] fields = []
-                for fld in sdef.fields:
-                    String ftype_name = spanned_type_to_name(fld.param_type)
-                    fields.push(GirFieldInfo(fld.param_name, ftype_name))
-                Vector[GirEnumVariantInfo] no_variants = []
-                type_infos.put(sdef.name, GirTypeInfo(sdef.name, fields, no_variants, false))
+                # Generic struct TEMPLATES (`struct Vector[T]: pass`,
+                # `struct Pair[A,B]`, ...) are NOT concrete types — they are
+                # monomorphized into per-instantiation records (the
+                # `generic_instances` loop below). Registering the bare template
+                # name here gives `type_infos["Vector"]` the stub's single
+                # empty-named `void` field → emit_structs emits the invalid C
+                # `struct __gg_Vector { uint8_t ; };`. Mirror Rust gg, whose
+                # `register_struct_type` early-returns on `generic_params.is_some()`
+                # (src/ir/lowering/types.rs:579).
+                if sdef.type_params.len() == 0:
+                    Vector[GirFieldInfo] fields = []
+                    for fld in sdef.fields:
+                        String ftype_name = spanned_type_to_name(fld.param_type)
+                        fields.push(GirFieldInfo(fld.param_name, ftype_name))
+                    Vector[GirEnumVariantInfo] no_variants = []
+                    type_infos.put(sdef.name, GirTypeInfo(sdef.name, fields, no_variants, false))
             case IEnum(edef):
                 Vector[GirFieldInfo] no_fields = []
                 Vector[GirEnumVariantInfo] variants = []
@@ -3099,6 +3131,18 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     # Register monomorphized struct types as resource types if any substituted
     # field is a resource type (e.g., Pair[int, String] has a String field)
     for mrinst in generic_instances:
+        # Builtin collection base names (`Vector[T]`/`Dict[K,V]`/`Set[T]`/...)
+        # are declared as empty-body stubs in lib/std/collections.gg
+        # (`struct Vector[T]: pass`). Their monos (`Vector__bool`) are runtime
+        # GorgetArray/GorgetMap/GorgetSet aliases, NOT user structs — they are
+        # routed to the runtime type by lir_lower's `resource_meta_for`. Building
+        # a user mono record here registers `Vector__bool` in type_infos with the
+        # stub's single empty-named field → emit_structs emits the invalid C
+        # `struct __gg_Vector__bool { void* ; };`. Mirror Rust gg, which
+        # intercepts these base names BEFORE the generic-template path and routes
+        # them to `register_collection_alias` (src/ir/lowering/types.rs:699).
+        if is_builtin_collection_base(mrinst.base_name):
+            continue
         if struct_templates.contains(mrinst.base_name):
             StructDef sdef = struct_templates.get(mrinst.base_name).unwrap()
             # Build substitution map
