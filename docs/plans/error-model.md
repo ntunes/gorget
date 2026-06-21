@@ -427,7 +427,7 @@ the RFC must argue against.
     For a longjmp design this is load-bearing: either faults cannot unwind across FFI
     (they abort at the boundary) or the boundary installs a catch. Spec it.
 16. **`main` / single-threaded top-level fault boundary (review pass 2).** §4 says
-    uncaught faults "abort"; §3.1 says faults are catchable ONLY at a coarse boundary.
+    uncaught faults "abort"; §3.1 says a Phase-2 DEEP fault is catchable only at a coarse boundary.
     But is `main` (or a single-threaded CLI with no Task/request) itself such a
     boundary? If NOT, the most basic program shape has no boundary → every fault
     aborts → "recoverable overflow," the owner's GOAL, is unreachable without a
