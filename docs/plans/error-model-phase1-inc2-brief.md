@@ -30,7 +30,15 @@ inline). Mirror `FaultableBinOp`, reuse the already-wired safe path:
    the ~existing optimizer/sim/liveness/SSA `IndexLoad` sites untouched). Update every
    exhaustive GIR site (use/def, printer, validate, optimize incl. the CFG passes
    `successors`/`thread_jumps`/`eliminate_dead_blocks` that must remap the embedded
-   `fault_handler` BlockId, sim) — the compiler's exhaustive matches force this.
+   `fault_handler` BlockId, sim) — the compiler's exhaustive matches force MOST of these.
+   ⚠ **(pass 2) TWO sites are WILDCARDED and will NOT be forced — add them BY HAND:**
+   (i) `src/ir/validate.rs` resource-read-warning match (the `IndexLoad` arm `:1467` drives the
+   resource-move warning; the match ends in `_ => {}` `:1560`) — a `FaultableIndexLoad` falls
+   through silently and a faulting index-read of a RESOURCE element skips the analysis (this is
+   drop/resource-correctness, the whole point of A1 — add the arm); (ii) `src/sim/dispatch.rs`
+   (`IndexLoad` `:801`; the match ends in `_ => Ok(Value::Unit)` `:2399`) — low impact (`gg run`
+   execs the binary, not the sim; only `gg sim` interprets), but add the arm rather than silently
+   evaluate to Unit.
    ⚠ **(pass 1) ALSO update `src/ir/tag_ownership.rs:240`** — `IndexLoad` with `ReadMode::Clone`
    is tagged `LocalOwnership::Owned` (drives DROP-correctness for a cloned owned element).
    `FaultableIndexLoad` produces the SAME owned element → needs the SAME tag, or a Drop-bearing
@@ -89,6 +97,13 @@ A single signed Div op has TWO fault conditions; today both collapse into one fl
    caught. The 3 CFG-remap sites (`successors`/`thread_jumps`/`eliminate_dead_blocks`) remap BOTH
    fields; this ripples through the same exhaustive GIR sites the variant already touches.
    (`FaultableIndexLoad` keeps its single `fault_handler` — only `FaultableBinOp(Div/Rem)` needs two.)
+   ⚠ **(pass 2) PRODUCER-SIDE trio the two-field change forces — and the ACTUAL (C) bug fix lives
+   here, NOT in just satisfying the signature:** `bin_op_faultable` (`src/ir/builder.rs:282`, ctor
+   signature); `fault_handler_for` (`operators.rs:327`, today returns a SINGLE `Option<BlockId>` —
+   must return/populate BOTH for Div/Rem so the binding-form `catch f:` routes div0→`divzero_handler`
+   AND `INT_MIN/-1`→`overflow_handler`); the construction at `operators.rs:310-311`. Satisfying the
+   signature without populating both handlers for Div/Rem compiles clean but leaves the (C) bug
+   UNFIXED — populate both.
 3. **GIR→LIR Div faultable arm — emit a FaultCheck+branch ONLY for each CAUGHT category** (pass 1
    C2): if `overflow_handler.is_some()`: `flag_ovf = FaultCheck(DivOverflow)` →
    `Branch{flag_ovf → overflow_handler, else → next}`; if `divzero_handler.is_some()`: `flag_dz =
@@ -96,7 +111,8 @@ A single signed Div op has TWO fault conditions; today both collapse into one fl
    committed op (`commit_op`, `insts.rs:163`).
 4. ⚠ **PARTIAL-CATCH (the sharp edge, re-framed — pass 1 C2): there is NO panic *block*; the
    panic is `exit(1)` emitted INLINE inside `commit_op`** (the normal-checked `Div`/`Rem` in `cont`
-   still has its `if(rhs==0)exit(1)` + `INT_MIN/-1` trap, `c_lir:2546-2550`). So you do NOT branch to
+   still has its `if(rhs==0)exit(1)` + `INT_MIN/-1` trap — Div `c_lir/mod.rs:2485-2489`, Rem
+   `:2512-2516`, LLVM `:3377`/`:3404` (NOT `c_lir:2546-2550`, which is `Inst::Mod`)). So you do NOT branch to
    a panic block — you simply **DON'T emit a FaultCheck for the uncaught category, and let
    `commit_op`'s existing inline trap fire it.** `catch Fault.DivByZero:` on `INT_MIN/-1` → only the
    div0 FaultCheck is emitted; the `commit_op`'s own `INT_MIN/-1` trap panics. `catch Fault.Overflow:`
@@ -117,10 +133,12 @@ A single signed Div op has TWO fault conditions; today both collapse into one fl
   Spanned<String>, variant: Spanned<String> }`. Store `enum_or_name` as the qualifier at
   parse (`expr.rs:1116`). In typecheck (before `check_fault_variant`, `typecheck.rs:3083-3086`):
   if `qualifier.node != "Fault"`, emit a clear diagnostic at the qualifier span.
-- Update the readers that actually destructure `Variant`: typecheck `:3083` and the GIR-lowering
-  match `exprs/mod.rs:3514` (both exhaustive on the pattern). ⚠ **(pass 1) `resolve.rs:1853-1861`
-  likely needs NO change** — it destructures only `FaultCatchPattern::Binding(name)` (`:1860`), not
-  `Variant`; don't invent a change there.
+- Update the readers that actually destructure `Variant`: typecheck `:3083`, the GIR-lowering
+  match `exprs/mod.rs:3514`, AND ⚠ **(pass 2) the formatter `src/formatter/mod.rs:2099`** (it
+  destructures `FaultCatchPattern::Variant(v)`; the tuple→struct change forces it — and it MUST
+  print the qualifier so `gg fmt` round-trips `catch Fault.Overflow:` faithfully; don't silence the
+  compile error by dropping the qualifier). ⚠ **(pass 1) `resolve.rs:1853-1861` needs NO change** —
+  it destructures only `FaultCatchPattern::Binding(name)` (`:1860`), not `Variant`; don't invent one.
 
 ### (B) `--overflow=wrap` — ALREADY WORKS; lock-in fixture only  [TINY / NEAR-ZERO]
 ⚠ **The spec §11.2/§11.7 + TODO premise that this is a gap is REFUTED (scout, by running):**
@@ -171,7 +189,7 @@ New fixtures (deterministic stdout), each on default AND `GG_BACKEND=llvm`:
 (`integration.rs:5387`) — match the ACTUAL runtime substring (bounds is the longer `gorget: panic:
 index out of bounds: …`; div is `integer overflow` / `division by zero`); `fault_catch_overflow_wrap.gg`
 uses `run_gg_*_with_flags` (`:5569`/`:5762`); `fault_catch_bad_qualifier.gg` is a TYPECHECK-error
-fixture → use `check_gg_fails(fixture, msg)` (`integration.rs:~1131`), NOT a runtime fixture.
+fixture → use `check_gg_fails(fixture, msg)` (`integration.rs:5958`), NOT a runtime fixture.
 Executor runs: `cargo build`, `cargo test --lib`, `cargo test --test lints`, and these fixtures
 on BOTH backends. NOT the full integration sweep (parent's job).
 
