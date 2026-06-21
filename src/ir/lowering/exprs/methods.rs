@@ -3422,9 +3422,11 @@ pub(super) fn lower_index_access(
         let base_is_array = ctx.type_registry.get_type_def(&base_type_name)
             .and_then(|td| td.metadata.collection_kind)
             == Some(crate::ir::types::CollectionKind::Array);
+        let mut is_faultable_clone = false;
         let dst = if let Some(handler) = bounds_handler {
             if base_is_array && !is_range_index && !is_string_base {
                 let read = crate::ir::instructions::ReadMode::Clone;
+                is_faultable_clone = true;
                 builder.index_load_faultable(place.clone(), idx, result_type, read, handler)
             } else {
                 builder.index_load(place.clone(), idx, result_type)
@@ -3432,7 +3434,25 @@ pub(super) fn lower_index_access(
         } else {
             builder.index_load(place.clone(), idx, result_type)
         };
-        if ctx.type_registry.is_resource_type(elem_type) && !is_task && !is_string_base {
+        // A CollectionRef tags `dst` as a LIVE borrow into the base collection so
+        // a later `base.push(...)` triggers `cow_before_mutation` to materialize
+        // the borrow before the collection reallocates. That is correct for a
+        // plain `ReadMode::Borrow` index (the dst genuinely aliases the element).
+        //
+        // It is WRONG for the faultable `Fault.Bounds` read (`ReadMode::Clone`):
+        //   (a) the no-fault path already materializes the element to an OWNED
+        //       value, and the enclosing fault-catch's `ensure_owned_at_boundary`
+        //       ensures the catch result escapes owned — nothing holds a live
+        //       borrow into the collection past the catch; and
+        //   (b) on the out-of-bounds path the dst is NULL (the safe_get returned
+        //       NULL and control branched to the handler). A stale CollectionRef
+        //       on that NULL dst makes `cow_before_mutation` at a later
+        //       `base.push(...)` clone NULL → NULL-deref crash in
+        //       `gorget_string_clone_to_owned` (Core #8, both backends).
+        // So skip the CollectionRef registration for the faultable-clone dst.
+        if ctx.type_registry.is_resource_type(elem_type) && !is_task && !is_string_base
+            && !is_faultable_clone
+        {
             // Use FieldPath provenance when the base is a field access (e.g., s.v[0]).
             // This ensures cow_before_field_mutation("s.v") finds the ref when
             // s.v.push(x) is called later. Without this, the ref is keyed on the

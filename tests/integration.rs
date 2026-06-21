@@ -5650,6 +5650,18 @@ fn fault_catch_bounds_drop() {
 }
 
 #[test]
+fn fault_catch_bounds_resource_mut() {
+    // (A) §5 resource-coherence regression (Core #8): a faultable
+    // `Vector[String]` read whose OOB path is taken, followed by a `push`
+    // (which reallocates) and a USE of the caught value. The faultable dst
+    // must NOT be tagged a CollectionRef into `names` — otherwise the push's
+    // `cow_before_mutation` clones the dst, which is NULL on the OOB path →
+    // NULL-deref crash in `gorget_string_clone_to_owned` (identically on C and
+    // LLVM). Covers both the OOB and in-bounds branches + a post-mutation read.
+    run_gg("fault_catch_bounds_resource_mut.gg", "missing\nalice\ndave");
+}
+
+#[test]
 fn fault_bounds_panic_default() {
     // (A) Panic-by-default preserved: an UNCAUGHT out-of-bounds index still
     // panics `index out of bounds` and exit(1).
