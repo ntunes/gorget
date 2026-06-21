@@ -6,7 +6,7 @@
 > deferred items have their own briefs (§ "Out of scope" below).
 
 ## 0. The one-line goal
-Make `int r = (a * b) catch Overflow: fallback` and `… catch DivByZero: …` WORK on
+Make `int r = (a * b) catch Fault.Overflow: fallback` and `… catch Fault.DivByZero: …` WORK on
 **both** the C and LLVM backends: a faultable op that overflows/divides-by-zero
 branches to a local handler block (same function, no unwinding) instead of
 `exit(1)`; uncaught faults still panic exactly as today.
@@ -14,8 +14,14 @@ branches to a local handler block (same function, no unwinding) instead of
 ## 1. Scope — Increment 1 (IN)
 1. **`Fault` enum** (compiler-internal, no generics, variants `Overflow`,
    `DivByZero` ONLY this increment). Register it alongside `Option`/`Result` via the
-   built-in-enum injection (`inject_builtin_enums`, `src/semantic/generics/substitute.rs:317`)
-   — direct precedent; `Fault` is a free name (no collision). **NO `equip Error` this
+   built-in-enum injection — but register at **BOTH layers (pass 2)**: **(1) semantic**
+   `src/semantic/resolve.rs:152-166` (where `Option`/`Result` are defined as
+   `DefKind::Enum` with variants populated into `ctx.enum_variants`) — REQUIRED so
+   name-resolution + typecheck + the panic-default rule resolve `Fault.Overflow`
+   BEFORE IR lowering; **(2) IR-lowering** `src/ir/lowering/generics/substitute.rs:317`
+   (`inject_builtin_enums`, the corrected path — feeds `enum_templates`). Direct
+   precedent at both; `Fault` is a free name (no collision). Omitting (1) → `Fault.Overflow`
+   unresolved in typecheck. **NO `equip Error` this
    increment** (deferred → §2, review pass 1): Increment 1 binds a *concrete* `Fault`
    and matches on it; nothing calls `.display()`/`.debug()`/`.source()`, so the `Error`
    impl is pure Phase-2 (`dyn Error`) surface AND sits on an unsolved built-in-`equip`
@@ -23,9 +29,25 @@ branches to a local handler block (same function, no unwinding) instead of
    no machinery to inject an `equip` block for a built-in type). Keep it out.
 2. **The NEW shared LIR "checked-op-with-handler-branch" shape** — the §11.2 central
    item. A checked faultable op (`IAdd`/`ISub`/`IMul` overflow; `IDiv`/`IRem` zero)
-   whose fault outcome is a real `Inst::Branch` to a handler basic block, built in
-   GIR/LIR CFG (NOT a C-emit goto), so drop-insertion/elaboration see it. Template:
-   `lower_catch_expr`'s `ok_bb`/`err_bb`/`merge_bb` (`src/ir/lowering/exprs/mod.rs:3338`).
+   whose fault outcome is a real **`Term::Branch`** (a block terminator — `lir/mod.rs:1218`,
+   NOT an `Inst`; the brief earlier mis-named it `Inst::Branch`) to a handler basic block,
+   built in GIR/LIR CFG (NOT a C-emit goto), so drop-insertion/elaboration see it. The
+   `lower_catch_expr` `ok_bb`/`err_bb`/`merge_bb` shape (`src/ir/lowering/exprs/mod.rs:3338`)
+   is the CFG **template** — ⚠ but NOT a clean reuse (pass 2): `lower_catch_expr` branches
+   on a *materialized Result tag* (`tag_of`→`cmp`→`branch`); the fault op must instead
+   **output an overflow/zero FLAG and SPLIT the block at the op** (an `Inst` is mid-block,
+   a `Term` ends it — they can't be one node). **No existing LIR op outputs such a flag** —
+   this is the genuinely new piece (spec §11.2's "single largest item"); don't let the
+   template framing imply it's reuse.
+   - ⚠ **GIR→LIR handoff (pass 2 — name it):** the catch-scope ("which ops are the
+     left-operand") is known at GIR/IR-lowering, but the flag+branch is emitted at
+     LIR-lowering (`lower_binop`, `src/lir/lower/calls.rs:81`, which today takes only a
+     single `bool overflow_wrap`). Thread the "this op faults to handler-bb N" as NEW
+     TYPED METADATA on the GIR op (layering-discipline), pushed for the WHOLE left-operand
+     subtree and **CLEARED at any `Call`/`CallExtern` boundary** (so callee faults stay
+     deep). The `suppress_auto_prop` one-shot (`context.rs:260`) is a precedent for
+     context-threading but is consumed at `lower_expr` entry — the fault-scope needs a
+     scoped push/pop that survives the subtree, not a one-shot. Specify this mechanism.
    ⚠ **(pass 1) `IDiv`/`IRem` have NO `overflow` field and are checked UNCONDITIONALLY**
    (`c_lir/mod.rs:2467`, `llvm/mod.rs:3365`) — do NOT gate `DivByZero` on `Overflow::Trap`;
    it is well-defined in BOTH checked and wrap builds. Only `Overflow` (Add/Sub/Mul)
@@ -39,7 +61,7 @@ branches to a local handler block (same function, no unwinding) instead of
    `Result` `catch` (which is welded to `Result[T,E]`: parser `expr.rs:1072`, AST
    `ast.rs:585` `error_binding: Spanned<String>`, typecheck `typecheck.rs:3047`).
    Do NOT perturb the existing contract-`catch` path. Support BOTH spellings:
-   - pattern form `(expr) catch Overflow: fallback` (no value bound);
+   - pattern form `(expr) catch Fault.Overflow: fallback` (no value bound);
    - binding form `(expr) catch f: match f` where `f` binds a concrete `Fault`.
 5. **Handler-bb constructs the `Fault` value** for the binding form — materialize
    `Fault.Overflow()`/`Fault.DivByZero()` at the handler entry via `EnumInit`
@@ -60,11 +82,24 @@ branches to a local handler block (same function, no unwinding) instead of
   fixture; no built-in-`equip` precedent; `Error` not in the prelude. Phase 2 (the
   `dyn Error` unified surface) owns it.
 - **Catch grammar / parens → NO parens required; reach = the left-operand expression.**
-  `catch` is the lowest-BP infix (`expr.rs:771`), so `a*b catch Overflow: …` already
+  `catch` is the lowest-BP infix (`expr.rs:771`), so `a*b catch Fault.Overflow: …` already
   binds as `(a*b) catch …` — consistent with the existing `expr catch (e):` (no parens
   required there either). Lexical reach (§11.5) = the faultable ops emitted directly
   into the **left-operand expression's own basic blocks**, not through any
   `Call`/`CallExtern`. Parens are allowed for grouping but not required.
+- **Variant spelling → QUALIFIED `Fault.Overflow` (pass 2), not bare `Overflow`.**
+  Per the language's qualified-variant rule (`Color.Red()`, not `Red()`; only the
+  prelude variants `Ok`/`Some`/`None`/`Error` are bare). Do NOT make `Fault`'s variants
+  prelude-bare. So: `(a*b) catch Fault.Overflow: handler`.
+- **Parser disambiguation (pass 2) → ONE new production, three cases by what follows
+  `catch`:** `(` → the EXISTING `Result` `catch (name):` (untouched); a qualified path
+  `Fault.Overflow` → fault PATTERN (catch that variant); a bare ident → fault BINDING
+  (`catch f: <body matching f>`). The existing arm hard-expects `(` (`expr.rs:1072`), so
+  the leading token disambiguates cleanly (LL(1)). The pattern/binding distinction is
+  **semantic**, not two parser forms. **REQUIRED fixture: a parse guard proving
+  `catch (e):` (Result) and `catch Fault.Overflow:` (fault) coexist unambiguously.**
+  (Syntax is provisional pending the doc/§1-§4 reframe phase; the executor confirms it
+  parses without conflict.)
 - **`meta` / const-eval → COMPILE ERROR this increment.** `meta` arithmetic wraps
   silently (`meta.rs:1278-1280`), so there is no runtime fault to catch; a fault-`catch`
   in a `meta`/const-eval context is rejected with a clear diagnostic (do NOT silently
@@ -94,7 +129,7 @@ Per §11.7 — produce a compiling tree at each step; do not leave it broken bet
 2. **C backend** emits it (re-point the trap to the handler bb; result committed only
    on the OK path). Build.
 3. **AST + grammar + typecheck** for the new fault-catch form + the `Fault` enum +
-   `equip Error` + the panic-default match rule. Build + `cargo test --lib`.
+   the panic-default match rule (NO `equip Error` — deferred, §2). Build + `cargo test --lib`.
 4. **LLVM backend** emits the same shared shape. Build (+ a quick `GG_BACKEND=llvm`
    smoke on one fixture).
 5. **Fixtures** (§4). Run targeted integration on BOTH backends.
@@ -102,12 +137,12 @@ Per §11.7 — produce a compiling tree at each step; do not leave it broken bet
 ## 4. Test plan (the executor runs these; parent runs the full sweep)
 New fixtures under `tests/fixtures/` (deterministic stdout), each passing on the
 default AND `GG_BACKEND=llvm` runs:
-- `fault_catch_overflow.gg` — `(a*b) catch Overflow: <fallback>` yields the fallback;
+- `fault_catch_overflow.gg` — `(a*b) catch Fault.Overflow: <fallback>` yields the fallback;
   prints a deterministic line.
-- `fault_catch_div0.gg` — `(a/b) catch DivByZero: <fallback>`.
+- `fault_catch_div0.gg` — `(a/b) catch Fault.DivByZero: <fallback>`.
 - `fault_catch_binding.gg` — `… catch f: match f: case Fault.Overflow: … else: …`
   reads the right variant.
-- `fault_catch_compound.gg` — `(a*b + c/d) catch Overflow: …` catches the right op.
+- `fault_catch_compound.gg` — `(a*b + c/d) catch Fault.Overflow: …` catches the right op.
 - `fault_panic_default.gg` — an UNCAUGHT overflow still panics `exit(1)` (assert via
   the harness's crash/exit path, mirroring the existing overflow-panic fixtures).
 - `fault_catch_contract_unchanged.gg` — a regression guard: an existing `Result`
@@ -138,7 +173,7 @@ NOT run the full integration sweep (that's the parent's job).
 - **No name-matching for semantics** (CLAUDE.md): the fault-op routing is typed
   metadata on the LIR inst, not a string check.
 - **Drop-correctness:** the handler branch lives in GIR/LIR CFG so the drop passes
-  run over it; verify a `(struct_with_drop.method() * k) catch Overflow: …` shape
+  run over it; verify a `(struct_with_drop.method() * k) catch Fault.Overflow: …` shape
   doesn't leak (a fixture or a manual ASan check).
 - Report back: the diff summary, which fixtures pass on which backend, `cargo test
   --lib` result, and anything you had to deviate from this brief + why. Do NOT wait
