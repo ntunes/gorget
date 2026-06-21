@@ -290,6 +290,39 @@ pub enum Overflow {
     Wrap,
 }
 
+// ── Fault-catch checked arithmetic ───────────────────────────────────────────
+
+/// Which arithmetic operation a [`Inst::FaultCheck`] tests for a fault.
+///
+/// `Add`/`Sub`/`Mul` test for integer overflow; `Div`/`Rem` test for the two
+/// division faults (`rhs == 0`, and the signed `TYPE_MIN / -1` overflow). The
+/// op is carried as TYPED metadata so the C/LLVM emitters pick the right check
+/// from a typed `match`, never from a name/string heuristic (layering-discipline
+/// rule 2). The corresponding fault enum variant is `Fault.Overflow` for the
+/// first three and `Fault.DivByZero` for the last two.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FaultOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+}
+
+impl FaultOp {
+    /// The C `__builtin_*_overflow` mnemonic for the overflow ops; `None` for
+    /// the division ops (which are checked with an explicit zero/`TYPE_MIN`
+    /// comparison rather than a builtin).
+    pub fn overflow_builtin(self) -> Option<&'static str> {
+        match self {
+            FaultOp::Add => Some("add"),
+            FaultOp::Sub => Some("sub"),
+            FaultOp::Mul => Some("mul"),
+            FaultOp::Div | FaultOp::Rem => None,
+        }
+    }
+}
+
 // ── Comparison operators ────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -803,6 +836,18 @@ pub enum Inst {
     Mod { dst: ValueId, ty: LirType, lhs: ValueId, rhs: ValueId },
     Neg { dst: ValueId, ty: LirType, operand: ValueId },
 
+    /// Fault-catch checked arithmetic: compute the boolean FLAG `dst` (true iff
+    /// `lhs op rhs` would fault — overflow for Add/Sub/Mul, div-by-zero or the
+    /// signed `TYPE_MIN / -1` overflow for Div/Rem) WITHOUT trapping and WITHOUT
+    /// committing the arithmetic result. The block that contains this inst is
+    /// terminated by a `Term::Branch` on `dst` to the fault handler block; the
+    /// actual `lhs op rhs` is computed only on the no-fault (continuation) path,
+    /// so for Div/Rem no division-by-zero ever executes. This is the shared LIR
+    /// shape from which BOTH backends derive the branch (error-model.md §11.2);
+    /// outside a fault-catch, arithmetic stays the panic-by-default `Add`/`Div`
+    /// inline-trap form and this inst is never emitted.
+    FaultCheck { dst: ValueId, op: FaultOp, ty: LirType, lhs: ValueId, rhs: ValueId },
+
     // ── Bitwise ─────────────────────────────────────────────────────
     BitAnd { dst: ValueId, ty: LirType, lhs: ValueId, rhs: ValueId },
     BitOr { dst: ValueId, ty: LirType, lhs: ValueId, rhs: ValueId },
@@ -1062,6 +1107,7 @@ impl Inst {
             | Inst::Div { dst, .. }
             | Inst::Rem { dst, .. }
             | Inst::Mod { dst, .. }
+            | Inst::FaultCheck { dst, .. }
             | Inst::Neg { dst, .. }
             | Inst::BitAnd { dst, .. }
             | Inst::BitOr { dst, .. }
@@ -1114,6 +1160,7 @@ impl Inst {
             | Inst::Div { lhs, rhs, .. }
             | Inst::Rem { lhs, rhs, .. }
             | Inst::Mod { lhs, rhs, .. }
+            | Inst::FaultCheck { lhs, rhs, .. }
             | Inst::BitAnd { lhs, rhs, .. }
             | Inst::BitOr { lhs, rhs, .. }
             | Inst::BitXor { lhs, rhs, .. }

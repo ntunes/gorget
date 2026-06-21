@@ -3420,6 +3420,64 @@ fn emit_inst(
                 writeln!(out, "  %v{} = {rem_op} {lty} %{tmp2}, %v{}", dst.0, rhs.0).unwrap();
             }
         }
+        // Fault-catch checked arithmetic: produce the `i1` FLAG `%v{dst}` (true
+        // iff the op would fault) WITHOUT a trap and WITHOUT committing the
+        // arithmetic result. The result is computed only on the no-fault
+        // continuation path the `Term::Branch` falls through to (so for Div/Rem
+        // no division ever executes here). No inline labels are emitted and
+        // `trap_counter`/`current_label` are NOT touched, so the
+        // `block_exit_labels` pre-pass leaves this block's exit at `bb{N}`,
+        // correctly the `Term::Branch` (shared LIR shape, error-model.md §11.2).
+        Inst::FaultCheck { dst, op, ty, lhs, rhs } => {
+            let lty = llvm_type(ty);
+            let bits = int_bits(ty);
+            let signed = is_signed(ty);
+            // Operands may be wider (i64 constants) or narrower than `ty`; coerce.
+            let adjust = |out: &mut String, vid: u32, tag: &str| -> String {
+                let actual = val_types.get(vid as usize).and_then(|t| t.as_ref()).cloned();
+                let actual_bits = actual.as_ref().map(int_bits).unwrap_or(64);
+                if actual_bits == bits {
+                    return format!("%v{vid}");
+                }
+                let from_ty = actual.as_ref().map(llvm_type).unwrap_or("i64");
+                let name = format!("fc.{}.{tag}", dst.0);
+                if actual_bits > bits {
+                    writeln!(out, "  %{name} = trunc {from_ty} %v{vid} to {lty}").unwrap();
+                } else {
+                    let ext = if signed { "sext" } else { "zext" };
+                    writeln!(out, "  %{name} = {ext} {from_ty} %v{vid} to {lty}").unwrap();
+                }
+                format!("%{name}")
+            };
+            let lhs_s = adjust(out, lhs.0, "lhs");
+            let rhs_s = adjust(out, rhs.0, "rhs");
+            match op.overflow_builtin() {
+                Some(builtin) => {
+                    let sp = if signed { "s" } else { "u" };
+                    let intrinsic = format!("@llvm.{sp}{builtin}.with.overflow.i{bits}");
+                    let res = format!("fc.{}.res", dst.0);
+                    writeln!(out, "  %{res} = call {{ {lty}, i1 }} {intrinsic}({lty} {lhs_s}, {lty} {rhs_s})").unwrap();
+                    writeln!(out, "  %v{} = extractvalue {{ {lty}, i1 }} %{res}, 1", dst.0).unwrap();
+                }
+                None => {
+                    // Div / Rem: flag = (rhs == 0) || (signed && lhs == TYPE_MIN && rhs == -1).
+                    let zero_cmp = format!("fc.{}.zero", dst.0);
+                    writeln!(out, "  %{zero_cmp} = icmp eq {lty} {rhs_s}, 0").unwrap();
+                    if signed {
+                        let tmin = format!("-{}", 1u128 << (bits - 1)); // INT_MIN as decimal literal
+                        let lmin = format!("fc.{}.lmin", dst.0);
+                        let rneg1 = format!("fc.{}.rneg1", dst.0);
+                        let ovf = format!("fc.{}.ovf", dst.0);
+                        writeln!(out, "  %{lmin} = icmp eq {lty} {lhs_s}, {tmin}").unwrap();
+                        writeln!(out, "  %{rneg1} = icmp eq {lty} {rhs_s}, -1").unwrap();
+                        writeln!(out, "  %{ovf} = and i1 %{lmin}, %{rneg1}").unwrap();
+                        writeln!(out, "  %v{} = or i1 %{zero_cmp}, %{ovf}", dst.0).unwrap();
+                    } else {
+                        writeln!(out, "  %v{} = or i1 %{zero_cmp}, 0", dst.0).unwrap();
+                    }
+                }
+            }
+        }
         Inst::Neg { dst, ty, operand } => {
             let lty = llvm_type(ty);
             if ty.is_float() {

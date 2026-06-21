@@ -261,6 +261,7 @@ fn write_inst(f: &mut fmt::Formatter<'_>, inst: &Inst) -> fmt::Result {
         Inst::Div { dst, ty, lhs, rhs } => write!(f, "{dst}: {ty} = div {lhs}, {rhs}"),
         Inst::Rem { dst, ty, lhs, rhs } => write!(f, "{dst}: {ty} = rem {lhs}, {rhs}"),
         Inst::Mod { dst, ty, lhs, rhs } => write!(f, "{dst}: {ty} = mod {lhs}, {rhs}"),
+        Inst::FaultCheck { dst, op, ty, lhs, rhs } => write!(f, "{dst}: bool = fault_check.{op:?}.{ty} {lhs}, {rhs}"),
         Inst::Neg { dst, ty, operand } => write!(f, "{dst}: {ty} = neg {operand}"),
 
         // Bitwise

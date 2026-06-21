@@ -2557,6 +2557,32 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext, loc: &(String, u3
                 ).unwrap();
             }
         }
+        // Fault-catch checked arithmetic: set the bool FLAG without trapping and
+        // WITHOUT computing the arithmetic result (the result is computed only on
+        // the no-fault continuation path the `Term::Branch` falls through to —
+        // critical for Div/Rem so no division-by-zero ever executes). For
+        // Add/Sub/Mul the `__builtin_*_overflow` return value IS the flag; its
+        // result is written to a throwaway temp. For Div/Rem the flag is the
+        // div0 (+ signed TYPE_MIN/-1) predicate.
+        Inst::FaultCheck { dst, op, ty, lhs, rhs } => {
+            let ct = c_type_named(ty, sn);
+            if let Some(builtin) = op.overflow_builtin() {
+                write!(out, "{{ {ct} __fc_discard; {d} = __builtin_{builtin}_overflow(({ct}){l}, ({ct}){r}, &__fc_discard); }}",
+                    d = v(*dst), l = v(*lhs), r = v(*rhs)).unwrap();
+            } else if matches!(ty, LirType::I64 | LirType::I32 | LirType::I16 | LirType::I8) {
+                let tmin = match ty {
+                    LirType::I64 => "INT64_MIN",
+                    LirType::I32 => "INT32_MIN",
+                    LirType::I16 => "INT16_MIN",
+                    LirType::I8  => "INT8_MIN",
+                    _ => unreachable!(),
+                };
+                write!(out, "{d} = (({ct}){r} == 0) || (({ct}){l} == {tmin} && ({ct}){r} == -1);",
+                    d = v(*dst), l = v(*lhs), r = v(*rhs)).unwrap();
+            } else {
+                write!(out, "{d} = (({ct}){r} == 0);", d = v(*dst), r = v(*rhs)).unwrap();
+            }
+        }
         Inst::Neg { dst, operand, .. } => {
             write!(out, "{} = -{};", v(*dst), v(*operand)).unwrap();
         }

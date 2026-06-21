@@ -498,6 +498,7 @@ fn substitute_inst_values(inst: &mut Inst, subst: &HashMap<ValueId, ValueId>) {
         | Inst::BitXor { lhs, rhs, .. }
         | Inst::Shl { lhs, rhs, .. }
         | Inst::Shr { lhs, rhs, .. }
+        | Inst::FaultCheck { lhs, rhs, .. }
         | Inst::Cmp { lhs, rhs, .. } => {
             sub(lhs);
             sub(rhs);

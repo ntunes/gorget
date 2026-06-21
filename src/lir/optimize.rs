@@ -1499,7 +1499,8 @@ fn subst_inst_uses(inst: &mut Inst, subst: &rustc_hash::FxHashMap<ValueId, Value
         | Inst::Nop | Inst::InlineC { .. } => {}
         Inst::Add { lhs, rhs, .. } | Inst::Sub { lhs, rhs, .. }
         | Inst::Mul { lhs, rhs, .. } | Inst::Div { lhs, rhs, .. }
-        | Inst::Rem { lhs, rhs, .. } | Inst::Mod { lhs, rhs, .. } => {
+        | Inst::Rem { lhs, rhs, .. } | Inst::Mod { lhs, rhs, .. }
+        | Inst::FaultCheck { lhs, rhs, .. } => {
             *lhs = next(&uses, &mut idx); *rhs = next(&uses, &mut idx);
         }
         Inst::Neg { operand, .. } => { *operand = next(&uses, &mut idx); }

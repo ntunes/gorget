@@ -265,7 +265,7 @@ fn infer_inst_type(
         | Inst::Shl { ty, .. } | Inst::Shr { ty, .. }
         | Inst::BitNot { ty, .. } => Some(ty.clone()),
 
-        Inst::Cmp { .. } | Inst::Not { .. } => Some(LirType::Bool),
+        Inst::Cmp { .. } | Inst::Not { .. } | Inst::FaultCheck { .. } => Some(LirType::Bool),
 
         Inst::IntCast { to, .. } | Inst::FloatCast { to, .. }
         | Inst::IntToFloat { to, .. } | Inst::FloatToInt { to, .. }
