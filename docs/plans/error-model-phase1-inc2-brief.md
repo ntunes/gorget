@@ -35,10 +35,13 @@ inline). Mirror `FaultableBinOp`, reuse the already-wired safe path:
    (i) `src/ir/validate.rs` resource-read-warning match (the `IndexLoad` arm `:1467` drives the
    resource-move warning; the match ends in `_ => {}` `:1560`) — a `FaultableIndexLoad` falls
    through silently and a faulting index-read of a RESOURCE element skips the analysis (this is
-   drop/resource-correctness, the whole point of A1 — add the arm); (ii) `src/sim/dispatch.rs`
-   (`IndexLoad` `:801`; the match ends in `_ => Ok(Value::Unit)` `:2399`) — low impact (`gg run`
-   execs the binary, not the sim; only `gg sim` interprets), but add the arm rather than silently
-   evaluate to Unit.
+   drop/resource-correctness, the whole point of A1 — add the arm); (ii) **`src/sim/dispatch.rs`
+   `mark_instruction_dst` (`IndexLoad` arm `:62`, match ends `_ => {}` `:87`)** — a `FaultableIndexLoad`
+   producing an owned `dst` would fall through and not be marked initialized → a P4c
+   uninitialized-read false-positive in `gg sim`; add the arm. ⚠ (pass-3 correction: the sim
+   `execute_instruction` match is EXHAUSTIVE — `IndexLoad` at `:874`, no wildcard — so THAT one IS
+   compiler-forced; the wildcarded sim site is `mark_instruction_dst`, NOT `execute_instruction`.)
+   Low runtime impact (`gg run` execs the binary, not the sim), but the init-marking matters for `gg sim`.
    ⚠ **(pass 1) ALSO update `src/ir/tag_ownership.rs:240`** — `IndexLoad` with `ReadMode::Clone`
    is tagged `LocalOwnership::Owned` (drives DROP-correctness for a cloned owned element).
    `FaultableIndexLoad` produces the SAME owned element → needs the SAME tag, or a Drop-bearing
@@ -104,21 +107,30 @@ A single signed Div op has TWO fault conditions; today both collapse into one fl
    AND `INT_MIN/-1`→`overflow_handler`); the construction at `operators.rs:310-311`. Satisfying the
    signature without populating both handlers for Div/Rem compiles clean but leaves the (C) bug
    UNFIXED — populate both.
-3. **GIR→LIR Div faultable arm — emit a FaultCheck+branch ONLY for each CAUGHT category** (pass 1
-   C2): if `overflow_handler.is_some()`: `flag_ovf = FaultCheck(DivOverflow)` →
-   `Branch{flag_ovf → overflow_handler, else → next}`; if `divzero_handler.is_some()`: `flag_dz =
-   FaultCheck(Div/Rem div0)` → `Branch{flag_dz → divzero_handler, else → cont}`; in `cont`: the
-   committed op (`commit_op`, `insts.rs:163`).
-4. ⚠ **PARTIAL-CATCH (the sharp edge, re-framed — pass 1 C2): there is NO panic *block*; the
-   panic is `exit(1)` emitted INLINE inside `commit_op`** (the normal-checked `Div`/`Rem` in `cont`
-   still has its `if(rhs==0)exit(1)` + `INT_MIN/-1` trap — Div `c_lir/mod.rs:2485-2489`, Rem
-   `:2512-2516`, LLVM `:3377`/`:3404` (NOT `c_lir:2546-2550`, which is `Inst::Mod`)). So you do NOT branch to
-   a panic block — you simply **DON'T emit a FaultCheck for the uncaught category, and let
-   `commit_op`'s existing inline trap fire it.** `catch Fault.DivByZero:` on `INT_MIN/-1` → only the
-   div0 FaultCheck is emitted; the `commit_op`'s own `INT_MIN/-1` trap panics. `catch Fault.Overflow:`
-   on `10/0` → only the DivOverflow FaultCheck; `commit_op`'s div0 trap panics. VERIFY the uncaught
-   condition is trapped EXACTLY ONCE (by `commit_op`, never double-checked, never silently wrapped).
-5. **Rem too**: `INT_MIN % -1` is the same overflow (the emits include the MIN/-1 term for Rem).
+3. **GIR→LIR Div faultable arm — emit a check+branch for BOTH conditions; caught → handler,
+   UNCAUGHT → an EXPLICIT panic (pass 3 — do NOT rely on `commit_op`'s trap; it is NON-UNIFORM).**
+   For the overflow condition (`DivOverflow`: MIN/-1): branch to `overflow_handler` if `Some`, else
+   to an EMITTED panic ("integer overflow"). For the div0 condition: branch to `divzero_handler` if
+   `Some`, else to an EMITTED panic ("division by zero"). Then `cont` = the BARE (now fully-guarded)
+   div. So: `flag_ovf = FaultCheck(DivOverflow)` → `Branch{flag_ovf → overflow_handler-or-panicblk,
+   else → next}`; in `next`: `flag_dz = FaultCheck(div0)` → `Branch{flag_dz → divzero_handler-or-panicblk,
+   else → cont}`; `cont`: bare div.
+4. ⚠ **PARTIAL-CATCH — pass-1's "let `commit_op` fire it" is UNSOUND (pass 3, verified on both
+   backends).** The commit-path `INT_MIN/-1` trap exists ONLY for C-Div (`c_lir/mod.rs:2485-2489`);
+   it is ABSENT on **C-Rem** (`:2512-2516` silently sets `d=0`), **LLVM-Div** (`llvm:3387` bare `sdiv`,
+   only the div0 trap at `:3377`), and **LLVM-Rem** (`:3414` bare `srem`). So relying on `commit_op`
+   would make `(INT_MIN/-1) catch Fault.DivByZero:` SIGFPE/UB on LLVM — a both-backends-disagree
+   silent miscompile (Core invariant #8). **Fix (step 3): the faultable Div lowering EMITS its own
+   panic for the uncaught category**, so partial-catch panics UNIFORMLY on both backends with the
+   right message. The `cont` op is then BARE (both conditions already handled) — do NOT also emit
+   `commit_op`'s checks (that would double-check). VERIFY each condition is handled EXACTLY ONCE.
+   ⚠ **Pre-existing gap to VERIFY + FILE (out of Increment-2 scope):** the PLAIN (non-fault-scope)
+   `Inst::Div`/`Rem` on LLVM (and C-Rem) appear to LACK the `INT_MIN/-1` trap entirely — i.e.
+   `let x = INT_MIN / -1` (no catch) may be UB on LLVM today while C panics. Confirm; if real, file a
+   separate TODO (both backends must panic uniformly) — Increment 2's explicit-panic covers only the
+   IN-fault-scope case.
+5. **Rem too**: `INT_MIN % -1` is the same overflow — apply the same two-condition explicit-panic
+   lowering (do NOT trust the C-Rem `d=0` or the LLVM bare `srem`).
 6. **Lint**: covered by the coordinated lint change in (A) step 7 (the `FaultOp::DivOverflow` split
    has the same "existing lint can't count it" problem — one coherent lint change covers both).
 7. ⚠ **Update the now-stale comment** `context.rs:298` (`divzero_handler` "includes `TYPE_MIN/-1`") —
