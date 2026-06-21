@@ -5565,60 +5565,6 @@ fn linked_list() {
     );
 }
 
-/// Build and run a `.gg` fixture with extra CLI flags, asserting its stdout matches `expected`.
-fn run_gg_with_flags(fixture: &str, flags: &[&str], expected: &str) {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
-
-    assert!(
-        fixture_path.exists(),
-        "Fixture not found: {}",
-        fixture_path.display()
-    );
-
-    let stem = fixture_path.file_stem().unwrap().to_str().unwrap();
-    let dir = fixture_path.parent().unwrap();
-    let c_path = dir.join(format!("{stem}.c"));
-    let exe_path = dir.join(stem);
-
-    // 1. Build: gg build <flags> <fixture>
-    let mut cmd = gg_command("build");
-    for f in flags { cmd.arg(f); }
-    let build = build_with_timeout(
-        cmd.arg(&fixture_path),
-        fixture,
-    );
-
-    assert!(
-        build.status.success(),
-        "Build failed for {fixture}:\nstdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&build.stdout),
-        String::from_utf8_lossy(&build.stderr),
-    );
-
-    // 2. Execute the compiled binary
-    let run = run_with_timeout(&mut Command::new(&exe_path), fixture);
-
-    let stdout = String::from_utf8_lossy(&run.stdout);
-
-    // 3. Assert stdout
-    assert_eq!(
-        stdout.trim(),
-        expected.trim(),
-        "Output mismatch for {fixture}:\nExpected:\n{expected}\nGot:\n{stdout}",
-    );
-
-    assert!(
-        run.status.success(),
-        "Binary exited with error for {fixture}: {:?}\nstderr: {}",
-        run.status.code(),
-        String::from_utf8_lossy(&run.stderr),
-    );
-
-    // 4. Clean up generated files
-    let _ = std::fs::remove_file(&c_path);
-    let _ = std::fs::remove_file(&exe_path);
-}
 
 #[test]
 fn overflow_add() {
@@ -5633,11 +5579,6 @@ fn overflow_sub() {
 #[test]
 fn overflow_mul() {
     run_gg_panics("overflow_mul.gg", "integer overflow");
-}
-
-#[test]
-fn overflow_wrap() {
-    run_gg_with_flags("overflow_wrap.gg", &["--overflow=wrap"], "-9223372036854775808");
 }
 
 // ── Fault-catch (error-model.md §11, Phase 1 Increment 1) ──────────────────
@@ -5811,12 +5752,6 @@ fn directive_strip_asserts() {
 }
 
 #[test]
-#[serial(overflow_wrap_gg)]
-fn directive_overflow_wrap() {
-    run_gg("use_overflow_wrap.gg", "-9223372036854775808");
-}
-
-#[test]
 #[serial(strip_asserts_gg)]
 fn directive_cli_override_no_strip_asserts() {
     // Source says `directive strip-asserts` but CLI says `--no-strip-asserts` → asserts kept → panic
@@ -5824,10 +5759,11 @@ fn directive_cli_override_no_strip_asserts() {
 }
 
 #[test]
-#[serial(overflow_wrap_gg)]
-fn directive_cli_override_overflow_checked() {
-    // Source says `directive overflow=wrap` but CLI says `--overflow=checked` → checked → panic
-    run_gg_panics_with_flags("use_overflow_wrap.gg", &["--overflow=checked"], "integer overflow");
+fn directive_overflow_removed() {
+    // The global overflow mode was retired: `directive overflow=wrap` is no
+    // longer a recognized directive and must be rejected (use `+%`/`-%`/`*%`
+    // for explicit per-op wrapping). Reference-grade: reject the removed knob.
+    check_gg_fails("directive_overflow_removed.gg", "unknown directive `overflow`");
 }
 
 // ══════════════════════════════════════════════════════════════

@@ -254,7 +254,6 @@ fn ab_test_build_only(fixture: &str) {
 #[test] fn lir_ab_strings() { ab_test("strings.gg"); }
 #[test] fn lir_ab_type_alias_usage() { ab_test("type_alias_usage.gg"); }
 #[test] fn lir_ab_type_casts() { ab_test("type_casts.gg"); }
-#[test] fn lir_ab_use_overflow_wrap() { ab_test("use_overflow_wrap.gg"); }
 #[test] fn lir_ab_enums() { ab_test("enums.gg"); }
 #[test] fn lir_ab_functions() { ab_test("functions.gg"); }
 #[test] fn lir_ab_generics() { ab_test("generics.gg"); }
@@ -788,7 +787,6 @@ fn ab_test_build_only(fixture: &str) {
 #[test] fn lir_ab_overflow_add() { ab_test("overflow_add.gg"); }
 #[test] fn lir_ab_overflow_mul() { ab_test("overflow_mul.gg"); }
 #[test] fn lir_ab_overflow_sub() { ab_test("overflow_sub.gg"); }
-#[test] fn lir_ab_overflow_wrap() { ab_test("overflow_wrap.gg"); }
 #[test] fn lir_ab_process_pipe() { ab_test("process_pipe.gg"); }
 #[test] fn lir_ab_process_spawn() { ab_test("process_spawn.gg"); }
 #[test] fn lir_ab_string_index_oob() { ab_test("string_index_oob.gg"); }

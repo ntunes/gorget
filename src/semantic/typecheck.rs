@@ -7499,7 +7499,7 @@ void main():
 
     #[test]
     fn valid_directives_no_error() {
-        let errors = check("directive strip-asserts\ndirective overflow=wrap\nvoid main():\n    pass\n");
+        let errors = check("directive strip-asserts\nvoid main():\n    pass\n");
         assert!(
             !errors.iter().any(|e| matches!(
                 &e.kind,

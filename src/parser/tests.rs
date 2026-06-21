@@ -1048,18 +1048,6 @@ fn test_directive_strip_asserts() {
 }
 
 #[test]
-fn test_directive_overflow_wrap() {
-    let module = parse("directive overflow=wrap\nvoid main():\n    pass\n");
-    assert_eq!(module.items.len(), 2);
-    if let Item::Directive(ref d) = module.items[0].node {
-        assert_eq!(d.name, "overflow");
-        assert_eq!(d.value, Some("wrap".to_string()));
-    } else {
-        panic!("Expected Directive, got {:?}", module.items[0].node);
-    }
-}
-
-#[test]
 fn test_parse_index_still_works() {
     // Regression: arr[0] should still produce Index, not a generic call
     let module = parse("void main():\n    arr[0]\n");

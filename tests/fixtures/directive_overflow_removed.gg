@@ -1,0 +1,4 @@
+directive overflow=wrap
+
+void main():
+    print("unreachable")
