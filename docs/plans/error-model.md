@@ -501,16 +501,36 @@ Phase 1 is the small, shippable, **unwind-free** increment. This section is the
 consolidated spec the **Phase-1 review** evaluates; Phase 2 (deep/boundary catch)
 is OUT of scope and gets its own review cycle after Phase 1 lands. Rationale &
 decisions live in §0.5 (additive reversal), §3 (impossibility), Q14 (fault
-representation), §9.1 (phasing).
+representation), §9.1 (phasing). **(The `(expr) catch Overflow: …` spelling in the
+examples below is ILLUSTRATIVE — the exact fault-catch syntax is open, §11.5.)**
 
 ### 11.1 Scope — what Phase 1 delivers
-1. A **closed `Fault` enum** — the runtime faults that become catchable:
-   `Fault.Overflow`, `Fault.DivByZero`, `Fault.Bounds`, `Fault.OutOfMemory`
-   (initial set; exact membership = Q7, settled in the brief — `UnwrapNone`/`Assert`
-   are candidates).
+1. A **closed `Fault` enum**, scoped (review pass 1) to faults that are
+   **inline-checkable at the operation site** — so the §11.2 branch-to-handler works
+   without unwinding. The §11.2 mechanism is NOT uniform across faults:
+   - ✅ **`Fault.Overflow`, `Fault.DivByZero`** — checked INLINE today
+     (`c_lir/mod.rs:2438` overflow, `:2476` div0); just re-point the trap branch.
+     Solid Phase 1.
+   - ⚠ **`Fault.Bounds`** — checked INSIDE the runtime fn `gorget_array_get`
+     (`runtime_array.c:31`), reached via `CallExtern` (deep). BUT a non-panicking
+     **`gorget_array_safe_get` already exists** (`runtime_array.c:39`); a catch-scoped
+     index can lower to it + an **inline NULL-check branch** to the handler — still
+     unwind-free. **Brief decides:** include in Phase 1 via the safe-variant rewrite,
+     or defer to a Phase 1.5.
+   - ❌ **`Fault.OutOfMemory`** — scattered `exit(1)` deep in allocators
+     (`runtime_string_extended.c:348` et al.), no inline check, no safe variant →
+     **Phase 2** (needs unwind or an allocator rework). Do NOT promise it in Phase 1.
+
+   So the mechanism cleanly covers Overflow+DivByZero now, Bounds via a known
+   safe-variant swap, OOM deferred. (`UnwrapNone`/`Assert` candidates = Q7, brief.)
 2. **`Fault equip Error`** — `Fault` implements the EXISTING `Error` trait
    (`language-reference.md:2766`), so ONE `catch`/match surface handles faults AND
-   contract errors uniformly. No new base type, no subtyping, no open enums.
+   contract errors uniformly. ⚠ **(review pass 1)** `Error` **extends `Displayable &
+   Debuggable`** (`language-reference.md:2766/3439`), so the compiler-internal `Fault`
+   must synthesize **THREE** methods, not one: `String display(self)`,
+   `String debug(self)` (the supertraits) and `Option[String] source(&self)` (`Error`).
+   `@derive(Debuggable)` + a hand-written `display` covers it. No new base type, no
+   subtyping, no open enums.
 3. **Panic-by-default, unchanged.** Outside a fault `catch`, overflow/bounds/div0
    panic exactly as today (`exit(1)`). A plain `int sum(...)` stays `int` — NO
    signature change, NO `Result` ubiquity, the fast path is untouched.
@@ -529,14 +549,30 @@ representation), §9.1 (phasing).
   `--overflow=checked` flag already emits (`src/backend/c_lir/mod.rs:2438`,
   `runtime_checked_arith.c`), except the overflow branch jumps to the handler block
   instead of `gorget_panic`/`exit(1)`. The trap branches BEFORE the store → no
-  corrupted value materializes. Pure local control flow — NO setjmp/longjmp, NO
-  unwinding, NO drop-across-unwind.
-- ⚠ **Overflow-mode interaction (load-bearing):** the global `--overflow=wrap`
-  (release-fast) flag must NOT defeat a local `catch`. A `catch`-scoped expression is
-  compiled **checked regardless of the global mode** — globally you may run wrap/fast,
-  but the ops inside a `catch Overflow` are locally checked. This is the Phase-1
-  answer to the §6/Q2 "fast knob": per-expression checked override, not a global
-  commitment. The brief verifies the codegen can scope checked-ness per expression.
+  corrupted value materializes (verified pass 1: the wrapped result lives only in a
+  dead SSA temp the handler never reads). Pure local control flow — NO setjmp/longjmp,
+  NO unwinding, NO drop-across-unwind.
+- ⚠ **Handler branch MUST be GIR/LIR CFG, not a C-emit `goto` (review pass 1).** Model
+  it as a real `err_bb`/`merge_bb` like the existing `lower_catch_expr`
+  (`src/ir/lowering/exprs/mod.rs:3338-3485`). Only then do drop-insertion (`drops.rs`)
+  and drop-elaboration (`drop_elab.rs`) — which run in GIR/LIR, BEFORE the overflow
+  check is emitted at C-time — SEE the branch and clean up live owned temporaries on
+  the handler path (`(bigStruct.compute() * k) catch …`). A C-emit `goto` bolted onto
+  the inline trap would LEAK them. This is what keeps Phase 1 drop-correct without any
+  unwinding.
+- ⚠ **Overflow-mode interaction — load-bearing AND new plumbing, not flag reuse
+  (review pass 1):** the global `--overflow=wrap` flag must NOT defeat a local
+  `catch`; a `catch`-scoped expression is compiled **checked regardless of the global
+  mode**. Today `overflow_wrap` is a single **module-global** bool threaded to
+  `lower_binop` (`src/ir/lowering/mod.rs:516` → `lir/lower/mod.rs:96` → `calls.rs:82`),
+  all-or-nothing per build/file. The override therefore needs NEW plumbing: thread a
+  "force-checked" signal from the catch context down to `lower_binop`. It IS feasible —
+  the LIR `Inst::Add{…, overflow}` field is already **per-instruction**
+  (`src/lir/mod.rs:286`) — so "the SAME path the flag emits" is right at the
+  instruction level but undersells the per-expr *scoping* work. **Doc obligation
+  (§11.4):** state that `catch Overflow` forces checked semantics locally **even in a
+  wrap build** (an op that would silently wrap elsewhere fires the handler inside the
+  catch — intended).
 
 ### 11.3 Explicitly OUT of Phase 1 (→ Phase 2)
 Deep/boundary catch (a fault from a called function); the §6 greenfield unwind infra
@@ -554,14 +590,21 @@ are touched by Phase 1.
 
 ### 11.5 Phase-1 open questions (resolve in the brief)
 - **Exact `Fault` membership** (Q7, the Phase-1 subset).
-- **Lexical reach, precisely** — does a `catch` cover ops inside an inline block
-  expression or an inline closure body within the wrapped expr, or strictly the
-  top-level operator tree? A closure passed to `.map(…)` is invoked via a CALL — its
-  body faults are deep (Phase 2). Define the boundary unambiguously.
+- **Lexical reach, precisely (review pass 1)** — define as **"faultable ops emitted
+  DIRECTLY into the wrapped expression's own basic blocks, not through any
+  `Call`/`CallExtern`."** Clean for operator trees (`a*b + c/d`); the sharp edge is an
+  inline closure — `(xs.map((int x): x*2)) catch Overflow` — where `x*2` is lexically
+  visible but invoked via the `.map` CALL, so it is **deep (Phase 2), NOT caught**.
+  Defensible (call-boundary = the Phase-2 line) but a teachability footgun — the brief
+  must adopt the basic-block definition and document it crisply, not leave it as prose.
 - **`catch`-by-`Fault` syntax** — reuse the existing postfix `catch`
-  (`book/10-errors.md:169`): `(expr) catch Overflow: …` vs `(expr) catch f: match f`.
-- **`meta`/const-eval** — Phase-1 local catch at compile time: N/A, or does a `catch`
-  in a `meta` context force checked const-eval? (Today `meta` wraps, `meta.rs:1278-1280`.)
+  (`book/10-errors.md:169`, `src/parser/expr.rs` `InfixOp::Catch`): note today's `catch`
+  operates on a `throws`/`Result`-producing expr; a bare `a*b` is neither, so the
+  grammar/typecheck must accept catching a FAULT off a non-throwing expr. `(expr) catch
+  Overflow: …` vs `(expr) catch f: match f`.
+- **`meta`/const-eval** — `meta` arithmetic wraps silently today (`meta.rs:1278-1280`).
+  Cleanest Phase-1 answer: a `catch` in a `meta` context is a **no-op / compile error**
+  (const-eval has no runtime fault to catch); decide + state it, don't leave it silent.
 - **Self-host parity** — the lowering change must keep `self_host_*` /
   `bootstrap_fixed_point` green; verify no fixture relies on the un-catchable panic
   shape.
