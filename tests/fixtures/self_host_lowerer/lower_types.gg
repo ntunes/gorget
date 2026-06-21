@@ -2153,6 +2153,10 @@ int builtin_call_return_type(String fname, GirModule &gmod):
         return F64_TYPE
     if fname == "log" or fname == "log2" or fname == "log10":
         return F64_TYPE
+    if fname == "int_to_float":
+        return F64_TYPE
+    if fname == "float_to_int" or fname == "float_to_bits":
+        return I64_TYPE
     return -1
 
 # Extract element type from a collection name: Vector__int64_t → int64_t
