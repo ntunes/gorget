@@ -526,9 +526,16 @@ examples below is ILLUSTRATIVE — the exact fault-catch syntax is open, §11.5.
   no signature gains an error channel.** That universal/inferred-channel direction is
   a separate, much larger effort (its own future phase), explicitly off the Phase-1/2
   path.
-- **Faults are out-of-band, not in any signature.** A plain `int sum(...)` stays
-  `int`; overflow panics by default; you opt into recovery with a *local* catch. This
-  is the "no ubiquity" guarantee (§3, §9.1).
+- **Faults are out-of-SIGNATURE (not in any function's type) — and in Phase 1 they are
+  handled by LOCAL in-band control flow, NOT unwinding.** A plain `int sum(...)` stays
+  `int`; overflow panics by default; a *local* catch (`(a*b) catch Overflow: …`) turns
+  the faulting op's overflow into a **branch to a handler block in the SAME function**
+  (an inline "if-overflow-goto-handler", §11.2) — the fault never crosses a call, so
+  nothing needs a signature and nothing unwinds. ⚠ Distinguish the two axes: faults are
+  out-of-*signature* in BOTH phases; out-of-*band* (cross-call propagation via
+  unwinding) is **Phase 2 only**. Phase-1 local catch covers only the faultable ops in
+  the wrapped expression's OWN basic blocks (not ops inside a function it CALLS — those
+  panic → Phase 2). This is the "no ubiquity" guarantee (§3, §9.1).
 - **`Never` is untouched and unrelated to `Fault`** (the bottom type vs the fault
   enum — §9 Q4).
 
