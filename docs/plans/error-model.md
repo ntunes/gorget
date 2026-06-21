@@ -532,7 +532,7 @@ examples below is ILLUSTRATIVE — the exact fault-catch syntax is open, §11.5.
    supertype. ⚠ (the **unified `dyn Error` surface** — matching a fault AND a contract
    error in ONE handler — is the **Phase-2 boundary goal**; Phase-1 *local* catch binds
    a concrete `Fault` value, see item 5.) ⚠ **(review pass 1)** `Error` **extends `Displayable &
-   Debuggable`** (`language-reference.md:2766/3439`), so the compiler-internal `Fault`
+   Debuggable`** (`language-reference.md:2766`; `Displayable` `:2768`), so the compiler-internal `Fault`
    must synthesize **THREE** methods, not one: `String display(self)`,
    `String debug(self)` (the supertraits) and `Option[String] source(&self)` (`Error`).
    `@derive(Debuggable)` + a hand-written `display` covers it. No new base type, no
@@ -630,7 +630,7 @@ are touched by Phase 1.
 - **`catch`-by-`Fault` syntax — a NEW form, not a typecheck relaxation (review pass 2).**
   Today's `catch` is structurally welded to `Result[T,E]`: the parser hard-expects
   `catch (name):` (`expr.rs:1072`), the AST `Catch` node carries only `error_binding:
-  String` (`ast.rs:585`), and typecheck extracts `err_ty` only when the inner is a 2-arg
+  Spanned<String>` (`ast.rs:585`), and typecheck extracts `err_ty` only when the inner is a 2-arg
   `Result` (`typecheck.rs:3047`). A fault-catch off a bare `a*b` (neither `throws` nor
   `Result`) needs a **new AST node/variant + grammar + a DISTINCT typecheck path**, kept
   separate so the existing contract-error `catch (name):` path is UNTOUCHED. `(expr)
