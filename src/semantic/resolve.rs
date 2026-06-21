@@ -164,6 +164,24 @@ pub fn collect_top_level(
             ctx.enum_variants.insert(enum_def_id, EnumVariantInfo { variants: variant_infos, variant_field_types: Vec::new(), generic_param_names: Vec::new() });
         }
     }
+    // Register the compiler-internal `Fault` enum (error-model.md §11.1). Its
+    // variants are QUALIFIED-ONLY (`Fault.Overflow`, not bare `Overflow`), so —
+    // like a non-generic user enum (see the `Item::Enum` arm) — we `alloc_def`
+    // each variant WITHOUT inserting it into scope, and record them in
+    // `ctx.enum_variants` so qualified access, pattern matching, and the
+    // Fault-keyed panic-default exhaustiveness rule resolve. Increment 1:
+    // Overflow + DivByZero only. (The IR-lowering twin lives in
+    // `inject_builtin_enums`, generics/substitute.rs.)
+    if let Ok(fault_def_id) = scopes.define("Fault".to_string(), DefKind::Enum, Span::dummy()) {
+        let mut variant_infos = Vec::new();
+        let mut variant_field_types = Vec::new();
+        for vname in &["Overflow", "DivByZero"] {
+            let variant_def_id = scopes.alloc_def(vname.to_string(), DefKind::Variant, Span::dummy());
+            variant_infos.push((vname.to_string(), variant_def_id));
+            variant_field_types.push((vname.to_string(), Vec::new()));
+        }
+        ctx.enum_variants.insert(fault_def_id, EnumVariantInfo { variants: variant_infos, variant_field_types, generic_param_names: Vec::new() });
+    }
     // Register trait bounds for built-in collection types.
     // Dict[K,V] / HashMap[K,V] require K: Hashable + Equatable.
     // Set[T] / HashSet[T] require T: Hashable + Equatable.

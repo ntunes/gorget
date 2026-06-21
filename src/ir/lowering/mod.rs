@@ -226,6 +226,20 @@ pub fn lower_module(
         }
     }
 
+    // Register the compiler-internal `Fault` enum (error-model.md §11.1) as a
+    // concrete non-generic enum TypeDef. Unlike the generic Option/Result
+    // (lazily monomorphized from `enum_templates` on use), `Fault` is
+    // non-generic and used in a TYPED position (`Fault f = …`, `match f`,
+    // `Fault.Overflow()`), so its TypeDef + variant layout must exist eagerly.
+    // `register_enum_type` is idempotent (no-op if a user already defined a
+    // `Fault`, though `Fault` is a reserved built-in name here).
+    types::register_enum_type(
+        &mut type_mapper,
+        &mut module.type_registry,
+        &crate::ir::lowering::generics::builtin_fault_enum(),
+        &generic_templates,
+    );
+
     // Register opaque allocator pointer types (runtime types not defined in .gg source).
     // These C functions return pointers (e.g., gorget_pool_new → GorgetPoolAllocator*),
     // so we register them as Ptr(Named(...)) so that method-call lowering skips the
