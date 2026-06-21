@@ -3544,10 +3544,36 @@ fn lower_fault_catch_expr(
     let result_type = infer_operand_type_full(ctx, &inner_val, builder);
     let result_local = builder.add_local(result_type, None);
 
+    // Stage a value into `result_local` with the right AssignMode. For a
+    // resource result type (e.g. a `Vector` wrapped expr that has no faultable
+    // op) a plain Copy is a shallow alias the resource-move validator rejects —
+    // pick Move, mirroring `lower_catch_expr`'s `mode_for`. Primitive int
+    // results (the common faultable case) stay Copy.
+    fn store_result(
+        ctx: &mut LoweringContext,
+        builder: &mut FunctionBuilder,
+        result_local: LocalId,
+        result_type: TypeId,
+        val: Operand,
+    ) {
+        use crate::ir::instructions::AssignMode;
+        let mode = if ctx.type_registry.is_resource_type(result_type)
+            || ctx.type_registry.needs_drop(result_type)
+        {
+            AssignMode::Move
+        } else {
+            AssignMode::Copy
+        };
+        builder.assign_mode(mode, Place::local(result_local), val);
+        if mode == AssignMode::Move {
+            ctx.set_owned(builder, result_local);
+        }
+    }
+
     // No-fault path: the wrapped value flows to the result, then to merge. Skip
     // when a divergent inner already terminated the block (mirrors lower_catch).
     if !builder.is_terminated() {
-        builder.assign(Place::local(result_local), inner_val);
+        store_result(ctx, builder, result_local, result_type, inner_val);
         builder.jump(merge_bb);
     }
 
@@ -3564,7 +3590,7 @@ fn lower_fault_catch_expr(
         }
         let handler_val = lower_expr(ctx, builder, handler);
         if !builder.is_terminated() {
-            builder.assign(Place::local(result_local), handler_val);
+            store_result(ctx, builder, result_local, result_type, handler_val);
             builder.jump(merge_bb);
         }
     };

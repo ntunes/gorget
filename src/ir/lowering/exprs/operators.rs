@@ -301,10 +301,12 @@ pub(super) fn lower_binary_op(
             // Fault-`catch` routing (error-model.md §11.2): inside an active
             // fault scope, an integer faultable op (Add/Sub/Mul overflow,
             // Div/Rem div-by-zero) BRANCHES to the scope's handler on a fault
-            // instead of panicking. The scope is cleared at Call/CallExtern
-            // boundaries (lower_call), so only ops emitted DIRECTLY into the
-            // wrapped expression are caught. Typed gate (op kind + integer
-            // type), never a name check.
+            // instead of panicking. Only ops emitted DIRECTLY into the wrapped
+            // expression's own blocks are caught — a callee's or inline
+            // closure's faults are lowered in a SEPARATE function pass whose
+            // `func_state` (hence `fault_scope`) starts fresh, so they stay
+            // deep and panic (the §11.5 basic-block reach). Typed gate (op kind
+            // + integer type), never a name check.
             if let Some(handler) = fault_handler_for(ctx, operand_type, bin_op) {
                 let dst = builder.bin_op_faultable(bin_op, operand_type, lhs, rhs, handler);
                 return FunctionBuilder::copy(dst);
