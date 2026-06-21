@@ -140,19 +140,6 @@ pub fn analyze_with_source_dir(
                         });
                     }
                 }
-                "overflow" => {
-                    if d.value.as_deref() != Some("wrap") {
-                        errors.push(SemanticError {
-                            kind: SemanticErrorKind::UnknownDirective {
-                                name: format!(
-                                    "overflow={}",
-                                    d.value.as_deref().unwrap_or("(missing value)")
-                                ),
-                            },
-                            span: d.span,
-                        });
-                    }
-                }
                 "scheduler" => {
                     match d.value.as_deref() {
                         Some("pool") | Some("thread") | Some("inline") | Some("single") => {}
