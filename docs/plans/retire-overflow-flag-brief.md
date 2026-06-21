@@ -72,14 +72,21 @@ global. Retirement only changes which `Overflow` variant `lower_binop` emits for
   `directive_overflow_wrap` (`:5813-5817`), `directive_cli_override_overflow_checked`
   (`:5826-5831`); `lir_ab` tests `lir_ab.rs:257` + `:791` (⚠ RISK #1 — these build
   `use_overflow_wrap.gg`/`overflow_wrap.gg` with NO flag, so post-retirement the directive
-  ERRORS → `run_gir` returns `None` → the test PANICS; delete them in THIS change); parser unit
-  test `src/parser/tests.rs:1050-1060`; fixtures `tests/fixtures/{overflow_wrap,use_overflow_wrap}.gg`.
+  ERRORS → `run_gir` returns `None` → the test PANICS; delete them in THIS change); fixtures
+  `tests/fixtures/{overflow_wrap,use_overflow_wrap}.gg`.
+  - **`src/parser/tests.rs:1050-1060` (pass 1 — OPTIONAL cleanup-delete):** this only checks the
+    directive *parses* (the parser is unchanged), so it would still PASS post-change — delete it as
+    cleanup if you like, but it is NOT a break; don't mis-attribute a failure to it.
 - **Edit:** semantic unit `valid_directives_no_error` (`src/semantic/typecheck.rs:7501-7511`) —
   remove `directive overflow=wrap` from the input string (would now be `UnknownDirective`).
+  (Pass 1: this is the single most-likely SILENT test break — it actively asserts NO
+  `UnknownDirective` for that directive; must be edited.)
 - **Add (negative fixture, reference-grade):** `directive_overflow_removed.gg` —
   `directive overflow=wrap` → `UnknownDirective` typecheck error (use `check_gg_fails`).
-- **Add:** confirm `+%`/`-%`/`*%` still wrap (a `wrap_operators.gg` positive fixture if one
-  doesn't already cover it).
+- **`+%` positive coverage ALREADY EXISTS (pass 1) — do NOT add a new fixture:**
+  `tests/fixtures/wrapping_ops.gg` (`integration.rs:5740`, `run_gg`, NO flag) already exercises
+  `+%`/`-%`/`*%`/`+%=` at the overflow boundary (`INT_MAX +% 1 → INT_MIN`, etc.). It is the
+  load-bearing flag-free proof that `+%` survives the global's removal — just VERIFY it stays green.
 
 ## 5. Docs to rewrite (scout-located)
 - `docs/language-design.md` §2.2 line **213** — delete the `--overflow=wrap` sentence; keep
@@ -93,8 +100,13 @@ global. Retirement only changes which `Overflow` variant `lower_binop` emits for
 - `docs/plans/error-model.md`: STRIKE the now-vacuous override discussion — §11.2 note
   **638-650** (the "global `--overflow=wrap` must not defeat a local catch" force-checked-override),
   §11.4 doc-obligation, §11.5 test bullet **727** ("checked even under `--overflow=wrap`"), §11.7
-  **743-745**. (Increment 1's `FaultableBinOp` already force-checks structurally regardless of any
-  flag, `insts.rs:117-170`, so this whole worry is moot post-retirement.)
+  **743-745**, plus the stragglers at `error-model.md:44` and `:332`. (Increment 1's `FaultableBinOp`
+  already force-checks structurally regardless of any flag, `insts.rs:117-170`, so this whole worry
+  is moot post-retirement.)
+- **`docs/devbook/` (pass 1 — MISSED in the first draft):** `01-pipeline-and-driver.md:182` (lists
+  `--overflow=wrap|checked` as a build-shaping flag) and `21-simulator.md:210` ("`--overflow=wrap`
+  build option threaded through lowering") — both must be removed/updated, or they violate the §7
+  acceptance ("no surviving `--overflow=wrap` reference").
 
 ## 6. Constraints (NON-NEGOTIABLE)
 - **Worktree:** `pwd` + `git rev-parse --show-toplevel` FIRST; INSIDE your worktree, NEVER
