@@ -5669,6 +5669,19 @@ fn fault_bounds_panic_default() {
 }
 
 #[test]
+fn fault_catch_bounds_struct() {
+    // (A) case (c): a faultable Bounds read of a Vector of PLAIN STRUCT elements.
+    // Rust gg catches the OOB and yields the fallback struct. HELD-OUT from the
+    // self-host lock-in (`self_host_runtime`, no `.out` snapshot): the self-host
+    // SCOPES OUT case (c) — its faultable `safe_get` route is gated to scalar +
+    // resource element dsts, so a struct-vector bounds read falls through to the
+    // panicking getter (panics on OOB, an interim gap, see TODO). The diagnostic
+    // `self_host_runtime_diff` surfaces the gap; this test keeps the correct
+    // Rust-gg behavior locked.
+    run_gg("fault_catch_bounds_struct.gg", "3,4\n-1,-1");
+}
+
+#[test]
 fn fault_catch_intmin_div() {
     // (C) Div-split: `INT_MIN/-1` → Fault.Overflow (NOT DivByZero); `10/0` →
     // Fault.DivByZero; `INT_MIN % -1` → Fault.Overflow. Each caught correctly.

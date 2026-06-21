@@ -1,0 +1,31 @@
+# Fault.Bounds on a Vector of PLAIN STRUCT elements (error-model.md §11
+# Increment 2 (A), case (c)). The element is a by-value non-resource struct,
+# so the OUT-OF-BOUNDS read must take the `Fault.Bounds` handler and yield the
+# fallback struct — exactly like the scalar/resource element cases.
+#
+# ⚠ HELD-OUT from the self-host lock-in (`self_host_runtime`): the self-host
+# lowerer SCOPES OUT case (c). The faultable `gorget_array_safe_get` route is
+# gated to scalar (a) + resource (b) element dsts only — `gorget_array_safe_get`
+# is deliberately excluded from `eindex_raw_getter`'s aggregate copy-out
+# (lir_lower.gg), so a faultable struct read would mis-store the element void*
+# into a struct slot. The self-host therefore falls through to the PANICKING
+# `gorget_array_get` for struct-vector bounds reads (it panics on OOB instead
+# of catching — an interim gap, NOT a wrong value). Closing it needs a
+# distinguishing typed marker for the faultable raw `safe_get` so the aggregate
+# copy-out can fire on the in-bounds continuation, plus a `Vector[Struct].get()`
+# regression fixture — out of Inc2 scope (see TODO). This fixture is wired only
+# as a Rust-gg regression (`fault_catch_bounds_struct`) and is NOT snapshotted,
+# so the diagnostic `self_host_runtime_diff` surfaces the gap without locking it
+# into the passing set.
+struct Point:
+    int x
+    int y
+
+void main():
+    Vector[Point] pts = [Point(1, 2), Point(3, 4)]
+    # In-bounds → the element itself (no fault).
+    Point ok = (pts[1]) catch Fault.Bounds: Point(-1, -1)
+    print(f"{ok.x},{ok.y}")
+    # Out-of-bounds → caught, yields the fallback struct.
+    Point oob = (pts[9]) catch Fault.Bounds: Point(-1, -1)
+    print(f"{oob.x},{oob.y}")

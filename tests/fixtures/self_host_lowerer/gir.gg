@@ -105,6 +105,12 @@ const int OP_BITOR = 10
 const int OP_BITXOR = 11
 const int OP_SHL = 12
 const int OP_SHR = 13
+# Fault-check op (error-model.md §11 Increment 2 (C)): tests the signed
+# `INT_MIN / -1` division-overflow condition for a GIFaultCheck routed to a
+# `Fault.Overflow` handler. NOT a binop committed by GIBinOp — only ever the
+# discriminator operand of a `GIFaultCheck(flag, OP_DIV_OVERFLOW, ty, lhs, rhs)`
+# (mirrors Rust gg's `FaultOp::DivOverflow`).
+const int OP_DIV_OVERFLOW = 14
 
 const int CMP_EQ = 0
 const int CMP_NE = 1

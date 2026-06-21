@@ -390,6 +390,13 @@ struct LowerCtx:
     # `FunctionState.fault_scope` (`src/ir/lowering/context.rs`).
     Option[int] fault_overflow_handler
     Option[int] fault_divzero_handler
+    # `Some(bb)` routes an out-of-bounds ARRAY index read (`xs[i]`) to handler
+    # block `bb` (error-model.md §11 Increment 2 (A)); `None` = not caught (the
+    # index read stays panic-by-default via `gorget_array_get`). Saved/restored
+    # around ONLY the inner subtree by `lower_fault_catch_expr`, same as the two
+    # arithmetic handlers above. The EIndex arm in `lower_expr` consults this to
+    # route through the non-panicking `gorget_array_safe_get` + a NULL-branch.
+    Option[int] fault_bounds_handler
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -1985,7 +1992,7 @@ GirFunction lower_suite_body(String fn_name, Vector[Stmt] body, GirModule &gmod)
     Dict[String, bool] _sb_cow_mut = {}
     Dict[String, int] _sb_cow_span = {}
     Dict[String, bool] _sb_cow_clo = {}
-    LowerCtx sctx = LowerCtx([], [], [], 0, !_sb_named_locals, !_sb_lc_stk, !_sb_lb_stk, "", "", "", false, fn_name.clone(), DropElaborator(!_sb_de_scopes), !_sb_de_queue, -1, !_sb_on_err_blocks, false, !_sb_cow_mut, !_sb_cow_span, !_sb_cow_clo, {}, [], {}, None, None)
+    LowerCtx sctx = LowerCtx([], [], [], 0, !_sb_named_locals, !_sb_lc_stk, !_sb_lb_stk, "", "", "", false, fn_name.clone(), DropElaborator(!_sb_de_scopes), !_sb_de_queue, -1, !_sb_on_err_blocks, false, !_sb_cow_mut, !_sb_cow_span, !_sb_cow_clo, {}, [], {}, None, None, None)
     Vector[Instruction] sinit = []
     sctx.block_insts.push(!sinit)
     sctx.block_terms.push(GTNone())
@@ -3782,7 +3789,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         Dict[String, bool] _cow_mut3 = {}
                         Dict[String, int] _cow_span3 = {}
                         Dict[String, bool] _cow_clo3 = {}
-                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone(), DropElaborator(!_de_scopes3), !_de_queue3, -1, !_on_err_blocks3, false, !_cow_mut3, !_cow_span3, !_cow_clo3, {}, [], {}, None, None)
+                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone(), DropElaborator(!_de_scopes3), !_de_queue3, -1, !_on_err_blocks3, false, !_cow_mut3, !_cow_span3, !_cow_clo3, {}, [], {}, None, None, None)
                         Vector[Instruction] tinit = []
                         tctx.block_insts.push(!tinit)
                         tctx.block_terms.push(GTNone())

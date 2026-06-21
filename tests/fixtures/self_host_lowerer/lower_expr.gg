@@ -14,7 +14,7 @@ from gir import CAP_BY_VALUE, CAP_BY_MUT_REF
 from gir import init_type_table, register_type, lookup_or_register_named, register_ptr
 from gir import GirGlobal, GirGlobalField, gir_mod_add_global, GGINIT_FN_REF, GGINIT_STRUCT
 from gir import GGSTATIC_RUNTIME, GGSTATIC_BYTES, static_put_bytes
-from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM, OP_MOD
+from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM, OP_MOD, OP_DIV_OVERFLOW
 from gir import OP_ADD_WRAP, OP_SUB_WRAP, OP_MUL_WRAP
 from gir import OP_BITAND, OP_BITOR, OP_BITXOR, OP_SHL, OP_SHR
 from gir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
@@ -866,41 +866,68 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # body lowers with a fresh per-function ctx → fresh None scope).
             int binop_code = map_binop(op)
             bool is_int_ty = op_ty >= I8_TYPE and op_ty <= U64_TYPE
-            int fault_handler = -1
-            int commit_code = binop_code
-            if is_int_ty:
-                if binop_code == OP_ADD or binop_code == OP_SUB or binop_code == OP_MUL:
-                    match ctx.fault_overflow_handler:
-                        case Some(h):
-                            fault_handler = h
-                        case None:
-                            pass
-                    # On the no-fault path, commit the WRAP form: the FaultCheck
-                    # already caught overflow, so the wrapped value is the
-                    # correct committed result and never re-traps.
-                    if binop_code == OP_ADD:
-                        commit_code = OP_ADD_WRAP
-                    elif binop_code == OP_SUB:
+            # ── Add/Sub/Mul: single OVERFLOW category ────────────────────
+            if is_int_ty and (binop_code == OP_ADD or binop_code == OP_SUB or binop_code == OP_MUL):
+                int aovf_handler = -1
+                match ctx.fault_overflow_handler:
+                    case Some(h):
+                        aovf_handler = h
+                    case None:
+                        pass
+                if aovf_handler >= 0:
+                    # flag = FaultCheck(op, lhs, rhs); branch → handler, else →
+                    # continuation; commit the WRAP form (the FaultCheck already
+                    # caught overflow, so the wrapped value is correct).
+                    int commit_code = OP_ADD_WRAP
+                    if binop_code == OP_SUB:
                         commit_code = OP_SUB_WRAP
-                    else:
+                    elif binop_code == OP_MUL:
                         commit_code = OP_MUL_WRAP
-                elif binop_code == OP_DIV or binop_code == OP_REM:
-                    match ctx.fault_divzero_handler:
-                        case Some(h):
-                            fault_handler = h
-                        case None:
-                            pass
-                    # Div/Rem commit AS-IS: the fault branch excluded rhs==0, so
-                    # the normal IDiv/IRem div0-guard is statically dead here.
-            if fault_handler >= 0:
-                # flag = FaultCheck(op, lhs, rhs); branch flag → handler, else
-                # → continuation; commit `dst = lhs op rhs` in the continuation.
-                int flag = add_local(&ctx, BOOL_TYPE, None)
-                emit(&ctx, GIFaultCheck(flag, binop_code, op_ty, OpCopy(lhs), OpCopy(rhs)))
-                int fc_cont_bb = new_block(&ctx)
-                set_terminator(&ctx, GTBranch(OpCopy(flag), fault_handler, fc_cont_bb))
-                switch_to(&ctx, fc_cont_bb)
-                emit(&ctx, GIBinOp(dst, commit_code, op_ty, OpCopy(lhs), OpCopy(rhs)))
+                    int aflag = add_local(&ctx, BOOL_TYPE, None)
+                    emit(&ctx, GIFaultCheck(aflag, binop_code, op_ty, OpCopy(lhs), OpCopy(rhs)))
+                    int afc_cont_bb = new_block(&ctx)
+                    set_terminator(&ctx, GTBranch(OpCopy(aflag), aovf_handler, afc_cont_bb))
+                    switch_to(&ctx, afc_cont_bb)
+                    emit(&ctx, GIBinOp(dst, commit_code, op_ty, OpCopy(lhs), OpCopy(rhs)))
+                    return dst
+            # ── Div/Rem: TWO fault categories (error-model.md §11 Inc2 (C)) ──
+            # A signed Div/Rem has BOTH `INT_MIN/-1` (overflow → Fault.Overflow)
+            # and `rhs==0` (div-by-zero → Fault.DivByZero). Each branches
+            # INDEPENDENTLY, keyed on its OWN handler `Some`. The two conditions
+            # are mutually exclusive (`INT_MIN/-1` has `rhs=-1≠0`), so order is
+            # irrelevant. The UNCAUGHT category falls through to the bare
+            # IDiv/IRem, whose C-emit (E)-guards then panic with the right
+            # message (overflow → "integer overflow"; div0 → "division by zero").
+            # When BOTH are None, no FaultCheck/branch is emitted at all — just
+            # the bare (E)-guarded op. Mirrors Rust gg's div-split partial-catch.
+            elif is_int_ty and (binop_code == OP_DIV or binop_code == OP_REM):
+                int dovf_handler = -1
+                match ctx.fault_overflow_handler:
+                    case Some(h):
+                        dovf_handler = h
+                    case None:
+                        pass
+                int ddz_handler = -1
+                match ctx.fault_divzero_handler:
+                    case Some(h):
+                        ddz_handler = h
+                    case None:
+                        pass
+                if dovf_handler >= 0:
+                    int ovf_flag = add_local(&ctx, BOOL_TYPE, None)
+                    emit(&ctx, GIFaultCheck(ovf_flag, OP_DIV_OVERFLOW, op_ty, OpCopy(lhs), OpCopy(rhs)))
+                    int ovf_next_bb = new_block(&ctx)
+                    set_terminator(&ctx, GTBranch(OpCopy(ovf_flag), dovf_handler, ovf_next_bb))
+                    switch_to(&ctx, ovf_next_bb)
+                if ddz_handler >= 0:
+                    int dz_flag = add_local(&ctx, BOOL_TYPE, None)
+                    emit(&ctx, GIFaultCheck(dz_flag, binop_code, op_ty, OpCopy(lhs), OpCopy(rhs)))
+                    int dz_next_bb = new_block(&ctx)
+                    set_terminator(&ctx, GTBranch(OpCopy(dz_flag), ddz_handler, dz_next_bb))
+                    switch_to(&ctx, dz_next_bb)
+                # The bare op: any CAUGHT fault branched away above; an UNCAUGHT
+                # one hits the C-emit (E) guard here and panics.
+                emit(&ctx, GIBinOp(dst, binop_code, op_ty, OpCopy(lhs), OpCopy(rhs)))
                 return dst
             emit(&ctx, GIBinOp(dst, binop_code, op_ty, op_consume(&ctx, &gmod, lhs, CkBinOpArg()), op_consume(&ctx, &gmod, rhs, CkBinOpArg())))
             return dst
@@ -2334,21 +2361,79 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             #       gorget_array_get/gorget_map_get getter.
             #   (d) truly-UNREGISTERED elem (< 0): FALL BACK to the I64/0
             #       stub.
-            int idst = -1
-            if eix_elem_tid < PRIM_COUNT:
-                idst = add_local(&ctx, eix_elem_tid, None)
-            elif is_resource_type_name(eix_elem_norm, &gmod):
-                int eix_ptr_tid = register_ptr(&gmod, eix_elem_tid)
-                idst = add_local_with(&ctx, eix_ptr_tid, None, LoBorrowed(), BoNone())
-            elif eix_elem_tid >= 0:
-                idst = add_local(&ctx, eix_elem_tid, None)
-            else:
-                idst = add_local(&ctx, I64_TYPE, None)
-                emit(&ctx, GIAssign(idst, OpConstI64(0)))
-                return idst
+            # Determine the dst CASE up front (scalar / resource / struct /
+            # unregistered) — needed by BOTH the no-fault getter and the
+            # faultable Bounds route below, which SHARE this materialization.
+            bool eix_is_scalar = eix_elem_tid < PRIM_COUNT
+            bool eix_is_resource = (not eix_is_scalar) and is_resource_type_name(eix_elem_norm, &gmod)
+            bool eix_is_struct = (not eix_is_scalar) and (not eix_is_resource) and eix_elem_tid >= 0
+            # (d) truly-UNREGISTERED elem (< 0): FALL BACK to the I64/0 stub
+            # (shared by both paths; nothing faultable about an unknown elem).
+            if (not eix_is_scalar) and (not eix_is_resource) and (not eix_is_struct):
+                int idst_stub = add_local(&ctx, I64_TYPE, None)
+                emit(&ctx, GIAssign(idst_stub, OpConstI64(0)))
+                return idst_stub
+            # ── Fault.Bounds route (error-model.md §11 Increment 2 (A)) ──
+            # Inside an active `catch Fault.Bounds` scope, an array-backed index
+            # read (`gorget_array_get` ⇒ CkVector/CkDeque) routes through the
+            # NON-panicking `gorget_array_safe_get` (NULL on OOB) + an inline
+            # NULL-branch-before-deref to the handler. Dict/set keep panicking
+            # (not array-backed). Case (c) plain-struct elems are SCOPED OUT:
+            # `gorget_array_safe_get` is excluded from `eindex_raw_getter`'s
+            # aggregate copy-out (lir_lower.gg), so a faultable struct read would
+            # mis-store a void* into a struct slot — fall through to the
+            # panicking getter for those (interim gap, see the held-out
+            # `fault_catch_bounds_struct` fixture + TODO). Mirrors Rust gg's
+            # FaultableIndexLoad (drop CollectionRef on the faultable-clone dst
+            # so the OOB NULL never reaches a clone — that boundary is here:
+            # the faultable resource dst is materialized to OWNED at the catch,
+            # never borrowed past it, and the OOB path branches to the handler
+            # BEFORE any element materialization).
+            bool eix_faultable = (eix_getter == "gorget_array_get") and (eix_is_scalar or eix_is_resource)
+            int eix_bounds_h = -1
+            if eix_faultable:
+                match ctx.fault_bounds_handler:
+                    case Some(bh):
+                        eix_bounds_h = bh
+                    case None:
+                        pass
             # index/key MUST be OpBorrow (NOT OpCopy — OpCopy on a String
             # dict key trips validate_resource_moves → lowerer crashes).
             Vector[Operand] eix_args = [OpBorrow(eix_base), OpBorrow(eix_idx)]
+            if eix_bounds_h >= 0:
+                # Call the safe getter into a RAW borrowed pointer (void* on the
+                # C side, GtPtr(elem) here). NULL ⇒ out-of-bounds ⇒ branch to the
+                # handler; otherwise materialize the element in the continuation.
+                int eix_raw_ptr_tid = register_ptr(&gmod, eix_elem_tid)
+                int raw_ptr = add_local_with(&ctx, eix_raw_ptr_tid, None, LoBorrowed(), BoNone())
+                emit(&ctx, GICallExtern(raw_ptr, "gorget_array_safe_get", eix_args))
+                int oob_flag = add_local(&ctx, BOOL_TYPE, None)
+                emit(&ctx, GICmp(oob_flag, CMP_EQ, I64_TYPE, OpCopy(raw_ptr), OpConstNull()))
+                int eix_cont_bb = new_block(&ctx)
+                set_terminator(&ctx, GTBranch(OpCopy(oob_flag), eix_bounds_h, eix_cont_bb))
+                switch_to(&ctx, eix_cont_bb)
+                # Continuation: the element is in-bounds. Materialize per the dst
+                # case from the (non-NULL) raw pointer.
+                if eix_is_scalar:
+                    # Scalar: deref the void* into the bare element value.
+                    int idst_sc = add_local(&ctx, eix_elem_tid, None)
+                    emit(&ctx, GIDeref(idst_sc, raw_ptr, eix_elem_tid))
+                    return idst_sc
+                # Resource: the result IS the borrowed pointer into the element.
+                # The enclosing fault-catch's `op_consume(CkAssign())` clones it
+                # ONCE at the catch boundary (LoBorrowed ⇒ clone), yielding an
+                # OWNED element exactly once. No CollectionRef alias survives the
+                # catch, so a later `push` can't re-clone a dead/NULL dst.
+                return raw_ptr
+            # No-fault path: the panicking getter into the 3-way-typed dst.
+            int idst = -1
+            if eix_is_scalar:
+                idst = add_local(&ctx, eix_elem_tid, None)
+            elif eix_is_resource:
+                int eix_ptr_tid = register_ptr(&gmod, eix_elem_tid)
+                idst = add_local_with(&ctx, eix_ptr_tid, None, LoBorrowed(), BoNone())
+            else:
+                idst = add_local(&ctx, eix_elem_tid, None)
             emit(&ctx, GICallExtern(idst, eix_getter, eix_args))
             return idst
         case EIf(cond_box, then_body, else_branches):

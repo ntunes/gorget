@@ -24,7 +24,7 @@ from lir import runtime_fn_returns_cstr
 # Fault-catch checked arithmetic (error-model.md §11): IFaultCheck's `op`
 # field carries a GIR OP_* constant; the C emit picks the overflow builtin /
 # div0 predicate from it (typed gate, never a name match).
-from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM
+from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM, OP_DIV_OVERFLOW
 # Slot-coalescing reads the CFG successors and terminator operands from lir_ssa
 # (the new `term_uses` lives next to `term_successors`).
 from lir_ssa import term_successors, term_uses
@@ -3456,6 +3456,22 @@ String emit_field_store(String target_v, int struct_id, int field, int value, Li
         return lval + " = (void*)" + v(value) + ";"
     return lval + " = " + v(value) + ";"
 
+# The C `<stdint.h>` INT*_MIN macro for a SIGNED LIR integer width, or "" for
+# any non-signed-integer type (unsigned never overflows on `/ -1`, floats/ptrs
+# never reach here). Drives the `INT_MIN / -1` overflow trap shared by the
+# IDiv/IRem plain-op guards (error-model.md §11 (E)) and the IFaultCheck
+# OP_DIV_OVERFLOW discriminator (§11 (C)). Mirrors Rust gg's per-width MIN.
+String signed_int_min_literal(int ty):
+    if ty == LT_I8:
+        return "INT8_MIN"
+    elif ty == LT_I16:
+        return "INT16_MIN"
+    elif ty == LT_I32:
+        return "INT32_MIN"
+    elif ty == LT_I64:
+        return "INT64_MIN"
+    return ""
+
 String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Vector[String] &sn,
                  Dict[int, int] &val_types, Dict[String, int] &slit_map,
                  Dict[int, int] &val_to_slot):
@@ -3607,19 +3623,47 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Vector[String] 
         case IDiv(dst, ty, lhs, rhs):
             if lir_is_integer(ty):
                 String ct = c_type_name(ty, &sn)
-                return "if ((" + ct + ")" + v(rhs) + " == 0) { fprintf(stderr, \"gorget: division by zero\\n\"); exit(1); } " + v(dst) + " = (" + ct + ")" + v(lhs) + " / (" + ct + ")" + v(rhs) + ";"
+                # Div0 guard + the unconditional signed `INT_MIN / -1` overflow
+                # trap (error-model.md §11 (E)): `INT_MIN / -1` is signed-overflow
+                # UB (SIGFPE on x86_64). A caught Div never reaches here (the
+                # GIFaultCheck branched away); an UNCAUGHT one panics uniformly.
+                String dmin = signed_int_min_literal(ty)
+                String dovf = ""
+                if dmin != "":
+                    dovf = "if ((" + ct + ")" + v(lhs) + " == " + dmin + " && (" + ct + ")" + v(rhs) + " == -1) { fprintf(stderr, \"gorget: integer overflow\\n\"); exit(1); } "
+                return "if ((" + ct + ")" + v(rhs) + " == 0) { fprintf(stderr, \"gorget: division by zero\\n\"); exit(1); } " + dovf + v(dst) + " = (" + ct + ")" + v(lhs) + " / (" + ct + ")" + v(rhs) + ";"
             return v(dst) + " = " + v(lhs) + " / " + v(rhs) + ";"
 
         case IRem(dst, ty, lhs, rhs):
             if lir_is_float(ty):
                 return v(dst) + " = fmod(" + v(lhs) + ", " + v(rhs) + ");"
             String ct = c_type_name(ty, &sn)
-            return v(dst) + " = (" + ct + ")" + v(lhs) + " % (" + ct + ")" + v(rhs) + ";"
+            # Rem mirrors Div: the (previously MISSING) div0 guard + the signed
+            # `INT_MIN % -1` overflow trap (error-model.md §11 (E)). `INT_MIN %
+            # -1` is signed-overflow UB too (C-Rem used to silently return 0).
+            String rmin = signed_int_min_literal(ty)
+            String rovf = ""
+            if rmin != "":
+                rovf = "if ((" + ct + ")" + v(lhs) + " == " + rmin + " && (" + ct + ")" + v(rhs) + " == -1) { fprintf(stderr, \"gorget: integer overflow\\n\"); exit(1); } "
+            return "if ((" + ct + ")" + v(rhs) + " == 0) { fprintf(stderr, \"gorget: division by zero\\n\"); exit(1); } " + rovf + v(dst) + " = (" + ct + ")" + v(lhs) + " % (" + ct + ")" + v(rhs) + ";"
 
         case IMod(dst, ty, lhs, rhs):
             if lir_is_float(ty):
                 return "{ double __t = fmod(" + v(lhs) + ", " + v(rhs) + "); " + v(dst) + " = __t + (__t != 0.0 && ((__t < 0) != (" + v(rhs) + " < 0)) ? " + v(rhs) + " : 0.0); }"
-            return "{ typeof(" + v(lhs) + ") __t = " + v(lhs) + " % " + v(rhs) + "; " + v(dst) + " = __t + (__t != 0 && (__t ^ " + v(rhs) + ") < 0 ? " + v(rhs) + " : 0); }"
+            # Euclidean `.mod()` (error-model.md §11 (E), Rust `4020e01e`): div0
+            # TRAPS, and signed `INT_MIN.mod(-1)` is genuinely 0 (Euclidean — it
+            # does NOT panic, unlike Div/Rem which overflow). Use `__typeof__`,
+            # NOT GNU `typeof` (not a `-std=c11` keyword → a non-constant
+            # `a.mod(b)` failed to compile). Was: no div0 guard, no INT_MIN/-1
+            # guard, `typeof` — a Core-#8 cross-compiler defect the self-host
+            # shared (x.mod(0) returned garbage; INT_MIN.mod(-1) was UB).
+            String mod_ct = c_type_name(ty, &sn)
+            String mod_min = signed_int_min_literal(ty)
+            String mod_body = "{ __typeof__(" + v(lhs) + ") __t = " + v(lhs) + " % " + v(rhs) + "; " + v(dst) + " = __t + (__t != 0 && (__t ^ " + v(rhs) + ") < 0 ? " + v(rhs) + " : 0); }"
+            String mod_dz = "if ((" + mod_ct + ")" + v(rhs) + " == 0) { fprintf(stderr, \"gorget: division by zero\\n\"); exit(1); } "
+            if mod_min != "":
+                return mod_dz + "if ((" + mod_ct + ")" + v(lhs) + " == " + mod_min + " && (" + mod_ct + ")" + v(rhs) + " == -1) { " + v(dst) + " = 0; } else " + mod_body
+            return mod_dz + mod_body
 
         case IFaultCheck(dst, op, ty, lhs, rhs):
             # Fault-catch checked arithmetic (error-model.md §11.2): set the
@@ -3637,6 +3681,14 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Vector[String] 
                 return "{ " + fc_ct + " __fc_d; " + v(dst) + " = __builtin_sub_overflow((" + fc_ct + ")" + v(lhs) + ", (" + fc_ct + ")" + v(rhs) + ", &__fc_d); }"
             elif op == OP_MUL:
                 return "{ " + fc_ct + " __fc_d; " + v(dst) + " = __builtin_mul_overflow((" + fc_ct + ")" + v(lhs) + ", (" + fc_ct + ")" + v(rhs) + ", &__fc_d); }"
+            elif op == OP_DIV_OVERFLOW:
+                # The signed `INT_MIN / -1` division-overflow predicate (the
+                # `Fault.Overflow` half of the Div/Rem split, error-model.md §11
+                # (C)). Unsigned widths never overflow on `/ -1` → always false.
+                String fc_min = signed_int_min_literal(ty)
+                if fc_min == "":
+                    return v(dst) + " = 0;"
+                return v(dst) + " = ((" + fc_ct + ")" + v(lhs) + " == " + fc_min + " && (" + fc_ct + ")" + v(rhs) + " == -1);"
             else:
                 # OP_DIV / OP_REM: div-by-zero predicate.
                 return v(dst) + " = ((" + fc_ct + ")" + v(rhs) + " == 0);"
