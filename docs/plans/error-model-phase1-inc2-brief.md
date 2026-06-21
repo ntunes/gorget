@@ -114,7 +114,11 @@ A single signed Div op has TWO fault conditions; today both collapse into one fl
    `Some`, else to an EMITTED panic ("division by zero"). Then `cont` = the BARE (now fully-guarded)
    div. So: `flag_ovf = FaultCheck(DivOverflow)` → `Branch{flag_ovf → overflow_handler-or-panicblk,
    else → next}`; in `next`: `flag_dz = FaultCheck(div0)` → `Branch{flag_dz → divzero_handler-or-panicblk,
-   else → cont}`; `cont`: bare div.
+   else → cont}`; `cont`: emit the **normal `Inst::Div`** (as Increment-1 does, `insts.rs:163`) — its
+   inline div0/`INT_MIN/-1` checks are **statically false and harmless here** (cont is reached only when
+   both flags were false). ⚠ (pass 4) There is NO checkless-div LIR primitive — do NOT invent one;
+   "don't double-check" (step 4) means don't emit a SECOND explicit-panic for an ALREADY-handled
+   category, NOT that cont needs a bare/unchecked div.
 4. ⚠ **PARTIAL-CATCH — pass-1's "let `commit_op` fire it" is UNSOUND (pass 3, verified on both
    backends).** The commit-path `INT_MIN/-1` trap exists ONLY for C-Div (`c_lir/mod.rs:2485-2489`);
    it is ABSENT on **C-Rem** (`:2512-2516` silently sets `d=0`), **LLVM-Div** (`llvm:3387` bare `sdiv`,
@@ -123,12 +127,15 @@ A single signed Div op has TWO fault conditions; today both collapse into one fl
    silent miscompile (Core invariant #8). **Fix (step 3): the faultable Div lowering EMITS its own
    panic for the uncaught category**, so partial-catch panics UNIFORMLY on both backends with the
    right message. The `cont` op is then BARE (both conditions already handled) — do NOT also emit
-   `commit_op`'s checks (that would double-check). VERIFY each condition is handled EXACTLY ONCE.
-   ⚠ **Pre-existing gap to VERIFY + FILE (out of Increment-2 scope):** the PLAIN (non-fault-scope)
-   `Inst::Div`/`Rem` on LLVM (and C-Rem) appear to LACK the `INT_MIN/-1` trap entirely — i.e.
-   `let x = INT_MIN / -1` (no catch) may be UB on LLVM today while C panics. Confirm; if real, file a
-   separate TODO (both backends must panic uniformly) — Increment 2's explicit-panic covers only the
-   IN-fault-scope case.
+   a SECOND explicit panic for an already-handled category. VERIFY each condition is handled EXACTLY
+   ONCE (cont's normal `Inst::Div` re-checks are statically-false there, harmless — not a double-trap).
+   ⚠ **Pre-existing gap — CONFIRMED REAL (pass 4), FILED in TODO.md, OUT of Increment-2 scope:** the
+   PLAIN (non-fault-scope) `Inst::Div`/`Rem` LACK the `INT_MIN/-1` trap on **LLVM-Div** (`llvm:3387`
+   bare `sdiv`), **LLVM-Rem** (`:3414` bare `srem`), and **C-Rem** (`c_lir:2512-2516`, `d=0`) — only
+   C-Div (`c_lir:2487`) panics. So `let x = INT_MIN/-1` (NO catch) is UB on LLVM today while C panics
+   — a Core-#8 cross-backend defect. Increment 2's explicit-panic covers only the IN-fault-scope case;
+   the plain-op fix is a separate TODO (both backends must panic uniformly). Do NOT pull it into this
+   increment.
 5. **Rem too**: `INT_MIN % -1` is the same overflow — apply the same two-condition explicit-panic
    lowering (do NOT trust the C-Rem `d=0` or the LLVM bare `srem`).
 6. **Lint**: covered by the coordinated lint change in (A) step 7 (the `FaultOp::DivOverflow` split
