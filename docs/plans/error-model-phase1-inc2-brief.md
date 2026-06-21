@@ -31,6 +31,11 @@ inline). Mirror `FaultableBinOp`, reuse the already-wired safe path:
    exhaustive GIR site (use/def, printer, validate, optimize incl. the CFG passes
    `successors`/`thread_jumps`/`eliminate_dead_blocks` that must remap the embedded
    `fault_handler` BlockId, sim) — the compiler's exhaustive matches force this.
+   ⚠ **(pass 1) ALSO update `src/ir/tag_ownership.rs:240`** — `IndexLoad` with `ReadMode::Clone`
+   is tagged `LocalOwnership::Owned` (drives DROP-correctness for a cloned owned element).
+   `FaultableIndexLoad` produces the SAME owned element → needs the SAME tag, or a Drop-bearing
+   element leaks / double-frees under Bounds-catch (the ASan property §5 demands). (`FaultableBinOp`
+   has no tag_ownership arm because it produces a primitive int — `IndexLoad` is different.)
 2. **`FaultScope` gains `bounds_handler: Option<BlockId>`** (`src/ir/lowering/context.rs:294-300`),
    set in `lower_fault_catch_expr` (`src/ir/lowering/exprs/mod.rs:3527-3536`) alongside a
    new `bounds_entry` block.
@@ -45,19 +50,27 @@ inline). Mirror `FaultableBinOp`, reuse the already-wired safe path:
    `runtime_array.c:41`, signed `int64_t`, returns NULL on OOB), then `Inst::Cmp Eq raw_ptr,
    null → flag`, then `Term::Branch { flag → handler (block_map remap), else → cont_bb }`;
    in `cont_bb` deref `raw_ptr` for the element (NULL is NEVER deref'd before the branch —
-   branch-before-deref, unwind-free). This is the `.get()` shape (`methods.rs:2510-2521`)
-   with the null-branch pointed at the handler instead of building `None`. ⚠ PRESERVE the
-   borrowed-element metadata the normal arm sets: str-ptr marking (`str_ptr_values.insert`,
-   `insts.rs:1080`), the Ptr-return-vs-deref split, and resource/FieldPath provenance
-   (`methods.rs:3413-3421`) — do not drop them.
+   branch-before-deref, unwind-free). ⚠ **(pass 1) DO NOT mirror the `.get()` GIR Some/None
+   shape — that's the wrong template.** The load-bearing element-materialization (str-ptr
+   marking `str_ptr_values.insert` `insts.rs:1080`, the Ptr-return-vs-deref split, the
+   clone-vs-move-zero element handling + recursive-clone + the move-zero `Memset`) lives in
+   the **`IndexLoad` LIR arm `insts.rs:1072-1190` (~120 lines), not in `.get()`**. The correct
+   design: **SHARE that post-`raw_ptr` element-materialization block between `IndexLoad` and
+   `FaultableIndexLoad`** — the only delta is `gorget_array_safe_get` + the null-branch-before-deref.
+   An executor that copies `.get()`'s Some/None would miss the clone/move-zero element logic.
 5. **Handler-entry**: add a `bounds_entry` arm in `lower_fault_catch_expr`'s `lower_entry`
    (`exprs/mod.rs:3585-3596`) materializing `Fault.Bounds()` via `emit_enum_init_owned(…"Bounds"…)`.
    Binding-form `catch f:` installs all handlers (overflow/divzero/bounds); pattern-form
    `catch Fault.Bounds:` installs only `bounds_handler`.
 6. **Register `Bounds`** in BOTH layers: `builtin_fault_enum()` (`src/ir/lowering/generics/substitute.rs:330-339`)
    + `src/semantic/resolve.rs:178` (`&["Overflow","DivByZero","Bounds"]`).
-7. **Arm-count lint**: extend `fault_op_lowering_arms_count` (`tests/lints.rs:2355`) to also
-   count the `FaultableIndexLoad` lowering arm + its handler-entry.
+7. **Arm-count lint (pass 1 — the existing lint can't count these):** `fault_op_lowering_arms_count`
+   (`tests/lints.rs:2355`) counts `GirBinOp::X => FaultOp::X` arms — `FaultableIndexLoad` produces
+   NO such arm, so a bare EXPECTED bump goes RED. Either **change the lint to count faultable-lowering
+   arms / `FaultOp` variants generally**, or add a SEPARATE ratchet for `FaultableIndexLoad`. Pick
+   one (the (C) `FaultOp` split has the same problem — coordinate one coherent lint change covering
+   both new shapes). The goal stands (force the next faultable sibling through the shared path); the
+   mechanism must actually count the new arms.
 
 ### (C) Split `INT_MIN/-1` → `Fault.Overflow`  [MEDIUM / HIGH-scrutiny]
 A single signed Div op has TWO fault conditions; today both collapse into one flag →
@@ -68,22 +81,32 @@ A single signed Div op has TWO fault conditions; today both collapse into one fl
    (`c_lir/mod.rs:2580`) + LLVM (`llvm/mod.rs:3475-3489`) `FaultCheck` emits already compute
    both sub-predicates as an `||` — DECOMPOSE that `||` into the two kinds (symmetric in both
    backends — verify the LLVM `and`/`or` decomposition matches C).
-2. **GIR→LIR Div faultable arm emits TWO sequential checks/branches**: `flag_ovf =
-   FaultCheck(DivOverflow)` → `Branch{flag_ovf → overflow_handler, else → next}`; in `next`:
-   `flag_dz = FaultCheck(Div/Rem div0)` → `Branch{flag_dz → divzero_handler, else → cont}`;
-   in `cont`: the committed `lhs/rhs` (both faults statically excluded).
-3. **`fault_handler_for`** (`operators.rs:342-347`): Div/Rem returns a faultable form if
-   EITHER `overflow_handler` OR `divzero_handler` is set (so `catch Fault.Overflow:` on
-   `INT_MIN/-1` catches).
-4. ⚠ **PARTIAL-CATCH (the sharp edge):** when a Div is in a scope catching only ONE of its
-   two faults, the OTHER condition must still PANIC-by-default. The uncaught condition's
-   branch targets the panic path (re-emit its trapping check / `commit_op` `insts.rs:163`),
-   not a handler. So `catch Fault.DivByZero:` on `INT_MIN/-1` still panics, and `catch
-   Fault.Overflow:` on `10/0` still panics. VERIFY the uncaught condition is checked exactly
-   once (not double-checked, not silently wrapped).
+2. ⚠ **(pass 1 C1 — the central mechanism, was missing) A Div needs up to TWO handler blocks,
+   but GIR `FaultableBinOp` carries only ONE `fault_handler: BlockId` (`instructions.rs:222`).**
+   Fix: **change `FaultableBinOp.fault_handler: BlockId` → TWO typed-by-category optional fields
+   `overflow_handler: Option<BlockId>` + `divzero_handler: Option<BlockId>`** (typed, never
+   name-matched). Add/Sub/Mul set `overflow_handler` only; Div/Rem set whichever of the two are
+   caught. The 3 CFG-remap sites (`successors`/`thread_jumps`/`eliminate_dead_blocks`) remap BOTH
+   fields; this ripples through the same exhaustive GIR sites the variant already touches.
+   (`FaultableIndexLoad` keeps its single `fault_handler` — only `FaultableBinOp(Div/Rem)` needs two.)
+3. **GIR→LIR Div faultable arm — emit a FaultCheck+branch ONLY for each CAUGHT category** (pass 1
+   C2): if `overflow_handler.is_some()`: `flag_ovf = FaultCheck(DivOverflow)` →
+   `Branch{flag_ovf → overflow_handler, else → next}`; if `divzero_handler.is_some()`: `flag_dz =
+   FaultCheck(Div/Rem div0)` → `Branch{flag_dz → divzero_handler, else → cont}`; in `cont`: the
+   committed op (`commit_op`, `insts.rs:163`).
+4. ⚠ **PARTIAL-CATCH (the sharp edge, re-framed — pass 1 C2): there is NO panic *block*; the
+   panic is `exit(1)` emitted INLINE inside `commit_op`** (the normal-checked `Div`/`Rem` in `cont`
+   still has its `if(rhs==0)exit(1)` + `INT_MIN/-1` trap, `c_lir:2546-2550`). So you do NOT branch to
+   a panic block — you simply **DON'T emit a FaultCheck for the uncaught category, and let
+   `commit_op`'s existing inline trap fire it.** `catch Fault.DivByZero:` on `INT_MIN/-1` → only the
+   div0 FaultCheck is emitted; the `commit_op`'s own `INT_MIN/-1` trap panics. `catch Fault.Overflow:`
+   on `10/0` → only the DivOverflow FaultCheck; `commit_op`'s div0 trap panics. VERIFY the uncaught
+   condition is trapped EXACTLY ONCE (by `commit_op`, never double-checked, never silently wrapped).
 5. **Rem too**: `INT_MIN % -1` is the same overflow (the emits include the MIN/-1 term for Rem).
-6. **Lint**: update `fault_op_lowering_arms_count` (`tests/lints.rs:2351-2355`) for the new
-   `FaultOp` variant.
+6. **Lint**: covered by the coordinated lint change in (A) step 7 (the `FaultOp::DivOverflow` split
+   has the same "existing lint can't count it" problem — one coherent lint change covers both).
+7. ⚠ **Update the now-stale comment** `context.rs:298` (`divzero_handler` "includes `TYPE_MIN/-1`") —
+   after the split, `TYPE_MIN/-1` routes to `overflow_handler`.
 
 ### (D) Validate the fault-catch enum qualifier  [TINY / LOW]
 `(big*2) catch Bogus.Overflow:` is silently accepted as `Fault.Overflow` — the parser
@@ -94,17 +117,20 @@ A single signed Div op has TWO fault conditions; today both collapse into one fl
   Spanned<String>, variant: Spanned<String> }`. Store `enum_or_name` as the qualifier at
   parse (`expr.rs:1116`). In typecheck (before `check_fault_variant`, `typecheck.rs:3083-3086`):
   if `qualifier.node != "Fault"`, emit a clear diagnostic at the qualifier span.
-- Update the mechanical readers for the new shape: `resolve.rs:1853-1861` and the GIR-lowering
-  match on `FaultCatchPattern::Variant` (`exprs/mod.rs:3514`).
+- Update the readers that actually destructure `Variant`: typecheck `:3083` and the GIR-lowering
+  match `exprs/mod.rs:3514` (both exhaustive on the pattern). ⚠ **(pass 1) `resolve.rs:1853-1861`
+  likely needs NO change** — it destructures only `FaultCatchPattern::Binding(name)` (`:1860`), not
+  `Variant`; don't invent a change there.
 
 ### (B) `--overflow=wrap` — ALREADY WORKS; lock-in fixture only  [TINY / NEAR-ZERO]
 ⚠ **The spec §11.2/§11.7 + TODO premise that this is a gap is REFUTED (scout, by running):**
 `(big*2) catch Fault.Overflow: -1` already yields `-1` under `--overflow=wrap` (handler fires)
 because `FaultCheck` codegen is unconditionally `__builtin_*_overflow` and `fault_handler_for`
 never reads `overflow_wrap`. **Do NOT add override plumbing.** Add ONE lock-in fixture built
-under `--overflow=wrap`. If `run_gg` can't pass build flags, add a `run_gg_with_flags` helper
-(`tests/integration.rs:~5649-5684`). Correct the spec §11.2/§11.7 + the error-model TODO entry
-to "already correct (orthogonal to `overflow_wrap`); documented, not implemented."
+under `--overflow=wrap`. ⚠ **(pass 1) `run_gg_with_flags` ALREADY EXISTS** (`tests/integration.rs:5569`;
+`run_gg_panics_with_flags` at `:5762`, used by an existing `--overflow=wrap` test at `:5640`) —
+USE it, don't duplicate. Correct the spec §11.2/§11.7 + the error-model TODO entry to "already
+correct (orthogonal to `overflow_wrap`); documented, not implemented."
 
 ## 2. Out of scope (deferred, own briefs)
 - `Fault equip Error` / `dyn Error` unified surface — Phase 2.
@@ -141,6 +167,11 @@ New fixtures (deterministic stdout), each on default AND `GG_BACKEND=llvm`:
   op wraps outside the catch.
 - `fault_catch_bad_qualifier.gg` — `(big*2) catch Bogus.Overflow:` → typecheck error (negative
   fixture).
+⚠ **(pass 1) Harness helpers:** the panic-default / partial-catch fixtures use `run_gg_panics`
+(`integration.rs:5387`) — match the ACTUAL runtime substring (bounds is the longer `gorget: panic:
+index out of bounds: …`; div is `integer overflow` / `division by zero`); `fault_catch_overflow_wrap.gg`
+uses `run_gg_*_with_flags` (`:5569`/`:5762`); `fault_catch_bad_qualifier.gg` is a TYPECHECK-error
+fixture → use `check_gg_fails(fixture, msg)` (`integration.rs:~1131`), NOT a runtime fixture.
 Executor runs: `cargo build`, `cargo test --lib`, `cargo test --test lints`, and these fixtures
 on BOTH backends. NOT the full integration sweep (parent's job).
 
