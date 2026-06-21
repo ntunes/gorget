@@ -401,6 +401,53 @@ the RFC must argue against.
     Task/server. Define the default top-level boundary. (The existing `main() throws int`
     → exit-code path, `language-reference.md:2480`, is *contract*-channel, orthogonal.)
 
+## 9.1 UNDER EXPLORATION (owner 2026-06-21): unified `Error` typing + the typing/propagation split
+
+The owner asked whether a **single synchronous channel** could carry both contract
+errors and faults, with **all errors extending a base `Error` that includes the
+faults**, **uncaught faults panicking (as today)**, so a match is **always
+exhaustive**. Grounding (verified): Gorget already has an **`Error` trait**
+(`language-reference.md:2766`, the Rust `std::error::Error` model — `IoError`/
+`ParseError` implement it), trait `extends` for **supertraits only**, **NO class
+subtyping** (`language-design.md:1926/1958`), and **NO open enums** (enums are
+closed; matches are enforced-exhaustive, `typecheck.rs:3664`). So "extend a base
+`Error`" = **implement the `Error` trait** (composition), not inherit a base enum
+with variants.
+
+**The key realization: TYPING and PROPAGATION are orthogonal, and the proposal only
+settles TYPING.**
+- **TYPING (adopt — cheap, idiomatic):** make the closed `Fault` enum `equip Error`,
+  like the stdlib errors. Then one boundary `catch e` (`e: dyn Error`) handles BOTH a
+  contract error and a fault, uniformly. This REFINES Q14's "separate `Fault` type"
+  into "`Fault` is an `Error` impl." "Uncaught faults panic" keeps a plain `int
+  sum(...)` non-`Result` (no ubiquity), overflow panic-by-default (today's safety +
+  fast path), recovery opt-in — keep this. "Always exhaustive" = the closed `Fault`
+  enum is exhaustively matchable; the contract side is open (trait); unhandled faults
+  **fall through to panic** (exhaustiveness-via-implicit-panic-default — a small
+  `non_exhaustive`-style match rule). One literal enum holding faults + user variants
+  with static exhaustiveness would need **open enums** (a new feature, a lean toward
+  Java's `Throwable`).
+- **PROPAGATION (the real cost — UNCHANGED by the typing):** how a fault from a DEEP
+  call reaches that `catch`. Trilemma — pick two of {deep-catch, no-ubiquity,
+  no-unwind}:
+  - **local-only catch** (`(a*b) catch Overflow: …` at the op) → truly in-band, no
+    ubiquity, no unwind — but cannot catch a fault several frames down.
+  - **in-band deep** (fault rides `Result` up) → every arithmetic fn becomes `Result`
+    = ubiquity (the §3 problem).
+  - **out-of-band deep** (fault unwinds to the handler) → unwinding (the §6 greenfield
+    infra) — what Java/C#/Python actually do under their unified `try/catch` surface.
+
+  So "single synchronous channel" stays synchronous only for **local** faults; the
+  **server-keeps-serving** use case (catch an overflow deep in a handler) forces
+  unwinding regardless of how errors are typed. Java's unified `try/catch` IS
+  stack-unwinding underneath.
+
+**OPEN — the deciding question:** must a fault be catchable from a **deep call**
+(server/request-boundary recovery), or **only at the lexical site** of the risky
+op? Deep ⇒ buy the unwind machinery (Q10). Local-only ⇒ genuinely no unwind, but no
+deep recovery. This single answer, not "in-band vs out-of-band," is what's load-
+bearing. (If adopted, the §1/§4 reframe in Q14's follow-up folds in here.)
+
 ## 10. Bottom line
 
 The owner's "every function has two typed channels" is **real and good** — it's the
