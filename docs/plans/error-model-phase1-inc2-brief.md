@@ -10,9 +10,11 @@
 ## 0. The goal
 Extend local fault-catch with: **(A)** `Fault.Bounds` (catch an out-of-bounds index),
 **(C)** split `INT_MIN/-1` out of `DivByZero` into `Fault.Overflow`, **(D)** reject a
-wrong enum qualifier (`Bogus.Overflow`), **(B)** lock in the already-working
-`--overflow=wrap` behaviour, and **(E)** fix the pre-existing plain-op `INT_MIN/-1`
-cross-backend defect (UB on LLVM today). Stage them in the §3 order.
+wrong enum qualifier (`Bogus.Overflow`), and **(E)** fix the pre-existing plain-op
+`INT_MIN/-1` cross-backend defect (UB on LLVM today). Stage them in the §3 order.
+⚠ **(B) the `--overflow=wrap` lock-in is DROPPED (owner 2026-06-21): the flag is being
+RETIRED in a separate track**, so there is nothing to lock in. The (B) section below is
+struck through; do NOT add `fault_catch_overflow_wrap.gg`.
 
 ## 1. Scope — Increment 2 (IN), by sub-task
 
@@ -157,15 +159,12 @@ A single signed Div op has TWO fault conditions; today both collapse into one fl
   compile error by dropping the qualifier). ⚠ **(pass 1) `resolve.rs:1853-1861` needs NO change** —
   it destructures only `FaultCatchPattern::Binding(name)` (`:1860`), not `Variant`; don't invent one.
 
-### (B) `--overflow=wrap` — ALREADY WORKS; lock-in fixture only  [TINY / NEAR-ZERO]
-⚠ **The spec §11.2/§11.7 + TODO premise that this is a gap is REFUTED (scout, by running):**
-`(big*2) catch Fault.Overflow: -1` already yields `-1` under `--overflow=wrap` (handler fires)
-because `FaultCheck` codegen is unconditionally `__builtin_*_overflow` and `fault_handler_for`
-never reads `overflow_wrap`. **Do NOT add override plumbing.** Add ONE lock-in fixture built
-under `--overflow=wrap`. ⚠ **(pass 1) `run_gg_with_flags` ALREADY EXISTS** (`tests/integration.rs:5569`;
-`run_gg_panics_with_flags` at `:5762`, used by an existing `--overflow=wrap` test at `:5640`) —
-USE it, don't duplicate. Correct the spec §11.2/§11.7 + the error-model TODO entry to "already
-correct (orthogonal to `overflow_wrap`); documented, not implemented."
+### (B) `--overflow=wrap` lock-in — ~~DROPPED~~ (owner 2026-06-21: the flag is being RETIRED)
+~~Originally: lock in the already-working wrap behaviour.~~ The scout verified (by running) that
+`(big*2) catch Fault.Overflow: -1` already yields `-1` under `--overflow=wrap` (the fault path is
+orthogonal to `overflow_wrap`). But the **`--overflow` flag is being retired in a separate track**,
+so there is nothing to lock in: **do NOT add `fault_catch_overflow_wrap.gg`, do NOT add override
+plumbing, do NOT touch the spec §11.2/§11.7 here** (the retirement track rewrites that). Skip (B).
 
 ### (E) Fix the plain-op `INT_MIN/-1` cross-backend defect  [SMALL / surgical, but HOT-PATH]
 ⚠ **Confirmed (pass 4):** the PLAIN (non-fault-scope) `Inst::Div`/`Rem` lack the `INT_MIN/-1`
@@ -189,6 +188,9 @@ overflow trap on three of four backend×op forms — **C-Rem** silently `d=0` (`
    fixtures. The full both-backend sweep is the regression gate; verify no existing fixture regresses.
 
 ## 2. Out of scope (deferred, own briefs)
+- **Retiring the `--overflow` flag** (owner 2026-06-21) — its OWN track (delete the flag +
+  `overflow_wrap` global + threading; keep `+%` per-op wrapping; migrate wrap-mode fixtures). This is
+  why (B) was dropped. Do NOT touch the flag plumbing in THIS increment.
 - `Fault equip Error` / `dyn Error` unified surface — Phase 2.
 - OOM — Phase 2. Deep/boundary catch + unwinding — Phase 2.
 - The doc rewrite (`language-design.md`/`book`/`reference`) + the §1/§4 two-channels reframe —
@@ -205,8 +207,7 @@ overflow trap on three of four backend×op forms — **C-Rem** silently `d=0` (`
 3. **(C) Div-split** — the `FaultOp` split + two-branch lowering + partial-catch + both backends
    + lint. Build + `cargo test --lib` + `cargo test --test lints`.
 4. **(D) Qualifier** — AST/parse/typecheck. Build + `cargo test --lib`.
-5. **(B) wrap-fixture** + the spec/TODO premise correction.
-6. **Fixtures** (§4) — all of them, on BOTH backends.
+5. **Fixtures** (§4) — all of them, on BOTH backends. (No (B) — dropped.)
 
 ## 4. Test plan (executor runs; parent runs the full sweep)
 New fixtures (deterministic stdout), each on default AND `GG_BACKEND=llvm`:
@@ -222,19 +223,15 @@ New fixtures (deterministic stdout), each on default AND `GG_BACKEND=llvm`:
   `(INT_MIN % -1) catch Fault.Overflow:` caught.
 - `fault_intmin_partial.gg` — `(INT_MIN/-1) catch Fault.DivByZero:` does NOT catch → panics;
   `(10/0) catch Fault.Overflow:` does NOT catch → panics (the partial-catch guard).
-- `fault_catch_overflow_wrap.gg` — built under `--overflow=wrap`: handler fires where the same
-  op wraps outside the catch.
 - `fault_catch_bad_qualifier.gg` — `(big*2) catch Bogus.Overflow:` → typecheck error (negative
   fixture).
 - `div_intmin_plain.gg` — **(E)** UNCAUGHT `INT_MIN / -1` panics `integer overflow`, and `INT_MIN % -1`
-  panics — on BOTH backends (the pre-existing-defect regression guard; uses `run_gg_panics`). Add an
-  `--overflow=wrap` variant only if (E)'s "unconditional trap" decision is confirmed (it should still
-  panic under wrap, since division overflow is unconditional like div0).
+  panics — on BOTH backends (the pre-existing-defect regression guard; uses `run_gg_panics`).
 ⚠ **(pass 1) Harness helpers:** the panic-default / partial-catch fixtures use `run_gg_panics`
 (`integration.rs:5387`) — match the ACTUAL runtime substring (bounds is the longer `gorget: panic:
-index out of bounds: …`; div is `integer overflow` / `division by zero`); `fault_catch_overflow_wrap.gg`
-uses `run_gg_*_with_flags` (`:5569`/`:5762`); `fault_catch_bad_qualifier.gg` is a TYPECHECK-error
-fixture → use `check_gg_fails(fixture, msg)` (`integration.rs:5958`), NOT a runtime fixture.
+index out of bounds: …`; div is `integer overflow` / `division by zero`); `fault_catch_bad_qualifier.gg`
+is a TYPECHECK-error fixture → use `check_gg_fails(fixture, msg)` (`integration.rs:5958`), NOT a
+runtime fixture.
 Executor runs: `cargo build`, `cargo test --lib`, `cargo test --test lints`, and these fixtures
 on BOTH backends. NOT the full integration sweep (parent's job).
 
@@ -270,7 +267,6 @@ on BOTH backends. NOT the full integration sweep (parent's job).
   Rem handled.
 - `Bogus.Overflow` rejected at typecheck; `Fault.Overflow`/`Fault.DivByZero`/`Fault.Bounds`
   accepted.
-- (B): the wrap fixture passes; the spec §11.2/§11.7 + TODO premise corrected to "already works".
 - (E): plain (uncaught) `INT_MIN/-1` AND `INT_MIN % -1` panic `integer overflow` on BOTH backends
   (`div_intmin_plain.gg`); no regression to existing division fixtures (hot path); the `TODO.md`
   Core-#8 entry is REMOVED (now done, → DONE.md with the increment).
