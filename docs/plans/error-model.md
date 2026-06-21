@@ -207,6 +207,13 @@ unwind, not just leak/double-free.**
 | Catch site | local | task / request / supervisor boundary, **catch by type** (`catch Overflow`) |
 | Likely codegen | Zig-`!T`-style value-union return | unwind / abort path (see §6) |
 
+> **Phase-1 clarification (shipped, §11):** the table describes the BROAD/eventual model.
+> What ships in Phase 1 narrows the fault column to a closed `Fault` enum (Overflow,
+> DivByZero, Bounds) that is **out of every function's signature** (a plain `int sum(...)`
+> stays `int`) and is recovered **locally and lexically** via `(expr) catch Fault.X` at the
+> faulting op — NOT (yet) at a coarse boundary. The "Catch site: boundary" row is the
+> Phase-2 deep/boundary catch and is unchanged. Faults still panic by default if uncaught.
+
 ## 5. Inference + boundary annotation (the make-or-break detail)
 
 "Both channels typed, like `throws` today" has a fork the owner must see:
@@ -419,11 +426,11 @@ the RFC must argue against.
     **Retire "untyped" as a misnomer:** BOTH error paths are typed (both carry
     structured types); they differ only in *where* the type lives — `Result[T,E]` is
     **in the signature** (contract), the `Fault` enum is **ambient/out-of-signature**
-    (faults). ⚠ **Follow-up (structural):** §1/§4's "ONE error channel, two kinds"
-    framing should be revisited — mechanically these are **two channels** (the
-    in-signature `Result` contract channel + the ambient structured-`Fault` channel),
-    per §6's value-union-vs-unwind split. That reframe is a doc edit that should get
-    its own confirming review (don't silently overhaul the pass-3-signed-off framing).
+    (faults). ⚠ **Follow-up — NOT happening (owner 2026-06-21):** an earlier note here
+    proposed reframing §1/§4's "ONE error channel, two kinds" into "two channels." The
+    owner KEEPS the "one error channel, two kinds" framing; the reframe is dropped. The
+    out-of-signature distinction above is captured by the §4 Phase-1 clarification, not a
+    §1/§4 restructure.
 15. **FFI / `extern`-boundary fault unwind (review pass 2).** A longjmp-based fault
     unwind (§6) that jumps over a foreign C frame skips C-side cleanup and is UB on
     many ABIs. The doc has zero treatment of a fault crossing an `extern` boundary.
@@ -507,7 +514,7 @@ later as a separate funded effort.
 - Strictly **additive** over Phase 1 — same `Fault`/`Error` typing, same `catch`
   surface; only the PROPAGATION reach extends from lexical to deep.
 
-(The §1/§4 "one channel / two kinds" reframe from Q14's follow-up lands with Phase 1.)
+(The §1/§4 "one channel / two kinds" framing is KEPT — the once-anticipated "two channels" reframe is not happening, owner 2026-06-21. Phase 1 added a §4 Phase-1 clarification only.)
 
 ## 10. Bottom line
 
@@ -673,10 +680,10 @@ in the brief; the known set (owner Q 2026-06-21 — "does the plan update all do
 - **`docs/language-reference.md`:** the new fault-catch **grammar** (catching a fault
   off a non-throwing expr — distinct from the `Result` `catch`, §11.5); a **`Fault`
   enum** reference + its variants; note `Fault` implements `Error` (`:2766`).
-- **`error-model.md` itself — the §1/§4 reframe:** "one error channel, two kinds" →
-  **two channels** (in-signature `Result` contract channel + the ambient `Fault`
-  channel), per Q14's follow-up; and the §2/§10 universal-channel framing scoped per
-  §11.0. (Wants its own confirming review — it edits §1-§8.)
+- **`error-model.md` itself:** the once-anticipated §1/§4 "two channels" reframe is
+  NOT happening (owner 2026-06-21) — the "one error channel, two kinds" framing is KEPT.
+  Phase 1 adds only a §4 Phase-1 clarification (faults are out-of-signature, recovered
+  locally via `catch Fault.X`); §1 and the §4 table are unchanged.
 - **Examples** across book/reference that assume overflow is always fatal.
 
 ### 11.5 Phase-1 open questions (resolve in the brief)

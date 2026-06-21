@@ -195,22 +195,27 @@ int8 x = 127
 x += 1                    # panic: integer overflow (int8)
 ```
 
-For intentional wrapping, use the `wrapping` module or wrapping operators:
+For intentional wrapping, use the per-operator wrapping operators:
 
 ```gorget
-import std.math.wrapping
-
 int8 x = 127
-int8 y = wrapping.add(x, 1)    # y == -128 (wraps)
-
-# Wrapping operator syntax (alternative)
 int8 z = x +% 1                # z == -128 (wrapping add)
 int8 w = x *% 2                # wrapping multiply
 ```
 
 Wrapping operators: `+%`, `-%`, `*%`. These mirror Zig's approach. No wrapping division (division by zero panics separately).
 
-Plain `+`, `-`, `*` always check overflow and panic (or recover via `catch Fault.Overflow`); the per-operator `+%`/`-%`/`*%` forms are the only way to opt into wrapping. There is no global "wrap the whole build" mode — wrapping is per-expression, by design.
+Plain `+`, `-`, `*` always check overflow; the per-operator `+%`/`-%`/`*%` forms are the only way to opt into wrapping. There is no global "wrap the whole build" mode — wrapping is per-expression, by design.
+
+The overflow panic is also **locally recoverable**. Wrapping an arithmetic expression in `(...) catch Fault.Overflow:` branches an overflowing op to a fallback instead of panicking:
+
+```gorget
+int big = 9223372036854775807
+int r = (big * 2) catch Fault.Overflow: -1     # r == -1 (overflow caught)
+int ok = (3 * 4) catch Fault.Overflow: -1      # ok == 12 (no fault)
+```
+
+Recovery is **local and lexical** — the catch covers only the faultable ops emitted directly into the wrapped expression, and an uncaught overflow still panics exactly as above. See §6 for the full `Fault` model.
 
 ### 2.3 Functions
 
@@ -1310,6 +1315,30 @@ void critical_section():
 - TLS/crypto (handshake failure, invalid certificate)
 
 **Rule of thumb:** Can the caller prevent this failure by writing correct code? Yes → panic. No → Result.
+
+The rule still holds: a fault (overflow, bounds, div0) is a programmer error, so it **panics by default** — continuing with corrupted state is worse than stopping. What the rule adds, rather than reverses, is **opt-in local recovery**: a faulting op can be caught *lexically*, at the operation site, instead of aborting the process.
+
+#### Recoverable Faults
+
+A small, closed set of panics — **`Fault.Overflow`** (integer overflow), **`Fault.DivByZero`** (division or remainder by zero), and **`Fault.Bounds`** (an out-of-bounds index into an array-backed collection) — form the **fault** kind. They panic by default, but an expression that can fault may opt into a local fallback with `catch`:
+
+```gorget
+# Pattern form: catch one named variant, yield a fallback.
+int r = (big * 2) catch Fault.Overflow: -1
+
+# Binding form: bind the constructed Fault value and match on it.
+int d = (10 / z) catch f: match f:
+    case Fault.Overflow(): 111
+    case Fault.DivByZero(): 222
+```
+
+This recovery is **strictly local and lexical**:
+
+- It covers only the faultable ops emitted directly into the wrapped expression's own basic blocks. A fault raised *inside a function the expression calls* is not caught — it still panics.
+- An uncaught fault still panics with a diagnostic and exits, exactly as before. `catch` adds a recovery path; it does not change the default.
+- Faults stay **out of function signatures** — a plain `int sum(...)` does not become a `Result`-returning function just because it does arithmetic. Faults are not contract errors; they are not part of any function's `throws` type or the API surface.
+
+The variants are spelled **qualified** (`Fault.Overflow`, not bare `Overflow`); a wrong qualifier (`Bogus.Overflow`) is a compile-time error. `INT_MIN / -1` and `INT_MIN % -1` are overflows (`Fault.Overflow`), not div-by-zero. This fault `catch Fault.X:` is distinct from the `Result`/`throws` `catch (e):` form (§6.1's model), which recovers a *contract* error from a throwing call.
 
 ### 6.5 Assert (Always-On)
 

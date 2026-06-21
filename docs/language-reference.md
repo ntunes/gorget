@@ -2475,6 +2475,20 @@ int x = risky() catch (e):
 
 The block form lets the recovery run side-effecting statements (logging, cleanup, etc.) before producing the fallback value. Statements inside the block can be `return`, `throw` (if the enclosing function declares `throws`), or any normal control flow — the type checker treats divergent recoveries as compatible with any expected type.
 
+**Fault catch** — a distinct form of `catch` recovers a **fault** (integer overflow, division by zero, an out-of-bounds index) from a non-throwing expression. It is spelled without the parenthesized error binding the contract form uses, and names a `Fault` variant or binds the constructed `Fault` value (see §10.9 for the `Fault` type):
+
+```gorget
+# Pattern form — catch one named fault, yield a fallback.
+int r = (big * 2) catch Fault.Overflow: -1
+
+# Binding form — bind the constructed Fault value and match on it.
+int d = (10 / z) catch f: match f:
+    case Fault.Overflow(): 111
+    case Fault.DivByZero(): 222
+```
+
+Recovery is **local and lexical**: it covers only the faultable ops emitted directly into the wrapped expression's own basic blocks. A fault raised inside a function the expression *calls* is not caught — it still panics. Outside a fault `catch`, a fault panics by default, unchanged. The variant must be qualified with `Fault` (`Fault.Overflow`); a wrong qualifier (`Bogus.Overflow`) is a compile-time error. This is separate from the contract-error `catch (e):` form above (which recovers a thrown `Result` error) — the two never overlap, since faults are out of the function's signature.
+
 ### 10.6 Throws on Main
 
 `main()` may declare `throws int`, where the thrown integer becomes the process exit code:
@@ -2527,6 +2541,25 @@ enum AppError:
     Parse(ParseError)
     NotFound(String)
 ```
+
+### 10.9 Faults
+
+`Fault` is a built-in, **closed** enum naming the recoverable runtime faults. It is the scrutinee of the fault `catch` form (§10.5):
+
+```gorget
+enum Fault:
+    Overflow         # integer overflow
+    DivByZero        # division or remainder by zero
+    Bounds           # out-of-bounds index
+```
+
+Faults panic by default; a fault `catch` (§10.5) is the only way to recover one, and only locally. The variants are spelled qualified (`Fault.Overflow`, `Fault.DivByZero`, `Fault.Bounds`).
+
+- **`Fault.Overflow`** — an overflowing checked `+`/`-`/`*` (the wrapping `+%`/`-%`/`*%` forms never fault). It also covers signed division overflow: `INT_MIN / -1` and `INT_MIN % -1` are `Fault.Overflow`, **not** `Fault.DivByZero`.
+- **`Fault.DivByZero`** — a `/` or `%` whose divisor is zero.
+- **`Fault.Bounds`** — an out-of-bounds index read of an indexed array-backed collection (`Vector`, `Deque`). A negative index is a catchable `Bounds` inside a fault `catch` (and a panic outside one). Dict lookups, string indexing, and range slices are not covered.
+
+Faults are **out of the function signature** — a plain `int sum(...)` does not become a `Result`-returning function because it does arithmetic — so they never appear in a `throws` type or on the API surface.
 
 ---
 
@@ -6531,7 +6564,9 @@ expr = literal | IDENTIFIER | path_expr | unary_expr | binary_expr
      | await_expr | spawn_expr | rethrow_expr | catch_expr
      | "self" | "it" | "(" expr ")" ;
 rethrow_expr = expr "rethrow" ( expr | "(" [ type ] IDENTIFIER ")" ":" expr ) ;
-catch_expr   = expr "catch" "(" IDENTIFIER ")" ":" expr ;
+catch_expr   = contract_catch | fault_catch ;
+contract_catch = expr "catch" "(" IDENTIFIER ")" ":" expr ;
+fault_catch  = expr "catch" ( "Fault" "." IDENTIFIER | IDENTIFIER ) ":" expr ;
 
 (* ── Patterns ── *)
 pattern = "_" | literal | IDENTIFIER

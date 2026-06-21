@@ -4,16 +4,21 @@ Every program encounters situations it cannot handle: a file that doesn't exist,
 request that times out, user input that doesn't parse. How a language deals with these
 situations shapes how reliable your code can be.
 
-Gorget divides failures into two categories:
+Gorget sorts failures into two broad categories:
 
 - **Expected failures** — things that can go wrong in normal operation: I/O errors, invalid
   input, missing data. The compiler ensures you handle them.
 
 - **Programmer errors** — bugs: array out of bounds, integer overflow, calling `unwrap()`
-  on `None`. These panic immediately, because continuing with corrupted state is worse than
-  stopping.
+  on `None`. By default these **panic immediately**, because continuing with corrupted state
+  is usually worse than stopping.
 
-This chapter covers both, starting with expected failures — the kind that need a design.
+The line between them isn't a wall. A small, closed set of programmer errors — integer
+overflow, division by zero, and out-of-bounds indexing — are **faults** that panic by
+default but can be *locally recovered* when a sensible fallback exists. We cover that at the
+end of the chapter under [Recovering from Faults](#recovering-from-faults).
+
+This chapter covers all of it, starting with expected failures — the kind that need a design.
 
 The previous chapter introduced `Result[T, E]` and `Option[T]` as data types with methods
 like `map`, `and_then`, and `unwrap_or`. This chapter builds on that foundation with
@@ -536,6 +541,95 @@ is per-expression — plain `+`/`-`/`*` always check overflow.
 
 ---
 
+## Recovering from Faults
+
+A panic isn't always the end. A small, closed set of programmer errors are **faults** — they
+panic by default, but you can opt into a local fallback when one makes sense. The faults are
+the variants of a built-in enum:
+
+```gorget
+enum Fault:
+    Overflow         # integer overflow (including INT_MIN / -1 and INT_MIN % -1)
+    DivByZero        # division or remainder by zero
+    Bounds           # out-of-bounds index into an array-backed collection
+```
+
+To recover, wrap a faultable expression in `(...) catch`. There are two forms.
+
+**Pattern form** — catch one named fault and produce a fallback:
+
+```gorget
+void main():
+    int big = 9223372036854775807
+    int r = (big * 2) catch Fault.Overflow: -1     # overflow caught → -1
+    int ok = (3 * 4) catch Fault.Overflow: -1      # no fault → 12
+    print(f"{r}")                                  # -1
+    print(f"{ok}")                                 # 12
+```
+
+**Binding form** — bind the constructed `Fault` value and `match` on which fault occurred:
+
+```gorget
+void main():
+    int z = 0
+    int d = (10 / z) catch f: match f:
+        case Fault.Overflow(): 111
+        case Fault.DivByZero(): 222
+    print(f"{d}")                                  # 222
+```
+
+Out-of-bounds reads are catchable the same way:
+
+```gorget
+void main():
+    Vector[int] xs = [10, 20, 30]
+    int r = (xs[10]) catch Fault.Bounds: -1        # out of bounds → -1
+    int ok = (xs[1]) catch Fault.Bounds: -1        # in bounds → 20
+```
+
+A few rules worth keeping straight:
+
+- **Panic-by-default still holds.** A fault *outside* a `catch` panics and exits, exactly as
+  before. `catch` adds a recovery path; it does not soften the default.
+
+- **Recovery is local and lexical.** The `catch` only covers the faultable ops written
+  directly into the wrapped expression. A fault raised *inside a function the expression
+  calls* is **not** caught — it still panics:
+
+  ```gorget
+  int doubled(int x): x * 2          # overflows internally
+
+  void main():
+      int big = 9223372036854775807
+      # NOT caught — the overflow happens inside doubled(), across a call.
+      int r = (doubled(big)) catch Fault.Overflow: -1    # still panics
+  ```
+
+- **Variants are spelled qualified.** Write `Fault.Overflow`, not bare `Overflow`. A wrong
+  qualifier (`Bogus.Overflow`) is a compile-time error, never silently treated as a `Fault`.
+
+- **The categories are exact.** `INT_MIN / -1` and `INT_MIN % -1` are *overflows*
+  (`Fault.Overflow`), not div-by-zero. `Fault.Bounds` applies to array-backed collections
+  (`Vector`, `Deque`), not dict lookups or string indexing.
+
+### Fault `catch` vs contract `catch`
+
+This `catch Fault.X:` is a different construct from the `Result`/`throws` recovery you saw
+earlier. The contract form `catch (e):` (note the **parentheses**) recovers an *error thrown
+by a throwing call*:
+
+```gorget
+int port = parse_port(input) catch (e): 8080         # contract error from a throwing call
+int r = (big * 2) catch Fault.Overflow: -1           # fault from a local arithmetic op
+```
+
+They look similar but never overlap: faults are out-of-signature (a plain `int` function
+never becomes `Result`-returning just because it does arithmetic), while contract errors ride
+the function's declared `throws`/`Result` type. Use `catch (e):` for *contract* errors and
+`catch Fault.X:` for *faults*.
+
+---
+
 ## Putting It Together
 
 Here's a realistic example that combines `throws`, Result capture, custom error types,
@@ -613,6 +707,7 @@ kind differently.
 | `rethrow expr` | Replace error with a different value | `throws int` main, simple error mapping |
 | `rethrow (T e): expr` | Transform and re-throw with context | Adding context, converting error types |
 | `catch (e): expr` | Recover from error with fallback | Default values, graceful degradation |
+| `catch Fault.X: expr` | Locally recover from a fault (overflow/div0/bounds) | Recoverable arithmetic/indexing |
 | `throws int` on main | Exit code on error | Process-level error handling |
 | `on error: block` | Cleanup on error exit only | Resource cleanup |
 | `Result[T, E] x = expr` | Capture a throwing call as `Result` | When you want to handle, not propagate |
