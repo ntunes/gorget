@@ -37,12 +37,28 @@ same in the entry module works.)
    `"../../../src/backend/c/runtime/X.c"`; VERIFY the correct relative depth from the driver's location)
    + a `build_embedded_runtime() -> Dict[String, String]` mapping basename → contents. Hand-listed is
    acceptable (Rust's is too). The 62 names are the full `ls src/backend/c/runtime/*.c` set.
-2. **`read_runtime` gains a `Dict[String,String] &embedded` param** (`lir_codegen.gg:6988`): consult the
-   embedded dict FIRST, with the **disk-override escape hatch** preserved — `if getenv("GG_RUNTIME_DIR")
-   == "": <use embedded>` else disk-read (mirrors Rust's `GORGET_RESOURCES_PATH`; so a dev can still
-   point at on-disk runtime). A `--runtime-dir=` flag must also still force the disk path.
-3. **Thread the dict** from the 3 driver callers (build/run/the `:305`-ish paths) through
-   `emit_runtime_preamble` to all 78 `read_runtime` call sites.
+2. **`read_runtime` gains `&embedded` + an `explicit` signal** (`lir_codegen.gg:6988`), with a **3-STATE
+   precedence (review pass-1 B1 — the naive `getenv("GG_RUNTIME_DIR")==""` check is WRONG).** By the time
+   `read_runtime` runs, `runtime_dir` has ALREADY absorbed flag/env/default (`driver.gg:309-312` env,
+   `:345` flag), so it cannot tell a `--runtime-dir=` flag from the default — and **9 `--runtime-dir=`
+   test sites** (`tests/integration.rs:16162/16194/16212/16454/16793/17461/25003/…`) pass the flag WITHOUT
+   setting `GG_RUNTIME_DIR`, so the naive check would silently feed them embedded bytes (a shipped no-op-
+   flag defect). Required precedence: **explicit `--runtime-dir=` flag (disk) > `GG_RUNTIME_DIR` env
+   (disk) > embedded (default).** Compute `bool runtime_dir_explicit = (--runtime-dir given) OR
+   (getenv("GG_RUNTIME_DIR") != "")` IN THE DRIVER and pass it down. Then `read_runtime`:
+   `if explicit: read_file(rdir+"/"+name)` (disk, exactly as today) `else:` look up
+   `embedded[basename(name)]` → **on HIT use it; on MISS fall through to disk** (review pass-1 B2 —
+   REQUIRED: `read_runtime` is ALSO called with `../stb_image.h`, `../sqlite3/sqlite3.c`,
+   `../sqlite3/gorget_sqlite.c` at `lir_codegen.gg:7459/7485/7487`, NOT in the 62-set; a dict-ONLY read
+   returns empty → `exit(1)` → breaks every SDL/SQLite/image fixture. Miss-fallback-to-disk keeps them
+   working; an import-free `hello.gg` never triggers those feature-gated reads, so it stays relocatable).
+   Mirrors Rust's `GORGET_RESOURCES_PATH`.
+3. **Build the dict ONCE in `emit_runtime_preamble` — NO caller threading (review pass-1 M3).** All 78
+   `read_runtime` calls live inside the SINGLE function `emit_runtime_preamble`
+   (`lir_codegen.gg:7180-7501`), so build `build_embedded_runtime() -> Dict[String,String]` at its top
+   and pass `&embedded` to each call — 78 mechanical 1-arg edits in ONE function, zero cross-function
+   plumbing. ONLY the `explicit` bool (item 2) needs to reach `emit_runtime_preamble` from the 3 driver
+   callers (a single `bool` param, not a dict).
 4. **SQLite/SDL/GL/metal stay DISK-ONLY** (do NOT embed the 8.8 MB sqlite3.c into `driver.gg` — it would
    balloon the self-compiled driver source + the bootstrap). These remain on the disk/conditional path;
    Inc-4 handles SQLite separately (feature-gated).
@@ -70,10 +86,20 @@ only — programs with `from std…` need Inc-3's `lib/std` embedding; note that
   of well-formed programs — the embedded bytes are identical to the disk bytes).
 
 ## Riskiest part
-The `bootstrap_fixed_point` under 62 embedded literals (compile-time/RSS of the self-compiled driver) and
-getting the entry-relative `embed_file` paths right for all 62. Keep SQLite OFF the embed path. If the
-bootstrap compile time balloons unacceptably, that's a real finding — report it (a generated-manifest or
-a seed-side `Item::Module` meta-recursion fix would be the heavier alternative).
+The 3-state precedence (B1) + the dict-miss-fallback (B2) — get those wrong and you ship a no-op `--runtime-dir`
+flag or break SDL/SQLite. And `bootstrap_fixed_point` under 62 embeds: **risk framing (review pass-1 M4) —
+`driver.gg`'s SOURCE only gains 62 tiny `embed_file("path")` call expressions; the 609 KB materializes
+IN MEMORY at meta-eval (`read_file`, `meta.gg:614`) — exactly as `read_runtime`'s disk reads do today.**
+The real cost is transient meta-pass RSS + the post-subst AST holding ~609 KB of inlined string literals,
+NOT source-file bloat — so the bootstrap risk is real but LOWER than "62 huge literals in the source"
+implies. **Measure INCREMENTALLY (4 → 20 → 62)** — if `subst_stmts` String-clones or Dict growth balloon
+RSS non-linearly, catching it at 20 is far cheaper than at 62. Keep `GG_BUILD_TIMEOUT_SECS=600`. Get the
+entry-relative `embed_file` paths right for all 62. Keep SQLite OFF the embed path.
+**Seed-fix alternative (review pass-1 M5) — correctly deferred, and it's NOT just "low-risk recursion":**
+`embed_file` resolves relative to a single per-compilation `ctx.source_dir` (`meta.rs:1095`), not
+per-module, so making imported-module embeds work without a per-module source_dir is a path-resolution
+footgun that must land in BOTH compilers without bootstrap divergence. Driver.gg-as-home is genuinely the
+lower-risk choice.
 
 ## Downstream (NOT this brief)
 - **Inc-3:** embed `lib/std/*.gg` via the SAME `embed_file` mechanism (same entry-module constraint),
