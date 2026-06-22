@@ -88,6 +88,15 @@ only — programs with `from std…` need Inc-3's `lib/std` embedding; note that
 - `cargo test --lib`; `self_host_runtime` 0 regressed; `lowerer_comparison`/`c_emit_comparison` no
   regression (the change is in the runtime-read path + driver, structurally neutral for emitted output
   of well-formed programs — the embedded bytes are identical to the disk bytes).
+- **BYTE-IDENTITY verify (review pass-3 — close the escaping loop):** after the embed lands, diff a
+  relocatable build's emitted preamble (embedded path, env unset + no flag) against a
+  `--runtime-dir=<disk>` build's preamble — they MUST be byte-identical (both are `read_file` of the
+  same bytes). This confirms the UTF-8 round-trip through the ASCII-only `escape_c_string`
+  (`lir_codegen.gg:359-362`, passes non-ASCII through) is faithful for the ~25K non-ASCII comment-header
+  bytes across 59/62 files — proven safe today by the 26 existing such literals (3 already emitted via
+  `escape_c_string`, bootstrap-green), but verify for the full 62. (Minor latitude: `embedded.contains(name)`
+  works on the bare `name` — all 62 keys are bare basenames, the 3 `../` special reads miss either way —
+  so a `basename()` helper isn't strictly required.)
 
 ## Riskiest part
 The 3-state precedence (B1) + the dict-miss-fallback (B2) — get those wrong and you ship a no-op `--runtime-dir`
