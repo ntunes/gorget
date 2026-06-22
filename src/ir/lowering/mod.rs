@@ -69,7 +69,8 @@ pub struct LoweringOptions {
     pub scheduler_mode: Option<crate::ir::SchedulerMode>,
     /// Release build (`--release`): compile the generated C at `-O2` instead of
     /// the `-O0` default. Affects only the backend `cc`/`llc` opt level — never
-    /// program behavior. Default `false` keeps the debuggable `-O0 -g` path.
+    /// program behavior. Default `false` keeps the implicit `-O0` path (no `-g`
+    /// unless `--sanitize`).
     pub release: bool,
 }
 
