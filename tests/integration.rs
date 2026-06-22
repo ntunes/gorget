@@ -4023,6 +4023,24 @@ fn snag50_match_as_expr_arm_locals_leak() {
 //    path (the error short-circuits to a top-level `catch`).
 
 #[test]
+fn throws_expr_body_tail() {
+    // Expression-body `throws` fn (`int inc(int x) throws String: x + 1`) must
+    // wrap its tail value in `Ok(...)` so it matches the `Result[T, E]` return
+    // slot. The bug: the expr-body lowering arm assigned the bare `T` straight
+    // into the `Result` slot, emitting ill-typed C (the block-body equivalent
+    // with an explicit `return` wrapped fine via `lower_return`).
+    //
+    // Coverage: a plain arithmetic tail (`inc`); a `throws`-call FORWARDER
+    // (`forward(x): risky(x)`) that exercises the double-wrap subtlety — the
+    // inner call auto-propagates (unwrapping to `T`), and the expr-body arm
+    // re-wraps it exactly once (never double-`Ok`); the error path (`risky(-3)`
+    // throws, propagates through `forward`, caught at the call site); and a
+    // resource-typed tail (`greet` returns `String`) exercising the Move-mode
+    // return-slot assign on the wrapped Ok value.
+    run_gg("throws_expr_body_tail.gg", "11\n10\n-1\nHi, Bee");
+}
+
+#[test]
 fn throws_autoprop_binop_operand() {
     // `return to_n(x) + 5` — throwing call as a binary-op operand.
     run_gg("throws_autoprop_binop_operand.gg", "15\n-99");

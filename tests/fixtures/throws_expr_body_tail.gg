@@ -1,0 +1,35 @@
+# Expression-body `throws` fn: the tail value must be wrapped in `Ok(...)` so
+# it matches the function's `Result[T, E]` return slot. Before the fix the
+# bare `T` was assigned straight into the `Result` slot, emitting ill-typed C
+# (the block-body equivalent compiled fine — the expr-body path didn't wrap).
+
+# Plain expr-body throws fn with an arithmetic tail value.
+int inc(int x) throws String: x + 1
+
+# Expr-body throws fn that throws on the error path (block body for the throw).
+int risky(int x) throws String:
+    if x < 0:
+        throw "negative"
+    return x * 2
+
+# Expr-body throws fn that FORWARDS another throws call. The inner call
+# auto-propagates (unwrapping to the inner `T`); this arm must re-wrap the
+# unwrapped value exactly ONCE — never double-`Ok`.
+int forward(int x) throws String: risky(x)
+
+# Expr-body throws fn returning a resource type (String) — exercises the
+# Move-mode return-slot assign on the wrapped Ok value.
+String greet(String name) throws String: "Hi, " + name
+
+void main():
+    int a = inc(10) catch (e): -1
+    print(a)
+
+    int b = forward(5) catch (e): -1
+    print(b)
+
+    int c = forward(-3) catch (e): -1
+    print(c)
+
+    String g = greet("Bee") catch (e): "err"
+    print(g)

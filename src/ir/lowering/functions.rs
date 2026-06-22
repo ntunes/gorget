@@ -50,6 +50,42 @@ fn assign_to_return_slot(
     builder.assign_mode(mode, Place::local(LocalId(0)), operand);
 }
 
+/// Expression-body `throws` fn: wrap the tail value in `Ok(...)` so it matches
+/// the function's `Result[T, E]` return slot.
+///
+/// The declared return type of an expr-body `throws` fn is the *unwrapped* `T`
+/// (the typechecker views the tail against `T`, rejecting an explicit
+/// `Ok(...)`/`Error(...)` tail), but the return slot `_0` is the `Result[T, E]`
+/// (`ret_type`). Without this wrap the bare `T` is assigned straight into the
+/// `Result` slot → ill-typed C. The block-body path wraps in `lower_return`,
+/// and the `is_main && throws` arm in `lower_function` does the same; this
+/// centralizes the wrap so every expr-body arm (`lower_function`,
+/// `lower_equip_method`) routes through one site.
+///
+/// Auto-prop has already run inside `lower_expr` (the centralized hook), so a
+/// tail `throws`-call operand arrives here as the unwrapped `T` — this wraps it
+/// exactly once. The defensive `op_ty == ret_type` guard skips the wrap if the
+/// operand is somehow already the function's `Result` type (no double-`Ok`).
+fn wrap_expr_tail_in_ok(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    operand: Operand,
+    ret_type: TypeId,
+    throws: bool,
+) -> Operand {
+    if !throws {
+        return operand;
+    }
+    let op_ty = super::exprs::infer_operand_type_full(ctx, &operand, builder);
+    if op_ty == ret_type {
+        return operand;
+    }
+    let type_name = ctx.type_registry.type_name(ret_type)
+        .unwrap_or_else(|| "Result".to_string());
+    let ok_val = builder.enum_init(type_name, "Ok", ret_type, vec![operand]);
+    FunctionBuilder::copy(ok_val)
+}
+
 /// Public wrapper around `all_return_nominals_registered` for
 /// cross-module callers (non-generic trait default emission in
 /// `traits.rs` reuses the same demand-gate heuristic).
@@ -862,6 +898,7 @@ pub fn lower_function(
                 operand = ctx.ensure_owned_at_boundary(&mut builder, operand, expr_span, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
                 operand = ctx.auto_deref_at_return(&mut builder, operand, ret_type);
             }
+            operand = wrap_expr_tail_in_ok(ctx, &mut builder, operand, ret_type, func.throws.is_some());
             let returned_local = match &operand {
                 Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
                     Some(place.local)
@@ -1137,6 +1174,7 @@ pub fn lower_equip_method(
                 operand = ctx.ensure_owned_at_boundary(&mut builder, operand, expr_span, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
                 operand = ctx.auto_deref_at_return(&mut builder, operand, ret_type);
             }
+            operand = wrap_expr_tail_in_ok(ctx, &mut builder, operand, ret_type, method.throws.is_some());
             let returned_local = match &operand {
                 Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
                     Some(place.local)
