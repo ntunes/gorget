@@ -3961,11 +3961,19 @@ fn emit_inst(
                     writeln!(out, "  %v{} = bitcast ptr %{payload_ptr} to ptr", dst.0).unwrap();
                 } else {
                     // Compute byte offset: accumulate sizes of preceding variant fields.
-                    // Find the variant prefix (e.g., "Triangle") and sum sizes of fields 0..idx.
+                    // Find the variant name (e.g., "Triangle") and sum sizes of fields 0..idx.
+                    // Each field is named `<Variant>_<idx>`; derive the owning variant by
+                    // stripping the trailing `_<idx>` and compare for EXACT equality. A
+                    // starts_with test here would wrongly group a variant whose name is a
+                    // prefix of another (GICall ⊂ GICallExtern, GIDeref ⊂ GIDerefStore),
+                    // counting the longer variant's fields into the shorter's offsets and
+                    // writing payload past the struct. Mirrors the C backend's exact
+                    // variant grouping (src/backend/c_lir/mod.rs).
                     let prefix = field_name.rsplitn(2, '_').nth(1).unwrap_or(field_name);
                     let mut byte_offset = 0usize;
                     for f in &sdef.fields[1..] {
-                        if f.0.starts_with(prefix) {
+                        let f_variant = f.0.rsplitn(2, '_').nth(1).unwrap_or(f.0.as_str());
+                        if f_variant == prefix {
                             let f_idx = f.0.rsplit('_').next()
                                 .and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
                             if f_idx < variant_field_idx {

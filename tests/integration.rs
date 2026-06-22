@@ -9630,6 +9630,26 @@ fn pattern_destructure_loop() {
 }
 
 #[test]
+fn prefix_enum() {
+    // Both-backend parity guard for the LLVM union-payload field-offset bug:
+    // an enum whose variant name is a strict prefix of another (Call ⊂
+    // CallExtern) must read/write its payload fields at the right offsets on
+    // both backends. The load-bearing bite-guard is
+    // self_host_no_unnamed_collection_struct (the LLVM-compiled self-host
+    // driver SIGSEGVs on its own GIR Call/CallExtern enum without the fix);
+    // this is the small parity smoke-test for the codegen path.
+    run_gg(
+        "prefix_enum.gg",
+        "\
+Call name=frobnicate len=2
+10
+20
+CallExtern name=syscall len=1
+99",
+    );
+}
+
+#[test]
 fn csv_basic() {
     run_gg(
         "csv_basic.gg",
@@ -17112,15 +17132,12 @@ fn self_host_runtime() {
 #[serial(self_host_lowerer_driver)]
 fn self_host_no_unnamed_collection_struct() {
     // Backend-independent structural check on the self-host's EMITTED C (no
-    // unnamed-field collection struct). The C-compiled driver produces identical
-    // emitted C, so the C-backend run fully covers it. Skip under LLVM: the
-    // LLVM-COMPILED self-host driver panics `allocation failed` on tensor_basic
-    // (a pre-existing LLVM-backend gap, orthogonal to this check — no prior test
-    // ran the LLVM-compiled driver on a corpus fixture; bootstrap_fixed_point
-    // runs it only on the self-host source). Tracked in TODO.md.
-    if skip_under_llvm() {
-        return;
-    }
+    // unnamed-field collection struct). Runs the self-host driver — built with
+    // the active backend — on representative corpus fixtures and inspects the C
+    // it emits. This also doubles as the bite-guard for the LLVM union-payload
+    // field-offset fix: before that fix, the LLVM-COMPILED driver SIGSEGV'd on
+    // its own GIR Call/CallExtern enum (a variant name being a strict prefix of
+    // another) while processing tensor_basic/ecs_basics/type_alias_struct_ctor.
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
