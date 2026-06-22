@@ -28,6 +28,166 @@ from std.conv import int_to_str
 from std.io import stderr
 from std.thread import thread_spawn, Thread
 
+# ── Inc-2: embedded C runtime (relocatability) ───────────────────────────────
+# Bake the 62 `src/backend/c/runtime/*.c` files into THIS binary via `embed_file`
+# (Gorget's `include_str!`), so a built `gg-selfhost` carries its runtime and
+# `build hello.gg -o hello && ./hello` works from ANY cwd with NO env vars (the
+# emitted preamble reads these embedded bytes instead of the on-disk runtime dir).
+#
+# WHY HERE (the entry-module constraint): the meta-const pass evaluates
+# `embed_file` consts ONLY in the ENTRY module (`src/semantic/meta.rs:476-478`
+# iterates top-level `module.items`; imported modules are nested in `Item::Module`
+# wrappers it does NOT descend into). driver.gg IS the entry, so the table + its
+# builder MUST live here, not in lir_codegen.gg. `build_embedded_runtime()` is
+# called by the 3 `emit_runtime_preamble` sites below and passed down as
+# `&embedded`; lir_codegen.gg's `read_runtime` consults it (3-state precedence:
+# --runtime-dir flag > GG_RUNTIME_DIR env > embedded; a dict-MISS — the three
+# `../stb_image.h`/`../sqlite3/...` reads not in this 62-set — falls through to
+# disk). Paths are entry-relative (driver.gg lives at
+# tests/fixtures/self_host_lowerer/, so ../../../ reaches the repo root).
+#
+# SQLite (8.8 MB), SDL, stb_image are vendored OUTSIDE runtime/ and stay
+# DISK-ONLY (embedding sqlite3.c would balloon this source + the bootstrap) —
+# Inc-4 handles SQLite separately.
+#
+# ⚠ LINT-PINNED: `tests/lints.rs::self_host_embedded_runtime_table_count` asserts
+# this table has exactly `ls src/backend/c/runtime/*.c | wc -l` entries, so a NEW
+# runtime file is FORCED into the table (else it'd silently fall back to disk and
+# break relocatability). When you add a runtime .c, add BOTH its `RT_` const and
+# its `d[...] =` row, then bump the lint.
+meta String RT_async_runtime = embed_file("../../../src/backend/c/runtime/async_runtime.c")
+meta String RT_audio_runtime = embed_file("../../../src/backend/c/runtime/audio_runtime.c")
+meta String RT_blocking_pool_runtime = embed_file("../../../src/backend/c/runtime/blocking_pool_runtime.c")
+meta String RT_bytes_f32_runtime = embed_file("../../../src/backend/c/runtime/bytes_f32_runtime.c")
+meta String RT_bytes_runtime = embed_file("../../../src/backend/c/runtime/bytes_runtime.c")
+meta String RT_channel_runtime = embed_file("../../../src/backend/c/runtime/channel_runtime.c")
+meta String RT_compress_runtime = embed_file("../../../src/backend/c/runtime/compress_runtime.c")
+meta String RT_crypto_runtime = embed_file("../../../src/backend/c/runtime/crypto_runtime.c")
+meta String RT_gl_runtime = embed_file("../../../src/backend/c/runtime/gl_runtime.c")
+meta String RT_hot_reload_runtime = embed_file("../../../src/backend/c/runtime/hot_reload_runtime.c")
+meta String RT_image_runtime = embed_file("../../../src/backend/c/runtime/image_runtime.c")
+meta String RT_main_waker_runtime = embed_file("../../../src/backend/c/runtime/main_waker_runtime.c")
+meta String RT_metal_runtime = embed_file("../../../src/backend/c/runtime/metal_runtime.c")
+meta String RT_mutex_runtime = embed_file("../../../src/backend/c/runtime/mutex_runtime.c")
+meta String RT_panic_normal = embed_file("../../../src/backend/c/runtime/panic_normal.c")
+meta String RT_panic_test = embed_file("../../../src/backend/c/runtime/panic_test.c")
+meta String RT_process_runtime = embed_file("../../../src/backend/c/runtime/process_runtime.c")
+meta String RT_process_spawn_runtime = embed_file("../../../src/backend/c/runtime/process_spawn_runtime.c")
+meta String RT_reactor_runtime = embed_file("../../../src/backend/c/runtime/reactor_runtime.c")
+meta String RT_runtime_alloc_report = embed_file("../../../src/backend/c/runtime/runtime_alloc_report.c")
+meta String RT_runtime_arena_alloc = embed_file("../../../src/backend/c/runtime/runtime_arena_alloc.c")
+meta String RT_runtime_args = embed_file("../../../src/backend/c/runtime/runtime_args.c")
+meta String RT_runtime_array = embed_file("../../../src/backend/c/runtime/runtime_array.c")
+meta String RT_runtime_checked_arith = embed_file("../../../src/backend/c/runtime/runtime_checked_arith.c")
+meta String RT_runtime_clone_stats = embed_file("../../../src/backend/c/runtime/runtime_clone_stats.c")
+meta String RT_runtime_env = embed_file("../../../src/backend/c/runtime/runtime_env.c")
+meta String RT_runtime_error = embed_file("../../../src/backend/c/runtime/runtime_error.c")
+meta String RT_runtime_fallback_alloc = embed_file("../../../src/backend/c/runtime/runtime_fallback_alloc.c")
+meta String RT_runtime_file = embed_file("../../../src/backend/c/runtime/runtime_file.c")
+meta String RT_runtime_fixedbuf_alloc = embed_file("../../../src/backend/c/runtime/runtime_fixedbuf_alloc.c")
+meta String RT_runtime_io = embed_file("../../../src/backend/c/runtime/runtime_io.c")
+meta String RT_runtime_map = embed_file("../../../src/backend/c/runtime/runtime_map.c")
+meta String RT_runtime_math = embed_file("../../../src/backend/c/runtime/runtime_math.c")
+meta String RT_runtime_parse = embed_file("../../../src/backend/c/runtime/runtime_parse.c")
+meta String RT_runtime_path = embed_file("../../../src/backend/c/runtime/runtime_path.c")
+meta String RT_runtime_pool_alloc = embed_file("../../../src/backend/c/runtime/runtime_pool_alloc.c")
+meta String RT_runtime_preamble = embed_file("../../../src/backend/c/runtime/runtime_preamble.c")
+meta String RT_runtime_set = embed_file("../../../src/backend/c/runtime/runtime_set.c")
+meta String RT_runtime_sort = embed_file("../../../src/backend/c/runtime/runtime_sort.c")
+meta String RT_runtime_string = embed_file("../../../src/backend/c/runtime/runtime_string.c")
+meta String RT_runtime_string_array = embed_file("../../../src/backend/c/runtime/runtime_string_array.c")
+meta String RT_runtime_string_base_ops = embed_file("../../../src/backend/c/runtime/runtime_string_base_ops.c")
+meta String RT_runtime_string_extended = embed_file("../../../src/backend/c/runtime/runtime_string_extended.c")
+meta String RT_runtime_tlsf_alloc = embed_file("../../../src/backend/c/runtime/runtime_tlsf_alloc.c")
+meta String RT_runtime_tostr = embed_file("../../../src/backend/c/runtime/runtime_tostr.c")
+meta String RT_runtime_tracking_alloc = embed_file("../../../src/backend/c/runtime/runtime_tracking_alloc.c")
+meta String RT_scheduler_inline_runtime = embed_file("../../../src/backend/c/runtime/scheduler_inline_runtime.c")
+meta String RT_scheduler_pool_runtime = embed_file("../../../src/backend/c/runtime/scheduler_pool_runtime.c")
+meta String RT_scheduler_single_runtime = embed_file("../../../src/backend/c/runtime/scheduler_single_runtime.c")
+meta String RT_scheduler_thread_runtime = embed_file("../../../src/backend/c/runtime/scheduler_thread_runtime.c")
+meta String RT_sdl_runtime = embed_file("../../../src/backend/c/runtime/sdl_runtime.c")
+meta String RT_server_socket_runtime = embed_file("../../../src/backend/c/runtime/server_socket_runtime.c")
+meta String RT_shared_runtime = embed_file("../../../src/backend/c/runtime/shared_runtime.c")
+meta String RT_socket_runtime = embed_file("../../../src/backend/c/runtime/socket_runtime.c")
+meta String RT_sync_runtime = embed_file("../../../src/backend/c/runtime/sync_runtime.c")
+meta String RT_task_common = embed_file("../../../src/backend/c/runtime/task_common.c")
+meta String RT_task_group_runtime = embed_file("../../../src/backend/c/runtime/task_group_runtime.c")
+meta String RT_thread_runtime = embed_file("../../../src/backend/c/runtime/thread_runtime.c")
+meta String RT_tls_server_runtime = embed_file("../../../src/backend/c/runtime/tls_server_runtime.c")
+meta String RT_tls_socket_runtime = embed_file("../../../src/backend/c/runtime/tls_socket_runtime.c")
+meta String RT_trace_runtime = embed_file("../../../src/backend/c/runtime/trace_runtime.c")
+meta String RT_udp_socket_runtime = embed_file("../../../src/backend/c/runtime/udp_socket_runtime.c")
+
+# Build the basename → contents map from the embedded consts above. Each `RT_X`
+# identifier is substituted with the file's bytes by the meta pass (Rust:
+# meta.rs str_consts; self-host: meta.gg subst_expr EIdentifier→EStringLiteral),
+# so this is a pure compile-time-inlined Dict build — no runtime file I/O.
+Dict[String, String] build_embedded_runtime():
+    Dict[String, String] d = {}
+    d["async_runtime.c"] = RT_async_runtime
+    d["audio_runtime.c"] = RT_audio_runtime
+    d["blocking_pool_runtime.c"] = RT_blocking_pool_runtime
+    d["bytes_f32_runtime.c"] = RT_bytes_f32_runtime
+    d["bytes_runtime.c"] = RT_bytes_runtime
+    d["channel_runtime.c"] = RT_channel_runtime
+    d["compress_runtime.c"] = RT_compress_runtime
+    d["crypto_runtime.c"] = RT_crypto_runtime
+    d["gl_runtime.c"] = RT_gl_runtime
+    d["hot_reload_runtime.c"] = RT_hot_reload_runtime
+    d["image_runtime.c"] = RT_image_runtime
+    d["main_waker_runtime.c"] = RT_main_waker_runtime
+    d["metal_runtime.c"] = RT_metal_runtime
+    d["mutex_runtime.c"] = RT_mutex_runtime
+    d["panic_normal.c"] = RT_panic_normal
+    d["panic_test.c"] = RT_panic_test
+    d["process_runtime.c"] = RT_process_runtime
+    d["process_spawn_runtime.c"] = RT_process_spawn_runtime
+    d["reactor_runtime.c"] = RT_reactor_runtime
+    d["runtime_alloc_report.c"] = RT_runtime_alloc_report
+    d["runtime_arena_alloc.c"] = RT_runtime_arena_alloc
+    d["runtime_args.c"] = RT_runtime_args
+    d["runtime_array.c"] = RT_runtime_array
+    d["runtime_checked_arith.c"] = RT_runtime_checked_arith
+    d["runtime_clone_stats.c"] = RT_runtime_clone_stats
+    d["runtime_env.c"] = RT_runtime_env
+    d["runtime_error.c"] = RT_runtime_error
+    d["runtime_fallback_alloc.c"] = RT_runtime_fallback_alloc
+    d["runtime_file.c"] = RT_runtime_file
+    d["runtime_fixedbuf_alloc.c"] = RT_runtime_fixedbuf_alloc
+    d["runtime_io.c"] = RT_runtime_io
+    d["runtime_map.c"] = RT_runtime_map
+    d["runtime_math.c"] = RT_runtime_math
+    d["runtime_parse.c"] = RT_runtime_parse
+    d["runtime_path.c"] = RT_runtime_path
+    d["runtime_pool_alloc.c"] = RT_runtime_pool_alloc
+    d["runtime_preamble.c"] = RT_runtime_preamble
+    d["runtime_set.c"] = RT_runtime_set
+    d["runtime_sort.c"] = RT_runtime_sort
+    d["runtime_string.c"] = RT_runtime_string
+    d["runtime_string_array.c"] = RT_runtime_string_array
+    d["runtime_string_base_ops.c"] = RT_runtime_string_base_ops
+    d["runtime_string_extended.c"] = RT_runtime_string_extended
+    d["runtime_tlsf_alloc.c"] = RT_runtime_tlsf_alloc
+    d["runtime_tostr.c"] = RT_runtime_tostr
+    d["runtime_tracking_alloc.c"] = RT_runtime_tracking_alloc
+    d["scheduler_inline_runtime.c"] = RT_scheduler_inline_runtime
+    d["scheduler_pool_runtime.c"] = RT_scheduler_pool_runtime
+    d["scheduler_single_runtime.c"] = RT_scheduler_single_runtime
+    d["scheduler_thread_runtime.c"] = RT_scheduler_thread_runtime
+    d["sdl_runtime.c"] = RT_sdl_runtime
+    d["server_socket_runtime.c"] = RT_server_socket_runtime
+    d["shared_runtime.c"] = RT_shared_runtime
+    d["socket_runtime.c"] = RT_socket_runtime
+    d["sync_runtime.c"] = RT_sync_runtime
+    d["task_common.c"] = RT_task_common
+    d["task_group_runtime.c"] = RT_task_group_runtime
+    d["thread_runtime.c"] = RT_thread_runtime
+    d["tls_server_runtime.c"] = RT_tls_server_runtime
+    d["tls_socket_runtime.c"] = RT_tls_socket_runtime
+    d["trace_runtime.c"] = RT_trace_runtime
+    d["udp_socket_runtime.c"] = RT_udp_socket_runtime
+    return d
+
 # A (#14): run the compile on a 512MB opt-in stack so the compiler tolerates
 # deep expression lowering without overflowing the OS-default ~8MB main thread
 # (the (B) parse-time limit caps input at 128; this gives the lowerer headroom).
@@ -91,6 +251,12 @@ void compile_main():
     # the preamble read does not depend on cwd. read_file returns "" silently on
     # a bad path, so read_runtime (in lir_codegen.gg) fails loud on an empty read.
     String runtime_dir = "src/backend/c/runtime"
+    # Inc-2: `--runtime-dir=` FLAG forces a disk read (overrides the embedded
+    # runtime). The legacy path is FLAG-ONLY — it never reads GG_RUNTIME_DIR (the
+    # standalone `run_build_mode` path does), so `explicit` here tracks only the
+    # flag. Output is byte-identical either way at the default dir: flag→disk at
+    # `src/backend/c/runtime` reads the same bytes the embed baked in.
+    bool runtime_dir_explicit = false
     int ai = 2
     while ai < cmd_args.len():
         String arg = cmd_args.get(ai).unwrap()
@@ -104,6 +270,7 @@ void compile_main():
             emit_lir = true
         if arg.starts_with("--runtime-dir="):
             runtime_dir = arg.slice(14, arg.len())
+            runtime_dir_explicit = true
         ai += 1
     # Phase-timer gate: mirror the GG_VALIDATE_PASSES idiom in validate.gg:352.
     # OFF by default (env unset → getenv returns "" → _timing false) so every
@@ -240,7 +407,8 @@ void compile_main():
             # emit_lir_helpers) THEN the body. Order is preamble-then-body,
             # matching Rust's splice boundary (the runtime precedes the body's
             # user typedefs). No external splice needed downstream.
-            String _pre = emit_runtime_preamble(&lir, runtime_dir)
+            Dict[String, String] _embedded = build_embedded_runtime()
+            String _pre = emit_runtime_preamble(&lir, runtime_dir, &_embedded, runtime_dir_explicit)
             String _body = generate_c(&lir)
             _t1 = time_ms()
             if _timing: print("PHASE generate_c " + int_to_str(_t1 - _tp) + " ms", file=stderr)
@@ -308,6 +476,11 @@ void run_build_mode(Vector[String] cmd_args, bool do_run):
     # Defaults: env vars (set by the orchestrator) then repo-relative fallbacks.
     String runtime_dir = getenv("GG_RUNTIME_DIR")
     String lib_dir = getenv("GG_LIB_DIR")
+    # Inc-2 3-state precedence: an EXPLICIT runtime dir (GG_RUNTIME_DIR env set,
+    # OR a --runtime-dir= flag below) forces a DISK read in `read_runtime`;
+    # otherwise the preamble uses the EMBEDDED runtime (relocatable). Seed from
+    # the env read here; the flag-parse loop sets it true if --runtime-dir= is given.
+    bool runtime_dir_explicit = runtime_dir != ""
     if runtime_dir == "":
         runtime_dir = "src/backend/c/runtime"
     if lib_dir == "":
@@ -344,6 +517,7 @@ void run_build_mode(Vector[String] cmd_args, bool do_run):
             backend = arg.slice(10, arg.len())
         elif arg.starts_with("--runtime-dir="):
             runtime_dir = arg.slice(14, arg.len())
+            runtime_dir_explicit = true
         elif arg.starts_with("--lib-dir="):
             lib_dir = arg.slice(10, arg.len())
         elif not arg.starts_with("-"):
@@ -420,11 +594,15 @@ void run_build_mode(Vector[String] cmd_args, bool do_run):
     if emit_c_body:
         print(generate_c(&lir))
         return
+    # Inc-2: the embedded runtime table (consulted by read_runtime when no
+    # explicit --runtime-dir/GG_RUNTIME_DIR forces a disk read). Built once for
+    # both the --emit-c dump and the cc/link path below.
+    Dict[String, String] _embedded = build_embedded_runtime()
     if emit_c_full:
-        print(emit_runtime_preamble(&lir, runtime_dir) + generate_c(&lir))
+        print(emit_runtime_preamble(&lir, runtime_dir, &_embedded, runtime_dir_explicit) + generate_c(&lir))
         return
     # Emit full C (runtime preamble + body).
-    String full_c = emit_runtime_preamble(&lir, runtime_dir) + generate_c(&lir)
+    String full_c = emit_runtime_preamble(&lir, runtime_dir, &_embedded, runtime_dir_explicit) + generate_c(&lir)
 
     # ── Write C → temp file ──────────────────────────────────────────────────
     write_file(c_path, full_c)

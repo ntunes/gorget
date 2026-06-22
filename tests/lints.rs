@@ -2548,3 +2548,80 @@ fn collection_base_names_single_source() {
         );
     }
 }
+
+/// Ratchet (CLAUDE.md "convert a recurring bug class into an executable guard"):
+/// the self-host's embedded C-runtime table in
+/// `tests/fixtures/self_host_lowerer/driver.gg` (Inc-2 relocatability) must
+/// carry EXACTLY one entry per `src/backend/c/runtime/*.c` file. A new runtime
+/// `.c` that lands WITHOUT being added to the table would silently fall back to
+/// the on-disk read in `read_runtime` — breaking relocatability for any program
+/// that needs it (a `gg-selfhost` built without that file's bytes can't compile
+/// a program from a foreign cwd). This pins the table to the directory so the
+/// next runtime file is FORCED into BOTH the `meta String RT_*` const list and
+/// the `build_embedded_runtime` dict.
+///
+/// **If this fails because a runtime .c was ADDED:** add its
+/// `meta String RT_<basename> = embed_file("../../../src/backend/c/runtime/<basename>.c")`
+/// const AND its `d["<basename>.c"] = RT_<basename>` row in driver.gg, then this
+/// passes automatically (the lint counts the directory, not a hardcoded N).
+/// **If a runtime .c was REMOVED:** delete its const + dict row to match.
+///
+/// SQLite (`../sqlite3/*`), stb_image (`../stb_image.h`), SDL/GL/metal external
+/// headers are vendored OUTSIDE `runtime/` and intentionally stay disk-only
+/// (Inc-4), so they are NOT in this set and NOT counted here.
+#[test]
+fn self_host_embedded_runtime_table_count() {
+    // Count the canonical source: every *.c directly under src/backend/c/runtime.
+    let runtime_dir = Path::new("src/backend/c/runtime");
+    let mut runtime_files = 0usize;
+    let entries = fs::read_dir(runtime_dir)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", runtime_dir.display()));
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("c") {
+            runtime_files += 1;
+        }
+    }
+    assert!(
+        runtime_files > 0,
+        "found 0 *.c files under {} — wrong cwd or a moved runtime dir?",
+        runtime_dir.display(),
+    );
+
+    let driver = fs::read_to_string("tests/fixtures/self_host_lowerer/driver.gg")
+        .expect("cannot read self_host_lowerer/driver.gg");
+
+    // The embed-const table: `meta String RT_<name> = embed_file("...runtime/<name>.c")`.
+    let const_count = driver
+        .lines()
+        .filter(|l| {
+            let t = l.trim_start();
+            t.starts_with("meta String RT_") && t.contains("embed_file(")
+        })
+        .count();
+
+    // The dict-build rows: `d["<name>.c"] = RT_<name>` inside build_embedded_runtime.
+    let insert_count = driver
+        .lines()
+        .filter(|l| {
+            let t = l.trim_start();
+            t.starts_with("d[\"") && t.contains("= RT_") && t.contains(".c\"]")
+        })
+        .count();
+
+    assert_eq!(
+        const_count, runtime_files,
+        "embedded-runtime `meta String RT_*` const count ({const_count}) != number of \
+         src/backend/c/runtime/*.c files ({runtime_files}). A runtime .c was added or \
+         removed without updating driver.gg's embed table — the file would silently \
+         fall back to the disk read, breaking relocatability. Add/remove its `RT_` \
+         const (and its dict row) to match.",
+    );
+    assert_eq!(
+        insert_count, runtime_files,
+        "embedded-runtime dict-build `d[\"X.c\"] = RT_X` row count ({insert_count}) != \
+         number of src/backend/c/runtime/*.c files ({runtime_files}). Each `RT_` const \
+         must be inserted into the `build_embedded_runtime` map. Add/remove the matching \
+         dict row.",
+    );
+}

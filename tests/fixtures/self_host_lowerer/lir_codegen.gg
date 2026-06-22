@@ -6982,10 +6982,27 @@ String generate_c(LirModule &m):
 # pointer, which works. Emit-once flags are plain function-local bools.
 # ════════════════════════════════════════════════════════════════════
 
-# Read a runtime `.c` file and FAIL LOUD on an empty/missing read. read_file
-# returns "" silently on a bad path; every runtime `.c` is non-empty, so an
-# empty read ALWAYS means a wrong path → exit(1), don't emit a broken preamble.
-String read_runtime(String rdir, String name):
+# Read a runtime `.c` file, preferring the EMBEDDED copy (Inc-2 relocatability)
+# so a `gg-selfhost` built with the runtime baked in (`embed_file` consts in
+# driver.gg → `build_embedded_runtime`) carries its runtime and `build foo.gg`
+# works from ANY cwd with NO env vars. 3-STATE precedence (mirrors Rust's
+# GORGET_RESOURCES_PATH disk-override):
+#   explicit (--runtime-dir flag OR GG_RUNTIME_DIR env set) → DISK, exactly as
+#     before (the test harness's 9 --runtime-dir= sites + the orchestrator's
+#     absolute env paths must still read from disk, NOT the embed);
+#   else → look the bare basename up in `embedded`: HIT use it, MISS fall
+#     through to disk (REQUIRED — `read_runtime` is also called with the three
+#     `../stb_image.h` / `../sqlite3/...` reads NOT in the 62-set; a dict-only
+#     read returns empty → exit(1) → breaks every SDL/SQLite/image fixture.
+#     An import-free hello.gg never triggers those feature-gated reads, so it
+#     stays relocatable).
+# read_file returns "" silently on a bad path; every runtime `.c` is non-empty,
+# so an empty DISK read ALWAYS means a wrong path → exit(1), don't emit a broken
+# preamble.
+String read_runtime(String rdir, String name, Dict[String, String] &embedded, bool explicit):
+    if not explicit:
+        if embedded.contains(name):
+            return embedded.get(name).unwrap()
     String s = read_file(rdir + "/" + name)
     if s.byte_len() == 0:
         print("error: runtime file " + name + " empty or missing at " + rdir, file=stderr)
@@ -7177,50 +7194,55 @@ bool module_has_test_runner(LirModule &m):
         i += 1
     return false
 
-String emit_runtime_preamble(LirModule &m, String runtime_dir):
+# `embedded` = the runtime `.c` table baked into the driver via `embed_file`
+# (built in driver.gg's `build_embedded_runtime`, passed by the 3 callers so the
+# entry-module meta-const constraint holds — the meta pass only evaluates
+# `embed_file` consts in the ENTRY module, never imported ones). `explicit` =
+# the caller saw a --runtime-dir flag OR GG_RUNTIME_DIR env (→ force disk).
+String emit_runtime_preamble(LirModule &m, String runtime_dir, Dict[String, String] &embedded, bool explicit):
     String rdir = runtime_dir
     Vector[String] n = build_all_call_names(&m)
     StrBuf buf = sb_new()
 
     # ── Minimal preamble (headers, allocator, scoped alloc stubs) ──
-    sb_push(&buf, read_runtime(rdir, "runtime_preamble.c"))
+    sb_push(&buf, read_runtime(rdir, "runtime_preamble.c", &embedded, explicit))
 
     # ── Conditional allocators ──
     if cn_has_prefix(&n, "gorget_arena_") or cn_has_prefix(&n, "GorgetArena"):
-        sb_push(&buf, read_runtime(rdir, "runtime_arena_alloc.c"))
+        sb_push(&buf, read_runtime(rdir, "runtime_arena_alloc.c", &embedded, explicit))
     if cn_has_prefix(&n, "gorget_tracking_"):
-        sb_push(&buf, read_runtime(rdir, "runtime_tracking_alloc.c"))
+        sb_push(&buf, read_runtime(rdir, "runtime_tracking_alloc.c", &embedded, explicit))
     if cn_has_prefix(&n, "gorget_pool_") or cn_has_prefix(&n, "GorgetPool"):
-        sb_push(&buf, read_runtime(rdir, "runtime_pool_alloc.c"))
+        sb_push(&buf, read_runtime(rdir, "runtime_pool_alloc.c", &embedded, explicit))
     if cn_has_prefix(&n, "gorget_tlsf_"):
-        sb_push(&buf, read_runtime(rdir, "runtime_tlsf_alloc.c"))
+        sb_push(&buf, read_runtime(rdir, "runtime_tlsf_alloc.c", &embedded, explicit))
     if cn_has_prefix(&n, "gorget_fba_") or cn_has_prefix(&n, "gorget_fixed_buffer_"):
-        sb_push(&buf, read_runtime(rdir, "runtime_fixedbuf_alloc.c"))
+        sb_push(&buf, read_runtime(rdir, "runtime_fixedbuf_alloc.c", &embedded, explicit))
     if cn_has_prefix(&n, "gorget_fallback_"):
-        sb_push(&buf, read_runtime(rdir, "runtime_fallback_alloc.c"))
+        sb_push(&buf, read_runtime(rdir, "runtime_fallback_alloc.c", &embedded, explicit))
 
     # ── String types and operations ──
-    sb_push(&buf, read_runtime(rdir, "runtime_string.c"))
+    sb_push(&buf, read_runtime(rdir, "runtime_string.c", &embedded, explicit))
 
     # Extended string methods (unicode tables, search, split/replace/trim/etc.)
     if needs_string_extended(&n):
-        sb_push(&buf, read_runtime(rdir, "runtime_string_extended.c"))
+        sb_push(&buf, read_runtime(rdir, "runtime_string_extended.c", &embedded, explicit))
 
     # Base string operations (Str-aware concat, append, cstr conversion)
-    sb_push(&buf, read_runtime(rdir, "runtime_string_base_ops.c"))
+    sb_push(&buf, read_runtime(rdir, "runtime_string_base_ops.c", &embedded, explicit))
 
     # ── Alloc report (test/bench mode only) ──
     bool is_test_or_bench = m.test_fns.len() > 0 or m.bench_fns.len() > 0 or m.is_test_module or module_has_test_runner(&m)
     if is_test_or_bench:
-        sb_push(&buf, read_runtime(rdir, "runtime_alloc_report.c"))
+        sb_push(&buf, read_runtime(rdir, "runtime_alloc_report.c", &embedded, explicit))
 
     # ── Clone stats report: `clone_stats` field ABSENT → default false → skip. ──
 
     # ── Panic handler ──
     if not is_test_or_bench:
-        sb_push(&buf, read_runtime(rdir, "panic_normal.c"))
+        sb_push(&buf, read_runtime(rdir, "panic_normal.c", &embedded, explicit))
     else:
-        sb_push(&buf, read_runtime(rdir, "panic_test.c"))
+        sb_push(&buf, read_runtime(rdir, "panic_test.c", &embedded, explicit))
 
     # ── Conditional core sections ──
     # emit-once flags (plain function-local bools — see the StrBuf note in the
@@ -7230,97 +7252,97 @@ String emit_runtime_preamble(LirModule &m, String runtime_dir):
 
     # Checked arithmetic
     if cn_has_prefix(&n, "gorget_checked_") or cn_has_prefix(&n, "GORGET_CHECKED_"):
-        sb_push(&buf, read_runtime(rdir, "runtime_checked_arith.c"))
+        sb_push(&buf, read_runtime(rdir, "runtime_checked_arith.c", &embedded, explicit))
 
     # Collections: Array
     bool vector_struct_present = recursive_drop_fn_used(&m, "gorget_array_free")
     if vector_struct_present or cn_has_prefix(&n, "gorget_array_") or cn_has_prefix(&n, "Vector__"):
         if not emitted_array:
-            sb_push(&buf, read_runtime(rdir, "runtime_array.c"))
+            sb_push(&buf, read_runtime(rdir, "runtime_array.c", &embedded, explicit))
             emitted_array = true
 
     # String/Array operations (join, split, iterators — needs RUNTIME_ARRAY)
     if pred_string_array(&n):
         if not emitted_array:
-            sb_push(&buf, read_runtime(rdir, "runtime_array.c"))
+            sb_push(&buf, read_runtime(rdir, "runtime_array.c", &embedded, explicit))
             emitted_array = true
-        sb_push(&buf, read_runtime(rdir, "runtime_string_array.c"))
+        sb_push(&buf, read_runtime(rdir, "runtime_string_array.c", &embedded, explicit))
 
     # Collections: Map (depends on Array)
     bool map_struct_present = recursive_drop_fn_used(&m, "gorget_map_free")
     if map_struct_present or pred_map(&n):
         if not emitted_array:
-            sb_push(&buf, read_runtime(rdir, "runtime_array.c"))
+            sb_push(&buf, read_runtime(rdir, "runtime_array.c", &embedded, explicit))
             emitted_array = true
         if not emitted_map:
-            sb_push(&buf, read_runtime(rdir, "runtime_map.c"))
+            sb_push(&buf, read_runtime(rdir, "runtime_map.c", &embedded, explicit))
             emitted_map = true
 
     # Collections: Set (depends on Map)
     bool set_struct_present = recursive_drop_fn_used(&m, "gorget_set_free")
     if set_struct_present or pred_set(&n):
         if not emitted_array:
-            sb_push(&buf, read_runtime(rdir, "runtime_array.c"))
+            sb_push(&buf, read_runtime(rdir, "runtime_array.c", &embedded, explicit))
             emitted_array = true
         if not emitted_map:
-            sb_push(&buf, read_runtime(rdir, "runtime_map.c"))
+            sb_push(&buf, read_runtime(rdir, "runtime_map.c", &embedded, explicit))
             emitted_map = true
-        sb_push(&buf, read_runtime(rdir, "runtime_set.c"))
+        sb_push(&buf, read_runtime(rdir, "runtime_set.c", &embedded, explicit))
 
     # Error handling (test/bench mode or explicit catch/throw)
     if is_test_or_bench or pred_error(&n):
-        sb_push(&buf, read_runtime(rdir, "runtime_error.c"))
+        sb_push(&buf, read_runtime(rdir, "runtime_error.c", &embedded, explicit))
 
     # File I/O (depends on Array for read_file_bytes)
     if pred_file(&n):
         if not emitted_array:
-            sb_push(&buf, read_runtime(rdir, "runtime_array.c"))
+            sb_push(&buf, read_runtime(rdir, "runtime_array.c", &embedded, explicit))
             emitted_array = true
-        sb_push(&buf, read_runtime(rdir, "runtime_file.c"))
+        sb_push(&buf, read_runtime(rdir, "runtime_file.c", &embedded, explicit))
 
     # Path functions + readdir (depends on Array for readdir)
     if pred_path(&n):
         if not emitted_array:
-            sb_push(&buf, read_runtime(rdir, "runtime_array.c"))
+            sb_push(&buf, read_runtime(rdir, "runtime_array.c", &embedded, explicit))
             emitted_array = true
-        sb_push(&buf, read_runtime(rdir, "runtime_path.c"))
+        sb_push(&buf, read_runtime(rdir, "runtime_path.c", &embedded, explicit))
 
     # CLI args (needs RUNTIME_ARRAY)
     if cn_has_eq(&n, "gorget_args"):
         if not emitted_array:
-            sb_push(&buf, read_runtime(rdir, "runtime_array.c"))
+            sb_push(&buf, read_runtime(rdir, "runtime_array.c", &embedded, explicit))
             emitted_array = true
-        sb_push(&buf, read_runtime(rdir, "runtime_args.c"))
+        sb_push(&buf, read_runtime(rdir, "runtime_args.c", &embedded, explicit))
 
     # Parsing (also detects int__parse/float__parse codegen patterns)
     if cn_has_prefix(&n, "gorget_parse_int") or cn_has_prefix(&n, "gorget_parse_float") or cn_has_prefix(&n, "gorget_try_parse") or parse_method_present(&n):
-        sb_push(&buf, read_runtime(rdir, "runtime_parse.c"))
+        sb_push(&buf, read_runtime(rdir, "runtime_parse.c", &embedded, explicit))
 
     # to_str conversions
     if pred_tostr(&n):
-        sb_push(&buf, read_runtime(rdir, "runtime_tostr.c"))
+        sb_push(&buf, read_runtime(rdir, "runtime_tostr.c", &embedded, explicit))
 
     # Environment
     if pred_env(&n):
-        sb_push(&buf, read_runtime(rdir, "runtime_env.c"))
+        sb_push(&buf, read_runtime(rdir, "runtime_env.c", &embedded, explicit))
 
     # Interactive I/O, time, datetime, random, line input (depends on Array)
     if pred_io(&n):
         if not emitted_array:
-            sb_push(&buf, read_runtime(rdir, "runtime_array.c"))
+            sb_push(&buf, read_runtime(rdir, "runtime_array.c", &embedded, explicit))
             emitted_array = true
-        sb_push(&buf, read_runtime(rdir, "runtime_io.c"))
+        sb_push(&buf, read_runtime(rdir, "runtime_io.c", &embedded, explicit))
 
     # Math
     if pred_math(&n):
-        sb_push(&buf, read_runtime(rdir, "runtime_math.c"))
+        sb_push(&buf, read_runtime(rdir, "runtime_math.c", &embedded, explicit))
 
     # Sort comparators (depends on Array)
     if pred_sort(&n):
         if not emitted_array:
-            sb_push(&buf, read_runtime(rdir, "runtime_array.c"))
+            sb_push(&buf, read_runtime(rdir, "runtime_array.c", &embedded, explicit))
             emitted_array = true
-        sb_push(&buf, read_runtime(rdir, "runtime_sort.c"))
+        sb_push(&buf, read_runtime(rdir, "runtime_sort.c", &embedded, explicit))
 
     # Blank line between core sections and sync/async sections (emit_types.rs:2078)
     sb_push(&buf, "\n")
@@ -7328,103 +7350,103 @@ String emit_runtime_preamble(LirModule &m, String runtime_dir):
     # Sync primitives
     bool needs_sync = needs_sync_pred(&n)
     if needs_sync:
-        sb_push(&buf, read_runtime(rdir, "sync_runtime.c"))
+        sb_push(&buf, read_runtime(rdir, "sync_runtime.c", &embedded, explicit))
 
     # Async core (compute needs_async FIRST — channel/mutex re-append it below)
     bool needs_async = needs_async_pred(&n)
     if needs_async:
-        sb_push(&buf, read_runtime(rdir, "async_runtime.c"))
-        sb_push(&buf, read_runtime(rdir, "task_common.c"))
+        sb_push(&buf, read_runtime(rdir, "async_runtime.c", &embedded, explicit))
+        sb_push(&buf, read_runtime(rdir, "task_common.c", &embedded, explicit))
         if m.scheduler_mode == SCHED_POOL:
-            sb_push(&buf, read_runtime(rdir, "scheduler_pool_runtime.c"))
+            sb_push(&buf, read_runtime(rdir, "scheduler_pool_runtime.c", &embedded, explicit))
         elif m.scheduler_mode == SCHED_THREAD:
-            sb_push(&buf, read_runtime(rdir, "scheduler_thread_runtime.c"))
+            sb_push(&buf, read_runtime(rdir, "scheduler_thread_runtime.c", &embedded, explicit))
         elif m.scheduler_mode == SCHED_INLINE:
-            sb_push(&buf, read_runtime(rdir, "scheduler_inline_runtime.c"))
+            sb_push(&buf, read_runtime(rdir, "scheduler_inline_runtime.c", &embedded, explicit))
         elif m.scheduler_mode == SCHED_SINGLE:
-            sb_push(&buf, read_runtime(rdir, "scheduler_single_runtime.c"))
-        sb_push(&buf, read_runtime(rdir, "main_waker_runtime.c"))
+            sb_push(&buf, read_runtime(rdir, "scheduler_single_runtime.c", &embedded, explicit))
+        sb_push(&buf, read_runtime(rdir, "main_waker_runtime.c", &embedded, explicit))
         # EXECUTOR_RUNTIME is the empty const — emit nothing (no file).
 
     # Channels (also triggered by monomorphized Channel__T methods)
     if cn_has_prefix(&n, "gorget_channel_") or cn_has_prefix(&n, "Channel__"):
         if not needs_async:
-            sb_push(&buf, read_runtime(rdir, "async_runtime.c"))
-        sb_push(&buf, read_runtime(rdir, "channel_runtime.c"))
+            sb_push(&buf, read_runtime(rdir, "async_runtime.c", &embedded, explicit))
+        sb_push(&buf, read_runtime(rdir, "channel_runtime.c", &embedded, explicit))
 
     # Shared / Weak references
     if cn_has_prefix(&n, "gorget_shared_") or cn_has_prefix(&n, "gorget_weak_") or cn_has_prefix(&n, "Shared__") or cn_has_prefix(&n, "Weak__"):
-        sb_push(&buf, read_runtime(rdir, "shared_runtime.c"))
+        sb_push(&buf, read_runtime(rdir, "shared_runtime.c", &embedded, explicit))
 
     # Mutex / Guard
     if pred_mutex(&n):
         if not needs_async:
-            sb_push(&buf, read_runtime(rdir, "async_runtime.c"))
-        sb_push(&buf, read_runtime(rdir, "mutex_runtime.c"))
+            sb_push(&buf, read_runtime(rdir, "async_runtime.c", &embedded, explicit))
+        sb_push(&buf, read_runtime(rdir, "mutex_runtime.c", &embedded, explicit))
 
     # Reactor (async I/O, sleep, timers)
     if cn_has_prefix(&n, "gorget_reactor_") or cn_has_prefix(&n, "gorget_sleep_async"):
-        sb_push(&buf, read_runtime(rdir, "reactor_runtime.c"))
+        sb_push(&buf, read_runtime(rdir, "reactor_runtime.c", &embedded, explicit))
 
     # Blocking pool — also needed for spawned functions
     if cn_has_prefix(&n, "gorget_blocking_") or m.spawned_fns.len() > 0:
-        sb_push(&buf, read_runtime(rdir, "blocking_pool_runtime.c"))
+        sb_push(&buf, read_runtime(rdir, "blocking_pool_runtime.c", &embedded, explicit))
 
     # Task groups
     if cn_has_prefix(&n, "gorget_task_group_"):
-        sb_push(&buf, read_runtime(rdir, "task_group_runtime.c"))
+        sb_push(&buf, read_runtime(rdir, "task_group_runtime.c", &embedded, explicit))
 
     # Bytes
     if cn_has_prefix(&n, "gorget_bytes_"):
-        sb_push(&buf, read_runtime(rdir, "bytes_runtime.c"))
+        sb_push(&buf, read_runtime(rdir, "bytes_runtime.c", &embedded, explicit))
 
     # Crypto
     if pred_crypto(&n):
-        sb_push(&buf, read_runtime(rdir, "crypto_runtime.c"))
+        sb_push(&buf, read_runtime(rdir, "crypto_runtime.c", &embedded, explicit))
 
     # Socket (depends on Array)
     if cn_has_prefix(&n, "gorget_socket_") or cn_has_prefix(&n, "gorget_tcp_"):
         if not emitted_array:
-            sb_push(&buf, read_runtime(rdir, "runtime_array.c"))
+            sb_push(&buf, read_runtime(rdir, "runtime_array.c", &embedded, explicit))
             emitted_array = true
-        sb_push(&buf, read_runtime(rdir, "socket_runtime.c"))
+        sb_push(&buf, read_runtime(rdir, "socket_runtime.c", &embedded, explicit))
 
     # Server socket (depends on Array)
     if cn_has_prefix(&n, "gorget_server_socket_") or cn_has_prefix(&n, "gorget_listener_"):
         if not emitted_array:
-            sb_push(&buf, read_runtime(rdir, "runtime_array.c"))
+            sb_push(&buf, read_runtime(rdir, "runtime_array.c", &embedded, explicit))
             emitted_array = true
-        sb_push(&buf, read_runtime(rdir, "server_socket_runtime.c"))
+        sb_push(&buf, read_runtime(rdir, "server_socket_runtime.c", &embedded, explicit))
 
     # UDP socket
     if cn_has_prefix(&n, "gorget_udp_"):
-        sb_push(&buf, read_runtime(rdir, "udp_socket_runtime.c"))
+        sb_push(&buf, read_runtime(rdir, "udp_socket_runtime.c", &embedded, explicit))
 
     # TLS
     if cn_has_prefix(&n, "gorget_tls_"):
-        sb_push(&buf, read_runtime(rdir, "tls_socket_runtime.c"))
-        sb_push(&buf, read_runtime(rdir, "tls_server_runtime.c"))
+        sb_push(&buf, read_runtime(rdir, "tls_socket_runtime.c", &embedded, explicit))
+        sb_push(&buf, read_runtime(rdir, "tls_server_runtime.c", &embedded, explicit))
 
     # Process spawn + signal handling
     bool needs_spawn = needs_spawn_pred(&n)
 
     # Process — also needed when spawn is used (ExecResult typedef lives here)
     if needs_spawn or cn_has_prefix(&n, "gorget_process_") or cn_has_prefix(&n, "gorget_exec_") or cn_has_eq(&n, "gorget_getenv") or cn_has_eq(&n, "gorget_setenv"):
-        sb_push(&buf, read_runtime(rdir, "process_runtime.c"))
+        sb_push(&buf, read_runtime(rdir, "process_runtime.c", &embedded, explicit))
 
     if needs_spawn:
         if not emitted_array:
-            sb_push(&buf, read_runtime(rdir, "runtime_array.c"))
+            sb_push(&buf, read_runtime(rdir, "runtime_array.c", &embedded, explicit))
             emitted_array = true
-        sb_push(&buf, read_runtime(rdir, "process_spawn_runtime.c"))
+        sb_push(&buf, read_runtime(rdir, "process_spawn_runtime.c", &embedded, explicit))
 
     # Thread
     if cn_has_prefix(&n, "gorget_thread_") or cn_has_prefix(&n, "gorget_current_thread_id") or cn_has_prefix(&n, "__gorget_thread_spawn_") or m.thread_spawned_fns.len() > 0:
-        sb_push(&buf, read_runtime(rdir, "thread_runtime.c"))
+        sb_push(&buf, read_runtime(rdir, "thread_runtime.c", &embedded, explicit))
 
     # Trace (trace_filename is a String, "" if none)
     if m.trace_filename != "" or cn_has_prefix(&n, "gorget_trace_"):
-        sb_push(&buf, read_runtime(rdir, "trace_runtime.c"))
+        sb_push(&buf, read_runtime(rdir, "trace_runtime.c", &embedded, explicit))
 
     # SDL (needs external libs; ported faithfully but gate-excluded)
     if cn_has_prefix(&n, "sdl_") or cn_has_prefix(&n, "gorget_sdl_"):
@@ -7432,15 +7454,15 @@ String emit_runtime_preamble(LirModule &m, String runtime_dir):
             sb_push(&buf, "#define GORGET_USE_SDL_IMAGE\n")
         if pred_sdl_ttf(&n):
             sb_push(&buf, "#define GORGET_USE_SDL_TTF\n")
-        sb_push(&buf, read_runtime(rdir, "sdl_runtime.c"))
+        sb_push(&buf, read_runtime(rdir, "sdl_runtime.c", &embedded, explicit))
 
     # Bytes f32/f64/i64 helpers
     if cn_has_bytes_fp(&n):
-        sb_push(&buf, read_runtime(rdir, "bytes_f32_runtime.c"))
+        sb_push(&buf, read_runtime(rdir, "bytes_f32_runtime.c", &embedded, explicit))
 
     # OpenGL
     if cn_has_prefix(&n, "gorget_gl_"):
-        sb_push(&buf, read_runtime(rdir, "gl_runtime.c"))
+        sb_push(&buf, read_runtime(rdir, "gl_runtime.c", &embedded, explicit))
 
     # Image loading (stb_image — vendored header outside runtime/)
     if cn_has_prefix(&n, "gorget_image_"):
@@ -7456,21 +7478,21 @@ String emit_runtime_preamble(LirModule &m, String runtime_dir):
         sb_push(&buf, "#pragma GCC diagnostic ignored \"-Wunused-parameter\"\n")
         sb_push(&buf, "#pragma GCC diagnostic ignored \"-Wsign-compare\"\n")
         sb_push(&buf, "#pragma GCC diagnostic ignored \"-Wshift-negative-value\"\n")
-        sb_push(&buf, read_runtime(rdir, "../stb_image.h"))
+        sb_push(&buf, read_runtime(rdir, "../stb_image.h", &embedded, explicit))
         sb_push(&buf, "\n#pragma GCC diagnostic pop\n")
-        sb_push(&buf, read_runtime(rdir, "image_runtime.c"))
+        sb_push(&buf, read_runtime(rdir, "image_runtime.c", &embedded, explicit))
 
     # Audio (SDL2_mixer)
     if cn_has_prefix(&n, "gorget_audio_"):
-        sb_push(&buf, read_runtime(rdir, "audio_runtime.c"))
+        sb_push(&buf, read_runtime(rdir, "audio_runtime.c", &embedded, explicit))
 
     # Compression (zlib/deflate)
     if cn_has_prefix(&n, "gorget_zlib_") or cn_has_prefix(&n, "gorget_deflate_") or cn_has_prefix(&n, "gorget_crc32_"):
-        sb_push(&buf, read_runtime(rdir, "compress_runtime.c"))
+        sb_push(&buf, read_runtime(rdir, "compress_runtime.c", &embedded, explicit))
 
     # Metal (macOS Objective-C wrappers)
     if cn_has_prefix(&n, "gorget_metal_") or cn_has_prefix(&n, "gorget_sdl_metal_"):
-        sb_push(&buf, read_runtime(rdir, "metal_runtime.c"))
+        sb_push(&buf, read_runtime(rdir, "metal_runtime.c", &embedded, explicit))
 
     # SQLite (vendored amalgamation outside runtime/)
     if cn_has_prefix(&n, "gorget_sqlite_") or cn_has_eq(&n, "sqlite_open"):
@@ -7482,13 +7504,13 @@ String emit_runtime_preamble(LirModule &m, String runtime_dir):
         sb_push(&buf, "#pragma GCC diagnostic ignored \"-Wunused-function\"\n")
         sb_push(&buf, "#pragma GCC diagnostic ignored \"-Wimplicit-fallthrough\"\n")
         sb_push(&buf, "#pragma GCC diagnostic ignored \"-Wpedantic\"\n")
-        sb_push(&buf, read_runtime(rdir, "../sqlite3/sqlite3.c"))
+        sb_push(&buf, read_runtime(rdir, "../sqlite3/sqlite3.c", &embedded, explicit))
         sb_push(&buf, "\n#pragma GCC diagnostic pop\n")
-        sb_push(&buf, read_runtime(rdir, "../sqlite3/gorget_sqlite.c"))
+        sb_push(&buf, read_runtime(rdir, "../sqlite3/gorget_sqlite.c", &embedded, explicit))
 
     # Hot-reload runtime
     if m.hot_reload:
-        sb_push(&buf, read_runtime(rdir, "hot_reload_runtime.c"))
+        sb_push(&buf, read_runtime(rdir, "hot_reload_runtime.c", &embedded, explicit))
 
     # LIR helpers (default values, comparators, hashers, char/utf8 helpers, etc.)
     sb_push(&buf, emit_lir_helpers(&m))

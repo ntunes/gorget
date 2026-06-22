@@ -16226,6 +16226,176 @@ fn self_host_cli_pipeline() {
     let _ = std::fs::remove_dir_all(&tmp_root);
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// GG_IMPL Inc-2 gate: a built `gg-selfhost` is RELOCATABLE — it carries its
+// runtime (the 62 `src/backend/c/runtime/*.c` files embedded into driver.gg via
+// `embed_file`) so `build hello.gg -o hello && ./hello` works from ANY cwd with
+// NO env vars. This is the whole point of Inc-2: drop the GG_RUNTIME_DIR /
+// GG_LIB_DIR exports for a truly portable install.
+//
+// The driver binary built by `build_gg_dir_cached` IS the embedded gg-selfhost
+// (the meta pass baked the 62 files in at build time). We run it from a tmpdir
+// with the runtime/lib env UNSET and assert the build+run succeeds.
+//
+// Three checks, mirroring the 3-state precedence in read_runtime:
+//   1. EMBEDDED (env unset, no flag) → build+run an import-free hello → exit 0.
+//   2. ESCAPE HATCH `GG_RUNTIME_DIR=<real>` (env forces disk) → still works.
+//   3. ESCAPE HATCH `--runtime-dir=<bogus>` (flag forces disk, OVERRIDES embed)
+//      → FAILS to open the bogus runtime dir. This proves the flag genuinely
+//      overrides the embed (the B1 no-op-flag defect the brief warned of), not
+//      that it silently falls back to the baked-in copy.
+//
+// Import-free `hello` only: programs with `from std…` imports need Inc-3's
+// `lib/std` embedding to be relocatable (the lib-dir is still resolved from
+// disk / $GG_LIB_DIR here). `tests/fixtures/hello.gg` is import-free.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_relocatable_embedded_runtime() {
+    if skip_under_llvm() {
+        // The self-host driver emits C only; embedding is backend-agnostic.
+        return;
+    }
+
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_impl_reloc_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+
+    // An import-free program (no `from std…`) — relocatable today (Inc-2).
+    let hello = tmp_root.join("hello.gg");
+    std::fs::write(&hello, "void main():\n    print(\"Hello, World!\")\n")
+        .expect("failed to write hello.gg");
+    let out_bin = tmp_root.join("hello");
+
+    // ── 1. EMBEDDED: env UNSET, no --runtime-dir, cwd = the tmpdir. ──────────
+    // The driver must read its runtime from the embedded table, not the cwd.
+    let build = run_with_timeout(
+        Command::new(&driver_exe)
+            .current_dir(&tmp_root)
+            .env_remove("GG_RUNTIME_DIR")
+            .env_remove("GG_LIB_DIR")
+            .arg("build")
+            .arg("hello.gg")
+            .arg("-o")
+            .arg("hello"),
+        "reloc build (embedded runtime, no env)",
+    );
+    assert!(
+        build.status.success(),
+        "RELOCATABLE build FAILED: `gg-selfhost build hello.gg` from a foreign cwd \
+         with no GG_RUNTIME_DIR must use the EMBEDDED runtime and exit 0. If this \
+         fails with `cannot open …runtime_preamble.c`, the embed table or the \
+         read_runtime fallback regressed.\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr),
+    );
+    assert!(out_bin.exists(), "relocatable build did not produce {out_bin:?}");
+    let ran = run_with_timeout(&mut Command::new(&out_bin), "run relocatable hello");
+    assert!(
+        ran.status.success(),
+        "the relocatably-built hello should exit 0; got {:?}",
+        ran.status.code(),
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&ran.stdout).trim_end(),
+        "Hello, World!",
+        "the relocatably-built hello should print the greeting",
+    );
+
+    // ── 2. ESCAPE HATCH: GG_RUNTIME_DIR=<real> (env forces disk) → works. ────
+    let out_env = tmp_root.join("hello_env");
+    let build_env = run_with_timeout(
+        Command::new(&driver_exe)
+            .current_dir(&tmp_root)
+            .env("GG_RUNTIME_DIR", &runtime_dir)
+            .env_remove("GG_LIB_DIR")
+            .arg("build")
+            .arg("hello.gg")
+            .arg("-o")
+            .arg("hello_env"),
+        "reloc build (GG_RUNTIME_DIR escape hatch)",
+    );
+    assert!(
+        build_env.status.success(),
+        "GG_RUNTIME_DIR=<real> escape hatch should still build.\nstderr: {}",
+        String::from_utf8_lossy(&build_env.stderr),
+    );
+    assert!(out_env.exists(), "GG_RUNTIME_DIR build did not produce {out_env:?}");
+    let ran_env = run_with_timeout(&mut Command::new(&out_env), "run env-built hello");
+    assert!(ran_env.status.success(), "env-built hello should exit 0");
+
+    // ── 3. ESCAPE HATCH: --runtime-dir=<bogus> (flag forces disk, OVERRIDES
+    //       the embed) → FAILS. Proves the flag is NOT a no-op (the B1 defect):
+    //       a forced-disk read of a nonexistent dir must error, NOT silently
+    //       fall back to the baked-in runtime.
+    let bogus_dir = tmp_root.join("no_such_runtime");
+    let build_bogus = run_with_timeout(
+        Command::new(&driver_exe)
+            .current_dir(&tmp_root)
+            .env_remove("GG_RUNTIME_DIR")
+            .env_remove("GG_LIB_DIR")
+            .arg("build")
+            .arg("hello.gg")
+            .arg("-o")
+            .arg("hello_bogus")
+            .arg(format!("--runtime-dir={}", bogus_dir.display())),
+        "reloc build (--runtime-dir=bogus forces disk)",
+    );
+    assert!(
+        !build_bogus.status.success(),
+        "`--runtime-dir=<bogus>` must FORCE a disk read and FAIL (proving the flag \
+         overrides the embed, not a silent no-op fallback). It unexpectedly \
+         succeeded.\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&build_bogus.stdout),
+        String::from_utf8_lossy(&build_bogus.stderr),
+    );
+
+    // ── 4. BYTE-IDENTITY: the embedded-path preamble == the disk-path preamble.
+    //       Both `--emit-c` dumps must be byte-identical — confirms the UTF-8
+    //       round-trip through escape_c_string is faithful for all embedded
+    //       files (59/62 carry non-ASCII comment-header bytes).
+    let emit_embedded = run_with_timeout(
+        Command::new(&driver_exe)
+            .current_dir(&tmp_root)
+            .env_remove("GG_RUNTIME_DIR")
+            .env_remove("GG_LIB_DIR")
+            .arg("build")
+            .arg("hello.gg")
+            .arg("--emit-c"),
+        "emit-c (embedded)",
+    );
+    assert!(emit_embedded.status.success(), "embedded --emit-c should succeed");
+    let emit_disk = run_with_timeout(
+        Command::new(&driver_exe)
+            .current_dir(&tmp_root)
+            .env_remove("GG_RUNTIME_DIR")
+            .env_remove("GG_LIB_DIR")
+            .arg("build")
+            .arg("hello.gg")
+            .arg("--emit-c")
+            .arg(format!("--runtime-dir={}", runtime_dir.display())),
+        "emit-c (disk)",
+    );
+    assert!(emit_disk.status.success(), "disk --emit-c should succeed");
+    assert_eq!(
+        emit_embedded.stdout, emit_disk.stdout,
+        "the embedded-runtime emitted C must be BYTE-IDENTICAL to the disk-runtime \
+         emitted C (the embed bytes are the same bytes read from disk). A mismatch \
+         means escape_c_string mangled a byte on the embed round-trip.",
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp_root);
+}
+
 // INTENDED-BEHAVIOR BREADCRUMB (per CLAUDE.md "Don't redesign around compiler
 // gaps"): `gg check` on an ILL-TYPED program SHOULD exit NONZERO. It does not
 // TODAY — the self-host typechecker is PERMISSIVE (most of Rust's `self.error`
