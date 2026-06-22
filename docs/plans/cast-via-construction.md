@@ -13,8 +13,9 @@
 > the owner's final decisions) and **SUPERSEDES §3–§6 where they differ** — notably:
 > overflow → THROW (off the strict-panic stance); `T(x)` is the SURFACE over an
 > INTERNAL conversion-dispatch (the `From` registry survives under the hood; the
-> surface trait names vanish); **flavors are source METHODS** (`x.clamped(byte)`),
-> NOT named-arg ctor variants (those reintroduce value-dependent effect); recover a
+> surface trait names vanish); **flavors are NAMED-ARGUMENT constructors**
+> (`byte(clamping = x)`, `int(rounding = f)` — §3.3; an earlier source-method detour
+> was REVERSED 2026-06-22, see the correction in §7.3 fork 2); recover a
 > Result via the **typed destination** (`Result[T,CastError] r = byte(x)`), NOT
 > `catch byte(x)`; value→String is **`String(T)`** (= `Displayable.display()`),
 > `str(x)` stays rejected. §3–§4 below are the original v2 sketch; read §7 for the
@@ -56,8 +57,10 @@ mostly *deletes* `as` and the trait trio.
 float f = float(42)              # 42.0
 long  l = long(small_int)
 
-# float → int — truncate toward zero (the defining meaning of float→int)
-int n = int(3.7)                 # 3
+# float → int — the rounding mode is a REQUIRED named argument (no bare int(f);
+# a silent fractional-loss default is exactly the footgun we ban)
+int n = int(truncating = 3.7)    # 3   (toward zero)
+int n = int(rounding   = 3.7)    # 4
 ```
 
 ### 3.2 Fallibility is `throws`, not a return type  *(the heart of this RFC)*
@@ -113,16 +116,23 @@ a defined value instead." They never fail:
 ```gorget
 byte b = byte(clamping   = 300)   # 255   — saturate
 byte b = byte(truncating = 300)   # 44    — wrap / bit-truncate
-int  n = int(rounding    = 3.7)   # 4     — round-to-nearest (bare int(f) truncates)
+int  n = int(rounding    = 3.7)   # 4     — round-to-nearest (bare int(f) is REJECTED — a mode is required)
 byte b = byte(bits = signed_x)    # reinterpret bit-pattern — explicit, never implicit
 ```
 
 | form | int → narrower int | float → int | widening / struct |
 |---|---|---|---|
-| `T(x)` | narrowing ctor: returns `T`, **throws** Overflow (constants const-checked) | returns `int`, truncates fraction, **throws** on NaN/∞/out-of-range | widening ctor: not `throws` |
-| `T(clamping = x)` | saturate (total) | saturate (total) | — |
-| `T(truncating = x)` | wrap (total) | — | — |
-| `T(rounding = x)` | — | round (total) | — |
+| `T(x)` | narrowing ctor: returns `T`, **throws** Overflow (constants const-checked) | **rejected** — a rounding mode is required (rows below) | widening ctor: not `throws` |
+| `T(clamping = x)` | saturate (total) | — | — |
+| `T(truncating = x)` | wrap (total) | toward zero¹ (total fraction; **throws** range) | — |
+| `T(rounding = x)` | — | round (total fraction; **throws** range) | — |
+| `T(flooring = x)` · `T(ceiling = x)` | — | floor · ceil (total fraction; **throws** range) | — |
+
+¹ `truncating` means "discard what doesn't fit" in both columns — high bits (int
+narrowing → wrap) vs the fraction (float→int → toward zero); the meaning is
+selected by the source type. Whether to keep the shared label or split them is a
+naming detail to settle in the scout. Range loss (NaN/∞/out-of-`int64`) throws
+uniformly; a saturating range policy for float→int is a possible later addition.
 | `catch T(x)` | `Result[T, CastError]` | `Result[int, CastError]` | (valid; never `Error`) |
 
 ### 3.4 The error type — typed, not stringly
@@ -137,17 +147,28 @@ enum CastError:
 
 (Upgrade over today's `TryFrom -> Result[Self, String]`.)
 
-### 3.5 `int(float)` is settled by the same rule
+### 3.5 `float → int` requires an explicit rounding mode
 
-`int(3.7) → 3` truncates the fraction — that is what float→int *means*, not a
-footgun, so no ceremony. The genuinely undefined cases throw:
+A float→int conversion is lossy in *two* independent ways — the fraction
+(`3.7`→`3`? `4`?) and the range (NaN/∞/`1e30` don't fit). The fraction has no safe
+default (truncating silently is the banned footgun; throwing on every non-integer
+float is miserable), so the **rounding mode is a required named argument** — bare
+`int(f)` is a typecheck error. The range edges always throw:
 
 ```gorget
-int n = int(3.7)        # 3        (truncate toward zero)
-int n = int(0.0/0.0)    # throws CastError(NotRepresentable)   (NaN)
-int n = int(1.0/0.0)    # throws CastError(Overflow)           (+∞)
-int n = int(1e30)       # throws CastError(Overflow)           (doesn't fit int64)
+int n = int(truncating = 3.7)   # 3    (toward zero)
+int n = int(rounding   = 3.7)   # 4
+int n = int(flooring   = -2.5)  # -3
+int n = int(ceiling    = -2.5)  # -2
+int n = int(3.7)                # TYPECHECK ERROR: pick a mode (truncating/rounding/flooring/ceiling)
+int n = int(rounding = 0.0/0.0) # throws CastError(NotRepresentable)   (NaN)
+int n = int(rounding = 1.0/0.0) # throws CastError(Overflow)           (+∞)
+int n = int(rounding = 1e30)    # throws CastError(Overflow)           (doesn't fit int64)
 ```
+
+(The mode label resolves the fraction — total; the range edges throw, uniform with
+integer narrowing. A *saturating* range policy for float→int is a possible later
+addition, not part of this design.)
 
 ## 4. The payoff — one mechanism, three trait deletions
 
@@ -191,7 +212,7 @@ So builtin numerics, newtype conversion, and error widening all go through
   `T sum[T: Numeric](Vector[T])` — that's parametric polymorphism, orthogonal to
   conversion.)
 - **Failable-constructor mechanism → dissolved** by §3.2 (always `Self` + `throws`).
-- **`int(float)` edges → §3.5** (truncate fraction; throw on NaN/∞/out-of-range).
+- **`int(float)` → §3.5** (rounding mode is a REQUIRED named arg — no bare `int(f)`; range edges throw).
 - **`as` removed entirely (owner-decided 2026-06-20).** `T(x)` is the *sole*
   conversion spelling; the `as` operator is gone — no second way to convert, no
   lossless-`as` carve-out. Every existing `as` becomes a constructor call.
@@ -234,8 +255,9 @@ A **both-compilers, language-surface** change (Rust gg + self-host + spec + book
    flavors + `CastError`** in both compilers, with constant-narrowing checked at
    compile time (`meta`). No new value-flow analysis.
 3. **Remove `as` entirely.** Widening `as` → the non-throwing constructor;
-   narrowing/`float→int` `as` → the throwing constructor (`float as int` →
-   `int(f)`, which throws on the un-representable edges). Per CLAUDE.md core
+   narrowing `as` → the throwing constructor; `float as int` → a mode-labeled
+   constructor (`int(truncating = f)` / `int(rounding = f)` / …, which throws on
+   the un-representable range edges). Per CLAUDE.md core
    invariant #8, the outcome is that a lossy conversion can no longer happen
    *silently* — it's handled (throw), a flavor, or a compile-checked constant —
    in **both** compilers, with negative fixtures.
@@ -349,17 +371,27 @@ for the owner (below).**
 2. **Constructor mechanism → option (c): `T(x)` is the SURFACE; the conversion
    dispatch survives UNDER THE HOOD** (the `From` registry + `is_safe_integer_widening`).
    A 1-arg ctor `Self(T)` auto-registers the internal "from T" (no user-written
-   trait — `From`/`Into`/`TryFrom` vanish from the *surface*). **NO default-param
-   flavors** — they'd make throws-ness depend on an ARGUMENT VALUE (`byte(x, mode=Clamp)`
-   total vs `byte(x)` throws), reintroducing the value-dependent effect Knob 2
-   removed. Instead the flavors are SEPARATE TOTAL OPERATIONS (methods on the
-   source: `x.clamped(byte)`/`x.truncated(byte)`/`x.rounded(int)`), so `T(x)` stays
-   the SINGLE constructor (throwing for narrowing, non-throwing for widening,
-   type-level). Builtin numeric conversions are compiler-native (`int(<any numeric>)`,
+   trait — `From`/`Into`/`TryFrom` vanish from the *surface*). **Flavors are
+   NAMED-ARGUMENT constructors** (§3.3): `byte(clamping = x)`, `byte(truncating = x)`,
+   `int(rounding = f)` — the type is the callee, the mode is a static argument
+   LABEL selecting a distinct (total) overload, exactly Swift's `UInt8(clamping:)`.
+
+   ⚠ **CORRECTION 2026-06-22 (owner).** An earlier pass here moved the flavors to
+   SOURCE METHODS with a type argument (`x.clamped(byte)` / `x.truncated(byte)` /
+   `x.rounded(int)`) to "avoid argument-dependent throws-ness." That was a category
+   error: a runtime `mode` PARAMETER (`byte(x, mode = runtimeVar)`) genuinely makes
+   throws-ness undecidable and stays banned — but a compile-time argument LABEL
+   (`clamping =`) is not a value; it selects a statically-resolved overload whose
+   throws-ness is known at compile time. The method form is also the one that put a
+   TYPE in value-argument position (`x.truncated(int)`), which the language doesn't
+   otherwise allow. **Resolution: named-arg construction (§3.3) stands; `T(x)` is the
+   single constructor, the labeled forms are its total siblings. The "§3.3 must be
+   revised → source methods" instruction is WITHDRAWN.**
+
+   Builtin numeric conversions are compiler-native (`int(<any numeric>)`,
    throws-ness from the typed widening table) — **no user overloading**; only USER
    types convertible from multiple sources use the (internal) multi-impl dispatch
-   that `From[T]` already provides. **§3.3 must be revised: drop the named-arg
-   flavors; move clamp/truncate/round to source methods.**
+   that `From[T]` already provides.
 3. **`str(x)` stays rejected; the value→String conversion is `String(T)`.** `str`
    was never a type; `String` is. `String(x)` is the type's constructor doing the
    conversion — the constructor SPELLING of `Displayable.display()` (infallible →
@@ -383,15 +415,17 @@ DIFFERENT way than integer narrowing: it's not range overflow, it's fractional
 loss. If `int(aFloat)` "throws when not representable," then *almost every* float
 throws (3.7, 0.1, …) — miserable, and it pushes every float→int through a
 handler. If it truncates silently, we've reintroduced the silent-lossy default we
-banned. **Resolution:** float→int has **no bare `int(x)` form at all** — the user
-MUST pick a rounding mode via a source method: `x.truncated(int)` (toward zero) /
-`x.rounded(int)` / `x.floored(int)` / `x.ceiled(int)`. The bare-constructor `int(f)`
-is a TYPECHECK ERROR with a fix-it suggesting the methods. (Swift's `Int(3.7)`
-truncates-by-default — we deliberately diverge: no silent lossy default, ever.)
-The throwing bare `T(x)` form is therefore **integer-narrowing-only**; float→int
-is method-only; int→float widening (`float(i)`) is total. So the "one rule"
-is really: *integer→integer* narrows-throws/widens-total; *float→integer* is
-method-only; *→float* widens-total. Three clauses, still typed, still no name-match.
+banned. **Resolution (2026-06-22):** float→int has **no bare `int(f)` form** — the
+user MUST pick the rounding mode as a REQUIRED named argument on the constructor:
+`int(truncating = f)` (toward zero) / `int(rounding = f)` / `int(flooring = f)` /
+`int(ceiling = f)`. Bare `int(f)` is a TYPECHECK ERROR with a fix-it listing the
+modes. The label resolves the fraction (total); range edges (NaN/∞/out-of-`int64`)
+throw, uniform with integer narrowing. (Swift's `Int(3.7)` truncates-by-default —
+we deliberately diverge: no silent lossy default, ever.) So the spelling stays
+**construction throughout** — the type is always the callee, the mode is a static
+label; nothing lands in type-as-value-argument position. The "one rule" is:
+*integer→integer* narrows-throws/widens-total; *float→integer* requires a mode
+label (throws on range); *→float* widens-total. Still typed, still no name-match.
 
 **Seam B — generics RELOCATE the From/TryFrom distinction, they don't delete it.**
 In monomorphized code `T(x)`'s effect is statically known (the `(src,tgt)` pair is
@@ -472,7 +506,7 @@ fallible/infallible split stops needing two traits:
 | `TryFrom[T]` (fallible) | "From, but Rust's From can't fail" | **`throws` ctor `Self(T)`** — the `throws` IS the "Try" |
 | `Into[T]` | `From` read backwards, for bounds | **deleted** (use `From` in the bound) |
 | `TryInto[T]` | `TryFrom` read backwards | **deleted** |
-| `as` (silent lossy) | unchecked truncation | **deleted** (lossy = named method `x.truncated(T)`) |
+| `as` (silent lossy) | unchecked truncation | **deleted** (lossy = named-arg ctor `T(truncating = x)` / `T(clamping = x)`) |
 
 **Five conversion concepts → ONE constructor form + the `throws` effect we already
 have.** `From[T]` survives only as the *name of the capability* a 1-arg
