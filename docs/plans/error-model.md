@@ -507,12 +507,26 @@ later as a separate funded effort.
   shape in BOTH backends** (the single largest item — there is no existing trap to
   re-point; see §11.2); and the panic-default match rule.
 
-**PHASE 2 — deep / boundary catch (separate funded effort; needs unwinding).**
+**PHASE 2 — deep / boundary catch (separate funded effort).**
 - Catch a fault from a deep call at a task/request boundary (server-keeps-serving).
-- Buys the full §6 greenfield unwind infra (Q10) + inherits Q9/Q15/Q16 + the §3.1
-  boundary-discards-the-unit safety argument + the boundary-only invariant.
-- Strictly **additive** over Phase 1 — same `Fault`/`Error` typing, same `catch`
-  surface; only the PROPAGATION reach extends from lexical to deep.
+- **⭐ RESOLVED 2026-06-22 (OWNER-DECIDED: Option A + hybrid — supersedes "needs unwinding").**
+  A scout (verified against source) + a fresh A-vs-B comparison + 3 review passes established that
+  Phase 2 does **NOT** need the §6 greenfield unwind infra: Gorget ALREADY ships a deep, drop-correct
+  **BY-VALUE** error channel (the `throws`/`Result` path running `emit_early_exit_drops` at each
+  early-exit frame, `src/ir/lowering/stmts/mod.rs:2373-2398` + the auto-prop hook
+  `exprs/mod.rs:87`/`:2922`). Phase-2 fault propagation REUSES it via a **hidden out-of-band return
+  slot** (faults stay OFF signatures — the §3 ubiquity guarantee holds — NOT stack unwinding), so
+  **Q9/Q15/Q16/B2 dissolve**. The **hybrid**: a unified `catch (e): match e` boundary handler over
+  `dyn Error` (catching BOTH contract errors AND faults) via `Fault equip Error`, with NO `throws Fault`
+  on any signature — this delivers the owner's uniformity goal without re-importing the `throws`-spine
+  ubiquity. (Option B = uniform `throws` for faults was REJECTED: measured self-host ubiquity floods the
+  protected call spine; Swift — the assumed precedent — actually TRAPS on overflow, a precedent FOR A.)
+  Design: `error-model-phase2-design.md`; A-vs-B rationale: `error-model-phase2-A-vs-B.md`.
+  **Open pre-impl gate:** MEASURE the hidden-slot hot-path threading cost on the self-host self-compile
+  before shipping Increment 2.1.
+- Strictly **additive** over Phase 1 — same `Fault`/`Error` typing, same `catch` surface; only the
+  PROPAGATION reach extends from lexical to deep (BY-VALUE, not unwind). First increment = single-call-
+  deep (2.1, `error-model-phase2-design.md` §4).
 
 (The §1/§4 "one channel / two kinds" framing is KEPT — the once-anticipated "two channels" reframe is not happening, owner 2026-06-21. Phase 1 added a §4 Phase-1 clarification only.)
 

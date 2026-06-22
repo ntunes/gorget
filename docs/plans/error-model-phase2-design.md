@@ -13,9 +13,12 @@ signatures). **VERDICT (comparison `a0ea33be` → `error-model-phase2-A-vs-B.md`
 that delivers B's one ergonomic win (a unified `dyn Error` boundary handler via `Fault equip Error`).**
 ⚠ Prior-art CORRECTION: Swift TRAPS on overflow (uncatchable) — a precedent FOR A, NOT B; the real
 B-camp is Java/C#/Python/Ruby (unchecked exceptions). **NOTHING is adopted; the linchpin (deep by-value
-is possible + drop-correct) holds for BOTH options.** `error-model.md` §9.1 remains authoritative;
-AWAITING OWNER DECISION (A / B / hybrid).
-**Supersedes nothing yet** — no Increment 2.1 brief until the owner picks A or B.
+is possible + drop-correct) holds for BOTH options.** **✅ OWNER-ACCEPTED 2026-06-22: Option A + the
+hybrid** (folded into `error-model.md` §9.1 PHASE 2). Increment 2.1 (single-call-deep by-value catch) is
+now briefable; **pre-impl gate = MEASURE the hidden-slot hot-path threading cost on the self-host
+self-compile** before shipping.
+**Owner picked A+hybrid (2026-06-22)** — Increment 2.1 (§4) is now scoutable/briefable; the §9.1
+"deep ⇒ unwind" framing is superseded (folded into `error-model.md`).
 
 > ⚠ This design **reframes a load-bearing assumption** in `error-model.md` §9.1 — that deep/boundary
 > fault catch requires a greenfield unwind substrate. The reframe rests on the claim that Gorget's

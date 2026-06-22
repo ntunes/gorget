@@ -2,8 +2,9 @@
 
 **Status:** comparison produced by a fresh analyst (`a0ea33be`, 2026-06-22) at the owner's request
 ("review both options and come back with which one is better"). **VERDICT: Option A, with a hybrid that
-delivers Option B's one real ergonomic win.** AWAITING OWNER DECISION — no Increment 2.1 brief until the
-owner picks. This does NOT supersede `error-model.md` §9.1.
+delivers Option B's one real ergonomic win.** **✅ OWNER-ACCEPTED 2026-06-22: Option A + hybrid** —
+folded into `error-model.md` §9.1 PHASE 2 (the "deep ⇒ unwind" framing is superseded). Increment 2.1 now
+briefable; pre-impl gate = measure the hidden-slot hot-path cost on the self-host self-compile.
 
 ## The two options (both by-value — the unwind substrate was already killed)
 - **Option A** — hidden out-of-band by-value slot (`error-model-phase2-design.md`): faults ride a
