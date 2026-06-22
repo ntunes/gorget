@@ -58,7 +58,11 @@ same in the entry module works.)
    (`lir_codegen.gg:7180-7501`), so build `build_embedded_runtime() -> Dict[String,String]` at its top
    and pass `&embedded` to each call — 78 mechanical 1-arg edits in ONE function, zero cross-function
    plumbing. ONLY the `explicit` bool (item 2) needs to reach `emit_runtime_preamble` from the 3 driver
-   callers (a single `bool` param, not a dict).
+   callers (a single `bool` param, not a dict). **Compute `explicit` PER-SITE (review pass-2 note):** the
+   3 callers are `compile_main` (`driver.gg:243`, legacy `--emit-c`) + `run_build_mode` (`:424`, `:427`).
+   `run_build_mode` reads flag+env; `compile_main` is **FLAG-ONLY** (never reads `GG_RUNTIME_DIR`) — do
+   NOT paste an env read into it (its output is byte-identical either way: `explicit=true`→disk at the
+   default `src/backend/c/runtime` equals `explicit=false`→the embedded bytes).
 4. **SQLite/SDL/GL/metal stay DISK-ONLY** (do NOT embed the 8.8 MB sqlite3.c into `driver.gg` — it would
    balloon the self-compiled driver source + the bootstrap). These remain on the disk/conditional path;
    Inc-4 handles SQLite separately (feature-gated).
