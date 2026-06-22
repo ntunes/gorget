@@ -51,11 +51,21 @@ flush into. Use the **body-buffering + line-extraction** shape instead:
      wrong). Review pass 1 confirmed none exist today; assert/guard so a future one isn't silently
      mis-hoisted.
 3. **Assemble `out`** = (prelude header + the existing entry slot/StrLit allocas `:2596-2639`, emitted as
-   today) + `hoisted` (the extracted body allocas, placed in the entry block AFTER the slot allocas,
-   before `br label %bb0`) + `body_buf`. This leaves the entry-prelude allocas (`:2596-2639`), the
-   run-once `main`-prologue allocas in `emit_global_runtime_init`/`emit_global_init_arg_llvm`
-   (`mod.rs:1908/1967/2027`), and the straight-line `__clone` wrapper alloca (`:2305`) UNTOUCHED — they
-   are not in `body_buf`.
+   today) + `hoisted` (the extracted body allocas) + `br label %bb0` + `body_buf`. This leaves the
+   entry-prelude allocas (`:2596-2639`), the run-once `main`-prologue allocas in
+   `emit_global_runtime_init`/`emit_global_init_arg_llvm` (`mod.rs:1908/1967/2027`), and the
+   straight-line `__clone` wrapper alloca (`:2305`) UNTOUCHED — they are not in `body_buf`.
+   - ⚠ **RELOCATE the entry terminator (review pass 3 — else you emit INVALID IR).** Today
+     `writeln!(out, "  br label %bb0")` + the blank line are emitted at **`mod.rs:2686-2687`, BEFORE the
+     block loop**, as the tail of the streamed prelude. An `alloca` may NOT appear after a block
+     terminator, so the hoisted allocas must land BEFORE that `br` — but they're only known AFTER the
+     loop. So: **MOVE the `br label %bb0` (+ blank) emission out of `:2686-2687` to AFTER the block
+     loop.** The correct post-loop sequence is: append `hoisted` to `out` → `writeln!(out, "  br label
+     %bb0")` + blank → append `body_buf` → `writeln!(out, "}}")`. (Placing the hoisted allocas after the
+     trace-prologue `call`s at `:2655-2682` but before the `br` is legal — entry-block allocas are static
+     regardless of position within the entry block.) Pass 3 confirmed nothing at `:2688-2906` (the
+     `block_exit_labels` precompute) reads or depends on `br label %bb0` already being in `out`, so the
+     relocation is safe + localized.
 
 This is NOT the prototype's fragile whole-`out` string post-pass — it is a structured extraction from a
 *dedicated body buffer*, so it cannot disturb the prelude or globals, and it is **enumeration-free** (the
