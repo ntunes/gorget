@@ -15,8 +15,9 @@ that delivers B's one ergonomic win (a unified `dyn Error` boundary handler via 
 B-camp is Java/C#/Python/Ruby (unchecked exceptions). **NOTHING is adopted; the linchpin (deep by-value
 is possible + drop-correct) holds for BOTH options.** **✅ OWNER-ACCEPTED 2026-06-22: Option A + the
 hybrid** (folded into `error-model.md` §9.1 PHASE 2). Increment 2.1 (single-call-deep by-value catch) is
-now briefable; **pre-impl gate = MEASURE the hidden-slot hot-path threading cost on the self-host
-self-compile** before shipping.
+now briefable; **pre-impl gate ✅ SATISFIED 2026-06-22** (measured ~0.016 ns/frame happy-path, scout
+`ace83307`; unwinding's edge marginal, A confirmed) — with the BINDING impl instruction: lower the slot
+as a hidden **out-param / tagged-return**, NOT a `Result`-union struct-return (§5).
 **Owner picked A+hybrid (2026-06-22)** — Increment 2.1 (§4) is now scoutable/briefable; the §9.1
 "deep ⇒ unwind" framing is superseded (folded into `error-model.md`).
 
@@ -184,9 +185,20 @@ Phase-1 answer). **Self-host fast-follows each** (Phase-1 substrate already pres
   cleanup-on-unwind drop elaboration (C backend), landing pads / `invoke` / personality from scratch
   (LLVM — zero EH today), per-task setjmp in all four schedulers, FFI catch frames (Q15 UB).
   **Strong recommendation: do not build it unless a measured hot-path regression forces it.**
-- **Real cost on the recommended path: hot-path threading (§3).** (3a) threads a hidden slot through
-  participating frames. Per "measure MEMORY not just time," the first increment must measure overhead
-  (`--clones=stats` + RSS) on the self-host self-compile; (3b) reachability-scoping is the mitigation.
+- **Real cost on the recommended path: hot-path threading (§3) — ✅ MEASURED 2026-06-22 (scout
+  `ace83307`), gate SATISFIED.** A's well-lowered propagation cost is **~zero on the happy path**:
+  ~**0.016 ns/frame** (~3% on a 600M-call call-SATURATED microbenchmark, unmeasurable on real
+  workloads) — the ideal hidden-slot lowers to a **branchless `csinc`** the CPU absorbs. Unwinding's
+  happy-path edge over A is therefore **marginal-to-unmeasurable**, while its price is enormous
+  (greenfield landing pads in BOTH backends + drop-during-unwind hazard + FFI UB) → **A confirmed; do
+  NOT build unwinding.** (3b) reachability-scoping makes A's cost **zero** on non-participating frames
+  (self-host: ~916 fns, only ~10 `throws`; deep-catch is a boundary feature → tiny spine).
+  **⚠ ONE BINDING IMPL INSTRUCTION the measurement adds:** lower the hidden slot as a **hidden out-param
+  / tagged-return register** — **NOT** the fat by-value `Result`-union struct-return that `throws` uses
+  today. The current `Result` lowering is ~9× the floor (63ms ideal → 86ms clean 32-byte struct-return
+  → 765ms actual; the 8× gap above clean struct-return = **redundant memcpys** in the current lowering,
+  visible in the emitted C). Q9 drop-correctness across propagation is PROVEN today on the existing
+  by-value path (scout built the fixture, ASan/UBSan clean) — inherited, not new work.
 - **Seam B (Q13) generics** — a type-param method's fault-channel is unknown pre-mono; conservative
   "may-fault" threading is correct-but-overbroad. Defer bound-spelling to 2.3; don't gate 2.1.
 - **Indirect-call seam (fn-pointer / closure / `Callable[T]`) — the weakest point of the
