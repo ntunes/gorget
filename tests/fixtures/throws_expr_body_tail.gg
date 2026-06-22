@@ -21,6 +21,36 @@ int forward(int x) throws String: risky(x)
 # Move-mode return-slot assign on the wrapped Ok value.
 String greet(String name) throws String: "Hi, " + name
 
+# T = Result — the declared success type is *itself* a Result. The synthesized
+# return slot is the double `Result[Result[int, String], String]`. The user's
+# tail value is the INNER `Result[int, String]`; the throws machinery must wrap
+# it in the outer `Ok` exactly once (B1). Before the fix the expr-body tail
+# never set `expected_type` to the declared `T`, so auto-prop over-unwrapped the
+# inner Result and the Ok-wrap re-wrapped at the wrong layer → a SILENT
+# MISCOMPILE (the binary built but `r` was corrupt and printed nothing).
+#
+# `mk` is a plain (non-throws) Result-returning fn, so the tail is a clean
+# `Result[int, String]` value with no nested-throws ambiguity.
+Result[int, String] mk(int x):
+    if x < 0:
+        return Error("neg")
+    return Ok(x * 3)
+
+# Expr-body form: tail `mk(x)` is a `Result[int, String]` value.
+Result[int, String] wrap_result_expr(int x) throws String: mk(x)
+
+# Block-body form: `return mk(x)` — same inner value, explicit return.
+Result[int, String] wrap_result_block(int x) throws String:
+    return mk(x)
+
+# `return Ok(...)` form: `Ok(x * 4)` builds the INNER `Result[int, String]`
+# (resolved against the declared `T`, not the slot), then the outer Ok-wrap
+# fires. The throw path exercises the outer Error layer.
+Result[int, String] wrap_result_ok(int x) throws String:
+    if x < 0:
+        throw "neg"
+    return Ok(x * 4)
+
 void main():
     int a = inc(10) catch (e): -1
     print(a)
@@ -33,3 +63,39 @@ void main():
 
     String g = greet("Bee") catch (e): "err"
     print(g)
+
+    # T = Result, expr-body tail: catch peels the outer throws-Result, leaving
+    # the inner `Result[int, String]` = Ok(12).
+    Result[int, String] r1 = wrap_result_expr(4) catch (e): Error("boom")
+    match r1:
+        case Ok(v):
+            print("ok")
+            print(v)
+        case Error(m):
+            print("err")
+            print(m)
+
+    # T = Result, block-body tail (return mk(x)).
+    Result[int, String] r2 = wrap_result_block(5) catch (e): Error("boom")
+    match r2:
+        case Ok(v):
+            print(v)
+        case Error(m):
+            print(m)
+
+    # T = Result, `return Ok(inner)` success path (Ok(24)).
+    Result[int, String] r3 = wrap_result_ok(6) catch (e): Error("boom")
+    match r3:
+        case Ok(v):
+            print(v)
+        case Error(m):
+            print(m)
+
+    # T = Result, throw path: the outer Error propagates, caught at the call
+    # site, leaving the inner Error("from-throw").
+    Result[int, String] r4 = wrap_result_ok(-1) catch (e): Error("from-throw")
+    match r4:
+        case Ok(v):
+            print(v)
+        case Error(m):
+            print(m)

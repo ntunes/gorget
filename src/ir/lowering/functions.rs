@@ -890,7 +890,27 @@ pub fn lower_function(
 
         FunctionBody::Expression(expr) => {
             let expr_span = expr.span;
+            // Mirror the binding form / `lower_return`: set `expected_type` to the
+            // *declared success type* `T` while lowering the tail, so the
+            // centralized auto-prop hook (and `Ok(...)`/`Error(...)` constructor
+            // resolution) sees the user-level type, not the synthesized
+            // `Result[T, E]` return slot. For a `throws` fn `T` is the Ok-payload
+            // of the slot; when `T` is itself a `Result`/`Option` the gate then
+            // fires and the tail is kept un-unwrapped (the B1 silent-miscompile:
+            // without this the gate didn't fire, auto-prop over-unwrapped the
+            // inner `Result` to a bare value, and the Ok-wrap below re-wrapped it
+            // at the wrong layer). For a non-throws fn `expected_type` stays the
+            // slot type (unchanged behavior).
+            let slot_type = builder.locals[0].type_id;
+            let declared_success_type = if func.throws.is_some() {
+                super::exprs::result_ok_payload_type(ctx, slot_type)
+            } else {
+                slot_type
+            };
+            let prev_expected = ctx.func_state.expected_type;
+            ctx.func_state.expected_type = Some(declared_success_type);
             let mut operand = lower_expr(ctx, &mut builder, expr);
+            ctx.func_state.expected_type = prev_expected;
             // Clone borrowed operands at the return boundary (BareParam, CowBorrow, etc.).
             // Skip when return type is Ptr — the caller expects a borrow, not an owned clone.
             let ret_type = builder.locals[0].type_id;
@@ -1166,7 +1186,21 @@ pub fn lower_equip_method(
 
         FunctionBody::Expression(expr) => {
             let expr_span = expr.span;
+            // See `lower_function`'s expr-body arm: set `expected_type` to the
+            // declared success type `T` (Ok-payload of the `Result[T, E]` slot
+            // for a `throws` method) so auto-prop / `Ok(...)` resolution sees the
+            // user-level type, not the slot. Fixes the `T = Result` silent
+            // miscompile on the method path too.
+            let slot_type = builder.locals[0].type_id;
+            let declared_success_type = if method.throws.is_some() {
+                super::exprs::result_ok_payload_type(ctx, slot_type)
+            } else {
+                slot_type
+            };
+            let prev_expected = ctx.func_state.expected_type;
+            ctx.func_state.expected_type = Some(declared_success_type);
             let mut operand = lower_expr(ctx, &mut builder, expr);
+            ctx.func_state.expected_type = prev_expected;
             // Clone borrowed operands at the return boundary.
             // Skip when return type is Ptr — the caller expects a borrow.
             let ret_type = builder.locals[0].type_id;

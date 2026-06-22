@@ -3150,6 +3150,25 @@ fn maybe_emit_from_conversion(
     converted
 }
 
+/// The Ok-payload (success) type of a `Result[T, E]` slot — i.e. the declared
+/// return type `T` of a `throws` fn whose synthesized return slot is `result_type`.
+///
+/// Returns `result_type` unchanged when it is not a Result enum (defensive — a
+/// `throws` fn's slot is always a `Result`, so the fallback only guards
+/// mis-calls). Used to set `expected_type` to the *user-level* return type when
+/// lowering a `throws` fn's tail/return value, so the auto-prop Result-gate and
+/// `Ok(...)`/`Error(...)` constructor resolution see `T`, not the slot. This is
+/// what makes a `throws` fn whose declared `T` is itself a `Result` lower
+/// correctly (the inner value keeps its Result layer; the outer Ok-wrap then
+/// fires exactly once).
+pub fn result_ok_payload_type(ctx: &LoweringContext, result_type: TypeId) -> TypeId {
+    if ctx.type_registry.enum_category(result_type) == Some(EnumCategory::Result) {
+        extract_result_field_types(ctx, result_type).0
+    } else {
+        result_type
+    }
+}
+
 /// Extract Ok and Error field types from a Result type definition.
 fn extract_result_field_types(ctx: &LoweringContext, result_type: TypeId) -> (TypeId, TypeId) {
     let type_name = ctx.type_registry.type_name(result_type);

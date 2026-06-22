@@ -1625,18 +1625,47 @@ fn lower_return(
     expr: Option<&Spanned<Expr>>,
 ) {
     if let Some(expr) = expr {
+        // A `throws` fn whose declared success type `T` is *itself* a
+        // `Result`/`Option`: the synthesized return slot is `Result[T, E]`
+        // (double-Result). The user's `return Ok(...)` / `return <value>` then
+        // produces a value of the inner type `T`, which still needs ONE outer
+        // Ok-wrap into the slot. The default path below treats `Ok(...)` as the
+        // slot-typed variant (the `is_explicit_result_variant` shortcut) and
+        // sets `expected_type` to the slot — both correct only when `T` is a
+        // non-Result (then slot == Result[T, E] and `Ok(value)` *is* the slot).
+        // When `T` is a Result we instead lower the value against `T` and force
+        // it through the Ok-wrap branch. (Was a silent miscompile: the inner
+        // value's bytes were written straight into the outer Ok slot, dropping
+        // the middle Result layer.)
+        let ret_type = builder.locals[0].type_id;
+        let throws_declared_success_type = ctx.func_state.current_throws_result_type
+            .map(|slot| super::exprs::result_ok_payload_type(ctx, slot));
+        let declared_t_is_result = throws_declared_success_type
+            .map(|t| ctx.type_registry.enum_category(t) == Some(EnumCategory::Result))
+            .unwrap_or(false);
+
         // Check if the return expression is already an explicit Ok/Error variant
         // (used in throws functions). If so, skip the automatic Result wrapping —
         // the expression itself already produces a Result.
-        let mut is_explicit_result_variant = matches!(&expr.node,
+        //
+        // When the declared `T` is itself a Result, an explicit `Ok(...)` builds
+        // the *inner* `T` and still needs the outer wrap, so force the shortcut
+        // off and route through the Ok-wrap branch below.
+        let mut is_explicit_result_variant = !declared_t_is_result && matches!(&expr.node,
             Expr::Call { callee, .. } if matches!(&callee.node,
                 Expr::Identifier(name) if name == "Ok" || name == "Error" || name == "Some" || name == "None"
             )
         );
-        // Set expected type from function return type so variant constructors resolve correctly
+        // Set expected type so variant constructors / auto-prop resolve against
+        // the user-level type. For a `throws` fn with a Result `T` that is the
+        // inner `T` (so `Ok(...)` builds `T`, not the slot); otherwise the slot.
         let prev_expected = ctx.func_state.expected_type;
-        let ret_type = builder.locals[0].type_id;
-        ctx.func_state.expected_type = Some(ret_type);
+        let expected_for_value = if declared_t_is_result {
+            throws_declared_success_type.unwrap_or(ret_type)
+        } else {
+            ret_type
+        };
+        ctx.func_state.expected_type = Some(expected_for_value);
 
         // `return v` where `v` is a `!`-sigil resource parameter: the body is
         // transferring its owned pointee onward through the return value.

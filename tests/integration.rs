@@ -4037,7 +4037,23 @@ fn throws_expr_body_tail() {
     // throws, propagates through `forward`, caught at the call site); and a
     // resource-typed tail (`greet` returns `String`) exercising the Move-mode
     // return-slot assign on the wrapped Ok value.
-    run_gg("throws_expr_body_tail.gg", "11\n10\n-1\nHi, Bee");
+    //
+    // B1 — declared `T` is *itself* a `Result`: the return slot is the double
+    // `Result[Result[int, String], String]`, so the user's tail value is the
+    // INNER `Result[int, String]` and the Ok-wrap must fire exactly once at the
+    // right layer. Was a SILENT MISCOMPILE (built clean, `r` corrupt, printed
+    // nothing): the expr-body tail (and the block-body `return Ok(...)` path)
+    // never set `expected_type` to the declared `T`, so auto-prop over-unwrapped
+    // the inner Result and the Ok-wrap re-wrapped at the wrong layer. Fix: set
+    // `expected_type = declared T` (Ok-payload of the slot) around the tail, and
+    // route the explicit `Ok(...)` through the outer-Ok wrap when `T` is a
+    // Result. `wrap_result_expr` (expr-body), `wrap_result_block` (block-body),
+    // `wrap_result_ok` (`return Ok(inner)` + throw path) cover all four shapes →
+    // `ok\n12` / `15` / `24` / `from-throw`.
+    run_gg(
+        "throws_expr_body_tail.gg",
+        "11\n10\n-1\nHi, Bee\nok\n12\n15\n24\nfrom-throw",
+    );
 }
 
 #[test]
