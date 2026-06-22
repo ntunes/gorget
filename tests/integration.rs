@@ -17110,6 +17110,78 @@ fn self_host_runtime() {
     );
 }
 
+/// GUARD for the self-host `embed_file` meta builtin (GG_IMPL bundling Inc-1).
+///
+/// `embed_file(path)` is Gorget's `include_str!`: at compile time the meta pass
+/// reads a file relative to the entry source dir and inlines its contents as a
+/// `String` constant. Before this landed, the self-host meta evaluator did NOT
+/// know `embed_file` — feeding it `meta String SQL = embed_file("…")` produced
+/// `[bug] EIdentifier: unknown identifier 'SQL'` and the program silently
+/// printed `0` (the bare-`OpConstI64(0)` fallback) instead of the file body.
+///
+/// This compiles the SHARED `embed_file.gg` fixture through the self-host driver
+/// (`driver F lib --emit-c` → `cc` → run) and asserts it emits the embedded file
+/// contents byte-for-byte. PROVE-IT-BITES: revert the `meta.gg` arm (or any of
+/// the 5 `expand_meta_types` source-dir call sites) and the run prints `0\n0\n
+/// done` — this test then fails on the first WRONG-OUTPUT line. The `embed_file`
+/// fixture embeds two real sibling files (`embed_content.txt` 44B + `embed_hello
+/// .txt` 11B), so it also exercises the path-resolution (`path_parent(
+/// path_absolute(entry))`) threaded through the driver.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_embed_file() {
+    if skip_under_llvm() { return; }
+
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let fixture = manifest_dir.join("tests/fixtures/embed_file.gg");
+
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_embed_file_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+
+    // The expected output is the contents of the two embedded sibling files
+    // (`embed_content.txt`, `embed_hello.txt`) followed by `done` — exactly what
+    // Rust gg emits (`tests/integration.rs` `embed_file()` test).
+    let expected = "\
+SELECT id, name FROM users WHERE active = 1;
+hello world
+done";
+
+    let result = self_host_emit_cc_run(
+        &driver_exe,
+        &lib_dir,
+        &runtime_dir,
+        &fixture,
+        &tmp_root,
+        "embed",
+    );
+    let _ = std::fs::remove_dir_all(&tmp_root);
+
+    match result {
+        Ok(stdout) => assert_eq!(
+            stdout.trim_end(),
+            expected,
+            "self-host `embed_file` produced the wrong output. \
+             Pre-fix the self-host did not evaluate embed_file and printed \
+             `0\\n0\\ndone`; with the fix it must inline the embedded file \
+             contents. (meta.gg embed_file arm or a driver source-dir call site \
+             regressed.)"
+        ),
+        Err(other) => panic!(
+            "self-host `embed_file` failed to build/run embed_file.gg: {other:?}"
+        ),
+    }
+}
+
 /// STRUCTURAL GUARD for the "GorgetArray-backed collection template registered
 /// as a user struct" bug class (fixed in lower.gg: gate the bare `type_infos`
 /// registration on `type_params.len()==0` + skip `is_builtin_collection_base`

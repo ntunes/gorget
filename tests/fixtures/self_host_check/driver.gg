@@ -21,6 +21,7 @@ from derive import expand_derives
 from meta import expand_meta_types, expand_meta_for_match
 from loader import load_all
 from std.fs import read_file, file_exists
+from std.path import path_parent, path_absolute
 from std.os import args
 from std.collections import Vector
 
@@ -63,7 +64,11 @@ void main():
     ScopeTable scopes = ScopeTable.new_scope_table()
     scopes.init()
     TypeTable types = TypeTable.new_type_table()
-    expand_meta_types(&m, &types)
+    # embed_file() resolves paths relative to the entry source dir. Bind
+    # to a String VarDecl first so the cstr->String coercion fires (it
+    # only fires at an SVarDecl, not in argument position).
+    String entry_source_dir = path_parent(path_absolute(path))
+    expand_meta_types(&m, &types, entry_source_dir)
     expand_meta_for_match(&m)
     ResolveContext ctx = resolve_module(m, &scopes, &types)
     type_check_module(m, &scopes, &types, &ctx)

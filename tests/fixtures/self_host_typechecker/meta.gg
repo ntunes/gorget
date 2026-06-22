@@ -14,6 +14,7 @@ from ast import MatchArm, ElseBranch, EnumDef, EnumVariant, FunctionDef, EquipBl
 from ast import SpannedPattern, Pattern, PConstructor, PWildcard, PBinding
 from types import TypeTable
 from std.collections import Vector, Dict
+from std.fs import read_file
 
 # ── Constant expression evaluator ─────────────────────────────
 
@@ -572,7 +573,7 @@ void substitute_meta_consts(Module &m, Dict[String, int] &iv, Dict[String, bool]
 
 # ── Main expansion entry point ────────────────────────────────
 
-void expand_meta_types(Module &m, TypeTable &types):
+void expand_meta_types(Module &m, TypeTable &types, String source_dir):
     # Pass 1: collect meta const values
     Dict[String, int] int_consts = Dict[String, int]()
     Dict[String, bool] bool_consts = Dict[String, bool]()
@@ -599,6 +600,20 @@ void expand_meta_types(Module &m, TypeTable &types):
                                 case EIdentifier(fn_name):
                                     if fn_name == "typename" and cargs.len() == 1:
                                         str_consts[mc_name] = meta_typename(arg_as_type(cargs.get(0).unwrap()))
+                                    elif fn_name == "embed_file" and cargs.len() == 1:
+                                        # Gorget's include_str!: read a file
+                                        # relative to the entry source dir at
+                                        # compile time, returning its contents
+                                        # as a String constant. Mirror Rust
+                                        # src/semantic/meta.rs:1086-1106. The
+                                        # contents land in str_consts, so the
+                                        # subst pass inlines it as a string
+                                        # literal exactly like a `meta String`.
+                                        match cargs.get(0).unwrap().expr:
+                                            case EStringLiteral(rel_path, _):
+                                                str_consts[mc_name] = read_file(source_dir + "/" + rel_path)
+                                            else:
+                                                pass
                                 else:
                                     pass
                         else:
