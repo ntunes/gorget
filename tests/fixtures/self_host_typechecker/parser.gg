@@ -1196,6 +1196,141 @@ equip Parser:
             while self.check_tok(TOK_NEWLINE):
                 self.advance()
 
+    # Parse the indented item-block that forms one branch of a top-level
+    # `meta if`/`elif`/`else`. Mirrors the item-detection loop of
+    # parse_module, scoped to a single INDENT…DEDENT block. Handles the
+    # item kinds that legally appear inside conditional compilation:
+    # meta declarations (const/type/assert/log), imports, extern blocks,
+    # struct/enum/trait/equip, directives, const/static/type/newtype, and
+    # function definitions. The winning branch's items are later spliced
+    # into the module by meta.gg's flatten pass (Phase 1.5).
+    Vector[Item] parse_meta_body_items(&self):
+        Vector[Item] body = Vector[Item]()
+        self.skip_trivia()
+        if not self.match_tok(TOK_INDENT):
+            # Single-line branch: `meta if c: <one item>` on the same line.
+            self.parse_one_meta_body_item(&body)
+            self.skip_newlines()
+            return body
+        while not self.check_tok(TOK_DEDENT) and not self.at_end():
+            self.skip_trivia()
+            if self.check_tok(TOK_DEDENT) or self.at_end():
+                break
+            self.parse_one_meta_body_item(&body)
+            self.skip_newlines()
+        self.match_tok(TOK_DEDENT)
+        return body
+
+    # Parse a single item inside a meta-if branch, pushing it into `body`.
+    # (Nested top-level `meta if` is handled recursively — the flatten pass
+    # loops until no IMetaIf remains, matching Rust's flatten_meta_ifs.)
+    void parse_one_meta_body_item(&self, Vector[Item] &body):
+        if self.check_kw(KW_PUBLIC):
+            self.advance()
+        if self.check_kw(KW_STRUCT):
+            body.push(self.parse_struct_item(Vector[String]()))
+        elif self.check_kw(KW_ENUM):
+            body.push(self.parse_enum_item(Vector[String]()))
+        elif self.check_kw(KW_TRAIT):
+            body.push(self.parse_trait_item())
+        elif self.check_kw(KW_EQUIP):
+            body.push(self.parse_equip_item())
+        elif self.check_kw(KW_IMPORT) or self.check_kw(KW_FROM):
+            body.push(self.parse_import_item())
+        elif self.check_kw(KW_DIRECTIVE):
+            body.push(self.parse_directive_item())
+        elif self.check_kw(KW_CONST):
+            body.push(self.parse_const_item())
+        elif self.check_kw(KW_TYPE):
+            body.push(self.parse_type_alias_item())
+        elif self.check_kw(KW_NEWTYPE):
+            body.push(self.parse_newtype_item())
+        elif self.check_kw(KW_EXTERN):
+            body.push(self.parse_extern_block())
+        elif self.check_kw(KW_META):
+            self.parse_meta_body_meta_item(&body)
+        else:
+            int saved_pos = self.pos
+            bool is_func = self.try_detect_function()
+            self.pos = saved_pos
+            if is_func:
+                body.push(self.parse_function_item())
+            else:
+                # Unsupported item shape inside a meta-if branch — skip the
+                # line defensively rather than corrupt the token stream.
+                while not self.at_end() and not self.check_tok(TOK_NEWLINE) and not self.check_tok(TOK_DEDENT):
+                    self.advance()
+
+    # Parse a `meta …` declaration inside a meta-if branch. Mirrors the
+    # `meta` arm of parse_module's item loop (meta const / type / assert /
+    # log / nested meta-if).
+    void parse_meta_body_meta_item(&self, Vector[Item] &body):
+        self.advance()  # skip 'meta'
+        if self.check_kw(KW_IF):
+            # Nested top-level meta-if inside a branch.
+            self.advance()
+            SpannedExpr nif_cond = self.parse_expr()
+            self.expect_tok(TOK_COLON, "expected ':' after nested meta if condition")
+            self.expect_tok(TOK_NEWLINE, "expected newline after nested meta if ':'")
+            Vector[Item] nif_then = self.parse_meta_body_items()
+            Vector[ItemElseBranch] nif_branches = Vector[ItemElseBranch]()
+            while self.check_kw(KW_ELIF):
+                self.advance()
+                SpannedExpr nelif_cond = self.parse_expr()
+                self.expect_tok(TOK_COLON, "expected ':' after nested meta elif condition")
+                self.expect_tok(TOK_NEWLINE, "expected newline after nested meta elif ':'")
+                nif_branches.push(ItemElseBranch(Some(nelif_cond), self.parse_meta_body_items()))
+            if self.check_kw(KW_ELSE):
+                self.advance()
+                self.expect_tok(TOK_COLON, "expected ':' after nested meta else")
+                self.expect_tok(TOK_NEWLINE, "expected newline after nested meta else ':'")
+                nif_branches.push(ItemElseBranch(None, self.parse_meta_body_items()))
+            body.push(IMetaIf(nif_cond, nif_then, nif_branches))
+        elif self.check_kw(KW_ASSERT):
+            body.push(IMetaAssert())
+            self.skip_meta_rest()
+        elif self.check_tok(TOK_IDENT) and self.peek_ident() == "log":
+            body.push(IMetaLog())
+            self.skip_meta_rest()
+        elif self.check_kw(KW_TYPE):
+            self.advance()  # skip 'type'
+            SpannedToken mt_name_tok = self.advance()
+            String mt_name = token_ident(mt_name_tok.lex_token)
+            if self.check_tok(TOK_LPAREN):
+                body.push(IMetaTypeFunc(mt_name))
+            elif self.check_tok(TOK_EQ):
+                self.advance()
+                SpannedType mt_rhs = self.parse_type()
+                if self.check_kw(KW_IF):
+                    self.advance()
+                    String mt_cond = ""
+                    if self.check_tok(TOK_IDENT):
+                        SpannedToken cond_tok = self.advance()
+                        mt_cond = token_ident(cond_tok.lex_token)
+                    self.expect_kw(KW_ELSE, "expected 'else'")
+                    SpannedType mt_else = self.parse_type()
+                    body.push(IMetaType(mt_name, MtrConditional(mt_rhs, mt_cond, mt_else)))
+                else:
+                    body.push(IMetaType(mt_name, MtrPlain(mt_rhs)))
+            else:
+                body.push(IMetaType(mt_name, MtrUnresolved()))
+            self.skip_newlines()
+        else:
+            # meta <Type> <name> = <expr>  (a meta const)
+            int mc_saved = self.pos
+            SpannedType mc_type = self.parse_type()
+            SpannedToken mc_name_tok = self.advance()
+            String mc_name = token_ident(mc_name_tok.lex_token)
+            if mc_name != "" and self.check_tok(TOK_EQ):
+                self.advance()
+                SpannedExpr mc_val = self.parse_expr()
+                body.push(IMetaConst(mc_type, mc_name, mc_val))
+                self.skip_newlines()
+            else:
+                self.pos = mc_saved
+                while not self.at_end() and not self.check_tok(TOK_NEWLINE) and not self.check_tok(TOK_DEDENT):
+                    self.advance()
+
     # ── Helper: make spanned nodes ───────────────────────────
 
     SpannedExpr mk_expr(self, Expr !e, int start):
@@ -4198,10 +4333,33 @@ equip Parser:
                 int meta_saved = self.pos
                 self.advance()
                 bool parsed_meta_item = false
-                # meta if ...
+                # meta if <cond>: <items> [elif <cond>: <items>]* [else: <items>]
+                # Parse the condition + branch item-blocks into a real
+                # IMetaIf payload so meta.gg's flatten pass (Phase 1.5) can
+                # evaluate the condition and splice the winning branch.
                 if self.check_kw(KW_IF):
-                    items.push(IMetaIf())
-                    parsed_meta_item = true
+                    self.advance()  # skip 'if'
+                    SpannedExpr mif_cond = self.parse_expr()
+                    self.expect_tok(TOK_COLON, "expected ':' after meta if condition")
+                    self.expect_tok(TOK_NEWLINE, "expected newline after meta if ':'")
+                    Vector[Item] mif_then = self.parse_meta_body_items()
+                    Vector[ItemElseBranch] mif_branches = Vector[ItemElseBranch]()
+                    while self.check_kw(KW_ELIF):
+                        self.advance()  # skip 'elif'
+                        SpannedExpr elif_cond = self.parse_expr()
+                        self.expect_tok(TOK_COLON, "expected ':' after meta elif condition")
+                        self.expect_tok(TOK_NEWLINE, "expected newline after meta elif ':'")
+                        Vector[Item] elif_items = self.parse_meta_body_items()
+                        mif_branches.push(ItemElseBranch(Some(elif_cond), elif_items))
+                    if self.check_kw(KW_ELSE):
+                        self.advance()  # skip 'else'
+                        self.expect_tok(TOK_COLON, "expected ':' after meta else")
+                        self.expect_tok(TOK_NEWLINE, "expected newline after meta else ':'")
+                        Vector[Item] else_items = self.parse_meta_body_items()
+                        mif_branches.push(ItemElseBranch(None, else_items))
+                    items.push(IMetaIf(mif_cond, mif_then, mif_branches))
+                    # The header/body were consumed above; do NOT skip_meta_rest.
+                    continue
                 # meta assert ...
                 elif self.check_kw(KW_ASSERT):
                     items.push(IMetaAssert())

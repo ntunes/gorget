@@ -159,7 +159,7 @@ enum Item:
     IMetaType(String, MetaTypeRhs)
     IMetaTypeFunc(String)
     IMetaAssert
-    IMetaIf
+    IMetaIf(SpannedExpr, Vector[Item], Vector[ItemElseBranch])
     IMetaLog
     IStaticDecl(SpannedType, String, SpannedExpr)
     IExternBlock(Vector[FunctionDef])
@@ -241,6 +241,13 @@ struct MatchArm:
 struct ElseBranch:
     Option[SpannedExpr] condition
     Vector[Stmt] body
+
+# Item-level else/elif branch — the top-level `meta if` analogue of
+# ElseBranch (which carries statements). `condition` is None for the
+# trailing `else:` block, Some(...) for an `elif <cond>:` block.
+struct ItemElseBranch:
+    Option[SpannedExpr] condition
+    Vector[Item] items
 
 struct ImportStmt:
     String module_path

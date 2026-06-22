@@ -3,6 +3,7 @@
 # the type checker can resolve types like `Num` (alias for `int`).
 
 from ast import Module, Item, IMetaConst, IMetaType, IMetaTypeFunc, IFunction, IEquip
+from ast import IMetaIf, ItemElseBranch
 from ast import MetaTypeRhs, MtrPlain, MtrConditional, MtrCall, MtrUnresolved
 from ast import SpannedType, Type, TPrimitive, TNamed, TInferred, SpannedExpr, Expr, Span, Param
 from ast import EIntLiteral, EFloatLiteral, EBoolLiteral, EStringLiteral
@@ -571,6 +572,83 @@ void substitute_meta_consts(Module &m, Dict[String, int] &iv, Dict[String, bool]
                 pass
         i = i + 1
 
+# ── Phase 1.5: flatten top-level `meta if` ────────────────────
+# Mirror of Rust src/semantic/meta.rs `flatten_meta_ifs` (:865) +
+# `pick_meta_if_branch` (:906). Evaluate each top-level IMetaIf's
+# condition against the collected consts, splice the winning branch's
+# items into m.items, and collect any meta consts the branch declares so
+# subsequent references resolve. Loops until no IMetaIf remains (handles
+# nested meta-if introduced by a winning branch).
+
+# Collect a single IMetaConst declaration into the const dicts. Used when
+# a winning meta-if branch introduces new consts (the spliced items must
+# be visible to substitution, exactly like top-level meta consts).
+void collect_meta_const(Item mitem, Dict[String, int] &iv, Dict[String, bool] &bv, Dict[String, String] &sv, Module &m):
+    match mitem:
+        case IMetaConst(mc_type, mc_name, mc_expr):
+            String type_name = meta_type_to_name(mc_type.ty)
+            if type_name == "int":
+                bool ok = true
+                int v = eval_int_ex(mc_expr.expr, &iv, &m, 0, &ok)
+                if ok:
+                    iv[mc_name] = v
+            elif type_name == "bool":
+                bool ok = true
+                bv[mc_name] = eval_meta_bool(mc_expr.expr, &iv, &bv, &m, &ok)
+            elif type_name == "str" or type_name == "String":
+                match mc_expr.expr:
+                    case EStringLiteral(s, _):
+                        sv[mc_name] = s
+                    else:
+                        pass
+        else:
+            pass
+
+# Return the winning branch's items for a meta-if, evaluating the main
+# condition then each elif, else the trailing else (empty if none).
+Vector[Item] pick_meta_if_branch(SpannedExpr cond, Vector[Item] then_items, Vector[ItemElseBranch] branches, Dict[String, int] &iv, Dict[String, bool] &bv, Module &m):
+    bool ok = true
+    bool taken = eval_meta_bool(cond.expr, &iv, &bv, &m, &ok)
+    if ok and taken:
+        return then_items
+    int bi = 0
+    while bi < branches.len():
+        ItemElseBranch br = branches.get(bi).unwrap()
+        match br.condition:
+            case Some(ec):
+                bool eok = true
+                bool etaken = eval_meta_bool(ec.expr, &iv, &bv, &m, &eok)
+                if eok and etaken:
+                    return br.items
+            case None:
+                # Trailing else — wins iff no earlier branch did.
+                return br.items
+        bi = bi + 1
+    return Vector[Item]()
+
+void flatten_meta_ifs(Module &m, Dict[String, int] &iv, Dict[String, bool] &bv, Dict[String, String] &sv):
+    bool changed = true
+    while changed:
+        changed = false
+        Vector[Item] new_items = Vector[Item]()
+        int i = 0
+        while i < m.items.len():
+            Item mitem = m.items.get(i).unwrap()
+            match mitem:
+                case IMetaIf(cond, then_items, branches):
+                    changed = true
+                    Vector[Item] winning = pick_meta_if_branch(cond, then_items, branches, &iv, &bv, &m)
+                    int wj = 0
+                    while wj < winning.len():
+                        Item won = winning.get(wj).unwrap()
+                        collect_meta_const(won, &iv, &bv, &sv, &m)
+                        new_items.push(won)
+                        wj = wj + 1
+                else:
+                    new_items.push(mitem)
+            i = i + 1
+        m.items = new_items
+
 # ── Main expansion entry point ────────────────────────────────
 
 void expand_meta_types(Module &m, TypeTable &types, String source_dir):
@@ -623,6 +701,14 @@ void expand_meta_types(Module &m, TypeTable &types, String source_dir):
 
     # Add platform builtins
     int_consts["arch_word_bits"] = 64
+
+    # Phase 1.5: Flatten top-level `meta if` (conditional compilation).
+    # Evaluate each IMetaIf condition against the collected consts, splice
+    # the winning branch's items into m.items, and collect any meta consts
+    # the winning branch declares (so references resolve in substitution).
+    # Loops until no IMetaIf remains (handles nested meta-if). Mirrors Rust
+    # src/semantic/meta.rs `flatten_meta_ifs` (:865).
+    flatten_meta_ifs(&m, &int_consts, &bool_consts, &str_consts)
 
     # [PROTOTYPE] Phase 2: substitute collected const values into all bodies.
     substitute_meta_consts(&m, &int_consts, &bool_consts, &str_consts)
