@@ -4050,10 +4050,37 @@ fn throws_expr_body_tail() {
     // Result. `wrap_result_expr` (expr-body), `wrap_result_block` (block-body),
     // `wrap_result_ok` (`return Ok(inner)` + throw path) cover all four shapes →
     // `ok\n12` / `15` / `24` / `from-throw`.
+    //
+    // B1-Option fold — declared `T` is *itself* an `Option`: same double-wrap
+    // shape (slot = `Result[Option[int], String]`). Before the fold the
+    // `declared_t_is_*` gate matched only `Result`, so a `Some(...)`/`None` tail
+    // kept the explicit-variant shortcut ON and the 16-byte inner `Option` was
+    // direct-assigned into the larger outer `Result` slot — a stack-buffer
+    // overflow (`-Wstringop-overread`) that silently DROPPED the value (`56`
+    // never printed). Fix: broaden the gate to `Result | Option`. `wrap_opt_expr`
+    // (expr-body, Some(21)), `wrap_opt_block` (block-body, None -> -2),
+    // `wrap_opt_some` (`return Some(inner)`, Some(56)) + throw path (None -> -4)
+    // give `21` / `-2` / `56` / `-4`. (Non-resource int inner; the resource-inner
+    // payload case is a separately-filed known defect, see the `#[ignore]`'d
+    // `throws_t_result_resource_inner` test.)
     run_gg(
         "throws_expr_body_tail.gg",
-        "11\n10\n-1\nHi, Bee\nok\n12\n15\n24\nfrom-throw",
+        "11\n10\n-1\nHi, Bee\nok\n12\n15\n24\nfrom-throw\n21\n-2\n56\n-4",
     );
+}
+
+#[test]
+#[ignore] // KNOWN DEFECT (filed TODO.md High): throws T=Result/Option with a RESOURCE
+          // (heap-String) inner payload double-frees the inner String — the outer-Ok-wrap
+          // path (B1) doesn't transfer/register ownership of the inner resource. ASan:
+          // attempting double-free. B1 fixed the int-inner case; this is the orthogonal
+          // deeper drop-tracking gap. FLIP TO ACTIVE (remove #[ignore]) when fixed.
+fn throws_t_result_resource_inner() {
+    // The language-CORRECT output: `wrap_result(5)` -> Ok(Ok("val-ok")), catch peels
+    // the outer throws-Result -> Ok("val-ok") -> prints `val-ok`; `wrap_option(5)` ->
+    // Ok(Some("opt-yes")) -> Some("opt-yes") -> prints `opt-yes`. Currently CRASHES
+    // (double-free, exit 134) instead of printing this.
+    run_gg("throws_t_result_resource_inner.gg", "val-ok\nopt-yes");
 }
 
 #[test]

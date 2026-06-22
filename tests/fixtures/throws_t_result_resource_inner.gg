@@ -1,0 +1,44 @@
+# KNOWN DEFECT (filed in TODO.md) — `#[ignore]`'d until the drop-tracking is fixed.
+#
+# A `throws` fn whose declared success type `T` is a `Result`/`Option` with a
+# RESOURCE (heap-String) INNER payload double-frees. The outer-Ok-wrap path
+# (B1) does not transfer/register ownership of the inner resource: the inner
+# `Result`/`Option` value's String is dropped once inside the wrapping fn (via
+# the inner enum's `__drop`) AND again at the call site after the outer Ok-wrap
+# aliases the same allocation. ASan: `attempting double-free`.
+#
+# The B1 int-inner case is fixed (non-resource payload, `throws_expr_body_tail`);
+# this is the orthogonal deeper drop-tracking gap. The expected output below is
+# what the language SHOULD produce — when the drop-tracking is fixed, remove the
+# `#[ignore]` and this flips green.
+
+# --- Result inner (heap String payload) ---
+Result[String, String] mk_result(int x):
+    if x < 0:
+        return Error("neg")
+    return Ok("val-" + "ok")
+
+Result[String, String] wrap_result(int x) throws String: mk_result(x)
+
+# --- Option inner (heap String payload) ---
+Option[String] mk_option(int x):
+    if x < 0:
+        return None
+    return Some("opt-" + "yes")
+
+Option[String] wrap_option(int x) throws String: mk_option(x)
+
+void main():
+    Result[String, String] r1 = wrap_result(5) catch (e): Error("c")
+    match r1:
+        case Ok(s):
+            print(s)
+        case Error(m):
+            print(m)
+
+    Option[String] o1 = wrap_option(5) catch (e): None
+    match o1:
+        case Some(s):
+            print(s)
+        case None:
+            print("none")

@@ -1640,27 +1640,38 @@ fn lower_return(
         let ret_type = builder.locals[0].type_id;
         let throws_declared_success_type = ctx.func_state.current_throws_result_type
             .map(|slot| super::exprs::result_ok_payload_type(ctx, slot));
-        let declared_t_is_result = throws_declared_success_type
-            .map(|t| ctx.type_registry.enum_category(t) == Some(EnumCategory::Result))
+        // True when the declared success type `T` is itself an enum-wrapper
+        // (`Result[..]` OR `Option[..]`). In both cases the synthesized return
+        // slot is `Result[T, E]` (one extra outer layer), so an explicit
+        // `Ok`/`Error`/`Some`/`None` from the user builds the *inner* `T` and
+        // still needs ONE outer Ok-wrap. (Option must be included too: without
+        // it, a `Some(...)`/`None` tail kept the shortcut on and the 16-byte
+        // inner `Option` was direct-assigned into the larger outer `Result`
+        // slot — a stack-buffer overflow + silently dropped value.)
+        let declared_t_is_enum_wrapper = throws_declared_success_type
+            .map(|t| matches!(ctx.type_registry.enum_category(t),
+                Some(EnumCategory::Result) | Some(EnumCategory::Option)))
             .unwrap_or(false);
 
         // Check if the return expression is already an explicit Ok/Error variant
         // (used in throws functions). If so, skip the automatic Result wrapping —
         // the expression itself already produces a Result.
         //
-        // When the declared `T` is itself a Result, an explicit `Ok(...)` builds
-        // the *inner* `T` and still needs the outer wrap, so force the shortcut
-        // off and route through the Ok-wrap branch below.
-        let mut is_explicit_result_variant = !declared_t_is_result && matches!(&expr.node,
+        // When the declared `T` is itself a Result/Option, an explicit
+        // `Ok(...)` / `Some(...)` builds the *inner* `T` and still needs the
+        // outer wrap, so force the shortcut off and route through the Ok-wrap
+        // branch below.
+        let mut is_explicit_result_variant = !declared_t_is_enum_wrapper && matches!(&expr.node,
             Expr::Call { callee, .. } if matches!(&callee.node,
                 Expr::Identifier(name) if name == "Ok" || name == "Error" || name == "Some" || name == "None"
             )
         );
         // Set expected type so variant constructors / auto-prop resolve against
-        // the user-level type. For a `throws` fn with a Result `T` that is the
-        // inner `T` (so `Ok(...)` builds `T`, not the slot); otherwise the slot.
+        // the user-level type. For a `throws` fn with a Result/Option `T` that is
+        // the inner `T` (so `Ok(...)` / `Some(...)` builds `T`, not the slot);
+        // otherwise the slot.
         let prev_expected = ctx.func_state.expected_type;
-        let expected_for_value = if declared_t_is_result {
+        let expected_for_value = if declared_t_is_enum_wrapper {
             throws_declared_success_type.unwrap_or(ret_type)
         } else {
             ret_type

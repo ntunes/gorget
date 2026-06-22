@@ -51,6 +51,35 @@ Result[int, String] wrap_result_ok(int x) throws String:
         throw "neg"
     return Ok(x * 4)
 
+# T = Option — the declared success type is *itself* an `Option`. Same
+# double-wrap shape as the T=Result case: the synthesized slot is
+# `Result[Option[int], String]`, so the user's tail value is the INNER
+# `Option[int]` and the outer Ok-wrap must fire exactly once. Before the Option
+# fold the `declared_t_is_*` gate matched only `Result`, so a `Some(...)`/`None`
+# tail kept the explicit-variant shortcut ON and the 16-byte inner `Option` was
+# direct-assigned into the larger outer `Result` slot — a stack-buffer overflow
+# (`-Wstringop-overread`) + silently dropped value. (Non-resource int inner; the
+# resource-inner case is a separately-filed known defect.)
+Option[int] maybe(int x):
+    if x < 0:
+        return None
+    return Some(x * 7)
+
+# Expr-body form: tail `maybe(x)` is an `Option[int]` value.
+Option[int] wrap_opt_expr(int x) throws String: maybe(x)
+
+# Block-body form: `return maybe(x)` — same inner value, explicit return.
+Option[int] wrap_opt_block(int x) throws String:
+    return maybe(x)
+
+# `return Some(...)` form: `Some(x + 50)` builds the INNER `Option[int]`
+# (resolved against the declared `T`, not the slot), then the outer Ok-wrap
+# fires. The throw path exercises the outer Error layer.
+Option[int] wrap_opt_some(int x) throws String:
+    if x < 0:
+        throw "neg"
+    return Some(x + 50)
+
 void main():
     int a = inc(10) catch (e): -1
     print(a)
@@ -99,3 +128,37 @@ void main():
             print(v)
         case Error(m):
             print(m)
+
+    # T = Option, expr-body tail: catch peels the outer throws-Result, leaving
+    # the inner `Option[int]` = Some(21).
+    Option[int] o1 = wrap_opt_expr(3) catch (e): None
+    match o1:
+        case Some(v):
+            print(v)
+        case None:
+            print(-1)
+
+    # T = Option, block-body tail (return maybe(x)): maybe(-1) returns None.
+    Option[int] o2 = wrap_opt_block(-1) catch (e): None
+    match o2:
+        case Some(v):
+            print(v)
+        case None:
+            print(-2)
+
+    # T = Option, `return Some(inner)` success path (Some(56)).
+    Option[int] o3 = wrap_opt_some(6) catch (e): None
+    match o3:
+        case Some(v):
+            print(v)
+        case None:
+            print(-3)
+
+    # T = Option, throw path: the outer Error propagates, caught at the call
+    # site, leaving the catch default None.
+    Option[int] o4 = wrap_opt_some(-1) catch (e): None
+    match o4:
+        case Some(v):
+            print(v)
+        case None:
+            print(-4)
