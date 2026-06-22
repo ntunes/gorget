@@ -4178,6 +4178,34 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         int unit_dst = add_local(&ctx, UNIT_TYPE, None)
         emit(&ctx, GIAssign(unit_dst, OpConstUnit()))
         result = unit_dst
+        # Resolve the `terminator=` kwarg (default "\n"). Mirrors Rust gg's
+        # lower_print_call (src/ir/lowering/exprs/calls.rs:1604-1618): the
+        # terminator must be a plain (non-interpolated) string literal so it
+        # can be spliced into the printf format string at compile time. The
+        # parser puts the keyword for value i at arg_names[i] ("" for a
+        # positional arg, parser.gg:1896), parallel to `args`. Scan args[1..]
+        # for `terminator`; the positional value stays args[0]. Without this
+        # the hardcoded `\n` below ignores `print(x, terminator="")` /
+        # `terminator=", "`, breaking the print_terminator / print_builtin
+        # fixtures (every line gets a spurious newline).
+        String term = "\n"
+        int pterm_i = 1
+        while pterm_i < args.len():
+            String pterm_name = ""
+            if pterm_i < arg_names.len():
+                pterm_name = arg_names.get(pterm_i).unwrap()
+            if pterm_name == "terminator":
+                SpannedExpr pterm_arg = args.get(pterm_i).unwrap()
+                match pterm_arg.expr:
+                    case EStringLiteral(pterm_s, pterm_interp):
+                        # Single-segment (non-interpolated) literal only; an
+                        # interpolated terminator is silently ignored (matches
+                        # Rust's `if !has_interp` gate — not a real use case).
+                        if not pterm_interp:
+                            term = pterm_s.clone()
+                    else:
+                        pass
+            pterm_i = pterm_i + 1
         if args.len() > 0:
             SpannedExpr parg = args.get(0).unwrap()
             int val = lower_expr(&ctx, parg, &gmod)
@@ -4196,9 +4224,11 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                 emit(&ctx, GIDeref(sval, val, gs_tid))
                 val = sval
                 val_type = gs_tid
-            String fmt = "%lld\n"
+            # Format SPEC only (no terminator); `term` is appended at the
+            # build site below so the `terminator=` kwarg is honoured.
+            String fmt = "%lld"
             if val_type == F64_TYPE:
-                fmt = "%f\n"
+                fmt = "%f"
             elif val_type == BOOL_TYPE:
                 # bool → gorget_bool_to_str → GorgetString, print as "%s\n".
                 # Mirrors Rust format_for_printf BOOL_TYPE→"%s"
@@ -4216,7 +4246,7 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                 register_local_for_drop(&ctx, bdst, gs_tid, &gmod)
                 val = bdst
                 val_type = gs_tid
-                fmt = "%.*s\n"
+                fmt = "%.*s"
             elif fstr_displayable_display_method(val_type, &gmod) is Some(pdisp_fn):
                 # Displayable dispatch: `print(x)` where x is a struct/enum
                 # with a `display` method → call `Type__display(&x)` → String,
@@ -4237,12 +4267,15 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                 register_local_for_drop(&ctx, pdisp_dst, gs_tid, &gmod)
                 val = pdisp_dst
                 val_type = gs_tid
-                fmt = "%.*s\n"
+                fmt = "%.*s"
             if val_type == gs_tid:
                 # %.*s + (int)len,data so a non-NUL-terminated cap=0 view
                 # (trim/strip/slice) prints exactly len bytes, not over-reading.
                 # The printf emitter decomposes the Str value arg (ai != 0).
-                fmt = "%.*s\n"
+                fmt = "%.*s"
+            # Append the resolved terminator (default "\n") so `terminator=`
+            # is honoured (was a hardcoded "\n" baked into each spec above).
+            fmt = fmt + term
             Vector[Operand] printf_args = [OpConstStr(fmt), op_consume(&ctx, &gmod, val, CkFormatArg())]
             int pdst = add_local(&ctx, I32_TYPE, None)
             emit(&ctx, GICallExtern(pdst, "printf", printf_args))

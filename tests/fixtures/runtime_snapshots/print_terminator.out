@@ -1,0 +1,5 @@
+hello
+a, b, c
+x	y	z
+no-newline <- continues
+x = 42 | done
