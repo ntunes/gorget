@@ -3791,6 +3791,9 @@ equip Parser:
                     self.advance()
                 if self.check_tok(TOK_IDENT) and token_ident(self.peek().lex_token) == "noreturn":
                     self.advance()
+                # `borrowed` (non-owning FFI return alias) is also a bare ident.
+                if self.check_tok(TOK_IDENT) and token_ident(self.peek().lex_token) == "borrowed":
+                    self.advance()
             # Skip 'async' modifier before method def
             if self.check_kw(KW_ASYNC):
                 self.advance()
@@ -3931,6 +3934,10 @@ equip Parser:
         # Inline extern: extern int func(int x) = "symbol"
         # Detected when next token is a type keyword or identifier (not ':')
         if not self.check_tok(TOK_COLON):
+            # Skip an optional `borrowed` (non-owning FFI return alias) bare
+            # ident before the return type — same shape as the block form.
+            if self.check_tok(TOK_IDENT) and token_ident(self.peek().lex_token) == "borrowed":
+                self.advance()
             FunctionDef fd = self.parse_function_def()
             # Preserve the `= "symbol"` body (single string-literal stmt) so
             # loader.gg can detect the rename and populate call_redirects.
@@ -3964,12 +3971,18 @@ equip Parser:
                 # return type, matching what parse_function_def expects.
                 if self.check_kw(KW_EXTERN):
                     self.advance()
-                # Skip optional `blocking` / `noreturn` / `async` modifiers
-                # before the return type. `blocking` and `noreturn` are bare
-                # identifiers in the self-host lexer (not keywords).
+                # Skip optional `blocking` / `noreturn` / `borrowed` / `async`
+                # modifiers before the return type. `blocking`, `noreturn`, and
+                # `borrowed` are bare identifiers in the self-host lexer (not
+                # keywords). `borrowed` (e.g. `extern borrowed String f() =
+                # "sym"`) marks a non-owning FFI return alias; without skipping
+                # it the qualifier is parsed as the return type and the whole
+                # extern decl is dropped → an undefined link reference.
                 if self.check_tok(TOK_IDENT) and token_ident(self.peek().lex_token) == "blocking":
                     self.advance()
                 if self.check_tok(TOK_IDENT) and token_ident(self.peek().lex_token) == "noreturn":
+                    self.advance()
+                if self.check_tok(TOK_IDENT) and token_ident(self.peek().lex_token) == "borrowed":
                     self.advance()
                 if self.check_kw(KW_ASYNC):
                     self.advance()

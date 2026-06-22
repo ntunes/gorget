@@ -3551,6 +3551,10 @@ equip Parser:
         # Inline extern: extern int func(int x) = "symbol"
         # Detected when next token is a type keyword or identifier (not ':')
         if not self.check_tok(TOK_COLON):
+            # Skip an optional `borrowed` (non-owning FFI return alias) bare
+            # ident before the return type — same shape as the block form.
+            if self.check_tok(TOK_IDENT) and token_ident(self.peek().lex_token) == "borrowed":
+                self.advance()
             FunctionDef fd = self.parse_function_def()
             # Convert expr-body (= "symbol") to declaration (empty body)
             Vector[Stmt] empty = Vector[Stmt]()
@@ -3565,6 +3569,24 @@ equip Parser:
                     break
                 # Skip 'public' if present
                 if self.check_kw(KW_PUBLIC):
+                    self.advance()
+                # Skip the inner `extern` keyword so the next token is the
+                # return type, matching what parse_function_def expects.
+                if self.check_kw(KW_EXTERN):
+                    self.advance()
+                # Skip optional `blocking` / `noreturn` / `borrowed` modifiers
+                # before the return type. These are bare identifiers in the
+                # self-host lexer (not keywords). `borrowed` (e.g. `extern
+                # borrowed String f() = "sym"`) marks a non-owning FFI return
+                # alias; without skipping it the qualifier is parsed as the
+                # return type and the extern decl mis-parses.
+                if self.check_tok(TOK_IDENT) and token_ident(self.peek().lex_token) == "blocking":
+                    self.advance()
+                if self.check_tok(TOK_IDENT) and token_ident(self.peek().lex_token) == "noreturn":
+                    self.advance()
+                if self.check_tok(TOK_IDENT) and token_ident(self.peek().lex_token) == "borrowed":
+                    self.advance()
+                if self.check_kw(KW_ASYNC):
                     self.advance()
                 Item fn_item = self.parse_function_item()
                 match fn_item:

@@ -1125,4 +1125,56 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
 
         pi += 1
 
+    # Main-module extern aliases: `extern "C": ... f(...) = "symbol"` declared
+    # in the ENTRY module (not an import). Mirrors Rust gg's extern_bindings
+    # pass (src/ir/lowering/mod.rs:717-718 `ctx.extern_bindings.insert(name,
+    # c_symbol)`), which scans ALL module functions — including the entry one.
+    # The imported-module loop above (pi) only covers extern aliases pulled in
+    # via `import`; without this scan a top-level `extern "C": ... = "sym"`
+    # block in the fixture itself never populates call_redirects, so lower_call
+    # emits the Gorget name (e.g. `_llabs_borrowed`) instead of the C symbol
+    # (`llabs`) → undefined link reference (extern_borrowed/borrowed_extern_
+    # string).
+    #
+    # Scope: BLOCK-form externs only (IExternBlock). A top-level *inline*
+    # `extern int f(...) = "sym"` parses to a bare IFunction that is shape-
+    # indistinguishable from a real `String greet(): return "hi"` — registering
+    # those by body-shape would mis-redirect real functions. That case (A.3)
+    # needs a typed `is_extern_stub` flag on FunctionDef and is filed
+    # separately; it is NOT one of the wired fixtures here (both use the block
+    # form).
+    int mi = 0
+    while mi < m.items.len():
+        Item main_item = m.items.get(mi).unwrap()
+        match main_item:
+            case IExternBlock(main_ext_fns):
+                int mxi = 0
+                while mxi < main_ext_fns.len():
+                    FunctionDef main_ext_fd = main_ext_fns.get(mxi).unwrap()
+                    if main_ext_fd.body.len() == 1:
+                        Stmt main_ext_s = main_ext_fd.body.get(0).unwrap()
+                        match main_ext_s:
+                            case SExpr(main_ext_sx):
+                                match main_ext_sx.expr:
+                                    case EStringLiteral(main_ext_val, _):
+                                        call_redirects.put(main_ext_fd.name.clone(), main_ext_val.clone())
+                                    else:
+                                        pass
+                            case SReturn(main_ext_ret_opt):
+                                match main_ext_ret_opt:
+                                    case Some(main_ext_ret_expr):
+                                        match main_ext_ret_expr.expr:
+                                            case EStringLiteral(main_ext_val2, _):
+                                                call_redirects.put(main_ext_fd.name.clone(), main_ext_val2.clone())
+                                            else:
+                                                pass
+                                    case None:
+                                        pass
+                            else:
+                                pass
+                    mxi += 1
+            else:
+                pass
+        mi += 1
+
     return call_redirects
