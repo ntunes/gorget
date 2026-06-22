@@ -4313,6 +4313,51 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         # Lower the inner arg and pass its type through.
         SpannedExpr inner = args.get(0).unwrap()
         result = lower_expr(&ctx, inner, &gmod)
+    elif fname == "len" and args.len() == 1:
+        # Free `len(x)` → dispatch to the runtime fn for the ARG's type,
+        # mirroring Rust gg's free-len handler (src/ir/lowering/exprs/
+        # calls.rs:534-571). String → gorget_str_codepoint_count (by value),
+        # Vector/Deque/Heap → gorget_array_len, Dict → gorget_map_len,
+        # Set → gorget_set_len (the latter three take the receiver by pointer,
+        # which lir_lower's needs_ptr_arg wraps for us — gorget_array_len is in
+        # that list, lir_lower.gg:2205). Without this arm the call falls through
+        # to the generic GICall path and emits a literal `len(x)` C call to an
+        # undefined symbol. The dispatch is keyed on the TYPED arg type
+        # (is_string_type_id / collection_kind_of), not a name match.
+        SpannedExpr len_arg = args.get(0).unwrap()
+        int len_local = lower_expr(&ctx, len_arg, &gmod)
+        int len_arg_ty = I64_TYPE
+        if len_local >= 0 and len_local < ctx.locals.len():
+            len_arg_ty = ctx.locals.get(len_local).unwrap().type_id
+        int len_dst = add_local(&ctx, I64_TYPE, None)
+        if is_string_type_id(len_arg_ty, &gmod):
+            # gorget_str_codepoint_count takes Str BY VALUE (lir_lower.gg:2283,
+            # NOT in needs_ptr_arg). Pass the receiver as a read-only OpBorrow —
+            # the SAME shape the `.len()` METHOD path uses (the resource-move
+            # validator forbids OpCopy on a resource; OpBorrow is read-only so
+            # the String isn't consumed and the C-emit reads it by value).
+            # A borrowed-String arg (Ptr(GorgetString)) is deref'd to a value
+            # first so the by-value ABI is satisfied.
+            int len_str_val = len_local
+            if is_ptr_to_string_type_id(len_arg_ty, &gmod):
+                int gs_tid = lookup_or_register_named(&gmod, "GorgetString")
+                int len_sval = add_local_with(&ctx, gs_tid, None, LoBorrowed(), BoNone())
+                emit(&ctx, GIDeref(len_sval, len_local, gs_tid))
+                len_str_val = len_sval
+            emit(&ctx, GICallExtern(len_dst, "gorget_str_codepoint_count", [OpBorrow(len_str_val)]))
+        else:
+            # Collection: pick the runtime fn off the RESOLVED CollectionKind.
+            # Default to gorget_array_len (Vector/Deque/Heap/unknown), matching
+            # Rust's else-branch fall-through (calls.rs:568).
+            String len_fn = "gorget_array_len"
+            String len_tn = type_id_to_name(len_arg_ty, &gmod)
+            CollectionKind len_ck = collection_kind_of(&gmod, len_tn)
+            if collection_kind_eq(len_ck, CkDict()):
+                len_fn = "gorget_map_len"
+            elif collection_kind_eq(len_ck, CkOrderedSet()) or collection_kind_eq(len_ck, CkHashSet()):
+                len_fn = "gorget_set_len"
+            emit(&ctx, GICallExtern(len_dst, len_fn, [OpBorrow(len_local)]))
+        result = len_dst
     elif fname == "thread_spawn" and (args.len() == 1 or args.len() == 2):
         # thread_spawn(fn[, stack_size]) → __gorget_thread_spawn_{fn}().
         # Mirrors Rust gg's intrinsic (`src/ir/lowering/exprs/calls.rs:914`).

@@ -2841,6 +2841,53 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                 gmod.fn_sigs.put(rs_fdef.name, rs_prim_rt)
                         else:
                             pass
+            case IExternBlock(rs_ext_fns):
+                # Register the ENTRY-module `extern "C":` block's externs in
+                # fn_sigs, mirroring Rust gg's imported/inline-extern path
+                # (src/ir/lowering/mod.rs:801-810: for each block fn,
+                # `ctx.fn_sigs.insert(name, (param_types, ret_type))`). Without
+                # this, a `String`-returning extern (e.g. `extern borrowed String
+                # _test_borrowed_empty() = "gorget_str_empty"`) leaves its result
+                # slot at the I64 fn_sigs default → the ISlotStore types `Str`
+                # into an `int64_t` slot → cc errors "incompatible types when
+                # assigning to type 'int64_t' from type 'Str'".
+                #
+                # Register under BOTH the Gorget name AND the redirected C symbol
+                # (the `= "sym"` body), exactly as Rust registers both the
+                # mangled and bare names (mod.rs:776/810). The call site resolves
+                # the redirect FIRST (call_name = call_redirects[fname], lower_
+                # expr.gg:4542) and then looks up the return type under the
+                # already-redirected `call_name` (lower_expr.gg:4910) — so the
+                # C-symbol key is the one that fires; the Gorget-name key is the
+                # belt-and-suspenders for any lookup that runs before the redirect.
+                # Keyed by the extern's return type via map_ast_type (resolves
+                # String → GorgetString); I64-default returns are left untouched.
+                for rs_ext_fd in rs_ext_fns:
+                    int rs_ext_rt = map_ast_type(rs_ext_fd.return_type, &gmod)
+                    if rs_ext_rt != I64_TYPE:
+                        gmod.fn_sigs.put(rs_ext_fd.name.clone(), rs_ext_rt)
+                        # Extract the `= "symbol"` C name from the stub body and
+                        # register the sig under it too (the redirect-resolved key).
+                        if rs_ext_fd.body.len() == 1:
+                            match rs_ext_fd.body.get(0).unwrap():
+                                case SReturn(rs_ext_ret_opt):
+                                    match rs_ext_ret_opt:
+                                        case Some(rs_ext_ret):
+                                            match rs_ext_ret.expr:
+                                                case EStringLiteral(rs_ext_sym, _):
+                                                    gmod.fn_sigs.put(rs_ext_sym.clone(), rs_ext_rt)
+                                                else:
+                                                    pass
+                                        case None:
+                                            pass
+                                case SExpr(rs_ext_sx):
+                                    match rs_ext_sx.expr:
+                                        case EStringLiteral(rs_ext_sym2, _):
+                                            gmod.fn_sigs.put(rs_ext_sym2.clone(), rs_ext_rt)
+                                        else:
+                                            pass
+                                else:
+                                    pass
             else:
                 pass
 
