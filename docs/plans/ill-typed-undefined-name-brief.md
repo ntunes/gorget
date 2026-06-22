@@ -114,6 +114,53 @@ naive fix's 238 regressions are the proof this is the hard part. Re-measure the 
 before AND after; the fix is not done until it's 0 spurious. Keep the `bootstrap_fixed_point` green
 (the driver's own source must resolve clean under the new path).
 
+## ⚠ REVIEW PASS 1 — SCOPE CORRECTION (BLOCKING; brief is NOT launch-ready as written)
+Review `a60bfa12` REPRODUCED the trap (233/1285 spurious on the naive fix) and proved the **3-class
+allow-set is INCOMPLETE — there are 5 classes, and the "0 spurious" gate is UNSATISFIABLE with B1+B2
+alone.** The undefined-name diagnostic is ENTANGLED with pre-existing resolver-registration bugs:
+
+- **4th class — `meta`-introduced bindings** (`BONUS`/`MSG`/`Map`/`vname`/`idx`/`fname`/`ftype`): neither
+  import nor variant nor intrinsic. HETEROGENEOUS — `meta_basic` compiles CORRECTLY today (the naive fix
+  would REGRESS it), while `meta_fields`/`meta_variant_payloads`/`meta_enum_ordinal` already MISCOMPILE
+  (`0\n0\ndone` vs Rust's expansion). Allow-listing these would MASK the meta-expansion gap (violates
+  "Don't redesign around compiler gaps"). Do NOT blanket-allow-list `meta` names.
+- **5th class — legitimate locals/params the resolver FAILS to register** (NOT allow-list candidates —
+  allow-listing buries real bugs; several already MISCOMPILE, so the new diagnostic would turn a
+  miscompile into a FALSE REJECTION of a Rust-VALID program):
+  - **inclusive-range `for i in 0..=3:` does not bind `i`** (half-open `0..3` works) — self-host already
+    miscompiles (`inc:5` one garbage iter vs Rust `inc:0..3`). Resolver/lowering `..=` gap.
+  - **sigil/ref-element VarDecls & params** unregistered: `Option[int &] hit = v.get(1)`
+    (`method_resolution_valid_unwrap` → EMPTY output vs `22/77/40/33`); `Vector[int !] items` /
+    `Option[int !] peek_last` params (`sigil_type_args`).
+  - **inline `extern borrowed` decls** (`extern_borrowed.gg:14`, `borrowed_extern_string.gg`).
+  - **missing builtins**: `panic` (not in self-host `is_builtin`), reflection `field_set`/`field_value`.
+
+**The corrected gate (re-scope REQUIRED):** "**no spurious rejection on fixtures the self-host currently
+compiles CORRECTLY**." Fixtures the self-host ALREADY miscompiles (5th-class) must NOT block the gate via
+an allow-list — instead, each is its own filed bug; rejecting them (a clean error vs a silent miscompile)
+diverges from Rust-ACCEPTS, so it needs an **OWNER CALL per Core-#8** (ship a new rejection on an
+already-broken fixture? or fix the resolver-registration gap first so the name IS defined = the
+reference-grade answer). **The clean decomposition (this track is MULTI-INCREMENT, not one executor):**
+1. **Pre-req resolver-registration fixes** (real parity bugs, fix first — they ALSO unblock the
+   diagnostic by making the legitimate names defined): inclusive-range `..=` binding, sigil/ref VarDecl+
+   param registration, inline-extern decl registration, add `panic`/reflection builtins.
+2. **The undefined-name diagnostic** + the import/variant/intrinsic allow-set, AFTER (1), so it can't
+   false-positive on valid code. The 4th-class meta bindings need the meta-expansion gap addressed (for
+   the miscompiling ones) — not allow-listed.
+
+**Other folds:** R3 — `resolve_module` is ALSO imported by `self_host_typechecker/driver.gg:13` (NO
+`load_imports`/`call_redirects`, drains diags to stderr) → the new signature needs an empty-import
+default there + confirm `type_comparison`/`resolver_comparison` stdout byte-stable. There is also a
+NON-symlinked 4th copy `self_host_resolver/resolve.gg` (EIdentifier `:656`) — fix it too. R4 — the
+self-host has no `is_known_variant_name`; non-generic variants register via `alloc_def` WITHOUT
+`name_index` insertion (`resolve.gg:204`/`scope.gg:209`), so a `name_index` scan MISSES `Red`/`Blue` —
+the query must scan `definitions` for `DkVariant` (or extend `alloc_def` to name-index variants, like
+Rust). Plumbing carrier = `ResolveContext` (already carries `diagnostics`, already passed to
+`resolve_expr`). `DkUndefinedName` already EXISTS (`diagnostic.gg:43`).
+
+**STATUS: needs an owner call on the gate re-scope + a brief re-write (pass 2 after fold), then the
+pre-req resolver fixes scouted as their own increments. NOT a next-round single executor.**
+
 ## Follow-up (NOT this brief)
 Case A (explicit-VarDecl type-mismatch, `int x = "s"`): the self-host has NO type-compatibility helper;
 needs a coercion-aware `types_compatible(declared, inferred)` predicate built from scratch + the snag-#11
