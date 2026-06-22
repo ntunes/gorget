@@ -38,22 +38,35 @@ void main():
 
 void compile_main():
     Vector[String] cmd_args = args()
-    # ── Build/run subcommand (new standalone-compiler CLI) ──────────────────
+    # ── Build/run/check subcommand (new standalone-compiler CLI) ─────────────
     # GG_IMPL=selfhost installs this binary as `gg`. When invoked as:
-    #   gg build <input.gg> [-o <output>] [--runtime-dir=<dir>] [--lib-dir=<dir>]
-    #   gg run   <input.gg>               [--runtime-dir=<dir>] [--lib-dir=<dir>]
-    # delegate to run_build_mode / run_run_mode and return.  The legacy path
-    # (driver <path> <lib_dir> [--emit-c|--lir-c|…]) is unchanged so all
-    # existing test-harness callers (self_host_bootstrap_fixed_point,
+    #   gg build <input.gg> [-o <output>] [--backend=<b>] [--emit-c|--lir-c|--emit-gir|--emit-lir] [--runtime-dir=<dir>] [--lib-dir=<dir>]
+    #   gg run   <input.gg>              [--backend=<b>] [--runtime-dir=<dir>] [--lib-dir=<dir>]
+    #   gg check <input.gg>              [--lib-dir=<dir>]
+    #   gg --help
+    # delegate to run_build_mode / run_check_mode / print_usage and return. The
+    # legacy path (driver <path> <lib_dir> [--emit-c|--lir-c|…]) is unchanged so
+    # all existing test-harness callers (self_host_bootstrap_fixed_point,
     # c_emit_comparison, lowerer_comparison, …) continue to work.
-    if cmd_args.len() >= 2:
-        String _subcmd = cmd_args.get(1).unwrap()
-        if _subcmd == "build":
-            run_build_mode(cmd_args, false)
-            return
-        if _subcmd == "run":
-            run_build_mode(cmd_args, true)
-            return
+    #
+    # `--help` is matched FIRST (before any subcommand) so both `gg --help` and
+    # a bare `gg` with no args print the usage summary and exit 0.
+    if cmd_args.len() < 2:
+        print_usage()
+        exit(0)
+    String _subcmd = cmd_args.get(1).unwrap()
+    if _subcmd == "--help" or _subcmd == "-h":
+        print_usage()
+        exit(0)
+    if _subcmd == "build":
+        run_build_mode(cmd_args, false)
+        return
+    if _subcmd == "run":
+        run_build_mode(cmd_args, true)
+        return
+    if _subcmd == "check":
+        run_check_mode(cmd_args)
+        return
     # ── Legacy path ─────────────────────────────────────────────────────────
     String path = cmd_args.get(1).unwrap()
     String lib_dir = "lib"
@@ -240,10 +253,43 @@ void compile_main():
         # Default (no dump flag): GIR text, matching prior driver behavior.
         print(format_module(&gir))
 
+# ── usage / --help ───────────────────────────────────────────────────────────
+# Printed by `gg --help`, a bare `gg`, and on a no-input-file error. Kept in one
+# place so the subcommand list / flag set has a single source of truth.
+void print_usage():
+    print("gg — the Gorget compiler (self-host)")
+    print("")
+    print("usage:")
+    print("  gg build <input.gg> [-o <output>] [options]   compile to a native binary")
+    print("  gg run   <input.gg>              [options]    compile and execute (propagates exit code)")
+    print("  gg check <input.gg>             [options]     parse + resolve + typecheck only (no codegen)")
+    print("  gg --help                                     print this message")
+    print("")
+    print("options:")
+    print("  -o <output>            output binary path (build; default: input with .gg stripped)")
+    print("  --backend=<b>          codegen backend; self-host emits C only (c). llvm is rejected.")
+    print("  --emit-c               dump full C (runtime preamble + body) to stdout, skip cc/link")
+    print("  --lir-c                dump body-only C to stdout, skip cc/link")
+    print("  --emit-gir             dump GIR text to stdout, skip codegen")
+    print("  --emit-lir             dump post-drop-elaboration LIR to stdout, skip codegen")
+    print("  --runtime-dir=<dir>    path to the C runtime (default: $GG_RUNTIME_DIR or src/backend/c/runtime)")
+    print("  --lib-dir=<dir>        path to the std library (default: $GG_LIB_DIR or lib)")
+
 # ── build/run subcommand implementation ─────────────────────────────────────
 # Handles `gg build <input.gg> [-o <output>] [opts]` and
 #          `gg run   <input.gg>               [opts]`
 # where opts are:
+#   --backend=<b>         codegen backend selector. The self-host backend emits
+#                         C only, so `c` is accepted (and is the default); any
+#                         other value (notably `llvm`) is REJECTED cleanly — the
+#                         self-host driver has no LLVM emit path. (The Rust gg's
+#                         `--backend=llvm` lives in src/main.rs, a different
+#                         binary.)
+#   --emit-c / --lir-c / --emit-gir / --emit-lir
+#                         IR/C dump passthrough mirroring the legacy path: when
+#                         any is set, emit the requested form to stdout and
+#                         RETURN before cc/link (matches Rust gg's --emit-*,
+#                         which dump-and-exit; src/main.rs:638/659).
 #   --runtime-dir=<abs>   path to src/backend/c/runtime (default: $GG_RUNTIME_DIR
 #                         or repo-relative "src/backend/c/runtime")
 #   --lib-dir=<abs>       path to the lib/ standard library (default: $GG_LIB_DIR
@@ -262,6 +308,18 @@ void run_build_mode(Vector[String] cmd_args, bool do_run):
     if lib_dir == "":
         lib_dir = "lib"
 
+    # Emit-flag passthrough (mirrors the legacy path's flag set, :72-90). When
+    # any is set, the requested IR/C is dumped to stdout and we RETURN before
+    # cc/link. --emit-c = full program (preamble + body); --lir-c = body only.
+    bool emit_c_full = false
+    bool emit_c_body = false
+    bool emit_gir = false
+    bool emit_lir = false
+    # --backend selector. The self-host emits C only, so default = "c" and any
+    # other value is rejected below. Mirrors the Rust gg's --backend=c|llvm flag
+    # surface so a caller's `--backend=c` is accepted (a no-op here).
+    String backend = "c"
+
     int ai = 2
     while ai < cmd_args.len():
         String arg = cmd_args.get(ai).unwrap()
@@ -269,6 +327,16 @@ void run_build_mode(Vector[String] cmd_args, bool do_run):
             ai += 1
             if ai < cmd_args.len():
                 output_path = cmd_args.get(ai).unwrap()
+        elif arg == "--emit-c":
+            emit_c_full = true
+        elif arg == "--lir-c":
+            emit_c_body = true
+        elif arg == "--emit-gir":
+            emit_gir = true
+        elif arg == "--emit-lir":
+            emit_lir = true
+        elif arg.starts_with("--backend="):
+            backend = arg.slice(10, arg.len())
         elif arg.starts_with("--runtime-dir="):
             runtime_dir = arg.slice(14, arg.len())
         elif arg.starts_with("--lib-dir="):
@@ -277,9 +345,16 @@ void run_build_mode(Vector[String] cmd_args, bool do_run):
             input_path = arg
         ai += 1
 
+    # Reject any backend the self-host can't emit. The self-host has no LLVM
+    # path (the Rust gg owns --backend=llvm); accept `c` (the only backend) and
+    # reject everything else with a clear message rather than silently emitting C.
+    if backend != "c":
+        print("error: unsupported --backend=" + backend + " (the self-host compiler emits C only; use --backend=c)", file=stderr)
+        exit(1)
+
     if input_path == "":
         print("error: no input file given", file=stderr)
-        print("usage: gg build <input.gg> [-o <output>] [--runtime-dir=<dir>] [--lib-dir=<dir>]", file=stderr)
+        print("usage: gg build <input.gg> [-o <output>] [--backend=<b>] [--emit-c|--lir-c|--emit-gir|--emit-lir] [--runtime-dir=<dir>] [--lib-dir=<dir>]", file=stderr)
         exit(1)
 
     # Derive default output path from input: strip ".gg" suffix.
@@ -313,6 +388,11 @@ void run_build_mode(Vector[String] cmd_args, bool do_run):
     GirModule gir = lower_module(m, scopes, types, call_redirects, imported_fns)
     validate_gir_after("gir-lowering", &gir)
     run_validators(&gir)
+    # --emit-gir: dump GIR text and stop before LIR lowering (mirrors the legacy
+    # path :178 and Rust's --emit-gir; src/main.rs:638).
+    if emit_gir:
+        print(format_module(&gir))
+        return
     LirModule lir = lower_gir_to_lir(&gir)
     validate_lir_after("lir-lowering", &lir)
     eliminate_dead_globals(&lir)
@@ -320,6 +400,20 @@ void run_build_mode(Vector[String] cmd_args, bool do_run):
     validate_lir_after("ssa-construction", &lir)
     elaborate_drops(&lir)
     validate_lir_after("drop-elaboration", &lir)
+    # --emit-lir: dump the post-SSA, post-drop-elaboration LIR and stop (mirrors
+    # the legacy path :218 and Rust's --emit-lir; src/main.rs:659).
+    if emit_lir:
+        print(format_lir_module(&lir))
+        return
+    # --lir-c: dump body-only C (no runtime preamble) and stop. --emit-c: dump
+    # the full program (preamble + body) and stop. Both skip cc/link, matching
+    # the legacy path's --lir-c/--emit-c (:220-238) + Rust's dump-and-exit.
+    if emit_c_body:
+        print(generate_c(&lir))
+        return
+    if emit_c_full:
+        print(emit_runtime_preamble(&lir, runtime_dir) + generate_c(&lir))
+        return
     # Emit full C (runtime preamble + body).
     String full_c = emit_runtime_preamble(&lir, runtime_dir) + generate_c(&lir)
 
@@ -344,6 +438,64 @@ void run_build_mode(Vector[String] cmd_args, bool do_run):
     if do_run:
         int run_exit = exec(output_path)
         exit(run_exit)
+
+# ── check subcommand implementation ──────────────────────────────────────────
+# Handles `gg check <input.gg> [--lib-dir=<dir>]`: run the front-end passes
+# (parse → load_imports → derive/meta → resolve → typecheck) and report whether
+# the program is well-formed, WITHOUT codegen / cc / link. Exit NONZERO on any
+# error diagnostic, 0 + "ok" if clean.
+#
+# ⚠ INTERIM SEMANTICS — pending a FILED self-host-typechecker defect:
+# `check` reports exactly what `has_errors(ctx.diagnostics)` surfaces, which is
+# the correct PLUMBING. But the self-host typechecker is currently PERMISSIVE —
+# it ACCEPTS many ill-typed programs (e.g. `int x = "s"`, `print(undef)`,
+# `int y = *x` on a non-Box) because most of Rust's `self.error(...)` check
+# sites are unmigrated and emit no diagnostic. So `check` will exit 0 on those
+# programs TODAY. That is the TYPECHECKER's filed gap, NOT this CLI work:
+#   • TODO.md "gg check PERMISSIVENESS" (bare `return` in `T throws E`, etc.)
+#   • TODO.md "explicit-VarDecl path skips initializer inference" (`int y = *x`
+#     accepted though `auto y = *x` is rejected)
+#   • TODO.md "typechecker — 42 of 47 Rust self.error(...) sites unmigrated"
+# Do NOT fix the typechecker here — `check` is wired to surface whatever the
+# typechecker reports and improves automatically as those check sites land. A
+# `#[ignore]`'d integration test (gg_impl_check_rejects_illtyped) is the live
+# breadcrumb that flips green when the typechecker stops accepting bad programs.
+void run_check_mode(Vector[String] cmd_args):
+    String input_path = ""
+    String lib_dir = getenv("GG_LIB_DIR")
+    if lib_dir == "":
+        lib_dir = "lib"
+    int ai = 2
+    while ai < cmd_args.len():
+        String arg = cmd_args.get(ai).unwrap()
+        if arg.starts_with("--lib-dir="):
+            lib_dir = arg.slice(10, arg.len())
+        elif not arg.starts_with("-"):
+            input_path = arg
+        ai += 1
+    if input_path == "":
+        print("error: no input file given", file=stderr)
+        print("usage: gg check <input.gg> [--lib-dir=<dir>]", file=stderr)
+        exit(1)
+
+    # Front-end only: parse → resolve → typecheck (no GIR/LIR/codegen/cc/link).
+    String source = read_file(input_path)
+    Module m = parse_source(source)
+    Dict[String, bool] imported_fns = {}
+    Dict[String, String] call_redirects = load_imports(&m, input_path, lib_dir, &imported_fns, source.byte_len())
+    expand_derives(&m)
+    ScopeTable scopes = ScopeTable.new_scope_table()
+    scopes.init()
+    TypeTable types = TypeTable.new_type_table()
+    expand_meta_types(&m, &types)
+    expand_meta_for_match(&m)
+    ResolveContext ctx = resolve_module(m, &scopes, &types)
+    apply_collect_target_rewrites(&m)
+    type_check_module(m, &scopes, &types, &ctx)
+    if has_errors(ctx.diagnostics):
+        report_diagnostics(ctx.diagnostics, source, input_path)
+        exit(1)
+    print("ok")
 
 void run_ssa(LirModule &m):
     int fi = 0

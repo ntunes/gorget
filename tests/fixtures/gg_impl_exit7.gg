@@ -1,0 +1,9 @@
+# GG_IMPL pipeline test fixture: a program whose process exit code is a
+# non-zero, non-trivial constant (7). The self-host driver's `run` subcommand
+# must execute the compiled binary and PROPAGATE its exit code unchanged, so
+# `gg-selfhost run gg_impl_exit7.gg` exits 7. Asserted by the gg_impl pipeline
+# integration test (tests/integration.rs).
+from std.os import exit
+
+void main():
+    exit(7)

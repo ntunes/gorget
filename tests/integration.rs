@@ -15996,6 +15996,208 @@ fn self_host_driver_rejects_invalid_program() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// GG_IMPL sub-req 2 gate: the self-host driver's standalone CLI surface.
+//
+// Drives the self-host `gg`-equivalent (driver.gg compiled to a binary) through
+// its `build` / `run` / `check` / `--help` subcommands END-TO-END — the surface
+// `GG_IMPL=selfhost` installs (scripts/gg_impl.sh). The pipeline was MANUAL-only
+// before this; this is the first integration guard for it.
+//
+// Deterministic: runtime-dir + lib-dir are passed as ABSOLUTE repo paths (no
+// $GG_RUNTIME_DIR / cwd drift), no network. Reuses the cached driver build.
+//
+// NOTE: this does NOT reuse `self_host_emit_cc_run` — that helper classifies any
+// nonzero exit as `Crashed`, but the `run` case here ASSERTS a nonzero exit (the
+// driver must PROPAGATE the program's exit code 7). We invoke the driver's
+// build/run/check subcommands directly and assert on the exit code + stdout.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_cli_pipeline() {
+    if skip_under_llvm() {
+        // The self-host driver emits C only; the LLVM sweep builds the same
+        // driver binary (C-backend output is identical) and this test's
+        // subcommand semantics are backend-agnostic. Skip to avoid double work
+        // under the LLVM gate (mirrors self_host_full_program's skip).
+        return;
+    }
+
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_impl_cli_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+
+    // ── 1. `gg check <valid.gg>` → exits 0. ──────────────────────────────────
+    let hello = manifest_dir.join("tests/fixtures/hello.gg");
+    let check = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg("check")
+            .arg(&hello)
+            .arg(format!("--lib-dir={}", lib_dir.display())),
+        "check hello.gg",
+    );
+    assert!(
+        check.status.success(),
+        "`gg check hello.gg` should exit 0 (clean program).\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&check.stdout),
+        String::from_utf8_lossy(&check.stderr),
+    );
+
+    // ── 2. `gg --help` → exits 0 + prints a usage summary. ───────────────────
+    let help = run_with_timeout(Command::new(&driver_exe).arg("--help"), "--help");
+    assert!(help.status.success(), "`gg --help` should exit 0");
+    let help_out = String::from_utf8_lossy(&help.stdout);
+    assert!(
+        help_out.contains("usage:")
+            && help_out.contains("build")
+            && help_out.contains("run")
+            && help_out.contains("check"),
+        "`gg --help` should print a usage summary listing the subcommands.\nstdout:\n{help_out}",
+    );
+
+    // ── 3. `gg build hello.gg -o out` → produces a binary that runs + exits 0.
+    let out_bin = tmp_root.join("hello_cli");
+    let build = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg("build")
+            .arg(&hello)
+            .arg("-o")
+            .arg(&out_bin)
+            .arg(format!("--runtime-dir={}", runtime_dir.display()))
+            .arg(format!("--lib-dir={}", lib_dir.display())),
+        "build hello.gg",
+    );
+    assert!(
+        build.status.success(),
+        "`gg build hello.gg -o out` should exit 0.\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr),
+    );
+    assert!(out_bin.exists(), "`gg build` did not produce the output binary {out_bin:?}");
+    let ran = run_with_timeout(&mut Command::new(&out_bin), "run built hello");
+    assert!(
+        ran.status.success(),
+        "the built hello binary should exit 0; got {:?}",
+        ran.status.code(),
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&ran.stdout).trim_end(),
+        "Hello, World!",
+        "the built hello binary should print the expected greeting",
+    );
+
+    // ── 4. `gg run <exit7>.gg` → PROPAGATES the program's exit code (7). ─────
+    // The driver's `run` mode execs the compiled binary and `exit()`s its code,
+    // so a non-zero program exit must surface as the driver's exit. (This is
+    // why we can't reuse self_host_emit_cc_run: it would flag exit-7 as Crashed.)
+    let exit7 = manifest_dir.join("tests/fixtures/gg_impl_exit7.gg");
+    let run7 = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg("run")
+            .arg(&exit7)
+            .arg(format!("--runtime-dir={}", runtime_dir.display()))
+            .arg(format!("--lib-dir={}", lib_dir.display())),
+        "run gg_impl_exit7.gg",
+    );
+    assert_eq!(
+        run7.status.code(),
+        Some(7),
+        "`gg run gg_impl_exit7.gg` should propagate exit code 7.\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&run7.stdout),
+        String::from_utf8_lossy(&run7.stderr),
+    );
+
+    // ── 5. `gg build --backend=llvm` → rejected cleanly (self-host emits C). ──
+    let bad_backend = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg("build")
+            .arg(&hello)
+            .arg("--backend=llvm")
+            .arg(format!("--runtime-dir={}", runtime_dir.display()))
+            .arg(format!("--lib-dir={}", lib_dir.display())),
+        "build --backend=llvm",
+    );
+    assert!(
+        !bad_backend.status.success(),
+        "`gg build --backend=llvm` should be rejected (the self-host emits C only)",
+    );
+    assert!(
+        String::from_utf8_lossy(&bad_backend.stderr).contains("--backend"),
+        "the --backend=llvm rejection should name the unsupported backend.\nstderr: {}",
+        String::from_utf8_lossy(&bad_backend.stderr),
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp_root);
+}
+
+// INTENDED-BEHAVIOR BREADCRUMB (per CLAUDE.md "Don't redesign around compiler
+// gaps"): `gg check` on an ILL-TYPED program SHOULD exit NONZERO. It does not
+// TODAY — the self-host typechecker is PERMISSIVE (most of Rust's `self.error`
+// check sites are unmigrated; TODO.md "gg check PERMISSIVENESS" + "explicit-
+// VarDecl path skips initializer inference" + "42 of 47 Rust self.error sites
+// unmigrated"). The `check` CLI plumbing is correct (it surfaces whatever
+// `has_errors` reports); the defect is in the typechecker, filed separately and
+// NOT fixed by this CLI work. This test is wired to the INTENDED behavior so it
+// FLIPS GREEN the moment the typechecker starts rejecting ill-typed programs —
+// a live executable record of the gap, not a silent workaround.
+#[test]
+#[ignore = "self-host typechecker is permissive; flips green when the filed \
+            typechecker diagnostic gap (TODO.md gg check PERMISSIVENESS) is closed"]
+#[serial(self_host_lowerer_driver)]
+fn self_host_check_rejects_illtyped() {
+    if skip_under_llvm() {
+        return;
+    }
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_impl_check_bad_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+
+    // An ill-typed program: an int binding initialized with a String literal.
+    // Rust gg rejects this; the self-host typechecker currently accepts it.
+    let bad = tmp_root.join("illtyped.gg");
+    std::fs::write(&bad, "void main():\n    int x = \"s\"\n    print(x)\n")
+        .expect("failed to write illtyped.gg");
+
+    let check = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg("check")
+            .arg(&bad)
+            .arg(format!("--lib-dir={}", lib_dir.display())),
+        "check illtyped.gg",
+    );
+    assert!(
+        !check.status.success(),
+        "`gg check` on an ill-typed program SHOULD exit nonzero (intended). \
+         If this now fails, the typechecker-permissiveness gap is closed — \
+         un-ignore this test and retire the interim note in driver.gg's check arm.\n\
+         stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&check.stdout),
+        String::from_utf8_lossy(&check.stderr),
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp_root);
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Chain 2 gate: the self-host emits a FULL, standalone program.
 //
 // Proves `driver F lib --emit-c --runtime-dir=<abs runtime> | cc | run`
