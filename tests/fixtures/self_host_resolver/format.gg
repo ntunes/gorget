@@ -259,11 +259,14 @@ String format_expr(SpannedExpr se):
             String os = format_expr(*obj)
             String is_ = format_expr(*idx)
             return os + "[" + is_ + "]"
-        case ERange(lo, hi):
+        case ERange(lo, hi, inclusive):
             String result = ""
             if has_opt_boxed_expr(lo):
                 result = format_expr(get_opt_boxed_expr(lo))
-            result = result + ".."
+            if inclusive:
+                result = result + "..="
+            else:
+                result = result + ".."
             if has_opt_boxed_expr(hi):
                 result = result + format_expr(get_opt_boxed_expr(hi))
             return result

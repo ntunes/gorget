@@ -188,11 +188,14 @@ String format_expr(SpannedExpr se):
             String os = format_expr(*obj)
             String is_ = format_expr(*idx)
             return f"{os}[{is_}]"
-        case ERange(lo, hi):
+        case ERange(lo, hi, inclusive):
             String result = ""
             if lo is Some(b):
                 result = format_expr(*b)
-            result = result + ".."
+            if inclusive:
+                result = result + "..="
+            else:
+                result = result + ".."
             if hi is Some(b):
                 result = result + format_expr(*b)
             return result

@@ -621,7 +621,7 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
             resolve_expr(*object, &scopes, &ctx)
             resolve_expr(*index, &scopes, &ctx)
 
-        case ERange(opt_start, opt_end):
+        case ERange(opt_start, opt_end, _):
             if opt_start is Some(b):
                 resolve_expr(*b, &scopes, &ctx)
             if opt_end is Some(b):

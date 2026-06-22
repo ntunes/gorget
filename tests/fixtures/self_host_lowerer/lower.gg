@@ -480,7 +480,7 @@ String expr_kind(Expr e):
             return "EFieldAccess"
         case EIndex(_, _):
             return "EIndex"
-        case ERange(_, _):
+        case ERange(_, _, _):
             return "ERange"
         case EIf(_, _, _):
             return "EIf"

@@ -93,14 +93,14 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
     match pat.pat:
         case PBinding(loop_name):
             match iter_expr.expr:
-                case ERange(start_opt, end_opt):
+                case ERange(start_opt, end_opt, inclusive):
                     match start_opt:
                         case Some(start_box):
                             match end_opt:
                                 case Some(end_box):
                                     SpannedExpr start_e = *start_box
                                     SpannedExpr end_e = *end_box
-                                    lower_for_range(&ctx, loop_name, start_e, end_e, body, &gmod, is_main)
+                                    lower_for_range(&ctx, loop_name, start_e, end_e, inclusive, body, &gmod, is_main)
                                     return
                                 case None:
                                     pass
@@ -667,9 +667,11 @@ void lower_for_set(LowerCtx &ctx, SpannedPattern pat, int coll_local, String col
 # `lower_for_vector` (header/body/incr/exit, loop stacks, per-iteration drop
 # scope); the only differences are the counter is seeded from the lowered
 # `start` (instead of 0) and the bound is the lowered `end` (instead of
-# `coll.len()`). Exclusive `<` only — the self-host `ERange` has no inclusive
-# form. Continue → incr_bb (advance the counter); break → exit_bb.
-void lower_for_range(LowerCtx &ctx, String loop_name, SpannedExpr start_e, SpannedExpr end_e, Vector[Stmt] body, GirModule &gmod, bool is_main):
+# `coll.len()`). The bound comparison is `<=` for an inclusive range
+# (`0..=3`) and `<` for a half-open one (`0..3`), mirroring Rust's
+# `lower_for_range` cmp_op = if inclusive { Le } else { Lt } (for_loops.rs:1181).
+# Continue → incr_bb (advance the counter); break → exit_bb.
+void lower_for_range(LowerCtx &ctx, String loop_name, SpannedExpr start_e, SpannedExpr end_e, bool inclusive, Vector[Stmt] body, GirModule &gmod, bool is_main):
     # ── Iteration state ──────────────────────────────────────
     # Loop var: a fresh OWNED i64 seeded from `start`. `nl_put` reads
     # `loop_name` again below, so it is LIVE here — the bare `Some(loop_name)`
@@ -686,10 +688,14 @@ void lower_for_range(LowerCtx &ctx, String loop_name, SpannedExpr start_e, Spann
     int incr_bb = new_block(&ctx)
     int exit_bb = new_block(&ctx)
     set_terminator(&ctx, GTJump(header_bb))
-    # Header: `loop_var < end ? body : exit`
+    # Header: `loop_var <(=) end ? body : exit` — `<=` when the range is
+    # inclusive (`0..=3`), `<` otherwise.
     switch_to(&ctx, header_bb)
     int cond_local = add_local(&ctx, BOOL_TYPE, None)
-    emit(&ctx, GICmp(cond_local, CMP_LT, I64_TYPE, OpCopy(loop_var), OpCopy(end_local)))
+    int range_cmp = CMP_LT
+    if inclusive:
+        range_cmp = CMP_LE
+    emit(&ctx, GICmp(cond_local, range_cmp, I64_TYPE, OpCopy(loop_var), OpCopy(end_local)))
     set_terminator(&ctx, GTBranch(OpCopy(cond_local), body_bb, exit_bb))
     # Body: lower the loop body in a fresh loop/drop scope. Continue jumps
     # to incr (advance the counter); break jumps to exit.

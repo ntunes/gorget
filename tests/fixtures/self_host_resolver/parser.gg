@@ -929,6 +929,8 @@ int infix_left_bp(int tag):
         return 3
     elif tag == TOK_DOTDOT:
         return 23
+    elif tag == TOK_DOTDOTEQ:
+        return 23
     elif tag == TOK_EQEQ:
         return 11
     elif tag == TOK_BANGEQ:
@@ -967,6 +969,8 @@ int infix_right_bp(int tag):
     if tag == TOK_DOUBLEQUESTION:
         return 4
     elif tag == TOK_DOTDOT:
+        return 24
+    elif tag == TOK_DOTDOTEQ:
         return 24
     elif tag == TOK_EQEQ:
         return 12
@@ -1358,8 +1362,14 @@ equip Parser:
         self.expect_tok(TOK_LBRACKET, "expected '[' for type args")
         if not self.check_tok(TOK_RBRACKET):
             args.push(self.parse_type())
+            # Skip optional ownership sigil after a type arg (`!` move,
+            # `&` borrow). The Rust formatter preserves these but the
+            # self-host AST drops them; consuming here keeps the parser
+            # from tripping on the `]` mismatch.
+            self.skip_ownership_markers()
             while self.match_tok(TOK_COMMA):
                 args.push(self.parse_type())
+                self.skip_ownership_markers()
         self.expect_tok(TOK_RBRACKET, "expected ']' after type args")
         return args
 
@@ -1822,7 +1832,9 @@ equip Parser:
             self.advance()
             SpannedExpr rhs = self.parse_expr_bp(r_bp)
             if ptag == TOK_DOTDOT:
-                lhs = SpannedExpr(ERange(Some(Box(lhs)), Some(Box(rhs))), Span(lhs.span.start, rhs.span.end))
+                lhs = SpannedExpr(ERange(Some(Box(lhs)), Some(Box(rhs)), false), Span(lhs.span.start, rhs.span.end))
+            elif ptag == TOK_DOTDOTEQ:
+                lhs = SpannedExpr(ERange(Some(Box(lhs)), Some(Box(rhs)), true), Span(lhs.span.start, rhs.span.end))
             else:
                 lhs = SpannedExpr(EBinaryOp(Box(lhs), op, Box(rhs)), Span(lhs.span.start, rhs.span.end))
 

@@ -813,7 +813,7 @@ bool closure_expr_has_capture(SpannedExpr sexpr, Dict[String, bool] in_scope, Gi
             if closure_expr_has_capture(*obj, in_scope, &gmod):
                 return true
             return closure_expr_has_capture(*idx, in_scope, &gmod)
-        case ERange(lo_opt, hi_opt):
+        case ERange(lo_opt, hi_opt, _):
             match lo_opt:
                 case Some(lo):
                     if closure_expr_has_capture(*lo, in_scope, &gmod):
@@ -1147,7 +1147,7 @@ void cc_collect_expr(LowerCtx &ctx, SpannedExpr sexpr, Dict[String, bool] in_sco
         case EIndex(obj, idx):
             cc_collect_expr(&ctx, *obj, in_scope, &gmod, &cc)
             cc_collect_expr(&ctx, *idx, in_scope, &gmod, &cc)
-        case ERange(lo_opt, hi_opt):
+        case ERange(lo_opt, hi_opt, _):
             match lo_opt:
                 case Some(lo):
                     cc_collect_expr(&ctx, *lo, in_scope, &gmod, &cc)
@@ -1405,7 +1405,7 @@ bool expr_has_nested_closure(SpannedExpr sexpr):
             return expr_has_nested_closure(*obj)
         case EIndex(obj, idx):
             return expr_has_nested_closure(*obj) or expr_has_nested_closure(*idx)
-        case ERange(lo_opt, hi_opt):
+        case ERange(lo_opt, hi_opt, _):
             match lo_opt:
                 case Some(lo):
                     if expr_has_nested_closure(*lo):

@@ -285,7 +285,7 @@ bool expr_mentions_iter(SpannedExpr sexpr):
             SpannedExpr as_e = *inner_box
             SpannedType as_ty = *target_ty_box
             return expr_mentions_iter(as_e) or type_mentions_iter(as_ty)
-        case ERange(start_opt, end_opt):
+        case ERange(start_opt, end_opt, _):
             match start_opt:
                 case Some(s_box):
                     SpannedExpr s_e = *s_box

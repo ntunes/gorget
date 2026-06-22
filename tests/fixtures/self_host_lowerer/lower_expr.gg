@@ -1333,15 +1333,27 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # deref for a bare identifier; non-identifier receivers (chained
             # calls etc.) fall back to `lower_expr` unchanged.
             int recv = lower_place_base(&ctx, *recv_box, &gmod)
-            if mname == "unwrap" or mname == "unwrap_or":
-                # Lower the default value first (for unwrap_or) and
-                # capture its local id — needed if we synthesize a
-                # tag check below. unwrap (no args) leaves this at -1.
+            if mname == "unwrap" or mname == "unwrap_or" or mname == "expect":
+                # `unwrap`, `expect`, and `unwrap_or` share this intercept so
+                # the Option[Ref[T]] ref-payload deref (Phase 3 below) applies
+                # to all three — mirrors Rust's single
+                # `matches!(method_name, "unwrap" | "expect" | "unwrap_or")`
+                # arm (src/ir/lowering/exprs/methods.rs:681). Without `expect`
+                # here it fell through to the generic `__option_expect`
+                # combinator, which returned the raw `Some_0` pointer for an
+                # `Option[int &]` instead of dereferencing it (garbage value).
+                # Lower the default value first (for `unwrap_or` ONLY) and
+                # capture its local id — needed if we synthesize a tag check
+                # below. `unwrap` (no args) leaves this at -1; `expect`'s arg is
+                # the panic MESSAGE, not a default — like Rust, the success path
+                # ignores it (it would only matter on the None panic, which the
+                # plain-unwrap path below does not emit), so we still lower it
+                # for its side effects but never use it as a default.
                 int default_local = -1
                 int uoi = 0
                 while uoi < margs.len():
                     int lo = lower_expr(&ctx, margs.get(uoi).unwrap(), &gmod)
-                    if uoi == 0:
+                    if uoi == 0 and mname == "unwrap_or":
                         default_local = lo
                     uoi += 1
                 # Determine the wrapper type, inner type name, and variant.
@@ -3759,10 +3771,11 @@ int lower_dict_fold(LowerCtx &ctx, int recv, String recv_type_name, SpannedExpr 
 # the `for c in s: stack.push(c)` idiom).
 int lower_list_comprehension(LowerCtx &ctx, SpannedExpr comp_expr, String var_name, SpannedExpr iterable, Option[Box[SpannedExpr]] filt_opt, GirModule &gmod):
     Span span = comp_expr.span
-    # ── RANGE base: `[x for x in start..end]` (exclusive `..` only — the
-    # parser produces no inclusive range). Mirrors collections.rs:520.
+    # ── RANGE base: `[x for x in start..end]` / `[x for x in start..=end]`.
+    # The ERange's inclusive flag (`rng_incl`) threads into `lower_for_range`,
+    # which picks `<=` vs `<`. Mirrors collections.rs:520.
     match iterable.expr:
-        case ERange(start_opt, end_opt):
+        case ERange(start_opt, end_opt, rng_incl):
             match start_opt:
                 case Some(start_box):
                     match end_opt:
@@ -3789,7 +3802,7 @@ int lower_list_comprehension(LowerCtx &ctx, SpannedExpr comp_expr, String var_na
                             String racc_name = "__listcomp_acc_" + int_to_str(racc)
                             nl_put(&ctx, racc_name, racc)
                             Vector[Stmt] rbody = comp_synth_body(racc_name, comp_expr, filt_opt, span)
-                            lower_for_range(&ctx, var_name, *start_box, *end_box, rbody, &gmod, false)
+                            lower_for_range(&ctx, var_name, *start_box, *end_box, rng_incl, rbody, &gmod, false)
                             return racc
                         case None:
                             pass
@@ -3898,7 +3911,7 @@ Vector[Stmt] comp_synth_body(String acc_name, SpannedExpr comp_expr, Option[Box[
 int lower_set_comprehension(LowerCtx &ctx, SpannedExpr comp_expr, String var_name, SpannedExpr iterable, Option[Box[SpannedExpr]] filt_opt, GirModule &gmod):
     Span span = comp_expr.span
     match iterable.expr:
-        case ERange(start_opt, end_opt):
+        case ERange(start_opt, end_opt, rng_incl):
             match start_opt:
                 case Some(start_box):
                     match end_opt:
@@ -3907,7 +3920,7 @@ int lower_set_comprehension(LowerCtx &ctx, SpannedExpr comp_expr, String var_nam
                             String sacc_name = "__setcomp_acc_" + int_to_str(sacc)
                             nl_put(&ctx, sacc_name, sacc)
                             Vector[Stmt] sbody = comp_synth_set_body(sacc_name, comp_expr, filt_opt, span)
-                            lower_for_range(&ctx, var_name, *start_box, *end_box, sbody, &gmod, false)
+                            lower_for_range(&ctx, var_name, *start_box, *end_box, rng_incl, sbody, &gmod, false)
                             return sacc
                         case None:
                             pass
@@ -3996,7 +4009,7 @@ Vector[Stmt] comp_synth_set_body(String acc_name, SpannedExpr comp_expr, Option[
 int lower_dict_comprehension(LowerCtx &ctx, SpannedExpr key_expr, SpannedExpr val_expr, String var_name, SpannedExpr iterable, Option[Box[SpannedExpr]] filt_opt, GirModule &gmod):
     Span span = key_expr.span
     match iterable.expr:
-        case ERange(start_opt, end_opt):
+        case ERange(start_opt, end_opt, rng_incl):
             match start_opt:
                 case Some(start_box):
                     match end_opt:
@@ -4005,7 +4018,7 @@ int lower_dict_comprehension(LowerCtx &ctx, SpannedExpr key_expr, SpannedExpr va
                             String dacc_name = "__dictcomp_acc_" + int_to_str(dacc)
                             nl_put(&ctx, dacc_name, dacc)
                             Vector[Stmt] dbody = comp_synth_dict_body(dacc_name, key_expr, val_expr, filt_opt, span)
-                            lower_for_range(&ctx, var_name, *start_box, *end_box, dbody, &gmod, false)
+                            lower_for_range(&ctx, var_name, *start_box, *end_box, rng_incl, dbody, &gmod, false)
                             return dacc
                         case None:
                             pass

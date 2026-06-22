@@ -904,6 +904,8 @@ int infix_left_bp(int tag):
         return 3
     elif tag == TOK_DOTDOT:
         return 23
+    elif tag == TOK_DOTDOTEQ:
+        return 23
     elif tag == TOK_EQEQ:
         return 11
     elif tag == TOK_BANGEQ:
@@ -942,6 +944,8 @@ int infix_right_bp(int tag):
     if tag == TOK_DOUBLEQUESTION:
         return 4
     elif tag == TOK_DOTDOT:
+        return 24
+    elif tag == TOK_DOTDOTEQ:
         return 24
     elif tag == TOK_EQEQ:
         return 12
@@ -1361,11 +1365,29 @@ equip Parser:
         Vector[SpannedType] args = Vector[SpannedType]()
         self.expect_tok(TOK_LBRACKET, "expected '[' for type args")
         if not self.check_tok(TOK_RBRACKET):
-            args.push(self.parse_type())
+            args.push(self.parse_type_with_ownership())
             while self.match_tok(TOK_COMMA):
-                args.push(self.parse_type())
+                args.push(self.parse_type_with_ownership())
         self.expect_tok(TOK_RBRACKET, "expected ']' after type args")
         return args
+
+    # Generic-arg / return-type element type with an optional trailing
+    # ownership sigil (`T &` / `T !`) — the "iterator-intent" marker inside
+    # generic brackets (`Vector[int !]`, `Option[String &]`). Mirrors Rust's
+    # `parse_type_with_ownership` (src/parser/types.rs:20). The sigils
+    # collapse to the bare T at monomorphization (the storage is identical:
+    # `Vector[String]` and `Vector[String &]` share runtime code — see
+    # tests/fixtures/sigil_type_args.gg), and the self-host `Type` enum has
+    # no Ref/Owned wrapper variant, so we consume-and-discard the sigil here
+    # rather than threading a wrapper. Without this, the trailing `!`/`&` is
+    # left unconsumed by `parse_type`, derailing the rest of the type/param
+    # list (the param binding goes unregistered, the return type loses its
+    # generic args → bogus `Option` instead of `Option__int64_t`).
+    SpannedType parse_type_with_ownership(&self):
+        SpannedType ty = self.parse_type()
+        if self.check_tok(TOK_BANG) or self.check_tok(TOK_AMP):
+            self.advance()
+        return ty
 
     Vector[String] parse_type_params(&self):
         Vector[String] params = Vector[String]()
@@ -1827,7 +1849,9 @@ equip Parser:
             self.advance()
             SpannedExpr rhs = self.parse_expr_bp(r_bp)
             if ptag == TOK_DOTDOT:
-                lhs = SpannedExpr(ERange(Some(Box(lhs)), Some(Box(rhs))), Span(lhs.span.start, rhs.span.end))
+                lhs = SpannedExpr(ERange(Some(Box(lhs)), Some(Box(rhs)), false), Span(lhs.span.start, rhs.span.end))
+            elif ptag == TOK_DOTDOTEQ:
+                lhs = SpannedExpr(ERange(Some(Box(lhs)), Some(Box(rhs)), true), Span(lhs.span.start, rhs.span.end))
             else:
                 lhs = SpannedExpr(EBinaryOp(Box(lhs), op, Box(rhs)), Span(lhs.span.start, rhs.span.end))
 

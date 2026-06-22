@@ -63,7 +63,7 @@ enum Expr:
     EMethodCall(Box[SpannedExpr], String, Vector[SpannedExpr], Vector[String], Vector[SpannedType])
     EFieldAccess(Box[SpannedExpr], String)
     EIndex(Box[SpannedExpr], Box[SpannedExpr])
-    ERange(Option[Box[SpannedExpr]], Option[Box[SpannedExpr]])
+    ERange(Option[Box[SpannedExpr]], Option[Box[SpannedExpr]], bool)
     EIf(Box[SpannedExpr], Vector[Stmt], Vector[ElseBranch])
     EMatch(Box[SpannedExpr], Vector[MatchArm])
     EClosure(Vector[Param], Vector[Stmt])
