@@ -3,10 +3,17 @@
 **Status:** DESIGN, scout-produced (`afa58d78`, 2026-06-22). **Design review COMPLETE — 2 clean
 sequential fresh passes:** pass 1 (`a8bbd2b9`) SIGN OFF (linchpin cites VERIFIED against source) + 4
 minors folded; pass 2 (`a990fe31`) SIGN OFF (fold clean, additions sound, cites re-confirmed, no
-contradictions). TL;DR hedge applied. **GATED ON OWNER SIGN-OFF of the §9.1 reframe** before it folds
-into `error-model.md` §9.1 and before any executor briefs Increment 2.1.
-**Supersedes nothing yet** — `error-model.md` §9.1 remains authoritative until the owner accepts the
-by-value reframe.
+contradictions). TL;DR hedge applied.
+**OWNER DECISION 2026-06-22: reframe NOTED, implementation HELD for a later round.** The owner wants a
+fresh A-vs-B comparison before adopting, and leans toward a *simpler* model than this doc's hidden-slot:
+**Option B = use `throws` for Faults too, uniformly** (faults ride the visible `throws`/`Result` channel
+like contract errors; ~zero new machinery; cost = `throws` ubiquity + the §3 tension + merging the
+fault/contract distinction). This doc is **Option A** (hidden out-of-band by-value slot; faults off
+signatures). A comparison agent (`a0ea33be`) is evaluating A vs B against `error-model.md` §3, the
+cast-RFC's already-decided narrowing-overflow→throw (§7.3), self-host ubiquity, and prior art (Swift =
+the B precedent). **NOTHING is adopted; the linchpin (deep by-value is possible + drop-correct) holds
+for BOTH options.** `error-model.md` §9.1 remains authoritative.
+**Supersedes nothing yet** — no Increment 2.1 brief until the owner picks A or B.
 
 > ⚠ This design **reframes a load-bearing assumption** in `error-model.md` §9.1 — that deep/boundary
 > fault catch requires a greenfield unwind substrate. The reframe rests on the claim that Gorget's
