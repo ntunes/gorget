@@ -460,7 +460,7 @@ with variants.
 **The key realization: TYPING and PROPAGATION are orthogonal, and the proposal only
 settles TYPING.**
 - **TYPING (adopt — cheap, idiomatic):** make the closed `Fault` enum `equip Error`,
-  like the stdlib errors. Then one boundary `catch e` (`e: dyn Error`) handles BOTH a
+  like the stdlib errors. Then one boundary `catch e` (`e: the `Error` trait`) handles BOTH a
   contract error and a fault, uniformly. This REFINES Q14's "separate `Fault` type"
   into "`Fault` is an `Error` impl." "Uncaught faults panic" keeps a plain `int
   sum(...)` non-`Result` (no ubiquity), overflow panic-by-default (today's safety +
@@ -517,7 +517,7 @@ later as a separate funded effort.
   `exprs/mod.rs:87`/`:2922`). Phase-2 fault propagation REUSES it via a **hidden out-of-band return
   slot** (faults stay OFF signatures — the §3 ubiquity guarantee holds — NOT stack unwinding), so
   **Q9/Q15/Q16/B2 dissolve**. The **hybrid**: a unified `catch (e): match e` boundary handler over
-  `dyn Error` (catching BOTH contract errors AND faults) via `Fault equip Error`, with NO `throws Fault`
+  `Error` (catching BOTH contract errors AND faults) via `Fault equip Error`, with NO `throws Fault`
   on any signature — this delivers the owner's uniformity goal without re-importing the `throws`-spine
   ubiquity. (Option B = uniform `throws` for faults was REJECTED: measured self-host ubiquity floods the
   protected call spine; Swift — the assumed precedent — actually TRAPS on overflow, a precedent FOR A.)
@@ -600,7 +600,7 @@ examples below is ILLUSTRATIVE — the exact fault-catch syntax is open, §11.5.
    safe-variant swap, OOM deferred. (`UnwrapNone`/`Assert` candidates = Q7, brief.)
 2. **`Fault equip Error`** — `Fault` implements the EXISTING `Error` trait
    (`language-reference.md:2766`), so faults compose with contract errors under one
-   supertype. ⚠ (the **unified `dyn Error` surface** — matching a fault AND a contract
+   supertype. ⚠ (the **unified `Error` surface** — matching a fault AND a contract
    error in ONE handler — is the **Phase-2 boundary goal**; Phase-1 *local* catch binds
    a concrete `Fault` value, see item 5.) ⚠ **(review pass 1)** `Error` **extends `Displayable &
    Debuggable`** (`language-reference.md:2766`; `Displayable` `:2768`), so the compiler-internal `Fault`
@@ -617,11 +617,11 @@ examples below is ILLUSTRATIVE — the exact fault-catch syntax is open, §11.5.
    are deep → panic → Phase 2.
 5. **Exhaustiveness via implicit-panic-default — over the closed `Fault` enum (review
    pass 2).** The Phase-1 local-catch scrutinee binds a **concrete `Fault` value** (a
-   closed enum), NOT a `dyn Error` trait object — so the panic-default rule is coherent:
+   closed enum), NOT an `Error` trait object — so the panic-default rule is coherent:
    a fault match handles the variants it names; unnamed `Fault` variants fall through to
    **panic** (a `non_exhaustive`-style rule keyed on the `Fault` enum at
    `typecheck.rs:3640-3666`, leaving every OTHER enum strictly exhaustive). The unified
-   `dyn Error` surface (item 2) is Phase 2 — Phase-1's `Fault equip Error` only makes
+   `Error` surface (item 2) is Phase 2 — Phase-1's `Fault equip Error` only makes
    faults composable later; the Phase-1 catch itself matches the closed `Fault`.
 
 ### 11.2 Lowering — no unwinding

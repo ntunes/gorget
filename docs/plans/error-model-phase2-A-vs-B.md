@@ -55,12 +55,12 @@ a genuine bug). No first-tier safe language puts faults on the recoverable chann
 
 ### 5. What B loses
 The bug-vs-contract distinction at the catch site (`catch Fault.X` vs `catch (e)` become one construct
-over `dyn Error` → a contract catch can silently swallow a bug); faults off the API/compat surface (§4);
+over `Error` → a contract catch can silently swallow a bug); faults off the API/compat surface (§4);
 the Midori bug≠expected classification. All deliberately built by the doc + already taught in
 `book/10-errors.md:615-629`.
 
 ### 6. Result reconciliation
-B forces either a `Fault | UserError` union (the §3 closed-enum sprawl) or a `dyn Error` dynamic match
+B forces either a `Fault | UserError` union (the §3 closed-enum sprawl) or an `Error` dynamic match
 (which negates B's own exhaustiveness claim — and is the same dynamic match A's Q14(C) already uses). A
 keeps them cleanly separate.
 

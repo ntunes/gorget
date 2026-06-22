@@ -10,7 +10,7 @@ fresh A-vs-B comparison before adopting, and leans toward a *simpler* model than
 like contract errors; ~zero new machinery; cost = `throws` ubiquity + the §3 tension + merging the
 fault/contract distinction). This doc is **Option A** (hidden out-of-band by-value slot; faults off
 signatures). **VERDICT (comparison `a0ea33be` → `error-model-phase2-A-vs-B.md`): Option A, with a hybrid
-that delivers B's one ergonomic win (a unified `dyn Error` boundary handler via `Fault equip Error`).**
+that delivers B's one ergonomic win (a unified `Error` boundary handler via `Fault equip Error`).**
 ⚠ Prior-art CORRECTION: Swift TRAPS on overflow (uncatchable) — a precedent FOR A, NOT B; the real
 B-camp is Java/C#/Python/Ruby (unchecked exceptions). **NOTHING is adopted; the linchpin (deep by-value
 is possible + drop-correct) holds for BOTH options.** **✅ OWNER-ACCEPTED 2026-06-22: Option A + the

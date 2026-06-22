@@ -192,16 +192,16 @@ if the hybrid's unified `catch (e): match e` boundary is wanted at 2.1; DEFERRAB
 2.1 ships only the concrete-`Fault` catch first.)
 - *Finding:* Phase-1 §11.1 item 2 said `Fault equip Error`; the scout found **no
   `Error`/`Displayable`/`Debuggable` impl on `Fault`** in current source. The hybrid
-  (the one ergonomic win the owner accepted from Option B — a unified `dyn Error`
+  (the one ergonomic win the owner accepted from Option B — a unified `Error`
   boundary handler) is GREENFIELD. It needs the 3 synthesized methods (`display`,
   `debug`, `source`) + built-in-`equip` injection (TODO line 58 flags it "blocked on
   built-in-`equip` injection").
-- *Recommendation:* **DEFER the unified `dyn Error` surface past 2.1.** 2.1's catch
+- *Recommendation:* **DEFER the unified `Error` surface past 2.1.** 2.1's catch
   binds a concrete `Fault` (exactly like Phase-1's binding form). Ship `Fault equip
   Error` as its own increment (2.1b) once 2.1's propagation works — the propagation
   mechanism is independent of the typing surface. Make the call: is the deep-catch
   demonstrator allowed to use `catch Fault.Overflow:` / `catch f: match f` (concrete)
-  at 2.1, deferring `catch (e): match e` (dyn Error)?
+  at 2.1, deferring `catch (e): match e` (the `Error` trait)?
 
 **D2 — `Fault` membership for the deep case.** (BLOCKING — defines the slot's tag
 space.)
@@ -254,7 +254,7 @@ decision* for the fault model. Note closed.
 
 **D8 — Result reconciliation.** §9 Q6 / A-vs-B §6. *Finding:* under A+hybrid the
 contract `Result[T,E]` and the out-of-band `Fault` stay cleanly separate; the boundary
-`catch (e)` over `dyn Error` (the hybrid) is the only place they meet, via `Fault equip
+`catch (e)` over `Error` (the hybrid) is the only place they meet, via `Fault equip
 Error` — NOT a `Fault | UserError` union. *Recommendation:* keep separate; the only
 reconciliation work is D1 (`Fault equip Error`). DEFERRABLE (rides D1).
 
@@ -312,7 +312,7 @@ the re-measure path if the slot threading is ever suspected of bloat.
   backends), MINUS the front-end (grammar/typecheck reused) PLUS the ABI extension.
   **Medium-large, single funded chain** (scout→brief→≥3 reviews→executor→output-review,
   one backend then the other).
-- **2.1b** `Fault equip Error` + unified `dyn Error` boundary (the hybrid; blocked on
+- **2.1b** `Fault equip Error` + unified `Error` boundary (the hybrid; blocked on
   built-in-`equip` injection) — **small-medium**, independent of propagation.
 - **2.2** N-frames transitive threading — **small** (the slot threads recursively once
   2.1's single-hop works; mostly fixtures + the conservative reach).
@@ -370,7 +370,7 @@ lint `tests/lints.rs:2462`; `&`-out-param ABI `context.rs:1679`; sret/out-param 
 
 **Two findings that need a brief/owner note (not in the docs):**
 1. **`Fault equip Error` is NOT implemented** in current Rust gg (the hybrid's
-   unified-`dyn Error` surface is greenfield, blocked on built-in-`equip` injection) —
+   unified-`Error` surface is greenfield, blocked on built-in-`equip` injection) —
    D1.
 2. The design docs' `file:line` numbers have all DRIFTED ~40-60 lines; a brief built on
    the doc citations verbatim would mis-point. Regenerate from the table above.
