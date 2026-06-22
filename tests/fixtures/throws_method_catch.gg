@@ -1,0 +1,52 @@
+# A `throws` EQUIP METHOD with an `int` payload consumed by `catch`.
+#
+# The bug (now fixed): the non-generic equip-method `fn_sigs` pre-scan
+# (`src/ir/lowering/mod.rs`) had NO `throws` branch, so it registered the method
+# result as bare `int` instead of `Result[int, String]`. The free-fn pre-scan and
+# the method-body lowering BOTH synthesize the `Result[…]` correctly — the
+# pre-scan was the one drifted copy. The call site `c.add(5) catch (e): …` read
+# the stale `int64_t` while the emitted C method returned `Result`, so cc errored
+# `incompatible types … 'int64_t' from '__gg_Result__int64_t__GorgetString'`.
+#
+# Fix: route all three sites through `synthesize_throws_result_type`. This fixture
+# exercises BOTH the success path (no throw, caught-or-not) and the error path
+# (throw propagates to the call-site `catch`).
+#
+# NOTE: `int` payload deliberately — a String/resource payload trips a SEPARATE,
+# pre-existing Tier-2a consume-site validator panic (filed in TODO.md High), which
+# is identical for the free-fn form and orthogonal to this method-vs-free-fn bug.
+
+struct Calc:
+    int base
+
+equip Calc:
+    # `throws` method with an int payload.
+    int add(self, int x) throws String:
+        if x < 0:
+            throw "negative"
+        return self.base + x
+
+    # Second `throws` method to confirm the per-method pre-scan handles each.
+    int scale(self, int x) throws String:
+        if x == 0:
+            throw "zero"
+        return self.base * x
+
+void main():
+    Calc c = Calc(10)
+
+    # Success path: c.add(5) -> Ok(15), catch peels nothing -> 15.
+    int r1 = c.add(5) catch (e): -1
+    print(r1)
+
+    # Error path: c.add(-3) throws, propagates, caught -> -99.
+    int r2 = c.add(-3) catch (e): -99
+    print(r2)
+
+    # Second method, success path: c.scale(4) -> Ok(40) -> 40.
+    int r3 = c.scale(4) catch (e): -1
+    print(r3)
+
+    # Second method, error path: c.scale(0) throws -> -77.
+    int r4 = c.scale(0) catch (e): -77
+    print(r4)

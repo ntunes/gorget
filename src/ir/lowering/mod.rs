@@ -629,25 +629,14 @@ pub fn lower_module(
             let ret_type = if is_main && func.throws.is_none() {
                 I32_TYPE
             } else if func.throws.is_some() {
-                // `int foo() throws str` → Result[int, str]
-                let ok_type = ctx.type_mapper.map_ast_type_mut(&func.return_type.node, &mut ctx.type_registry);
-                let err_type = ctx.type_mapper.map_ast_type_mut(&func.throws.as_ref().unwrap().node, &mut ctx.type_registry);
-                let ok_c = crate::ir::lowering::types::mangle_type_for_name(&func.return_type.node);
-                let err_c = crate::ir::lowering::types::mangle_type_for_name(&func.throws.as_ref().unwrap().node);
-                let result_name = format!("Result__{ok_c}__{err_c}");
-                if let Some(&id) = ctx.type_mapper.named_types.get(&result_name) {
-                    id
-                } else {
-                    // Tier 1c: route through `make_result_type_def` so the
-                    // wrapper's metadata reads `needs_drop` from the
-                    // registry.
-                    use crate::ir::lowering::types::make_result_type_def;
-                    let type_def = make_result_type_def(&result_name, ok_type, err_type, &ctx.type_registry);
-                    ctx.type_registry.add_type_def(type_def);
-                    let type_id = ctx.type_registry.insert(crate::ir::types::GirType::Named(result_name.clone()));
-                    ctx.type_mapper.register_named(result_name, type_id);
-                    type_id
-                }
+                // `int foo() throws str` → Result[int, str]. One source of
+                // truth (devbook-24 rule 3): synthesize via the shared helper.
+                crate::ir::lowering::types::synthesize_throws_result_type(
+                    &mut ctx.type_mapper,
+                    &mut ctx.type_registry,
+                    &func.return_type.node,
+                    &func.throws.as_ref().unwrap().node,
+                )
             } else {
                 // Use map_ast_type_mut so tuple return types get registered on the fly
                 ctx.type_mapper.map_ast_type_mut(&func.return_type.node, &mut ctx.type_registry)
@@ -1001,7 +990,22 @@ pub fn lower_module(
                     let method_def = &method.node;
                     let mangled = format!("{}__{}", type_name, method_def.name.node);
 
-                    let ret_type = ctx.type_mapper.map_ast_type_mut(&method_def.return_type.node, &mut ctx.type_registry);
+                    // `int add(self) throws str` → Result[int, str]. This
+                    // pre-scan once registered bare `int` (no throws branch),
+                    // so a `c.add(5) catch (e): …` call read `int64_t` while
+                    // the emitted C method returned `Result` → ill-typed C.
+                    // Route through the shared helper — same synthesis as the
+                    // free-fn pre-scan and the method body (`functions.rs`).
+                    let ret_type = if let Some(throws) = &method_def.throws {
+                        types::synthesize_throws_result_type(
+                            &mut ctx.type_mapper,
+                            &mut ctx.type_registry,
+                            &method_def.return_type.node,
+                            &throws.node,
+                        )
+                    } else {
+                        ctx.type_mapper.map_ast_type_mut(&method_def.return_type.node, &mut ctx.type_registry)
+                    };
                     let has_self = method_def.params.first()
                         .map(|p| p.node.name.node == "self")
                         .unwrap_or(false);

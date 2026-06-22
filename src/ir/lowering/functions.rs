@@ -82,7 +82,18 @@ fn wrap_expr_tail_in_ok(
     }
     let type_name = ctx.type_registry.type_name(ret_type)
         .unwrap_or_else(|| "Result".to_string());
-    let ok_val = builder.enum_init(type_name, "Ok", ret_type, vec![operand]);
+    // Core #3 — route the outer-Ok wrap through the CoW chokepoint.
+    // `emit_enum_init_owned` clone-or-moves the payload per the CoW table and
+    // `drops.unregister`s the consumed source, so an inner resource (e.g. a
+    // `Result[String, …]` tail whose Ok holds a heap String) is NOT double-freed:
+    // dropped once inside this fn AND again at the call site. Raw `builder.enum_init`
+    // (shallow memcpy, no ownership transfer) was the sibling that forgot it
+    // (the block-body path in `lower_return` does the transfer via
+    // `move_zero_and_mark`). `drops.unregister` emits NO instruction, so the
+    // `stmts/mod.rs:1812` move-zero drop-flag-corruption class on rethrow shapes
+    // is structurally out of reach here. The operand is a fresh owned temp, so
+    // `None` arg_spans is fine — `clone_resource_args_for_init` moves it regardless.
+    let ok_val = ctx.emit_enum_init_owned(builder, &type_name, "Ok", ret_type, vec![operand], None);
     FunctionBuilder::copy(ok_val)
 }
 
@@ -965,29 +976,17 @@ pub fn lower_equip_method(
     let method_name = &method.name.node;
     let mangled_name = format!("{type_name}__{method_name}");
 
-    let return_type = if method.throws.is_some() {
-        // `int parse(self, String input) throws String` → Result[int, String]
-        let ok_type = ctx.type_mapper.map_ast_type_mut(&method.return_type.node, &mut ctx.type_registry);
-        let err_type = ctx.type_mapper.map_ast_type_mut(&method.throws.as_ref().unwrap().node, &mut ctx.type_registry);
-        let ok_c = crate::ir::lowering::types::mangle_type_for_name(&method.return_type.node);
-        let err_c = crate::ir::lowering::types::mangle_type_for_name(&method.throws.as_ref().unwrap().node);
-        let result_name = format!("Result__{ok_c}__{err_c}");
-        if let Some(&id) = ctx.type_mapper.named_types.get(&result_name) {
-            id
-        } else {
-            // Tier 1c: route through `make_result_type_def` so the
-            // wrapper's metadata reads `needs_drop` from the registry
-            // — registers as `(Recursive, Resource)` when either
-            // variant payload is droppable. Replaces a direct
-            // TypeMetadata::default() construction that silently
-            // recorded `(None, Trivial)` for `Result[T, String]`.
-            use crate::ir::lowering::types::make_result_type_def;
-            let type_def = make_result_type_def(&result_name, ok_type, err_type, &ctx.type_registry);
-            ctx.type_registry.add_type_def(type_def);
-            let type_id = ctx.type_registry.insert(crate::ir::types::GirType::Named(result_name.clone()));
-            ctx.type_mapper.register_named(result_name, type_id);
-            type_id
-        }
+    let return_type = if let Some(throws) = &method.throws {
+        // `int parse(self, String input) throws String` → Result[int, String].
+        // One source of truth (devbook-24 rule 3): synthesize via the shared
+        // helper — same path as the free-fn and equip-method pre-scans in
+        // `mod.rs`.
+        crate::ir::lowering::types::synthesize_throws_result_type(
+            &mut ctx.type_mapper,
+            &mut ctx.type_registry,
+            &method.return_type.node,
+            &throws.node,
+        )
     } else {
         ctx.type_mapper.map_ast_type(&method.return_type.node)
     };

@@ -738,6 +738,98 @@ fn container_literal_arms_count() {
     );
 }
 
+/// Ratchet (Core #4 "one fix, all siblings" / devbook-24 rule 3 "one source of
+/// truth"): the `throws T … throws E` → `Result[T, E]` return-type synthesis must
+/// live in EXACTLY ONE place — `types::synthesize_throws_result_type`. There are
+/// FOUR throws-signature sites that each need this `Result[T, E]` return type:
+///   1. the free-fn `fn_sigs` pre-scan (`mod.rs`),
+///   2. the equip-method `fn_sigs` pre-scan (`mod.rs`),
+///   3. the trait-equip method-sig pre-scan (`traits.rs`), and
+///   4. the equip-method body lowering (`functions.rs`).
+/// Site #2 once silently DRIFTED — it had no `throws` branch at all, so it
+/// registered bare `int` instead of `Result[int, String]`, and a
+/// `c.add(5) catch (e): …` call read the stale `int64_t` while the emitted C
+/// method returned `Result` → ill-typed C (`incompatible types … 'int64_t' from
+/// '__gg_Result__…'`). The fix extracted the synthesis into ONE helper and routed
+/// all four sites through it.
+///
+/// This lint pins that invariant two ways:
+///   - the inline `Result__{ok_c}__{err_c}` mangled-name `format!` appears in
+///     EXACTLY ONE place (the helper); a re-inlined fifth copy trips it, and
+///   - the helper is CALLED from at least the four known sig sites.
+///
+/// **If this fails:** a new throws-sig path was added (or a site re-inlined the
+/// synthesis). Route it through `synthesize_throws_result_type` instead of
+/// hand-rolling `format!("Result__{ok_c}__{err_c}")` + `make_result_type_def`, so
+/// the metadata (`needs_drop` / copy-semantics) and the mangled name stay
+/// coherent across every site. Then bump `EXPECTED_CALL_SITES`.
+#[test]
+fn throws_result_synthesis_single_source() {
+    // The mangled-name format string is the load-bearing inline-synthesis
+    // marker. It must appear in EXACTLY ONE code location (the helper). Doc-
+    // comment mentions use a different spelling (`Result__{ok_c}__{err_c}`
+    // inside backticks/prose without `format!(`) so we anchor on the `format!`.
+    const SYNTH_MARKER: &str = r#"format!("Result__{ok_c}__{err_c}")"#;
+    const HELPER_FN: &str = "fn synthesize_throws_result_type";
+    const HELPER_CALL: &str = "synthesize_throws_result_type(";
+    // 4 sig sites + the `fn …(` definition line itself = 5 textual matches of
+    // the call marker. (The definition line also contains `synthesize_throws_
+    // result_type(`.)
+    const EXPECTED_CALL_SITES: usize = 4;
+
+    let files = [
+        "src/ir/lowering/types.rs",
+        "src/ir/lowering/mod.rs",
+        "src/ir/lowering/functions.rs",
+        "src/ir/lowering/traits.rs",
+    ];
+
+    let mut inline_synth = 0usize;
+    let mut helper_defs = 0usize;
+    let mut call_sites = 0usize;
+    for f in files {
+        let content = fs::read_to_string(f).unwrap_or_default();
+        for line in content.lines() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") || trimmed.starts_with("///") {
+                continue;
+            }
+            inline_synth += line.matches(SYNTH_MARKER).count();
+            if line.contains(HELPER_FN) {
+                helper_defs += 1;
+                continue; // the definition line is not a call site
+            }
+            call_sites += line.matches(HELPER_CALL).count();
+        }
+    }
+
+    assert_eq!(
+        inline_synth, 1,
+        "Inline `throws` → Result-type synthesis (`{SYNTH_MARKER}`) must appear in \
+         EXACTLY ONE place — `types::synthesize_throws_result_type` — but found \
+         {inline_synth} copies.\n\n\
+         A throws-sig site re-inlined the synthesis. Route it through the shared \
+         helper instead (devbook-24 rule 3 / Core #4): the equip-method pre-scan \
+         once drifted exactly this way (registered bare `int`, not `Result[int, E]`) \
+         and emitted ill-typed C. Delete the inline copy, call \
+         `synthesize_throws_result_type(&mut ctx.type_mapper, &mut ctx.type_registry, \
+         &return_ty, &throws_ty)`.",
+    );
+    assert_eq!(
+        helper_defs, 1,
+        "Expected exactly one `synthesize_throws_result_type` definition, found {helper_defs}.",
+    );
+    assert_eq!(
+        call_sites, EXPECTED_CALL_SITES,
+        "throws-result synthesis call-site count changed: {call_sites} vs \
+         {EXPECTED_CALL_SITES}.\n\n\
+         If you added a throws-signature path (a new place that needs the \
+         `Result[T, E]` return type for a `throws` fn/method), it MUST call \
+         `synthesize_throws_result_type` — NOT hand-roll the `Result__…` mangle — \
+         then bump EXPECTED_CALL_SITES. If you removed a site, lower it.",
+    );
+}
+
 /// Ratchet: the comprehension dispatch in the SELF-HOST `lower_expr_inner`
 /// (`tests/fixtures/self_host_lowerer/lower_expr.gg`) is a 3-arm enumerated
 /// class — `EListComp` / `ESetComp` / `EDictComp`. Each routes through the

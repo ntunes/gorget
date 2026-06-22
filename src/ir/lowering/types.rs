@@ -1209,6 +1209,49 @@ pub fn make_result_type_def(name: &str, ok_type: TypeId, err_type: TypeId, regis
     }
 }
 
+/// Synthesize (and cache) the `Result[T, E]` return type for a `throws` signature.
+///
+/// A `T foo() throws E` function/method lowers to a `Result[T, E]` return slot.
+/// The mangled wrapper name is `Result__{ok_c}__{err_c}` (driven by
+/// `mangle_type_for_name`), registered once via `make_result_type_def` so the
+/// wrapper's `needs_drop`/copy-semantics metadata is read from the registry.
+/// Idempotent: a second call with the same `(return_type, throws_type)` returns
+/// the already-registered id.
+///
+/// **One source of truth (devbook-24 rule 3 / Core #4).** This is the SOLE place
+/// the `Result__{ok}__{err}` throws-result synthesis is spelled. The three
+/// throws-sig sites — the free-fn pre-scan (`mod.rs`), the equip-method pre-scan
+/// (`mod.rs`), and the method-body lowering (`functions.rs`) — all route through
+/// here so a fourth path cannot drift (which is exactly how the equip-method
+/// pre-scan once silently registered bare `int` instead of `Result[int, E]`,
+/// yielding ill-typed C at the call site). The `tests/lints.rs`
+/// `throws_result_synthesis_single_source` ratchet pins this invariant.
+pub fn synthesize_throws_result_type(
+    type_mapper: &mut TypeMapper,
+    registry: &mut TypeRegistry,
+    return_type: &Type,
+    throws_type: &Type,
+) -> TypeId {
+    let ok_type = type_mapper.map_ast_type_mut(return_type, registry);
+    let err_type = type_mapper.map_ast_type_mut(throws_type, registry);
+    let ok_c = mangle_type_for_name(return_type);
+    let err_c = mangle_type_for_name(throws_type);
+    let result_name = format!("Result__{ok_c}__{err_c}");
+    if let Some(&id) = type_mapper.named_types.get(&result_name) {
+        return id;
+    }
+    // Tier 1c: route through `make_result_type_def` so the wrapper's metadata
+    // reads `needs_drop` from the registry — registers as `(Recursive, Resource)`
+    // when either variant payload is droppable. Replaces a direct
+    // `TypeMetadata::default()` construction that silently recorded
+    // `(None, Trivial)` for `Result[T, String]`.
+    let type_def = make_result_type_def(&result_name, ok_type, err_type, registry);
+    registry.add_type_def(type_def);
+    let type_id = registry.insert(crate::ir::types::GirType::Named(result_name.clone()));
+    type_mapper.register_named(result_name, type_id);
+    type_id
+}
+
 /// Create a single-field wrapper TypeDef (Box[T], Shared[T], etc.).
 pub fn make_wrapper_type_def(name: &str, inner_type: TypeId, copy_semantics: CopySemantics, drop_strategy: DropStrategy) -> TypeDef {
     TypeDef {

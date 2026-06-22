@@ -94,24 +94,18 @@ pub fn register_trait_types(
                     }
 
                     let method_name = &method_def.name.node;
-                    let return_type = if method_def.throws.is_some() {
-                        // `int parse(self, String input) throws String` → Result[int, String]
-                        let ok_type = ctx.type_mapper.map_ast_type_mut(&method_def.return_type.node, &mut ctx.type_registry);
-                        let err_type = ctx.type_mapper.map_ast_type_mut(&method_def.throws.as_ref().unwrap().node, &mut ctx.type_registry);
-                        let ok_c = crate::ir::lowering::types::mangle_type_for_name(&method_def.return_type.node);
-                        let err_c = crate::ir::lowering::types::mangle_type_for_name(&method_def.throws.as_ref().unwrap().node);
-                        let result_name = format!("Result__{ok_c}__{err_c}");
-                        if let Some(&id) = ctx.type_mapper.named_types.get(&result_name) {
-                            id
-                        } else {
-                            // Tier 1c: route through `make_result_type_def`.
-                            use crate::ir::lowering::types::make_result_type_def;
-                            let type_def = make_result_type_def(&result_name, ok_type, err_type, &ctx.type_registry);
-                            ctx.type_registry.add_type_def(type_def);
-                            let type_id = ctx.type_registry.insert(crate::ir::types::GirType::Named(result_name.clone()));
-                            ctx.type_mapper.register_named(result_name, type_id);
-                            type_id
-                        }
+                    let return_type = if let Some(throws) = &method_def.throws {
+                        // `int parse(self, String input) throws String` →
+                        // Result[int, String]. One source of truth
+                        // (devbook-24 rule 3): synthesize via the shared helper
+                        // — same path as the free-fn / equip-method pre-scans
+                        // and the method-body lowering.
+                        crate::ir::lowering::types::synthesize_throws_result_type(
+                            &mut ctx.type_mapper,
+                            &mut ctx.type_registry,
+                            &method_def.return_type.node,
+                            &throws.node,
+                        )
                     } else {
                         ctx.type_mapper.map_ast_type(&method_def.return_type.node)
                     };

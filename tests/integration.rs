@@ -4061,8 +4061,8 @@ fn throws_expr_body_tail() {
     // (expr-body, Some(21)), `wrap_opt_block` (block-body, None -> -2),
     // `wrap_opt_some` (`return Some(inner)`, Some(56)) + throw path (None -> -4)
     // give `21` / `-2` / `56` / `-4`. (Non-resource int inner; the resource-inner
-    // payload case is a separately-filed known defect, see the `#[ignore]`'d
-    // `throws_t_result_resource_inner` test.)
+    // payload case — which used to double-free — is now FIXED and covered by the
+    // active `throws_t_result_resource_inner` test.)
     run_gg(
         "throws_expr_body_tail.gg",
         "11\n10\n-1\nHi, Bee\nok\n12\n15\n24\nfrom-throw\n21\n-2\n56\n-4",
@@ -4070,17 +4070,41 @@ fn throws_expr_body_tail() {
 }
 
 #[test]
-#[ignore] // KNOWN DEFECT (filed TODO.md High): throws T=Result/Option with a RESOURCE
-          // (heap-String) inner payload double-frees the inner String — the outer-Ok-wrap
-          // path (B1) doesn't transfer/register ownership of the inner resource. ASan:
-          // attempting double-free. B1 fixed the int-inner case; this is the orthogonal
-          // deeper drop-tracking gap. FLIP TO ACTIVE (remove #[ignore]) when fixed.
 fn throws_t_result_resource_inner() {
-    // The language-CORRECT output: `wrap_result(5)` -> Ok(Ok("val-ok")), catch peels
-    // the outer throws-Result -> Ok("val-ok") -> prints `val-ok`; `wrap_option(5)` ->
-    // Ok(Some("opt-yes")) -> Some("opt-yes") -> prints `opt-yes`. Currently CRASHES
-    // (double-free, exit 134) instead of printing this.
-    run_gg("throws_t_result_resource_inner.gg", "val-ok\nopt-yes");
+    // FIXED: throws T=Result/Option with a RESOURCE (heap-String) inner payload
+    // used to double-free the inner String. The expr-body outer-Ok-wrap
+    // (`wrap_expr_tail_in_ok`) built the outer `Ok` with raw `builder.enum_init`
+    // — a shallow memcpy with NO ownership transfer — so the inner enum's heap
+    // String was dropped once INSIDE the wrapping fn AND again at the call site
+    // (ASan: attempting double-free, exit 134). Fix: route the wrap through
+    // `emit_enum_init_owned` (`context.rs`), which clone-or-moves the payload per
+    // the CoW table and `drops.unregister`s the consumed source.
+    //
+    // `wrap_result(5)` -> Ok(Ok("val-ok")); catch peels the outer throws-Result ->
+    // Ok("val-ok") -> `val-ok`. The block-body twin `wrap_result_block` (already
+    // clean via `lower_return`) pins the sibling. `wrap_option(5)` ->
+    // Ok(Some("opt-yes")) -> Some("opt-yes") -> `opt-yes`. The non-resource int
+    // inner `wrap_int(4)` -> Ok(Ok(12)) -> Ok(12) -> `12` anchors the B1 int case.
+    run_gg("throws_t_result_resource_inner.gg", "val-ok\nval-ok\nopt-yes\n12");
+}
+
+#[test]
+fn throws_method_catch() {
+    // A `throws` EQUIP METHOD with an `int` payload consumed by `catch`. The bug:
+    // the non-generic equip-method `fn_sigs` pre-scan (`src/ir/lowering/mod.rs`)
+    // had NO `throws` branch, so it registered the method result as bare `int`
+    // instead of `Result[int, String]`. The call site `c.add(5) catch (e): …`
+    // read the stale `int64_t` while the emitted C method returned `Result` → cc
+    // `incompatible types … 'int64_t' from '__gg_Result__int64_t__GorgetString'`.
+    // The free-fn pre-scan and the method-body lowering BOTH synthesized the
+    // `Result[…]` correctly — the equip-method pre-scan was the one drifted copy.
+    // Fix: route all three sites through `synthesize_throws_result_type`.
+    //
+    // Success path: c.add(5) -> Ok(15) -> 15. Error path: c.add(-3) throws,
+    // caught -> -99. Second method `scale`: c.scale(4) -> 40, c.scale(0) throws
+    // -> -77. (int payload deliberately — a resource payload trips a separate,
+    // pre-existing Tier-2a validator panic identical for free fns, filed in TODO.)
+    run_gg("throws_method_catch.gg", "15\n-99\n40\n-77");
 }
 
 #[test]

@@ -1,18 +1,20 @@
-# KNOWN DEFECT (filed in TODO.md) — `#[ignore]`'d until the drop-tracking is fixed.
-#
 # A `throws` fn whose declared success type `T` is a `Result`/`Option` with a
-# RESOURCE (heap-String) INNER payload double-frees. The outer-Ok-wrap path
-# (B1) does not transfer/register ownership of the inner resource: the inner
-# `Result`/`Option` value's String is dropped once inside the wrapping fn (via
-# the inner enum's `__drop`) AND again at the call site after the outer Ok-wrap
-# aliases the same allocation. ASan: `attempting double-free`.
+# RESOURCE (heap-String) INNER payload used to double-free.
 #
-# The B1 int-inner case is fixed (non-resource payload, `throws_expr_body_tail`);
-# this is the orthogonal deeper drop-tracking gap. The expected output below is
-# what the language SHOULD produce — when the drop-tracking is fixed, remove the
-# `#[ignore]` and this flips green.
+# The outer-Ok-wrap path (`wrap_expr_tail_in_ok`, B1) built the outer `Ok` with
+# raw `builder.enum_init` — a shallow memcpy with NO ownership transfer. The inner
+# `Result`/`Option` value's heap String was byte-copied into the outer `Ok_0` but
+# its scope-exit `DropEntry` stayed live → dropped once INSIDE the wrapping fn
+# (the inner enum's `__drop`) AND again at the call site. ASan: `attempting
+# double-free`.
+#
+# Fix: route `wrap_expr_tail_in_ok` through `emit_enum_init_owned`
+# (`context.rs`), which clone-or-moves the payload per the CoW table and
+# `drops.unregister`s the consumed source — exactly the missing transfer. This
+# unifies all Ok/Some wraps through the one CoW chokepoint. The block-body sibling
+# (`lower_return`) was already clean (it does the transfer via `move_zero_and_mark`).
 
-# --- Result inner (heap String payload) ---
+# --- Result inner (heap String payload), expr-body tail ---
 Result[String, String] mk_result(int x):
     if x < 0:
         return Error("neg")
@@ -20,7 +22,13 @@ Result[String, String] mk_result(int x):
 
 Result[String, String] wrap_result(int x) throws String: mk_result(x)
 
-# --- Option inner (heap String payload) ---
+# --- Result inner (heap String payload), block-body twin (regression anchor) ---
+# The block-body path was already clean; this pins it so the two siblings can't
+# silently diverge again.
+Result[String, String] wrap_result_block(int x) throws String:
+    return mk_result(x)
+
+# --- Option inner (heap String payload), expr-body tail ---
 Option[String] mk_option(int x):
     if x < 0:
         return None
@@ -28,7 +36,20 @@ Option[String] mk_option(int x):
 
 Option[String] wrap_option(int x) throws String: mk_option(x)
 
+# --- Non-resource (int) inner, expr-body tail (regression anchor) ---
+# The int-inner case was already fixed by B1; pinned here under the resource-inner
+# test so any future change to `wrap_expr_tail_in_ok` keeps the non-resource path
+# correct (no spurious clone, no drop mistracking).
+Result[int, String] mk_int(int x):
+    if x < 0:
+        return Error("neg")
+    return Ok(x * 3)
+
+Result[int, String] wrap_int(int x) throws String: mk_int(x)
+
 void main():
+    # expr-body resource Result: wrap_result(5) -> Ok(Ok("val-ok")); catch peels
+    # the outer throws-Result -> Ok("val-ok") -> prints `val-ok`.
     Result[String, String] r1 = wrap_result(5) catch (e): Error("c")
     match r1:
         case Ok(s):
@@ -36,9 +57,27 @@ void main():
         case Error(m):
             print(m)
 
+    # block-body resource Result twin: same value, explicit return.
+    Result[String, String] r2 = wrap_result_block(5) catch (e): Error("c")
+    match r2:
+        case Ok(s):
+            print(s)
+        case Error(m):
+            print(m)
+
+    # expr-body resource Option: wrap_option(5) -> Ok(Some("opt-yes")) ->
+    # Some("opt-yes") -> prints `opt-yes`.
     Option[String] o1 = wrap_option(5) catch (e): None
     match o1:
         case Some(s):
             print(s)
         case None:
             print("none")
+
+    # non-resource int inner: wrap_int(4) -> Ok(Ok(12)) -> Ok(12) -> prints `12`.
+    Result[int, String] i1 = wrap_int(4) catch (e): Error("c")
+    match i1:
+        case Ok(v):
+            print(v)
+        case Error(m):
+            print(m)
