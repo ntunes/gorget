@@ -2774,6 +2774,26 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                     gmod.types_with_user_drop.put(udrop_tname, true)
                     udrop_changed = true
 
+    # Fold every user-Drop type into `resource_types`, mirroring Rust's
+    # single `copy_semantics=Resource` + `drop_strategy=Custom("T__drop")`
+    # axis (`src/ir/lowering/mod.rs:260-280`): scanning `equip T with Drop:`
+    # UNCONDITIONALLY marks the type a resource, never inspecting fields. The
+    # self-host previously keyed droppability only on the resource-FIELD axis
+    # (the fixpoint above + runtime resources), so a FIELDLESS Drop-bearing
+    # struct local (`R a = R(100)` with `equip R with Drop`) was never
+    # registered for drop — `R__drop` was DCE'd and the destructor silently
+    # never ran (a RAII violation). Folding here makes all three consumers
+    # fire consistently: `is_droppable_type` (lower_drops.gg) registers the
+    # local, `drop_fn_for_type` (lir_lower.gg) resolves `R__drop`, and
+    # `populate_drop_metadata`'s `is_resource_struct` guard emits+wires the
+    # call. It also flips these to the resource clone/Ptr ABI — exactly Rust's
+    # `copy_semantics=Resource` (a custom-drop type isn't freely bit-copyable;
+    # two byte-copies would each run `drop`). Done at the PRODUCER, after the
+    # transitive fixpoint converges, so the signal is consistent everywhere.
+    for udrop_res_name in gmod.types_with_user_drop.keys():
+        if not gmod.resource_types.contains(udrop_res_name):
+            gmod.resource_types.put(udrop_res_name, true)
+
     # Refine fn_sigs for functions with named/generic return types. The
     # pre-scan above defaulted those to `I64_TYPE` because `map_ast_type`
     # needs the real `gmod` to resolve generic names. Left uncorrected, a

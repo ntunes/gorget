@@ -4638,6 +4638,17 @@ dropping alpha",
 }
 
 #[test]
+fn drop_struct_local() {
+    // RAII: a FIELDLESS (non-resource) Drop-bearing struct local is dropped
+    // exactly once at scope exit. Guards the self-host fold of
+    // types_with_user_drop into resource_types (the self-host once keyed
+    // droppability only on the resource-FIELD axis and silently never ran the
+    // destructor; Rust gg has always scanned `equip T with Drop:`
+    // unconditionally). Also wired into the `self_host_runtime` lock-in net.
+    run_gg("drop_struct_local.gg", "200\ndrop R");
+}
+
+#[test]
 fn drop_reassign() {
     run_gg(
         "drop_reassign.gg",
