@@ -2926,35 +2926,54 @@ pub fn emit_result_auto_propagate(
     result_type: TypeId,
     prop_span: crate::span::Span,
 ) -> Operand {
-    // Tier 1c: when result_operand is a place operand on a resource
-    // Result, use Move semantics so val_local owns the data without
-    // shallow-aliasing the source. The original ENUM-init or call
-    // result is dead immediately after this assign — we extract its
-    // payload inline below and don't reference it again.
-    let val_local = builder.add_local(result_type, None);
+    // Determine a working place to read the tag/Ok/Error payloads from.
+    //
+    // Resource path (Tier 1c): when result_operand is a bare-place operand on
+    // a *resource* Result, Move it into a fresh `val_local` so it owns the data
+    // without shallow-aliasing the source, and MoveZero the source. The
+    // resource Ok/Error field loads below zero the slot they read from, so they
+    // must read from the owned `val_local`, not the source.
+    //
+    // Non-resource fast path: when the operand is a bare-place operand on a
+    // *non-resource* Result, read tag/fields DIRECTLY from the source place —
+    // the redundant `val_local` memcpy buys nothing. The source is a
+    // materialized place (a call result / enum-init) that is dead immediately
+    // after, the loads are non-destructive for non-resource fields, and a
+    // non-resource Result carries no drop, so no MoveZero/unregister is owed.
+    //
+    // Fallback: a non-place operand (constant / projected place) still needs a
+    // temp so `tag_of` / `enum_field_load_move` have a `Place` to address.
     let src_local = if let Operand::Copy(ref p) | Operand::Move(ref p) = result_operand {
         if p.projections.is_empty() { Some(p.local) } else { None }
     } else { None };
-    if src_local.is_some() && ctx.type_registry.is_resource_type(result_type) {
-        builder.assign_mode(
-            crate::ir::instructions::AssignMode::Move,
-            Place::local(val_local),
-            result_operand,
-        );
-        if let Some(local) = src_local {
-            if !ctx.drops.is_moved(local) {
-                ctx.move_zero_and_mark(builder, local);
+    let is_resource = ctx.type_registry.is_resource_type(result_type);
+    let (work_place, owns_work) = if let Some(src) = src_local {
+        if is_resource {
+            let val_local = builder.add_local(result_type, None);
+            builder.assign_mode(
+                crate::ir::instructions::AssignMode::Move,
+                Place::local(val_local),
+                result_operand,
+            );
+            if !ctx.drops.is_moved(src) {
+                ctx.move_zero_and_mark(builder, src);
             }
+            (Place::local(val_local), true)
+        } else {
+            // Read straight from the source — no copy.
+            (Place::local(src), false)
         }
     } else {
+        let val_local = builder.add_local(result_type, None);
         builder.assign(Place::local(val_local), result_operand);
-    }
+        (Place::local(val_local), true)
+    };
 
     // Look up Ok/Error field types from the Result type definition
     let (ok_field_type, err_field_type) = extract_result_field_types(ctx, result_type);
 
     // Check tag: 0 = Ok, 1 = Error
-    let tag = builder.tag_of(FunctionBuilder::copy(val_local));
+    let tag = builder.tag_of(Operand::Copy(work_place.clone()));
     let is_ok = builder.cmp(
         CmpOp::Eq,
         I32_TYPE,
@@ -2971,28 +2990,34 @@ pub fn emit_result_auto_propagate(
     // Ok path: extract Ok value (field 0 of variant 0)
     builder.switch_to(ok_bb);
     let ok_val = builder.enum_field_load_move(
-        Place::local(val_local),
+        work_place.clone(),
         "Ok",
         0,
         ok_field_type,
     );
-    // Move-if-dead: the Result temp is consumed by ? — unregister + MoveZero.
-    ctx.drops.unregister(val_local);
-    builder.move_zero(Place::local(val_local));
-    ctx.drops.mark_moved(val_local);
+    // Move-if-dead: the owned Result temp is consumed by ? — unregister +
+    // MoveZero. Skipped on the non-resource fast path: `work_place` is the
+    // borrowed source (not ours to zero) and carries no drop.
+    if owns_work {
+        ctx.drops.unregister(work_place.local);
+        builder.move_zero(work_place.clone());
+        ctx.drops.mark_moved(work_place.local);
+    }
     builder.jump(merge_bb);
 
     // Error path: propagate error via early return
     builder.switch_to(err_bb);
     let err_val = builder.enum_field_load_move(
-        Place::local(val_local),
+        work_place.clone(),
         "Error",
         0,
         err_field_type,
     );
-    // val_local already unregistered above (both paths share the unregister)
-    builder.move_zero(Place::local(val_local));
-    ctx.drops.mark_moved(val_local);
+    // work_place already unregistered above (both paths share the unregister)
+    if owns_work {
+        builder.move_zero(work_place.clone());
+        ctx.drops.mark_moved(work_place.local);
+    }
     // Re-wrap error in the *current* function's Result type and return.
     let fn_result_type = ctx.func_state.current_throws_result_type.or_else(|| {
         let ret_type = builder.locals[0].type_id;
