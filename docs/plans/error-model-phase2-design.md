@@ -1,7 +1,10 @@
 # Error-model Phase 2 (deep / boundary fault catch) — design
 
-**Status:** DESIGN, scout-produced (`afa58d78`, 2026-06-22), UNDER REVIEW. Not yet briefable.
-**Supersedes nothing yet** — folds into `error-model.md` §9.1 *only after* the review cycle signs off.
+**Status:** DESIGN, scout-produced (`afa58d78`, 2026-06-22). Review pass 1 (`a8bbd2b9`): **SIGN OFF**,
+linchpin cites VERIFIED against source, 4 minors FOLDED (indirect-call seam named, fault-in-destructor
+policy decided, cite drifts fixed, plain-fn twin cited). Pass 2 (confirming the fold) PENDING.
+**Supersedes nothing yet** — folds into `error-model.md` §9.1 *only after* a clean confirming pass +
+owner sign-off on the §9.1 reframe.
 
 > ⚠ This design **reframes a load-bearing assumption** in `error-model.md` §9.1 — that deep/boundary
 > fault catch requires a greenfield unwind substrate. The reframe rests on the claim that Gorget's
@@ -21,26 +24,30 @@ sidesteps the multi-month unwind substrate entirely (and with it B2/Q9/Q15/Q16/�
 
 ## 1. The load-bearing fork, and the premises to verify
 
-**Claim (LINCHPIN — verify each cite):** Gorget's contract-error model is already by-value, deep, and
-drop-correct:
-- `throws E` lowers to a `Result[T,E]` **value-union return** — `src/ir/lowering/functions.rs:715,912`.
+**Claim (LINCHPIN — all cites VERIFIED against current source, review pass 1 `a8bbd2b9`):** Gorget's
+contract-error model is already by-value, deep, and drop-correct:
+- `throws E` lowers to a `Result[T,E]` **value-union return** — `src/ir/lowering/functions.rs:715`
+  (`current_throws_result_type` + the equip-method path `:911-934`) AND the plain-function twin
+  `src/ir/lowering/mod.rs:626-645` (where most `throws` functions get their `Result` return type).
 - A `throw` in a `throws` fn builds `Error(val)` and **returns it by value**, running
-  `emit_on_error_cleanups` then `emit_early_exit_drops` first — `src/ir/lowering/stmts/mod.rs:2380-2398`
+  `emit_on_error_cleanups` then `emit_early_exit_drops` first — `src/ir/lowering/stmts/mod.rs:2373-2398`
+  (the `throws` conditional opens at `:2373`; cleanups `:2396`, drops `:2397`, `builder.ret` `:2398`)
   — so every droppable local in scope is cleaned up at the early-exit point by **ordinary CFG drop
-  insertion**, no unwind.
-- Each call site receiving a `Result` from a callee auto-propagates via the producer-side `Result→T`
-  hook `apply_auto_propagation` — `src/ir/lowering/exprs/mod.rs:44-87` — which itself emits an early
-  `Error` return (with its own drops). So an error **threads up N frames by value**, each frame running
-  its own drops correctly.
+  insertion**, no unwind. **CRUX, confirmed exactly as claimed.**
+- Each call site receiving a `Result` from a callee auto-propagates via the centralized producer-side
+  hook `maybe_auto_propagate` (`src/ir/lowering/exprs/mod.rs:87`) → `emit_result_auto_propagate`
+  (`:2922`), which on the Error path re-wraps in the *current* frame's `Result` and **returns by value**
+  (`:3057`) after running `emit_on_error_cleanups` (`:3055`) + `emit_early_exit_drops` (`:3056`). So an
+  error **threads up N frames by value**, each frame running its own drops correctly.
 - `catch (e):` (`lower_catch_expr`, `src/ir/lowering/exprs/mod.rs:3341`) catches that by-value error at
   any boundary up the chain.
 
-**Claim (the setjmp substrate is vestigial, not production):** `gorget_throw`/`GORGET_TRY`
-(`src/backend/c/.../runtime_error.c:8-27`) is emitted ONLY as the fallback arm for a `throw` in a
+**Claim (the setjmp substrate is vestigial, not production) — VERIFIED:** `gorget_throw`/`GORGET_TRY`
+(`src/backend/c/.../runtime_error.c:3-28`) is emitted ONLY as the fallback arm for a `throw` in a
 *non*-`throws` (ill-typed) context — `stmts/mod.rs:2400-2402`. The real path is by-value. The test-mode
-cleanup-stack + longjmp (`panic_test.c:2-41`) is driven by the **test harness**
-(`src/backend/c_lir/helpers.rs:1936-1977` emits `__gorget_cleanup_push` only for test bodies), not
-general drop insertion.
+cleanup-stack + longjmp (`panic_test.c:2-41`) is driven by the **test harness**: `__gorget_cleanup_push`
+is gated `if func.is_test_fn` (`src/backend/c_lir/mod.rs:1853` calling `helpers.rs:1938`), NOT general
+drop insertion.
 
 **Claim (no zero-cost EH anywhere):** no `landingpad`/`invoke`/`personality`/`resume` in
 `src/backend/llvm/` (the single "invoke" hit is a comment, `llvm/mod.rs:4269`). Production panic is
@@ -83,6 +90,12 @@ exists because shops don't want it); Midori/Erlang (support the fault≠contract
   `drop(!self)` reading partial state) does not arise: the fault return is at a statement boundary after
   the faulting op branched *before* its store. **Gate fixture:** a fault propagating up 3 frames, each
   with a live `Drop`-typed local, ASan/UBSan clean.
+  - **Re-entrancy policy (fault-inside-a-destructor) — DECIDED: abort.** A faultable op (e.g. `a*b`
+    overflow) inside a user `drop(!self)` body that itself runs *during* `emit_early_exit_drops` of an
+    in-flight fault propagation, when that drop is lexically within a deep-catch scope, is a
+    fault-during-fault-cleanup re-entrancy. Policy: **a fault raised inside a `drop` aborts** (matches
+    Rust's abort-on-double-panic). Not a 2.1 blocker (2.1's fixtures use non-resource frames); state it
+    in the spec + add a fixture when resource-bearing deep frames land.
 - **Q15 (FFI) — non-issue; blocks nothing.** A by-value return never unwinds over a foreign frame. A
   fault *inside* an extern still aborts (unchanged, correct). Document: faults do not cross `extern` by
   propagation.
@@ -142,7 +155,8 @@ Plus the Q9 drop-correctness gate: `faulty`'s frame holds a live `Drop`-typed lo
 up, ASan/UBSan clean.
 
 **Sequencing:** 2.1 single-call-deep → 2.2 N-frames-deep (transitive threading) → 2.3 generics/trait
-reach (Q13 Seam B; conservative "may-fault") → 2.4 Task/TaskGroup boundary (the literal
+reach (Q13 Seam B; conservative "may-fault") → **2.3b indirect calls** (fn-pointer/closure/`Callable[T]`
+— the slot reflected in the callable type; see §5) → 2.4 Task/TaskGroup boundary (the literal
 "server keeps serving"; **the only sub-item touching the runtime** — add a fault field to the task
 struct + surface it in `join`; still by-value, no scheduler setjmp) → 2.5 `meta`/const-eval (Q11; keep
 Phase-1 answer). **Self-host fast-follows each** (Phase-1 substrate already present in
@@ -160,6 +174,16 @@ Phase-1 answer). **Self-host fast-follows each** (Phase-1 substrate already pres
   (`--clones=stats` + RSS) on the self-host self-compile; (3b) reachability-scoping is the mitigation.
 - **Seam B (Q13) generics** — a type-param method's fault-channel is unknown pre-mono; conservative
   "may-fault" threading is correct-but-overbroad. Defer bound-spelling to 2.3; don't gate 2.1.
+- **Indirect-call seam (fn-pointer / closure / `Callable[T]`) — the weakest point of the
+  "hidden slot ≠ signature change" claim; NAME it, don't leave it silent.** For a DIRECT call the
+  hidden fault-return slot is invisible at the source signature (2.1 relies on this). For an INDIRECT
+  call through a `Callable[int(int,int)]` holding a faulting function, the call site can't see the
+  callee's fault-ness, so the slot must become part of the **function-pointer TYPE** — i.e. a de-facto
+  signature change for indirect calls (analogous to Seam B). 2.1 (direct calls only) dodges it; it is a
+  deferred seam, sequenced as **2.3b** alongside the generics seam. The honest framing: "hidden by-value
+  slot" is fully transparent only for direct calls; indirect/generic call sites need the slot reflected
+  in the callable/bound type. This does NOT sink the design (direct + monomorphized calls are the bulk
+  and 2.1/2.2 cover them) but it bounds the "no signature change anywhere" claim.
 - **`on error` (Q12)** already runs on the by-value error path (`emit_on_error_cleanups`,
   `stmts/mod.rs:2396`). Recommend it also runs on a fault propagation (consistency; free on by-value).
 
