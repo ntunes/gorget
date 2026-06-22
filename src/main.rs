@@ -992,7 +992,7 @@ fn try_build_ir(
 
         // ── LLVM backend: .ll → clang -c → link with runtime .o → binary ──
         if backend_name == "llvm" {
-            return compile_llvm_pipeline(&src_path, &exe_path, &generated_code, &concat_source, &lir_module);
+            return compile_llvm_pipeline(&src_path, &exe_path, &generated_code, &concat_source, &lir_module, options.release);
         }
 
         // ── C backend: .c → cc → binary ──
@@ -1097,6 +1097,12 @@ fn try_build_ir(
             .arg("-fdata-sections")
             .arg("-o")
             .arg(&exe_path);
+        // --release: optimize the generated C at -O2. The default (no flag)
+        // stays at the compiler's implicit -O0 for fast, debuggable builds.
+        // -O2 changes only codegen, never observable program behavior.
+        if options.release {
+            cc_cmd.arg("-O2");
+        }
         // Metal requires Objective-C compilation — must come before source file
         #[cfg(target_os = "macos")]
         if needs_metal {
@@ -1185,6 +1191,7 @@ fn compile_llvm_pipeline(
     _ll_code: &str,
     concat_source: &str,
     lir_module: &gorget::lir::LirModule,
+    release: bool,
 ) -> Result<PathBuf, String> {
     let tmp_dir = ll_path.parent().unwrap_or(Path::new("."));
 
@@ -1398,9 +1405,13 @@ fn compile_llvm_pipeline(
     let ll_o_path = tmp_dir.join(format!("__gorget_user_{stem}.o"));
     let llc = env::var("LLC").unwrap_or_else(|_| "llc".to_string());
     let mut ll_cmd = Command::new(&llc);
+    // --release lifts the user-IR opt level to -O2 (matching the C backend);
+    // the default is -O0 for fast, debuggable builds. The runtime .o above is
+    // always -O2 regardless — release affects only generated user code.
+    let user_opt = if release { "-O2" } else { "-O0" };
     ll_cmd
         .arg("-filetype=obj")
-        .arg("-O0")
+        .arg(user_opt)
         .arg("-relocation-model=pic")
         .arg("-o").arg(&ll_o_path)
         .arg(ll_path);
@@ -2399,6 +2410,7 @@ fn real_main() {
         println!("Package commands:  init, new, add, remove");
         println!();
         println!("Build flags:");
+        println!("  --release               Optimize the generated C at -O2 (default: -O0, fast/debuggable)");
         println!("  --hot-reload            Enable hot code reload (builds host + guest .dylib)");
         println!("  --shared [-o F]         Build as shared library (.dylib/.so)");
         println!("  --sanitize              Enable AddressSanitizer + UBSan for runtime bug detection");
@@ -2595,6 +2607,7 @@ fn real_main() {
     let hot_reload_flag = args.iter().any(|a| a == "--hot-reload");
     let scheduler_mode = parse_scheduler(&args);
     let sanitize = args.iter().any(|a| a == "--sanitize");
+    let release = args.iter().any(|a| a == "--release");
     let emit_gir = args.iter().any(|a| a == "--emit-gir");
     let emit_lir = args.iter().any(|a| a == "--emit-lir");
     let emit_c_lir = args.iter().any(|a| a == "--emit-c-lir");
@@ -2920,7 +2933,7 @@ fn real_main() {
                     no_strip_asserts,
                     trace_filename,
                     hot_reload: hot_reload_flag || source_has_hot_reload(&source),
-                    sanitize, scheduler_mode,
+                    sanitize, scheduler_mode, release,
                     ..Default::default()
                 };
                 let result = try_build_ir(filename, &source, dep_paths, None, None, Some(shared_path), &features, lowering_opts, emit_gir, emit_lir, emit_c_lir, show_clones, clones_verbose, clone_stats, backend_name, target);
@@ -2948,7 +2961,7 @@ fn real_main() {
                     no_strip_asserts,
                     trace_filename,
                     hot_reload: hot_reload_flag || source_has_hot_reload(&source),
-                    sanitize,
+                    sanitize, release,
                     ..Default::default()
                 };
                 let result = try_build_ir(filename, &source, dep_paths, None, shared_output_path.as_deref(), None, &features, lowering_opts, emit_gir, emit_lir, emit_c_lir, show_clones, clones_verbose, clone_stats, backend_name, target);
@@ -3011,7 +3024,7 @@ fn real_main() {
                 no_strip_asserts,
                 trace_filename,
                 hot_reload: hot_reload_flag || source_has_hot_reload(&source),
-                sanitize, scheduler_mode,
+                sanitize, scheduler_mode, release,
                 ..Default::default()
             };
             let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, show_clones, clones_verbose, clone_stats, "c-lir", "native");

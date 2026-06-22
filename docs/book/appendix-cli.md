@@ -26,7 +26,8 @@ Running `gg` with no arguments launches the interactive TUI.
 Compile a `.gg` source file to a native binary.
 
 ```bash
-gg build app.gg                    # produces ./app
+gg build app.gg                    # produces ./app (debuggable -O0 build)
+gg build app.gg --release          # optimize the generated C at -O2
 gg build app.gg --sanitize         # with AddressSanitizer + UBSan
 gg build app.gg --shared -o lib.so # shared library
 gg build app.gg --hot-reload       # host binary + guest dylib
@@ -36,6 +37,7 @@ gg build app.gg --hot-reload       # host binary + guest dylib
 
 | Flag | Description |
 |------|-------------|
+| `--release` | Optimize the generated C at `-O2` (default: `-O0`, fast & debuggable) |
 | `--strip-asserts` | Remove all `assert` statements |
 | `--no-strip-asserts` | Keep asserts (overrides source directive) |
 | `--trace` | Enable execution tracing (outputs `.trace.jsonl`) |

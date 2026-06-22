@@ -67,6 +67,10 @@ pub struct LoweringOptions {
     pub sanitize: bool,
     /// Override scheduler backend (pool, thread, inline, single).
     pub scheduler_mode: Option<crate::ir::SchedulerMode>,
+    /// Release build (`--release`): compile the generated C at `-O2` instead of
+    /// the `-O0` default. Affects only the backend `cc`/`llc` opt level — never
+    /// program behavior. Default `false` keeps the debuggable `-O0 -g` path.
+    pub release: bool,
 }
 
 /// Lower an AST module + analysis result into a GIR module.

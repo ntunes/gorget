@@ -25741,3 +25741,120 @@ abc
 xyz",
     );
 }
+
+/// `--release` (-O2) build path. Two invariants:
+///   1. CORRECTNESS — `gg build --release` produces a working binary whose
+///      stdout matches a default (-O0) build; `--release` changes only the
+///      optimizer level, never observable program behavior.
+///   2. PROOF — the C-backend `cc` invocation actually receives `-O2` when
+///      `--release` is set, and does NOT when it is omitted (the default path
+///      stays at the compiler's implicit -O0). We prove this by overriding
+///      `CC` with a wrapper script that appends its full arg list to a log
+///      file before exec'ing the real `cc`, then grep the log for `-O2`.
+///
+/// Under `GG_BACKEND=llvm` the user-code opt level lives in the `llc`
+/// invocation (`-O0`/`-O2`), not `cc` (the runtime `.o` is always `-O2`), so
+/// the cc-arg proof is C-backend-specific — under LLVM we assert only the
+/// build+run correctness half. `#[serial]` because the CC override is a
+/// process-wide env mutation funneled through a shared wrapper/log path.
+#[test]
+#[serial]
+fn release_flag_optimizes_at_o2() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures/hello.gg");
+    assert!(fixture_path.exists(), "Fixture not found: {}", fixture_path.display());
+    let expected = "Hello, World!";
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let cc_log = tmp.path().join("cc_args.log");
+    // The real cc: honor an existing CC override, else `cc`.
+    let real_cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
+
+    // Wrapper script: record args (one per line, '\0' separated invocations)
+    // then exec the real compiler so the build still succeeds end-to-end.
+    let wrapper = tmp.path().join("cc_wrapper.sh");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" >> '{log}'\nprintf '\\0' >> '{log}'\nexec {cc} \"$@\"\n",
+            log = cc_log.display(),
+            cc = real_cc,
+        ),
+    )
+    .expect("write wrapper");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod wrapper");
+    }
+
+    // Helper: build `hello.gg` with the CC wrapper, optionally with --release,
+    // run the binary, assert stdout == expected, and return the captured cc
+    // args (the per-invocation '\0'-separated log contents).
+    let build_run_capture = |release: bool| -> String {
+        let _ = std::fs::remove_file(&cc_log);
+        let out_dir = tmp.path().join(if release { "rel" } else { "dbg" });
+        std::fs::create_dir_all(&out_dir).expect("out dir");
+        let out_bin = out_dir.join("hello");
+
+        let mut cmd = gg_command("build");
+        cmd.arg(&fixture_path).arg("-o").arg(&out_bin);
+        if release {
+            cmd.arg("--release");
+        }
+        cmd.env("CC", &wrapper);
+        let build = build_with_timeout(&mut cmd, "hello.gg (release-flag guard)");
+        assert!(
+            build.status.success(),
+            "Build (release={release}) failed:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&build.stdout),
+            String::from_utf8_lossy(&build.stderr),
+        );
+
+        let run = run_with_timeout(&mut Command::new(&out_bin), "hello (release-flag guard)");
+        let stdout = String::from_utf8_lossy(&run.stdout);
+        assert!(
+            run.status.success(),
+            "Binary (release={release}) exited with error: status={:?}\nstdout:\n{stdout}\nstderr:\n{}",
+            run.status.code(),
+            String::from_utf8_lossy(&run.stderr),
+        );
+        assert_eq!(
+            stdout.trim(),
+            expected,
+            "Output mismatch (release={release}): got {stdout:?}",
+        );
+
+        std::fs::read_to_string(&cc_log).unwrap_or_default()
+    };
+
+    // 1. Default build: correct output, and (C backend) the cc invocation
+    //    compiling the user program must NOT carry -O2.
+    let default_args = build_run_capture(false);
+    // 2. Release build: correct output (identical to default), and (C backend)
+    //    the cc invocation must carry -O2.
+    let release_args = build_run_capture(true);
+
+    if !skip_under_llvm() {
+        // The user-program compile is the cc invocation that names the .c
+        // source file (`*.c`) — isolate that invocation so we don't confuse it
+        // with any unrelated probe. Args within one invocation are separated by
+        // newlines; invocations by '\0'. We look for an invocation that
+        // compiles a .c source and check its -O2 presence.
+        let user_invocation_has_o2 = |log: &str| -> bool {
+            log.split('\0').any(|inv| {
+                let compiles_c = inv.lines().any(|l| l.ends_with(".c"));
+                compiles_c && inv.lines().any(|l| l == "-O2")
+            })
+        };
+        assert!(
+            !user_invocation_has_o2(&default_args),
+            "DEFAULT build unexpectedly passed -O2 to cc (the -O0 default path must be untouched).\ncc args:\n{default_args}",
+        );
+        assert!(
+            user_invocation_has_o2(&release_args),
+            "--release build did NOT pass -O2 to the user-program cc invocation.\ncc args:\n{release_args}",
+        );
+    }
+}
