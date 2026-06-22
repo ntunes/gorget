@@ -16396,6 +16396,227 @@ fn self_host_relocatable_embedded_runtime() {
     let _ = std::fs::remove_dir_all(&tmp_root);
 }
 
+// GG_IMPL Inc-3 gate: a built `gg-selfhost` is RELOCATABLE for programs WITH
+// `from std…` imports — it carries the 28 `lib/std/*.gg` modules embedded into
+// driver.gg via `embed_file` (the same mechanism as Inc-2's runtime), keyed on
+// the normalized module path (`std.collections`, `std.math`), and consults that
+// table in `load_imports` with the 3-state precedence: a LOCAL/lib-dir disk file
+// always WINS (shadows the embed), an explicit `--lib-dir=`/`GG_LIB_DIR` forces
+// DISK, and only when neither resolves does the embedded copy serve the std
+// module (disk-miss-fallback for non-std namespaces).
+//
+// Five checks:
+//   1. EMBEDDED (env unset, no flag, foreign cwd) → build+run a `from std.math
+//      import PI` program → prints `3.141593`. PROVE-IT-BITES: the baseline
+//      SILENTLY MISCOMPILES this to `0` (`unknown identifier 'PI'` →
+//      OpConstI64(0)) — the silent-skip-on-import-miss the embed fixes.
+//   2. ESCAPE HATCH `GG_LIB_DIR=<real>` (env forces disk) → still works (3.141593).
+//   3. ESCAPE HATCH `--lib-dir=<bogus>` (flag forces disk, OVERRIDES the embed)
+//      → the std module is NOT found on the bogus disk path and is NOT fetched
+//      from the embed → the build does NOT produce a correct binary. Proves the
+//      flag genuinely forces disk (NOT a silent no-op fallback to the baked-in
+//      copy). (The self-host's load_imports silently skips a true import miss, so
+//      the build still exits 0 but the program is the same `0` miscompile — we
+//      assert the OUTPUT is NOT the correct value, which a no-op-flag-fallback
+//      would have produced.)
+//   4. LOCAL-MODULE SHADOWING: a local `std/math.gg` in the cwd (resolved via
+//      base_dir in resolve_module_path) shadows the embedded copy → its value
+//      wins. Proves local-disk beats embed.
+//   5. BYTE-IDENTITY: the embedded-path emitted C == the `--lib-dir=<disk>`
+//      emitted C (the embed bytes are the same bytes read from disk).
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_relocatable_embedded_libstd() {
+    if skip_under_llvm() {
+        // The self-host driver emits C only; embedding is backend-agnostic.
+        return;
+    }
+
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_impl_reloc_libstd_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+
+    // A program that imports a std module (needs the embedded lib/std to be
+    // relocatable). `from std.math import PI` → print(PI) → `3.141593`.
+    let prog = tmp_root.join("pi.gg");
+    std::fs::write(&prog, "from std.math import PI\n\nvoid main():\n    print(PI)\n")
+        .expect("failed to write pi.gg");
+    let expected = "3.141593";
+
+    // ── 1. EMBEDDED: env UNSET, no --lib-dir, cwd = the tmpdir. ──────────────
+    let out_bin = tmp_root.join("pi");
+    let build = run_with_timeout(
+        Command::new(&driver_exe)
+            .current_dir(&tmp_root)
+            .env_remove("GG_RUNTIME_DIR")
+            .env_remove("GG_LIB_DIR")
+            .arg("build")
+            .arg("pi.gg")
+            .arg("-o")
+            .arg("pi"),
+        "reloc libstd build (embedded, no env)",
+    );
+    assert!(
+        build.status.success(),
+        "RELOCATABLE std-import build FAILED: `gg-selfhost build pi.gg` from a foreign \
+         cwd with no GG_LIB_DIR must resolve `from std.math import PI` from the EMBEDDED \
+         lib/std table and exit 0.\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr),
+    );
+    assert!(out_bin.exists(), "relocatable std-import build did not produce {out_bin:?}");
+    let ran = run_with_timeout(&mut Command::new(&out_bin), "run relocatable pi");
+    assert!(ran.status.success(), "the relocatably-built pi should exit 0");
+    assert_eq!(
+        String::from_utf8_lossy(&ran.stdout).trim_end(),
+        expected,
+        "the relocatably-built std-importing program must print PI from the embedded \
+         lib/std/math.gg. If it prints `0`, the embed table or the load_imports \
+         consultation regressed (the baseline silent miscompile).",
+    );
+
+    // ── 2. ESCAPE HATCH: GG_LIB_DIR=<real> (env forces disk) → works. ────────
+    let out_env = tmp_root.join("pi_env");
+    let build_env = run_with_timeout(
+        Command::new(&driver_exe)
+            .current_dir(&tmp_root)
+            .env_remove("GG_RUNTIME_DIR")
+            .env("GG_LIB_DIR", &lib_dir)
+            .arg("build")
+            .arg("pi.gg")
+            .arg("-o")
+            .arg("pi_env"),
+        "reloc libstd build (GG_LIB_DIR escape hatch)",
+    );
+    assert!(
+        build_env.status.success(),
+        "GG_LIB_DIR=<real> escape hatch should still build.\nstderr: {}",
+        String::from_utf8_lossy(&build_env.stderr),
+    );
+    let ran_env = run_with_timeout(&mut Command::new(&out_env), "run env-built pi");
+    assert!(ran_env.status.success(), "env-built pi should exit 0");
+    assert_eq!(
+        String::from_utf8_lossy(&ran_env.stdout).trim_end(),
+        expected,
+        "GG_LIB_DIR=<real> build should read PI from disk and print {expected}",
+    );
+
+    // ── 3. ESCAPE HATCH: --lib-dir=<bogus> (flag forces disk, OVERRIDES embed).
+    //       The std module is NOT on the bogus path and is NOT fetched from the
+    //       embed → the program is the `0` miscompile, NOT the correct value.
+    //       Proves the flag forces disk (not a silent no-op fallback to embed).
+    let bogus_dir = tmp_root.join("no_such_libdir");
+    let out_bogus = tmp_root.join("pi_bogus");
+    let build_bogus = run_with_timeout(
+        Command::new(&driver_exe)
+            .current_dir(&tmp_root)
+            .env_remove("GG_RUNTIME_DIR")
+            .env_remove("GG_LIB_DIR")
+            .arg("build")
+            .arg("pi.gg")
+            .arg("-o")
+            .arg("pi_bogus")
+            .arg(format!("--lib-dir={}", bogus_dir.display())),
+        "reloc libstd build (--lib-dir=bogus forces disk)",
+    );
+    // The self-host load_imports silently skips a true import miss, so the build
+    // exits 0 but PI is unresolved → OpConstI64(0). The key assertion is the
+    // OUTPUT is NOT the correct value: a no-op flag that silently fell back to the
+    // embed would have produced `3.141593`. So `!= expected` proves the override.
+    let bogus_out = if build_bogus.status.success() && out_bogus.exists() {
+        let r = run_with_timeout(&mut Command::new(&out_bogus), "run bogus-libdir pi");
+        String::from_utf8_lossy(&r.stdout).trim_end().to_string()
+    } else {
+        String::new()
+    };
+    assert_ne!(
+        bogus_out, expected,
+        "`--lib-dir=<bogus>` must FORCE a disk read and NOT silently fall back to the \
+         embedded lib/std (the no-op-flag defect). It unexpectedly produced the correct \
+         PI value, meaning the flag did not override the embed.",
+    );
+
+    // ── 4. LOCAL-MODULE SHADOWING: a local `std/math.gg` shadows the embed. ──
+    let shadow_root = tmp_root.join("shadow");
+    std::fs::create_dir_all(shadow_root.join("std")).expect("mkdir shadow/std");
+    std::fs::write(shadow_root.join("std/math.gg"), "const float PI = 999.0\n")
+        .expect("write shadow std/math.gg");
+    std::fs::write(
+        shadow_root.join("pi.gg"),
+        "from std.math import PI\n\nvoid main():\n    print(PI)\n",
+    )
+    .expect("write shadow pi.gg");
+    let out_shadow = shadow_root.join("pi_shadow");
+    let build_shadow = run_with_timeout(
+        Command::new(&driver_exe)
+            .current_dir(&shadow_root)
+            .env_remove("GG_RUNTIME_DIR")
+            .env_remove("GG_LIB_DIR")
+            .arg("build")
+            .arg("pi.gg")
+            .arg("-o")
+            .arg("pi_shadow"),
+        "reloc libstd build (local-module shadowing)",
+    );
+    assert!(
+        build_shadow.status.success(),
+        "local-module-shadowing build should succeed.\nstderr: {}",
+        String::from_utf8_lossy(&build_shadow.stderr),
+    );
+    let ran_shadow = run_with_timeout(&mut Command::new(&out_shadow), "run shadowed pi");
+    assert!(ran_shadow.status.success(), "shadowed pi should exit 0");
+    assert_eq!(
+        String::from_utf8_lossy(&ran_shadow.stdout).trim_end(),
+        "999.000000",
+        "a LOCAL `std/math.gg` (resolved via base_dir) must SHADOW the embedded \
+         lib/std/math.gg — the local disk file wins. If this prints 3.141593, the embed \
+         is incorrectly consulted before the local-disk resolution.",
+    );
+
+    // ── 5. BYTE-IDENTITY: embedded-path emitted C == --lib-dir=<disk> emitted C.
+    let emit_embedded = run_with_timeout(
+        Command::new(&driver_exe)
+            .current_dir(&tmp_root)
+            .env_remove("GG_RUNTIME_DIR")
+            .env_remove("GG_LIB_DIR")
+            .arg("build")
+            .arg("pi.gg")
+            .arg("--emit-c"),
+        "emit-c (embedded libstd)",
+    );
+    assert!(emit_embedded.status.success(), "embedded --emit-c should succeed");
+    let emit_disk = run_with_timeout(
+        Command::new(&driver_exe)
+            .current_dir(&tmp_root)
+            .env_remove("GG_RUNTIME_DIR")
+            .env_remove("GG_LIB_DIR")
+            .arg("build")
+            .arg("pi.gg")
+            .arg("--emit-c")
+            .arg(format!("--lib-dir={}", lib_dir.display())),
+        "emit-c (disk libstd)",
+    );
+    assert!(emit_disk.status.success(), "disk --emit-c should succeed");
+    assert_eq!(
+        emit_embedded.stdout, emit_disk.stdout,
+        "the embedded-lib/std emitted C must be BYTE-IDENTICAL to the disk-lib/std \
+         emitted C (the embed bytes are the same bytes read from disk). A mismatch means \
+         the embed round-trip mangled a byte of a lib/std module.",
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp_root);
+}
+
 // INTENDED-BEHAVIOR BREADCRUMB (per CLAUDE.md "Don't redesign around compiler
 // gaps"): `gg check` on an ILL-TYPED program SHOULD exit NONZERO. It does not
 // TODAY — the self-host typechecker is PERMISSIVE (most of Rust's `self.error`

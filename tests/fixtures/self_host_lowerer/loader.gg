@@ -570,7 +570,7 @@ String mangle_prefix(String module_path):
 
 # ── Import loading ───────────────────────────────────────
 
-Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, Dict[String, bool] &imported_fns, int entry_source_len):
+Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, Dict[String, bool] &imported_fns, int entry_source_len, Dict[String, String] &lib_embedded, bool lib_explicit):
     # Canonicalize the entry path to an absolute path BEFORE deriving
     # `base_dir`. Mirrors Rust's `ModuleLoader::load_all` (src/loader.rs:581
     # `entry.canonicalize()` → `canonical.parent()`). Without this, a
@@ -671,8 +671,26 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                     String pr_path = resolve_module_path(project_root, mod_path)
                     if file_exists(pr_path):
                         file_path = pr_path
+        # Inc-3 PROTOTYPE: embedded lib/std fallback (relocatability). 3-state
+        # precedence mirrors Inc-2's read_runtime: a local/lib_dir/project-root
+        # disk file (file_exists above) always WINS; an explicit lib-dir
+        # (--lib-dir= flag or GG_LIB_DIR env) forces disk; otherwise consult the
+        # embedded table keyed on the NORMALIZED module path (std.net.X→std.X,
+        # mirroring resolve_module_path). HIT → use embedded; MISS → fall through
+        # to disk (so non-std imports / project namespaces stay disk-only).
+        bool have_source = false
+        String source = ""
         if file_exists(file_path):
-            String source = read_file(file_path)
+            source = read_file(file_path)
+            have_source = true
+        elif not lib_explicit:
+            String embed_key = mod_path
+            if mod_path.starts_with("std.net."):
+                embed_key = "std." + mod_path.slice(8, mod_path.len())
+            if lib_embedded.contains(embed_key):
+                source = lib_embedded.get(embed_key).unwrap()
+                have_source = true
+        if have_source:
             int module_offset = next_offset
             next_offset = next_offset + source.byte_len() + 1
             Module imported = parse_source_with_offset(source, module_offset)

@@ -188,6 +188,73 @@ Dict[String, String] build_embedded_runtime():
     d["udp_socket_runtime.c"] = RT_udp_socket_runtime
     return d
 
+# ── Inc-3 PROTOTYPE: embedded lib/std/*.gg (relocatability for imports) ───────
+# Same entry-module constraint as the runtime table: `embed_file` consts only
+# work in driver.gg. Keyed on the NORMALIZED module path (std.net.X → std.X,
+# mirroring resolve_module_path's rewrite), so load_imports consults it before
+# the disk lib_dir. 28 lib/std/*.gg files, ~129 KB total.
+meta String LIB_alloc = embed_file("../../../lib/std/alloc.gg")
+meta String LIB_async = embed_file("../../../lib/std/async.gg")
+meta String LIB_bytes = embed_file("../../../lib/std/bytes.gg")
+meta String LIB_channel = embed_file("../../../lib/std/channel.gg")
+meta String LIB_collections = embed_file("../../../lib/std/collections.gg")
+meta String LIB_conv = embed_file("../../../lib/std/conv.gg")
+meta String LIB_datetime = embed_file("../../../lib/std/datetime.gg")
+meta String LIB_encoding = embed_file("../../../lib/std/encoding.gg")
+meta String LIB_fmt = embed_file("../../../lib/std/fmt.gg")
+meta String LIB_fs = embed_file("../../../lib/std/fs.gg")
+meta String LIB_hash = embed_file("../../../lib/std/hash.gg")
+meta String LIB_heap = embed_file("../../../lib/std/heap.gg")
+meta String LIB_io = embed_file("../../../lib/std/io.gg")
+meta String LIB_iter = embed_file("../../../lib/std/iter.gg")
+meta String LIB_math = embed_file("../../../lib/std/math.gg")
+meta String LIB_os = embed_file("../../../lib/std/os.gg")
+meta String LIB_path = embed_file("../../../lib/std/path.gg")
+meta String LIB_process = embed_file("../../../lib/std/process.gg")
+meta String LIB_random = embed_file("../../../lib/std/random.gg")
+meta String LIB_signal = embed_file("../../../lib/std/signal.gg")
+meta String LIB_slotmap = embed_file("../../../lib/std/slotmap.gg")
+meta String LIB_socket = embed_file("../../../lib/std/socket.gg")
+meta String LIB_sync = embed_file("../../../lib/std/sync.gg")
+meta String LIB_term = embed_file("../../../lib/std/term.gg")
+meta String LIB_thread = embed_file("../../../lib/std/thread.gg")
+meta String LIB_time = embed_file("../../../lib/std/time.gg")
+meta String LIB_tls = embed_file("../../../lib/std/tls.gg")
+meta String LIB_udp = embed_file("../../../lib/std/udp.gg")
+
+# Build the normalized-module-path → source map (compile-time inlined, no I/O).
+Dict[String, String] build_embedded_lib():
+    Dict[String, String] d = {}
+    d["std.alloc"] = LIB_alloc
+    d["std.async"] = LIB_async
+    d["std.bytes"] = LIB_bytes
+    d["std.channel"] = LIB_channel
+    d["std.collections"] = LIB_collections
+    d["std.conv"] = LIB_conv
+    d["std.datetime"] = LIB_datetime
+    d["std.encoding"] = LIB_encoding
+    d["std.fmt"] = LIB_fmt
+    d["std.fs"] = LIB_fs
+    d["std.hash"] = LIB_hash
+    d["std.heap"] = LIB_heap
+    d["std.io"] = LIB_io
+    d["std.iter"] = LIB_iter
+    d["std.math"] = LIB_math
+    d["std.os"] = LIB_os
+    d["std.path"] = LIB_path
+    d["std.process"] = LIB_process
+    d["std.random"] = LIB_random
+    d["std.signal"] = LIB_signal
+    d["std.slotmap"] = LIB_slotmap
+    d["std.socket"] = LIB_socket
+    d["std.sync"] = LIB_sync
+    d["std.term"] = LIB_term
+    d["std.thread"] = LIB_thread
+    d["std.time"] = LIB_time
+    d["std.tls"] = LIB_tls
+    d["std.udp"] = LIB_udp
+    return d
+
 # A (#14): run the compile on a 512MB opt-in stack so the compiler tolerates
 # deep expression lowering without overflowing the OS-default ~8MB main thread
 # (the (B) parse-time limit caps input at 128; this gives the lowerer headroom).
@@ -291,7 +358,12 @@ void compile_main():
     Dict[String, bool] imported_fns = {}
     # Pass the entry source length so the loader can shift imported-
     # module spans past it and avoid resolution_map collisions.
-    Dict[String, String] call_redirects = load_imports(&m, path, lib_dir, &imported_fns, source.byte_len())
+    # Inc-3 PROTOTYPE: legacy path is FLAG-ONLY (never reads GG_LIB_DIR). A lib_dir
+    # positional arg (the harness always passes one) → explicit disk → byte-identical
+    # to today; only a bare `driver <path>` with no lib_dir consults the embed.
+    Dict[String, String] lib_embedded = build_embedded_lib()
+    bool lib_explicit = cmd_args.len() > 2
+    Dict[String, String] call_redirects = load_imports(&m, path, lib_dir, &imported_fns, source.byte_len(), &lib_embedded, lib_explicit)
     _t1 = time_ms()
     if _timing: print("PHASE load_imports " + int_to_str(_t1 - _tp) + " ms", file=stderr)
     _tp = _t1
@@ -481,6 +553,10 @@ void run_build_mode(Vector[String] cmd_args, bool do_run):
     # otherwise the preamble uses the EMBEDDED runtime (relocatable). Seed from
     # the env read here; the flag-parse loop sets it true if --runtime-dir= is given.
     bool runtime_dir_explicit = runtime_dir != ""
+    # Inc-3 3-state precedence (mirrors runtime_dir_explicit): an EXPLICIT lib dir
+    # (GG_LIB_DIR env set, OR --lib-dir= below) forces DISK in load_imports;
+    # otherwise std.* imports come from the EMBEDDED table (relocatable).
+    bool lib_dir_explicit = lib_dir != ""
     if runtime_dir == "":
         runtime_dir = "src/backend/c/runtime"
     if lib_dir == "":
@@ -520,6 +596,7 @@ void run_build_mode(Vector[String] cmd_args, bool do_run):
             runtime_dir_explicit = true
         elif arg.starts_with("--lib-dir="):
             lib_dir = arg.slice(10, arg.len())
+            lib_dir_explicit = true
         elif not arg.starts_with("-"):
             input_path = arg
         ai += 1
@@ -551,7 +628,8 @@ void run_build_mode(Vector[String] cmd_args, bool do_run):
     String source = read_file(input_path)
     Module m = parse_source(source)
     Dict[String, bool] imported_fns = {}
-    Dict[String, String] call_redirects = load_imports(&m, input_path, lib_dir, &imported_fns, source.byte_len())
+    Dict[String, String] lib_embedded = build_embedded_lib()
+    Dict[String, String] call_redirects = load_imports(&m, input_path, lib_dir, &imported_fns, source.byte_len(), &lib_embedded, lib_dir_explicit)
     expand_derives(&m)
     ScopeTable scopes = ScopeTable.new_scope_table()
     scopes.init()
@@ -650,6 +728,7 @@ void run_build_mode(Vector[String] cmd_args, bool do_run):
 void run_check_mode(Vector[String] cmd_args):
     String input_path = ""
     String lib_dir = getenv("GG_LIB_DIR")
+    bool lib_dir_explicit = lib_dir != ""
     if lib_dir == "":
         lib_dir = "lib"
     int ai = 2
@@ -657,6 +736,7 @@ void run_check_mode(Vector[String] cmd_args):
         String arg = cmd_args.get(ai).unwrap()
         if arg.starts_with("--lib-dir="):
             lib_dir = arg.slice(10, arg.len())
+            lib_dir_explicit = true
         elif not arg.starts_with("-"):
             input_path = arg
         ai += 1
@@ -669,7 +749,8 @@ void run_check_mode(Vector[String] cmd_args):
     String source = read_file(input_path)
     Module m = parse_source(source)
     Dict[String, bool] imported_fns = {}
-    Dict[String, String] call_redirects = load_imports(&m, input_path, lib_dir, &imported_fns, source.byte_len())
+    Dict[String, String] lib_embedded = build_embedded_lib()
+    Dict[String, String] call_redirects = load_imports(&m, input_path, lib_dir, &imported_fns, source.byte_len(), &lib_embedded, lib_dir_explicit)
     expand_derives(&m)
     ScopeTable scopes = ScopeTable.new_scope_table()
     scopes.init()

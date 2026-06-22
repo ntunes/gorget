@@ -2625,3 +2625,80 @@ fn self_host_embedded_runtime_table_count() {
          dict row.",
     );
 }
+
+/// Ratchet (CLAUDE.md "convert a recurring bug class into an executable guard"):
+/// the self-host's embedded `lib/std` table in
+/// `tests/fixtures/self_host_lowerer/driver.gg` (Inc-3 relocatability for
+/// programs WITH `from std…` imports) must carry EXACTLY one entry per
+/// `lib/std/*.gg` file. A new `lib/std` module that lands WITHOUT being added to
+/// the table would silently fall back to the on-disk read in `load_imports` —
+/// breaking relocatability for any program that imports it (a `gg-selfhost`
+/// built without that module's bytes can't compile a program from a foreign cwd
+/// with no `$GG_LIB_DIR`). This pins the table to the directory so the next
+/// `lib/std` module is FORCED into BOTH the `meta String LIB_*` const list and
+/// the `build_embedded_lib` dict.
+///
+/// **If this fails because a `lib/std` module was ADDED:** add its
+/// `meta String LIB_<basename> = embed_file("../../../lib/std/<basename>.gg")`
+/// const AND its `d["std.<basename>"] = LIB_<basename>` row in driver.gg, then
+/// this passes automatically (the lint counts the directory, not a hardcoded N).
+/// **If a `lib/std` module was REMOVED:** delete its const + dict row to match.
+///
+/// `lib/xtd/*.gg` (SQLite/SDL/GL externs) is a SEPARATE later increment and is
+/// intentionally NOT embedded — so it is NOT in this set and NOT counted here.
+#[test]
+fn self_host_embedded_libstd_table_count() {
+    // Count the canonical source: every *.gg directly under lib/std.
+    let libstd_dir = Path::new("lib/std");
+    let mut libstd_files = 0usize;
+    let entries = fs::read_dir(libstd_dir)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", libstd_dir.display()));
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("gg") {
+            libstd_files += 1;
+        }
+    }
+    assert!(
+        libstd_files > 0,
+        "found 0 *.gg files under {} — wrong cwd or a moved lib/std dir?",
+        libstd_dir.display(),
+    );
+
+    let driver = fs::read_to_string("tests/fixtures/self_host_lowerer/driver.gg")
+        .expect("cannot read self_host_lowerer/driver.gg");
+
+    // The embed-const table: `meta String LIB_<name> = embed_file("...lib/std/<name>.gg")`.
+    let const_count = driver
+        .lines()
+        .filter(|l| {
+            let t = l.trim_start();
+            t.starts_with("meta String LIB_") && t.contains("embed_file(")
+        })
+        .count();
+
+    // The dict-build rows: `d["std.<name>"] = LIB_<name>` inside build_embedded_lib.
+    let insert_count = driver
+        .lines()
+        .filter(|l| {
+            let t = l.trim_start();
+            t.starts_with("d[\"std.") && t.contains("= LIB_")
+        })
+        .count();
+
+    assert_eq!(
+        const_count, libstd_files,
+        "embedded-libstd `meta String LIB_*` const count ({const_count}) != number of \
+         lib/std/*.gg files ({libstd_files}). A lib/std module was added or removed \
+         without updating driver.gg's embed table — the module would silently fall back \
+         to the disk read, breaking relocatability for std-importing programs. Add/remove \
+         its `LIB_` const (and its dict row) to match.",
+    );
+    assert_eq!(
+        insert_count, libstd_files,
+        "embedded-libstd dict-build `d[\"std.X\"] = LIB_X` row count ({insert_count}) != \
+         number of lib/std/*.gg files ({libstd_files}). Each `LIB_` const must be \
+         inserted into the `build_embedded_lib` map keyed on the normalized module path. \
+         Add/remove the matching dict row.",
+    );
+}
