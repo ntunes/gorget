@@ -1,10 +1,12 @@
 # Error-model Phase 2 (deep / boundary fault catch) — design
 
-**Status:** DESIGN, scout-produced (`afa58d78`, 2026-06-22). Review pass 1 (`a8bbd2b9`): **SIGN OFF**,
-linchpin cites VERIFIED against source, 4 minors FOLDED (indirect-call seam named, fault-in-destructor
-policy decided, cite drifts fixed, plain-fn twin cited). Pass 2 (confirming the fold) PENDING.
-**Supersedes nothing yet** — folds into `error-model.md` §9.1 *only after* a clean confirming pass +
-owner sign-off on the §9.1 reframe.
+**Status:** DESIGN, scout-produced (`afa58d78`, 2026-06-22). **Design review COMPLETE — 2 clean
+sequential fresh passes:** pass 1 (`a8bbd2b9`) SIGN OFF (linchpin cites VERIFIED against source) + 4
+minors folded; pass 2 (`a990fe31`) SIGN OFF (fold clean, additions sound, cites re-confirmed, no
+contradictions). TL;DR hedge applied. **GATED ON OWNER SIGN-OFF of the §9.1 reframe** before it folds
+into `error-model.md` §9.1 and before any executor briefs Increment 2.1.
+**Supersedes nothing yet** — `error-model.md` §9.1 remains authoritative until the owner accepts the
+by-value reframe.
 
 > ⚠ This design **reframes a load-bearing assumption** in `error-model.md` §9.1 — that deep/boundary
 > fault catch requires a greenfield unwind substrate. The reframe rests on the claim that Gorget's
@@ -19,8 +21,9 @@ for **by-value**, and the substrate for it **already exists and ships**. Gorget'
 path is already a Swift/Zig-style deep, cross-frame, drop-correct by-value error channel. True
 unwinding (setjmp/longjmp or LLVM landing pads) is **greenfield, fragmented, and unnecessary** for the
 owner's actual goal ("server keeps serving"). Phase-2 fault catch = the existing by-value propagation
-machinery, gated so faults stay out of public signatures via a hidden out-of-band return slot — which
-sidesteps the multi-month unwind substrate entirely (and with it B2/Q9/Q15/Q16/§3.1).
+machinery, gated so faults stay out of public signatures (fully for direct/monomorphized calls;
+indirect/generic call sites reflect the slot in the callable/bound type — §5) via a hidden out-of-band
+return slot — which sidesteps the multi-month unwind substrate entirely (and with it B2/Q9/Q15/Q16/§3.1).
 
 ## 1. The load-bearing fork, and the premises to verify
 
