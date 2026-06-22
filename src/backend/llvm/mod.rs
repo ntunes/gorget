@@ -2683,8 +2683,13 @@ fn emit_function(
         }
     }
 
-    writeln!(out, "  br label %bb0").unwrap();
-    writeln!(out).unwrap();
+    // NOTE: `br label %bb0` (the entry-block terminator) is NOT emitted here.
+    // It is emitted AFTER the block loop below, so the per-instruction temp
+    // allocas hoisted out of the body can land in the entry block *before* the
+    // terminator. (An `alloca` after a block terminator is invalid IR; LLVM
+    // never reclaims non-entry-block allocas across loop iterations, so a hot
+    // loop's per-iteration body allocas otherwise pile up onto the stack →
+    // overflow on the ~660K-line self-compile.)
 
     // Emit blocks
     // First, collect predecessor info for phi nodes
@@ -2904,9 +2909,19 @@ fn emit_function(
         labels
     };
 
+    // Buffer the block body separately so per-instruction temp `alloca`s can be
+    // hoisted to the entry block afterwards. Every body emitter
+    // (`emit_inst`/`emit_branch_arg_casts`/`emit_term` and the phi/trace
+    // writeln!s) takes `out: &mut String` first, so feeding it `&mut body_buf`
+    // threads through with no per-site rewrite. `body_out` is a distinct name
+    // (not a shadow of `out`) so the entry-block `out` stays writable after the
+    // loop for the hoist assembly.
+    let mut body_buf = String::new();
+    let body_out = &mut body_buf;
+
     for block in &func.blocks {
         let bid = block.id.0;
-        writeln!(out, "bb{bid}:").unwrap();
+        writeln!(body_out, "bb{bid}:").unwrap();
 
         // Phi nodes for block parameters.
         // Aggregates flow as pointers in this backend — emit `phi ptr` (not
@@ -2968,9 +2983,9 @@ fn emit_function(
             }
             if phi_entries.is_empty() {
                 // Unreachable block param — just set to undef
-                writeln!(out, "  %v{} = add {ty} 0, 0 ; dead phi", param_val.0).unwrap();
+                writeln!(body_out, "  %v{} = add {ty} 0, 0 ; dead phi", param_val.0).unwrap();
             } else {
-                writeln!(out, "  %v{} = phi {ty} {}", param_val.0, phi_entries.join(", ")).unwrap();
+                writeln!(body_out, "  %v{} = phi {ty} {}", param_val.0, phi_entries.join(", ")).unwrap();
             }
         }
 
@@ -2980,10 +2995,10 @@ fn emit_function(
         // phis to be the leading instructions of a block) and before user
         // instructions. Mirrors `c_lir/mod.rs:1712-1720`.
         if tracing && trace_then_blocks.contains(&bid) {
-            writeln!(out, "  call void @__gorget_trace_emit_branch()").unwrap();
+            writeln!(body_out, "  call void @__gorget_trace_emit_branch()").unwrap();
         }
         if tracing {
-            writeln!(out, "  call void @__gorget_trace_emit_stmt_start()").unwrap();
+            writeln!(body_out, "  call void @__gorget_trace_emit_stmt_start()").unwrap();
         }
 
         // Instructions
@@ -2999,7 +3014,7 @@ fn emit_function(
             // src/backend/c_lir/mod.rs `resolve_panic_loc`.
             let span = block.span_map.get(inst_idx).copied().flatten();
             let loc = resolve_panic_loc(span, &module.file_infos);
-            emit_inst(out, inst, func, module, snames, str_globals, &val_types, bid, &mut trap_counter, &mut current_label, &mut df_stack, &loc);
+            emit_inst(body_out, inst, func, module, snames, str_globals, &val_types, bid, &mut trap_counter, &mut current_label, &mut df_stack, &loc);
 
         }
 
@@ -3008,20 +3023,88 @@ fn emit_function(
         // only — main exits via the implicit `ret i32 0` we emit). Mirrors
         // `c_lir/mod.rs:1750-1763`.
         if tracing {
-            writeln!(out, "  call void @__gorget_trace_emit_stmt_end()").unwrap();
+            writeln!(body_out, "  call void @__gorget_trace_emit_stmt_end()").unwrap();
             if !is_main && matches!(&block.terminator, Term::Ret(_) | Term::RetVoid) {
                 if let Some(display_name) = &func.display_name {
                     let name_idx = str_globals.intern(display_name);
-                    writeln!(out, "  call void @__gorget_trace_emit_return(ptr @.str.{name_idx})").unwrap();
+                    writeln!(body_out, "  call void @__gorget_trace_emit_return(ptr @.str.{name_idx})").unwrap();
                 }
             }
         }
 
         // Terminator — pre-emit any int-width casts needed for branch args
         // whose types don't match the target block's params.
-        emit_branch_arg_casts(out, &block.terminator, func, bid, &val_types, snames);
-        emit_term(out, &block.terminator, func, module, snames, &val_types, bid);
+        emit_branch_arg_casts(body_out, &block.terminator, func, bid, &val_types, snames);
+        emit_term(body_out, &block.terminator, func, module, snames, &val_types, bid);
     }
+
+    // ── Hoist per-instruction temp allocas to the entry block ──────────────
+    //
+    // LLVM only reclaims allocas that live in the function's *entry* block; an
+    // alloca emitted into a loop-body basic block is allocated afresh on every
+    // iteration and never freed until the call returns. The self-host driver's
+    // hot fixpoint loops (e.g. `coal_compute_live_blocks`) therefore piled
+    // millions of per-instruction temp allocas onto one frame → stack overflow
+    // on its own ~660K-line source.
+    //
+    // Fix (enumeration-free): every body alloca DEFINITION is a single,
+    // statically-sized, uniquely-named line `^\s*%… = alloca …`. Move each such
+    // line out of `body_buf` into the entry block (which dominates all blocks,
+    // so every hoist is SSA-valid); leave the follower lines (store / memset /
+    // getelementptr / select / memcpy / call that USE the pointer) in place.
+    let mut hoisted: Vec<&str> = Vec::new();
+    let mut remaining_body = String::with_capacity(body_buf.len());
+    for line in body_buf.lines() {
+        let trimmed = line.trim_start();
+        let is_alloca_def = trimmed.starts_with('%')
+            && trimmed.contains(" = alloca ");
+        if is_alloca_def {
+            // SAFETY: a RUNTIME-sized alloca (`= alloca <ty>, i32/i64 %<reg>`)
+            // depends on a register computed earlier in the body — hoisting it
+            // above its size operand would be wrong. None are emitted today
+            // (the only comma forms are constant-sized, e.g. `alloca i8, i64
+            // 16`); guard so a future one is left in place rather than silently
+            // mis-hoisted. Detect the `, i32/i64 %` runtime-operand shape.
+            let is_runtime_sized = trimmed.contains(", i64 %")
+                || trimmed.contains(", i32 %");
+            debug_assert!(
+                !is_runtime_sized,
+                "runtime-sized alloca cannot be hoisted to the entry block: {line}"
+            );
+            if is_runtime_sized {
+                remaining_body.push_str(line);
+                remaining_body.push('\n');
+                continue;
+            }
+            hoisted.push(line);
+        } else {
+            remaining_body.push_str(line);
+            remaining_body.push('\n');
+        }
+    }
+
+    // Anti-regression ratchet: every body alloca must have been hoisted. A
+    // future emit arm that introduces a body alloca trips this debug assertion
+    // instead of the next SIGSEGV.
+    debug_assert!(
+        !remaining_body.lines().any(|l| {
+            let t = l.trim_start();
+            t.starts_with('%') && t.contains(" = alloca ")
+        }),
+        "body buffer still contains an `= alloca` line after the entry-block hoist"
+    );
+
+    // Assemble the entry block: the streamed prelude already in `out` (slot /
+    // StrLit allocas, trace prologue), then the hoisted body allocas, then the
+    // entry terminator (relocated here from above so allocas precede it — an
+    // alloca after a terminator is invalid IR), then the rewritten body.
+    for line in hoisted {
+        out.push_str(line);
+        out.push('\n');
+    }
+    writeln!(out, "  br label %bb0").unwrap();
+    writeln!(out).unwrap();
+    out.push_str(&remaining_body);
 
     writeln!(out, "}}\n").unwrap();
 }

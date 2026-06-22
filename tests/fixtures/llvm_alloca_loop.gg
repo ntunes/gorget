@@ -1,0 +1,34 @@
+from std.collections import Dict
+
+# A >16-byte struct so the helper returns via the sret path — each call
+# allocates a temp via the general CallExtern sret site (mod.rs:6391).
+struct Point:
+    int x
+    int y
+    int z
+    int w
+
+Point make_point(int seed):
+    return Point(seed, seed + 1, seed + 2, seed + 3)
+
+# Regression guard for the LLVM body-alloca leak: the LLVM backend used to
+# emit per-instruction temp allocas (sret dests, Dict-op spills) into the
+# loop-body basic blocks. LLVM never reclaims non-entry-block allocas across
+# iterations, so 3,000,000 iterations piled millions of one-frame allocas
+# onto the main thread's ~8MB stack -> SIGSEGV. With the entry-block hoist
+# every iteration reuses the same entry-block slots, so this runs to
+# completion. Runs identically under the C backend (function-scope temps).
+void main():
+    Dict[int, int] seen = Dict[int, int]()
+    int i = 0
+    int sum = 0
+    while i < 3000000:
+        Point p = make_point(i)
+        int key = p.x % 8
+        if not seen.contains(key):
+            seen.put(key, p.w)
+        sum = sum + (p.x - p.x)
+        i = i + 1
+    print(f"iters: {i}")
+    print(f"keys: {seen.len()}")
+    print(f"sum: {sum}")

@@ -11974,6 +11974,26 @@ done",
     );
 }
 
+// Regression guard for the LLVM body-alloca leak. A `while i < 3_000_000:`
+// loop calls an sret-returning helper + Dict.contains/put each iteration. The
+// LLVM backend used to emit those per-instruction temp allocas into the
+// loop-body basic blocks; LLVM never reclaims non-entry-block allocas across
+// iterations, so the loop piled millions onto the main thread's ~8MB stack →
+// SIGSEGV. With the entry-block hoist every iteration reuses the same entry
+// allocas, so it runs to completion. Passes under the C backend always (its
+// temps are function-scope C locals); under GG_BACKEND=llvm it goes
+// SIGSEGV→correct WITH the fix.
+#[test]
+fn llvm_alloca_loop() {
+    run_gg(
+        "llvm_alloca_loop.gg",
+        "\
+iters: 3000000
+keys: 8
+sum: 0",
+    );
+}
+
 // Dict and multi-collection allocator tests
 
 #[test]
@@ -14971,7 +14991,6 @@ fn self_host_bootstrap() {
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn self_host_bootstrap_fixed_point() {
-    if skip_under_llvm() { return; }
     let (driver_exe, driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
@@ -14993,6 +15012,32 @@ fn self_host_bootstrap_fixed_point() {
     let stage1_body = String::from_utf8_lossy(&body_out.stdout).to_string();
 
     // Extract Rust preamble + concatenate → stage1.c.
+    //
+    // The runtime preamble (the C-runtime boilerplate `gg`'s C backend emits
+    // before the user typedefs) comes from a `driver.c`. Under the LLVM backend
+    // `gg build` emits only the `.ll`/exe, so `driver.c` is absent — build a
+    // one-off C-backend copy of the driver purely to materialize `driver.c` for
+    // the preamble. The driver EXE used for stage emission above is still the
+    // backend-selected build (so under LLVM this genuinely verifies the
+    // LLVM-built driver bootstraps); the `--lir-c` body it emits is
+    // backend-independent and byte-identical to the C-built driver's.
+    let driver_c = if driver_c.exists() {
+        driver_c
+    } else {
+        let c_build = build_with_timeout(
+            Command::new(gg_binary())
+                .arg("build")
+                .arg("--backend=c-lir")
+                .arg(&driver_gg),
+            "self_host_bootstrap_fixed_point C-backend driver (preamble source)",
+        );
+        assert!(
+            c_build.status.success(),
+            "C-backend driver build (for preamble) failed: stderr={}",
+            String::from_utf8_lossy(&c_build.stderr),
+        );
+        driver_c
+    };
     let rust_c = std::fs::read_to_string(&driver_c)
         .expect("failed to read driver.c");
     let preamble_end = rust_c
