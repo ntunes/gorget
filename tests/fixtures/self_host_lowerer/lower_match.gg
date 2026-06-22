@@ -27,7 +27,7 @@ from compiler.data.schema import BuiltinRetKind, BrkString, BrkInfer
 from lir_lower import resource_meta_for
 from lower import LowerCtx, ResultPayloadTypes, DictKvNames, ClosureSig, CaptureCollector, FieldBorrowPair, SVarDeclEmission
 from lower import lower_fail, diag_bug, diag_warn, emit, new_block, switch_to, set_terminator
-from lower import add_local, add_local_with, add_local_inheriting, nl_get, nl_put, nl_contains
+from lower import add_local, add_local_with, add_local_inheriting, nl_get, nl_put, nl_contains, nl_snapshot, nl_restore
 from lower import expr_kind, pat_kind, stmt_kind
 from lower import collection_kind_of, collection_kind_eq, int_vec_contains, method_mutates_receiver
 from lower import inherit_borrow_from, set_field_borrow, cow_register_alias, decide_svardecl_emission
@@ -1416,7 +1416,32 @@ void lower_match_stmt(LowerCtx &ctx, SpannedExpr scrutinee_expr, Vector[MatchArm
     for arm in arms:
         int arm_body_bb = new_block(&ctx)
         int next_arm_bb = new_block(&ctx)
-        lower_pattern_match(&ctx, scrutinee, arm.pattern, enum_name, arm_body_bb, next_arm_bb, &gmod)
+        # Per-arm name-map snapshot (Rust `save_locals`, `context.rs:1481`):
+        # arms are mutually-exclusive scopes, so a `case x:` binding must not
+        # leak into the next arm or `else`. Restored at the arm's tail below.
+        Dict[String, int] nl_snap = nl_snapshot(&ctx)
+        # Guards (`case PAT if COND:`): mirror Rust `patterns.rs:450-460`.
+        # The pattern match routes to a `guard_bb` (NOT straight to the body);
+        # the pattern bindings are emitted inline in the pre-arm block (the
+        # self-host's `named_locals` Dict persists across blocks, so they stay
+        # visible to the guard expr), and `guard_bb` evaluates COND and branches
+        # to the arm body when true or to the next arm when false. Without this
+        # a guarded arm was taken whenever its base pattern matched, regardless
+        # of the guard — every guarded arm short-circuited to its body.
+        int pat_target_bb = arm_body_bb
+        if arm.guard.is_some():
+            pat_target_bb = new_block(&ctx)
+        lower_pattern_match(&ctx, scrutinee, arm.pattern, enum_name, pat_target_bb, next_arm_bb, &gmod)
+        match arm.guard:
+            case Some(guard_expr):
+                switch_to(&ctx, pat_target_bb)
+                int saved_expected_g = ctx.expected_type
+                ctx.expected_type = -1
+                int gcond = lower_expr(&ctx, guard_expr, &gmod)
+                ctx.expected_type = saved_expected_g
+                set_terminator(&ctx, GTBranch(OpCopy(gcond), arm_body_bb, next_arm_bb))
+            case None:
+                pass
         # Arm body lowering in the match-bound block.
         # Phase 2: per-arm Block scope so payload bindings + arm-local
         # SVarDecls get cleaned up at the merge edge.
@@ -1430,6 +1455,7 @@ void lower_match_stmt(LowerCtx &ctx, SpannedExpr scrutinee_expr, Vector[MatchArm
                 set_terminator(&ctx, GTJump(merge_bb))
             else:
                 pop_drop_scope_no_emit(&ctx)
+        nl_restore(&ctx, nl_snap)
         switch_to(&ctx, next_arm_bb)
     # No arm matched — jump to merge (unreachable in practice when the
     # match is exhaustive; the self-host's typechecker doesn't enforce
@@ -1467,10 +1493,12 @@ void lower_match_stmt(LowerCtx &ctx, SpannedExpr scrutinee_expr, Vector[MatchArm
 # still C-typechecked). Mirrors Rust `lower_match_expr` (no default) and
 # the self-host `lower_match_stmt` fall-through (`:7856-7859`).
 #
-# Guards (`MatchArm.guard`) are NOT handled — matches `lower_match_stmt`'s
-# existing (no-guard) behavior; logged as a follow-up. Per-arm name-map
-# snapshot/restore (Rust Snag #50) is likewise omitted, matching
-# `lower_match_stmt`'s per-arm drop-scope behavior (logged follow-up).
+# Guards (`MatchArm.guard`) ARE handled: a guarded arm routes its pattern-match
+# to a guard block, lowers the guard (expected_type cleared), and selects via
+# `GTBranch(guard, body, next_arm)` — mirrors Rust `patterns.rs:450-460`. Per-arm
+# name-map snapshot/restore (Rust Snag #50, `save_locals`/`restore_locals`) wipes
+# each arm's pattern bindings before the next arm, so a `case x:` binding can't
+# leak into (and clobber) a later arm or the scrutinee.
 int lower_match_expr(LowerCtx &ctx, SpannedExpr scrutinee_expr, Vector[MatchArm] arms, GirModule &gmod):
     # Same scrutinee discipline as lower_match_stmt: suppress the centralized
     # auto-prop when the arms discriminate a Result/Option (keep it raw);
@@ -1509,7 +1537,28 @@ int lower_match_expr(LowerCtx &ctx, SpannedExpr scrutinee_expr, Vector[MatchArm]
     for arm in arms:
         int arm_body_bb = new_block(&ctx)
         int next_arm_bb = new_block(&ctx)
-        lower_pattern_match(&ctx, scrutinee, arm.pattern, enum_name, arm_body_bb, next_arm_bb, &gmod)
+        # Per-arm name-map snapshot (Rust `save_locals`) — see lower_match_stmt.
+        Dict[String, int] nl_snap = nl_snapshot(&ctx)
+        # Guards (`case PAT if COND:`): same shape as `lower_match_stmt` — route
+        # the pattern match to a `guard_bb` that evaluates COND and branches to
+        # the arm body (true) or the next arm (false). Mirrors Rust
+        # `patterns.rs:450-460`. Clear `expected_type` around the guard so the
+        # match RESULT's expected type (seeded above) doesn't leak into the
+        # bool-typed guard's lowering.
+        int pat_target_bb = arm_body_bb
+        if arm.guard.is_some():
+            pat_target_bb = new_block(&ctx)
+        lower_pattern_match(&ctx, scrutinee, arm.pattern, enum_name, pat_target_bb, next_arm_bb, &gmod)
+        match arm.guard:
+            case Some(guard_expr):
+                switch_to(&ctx, pat_target_bb)
+                int saved_expected_g = ctx.expected_type
+                ctx.expected_type = -1
+                int gcond = lower_expr(&ctx, guard_expr, &gmod)
+                ctx.expected_type = saved_expected_g
+                set_terminator(&ctx, GTBranch(OpCopy(gcond), arm_body_bb, next_arm_bb))
+            case None:
+                pass
         # Arm body lowering in the match-bound block. Per-arm Block scope so
         # payload bindings + arm-local SVarDecls get cleaned up at the merge
         # edge (same as lower_match_stmt; lower_pattern_match already emitted
@@ -1530,6 +1579,7 @@ int lower_match_expr(LowerCtx &ctx, SpannedExpr scrutinee_expr, Vector[MatchArm]
             # Diverging arm (body ended in return / exit / noreturn): its
             # terminator stands — no assign, no merge jump.
             pop_drop_scope_no_emit(&ctx)
+        nl_restore(&ctx, nl_snap)
         switch_to(&ctx, next_arm_bb)
     # No arm matched (dynamically unreachable for an exhaustive match) —
     # jump to merge with NO result default. See the header note.

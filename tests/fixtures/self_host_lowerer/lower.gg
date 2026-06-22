@@ -413,6 +413,18 @@ int nl_get(LowerCtx &ctx, String name):
 void nl_put(LowerCtx &ctx, String name, int val):
     ctx.named_locals.put(name.clone(), val)
 
+# Snapshot / restore the name→local map. Mirrors Rust's
+# `save_locals`/`restore_locals` (`context.rs:1481`/`:1518`): match arms are
+# mutually-exclusive scopes, so a `case x:` binding (and a guarded arm's
+# binding) must NOT leak into the next arm or the `else`. Without the restore,
+# `match cmd: case "q": …; case cmd: …` rebinds `cmd` to a fresh by-value local
+# that then shadows the parameter in the `else`/later arms — corrupting reads.
+Dict[String, int] nl_snapshot(LowerCtx &ctx):
+    return ctx.named_locals.clone()
+
+void nl_restore(LowerCtx &ctx, Dict[String, int] snap):
+    ctx.named_locals = snap.clone()
+
 # Diagnostic helper for unhandled AST variants. Called from the
 # `else: ...` fall-through arms in lower_stmt / lower_expr. The message
 # is wrapped in a /* ... */ C comment so it embeds harmlessly in the
