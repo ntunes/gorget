@@ -736,8 +736,13 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                         # Real functions: >=2 body statements, OR expression body,
                         # OR 1 statement that is SIf/SWhile/SFor/SMatch.
                         # Stubs have 0 statements or 1 trivial statement.
-                        bool has_real_body = fdef.body.len() >= 2 or fdef.is_expr_body
-                        if not has_real_body and fdef.body.len() == 1:
+                        # is_extern_stub (typed flag set by the parser at the
+                        # extern ctor) forces the stub down the else branch: its
+                        # preserved `= "symbol"` alias body — kept so the redirect
+                        # above can read it — must NOT count as a real body (that
+                        # would mangle + overwrite the clean redirect at :779).
+                        bool has_real_body = (fdef.body.len() >= 2 or fdef.is_expr_body) and not fdef.is_extern_stub
+                        if not fdef.is_extern_stub and not has_real_body and fdef.body.len() == 1:
                             Stmt first_s = fdef.body.get(0).unwrap()
                             match first_s:
                                 case SIf(_, _, _):
@@ -779,7 +784,7 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                             call_redirects.put(bare_name, mangled.clone())
                             imported_fns.put(mangled.clone(), true)
                             # Create a renamed copy
-                            FunctionDef renamed = FunctionDef(mangled, fdef.params, fdef.return_type, fdef.type_params, fdef.body, fdef.is_expr_body, fdef.throws_type)
+                            FunctionDef renamed = FunctionDef(mangled, fdef.params, fdef.return_type, fdef.type_params, fdef.body, fdef.is_expr_body, fdef.throws_type, fdef.is_extern_stub)
                             m.items.push(IFunction(renamed))
                         else:
                             # Imported extern stub / forward declaration
@@ -822,7 +827,7 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                                     pass
                             if stub_is_string_ret:
                                 Vector[Stmt] empty_body = Vector[Stmt]()
-                                FunctionDef stub_decl = FunctionDef(fdef.name.clone(), fdef.params, fdef.return_type, fdef.type_params, empty_body, false, fdef.throws_type)
+                                FunctionDef stub_decl = FunctionDef(fdef.name.clone(), fdef.params, fdef.return_type, fdef.type_params, empty_body, false, fdef.throws_type, true)
                                 m.items.push(IFunction(stub_decl))
                     case IEnum(edef):
                         # Merge imported enums so type_infos has variant info —
@@ -992,7 +997,7 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                                             pass
                                     if stub_register_ret:
                                         Vector[Stmt] empty_m_body = Vector[Stmt]()
-                                        FunctionDef void_stub = FunctionDef(stub_key.clone(), emdef.params, emdef.return_type, emdef.type_params, empty_m_body, false, emdef.throws_type)
+                                        FunctionDef void_stub = FunctionDef(stub_key.clone(), emdef.params, emdef.return_type, emdef.type_params, empty_m_body, false, emdef.throws_type, true)
                                         m.items.push(IFunction(void_stub))
                                     emi += 1
                                     continue

@@ -192,6 +192,12 @@ struct FunctionDef:
     Vector[Stmt] body
     bool is_expr_body
     Option[SpannedType] throws_type
+    # True for an `extern int f(...) = "sym"` / `extern "C": ...` alias decl.
+    # Typed source of truth replacing the body-shape heuristics (is_expr_body /
+    # SReturn(Some)→has_real_body / body.len()>0) the loader+lowerer used to
+    # tell a stub from a real fn. Set by the parser at the 2 extern ctors; read
+    # by loader.gg's has_real_body gate + lower.gg's body-lowering skip.
+    bool is_extern_stub
 
 struct StructDef:
     String name

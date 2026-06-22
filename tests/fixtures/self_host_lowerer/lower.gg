@@ -2066,14 +2066,14 @@ void apply_collect_target_rewrites(Module &m):
         match m.items.get(i).unwrap():
             case IFunction(fdef):
                 Vector[Stmt] nb = collect_rewrite_stmts(fdef.body, fdef.return_type, &fn_param_types)
-                m.items.set(i, IFunction(FunctionDef(fdef.name, fdef.params, fdef.return_type, fdef.type_params, nb, fdef.is_expr_body, fdef.throws_type)))
+                m.items.set(i, IFunction(FunctionDef(fdef.name, fdef.params, fdef.return_type, fdef.type_params, nb, fdef.is_expr_body, fdef.throws_type, fdef.is_extern_stub)))
             case IEquip(eqblk):
                 Vector[FunctionDef] nm = Vector[FunctionDef]()
                 int mi = 0
                 while mi < eqblk.methods.len():
                     FunctionDef method = eqblk.methods.get(mi).unwrap()
                     Vector[Stmt] mnb = collect_rewrite_stmts(method.body, method.return_type, &fn_param_types)
-                    nm.push(FunctionDef(method.name, method.params, method.return_type, method.type_params, mnb, method.is_expr_body, method.throws_type))
+                    nm.push(FunctionDef(method.name, method.params, method.return_type, method.type_params, mnb, method.is_expr_body, method.throws_type, method.is_extern_stub))
                     mi = mi + 1
                 m.items.set(i, IEquip(EquipBlock(eqblk.target, eqblk.type_params, eqblk.trait_name, nm, eqblk.via_field, eqblk.trait_generic_args)))
             case ITrait(tdef):
@@ -2082,7 +2082,7 @@ void apply_collect_target_rewrites(Module &m):
                 while ti < tdef.methods.len():
                     FunctionDef tmethod = tdef.methods.get(ti).unwrap()
                     Vector[Stmt] tnb = collect_rewrite_stmts(tmethod.body, tmethod.return_type, &fn_param_types)
-                    tnm.push(FunctionDef(tmethod.name, tmethod.params, tmethod.return_type, tmethod.type_params, tnb, tmethod.is_expr_body, tmethod.throws_type))
+                    tnm.push(FunctionDef(tmethod.name, tmethod.params, tmethod.return_type, tmethod.type_params, tnb, tmethod.is_expr_body, tmethod.throws_type, tmethod.is_extern_stub))
                     ti = ti + 1
                 m.items.set(i, ITrait(TraitDef(tdef.name, tdef.type_params, tnm, tdef.parent_traits)))
             else:
@@ -2999,6 +2999,36 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             case IFunction(fdef):
                 if fdef.type_params.len() > 0:
                     fn_templates.put(fdef.name.clone(), fdef)
+                # Register a MAIN-MODULE inline extern's `= "symbol"` redirect
+                # (`extern int f(...) = "sym"`). load_imports only scans IMPORTED
+                # modules, so the main module's own externs never reach
+                # call_redirects otherwise → the bare name is emitted unresolved
+                # (undefined reference). Done in this PRE-PASS (not the body loop)
+                # so an extern declared AFTER main() is already registered when
+                # main's body is lowered — registration here is order-robust;
+                # in-loop registration is not. Use gmod.call_redirects (the bare
+                # param was moved into gmod at :2713).
+                if fdef.is_extern_stub and fdef.body.len() == 1:
+                    Stmt ext_s = fdef.body.get(0).unwrap()
+                    match ext_s:
+                        case SReturn(ext_ret_opt):
+                            match ext_ret_opt:
+                                case Some(ext_ret_expr):
+                                    match ext_ret_expr.expr:
+                                        case EStringLiteral(ext_sym, _):
+                                            gmod.call_redirects.put(fdef.name.clone(), ext_sym.clone())
+                                        else:
+                                            pass
+                                case None:
+                                    pass
+                        case SExpr(ext_sx):
+                            match ext_sx.expr:
+                                case EStringLiteral(ext_sym2, _):
+                                    gmod.call_redirects.put(fdef.name.clone(), ext_sym2.clone())
+                                else:
+                                    pass
+                        else:
+                            pass
             case IEquip(eqblk):
                 # Check if equip is generic: either type_params set OR target has type args
                 bool is_generic_equip = eqblk.type_params.len() > 0
@@ -3747,11 +3777,14 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             case IFunction(fdef):
                 # Skip generic templates — they'll be monomorphized below
                 if fdef.type_params.len() == 0:
-                    # Skip extern/forward declarations: the parser loses
-                    # the `extern` keyword and `= "symbol"` binding, producing
-                    # a function with 0 body statements. The Rust compiler
-                    # emits these as `declare extern`, not as `fn @`.
-                    if fdef.body.len() > 0:
+                    # Skip extern declarations. A main-module inline extern now
+                    # KEEPS its `= "symbol"` alias body (so the pre-pass can
+                    # register its redirect), so the old `body.len() > 0` gate
+                    # alone would lower it as a garbage real fn (return "sym"
+                    # for a non-String return type — the Core-#8 regression).
+                    # The typed is_extern_stub flag is the source of truth: a
+                    # stub emits no `fn @`, only the declare/redirect.
+                    if not fdef.is_extern_stub and fdef.body.len() > 0:
                         gmod.functions.push(lower_function(fdef, &gmod))
             case IStaticDecl(si_ty, si_name, si_val):
                 # Array/dict LITERAL static (`static Vector[T] X = [..]` /

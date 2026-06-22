@@ -3458,12 +3458,12 @@ equip Parser:
             SpannedExpr body_expr = self.parse_expr()
             Vector[Stmt] body = Vector[Stmt]()
             body.push(SReturn(Some(body_expr)))
-            return FunctionDef(name, params, ret_ty, type_params, body, true, throws_type)
+            return FunctionDef(name, params, ret_ty, type_params, body, true, throws_type, false)
 
         # Declaration-only function (no body — e.g. trait method signatures)
         if self.check_tok(TOK_NEWLINE) or self.check_tok(TOK_DEDENT) or self.at_end():
             Vector[Stmt] body = Vector[Stmt]()
-            return FunctionDef(name, params, ret_ty, type_params, body, false, throws_type)
+            return FunctionDef(name, params, ret_ty, type_params, body, false, throws_type, false)
 
         self.expect_tok(TOK_COLON, "expected ':' after function signature")
         # Skip any comment tokens between : and the newline/indent
@@ -3473,9 +3473,9 @@ equip Parser:
             SpannedExpr body_expr = self.parse_expr()
             Vector[Stmt] body = Vector[Stmt]()
             body.push(SReturn(Some(body_expr)))
-            return FunctionDef(name, params, ret_ty, type_params, body, true, throws_type)
+            return FunctionDef(name, params, ret_ty, type_params, body, true, throws_type, false)
         Vector[Stmt] body = self.parse_block()
-        return FunctionDef(name, params, ret_ty, type_params, body, false, throws_type)
+        return FunctionDef(name, params, ret_ty, type_params, body, false, throws_type, false)
 
     Vector[Param] parse_params(&self):
         Vector[Param] params = Vector[Param]()
@@ -3942,10 +3942,26 @@ equip Parser:
             # Preserve the `= "symbol"` body (single string-literal stmt) so
             # loader.gg can detect the rename and populate call_redirects.
             # Collapse any other body to empty.
+            # parse_function_def wraps `= "symbol"` as SReturn(Some(EStringLiteral))
+            # (the `= expr` expr-body form). The BLOCK arm below already preserves
+            # BOTH shapes; the inline arm must too — preserve either so the symbol
+            # survives to the loader / lowerer redirect registration. The typed
+            # is_extern_stub flag (set below) is what stops the preserved body from
+            # tripping the loader's has_real_body / lowerer's body.len()>0 gates.
             Vector[Stmt] body_out = Vector[Stmt]()
             if fd.is_expr_body and fd.body.len() == 1:
                 Stmt first_b = fd.body.get(0).unwrap()
                 match first_b:
+                    case SReturn(ret_opt_b):
+                        match ret_opt_b:
+                            case Some(ret_expr_b):
+                                match ret_expr_b.expr:
+                                    case EStringLiteral(_, _):
+                                        body_out.push(first_b)
+                                    else:
+                                        pass
+                            case None:
+                                pass
                     case SExpr(sexpr_b):
                         match sexpr_b.expr:
                             case EStringLiteral(_, _):
@@ -3954,7 +3970,7 @@ equip Parser:
                                 pass
                     else:
                         pass
-            FunctionDef decl = FunctionDef(fd.name, fd.params, fd.return_type, fd.type_params, body_out, false, fd.throws_type)
+            FunctionDef decl = FunctionDef(fd.name, fd.params, fd.return_type, fd.type_params, body_out, false, fd.throws_type, true)
             return IFunction(decl)
         self.expect_tok(TOK_COLON, "expected ':' after extern")
         Vector[FunctionDef] fns = Vector[FunctionDef]()
@@ -4013,7 +4029,7 @@ equip Parser:
                                     pass
                         else:
                             pass
-                FunctionDef fn_decl = FunctionDef(fn_fd.name, fn_fd.params, fn_fd.return_type, fn_fd.type_params, fn_body, false, fn_fd.throws_type)
+                FunctionDef fn_decl = FunctionDef(fn_fd.name, fn_fd.params, fn_fd.return_type, fn_fd.type_params, fn_body, false, fn_fd.throws_type, true)
                 fns.push(fn_decl)
                 self.skip_trivia()
             if self.check_tok(TOK_DEDENT):
