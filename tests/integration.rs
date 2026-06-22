@@ -16284,6 +16284,51 @@ fn self_host_cli_pipeline() {
         String::from_utf8_lossy(&bad_backend.stderr),
     );
 
+    // ── 6. `gg run` with a BARE output name from a FOREIGN cwd. ──────────────
+    // Regression for the filed defect: the driver execs the just-built binary
+    // via system(), so a bare `-o hello_run` (no directory component) would be a
+    // PATH lookup — and PATH excludes `.`, so the binary in the cwd was "not
+    // found" (exit 127 / sh "not in a function"). The fix resolves the output to
+    // an absolute path before exec. We run from `tmp_root` (a foreign cwd, NOT
+    // where the .gg lives) with the runtime env UNSET (embedded runtime) and a
+    // BARE `-o`, and assert the program actually runs + prints + exits 0.
+    let run_cwd = tmp_root.join("run_cwd");
+    std::fs::create_dir_all(&run_cwd).expect("failed to create run_cwd");
+    // Import-free program: relocatable via the embedded runtime (Inc-2), so no
+    // --runtime-dir / --lib-dir flags are needed and the output binary's dir is
+    // purely the cwd — exactly the bare-name shape that triggered the bug.
+    let run_src = run_cwd.join("greet.gg");
+    std::fs::write(&run_src, "void main():\n    print(\"ran from foreign cwd\")\n")
+        .expect("failed to write greet.gg");
+    let run_bare = run_with_timeout(
+        Command::new(&driver_exe)
+            .current_dir(&run_cwd)
+            .env_remove("GG_RUNTIME_DIR")
+            .env_remove("GG_LIB_DIR")
+            .arg("run")
+            .arg("greet.gg")
+            .arg("-o")
+            .arg("greet_bin"),
+        "run greet.gg -o greet_bin (bare name, foreign cwd)",
+    );
+    assert!(
+        run_bare.status.success(),
+        "`gg run greet.gg -o greet_bin` from a foreign cwd with a BARE output name \
+         must resolve the binary to an absolute path before exec — a bare name is a \
+         PATH lookup (PATH excludes `.`), so the just-built binary would be \
+         \"not found\" (exit 127). Got {:?}.\nstdout: {}\nstderr: {}",
+        run_bare.status.code(),
+        String::from_utf8_lossy(&run_bare.stdout),
+        String::from_utf8_lossy(&run_bare.stderr),
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run_bare.stdout).trim_end(),
+        "ran from foreign cwd",
+        "`gg run` with a bare output name should actually execute the binary and \
+         emit its stdout.\nstderr: {}",
+        String::from_utf8_lossy(&run_bare.stderr),
+    );
+
     let _ = std::fs::remove_dir_all(&tmp_root);
 }
 

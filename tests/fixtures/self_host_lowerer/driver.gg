@@ -701,7 +701,14 @@ void run_build_mode(Vector[String] cmd_args, bool do_run):
 
     # ── run mode: execute the compiled binary ────────────────────────────────
     if do_run:
-        int run_exit = exec(output_path)
+        # `exec` shells out via system(), so a BARE output name (e.g. `-o hello`
+        # or a derived `hello` from `hello.gg`) would be a PATH lookup — and PATH
+        # excludes `.`, so the just-built binary in the cwd is "not found". Resolve
+        # to an absolute path first (mirrors Rust gg, which execs the full exe
+        # path); already-absolute paths pass through unchanged. Bind to a String
+        # VarDecl so the cstr->String coercion fires (it only fires at SVarDecl).
+        String run_path = path_absolute(output_path)
+        int run_exit = exec(run_path)
         exit(run_exit)
 
 # ── check subcommand implementation ──────────────────────────────────────────
