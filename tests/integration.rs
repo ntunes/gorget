@@ -5682,14 +5682,25 @@ fn fault_bounds_panic_default() {
 #[test]
 fn fault_catch_bounds_struct() {
     // (A) case (c): a faultable Bounds read of a Vector of PLAIN STRUCT elements.
-    // Rust gg catches the OOB and yields the fallback struct. HELD-OUT from the
-    // self-host lock-in (`self_host_runtime`, no `.out` snapshot): the self-host
-    // SCOPES OUT case (c) — its faultable `safe_get` route is gated to scalar +
-    // resource element dsts, so a struct-vector bounds read falls through to the
-    // panicking getter (panics on OOB, an interim gap, see TODO). The diagnostic
-    // `self_host_runtime_diff` surfaces the gap; this test keeps the correct
-    // Rust-gg behavior locked.
+    // Rust gg catches the OOB and yields the fallback struct. The self-host now
+    // ALSO handles case (c) (the last Inc2 gap, closed): its faultable `safe_get`
+    // route is gated to scalar + resource + struct element dsts, and the
+    // in-bounds continuation derefs the raw element pointer with the same
+    // aggregate-safe `GIDeref` the scalar case uses. Locked into the self-host
+    // net via `runtime_snapshots/fault_catch_bounds_struct.out`; the `.get()`
+    // Option path is proved uncrossed by the `vec_struct_get` regression test.
     run_gg("fault_catch_bounds_struct.gg", "3,4\n-1,-1");
+}
+
+#[test]
+fn vec_struct_get() {
+    // Regression guard for the fault-catch case-(c) fix: the ORDINARY
+    // `Vector[Struct].get()` Option path must be UNCHANGED. `.get()` flows
+    // through its own Option-wrap routing (`gorget_array_safe_get`), NOT the
+    // raw `gorget_array_get` the faultable EIndex arm emits — so in-bounds
+    // yields `Some(struct)` and OOB yields `None`. Proves the case-(c) fix did
+    // not perturb `safe_get`/`eindex_raw_getter`.
+    run_gg("vec_struct_get.gg", "3,4\nnone-oob");
 }
 
 #[test]

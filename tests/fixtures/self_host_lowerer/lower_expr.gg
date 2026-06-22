@@ -2378,18 +2378,21 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # read (`gorget_array_get` ⇒ CkVector/CkDeque) routes through the
             # NON-panicking `gorget_array_safe_get` (NULL on OOB) + an inline
             # NULL-branch-before-deref to the handler. Dict/set keep panicking
-            # (not array-backed). Case (c) plain-struct elems are SCOPED OUT:
-            # `gorget_array_safe_get` is excluded from `eindex_raw_getter`'s
-            # aggregate copy-out (lir_lower.gg), so a faultable struct read would
-            # mis-store a void* into a struct slot — fall through to the
-            # panicking getter for those (interim gap, see the held-out
-            # `fault_catch_bounds_struct` fixture + TODO). Mirrors Rust gg's
+            # (not array-backed). Case (c) plain-struct elems ARE HANDLED: the
+            # in-bounds continuation derefs the raw element pointer with the SAME
+            # `GIDeref` the scalar case uses — its LIR lowering IMemcpy's
+            # `sizeof(inner)`, so it copies the whole aggregate out (no new
+            # instruction, no typed marker, no name-matching). The `safe_get`
+            # exclusion from `eindex_raw_getter`'s aggregate copy-out is moot:
+            # the faultable path never routes a struct dst through that copy-out
+            # — it uses GIDeref directly (see `fault_catch_bounds_struct`).
+            # Mirrors Rust gg's
             # FaultableIndexLoad (drop CollectionRef on the faultable-clone dst
             # so the OOB NULL never reaches a clone — that boundary is here:
             # the faultable resource dst is materialized to OWNED at the catch,
             # never borrowed past it, and the OOB path branches to the handler
             # BEFORE any element materialization).
-            bool eix_faultable = (eix_getter == "gorget_array_get") and (eix_is_scalar or eix_is_resource)
+            bool eix_faultable = (eix_getter == "gorget_array_get") and (eix_is_scalar or eix_is_resource or eix_is_struct)
             int eix_bounds_h = -1
             if eix_faultable:
                 match ctx.fault_bounds_handler:
@@ -2419,6 +2422,17 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     int idst_sc = add_local(&ctx, eix_elem_tid, None)
                     emit(&ctx, GIDeref(idst_sc, raw_ptr, eix_elem_tid))
                     return idst_sc
+                if eix_is_struct:
+                    # Plain non-resource struct element (case (c)): deref the
+                    # void* into a fresh by-value struct local with the SAME
+                    # GIDeref the scalar case uses. GIDeref's LIR lowering
+                    # (lir_lower.gg) IMemcpy's `sizeof(inner)`, so it copies the
+                    # whole aggregate out of the element — no new instruction, no
+                    # typed marker, no name-matching. The OOB NULL path already
+                    # branched to the handler above, so this only runs in-bounds.
+                    int idst_st = add_local(&ctx, eix_elem_tid, None)
+                    emit(&ctx, GIDeref(idst_st, raw_ptr, eix_elem_tid))
+                    return idst_st
                 # Resource: the result IS the borrowed pointer into the element.
                 # The enclosing fault-catch's `op_consume(CkAssign())` clones it
                 # ONCE at the catch boundary (LoBorrowed ⇒ clone), yielding an

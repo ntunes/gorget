@@ -3,20 +3,16 @@
 # so the OUT-OF-BOUNDS read must take the `Fault.Bounds` handler and yield the
 # fallback struct — exactly like the scalar/resource element cases.
 #
-# ⚠ HELD-OUT from the self-host lock-in (`self_host_runtime`): the self-host
-# lowerer SCOPES OUT case (c). The faultable `gorget_array_safe_get` route is
-# gated to scalar (a) + resource (b) element dsts only — `gorget_array_safe_get`
-# is deliberately excluded from `eindex_raw_getter`'s aggregate copy-out
-# (lir_lower.gg), so a faultable struct read would mis-store the element void*
-# into a struct slot. The self-host therefore falls through to the PANICKING
-# `gorget_array_get` for struct-vector bounds reads (it panics on OOB instead
-# of catching — an interim gap, NOT a wrong value). Closing it needs a
-# distinguishing typed marker for the faultable raw `safe_get` so the aggregate
-# copy-out can fire on the in-bounds continuation, plus a `Vector[Struct].get()`
-# regression fixture — out of Inc2 scope (see TODO). This fixture is wired only
-# as a Rust-gg regression (`fault_catch_bounds_struct`) and is NOT snapshotted,
-# so the diagnostic `self_host_runtime_diff` surfaces the gap without locking it
-# into the passing set.
+# CASE (c) IS NOW HANDLED on the self-host (the last Inc2 gap, closed): the
+# faultable `gorget_array_safe_get` route is gated to scalar (a) + resource (b)
+# + struct (c) element dsts. The in-bounds continuation derefs the raw element
+# pointer with the SAME `GIDeref` the scalar case uses — its LIR lowering
+# IMemcpy's `sizeof(inner)`, so it copies the whole aggregate out (no new
+# instruction, no typed marker, no name-matching, and `eindex_raw_getter`'s
+# aggregate copy-out is untouched — the faultable path never routes through it).
+# Wired into the self-host lock-in (`self_host_runtime`) via the committed
+# `runtime_snapshots/fault_catch_bounds_struct.out` snapshot. The `.get()`
+# Option path is proved uncrossed by the `vec_struct_get` regression fixture.
 struct Point:
     int x
     int y
