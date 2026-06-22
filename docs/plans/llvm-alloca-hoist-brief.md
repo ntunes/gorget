@@ -25,33 +25,57 @@ is an alloca-lifetime/placement bug, no name-matching, no offsets.
 **Why driver-source-only:** input-size-dependent. Corpus fixtures' loops run too few iterations to
 exhaust the stack; only the ~660K-line self-compile drives the fixpoint to millions of iterations.
 
-## The fix (reference-grade, producer-centralized, layering-correct)
-Hoist every per-instruction temp `alloca` **definition** to the function **entry block**
-(`entry.prelude`) — LLVM's documented requirement for frontend-emitted allocas. **Do NOT** use the
-prototype's string post-pass; use the production shape:
+## The fix (reference-grade, ENUMERATION-FREE, body-buffered — revised per review pass 1)
+Hoist EVERY per-instruction temp `alloca` **definition** in the function body to the function **entry
+block** — LLVM's documented requirement for frontend-emitted allocas. **Do NOT enumerate sites** (review
+pass 1 proved the hand-list missed ~30, incl. the load-bearing general-sret `mod.rs:6391` that
+`coal_compute_live_blocks` actually hits, and `emit_branch_arg_casts:7049` which isn't even reachable via
+`emit_inst`). And **do NOT** "flush into the entry prelude after :2639" — `emit_function` (`mod.rs:2321`)
+*streams* the prelude directly into `out` (`:2576` `entry.prelude:`, slot/StrLit allocas `:2596-2639`,
+`br label %bb0` `:2686`) BEFORE it loops over blocks (`emit_inst` at `:3002`), so there is no buffer to
+flush into. Use the **body-buffering + line-extraction** shape instead:
 
-- Thread a `pending_entry_allocas: &mut Vec<String>` (or the self-host/Rust-appropriate buffer type)
-  through `emit_inst` (`src/backend/llvm/mod.rs:3089`) and its helpers. When an arm currently writes a
-  `%v{d} = alloca {ty}` / `%spill.N = alloca {ty}` **definition** line into `out`, instead PUSH that
-  line onto `pending_entry_allocas`. The **follower** instructions that USE the alloca'd pointer
-  (`memset`/`store`/`select`/`memcpy`/the call itself) STAY at the current call site — only the `alloca`
-  *definition* moves.
-- Flush `pending_entry_allocas` into `entry.prelude` in `emit_function`, AFTER the existing slot/StrLit
-  entry allocas (`src/backend/llvm/mod.rs:2596-2639`). An alloca dominates all its uses once in the
-  entry block, so every hoist is SSA-valid (the temps have statically-known sizes + unique value-id
-  names, no value operands).
+1. **Emit the function body into a SEPARATE `String body_buf`,** not directly into `out`. In
+   `emit_function`, the per-block loop (the `emit_inst` calls at `~:3002` AND the `emit_branch_arg_casts`
+   call at `~:3022`) writes into `body_buf`. (The body-emitting HOF helper closures take an
+   `out: &mut String` param — they'll write into `body_buf` because that's what gets passed down; no
+   per-site threading needed.)
+2. **Extract every alloca DEFINITION from `body_buf` by line** into a `hoisted: Vec<String>`: a body
+   alloca def is a single line matching `^\s*%\S+ = alloca ` (all body allocas are single-line +
+   statically sized + unique-named — review pass 1 + M1 confirmed NO runtime-count `alloca <ty>, i64 %reg`
+   form exists anywhere). Move the matched line to `hoisted`; leave all FOLLOWER lines (the
+   `memset`/`store`/`select`/`memcpy`/call that USE the pointer) in `body_buf`. An entry-block alloca
+   dominates all uses, so every hoist is SSA-valid.
+   - ⚠ **SAFETY:** if a line ever matches `= alloca <ty>, i64 %<reg>` (a RUNTIME-sized alloca — operand
+     register, not a constant), do NOT move it (hoisting before its size operand is computed would be
+     wrong). Review pass 1 confirmed none exist today; assert/guard so a future one isn't silently
+     mis-hoisted.
+3. **Assemble `out`** = (prelude header + the existing entry slot/StrLit allocas `:2596-2639`, emitted as
+   today) + `hoisted` (the extracted body allocas, placed in the entry block AFTER the slot allocas,
+   before `br label %bb0`) + `body_buf`. This leaves the entry-prelude allocas (`:2596-2639`), the
+   run-once `main`-prologue allocas in `emit_global_runtime_init`/`emit_global_init_arg_llvm`
+   (`mod.rs:1908/1967/2027`), and the straight-line `__clone` wrapper alloca (`:2305`) UNTOUCHED — they
+   are not in `body_buf`.
 
-**The alloca sites to hoist** (all statically-sized → all hoistable; scout-enumerated — re-grep, line
-numbers drift):
-- sret-call destinations: `mod.rs:4110, 4120, 4190, 4256, 4707` (`%v{d} = alloca {ret_ty}`).
-- scalar-key spills for map ops: `mod.rs:4898` (`%spill.N = alloca …` → `gorget_map_put`/`_get`).
-- Option-construction temps: `mod.rs:4913, 4964, 4966, 5193, 5349, 5365`.
-- HOF/combinator `%v{d} = alloca %GorgetString/%GorgetArray`: `mod.rs:4423, 4465, 4516, 4747, 4759, 4808`.
-- fat-pointer `[2 x ptr]` allocas: `mod.rs:3281` (the prototype's `// skip array-of-ptr … conservative?`
-  note was thinking-aloud — these ARE const-sized; **hoist them too**).
-- `grep -n "= alloca" src/backend/llvm/mod.rs` and confirm EVERY non-entry-block alloca with a static
-  size + no value operand is routed through the buffer. (Entry-block slot/StrLit allocas at `:2596-2639`
-  are ALREADY correct — leave them.)
+This is NOT the prototype's fragile whole-`out` string post-pass — it is a structured extraction from a
+*dedicated body buffer*, so it cannot disturb the prelude or globals, and it is **enumeration-free** (the
+pattern catches 6391/7049/5436-5509/6295 and any future site automatically). The site list below is
+EVIDENCE of the bug's breadth, NOT a checklist to patch.
+
+**STRUCTURAL GUARD (required — the anti-regression ratchet):** after extraction, assert `body_buf`
+contains **zero** `= alloca ` lines (every body alloca was hoisted). Wire this as a debug assertion in
+`emit_function` AND, if practical, a `tests/lints.rs`-style check — so the next emit arm that introduces
+a body alloca is caught structurally, not by the next SIGSEGV. (This is the "convert a recurring bug
+class into an executable guard" invariant — the hand-list is exactly what it replaces.)
+
+**Evidence of breadth (NOT a checklist — the line-extraction handles all):** sret dests
+`mod.rs:4110/4120/4190/4256/4707` + the **general CallExtern sret `:6391`** (the one
+`coal_compute_live_blocks` hits) + the general scalar-spill `:6295`; map-op spills `:4898`; Option temps
+`:4913/4964/4966/5193/5349/5365`; HOF/combinator temps `:4423/4465/4516/4747/4759/4808` + the
+helper-closure temps `:5436/5451/5472/5487/5504/5509`; fat-ptr `[2 x ptr]` `:3281`; format/spill temps
+`:5864/5934/6018/6037/6176/6189/6331/6341/6429/6440/6475/6485/6811/6817`; and the branch-arg-cast spill
+in `emit_branch_arg_casts` `:7049`. `emit_inst` spans `~:3089-6886`; everything alloca'd in that range +
+`emit_branch_arg_casts` is body-scope.
 
 ## Guard (REQUIRED — must bite on x86_64, where CI runs)
 The scout's repro: a ~25-line fixture with a `while i < 3_000_000:` loop that each iteration calls an
@@ -81,11 +105,13 @@ regardless). Do NOT lift the skip on an un-green bootstrap.
 - No `c_emit`/parity regression (backend-only change; C unaffected).
 
 ## Riskiest part
-Threading the buffer through ALL emit paths without missing a site (a missed non-entry alloca = the bug
-persists for that op) AND without hoisting a NON-static alloca (there should be none — confirm every
-hoisted site is statically-sized; a runtime-sized alloca hoisted to entry would be wrong, but the scout
-found none). Keep followers at the call site. Verify the LLVM bootstrap byte-identicality (the scout's
-strongest evidence) reproduces.
+Getting the body-buffering refactor right (emit blocks into `body_buf`, not `out`) and the
+line-extraction precise: move ONLY single-line static `alloca` defs, leave followers in place, and place
+hoisted allocas in the entry block before `br label %bb0`. The structural guard (zero `= alloca` lines
+remain in `body_buf`) is what makes "enumeration-free" safe — make sure it actually fires. Confirm NO
+runtime-sized `alloca <ty>, i64 %reg` form is moved (none exist today; the guard must skip one if it ever
+appears). Verify the LLVM bootstrap byte-identicality (the scout's strongest evidence) reproduces, and
+that the C-backend output is unchanged (byte-identical — the change is LLVM-only).
 
 ## Also file (side findings — NOT this brief; add to TODO.md / fix on contact)
 1. **`sizeof_struct_by_name` returns 160 for GorgetMap, canonical is 152** (`mod.rs:2088`; the `:2073`
