@@ -431,7 +431,7 @@ fn static_struct_scalar_field() {
     // to `const unit`. Fixed by materializing the global into an addressable
     // MutPtr local before projecting. Isolates Bug #1 (no Bug #2 needed —
     // literal-arg ctors stay on the compile-time GlobalInit::Struct path).
-    // See docs/plans/brief_static_struct_field.md.
+    // See DONE.md (`743412da` Bug#1 + `6ac72607` Bug#2).
     run_gg("static_struct_scalar_field.gg", "P.x=3\nP.y=4\nq.x=3");
 }
 
@@ -452,7 +452,7 @@ fn static_struct_resource_field() {
     // non-literal-arg struct ctor through the synthesized __gg_static_init_B().
     // Bug #1 (addressing): `B.items.push(7)` needs an addressable place at the
     // global. Asserts the pushed value (7) and .len() after a second push (2).
-    // See docs/plans/brief_static_struct_field.md + bugB_static_collection_init.md.
+    // See DONE.md (`743412da`/`6ac72607`) + docs/plans/bugB_static_collection_init.md.
     run_gg("static_struct_resource_field.gg", "first=7\nlen=2\nsecond=11");
 }
 
@@ -1125,7 +1125,7 @@ fn str_builtin_call_error() {
 // `gg check` must reject an undefined type name in a VarDecl annotation,
 // instead of silently degrading it to `error_id` → unit. The Rust-style
 // numeric shorthand `u8` (not a Gorget keyword) gets a "did you mean `uint8`?"
-// hint. See docs/plans/trackB_T4_unknown_type_error.md.
+// hint. See docs/devbook/09-type-checking.md, "Unknown type names".
 #[test]
 fn unknown_type_error() {
     check_gg_fails(
@@ -24959,7 +24959,7 @@ fn gorget_js_snag_7_view_through_struct_literal() {
 
 // ---------------------------------------------------------------------------
 // Bare-`None`-at-call-arg expected-type fixtures (self-host peel fix chain;
-// see docs/plans/brief_lowergg_split_retry.md and docs/plans/none_peel_fix.patch).
+// see docs/plans/none_peel_fix.patch).
 // Sibling of `none_literal_at_call_arg` (Option[int] — primitive payload).
 // ---------------------------------------------------------------------------
 

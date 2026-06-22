@@ -198,6 +198,33 @@ aggregate params to `ptr` (`src/backend/llvm/mod.rs:2143-2149`); the
 "is this a spawn wrapper" predicate lives in `lir::queries::is_spawn_wrapper`
 so the naming patterns are tracked in one place, not name-matched here.
 
+## Entry-block alloca hoisting
+
+**Invariant: every frontend-emitted `alloca` must live in the function *entry*
+block.** LLVM only reclaims an `alloca`'s stack slot at function return, and it
+never reclaims one that sits *outside* the entry block across loop iterations —
+each iteration through a body-block `alloca` allocates a fresh slot that leaks
+for the whole call. A per-instruction temp `alloca` emitted inside a loop body
+therefore turns an N-iteration loop into N stack frames' worth of slots: a
+backward-dataflow fixpoint over a large module (the self-host driver compiling
+its own ~660K-line source) drove one such site to *hundreds of MB* of stack in a
+single frame and SIGSEGV'd — surfacing as a bogus-looking crash in an unrelated
+leaf (`gorget_map_get`'s prologue store first touching the guard page). The C
+backend is immune because its temps are function-scope C locals reused each
+iteration; this is an LLVM-only placement bug, not a hash/ABI/offset bug.
+
+So `emit_function` streams the body into a separate buffer, extracts every
+single-line static `alloca` *definition* (`%x = alloca <ty>`) out of it, and
+re-emits those defs in the entry block (before the `br` to the first body
+block); the followers that *use* the pointer (`store`/`memcpy`/`select`/calls)
+stay in place, and an entry-block alloca dominates all of them, so every hoist
+is SSA-valid. A genuinely runtime-sized `alloca <ty>, i64 %reg` must NOT be
+hoisted past the register that computes its size; the extractor skips that shape.
+The matching invariant is enforced as a structural guard
+([Chapter 25](25-structural-guards.md)): after extraction, zero `alloca` lines
+may remain in the body buffer, so the next emit arm that introduces a body
+alloca is caught by an assertion rather than by the next SIGSEGV.
+
 ## Overflow, bounds, and trap intrinsics
 
 `Overflow::Trap` on `Add`/`Sub`/`Mul` lowers to LLVM's checked-arithmetic

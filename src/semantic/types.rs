@@ -578,7 +578,7 @@ fn numeric_shorthand_suggestion(name: &str) -> Option<String> {
 /// `UndefinedName` instead of swallowing the unknown type. It is deliberately
 /// scoped to the top-level name (not generic args / nested types): the
 /// typecheck-pass VarDecl site is the only sound place to hard-error today
-/// (see `docs/plans/trackB_T4_unknown_type_error.md`).
+/// (see `docs/devbook/09-type-checking.md`, "Unknown type names").
 ///
 /// `fn_scope` is the enclosing function's body scope (the typechecker's
 /// `current_fn_scope`). It must be consulted IN ADDITION to plain

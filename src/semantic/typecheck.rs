@@ -3162,7 +3162,7 @@ impl<'a> TypeChecker<'a> {
                         // undefined: surface it instead of letting
                         // `ast_type_to_resolved` degrade it to `error_id`
                         // (→ silently defaulted to unit downstream).
-                        // See docs/plans/trackB_T4_unknown_type_error.md.
+                        // See docs/devbook/09-type-checking.md, "Unknown type names".
                         if let Some((name_node, suggestion)) =
                             super::types::unknown_named_type(
                                 &type_.node,

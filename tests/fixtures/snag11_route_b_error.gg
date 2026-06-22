@@ -3,7 +3,7 @@
 # `From` conversion. Like Route A this must REJECT — the auto-propagation gate
 # is keyed on the propagation position, not on `throws` specifically, so both
 # routes share the teaching error. (Route A's repro is the throwing-fn variant
-# in docs/plans/snag11_cross_error_propagation.gg.)
+# in tests/fixtures/snag11_cross_error_propagation.gg.)
 
 struct BigErr:
     String msg

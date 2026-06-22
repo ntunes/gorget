@@ -1,7 +1,7 @@
 # Scout — ill-typed Case B (reject undefined identifiers): the reference-grade increment plan
 
 **Status:** READ-ONLY scout, fresh measurement (2026-06-22, worktree off `gorget-1` tip `7da95d0e`).
-Supersedes the dated figures in `ill-typed-undefined-name-brief.md` (which cited 238/233 from
+Supersedes the earlier dated figures (which cited 238/233 from
 `a3b28b2c`/`a60bfa12`). All numbers below were **regenerated this session** by building a SCOUT-instrumented
 self-host and running it over the full 1290-fixture corpus + cross-checking each hit against Rust `gg check`.
 The prototype edits were reverted; the tree is clean.

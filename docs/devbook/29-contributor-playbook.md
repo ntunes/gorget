@@ -404,7 +404,7 @@ The discipline catches over-claims in *both* directions — a yield estimated to
 high, and an approach that *measures negative*. A higher-order-function port was
 floated as "~9 → ~1 remaining"; the honest staged landing flipped one Vector-HOF
 fixture and explicitly down-scoped the optimistic count (`vector_higher_order`,
-self-host commit `4158530b`, see DONE.md / `docs/plans/trackA_collection_hof_port.md`).
+self-host commit `4158530b`, see DONE.md).
 And a "cheap composite-span-key" re-key proposed for the lazy-`Iterator[T]` chain
 fix (TODO item #39) was *measured at **−4*** — it regressed four fixtures — so the
 shipped fix used a per-link `span.end` oracle instead (DONE.md "TASK #39"). A
@@ -430,9 +430,10 @@ told to "start from the parked commit `4158530b`"; a brief-reviewer flagged it a
 a retired branch, having **conflated it with `eb730d49`** — a *different* commit,
 in the Rust C-backend (`src/backend/c_lir/emit_types.rs`), two months earlier,
 that *deleted* inline-C HOF helpers in favor of `HofExpand`. `git` refuted the
-conflation in seconds: `4158530b` is a *self-host* commit doing inline expansion,
-parked (not retired), and aligned with Rust's current direction
-(`docs/plans/trackA_collection_hof_port.md:84-90`). Two commits that "sound like
+conflation in seconds: `4158530b` is a *self-host* commit doing inline expansion
+via `comp_make_acc` + `lower_for_vector` (the same direction as Rust's current
+`HofExpand`), parked (not retired) — not a deletion of inline-C helpers like
+`eb730d49`. Two commits that "sound like
 the same change" can be on opposite sides of the compiler and months apart —
 cross-check the hash, the files it touches, and the date before you let a
 review-pass conclusion ("that's already retired") kill or redirect a plan.

@@ -51,6 +51,38 @@ concrete types rather than dangling type variables (`typecheck.rs:5513-5521`).
 return types of functions declared later, then the body walk
 (`check_items_recursive_tc`, `typecheck.rs:5509`).
 
+## Unknown type names: caught here, not at resolve
+
+An *undefined* type name (`Floobar x = 5`, or `u8 n = 2` — `u8` isn't a Gorget
+keyword) used to degrade silently to `error_id` and default to `unit`
+downstream, so `gg check` reported "OK" and the program ran wrong or hit a C
+"void value not ignored" link error. The fix surfaces an `UndefinedName` error —
+but **the only sound site to hard-error is the typecheck-pass VarDecl annotation**
+(`unknown_named_type`, `types.rs`; raised at the VarDecl site, `typecheck.rs`),
+*not* the resolve pass:
+
+- **Resolve runs too early for cross-module forward refs.** A type can be
+  unknown on first sight in the resolve pass and defined later in another module;
+  the cross-module fixup is return-type-only, so hard-erroring at resolve-pass
+  param/throws/extern sites would spuriously reject a legitimate forward ref. By
+  the typecheck pass every *defined* type is in scope, so a still-unknown
+  `Type::Named` is genuinely undefined.
+- **Generic-param timing.** Function parameter types resolve in the collect pass
+  *before* the function's generic params are registered in scope, so a
+  resolve-pass error would fire on a legit `T` in `fn foo[T](T a)`. The typecheck
+  pass reaches in-scope generics via two scope roots — free fns through the
+  enclosing `current_fn_scope` ancestor chain, equip blocks through the
+  equip-generics list — and a name is unknown only when *both* miss. Equip
+  target-implicit generics (`equip X[T]:`, where `T` is never a scope def) are
+  suppressed explicitly.
+
+The `types.rs` `ast_type_to_resolved` chokepoint keeps returning
+`Ok(error_id)` for the unknown case (zero blast radius to its other callers,
+preserves resolve-pass forward-ref tolerance); only the typecheck VarDecl site
+opts into the hard error. Unknown type names at *param* and struct/enum *field*
+positions remain a tracked follow-up — they need the generic-param-timing
+ordering fixed first. (Landed `bd54f223`; see DONE.md.)
+
 ## The unifier
 
 The whole inference engine is one function: `unify(a, b, span)`

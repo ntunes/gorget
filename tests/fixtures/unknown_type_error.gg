@@ -3,7 +3,7 @@
 # unit, so `gg check` reported "OK" and the program either ran wrong or hit a
 # C "void value not ignored" link error. The Rust-style numeric shorthand `u8`
 # (not a Gorget keyword — `uint8`/`byte` are) gets a "did you mean?" hint.
-# See docs/plans/trackB_T4_unknown_type_error.md.
+# See docs/devbook/09-type-checking.md, "Unknown type names".
 
 void main():
     Floobar x = 5
