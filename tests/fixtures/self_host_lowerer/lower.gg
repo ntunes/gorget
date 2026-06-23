@@ -2584,6 +2584,20 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         enum_variant_parent_idx.put(var.name.clone(), edef.name.clone())
                 type_infos.put(edef.name, GirTypeInfo(edef.name, no_fields, variants, true))
                 enum_registry.put(edef.name.clone(), !variant_names_only)
+            case INewtype(nt_name, nt_inner):
+                # A newtype `newtype Meters(float)` is a single-field wrapper
+                # struct with field `_0` of the inner type. Mirrors Rust gg's
+                # `register_newtype` (src/ir/lowering/types.rs:653-656). Without
+                # this arm the newtype's type_info is missing → emit_structs
+                # emits an empty `char __pad` struct, the constructor
+                # `Meters(3.14)` drops its arg into `{ }`, and `dist.0`
+                # (normalized to `_0`) falls through to the [bug] I64(0)
+                # placeholder.
+                Vector[GirFieldInfo] nt_fields = []
+                String nt_inner_name = spanned_type_to_name(nt_inner)
+                nt_fields.push(GirFieldInfo("_0", nt_inner_name))
+                Vector[GirEnumVariantInfo] nt_no_variants = []
+                type_infos.put(nt_name, GirTypeInfo(nt_name, nt_fields, nt_no_variants, false))
             else:
                 pass
     # Fix D (2026-05-22) — register struct constructors in fn_move_params
