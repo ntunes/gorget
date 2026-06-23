@@ -170,8 +170,9 @@ bool is_runtime_defined_named(String name):
         return true
     if name == "GorgetRSAKey" or name == "GorgetEd25519KeyPair":
         return true
-    if name == "GorgetRegex" or name == "GorgetRegexMatch":
-        return true
+    # Regex/Match are pure-Gorget structs in lib/xtd/regex.gg — no runtime
+    # mapping. (Previously routed to GorgetRegex / GorgetRegexMatch when
+    # xtd.regex was a PCRE2 wrapper.) Mirrors Rust lir_to_runtime_name.
     return false
 
 # Map LIR struct names to their runtime C names when they differ.
@@ -210,10 +211,8 @@ String lir_to_runtime_name(String name):
         return "GorgetEd25519KeyPair"
     elif name == "X25519KeyPair":
         return "GorgetX25519KeyPair"
-    elif name == "Regex":
-        return "GorgetRegex"
-    elif name == "RegexMatch" or name == "Match":
-        return "GorgetRegexMatch"
+    # Regex/Match are pure-Gorget structs (lib/xtd/regex.gg) — no runtime
+    # name; they fall through to the __gg_<sanitized> path, exactly like Rust.
     elif name == "File":
         return "GorgetFile"
     elif name == "Barrier":
@@ -4963,23 +4962,39 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
                 return out_pv
 
     # Qualified enum variant: `EnumName__VariantName(x)` (the resolved form
-    # of `EnumName.VariantName(x)`). Split and recurse the lookup.
+    # of `EnumName.VariantName(x)`, OR a bare ctor the GIR disambiguated to its
+    # expected-type parent). Split out the bare variant for the tag / field-name
+    # lookups, and the parent for the struct-name lookup.
+    #
+    # `ev_name` = the BARE variant (used for the `<variant>_<i>` payload-field
+    # prefix and the bare-tag fallback); `qual_parent` = the parent enum read
+    # from the QUALIFIED key (collision-free) when present, else "".
     String ev_name = name
+    String qual_parent = ""
     if name.contains("__"):
         # Parser/resolver emits EnumName__VariantName for qualified variants.
-        # Check if the bare variant name is registered — recurse via it.
         int underscore_idx = name.index_of("__").unwrap()
         String maybe_parent = name.slice(0, underscore_idx)
         String maybe_variant = name.slice(underscore_idx + 2, name.len())
-        if m.enum_variant_parent.contains(maybe_variant) and m.enum_variant_parent.get(maybe_variant).unwrap() == maybe_parent:
+        # Prefer the QUALIFIED key (`RxNode__Empty` → `RxNode`): it carries the
+        # caller-resolved parent and is immune to the bare-name first-write-wins
+        # collision (`Empty` → `ParseError`). lir_lower registers it for every
+        # variant. Mirrors Rust gg, where the qualified path resolves the parent
+        # from the receiver name (methods.rs:281-296), NOT the name-keyed map.
+        if m.enum_variant_parent.contains(name):
+            qual_parent = m.enum_variant_parent.get(name).unwrap()
+            ev_name = maybe_variant
+        elif m.enum_variant_parent.contains(maybe_variant) and m.enum_variant_parent.get(maybe_variant).unwrap() == maybe_parent:
             ev_name = maybe_variant
 
     # Enum variant constructor: `VariantName(x)` → inline struct init for
     # the parent enum (no C function exists for variants). For 0-arg
     # variants, emits just the tag. For 1+-arg variants, initializes the
     # variant's payload fields.
-    if m.enum_variant_parent.contains(ev_name):
-        String parent_name = m.enum_variant_parent.get(ev_name).unwrap()
+    if qual_parent != "" or m.enum_variant_parent.contains(ev_name):
+        String parent_name = qual_parent
+        if parent_name == "":
+            parent_name = m.enum_variant_parent.get(ev_name).unwrap()
         int parent_sid = find_struct_type(parent_name, &m)
         if parent_sid >= LT_STRUCT_BASE:
             int parent_idx = parent_sid - LT_STRUCT_BASE
@@ -4993,7 +5008,13 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
             # got tag = seen_variants.len() (6) instead of their real
             # ordinal (63) — and match-ing TkEof at runtime never hit.
             int variant_tag = -1
-            if m.enum_variant_tag.contains(ev_name):
+            # Prefer the QUALIFIED tag key (`RxNode__Empty`) when the parent was
+            # resolved via the qualified path — the bare `enum_variant_tag` key
+            # (`Empty`) is first-write-wins and could carry the OTHER enum's
+            # ordinal if the two colliding variants sit at different positions.
+            if qual_parent != "" and m.enum_variant_tag.contains(name):
+                variant_tag = m.enum_variant_tag.get(name).unwrap()
+            elif m.enum_variant_tag.contains(ev_name):
                 variant_tag = m.enum_variant_tag.get(ev_name).unwrap()
             # Fallback: old heuristic for any variants the map missed.
             if variant_tag < 0:

@@ -1115,7 +1115,26 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             eix_idx_name = i
                         else:
                             pass
-                    if eix_base_name.len() > 0 and eix_idx_name.len() > 0:
+                    # CRITICAL discriminator: this synthesizes a MONOMORPHIZED
+                    # TYPE receiver (`SetIter[int].next()` → `SetIter__int64_t`,
+                    # `Heap[int].new()` → `Heap__int64_t`) for a STATIC method on a
+                    # generic type instantiation. It must NOT fire for a VALUE
+                    # index-read (`rs[i].clone()`, where `rs` is a local Vector and
+                    # `i` an int loop var) — that builds the bogus type name `rs__i`
+                    # and `rs[i].clone()` then emits `rs__i__clone()` (undefined
+                    # reference at cc).
+                    #
+                    # The discriminator is BINDING-VS-TYPE: `eix_base_name` is a TYPE
+                    # only when it is NOT a bound local variable. `named_locals`
+                    # holds every value binding in scope; a local (`rs`, `parts`,
+                    # `alts`) is present → value index-read; a generic type name
+                    # (`Heap`, `SetIter`, registered nowhere as a value) is absent →
+                    # static-method synthesis. This is broader and more correct than
+                    # `type_infos.contains` (which misses BUILTIN generic types like
+                    # `Heap`/`SlotMap` that are resource types, not type_infos
+                    # entries — gating on it regressed `Heap[int].new()`). Typed
+                    # binding-table test, no name match.
+                    if eix_base_name.len() > 0 and eix_idx_name.len() > 0 and not ctx.named_locals.contains(eix_base_name):
                         # Substitute through `gmod.type_subs` (T → int64_t).
                         if gmod.type_subs.contains(eix_idx_name):
                             int sub_tid = gmod.type_subs.get(eix_idx_name).unwrap()
@@ -4909,6 +4928,39 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                     for et_v in et_ti.variants:
                         if et_v.name == fname:
                             ret_type = ctx.expected_type
+                            # QUALIFY the ctor name to the disambiguated parent
+                            # (`Empty` → `RxNode__Empty`). A BARE variant whose
+                            # name collides across enums (`RxNode.Empty` vs the
+                            # transitively-imported `ParseError.Empty`) would
+                            # otherwise route through the first-write-wins
+                            # `enum_variant_parent` map at the C-emit and mint the
+                            # WRONG parent struct (`(__gg_ParseError){.tag=0}` into
+                            # an `__gg_RxNode` slot → cc-fail "incompatible types").
+                            # Writing the parent through into the call name here is
+                            # "resolve once, write through": the GIR has the typed
+                            # expected-type fact, so it records the parent on the
+                            # GICall name, and the C-emit reads it from the
+                            # collision-free QUALIFIED key (Rust gg resolves the
+                            # same way from the receiver name, methods.rs:281-296,
+                            # after the loader's collision-excluding qualification,
+                            # src/loader.rs:907-940).
+                            #
+                            # ONLY for a NON-GENERIC parent (`et_name` free of
+                            # `__`). The C-emit splits a qualified ctor name on the
+                            # FIRST `__` to recover (parent, variant); a MONO'd
+                            # generic enum parent (`Wrapper__int64_t`) already
+                            # contains `__`, so `Wrapper__int64_t__Value` would
+                            # mis-split to parent=`Wrapper`, variant=`int64_t__Value`
+                            # (cc-fail: `__gg_Wrapper__int64_t has no member
+                            # int64_t__Value_0`). The mono'd case needs no
+                            # qualification anyway: `ret_type = ctx.expected_type`
+                            # already pins the mono slot type, and the LIR mints the
+                            # mono layout from the bare variant name correctly. So
+                            # the qualification is scoped to the genuine cross-enum
+                            # bare-name collision (`RxNode`/`ParseError`), which is
+                            # exactly the non-generic case.
+                            if not call_name.contains("__") and not et_name.contains("__"):
+                                call_name = et_name + "__" + fname
                             break
         if ret_type == I64_TYPE and gmod.fn_sigs.contains(call_name):
             ret_type = gmod.fn_sigs.get(call_name).unwrap()

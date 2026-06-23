@@ -4650,6 +4650,22 @@ LirModule lower_gir_to_lir(GirModule &gmod):
             # CoW for-element BORROW scan (no GirEnumVariantInfo__clone): reads
             # v_v.name only; enumerate() preserves the variant tag vi_v.
             for (vi_v, v_v) in tinfo_v.variants.enumerate():
+                # BARE-name keys (`Empty` → `RxNode`). LAST-WRITE-WINS (plain
+                # `.put`), the PRE-EXISTING behavior — deliberately UNCHANGED.
+                # The template-vs-mono resolution depends on it: both `Wrapper`
+                # (the generic template) and `Wrapper__int64_t` (its mono) define
+                # the variant `Value`; the mono is iterated/registered such that
+                # the bare `Value` resolves to the layout the C-emit must mint.
+                # A first-write-wins guard here flips that and mis-mints the
+                # template struct into a mono slot (cc-fail: `__gg_Wrapper` into
+                # `__gg_Wrapper__int64_t`). The CROSS-ENUM collision
+                # (`RxNode.Empty`/`ParseError.Empty`) is handled NOT by touching
+                # this bare map but by the QUALIFIED keys below + the GIR-side
+                # qualification of the bare ctor name (`lower_expr.gg`,
+                # non-generic parent only). Mirrors Rust gg: the name-keyed map is
+                # a last-mile convenience for already-disambiguated names, the
+                # qualified / receiver-driven path is the collision arbiter
+                # (src/loader.rs:907-940, methods.rs:281-296).
                 m.enum_variant_parent.put(v_v.name, tname_v)
                 # The variant's ordinal position in the source enum declaration
                 # IS its runtime tag. The codegen's struct-field-scan heuristic
@@ -4657,6 +4673,16 @@ LirModule lower_gir_to_lir(GirModule &gmod):
                 # unit variants contribute no payload fields. Record the right
                 # tag here so callers can look it up.
                 m.enum_variant_tag.put(v_v.name, vi_v)
+                # QUALIFIED keys (`RxNode__Empty` → `RxNode`, tag 0). Always
+                # unambiguous — a qualified ctor name (`EnumName.Variant()`, or a
+                # bare ctor the GIR disambiguated via the expected type) carries
+                # its own parent, so it must NOT route through the collision-prone
+                # bare map. The C-emit (`lir_codegen.gg` enum-variant ctor path)
+                # reads these directly when `name.contains("__")`. Additive — does
+                # NOT alter any existing bare-key lookup.
+                String qual_key = tname_v + "__" + v_v.name
+                m.enum_variant_parent.put(qual_key, tname_v)
+                m.enum_variant_tag.put(qual_key, vi_v)
 
     # Register builtin structs
     register_builtin_structs(&m, &sr)
