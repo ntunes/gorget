@@ -1064,8 +1064,10 @@ pub(super) fn lower_call(
             }
         }
 
-        // Check if this is an enum variant constructor
-        if let Some((enum_name, variant_name)) = ctx.resolve_enum_variant(&effective_name) {
+        // Check if this is an enum variant constructor.
+        // SSOT: honour the typechecker-determined expected type to disambiguate
+        // same-named variants across enums (e.g. Type.TArray vs CRuntimeType.TArray).
+        if let Some((enum_name, variant_name)) = ctx.resolve_enum_variant_typed(&effective_name, ctx.func_state.expected_type) {
             let arg_spans: Vec<Option<crate::span::Span>> = args.iter()
                 .map(|a| Some(a.node.value.span))
                 .collect();
@@ -1106,8 +1108,9 @@ pub(super) fn lower_call(
             let dst = ctx.emit_enum_init_owned(builder, &enum_name, &variant_name, type_id, field_operands, Some(arg_spans));
             return FunctionBuilder::copy(dst);
         }
-        // Also check base name for non-generic enum variants
-        if let Some((enum_name, variant_name)) = ctx.resolve_enum_variant(name) {
+        // Also check base name for non-generic enum variants.
+        // SSOT: type-aware to disambiguate same-named variants across enums.
+        if let Some((enum_name, variant_name)) = ctx.resolve_enum_variant_typed(name, ctx.func_state.expected_type) {
             let arg_spans: Vec<Option<crate::span::Span>> = args.iter()
                 .map(|a| Some(a.node.value.span))
                 .collect();

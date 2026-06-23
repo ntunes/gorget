@@ -830,6 +830,158 @@ fn throws_result_synthesis_single_source() {
     );
 }
 
+/// Ratchet (Core #4 "one fix, all siblings" / devbook-24 rules 2+4 — type-aware
+/// enum-variant resolution at the GIR producer). `LoweringContext::enum_variants`
+/// is a flat `variant_name -> (enum, variant)` map populated LAST-WRITE-WINS, so
+/// reading it by BARE NAME to resolve a constructor's IDENTITY mis-picks the enum
+/// when two in-scope enums share a variant name (the `CRuntimeType.TArray` vs
+/// `Type.TArray` collision → wrong struct-id → `field index N out of range`).
+/// The SSOT fix routes every CONSTRUCTOR-identity read through
+/// `resolve_enum_variant_typed(name, expected_type)`, which prefers the
+/// typechecker-determined expected enum and only falls back to the flat map when
+/// it doesn't disambiguate.
+///
+/// This lint pins the read sites so a new BARE identity-resolution site can't be
+/// added without going through the typed helper. It counts two markers across
+/// `src/ir/lowering/`:
+///   - `.resolve_enum_variant(` calls (the public bare accessor), and
+///   - direct `enum_variants.get(` field reads.
+///
+/// Both are pinned to an ALLOWLIST of known-safe sites:
+///   `.resolve_enum_variant(` — total 9, all non-identity-ctor:
+///     * `context.rs` ×1 — the typed helper's OWN fallback (`self.resolve_enum_variant(name)`).
+///     * `stmts/patterns.rs` ×6 — the match/pattern side, already type-aware
+///       (prefers `type_name(scrut_type)`; the flat map is only its `.or_else` tail).
+///     * `exprs/methods.rs` ×2 and `exprs/mod.rs` ×1 — `.is_some()` MEMBERSHIP
+///       tests (existence, not identity → collision-safe).
+///   `enum_variants.get(` — total 3:
+///     * `context.rs` ×2 — the canonical accessor body + `infer_type_from_expr`'s
+///       `Expr::Call` arm (returns a type_id for type-INFERENCE, not a ctor tuple
+///       → a real same-class sibling, deferred + NAMED; lower-risk).
+///     * `closures.rs` ×1 — closure return-type inference (also a type_id, not a
+///       ctor tuple → deferred + NAMED).
+///
+/// **If this fails because the count GREW:** you added a bare enum-variant
+/// IDENTITY read. If it constructs a variant, route it through
+/// `resolve_enum_variant_typed` with the `expected_type` in hand (devbook-24
+/// rules 2+4 — resolve once, write through the typed metadata) instead of the
+/// flat last-write-wins map, then re-balance the per-file budget below. If it's a
+/// genuine `.is_some()` membership test or a deferred inference read, add it to
+/// the allowlist comment AND bump the matching per-file budget so the next site
+/// is still forced to justify itself. **If it SHRANK** (a deferred inference site
+/// finally got its own expected-type write-through, or a `.is_some()` test was
+/// removed), lower the budget to lock the new floor.
+#[test]
+fn enum_variant_resolution_typed_ssot() {
+    // Per-file budgets for the BARE `.resolve_enum_variant(` accessor. The typed
+    // helper `.resolve_enum_variant_typed(` is NOT counted (it IS the fix). The
+    // `fn resolve_enum_variant(` / `fn resolve_enum_variant_typed(` DEFINITION
+    // lines are excluded by anchoring on the leading `.` (method-call form).
+    let bare_call_budget: &[(&str, usize)] = &[
+        ("src/ir/lowering/context.rs", 1),       // typed helper's own fallback
+        ("src/ir/lowering/stmts/patterns.rs", 6), // already type-aware match side
+        ("src/ir/lowering/exprs/methods.rs", 2),  // `.is_some()` membership
+        ("src/ir/lowering/exprs/mod.rs", 1),      // `.is_some()` membership
+    ];
+    // Per-file budgets for direct `enum_variants.get(` field reads.
+    let direct_get_budget: &[(&str, usize)] = &[
+        ("src/ir/lowering/context.rs", 2),  // canonical accessor + infer_type_from_expr (deferred, NAMED)
+        ("src/ir/lowering/closures.rs", 1), // closure return-type inference (deferred, NAMED)
+    ];
+
+    fn count_marker(file: &str, marker: &str) -> usize {
+        let content = fs::read_to_string(file).unwrap_or_default();
+        let mut n = 0usize;
+        for line in content.lines() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") || trimmed.starts_with("///") {
+                continue;
+            }
+            n += line.matches(marker).count();
+        }
+        n
+    }
+
+    for &(file, expected) in bare_call_budget {
+        let got = count_marker(file, ".resolve_enum_variant(");
+        assert_eq!(
+            got, expected,
+            "Bare `.resolve_enum_variant(` count in `{file}` changed: {got} vs \
+             allowlisted {expected}.\n\n\
+             `enum_variants` is a flat last-write-wins `variant_name -> enum` map; \
+             reading it by bare name to resolve a CONSTRUCTOR's identity mis-picks \
+             the enum when two in-scope enums share a variant name. Route any new \
+             constructor read through `resolve_enum_variant_typed(name, \
+             ctx.func_state.expected_type)` (devbook-24 rules 2+4). If the new site \
+             is a `.is_some()` membership test or the helper's own fallback, add it \
+             to the allowlist comment above and bump this file's budget.",
+        );
+    }
+    for &(file, expected) in direct_get_budget {
+        let got = count_marker(file, "enum_variants.get(");
+        assert_eq!(
+            got, expected,
+            "Direct `enum_variants.get(` count in `{file}` changed: {got} vs \
+             allowlisted {expected}.\n\n\
+             A new direct read of the flat variant map was added. If it resolves a \
+             CONSTRUCTOR's identity, route it through `resolve_enum_variant_typed`. \
+             The two allowlisted reads (`context.rs` infer_type_from_expr, \
+             `closures.rs` return-type inference) return a type_id for INFERENCE, \
+             not a ctor tuple — they are deferred same-class siblings (NAMED in the \
+             allowlist) and still want an expected-type write-through eventually. \
+             Add a justification to the allowlist comment and bump the budget.",
+        );
+    }
+
+    // Guard against a NEW file under `src/ir/lowering/` sneaking in either marker
+    // outside the per-file allowlists above — the budgets are keyed by file, so a
+    // bare read in an UN-listed file would otherwise be invisible.
+    let allowlisted: std::collections::HashSet<&str> = bare_call_budget
+        .iter()
+        .map(|&(f, _)| f)
+        .chain(direct_get_budget.iter().map(|&(f, _)| f))
+        .collect();
+    let mut stray = Vec::new();
+    visit_rs_files(Path::new("src/ir/lowering"), &mut |path| {
+        let p = path.to_str().unwrap_or_default();
+        // Normalise the leading `./` away if present.
+        let norm = p.trim_start_matches("./");
+        if allowlisted.contains(norm) {
+            return;
+        }
+        let bare = count_marker(norm, ".resolve_enum_variant(");
+        let get = count_marker(norm, "enum_variants.get(");
+        if bare + get > 0 {
+            stray.push(format!("{norm}: .resolve_enum_variant(={bare}, enum_variants.get(={get}"));
+        }
+    });
+    assert!(
+        stray.is_empty(),
+        "New bare enum-variant resolution read(s) appeared in un-allowlisted \
+         file(s) under src/ir/lowering/:\n  {}\n\n\
+         Route constructor reads through `resolve_enum_variant_typed`; if it's a \
+         membership/inference site, add the file to the allowlist in \
+         `enum_variant_resolution_typed_ssot`.",
+        stray.join("\n  "),
+    );
+}
+
+/// Recursively visit every `*.rs` file under `dir`, calling `f` with each path.
+fn visit_rs_files(dir: &Path, f: &mut dyn FnMut(&Path)) {
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            visit_rs_files(&path, f);
+        } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+            f(&path);
+        }
+    }
+}
+
 /// Ratchet: the comprehension dispatch in the SELF-HOST `lower_expr_inner`
 /// (`tests/fixtures/self_host_lowerer/lower_expr.gg`) is a 3-arm enumerated
 /// class — `EListComp` / `ESetComp` / `EDictComp`. Each routes through the

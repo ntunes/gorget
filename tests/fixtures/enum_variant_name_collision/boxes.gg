@@ -1,0 +1,15 @@
+# Module B: declares a DIFFERENT enum that ALSO has a `Tagged` variant, but with
+# TWO int fields (a different struct-id / layout than `Shape.Tagged`). If this
+# module loads last, the flat variant map points `Tagged` here, so a bare
+# `Tagged(int)` construction in `main.gg` would mis-resolve to `Container` and
+# write field index 1 into a struct that only has field 0 -> miscompile.
+enum Container:
+    Tagged(int, int)
+    Empty()
+
+int container_sum(Container c):
+    match c:
+        case Container.Tagged(a, b):
+            return a + b
+        case Container.Empty():
+            return 0

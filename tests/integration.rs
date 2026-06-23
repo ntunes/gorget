@@ -2225,6 +2225,22 @@ fn modules_enum() {
     run_gg_dir("modules_enum", "main.gg", "red");
 }
 
+// Regression net for the GIR EnumInit struct-id collision: two imported enums
+// (`Container` from `boxes`, `Shape` from `shapes`) each declare a field-carrying
+// variant named `Tagged` with DIFFERENT field shapes. `shapes` is imported last,
+// so the flat last-write-wins `variant_name -> enum` map points bare `Tagged` at
+// `Shape.Tagged` (one field); the fixture then constructs `Container.Tagged`
+// (two fields) BARE in expected-type position. On a buggy compiler the bare
+// construction mis-resolved to `Shape.Tagged` and wrote field index 2 into a
+// 1-field struct -> `field index 2 out of range` LIR panic. The type-aware
+// `resolve_enum_variant_typed` (devbook/24 rules 2+4) resolves the variant from
+// the expected type instead of the colliding flat map. Baseline gorget-1 gg
+// PANICS here; the fix builds+runs `34\n7` on both C and LLVM backends.
+#[test]
+fn enum_variant_name_collision() {
+    run_gg_dir("enum_variant_name_collision", "main.gg", "34\n7");
+}
+
 #[test]
 fn modules_struct_return() {
     run_gg_dir("modules_struct_return", "main.gg", "0\n0");

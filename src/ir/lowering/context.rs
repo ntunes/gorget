@@ -1654,8 +1654,60 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Resolve an identifier to an enum variant: returns (enum_type_name, variant_name).
+    ///
+    /// This is the colliding read site: `enum_variants` is a flat
+    /// `variant_name -> (enum, variant)` map populated last-write-wins, so when
+    /// two enums declare the same variant name (e.g. `Type.TArray` from `ast.gg`
+    /// and `CRuntimeType.TArray` from `compiler/data/schema.gg`) the second
+    /// registration shadows the first and every `TArray(...)` constructor
+    /// resolves to the wrong enum — regardless of the expected type the
+    /// typechecker already determined. Prefer `resolve_enum_variant_typed` at
+    /// any constructor call site that has an `expected_type` in hand.
     pub fn resolve_enum_variant(&self, name: &str) -> Option<(String, String)> {
         self.enum_variants.get(name).cloned()
+    }
+
+    /// Type-aware variant resolution (SSOT — devbook/24 rules 2+4): when
+    /// `expected_type` is an enum that *declares* a variant named `name`, return
+    /// THAT enum's `(name, variant)` pair, bypassing the last-write-wins
+    /// `enum_variants` collision. The typechecker already resolved the
+    /// constructor's type into `func_state.expected_type`; honouring it here
+    /// means the GIR `EnumInit` carries the correct enum name (and the LIR
+    /// struct-id derived from it is correct), instead of a name reconstructed
+    /// from a colliding flat map.
+    ///
+    /// Stricter than the pattern/match side (`stmts/patterns.rs`): it gates on
+    /// actual variant membership before preferring the expected type, then falls
+    /// back to the flat map only when the expected type does not disambiguate
+    /// (no expected type, not an enum, or it does not own this variant).
+    pub fn resolve_enum_variant_typed(
+        &self,
+        name: &str,
+        expected_type: Option<TypeId>,
+    ) -> Option<(String, String)> {
+        if let Some(et) = expected_type {
+            // Deref Ptr/MutPtr like the pattern side does, so an expected
+            // `&Enum` / `!Enum` still disambiguates.
+            let et = match self.type_registry.get(et) {
+                Some(GirType::Ptr(i) | GirType::MutPtr(i)) => *i,
+                _ => et,
+            };
+            if let Some(enum_name) = self.type_registry.type_name(et) {
+                // Confirm THIS enum actually declares `name` before preferring it.
+                let declares = self
+                    .type_registry
+                    .get_type_def(&enum_name)
+                    .and_then(|td| match &td.kind {
+                        TypeDefKind::Enum(ed) => Some(ed),
+                        _ => None,
+                    })
+                    .is_some_and(|ed| ed.variants.iter().any(|v| v.name == name));
+                if declares {
+                    return Some((enum_name, name.to_string()));
+                }
+            }
+        }
+        self.resolve_enum_variant(name)
     }
 
     /// Register a pointer type and return its TypeId.

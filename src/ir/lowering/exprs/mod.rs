@@ -176,8 +176,9 @@ fn lower_expr_inner(
             } else if ctx.fn_sigs.contains_key(name.as_str()) {
                 // Named function reference (for passing as Callable argument)
                 Operand::Constant(Constant::FuncRef(name.clone()))
-            } else if let Some((enum_name, variant_name)) = ctx.resolve_enum_variant(name) {
-                // Bare nullary enum variant (e.g., `Red` after glob import)
+            } else if let Some((enum_name, variant_name)) = ctx.resolve_enum_variant_typed(name, ctx.func_state.expected_type) {
+                // Bare nullary enum variant (e.g., `Red` after glob import).
+                // SSOT: type-aware to disambiguate same-named variants across enums.
                 let type_id = ctx.type_mapper.lookup_named(&enum_name).unwrap_or(UNIT_TYPE);
                 let dst = builder.enum_init(&enum_name, &variant_name, type_id, vec![]);
                 FunctionBuilder::copy(dst)
@@ -969,9 +970,10 @@ fn lower_expr_inner(
                     }
                 }
             }
-            // Single-segment path — try as enum variant (prelude: None, Some, Ok, Error)
+            // Single-segment path — try as enum variant (prelude: None, Some, Ok, Error).
+            // SSOT: type-aware to disambiguate same-named variants across enums.
             if let Some(last) = segments.last() {
-                if let Some((enum_name, variant_name)) = ctx.resolve_enum_variant(&last.node) {
+                if let Some((enum_name, variant_name)) = ctx.resolve_enum_variant_typed(&last.node, ctx.func_state.expected_type) {
                     let type_id = ctx.type_mapper.lookup_named(&enum_name).unwrap_or(UNIT_TYPE);
                     let dst = builder.enum_init(&enum_name, &variant_name, type_id, vec![]);
                     return FunctionBuilder::copy(dst);
@@ -1492,8 +1494,12 @@ fn lower_expr_inner(
                 }
             }
 
-            // 2. Fallback: variant map (for user-defined non-generic enums)
-            if let Some((enum_name, vn)) = ctx.resolve_enum_variant(&variant_name) {
+            // 2. Fallback: variant map (for user-defined non-generic enums).
+            // SSOT: route through the type-aware helper for consistency with the
+            // other bare ctor sites — the membership-gated expected_type check at
+            // (1) already fired, so this re-fails it and falls to the flat map
+            // (harmless no-op here, but keeps every bare ctor read on one accessor).
+            if let Some((enum_name, vn)) = ctx.resolve_enum_variant_typed(&variant_name, ctx.func_state.expected_type) {
                 let type_id = ctx.type_mapper.lookup_named(&enum_name).unwrap_or(UNIT_TYPE);
                 let dst = ctx.emit_enum_init_owned(builder, &enum_name, &vn, type_id, lowered_args, Some(arg_spans));
                 return FunctionBuilder::copy(dst);
@@ -1873,8 +1879,10 @@ fn lower_struct_literal(
         return result;
     }
 
-    // Check if this is an enum variant constructor
-    if let Some((enum_name, variant_name)) = ctx.resolve_enum_variant(&effective_name) {
+    // Check if this is an enum variant constructor.
+    // SSOT: honour the typechecker-determined expected type to disambiguate
+    // same-named variants across enums (e.g. Type.TArray vs CRuntimeType.TArray).
+    if let Some((enum_name, variant_name)) = ctx.resolve_enum_variant_typed(&effective_name, ctx.func_state.expected_type) {
         let arg_spans: Vec<Option<crate::span::Span>> = args.iter()
             .map(|arg| Some(arg.span))
             .collect();
@@ -1910,8 +1918,9 @@ fn lower_struct_literal(
         let dst = ctx.emit_enum_init_owned(builder, &enum_name, &variant_name, type_id, field_operands, Some(arg_spans));
         return FunctionBuilder::copy(dst);
     }
-    // Also check the base name for non-generic enum variants
-    if let Some((enum_name, variant_name)) = ctx.resolve_enum_variant(name) {
+    // Also check the base name for non-generic enum variants.
+    // SSOT: type-aware to disambiguate same-named variants across enums.
+    if let Some((enum_name, variant_name)) = ctx.resolve_enum_variant_typed(name, ctx.func_state.expected_type) {
         let arg_spans: Vec<Option<crate::span::Span>> = args.iter()
             .map(|arg| Some(arg.span))
             .collect();

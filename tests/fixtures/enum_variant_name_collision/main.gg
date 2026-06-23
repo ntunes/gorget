@@ -1,0 +1,26 @@
+# Regression net for the EnumInit struct-id collision (GIR-lowering flat
+# `variant_name -> enum` last-write-wins map). Two imported enums each declare a
+# field-carrying variant named `Tagged` with DIFFERENT field shapes:
+#   - boxes.Container.Tagged(int, int)   (two payload fields)
+#   - shapes.Shape.Tagged(int)           (one payload field)
+# `shapes` is imported LAST, so the flat map points bare `Tagged` at
+# `Shape.Tagged` (one field). We then construct `Container.Tagged` BARE, in
+# expected-type position (`Container c = Tagged(30, 4)`). On a buggy compiler the
+# bare construction mis-resolves to `Shape.Tagged` and writes field index 2 into
+# a struct that only has field 0 -> `field index 2 out of range` LIR panic.
+# The fix resolves the variant from the expected type (`Container`), not the
+# colliding flat map, so the construction is correct.
+from boxes import Container, Tagged, Empty
+from shapes import Shape
+
+void main():
+    # Bare `Tagged(30, 4)` in expected-type position (`Container`, two fields).
+    # The flat map points `Tagged` at Shape (imported last); only the typed
+    # resolver picks Container here. Sum = 34.
+    Container c = Tagged(30, 4)
+    print(f"{container_sum(c)}")
+
+    # Qualified construction of the other enum's same-named variant, to prove
+    # both layouts still build correctly side by side. shape_value = 7.
+    Shape s = Shape.Tagged(7)
+    print(f"{shape_value(s)}")

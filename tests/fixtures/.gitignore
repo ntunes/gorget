@@ -17,6 +17,10 @@
 !mutarg_import_probe/*.gg
 !stack_guard_concat_chain/
 !stack_guard_concat_chain/*.gg
+# Multi-module regression net for the GIR EnumInit struct-id collision
+# (type-aware enum-variant resolution); keep only the .gg sources.
+!enum_variant_name_collision/
+!enum_variant_name_collision/*.gg
 # Parse-time expr-depth-limit fixtures (B-rust): long flat `1 + 1 + ... + 1`
 # chains kept in subdirs so the corpus-wide `fmt_idempotent` test (top-level
 # tests/fixtures/*.gg only) doesn't reflow them (`gg fmt` corrupts long chains).

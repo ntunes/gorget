@@ -1,0 +1,15 @@
+# Module A: declares an enum whose field-carrying variant shares its NAME with a
+# variant in module B's enum (see `boxes.gg`), but with a DIFFERENT field shape
+# (one int field). The GIR producer's flat `variant_name -> enum` map is
+# last-write-wins, so a BARE `Tagged(...)` construction must be disambiguated by
+# the expected type — otherwise it binds to the wrong enum's struct-id.
+enum Shape:
+    Tagged(int)
+    Empty()
+
+int shape_value(Shape s):
+    match s:
+        case Shape.Tagged(v):
+            return v
+        case Shape.Empty():
+            return -1
