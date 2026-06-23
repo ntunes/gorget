@@ -59,6 +59,8 @@ bool is_builtin(String name):
         return true
     if name == "format":
         return true
+    if name == "panic":
+        return true
     if name == "len":
         return true
     if name == "type":
@@ -276,8 +278,19 @@ void collect_import(ImportStmt imp, ScopeTable &scopes):
         else:
             scopes.define(path, DkImport(), Span(0, 0))
         return
-    for name in imp.names:
-        scopes.define(name, DkImport(), Span(0, 0))
+    # Register each imported name under its LOCALLY-VISIBLE spelling: the
+    # `as`-alias when present (`from X import sin as msin` → register `msin`),
+    # else the bare name. Mirrors Rust's rebind_alias (resolve.rs:234-241):
+    # the alias is what later identifier lookups must resolve.
+    int ni = 0
+    while ni < imp.names.len():
+        String local_name = imp.names.get(ni).unwrap()
+        if ni < imp.aliases.len():
+            String alias = imp.aliases.get(ni).unwrap()
+            if alias != "":
+                local_name = alias
+        scopes.define(local_name, DkImport(), Span(0, 0))
+        ni += 1
 
 # ═══════════════════════════════════════════════════════════
 # Pass 2: resolve_bodies
@@ -605,9 +618,37 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
             resolve_expr(*operand, &scopes, &ctx)
 
         case ECall(callee, args, _, _):
-            resolve_expr(*callee, &scopes, &ctx)
-            for arg in args:
-                resolve_expr(arg, &scopes, &ctx)
+            # field_value(obj, fname) / field_set(obj, fname, value) /
+            # make_variant(T, "Variant") are compile-time rewrite builtins. The
+            # callee is not a real function and the field-name / type-name arg is
+            # a meta-loop variable or string literal — NOT a runtime identifier.
+            # Resolve only the genuine value args (skip the callee + the meta arg)
+            # to avoid spurious "undefined name" errors; the actual rewrite happens
+            # during meta substitution. Mirrors Rust resolve.rs:1545-1570 (the
+            # known-compiler-callee carve-out — the one name-match the resolver
+            # legitimately needs at the ECall site).
+            bool reflection_handled = false
+            match (*callee).expr:
+                case EIdentifier(cname):
+                    if cname == "field_value" and args.len() == 2:
+                        # Resolve only arg0 (the object expression).
+                        resolve_expr(args.get(0).unwrap(), &scopes, &ctx)
+                        reflection_handled = true
+                    elif cname == "field_set" and args.len() == 3:
+                        # Resolve arg0 (object) and arg2 (value); skip arg1 (field name).
+                        resolve_expr(args.get(0).unwrap(), &scopes, &ctx)
+                        resolve_expr(args.get(2).unwrap(), &scopes, &ctx)
+                        reflection_handled = true
+                    elif cname == "make_variant" and args.len() == 2:
+                        # arg0 is a type name, arg1 a string literal — neither
+                        # is a runtime value identifier. Resolve nothing.
+                        reflection_handled = true
+                else:
+                    pass
+            if not reflection_handled:
+                resolve_expr(*callee, &scopes, &ctx)
+                for arg in args:
+                    resolve_expr(arg, &scopes, &ctx)
 
         case EMethodCall(receiver, _, args, _, _):
             resolve_expr(*receiver, &scopes, &ctx)

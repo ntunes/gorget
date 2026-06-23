@@ -3942,6 +3942,7 @@ equip Parser:
         int start = self.peek().lex_start
         String module_path = ""
         Vector[String] names = Vector[String]()
+        Vector[String] aliases = Vector[String]()
 
         if self.check_kw(KW_FROM):
             self.advance()
@@ -3971,14 +3972,18 @@ equip Parser:
                             pass
                 module_path = module_path + "." + seg
             self.expect_kw(KW_IMPORT, "expected 'import' after from path")
-            # Parse names (identifiers or keywords used as names like Box, Rc, Arc)
+            # Parse names (identifiers or keywords used as names like Box, Rc, Arc),
+            # each optionally followed by `as <alias>`. `aliases` is parallel to
+            # `names`: "" means imported bare, else the local alias.
             SpannedToken n1 = self.advance()
             String n1_name = self.extract_name(n1)
             names.push(n1_name)
+            aliases.push(self.parse_import_alias())
             while self.match_tok(TOK_COMMA):
                 SpannedToken n2 = self.advance()
                 String n2_name = self.extract_name(n2)
                 names.push(n2_name)
+                aliases.push(self.parse_import_alias())
         elif self.check_kw(KW_IMPORT):
             self.advance()
             SpannedToken first = self.advance()
@@ -3987,7 +3992,16 @@ equip Parser:
                 SpannedToken next = self.advance()
                 module_path = module_path + "." + token_ident(next.lex_token)
 
-        return IImport(ImportStmt(module_path, names))
+        return IImport(ImportStmt(module_path, names, aliases))
+
+    # Consume an optional `as <alias>` after an imported name. Returns the
+    # alias ("" when absent). Mirrors Rust's import-alias parse.
+    String parse_import_alias(&self):
+        if self.check_kw(KW_AS):
+            self.advance()
+            SpannedToken alias_tok = self.advance()
+            return self.extract_name(alias_tok)
+        return ""
 
     Item parse_directive_item(&self):
         self.expect_kw(KW_DIRECTIVE, "expected 'directive'")

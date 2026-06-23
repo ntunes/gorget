@@ -5,7 +5,7 @@ from types import TypeTable
 from resolve import resolve_module, ResolveContext
 from typecheck import type_check_module
 from derive import expand_derives
-from meta import expand_meta_types, expand_meta_for_match
+from meta import expand_meta_types, expand_meta_for_match, rename_import_aliases
 from lower import lower_module, apply_collect_target_rewrites
 from loader import load_imports
 from gir import GirModule
@@ -397,6 +397,11 @@ void compile_main():
     # `expand_meta_for_match(&m)`); the rewritten `m` then flows into both
     # typecheck and lower_module.
     apply_collect_target_rewrites(&m)
+    # Rebind aliased imports (`from X import Y as Z`) back to surface names so
+    # the IR backend's `map_runtime_name` lowers `Z(...)` calls to the real C
+    # symbol of `Y`. Mirrors Rust gg's `rewrite_import_aliases` (after resolve,
+    # before lowering — src/semantic/mod.rs:248).
+    rename_import_aliases(&m)
     type_check_module(m, &scopes, &types, &ctx)
     _t1 = time_ms()
     if _timing: print("PHASE type_check " + int_to_str(_t1 - _tp) + " ms", file=stderr)
@@ -642,6 +647,11 @@ void run_build_mode(Vector[String] cmd_args, bool do_run):
     expand_meta_for_match(&m)
     ResolveContext ctx = resolve_module(m, &scopes, &types)
     apply_collect_target_rewrites(&m)
+    # Rebind aliased imports (`from X import Y as Z`) back to surface names so
+    # the IR backend's `map_runtime_name` lowers `Z(...)` calls to the real C
+    # symbol of `Y`. Mirrors Rust gg's `rewrite_import_aliases` (after resolve,
+    # before lowering — src/semantic/mod.rs:248).
+    rename_import_aliases(&m)
     type_check_module(m, &scopes, &types, &ctx)
     if has_errors(ctx.diagnostics):
         report_diagnostics(ctx.diagnostics, source, input_path)
@@ -770,6 +780,11 @@ void run_check_mode(Vector[String] cmd_args):
     expand_meta_for_match(&m)
     ResolveContext ctx = resolve_module(m, &scopes, &types)
     apply_collect_target_rewrites(&m)
+    # Rebind aliased imports (`from X import Y as Z`) back to surface names so
+    # the IR backend's `map_runtime_name` lowers `Z(...)` calls to the real C
+    # symbol of `Y`. Mirrors Rust gg's `rewrite_import_aliases` (after resolve,
+    # before lowering — src/semantic/mod.rs:248).
+    rename_import_aliases(&m)
     type_check_module(m, &scopes, &types, &ctx)
     if has_errors(ctx.diagnostics):
         report_diagnostics(ctx.diagnostics, source, input_path)

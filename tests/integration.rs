@@ -4655,6 +4655,51 @@ fn import_alias() {
 3");
 }
 
+// Aliasing a TYPE on import (`from std.datetime import DateTime as DT`) and
+// using the alias in TYPE positions (field / param / return / local-decl).
+// Exercises the TYPE axis of the aliased-import rewrite — the IR backend looks
+// types up by surface name, so the local alias must be renamed back to the
+// original everywhere it appears as a type. Without the type-axis rename the
+// self-host emits C that still spells `DT` as the type (cc error / wrong
+// output); with it, the renamed C builds and runs deterministically.
+#[test]
+fn import_type_alias() {
+    run_gg("import_type_alias.gg", "\
+2001
+1");
+}
+
+// Aliased type used in a NESTED type position (`Vector[DT]`, a generic arg).
+// Both Rust `gg` and the SELF-HOST handle this (output `2000`): the type-axis
+// rewrite's `TNamed`-generic-args recursion is restored in
+// `self_host_typechecker/meta.gg::rename_aliases_type` (mirrors Rust
+// `rewrite.rs:464`). That arm reconstructs only a `Vector[SpannedType]`, so it
+// does NOT trip the Rust-`gg` BIR struct-id collision that the `Box`-wrapping
+// arms (`TArray`/`TSlice`/`TFunction`) still hit — see `import_type_alias_box`.
+#[test]
+fn import_type_alias_nested() {
+    run_gg("import_type_alias_nested.gg", "2000");
+}
+
+// Aliased type used inside a `Box`-WRAPPING container — a function type
+// `Callable[DT(int)]` (the `TFunction` arm of the type-axis rewrite, which
+// reconstructs a `Box[SpannedType]` for its inner `Type`). Rust `gg` handles
+// it (output `2000`); the SELF-HOST defers the `TFunction`/`TArray`/`TSlice`
+// recursion because restoring it trips a Rust-`gg` BIR struct-id collision
+// (`field index N out of range for CRuntimeType`) when a self-recursive fn
+// reconstructs a `Box`-wrapped `Type` value in a large multi-module build —
+// pressure-dependent, does NOT repro standalone. #[ignore]d until the BIR bug
+// is fixed and the arms are restored in
+// `self_host_typechecker/meta.gg::rename_aliases_type`. The `TNamed`-args arm
+// is already restored (see `import_type_alias_nested`). The expected output is
+// the CORRECT language behavior (per "Don't redesign around compiler gaps":
+// the wired-in output reflects what the language SHOULD do, not the gap).
+#[test]
+#[ignore = "self-host type-axis Box-wrapping recursion deferred: Rust-gg BIR EnumInit struct-id collision (CRuntimeType) on self-recursive Box-wrapped Type-enum reconstruct in large modules"]
+fn import_type_alias_box() {
+    run_gg("import_type_alias_box.gg", "2000");
+}
+
 #[test]
 fn import_wildcard() {
     run_gg("import_wildcard.gg", "\

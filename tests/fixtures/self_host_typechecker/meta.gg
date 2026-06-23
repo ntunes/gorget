@@ -3,9 +3,12 @@
 # the type checker can resolve types like `Num` (alias for `int`).
 
 from ast import Module, Item, IMetaConst, IMetaType, IMetaTypeFunc, IFunction, IEquip
-from ast import IMetaIf, ItemElseBranch
+from ast import IMetaIf, ItemElseBranch, IImport, ITrait, ImportStmt, TraitDef
+from ast import IStruct, IEnum, IConstDecl, IStaticDecl, ITypeAlias, INewtype
+from ast import IExternBlock, ITest, IBench, ISuiteSetup, ISuiteTeardown, StructDef
 from ast import MetaTypeRhs, MtrPlain, MtrConditional, MtrCall, MtrUnresolved
 from ast import SpannedType, Type, TPrimitive, TNamed, TInferred, SpannedExpr, Expr, Span, Param
+from ast import EStructLiteral, EAs
 from ast import EIntLiteral, EFloatLiteral, EBoolLiteral, EStringLiteral
 from ast import EIdentifier, EBinaryOp, EUnaryOp, ECall
 from ast import EMethodCall, EFieldAccess, EIndex, EFString, EArrayLiteral
@@ -568,6 +571,364 @@ void substitute_meta_consts(Module &m, Dict[String, int] &iv, Dict[String, bool]
                     nm.push(FunctionDef(meth.name, meth.params, meth.return_type, meth.type_params, subst_stmts(meth.body, &iv, &bv, &sv), meth.is_expr_body, meth.throws_type, meth.is_extern_stub))
                     mi = mi + 1
                 m.items.set(i, IEquip(EquipBlock(eqblk.target, eqblk.type_params, eqblk.trait_name, nm, eqblk.via_field, eqblk.trait_generic_args)))
+            else:
+                pass
+        i = i + 1
+
+# ── Aliased-import rename (Rust's rewrite_import_aliases Pass-1.5) ──
+#
+# `from std.math import sin as msin, cos as mcos` makes `msin`/`mcos` the
+# LOCALLY-visible names, but the IR backend lowers calls by SURFACE name —
+# `map_runtime_name` maps `sin`→`gorget_sin`, and `msin` would map to itself
+# (undefined reference). Mirrors Rust gg's `rewrite_import_aliases`
+# (src/semantic/rewrite.rs:42-124, wired at src/semantic/mod.rs:248 after
+# resolve, before lowering): a pure-AST walk that renames every `alias`
+# identifier back to its `original` so the call site spells `sin` before
+# `map_runtime_name` runs. The alias→original map is recorded on
+# `ImportStmt.aliases` (parallel to `names`) by the parser's `as`-consumption.
+#
+# Identifier-axis only (the alias is always an imported VALUE/fn name here):
+# we rename `EIdentifier` and the `ECall` callee. This is the same coverage
+# `subst_expr` provides for meta-const substitution; the structural recursion
+# (the `Box(rename...)` rebuild) is the ownership-decided reconstruction
+# idiom used throughout this file.
+Dict[String, String] collect_import_aliases(Module m):
+    Dict[String, String] amap = {}
+    for item in m.items:
+        match item:
+            case IImport(imp):
+                int ni = 0
+                while ni < imp.names.len():
+                    if ni < imp.aliases.len():
+                        String alias = imp.aliases.get(ni).unwrap()
+                        if alias != "":
+                            # alias → original surface name (the C symbol driver).
+                            amap.put(alias, imp.names.get(ni).unwrap())
+                    ni += 1
+            else:
+                pass
+    return amap
+
+# ── Type-axis rename (Rust's `rename_type`, rewrite.rs:458-487) ──
+#
+# An imported TYPE can be aliased too — `from geom import Point as P`
+# then `P f(P a)`. The IR backend looks the type up by SURFACE name, so
+# the local alias `P` must be renamed back to `Point` in every type
+# position. This mirrors Rust's `rename_type` for the HEAD-name axis:
+# it renames the head name of a `TNamed` (the position an imported type
+# alias actually occupies — a param/return/field/const type that IS the
+# aliased type). `TPrimitive`/`TSelf`/`TInferred` are leaves and never
+# carry an aliasable name.
+#
+# ⚠ NESTED-TYPE RECURSION IS DEFERRED (live Rust-`gg` compiler bug; the
+# exposing artifact is the #[ignore]d `import_type_alias_nested` fixture).
+# Rust's `rename_type` ALSO recurses into container element types
+# (`Vector[P]` generic args, `[P; N]` / `[P]` element, `(P, int)` tuple
+# members, `P(int)` function params/ret).
+# Porting that recursion here trips a Rust-`gg` BIR-lowering bug: in a
+# large multi-module build (the self-host lowerer), a self-recursive fn
+# that pattern-matches on the `Type` enum AND reconstructs a `Type` value
+# containing the recursive result mis-resolves the reconstructed enum's
+# `EnumInit` struct-id to a builtin (`CRuntimeType`), tripping the LIR
+# validator (`field index N out of range for CRuntimeType`). The same
+# function compiles standalone; the collision is struct-registry-pressure
+# dependent. The head-name rename below is correct and complete for the
+# common import-type-alias case; the nested case stays a sharp TODO + an
+# #[ignore]d fixture rather than a redesign-around (per "Don't redesign
+# around compiler gaps"). When the BIR struct-id bug is fixed, restore the
+# `TArray`/`TSlice`/`TTuple`/`TNamed`-args/`TFunction` recursion arms.
+SpannedType rename_aliases_type(SpannedType st, Dict[String, String] &amap):
+    match st.ty:
+        case TNamed(name, args):
+            String nn = name
+            if amap.contains(name):
+                nn = amap[name]
+            # Recurse into each generic arg (mirrors Rust rewrite.rs:464):
+            # this reconstructs only a `Vector[SpannedType]`, NOT a
+            # `Box`-wrapped inner `Type`, so it does NOT trip the BIR
+            # struct-id collision. The `TArray`/`TSlice`/`TFunction` arms
+            # (which DO reconstruct a `Box[SpannedType]`) stay deferred.
+            Vector[SpannedType] nargs = Vector[SpannedType]()
+            int ai = 0
+            while ai < args.len():
+                nargs.push(rename_aliases_type(args.get(ai).unwrap(), &amap))
+                ai = ai + 1
+            return SpannedType(TNamed(nn, nargs), st.span)
+        else:
+            return st
+
+# Rename the aliased TYPE in a parameter (param_type) plus any aliased
+# VALUE in its default-value expression. Mirrors Rust's per-param body
+# of `rename_function` (rewrite.rs:128-133).
+Param rename_aliases_param(Param p, Dict[String, String] &amap):
+    SpannedType nt = rename_aliases_type(p.param_type, &amap)
+    Option[SpannedExpr] nd = None
+    match p.default_value:
+        case Some(d):
+            nd = Some(rename_aliases_expr(d, &amap))
+        case None:
+            nd = None
+    return Param(nt, p.param_name, p.ownership, nd)
+
+Vector[Param] rename_aliases_params(Vector[Param] params, Dict[String, String] &amap):
+    Vector[Param] out = Vector[Param]()
+    int i = 0
+    while i < params.len():
+        out.push(rename_aliases_param(params.get(i).unwrap(), &amap))
+        i = i + 1
+    return out
+
+# Rename aliased names through a whole FunctionDef: param types + default
+# exprs, return type, throws type, and the body. Mirrors Rust's
+# `rename_function` (rewrite.rs:126-142).
+FunctionDef rename_aliases_fn(FunctionDef f, Dict[String, String] &amap):
+    Vector[Param] np = rename_aliases_params(f.params, &amap)
+    SpannedType nr = rename_aliases_type(f.return_type, &amap)
+    Option[SpannedType] nt = None
+    match f.throws_type:
+        case Some(t):
+            nt = Some(rename_aliases_type(t, &amap))
+        case None:
+            nt = None
+    Vector[Stmt] nb = rename_aliases_stmts(f.body, &amap)
+    return FunctionDef(f.name, np, nr, f.type_params, nb, f.is_expr_body, nt, f.is_extern_stub)
+
+SpannedExpr rename_aliases_expr(SpannedExpr se, Dict[String, String] &amap):
+    match se.expr:
+        case EIdentifier(name):
+            if amap.contains(name):
+                return SpannedExpr(EIdentifier(amap[name]), se.span)
+            return se
+        case EBinaryOp(l, op, r):
+            return SpannedExpr(EBinaryOp(Box(rename_aliases_expr(*l, &amap)), op, Box(rename_aliases_expr(*r, &amap))), se.span)
+        case EUnaryOp(op, operand):
+            return SpannedExpr(EUnaryOp(op, Box(rename_aliases_expr(*operand, &amap))), se.span)
+        case ECall(callee, args, arg_names, targs):
+            Vector[SpannedExpr] na = Vector[SpannedExpr]()
+            int i = 0
+            while i < args.len():
+                na.push(rename_aliases_expr(args.get(i).unwrap(), &amap))
+                i = i + 1
+            Vector[SpannedType] nt = Vector[SpannedType]()
+            int ti = 0
+            while ti < targs.len():
+                nt.push(rename_aliases_type(targs.get(ti).unwrap(), &amap))
+                ti = ti + 1
+            return SpannedExpr(ECall(Box(rename_aliases_expr(*callee, &amap)), na, arg_names, nt), se.span)
+        case EMethodCall(recv, mname, args, arg_names, targs):
+            Vector[SpannedExpr] na = Vector[SpannedExpr]()
+            int i = 0
+            while i < args.len():
+                na.push(rename_aliases_expr(args.get(i).unwrap(), &amap))
+                i = i + 1
+            Vector[SpannedType] nt = Vector[SpannedType]()
+            int ti = 0
+            while ti < targs.len():
+                nt.push(rename_aliases_type(targs.get(ti).unwrap(), &amap))
+                ti = ti + 1
+            return SpannedExpr(EMethodCall(Box(rename_aliases_expr(*recv, &amap)), mname, na, arg_names, nt), se.span)
+        case EStructLiteral(name, gargs, args):
+            String nn = name
+            if amap.contains(name):
+                nn = amap[name]
+            # Generic args are carried as bare type-name strings here (not
+            # SpannedType); rename each that names an aliased type.
+            Vector[String] ng = Vector[String]()
+            int gi = 0
+            while gi < gargs.len():
+                String g = gargs.get(gi).unwrap()
+                if amap.contains(g):
+                    ng.push(amap[g])
+                else:
+                    ng.push(g)
+                gi = gi + 1
+            Vector[SpannedExpr] na = Vector[SpannedExpr]()
+            int i = 0
+            while i < args.len():
+                na.push(rename_aliases_expr(args.get(i).unwrap(), &amap))
+                i = i + 1
+            return SpannedExpr(EStructLiteral(nn, ng, na), se.span)
+        case EAs(inner, ty):
+            return SpannedExpr(EAs(Box(rename_aliases_expr(*inner, &amap)), Box(rename_aliases_type(*ty, &amap))), se.span)
+        case EFieldAccess(base, fname):
+            return SpannedExpr(EFieldAccess(Box(rename_aliases_expr(*base, &amap)), fname), se.span)
+        case EIndex(base, idx):
+            return SpannedExpr(EIndex(Box(rename_aliases_expr(*base, &amap)), Box(rename_aliases_expr(*idx, &amap))), se.span)
+        case EFString(raw, parts):
+            Vector[SpannedExpr] np = Vector[SpannedExpr]()
+            int i = 0
+            while i < parts.len():
+                np.push(rename_aliases_expr(parts.get(i).unwrap(), &amap))
+                i = i + 1
+            return SpannedExpr(EFString(raw, np), se.span)
+        case EArrayLiteral(elems):
+            Vector[SpannedExpr] ne = Vector[SpannedExpr]()
+            int i = 0
+            while i < elems.len():
+                ne.push(rename_aliases_expr(elems.get(i).unwrap(), &amap))
+                i = i + 1
+            return SpannedExpr(EArrayLiteral(ne), se.span)
+        else:
+            return se
+
+Vector[Stmt] rename_aliases_stmts(Vector[Stmt] stmts, Dict[String, String] &amap):
+    Vector[Stmt] out = Vector[Stmt]()
+    int i = 0
+    while i < stmts.len():
+        Stmt s = stmts.get(i).unwrap()
+        match s:
+            case SExpr(e):
+                out.push(SExpr(rename_aliases_expr(e, &amap)))
+            case SReturn(oe):
+                match oe:
+                    case Some(e):
+                        out.push(SReturn(Some(rename_aliases_expr(e, &amap))))
+                    case None:
+                        out.push(s)
+            case SVarDecl(ty, name, val, a, b, c):
+                # Rename the declared type too — `P x = ...` where `P` is an
+                # aliased type (Rust rename_stmt VarDecl, rewrite.rs:153-156).
+                out.push(SVarDecl(rename_aliases_type(ty, &amap), name, rename_aliases_expr(val, &amap), a, b, c))
+            case SAssign(lhs, rhs):
+                out.push(SAssign(rename_aliases_expr(lhs, &amap), rename_aliases_expr(rhs, &amap)))
+            case SCompoundAssign(lhs, op, rhs):
+                out.push(SCompoundAssign(rename_aliases_expr(lhs, &amap), op, rename_aliases_expr(rhs, &amap)))
+            case SThrow(e):
+                out.push(SThrow(rename_aliases_expr(e, &amap)))
+            case SBreak(oe):
+                match oe:
+                    case Some(e):
+                        out.push(SBreak(Some(rename_aliases_expr(e, &amap))))
+                    case None:
+                        out.push(s)
+            case SLoop(body):
+                out.push(SLoop(rename_aliases_stmts(body, &amap)))
+            case SWith(e, name, body):
+                out.push(SWith(rename_aliases_expr(e, &amap), name, rename_aliases_stmts(body, &amap)))
+            case SAssert(cond, msg):
+                out.push(SAssert(rename_aliases_expr(cond, &amap), msg))
+            case SAssertReturn(cond, msg):
+                out.push(SAssertReturn(rename_aliases_expr(cond, &amap), msg))
+            case SNamedScope(name, body):
+                out.push(SNamedScope(name, rename_aliases_stmts(body, &amap)))
+            case SOnError(body):
+                out.push(SOnError(rename_aliases_stmts(body, &amap)))
+            case SSnapshot(name, n, e):
+                out.push(SSnapshot(name, n, rename_aliases_expr(e, &amap)))
+            case SIf(cond, then_b, else_branches):
+                Vector[ElseBranch] nb = Vector[ElseBranch]()
+                int ei = 0
+                while ei < else_branches.len():
+                    ElseBranch eb = else_branches.get(ei).unwrap()
+                    Option[SpannedExpr] nc = None
+                    match eb.condition:
+                        case Some(c):
+                            nc = Some(rename_aliases_expr(c, &amap))
+                        case None:
+                            nc = None
+                    nb.push(ElseBranch(nc, rename_aliases_stmts(eb.body, &amap)))
+                    ei = ei + 1
+                out.push(SIf(rename_aliases_expr(cond, &amap), rename_aliases_stmts(then_b, &amap), nb))
+            case SWhile(cond, body):
+                out.push(SWhile(rename_aliases_expr(cond, &amap), rename_aliases_stmts(body, &amap)))
+            case SFor(pat, iter_e, body, own, else_b):
+                out.push(SFor(pat, rename_aliases_expr(iter_e, &amap), rename_aliases_stmts(body, &amap), own, rename_aliases_stmts(else_b, &amap)))
+            case SMatch(scrut, arms):
+                Vector[MatchArm] na = Vector[MatchArm]()
+                int ai = 0
+                while ai < arms.len():
+                    MatchArm a = arms.get(ai).unwrap()
+                    Option[SpannedExpr] ng = None
+                    match a.guard:
+                        case Some(g):
+                            ng = Some(rename_aliases_expr(g, &amap))
+                        case None:
+                            ng = None
+                    na.push(MatchArm(a.pattern, ng, rename_aliases_stmts(a.body, &amap)))
+                    ai = ai + 1
+                out.push(SMatch(rename_aliases_expr(scrut, &amap), na))
+            else:
+                out.push(s)
+        i = i + 1
+    return out
+
+# Rename every FunctionDef in a method list (equip/trait bodies +
+# extern-block sigs). Shared by the item dispatch below.
+Vector[FunctionDef] rename_aliases_fns(Vector[FunctionDef] fns, Dict[String, String] &amap):
+    Vector[FunctionDef] out = Vector[FunctionDef]()
+    int i = 0
+    while i < fns.len():
+        out.push(rename_aliases_fn(fns.get(i).unwrap(), &amap))
+        i = i + 1
+    return out
+
+# Mirror of Rust's `rename_item` (rewrite.rs:58-124) — walks EVERY item
+# kind and renames aliased names in both the VALUE axis (expr/stmt bodies)
+# and the TYPE axis (function signatures, struct field types, enum payload
+# types, const/static/typealias/newtype types, equip target type, trait/
+# equip/extern method sigs). Item kinds with no aliasable surface (imports,
+# directives, meta-*) are left untouched.
+void rename_import_aliases(Module &m):
+    Dict[String, String] amap = collect_import_aliases(m)
+    if amap.len() == 0:
+        return
+    int i = 0
+    while i < m.items.len():
+        match m.items.get(i).unwrap():
+            case IFunction(fdef):
+                m.items.set(i, IFunction(rename_aliases_fn(fdef, &amap)))
+            case IEquip(eqblk):
+                # Rename the equip TARGET type + the trait NAME (if any) +
+                # every method signature/body. Mirrors Rust rewrite.rs:62-68.
+                SpannedType ntarget = rename_aliases_type(eqblk.target, &amap)
+                Option[String] ntrait = eqblk.trait_name
+                match eqblk.trait_name:
+                    case Some(tn):
+                        if amap.contains(tn):
+                            ntrait = Some(amap[tn])
+                    case None:
+                        pass
+                Vector[FunctionDef] nm = rename_aliases_fns(eqblk.methods, &amap)
+                m.items.set(i, IEquip(EquipBlock(ntarget, eqblk.type_params, ntrait, nm, eqblk.via_field, eqblk.trait_generic_args)))
+            case ITrait(tdef):
+                Vector[FunctionDef] tnm = rename_aliases_fns(tdef.methods, &amap)
+                m.items.set(i, ITrait(TraitDef(tdef.name, tdef.type_params, tnm, tdef.parent_traits)))
+            case IStruct(sdef):
+                # Field types are Param.param_type — rename the type axis.
+                Vector[Param] nf = rename_aliases_params(sdef.fields, &amap)
+                m.items.set(i, IStruct(StructDef(sdef.name, nf, sdef.type_params, sdef.derives)))
+            case IEnum(edef):
+                # Each variant's tuple payload is a Vector[SpannedType].
+                Vector[EnumVariant] nv = Vector[EnumVariant]()
+                int vi = 0
+                while vi < edef.variants.len():
+                    EnumVariant v = edef.variants.get(vi).unwrap()
+                    Vector[SpannedType] nft = Vector[SpannedType]()
+                    int fi = 0
+                    while fi < v.fields.len():
+                        nft.push(rename_aliases_type(v.fields.get(fi).unwrap(), &amap))
+                        fi = fi + 1
+                    nv.push(EnumVariant(v.name, nft))
+                    vi = vi + 1
+                m.items.set(i, IEnum(EnumDef(edef.name, nv, edef.type_params, edef.derives)))
+            case IConstDecl(ty, name, val):
+                m.items.set(i, IConstDecl(rename_aliases_type(ty, &amap), name, rename_aliases_expr(val, &amap)))
+            case IStaticDecl(ty, name, val):
+                m.items.set(i, IStaticDecl(rename_aliases_type(ty, &amap), name, rename_aliases_expr(val, &amap)))
+            case ITypeAlias(name, tps, ty):
+                m.items.set(i, ITypeAlias(name, tps, rename_aliases_type(ty, &amap)))
+            case INewtype(name, ty):
+                m.items.set(i, INewtype(name, rename_aliases_type(ty, &amap)))
+            case IExternBlock(fns):
+                m.items.set(i, IExternBlock(rename_aliases_fns(fns, &amap)))
+            case ITest(name, tagexprs, tagnames, body):
+                m.items.set(i, ITest(name, tagexprs, tagnames, rename_aliases_stmts(body, &amap)))
+            case IBench(name, body):
+                m.items.set(i, IBench(name, rename_aliases_stmts(body, &amap)))
+            case ISuiteSetup(body):
+                m.items.set(i, ISuiteSetup(rename_aliases_stmts(body, &amap)))
+            case ISuiteTeardown(body):
+                m.items.set(i, ISuiteTeardown(rename_aliases_stmts(body, &amap)))
             else:
                 pass
         i = i + 1

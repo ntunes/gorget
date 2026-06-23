@@ -626,5 +626,12 @@ String format_import(ImportStmt imp):
             if i > 0:
                 result = result + ", "
             result = result + n
+            # Render `as <alias>` for an aliased name (parallel `aliases`
+            # vector; "" = bare). Round-trip fidelity so the bootstrap's
+            # format→re-parse cycle preserves `from X import Y as Z`.
+            if i < imp.aliases.len():
+                String alias = imp.aliases.get(i).unwrap()
+                if alias != "":
+                    result = result + " as " + alias
         return result
     return f"import {imp.module_path}"

@@ -1,0 +1,27 @@
+# Import TYPE aliasing: `from X import SomeType as Alias`, then use the
+# alias in TYPE positions (param, return, field, local-decl).
+#
+# This exercises the TYPE axis of the aliased-import rewrite (Rust's
+# `rename_type` / self-host `rename_aliases_type`): the IR backend looks
+# types up by SURFACE name, so the local alias `DT` must be renamed back
+# to `DateTime` everywhere it appears as a type — otherwise the backend
+# can't find a C type named `DT`. Without the type-axis rename this
+# fixture fails to build; with it, it prints deterministically.
+
+from std.datetime import DateTime as DT
+
+# `DT` as a field type.
+struct Stamp:
+    DT moment
+
+# `DT` as both a parameter type and a return type.
+DT next_year(DT d):
+    return DT(d.dt_year + 1, d.dt_month, d.dt_day, d.dt_hour, d.dt_minute, d.dt_second, d.dt_offset_sec)
+
+void main():
+    # `DT` as a local-declaration type, constructed via the alias.
+    DT d = DT(2000, 1, 1, 0, 0, 0, 0)
+    DT d2 = next_year(d)
+    Stamp s = Stamp(d2)
+    print(f"{s.moment.dt_year}")
+    print(f"{s.moment.dt_month}")

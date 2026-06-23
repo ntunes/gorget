@@ -701,6 +701,73 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 int in_dst = add_local(&ctx, BOOL_TYPE, None)
                 emit(&ctx, GICallExtern(in_dst, contains_method, in_args))
                 return in_dst
+            # `lhs ?? rhs` — the default operator. `??` is NOT arithmetic; the
+            # parser models it as an EBinaryOp with op "??" (parser.gg:838), but
+            # falling through to `map_binop("??")` defaults to OP_ADD (WRONG) and
+            # emitted `(Option__T)lhs + (Option__T)rhs` (a non-scalar C add).
+            # Mirrors Rust gg's `Expr::DefaultOp` lowering
+            # (src/ir/lowering/exprs/mod.rs:772-953): if lhs is Some/Ok, unwrap
+            # to its inner T; else evaluate rhs (which may be a value OR a
+            # divergent `panic(...)` / `return` / `throw`). Built on the same
+            # tag-read + branch + payload-read vocabulary as `.unwrap_or()`
+            # (lower_expr.gg:1502-1520) fused with the divergent-arm gate from
+            # `lower_match_expr` (lower_match.gg:1451-1457) so a divergent rhs
+            # contributes no merge edge.
+            if op == "??":
+                int qq_lhs = lower_expr(&ctx, *lhs_box, &gmod)
+                int qq_recv_tid = ctx.locals.get(qq_lhs).unwrap().type_id
+                # Classify the lhs off the typed enum_category channel (peels
+                # Ptr/MutPtr internally), exactly as unwrap_or does — never a
+                # name re-parse. Some(0)/Ok(0) is the success variant; .ok_type
+                # is its inner payload tid.
+                EnumCategory qq_ec = enum_category_of(&gmod, qq_recv_tid)
+                String qq_variant = ""
+                if qq_ec.category == ENUM_CAT_OPTION:
+                    qq_variant = "Some"
+                elif qq_ec.category == ENUM_CAT_RESULT:
+                    qq_variant = "Ok"
+                if qq_variant != "":
+                    int qq_inner_tid = qq_ec.ok_type
+                    String qq_recv_tn = local_type_name(qq_lhs, &ctx, &gmod)
+                    # Result slot holds the inner T (NOT the Option/Result), so
+                    # both arms store a T value and the merge is T-typed —
+                    # mirrors Rust typing result_id as inner_type (:894).
+                    int qq_dst = add_local(&ctx, qq_inner_tid, None)
+                    int qq_scr_ptr = match_scrutinee_ptr(&ctx, &gmod, qq_lhs)
+                    int qq_tag = emit_tag_read(&ctx, qq_scr_ptr, qq_recv_tn, &gmod)
+                    # tag == 0 → Some / Ok arm.
+                    int qq_cmp = add_local(&ctx, BOOL_TYPE, None)
+                    emit(&ctx, GICmp(qq_cmp, CMP_EQ, I64_TYPE, OpCopy(qq_tag), OpConstI64(0)))
+                    int qq_some_bb = new_block(&ctx)
+                    int qq_else_bb = new_block(&ctx)
+                    int qq_merge_bb = new_block(&ctx)
+                    set_terminator(&ctx, GTBranch(OpCopy(qq_cmp), qq_some_bb, qq_else_bb))
+                    # Some/Ok arm: read the payload, store into the merge slot.
+                    switch_to(&ctx, qq_some_bb)
+                    int qq_payload = emit_payload_read(&ctx, qq_scr_ptr, qq_recv_tn, qq_variant, 0, qq_inner_tid, &gmod)
+                    emit(&ctx, GIAssign(qq_dst, op_consume(&ctx, &gmod, qq_payload, CkAssign())))
+                    set_terminator(&ctx, GTJump(qq_merge_bb))
+                    # None/Error arm: lower the rhs. It may diverge (panic /
+                    # return / throw) — its lower_expr then sets a terminator
+                    # itself. Only assign + jump when the arm did NOT diverge
+                    # (block_terms still GTNone), mirroring lower_match_expr's
+                    # divergent-arm gate. A divergent rhs contributes no merge
+                    # edge; a value rhs is moved/copied into the T-typed slot.
+                    switch_to(&ctx, qq_else_bb)
+                    int qq_rhs = lower_expr(&ctx, *rhs_box, &gmod)
+                    match ctx.block_terms.get(ctx.current_block).unwrap():
+                        case GTNone():
+                            emit(&ctx, GIAssign(qq_dst, op_consume(&ctx, &gmod, qq_rhs, CkAssign())))
+                            set_terminator(&ctx, GTJump(qq_merge_bb))
+                        else:
+                            pass
+                    switch_to(&ctx, qq_merge_bb)
+                    return qq_dst
+                # lhs is not an Option/Result (channel miss) — surface it and
+                # fall through to the lhs value as a best-effort (never the
+                # bogus OP_ADD). A genuine `??` only applies to Option/Result.
+                diag_bug("lower_expr", "?? on non-Option/Result lhs — channel miss; returning lhs unchanged")
+                return qq_lhs
             # A binop's OPERANDS are scalar/string-typed by the operator, not
             # by the binop's destination. Clear the enclosing `expected_type`
             # so a Result-typed surrounding context (e.g. `return to_n(x) + 5`
@@ -4344,6 +4411,38 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
             emit(&ctx, GICallExtern(pdst, "printf", printf_args))
             # `result` is already the UNIT local set at the top of the is_print
             # arm; the printf byte-count `pdst` is intentionally discarded.
+    elif fname == "panic" and args.len() == 1:
+        # `panic(msg)` — noreturn builtin. Mirrors Rust gg's lower_call
+        # special-case (src/ir/lowering/exprs/calls.rs:525-531): lower the
+        # message, route through the same `gorget_panic` runtime symbol the
+        # assert lowering already uses (lower_stmt.gg:1031), then emit an
+        # unreachable terminator so post-panic code is dead. Because `panic`
+        # is used as a VALUE here (match-arm tail, `?? panic(...)`), the old
+        # generic-call path emitted `__v = panic(__msg)` — an undefined symbol
+        # AND a non-scalar conversion at the `??` coalesce site. The runtime
+        # `gorget_panic(const char*)` is registered cstr-position
+        # (lir_codegen.gg:2012 / runtime_arg_is_cstr), so the lowered String
+        # message is converted via gorget_str_to_cstr at the C-emit boundary.
+        SpannedExpr panic_arg = args.get(0).unwrap()
+        int panic_msg = lower_expr(&ctx, panic_arg, &gmod)
+        # Borrow-only consume (gorget_panic reads the message, never owns it),
+        # matching the format-arg / print String-to-extern idiom (CkFormatArg
+        # lowers to OpBorrow, so the message is not moved).
+        emit(&ctx, GICallExtern(-1, "gorget_panic", [op_consume(&ctx, &gmod, panic_msg, CkFormatArg())]))
+        # gorget_panic is noreturn. The self-host Terminator has no
+        # GTUnreachable, so jump to a fresh dead block — the faithful
+        # equivalent Rust's `builder.unreachable()` (the same idiom the
+        # assert lowering uses, lower_stmt.gg:1036). Any code lowered after
+        # the panic lands in `panic_dead_bb`, which has no predecessors.
+        int panic_dead_bb = new_block(&ctx)
+        set_terminator(&ctx, GTJump(panic_dead_bb))
+        switch_to(&ctx, panic_dead_bb)
+        # `panic` is Never-typed; it yields no value. Return a UNIT local so
+        # the (dynamically unreachable) value-position use has a well-typed
+        # placeholder, mirroring Rust's `Operand::Constant(Constant::Unit)`.
+        int panic_unit = add_local(&ctx, UNIT_TYPE, None)
+        emit(&ctx, GIAssign(panic_unit, OpConstUnit()))
+        result = panic_unit
     elif (fname == "Str" or fname == "String" or fname == "GorgetString") and args.len() == 1:
         # Identity coercion: Str(x) / String(x) returns x (already a string).
         # Lower the inner arg and pass its type through.

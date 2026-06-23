@@ -252,6 +252,13 @@ struct ItemElseBranch:
 struct ImportStmt:
     String module_path
     Vector[String] names
+    # Parallel to `names`: the `as`-alias for each imported name, or "" when
+    # the name is imported bare. `from X import sin as msin, cos` →
+    # names = [sin, cos], aliases = [msin, ""]. Mirrors Rust's
+    # `ImportStmt::From { names: Vec<{ name, alias }> }` (resolve.rs:234-241):
+    # the alias becomes the locally-visible name; the original drives the C
+    # symbol redirect.
+    Vector[String] aliases
 
 enum SelectOp:
     SORecv(String, int, SpannedExpr)

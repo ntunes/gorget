@@ -313,10 +313,18 @@ void collect_import(ImportStmt imp, ScopeTable &scopes):
         else:
             scopes.define(path, DkImport(), Span(0, 0))
         return
+    # Register each imported name under its LOCALLY-VISIBLE spelling: the
+    # `as`-alias when present (`from X import sin as msin` → register `msin`),
+    # else the bare name. Mirrors Rust's rebind_alias (resolve.rs:234-241):
+    # the alias is what later identifier lookups must resolve.
     int i = 0
     while i < imp.names.len():
-        String name = get_str_at(imp.names, i)
-        scopes.define(name, DkImport(), Span(0, 0))
+        String local_name = get_str_at(imp.names, i)
+        if i < imp.aliases.len():
+            String alias = get_str_at(imp.aliases, i)
+            if alias != "":
+                local_name = alias
+        scopes.define(local_name, DkImport(), Span(0, 0))
         i = i + 1
 
 # ═══════════════════════════════════════════════════════════

@@ -1,0 +1,33 @@
+# Import TYPE aliasing used in a NESTED type position (`Vector[DT]`, a
+# generic argument) — NOT the head of the type. This is the part of the
+# type-axis rewrite that the self-host currently DEFERS: porting the
+# recursive container walk of Rust's `rename_type` trips a Rust-`gg`
+# BIR-lowering bug (a self-recursive fn that pattern-matches on the `Type`
+# enum AND reconstructs a `Type` value mis-resolves the reconstructed
+# enum's `EnumInit` struct-id to a builtin in a large multi-module build;
+# `field index N out of range for CRuntimeType`). The Rust `gg` handles
+# this correctly today (`rename_type` recurses), so the expected output
+# below is the CORRECT language behavior — the self-host must reach it once
+# the BIR struct-id collision is fixed and the recursion arms are restored
+# in `self_host_typechecker/meta.gg::rename_aliases_type`.
+#
+# Wired #[ignore] in tests/integration.rs because the SELF-HOST runtime-diff
+# path can't reproduce it yet; un-ignore when the recursion is restored.
+
+from std.datetime import DateTime as DT
+from std.collections import Vector
+
+# `DT` NESTED inside a generic arg, as a field type.
+struct Stamps:
+    Vector[DT] moments
+
+# `DT` nested in a generic arg, as a param + return type.
+Vector[DT] echo_moments(Vector[DT] ds):
+    return ds
+
+void main():
+    Vector[DT] v = Vector[DT]()
+    v.push(DT(2000, 1, 1, 0, 0, 0, 0))
+    Vector[DT] v2 = echo_moments(v)
+    Stamps s = Stamps(v2)
+    print(f"{s.moments.get(0).unwrap().dt_year}")
