@@ -1092,6 +1092,22 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                         # lower.gg) fall through to the EIdentifier
                         # unknown-fallback (OpConstI64(0)) when imported.
                         m.items.push(imp_item)
+                    case ITypeAlias(_, _, _):
+                        # Merge imported module-level type aliases (`type Entity
+                        # = SlotKey`) so collect_top_level's ITypeAlias arm
+                        # (resolve.gg) registers the alias name AND the lowerer
+                        # can resolve `Entity(...)` constructor calls / `Entity`
+                        # type annotations through to the aliased type. Rust
+                        # merges ALL imported items (loader.rs:1378-1390, keeping
+                        # every non-import item incl. TypeAlias), so the alias is
+                        # globally visible even when only sibling names are
+                        # explicitly imported (`from xtd.ecs import EntityPool`).
+                        # Without this merge the alias is dropped by the `else`
+                        # arm below → `Entity` resolves to nothing (the ecs_*
+                        # fixtures). (NOTE: this allowlist-merge diverges from the
+                        # check-loader + Rust `else: push` merge-all; the broader
+                        # divergence is filed in TODO as a follow-up.)
+                        m.items.push(imp_item)
                     case IExternBlock(ext_fns):
                         # Extract aliases from extern stubs: body is one of
                         # SExpr(EStringLiteral) or SReturn(Some(EStringLiteral))

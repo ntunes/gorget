@@ -4092,8 +4092,17 @@ equip Parser:
         # Inline extern: extern int func(int x) = "symbol"
         # Detected when next token is a type keyword or identifier (not ':')
         if not self.check_tok(TOK_COLON):
-            # Skip an optional `borrowed` (non-owning FFI return alias) bare
-            # ident before the return type — same shape as the block form.
+            # Skip optional `blocking` / `noreturn` / `borrowed` (non-owning FFI
+            # return alias) bare-ident modifiers before the return type — same
+            # shape as the block form. Without skipping them the qualifier is
+            # parsed as the return type and the whole inline extern decl is
+            # dropped → an undefined link reference. (A.1b: the un-fixed sibling
+            # of the `borrowed`-only inline skip; CLAUDE.md "fix the class, not
+            # the instance".)
+            if self.check_tok(TOK_IDENT) and token_ident(self.peek().lex_token) == "blocking":
+                self.advance()
+            if self.check_tok(TOK_IDENT) and token_ident(self.peek().lex_token) == "noreturn":
+                self.advance()
             if self.check_tok(TOK_IDENT) and token_ident(self.peek().lex_token) == "borrowed":
                 self.advance()
             FunctionDef fd = self.parse_function_def()
