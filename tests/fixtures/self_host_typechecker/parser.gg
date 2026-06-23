@@ -3029,21 +3029,30 @@ equip Parser:
                 Vector[Stmt] body = self.parse_block()
                 return SMetaFor(body)
             elif self.check_kw(KW_IF):
-                # meta if ...: body [elif ...: body]* [else: body]
-                self.skip_meta_header()
+                # meta if <cond>: body [elif <cond>: body]* [else: body]
+                # PROTOTYPE: capture the condition expression (parse_meta_cond)
+                # so the delayed-meta engine can evaluate it per-mono. Mirrors
+                # the IMetaIf #1 fix at the statement level.
+                self.advance()
+                SpannedExpr meta_cond = self.parse_expr()
+                self.expect_tok(TOK_COLON, "expected ':' after meta if condition")
+                self.expect_tok(TOK_NEWLINE, "expected newline after meta if ':'")
                 Vector[Stmt] then_body = self.parse_block()
                 Vector[ElseBranch] branches = Vector[ElseBranch]()
                 while self.check_kw(KW_ELIF):
-                    self.skip_meta_header()
+                    self.advance()
+                    SpannedExpr elif_cond = self.parse_expr()
+                    self.expect_tok(TOK_COLON, "expected ':' after meta elif condition")
+                    self.expect_tok(TOK_NEWLINE, "expected newline after meta elif ':'")
                     Vector[Stmt] elif_body = self.parse_block()
-                    branches.push(ElseBranch(None, elif_body))
+                    branches.push(ElseBranch(Some(elif_cond), elif_body))
                 if self.check_kw(KW_ELSE):
                     self.advance()
                     self.expect_tok(TOK_COLON, "expected ':' after else")
                     self.expect_tok(TOK_NEWLINE, "expected newline after else ':'")
                     Vector[Stmt] else_body = self.parse_block()
                     branches.push(ElseBranch(None, else_body))
-                return SMetaIf(then_body, branches)
+                return SMetaIf(meta_cond, then_body, branches)
             else:
                 self.skip_meta_rest()
                 return SMeta()

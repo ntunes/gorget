@@ -426,7 +426,7 @@ bool stmt_mentions_iter(Stmt s):
             return expr_mentions_iter(expr)
         case SMetaFor(body):
             return block_mentions_iter(body)
-        case SMetaIf(then_body, branches):
+        case SMetaIf(meta_cond, then_body, branches):
             if block_mentions_iter(then_body):
                 return true
             int i = 0
@@ -765,7 +765,7 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                                     has_real_body = true
                                 case SMetaFor(_):
                                     has_real_body = true
-                                case SMetaIf(_, _):
+                                case SMetaIf(_, _, _):
                                     has_real_body = true
                                 case SExpr(sexpr):
                                     # Accept SExpr if it's a call (not a string literal
@@ -1025,7 +1025,7 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                                         is_real = true
                                     case SMetaFor(_):
                                         is_real = true
-                                    case SMetaIf(_, _):
+                                    case SMetaIf(_, _, _):
                                         is_real = true
                                     case SExpr(sexpr):
                                         # Reject string-literal stubs ("extern_abi_name")

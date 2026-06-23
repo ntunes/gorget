@@ -613,7 +613,7 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
             resolve_block(body, &scopes, &types, &ctx)
             scopes.pop_scope()
 
-        case SMetaIf(then_body, elif_branches):
+        case SMetaIf(meta_cond, then_body, elif_branches):
             scopes.push_scope(SkBlock())
             resolve_block(then_body, &scopes, &types, &ctx)
             scopes.pop_scope()
@@ -1044,7 +1044,7 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
             resolve_block_expr(body, &scopes, &ctx)
             scopes.pop_scope()
 
-        case SMetaIf(then_body, elif_branches):
+        case SMetaIf(meta_cond, then_body, elif_branches):
             scopes.push_scope(SkBlock())
             resolve_block_expr(then_body, &scopes, &ctx)
             scopes.pop_scope()

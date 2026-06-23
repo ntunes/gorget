@@ -114,7 +114,10 @@ enum Stmt:
     SPass
     SMeta
     SMetaFor(Vector[Stmt])
-    SMetaIf(Vector[Stmt], Vector[ElseBranch])
+    # SMetaIf carries its CONDITION (the `meta if <cond>:` expression) so the
+    # delayed-meta engine can evaluate it per monomorphization. elif conditions
+    # live in the ElseBranch.condition.
+    SMetaIf(SpannedExpr, Vector[Stmt], Vector[ElseBranch])
     SFor(SpannedPattern, SpannedExpr, Vector[Stmt], int, Vector[Stmt])
     SWhile(SpannedExpr, Vector[Stmt])
     SLoop(Vector[Stmt])

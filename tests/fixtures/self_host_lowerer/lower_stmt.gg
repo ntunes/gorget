@@ -795,8 +795,11 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             # `meta for` — compile-time loop already expanded earlier in
             # the pipeline; any remaining SMetaFor is a residual marker.
             pass
-        case SMetaIf(_, _):
-            # `meta if` — compile-time conditional, already resolved.
+        case SMetaIf(_, _, _):
+            # `meta if` — compile-time conditional. Should have been
+            # expanded by the delayed-meta engine at lower_generic_function
+            # time. A residual here = non-generic context (no concrete T) or
+            # an unevaluable condition; drop (Rust also leaves it inert).
             pass
         case SMatch(scrutinee, arms):
             # Real SMatch lowering — delegates to lower_match_stmt for

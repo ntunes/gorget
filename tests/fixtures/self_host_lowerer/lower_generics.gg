@@ -8,6 +8,7 @@
 from std.collections import Vector, Dict
 from std.conv import int_to_str, float_to_str
 from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch, EquipBlock, StructDef, EnumDef, EnumVariant, Type, MatchArm, Pattern, SpannedPattern
+from meta import meta_typename, meta_type_byte_size
 from scope import ScopeTable, DefInfo
 from types import TypeTable, ResolvedType
 from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Terminator, Operand, GirType, GirExtern, GirTypeInfo, GirFieldInfo, GirEnumVariantInfo, LiftedClosure, ClosureCapture, ResourceMetadata, CollectionKind, ConsumeKind
@@ -569,10 +570,225 @@ void setup_type_subs(GirModule &gmod, Vector[String] type_params, Vector[Spanned
 void clear_type_subs(GirModule &gmod):
     gmod.type_subs = {}
 
+# ── [PROTOTYPE] Delayed-meta engine (monomorphization time) ──────────
+# Mirrors Rust src/semantic/meta.rs evaluate_delayed_meta_block, wired at
+# src/ir/lowering/functions.rs:852 (per-monomorphization, after type
+# substitution, before GIR lowering). The self-host previously DROPPED
+# every statement-body `meta if` (lower_stmt.gg SMetaIf -> pass), so a
+# `meta if typename(T) == "int":` body silently vanished and the generic
+# function returned garbage. Here we evaluate each `meta if` against the
+# concrete type args known at this instantiation and SPLICE the winning
+# branch's statements into the function body BEFORE lowering.
+#
+# PROTOTYPE SCOPE: handles `typename(T) (==|!=) "literal"` and
+# `sizeof(T) (==|...) N` conditions (covers meta_delayed_basic/_nested/
+# _match/_for, meta_log). `T is Category` (meta_type_is) and
+# implements()/fields()/variant_names() reflection are follow-on slices.
+
+# Build param-name -> typename map from the concrete type args.
+Dict[String, String] build_meta_typename_env(Vector[String] type_params, Vector[SpannedType] type_args):
+    Dict[String, String] env = {}
+    int i = 0
+    while i < type_params.len() and i < type_args.len():
+        String pn = type_params.get(i).unwrap()
+        SpannedType ta = type_args.get(i).unwrap()
+        env.put(pn, meta_typename(ta.ty))
+        i += 1
+    return env
+
+# Resolve a `typename(T)` / `sizeof(T)` call against the concrete env.
+# Returns "" (string result) via out-params: kind 0=unknown, 1=string,
+# 2=int. Kept minimal for the prototype.
+String eval_meta_builtin_str(SpannedExpr se, Dict[String, String] &tn_env, bool &is_str):
+    is_str = false
+    match se.expr:
+        case EStringLiteral(s, _):
+            is_str = true
+            return s
+        case ECall(callee, args, _, _):
+            match (*callee).expr:
+                case EIdentifier(fname):
+                    if fname == "typename" and args.len() == 1:
+                        match args.get(0).unwrap().expr:
+                            case EIdentifier(tparam):
+                                if tn_env.contains(tparam):
+                                    is_str = true
+                                    return tn_env[tparam]
+                            else:
+                                pass
+                else:
+                    pass
+        else:
+            pass
+    return ""
+
+# Resolve a `sizeof(T)` call (or int literal) to an int. ok=false if
+# unevaluable.
+int eval_meta_builtin_int(SpannedExpr se, Dict[String, String] &tn_env, bool &ok):
+    ok = false
+    match se.expr:
+        case EIntLiteral(n):
+            ok = true
+            return n
+        case ECall(callee, args, _, _):
+            match (*callee).expr:
+                case EIdentifier(fname):
+                    if (fname == "sizeof" or fname == "bitwidth") and args.len() == 1:
+                        match args.get(0).unwrap().expr:
+                            case EIdentifier(tparam):
+                                if tn_env.contains(tparam):
+                                    int byts = meta_type_byte_size(tn_env[tparam])
+                                    ok = true
+                                    if fname == "bitwidth":
+                                        return byts * 8
+                                    return byts
+                            else:
+                                pass
+                else:
+                    pass
+        else:
+            pass
+    return 0
+
+# Evaluate a `meta if`/`meta elif` condition against the concrete env.
+# Sets ok=false if the condition is not in the supported prototype subset
+# (caller then leaves the meta-if inert, matching Rust's behavior).
+bool eval_delayed_meta_cond(SpannedExpr cond, Dict[String, String] &tn_env, bool &ok):
+    ok = false
+    match cond.expr:
+        case EBinaryOp(l, op, r):
+            if op == "==" or op == "!=":
+                # Try string comparison: typename(T) == "literal"
+                bool ls = false
+                bool rs = false
+                String lv = eval_meta_builtin_str(*l, &tn_env, &ls)
+                String rv = eval_meta_builtin_str(*r, &tn_env, &rs)
+                if ls and rs:
+                    ok = true
+                    bool eq = (lv == rv)
+                    if op == "==":
+                        return eq
+                    return not eq
+                # Try int comparison: sizeof(T) == N
+                bool li = false
+                bool ri = false
+                int liv = eval_meta_builtin_int(*l, &tn_env, &li)
+                int riv = eval_meta_builtin_int(*r, &tn_env, &ri)
+                if li and ri:
+                    ok = true
+                    bool ieq = (liv == riv)
+                    if op == "==":
+                        return ieq
+                    return not ieq
+            elif op == "<" or op == ">" or op == "<=" or op == ">=":
+                bool li = false
+                bool ri = false
+                int liv = eval_meta_builtin_int(*l, &tn_env, &li)
+                int riv = eval_meta_builtin_int(*r, &tn_env, &ri)
+                if li and ri:
+                    ok = true
+                    if op == "<":
+                        return liv < riv
+                    elif op == ">":
+                        return liv > riv
+                    elif op == "<=":
+                        return liv <= riv
+                    else:
+                        return liv >= riv
+        else:
+            pass
+    return false
+
+# Walk a statement list, evaluating each SMetaIf against the env and
+# splicing the winning branch. Recurses into nested blocks AND into the
+# spliced branch bodies. Returns the rewritten statement list.
+Vector[Stmt] evaluate_delayed_meta_stmts(Vector[Stmt] stmts, Dict[String, String] &tn_env):
+    Vector[Stmt] out = Vector[Stmt]()
+    int i = 0
+    while i < stmts.len():
+        Stmt s = stmts.get(i).unwrap()
+        match s:
+            case SMetaIf(meta_cond, then_body, elif_branches):
+                bool ok = false
+                bool taken = false
+                bool cv = eval_delayed_meta_cond(meta_cond, &tn_env, &ok)
+                if ok and cv:
+                    # then-branch wins
+                    Vector[Stmt] spliced = evaluate_delayed_meta_stmts(then_body, &tn_env)
+                    int si = 0
+                    while si < spliced.len():
+                        out.push(spliced.get(si).unwrap())
+                        si += 1
+                    taken = true
+                elif ok:
+                    # then-branch false: try elif/else branches in order
+                    int bi = 0
+                    while bi < elif_branches.len() and not taken:
+                        ElseBranch eb = elif_branches.get(bi).unwrap()
+                        match eb.condition:
+                            case Some(ec):
+                                bool eok = false
+                                bool ecv = eval_delayed_meta_cond(ec, &tn_env, &eok)
+                                if eok and ecv:
+                                    Vector[Stmt] sp = evaluate_delayed_meta_stmts(eb.body, &tn_env)
+                                    int sj = 0
+                                    while sj < sp.len():
+                                        out.push(sp.get(sj).unwrap())
+                                        sj += 1
+                                    taken = true
+                                elif not eok:
+                                    # unevaluable elif: bail out, leave inert
+                                    bi = elif_branches.len()
+                            case None:
+                                # else branch: wins if nothing taken yet
+                                Vector[Stmt] sp = evaluate_delayed_meta_stmts(eb.body, &tn_env)
+                                int sj = 0
+                                while sj < sp.len():
+                                    out.push(sp.get(sj).unwrap())
+                                    sj += 1
+                                taken = true
+                        bi += 1
+                if not ok:
+                    # unevaluable condition: leave the meta-if inert (drop,
+                    # like Rust when the env lacks the binding)
+                    pass
+            case SIf(cond, then_b, else_branches):
+                Vector[ElseBranch] nb = Vector[ElseBranch]()
+                int ei = 0
+                while ei < else_branches.len():
+                    ElseBranch eb = else_branches.get(ei).unwrap()
+                    nb.push(ElseBranch(eb.condition, evaluate_delayed_meta_stmts(eb.body, &tn_env)))
+                    ei += 1
+                out.push(SIf(cond, evaluate_delayed_meta_stmts(then_b, &tn_env), nb))
+            case SWhile(cond, body):
+                out.push(SWhile(cond, evaluate_delayed_meta_stmts(body, &tn_env)))
+            case SFor(pat, iter_e, body, own, else_b):
+                out.push(SFor(pat, iter_e, evaluate_delayed_meta_stmts(body, &tn_env), own, evaluate_delayed_meta_stmts(else_b, &tn_env)))
+            case SLoop(body):
+                out.push(SLoop(evaluate_delayed_meta_stmts(body, &tn_env)))
+            case SMatch(scrut, arms):
+                Vector[MatchArm] na = Vector[MatchArm]()
+                int ai = 0
+                while ai < arms.len():
+                    MatchArm a = arms.get(ai).unwrap()
+                    na.push(MatchArm(a.pattern, a.guard, evaluate_delayed_meta_stmts(a.body, &tn_env)))
+                    ai += 1
+                out.push(SMatch(scrut, na))
+            else:
+                out.push(s)
+        i += 1
+    return out
+
 # Lower a monomorphized instance of a generic function
 void lower_generic_function(FunctionDef fdef, String mangled_name, Vector[String] type_params, Vector[SpannedType] type_args, GirModule &gmod):
     setup_type_subs(&gmod, type_params, type_args)
-    GirFunction gfn = lower_function(fdef, &gmod)
+    # PROTOTYPE: evaluate statement-body `meta if` against the concrete
+    # type args, splicing the winning branch BEFORE lowering. Mirrors Rust
+    # functions.rs:852 evaluate_delayed_meta_block.
+    Dict[String, String] tn_env = build_meta_typename_env(type_params, type_args)
+    Vector[Stmt] expanded_body = evaluate_delayed_meta_stmts(fdef.body, &tn_env)
+    FunctionDef mfdef = FunctionDef(fdef.name, fdef.params, fdef.return_type, fdef.type_params, expanded_body, fdef.is_expr_body, fdef.throws_type, fdef.is_extern_stub)
+    GirFunction gfn = lower_function(mfdef, &gmod)
 
     # Detect bare Move-type params that are directly returned.
     # If return type is resource AND body is `return param_name` or just `param_name`,

@@ -1269,7 +1269,7 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
             # before typecheck. If we still see one, treat it as a no-op.
             pass
 
-        case SMetaIf(then_body, else_branches):
+        case SMetaIf(meta_cond, then_body, else_branches):
             type_check_stmts(then_body, scope_id, &scopes, &types, &ctx)
             for eb in else_branches:
                 type_check_stmts(eb.body, scope_id, &scopes, &types, &ctx)
