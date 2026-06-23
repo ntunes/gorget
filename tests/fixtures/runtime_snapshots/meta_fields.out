@@ -1,0 +1,8 @@
+x:float
+y:float
+name:String
+health:int
+alive:bool
+2
+1
+done

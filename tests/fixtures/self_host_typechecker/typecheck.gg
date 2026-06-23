@@ -1261,7 +1261,7 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
         case SItem(item):
             type_check_item(item, scope_id, &scopes, &types, &ctx)
 
-        case SMetaFor(body):
+        case SMetaFor(mf_vars, mf_iter, body):
             type_check_stmts(body, scope_id, &scopes, &types, &ctx)
 
         case SMetaForMatch(_, _, _):

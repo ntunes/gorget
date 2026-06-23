@@ -8,6 +8,11 @@
 from std.collections import Vector, Dict
 from std.conv import int_to_str, float_to_str
 from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch, EquipBlock, StructDef, EnumDef, EnumVariant, Type, MatchArm, Pattern, SpannedPattern
+# PROTOTYPE slice #4: expr/stmt constructors used to substitute meta-for
+# loop-var bindings (string values) into the unrolled body.
+from ast import EIdentifier, EStringLiteral, EFString, EIntLiteral, EBinaryOp, EUnaryOp, ECall, EMethodCall, EFieldAccess, EIndex, EArrayLiteral, EIs
+from ast import SExpr, SReturn, SVarDecl, SAssign, SCompoundAssign, SIf, SWhile, SFor, SLoop, SMatch, Span
+from ast import PBinding, PConstructor
 from meta import meta_typename, meta_type_byte_size
 from scope import ScopeTable, DefInfo
 from types import TypeTable, ResolvedType
@@ -457,7 +462,7 @@ void discover_generic_calls_stmt(Stmt stmt, Dict[String, bool] &seen, Vector[Gen
             discover_generic_calls_expr(scrutinee, &seen, &instances)
             for arm in arms:
                 discover_generic_calls_stmts(arm.body, &seen, &instances)
-        case SMetaFor(meta_body):
+        case SMetaFor(mf_vars, mf_iter, meta_body):
             # Meta for type_variants: expand type-variable generic calls
             # to the 4 standard column types (int, float, String, bool).
             # The meta for header is lost, so we heuristically expand
@@ -695,6 +700,272 @@ bool eval_delayed_meta_cond(SpannedExpr cond, Dict[String, String] &tn_env, bool
                         return liv <= riv
                     else:
                         return liv >= riv
+        case EIs(lhs, negated, pat):
+            # `ftype is numeric:` (after meta-for subst, lhs is an
+            # EStringLiteral of the field's source type name). The pattern
+            # is a bare category name (PBinding/PConstructor).
+            String category = ""
+            match (*pat).pat:
+                case PBinding(cat):
+                    category = cat
+                case PConstructor(cat, _):
+                    category = cat
+                else:
+                    pass
+            bool ls = false
+            String lv = ""
+            match (*lhs).expr:
+                case EStringLiteral(s, _):
+                    ls = true
+                    lv = s
+                else:
+                    pass
+            if ls and category != "":
+                bool cat_ok = false
+                bool is_cat = meta_type_category_is(lv, category, &cat_ok)
+                if cat_ok:
+                    ok = true
+                    if negated:
+                        return not is_cat
+                    return is_cat
+        else:
+            pass
+    return false
+
+# ── PROTOTYPE slice #4: meta-for-over-reflection unroll ──────────────
+# `meta for fname, ftype in fields(T):` / `meta for vname in
+# variant_names(T):` must materialize their loop-vars per concrete T at
+# monomorphization. The engine evaluates the iterable against the
+# concrete type (looked up in gmod.type_infos / gmod.enum_registry),
+# binds each loop-var to a string value per iteration, substitutes those
+# bindings into the body (f-string parts + bare identifier renames), and
+# splices the unrolled statements. Mirrors Rust src/semantic/meta.rs
+# evaluate_delayed_meta_block's Stmt::MetaFor List-expression arm.
+
+# Reverse the C-mangle so fields() reports SOURCE-level type names
+# (Point.x : "double" -> "float"), matching Rust fields() which reads the
+# type registry's canonical names and normalizes GorgetString -> String.
+# This is the de-mangle boundary (the type_info type_name is the C
+# contract; here we map it back to the user-facing spelling), the inverse
+# of lower_types.gg prim_to_c_name. NOTE: partial inverse — covers the
+# primitives meta_fields exercises (float/String/int/bool + sized int
+# siblings); does NOT yet cover u8->byte (harmless for 4a, add when 4b
+# needs it).
+String demangle_field_type_name(String cname):
+    match cname:
+        case "int64_t":
+            return "int"
+        case "double":
+            return "float"
+        case "GorgetString":
+            return "String"
+        case "bool":
+            return "bool"
+        case "int8_t":
+            return "int8"
+        case "int16_t":
+            return "int16"
+        case "int32_t":
+            return "int32"
+        case "uint64_t":
+            return "uint"
+        case "uint8_t":
+            return "uint8"
+        case "uint16_t":
+            return "uint16"
+        case "uint32_t":
+            return "uint32"
+        case "float":
+            return "float32"
+        else:
+            return cname
+
+# `ftype is numeric:` (and a few sibling category predicates) used inside
+# meta-for bodies. Mirrors Rust's meta `is`-category check on the
+# resolved type string. Returns the boolean and sets ok=true when the
+# predicate is recognized.
+bool meta_type_category_is(String tyname, String category, bool &ok):
+    ok = true
+    if category == "numeric":
+        return tyname == "int" or tyname == "float" or tyname == "int8" or tyname == "int16" or tyname == "int32" or tyname == "uint" or tyname == "uint8" or tyname == "uint16" or tyname == "uint32" or tyname == "float32"
+    elif category == "integer":
+        return tyname == "int" or tyname == "int8" or tyname == "int16" or tyname == "int32" or tyname == "uint" or tyname == "uint8" or tyname == "uint16" or tyname == "uint32"
+    elif category == "float":
+        return tyname == "float" or tyname == "float32"
+    elif category == "string":
+        return tyname == "String"
+    elif category == "bool":
+        return tyname == "bool"
+    ok = false
+    return false
+
+# Substitute the meta-for loop-var string bindings into an expression.
+# A bare `EIdentifier(name)` bound in `sv` becomes an `EStringLiteral`,
+# EXCEPT when used as the callee of a call (`vname(w)`) — there it is an
+# identifier RENAME (ctor-call), mirroring Rust substitute_expr's
+# Expr::Call special-case. Recurses structurally (f-string parts handled
+# so `f"{fname}:{ftype}"` prints the substituted value).
+SpannedExpr subst_mf_expr(SpannedExpr se, Dict[String, String] &sv):
+    match se.expr:
+        case EIdentifier(name):
+            if sv.contains(name):
+                return SpannedExpr(EStringLiteral(sv.get(name).unwrap(), false), se.span)
+            return se
+        case EBinaryOp(l, op, r):
+            return SpannedExpr(EBinaryOp(Box(subst_mf_expr(*l, &sv)), op, Box(subst_mf_expr(*r, &sv))), se.span)
+        case EUnaryOp(op, operand):
+            return SpannedExpr(EUnaryOp(op, Box(subst_mf_expr(*operand, &sv))), se.span)
+        case ECall(callee, args, arg_names, targs):
+            # Ctor-call rename: a bare `vname(...)` callee bound to a
+            # string becomes `Circle(...)` (identifier), NOT
+            # `"Circle"(...)` (string literal).
+            SpannedExpr new_callee = *callee
+            match (*callee).expr:
+                case EIdentifier(cname):
+                    if sv.contains(cname):
+                        new_callee = SpannedExpr(EIdentifier(sv.get(cname).unwrap()), (*callee).span)
+                else:
+                    new_callee = subst_mf_expr(*callee, &sv)
+            Vector[SpannedExpr] na = Vector[SpannedExpr]()
+            for a in args:
+                na.push(subst_mf_expr(a, &sv))
+            return SpannedExpr(ECall(Box(new_callee), na, arg_names, targs), se.span)
+        case EMethodCall(recv, mname, args, arg_names, targs):
+            Vector[SpannedExpr] na = Vector[SpannedExpr]()
+            for a in args:
+                na.push(subst_mf_expr(a, &sv))
+            return SpannedExpr(EMethodCall(Box(subst_mf_expr(*recv, &sv)), mname, na, arg_names, targs), se.span)
+        case EFieldAccess(base, fname):
+            return SpannedExpr(EFieldAccess(Box(subst_mf_expr(*base, &sv)), fname), se.span)
+        case EIndex(base, idx):
+            return SpannedExpr(EIndex(Box(subst_mf_expr(*base, &sv)), Box(subst_mf_expr(*idx, &sv))), se.span)
+        case EFString(raw, parts):
+            Vector[SpannedExpr] np = Vector[SpannedExpr]()
+            for p in parts:
+                np.push(subst_mf_expr(p, &sv))
+            return SpannedExpr(EFString(raw, np), se.span)
+        case EArrayLiteral(elems):
+            Vector[SpannedExpr] ne = Vector[SpannedExpr]()
+            for e in elems:
+                ne.push(subst_mf_expr(e, &sv))
+            return SpannedExpr(EArrayLiteral(ne), se.span)
+        case EIs(inner, negated, pat):
+            # `ftype is numeric` — substitute the LHS (the loop-var) so the
+            # meta-cond engine sees `"int" is numeric` post-unroll. Rebuild
+            # OWNED (never return the borrowed `se`): the pattern (category
+            # name) is carried through via a value copy.
+            SpannedPattern pat_copy = *pat
+            return SpannedExpr(EIs(Box(subst_mf_expr(*inner, &sv)), negated, Box(pat_copy)), se.span)
+        else:
+            return se
+
+# Substitute the loop-var string bindings into a statement list.
+Vector[Stmt] subst_mf_stmts(Vector[Stmt] stmts, Dict[String, String] &sv):
+    Vector[Stmt] out = Vector[Stmt]()
+    for s in stmts:
+        match s:
+            case SExpr(e):
+                out.push(SExpr(subst_mf_expr(e, &sv)))
+            case SReturn(oe):
+                match oe:
+                    case Some(e):
+                        out.push(SReturn(Some(subst_mf_expr(e, &sv))))
+                    case None:
+                        out.push(s)
+            case SVarDecl(ty, name, val, a, b, c):
+                out.push(SVarDecl(ty, name, subst_mf_expr(val, &sv), a, b, c))
+            case SAssign(lhs, rhs):
+                out.push(SAssign(subst_mf_expr(lhs, &sv), subst_mf_expr(rhs, &sv)))
+            case SCompoundAssign(lhs, op, rhs):
+                out.push(SCompoundAssign(subst_mf_expr(lhs, &sv), op, subst_mf_expr(rhs, &sv)))
+            case SIf(cond, then_b, branches):
+                Vector[ElseBranch] nb = Vector[ElseBranch]()
+                for eb in branches:
+                    Option[SpannedExpr] nc = None
+                    match eb.condition:
+                        case Some(c):
+                            nc = Some(subst_mf_expr(c, &sv))
+                        case None:
+                            nc = None
+                    nb.push(ElseBranch(nc, subst_mf_stmts(eb.body, &sv)))
+                out.push(SIf(subst_mf_expr(cond, &sv), subst_mf_stmts(then_b, &sv), nb))
+            case SMetaIf(meta_cond, then_body, elif_branches):
+                Vector[ElseBranch] nb = Vector[ElseBranch]()
+                for eb in elif_branches:
+                    Option[SpannedExpr] nc = None
+                    match eb.condition:
+                        case Some(c):
+                            nc = Some(subst_mf_expr(c, &sv))
+                        case None:
+                            nc = None
+                    nb.push(ElseBranch(nc, subst_mf_stmts(eb.body, &sv)))
+                out.push(SMetaIf(subst_mf_expr(meta_cond, &sv), subst_mf_stmts(then_body, &sv), nb))
+            case SWhile(cond, body):
+                out.push(SWhile(subst_mf_expr(cond, &sv), subst_mf_stmts(body, &sv)))
+            case SFor(pat, iter_e, body, own, else_b):
+                out.push(SFor(pat, subst_mf_expr(iter_e, &sv), subst_mf_stmts(body, &sv), own, subst_mf_stmts(else_b, &sv)))
+            case SMatch(scrut, arms):
+                Vector[MatchArm] na = Vector[MatchArm]()
+                for a in arms:
+                    na.push(MatchArm(a.pattern, a.guard, subst_mf_stmts(a.body, &sv)))
+                out.push(SMatch(subst_mf_expr(scrut, &sv), na))
+            else:
+                out.push(s)
+    return out
+
+# Resolve a meta-for iterable of the form `fields(T)` to the list of
+# (field-name, source-type-name) pairs for the concrete T. Sets ok=false
+# if the iterable is not a recognized `fields(<param>)` call or the
+# concrete type is not a registered struct. tn_env maps the type param
+# (e.g. "T") to its concrete typename (e.g. "Point").
+bool eval_meta_fields(SpannedExpr iter_e, Dict[String, String] &tn_env, GirModule &gmod, Vector[String] &out_names, Vector[String] &out_types):
+    match iter_e.expr:
+        case ECall(callee, args, _, _):
+            match (*callee).expr:
+                case EIdentifier(fname):
+                    if fname == "fields" and args.len() == 1:
+                        match args.get(0).unwrap().expr:
+                            case EIdentifier(tparam):
+                                String concrete = tparam
+                                if tn_env.contains(tparam):
+                                    concrete = tn_env.get(tparam).unwrap()
+                                if gmod.type_infos.contains(concrete):
+                                    GirTypeInfo ti = gmod.type_infos.get(concrete).unwrap()
+                                    if not ti.is_enum:
+                                        for f in ti.fields:
+                                            out_names.push(f.name.clone())
+                                            out_types.push(demangle_field_type_name(f.type_name))
+                                        return true
+                            else:
+                                pass
+                else:
+                    pass
+        else:
+            pass
+    return false
+
+# Resolve `variant_names(T)` to the list of variant names for the
+# concrete enum T. Sets ok=false if unrecognized / not an enum.
+bool eval_meta_variant_names(SpannedExpr iter_e, Dict[String, String] &tn_env, GirModule &gmod, Vector[String] &out_names):
+    match iter_e.expr:
+        case ECall(callee, args, _, _):
+            match (*callee).expr:
+                case EIdentifier(fname):
+                    if fname == "variant_names" and args.len() == 1:
+                        match args.get(0).unwrap().expr:
+                            case EIdentifier(tparam):
+                                String concrete = tparam
+                                if tn_env.contains(tparam):
+                                    concrete = tn_env.get(tparam).unwrap()
+                                if gmod.enum_registry.contains(concrete):
+                                    Vector[String] vnames = gmod.enum_registry.get(concrete).unwrap()
+                                    for vn in vnames:
+                                        out_names.push(vn.clone())
+                                    return true
+                            else:
+                                pass
+                else:
+                    pass
         else:
             pass
     return false
@@ -702,7 +973,7 @@ bool eval_delayed_meta_cond(SpannedExpr cond, Dict[String, String] &tn_env, bool
 # Walk a statement list, evaluating each SMetaIf against the env and
 # splicing the winning branch. Recurses into nested blocks AND into the
 # spliced branch bodies. Returns the rewritten statement list.
-Vector[Stmt] evaluate_delayed_meta_stmts(Vector[Stmt] stmts, Dict[String, String] &tn_env):
+Vector[Stmt] evaluate_delayed_meta_stmts(Vector[Stmt] stmts, Dict[String, String] &tn_env, GirModule &gmod):
     Vector[Stmt] out = Vector[Stmt]()
     int i = 0
     while i < stmts.len():
@@ -714,7 +985,7 @@ Vector[Stmt] evaluate_delayed_meta_stmts(Vector[Stmt] stmts, Dict[String, String
                 bool cv = eval_delayed_meta_cond(meta_cond, &tn_env, &ok)
                 if ok and cv:
                     # then-branch wins
-                    Vector[Stmt] spliced = evaluate_delayed_meta_stmts(then_body, &tn_env)
+                    Vector[Stmt] spliced = evaluate_delayed_meta_stmts(then_body, &tn_env, &gmod)
                     int si = 0
                     while si < spliced.len():
                         out.push(spliced.get(si).unwrap())
@@ -730,7 +1001,7 @@ Vector[Stmt] evaluate_delayed_meta_stmts(Vector[Stmt] stmts, Dict[String, String
                                 bool eok = false
                                 bool ecv = eval_delayed_meta_cond(ec, &tn_env, &eok)
                                 if eok and ecv:
-                                    Vector[Stmt] sp = evaluate_delayed_meta_stmts(eb.body, &tn_env)
+                                    Vector[Stmt] sp = evaluate_delayed_meta_stmts(eb.body, &tn_env, &gmod)
                                     int sj = 0
                                     while sj < sp.len():
                                         out.push(sp.get(sj).unwrap())
@@ -741,7 +1012,7 @@ Vector[Stmt] evaluate_delayed_meta_stmts(Vector[Stmt] stmts, Dict[String, String
                                     bi = elif_branches.len()
                             case None:
                                 # else branch: wins if nothing taken yet
-                                Vector[Stmt] sp = evaluate_delayed_meta_stmts(eb.body, &tn_env)
+                                Vector[Stmt] sp = evaluate_delayed_meta_stmts(eb.body, &tn_env, &gmod)
                                 int sj = 0
                                 while sj < sp.len():
                                     out.push(sp.get(sj).unwrap())
@@ -752,26 +1023,69 @@ Vector[Stmt] evaluate_delayed_meta_stmts(Vector[Stmt] stmts, Dict[String, String
                     # unevaluable condition: leave the meta-if inert (drop,
                     # like Rust when the env lacks the binding)
                     pass
+            case SMetaFor(mf_vars, mf_iter, mf_body):
+                # PROTOTYPE slice #4: unroll the meta-for over a reflection
+                # iterable. Mirrors Rust evaluate_delayed_meta_block's
+                # Stmt::MetaFor List arm: evaluate the iterable, bind the
+                # loop-var(s) per item, substitute into a clone of the body,
+                # recurse (for nested meta-if), and splice.
+                bool handled = false
+                # `fields(T)` → (name, type) pairs, two loop vars.
+                if mf_vars.len() == 2:
+                    Vector[String] fnames = Vector[String]()
+                    Vector[String] ftypes = Vector[String]()
+                    if eval_meta_fields(mf_iter, &tn_env, &gmod, &fnames, &ftypes):
+                        handled = true
+                        String var_n = mf_vars.get(0).unwrap()
+                        String var_t = mf_vars.get(1).unwrap()
+                        int fi = 0
+                        while fi < fnames.len():
+                            Dict[String, String] sv = {}
+                            sv.put(var_n.clone(), fnames.get(fi).unwrap())
+                            sv.put(var_t.clone(), ftypes.get(fi).unwrap())
+                            Vector[Stmt] sub_body = subst_mf_stmts(mf_body, &sv)
+                            Vector[Stmt] unrolled = evaluate_delayed_meta_stmts(sub_body, &tn_env, &gmod)
+                            for us in unrolled:
+                                out.push(us)
+                            fi += 1
+                # `variant_names(T)` → variant names, one loop var.
+                if mf_vars.len() == 1 and not handled:
+                    Vector[String] vnames = Vector[String]()
+                    if eval_meta_variant_names(mf_iter, &tn_env, &gmod, &vnames):
+                        handled = true
+                        String var_v = mf_vars.get(0).unwrap()
+                        for vn in vnames:
+                            Dict[String, String] sv = {}
+                            sv.put(var_v.clone(), vn.clone())
+                            Vector[Stmt] sub_body = subst_mf_stmts(mf_body, &sv)
+                            Vector[Stmt] unrolled = evaluate_delayed_meta_stmts(sub_body, &tn_env, &gmod)
+                            for us in unrolled:
+                                out.push(us)
+                if not handled:
+                    # Unrecognized iterable (int range, variant_payloads, or
+                    # unevaluable T): leave inert (Rust drops it too). The
+                    # later lower_stmt SMetaFor arm is a no-op.
+                    pass
             case SIf(cond, then_b, else_branches):
                 Vector[ElseBranch] nb = Vector[ElseBranch]()
                 int ei = 0
                 while ei < else_branches.len():
                     ElseBranch eb = else_branches.get(ei).unwrap()
-                    nb.push(ElseBranch(eb.condition, evaluate_delayed_meta_stmts(eb.body, &tn_env)))
+                    nb.push(ElseBranch(eb.condition, evaluate_delayed_meta_stmts(eb.body, &tn_env, &gmod)))
                     ei += 1
-                out.push(SIf(cond, evaluate_delayed_meta_stmts(then_b, &tn_env), nb))
+                out.push(SIf(cond, evaluate_delayed_meta_stmts(then_b, &tn_env, &gmod), nb))
             case SWhile(cond, body):
-                out.push(SWhile(cond, evaluate_delayed_meta_stmts(body, &tn_env)))
+                out.push(SWhile(cond, evaluate_delayed_meta_stmts(body, &tn_env, &gmod)))
             case SFor(pat, iter_e, body, own, else_b):
-                out.push(SFor(pat, iter_e, evaluate_delayed_meta_stmts(body, &tn_env), own, evaluate_delayed_meta_stmts(else_b, &tn_env)))
+                out.push(SFor(pat, iter_e, evaluate_delayed_meta_stmts(body, &tn_env, &gmod), own, evaluate_delayed_meta_stmts(else_b, &tn_env, &gmod)))
             case SLoop(body):
-                out.push(SLoop(evaluate_delayed_meta_stmts(body, &tn_env)))
+                out.push(SLoop(evaluate_delayed_meta_stmts(body, &tn_env, &gmod)))
             case SMatch(scrut, arms):
                 Vector[MatchArm] na = Vector[MatchArm]()
                 int ai = 0
                 while ai < arms.len():
                     MatchArm a = arms.get(ai).unwrap()
-                    na.push(MatchArm(a.pattern, a.guard, evaluate_delayed_meta_stmts(a.body, &tn_env)))
+                    na.push(MatchArm(a.pattern, a.guard, evaluate_delayed_meta_stmts(a.body, &tn_env, &gmod)))
                     ai += 1
                 out.push(SMatch(scrut, na))
             else:
@@ -786,7 +1100,7 @@ void lower_generic_function(FunctionDef fdef, String mangled_name, Vector[String
     # type args, splicing the winning branch BEFORE lowering. Mirrors Rust
     # functions.rs:852 evaluate_delayed_meta_block.
     Dict[String, String] tn_env = build_meta_typename_env(type_params, type_args)
-    Vector[Stmt] expanded_body = evaluate_delayed_meta_stmts(fdef.body, &tn_env)
+    Vector[Stmt] expanded_body = evaluate_delayed_meta_stmts(fdef.body, &tn_env, &gmod)
     FunctionDef mfdef = FunctionDef(fdef.name, fdef.params, fdef.return_type, fdef.type_params, expanded_body, fdef.is_expr_body, fdef.throws_type, fdef.is_extern_stub)
     GirFunction gfn = lower_function(mfdef, &gmod)
 

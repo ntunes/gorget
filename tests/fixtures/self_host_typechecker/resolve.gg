@@ -560,8 +560,14 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
         case SMeta():
             pass
 
-        case SMetaFor(body):
+        case SMetaFor(mf_vars, mf_iter, body):
+            # PROTOTYPE slice #4: bind the meta-for loop vars in the body
+            # scope so references to `fname`/`ftype`/`vname`/`idx` resolve
+            # (the names materialize per-mono at lowering; here we just
+            # register them so resolution doesn't false-miss).
             scopes.push_scope(SkBlock())
+            for mfv in mf_vars:
+                scopes.define(mfv, DkVariable(), Span(0, 0))
             resolve_block(body, &scopes, &types, &ctx)
             scopes.pop_scope()
 
@@ -965,8 +971,10 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
         case SAssert(condition, _):
             resolve_expr(condition, &scopes, &ctx)
 
-        case SMetaFor(body):
+        case SMetaFor(mf_vars, mf_iter, body):
             scopes.push_scope(SkBlock())
+            for mfv in mf_vars:
+                scopes.define(mfv, DkVariable(), Span(0, 0))
             resolve_block_expr(body, &scopes, &ctx)
             scopes.pop_scope()
 

@@ -3024,10 +3024,28 @@ equip Parser:
         if self.check_kw(KW_META):
             self.advance()
             if self.check_kw(KW_FOR):
-                # meta for ...: body — skip header to colon, parse body
-                self.skip_meta_header()
+                # meta for <vars> in <iterable>: body
+                # PROTOTYPE slice #4: capture the loop-var names + the
+                # iterable expression (e.g. `fields(T)` / `variant_names(T)`
+                # / `0..variant_count(T)`) so the delayed-meta engine can
+                # unroll it per-mono. Mirrors the SMetaForMatch capture at
+                # parse_match_stmt + the meta #3 SMetaIf-carries-condition fix.
+                self.advance()
+                Vector[String] mf_vars = Vector[String]()
+                String mf_first = self.parse_meta_for_var_name()
+                if mf_first != "":
+                    mf_vars.push(mf_first)
+                while self.check_tok(TOK_COMMA):
+                    self.advance()
+                    String mf_nv = self.parse_meta_for_var_name()
+                    if mf_nv != "":
+                        mf_vars.push(mf_nv)
+                self.expect_kw(KW_IN, "expected 'in' in meta-for header")
+                SpannedExpr mf_iter = self.parse_expr()
+                self.expect_tok(TOK_COLON, "expected ':' after meta-for header")
+                self.expect_tok(TOK_NEWLINE, "expected newline after meta-for ':'")
                 Vector[Stmt] body = self.parse_block()
-                return SMetaFor(body)
+                return SMetaFor(mf_vars, mf_iter, body)
             elif self.check_kw(KW_IF):
                 # meta if <cond>: body [elif <cond>: body]* [else: body]
                 # PROTOTYPE: capture the condition expression (parse_meta_cond)
@@ -3304,7 +3322,11 @@ equip Parser:
                     self.skip_meta_header()
                     Vector[Stmt] meta_body = self.parse_block()
                     SpannedPattern meta_wild = SpannedPattern(PWildcard(), Span(start, start))
-                    arms.push(MatchArm(meta_wild, None, [SMetaFor(meta_body)]))
+                    # PROTOTYPE slice #4 arity: in-match `meta if` body wrapped
+                    # in SMetaFor with empty vars + placeholder iterable (this
+                    # arm doesn't unroll — it's the meta-if-in-match hack).
+                    SpannedExpr mf_placeholder = SpannedExpr(EIntLiteral(0), Span(start, start))
+                    arms.push(MatchArm(meta_wild, None, [SMetaFor(Vector[String](), mf_placeholder, meta_body)]))
                 else:
                     self.skip_meta_rest()
             elif self.check_kw(KW_ELSE):

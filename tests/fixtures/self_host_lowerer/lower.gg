@@ -590,7 +590,7 @@ String stmt_kind(Stmt s):
             return "SPass"
         case SMeta:
             return "SMeta"
-        case SMetaFor(_):
+        case SMetaFor(_, _, _):
             return "SMetaFor"
         case SMetaIf(_, _, _):
             return "SMetaIf"

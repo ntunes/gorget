@@ -113,7 +113,11 @@ enum Stmt:
     SContinue
     SPass
     SMeta
-    SMetaFor(Vector[Stmt])
+    # PROTOTYPE slice #4: SMetaFor now CARRIES its loop-var names + the
+    # iterable expression (e.g. `fields(T)` / `variant_names(T)`) so the
+    # delayed-meta engine can UNROLL it per monomorphization. Previously
+    # SMetaFor(body) discarded both → the whole meta-for body vanished.
+    SMetaFor(Vector[String], SpannedExpr, Vector[Stmt])
     # SMetaIf carries its CONDITION (the `meta if <cond>:` expression) so the
     # delayed-meta engine can evaluate it per monomorphization. elif conditions
     # live in the ElseBranch.condition.

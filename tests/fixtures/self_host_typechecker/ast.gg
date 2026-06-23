@@ -118,7 +118,14 @@ enum Stmt:
     SContinue
     SPass
     SMeta
-    SMetaFor(Vector[Stmt])
+    # PROTOTYPE slice #4: SMetaFor now CARRIES its loop-var names + the
+    # iterable expression (e.g. `fields(T)` / `variant_names(T)` /
+    # `0..variant_count(T)`) so the delayed-meta engine can UNROLL it per
+    # monomorphization, binding the loop vars per concrete T. Previously
+    # SMetaFor(body) discarded both (skip_meta_header ate them) → the whole
+    # meta-for body silently vanished. Mirrors Rust `Stmt::MetaFor { vars,
+    # range, body }` and the meta #3 SMetaIf-carries-condition fix shape.
+    SMetaFor(Vector[String], SpannedExpr, Vector[Stmt])
     # PROTOTYPE: SMetaIf now carries its CONDITION (the `meta if <cond>:`
     # expression) so the delayed-meta engine can evaluate it per
     # monomorphization. elif conditions live in the ElseBranch.condition.

@@ -424,7 +424,7 @@ bool stmt_mentions_iter(Stmt s):
             return block_mentions_iter(body)
         case SSnapshot(_, _, expr):
             return expr_mentions_iter(expr)
-        case SMetaFor(body):
+        case SMetaFor(mf_vars, mf_iter, body):
             return block_mentions_iter(body)
         case SMetaIf(meta_cond, then_body, branches):
             if block_mentions_iter(then_body):
@@ -763,7 +763,7 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                                     has_real_body = true
                                 case SAssign(_, _):
                                     has_real_body = true
-                                case SMetaFor(_):
+                                case SMetaFor(_, _, _):
                                     has_real_body = true
                                 case SMetaIf(_, _, _):
                                     has_real_body = true
@@ -1023,7 +1023,7 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                                         is_real = true
                                     case SAssign(_, _):
                                         is_real = true
-                                    case SMetaFor(_):
+                                    case SMetaFor(_, _, _):
                                         is_real = true
                                     case SMetaIf(_, _, _):
                                         is_real = true

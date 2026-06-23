@@ -373,7 +373,7 @@ String format_stmt(Stmt s):
             return "pass"
         case SMeta:
             return "meta"
-        case SMetaFor(body):
+        case SMetaFor(mf_vars, mf_iter, body):
             return "meta"
         case SMetaForMatch(_, _, _):
             return "meta"

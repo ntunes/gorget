@@ -1176,6 +1176,21 @@ equip Parser:
         self.expect_tok(TOK_COLON, "expected ':' in meta header")
         self.expect_tok(TOK_NEWLINE, "expected newline after meta header ':'")
 
+    # PROTOTYPE slice #4: read one meta-for loop-var name (an identifier;
+    # type-keyword spellings tolerated defensively). Mirrors the
+    # typechecker copy's helper; here keyword_tag maps Keyword -> int for
+    # the int-form type_keyword_name / non_type_keyword_name.
+    String parse_meta_for_var_name(&self):
+        SpannedToken st = self.advance()
+        String n = token_ident(st.lex_token)
+        if n != "":
+            return n
+        int kt = keyword_tag(st.lex_token)
+        String tn = type_keyword_name(kt)
+        if tn != "":
+            return tn
+        return non_type_keyword_name(kt)
+
     # Skip the rest of a meta item: consume tokens to end of line, then consume
     # any indented body block, plus elif/else continuations.
     void skip_meta_rest(&self):
@@ -2718,10 +2733,27 @@ equip Parser:
         if self.check_kw(KW_META):
             self.advance()
             if self.check_kw(KW_FOR):
-                # meta for ...: body — skip header to colon, parse body
-                self.skip_meta_header()
+                # meta for <vars> in <iterable>: body
+                # PROTOTYPE slice #4: capture the loop-var names + the
+                # iterable expression so the 3-arity SMetaFor matches the
+                # typechecker/lowerer copies (fidelity — this resolver dir is
+                # an independent comparison driver).
+                self.advance()
+                Vector[String] mf_vars = Vector[String]()
+                String mf_first = self.parse_meta_for_var_name()
+                if mf_first != "":
+                    mf_vars.push(mf_first)
+                while self.check_tok(TOK_COMMA):
+                    self.advance()
+                    String mf_nv = self.parse_meta_for_var_name()
+                    if mf_nv != "":
+                        mf_vars.push(mf_nv)
+                self.expect_kw(KW_IN, "expected 'in' in meta-for header")
+                SpannedExpr mf_iter = self.parse_expr()
+                self.expect_tok(TOK_COLON, "expected ':' after meta-for header")
+                self.expect_tok(TOK_NEWLINE, "expected newline after meta-for ':'")
                 Vector[Stmt] body = self.parse_block()
-                return SMetaFor(body)
+                return SMetaFor(mf_vars, mf_iter, body)
             elif self.check_kw(KW_IF):
                 # meta if <cond>: body [elif <cond>: body]* [else: body]
                 # Capture the condition expression so the delayed-meta engine
