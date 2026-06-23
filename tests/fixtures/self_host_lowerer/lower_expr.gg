@@ -2346,6 +2346,23 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         eix_base_name = type_id_to_name(eix_inner2, &gmod)
                     else:
                         pass
+            # String character index-read (`s[i]`) → gorget_str_index(Str, int).
+            # Mirrors Rust gg's `lower_index_access` (methods.rs:3370-3386):
+            # resolve through Ptr — a by-pointer `String` PARAM is a
+            # GtPtr(GorgetString), so is_string_local (which unwraps GtPtr/
+            # GtMutPtr) detects both the value-String and by-pointer-String base.
+            # gorget_str_index takes `Str` BY VALUE; the codegen's
+            # `runtime_takes_str_by_value("gorget_str_index")` (gorget_str_ prefix)
+            # inserts the `*(Str*)` deref for a Ptr-typed actual, so a borrowed
+            # base is handled exactly like the gorget_str_eq/gorget_str_cat paths.
+            # The result is a cap=0 VIEW REGION into the base's buffer; typing the
+            # dst GorgetString lets the boundary clone own it when it escapes.
+            if is_string_local(eix_base, &ctx, &gmod):
+                int eix_str_gs = lookup_or_register_named(&gmod, "GorgetString")
+                int eix_str_dst = add_local(&ctx, eix_str_gs, None)
+                Vector[Operand] eix_str_args = [op_consume(&ctx, &gmod, eix_base, CkCallArgBorrow()), op_consume(&ctx, &gmod, eix_idx, CkBinOpArg())]
+                emit(&ctx, GICallExtern(eix_str_dst, "gorget_str_index", eix_str_args))
+                return eix_str_dst
             String eix_getter = ""
             match resource_meta_for(&gmod, eix_base_name):
                 case Some(eix_rmeta):

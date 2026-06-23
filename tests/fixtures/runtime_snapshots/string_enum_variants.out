@@ -1,0 +1,10 @@
+tokens: 7
+word: hello
+num: 42
+punct: +
+word: world
+words: hello,world
+text(11): HELLO WORLD
+cmd: greet(alice)
+empty
+texts: 2, cmds: 2
