@@ -1,0 +1,4 @@
+t = hello
+c = e
+s = hello
+v.len() = 3
