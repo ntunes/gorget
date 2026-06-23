@@ -872,6 +872,24 @@ void rename_import_aliases(Module &m):
     Dict[String, String] amap = collect_import_aliases(m)
     if amap.len() == 0:
         return
+    apply_alias_rename(&m, &amap)
+
+# Type-axis rewrite for resolved meta type aliases. Same item-walk +
+# rename_aliases_* machinery rename_import_aliases uses; only the alias
+# source differs (resolved meta aliases vs import aliases). Mirrors Rust
+# src/semantic/meta.rs substitute_item (:1907).
+void rename_meta_aliases_in_module(Module &m, Dict[String, String] &amap):
+    apply_alias_rename(&m, &amap)
+
+# Shared alias-rename item walk. Renames the aliased type head in every
+# item position (fn params/returns/throws/bodies, equip target+trait+
+# methods, trait methods, struct fields, enum payloads, const/static/
+# typealias/newtype types, extern stubs, test/bench/suite bodies) using
+# `amap`. Extracted verbatim from the former rename_import_aliases body so
+# meta-type-alias substitution reuses it (the SSOT for the item walk —
+# prevents import-alias / meta-alias drift). Both rename_import_aliases and
+# rename_meta_aliases_in_module delegate here.
+void apply_alias_rename(Module &m, Dict[String, String] &amap):
     int i = 0
     while i < m.items.len():
         match m.items.get(i).unwrap():
@@ -1074,7 +1092,16 @@ void expand_meta_types(Module &m, TypeTable &types, String source_dir):
     # [PROTOTYPE] Phase 2: substitute collected const values into all bodies.
     substitute_meta_consts(&m, &int_consts, &bool_consts, &str_consts)
 
-    # Pass 2: resolve meta type aliases
+    # Pass 2: resolve meta type aliases.
+    # ALSO accumulate alias-name -> target-name into a local map so the
+    # resolved aliases can be SUBSTITUTED into the AST (mirrors Rust
+    # src/semantic/meta.rs Phase 2 substitute_item/substitute_type,
+    # :1867/:1907). The typechecker reads types.meta_aliases, but the
+    # LOWERER reads the AST — without this rewrite `Map[String,int]` survives
+    # into lowering as an unknown user type (`[lower_fail] unsupported base
+    # type Map__...`). devbook/24 rule 4 "resolve once, write THROUGH";
+    # same one-layer-too-shallow class as the IMetaIf #1 fix.
+    Dict[String, String] meta_amap = {}
     for item in m.items:
         match item:
             case IMetaType(mt_name, mt_rhs):
@@ -1083,6 +1110,7 @@ void expand_meta_types(Module &m, TypeTable &types, String source_dir):
                         String target = meta_type_to_name(rhs_type.ty)
                         if target != "":
                             types.meta_aliases[mt_name] = target
+                            meta_amap[mt_name] = target
                     case MtrConditional(then_type, cond_name, else_type):
                         bool cond_val = false
                         if bool_consts.contains(cond_name):
@@ -1091,10 +1119,12 @@ void expand_meta_types(Module &m, TypeTable &types, String source_dir):
                             String target = meta_type_to_name(then_type.ty)
                             if target != "":
                                 types.meta_aliases[mt_name] = target
+                                meta_amap[mt_name] = target
                         else:
                             String target = meta_type_to_name(else_type.ty)
                             if target != "":
                                 types.meta_aliases[mt_name] = target
+                                meta_amap[mt_name] = target
                     case MtrCall(callee, call_args):
                         # Evaluate the call args, handling arch_word_bits() etc.
                         Vector[SpannedExpr] resolved_args = Vector[SpannedExpr]()
@@ -1118,10 +1148,26 @@ void expand_meta_types(Module &m, TypeTable &types, String source_dir):
                         String result = eval_type_func_call(callee, &resolved_args, &int_consts)
                         if result != "":
                             types.meta_aliases[mt_name] = result
+                            meta_amap[mt_name] = result
                     case MtrUnresolved():
                         pass
             else:
                 pass
+
+    # Phase 2 substitution: rename every resolved meta-type alias to its
+    # target throughout the AST so the lowerer sees the underlying type.
+    # Reuses the same rename_aliases_* type-rename walk that
+    # rename_import_aliases uses (the type axis already recurses into generic
+    # args and renames ECall constructor callees, so `Map[String,int]()` ->
+    # `Dict[String,int]()`). Mirrors Rust meta.rs substitute_item; runs here
+    # inside expand_meta_types, BEFORE resolve — matching Rust, where
+    # substitute_item runs in the meta phase before resolve.
+    # TODO: meta_amap stores flat target NAMES; meta_type_to_name returns ""
+    # for a target carrying its own generic args (e.g. meta type IntVec =
+    # Vector[int]). No current fixture exercises it; Rust stores a full Type +
+    # a Phase-1.75 ctor fixup to thread the baked generic args.
+    if meta_amap.len() > 0:
+        rename_meta_aliases_in_module(&m, &meta_amap)
 
 # ── Meta-for-in-match expansion ─────────────────────────────
 #
