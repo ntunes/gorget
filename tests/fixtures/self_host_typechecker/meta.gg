@@ -614,46 +614,48 @@ Dict[String, String] collect_import_aliases(Module m):
 # An imported TYPE can be aliased too — `from geom import Point as P`
 # then `P f(P a)`. The IR backend looks the type up by SURFACE name, so
 # the local alias `P` must be renamed back to `Point` in every type
-# position. This mirrors Rust's `rename_type` for the HEAD-name axis:
-# it renames the head name of a `TNamed` (the position an imported type
-# alias actually occupies — a param/return/field/const type that IS the
-# aliased type). `TPrimitive`/`TSelf`/`TInferred` are leaves and never
-# carry an aliasable name.
+# position — the head name of a `TNamed` (the position an imported type
+# alias most often occupies) AND every nested type the alias can hide
+# inside (`Vector[P]`, `[P; N]`, `[P]`, `(P, int)`, `P(int)`).
+# `TPrimitive`/`TSelf`/`TInferred` are leaves and never carry an
+# aliasable name.
 #
-# ⚠ NESTED-TYPE RECURSION IS DEFERRED (live Rust-`gg` compiler bug; the
-# exposing artifact is the #[ignore]d `import_type_alias_nested` fixture).
-# Rust's `rename_type` ALSO recurses into container element types
-# (`Vector[P]` generic args, `[P; N]` / `[P]` element, `(P, int)` tuple
-# members, `P(int)` function params/ret).
-# Porting that recursion here trips a Rust-`gg` BIR-lowering bug: in a
-# large multi-module build (the self-host lowerer), a self-recursive fn
-# that pattern-matches on the `Type` enum AND reconstructs a `Type` value
-# containing the recursive result mis-resolves the reconstructed enum's
-# `EnumInit` struct-id to a builtin (`CRuntimeType`), tripping the LIR
-# validator (`field index N out of range for CRuntimeType`). The same
-# function compiles standalone; the collision is struct-registry-pressure
-# dependent. The head-name rename below is correct and complete for the
-# common import-type-alias case; the nested case stays a sharp TODO + an
-# #[ignore]d fixture rather than a redesign-around (per "Don't redesign
-# around compiler gaps"). When the BIR struct-id bug is fixed, restore the
-# `TArray`/`TSlice`/`TTuple`/`TNamed`-args/`TFunction` recursion arms.
+# Recurses into every type position that can carry an aliasable name —
+# the head name of a `TNamed`, each generic arg, the element of an array
+# or slice, each tuple member, and a function type's return/param types
+# (mirrors Rust's `rename_type`, rewrite.rs:458-487). The self-host `Type`
+# enum has no `TRef`/`TOwned` variants, so those Rust arms have no twin.
 SpannedType rename_aliases_type(SpannedType st, Dict[String, String] &amap):
     match st.ty:
         case TNamed(name, args):
             String nn = name
             if amap.contains(name):
                 nn = amap[name]
-            # Recurse into each generic arg (mirrors Rust rewrite.rs:464):
-            # this reconstructs only a `Vector[SpannedType]`, NOT a
-            # `Box`-wrapped inner `Type`, so it does NOT trip the BIR
-            # struct-id collision. The `TArray`/`TSlice`/`TFunction` arms
-            # (which DO reconstruct a `Box[SpannedType]`) stay deferred.
+            # Recurse into each generic arg (mirrors Rust rewrite.rs:464).
             Vector[SpannedType] nargs = Vector[SpannedType]()
             int ai = 0
             while ai < args.len():
                 nargs.push(rename_aliases_type(args.get(ai).unwrap(), &amap))
                 ai = ai + 1
             return SpannedType(TNamed(nn, nargs), st.span)
+        case TArray(elem, n):
+            return SpannedType(TArray(Box(rename_aliases_type(*elem, &amap)), n), st.span)
+        case TSlice(elem):
+            return SpannedType(TSlice(Box(rename_aliases_type(*elem, &amap))), st.span)
+        case TTuple(elems):
+            Vector[SpannedType] nelems = Vector[SpannedType]()
+            int ti = 0
+            while ti < elems.len():
+                nelems.push(rename_aliases_type(elems.get(ti).unwrap(), &amap))
+                ti = ti + 1
+            return SpannedType(TTuple(nelems), st.span)
+        case TFunction(ret, params, owns):
+            Vector[SpannedType] nparams = Vector[SpannedType]()
+            int fi = 0
+            while fi < params.len():
+                nparams.push(rename_aliases_type(params.get(fi).unwrap(), &amap))
+                fi = fi + 1
+            return SpannedType(TFunction(Box(rename_aliases_type(*ret, &amap)), nparams, owns), st.span)
         else:
             return st
 
