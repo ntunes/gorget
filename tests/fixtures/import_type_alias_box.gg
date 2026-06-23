@@ -1,24 +1,8 @@
-# Import TYPE aliasing used inside a `Box`-WRAPPING container type — here a
-# function type `Callable[DT(...)]`, whose return position the type-axis
-# rewrite must rename `DT` -> `DateTime` inside. This is the part of the
-# rewrite the SELF-HOST currently DEFERS: the `TFunction` (and `TArray` /
-# `TSlice`) recursion arms of `rename_aliases_type` reconstruct a
-# `Box[SpannedType]` for the inner `Type`, and porting THAT trips a Rust-`gg`
-# BIR-lowering bug (a self-recursive fn that pattern-matches on the `Type`
-# enum AND reconstructs a `Box`-wrapped `Type` value mis-resolves the
-# reconstructed `EnumInit` struct-id to a builtin in a large multi-module
-# build; `field index N out of range for CRuntimeType` — pressure-dependent,
-# does NOT repro standalone).
-#
-# The `TNamed`-generic-args arm IS restored (see `import_type_alias_nested`,
-# which runs `2000`); only the `Box`-wrapping arms remain deferred. Rust `gg`
-# handles THIS fixture correctly today, so the expected output below is the
-# CORRECT language behavior — the self-host must reach it once the BIR
-# struct-id collision is fixed and the `TFunction`/`TArray`/`TSlice` recursion
-# arms are restored in `self_host_typechecker/meta.gg::rename_aliases_type`.
-#
-# Wired #[ignore] in tests/integration.rs because the SELF-HOST can't build it
-# yet (the deferred Box-wrapping recursion); un-ignore when restored.
+# Import TYPE aliasing used inside a `Box`-WRAPPING container type — a function
+# type `Callable[DT(...)]`, whose return position the type-axis rewrite must
+# rename `DT` -> `DateTime` inside. Exercises the `TFunction`/`TArray`/`TSlice`
+# recursion arms of `rename_aliases_type`, which reconstruct a `Box[SpannedType]`
+# for the inner `Type`. Both Rust `gg` and the self-host produce `2000`.
 
 from std.datetime import DateTime as DT
 
