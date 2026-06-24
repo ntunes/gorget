@@ -22785,6 +22785,18 @@ fn expression_body_functions() {
 }
 
 #[test]
+fn return_expr_body() {
+    // Regression: `return` as an expression-body tail (`int f(...): return EXPR`)
+    // must behave like `: EXPR`. Was mis-lowered to drop the value (the outer
+    // assign_to_return_slot clobbered the inner return's slot). Covers all 4
+    // FunctionBody::Expression arms: top-level fn, method, generic fn, throws.
+    run_gg(
+        "return_expr_body.gg",
+        "12\n50\n7\nhi bob\n42",
+    );
+}
+
+#[test]
 fn derive_equatable_enum() {
     run_gg(
         "derive_equatable_enum.gg",

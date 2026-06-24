@@ -1094,36 +1094,56 @@ pub fn lower_function(
             ctx.func_state.expected_type = Some(declared_success_type);
             let mut operand = lower_expr(ctx, &mut builder, expr);
             ctx.func_state.expected_type = prev_expected;
-            // Clone borrowed operands at the return boundary (BareParam, CowBorrow, etc.).
-            // Skip when return type is Ptr — the caller expects a borrow, not an owned clone.
-            let ret_type = builder.locals[0].type_id;
-            if !matches!(ctx.type_registry.get(ret_type), Some(GirType::Ptr(_))) {
-                operand = ctx.ensure_owned_at_boundary(&mut builder, operand, expr_span, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
-                operand = ctx.auto_deref_at_return(&mut builder, operand, ret_type);
-            }
-            operand = wrap_expr_tail_in_ok(ctx, &mut builder, operand, ret_type, func.throws.is_some());
-            let returned_local = match &operand {
-                Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
-                    Some(place.local)
+            // A `return`/`throw` used as the expr-body tail diverges: the inner
+            // statement already assigned the return slot, emitted scope-exit
+            // drops, and terminated the block. The outer `assign_to_return_slot`
+            // (an unguarded `emit`) would clobber the real value with the
+            // divergent tail's Unit operand; the trailing `ret` is already a
+            // no-op on the terminated block. Skip the trailing assign/drops/ret
+            // (the inner return owns them) while still balancing the drop scope.
+            // Mirrors the closure-body terminator guard (`closures.rs:520`).
+            if !builder.is_terminated() {
+                // Clone borrowed operands at the return boundary (BareParam, CowBorrow, etc.).
+                // Skip when return type is Ptr — the caller expects a borrow, not an owned clone.
+                let ret_type = builder.locals[0].type_id;
+                if !matches!(ctx.type_registry.get(ret_type), Some(GirType::Ptr(_))) {
+                    operand = ctx.ensure_owned_at_boundary(&mut builder, operand, expr_span, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
+                    operand = ctx.auto_deref_at_return(&mut builder, operand, ret_type);
                 }
-                _ => None,
-            };
-            assign_to_return_slot(ctx, &mut builder, operand);
-            // Cross-frame fault (Inc-2.1a): fill the fault-return block while the
-            // Function drop scope is still pushed (the expr-body tail's own
-            // early-exit drops + pop follow).
-            if let Some(frb) = fault_return_bb {
-                let saved = builder.current_block;
-                let slot = ctx.func_state.fault_slot_param.unwrap();
-                fill_fault_return_block(ctx, &mut builder, frb, slot, return_type == UNIT_TYPE);
-                builder.switch_to(saved);
+                operand = wrap_expr_tail_in_ok(ctx, &mut builder, operand, ret_type, func.throws.is_some());
+                let returned_local = match &operand {
+                    Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
+                        Some(place.local)
+                    }
+                    _ => None,
+                };
+                assign_to_return_slot(ctx, &mut builder, operand);
+                // Cross-frame fault (Inc-2.1a): fill the fault-return block while the
+                // Function drop scope is still pushed (the expr-body tail's own
+                // early-exit drops + pop follow).
+                if let Some(frb) = fault_return_bb {
+                    let saved = builder.current_block;
+                    let slot = ctx.func_state.fault_slot_param.unwrap();
+                    fill_fault_return_block(ctx, &mut builder, frb, slot, return_type == UNIT_TYPE);
+                    builder.switch_to(saved);
+                }
+                ctx.drops.emit_early_exit_drops(
+                    &mut builder, &ctx.type_registry,
+                    DropScopeKind::Function, returned_local,
+                );
+                ctx.drops.pop_scope_no_emit();
+                builder.ret(FunctionBuilder::copy(LocalId(0)));
+            } else {
+                // Tail already terminated (e.g. `: return x`). Fill the
+                // fault-return block (if any) and balance the drop scope.
+                if let Some(frb) = fault_return_bb {
+                    let saved = builder.current_block;
+                    let slot = ctx.func_state.fault_slot_param.unwrap();
+                    fill_fault_return_block(ctx, &mut builder, frb, slot, return_type == UNIT_TYPE);
+                    builder.switch_to(saved);
+                }
+                ctx.drops.pop_scope_no_emit();
             }
-            ctx.drops.emit_early_exit_drops(
-                &mut builder, &ctx.type_registry,
-                DropScopeKind::Function, returned_local,
-            );
-            ctx.drops.pop_scope_no_emit();
-            builder.ret(FunctionBuilder::copy(LocalId(0)));
         }
 
         FunctionBody::Declaration | FunctionBody::Extern(_) => {
@@ -1384,25 +1404,30 @@ pub fn lower_equip_method(
             ctx.func_state.expected_type = Some(declared_success_type);
             let mut operand = lower_expr(ctx, &mut builder, expr);
             ctx.func_state.expected_type = prev_expected;
-            // Clone borrowed operands at the return boundary.
-            // Skip when return type is Ptr — the caller expects a borrow.
-            let ret_type = builder.locals[0].type_id;
-            if !matches!(ctx.type_registry.get(ret_type), Some(GirType::Ptr(_))) {
-                operand = ctx.ensure_owned_at_boundary(&mut builder, operand, expr_span, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
-                operand = ctx.auto_deref_at_return(&mut builder, operand, ret_type);
-            }
-            operand = wrap_expr_tail_in_ok(ctx, &mut builder, operand, ret_type, method.throws.is_some());
-            let returned_local = match &operand {
-                Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
-                    Some(place.local)
+            // See `lower_function`'s expr-body arm: a `return`/`throw` tail
+            // already terminated the block; the outer assign would clobber the
+            // slot. Skip the trailing assign/drops/ret, just balance the scope.
+            if !builder.is_terminated() {
+                // Clone borrowed operands at the return boundary.
+                // Skip when return type is Ptr — the caller expects a borrow.
+                let ret_type = builder.locals[0].type_id;
+                if !matches!(ctx.type_registry.get(ret_type), Some(GirType::Ptr(_))) {
+                    operand = ctx.ensure_owned_at_boundary(&mut builder, operand, expr_span, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
+                    operand = ctx.auto_deref_at_return(&mut builder, operand, ret_type);
                 }
-                _ => None,
-            };
-            assign_to_return_slot(ctx, &mut builder, operand);
-            ctx.drops.emit_early_exit_drops(
-                &mut builder, &ctx.type_registry,
-                DropScopeKind::Function, returned_local,
-            );
+                operand = wrap_expr_tail_in_ok(ctx, &mut builder, operand, ret_type, method.throws.is_some());
+                let returned_local = match &operand {
+                    Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
+                        Some(place.local)
+                    }
+                    _ => None,
+                };
+                assign_to_return_slot(ctx, &mut builder, operand);
+                ctx.drops.emit_early_exit_drops(
+                    &mut builder, &ctx.type_registry,
+                    DropScopeKind::Function, returned_local,
+                );
+            }
             ctx.drops.pop_scope_no_emit();
             builder.ret(FunctionBuilder::copy(LocalId(0)));
         }
@@ -1659,36 +1684,41 @@ pub fn lower_generic_function(
         FunctionBody::Expression(expr) => {
             let expr_span = expr.span;
             let mut operand = lower_expr(ctx, &mut builder, expr);
-            // Clone borrowed operands at the return boundary.
-            // Skip when return type is Ptr — the caller expects a borrow.
-            let ret_type = builder.locals[0].type_id;
-            if !matches!(ctx.type_registry.get(ret_type), Some(GirType::Ptr(_))) {
-                operand = ctx.auto_deref_at_return(&mut builder, operand, ret_type);
-                operand = ctx.ensure_owned_at_boundary(&mut builder, operand, expr_span, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
-            }
-            let returned_local = match &operand {
-                Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
-                    Some(place.local)
+            // See `lower_function`'s expr-body arm: a `return`/`throw` tail
+            // already terminated the block; the outer assign would clobber the
+            // slot. Skip the trailing assign/drops/ret, just balance the scope.
+            if !builder.is_terminated() {
+                // Clone borrowed operands at the return boundary.
+                // Skip when return type is Ptr — the caller expects a borrow.
+                let ret_type = builder.locals[0].type_id;
+                if !matches!(ctx.type_registry.get(ret_type), Some(GirType::Ptr(_))) {
+                    operand = ctx.auto_deref_at_return(&mut builder, operand, ret_type);
+                    operand = ctx.ensure_owned_at_boundary(&mut builder, operand, expr_span, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
                 }
-                _ => None,
-            };
-            assign_to_return_slot(ctx, &mut builder, operand);
-            // For move-overridden params: zero the source through the pointer
-            // to prevent the caller from double-freeing.
-            if !move_override_params.is_empty() {
-                if let Expr::Identifier(name) = &expr.node {
-                    if let Some((local_id, _)) = ctx.lookup_local(name) {
-                        builder.move_zero(Place {
-                            local: local_id,
-                            projections: vec![Projection::Deref],
-                        });
+                let returned_local = match &operand {
+                    Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
+                        Some(place.local)
+                    }
+                    _ => None,
+                };
+                assign_to_return_slot(ctx, &mut builder, operand);
+                // For move-overridden params: zero the source through the pointer
+                // to prevent the caller from double-freeing.
+                if !move_override_params.is_empty() {
+                    if let Expr::Identifier(name) = &expr.node {
+                        if let Some((local_id, _)) = ctx.lookup_local(name) {
+                            builder.move_zero(Place {
+                                local: local_id,
+                                projections: vec![Projection::Deref],
+                            });
+                        }
                     }
                 }
+                ctx.drops.emit_early_exit_drops(
+                    &mut builder, &ctx.type_registry,
+                    DropScopeKind::Function, returned_local,
+                );
             }
-            ctx.drops.emit_early_exit_drops(
-                &mut builder, &ctx.type_registry,
-                DropScopeKind::Function, returned_local,
-            );
             ctx.drops.pop_scope_no_emit();
             builder.ret(FunctionBuilder::copy(LocalId(0)));
         }
@@ -2052,24 +2082,29 @@ fn lower_equip_method_with_subs(
         FunctionBody::Expression(expr) => {
             let expr_span = expr.span;
             let mut operand = lower_expr(ctx, &mut builder, expr);
-            // Clone borrowed operands at the return boundary.
-            // Skip when return type is Ptr — the caller expects a borrow.
-            let ret_type = builder.locals[0].type_id;
+            // See `lower_function`'s expr-body arm: a `return`/`throw` tail
+            // already terminated the block; the outer assign would clobber the
+            // slot. Skip the trailing assign/drops/ret, just balance the scope.
+            if !builder.is_terminated() {
+                // Clone borrowed operands at the return boundary.
+                // Skip when return type is Ptr — the caller expects a borrow.
+                let ret_type = builder.locals[0].type_id;
                 operand = ctx.auto_deref_at_return(&mut builder, operand, ret_type);
-            if !matches!(ctx.type_registry.get(ret_type), Some(GirType::Ptr(_))) {
-                operand = ctx.ensure_owned_at_boundary(&mut builder, operand, expr_span, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
-            }
-            let returned_local = match &operand {
-                Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
-                    Some(place.local)
+                if !matches!(ctx.type_registry.get(ret_type), Some(GirType::Ptr(_))) {
+                    operand = ctx.ensure_owned_at_boundary(&mut builder, operand, expr_span, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
                 }
-                _ => None,
-            };
-            assign_to_return_slot(ctx, &mut builder, operand);
-            ctx.drops.emit_early_exit_drops(
-                &mut builder, &ctx.type_registry,
-                DropScopeKind::Function, returned_local,
-            );
+                let returned_local = match &operand {
+                    Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
+                        Some(place.local)
+                    }
+                    _ => None,
+                };
+                assign_to_return_slot(ctx, &mut builder, operand);
+                ctx.drops.emit_early_exit_drops(
+                    &mut builder, &ctx.type_registry,
+                    DropScopeKind::Function, returned_local,
+                );
+            }
             ctx.drops.pop_scope_no_emit();
             builder.ret(FunctionBuilder::copy(LocalId(0)));
         }
