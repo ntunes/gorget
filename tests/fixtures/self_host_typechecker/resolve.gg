@@ -560,6 +560,14 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
         case SMeta():
             pass
 
+        case SMetaConst(mc_name, mc_val):
+            # PROTOTYPE slice #4b: define the meta-const name in scope so
+            # later references (e.g. `f"{idx}"`) resolve. The value
+            # materializes per-mono at lowering; the value expr is a meta
+            # builtin call (enum_ordinal/...) with no runtime meaning, so we
+            # register the name without resolving the value against scope.
+            scopes.define(mc_name, DkVariable(), Span(0, 0))
+
         case SMetaFor(mf_vars, mf_iter, body):
             # PROTOTYPE slice #4: bind the meta-for loop vars in the body
             # scope so references to `fname`/`ftype`/`vname`/`idx` resolve
@@ -970,6 +978,15 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
 
         case SAssert(condition, _):
             resolve_expr(condition, &scopes, &ctx)
+
+        case SMetaConst(mc_name, mc_val):
+            # PROTOTYPE slice #4b: in a block-as-expression context, an
+            # in-body `meta const` still binds its name so later references
+            # (e.g. `f"{idx}"`) resolve. The value materializes per-mono at
+            # lowering; the value expr is a meta builtin call with no runtime
+            # meaning, so register the name without resolving the value.
+            # Mirrors the SMetaFor binding arm below.
+            scopes.define(mc_name, DkVariable(), Span(0, 0))
 
         case SMetaFor(mf_vars, mf_iter, body):
             scopes.push_scope(SkBlock())

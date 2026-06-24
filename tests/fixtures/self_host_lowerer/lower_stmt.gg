@@ -791,6 +791,11 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
         case SMeta:
             # Standalone `meta` marker — compile-time sentinel, no runtime.
             pass
+        case SMetaConst(_, _):
+            # `meta const` — compile-time binding consumed by the delayed-meta
+            # engine at lower_generic_function time. A residual here = a
+            # non-generic context (no concrete T was substituted); drop.
+            pass
         case SMetaFor(_, _, _):
             # `meta for` — compile-time loop already expanded earlier in
             # the pipeline; any remaining SMetaFor is a residual marker.

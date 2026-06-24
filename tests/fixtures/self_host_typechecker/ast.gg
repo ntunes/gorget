@@ -130,6 +130,13 @@ enum Stmt:
     # expression) so the delayed-meta engine can evaluate it per
     # monomorphization. elif conditions live in the ElseBranch.condition.
     SMetaIf(SpannedExpr, Vector[Stmt], Vector[ElseBranch])
+    # PROTOTYPE slice #4b: in-body `meta const <name> = <expr>` carries its
+    # binding name + value expression. The delayed-meta engine evaluates the
+    # value (e.g. `enum_ordinal(T, vname)`), binds it into the per-mono meta
+    # env, and substitutes references in the remaining statements. Mirrors
+    # Rust `Stmt::MetaConst { name, value }` (no explicit type — inferred
+    # from the value). Previously discarded as bare `SMeta()` at parse.
+    SMetaConst(String, SpannedExpr)
     # Meta-for nested INSIDE a match arm. The parser captures the loop
     # variable names + the range expression (e.g. `variant_payloads(T)`)
     # + the inner case-arm templates so that meta.gg's expand_meta_types

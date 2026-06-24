@@ -2800,6 +2800,20 @@ equip Parser:
                     Vector[Stmt] else_body = self.parse_block()
                     branches.push(ElseBranch(None, else_body))
                 return SMetaIf(meta_cond, then_body, branches)
+            elif self.check_kw(KW_CONST):
+                # meta const <name> = <expr>
+                # PROTOTYPE slice #4b: capture the binding name + value so the
+                # delayed-meta engine can evaluate it (e.g.
+                # `enum_ordinal(T, vname)`) and substitute references. Mirrors
+                # Rust parse_meta_const_stmt (stmt.rs:999). Previously fell into
+                # the else arm below and was discarded as bare SMeta().
+                self.advance()
+                SpannedToken mc_name_tok = self.advance()
+                String mc_name = token_ident(mc_name_tok.lex_token)
+                self.expect_tok(TOK_EQ, "expected '=' in meta const")
+                SpannedExpr mc_val = self.parse_expr()
+                self.skip_newlines()
+                return SMetaConst(mc_name, mc_val)
             else:
                 self.skip_meta_rest()
                 return SMeta()
