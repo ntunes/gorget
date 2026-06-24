@@ -278,12 +278,25 @@ pub struct FunctionState {
     /// Active fault-catch scope (error-model.md §11). When `Some`, a faultable
     /// arithmetic op (`a*b`, `a/b`, …) emitted DIRECTLY into the wrapped
     /// expression's basic blocks branches to a handler block instead of
-    /// panicking. CLEARED at any `Call`/`CallExtern` boundary so a callee's
-    /// faults stay deep (still panic → Phase 2). A scoped push/pop (NOT the
-    /// one-shot `suppress_auto_prop`) — it must survive the whole left-operand
-    /// subtree. Only the innermost scope is active (a nested fault-catch saves
-    /// and restores the outer one).
+    /// panicking. A scoped push/pop (NOT the one-shot `suppress_auto_prop`) —
+    /// it must survive the whole left-operand subtree. Only the innermost scope
+    /// is active (a nested fault-catch saves and restores the outer one).
+    ///
+    /// **2.1a override (was: "CLEARED at any Call/CallExtern boundary so a
+    /// callee's faults stay deep"):** the call-site gate now CONSULTS this scope
+    /// (+ the callee's `participates_in_fault` flag) to route a `FaultableCall`,
+    /// so the scope SURVIVES the call boundary for handler routing. A
+    /// participating callee's deep fault propagates to the caller's handler; a
+    /// non-participating callee's faults still panic deep (it has no slot param).
     pub fault_scope: Option<FaultScope>,
+    /// The synthesized trailing `MutPtr<i32>` fault-slot param of a participating
+    /// callee (error-model.md §11, Inc-2.1a). `Some(local)` when the function
+    /// being lowered PARTICIPATES in cross-frame fault propagation — its body's
+    /// uncaught faultable ops branch to a synthesized fault-RETURN block that
+    /// writes the tag through this slot (NULL-checked) and early-exits. `None`
+    /// for a non-participating function. Set in `lower_function` before body
+    /// lowering, read by the fault-return block emit.
+    pub fault_slot_param: Option<LocalId>,
 }
 
 /// The handler-block targets an active fault-`catch` routes faults to.
@@ -469,6 +482,17 @@ pub struct LoweringContext<'a> {
     /// monomorph collection). Each function's body is the load-bearing
     /// `<T> __r = <RHS>; return __r` shape — see `lower_static_decl`.
     pub synthetic_static_init_fns: Vec<crate::parser::ast::FunctionDef>,
+    /// Functions that PARTICIPATE in cross-frame fault propagation
+    /// (error-model.md §11, Increment 2.1a). A function is in this set iff
+    /// (a) its body has a reachable-uncaught faultable arithmetic op AND (b) it
+    /// is directly called from inside a `FaultCatch` scope that catches the
+    /// fault. The intersection bounds the blast radius: ONLY these functions
+    /// get the synthesized trailing `MutPtr<i32>` fault-slot param, and every
+    /// direct caller of one of them passes the trailing arg (uniform signature,
+    /// D5). Computed once in the module pre-pass; read at the signature lowering
+    /// AND the call-site gate via [`Self::participates_in_fault`]. Typed flag,
+    /// set at the source — never re-derived from a name (devbook/24 rule 2).
+    pub participating_fault_fns: rustc_hash::FxHashSet<String>,
 }
 
 /// Snapshot of lowering state taken at branch entry, restored at branch exit.
@@ -565,7 +589,17 @@ impl<'a> LoweringContext<'a> {
             lower_fn_sub_times: std::collections::HashMap::new(),
             stmt_nested_dur: std::time::Duration::ZERO,
             synthetic_static_init_fns: Vec::new(),
+            participating_fault_fns: rustc_hash::FxHashSet::default(),
         }
+    }
+
+    /// Whether `name` participates in cross-frame fault propagation
+    /// (error-model.md §11, Increment 2.1a) — i.e. its lowered signature has a
+    /// synthesized trailing `MutPtr<i32>` fault-slot param and every direct
+    /// caller must pass the trailing arg. Read at the signature lowering and
+    /// the call-site gate. See [`Self::participating_fault_fns`].
+    pub fn participates_in_fault(&self, name: &str) -> bool {
+        self.participating_fault_fns.contains(name)
     }
 
     /// Populate fn_sigs and runtime_callees from the BuiltinTypeProtocol declarations.
