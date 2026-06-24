@@ -1142,6 +1142,9 @@ pub fn lower_function(
     let mut func = builder.build();
     func.display_name = Some(name.to_string());
     func.def_span = Some(func_span);
+    // Cross-frame fault (Inc-2.1a): flag the synthesized trailing slot param so
+    // the first-class adapter generation passes NULL for it (not a phantom arg).
+    func.participates_in_fault = fault_return_bb.is_some();
     module.functions.push(func);
     *ctx.lower_fn_sub_times.entry("lower_function::finalize").or_default() += __finalize_t0.elapsed();
 }

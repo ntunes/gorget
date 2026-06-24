@@ -594,6 +594,7 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
+            participates_in_fault: false,
         };
 
         let live = Liveness::compute(&func);
@@ -677,6 +678,7 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
+            participates_in_fault: false,
         };
 
         let live = Liveness::compute(&func);
@@ -768,6 +770,7 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
+            participates_in_fault: false,
         };
 
         let live = Liveness::compute(&func);
@@ -826,6 +829,7 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
+            participates_in_fault: false,
         };
 
         let live = Liveness::compute(&func);
@@ -861,6 +865,7 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
+            participates_in_fault: false,
         };
 
         let live = Liveness::compute(&func);
@@ -882,6 +887,7 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
+            participates_in_fault: false,
         };
         let live = Liveness::compute(&func);
         assert!(!live.is_live_after(LocalId(0), BlockId(0), 0));

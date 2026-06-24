@@ -2635,6 +2635,7 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
+            participates_in_fault: false,
         }
     }
 
