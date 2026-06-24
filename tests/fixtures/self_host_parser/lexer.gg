@@ -30,7 +30,6 @@ enum Keyword:
     KwAsync  KwAwait  KwSpawn
     KwUnsafe  KwExtern
     KwSelfLower  KwSelfUpper
-    KwBox  KwRc  KwArc  KwWeak  KwCell  KwRefCell  KwMutex  KwRwLock
     KwMove  KwMutable
     KwTest  KwSuite  KwBench  KwIt  KwPanic  KwAssert
     KwShared  KwMeta  KwSelect  KwRethrow  KwMod  KwCatch  KwOn  KwSnapshot
@@ -245,22 +244,6 @@ Option[Keyword] keyword_from_str(String s):
         return Some(KwSelfLower())
     elif s == "Self":
         return Some(KwSelfUpper())
-    elif s == "Box":
-        return Some(KwBox())
-    elif s == "Rc":
-        return Some(KwRc())
-    elif s == "Arc":
-        return Some(KwArc())
-    elif s == "Weak":
-        return Some(KwWeak())
-    elif s == "Cell":
-        return Some(KwCell())
-    elif s == "RefCell":
-        return Some(KwRefCell())
-    elif s == "Mutex":
-        return Some(KwMutex())
-    elif s == "RwLock":
-        return Some(KwRwLock())
     elif s == "move":
         return Some(KwMove())
     elif s == "mutable":

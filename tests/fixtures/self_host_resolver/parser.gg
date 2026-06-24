@@ -407,12 +407,6 @@ int keyword_tag(Token tok):
                     return KW_SELF_LOWER
                 case KwSelfUpper:
                     return KW_SELF_UPPER
-                case KwBox:
-                    return KW_BOX
-                case KwRc:
-                    return KW_RC
-                case KwArc:
-                    return KW_ARC
                 case KwInt8:
                     return KW_INT8
                 case KwInt16:
@@ -463,16 +457,6 @@ int keyword_tag(Token tok):
                     return KW_UNSAFE
                 case KwExtern:
                     return KW_EXTERN
-                case KwWeak:
-                    return KW_WEAK
-                case KwCell:
-                    return KW_CELL
-                case KwRefCell:
-                    return KW_REFCELL
-                case KwMutex:
-                    return KW_MUTEX
-                case KwRwLock:
-                    return KW_RWLOCK
                 case KwAsync:
                     return KW_ASYNC
                 case KwAwait:

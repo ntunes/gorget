@@ -40,6 +40,7 @@ from gir import CollectionKind, CkVector, CkDeque, CkHeap, CkDict, CkOrderedSet,
 # family; `resource_meta_for` is the lazy-populating accessor that
 # memoises results into `gmod.resource_metadata`.
 from lir_lower import resource_meta_for
+from gir import BoxKind, BkNotBox, BkRegularBox, BkTraitBox
 from lower_cow import compute_cow_scan, cow_pristine_after, cow_source_root_name
 from lower_drops import init_drop_elab, push_drop_scope, emit_scope_drops, pop_drop_scope, pop_drop_scope_no_emit, is_droppable_type, register_local_for_drop, register_owning_param, mark_local_moved, restore_moved, union_moved, emit_drops_for_early_exit, flush_drop_queue
 from lower_liveness import LivenessAnalysis, compute_liveness, wire_liveness_into_modes, liveness_instrumentation_diff, update_last_pos_for_inst, update_last_pos_for_term, note_operand_pos, empty_liveness
@@ -3274,6 +3275,40 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
         # intercepts these base names BEFORE the generic-template path and routes
         # them to `register_collection_alias` (src/ir/lowering/types.rs:699).
         if is_builtin_collection_base(mrinst.base_name):
+            continue
+        # Box (the `struct Box[T]: pass` stub in lib/std/collections.gg) is a
+        # runtime box-alloc type, NOT a user struct: its monos (`Box__SpannedType`)
+        # are `typedef void* Box__<inner>` allocated via `__gorget_box_alloc_<inner>`
+        # and routed by lir_lower's `resource_meta_for` BkRegularBox arm — NEVER an
+        # inline struct with a `_0` field. Mirror Rust gg, which intercepts `"Box"`
+        # alongside the collection bases in the SAME match arm BEFORE the
+        # generic-template monomorphize path (src/ir/lowering/types.rs:699:
+        # `"Vector" | "Dict" | ... | "Box" => { register_collection_alias(..); return }`).
+        # Box is INTENTIONALLY excluded from `is_builtin_collection_base` (that helper
+        # is the GorgetArray/Map/Set-backed set, enforced by tests/lints.rs
+        # `collection_base_names_single_source`), so the skip is a SEPARATE typed read
+        # of the `box_kind` channel here — the same `BkRegularBox`/`BkTraitBox`
+        # discriminator the build_resource_metadata arms (lir_lower.gg:311/416)
+        # populate and lir_lower.gg:636 reads, NOT a `Box`-name string match.
+        # Without this skip, de-keywording `Box` (so `struct Box[T]: pass` registers
+        # as a template) lets `Box[SpannedType]` reach this loop → `Box__SpannedType`
+        # is registered in `type_infos` as a struct → its ctor's dst slot types as the
+        # struct → `try_lower_user_struct_ctor` emits `((Box__SpannedType*)x)->_0 = ..`
+        # against the `typedef void*` → stage-1 cc fails (`request for member '_0' in
+        # something not a structure or union`).
+        bool mrinst_is_box = false
+        match resource_meta_for(&gmod, mrinst.base_name):
+            case Some(mrinst_rm):
+                match mrinst_rm.box_kind:
+                    case BkRegularBox():
+                        mrinst_is_box = true
+                    case BkTraitBox():
+                        mrinst_is_box = true
+                    case BkNotBox():
+                        pass
+            case None:
+                pass
+        if mrinst_is_box:
             continue
         if struct_templates.contains(mrinst.base_name):
             StructDef sdef = struct_templates.get(mrinst.base_name).unwrap()
