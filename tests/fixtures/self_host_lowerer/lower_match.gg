@@ -789,6 +789,37 @@ void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vecto
                 int lit_continue_bb = new_block(&ctx)
                 set_terminator(&ctx, GTBranch(OpCopy(lit_eq), lit_continue_bb, no_match_bb))
                 switch_to(&ctx, lit_continue_bb)
+            case PConstructor(sub_variant, sub_sub_pats):
+                # Nested constructor sub-pattern (`case Some(Color.Green()):`,
+                # `case Some(Shape.Rect(w, h)):`). Mirrors Rust's recursive
+                # `lower_pattern_condition` (patterns.rs:609-730): read the
+                # outer variant's payload field, then recurse on the INNER
+                # constructor — checking its discriminant AND binding/checking
+                # its own sub-patterns. Without this the inner discriminant was
+                # silently dropped (every `Some(Color.*)` arm matched the first,
+                # every `Some(Shape.*)` bound 0): the `else: lower_fail` arm
+                # below fell through to the unconditional `GTJump(match_bb)`.
+                #
+                # Read the payload as a BORROW (borrow_all=true) — the nested
+                # tag/field reads are non-destructive; cloning here would leak
+                # (Rust Snag #34 / EnumFieldLoadMode::Borrow rationale). The
+                # field local carries the inner enum's typed id, so the recursive
+                # `lower_ctor_pattern` re-infers the inner enum name from it (and
+                # from the qualified `Color.Green` variant name) — pass "" so it
+                # resolves fresh rather than reusing the OUTER enum name.
+                int nctor_fty = lookup_ctor_field_type(effective_enum, effective_variant, fi, &gmod)
+                int nctor_field_val = emit_payload_read_mode_full(&ctx, scrutinee_ptr, effective_enum, effective_variant, fi, nctor_fty, &gmod, false, true)
+                int nctor_continue_bb = new_block(&ctx)
+                lower_ctor_pattern(&ctx, nctor_field_val, sub_variant, sub_sub_pats, "", nctor_continue_bb, no_match_bb, &gmod)
+                switch_to(&ctx, nctor_continue_bb)
+            case PDotShorthand(sub_variant, sub_sub_pats):
+                # `.VariantName(pats)` nested sub-pattern — same recursion as
+                # PConstructor, enum name inferred from the field local's type.
+                int ndot_fty = lookup_ctor_field_type(effective_enum, effective_variant, fi, &gmod)
+                int ndot_field_val = emit_payload_read_mode_full(&ctx, scrutinee_ptr, effective_enum, effective_variant, fi, ndot_fty, &gmod, false, true)
+                int ndot_continue_bb = new_block(&ctx)
+                lower_ctor_pattern(&ctx, ndot_field_val, sub_variant, sub_sub_pats, "", ndot_continue_bb, no_match_bb, &gmod)
+                switch_to(&ctx, ndot_continue_bb)
             else:
                 lower_fail("nested non-binding pattern in PConstructor — using wildcard fallback (got: " + pat_kind(sp.pat) + ")")
         fi += 1
