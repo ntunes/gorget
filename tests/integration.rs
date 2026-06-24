@@ -22792,7 +22792,7 @@ fn return_expr_body() {
     // FunctionBody::Expression arms: top-level fn, method, generic fn, throws.
     run_gg(
         "return_expr_body.gg",
-        "12\n50\n7\nhi bob\n42",
+        "12\n50\n99\n7\nhi bob\n42",
     );
 }
 
