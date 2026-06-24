@@ -1481,60 +1481,80 @@ fn no_growth_in_self_host_prelude_optionlike_routing() {
 /// blocker (needs a `fn_sigs.contains` dedup guard to avoid double-emit with the
 /// `proto_minsts` arm, plus a repro fixture) and KEEPS its bare `pass`.
 ///
-/// The ratchet counts the TWO-LINE textual pattern `case None:` immediately
-/// followed by a line whose TRIMMED content is exactly `pass`, scanning
-/// `tests/fixtures/self_host_lowerer/lower.gg`. A whole-function `case None:`
-/// counter would be vacuous (the file has many `case None:` lines across
-/// unrelated matches). This textual pattern reacts precisely: dropping an arm's
-/// `pass` body (i.e. IMPLEMENTING the inherent path) decreases the count.
+/// **Why this ratchet is ANCHORED, not a whole-file `case None:`→`pass` count.**
+/// The earlier design counted EVERY `case None:` immediately followed by a
+/// trimmed-`pass` line across all of `lower.gg`. That was a blunt instrument: a
+/// 4500-line lowerer destructures `Option` constantly, and a vacuous "no value
+/// to extract here" None arm — with literally nothing to lower — is idiomatic
+/// and correct. Three such arms were added by unrelated parity fixes
+/// (`ext_ret_opt`/`05daf35b`, `rs_ext_ret_opt`/`239083f2`,
+/// `resource_meta_for(mrinst.base_name)`/`19d1529a`), pushing the blunt count
+/// 18→21 and turning the FATAL ratchet RED even though NONE of them is a
+/// method-generic dispatch stub. A guard that goes red on correct, unrelated
+/// code can no longer catch the NEXT real growth — exactly the guard-rot Core
+/// invariant #6 forbids. So the ratchet now anchors on the ONE genuine class it
+/// was always meant to police, not on a textual pattern it cannot isolate.
 ///
-/// Pre-count was 20 (review-measured, re-derived here before pinning). Arms 1+2
-/// (the two `proto_minsts` None arms) dropped their `pass` bodies → 18. The
-/// deferred `gm_` `:4205` site stays counted (its `pass` is still immediately
-/// after `case None:`, with the explanatory comment placed AFTER the `pass` so
-/// adjacency is preserved). Pin BUDGET = 18.
+/// SO this ratchet counts a `case None:`→`pass` whose IMMEDIATELY FOLLOWING line
+/// is the deferred-class marker (`gm-inherent-generic-equip DEFERRED`, placed
+/// AFTER the `pass` so the `case None:`→`pass` adjacency is preserved). Today
+/// that is exactly ONE arm (the `gm_` loop, body-emit on a GENERIC receiver,
+/// lower.gg:~4205). BUDGET = 1 with TARGET 0: implementing the inherent body
+/// (and deleting the marker line) drops the count to 0.
 ///
-/// **If this fails (count went UP):** a new bare `case None:`→`pass` was added.
-/// If it is the next sibling in the method-generic class (e.g. a future `gm_`
-/// inherent fix), implement it through the shared inherent-lowering shape
-/// (mirror Arm 2) rather than leaving a stub, and LOWER `BUDGET` in the same
-/// commit. Any other new `case None:`→`pass` should likewise be justified or
-/// implemented — never bump the budget to dodge review.
+/// **If this fails (count went UP):** a NEW deferred method-generic equip stub
+/// was added — implement it through the shared inherent-lowering shape (mirror
+/// the `proto_minsts` body-emit None arm) or, if it must be deferred, justify it
+/// in review and bump BUDGET deliberately. A bare unrelated `Option` None arm
+/// does NOT carry the marker and is correctly invisible to this ratchet.
 #[test]
 fn no_growth_in_self_host_lower_case_none_pass_stubs() {
-    const BUDGET: usize = 18;
+    // The deferred method-generic equip-instance inherent body-emit stub.
+    // TARGET 0 (implement the inherent path + delete the marker).
+    const BUDGET: usize = 1;
+    // The distinctive marker the deferred stub places on the line right after
+    // its `pass` (see the `gm_` loop, lower.gg:~4205). Substring match so the
+    // exact wording can evolve without silently un-anchoring the ratchet.
+    const DEFERRED_MARKER: &str = "gm-inherent-generic-equip DEFERRED";
 
     let content =
         fs::read_to_string("tests/fixtures/self_host_lowerer/lower.gg").unwrap_or_default();
 
-    // Count `case None:` immediately followed by a line whose TRIMMED content
-    // is exactly `pass`.
+    // Count `case None:` → `pass` whose FOLLOWING line carries the deferred
+    // method-generic marker. A whole-file `case None:`→`pass` count is too
+    // blunt (idiomatic vacuous `Option` None arms blow the budget); anchoring
+    // on the marker isolates exactly the class this ratchet polices.
     let lines: Vec<&str> = content.lines().collect();
     let mut count = 0usize;
-    for w in lines.windows(2) {
-        if w[0].trim() == "case None:" && w[1].trim() == "pass" {
+    for w in lines.windows(3) {
+        if w[0].trim() == "case None:"
+            && w[1].trim() == "pass"
+            && w[2].contains(DEFERRED_MARKER)
+        {
             count += 1;
         }
     }
 
     assert!(
         count > 0,
-        "no_growth_in_self_host_lower_case_none_pass_stubs: failed to locate any \
-         `case None:`→`pass` pattern in lower.gg — the scan or the file moved.",
+        "no_growth_in_self_host_lower_case_none_pass_stubs: the deferred \
+         method-generic equip stub marker (`{DEFERRED_MARKER}`) was not found \
+         immediately after a `case None:`→`pass` in lower.gg. If the inherent \
+         `gm_` body-emit path was IMPLEMENTED, delete this ratchet (move its \
+         TODO entry to DONE.md). Otherwise the scan or the marker moved — re-anchor.",
     );
     assert!(
         count <= BUDGET,
-        "Self-host `lower.gg` bare `case None:`→`pass` stub count grew beyond budget: \
-         {count} > {BUDGET}.\n\n\
-         A new unimplemented `case None:`→`pass` arm was added. If it is the next \
-         method-generic equip-instance sibling (the deferred `gm_` inherent path, \
-         lower.gg:~4205, or any new dispatch arm in the class), do NOT leave it a \
-         stub: lower the inherent equip-block body through the shared shape (mirror \
-         the `proto_minsts` body-emit None arm — match the method in the equip \
-         block's own `methods`, bind equip-[T] + Self + method-[U] subs, emit under \
-         the mangled symbol; the `gm_` arm additionally needs a `fn_sigs.contains` \
-         dedup guard to avoid double-emit). Then LOWER BUDGET in the same commit. \
-         Don't bump the budget to dodge review.",
+        "Self-host `lower.gg` deferred method-generic equip-instance \
+         `case None:`→`pass` stub count grew beyond budget: {count} > {BUDGET}.\n\n\
+         A new DEFERRED method-generic equip-instance inherent body-emit arm was \
+         added (it carries the `{DEFERRED_MARKER}` marker). Do NOT leave it a \
+         stub: lower the inherent equip-block body through the shared shape \
+         (mirror the `proto_minsts` body-emit None arm — match the method in the \
+         equip block's own `methods`, bind equip-[T] + Self + method-[U] subs, \
+         emit under the mangled symbol; the `gm_` arm additionally needs a \
+         `fn_sigs.contains` dedup guard to avoid double-emit). Then LOWER BUDGET \
+         in the same commit. Don't bump the budget to dodge review.",
     );
 }
 
