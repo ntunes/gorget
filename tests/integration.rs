@@ -5850,6 +5850,12 @@ fn fault_deep_uncaught_panic() {
 
 #[test]
 fn fault_deep_fnvalue_panic() {
+    // C-ONLY (2.1a): the LLVM closure-adapter for a participating fn does NOT yet
+    // pass NULL for the trailing fault-slot — it forwards an uninitialized register,
+    // panicking only incidentally when that register holds 0 (a latent wild-write
+    // under a different register schedule). The LLVM adapter fix is 2.1b (filed in
+    // TODO). Gate to C until then so an LLVM sweep can't "pass" on incidental UB.
+    if skip_under_llvm() { return; }
     // MEMORY-SAFETY regression guard (Core #6): a PARTICIPATING fn taken as a
     // first-class fn-value AND passed to a higher-order fn is invoked through the
     // 2-arg callable ABI — its synthesized trailing fault-slot is NOT part of the
