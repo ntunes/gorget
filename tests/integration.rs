@@ -5581,6 +5581,45 @@ fn run_gg_panics(fixture: &str, expected_stderr: &str) {
     let _ = std::fs::remove_file(&exe_path);
 }
 
+/// Like [`run_gg_panics`] but ALSO asserts the program's STDOUT contains
+/// `expected_stdout` before it panics — so a negative fixture can lock in BOTH
+/// the happy-path output that ran first AND the panic-by-default exit.
+fn run_gg_panics_with_stdout(fixture: &str, expected_stdout: &str, expected_stderr: &str) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
+    assert!(fixture_path.exists(), "Fixture not found: {}", fixture_path.display());
+
+    let stem = fixture_path.file_stem().unwrap().to_str().unwrap();
+    let dir = fixture_path.parent().unwrap();
+    let c_path = dir.join(format!("{stem}.c"));
+    let exe_path = dir.join(stem);
+
+    let build = build_with_timeout(gg_command("build").arg(&fixture_path), fixture);
+    assert!(
+        build.status.success(),
+        "Build failed for {fixture}:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr),
+    );
+
+    let run = run_with_timeout(&mut Command::new(&exe_path), fixture);
+    assert!(!run.status.success(), "Expected panic but binary succeeded for {fixture}");
+
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        stdout.contains(expected_stdout),
+        "Stdout mismatch for {fixture}:\nExpected to contain: {expected_stdout}\nGot: {stdout}",
+    );
+    assert!(
+        stderr.contains(expected_stderr),
+        "Stderr mismatch for {fixture}:\nExpected to contain: {expected_stderr}\nGot: {stderr}",
+    );
+
+    let _ = std::fs::remove_file(&c_path);
+    let _ = std::fs::remove_file(&exe_path);
+}
+
 #[test]
 fn arg_temp_drop_no_leak() {
     // An owning temporary passed to a bare (borrow) value param must be dropped
@@ -5772,6 +5811,59 @@ fn fault_catch_drop() {
 fn fault_panic_default() {
     // Panic-by-default preserved: overflow OUTSIDE a fault-catch still exits 1.
     run_gg_panics("fault_panic_default.gg", "integer overflow");
+}
+
+// ── Error model — Increment 2.1a: CROSS-FRAME fault propagation (C backend,
+// single hop, error-model.md §11). An overflow raised in a callee propagates to
+// a `catch` in its DIRECT caller via a hidden trailing `MutPtr<i32>` fault-slot,
+// without unwind — `FaultableCall` + branch-before-read. LLVM lock-in is 2.1b. ──
+
+#[test]
+fn fault_deep_catch() {
+    // The §1 demonstrator: `faulty(BIG, BIG)` overflows in the callee; the
+    // `catch Fault.Overflow` is one frame up in main. The fault propagates →
+    // handler value -1, NOT a panic.
+    run_gg("fault_deep_catch.gg", "-1");
+}
+
+#[test]
+fn fault_deep_catch_drop() {
+    // Q9 drop-gate: the callee `faulty` holds a LIVE Drop-bearing local (`g`) when
+    // the overflow happens. The early-exit drops run on the fault path → `g` is
+    // dropped EXACTLY ONCE (deterministic "drop guard N" print proves it on BOTH
+    // paths). Fault path → "drop guard 1", -1; no-fault → "drop guard 2", 14.
+    // (Also run under ASan/UBSan during development — clean: no leak/double-free.)
+    run_gg(
+        "fault_deep_catch_drop.gg",
+        "drop guard 1\n-1\ndrop guard 2\n14",
+    );
+}
+
+#[test]
+fn fault_deep_uncaught_panic() {
+    // Panic-by-default for a DEEP fault with NO catch in the caller: `main` calls
+    // `faulty` without a `catch`, so this call site passes a NULL fault-slot and
+    // the callee's fault arm panics (exit 1). `deep_catcher` (which DOES catch)
+    // prints 6 first, exercising the uniform-signature participating path.
+    run_gg_panics("fault_deep_uncaught_panic.gg", "integer overflow");
+}
+
+#[test]
+fn fault_deep_fnvalue_panic() {
+    // MEMORY-SAFETY regression guard (Core #6): a PARTICIPATING fn taken as a
+    // first-class fn-value AND passed to a higher-order fn is invoked through the
+    // 2-arg callable ABI — its synthesized trailing fault-slot is NOT part of the
+    // callable type, so the closure adapter must pass NULL for it. A phantom slot
+    // arg wrote a fault tag through a wild pointer (SIGSEGV / ASan global-buffer-
+    // overflow) before the fix. The no-overflow indirect calls still return the
+    // right values (-1, 42, 72); the indirect overflow PANICS by default (NULL
+    // slot → callee panic arm) — indirect propagation is deferred to 2.3b.
+    // Verified ASan/UBSan-clean during development (no wild write).
+    run_gg_panics_with_stdout(
+        "fault_deep_fnvalue_panic.gg",
+        "-1\n42\n72",
+        "integer overflow",
+    );
 }
 
 // ── Error model — Increment 2 (Bounds + Div-split + qualifier + plain-op

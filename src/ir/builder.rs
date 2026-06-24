@@ -129,6 +129,7 @@ impl FunctionBuilder {
             def_span: None,
             with_refresh_pairs: self.with_refresh_pairs,
             inner_shared_spawns: self.inner_shared_spawns,
+            participates_in_fault: false,
         }
     }
 
@@ -377,6 +378,48 @@ impl FunctionBuilder {
             dst: None,
             func: func.into(),
             args,
+        });
+    }
+
+    /// Emit a fault-`catch`able direct call (error-model.md §11, Increment 2.1a):
+    /// like [`Self::call`] but the callee participates in cross-frame fault
+    /// propagation. `args` must already include the trailing `&fault_slot`
+    /// operand as its LAST element; `fault_slot` is the caller's `i32` slot place
+    /// (tested non-zero after the call), and `fault_handler` is the GIR block to
+    /// branch to on a fault. Emits a `dst`-producing form when `return_type` is
+    /// not unit. Used ONLY by the call-site gate inside an active fault scope.
+    pub fn fault_call(
+        &mut self,
+        func: impl Into<String>,
+        args: Vec<Operand>,
+        return_type: TypeId,
+        fault_slot: Place,
+        fault_handler: BlockId,
+    ) -> LocalId {
+        let func = func.into();
+        self.emit_with_temp(return_type, |dst| Instruction::FaultableCall {
+            dst: Some(dst),
+            func,
+            args,
+            fault_slot,
+            fault_handler,
+        })
+    }
+
+    /// Void-returning variant of [`Self::fault_call`].
+    pub fn fault_call_void(
+        &mut self,
+        func: impl Into<String>,
+        args: Vec<Operand>,
+        fault_slot: Place,
+        fault_handler: BlockId,
+    ) {
+        self.emit(Instruction::FaultableCall {
+            dst: None,
+            func: func.into(),
+            args,
+            fault_slot,
+            fault_handler,
         });
     }
 

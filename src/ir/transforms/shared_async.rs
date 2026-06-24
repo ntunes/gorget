@@ -620,6 +620,15 @@ fn remap_instruction(instr: &mut Instruction, map: &FxHashMap<LocalId, LocalId>)
                 remap_operand(a, map);
             }
         }
+        Instruction::FaultableCall { dst, args, fault_slot, .. } => {
+            if let Some(d) = dst {
+                *d = remap_local(*d, map);
+            }
+            for a in args {
+                remap_operand(a, map);
+            }
+            remap_place(fault_slot, map);
+        }
         Instruction::CallIndirect { dst, callee, args } => {
             if let Some(d) = dst {
                 *d = remap_local(*d, map);
@@ -756,6 +765,7 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
+            participates_in_fault: false,
         }
     }
 

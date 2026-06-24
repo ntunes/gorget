@@ -2668,6 +2668,31 @@ fn fault_op_lowering_arms_count() {
          shared `materialize_collection_element` element path — a future sibling \
          must not duplicate or skip the clone/move-zero/str-ptr logic.",
     );
+
+    // Cross-frame fault propagation (error-model.md §11, Increment 2.1a) adds a
+    // THIRD faultable shape, `Instruction::FaultableCall` — a participating
+    // callee writes a fault tag into a hidden trailing `MutPtr<i32>` slot and
+    // the caller BRANCHES to its `fault_handler` after the call. Like the
+    // other two shapes it must stay wired through the one shared lowering arm,
+    // and — THE LINCHPIN — its `fault_handler` MUST be counted as a block
+    // successor in `successors()` (else DCE prunes the handler and the fault
+    // recovery silently vanishes). Assert both so a future refactor can't drop
+    // either without tripping this ratchet.
+    assert!(
+        insts.contains("Instruction::FaultableCall {"),
+        "the `FaultableCall` GIR→LIR lowering arm vanished from \
+         src/lir/lower/insts.rs — the cross-frame fault call must lower through \
+         the shared `Inst::Call` + slot-check-branch shape (error-model.md §11).",
+    );
+    let optimize = fs::read_to_string("src/ir/transforms/optimize.rs").unwrap_or_default();
+    assert!(
+        optimize.contains("Instruction::FaultableCall { fault_handler, .. }"),
+        "the `FaultableCall` arm vanished from `successors()` / the block-id \
+         remap loops in src/ir/transforms/optimize.rs — its `fault_handler` \
+         block must count as a successor (else DCE prunes the fault handler and \
+         cross-frame fault recovery silently vanishes) and forward through \
+         block renumbering (else the stored handler id goes stale).",
+    );
 }
 
 /// Single-source-of-truth ratchet (CLAUDE.md invariant #4 "one fix, all
