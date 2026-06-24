@@ -5774,6 +5774,41 @@ fn fault_panic_default() {
     run_gg_panics("fault_panic_default.gg", "integer overflow");
 }
 
+// ── Error model — Increment 2.1a: CROSS-FRAME fault propagation (C backend,
+// single hop, error-model.md §11). An overflow raised in a callee propagates to
+// a `catch` in its DIRECT caller via a hidden trailing `MutPtr<i32>` fault-slot,
+// without unwind — `FaultableCall` + branch-before-read. LLVM lock-in is 2.1b. ──
+
+#[test]
+fn fault_deep_catch() {
+    // The §1 demonstrator: `faulty(BIG, BIG)` overflows in the callee; the
+    // `catch Fault.Overflow` is one frame up in main. The fault propagates →
+    // handler value -1, NOT a panic.
+    run_gg("fault_deep_catch.gg", "-1");
+}
+
+#[test]
+fn fault_deep_catch_drop() {
+    // Q9 drop-gate: the callee `faulty` holds a LIVE Drop-bearing local (`g`) when
+    // the overflow happens. The early-exit drops run on the fault path → `g` is
+    // dropped EXACTLY ONCE (deterministic "drop guard N" print proves it on BOTH
+    // paths). Fault path → "drop guard 1", -1; no-fault → "drop guard 2", 14.
+    // (Also run under ASan/UBSan during development — clean: no leak/double-free.)
+    run_gg(
+        "fault_deep_catch_drop.gg",
+        "drop guard 1\n-1\ndrop guard 2\n14",
+    );
+}
+
+#[test]
+fn fault_deep_uncaught_panic() {
+    // Panic-by-default for a DEEP fault with NO catch in the caller: `main` calls
+    // `faulty` without a `catch`, so this call site passes a NULL fault-slot and
+    // the callee's fault arm panics (exit 1). `deep_catcher` (which DOES catch)
+    // prints 6 first, exercising the uniform-signature participating path.
+    run_gg_panics("fault_deep_uncaught_panic.gg", "integer overflow");
+}
+
 // ── Error model — Increment 2 (Bounds + Div-split + qualifier + plain-op
 // INT_MIN trap, error-model.md §11). ──
 

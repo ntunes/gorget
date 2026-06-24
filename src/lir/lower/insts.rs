@@ -675,20 +675,45 @@ impl<'a> FuncLowering<'a> {
             }
 
             // Fault-`catch`able cross-frame call (error-model.md §11, Increment
-            // 2.1a). 2.1a-i: lowers identically to `Call` — the front-end does
-            // not emit `FaultableCall` yet, so this arm is well-formed-but-dead.
-            // 2.1a-iii REPLACES this body with the slot-check-branch split:
-            // after the `Inst::Call`, test `fault_slot != 0` and branch to
-            // `fault_handler` (else continue + read result). Delegate to the
-            // shared `Call` arm by reconstructing the call (the participating
-            // callee is always a known user fn in `func_index`).
-            Instruction::FaultableCall { dst, func, args, .. } => {
+            // 2.1a). The participating callee writes a fault tag into the hidden
+            // trailing `MutPtr<i32>` slot (passed as the last arg) on a deep
+            // fault; the caller checks the slot AFTER the call and BRANCHES to
+            // `fault_handler` BEFORE reading the result. Modeled on the
+            // `FaultableIndexLoad` split (branch-before-deref). The callee is
+            // always a known user fn in `func_index`, so delegate the call emit
+            // to the shared `Call` arm (handles result store + post-call zeros),
+            // then split the block on `slot != 0`.
+            Instruction::FaultableCall { dst, func, args, fault_slot, fault_handler } => {
+                // 1. Emit the call exactly like a plain `Call` (the slot `&arg`
+                //    is already the last element of `args`; the result store is
+                //    a no-op-if-unread sentinel on the fault path).
                 let as_call = Instruction::Call {
                     dst: *dst,
                     func: func.clone(),
                     args: args.clone(),
                 };
                 bb = self.lower_instruction(&as_call, bb);
+                // 2. Load the caller's i32 fault slot and test it != 0.
+                let slot_val = self.lower_place_load(fault_slot, bb);
+                let zero = self.lower_constant(&Constant::I32(0), bb);
+                let flag = self.lir_func.next_value();
+                self.push_inst(bb, Inst::Cmp {
+                    dst: flag, op: CmpOp::Ne, lhs: slot_val, rhs: zero,
+                });
+                // 3. Branch BEFORE reading the result: fault → handler (the
+                //    user's catch entry), no-fault → continuation.
+                let handler_lir = self.block_map[fault_handler.0 as usize];
+                let cont_bb = self.lir_func.add_block();
+                self.set_terminator(bb, Term::Branch {
+                    cond: flag,
+                    then_block: handler_lir,
+                    then_args: vec![],
+                    else_block: cont_bb,
+                    else_args: vec![],
+                });
+                // Continuation: no fault — the result (already stored to `dst`)
+                // is read by subsequent instructions in this block.
+                bb = cont_bb;
             }
 
             Instruction::CallExtern { dst, func, args } => {

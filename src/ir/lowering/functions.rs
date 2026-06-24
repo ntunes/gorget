@@ -897,13 +897,17 @@ pub fn lower_function(
     // synthesized trailing `MutPtr<i32>` fault-slot param local (`_{N+1}`, after
     // the N user params — already allocated by `FunctionBuilder::new` from the
     // appended `params` entry). The body's uncaught faultable ops branch to a
-    // fault-return block that writes the tag through this slot. Registered as a
-    // borrowed-ptr param (it's `&out`-shaped) so a body deref reads/writes the
-    // pointee, not the pointer value.
+    // fault-return block that writes the tag through this slot.
+    //
+    // Registered as a PLAIN local (NOT a `BorrowedPtr` ref-local): the slot
+    // holds the raw `int32_t*` pointer value, so `LoadRef`/`StoreRef` on
+    // `Place::local(slot)` do the correct two-step (load the pointer value from
+    // the slot, then deref) and the NULL-check reads the pointer value directly.
+    // A `BorrowedPtr` tag would make `lower_place_addr` return the pointer value
+    // and the StoreRef would double-deref → segfault.
     if let Some(slot_ty) = fault_slot_mut_ptr_ty {
         let slot_local = LocalId((func.params.len() + 1) as u32);
         ctx.register_local("__fault", slot_local, slot_ty);
-        ctx.set_param_borrow_unique(&mut builder, slot_local);
         ctx.func_state.fault_slot_param = Some(slot_local);
     }
 
