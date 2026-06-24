@@ -286,6 +286,12 @@ void compile_main():
     if _subcmd == "--help" or _subcmd == "-h":
         print_usage()
         exit(0)
+    # G1: `--version` / `-V` — match Rust gg's `println!("gg {}", CARGO_PKG_VERSION)`
+    # (src/main.rs). The version literal mirrors Cargo.toml `version` (0.1.4-alpha);
+    # the self-host has no version constant, so it is hardcoded here. Stdout, exit 0.
+    if _subcmd == "--version" or _subcmd == "-V":
+        print("gg 0.1.4-alpha")
+        exit(0)
     if _subcmd == "build":
         run_build_mode(cmd_args, false)
         return
@@ -295,6 +301,18 @@ void compile_main():
     if _subcmd == "check":
         run_check_mode(cmd_args)
         return
+    # G2: unknown-command diagnostic — mirror Rust gg's `Unknown command: <x>` + the
+    # valid-command list on stderr + exit 1 (src/main.rs). The command list is the
+    # self-host's ACTUAL commands (build/run/check) — listing commands it does not
+    # implement would be a worse divergence than the prefix. CRITICAL gate: this must
+    # NOT swallow the legacy harness shape `driver <file.gg> <lib_dir> [--lir-c]` that
+    # self_host_bootstrap_fixed_point / c_emit_comparison depend on, so an arg1 is
+    # treated as an unknown command ONLY when it does not start with `-` (not a flag)
+    # AND does not end in `.gg` (not a source path). Everything else falls through.
+    if not _subcmd.starts_with("-") and not _subcmd.ends_with(".gg"):
+        print("Unknown command: " + _subcmd, file=stderr)
+        print("valid commands: build, run, check", file=stderr)
+        exit(1)
     # ── Legacy path ─────────────────────────────────────────────────────────
     String path = cmd_args.get(1).unwrap()
     String lib_dir = "lib"

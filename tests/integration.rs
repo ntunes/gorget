@@ -16406,6 +16406,77 @@ fn self_host_cli_pipeline() {
         String::from_utf8_lossy(&run_bare.stderr),
     );
 
+    // ── 7. `gg --version` / `-V` → exit 0 + prints `gg <version>` on stdout. ──
+    // G1: mirror Rust gg's `println!("gg {}", CARGO_PKG_VERSION)` (src/main.rs).
+    // The version literal tracks Cargo.toml `version` = "0.1.4-alpha".
+    for vflag in ["--version", "-V"] {
+        let ver = run_with_timeout(Command::new(&driver_exe).arg(vflag), vflag);
+        assert!(
+            ver.status.success(),
+            "`gg {vflag}` should exit 0.\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&ver.stdout),
+            String::from_utf8_lossy(&ver.stderr),
+        );
+        assert!(
+            String::from_utf8_lossy(&ver.stdout).contains("gg 0.1.4-alpha"),
+            "`gg {vflag}` should print the version line `gg 0.1.4-alpha` (matching \
+             Rust gg's `gg {{CARGO_PKG_VERSION}}`).\nstdout: {}",
+            String::from_utf8_lossy(&ver.stdout),
+        );
+    }
+
+    // ── 8. Unknown command → exit 1 + `Unknown command:` on stderr. ──────────
+    // G2: an arg1 that is NOT a flag and does NOT end in `.gg` and is not one of
+    // build/run/check is an unknown subcommand. Mirror Rust gg's
+    // `Unknown command: <x>` prefix (src/main.rs), exit 1.
+    let unknown = run_with_timeout(
+        Command::new(&driver_exe).arg("frobnicate").arg(&hello),
+        "frobnicate (unknown command)",
+    );
+    assert_eq!(
+        unknown.status.code(),
+        Some(1),
+        "an unknown command should exit 1.\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&unknown.stdout),
+        String::from_utf8_lossy(&unknown.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&unknown.stderr).contains("Unknown command"),
+        "an unknown command should print `Unknown command:` on stderr.\nstderr: {}",
+        String::from_utf8_lossy(&unknown.stderr),
+    );
+
+    // ── 9. LEGACY harness shape preserved: arg1 = a real `.gg` PATH is NOT ────
+    // treated as an unknown command. The G2 gate excludes `.gg`-suffixed args, so
+    // `driver <file.gg> <lib_dir> --lir-c` (the shape self_host_bootstrap_fixed_point
+    // / c_emit_comparison invoke) still flows through the legacy path. We assert the
+    // legacy path emits C body to stdout and does NOT print the unknown-command
+    // diagnostic. (self_host_bootstrap_fixed_point is the deeper canary.)
+    let legacy = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&hello)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "legacy shape: driver hello.gg lib --lir-c",
+    );
+    assert!(
+        legacy.status.success(),
+        "the legacy harness shape `driver <file.gg> <lib_dir> --lir-c` must still \
+         work (NOT be swallowed by the unknown-command gate).\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&legacy.stdout),
+        String::from_utf8_lossy(&legacy.stderr),
+    );
+    assert!(
+        !String::from_utf8_lossy(&legacy.stderr).contains("Unknown command"),
+        "the legacy `.gg`-path shape must NOT be treated as an unknown command.\nstderr: {}",
+        String::from_utf8_lossy(&legacy.stderr),
+    );
+    assert!(
+        !String::from_utf8_lossy(&legacy.stdout).is_empty(),
+        "the legacy `--lir-c` path should emit C body to stdout.\nstderr: {}",
+        String::from_utf8_lossy(&legacy.stderr),
+    );
+
     let _ = std::fs::remove_dir_all(&tmp_root);
 }
 
