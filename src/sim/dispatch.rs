@@ -82,7 +82,8 @@ fn mark_instruction_dst(initialized: &mut HashSet<u32>, inst: &Instruction) {
         }
         Instruction::Call { dst: Some(dst), .. }
         | Instruction::CallExtern { dst: Some(dst), .. }
-        | Instruction::CallIndirect { dst: Some(dst), .. } => {
+        | Instruction::CallIndirect { dst: Some(dst), .. }
+        | Instruction::FaultableCall { dst: Some(dst), .. } => {
             initialized.insert(dst.0);
         }
         _ => {}
@@ -1147,6 +1148,20 @@ impl<'m> Interpreter<'m> {
                 let i = dst.0 as usize;
                 while locals.len() <= i { locals.push(Value::Unit); }
                 locals[i] = field_val;
+            }
+
+            // Fault-`catch`able cross-frame call (error-model.md §11, Increment
+            // 2.1a). The simulator runs callees in fresh frames that panic on an
+            // uncaught fault (it does not thread the NULL slot), so it executes
+            // the call exactly like a plain `Call`; the slot-check branch is a
+            // backend (LIR→C) concern. Delegate to the `Call` arm.
+            Instruction::FaultableCall { dst, func, args, .. } => {
+                let as_call = Instruction::Call {
+                    dst: *dst,
+                    func: func.clone(),
+                    args: args.clone(),
+                };
+                return self.execute_instruction(locals, initialized, &as_call, depth);
             }
 
             Instruction::Call { dst, func, args, .. } => {

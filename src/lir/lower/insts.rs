@@ -674,6 +674,23 @@ impl<'a> FuncLowering<'a> {
                 }
             }
 
+            // Fault-`catch`able cross-frame call (error-model.md §11, Increment
+            // 2.1a). 2.1a-i: lowers identically to `Call` — the front-end does
+            // not emit `FaultableCall` yet, so this arm is well-formed-but-dead.
+            // 2.1a-iii REPLACES this body with the slot-check-branch split:
+            // after the `Inst::Call`, test `fault_slot != 0` and branch to
+            // `fault_handler` (else continue + read result). Delegate to the
+            // shared `Call` arm by reconstructing the call (the participating
+            // callee is always a known user fn in `func_index`).
+            Instruction::FaultableCall { dst, func, args, .. } => {
+                let as_call = Instruction::Call {
+                    dst: *dst,
+                    func: func.clone(),
+                    args: args.clone(),
+                };
+                bb = self.lower_instruction(&as_call, bb);
+            }
+
             Instruction::CallExtern { dst, func, args } => {
                 // Intercept unwrap/expect before func_index — these pseudo-functions
                 // may be in func_index but have no C implementation.

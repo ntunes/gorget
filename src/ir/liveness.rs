@@ -320,7 +320,8 @@ fn collect_inst_defs_into(inst: &Instruction, defs: &mut Vec<u32>) {
         }
         Instruction::Call { dst: Some(d), .. }
         | Instruction::CallIndirect { dst: Some(d), .. }
-        | Instruction::CallExtern { dst: Some(d), .. } => {
+        | Instruction::CallExtern { dst: Some(d), .. }
+        | Instruction::FaultableCall { dst: Some(d), .. } => {
             defs.push(d.0);
         }
         Instruction::MoveZero { place } if place.projections.is_empty() => {
@@ -398,6 +399,10 @@ fn collect_inst_reads_into(inst: &Instruction, reads: &mut Vec<u32>) {
         }
         Instruction::Call { args, .. } | Instruction::CallExtern { args, .. } => {
             for a in args { push_op(reads, a); }
+        }
+        Instruction::FaultableCall { args, fault_slot, .. } => {
+            for a in args { push_op(reads, a); }
+            push_place(reads, fault_slot);
         }
         Instruction::CallIndirect { callee, args, .. } => {
             push_op(reads, callee);
