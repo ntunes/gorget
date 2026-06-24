@@ -2,7 +2,7 @@ from parser import parse_source
 from ast import Module
 from scope import ScopeTable
 from types import TypeTable
-from resolve import resolve_module, ResolveContext
+from resolve import resolve_module, resolve_module_with_imports, ResolveContext
 from typecheck import type_check_module
 from derive import expand_derives
 from meta import expand_meta_types, expand_meta_for_match, rename_import_aliases
@@ -363,7 +363,8 @@ void compile_main():
     # to today; only a bare `driver <path>` with no lib_dir consults the embed.
     Dict[String, String] lib_embedded = build_embedded_lib()
     bool lib_explicit = cmd_args.len() > 2
-    Dict[String, String] call_redirects = load_imports(&m, path, lib_dir, &imported_fns, source.byte_len(), &lib_embedded, lib_explicit)
+    Dict[String, bool] imported_bare_names = {}
+    Dict[String, String] call_redirects = load_imports(&m, path, lib_dir, &imported_fns, source.byte_len(), &lib_embedded, lib_explicit, &imported_bare_names)
     _t1 = time_ms()
     if _timing: print("PHASE load_imports " + int_to_str(_t1 - _tp) + " ms", file=stderr)
     _tp = _t1
@@ -383,7 +384,7 @@ void compile_main():
     _t1 = time_ms()
     if _timing: print("PHASE meta_expand " + int_to_str(_t1 - _tp) + " ms", file=stderr)
     _tp = _t1
-    ResolveContext ctx = resolve_module(m, &scopes, &types)
+    ResolveContext ctx = resolve_module_with_imports(m, &scopes, &types, imported_bare_names)
     _t1 = time_ms()
     if _timing: print("PHASE resolve_module " + int_to_str(_t1 - _tp) + " ms", file=stderr)
     _tp = _t1
@@ -634,7 +635,8 @@ void run_build_mode(Vector[String] cmd_args, bool do_run):
     Module m = parse_source(source)
     Dict[String, bool] imported_fns = {}
     Dict[String, String] lib_embedded = build_embedded_lib()
-    Dict[String, String] call_redirects = load_imports(&m, input_path, lib_dir, &imported_fns, source.byte_len(), &lib_embedded, lib_dir_explicit)
+    Dict[String, bool] imported_bare_names = {}
+    Dict[String, String] call_redirects = load_imports(&m, input_path, lib_dir, &imported_fns, source.byte_len(), &lib_embedded, lib_dir_explicit, &imported_bare_names)
     expand_derives(&m)
     ScopeTable scopes = ScopeTable.new_scope_table()
     scopes.init()
@@ -645,7 +647,7 @@ void run_build_mode(Vector[String] cmd_args, bool do_run):
     String entry_source_dir = path_parent(path_absolute(input_path))
     expand_meta_types(&m, &types, entry_source_dir)
     expand_meta_for_match(&m)
-    ResolveContext ctx = resolve_module(m, &scopes, &types)
+    ResolveContext ctx = resolve_module_with_imports(m, &scopes, &types, imported_bare_names)
     apply_collect_target_rewrites(&m)
     # Rebind aliased imports (`from X import Y as Z`) back to surface names so
     # the IR backend's `map_runtime_name` lowers `Z(...)` calls to the real C
@@ -767,7 +769,8 @@ void run_check_mode(Vector[String] cmd_args):
     Module m = parse_source(source)
     Dict[String, bool] imported_fns = {}
     Dict[String, String] lib_embedded = build_embedded_lib()
-    Dict[String, String] call_redirects = load_imports(&m, input_path, lib_dir, &imported_fns, source.byte_len(), &lib_embedded, lib_dir_explicit)
+    Dict[String, bool] imported_bare_names = {}
+    Dict[String, String] call_redirects = load_imports(&m, input_path, lib_dir, &imported_fns, source.byte_len(), &lib_embedded, lib_dir_explicit, &imported_bare_names)
     expand_derives(&m)
     ScopeTable scopes = ScopeTable.new_scope_table()
     scopes.init()
@@ -778,7 +781,7 @@ void run_check_mode(Vector[String] cmd_args):
     String entry_source_dir = path_parent(path_absolute(input_path))
     expand_meta_types(&m, &types, entry_source_dir)
     expand_meta_for_match(&m)
-    ResolveContext ctx = resolve_module(m, &scopes, &types)
+    ResolveContext ctx = resolve_module_with_imports(m, &scopes, &types, imported_bare_names)
     apply_collect_target_rewrites(&m)
     # Rebind aliased imports (`from X import Y as Z`) back to surface names so
     # the IR backend's `map_runtime_name` lowers `Z(...)` calls to the real C

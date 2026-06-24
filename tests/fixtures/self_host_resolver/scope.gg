@@ -1,7 +1,7 @@
 # Scope tree and definition table for name resolution.
 # Uses flat parallel vectors for scope names to avoid non-Copy codegen issues.
 
-from std.collections import Vector
+from std.collections import Vector, Dict
 from ast import Span
 from ids import NO_DEF, NO_SCOPE
 
@@ -59,6 +59,12 @@ struct ScopeTable:
     Vector[String] name_keys
     Vector[int] name_def_ids
     int current
+    # Variant name → def_ids. `alloc_def` (used for non-generic enum variants,
+    # which are NOT in the value namespace nor the parallel name table) records
+    # each variant here so `is_known_variant_name` is an O(K) lookup. Mirrors
+    # Rust gg's `name_index` role for `is_known_variant_name`
+    # (src/semantic/scope.rs:195/442).
+    Dict[String, Vector[int]] variant_name_index
 
 # ── Typed accessors (only for immutable self or standalone use) ────
 
@@ -82,6 +88,31 @@ bool def_kind_is_trait(DefKind k):
         else:
             return false
 
+bool def_kind_is_variant(DefKind k):
+    match k:
+        case DkVariant():
+            return true
+        else:
+            return false
+
+# Is `name` a known (non-generic) enum variant anywhere in the module?
+# Non-generic variants are `alloc_def`'d (no value-namespace entry), so a
+# plain lookup misses them; this O(K) query lets the resolver stay silent for
+# bare variant refs. Mirrors Rust gg `ScopeTable::is_known_variant_name`
+# (src/semantic/scope.rs:442). Kept in sync with the typechecker/lowerer copy
+# per CLAUDE.md "fix the class, not the instance".
+bool is_known_variant_name(ScopeTable scopes, String name):
+    if scopes.variant_name_index.contains(name):
+        Vector[int] ids = scopes.variant_name_index.get(name).unwrap()
+        int j = 0
+        while j < ids.len():
+            int def_id = ids.get(j).unwrap()
+            DefInfo d = get_def_at(scopes.definitions, def_id)
+            if def_kind_is_variant(d.kind):
+                return true
+            j += 1
+    return false
+
 # ── ScopeTable methods ──────────────────────────────────────
 
 equip ScopeTable:
@@ -92,7 +123,8 @@ equip ScopeTable:
         Vector[int](),
         Vector[String](),
         Vector[int](),
-        NO_SCOPE
+        NO_SCOPE,
+        Dict[String, Vector[int]]()
     )
 
     void init(&self):
@@ -167,8 +199,16 @@ equip ScopeTable:
     # Used for non-generic enum variants which have def_ids but aren't in scope.
     int alloc_def(&self, String name, DefKind kind, Span !span):
         int def_id = self.definitions.len()
+        String vkey = name.clone()
+        bool is_variant = def_kind_is_variant(kind)
         DefInfo info = DefInfo(name, kind, span, self.current, NO_DEF, false, false)
         self.definitions.push(info)
+        if is_variant:
+            if self.variant_name_index.contains(vkey):
+                self.variant_name_index.get(vkey).unwrap().push(def_id)
+            else:
+                Vector[int] v = [def_id]
+                self.variant_name_index.put(vkey, !v)
         return def_id
 
     # Find name entry index in flat table (returns -1 if not found)

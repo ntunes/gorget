@@ -13,7 +13,7 @@ from scope import DkFunction, DkStruct, DkEnum, DkVariant, DkTrait
 from scope import DkTypeAlias, DkNewtype, DkVariable, DkConst, DkStatic
 from scope import DkGenericParam, DkImport
 from scope import SkModule, SkFunction, SkBlock, SkEquipBlock, SkTraitDef, SkForLoop
-from scope import get_def_at
+from scope import get_def_at, is_known_variant_name
 from types import TypeTable, ast_type_to_resolved, ResolvedType, get_stype_at
 from diagnostic import Diagnostic, DiagKind, DkUndefinedName, DkDuplicateDefinition
 
@@ -679,7 +679,14 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
             int def_id = scopes.lookup(name)
             if def_id >= 0:
                 ctx.resolution_map.put(expr.span.start, def_id)
-            elif not is_builtin(name):
+            elif is_builtin(name):
+                pass
+            elif is_known_variant_name(scopes, name):
+                # Bare ref to a non-generic enum variant (`alloc_def`'d, not in
+                # the value namespace). Rust gg stays silent here too
+                # (src/semantic/resolve.rs's `is_known_variant_name` exclusion).
+                pass
+            else:
                 ctx.diagnostics.push(Diagnostic.error(expr.span, DkUndefinedName(), "undefined name `" + name + "`"))
 
         case EBinaryOp(left, op, right):

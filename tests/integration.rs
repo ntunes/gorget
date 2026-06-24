@@ -17751,6 +17751,70 @@ fn self_host_runtime() {
     );
 }
 
+/// SATISFIABLE-GATE for Case-B's β-flip: the self-host resolver MUST REJECT a
+/// genuinely-undefined name, exactly as Rust gg does.
+///
+/// Before the flip, the self-host resolver's `Expr::Identifier`-miss arm did
+/// `pass` (silently accepted any undefined name). The β-flip changes it to push
+/// a `DkUndefinedName` diagnostic (mirroring Rust `src/semantic/resolve.rs`'s
+/// `UndefinedName` site), which the build/check path surfaces via
+/// `has_errors(ctx.diagnostics)` → `exit(1)`. This test pins that behavior:
+/// running the self-host driver in `check` mode against `undefined_name_error.gg`
+/// (which references the undefined name `nonexistent`) MUST fail with an
+/// "undefined name" diagnostic — Rust rejects it identically
+/// (`check_gg_fails("undefined_name_error.gg", "undefined name")`).
+///
+/// PROVE-IT-BITES: revert the flip (restore the `pass` at the EIdentifier-miss
+/// arm in `self_host_typechecker/resolve.gg`) and this test FAILS — the driver
+/// `check` exits 0 and the program is silently accepted, regressing the gate.
+///
+/// The companion guarantee (NO Rust-clean-accept program is false-rejected) is
+/// the FULL-CORPUS measurement run by the scout, not a per-fixture assertion
+/// here; this test only pins the one direction the flip must always satisfy.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_rejects_undefined_name() {
+    if skip_under_llvm() { return; }
+
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir.join("tests/fixtures/undefined_name_error.gg");
+
+    assert!(
+        fixture.exists(),
+        "self_host_rejects_undefined_name: fixture not found: {}",
+        fixture.display(),
+    );
+
+    // `driver check <fixture> --lib-dir=<lib>` — the front-end-only path
+    // (parse → resolve → typecheck) that surfaces resolver diagnostics and
+    // `exit(1)`s on any error-severity diagnostic.
+    let output = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg("check")
+            .arg(&fixture)
+            .arg(format!("--lib-dir={}", lib_dir.display())),
+        "undefined_name_error.gg",
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        !output.status.success(),
+        "self_host_rejects_undefined_name: the self-host `check` must REJECT \
+         undefined_name_error.gg (the β-flip pushes DkUndefinedName), but it \
+         succeeded. The flip likely regressed to `pass` at the EIdentifier-miss \
+         arm.\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    assert!(
+        stderr.contains("undefined name"),
+        "self_host_rejects_undefined_name: expected an `undefined name` \
+         diagnostic on stderr, got:\nstdout: {stdout}\nstderr: {stderr}",
+    );
+}
+
 /// GUARD for the self-host `embed_file` meta builtin (GG_IMPL bundling Inc-1).
 ///
 /// `embed_file(path)` is Gorget's `include_str!`: at compile time the meta pass

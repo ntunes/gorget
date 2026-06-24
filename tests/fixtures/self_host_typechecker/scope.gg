@@ -75,6 +75,12 @@ struct ScopeTable:
     # scope. `children.len()` is kept == `scopes.len()`; grown in BOTH
     # `init` (root scope) and `push_scope`.
     Vector[Vector[int]] children
+    # Variant name → def_ids. `alloc_def` (used for non-generic enum
+    # variants, which are NOT in the value namespace nor the parallel name
+    # table) records each variant here so `is_known_variant_name` is an O(K)
+    # lookup rather than a linear scan of `definitions`. Mirrors Rust gg's
+    # `name_index` role for `is_known_variant_name` (src/semantic/scope.rs:195/442).
+    Dict[String, Vector[int]] variant_name_index
 
 # ── Typed accessors ────
 
@@ -98,6 +104,42 @@ bool def_kind_is_trait(DefKind k):
         else:
             return false
 
+bool def_kind_is_variant(DefKind k):
+    match k:
+        case DkVariant():
+            return true
+        else:
+            return false
+
+# Is `name` a known (non-generic) enum variant anywhere in the module?
+#
+# Non-generic enum variants are allocated via `alloc_def` (which does NOT
+# insert into the scope's value namespace nor into the parallel name table)
+# — they are accessed via qualified paths (`EnumName.Variant`). When the
+# loader's pre-merge qualifier drops an ambiguous bare name, the resolver
+# hits an `Identifier(name)` that is not in scope but is still a legitimate
+# variant ref; this query lets the resolver stay silent for those names.
+# Real undefined names (no variant anywhere) still report normally.
+#
+# Production-grade O(K) form: `alloc_def` records each variant's def_id in
+# `variant_name_index` (name → def_ids), and this consults THAT index — it
+# is NOT a linear scan of `definitions`. Mirrors Rust gg's
+# `ScopeTable::is_known_variant_name` (src/semantic/scope.rs:442), adapted
+# to the self-host's distinct `name_index` meaning (here `name_index` maps
+# name → parallel-name-table indices, NOT def_ids, so variants need their
+# own def_id index).
+bool is_known_variant_name(ScopeTable scopes, String name):
+    if scopes.variant_name_index.contains(name):
+        Vector[int] ids = scopes.variant_name_index.get(name).unwrap()
+        int j = 0
+        while j < ids.len():
+            int def_id = ids.get(j).unwrap()
+            DefInfo d = get_def_at(scopes.definitions, def_id)
+            if def_kind_is_variant(d.kind):
+                return true
+            j += 1
+    return false
+
 # ── ScopeTable methods ──────────────────────────────────────
 
 equip ScopeTable:
@@ -110,7 +152,8 @@ equip ScopeTable:
         Vector[int](),
         NO_SCOPE,
         Dict[String, Vector[int]](),
-        Vector[Vector[int]]()
+        Vector[Vector[int]](),
+        Dict[String, Vector[int]]()
     )
 
     void init(&self):
@@ -208,8 +251,19 @@ equip ScopeTable:
     # Used for non-generic enum variants which have def_ids but aren't in scope.
     int alloc_def(&self, String name, DefKind kind, Span !span):
         int def_id = self.definitions.len()
+        # Index variants by name so `is_known_variant_name` is O(K), not a
+        # linear scan. Capture the key/variant-ness BEFORE `name` is consumed
+        # by the DefInfo ctor below.
+        String vkey = name.clone()
+        bool is_variant = def_kind_is_variant(kind)
         DefInfo info = DefInfo(name, kind, span, self.current, NO_DEF, false, false)
         self.definitions.push(info)
+        if is_variant:
+            if self.variant_name_index.contains(vkey):
+                self.variant_name_index.get(vkey).unwrap().push(def_id)
+            else:
+                Vector[int] v = [def_id]
+                self.variant_name_index.put(vkey, !v)
         return def_id
 
     # Find name entry index in flat table (returns None if not found).

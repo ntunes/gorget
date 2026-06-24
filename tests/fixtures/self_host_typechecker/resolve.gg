@@ -13,9 +13,9 @@ from scope import DkFunction, DkStruct, DkEnum, DkVariant, DkTrait
 from scope import DkTypeAlias, DkNewtype, DkVariable, DkConst, DkStatic
 from scope import DkGenericParam, DkImport
 from scope import SkModule, SkFunction, SkBlock, SkEquipBlock, SkTraitDef, SkForLoop
-from scope import get_def_at
+from scope import get_def_at, is_known_variant_name
 from types import TypeTable, ast_type_to_resolved, ResolvedType, get_stype_at
-from diagnostic import Diagnostic
+from diagnostic import Diagnostic, DkUndefinedName
 
 # ── Function-body scope register ────────────────────────────
 # The Dict gives O(1) lookup of the canonical (last-registered) body
@@ -51,6 +51,13 @@ struct ResolveContext:
     int loop_depth
     bool current_function_throws
     bool in_function_body
+    # Imported bare fn names (from `load_imports`' `imported_bare_names`),
+    # allow-listed at the Identifier-miss site so transitively-merged
+    # library code calling bare import names does not false-positive as
+    # undefined. EMPTY for the comparison drivers (they call the 3-arg
+    # `resolve_module`), so the flip is parity-neutral for them; populated
+    # only by the build/check path (`resolve_module_with_imports`).
+    Dict[String, bool] import_allow
 
 # ── Built-in check ──────────────────────────────────────────
 
@@ -99,12 +106,34 @@ bool is_builtin(String name):
         return true
     return false
 
+# Compiler-synthetic intrinsic names the resolver must NOT treat as user
+# identifiers. These are emitted by meta/derive expansion and the
+# iterator/bytes/datetime lowering — never written by a user. Centralized
+# `__`-prefix carve-out for the KNOWN synthetic set (CLAUDE.md "no name
+# matching": these are compiler-internal, never user identifiers, and the
+# predicate is centralized + commented; mirrors Rust resolve.rs's `__return__`
+# / synthetic-intrinsic exclusions).
+bool is_compiler_intrinsic_name(String name):
+    if name == "__return__":
+        return true
+    if name.starts_with("__metaop__"):
+        return true
+    if name.starts_with("__dict_iter_"):
+        return true
+    if name.starts_with("__set_"):
+        return true
+    if name.starts_with("__bytes_"):
+        return true
+    if name == "__dt_decompose":
+        return true
+    return false
+
 # ═══════════════════════════════════════════════════════════
 # Pass 1: collect_top_level
 # ═══════════════════════════════════════════════════════════
 
 ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable &types):
-    ResolveContext ctx = ResolveContext(Dict[int, int](), Dict[String, int](), Vector[String](), Vector[int](), Vector[Diagnostic](), 0, false, false)
+    ResolveContext ctx = ResolveContext(Dict[int, int](), Dict[String, int](), Vector[String](), Vector[int](), Vector[Diagnostic](), 0, false, false, Dict[String, bool]())
 
     # Register built-in core traits
     Vector[String] trait_names = Vector[String]()
@@ -621,8 +650,21 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
         case EIdentifier(name):
             if scopes.lookup(name) is Some(def_id):
                 ctx.resolution_map.put(expr.span.start, def_id)
-            elif not is_builtin(name):
+            elif is_builtin(name):
                 pass
+            elif is_compiler_intrinsic_name(name):
+                pass
+            elif ctx.import_allow.contains(name):
+                pass
+            elif is_known_variant_name(scopes, name):
+                pass
+            else:
+                # Genuinely-undefined name — reject it (matches Rust gg's
+                # `Expr::Identifier`-miss `UndefinedName` site,
+                # src/semantic/resolve.rs:1485-1509). Drains to stderr via
+                # the comparison driver; halts the build/check path via
+                # `has_errors(ctx.diagnostics)`.
+                ctx.diagnostics.push(Diagnostic.error(expr.span, DkUndefinedName(), "undefined name `" + name + "`"))
 
         case EBinaryOp(left, op, right):
             resolve_expr(*left, &scopes, &ctx)
@@ -1084,6 +1126,14 @@ void resolve_is_condition(SpannedExpr expr, ScopeTable &scopes, ResolveContext &
 # ═══════════════════════════════════════════════════════════
 
 ResolveContext resolve_module(Module module, ScopeTable &scopes, TypeTable &types):
+    Dict[String, bool] empty_allow = Dict[String, bool]()
+    return resolve_module_with_imports(module, &scopes, &types, empty_allow)
+
+# Build/check entry point: same as `resolve_module` but threads the
+# `imported_bare_names` allow-set from `load_imports` so transitively-merged
+# library bodies calling bare import names don't false-positive as undefined.
+ResolveContext resolve_module_with_imports(Module module, ScopeTable &scopes, TypeTable &types, Dict[String, bool] import_allow):
     ResolveContext ctx = collect_top_level(module, &scopes, &types)
+    ctx.import_allow = import_allow
     resolve_bodies(module, &scopes, &types, &ctx)
     return ctx

@@ -570,7 +570,7 @@ String mangle_prefix(String module_path):
 
 # ── Import loading ───────────────────────────────────────
 
-Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, Dict[String, bool] &imported_fns, int entry_source_len, Dict[String, String] &lib_embedded, bool lib_explicit):
+Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, Dict[String, bool] &imported_fns, int entry_source_len, Dict[String, String] &lib_embedded, bool lib_explicit, Dict[String, bool] &imported_bare_names):
     # Canonicalize the entry path to an absolute path BEFORE deriving
     # `base_dir`. Mirrors Rust's `ModuleLoader::load_all` (src/loader.rs:581
     # `entry.canonicalize()` → `canonical.parent()`). Without this, a
@@ -708,6 +708,14 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                             import_mod_paths.push(sub_imp.module_path.clone())
                             loaded.put(sub_imp.module_path.clone(), true)
                     case IFunction(fdef):
+                        # A.3 carrier: record EVERY imported bare fn name (real-
+                        # bodied, extern-stub of any ret type, or bodyless
+                        # intrinsic fwd-decl) regardless of the downstream
+                        # mangle/drop decision. This is the resolver's
+                        # import-allow set — a superset of `call_redirects`
+                        # bare keys plus the math/non-String externs the
+                        # String-only redirect carve-out drops.
+                        imported_bare_names.put(fdef.name.clone(), true)
                         # Aliased extern stub: body is one of SExpr(EStringLiteral)
                         # or SReturn(Some(EStringLiteral)) depending on how the
                         # parser wrapped `= "symbol"`.
@@ -1115,6 +1123,10 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                         int exi = 0
                         while exi < ext_fns.len():
                             FunctionDef ext_fd = ext_fns.get(exi).unwrap()
+                            # A.3 carrier (extern-block arm): record the bare
+                            # extern name so the resolver's import-allow set
+                            # covers non-String externs the redirect drops.
+                            imported_bare_names.put(ext_fd.name.clone(), true)
                             if ext_fd.body.len() == 1:
                                 Stmt ext_s = ext_fd.body.get(0).unwrap()
                                 match ext_s:
