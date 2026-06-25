@@ -2029,7 +2029,7 @@ bool runtime_arg_is_cstr(String name, int arg_idx):
             return true
         if name == "gorget_input" or name == "gorget_file_open_try":
             return true
-        if name == "gorget_format_time" or name == "gorget_parse_time":
+        if name == "gorget_parse_time":
             return true
         if name == "gorget_udp_bind" or name == "gorget_socket_connect":
             return true
@@ -2043,6 +2043,10 @@ bool runtime_arg_is_cstr(String name, int arg_idx):
         if name == "gorget_path_join":
             return true
         if name == "gorget_file_open_try" or name == "gorget_parse_time":
+            return true
+        # gorget_format_time(int64_t epoch, const char* fmt) — cstr is arg 1
+        # (authoritative: src/lir/runtime.rs FormatTime sig CStr@1).
+        if name == "gorget_format_time":
             return true
         # In-place String append — arg 1 is the rhs data passed as cstr+len
         # (extern "C" coerces String→cstr; the .len comes via arg 2).

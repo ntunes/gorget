@@ -1,0 +1,12 @@
+[INFO] server started
+[WARN] disk space low
+[ERROR] connection refused
+[DEBUG] trace point
+[INFO] hello
+[WARN] caution
+[ERROR] boom
+[DEBUG] debug visible
+[INFO] info visible
+[ERROR] only error shows
+[INFO] app: started
+done

@@ -1,0 +1,8 @@
+[ERROR] visible error
+[DEBUG] debug now visible
+[INFO] info now visible
+[WARN] warn now visible
+[ERROR] error still visible
+[INFO] info still visible
+[ERROR] error still visible 2
+done
