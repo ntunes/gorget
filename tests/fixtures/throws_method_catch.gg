@@ -12,9 +12,10 @@
 # exercises BOTH the success path (no throw, caught-or-not) and the error path
 # (throw propagates to the call-site `catch`).
 #
-# NOTE: `int` payload deliberately — a String/resource payload trips a SEPARATE,
-# pre-existing Tier-2a consume-site validator panic (filed in TODO.md High), which
-# is identical for the free-fn form and orthogonal to this method-vs-free-fn bug.
+# NOTE: `int` payload deliberately here. The String/resource-payload shape (which
+# once tripped a separate Tier-2a consume-site validator panic, identical for the
+# free-fn form) is now covered by `throws_catch_resource_payload.gg` — fixed by
+# tagging the catch err-binding Owned at its write site (Core invariant #3).
 
 struct Calc:
     int base

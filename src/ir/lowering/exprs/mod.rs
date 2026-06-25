@@ -3507,6 +3507,19 @@ fn lower_catch_expr(
     let err_op = FunctionBuilder::copy(err_val);
     let err_mode = mode_for(ctx, builder, &err_op, err_field_type);
     builder.assign_mode(err_mode, Place::local(err_local), err_op);
+    // Tier 2a (Core invariant #3): the error binding is born OWNING the
+    // moved-out `Error` payload — `enum_field_load_move` + `MoveZero` of
+    // `val_local` transferred ownership of the heap data into `err_val`,
+    // which the Move-mode assign forwards into `err_local`. Tag the typed
+    // ownership at this writer site so a recovery expression that returns the
+    // bare binding (`… catch (e): e`) flows a tracked Owned source into
+    // `result_local`, instead of an Untracked one that trips Tier 2a's
+    // `AssignIntoOwnedSlot` validator. Mirrors the Snag #38 `set_owned` of
+    // `result_local` below. Guarded on Move mode: a primitive (Copy-mode)
+    // error payload is not drop-tracked, so leaving it Untracked is correct.
+    if matches!(err_mode, crate::ir::instructions::AssignMode::Move) {
+        ctx.set_owned(builder, err_local);
+    }
     ctx.register_local(&error_binding.node, err_local, err_field_type);
 
     let recovery_val = lower_expr(ctx, builder, recovery);

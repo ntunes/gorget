@@ -4118,9 +4118,25 @@ fn throws_method_catch() {
     //
     // Success path: c.add(5) -> Ok(15) -> 15. Error path: c.add(-3) throws,
     // caught -> -99. Second method `scale`: c.scale(4) -> 40, c.scale(0) throws
-    // -> -77. (int payload deliberately — a resource payload trips a separate,
-    // pre-existing Tier-2a validator panic identical for free fns, filed in TODO.)
+    // -> -77. (int payload here; the resource-payload shape is now covered by
+    // `throws_catch_resource_payload` below — the err-binding-Owned write-site fix.)
     run_gg("throws_method_catch.gg", "15\n-99\n40\n-77");
+}
+
+#[test]
+fn throws_catch_resource_payload() {
+    // A `throws` fn/method whose SUCCESS payload is a RESOURCE (String) consumed
+    // by `catch`. The `catch (e):` error binding owns the moved-out Error payload,
+    // but `lower_catch_expr` left it Untracked → a recovery returning the bare
+    // binding (`catch (e): e`) tripped the Tier-2a `AssignIntoOwnedSlot` validator
+    // (identical for free fns and equip methods). Fixed at the write site
+    // (`src/ir/lowering/exprs/mod.rs`, Core invariant #3: tag the err binding
+    // Owned on a Move-mode assign). Covers free-fn + method, success+error, both
+    // bare-resource-binding recovery and fresh-literal recovery.
+    run_gg(
+        "throws_catch_resource_payload.gg",
+        "f-ok\nf-negative\nf-fallback\nm-ok\nm-negative\nm-fallback",
+    );
 }
 
 #[test]
