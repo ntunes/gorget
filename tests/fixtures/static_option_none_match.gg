@@ -1,0 +1,8 @@
+# Regression guard: `static Option[int] G = None` is CORRECT — the static path
+# emits a runtime init writing the proper None tag, so the match takes `none`.
+static Option[int] G = None
+
+void main():
+    match G:
+        case Some(x): print(f"some:{x}")
+        case None: print("none")

@@ -1,0 +1,10 @@
+# `const Color C = Color.Blue()` — a user enum constructor is not foldable.
+enum Color:
+    Red()
+    Green()
+    Blue()
+
+const Color C = Color.Blue()
+
+void main():
+    print("unreachable")

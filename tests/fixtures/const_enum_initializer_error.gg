@@ -1,0 +1,10 @@
+# `const Option[int] G = None` is NOT a compile-time constant: an enum
+# constructor can't fold, and the lowering would substitute a zero placeholder
+# (a zeroed Option tag reads as Some) — a silent miscompile. Rejected at
+# typecheck; use `static` for a runtime-initialized global.
+const Option[int] G = None
+
+void main():
+    match G:
+        case Some(x): print(f"some:{x}")
+        case None: print("none")

@@ -33,6 +33,33 @@ fn equip_generic_names(impl_block: &EquipBlock) -> Vec<String> {
     names
 }
 
+/// Whether a module-level `const` initializer can fold to a compile-time
+/// constant. Mirrors the forms `ir::lowering::eval_const_expr` actually
+/// folds: numeric/bool literals, non-interpolated string literals, references
+/// to other constants (resolved later), and arithmetic/logic over those. An
+/// enum/struct constructor (`Some(..)`, `None`, `Color.Blue()`, a struct
+/// literal) is NOT foldable — `const` is inlined at every use site, so such an
+/// initializer is ill-formed (the lowering would substitute a zero placeholder
+/// and silently miscompile). Those decls must use `static` instead.
+fn expr_is_const_foldable(expr: &Expr) -> bool {
+    match expr {
+        Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_) => true,
+        // Non-interpolated string literal (folds to a `Constant::Str`).
+        Expr::StringLiteral(lit, _) => {
+            use crate::lexer::token::StringSegment;
+            lit.segments.len() == 1
+                && matches!(lit.segments.first(), Some(StringSegment::Literal(_)))
+        }
+        // Reference to another const/meta constant — resolved during lowering.
+        Expr::Identifier(_) => true,
+        Expr::UnaryOp { operand, .. } => expr_is_const_foldable(&operand.node),
+        Expr::BinaryOp { left, right, .. } => {
+            expr_is_const_foldable(&left.node) && expr_is_const_foldable(&right.node)
+        }
+        _ => false,
+    }
+}
+
 /// Push every bare `Named { name, [] }` arg name found in the generic-arg
 /// positions of `ty` (recursing through nested generics like `Pair[K, V]`).
 fn collect_bare_named_args(ty: &Type, names: &mut Vec<String>) {
@@ -6958,6 +6985,20 @@ fn check_items_recursive_tc(checker: &mut TypeChecker, items: &[Spanned<Item>]) 
             }
             Item::ConstDecl(c) => {
                 let value_ty = checker.infer_expr(&c.value);
+                // A module-level `const` is inlined at every use site, so its
+                // initializer must fold to a compile-time constant. An enum /
+                // struct constructor (e.g. `const Option[int] G = None`) cannot
+                // — the lowering would otherwise substitute a zero placeholder,
+                // silently miscompiling (a zeroed Option tag reads as `Some`).
+                // Reject here; the user should reach for `static` instead.
+                if !expr_is_const_foldable(&c.value.node) {
+                    checker.error(
+                        SemanticErrorKind::NonConstantConstInitializer {
+                            name: c.name.node.clone(),
+                        },
+                        c.value.span,
+                    );
+                }
                 // Set DefInfo.type_id so format_types_canonical surfaces
                 // the const's type. Without this, top-level constants like
                 // `const float PI = 3.14...` don't appear in TYPE output.

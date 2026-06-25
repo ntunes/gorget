@@ -1103,6 +1103,35 @@ fn string_index_compound_assign_error() {
     );
 }
 
+// A module-level `const` is inlined at every use site, so its initializer must
+// fold to a compile-time constant. An enum/struct constructor cannot — the
+// lowering substituted a zero placeholder (a zeroed Option tag reads as `Some`,
+// so `const Option[int] G = None` silently matched the Some arm). Now rejected
+// at typecheck; the user reaches for `static` (runtime init) instead.
+#[test]
+fn const_enum_initializer_error() {
+    check_gg_fails(
+        "const_enum_initializer_error.gg",
+        "not a compile-time constant",
+    );
+}
+
+#[test]
+fn const_enum_user_variant_error() {
+    check_gg_fails(
+        "const_enum_user_variant_error.gg",
+        "not a compile-time constant",
+    );
+}
+
+// Regression guard for the CORRECT side: `static Option[int] G = None` (the
+// static path emits a runtime init writing the proper None tag) prints `none`,
+// NOT `some` — the static path was never broken (only `const` was).
+#[test]
+fn static_option_none_match() {
+    run_gg("static_option_none_match.gg", "none");
+}
+
 // A bare `return` in a non-void `T throws E` function (here `int throws`)
 // must error as a missing return value — it previously lowered silently to
 // `Ok(0)`. The `void throws E` bare-return remains valid (raw return = void).

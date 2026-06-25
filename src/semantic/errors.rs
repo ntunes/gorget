@@ -416,6 +416,12 @@ pub enum SemanticErrorKind {
     /// Assignment to a const binding (always an error).
     AssignmentToConst { name: String },
 
+    /// A module-level `const` initializer is not a compile-time constant
+    /// (e.g. an enum/struct constructor). `const` is inlined at every use
+    /// site, so its value must fold at compile time — use `static` for a
+    /// runtime-initialized global instead.
+    NonConstantConstInitializer { name: String },
+
     /// `via` used without a trait in equip block.
     ViaWithoutTrait,
 
@@ -807,6 +813,9 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::AssignmentToConst { name } => {
                 write!(f, "cannot assign to constant `{name}`")
+            }
+            SemanticErrorKind::NonConstantConstInitializer { name } => {
+                write!(f, "`const {name}` initializer is not a compile-time constant; `const` values are inlined at every use site. Use `static {name}` for a runtime-initialized global")
             }
             SemanticErrorKind::ViaWithoutTrait => {
                 write!(f, "`via` delegation can only be used in trait equip blocks")
