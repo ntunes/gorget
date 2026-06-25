@@ -1,0 +1,7 @@
+# A `const` cannot reference a `static` (a runtime-initialized global): the
+# static isn't a compile-time constant → doesn't fold → would inline as 0. Reject.
+static int RT = 9
+const int X = RT
+
+void main():
+    print(f"{X}")

@@ -1,0 +1,7 @@
+# A module-level `const` cannot be a non-const identifier (here a function name):
+# it doesn't fold (`eval_const_expr` returns None) → it would inline as 0. Reject.
+int somefn(): 7
+const int X = somefn
+
+void main():
+    print(f"{X}")

@@ -1,0 +1,7 @@
+# String concatenation is not folded by the const-evaluator (only numeric/bool
+# binops), so a `const String` built from `+` doesn't fold → would inline as
+# empty. Reject (use a single string literal, or `static`).
+const String S = "a" + "b"
+
+void main():
+    print(S)

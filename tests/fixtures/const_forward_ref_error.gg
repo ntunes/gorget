@@ -1,0 +1,8 @@
+# A `const` referencing a const declared LATER doesn't fold under the single-pass
+# const-scan (B isn't registered when A is folded) → would inline as 0. Reject.
+# (Supporting forward const-refs is a separate feature — fixpoint registration.)
+const int A = B + 1
+const int B = 10
+
+void main():
+    print(f"{A}")

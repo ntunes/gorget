@@ -1124,6 +1124,32 @@ fn const_enum_user_variant_error() {
     );
 }
 
+// The whole non-foldable-const CLASS (driven off the real `eval_const_expr`, not
+// an AST shadow): a `const` initializer that the const-evaluator can't fold would
+// inline as a zero placeholder (silent miscompile). These four sub-classes each
+// previously passed `gg check` then ran to 0 on BOTH backends; now rejected.
+#[test]
+fn const_nonconst_fn_ref_error() {
+    check_gg_fails("const_nonconst_fn_ref_error.gg", "not a compile-time constant");
+}
+
+#[test]
+fn const_static_ref_error() {
+    check_gg_fails("const_static_ref_error.gg", "not a compile-time constant");
+}
+
+#[test]
+fn const_forward_ref_error() {
+    // A const referencing a const declared LATER (single-pass scan) — rejected
+    // until forward-const-ref fixpoint registration lands (filed, low-pri).
+    check_gg_fails("const_forward_ref_error.gg", "not a compile-time constant");
+}
+
+#[test]
+fn const_string_concat_error() {
+    check_gg_fails("const_string_concat_error.gg", "not a compile-time constant");
+}
+
 // Regression guard for the CORRECT side: `static Option[int] G = None` (the
 // static path emits a runtime init writing the proper None tag) prints `none`,
 // NOT `some` — the static path was never broken (only `const` was).

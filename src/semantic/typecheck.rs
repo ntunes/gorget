@@ -33,30 +33,60 @@ fn equip_generic_names(impl_block: &EquipBlock) -> Vec<String> {
     names
 }
 
-/// Whether a module-level `const` initializer can fold to a compile-time
-/// constant. Mirrors the forms `ir::lowering::eval_const_expr` actually
-/// folds: numeric/bool literals, non-interpolated string literals, references
-/// to other constants (resolved later), and arithmetic/logic over those. An
-/// enum/struct constructor (`Some(..)`, `None`, `Color.Blue()`, a struct
-/// literal) is NOT foldable — `const` is inlined at every use site, so such an
-/// initializer is ill-formed (the lowering would substitute a zero placeholder
-/// and silently miscompile). Those decls must use `static` instead.
-fn expr_is_const_foldable(expr: &Expr) -> bool {
-    match expr {
-        Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_) => true,
-        // Non-interpolated string literal (folds to a `Constant::Str`).
-        Expr::StringLiteral(lit, _) => {
-            use crate::lexer::token::StringSegment;
-            lit.segments.len() == 1
-                && matches!(lit.segments.first(), Some(StringSegment::Literal(_)))
+/// Reject module-level `const` decls whose initializer is NOT a compile-time
+/// constant, by MIRRORING the lowering const-fold loop EXACTLY (`ir::lowering`
+/// builds `module_constants` via a single-pass source-order fold over top-level
+/// ConstDecl/MetaConst/MetaIf items using `eval_const_expr`). A ConstDecl whose
+/// `eval_const_expr` returns `None` is one lowering CANNOT fold — it would
+/// otherwise substitute a zero placeholder at every use site (a zeroed enum tag
+/// reads as the ordinal-0 variant: `const Option[int] G = None` matched `Some`),
+/// a silent miscompile. Driving the rejection off the REAL folder (one source of
+/// truth, Core #1/#3 — NOT an AST-shape shadow) closes the whole class at once:
+/// enum/struct/None constructors, non-const identifier refs (fn/static/var),
+/// forward const-refs (not yet registered in single-pass order), and string
+/// concatenation. Foldable forms still pass (literals, prior-const refs, numeric
+/// arithmetic). The user reaches for `static` (runtime-initialized global).
+fn check_module_const_foldability(checker: &mut TypeChecker, items: &[Spanned<Item>]) {
+    use crate::ir::instructions::Constant;
+    use crate::ir::lowering::eval_const_expr;
+    // Same accumulator + source order as the lowering const-scan, so a ConstDecl
+    // errors here IFF lowering would fail to fold it (= would silently miscompile).
+    let mut known: rustc_hash::FxHashMap<String, Constant> = rustc_hash::FxHashMap::default();
+    for item in items {
+        match &item.node {
+            Item::ConstDecl(c) => match eval_const_expr(&c.value.node, &known) {
+                Some(val) => {
+                    known.insert(c.name.node.clone(), val);
+                }
+                None => checker.error(
+                    SemanticErrorKind::NonConstantConstInitializer {
+                        name: c.name.node.clone(),
+                    },
+                    c.value.span,
+                ),
+            },
+            Item::MetaConst(mc) => {
+                if let Some(val) = eval_const_expr(&mc.value.node, &known) {
+                    known.insert(mc.name.node.clone(), val);
+                }
+            }
+            Item::MetaIf(meta_if) => {
+                let active = matches!(
+                    eval_const_expr(&meta_if.condition.node, &known),
+                    Some(Constant::Bool(true))
+                );
+                if active {
+                    for sub in &meta_if.then_items {
+                        if let Item::MetaConst(mc) = &sub.node {
+                            if let Some(val) = eval_const_expr(&mc.value.node, &known) {
+                                known.insert(mc.name.node.clone(), val);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
-        // Reference to another const/meta constant — resolved during lowering.
-        Expr::Identifier(_) => true,
-        Expr::UnaryOp { operand, .. } => expr_is_const_foldable(&operand.node),
-        Expr::BinaryOp { left, right, .. } => {
-            expr_is_const_foldable(&left.node) && expr_is_const_foldable(&right.node)
-        }
-        _ => false,
     }
 }
 
@@ -6245,6 +6275,11 @@ pub fn check_module(
 
     check_items_recursive_tc(&mut checker, &module.items);
 
+    // Reject module-level `const`s whose initializer is not a compile-time
+    // constant (drives off the real `eval_const_expr`, mirroring the lowering
+    // const-fold loop — one source of truth, no AST shadow).
+    check_module_const_foldability(&mut checker, &module.items);
+
     // Resolve type variables in DefInfos so codegen sees concrete types.
     // Uses deep resolution to handle composite types like Function([Var, Var], Var).
     for i in 0..checker.scopes.def_count() {
@@ -6985,20 +7020,10 @@ fn check_items_recursive_tc(checker: &mut TypeChecker, items: &[Spanned<Item>]) 
             }
             Item::ConstDecl(c) => {
                 let value_ty = checker.infer_expr(&c.value);
-                // A module-level `const` is inlined at every use site, so its
-                // initializer must fold to a compile-time constant. An enum /
-                // struct constructor (e.g. `const Option[int] G = None`) cannot
-                // — the lowering would otherwise substitute a zero placeholder,
-                // silently miscompiling (a zeroed Option tag reads as `Some`).
-                // Reject here; the user should reach for `static` instead.
-                if !expr_is_const_foldable(&c.value.node) {
-                    checker.error(
-                        SemanticErrorKind::NonConstantConstInitializer {
-                            name: c.name.node.clone(),
-                        },
-                        c.value.span,
-                    );
-                }
+                // Non-foldable const initializers are rejected module-wide by
+                // `check_module_const_foldability` (driven off the real
+                // `eval_const_expr`, mirroring the lowering const-fold loop) —
+                // not a per-item AST shadow.
                 // Set DefInfo.type_id so format_types_canonical surfaces
                 // the const's type. Without this, top-level constants like
                 // `const float PI = 3.14...` don't appear in TYPE output.
