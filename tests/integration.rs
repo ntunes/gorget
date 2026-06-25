@@ -4140,6 +4140,18 @@ fn throws_catch_resource_payload() {
 }
 
 #[test]
+fn catch_recovery_alloc() {
+    // A `catch` recovery that ALLOCATES (string concat, or a fn-call returning an
+    // owned String) double-freed: the recovery-assign moved the fresh heap temp
+    // into the result slot but never zeroed the source, so it was dropped again
+    // at the merge (`free(): double free detected`, an abort). Atom recoveries
+    // (`catch (e): e` / static literal) dodged it. Fixed at the recovery-assign
+    // write site (move_zero+mark the Move-mode source, mirroring the Ok/Error
+    // payload move-out). Covers concat-using-e, fn-call, concat-not-using-e.
+    run_gg("catch_recovery_alloc.gg", "[empty]\nv:x\nwrap(empty)\n<>");
+}
+
+#[test]
 fn throws_autoprop_binop_operand() {
     // `return to_n(x) + 5` — throwing call as a binary-op operand.
     run_gg("throws_autoprop_binop_operand.gg", "15\n-99");

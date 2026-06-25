@@ -1,0 +1,25 @@
+# Regression: a `catch` recovery that ALLOCATES (string concat, or a fn-call
+# returning an owned String) double-freed — the recovery-assign moved the fresh
+# heap temp into the result slot but did NOT zero the source, so it was dropped
+# again at the merge (`free(): double free detected`). Atom recoveries
+# (`catch (e): e` / a static `"literal"`) dodged it. Fixed at the recovery-assign
+# write site (move_zero+mark the Move-mode source, mirroring the Ok/Error payload
+# move-out). Covers: concat using the binding, fn-call recovery, concat NOT using
+# the binding, plus a success path.
+
+String mk(String s) throws String:
+    if s == "":
+        throw "empty"
+    return "v:" + s
+
+String wrap(String e): "wrap(" + e + ")"
+
+void main():
+    String a = mk("") catch (e): "[" + e + "]"   # allocating recovery using e
+    print(a)
+    String b = mk("x") catch (e): "[" + e + "]"  # success path (recovery not run)
+    print(b)
+    String c = mk("") catch (e): wrap(e)         # fn-call recovery (owned String)
+    print(c)
+    String d = mk("") catch (e): "<" + ">"       # allocating recovery NOT using e
+    print(d)

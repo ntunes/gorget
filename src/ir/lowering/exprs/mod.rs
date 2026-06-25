@@ -3533,7 +3533,29 @@ fn lower_catch_expr(
     // `lower_match_stmt_as_expr` post-loop fallthrough fix.
     if !builder.is_terminated() {
         let recovery_mode = mode_for(ctx, builder, &recovery_val, ok_field_type);
+        // Mirror the Ok/Error payload move-out above (the `val_local` path): a
+        // Move-mode assign from an OWNING temp/local must zero+mark the source,
+        // else the recovery's heap data is moved into `result_local` AND dropped
+        // again at the merge → double-free. Only the bare/atom recoveries
+        // (`catch (e): e` / a static `"literal"`) dodged it; an ALLOCATING
+        // recovery (`catch (e): "[" + e + "]"`, a concat/fn-call returning an
+        // owned String) hit it. The `is_moved` guard keeps `catch (e): e`
+        // (already-moved err binding) a no-op.
+        let recovery_src_local = if let Operand::Copy(ref p) | Operand::Move(ref p) =
+            recovery_val
+        {
+            if p.projections.is_empty() { Some(p.local) } else { None }
+        } else {
+            None
+        };
         builder.assign_mode(recovery_mode, Place::local(result_local), recovery_val);
+        if matches!(recovery_mode, crate::ir::instructions::AssignMode::Move) {
+            if let Some(src_local) = recovery_src_local {
+                if !ctx.drops.is_moved(src_local) {
+                    ctx.move_zero_and_mark(builder, src_local);
+                }
+            }
+        }
         builder.jump(merge_bb);
     }
 
