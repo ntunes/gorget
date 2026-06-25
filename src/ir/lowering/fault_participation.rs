@@ -1,11 +1,11 @@
 //! Cross-frame fault-propagation participation analysis (error-model.md §11,
-//! Increment 2.1a/2.1c — C + LLVM, single hop, arithmetic faults
-//! `Fault.Overflow` + `Fault.DivByZero`).
+//! Increment 2.1a/2.1c/2.1d — C + LLVM, single hop, faults
+//! `Fault.Overflow` + `Fault.DivByZero` + `Fault.Bounds`).
 //!
 //! A function PARTICIPATES in cross-frame fault propagation iff:
-//!   (a) its body has a reachable-uncaught faultable arithmetic op (an
-//!       integer Add/Sub/Mul/Div/Rem NOT lexically inside a local
-//!       `FaultCatch` that catches the fault), AND
+//!   (a) its body has a reachable-uncaught faultable op (an integer
+//!       Add/Sub/Mul/Div/Rem OR an array index read `v[i]`, NOT lexically
+//!       inside a local `FaultCatch` that catches the fault), AND
 //!   (b) it is directly called from inside a `FaultCatch` scope that catches
 //!       the fault (so a deep fault would actually need to reach a handler).
 //!
@@ -13,14 +13,14 @@
 //! the blast radius of the uniform-signature design (D5): a participating
 //! callee gets a synthesized trailing `MutPtr<i32>` fault-slot param, and
 //! EVERY direct caller must pass the trailing arg. Marking every
-//! arithmetic-bearing function would change thousands of signatures across
+//! fault-bearing function would change thousands of signatures across
 //! the suite; the intersection limits it to exactly the deep-catch callees.
 //!
 //! 2.1a is single-hop and conservative: condition (b) only follows DIRECT
 //! calls inside the catch (no transitive closure — that is 2.2). The detector
-//! over-approximates (a) (any uncaught arithmetic op, on any integer type)
-//! which is sound: a function flagged but never deep-caught simply isn't in
-//! the intersection.
+//! over-approximates (a) (any uncaught faultable op — arithmetic or array
+//! index read) which is sound: a function flagged but never deep-caught
+//! simply isn't in the intersection.
 //!
 //! This is a TYPED flag set at the source (devbook/24 rule 2), stored in
 //! `LoweringContext::participating_fault_fns` and read via
@@ -178,16 +178,17 @@ fn walk_block_with<V: ExprVisitor>(visitor: &mut V, block: &Block) {
 
 /// Compute the participating-function set over all non-generic functions in
 /// the AST module. Returns the intersection of (a) functions with an
-/// uncaught faultable arithmetic op and (b) functions directly called from a
-/// `FaultCatch`-arith scope (Overflow or DivByZero) anywhere in the module.
+/// uncaught faultable op (arithmetic or array index read) and (b) functions
+/// directly called from a `FaultCatch` scope (Overflow, DivByZero, or Bounds)
+/// anywhere in the module.
 ///
 /// Generic functions are EXCLUDED (generics are 2.3 — their monomorphized
 /// instances aren't named at AST scan time anyway).
 pub fn compute_participating_fault_fns(
     items: &[Spanned<Item>],
 ) -> FxHashSet<String> {
-    // Phase (b): collect every direct callee inside a Fault arith catch
-    // (Fault.Overflow or Fault.DivByZero).
+    // Phase (b): collect every direct callee inside a Fault catch
+    // (Fault.Overflow, Fault.DivByZero, or Fault.Bounds).
     let mut deep_callees = DeepCatchCalleeCollector {
         catch_depth: 0,
         callees: FxHashSet::default(),
@@ -200,12 +201,12 @@ pub fn compute_participating_fault_fns(
     if deep_callees.callees.is_empty() {
         // No deep-catch call site anywhere → nothing participates. Fast path:
         // the entire existing suite + self-host take this branch (they have no
-        // arith `catch Fault.X` over a user CALL), so signatures are unchanged.
+        // `catch Fault.X` over a user CALL), so signatures are unchanged.
         return FxHashSet::default();
     }
 
     // Phase (a) ∩ (b): a candidate participates only if its OWN body has an
-    // uncaught faultable arithmetic op.
+    // uncaught faultable op (arithmetic or array index read).
     let mut participating = FxHashSet::default();
     for item in items {
         if let Item::Function(func) = &item.node {
