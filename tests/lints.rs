@@ -2715,7 +2715,7 @@ fn fault_op_lowering_arms_count() {
     );
     let optimize = fs::read_to_string("src/ir/transforms/optimize.rs").unwrap_or_default();
     assert!(
-        optimize.contains("Instruction::FaultableCall { overflow_handler, divzero_handler, .. }"),
+        optimize.contains("Instruction::FaultableCall { overflow_handler, divzero_handler, bounds_handler, .. }"),
         "the `FaultableCall` arm vanished from `successors()` / the block-id \
          remap loops in src/ir/transforms/optimize.rs — its per-category handler \
          blocks must count as successors (else DCE prunes a fault handler and \
@@ -2746,9 +2746,9 @@ fn fault_op_lowering_arms_count() {
 /// `FAULT_CALL_HANDLER_CATEGORIES`. If you removed one, lower it.
 #[test]
 fn fault_call_handler_category_count() {
-    /// Baseline 2026-06-25: 2 (overflow_handler, divzero_handler).
-    /// Bounds (2.1d) makes this 3.
-    const FAULT_CALL_HANDLER_CATEGORIES: usize = 2;
+    /// Baseline 2026-06-25: 3 (overflow_handler, divzero_handler,
+    /// bounds_handler — Bounds landed in 2.1d).
+    const FAULT_CALL_HANDLER_CATEGORIES: usize = 3;
 
     // Count the `*_handler: Option<BlockId>` fields inside the `FaultableCall`
     // GIR variant body — the single source of truth for the dispatch categories.

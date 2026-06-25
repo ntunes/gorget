@@ -683,7 +683,7 @@ impl<'a> FuncLowering<'a> {
             // always a known user fn in `func_index`, so delegate the call emit
             // to the shared `Call` arm (handles result store + post-call zeros),
             // then split the block on `slot != 0`.
-            Instruction::FaultableCall { dst, func, args, fault_slot, overflow_handler, divzero_handler } => {
+            Instruction::FaultableCall { dst, func, args, fault_slot, overflow_handler, divzero_handler, bounds_handler } => {
                 // 1. Emit the call exactly like a plain `Call` (the slot `&arg`
                 //    is already the last element of `args`; the result store is
                 //    a no-op-if-unread sentinel on the fault path).
@@ -709,6 +709,8 @@ impl<'a> FuncLowering<'a> {
                     (self.resolve_variant_ordinal("Fault", "Overflow") + 1) as i32;
                 let divzero_tag =
                     (self.resolve_variant_ordinal("Fault", "DivByZero") + 1) as i32;
+                let bounds_tag =
+                    (self.resolve_variant_ordinal("Fault", "Bounds") + 1) as i32;
 
                 // Emit one `tag == N → handler` test+branch, splitting `cur`.
                 // Returns the continuation (slot-not-this-tag) block. The slot is
@@ -739,6 +741,9 @@ impl<'a> FuncLowering<'a> {
                 }
                 if let Some(h) = divzero_handler {
                     cur = emit_tag_branch(self, cur, slot_val, divzero_tag, *h);
+                }
+                if let Some(h) = bounds_handler {
+                    cur = emit_tag_branch(self, cur, slot_val, bounds_tag, *h);
                 }
                 // Continuation: tag is 0 (no fault) — the result (already stored
                 // to `dst`) is read by subsequent instructions in this block.

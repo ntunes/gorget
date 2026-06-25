@@ -514,7 +514,7 @@ fn print_instruction(out: &mut String, inst: &Instruction, reg: &TypeRegistry) {
             }
             write!(out, ")").unwrap();
         }
-        Instruction::FaultableCall { dst, func, args, fault_slot, overflow_handler, divzero_handler } => {
+        Instruction::FaultableCall { dst, func, args, fault_slot, overflow_handler, divzero_handler, bounds_handler } => {
             if let Some(d) = dst {
                 write!(out, "_{} = ", d.0).unwrap();
             }
@@ -531,6 +531,9 @@ fn print_instruction(out: &mut String, inst: &Instruction, reg: &TypeRegistry) {
             }
             if let Some(h) = divzero_handler {
                 write!(out, " divzero->bb{}", h.0).unwrap();
+            }
+            if let Some(h) = bounds_handler {
+                write!(out, " bounds->bb{}", h.0).unwrap();
             }
         }
         Instruction::CallIndirect { dst, callee, args } => {

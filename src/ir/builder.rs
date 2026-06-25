@@ -398,6 +398,7 @@ impl FunctionBuilder {
         fault_slot: Place,
         overflow_handler: Option<BlockId>,
         divzero_handler: Option<BlockId>,
+        bounds_handler: Option<BlockId>,
     ) -> LocalId {
         let func = func.into();
         self.emit_with_temp(return_type, |dst| Instruction::FaultableCall {
@@ -407,6 +408,7 @@ impl FunctionBuilder {
             fault_slot,
             overflow_handler,
             divzero_handler,
+            bounds_handler,
         })
     }
 
@@ -418,6 +420,7 @@ impl FunctionBuilder {
         fault_slot: Place,
         overflow_handler: Option<BlockId>,
         divzero_handler: Option<BlockId>,
+        bounds_handler: Option<BlockId>,
     ) {
         self.emit(Instruction::FaultableCall {
             dst: None,
@@ -426,6 +429,7 @@ impl FunctionBuilder {
             fault_slot,
             overflow_handler,
             divzero_handler,
+            bounds_handler,
         });
     }
 

@@ -34,18 +34,18 @@ use crate::parser::ast::{
 use crate::parser::visitor::{walk_expr, ExprVisitor};
 use crate::span::Spanned;
 
-/// Does this `FaultCatch` pattern catch an ARITHMETIC fault (`Fault.Overflow`
-/// or `Fault.DivByZero`)?
+/// Does this `FaultCatch` pattern catch any PROPAGATABLE fault (`Fault.Overflow`,
+/// `Fault.DivByZero`, or `Fault.Bounds`)?
 ///
-/// `catch Fault.Overflow:` / `catch Fault.DivByZero:` (variant form) each
-/// catch exactly their category. `catch f:` (binding form) catches ANY fault
-/// — including both arithmetic categories. `Fault.Bounds` does NOT catch an
-/// arithmetic fault, so an overflow/div0 inside it stays uncaught (Bounds deep
-/// propagation is 2.1d — a distinct mechanism).
-fn pattern_catches_arith(pattern: &FaultCatchPattern) -> bool {
+/// `catch Fault.Overflow:` / `catch Fault.DivByZero:` / `catch Fault.Bounds:`
+/// (variant form) each catch exactly their category. `catch f:` (binding form)
+/// catches ANY fault — all three categories. A catch scope makes a callee
+/// participate iff that callee can raise a fault the scope catches; the
+/// per-category op detector (below) is what discriminates which fault.
+fn pattern_catches_fault(pattern: &FaultCatchPattern) -> bool {
     match pattern {
         FaultCatchPattern::Variant { variant, .. } => {
-            matches!(variant.node.as_str(), "Overflow" | "DivByZero")
+            matches!(variant.node.as_str(), "Overflow" | "DivByZero" | "Bounds")
         }
         FaultCatchPattern::Binding(_) => true,
     }
@@ -61,16 +61,19 @@ fn is_faultable_arith(op: BinaryOp) -> bool {
     )
 }
 
-/// Visitor (a): does a function body contain an arithmetic op NOT inside a
-/// local `FaultCatch`-arith scope? `catch_depth` counts enclosing
-/// arith-catching scopes (Overflow or DivByZero); an arithmetic op at depth 0
-/// is uncaught.
-struct UncaughtArithDetector {
+/// Visitor (a): does a function body contain a faultable op (an arithmetic
+/// Add/Sub/Mul/Div/Rem OR an `array[index]` read) NOT inside a local
+/// `FaultCatch` scope? `catch_depth` counts enclosing fault-catching scopes
+/// (Overflow / DivByZero / Bounds, or a binding catch); a faultable op at
+/// depth 0 is uncaught. Over-approximates: a flagged fn that is never
+/// deep-caught simply isn't in the intersection (sound — the gate's
+/// per-category resolution re-panics any uncaught category, §3).
+struct UncaughtFaultDetector {
     catch_depth: usize,
     found: bool,
 }
 
-impl ExprVisitor for UncaughtArithDetector {
+impl ExprVisitor for UncaughtFaultDetector {
     fn visit_expr(&mut self, expr: &Spanned<Expr>) {
         if self.found {
             return; // short-circuit
@@ -85,11 +88,26 @@ impl ExprVisitor for UncaughtArithDetector {
                 self.visit_expr(left);
                 self.visit_expr(right);
             }
+            // An `object[index]` read is a faultable op (Bounds) — it may be
+            // out of range. (The cross-frame Bounds mechanism, 2.1d, routes the
+            // callee's OOB to its bounds-return block.) Conservatively counts
+            // ANY index read; the GIR `bounds_handler_for` gate narrows the
+            // ACTUAL faultable lowering to ARRAY element reads at the
+            // type-resolved site (dict/string/range index never lowers to a
+            // `FaultableIndexLoad`), so over-flagging a non-array index here is
+            // harmless (an unused slot/return block, DCE'd).
+            Expr::Index { object, index } => {
+                if self.catch_depth == 0 {
+                    self.found = true;
+                    return;
+                }
+                self.visit_expr(object);
+                self.visit_expr(index);
+            }
             Expr::FaultCatch { expr: inner, pattern, handler } => {
                 // The wrapped expr is inside the catch scope IFF the pattern
-                // catches an arithmetic fault; the handler runs OUTSIDE the
-                // caught scope.
-                if pattern_catches_arith(pattern) {
+                // catches a fault; the handler runs OUTSIDE the caught scope.
+                if pattern_catches_fault(pattern) {
                     self.catch_depth += 1;
                     self.visit_expr(inner);
                     self.catch_depth -= 1;
@@ -104,8 +122,8 @@ impl ExprVisitor for UncaughtArithDetector {
 }
 
 /// Visitor (b): collect direct-call callee names that appear inside a
-/// `FaultCatch`-arith scope. Only `Expr::Call` on a bare
-/// `Expr::Identifier` callee is a "direct call" (method/indirect calls are
+/// `FaultCatch` scope (catching any propagatable fault). Only `Expr::Call` on a
+/// bare `Expr::Identifier` callee is a "direct call" (method/indirect calls are
 /// 2.3/2.3b — out of scope).
 struct DeepCatchCalleeCollector {
     catch_depth: usize,
@@ -116,7 +134,7 @@ impl ExprVisitor for DeepCatchCalleeCollector {
     fn visit_expr(&mut self, expr: &Spanned<Expr>) {
         match &expr.node {
             Expr::FaultCatch { expr: inner, pattern, handler } => {
-                if pattern_catches_arith(pattern) {
+                if pattern_catches_fault(pattern) {
                     self.catch_depth += 1;
                     self.visit_expr(inner);
                     self.catch_depth -= 1;
@@ -198,7 +216,7 @@ pub fn compute_participating_fault_fns(
             if !deep_callees.callees.contains(name) {
                 continue;
             }
-            if function_has_uncaught_arith(func) {
+            if function_has_uncaught_fault(func) {
                 participating.insert(name.clone());
             }
         }
@@ -206,10 +224,10 @@ pub fn compute_participating_fault_fns(
     participating
 }
 
-/// Whether a single function body contains a reachable-uncaught faultable
-/// arithmetic op (condition (a)).
-fn function_has_uncaught_arith(func: &FunctionDef) -> bool {
-    let mut detector = UncaughtArithDetector {
+/// Whether a single function body contains a reachable-uncaught faultable op
+/// (an arithmetic op OR an `array[index]` read — condition (a)).
+fn function_has_uncaught_fault(func: &FunctionDef) -> bool {
+    let mut detector = UncaughtFaultDetector {
         catch_depth: 0,
         found: false,
     };

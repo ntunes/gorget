@@ -389,6 +389,11 @@ pub enum Instruction {
         /// scope's `div_zero_panic` block (re-panic). Always `Some` for an emitted
         /// catching `FaultableCall`. `block_map`-remapped at GIR→LIR.
         divzero_handler: Option<BlockId>,
+        /// GIR block to dispatch to when the slot holds the `Bounds` tag. The
+        /// user's `Fault.Bounds` catch entry if this scope catches it, else the
+        /// scope's `bounds_panic` block (re-panic). Always `Some` for an emitted
+        /// catching `FaultableCall`. `block_map`-remapped at GIR→LIR (2.1d).
+        bounds_handler: Option<BlockId>,
     },
 
     // -- Ownership --

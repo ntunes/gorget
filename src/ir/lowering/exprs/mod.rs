@@ -3628,6 +3628,7 @@ fn lower_fault_catch_expr(
     // removes them. (Add/Sub/Mul never reach here — they only fault when caught.)
     let div_overflow_panic = builder.new_block();
     let div_zero_panic = builder.new_block();
+    let bounds_panic = builder.new_block();
     let saved_active = builder.current_block;
     builder.switch_to(div_overflow_panic);
     builder.call_extern(
@@ -3643,6 +3644,13 @@ fn lower_fault_catch_expr(
         UNIT_TYPE,
     );
     builder.unreachable();
+    builder.switch_to(bounds_panic);
+    builder.call_extern(
+        "gorget_panic",
+        vec![Operand::Constant(Constant::Str("index out of bounds".to_string()))],
+        UNIT_TYPE,
+    );
+    builder.unreachable();
     builder.switch_to(saved_active);
 
     // Push the fault scope for the inner expression's subtree. Save/restore the
@@ -3654,6 +3662,7 @@ fn lower_fault_catch_expr(
         bounds_handler: bounds_entry,
         div_overflow_panic,
         div_zero_panic,
+        bounds_panic,
     });
     // The wrapped expression is a plain value; suppress the throws-call
     // auto-prop peel (a faultable `a*b` is never a Result — mirror typecheck).

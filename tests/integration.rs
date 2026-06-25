@@ -5993,6 +5993,79 @@ fn fault_deep_mixed_divzero_only() {
     );
 }
 
+// ── Error model — Increment 2.1d (Bounds cross-frame fault tag). The callee's
+// `v[i]` routes the OOB (gorget_array_safe_get NULL) into a Bounds fault-return
+// block (tag 3); the caller's tag-switch dispatches the Bounds category. ──
+
+#[test]
+fn fault_deep_catch_bounds() {
+    // The §1 demonstrator for Bounds: `getx(xs, 99)` indexes out of bounds in the
+    // callee; the `catch Fault.Bounds` is one frame up in main → handler 999.
+    run_gg("fault_deep_catch_bounds.gg", "999");
+}
+
+#[test]
+fn fault_deep_catch_bounds_binding() {
+    // Tag-dispatch guard (binding form): the callee's Bounds tag must select the
+    // Bounds arm (not Overflow/DivByZero) → 7.
+    run_gg("fault_deep_catch_bounds_binding.gg", "7");
+}
+
+#[test]
+fn fault_deep_uncaught_bounds_panic() {
+    // Panic-by-default for a DEEP OOB with NO catch: `deep_catcher` (which catches)
+    // prints 42; `main`'s second call passes a NULL slot → panic, exit 1.
+    run_gg_panics_with_stdout(
+        "fault_deep_uncaught_bounds_panic.gg",
+        "42",
+        "index out of bounds",
+    );
+}
+
+#[test]
+fn fault_deep_mixed_bounds_only() {
+    // Uncaught-CATEGORY re-panic guard: `mixed` raises BOTH a Bounds (`xs[i]`) and
+    // an Overflow (`a * b`); the call site catches Bounds ONLY. First call's OOB
+    // caught (777); second call's Overflow is uncaught → re-panic "integer
+    // overflow", exit 1 (not swallowed).
+    run_gg_panics_with_stdout(
+        "fault_deep_mixed_bounds_only.gg",
+        "777",
+        "integer overflow",
+    );
+}
+
+#[test]
+fn fault_deep_bounds_swallow_guard() {
+    // THE Core-#8 swallow guard (the reason the `bounds_panic` block on FaultScope
+    // exists, NEW in 2.1d): a deep Bounds caught only by `catch Fault.Overflow:` is
+    // a category this scope does NOT catch → it MUST re-panic "index out of bounds"
+    // (exit 1), NOT silently fall through to the result. Without the always-Some
+    // bounds_handler → bounds_panic resolution, the Bounds would be swallowed.
+    run_gg_panics("fault_deep_bounds_swallow_guard.gg", "index out of bounds");
+}
+
+#[test]
+fn fault_deep_catch_bounds_drop() {
+    // Q9 drop-gate (cross-frame Bounds): the callee holds a LIVE Drop-bearing local
+    // when the OOB happens; the early-exit drops run on the fault path → dropped
+    // EXACTLY ONCE. Fault path → "drop guard 1", -1; no-fault → "drop guard 2", 22.
+    // (Also run under ASan/UBSan — clean.)
+    run_gg(
+        "fault_deep_catch_bounds_drop.gg",
+        "drop guard 1\n-1\ndrop guard 2\n22",
+    );
+}
+
+#[test]
+fn fault_deep_catch_bounds_resource() {
+    // Resource-element Bounds: a deep OOB on a `Vector[String]`; the callee's
+    // declared return is the OWNED element (String), so the return-boundary
+    // materialization clones the borrow (no Ptr(T) leak). → "missing", "bob".
+    // (Run under ASan/UBSan — clean.)
+    run_gg("fault_deep_catch_bounds_resource.gg", "missing\nbob");
+}
+
 // ── Error model — Increment 2 (Bounds + Div-split + qualifier + plain-op
 // INT_MIN trap, error-model.md §11). ──
 

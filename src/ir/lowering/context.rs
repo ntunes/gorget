@@ -326,6 +326,13 @@ pub struct FaultScope {
     /// GIR block that panics `"division by zero"` — the UNCAUGHT-div0
     /// destination for a Div/Rem in a scope that doesn't catch `Fault.DivByZero`.
     pub div_zero_panic: BlockId,
+    /// GIR block that panics `"index out of bounds"` — the UNCAUGHT-bounds
+    /// destination at the CROSS-FRAME gate: when a participating callee can
+    /// raise `Fault.Bounds` but THIS scope catches only an arith category, the
+    /// gate resolves `bounds_handler.unwrap_or(bounds_panic)` so the
+    /// `FaultableCall` carries an ALWAYS-Some bounds handler and an uncaught
+    /// Bounds tag re-panics (mirrors `div_overflow_panic`/`div_zero_panic`, 2.1d).
+    pub bounds_panic: BlockId,
 }
 
 /// Tracks lowering state within a function.

@@ -1374,16 +1374,17 @@ pub(super) fn lower_call(
         // a fault scope, both stay `None` → pass NULL + a plain `Call`
         // (panic-by-default).
         let callee_participates_in_fault = ctx.participates_in_fault(&effective_name);
-        let (fault_overflow_handler, fault_divzero_handler) = if callee_participates_in_fault {
+        let (fault_overflow_handler, fault_divzero_handler, fault_bounds_handler) = if callee_participates_in_fault {
             match ctx.func_state.fault_scope {
                 Some(s) => (
                     Some(s.overflow_handler.unwrap_or(s.div_overflow_panic)),
                     Some(s.divzero_handler.unwrap_or(s.div_zero_panic)),
+                    Some(s.bounds_handler.unwrap_or(s.bounds_panic)),
                 ),
-                None => (None, None),
+                None => (None, None, None),
             }
         } else {
-            (None, None)
+            (None, None, None)
         };
 
         // Resolve extern bindings: use the C symbol name instead of the Gorget name
@@ -1440,7 +1441,7 @@ pub(super) fn lower_call(
         // is `Some` only for the catching path (the FaultableCall reads its tag
         // after the call, branch-before-read).
         let fault_slot_place: Option<Place> = if callee_participates_in_fault {
-            if fault_overflow_handler.is_some() || fault_divzero_handler.is_some() {
+            if fault_overflow_handler.is_some() || fault_divzero_handler.is_some() || fault_bounds_handler.is_some() {
                 // Catching caller: zero-init slot + pass `&slot`.
                 let slot = builder.add_local(I32_TYPE, Some("__fault_slot"));
                 builder.assign(Place::local(slot), FunctionBuilder::const_i32(0));
@@ -1463,10 +1464,10 @@ pub(super) fn lower_call(
             // AFTER the call (branch-before-read to the matching category entry).
             // The result is read only on the no-fault continuation.
             if ret_type == UNIT_TYPE {
-                builder.fault_call_void(&call_name, lowered_args, slot_place, fault_overflow_handler, fault_divzero_handler);
+                builder.fault_call_void(&call_name, lowered_args, slot_place, fault_overflow_handler, fault_divzero_handler, fault_bounds_handler);
                 Operand::Constant(Constant::Unit)
             } else {
-                let dst = builder.fault_call(&call_name, lowered_args, ret_type, slot_place, fault_overflow_handler, fault_divzero_handler);
+                let dst = builder.fault_call(&call_name, lowered_args, ret_type, slot_place, fault_overflow_handler, fault_divzero_handler, fault_bounds_handler);
                 if ctx.type_registry.needs_drop(ret_type) {
                     ctx.drops.register_local(dst, ret_type, &ctx.type_registry);
                 }

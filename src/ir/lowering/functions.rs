@@ -65,15 +65,16 @@ fn assign_to_return_slot(
 fn setup_fault_return_scope(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
-) -> (BlockId, BlockId) {
+) -> (BlockId, BlockId, BlockId) {
     use super::context::FaultScope;
     let saved_active = builder.current_block;
 
-    // The two fault-return blocks (filled after body lowering): one per
-    // arithmetic category, each writing its own tag (Overflow=1 / DivByZero=2)
+    // The three fault-return blocks (filled after body lowering): one per
+    // category, each writing its own tag (Overflow=1 / DivByZero=2 / Bounds=3)
     // through the slot or panicking by default on a NULL slot.
     let overflow_return_bb = builder.new_block();
     let divzero_return_bb = builder.new_block();
+    let bounds_return_bb = builder.new_block();
 
     // Per-category panic blocks for an uncaught Div/Rem fault. With BOTH
     // arith categories now propagating, these are reached only when a NULL
@@ -82,6 +83,7 @@ fn setup_fault_return_scope(
     // participating callee and DCE'd. Kept for `FaultScope` shape uniformity.
     let div_overflow_panic = builder.new_block();
     let div_zero_panic = builder.new_block();
+    let bounds_panic = builder.new_block();
     builder.switch_to(div_overflow_panic);
     builder.call_extern(
         "gorget_panic",
@@ -96,18 +98,28 @@ fn setup_fault_return_scope(
         UNIT_TYPE,
     );
     builder.unreachable();
+    builder.switch_to(bounds_panic);
+    builder.call_extern(
+        "gorget_panic",
+        vec![Operand::Constant(Constant::Str("index out of bounds".to_string()))],
+        UNIT_TYPE,
+    );
+    builder.unreachable();
     builder.switch_to(saved_active);
 
     ctx.func_state.fault_scope = Some(FaultScope {
         overflow_handler: Some(overflow_return_bb),
         // 2.1c: deep DivByZero now propagates → its own return block.
         divzero_handler: Some(divzero_return_bb),
-        // Bounds deep propagation is 2.1d — a distinct (safe-get) mechanism.
-        bounds_handler: None,
+        // 2.1d: deep Bounds now propagates → its own return block. The callee's
+        // `v[i]` lowers to a `FaultableIndexLoad` routing to this block (the
+        // `bounds_handler_for` gate fires once `bounds_handler` is Some).
+        bounds_handler: Some(bounds_return_bb),
         div_overflow_panic,
         div_zero_panic,
+        bounds_panic,
     });
-    (overflow_return_bb, divzero_return_bb)
+    (overflow_return_bb, divzero_return_bb, bounds_return_bb)
 }
 
 /// Fill ONE synthesized per-category fault-RETURN block of a participating
@@ -1043,11 +1055,12 @@ pub fn lower_function(
             // blocks while the Function drop scope is still pushed. Switches blocks
             // internally, so restore the current block before the implicit-return
             // logic below.
-            if let Some((overflow_bb, divzero_bb)) = fault_return_bbs {
+            if let Some((overflow_bb, divzero_bb, bounds_bb)) = fault_return_bbs {
                 let saved = builder.current_block;
                 let slot = ctx.func_state.fault_slot_param.unwrap();
                 fill_fault_return_block(ctx, &mut builder, overflow_bb, slot, return_type == UNIT_TYPE, "Overflow", "integer overflow");
                 fill_fault_return_block(ctx, &mut builder, divzero_bb, slot, return_type == UNIT_TYPE, "DivByZero", "division by zero");
+                fill_fault_return_block(ctx, &mut builder, bounds_bb, slot, return_type == UNIT_TYPE, "Bounds", "index out of bounds");
                 builder.switch_to(saved);
             }
 
@@ -1137,11 +1150,12 @@ pub fn lower_function(
                 // Cross-frame fault (Inc-2.1a/2.1c): fill BOTH per-category
                 // fault-return blocks while the Function drop scope is still pushed
                 // (the expr-body tail's own early-exit drops + pop follow).
-                if let Some((overflow_bb, divzero_bb)) = fault_return_bbs {
+                if let Some((overflow_bb, divzero_bb, bounds_bb)) = fault_return_bbs {
                     let saved = builder.current_block;
                     let slot = ctx.func_state.fault_slot_param.unwrap();
                     fill_fault_return_block(ctx, &mut builder, overflow_bb, slot, return_type == UNIT_TYPE, "Overflow", "integer overflow");
                     fill_fault_return_block(ctx, &mut builder, divzero_bb, slot, return_type == UNIT_TYPE, "DivByZero", "division by zero");
+                    fill_fault_return_block(ctx, &mut builder, bounds_bb, slot, return_type == UNIT_TYPE, "Bounds", "index out of bounds");
                     builder.switch_to(saved);
                 }
                 ctx.drops.emit_early_exit_drops(
@@ -1154,11 +1168,12 @@ pub fn lower_function(
                 // Tail already terminated (e.g. `: return x`). Fill BOTH
                 // per-category fault-return blocks (if any) and balance the drop
                 // scope.
-                if let Some((overflow_bb, divzero_bb)) = fault_return_bbs {
+                if let Some((overflow_bb, divzero_bb, bounds_bb)) = fault_return_bbs {
                     let saved = builder.current_block;
                     let slot = ctx.func_state.fault_slot_param.unwrap();
                     fill_fault_return_block(ctx, &mut builder, overflow_bb, slot, return_type == UNIT_TYPE, "Overflow", "integer overflow");
                     fill_fault_return_block(ctx, &mut builder, divzero_bb, slot, return_type == UNIT_TYPE, "DivByZero", "division by zero");
+                    fill_fault_return_block(ctx, &mut builder, bounds_bb, slot, return_type == UNIT_TYPE, "Bounds", "index out of bounds");
                     builder.switch_to(saved);
                 }
                 ctx.drops.pop_scope_no_emit();

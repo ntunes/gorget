@@ -1881,9 +1881,10 @@ fn thread_jumps(func: &mut Function) {
                 Instruction::FaultableIndexLoad { fault_handler, .. } => {
                     fault_handler.0 = resolved[fault_handler.0 as usize];
                 }
-                Instruction::FaultableCall { overflow_handler, divzero_handler, .. } => {
+                Instruction::FaultableCall { overflow_handler, divzero_handler, bounds_handler, .. } => {
                     if let Some(h) = overflow_handler { h.0 = resolved[h.0 as usize]; }
                     if let Some(h) = divzero_handler { h.0 = resolved[h.0 as usize]; }
+                    if let Some(h) = bounds_handler { h.0 = resolved[h.0 as usize]; }
                 }
                 _ => {}
             }
@@ -2040,9 +2041,10 @@ fn eliminate_dead_blocks(func: &mut Function) {
                 Instruction::FaultableIndexLoad { fault_handler, .. } => {
                     fault_handler.0 = remap[fault_handler.0 as usize];
                 }
-                Instruction::FaultableCall { overflow_handler, divzero_handler, .. } => {
+                Instruction::FaultableCall { overflow_handler, divzero_handler, bounds_handler, .. } => {
                     if let Some(h) = overflow_handler { h.0 = remap[h.0 as usize]; }
                     if let Some(h) = divzero_handler { h.0 = remap[h.0 as usize]; }
+                    if let Some(h) = bounds_handler { h.0 = remap[h.0 as usize]; }
                 }
                 _ => {}
             }
@@ -2086,9 +2088,10 @@ fn successors(bb: &BasicBlock) -> Vec<u32> {
             // caught cross-frame fault, so each handler block is a real successor
             // — count them toward reachability (error-model.md §11). THE LINCHPIN:
             // omit this and DCE prunes the handler → fault recovery vanishes.
-            Instruction::FaultableCall { overflow_handler, divzero_handler, .. } => {
+            Instruction::FaultableCall { overflow_handler, divzero_handler, bounds_handler, .. } => {
                 if let Some(h) = overflow_handler { succs.push(h.0); }
                 if let Some(h) = divzero_handler { succs.push(h.0); }
+                if let Some(h) = bounds_handler { succs.push(h.0); }
             }
             _ => {}
         }
