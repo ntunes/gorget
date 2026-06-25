@@ -499,6 +499,18 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                         ctx.expected_type = ret_place_ty_pre
                     int val = lower_expr(&ctx, ret_expr, &gmod)
                     ctx.expected_type = prev_expected_ret
+                    # Divergent expr-body tail guard (mirrors Rust gg's
+                    # `if !builder.is_terminated()` in
+                    # `src/ir/lowering/functions.rs`): the inline expr-body
+                    # form `RetType f(...): return EXPR` parses the body as
+                    # `SReturn(Some(EDo([SReturn(Some(EXPR))])))` — the inner
+                    # `return`/`throw` (now an EDo-wrapped divergent expr, see
+                    # parser.gg parse_prefix) already assigned `_0` AND
+                    # terminated this block. The outer assign/drops/ret below
+                    # would clobber `_0` with the EDo's unit tail value (and
+                    # re-set the terminator). Bail out: the block is done.
+                    if block_terminated(&ctx):
+                        return
                     # Throws-function Result.Ok wrapping (mirrors Rust gg's
                     # `lower_return` at `stmts/mod.rs:1585-1658`): when the
                     # return place is a `Result__T__E` (the fn is `throws`)

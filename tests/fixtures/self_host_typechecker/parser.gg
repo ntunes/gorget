@@ -2681,6 +2681,35 @@ equip Parser:
             Vector[Stmt] body = self.parse_block()
             return SpannedExpr(EDo(body), Span(start, self.peek().lex_start))
 
+        # Divergent expressions in expression position: `return [expr]` and
+        # `throw expr`. Mirrors Rust parser (src/parser/expr.rs:515-525): wrap
+        # the statement in a synthetic EDo block so the inline expr-body form
+        # `RetType f(...): return EXPR` parses (the body-after-colon path calls
+        # parse_expr, which routes here). Block-as-expr lowering emits the
+        # early-exit terminator; the EDo value is irrelevant.
+        if self.check_kw(KW_RETURN):
+            self.advance()
+            Vector[Stmt] rbody = Vector[Stmt]()
+            if self.check_tok(TOK_NEWLINE) or self.check_tok(TOK_DEDENT) or self.at_end():
+                rbody.push(SReturn(None))
+            else:
+                SpannedExpr rval = self.parse_expr()
+                if self.check_tok(TOK_COMMA):
+                    Vector[SpannedExpr] relems = Vector[SpannedExpr]()
+                    relems.push(rval)
+                    while self.match_tok(TOK_COMMA):
+                        relems.push(self.parse_expr())
+                    rval = SpannedExpr(ETupleLiteral(relems), Span(0, 0))
+                rbody.push(SReturn(Some(rval)))
+            return SpannedExpr(EDo(rbody), Span(start, self.peek().lex_start))
+
+        if self.check_kw(KW_THROW):
+            self.advance()
+            SpannedExpr tval = self.parse_expr()
+            Vector[Stmt] tbody = Vector[Stmt]()
+            tbody.push(SThrow(tval))
+            return SpannedExpr(EDo(tbody), Span(start, self.peek().lex_start))
+
         # Some(expr), Ok(expr), Error(expr), Box(expr), String(...), Option(...) — keyword constructors
         if self.check_kw(KW_SOME) or self.check_kw(KW_OK) or self.check_kw(KW_ERROR) or self.check_kw(KW_BOX) or self.check_kw(KW_RC) or self.check_kw(KW_ARC) or self.check_kw(KW_STRING_TYPE) or self.check_kw(KW_OPTION) or self.check_kw(KW_WEAK) or self.check_kw(KW_CELL) or self.check_kw(KW_REFCELL) or self.check_kw(KW_MUTEX) or self.check_kw(KW_RWLOCK):
             SpannedToken kw_tok = self.advance()
