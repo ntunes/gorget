@@ -2049,6 +2049,28 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
             if recv >= 0 and recv < ctx.locals.len():
                 return ctx.locals.get(recv).unwrap().type_id
         return I64_TYPE
+    # unwrap_error / unwrap_err on a Result__Ok__Err receiver: return the Err
+    # payload type. Reads the SAME typed enum-category channel `.unwrap()` uses
+    # (mint-site `err_type` recorded by `record_enum_category`), so a String-Err
+    # Result yields `GorgetString`, not the I64 default — the default left
+    # `r.unwrap_error()` typed int64_t (printed `%lld`/garbage) and the codegen
+    # reading the Ok_0 slot. Mirrors Rust `typecheck.rs:5714` (val_type).
+    if method == "unwrap_error" or method == "unwrap_err":
+        if recv >= 0 and recv < ctx.locals.len():
+            int uerr_tid = ctx.locals.get(recv).unwrap().type_id
+            if uerr_tid >= 0 and uerr_tid < gmod.type_table.len():
+                GirType uerr_gt0 = gmod.type_table.get(uerr_tid).unwrap()
+                match uerr_gt0:
+                    case GtPtr(uerr_inner):
+                        uerr_tid = uerr_inner
+                    case GtMutPtr(uerr_inner2):
+                        uerr_tid = uerr_inner2
+                    else:
+                        pass
+            EnumCategory uerr_ec = enum_category_of(&gmod, uerr_tid)
+            if uerr_ec.category == ENUM_CAT_RESULT:
+                return uerr_ec.err_type
+        return I64_TYPE
     # get/pop/last/first/remove/safe_get on a collection: return Option[V].
     # option_ref_borrow Phase 3 (R1 — SPLIT, don't flip): the borrowing
     # getters (get/first/last/safe_get) return Option[Ref[V]] — a borrow into

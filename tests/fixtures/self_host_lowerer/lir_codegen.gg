@@ -4257,8 +4257,29 @@ String emit_option_result_combinator(int dst, String name, Vector[int] &args,
             return ";"
         case "__result_unwrap_error":
             if dst >= 0:
-                # Error payload is the 3rd field. For simplicity, at offset 8 for tag=1.
-                # This is approximate — works for simple scalar payloads.
+                # Error payload is the Result's THIRD field (`{ tag; Ok_0;
+                # Error_0; }`), NOT offset 8 — that is the Ok_0 slot (a
+                # String-Err Result read offset-8 yielded a garbage/zero Str).
+                # Read the named field via the struct cast when the source LIR
+                # type is the mono'd Result struct (`c_type_name` recovers the
+                # C name); fall back to offset 8 only for an unknown layout.
+                # `unwrap_error` is a BORROWING getter (self_conv Borrow) — the
+                # source Result stays live and is dropped normally, so a
+                # resource (String) error payload must be CLONED to an
+                # independent owner (else the Result's drop + the result's drop
+                # double-free the shared `Error_0`). Scalar payloads copy by
+                # value. Mirrors Rust `builtins.rs:842` (Borrow self_conv).
+                if src_ty >= LT_STRUCT_BASE:
+                    String res_cn = c_type_name(src_ty, &sn)
+                    String rc_cast = "((" + res_cn + "*)" + src + ")"
+                    int rc_sid = src_ty - LT_STRUCT_BASE
+                    if rc_sid >= 0 and rc_sid < m.structs.len():
+                        LirStructDef rc_def = m.structs.get(rc_sid).unwrap()
+                        if rc_def.fields.len() >= 3:
+                            String rc_efty = field_type_str(rc_def.fields.get(2).unwrap().ty, &sn)
+                            if rc_efty == "Str" or rc_efty == "GorgetString":
+                                return v(dst) + " = gorget_string_clone_to_owned(&" + rc_cast + "->Error_0);"
+                    return v(dst) + " = " + rc_cast + "->Error_0;"
                 return "memcpy(&" + v(dst) + ", (char*)" + src + " + 8, sizeof(" + v(dst) + "));"
             return ";"
         case "__result_expect":

@@ -1,0 +1,12 @@
+42: 42
+-5: negative: -5
+abc: not a number: abc
+empty: empty input
+sum: 60
+errors: 2
+err: empty name
+err: too short: 2
+err: has spaces
+valid: 2, invalid: 3
+10/3 = 3
+error: division by zero
