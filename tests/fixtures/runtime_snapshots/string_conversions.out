@@ -1,0 +1,25 @@
+0
+42
+-1
+1000000
+3.14
+0
+-2.5
+int: 42
+float: 3.140000
+bool: true
+roundtrip 42: 42
+roundtrip -100: -100
+parse 0: 0
+parse abc: true
+parse empty: true
+roundtrip 2.718: true
+parse bad float: true
+nums: 0,1,2,3,4,5,6,7,8,9
+sum: 45
+true
+false
+flag is false
+big: 999999999
+big len: 9
+big roundtrip: 999999999

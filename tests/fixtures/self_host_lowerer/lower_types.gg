@@ -1896,9 +1896,22 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
             pass
     if method == "byte_at":
         return U8_TYPE
-    # Collection-returning methods
-    if method == "split" or method == "lines" or method == "chars" or method == "bytes":
-        return lookup_or_register_named(&gmod, "GorgetArray")
+    # Collection-returning methods.
+    #
+    # `split`/`lines`/`chars` return `Vector[String]`; `bytes` returns
+    # `Vector[u8]`. Mirror Rust's mod.rs `GorgetString__{split,lines,chars}`
+    # → `Vector__GorgetString` (`vec_str_type`) and `GorgetString__bytes` →
+    # `Vector__uint8_t` (`vec_u8_type`). Returning the ELEMENT-CARRYING
+    # `Vector__<T>` (not the element-erased bare `GorgetArray`) is the SIBLING
+    # of the `keys`/`values`/`items` fix below: the erased element type makes
+    # the downstream `parts[i]` index-read take the INT path (emits
+    # `(int64_t)0LL` + `%lld`, no `gorget_array_get`) → prints `0`. The
+    # element-carrying type lets `collection_element_type` recover the element
+    # so the index-read takes the correct String/u8 path.
+    if method == "split" or method == "lines" or method == "chars":
+        return lookup_or_register_named(&gmod, "Vector__GorgetString")
+    if method == "bytes":
+        return lookup_or_register_named(&gmod, "Vector__uint8_t")
     if method == "sorted" or method == "reversed" or method == "unique":
         return lookup_or_register_named(&gmod, "GorgetArray")
     if method == "enumerate" or method == "take" or method == "skip":
