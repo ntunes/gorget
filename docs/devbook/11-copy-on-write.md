@@ -897,11 +897,17 @@ their runtime accessors hand back a clone, bound owned and drop-registered
 
 View tagging reads the typed `returns_view` column off the String builtin
 table (`STRING_BUILTIN_METHODS` via `string_builtin_method`, consumed at the
-single LoView tag site in `lower_expr.gg`'s method-call arm) — the old
-`is_string_view_method` name-match this paragraph once documented has been
-retired. The tag is load-bearing: a mis-tagged slice view (tagged owned
-instead of `LoView`) once move-elided a `.clone()` and injected NUL bytes
-into the multi-MB `generate_c` output. That same tag site is also where a
+LoView tag sites in `lower_expr.gg` — the method-call arm, PLUS the
+slice-/index-syntax arms `s[i:j]`/`s[i]` → `gorget_str_slice`/`gorget_str_index`,
+which bypass the method-builtin table entirely) — the old `is_string_view_method`
+name-match this paragraph once documented has been retired. The tag is
+load-bearing on every view-producing site: a mis-tagged method slice view
+(tagged owned instead of `LoView`) once move-elided a `.clone()` and injected
+NUL bytes into the multi-MB `generate_c` output; separately, the slice-/index-
+syntax dsts were left untagged (`LoOwned`) and so were moved by value and freed
+by the SAssign drop-on-overwrite *before* the view aliased the source buffer
+(a UAF — garbage output on `fmt_basic`/`fmt_edge`), until both dsts were tagged
+`LoView()/BoNone()` so `op_consume` materializes at the owning position. That same tag site is also where a
 lazy family member's view results join the family (the returns_view
 derivation join described in the Phase-2 section above). There is also a
 fuller `decide_operand_at_consuming_arg` (`lower.gg:1809`) that splits the

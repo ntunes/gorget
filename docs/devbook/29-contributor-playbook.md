@@ -452,6 +452,24 @@ instance: a producer-side leak-validator design was scouted, then took four
 sequential review passes — each catching a citation defect the prior fold left —
 before a pass came clean.)
 
+A later round put a sharper edge on this. The `index_of`/`find` → `Option[int]`
+sentinel-wrap brief took **five** sequential fresh passes, each catching a distinct
+defect a green gate would never surface: pass-2 caught a GIR→LIR **wrong-layer**
+error (the draft emitted `IEnumInit` in GIR lowering, but it is LIR-only);
+pass-3 caught a **backwards name-form** that would have NO-OPed the whole fix (the
+predicate keyed on the unmapped method name, not the mapped `gorget_str_index_of`
+that actually reaches the LIR dispatch), *plus* a missing collection-receiver
+predicate arm that the receiver-blind type-flip itself regresses, *plus* a
+`ptr-deref-an-int` segfault trap (the scalar sentinel must use the raw int
+directly as the payload — no `ISlotLoad`/`ILoad`); pass-4 caught a missing
+mandatory `record_enum_category` call (without it the type side never classifies
+the result as `Option`, so ~14 internal `index_of().unwrap()` sites silently
+miscompile and the bootstrap diverges); pass-5 signed off clean with an
+end-to-end trace. Five defects across four passes — every one something a single
+pass, or a parallel fan-out at v1, would have shipped; only the bootstrap
+fixed-point would have caught the `record_enum_category` omission, and only after
+a full execute cycle.
+
 The reviewers are neither rubber-stamps nor nitpickers-for-sport: brief each to
 verify load-bearing claims against source with `file:line` and return **SIGN OFF
 or specific cited reservations**, and cross-check their claims yourself — a
@@ -460,6 +478,24 @@ brief-reviews → launch (worktree) → fresh output-review → integrate.** The
 output-review includes the **breadcrumb-check**: no `LANDED`/`FIXED`/`DONE`/`✅`
 status entries land in `TODO.md` — completed work belongs in `DONE.md`, and
 `TODO.md` holds pending work only.
+
+## Worktree discipline: agent worktrees nest under main
+
+Agent worktrees live UNDER the main checkout (`/workspace/gorget/.claude/worktrees/agent-*`).
+That nesting is a trap: an unqualified `/workspace/gorget/...` absolute path, or a
+`python`/`sed`/heredoc fallback after an Edit-tool disk-desync, writes into MAIN
+rather than the worktree. One f-string executor's heredoc fallback (after a
+Read/Edit desync) wrote 20 files into `/workspace/gorget` — a pure duplicate of
+work it had already committed to its own branch, caught only because the owner
+noticed pending changes on `main`. The forensic patch was captured,
+`git -C /workspace/gorget reset --hard` cleaned it (the branch never moved —
+`reset --hard` with no commit arg only discards the working-tree contamination),
+and every subsequent brief was hardened: worktree-relative paths only, no
+absolute-repo-path heredoc fallback, and a post-write `git -C /workspace/gorget
+status` contamination check. The one-line rule lives in `AGENTS.md` §
+"Multi-agent orchestration" (rule 7); the lesson is that **worktree isolation is
+necessary but not sufficient when the worktrees are children of the thing they
+must not touch.**
 
 ---
 
