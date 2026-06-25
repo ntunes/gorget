@@ -98,7 +98,7 @@ enum Expr:
     # Mirror of Rust's `Expr::StringLiteral(_, Vec<Spanned<Expr>>)` —
     # the resolver walks `interp_exprs` so identifiers / closures
     # inside `{...}` get resolved alongside the rest of the AST.
-    EFString(String, Vector[SpannedExpr])
+    EFString(String, Vector[SpannedExpr], Vector[Option[String]])
 
 # How an EFaultCatch selects which fault(s) it intercepts.
 enum FaultCatchPattern:

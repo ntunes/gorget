@@ -212,7 +212,7 @@ String describe_string(StringLiteral slit):
         match seg:
             case SegLiteral(text):
                 result = result + text
-            case SegInterpolation(expr):
+            case SegInterpolation(expr, _):
                 result = result + "{" + expr + "}"
         i = i + 1
     return result

@@ -552,7 +552,7 @@ int guess_return_type(SpannedExpr sexpr, GirModule &gmod):
             return BOOL_TYPE
         case EStringLiteral(_, _):
             return STRING_MARKER
-        case EFString(_, _):
+        case EFString(_, _, _):
             return STRING_MARKER
         case EBinaryOp(lhs_box, op, rhs_box):
             match op:
@@ -696,7 +696,7 @@ bool expr_has_it(SpannedExpr sexpr):
             return false
         case EIf(cond, _, _):
             return expr_has_it(*cond)
-        case EFString(_, fexprs):
+        case EFString(_, fexprs, _):
             for fx in fexprs:
                 if expr_has_it(fx):
                     return true
@@ -905,7 +905,7 @@ bool closure_expr_has_capture(SpannedExpr sexpr, Dict[String, bool] in_scope, Gi
             return closure_stmts_have_capture(stmts, in_scope, &gmod)
         case EDo(stmts):
             return closure_stmts_have_capture(stmts, in_scope, &gmod)
-        case EFString(_, fexprs):
+        case EFString(_, fexprs, _):
             for fx in fexprs:
                 if closure_expr_has_capture(fx, in_scope, &gmod):
                     return true
@@ -1215,7 +1215,7 @@ void cc_collect_expr(LowerCtx &ctx, SpannedExpr sexpr, Dict[String, bool] in_sco
             cc_collect_stmts(&ctx, stmts, in_scope, &gmod, &cc)
         case EDo(stmts):
             cc_collect_stmts(&ctx, stmts, in_scope, &gmod, &cc)
-        case EFString(_, fexprs):
+        case EFString(_, fexprs, _):
             for fx in fexprs:
                 cc_collect_expr(&ctx, fx, in_scope, &gmod, &cc)
         case ESelfExpr():
@@ -1479,7 +1479,7 @@ bool expr_has_nested_closure(SpannedExpr sexpr):
             return stmts_have_nested_closure(stmts)
         case EDo(stmts):
             return stmts_have_nested_closure(stmts)
-        case EFString(_, fexprs):
+        case EFString(_, fexprs, _):
             for fx in fexprs:
                 if expr_has_nested_closure(fx):
                     return true

@@ -546,7 +546,7 @@ String token_string_val(Token tok):
                 match seg:
                     case SegLiteral(s):
                         result = result + s
-                    case SegInterpolation(s):
+                    case SegInterpolation(s, _):
                         String open_b = r"{"
                         String close_b = r"}"
                         result = result + open_b + s + close_b
@@ -562,7 +562,7 @@ bool token_has_interpolation(Token tok):
             while i < slit.lex_segments.len():
                 StringSegment seg = slit.lex_segments.get(i).unwrap()
                 match seg:
-                    case SegInterpolation(_):
+                    case SegInterpolation(_, _):
                         return true
                     else:
                         pass
@@ -2097,6 +2097,9 @@ equip Parser:
                 # `parse_format_string_interp_exprs`.
                 String ftemplate = ""
                 Vector[SpannedExpr] fexprs = Vector[SpannedExpr]()
+                # Parallel to fexprs, aligned by index: the depth-0 format spec
+                # the lexer split off each segment (None when no `:spec`).
+                Vector[Option[String]] fspecs = Vector[Option[String]]()
                 match t.lex_token:
                     case TkString(slit):
                         int fsi = 0
@@ -2105,7 +2108,7 @@ equip Parser:
                             match fseg:
                                 case SegLiteral(s):
                                     ftemplate = ftemplate + s
-                                case SegInterpolation(expr_text):
+                                case SegInterpolation(expr_text, spec):
                                     ftemplate = ftemplate + "{}"
                                     int interp_base = self.next_interp_offset
                                     self.next_interp_offset = interp_base + 1048576
@@ -2113,10 +2116,11 @@ equip Parser:
                                     Parser sub = Parser(sub_tokens, 0, Vector[String](), 0, 1099511627776, 0, Vector[String]())
                                     SpannedExpr parsed_expr = sub.parse_expr()
                                     fexprs.push(parsed_expr)
+                                    fspecs.push(spec)
                             fsi = fsi + 1
                     else:
                         pass
-                return SpannedExpr(EFString(ftemplate, !fexprs), Span(t.lex_start, t.lex_end))
+                return SpannedExpr(EFString(ftemplate, !fexprs, !fspecs), Span(t.lex_start, t.lex_end))
             return SpannedExpr(EStringLiteral(token_string_val(t.lex_token), false), Span(t.lex_start, t.lex_end))
 
         # Bool literal

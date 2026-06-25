@@ -123,7 +123,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                 return types.owned_string_id
             return types.string_id
 
-        case EFString(template, exprs):
+        case EFString(template, exprs, _specs):
             # f-strings always materialise as owned String — the
             # interpolation segments concat with the literal pieces.
             return types.owned_string_id

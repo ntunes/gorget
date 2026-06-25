@@ -666,7 +666,7 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
         case EStringLiteral(_, _):
             pass
 
-        case EFString(_, exprs):
+        case EFString(_, exprs, _):
             # Walk pre-parsed interpolation segments so identifiers,
             # method calls, and closures inside `{...}` get resolved.
             int fi = 0

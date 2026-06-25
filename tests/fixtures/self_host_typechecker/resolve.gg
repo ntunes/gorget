@@ -884,7 +884,7 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
             for arg in args:
                 resolve_expr(arg, &scopes, &ctx)
 
-        case EFString(_, exprs):
+        case EFString(_, exprs, _):
             # Walk pre-parsed interpolation segments so identifiers /
             # closures inside `{...}` get resolved.
             for fe in exprs:

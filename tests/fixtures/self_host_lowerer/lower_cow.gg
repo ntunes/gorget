@@ -218,7 +218,7 @@ void cow_scan_expr(LowerCtx &ctx, GirModule &gmod, SpannedExpr e, bool in_closur
         case EStructLiteral(_, _, fields_s):
             for fs in fields_s:
                 cow_scan_expr(&ctx, &gmod, fs, in_closure)
-        case EFString(_, parts_f):
+        case EFString(_, parts_f, _):
             for pf in parts_f:
                 cow_scan_expr(&ctx, &gmod, pf, in_closure)
         case EIf(cond_box, then_b, elses):

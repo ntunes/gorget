@@ -245,7 +245,7 @@ bool expr_mentions_iter(SpannedExpr sexpr):
             return block_mentions_iter(body)
         case EBlock(body):
             return block_mentions_iter(body)
-        case EFString(_, fexprs):
+        case EFString(_, fexprs, _):
             int i = 0
             while i < fexprs.len():
                 SpannedExpr fe = fexprs.get(i).unwrap()

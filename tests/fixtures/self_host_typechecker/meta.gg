@@ -489,13 +489,16 @@ SpannedExpr subst_expr(SpannedExpr se, Dict[String, int] &iv, Dict[String, bool]
             return SpannedExpr(EFieldAccess(Box(subst_expr(*base, &iv, &bv, &sv)), fname), se.span)
         case EIndex(base, idx):
             return SpannedExpr(EIndex(Box(subst_expr(*base, &iv, &bv, &sv)), Box(subst_expr(*idx, &iv, &bv, &sv))), se.span)
-        case EFString(raw, parts):
+        case EFString(raw, parts, specs):
             Vector[SpannedExpr] np = Vector[SpannedExpr]()
             int i = 0
             while i < parts.len():
                 np.push(subst_expr(parts.get(i).unwrap(), &iv, &bv, &sv))
                 i = i + 1
-            return SpannedExpr(EFString(raw, np), se.span)
+            # Carry the per-segment format specs through unchanged — the
+            # substitution only rewrites the interpolation EXPRESSIONS, not
+            # their `:spec`, and the parts count is preserved 1:1.
+            return SpannedExpr(EFString(raw, np, specs), se.span)
         case EArrayLiteral(elems):
             Vector[SpannedExpr] ne = Vector[SpannedExpr]()
             int i = 0
@@ -757,13 +760,14 @@ SpannedExpr rename_aliases_expr(SpannedExpr se, Dict[String, String] &amap):
             return SpannedExpr(EFieldAccess(Box(rename_aliases_expr(*base, &amap)), fname), se.span)
         case EIndex(base, idx):
             return SpannedExpr(EIndex(Box(rename_aliases_expr(*base, &amap)), Box(rename_aliases_expr(*idx, &amap))), se.span)
-        case EFString(raw, parts):
+        case EFString(raw, parts, specs):
             Vector[SpannedExpr] np = Vector[SpannedExpr]()
             int i = 0
             while i < parts.len():
                 np.push(rename_aliases_expr(parts.get(i).unwrap(), &amap))
                 i = i + 1
-            return SpannedExpr(EFString(raw, np), se.span)
+            # Carry the per-segment format specs through unchanged.
+            return SpannedExpr(EFString(raw, np, specs), se.span)
         case EArrayLiteral(elems):
             Vector[SpannedExpr] ne = Vector[SpannedExpr]()
             int i = 0
@@ -1386,13 +1390,14 @@ SpannedExpr subst_arm_expr(SpannedExpr se, String vn, String vval, Dict[String, 
             return SpannedExpr(EFieldAccess(Box(subst_arm_expr(*base, vn, vval, &tmap)), fname), se.span)
         case EIndex(base, idx):
             return SpannedExpr(EIndex(Box(subst_arm_expr(*base, vn, vval, &tmap)), Box(subst_arm_expr(*idx, vn, vval, &tmap))), se.span)
-        case EFString(raw, parts):
+        case EFString(raw, parts, specs):
             Vector[SpannedExpr] np = Vector[SpannedExpr]()
             int i = 0
             while i < parts.len():
                 np.push(subst_arm_expr(parts.get(i).unwrap(), vn, vval, &tmap))
                 i = i + 1
-            return SpannedExpr(EFString(raw, np), se.span)
+            # Carry the per-segment format specs through unchanged.
+            return SpannedExpr(EFString(raw, np, specs), se.span)
         case EArrayLiteral(elems):
             Vector[SpannedExpr] ne = Vector[SpannedExpr]()
             int i = 0

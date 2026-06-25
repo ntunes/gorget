@@ -1,0 +1,13 @@
+hex: ff
+HEX: FF
+oct: 377
+bin: 11111111
+bin alt: 0b11111111
+padded: 00000042
+hex padded: 00002a
+fixed: 3.14
+sci: 3.142e+00
+SCI: 3.142E+00
+neg hex: ffffffffffffffd6
+zero bin: 0
+zero hex: 0

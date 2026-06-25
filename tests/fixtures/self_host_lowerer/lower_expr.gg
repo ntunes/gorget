@@ -38,6 +38,140 @@ from lower_drops import init_drop_elab, push_drop_scope, emit_scope_drops, pop_d
 from lower_liveness import LivenessAnalysis, compute_liveness, wire_liveness_into_modes, liveness_instrumentation_diff, update_last_pos_for_inst, update_last_pos_for_term, note_operand_pos, empty_liveness
 from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, index_value_type_name, collection_accumulator_tid, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, is_comparison, map_cmpop, eval_const_int_expr
 
+# ── f-string format-spec application (`{x:.2f}`, `{n:08d}`, `{255:#x}`) ──
+#
+# Port of Rust gg's `apply_format_spec` (src/ir/lowering/exprs/calls.rs:2082).
+# Given a user format spec (`.2f`, `08d`, `x`, `#x`, `b`, …) and the arg's
+# GIR type, build the printf format fragment (e.g. `%08lld`, `%.2f`, `%#llx`)
+# and push the consumed operand(s) into `gsf_args`. Returns the fragment, or
+# "" to DECLINE — the caller then falls through to the existing type-based
+# default (mirrors Rust's `Option` returning `None`). Two decline cases, both
+# yielding "": (i) the spec is empty, (ii) the spec is present but inapplicable
+# to this arg's type (e.g. `:.2f` on an int).
+#
+# The `b` (binary) arm calls `gorget_int_to_binary(val, alt)` → owned Str and
+# registers it for drop at its producer (print-temp leak class), exactly like
+# the bool arm in the EFString lowering.
+#
+# Spec grammar (mirror Rust + docs/language-reference.md §14.1):
+#   [#][0][width][.precision][type]   type ∈ {d x X o b | f e E}
+#
+# NOTE (completeness, not required for the 2-fixture flip — corpus candidates
+# are I64/F64 only): narrow-int widening to 64-bit (`widen_int`) and unsigned
+# `%llu` are NOT handled here; a narrow int passed through C's variadic ABI
+# with `%lld` may mis-render. Mirror Rust's `widen_int` if/when narrow-int
+# f-string specs land in the corpus. [TODO: this brief — f-string format-spec]
+String apply_format_spec(LowerCtx &ctx, GirModule &gmod, Vector[Operand] &gsf_args, String spec, int aloc, int aty, int gs_tid):
+    if spec.byte_len() == 0:
+        return ""
+    bool is_int = aty == I8_TYPE or aty == I16_TYPE or aty == I32_TYPE or aty == I64_TYPE or aty == U8_TYPE or aty == U16_TYPE or aty == U32_TYPE or aty == U64_TYPE
+    bool is_float = aty == F32_TYPE or aty == F64_TYPE
+
+    int n = spec.byte_len()
+    int pos = 0
+
+    # '#' — alternate form (0x / 0o / 0b prefix)
+    bool alt = false
+    if pos < n and spec.byte_at(pos) == b'#':
+        alt = true
+        pos = pos + 1
+
+    # '0' — zero-pad (only when followed by a digit, matching Rust)
+    bool zero_pad = false
+    if pos < n and spec.byte_at(pos) == b'0' and pos + 1 < n and is_ascii_digit(spec.byte_at(pos + 1)):
+        zero_pad = true
+        pos = pos + 1
+
+    # width digits
+    int width_start = pos
+    while pos < n and is_ascii_digit(spec.byte_at(pos)):
+        pos = pos + 1
+    String width = ""
+    if pos > width_start:
+        width = owned_slice(spec, width_start, pos)
+
+    # precision: .N
+    bool has_prec = false
+    String prec = ""
+    if pos < n and spec.byte_at(pos) == b'.':
+        pos = pos + 1
+        int prec_start = pos
+        while pos < n and is_ascii_digit(spec.byte_at(pos)):
+            pos = pos + 1
+        prec = owned_slice(spec, prec_start, pos)
+        has_prec = true
+
+    String zflag = ""
+    if zero_pad:
+        zflag = "0"
+    String aprefix = ""
+    if alt:
+        aprefix = "#"
+
+    # No type char — width/precision with the default type.
+    if pos >= n:
+        if is_int and (width.byte_len() > 0 or zero_pad):
+            gsf_args.push(op_consume(&ctx, &gmod, aloc, CkFormatArg()))
+            return "%" + zflag + width + "lld"
+        if is_float and has_prec:
+            gsf_args.push(op_consume(&ctx, &gmod, aloc, CkFormatArg()))
+            return "%." + prec + "f"
+        return ""
+
+    byte tc = spec.byte_at(pos)
+
+    # ── Integer formats ──
+    if tc == b'd' and is_int:
+        gsf_args.push(op_consume(&ctx, &gmod, aloc, CkFormatArg()))
+        return "%" + zflag + width + "lld"
+    if tc == b'x' and is_int:
+        gsf_args.push(op_consume(&ctx, &gmod, aloc, CkFormatArg()))
+        return "%" + aprefix + zflag + width + "llx"
+    if tc == b'X' and is_int:
+        gsf_args.push(op_consume(&ctx, &gmod, aloc, CkFormatArg()))
+        return "%" + aprefix + zflag + width + "llX"
+    if tc == b'o' and is_int:
+        gsf_args.push(op_consume(&ctx, &gmod, aloc, CkFormatArg()))
+        return "%" + aprefix + zflag + width + "llo"
+    if tc == b'b' and is_int:
+        # Binary has no printf equivalent — call the runtime helper, which
+        # returns an owned Str (heap buffer). Clone of the bool arm below.
+        int balt = 0
+        if alt:
+            balt = 1
+        int bdst = add_local(&ctx, gs_tid, None)
+        Vector[Operand] bargs = [OpCopy(aloc), OpConstI64(balt)]
+        emit(&ctx, GICallExtern(bdst, "gorget_int_to_binary", bargs))
+        register_local_for_drop(&ctx, bdst, gs_tid, &gmod)
+        gsf_args.push(op_consume(&ctx, &gmod, bdst, CkFormatArg()))
+        return "%.*s"
+
+    # ── Float formats ──
+    if tc == b'f' and is_float:
+        String fp = prec
+        if not has_prec:
+            fp = "6"
+        gsf_args.push(op_consume(&ctx, &gmod, aloc, CkFormatArg()))
+        return "%" + zflag + width + "." + fp + "f"
+    if tc == b'e' and is_float:
+        String ep = prec
+        if not has_prec:
+            ep = "6"
+        gsf_args.push(op_consume(&ctx, &gmod, aloc, CkFormatArg()))
+        return "%" + width + "." + ep + "e"
+    if tc == b'E' and is_float:
+        String Ep = prec
+        if not has_prec:
+            Ep = "6"
+        gsf_args.push(op_consume(&ctx, &gmod, aloc, CkFormatArg()))
+        return "%" + width + "." + Ep + "E"
+
+    # Unrecognized / inapplicable spec — decline, caller uses the default.
+    return ""
+
+bool is_ascii_digit(byte c):
+    return c >= b'0' and c <= b'9'
+
 # ── Displayable dispatch for `print(x)` / f-string `{x}` ─────────────
 #
 # Return the `display` method symbol to call for a value of type `tid`
@@ -383,7 +517,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             int dst = add_local(&ctx, gs_tid, None)
             emit(&ctx, GIAssign(dst, OpConstStr(s)))
             return dst
-        case EFString(s, fexprs):
+        case EFString(s, fexprs, specs):
             int gs_tid = lookup_or_register_named(&gmod, "GorgetString")
             if fexprs.len() == 0:
                 # No interpolation — just a string literal
@@ -433,73 +567,86 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             emit(&ctx, GIDeref(saloc, aloc, gs_tid))
                             aloc = saloc
                             aty = gs_tid
-                        if aty == F64_TYPE or aty == F32_TYPE:
-                            fmt = fmt + "%f"
-                            gsf_args.push(op_consume(&ctx, &gmod, aloc, CkFormatArg()))
-                        elif aty == gs_tid:
-                            # String → %.*s with (int)len,data (the printf-style
-                            # emitter for gorget_string_format decomposes a
-                            # GorgetString value arg into `(int)len, data`).
-                            # %.*s bounds the read to len bytes — required for
-                            # non-NUL-terminated cap=0 views (trim/strip/slice).
-                            fmt = fmt + "%.*s"
-                            gsf_args.push(op_consume(&ctx, &gmod, aloc, CkFormatArg()))
-                        elif aty == BOOL_TYPE:
-                            # Bool → "true"/"false" via gorget_bool_to_str.
-                            int bstr = add_local(&ctx, gs_tid, None)
-                            Vector[Operand] bargs = [OpCopy(aloc)]
-                            emit(&ctx, GICallExtern(bstr, "gorget_bool_to_str", bargs))
-                            # FRESH-OWNED-TEMP drop registration (#7-style):
-                            # gorget_bool_to_str allocates a fresh `GorgetString`
-                            # (LoOwned) that is only BORROWED by the surrounding
-                            # gorget_string_format below (CkFormatArg → OpBorrow),
-                            # so it is orphaned and leaks. Register at creation so
-                            # the scope-exit GIDropIfAlive frees it once. Borrow-
-                            # only consume ⇒ never moved ⇒ no double-free.
-                            register_local_for_drop(&ctx, bstr, gs_tid, &gmod)
-                            fmt = fmt + "%.*s"
-                            gsf_args.push(op_consume(&ctx, &gmod, bstr, CkFormatArg()))
-                        elif fstr_displayable_display_method(aty, &gmod) is Some(disp_fn):
-                            # Displayable dispatch: `{x}` where x is a struct/enum
-                            # with a `display` method (user `equip … with
-                            # Displayable` or `@derive(Displayable)`) → call
-                            # `Type__display(&x)` → String, then %.*s. Without
-                            # this the value falls to the `%lld` int default
-                            # below, printing the struct/enum's raw bits (a
-                            # pointer or 0) instead of the formatted text.
-                            # Mirrors Rust gg's format_for_printf Displayable
-                            # branch (src/ir/lowering/exprs/calls.rs:1964-1996).
-                            # TYPED gate: the method's presence in `fn_sigs`
-                            # (a Dict lookup of the actually-emitted symbol),
-                            # not a name-shape test. `is Some(disp_fn)` binds
-                            # the symbol once in the condition — no sentinel, no
-                            # second lookup.
-                            int disp_dst = add_local(&ctx, gs_tid, None)
-                            # `display(self)` takes `&self` (a borrow) — pass
-                            # the value local by OpBorrow, exactly as the
-                            # explicit `.display()` method-call path does.
-                            emit(&ctx, GICallExtern(disp_dst, disp_fn, [OpBorrow(aloc)]))
-                            # FRESH-OWNED-TEMP drop registration (#7-style):
-                            # `display` returns an OWNED GorgetString (return
-                            # position = ownership boundary) that is only
-                            # BORROWED by the surrounding gorget_string_format
-                            # (CkFormatArg → OpBorrow), so it is orphaned and
-                            # would leak. A literal-returning display body is a
-                            # cap=0 view whose free no-ops, so the registration
-                            # is safe on views too. Mirrors Rust
-                            # `ctx.drops.register_local(result, …)` (calls.rs:1990).
-                            register_local_for_drop(&ctx, disp_dst, gs_tid, &gmod)
-                            fmt = fmt + "%.*s"
-                            gsf_args.push(op_consume(&ctx, &gmod, disp_dst, CkFormatArg()))
-                        else:
-                            # Default: int64_t printf via %lld. Narrow ints
-                            # are auto-promoted by C's variadic ABI to
-                            # `int` (4 bytes) — but vsnprintf with `%lld`
-                            # reads 8 bytes. Acceptable for I64; narrow
-                            # ints may render incorrectly until a typed
-                            # specifier table is added.
-                            fmt = fmt + "%lld"
-                            gsf_args.push(op_consume(&ctx, &gmod, aloc, CkFormatArg()))
+                        # User format spec (`{x:.2f}`, `{n:08d}`, `{255:#x}`,
+                        # `{x:b}`) present for THIS placeholder? Try to apply it
+                        # (mirror Rust apply_format_spec). A non-empty fragment
+                        # means the spec was applied (and its operand(s) already
+                        # pushed into gsf_args); "" means absent OR inapplicable
+                        # to this arg's type → fall through to the type default.
+                        bool spec_applied = false
+                        if specs.get(fi).unwrap() is Some(uspec):
+                            String spec_frag = apply_format_spec(&ctx, &gmod, &gsf_args, uspec, aloc, aty, gs_tid)
+                            if spec_frag.byte_len() > 0:
+                                fmt = fmt + spec_frag
+                                spec_applied = true
+                        if not spec_applied:
+                            if aty == F64_TYPE or aty == F32_TYPE:
+                                fmt = fmt + "%f"
+                                gsf_args.push(op_consume(&ctx, &gmod, aloc, CkFormatArg()))
+                            elif aty == gs_tid:
+                                # String → %.*s with (int)len,data (the printf-style
+                                # emitter for gorget_string_format decomposes a
+                                # GorgetString value arg into `(int)len, data`).
+                                # %.*s bounds the read to len bytes — required for
+                                # non-NUL-terminated cap=0 views (trim/strip/slice).
+                                fmt = fmt + "%.*s"
+                                gsf_args.push(op_consume(&ctx, &gmod, aloc, CkFormatArg()))
+                            elif aty == BOOL_TYPE:
+                                # Bool → "true"/"false" via gorget_bool_to_str.
+                                int bstr = add_local(&ctx, gs_tid, None)
+                                Vector[Operand] bargs = [OpCopy(aloc)]
+                                emit(&ctx, GICallExtern(bstr, "gorget_bool_to_str", bargs))
+                                # FRESH-OWNED-TEMP drop registration (#7-style):
+                                # gorget_bool_to_str allocates a fresh `GorgetString`
+                                # (LoOwned) that is only BORROWED by the surrounding
+                                # gorget_string_format below (CkFormatArg → OpBorrow),
+                                # so it is orphaned and leaks. Register at creation so
+                                # the scope-exit GIDropIfAlive frees it once. Borrow-
+                                # only consume ⇒ never moved ⇒ no double-free.
+                                register_local_for_drop(&ctx, bstr, gs_tid, &gmod)
+                                fmt = fmt + "%.*s"
+                                gsf_args.push(op_consume(&ctx, &gmod, bstr, CkFormatArg()))
+                            elif fstr_displayable_display_method(aty, &gmod) is Some(disp_fn):
+                                # Displayable dispatch: `{x}` where x is a struct/enum
+                                # with a `display` method (user `equip … with
+                                # Displayable` or `@derive(Displayable)`) → call
+                                # `Type__display(&x)` → String, then %.*s. Without
+                                # this the value falls to the `%lld` int default
+                                # below, printing the struct/enum's raw bits (a
+                                # pointer or 0) instead of the formatted text.
+                                # Mirrors Rust gg's format_for_printf Displayable
+                                # branch (src/ir/lowering/exprs/calls.rs:1964-1996).
+                                # TYPED gate: the method's presence in `fn_sigs`
+                                # (a Dict lookup of the actually-emitted symbol),
+                                # not a name-shape test. `is Some(disp_fn)` binds
+                                # the symbol once in the condition — no sentinel, no
+                                # second lookup.
+                                int disp_dst = add_local(&ctx, gs_tid, None)
+                                # `display(self)` takes `&self` (a borrow) — pass
+                                # the value local by OpBorrow, exactly as the
+                                # explicit `.display()` method-call path does.
+                                emit(&ctx, GICallExtern(disp_dst, disp_fn, [OpBorrow(aloc)]))
+                                # FRESH-OWNED-TEMP drop registration (#7-style):
+                                # `display` returns an OWNED GorgetString (return
+                                # position = ownership boundary) that is only
+                                # BORROWED by the surrounding gorget_string_format
+                                # (CkFormatArg → OpBorrow), so it is orphaned and
+                                # would leak. A literal-returning display body is a
+                                # cap=0 view whose free no-ops, so the registration
+                                # is safe on views too. Mirrors Rust
+                                # `ctx.drops.register_local(result, …)` (calls.rs:1990).
+                                register_local_for_drop(&ctx, disp_dst, gs_tid, &gmod)
+                                fmt = fmt + "%.*s"
+                                gsf_args.push(op_consume(&ctx, &gmod, disp_dst, CkFormatArg()))
+                            else:
+                                # Default: int64_t printf via %lld. Narrow ints
+                                # are auto-promoted by C's variadic ABI to
+                                # `int` (4 bytes) — but vsnprintf with `%lld`
+                                # reads 8 bytes. Acceptable for I64; narrow
+                                # ints may render incorrectly until a typed
+                                # specifier table is added.
+                                fmt = fmt + "%lld"
+                                gsf_args.push(op_consume(&ctx, &gmod, aloc, CkFormatArg()))
                         fi += 1
                     byte_i += 2
                 else:

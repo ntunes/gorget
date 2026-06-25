@@ -95,7 +95,7 @@ enum Expr:
     # `(expr) catch f: match f`. The pattern selects which fault(s) are
     # caught; the handler runs on the fault path. Inc1 = arithmetic faults.
     EFaultCatch(Box[SpannedExpr], FaultCatchPattern, Box[SpannedExpr])
-    EFString(String, Vector[SpannedExpr])
+    EFString(String, Vector[SpannedExpr], Vector[Option[String]])
 
 # How an EFaultCatch selects which fault(s) it intercepts.
 #   FcpVariant(qualifier, variant) — `catch Fault.Overflow:` (qualifier is

@@ -547,7 +547,7 @@ String token_string_val(Token tok):
                 match seg:
                     case SegLiteral(s):
                         result = result + s
-                    case SegInterpolation(s):
+                    case SegInterpolation(s, _):
                         String open_b = r"{"
                         String close_b = r"}"
                         result = result + open_b + s + close_b
@@ -563,7 +563,7 @@ bool token_has_interpolation(Token tok):
             while i < slit.lex_segments.len():
                 StringSegment seg = slit.lex_segments.get(i).unwrap()
                 match seg:
-                    case SegInterpolation(_):
+                    case SegInterpolation(_, _):
                         return true
                     else:
                         pass

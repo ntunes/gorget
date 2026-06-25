@@ -780,7 +780,7 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
         case EDo(body_stmts):
             type_check_stmts(body_stmts, scope_id, &scopes, &types, &ctx)
 
-        case EFString(template, exprs):
+        case EFString(template, exprs, _specs):
             # F-string interpolation segments are pre-parsed into real
             # SpannedExpr by the parser; walk them so closures inside
             # `{...}` get their params/body typed.

@@ -213,7 +213,7 @@ String describe_string_canonical(StringLiteral slit):
         match seg:
             case SegLiteral(text):
                 result = result + escape_canonical(text)
-            case SegInterpolation(expr):
+            case SegInterpolation(expr, _):
                 result = result + f"\{" + expr + "\}"
         i = i + 1
     return result

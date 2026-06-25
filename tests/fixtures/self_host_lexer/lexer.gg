@@ -43,7 +43,7 @@ enum StringKind:
 
 enum StringSegment:
     SegLiteral(String)
-    SegInterpolation(String)
+    SegInterpolation(String, Option[String])
 
 struct StringLiteral:
     StringKind lex_kind
@@ -641,7 +641,8 @@ equip Lexer:
 
                 String expr_text = owned_slice(self.lex_source, expr_start, self.lex_pos)
                 String expr_only = split_interpolation_expr(expr_text)
-                segments.push(SegInterpolation(expr_only))
+                Option[String] spec_opt = split_interpolation_spec_part(expr_text)
+                segments.push(SegInterpolation(expr_only, spec_opt))
                 if self.lex_pos < self.lex_source.byte_len():
                     self.lex_advance()
                 continue
@@ -1103,6 +1104,50 @@ String split_interpolation_expr(String text):
         # Non-empty spec → keep only the text before the colon.
         return owned_slice(text, 0, last_colon)
     return text
+
+# Sibling of `split_interpolation_expr`: returns the depth-0 format SPEC
+# (everything after the last depth-0 `:`), or `None` if there is no depth-0
+# colon or the spec is empty. Mirrors Rust `split_interpolation_spec`'s
+# `Option<String>` return (src/lexer/mod.rs:997). The self-host has no tuple
+# returns, so this re-walks the text rather than returning a pair from the
+# expr splitter; the two share the exact same depth-0 scan logic.
+Option[String] split_interpolation_spec_part(String text):
+    int n = text.byte_len()
+    int last_colon = -1
+    int paren_depth = 0
+    int bracket_depth = 0
+    int brace_depth = 0
+    int i = 0
+    while i < n:
+        byte c = text.byte_at(i)
+        if c == b'(':
+            paren_depth = paren_depth + 1
+        elif c == b')':
+            if paren_depth > 0:
+                paren_depth = paren_depth - 1
+        elif c == b'[':
+            bracket_depth = bracket_depth + 1
+        elif c == b']':
+            if bracket_depth > 0:
+                bracket_depth = bracket_depth - 1
+        elif c == b'{':
+            brace_depth = brace_depth + 1
+        elif c == b'}':
+            if brace_depth > 0:
+                brace_depth = brace_depth - 1
+        elif c == b'"' or c == b'\'':
+            byte quote = c
+            i = i + 1
+            while i < n and text.byte_at(i) != quote:
+                if text.byte_at(i) == b'\\':
+                    i = i + 1
+                i = i + 1
+        elif c == b':' and paren_depth == 0 and bracket_depth == 0 and brace_depth == 0:
+            last_colon = i
+        i = i + 1
+    if last_colon >= 0 and last_colon + 1 < n:
+        return Some(owned_slice(text, last_colon + 1, n))
+    return None()
 
 int lex_parse_int_radix(String s, int radix):
     int result = 0
