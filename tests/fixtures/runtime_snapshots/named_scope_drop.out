@@ -1,0 +1,6 @@
+using b
+drop b
+using a
+drop a
+using outer
+drop outer

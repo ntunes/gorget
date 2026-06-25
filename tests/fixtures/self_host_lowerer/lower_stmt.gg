@@ -1076,6 +1076,30 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     nl_put(&ctx, lc_name, lc_local)
                 else:
                     lower_fail("unhandled Item in lower_stmt SItem")
+        case SNamedScope(_name, ns_body):
+            # `label: <body>` named scope. The label is a break/continue
+            # TARGET, NOT a new binding — typecheck (typecheck.gg:1173) just
+            # recurses through the body without binding the name. Before this
+            # arm SNamedScope hit `else: lower_fail` and the ENTIRE named-scope
+            # body was SILENTLY DROPPED (`outer:`/`inner:` blocks vanished).
+            #
+            # A named scope is a block scope (linear control flow): snapshot
+            # the name→local map so body bindings don't leak past the scope,
+            # open a Block drop scope so body locals are cleaned up at exit,
+            # lower the body, drop the scope (no-emit if the body already
+            # terminated via return/break — those emitted their own drops),
+            # then restore the name map. Mirrors Rust's `lower_named_scope`
+            # (src/ir/lowering/stmts/mod.rs:2878) + the SWith block pattern.
+            Dict[String, int] ns_snapshot = nl_snapshot(&ctx)
+            push_drop_scope(&ctx.drop_elab, DSK_BLOCK)
+            lower_stmts(&ctx, ns_body, &gmod, is_main)
+            Terminator ns_term = ctx.block_terms.get(ctx.current_block).unwrap()
+            match ns_term:
+                case GTNone():
+                    pop_drop_scope(&ctx)
+                else:
+                    pop_drop_scope_no_emit(&ctx)
+            nl_restore(&ctx, ns_snapshot)
         else:
             lower_fail("unhandled in lower_stmt: " + stmt_kind(stmt))
 
@@ -1346,13 +1370,44 @@ void lower_index_assign(LowerCtx &ctx, SpannedExpr base_expr, SpannedExpr idx_ex
     int base = lower_place_base(&ctx, base_expr, &gmod)
     int base_tid = ctx.locals.get(base).unwrap().type_id
     String base_tname = type_id_to_name(base_tid, &gmod)
+    # Unwrap a Ptr/MutPtr base (param/static/self.field) to the collection
+    # name so index_value_type_name can recover the element/value type
+    # (mirrors the lower_index_compound_assign arm).
+    if base_tid >= 0 and base_tid < gmod.type_table.len():
+        GirType ia_bt = gmod.type_table.get(base_tid).unwrap()
+        match ia_bt:
+            case GtPtr(ia_inner):
+                base_tname = type_id_to_name(ia_inner, &gmod)
+            case GtMutPtr(ia_inner2):
+                base_tname = type_id_to_name(ia_inner2, &gmod)
+            else:
+                pass
+    # Resolve the collection's VALUE/element type so the value RHS is lowered
+    # WITH that context. Without it `g["k"] = []` lowered the empty literal
+    # with the Ptr-default `elem_size=8`, truncating 32-byte `Str` pushes
+    # (empty output). Same value-type recovery the EIndex read + compound arm
+    # use (index_value_type_name → resolve_field_gir_type) — one source of
+    # truth for the Dict/HashMap value-suffix split. The INDEX stays
+    # independently typed (expected_type=-1).
+    String ia_elem_name = index_value_type_name(base_tname)
+    String ia_elem_norm = ia_elem_name
+    if ia_elem_name == "Str":
+        ia_elem_norm = "GorgetString"
+    int ia_elem_tid = -1
+    if ia_elem_norm != "":
+        int ia_resolved = resolve_field_gir_type(ia_elem_norm, &gmod)
+        if ia_resolved >= 0:
+            ia_elem_tid = ia_resolved
     # idx (int/key) + val (element) are independently typed, not the
     # surrounding context — clear any leaked `expected_type` so a Result-typed
     # expectation doesn't make the centralized auto-prop hook's capture-form
     # check suppress a throws-call idx/value's peel (`v[pick()] = might()`).
+    # The idx lowers with no context; the val lowers WITH the resolved
+    # collection value type so an empty `[]` gets the right element size.
     int saved_expected_ia = ctx.expected_type
     ctx.expected_type = -1
     int idx = lower_expr(&ctx, idx_expr, &gmod)
+    ctx.expected_type = ia_elem_tid
     int val = lower_expr(&ctx, value_expr, &gmod)
     ctx.expected_type = saved_expected_ia
     idx = maybe_auto_propagate(&ctx, idx, &gmod)
