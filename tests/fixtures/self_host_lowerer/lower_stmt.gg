@@ -1326,6 +1326,7 @@ void lower_if(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] then_body, Vect
     # edge. Use pop_drop_scope_no_emit on early-exit branches (return/
     # break/continue already emitted their drops).
     switch_to(&ctx, then_bb)
+    Dict[String, int] saved_then = nl_snapshot(&ctx)
     push_drop_scope(&ctx.drop_elab, DSK_BLOCK)
     lower_stmts(&ctx, then_body, &gmod, is_main)
     # Only jump to merge if not already terminated (no return/break)
@@ -1336,8 +1337,10 @@ void lower_if(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] then_body, Vect
             set_terminator(&ctx, GTJump(merge_bb))
         else:
             pop_drop_scope_no_emit(&ctx)
+    nl_restore(&ctx, saved_then)
     # Else branch
     switch_to(&ctx, else_bb)
+    Dict[String, int] saved_else = nl_snapshot(&ctx)
     push_drop_scope(&ctx.drop_elab, DSK_BLOCK)
     if elif_branches.len() > 0:
         ElseBranch eb = elif_branches.get(0).unwrap()
@@ -1360,6 +1363,7 @@ void lower_if(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] then_body, Vect
             set_terminator(&ctx, GTJump(merge_bb))
         else:
             pop_drop_scope_no_emit(&ctx)
+    nl_restore(&ctx, saved_else)
     switch_to(&ctx, merge_bb)
 
 
