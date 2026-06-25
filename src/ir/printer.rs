@@ -514,7 +514,7 @@ fn print_instruction(out: &mut String, inst: &Instruction, reg: &TypeRegistry) {
             }
             write!(out, ")").unwrap();
         }
-        Instruction::FaultableCall { dst, func, args, fault_slot, fault_handler } => {
+        Instruction::FaultableCall { dst, func, args, fault_slot, overflow_handler, divzero_handler } => {
             if let Some(d) = dst {
                 write!(out, "_{} = ", d.0).unwrap();
             }
@@ -525,7 +525,13 @@ fn print_instruction(out: &mut String, inst: &Instruction, reg: &TypeRegistry) {
                 }
                 write!(out, "{}", format_operand(a, reg)).unwrap();
             }
-            write!(out, ") fault_slot={} -> bb{}", format_place(fault_slot), fault_handler.0).unwrap();
+            write!(out, ") fault_slot={}", format_place(fault_slot)).unwrap();
+            if let Some(h) = overflow_handler {
+                write!(out, " overflow->bb{}", h.0).unwrap();
+            }
+            if let Some(h) = divzero_handler {
+                write!(out, " divzero->bb{}", h.0).unwrap();
+            }
         }
         Instruction::CallIndirect { dst, callee, args } => {
             if let Some(d) = dst {

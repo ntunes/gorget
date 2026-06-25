@@ -2698,29 +2698,97 @@ fn fault_op_lowering_arms_count() {
          must not duplicate or skip the clone/move-zero/str-ptr logic.",
     );
 
-    // Cross-frame fault propagation (error-model.md §11, Increment 2.1a) adds a
-    // THIRD faultable shape, `Instruction::FaultableCall` — a participating
-    // callee writes a fault tag into a hidden trailing `MutPtr<i32>` slot and
-    // the caller BRANCHES to its `fault_handler` after the call. Like the
-    // other two shapes it must stay wired through the one shared lowering arm,
-    // and — THE LINCHPIN — its `fault_handler` MUST be counted as a block
-    // successor in `successors()` (else DCE prunes the handler and the fault
-    // recovery silently vanishes). Assert both so a future refactor can't drop
-    // either without tripping this ratchet.
+    // Cross-frame fault propagation (error-model.md §11, Increment 2.1a/2.1c)
+    // adds a THIRD faultable shape, `Instruction::FaultableCall` — a
+    // participating callee writes a per-category fault TAG into a hidden trailing
+    // `MutPtr<i32>` slot and the caller reads the tag VALUE and DISPATCHES to the
+    // matching per-category handler after the call. Like the other two shapes it
+    // must stay wired through the one shared lowering arm, and — THE LINCHPIN —
+    // each handler MUST be counted as a block successor in `successors()` (else
+    // DCE prunes a handler and the fault recovery silently vanishes). Assert both
+    // so a future refactor can't drop either without tripping this ratchet.
     assert!(
         insts.contains("Instruction::FaultableCall {"),
         "the `FaultableCall` GIR→LIR lowering arm vanished from \
          src/lir/lower/insts.rs — the cross-frame fault call must lower through \
-         the shared `Inst::Call` + slot-check-branch shape (error-model.md §11).",
+         the shared `Inst::Call` + tag-dispatch shape (error-model.md §11).",
     );
     let optimize = fs::read_to_string("src/ir/transforms/optimize.rs").unwrap_or_default();
     assert!(
-        optimize.contains("Instruction::FaultableCall { fault_handler, .. }"),
+        optimize.contains("Instruction::FaultableCall { overflow_handler, divzero_handler, .. }"),
         "the `FaultableCall` arm vanished from `successors()` / the block-id \
-         remap loops in src/ir/transforms/optimize.rs — its `fault_handler` \
-         block must count as a successor (else DCE prunes the fault handler and \
+         remap loops in src/ir/transforms/optimize.rs — its per-category handler \
+         blocks must count as successors (else DCE prunes a fault handler and \
          cross-frame fault recovery silently vanishes) and forward through \
-         block renumbering (else the stored handler id goes stale).",
+         block renumbering (else a stored handler id goes stale).",
+    );
+}
+
+/// Sibling-arm ratchet for the `FaultableCall` per-category tag-dispatch
+/// (error-model.md §11, Increment 2.1c, CLAUDE.md invariant #4 "one fix, all
+/// siblings" + devbook/24 rule 2 "typed metadata, not name-matched"): the
+/// cross-frame fault call routes by reading the slot tag VALUE and dispatching
+/// to one of N per-category handler FIELDS on `Instruction::FaultableCall`
+/// (`overflow_handler`, `divzero_handler`; Bounds adds `bounds_handler` in
+/// 2.1d). A single `slot != 0` branch could NOT distinguish categories — it
+/// would route every fault to one entry and construct the WRONG `Fault` variant
+/// (the measured §2.3 silent miscompile: a deep DivByZero printing the Overflow
+/// arm). This lint PINS the handler-category count so the next category (Bounds)
+/// is FORCED to add its own typed handler field + tag-dispatch arm — not a
+/// name-matched or single-branch dodge.
+///
+/// **If this fails because you added a category:** add the `<cat>_handler:
+/// Option<BlockId>` field to the `FaultableCall` GIR variant
+/// (`src/ir/instructions.rs`), thread it through the builder ctors, printer, the
+/// three `optimize.rs` remap/successor arms, and the GIR→LIR tag-dispatch
+/// (`src/lir/lower/insts.rs`) with its own `tag == <CAT>_TAG → handler` branch,
+/// AND resolve it (always-Some) at the call-site gate (`calls.rs`). Then bump
+/// `FAULT_CALL_HANDLER_CATEGORIES`. If you removed one, lower it.
+#[test]
+fn fault_call_handler_category_count() {
+    /// Baseline 2026-06-25: 2 (overflow_handler, divzero_handler).
+    /// Bounds (2.1d) makes this 3.
+    const FAULT_CALL_HANDLER_CATEGORIES: usize = 2;
+
+    // Count the `*_handler: Option<BlockId>` fields inside the `FaultableCall`
+    // GIR variant body — the single source of truth for the dispatch categories.
+    let instructions = fs::read_to_string("src/ir/instructions.rs").unwrap_or_default();
+    let mut in_variant = false;
+    let mut handler_fields = 0usize;
+    for line in instructions.lines() {
+        let t = line.trim_start();
+        if t.starts_with("FaultableCall {") {
+            in_variant = true;
+            continue;
+        }
+        if in_variant {
+            // The variant body ends at its closing `},` (the field list is
+            // brace-balanced; the next variant or the enum tail follows).
+            if t.starts_with("},") || t == "}" {
+                break;
+            }
+            if t.starts_with("//") || t.is_empty() {
+                continue;
+            }
+            // A handler field line: `<name>_handler: Option<BlockId>,`.
+            if t.ends_with("_handler: Option<BlockId>,") {
+                handler_fields += 1;
+            }
+        }
+    }
+    assert_eq!(
+        handler_fields, FAULT_CALL_HANDLER_CATEGORIES,
+        "`FaultableCall` per-category handler-field count \
+         (src/ir/instructions.rs) changed: {handler_fields} vs expected \
+         {FAULT_CALL_HANDLER_CATEGORIES}.\n\n\
+         The cross-frame fault call dispatches by slot-tag VALUE to one \
+         per-category handler field. A new category (e.g. Bounds, 2.1d) must add \
+         its own `<cat>_handler: Option<BlockId>` field AND a matching \
+         `tag == <CAT>_TAG → handler` arm in the GIR→LIR tag-dispatch \
+         (src/lir/lower/insts.rs) + the call-site resolution (calls.rs) + the \
+         builder/printer/optimize.rs sibling arms, then bump \
+         FAULT_CALL_HANDLER_CATEGORIES — forcing the new category through the \
+         shared tag-dispatch, not a single-branch dodge (the §2.3 miscompile).",
     );
 }
 

@@ -683,7 +683,7 @@ impl<'a> FuncLowering<'a> {
             // always a known user fn in `func_index`, so delegate the call emit
             // to the shared `Call` arm (handles result store + post-call zeros),
             // then split the block on `slot != 0`.
-            Instruction::FaultableCall { dst, func, args, fault_slot, fault_handler } => {
+            Instruction::FaultableCall { dst, func, args, fault_slot, overflow_handler, divzero_handler } => {
                 // 1. Emit the call exactly like a plain `Call` (the slot `&arg`
                 //    is already the last element of `args`; the result store is
                 //    a no-op-if-unread sentinel on the fault path).
@@ -693,27 +693,56 @@ impl<'a> FuncLowering<'a> {
                     args: args.clone(),
                 };
                 bb = self.lower_instruction(&as_call, bb);
-                // 2. Load the caller's i32 fault slot and test it != 0.
+
+                // 2. TAG-DISPATCH (error-model.md §11, Inc-2.1c): read the slot
+                //    tag VALUE and dispatch to the matching per-category handler.
+                //    A single `!= 0` branch can't distinguish Overflow from
+                //    DivByZero (it would route both to one entry, constructing
+                //    the WRONG `Fault` variant — the §2.3 silent miscompile). The
+                //    tags are the `Fault` enum discriminants + 1 (0 = "no fault"),
+                //    read from the typed registry — no magic `1`/`2` literal
+                //    (devbook/24 rule 2). The per-category handlers are ALWAYS
+                //    `Some` here (the gate resolves an uncaught category to its
+                //    panic block), so a category this scope doesn't catch
+                //    re-panics automatically — uniform across both backends.
+                let overflow_tag =
+                    (self.resolve_variant_ordinal("Fault", "Overflow") + 1) as i32;
+                let divzero_tag =
+                    (self.resolve_variant_ordinal("Fault", "DivByZero") + 1) as i32;
+
+                // Emit one `tag == N → handler` test+branch, splitting `cur`.
+                // Returns the continuation (slot-not-this-tag) block. The slot is
+                // an i32, so the tag constant is i32 (type-matched comparison).
+                let emit_tag_branch = |this: &mut Self, cur: BlockId, slot_val: ValueId, tag: i32, handler: ir::types::BlockId| -> BlockId {
+                    let tag_const = this.lower_constant(&Constant::I32(tag), cur);
+                    let flag = this.lir_func.next_value();
+                    this.push_inst(cur, Inst::Cmp {
+                        dst: flag, op: CmpOp::Eq, lhs: slot_val, rhs: tag_const,
+                    });
+                    let handler_lir = this.block_map[handler.0 as usize];
+                    let cont = this.lir_func.add_block();
+                    this.set_terminator(cur, Term::Branch {
+                        cond: flag,
+                        then_block: handler_lir,
+                        then_args: vec![],
+                        else_block: cont,
+                        else_args: vec![],
+                    });
+                    cont
+                };
+
+                // Load the slot ONCE, then chain a per-category equality branch.
                 let slot_val = self.lower_place_load(fault_slot, bb);
-                let zero = self.lower_constant(&Constant::I32(0), bb);
-                let flag = self.lir_func.next_value();
-                self.push_inst(bb, Inst::Cmp {
-                    dst: flag, op: CmpOp::Ne, lhs: slot_val, rhs: zero,
-                });
-                // 3. Branch BEFORE reading the result: fault → handler (the
-                //    user's catch entry), no-fault → continuation.
-                let handler_lir = self.block_map[fault_handler.0 as usize];
-                let cont_bb = self.lir_func.add_block();
-                self.set_terminator(bb, Term::Branch {
-                    cond: flag,
-                    then_block: handler_lir,
-                    then_args: vec![],
-                    else_block: cont_bb,
-                    else_args: vec![],
-                });
-                // Continuation: no fault — the result (already stored to `dst`)
-                // is read by subsequent instructions in this block.
-                bb = cont_bb;
+                let mut cur = bb;
+                if let Some(h) = overflow_handler {
+                    cur = emit_tag_branch(self, cur, slot_val, overflow_tag, *h);
+                }
+                if let Some(h) = divzero_handler {
+                    cur = emit_tag_branch(self, cur, slot_val, divzero_tag, *h);
+                }
+                // Continuation: tag is 0 (no fault) — the result (already stored
+                // to `dst`) is read by subsequent instructions in this block.
+                bb = cur;
             }
 
             Instruction::CallExtern { dst, func, args } => {

@@ -50,28 +50,36 @@ fn assign_to_return_slot(
     builder.assign_mode(mode, Place::local(LocalId(0)), operand);
 }
 
-/// Cross-frame fault propagation (error-model.md §11, Inc-2.1a): set up the
-/// function-level `fault_scope` for a PARTICIPATING callee. Allocates the
-/// fault-RETURN block (filled later by [`fill_fault_return_block`]) and points
-/// the scope's `overflow_handler` at it, so the body's uncaught faultable
-/// overflow ops branch there via the existing `FaultableBinOp` machinery. Div/Rem
-/// div0 / TYPE_MIN faults still PANIC inline (2.1a ships Overflow only; DivByZero
-/// deep propagation is 2.1c). Returns the fault-return block id (caller stashes it
-/// for the fill pass) + saves no outer scope (a participating fn's scope is the
-/// outermost; a nested local `catch` saves/restores it in `lower_fault_catch_expr`).
+/// Cross-frame fault propagation (error-model.md §11, Inc-2.1a/2.1c): set up the
+/// function-level `fault_scope` for a PARTICIPATING callee. Allocates TWO
+/// fault-RETURN blocks (filled later by [`fill_fault_return_block`]) and points
+/// the scope's `overflow_handler` AND `divzero_handler` at them, so the body's
+/// uncaught faultable Add/Sub/Mul overflow ops AND Div/Rem div0 / TYPE_MIN faults
+/// each branch to the matching return block via the existing `FaultableBinOp`
+/// machinery. Each return block writes its category's tag through the hidden slot
+/// and early-exits (or panics by default on a NULL slot). Bounds is still NOT
+/// propagated (`bounds_handler: None`) — a distinct mechanism (2.1d). Returns the
+/// two fault-return block ids `(overflow, divzero)` (caller stashes them for the
+/// fill pass) + saves no outer scope (a participating fn's scope is the outermost;
+/// a nested local `catch` saves/restores it in `lower_fault_catch_expr`).
 fn setup_fault_return_scope(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
-) -> BlockId {
+) -> (BlockId, BlockId) {
     use super::context::FaultScope;
     let saved_active = builder.current_block;
 
-    // The fault-return block (filled after body lowering).
-    let fault_return_bb = builder.new_block();
+    // The two fault-return blocks (filled after body lowering): one per
+    // arithmetic category, each writing its own tag (Overflow=1 / DivByZero=2)
+    // through the slot or panicking by default on a NULL slot.
+    let overflow_return_bb = builder.new_block();
+    let divzero_return_bb = builder.new_block();
 
-    // Per-category panic blocks for an uncaught Div/Rem fault (Overflow-only in
-    // 2.1a, so Div/Rem TYPE_MIN/-1 and div0 panic inline — same as a Phase-1
-    // scope that doesn't catch those categories). Dead+DCE'd if no Div/Rem.
+    // Per-category panic blocks for an uncaught Div/Rem fault. With BOTH
+    // arith categories now propagating, these are reached only when a NULL
+    // slot is passed (a non-catching caller) — the return-block fill emits the
+    // NULL-slot panic inline, so these scope-level blocks are dead for a
+    // participating callee and DCE'd. Kept for `FaultScope` shape uniformity.
     let div_overflow_panic = builder.new_block();
     let div_zero_panic = builder.new_block();
     builder.switch_to(div_overflow_panic);
@@ -91,40 +99,45 @@ fn setup_fault_return_scope(
     builder.switch_to(saved_active);
 
     ctx.func_state.fault_scope = Some(FaultScope {
-        overflow_handler: Some(fault_return_bb),
-        // 2.1a: deep DivByZero/Bounds not yet propagated → panic inline.
-        divzero_handler: None,
+        overflow_handler: Some(overflow_return_bb),
+        // 2.1c: deep DivByZero now propagates → its own return block.
+        divzero_handler: Some(divzero_return_bb),
+        // Bounds deep propagation is 2.1d — a distinct (safe-get) mechanism.
         bounds_handler: None,
         div_overflow_panic,
         div_zero_panic,
     });
-    fault_return_bb
+    (overflow_return_bb, divzero_return_bb)
 }
 
-/// Fill the synthesized fault-RETURN block of a participating callee
-/// (error-model.md §11, Inc-2.1a, Design X). MUST be called while the Function
-/// drop scope is still pushed (it emits early-exit drops). The block:
+/// Fill ONE synthesized per-category fault-RETURN block of a participating
+/// callee (error-model.md §11, Inc-2.1a/2.1c, Design X). Called once per
+/// arithmetic category (`Overflow`/`DivByZero`); MUST be called while the
+/// Function drop scope is still pushed (it emits early-exit drops). The block:
 /// ```text
 ///   if __fault != NULL:                # caller IS catching
-///       *__fault = OVERFLOW_TAG         # signal the fault via the side-channel
+///       *__fault = <variant>_TAG        # signal the fault via the side-channel
 ///       <emit early-exit drops>         # drop-correct: frame locals freed once
 ///       return <sentinel _0>            # branch-before-read ⇒ never consumed
 ///   else:                               # no catching caller (NULL slot)
-///       gorget_panic("integer overflow")  # preserve panic-by-default
+///       gorget_panic(<panic_msg>)        # preserve panic-by-default
 /// ```
-/// `overflow_tag` is the `Fault.Overflow` discriminant + 1 from the typed
-/// registry (0 is reserved for "no fault" — never a magic literal).
+/// The tag is the `Fault.<variant>` discriminant + 1 from the typed registry
+/// (0 is reserved for "no fault" — never a magic literal). `panic_msg` is the
+/// per-category NULL-slot message ("integer overflow" / "division by zero").
 fn fill_fault_return_block(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     fault_return_bb: BlockId,
     slot_local: LocalId,
     is_void_return: bool,
+    variant: &str,
+    panic_msg: &str,
 ) {
-    // Tag = `Fault.Overflow` discriminant + 1 (0 reserved for "no fault").
+    // Tag = `Fault.<variant>` discriminant + 1 (0 reserved for "no fault").
     // Typed lookup off the registry — no magic `1`/`2`/`3` (devbook/24 rule 2).
-    let overflow_tag = ctx
-        .resolve_variant_tag("Fault", "Overflow")
+    let fault_tag = ctx
+        .resolve_variant_tag("Fault", variant)
         .map(|ord| (ord + 1) as i32)
         .unwrap_or(1);
     let slot_ty = builder.local_type(slot_local);
@@ -145,7 +158,7 @@ fn fill_fault_return_block(
     builder.switch_to(write_bb);
     builder.store_ref(
         Place::local(slot_local),
-        Operand::Constant(Constant::I32(overflow_tag)),
+        Operand::Constant(Constant::I32(fault_tag)),
     );
     // Early-exit drops for the whole function scope (excluding the return place).
     ctx.drops.emit_early_exit_drops(
@@ -163,7 +176,7 @@ fn fill_fault_return_block(
     builder.switch_to(panic_bb);
     builder.call_extern(
         "gorget_panic",
-        vec![Operand::Constant(Constant::Str("integer overflow".to_string()))],
+        vec![Operand::Constant(Constant::Str(panic_msg.to_string()))],
         UNIT_TYPE,
     );
     builder.unreachable();
@@ -939,12 +952,13 @@ pub fn lower_function(
         }
     }
 
-    // Cross-frame fault propagation (error-model.md §11, Inc-2.1a): for a
+    // Cross-frame fault propagation (error-model.md §11, Inc-2.1a/2.1c): for a
     // PARTICIPATING callee, set up the function-level fault scope whose
-    // overflow_handler is a synthesized fault-RETURN block (filled after body
-    // lowering, below). The body's uncaught faultable overflow ops branch there
-    // via the existing FaultableBinOp machinery — no new op disposition needed.
-    let fault_return_bb = ctx.func_state.fault_slot_param.map(|_| {
+    // overflow_handler/divzero_handler are synthesized per-category fault-RETURN
+    // blocks (filled after body lowering, below). The body's uncaught faultable
+    // overflow ops branch to the Overflow block and Div/Rem div0 to the DivByZero
+    // block via the existing FaultableBinOp machinery — no new op disposition.
+    let fault_return_bbs = ctx.func_state.fault_slot_param.map(|_| {
         setup_fault_return_scope(ctx, &mut builder)
     });
 
@@ -1025,13 +1039,15 @@ pub fn lower_function(
             lower_block(ctx, &mut builder, block);
             *ctx.lower_fn_sub_times.entry("lower_function::body::lower_block").or_default() += __lower_block_t0.elapsed();
 
-            // Cross-frame fault (Inc-2.1a): fill the fault-return block while the
-            // Function drop scope is still pushed. Switches blocks internally, so
-            // restore the current block before the implicit-return logic below.
-            if let Some(frb) = fault_return_bb {
+            // Cross-frame fault (Inc-2.1a/2.1c): fill BOTH per-category fault-return
+            // blocks while the Function drop scope is still pushed. Switches blocks
+            // internally, so restore the current block before the implicit-return
+            // logic below.
+            if let Some((overflow_bb, divzero_bb)) = fault_return_bbs {
                 let saved = builder.current_block;
                 let slot = ctx.func_state.fault_slot_param.unwrap();
-                fill_fault_return_block(ctx, &mut builder, frb, slot, return_type == UNIT_TYPE);
+                fill_fault_return_block(ctx, &mut builder, overflow_bb, slot, return_type == UNIT_TYPE, "Overflow", "integer overflow");
+                fill_fault_return_block(ctx, &mut builder, divzero_bb, slot, return_type == UNIT_TYPE, "DivByZero", "division by zero");
                 builder.switch_to(saved);
             }
 
@@ -1118,13 +1134,14 @@ pub fn lower_function(
                     _ => None,
                 };
                 assign_to_return_slot(ctx, &mut builder, operand);
-                // Cross-frame fault (Inc-2.1a): fill the fault-return block while the
-                // Function drop scope is still pushed (the expr-body tail's own
-                // early-exit drops + pop follow).
-                if let Some(frb) = fault_return_bb {
+                // Cross-frame fault (Inc-2.1a/2.1c): fill BOTH per-category
+                // fault-return blocks while the Function drop scope is still pushed
+                // (the expr-body tail's own early-exit drops + pop follow).
+                if let Some((overflow_bb, divzero_bb)) = fault_return_bbs {
                     let saved = builder.current_block;
                     let slot = ctx.func_state.fault_slot_param.unwrap();
-                    fill_fault_return_block(ctx, &mut builder, frb, slot, return_type == UNIT_TYPE);
+                    fill_fault_return_block(ctx, &mut builder, overflow_bb, slot, return_type == UNIT_TYPE, "Overflow", "integer overflow");
+                    fill_fault_return_block(ctx, &mut builder, divzero_bb, slot, return_type == UNIT_TYPE, "DivByZero", "division by zero");
                     builder.switch_to(saved);
                 }
                 ctx.drops.emit_early_exit_drops(
@@ -1134,12 +1151,14 @@ pub fn lower_function(
                 ctx.drops.pop_scope_no_emit();
                 builder.ret(FunctionBuilder::copy(LocalId(0)));
             } else {
-                // Tail already terminated (e.g. `: return x`). Fill the
-                // fault-return block (if any) and balance the drop scope.
-                if let Some(frb) = fault_return_bb {
+                // Tail already terminated (e.g. `: return x`). Fill BOTH
+                // per-category fault-return blocks (if any) and balance the drop
+                // scope.
+                if let Some((overflow_bb, divzero_bb)) = fault_return_bbs {
                     let saved = builder.current_block;
                     let slot = ctx.func_state.fault_slot_param.unwrap();
-                    fill_fault_return_block(ctx, &mut builder, frb, slot, return_type == UNIT_TYPE);
+                    fill_fault_return_block(ctx, &mut builder, overflow_bb, slot, return_type == UNIT_TYPE, "Overflow", "integer overflow");
+                    fill_fault_return_block(ctx, &mut builder, divzero_bb, slot, return_type == UNIT_TYPE, "DivByZero", "division by zero");
                     builder.switch_to(saved);
                 }
                 ctx.drops.pop_scope_no_emit();
@@ -1164,7 +1183,7 @@ pub fn lower_function(
     func.def_span = Some(func_span);
     // Cross-frame fault (Inc-2.1a): flag the synthesized trailing slot param so
     // the first-class adapter generation passes NULL for it (not a phantom arg).
-    func.participates_in_fault = fault_return_bb.is_some();
+    func.participates_in_fault = fault_return_bbs.is_some();
     module.functions.push(func);
     *ctx.lower_fn_sub_times.entry("lower_function::finalize").or_default() += __finalize_t0.elapsed();
 }

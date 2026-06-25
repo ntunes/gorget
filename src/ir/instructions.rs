@@ -347,21 +347,27 @@ pub enum Instruction {
         args: Vec<Operand>,
     },
     /// A direct call to a user function that PARTICIPATES in cross-frame fault
-    /// propagation (error-model.md §11, Increment 2.1a `Fault.Overflow`), emitted
-    /// ONLY at a call site inside an active fault-`catch` scope that catches the
-    /// callee's fault. Identical to `Call` for ownership/liveness/optimizer
-    /// purposes (`dst`/`func`/`args` behave exactly like `Call`'s), but the
-    /// callee writes a fault tag into the hidden trailing `MutPtr<i32>` slot
-    /// (`fault_slot`, passed as the LAST element of `args`) on a fault instead of
-    /// panicking, and the caller BRANCHES to `fault_handler` (a GIR block in the
-    /// SAME function — the user's `catch` entry) when the slot is non-zero AFTER
-    /// the call. GIR→LIR lowering emits `Inst::Call`, then `flag = (slot != 0)`
-    /// and `Term::Branch { flag → fault_handler, !flag → continuation }`; the
+    /// propagation (error-model.md §11, Increment 2.1a/2.1c — arithmetic faults
+    /// `Fault.Overflow` + `Fault.DivByZero`), emitted ONLY at a call site inside
+    /// an active fault-`catch` scope. Identical to `Call` for
+    /// ownership/liveness/optimizer purposes (`dst`/`func`/`args` behave exactly
+    /// like `Call`'s), but the callee writes a per-category fault TAG into the
+    /// hidden trailing `MutPtr<i32>` slot (`fault_slot`, passed as the LAST element
+    /// of `args`) on a fault instead of panicking, and the caller reads the tag
+    /// VALUE and DISPATCHES to the matching per-category handler (a GIR block in
+    /// the SAME function) AFTER the call. GIR→LIR lowering emits `Inst::Call`, then
+    /// loads the slot and, by tag VALUE, branches: `0` → continuation,
+    /// `OVERFLOW_TAG` → `overflow_handler`, `DIVZERO_TAG` → `divzero_handler`. The
     /// continuation reads the result. Branch-BEFORE-read ⇒ the sentinel return
-    /// value is never consumed on the fault path (mirrors `FaultableIndexLoad`'s
-    /// branch-before-deref). A SEPARATE variant (not a field on `Call`) so every
-    /// existing `Call` site — optimizer, sim, liveness, validate — is untouched
-    /// and the fault routing is forced through the one shared lowering arm.
+    /// value is never consumed on a fault path (mirrors `FaultableIndexLoad`'s
+    /// branch-before-deref). The per-category handlers are ALWAYS `Some` at this
+    /// instruction (resolved at the call-site gate to the user's catch entry OR
+    /// the scope's panic block, so an uncaught-by-this-scope category re-panics
+    /// automatically — uniform across both backends, no LIR-level conditional).
+    /// A SEPARATE variant (not a field on `Call`) so every existing `Call` site —
+    /// optimizer, sim, liveness, validate — is untouched and the fault routing is
+    /// forced through the one shared lowering arm. (Bounds adds a third
+    /// `bounds_handler` category in 2.1d.)
     FaultableCall {
         dst: Option<LocalId>,
         func: String,
@@ -369,13 +375,20 @@ pub enum Instruction {
         /// (`&slot` / `BorrowMut` of the caller's `i32` slot). The callee's
         /// synthesized trailing `MutPtr<i32>` param receives it.
         args: Vec<Operand>,
-        /// The caller's `i32` fault slot place — tested for non-zero AFTER the
-        /// call to decide whether to branch to `fault_handler`. Same place the
-        /// trailing `&slot` arg in `args` borrows.
+        /// The caller's `i32` fault slot place — loaded AFTER the call; its tag
+        /// VALUE selects the per-category handler. Same place the trailing
+        /// `&slot` arg in `args` borrows.
         fault_slot: Place,
-        /// GIR block to branch to when the slot is non-zero (the user's `catch`
-        /// handler entry). `block_map`-remapped at GIR→LIR.
-        fault_handler: BlockId,
+        /// GIR block to dispatch to when the slot holds the `Overflow` tag. The
+        /// user's `Fault.Overflow` catch entry if this scope catches it, else the
+        /// scope's `div_overflow_panic` block (re-panic). Always `Some` for an
+        /// emitted catching `FaultableCall`. `block_map`-remapped at GIR→LIR.
+        overflow_handler: Option<BlockId>,
+        /// GIR block to dispatch to when the slot holds the `DivByZero` tag. The
+        /// user's `Fault.DivByZero` catch entry if this scope catches it, else the
+        /// scope's `div_zero_panic` block (re-panic). Always `Some` for an emitted
+        /// catching `FaultableCall`. `block_map`-remapped at GIR→LIR.
+        divzero_handler: Option<BlockId>,
     },
 
     // -- Ownership --

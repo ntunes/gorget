@@ -5898,6 +5898,72 @@ fn fault_deep_fnvalue_panic() {
     );
 }
 
+// ── Error model — Increment 2.1c: CROSS-FRAME DivByZero propagation (C + LLVM,
+// single hop, error-model.md §11). Same hidden-slot ABI as Overflow, plus the
+// load-bearing per-category TAG-DISPATCH: the caller reads the slot tag VALUE and
+// routes to the matching `Fault` category entry (a single `slot != 0` branch
+// would construct the WRONG variant — the §2.3 silent miscompile). ──
+
+#[test]
+fn fault_deep_catch_divzero() {
+    // The §1 demonstrator for DivByZero: `q(10, z)` divides by zero in the
+    // callee; the `catch Fault.DivByZero` is one frame up in main. The fault
+    // propagates → handler value 999, NOT a panic.
+    run_gg("fault_deep_catch_divzero.gg", "999");
+}
+
+#[test]
+fn fault_deep_catch_divzero_binding() {
+    // CORE-#8 REGRESSION GUARD (the §2.3 silent miscompile): the binding form
+    // `catch f: match f` catches multiple categories, so the caller must dispatch
+    // on the slot TAG VALUE. A naive single-handler `FaultableCall` printed 100
+    // (the Overflow arm) for a deep div0; the per-category tag-dispatch routes the
+    // DivByZero tag to the DivByZero arm → 200. MUST print 200, not 100.
+    run_gg("fault_deep_catch_divzero_binding.gg", "200");
+}
+
+#[test]
+fn fault_deep_uncaught_divzero_panic() {
+    // Panic-by-default for a DEEP div0 with NO catch in the caller: `main` calls
+    // `q` without a `catch`, so this call site passes a NULL fault-slot and the
+    // callee's fault arm panics (exit 1). `deep_catcher` (which DOES catch) prints
+    // 999 first, exercising the uniform-signature participating path.
+    run_gg_panics_with_stdout(
+        "fault_deep_uncaught_divzero_panic.gg",
+        "999",
+        "division by zero",
+    );
+}
+
+#[test]
+fn fault_deep_catch_divzero_drop() {
+    // Q9 drop-gate (cross-frame div0 variant): the callee `q` holds a LIVE
+    // Drop-bearing local (`g`) when the div0 happens. The early-exit drops run on
+    // the fault path → `g` is dropped EXACTLY ONCE (deterministic "drop guard N"
+    // print proves it on BOTH paths). Fault path → "drop guard 1", -1; no-fault →
+    // "drop guard 2", 7. (Also run under ASan/UBSan — clean: no leak/double-free.)
+    run_gg(
+        "fault_deep_catch_divzero_drop.gg",
+        "drop guard 1\n-1\ndrop guard 2\n7",
+    );
+}
+
+#[test]
+fn fault_deep_mixed_divzero_only() {
+    // §3 uncaught-CATEGORY re-panic guard: the callee `mixed` can raise BOTH an
+    // Overflow (`a * b`) and a DivByZero (`a / b`); the call site catches DivByZero
+    // ONLY. The first call's div0 is caught (777); the second call's OVERFLOW is a
+    // category this scope does NOT catch → the caller re-dispatches to the
+    // (always-Some) panic block → "integer overflow", exit 1. Proves a non-caught
+    // category does NOT silently fall through (a Core-#8 miscompile) — uniform
+    // across both backends.
+    run_gg_panics_with_stdout(
+        "fault_deep_mixed_divzero_only.gg",
+        "777",
+        "integer overflow",
+    );
+}
+
 // ── Error model — Increment 2 (Bounds + Div-split + qualifier + plain-op
 // INT_MIN trap, error-model.md §11). ──
 

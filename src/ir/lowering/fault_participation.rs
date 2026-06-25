@@ -1,5 +1,6 @@
 //! Cross-frame fault-propagation participation analysis (error-model.md §11,
-//! Increment 2.1a — C backend, single hop, `Fault.Overflow`).
+//! Increment 2.1a/2.1c — C + LLVM, single hop, arithmetic faults
+//! `Fault.Overflow` + `Fault.DivByZero`).
 //!
 //! A function PARTICIPATES in cross-frame fault propagation iff:
 //!   (a) its body has a reachable-uncaught faultable arithmetic op (an
@@ -33,16 +34,19 @@ use crate::parser::ast::{
 use crate::parser::visitor::{walk_expr, ExprVisitor};
 use crate::span::Spanned;
 
-/// Does this `FaultCatch` pattern catch `Fault.Overflow`?
+/// Does this `FaultCatch` pattern catch an ARITHMETIC fault (`Fault.Overflow`
+/// or `Fault.DivByZero`)?
 ///
-/// `catch Fault.Overflow:` (variant form) catches exactly Overflow.
-/// `catch f:` (binding form) catches ANY fault — including Overflow.
-/// Any other variant (`Fault.DivByZero`, `Fault.Bounds`) does NOT catch
-/// Overflow, so an overflow inside it stays uncaught (2.1a ships Overflow
-/// only; DivByZero/Bounds deep propagation is 2.1c).
-fn pattern_catches_overflow(pattern: &FaultCatchPattern) -> bool {
+/// `catch Fault.Overflow:` / `catch Fault.DivByZero:` (variant form) each
+/// catch exactly their category. `catch f:` (binding form) catches ANY fault
+/// — including both arithmetic categories. `Fault.Bounds` does NOT catch an
+/// arithmetic fault, so an overflow/div0 inside it stays uncaught (Bounds deep
+/// propagation is 2.1d — a distinct mechanism).
+fn pattern_catches_arith(pattern: &FaultCatchPattern) -> bool {
     match pattern {
-        FaultCatchPattern::Variant { variant, .. } => variant.node == "Overflow",
+        FaultCatchPattern::Variant { variant, .. } => {
+            matches!(variant.node.as_str(), "Overflow" | "DivByZero")
+        }
         FaultCatchPattern::Binding(_) => true,
     }
 }
@@ -58,8 +62,9 @@ fn is_faultable_arith(op: BinaryOp) -> bool {
 }
 
 /// Visitor (a): does a function body contain an arithmetic op NOT inside a
-/// local `FaultCatch`-Overflow scope? `catch_depth` counts enclosing
-/// overflow-catching scopes; an arithmetic op at depth 0 is uncaught.
+/// local `FaultCatch`-arith scope? `catch_depth` counts enclosing
+/// arith-catching scopes (Overflow or DivByZero); an arithmetic op at depth 0
+/// is uncaught.
 struct UncaughtArithDetector {
     catch_depth: usize,
     found: bool,
@@ -82,8 +87,9 @@ impl ExprVisitor for UncaughtArithDetector {
             }
             Expr::FaultCatch { expr: inner, pattern, handler } => {
                 // The wrapped expr is inside the catch scope IFF the pattern
-                // catches Overflow; the handler runs OUTSIDE the caught scope.
-                if pattern_catches_overflow(pattern) {
+                // catches an arithmetic fault; the handler runs OUTSIDE the
+                // caught scope.
+                if pattern_catches_arith(pattern) {
                     self.catch_depth += 1;
                     self.visit_expr(inner);
                     self.catch_depth -= 1;
@@ -98,7 +104,7 @@ impl ExprVisitor for UncaughtArithDetector {
 }
 
 /// Visitor (b): collect direct-call callee names that appear inside a
-/// `FaultCatch`-Overflow scope. Only `Expr::Call` on a bare
+/// `FaultCatch`-arith scope. Only `Expr::Call` on a bare
 /// `Expr::Identifier` callee is a "direct call" (method/indirect calls are
 /// 2.3/2.3b — out of scope).
 struct DeepCatchCalleeCollector {
@@ -110,7 +116,7 @@ impl ExprVisitor for DeepCatchCalleeCollector {
     fn visit_expr(&mut self, expr: &Spanned<Expr>) {
         match &expr.node {
             Expr::FaultCatch { expr: inner, pattern, handler } => {
-                if pattern_catches_overflow(pattern) {
+                if pattern_catches_arith(pattern) {
                     self.catch_depth += 1;
                     self.visit_expr(inner);
                     self.catch_depth -= 1;
@@ -155,14 +161,15 @@ fn walk_block_with<V: ExprVisitor>(visitor: &mut V, block: &Block) {
 /// Compute the participating-function set over all non-generic functions in
 /// the AST module. Returns the intersection of (a) functions with an
 /// uncaught faultable arithmetic op and (b) functions directly called from a
-/// `FaultCatch`-Overflow scope anywhere in the module.
+/// `FaultCatch`-arith scope (Overflow or DivByZero) anywhere in the module.
 ///
 /// Generic functions are EXCLUDED (generics are 2.3 — their monomorphized
 /// instances aren't named at AST scan time anyway).
 pub fn compute_participating_fault_fns(
     items: &[Spanned<Item>],
 ) -> FxHashSet<String> {
-    // Phase (b): collect every direct callee inside a Fault.Overflow catch.
+    // Phase (b): collect every direct callee inside a Fault arith catch
+    // (Fault.Overflow or Fault.DivByZero).
     let mut deep_callees = DeepCatchCalleeCollector {
         catch_depth: 0,
         callees: FxHashSet::default(),
@@ -175,7 +182,7 @@ pub fn compute_participating_fault_fns(
     if deep_callees.callees.is_empty() {
         // No deep-catch call site anywhere → nothing participates. Fast path:
         // the entire existing suite + self-host take this branch (they have no
-        // `catch Fault.X` over a user CALL), so signatures are unchanged.
+        // arith `catch Fault.X` over a user CALL), so signatures are unchanged.
         return FxHashSet::default();
     }
 

@@ -1881,8 +1881,9 @@ fn thread_jumps(func: &mut Function) {
                 Instruction::FaultableIndexLoad { fault_handler, .. } => {
                     fault_handler.0 = resolved[fault_handler.0 as usize];
                 }
-                Instruction::FaultableCall { fault_handler, .. } => {
-                    fault_handler.0 = resolved[fault_handler.0 as usize];
+                Instruction::FaultableCall { overflow_handler, divzero_handler, .. } => {
+                    if let Some(h) = overflow_handler { h.0 = resolved[h.0 as usize]; }
+                    if let Some(h) = divzero_handler { h.0 = resolved[h.0 as usize]; }
                 }
                 _ => {}
             }
@@ -2039,8 +2040,9 @@ fn eliminate_dead_blocks(func: &mut Function) {
                 Instruction::FaultableIndexLoad { fault_handler, .. } => {
                     fault_handler.0 = remap[fault_handler.0 as usize];
                 }
-                Instruction::FaultableCall { fault_handler, .. } => {
-                    fault_handler.0 = remap[fault_handler.0 as usize];
+                Instruction::FaultableCall { overflow_handler, divzero_handler, .. } => {
+                    if let Some(h) = overflow_handler { h.0 = remap[h.0 as usize]; }
+                    if let Some(h) = divzero_handler { h.0 = remap[h.0 as usize]; }
                 }
                 _ => {}
             }
@@ -2080,12 +2082,13 @@ fn successors(bb: &BasicBlock) -> Vec<u32> {
             Instruction::FaultableIndexLoad { fault_handler, .. } => {
                 succs.push(fault_handler.0);
             }
-            // A `FaultableCall` branches to its `fault_handler` on a caught
-            // cross-frame fault, so the handler block is a real successor —
-            // count it toward reachability (error-model.md §11). THE LINCHPIN:
+            // A `FaultableCall` dispatches to its per-category handler on a
+            // caught cross-frame fault, so each handler block is a real successor
+            // — count them toward reachability (error-model.md §11). THE LINCHPIN:
             // omit this and DCE prunes the handler → fault recovery vanishes.
-            Instruction::FaultableCall { fault_handler, .. } => {
-                succs.push(fault_handler.0);
+            Instruction::FaultableCall { overflow_handler, divzero_handler, .. } => {
+                if let Some(h) = overflow_handler { succs.push(h.0); }
+                if let Some(h) = divzero_handler { succs.push(h.0); }
             }
             _ => {}
         }
