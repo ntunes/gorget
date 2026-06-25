@@ -650,8 +650,13 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         fi += 1
                     byte_i += 2
                 else:
-                    # Copy literal byte
-                    fmt = fmt + s.slice(byte_i, byte_i + 1)
+                    # Copy literal byte. byte_i is a BYTE offset (byte_at/byte_len
+                    # above), so the copy MUST be byte-indexed too — .slice() is
+                    # CODEPOINT-indexed, which desyncs after the first multibyte
+                    # literal char and corrupts the rest (fstring_unicode_passthrough).
+                    # byte_slice ≡ slice for ASCII, so zero ASCII regression; the
+                    # lexer's owned_slice uses the same byte_slice idiom.
+                    fmt = fmt + s.byte_slice(byte_i, byte_i + 1)
                     byte_i += 1
             # Overwrite fmt placeholder at position 0 with the built format string.
             gsf_args.set(0, OpConstStr(fmt))
@@ -2568,7 +2573,13 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                                         int eix_sl_end = lower_expr(&ctx, *eix_re_box, &gmod)
                                         ctx.expected_type = prev_expected_eix
                                         int eix_sl_gs = lookup_or_register_named(&gmod, "GorgetString")
-                                        int eix_sl_dst = add_local(&ctx, eix_sl_gs, None)
+                                        # The slice result is a cap=0 VIEW REGION into the base's
+                                        # buffer — tag LoView (not the default LoOwned) so op_consume
+                                        # MATERIALIZES (OpClone) at an owning consume position. Without
+                                        # this the view is moved-by-value and the SAssign drop-on-overwrite
+                                        # frees the source buffer before the view aliases it (UAF —
+                                        # fmt_basic/fmt_edge). Mirrors the method-view path at :~2264.
+                                        int eix_sl_dst = add_local_with(&ctx, eix_sl_gs, None, LoView(), BoNone())
                                         Vector[Operand] eix_sl_args = [op_consume(&ctx, &gmod, eix_base, CkCallArgBorrow()), op_consume(&ctx, &gmod, eix_sl_start, CkBinOpArg()), op_consume(&ctx, &gmod, eix_sl_end, CkBinOpArg())]
                                         emit(&ctx, GICallExtern(eix_sl_dst, "gorget_str_slice", eix_sl_args))
                                         return eix_sl_dst
@@ -2606,7 +2617,12 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # dst GorgetString lets the boundary clone own it when it escapes.
             if is_string_local(eix_base, &ctx, &gmod):
                 int eix_str_gs = lookup_or_register_named(&gmod, "GorgetString")
-                int eix_str_dst = add_local(&ctx, eix_str_gs, None)
+                # cap=0 VIEW REGION into the base's buffer (see comment above) —
+                # tag LoView so op_consume MATERIALIZES (OpClone) at an owning
+                # consume position. The default LoOwned moves the view by value,
+                # and the SAssign drop-on-overwrite then frees the source buffer
+                # before the view aliases it (UAF). Mirrors :~2264.
+                int eix_str_dst = add_local_with(&ctx, eix_str_gs, None, LoView(), BoNone())
                 Vector[Operand] eix_str_args = [op_consume(&ctx, &gmod, eix_base, CkCallArgBorrow()), op_consume(&ctx, &gmod, eix_idx, CkBinOpArg())]
                 emit(&ctx, GICallExtern(eix_str_dst, "gorget_str_index", eix_str_args))
                 return eix_str_dst
@@ -4111,7 +4127,9 @@ int lower_list_comprehension(LowerCtx &ctx, SpannedExpr comp_expr, String var_na
         String sacc_name = "__listcomp_acc_" + int_to_str(sacc)
         nl_put(&ctx, sacc_name, sacc)
         Vector[Stmt] sbody = comp_synth_body(sacc_name, comp_expr, filt_opt, span)
-        lower_for_string(&ctx, var_pat, coll_local, sbody, &gmod, false)
+        # String list-comprehension `[c for c in s]` is never enumerate (a bare
+        # PBinding loop var) — pass is_enumerate=false.
+        lower_for_string(&ctx, var_pat, coll_local, false, sbody, &gmod, false)
         return sacc
     # ── VECTOR base: idx-walk via `lower_for_vector`. Accumulator element
     # type recovered from the SOURCE collection name (the element-preserving

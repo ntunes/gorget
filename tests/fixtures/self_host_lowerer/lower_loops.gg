@@ -203,7 +203,7 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
     # also covers a Ptr-to-String param — type_id_to_name(GtPtr(GorgetString))
     # collapses to "GorgetString" (lower.gg:877-879).
     if coll_tn == "GorgetString":
-        lower_for_string(&ctx, pat, coll_local, body, &gmod, is_main)
+        lower_for_string(&ctx, pat, coll_local, probe_is_enumerate, body, &gmod, is_main)
         return
     if probe_is_enumerate:
         # Non-Vector `.enumerate()` — would need either (a) an iterator-
@@ -322,7 +322,7 @@ void lower_for_vector(LowerCtx &ctx, SpannedPattern pat, int coll_local, String 
 # (bare String param's void* ABI) is auto-deref'd `*(Str*)` at C-emit via the
 # `runtime_takes_str_by_value` + `runtime_arg_is_str` registrations
 # (lir_codegen.gg).
-void lower_for_string(LowerCtx &ctx, SpannedPattern pat, int coll_local, Vector[Stmt] body, GirModule &gmod, bool is_main):
+void lower_for_string(LowerCtx &ctx, SpannedPattern pat, int coll_local, bool is_enumerate, Vector[Stmt] body, GirModule &gmod, bool is_main):
     int gstr_tid = lookup_or_register_named(&gmod, "GorgetString")
     # #37 Phase 2 derivation join (b): the per-iteration codepoint views
     # below alias the SOURCE slot's buffer for the whole loop, so a LAZY
@@ -335,6 +335,14 @@ void lower_for_string(LowerCtx &ctx, SpannedPattern pat, int coll_local, Vector[
     # byte_pos counter (seeded 0) + the BYTE-length bound (NOT codepoint count).
     int bytepos_local = add_local(&ctx, I64_TYPE, None)
     emit(&ctx, GIAssign(bytepos_local, OpConstI64(0)))
+    # Codepoint-ordinal counter for `for (i, ch) in s.enumerate()`. INDEPENDENT
+    # of byte_pos (which strides by the codepoint byte-length): cpidx is the
+    # logical 0-based index of the current codepoint, +1 per iteration. Only
+    # bound/incremented when is_enumerate (the bare `for ch in s` path ignores it).
+    int cpidx_local = -1
+    if is_enumerate:
+        cpidx_local = add_local(&ctx, I64_TYPE, None)
+        emit(&ctx, GIAssign(cpidx_local, OpConstI64(0)))
     int len_local = add_local(&ctx, I64_TYPE, None)
     Vector[Operand] len_args = [OpBorrow(coll_local)]
     emit(&ctx, GICallExtern(len_local, "gorget_str_byte_len", len_args))
@@ -358,7 +366,20 @@ void lower_for_string(LowerCtx &ctx, SpannedPattern pat, int coll_local, Vector[
     int ch_local = add_local_with(&ctx, gstr_tid, None, LoBorrowed(), BoCollectionElement(coll_local))
     Vector[Operand] cp_args = [OpBorrow(coll_local), OpCopy(bytepos_local)]
     emit(&ctx, GICallExtern(ch_local, "gorget_str_codepoint_at", cp_args))
-    bind_for_local(&ctx, pat, ch_local, gstr_tid, &gmod)
+    if is_enumerate:
+        # `(i, ch)` 2-tuple bind, mirroring the Vector enumerate path
+        # (:~274-283): i ← cpidx (codepoint ordinal), ch ← the codepoint view.
+        match pat.pat:
+            case PTuple(parts):
+                if parts.len() == 2:
+                    bind_for_local(&ctx, parts.get(0).unwrap(), cpidx_local, I64_TYPE, &gmod)
+                    bind_for_local(&ctx, parts.get(1).unwrap(), ch_local, gstr_tid, &gmod)
+                else:
+                    lower_fail("SFor enumerate: expected 2-tuple pattern, got " + int_to_str(parts.len()) + " parts")
+            else:
+                lower_fail("SFor enumerate: expected tuple pattern")
+    else:
+        bind_for_local(&ctx, pat, ch_local, gstr_tid, &gmod)
     lower_stmts(&ctx, body, &gmod, is_main)
     Terminator body_term = ctx.block_terms.get(ctx.current_block).unwrap()
     match body_term:
@@ -380,6 +401,12 @@ void lower_for_string(LowerCtx &ctx, SpannedPattern pat, int coll_local, Vector[
     int new_pos = add_local(&ctx, I64_TYPE, None)
     emit(&ctx, GIBinOp(new_pos, OP_ADD, I64_TYPE, OpCopy(bytepos_local), OpCopy(cplen_local)))
     emit(&ctx, GIAssign(bytepos_local, OpCopy(new_pos)))
+    if is_enumerate:
+        # cpidx += 1 (codepoint ordinal advances by exactly one per iteration,
+        # independent of the byte stride above).
+        int new_cpidx = add_local(&ctx, I64_TYPE, None)
+        emit(&ctx, GIBinOp(new_cpidx, OP_ADD, I64_TYPE, OpCopy(cpidx_local), OpConstI64(1)))
+        emit(&ctx, GIAssign(cpidx_local, OpCopy(new_cpidx)))
     set_terminator(&ctx, GTJump(header_bb))
     switch_to(&ctx, exit_bb)
 
