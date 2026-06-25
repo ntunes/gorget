@@ -516,7 +516,16 @@ fn no_growth_in_phase_d_proxy_reads() {
     /// discipline class as the 64→…→83 bumps — `move_zero_and_mark` is
     /// non-idempotent (asserts) and `is_moved` is drop-accountant state with no
     /// `LocalOwnership` accessor. Locking in the floor.
-    const BUDGET: usize = 84;
+    /// Bumped 84 → 85 (2026-06-25): one new proxy read from the catch
+    /// RECOVERY-assign double-free fix (`ab8e3e7a`): the `!ctx.drops.is_moved(src)`
+    /// idempotence guard before `move_zero_and_mark` on the recovery source in
+    /// `lower_catch_expr` (`exprs/mod.rs`). An ALLOCATING `catch` recovery
+    /// (`catch (e): "[" + e + "]"`) Move-stages a fresh String temp into the
+    /// result local; without the move-zero the source double-frees. SAME write-
+    /// side-discipline class as the 64→…→84 bumps — `move_zero_and_mark` is
+    /// non-idempotent (asserts) and `is_moved` is drop-accountant state with no
+    /// `LocalOwnership` accessor. Locking in the floor.
+    const BUDGET: usize = 85;
 
     let count = count_phase_d_proxy_reads();
     assert!(
