@@ -1998,6 +1998,18 @@ bool runtime_arg_needs_addr(String name, int arg_idx):
         return true
     return false
 
+# Returns true if the given argument position of a runtime function takes a
+# `GorgetArray` BY VALUE (not GorgetArray*). The self-host's default ABI passes
+# the parts-Vector as a bare void* pointer, but the runtime declares the param
+# by value (e.g. gorget_str_join(Str sep, GorgetArray parts), arg 1). The call
+# site must deref+cast `*(GorgetArray*)` to match. Mirrors Rust gg's
+# emit_coerced_arg (aggregate param + ptr arg → `*(ty*)`) and the StrJoin
+# sig `(T::Array, A::ByValue)` at src/lir/runtime.rs.
+bool runtime_arg_is_array(String name, int arg_idx):
+    if name == "gorget_str_join" and arg_idx == 1:
+        return true
+    return false
+
 bool runtime_arg_is_cstr(String name, int arg_idx):
     if arg_idx == 0:
         if name == "gorget_read_file" or name == "gorget_read_line" or name == "gorget_read_file_bytes":
@@ -5127,7 +5139,16 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
         bool str_pos = str_by_value_fn and runtime_arg_is_str(name, ai)
         bool cstr_pos = runtime_arg_is_cstr(name, ai)
         bool addr_pos = runtime_arg_needs_addr(name, ai)
-        if addr_pos and not is_ptr:
+        bool array_pos = runtime_arg_is_array(name, ai)
+        if array_pos and is_ptr:
+            # Runtime fn wants GorgetArray by value, caller has *GorgetArray
+            # (aggregate passed by pointer — the self-host's default ABI for
+            # the parts-Vector). Deref+cast. Without this, the bare void*
+            # pointer is passed where a GorgetArray value is expected and the
+            # C compiler errors on `gorget_str_join`'s arg 2. Mirrors Rust gg's
+            # emit_coerced_arg (aggregate param + ptr arg → `*(GorgetArray*)`).
+            out = out + "*(GorgetArray*)" + v(arg_id)
+        elif addr_pos and not is_ptr:
             # Runtime fn declares this arg as a pointer to an aggregate;
             # the self-host lowered it by value (lost `&` along the way).
             # Wrap with `&` to recover the pointer.

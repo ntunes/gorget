@@ -1,0 +1,14 @@
+rows: 2
+[0][1]: b
+[1][2]: f
+flat: a,b,c,d,e,f
+groups: 2
+a: apple,avocado
+b: banana,blueberry
+a names: alice,anna,alex
+c names: charlie,carol
+parsed rows: 3
+parsed[0]: one,two,three
+parsed[1]: four,five
+parsed[2][0]: six
+total cells: 6
