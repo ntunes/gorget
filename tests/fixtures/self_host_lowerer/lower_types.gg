@@ -1720,6 +1720,22 @@ int gmod_next_closure_id(GirModule &gmod):
     gmod.named_types.put("__closure_counter", cid + 1)
     return cid
 
+# Strip the mangled map prefix (`Dict__`/`HashMap__`/`GorgetMap__`) from a
+# receiver type name, returning the `K__V` payload (or "" if not a map type).
+# SINGLE name-parsing site shared by the `items` and `keys`/`values`
+# return-type-inference arms (was duplicated inline in both). The K/V are
+# encoded only in the mangled name at this layer, so name-parsing is the
+# available mechanism; consolidating to one helper keeps the self-host
+# name-prefix routing ratchet flat instead of adding sibling sites.
+String map_kv_payload(String recv_name):
+    if recv_name.starts_with("Dict__"):
+        return recv_name.slice(6, recv_name.len())
+    elif recv_name.starts_with("HashMap__"):
+        return recv_name.slice(9, recv_name.len())
+    elif recv_name.starts_with("GorgetMap__"):
+        return recv_name.slice(11, recv_name.len())
+    return ""
+
 int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &gmod):
     # Void-returning methods. `Vector[T].remove(idx)` was previously
     # treated as void, but actually returns `Option[T]` — the void
@@ -1899,13 +1915,7 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
                         items_recv = items_n
                     else:
                         pass
-        String items_kv = ""
-        if items_recv.starts_with("Dict__"):
-            items_kv = items_recv.slice(6, items_recv.len())
-        elif items_recv.starts_with("HashMap__"):
-            items_kv = items_recv.slice(9, items_recv.len())
-        elif items_recv.starts_with("GorgetMap__"):
-            items_kv = items_recv.slice(11, items_recv.len())
+        String items_kv = map_kv_payload(items_recv)
         if items_kv != "":
             # Split K__V at the top-level `__` boundary.
             int items_split = items_kv.index_of("__").unwrap_or(-1)
@@ -1919,6 +1929,38 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
                 return lookup_or_register_named(&gmod, "Vector__" + type_id_to_name(items_tup_tid, &gmod))
         return lookup_or_register_named(&gmod, "GorgetArray")
     if method == "keys" or method == "values":
+        # `Dict[K,V].keys()` returns `Vector[K]`; `.values()` returns
+        # `Vector[V]`. Mirror Rust's builtins.rs `keys`/`values` return_type
+        # (`Vector__{elem_name}` / `Vector__{val_name}`, falling back to the
+        # bare GorgetArray only when the receiver isn't a recognized Dict):
+        # split the receiver `Dict__K__V` into K/V and return the
+        # element-CARRYING `Vector__K` / `Vector__V` so the downstream
+        # `for k in d.keys()` / `.get(i).unwrap()` element extraction
+        # (collection_element_type) can resolve the element type — the bare
+        # `GorgetArray` erased it, dropping the loop body via lower_fail.
+        String kv_recv = ""
+        if recv >= 0 and recv < ctx.locals.len():
+            int kv_rtid = ctx.locals.get(recv).unwrap().type_id
+            if kv_rtid >= 0 and kv_rtid < gmod.type_table.len():
+                match gmod.type_table.get(kv_rtid).unwrap():
+                    case GtPtr(kv_inner):
+                        kv_recv = type_id_to_name(kv_inner, &gmod)
+                    case GtMutPtr(kv_inner2):
+                        kv_recv = type_id_to_name(kv_inner2, &gmod)
+                    case GtNamed(kv_n):
+                        kv_recv = kv_n
+                    else:
+                        pass
+        String kv_str = map_kv_payload(kv_recv)
+        if kv_str != "":
+            int kv_split = kv_str.index_of("__").unwrap_or(-1)
+            if kv_split > 0:
+                if method == "keys":
+                    String kv_k = kv_str.slice(0, kv_split)
+                    return lookup_or_register_named(&gmod, "Vector__" + kv_k)
+                else:
+                    String kv_v = kv_str.slice(kv_split + 2, kv_str.len())
+                    return lookup_or_register_named(&gmod, "Vector__" + kv_v)
         return lookup_or_register_named(&gmod, "GorgetArray")
     if method == "chunks" or method == "zip":
         return lookup_or_register_named(&gmod, "GorgetArray")

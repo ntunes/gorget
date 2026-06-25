@@ -1,0 +1,18 @@
+# Repro: Dict[K,V2].get(k).unwrap() used in a CONDITION inside
+# `for k in Dict[K,V1].keys()` drops the branch in the self-host.
+# Oracle: "out size: 1"  Self-host: "out size: 0"
+from std.collections import Dict, Vector
+
+void main():
+    Dict[int, int] a = {}
+    a[1] = 10
+    a[2] = 20
+    Dict[int, bool] flags = {}
+    flags[1] = true
+    flags[2] = false
+
+    Vector[int] out = Vector[int]()
+    for k in a.keys():
+        if flags.get(k).unwrap():
+            out.push(k)
+    print(f"out size: {out.len()}")
