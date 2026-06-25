@@ -4517,6 +4517,13 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         # `terminator=", "`, breaking the print_terminator / print_builtin
         # fixtures (every line gets a spurious newline).
         String term = "\n"
+        # The `file=stderr` kwarg routes the printf to STDERR via the
+        # fprintf_stderr runtime symbol (with a NULL placeholder first arg the
+        # C-emit skips). Mirrors Rust gg's lower_print_call (src/ir/lowering/
+        # exprs/calls.rs:1697-1762): `file` must be the bare identifier
+        # `stderr`. Without this the kwarg is dropped and the write lands on
+        # stdout, breaking the print_builtin fixture.
+        bool use_stderr = false
         int pterm_i = 1
         while pterm_i < args.len():
             String pterm_name = ""
@@ -4531,6 +4538,14 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                         # Rust's `if !has_interp` gate — not a real use case).
                         if not pterm_interp:
                             term = pterm_s.clone()
+                    else:
+                        pass
+            elif pterm_name == "file":
+                SpannedExpr pfile_arg = args.get(pterm_i).unwrap()
+                match pfile_arg.expr:
+                    case EIdentifier(pfile_id):
+                        if pfile_id == "stderr":
+                            use_stderr = true
                     else:
                         pass
             pterm_i = pterm_i + 1
@@ -4604,9 +4619,16 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
             # Append the resolved terminator (default "\n") so `terminator=`
             # is honoured (was a hardcoded "\n" baked into each spec above).
             fmt = fmt + term
-            Vector[Operand] printf_args = [OpConstStr(fmt), op_consume(&ctx, &gmod, val, CkFormatArg())]
             int pdst = add_local(&ctx, I32_TYPE, None)
-            emit(&ctx, GICallExtern(pdst, "printf", printf_args))
+            if use_stderr:
+                # `file=stderr` → fprintf_stderr(NULL placeholder, fmt, args).
+                # The C-emit skips the placeholder and emits fprintf(stderr, …);
+                # mirrors Rust gg (calls.rs:1734-1738 / 1753-1757).
+                Vector[Operand] ferr_args = [OpConstNull(), OpConstStr(fmt), op_consume(&ctx, &gmod, val, CkFormatArg())]
+                emit(&ctx, GICallExtern(pdst, "fprintf_stderr", ferr_args))
+            else:
+                Vector[Operand] printf_args = [OpConstStr(fmt), op_consume(&ctx, &gmod, val, CkFormatArg())]
+                emit(&ctx, GICallExtern(pdst, "printf", printf_args))
             # `result` is already the UNIT local set at the top of the is_print
             # arm; the printf byte-count `pdst` is intentionally discarded.
     elif fname == "panic" and args.len() == 1:

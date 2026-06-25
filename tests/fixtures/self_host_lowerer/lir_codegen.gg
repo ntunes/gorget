@@ -355,9 +355,11 @@ String escape_c_string(String s):
             sb_push(&buf, "\\r")
         elif ch == "\t":
             sb_push(&buf, "\\t")
+        elif s.byte_at(i) == 0:
+            sb_push(&buf, "\\0")
         else:
-            # For non-ASCII bytes we'd need hex escaping, but the self-host
-            # only handles ASCII fixtures. Pass through as-is.
+            # Non-ASCII bytes pass through as raw UTF-8 (cc accepts them in a
+            # string literal); embedded NULs are escaped above.
             sb_push(&buf, ch)
         i += 1
     return buf.s
@@ -666,6 +668,8 @@ bool is_runtime_fn(String name):
     if name.starts_with("gorget_") or name.starts_with("__gorget_"):
         return true
     if name == "printf" or name == "fprintf" or name == "snprintf":
+        return true
+    if name == "fprintf_stderr":
         return true
     if name == "malloc" or name == "calloc" or name == "realloc" or name == "free":
         return true
@@ -2266,7 +2270,7 @@ int runtime_fn_return_type(String name, LirModule &m):
     if name == "gorget_array_pop":
         return LT_I64
     # Printf returns int32_t
-    if name == "printf" or name == "fprintf":
+    if name == "printf" or name == "fprintf" or name == "fprintf_stderr":
         return LT_I32
     # malloc/calloc/realloc return ptr
     if name == "malloc" or name == "calloc" or name == "realloc":
@@ -4769,6 +4773,39 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
             if dst >= 0:
                 return v(dst) + " = (bool)" + v(args.get(0).unwrap()) + ";"
             return ";"
+
+    # fprintf_stderr(NULL, fmt, args...) → fprintf(stderr, fmt, args...).
+    # The leading NULL placeholder (args[0]) is skipped; the remaining args
+    # decompose exactly like printf (fmt at the new index 0, Str value args
+    # at index>0 → `(int)len, data` for %.*s). Mirrors Rust gg's C backend
+    # (src/backend/c_lir/emit_call_extern.rs:154-161,384-388,688-694), which
+    # rewrites the symbol to `fprintf`, drops args[0], and prepends `stderr`.
+    if name == "fprintf_stderr":
+        int fe_gs_ty = find_struct_type("GorgetString", &m)
+        String fe_out = ""
+        if dst >= 0:
+            fe_out = v(dst) + " = "
+        fe_out = fe_out + "fprintf(stderr"
+        # Skip args[0] (the NULL placeholder). The format string is args[1].
+        int fe_ai = 1
+        while fe_ai < args.len():
+            fe_out = fe_out + ", "
+            int fe_arg_id = args.get(fe_ai).unwrap()
+            int fe_arg_ty = -1
+            if val_types.contains(fe_arg_id):
+                fe_arg_ty = val_types.get(fe_arg_id).unwrap()
+            if fe_arg_ty == fe_gs_ty:
+                # args[1] is the format string (the new position-0 slot after
+                # the dropped placeholder) → `.data`. Later Str value args
+                # decompose to `(int)len, data` for %.*s.
+                if fe_ai != 1:
+                    fe_out = fe_out + "(int)" + v(fe_arg_id) + ".len, " + v(fe_arg_id) + ".data"
+                else:
+                    fe_out = fe_out + v(fe_arg_id) + ".data"
+            else:
+                fe_out = fe_out + v(fe_arg_id)
+            fe_ai += 1
+        return fe_out + ");"
 
     # Printf/fprintf/gorget_string_format: variadic — Str args need .data
     # extraction for C's printf-style format. gorget_string_format takes

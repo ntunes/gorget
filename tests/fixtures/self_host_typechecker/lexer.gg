@@ -506,6 +506,16 @@ equip Lexer:
                 self.lex_advance()
             int code = lex_parse_int_radix(hex_str, 16)
             return Some(chr(code))
+        elif c == b'u':
+            # \uXXXX — 4-hex-digit BMP codepoint shorthand (JS/Rust/Java).
+            self.lex_advance()
+            int u_start = self.lex_pos
+            int u_end = u_start + 4
+            while self.lex_pos < u_end and self.lex_pos < self.lex_source.byte_len() and self.lex_peek().is_hex_digit():
+                self.lex_advance()
+            String u_hex = owned_slice(self.lex_source, u_start, self.lex_pos)
+            int u_code = lex_parse_int_radix(u_hex, 16)
+            return Some(chr(u_code))
         else:
             self.lex_advance()
             return Some(owned_slice(self.lex_source, self.lex_pos - 1, self.lex_pos))
