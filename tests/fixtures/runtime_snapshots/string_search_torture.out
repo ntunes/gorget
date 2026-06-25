@@ -1,0 +1,29 @@
+long needle: false
+long index_of: true
+long find: true
+empty contains: true
+empty starts: true
+empty ends: true
+self contains: true
+self index_of: 0
+self starts: true
+self ends: true
+first: 0
+last: 6
+mid: 3
+miss: true
+aa in aaaa: 2
+ana in banana: 1
+first abc: 0
+idx_of=find: true
+both none: true
+empty count: 0
+no match: 0
+count 1: 1
+single char: 5
+noop replace: hello
+grown len: 32
+cascade: bbb
+starts abc: true
+ends abc: true
+starts abcabcd: false

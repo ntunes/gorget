@@ -1,0 +1,26 @@
+host: localhost
+port: 8080
+debug: true
+name: My App
+keys: 4
+rows: 4
+header: name,age,city
+row1: alice,30,paris
+[2][0]: bob
+[3][2]: berlin
+dir: /home/user/documents
+base: file.txt
+ext: txt
+stem: file
+ext none: []
+stem: Makefile
+name: alice
+city: paris
+tok: [count]
+tok: [+]
+tok: [1]
+tok: [*]
+tok: [value]
+errors: 1
+infos: 2
+ERROR: connection lost

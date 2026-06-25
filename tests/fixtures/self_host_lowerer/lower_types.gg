@@ -1812,7 +1812,17 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
     if method == "len" or method == "capacity" or method == "find_index":
         return I64_TYPE
     if method == "find":
-        return I64_TYPE
+        # Sentinel→Option: Rust's sentinel_to_option set is {find, index_of,
+        # find_from, find_ext} (ir/lowering/mod.rs:3720) — these return
+        # Option[int] (codepoint index, None if absent), wrapped at the LIR
+        # layer by emit_sentinel_scalar_option_wrap. MUST record the enum
+        # category, or the downstream `.unwrap()` arm (which classifies via
+        # enum_category_of → ok_type) falls to the I64 fallback and the type
+        # side disagrees with the LIR unwrap (silent miscompile + bootstrap
+        # divergence). Mirrors the `.pop()`/`.get()` two-step idiom below.
+        int find_opt_tid = lookup_or_register_named(&gmod, "Option__int64_t")
+        record_enum_category(&gmod, find_opt_tid, ENUM_CAT_OPTION, I64_TYPE, -1)
+        return find_opt_tid
     # Bool-returning methods
     if method == "contains" or method == "is_empty" or method == "any" or method == "all":
         return BOOL_TYPE
@@ -1978,9 +1988,20 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
         return F64_TYPE
     if method == "round":
         return F64_TYPE
-    # Hash/count
-    if method == "hash" or method == "count" or method == "index_of":
+    # Hash/count — stay raw I64 (NOT in Rust's sentinel_to_option set).
+    if method == "hash" or method == "count":
         return I64_TYPE
+    # index_of: sentinel→Option (Rust's set is {find, index_of, find_from,
+    # find_ext}; ir/lowering/mod.rs:3720). Receiver-blind: String AND Vector
+    # index_of both type as Option[int] (correct — Rust's set covers
+    # collections), wrapped at the LIR layer (emit_sentinel_scalar_option_wrap,
+    # keyed on the mapped gorget_str_index_of / gorget_array_index_of symbols).
+    # MUST record the enum category for the downstream `.unwrap()` arm — see the
+    # `find` arm comment above.
+    if method == "index_of":
+        int idx_opt_tid = lookup_or_register_named(&gmod, "Option__int64_t")
+        record_enum_category(&gmod, idx_opt_tid, ENUM_CAT_OPTION, I64_TYPE, -1)
+        return idx_opt_tid
     # unwrap on Option__V receiver: return inner V.
     if method == "unwrap":
         String recv_name = ""

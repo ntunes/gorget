@@ -2669,6 +2669,73 @@ int emit_void_ptr_option_wrap(String emit_name, int dst_local, int opt_sid, Vect
 
     return merge_bb
 
+# Scalar sentinel → Option wrap for index_of/find. Mirrors Rust
+# src/lir/lower/lifts.rs::emit_sentinel_scalar_option_wrap (lines 448-478):
+# the call returns a raw i64 index; `raw >= 0 ? Some(raw) : None`. The raw int
+# is used DIRECTLY as the Some payload — NO LT_PTR slot, NO ISlotStore/ISlotLoad,
+# NO INullPtr, NO ILoad deref (the ptr sibling above does all of that because it
+# dereferences a pointer-sentinel; doing it here would treat the integer index as
+# a pointer = garbage/segfault, corrupting the ~14 internal index_of().unwrap()
+# sites + diverging bootstrap). The Some/None EnumInit shape mirrors the ptr
+# sibling (ISlotAddr(dst_slot) → IEnumInit tag 0/1).
+int emit_sentinel_scalar_option_wrap(String emit_name, int dst_local, int opt_sid, Vector[int] lir_args, LirFunction &f, int bb, Vector[int] &local_to_slot, LirModule &m):
+    int raw_val = lir_fn_next_value(&f)
+    Vector[int] empty_abis = []
+    lir_push_inst(&f, bb, ICallExtern(raw_val, emit_name, lir_args, emit_name, empty_abis))
+
+    int dst_slot = local_to_slot.get(dst_local).unwrap()
+    int slot_addr_pre = lir_fn_next_value(&f)
+    int sz_val = lir_fn_next_value(&f)
+    int zero_byte = lir_fn_next_value(&f)
+    int sz_bytes = lir_type_byte_size_in_mod(LT_STRUCT_BASE + opt_sid, &m, 0)
+    lir_push_inst(&f, bb, ISlotAddr(slot_addr_pre, dst_slot))
+    lir_push_inst(&f, bb, IIConst(sz_val, LT_I64, sz_bytes))
+    lir_push_inst(&f, bb, IIConst(zero_byte, LT_I32, 0))
+    lir_push_inst(&f, bb, IMemset(slot_addr_pre, zero_byte, sz_val))
+
+    int const0 = lir_fn_next_value(&f)
+    int is_found = lir_fn_next_value(&f)
+    lir_push_inst(&f, bb, IIConst(const0, LT_I64, 0))
+    lir_push_inst(&f, bb, ICmp(is_found, CMP_GE, raw_val, const0))
+
+    int some_bb = lir_fn_add_block(&f)
+    int none_bb = lir_fn_add_block(&f)
+    int merge_bb = lir_fn_add_block(&f)
+    Vector[int] empty_args0 = []
+    Vector[int] empty_args1 = []
+    lir_set_term(&f, bb, TBranch(is_found, some_bb, empty_args0, none_bb, empty_args1))
+
+    # Some arm: raw_val used DIRECTLY as the i64 payload (field 1).
+    int some_slot_addr = lir_fn_next_value(&f)
+    Vector[FieldInit] some_fields = []
+    some_fields.push(FieldInit(1, raw_val))
+    lir_push_inst(&f, some_bb, ISlotAddr(some_slot_addr, dst_slot))
+    lir_push_inst(&f, some_bb, IEnumInit(some_slot_addr, opt_sid, 0, some_fields))
+    Vector[int] empty_args_s = []
+    lir_set_term(&f, some_bb, TJump(merge_bb, empty_args_s))
+
+    # None arm.
+    int none_slot_addr = lir_fn_next_value(&f)
+    Vector[FieldInit] none_fields = []
+    lir_push_inst(&f, none_bb, ISlotAddr(none_slot_addr, dst_slot))
+    lir_push_inst(&f, none_bb, IEnumInit(none_slot_addr, opt_sid, 1, none_fields))
+    Vector[int] empty_args_n = []
+    lir_set_term(&f, none_bb, TJump(merge_bb, empty_args_n))
+
+    return merge_bb
+
+# Predicate: methods whose mapped runtime symbol returns a raw i64 sentinel
+# index that must be wrapped into Option[int] (Rust's sentinel_to_option set
+# {find, index_of, ...}). Keyed on MAPPED gorget_* names (call_name at the
+# dispatch site is map_runtime_name'd) — gorget_str_index_of/find (String) AND
+# gorget_array_index_of (Vector, since the §1 type flip is receiver-blind).
+bool is_sentinel_scalar_method(String name):
+    if name == "gorget_str_index_of" or name == "gorget_str_find":
+        return true
+    if name == "gorget_array_index_of":
+        return true
+    return false
+
 int extract_elem_size_from_name_in_mod(String name, Dict[String, int] &sr, LirModule &m):
     String elem = coll_elem_type_for_name(name, &m)
     if elem != "":
@@ -3850,6 +3917,21 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                                 bool wrap_is_borrow = gir_local_is_for_element(dst_local, &gir_locals)
                                 int new_bb = emit_void_ptr_option_wrap(call_name, dst_local, lift_opt_sid, lir_args, &f, bb, &local_to_slot, &m, wrap_is_borrow)
                                 return new_bb
+                # Scalar sentinel → Option wrap: index_of/find return a raw i64
+                # sentinel (-1 == not found) that the §1 type flip typed as
+                # Option[int]. Wrap `raw >= 0 ? Some(raw) : None`. Mirrors the
+                # ptr-sentinel sibling above; obtains the Option__int64_t sid
+                # the same way (from the EK_OPTION dst slot type).
+                if dst_local >= 0 and is_sentinel_scalar_method(call_name):
+                    int scal_dst_slot = local_to_slot.get(dst_local).unwrap()
+                    int scal_slot_ty = f.slots.get(scal_dst_slot).unwrap().ty
+                    if scal_slot_ty >= LT_STRUCT_BASE:
+                        int scal_opt_sid = scal_slot_ty - LT_STRUCT_BASE
+                        if scal_opt_sid < m.structs.len():
+                            LirStructDef scal_opt_def = m.structs.get(scal_opt_sid).unwrap()
+                            if scal_opt_def.enum_kind == EK_OPTION:
+                                int scal_new_bb = emit_sentinel_scalar_option_wrap(call_name, dst_local, scal_opt_sid, lir_args, &f, bb, &local_to_slot, &m)
+                                return scal_new_bb
                 int dst = -1
                 if dst_local >= 0:
                     # For channel recv, the result is written to the slot directly via &out.
