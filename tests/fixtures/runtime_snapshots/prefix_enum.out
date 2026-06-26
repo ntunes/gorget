@@ -1,0 +1,5 @@
+Call name=frobnicate len=2
+10
+20
+CallExtern name=syscall len=1
+99
