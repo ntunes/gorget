@@ -1270,21 +1270,34 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     int mdst = add_local(&ctx, UNIT_TYPE, None)
                     emit(&ctx, GIAssign(mdst, OpConstUnit()))
                     return mdst
-                case EClosure(_, _):
-                    # closure Phase 2 Step A: an immediately-invoked closure
-                    # `((p…): body)(args)` (IIFE). Route the callee through
-                    # lower_expr so the make-site EClosure arm RECORDS the
-                    # closure (the post-pass then pushes its __Closure_N__call).
-                    # The old scan reached this via ECall→callee recursion; the
-                    # make-site ECall arm dropped non-ident/non-field callees,
-                    # so this case restores closure-recording parity. Lower the
-                    # args for side effects; return UNIT (matching the old IIFE
-                    # value behavior — real IIFE call wiring is Phase 1.5).
-                    lower_expr(&ctx, callee, &gmod)
+                case EClosure(iife_params, iife_body):
+                    # closure Phase 2 increment 1/7: an immediately-invoked
+                    # closure `((p…): body)(args)` (IIFE). Lower the EClosure
+                    # callee to its GorgetClosure VALUE (the make-site arm mints
+                    # the cid, records the LiftedClosure, and the post-pass pushes
+                    # __Closure_N__call), then dispatch it exactly like the
+                    # named-callable-value call arm above (:1196): closure value
+                    # as arg-0, call args borrowed, emit __callable_<arity>. The
+                    # codegen passes arg-0 by pointer (needs_ptr_arg) so the
+                    # GorgetClosure value's address becomes the void*[2] {fn,env}.
+                    # Previously this arm lowered for side-effects and returned
+                    # hardcoded OpConstUnit() (`0`), so every IIFE evaluated to 0.
+                    int iife_callable = lower_expr(&ctx, callee, &gmod)
+                    Vector[Operand] iife_call_args = []
+                    iife_call_args.push(op_consume(&ctx, &gmod, iife_callable, CkCallArgBorrow()))  # closure value as first arg
                     for iife_arg in args:
-                        lower_expr(&ctx, iife_arg, &gmod)
-                    int iife_dst = add_local(&ctx, UNIT_TYPE, None)
-                    emit(&ctx, GIAssign(iife_dst, OpConstUnit()))
+                        int iife_aval = lower_expr(&ctx, iife_arg, &gmod)
+                        iife_call_args.push(op_consume(&ctx, &gmod, iife_aval, CkCallArgBorrow()))
+                    int iife_arity = args.len()
+                    String iife_call = "__callable_" + int_to_str(iife_arity)
+                    # Return type from the closure's signature (body-inferred via
+                    # guess_return_type). compute_closure_sig's `cid` arg only
+                    # names the env struct / self-ptr — the return_type derivation
+                    # is cid-independent (lower_closures.gg:1592-1623), so a
+                    # throwaway 0 is safe here.
+                    int iife_ret = compute_closure_sig(0, iife_params, iife_body, &gmod).return_type
+                    int iife_dst = add_local(&ctx, iife_ret, None)
+                    emit(&ctx, GICallExtern(iife_dst, iife_call, iife_call_args))
                     return iife_dst
                 case ENoneLiteral():
                     # `None()` call form (e.g. `Dict[String,Option[int]] d = {"b":None()}`).
