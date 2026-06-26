@@ -591,3 +591,13 @@ Unlike vector(:177)/dict(:189) which emit a `lower_fail` else-guard, `lower_for_
 
 ## [nit, from D output-review] stale docstring on decide_operand_at_consuming_arg
 `lower.gg:~1808` docstring still says "Status: dead code in this commit. No caller exists." — FALSE: the fn is wired via `wire_one_operand` (lower_liveness.gg:970). Pre-existing, comment-only (no codegen impact). Correct the docstring to reflect it's the live CFG-aware wire-pass operand-mode decision. 1-line cleanup.
+
+## [round-9 follow-ups, from 9A triage]
+### sibling of 9-1 (throws Result-deferral) — EXPR-BODY path
+9-1 fixes the match-as-value path (`lower_match_expr`). The SAME bare-T-into-Result-slot bug exists in the throws EXPR-BODY return path (fixtures `throws_expr_body_tail`, `throws_t_result_resource_inner`, and `result_map`'s non-match return). The match fix does NOT reach them (different lowering path). Sibling-site (core invariant #4): after 9-1 lands, scout-prototype the expr-body Result-deferral (find the expr-body tail-return lowering that seeds result type from `ctx.expected_type` without the ENUM_CAT_RESULT defer). Likely +2-3.
+
+### default_params_complex — named-argument reordering (NO-GO as single-file; standalone track)
+Self-host has trailing-default FILL but NO named-arg permutation (`resolve_call_args`-equiv) and no `fn_param_names` map. Mirror Rust `src/ir/lowering/exprs/calls.rs:384-445`. Spans fn-sig registration (`lower.gg`) + call lowering (`lower_expr.gg`) + a new module field — multi-site, not single-file-bounded. Isolated +1 (`default_params_complex`). Needs a scout→brief→reviews track.
+
+### type_alias_struct_ctor — no struct_aliases mechanism (DEEP)
+Self-host has NO `struct_aliases` (Rust `LirModule::struct_aliases`). `type Handle = SlotKey` registers `Handle` as a separate EMPTY struct (`struct __gg_Handle { char __pad; }`), ctor drops args, field access fails (`unknown field`). Needs a new alias-resolution mechanism across registration + ctor-routing + field-access (multi-file). The old TODO note "no struct-emit involvement" is REFUTED. DEEP — not a parallel-round candidate.
