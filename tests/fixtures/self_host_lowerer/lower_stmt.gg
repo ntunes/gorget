@@ -435,6 +435,13 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     String cevt_src_key = ctx.current_fn_name + "\0" + int_to_str(val)
                     if gmod.closure_env_type.contains(cevt_src_key):
                         gmod.closure_env_type.put(ctx.current_fn_name + "\0" + int_to_str(var_local), gmod.closure_env_type.get(cevt_src_key).unwrap())
+                    # closure Phase 2 increment 3 — copy the make-site's closure
+                    # VALUE return-type channel entry (`<fn>\0<cdst> -> ret_tid`)
+                    # onto the fresh dropped `var_local`, so a call through the
+                    # named binding recovers the return type. Same shape/idiom as
+                    # the `closure_env_type` copy-forward above.
+                    if gmod.closure_value_ret_type.contains(cevt_src_key):
+                        gmod.closure_value_ret_type.put(ctx.current_fn_name + "\0" + int_to_str(var_local), gmod.closure_value_ret_type.get(cevt_src_key).unwrap())
                 case LazyViewBind(lv_clone_fn):
                     # #37 Phase 2 — lazy loop-carried element borrow. `val`
                     # is the GtPtr(GorgetString) element address. The bind

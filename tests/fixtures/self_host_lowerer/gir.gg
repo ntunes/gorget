@@ -681,6 +681,31 @@ struct GirModule:
     # fn_move_params / fn_defaults / types_with_user_drop. Appended AT END to
     # avoid shifting positional ctor call sites.
     Dict[String, Vector[int]] fn_param_sigs
+    # closure Phase 2 increment 3: typed return-type side-channel for a
+    # CALLABLE-valued LOCAL, keyed `<fn_name>\0<int_to_str(local_id)>`. The
+    # closure VALUE local is deliberately typed `GorgetClosure` (env-erased,
+    # so the heap env is droppable — see the make-site `add_local(...,
+    # closure_tid, None)`), which LOSES the closure's FnPtr return type. At a
+    # call `print(greet("world"))` the `ECall(EIdentifier(greet))` arm has no
+    # `GtFnPtr` to read a return tid from and (in a non-return context) no
+    # `ctx.expected_type` either → it defaulted the indirect call to an
+    # `int64_t`-return cast. For a `String` (>16B, SysV hidden-sret) result
+    # that shifts env-ptr/sret/args → corruption → SIGSEGV. This channel
+    # records the closure-sig return type at the make-site (under the
+    # GorgetClosure value's `cdst` local id) so the call site can recover it.
+    # Mirrors Rust gg's `callable_return_types` side-channel
+    # (`src/ir/lowering/context.rs:192`, read at `calls.rs:1208`). Reuses the
+    # exact `closure_env_type` composite-per-function key idiom (GIR local-ids
+    # are per-function — a bare-int key would COLLIDE across functions). The
+    # SVarDecl MoveDirect arm copies the entry onto the fresh `var_local` it
+    # mints, exactly as `closure_env_type` does. The call-site read is GATED
+    # on `!= UNIT_TYPE` (compute_closure_sig mis-infers a match/if-tail-value
+    # body as UNIT — a separate filed gap — and a void-return cast of a used
+    # result is a `void value not ignored` CC-FAIL; the guard lets those fall
+    # through to the correct baseline `expected_type` path). Single source of
+    # truth, one accessor — Layering rule 3. Appended AT END to avoid shifting
+    # positional ctor call sites.
+    Dict[String, int] closure_value_ret_type
 
 # Per-test metadata mirroring Rust's `TestFnInfo` (`src/ir/mod.rs:30`).
 # `fn_name` is the emitted `__test_N` symbol ("" for a skipped test, which

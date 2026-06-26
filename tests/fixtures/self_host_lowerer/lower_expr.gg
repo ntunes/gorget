@@ -1247,6 +1247,31 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                                                 pass
                                 else:
                                     pass
+                        # closure Phase 2 increment 3 — the callable is the
+                        # env-erased `GorgetClosure` value of a closure LOCAL (no
+                        # FnPtr sig fired above). Recover the closure's return
+                        # type from the typed `closure_value_ret_type`
+                        # side-channel the make-site recorded (keyed
+                        # `<fn>\0<callable_local>`). WITHOUT this, a non-return
+                        # context (`print(greet(...))`) has no `expected_type`
+                        # either → the indirect call is cast `int64_t`-return; a
+                        # `String` (>16B SysV hidden-sret) result then shifts
+                        # env-ptr/sret/args → corruption → SIGSEGV. GUARD on
+                        # `!= UNIT_TYPE` is LOAD-BEARING: compute_closure_sig
+                        # mis-infers a match/if-tail-value body as UNIT (a
+                        # separate filed gap), and a `void`-return cast of a USED
+                        # result is a `void value not ignored` CC-FAIL — so a
+                        # UNIT recovery is dropped and falls through to the
+                        # correct baseline `expected_type` path. Typed
+                        # metadata-read-through, not mangled-name reconstruction
+                        # (CLAUDE.md #2). Mirrors Rust gg's `callable_return_types`.
+                        if not cl_ret_found:
+                            String cvrt_key = ctx.current_fn_name + "\0" + int_to_str(callable_local)
+                            if gmod.closure_value_ret_type.contains(cvrt_key):
+                                int cvrt_ret = gmod.closure_value_ret_type.get(cvrt_key).unwrap()
+                                if cvrt_ret != UNIT_TYPE:
+                                    cl_ret_type = cvrt_ret
+                                    cl_ret_found = true
                         # Fallback: the callable is the erased `GorgetClosure`
                         # struct (no FnPtr sig) — read the WRITER-set
                         # `ctx.expected_type` (the result slot's real type, e.g.
@@ -3199,6 +3224,16 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             bool cl_lowerable = cl_caps_ok and not cl_nested
             bool cl_has_caps = cl_caps.len() > 0
             int cdst = add_local(&ctx, closure_tid, None)
+            # closure Phase 2 increment 3 — record the closure VALUE local's
+            # return type. `cdst` is the env-erased `GorgetClosure` slot, which
+            # loses the FnPtr return tid; the call site recovers it from this
+            # channel (keyed `<fn>\0<cdst>`, the exact `closure_env_type`
+            # idiom). Recorded UNCONDITIONALLY for every closure value (any
+            # branch below, capturing or stubbed) so a String-returning closure
+            # is recoverable regardless of env shape. The SVarDecl MoveDirect
+            # arm copies it onto the dropped `var_local`. Read GATED on
+            # `!= UNIT_TYPE` at the call site (see gir.gg field comment).
+            gmod.closure_value_ret_type.put(ctx.current_fn_name + "\0" + int_to_str(cdst), cl_sig.return_type)
             if cl_lowerable and cl_has_caps:
                 # ── §4c: register __Closure_N's FIELDS at the MAKE-SITE. ──
                 # type_id_to_name is FAITHFUL for the §4b-restricted set
