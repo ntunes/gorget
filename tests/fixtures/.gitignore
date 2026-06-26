@@ -58,3 +58,14 @@ self_host_*/__gorget_runtime*.o
 self_host_*/__gorget_user*.o
 self_host_*/*.ll
 modules_pkg*/*.ll
+
+# Catch-all: re-ignore compiled/generated artifacts in ANY un-ignored fixture
+# subdir. The `!dir/**` exceptions above otherwise re-include a generated
+# main.ll / main.c / __gorget_*.o whenever such a fixture is built (the LLVM
+# backend emits .ll into the fixture dir). These are never tracked — keep this
+# block LAST so it wins over the exceptions, and it auto-covers future dirs.
+**/*.ll
+**/main.c
+**/__gorget_runtime*.c
+**/__gorget_runtime*.o
+**/__gorget_user*.o
