@@ -748,6 +748,23 @@ Vector[int] get_fn_param_types(String name, GirModule &gmod):
                 types.push(pt)
             return types
         i += 1
+    # FALLBACK (NOT primary): a forward-referenced callee — one defined
+    # TEXTUALLY BELOW the caller — is not yet in `gmod.functions` when the
+    # caller lowers, so the scan above misses and returns []. The bare-`None`
+    # / prelude-variant arg expected-type lookup then fails (the
+    # `ai < callee_param_types.len()` guard at lower_expr.gg), zeroing the
+    # Option (tag 0 = Some) → miscompile/segfault. Recover the param types
+    # from the order-independent `fn_param_sigs` pre-pass (populated over ALL
+    # functions before any body is lowered; Rust gg `mod.rs:656`). These are
+    # the UNWRAPPED VALUE types — that is correct here: the consumer peels the
+    # ABI Ptr wrapper anyway (a value type is a no-op peel) and `&`-param
+    # by-ptr detection routes via the order-independent `fn_borrow_params`
+    # map, NOT these tids. The primary scan above stays authoritative for any
+    # already-lowered callee, so an already-found callee's result is byte-for-
+    # byte unchanged.
+    if gmod.fn_param_sigs.contains(name):
+        for fps_pt in gmod.fn_param_sigs.get(name).unwrap():
+            types.push(fps_pt)
     return types
 
 # Check if a call name is a type constructor (produces a named type).

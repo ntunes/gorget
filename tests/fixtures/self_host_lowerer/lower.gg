@@ -2785,7 +2785,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     Dict[String, GirStaticInfo] statics = {}
     Dict[String, ResourceMetadata] resource_metadata = {}
     Dict[int, int] option_ref_payload = {}
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, !const_decls, !bool_const_decls, !string_const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types, !option_ref_payload, [], !enum_variant_parent_idx, false, [], {}, {}, {}, {}, {}, !fn_defaults, [], [])
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, !const_decls, !bool_const_decls, !string_const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types, !option_ref_payload, [], !enum_variant_parent_idx, false, [], {}, {}, {}, {}, {}, !fn_defaults, [], [], {})
 
     # R11: extract the `strip-asserts` directive so the SAssert case in
     # lower_stmt can emit a no-op instead of a conditional panic. Mirrors
@@ -3521,6 +3521,37 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
         match fs_item:
             case IFunction(fsdef):
                 if fsdef.type_params.len() == 0 and fsdef.name != "main":
+                    # Order-independent param-type registration (Rust gg
+                    # `src/ir/lowering/mod.rs:656`): record each param's DECLARED
+                    # VALUE-type id under the fn name, so a forward-ref callee
+                    # (absent from `gmod.functions` at the caller's lower time)
+                    # still yields its param types. Read ONLY as a FALLBACK in
+                    # `get_fn_param_types` (lower_types.gg) — the lowered
+                    # `gmod.functions` scan stays primary because it carries the
+                    # ABI-WRAPPED (Ptr/MutPtr) tids the by-ptr arg detection
+                    # needs; this fills the forward-ref MISS with the unwrapped
+                    # value types (peeled as a no-op downstream).
+                    #
+                    # SKIP extern stubs (`is_extern_stub`): a stub has no lowered
+                    # body, so it can never be the forward-ref-callee-with-a-bare-
+                    # `None`-arg case this pre-pass exists to type (an extern's
+                    # by-pointer param goes through the `&`/`!` sigil + borrow_flags
+                    # path, not the value-None expected-type path). Crucially,
+                    # `map_ast_type` has a REGISTRATION SIDE EFFECT
+                    # (`lookup_or_register_named` at lower_types.gg:645) — eagerly
+                    # mapping a stub's param like `wait(Guard[bool])`
+                    # (lib/std/sync.gg) would register `Guard__bool` as a named
+                    # type that NOTHING else uses, emitting a dangling
+                    # `typedef gorget_guard_t Guard__bool;` (unknown runtime type)
+                    # → CC-FAIL on the sync/thread fixtures. The existing fn_sigs
+                    # ret-type registration below never tripped this because a
+                    # `void`/primitive return maps without registration. Gate it
+                    # out at the source.
+                    if not fsdef.is_extern_stub:
+                        Vector[int] fps_param_tids = []
+                        for fps_p in fsdef.params:
+                            fps_param_tids.push(map_ast_type(fps_p.param_type, &gmod))
+                        gmod.fn_param_sigs.put(fsdef.name.clone(), !fps_param_tids)
                     int ret_tid = map_fn_return_type(fsdef.return_type, &gmod)
                     # Honour throws_type for Result[T, E] wrapping. This is the
                     # AUTHORITATIVE fn_sigs pass (it runs after the pre-scan and

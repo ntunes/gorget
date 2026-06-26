@@ -657,6 +657,26 @@ struct GirModule:
     # non-test modules. Appended AT END to avoid shifting positional ctor call
     # sites.
     Vector[GirTestFn] test_fns
+    # Order-independent per-fn DECLARED param VALUE-type ids, keyed by fn name.
+    # Populated in the authoritative fn_sigs pre-pass (lower.gg ~:3522, the
+    # `IFunction(fsdef)` arm) over ALL module functions BEFORE any body is
+    # lowered — so a caller that calls a callee defined TEXTUALLY BELOW it (a
+    # forward reference, absent from `gmod.functions` at the caller's lower
+    # time) can still recover the callee's param types. Read ONLY as a FALLBACK
+    # by `get_fn_param_types` (lower_types.gg) when the primary `gmod.functions`
+    # scan misses: the lowered scan returns ABI-WRAPPED (Ptr/MutPtr) tids that
+    # the consumer's `&*b`/`!*b` by-pointer detection relies on, so it stays the
+    # primary; this fallback only fills the forward-ref hole with the unwrapped
+    # VALUE types (the consumer's GtPtr peel handles value types as a correct
+    # no-op, and `&`-param detection still works via the order-independent
+    # `fn_borrow_params` map). Without this, a bare `None` arg to a forward-ref
+    # callee gets NO expected type (the `ai < callee_param_types.len()` guard
+    # fails) and lowers to a zeroed `(Option__T){0}` (tag 0 = Some) → segfault.
+    # Mirrors Rust gg's order-independent `ctx.fn_sigs` pre-pass
+    # (`src/ir/lowering/mod.rs:656`). Same class/shape as fn_borrow_params /
+    # fn_move_params / fn_defaults / types_with_user_drop. Appended AT END to
+    # avoid shifting positional ctor call sites.
+    Dict[String, Vector[int]] fn_param_sigs
 
 # Per-test metadata mirroring Rust's `TestFnInfo` (`src/ir/mod.rs:30`).
 # `fn_name` is the emitted `__test_N` symbol ("" for a skipped test, which
