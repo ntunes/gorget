@@ -582,3 +582,6 @@ Loop-else scout (round-8) proved the full feature is NOT bounded to lower_loops.
 
 ## [nit, non-blocking, from B output-review] `byte` alias on signed arm in resolve_field_gir_type
 `resolve_field_gir_type` (lower_types.gg) keeps `byte` on the signed arm (`int8_t|i8|byte→I8_TYPE`), but Rust treats `byte` as a `uint8` alias (`src/lexer/token.rs:471`, `src/ir/lowering/exprs/mod.rs:2566`) and the sibling `prim_name_to_type` (lower_types.gg:56-58) correctly maps `byte→U8_TYPE`. Currently DEAD (field type names reach this fn in canonical `uint8_t` form, not surface `byte`), so not a regression — but tighten for sibling-site consistency: move `byte` to the unsigned `uint8_t|u8|byte→U8_TYPE` arm. Verify no fixture flips before/after (should be a no-op).
+
+## [nit, non-blocking, from A output-review] MutRef__ symmetry in resolve_field_lir_type
+The Ref[T]/MutRef[T] GIFieldLoad fix (lir_lower.gg) introduced the first `MutRef__` residual in the self-host lowerer. `resolve_field_lir_type:708` and `resolve_field_gir_type` (lower_types.gg:942) only special-case `Ref__`; `MutRef__` fields currently reach LT_PTR via the line-714 fallback (correct but incidental). Optional: backfill an explicit `MutRef__` case for full Ref/MutRef symmetry (matches Rust's symmetric `base == "Ref" || base == "MutRef"`). No-op expected; verify no fixture flips.
