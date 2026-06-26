@@ -1724,21 +1724,25 @@ Operand op_consume(LowerCtx &ctx, GirModule &gmod, int lid, ConsumeKind kind):
         case GtMutPtr(inner_tid):
             # MutPtr(T) at a consume position. `&`-borrow AND `!`-move
             # resource params BOTH lower to MutPtr(T) (one slot kind,
-            # `owning_param` distinguishes them only for the exit
-            # drop — mirrors Rust `ir/mod.rs` Local + `functions.rs`
-            # param setup). Neither owns the pointee at THIS call: a `&`
-            # borrows it; a `!` owns it but is consumed here while still
-            # live past the call (last-use move is a deferred opt). So,
-            # exactly like the Ptr(T) arm and Rust's
-            # `ensure_owned_at_consuming_arg` (borrow-state source →
-            # clone, never shallow-alias — `context.rs:1953-1987`),
-            # materialise a fresh owned T via deref+clone-through.
-            # decide_ptr_consume keeps OpCopy for non-resource pointees
-            # (MutPtr-to-int etc.), so this is inert there. Reaching here
-            # at all implies a consume kind — non-consume kinds returned
-            # OpBorrow at the top of this fn. Without this, a `!`-param
-            # consumed into Box/push/field-init shallow-aliased the
-            # pointee, and drop emission then freed it → dangle (bug #3).
+            # `owning_param` distinguishes them — mirrors Rust `ir/mod.rs`
+            # Local + `functions.rs` param setup). At INITIAL lowering we
+            # have no liveness, so we conservatively clone-through here:
+            # like the Ptr(T) arm and Rust's `ensure_owned_at_consuming_arg`
+            # (borrow-state source → clone, never shallow-alias —
+            # `context.rs:1953-1987`), materialise a fresh owned T via
+            # deref+clone-through. The CFG-aware wire pass
+            # (`decide_operand_at_consuming_arg`'s GtMutPtr arm) then
+            # RE-DECIDES with liveness in hand and PROMOTES an owning
+            # `!`-param at its LAST USE to OpMove (forwarding the pointer +
+            # suppressing the exit drop) — so the last-use move is realised
+            # there, not deferred. decide_ptr_consume keeps OpCopy for
+            # non-resource pointees (MutPtr-to-int etc.), so this is inert
+            # there. Reaching here at all implies a consume kind —
+            # non-consume kinds returned OpBorrow at the top of this fn.
+            # Without the clone fallback (for `&`-borrows and non-last-use
+            # `!`-consumes), a `!`-param consumed into Box/push/field-init
+            # shallow-aliased the pointee, and drop emission then freed it →
+            # dangle (bug #3).
             return decide_ptr_consume(&gmod, lid, inner_tid)
         else:
             # GtFnPtr / GtTuple / etc. — byte-copy of a pointer is just
@@ -1872,13 +1876,36 @@ Operand decide_operand_at_consuming_arg(LowerCtx &ctx, GirModule &gmod, int src_
             return decide_ptr_consume(&gmod, src_lid, inner)
         case GtMutPtr(inner):
             # Case 2b: MutPtr(T). `&`-borrow AND `!`-move resource params
-            # both lower to MutPtr(T) (see op_consume's GtMutPtr arm).
-            # At a consuming position neither may shallow-alias: a borrow
-            # doesn't own the pointee, and a `!` consumed while live-past
-            # this use must materialise (last-use move is a deferred opt).
-            # Clone-through if T is a resource; otherwise plain pointer
-            # byte-copy. Mirrors the Ptr(T) arm and Rust's
-            # `ensure_owned_at_consuming_arg` (borrow-state → clone).
+            # both lower to MutPtr(T) — the typed `owning_param` bit
+            # (`GirLocal.owning_param`, set by `register_owning_param`)
+            # is the SOLE discriminator between them (see op_consume's
+            # GtMutPtr arm + the field docstring at gir.gg:273-287, which
+            # names THIS site as reader (D)).
+            #
+            # An owning `!`-param at its CFG LAST USE that is transferred
+            # ONWARD (passed `!` to another consuming call) must MOVE, not
+            # clone: the slot already holds a `T*`; OpMove forwards that
+            # pointer and triggers the caller's `mark_local_moved` +
+            # `GIMoveZero`→`IMoveSlot`, flipping the param slot's drop flag
+            # to dead so the function-exit drop is suppressed. Cloning here
+            # instead would materialise a fresh `T` for the callee (which
+            # the callee drops) AND leave the param slot live for the exit
+            # drop → the resource is DOUBLE-DROPPED (the callee's drop + the
+            # caller's exit drop). Mirrors Rust's `is_owning_param`
+            # onward-move fast-path (`lower_call_arg`, calls.rs:90-105:
+            # forward the pointer, schedule a post-call MoveZero, return
+            # `copy(local_id)` — never clone). The existing drop-flag
+            # dataflow in drop_elab does the rest; no re-architecture needed.
+            #
+            # Everything else stays clone-through: a `&`-borrow doesn't own
+            # the pointee (cloning is the only sound transfer to an owning
+            # destination), and a `!`-param consumed while LIVE PAST this
+            # use must materialise. A non-droppable pointee (primitive /
+            # non-resource) has no drop to double, so it byte-copies via
+            # `decide_ptr_consume`.
+            GirLocal mloc = ctx.locals.get(src_lid).unwrap()
+            if mloc.owning_param and is_last_use and is_droppable_type(inner, &gmod):
+                return OpMove(src_lid)
             return decide_ptr_consume(&gmod, src_lid, inner)
         case GtFnPtr(_, _):
             # Function pointer: not a resource. Byte-copy.

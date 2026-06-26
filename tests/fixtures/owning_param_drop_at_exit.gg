@@ -1,20 +1,31 @@
-# Owning `!` parameter must drop at function exit when not transferred onward.
+# An owning `!` parameter must drop EXACTLY ONCE: at the callee's exit when
+# it is NOT transferred onward, OR inside the inner callee (and not again at
+# this exit) when it IS transferred onward by `!`.
 #
-# Pre-existing GIR drop-accountant miss surfaced 2026-05-04 by §8.1 agent
-# during drop-flag dataflow init work. Filed in TODO under "Owning `!`
-# parameter not always given end-of-function drop guard".
+# Rust gg is correct here — it drops each `!`-param once. This fixture guards
+# a SELF-HOST double-drop that the runtime-parity harness surfaced: when an
+# owning `!`-param was moved ONWARD (passed `!` to another consuming call at
+# its last use, e.g. `conditional`'s `consume(!r)` and `outer`'s `inner(!r)`),
+# the self-host lowerer CLONED it at the onward-move site AND still dropped
+# the param slot at function exit → the resource was dropped TWICE (once
+# inside the callee, once at the caller's exit). It surfaced as an EXTRA
+# `drop p2` (after `cond-done true`) and an EXTRA `drop p4` (after
+# `outer-done`) versus the Rust oracle.
 #
-# The `!` sigil means "ownership transferred to callee." If the callee
-# doesn't transfer it onward (no inner consume), the resource MUST drop at
-# the callee's exit — otherwise it leaks unconditionally.
+# Root cause + fix: the `GtMutPtr(inner)` arm of
+# `decide_operand_at_consuming_arg` (self_host_lowerer/lower.gg) routed BOTH
+# `&`-borrow and `!`-move params to clone-through, ignoring the typed
+# `GirLocal.owning_param` bit and `is_last_use`. The fix moves an owning
+# `!`-param on its last use (`owning_param and is_last_use` → `OpMove`) — the
+# slot already holds a `T*`, so OpMove forwards the pointer and triggers
+# `mark_local_moved` + `GIMoveZero`, flipping the param's drop flag to dead.
+# The existing drop_elab drop-flag dataflow then suppresses the exit drop.
+# Mirrors Rust's `is_owning_param` onward-move fast-path (calls.rs:90-105).
 #
-# This fixture is wired into integration.rs as #[ignore] until the GIR drop
-# accountant emits the missing exit drop. Run manually:
-#
-#   cargo test --test integration -- --ignored owning_param_drop_at_exit
-#
-# Currently produces output missing every `drop X` line below. With the fix,
-# all five drop prints should appear in the expected positions.
+# This is a LIVE `#[test]` (run_gg, asserting the Rust oracle output below)
+# AND is locked into the self_host_runtime net via
+# runtime_snapshots/owning_param_drop_at_exit.out, so the self-host fix can't
+# regress. Each `!`-param drops exactly once in the expected positions.
 
 struct R:
     String name

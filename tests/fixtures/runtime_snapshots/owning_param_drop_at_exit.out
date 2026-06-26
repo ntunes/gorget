@@ -1,0 +1,21 @@
+simple p1
+drop p1
+---
+consume p2
+drop p2
+cond-done true
+---
+cond-done false
+drop p3
+---
+inner p4
+drop p4
+outer-done
+---
+early-short p5
+drop p5
+early-1 false
+---
+early-full p6
+drop p6
+early-2 true
