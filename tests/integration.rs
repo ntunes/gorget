@@ -15274,6 +15274,9 @@ fn c_emit_comparison() {
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn self_host_bootstrap() {
+    // C-only: reads the `driver.c` emitted by `gg build` to splice in the
+    // Rust runtime preamble; under `--backend=llvm` the build emits `.ll`, so
+    // there is no `.c` to inspect (this is the C-backend contract, not an LLVM gap).
     if skip_under_llvm() { return; }
     // 1. Build stage-0 driver via the Rust compiler (cached). build_gg_dir
     //    leaves driver.c next to the binary — we reuse it to extract
@@ -15702,7 +15705,6 @@ fn self_host_bootstrap_fixed_point() {
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn self_host_snag5_synth_name_no_type_misroute() {
-    if skip_under_llvm() { return; }
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
@@ -15772,7 +15774,6 @@ fn self_host_snag5_synth_name_no_type_misroute() {
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn phase_c_closed_classes_remain_at_zero_self_host() {
-    if skip_under_llvm() { return; }
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
@@ -15858,7 +15859,6 @@ fn phase_c_closed_classes_remain_at_zero_self_host() {
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn validate_passes_passes_self_host() {
-    if skip_under_llvm() { return; }
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
@@ -15958,7 +15958,6 @@ fn validate_passes_passes_self_host() {
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn self_host_e2e() {
-    if skip_under_llvm() { return; }
     if skip_unless_full() { return; }
 
     // 1. Build stage-0 driver (cached) and extract the Rust runtime
@@ -16481,8 +16480,6 @@ fn self_host_e2e() {
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn self_host_driver_rejects_invalid_program() {
-    if skip_under_llvm() { return; }
-
     // Cached — shared with lowerer_comparison / bootstrap / e2e.
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -16556,14 +16553,6 @@ fn self_host_driver_rejects_invalid_program() {
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn self_host_cli_pipeline() {
-    if skip_under_llvm() {
-        // The self-host driver emits C only; the LLVM sweep builds the same
-        // driver binary (C-backend output is identical) and this test's
-        // subcommand semantics are backend-agnostic. Skip to avoid double work
-        // under the LLVM gate (mirrors self_host_full_program's skip).
-        return;
-    }
-
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
@@ -16823,11 +16812,6 @@ fn self_host_cli_pipeline() {
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn self_host_relocatable_embedded_runtime() {
-    if skip_under_llvm() {
-        // The self-host driver emits C only; embedding is backend-agnostic.
-        return;
-    }
-
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let runtime_dir = manifest_dir.join("src/backend/c/runtime");
@@ -16999,11 +16983,6 @@ fn self_host_relocatable_embedded_runtime() {
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn self_host_relocatable_embedded_libstd() {
-    if skip_under_llvm() {
-        // The self-host driver emits C only; embedding is backend-agnostic.
-        return;
-    }
-
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
@@ -17204,9 +17183,6 @@ fn self_host_relocatable_embedded_libstd() {
             typechecker diagnostic gap (TODO.md gg check PERMISSIVENESS) is closed"]
 #[serial(self_host_lowerer_driver)]
 fn self_host_check_rejects_illtyped() {
-    if skip_under_llvm() {
-        return;
-    }
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
@@ -17276,8 +17252,6 @@ fn self_host_check_rejects_illtyped() {
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn self_host_full_program() {
-    if skip_under_llvm() { return; }
-
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
@@ -17841,7 +17815,6 @@ fn runtime_parity_corpus(manifest_dir: &Path) -> Vec<PathBuf> {
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn self_host_runtime_diff() {
-    if skip_under_llvm() { return; }
     if std::env::var("GG_RUNTIME_DIFF").as_deref() != Ok("1") {
         // Diagnostic-only: opt in via GG_RUNTIME_DIFF=1.
         return;
@@ -18020,8 +17993,6 @@ fn self_host_runtime_diff() {
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn self_host_runtime() {
-    if skip_under_llvm() { return; }
-
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
@@ -18163,8 +18134,6 @@ fn self_host_runtime() {
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn self_host_rejects_undefined_name() {
-    if skip_under_llvm() { return; }
-
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
@@ -18224,8 +18193,6 @@ fn self_host_rejects_undefined_name() {
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn self_host_embed_file() {
-    if skip_under_llvm() { return; }
-
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
@@ -18448,9 +18415,6 @@ fn self_host_no_unnamed_collection_struct() {
 /// on Linux) a hard failure; `exitcode=99` makes any ASan/LSan error a nonzero
 /// exit so we don't rely on string-scraping alone.
 fn assert_box_deref_asan_clean(stem: &str) {
-    if skip_under_llvm() {
-        return;
-    }
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
@@ -25711,9 +25675,11 @@ fn cow_lazy_selfref_concat_poke() {
 // fixture) so it doesn't rot.
 #[test]
 fn witness_never_emitted_c_clone_shape() {
-    // C-backend artifact inspection: the LLVM backend emits no .c file, so
-    // there is nothing to assert there (its behavioral twins witness_* run
-    // under both backends).
+    // C-only: asserts on the emitted-C clone shape (the C-backend contract); it
+    // reads the `.c` emitted by `gg build`, but under `--backend=llvm` the build
+    // emits `.ll`, so there is no `.c` to inspect (this is the C-backend
+    // contract, not an LLVM gap). Its behavioral twins witness_* run under both
+    // backends.
     if skip_under_llvm() {
         return;
     }
@@ -25810,9 +25776,6 @@ fn mutarg_import_probe() {
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn mutarg_import_probe_self_host() {
-    if skip_under_llvm() {
-        return;
-    }
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
@@ -25847,9 +25810,6 @@ fn mutarg_import_probe_self_host() {
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn print_tail_exit_expr_body_self_host() {
-    if skip_under_llvm() {
-        return;
-    }
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
@@ -25882,9 +25842,6 @@ fn print_tail_exit_expr_body_self_host() {
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn print_tail_exit_block_return_self_host() {
-    if skip_under_llvm() {
-        return;
-    }
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
@@ -25958,9 +25915,6 @@ fn cow_lazy_d1_alias_takenpath() {
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn cow_lazy_move_bind_self_host() {
-    if skip_under_llvm() {
-        return;
-    }
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
@@ -25989,9 +25943,6 @@ fn cow_lazy_move_bind_self_host() {
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn cow_lazy_move_reassign_self_host() {
-    if skip_under_llvm() {
-        return;
-    }
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
@@ -26026,9 +25977,6 @@ fn cow_lazy_move_reassign_self_host() {
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn witness_never_self_host_emitted_c_clone_shape() {
-    if skip_under_llvm() {
-        return;
-    }
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
@@ -26113,9 +26061,6 @@ fn witness_never_self_host_emitted_c_clone_shape() {
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn stack_guard_self_host_driver_deep_lowering() {
-    if skip_under_llvm() {
-        return;
-    }
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
@@ -26168,13 +26113,10 @@ fn stack_guard_self_host_driver_deep_lowering() {
 /// binary builds fine but crashes / exits non-zero under the pin) so this
 /// documents the honest contract rather than silently flipping to a pass if
 /// some host has a huge default stack. TCO (## Low in TODO) is the eventual
-/// cure for the tail subset. (LLVM leg scoped out — also runs on the host
-/// stack; the test skip_under_llvm()s.)
+/// cure for the tail subset. (The LLVM-backend binary also runs on the host
+/// stack and overflows identically, so this runs under both backends.)
 #[test]
 fn stack_guard_runtime_deep_recursion() {
-    if skip_under_llvm() {
-        return;
-    }
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture = manifest_dir.join("tests/fixtures/stack_guard_deep_recursion.gg");
     let work_dir = std::env::temp_dir().join(format!(
