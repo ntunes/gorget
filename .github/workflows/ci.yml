@@ -37,6 +37,11 @@ jobs:
         env:
           GG_BUILD_TIMEOUT_SECS: 600
           GG_TEST_TIMEOUT_SECS: 600
+          # self_host_bootstrap's stage-1 run has its own knob (default 120s),
+          # separate from the build/test timeouts. The stage-1 self-host
+          # compile of driver.gg legitimately takes 100-500s on the slow
+          # x86_64 runner, so the 120s default trips on CI. (See TODO.md.)
+          GG_STAGE1_TIMEOUT_SECS: 900
 
       - name: Security tests (ASan + UBSan)
         run: cargo test --test security -- --test-threads=1
