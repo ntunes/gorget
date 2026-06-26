@@ -643,3 +643,12 @@ The ByMutRef reclassify (lower_expr.gg:~3186) emits a `MutPtr(&outer_slot)` env 
 
 ## [closure follow-up, from Increment-3 review] closure_value_ret_type channel follow-the-value gap
 The Increment-3 `closure_value_ret_type` channel is populated only at the closure make-site + the SVarDecl-MoveDirect copy-forward. A closure value reaching a callable local via a NON-MoveDirect VarDecl branch (CoW/Branch-C), a reassignment (`f = (...)`), or store-in-collection-then-retrieve MISSES the channel → falls back to `expected_type` (same as pre-Increment-3, no regression — just unaddressed). The fn-ARG-then-called path IS handled (GtFnPtr param fires the FnPtr-recovery arm first). Extend the copy-forward to the other VarDecl branches + reassignment when a later increment needs it.
+
+## ===== CLOSURE INCREMENT 4 (Option/Result combinators) — DEEP, 5 sub-increments (scout map) =====
+NO single sub-increment flips a corpus fixture alone (every combinator fixture mixes kinds). 3 root bugs: R1 no receiver-aware combinator return-type (lower_types.gg:2017 returns bare GorgetArray); R2 hardcoded-void* templates truncate 16-byte payloads (lir_codegen.gg:4337-4418 emit_option_result_combinator); R3 enum-ctor closure body return-type (`(x):Ok(x+1)`→int64_t not Result). The self-host INLINES these combinators via C-string templates (no Rust runtime equivalent); Rust uses a GIR desugar (methods.rs:1487) — porting that is the principled long-term fix but a big re-arch.
+- 4a — receiver-aware combinator return-type (R1), lower_types.gg:~2016 via enum_category_of(peel_ptr_tid(recv)). LOW. Prototyped MATCH. 0 corpus alone (prerequisite).
+- 4b — type-aware combinator templates (R2), lir_codegen.gg:4337-4418: route through the type-aware ICallClosure codegen (:4150-4170) reusing Increment-3's closure_value_ret_type channel; model the `__result_unwrap_error` type-aware arm (:4317). MED + add a tests/lints.rs arm-count guard. 4a+4b TARGET option_result_combinators (must MEASURE).
+- 4c — enum-ctor closure-body return type (R3), lower_expr.gg + closure_value_ret_type channel. MED. Flips result_map, coroutine_result_combinators.
+- 4d — implicit-`it` enum-ctor body lowering (`Some(it+1)` stub-body gap), lower_expr.gg + lower_closures.gg:1649. MED. Flips implicit_it.
+- 4e — resource-returning combinator closures + ownership (snag-51 dbl-free class). HIGH. Flips option_map, coroutine_result_combinators(.to_upper path).
+OUT OF SCOPE (pre-existing, NOT Option/Result): dict_higher_order, coroutine_dict_higher_order, iterator_adapters.
