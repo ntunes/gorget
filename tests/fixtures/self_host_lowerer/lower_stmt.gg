@@ -497,6 +497,30 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     int ret_place_ty_pre = ctx.locals.get(0).unwrap().type_id
                     if ret_place_ty_pre != I64_TYPE and ret_place_ty_pre != UNIT_TYPE:
                         ctx.expected_type = ret_place_ty_pre
+                    # Defect B (throws fn with a Result/Option success type T):
+                    # the declared `T` of a `throws T` fn is the UNWRAPPED `T`
+                    # but `_0` is the synthesized `Result[T, E]` (one layer
+                    # wider). When `T` is ITSELF a Result/Option, an explicit
+                    # `return Ok(...)` / `Some(...)` tail builds the INNER `T`,
+                    # not the outer slot — so the variant-ctor reader sites in
+                    # `lower_call` must resolve against the inner `T` (the
+                    # slot's `Ok_0` payload `ok_type`), else `Ok(x*4)` resolves
+                    # its `Ok_0` field against the OUTER slot (payload = inner
+                    # Result) and drops the int. GATED ON `ctx.fn_is_throws`: a
+                    # PLAIN `Result[Option[int], String]` fn whose
+                    # `return Ok(Some(42))` correctly builds the FULL Result is
+                    # structurally identical at this site — only the throws flag
+                    # distinguishes the synthesized-slot reinterpretation
+                    # (without the gate, `option_result_nested` regresses).
+                    # Mirrors Rust gg's `declared_t_is_enum_wrapper` /
+                    # `expected_for_value = inner T`
+                    # (`src/ir/lowering/stmts/mod.rs:1651-1679`).
+                    if ctx.fn_is_throws and enum_category_of(&gmod, ret_place_ty_pre).category == ENUM_CAT_RESULT:
+                        int ok_inner_ty = enum_category_of(&gmod, ret_place_ty_pre).ok_type
+                        if ok_inner_ty >= 0:
+                            int ok_inner_cat = enum_category_of(&gmod, ok_inner_ty).category
+                            if ok_inner_cat == ENUM_CAT_RESULT or ok_inner_cat == ENUM_CAT_OPTION:
+                                ctx.expected_type = ok_inner_ty
                     int val = lower_expr(&ctx, ret_expr, &gmod)
                     ctx.expected_type = prev_expected_ret
                     # Divergent expr-body tail guard (mirrors Rust gg's
@@ -522,11 +546,36 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     # silently drops the value. The bare `Ok` variant name
                     # routes through the LIR `try_lower_prelude_variant`
                     # rewrite (same substrate as `lower_throw_stmt`'s Error).
-                    # `enum_category_of` peels Ptr/MutPtr internally (a borrowed
-                    # `return r` gives `val` a `GtPtr(Result__…)` tid; the channel
-                    # is keyed on the bare Result GIR id) so a borrowed Result is
-                    # still seen as a Result and not double-wrapped.
-                    if enum_category_of(&gmod, ret_place_ty_pre).category == ENUM_CAT_RESULT and not (enum_category_of(&gmod, ctx.locals.get(val).unwrap().type_id).category == ENUM_CAT_RESULT):
+                    #
+                    # Defect A — the skip-guard compares by TYPE-EQUALITY, not
+                    # category: skip the Ok-wrap ONLY when `val`'s (Ptr/MutPtr-
+                    # peeled) type is the SAME `Result[T, E]` as the slot, i.e.
+                    # the operand already IS the fn's own Result (an explicit
+                    # `return Ok(x)` whose ctor built the outer slot, a
+                    # throws-call result, or a borrowed `return r`). A
+                    # category-only check wrongly skipped the wrap when `T` is
+                    # ITSELF a Result of a DIFFERENT type (outer
+                    # `Result[Result[int,String],String]`, tail value
+                    # `Result[int,String]`): both are category RESULT, so the
+                    # inner Result got direct-assigned into the wider outer
+                    # slot and the outer was zero-inited (`Ok(0)`). Mirrors Rust
+                    # gg's `op_ty == ret_type` type-equality guards in
+                    # `wrap_expr_tail_in_ok` (`functions.rs:224`) and
+                    # `lower_return` (`stmts/mod.rs:1717`). `ret_place_ty_pre` is
+                    # already the bare slot tid; peel `val`'s slot type so a
+                    # borrowed `return r` (a `GtPtr(Result__…)` tid) still
+                    # compares equal and is not double-wrapped.
+                    int val_ty_raw = ctx.locals.get(val).unwrap().type_id
+                    int val_ty_peeled = val_ty_raw
+                    if val_ty_raw >= 0 and val_ty_raw < gmod.type_table.len():
+                        match gmod.type_table.get(val_ty_raw).unwrap():
+                            case GtPtr(vt_inner):
+                                val_ty_peeled = vt_inner
+                            case GtMutPtr(vt_inner):
+                                val_ty_peeled = vt_inner
+                            else:
+                                pass
+                    if enum_category_of(&gmod, ret_place_ty_pre).category == ENUM_CAT_RESULT and val_ty_peeled != ret_place_ty_pre:
                         int ok_dst = add_local(&ctx, ret_place_ty_pre, None)
                         Vector[Operand] ok_args = [op_consume(&ctx, &gmod, val, CkCallArgOwning())]
                         emit(&ctx, GICallExtern(ok_dst, "Ok", ok_args))

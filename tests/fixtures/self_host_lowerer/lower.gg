@@ -398,6 +398,24 @@ struct LowerCtx:
     # arithmetic handlers above. The EIndex arm in `lower_expr` consults this to
     # route through the non-panicking `gorget_array_safe_get` + a NULL-branch.
     Option[int] fault_bounds_handler
+    # True iff the function currently being lowered is a `throws` fn (its
+    # declared `throws_type` is `Some`), so the return slot `_0` is the
+    # SYNTHESIZED `Result[T, E]` one layer wider than the user's declared
+    # success type `T`. Set at the two throws-computing LowerCtx sites
+    # (`lower_function` / `lower_equip_block` in lower_closures.gg) when the
+    # def's `throws_type` is `Some`; false at every other construction site
+    # (closure-body, suite-body, test-body). Read by the SReturn arm's
+    # Defect-B expected-type seeding: when `T` is itself a Result/Option, an
+    # explicit `Ok(...)` / `Some(...)` tail builds the INNER `T`, so the
+    # reader sites must resolve against `ok_type` (the inner T), NOT the full
+    # outer slot. The gate is LOAD-BEARING: a plain (non-throws)
+    # `Result[Option[int], String]` fn whose `return Ok(Some(42))` correctly
+    # builds the FULL Result is structurally identical at the return site —
+    # only this flag distinguishes the synthesized-slot reinterpretation from
+    # the genuine outer-Result build (else `option_result_nested` regresses).
+    # Mirrors Rust gg's `func_state.current_throws_result_type` being `Some`
+    # (`src/ir/lowering/stmts/mod.rs:1641` `declared_t_is_enum_wrapper`).
+    bool fn_is_throws
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -2034,7 +2052,8 @@ GirFunction lower_suite_body(String fn_name, Vector[Stmt] body, GirModule &gmod)
     Dict[String, bool] _sb_cow_mut = {}
     Dict[String, int] _sb_cow_span = {}
     Dict[String, bool] _sb_cow_clo = {}
-    LowerCtx sctx = LowerCtx([], [], [], 0, !_sb_named_locals, !_sb_lc_stk, !_sb_lb_stk, "", "", "", false, fn_name.clone(), DropElaborator(!_sb_de_scopes), !_sb_de_queue, -1, !_sb_on_err_blocks, false, !_sb_cow_mut, !_sb_cow_span, !_sb_cow_clo, {}, [], {}, None, None, None)
+    # suite setup/teardown bodies are void, non-throws → fn_is_throws=false.
+    LowerCtx sctx = LowerCtx([], [], [], 0, !_sb_named_locals, !_sb_lc_stk, !_sb_lb_stk, "", "", "", false, fn_name.clone(), DropElaborator(!_sb_de_scopes), !_sb_de_queue, -1, !_sb_on_err_blocks, false, !_sb_cow_mut, !_sb_cow_span, !_sb_cow_clo, {}, [], {}, None, None, None, false)
     Vector[Instruction] sinit = []
     sctx.block_insts.push(!sinit)
     sctx.block_terms.push(GTNone())
@@ -3998,7 +4017,8 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         Dict[String, bool] _cow_mut3 = {}
                         Dict[String, int] _cow_span3 = {}
                         Dict[String, bool] _cow_clo3 = {}
-                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone(), DropElaborator(!_de_scopes3), !_de_queue3, -1, !_on_err_blocks3, false, !_cow_mut3, !_cow_span3, !_cow_clo3, {}, [], {}, None, None, None)
+                        # Test bodies are void, non-throws → fn_is_throws=false.
+                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone(), DropElaborator(!_de_scopes3), !_de_queue3, -1, !_on_err_blocks3, false, !_cow_mut3, !_cow_span3, !_cow_clo3, {}, [], {}, None, None, None, false)
                         Vector[Instruction] tinit = []
                         tctx.block_insts.push(!tinit)
                         tctx.block_terms.push(GTNone())
