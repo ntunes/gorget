@@ -568,6 +568,32 @@ String mangle_prefix(String module_path):
     # "std.conv" → "std__conv___"
     return module_path.replace(".", "__") + "___"
 
+# PROTOTYPE: a return type "safe" to register in fn_sigs from an IMPORTED
+# extern block. Imported extern blocks may declare externs the entry program
+# never calls (e.g. `process_spawn` returning `Result[Process, String]` in
+# std.process when the fixture only imports `exec`). Registering such a return
+# type via map_ast_type SIDE-EFFECT-registers the user nominal (`Process` →
+# `GorgetProcess`) and its `Result__Process__GorgetString` wrapper struct,
+# which the C-emit then references WITHOUT a typedef (the `Process` struct decl
+# is not merged) → cc-fail `unknown type name 'GorgetProcess'`. Restrict the
+# push to externs whose return is a runtime-backed shape that always has a C
+# typedef: primitives / void / cstr / String / the builtin collections. This
+# is exactly the value-position-print bug class (scalar/String/cstr/Vector);
+# user-nominal and Result/Option-of-nominal returns are NOT printed and need
+# no fn_sigs entry here.
+bool extern_ret_shape_safe_to_register(SpannedType rt):
+    match rt.ty:
+        case TPrimitive(_):
+            return true
+        case TNamed(rn, _):
+            if rn == "String" or rn == "cstr" or rn == "void":
+                return true
+            if rn == "Vector" or rn == "Deque" or rn == "Dict" or rn == "Set":
+                return true
+            return false
+        else:
+            return false
+
 # ── Import loading ───────────────────────────────────────
 
 Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, Dict[String, bool] &imported_fns, int entry_source_len, Dict[String, String] &lib_embedded, bool lib_explicit, Dict[String, bool] &imported_bare_names):
@@ -823,17 +849,19 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                             # slot; registering them as GorgetString breaks that
                             # path (const char* vs Str cc mismatch). Restrict to the
                             # `String` return shape that the bug #4 class needs.
-                            bool stub_is_string_ret = false
-                            match fdef.return_type.ty:
-                                case TPrimitive(stub_rt_name):
-                                    if stub_rt_name == "String":
-                                        stub_is_string_ret = true
-                                case TNamed(stub_rt_name2, _):
-                                    if stub_rt_name2 == "String":
-                                        stub_is_string_ret = true
-                                else:
-                                    pass
-                            if stub_is_string_ret:
+                            # PROTOTYPE: push an empty-body stub copy for EVERY
+                            # imported inline extern stub (was String-only). The
+                            # fn_sigs refine pass (lower.gg:~2835, IFunction arm)
+                            # then registers the typed return — bool/cstr/String/
+                            # float — under the bare name AND the C symbol, so a
+                            # `bool t = is_tty()` value-position read (print /
+                            # f-string) sees BOOL_TYPE instead of the I64 default
+                            # (which prints `0`/`1` not `false`/`true`). The cstr
+                            # case is mapped to GorgetString in the refine pass so
+                            # the EMIT-side cstr wrap fires (see lower.gg). The empty
+                            # body keeps the function-lowering loop (body.len() > 0)
+                            # from emitting a degenerate body; is_extern_stub=true.
+                            if fdef.is_extern_stub and extern_ret_shape_safe_to_register(fdef.return_type):
                                 Vector[Stmt] empty_body = Vector[Stmt]()
                                 FunctionDef stub_decl = FunctionDef(fdef.name.clone(), fdef.params, fdef.return_type, fdef.type_params, empty_body, false, fdef.throws_type, true)
                                 m.items.push(IFunction(stub_decl))
@@ -1149,6 +1177,28 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                                     else:
                                         pass
                             exi += 1
+                        # PROTOTYPE: push a FILTERED imported extern block into
+                        # m.items so the fn_sigs refine pass (lower.gg:~2873, which
+                        # has gmod) registers the typed RETURN type under the bare
+                        # Gorget name AND the redirected C symbol — exactly as it
+                        # does for main-module extern blocks. Without this, an
+                        # imported `extern bool mkdir(...) = "gorget_mkdir"` leaves
+                        # fn_sigs[mkdir]/fn_sigs[gorget_mkdir] unregistered → I64
+                        # default → print(mkdir(...)) emits "%lld" (1/0) not
+                        # true/false; cstr/String returns print the pointer.
+                        # Only externs with a runtime-backed return shape are
+                        # pushed (see extern_ret_shape_safe_to_register): a
+                        # user-nominal return (Result[Process, String]) would leak
+                        # an undefined struct into the C-emit.
+                        Vector[FunctionDef] safe_ext_fns = Vector[FunctionDef]()
+                        int sxi = 0
+                        while sxi < ext_fns.len():
+                            FunctionDef sext_fd = ext_fns.get(sxi).unwrap()
+                            if extern_ret_shape_safe_to_register(sext_fd.return_type):
+                                safe_ext_fns.push(sext_fd.clone())
+                            sxi += 1
+                        if safe_ext_fns.len() > 0:
+                            m.items.push(IExternBlock(safe_ext_fns))
                     else:
                         # Skip structs, enums, traits, etc. from imported modules.
                         # Only functions, equip blocks with real bodies, and

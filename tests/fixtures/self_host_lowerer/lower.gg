@@ -2893,6 +2893,25 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                 # String → GorgetString); I64-default returns are left untouched.
                 for rs_ext_fd in rs_ext_fns:
                     int rs_ext_rt = map_ast_type(rs_ext_fd.return_type, &gmod)
+                    # PROTOTYPE: a `cstr`-returning extern types to a bare `cstr`
+                    # named type via map_ast_type; register it as GorgetString
+                    # instead so the EMIT-side cstr wrap (is_cstr_returning_fn,
+                    # lir_codegen.gg — fires only when the dst slot is GorgetString)
+                    # materialises the Str at the call. The SVarDecl LOWERING
+                    # coercion is then skipped by its `var_type != gs_tid_decl`
+                    # guard, so exactly one wrap fires. Mirrors getenv.
+                    bool rs_ext_is_cstr = false
+                    match rs_ext_fd.return_type.ty:
+                        case TPrimitive(rs_cstr_n):
+                            if rs_cstr_n == "cstr":
+                                rs_ext_is_cstr = true
+                        case TNamed(rs_cstr_n2, _):
+                            if rs_cstr_n2 == "cstr":
+                                rs_ext_is_cstr = true
+                        else:
+                            pass
+                    if rs_ext_is_cstr:
+                        rs_ext_rt = lookup_or_register_named(&gmod, "GorgetString")
                     if rs_ext_rt != I64_TYPE:
                         gmod.fn_sigs.put(rs_ext_fd.name.clone(), rs_ext_rt)
                         # Extract the `= "symbol"` C name from the stub body and

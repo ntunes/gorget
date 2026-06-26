@@ -5300,6 +5300,20 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                             break
         if ret_type == I64_TYPE and gmod.fn_sigs.contains(call_name):
             ret_type = gmod.fn_sigs.get(call_name).unwrap()
+        # PROTOTYPE (option b): consult fn_sigs under the PRE-REDIRECT bare name
+        # `fname` — but ONLY for a REDIRECTED extern (`fname` is in
+        # call_redirects). Imported externs register their return type in fn_sigs
+        # under the bare Gorget name (loader stub push → refine pass), but the
+        # call site rewrites `call_name` to the redirected C symbol FIRST (above),
+        # so the post-redirect lookup misses. Mirror Rust gg, which looks up the
+        # ret_type on the bare `effective_name` and applies the C-symbol redirect
+        # only to the emitted name (calls.rs:~1354/1391). The call_redirects guard
+        # is load-bearing: without it, a GENERIC user call (`extract_first[int,
+        # String](p)`, call_name=`extract_first__int64_t__GorgetString`) would
+        # match the bare `fn_sigs[extract_first]` whose return type is the
+        # un-monomorphized generic param `A` → wrong slot → garbage.
+        if ret_type == I64_TYPE and gmod.call_redirects.contains(fname) and gmod.fn_sigs.contains(fname):
+            ret_type = gmod.fn_sigs.get(fname).unwrap()
         # Also check call_redirects for the original name.
         if ret_type == I64_TYPE and gmod.call_redirects.contains(fname):
             String redir = gmod.call_redirects.get(fname).unwrap()
