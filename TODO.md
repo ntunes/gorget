@@ -588,3 +588,6 @@ The Ref[T]/MutRef[T] GIFieldLoad fix (lir_lower.gg) introduced the first `MutRef
 
 ## [micro-guard, from C output-review] range/string for-paths drop else_body SILENTLY
 Unlike vector(:177)/dict(:189) which emit a `lower_fail` else-guard, `lower_for_range`(:103) and `lower_for_string`(:206) drop a loop-`else` body with NO marker — so a range/string for-else silently vanishes instead of failing loudly. PART OF the deep loop-else track (those paths get real else-handling there), but as a CHEAP interim ratchet, add a `lower_fail("for-range/string with else-body not yet implemented")` guard to both so the gap can't hide. Do this when picking up the deep track (or as a 2-line standalone).
+
+## [nit, from D output-review] stale docstring on decide_operand_at_consuming_arg
+`lower.gg:~1808` docstring still says "Status: dead code in this commit. No caller exists." — FALSE: the fn is wired via `wire_one_operand` (lower_liveness.gg:970). Pre-existing, comment-only (no codegen impact). Correct the docstring to reflect it's the live CFG-aware wire-pass operand-mode decision. 1-line cleanup.
