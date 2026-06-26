@@ -1690,7 +1690,7 @@ bool is_runtime_array_ctor(String mapped_name):
 # sees NULL and never frees overwritten/freed resource elements — the
 # ~13 GB driver.gg OOM on Vector[Vector[int]] / Vector[LirFunction]
 # loop-reassignment.
-String emit_collection_elem_wiring(int dst, String mapped_name, String original_name, LirModule &m):
+String emit_collection_elem_wiring(int dst, String mapped_name, String original_name, LirModule &m, Vector[String] &sn):
     if dst < 0 or original_name.len() == 0:
         return ""
     String dv = v(dst)
@@ -1711,6 +1711,31 @@ String emit_collection_elem_wiring(int dst, String mapped_name, String original_
             if vdf.len() > 0 and vcf.len() > 0:
                 w = w + " " + dv + ".val_drop = (__gorget_drop_fn)" + vdf + ";"
                 w = w + " " + dv + ".val_clone = (__gorget_drop_fn)" + vcf + ";"
+    # Empty `{}` Dict/HashMap literals with a concrete K/V hint lower to the
+    # magic sized ctor name `__gorget_{dict,map}_new_sized_K__GGSEP__V`
+    # (lower_expr.gg:3612), NOT to a bare `gorget_{dict,map}_new[_str]`. That
+    # name is what map_mono_to_runtime returns unchanged (it starts with
+    # `__gorget_`) and what C-emit expands at lir_codegen.gg:4693. The bare-name
+    # arm above never matched it, so `Dict[String, <resource>]` value drops were
+    # NEVER wired → the values leaked (gorget_map_free honors val_drop, but it
+    # stayed NULL). Parse the V token out of the magic name (mirroring the
+    # C-emit parse) and resolve it through the SAME typed registry the bare arm
+    # uses (resolve_sizeof_c_type → runtime category → lc_collection_drop_fn),
+    # so nested resource values (Vector/Dict/Set as well as String) are covered.
+    if mapped_name.starts_with("__gorget_dict_new_sized_") or mapped_name.starts_with("__gorget_map_new_sized_"):
+        int sized_pfx_len = 24
+        if mapped_name.starts_with("__gorget_map_new_sized_"):
+            sized_pfx_len = 23
+        String sized_rest = mapped_name.slice(sized_pfx_len, mapped_name.len())
+        int sized_sep = find_substr(sized_rest, "__GGSEP__")
+        if sized_sep > 0:
+            String sized_v_tok = sized_rest.slice(sized_sep + 9, sized_rest.len())
+            String sized_v_ty = resolve_sizeof_c_type(sized_v_tok, &m, &sn)
+            String sized_vdf = lc_collection_drop_fn(sized_v_ty, &m)
+            String sized_vcf = lc_collection_clone_fn(sized_v_ty, &m)
+            if sized_vdf.len() > 0 and sized_vcf.len() > 0:
+                w = w + " " + dv + ".val_drop = (__gorget_drop_fn)" + sized_vdf + ";"
+                w = w + " " + dv + ".val_clone = (__gorget_drop_fn)" + sized_vcf + ";"
     return w
 
 String emit_func_forward_decls(LirModule &m, Vector[String] &sn):
@@ -4035,7 +4060,7 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Vector[String] 
             String ce_wiring = emit_dict_ctor_wiring(dst, name, original_name, &m)
             # Vector/array element + Dict value drop+clone fn-ptr wiring
             # (closes the elaborate_drops collection-element leak).
-            String ce_elem_wiring = emit_collection_elem_wiring(dst, name, original_name, &m)
+            String ce_elem_wiring = emit_collection_elem_wiring(dst, name, original_name, &m, &sn)
             return ce_call + ce_wiring + ce_elem_wiring
 
         case ICallPtr(dst, callee, args):
