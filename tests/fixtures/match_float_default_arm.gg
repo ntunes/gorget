@@ -1,0 +1,14 @@
+enum E:
+  A(float)
+  B()
+
+float pick(E e):
+  return match e:
+    case E.A(v):
+      v
+    case E.B():
+      0.0
+
+void main():
+  print(pick(E.A(2.5)))
+  print(pick(E.B()))

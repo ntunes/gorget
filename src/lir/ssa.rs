@@ -37,6 +37,36 @@ pub fn construct_ssa(func: &mut LirFunction) {
     }
 }
 
+/// Synthesize a type-correct zero/default constant for `dst` of type `ty`.
+///
+/// SSA construction materializes a default value whenever a slot is read with
+/// no reaching store (uninitialized variable, or an unresolved block argument at
+/// a branch). The constant *must* match the slot's `LirType`: a float slot needs
+/// a float const (`FConst`), not an integer `IConst` tagged `f64`. Emitting a
+/// type-blind `IConst` is silently masked by the C backend (`(double)0LL` casts
+/// to `0.0`) but produces invalid LLVM IR (`add double 0, 0`, which `llc`
+/// rejects with "integer constant must have integer type").
+///
+/// This is the single source of truth for default-synthesis dispatch; all three
+/// sites in this pass route through it.
+fn zero_const_inst(val: ValueId, ty: LirType) -> Inst {
+    match &ty {
+        LirType::Bool => Inst::BoolConst { dst: val, value: false },
+        LirType::F32 => Inst::FConst { dst: val, ty: LirType::F32, bits: 0 },
+        LirType::F64 => Inst::FConst { dst: val, ty: LirType::F64, bits: 0 },
+        LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef => Inst::NullPtr { dst: val },
+        // Item 7e Phase 3: a `Resource` slot is either pointer-shaped
+        // (RefCounted handle) — null-init same as Ptr — or aggregate-
+        // shaped, in which case the entry-block undefined value is
+        // conceptually a zero struct; emitting a NullPtr-like sentinel
+        // is the closest analog at SSA time. The aggregate path
+        // shouldn't fire in practice (slot types stay `Struct(sid)`
+        // under the surgical Phase 2 scope), but is defensive.
+        LirType::Resource { .. } => Inst::NullPtr { dst: val },
+        _ => Inst::IConst { dst: val, ty, value: 0 },
+    }
+}
+
 /// A slot is promotable if:
 /// - It has scalar type (not aggregate, not void)
 /// - No SlotAddr instruction references it
@@ -235,22 +265,8 @@ impl<'a> SsaBuilder<'a> {
             // This happens for uninitialized variables. Create a zero constant.
             let val = self.func.next_value();
             let ty = self.func.slots[slot.0 as usize].ty.clone();
-            // Insert a zero constant at the beginning of bb0.
-            let zero_inst = match &ty {
-                LirType::Bool => Inst::BoolConst { dst: val, value: false },
-                LirType::F32 => Inst::FConst { dst: val, ty: LirType::F32, bits: 0 },
-                LirType::F64 => Inst::FConst { dst: val, ty: LirType::F64, bits: 0 },
-                LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef => Inst::NullPtr { dst: val },
-                // Item 7e Phase 3: a `Resource` slot is either pointer-shaped
-                // (RefCounted handle) — null-init same as Ptr — or aggregate-
-                // shaped, in which case the entry-block undefined value is
-                // conceptually a zero struct; emitting a NullPtr-like sentinel
-                // is the closest analog at SSA time. The aggregate path
-                // shouldn't fire in practice (slot types stay `Struct(sid)`
-                // under the surgical Phase 2 scope), but is defensive.
-                LirType::Resource { .. } => Inst::NullPtr { dst: val },
-                _ => Inst::IConst { dst: val, ty: ty.clone(), value: 0 },
-            };
+            // Insert a type-correct zero constant at the beginning of bb0.
+            let zero_inst = zero_const_inst(val, ty);
             self.func.blocks[bb.0 as usize].insert_inst(0, zero_inst, None);
             self.current_def.insert((bb, slot), val);
             val
@@ -372,7 +388,7 @@ impl<'a> SsaBuilder<'a> {
                             let v = self.func.next_value();
                             let ty = self.func.slots[slot.0 as usize].ty.clone();
                             self.func.blocks[pred_bb.0 as usize]
-                                .push_synthetic(Inst::IConst { dst: v, ty, value: 0 });
+                                .push_synthetic(zero_const_inst(v, ty));
                             v
                         })
                 }).collect();
@@ -398,12 +414,12 @@ impl<'a> SsaBuilder<'a> {
         }
         let preds = self.preds[bb.0 as usize].clone();
         if preds.is_empty() {
-            // Entry block — undefined, use zero.
+            // Entry block — undefined, use a type-correct zero.
             let val = self.func.next_value();
             let ty = self.func.slots[slot.0 as usize].ty.clone();
             self.func.blocks[bb.0 as usize].insert_inst(
                 0,
-                Inst::IConst { dst: val, ty, value: 0 },
+                zero_const_inst(val, ty),
                 None,
             );
             self.current_def.insert((bb, slot), val);
@@ -905,5 +921,39 @@ mod tests {
         assert_eq!(preds[3].len(), 2); // bb3 ← bb1, bb2
         assert!(preds[3].contains(&bb1));
         assert!(preds[3].contains(&bb2));
+    }
+
+    #[test]
+    fn zero_const_inst_is_type_dispatched() {
+        // A float slot's synthesized default must be a float const (FConst),
+        // not an integer IConst tagged f64 — the latter emits invalid LLVM IR
+        // (`add double 0, 0`). Regression guard for gorget-js snag #12.
+        let v = ValueId(0);
+        assert!(
+            matches!(
+                zero_const_inst(v, LirType::F64),
+                Inst::FConst { ty: LirType::F64, bits: 0, .. }
+            ),
+            "F64 default must be an FConst"
+        );
+        assert!(
+            matches!(
+                zero_const_inst(v, LirType::F32),
+                Inst::FConst { ty: LirType::F32, bits: 0, .. }
+            ),
+            "F32 default must be an FConst"
+        );
+        assert!(
+            matches!(zero_const_inst(v, LirType::I64), Inst::IConst { value: 0, .. }),
+            "integer default must be an IConst"
+        );
+        assert!(
+            matches!(zero_const_inst(v, LirType::Bool), Inst::BoolConst { value: false, .. }),
+            "bool default must be a BoolConst"
+        );
+        assert!(
+            matches!(zero_const_inst(v, LirType::Ptr), Inst::NullPtr { .. }),
+            "pointer default must be a NullPtr"
+        );
     }
 }

@@ -23922,6 +23922,23 @@ code=1",
     );
 }
 
+// gorget-js snag #12: a float slot read with no reaching store synthesizes a
+// default zero. The SSA pass must emit a *float* const (FConst), not a
+// type-blind integer IConst tagged f64 — the latter compiles under C
+// (`(double)0LL` casts to 0.0) but emits invalid LLVM (`add double 0, 0`,
+// rejected by llc). The `E.B()` arm's `0.0` exercises the default-synthesis
+// path. Run once per backend (no skip_under_llvm) against the same expected
+// stdout, so this fixture guards BOTH backends and catches a both-wrong regression.
+#[test]
+fn match_float_default_arm() {
+    run_gg(
+        "match_float_default_arm.gg",
+        "\
+2.500000
+0.000000",
+    );
+}
+
 #[test]
 fn consuming_self_loop_error() {
     check_gg_fails("consuming_self_loop_error.gg", "cannot move");
