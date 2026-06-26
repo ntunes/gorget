@@ -5092,6 +5092,39 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                                 # the already-lowered inner; do NOT re-lower.
                                 arg_local = ad_box_local
                                 ad_handled = true
+                    case EIdentifier(ad_name):
+                        # `&value` where `value` is a module-level scalar STATIC.
+                        # The parser strips the `&` sigil, so this reaches the arg
+                        # loop as a bare `EIdentifier`. Falling through to
+                        # `lower_expr(arg)` routes through `lower_static_ref_ident`,
+                        # which types the dst as the static's OWN scalar type — so
+                        # `lir_lower`'s scalar-read gate (`lir_lower.gg`:
+                        # `lir_is_scalar(slot_ty) and not ptr-kind`) LOADS the value
+                        # into a stack temp, and `OpBorrow` then borrows the THROWAWAY
+                        # temp: the callee mutates the copy, the static stays 0.
+                        #
+                        # Fix: emit `__global_ref__<name>` into a `GtMutPtr`-typed dst.
+                        # The PTR-kind slot makes `gr_slot_is_ptr_kind` true →
+                        # the scalar-load gate is SKIPPED → `IGlobalAddr` yields
+                        # `&__lir_gN` straight through, and `OpBorrow` passes the
+                        # global's REAL address to the callee. Emitted C goes from
+                        # load-into-temp to `set_to(&__lir_g0, 42)`. Mirrors Rust gg's
+                        # `Constant::GlobalRefPtr` (addr-only, no load —
+                        # `src/lir/lower/operands.rs:128-134`); identical shape to the
+                        # static place-base arm in `lower_place_base`
+                        # (`lower_stmt.gg`). GATED on a TRUE static
+                        # (`static_contains and not nl_contains`): a name-local /
+                        # param shadow falls through to the existing `lower_expr(arg)`
+                        # path below, so this hot arg-lowering path is unchanged for
+                        # everything that is not a module-level static.
+                        if static_contains(&gmod, ad_name) and not nl_contains(&ctx, ad_name):
+                            int ad_sty = static_lookup_type(&gmod, ad_name)
+                            int ad_pty = register_type(&gmod, GtMutPtr(ad_sty))
+                            int ad_pdst = add_local(&ctx, ad_pty, None)
+                            Vector[Operand] ad_no_args = []
+                            emit(&ctx, GICallExtern(ad_pdst, "__global_ref__" + ad_name, ad_no_args))
+                            arg_local = ad_pdst
+                            ad_handled = true
                     else:
                         pass
             if not ad_handled:
