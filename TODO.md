@@ -607,3 +607,6 @@ Self-host has NO `struct_aliases` (Rust `LirModule::struct_aliases`). `type Hand
 
 ## [follow-up, from throws-expr-body scout] result_map — closure-return-type inference for Result-producing HOF closures
 `result_map.gg` (no `throws`) CC-FAILs in `__Closure_2__call`: the closure passed to `.and_then((int x): Ok(x+1))` has its return type inferred as `int64_t` but its body returns `Result__int64_t__GorgetString` → `error: incompatible types ... 'Result...' but 'int64_t' was expected`. SEPARATE class from the throws Result-deferral — a closure-return-type-inference bug for Result-producing higher-order method closures (`.map`/`.and_then`/`.map_err`). Likely in closure-body return-type inference (lower_closures.gg). Needs its own scout. Unrelated to the throws fixes.
+
+## [nit, non-blocking, from throws-expr-body review] Defect-A peel is single-level
+`lower_stmt.gg:545` peels `GtPtr`/`GtMutPtr` off `val`'s type ONCE (not recursive like `peel_ptr_tid`). Sufficient today (return-site operands are at most single-Ptr-wrapped Result; green 813-net), but a future borrow-of-borrow Result return would under-peel. If `peel_ptr_tid` is cheap to call there, prefer it for robustness. Inconsequential now.
