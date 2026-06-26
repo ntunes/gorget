@@ -1052,6 +1052,95 @@ fn self_host_comprehension_dispatch_arms_count() {
 
 /// Sibling-site-drift ratchet (CLAUDE.md invariant #4 "one fix, all siblings"
 /// + #6 "convert a recurring bug class into an executable guard"; devbook/24
+/// rule 2 "typed metadata, not name-matched"): the Option/Result HOF combinator
+/// templates in the self-host `emit_option_result_combinator`
+/// (`lir_codegen.gg`) are an enumerated class. Each one that dispatches a USER
+/// closure MUST drive the closure-call return cast + the payload read/write off
+/// the TYPED struct fields (`dst_c`/`src_pay_c`/`dst_pay_c`/`dst_err_c` via
+/// `combinator_field_c_type`), NOT the old `void*` cast — a `void*` truncates a
+/// 16-byte `Str`/`Option`/`Result` payload-or-return to 8 bytes →
+/// garbage/SIGSEGV (Inc-4b: `and_then` returned a wide Option, `map_err`
+/// returned a Str). The lint pins this two ways:
+///   - the HOF combinator arm COUNT stays at the baseline (a new combinator
+///     arm trips it and forces a review for the type-aware path), and
+///   - the truncating 2-arg closure cast `void*(*)(void*, void*)` appears
+///     ZERO times in the file (a re-inlined truncating call trips it).
+///
+/// **If this fails because the arm count changed:** a combinator template was
+/// added/removed. A new one that dispatches a closure MUST use the typed
+/// `dst_c`/`*_pay_c`/`*_err_c` C-type strings for the call cast and payload, not
+/// `void*`. Bump EXPECTED with a justification, or lower it if an arm was
+/// removed. **If the void*-cast count is non-zero:** a template re-introduced
+/// the truncating `((void*(*)(void*, void*))…)` closure call — route it through
+/// the typed cast instead.
+#[test]
+fn self_host_combinator_template_arms_count() {
+    /// Baseline 2026-06-26 (Inc-4b): 12 `case` lines for the closure-dispatching
+    /// / value HOF combinator arms in the third `match name:` block of
+    /// `emit_option_result_combinator` — option_{map,filter,and_then,
+    /// `or_else|or` (one merged case line),flatten,unwrap_or_else} +
+    /// result_{map,map_err,and_then,or_else,or,unwrap_or_else}. Counts `case`
+    /// LINES, so a `|`-merged arm (option_or_else|option_or) is one.
+    const EXPECTED_ARMS: usize = 12;
+
+    // lir_codegen.gg lives ONLY in self_host_lowerer (real file, not symlinked),
+    // so no double-count guard is needed.
+    let content =
+        fs::read_to_string("tests/fixtures/self_host_lowerer/lir_codegen.gg").unwrap_or_default();
+
+    // The HOF combinator arms are exactly the `case "__option_…"` / `case
+    // "__result_…"` arms that live BELOW the "HOF combinators" banner and ABOVE
+    // the `# Fallback: unknown combinator` line. Scope the scan to that window
+    // so the earlier is_some/unwrap/expect tag-check arms aren't counted.
+    let start = content
+        .find("# ── HOF combinators: map, filter, and_then, or_else, or ──")
+        .expect("self_host_combinator_template_arms_count: HOF combinator banner not found");
+    let end = content[start..]
+        .find("# Fallback: unknown combinator")
+        .map(|o| start + o)
+        .expect("self_host_combinator_template_arms_count: combinator fallback marker not found");
+    let window = &content[start..end];
+
+    let mut arms = 0usize;
+    for line in window.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('#') {
+            continue; // .gg comments
+        }
+        if trimmed.starts_with("case \"__option_") || trimmed.starts_with("case \"__result_") {
+            arms += 1;
+        }
+    }
+
+    assert_eq!(
+        arms, EXPECTED_ARMS,
+        "Self-host Option/Result HOF combinator template arm count changed: \
+         {arms} vs {EXPECTED_ARMS}.\n\n\
+         The combinator templates are an enumerated class. A new combinator that \
+         dispatches a user closure MUST drive the closure-call return cast and the \
+         payload read/write off the TYPED struct fields (`dst_c`/`src_pay_c`/\
+         `dst_pay_c`/`dst_err_c` via `combinator_field_c_type`) — NOT a `void*` \
+         cast, which truncates a 16-byte Str/Option/Result payload-or-return to 8 \
+         bytes (garbage/SIGSEGV). Bump EXPECTED_ARMS with a justification, or lower \
+         it if an arm was removed.",
+    );
+
+    // The truncating 2-arg closure-call cast must be GONE: every closure that
+    // takes a payload arg is now declared with the real argument + return type.
+    let trunc_casts = content.matches("void*(*)(void*, void*)").count();
+    assert_eq!(
+        trunc_casts, 0,
+        "Found {trunc_casts} truncating 2-arg closure-call cast(s) \
+         `void*(*)(void*, void*)` in lir_codegen.gg. A combinator template \
+         re-introduced the void*-truncating closure call (loses the upper 8 bytes \
+         of a Str/Option/Result payload or return → garbage/SIGSEGV). Declare the \
+         call with the real payload + return C types (`combinator_field_c_type`) \
+         instead.",
+    );
+}
+
+/// Sibling-site-drift ratchet (CLAUDE.md invariant #4 "one fix, all siblings"
+/// + #6 "convert a recurring bug class into an executable guard"; devbook/24
 /// rule 3 "one source of truth per axis"): every freshly-built collection
 /// LOCAL (the dst of an array/dict/set LITERAL or a list/set/dict
 /// COMPREHENSION / HOF accumulator) in the self-host GIR lowerer

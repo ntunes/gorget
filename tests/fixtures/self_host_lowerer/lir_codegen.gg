@@ -4265,6 +4265,34 @@ String map_mono_to_runtime(String name, LirModule &m):
 # All combinators take a pointer to the Option/Result as first arg.
 # HOF combinators (map, filter, and_then, or_else) take a closure ptr as second arg.
 
+# Closure Phase-2 Inc-4b (R2) helper: the LIR field type of the variant
+# payload at `field_idx` of the enum struct `struct_ty` (Some_0/Ok_0 = idx 1,
+# Error_0 = idx 2), or LT_VOID if `struct_ty` is not a known struct or has no
+# such field. Drives the type-aware combinator templates so the closure-call
+# declaration + payload read/write use the REAL payload C type instead of the
+# truncating `void*` cast (a 16-byte Str/Option/Result return cast to void*
+# lost its upper 8 bytes → garbage/SIGSEGV). Mirrors the field-cast read in
+# `__result_unwrap_error` (single mechanism: drive off the typed struct def).
+int combinator_field_lir_type(int struct_ty, int field_idx, LirModule &m):
+    if struct_ty < LT_STRUCT_BASE:
+        return LT_VOID
+    int sid = struct_ty - LT_STRUCT_BASE
+    if sid < 0 or sid >= m.structs.len():
+        return LT_VOID
+    LirStructDef sdef = m.structs.get(sid).unwrap()
+    if field_idx < 0 or field_idx >= sdef.fields.len():
+        return LT_VOID
+    return sdef.fields.get(field_idx).unwrap().ty
+
+# The C type-name for the variant payload at `field_idx` of `struct_ty`,
+# falling back to "void*" when the field type is unknown (preserves the old
+# behaviour for any combinator whose dst/src type didn't resolve).
+String combinator_field_c_type(int struct_ty, int field_idx, Vector[String] &sn, LirModule &m):
+    int fty = combinator_field_lir_type(struct_ty, field_idx, &m)
+    if fty == LT_VOID:
+        return "void*"
+    return c_type_name(fty, &sn)
+
 String emit_option_result_combinator(int dst, String name, Vector[int] &args,
                                       Vector[String] &sn, Dict[int, int] &val_types, LirModule &m):
     if args.len() == 0:
@@ -4278,6 +4306,29 @@ String emit_option_result_combinator(int dst, String name, Vector[int] &args,
         src_ty = val_types.get(src_id).unwrap()
     if lir_is_aggregate(src_ty):
         src = "(&" + src + ")"
+
+    # Closure Phase-2 Inc-4b (R2): type-aware closure-call + payload types for
+    # the HOF templates below. `dst_ty` is the result Option/Result struct (16
+    # bytes for a scalar payload, larger for Str/aggregate). The payload C types
+    # (`Some_0`/`Ok_0` = field idx 1, `Error_0` = idx 2) drive the closure-call
+    # return cast and the payload read so a wide (Str/Option/Result) return is
+    # NO LONGER truncated through `void*` (the void* cast lost the upper 8 bytes
+    # → garbage/SIGSEGV). Now `infer_method_return_type` (Inc-4a) types `dst` as
+    # the real Option__T / Result__T__E, so `dst_ty` resolves here.
+    int dst_ty = LT_VOID
+    if dst >= 0 and val_types.contains(dst):
+        dst_ty = val_types.get(dst).unwrap()
+    # src payload (the closure's INPUT for map/filter/and_then; the err payload
+    # for map_err/or_else on Result is field idx 2).
+    String src_pay_c = combinator_field_c_type(src_ty, 1, &sn, &m)
+    String src_err_c = combinator_field_c_type(src_ty, 2, &sn, &m)
+    # dst payload (the closure's OUTPUT for map; the Error payload for map_err).
+    String dst_pay_c = combinator_field_c_type(dst_ty, 1, &sn, &m)
+    String dst_err_c = combinator_field_c_type(dst_ty, 2, &sn, &m)
+    # dst whole-struct C name (the closure's OUTPUT for and_then/or_else).
+    String dst_c = "void*"
+    if dst_ty >= LT_STRUCT_BASE:
+        dst_c = c_type_name(dst_ty, &sn)
 
     # ── Tag checks: is_some, is_none, is_ok, is_error ──
     match name:
@@ -4347,30 +4398,37 @@ String emit_option_result_combinator(int dst, String name, Vector[int] &args,
     if args.len() > 1:
         closure = v(args.get(1).unwrap())
 
+    # Inc-4b (R2): every HOF arm below reads the source payload as its REAL C
+    # type (`*(<pay>*)((char*)src + 8)`, the Some_0/Ok_0 field at the aligned
+    # offset 8) and declares the closure call with the REAL return type — no
+    # more `void*` truncation of a 16-byte Str / Option / Result payload-or-
+    # return. The destination payload is written via `((<DstStruct>*)&dst)->Field
+    # = ...` so a wide payload lands fully and the layout (union or laid-out)
+    # comes from the typed struct def, not hand-rolled offset math.
     match name:
         case "__option_map":
-            # if tag==0: result = {0, fn(payload)}; else: result = {1}
+            # if tag==0: dst = Some(fn(payload)); else: dst = None
             if dst >= 0:
-                return "{ if ((*(int32_t*)" + src + ") == 0) { *(int32_t*)&" + v(dst) + " = 0; void* __payload = (char*)" + src + " + 8; void* __mapped = ((void*(*)(void*, void*))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], *((void**)__payload)); memcpy((char*)&" + v(dst) + " + 8, &__mapped, sizeof(__mapped)); } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); *(int32_t*)&" + v(dst) + " = 1; } }"
+                return "{ if ((*(int32_t*)" + src + ") == 0) { *(int32_t*)&" + v(dst) + " = 0; " + src_pay_c + " __pay = *(" + src_pay_c + "*)((char*)" + src + " + 8); ((" + dst_c + "*)&" + v(dst) + ")->Some_0 = ((" + dst_pay_c + "(*)(void*, " + src_pay_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __pay); } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); *(int32_t*)&" + v(dst) + " = 1; } }"
             return ";"
         case "__option_filter":
             # if tag==0 && predicate(payload): keep; else: None
             if dst >= 0:
-                return "{ if ((*(int32_t*)" + src + ") == 0) { void* __payload = (char*)" + src + " + 8; bool __keep = (bool)(int64_t)((void*(*)(void*, void*))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], *((void**)__payload)); if (__keep) { memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); *(int32_t*)&" + v(dst) + " = 1; } } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); *(int32_t*)&" + v(dst) + " = 1; } }"
+                return "{ if ((*(int32_t*)" + src + ") == 0) { " + src_pay_c + " __pay = *(" + src_pay_c + "*)((char*)" + src + " + 8); bool __keep = (bool)((int64_t(*)(void*, " + src_pay_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __pay); if (__keep) { memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); *(int32_t*)&" + v(dst) + " = 1; } } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); *(int32_t*)&" + v(dst) + " = 1; } }"
             return ";"
         case "__option_and_then":
-            # if tag==0: result = fn(payload) (fn returns Option); else: None
+            # if tag==0: dst = fn(payload) (fn returns Option); else: None
             if dst >= 0:
-                return "{ if ((*(int32_t*)" + src + ") == 0) { void* __payload = (char*)" + src + " + 8; void* __res = ((void*(*)(void*, void*))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], *((void**)__payload)); memcpy(&" + v(dst) + ", &__res, sizeof(" + v(dst) + ")); } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); *(int32_t*)&" + v(dst) + " = 1; } }"
+                return "{ if ((*(int32_t*)" + src + ") == 0) { " + src_pay_c + " __pay = *(" + src_pay_c + "*)((char*)" + src + " + 8); " + v(dst) + " = ((" + dst_c + "(*)(void*, " + src_pay_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __pay); } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); *(int32_t*)&" + v(dst) + " = 1; } }"
             return ";"
         case "__option_or_else" | "__option_or":
-            # if tag!=0: result = fn() or alt; else: keep
+            # if tag!=0: dst = fn() or alt; else: keep src
             if dst >= 0:
                 if name == "__option_or" and args.len() > 1:
                     # __option_or(src, alt) — alt is a pointer to the alternative
                     String alt = v(args.get(1).unwrap())
                     return "{ if ((*(int32_t*)" + src + ") != 0) { memcpy(&" + v(dst) + ", " + alt + ", sizeof(" + v(dst) + ")); } else { memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); } }"
-                return "{ if ((*(int32_t*)" + src + ") != 0) { void* __res = ((void*(*)(void*))((void**)" + closure + ")[0])(((void**)" + closure + ")[1]); memcpy(&" + v(dst) + ", &__res, sizeof(" + v(dst) + ")); } else { memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); } }"
+                return "{ if ((*(int32_t*)" + src + ") != 0) { " + v(dst) + " = ((" + dst_c + "(*)(void*))((void**)" + closure + ")[0])(((void**)" + closure + ")[1]); } else { memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); } }"
             return ";"
         case "__option_flatten":
             # Unwrap nested Option: if tag==0, return inner Option; else None
@@ -4380,36 +4438,41 @@ String emit_option_result_combinator(int dst, String name, Vector[int] &args,
         case "__option_unwrap_or_else":
             # if tag==0: return payload; else: return fn()
             if dst >= 0:
-                return "{ if ((*(int32_t*)" + src + ") == 0) { memcpy(&" + v(dst) + ", (char*)" + src + " + 8, sizeof(" + v(dst) + ")); } else { " + v(dst) + " = (int64_t)((void*(*)(void*))((void**)" + closure + ")[0])(((void**)" + closure + ")[1]); } }"
+                return "{ if ((*(int32_t*)" + src + ") == 0) { memcpy(&" + v(dst) + ", (char*)" + src + " + 8, sizeof(" + v(dst) + ")); } else { " + v(dst) + " = (" + c_type_name(dst_ty, &sn) + ")((void*(*)(void*))((void**)" + closure + ")[0])(((void**)" + closure + ")[1]); } }"
             return ";"
         case "__result_map":
             # Same as option_map but for Result (tag==0 is Ok)
             if dst >= 0:
-                return "{ if ((*(int32_t*)" + src + ") == 0) { *(int32_t*)&" + v(dst) + " = 0; void* __payload = (char*)" + src + " + 8; void* __mapped = ((void*(*)(void*, void*))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], *((void**)__payload)); memcpy((char*)&" + v(dst) + " + 8, &__mapped, sizeof(__mapped)); } else { memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); } }"
+                return "{ if ((*(int32_t*)" + src + ") == 0) { *(int32_t*)&" + v(dst) + " = 0; " + src_pay_c + " __pay = *(" + src_pay_c + "*)((char*)" + src + " + 8); ((" + dst_c + "*)&" + v(dst) + ")->Ok_0 = ((" + dst_pay_c + "(*)(void*, " + src_pay_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __pay); } else { memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); } }"
             return ";"
         case "__result_map_err":
-            # if tag!=0: result = {1, fn(error_payload)}; else: keep
+            # if tag!=0: dst = Error(fn(error_payload)); else: keep Ok
             if dst >= 0:
-                return "{ if ((*(int32_t*)" + src + ") != 0) { *(int32_t*)&" + v(dst) + " = 1; void* __payload = (char*)" + src + " + 8; void* __mapped = ((void*(*)(void*, void*))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], *((void**)__payload)); memcpy((char*)&" + v(dst) + " + 8, &__mapped, sizeof(__mapped)); } else { memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); } }"
+                return "{ if ((*(int32_t*)" + src + ") != 0) { *(int32_t*)&" + v(dst) + " = 1; " + src_err_c + " __pay = ((" + c_type_name(src_ty, &sn) + "*)" + src + ")->Error_0; ((" + dst_c + "*)&" + v(dst) + ")->Error_0 = ((" + dst_err_c + "(*)(void*, " + src_err_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __pay); } else { memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); } }"
             return ";"
         case "__result_and_then":
-            # if tag==0: result = fn(ok_payload) (fn returns Result); else: keep error
+            # if tag==0: dst = fn(ok_payload) (fn returns Result); else: keep error
             if dst >= 0:
-                return "{ if ((*(int32_t*)" + src + ") == 0) { void* __payload = (char*)" + src + " + 8; void* __res = ((void*(*)(void*, void*))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], *((void**)__payload)); memcpy(&" + v(dst) + ", &__res, sizeof(" + v(dst) + ")); } else { memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); } }"
+                return "{ if ((*(int32_t*)" + src + ") == 0) { " + src_pay_c + " __pay = *(" + src_pay_c + "*)((char*)" + src + " + 8); " + v(dst) + " = ((" + dst_c + "(*)(void*, " + src_pay_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __pay); } else { memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); } }"
             return ";"
         case "__result_or_else":
-            # if tag!=0: result = fn(error_payload) (fn returns Result); else: keep ok
+            # if tag!=0: dst = fn(error_payload) (fn returns Result); else: keep ok
             if dst >= 0:
-                return "{ if ((*(int32_t*)" + src + ") != 0) { void* __payload = (char*)" + src + " + 8; void* __res = ((void*(*)(void*, void*))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], *((void**)__payload)); memcpy(&" + v(dst) + ", &__res, sizeof(" + v(dst) + ")); } else { memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); } }"
+                return "{ if ((*(int32_t*)" + src + ") != 0) { " + src_err_c + " __pay = ((" + c_type_name(src_ty, &sn) + "*)" + src + ")->Error_0; " + v(dst) + " = ((" + dst_c + "(*)(void*, " + src_err_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __pay); } else { memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); } }"
             return ";"
         case "__result_or":
+            # alt (arg[1]) is already a POINTER to the alternative Result (the
+            # `__option_or` sibling reads it bare). The prior `&alt` here copied
+            # the pointer-to-pointer (8 bytes of a pointer + garbage) instead of
+            # the Result struct → err.or(alt) yielded the original Error. Mirror
+            # __option_or: deref via the bare `alt`.
             if dst >= 0 and args.len() > 1:
                 String alt = v(args.get(1).unwrap())
-                return "{ if ((*(int32_t*)" + src + ") != 0) { memcpy(&" + v(dst) + ", &" + alt + ", sizeof(" + v(dst) + ")); } else { memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); } }"
+                return "{ if ((*(int32_t*)" + src + ") != 0) { memcpy(&" + v(dst) + ", " + alt + ", sizeof(" + v(dst) + ")); } else { memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); } }"
             return ";"
         case "__result_unwrap_or_else":
             if dst >= 0:
-                return "{ if ((*(int32_t*)" + src + ") == 0) { memcpy(&" + v(dst) + ", (char*)" + src + " + 8, sizeof(" + v(dst) + ")); } else { " + v(dst) + " = (int64_t)((void*(*)(void*))((void**)" + closure + ")[0])(((void**)" + closure + ")[1]); } }"
+                return "{ if ((*(int32_t*)" + src + ") == 0) { memcpy(&" + v(dst) + ", (char*)" + src + " + 8, sizeof(" + v(dst) + ")); } else { " + v(dst) + " = (" + c_type_name(dst_ty, &sn) + ")((void*(*)(void*))((void**)" + closure + ")[0])(((void**)" + closure + ")[1]); } }"
             return ";"
         else:
             pass
