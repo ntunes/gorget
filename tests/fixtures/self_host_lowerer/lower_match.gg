@@ -1558,11 +1558,23 @@ int lower_match_expr(LowerCtx &ctx, SpannedExpr scrutinee_expr, Vector[MatchArm]
     String enum_name = match_enum_type(type_name, &gmod)
     # Seed result type from expected_type when the writer set a concrete
     # one; else I64 (refined below from the first non-Unit arm value).
+    # EXCEPTION: when expected_type is a Result wrapper (a `throws` fn's
+    # return position — the writer sets expected_type to the Result), do
+    # NOT seed/refine from it. A bare-T arm (`case BoolV(b): b`) yields a
+    # bare `bool`; seeding the result-local to the Result wrapper would size
+    # the slot for the wrapper and codegen `(Result){0}`, DROPPING the bool
+    # (returns `ok false`). Leave result_type_refined = false so the FIRST
+    # non-divergent arm refines the result-local to its OWN type (bare-T →
+    # bool); the outer `lower_return` then wraps `Ok(b)`. Mirrors Rust
+    # `lower_match_expr`/`lower_match_stmt_as_expr`: when expected_type is a
+    # Result wrapper, defer the result_local's final type to the first
+    # non-divergent arm.
     int result_type_init = I64_TYPE
     bool result_type_refined = false
     if ctx.expected_type >= 0 and ctx.expected_type < gmod.type_table.len():
-        result_type_init = ctx.expected_type
-        result_type_refined = true
+        if enum_category_of(&gmod, ctx.expected_type).category != ENUM_CAT_RESULT:
+            result_type_init = ctx.expected_type
+            result_type_refined = true
     int result = add_local(&ctx, result_type_init, None)
     int merge_bb = new_block(&ctx)
     for arm in arms:

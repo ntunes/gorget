@@ -1,0 +1,6 @@
++: ok true
+-: ok false
+0: err zero!
+r/bool: ok true
+r/+: ok true
+r/-: ok false
