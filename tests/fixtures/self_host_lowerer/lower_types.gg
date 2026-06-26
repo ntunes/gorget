@@ -928,8 +928,18 @@ int resolve_field_gir_type(String type_name, GirModule &gmod):
             return lookup_or_register_named(&gmod, "GorgetString")
         case "int32_t" | "i32":
             return I32_TYPE
-        case "int8_t" | "i8" | "byte" | "uint8_t":
+        case "int16_t" | "i16":
+            return I16_TYPE
+        case "int8_t" | "i8" | "byte":
             return I8_TYPE
+        case "uint8_t" | "u8":
+            return U8_TYPE
+        case "uint16_t" | "u16":
+            return U16_TYPE
+        case "uint32_t" | "u32":
+            return U32_TYPE
+        case "uint64_t" | "u64":
+            return U64_TYPE
         else:
             # BRIDGE (option_ref_borrow): a `Ref__<pointee>` field name is a
             # borrow-payload (Option[Ref[T]].Some_0) — resolve it to a real
