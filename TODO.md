@@ -623,3 +623,6 @@ Sequenced increments (ordered yield/risk/unblock):
 5. Callable-param-through-extern callback (`df.apply_float(col, fn)`): extern-method ABI + `__callable_N` threading. Est +3-5 (closure_float_ret/callable_ref_param/vector_callable_two_locals). MED-HIGH. Rust `closures.rs:233-248`.
 6. Nested closures: drop `stmts_have_nested_closure` guard `lower_expr.gg:3158` + env nesting. Est +2-3. MED.
 7. Box[Callable] / shared callable / non-resource-enum capture: `lir_lower.gg` Box/shared paths. Est +3-4 (box_callable/shared_callable/test_closures_edge_cases). MED.
+
+## [follow-up, from none_literal review] map_ast_type registration side-effect is a latent footgun
+`map_ast_type` calls `lookup_or_register_named` (lower_types.gg:~645) — a REGISTRATION SIDE EFFECT, so it is NOT a pure type-query. The fn_param_sigs pre-pass guard `not fsdef.is_extern_stub` (lower.gg:3550) LOCALLY contains it for stub PARAMS, but the unguarded return-path registration (`map_fn_return_type`→`map_ast_type`, lower.gg:3555) would re-trip it for a future `extern Guard[bool] make()` (a stub whose RETURN is a named resource). Principled fix: split a side-effect-free pure type-query path from the register-on-demand path, OR make the pre-pass use the query-only variant. Not urgent (no current fixture trips the return path), but the footgun is real.
