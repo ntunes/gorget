@@ -1,0 +1,34 @@
+# Regression: a `bool` derived from a *runtime* comparison must round-trip
+# correctly through the C-ABI boundary (gorget_bool_to_str / push_bool).
+#
+# Gorget `bool` lowers to LLVM `i1`. A C `_Bool` argument must be passed
+# `zeroext` (x86-64 psABI): an `i1` from `icmp`/`xor` has undefined high bits,
+# so without the attribute the C runtime reads garbage and `not`/comparisons
+# flip nondeterministically with register allocation. With a literal operand
+# the comparison const-folds and hides the bug — the operand here comes from a
+# runtime call so a real `icmp` is emitted.
+
+int identity(int x):
+    return x
+
+void main():
+    int a = identity(0)
+    bool z = a == 0
+    print(f"z={z}")
+    print(f"nz={not z}")
+
+    int b = identity(7)
+    bool nz2 = b == 0
+    print(f"nz2={nz2}")
+    print(f"z2={not nz2}")
+
+    # chained `and` of runtime comparisons, then negate
+    bool all_zero = a == 0 and b - 7 == 0 and identity(0) == 0
+    print(f"all_zero={all_zero}")
+    print(f"leaked={not all_zero}")
+
+    # bool through String.push (gorget_string_push_bool)
+    String s = ""
+    s.push(not z)
+    s.push(z)
+    print(s)

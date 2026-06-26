@@ -26304,6 +26304,25 @@ value: true
     );
 }
 
+// Regression for the LLVM `i1`-without-`zeroext` C-ABI bug: a bool from a
+// runtime comparison passed to gorget_bool_to_str / push_bool read garbage
+// upper bits, flipping `not`/comparisons nondeterministically (surfaced as a
+// phantom leak in leak_string_heavy after unrelated codegen churn).
+#[test]
+fn bool_not_runtime_cmp_abi() {
+    run_gg(
+        "bool_not_runtime_cmp_abi.gg",
+        "\
+z=true
+nz=false
+nz2=false
+z2=true
+all_zero=true
+leaked=false
+falsetrue",
+    );
+}
+
 #[test]
 fn fstring_move_interp_leak() {
     run_gg(

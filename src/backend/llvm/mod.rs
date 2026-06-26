@@ -97,6 +97,26 @@ fn llvm_arg_type(ty: &LirType, snames: &HashMap<u32, String>) -> String {
     }
 }
 
+/// Parameter type for a C-ABI function *declaration*.
+///
+/// Gorget `bool` lowers to LLVM `i1`, but a C `_Bool` argument must be passed
+/// `zeroext` per the x86-64 psABI: the callee reads the argument byte and the
+/// caller must guarantee the high bits are clear. An `i1` produced by `icmp`
+/// or `xor` lives in a register with *undefined* high bits, so without
+/// `zeroext` the C runtime reads garbage — e.g. `not (x == 0)` then flips
+/// nondeterministically with register allocation (it surfaced as a phantom
+/// leak in `leak_string_heavy` after unrelated codegen churn). llc applies the
+/// declaration's parameter attribute to direct call sites, so annotating the
+/// declaration is sufficient; this mirrors what clang emits for every `bool`
+/// parameter. Keep new C-function declarations that take a `bool` routed
+/// through here (or spell `i1 zeroext` by hand) — a bare `i1` param is the bug.
+fn llvm_c_param_type(ty: &LirType, snames: &HashMap<u32, String>) -> String {
+    match ty {
+        LirType::Bool => "i1 zeroext".to_string(),
+        _ => llvm_arg_type(ty, snames),
+    }
+}
+
 /// On x86_64 SysV, large aggregates (>16 bytes) passed by value go on the
 /// outgoing stack frame as a memory-class copy. On aarch64 AAPCS64 they are
 /// instead passed via an implicit pointer in a register, which is what the
@@ -1334,18 +1354,18 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     writeln!(out, "declare void @gorget_string_format(ptr sret(%GorgetString), ptr, ...)").unwrap();
     writeln!(out, "declare void @gorget_string_format_alloc(ptr sret(%GorgetString), ptr, ...)").unwrap();
     // gorget_bool_to_str returns GorgetString by value → sret
-    writeln!(out, "declare void @gorget_bool_to_str(ptr sret(%GorgetString), i1)").unwrap();
+    writeln!(out, "declare void @gorget_bool_to_str(ptr sret(%GorgetString), i1 zeroext)").unwrap();
     writeln!(out, "declare ptr @malloc(i64)").unwrap();
     writeln!(out, "declare void @free(ptr)").unwrap();
     // String push variants for gorget_str_push type dispatch
     writeln!(out, "declare void @gorget_string_push_int(ptr, i64)").unwrap();
     writeln!(out, "declare void @gorget_string_push_float(ptr, double)").unwrap();
-    writeln!(out, "declare void @gorget_string_push_bool(ptr, i1)").unwrap();
+    writeln!(out, "declare void @gorget_string_push_bool(ptr, i1 zeroext)").unwrap();
     // gorget_string_push_char(GorgetString* s, Str c) — second arg is Str by value.
     writeln!(out, "declare void @gorget_string_push_char(ptr, {sp})", sp = str_param).unwrap();
     writeln!(out, "declare void @gorget_string_push_line_int(ptr, i64)").unwrap();
     writeln!(out, "declare void @gorget_string_push_line_float(ptr, double)").unwrap();
-    writeln!(out, "declare void @gorget_string_push_line_bool(ptr, i1)").unwrap();
+    writeln!(out, "declare void @gorget_string_push_line_bool(ptr, i1 zeroext)").unwrap();
     writeln!(out, "declare void @gorget_string_push_line(ptr, ptr)").unwrap();
     writeln!(out, "declare void @exit(i32) noreturn").unwrap();
     // Dict/Map/Set HOF helpers for filter inline expansion
@@ -1650,7 +1670,10 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
                     }
                     return format!("ptr {}", large_agg_byval_attr(p, snames)).trim_end().to_string();
                 }
-                llvm_type_full(p, snames)
+                // Scalar params: `bool` must carry `zeroext` at the C-ABI
+                // boundary (see llvm_c_param_type) — a bare `i1` reads garbage
+                // upper bits on the C side.
+                llvm_c_param_type(p, snames)
             })
             .collect();
         let variadic = if ext.is_variadic {
