@@ -216,7 +216,7 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
     # Range/user-iterables. Calls `coll.iter()` (or treats `coll` as the
     # iterator if no iter() exists) and loops on `next() → Option[T]`
     # until None.
-    lower_for_iterator(&ctx, pat, coll_local, coll_tn, body, &gmod, is_main)
+    lower_for_iterator(&ctx, pat, coll_local, coll_tn, body, else_body, &gmod, is_main)
 
 # Vector/Deque fast path: idx-based scaffold matching the manual idiom
 # users write today (`int i = 0; while i < x.len(): T v = x.get(i).unwrap();
@@ -775,7 +775,7 @@ void lower_for_range(LowerCtx &ctx, String loop_name, SpannedExpr start_e, Spann
 #           break → exit>
 #
 # Continue jumps to the header (re-call next()); break to exit.
-void lower_for_iterator(LowerCtx &ctx, SpannedPattern pat, int coll_local, String coll_tn, Vector[Stmt] body, GirModule &gmod, bool is_main):
+void lower_for_iterator(LowerCtx &ctx, SpannedPattern pat, int coll_local, String coll_tn, Vector[Stmt] body, Vector[Stmt] else_body, GirModule &gmod, bool is_main):
     # Locate iter() and next() in fn_sigs. If coll has `iter()`, we call it
     # and loop on the returned iterator. If coll has `next()` but no
     # `iter()`, it IS an iterator — skip the iter() call.
@@ -811,9 +811,20 @@ void lower_for_iterator(LowerCtx &ctx, SpannedPattern pat, int coll_local, Strin
     # ── Block layout ────────────────────────────────────────
     # No incr_bb — `.next()` advances internally, so continue goes back
     # to the header (which re-calls next()).
+    # for-else: `else_bb` sits between the header's None-exit and the true
+    # `exit_bb`. The header branches to `else_bb` (not `exit_bb`) when
+    # `next()` yields None (natural exhaustion). `break` points to
+    # `exit_bb` directly — skipping `else_bb` (Python for-else semantics:
+    # else runs only when no break fired). When `else_body` is empty,
+    # `else_bb == exit_bb` and the None-exit goes straight to exit.
+    # Mirrors `lower_for_set` above + Rust's alloc_for_blocks /
+    # emit_else_arm_tail (for_loops.rs:33-44 / :68-81).
     int header_bb = new_block(&ctx)
     int body_bb = new_block(&ctx)
     int exit_bb = new_block(&ctx)
+    int else_bb = exit_bb
+    if else_body.len() > 0:
+        else_bb = new_block(&ctx)
     set_terminator(&ctx, GTJump(header_bb))
     # Header: step = iter.next(); branch on Some/None tag.
     switch_to(&ctx, header_bb)
@@ -824,9 +835,10 @@ void lower_for_iterator(LowerCtx &ctx, SpannedPattern pat, int coll_local, Strin
     int tag_local = emit_tag_read(&ctx, scr_ptr, opt_type_name, &gmod)
     int cmp_local = add_local(&ctx, BOOL_TYPE, None)
     # Option tag layout: 0 = Some, 1 = None (matches emit_tag_read's contract,
-    # mirroring the unwrap_or path at lines ~2055-2076).
+    # mirroring the unwrap_or path at lines ~2055-2076). On None (exhausted)
+    # branch to `else_bb` (== exit_bb when there's no else).
     emit(&ctx, GICmp(cmp_local, CMP_EQ, I64_TYPE, OpCopy(tag_local), OpConstI64(0)))
-    set_terminator(&ctx, GTBranch(OpCopy(cmp_local), body_bb, exit_bb))
+    set_terminator(&ctx, GTBranch(OpCopy(cmp_local), body_bb, else_bb))
     # Body: extract payload, bind pattern, lower body, jump back to header.
     ctx.loop_continue_stack.push(header_bb)
     ctx.loop_break_stack.push(exit_bb)
@@ -862,6 +874,18 @@ void lower_for_iterator(LowerCtx &ctx, SpannedPattern pat, int coll_local, Strin
             pop_drop_scope_no_emit(&ctx)
     ctx.loop_continue_stack.pop()
     ctx.loop_break_stack.pop()
+    # else block: runs only when the iterator exhausted (next() → None)
+    # without a break. If else_body is empty, else_bb == exit_bb and this
+    # is a no-op (the `if` guards it). Mirrors `lower_for_set`'s tail.
+    if else_body.len() > 0:
+        switch_to(&ctx, else_bb)
+        lower_stmts(&ctx, else_body, &gmod, is_main)
+        Terminator else_term = ctx.block_terms.get(ctx.current_block).unwrap()
+        match else_term:
+            case GTNone():
+                set_terminator(&ctx, GTJump(exit_bb))
+            else:
+                pass
     switch_to(&ctx, exit_bb)
 
 # Bind a for-loop pattern part to a GIR local. The element binding is a
