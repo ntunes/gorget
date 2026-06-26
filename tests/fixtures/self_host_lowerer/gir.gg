@@ -389,15 +389,19 @@ struct GirGlobal:
 # (= env-field = struct-ctor-arg = body GIFieldLoad-index) order. The
 # capture VECTOR ORDER is the SINGLE source of truth across all three:
 # env-field order == struct-ctor arg order == body GIFieldLoad index.
-# `mode` is CAP_BY_VALUE in 2a; CAP_BY_MUT_REF is reserved for 2c.
-const int CAP_BY_VALUE = 0    # 2a: bit-copy a primitive into the env
-const int CAP_BY_MUT_REF = 1  # 2c (reserved, not implemented)
+# `mode` is CAP_BY_VALUE in 2a/2b; CAP_BY_MUT_REF (2c) is used for a
+# captured PRIMITIVE that the body MUTATES — the env field holds a
+# `MutPtr(T)` to the outer slot (named `MutRef__<T>` so the body
+# GIFieldLoad takes the load-stored-pointer path), and reads/writes
+# deref through it. Resource/nested/enum mutable captures still STUB.
+const int CAP_BY_VALUE = 0    # 2a/2b: bit-copy/clone the value into the env
+const int CAP_BY_MUT_REF = 1  # 2c: env holds a MutPtr(T) to the outer slot
 
 struct ClosureCapture:
     String name      # the captured outer-local's name
-    int type_id      # GIR type id of the captured value (2a: {0,4,10})
-    int local_id     # the outer local's id at the make-site (for OpCopy)
-    int mode         # CAP_BY_VALUE (2a) / CAP_BY_MUT_REF (2c, reserved)
+    int type_id      # GIR type id of the captured value (2a: {0,4,10}; 2c: pointee T)
+    int local_id     # the outer local's id at the make-site (for OpCopy / OpBorrow)
+    int mode         # CAP_BY_VALUE (2a/2b) / CAP_BY_MUT_REF (2c primitive mutate-through)
 
 struct LiftedClosure:
     int cid                          # closure id (from gmod_next_closure_id)

@@ -3158,15 +3158,42 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     if not (cl_is_resource or cl_is_copy_struct):
                         cl_caps_ok = false
                 cl_ci += 1
-            # (c) mutation check — build the capture-name set, then scan.
+            # (c) mutation check — RECLASSIFY mutated PRIMITIVE captures to
+            # CAP_BY_MUT_REF (2c) instead of stubbing. A closure that mutates
+            # a captured outer var (`count = count + 1`, `total += n`) holds a
+            # `MutPtr(T)` to the outer slot in its env (named `MutRef__<T>` at
+            # §4c-2c so the body GIFieldLoad loads-the-stored-pointer), and the
+            # body reads/writes deref through it (the shared `&`/`!`-param
+            # paths fire on the `GtMutPtr(T)`-typed body load — see §4e-2c).
+            # Mirrors Rust `closures.rs` ByMutRef: detect_mutations (:101-118) →
+            # MutPtr field (:124-138) → emit_borrow_mut (:326-332) → body deref
+            # (:413-425). RESTRICTED to primitive pointees {BOOL,I64,F64}: a
+            # mutated RESOURCE / COPY-struct capture stays STUB (2c is
+            # primitive-only; resource/nested/enum mutable captures are later
+            # increments). Build the new caps vector in walk order (single
+            # source of truth) flipping the mode per mutated primitive.
             if cl_caps_ok and cl_caps.len() > 0:
-                Dict[String, bool] cl_cap_names = {}
+                Vector[ClosureCapture] cl_caps2 = []
                 int cl_cni = 0
                 while cl_cni < cl_caps.len():
-                    cl_cap_names.put(cl_caps.get(cl_cni).unwrap().name.clone(), true)
+                    ClosureCapture cl_mc = cl_caps.get(cl_cni).unwrap()
+                    # Per-name mutation test (single-name set → reuse
+                    # stmts_mutate_any). Cheap: closures capture few vars.
+                    Dict[String, bool] cl_one_name = {}
+                    cl_one_name.put(cl_mc.name.clone(), true)
+                    bool cl_mut = stmts_mutate_any(cbody, cl_one_name)
+                    bool cl_prim = cl_mc.type_id == BOOL_TYPE or cl_mc.type_id == I64_TYPE or cl_mc.type_id == F64_TYPE
+                    if cl_mut and cl_prim:
+                        # Reclassify → ByMutRef (mutate-through-MutPtr).
+                        cl_caps2.push(ClosureCapture(cl_mc.name.clone(), cl_mc.type_id, cl_mc.local_id, CAP_BY_MUT_REF))
+                    elif cl_mut:
+                        # Mutated non-primitive (resource / COPY struct) → STUB.
+                        cl_caps_ok = false
+                        cl_caps2.push(cl_mc)
+                    else:
+                        cl_caps2.push(cl_mc)
                     cl_cni += 1
-                if stmts_mutate_any(cbody, cl_cap_names):
-                    cl_caps_ok = false
+                cl_caps = !cl_caps2
             # (d) nested-closure guard (retain the Phase-1 guard).
             bool cl_nested = stmts_have_nested_closure(cbody)
             bool cl_lowerable = cl_caps_ok and not cl_nested
@@ -3203,7 +3230,30 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                                 cl_field_tid = cl_pointee2
                             else:
                                 pass
-                    cl_env_fields.push(GirFieldInfo(cl_cap.name.clone(), type_id_to_name(cl_field_tid, &gmod)))
+                    # §4c-2c (Phase 2c ByMutRef): a MUTATED primitive capture's
+                    # env field holds a `MutPtr(T)` to the OUTER slot, NOT the
+                    # value. Name it `MutRef__<pointee>` (e.g. `MutRef__int64_t`)
+                    # — this is LOAD-BEARING: the body GIFieldLoad dispatch
+                    # (lir_lower.gg ~4360) decides pointer-alias-store vs
+                    # load-stored-pointer from the field-type-NAME prefix
+                    # `Ref__`/`MutRef__`. A `MutPtr(int)` field named plain
+                    # `int64_t` would take the ALIAS-STORE path (store `&field`)
+                    # → a `**int` double-pointer bug. `MutRef__int64_t` makes
+                    # `fl_field_is_borrow_ptr` true → the correct load-stored-
+                    # pointer path. This REUSES the existing accepted
+                    # `Ref__`/`MutRef__` borrow-ptr residual (the same one
+                    # Round-8 Track A reads + `resolve_field_lir_type`'s `Ref__`
+                    # guard / the fallback LT_PTR resolves it to a pointer
+                    # field). The principled typed-`is_borrow_ptr`-flag cleanup
+                    # (a typed field on GirFieldInfo, set at the source, read via
+                    # an accessor — replacing this name-prefix residual) is FILED
+                    # in TODO.md as a separate class-fix track; do NOT implement
+                    # it here. (`type_id_to_name` peels MutPtr→pointee, so the
+                    # value-typed pointee name is what we prefix.)
+                    String cl_field_name = type_id_to_name(cl_field_tid, &gmod)
+                    if cl_cap.mode == CAP_BY_MUT_REF:
+                        cl_field_name = "MutRef__" + cl_field_name
+                    cl_env_fields.push(GirFieldInfo(cl_cap.name.clone(), cl_field_name))
                     cl_fi += 1
                 # ② closure ENV-FIELD leak fix — compute "does the heap env own
                 # >=1 RESOURCE field" BEFORE the `!cl_env_fields` move below.
@@ -3228,18 +3278,35 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 Vector[Operand] cl_ctor_args = []
                 int cl_ai = 0
                 while cl_ai < cl_caps.len():
-                    # §4d-2 (Phase 2b): route the capture source through
-                    # op_consume at an OWNING (CkFieldWrite) position — the
-                    # env field OWNS its data. A LIVE owned resource → OpClone
-                    # (the wire pass keeps it for live sources; e.g.
-                    # `String s` printed after the make-site MUST clone, not
-                    # move); a DEAD owned resource → OpMove (refined by the
-                    # liveness wire pass); a Ptr/borrow-alias → OpClone through
-                    # the pointer (decide_ptr_consume). Primitives / COPY
-                    # structs fall to OpCopy inside op_consume, identical to
-                    # the prior raw OpCopy. So the env always holds an
-                    # INDEPENDENT snapshot, never a shared alias.
-                    cl_ctor_args.push(op_consume(&ctx, &gmod, cl_caps.get(cl_ai).unwrap().local_id, CkFieldWrite()))
+                    ClosureCapture cl_arg_cap = cl_caps.get(cl_ai).unwrap()
+                    if cl_arg_cap.mode == CAP_BY_MUT_REF:
+                        # §4d-2c (Phase 2c ByMutRef): the env field is a
+                        # `MutPtr(T)` to the OUTER slot, so push its ADDRESS, not
+                        # the value. Mint a fresh `GtMutPtr(T)` temp and emit
+                        # `GIAssign(tmp, OpBorrow(cap.local_id))`; the LIR D.1
+                        # dispatch (lir_lower.gg ~3296) sees a value-typed source
+                        # rebound into a Ptr-typed dst and emits
+                        # `tmp = &outer_slot` (ISlotAddr+ISlotStore). Push
+                        # `OpCopy(tmp)` (a plain pointer copy into the env field)
+                        # — NOT op_consume, which would clone/move the VALUE.
+                        # Mirrors Rust `emit_borrow_mut` (closures.rs:326-332).
+                        int cl_mr_ptr_ty = register_type(&gmod, GtMutPtr(cl_arg_cap.type_id))
+                        int cl_mr_tmp = add_local(&ctx, cl_mr_ptr_ty, None)
+                        emit(&ctx, GIAssign(cl_mr_tmp, OpBorrow(cl_arg_cap.local_id)))
+                        cl_ctor_args.push(OpCopy(cl_mr_tmp))
+                    else:
+                        # §4d-2 (Phase 2b): route the capture source through
+                        # op_consume at an OWNING (CkFieldWrite) position — the
+                        # env field OWNS its data. A LIVE owned resource → OpClone
+                        # (the wire pass keeps it for live sources; e.g.
+                        # `String s` printed after the make-site MUST clone, not
+                        # move); a DEAD owned resource → OpMove (refined by the
+                        # liveness wire pass); a Ptr/borrow-alias → OpClone through
+                        # the pointer (decide_ptr_consume). Primitives / COPY
+                        # structs fall to OpCopy inside op_consume, identical to
+                        # the prior raw OpCopy. So the env always holds an
+                        # INDEPENDENT snapshot, never a shared alias.
+                        cl_ctor_args.push(op_consume(&ctx, &gmod, cl_arg_cap.local_id, CkFieldWrite()))
                     cl_ai += 1
                 emit(&ctx, GICall(cl_env_tmp, closure_name.clone(), cl_ctor_args))
                 emit(&ctx, GIAssign(cdst, OpCopy(cl_env_tmp)))

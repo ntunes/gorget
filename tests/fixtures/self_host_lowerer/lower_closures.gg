@@ -1748,7 +1748,23 @@ void lower_closure_body(String call_name, Vector[int] !abi_param_types, int self
         # COPY-struct captures keep the value byte-copy (sound, no heap).
         String cap_tname = type_id_to_name(cap.type_id, &gmod)
         int fdst = -1
-        if is_resource_type_name(cap_tname, &gmod):
+        if cap.mode == CAP_BY_MUT_REF:
+            # §4e-2c (Phase 2c ByMutRef): the env field holds a `MutPtr(T)` to
+            # the OUTER slot (named `MutRef__<T>` at the make-site §4c-2c). The
+            # field is a BORROW pointer, so the GIFieldLoad dispatch
+            # (lir_lower.gg ~4360, `fl_field_is_borrow_ptr`) LOADS the stored
+            # pointer (it does NOT take the alias-store path that would yield
+            # `**T`). Register the body local as `GtMutPtr(T)`-typed so the
+            # body read/write is FREE via the existing SHARED `&`/`!`-param
+            # paths: a bare `EIdentifier` read auto-derefs (lower_expr.gg ~699,
+            # the GtMutPtr arm → GIDeref) and `SAssign`/`SCompoundAssign`
+            # deref-store (lower_stmt.gg ~675/~935 → GIDerefStore). No new deref
+            # logic — just type the local correctly so the shared paths fire.
+            # `cap.type_id` is the primitive pointee T (set at Site 1). Mirrors
+            # Rust `emit_closure_call_function` ByMutRef (closures.rs:413-425).
+            int cap_mr_ty = register_type(&gmod, GtMutPtr(cap.type_id))
+            fdst = add_local(&cctx, cap_mr_ty, Some(cap.name.clone()))
+        elif is_resource_type_name(cap_tname, &gmod):
             # Deref a Ptr-typed CoW-alias capture to its OWNED pointee T —
             # matching Site-3's env-field type — BEFORE register_ptr, so the
             # body-load dst is `Ptr(T)`, NOT `Ptr(Ptr(T))`. SVarDecl Branch C
