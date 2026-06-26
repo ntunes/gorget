@@ -585,3 +585,6 @@ Loop-else scout (round-8) proved the full feature is NOT bounded to lower_loops.
 
 ## [nit, non-blocking, from A output-review] MutRef__ symmetry in resolve_field_lir_type
 The Ref[T]/MutRef[T] GIFieldLoad fix (lir_lower.gg) introduced the first `MutRef__` residual in the self-host lowerer. `resolve_field_lir_type:708` and `resolve_field_gir_type` (lower_types.gg:942) only special-case `Ref__`; `MutRef__` fields currently reach LT_PTR via the line-714 fallback (correct but incidental). Optional: backfill an explicit `MutRef__` case for full Ref/MutRef symmetry (matches Rust's symmetric `base == "Ref" || base == "MutRef"`). No-op expected; verify no fixture flips.
+
+## [micro-guard, from C output-review] range/string for-paths drop else_body SILENTLY
+Unlike vector(:177)/dict(:189) which emit a `lower_fail` else-guard, `lower_for_range`(:103) and `lower_for_string`(:206) drop a loop-`else` body with NO marker — so a range/string for-else silently vanishes instead of failing loudly. PART OF the deep loop-else track (those paths get real else-handling there), but as a CHEAP interim ratchet, add a `lower_fail("for-range/string with else-body not yet implemented")` guard to both so the gap can't hide. Do this when picking up the deep track (or as a 2-line standalone).
