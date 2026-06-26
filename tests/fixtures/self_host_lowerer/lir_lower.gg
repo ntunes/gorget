@@ -4330,7 +4330,36 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
             int fl_dst_tid = gir_locals.get(fl_dst_local).unwrap().type_id
             int fl_dst_slot = local_to_slot.get(fl_dst_local).unwrap()
             bool fl_dst_is_ptr = is_ptr_type(fl_dst_tid, &gmod)
-            if fl_dst_is_ptr:
+            # Exception to the alias path: if the FIELD itself is a user
+            # borrow pointer (`Ref[T]` / `MutRef[T]`), its storage ALREADY
+            # holds a pointer value — `&field` (fl_fptr) is a pointer-to-
+            # pointer, so storing it as the dst's pointer yields `**T` and
+            # every downstream reader (print, method-receiver self, extern
+            # arg) dereferences garbage. We must LOAD the stored pointer
+            # through fl_fptr instead (the else byte-copy/load branch). This
+            # mirrors Rust `src/lir/lower/insts.rs:1029-1034`, which computes
+            # `field_is_ptr` from the field's own GIR type and fires the
+            # alias store only `if dst_is_ptr && !field_is_ptr`.
+            #
+            # Metadata source: the field's GIR type is NOT reachable as a
+            # typed id at this LIR site — `GirFieldInfo` (gir.gg:308) stores
+            # only the field's resolved type NAME, and `map_ast_type` lowers
+            # `Ref[T]`/`MutRef[T]` to `GtNamed("Ref__T")`/`GtNamed("MutRef__T")`
+            # (no GtPtr; see `resolve_field_lir_type`'s `Ref__` guard at the
+            # top of this file, ~line 708). So re-resolving the name would
+            # bottom out at the SAME `Ref__` residual the
+            # `resolve_field_gir_type` bridge uses (lower_types.gg:942, the
+            # documented one name-derived heuristic). We therefore read the
+            # field's declared type name and check the borrow-ptr prefix
+            # directly — the same accepted residual as `resolve_field_lir_type`.
+            bool fl_field_is_borrow_ptr = false
+            if gmod.type_infos.contains(fl_base_tn):
+                GirTypeInfo fl_base_info = gmod.type_infos.get(fl_base_tn).unwrap()
+                if fl_field >= 0 and fl_field < fl_base_info.fields.len():
+                    String fl_field_tn = fl_base_info.fields.get(fl_field).unwrap().type_name
+                    if fl_field_tn.starts_with("Ref__") or fl_field_tn.starts_with("MutRef__"):
+                        fl_field_is_borrow_ptr = true
+            if fl_dst_is_ptr and not fl_field_is_borrow_ptr:
                 # Pointer-alias: store the field address directly as
                 # the dst's pointer value. No byte-copy.
                 lir_push_inst(&f, bb, ISlotStore(fl_dst_slot, fl_fptr, false))
