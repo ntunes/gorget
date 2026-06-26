@@ -610,3 +610,16 @@ Self-host has NO `struct_aliases` (Rust `LirModule::struct_aliases`). `type Hand
 
 ## [nit, non-blocking, from throws-expr-body review] Defect-A peel is single-level
 `lower_stmt.gg:545` peels `GtPtr`/`GtMutPtr` off `val`'s type ONCE (not recursive like `peel_ptr_tid`). Sufficient today (return-site operands are at most single-Ptr-wrapped Result; green 813-net), but a future borrow-of-borrow Result return would under-peel. If `peel_ptr_tid` is cheap to call there, prefer it for robustness. Inconsequential now.
+
+## ====== CLOSURE PHASE-2 DEEP TRACK (owner-chosen 2026-06-26; roadmap from mapping scout) ======
+CONFIRMED landed (run-verified): Phase 1 (non-capturing bodies), 2a (make-site refactor: LiftedClosure/drain-pass), 2b (RESOURCE/CoW captures — `cow_closure_*`/`copy_struct_closure_capture` MATCH). ~25 closure fixtures already MATCH.
+KEY: self-host source uses ZERO closures → NO increment can break bootstrap_fixed_point (track is low-risk; gate on self_host_runtime/_diff + targeted fixtures).
+Design refs: `docs/devbook/12-gir-lowering.md:342-448`, `docs/language-design.md:1369-1538` §7; Rust `src/ir/lowering/closures.rs` + LIR `Inst::CallClosure`/`ClosurePack`.
+Sequenced increments (ordered yield/risk/unblock):
+1. ✅ IN FLIGHT — IIFE call wiring (`((p):body)(args)`): one arm `lower_expr.gg:1273` (returned hardcoded unit). PROTOTYPED +2 (closure_iife, closure_iife_tuple_param), 0 regress. LOW.
+2. ByMutRef / 2c mutable captures (closure mutates outer var `count=count+1`): `lower_expr.gg:3148-3156` drops the mutation→stub today; add `MutPtr(T)` env field + deref body-load. Est +4-6 (test_multiline_closures, closures.gg tail). Rust `closures.rs:101-138,413-425` (detect_mutations→ByMutRef). MED.
+3. Multi-statement body w/ control-flow + early return (CRASH today): `lower_closure_body` `lower_closures.gg:1787` (block lowering + early-return drops). Est +2-4 (closure_multiline_return). MED (root-cause the crash first).
+4. Option/Result `.map`/`.and_then`/`or_else`/`map_err` + closure (the REAL `.map(it)` unblock — Vector HOFs ALREADY work via AST-inline `try_lower_vector_hof` lower_expr.gg:3691): combinator dispatch + `lir_lower.gg:2154` ptr arg + return-type wiring. Est +6-10 (implicit_it/option_map/result_map/option_result_combinators/coroutine_*_combinators — LARGEST cluster). HIGH (return-type CC-FAILs).
+5. Callable-param-through-extern callback (`df.apply_float(col, fn)`): extern-method ABI + `__callable_N` threading. Est +3-5 (closure_float_ret/callable_ref_param/vector_callable_two_locals). MED-HIGH. Rust `closures.rs:233-248`.
+6. Nested closures: drop `stmts_have_nested_closure` guard `lower_expr.gg:3158` + env nesting. Est +2-3. MED.
+7. Box[Callable] / shared callable / non-resource-enum capture: `lir_lower.gg` Box/shared paths. Est +3-4 (box_callable/shared_callable/test_closures_edge_cases). MED.
