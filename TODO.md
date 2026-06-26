@@ -601,3 +601,6 @@ Self-host has trailing-default FILL but NO named-arg permutation (`resolve_call_
 
 ### type_alias_struct_ctor — no struct_aliases mechanism (DEEP)
 Self-host has NO `struct_aliases` (Rust `LirModule::struct_aliases`). `type Handle = SlotKey` registers `Handle` as a separate EMPTY struct (`struct __gg_Handle { char __pad; }`), ctor drops args, field access fails (`unknown field`). Needs a new alias-resolution mechanism across registration + ctor-routing + field-access (multi-file). The old TODO note "no struct-emit involvement" is REFUTED. DEEP — not a parallel-round candidate.
+
+## [follow-up, from 9-2 output-review] struct/collection static-by-&-ref fixture
+9-2's `EIdentifier` arm in `ad_param_by_ptr` (lower_expr.gg) fires for ANY static (not just scalars — matches the type-agnostic `lower_place_base`). The only `&static` free-fn by-ptr arg in the corpus is the scalar `static_ref_param`, so the broadened struct/collection-static-by-& path is intercepted-but-UNTESTED. Add a fixture (`set_struct(&counter)` where counter is a module-level struct static, mutate a field) asserting the static is mutated through its real address, to lock the broadened behavior on both backends. Low-risk (both arms store &__lir_gN), but currently unguarded.
