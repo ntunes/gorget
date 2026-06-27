@@ -76,10 +76,10 @@ from lower_match import match_enum_type, match_variant_index, try_lift_option_re
 # Continue/break: continue jumps to `incr_bb` (so idx advances); break to
 # `exit_bb`. Stacks pushed/popped around `lower_stmts(body, ...)`.
 #
-# for-else (else_body): rare in self-host; emits a `lower_fail` diagnostic
-# rather than silently dropping. Wire the Python-semantics version (runs
-# only when the loop completes without break) when a self-host site
-# actually needs it.
+# for-else (else_body): Python semantics — the else block runs only when
+# the loop completes WITHOUT hitting a break. Wired for the range/set/
+# iterator paths (else_bb scaffold); the vector/dict paths still
+# `lower_fail` loudly (never silently drop) until a self-host site needs them.
 void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[Stmt] body, Vector[Stmt] else_body, GirModule &gmod, bool is_main):
     # Range fast path — `for i in start..end` over a literal `ERange`.
     # Mirrors Rust's `lower_for` first branch (src/ir/lowering/stmts/
