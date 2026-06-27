@@ -5264,10 +5264,139 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         # shallow memcpy into the field → the source and the field alias one
         # buffer → both drop → double-free (the adapter `inner`/`f` fields).
         bool is_ctor_call = is_type_constructor(call_name, &gmod) or gmod.type_infos.contains(call_name)
+        # Named-argument REORDERING (free-function calls only). The arg loop
+        # below binds args POSITIONALLY (`ai` = the param index), and the
+        # trailing default-fill is APPEND-ONLY. So a named arg that SKIPS a
+        # middle defaulted param (`compute(5, offset=10)` — `factor` keeps its
+        # default) would land `offset` into `factor`'s slot and never fill
+        # `factor`. Fix: when a named arg is present and we know the callee's
+        # ordered param names, build a reordered `r_args` in PARAM order —
+        # named args by NAME, positionals into the next free slot, empty slots
+        # from `fn_defaults` — then iterate THAT. Mirrors Rust gg's
+        # `resolve_call_args` (`src/ir/lowering/exprs/calls.rs:386-445`).
+        # SCOPED to free-function calls: ctor field-init keeps its existing
+        # by-index handling (`is_ctor_call` guard); the method-call path uses
+        # a different lowering and is untouched.
+        bool did_reorder = false
+        Vector[SpannedExpr] r_args = []
+        bool nr_has_named = false
+        int nr_i = 0
+        while nr_i < arg_names.len():
+            if arg_names.get(nr_i).unwrap() != "":
+                nr_has_named = true
+            nr_i += 1
+        if nr_has_named and not is_ctor_call and gmod.fn_param_names.contains(call_name):
+            Vector[String] r_pnames = gmod.fn_param_names.get(call_name).unwrap()
+            int r_n = r_pnames.len()
+            # Slot array in param order; each slot tracks whether it's filled
+            # and (when filled) holds the SpannedExpr to lower at that index.
+            Vector[bool] r_slot_filled = []
+            Vector[SpannedExpr] r_slot_expr = []
+            int rs_i = 0
+            while rs_i < r_n:
+                r_slot_filled.push(false)
+                # Placeholder expr (overwritten on fill); never lowered while
+                # r_slot_filled[i] is false.
+                r_slot_expr.push(args.get(0).unwrap())
+                rs_i += 1
+            # Place args: named by NAME-slot, positional into next free slot.
+            bool r_ok = true
+            int r_pos = 0
+            int ra_i = 0
+            while ra_i < args.len() and r_ok:
+                String ra_name = ""
+                if ra_i < arg_names.len():
+                    ra_name = arg_names.get(ra_i).unwrap()
+                if ra_name != "":
+                    # Named — find its param index.
+                    int r_target = -1
+                    int rp_i = 0
+                    while rp_i < r_n:
+                        if r_pnames.get(rp_i).unwrap() == ra_name:
+                            r_target = rp_i
+                        rp_i += 1
+                    if r_target < 0:
+                        # Unknown param name → fall back to the positional path.
+                        r_ok = false
+                    else:
+                        r_slot_filled.set(r_target, true)
+                        r_slot_expr.set(r_target, args.get(ra_i).unwrap())
+                else:
+                    # Positional → next free slot in order.
+                    while r_pos < r_n and r_slot_filled.get(r_pos).unwrap():
+                        r_pos += 1
+                    if r_pos < r_n:
+                        r_slot_filled.set(r_pos, true)
+                        r_slot_expr.set(r_pos, args.get(ra_i).unwrap())
+                        r_pos += 1
+                    else:
+                        # More positionals than params → fall back.
+                        r_ok = false
+                ra_i += 1
+            # Fill empty slots from the callee's parsed defaults.
+            if r_ok:
+                Vector[Option[SpannedExpr]] r_defaults = []
+                if gmod.fn_defaults.contains(call_name):
+                    r_defaults = gmod.fn_defaults.get(call_name).unwrap()
+                elif gmod.fn_defaults.contains(fname):
+                    r_defaults = gmod.fn_defaults.get(fname).unwrap()
+                int rf_i = 0
+                while rf_i < r_n and r_ok:
+                    if not r_slot_filled.get(rf_i).unwrap():
+                        if rf_i < r_defaults.len():
+                            match r_defaults.get(rf_i).unwrap():
+                                case Some(rd_expr):
+                                    r_slot_filled.set(rf_i, true)
+                                    r_slot_expr.set(rf_i, rd_expr)
+                                case None:
+                                    # No default for an unfilled slot → malformed
+                                    # call; fall back to the positional path
+                                    # rather than lower a placeholder.
+                                    r_ok = false
+                        else:
+                            r_ok = false
+                    rf_i += 1
+            # Only commit the reorder if every slot is now filled.
+            if r_ok:
+                int rc_i = 0
+                while rc_i < r_n:
+                    r_args.push(r_slot_expr.get(rc_i).unwrap())
+                    rc_i += 1
+                did_reorder = true
         # CoW for-element BORROW scan (no SpannedExpr__clone): arg is only read
         # (apply_container_hint/lower_expr/match arg.expr — all immutable-borrow
-        # uses); enumerate() preserves the positional arg index ai.
-        for (ai, arg) in args.enumerate():
+        # uses); enumerate() preserves the positional arg index ai. When we
+        # reordered, iterate the freshly-built `r_args` (each element a deep
+        # `.get().unwrap()` clone — independently owned, so dropping `r_args` on
+        # scope exit does NOT alias/double-free the caller's `args`). When we did
+        # NOT reorder, iterate the BORROWED `args` directly — the original
+        # zero-clone path. (A whole-vector `Vector[SpannedExpr] x = args` shallow-
+        # CoW aliases the inner buffers → double-free; the `Vector[SpannedExpr]`-
+        # by-value self-host gap, lower_expr.gg:4538.) Selected via a per-element
+        # index read below so there is exactly ONE loop body.
+        int call_arg_count = args.len()
+        if did_reorder:
+            call_arg_count = r_args.len()
+        int ai = 0
+        while ai < call_arg_count:
+            # Per-element read of the active source. When reordered, `r_args`
+            # holds independently-owned deep clones (each from a single
+            # `.get().unwrap()`), so binding `arg` from it does NOT alias the
+            # caller's `args` → no double-free on scope exit. In the common path
+            # `args.get(ai)` reads the caller's vector. `arg` is READ-ONLY in the
+            # body (lower_expr / apply_container_hint / match arg.expr all borrow
+            # it), so the per-element clone is semantically identical to the
+            # original for-element borrow scan. The init reads `args.get(0)`
+            # (always in-bounds: the loop runs only when `call_arg_count > 0`,
+            # which guarantees `args.len() >= 1`) and is immediately overwritten
+            # from the correct source — `r_args` may be LONGER than `args` (it
+            # includes the reorder's filled defaults) and `r_args` is EMPTY when
+            # not reordered, so the source MUST be selected by the flag.
+            SpannedExpr arg = args.get(0).unwrap()
+            if did_reorder:
+                arg = r_args.get(ai).unwrap()
+            else:
+                arg = args.get(ai).unwrap()
             # For struct-constructor calls, hint the container-literal
             # element size for each positional arg using the target field's
             # declared type. Look up type_infos inline (per-arg) — keeping
@@ -5538,6 +5667,7 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                     gir_args.push(op_consume(&ctx, &gmod, arg_local, CkFieldWrite()))
                 else:
                     gir_args.push(op_consume(&ctx, &gmod, arg_local, classify_call_arg(&gmod, call_name, ai)))
+            ai += 1
         # P0 default-arg FILL: an explicit call may leave trailing param slots
         # unsupplied. For each such slot whose declared param has a parsed
         # default expr (`fn_defaults[call_name][idx]`), lower the default with
@@ -5549,7 +5679,10 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         # of `args`. Keyed on the redirect-resolved `call_name`; the
         # template-name `fname` is the fallback for a mono'd call whose mangled
         # name isn't itself registered (defaults live under the template name).
-        if args.len() < callee_param_types.len():
+        # GATED on `not did_reorder`: the named-arg reorder above already
+        # placed every slot (named + positional + default) into `r_args`, so
+        # the loop pushed all params — appending here would DOUBLE-fill.
+        if not did_reorder and args.len() < callee_param_types.len():
             Vector[Option[SpannedExpr]] call_defaults = []
             if gmod.fn_defaults.contains(call_name):
                 call_defaults = gmod.fn_defaults.get(call_name).unwrap()

@@ -706,6 +706,19 @@ struct GirModule:
     # truth, one accessor — Layering rule 3. Appended AT END to avoid shifting
     # positional ctor call sites.
     Dict[String, int] closure_value_ret_type
+    # Order-independent per-fn ordered DECLARED param NAMES, keyed by fn name.
+    # Populated in the authoritative fn_param_sigs pre-pass (lower.gg, the
+    # `IFunction(fsdef)` arm) over ALL module functions BEFORE any body is
+    # lowered. Read by `lower_call` to REORDER a call's args into parameter
+    # order: a named arg that skips a middle DEFAULTED param must land in its
+    # by-NAME slot, not the next positional slot (the append-only default-fill
+    # cannot recover a mid-skipped slot — `compute(5, offset=10)` would put
+    # `offset` into `factor`'s slot). Mirrors Rust gg's `ctx.fn_param_names`
+    # (`src/ir/lowering/mod.rs`), read by `resolve_call_args`
+    # (`src/ir/lowering/exprs/calls.rs:386-445`). Same class/shape as
+    # fn_param_sigs / fn_borrow_params / fn_defaults. Appended AT END to avoid
+    # shifting positional ctor call sites.
+    Dict[String, Vector[String]] fn_param_names
 
 # Per-test metadata mirroring Rust's `TestFnInfo` (`src/ir/mod.rs:30`).
 # `fn_name` is the emitted `__test_N` symbol ("" for a skipped test, which
