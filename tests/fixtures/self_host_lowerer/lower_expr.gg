@@ -1204,8 +1204,49 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         # per CLAUDE.md "Ownership at Consuming Positions".
                         cl_args.push(op_consume(&ctx, &gmod, callable_local, CkCallArgBorrow()))  # closure/callable as first arg
                         for carg in args:
-                            int cval = lower_expr(&ctx, carg, &gmod)
-                            cl_args.push(op_consume(&ctx, &gmod, cval, CkCallArgBorrow()))
+                            # closure Phase 2 increment 5b — pass a borrow-unique
+                            # PARAM identifier THROUGH by pointer (don't deref to a
+                            # value). The `__callable_N` adapter expects the param's
+                            # `T*` (the same pointer the param slot holds); if we let
+                            # the general `lower_expr` EIdentifier reader (:696-706)
+                            # run, it auto-derefs a `GtMutPtr(non-resource)` slot to a
+                            # by-VALUE struct → the callee derefs the value-as-address
+                            # → SIGSEGV (callable_ref_param / generic_callable_ref).
+                            # NARROW carve-out (mirrors Rust gg `is_param_borrow_unique`
+                            # at calls.rs:1186-1196): only when the arg is an
+                            # `EIdentifier` bound to a local that is a `LoParam()`
+                            # whose `type_id` is `GtMutPtr(_)`. The `LoParam` gate is
+                            # LOAD-BEARING for narrowness — a `&x` borrow TEMP is also
+                            # `GtMutPtr` but is NOT `LoParam`, so it stays on the deref
+                            # path; ONLY a borrow-unique PARAM is passed by pointer.
+                            # `op_consume(..., CkCallArgBorrow())` is a non-consume
+                            # kind → returns `OpBorrow(raw_pointer_local)`, forwarding
+                            # the pointer bits. The general scalar-read deref
+                            # (:696-706) is UNCHANGED (still derefs for `x + 10` etc.).
+                            bool carg_passed_ptr = false
+                            match carg.expr:
+                                case EIdentifier(carg_name):
+                                    if nl_contains(&ctx, carg_name):
+                                        int carg_lid = nl_get(&ctx, carg_name)
+                                        GirLocal carg_loc = ctx.locals.get(carg_lid).unwrap()
+                                        bool carg_is_param = false
+                                        match carg_loc.ownership:
+                                            case LoParam():
+                                                carg_is_param = true
+                                            else:
+                                                pass
+                                        if carg_is_param and carg_loc.type_id >= PRIM_COUNT and carg_loc.type_id < gmod.type_table.len():
+                                            match gmod.type_table.get(carg_loc.type_id).unwrap():
+                                                case GtMutPtr(_):
+                                                    cl_args.push(op_consume(&ctx, &gmod, carg_lid, CkCallArgBorrow()))
+                                                    carg_passed_ptr = true
+                                                else:
+                                                    pass
+                                else:
+                                    pass
+                            if not carg_passed_ptr:
+                                int cval = lower_expr(&ctx, carg, &gmod)
+                                cl_args.push(op_consume(&ctx, &gmod, cval, CkCallArgBorrow()))
                         # Emit as __callable_N (codegen handles this as void*[2] dispatch)
                         int arity = args.len()
                         String cl_call = "__callable_" + int_to_str(arity)
@@ -1309,8 +1350,40 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     Vector[Operand] iife_call_args = []
                     iife_call_args.push(op_consume(&ctx, &gmod, iife_callable, CkCallArgBorrow()))  # closure value as first arg
                     for iife_arg in args:
-                        int iife_aval = lower_expr(&ctx, iife_arg, &gmod)
-                        iife_call_args.push(op_consume(&ctx, &gmod, iife_aval, CkCallArgBorrow()))
+                        # closure Phase 2 increment 5b — SIBLING of the named-callable
+                        # arg loop above (:1206). Same `__callable_N` dispatch, same
+                        # hazard: a borrow-unique PARAM identifier arg must be passed
+                        # THROUGH by pointer, not auto-dereffed to a value (the general
+                        # EIdentifier reader :696-706 would deref a `GtMutPtr` slot to a
+                        # by-VALUE struct → callee derefs value-as-address → SIGSEGV).
+                        # Narrow carve-out (LoParam + GtMutPtr) — see :1206 for the full
+                        # rationale + the Rust ref (calls.rs:1186-1196). Fixing the
+                        # CLASS, not just the named-callable instance (CLAUDE.md
+                        # "Sibling-site drift — fix the class, not the instance").
+                        bool iife_passed_ptr = false
+                        match iife_arg.expr:
+                            case EIdentifier(iife_name):
+                                if nl_contains(&ctx, iife_name):
+                                    int iife_lid = nl_get(&ctx, iife_name)
+                                    GirLocal iife_loc = ctx.locals.get(iife_lid).unwrap()
+                                    bool iife_is_param = false
+                                    match iife_loc.ownership:
+                                        case LoParam():
+                                            iife_is_param = true
+                                        else:
+                                            pass
+                                    if iife_is_param and iife_loc.type_id >= PRIM_COUNT and iife_loc.type_id < gmod.type_table.len():
+                                        match gmod.type_table.get(iife_loc.type_id).unwrap():
+                                            case GtMutPtr(_):
+                                                iife_call_args.push(op_consume(&ctx, &gmod, iife_lid, CkCallArgBorrow()))
+                                                iife_passed_ptr = true
+                                            else:
+                                                pass
+                            else:
+                                pass
+                        if not iife_passed_ptr:
+                            int iife_aval = lower_expr(&ctx, iife_arg, &gmod)
+                            iife_call_args.push(op_consume(&ctx, &gmod, iife_aval, CkCallArgBorrow()))
                     int iife_arity = args.len()
                     String iife_call = "__callable_" + int_to_str(iife_arity)
                     # Return type from the closure's signature (body-inferred via
