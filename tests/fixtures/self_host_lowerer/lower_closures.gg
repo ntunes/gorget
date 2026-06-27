@@ -560,7 +560,7 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod, bool trait_is_register
 
 int STRING_MARKER = -2
 
-int guess_return_type(SpannedExpr sexpr, GirModule &gmod):
+int guess_return_type(SpannedExpr sexpr, GirModule &gmod, int expected_type):
     match sexpr.expr:
         case EIntLiteral(_):
             return I64_TYPE
@@ -601,6 +601,13 @@ int guess_return_type(SpannedExpr sexpr, GirModule &gmod):
                 else:
                     return I64_TYPE
         case ENoneLiteral():
+            # Inc-4c: a bare `None` closure tail in an Option-expected context
+            # (`or_else((): None)`) yields the expected Option type (mirrors the
+            # `None()`-call arm below and Rust gg closures.rs:1093-1101).
+            if expected_type >= 0:
+                EnumCategory nl_ec = enum_category_of(&gmod, expected_type)
+                if nl_ec.category == ENUM_CAT_OPTION:
+                    return expected_type
             return UNIT_TYPE
         case ECall(callee_box, args, _, targs):
             match (*callee_box).expr:
@@ -610,7 +617,11 @@ int guess_return_type(SpannedExpr sexpr, GirModule &gmod):
                     # Enum variant constructors: Some(x) → Option__T, Ok(x)/Error(x) → Result
                     if fname == "Some" and args.len() == 1:
                         SpannedExpr inner_arg = args.get(0).unwrap()
-                        int inner_t = guess_return_type(inner_arg, &gmod)
+                        # The Some PAYLOAD is an inner constructor arg, NOT a tail
+                        # position — its own type is inferred standalone (`-1`),
+                        # then wrapped here into Option__<payload>. (Only TAIL
+                        # positions propagate the caller's `expected_type`.)
+                        int inner_t = guess_return_type(inner_arg, &gmod, -1)
                         if inner_t == STRING_MARKER:
                             inner_t = lookup_or_register_named(&gmod, "GorgetString")
                         String inner_name = type_id_to_name(inner_t, &gmod)
@@ -618,18 +629,34 @@ int guess_return_type(SpannedExpr sexpr, GirModule &gmod):
                         record_enum_category(&gmod, gss_opt, ENUM_CAT_OPTION, inner_t, -1)
                         return gss_opt
                     if fname == "None":
+                        # Inc-4c: a bare `None` closure tail in an Option-expected
+                        # context (`or_else((): None)`) yields the expected Option
+                        # type. Mirrors Rust gg `infer_closure_return_type`
+                        # (closures.rs:1093-1101): read `expected_type`, return it
+                        # when its enum_category is Option.
+                        if expected_type >= 0:
+                            EnumCategory n_ec = enum_category_of(&gmod, expected_type)
+                            if n_ec.category == ENUM_CAT_OPTION:
+                                return expected_type
                         return UNIT_TYPE
                     if fname == "Ok" or fname == "Error":
-                        # Result constructor — look at argument type to infer Result__T__E
-                        if args.len() > 0:
-                            SpannedExpr r_arg = args.get(0).unwrap()
-                            int r_t = guess_return_type(r_arg, &gmod)
-                            if r_t == STRING_MARKER:
-                                r_t = lookup_or_register_named(&gmod, "GorgetString")
-                            String r_name = type_id_to_name(r_t, &gmod)
-                            # Can't fully infer Result__T__E from one variant,
-                            # but return int64_t as a safe default
-                            return I64_TYPE
+                        # Inc-4c: an `Ok(e)`/`Error(e)` closure tail in a
+                        # Result-expected context (`and_then`/`or_else`/`flat_map`,
+                        # whose closure returns the SAME Result type as the
+                        # receiver) yields the expected Result type. Mirrors Rust
+                        # gg `infer_closure_return_type` (closures.rs:1048-1056):
+                        # read `expected_type` and return it when its
+                        # enum_category is Result — the error payload type can't be
+                        # inferred from one variant alone, so the caller-supplied
+                        # expected Result is the only correct source.
+                        if expected_type >= 0:
+                            EnumCategory r_ec = enum_category_of(&gmod, expected_type)
+                            if r_ec.category == ENUM_CAT_RESULT:
+                                return expected_type
+                        # No Result-expected context — fall back to int64_t (the
+                        # historical safe default; the constructor arg alone can't
+                        # name a full Result__T__E).
+                        return I64_TYPE
                     # Look up return type from fn_sigs (also check call_redirects)
                     String call_name = fname
                     if targs.len() > 0:
@@ -658,7 +685,7 @@ int guess_return_type(SpannedExpr sexpr, GirModule &gmod):
                 return BOOL_TYPE
             # unwrap/unwrap_or: return type matches the receiver's inner type
             if mname == "unwrap" or mname == "unwrap_or":
-                int recv_t = guess_return_type(*recv, &gmod)
+                int recv_t = guess_return_type(*recv, &gmod, -1)
                 return recv_t
         case EIdentifier(name):
             # Look up from fn_sigs (could be a variable holding a closure)
@@ -670,11 +697,14 @@ int guess_return_type(SpannedExpr sexpr, GirModule &gmod):
                 Stmt last = then_body.get(then_body.len() - 1).unwrap()
                 match last:
                     case SExpr(inner_expr):
-                        return guess_return_type(inner_expr, &gmod)
+                        # An EIf then-body tail IS a tail position — propagate
+                        # `expected_type` so an `Ok(e)`/`None` inside the branch
+                        # infers the same Result/Option as the whole closure.
+                        return guess_return_type(inner_expr, &gmod, expected_type)
                     case SReturn(opt_ret):
                         match opt_ret:
                             case Some(ret_expr):
-                                return guess_return_type(ret_expr, &gmod)
+                                return guess_return_type(ret_expr, &gmod, expected_type)
                             case None:
                                 return UNIT_TYPE
                     else:
@@ -1573,7 +1603,7 @@ bool stmts_have_nested_closure(Vector[Stmt] stmts):
 # Takes `cid` because `self_ptr` is derived from the env type `__Closure_<cid>`.
 # The make-site and the post-pass both store/read these via a LiftedClosure
 # record, so the recorded sig == what `lower_closure_body` expects.
-ClosureSig compute_closure_sig(int cid, Vector[Param] params, Vector[Stmt] body, GirModule &gmod):
+ClosureSig compute_closure_sig(int cid, Vector[Param] params, Vector[Stmt] body, GirModule &gmod, int expected_type):
     String closure_name = "__Closure_" + int_to_str(cid)
     int closure_tid = lookup_or_register_named(&gmod, closure_name)
     int self_ptr = register_ptr(&gmod, closure_tid)
@@ -1597,11 +1627,11 @@ ClosureSig compute_closure_sig(int cid, Vector[Param] params, Vector[Stmt] body,
             case SReturn(opt_expr):
                 match opt_expr:
                     case Some(rexpr):
-                        ret_type = guess_return_type(rexpr, &gmod)
+                        ret_type = guess_return_type(rexpr, &gmod, expected_type)
                     case None:
                         ret_type = UNIT_TYPE
             case SExpr(expr):
-                ret_type = guess_return_type(expr, &gmod)
+                ret_type = guess_return_type(expr, &gmod, expected_type)
             else:
                 ret_type = UNIT_TYPE
     # Single-param float-only closure → float return.
@@ -1627,14 +1657,14 @@ ClosureSig compute_closure_sig(int cid, Vector[Param] params, Vector[Stmt] body,
 # closure Phase 2 Step A: signature for an IMPLICIT `it` closure
 # (`EImplicitClosure` / `.map(it*2)`), lifting the `emit_it_closure` shape:
 # a single implicit `it` param typed I64, return inferred by guess_return_type.
-ClosureSig compute_implicit_closure_sig(int cid, SpannedExpr body, GirModule &gmod):
+ClosureSig compute_implicit_closure_sig(int cid, SpannedExpr body, GirModule &gmod, int expected_type):
     String closure_name = "__Closure_" + int_to_str(cid)
     int closure_tid = lookup_or_register_named(&gmod, closure_name)
     int self_ptr = register_ptr(&gmod, closure_tid)
     Vector[int] abi_param_types = [self_ptr, I64_TYPE]
     Vector[int] body_param_types = [I64_TYPE]
     Vector[String] body_param_names = ["it"]
-    int ret_type = guess_return_type(body, &gmod)
+    int ret_type = guess_return_type(body, &gmod, expected_type)
     if ret_type == STRING_MARKER:
         ret_type = lookup_or_register_named(&gmod, "GorgetString")
     return ClosureSig(!abi_param_types, self_ptr, !body_param_types, !body_param_names, ret_type)
@@ -1655,7 +1685,7 @@ int record_implicit_it_closure(LowerCtx &ctx, SpannedExpr ic_body, GirModule &gm
     Vector[Operand] ic_make_args = []
     gmod.fn_sigs.put(ic_make_fn, ic_gc_tid)
     emit(&ctx, GICallExtern(ic_cdst, ic_make_fn, ic_make_args))
-    ClosureSig ic_sig = compute_implicit_closure_sig(ic_cid, ic_body, &gmod)
+    ClosureSig ic_sig = compute_implicit_closure_sig(ic_cid, ic_body, &gmod, ctx.expected_type)
     # Lowerable guard byte-identical to the old scan's implicit-it guard:
     # non-capturing AND nests no closure.
     bool ic_lowerable = not (implicit_closure_body_captures(ic_body, &gmod) or expr_has_nested_closure(ic_body))
@@ -1797,10 +1827,27 @@ void lower_closure_body(String call_name, Vector[int] !abi_param_types, int self
     Vector[Param] _cs_no_params = []
     compute_cow_scan(&cctx, &gmod, _cs_no_params, body_stmts)
 
+    # Inc-4c: a closure body whose tail constructs a prelude variant
+    # (`Ok(e)`/`Error(e)`/`Some(e)`/bare `None`) needs the closure's full
+    # monomorphized return type as `expected_type` so `lower_call` lowers it
+    # as an INLINE enum construction (tag + payload) rather than a bare
+    # `Ok(...)` call (an undefined symbol → cc/ld-fail). This is the body-side
+    # twin of the sig-side `guess_return_type` fix: the sig set `ret_type` to
+    # the Result/Option type; here we expose it to the body's variant-ctor
+    # reader, exactly as `lower_function`'s SReturn sets `expected_type` to the
+    # function return type before lowering `return Ok(e)` (lower_stmt.gg:503-506).
+    # NOTE (reference-grade refinement): this sets expected_type for the WHOLE
+    # body block, not just the tail position. The scout measured this
+    # empirically harmless (lock-in green, WRONG-output set unchanged); the
+    # narrower shape would scope it to the tail once `lower_block_expr` is
+    # refactored to expose its tail statement separately.
+    int prev_cbody_et = cctx.expected_type
+    cctx.expected_type = ret_type
     # Lower the body as an expression block; funnel its tail value into the
     # return place `_0`, then terminate with `return _0` — mirrors how
     # `lower_function` finalizes a normal function's return value.
     int tail = lower_block_expr(&cctx, body_stmts, &gmod)
+    cctx.expected_type = prev_cbody_et
     if not block_terminated(&cctx):
         # Mirror SReturn's Some(val) arm (lower.gg:7895-7912): emit the
         # function-scope GIDropIfAlive for every body temp BEFORE setting the

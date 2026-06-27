@@ -1320,7 +1320,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     # names the env struct / self-ptr — the return_type derivation
                     # is cid-independent (lower_closures.gg:1592-1623), so a
                     # throwaway 0 is safe here.
-                    int iife_ret = compute_closure_sig(0, iife_params, iife_body, &gmod).return_type
+                    int iife_ret = compute_closure_sig(0, iife_params, iife_body, &gmod, ctx.expected_type).return_type
                     int iife_dst = add_local(&ctx, iife_ret, None)
                     emit(&ctx, GICallExtern(iife_dst, iife_call, iife_call_args))
                     return iife_dst
@@ -2163,6 +2163,26 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # cleanly — NO lir_lower change is needed (the original "wrong ABI"
             # diagnosis was inverted; see docs/plans/drop_emission.md).
             CollectionKind _recv_ck = collection_kind_of(&gmod, recv_type_name)
+            # Inc-4c: a same-type Option/Result combinator (`and_then`/`or_else`/
+            # `flat_map`) takes a closure that returns the SAME Option/Result type
+            # as the receiver; `or` takes a Result/Option VALUE of the same type.
+            # Carry the receiver's enum TypeId as the closure/value arg's
+            # `expected_type` so a bare `Ok(e)`/`Error(e)`/`Some(e)`/`None` tail
+            # (closure tail OR direct arg) infers the full `Result__T__E` /
+            # `Option__T` (not the int64_t fallback → `int64_t was expected`
+            # cc-fail). Mirrors Rust gg `try_lower_option_result_combinator`
+            # setting `expected_type` for exactly these methods
+            # (methods.rs:2987-2993). `map`/`map_err` CHANGE the wrapper type, so
+            # they are EXCLUDED (their closure returns the INNER type, handled by
+            # the existing Some/inner arms). The selection is TYPED (enum_category
+            # of the receiver), not a name-match for meaning — the method-name
+            # set is just the same-type-combinator family.
+            int _combinator_et = -1
+            if mname == "and_then" or mname == "or_else" or mname == "flat_map" or mname == "or":
+                int _recv_tid = ctx.locals.get(recv).unwrap().type_id
+                EnumCategory _recv_ec = enum_category_of(&gmod, _recv_tid)
+                if _recv_ec.category == ENUM_CAT_RESULT or _recv_ec.category == ENUM_CAT_OPTION:
+                    _combinator_et = peel_ptr_tid(&gmod, _recv_tid)
             int _ma_idx = 0
             for ma in margs:
                 # closure Phase 2 Step A: a method-call arg that CONTAINS a
@@ -2171,6 +2191,13 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 # closure body — record it (the OLD scan did the same via
                 # expr_has_it → emit_it_closure). Otherwise lower normally.
                 int ma_val = -1
+                # Inc-4c: for a same-type combinator arg, expose the receiver
+                # Option/Result type as `expected_type` (else -1, the historical
+                # clear). `record_implicit_it_closure` and the EClosure make-site
+                # both read `ctx.expected_type`, so set it for BOTH paths;
+                # save/restore keeps it scoped to this arg.
+                int prev_expected_ma = ctx.expected_type
+                ctx.expected_type = _combinator_et
                 if expr_has_it(ma):
                     ma_val = record_implicit_it_closure(&ctx, ma, &gmod)
                 else:
@@ -2178,14 +2205,13 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     # Result-typed surrounding context (e.g. `return a.add(to_n(sel))`
                     # from a `throws` fn) doesn't make the centralized auto-prop
                     # hook's capture-form check suppress the peel on a throws-call
-                    # arg — leaving a `Result` where the param wants `T`. (The
-                    # method-arg path never set a per-arg expected_type, so -1 is
-                    # the prior behaviour for non-throws args.) Mirrors the
-                    # free-call arg loop and Rust gg's per-arg expected_type clear.
-                    int prev_expected_ma = ctx.expected_type
-                    ctx.expected_type = -1
+                    # arg — leaving a `Result` where the param wants `T`. (For a
+                    # combinator closure/value arg this is the receiver
+                    # Option/Result type, set above; for every other arg it is the
+                    # prior -1.) Mirrors the free-call arg loop and Rust gg's
+                    # per-arg expected_type clear.
                     ma_val = lower_expr(&ctx, ma, &gmod)
-                    ctx.expected_type = prev_expected_ma
+                ctx.expected_type = prev_expected_ma
                 # #37 Phase 2 hook 3 (method non-receiver `&`/`!` args):
                 # `h.poke_vec(&v)` lets the callee mutate `v` through a
                 # method arg whose sigil the parser stripped — the hook is
@@ -3129,7 +3155,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # The closure value at the GIR level is a GorgetClosure struct
             # (not __Closure_N which is the captured-vars env struct).
             int closure_tid = lookup_or_register_named(&gmod, "GorgetClosure")
-            ClosureSig cl_sig = compute_closure_sig(cid, cparams, cbody, &gmod)
+            ClosureSig cl_sig = compute_closure_sig(cid, cparams, cbody, &gmod, ctx.expected_type)
             # ── Step B (§4a/§4b): collect + classify ByValue captures. ──
             # The collector mirrors the Phase-1 detector's walk EXACTLY (same
             # capture-shaped criterion, scoping, nested-skip); `unliftable` is
@@ -3616,7 +3642,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             # Record the closure (lowerable guard identical to
                             # the EClosure arm) so the post-pass pushes its
                             # __Closure_N__call.
-                            ClosureSig sp_sig = compute_closure_sig(sp_cid, sp_params, sp_body, &gmod)
+                            ClosureSig sp_sig = compute_closure_sig(sp_cid, sp_params, sp_body, &gmod, -1)
                             bool sp_lowerable = not (closure_body_captures(sp_params, sp_body, &gmod) or stmts_have_nested_closure(sp_body))
                             # inline-SPAWN closures: capture support is DEFERRED
                             # (stay stubbed-if-capturing). Pass empty captures.
