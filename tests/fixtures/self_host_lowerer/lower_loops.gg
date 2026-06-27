@@ -100,7 +100,7 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
                                 case Some(end_box):
                                     SpannedExpr start_e = *start_box
                                     SpannedExpr end_e = *end_box
-                                    lower_for_range(&ctx, loop_name, start_e, end_e, inclusive, body, &gmod, is_main)
+                                    lower_for_range(&ctx, loop_name, start_e, end_e, inclusive, body, else_body, &gmod, is_main)
                                     return
                                 case None:
                                     pass
@@ -698,7 +698,16 @@ void lower_for_set(LowerCtx &ctx, SpannedPattern pat, int coll_local, String col
 # (`0..=3`) and `<` for a half-open one (`0..3`), mirroring Rust's
 # `lower_for_range` cmp_op = if inclusive { Le } else { Lt } (for_loops.rs:1181).
 # Continue → incr_bb (advance the counter); break → exit_bb.
-void lower_for_range(LowerCtx &ctx, String loop_name, SpannedExpr start_e, SpannedExpr end_e, bool inclusive, Vector[Stmt] body, GirModule &gmod, bool is_main):
+#
+# for-else (else_body): runs only when the range exhausts WITHOUT a break,
+# mirroring Rust's `lower_for_range` + `emit_else_arm_tail` (for_loops.rs:1183,
+# 1204). Same `else_bb` scaffold as `lower_for_set` above: the header's
+# false-exit (range exhausted) branches to `else_bb` when an else arm is
+# present (else straight to `exit_bb`); a `break` still targets `exit_bb`
+# directly, skipping `else_bb` (Python for-else semantics — else runs only
+# when no break fired). When `else_body` is empty, `else_bb == exit_bb` and
+# the else tail is a no-op.
+void lower_for_range(LowerCtx &ctx, String loop_name, SpannedExpr start_e, SpannedExpr end_e, bool inclusive, Vector[Stmt] body, Vector[Stmt] else_body, GirModule &gmod, bool is_main):
     # ── Iteration state ──────────────────────────────────────
     # Loop var: a fresh OWNED i64 seeded from `start`. `nl_put` reads
     # `loop_name` again below, so it is LIVE here — the bare `Some(loop_name)`
@@ -710,22 +719,27 @@ void lower_for_range(LowerCtx &ctx, String loop_name, SpannedExpr start_e, Spann
     # End bound, lowered once (the cond re-reads this fixed value each iter).
     int end_local = lower_expr(&ctx, end_e, &gmod)
     # ── Block layout ─────────────────────────────────────────
+    # `else_bb` sits between the header's false-exit and the true `exit_bb`;
+    # allocated only when `else_body` is non-empty (else it aliases exit_bb).
     int header_bb = new_block(&ctx)
     int body_bb = new_block(&ctx)
     int incr_bb = new_block(&ctx)
     int exit_bb = new_block(&ctx)
+    int else_bb = exit_bb
+    if else_body.len() > 0:
+        else_bb = new_block(&ctx)
     set_terminator(&ctx, GTJump(header_bb))
-    # Header: `loop_var <(=) end ? body : exit` — `<=` when the range is
-    # inclusive (`0..=3`), `<` otherwise.
+    # Header: `loop_var <(=) end ? body : else_bb (or exit_bb if no else)` —
+    # `<=` when the range is inclusive (`0..=3`), `<` otherwise.
     switch_to(&ctx, header_bb)
     int cond_local = add_local(&ctx, BOOL_TYPE, None)
     int range_cmp = CMP_LT
     if inclusive:
         range_cmp = CMP_LE
     emit(&ctx, GICmp(cond_local, range_cmp, I64_TYPE, OpCopy(loop_var), OpCopy(end_local)))
-    set_terminator(&ctx, GTBranch(OpCopy(cond_local), body_bb, exit_bb))
+    set_terminator(&ctx, GTBranch(OpCopy(cond_local), body_bb, else_bb))
     # Body: lower the loop body in a fresh loop/drop scope. Continue jumps
-    # to incr (advance the counter); break jumps to exit.
+    # to incr (advance the counter); break jumps to exit (skips else body).
     ctx.loop_continue_stack.push(incr_bb)
     ctx.loop_break_stack.push(exit_bb)
     push_drop_scope(&ctx.drop_elab, DSK_LOOP)
@@ -746,6 +760,17 @@ void lower_for_range(LowerCtx &ctx, String loop_name, SpannedExpr start_e, Spann
     emit(&ctx, GIBinOp(new_var, OP_ADD, I64_TYPE, OpCopy(loop_var), OpConstI64(1)))
     emit(&ctx, GIAssign(loop_var, OpCopy(new_var)))
     set_terminator(&ctx, GTJump(header_bb))
+    # else block: runs only when the range exhausted without break.
+    # If else_body is empty, else_bb == exit_bb and this is a no-op.
+    if else_body.len() > 0:
+        switch_to(&ctx, else_bb)
+        lower_stmts(&ctx, else_body, &gmod, is_main)
+        Terminator else_term = ctx.block_terms.get(ctx.current_block).unwrap()
+        match else_term:
+            case GTNone():
+                set_terminator(&ctx, GTJump(exit_bb))
+            else:
+                pass
     switch_to(&ctx, exit_bb)
 
 # Iterator-protocol fallback — universal path for any type with the

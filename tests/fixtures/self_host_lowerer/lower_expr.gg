@@ -4362,7 +4362,7 @@ int lower_list_comprehension(LowerCtx &ctx, SpannedExpr comp_expr, String var_na
                             String racc_name = "__listcomp_acc_" + int_to_str(racc)
                             nl_put(&ctx, racc_name, racc)
                             Vector[Stmt] rbody = comp_synth_body(racc_name, comp_expr, filt_opt, span)
-                            lower_for_range(&ctx, var_name, *start_box, *end_box, rng_incl, rbody, &gmod, false)
+                            lower_for_range(&ctx, var_name, *start_box, *end_box, rng_incl, rbody, Vector[Stmt](), &gmod, false)
                             return racc
                         case None:
                             pass
@@ -4482,7 +4482,7 @@ int lower_set_comprehension(LowerCtx &ctx, SpannedExpr comp_expr, String var_nam
                             String sacc_name = "__setcomp_acc_" + int_to_str(sacc)
                             nl_put(&ctx, sacc_name, sacc)
                             Vector[Stmt] sbody = comp_synth_set_body(sacc_name, comp_expr, filt_opt, span)
-                            lower_for_range(&ctx, var_name, *start_box, *end_box, rng_incl, sbody, &gmod, false)
+                            lower_for_range(&ctx, var_name, *start_box, *end_box, rng_incl, sbody, Vector[Stmt](), &gmod, false)
                             return sacc
                         case None:
                             pass
@@ -4580,7 +4580,7 @@ int lower_dict_comprehension(LowerCtx &ctx, SpannedExpr key_expr, SpannedExpr va
                             String dacc_name = "__dictcomp_acc_" + int_to_str(dacc)
                             nl_put(&ctx, dacc_name, dacc)
                             Vector[Stmt] dbody = comp_synth_dict_body(dacc_name, key_expr, val_expr, filt_opt, span)
-                            lower_for_range(&ctx, var_name, *start_box, *end_box, rng_incl, dbody, &gmod, false)
+                            lower_for_range(&ctx, var_name, *start_box, *end_box, rng_incl, dbody, Vector[Stmt](), &gmod, false)
                             return dacc
                         case None:
                             pass
