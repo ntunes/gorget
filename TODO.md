@@ -696,3 +696,18 @@ With a VALID `source` pointer (post Ref[T]-field fix), `dict_keys_lazy`/`dict_va
 - none_assign_to_option_slot (WRONG): CoW lazy-bind — `t = r.pending` materializes the clone at `return t` AFTER `r.pending = None` overwrote it. Intricate CoW (lower_stmt.gg hook 4), risky.
 - lazy-iter adapter-chain infinite-loop (DEEP, KILLED): FilterIter.next()'s `self.inner` EFieldAccess copies the inner iterator (lower_place_base lower_stmt.gg:1215 has no EFieldAccess case → value copy not field-borrow); Ref[Dict]/Ref[Set] source isn't is_resource_field_type (lower_types.gg:2521). Real fix = place-projection receiver (&self.inner), architectural (self-host has no Place/Projection::Field IR). DEEP.
 - collection type-alias (type IntList = Vector[int]) — meta_aliases drops the [int] targ; needs targ-preserving alias storage. Separate from GO #1.
+
+## ====== REFERENCE-GRADE REJECTION TRACK (owner-asked 2026-06-27; audit @ 65c2cdc0) ======
+SELF-HOST IS TOO PERMISSIVE: Rust gg rejects 116 fixtures, self-host ACCEPTS 109 (emits C). Self-host typecheck is an INFERENCE pass (~6 control-flow diagnostics only), NO general type/arg/trait/const enforcement, NO borrow/move/safety pass. Parity-NEUTRAL (rejected fixtures are RUST-REJECTED, excluded from denom) — pure correctness wins per invariant #8.
+TEST MECHANISM (exists, under-used): `check_gg_fails` (integration.rs:6486) = Rust rejects; `self_host_driver_rejects_invalid_program` (integration.rs:16510, runs driver `--lir-c`, asserts non-zero exit + codespan + EMPTY stdout) = self-host rejects. Clone the latter per gap. (The hole: c_emit_comparison:15182 + self_host_runtime_diff:17897 `return RustRejected` without running the self-host.)
+★ EVERY rejection MUST gate on: 1208-Rust-accepted-fixture FP sweep (0 false positives) + `self_host_bootstrap_fixed_point` (a new reject that trips the self-host's OWN 667K-line source breaks bootstrap) + `type_comparison`.
+WRITE SITE: self_host_typechecker/typecheck.gg (SYMLINKED into self_host_lowerer → affects build/check + type_comparison + bootstrap).
+LANDING ORDER (most-bounded first):
+1. positional_after_named (typecheck.gg ECall :678, ~13 lines, mirrors Rust typecheck.rs:5314) — PROTOTYPED: self-host rejects, 0/1208 FP, bootstrap+type_comparison clean, paired test passes. LANDING NOW.
+2. required_after_default (Param.default_value scan, parser.gg:3759 preserves it).
+3. duplicate_struct_field (named-arg/EStructLiteral labels) + wrong_arg_count/wrong_field_count (signature via infer_expr_type/scope).
+4. CONVERT/CAST single-node form-rejections (str()/cast-name calls, deref-non-box, string-index-assign, out-of-range).
+5. non_exhaustive_match (MODERATE — collect-all-variants + diff; else/_ wildcard + qualified-vs-bare must be exact).
+6. TYPE-mismatch family ~19 (BIGGER behavioral decision — typecheck deliberately non-enforcing; respect the 42 type_comparison supersets; FP-sweep each).
+7. const_assign / await_outside_async — parser DISCARDS local-`const` (parser.gg:3546) + `async` (:3113) flags → thread flag through parser+AST FIRST, then a bounded check.
+8. DEEP BORROW-CHECK port ~44 (MOVE ~17/BORROW ~8/ARENA ~12/CLOSURE-CAPTURE ~5/CLOSURE-ESCAPE ~2): port Rust `BorrowChecker` (safety/mod.rs:241, ~2000 lines: var_states move-dataflow, var_origins lifetime, arena_depth, loop_depth, struct-field-ref flags, CoW carve-outs). HIGH FP risk (carve-outs: loop-local re-create, `x=f(!x)` rebind waiver, CoW accept-live-at-ctor, imported-module skip). Multi-session sub-project. The escaping-mutating-closure + reassign-while-captured cases I originally cited live HERE (CLOSURE-ESCAPE/CAPTURE).
