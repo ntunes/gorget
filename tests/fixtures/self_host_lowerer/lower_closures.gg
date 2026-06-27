@@ -1089,7 +1089,7 @@ bool closure_stmt_has_capture(Stmt stmt, Dict[String, bool] in_scope, GirModule 
                 if closure_stmts_have_capture(eb.body, in_scope, &gmod):
                     return true
             return false
-        case SWhile(cond, body):
+        case SWhile(cond, body, _):
             if closure_expr_has_capture(cond, in_scope, &gmod):
                 return true
             return closure_stmts_have_capture(body, in_scope, &gmod)
@@ -1387,7 +1387,7 @@ void cc_collect_stmt(LowerCtx &ctx, Stmt stmt, Dict[String, bool] in_scope, GirM
                     case None:
                         pass
                 cc_collect_stmts(&ctx, eb.body, in_scope, &gmod, &cc)
-        case SWhile(cond, body):
+        case SWhile(cond, body, _):
             cc_collect_expr(&ctx, cond, in_scope, &gmod, &cc)
             cc_collect_stmts(&ctx, body, in_scope, &gmod, &cc)
         case SLoop(body):
@@ -1471,7 +1471,7 @@ bool stmt_mutates_any(Stmt stmt, Dict[String, bool] cap_names):
                 if stmts_mutate_any(eb.body, cap_names):
                     return true
             return false
-        case SWhile(_, body):
+        case SWhile(_, body, _):
             return stmts_mutate_any(body, cap_names)
         case SLoop(body):
             return stmts_mutate_any(body, cap_names)
@@ -1637,7 +1637,7 @@ bool stmt_has_nested_closure(Stmt stmt):
                 if stmts_have_nested_closure(eb.body):
                     return true
             return false
-        case SWhile(cond, body):
+        case SWhile(cond, body, _):
             return expr_has_nested_closure(cond) or stmts_have_nested_closure(body)
         case SLoop(body):
             return stmts_have_nested_closure(body)

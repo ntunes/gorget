@@ -386,8 +386,12 @@ bool stmt_mentions_iter(Stmt s):
                     return true
                 i += 1
             return false
-        case SWhile(cond, body):
-            return expr_mentions_iter(cond) or block_mentions_iter(body)
+        case SWhile(cond, body, else_body):
+            if expr_mentions_iter(cond):
+                return true
+            if block_mentions_iter(body):
+                return true
+            return block_mentions_iter(else_body)
         case SFor(_, iter_expr, body, _, else_body):
             if expr_mentions_iter(iter_expr):
                 return true
@@ -781,7 +785,7 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                             match first_s:
                                 case SIf(_, _, _):
                                     has_real_body = true
-                                case SWhile(_, _):
+                                case SWhile(_, _, _):
                                     has_real_body = true
                                 case SFor(_, _, _, _, _):
                                     has_real_body = true
@@ -1043,7 +1047,7 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                                 match first_s:
                                     case SIf(_, _, _):
                                         is_real = true
-                                    case SWhile(_, _):
+                                    case SWhile(_, _, _):
                                         is_real = true
                                     case SFor(_, _, _, _, _):
                                         is_real = true

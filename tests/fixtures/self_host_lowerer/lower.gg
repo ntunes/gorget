@@ -617,7 +617,7 @@ String stmt_kind(Stmt s):
             return "SMetaIf"
         case SFor(_, _, _, _, _):
             return "SFor"
-        case SWhile(_, _):
+        case SWhile(_, _, _):
             return "SWhile"
         case SLoop(_):
             return "SLoop"
@@ -2232,8 +2232,8 @@ Vector[Stmt] collect_rewrite_stmts(Vector[Stmt] stmts, SpannedType ret_ty, Dict[
                     nbr.push(ElseBranch(eb.condition, collect_rewrite_stmts(eb.body, ret_ty, &fn_param_types)))
                     ei = ei + 1
                 result.push(SIf(cond, nt, nbr))
-            case SWhile(cond, body):
-                result.push(SWhile(cond, collect_rewrite_stmts(body, ret_ty, &fn_param_types)))
+            case SWhile(cond, body, else_b):
+                result.push(SWhile(cond, collect_rewrite_stmts(body, ret_ty, &fn_param_types), collect_rewrite_stmts(else_b, ret_ty, &fn_param_types)))
             case SLoop(body):
                 result.push(SLoop(collect_rewrite_stmts(body, ret_ty, &fn_param_types)))
             case SFor(pat, iter_expr, body, own, else_b):

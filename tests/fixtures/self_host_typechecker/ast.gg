@@ -146,7 +146,7 @@ enum Stmt:
     # expansion — never seen by resolve/typecheck.
     SMetaForMatch(Vector[String], SpannedExpr, Vector[MatchArm])
     SFor(SpannedPattern, SpannedExpr, Vector[Stmt], int, Vector[Stmt])
-    SWhile(SpannedExpr, Vector[Stmt])
+    SWhile(SpannedExpr, Vector[Stmt], Vector[Stmt])
     SLoop(Vector[Stmt])
     SIf(SpannedExpr, Vector[Stmt], Vector[ElseBranch])
     SMatch(SpannedExpr, Vector[MatchArm])

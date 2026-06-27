@@ -1174,10 +1174,21 @@ int resolve_elem_type_id(String elem_name, GirModule &gmod):
         return lookup_or_register_named(&gmod, "GorgetString")
     return lookup_or_register_named(&gmod, elem_name)
 
-void lower_while(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] body, GirModule &gmod, bool is_main):
+void lower_while(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] body, Vector[Stmt] else_body, GirModule &gmod, bool is_main):
     int header_bb = new_block(&ctx)
     int body_bb = new_block(&ctx)
     int exit_bb = new_block(&ctx)
+    # while-else: `else_bb` sits between the header's false-exit (the
+    # condition went false → natural loop exit) and the true `exit_bb`.
+    # The header branches to `else_bb` (not `exit_bb`) when an else arm is
+    # present; SBreak still jumps to `exit_bb` directly — skipping `else_bb`
+    # (Python while-else semantics: else runs only when no break fired).
+    # When `else_body` is empty, `else_bb == exit_bb` and the false-exit
+    # goes straight to exit. Mirrors `lower_for_range`'s else_bb scaffold +
+    # Rust's `lower_while` (src/ir/lowering/stmts/mod.rs:2290).
+    int else_bb = exit_bb
+    if else_body.len() > 0:
+        else_bb = new_block(&ctx)
     set_terminator(&ctx, GTJump(header_bb))
     # Header: evaluate condition
     switch_to(&ctx, header_bb)
@@ -1191,8 +1202,10 @@ void lower_while(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] body, GirMod
     ctx.expected_type = saved_expected_wh
     # Auto-propagate a `throws` call used as the condition (`while might():`).
     cond = maybe_auto_propagate(&ctx, cond, &gmod)
-    set_terminator(&ctx, GTBranch(OpCopy(cond), body_bb, exit_bb))
+    # Condition false (natural exit) → else_bb (== exit_bb when no else arm).
+    set_terminator(&ctx, GTBranch(OpCopy(cond), body_bb, else_bb))
     # Body. Push loop targets so SBreak/SContinue know where to jump.
+    # break jumps to exit_bb (skips the else body).
     ctx.loop_continue_stack.push(header_bb)
     ctx.loop_break_stack.push(exit_bb)
     # Phase 2: open a Loop drop scope around the body.
@@ -1209,6 +1222,17 @@ void lower_while(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] body, GirMod
     # Pop — targets only apply to this loop's direct body.
     ctx.loop_continue_stack.pop()
     ctx.loop_break_stack.pop()
+    # else block: runs only when the condition went false without a break.
+    # If else_body is empty, else_bb == exit_bb and this is a no-op.
+    if else_body.len() > 0:
+        switch_to(&ctx, else_bb)
+        lower_stmts(&ctx, else_body, &gmod, is_main)
+        Terminator else_term = ctx.block_terms.get(ctx.current_block).unwrap()
+        match else_term:
+            case GTNone():
+                set_terminator(&ctx, GTJump(exit_bb))
+            else:
+                pass
     switch_to(&ctx, exit_bb)
 
 # ── Function lowering ────────────────────────────────────

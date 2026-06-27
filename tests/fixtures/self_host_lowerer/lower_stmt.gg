@@ -693,8 +693,8 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             lower_expr(&ctx, sexpr, &gmod)
         case SIf(cond_expr, then_body, elif_branches):
             lower_if(&ctx, cond_expr, then_body, elif_branches, &gmod, is_main)
-        case SWhile(cond_expr, body):
-            lower_while(&ctx, cond_expr, body, &gmod, is_main)
+        case SWhile(cond_expr, body, else_body):
+            lower_while(&ctx, cond_expr, body, else_body, &gmod, is_main)
         case SAssign(target_expr, value_expr):
             # #37 Phase 2 hook 4 (SAssign target root): reassign `v = w`,
             # index-store `v[i] = x`, field-store `v.f = x` destroy or

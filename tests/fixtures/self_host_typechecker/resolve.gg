@@ -502,7 +502,7 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
                 resolve_block(else_body, &scopes, &types, &ctx)
                 scopes.pop_scope()
 
-        case SWhile(condition, body):
+        case SWhile(condition, body, else_body):
             scopes.push_scope(SkBlock())
             if has_is_patterns(condition.expr):
                 resolve_is_condition(condition, &scopes, &ctx)
@@ -510,6 +510,10 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
                 resolve_expr(condition, &scopes, &ctx)
             resolve_block(body, &scopes, &types, &ctx)
             scopes.pop_scope()
+            if else_body.len() > 0:
+                scopes.push_scope(SkBlock())
+                resolve_block(else_body, &scopes, &types, &ctx)
+                scopes.pop_scope()
 
         case SLoop(body):
             scopes.push_scope(SkForLoop())
@@ -953,11 +957,15 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
                 resolve_block_expr(else_body, &scopes, &ctx)
                 scopes.pop_scope()
 
-        case SWhile(condition, body):
+        case SWhile(condition, body, else_body):
             scopes.push_scope(SkBlock())
             resolve_expr(condition, &scopes, &ctx)
             resolve_block_expr(body, &scopes, &ctx)
             scopes.pop_scope()
+            if else_body.len() > 0:
+                scopes.push_scope(SkBlock())
+                resolve_block_expr(else_body, &scopes, &ctx)
+                scopes.pop_scope()
 
         case SLoop(body):
             scopes.push_scope(SkForLoop())

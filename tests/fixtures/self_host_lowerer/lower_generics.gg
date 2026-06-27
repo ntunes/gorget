@@ -176,9 +176,10 @@ void proto_walk_stmts(Vector[Stmt] stmts, GirModule &gmod, Vector[ProtoMethInst]
                 proto_walk_stmts(tb, &gmod, &out, &seen)
                 for el in elifs:
                     proto_walk_stmts(el.body, &gmod, &out, &seen)
-            case SWhile(c, b):
+            case SWhile(c, b, eb):
                 proto_walk_expr(c, &gmod, &out, &seen)
                 proto_walk_stmts(b, &gmod, &out, &seen)
+                proto_walk_stmts(eb, &gmod, &out, &seen)
             case SFor(_, p_iter, b, _, eb):
                 proto_walk_expr(p_iter, &gmod, &out, &seen)
                 proto_walk_stmts(b, &gmod, &out, &seen)
@@ -273,9 +274,10 @@ void discover_adapter_chain_stmts(Vector[Stmt] stmts, GirModule &gmod, Dict[Stri
                 discover_adapter_chain_stmts(tb, &gmod, equip_generic_names, &seen, &instances)
                 for el in elifs:
                     discover_adapter_chain_stmts(el.body, &gmod, equip_generic_names, &seen, &instances)
-            case SWhile(c, b):
+            case SWhile(c, b, eb):
                 discover_adapter_chain_expr(c, &gmod, equip_generic_names, &seen, &instances)
                 discover_adapter_chain_stmts(b, &gmod, equip_generic_names, &seen, &instances)
+                discover_adapter_chain_stmts(eb, &gmod, equip_generic_names, &seen, &instances)
             case SFor(_, p_iter, b, _, eb):
                 discover_adapter_chain_expr(p_iter, &gmod, equip_generic_names, &seen, &instances)
                 discover_adapter_chain_stmts(b, &gmod, equip_generic_names, &seen, &instances)
@@ -452,7 +454,7 @@ void discover_generic_calls_stmt(Stmt stmt, Dict[String, bool] &seen, Vector[Gen
                     case None:
                         pass
                 discover_generic_calls_stmts(eb.body, &seen, &instances)
-        case SWhile(cond, body):
+        case SWhile(cond, body, _):
             discover_generic_calls_expr(cond, &seen, &instances)
             discover_generic_calls_stmts(body, &seen, &instances)
         case SFor(_, iter_expr, body, _, _):
@@ -985,8 +987,8 @@ Vector[Stmt] subst_mf_stmts(Vector[Stmt] stmts, Dict[String, String] &sv, Dict[S
                             nc = None
                     nb.push(ElseBranch(nc, subst_mf_stmts(eb.body, &sv, &iv)))
                 out.push(SMetaIf(subst_mf_expr(meta_cond, &sv, &iv), subst_mf_stmts(then_body, &sv, &iv), nb))
-            case SWhile(cond, body):
-                out.push(SWhile(subst_mf_expr(cond, &sv, &iv), subst_mf_stmts(body, &sv, &iv)))
+            case SWhile(cond, body, else_b):
+                out.push(SWhile(subst_mf_expr(cond, &sv, &iv), subst_mf_stmts(body, &sv, &iv), subst_mf_stmts(else_b, &sv, &iv)))
             case SFor(pat, iter_e, body, own, else_b):
                 out.push(SFor(pat, subst_mf_expr(iter_e, &sv, &iv), subst_mf_stmts(body, &sv, &iv), own, subst_mf_stmts(else_b, &sv, &iv)))
             case SMatch(scrut, arms):
@@ -1246,8 +1248,8 @@ Vector[Stmt] evaluate_delayed_meta_stmts(Vector[Stmt] stmts, Dict[String, String
                     nb.push(ElseBranch(eb.condition, evaluate_delayed_meta_stmts(eb.body, &tn_env, &int_env, &gmod)))
                     ei += 1
                 out.push(SIf(cond, evaluate_delayed_meta_stmts(then_b, &tn_env, &int_env, &gmod), nb))
-            case SWhile(cond, body):
-                out.push(SWhile(cond, evaluate_delayed_meta_stmts(body, &tn_env, &int_env, &gmod)))
+            case SWhile(cond, body, else_b):
+                out.push(SWhile(cond, evaluate_delayed_meta_stmts(body, &tn_env, &int_env, &gmod), evaluate_delayed_meta_stmts(else_b, &tn_env, &int_env, &gmod)))
             case SFor(pat, iter_e, body, own, else_b):
                 out.push(SFor(pat, iter_e, evaluate_delayed_meta_stmts(body, &tn_env, &int_env, &gmod), own, evaluate_delayed_meta_stmts(else_b, &tn_env, &int_env, &gmod)))
             case SLoop(body):
@@ -1425,7 +1427,7 @@ void scan_spawn_wrappers(Vector[Stmt] stmts, Dict[String, bool] &shared_vars, Di
                 scan_expr_for_spawn(expr, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
             case SAssign(_, val):
                 scan_expr_for_spawn(val, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
-            case SWhile(cond, body):
+            case SWhile(cond, body, _):
                 scan_expr_for_spawn(cond, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
                 scan_spawn_wrappers(body, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
             case SIf(cond, then_body, branches):
@@ -1573,7 +1575,7 @@ void emit_named_closure_spawn_stmts(Vector[Stmt] stmts, String fn_name, Dict[Str
                 emit_named_closure_spawn_stmts(then_body, fn_name, &emitted, &gmod)
                 for nceb in branches:
                     emit_named_closure_spawn_stmts(nceb.body, fn_name, &emitted, &gmod)
-            case SWhile(_, body):
+            case SWhile(_, body, _):
                 emit_named_closure_spawn_stmts(body, fn_name, &emitted, &gmod)
             case SFor(_, iter_expr, body, _, _):
                 emit_named_closure_spawn_expr(iter_expr, fn_name, &emitted, &gmod)
@@ -1638,9 +1640,10 @@ void discover_mono_method_insts_stmt(Stmt stmt, Dict[String, SpannedType] params
             discover_mono_method_insts(tb, params_by_name, &type_sub_map, &gmod, &out, &seen)
             for el in elifs:
                 discover_mono_method_insts(el.body, params_by_name, &type_sub_map, &gmod, &out, &seen)
-        case SWhile(c, b):
+        case SWhile(c, b, eb):
             discover_mono_method_insts_expr(c, params_by_name, &type_sub_map, &gmod, &out, &seen)
             discover_mono_method_insts(b, params_by_name, &type_sub_map, &gmod, &out, &seen)
+            discover_mono_method_insts(eb, params_by_name, &type_sub_map, &gmod, &out, &seen)
         case SFor(_, iter_e, b, _, eb):
             discover_mono_method_insts_expr(iter_e, params_by_name, &type_sub_map, &gmod, &out, &seen)
             discover_mono_method_insts(b, params_by_name, &type_sub_map, &gmod, &out, &seen)
@@ -1818,7 +1821,7 @@ int discover_transitive_stmt(Stmt stmt, Dict[String, SpannedType] &type_sub_map,
             added += discover_transitive_stmts(then_body, &type_sub_map, &seen, &instances)
             for eb in branches:
                 added += discover_transitive_stmts(eb.body, &type_sub_map, &seen, &instances)
-        case SWhile(cond, body):
+        case SWhile(cond, body, _):
             added += discover_transitive_expr(cond, &type_sub_map, &seen, &instances)
             added += discover_transitive_stmts(body, &type_sub_map, &seen, &instances)
         case SFor(_, iter_expr, body, _, _):

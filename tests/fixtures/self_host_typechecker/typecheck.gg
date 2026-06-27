@@ -1292,12 +1292,13 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
             type_check_stmts(body, scope_id, &scopes, &types, &ctx)
             ctx.loop_depth = ctx.loop_depth - 1
 
-        case SWhile(cond, body):
+        case SWhile(cond, body, else_body):
             if has_is_patterns(cond.expr):
                 assign_is_condition_types(cond, scope_id, &scopes, &types, &ctx)
             ctx.loop_depth = ctx.loop_depth + 1
             type_check_stmts(body, scope_id, &scopes, &types, &ctx)
             ctx.loop_depth = ctx.loop_depth - 1
+            type_check_stmts(else_body, scope_id, &scopes, &types, &ctx)
 
         case SLoop(body):
             ctx.loop_depth = ctx.loop_depth + 1

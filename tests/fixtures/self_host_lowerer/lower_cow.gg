@@ -329,9 +329,10 @@ void cow_scan_stmts(LowerCtx &ctx, GirModule &gmod, Vector[Stmt] stmts, bool in_
                         cow_scan_expr(&ctx, &gmod, be, in_closure)
                     case None:
                         pass
-            case SWhile(cond_e, body_w):
+            case SWhile(cond_e, body_w, else_w):
                 cow_scan_expr(&ctx, &gmod, cond_e, in_closure)
                 cow_scan_stmts(&ctx, &gmod, body_w, in_closure)
+                cow_scan_stmts(&ctx, &gmod, else_w, in_closure)
             case SLoop(body_l):
                 cow_scan_stmts(&ctx, &gmod, body_l, in_closure)
             case SFor(_, iter_e, body_f, _, else_f):

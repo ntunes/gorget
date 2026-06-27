@@ -2958,12 +2958,14 @@ equip Parser:
             SpannedExpr cond = self.parse_expr()
             self.expect_tok(TOK_COLON, "expected ':' after while condition")
             Vector[Stmt] body = self.parse_block()
-            # Skip optional else: block (while-else)
+            # Parse optional else: block (while-else) — runs when the loop
+            # exits WITHOUT a break, mirroring the for-else else_body capture.
+            Vector[Stmt] else_body = Vector[Stmt]()
             if self.check_kw(KW_ELSE):
                 self.advance()
                 self.expect_tok(TOK_COLON, "expected ':' after else")
-                self.parse_block()
-            return SWhile(cond, body)
+                else_body = self.parse_block()
+            return SWhile(cond, body, else_body)
 
         # for
         if self.check_kw(KW_FOR):

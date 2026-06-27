@@ -320,7 +320,7 @@ int eval_stmts(Vector[Stmt] stmts, Dict[String, int] &env, Module &m, int depth,
                             if returned:
                                 return rv
                         ei = ei + 1
-            case SWhile(cond, body):
+            case SWhile(cond, body, _):
                 while eval_bool_ex(cond.expr, &env, &m, depth, &ok):
                     iters = iters + 1
                     if iters > 100000:
@@ -543,8 +543,8 @@ Vector[Stmt] subst_stmts(Vector[Stmt] stmts, Dict[String, int] &iv, Dict[String,
                     nb.push(ElseBranch(nc, subst_stmts(eb.body, &iv, &bv, &sv)))
                     ei = ei + 1
                 out.push(SIf(subst_expr(cond, &iv, &bv, &sv), subst_stmts(then_b, &iv, &bv, &sv), nb))
-            case SWhile(cond, body):
-                out.push(SWhile(subst_expr(cond, &iv, &bv, &sv), subst_stmts(body, &iv, &bv, &sv)))
+            case SWhile(cond, body, else_b):
+                out.push(SWhile(subst_expr(cond, &iv, &bv, &sv), subst_stmts(body, &iv, &bv, &sv), subst_stmts(else_b, &iv, &bv, &sv)))
             case SFor(pat, iter_e, body, own, else_b):
                 out.push(SFor(pat, subst_expr(iter_e, &iv, &bv, &sv), subst_stmts(body, &iv, &bv, &sv), own, subst_stmts(else_b, &iv, &bv, &sv)))
             case SMatch(scrut, arms):
@@ -836,8 +836,8 @@ Vector[Stmt] rename_aliases_stmts(Vector[Stmt] stmts, Dict[String, String] &amap
                     nb.push(ElseBranch(nc, rename_aliases_stmts(eb.body, &amap)))
                     ei = ei + 1
                 out.push(SIf(rename_aliases_expr(cond, &amap), rename_aliases_stmts(then_b, &amap), nb))
-            case SWhile(cond, body):
-                out.push(SWhile(rename_aliases_expr(cond, &amap), rename_aliases_stmts(body, &amap)))
+            case SWhile(cond, body, else_b):
+                out.push(SWhile(rename_aliases_expr(cond, &amap), rename_aliases_stmts(body, &amap), rename_aliases_stmts(else_b, &amap)))
             case SFor(pat, iter_e, body, own, else_b):
                 out.push(SFor(pat, rename_aliases_expr(iter_e, &amap), rename_aliases_stmts(body, &amap), own, rename_aliases_stmts(else_b, &amap)))
             case SMatch(scrut, arms):
@@ -1444,8 +1444,8 @@ Vector[Stmt] subst_arm_stmts(Vector[Stmt] stmts, String vn, String vval, Dict[St
                     nb.push(ElseBranch(nc, subst_arm_stmts(eb.body, vn, vval, &tmap)))
                     ei = ei + 1
                 out.push(SIf(subst_arm_expr(cond, vn, vval, &tmap), subst_arm_stmts(then_b, vn, vval, &tmap), nb))
-            case SWhile(cond, body):
-                out.push(SWhile(subst_arm_expr(cond, vn, vval, &tmap), subst_arm_stmts(body, vn, vval, &tmap)))
+            case SWhile(cond, body, else_b):
+                out.push(SWhile(subst_arm_expr(cond, vn, vval, &tmap), subst_arm_stmts(body, vn, vval, &tmap), subst_arm_stmts(else_b, vn, vval, &tmap)))
             case SFor(pat, iter_e, body, own, else_b):
                 out.push(SFor(pat, subst_arm_expr(iter_e, vn, vval, &tmap), subst_arm_stmts(body, vn, vval, &tmap), own, subst_arm_stmts(else_b, vn, vval, &tmap)))
             case SMatch(scrut, arms):
@@ -1596,8 +1596,8 @@ Vector[Stmt] expand_meta_for_in_stmts(Vector[Stmt] stmts, Module m):
                     new_branches.push(ElseBranch(eb.condition, new_eb_body))
                     ei = ei + 1
                 result.push(SIf(cond, new_then, new_branches))
-            case SWhile(cond, body):
-                result.push(SWhile(cond, expand_meta_for_in_stmts(body, m)))
+            case SWhile(cond, body, else_b):
+                result.push(SWhile(cond, expand_meta_for_in_stmts(body, m), expand_meta_for_in_stmts(else_b, m)))
             case SFor(pat, iter_expr, body, own, else_b):
                 result.push(SFor(pat, iter_expr, expand_meta_for_in_stmts(body, m), own, expand_meta_for_in_stmts(else_b, m)))
             else:
