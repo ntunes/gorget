@@ -1220,31 +1220,29 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         # NOT mangled-name reconstruction).
                         bool cl_ret_found = false
                         int callable_tid = ctx.locals.get(callable_local).unwrap().type_id
-                        if callable_tid >= 0 and callable_tid < gmod.type_table.len():
-                            GirType ct = gmod.type_table.get(callable_tid).unwrap()
+                        # Callable params are passed ByPtr — a `Callable` arg is
+                        # `Ptr(FnPtr(...))`, and a double-returning callback handed
+                        # in through a nested-ptr shape is `Ptr(Ptr(FnPtr(...)))`.
+                        # Peel ALL Ptr/MutPtr layers recursively (was a single
+                        # hand-unrolled level → a `**fn` never reached the FnPtr →
+                        # the return defaulted to I64_TYPE → a `double()` callback
+                        # mis-cast `int64_t(*)(...)` → garbage). Mirrors Rust gg's
+                        # `extract_callable_return_type` recursive peel.
+                        int peeled_tid = peel_ptr_tid(&gmod, callable_tid)
+                        if peeled_tid >= 0 and peeled_tid < gmod.type_table.len():
+                            GirType ct = gmod.type_table.get(peeled_tid).unwrap()
                             match ct:
                                 case GtFnPtr(_, ret_tid):
-                                    cl_ret_type = ret_tid
-                                    cl_ret_found = true
-                                case GtPtr(inner_tid):
-                                    # Callable params are Ptr(FnPtr(...)) — unwrap
-                                    if inner_tid >= 0 and inner_tid < gmod.type_table.len():
-                                        GirType inner_ct = gmod.type_table.get(inner_tid).unwrap()
-                                        match inner_ct:
-                                            case GtFnPtr(_, ret_tid2):
-                                                cl_ret_type = ret_tid2
-                                                cl_ret_found = true
-                                            else:
-                                                pass
-                                case GtMutPtr(inner_tid):
-                                    if inner_tid >= 0 and inner_tid < gmod.type_table.len():
-                                        GirType inner_ct = gmod.type_table.get(inner_tid).unwrap()
-                                        match inner_ct:
-                                            case GtFnPtr(_, ret_tid2):
-                                                cl_ret_type = ret_tid2
-                                                cl_ret_found = true
-                                            else:
-                                                pass
+                                    # GUARD on `!= UNIT_TYPE` (mirror the
+                                    # closure_value_ret_type guard below): a
+                                    # `void()` callable's recovered UNIT return must
+                                    # NOT be cast over a used result — `void value
+                                    # not ignored as it ought to be` CC-FAIL. Drop a
+                                    # UNIT recovery so it falls through to the
+                                    # correct baseline `expected_type` path.
+                                    if ret_tid != UNIT_TYPE:
+                                        cl_ret_type = ret_tid
+                                        cl_ret_found = true
                                 else:
                                     pass
                         # closure Phase 2 increment 3 — the callable is the
