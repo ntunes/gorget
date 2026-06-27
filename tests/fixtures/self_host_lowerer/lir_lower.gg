@@ -246,6 +246,23 @@ Option[ResourceMetadata] build_resource_metadata(String name):
             Some("gorget_closure_free"), Some("gorget_closure_clone"), None,
             CsResource(), CkNotCollection(), BkNotBox(), false, None, None, false))
 
+    # Callable__/MutCallable__/ConsumeCallable__ — the in-collection callable
+    # forms (the user-facing local form lowers to FnPtr; the Named "Callable__…"
+    # form only appears as a collection element / dict value / Option payload via
+    # resolve_inner_type). All three share the runtime's 16-byte GorgetClosure
+    # `{fn_ptr, env}` layout (drop gorget_closure_free, clone gorget_closure_clone),
+    # mirroring Rust src/ir/lowering/builtins.rs:998-1056 (c_runtime_alias =
+    # "GorgetClosure"). The prefix MUST end in `__` (the mangling separator) so it
+    # cannot misfire on a user type — `Callable__GorgetClosure` is the exact
+    # mangled spelling. CkNotCollection: a Callable is a scalar resource, not a
+    # container; the Pass-1 dispatch below routes it to the pre-registered 16-byte
+    # GorgetClosure struct (no fresh empty-`{char __pad;}` body).
+    if name.starts_with("Callable__") or name.starts_with("MutCallable__") or name.starts_with("ConsumeCallable__"):
+        return Some(ResourceMetadata(
+            "GorgetClosure", 16, LtStructBase(),
+            Some("gorget_closure_free"), Some("gorget_closure_clone"), None,
+            CsResource(), CkNotCollection(), BkNotBox(), false, None, None, false))
+
     # Vector__T → GorgetArray (is_typed_constructor=true).
     if name.starts_with("Vector__"):
         return Some(ResourceMetadata(
@@ -925,6 +942,20 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
                                         m.type_method_prefix_map.put(name.clone(), gmp)
                                     case None:
                                         m.type_method_prefix_map.put(name.clone(), "gorget_guard")
+                                dispatched = true
+                            if not dispatched and rmeta.runtime_name == "GorgetClosure":
+                                # Callable__/MutCallable__/ConsumeCallable__ alias to
+                                # the pre-registered 16-byte GorgetClosure struct (set up
+                                # in register_builtin_structs). Point `sr` at that struct
+                                # id so locals get C type GorgetClosure (no fresh empty
+                                # body — should_skip_struct sees the type_runtime_map
+                                # "GorgetClosure" category and suppresses it), and
+                                # resource_clone_fn (sdef.name == "GorgetClosure") returns
+                                # gorget_closure_clone_to_owned for the `.clone()` path.
+                                int cls_rt_sid = sr.get("GorgetClosure").unwrap_or(-1)
+                                if cls_rt_sid >= 0:
+                                    sr.put(name, cls_rt_sid)
+                                m.type_runtime_map.put(name.clone(), "GorgetClosure")
                                 dispatched = true
                         case None:
                             pass

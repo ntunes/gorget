@@ -1614,6 +1614,13 @@ String lc_collection_drop_fn(String type_name, LirModule &m):
         return "gorget_set_free"
     elif runtime == "GorgetString":
         return "gorget_string_free"
+    elif runtime == "GorgetClosure":
+        # Vector[Callable] / Dict[_, Callable] element-drop: the element token is
+        # the mangled `Callable__…` name whose type_runtime_map category is now
+        # "GorgetClosure". Route element drop to gorget_closure_free (paired with
+        # the clone below — wiring drop without clone would double-free a
+        # shallow-copied closure's env).
+        return "gorget_closure_free"
     if m.recursive_drop_structs.contains(type_name) or m.recursive_drop_enums.contains(type_name):
         # Drop-name collision element type (a `Vector[T]` / `Dict[_, T]`
         # whose `T` has a user `T.drop(...)` method) routes element drops to
@@ -1653,6 +1660,12 @@ String lc_collection_clone_fn(String type_name, LirModule &m):
         return "gorget_set_clone_inplace"
     elif runtime == "GorgetString":
         return "gorget_string_clone_inplace"
+    elif runtime == "GorgetClosure":
+        # Companion in-place clone for the Callable element (paired with
+        # gorget_closure_free above): deep-clones the closure env so a
+        # shallow collection copy doesn't alias — and a later drop of either
+        # copy doesn't double-free.
+        return "gorget_closure_clone_inplace"
     if m.recursive_drop_structs.contains(type_name) or m.recursive_drop_enums.contains(type_name):
         return type_name + "__clone_inplace"
     return ""
@@ -2486,6 +2499,14 @@ String runtime_category_to_c_type(String runtime):
         return "GorgetSet"
     elif runtime == "GorgetString":
         return "GorgetString"
+    elif runtime == "GorgetClosure":
+        # Callable__/MutCallable__/ConsumeCallable__ alias to the runtime's
+        # 16-byte GorgetClosure `{fn_ptr, env}` struct (registered in
+        # register_builtin_structs). Returning a non-"" C type here makes
+        # should_skip_struct suppress a fresh empty body and lets
+        # resolve_sizeof_c_type / mono_wrapper_runtime_type resolve a
+        # Vector[Callable] / Dict[_, Callable] element to the 16-byte struct.
+        return "GorgetClosure"
     elif runtime == "Ptr" or runtime == "Box":
         return "void*"
     elif runtime == "Guard":

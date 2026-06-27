@@ -1500,9 +1500,20 @@ fn snag11_equip_symbol_mangle_site_count() {
 /// :307/:655/:828/:903 + emit_box_alloc), NOT a classification dodge. FOLLOW-UP
 /// (TODO): the typed `box_inner_type` field on the self-host `LirStructDef` retires
 /// this parse — drop BUDGET back to 74 when it lands.
+/// Bumped 75 → 78 (2026-06-27): the self-host Callable→GorgetClosure alias
+/// (closure Phase-2 inc-5c, `c96977f7`) added THREE
+/// `name.starts_with("Callable__"/"MutCallable__"/"ConsumeCallable__")` sites in
+/// `lir_lower.gg`'s `build_resource_metadata` — the SINGLE-SOURCE-OF-TRUTH
+/// resource-metadata classifier (the same fn holding `Vector__`/`Box__`/`Guard__`,
+/// the lint's allowed "option 2" location). They alias the in-collection Callable
+/// family to the 16-byte runtime `GorgetClosure` (drop `gorget_closure_free`, clone
+/// `gorget_closure_clone_to_owned`/`_inplace`), mirroring Rust `builtins.rs:998-1056`.
+/// The codegen body-suppression + the collection clone/drop routing decisions use the
+/// TYPED `runtime == "GorgetClosure"` (set once by the alias's `type_runtime_map.put`),
+/// adding 0 to this count — NOT a classification dodge.
 #[test]
 fn no_growth_in_self_host_name_prefix_routing() {
-    const BUDGET: usize = 75;
+    const BUDGET: usize = 78;
 
     // Phase-A classification-routing class only: all MANGLED_PREFIXES EXCEPT
     // the prelude option-like ones (those are the sibling lint's burn-down).
