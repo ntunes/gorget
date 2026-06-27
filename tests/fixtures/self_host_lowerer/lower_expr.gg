@@ -5160,6 +5160,29 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         # Resolve call redirects (bare → module-prefixed name).
         if gmod.call_redirects.contains(call_name):
             call_name = gmod.call_redirects.get(call_name).unwrap()
+        # Resolve a TYPE-ALIAS struct/enum constructor through `meta_aliases`
+        # (`type Handle = SlotKey` then `Handle(7, 0)`). The alias item is
+        # erased in GIR, so `call_name = "Handle"` reaches the ctor path with
+        # no entry in `type_infos` → the struct/enum-ctor field-init resolution
+        # below sees no fields → emits an empty `(Handle){}` with the ctor args
+        # DROPPED (and `h.id` reads a placeholder 0). `meta_aliases` already
+        # records `Handle → SlotKey` (lower.gg's ITypeAlias collection, keyed
+        # by the alias name for a 0-tparam `TNamed` target); rewrite `call_name`
+        # to the aliased name HERE, before the downstream ctor resolution, so
+        # `type_infos`/`is_type_constructor`/the field-init loop/the ret_type
+        # block/the emitted `GICall` all see the REAL struct. SCOPE: gated on
+        # the resolved target being a declared struct/enum (`type_infos`
+        # contains it) — a TYPED discriminator (no name matching). A primitive
+        # alias (`type Id = int`, target `"int"`) and a COLLECTION alias
+        # (`type IntList = Vector[int]`, stored as bare `"Vector"`) both have a
+        # target ABSENT from `type_infos`, so they fall through unchanged (the
+        # collection-alias targ-drop is a separate, deeper item). Guard on a
+        # non-mangled name (`not contains("__")`) so a monomorphized generic
+        # `call_name` can't accidentally alias-resolve.
+        if not call_name.contains("__") and gmod.meta_aliases.contains(call_name):
+            String _alias_target = gmod.meta_aliases.get(call_name).unwrap()
+            if gmod.type_infos.contains(_alias_target):
+                call_name = _alias_target
         # User function call
         Vector[Operand] gir_args = []
         # Look up borrow params from pre-scanned ownership info
