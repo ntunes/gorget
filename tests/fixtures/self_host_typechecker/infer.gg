@@ -531,8 +531,50 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                     Vector[int] vec_args = Vector[int]()
                     vec_args.push(types.string_id)
                     return types.add_type(RTGeneric(vec_def, vec_args))
-            if method_name == "is_empty" or method_name == "contains" or method_name == "starts_with" or method_name == "ends_with":
+            # Set-op predicates return bool (mirrors Rust typecheck.rs:5665 —
+            # `is_subset`/`is_superset` on Set/HashSet). Sibling of the
+            # is_empty/contains arm. Without this the result slot defaults to
+            # I64 and a `print(f"{a.is_subset(b)}")` prints 1/0 instead of
+            # true/false (the int-instead-of-bool symptom).
+            if method_name == "is_empty" or method_name == "contains" or method_name == "starts_with" or method_name == "ends_with" or method_name == "is_subset" or method_name == "is_superset" or method_name == "is_disjoint":
                 return types.bool_id
+            # Set-ops `union`/`intersection`/`difference` are RECEIVER-AWARE:
+            # on a Set/HashSet they return the receiver's OWN type (mirrors
+            # Rust typecheck.rs:5670 — `Some(receiver_type)`). Read the typed
+            # receiver category (RTGeneric/RTDefined → DefInfo.name), never a
+            # name guess. Without this the result slot defaults to I64 and the
+            # `Set[int] u = a.union(b)` assignment is `incompatible types`.
+            if method_name == "union" or method_name == "intersection" or method_name == "difference" or method_name == "symmetric_difference":
+                ResolvedType setop_recv_rt = get_rtype_at(types.types, reg_obj_type)
+                match setop_recv_rt:
+                    case RTGeneric(setop_def, setop_targs):
+                        DefInfo setop_d = scopes.get_def(setop_def)
+                        if setop_d.name == "Set" or setop_d.name == "HashSet":
+                            return reg_obj_type
+                    case RTDefined(setop_def2):
+                        DefInfo setop_d2 = scopes.get_def(setop_def2)
+                        if setop_d2.name == "Set" or setop_d2.name == "HashSet":
+                            return reg_obj_type
+                    else:
+                        pass
+            # `update(other)` on a Dict/HashMap returns void/unit (mirrors Rust
+            # typecheck.rs:5613 — `"put" | "set" | "update" => void_id`). It
+            # mutates the receiver in place; the call is statement-position.
+            # Without this the result slot defaults to I64 and the `void`
+            # value-discard path emits `void value not ignored` at cc.
+            if method_name == "update":
+                ResolvedType upd_recv_rt = get_rtype_at(types.types, reg_obj_type)
+                match upd_recv_rt:
+                    case RTGeneric(upd_def, upd_targs):
+                        DefInfo upd_d = scopes.get_def(upd_def)
+                        if upd_d.name == "Dict" or upd_d.name == "HashMap":
+                            return types.void_id
+                    case RTDefined(upd_def2):
+                        DefInfo upd_d2 = scopes.get_def(upd_def2)
+                        if upd_d2.name == "Dict" or upd_d2.name == "HashMap":
+                            return types.void_id
+                    else:
+                        pass
             # .unwrap() returns the inner type of Option[T] or Result[T,E]
             if method_name == "unwrap" or method_name == "unwrap_or":
                 int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, &ctx)

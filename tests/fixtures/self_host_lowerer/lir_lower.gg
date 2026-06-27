@@ -1845,10 +1845,14 @@ String map_set_method(String method):
             return "gorget_set_intersection"
         case "difference":
             return "gorget_set_difference"
+        case "symmetric_difference":
+            return "gorget_set_symmetric_difference"
         case "is_subset":
             return "gorget_set_is_subset"
         case "is_superset":
             return "gorget_set_is_superset"
+        case "is_disjoint":
+            return "gorget_set_is_disjoint"
         else:
             return ""
 
@@ -2207,9 +2211,30 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
             return true
         if fn_name == "gorget_map_clear" or fn_name == "gorget_map_free":
             return true
+        # `gorget_map_update(void* __dst_ptr, GorgetMap __other)` MUTATES the
+        # receiver in place (merges other's entries via put_cloned). Self (arg
+        # 0) MUST pass by pointer — by value would mutate a stack COPY (wrong +
+        # a likely UAF after the rehash reallocates the copy's storage). Mirrors
+        # the Rust ABI (`legacy_self_by_ptr` → every non-`_new` gorget_map_*
+        # passes self by ptr; `emit_types.rs:2741` signature is `void* __dst_ptr`).
+        if fn_name == "gorget_map_update":
+            return true
         if fn_name == "gorget_set_add" or fn_name == "gorget_set_remove":
             return true
         if fn_name == "gorget_set_clear" or fn_name == "gorget_set_free":
+            return true
+        # Set-op stubs (`gorget_set_union`/`_intersection`/`_difference` +
+        # predicates `_is_subset`/`_is_superset`) take self (arg 0) by POINTER:
+        # their emitted bodies cast `(GorgetSet*)__self_ptr` and read
+        # `__self->order`/`->cap`/`->states` (emit_types.rs:2677-2897). Mirrors
+        # the Rust ABI (`legacy_self_by_ptr` → every non-`_new` gorget_set_*
+        # passes self by ptr). Without this the receiver passes by value and cc
+        # rejects "incompatible type for argument 1" against the `void*` param.
+        if fn_name == "gorget_set_union" or fn_name == "gorget_set_intersection" or fn_name == "gorget_set_difference":
+            return true
+        if fn_name == "gorget_set_symmetric_difference":
+            return true
+        if fn_name == "gorget_set_is_subset" or fn_name == "gorget_set_is_superset" or fn_name == "gorget_set_is_disjoint":
             return true
         if fn_name == "gorget_channel_send" or fn_name == "gorget_channel_close":
             return true

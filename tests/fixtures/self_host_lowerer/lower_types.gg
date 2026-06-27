@@ -1827,6 +1827,12 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
         # Dict/Vector/Deque/etc. — fall through to receiver-aware path below.
     if method == "clear" or method == "insert" or method == "extend" or method == "reverse":
         return UNIT_TYPE
+    # `Dict/HashMap.update(other)` merges other's entries in place; void
+    # return (runtime `gorget_map_update`). Mirrors Rust typecheck.rs:5613
+    # (`"put" | "set" | "update" => void_id`). Without this the call falls
+    # through to the I64 default → cc errors "void value not ignored".
+    if method == "update":
+        return UNIT_TYPE
     # `Vector[T].reserve(n)` — grows the allocation in place; void return
     # (runtime `gorget_array_reserve`). Sibling of clear/insert/extend
     # above. Without this entry the call falls through to the I64 default,
@@ -1851,7 +1857,11 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
         record_enum_category(&gmod, find_opt_tid, ENUM_CAT_OPTION, I64_TYPE, -1)
         return find_opt_tid
     # Bool-returning methods
-    if method == "contains" or method == "is_empty" or method == "any" or method == "all":
+    # `Set/HashSet.is_subset(other)` / `.is_superset(other)` return bool
+    # (runtime `gorget_set_is_subset` / `_is_superset`). Mirrors Rust
+    # typecheck.rs:5665. Without this the result slot defaults to I64 and a
+    # `print(f"{a.is_subset(b)}")` prints 1/0 instead of true/false.
+    if method == "contains" or method == "is_empty" or method == "any" or method == "all" or method == "is_subset" or method == "is_superset" or method == "is_disjoint":
         return BOOL_TYPE
     if method == "starts_with" or method == "ends_with":
         return BOOL_TYPE
@@ -1898,6 +1908,43 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
                                     return slice_recv_t
                                 case CkDeque():
                                     return slice_recv_t
+                                else:
+                                    pass
+                        case None:
+                            pass
+                else:
+                    pass
+    # `Set/HashSet.union(other)` / `.intersection(other)` / `.difference(other)`
+    # are RECEIVER-AWARE: they return the receiver's OWN Set type (mirrors Rust
+    # typecheck.rs:5670 — `Some(receiver_type)`). Classify the receiver via the
+    # TYPED `resource_meta_for`/`collection_kind` metadata (CkOrderedSet /
+    # CkHashSet), not a name prefix — the same idiom as the `slice`/`remove`
+    # receiver-aware arms above. Without this the result slot defaults to I64
+    # and the `Set[int] u = a.union(b)` assignment is `incompatible types`.
+    if method == "union" or method == "intersection" or method == "difference" or method == "symmetric_difference":
+        int setop_recv_t = -1
+        if recv >= 0 and recv < ctx.locals.len():
+            setop_recv_t = ctx.locals.get(recv).unwrap().type_id
+            if setop_recv_t >= 0 and setop_recv_t < gmod.type_table.len():
+                GirType setop_gt0 = gmod.type_table.get(setop_recv_t).unwrap()
+                match setop_gt0:
+                    case GtPtr(setop_inner):
+                        setop_recv_t = setop_inner
+                    case GtMutPtr(setop_inner2):
+                        setop_recv_t = setop_inner2
+                    else:
+                        pass
+        if setop_recv_t >= 0 and setop_recv_t < gmod.type_table.len():
+            GirType setop_gt = gmod.type_table.get(setop_recv_t).unwrap()
+            match setop_gt:
+                case GtNamed(setop_n):
+                    match resource_meta_for(&gmod, setop_n):
+                        case Some(setop_rmeta):
+                            match setop_rmeta.collection_kind:
+                                case CkOrderedSet():
+                                    return setop_recv_t
+                                case CkHashSet():
+                                    return setop_recv_t
                                 else:
                                     pass
                         case None:
