@@ -1149,12 +1149,30 @@ bool closure_body_captures(Vector[Param] params, Vector[Stmt] body, GirModule &g
         in_scope.put(p.param_name.clone(), true)
     return closure_stmts_have_capture(body, in_scope, &gmod)
 
-# Phase-1 entry guard for the implicit-`it` (EImplicitClosure) body shape:
-# the single implicit param is `"it"`.
-bool implicit_closure_body_captures(SpannedExpr body, GirModule &gmod):
+# closure Phase-2 §4d: entry guard for the implicit-`it`
+# (EImplicitClosure / `.map(it*2)`, `.and_then(Some(it+1))`) body shape,
+# built on the COLLECTOR (`cc_collect_expr`) — the SAME capture analysis
+# the EXPLICIT closure make-site uses (lower_expr.gg:~3216), NOT the
+# Phase-1 detector (`closure_expr_has_capture`). The detector mis-classifies
+# a bare-identifier CALLEE that is module-unresolvable — notably a PRELUDE
+# enum variant `Some`/`None`/`Ok`/`Error` (which `closure_ident_module_-
+# resolvable` does NOT cover: `enum_variant_parent` only indexes USER enums)
+# — as a captured free var, STUBbing the whole body. The collector routes a
+# bare callee through `cc_callee_is_free_fn` (function namespace, captures
+# nothing) and records ONLY genuine outer-LOCALs (`nl_contains`) as captures.
+# Returns true iff the body GENUINELY captures (an outer local → `caps`, or a
+# capture-shaped-but-unresolvable var / `self` → `unliftable`), which keeps
+# capturing implicit-`it` (`.map(it+k)`, k an outer local) STUBBED — capture
+# support for the implicit-`it` path is DEFERRED. The single implicit param
+# is `"it"`. Mirrors Rust `FreeVarCollector::visit_expr` (closures.rs:631).
+bool implicit_closure_genuine_capture(LowerCtx &ctx, SpannedExpr body, GirModule &gmod):
     Dict[String, bool] in_scope = {}
     in_scope.put("it", true)
-    return closure_expr_has_capture(body, in_scope, &gmod)
+    Vector[ClosureCapture] caps0 = []
+    Dict[String, bool] seen0 = {}
+    CaptureCollector cc = CaptureCollector(!caps0, !seen0, false)
+    cc_collect_expr(&ctx, body, in_scope, &gmod, &cc)
+    return cc.unliftable or cc.caps.len() > 0
 
 # ── closure Phase 2 Step B: capture COLLECTOR + CLASSIFIER ───────────
 #
@@ -1733,9 +1751,13 @@ int record_implicit_it_closure(LowerCtx &ctx, SpannedExpr ic_body, GirModule &gm
     gmod.fn_sigs.put(ic_make_fn, ic_gc_tid)
     emit(&ctx, GICallExtern(ic_cdst, ic_make_fn, ic_make_args))
     ClosureSig ic_sig = compute_implicit_closure_sig(ic_cid, ic_body, &gmod, ctx.expected_type)
-    # Lowerable guard byte-identical to the old scan's implicit-it guard:
-    # non-capturing AND nests no closure.
-    bool ic_lowerable = not (implicit_closure_body_captures(ic_body, &gmod) or expr_has_nested_closure(ic_body))
+    # Lowerable guard (§4d): lower IFF the body neither GENUINELY captures nor
+    # nests a closure. The capture check routes through the COLLECTOR (the same
+    # analysis the explicit-closure make-site uses), so a prelude/user enum-ctor
+    # callee like `Some(it+1)` is correctly a free-fn (not a capture) and the
+    # body lowers via the enum-ctor machinery; a real outer-local capture
+    # (`.map(it+k)`) stays STUBBED (implicit-it capture support is DEFERRED).
+    bool ic_lowerable = not (implicit_closure_genuine_capture(&ctx, ic_body, &gmod) or expr_has_nested_closure(ic_body))
     Vector[Stmt] ic_body_stmts = [SExpr(ic_body)]
     # implicit-it closures: capture support is DEFERRED (stay stubbed-if-
     # capturing). Pass empty captures.
