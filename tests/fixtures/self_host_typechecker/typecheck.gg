@@ -1163,6 +1163,38 @@ void check_sized_int_literal_range(SpannedExpr init_expr, int var_type_id, TypeT
     if value < range_min or value > range_max:
         ctx.diagnostics.push(Diagnostic.error(init_expr.span, DkTypeMismatch(), f"value {value} is out of range for type {prim_name} (valid range: {range_min}..={range_max})"))
 
+# ── String index-assign reject (StringIndexAssign) ──────────
+# Mirrors Rust's check_string_index_assign in src/semantic/typecheck.rs:4174
+# (kind SemanticErrorKind::StringIndexAssign, message at errors.rs:773),
+# called from the Stmt::Assign / Stmt::CompoundAssign arms (typecheck.rs:3324
+# /3343). Reject `s[i] = x` / `s[i] += x` when the indexed OBJECT is a String:
+# `s[i]` is a documented read-only codepoint view (language-reference SStrings)
+# and the lowering has no String index-setter, so these compiled as SILENT
+# NO-OPS in the self-host before this gate.
+#
+# Fires ONLY when the index target's receiver resolves to a String primitive —
+# the exact discriminator the EIndex INFERENCE already uses (infer.gg:751-754,
+# RTPrimitive("str"|"String")) and which mirrors Rust's `Primitive(StringType)`
+# (Rust's owned-`String` and `str` ids BOTH carry PrimitiveType::StringType;
+# the self-host splits them into RTPrimitive("String") / RTPrimitive("str")).
+# This is a typed resolved-type test, NOT identifier name-matching. Vector/Dict/
+# array/slice/user-type index targets all fall through untouched — their
+# receivers resolve to RTGeneric/RTArray/RTSlice/RTDefined, never RTPrimitive.
+void check_string_index_assign(SpannedExpr target, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
+    match target.expr:
+        case EIndex(obj, _):
+            int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, &ctx)
+            if obj_type >= 0 and obj_type < types.types.len():
+                ResolvedType ort = get_rtype_at(types.types, obj_type)
+                match ort:
+                    case RTPrimitive(name):
+                        if name == "str" or name == "String":
+                            ctx.diagnostics.push(Diagnostic.error(target.span, DkTypeMismatch(), "strings are not index-assignable: `s[i]` is a read-only codepoint view — build a new string instead (e.g. `s.replace(...)`, slicing + concatenation)"))
+                    else:
+                        pass
+        else:
+            pass
+
 # ── Type-check statements (looking for VarDecl with explicit types) ──
 
 void type_check_stmts(Vector[Stmt] stmts, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
@@ -1309,6 +1341,19 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
             walk_expr_closures(sexpr, scope_id, &scopes, &types, &ctx)
 
         case SAssign(target, value):
+            # StringIndexAssign: reject `s[i] = x` when `s` is a String, matching
+            # Rust gg (typecheck.rs:3324). The receiver is resolved (not name-
+            # matched) so Vector/Dict/array index-assigns stay accepted.
+            check_string_index_assign(target, scope_id, &scopes, &types, &ctx)
+            walk_expr_closures(value, scope_id, &scopes, &types, &ctx)
+
+        case SCompoundAssign(target, _, value):
+            # StringIndexAssign sibling: reject `s[i] += x` when `s` is a String,
+            # matching Rust gg (typecheck.rs:3343). Before this, SCompoundAssign
+            # fell into the `else: pass` arm and the String write-back compiled
+            # as a SILENT NO-OP. The value sub-expression is still walked for
+            # closures, mirroring the SAssign arm.
+            check_string_index_assign(target, scope_id, &scopes, &types, &ctx)
             walk_expr_closures(value, scope_id, &scopes, &types, &ctx)
 
         case SReturn(opt_expr):

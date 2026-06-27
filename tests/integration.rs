@@ -16922,6 +16922,146 @@ fn self_host_driver_rejects_value_out_of_range() {
     );
 }
 
+// Companion to `self_host_driver_rejects_value_out_of_range`, exercising the
+// StringIndexAssign diagnostic. The self-host typecheck now REJECTS an
+// assignment to a String index (`s[0] = "H"`), matching Rust gg (see
+// `string_index_assign_error()` for the Rust-side reject + the
+// `check_string_index_assign` call in the SAssign arm of
+// self_host_typechecker/typecheck.gg's type_check_stmt, which mirrors Rust's
+// `check_string_index_assign` in src/semantic/typecheck.rs:4174 — kind
+// SemanticErrorKind::StringIndexAssign, called at :3324, message at
+// errors.rs:773). Before this, the self-host silently ACCEPTED `s[i] = x` and
+// lowered it to C — where the lowering has no String index-setter, so it
+// compiled as a SILENT NO-OP. The guard fires ONLY when the indexed object
+// resolves to a String primitive (RTPrimitive("str"|"String") — the same
+// discriminator the EIndex inference already uses, infer.gg:751); Vector/Dict/
+// array/slice/user-type index targets resolve to RTGeneric/RTArray/RTSlice/
+// RTDefined and stay accepted. The message is byte-identical to Rust's. Same
+// contract as the sibling guards: non-zero exit, a source-grounded codespan
+// diagnostic on stderr, and NO C on stdout (the diagnostic gate halts BEFORE
+// lowering). Parity-neutral — the fixture is Rust-rejected, excluded from the
+// parity denominator.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_rejects_string_index_assign() {
+    // Cached — shared with lowerer_comparison / bootstrap / e2e.
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir
+        .join("tests/fixtures/string_index_assign_error.gg");
+    assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
+
+    // Invoke the driver exactly as the e2e harness does: `driver F lib --lir-c`.
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "self_host_driver_rejects_string_index_assign",
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    // 1. The driver MUST exit non-zero (the diagnostic gate's exit(1)).
+    assert!(
+        !out.status.success(),
+        "self-host driver accepted a Rust-REJECTED program (assignment to a \
+         string index, `s[0] = \"H\"`). The check_string_index_assign call in \
+         the SAssign arm of self_host_typechecker/typecheck.gg was removed or \
+         stopped firing. exit={:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+
+    // 2. It MUST render a codespan diagnostic to stderr (see
+    //    self_host_typechecker/diagnostic.gg::render_diagnostic). The `error`
+    //    headline, the full message text (byte-identical to Rust's so
+    //    type_comparison stays exact), and the box rule together prove the
+    //    diagnostic rendered with content.
+    assert!(
+        stderr.contains("error")
+            && stderr.contains(
+                "strings are not index-assignable: `s[i]` is a read-only \
+                 codepoint view",
+            )
+            && stderr.contains('\u{250c}'),
+        "self-host driver exited non-zero but emitted no codespan diagnostic \
+         to stderr — the reject path must render, not crash silently.\n\
+         stderr:\n{stderr}",
+    );
+
+    // 3. It MUST NOT emit C (the gate halts BEFORE lower_module). On a rejected
+    //    program stdout must be empty.
+    assert!(
+        stdout.trim().is_empty(),
+        "self-host driver emitted C for a rejected program — the gate must \
+         halt BEFORE lowering. stdout bytes={}\nstdout head:\n{}",
+        stdout.len(),
+        &stdout.chars().take(200).collect::<String>(),
+    );
+}
+
+// Compound sibling of `self_host_driver_rejects_string_index_assign`: the
+// self-host now also REJECTS `s[0] += "x"` (a String compound index-assign),
+// matching Rust gg (`string_index_compound_assign_error()`). Before this, the
+// self-host's type_check_stmt had NO SCompoundAssign arm — compound assigns fell
+// into `else: pass`, so the String write-back compiled as a SILENT NO-OP. The
+// fix adds an SCompoundAssign arm calling the same check_string_index_assign
+// guard the SAssign arm uses (mirroring Rust's Stmt::CompoundAssign arm at
+// src/semantic/typecheck.rs:3343). Same contract: non-zero exit, codespan
+// diagnostic on stderr, NO C on stdout. Parity-neutral.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_rejects_string_index_compound_assign() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir
+        .join("tests/fixtures/string_index_compound_assign_error.gg");
+    assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
+
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "self_host_driver_rejects_string_index_compound_assign",
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    assert!(
+        !out.status.success(),
+        "self-host driver accepted a Rust-REJECTED program (a string compound \
+         index-assign, `s[0] += \"x\"`). The SCompoundAssign arm of \
+         self_host_typechecker/typecheck.gg's type_check_stmt was removed or \
+         stopped calling check_string_index_assign. exit={:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+
+    assert!(
+        stderr.contains("error")
+            && stderr.contains(
+                "strings are not index-assignable: `s[i]` is a read-only \
+                 codepoint view",
+            )
+            && stderr.contains('\u{250c}'),
+        "self-host driver exited non-zero but emitted no codespan diagnostic \
+         to stderr — the reject path must render, not crash silently.\n\
+         stderr:\n{stderr}",
+    );
+
+    assert!(
+        stdout.trim().is_empty(),
+        "self-host driver emitted C for a rejected program — the gate must \
+         halt BEFORE lowering. stdout bytes={}\nstdout head:\n{}",
+        stdout.len(),
+        &stdout.chars().take(200).collect::<String>(),
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // GG_IMPL sub-req 2 gate: the self-host driver's standalone CLI surface.
 //
