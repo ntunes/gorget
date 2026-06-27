@@ -513,6 +513,13 @@ pub enum SemanticErrorKind {
     /// Duplicate field in struct literal.
     DuplicateStructField { field: String },
 
+    /// Two fields with the same name in a struct *declaration*
+    /// (`struct P: int x; int x`). Distinct from `DuplicateStructField`,
+    /// which is a duplicate in a struct *literal*. The declaration form
+    /// previously slipped through resolution and only failed downstream
+    /// at the C compiler ("duplicate member"); this rejects it up front.
+    DuplicateStructFieldDecl { field: String },
+
     /// Wrong number of fields in struct literal.
     WrongFieldCount { type_: String, expected: usize, found: usize },
 
@@ -901,6 +908,9 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::DuplicateStructField { field } => {
                 write!(f, "duplicate field `{field}` in struct literal")
+            }
+            SemanticErrorKind::DuplicateStructFieldDecl { field } => {
+                write!(f, "duplicate struct field `{field}`")
             }
             SemanticErrorKind::WrongFieldCount { type_, expected, found } => {
                 write!(f, "`{type_}` has {expected} fields but {found} were supplied")

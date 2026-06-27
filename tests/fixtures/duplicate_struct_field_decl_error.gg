@@ -1,0 +1,7 @@
+struct P:
+    int x
+    int x
+
+void main():
+    P p = P(1, 2)
+    print(p.x)

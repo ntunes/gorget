@@ -545,6 +545,23 @@ fn collect_item(
         }
 
         Item::Struct(s) => {
+            // Reject two fields with the same name in the declaration
+            // (`struct P: int x; int x`). Previously this slipped through
+            // resolution and only failed downstream at the C compiler
+            // ("duplicate member"); reject it up front with a real
+            // diagnostic on the SECOND field's name. The self-host mirrors
+            // this in self_host_typechecker/typecheck.gg's IStruct arm.
+            let mut seen_fields: std::collections::HashSet<&str> = std::collections::HashSet::new();
+            for f in &s.fields {
+                if !seen_fields.insert(f.node.name.node.as_str()) {
+                    errors.push(SemanticError {
+                        kind: SemanticErrorKind::DuplicateStructFieldDecl {
+                            field: f.node.name.node.clone(),
+                        },
+                        span: f.node.name.span,
+                    });
+                }
+            }
             match scopes.define(s.name.node.clone(), DefKind::Struct, s.name.span) {
                 Ok(def_id) => {
                     let fields: Vec<(String, Span)> = s

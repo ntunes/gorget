@@ -25,7 +25,7 @@ from types import RTCallableTrait, RTMutCallableTrait, RTConsumeCallableTrait, R
 from resolve import ResolveContext
 from infer import infer_expr_type, infer_closure_return_type
 from traits import build_trait_registry, resolve_method_full, resolve_method_by_name, MethodResolution
-from diagnostic import Diagnostic, DkTypeMismatch, DkControlFlow
+from diagnostic import Diagnostic, DkTypeMismatch, DkControlFlow, DkDuplicateDefinition
 
 # ── Fallback def lookup by name ──────────────────────────────
 # Scans all definitions for a matching name (and optionally DkFunction kind).
@@ -1329,6 +1329,20 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
                 register_function_signature(efunc, scope_id, &scopes, &types, &ctx, -1)
 
         case IStruct(sdef):
+            # Reject two fields with the same name in the struct
+            # declaration (`struct P: int x; int x`). Mirrors Rust's
+            # duplicate-field scan in the `Item::Struct` collection arm
+            # (src/semantic/resolve.rs). Before this, both compilers
+            # silently ACCEPTED the ill-formed decl and only failed
+            # downstream at the C compiler ("duplicate member"). Walk the
+            # fields in order; the SECOND occurrence of a name is the error
+            # (same message text as Rust so type_comparison stays exact).
+            Vector[String] seen_fields = Vector[String]()
+            for field in sdef.fields:
+                if seen_fields.contains(field.param_name):
+                    ctx.diagnostics.push(Diagnostic.error(field.param_type.span, DkDuplicateDefinition(), f"duplicate struct field `{field.param_name}`"))
+                else:
+                    seen_fields.push(field.param_name)
             # Build a field type lookup table for EFieldAccess inference.
             # Store struct_name.field_name → type_id in variant_field_types dict.
             for field in sdef.fields:
