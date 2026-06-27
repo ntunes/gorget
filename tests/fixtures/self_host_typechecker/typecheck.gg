@@ -675,7 +675,7 @@ void walk_expr_closures(SpannedExpr sexpr, int scope_id, ScopeTable &scopes, Typ
 
 void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
     match sexpr.expr:
-        case ECall(callee, args, _, targs):
+        case ECall(callee, args, arg_names, targs):
             walk_expr_closures(*callee, scope_id, &scopes, &types, &ctx)
             # Infer callee type to extract expected param types for closure args
             Vector[int] call_param_types = Vector[int]()
@@ -687,7 +687,21 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
                         call_param_types = ptypes
                     else:
                         pass
+            # PositionalAfterNamed — a positional arg may not follow a named
+            # one. The parser stores the keyword for value i at arg_names[i]
+            # ("" for a positional arg, parser.gg:2055), parallel to `args`.
+            # Once a named arg is seen, a later positional arg is rejected.
+            # Mirrors src/semantic/typecheck.rs:5314
+            # (SemanticErrorKind::PositionalAfterNamed).
+            bool seen_named = false
             for (ai, arg) in args.enumerate():
+                String aname = ""
+                if ai < arg_names.len():
+                    aname = arg_names.get(ai).unwrap()
+                if aname.len() > 0:
+                    seen_named = true
+                elif seen_named:
+                    ctx.diagnostics.push(Diagnostic.error(arg.span, DkControlFlow(), "positional argument cannot follow named argument"))
                 if ai < call_param_types.len():
                     walk_expr_closures_with_type(arg, get_int_at(call_param_types, ai), scope_id, &scopes, &types, &ctx)
                 else:

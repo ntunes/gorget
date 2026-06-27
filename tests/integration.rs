@@ -16563,6 +16563,73 @@ fn self_host_driver_rejects_invalid_program() {
     );
 }
 
+// Companion to `self_host_driver_rejects_invalid_program`, exercising the
+// positional-after-named diagnostic (the self-host typecheck now REJECTS
+// `f(a=1, 2)`, matching Rust gg — see `positional_after_named_error()` for
+// the Rust-side reject + self_host_typechecker/typecheck.gg's ECall case,
+// which mirrors src/semantic/typecheck.rs:5314 SemanticErrorKind::
+// PositionalAfterNamed). Before this, the self-host silently ACCEPTED the
+// ill-typed call and lowered it. Same contract as the sibling guard:
+// non-zero exit, a source-grounded codespan diagnostic on stderr, and NO C
+// on stdout (the diagnostic gate halts BEFORE lowering). Parity-neutral —
+// the fixture is Rust-rejected, excluded from the parity denominator.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_rejects_positional_after_named() {
+    // Cached — shared with lowerer_comparison / bootstrap / e2e.
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir
+        .join("tests/fixtures/positional_after_named_error.gg");
+    assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
+
+    // Invoke the driver exactly as the e2e harness does: `driver F lib --lir-c`.
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "self_host_driver_rejects_positional_after_named",
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    // 1. The driver MUST exit non-zero (the diagnostic gate's exit(1)).
+    assert!(
+        !out.status.success(),
+        "self-host driver accepted a Rust-REJECTED program (a positional arg \
+         following a named arg, `f(a=1, 2)`). The PositionalAfterNamed \
+         diagnostic in self_host_typechecker/typecheck.gg's ECall case was \
+         removed or stopped firing. exit={:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+
+    // 2. It MUST render a codespan diagnostic to stderr (the rustc-style
+    //    output `gg check` emits — see self_host_typechecker/diagnostic.gg::
+    //    render_diagnostic). The `error` headline and message text together
+    //    with the box rule prove the diagnostic rendered with content.
+    assert!(
+        stderr.contains("error")
+            && stderr.contains("positional argument cannot follow named argument")
+            && stderr.contains('\u{250c}'),
+        "self-host driver exited non-zero but emitted no codespan diagnostic \
+         to stderr — the reject path must render, not crash silently.\n\
+         stderr:\n{stderr}",
+    );
+
+    // 3. It MUST NOT emit C (the gate halts BEFORE lower_module). The `--lir-c`
+    //    body goes to stdout; on a rejected program stdout must be empty.
+    assert!(
+        stdout.trim().is_empty(),
+        "self-host driver emitted C for a rejected program — the gate must \
+         halt BEFORE lowering. stdout bytes={}\nstdout head:\n{}",
+        stdout.len(),
+        &stdout.chars().take(200).collect::<String>(),
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // GG_IMPL sub-req 2 gate: the self-host driver's standalone CLI surface.
 //
