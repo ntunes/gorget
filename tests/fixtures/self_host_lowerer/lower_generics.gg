@@ -774,9 +774,25 @@ bool eval_delayed_meta_cond(SpannedExpr cond, Dict[String, String] &tn_env, Dict
                         return liv <= riv
                     else:
                         return liv >= riv
+            elif op == "or" or op == "and":
+                # `meta if T is signed or T is float:` — recurse on each
+                # operand (each typically an `is` predicate) and combine.
+                # Both operands must be recognized for the meta-cond to be
+                # decided; otherwise leave the construct inert (ok=false).
+                bool lok = false
+                bool rok = false
+                bool lvb = eval_delayed_meta_cond(*l, &tn_env, &int_env, &gmod, &lok)
+                bool rvb = eval_delayed_meta_cond(*r, &tn_env, &int_env, &gmod, &rok)
+                if lok and rok:
+                    ok = true
+                    if op == "or":
+                        return lvb or rvb
+                    return lvb and rvb
         case EIs(lhs, negated, pat):
             # `ftype is numeric:` (after meta-for subst, lhs is an
-            # EStringLiteral of the field's source type name). The pattern
+            # EStringLiteral of the field's source type name) OR
+            # `meta if T is float:` where T is a bare generic type-param
+            # (lhs is an EIdentifier resolved through tn_env). The pattern
             # is a bare category name (PBinding/PConstructor).
             String category = ""
             match (*pat).pat:
@@ -792,6 +808,14 @@ bool eval_delayed_meta_cond(SpannedExpr cond, Dict[String, String] &tn_env, Dict
                 case EStringLiteral(s, _):
                     ls = true
                     lv = s
+                case EIdentifier(tparam):
+                    # Resolve a direct type-param `T` to its concrete type
+                    # name via tn_env (the same map the EStringLiteral path
+                    # ultimately consults). Mirrors Rust's delayed `T is C`
+                    # check resolving T against the monomorphization binding.
+                    if tn_env.contains(tparam):
+                        ls = true
+                        lv = tn_env.get(tparam).unwrap()
                 else:
                     pass
             if ls and category != "":
@@ -860,18 +884,25 @@ String demangle_field_type_name(String cname):
 # predicate is recognized.
 bool meta_type_category_is(String tyname, String category, bool &ok):
     ok = true
-    if category == "numeric":
-        return tyname == "int" or tyname == "float" or tyname == "int8" or tyname == "int16" or tyname == "int32" or tyname == "uint" or tyname == "uint8" or tyname == "uint16" or tyname == "uint32" or tyname == "float32"
-    elif category == "integer":
-        return tyname == "int" or tyname == "int8" or tyname == "int16" or tyname == "int32" or tyname == "uint" or tyname == "uint8" or tyname == "uint16" or tyname == "uint32"
+    # Category families mirror Rust src/semantic/meta.rs eval_type_is_check.
+    if category == "int" or category == "integer" or category == "numeric":
+        bool is_int = tyname == "int8" or tyname == "int16" or tyname == "int32" or tyname == "int" or tyname == "int64" or tyname == "uint8" or tyname == "uint16" or tyname == "uint32" or tyname == "uint" or tyname == "uint64"
+        if category == "numeric":
+            return is_int or tyname == "float32" or tyname == "float" or tyname == "float64"
+        return is_int
     elif category == "float":
-        return tyname == "float" or tyname == "float32"
+        return tyname == "float32" or tyname == "float" or tyname == "float64"
+    elif category == "signed":
+        return tyname == "int8" or tyname == "int16" or tyname == "int32" or tyname == "int" or tyname == "int64"
+    elif category == "unsigned":
+        return tyname == "uint8" or tyname == "uint16" or tyname == "uint32" or tyname == "uint" or tyname == "uint64"
     elif category == "string":
         return tyname == "String"
     elif category == "bool":
         return tyname == "bool"
-    ok = false
-    return false
+    # Exact match for everything else (float32, int8, uint64, MyStruct, …) —
+    # Rust's `other => resolved == other` arm.
+    return tyname == category
 
 # Substitute the meta-for loop-var string bindings into an expression.
 # A bare `EIdentifier(name)` bound in `sv` becomes an `EStringLiteral`,
