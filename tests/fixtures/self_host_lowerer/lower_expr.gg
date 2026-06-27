@@ -5417,6 +5417,47 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                     pass
             if not is_borrow and ai < borrow_flags.len():
                 is_borrow = borrow_flags.get(ai).unwrap()
+            # Borrow-typed ctor field (`Ref[T]` / `MutRef[T]`): the field IS a
+            # pointer, so a Ptr-typed source operand is exactly what we want
+            # stored — the field aliases the source, it does not copy. Cloning
+            # at `CkFieldWrite` would deref+copy the pointee into a fresh stack
+            # local and then store ITS address into the field → a dangling
+            # pointer the instant the stack local dies (the `DictIter.source`
+            # = `Ref[Dict[K,V]]` slice-view-to-stack-local UAF: the map is
+            # cloned into a stack `GorgetMap`, `source` points at it, on
+            # `Dict__iter` return the stack map dies → `DictIter__next` reads
+            # garbage → empty iteration). Resolve the ctor field's declared
+            # GIR type at this arg index (same TYPED `type_infos` /
+            # `lookup_ctor_field_type` channel the `_ucft` expected-type block
+            # above reads — NO name matching) and, when it is `GtPtr`/`GtMutPtr`,
+            # store the borrow pointer THROUGH (`OpBorrow`) instead of the owning
+            # clone. Mirrors Rust gg `lower_struct_literal`
+            # (`src/ir/lowering/exprs/mod.rs:1994-2001`: `field_is_ptr =
+            # matches!(field_type, Ptr | MutPtr)` → `continue` to skip the
+            # owning boundary). `user_ctor_enum`/`user_ctor_variant` are the
+            # already-resolved struct/parent-enum + variant names (set above for
+            # the `callee_param_types.len() == 0` ctor case that borrow-field
+            # structs like `DictIter` take).
+            bool ctor_field_is_ptr = false
+            if is_ctor_call and user_ctor_enum != "":
+                int _cfpt = I64_TYPE
+                if user_ctor_variant == "":
+                    String _cfpt_name = ""
+                    GirTypeInfo _cfpti = gmod.type_infos.get(user_ctor_enum).unwrap()
+                    if ai < _cfpti.fields.len():
+                        _cfpt_name = _cfpti.fields.get(ai).unwrap().type_name.clone()
+                    if _cfpt_name != "":
+                        _cfpt = resolve_field_gir_type(_cfpt_name, &gmod)
+                else:
+                    _cfpt = lookup_ctor_field_type(user_ctor_enum, user_ctor_variant, ai, &gmod)
+                if _cfpt >= 0 and _cfpt < gmod.type_table.len():
+                    match gmod.type_table.get(_cfpt).unwrap():
+                        case GtPtr(_):
+                            ctor_field_is_ptr = true
+                        case GtMutPtr(_):
+                            ctor_field_is_ptr = true
+                        else:
+                            pass
             # #37 Phase 2 hook 2 (free-call `&`/`!` args): a `&v` / `!v`
             # call arg lets the callee mutate (or drop) the collection —
             # a mutation site for the lazy family. The parser DISCARDS
@@ -5449,7 +5490,10 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                     case LoBorrowed():
                         gir_args.push(OpBorrow(arg_local))
                     else:
-                        if is_ctor_call:
+                        if is_ctor_call and ctor_field_is_ptr:
+                            # Borrow-typed field: store the pointer through, no clone.
+                            gir_args.push(OpBorrow(arg_local))
+                        elif is_ctor_call:
                             gir_args.push(op_consume(&ctx, &gmod, arg_local, CkFieldWrite()))
                         else:
                             gir_args.push(op_consume(&ctx, &gmod, arg_local, classify_call_arg(&gmod, call_name, ai)))
@@ -5460,8 +5504,14 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                 # `!T` → CkCallArgOwning (drives OpMove/OpClone). The
                 # outer `is_borrow` branch already handled `&T` params.
                 # A constructor field-init is a CONSUME position (the field
-                # must own) → CkFieldWrite; see `is_ctor_call` above.
-                if is_ctor_call:
+                # must own) → CkFieldWrite; see `is_ctor_call` above. EXCEPT a
+                # borrow-typed field (`Ref[T]`/`MutRef[T]`) — the field IS the
+                # pointer, so store the borrow THROUGH (`OpBorrow`), never the
+                # owning deref+copy-into-stack-local that dangles (see
+                # `ctor_field_is_ptr` resolution above; Rust gg mod.rs:1994).
+                if is_ctor_call and ctor_field_is_ptr:
+                    gir_args.push(OpBorrow(arg_local))
+                elif is_ctor_call:
                     gir_args.push(op_consume(&ctx, &gmod, arg_local, CkFieldWrite()))
                 else:
                     gir_args.push(op_consume(&ctx, &gmod, arg_local, classify_call_arg(&gmod, call_name, ai)))
