@@ -1,13 +1,23 @@
-# Regression guard for the R2 combinator-template payload-truncation class
-# (Inc-4c completion): `unwrap_or_else` whose closure returns a 16-byte `Str`
-# must NOT truncate it through a `void*` return cast. Before the fix the empty
-# (None / Error) path printed an EMPTY string instead of the closure's value.
+# Regression guard for the R2 combinator-template class. TWO bugs guarded:
+#
+#  (1) Inc-4c payload truncation: `unwrap_or_else` whose closure returns a
+#      16-byte `Str` must NOT truncate it through a `void*` return cast. Before
+#      that fix the empty (None / Error) path printed an EMPTY string.
+#
+#  (2) R2-completion dropped-error-arg: a Result's `unwrap_or_else` closure
+#      RECEIVES the Error payload (`(int e): f"err-code-{e}"`, `(String e):
+#      len(e)`). The pre-fix arm called the fn-ptr with `env`-only → the closure
+#      read a GARBAGE `e` (SIGSEGV on a Str payload, wrong value on a scalar).
+#      The closures below READ `e`, so a dropped error arg shows up as a
+#      wrong/garbage output — not silently masked the way an `e`-ignoring
+#      closure would. `__option_unwrap_or_else` stays nullary (None carries no
+#      payload) and is exercised unchanged.
 #
 # Covers both the Option and Result `unwrap_or_else` arms, on BOTH the
 # present (Some / Ok — returns the payload) and absent (None / Error — runs the
-# closure) paths, with a `String` payload/return on every path.
+# closure) paths, with a `String` payload/return throughout.
 void main():
-    # Option[String] — closure returns a Str on the None path.
+    # Option[String] — closure is nullary (None has no payload), returns a Str.
     Option[String] some_s = Some("payload-present")
     Option[String] none_s = None()
     String a = some_s.unwrap_or_else((): "default-value-here")
@@ -15,12 +25,26 @@ void main():
     print(a)
     print(b)
 
-    # Result[String, int] — Ok payload is a Str; the closure returns a Str on
-    # the Error path. Exercises the `Ok_0` named-field read AND the type-aware
-    # closure return cast for a Result.
+    # Result[String, int] — closure returns the Ok type (String). The Error
+    # closure READS its int error payload and threads it into the returned Str
+    # (`f"err-code-{e}"`). A dropped error arg would read a garbage `e`, so the
+    # `42` would not appear. The Ok path returns its Str payload (named-field
+    # read, no void* truncation).
     Result[String, int] ok_s = Ok("ok-payload-str")
-    Result[String, int] err_s = Error(7)
+    Result[String, int] err_s = Error(42)
     String c = ok_s.unwrap_or_else((int e): "result-default-str")
-    String d = err_s.unwrap_or_else((int e): "result-default-str")
+    String d = err_s.unwrap_or_else((int e): f"err-code-{e}")
     print(c)
     print(d)
+
+    # Result[int, String] — closure returns the Ok type (int). The Error closure
+    # READS its 16-byte STRING error payload (`len(e)`), exercising the named
+    # `Error_0` Str read + the closure-arg pass. The Ok path returns its int
+    # payload via the named-field read. A dropped error arg crashes here (the
+    # closure dereferences a garbage Str).
+    Result[int, String] ok_i = Ok(7)
+    Result[int, String] err_i = Error("boom")
+    int e1 = ok_i.unwrap_or_else((String e): len(e))
+    print(f"{e1}")
+    int f1 = err_i.unwrap_or_else((String e): len(e))
+    print(f"{f1}")

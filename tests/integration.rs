@@ -9841,15 +9841,20 @@ mapped
     );
 }
 
-// R2 (Inc-4c) regression guard: `unwrap_or_else` whose closure returns a 16-byte
-// `Str` must NOT truncate it through a `void*` return cast. The 4a+4b
-// type-aware-combinator pass fixed map/filter/and_then/or_else/or/map_err but
-// MISSED the no-payload-arg `unwrap_or_else` siblings (Option AND Result), whose
-// env-only closure call cast the fn-ptr as `void*(*)(void*)` → the Str return
-// lost its upper 8 bytes → an EMPTY string on the None/Error path. This locks
-// the fix on BOTH the present (Some/Ok → payload, via the named-field read) and
-// absent (None/Error → closure) paths. Standard build (NOT skip_under_llvm) so
-// both backends stay covered.
+// R2 combinator-template regression guard. Two bugs:
+//  (1) Inc-4c payload truncation: `unwrap_or_else` whose closure returns a
+//      16-byte `Str` must NOT truncate it through a `void*` return cast. The
+//      4a+4b type-aware-combinator pass fixed map/filter/and_then/or_else/or/
+//      map_err but MISSED the `unwrap_or_else` siblings, whose env-only closure
+//      call cast the fn-ptr as `void*(*)(void*)` → the Str return lost its upper
+//      8 bytes → an EMPTY string on the None/Error path.
+//  (2) R2-completion dropped-error-arg: a Result's `unwrap_or_else` closure
+//      RECEIVES the Error payload, but the arm called the fn-ptr with `env`-only
+//      → the closure read a GARBAGE `e` (SIGSEGV on a Str payload). The Result
+//      closures below READ `e` (`f"err-code-{e}"`, `len(e)`), so the error
+//      payload must flow in for the output to match. `__option_unwrap_or_else`
+//      stays nullary (None has no payload) and is covered unchanged.
+// Standard build (NOT skip_under_llvm) so both backends stay covered.
 #[test]
 fn combinator_unwrap_or_else_str() {
     run_gg(
@@ -9858,7 +9863,9 @@ fn combinator_unwrap_or_else_str() {
 payload-present
 default-value-here
 ok-payload-str
-result-default-str",
+err-code-42
+7
+4",
     );
 }
 

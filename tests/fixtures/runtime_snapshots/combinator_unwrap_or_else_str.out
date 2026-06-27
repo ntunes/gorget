@@ -1,4 +1,6 @@
 payload-present
 default-value-here
 ok-payload-str
-result-default-str
+err-code-42
+7
+4
