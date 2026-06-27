@@ -577,22 +577,26 @@ int guess_return_type(SpannedExpr sexpr, GirModule &gmod, int expected_type):
                 case "==" | "!=" | "<" | "<=" | ">" | ">=" | "and" | "or":
                     return BOOL_TYPE
                 else:
-                    # Check for string concatenation or float arithmetic
-                    # by inspecting the immediate operand expressions
-                    match (*lhs_box).expr:
-                        case EStringLiteral(_, _):
-                            return STRING_MARKER
-                        case EFloatLiteral(_):
-                            return F64_TYPE
-                        else:
-                            pass
-                    match (*rhs_box).expr:
-                        case EStringLiteral(_, _):
-                            return STRING_MARKER
-                        case EFloatLiteral(_):
-                            return F64_TYPE
-                        else:
-                            pass
+                    # Check for string concatenation or float arithmetic by
+                    # RECURSING into both operands' own types (`-1` = infer the
+                    # operand standalone, not a tail position). A chained concat
+                    # `prefix + " " + name` parses as `((prefix + " ") + name)`:
+                    # the outer `+`'s lhs is itself an EBinaryOp and its rhs an
+                    # EIdentifier — neither is an immediate literal, so the old
+                    # immediate-operand-only check fell through to I64_TYPE and
+                    # the closure body (a Str) mismatched its int64_t return.
+                    # The inner `(prefix + " ")` yields STRING_MARKER off the
+                    # `" "` literal, which now propagates through the outer `+`.
+                    int lhs_t = guess_return_type(*lhs_box, &gmod, -1)
+                    if lhs_t == STRING_MARKER:
+                        return STRING_MARKER
+                    if lhs_t == F64_TYPE:
+                        return F64_TYPE
+                    int rhs_t = guess_return_type(*rhs_box, &gmod, -1)
+                    if rhs_t == STRING_MARKER:
+                        return STRING_MARKER
+                    if rhs_t == F64_TYPE:
+                        return F64_TYPE
                     return I64_TYPE
         case EUnaryOp(op, _):
             match op:
