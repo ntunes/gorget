@@ -1,0 +1,36 @@
+--- int to float ---
+42.000000
+0.000000
+-100.000000
+--- float to int ---
+3
+9
+0
+--- neg float to int ---
+-7
+0
+-100
+--- zero ---
+0.000000
+0
+--- cast in expr ---
+3.500000
+7
+--- large values ---
+1000000.000000
+--- chained ---
+42
+--- int to str ---
+123
+--- conv functions ---
+456
+2.5
+true
+false
+--- parse ---
+99
+3.140000
+parse_none
+--- symmetry ---
+-42
+done

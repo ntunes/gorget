@@ -4557,6 +4557,86 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
         if name == "gorget_str_rstrip":
             name = "gorget_str_rstrip_ws"
 
+    # ── Monomorphized parse methods: int64_t__parse / double__parse /
+    # bool__parse → inline Option[T] expansion ─────────────────────────
+    # `int.parse(s)` / `float.parse(s)` / `bool.parse(s)` lower to a
+    # GICallExtern named `<prim>__parse` whose dst is typed `Option__<T>`
+    # (lower_expr.gg:1659). There is no runtime function with that name —
+    # the C backend EXPANDS the call inline into a `gorget_try_parse_int` /
+    # `gorget_try_parse_float` probe + an Option tag/payload assignment, so
+    # a failed parse yields `{.tag = 1}` (None) instead of garbage. Without
+    # this expansion the bare `int64_t__parse(arg)` call is undeclared → C
+    # implicit-int returns `int` → "incompatible types when assigning to
+    # type 'Option__int64_t' from type 'int'" CC-FAIL. Mirrors Rust gg
+    # src/backend/c_lir/emit_call_extern.rs:287-381.
+    if dst >= 0 and name.ends_with("__parse"):
+        bool is_int_parse = name.starts_with("int") or name.starts_with("uint")
+        bool is_float_parse = name == "double__parse" or name == "float__parse"
+        bool is_bool_parse = name == "bool__parse"
+        if is_int_parse or is_float_parse or is_bool_parse:
+            int p_dst_ty = LT_VOID
+            if val_types.contains(dst):
+                p_dst_ty = val_types.get(dst).unwrap()
+            # Only expand when the dst really is an Option struct (its
+            # enum_kind, set from GIR's enum_category at LIR struct
+            # registration, is the typed discriminator — no name match).
+            bool dst_is_option = false
+            if p_dst_ty >= LT_STRUCT_BASE:
+                int p_sid = p_dst_ty - LT_STRUCT_BASE
+                if p_sid >= 0 and p_sid < m.structs.len():
+                    if m.structs.get(p_sid).unwrap().enum_kind == EK_OPTION:
+                        dst_is_option = true
+            if dst_is_option:
+                String opt_c = c_type_name(p_dst_ty, &sn)
+                # Payload C type (Some_0 = field idx 1) drives the cast so a
+                # sized-int Option (Option__int32_t etc.) gets the right
+                # narrowing cast; LT_VOID → fall back to int64_t/double.
+                int pay_lir = combinator_field_lir_type(p_dst_ty, 1, &m)
+                # Coerce arg 0 (the source String) to `const char*`. A Str
+                # value exposes `.data` directly; a Ptr-to-Str dereferences
+                # first; anything else is assumed already a cstr.
+                String cstr_arg = "NULL"
+                if args.len() > 0:
+                    int p_arg = args.get(0).unwrap()
+                    int p_arg_ty = LT_VOID
+                    if val_types.contains(p_arg):
+                        p_arg_ty = val_types.get(p_arg).unwrap()
+                    int str_tid = find_struct_type("GorgetString", &m)
+                    if p_arg_ty == str_tid and str_tid >= LT_STRUCT_BASE:
+                        cstr_arg = "(const char*)" + v(p_arg) + ".data"
+                    elif p_arg_ty == LT_PTR or (p_arg_ty >= LT_PTR_TO_BASE and p_arg_ty < LT_STRUCT_BASE):
+                        cstr_arg = "(const char*)((Str*)" + v(p_arg) + ")->data"
+                    else:
+                        cstr_arg = "(const char*)" + v(p_arg) + ".data"
+                if is_int_parse:
+                    String cast_type = "int64_t"
+                    String range_check = ""
+                    if pay_lir == LT_I8:
+                        cast_type = "int8_t"
+                        range_check = " && __pr.value >= -128 && __pr.value <= 127"
+                    elif pay_lir == LT_I16:
+                        cast_type = "int16_t"
+                        range_check = " && __pr.value >= -32768 && __pr.value <= 32767"
+                    elif pay_lir == LT_I32:
+                        cast_type = "int32_t"
+                        range_check = " && __pr.value >= -2147483648LL && __pr.value <= 2147483647LL"
+                    elif pay_lir == LT_U8:
+                        cast_type = "uint8_t"
+                        range_check = " && __pr.value >= 0 && __pr.value <= 255"
+                    elif pay_lir == LT_U16:
+                        cast_type = "uint16_t"
+                        range_check = " && __pr.value >= 0 && __pr.value <= 65535"
+                    elif pay_lir == LT_U32:
+                        cast_type = "uint32_t"
+                        range_check = " && __pr.value >= 0 && __pr.value <= 4294967295LL"
+                    elif pay_lir == LT_U64:
+                        cast_type = "uint64_t"
+                    return v(dst) + " = ({ const char* __pa = " + cstr_arg + "; GorgetParseIntResult __pr = gorget_try_parse_int(__pa, strlen(__pa)); " + opt_c + " __opt; if (__pr.ok" + range_check + ") { __opt.tag = 0; __opt.Some_0 = (" + cast_type + ")__pr.value; } else { __opt.tag = 1; } __opt; });"
+                if is_float_parse:
+                    return v(dst) + " = ({ const char* __pa = " + cstr_arg + "; GorgetParseFloatResult __pr = gorget_try_parse_float(__pa, strlen(__pa)); " + opt_c + " __opt; if (__pr.ok) { __opt.tag = 0; __opt.Some_0 = (double)__pr.value; } else { __opt.tag = 1; } __opt; });"
+                if is_bool_parse:
+                    return v(dst) + " = ({ const char* __ps = " + cstr_arg + "; size_t __pl = strlen(__ps); " + opt_c + " __opt; if (__pl == 4 && memcmp(__ps, \"true\", 4) == 0) { __opt.tag = 0; __opt.Some_0 = true; } else if (__pl == 5 && memcmp(__ps, \"false\", 5) == 0) { __opt.tag = 0; __opt.Some_0 = false; } else { __opt.tag = 1; } __opt; });"
+
     # Closure call dispatch.
     if name.starts_with("__gorget_closure_call_"):
         if args.len() > 0:
