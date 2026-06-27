@@ -1,0 +1,85 @@
+struct Point:
+    int x
+
+equip Point:
+    # value-receiver method, single trailing scalar default
+    int add(self, int a, int b = 2):
+        return self.x + a + b
+
+    # &self (mutable-borrow receiver) method, single trailing scalar default
+    int add_ref(&self, int a, int b = 10):
+        self.x = self.x + a + b
+        return self.x
+
+    # multiple trailing scalar defaults (used to exercise reordered named args:
+    # encode each param distinctly so a misplacement is visible in the output)
+    int add3(self, int a, int b = 20, int c = 300):
+        return a * 100 + b * 10 + c
+
+    # String default param
+    String label(self, String prefix = "pt"):
+        return f"{prefix}:{self.x}"
+
+# STATIC equip method (no `self`) with trailing defaults — dispatched via
+# `Maker.make(...)`, the static path, which must also fill/reorder.
+struct Maker:
+    int v
+
+equip Maker:
+    Maker make(int a, int b = 7):
+        return Maker(a * 10 + b)
+    Maker make3(int a, int b = 2, int c = 5):
+        return Maker(a * 100 + b * 10 + c)
+
+# PRIMITIVE-equip STATIC method with a trailing default. `equip_target_name`
+# mangles the primitive equip target to its C name (`int64_t`), so the
+# static default-fill key must use the SAME mangling (not the surface `int`)
+# or the fill is skipped → broken C ("too few arguments to int64_t__combine").
+equip int:
+    int combine(int a, int b = 100):
+        return a + b
+
+int main():
+    Point p = Point(0)
+
+    # value-receiver, default filled (x is still 0 here)
+    print(p.add(5))             # 0 + 5 + 2 = 7
+    # value-receiver, explicit override
+    print(p.add(5, 2))          # 0 + 5 + 2 = 7
+    print(p.add(5, 100))        # 0 + 5 + 100 = 105
+
+    # &self (mutating) method: default filled, then overridden — mutates x
+    print(p.add_ref(1))         # x = 0 + 1 + 10 = 11
+    print(p.add_ref(1, 5))      # x = 11 + 1 + 5 = 17
+
+    # add3 = a*100 + b*10 + c (x no longer used). Defaults b=20, c=300.
+    print(p.add3(1))            # a=1, b=20, c=300 -> 100+200+300 = 600
+    print(p.add3(1, 2))         # a=1, b=2,  c=300 -> 100+20+300  = 420
+    print(p.add3(1, 2, 3))      # a=1, b=2,  c=3   -> 100+20+3    = 123
+
+    # GENUINELY REORDERED named method args (the masking case): names out of
+    # natural slot order must map by NAME, not arrival position.
+    print(p.add3(b=5, a=1))     # a=1, b=5,  c=300 -> 100+50+300  = 450
+    print(p.add3(c=7, a=2, b=3))# a=2, b=3,  c=7   -> 200+30+7    = 237
+    print(p.add3(a=9))          # a=9, b=20, c=300 -> 900+200+300 = 1400
+
+    # String default param: filled and overridden
+    print(p.label())            # pt:17
+    print(p.label("here"))      # here:17
+
+    # named arg in its natural slot still resolves correctly
+    print(p.add(5, b=100))      # 17 + 5 + 100 = 122
+
+    # STATIC equip-method defaults + reordered named args (struct target)
+    print(Maker.make(5).v)      # a=5, b=7        -> 50+7   = 57
+    print(Maker.make(5, 3).v)   # a=5, b=3        -> 50+3   = 53
+    print(Maker.make(b=9, a=4).v)    # a=4, b=9   -> 40+9   = 49  (reordered)
+    print(Maker.make3(1).v)     # a=1, b=2, c=5   -> 100+20+5 = 125
+    print(Maker.make3(c=7, a=2).v)   # a=2, b=2, c=7 -> 200+20+7 = 227 (reorder+default)
+
+    # PRIMITIVE-equip STATIC method default-fill + reorder (the mangled-key case)
+    print(int.combine(5))       # a=5, b=100      -> 5+100  = 105
+    print(int.combine(5, 3))    # a=5, b=3        -> 5+3    = 8
+    print(int.combine(b=9, a=4))# a=4, b=9        -> 4+9    = 13  (reordered)
+
+    return 0

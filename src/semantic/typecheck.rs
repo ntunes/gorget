@@ -1566,7 +1566,11 @@ impl<'a> TypeChecker<'a> {
                         if (has_named || has_defaults) && func_info.is_some() {
                             // Full named-arg / default-param validation
                             let fi = func_info.unwrap();
-                            self.check_named_args_and_defaults(args, &params, fi, expr.span);
+                            let fi_param_names = fi.param_names.clone();
+                            let fi_param_defaults = fi.param_defaults.clone();
+                            self.check_named_args_and_defaults(
+                                args, &params, &fi_param_names, &fi_param_defaults, expr.span,
+                            );
                         } else {
                             // Simple positional check (original behavior)
                             if args.len() != params.len() {
@@ -2084,19 +2088,55 @@ impl<'a> TypeChecker<'a> {
                             sig = substituted;
                         }
                     }
-                    // Check argument count
-                    if args.len() != sig.params.len() {
-                        self.error(
-                            SemanticErrorKind::WrongArgCount {
-                                expected: sig.params.len(),
-                                found: args.len(),
-                            },
-                            expr.span,
+                    // Argument count / default-fill check. Equip methods may
+                    // carry trailing default params just like free functions —
+                    // route those (and any named-arg call) through the shared
+                    // `check_named_args_and_defaults` so `p.add(5)` for
+                    // `int add(self, int a, int b = 2)` type-checks instead of
+                    // being rejected as WrongArgCount.
+                    //
+                    // ALIGNMENT QUIRK: `sig.params` (from resolve_method)
+                    // EXCLUDES `self`, but the method's `FunctionInfo`
+                    // param_names/param_defaults INCLUDE `self` at index 0
+                    // (the parser injects a synthetic self param). Strip the
+                    // self slot so both views align with `sig.params`. A static
+                    // equip method (no `self`) is NOT stripped — its
+                    // `FunctionInfo` already excludes self, matching `sig.params`.
+                    let method_info_strip = self.function_info.get(&stored_def_id).map(|fi| {
+                        let skip = if fi.param_names.first().map(|n| n == "self").unwrap_or(false) {
+                            1
+                        } else {
+                            0
+                        };
+                        let pn: Vec<String> = fi.param_names.iter().skip(skip).cloned().collect();
+                        let pd: Vec<Option<Spanned<Expr>>> =
+                            fi.param_defaults.iter().skip(skip).cloned().collect();
+                        (pn, pd)
+                    });
+                    let has_named = args.iter().any(|a| a.node.name.is_some());
+                    let has_defaults = method_info_strip
+                        .as_ref()
+                        .map_or(false, |(_, pd)| pd.iter().any(|d| d.is_some()));
+                    if (has_named || has_defaults) && method_info_strip.is_some() {
+                        let (pn, pd) = method_info_strip.unwrap();
+                        self.check_named_args_and_defaults(
+                            args, &sig.params, &pn, &pd, expr.span,
                         );
-                    }
-                    for (arg, &param_type) in args.iter().zip(sig.params.iter()) {
-                        let arg_type = self.infer_expr(&arg.node.value);
-                        self.unify(param_type, arg_type, arg.span);
+                    } else {
+                        // Simple positional check (original behavior).
+                        if args.len() != sig.params.len() {
+                            self.error(
+                                SemanticErrorKind::WrongArgCount {
+                                    expected: sig.params.len(),
+                                    found: args.len(),
+                                },
+                                expr.span,
+                            );
+                        }
+                        for (arg, &param_type) in args.iter().zip(sig.params.iter()) {
+                            let arg_type = self.infer_expr(&arg.node.value);
+                            self.unify(param_type, arg_type, arg.span);
+                        }
                     }
                     // Record the method call's own type so downstream consumers
                     // (generic method-instance discovery, borrow checker) can
@@ -5276,16 +5316,23 @@ impl<'a> TypeChecker<'a> {
     /// Validate a call with named arguments and/or default parameters.
     /// Checks: no positional after named, no unknown names, no duplicates,
     /// all required params are satisfied. Also type-checks args (including defaults).
+    /// Validate named args + fill-in defaults against a parameter list.
+    ///
+    /// `param_names` / `param_defaults` are passed as slices (not a
+    /// `&FunctionInfo`) so both call sites can supply the right view:
+    /// the free-function ECall path passes the whole `FunctionInfo`
+    /// slices, while the EMethodCall path passes a `self`-STRIPPED view
+    /// (the method's `FunctionInfo` includes `self` at index 0, but the
+    /// resolved `param_types` from `resolve_method` exclude it — they
+    /// must align). See the EMethodCall WrongArgCount site.
     fn check_named_args_and_defaults(
         &mut self,
         args: &[Spanned<CallArg>],
         param_types: &[TypeId],
-        func_info: &FunctionInfo,
+        param_names: &[String],
+        param_defaults: &[Option<Spanned<Expr>>],
         call_span: Span,
     ) {
-        let param_names = &func_info.param_names;
-        let param_defaults = &func_info.param_defaults;
-
         // Track which params have been satisfied
         let mut satisfied = vec![false; param_names.len()];
         let mut seen_named = false;

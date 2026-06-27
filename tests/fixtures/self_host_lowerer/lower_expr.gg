@@ -1608,7 +1608,110 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         # (`From__<arg0_c>_for_<Type>__from`). Capture arg0's
                         # type_id here so the search key can spell it.
                         int _static_arg0_tid = -1
-                        for sma in margs:
+                        # STATIC equip-method named-arg REORDER + default-fill.
+                        # A static method (`Maker.make(5)` for `Maker make(int a,
+                        # int b = 7)`) has NO self, so `fn_param_names`/`fn_defaults`
+                        # (keyed by the Gorget `Type__method` mangling) carry no
+                        # self slot. Reorder named args by slot and fill trailing
+                        # defaults so `gg check` (which accepts) and lowering agree
+                        # (else "too few arguments to function 'Maker__make'").
+                        # Mirrors the instance-method reorder above and Rust gg's
+                        # static default-fill (`methods.rs`). Enum-variant ctors
+                        # carry no fn_defaults entry → no-op.
+                        String _s_defaults_key = ident_name + "__" + mname
+                        Vector[SpannedExpr] static_margs = margs.clone()
+                        bool _s_has_named = false
+                        int _sn_i = 0
+                        while _sn_i < _marg_names.len():
+                            if _marg_names.get(_sn_i).unwrap() != "":
+                                _s_has_named = true
+                            _sn_i += 1
+                        bool _s_did_reorder = false
+                        if _s_has_named and gmod.fn_param_names.contains(_s_defaults_key):
+                            Vector[String] _s_pnames = gmod.fn_param_names.get(_s_defaults_key).unwrap()
+                            int _s_skip = 0
+                            if _s_pnames.len() > 0 and _s_pnames.get(0).unwrap() == "self":
+                                _s_skip = 1
+                            int _s_n = _s_pnames.len() - _s_skip
+                            Vector[bool] _s_filled = []
+                            Vector[SpannedExpr] _s_expr = []
+                            int _ssi = 0
+                            while _ssi < _s_n:
+                                _s_filled.push(false)
+                                _s_expr.push(margs.get(0).unwrap())
+                                _ssi += 1
+                            bool _s_ok = true
+                            int _s_pos = 0
+                            int _sr_i = 0
+                            while _sr_i < margs.len() and _s_ok:
+                                String _sr_name = ""
+                                if _sr_i < _marg_names.len():
+                                    _sr_name = _marg_names.get(_sr_i).unwrap()
+                                if _sr_name != "":
+                                    int _s_target = -1
+                                    int _sp_i = 0
+                                    while _sp_i < _s_n:
+                                        if _s_pnames.get(_sp_i + _s_skip).unwrap() == _sr_name:
+                                            _s_target = _sp_i
+                                        _sp_i += 1
+                                    if _s_target < 0:
+                                        _s_ok = false
+                                    else:
+                                        _s_filled.set(_s_target, true)
+                                        _s_expr.set(_s_target, margs.get(_sr_i).unwrap())
+                                else:
+                                    while _s_pos < _s_n and _s_filled.get(_s_pos).unwrap():
+                                        _s_pos += 1
+                                    if _s_pos < _s_n:
+                                        _s_filled.set(_s_pos, true)
+                                        _s_expr.set(_s_pos, margs.get(_sr_i).unwrap())
+                                        _s_pos += 1
+                                    else:
+                                        _s_ok = false
+                                _sr_i += 1
+                            if _s_ok:
+                                Vector[Option[SpannedExpr]] _sr_defaults = []
+                                if gmod.fn_defaults.contains(_s_defaults_key):
+                                    _sr_defaults = gmod.fn_defaults.get(_s_defaults_key).unwrap()
+                                int _sf_i = 0
+                                while _sf_i < _s_n and _s_ok:
+                                    if not _s_filled.get(_sf_i).unwrap():
+                                        int _sf_si = _sf_i + _s_skip
+                                        if _sf_si < _sr_defaults.len():
+                                            match _sr_defaults.get(_sf_si).unwrap():
+                                                case Some(_sfd_expr):
+                                                    _s_filled.set(_sf_i, true)
+                                                    _s_expr.set(_sf_i, _sfd_expr)
+                                                case None:
+                                                    _s_ok = false
+                                        else:
+                                            _s_ok = false
+                                    _sf_i += 1
+                            if _s_ok:
+                                static_margs = []
+                                int _sc_i = 0
+                                while _sc_i < _s_n:
+                                    static_margs.push(_s_expr.get(_sc_i).unwrap())
+                                    _sc_i += 1
+                                _s_did_reorder = true
+                        if not _s_did_reorder:
+                            static_margs = margs.clone()
+                            if gmod.fn_defaults.contains(_s_defaults_key):
+                                Vector[Option[SpannedExpr]] _s_defaults = gmod.fn_defaults.get(_s_defaults_key).unwrap()
+                                int _s_skip2 = 0
+                                if gmod.fn_param_names.contains(_s_defaults_key):
+                                    Vector[String] _s_pn2 = gmod.fn_param_names.get(_s_defaults_key).unwrap()
+                                    if _s_pn2.len() > 0 and _s_pn2.get(0).unwrap() == "self":
+                                        _s_skip2 = 1
+                                int _sdf_si = static_margs.len() + _s_skip2
+                                while _sdf_si < _s_defaults.len():
+                                    match _s_defaults.get(_sdf_si).unwrap():
+                                        case Some(_sdf_expr):
+                                            static_margs.push(_sdf_expr)
+                                        else:
+                                            pass
+                                    _sdf_si += 1
+                        for sma in static_margs:
                             int sma_val = lower_expr(&ctx, sma, &gmod)
                             if _sai == 0:
                                 _static_arg0_tid = ctx.locals.get(sma_val).unwrap().type_id
@@ -2317,8 +2420,122 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 EnumCategory _recv_ec = enum_category_of(&gmod, _recv_tid)
                 if _recv_ec.category == ENUM_CAT_RESULT or _recv_ec.category == ENUM_CAT_OPTION:
                     _combinator_et = peel_ptr_tid(&gmod, _recv_tid)
+            # EQUIP-METHOD named-arg REORDER + trailing default-fill. An explicit
+            # method call may use named args (`p.add3(b=5, a=1)`) and/or leave
+            # trailing param slots unsupplied (`p.add(5)` for
+            # `int add(self, int a, int b = 2)`). Both `fn_param_names` and
+            # `fn_defaults` are keyed by the raw `Type__method` mangling
+            # (lower.gg, SURFACE-indexed with `self` at idx 0). The `margs` here
+            # are the NON-self args, so non-self param `j` ↔ surface index `j+1`;
+            # we build a slot array over the NON-self params, place named args by
+            # name and positionals into the next free slot, fill empties from
+            # `fn_defaults` (surface index `j+1`), and iterate the reordered
+            # vector. Mirrors the free-fn reorder (~line 5373) and Rust gg's
+            # `resolve_method_call_args` (`src/ir/lowering/exprs/methods.rs`).
+            # Without the REORDER a `p.add3(b=5, a=1)` would push args
+            # positionally (a=5, b=1) → silent cross-compiler miscompile vs Rust.
+            String _m_defaults_key = recv_type_name + "__" + mname
+            Vector[SpannedExpr] filled_margs = margs.clone()
+            bool _m_has_named = false
+            int _mn_i = 0
+            while _mn_i < _marg_names.len():
+                if _marg_names.get(_mn_i).unwrap() != "":
+                    _m_has_named = true
+                _mn_i += 1
+            bool _m_did_reorder = false
+            if _m_has_named and gmod.fn_param_names.contains(_m_defaults_key):
+                Vector[String] _m_pnames_all = gmod.fn_param_names.get(_m_defaults_key).unwrap()
+                # Drop the leading `self` slot (present for instance methods) so
+                # the slot array aligns with the non-self `margs`.
+                int _m_self_skip = 0
+                if _m_pnames_all.len() > 0 and _m_pnames_all.get(0).unwrap() == "self":
+                    _m_self_skip = 1
+                int _m_n = _m_pnames_all.len() - _m_self_skip
+                Vector[bool] _m_slot_filled = []
+                Vector[SpannedExpr] _m_slot_expr = []
+                int _ms_i = 0
+                while _ms_i < _m_n:
+                    _m_slot_filled.push(false)
+                    _m_slot_expr.push(margs.get(0).unwrap())   # placeholder; never lowered while filled[i] is false
+                    _ms_i += 1
+                bool _m_ok = true
+                int _m_pos = 0
+                int _mr_i = 0
+                while _mr_i < margs.len() and _m_ok:
+                    String _mr_name = ""
+                    if _mr_i < _marg_names.len():
+                        _mr_name = _marg_names.get(_mr_i).unwrap()
+                    if _mr_name != "":
+                        int _m_target = -1
+                        int _mp_i = 0
+                        while _mp_i < _m_n:
+                            if _m_pnames_all.get(_mp_i + _m_self_skip).unwrap() == _mr_name:
+                                _m_target = _mp_i
+                            _mp_i += 1
+                        if _m_target < 0:
+                            _m_ok = false
+                        else:
+                            _m_slot_filled.set(_m_target, true)
+                            _m_slot_expr.set(_m_target, margs.get(_mr_i).unwrap())
+                    else:
+                        while _m_pos < _m_n and _m_slot_filled.get(_m_pos).unwrap():
+                            _m_pos += 1
+                        if _m_pos < _m_n:
+                            _m_slot_filled.set(_m_pos, true)
+                            _m_slot_expr.set(_m_pos, margs.get(_mr_i).unwrap())
+                            _m_pos += 1
+                        else:
+                            _m_ok = false
+                    _mr_i += 1
+                # Fill empty slots from defaults (surface index = non-self j + 1).
+                if _m_ok:
+                    Vector[Option[SpannedExpr]] _mr_defaults = []
+                    if gmod.fn_defaults.contains(_m_defaults_key):
+                        _mr_defaults = gmod.fn_defaults.get(_m_defaults_key).unwrap()
+                    int _mf_i = 0
+                    while _mf_i < _m_n and _m_ok:
+                        if not _m_slot_filled.get(_mf_i).unwrap():
+                            int _mf_si = _mf_i + _m_self_skip
+                            if _mf_si < _mr_defaults.len():
+                                match _mr_defaults.get(_mf_si).unwrap():
+                                    case Some(_mfd_expr):
+                                        _m_slot_filled.set(_mf_i, true)
+                                        _m_slot_expr.set(_mf_i, _mfd_expr)
+                                    case None:
+                                        _m_ok = false
+                            else:
+                                _m_ok = false
+                        _mf_i += 1
+                if _m_ok:
+                    filled_margs = []
+                    int _mc_i = 0
+                    while _mc_i < _m_n:
+                        filled_margs.push(_m_slot_expr.get(_mc_i).unwrap())
+                        _mc_i += 1
+                    _m_did_reorder = true
+            # No named args (or reorder fell back): APPEND-only trailing fill.
+            if not _m_did_reorder:
+                filled_margs = margs.clone()
+                if gmod.fn_defaults.contains(_m_defaults_key):
+                    Vector[Option[SpannedExpr]] _m_defaults = gmod.fn_defaults.get(_m_defaults_key).unwrap()
+                    # surface index of the first missing trailing slot. With a
+                    # leading self, non-self position `filled_margs.len()` maps to
+                    # surface `filled_margs.len() + self_skip`.
+                    int _m_self_skip2 = 0
+                    if gmod.fn_param_names.contains(_m_defaults_key):
+                        Vector[String] _m_pn2 = gmod.fn_param_names.get(_m_defaults_key).unwrap()
+                        if _m_pn2.len() > 0 and _m_pn2.get(0).unwrap() == "self":
+                            _m_self_skip2 = 1
+                    int _mdf_si = filled_margs.len() + _m_self_skip2
+                    while _mdf_si < _m_defaults.len():
+                        match _m_defaults.get(_mdf_si).unwrap():
+                            case Some(_mdf_expr):
+                                filled_margs.push(_mdf_expr)
+                            else:
+                                pass
+                        _mdf_si += 1
             int _ma_idx = 0
-            for ma in margs:
+            for ma in filled_margs:
                 # closure Phase 2 Step A: a method-call arg that CONTAINS a
                 # raw `it` (e.g. `.map(it*2)`, where the self-host parser does
                 # NOT always wrap it in EImplicitClosure) is an implicit-it

@@ -36,6 +36,84 @@ fn gorget_name_for_type_id(ctx: &LoweringContext, type_id: TypeId) -> String {
     }
 }
 
+/// Resolve named arguments and fill default parameter values for an
+/// equip-METHOD call. Mirrors the free-function `resolve_call_args`
+/// (`calls.rs`), offset by the implicit `self`.
+///
+/// `ctx.fn_param_names` / `ctx.fn_defaults` for an equip method are keyed by
+/// the mangled `Type__method` name and SURFACE-indexed with `self` at idx 0
+/// (the parser injects a synthetic self param). The `args` passed here are the
+/// NON-self surface args, so method-arg position `N` ↔ surface param `N + 1`.
+/// We build a non-self slot array (length = #non-self params), place
+/// positional/named args into it, fill any empty slot that has a default, and
+/// flatten back to a positional arg list.
+fn resolve_method_call_args(
+    ctx: &LoweringContext,
+    mangled_name: &str,
+    args: &[Spanned<ast::CallArg>],
+) -> Vec<Spanned<ast::CallArg>> {
+    // Surface param names INCLUDE self at idx 0 for instance methods. The
+    // non-self params (which the method-call args correspond to) are
+    // `param_names[1..]`. A static equip method has no `self`, so its
+    // FunctionInfo already excludes it — don't strip in that case.
+    let param_names = match ctx.fn_param_names.get(mangled_name) {
+        Some(names) if !names.is_empty() => names,
+        _ => return args.to_vec(), // no param info → pass through unchanged
+    };
+    let strip_self = param_names.first().map(|n| n == "self").unwrap_or(false);
+    let non_self_param_names: &[String] = if strip_self { &param_names[1..] } else { &param_names[..] };
+
+    let has_named = args.iter().any(|a| a.node.name.is_some());
+    let has_defaults = ctx.fn_defaults.contains_key(mangled_name);
+
+    if !has_named && !has_defaults {
+        return args.to_vec();
+    }
+    if !has_named && args.len() >= non_self_param_names.len() {
+        return args.to_vec(); // all params supplied positionally, no reorder needed
+    }
+
+    // Build a slot array matching non-self parameter order.
+    let mut slots: Vec<Option<Spanned<ast::CallArg>>> = vec![None; non_self_param_names.len()];
+
+    let mut positional_idx = 0;
+    for arg in args {
+        if let Some(name) = arg.node.name.as_ref() {
+            if let Some(pos) = non_self_param_names.iter().position(|p| p == &name.node) {
+                slots[pos] = Some(arg.clone());
+            }
+        } else {
+            while positional_idx < slots.len() && slots[positional_idx].is_some() {
+                positional_idx += 1;
+            }
+            if positional_idx < slots.len() {
+                slots[positional_idx] = Some(arg.clone());
+                positional_idx += 1;
+            }
+        }
+    }
+
+    // Fill defaults for any remaining empty slot. `fn_defaults` is surface-
+    // indexed, matching `fn_param_names`: a default at surface index `param_idx`
+    // fills non-self slot `param_idx - 1` when `self` is present, else `param_idx`.
+    let self_offset: usize = if strip_self { 1 } else { 0 };
+    if let Some(defaults) = ctx.fn_defaults.get(mangled_name) {
+        for (param_idx, default_expr) in defaults {
+            if *param_idx < self_offset { continue; } // the self slot has no default
+            let slot = *param_idx - self_offset;
+            if slot < slots.len() && slots[slot].is_none() {
+                slots[slot] = Some(Spanned::dummy(ast::CallArg {
+                    name: None,
+                    ownership: ast::Ownership::Borrow,
+                    value: Spanned::dummy(default_expr.clone()),
+                }));
+            }
+        }
+    }
+
+    slots.into_iter().flatten().collect()
+}
+
 /// Build the `Ptr(enum)` argument for an Option/Result builtin extern
 /// (`__option_is_some`, `__option_unwrap`, `__result_unwrap_error`, …).
 ///
@@ -259,6 +337,33 @@ pub(super) fn lower_method_call(
                     .and_then(|ed| ed.variants.iter().find(|v| v.name == method_name))
                     .map(|v| v.fields.iter().map(|f| Some(f.type_id)).collect())
                     .unwrap_or_else(|| vec![None; args.len()]);
+                // STATIC equip-method default-fill / named-arg reorder. A
+                // STATIC method (no `self`) reached via `Type.method(...)`
+                // dispatches HERE rather than through the instance path's
+                // `resolve_method_call_args`, so without this a `Maker.make(5)`
+                // call to `Maker make(int a, int b = 7)` would lower as "too
+                // few arguments to function 'Maker__make'". `fn_defaults` /
+                // `fn_param_names` are keyed by `equip_target_name` (`mod.rs`),
+                // which is the C-MANGLED name for PRIMITIVE equips (`int64_t`,
+                // not `int`) and the surface name for named/struct types — i.e.
+                // `c_type_name`, the SAME mangling the emitted call uses below
+                // (`{c_type_name}__{method_name}`). Keying on the surface `name`
+                // here missed primitive-equip statics (`int.combine(5)` → fill
+                // skipped → broken C). They carry NO self slot for a static
+                // method, so the helper fills/reorders correctly (`strip_self`
+                // is false). Enum-variant ctors carry no fn_defaults entry → no-op.
+                let static_defaults_key = format!("{c_type_name}__{method_name}");
+                let filled_static_args = resolve_method_call_args(ctx, &static_defaults_key, args);
+                let args: &[Spanned<ast::CallArg>] = &filled_static_args;
+                let variant_field_types: Vec<Option<TypeId>> = if variant_field_types.len() == args.len() {
+                    variant_field_types
+                } else {
+                    // Default-fill widened the arg list; pad field-type hints
+                    // (variants don't get here with defaults, so None is fine).
+                    let mut v = variant_field_types;
+                    v.resize(args.len(), None);
+                    v
+                };
                 let lowered_args: Vec<Operand> = args.iter()
                     .enumerate()
                     .map(|(i, arg)| {
@@ -1906,6 +2011,18 @@ pub(super) fn lower_method_call(
                 .cloned()
                 .unwrap_or(mangled.clone())
         };
+
+        // Resolve named args + fill trailing defaults for equip-method calls —
+        // mirrors the free-fn `resolve_call_args` (calls.rs), offset by the
+        // implicit `self`. Equip methods register `fn_param_names` /
+        // `fn_defaults` keyed by the mangled `Type__method` name, SURFACE-
+        // indexed with `self` at idx 0; the method-call `args` here are the
+        // NON-self surface args (arg position N ↔ surface param N+1). Without
+        // this fill, `p.add(5)` to a method with a trailing default would
+        // lower as "too few arguments to function 'P__add'".
+        let filled_args: Vec<Spanned<ast::CallArg>> =
+            resolve_method_call_args(ctx, effective_name.as_str(), args);
+        let args: &[Spanned<ast::CallArg>] = &filled_args;
 
         // Detect !self (consuming self) methods for post-call receiver MoveZero
         let has_consuming_self = ctx.fn_param_ownerships.get(effective_name.as_str())

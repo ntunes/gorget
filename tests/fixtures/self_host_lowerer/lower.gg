@@ -3650,6 +3650,21 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                         pass
                                 if em_ret >= 0:
                                     String em_full = target_name + "__" + em.name
+                                    # Register ordered param NAMES for equip methods
+                                    # (named-arg REORDERING + default-fill in
+                                    # lower_expr's method/static paths), keyed by the
+                                    # bare `Type__method` mangling — surface-indexed
+                                    # with `self` at idx 0 for instance methods, no
+                                    # self for static methods. Mirrors the IFunction
+                                    # `fn_param_names` registration above and Rust gg's
+                                    # equip-method `fn_param_names` pre-pass
+                                    # (`src/ir/lowering/mod.rs`). Without it the
+                                    # reorder block can't resolve named method args by
+                                    # slot (silent positional miscompile vs Rust).
+                                    Vector[String] em_param_names = []
+                                    for em_p in em.params:
+                                        em_param_names.push(em_p.param_name.clone())
+                                    gmod.fn_param_names.put(em_full.clone(), em_param_names)
                                     # Own-vtable method on the registered route: its
                                     # body is `Trait_for_Type__method`, so register
                                     # ONLY that and DROP the spurious bare entry

@@ -23555,6 +23555,30 @@ fn default_param_selfhost() {
     );
 }
 
+// Trailing default params on EQUIP METHODS must fill/reorder at the call site,
+// exactly like free functions, in BOTH the instance and STATIC dispatch paths.
+// `p.add(5)` for `int add(self, int a, int b = 2)` fills the `b = 2` default → 7
+// (Rust gg formerly REJECTED this as WrongArgCount; the self-host
+// accepted-then-miscompiled). Covers value-receiver AND `&self` receivers,
+// single AND multiple trailing defaults, scalar AND String defaults,
+// explicit-all-args, named-arg in natural slot, GENUINELY REORDERED named args
+// (`p.add3(b=5, a=1)` → 450, masked by a natural-slot name), and STATIC
+// equip-method defaults + reorder (`Maker.make(5)` → 57, `Maker.make(b=9,a=4)`),
+// INCLUDING a PRIMITIVE-equip static (`equip int: int combine(int a, int b=100)`;
+// `int.combine(5)` → 105): `equip_target_name` mangles the primitive target to
+// its C name (`int64_t`), so the static-fill key must use `c_type_name`, not the
+// surface `int` (the prior surface-key miss let Rust accept-then-emit broken C).
+// See the EMethodCall WrongArgCount / fn_defaults / resolve_method_call_args +
+// static-path fill (Rust) and lower_expr.gg instance + static reorder
+// (self-host). The self-host and Rust outputs are byte-identical.
+#[test]
+fn method_default_args() {
+    run_gg(
+        "method_default_args.gg",
+        "7\n7\n105\n11\n17\n600\n420\n123\n450\n237\n1400\npt:17\nhere:17\n122\n57\n53\n49\n125\n227\n105\n8\n13",
+    );
+}
+
 #[test]
 fn method_chaining_builder() {
     run_gg(

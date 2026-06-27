@@ -1084,6 +1084,29 @@ pub fn lower_module(
                         .collect();
                     ctx.fn_param_ownerships.insert(mangled.clone(), param_ownerships);
 
+                    // Register param names for equip methods, surface-indexed with
+                    // `self` at idx 0. Used by the method-call default-fill /
+                    // named-arg reordering in `methods.rs::lower_method_call`.
+                    let method_param_names: Vec<String> = method_def.params.iter()
+                        .map(|p| p.node.name.node.clone())
+                        .collect();
+                    ctx.fn_param_names.insert(mangled.clone(), method_param_names);
+
+                    // Register default parameter values for equip methods, keyed by
+                    // the mangled `Type__method` name. Surface-indexed with `self`
+                    // at idx 0 (parser injects a synthetic self param) — the call-
+                    // site default-fill in `methods.rs::lower_method_call` strips
+                    // the self slot. Without this, a `p.add(5)` call to a method
+                    // with a trailing default would not fill → "too few arguments
+                    // to function 'P__add'". Mirrors the free-fn registration above.
+                    let method_defaults: Vec<(usize, ast::Expr)> = method_def.params.iter()
+                        .enumerate()
+                        .filter_map(|(i, p)| p.node.default.as_ref().map(|d| (i, d.node.clone())))
+                        .collect();
+                    if !method_defaults.is_empty() {
+                        ctx.fn_defaults.insert(mangled.clone(), method_defaults);
+                    }
+
                     // Register extern binding for equip methods (e.g., UdpSocket__local_addr → gorget_udp_local_addr)
                     if let FunctionBody::Extern(c_symbol) = &method_def.body {
                         ctx.extern_bindings.insert(mangled.clone(), c_symbol.clone());
