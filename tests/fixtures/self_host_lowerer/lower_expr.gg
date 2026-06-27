@@ -5918,6 +5918,26 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                     ret_type = lookup_or_register_named(&gmod, "GorgetClosure")
                 else:
                     pass
+        # VOID-RETURNING call: a `void` free-fn / extern (`extern void seed`,
+        # `extern void signal_trap`, …) yields UNIT. Capturing it into a slot
+        # would emit `__v = gorget_void_fn(...)` where the runtime symbol is
+        # declared `void` → cc `error: void value not ignored`. Emit the call
+        # as a STATEMENT with no result binding (GICall with the `-1` no-capture
+        # dst sentinel — the same form the `panic`/print-byte-count paths use;
+        # lir_lower's GICall/GICallExtern arms pass `dst = -1` to ICall/
+        # ICallExtern and skip the ISlotStore when `dst_local < 0`), then return
+        # a UNIT local so a value-position use has a well-typed placeholder.
+        # Mirrors Rust gg's lower_call: `if ret_type == UNIT_TYPE {
+        # builder.call_void(...); Operand::Constant(Constant::Unit) }`
+        # (src/ir/lowering/exprs/calls.rs:1477-1479). Gated strictly on
+        # `ret_type == UNIT_TYPE`, so it NEVER fires on a ctor call (struct/enum
+        # ret_type) or a value-returning call (int/String/…). Drop registration
+        # is correctly skipped — there is no owned result to free.
+        if ret_type == UNIT_TYPE:
+            emit(&ctx, GICall(-1, call_name, gir_args))
+            int void_unit = add_local(&ctx, UNIT_TYPE, None)
+            emit(&ctx, GIAssign(void_unit, OpConstUnit()))
+            return void_unit
         int dst = add_local(&ctx, ret_type, None)
         emit(&ctx, GICall(dst, call_name, gir_args))
         # FRESH-OWNED-TEMP drop registration (#7-style): a resource/String-
