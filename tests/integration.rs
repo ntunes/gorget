@@ -16843,6 +16843,85 @@ fn self_host_driver_rejects_trait_required_after_default() {
     );
 }
 
+// Companion to `self_host_driver_rejects_required_after_default`, exercising
+// the ValueOutOfRange diagnostic. The self-host typecheck now REJECTS a sized-
+// int variable declaration whose LITERAL initializer does not fit the declared
+// type (`int8 x = 200`, valid range -128..=127), matching Rust gg (see
+// `value_out_of_range_error()` for the Rust-side reject + the
+// check_sized_int_literal_range call in the SVarDecl arm of
+// self_host_typechecker/typecheck.gg's type_check_stmt, which mirrors Rust's
+// IntLiteral/UnaryOp::Neg range check in src/semantic/typecheck.rs:1146/1311,
+// range table `fn int_range` at :182, kind SemanticErrorKind::ValueOutOfRange,
+// message at errors.rs:846). Before this, the self-host silently ACCEPTED the
+// out-of-range literal and lowered it to C. The check fires only on the 6
+// smaller sized ints (int8/16/32, uint8/16/32 — bare `int`/int64/uint64 are
+// i64-backed and out of scope), uses INCLUSIVE ranges, handles the negative-
+// literal shape `EUnaryOp("-", EIntLiteral)`, and only triggers on a literal
+// init (not `f()`/`a+b`). The message is byte-identical to Rust's so
+// type_comparison stays exact. Same contract as the sibling guards: non-zero
+// exit, a source-grounded codespan diagnostic on stderr, and NO C on stdout
+// (the diagnostic gate halts BEFORE lowering). Parity-neutral — the fixture is
+// Rust-rejected, excluded from the parity denominator.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_rejects_value_out_of_range() {
+    // Cached — shared with lowerer_comparison / bootstrap / e2e.
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir
+        .join("tests/fixtures/value_out_of_range_error.gg");
+    assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
+
+    // Invoke the driver exactly as the e2e harness does: `driver F lib --lir-c`.
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "self_host_driver_rejects_value_out_of_range",
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    // 1. The driver MUST exit non-zero (the diagnostic gate's exit(1)).
+    assert!(
+        !out.status.success(),
+        "self-host driver accepted a Rust-REJECTED program (an out-of-range \
+         sized-int literal initializer, `int8 x = 200`). The \
+         check_sized_int_literal_range call in the SVarDecl arm of \
+         self_host_typechecker/typecheck.gg was removed or stopped firing. \
+         exit={:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+
+    // 2. It MUST render a codespan diagnostic to stderr (the rustc-style output
+    //    `gg check` emits — see self_host_typechecker/diagnostic.gg::
+    //    render_diagnostic). The `error` headline, the full message text (which
+    //    is byte-identical to Rust's so type_comparison stays exact), and the
+    //    box rule together prove the diagnostic rendered with content.
+    assert!(
+        stderr.contains("error")
+            && stderr
+                .contains("value 200 is out of range for type int8 (valid range: -128..=127)")
+            && stderr.contains('\u{250c}'),
+        "self-host driver exited non-zero but emitted no codespan diagnostic \
+         to stderr — the reject path must render, not crash silently.\n\
+         stderr:\n{stderr}",
+    );
+
+    // 3. It MUST NOT emit C (the gate halts BEFORE lower_module). The `--lir-c`
+    //    body goes to stdout; on a rejected program stdout must be empty.
+    assert!(
+        stdout.trim().is_empty(),
+        "self-host driver emitted C for a rejected program — the gate must \
+         halt BEFORE lowering. stdout bytes={}\nstdout head:\n{}",
+        stdout.len(),
+        &stdout.chars().take(200).collect::<String>(),
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // GG_IMPL sub-req 2 gate: the self-host driver's standalone CLI surface.
 //

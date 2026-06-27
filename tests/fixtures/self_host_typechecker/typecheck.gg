@@ -10,7 +10,7 @@ from ast import Module, Item, Stmt, Param, FunctionDef, StructDef, EnumDef
 from ast import EnumVariant, TraitDef, EquipBlock, MatchArm, ElseBranch
 from ast import SpannedExpr, SpannedType, SpannedPattern, Span, Type, Expr, Pattern
 from ast import EMethodCall, EBinaryOp, EIs, EClosure, ECall, EBlock, EDo, EAs, EIdentifier, EFString, SelectArm, SORecv, EMatch
-from ast import EFieldAccess, EUnaryOp, EIndex
+from ast import EFieldAccess, EUnaryOp, EIndex, EIntLiteral
 from ast import SExpr, SVarDecl, SReturn
 from ast import TPrimitive
 from ids import NO_DEF, NO_TYPE
@@ -1085,6 +1085,84 @@ void record_method_targs_preserving_expr_types(SpannedExpr init_expr, ScopeTable
     record_method_targs_in_expr(init_expr, &scopes, &types, &ctx)
     types.expr_types = saved_expr_types
 
+# ── Sized-int literal range check (ValueOutOfRange) ──────────
+# Mirrors Rust's IntLiteral/UnaryOp::Neg range check in
+# src/semantic/typecheck.rs:1146/1311 (kind SemanticErrorKind::ValueOutOfRange,
+# range table `fn int_range` at :182, message at errors.rs:846). Rust rejects a
+# literal initializer that does not fit the declared sized-int type
+# (`int8 x = 200`); the self-host used to silently accept + lower it.
+#
+# Fires ONLY when (a) the annotation is one of the 6 SMALLER sized ints
+# (int8/16/32, uint8/16/32 — bare `int`=int64 and uint64 are i64-backed in the
+# self-host's EIntLiteral, so their checks are unrepresentable / full-range and
+# OUT OF SCOPE, matching the brief), and (b) the initializer is a LITERAL: a
+# bare `EIntLiteral` or the negative shape `EUnaryOp("-", EIntLiteral)` (a `-N`
+# literal parses as unary-neg of N, so the signed value is computed before the
+# range check — this both accepts `-128` and rejects `-129`). Non-literal inits
+# (`f()`, `a + b`) are NOT const-folded — Rust only range-checks the literal
+# site here, and we match that. Inclusive ranges throughout.
+void check_sized_int_literal_range(SpannedExpr init_expr, int var_type_id, TypeTable &types, ResolveContext &ctx):
+    if var_type_id < 0 or var_type_id >= types.types.len():
+        return
+    ResolvedType vrt = get_rtype_at(types.types, var_type_id)
+    String prim_name = ""
+    match vrt:
+        case RTPrimitive(pname):
+            prim_name = pname
+        else:
+            return
+    # Inclusive (min, max) for the smaller sized ints only.
+    bool is_sized = false
+    int range_min = 0
+    int range_max = 0
+    if prim_name == "int8":
+        is_sized = true
+        range_min = -128
+        range_max = 127
+    elif prim_name == "int16":
+        is_sized = true
+        range_min = -32768
+        range_max = 32767
+    elif prim_name == "int32":
+        is_sized = true
+        range_min = -2147483648
+        range_max = 2147483647
+    elif prim_name == "uint8":
+        is_sized = true
+        range_min = 0
+        range_max = 255
+    elif prim_name == "uint16":
+        is_sized = true
+        range_min = 0
+        range_max = 65535
+    elif prim_name == "uint32":
+        is_sized = true
+        range_min = 0
+        range_max = 4294967295
+    if not is_sized:
+        return
+    # Extract the signed literal value, if the initializer is a literal shape.
+    bool is_literal = false
+    int value = 0
+    match init_expr.expr:
+        case EIntLiteral(n):
+            is_literal = true
+            value = n
+        case EUnaryOp(op, inner):
+            if op == "-":
+                match (*inner).expr:
+                    case EIntLiteral(n):
+                        is_literal = true
+                        value = -n
+                    else:
+                        pass
+        else:
+            pass
+    if not is_literal:
+        return
+    if value < range_min or value > range_max:
+        ctx.diagnostics.push(Diagnostic.error(init_expr.span, DkTypeMismatch(), f"value {value} is out of range for type {prim_name} (valid range: {range_min}..={range_max})"))
+
 # ── Type-check statements (looking for VarDecl with explicit types) ──
 
 void type_check_stmts(Vector[Stmt] stmts, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
@@ -1105,6 +1183,9 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
             int var_type_id = -1
             if not is_inferred:
                 var_type_id = ast_type_to_resolved(stype.ty, stype.span, scopes, &types)
+                # ValueOutOfRange: reject a literal initializer that does not fit
+                # the declared sized-int type (`int8 x = 200`), matching Rust gg.
+                check_sized_int_literal_range(init_expr, var_type_id, &types, &ctx)
                 # Lazy-iterator phase 1b Blocker #1: for an explicitly-typed
                 # binding the initializer is otherwise never inferred, so the
                 # method-targs side-table stays empty for bare-form Iterator
