@@ -2274,6 +2274,55 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     ret_tid = tc_ret
                 else:
                     ret_tid = infer_method_return_type(mname, recv, &ctx, &gmod)
+            # closure Phase-2 increment 4e-1: CROSS-TYPE map/map_err result type.
+            # `infer_method_return_type` (and every other source above) returns
+            # the RECEIVER's Option/Result type for map/map_err — correct only
+            # when the new inner type U equals the old T. For a cross-type
+            # `Option[int].map((x): "str")` that names the result `Option__int64_t`,
+            # whose 8-byte payload slot the 16-byte `Str` overflows AND through
+            # which the Str-returning closure is called via an `int64_t(*)` cast
+            # (SysV sret mismatch → SIGSEGV). Derive the real inner type from the
+            # closure ARG's return type and re-mint the wrapper. The combinator
+            # templates (lir_codegen) ALREADY read `dst_ty` and cast the closure
+            # to it, so once `ret_tid` carries `Option__U` / `Result__U__E` /
+            # `Result__T__F` the emitted call is correct.
+            #
+            # GATE is TYPED, not name-driven: the method NAME (map/map_err) only
+            # SELECTS the combinator family; the decision to fire rests on
+            # `enum_category_of(peel(recv))` being Option/Result. Vector/Dict
+            # `.map` receivers fall through UNCHANGED (no enum category). The U==T
+            # case re-mints the IDENTICAL mangled name (`type_id_to_name(I64)` ==
+            # "int64_t", etc.), so a same-type `.map` is byte-for-byte unchanged.
+            if mname == "map" or mname == "map_err":
+                int _cm_recv_tid = ctx.locals.get(recv).unwrap().type_id
+                EnumCategory _cm_ec = enum_category_of(&gmod, _cm_recv_tid)
+                if (_cm_ec.category == ENUM_CAT_OPTION or _cm_ec.category == ENUM_CAT_RESULT) and margs.len() == 1:
+                    int _cm_u = combinator_closure_ret_type(margs.get(0).unwrap(), &gmod)
+                    if mname == "map":
+                        if _cm_ec.category == ENUM_CAT_OPTION:
+                            # Option.map: ok payload becomes U; Option has no err.
+                            String _cm_u_name = type_id_to_name(_cm_u, &gmod)
+                            int _cm_opt = lookup_or_register_named(&gmod, "Option__" + _cm_u_name)
+                            record_enum_category(&gmod, _cm_opt, ENUM_CAT_OPTION, _cm_u, -1)
+                            ret_tid = _cm_opt
+                        else:
+                            # Result.map: ok payload becomes U; err type preserved.
+                            int _cm_e = _cm_ec.err_type
+                            String _cm_u_name2 = type_id_to_name(_cm_u, &gmod)
+                            String _cm_e_name = type_id_to_name(_cm_e, &gmod)
+                            int _cm_res = lookup_or_register_named(&gmod, "Result__" + _cm_u_name2 + "__" + _cm_e_name)
+                            record_enum_category(&gmod, _cm_res, ENUM_CAT_RESULT, _cm_u, _cm_e)
+                            ret_tid = _cm_res
+                    else:
+                        # map_err is only valid on Result: ok payload T preserved;
+                        # err type becomes F (= the closure return U).
+                        if _cm_ec.category == ENUM_CAT_RESULT:
+                            int _cm_t = _cm_ec.ok_type
+                            String _cm_t_name = type_id_to_name(_cm_t, &gmod)
+                            String _cm_f_name = type_id_to_name(_cm_u, &gmod)
+                            int _cm_res2 = lookup_or_register_named(&gmod, "Result__" + _cm_t_name + "__" + _cm_f_name)
+                            record_enum_category(&gmod, _cm_res2, ENUM_CAT_RESULT, _cm_t, _cm_u)
+                            ret_tid = _cm_res2
             if ret_tid == UNIT_TYPE:
                 # Void-returning method — no destination
                 emit(&ctx, GICallExtern(-1, full_name, call_args))

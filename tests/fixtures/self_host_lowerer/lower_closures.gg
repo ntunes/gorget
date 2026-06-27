@@ -713,6 +713,53 @@ int guess_return_type(SpannedExpr sexpr, GirModule &gmod, int expected_type):
             pass
     return I64_TYPE
 
+# closure Phase-2 increment 4e-1: derive the NEW inner type `U` for a
+# cross-type `Option/Result.map`/`Result.map_err` combinator from the
+# closure ARG's own return type. `infer_method_return_type` deliberately
+# returns the RECEIVER type for map/map_err ("correct only when U==T"), so
+# a cross-type `Option[int].map((x): "str")` would name its result
+# `Option__int64_t` — an 8-byte payload slot the 16-byte `Str` overflows,
+# and the closure gets called through an `int64_t(*)` cast (sret mismatch
+# → SIGSEGV). This re-reads the closure body's OWN return type (the same
+# inference `compute_closure_sig` / `compute_implicit_closure_sig` run at
+# the make-site) so the caller can mint `Option__U` / `Result__U__E` /
+# `Result__T__F`. SIDE-EFFECT-FREE: the arg was already lowered by the
+# call-site loop — this is a pure re-read, burning no closure id and
+# registering no `__Closure_N`. `expected_type` is passed `-1` because we
+# want the closure's OWN return type, not a context-coerced one. The
+# STRING_MARKER sentinel resolves to the `GorgetString` tid exactly as the
+# sig-side helpers do.
+int combinator_closure_ret_type(SpannedExpr closure_arg, GirModule &gmod):
+    int u = I64_TYPE
+    match closure_arg.expr:
+        case EClosure(_, cbody):
+            # Explicit `(p…): body` — return type is the last statement's
+            # type (SReturn payload / SExpr tail), mirroring compute_closure_sig.
+            if cbody.len() > 0:
+                Stmt cl_last = cbody.get(cbody.len() - 1).unwrap()
+                match cl_last:
+                    case SReturn(cl_opt):
+                        match cl_opt:
+                            case Some(cl_rexpr):
+                                u = guess_return_type(cl_rexpr, &gmod, -1)
+                            case None:
+                                u = UNIT_TYPE
+                    case SExpr(cl_expr):
+                        u = guess_return_type(cl_expr, &gmod, -1)
+                    else:
+                        u = UNIT_TYPE
+        case EImplicitClosure(cbox):
+            # `.map(it*2)` parsed as an explicit implicit-closure wrapper.
+            u = guess_return_type(*cbox, &gmod, -1)
+        else:
+            # A raw `it`-expression arg (`.map(it*2)` where the parser did
+            # NOT wrap it) — infer directly off the body, same as
+            # compute_implicit_closure_sig.
+            u = guess_return_type(closure_arg, &gmod, -1)
+    if u == STRING_MARKER:
+        u = lookup_or_register_named(&gmod, "GorgetString")
+    return u
+
 # ── Closure scanning ─────────────────────────────────────
 
 # Check if an expression tree contains the implicit `it` parameter.
