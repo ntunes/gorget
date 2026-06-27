@@ -1,0 +1,11 @@
+struct S:
+    int x
+
+equip S:
+    int compute(self, int a, int b):
+        return a + b
+
+void main():
+    S s = S(0)
+    int r = s.compute(a=1, 2)
+    print(r)

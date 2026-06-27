@@ -16630,6 +16630,70 @@ fn self_host_driver_rejects_positional_after_named() {
     );
 }
 
+// Invariant #8 sibling of `self_host_driver_rejects_positional_after_named`:
+// the same positional-after-named rule on a METHOD call (`s.compute(a=1, 2)`).
+// Before this, the self-host EMethodCall walker did NOT carry the check (it was
+// free-fn-ECall-only, mirroring the same gap in Rust gg). The fix adds the
+// identical structural walk over the method's explicit arg list + arg_names to
+// self_host_typechecker/typecheck.gg's EMethodCall case; the receiver is the
+// separate `obj` field, NOT part of `args`, so there is no off-by-one. Same
+// contract as the free-fn sibling: non-zero exit, a source-grounded codespan
+// diagnostic on stderr, and NO C on stdout (the gate halts BEFORE lowering).
+// Parity-neutral — Rust-rejected, excluded from the parity denominator.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_rejects_positional_after_named_method() {
+    // Cached — shared with lowerer_comparison / bootstrap / e2e.
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir
+        .join("tests/fixtures/positional_after_named_method_error.gg");
+    assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
+
+    // Invoke the driver exactly as the e2e harness does: `driver F lib --lir-c`.
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "self_host_driver_rejects_positional_after_named_method",
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    // 1. The driver MUST exit non-zero (the diagnostic gate's exit(1)).
+    assert!(
+        !out.status.success(),
+        "self-host driver accepted a Rust-REJECTED program (a positional arg \
+         following a named arg on a METHOD call, `s.compute(a=1, 2)`). The \
+         PositionalAfterNamed walk in self_host_typechecker/typecheck.gg's \
+         EMethodCall case was removed or stopped firing. exit={:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+
+    // 2. It MUST render a codespan diagnostic to stderr (same render path as the
+    //    free-fn sibling — see self_host_typechecker/diagnostic.gg).
+    assert!(
+        stderr.contains("error")
+            && stderr.contains("positional argument cannot follow named argument")
+            && stderr.contains('\u{250c}'),
+        "self-host driver exited non-zero but emitted no codespan diagnostic \
+         to stderr — the reject path must render, not crash silently.\n\
+         stderr:\n{stderr}",
+    );
+
+    // 3. It MUST NOT emit C (the gate halts BEFORE lower_module).
+    assert!(
+        stdout.trim().is_empty(),
+        "self-host driver emitted C for a rejected program — the gate must \
+         halt BEFORE lowering. stdout bytes={}\nstdout head:\n{}",
+        stdout.len(),
+        &stdout.chars().take(200).collect::<String>(),
+    );
+}
+
 // Companion to `self_host_driver_rejects_invalid_program`, exercising the
 // required-after-default diagnostic (the self-host typecheck now REJECTS a
 // function decl where a required param follows a defaulted one,
@@ -23822,6 +23886,18 @@ fn main_throws_non_int_error() {
 #[test]
 fn positional_after_named_error() {
     check_gg_fails("positional_after_named_error.gg", "positional argument cannot follow");
+}
+
+// Invariant #8 sibling of `positional_after_named_error`: the same rule on a
+// METHOD call (`s.compute(a=1, 2)`). Before this, the free-fn ECall path
+// rejected positional-after-named but the EMethodCall path did not — the check
+// was free-fn-only in BOTH compilers. The fix extends the structural walk to
+// the method-call arg list (src/semantic/typecheck.rs's EMethodCall arm +
+// self_host_typechecker/typecheck.gg's EMethodCall case). The receiver is not
+// part of the explicit arg list, so there is no off-by-one against `self`.
+#[test]
+fn positional_after_named_method_error() {
+    check_gg_fails("positional_after_named_method_error.gg", "positional argument cannot follow");
 }
 
 #[test]

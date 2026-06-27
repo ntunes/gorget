@@ -730,8 +730,26 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
                 else:
                     walk_expr_closures(arg, scope_id, &scopes, &types, &ctx)
 
-        case EMethodCall(obj, method_name, args, _, targs):
+        case EMethodCall(obj, method_name, args, arg_names, targs):
             walk_expr_closures(*obj, scope_id, &scopes, &types, &ctx)
+            # PositionalAfterNamed — a positional arg may not follow a named
+            # one. Same contract as the ECall case above: the keyword for the
+            # explicit arg at index i lives at arg_names[i] ("" for positional,
+            # parser.gg:2012), parallel to `args`. The receiver is the separate
+            # `obj` field, NOT part of `args`, so there is no off-by-one against
+            # `self` — `args`/`arg_names` cover only the EXPLICIT args after the
+            # receiver. Invariant #8: this completes the class the free-fn ECall
+            # check started. Mirrors src/semantic/typecheck.rs's EMethodCall arm
+            # (SemanticErrorKind::PositionalAfterNamed).
+            bool m_seen_named = false
+            for (mai, marg) in args.enumerate():
+                String maname = ""
+                if mai < arg_names.len():
+                    maname = arg_names.get(mai).unwrap()
+                if maname.len() > 0:
+                    m_seen_named = true
+                elif m_seen_named:
+                    ctx.diagnostics.push(Diagnostic.error(marg.span, DkControlFlow(), "positional argument cannot follow named argument"))
             # Infer receiver element type for collection higher-order methods
             int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, &ctx)
             int elem_type = extract_element_type(obj_type, scopes, types).unwrap_or(-1)

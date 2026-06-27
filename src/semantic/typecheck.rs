@@ -1958,6 +1958,25 @@ impl<'a> TypeChecker<'a> {
                 args,
                 generic_args,
             } => {
+                // Invariant #8 (complete the class): a positional argument may
+                // not follow a named argument. The free-fn `ECall` path already
+                // rejects this (`check_named_args_and_defaults`); method calls
+                // carry the same `Spanned<CallArg>` arg list and must reject it
+                // too. The check is purely structural over the explicit arg list
+                // (the receiver is `self.receiver`, NOT part of `args`), so it is
+                // dispatch-independent and runs once here before any dispatch
+                // fork — no off-by-one against the receiver.
+                {
+                    let mut seen_named = false;
+                    for arg in args.iter() {
+                        if arg.node.name.is_some() {
+                            seen_named = true;
+                        } else if seen_named {
+                            self.error(SemanticErrorKind::PositionalAfterNamed, arg.span);
+                        }
+                    }
+                }
+
                 // Static method calls on type names: int.parse(), float.default()
                 if let Expr::Identifier(name) = &receiver.node {
                     if let Some(ret) = self.resolve_static_method_type(name, &method.node, args, expr.span) {
