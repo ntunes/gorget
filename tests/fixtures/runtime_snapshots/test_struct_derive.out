@@ -1,0 +1,16 @@
+person eq: same
+person eq: diff
+coord eq: same
+coord eq: diff
+Person(name=Alice, age=30, active=true)
+Person(name=Alice, age=30, active=true)
+clone equals original
+
+0
+false
+hash: same fields same hash
+hash: diff fields diff hash
+vec2 eq: same
+vec2 eq: diff
+Vec2(dx=1.500000, dy=2.500000)
+vec2 clone equals original

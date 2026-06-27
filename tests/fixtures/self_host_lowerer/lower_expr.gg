@@ -1602,8 +1602,16 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             _static_call = "GorgetString"
                         _static_call = _static_call + "__" + mname
                         int _sai = 0
+                        # Trait-static-method redirect (below) disambiguates
+                        # overlapping `From[A]`/`From[B]` impls by the FIRST
+                        # arg's C-type, which is baked into the trait prefix
+                        # (`From__<arg0_c>_for_<Type>__from`). Capture arg0's
+                        # type_id here so the search key can spell it.
+                        int _static_arg0_tid = -1
                         for sma in margs:
                             int sma_val = lower_expr(&ctx, sma, &gmod)
+                            if _sai == 0:
+                                _static_arg0_tid = ctx.locals.get(sma_val).unwrap().type_id
                             static_args.push(op_consume(&ctx, &gmod, sma_val, classify_call_arg(&gmod, _static_call, _sai)))
                             _sai += 1
                         # Primitive method names need C-runtime mangling.
@@ -1659,6 +1667,61 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             int binfer = builtin_call_return_type(static_name, &gmod)
                             if binfer >= 0:
                                 static_ret = binfer
+                        # Trait-static-method symbol redirect (sibling of the
+                        # instance-method redirect at ~:2182). A trait impl /
+                        # `@derive(From)` / equip-trait emits the static method
+                        # BODY under the trait-prefixed mangling
+                        # (`From__<arg0_c>_for_<Type>__from`,
+                        # `Default_for_<Type>__default`, etc. — see
+                        # lower_closures.gg lower_equip_block :361), NOT the bare
+                        # `<Type>__<method>` this call site reconstructs. The
+                        # bare name is undeclared → C implicit-int → `incompatible
+                        # types … from type 'int'` (CC-FAIL). A PHANTOM bare
+                        # `<Type>__<method>` sits in fn_sigs (it carries the
+                        # correct RETURN type, used by the static_ret chain
+                        # above), so a `contains` gate would never fire — run the
+                        # redirect UNCONDITIONALLY (skip only variant ctors, which
+                        # are real struct ctors, never trait impls). Mirrors Rust
+                        # gg src/ir/lowering/exprs/methods.rs:298-326.
+                        #
+                        # DISAMBIGUATION (load-bearing): overlapping impls on the
+                        # SAME type (`equip UserId with From[int]` AND
+                        # `From[Label]`) both end `_for_UserId__from`. The arg0
+                        # C-type qualifier in the trait prefix is what tells them
+                        # apart, so try the arg-type-qualified suffix
+                        # `__<arg0_c>_for_<Type>__<method>` FIRST. type_id_to_name
+                        # peels Ptr/MutPtr, so a borrowed arg resolves to the same
+                        # name the equip-site baked in (int64_t / double / Label).
+                        # Only if that misses (a no-arg trait method like
+                        # Default::default, or no arg-qualified key) fall back to
+                        # the bare `_for_<Type>__<method>` suffix. No `_for_`
+                        # match at all ⇒ a plain non-trait static method ⇒ keep
+                        # the bare name untouched.
+                        if not is_variant_ctor:
+                            String _ts_for_suffix = "_for_" + type_prefix + "__" + mname
+                            String _ts_redirect = ""
+                            String _ts_arg_qual = ""
+                            if _static_arg0_tid >= 0:
+                                _ts_arg_qual = "__" + type_id_to_name(_static_arg0_tid, &gmod) + _ts_for_suffix
+                            Vector[String] _ts_keys = gmod.fn_sigs.keys()
+                            int _tsk = 0
+                            # Pass 1: arg-type-qualified (disambiguates overloads).
+                            if _ts_arg_qual != "":
+                                while _tsk < _ts_keys.len():
+                                    String _cand = _ts_keys.get(_tsk).unwrap()
+                                    if _cand.ends_with(_ts_arg_qual):
+                                        _ts_redirect = _cand
+                                    _tsk += 1
+                            # Pass 2: bare `_for_` suffix (no-arg trait methods).
+                            if _ts_redirect == "":
+                                _tsk = 0
+                                while _tsk < _ts_keys.len():
+                                    String _cand = _ts_keys.get(_tsk).unwrap()
+                                    if _cand.ends_with(_ts_for_suffix):
+                                        _ts_redirect = _cand
+                                    _tsk += 1
+                            if _ts_redirect != "":
+                                static_name = _ts_redirect.clone()
                         int sdst = add_local(&ctx, static_ret, None)
                         emit(&ctx, GICallExtern(sdst, static_name, static_args))
                         return sdst
