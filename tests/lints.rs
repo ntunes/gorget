@@ -1060,19 +1060,26 @@ fn self_host_comprehension_dispatch_arms_count() {
 /// `combinator_field_c_type`), NOT the old `void*` cast — a `void*` truncates a
 /// 16-byte `Str`/`Option`/`Result` payload-or-return to 8 bytes →
 /// garbage/SIGSEGV (Inc-4b: `and_then` returned a wide Option, `map_err`
-/// returned a Str). The lint pins this two ways:
+/// returned a Str). The lint pins this three ways:
 ///   - the HOF combinator arm COUNT stays at the baseline (a new combinator
-///     arm trips it and forces a review for the type-aware path), and
+///     arm trips it and forces a review for the type-aware path),
 ///   - the truncating 2-arg closure cast `void*(*)(void*, void*)` appears
-///     ZERO times in the file (a re-inlined truncating call trips it).
+///     ZERO times in the file (a re-inlined payload-arg truncating call trips
+///     it), and
+///   - the truncating 1-arg closure cast `void*(*)(void*)` appears ZERO times
+///     in the `emit_option_result_combinator` body (Inc-4c: the no-payload-arg
+///     `unwrap_or_else`/`or_else`/`or` siblings the 4a+4b pass MISSED — their
+///     env-only call still truncated a 16-byte Str return through `void*` → an
+///     empty Str on the fn() path).
 ///
 /// **If this fails because the arm count changed:** a combinator template was
 /// added/removed. A new one that dispatches a closure MUST use the typed
 /// `dst_c`/`*_pay_c`/`*_err_c` C-type strings for the call cast and payload, not
 /// `void*`. Bump EXPECTED with a justification, or lower it if an arm was
-/// removed. **If the void*-cast count is non-zero:** a template re-introduced
-/// the truncating `((void*(*)(void*, void*))…)` closure call — route it through
-/// the typed cast instead.
+/// removed. **If a void*-cast count is non-zero:** a template re-introduced a
+/// truncating `((void*(*)(void*[, void*]))…)` closure call — route it through
+/// the typed cast (`c_type_name(dst_ty, &sn)` / `combinator_field_c_type`)
+/// instead.
 #[test]
 fn self_host_combinator_template_arms_count() {
     /// Baseline 2026-06-26 (Inc-4b): 12 `case` lines for the closure-dispatching
@@ -1136,6 +1143,37 @@ fn self_host_combinator_template_arms_count() {
          of a Str/Option/Result payload or return → garbage/SIGSEGV). Declare the \
          call with the real payload + return C types (`combinator_field_c_type`) \
          instead.",
+    );
+
+    // Inc-4c (R2 completion): the 1-arg truncating cast `void*(*)(void*)` must
+    // ALSO be gone from `emit_option_result_combinator`. It was the sibling the
+    // 4a+4b pass MISSED: the no-payload-arg combinators (`unwrap_or_else`,
+    // `or_else`/`or` on the closure path) call the closure as
+    // `((void*(*)(void*))fn)(env)`, which truncates a 16-byte Str return through
+    // the `void*` return type → an empty Str on the fn() path. Both
+    // truncation forms (1-arg and 2-arg) are now forbidden so NEITHER can come
+    // back. Scope to the `emit_option_result_combinator` body so the generic
+    // `__gorget_closure_call_`/`__callable_` dispatch fragments (which build an
+    // N-arg cast by string-concatenation and are NOT combinator templates) are
+    // not scanned.
+    let fn_start = content
+        .find("String emit_option_result_combinator(")
+        .expect("self_host_combinator_template_arms_count: emit_option_result_combinator fn not found");
+    let fn_end = content[fn_start..]
+        .find("\nString emit_call_extern_with(")
+        .map(|o| fn_start + o)
+        .expect("self_host_combinator_template_arms_count: end of emit_option_result_combinator not found");
+    let fn_body = &content[fn_start..fn_end];
+    let trunc_casts_1arg = fn_body.matches("void*(*)(void*)").count();
+    assert_eq!(
+        trunc_casts_1arg, 0,
+        "Found {trunc_casts_1arg} truncating 1-arg closure-call cast(s) \
+         `void*(*)(void*)` in `emit_option_result_combinator`. A no-payload-arg \
+         combinator (unwrap_or_else / or_else / or) re-introduced the \
+         void*-truncating closure call (loses the upper 8 bytes of a 16-byte \
+         Str/Option/Result return → an empty Str on the fn() path). Declare the \
+         call with the real return C type (`c_type_name(dst_ty, &sn)` / \
+         `combinator_field_c_type`) instead.",
     );
 }
 

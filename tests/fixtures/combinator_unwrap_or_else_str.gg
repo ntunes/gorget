@@ -1,0 +1,26 @@
+# Regression guard for the R2 combinator-template payload-truncation class
+# (Inc-4c completion): `unwrap_or_else` whose closure returns a 16-byte `Str`
+# must NOT truncate it through a `void*` return cast. Before the fix the empty
+# (None / Error) path printed an EMPTY string instead of the closure's value.
+#
+# Covers both the Option and Result `unwrap_or_else` arms, on BOTH the
+# present (Some / Ok — returns the payload) and absent (None / Error — runs the
+# closure) paths, with a `String` payload/return on every path.
+void main():
+    # Option[String] — closure returns a Str on the None path.
+    Option[String] some_s = Some("payload-present")
+    Option[String] none_s = None()
+    String a = some_s.unwrap_or_else((): "default-value-here")
+    String b = none_s.unwrap_or_else((): "default-value-here")
+    print(a)
+    print(b)
+
+    # Result[String, int] — Ok payload is a Str; the closure returns a Str on
+    # the Error path. Exercises the `Ok_0` named-field read AND the type-aware
+    # closure return cast for a Result.
+    Result[String, int] ok_s = Ok("ok-payload-str")
+    Result[String, int] err_s = Error(7)
+    String c = ok_s.unwrap_or_else((int e): "result-default-str")
+    String d = err_s.unwrap_or_else((int e): "result-default-str")
+    print(c)
+    print(d)

@@ -4329,6 +4329,24 @@ String emit_option_result_combinator(int dst, String name, Vector[int] &args,
     String dst_c = "void*"
     if dst_ty >= LT_STRUCT_BASE:
         dst_c = c_type_name(dst_ty, &sn)
+    # Inc-4c (R2 completion): `unwrap_or_else` returns the UNWRAPPED payload (NOT
+    # an Option/Result struct), so its closure-call return C type is `dst_ty`
+    # itself. The pre-fix arms cast the fn-ptr through a void-pointer return → a
+    # 16-byte Str/aggregate return was TRUNCATED to 8 bytes (empty Str on the
+    # fn() path). Use the real `dst_ty` C name (sibling of map/map_err's
+    # type-aware casts); fall back to a void-pointer return only for an
+    # unresolved `dst_ty` (never emit a `(void)` return cast).
+    String uoe_ret_c = "void*"
+    if dst_ty != LT_VOID:
+        uoe_ret_c = c_type_name(dst_ty, &sn)
+    # Source enum struct C name (a POINTER read — `src` is already a pointer),
+    # used to read the Some_0 / Ok_0 payload via the NAMED field instead of a
+    # raw `+8` byte offset (which mis-reads a payload narrower than 8 bytes,
+    # e.g. a `bool` Option whose payload sits at offset 4). Empty when the
+    # source type didn't resolve to a struct → callers fall back to `+8`.
+    String src_struct_c = ""
+    if src_ty >= LT_STRUCT_BASE:
+        src_struct_c = c_type_name(src_ty, &sn)
 
     # ── Tag checks: is_some, is_none, is_ok, is_error ──
     match name:
@@ -4436,9 +4454,13 @@ String emit_option_result_combinator(int dst, String name, Vector[int] &args,
                 return "{ if ((*(int32_t*)" + src + ") == 0) { memcpy(&" + v(dst) + ", (char*)" + src + " + 8, sizeof(" + v(dst) + ")); } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); *(int32_t*)&" + v(dst) + " = 1; } }"
             return ";"
         case "__option_unwrap_or_else":
-            # if tag==0: return payload; else: return fn()
+            # if tag==0: return payload (named Some_0 field, type-correct offset);
+            # else: return fn() with the REAL payload return type (no void* trunc).
             if dst >= 0:
-                return "{ if ((*(int32_t*)" + src + ") == 0) { memcpy(&" + v(dst) + ", (char*)" + src + " + 8, sizeof(" + v(dst) + ")); } else { " + v(dst) + " = (" + c_type_name(dst_ty, &sn) + ")((void*(*)(void*))((void**)" + closure + ")[0])(((void**)" + closure + ")[1]); } }"
+                String some_read = "memcpy(&" + v(dst) + ", (char*)" + src + " + 8, sizeof(" + v(dst) + "));"
+                if src_struct_c != "":
+                    some_read = v(dst) + " = ((" + src_struct_c + "*)" + src + ")->Some_0;"
+                return "{ if ((*(int32_t*)" + src + ") == 0) { " + some_read + " } else { " + v(dst) + " = ((" + uoe_ret_c + "(*)(void*))((void**)" + closure + ")[0])(((void**)" + closure + ")[1]); } }"
             return ";"
         case "__result_map":
             # Same as option_map but for Result (tag==0 is Ok)
@@ -4471,8 +4493,13 @@ String emit_option_result_combinator(int dst, String name, Vector[int] &args,
                 return "{ if ((*(int32_t*)" + src + ") != 0) { memcpy(&" + v(dst) + ", " + alt + ", sizeof(" + v(dst) + ")); } else { memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); } }"
             return ";"
         case "__result_unwrap_or_else":
+            # if tag==0 (Ok): return payload (named Ok_0 field, type-correct
+            # offset); else: return fn() with the REAL payload return type.
             if dst >= 0:
-                return "{ if ((*(int32_t*)" + src + ") == 0) { memcpy(&" + v(dst) + ", (char*)" + src + " + 8, sizeof(" + v(dst) + ")); } else { " + v(dst) + " = (" + c_type_name(dst_ty, &sn) + ")((void*(*)(void*))((void**)" + closure + ")[0])(((void**)" + closure + ")[1]); } }"
+                String ok_read = "memcpy(&" + v(dst) + ", (char*)" + src + " + 8, sizeof(" + v(dst) + "));"
+                if src_struct_c != "":
+                    ok_read = v(dst) + " = ((" + src_struct_c + "*)" + src + ")->Ok_0;"
+                return "{ if ((*(int32_t*)" + src + ") == 0) { " + ok_read + " } else { " + v(dst) + " = ((" + uoe_ret_c + "(*)(void*))((void**)" + closure + ")[0])(((void**)" + closure + ")[1]); } }"
             return ";"
         else:
             pass

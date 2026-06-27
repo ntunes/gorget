@@ -2145,6 +2145,31 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
             if recv >= 0 and recv < ctx.locals.len():
                 return ctx.locals.get(recv).unwrap().type_id
         return I64_TYPE
+    # unwrap_or_else on an Option/Result receiver: returns the UNWRAPPED Some_0 /
+    # Ok_0 payload type (the closure on the empty path also yields that type), the
+    # SAME `ok_type` `.unwrap()` returns — read off the typed enum-category
+    # channel. Inc-4c (R2 completion): this arm was MISSING, so the result
+    # defaulted to I64_TYPE — a `String`-payload `unwrap_or_else` was typed
+    # `int64_t`, so `emit_option_result_combinator` declared the dst slot + the
+    # closure-call return as `int64_t` and TRUNCATED the 16-byte `Str` return to
+    # 8 bytes (empty Str on the fn() path). Mirrors the `unwrap` arm above and
+    # Rust `typecheck.rs` (`unwrap_or_else` → the Ok/Some payload type).
+    if method == "unwrap_or_else":
+        if recv >= 0 and recv < ctx.locals.len():
+            int uoe_recv_tid = ctx.locals.get(recv).unwrap().type_id
+            if uoe_recv_tid >= 0 and uoe_recv_tid < gmod.type_table.len():
+                GirType uoe_gt0 = gmod.type_table.get(uoe_recv_tid).unwrap()
+                match uoe_gt0:
+                    case GtPtr(uoe_inner):
+                        uoe_recv_tid = uoe_inner
+                    case GtMutPtr(uoe_inner2):
+                        uoe_recv_tid = uoe_inner2
+                    else:
+                        pass
+            EnumCategory uoe_ec = enum_category_of(&gmod, uoe_recv_tid)
+            if uoe_ec.category == ENUM_CAT_OPTION or uoe_ec.category == ENUM_CAT_RESULT:
+                return uoe_ec.ok_type
+        return I64_TYPE
     # unwrap_error / unwrap_err on a Result__Ok__Err receiver: return the Err
     # payload type. Reads the SAME typed enum-category channel `.unwrap()` uses
     # (mint-site `err_type` recorded by `record_enum_category`), so a String-Err
