@@ -18297,7 +18297,16 @@ fn self_host_emit_cc_run(
     // worker (and with it every result it accumulated). Isolate it: a timeout
     // becomes a Crashed("timed out") outcome for THIS fixture, not a fatal
     // abort.
-    let run = match run_with_timeout_catching(&mut Command::new(&bin_path), &fname) {
+    //
+    // Null the child's stdin: stdin-reading fixtures (e.g. io_input.gg) would
+    // otherwise inherit the parent sweep's stdin, which never EOFs under the
+    // parallel harness, and block in `read_line` until the deadline. With
+    // `Stdio::null()` they get immediate EOF and produce their EOF-path output
+    // (matching the committed snapshot), so the full sweep is clean without a
+    // `< /dev/null` redirect on the cargo invocation.
+    let mut run_cmd = Command::new(&bin_path);
+    run_cmd.stdin(Stdio::null());
+    let run = match run_with_timeout_catching(&mut run_cmd, &fname) {
         Some(out) => out,
         None => {
             return Err(RuntimeParityOutcome::Crashed {
@@ -18385,9 +18394,12 @@ fn self_host_runtime_diff() {
 
             // 2. Oracle: gg run F (live). A hung fixture (infinite loop /
             // stdin-block) is treated as a Rust crash for parity purposes
-            // (excluded) rather than aborting the worker.
+            // (excluded) rather than aborting the worker. Null stdin so a
+            // stdin-reading fixture (io_input.gg) gets EOF and runs its
+            // EOF-path instead of blocking on the inherited sweep stdin (which
+            // never EOFs) and burning the full deadline.
             let oracle = match run_with_timeout_catching(
-                Command::new(gg_exe).arg("run").arg(fixture),
+                Command::new(gg_exe).arg("run").arg(fixture).stdin(Stdio::null()),
                 &stem,
             ) {
                 Some(o) => o,
@@ -19121,8 +19133,10 @@ fn regenerate_runtime_snapshots(
         }
 
         // Oracle twice. A hung oracle ⇒ skip (can't snapshot a non-terminating
-        // fixture); caught per-fixture so it doesn't abort the worker.
-        let oracle1 = match run_with_timeout_catching(Command::new(gg_exe).arg("run").arg(fixture), &stem) {
+        // fixture); caught per-fixture so it doesn't abort the worker. Null
+        // stdin so a stdin-reading fixture (io_input.gg) snapshots its EOF-path
+        // output instead of blocking on the inherited (non-EOF) sweep stdin.
+        let oracle1 = match run_with_timeout_catching(Command::new(gg_exe).arg("run").arg(fixture).stdin(Stdio::null()), &stem) {
             Some(o) => o,
             None => return Regen::Skipped(stem, "rust gg run timed out".into()),
         };
@@ -19130,7 +19144,7 @@ fn regenerate_runtime_snapshots(
             return Regen::Skipped(stem, "rust gg run failed (reject/crash)".into());
         }
         let o1 = String::from_utf8_lossy(&oracle1.stdout).trim_end().to_string();
-        let oracle2 = match run_with_timeout_catching(Command::new(gg_exe).arg("run").arg(fixture), &stem) {
+        let oracle2 = match run_with_timeout_catching(Command::new(gg_exe).arg("run").arg(fixture).stdin(Stdio::null()), &stem) {
             Some(o) => o,
             None => return Regen::Flaky(stem, "rust gg run non-deterministic (2nd run timed out)".into()),
         };
