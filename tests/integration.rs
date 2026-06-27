@@ -16700,6 +16700,78 @@ fn self_host_driver_rejects_required_after_default() {
     );
 }
 
+// Completes the required-after-default sibling class for the self-host
+// driver: the THIRD decl site Rust validates is a TRAIT-METHOD declaration
+// (`int greet(self, int a = 1, int b)`). Rust's `collect_trait`
+// (src/semantic/traits.rs:872) calls validate_default_param_ordering on
+// every trait-method's params; the self-host now mirrors this via the
+// `ITrait` arm of type_check_item (which calls the shared
+// `check_default_param_ordering` helper also used by type_check_function for
+// free fns + equip methods). Before this, the self-host had no `ITrait` arm
+// and silently ACCEPTED the ill-typed trait decl. Same contract as the
+// Function/Equip sibling: non-zero exit, a source-grounded codespan
+// diagnostic on stderr, and NO C on stdout (the gate halts BEFORE lowering).
+// Parity-neutral — the fixture is Rust-rejected, excluded from the parity
+// denominator.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_rejects_trait_required_after_default() {
+    // Cached — shared with lowerer_comparison / bootstrap / e2e.
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir
+        .join("tests/fixtures/trait_required_after_default_error.gg");
+    assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
+
+    // Invoke the driver exactly as the e2e harness does: `driver F lib --lir-c`.
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "self_host_driver_rejects_trait_required_after_default",
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    // 1. The driver MUST exit non-zero (the diagnostic gate's exit(1)).
+    assert!(
+        !out.status.success(),
+        "self-host driver accepted a Rust-REJECTED program (a required param \
+         following a defaulted one in a TRAIT-METHOD decl, \
+         `int greet(self, int a = 1, int b)`). The ITrait arm of \
+         type_check_item (calling check_default_param_ordering) in \
+         self_host_typechecker/typecheck.gg was removed or stopped firing. \
+         exit={:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+
+    // 2. It MUST render a codespan diagnostic to stderr (the rustc-style
+    //    output `gg check` emits — see self_host_typechecker/diagnostic.gg::
+    //    render_diagnostic). The `error` headline and message text together
+    //    with the box rule prove the diagnostic rendered with content.
+    assert!(
+        stderr.contains("error")
+            && stderr.contains("follows a parameter with a default value")
+            && stderr.contains('\u{250c}'),
+        "self-host driver exited non-zero but emitted no codespan diagnostic \
+         to stderr — the reject path must render, not crash silently.\n\
+         stderr:\n{stderr}",
+    );
+
+    // 3. It MUST NOT emit C (the gate halts BEFORE lower_module). The `--lir-c`
+    //    body goes to stdout; on a rejected program stdout must be empty.
+    assert!(
+        stdout.trim().is_empty(),
+        "self-host driver emitted C for a rejected program — the gate must \
+         halt BEFORE lowering. stdout bytes={}\nstdout head:\n{}",
+        stdout.len(),
+        &stdout.chars().take(200).collect::<String>(),
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // GG_IMPL sub-req 2 gate: the self-host driver's standalone CLI surface.
 //
@@ -23302,6 +23374,21 @@ fn throw_in_non_throwing_error() {
 fn required_after_default_error() {
     check_gg_fails(
         "required_after_default_error.gg",
+        "follows a parameter with a default value",
+    );
+}
+
+// Sibling of `required_after_default_error`, covering the THIRD decl site
+// Rust validates: a TRAIT-METHOD declaration (`int greet(self, int a = 1,
+// int b)`). Rust's `validate_default_param_ordering` is called from
+// `Item::Function` (resolve.rs:513), `Item::Equip` (resolve.rs:708), AND
+// `collect_trait` (traits.rs:872) — this last covers trait-method decls.
+// Both compilers must reject required-after-default uniformly across all
+// three (invariant #8 + fix-the-class).
+#[test]
+fn trait_required_after_default_error() {
+    check_gg_fails(
+        "trait_required_after_default_error.gg",
         "follows a parameter with a default value",
     );
 }

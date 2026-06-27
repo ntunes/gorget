@@ -343,6 +343,27 @@ void register_function_signature(FunctionDef func, int parent_scope, ScopeTable 
     if fn_def_opt is Some(fn_def):
         scopes.set_def_type(fn_def, fn_type_id)
 
+# RequiredAfterDefault — a required (no-default) parameter may not
+# follow a parameter that declares a default value. Positional
+# call-site resolution is ambiguous otherwise. Walk the params in
+# order; once a defaulted param is seen, any later param WITHOUT a
+# default is an error. Mirrors Rust's `validate_default_param_ordering`
+# (src/semantic/resolve.rs:445), called from THREE decl sites:
+# `Item::Function` (resolve.rs:513), `Item::Equip` methods
+# (resolve.rs:708) — both reached via `type_check_function` — AND
+# trait-method declarations (traits.rs:872), reached via the `ITrait`
+# arm of `type_check_item`. Extracted to a shared helper so the one
+# check covers the whole class (fix the class, not the instance) and
+# the trait path cannot drift from the free-fn/equip path. NOT applied
+# to extern fns (Rust's Item::ExternBlock does not validate them).
+void check_default_param_ordering(Vector[Param] params, ResolveContext &ctx):
+    bool seen_default = false
+    for p in params:
+        if p.default_value is Some(_):
+            seen_default = true
+        elif seen_default:
+            ctx.diagnostics.push(Diagnostic.error(p.param_type.span, DkControlFlow(), f"required parameter `{p.param_name}` follows a parameter with a default value"))
+
 void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx,int def_scope):
     # Register the signature first (idempotent — running it twice for
     # IFunction items already pre-passed in type_check_module just
@@ -351,22 +372,7 @@ void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes,
     # the body-scope signature dance too.
     register_function_signature(func, parent_scope, &scopes, &types, &ctx, def_scope)
 
-    # RequiredAfterDefault — a required (no-default) parameter may not
-    # follow a parameter that declares a default value. Positional
-    # call-site resolution is ambiguous otherwise. Walk the params in
-    # order; once a defaulted param is seen, any later param WITHOUT a
-    # default is an error. Mirrors Rust's `validate_default_param_ordering`
-    # (src/semantic/resolve.rs:445), called from `Item::Function` and
-    # `Item::Equip` methods — so this lives in `type_check_function`,
-    # which covers exactly those (free fns + equip methods), and NOT
-    # extern fns (registered directly via register_function_signature,
-    # which Rust's Item::ExternBlock does not validate).
-    bool seen_default = false
-    for p in func.params:
-        if p.default_value is Some(_):
-            seen_default = true
-        elif seen_default:
-            ctx.diagnostics.push(Diagnostic.error(p.param_type.span, DkControlFlow(), f"required parameter `{p.param_name}` follows a parameter with a default value"))
+    check_default_param_ordering(func.params, &ctx)
 
     # `main` can only throw `int` (the process exit code). Mirrors the
     # Rust check at src/semantic/typecheck.rs:5197 (SemanticErrorKind::
@@ -1385,6 +1391,17 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
             types.trait_equip_scope_id = saved_trait_equip
             types.self_type_id = -1
             scopes.set_current(saved_scope)
+
+        case ITrait(tdef):
+            # Validate required-after-default param ordering on every
+            # trait-method declaration (both signature-only and
+            # default-bodied), mirroring Rust's unconditional
+            # `validate_default_param_ordering(&method.params, ...)` call
+            # inside `collect_trait` (traits.rs:872). SCOPED to ONLY this
+            # param-ordering check — trait-method bodies/signatures are
+            # NOT otherwise type-checked here, matching Rust's targeted call.
+            for method in tdef.methods:
+                check_default_param_ordering(method.params, &ctx)
 
         case IConstDecl(stype, name, init_expr):
             bool is_inferred = false

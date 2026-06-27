@@ -1,0 +1,12 @@
+# A trait-method DECLARATION where a required parameter (`b`) follows a
+# defaulted one (`a = 1`). Positional call-site resolution is ambiguous,
+# so this must be REJECTED — exactly as a free function or equip method
+# would be. Rust gg validates this in `collect_trait`
+# (src/semantic/traits.rs:872 → validate_default_param_ordering); the
+# self-host must reject it too (the sibling of Rejection #2's
+# Function+Equip coverage).
+trait Greeter:
+    int greet(self, int a = 1, int b)
+
+void main():
+    pass
