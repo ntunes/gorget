@@ -351,6 +351,23 @@ void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes,
     # the body-scope signature dance too.
     register_function_signature(func, parent_scope, &scopes, &types, &ctx, def_scope)
 
+    # RequiredAfterDefault — a required (no-default) parameter may not
+    # follow a parameter that declares a default value. Positional
+    # call-site resolution is ambiguous otherwise. Walk the params in
+    # order; once a defaulted param is seen, any later param WITHOUT a
+    # default is an error. Mirrors Rust's `validate_default_param_ordering`
+    # (src/semantic/resolve.rs:445), called from `Item::Function` and
+    # `Item::Equip` methods — so this lives in `type_check_function`,
+    # which covers exactly those (free fns + equip methods), and NOT
+    # extern fns (registered directly via register_function_signature,
+    # which Rust's Item::ExternBlock does not validate).
+    bool seen_default = false
+    for p in func.params:
+        if p.default_value is Some(_):
+            seen_default = true
+        elif seen_default:
+            ctx.diagnostics.push(Diagnostic.error(p.param_type.span, DkControlFlow(), f"required parameter `{p.param_name}` follows a parameter with a default value"))
+
     # `main` can only throw `int` (the process exit code). Mirrors the
     # Rust check at src/semantic/typecheck.rs:5197 (SemanticErrorKind::
     # MainThrowsNonInt). First exemplar push site of the typechecker's
