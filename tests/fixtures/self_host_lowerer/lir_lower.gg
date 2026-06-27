@@ -4162,6 +4162,35 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                         # IS that heap pointer. POD inner → drop fn "" → no-op.
                         if dia_box_inner_name != "":
                             String dia_inner_drop = drop_fn_for_type(dia_box_inner_name, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types, &m.drop_collision_types, &m.type_method_prefix_map)
+                            # `drop_fn_for_type` is a name-keyed lookup over
+                            # `type_runtime_map`, which does NOT carry the
+                            # `Callable__`/`MutCallable__`/`ConsumeCallable__`
+                            # monos (they alias straight to the pre-registered
+                            # GorgetClosure struct without a per-name runtime-map
+                            # entry — lir_lower.gg:946). So a `Box[Callable]`
+                            # inner resolves to "" above and its closure ENV
+                            # (`__gorget_closure_env_alloc`) LEAKS on the bare box
+                            # `free`. `resource_meta_for` IS the typed channel
+                            # that classifies those prefixes (lir_lower.gg:260 →
+                            # runtime "GorgetClosure", drop_fn
+                            # `gorget_closure_free`); consult it for the inner
+                            # drop fn when the name-keyed lookup misses. The box
+                            # pointer points straight at the inner GorgetClosure,
+                            # so `gorget_closure_free(box_ptr)` frees `c->env`
+                            # (no-op on a NULL env) BEFORE the box `free` — one
+                            # owner, no double-free. No name-prefix routing here:
+                            # the prefix classification lives inside the typed
+                            # `resource_meta_for`, read via its `drop_fn` field.
+                            if dia_inner_drop == "":
+                                match resource_meta_for(&gmod, dia_box_inner_name):
+                                    case Some(dia_inner_rmeta):
+                                        match dia_inner_rmeta.drop_fn:
+                                            case Some(dia_rm_drop):
+                                                dia_inner_drop = dia_rm_drop
+                                            case None:
+                                                pass
+                                    case None:
+                                        pass
                             if dia_inner_drop == "" and m.type_drop_fns.contains(dia_box_inner_name):
                                 dia_inner_drop = m.type_drop_fns.get(dia_box_inner_name).unwrap().drop_fn_name
                             if dia_inner_drop != "":
