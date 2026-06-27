@@ -1656,8 +1656,15 @@ fn eval_meta_stmt(
             }
         }
 
-        Stmt::While { condition, body, .. } => {
+        Stmt::While { condition, body, else_body } => {
             let mut iterations: u64 = 0;
+            // `did_break` distinguishes natural completion (condition went
+            // false) from an explicit `break`; the `else` body runs only on
+            // natural completion, matching runtime `while … else` semantics
+            // (language-reference: "Supports else (runs if loop exits normally
+            // without break)"). Without this, compile-time evaluation of a
+            // function diverged from its runtime evaluation.
+            let mut did_break = false;
             loop {
                 match eval_expr(&condition.node, env, ctx, condition.span)? {
                     MetaValue::Bool(false) => break,
@@ -1677,8 +1684,16 @@ fn eval_meta_stmt(
                 }
                 match eval_meta_block(body, env, ctx)? {
                     MetaControlFlow::Continue | MetaControlFlow::LoopContinue => {}
-                    MetaControlFlow::Break => break,
+                    MetaControlFlow::Break => {
+                        did_break = true;
+                        break;
+                    }
                     r @ MetaControlFlow::Return(_) => return Ok(r),
+                }
+            }
+            if !did_break {
+                if let Some(else_blk) = else_body {
+                    return eval_meta_block(else_blk, env, ctx);
                 }
             }
             Ok(MetaControlFlow::Continue)
@@ -1705,7 +1720,7 @@ fn eval_meta_stmt(
             Ok(MetaControlFlow::Continue)
         }
 
-        Stmt::For { pattern, iterable, body, .. } => {
+        Stmt::For { pattern, iterable, body, else_body, .. } => {
             // Only integer range iteration is supported at compile time.
             match &iterable.node {
                 Expr::Range { start, end, inclusive } => {
@@ -1741,6 +1756,10 @@ fn eval_meta_stmt(
                     let upper = if *inclusive { end_val + 1 } else { end_val };
                     let mut iterations: u64 = 0;
                     let mut i = start_val;
+                    // `else` runs only on natural completion (loop ran to the
+                    // end of the range), not after a `break` — matching runtime
+                    // `for … else` semantics.
+                    let mut did_break = false;
                     while i < upper {
                         iterations += 1;
                         if iterations > MAX_META_ITERATIONS {
@@ -1754,10 +1773,18 @@ fn eval_meta_stmt(
                         env.insert(loop_var.clone(), MetaValue::Int(i));
                         match eval_meta_block(body, env, ctx)? {
                             MetaControlFlow::Continue | MetaControlFlow::LoopContinue => {}
-                            MetaControlFlow::Break => break,
+                            MetaControlFlow::Break => {
+                                did_break = true;
+                                break;
+                            }
                             r @ MetaControlFlow::Return(_) => return Ok(r),
                         }
                         i += 1;
+                    }
+                    if !did_break {
+                        if let Some(else_blk) = else_body {
+                            return eval_meta_block(else_blk, env, ctx);
+                        }
                     }
                     Ok(MetaControlFlow::Continue)
                 }

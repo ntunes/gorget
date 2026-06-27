@@ -1,0 +1,47 @@
+# Exercises the registry-backed `T is Enum` / `T is Struct` meta type
+# predicates and confirms there is NO `string` category (`T is string`
+# is exact-match against a non-existent type, hence always false; only
+# `T is String` matches the String type).
+
+enum Color:
+    Red()
+    Green()
+    Blue()
+
+struct Point:
+    int x
+    int y
+
+String shape_of[T]():
+    meta if T is Enum:
+        return "enum"
+    elif T is Struct:
+        return "struct"
+    else:
+        return "other"
+
+String string_cat[T]():
+    # `string` is NOT a category — this is an exact match against a type
+    # literally named `string`, which does not exist, so it is always false.
+    meta if T is string:
+        return "is-string-category"
+    else:
+        return "not-string-category"
+
+String string_exact[T]():
+    # `String` IS the real string type; exact match succeeds for String.
+    meta if T is String:
+        return "is-String"
+    else:
+        return "not-String"
+
+void main():
+    print(shape_of[Color]())     # enum
+    print(shape_of[Point]())     # struct
+    print(shape_of[int]())       # other
+    print(shape_of[String]())    # other
+    print(string_cat[String]())  # not-string-category
+    print(string_cat[Color]())   # not-string-category
+    print(string_exact[String]())  # is-String
+    print(string_exact[int]())     # not-String
+    print("done")

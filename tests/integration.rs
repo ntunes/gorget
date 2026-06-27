@@ -19504,6 +19504,42 @@ done",
 }
 
 #[test]
+fn meta_type_is_enum_struct() {
+    // Registry-backed `T is Enum` / `T is Struct`, and the absence of a
+    // `string` category (`T is string` is exact-match against a
+    // non-existent type, hence false; only `T is String` matches).
+    run_gg(
+        "meta_type_is_enum_struct.gg",
+        "\
+enum
+struct
+other
+other
+not-string-category
+not-string-category
+is-String
+not-String
+done",
+    );
+}
+
+#[test]
+fn meta_while_else() {
+    // Compile-time `while … else` / `for … else`: the else body runs on
+    // natural completion and is skipped after a break — matching the
+    // function's runtime evaluation (compile-time eval == runtime eval).
+    run_gg(
+        "meta_while_else.gg",
+        "\
+1006
+5
+108
+506
+3",
+    );
+}
+
+#[test]
 fn meta_enum_ordinal() {
     run_gg(
         "meta_enum_ordinal.gg",

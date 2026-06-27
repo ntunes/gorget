@@ -820,7 +820,7 @@ bool eval_delayed_meta_cond(SpannedExpr cond, Dict[String, String] &tn_env, Dict
                     pass
             if ls and category != "":
                 bool cat_ok = false
-                bool is_cat = meta_type_category_is(lv, category, &cat_ok)
+                bool is_cat = meta_type_category_is(lv, category, &gmod, &cat_ok)
                 if cat_ok:
                     ok = true
                     if negated:
@@ -882,7 +882,7 @@ String demangle_field_type_name(String cname):
 # meta-for bodies. Mirrors Rust's meta `is`-category check on the
 # resolved type string. Returns the boolean and sets ok=true when the
 # predicate is recognized.
-bool meta_type_category_is(String tyname, String category, bool &ok):
+bool meta_type_category_is(String tyname, String category, GirModule &gmod, bool &ok):
     ok = true
     # Category families mirror Rust src/semantic/meta.rs eval_type_is_check.
     if category == "int" or category == "integer" or category == "numeric":
@@ -896,12 +896,26 @@ bool meta_type_category_is(String tyname, String category, bool &ok):
         return tyname == "int8" or tyname == "int16" or tyname == "int32" or tyname == "int" or tyname == "int64"
     elif category == "unsigned":
         return tyname == "uint8" or tyname == "uint16" or tyname == "uint32" or tyname == "uint" or tyname == "uint64"
-    elif category == "string":
-        return tyname == "String"
     elif category == "bool":
         return tyname == "bool"
-    # Exact match for everything else (float32, int8, uint64, MyStruct, …) —
-    # Rust's `other => resolved == other` arm.
+    elif category == "Enum" or category == "enum":
+        # Registry-backed: true when the resolved type is a user enum.
+        # Mirrors Rust's TypeDefKind::Enum check against the type registry.
+        if gmod.type_infos.contains(tyname):
+            return gmod.type_infos.get(tyname).unwrap().is_enum
+        return false
+    elif category == "Struct" or category == "struct":
+        # Registry-backed: true when the resolved type is a user struct.
+        # Mirrors Rust's TypeDefKind::Struct check against the type registry.
+        if gmod.type_infos.contains(tyname):
+            return not gmod.type_infos.get(tyname).unwrap().is_enum
+        return false
+    # Exact match for everything else (bool, str, String, char, void,
+    # float32, int8, uint64, MyStruct, …) — Rust's
+    # `"bool" | "str" | "String" | "char" | "void" => resolved == category`
+    # and `other => resolved == other` arms collapse to one equality here.
+    # NOTE: there is NO `string` category in Rust — `T is string` correctly
+    # falls through to this exact-match (false for every real type).
     return tyname == category
 
 # Substitute the meta-for loop-var string bindings into an expression.

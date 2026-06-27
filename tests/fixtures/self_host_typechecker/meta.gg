@@ -12,7 +12,7 @@ from ast import TArray, TSlice, TTuple, TFunction
 from ast import EStructLiteral, EAs
 from ast import EIntLiteral, EFloatLiteral, EBoolLiteral, EStringLiteral
 from ast import EIdentifier, EBinaryOp, EUnaryOp, ECall
-from ast import EMethodCall, EFieldAccess, EIndex, EFString, EArrayLiteral
+from ast import EMethodCall, EFieldAccess, EIndex, EFString, EArrayLiteral, ERange
 from ast import Stmt, SMatch, SMetaForMatch, SIf, SWhile, SFor, SReturn, SExpr
 from ast import SVarDecl, SAssign, SCompoundAssign, SMetaFor, SMetaIf
 from ast import MatchArm, ElseBranch, EnumDef, EnumVariant, FunctionDef, EquipBlock
@@ -256,9 +256,19 @@ int eval_meta_fn_body(FunctionDef fdef, Dict[String, int] &env, Module &m, int d
                         return 0
             else:
                 pass
-    return eval_stmts(fdef.body, &env, &m, depth, &returned, &ok)
+    bool broke = false
+    bool continued = false
+    return eval_stmts(fdef.body, &env, &m, depth, &returned, &broke, &continued, &ok)
 
-int eval_stmts(Vector[Stmt] stmts, Dict[String, int] &env, Module &m, int depth, bool &returned, bool &ok):
+# Interpret a statement sequence. `returned`/`broke`/`continued` are
+# control-flow out-params: each is set true when the corresponding control
+# transfer (return / break / continue) is reached, and the recursion
+# unwinds to the nearest enclosing handler — the function for `returned`,
+# the enclosing loop for `broke`/`continued`. Loops CONSUME `broke`/
+# `continued` (reset to false) and run the `else` body only on natural
+# completion (no break), matching runtime `while … else` semantics.
+# Mirrors Rust src/semantic/meta.rs eval_meta_stmt's Stmt::While arm.
+int eval_stmts(Vector[Stmt] stmts, Dict[String, int] &env, Module &m, int depth, bool &returned, bool &broke, bool &continued, bool &ok):
     int si = 0
     int iters = 0
     while si < stmts.len():
@@ -272,6 +282,12 @@ int eval_stmts(Vector[Stmt] stmts, Dict[String, int] &env, Module &m, int depth,
                     case None:
                         returned = true
                         return 0
+            case SBreak(_):
+                broke = true
+                return 0
+            case SContinue:
+                continued = true
+                return 0
             case SVarDecl(ty, name, val, _, _, _):
                 env[name] = eval_int_ex(val.expr, &env, &m, depth, &ok)
             case SAssign(lhs, rhs):
@@ -300,8 +316,10 @@ int eval_stmts(Vector[Stmt] stmts, Dict[String, int] &env, Module &m, int depth,
                         pass
             case SIf(cond, then_b, else_branches):
                 if eval_bool_ex(cond.expr, &env, &m, depth, &ok):
-                    int rv = eval_stmts(then_b, &env, &m, depth, &returned, &ok)
-                    if returned:
+                    int rv = eval_stmts(then_b, &env, &m, depth, &returned, &broke, &continued, &ok)
+                    # Propagate any control transfer up to the enclosing
+                    # function (return) or loop (break/continue).
+                    if returned or broke or continued:
                         return rv
                 else:
                     bool took = false
@@ -316,19 +334,95 @@ int eval_stmts(Vector[Stmt] stmts, Dict[String, int] &env, Module &m, int depth,
                                 run_it = true
                         if run_it:
                             took = true
-                            int rv = eval_stmts(eb.body, &env, &m, depth, &returned, &ok)
-                            if returned:
+                            int rv = eval_stmts(eb.body, &env, &m, depth, &returned, &broke, &continued, &ok)
+                            if returned or broke or continued:
                                 return rv
                         ei = ei + 1
-            case SWhile(cond, body, _):
+            case SWhile(cond, body, else_body):
+                bool did_break = false
                 while eval_bool_ex(cond.expr, &env, &m, depth, &ok):
                     iters = iters + 1
                     if iters > 100000:
                         ok = false
                         return 0
-                    int rv = eval_stmts(body, &env, &m, depth, &returned, &ok)
+                    int rv = eval_stmts(body, &env, &m, depth, &returned, &broke, &continued, &ok)
                     if returned:
                         return rv
+                    if broke:
+                        # Consume the break: stop looping, skip the else.
+                        broke = false
+                        did_break = true
+                        break
+                    if continued:
+                        # Consume the continue: re-test the loop condition.
+                        continued = false
+                # `else` runs only on natural completion (no break), matching
+                # runtime `while … else` semantics ("else runs if the loop
+                # exits normally without break").
+                if not did_break:
+                    int erv = eval_stmts(else_body, &env, &m, depth, &returned, &broke, &continued, &ok)
+                    if returned or broke or continued:
+                        return erv
+            case SFor(fpat, iter_e, fbody, _, for_else):
+                # Range-based `for i in a..b:` at compile time, mirroring Rust
+                # src/semantic/meta.rs eval_meta_stmt's Stmt::For arm (only the
+                # integer-range form is evaluable). The `else` runs on natural
+                # completion (range exhausted), skipped after a `break`.
+                String loop_var = ""
+                match fpat.pat:
+                    case PBinding(nm):
+                        loop_var = nm
+                    else:
+                        pass
+                match iter_e.expr:
+                    case ERange(start_o, end_o, inclusive):
+                        int start_v = 0
+                        match start_o:
+                            case Some(sb):
+                                start_v = eval_int_ex((*sb).expr, &env, &m, depth, &ok)
+                            case None:
+                                start_v = 0
+                        bool have_end = false
+                        int end_v = 0
+                        match end_o:
+                            case Some(eb):
+                                have_end = true
+                                end_v = eval_int_ex((*eb).expr, &env, &m, depth, &ok)
+                            case None:
+                                have_end = false
+                        if loop_var != "" and have_end:
+                            int upper = end_v
+                            if inclusive:
+                                upper = end_v + 1
+                            bool for_break = false
+                            int fi = start_v
+                            while fi < upper:
+                                iters = iters + 1
+                                if iters > 100000:
+                                    ok = false
+                                    return 0
+                                env[loop_var] = fi
+                                int frv = eval_stmts(fbody, &env, &m, depth, &returned, &broke, &continued, &ok)
+                                if returned:
+                                    return frv
+                                if broke:
+                                    broke = false
+                                    for_break = true
+                                    break
+                                if continued:
+                                    continued = false
+                                fi = fi + 1
+                            if not for_break:
+                                int ferv = eval_stmts(for_else, &env, &m, depth, &returned, &broke, &continued, &ok)
+                                if returned or broke or continued:
+                                    return ferv
+                        else:
+                            ok = false
+                            return 0
+                    else:
+                        # Only range iteration is evaluable at compile time.
+                        ok = false
+                        return 0
             else:
                 pass
         si = si + 1

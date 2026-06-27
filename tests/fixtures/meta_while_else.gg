@@ -1,0 +1,69 @@
+# Compile-time evaluation of `while … else` / `for … else` must match the
+# function's runtime evaluation: the `else` body runs on natural loop
+# completion (condition went false / range exhausted) and is skipped after
+# a `break`. Before the fix the meta interpreter dropped the else_body,
+# so the same function returned different values at compile time vs runtime.
+
+int while_natural(int n):
+    int total = 0
+    while n > 0:
+        total = total + n
+        n = n - 1
+    else:
+        total = total + 1000
+    return total
+
+int while_break(int n):
+    int total = 0
+    while n > 0:
+        total = total + n
+        if n == 2:
+            break
+        n = n - 1
+    else:
+        total = total + 1000
+    return total
+
+int while_continue(int n):
+    int total = 0
+    int i = 0
+    while i < n:
+        i = i + 1
+        if i == 2:
+            continue
+        total = total + i
+    else:
+        total = total + 100
+    return total
+
+int for_natural(int n):
+    int total = 0
+    for i in 0..n:
+        total = total + i
+    else:
+        total = total + 500
+    return total
+
+int for_break(int n):
+    int total = 0
+    for i in 0..n:
+        total = total + i
+        if i == 2:
+            break
+    else:
+        total = total + 500
+    return total
+
+# Evaluate all of these at compile time.
+meta int A = while_natural(3)    # 3+2+1 + 1000 = 1006
+meta int B = while_break(3)      # 3+2 = 5 (else skipped)
+meta int C = while_continue(4)   # i=1,3,4 -> 1+3+4 + 100 = 108
+meta int D = for_natural(4)      # 0+1+2+3 + 500 = 506
+meta int E = for_break(10)       # 0+1+2 = 3 (else skipped)
+
+void main():
+    print(A)
+    print(B)
+    print(C)
+    print(D)
+    print(E)
