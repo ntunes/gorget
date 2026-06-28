@@ -626,6 +626,17 @@ String eval_meta_builtin_str(SpannedExpr se, Dict[String, String] &tn_env, bool 
                                 if tn_env.contains(tparam):
                                     is_str = true
                                     return tn_env[tparam]
+                                # Not a bound type param: it's a CONCRETE type
+                                # used directly (e.g. typename(int) in a
+                                # non-generic context). Fall back to the literal
+                                # type name, mirroring Rust meta.rs:2811-2812
+                                # (typename) / :2846 (typeof) and the int-builtin
+                                # idiom resolve_meta_tparam (returns tparam for a
+                                # non-tparam). Without this the concrete case
+                                # leaves is_str=false → the meta-if/match silently
+                                # drops (Core #8 divergence vs the Rust oracle).
+                                is_str = true
+                                return tparam
                             else:
                                 pass
                 else:
@@ -780,7 +791,22 @@ String eval_meta_str_v2(SpannedExpr se, Dict[String, String] &tn_env, Dict[Strin
         case ECall(callee, args, _, _):
             match (*callee).expr:
                 case EIdentifier(fname):
-                    if fname == "platform" and args.len() == 0:
+                    if (fname == "typename" or fname == "typeof") and args.len() == 1:
+                        # typeof/typename(T): resolve a bound type param via
+                        # tn_env, else fall back to the literal type name for a
+                        # CONCRETE type (e.g. typename(int) → "int"). Mirrors
+                        # Rust meta.rs:2811-2812 / :2846 and resolve_meta_tparam
+                        # (which already returns the literal name for a
+                        # non-tparam). eval_meta_builtin_str also covers this for
+                        # the comparison/cond paths; this arm covers the
+                        # str-v2-only call sites (e.g. `meta const s =
+                        # typename(int)`). Without it the concrete case is a
+                        # Core #8 silent-drop vs the Rust oracle.
+                        String tn = resolve_meta_tparam(args.get(0).unwrap(), &tn_env)
+                        if tn != "":
+                            ok = true
+                            return tn
+                    elif fname == "platform" and args.len() == 0:
                         # Compile-time platform string. Mirrors Rust
                         # meta.rs:1015, which returns the HOST platform via
                         # cfg!(target_os). The self-host compiler is a native

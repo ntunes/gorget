@@ -1,0 +1,61 @@
+# Core #8 guard: `typeof`/`typename` applied to a CONCRETE type (not a
+# generic tparam) inside a DELAYED-meta statement in a NON-generic body.
+#
+# The self-host lowerer evaluates statement-level `meta if`/`meta match`
+# in a non-generic `main()` via evaluate_delayed_meta_stmts with an EMPTY
+# tn_env. A concrete type spelled directly (`typename(int)`) is NOT a
+# bound tparam, so the string meta-builtin path must fall back to the
+# LITERAL type name — exactly as the int-builtins' resolve_meta_tparam
+# already does, and as Rust meta.rs:2811-2812 (typename) / :2846 (typeof).
+#
+# Before the fix the concrete case left is_str=false, so:
+#   * `meta match typename(int)` picked the `else` arm (wrong), and
+#   * `meta if typename(int) == "int"` SILENTLY DROPPED the whole meta-if.
+# Both now match the Rust `gg run` oracle.
+
+void main():
+    # meta match over a concrete type — must hit the matching arm.
+    meta match typename(int):
+        case "int":
+            print("match-int")
+        case "bool":
+            print("match-bool")
+        else:
+            print("match-else")
+
+    meta match typeof(bool):
+        case "int":
+            print("typeof-int")
+        case "bool":
+            print("typeof-bool")
+        else:
+            print("typeof-else")
+
+    meta match typename(String):
+        case "int":
+            print("str-int")
+        case "String":
+            print("str-string")
+        else:
+            print("str-else")
+
+    # meta if over a concrete type — must run the then-branch, not drop.
+    meta if typename(int) == "int":
+        print("if-int-then")
+    else:
+        print("if-int-else")
+
+    # meta if where the concrete type does NOT equal the literal — must
+    # run the else-branch (the comparison evaluates, it just isn't equal).
+    meta if typename(bool) == "int":
+        print("if-bool-then")
+    else:
+        print("if-bool-else")
+
+    # meta elif chain over concrete types.
+    meta if typename(float) == "int":
+        print("elif-int")
+    elif typename(float) == "float":
+        print("elif-float")
+    else:
+        print("elif-else")
