@@ -15426,10 +15426,14 @@ fn self_host_bootstrap() {
             .arg("--lir-c"),
         "self_host_bootstrap stage-1 → stage-2 body",
         // Auto-scale the stage-1 execution timeout the same way build_timeout()
-        // does. On loaded multi-agent boxes the binary's wall time can balloon
-        // far past its ~40s user CPU; on idle hosts 120s is plenty.
-        // Override with GG_STAGE1_TIMEOUT_SECS.
-        Duration::from_secs(env_or_load_adjusted_secs("GG_STAGE1_TIMEOUT_SECS", 120)),
+        // does. The stage-1 run is a FULL driver.gg self-compile by the spliced
+        // self-host binary — the same ~262s-user / 4-8×-wall workload as step-2's
+        // stage-0 run (which is hardcoded 600s, line ~15337). The base default was
+        // left at 120s — a latent too-tight deadline that passed only by luck on
+        // idle hosts and flaked once the self-host grew (round-4+5, 2026-06-28:
+        // confirmed pure timeout, completes correctly in ~270s with the bump).
+        // Matched to step-2's 600s. Override with GG_STAGE1_TIMEOUT_SECS.
+        Duration::from_secs(env_or_load_adjusted_secs("GG_STAGE1_TIMEOUT_SECS", 600)),
     );
     assert!(
         stage1_run_out.status.success(),
