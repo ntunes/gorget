@@ -255,8 +255,17 @@ integer range *or* a reflection `List` (binding loop vars and substituting them
 into the cloned body each iteration, `src/semantic/meta.rs:3399-3477`);
 evaluates `MetaMatch` by value equality (`meta_values_eq`,
 `src/semantic/meta.rs:2706`); unrolls `MetaWhile`; binds `MetaConst` and
-substitutes it into the remaining statements; and recurses into nested ordinary
-blocks (`recurse_delayed_meta_in_stmt`, `src/semantic/meta.rs:3620`). It splices
+substitutes it into the remaining statements; and recurses into the sub-blocks of
+nested control-flow and container statements — `if`/`elif`/`else`, `while`/`for`
+(incl. their `else`), `loop`, `unsafe`, `with`, `named scope`, `match` (arm bodies
++ `else`, after expanding any `MetaFor` arms), `select` (arm bodies + `else`), and
+nested `meta match`/`meta while` (`recurse_delayed_meta_in_stmt`,
+`src/semantic/meta.rs:3651`). It deliberately does **not** recurse into `on error`
+blocks: the on-error body is cloned into `on_error_blocks` at lower-time, *after*
+the delayed-meta pass runs, so a `meta if` inside an `on error` block is dropped by
+both Rust and the self-host (a known shared latent gap — the gate
+`block_has_delayed_meta` over-reports it via an `OnError` arm, but the pass leaves
+it unevaluated). It splices
 replacements without advancing the cursor so freshly-inserted statements are
 re-processed (handling nesting).
 
