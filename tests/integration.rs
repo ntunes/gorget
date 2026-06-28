@@ -18188,6 +18188,7 @@ fn runtime_parity_excluded(stem: &str) -> Option<&'static str> {
         || stem == "async_reactor_sleep"
         || stem == "shared_sleep_loop"
         || stem == "channel_recv_timeout"
+        || stem == "test_tags"  // `gg test` output pins elapsed `(Nms)` — wall-clock dependent (0ms vs 1ms flake)
     {
         return Some("sleep/timing (wall-clock dependent)");
     }
