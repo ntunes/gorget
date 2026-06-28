@@ -676,6 +676,17 @@ int eval_meta_int_v2(SpannedExpr se, Dict[String, String] &tn_env, Dict[String, 
                         if concrete != "" and gmod.enum_registry.contains(concrete):
                             ok = true
                             return gmod.enum_registry.get(concrete).unwrap().len()
+                    elif fname == "field_count" and args.len() == 1:
+                        # Struct field reflection. Mirrors Rust meta.rs:2947
+                        # field_count -> s.fields.len(). Reads the registered
+                        # GirTypeInfo.fields (the same data eval_meta_fields and
+                        # meta_type_category_is consult).
+                        String concrete = resolve_meta_tparam(args.get(0).unwrap(), &tn_env)
+                        if concrete != "" and gmod.type_infos.contains(concrete):
+                            GirTypeInfo ti = gmod.type_infos.get(concrete).unwrap()
+                            if not ti.is_enum:
+                                ok = true
+                                return ti.fields.len()
                     elif fname == "enum_ordinal" and args.len() == 2:
                         String concrete = resolve_meta_tparam(args.get(0).unwrap(), &tn_env)
                         # 2nd arg: a string literal (post-subst the loop var
@@ -722,6 +733,27 @@ String eval_meta_str_v2(SpannedExpr se, Dict[String, String] &tn_env, Dict[Strin
                             if ord >= 0 and ord < vnames.len():
                                 ok = true
                                 return vnames.get(ord).unwrap()
+                    elif fname == "field_type" and args.len() == 2:
+                        # Struct field reflection. Mirrors Rust meta.rs:2989
+                        # field_type -> type_id_to_canonical_name of the named
+                        # field's type. demangle_field_type_name maps the
+                        # registered C-level type name (int64_t/double/...) back
+                        # to the Gorget spelling (int/float/...), matching Rust's
+                        # canonical-name output.
+                        String concrete = resolve_meta_tparam(args.get(0).unwrap(), &tn_env)
+                        String want = ""
+                        match args.get(1).unwrap().expr:
+                            case EStringLiteral(s, _):
+                                want = s
+                            else:
+                                pass
+                        if concrete != "" and want != "" and gmod.type_infos.contains(concrete):
+                            GirTypeInfo ti = gmod.type_infos.get(concrete).unwrap()
+                            if not ti.is_enum:
+                                for f in ti.fields:
+                                    if f.name == want:
+                                        ok = true
+                                        return demangle_field_type_name(f.type_name)
                 else:
                     pass
         else:
@@ -736,11 +768,27 @@ bool eval_delayed_meta_cond(SpannedExpr cond, Dict[String, String] &tn_env, Dict
     match cond.expr:
         case EBinaryOp(l, op, r):
             if op == "==" or op == "!=":
-                # Try string comparison: typename(T) == "literal"
+                # Try string comparison: typename(T) == "literal",
+                # field_type(T, "f") == "literal". eval_meta_builtin_str
+                # handles typename + string literals; fall back to
+                # eval_meta_str_v2 for the richer string-valued builtins
+                # (field_type, enum_from_ordinal) on either side.
                 bool ls = false
                 bool rs = false
                 String lv = eval_meta_builtin_str(*l, &tn_env, &ls)
                 String rv = eval_meta_builtin_str(*r, &tn_env, &rs)
+                if not ls:
+                    bool ls2 = false
+                    String lv2 = eval_meta_str_v2(*l, &tn_env, &int_env, &gmod, &ls2)
+                    if ls2:
+                        ls = true
+                        lv = lv2
+                if not rs:
+                    bool rs2 = false
+                    String rv2 = eval_meta_str_v2(*r, &tn_env, &int_env, &gmod, &rs2)
+                    if rs2:
+                        rs = true
+                        rv = rv2
                 if ls and rs:
                     ok = true
                     bool eq = (lv == rv)
@@ -826,6 +874,34 @@ bool eval_delayed_meta_cond(SpannedExpr cond, Dict[String, String] &tn_env, Dict
                     if negated:
                         return not is_cat
                     return is_cat
+        case ECall(callee, args, _, _):
+            # Bare bool-valued reflection predicate as the whole meta-if
+            # condition (`meta if has_field(T, "z"):`). Without this arm the
+            # cond is unrecognized -> inert -> the generic fn returns garbage.
+            # Mirrors Rust meta.rs:2966 has_field -> s.fields.any(name==f).
+            match (*callee).expr:
+                case EIdentifier(fname):
+                    if fname == "has_field" and args.len() == 2:
+                        String concrete = resolve_meta_tparam(args.get(0).unwrap(), &tn_env)
+                        String want = ""
+                        match args.get(1).unwrap().expr:
+                            case EStringLiteral(s, _):
+                                want = s
+                            else:
+                                pass
+                        if concrete != "" and want != "":
+                            ok = true
+                            if gmod.type_infos.contains(concrete):
+                                GirTypeInfo ti = gmod.type_infos.get(concrete).unwrap()
+                                if not ti.is_enum:
+                                    for f in ti.fields:
+                                        if f.name == want:
+                                            return true
+                            # Unknown type or no such field: Rust returns false
+                            # (meta.rs:2984/2986), NOT inert.
+                            return false
+                else:
+                    pass
         else:
             pass
     return false
@@ -1102,6 +1178,35 @@ bool eval_meta_variant_names(SpannedExpr iter_e, Dict[String, String] &tn_env, G
             pass
     return false
 
+# Resolve `field_names(T)` to the list of struct field names (declaration
+# order) for the concrete struct T. Mirrors Rust meta.rs:2924 field_names
+# -> s.fields.map(|f| f.name). Sets the return to false (caller leaves the
+# meta-for inert) if unrecognized / not a registered struct.
+bool eval_meta_field_names(SpannedExpr iter_e, Dict[String, String] &tn_env, GirModule &gmod, Vector[String] &out_names):
+    match iter_e.expr:
+        case ECall(callee, args, _, _):
+            match (*callee).expr:
+                case EIdentifier(fname):
+                    if fname == "field_names" and args.len() == 1:
+                        match args.get(0).unwrap().expr:
+                            case EIdentifier(tparam):
+                                String concrete = tparam
+                                if tn_env.contains(tparam):
+                                    concrete = tn_env.get(tparam).unwrap()
+                                if gmod.type_infos.contains(concrete):
+                                    GirTypeInfo ti = gmod.type_infos.get(concrete).unwrap()
+                                    if not ti.is_enum:
+                                        for f in ti.fields:
+                                            out_names.push(f.name.clone())
+                                        return true
+                            else:
+                                pass
+                else:
+                    pass
+        else:
+            pass
+    return false
+
 # Walk a statement list, evaluating each SMetaIf against the env and
 # splicing the winning branch. Recurses into nested blocks AND into the
 # spliced branch bodies. Returns the rewritten statement list.
@@ -1216,6 +1321,20 @@ Vector[Stmt] evaluate_delayed_meta_stmts(Vector[Stmt] stmts, Dict[String, String
                             for us in unrolled:
                                 out.push(us)
                             fi += 1
+                # `field_names(T)` → struct field names, one loop var.
+                if mf_vars.len() == 1 and not handled:
+                    Vector[String] fonly = Vector[String]()
+                    if eval_meta_field_names(mf_iter, &tn_env, &gmod, &fonly):
+                        handled = true
+                        String var_f = mf_vars.get(0).unwrap()
+                        for fn in fonly:
+                            Dict[String, String] sv = {}
+                            Dict[String, int] iv = {}
+                            sv.put(var_f.clone(), fn.clone())
+                            Vector[Stmt] sub_body = subst_mf_stmts(mf_body, &sv, &iv)
+                            Vector[Stmt] unrolled = evaluate_delayed_meta_stmts(sub_body, &tn_env, &int_env, &gmod)
+                            for us in unrolled:
+                                out.push(us)
                 # `variant_names(T)` → variant names, one loop var.
                 if mf_vars.len() == 1 and not handled:
                     Vector[String] vnames = Vector[String]()
