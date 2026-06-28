@@ -1,0 +1,9 @@
+--- A: Dict[String, Option[int]] ---
+3
+--- B: Dict[String, Option[String]] ---
+3
+--- C: Dict[int, Option[int]] ---
+3
+--- D: Dict[String, Option[Vector[int]]] ---
+3
+done

@@ -6406,7 +6406,18 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         # (e.g. ERange); retyping them to Option__int64_t would MISMATCH
         # those fields. This is the minimal correct scope to unblock A
         # without depending on the orthogonal Box-typing fix.
-        if (fname == "Some") and first_arg_type >= PRIM_COUNT:
+        # Widened gate: ALSO fire for a primitive-inner `Some(<prim>)` whose
+        # resolved `ret_type` carries NO enum-category yet — i.e. it fell through
+        # to the bare-variant `Some` named type (Option is a prelude enum absent
+        # from type_infos → `enum_variant_parent` "" → typed by the bare `Some`).
+        # Without an enum-category recorded, a downstream combinator read-site
+        # (`enum_category_of`) returns the sentinel and mis-routes the chain to
+        # the GorgetArray HOF arm (`Some__map`/`GorgetArray = int`). The
+        # `not has_enum_category(ret_type)` disjunct PRESERVES the expected-type
+        # path: when adoption (above) already pinned a real `Option__T`,
+        # `has_enum_category(ret_type)` is true → arm SKIPPED → Some(Box)/ERange
+        # behavior unchanged.
+        if (fname == "Some") and first_arg_type >= 0 and (first_arg_type >= PRIM_COUNT or not has_enum_category(&gmod, ret_type)):
             int some_inner = first_arg_type
             if some_inner >= 0 and some_inner < gmod.type_table.len():
                 match gmod.type_table.get(some_inner).unwrap():
