@@ -1023,10 +1023,59 @@ bool eval_delayed_meta_cond(SpannedExpr cond, Dict[String, String] &tn_env, Dict
                             # Unknown type or no such field: Rust returns false
                             # (meta.rs:2984/2986), NOT inert.
                             return false
+                    if fname == "implements" and args.len() == 2:
+                        # `implements(T, "Trait")` — compile-time trait-impl
+                        # predicate. Mirrors Rust meta.rs:2908 ->
+                        # TraitRegistry::has_trait_impl_by_name (traits.rs:331):
+                        # (1) explicit/derived equip (gmod.trait_impls_by_type),
+                        # then (2) intrinsic-primitive satisfaction rules. Rust
+                        # returns false (NOT inert) when neither matches.
+                        String it_concrete = resolve_meta_tparam(args.get(0).unwrap(), &tn_env)
+                        String it_trait = ""
+                        match args.get(1).unwrap().expr:
+                            case EStringLiteral(s, _):
+                                it_trait = s
+                            else:
+                                pass
+                        if it_concrete != "" and it_trait != "":
+                            ok = true
+                            # (1) explicit/derived equip table
+                            if gmod.trait_impls_by_type.contains(it_concrete):
+                                Vector[String] it_traits = gmod.trait_impls_by_type.get(it_concrete).unwrap()
+                                for tn in it_traits:
+                                    if tn == it_trait:
+                                        return true
+                            # (2) intrinsic-primitive satisfaction (traits.rs:339)
+                            return meta_intrinsic_implements(it_concrete, it_trait)
                 else:
                     pass
         else:
             pass
+    return false
+
+# Replicates Rust's intrinsic trait satisfaction
+# (`src/semantic/traits.rs:339-351`): numeric primitives satisfy numeric
+# traits; hashable primitives satisfy Hashable/Equatable; all primitives +
+# String are Cloneable/Displayable/Debuggable. No registry needed — these
+# hold by the primitive's nature, mirroring the Rust intrinsic-satisfaction
+# block in `has_trait_impl_by_name`.
+bool meta_is_numeric_primitive(String name):
+    return name == "int" or name == "int8" or name == "int16" or name == "int32" or name == "int64" or name == "uint" or name == "uint8" or name == "uint16" or name == "uint32" or name == "uint64" or name == "float" or name == "float32" or name == "float64"
+
+bool meta_is_numeric_trait(String name):
+    return name == "Numeric" or name == "Add" or name == "Sub" or name == "Mul" or name == "Div" or name == "Rem" or name == "Mod" or name == "Neg" or name == "Comparable" or name == "Equatable" or name == "Default" or name == "One"
+
+bool meta_is_hashable_primitive(String name):
+    return meta_is_numeric_primitive(name) or name == "str" or name == "bool" or name == "char" or name == "String"
+
+bool meta_intrinsic_implements(String type_name, String trait_name):
+    if meta_is_numeric_primitive(type_name) and meta_is_numeric_trait(trait_name):
+        return true
+    if meta_is_hashable_primitive(type_name) and (trait_name == "Hashable" or trait_name == "Equatable"):
+        return true
+    # All primitives + String are Cloneable / Displayable / Debuggable.
+    if meta_is_hashable_primitive(type_name) and (trait_name == "Cloneable" or trait_name == "Displayable" or trait_name == "Debuggable"):
+        return true
     return false
 
 # ── PROTOTYPE slice #4: meta-for-over-reflection unroll ──────────────

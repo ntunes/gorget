@@ -719,6 +719,19 @@ struct GirModule:
     # fn_param_sigs / fn_borrow_params / fn_defaults. Appended AT END to avoid
     # shifting positional ctor call sites.
     Dict[String, Vector[String]] fn_param_names
+    # Type name → trait names the type explicitly implements, backing the
+    # compile-time `implements(T, "Trait")` meta-predicate. Populated by a
+    # pre-pass over `m.items` in `lower_module` (before any function body is
+    # lowered) scanning every `IEquip(EquipBlock(target, trait_name))`, which
+    # captures both user-written `equip X with Trait` and derive-synthesized
+    # equips (expand_derives runs first, driver.gg:389). Read by the
+    # `implements` arm of `eval_delayed_meta_cond`. Intrinsic-primitive
+    # satisfaction (numeric primitives satisfy numeric traits, etc.) is NOT
+    # stored here — it holds by the primitive's nature and is computed in the
+    # arm. This is the impl-table half of Rust's
+    # `TraitRegistry::has_trait_impl_by_name` (`src/semantic/traits.rs:331`).
+    # Appended AT END to avoid shifting positional ctor call sites.
+    Dict[String, Vector[String]] trait_impls_by_type
 
 # Per-test metadata mirroring Rust's `TestFnInfo` (`src/ir/mod.rs:30`).
 # `fn_name` is the emitted `__test_N` symbol ("" for a skipped test, which

@@ -2789,7 +2789,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     Dict[String, GirStaticInfo] statics = {}
     Dict[String, ResourceMetadata] resource_metadata = {}
     Dict[int, int] option_ref_payload = {}
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, !const_decls, !bool_const_decls, !string_const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types, !option_ref_payload, [], !enum_variant_parent_idx, false, [], {}, {}, {}, {}, {}, !fn_defaults, [], [], {}, {}, {})
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, !const_decls, !bool_const_decls, !string_const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types, !option_ref_payload, [], !enum_variant_parent_idx, false, [], {}, {}, {}, {}, {}, !fn_defaults, [], [], {}, {}, {}, {})
 
     # R11: extract the `strip-asserts` directive so the SAssert case in
     # lower_stmt can emit a no-op instead of a conditional panic. Mirrors
@@ -2799,6 +2799,45 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             case IDirective(dir_name, _):
                 if dir_name == "strip-asserts":
                     gmod.strip_asserts = true
+            else:
+                pass
+
+    # Pre-scan equip blocks to build the trait-impl registry for the
+    # compile-time `implements(T, "Trait")` meta-predicate. Runs HERE — before
+    # any function body is lowered — so the signal is populated when a generic
+    # `check[T]()` mono or a non-generic `main()` reaches the meta-eval splice.
+    # `expand_derives` already ran (driver.gg:389), so `@derive(Eq, ..)` appears
+    # as real `equip X with Eq` items alongside user-written equips. We read the
+    # SOURCE-level type name (TNamed.tname) to match what
+    # `resolve_meta_tparam`/`meta_typename` yields at the query site. Mirrors
+    # Rust's TraitRegistry impl-table (`src/semantic/traits.rs:331`).
+    #
+    # The per-type list is rebuilt-then-put (get → local → push → put), NOT
+    # mutated in place via `gmod.trait_impls_by_type.get(k).unwrap().push(v)`:
+    # the in-place idiom mis-compiles to a faulting stage-1 binary in this
+    # pre-pass context (a latent self-host codegen bug; see TODO.md), so we go
+    # through an owned local and write it back.
+    for ti_item in m.items:
+        match ti_item:
+            case IEquip(ti_eqblk):
+                String ti_tname = ""
+                match ti_eqblk.target.ty:
+                    case TNamed(tn, _):
+                        ti_tname = tn
+                    else:
+                        pass
+                String ti_trait = ""
+                match ti_eqblk.trait_name:
+                    case Some(tr):
+                        ti_trait = tr
+                    case None:
+                        pass
+                if ti_tname != "" and ti_trait != "":
+                    Vector[String] ti_existing = []
+                    if gmod.trait_impls_by_type.contains(ti_tname):
+                        ti_existing = gmod.trait_impls_by_type.get(ti_tname).unwrap()
+                    ti_existing.push(ti_trait)
+                    gmod.trait_impls_by_type.put(ti_tname, !ti_existing)
             else:
                 pass
 
