@@ -2375,7 +2375,7 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
     # values / copies scalars. Without this arm the call falls through to the
     # I64 default, so a String-valued get_or assigns a `Str` into an `int64_t`
     # slot (cc type error). Mirrors the `.get()` Dict V-suffix extraction.
-    if method == "get_or":
+    if method == "get_or" or method == "get_or_put":
         String gor_recv_name = ""
         if recv >= 0 and recv < ctx.locals.len():
             int gor_recv_tid = ctx.locals.get(recv).unwrap().type_id

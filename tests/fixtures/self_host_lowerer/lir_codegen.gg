@@ -884,7 +884,7 @@ String emit_dict_get_or_wrappers(LirModule &m):
     # Mirrors the thread_spawned_fns / test_fns codegen read pattern.
     String out = ""
     for dgor_req in m.dict_get_or_requests:
-        out = out + dict_get_or_wrapper_for(dgor_req)
+        out = out + dict_get_or_wrapper_for(dgor_req, &m)
     if out != "":
         out = out + "\n"
     return out
@@ -895,28 +895,65 @@ String emit_dict_get_or_wrappers(LirModule &m):
 # (read from coll_key/val_type_map upstream — never parsed from the symbol).
 # Dedup happened at the write site (one request per mangled name), so every
 # request emits exactly one wrapper.
-String dict_get_or_wrapper_for(DictGetOrReq req):
+String dict_get_or_wrapper_for(DictGetOrReq req, LirModule &m):
     String kty = box_alloc_c_type(req.key_c)
+    # For a runtime-backed value type (Vector→GorgetArray, Dict→GorgetMap,
+    # Set→GorgetSet) `box_alloc_c_type` yields the WRONG `__gg_<mangled>` name
+    # (there is no `__gg_Vector__int64_t` typedef — the C type is `GorgetArray`).
+    # Resolve those through the TYPED `type_runtime_map` → `runtime_category_to_c_type`,
+    # exactly as resolve_sizeof_c_type does. String stays "Str" (not `__gg_`,
+    # untouched) and user-struct values stay `__gg_<Name>` (not in type_runtime_map).
     String vty = box_alloc_c_type(req.val_c)
-    bool val_is_str = req.val_c == "GorgetString" or req.val_c == "Str"
+    if vty.starts_with("__gg_") and m.type_runtime_map.contains(req.val_c):
+        String vrt = runtime_category_to_c_type(m.type_runtime_map.get(req.val_c).unwrap_or(""))
+        if vrt != "":
+            vty = vrt
+    # Resource values must CLONE each owned output (the map's stored value, the
+    # hit-path return, the miss-path return) — leaving the caller's BORROWED
+    # `__d` to the caller. A bare `return __d` / shallow `gorget_map_put(&__d)`
+    # would make the result (and the map) alias `__d`'s heap → double-free at
+    # both drops. This is the same clone-at-ownership-boundary rule every
+    # collection insert obeys (docs/devbook/11-copy-on-write.md). The BY-VALUE
+    # deep-clone symbol comes from the TYPED resolver chain
+    # `drop_to_clone_fn(lc_collection_drop_fn(val_c))` — `gorget_array_clone` /
+    # `gorget_map_clone` / `gorget_set_clone` / `gorget_string_clone_to_owned` /
+    # `{name}__clone`, all `V f(const V* p)` returning by value. It is "" for
+    # trivials (int/bool/float), which then keep the byte-for-byte move-and-
+    # return-same (no clone, no regression). Mirrors Rust try_emit_dict_get_or's
+    # resource_clone_fn_for_payload gate (src/lir/lower/insts.rs).
+    String clone_fn = drop_to_clone_fn(lc_collection_drop_fn(req.val_c, &m))
+    bool val_is_resource = clone_fn != ""
+    # Hit: independent owned copy of the map's slot value (`__p` is the slot
+    # pointer). Resource → deep-clone; trivial → byte-copy the slot.
     String hit = ""
-    if val_is_str:
-        hit = "gorget_string_clone_to_owned(__p)"
+    if val_is_resource:
+        hit = clone_fn + "(__p)"
     else:
         hit = "*(" + vty + "*)__p"
     # get_or_put (mutating): the map is passed BY POINTER (`GorgetMap* __m`,
     # matching needs_ptr_arg's `__get_or_put` ABI row) so the miss-side
     # `gorget_map_put` persists into the CALLER's map. On a miss insert the
-    # default then return it; on a hit return the slot value (clone for
-    # strings). `__m` is already a pointer, so probe `gorget_map_get(__m, ...)`
-    # and put `gorget_map_put(__m, ...)` directly — no `&__m`. Mirrors Rust
-    # try_emit_dict_get_or's is_put branch (src/lir/lower/insts.rs:3093-3209).
+    # default then return it; on a hit return the slot value. `__m` is already a
+    # pointer, so probe `gorget_map_get(__m, ...)` and put `gorget_map_put(__m,
+    # ...)` directly — no `&__m`. Mirrors Rust try_emit_dict_get_or's is_put
+    # branch (src/lir/lower/insts.rs).
     if req.is_put:
-        String put_out = "static inline " + vty + " " + req.mangled_name + "(GorgetMap* __m, " + kty + " __k, " + vty + " __d) { void* __p = (void*)gorget_map_get(__m, &__k); if (__p == NULL) { gorget_map_put(__m, &__k, &__d); return __d; } return " + hit + "; }\n"
+        String miss_body = ""
+        if val_is_resource:
+            # Map owns one clone; the return is a SEPARATE clone; the borrowed
+            # `__d` is left to the caller (which drops its own copy).
+            miss_body = vty + " __mv = " + clone_fn + "(&__d); gorget_map_put(__m, &__k, &__mv); return " + clone_fn + "(&__d);"
+        else:
+            miss_body = "gorget_map_put(__m, &__k, &__d); return __d;"
+        String put_out = "static inline " + vty + " " + req.mangled_name + "(GorgetMap* __m, " + kty + " __k, " + vty + " __d) { void* __p = (void*)gorget_map_get(__m, &__k); if (__p == NULL) { " + miss_body + " } return " + hit + "; }\n"
         return put_out
     # get_or (read-only): map passed BY VALUE (`GorgetMap __m`), probe with
-    # `&__m`. Miss returns default without mutating.
-    String out = "static inline " + vty + " " + req.mangled_name + "(GorgetMap __m, " + kty + " __k, " + vty + " __d) { void* __p = (void*)gorget_map_get(&__m, &__k); if (__p == NULL) return __d; return " + hit + "; }\n"
+    # `&__m`. Miss returns default (CLONED when resource — a bare `return __d`
+    # would alias the caller's heap).
+    String miss_ret = "__d"
+    if val_is_resource:
+        miss_ret = clone_fn + "(&__d)"
+    String out = "static inline " + vty + " " + req.mangled_name + "(GorgetMap __m, " + kty + " __k, " + vty + " __d) { void* __p = (void*)gorget_map_get(&__m, &__k); if (__p == NULL) return " + miss_ret + "; return " + hit + "; }\n"
     return out
 
 # ── Globals ────────────────────────────────────────────────
@@ -7239,6 +7276,15 @@ String generate_c(LirModule &m):
     body = body + emit_enum_drops(&m, &sn)
     body = body + emit_enum_clones(&m, &sn)
     body = body + emit_type_drop_fns(&m, &sn)
+    # `d.get_or(k, default)` inline wrappers (no `gorget_map_get_or` runtime
+    # symbol). Emitted HERE — AFTER the drop/clone forward declarations and the
+    # struct/enum clone definitions, BEFORE the function definitions that call
+    # the wrappers — because a user-struct value type's wrapper `return`s
+    # `{name}__clone(&__d)` (e.g. `Holder__clone`), and that symbol must be
+    # declared (it is, just above) before the `static inline` wrapper that uses
+    # it, or C implicitly types it `int` and the `__gg_<Name>` return mismatches.
+    # Runtime clone symbols (gorget_array_clone, …) come from the runtime preamble.
+    body = body + emit_dict_get_or_wrappers(&m)
 
     # Use sb_push (in-place append) instead of `body = body + ...` —
     # the latter is O(N) per concat, O(N²) overall. For 600+ functions
@@ -7315,8 +7361,6 @@ String generate_c(LirModule &m):
     out = out + emit_box_allocators_from_lir(&m)
     # `b.get()`/`b.set(v)` inline wrappers (no `gorget_box_get` runtime symbol).
     out = out + emit_box_method_wrappers(&m)
-    # `d.get_or(k, default)` inline wrappers (no `gorget_map_get_or` runtime symbol).
-    out = out + emit_dict_get_or_wrappers(&m)
 
     out = out + body
     return out

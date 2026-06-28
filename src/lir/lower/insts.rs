@@ -3058,10 +3058,11 @@ impl<'a> FuncLowering<'a> {
             return None;
         }
         // Split base into K__V at the first `__` — simple types don't
-        // nest `__` so this is unambiguous for every fixture shape.
-        let key_sep = base.find("__")?;
-        let val_c = &base[key_sep + 2..];
-        let val_is_str = val_c == "GorgetString" || val_c == "Str";
+        // nest `__` so this is unambiguous for every fixture shape. The value
+        // type is taken from the destination local's GIR type (`val_ty` below),
+        // and the per-value clone decision flows through the typed resolver
+        // `resource_clone_fn_for_payload` — never a name-test on `base`.
+        let _ = base.find("__")?;
 
         let map_arg = lir_args[0];
         let key_arg = lir_args[1];
@@ -3097,17 +3098,21 @@ impl<'a> FuncLowering<'a> {
                 &LirType::Void,
             );
         }
-        if val_is_str {
-            let str_ty = self
-                .struct_reg
-                .lookup("GorgetString")
-                .map(LirType::Struct)
-                .unwrap_or(LirType::Ptr);
-            self.ensure_extern(
-                "gorget_string_clone_to_owned",
-                &[LirType::Ptr],
-                &str_ty,
-            );
+        // Resource-valued get_or/get_or_put must CLONE the default for EACH
+        // owned output (result slot, hit-path value, map insert), leaving the
+        // caller's borrowed default untouched — otherwise the result aliases
+        // the default's heap and both drops double-free. This is the same
+        // clone-at-ownership-boundary rule every collection insert obeys
+        // (docs/devbook/11-copy-on-write.md §"Materialization points"). The
+        // by-value deep-clone symbol comes from the typed single-source-of-
+        // truth resolver (NOT a `val_is_str` name-test — layering rule 2):
+        // `gorget_array_clone` / `gorget_map_clone` / `gorget_string_clone` /
+        // `gorget_closure_clone_to_owned` / `{name}__clone`. It returns None
+        // for scalars (int/bool/float) — the free trivial-gate, so those keep
+        // the byte-for-byte move-and-return-same behavior, no regression.
+        let val_clone_fn = self.resource_clone_fn_for_payload(&val_ty, false);
+        if let Some(clone_fn) = &val_clone_fn {
+            self.ensure_extern(clone_fn, &[LirType::Ptr], &val_ty);
         }
 
         // key_addr = &key. Handles scalar and aggregate keys uniformly
@@ -3120,15 +3125,59 @@ impl<'a> FuncLowering<'a> {
             ty: key_ty,
         });
 
-        // result_slot ← default. Used as the merge path for miss (and
-        // as the starting value for get_or_put's put side, which also
-        // needs default-by-address further below).
+        // default_addr = &default, as a BORROW. We need a pointer to the
+        // default to feed the by-value clone fns. `Inst::AddressOf` can't be
+        // used here: its lowering spills via `SlotStore(is_move=false)`, which
+        // for a String value is a `gorget_string_copy_cow` — a deep, OWNED copy
+        // that nothing drops → a leak. Instead spill with `is_move=true`, a
+        // SHALLOW byte-copy (an alias / borrow): no allocation, and the borrow
+        // slot is never drop-tracked, so it can't double-free. The clone fns
+        // read through this borrow and produce the independent owned copies.
+        // Only materialized for resource values (scalars never clone).
+        let default_addr = if val_clone_fn.is_some() {
+            let borrow_slot = self.lir_func.add_slot(val_ty.clone(), None);
+            self.push_inst(bb, Inst::SlotStore {
+                slot: borrow_slot,
+                value: default_arg,
+                is_move: true,
+            });
+            let addr = self.lir_func.next_value();
+            self.push_inst(bb, Inst::SlotAddr { dst: addr, slot: borrow_slot });
+            Some(addr)
+        } else {
+            None
+        };
+
+        // Small closure: store an owned (cloned-when-resource) copy of the
+        // default into result_slot at block `b`. For a resource value a bare
+        // copy aliases the caller's default heap → double-free at both drops,
+        // so deep-clone via the by-value resolver and MOVE the fresh clone in
+        // (a `is_move=false` String store would re-CoW and orphan-leak the
+        // clone). Scalars (val_clone_fn == None) keep the byte-for-byte copy.
         let result_slot = self.lir_func.add_slot(val_ty.clone(), None);
-        self.push_inst(bb, Inst::SlotStore {
-            slot: result_slot,
-            value: default_arg,
-            is_move: false,
-        });
+        let store_default_into_result = |this: &mut Self, b: BlockId| {
+            let (result_default, result_is_move) = if let Some(clone_fn) = &val_clone_fn {
+                let cloned = this.lir_func.next_value();
+                this.push_inst(b, Inst::CallExtern {
+                    dst: Some(cloned),
+                    name: clone_fn.clone(),
+                    args: vec![default_addr.expect("resource value has a borrow address")],
+                    arg_abis: vec![AbiKind::Ptr],
+                });
+                (cloned, true)
+            } else {
+                (default_arg, false)
+            };
+            this.push_inst(b, Inst::SlotStore {
+                slot: result_slot,
+                value: result_default,
+                is_move: result_is_move,
+            });
+        };
+        // result_slot is filled in the per-path blocks below (hit_bb with the
+        // map value, miss_bb with the default) — NOT pre-filled on the entry
+        // block. A pre-fill would clone the default eagerly and then orphan-leak
+        // that clone whenever the hit branch overwrites result_slot.
 
         // ptr = gorget_map_get(map, key_addr).
         let ptr = self.lir_func.next_value();
@@ -3152,11 +3201,11 @@ impl<'a> FuncLowering<'a> {
 
         let hit_bb = self.lir_func.add_block();
         let merge_bb = self.lir_func.add_block();
-        let miss_bb = if is_put {
-            self.lir_func.add_block()
-        } else {
-            merge_bb
-        };
+        // miss_bb is ALWAYS its own block (even read-only get_or): it stores the
+        // default-clone into result_slot, so the clone never executes on the hit
+        // path (which would orphan-leak it). get_or_put additionally inserts the
+        // default into the map there.
+        let miss_bb = self.lir_func.add_block();
 
         self.set_terminator(bb, Term::Branch {
             cond: is_present,
@@ -3166,47 +3215,93 @@ impl<'a> FuncLowering<'a> {
             else_args: vec![],
         });
 
-        // hit_bb: load (or clone-from) the map's value into result_slot.
+        // hit_bb: clone-from (resource) or load (scalar) the map's value into
+        // result_slot. The returned value must be an INDEPENDENT owned copy —
+        // a shallow Load would alias the map's storage, double-freeing against
+        // the map's val_drop. The map pointer `ptr` is the address of the
+        // element, fed straight to the by-value clone fn.
         let payload_val = self.lir_func.next_value();
-        if val_is_str {
+        let hit_is_move = if let Some(clone_fn) = &val_clone_fn {
             self.push_inst(hit_bb, Inst::CallExtern {
                 dst: Some(payload_val),
-                name: "gorget_string_clone_to_owned".to_string(),
+                name: clone_fn.clone(),
                 args: vec![ptr],
                 arg_abis: vec![AbiKind::Ptr],
             });
+            // Fresh by-value clone — move it in (see result-slot store above).
+            true
         } else {
             self.push_inst(hit_bb, Inst::Load {
                 dst: payload_val,
                 ptr,
                 ty: val_ty.clone(),
             });
-        }
+            false
+        };
         self.push_inst(hit_bb, Inst::SlotStore {
             slot: result_slot,
             value: payload_val,
-            is_move: false,
+            is_move: hit_is_move,
         });
         self.set_terminator(hit_bb, Term::Jump(merge_bb, vec![]));
 
-        // miss_bb (get_or_put only): insert default into map; fall
-        // through to merge. result_slot already holds default from
-        // the initial SlotStore, so nothing else is needed.
+        // miss_bb: fill result_slot with an owned copy of the default, and (for
+        // get_or_put) insert the default into the map; then jump to merge. The
+        // result_slot fill lives HERE — not pre-filled on the entry block — so
+        // the hit branch (which overwrites result_slot with the map value) never
+        // orphan-leaks a default clone. For get_or_put on a resource value the
+        // map must get its OWN clone too — inserting the caller's default bytes
+        // shallowly would alias the caller's heap (map's val_drop double-frees
+        // against the caller). Scalars insert the default bytes directly.
         if is_put {
-            let default_addr = self.lir_func.next_value();
-            self.push_inst(miss_bb, Inst::AddressOf {
-                dst: default_addr,
-                value: default_arg,
-                ty: val_ty.clone(),
-            });
+            let insert_addr = if let Some(clone_fn) = &val_clone_fn {
+                // Resource value: the map takes ownership of its OWN clone (a
+                // shallow `gorget_map_put` memcpy of the caller's default would
+                // make the map alias the caller's heap → its val_drop double-
+                // frees). Clone through the borrow address, then spill the fresh
+                // clone with a MOVE (shallow, no CoW re-copy) and hand its
+                // address to map_put — which memcpy-adopts it.
+                let map_clone = self.lir_func.next_value();
+                self.push_inst(miss_bb, Inst::CallExtern {
+                    dst: Some(map_clone),
+                    name: clone_fn.clone(),
+                    args: vec![default_addr.expect("resource value has a borrow address")],
+                    arg_abis: vec![AbiKind::Ptr],
+                });
+                let map_clone_slot = self.lir_func.add_slot(val_ty.clone(), None);
+                self.push_inst(miss_bb, Inst::SlotStore {
+                    slot: map_clone_slot,
+                    value: map_clone,
+                    is_move: true,
+                });
+                let map_clone_addr = self.lir_func.next_value();
+                self.push_inst(miss_bb, Inst::SlotAddr {
+                    dst: map_clone_addr,
+                    slot: map_clone_slot,
+                });
+                map_clone_addr
+            } else {
+                // Scalar value: insert the default's bytes directly (no clone).
+                let scalar_addr = self.lir_func.next_value();
+                self.push_inst(miss_bb, Inst::AddressOf {
+                    dst: scalar_addr,
+                    value: default_arg,
+                    ty: val_ty.clone(),
+                });
+                scalar_addr
+            };
             self.push_inst(miss_bb, Inst::CallExtern {
                     dst: None,
                     name: "gorget_map_put".to_string(),
-                    args: vec![map_arg, key_addr, default_addr],
+                    args: vec![map_arg, key_addr, insert_addr],
                     arg_abis: vec![AbiKind::Ptr, AbiKind::VoidElem, AbiKind::VoidElem],
                 });
-            self.set_terminator(miss_bb, Term::Jump(merge_bb, vec![]));
         }
+        // Fill result_slot with an owned copy of the default (independent of
+        // both the caller's default and, for get_or_put, the map's clone), then
+        // close the miss block. Runs for BOTH get_or and get_or_put.
+        store_default_into_result(self, miss_bb);
+        self.set_terminator(miss_bb, Term::Jump(merge_bb, vec![]));
 
         // merge_bb: result = SlotLoad(result_slot); store to dst.
         let result = self.lir_func.next_value();

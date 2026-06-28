@@ -1,0 +1,107 @@
+# Resource-valued Dict.get_or / get_or_put with an OWNED, live-past-call
+# default — the ownership-boundary clone matrix.
+#
+# Each get_or / get_or_put output (the returned value AND, for get_or_put on a
+# miss, the value stored in the map) must be an INDEPENDENT owned copy of the
+# default; the caller's borrowed default stays live and owned by the caller.
+# A shallow copy would make the result (or the map) alias the default's heap →
+# double-free at both drops. The defaults below are built with `+` (heap
+# concatenation, NOT a static literal, so the heap buffer actually exists) and
+# every default is read AFTER the call (live-past-call), so the bug — if the
+# clone were missing — fires under -fsanitize=address.
+#
+# Exercises Dict[String, V] for V ∈ { String, Vector[int], user-struct-owning-
+# a-String } × { get_or, get_or_put } × { hit, miss }.
+
+from std.collections import Dict, Vector
+
+struct Holder:
+    String name
+
+void main():
+    # ── Dict[String, String] ──────────────────────────────────
+    Dict[String, String] ds = Dict[String, String]()
+    ds.put("k", "inside" + "-str")
+
+    String sdef_a = "default" + "-str"
+    String s_get_hit = ds.get_or("k", sdef_a)            # hit  → map value clone
+    print(s_get_hit)
+    print(sdef_a)
+
+    String sdef_b = "missdef" + "-str"
+    String s_get_miss = ds.get_or("absent", sdef_b)      # miss → default clone
+    print(s_get_miss)
+    print(sdef_b)
+
+    String sdef_c = "putmiss" + "-str"
+    String s_put_miss = ds.get_or_put("newkey", sdef_c)  # miss → insert+return clones
+    print(s_put_miss)
+    print(sdef_c)
+    print(ds.get("newkey").unwrap())
+
+    String sdef_d = "putdef" + "-str"
+    String s_put_hit = ds.get_or_put("k", sdef_d)        # hit  → map value clone
+    print(s_put_hit)
+    print(sdef_d)
+
+    # ── Dict[String, Vector[int]] ─────────────────────────────
+    Dict[String, Vector[int]] dv = Dict[String, Vector[int]]()
+    Vector[int] inside = Vector[int]()
+    inside.push(10)
+    inside.push(20)
+    dv.put("k", inside)
+
+    Vector[int] vdef_a = Vector[int]()
+    vdef_a.push(1)
+    Vector[int] v_get_hit = dv.get_or("k", vdef_a)       # hit
+    print(f"{v_get_hit.get(0).unwrap()}")
+    print(f"{vdef_a.get(0).unwrap()}")
+
+    Vector[int] vdef_b = Vector[int]()
+    vdef_b.push(7)
+    Vector[int] v_get_miss = dv.get_or("absent", vdef_b) # miss
+    print(f"{v_get_miss.get(0).unwrap()}")
+    print(f"{vdef_b.get(0).unwrap()}")
+
+    Vector[int] vdef_c = Vector[int]()
+    vdef_c.push(33)
+    Vector[int] v_put_miss = dv.get_or_put("vk", vdef_c) # miss → insert+return
+    print(f"{v_put_miss.get(0).unwrap()}")
+    print(f"{vdef_c.get(0).unwrap()}")
+    print(f"{dv.get("vk").unwrap().get(0).unwrap()}")
+
+    Vector[int] vdef_d = Vector[int]()
+    vdef_d.push(99)
+    Vector[int] v_put_hit = dv.get_or_put("k", vdef_d)   # hit
+    print(f"{v_put_hit.get(0).unwrap()}")
+    print(f"{vdef_d.get(0).unwrap()}")
+
+    # ── Dict[String, Holder] (user struct owning a resource) ──
+    Dict[String, Holder] dh = Dict[String, Holder]()
+    String iname = "held" + "-inside"
+    dh.put("k", Holder(iname))
+
+    String hdef_a = "h" + "default-a"
+    Holder ha = Holder(hdef_a)
+    Holder h_get_hit = dh.get_or("k", ha)                # hit
+    print(h_get_hit.name)
+    print(ha.name)
+
+    String hdef_b = "h" + "default-b"
+    Holder hb = Holder(hdef_b)
+    Holder h_get_miss = dh.get_or("absent", hb)          # miss
+    print(h_get_miss.name)
+    print(hb.name)
+
+    String hdef_c = "h" + "default-c"
+    Holder hc = Holder(hdef_c)
+    Holder h_put_miss = dh.get_or_put("hk", hc)          # miss → insert+return
+    print(h_put_miss.name)
+    print(hc.name)
+    print(dh.get("hk").unwrap().name)
+
+    String hdef_d = "h" + "default-d"
+    Holder hd = Holder(hdef_d)
+    Holder h_put_hit = dh.get_or_put("k", hd)            # hit
+    print(h_put_hit.name)
+    print(hd.name)

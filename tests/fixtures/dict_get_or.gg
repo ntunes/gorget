@@ -1,0 +1,33 @@
+# Trivial (scalar) Dict.get_or / get_or_put green-guard.
+#
+# int (bool/float) values are NOT droppable, so the value-clone gate is skipped
+# entirely — these go through the byte-for-byte move-and-return-same path,
+# unchanged by the resource-clone fix. This fixture pins that: the int get_or
+# path was previously UNGUARDED (only dict_get_or_put.gg existed, and it
+# exercised only get_or_put).
+
+from std.collections import Dict
+
+void main():
+    Dict[String, int] d = Dict[String, int]()
+    d.put("a", 5)
+    int def1 = 7
+
+    # get_or hit → existing value
+    int v1 = d.get_or("a", def1)
+    print(f"{v1}")
+    # get_or miss → default (no insert)
+    int v2 = d.get_or("absent", def1)
+    print(f"{v2}")
+    print(f"{d.len()}")
+    print(f"{def1}")
+
+    # get_or_put hit → existing value, no insert
+    int v3 = d.get_or_put("a", 99)
+    print(f"{v3}")
+    print(f"{d["a"]}")
+    # get_or_put miss → insert default, return it
+    int v4 = d.get_or_put("c", 42)
+    print(f"{v4}")
+    print(f"{d["c"]}")
+    print(f"{d.len()}")

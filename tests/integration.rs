@@ -8291,6 +8291,69 @@ fn dict_get_or_put() {
     );
 }
 
+// Trivial (scalar) Dict.get_or / get_or_put green-guard. int values are not
+// droppable, so the resource-clone gate is skipped — these stay byte-for-byte
+// on the move-and-return-same path. Guards the previously-unguarded int get_or
+// (only get_or_put had a fixture). See `dict_get_or.gg`.
+#[test]
+fn dict_get_or() {
+    run_gg(
+        "dict_get_or.gg",
+        "\
+5
+7
+1
+7
+5
+5
+42
+42
+2",
+    );
+}
+
+// Resource-valued Dict.get_or / get_or_put with an OWNED, live-past-call
+// default — the ownership-boundary clone matrix. Each owned output (return
+// value + get_or_put map insert) is an INDEPENDENT deep clone of the default;
+// a shallow copy would double-free against the live default at end of scope.
+// Covers Dict[String, V] for V ∈ { String, Vector[int], user-struct-owning-a-
+// String } × { get_or, get_or_put } × { hit, miss }. The real teeth are under
+// the sanitizers (self_host_runtime + manual --sanitize); this pins stdout.
+#[test]
+fn dict_get_or_resource() {
+    run_gg(
+        "dict_get_or_resource.gg",
+        "\
+inside-str
+default-str
+missdef-str
+missdef-str
+putmiss-str
+putmiss-str
+putmiss-str
+inside-str
+putdef-str
+10
+1
+7
+7
+33
+33
+33
+10
+99
+held-inside
+hdefault-a
+hdefault-b
+hdefault-b
+hdefault-c
+hdefault-c
+hdefault-c
+held-inside
+hdefault-d",
+    );
+}
+
 #[test]
 fn set_operations() {
     run_gg(

@@ -714,7 +714,7 @@ impl<'a> FuncLowering<'a> {
     /// env behind the 16-byte handle, so a memcpy aliases the source env.
     /// `gorget_closure_clone_to_owned` produces a fresh-env handle. Without
     /// this branch, `Dict[K, Callable].get().unwrap()` double-frees the env.
-    fn resource_clone_fn_for_payload(&self, payload_ty: &LirType, consuming: bool) -> Option<String> {
+    pub(super) fn resource_clone_fn_for_payload(&self, payload_ty: &LirType, consuming: bool) -> Option<String> {
         if consuming { return None; }
         match payload_ty {
             LirType::Struct(sid) => {
