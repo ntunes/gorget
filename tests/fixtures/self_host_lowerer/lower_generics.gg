@@ -7,6 +7,7 @@
 # structs move with the cluster.
 from std.collections import Vector, Dict
 from std.conv import int_to_str, float_to_str
+from std.os import platform
 from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch, EquipBlock, StructDef, EnumDef, EnumVariant, Type, MatchArm, Pattern, SpannedPattern
 # PROTOTYPE slice #4: expr/stmt constructors used to substitute meta-for
 # loop-var bindings (string values) into the unrolled body.
@@ -724,7 +725,20 @@ String eval_meta_str_v2(SpannedExpr se, Dict[String, String] &tn_env, Dict[Strin
         case ECall(callee, args, _, _):
             match (*callee).expr:
                 case EIdentifier(fname):
-                    if fname == "enum_from_ordinal" and args.len() == 2:
+                    if fname == "platform" and args.len() == 0:
+                        # Compile-time platform string. Mirrors Rust
+                        # meta.rs:1015, which returns the HOST platform via
+                        # cfg!(target_os). The self-host compiler is a native
+                        # binary linked against the runtime, so calling the
+                        # `gorget_platform` extern at lowering time yields the
+                        # same host platform ("linux" on this build). Bind to a
+                        # String VarDecl first so the cstr->String coercion
+                        # fires (it only fires at an SVarDecl, not in return
+                        # position).
+                        String plat = platform()
+                        ok = true
+                        return plat
+                    elif fname == "enum_from_ordinal" and args.len() == 2:
                         String concrete = resolve_meta_tparam(args.get(0).unwrap(), &tn_env)
                         bool iok = false
                         int ord = eval_meta_int_v2(args.get(1).unwrap(), &tn_env, &int_env, &gmod, &iok)
@@ -1206,6 +1220,61 @@ bool eval_meta_field_names(SpannedExpr iter_e, Dict[String, String] &tn_env, Gir
         else:
             pass
     return false
+
+# Cheap recursive scan: does this statement list contain any "delayed meta"
+# statement (SMetaIf/SMetaFor/SMetaConst/SMetaForMatch/SMeta), reachable
+# directly or through a nested block? Mirrors Rust meta.rs:3268
+# block_has_delayed_meta / stmt_has_delayed_meta. Used to GATE the
+# evaluate_delayed_meta_stmts pass at the NON-generic lower_function call
+# site (lower.gg): only bodies that actually contain meta-stmts get the
+# splice pass, so the vast majority of non-meta fns are byte-unchanged.
+# The recursion shape MUST match evaluate_delayed_meta_stmts' splice shape
+# (SIf/SWhile/SFor/SLoop/SMatch) so the gate never misses a body the pass
+# would rewrite.
+bool block_has_delayed_meta(Vector[Stmt] stmts):
+    int i = 0
+    while i < stmts.len():
+        if stmt_has_delayed_meta(stmts.get(i).unwrap()):
+            return true
+        i += 1
+    return false
+
+bool stmt_has_delayed_meta(Stmt s):
+    match s:
+        case SMetaIf(_, _, _):
+            return true
+        case SMetaFor(_, _, _):
+            return true
+        case SMetaForMatch(_, _, _):
+            return true
+        case SMetaConst(_, _):
+            return true
+        case SMeta:
+            return true
+        case SIf(_, then_b, else_branches):
+            if block_has_delayed_meta(then_b):
+                return true
+            int ei = 0
+            while ei < else_branches.len():
+                if block_has_delayed_meta(else_branches.get(ei).unwrap().body):
+                    return true
+                ei += 1
+            return false
+        case SWhile(_, body, else_b):
+            return block_has_delayed_meta(body) or block_has_delayed_meta(else_b)
+        case SFor(_, _, body, _, else_b):
+            return block_has_delayed_meta(body) or block_has_delayed_meta(else_b)
+        case SLoop(body):
+            return block_has_delayed_meta(body)
+        case SMatch(_, arms):
+            int ai = 0
+            while ai < arms.len():
+                if block_has_delayed_meta(arms.get(ai).unwrap().body):
+                    return true
+                ai += 1
+            return false
+        else:
+            return false
 
 # Walk a statement list, evaluating each SMetaIf against the env and
 # splicing the winning branch. Recurses into nested blocks AND into the
