@@ -617,7 +617,10 @@ String eval_meta_builtin_str(SpannedExpr se, Dict[String, String] &tn_env, bool 
         case ECall(callee, args, _, _):
             match (*callee).expr:
                 case EIdentifier(fname):
-                    if fname == "typename" and args.len() == 1:
+                    # `typeof` is identical to `typename` in Rust (meta.rs:2836
+                    # vs :2800 — both return type_to_canonical_name of the
+                    # resolved type param). Accept both spellings here.
+                    if (fname == "typename" or fname == "typeof") and args.len() == 1:
                         match args.get(0).unwrap().expr:
                             case EIdentifier(tparam):
                                 if tn_env.contains(tparam):
@@ -673,6 +676,57 @@ int eval_meta_int_v2(SpannedExpr se, Dict[String, String] &tn_env, Dict[String, 
                             if fname == "bitwidth":
                                 return byts * 8
                             return byts
+                    elif fname == "min_val" and args.len() == 1:
+                        # Integer-type lower bound. Mirrors Rust meta.rs:2867:
+                        # signed -> type min, unsigned -> 0. Unknown/non-int
+                        # type leaves ok=false (construct stays inert).
+                        String concrete = resolve_meta_tparam(args.get(0).unwrap(), &tn_env)
+                        if concrete == "int8":
+                            ok = true
+                            return 0 - 128
+                        elif concrete == "int16":
+                            ok = true
+                            return 0 - 32768
+                        elif concrete == "int32":
+                            ok = true
+                            return 0 - 2147483648
+                        elif concrete == "int" or concrete == "int64":
+                            # i64::MIN; written as -(i64::MAX) - 1 because the
+                            # bare magnitude 9223372036854775808 overflows a
+                            # positive i64 literal and fails to parse.
+                            ok = true
+                            return -9223372036854775807 - 1
+                        elif concrete == "uint8" or concrete == "uint16" or concrete == "uint32" or concrete == "uint64" or concrete == "uint":
+                            ok = true
+                            return 0
+                    elif fname == "max_val" and args.len() == 1:
+                        # Integer-type upper bound. Mirrors Rust meta.rs:2886.
+                        # uint/uint64 saturate at i64::MAX (same as Rust).
+                        String concrete = resolve_meta_tparam(args.get(0).unwrap(), &tn_env)
+                        if concrete == "int8":
+                            ok = true
+                            return 127
+                        elif concrete == "int16":
+                            ok = true
+                            return 32767
+                        elif concrete == "int32":
+                            ok = true
+                            return 2147483647
+                        elif concrete == "int" or concrete == "int64":
+                            ok = true
+                            return 9223372036854775807
+                        elif concrete == "uint8":
+                            ok = true
+                            return 255
+                        elif concrete == "uint16":
+                            ok = true
+                            return 65535
+                        elif concrete == "uint32":
+                            ok = true
+                            return 4294967295
+                        elif concrete == "uint" or concrete == "uint64":
+                            ok = true
+                            return 9223372036854775807
                     elif fname == "variant_count" and args.len() == 1:
                         String concrete = resolve_meta_tparam(args.get(0).unwrap(), &tn_env)
                         if concrete != "" and gmod.enum_registry.contains(concrete):
@@ -774,6 +828,34 @@ String eval_meta_str_v2(SpannedExpr se, Dict[String, String] &tn_env, Dict[Strin
         else:
             pass
     return ""
+
+# Compare two meta expressions for value-equality, for `meta match` arm
+# selection. Tries int-eval on both (sizeof/bitwidth/min_val/max_val/literal/
+# int-const); if both are ints, compares them. Otherwise tries string-eval on
+# both (typeof/typename/enum_from_ordinal/string literal) and compares. Sets
+# ok=false if neither side pair is evaluable (caller leaves the arm unmatched).
+# Mirrors Rust meta_values_eq (meta.rs:2737) over two eval_delayed_expr results.
+bool meta_value_eq_v2(SpannedExpr a, SpannedExpr b, Dict[String, String] &tn_env, Dict[String, int] &int_env, GirModule &gmod, bool &ok):
+    ok = false
+    bool ai = false
+    bool bi = false
+    int av = eval_meta_int_v2(a, &tn_env, &int_env, &gmod, &ai)
+    int bv = eval_meta_int_v2(b, &tn_env, &int_env, &gmod, &bi)
+    if ai and bi:
+        ok = true
+        return av == bv
+    bool as_ = false
+    bool bs = false
+    String asv = eval_meta_builtin_str(a, &tn_env, &as_)
+    if not as_:
+        asv = eval_meta_str_v2(a, &tn_env, &int_env, &gmod, &as_)
+    String bsv = eval_meta_builtin_str(b, &tn_env, &bs)
+    if not bs:
+        bsv = eval_meta_str_v2(b, &tn_env, &int_env, &gmod, &bs)
+    if as_ and bs:
+        ok = true
+        return asv == bsv
+    return false
 
 # Evaluate a `meta if`/`meta elif` condition against the concrete env.
 # Sets ok=false if the condition is not in the supported prototype subset
@@ -1255,6 +1337,10 @@ bool stmt_has_delayed_meta(Stmt s):
             return true
         case SMetaConst(_, _):
             return true
+        case SMetaMatch(_, _, _):
+            return true
+        case SMetaWhile(_, _):
+            return true
         case SMeta:
             return true
         case SIf(_, then_b, else_branches):
@@ -1490,6 +1576,51 @@ Vector[Stmt] evaluate_delayed_meta_stmts(Vector[Stmt] stmts, Dict[String, String
                     # T): leave inert (Rust drops it too). The later lower_stmt
                     # SMetaFor arm is a no-op.
                     pass
+            case SMetaMatch(mm_scrut, mm_arms, mm_else):
+                # PROTOTYPE (deep-meta): evaluate the scrutinee, find the first
+                # case whose value is meta-equal, splice that arm's (recursively
+                # evaluated) body. If none match, splice the else body. If the
+                # scrutinee is unevaluable, leave inert (drop) — matching Rust
+                # evaluate_delayed_meta_block's MetaMatch arm (meta.rs:3510).
+                bool taken = false
+                int ai = 0
+                while ai < mm_arms.len() and not taken:
+                    MetaMatchArm arm = mm_arms.get(ai).unwrap()
+                    bool eqok = false
+                    bool eq = meta_value_eq_v2(mm_scrut, arm.case_value, &tn_env, &int_env, &gmod, &eqok)
+                    if eqok and eq:
+                        Vector[Stmt] sp = evaluate_delayed_meta_stmts(arm.body, &tn_env, &int_env, &gmod)
+                        int sj = 0
+                        while sj < sp.len():
+                            out.push(sp.get(sj).unwrap())
+                            sj += 1
+                        taken = true
+                    ai += 1
+                if not taken and mm_else.len() > 0:
+                    Vector[Stmt] sp = evaluate_delayed_meta_stmts(mm_else, &tn_env, &int_env, &gmod)
+                    int sj = 0
+                    while sj < sp.len():
+                        out.push(sp.get(sj).unwrap())
+                        sj += 1
+            case SMetaWhile(mw_cond, mw_body):
+                # PROTOTYPE (deep-meta): unroll the loop, splicing the
+                # (recursively evaluated) body each time the condition holds.
+                # Capped at 100000 iterations to match Rust's MAX_META_ITERATIONS
+                # (meta.rs:3548). If the condition is unevaluable, leave inert.
+                int iter_count = 0
+                bool keep = true
+                while keep and iter_count < 100000:
+                    bool cok = false
+                    bool cv = eval_delayed_meta_cond(mw_cond, &tn_env, &int_env, &gmod, &cok)
+                    if cok and cv:
+                        Vector[Stmt] sp = evaluate_delayed_meta_stmts(mw_body, &tn_env, &int_env, &gmod)
+                        int sj = 0
+                        while sj < sp.len():
+                            out.push(sp.get(sj).unwrap())
+                            sj += 1
+                        iter_count += 1
+                    else:
+                        keep = false
             case SIf(cond, then_b, else_branches):
                 Vector[ElseBranch] nb = Vector[ElseBranch]()
                 int ei = 0

@@ -627,6 +627,10 @@ String stmt_kind(Stmt s):
             return "SMatch"
         case SMetaForMatch(_, _, _):
             return "SMetaForMatch"
+        case SMetaMatch(_, _, _):
+            return "SMetaMatch"
+        case SMetaWhile(_, _):
+            return "SMetaWhile"
         case SWith(_, _, _):
             return "SWith"
         case SAssert(_, _):

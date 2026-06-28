@@ -440,6 +440,15 @@ bool stmt_mentions_iter(Stmt s):
                     return true
                 i += 1
             return false
+        case SMetaMatch(mm_scrut, mm_arms, mm_else):
+            int mi = 0
+            while mi < mm_arms.len():
+                if block_mentions_iter(mm_arms.get(mi).unwrap().body):
+                    return true
+                mi += 1
+            return block_mentions_iter(mm_else)
+        case SMetaWhile(mw_cond, mw_body):
+            return block_mentions_iter(mw_body)
         else:
             return false
 
@@ -804,6 +813,10 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                                 case SMetaFor(_, _, _):
                                     has_real_body = true
                                 case SMetaIf(_, _, _):
+                                    has_real_body = true
+                                case SMetaMatch(_, _, _):
+                                    has_real_body = true
+                                case SMetaWhile(_, _):
                                     has_real_body = true
                                 case SExpr(sexpr):
                                     # Accept SExpr if it's a call (not a string literal

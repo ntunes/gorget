@@ -915,6 +915,16 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             # time. A residual here = non-generic context (no concrete T) or
             # an unevaluable condition; drop (Rust also leaves it inert).
             pass
+        case SMetaMatch(_, _, _):
+            # `meta match` — compile-time value match. Expanded by the
+            # delayed-meta engine at lower_generic_function time; any residual
+            # here is non-generic / unevaluable, so drop (inert, like SMetaIf).
+            pass
+        case SMetaWhile(_, _):
+            # `meta while` — compile-time loop. Expanded by the delayed-meta
+            # engine at lower_generic_function time; any residual here is
+            # non-generic / unevaluable, so drop (inert, like SMetaIf).
+            pass
         case SMatch(scrutinee, arms):
             # Real SMatch lowering — delegates to lower_match_stmt for
             # the per-arm ctor / binding / guard scaffolding. Payload

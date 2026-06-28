@@ -381,6 +381,10 @@ String format_stmt(Stmt s):
             return "meta"
         case SMetaIf(meta_cond, then_body, branches):
             return "meta"
+        case SMetaMatch(_, _, _):
+            return "meta"
+        case SMetaWhile(_, _):
+            return "meta"
         case SFor(pat, iter, body, own, _):
             return f"for {format_pattern(pat)} in {format_expr(iter)}:{format_block(body)}"
         case SWhile(cond, body, _):

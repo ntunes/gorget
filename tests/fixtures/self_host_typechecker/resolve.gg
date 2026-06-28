@@ -627,6 +627,25 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
                 resolve_block(branch.body, &scopes, &types, &ctx)
                 scopes.pop_scope()
 
+        case SMetaMatch(mm_scrut, mm_arms, mm_else):
+            # Resolve each case-arm body + the else body in a fresh block
+            # scope so references inside resolve (the meta engine picks one
+            # arm per-mono at lowering; here every arm is name-resolved).
+            for mm_arm in mm_arms:
+                scopes.push_scope(SkBlock())
+                resolve_block(mm_arm.body, &scopes, &types, &ctx)
+                scopes.pop_scope()
+            scopes.push_scope(SkBlock())
+            resolve_block(mm_else, &scopes, &types, &ctx)
+            scopes.pop_scope()
+
+        case SMetaWhile(mw_cond, mw_body):
+            # Resolve the loop body in a fresh block scope (unrolled per-mono
+            # at lowering; here the body is name-resolved once).
+            scopes.push_scope(SkBlock())
+            resolve_block(mw_body, &scopes, &types, &ctx)
+            scopes.pop_scope()
+
         case SItem(item):
             collect_item(item, &scopes, &types)
             resolve_item_body(item, &scopes, &types, &ctx)
@@ -1057,6 +1076,20 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
                 scopes.push_scope(SkBlock())
                 resolve_block_expr(branch.body, &scopes, &ctx)
                 scopes.pop_scope()
+
+        case SMetaMatch(mm_scrut, mm_arms, mm_else):
+            for mm_arm in mm_arms:
+                scopes.push_scope(SkBlock())
+                resolve_block_expr(mm_arm.body, &scopes, &ctx)
+                scopes.pop_scope()
+            scopes.push_scope(SkBlock())
+            resolve_block_expr(mm_else, &scopes, &ctx)
+            scopes.pop_scope()
+
+        case SMetaWhile(mw_cond, mw_body):
+            scopes.push_scope(SkBlock())
+            resolve_block_expr(mw_body, &scopes, &ctx)
+            scopes.pop_scope()
 
         else:
             pass

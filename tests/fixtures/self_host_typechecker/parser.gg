@@ -3108,6 +3108,52 @@ equip Parser:
                 SpannedExpr mc_val = self.parse_expr()
                 self.skip_newlines()
                 return SMetaConst(mc_name, mc_val)
+            elif self.check_kw(KW_MATCH):
+                # meta match <expr>: case <val>: body ... [else: body]
+                # PROTOTYPE (deep-meta): capture the scrutinee + case arms
+                # (value expr + body) + else body so the delayed-meta engine
+                # can pick the matching arm per-mono. Mirrors Rust
+                # parse_meta_match_stmt (stmt.rs:929). Previously discarded as
+                # bare SMeta() at parse via skip_meta_rest.
+                self.advance()
+                SpannedExpr mm_scrut = self.parse_expr()
+                self.expect_tok(TOK_COLON, "expected ':' after meta match scrutinee")
+                self.expect_tok(TOK_NEWLINE, "expected newline after meta match ':'")
+                self.expect_tok(TOK_INDENT, "expected indent in meta match body")
+                Vector[MetaMatchArm] mm_arms = Vector[MetaMatchArm]()
+                Vector[Stmt] mm_else = Vector[Stmt]()
+                while not self.check_tok(TOK_DEDENT) and not self.at_end():
+                    self.skip_trivia()
+                    if self.check_tok(TOK_DEDENT):
+                        break
+                    if self.check_kw(KW_ELSE):
+                        self.advance()
+                        self.expect_tok(TOK_COLON, "expected ':' after meta match else")
+                        mm_else = self.parse_block()
+                    elif self.check_kw(KW_CASE):
+                        self.advance()
+                        SpannedExpr mm_cv = self.parse_expr()
+                        self.expect_tok(TOK_COLON, "expected ':' after meta match case value")
+                        Vector[Stmt] mm_body = self.parse_block()
+                        mm_arms.push(MetaMatchArm(mm_cv, mm_body))
+                    else:
+                        # Defensive: unrecognised token inside a meta-match
+                        # body. Advance to avoid an infinite loop.
+                        self.advance()
+                self.match_tok(TOK_DEDENT)
+                return SMetaMatch(mm_scrut, mm_arms, mm_else)
+            elif self.check_kw(KW_WHILE):
+                # meta while <cond>: body
+                # PROTOTYPE (deep-meta): capture the condition + body so the
+                # delayed-meta engine can unroll the loop per-mono. Mirrors
+                # Rust parse_meta_while_stmt (stmt.rs:985). Previously
+                # discarded as bare SMeta() at parse via skip_meta_rest.
+                self.advance()
+                SpannedExpr mw_cond = self.parse_expr()
+                self.expect_tok(TOK_COLON, "expected ':' after meta while condition")
+                self.expect_tok(TOK_NEWLINE, "expected newline after meta while ':'")
+                Vector[Stmt] mw_body = self.parse_block()
+                return SMetaWhile(mw_cond, mw_body)
             else:
                 self.skip_meta_rest()
                 return SMeta()

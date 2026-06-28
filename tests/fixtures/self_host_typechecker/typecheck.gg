@@ -1456,6 +1456,14 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
             for eb in else_branches:
                 type_check_stmts(eb.body, scope_id, &scopes, &types, &ctx)
 
+        case SMetaMatch(mm_scrut, mm_arms, mm_else):
+            for mm_arm in mm_arms:
+                type_check_stmts(mm_arm.body, scope_id, &scopes, &types, &ctx)
+            type_check_stmts(mm_else, scope_id, &scopes, &types, &ctx)
+
+        case SMetaWhile(mw_cond, mw_body):
+            type_check_stmts(mw_body, scope_id, &scopes, &types, &ctx)
+
         else:
             pass
 
