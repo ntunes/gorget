@@ -2285,6 +2285,12 @@ int runtime_fn_return_type(String name, LirModule &m):
         return LT_PTR
     if name == "gorget_array_contains" or name == "gorget_map_contains" or name == "gorget_set_contains":
         return LT_BOOL
+    # `gorget_set_remove(s, k)` returns bool (whether the element was present);
+    # mirrors Rust runtime.rs:452 SetRemove → T::Bool. Without this the result
+    # slot defaults to I64 and the dst-store shape is wrong (the set-predicate
+    # sibling of the `gorget_set_contains` bool arm above).
+    if name == "gorget_set_remove":
+        return LT_BOOL
     if name == "gorget_array_is_empty" or name == "gorget_map_is_empty":
         return LT_BOOL
     if name == "gorget_array_any" or name == "gorget_array_all":
@@ -2397,7 +2403,13 @@ bool is_void_runtime_fn(String name):
     # nothing, so suppress the dst assignment.
     if name == "gorget_map_iter_key" or name == "gorget_map_iter_value":
         return true
-    if name == "gorget_set_add" or name == "gorget_set_remove":
+    # `gorget_set_add` is void (Rust runtime.rs:442 SetAdd → T::Void), but
+    # `gorget_set_remove` returns BOOL (whether the element was present —
+    # Rust runtime.rs:452 SetRemove → T::Bool). Listing remove here suppressed
+    # the dst assignment, so `bool r = s.remove(x)` read an UNINITIALIZED slot
+    # (formatted as garbage `true`/`false`). Its return type is in
+    # `runtime_fn_return_type` (→ LT_BOOL) so the assignment emits correctly.
+    if name == "gorget_set_add":
         return true
     if name == "gorget_set_clear" or name == "gorget_set_free":
         return true

@@ -725,6 +725,15 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                                     Vector[int] dict_opt_args = Vector[int]()
                                     dict_opt_args.push(get_int_at(type_args, 1))
                                     return types.add_type(RTGeneric(dict_option_def, dict_opt_args))
+                            # Set/HashSet.remove(k) → bool (runtime
+                            # `gorget_set_remove` returns whether the element was
+                            # present). Mirrors Rust gg builtins.rs:459 (Set.remove
+                            # → ret_bool; HashSet shares SET.methods). Without this
+                            # the result slot defaults to I64 and a
+                            # `print(f"{s.remove(x)}")` prints 1/0 instead of
+                            # true/false (the int-instead-of-bool symptom).
+                            if method_name == "remove" and (d.name == "Set" or d.name == "HashSet"):
+                                return types.bool_id
                         else:
                             pass
             return NO_TYPE
