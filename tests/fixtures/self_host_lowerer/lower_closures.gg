@@ -615,6 +615,21 @@ int guess_return_type(SpannedExpr sexpr, GirModule &gmod, int expected_type):
             return UNIT_TYPE
         case ECall(callee_box, args, _, targs):
             match (*callee_box).expr:
+                case ENoneLiteral():
+                    # `None()` with parens parses as ECall(callee=ENoneLiteral)
+                    # — the callee is ENoneLiteral, NOT EIdentifier("None"), so
+                    # the `fname == "None"` arm below never fires for it. A
+                    # `None()` closure tail in an Option-expected context
+                    # (`and_then((x): None())` / `or_else((): None())`) must
+                    # yield the expected Option type. Mirrors Rust gg
+                    # `infer_closure_return_type` (closures.rs:1082-1090): read
+                    # `expected_type`, return it when its enum_category is
+                    # Option, else fall to I64_TYPE.
+                    if expected_type >= 0:
+                        EnumCategory nc_ec = enum_category_of(&gmod, expected_type)
+                        if nc_ec.category == ENUM_CAT_OPTION:
+                            return expected_type
+                    return I64_TYPE
                 case EIdentifier(fname):
                     if fname == "print" or fname == "pass":
                         return UNIT_TYPE

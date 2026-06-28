@@ -1,0 +1,28 @@
+--- map + unwrap_or ---
+20
+0
+--- filter + map + unwrap_or ---
+105
+-1
+--- and_then + unwrap_or ---
+30
+0
+--- or + unwrap_or ---
+99
+50
+--- long chain ---
+25
+-1
+30
+21
+--- conditional ---
+has value
+is none
+mapped is some
+mapped none is none
+--- and_then chain ---
+20
+0
+20
+-1
+done
