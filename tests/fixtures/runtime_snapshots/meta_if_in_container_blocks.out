@@ -1,0 +1,7 @@
+with/int: kept
+with/scratch len: 1
+with/other: kept
+with/scratch len: 1
+scope/bool: kept
+scope/other: kept
+done

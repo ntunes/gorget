@@ -1,0 +1,37 @@
+from std.alloc import Arena
+from std.collections import Vector
+
+# Exercises statement-level `meta if` nested inside container statements
+# (`with`, `named scope`). The delayed-meta evaluation pass must recurse into
+# these container bodies, splice the comptime-true branch, and DROP the
+# comptime-false branch — otherwise the whole meta-if (and the kept-branch
+# statement) is silently dropped (a self-host parity gap vs Rust gg).
+#
+# Each `meta if` here is comptime-decidable: `typename(T)` resolves at
+# monomorphization to the concrete type-arg name, so exactly the matching arm
+# survives. The kept branch prints a tag; if recursion did NOT fire the pass
+# would leave the meta-if inert and NOTHING would print from inside the block.
+
+void report_in_with[T]():
+    with Arena(4096) as pool:
+        Vector[int] scratch = Vector[int]()
+        scratch.push(1)
+        meta if typename(T) == "int":
+            print("with/int: kept")
+        else:
+            print("with/other: kept")
+        print(f"with/scratch len: {scratch.len()}")
+
+void report_in_named_scope[T]():
+    outer:
+        meta if typename(T) == "bool":
+            print("scope/bool: kept")
+        else:
+            print("scope/other: kept")
+
+void main():
+    report_in_with[int]()
+    report_in_with[String]()
+    report_in_named_scope[bool]()
+    report_in_named_scope[int]()
+    print("done")

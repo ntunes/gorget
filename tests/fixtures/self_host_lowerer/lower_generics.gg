@@ -13,6 +13,7 @@ from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, Spann
 # loop-var bindings (string values) into the unrolled body.
 from ast import EIdentifier, EStringLiteral, EFString, EIntLiteral, EBinaryOp, EUnaryOp, ECall, EMethodCall, EFieldAccess, EIndex, EArrayLiteral, EIs
 from ast import SExpr, SReturn, SVarDecl, SAssign, SCompoundAssign, SIf, SWhile, SFor, SLoop, SMatch, Span
+from ast import SWith, SNamedScope, SSelect, SelectArm
 from ast import PBinding, PConstructor
 from meta import meta_typename, meta_type_byte_size
 from scope import ScopeTable, DefInfo
@@ -1229,8 +1230,13 @@ bool eval_meta_field_names(SpannedExpr iter_e, Dict[String, String] &tn_env, Gir
 # site (lower.gg): only bodies that actually contain meta-stmts get the
 # splice pass, so the vast majority of non-meta fns are byte-unchanged.
 # The recursion shape MUST match evaluate_delayed_meta_stmts' splice shape
-# (SIf/SWhile/SFor/SLoop/SMatch) so the gate never misses a body the pass
-# would rewrite.
+# (SIf/SWhile/SFor/SLoop/SMatch/SWith/SNamedScope/SSelect) so the gate never
+# misses a body the pass would rewrite. NOTE: SOnError is intentionally NOT
+# recursed here — Rust's pass recurse_delayed_meta_in_stmt (meta.rs:3656)
+# likewise omits it (its OnError body is cloned into on_error_blocks at
+# lower time, AFTER the delayed-meta pass runs), so a `meta if` inside an
+# `on error` block is dropped by BOTH compilers; recursing here would
+# diverge from the Rust oracle. (Shared latent gap, tracked separately.)
 bool block_has_delayed_meta(Vector[Stmt] stmts):
     int i = 0
     while i < stmts.len():
@@ -1272,6 +1278,17 @@ bool stmt_has_delayed_meta(Stmt s):
                 if block_has_delayed_meta(arms.get(ai).unwrap().body):
                     return true
                 ai += 1
+            return false
+        case SWith(_, _, with_body):
+            return block_has_delayed_meta(with_body)
+        case SNamedScope(_, ns_body):
+            return block_has_delayed_meta(ns_body)
+        case SSelect(sel_arms):
+            int sai = 0
+            while sai < sel_arms.len():
+                if block_has_delayed_meta(sel_arms.get(sai).unwrap().body):
+                    return true
+                sai += 1
             return false
         else:
             return false
@@ -1495,6 +1512,25 @@ Vector[Stmt] evaluate_delayed_meta_stmts(Vector[Stmt] stmts, Dict[String, String
                     na.push(MatchArm(a.pattern, a.guard, evaluate_delayed_meta_stmts(a.body, &tn_env, &int_env, &gmod)))
                     ai += 1
                 out.push(SMatch(scrut, na))
+            case SWith(with_res, with_name, with_body):
+                # Recurse into the `with` block body. Mirrors Rust
+                # recurse_delayed_meta_in_stmt's Stmt::With arm (meta.rs:3694).
+                out.push(SWith(with_res, with_name, evaluate_delayed_meta_stmts(with_body, &tn_env, &int_env, &gmod)))
+            case SNamedScope(ns_name, ns_body):
+                # Recurse into the named-scope body. Mirrors Rust's
+                # Stmt::NamedScope arm (meta.rs:3678).
+                out.push(SNamedScope(ns_name, evaluate_delayed_meta_stmts(ns_body, &tn_env, &int_env, &gmod)))
+            case SSelect(sel_arms):
+                # Recurse into each select arm body. Mirrors Rust's
+                # Stmt::Select arm (meta.rs:3697). Self-host SSelect has no
+                # else arm (the Rust `else_arm` field is absent here).
+                Vector[SelectArm] nsa = Vector[SelectArm]()
+                int sai = 0
+                while sai < sel_arms.len():
+                    SelectArm sa = sel_arms.get(sai).unwrap()
+                    nsa.push(SelectArm(sa.op, evaluate_delayed_meta_stmts(sa.body, &tn_env, &int_env, &gmod)))
+                    sai += 1
+                out.push(SSelect(nsa))
             else:
                 out.push(s)
         i += 1
