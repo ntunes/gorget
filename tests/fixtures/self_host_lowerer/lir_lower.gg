@@ -1506,15 +1506,16 @@ String map_runtime_name(String name, LirModule &m, GirModule &gmod):
         # get_or". RECORD a wrapper REQUEST here, reading K/V from the TYPED
         # coll_key/val_type_map (no name parse), so emit_dict_get_or_wrappers
         # never re-derives meaning from the mangled Dict/HashMap symbol prefix.
-        if method == "get_or":
+        if method == "get_or" or method == "get_or_put":
             String dgor_key = coll_key_type_for_name(name, &m)
             String dgor_val = coll_val_type_for_name(name, &m)
+            bool dgor_is_put = method == "get_or_put"
             bool dgor_seen = false
             for dgor_r in m.dict_get_or_requests:
                 if dgor_r.mangled_name == name:
                     dgor_seen = true
             if not dgor_seen:
-                m.dict_get_or_requests.push(DictGetOrReq(name.clone(), dgor_key.clone(), dgor_val.clone()))
+                m.dict_get_or_requests.push(DictGetOrReq(name.clone(), dgor_key.clone(), dgor_val.clone(), dgor_is_put))
             return name
         return map_dict_method(method)
     if coll_cat == "GorgetSet":
@@ -2299,6 +2300,16 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
         if fn_name == "gorget_array_binary_search":
             return true
         if fn_name == "gorget_map_get" or fn_name == "gorget_map_len":
+            return true
+        # `Dict__K__V__get_or_put(GorgetMap* __m, K __k, V __d)` — the mutating
+        # get-or-put inline wrapper. Self (arg 0) is the map BY POINTER so the
+        # miss-side `gorget_map_put` persists into the CALLER's map (the map is
+        # a by-value struct of pointers + count; a put on a stack copy is lost
+        # and UAFs after a rehash). The read-only `get_or` variant passes the
+        # map by value, so this row is `__get_or_put`-specific. The flag is on
+        # the TYPED DictGetOrReq.is_put at the request site; the mangled-name
+        # test here is the C-emit ABI boundary (the symbol IS the contract).
+        if fn_name.ends_with("__get_or_put"):
             return true
         if fn_name == "gorget_map_contains" or fn_name == "gorget_map_is_empty":
             return true

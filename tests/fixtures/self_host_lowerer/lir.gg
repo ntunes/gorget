@@ -402,6 +402,11 @@ struct DictGetOrReq:
     String mangled_name
     String key_c
     String val_c
+    # is_put distinguishes `get_or` (read-only, map BY VALUE) from
+    # `get_or_put` (mutating, map BY POINTER — the miss-side insert must
+    # persist into the caller's map). TYPED metadata; downstream reads this
+    # flag, never a `__get_or_put` suffix test.
+    bool is_put
 
 # A `b.get()` / `b.set(v)` inline-wrapper REQUEST. The Box analogue of
 # DictGetOrReq: a TYPED monomorphization-request recorded at the CLASSIFIED

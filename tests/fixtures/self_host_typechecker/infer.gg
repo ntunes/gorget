@@ -617,7 +617,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             # Ref — the inline wrapper clones String values / copies scalars).
             # Without this arm the result slot defaults to I64 and a String-valued
             # get_or assigns a `Str` into an `int64_t` slot (cc type error).
-            if method_name == "get_or":
+            if method_name == "get_or" or method_name == "get_or_put":
                 int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, &ctx)
                 if obj_type >= 0 and obj_type < types.types.len():
                     ResolvedType ort = get_rtype_at(types.types, obj_type)

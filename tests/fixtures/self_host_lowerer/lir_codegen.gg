@@ -904,6 +904,18 @@ String dict_get_or_wrapper_for(DictGetOrReq req):
         hit = "gorget_string_clone_to_owned(__p)"
     else:
         hit = "*(" + vty + "*)__p"
+    # get_or_put (mutating): the map is passed BY POINTER (`GorgetMap* __m`,
+    # matching needs_ptr_arg's `__get_or_put` ABI row) so the miss-side
+    # `gorget_map_put` persists into the CALLER's map. On a miss insert the
+    # default then return it; on a hit return the slot value (clone for
+    # strings). `__m` is already a pointer, so probe `gorget_map_get(__m, ...)`
+    # and put `gorget_map_put(__m, ...)` directly — no `&__m`. Mirrors Rust
+    # try_emit_dict_get_or's is_put branch (src/lir/lower/insts.rs:3093-3209).
+    if req.is_put:
+        String put_out = "static inline " + vty + " " + req.mangled_name + "(GorgetMap* __m, " + kty + " __k, " + vty + " __d) { void* __p = (void*)gorget_map_get(__m, &__k); if (__p == NULL) { gorget_map_put(__m, &__k, &__d); return __d; } return " + hit + "; }\n"
+        return put_out
+    # get_or (read-only): map passed BY VALUE (`GorgetMap __m`), probe with
+    # `&__m`. Miss returns default without mutating.
     String out = "static inline " + vty + " " + req.mangled_name + "(GorgetMap __m, " + kty + " __k, " + vty + " __d) { void* __p = (void*)gorget_map_get(&__m, &__k); if (__p == NULL) return __d; return " + hit + "; }\n"
     return out
 
