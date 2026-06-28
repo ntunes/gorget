@@ -1986,9 +1986,60 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
         return lookup_or_register_named(&gmod, "Vector__GorgetString")
     if method == "bytes":
         return lookup_or_register_named(&gmod, "Vector__uint8_t")
-    if method == "sorted" or method == "reversed" or method == "unique":
+    # `sorted`/`reversed`/`unique`/`sorted_by`/`sorted_by_key`/`enumerate` are
+    # ELEMENT-PRESERVING eager array methods — they return a NEW array with the
+    # receiver's OWN element type. Mirror Rust gg (`builtins.rs` `return_type:
+    # ret_self` for each, and `typecheck.rs:5665` `"sorted" | "sorted_by" |
+    # "sorted_by_key" | "reversed" | "unique" | "slice" | "enumerate" =>
+    # Some(receiver_type)`): return the RECEIVER's own element-CARRYING type id,
+    # NOT the element-erased bare `GorgetArray`. SIBLING of the `slice`/`substr`
+    # receiver-aware arm above and the `split`/`lines`/`chars` → `Vector__<T>`
+    # arm: the erased bare `GorgetArray` drops the element type, so a chained
+    # `.filter`/`.map` after `v.sorted()` fails the `CkVector` HOF-intercept gate
+    # (`try_lower_vector_hof`, which needs `collection_element_type` to recover
+    # the element) → the chained HOF lowers as a generic int-returning
+    # `GorgetArray__filter`, and the C-emit errors `incompatible types when
+    # assigning to type 'GorgetArray' from type 'int'`. Classify the receiver via
+    # the TYPED `resource_meta_for`/`collection_kind` metadata (CkVector /
+    # CkDeque), not a name prefix — array-backed receivers return their own type;
+    # String / user-type receivers fall through to the bare GorgetArray.
+    #
+    # NOTE `take`/`skip` are deliberately ABSENT: they are iterator-adapter
+    # methods (lib/std/iter.gg `TakeIter`/`SkipIter` on `*Iter` receivers), NOT
+    # eager array methods, so they have no element-carrying array receiver to
+    # preserve and are left on the bare-GorgetArray fall-through here.
+    if method == "sorted" or method == "reversed" or method == "unique" or method == "sorted_by" or method == "sorted_by_key" or method == "enumerate":
+        int sorted_recv_t = -1
+        if recv >= 0 and recv < ctx.locals.len():
+            sorted_recv_t = ctx.locals.get(recv).unwrap().type_id
+            if sorted_recv_t >= 0 and sorted_recv_t < gmod.type_table.len():
+                GirType sorted_gt0 = gmod.type_table.get(sorted_recv_t).unwrap()
+                match sorted_gt0:
+                    case GtPtr(sorted_inner):
+                        sorted_recv_t = sorted_inner
+                    case GtMutPtr(sorted_inner2):
+                        sorted_recv_t = sorted_inner2
+                    else:
+                        pass
+        if sorted_recv_t >= 0 and sorted_recv_t < gmod.type_table.len():
+            GirType sorted_gt = gmod.type_table.get(sorted_recv_t).unwrap()
+            match sorted_gt:
+                case GtNamed(sorted_n):
+                    match resource_meta_for(&gmod, sorted_n):
+                        case Some(sorted_rmeta):
+                            match sorted_rmeta.collection_kind:
+                                case CkVector():
+                                    return sorted_recv_t
+                                case CkDeque():
+                                    return sorted_recv_t
+                                else:
+                                    pass
+                        case None:
+                            pass
+                else:
+                    pass
         return lookup_or_register_named(&gmod, "GorgetArray")
-    if method == "enumerate" or method == "take" or method == "skip":
+    if method == "take" or method == "skip":
         return lookup_or_register_named(&gmod, "GorgetArray")
     if method == "items":
         # `Dict[K,V].items()` returns `Vector[(K, V)]`. The self-host

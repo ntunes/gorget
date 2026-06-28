@@ -1,0 +1,16 @@
+hello,world,hi,gorget,test
+HELLO,WORLD,HI,GORGET,TEST
+short: hi
+long: Hello,WORLD,gorget,TEST
+fold: HelloWORLDhigorgetTEST
+csv: Hello,WORLD,hi,gorget,TEST
+any all-upper: true
+all nonempty: true
+any empty: false
+all short: false
+chain: HELLO,WORLD,GORGET,TEST
+sorted long: Hello,TEST,WORLD,gorget
+[Hello],[WORLD],[hi],[gorget],[TEST]
+longest: gorget
+total long chars: 20
+hello,world,foo
