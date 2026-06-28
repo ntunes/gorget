@@ -7997,6 +7997,18 @@ String emit_lir_helpers(LirModule &m):
     # (no static-runtime symbol) and must precede the set ops that call it.
     if cn_has_eq(&n, "gorget_set_union") or cn_has_eq(&n, "gorget_set_intersection") or cn_has_eq(&n, "gorget_set_difference") or cn_has_eq(&n, "gorget_set_symmetric_difference"):
         sb_push(&buf, "static inline GorgetSet gorget_set_new_like(const GorgetSet* __src) { GorgetSet __dst = __src->order ? gorget_dict_new(__src->key_size, 0) : gorget_map_new(__src->key_size, 0); __dst.hash_fn = __src->hash_fn; __dst.eq_fn = __src->eq_fn; __dst.key_drop = __src->key_drop; __dst.key_clone = __src->key_clone; __dst.key_materialize = __src->key_materialize; return __dst; }\n")
+    # `gorget_map_new_like(&src)` — the k/v mirror of `gorget_set_new_like`,
+    # used by the Dict-HOF `filter` intercept (lower_expr.gg) to build a result
+    # map shaped EXACTLY like the receiver. Reads `__src->order` at RUNTIME to
+    # pick the ordered (`gorget_dict_new`) vs unordered (`gorget_map_new`) ctor
+    # — so NO compile-time name-prefix classification is needed — and copies
+    # both the KEY and the VALUE size + hash/eq/drop/clone/materialize fn-ptrs
+    # (the set variant only copies the key story; a Dict result must preserve
+    # `val_size`/`val_drop`/`val_clone`/`val_materialize` so resource values
+    # round-trip and drop correctly). Mirrors Rust gg's `gorget_map_new_like`
+    # (src/lir/runtime.rs:427 / src/bir/lower.rs:3096).
+    if cn_has_eq(&n, "gorget_map_new_like"):
+        sb_push(&buf, "static inline GorgetMap gorget_map_new_like(const GorgetMap* __src) { GorgetMap __dst = __src->order ? gorget_dict_new(__src->key_size, __src->val_size) : gorget_map_new(__src->key_size, __src->val_size); __dst.hash_fn = __src->hash_fn; __dst.eq_fn = __src->eq_fn; __dst.key_drop = __src->key_drop; __dst.key_clone = __src->key_clone; __dst.key_materialize = __src->key_materialize; __dst.val_drop = __src->val_drop; __dst.val_clone = __src->val_clone; __dst.val_materialize = __src->val_materialize; return __dst; }\n")
     if cn_has_eq(&n, "gorget_set_union"):
         sb_push(&buf, "static inline GorgetSet gorget_set_union(void* __self_ptr, GorgetSet __other) { GorgetSet* __self = (GorgetSet*)__self_ptr; GorgetSet __result = gorget_set_new_like(__self); if (__self->order) { for (size_t __j = 0; __j < __self->order_len; __j++) { size_t __i = __self->order[__j]; if (__self->states[__i] != 1) continue; gorget_map_put_cloned(&__result, (char*)__self->keys + __i * __self->key_size, NULL); } } else { for (size_t __i = 0; __i < __self->cap; __i++) { if (__self->states[__i] != 1) continue; gorget_map_put_cloned(&__result, (char*)__self->keys + __i * __self->key_size, NULL); } } if (__other.order) { for (size_t __j = 0; __j < __other.order_len; __j++) { size_t __i = __other.order[__j]; if (__other.states[__i] != 1) continue; gorget_map_put_cloned(&__result, (char*)__other.keys + __i * __other.key_size, NULL); } } else { for (size_t __i = 0; __i < __other.cap; __i++) { if (__other.states[__i] != 1) continue; gorget_map_put_cloned(&__result, (char*)__other.keys + __i * __other.key_size, NULL); } } return __result; }\n")
     if cn_has_eq(&n, "gorget_set_intersection"):

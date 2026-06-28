@@ -2320,6 +2320,12 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
             return true
         if fn_name == "gorget_map_clone":
             return true
+        # `gorget_map_new_like(const GorgetMap* src)` — the Dict-HOF `filter`
+        # result ctor (lower_expr.gg). Reads the receiver map by const pointer
+        # (same ABI as gorget_map_clone) to copy its order/size/fn-ptr config.
+        # Without this the by-value map is passed and cc rejects argument 1.
+        if fn_name == "gorget_map_new_like":
+            return true
         if fn_name == "gorget_set_contains" or fn_name == "gorget_set_len":
             return true
         if fn_name == "gorget_set_clone" or fn_name == "gorget_set_is_empty":

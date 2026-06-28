@@ -4738,6 +4738,66 @@ int try_lower_dict_hof(LowerCtx &ctx, int recv, String recv_type_name, String mn
         String key_param = cparams.get(1).unwrap()
         String val_param = cparams.get(2).unwrap()
         return lower_dict_fold(&ctx, recv, recv_type_name, margs.get(0).unwrap(), acc_param, key_param, val_param, cbody, span, &gmod)
+    # ── filter: build a NEW Dict/HashMap of the same K/V via an accumulator ──
+    # `d.filter((k, v): pred)` → `acc = {}; for k, v in d: if pred: acc[k] = v`.
+    # The k/v mirror of the Set-HOF filter arm (`try_lower_set_hof`): a fresh
+    # map shaped EXACTLY like the receiver, an `if pred: acc[k] = v` body routed
+    # through `lower_for_dict` (binds OWNED per-iteration k/v copies). The
+    # `acc[k] = v` index-assign routes through `lower_index_assign` →
+    # `gorget_map_put` (the NO-CLONE owning mutator), so the still-live
+    # per-iteration k/v are clone-at-boundary'd by that path. Mirrors Rust gg's
+    # `try_emit_dict_hof` ("filter" => DictFilter, src/lir/lower/insts.rs),
+    # which builds the result via `gorget_map_new_like` — result = a fresh Dict
+    # of the receiver's K/V.
+    if mname == "filter":
+        if margs.len() != 1:
+            return -1
+        Vector[String] cparams = []
+        SpannedExpr cbody = sexpr
+        if not closure_extract(margs.get(0).unwrap(), &cparams, &cbody):
+            return -1
+        if cparams.len() != 2:
+            return -1
+        String key_param = cparams.get(0).unwrap()
+        String val_param = cparams.get(1).unwrap()
+        # Result accumulator: a fresh map shaped like the RECEIVER via the
+        # runtime `gorget_map_new_like(&recv)` helper (the k/v mirror of the
+        # set ops' `gorget_set_new_like`, emitted in lir_codegen.gg). It reads
+        # `__src->order` at RUNTIME to pick `gorget_dict_new` (ordered) vs
+        # `gorget_map_new` (unordered) and copies the receiver's key/value
+        # size + hash/eq/drop/clone fn-ptrs — so the ordered-ness and the
+        # resource-value drop wiring are preserved with NO compile-time
+        # name-prefix classification (CLAUDE.md rule #2: ordered-ness is NOT
+        # carried in the typed CollectionKind for maps — both Dict and HashMap
+        # are CkDict — so the only honest source is the receiver's own runtime
+        # `order` field). Mirrors Rust gg's `try_emit_dict_hof` DictFilter
+        # ctor. The accumulator LOCAL is typed the receiver's own (value-
+        # carrying) type id, so a CHAINED HOF / downstream `acc[k]` read
+        # re-resolves K/V from the name, exactly like the receiver.
+        int df_acc_tid = ctx.locals.get(recv).unwrap().type_id
+        int df_acc = add_local(&ctx, df_acc_tid, None)
+        Vector[Operand] df_ctor_args = [OpBorrow(recv)]
+        emit(&ctx, GICallExtern(df_acc, "gorget_map_new_like", df_ctor_args))
+        # Register at birth (Core invariant #3 — no leak).
+        register_local_for_drop(&ctx, df_acc, df_acc_tid, &gmod)
+        String df_acc_name = "__dict_hof_acc_" + int_to_str(df_acc)
+        nl_put(&ctx, df_acc_name, df_acc)
+        # Body: `if <closure body>: acc[k] = v`. The index-assign routes
+        # through `lower_index_assign` → `gorget_map_put` (clone-at-boundary
+        # for the still-live per-iteration k/v).
+        SpannedExpr df_acc_ref = SpannedExpr(EIdentifier(df_acc_name), span)
+        SpannedExpr df_key_ref = SpannedExpr(EIdentifier(key_param), span)
+        SpannedExpr df_val_ref = SpannedExpr(EIdentifier(val_param), span)
+        SpannedExpr df_index = SpannedExpr(EIndex(Box(df_acc_ref), Box(df_key_ref)), span)
+        Vector[Stmt] df_then = [SAssign(df_index, df_val_ref)]
+        Vector[ElseBranch] df_no_elifs = []
+        Vector[Stmt] df_body = [SIf(cbody.clone(), df_then, df_no_elifs)]
+        SpannedPattern df_k_pat = SpannedPattern(PBinding(key_param), span)
+        SpannedPattern df_v_pat = SpannedPattern(PBinding(val_param), span)
+        Vector[SpannedPattern] df_kv_parts = [df_k_pat, df_v_pat]
+        SpannedPattern df_kv_pat = SpannedPattern(PTuple(df_kv_parts), span)
+        lower_for_dict(&ctx, df_kv_pat, recv, recv_type_name, df_body, &gmod, false)
+        return df_acc
     return -1
 
 # `d.fold(init, (acc, k, v): body)` →
