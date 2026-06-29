@@ -8,7 +8,7 @@
 
 from lir import LirModule, LirFunction, LirBlock, LirInst, LirTerm, LirSlot
 from lir import SlotProvenance
-from lir import LirStructDef, LirExtern, LirGlobal, LirGlobalField, LirSpawnedFn, LirTestFn, LirBenchFn, LirThreadSpawnedFn, DictGetOrReq, BoxWrapperReq
+from lir import LirStructDef, LirExtern, LirGlobal, LirGlobalField, LirSpawnedFn, SpawnParam, CloneParam, LirTestFn, LirBenchFn, LirThreadSpawnedFn, DictGetOrReq, BoxWrapperReq
 from lir import StructField, BlockParam, SwitchCase, FieldDrop, EnumVariantDrop, TypeDropInfo, FieldInit
 from lir import LT_I8, LT_I16, LT_I32, LT_I64, LT_U8, LT_U16, LT_U32, LT_U64
 from lir import LT_F32, LT_F64, LT_BOOL, LT_PTR, LT_VOID
@@ -1168,6 +1168,18 @@ Vector[bool] compute_reachable_fns(LirModule &m):
                 worklist.push(tf)
             tf += 1
 
+    # Async-spawn roots (Inc-1): a `spawn fn(args)` target is called only
+    # from the emitted `__spawn_run_<fn>` wrapper TEXT (not in the LIR call
+    # graph), so DCE would strip it and the run helper would link-fail. Seed
+    # each spawned fn as a reachability root. Sibling of the thread-spawn seed.
+    for spawn_root in m.spawned_fns:
+        int spf = 0
+        while spf < n:
+            if m.functions.get(spf).unwrap().name == spawn_root.fn_name and not reachable.get(spf).unwrap():
+                reachable.set(spf, true)
+                worklist.push(spf)
+            spf += 1
+
     # Hashable-key roots: Dict[UserStruct, V] / Set[UserStruct] uses a
     # runtime hash-bucket bridge (`__gorget_ktable_hash__T(void*)` /
     # `__gorget_ktable_eq__T`) that calls `T__hash` / `T__eq` via fn
@@ -1969,6 +1981,121 @@ String emit_thread_helpers(LirModule &m):
         else:
             out = out + "    pthread_create(&__ctx->_thr, NULL, __gorget_thread_entry_" + fn_name + ", __ctx);\n"
         out = out + "    return __ctx;\n}\n"
+        out = out + "\n"
+
+    return out
+
+# Async spawn/await helpers (Inc-1: int+void returns, scalar by-value
+# params). Port of Rust gg's per-fn loop in `emit_types.rs:395-504`. Emits
+# the FIVE per-fn helpers (the `Task__<ret_c>` typedef is NOT emitted here —
+# it comes from emit_mono_typedefs once the ESpawn arm registers the
+# `Task__<ret_c>` named type, matching the helper symbols):
+#   • `__SpawnCtx_<fn>` ctx struct (GorgetTask base + `__p<i>` param fields +
+#     `result` for non-void),
+#   • `__spawn_run_<fn>` (scheduler entry: call the fn with `__ctx->__p<i>`,
+#     store `__ctx->result`),
+#   • `__spawn_drop_<fn>` (REQUIRED — referenced by the spawn fn's `.__drop`;
+#     omitting it is an undefined-symbol cc-fail),
+#   • `__gorget_spawn_<fn>` (CALLOC ctx, init mutex/cond, copy scalar params
+#     by value, SUBMIT, return the Task struct wired to `__spawn_drop_<fn>`),
+#   • `__gorget_await_<fn>` (extract ctx, WAIT, read result, destroy+free,
+#     return).
+# Gated empty on no spawned fns; deduped per fn_name. The runtime
+# (GorgetTask / scheduler macros) is already linked when spawned_fns>0.
+String emit_spawn_helpers(LirModule &m):
+    if m.spawned_fns.len() == 0:
+        return ""
+    String out = "\n/* ── async spawn/await helpers ── */\n"
+    Vector[String] emitted_spawn_fns = []
+    for sf in m.spawned_fns:
+        String fn_name = sf.fn_name
+        # Dedup per fn_name (the same fn spawned twice emits one helper set).
+        bool sf_already = false
+        for esf in emitted_spawn_fns:
+            if esf == fn_name:
+                sf_already = true
+        if sf_already:
+            continue
+        emitted_spawn_fns.push(fn_name.clone())
+        String safe_fn_name = c_func_name(fn_name)
+        String ret_c = sf.ret_c_type
+        bool is_void = ret_c == "void"
+        String ctx_name = "__SpawnCtx_" + fn_name
+        String task_type_name = "Task__void"
+        if not is_void:
+            task_type_name = "Task__" + ret_c
+
+        # Context struct: GorgetTask base + per-param fields (+ result).
+        out = out + "typedef struct " + ctx_name + " {\n"
+        out = out + "    GorgetTask base;\n"
+        for sp in sf.params:
+            out = out + "    " + sp.c_type_name + " __" + sp.name + ";\n"
+        if not is_void:
+            out = out + "    " + ret_c + " result;\n"
+        out = out + "} " + ctx_name + ";\n"
+
+        # Run function — scheduler worker entry.
+        out = out + "static void __spawn_run_" + fn_name + "(GorgetTask* __base) {\n"
+        out = out + "    " + ctx_name + "* __ctx = (" + ctx_name + "*)__base;\n"
+        String run_call_args = ""
+        int rpi = 0
+        while rpi < sf.params.len():
+            SpawnParam rsp = sf.params.get(rpi).unwrap()
+            if rpi > 0:
+                run_call_args = run_call_args + ", "
+            run_call_args = run_call_args + "__ctx->__" + rsp.name
+            rpi += 1
+        if is_void:
+            out = out + "    " + safe_fn_name + "(" + run_call_args + ");\n"
+        else:
+            out = out + "    __ctx->result = " + safe_fn_name + "(" + run_call_args + ");\n"
+        out = out + "}\n"
+
+        # Drop helper — referenced by the spawn fn's `.__drop` (MUST emit).
+        out = out + "static void __spawn_drop_" + fn_name + "(void* __ptr) {\n"
+        out = out + "    " + ctx_name + "* __ctx = (" + ctx_name + "*)__ptr;\n"
+        out = out + "    GORGET_SCHEDULER_WAIT(&__ctx->base);\n"
+        out = out + "    pthread_mutex_destroy(&__ctx->base.mtx);\n"
+        out = out + "    pthread_cond_destroy(&__ctx->base.cond);\n"
+        out = out + "    GORGET_FREE(__ctx, sizeof(" + ctx_name + "));\n"
+        out = out + "}\n"
+
+        # Spawn function — returns the Task struct.
+        String spawn_param_decls = ""
+        int spi = 0
+        while spi < sf.params.len():
+            SpawnParam ssp = sf.params.get(spi).unwrap()
+            if spi > 0:
+                spawn_param_decls = spawn_param_decls + ", "
+            spawn_param_decls = spawn_param_decls + ssp.c_type_name + " " + ssp.name
+            spi += 1
+        out = out + "static inline " + task_type_name + " __gorget_spawn_" + fn_name + "(" + spawn_param_decls + ") {\n"
+        out = out + "    " + ctx_name + "* __ctx = (" + ctx_name + "*)GORGET_CALLOC(1, sizeof(" + ctx_name + "));\n"
+        out = out + "    __ctx->base.run = __spawn_run_" + fn_name + ";\n"
+        out = out + "    pthread_mutex_init(&__ctx->base.mtx, NULL);\n"
+        out = out + "    pthread_cond_init(&__ctx->base.cond, NULL);\n"
+        for csp in sf.params:
+            # Inc-1: scalar by-value copy (no clone — clone_params is empty).
+            out = out + "    __ctx->__" + csp.name + " = " + csp.name + ";\n"
+        out = out + "    GORGET_SCHEDULER_SUBMIT(&__ctx->base);\n"
+        out = out + "    return (" + task_type_name + "){.__task = __ctx, .__drop = __spawn_drop_" + fn_name + "};\n"
+        out = out + "}\n"
+
+        # Await function — takes the Task by value, joins, returns the result.
+        if is_void:
+            out = out + "static inline void __gorget_await_" + fn_name + "(" + task_type_name + " task) {\n"
+        else:
+            out = out + "static inline " + ret_c + " __gorget_await_" + fn_name + "(" + task_type_name + " task) {\n"
+        out = out + "    " + ctx_name + "* __ctx = (" + ctx_name + "*)task.__task;\n"
+        out = out + "    GORGET_SCHEDULER_WAIT(&__ctx->base);\n"
+        if not is_void:
+            out = out + "    " + ret_c + " result = __ctx->result;\n"
+        out = out + "    pthread_mutex_destroy(&__ctx->base.mtx);\n"
+        out = out + "    pthread_cond_destroy(&__ctx->base.cond);\n"
+        out = out + "    GORGET_FREE(__ctx, sizeof(" + ctx_name + "));\n"
+        if not is_void:
+            out = out + "    return result;\n"
+        out = out + "}\n"
         out = out + "\n"
 
     return out
@@ -7249,6 +7376,11 @@ String generate_c(LirModule &m):
     # reference already-forward-declared functions. Mirrors Rust gg's
     # deferred-global emission in `src/backend/c_lir/mod.rs:857-864`.
     out = out + emit_deferred_globals(&m, &sn)
+
+    # Async spawn/await helpers (Inc-1). Emitted BEFORE thread helpers to
+    # match Rust gg's section order (spawn helpers precede thread helpers,
+    # which precede adapters — `src/backend/c_lir/mod.rs:882`).
+    out = out + emit_spawn_helpers(&m)
 
     # Thread[T] spawn/join wrappers. Emitted BEFORE adapter functions to
     # match Rust gg's section order (`src/backend/c_lir/mod.rs:882` — thread

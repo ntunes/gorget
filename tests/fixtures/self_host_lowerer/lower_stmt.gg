@@ -464,6 +464,17 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     emit(&ctx, GIAssign(var_local, op_consume(&ctx, &gmod, val, CkAssign())))
                     nl_put(&ctx, name, var_local)
                     register_local_for_drop(&ctx, var_local, var_type, &gmod)
+                    # Async spawn (Inc-1): `Task[T] t = spawn f()` mints a
+                    # FRESH binding local for `t` here, distinct from the spawn
+                    # dst. `t.await()` reads THIS local, so the spawn→producer
+                    # mapping must key off `var_local`, NOT the dst. The ESpawn
+                    # arm set `pending_spawn_fn`; consume it into
+                    # `result_locals[var_local]` (and clear it). A `Task[T]` is
+                    # a non-resource ptr/int handle, so it routes through this
+                    # MoveDirect arm. Mirrors Rust gg (`stmts/mod.rs:502-505`).
+                    if ctx.pending_spawn_fn != "":
+                        ctx.result_locals.put(var_local, ctx.pending_spawn_fn.clone())
+                        ctx.pending_spawn_fn = ""
                     # ② closure ENV-FIELD leak fix — a resource/CoW-capturing
                     # closure value (`GorgetClosure`, fresh-Owned resource) lands
                     # in MoveDirect, which mints a FRESH `var_local` != the make-

@@ -8,7 +8,7 @@ from std.conv import int_to_str, float_to_str
 from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch, EquipBlock, StructDef, EnumDef, EnumVariant, Type, MatchArm, Pattern, SpannedPattern, Span
 from scope import ScopeTable, DefInfo
 from types import TypeTable, ResolvedType
-from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Terminator, Operand, GirType, GirExtern, GirTypeInfo, GirFieldInfo, GirEnumVariantInfo, LiftedClosure, ClosureCapture, ResourceMetadata, CollectionKind, ConsumeKind, ThreadSpawnRec
+from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Terminator, Operand, GirType, GirExtern, GirTypeInfo, GirFieldInfo, GirEnumVariantInfo, LiftedClosure, ClosureCapture, ResourceMetadata, CollectionKind, ConsumeKind, ThreadSpawnRec, SpawnFnRec
 from gir import BOOL_TYPE, I8_TYPE, I16_TYPE, I32_TYPE, I64_TYPE, U8_TYPE, U16_TYPE, U32_TYPE, U64_TYPE, F32_TYPE, F64_TYPE, UNIT_TYPE, PRIM_COUNT
 from gir import CAP_BY_VALUE, CAP_BY_MUT_REF
 from gir import init_type_table, register_type, lookup_or_register_named, register_ptr
@@ -479,6 +479,101 @@ Option[String] box_deref_inner_name(String base_type_name, GirModule &gmod):
                     return None
         case None:
             return None
+
+# Lower a NAMED-function async spawn `spawn f(args)` (Inc-1: int+void
+# returns, scalar by-value params). Mirrors Rust gg's named-fn spawn path
+# (`src/ir/lowering/exprs/mod.rs:1388-1405`):
+#   • register the producer fn (push a deduped SpawnFnRec carrying the C
+#     return type + per-param C type names) so the GIR→LIR copy builds the
+#     LirSpawnedFn that emit_spawn_helpers consumes;
+#   • set `ctx.pending_spawn_fn` (the SVarDecl that binds this spawn result
+#     deposits it into `result_locals[var_local]` — the load-bearing keying);
+#   • register `task_type_fns[Task__<ret_c>]` (deduped) for the type-based
+#     await fallback;
+#   • register the `Task__<ret_c>` named type (the SAME ret_c string the
+#     helpers spell) so emit_mono_typedefs emits a matching typedef;
+#   • lower the args (scalar by-value) and emit `__gorget_spawn_<fn>(args)`
+#     into a Task-typed dst.
+# Returns -1 (sentinel) when the spawn is OUT of Inc-1 scope — the caller
+# then falls back to the bare passthrough (which keeps the pre-Inc-1
+# WRONG-output behavior, NOT a regression to a fresh cc-fail). Inc-1 scope =
+# producer returns `int`/scalar or `void` AND every param is scalar
+# (by-value). A String/Vector/aggregate return or ANY non-scalar param rolls
+# to Inc-2.
+int lower_named_fn_spawn(LowerCtx &ctx, String spawn_fn_name, Vector[SpannedExpr] spawn_args, GirModule &gmod):
+    # Producer return type. Prefer the REAL GIR-function return type (fn_sigs
+    # mis-records a String/collection return as I64_TYPE in the pre-scan, so it
+    # cannot distinguish a String return from an int one) — fall back to
+    # fn_sigs only when the callee is not yet in gmod.functions (forward ref).
+    int spawn_ret_ty = I64_TYPE
+    bool spawn_ret_found = false
+    int spfi = 0
+    while spfi < gmod.functions.len():
+        if gmod.functions.get(spfi).unwrap().name == spawn_fn_name:
+            spawn_ret_ty = gmod.functions.get(spfi).unwrap().return_type
+            spawn_ret_found = true
+            spfi = gmod.functions.len()
+        else:
+            spfi += 1
+    if not spawn_ret_found and gmod.fn_sigs.contains(spawn_fn_name):
+        spawn_ret_ty = gmod.fn_sigs.get(spawn_fn_name).unwrap()
+    # Inc-1 scope gate (return): unit OR scalar (< PRIM_COUNT). A named return
+    # type (String/Vector/struct, >= PRIM_COUNT) is Inc-2.
+    if spawn_ret_ty != UNIT_TYPE and spawn_ret_ty >= PRIM_COUNT:
+        return -1
+    String spawn_ret_c = "void"
+    if spawn_ret_ty != UNIT_TYPE:
+        spawn_ret_c = type_id_to_name(spawn_ret_ty, &gmod)
+    String spawn_task_name = "Task__" + spawn_ret_c
+    # Per-param C type names (Inc-1: scalar by-value). The GIR→LIR copy mints
+    # parallel `p0`/`p1`/… names for the SpawnParam list. Inc-1 scope gate
+    # (params): every param must be scalar (< PRIM_COUNT). A String/Vector/
+    # aggregate param needs the collection/Str C-emit branch → Inc-2.
+    Vector[String] spawn_param_ctys = []
+    Vector[int] spawn_param_tys = get_fn_param_types(spawn_fn_name, &gmod)
+    int sppi = 0
+    while sppi < spawn_param_tys.len():
+        int sp_pty = spawn_param_tys.get(sppi).unwrap()
+        if sp_pty >= PRIM_COUNT:
+            return -1
+        spawn_param_ctys.push(type_id_to_name(sp_pty, &gmod))
+        sppi += 1
+    # Register the spawn fn (dedup by fn_name — a fn spawned twice emits one
+    # helper set).
+    bool spawn_already = false
+    for sfr in gmod.spawned_fns:
+        if sfr.fn_name == spawn_fn_name:
+            spawn_already = true
+    if not spawn_already:
+        gmod.spawned_fns.push(SpawnFnRec(spawn_fn_name.clone(), spawn_ret_c.clone(), !spawn_param_ctys))
+    # Deposit marker — the binding SVarDecl consumes it into result_locals.
+    ctx.pending_spawn_fn = spawn_fn_name.clone()
+    # Register the Task type → producer fn (deduped: N spawns of the SAME fn
+    # collapse to len 1; two DISTINCT producers of the same Task type stay
+    # len 2 so the await type-fallback's len()==1 gate correctly doesn't fire).
+    Vector[String] spawn_ttf = []
+    if ctx.task_type_fns.contains(spawn_task_name):
+        spawn_ttf = ctx.task_type_fns.get(spawn_task_name).unwrap()
+    bool spawn_ttf_has = false
+    for ttf_fn in spawn_ttf:
+        if ttf_fn == spawn_fn_name:
+            spawn_ttf_has = true
+    if not spawn_ttf_has:
+        spawn_ttf.push(spawn_fn_name.clone())
+    ctx.task_type_fns.put(spawn_task_name, !spawn_ttf)
+    # Register the Task named type (the SAME ret_c string the helpers spell)
+    # so emit_mono_typedefs emits a typedef whose name matches the helper
+    # symbols. Mirrors the thread arm's `lookup_or_register_named(&gmod,
+    # "Thread__" + ts_ret_c)`.
+    int spawn_task_ty = lookup_or_register_named(&gmod, spawn_task_name)
+    # Lower the spawn-call args (scalar by-value in Inc-1) and emit the call.
+    Vector[Operand] spawn_call_args = []
+    for spawn_arg in spawn_args:
+        int spawn_arg_local = lower_expr(&ctx, spawn_arg, &gmod)
+        spawn_call_args.push(op_consume(&ctx, &gmod, spawn_arg_local, CkCallArgBorrow()))
+    int spawn_dst = add_local(&ctx, spawn_task_ty, None)
+    emit(&ctx, GICall(spawn_dst, "__gorget_spawn_" + spawn_fn_name, spawn_call_args))
+    return spawn_dst
 
 int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
     # Consume the one-shot suppress flag for THIS expression.
@@ -4033,7 +4128,55 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             switch_to(&ctx, merge_bb)
             return isdst
         case EAwait(inner_box):
-            return lower_expr(&ctx, *inner_box, &gmod)
+            # Async await (Inc-1). Lower the inner expr (the awaited Task
+            # local), resolve the producer fn, and dispatch through the
+            # monomorphic `__gorget_await_<fn>` helper. Mirrors Rust gg
+            # (`src/ir/lowering/exprs/mod.rs:1036-1108`).
+            int aw_inner = lower_expr(&ctx, *inner_box, &gmod)
+            # Resolution order: (1) DIRECT — the awaited local is a Task
+            # BINDING local registered at its SVarDecl (the path all 3 Inc-1
+            # fixtures use); (2) TYPE-based fallback when exactly one producer
+            # exists for the Task's type (the `len()==1` gate). Two fns
+            # producing the same Task[int] (coroutine_dict_set/option_result)
+            # correctly DON'T fire the fallback — the direct path resolves them.
+            String aw_fn = ""
+            if aw_inner >= 0 and aw_inner < ctx.locals.len():
+                if ctx.result_locals.contains(aw_inner):
+                    aw_fn = ctx.result_locals.get(aw_inner).unwrap()
+                else:
+                    int aw_task_ty = ctx.locals.get(aw_inner).unwrap().type_id
+                    String aw_task_name = type_id_to_name(aw_task_ty, &gmod)
+                    if ctx.task_type_fns.contains(aw_task_name):
+                        Vector[String] aw_fns = ctx.task_type_fns.get(aw_task_name).unwrap()
+                        if aw_fns.len() == 1:
+                            aw_fn = aw_fns.get(0).unwrap()
+            if aw_fn == "":
+                # Not a tracked Task (e.g. a non-async passthrough) — preserve
+                # the old bare-passthrough behavior.
+                return aw_inner
+            # Producer return type → `void`-await (no result) or value-await.
+            int aw_ret_ty = UNIT_TYPE
+            if gmod.fn_sigs.contains(aw_fn):
+                aw_ret_ty = gmod.fn_sigs.get(aw_fn).unwrap()
+            String aw_call = "__gorget_await_" + aw_fn
+            Vector[Operand] aw_args = [op_consume(&ctx, &gmod, aw_inner, CkCallArgBorrow())]
+            int aw_dst = 0
+            if aw_ret_ty == UNIT_TYPE:
+                aw_dst = add_local(&ctx, UNIT_TYPE, None)
+                emit(&ctx, GICall(-1, aw_call, aw_args))
+                emit(&ctx, GIAssign(aw_dst, OpConstUnit()))
+            else:
+                aw_dst = add_local(&ctx, aw_ret_ty, None)
+                emit(&ctx, GICall(aw_dst, aw_call, aw_args))
+            # Defensive move-zero of the awaited Task binding local: the join +
+            # free happens inside `__gorget_await_<fn>`, and `drop_fn_for_type`
+            # returns "" for a Task runtime type (so there is no scope-exit drop
+            # entry today). `mark_local_moved` no-ops cleanly when the local has
+            # no drop entry — this is parity/forward-safety, not load-bearing for
+            # the Inc-1 flip. Mirrors Rust's `move_zero_and_mark`
+            # (`exprs/mod.rs:1075-1078`).
+            mark_local_moved(&ctx, aw_inner)
+            return aw_dst
         case ESpawn(inner_box):
             # closure Phase 2 Step A: inline-spawn `spawn ((): body)(args)`.
             # The ECall make-site arm only handles EIdentifier/EFieldAccess
@@ -4042,9 +4185,11 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # `__spawn_wrap___Closure_N` stub (the exact stub the old scan
             # pushed), record a LiftedClosure (so the post-pass pushes its
             # `__Closure_N__call`), lower the args (so capturing-closure args
-            # aren't silently dropped), and return a value local. Else fall
-            # back to the bare passthrough. (Real spawn/await wiring is out of
-            # scope — fn-count parity is the gate.)
+            # aren't silently dropped), and return a value local. A NAMED-fn
+            # callee (`spawn f(args)`) routes through `lower_named_fn_spawn`
+            # (Inc-1: int+void returns, scalar by-value params — real
+            # spawn/await wiring). Any other shape falls back to the bare
+            # passthrough.
             match (*inner_box).expr:
                 case ECall(spawn_callee_box, spawn_args, _, _):
                     match (*spawn_callee_box).expr:
@@ -4074,6 +4219,28 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             int sp_dst = add_local(&ctx, UNIT_TYPE, None)
                             emit(&ctx, GIAssign(sp_dst, OpConstUnit()))
                             return sp_dst
+                        case EIdentifier(spawn_named_fn):
+                            # `spawn ident(args)`: the identifier is EITHER a real
+                            # named function OR a local CLOSURE variable (`auto g =
+                            # (): …; spawn g()`). ONLY a real named fn — present in
+                            # `fn_sigs` and NOT shadowed by a closure LOCAL of the
+                            # same name — routes to the Inc-1 spawn wiring. A
+                            # closure-variable spawn falls through to the bare
+                            # passthrough (its existing behavior — emitting
+                            # `__gorget_spawn_<g>` would reference a non-existent
+                            # `g` symbol → undefined-reference link-fail, regressing
+                            # spawn_closure_void/spawn_closure_copy). Mirrors the
+                            # ECall EIdentifier closure-vs-fn guard (:1195).
+                            if gmod.fn_sigs.contains(spawn_named_fn) and not nl_contains(&ctx, spawn_named_fn):
+                                # Named-fn spawn (Inc-1). Returns -1 when OUT of
+                                # Inc-1 scope (String/owned return or non-scalar
+                                # param) — fall back to the bare passthrough (keeps
+                                # the pre-Inc-1 WRONG-output, NOT a fresh cc-fail).
+                                # Rolls to Inc-2.
+                                int spawn_named_dst = lower_named_fn_spawn(&ctx, spawn_named_fn, spawn_args, &gmod)
+                                if spawn_named_dst >= 0:
+                                    return spawn_named_dst
+                            return lower_expr(&ctx, *inner_box, &gmod)
                         else:
                             return lower_expr(&ctx, *inner_box, &gmod)
                 else:

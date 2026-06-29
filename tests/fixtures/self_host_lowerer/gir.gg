@@ -447,6 +447,25 @@ struct ThreadSpawnRec:
     String ret_c_type
     int stack_size
 
+# A `spawn fn(args)` registration for a NAMED function (Inc-1: int+void
+# returns, scalar by-value params only). Mirrors Rust gg's
+# `ctx.spawn.fn_names` set + the `LirSpawnedFn` it ultimately produces
+# (`src/lir/types.rs` / `src/backend/c_lir/emit_types.rs:382-540`). Carried
+# as a GIR-level channel from the `ESpawn` arm in lower_expr to the
+# GIR→LIR copy in lir_lower, which builds the `LirSpawnedFn` consumed by
+# `emit_spawn_helpers` in lir_codegen. `ret_c_type` is the C return type
+# name ("void" for a unit-returning fn, "int64_t"/"double"/etc. otherwise)
+# — the SAME string used to register the `Task__<ret_c>` named type at the
+# spawn site, so the emitted helpers and the `emit_mono_typedefs` typedef
+# spell the Task type identically (a divergence is a cc-fail). `param_c_types`
+# are the per-param C type names (scalar by-value in Inc-1), parallel to the
+# synthesized `p0`/`p1`/… param names the C-emit mints. Deduped by fn_name at
+# the write site (one helper set per spawned fn).
+struct SpawnFnRec:
+    String fn_name
+    String ret_c_type
+    Vector[String] param_c_types
+
 struct GirModule:
     Vector[GirFunction] functions
     Vector[GirExtern] externs
@@ -732,6 +751,15 @@ struct GirModule:
     # `TraitRegistry::has_trait_impl_by_name` (`src/semantic/traits.rs:331`).
     # Appended AT END to avoid shifting positional ctor call sites.
     Dict[String, Vector[String]] trait_impls_by_type
+    # `spawn fn(args)` registrations for NAMED functions (Inc-1: int+void
+    # returns, scalar by-value params). Populated by the `ESpawn` arm in
+    # lower_expr; flows to `LirModule.spawned_fns` in lower_gir_to_lir, then
+    # to the per-fn spawn/await helper emit (`emit_spawn_helpers`) in
+    # lir_codegen. Mirrors Rust gg's `ctx.spawn.fn_names` → `LirSpawnedFn`
+    # pipeline (`src/ir/lowering/exprs/mod.rs:1391-1404` →
+    # `src/backend/c_lir/emit_types.rs:382-540`). Deduped by fn_name at the
+    # write site. Appended AT END to avoid shifting positional ctor call sites.
+    Vector[SpawnFnRec] spawned_fns
 
 # Per-test metadata mirroring Rust's `TestFnInfo` (`src/ir/mod.rs:30`).
 # `fn_name` is the emitted `__test_N` symbol ("" for a skipped test, which

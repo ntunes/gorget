@@ -5,7 +5,7 @@
 # explicit LIR instructions.
 
 from gir import GirModule, GirFunction, GirLocal, GirType, GirExtern, BasicBlock, Instruction, Terminator, Operand
-from gir import GirTypeInfo, GirFieldInfo, GirEnumVariantInfo, ThreadSpawnRec
+from gir import GirTypeInfo, GirFieldInfo, GirEnumVariantInfo, ThreadSpawnRec, SpawnFnRec
 from gir import BOOL_TYPE, I8_TYPE, I16_TYPE, I32_TYPE, I64_TYPE
 from gir import U8_TYPE, U16_TYPE, U32_TYPE, U64_TYPE, F32_TYPE, F64_TYPE, UNIT_TYPE, PRIM_COUNT
 from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM, OP_MOD
@@ -13,6 +13,7 @@ from gir import OP_ADD_WRAP, OP_SUB_WRAP, OP_MUL_WRAP
 from gir import OP_BITAND, OP_BITOR, OP_BITXOR, OP_SHL, OP_SHR
 from gir import UNOP_NEG, UNOP_NOT, UNOP_BITNOT
 from lir import LirModule, LirFunction, LirBlock, LirInst, LirTerm, LirSlot, LirStructDef, LirExtern, LirGlobal, LirThreadSpawnedFn, DictGetOrReq, BoxWrapperReq
+from lir import LirSpawnedFn, SpawnParam, CloneParam
 from lir import SlotProvenance
 from lir import StructField, BlockParam, SwitchCase, FieldDrop, EnumVariantDrop, TypeDropInfo, FieldInit
 from lir import LT_I8, LT_I16, LT_I32, LT_I64, LT_U8, LT_U16, LT_U32, LT_U64
@@ -5036,6 +5037,25 @@ LirModule lower_gir_to_lir(GirModule &gmod):
     # Mirrors Rust gg's GIR→LIR copy (`src/lir/lower/mod.rs:465-471`).
     for tsf_rec in gmod.thread_spawned_fns:
         m.thread_spawned_fns.push(LirThreadSpawnedFn(tsf_rec.fn_name.clone(), tsf_rec.ret_c_type.clone(), tsf_rec.stack_size))
+
+    # Async spawn fn metadata (`spawn fn(args)` → per-fn spawn/await helper
+    # emit, Inc-1). Sibling of the thread_spawned_fns copy above. Build the
+    # `LirSpawnedFn` from the GIR `SpawnFnRec`: synthesize `p0`/`p1`/… param
+    # names parallel to the carried `param_c_types` (scalar by-value in Inc-1),
+    # carry the ret_c_type verbatim (the SAME string used to register the
+    # `Task__<ret_c>` named type), and leave `ref_param_indices`/`clone_params`
+    # empty (Inc-2/Inc-3). Mirrors Rust gg (`src/lir/lower/mod.rs` async copy →
+    # `src/backend/c_lir/emit_types.rs:382-540`).
+    for spawn_rec in gmod.spawned_fns:
+        Vector[SpawnParam] sp_params = []
+        int spi = 0
+        while spi < spawn_rec.param_c_types.len():
+            String sp_cty = spawn_rec.param_c_types.get(spi).unwrap()
+            sp_params.push(SpawnParam("p" + int_to_str(spi), sp_cty.clone()))
+            spi += 1
+        Vector[int] sp_ref_indices = []
+        Vector[CloneParam] sp_clone_params = []
+        m.spawned_fns.push(LirSpawnedFn(spawn_rec.fn_name.clone(), !sp_params, spawn_rec.ret_c_type.clone(), !sp_ref_indices, !sp_clone_params))
 
     # Test-runner metadata: copy the ordered GIR test registry (built at
     # test-body lowering, in source order, including skipped tests) 1:1 into
