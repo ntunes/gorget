@@ -1459,7 +1459,20 @@ String map_runtime_name(String name, LirModule &m, GirModule &gmod):
                 return ctor_fn + "_str"
             return ctor_fn
         elif ctor_cat == "Ptr":
-            # Channel/Shared constructors: look up prefix in type_method_prefix_map.
+            # Channel/Shared constructors: look up the method prefix in
+            # type_method_prefix_map. The map is keyed by the FULL mangled type
+            # name (`Channel__int64_t` → `gorget_channel`, written at
+            # lir_lower.gg:679 for opaque-pointer types), so check the whole
+            # ctor `name` FIRST. The `__`-stem scan below only matched types
+            # whose mangling carries a SECOND `__` before the method (e.g.
+            # `Mutex__int64_t__new`, where `Mutex__int64_t` happens to be a
+            # prefix); a single-`__` ctor like `Channel__int64_t(cap)` left the
+            # stem as bare `Channel` (not a map key) and fell through to a bare,
+            # undefined `Channel__int64_t(cap, sizeof)`. Args are already
+            # `(cap, sizeof)`-correct (mirrors Rust `Channel__T__new(cap)` →
+            # `gorget_channel_new(cap, sizeof(elem))`, c_lir/helpers.rs:230).
+            if m.type_method_prefix_map.contains(name):
+                return m.type_method_prefix_map.get(name).unwrap_or("") + "_new"
             int ci = 0
             while ci < name.len() - 1:
                 if name.slice(ci, ci + 2) == "__":
@@ -4085,8 +4098,36 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                 String drop_fn = drop_fn_for_type(drop_tn, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types, &m.drop_collision_types, &m.type_method_prefix_map)
                 if drop_fn != "":
                     int slot = local_to_slot.get(local_id).unwrap()
+                    # Drop-fn arg. The default is `&slot` (ISlotAddr): a by-value
+                    # local's slot holds the value and `T__drop(&slot)` /
+                    # `gorget_guard_release(&slot)` (inline 16-byte guard) want the
+                    # slot ADDRESS. But a PTR-HANDLE runtime (Ptr/Box, e.g.
+                    # `Channel__T`) stores the handle pointer IN the slot, and its
+                    # runtime drop (`gorget_channel_release(GorgetChannel*)` /
+                    # `free(void*)`) wants that handle BY VALUE — passing `&slot`
+                    # (a `T**`) frees/releases the stack-slot address →
+                    # `munmap_chunk(): invalid pointer` SIGABRT. Load the slot and
+                    # pass the value, mirroring (1) the GIDropIfAlive arm's
+                    # dia_owns_ptr/dia_is_box ISlotLoad below and (2) Rust's
+                    # Trivial("free") SlotLoad (drops.rs:209-217). Gated on the
+                    # TYPED runtime category + PvOwnedPtr provenance — never a
+                    # slot-shape or name heuristic.
+                    bool drop_loads_value = false
+                    if m.type_runtime_map.contains(drop_tn):
+                        String drop_rt = m.type_runtime_map.get(drop_tn).unwrap_or("")
+                        if drop_rt == "Ptr" or drop_rt == "Box":
+                            drop_loads_value = true
+                    if not drop_loads_value and slot >= 0 and slot < f.slot_provenance.len():
+                        match f.slot_provenance.get(slot).unwrap():
+                            case PvOwnedPtr():
+                                drop_loads_value = true
+                            else:
+                                pass
                     int addr = lir_fn_next_value(&f)
-                    lir_push_inst(&f, bb, ISlotAddr(addr, slot))
+                    if drop_loads_value:
+                        lir_push_inst(&f, bb, ISlotLoad(addr, slot, LT_PTR))
+                    else:
+                        lir_push_inst(&f, bb, ISlotAddr(addr, slot))
                     Vector[int] drop_args = []
                     drop_args.push(addr)
                     Vector[int] drop_abis = []
@@ -4161,6 +4202,26 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                         int dia_loaded = lir_fn_next_value(&f)
                         lir_push_inst(&f, bb, ISlotLoad(dia_loaded, dia_slot, LT_PTR))
                         dia_drop_arg = dia_loaded
+                    # Ptr-handle local (runtime=="Ptr": Channel/Mutex/Shared/…): the
+                    # slot holds the HANDLE pointer by value (LT_PTR slot, NOT an
+                    # aggregate), and its runtime drop wants that handle BY VALUE —
+                    # `gorget_channel_release(GorgetChannel*)` / `free(void*)`. Passing
+                    # `&slot` (a `T**`) would release/free the stack-slot address →
+                    # `munmap_chunk(): invalid pointer` SIGABRT (or, when it doesn't
+                    # abort, decrement a garbage refcount and LEAK the channel). Load
+                    # the slot, exactly like the owning-`!`-param and Box arms, and
+                    # like Rust's Trivial("free") SlotLoad (drops.rs:209-217). Keyed on
+                    # the TYPED runtime category (not a name/slot-shape heuristic); the
+                    # owning-param case above already handled PvOwnedPtr ptr-slots, so
+                    # this only adds the owned-LOCAL ptr-handle (PvValue) case.
+                    bool dia_is_ptr_handle = false
+                    if not dia_owns_ptr and m.type_runtime_map.contains(dia_tn):
+                        if m.type_runtime_map.get(dia_tn).unwrap_or("") == "Ptr":
+                            dia_is_ptr_handle = true
+                    if dia_is_ptr_handle:
+                        int dia_ph_loaded = lir_fn_next_value(&f)
+                        lir_push_inst(&f, bb, ISlotLoad(dia_ph_loaded, dia_slot, LT_PTR))
+                        dia_drop_arg = dia_ph_loaded
                     # Box[T] local: a Box is `typedef void*` (pointer-represented)
                     # but its slot is `Box__T`-typed (aggregate). drop_fn_for_type
                     # maps Box→`free`, which wants the HEAP pointer the box holds —
@@ -4636,6 +4697,24 @@ String drop_fn_for_type(String type_name, Dict[String, bool] &resource_types, Di
     elif runtime == "GorgetSet":
         return "gorget_set_free"
     elif runtime == "Ptr" or runtime == "Box":
+        # A `Channel__T` Ptr-handle drops by RELEASING its refcount (atomic
+        # dec → auto-close + free at zero, channel_runtime.c gorget_channel_
+        # release), NOT a raw `free` of the handle. A raw `free` would (a) leak
+        # the channel's ring buffer + pthread mutex/condvars and (b) — because
+        # the GIDrop arm hands the handle off by VALUE for ptr-runtimes (see the
+        # ISlotLoad gate there, mirroring Rust's Trivial("free") SlotLoad) —
+        # double/mis-free under the tracking allocator. Route via the TYPED
+        # `method_prefix_map` (`Channel__int64_t` → `gorget_channel`, written at
+        # lir_lower.gg:679) + `_release`, matching on the prefix VALUE (NOT a
+        # `Channel__` name substring — the same prefix-value dispatch the
+        # simple-method arm uses at lir_lower.gg:1590 for `gorget_guard`). Rust
+        # emits a per-type wrapper `Channel__T__drop(self){gorget_channel_
+        # release(*self);}` (c_lir/helpers.rs:241); the self-host has no
+        # wrappers, so it routes the GIDrop straight to the runtime release.
+        if method_prefix_map.contains(type_name):
+            String pdrop_pfx = method_prefix_map.get(type_name).unwrap_or("")
+            if pdrop_pfx == "gorget_channel":
+                return pdrop_pfx + "_release"
         return "free"
     elif runtime == "Guard":
         # A `Guard__T`/`ReadGuard__T`/`WriteGuard__T` local drops by RELEASING
