@@ -2043,7 +2043,17 @@ String emit_spawn_helpers(LirModule &m):
             SpawnParam rsp = sf.params.get(rpi).unwrap()
             if rpi > 0:
                 run_call_args = run_call_args + ", "
-            run_call_args = run_call_args + "__ctx->__" + rsp.name
+            # String/collection params are stored as the actual struct in the
+            # SpawnCtx, but the lowered fn signature takes them by Ptr (void*),
+            # so pass the address of the ctx slot; scalars pass by value. This is
+            # the C-emit boundary (the c_type_name IS the runtime contract), and
+            # the routing keys off the resolved runtime struct names by equality.
+            # Mirrors the resolved-type routing in `emit_types.rs` (~421-436).
+            String rsp_ct = rsp.c_type_name
+            if rsp_ct == "GorgetString" or rsp_ct == "Str" or rsp_ct == "GorgetArray" or rsp_ct == "GorgetMap" or rsp_ct == "GorgetSet":
+                run_call_args = run_call_args + "(void*)&__ctx->__" + rsp.name
+            else:
+                run_call_args = run_call_args + "__ctx->__" + rsp.name
             rpi += 1
         if is_void:
             out = out + "    " + safe_fn_name + "(" + run_call_args + ");\n"

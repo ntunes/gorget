@@ -480,8 +480,45 @@ Option[String] box_deref_inner_name(String base_type_name, GirModule &gmod):
         case None:
             return None
 
-# Lower a NAMED-function async spawn `spawn f(args)` (Inc-1: int+void
-# returns, scalar by-value params). Mirrors Rust gg's named-fn spawn path
+# Map a GIR type-id to the runtime C-struct name used for a spawn param/return
+# slot in the SpawnCtx and the spawn helper signatures. String collapses to the
+# runtime `GorgetString`; the collections (Vector/Dict/Set/Deque/Heap) collapse
+# to their runtime struct (`GorgetArray`/`GorgetMap`/`GorgetSet`); scalars pass
+# through as their plain C name. Mirrors the resolved-type routing the Rust
+# backend performs in `emit_types.rs` (the spawned-fn ctx/run emit, ~418-440).
+String spawn_runtime_c_name(int tid, GirModule &gmod):
+    String nm = type_id_to_name(tid, &gmod)
+    if nm == "String" or nm == "Str" or nm == "GorgetString":
+        return "GorgetString"
+    String rt = collection_runtime_type(nm, &gmod)
+    if rt != "":
+        return rt
+    return nm
+
+# Is this param/return type-id a shape the named-fn spawn lowering fully handles?
+# Supported: scalar (< PRIM_COUNT, by-value) OR String OR a runtime collection
+# (Vector/Dict/Set/Deque/Heap → GorgetArray/GorgetMap/GorgetSet, passed by-ptr).
+# Unsupported (the gate returns -1 → bare passthrough): opaque/sync/refcounted
+# carriers (Shared/Mutex/AtomicInt/Channel/Semaphore/…), structs, and enums —
+# those need is_opaque→void*, clone_params, and per-param by-value-vs-ptr
+# resolution that the named-fn spawn path does not yet carry. A precise positive
+# allow-list (not a bare ">= PRIM_COUNT relax") is load-bearing: relaxing it
+# regresses those carriers to an `unknown type name` C-emit failure.
+bool spawn_shape_supported(int tid, GirModule &gmod):
+    if tid < PRIM_COUNT:
+        return true
+    String nm = type_id_to_name(tid, &gmod)
+    if nm == "String" or nm == "Str" or nm == "GorgetString":
+        return true
+    String rt = collection_runtime_type(nm, &gmod)
+    if rt == "GorgetArray" or rt == "GorgetMap" or rt == "GorgetSet":
+        return true
+    return false
+
+# Lower a NAMED-function async spawn `spawn f(args)`. Supports scalar+void
+# returns, String/collection returns, and scalar/String/collection params (the
+# `spawn_shape_supported` allow-list); opaque/sync/struct/enum shapes roll to a
+# later increment. Mirrors Rust gg's named-fn spawn path
 # (`src/ir/lowering/exprs/mod.rs:1388-1405`):
 #   • register the producer fn (push a deduped SpawnFnRec carrying the C
 #     return type + per-param C type names) so the GIR→LIR copy builds the
@@ -492,14 +529,11 @@ Option[String] box_deref_inner_name(String base_type_name, GirModule &gmod):
 #     await fallback;
 #   • register the `Task__<ret_c>` named type (the SAME ret_c string the
 #     helpers spell) so emit_mono_typedefs emits a matching typedef;
-#   • lower the args (scalar by-value) and emit `__gorget_spawn_<fn>(args)`
-#     into a Task-typed dst.
-# Returns -1 (sentinel) when the spawn is OUT of Inc-1 scope — the caller
-# then falls back to the bare passthrough (which keeps the pre-Inc-1
-# WRONG-output behavior, NOT a regression to a fresh cc-fail). Inc-1 scope =
-# producer returns `int`/scalar or `void` AND every param is scalar
-# (by-value). A String/Vector/aggregate return or ANY non-scalar param rolls
-# to Inc-2.
+#   • lower the args and emit `__gorget_spawn_<fn>(args)` into a Task-typed dst.
+# Returns -1 (sentinel) when the spawn is OUT of scope — the caller then falls
+# back to the bare passthrough (which keeps the pre-spawn-lowering WRONG-output
+# behavior, NOT a regression to a fresh cc-fail). An unsupported return type or
+# ANY unsupported param shape (see `spawn_shape_supported`) triggers the -1.
 int lower_named_fn_spawn(LowerCtx &ctx, String spawn_fn_name, Vector[SpannedExpr] spawn_args, GirModule &gmod):
     # Producer return type. Prefer the REAL GIR-function return type (fn_sigs
     # mis-records a String/collection return as I64_TYPE in the pre-scan, so it
@@ -517,26 +551,26 @@ int lower_named_fn_spawn(LowerCtx &ctx, String spawn_fn_name, Vector[SpannedExpr
             spfi += 1
     if not spawn_ret_found and gmod.fn_sigs.contains(spawn_fn_name):
         spawn_ret_ty = gmod.fn_sigs.get(spawn_fn_name).unwrap()
-    # Inc-1 scope gate (return): unit OR scalar (< PRIM_COUNT). A named return
-    # type (String/Vector/struct, >= PRIM_COUNT) is Inc-2.
-    if spawn_ret_ty != UNIT_TYPE and spawn_ret_ty >= PRIM_COUNT:
+    # Scope gate (return): unit OR a supported shape (scalar / String / runtime
+    # collection). Opaque/sync/struct/enum returns are out of scope → passthrough.
+    if spawn_ret_ty != UNIT_TYPE and not spawn_shape_supported(spawn_ret_ty, &gmod):
         return -1
     String spawn_ret_c = "void"
     if spawn_ret_ty != UNIT_TYPE:
-        spawn_ret_c = type_id_to_name(spawn_ret_ty, &gmod)
+        spawn_ret_c = spawn_runtime_c_name(spawn_ret_ty, &gmod)
     String spawn_task_name = "Task__" + spawn_ret_c
-    # Per-param C type names (Inc-1: scalar by-value). The GIR→LIR copy mints
-    # parallel `p0`/`p1`/… names for the SpawnParam list. Inc-1 scope gate
-    # (params): every param must be scalar (< PRIM_COUNT). A String/Vector/
-    # aggregate param needs the collection/Str C-emit branch → Inc-2.
+    # Scope gate (params): every param must be a supported shape. Record the
+    # runtime C-struct name (String → GorgetString, Vector → GorgetArray, scalar
+    # → scalar); the by-value-vs-by-ptr emit split is handled in
+    # emit_spawn_helpers (collections/String pass by-ptr, scalars by-value).
     Vector[String] spawn_param_ctys = []
     Vector[int] spawn_param_tys = get_fn_param_types(spawn_fn_name, &gmod)
     int sppi = 0
     while sppi < spawn_param_tys.len():
         int sp_pty = spawn_param_tys.get(sppi).unwrap()
-        if sp_pty >= PRIM_COUNT:
+        if not spawn_shape_supported(sp_pty, &gmod):
             return -1
-        spawn_param_ctys.push(type_id_to_name(sp_pty, &gmod))
+        spawn_param_ctys.push(spawn_runtime_c_name(sp_pty, &gmod))
         sppi += 1
     # Register the spawn fn (dedup by fn_name — a fn spawned twice emits one
     # helper set).
@@ -4155,8 +4189,22 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 # the old bare-passthrough behavior.
                 return aw_inner
             # Producer return type → `void`-await (no result) or value-await.
+            # Prefer the REAL GIR-function return type from gmod.functions: the
+            # pre-scan that builds fn_sigs mis-records a String/collection return
+            # as I64, so trusting fn_sigs here would type the await dst local as
+            # int for a String producer (wrong width → cc-fail). Fall back to
+            # fn_sigs only for a forward ref not yet in gmod.functions.
             int aw_ret_ty = UNIT_TYPE
-            if gmod.fn_sigs.contains(aw_fn):
+            bool aw_ret_found = false
+            int awfi = 0
+            while awfi < gmod.functions.len():
+                if gmod.functions.get(awfi).unwrap().name == aw_fn:
+                    aw_ret_ty = gmod.functions.get(awfi).unwrap().return_type
+                    aw_ret_found = true
+                    awfi = gmod.functions.len()
+                else:
+                    awfi += 1
+            if not aw_ret_found and gmod.fn_sigs.contains(aw_fn):
                 aw_ret_ty = gmod.fn_sigs.get(aw_fn).unwrap()
             String aw_call = "__gorget_await_" + aw_fn
             Vector[Operand] aw_args = [op_consume(&ctx, &gmod, aw_inner, CkCallArgBorrow())]
