@@ -2398,7 +2398,7 @@ fn monomorphize_struct(
         // fell into the `else` (`compute_drop_strategy_for_struct` over its empty
         // monomorph fields → `drop: None`) and the single-owner handle LEAKED on
         // scope exit (Core #8 Inc-B). RWLock is SINGLE-OWNER (unique-free via
-        // `gorget_rwlock_free`, NOT refcounted): CsResource (owns, drops once) +
+        // `gorget_rwlock_free`, NOT refcounted): `CopySemantics::Trivial` (owns, drops once) +
         // `{mangled}__drop` → `gorget_rwlock_free`, mirroring the Mutex semantics
         // and the ReadGuard/WriteGuard arm above. RWLock keeps `clone_fn = None`
         // (the default here), so `needs_param_drop`'s `clone_fn.is_some()` gate

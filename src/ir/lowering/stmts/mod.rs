@@ -1536,8 +1536,9 @@ fn lower_shared_var_decl(
             // Ensure ReadGuard and WriteGuard types exist WITH a TypeDef. The
             // facade read/write (`emit_rwlock_read_get`/`emit_rwlock_write_set`)
             // mints a `ReadGuard__T`/`WriteGuard__T` value slot and calls the
-            // 16-byte `gorget_rwlock_read`/`gorget_rwlock_write` (each returns a
-            // by-value `gorget_read_guard_t`/`gorget_write_guard_t` via sret).
+            // `gorget_rwlock_read_to`/`gorget_rwlock_write_to`, each writing a
+            // 16-byte `gorget_read_guard_t`/`gorget_write_guard_t` into the slot
+            // (via `*out = gorget_rwlock_read(rw)`).
             // Registering only a
             // bare `GirType::Named` (no TypeDef) left the name out of
             // `module.structs`, so the C backend emitted NO `typedef

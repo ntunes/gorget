@@ -207,8 +207,8 @@ pub fn ensure_rwlock_type_def(ctx: &mut LoweringContext, rwlock_type_name: &str,
 /// the name into `module.structs` → `emit_monomorphized_typedefs` emits the
 /// `typedef gorget_read_guard_t {name};` from the resources table). Without a
 /// TypeDef the rwlock guard slot resolves to `void*` (8 bytes) and the 16-byte
-/// `gorget_rwlock_read` (by-value `gorget_read_guard_t` sret, likewise
-/// `gorget_rwlock_write`) write stack-buffer-overflows.
+/// `gorget_rwlock_read_to` write (`*out = gorget_rwlock_read(rw)`, returning a
+/// by-value `gorget_read_guard_t`; likewise `gorget_rwlock_write_to`) stack-buffer-overflows.
 pub fn ensure_rwlock_guard_type_def(ctx: &mut LoweringContext, guard_type_name: &str, inner_type: TypeId) {
     use crate::ir::types::{CopySemantics, DropStrategy};
     use super::super::types::make_wrapper_type_def;

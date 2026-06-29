@@ -157,8 +157,10 @@ The first two clauses are satisfied by every sync handle (they are
 `Trivial` and carry a `{mangled}__drop`). The third — `clone_fn.is_some()`
 — is the discriminator. Single-owner handles keep **`clone_fn = None`**:
 the `clone_fn` write in `map_ast_type_mut` (`src/ir/lowering/types.rs:347-353`)
-sets the per-mono `{mangled}__clone` only for the refcounted family
-(`Shared`, `Weak`, `Channel`, `Guard`, `ReadGuard`, `WriteGuard`) and
+sets the per-mono `{mangled}__clone` only for the per-mono `__clone`
+family (`Shared`, `Weak`, `Channel` plus the Move-semantics guards
+`Guard`, `ReadGuard`, `WriteGuard` — which `needs_param_drop` excludes
+via its `Trivial` clause anyway) and
 leaves Mutex/RWLock at the protocol default of `None`; the
 `ensure_{mutex,rwlock}_type_def` docstrings (`type_reg.rs:166-169,189-192`)
 and the `monomorphize_struct` RWLock arm (`generics/mod.rs:2403-2405`)
@@ -200,14 +202,14 @@ see Chapter 13's LIR-lowering note, `13-ownership-in-ir.md:542-556`.)
 | Handle family | `copy_semantics` | `drop_strategy` | `clone_fn` | `needs_param_drop` | param drop is… |
 |---|---|---|---|---|---|
 | `Mutex`, `RWLock` (single-owner) | `Trivial` | `Trivial("{m}__drop")` → `gorget_*_free` | `None` | **false** | excluded — owner alone frees |
-| `Channel`, `Shared`, `Weak` (refcounted) | `Trivial` | `Trivial("{m}__drop")` → `gorget_*_release` | `Some("{m}__clone")` | **true** | a balanced refcount release |
+| `Channel`, `Shared`, `Weak` (refcounted) | `Trivial` | `Trivial("{m}__drop")` → release (`gorget_channel_release` / `gorget_shared_drop` / `gorget_weak_drop`) | `Some("{m}__clone")` | **true** | a balanced refcount release |
 
 ### The self-host mirror
 
 So both compilers agree, the self-host lowerer classifies the same way.
 `build_resource_metadata` (`tests/fixtures/self_host_lowerer/lir_lower.gg`)
 tags `Mutex__`/`RWLock__` as **`CsResource`** (single-owner) at lines
-360-385 and `Channel__`/`Shared__` as **`CsRefCounted`** at lines 388-399,
+360-384 and `Channel__`/`Shared__`/`Weak__` as **`CsRefCounted`** at lines 385-400,
 routing each handle's drop fn by a typed `method_prefix` (`Some("gorget_mutex")`,
 `Some("gorget_rwlock")`) read via `opaque_ptr_method_prefix`
 (`lir_lower.gg:509`) — never a name-substring test (`is_refcounted_carrier`,
