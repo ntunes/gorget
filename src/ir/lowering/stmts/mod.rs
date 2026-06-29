@@ -1533,17 +1533,28 @@ fn lower_shared_var_decl(
                 tid
             };
 
-            // Ensure ReadGuard and WriteGuard types exist
+            // Ensure ReadGuard and WriteGuard types exist WITH a TypeDef. The
+            // facade read/write (`emit_rwlock_read_get`/`emit_rwlock_write_set`)
+            // mints a `ReadGuard__T`/`WriteGuard__T` value slot and calls the
+            // 16-byte `gorget_rwlock_read`/`gorget_rwlock_write` (each returns a
+            // by-value `gorget_read_guard_t`/`gorget_write_guard_t` via sret).
+            // Registering only a
+            // bare `GirType::Named` (no TypeDef) left the name out of
+            // `module.structs`, so the C backend emitted NO `typedef
+            // gorget_read_guard_t ReadGuard__T;` and the slot fell back to
+            // `void*` (8 bytes) → the 16-byte runtime write stack-buffer-
+            // overflows (silent UB without ASan; fatal once the RWLock __drop
+            // perturbs the stack — Core #8 Inc-B). Mint the full TypeDef here
+            // (same shape as the `monomorphize_struct` ReadGuard/WriteGuard arm
+            // and `ensure_guard_type_def`) so BOTH guard typedefs are emitted
+            // whenever `shared(rwlock)` is used, regardless of whether user code
+            // names a `ReadGuard[T]`/`WriteGuard[T]` local. The typedef BODY is
+            // still driven by the typed resources table (`emit_wrapper_typedef`),
+            // not a name match — this only ensures the name reaches `module.structs`.
             let read_guard_mangled = format!("ReadGuard__{inner_c}");
-            if ctx.type_mapper.lookup_named(&read_guard_mangled).is_none() {
-                let tid = ctx.type_registry.insert(GirType::Named(read_guard_mangled.clone()));
-                ctx.type_mapper.register_named(read_guard_mangled, tid);
-            }
+            let _ = super::exprs::get_or_register_type(ctx, &read_guard_mangled, Some(&|c| super::exprs::ensure_rwlock_guard_type_def(c, &read_guard_mangled, inner_type)));
             let write_guard_mangled = format!("WriteGuard__{inner_c}");
-            if ctx.type_mapper.lookup_named(&write_guard_mangled).is_none() {
-                let tid = ctx.type_registry.insert(GirType::Named(write_guard_mangled.clone()));
-                ctx.type_mapper.register_named(write_guard_mangled, tid);
-            }
+            let _ = super::exprs::get_or_register_type(ctx, &write_guard_mangled, Some(&|c| super::exprs::ensure_rwlock_guard_type_def(c, &write_guard_mangled, inner_type)));
 
             let new_fn = format!("{mangled}__new");
             let tmp = builder.add_local(inner_type, None);

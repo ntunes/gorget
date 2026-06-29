@@ -12826,6 +12826,18 @@ fn mutex_alias() {
 }
 
 #[test]
+fn rwlock_alias() {
+    // Core #8 Inc-B borrow-param gate (RWLock sibling of mutex_alias): a
+    // single-owner RWLock passed by borrow then read/written after the call
+    // must be freed exactly once by the OWNER on scope exit, never by the
+    // borrow-param at fn-exit. The naive Trivial+__drop fix freed the borrow
+    // param -> heap-use-after-free in the post-call .read()/.write(). RWLock
+    // keeps clone_fn=None, so the `needs_param_drop` clone_fn gate excludes the
+    // single-owner borrow-param. ASan/LSan-clean; locks in leak-fix-no-UAF.
+    run_gg("rwlock_alias.gg", "42");
+}
+
+#[test]
 fn guard_struct_field() {
     run_gg("guard_struct_field.gg", "10\n20\n42");
 }

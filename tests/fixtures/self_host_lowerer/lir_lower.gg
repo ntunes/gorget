@@ -371,9 +371,16 @@ Option[ResourceMetadata] build_resource_metadata(String name):
             CsResource(), CkNotCollection(), BkNotBox(), true,
             Some("gorget_mutex"), None, true))
     if name.starts_with("RWLock__"):
+        # RWLock is SINGLE-OWNER (unique-free via gorget_rwlock_free, NOT
+        # refcounted): there is no clone/retain path, the owner alone frees on
+        # scope exit. CsResource (owned, drops once) is the accurate semantics;
+        # CsRefCounted was wrong. Cosmetic for the drop emission (drop is routed
+        # by drop_fn_for_type via the gorget_rwlock method-prefix, not by
+        # CopySemantics — which the self-host never matches on), but the typed
+        # flag must still be correct. Mirrors the Inc-A Mutex correction above.
         return Some(ResourceMetadata(
             "Ptr", 8, LtPtr(), None, None, None,
-            CsRefCounted(), CkNotCollection(), BkNotBox(), true,
+            CsResource(), CkNotCollection(), BkNotBox(), true,
             Some("gorget_rwlock"), None, true))
     if name.starts_with("Channel__"):
         return Some(ResourceMetadata(
@@ -4760,6 +4767,24 @@ String drop_fn_for_type(String type_name, Dict[String, bool] &resource_types, Di
             # self-host (lower_closures.gg:108-149 registers only `!arg` owning
             # params), so a Mutex borrow-param can never double-free.
             if pdrop_pfx == "gorget_mutex":
+                return pdrop_pfx + "_free"
+            # An `RWLock__T` Ptr-handle is SINGLE-OWNER (not refcounted), exactly
+            # like Mutex: its drop FREES the handle via `gorget_rwlock_free`
+            # (sync_runtime.c:131 — destroys the pthread rwlock, frees the waiter
+            # array + data + the handle), NOT a refcount `_release`. Route via the
+            # TYPED `method_prefix_map` (`RWLock__int64_t` → `gorget_rwlock`) +
+            # `_free`, matching on the prefix VALUE (NOT an `RWLock__` name
+            # substring — same prefix-value dispatch as the Mutex/Channel arms
+            # above). Rust gg emits a per-type wrapper
+            # `RWLock__T__drop(self){gorget_rwlock_free(*self);}`
+            # (c_lir/helpers.rs:300); the self-host has no wrappers, so it routes
+            # the GIDrop straight to `gorget_rwlock_free`. The owner-only free is
+            # safe because borrow params are never drop-registered in the self-host
+            # (lower_closures.gg registers only `!arg` owning params), so an RWLock
+            # borrow-param can never double-free. This arm MUST stay paired with
+            # the `register_owning_opaque_local` gate (lower_drops.gg:389) that
+            # registers the RWLock owning local for drop in the first place.
+            if pdrop_pfx == "gorget_rwlock":
                 return pdrop_pfx + "_free"
         return "free"
     elif runtime == "Guard":

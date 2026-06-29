@@ -186,13 +186,35 @@ pub fn ensure_guard_type_def(ctx: &mut LoweringContext, guard_type_name: &str, i
     );
 }
 
-/// Ensure a RWLock[T] type has a TypeDef in the registry (Copy pointer, no drop).
+/// Ensure a RWLock[T] type has a TypeDef in the registry (Copy pointer, single-owner
+/// drop frees the rwlock via `{name}__drop` -> `gorget_rwlock_free`). RWLock keeps
+/// `clone_fn = None` (single-owner, not refcounted) so `needs_param_drop` excludes
+/// its borrow-param — only the owner frees.
 pub fn ensure_rwlock_type_def(ctx: &mut LoweringContext, rwlock_type_name: &str, inner_type: TypeId) {
     use crate::ir::types::{CopySemantics, DropStrategy};
     use super::super::types::make_wrapper_type_def;
     if ctx.type_registry.get_type_def(rwlock_type_name).is_some() { return; }
     ctx.type_registry.add_type_def(
-        make_wrapper_type_def(rwlock_type_name, inner_type, CopySemantics::Trivial, DropStrategy::None)
+        make_wrapper_type_def(rwlock_type_name, inner_type, CopySemantics::Trivial, DropStrategy::Trivial(format!("{rwlock_type_name}__drop")))
+    );
+}
+
+/// Ensure a ReadGuard[T] / WriteGuard[T] type has a TypeDef in the registry
+/// (Move value struct, drop releases the rwlock read/write lock via
+/// `{name}__drop`). Identical shape to `ensure_guard_type_def` and to the
+/// `monomorphize_struct` ReadGuard/WriteGuard arm (`generics/mod.rs:2384`) —
+/// the value the C backend reads is the **presence of a TypeDef** (which puts
+/// the name into `module.structs` → `emit_monomorphized_typedefs` emits the
+/// `typedef gorget_read_guard_t {name};` from the resources table). Without a
+/// TypeDef the rwlock guard slot resolves to `void*` (8 bytes) and the 16-byte
+/// `gorget_rwlock_read` (by-value `gorget_read_guard_t` sret, likewise
+/// `gorget_rwlock_write`) write stack-buffer-overflows.
+pub fn ensure_rwlock_guard_type_def(ctx: &mut LoweringContext, guard_type_name: &str, inner_type: TypeId) {
+    use crate::ir::types::{CopySemantics, DropStrategy};
+    use super::super::types::make_wrapper_type_def;
+    if ctx.type_registry.get_type_def(guard_type_name).is_some() { return; }
+    ctx.type_registry.add_type_def(
+        make_wrapper_type_def(guard_type_name, inner_type, CopySemantics::Resource, DropStrategy::Trivial(format!("{guard_type_name}__drop")))
     );
 }
 

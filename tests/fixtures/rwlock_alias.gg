@@ -1,0 +1,22 @@
+# Core #8 Inc-B borrow-param gate: an RWLock[int] passed by borrow to a fn,
+# then read/written AFTER the call returns. The single-owner RWLock must be
+# freed exactly once (by the owner, on scope exit) — NOT by the borrow-param
+# at fn-exit. The naive "Trivial+__drop" fix freed the borrow param here,
+# producing a heap-use-after-free in the post-call .read()/.write(). This
+# fixture is the ASan/LSan gate that locks in leak-fix-without-UAF, mirroring
+# mutex_alias.gg for the RWLock sibling.
+
+from std.sync import RWLock
+
+void bump(RWLock[int] rw):
+    WriteGuard[int] wg = rw.write()
+    int v = wg.get()
+    wg.set(v + 1)
+
+void main():
+    RWLock[int] rw = RWLock[int](40)
+    bump(rw)
+    bump(rw)
+    ReadGuard[int] rg = rw.read()
+    int v = rg.get()
+    print(v)

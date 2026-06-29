@@ -2389,6 +2389,27 @@ fn monomorphize_struct(
             drop_strategy: DropStrategy::Trivial(format!("{mangled_name}__drop")),
             ..Default::default()
         }
+    } else if template.name.node == "RWLock" {
+        // RWLock[T] is declared as a `struct RWLock[T]` template in
+        // `lib/std/sync.gg:36` (unlike Mutex, which is a pure builtin with no
+        // template), so the ctor's `RWLock[int](v)` reaches THIS template-driven
+        // monomorph path FIRST — before `map_ast_type_mut` / `register_collection_
+        // alias` can stamp the per-mono drop wrapper. Without this arm RWLock
+        // fell into the `else` (`compute_drop_strategy_for_struct` over its empty
+        // monomorph fields → `drop: None`) and the single-owner handle LEAKED on
+        // scope exit (Core #8 Inc-B). RWLock is SINGLE-OWNER (unique-free via
+        // `gorget_rwlock_free`, NOT refcounted): CsResource (owns, drops once) +
+        // `{mangled}__drop` → `gorget_rwlock_free`, mirroring the Mutex semantics
+        // and the ReadGuard/WriteGuard arm above. RWLock keeps `clone_fn = None`
+        // (the default here), so `needs_param_drop`'s `clone_fn.is_some()` gate
+        // (`ir/types.rs:537`) excludes its borrow-param — only the owner frees.
+        TypeMetadata {
+            size: None,
+            align: None,
+            copy_semantics: CopySemantics::Trivial,
+            drop_strategy: DropStrategy::Trivial(format!("{mangled_name}__drop")),
+            ..Default::default()
+        }
     } else {
         // Tier 1c: coherence-at-construction for user generic structs.
         // Both blocker classes are now closed: per-mono Shared/Weak/

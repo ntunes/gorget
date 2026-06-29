@@ -297,7 +297,7 @@ pub(super) fn emit_rwlock_wrapper(out: &mut String, type_name: &str, method: &st
         "new" => writeln!(out, "static inline GorgetRWLock* {type_name}__new({elem} val) {{ return gorget_rwlock_new(sizeof({elem}), &val); }}").unwrap(),
         "read" => writeln!(out, "static inline gorget_read_guard_t {type_name}__read(GorgetRWLock** self) {{ return gorget_rwlock_read(*self); }}").unwrap(),
         "write" => writeln!(out, "static inline gorget_write_guard_t {type_name}__write(GorgetRWLock** self) {{ return gorget_rwlock_write(*self); }}").unwrap(),
-        "drop" => writeln!(out, "static inline void {type_name}__drop(GorgetRWLock** self) {{ gorget_rwlock_destroy(*self); }}").unwrap(),
+        "drop" => writeln!(out, "static inline void {type_name}__drop(GorgetRWLock** self) {{ gorget_rwlock_free(*self); }}").unwrap(),
         _ => {}
     }
 }

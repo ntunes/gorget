@@ -373,20 +373,23 @@ void register_owning_opaque_local(LowerCtx &ctx, int local_id, int type_id, GirM
         else:
             return
     # Gate on the handle having a SINGLE-OWNER per-handle free routed by
-    # `drop_fn_for_type`. Mutex (method_prefix `gorget_mutex` → `gorget_mutex_free`)
-    # is the only such handle wired today (Inc-A). RWLock / Atomics / Semaphore
-    # do NOT yet have a `drop_fn_for_type` arm — they would fall through to the
-    # bare `free` fallback, MIS-freeing the opaque handle (worse than the leak).
-    # So scope the registration to the Mutex handle via the TYPED `method_prefix`
-    # metadata VALUE (the same typed-value dispatch `drop_fn_for_type` uses — NOT
-    # a `Mutex__` name substring). RWLock single-owner drop is a separate
-    # increment (Inc-B) that adds both the `drop_fn_for_type` arm AND this gate.
+    # `drop_fn_for_type`. Mutex (method_prefix `gorget_mutex` → `gorget_mutex_free`,
+    # Inc-A) and RWLock (`gorget_rwlock` → `gorget_rwlock_free`, Inc-B) are the
+    # single-owner handles wired today — both unique-free, NOT refcounted. Atomics
+    # / Semaphore do NOT yet have a `drop_fn_for_type` arm — they would fall through
+    # to the bare `free` fallback, MIS-freeing the opaque handle (worse than the
+    # leak). So scope the registration to the wired single-owner handles via the
+    # TYPED `method_prefix` metadata VALUE (the same typed-value dispatch
+    # `drop_fn_for_type` uses — NOT a `Mutex__`/`RWLock__` name substring). This
+    # gate MUST stay in lockstep with the `drop_fn_for_type` single-owner arms
+    # (lir_lower.gg `gorget_mutex`/`gorget_rwlock` → `_free`): a prefix here with no
+    # drop arm there mis-frees; a drop arm there with no prefix here leaks.
     bool is_single_owner_handle = false
     match resource_meta_for(&gmod, inner_tname):
         case Some(rl_meta):
             match rl_meta.method_prefix:
                 case Some(mp):
-                    if mp == "gorget_mutex":
+                    if mp == "gorget_mutex" or mp == "gorget_rwlock":
                         is_single_owner_handle = true
                 case None:
                     pass
