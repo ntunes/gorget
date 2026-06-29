@@ -98,6 +98,149 @@ After phases 1–3 consume them as dataflow signals, the `MoveSlot` annotations 
 
 Back in `optimize_module`, if elaboration changed anything, a follow-up `eliminate_dead_code` pass runs over every function (`src/lir/optimize.rs:88`) to clean orphaned `SlotAddr` / `IConst` values left behind by deleted guards and memsets. Both before and after elaboration, `assert_module_valid` runs (`optimize.rs:73`, `optimize.rs:83`) so any shape regression is attributed to the right pass (Tier E §8.3's "validator after every pass").
 
+## Sync-type release-on-drop and the `clone_fn`-gate
+
+Everything above is the LIR-level *guard* machinery: it decides whether a
+`DropIfAlive` runs, not whether one is emitted in the first place. For the
+single-owner concurrency handles — `Mutex[T]`, `RWLock[T]` — the harder
+question is *who* drops, and the answer is encoded one layer up, at GIR
+type registration. This is the Core invariant #3 "register ownership at
+the value's birth" rule applied to opaque resource handles, and it leans
+on one keystone predicate; getting it wrong is a use-after-free, not a
+leak.
+
+### The owner frees; borrows do not
+
+A `Mutex` / `RWLock` value is a `Copy`-semantics (`CopySemantics::Trivial`)
+pointer to a heap-allocated lock. It is *single-owner*: the handle is
+freed exactly once, by a unique `gorget_mutex_free` / `gorget_rwlock_free`,
+with **no retain/release refcount**. So the producing local — the one
+minted by `Mutex[int](v)` — must drop on scope exit, but every *borrow*
+of it (a `Mutex &m` parameter, a match scrutinee, a collection read) must
+**not**, or the caller's still-live handle is freed out from under it.
+
+The owner-drop is registered by giving these handles a per-monomorph
+`DropStrategy::Trivial("{mangled}__drop")`. The whitelist that does this
+is the `base` match in `map_ast_type_mut` (`src/ir/lowering/types.rs:317-325`):
+`Guard`, `Shared`, `Weak`, `Channel`, `ReadGuard`, `WriteGuard`, `Mutex`,
+and `RWLock` all map to `{mangled}__drop`. The `__drop` wrapper itself is
+emitted by the C backend (`src/backend/c_lir/helpers.rs`): for Mutex it is
+`{type_name}__drop(...) { gorget_mutex_free(*self); }` (`helpers.rs:290`),
+for RWLock `gorget_rwlock_free(*self)` (`helpers.rs:300`) — the runtime
+unique-free entry points are `gorget_mutex_free` (`src/backend/c/runtime/mutex_runtime.c:37`)
+and `gorget_rwlock_free` (`src/backend/c/runtime/sync_runtime.c:131`).
+
+`RWLock` reaches registration by a second path: it is declared as a
+`struct RWLock[T]` template (`lib/std/sync.gg`), so its ctor hits the
+template-driven `monomorphize_struct` *before* `map_ast_type_mut` can stamp
+the wrapper. The arm at `src/ir/lowering/generics/mod.rs:2392-2412` mints
+the same `Trivial("{mangled}__drop")` there; without it RWLock fell into
+the generic `compute_drop_strategy_for_struct` over its empty monomorph
+fields → `DropStrategy::None`, and the handle leaked (Core #8 Inc-B). Mutex
+has no template, so `map_ast_type_mut` alone covers it. The
+`ensure_{mutex,rwlock}_type_def` helpers (`src/ir/lowering/exprs/type_reg.rs:170,193`)
+register the same shape for the eager-registration paths.
+
+### The keystone: `needs_param_drop`'s `clone_fn.is_some()` gate
+
+Borrow-params are excluded from drop by a single predicate,
+`TypeRegistry::needs_param_drop` (`src/ir/types.rs:531`). It returns true
+**only** when all three hold (`types.rs:535-537`):
+
+```rust
+type_def.metadata.copy_semantics == CopySemantics::Trivial
+    && type_def.metadata.drop_strategy != DropStrategy::None
+    && type_def.metadata.clone_fn.is_some()
+```
+
+The first two clauses are satisfied by every sync handle (they are
+`Trivial` and carry a `{mangled}__drop`). The third — `clone_fn.is_some()`
+— is the discriminator. Single-owner handles keep **`clone_fn = None`**:
+the `clone_fn` write in `map_ast_type_mut` (`src/ir/lowering/types.rs:347-353`)
+sets the per-mono `{mangled}__clone` only for the refcounted family
+(`Shared`, `Weak`, `Channel`, `Guard`, `ReadGuard`, `WriteGuard`) and
+leaves Mutex/RWLock at the protocol default of `None`; the
+`ensure_{mutex,rwlock}_type_def` docstrings (`type_reg.rs:166-169,189-192`)
+and the `monomorphize_struct` RWLock arm (`generics/mod.rs:2403-2405`)
+record the same.
+
+`needs_param_drop` gates `register_param` (`src/ir/lowering/drops.rs:179-180`),
+which is what registers a Copy-semantics *parameter* for a scope-exit
+drop. With Mutex/RWLock at `clone_fn = None`, the gate returns false and
+their borrow-params are never registered — only the producing local drops.
+
+**Why the gate exists (the trap).** The naive fix is "the param has a
+`__drop`, so register it for drop." That is strictly *worse* than the
+leak it replaces: a `Mutex &m` param holds the same pointer the caller
+still owns, so dropping it calls `gorget_mutex_free` on a live handle —
+a heap **use-after-free**, and a double-free once the caller's own owner-drop
+fires. The `clone_fn.is_some()` clause is exactly the test for "this
+handle has a retain, so a param drop is a balanced release, not a free."
+
+### Refcounted carriers, by contrast, *do* drop their params
+
+`Channel`, `Shared`, `Weak` are also `Trivial` with a `{mangled}__drop`,
+but they carry a real `clone_fn = Some("{mangled}__clone")` — a runtime
+**retain**, balanced by a **release** in `__drop`. Their `__drop`
+wrappers call `gorget_channel_release` / `gorget_shared_drop` /
+`gorget_weak_drop` (`src/backend/c_lir/helpers.rs:241,250,279`), and
+`{mangled}__clone` calls the matching retain (e.g. `gorget_channel_retain`,
+`helpers.rs:240`). For these, `needs_param_drop` *does* return true: a
+param is a held reference whose teardown must decrement the refcount, so
+registering it for drop is correct (it balances the retain, never frees a
+live handle). The `!`-move call path also consults `needs_param_drop` to
+zero the caller slot on `!x` so a moved refcount isn't released twice
+(`src/ir/lowering/exprs/calls.rs:371`). This is the only aspect of the
+refcounted-carrier / spawn machinery that belongs to the drop model; the
+rest of the async path is documented elsewhere. (For how `clone_fn` is
+*consumed* on the clone side — `resource_clone_fn` picking the matching
+`gorget_*_clone` / `{T}__clone` symbol at an `OpClone` materialization —
+see Chapter 13's LIR-lowering note, `13-ownership-in-ir.md:542-556`.)
+
+| Handle family | `copy_semantics` | `drop_strategy` | `clone_fn` | `needs_param_drop` | param drop is… |
+|---|---|---|---|---|---|
+| `Mutex`, `RWLock` (single-owner) | `Trivial` | `Trivial("{m}__drop")` → `gorget_*_free` | `None` | **false** | excluded — owner alone frees |
+| `Channel`, `Shared`, `Weak` (refcounted) | `Trivial` | `Trivial("{m}__drop")` → `gorget_*_release` | `Some("{m}__clone")` | **true** | a balanced refcount release |
+
+### The self-host mirror
+
+So both compilers agree, the self-host lowerer classifies the same way.
+`build_resource_metadata` (`tests/fixtures/self_host_lowerer/lir_lower.gg`)
+tags `Mutex__`/`RWLock__` as **`CsResource`** (single-owner) at lines
+360-385 and `Channel__`/`Shared__` as **`CsRefCounted`** at lines 388-399,
+routing each handle's drop fn by a typed `method_prefix` (`Some("gorget_mutex")`,
+`Some("gorget_rwlock")`) read via `opaque_ptr_method_prefix`
+(`lir_lower.gg:509`) — never a name-substring test (`is_refcounted_carrier`,
+`lir_lower.gg:193`, reads the `CsRefCounted` metadata, matching Core #2 /
+layering rule 2).
+
+The owner-drop registration mirrors the GIR side. The ctor mints the
+owning local as a `GtPtr(Handle)` slot, which makes the shared
+`register_local_for_drop` (`tests/fixtures/self_host_lowerer/lower_drops.gg:235`)
+a silent no-op — `is_droppable_type` rejects every `GtPtr` (a pointer is
+normally non-owning). So a dedicated `register_owning_opaque_local`
+(`lower_drops.gg:340`) handles these: it derefs the `GtPtr(inner)` wrapper,
+gates on the local being `LoOwned` with a runtime-resource pointee (a
+typed discriminator, not a name), and resolves the drop fn via the
+`gorget_mutex` / `gorget_rwlock` method-prefix arm of `drop_fn_for_type`.
+
+### R2 coupling: forcing both guard typedefs for `shared(rwlock)`
+
+One RWLock-specific wrinkle worth a note. A `shared(rwlock)` facade lowers
+`read`/`write` through 16-byte by-value guards (`gorget_read_guard_t` /
+`gorget_write_guard_t`, returned via sret). If only a bare `GirType::Named`
+were registered for `ReadGuard__T` / `WriteGuard__T`, the name never
+reaches `module.structs`, the C backend emits no `typedef gorget_read_guard_t
+ReadGuard__T;`, the slot falls back to `void*` (8 bytes), and the 16-byte
+runtime write stack-buffer-overflows — silent UB until the RWLock owner-drop
+perturbs the stack (Core #8 Inc-B). The `SharedStrategy::ArcRwLock` arm
+(`src/ir/lowering/stmts/mod.rs:1524`) therefore force-emits *both* guard
+TypeDefs via `ensure_rwlock_guard_type_def` (`src/ir/lowering/exprs/type_reg.rs:212`,
+called at `stmts/mod.rs:1554-1557`) whenever the facade is used, regardless
+of whether user code names a guard local. The typedef *body* is still
+driven by the typed resources table, not a name match — registration only
+ensures the name reaches `module.structs`.
+
 ## The optimizer fixpoint loop
 
 > **Correction to the internals doc.** `unified-resource-model.md` §8.4 (line 761) claims the optimizer "runs three iterations and stops, regardless of whether it would have converged in four." **This is stale.** The current code runs a snapshot/change-counter fixpoint with a generous safety cap, exactly the convergence behavior §8.4 proposed as future work.
