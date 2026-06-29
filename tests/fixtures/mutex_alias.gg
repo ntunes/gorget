@@ -1,0 +1,19 @@
+# Core #8 borrow-param gate: a Mutex[int] passed by borrow to a fn, then
+# locked/used AFTER the call returns. The single-owner Mutex must be freed
+# exactly once (by the owner, on scope exit) — NOT by the borrow-param at
+# fn-exit. The naive "Trivial+__drop" fix freed the borrow param here,
+# producing a heap-use-after-free in the post-call .lock(). This fixture is
+# the ASan/LSan gate that locks in leak-fix-without-UAF.
+
+void bump(Mutex[int] m):
+    Guard[int] g = m.lock()
+    int v = g.get()
+    g.set(v + 1)
+
+void main():
+    Mutex[int] m = Mutex[int](40)
+    bump(m)
+    bump(m)
+    Guard[int] g = m.lock()
+    int v = g.get()
+    print(v)

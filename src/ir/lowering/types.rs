@@ -316,7 +316,7 @@ impl TypeMapper {
                         // types use per-monomorphization drop wrappers.
                         let drop_strat = match base {
                             "Guard" | "Shared" | "Weak" | "Channel"
-                            | "ReadGuard" | "WriteGuard" =>
+                            | "ReadGuard" | "WriteGuard" | "Mutex" =>
                                 DropStrategy::Trivial(format!("{mangled}__drop")),
                             _ => match protocol.drop_fn {
                                 Some(f) => DropStrategy::Trivial(f.to_string()),

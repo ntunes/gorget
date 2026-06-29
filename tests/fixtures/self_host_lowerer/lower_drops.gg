@@ -315,6 +315,90 @@ void register_owning_param(LowerCtx &ctx, int local_id, int type_id, GirModule &
     oscope.entries.push(DropEntry(local_id, inner_tid, false))
     ctx.drop_elab.scopes.set(top, oscope)
 
+# Register an OWNING opaque-handle LOCAL (single-owner sync primitive: Mutex,
+# RWLock, …) for exit drop. The ctor mints these as a `GtPtr(Handle)` slot —
+# a slot holding the `GorgetMutex*`/`GorgetRWLock*` handle — because a bare
+# value slot can't carry the opaque pointer (lower_expr.gg:5855-5876). That
+# `GtPtr` wrapper makes the shared `register_local_for_drop` a SILENT NO-OP:
+# `is_droppable_type` rejects every `GtPtr` (a pointer is normally a non-owning
+# borrow alias). So a single-owner sync handle bound to a named local leaked —
+# nobody freed it at scope exit (the self-host Mutex 136B LeakSanitizer hit).
+#
+# DEDICATED — NOT a reuse of `register_local_for_drop` — for the same reason
+# as `register_owning_param` above: the `GtPtr(inner)` wrapper must be derefed
+# to gate on the INNER handle's dropability, and the registration must bypass
+# the blanket `GtPtr`→non-droppable rule. The discriminator is TYPED: only an
+# `LoOwned` local whose `GtPtr` pointee is a runtime-resource opaque handle
+# (`resource_meta_for(inner) == Some`) reaches the registration — a borrow
+# alias (LoBorrowed/LoView) or a non-resource pointee is skipped, so this can
+# never over-drop. Emission resolves the drop fn from the LOCAL's own `GtPtr`
+# slot type via `drop_fn_for_type` (the `gorget_mutex` method-prefix →
+# `gorget_mutex_free` single-owner arm), so the recorded `inner_tid` is for
+# consistency only. Mirrors Rust gg, where the value-typed Mutex local gets a
+# `drop_if_alive` at scope exit (`ir/lowering/exprs/type_reg.rs` →
+# `Mutex__T__drop`).
+void register_owning_opaque_local(LowerCtx &ctx, int local_id, int type_id, GirModule &gmod):
+    if ctx.drop_elab.scopes.len() == 0:
+        return
+    if local_id < 0 or local_id >= ctx.locals.len():
+        return
+    # Only a freshly-minted OWNER (the ctor result) is dropped here. A borrow
+    # alias / view of someone else's handle must NOT be freed (double-free).
+    match ctx.locals.get(local_id).unwrap().ownership:
+        case LoBorrowed():
+            return
+        case LoView():
+            return
+        else:
+            pass
+    # Deref the `GtPtr(inner)` opaque-handle wrapper to the underlying handle T.
+    # Only a `GtPtr` whose pointee is a runtime-resource opaque handle qualifies
+    # — `register_local_for_drop` already covers value-typed resource locals.
+    int rl_inner = -1
+    if type_id >= 0 and type_id < gmod.type_table.len():
+        match gmod.type_table.get(type_id).unwrap():
+            case GtPtr(inner):
+                rl_inner = inner
+            else:
+                pass
+    if rl_inner < 0 or rl_inner >= gmod.type_table.len():
+        return
+    # The opaque handle pointee is a named runtime type (`Mutex__int64_t`).
+    # Extract its name the same way `is_droppable_type` does (no `type_id_to_name`
+    # import needed in this module).
+    String inner_tname = ""
+    match gmod.type_table.get(rl_inner).unwrap():
+        case GtNamed(n):
+            inner_tname = n
+        else:
+            return
+    # Gate on the handle having a SINGLE-OWNER per-handle free routed by
+    # `drop_fn_for_type`. Mutex (method_prefix `gorget_mutex` → `gorget_mutex_free`)
+    # is the only such handle wired today (Inc-A). RWLock / Atomics / Semaphore
+    # do NOT yet have a `drop_fn_for_type` arm — they would fall through to the
+    # bare `free` fallback, MIS-freeing the opaque handle (worse than the leak).
+    # So scope the registration to the Mutex handle via the TYPED `method_prefix`
+    # metadata VALUE (the same typed-value dispatch `drop_fn_for_type` uses — NOT
+    # a `Mutex__` name substring). RWLock single-owner drop is a separate
+    # increment (Inc-B) that adds both the `drop_fn_for_type` arm AND this gate.
+    bool is_single_owner_handle = false
+    match resource_meta_for(&gmod, inner_tname):
+        case Some(rl_meta):
+            match rl_meta.method_prefix:
+                case Some(mp):
+                    if mp == "gorget_mutex":
+                        is_single_owner_handle = true
+                case None:
+                    pass
+        case None:
+            pass
+    if not is_single_owner_handle:
+        return
+    int rl_top = ctx.drop_elab.scopes.len() - 1
+    DropScope rl_scope = ctx.drop_elab.scopes.get(rl_top).unwrap()
+    rl_scope.entries.push(DropEntry(local_id, rl_inner, false))
+    ctx.drop_elab.scopes.set(rl_top, rl_scope)
+
 # Mark a local as "maybe moved" — used at consume sites that transfer
 # ownership out of the local. Walks the scope stack innermost-out;
 # matches the first entry with the given local_id and sets its

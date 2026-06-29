@@ -163,13 +163,16 @@ pub fn ensure_weak_type_def(ctx: &mut LoweringContext, weak_type_name: &str, inn
     );
 }
 
-/// Ensure a Mutex[T] type has a TypeDef in the registry (Copy pointer, no drop).
+/// Ensure a Mutex[T] type has a TypeDef in the registry (Copy pointer, single-owner
+/// drop frees the mutex via `{name}__drop` -> `gorget_mutex_free`). Mutex keeps
+/// `clone_fn = None` (single-owner, not refcounted) so `needs_param_drop` excludes
+/// its borrow-param — only the owner frees.
 pub fn ensure_mutex_type_def(ctx: &mut LoweringContext, mutex_type_name: &str, inner_type: TypeId) {
     use crate::ir::types::{CopySemantics, DropStrategy};
     use super::super::types::make_wrapper_type_def;
     if ctx.type_registry.get_type_def(mutex_type_name).is_some() { return; }
     ctx.type_registry.add_type_def(
-        make_wrapper_type_def(mutex_type_name, inner_type, CopySemantics::Trivial, DropStrategy::None)
+        make_wrapper_type_def(mutex_type_name, inner_type, CopySemantics::Trivial, DropStrategy::Trivial(format!("{mutex_type_name}__drop")))
     );
 }
 

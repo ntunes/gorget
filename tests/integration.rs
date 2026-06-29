@@ -12815,6 +12815,17 @@ fn mutex_basic() {
 }
 
 #[test]
+fn mutex_alias() {
+    // Core #8 borrow-param gate: a single-owner Mutex passed by borrow then
+    // locked/used after the call must be freed exactly once by the OWNER on
+    // scope exit, never by the borrow-param at fn-exit. The naive
+    // Trivial+__drop fix freed the borrow param -> heap-use-after-free in the
+    // post-call .lock(). The `needs_param_drop` clone_fn gate excludes the
+    // single-owner borrow-param. ASan/LSan-clean; locks in leak-fix-no-UAF.
+    run_gg("mutex_alias.gg", "42");
+}
+
+#[test]
 fn guard_struct_field() {
     run_gg("guard_struct_field.gg", "10\n20\n42");
 }

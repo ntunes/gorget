@@ -287,7 +287,7 @@ pub(super) fn emit_mutex_wrapper(out: &mut String, type_name: &str, method: &str
         "new" => writeln!(out, "static inline GorgetMutex* {type_name}__new({elem} val) {{ return gorget_mutex_new(sizeof({elem}), &val); }}").unwrap(),
         "lock" => writeln!(out, "static inline gorget_guard_t {type_name}__lock(GorgetMutex** self) {{ return gorget_mutex_lock(*self); }}").unwrap(),
         "try_lock" => writeln!(out, "static inline bool {type_name}__try_lock(GorgetMutex** self, gorget_guard_t* out) {{ return gorget_mutex_try_lock(*self, out); }}").unwrap(),
-        "drop" => writeln!(out, "static inline void {type_name}__drop(GorgetMutex** self) {{ gorget_mutex_destroy(*self); }}").unwrap(),
+        "drop" => writeln!(out, "static inline void {type_name}__drop(GorgetMutex** self) {{ gorget_mutex_free(*self); }}").unwrap(),
         _ => {} // Unknown method
     }
 }

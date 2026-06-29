@@ -533,7 +533,8 @@ impl TypeRegistry {
         if let Some(GirType::Named(name)) = self.get(type_id) {
             if let Some(type_def) = self.get_type_def(name) {
                 return type_def.metadata.copy_semantics == CopySemantics::Trivial
-                    && type_def.metadata.drop_strategy != DropStrategy::None;
+                    && type_def.metadata.drop_strategy != DropStrategy::None
+                    && type_def.metadata.clone_fn.is_some();
             }
         }
         false
