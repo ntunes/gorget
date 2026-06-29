@@ -397,6 +397,17 @@ struct GirGlobal:
 const int CAP_BY_VALUE = 0    # 2a/2b: bit-copy/clone the value into the env
 const int CAP_BY_MUT_REF = 1  # 2c: env holds a MutPtr(T) to the outer slot
 
+# ── Scheduler modes ─────────────────────────────────────────────
+# The async scheduler runtime selected for a module (codegen reads
+# `LirModule.scheduler_mode` to pick the matching `scheduler_*_runtime.c`).
+# Defined HERE (not in lir.gg) so `GirModule.scheduler_mode` can carry the
+# directive-selected mode through the GIR layer without a lir→gir layering
+# inversion; lir.gg / lir_lower.gg / lir_codegen.gg import these from gir.
+const int SCHED_POOL = 0
+const int SCHED_THREAD = 1
+const int SCHED_INLINE = 2
+const int SCHED_SINGLE = 3
+
 struct ClosureCapture:
     String name      # the captured outer-local's name
     int type_id      # GIR type id of the captured value (2a: {0,4,10}; 2c: pointee T)
@@ -760,6 +771,16 @@ struct GirModule:
     # `src/backend/c_lir/emit_types.rs:382-540`). Deduped by fn_name at the
     # write site. Appended AT END to avoid shifting positional ctor call sites.
     Vector[SpawnFnRec] spawned_fns
+    # Active scheduler mode for this module (SCHED_* constant from lir.gg).
+    # Set from the `directive scheduler=<mode>` module item in `lower_module`
+    # (mirrors Rust gg's `LoweringContext.scheduler_mode`, populated from the
+    # `IDirective("scheduler", value)` directive). Threaded into
+    # `new_lir_module` so codegen selects the matching scheduler runtime
+    # (`scheduler_single_runtime.c` for `scheduler=single`, the deterministic
+    # single-thread executor the `shared_stale_*` fixtures rely on). Defaults
+    # to SCHED_POOL (0) — the same value the LirModule ctor formerly hardcoded.
+    # Appended AT END to avoid shifting positional ctor call sites.
+    int scheduler_mode
 
 # Per-test metadata mirroring Rust's `TestFnInfo` (`src/ir/mod.rs:30`).
 # `fn_name` is the emitted `__test_N` symbol ("" for a skipped test, which

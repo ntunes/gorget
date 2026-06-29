@@ -24,7 +24,7 @@ from lir import lir_ptr_to, lir_struct, lir_is_scalar, lir_is_aggregate, lir_is_
 from lir import OVF_TRAP, OVF_WRAP
 from lir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
 from lir import ABI_AUTO, ABI_OUT_PTR
-from lir import SCHED_POOL
+from gir import SCHED_POOL
 from lir import lir_fn_next_value, lir_fn_add_slot, lir_fn_add_block
 from lir import lir_push_inst, lir_set_term
 from lir import lir_mod_add_struct, lir_mod_add_function, new_lir_module
@@ -4752,6 +4752,36 @@ String drop_fn_for_type(String type_name, Dict[String, bool] &resource_types, Di
             String pdrop_pfx = method_prefix_map.get(type_name).unwrap_or("")
             if pdrop_pfx == "gorget_channel":
                 return pdrop_pfx + "_release"
+            # A `Shared__T` / `Shared__Mutex__T` Ptr-handle (round-16 shared
+            # carrier) is REFCOUNTED: its drop decrements the strong count and,
+            # at zero, frees the inner data + control block (shared_runtime.c
+            # gorget_shared_drop). NOTE the release symbol is `_drop`, NOT
+            # `_release` — there is no `gorget_shared_release`. Same TYPED
+            # prefix-VALUE dispatch as the Channel arm above (the carrier-NESS
+            # is decided by `method_prefix == "gorget_shared"`, never a name
+            # substring). Rust emits a per-type wrapper `Shared__T__drop(self)
+            # {gorget_shared_drop(*self);}`; the self-host routes the GIDrop
+            # straight to the runtime release.
+            if pdrop_pfx == "gorget_shared":
+                # SUB-SELECTION (still inside the typed gorget_shared arm): the
+                # `shared int x` carrier is `Shared__Mutex__T` — its `data`
+                # holds an INNER `GorgetMutex*` that plain gorget_shared_drop
+                # would leak (Rust gg leaks it too — `Shared__Mutex__T__drop`
+                # → `gorget_shared_drop` only frees the data buffer, not the
+                # mutex; ASan confirms 176 bytes leaked there). Route the carrier
+                # to `gorget_shared_mutex_drop`, which frees the inner mutex at
+                # the last strong ref. This is the C-emit drop-symbol selection
+                # (the symbol IS the runtime contract); the `__Mutex__` infix
+                # test is a STRUCTURAL inner-type check (via `contains`, NOT a
+                # `starts_with` meaning-test) AFTER the typed `gorget_shared`
+                # gate already proved "this is a shared carrier" — it only picks
+                # the variant that also frees the nested handle. A plain
+                # `Shared[T]` (no inner Mutex) keeps the leak-equivalent
+                # `gorget_shared_drop` (its data is a value, not a handle, so
+                # there is nothing nested to free).
+                if type_name.contains("__Mutex__"):
+                    return "gorget_shared_mutex_drop"
+                return pdrop_pfx + "_drop"
             # A `Mutex__T` Ptr-handle is SINGLE-OWNER (not refcounted): its drop
             # FREES the handle via `gorget_mutex_free` (mutex_runtime.c:37 —
             # destroys the pthread mutex, frees the waiter array + data + the
@@ -4978,7 +5008,7 @@ void populate_drop_metadata(LirModule &m, GirModule &gmod):
 # ── Module lowering (main entry point) ──────────────────────
 
 LirModule lower_gir_to_lir(GirModule &gmod):
-    LirModule m = new_lir_module()
+    LirModule m = new_lir_module(gmod.scheduler_mode)
     Dict[String, int] sr = {}
 
     # ── Phase A — populate typed resource metadata ─────────────
@@ -5222,7 +5252,21 @@ LirModule lower_gir_to_lir(GirModule &gmod):
         while spci < sp_gir_ptys.len():
             String spc_nm = type_id_to_name(sp_gir_ptys.get(spci).unwrap(), &gmod)
             if is_refcounted_carrier(spc_nm, &gmod):
-                sp_clone_params.push(CloneParam(spci, spc_nm.clone()))
+                # Capture the carrier's TYPED method-prefix (gorget_channel /
+                # gorget_shared) so codegen routes the retain/release runtime
+                # symbols off the VALUE, not a name-prefix test on the carrier
+                # name (Core #2). `resource_meta_for` is the single source.
+                String spc_mp = ""
+                match resource_meta_for(&gmod, spc_nm):
+                    case Some(spc_meta):
+                        match spc_meta.method_prefix:
+                            case Some(mp):
+                                spc_mp = mp
+                            case None:
+                                pass
+                    case None:
+                        pass
+                sp_clone_params.push(CloneParam(spci, spc_nm.clone(), spc_mp.clone()))
             spci += 1
         m.spawned_fns.push(LirSpawnedFn(spawn_rec.fn_name.clone(), !sp_params, spawn_rec.ret_c_type.clone(), !sp_ref_indices, !sp_clone_params))
 

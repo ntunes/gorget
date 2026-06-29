@@ -1,5 +1,10 @@
 
 // ── Shared[T] / Weak[T] (atomic ref-counted shared data, Arc/Weak pattern) ──
+// Marker for mutex_runtime.c (emitted AFTER this file): `gorget_shared_mutex_drop`
+// (the leak-free `Shared[Mutex[T]]` carrier drop) needs both GorgetShared and
+// GorgetMutex, so it lives in mutex_runtime.c guarded by this define — present
+// only when shared_runtime.c is also part of the build.
+#define GORGET_SHARED_RUNTIME 1
 typedef struct GorgetShared {
     volatile int64_t strong;     // atomic strong ref count
     volatile int64_t weak;       // atomic weak ref count (+1 while any strong exists)
@@ -35,6 +40,13 @@ static inline void gorget_shared_drop(GorgetShared* s) {
         }
     }
 }
+
+// NOTE: `gorget_shared_mutex_drop` (the leak-free carrier drop for the
+// round-16 `shared int x` model) is defined in mutex_runtime.c, not here:
+// it must free the inner `GorgetMutex*` stored in the carrier's `data`, and
+// `GorgetMutex` / `gorget_mutex_free` are only declared once mutex_runtime.c
+// is included (which is AFTER this file). `GorgetShared` is in scope there
+// because this file is included first.
 
 static inline void* gorget_shared_get_ptr(GorgetShared* s) {
     return s->data;

@@ -1,0 +1,62 @@
+--- construction ---
+42
+--- unwrap ---
+42
+--- expect ---
+42
+--- is_some / is_none ---
+true
+false
+false
+true
+--- unwrap_or ---
+42
+99
+--- unwrap_or_else ---
+42
+99
+--- map ---
+84
+true
+42
+0
+--- filter ---
+42
+true
+true
+42
+--- and_then ---
+43
+true
+true
+--- or ---
+42
+77
+true
+--- or_else ---
+42
+77
+true
+--- flatten ---
+100
+true
+true
+--- chaining ---
+84
+0
+126
+0
+100
+10
+55
+86
+--- edge cases ---
+true
+0
+-1
+-1
+0
+100
+true
+45
+done

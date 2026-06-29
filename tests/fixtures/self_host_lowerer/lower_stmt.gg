@@ -25,7 +25,7 @@ from compiler.data.resources import STRING_BUILTIN_METHODS, COLLECTION_BUILTIN_M
 from compiler.data.schema import BuiltinMethodDecl, BuiltinMethodEntry
 from compiler.data.schema import BuiltinRetKind, BrkString, BrkInfer
 from lir_lower import resource_meta_for
-from lower import LowerCtx, ResultPayloadTypes, DictKvNames, ClosureSig, CaptureCollector, FieldBorrowPair, FieldDerefResult, SVarDeclEmission
+from lower import LowerCtx, ResultPayloadTypes, DictKvNames, ClosureSig, CaptureCollector, FieldBorrowPair, FieldDerefResult, SVarDeclEmission, SharedLocalInfo
 from lower import lower_fail, diag_bug, diag_warn, emit, new_block, switch_to, set_terminator
 from lower import add_local, add_local_with, add_local_inheriting, nl_get, nl_put, nl_contains
 from lower import expr_kind, pat_kind, stmt_kind
@@ -37,12 +37,27 @@ from lower_drops import init_drop_elab, push_drop_scope, emit_scope_drops, pop_d
 from lower_liveness import LivenessAnalysis, compute_liveness, wire_liveness_into_modes, liveness_instrumentation_diff, update_last_pos_for_inst, update_last_pos_for_term, note_operand_pos, empty_liveness
 from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, index_value_type_name, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, is_comparison, map_cmpop
 from lower_expr import block_terminated, lower_block_expr, lower_stmt_as_tail_value, lower_if_chain_expr, refine_local_type, lower_expr, lower_expr_inner, apply_container_hint_for_ctor_arg, lower_call, guard_field_deref_base, box_deref_inner_name
+from lower_expr import register_shared_carrier_type, emit_shared_mutex_lock_get, emit_shared_mutex_lock_set
 
 # ── Statement lowering ───────────────────────────────────
 
 void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
     match stmt:
-        case SVarDecl(stype, name, init_expr, _, _, _):
+        case SVarDecl(stype, name, init_expr, _, shared_kind, _):
+            # ── Shared-variable carrier model (round-16 Phase 1) ─────────
+            # `shared int x = 0` (shared_kind==1 = auto → ArcMutex). Mint the
+            # hidden Shared__Mutex__T carrier + a facade local; route reads/
+            # writes of `x` through the carrier's lock-chain. shared_kind 2
+            # (rwlock) / 3 (atomic) are OUT of scope this phase — they fall
+            # through to the normal var-decl path (their `shared` keyword is
+            # dropped, same as before). Mirrors Rust gg's ArcMutex arm
+            # (`src/ir/lowering/stmts/mod.rs:1579-1630`). Gated to a SCALAR
+            # inner (the only shape the lock-chain handles this phase).
+            if shared_kind == 1:
+                int shc_inner_ty = map_ast_type(stype, &gmod)
+                if shc_inner_ty < PRIM_COUNT and shc_inner_ty != UNIT_TYPE:
+                    lower_shared_var_decl(&ctx, name, init_expr, shc_inner_ty, &gmod)
+                    return
             # Facet 2 — tuple destructure VarDecl. The parser packs a tuple
             # binding pattern (`auto a, b = expr`, `(int a, String b) = expr`,
             # `auto (x, y) = expr`) into ONE SVarDecl whose `name` is the
@@ -729,6 +744,22 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                 cow_lazy_materialize_family(&ctx, cow_source_root_name(target_expr))
             match target_expr.expr:
                 case EIdentifier(name):
+                    # Shared-variable transparent WRITE (round-16 Phase 1).
+                    # `x = v` where x is a `shared int` locks the carrier and
+                    # writes the new value through the guard. Mirrors Rust gg's
+                    # `emit_shared_mutex_lock_set` write path (`shared.rs:42`).
+                    if ctx.shared_locals.contains(name):
+                        SharedLocalInfo sas_sh = ctx.shared_locals.get(name).unwrap()
+                        int sas_prev_et = ctx.expected_type
+                        ctx.expected_type = sas_sh.inner_type
+                        int sas_val = lower_expr(&ctx, value_expr, &gmod)
+                        ctx.expected_type = sas_prev_et
+                        emit_shared_mutex_lock_set(&ctx, &gmod, sas_sh, sas_val)
+                        # Keep the facade local in sync so any non-shared read
+                        # path (defensive) sees the latest value too.
+                        if sas_sh.facade_local >= 0:
+                            emit(&ctx, GIAssign(sas_sh.facade_local, OpCopy(sas_val)))
+                        return
                     if nl_contains(&ctx, name):
                         int lid = nl_get(&ctx, name)
                         # `&`/`!`-param whole-value WRITE detection. A
@@ -999,6 +1030,20 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             # __field_read + binop + __field_write.
             match target_expr.expr:
                 case EIdentifier(name):
+                    # Shared-variable compound-assign (round-16 Phase 1):
+                    # `x += y` on a `shared int x` desugars to a lock-get →
+                    # binop → lock-set through the carrier (atomic per
+                    # operation; the read and write each re-lock).
+                    if ctx.shared_locals.contains(name):
+                        SharedLocalInfo sca_sh = ctx.shared_locals.get(name).unwrap()
+                        int sca_cur = emit_shared_mutex_lock_get(&ctx, &gmod, sca_sh)
+                        int sca_rhs = lower_expr(&ctx, value_expr, &gmod)
+                        int sca_dst = add_local(&ctx, sca_sh.inner_type, None)
+                        emit_compound_arith(&ctx, op, sca_dst, sca_cur, sca_rhs, sca_sh.inner_type, &gmod)
+                        emit_shared_mutex_lock_set(&ctx, &gmod, sca_sh, sca_dst)
+                        if sca_sh.facade_local >= 0:
+                            emit(&ctx, GIAssign(sca_sh.facade_local, OpCopy(sca_dst)))
+                        return
                     if nl_contains(&ctx, name):
                         int lid = nl_get(&ctx, name)
                         int lhs_full_type = ctx.locals.get(lid).unwrap().type_id
@@ -1079,6 +1124,37 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             # `Stmt::OnError` push at `stmts/mod.rs:342`.
             ctx.on_error_blocks.push(cleanup_body)
         case SWith(with_resource, with_name, with_body):
+            # ── Shared-variable `with x:` form (round-16 Phase 1) ────────
+            # `with x:` where x is a `shared` var acquires the carrier's lock
+            # for the block, providing FRESHNESS (not atomicity across awaits
+            # — that's Phase 2). Phase-1 callees inside the block have no inner
+            # await, so the lock is held for the whole block: lock at entry,
+            # run the body (reads of x re-lock; safe — pthread recursive? no:
+            # we DROP the guard before the body so per-read locks don't
+            # deadlock), drop at exit. The block body runs in a fresh drop
+            # scope so its locals clean up. Mirrors Rust gg's `with`-shared
+            # lowering (the freshness contract, book/14-concurrency.md). The
+            # parser routes a bare `with ident:` to SWith(EIdentifier(ident),
+            # ident, body) (parser.gg:513), so detect the shared form by the
+            # resource being a shared-var identifier.
+            match with_resource.expr:
+                case EIdentifier(sw_name):
+                    if ctx.shared_locals.contains(sw_name):
+                        # Re-bind the facade to a FRESH locked read at block
+                        # entry (the freshness point), then lower the body. Each
+                        # `x` read inside re-locks (correct + race-free); the
+                        # lock is NOT held across the body so a nested per-read
+                        # lock cannot self-deadlock on the non-recursive mutex.
+                        SharedLocalInfo sw_sh = ctx.shared_locals.get(sw_name).unwrap()
+                        int sw_fresh = emit_shared_mutex_lock_get(&ctx, &gmod, sw_sh)
+                        if sw_sh.facade_local >= 0:
+                            emit(&ctx, GIAssign(sw_sh.facade_local, OpCopy(sw_fresh)))
+                        push_drop_scope(&ctx.drop_elab, DSK_BLOCK)
+                        lower_stmts(&ctx, with_body, &gmod, is_main)
+                        pop_drop_scope(&ctx)
+                        return
+                else:
+                    pass
             # R9 FIDELITY — `with <allocator>: as name:`-block lowering.
             # Mirrors Rust gg's `lower_with` (`src/ir/lowering/stmts/mod.rs:
             # 2732-2849`), single-binding. Before this, SWith hit the `else`
@@ -1232,6 +1308,53 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             nl_restore(&ctx, ns_snapshot)
         else:
             lower_fail("unhandled in lower_stmt: " + stmt_kind(stmt))
+
+# Lower `shared int x = <init>` (ArcMutex strategy). Mints the hidden
+# Shared__Mutex__T carrier + a facade local bound to `name`, and records a
+# SharedLocalInfo in ctx.shared_locals for the read/write facade + spawn
+# deferral. Mirrors Rust gg's ArcMutex arm of `lower_shared_var_decl`
+# (`src/ir/lowering/stmts/mod.rs:1579-1630`):
+#   tmp        = lower(init)
+#   mutex_val  = Mutex__c__new(tmp)          # gorget_mutex_new(sizeof, &tmp)
+#   shared_val = Shared__Mutex__c__new(mutex_val)  # gorget_shared_new(sizeof, &mutex)
+#   carrier    = shared_val                  # hidden local (drop-registered)
+#   facade     = emit_shared_mutex_lock_get(carrier)  # the user-named local
+void lower_shared_var_decl(LowerCtx &ctx, String name, SpannedExpr init_expr, int inner_ty, GirModule &gmod):
+    String inner_c = type_id_to_name(inner_ty, &gmod)
+    String mutex_mangled = "Mutex__" + inner_c
+    String guard_mangled = "Guard__" + inner_c
+    String shared_mangled = "Shared__Mutex__" + inner_c
+    int carrier_ty = register_shared_carrier_type(&gmod, inner_c)
+    # 1. Lower the init value (a plain scalar).
+    int prev_et = ctx.expected_type
+    ctx.expected_type = inner_ty
+    int shv_init = lower_expr(&ctx, init_expr, &gmod)
+    ctx.expected_type = prev_et
+    # 2. mutex_val = Mutex__c__new(init) → gorget_mutex_new(sizeof(T), &init).
+    int shv_mutex_ty = register_ptr(&gmod, lookup_or_register_named(&gmod, mutex_mangled))
+    int shv_mutex = add_local(&ctx, shv_mutex_ty, None)
+    emit(&ctx, GICall(shv_mutex, mutex_mangled + "__new", [op_consume(&ctx, &gmod, shv_init, CkCallArgBorrow())]))
+    # 3. shared_val = Shared__Mutex__c__new(mutex_val) → gorget_shared_new(sizeof(Mutex*), &mutex).
+    int shv_carrier = add_local(&ctx, carrier_ty, None)
+    emit(&ctx, GICall(shv_carrier, shared_mangled + "__new", [OpCopy(shv_mutex)]))
+    nl_put(&ctx, "__shared_carrier_" + name, shv_carrier)
+    # Register the carrier for drop (Shared__T → gorget_shared_drop releases
+    # the strong ref; at zero the mutex+data are freed). register_owning_opaque_local
+    # admits gorget_mutex/gorget_rwlock today — the Shared carrier needs its
+    # own drop registration. We register it directly via the carrier's drop arm
+    # (handled in lir_lower drop_fn_for_type, gorget_shared → _drop).
+    register_owning_opaque_local(&ctx, shv_carrier, carrier_ty, &gmod)
+    # 4. Build the SharedLocalInfo + a facade local seeded from a lock-get.
+    int shv_order = ctx.shared_decl_counter
+    ctx.shared_decl_counter = ctx.shared_decl_counter + 1
+    SharedLocalInfo shv_info = SharedLocalInfo(-1, shv_carrier, inner_ty, carrier_ty, inner_c.clone(), mutex_mangled.clone(), guard_mangled.clone(), shared_mangled.clone(), shv_order)
+    int shv_facade_val = emit_shared_mutex_lock_get(&ctx, &gmod, shv_info)
+    int shv_facade = add_local(&ctx, inner_ty, Some(name))
+    emit(&ctx, GIAssign(shv_facade, OpCopy(shv_facade_val)))
+    nl_put(&ctx, name, shv_facade)
+    # Finalize the info with the facade local + store in the carrier table.
+    SharedLocalInfo shv_final = SharedLocalInfo(shv_facade, shv_carrier, inner_ty, carrier_ty, inner_c.clone(), mutex_mangled.clone(), guard_mangled.clone(), shared_mangled.clone(), shv_order)
+    ctx.shared_locals.put(name.clone(), shv_final)
 
 # Lower the BASE of a place projection (field access, index, method
 # receiver) to its local id WITHOUT the value-read auto-deref. A bare

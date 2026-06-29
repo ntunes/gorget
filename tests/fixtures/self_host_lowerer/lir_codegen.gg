@@ -19,7 +19,7 @@ from lir import OVF_TRAP, OVF_WRAP
 from lir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
 from lir import EK_NOT_ENUM, EK_OPTION, EK_RESULT, EK_GENERAL
 from lir import GINIT_ZEROED, GINIT_FUNC_ADDR, GINIT_RUNTIME_CALL, GINIT_STRUCT, GINIT_BYTES
-from lir import SCHED_POOL, SCHED_THREAD, SCHED_INLINE, SCHED_SINGLE
+from gir import SCHED_POOL, SCHED_THREAD, SCHED_INLINE, SCHED_SINGLE
 from lir import runtime_fn_returns_cstr
 # Fault-catch checked arithmetic (error-model.md §11): IFaultCheck's `op`
 # field carries a GIR OP_* constant; the C emit picks the overflow builtin /
@@ -2015,17 +2015,60 @@ String emit_thread_helpers(LirModule &m):
 # `Channel__T__drop` → `gorget_channel_release` (c_lir/helpers.rs:241). The
 # self-host emits no per-type wrapper, so it routes straight to the runtime
 # release, exactly as the retain routes straight to `gorget_channel_retain`.
+# ── Carrier retain/release symbol registry (round-16, Core #2) ──────
+# A refcounted spawn-ctx carrier param is RETAINed when captured into the
+# spawn ctx and RELEASEd at ctx teardown. The runtime symbols differ per
+# carrier family — Channel uses `gorget_channel_retain`/`_release`, Shared
+# uses `gorget_shared_clone`/`_drop` (NOTE: Shared's release is `_drop`, NOT
+# `_release` — there is no `gorget_shared_release`). The keystone HARDCODED
+# the Channel symbols; with two carriers now (Channel + Shared) the spelling
+# routes off the CloneParam's TYPED `method_prefix` VALUE
+# (`gorget_channel` / `gorget_shared`), set once at the GIR→LIR re-derive from
+# resource_meta_for. This is the allowed C-emit-boundary spelling (the symbol
+# IS the runtime contract), driven by a typed-metadata VALUE — NOT a
+# Channel-name prefix test on the carrier name (Core #2 / layering rule 2;
+# the lint counts the latter). Channel → retain
+# gorget_channel_retain / release gorget_channel_release; Shared/Weak (prefix
+# gorget_shared) → retain gorget_shared_clone / release gorget_shared_drop.
+String carrier_retain_sym(String method_prefix):
+    if method_prefix == "gorget_shared":
+        return "gorget_shared_clone"
+    return "gorget_channel_retain"
+
+String carrier_release_sym(String method_prefix, String gir_type_name):
+    if method_prefix == "gorget_shared":
+        # A `Shared__Mutex__T` carrier (round-16 shared-spawn) wraps an inner
+        # GorgetMutex that must be freed at the LAST strong ref. The ctx-teardown
+        # release is ALSO routed to the mutex-aware drop so that, no matter which
+        # holder (the spawn ctx or the producer's facade carrier) decrements to
+        # zero last, the inner mutex is freed exactly once (each `_mutex_drop`
+        # frees the inner ONLY at strong==0, so it's idempotent across holders).
+        # Without this, a NEVER-awaited task whose ctx outlives the producer's
+        # carrier drop would leak the inner mutex (the producer's mutex-drop ran
+        # while strong>0, freeing nothing; the ctx's plain drop hit zero but
+        # frees only the data buffer). The `__Mutex__` infix is a STRUCTURAL
+        # inner-type check (contains, NOT a starts_with meaning-test) AFTER the
+        # typed `gorget_shared` method_prefix already proved "shared carrier".
+        if gir_type_name.contains("__Mutex__"):
+            return "gorget_shared_mutex_drop"
+        return "gorget_shared_drop"
+    return "gorget_channel_release"
+
 String emit_spawn_carrier_releases(LirSpawnedFn sf):
     String out = ""
     int rci = 0
     while rci < sf.params.len():
         SpawnParam rcp = sf.params.get(rci).unwrap()
         bool rcp_is_clone = false
+        String rcp_mp = ""
+        String rcp_gtn = ""
         for cp in sf.clone_params:
             if cp.param_index == rci:
                 rcp_is_clone = true
+                rcp_mp = cp.method_prefix
+                rcp_gtn = cp.gir_type_name
         if rcp_is_clone:
-            out = out + "    gorget_channel_release(__ctx->__" + rcp.name + ");\n"
+            out = out + "    " + carrier_release_sym(rcp_mp, rcp_gtn) + "(__ctx->__" + rcp.name + ");\n"
         rci += 1
     return out
 
@@ -2131,13 +2174,17 @@ String emit_spawn_helpers(LirModule &m):
             # owns its own refcount; non-carrier params are a by-value copy.
             # Mirrors Rust gg's `{gir}__clone(param)` (emit_types.rs:474). The
             # self-host emits no per-type clone wrapper, so it routes straight
-            # to the runtime retain (gorget_channel_retain).
+            # to the runtime retain, spelled per carrier family off the typed
+            # CloneParam.method_prefix VALUE (gorget_channel_retain /
+            # gorget_shared_clone) — never a name-prefix test (Core #2).
             bool csp_is_clone = false
+            String csp_mp = ""
             for cp in sf.clone_params:
                 if cp.param_index == cspi:
                     csp_is_clone = true
+                    csp_mp = cp.method_prefix
             if csp_is_clone:
-                out = out + "    __ctx->__" + csp.name + " = gorget_channel_retain(" + csp.name + ");\n"
+                out = out + "    __ctx->__" + csp.name + " = " + carrier_retain_sym(csp_mp) + "(" + csp.name + ");\n"
             else:
                 out = out + "    __ctx->__" + csp.name + " = " + csp.name + ";\n"
             cspi += 1
@@ -8409,7 +8456,17 @@ bool pred_mutex(Vector[String] &n):
     return false
 
 bool pred_crypto(Vector[String] &n):
-    if cn_has_prefix(&n, "gorget_crypto_") or cn_has_prefix(&n, "gorget_sha") or cn_has_prefix(&n, "gorget_hmac"): return true
+    # The `gorget_sha` / `gorget_hmac` prefixes are intentionally DIGIT-bearing
+    # (`gorget_sha1`/`gorget_sha256`/…) — a bare `gorget_sha` prefix collides
+    # with the round-16 shared-carrier runtime `gorget_shared_*` (its `get_ptr`
+    # / `clone` / `drop` symbols start with `gorget_sha`…), which would wrongly
+    # pull in crypto_runtime.c (OpenSSL) and fail to link. Rust gg avoids this
+    # because its shared ops go through per-type `Shared__T__*` WRAPPER names,
+    # not the bare `gorget_shared_*` symbols; the self-host emits the runtime
+    # symbols directly, so the prefix MUST be precise here. All real crypto
+    # one-shot hash symbols are `gorget_crypto_*` anyway (no bare `gorget_sha*`
+    # exists), so this is also a no-op tightening for the crypto corpus.
+    if cn_has_prefix(&n, "gorget_crypto_") or cn_has_prefix(&n, "gorget_sha1") or cn_has_prefix(&n, "gorget_sha256") or cn_has_prefix(&n, "gorget_sha512") or cn_has_prefix(&n, "gorget_hmac_"): return true
     if cn_has_prefix(&n, "gorget_x25519") or cn_has_prefix(&n, "gorget_hkdf") or cn_has_prefix(&n, "gorget_aead"): return true
     return false
 

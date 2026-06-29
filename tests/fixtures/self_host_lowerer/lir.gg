@@ -8,6 +8,7 @@
 
 from std.collections import Vector, Dict
 from gir import BorrowOrigin
+from gir import SCHED_POOL, SCHED_THREAD, SCHED_INLINE, SCHED_SINGLE
 
 # ── Types ───────────────────────────────────────────────────────
 
@@ -89,11 +90,9 @@ const int ABI_VOID_ELEM = 8
 const int ABI_OUT_PTR = 9
 
 # ── Scheduler modes ─────────────────────────────────────────────
-
-const int SCHED_POOL = 0
-const int SCHED_THREAD = 1
-const int SCHED_INLINE = 2
-const int SCHED_SINGLE = 3
+# SCHED_POOL/THREAD/INLINE/SINGLE are defined in gir.gg and re-imported
+# above (so GirModule.scheduler_mode can carry the mode without a lir→gir
+# layering inversion).
 
 # ── Instructions ────────────────────────────────────────────────
 
@@ -367,6 +366,16 @@ struct SpawnParam:
 struct CloneParam:
     int param_index
     String gir_type_name
+    # The carrier's TYPED method-prefix (`gorget_channel` / `gorget_shared`),
+    # read from resource_meta_for at the GIR→LIR re-derive site (where gmod is
+    # in scope). Codegen routes the retain/release runtime symbols off THIS
+    # VALUE — never an inline mangled-name prefix test (a Channel-name
+    # `starts_with`) on the gir_type_name (Core #2: that would decide the
+    # carrier family from the mangled name at the emit site, and the lint
+    # counts it). Channel → retain
+    # gorget_channel_retain / release gorget_channel_release; Shared/Weak →
+    # retain gorget_shared_clone / release gorget_shared_drop.
+    String method_prefix
 
 struct LirSpawnedFn:
     String fn_name
@@ -637,7 +646,7 @@ int lir_mod_add_function(LirModule &m, LirFunction f):
     m.functions.push(f)
     return id
 
-LirModule new_lir_module():
+LirModule new_lir_module(int sched):
     Vector[LirStructDef] structs = []
     Vector[LirGlobal] globals = []
     Vector[LirFunction] functions = []
@@ -661,4 +670,4 @@ LirModule new_lir_module():
     Dict[String, String] ccf = {}
     Vector[DictGetOrReq] dgor = []
     Vector[BoxWrapperReq] bwr = []
-    return LirModule(structs, globals, functions, externs, "", spawned, thread_spawned, tests, benches, false, false, SCHED_POOL, "", false, false, "", 0, false, rec_drop_s, rec_drop_e, drop_coll, type_drops, imported_t, evp, evt, trt, tmpm, cet, ckt, cvt, ccf, dgor, bwr)
+    return LirModule(structs, globals, functions, externs, "", spawned, thread_spawned, tests, benches, false, false, sched, "", false, false, "", 0, false, rec_drop_s, rec_drop_e, drop_coll, type_drops, imported_t, evp, evt, trt, tmpm, cet, ckt, cvt, ccf, dgor, bwr)

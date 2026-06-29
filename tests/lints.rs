@@ -1513,23 +1513,31 @@ fn snag11_equip_symbol_mangle_site_count() {
 /// adding 0 to this count — NOT a classification dodge.
 /// Bumped 78 → 79 (2026-06-29): the keystone Channel-spawn carrier (Slices 1+2)
 /// added ONE `nm.starts_with("Channel__")` site in `lower_expr.gg`'s
-/// `spawn_shape_supported` — the named-fn async-spawn ALLOW-LIST gate that admits
-/// a Channel carrier param (the one opaque carrier the spawn path supports this
-/// slice). It stays a Channel-specific NAME gate ON PURPOSE: the typed predicates
-/// both OVER-admit — `is_opaque_pointer_type` (.opaque_handle) would let Mutex /
-/// RWLock / Semaphore through, and `is_refcounted_carrier` (.copy_semantics ==
-/// CsRefCounted) would let RWLock / Shared through (RWLock is CsRefCounted, and is
-/// a spawned param in async_rwlock / shared_rwlock / stress_rwlock_*), regressing
-/// those fixtures to an `unknown type name` C-emit failure (their by-void* /
-/// clone_params plumbing is Slice-3+). Same precedent as the Thread 69→70 spawn-gate
-/// bump. The sibling spawn sites were typed in the SAME change and add 0: the
-/// clone_params membership decision (`lir_lower.gg` spawn loop) now reads
-/// `is_refcounted_carrier` (CsRefCounted), and `spawn_runtime_c_name`'s Channel→void*
-/// now reads `is_opaque_pointer_type` (.opaque_handle). Slice-3 generalizes the gate
-/// to a typed spawn-supported flag; drop BUDGET back to 78 when it lands.
+/// `spawn_shape_supported`.
+/// Restored 79 → 78 (2026-06-29, round-16 shared-spawn): that interim
+/// `nm.starts_with("Channel__")` gate was RETIRED to a typed
+/// `spawn_supported_carrier(nm, &gmod)` predicate that reads the carrier's
+/// `method_prefix` metadata VALUE (`gorget_channel` / `gorget_shared`) via
+/// `resource_meta_for` — admitting BOTH spawn carriers (Channel + Shared)
+/// without a name-prefix `starts_with` (so the count goes back down by one).
+/// The two typed predicates DO over-admit and are correctly NOT used for the
+/// gate: `is_opaque_pointer_type` (.opaque_handle) lets Mutex / RWLock /
+/// Semaphore through, and `is_refcounted_carrier` (.copy_semantics ==
+/// CsRefCounted) lets AtomicInt / AtomicBool / Semaphore / Weak / Shared /
+/// Channel through. (NOTE: RWLock is NOT CsRefCounted — Inc-B `a1331b4d`
+/// reclassified it to CsResource; the earlier claim here that "RWLock is
+/// CsRefCounted" was stale. RWLock's over-admit is via `is_opaque_pointer_type`,
+/// not `is_refcounted_carrier`.) RWLock IS a spawned param in async_rwlock /
+/// shared_rwlock / stress_rwlock_*; admitting it regresses those to an
+/// `unknown type name` C-emit failure — which is why the `method_prefix`
+/// VALUE match (exactly gorget_channel + gorget_shared) is the right gate.
+/// The carrier retain/release routing (`emit_spawn_helpers` /
+/// `emit_spawn_carrier_releases`) now reads the typed `CloneParam.method_prefix`
+/// VALUE too (gorget_channel_retain/_release vs gorget_shared_clone/_drop) —
+/// adds 0 name-prefix sites.
 #[test]
 fn no_growth_in_self_host_name_prefix_routing() {
-    const BUDGET: usize = 79;
+    const BUDGET: usize = 78;
 
     // Phase-A classification-routing class only: all MANGLED_PREFIXES EXCEPT
     // the prelude option-like ones (those are the sibling lint's burn-down).

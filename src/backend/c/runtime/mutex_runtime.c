@@ -43,6 +43,40 @@ static inline void gorget_mutex_free(GorgetMutex* m) {
     GORGET_FREE(m, sizeof(GorgetMutex));
 }
 
+// Drop a `Shared[Mutex[T]]` carrier (round-16 `shared int x` model). The
+// carrier is a GorgetShared whose `data` buffer holds an inner `GorgetMutex*`
+// (the lock over the shared value). Plain `gorget_shared_drop` frees only that
+// 8-byte data buffer, NOT the GorgetMutex it points to — so the mutex (its
+// waiter array + boxed value) leaks (Rust gg leaks it too: its
+// `Shared__Mutex__T__drop` also routes to `gorget_shared_drop`; ASan reports
+// the leak there). This variant closes the leak: at the LAST strong ref, free
+// the inner mutex BEFORE the data buffer, then free the control block. The
+// `shared int x` carrier's GIDrop routes here (drop_fn_for_type's
+// `gorget_shared` + `__Mutex__` arm). Defined in mutex_runtime.c (not
+// shared_runtime.c) because it needs `GorgetMutex` + `gorget_mutex_free`, which
+// are only declared here; `GorgetShared` is in scope because shared_runtime.c
+// is emitted first. GUARDED by GORGET_SHARED_RUNTIME (set in shared_runtime.c)
+// so a build that uses mutex/guard WITHOUT shared (mutex_basic etc.) does NOT
+// reference the absent GorgetShared type. The decrement is the SAME atomic as
+// the plain drop, so the inner-free is race-safe — only the thread observing
+// the count reach zero owns (and frees) the inner mutex.
+#ifdef GORGET_SHARED_RUNTIME
+static inline void gorget_shared_mutex_drop(GorgetShared* s) {
+    if (!s) return;
+    if (__atomic_sub_fetch(&s->strong, 1, __ATOMIC_SEQ_CST) == 0) {
+        if (s->data) {
+            GorgetMutex* inner = *(GorgetMutex**)s->data;
+            if (inner) gorget_mutex_free(inner);
+        }
+        GORGET_FREE(s->data, s->data_size);
+        s->data = NULL;
+        if (__atomic_sub_fetch(&s->weak, 1, __ATOMIC_SEQ_CST) == 0) {
+            GORGET_FREE(s, sizeof(GorgetShared));
+        }
+    }
+}
+#endif
+
 // Blocking lock — acquires the mutex and returns a guard.
 // For synchronous (non-async) contexts. Uses pthread_mutex_lock directly.
 static inline gorget_guard_t gorget_mutex_lock(GorgetMutex* m) {

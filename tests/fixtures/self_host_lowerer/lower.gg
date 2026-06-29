@@ -10,6 +10,7 @@ from types import TypeTable, ResolvedType
 from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Terminator
 from gir import Operand, GirType, GirExtern, GirTypeInfo, GirFieldInfo, GirEnumVariantInfo, LiftedClosure
 from gir import ClosureCapture, CAP_BY_VALUE, CAP_BY_MUT_REF
+from gir import SCHED_POOL, SCHED_THREAD, SCHED_INLINE, SCHED_SINGLE
 from gir import BOOL_TYPE, I8_TYPE, I16_TYPE, I32_TYPE, I64_TYPE, U8_TYPE, U16_TYPE, U32_TYPE, U64_TYPE, F32_TYPE, F64_TYPE, UNIT_TYPE, PRIM_COUNT
 from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM, OP_MOD
 from gir import OP_ADD_WRAP, OP_SUB_WRAP, OP_MUL_WRAP
@@ -220,6 +221,29 @@ struct LazyMember:
     int slot_type
     String clone_fn
     bool stmt_scoped
+
+# Per-shared-variable carrier model (mirrors Rust gg's `SharedLocalInfo`,
+# `src/ir/lowering/context.rs:41`). A `shared int x = 0` (shared_kind==1,
+# ArcMutex strategy) mints a hidden CARRIER local of type
+# `Shared__Mutex__<inner_c>` (a `gorget_shared` handle whose `data` holds a
+# `gorget_mutex` over the inner value) plus a facade local bound to the user
+# name. Every transparent read/write of `x` routes through the carrier's
+# lock-chain (`Shared__get` → `Mutex__lock` → `Guard__{get,set,drop}`); a
+# `spawn worker(&x)` passes the CARRIER (not `&x`) so the worker owns an
+# independently-retained handle and locks it inside the token wrapper.
+# Keyed in `ctx.shared` by the variable NAME (the self-host resolves
+# identifiers by name, not local-id). `decl_order` is the source-order index
+# (ascending lock order in the spawn token wrapper, descending unlock).
+struct SharedLocalInfo:
+    int facade_local        # the user-named local (inner_type slot)
+    int hidden_local        # the carrier local (Ptr to Shared__Mutex__T)
+    int inner_type          # GIR type-id of the inner value (the user's T)
+    int carrier_type        # GIR type-id of the Shared__Mutex__T carrier (Ptr-typed)
+    String inner_c          # inner C type name (int64_t / bool / double / …)
+    String mutex_mangled    # "Mutex__<inner_c>"
+    String guard_mangled    # "Guard__<inner_c>"
+    String shared_mangled   # "Shared__Mutex__<inner_c>"
+    int decl_order          # source declaration order (lock-ordering key)
 
 struct LowerCtx:
     Vector[GirLocal] locals
@@ -443,6 +467,26 @@ struct LowerCtx:
     # no pending spawn. Mirrors Rust gg's `ctx.spawn.pending_fn: Option<String>`
     # (set at `exprs/mod.rs:1391`, taken at `stmts/mod.rs:503`).
     String pending_spawn_fn
+    # ── Shared-variable carrier table (round-16 Phase 1) ─────────────
+    # NAME → SharedLocalInfo for every `shared int x = …` (shared_kind==1)
+    # in the current function. Populated by the SVarDecl shared-var arm;
+    # read by the EIdentifier read facade, the SAssign write facade, the
+    # `with x:` arm, and the spawn-of-`&shared` deferral. Mirrors Rust gg's
+    # `ctx.shared.locals` (`src/ir/lowering/context.rs:153`), keyed by name
+    # here (the self-host's name-based resolution) rather than by LocalId.
+    # Fresh empty per function (a separate lower_function = fresh ctx).
+    Dict[String, SharedLocalInfo] shared_locals
+    # One-shot "pass the raw carrier" flag (mirrors Rust gg's
+    # `ctx.shared.pass_raw`, `context.rs`). The spawn-of-`&shared` site sets
+    # this true around lowering the spawn args so a transparent shared-var
+    # read resolves to the CARRIER handle (`OpCopy(hidden_local)`) instead of
+    # the locked value — the worker must receive the carrier, not a snapshot.
+    # Reset false immediately after the args are lowered.
+    bool shared_pass_raw
+    # Monotonic source-order counter for shared-var decl_order assignment.
+    # Incremented per shared SVarDecl; the value is the SharedLocalInfo's
+    # `decl_order` (ascending lock order in the spawn token wrapper).
+    int shared_decl_counter
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -2084,7 +2128,7 @@ GirFunction lower_suite_body(String fn_name, Vector[Stmt] body, GirModule &gmod)
     Dict[String, int] _sb_cow_span = {}
     Dict[String, bool] _sb_cow_clo = {}
     # suite setup/teardown bodies are void, non-throws → fn_is_throws=false.
-    LowerCtx sctx = LowerCtx([], [], [], 0, !_sb_named_locals, !_sb_lc_stk, !_sb_lb_stk, "", "", "", false, fn_name.clone(), DropElaborator(!_sb_de_scopes), !_sb_de_queue, -1, !_sb_on_err_blocks, false, !_sb_cow_mut, !_sb_cow_span, !_sb_cow_clo, {}, [], {}, None, None, None, false, {}, {}, "")
+    LowerCtx sctx = LowerCtx([], [], [], 0, !_sb_named_locals, !_sb_lc_stk, !_sb_lb_stk, "", "", "", false, fn_name.clone(), DropElaborator(!_sb_de_scopes), !_sb_de_queue, -1, !_sb_on_err_blocks, false, !_sb_cow_mut, !_sb_cow_span, !_sb_cow_clo, {}, [], {}, None, None, None, false, {}, {}, "", {}, false, 0)
     Vector[Instruction] sinit = []
     sctx.block_insts.push(!sinit)
     sctx.block_terms.push(GTNone())
@@ -2816,16 +2860,29 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     Dict[String, GirStaticInfo] statics = {}
     Dict[String, ResourceMetadata] resource_metadata = {}
     Dict[int, int] option_ref_payload = {}
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, !const_decls, !bool_const_decls, !string_const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types, !option_ref_payload, [], !enum_variant_parent_idx, false, [], {}, {}, {}, {}, {}, !fn_defaults, [], [], {}, {}, {}, {}, [])
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, !const_decls, !bool_const_decls, !string_const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types, !option_ref_payload, [], !enum_variant_parent_idx, false, [], {}, {}, {}, {}, {}, !fn_defaults, [], [], {}, {}, {}, {}, [], SCHED_POOL)
 
     # R11: extract the `strip-asserts` directive so the SAssert case in
     # lower_stmt can emit a no-op instead of a conditional panic. Mirrors
     # Rust gg's directive scan (`src/ir/lowering/mod.rs:486-489`).
     for dir_item in m.items:
         match dir_item:
-            case IDirective(dir_name, _):
+            case IDirective(dir_name, dir_value):
                 if dir_name == "strip-asserts":
                     gmod.strip_asserts = true
+                # `directive scheduler=<mode>` selects the async scheduler
+                # runtime. The 8 `shared_stale_*` fixtures declare
+                # `directive scheduler=single`, which the parser captures as
+                # IDirective("scheduler", "single"). Without SCHED_SINGLE the
+                # spawned worker may race the producer under the default pool
+                # scheduler. Mirrors Rust gg's scheduler-directive scan.
+                elif dir_name == "scheduler":
+                    if dir_value == "single":
+                        gmod.scheduler_mode = SCHED_SINGLE
+                    elif dir_value == "thread":
+                        gmod.scheduler_mode = SCHED_THREAD
+                    elif dir_value == "inline":
+                        gmod.scheduler_mode = SCHED_INLINE
             else:
                 pass
 
@@ -4158,7 +4215,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         Dict[String, int] _cow_span3 = {}
                         Dict[String, bool] _cow_clo3 = {}
                         # Test bodies are void, non-throws → fn_is_throws=false.
-                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone(), DropElaborator(!_de_scopes3), !_de_queue3, -1, !_on_err_blocks3, false, !_cow_mut3, !_cow_span3, !_cow_clo3, {}, [], {}, None, None, None, false, {}, {}, "")
+                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone(), DropElaborator(!_de_scopes3), !_de_queue3, -1, !_on_err_blocks3, false, !_cow_mut3, !_cow_span3, !_cow_clo3, {}, [], {}, None, None, None, false, {}, {}, "", {}, false, 0)
                         Vector[Instruction] tinit = []
                         tctx.block_insts.push(!tinit)
                         tctx.block_terms.push(GTNone())

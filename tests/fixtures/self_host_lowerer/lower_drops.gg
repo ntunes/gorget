@@ -384,12 +384,19 @@ void register_owning_opaque_local(LowerCtx &ctx, int local_id, int type_id, GirM
     # gate MUST stay in lockstep with the `drop_fn_for_type` single-owner arms
     # (lir_lower.gg `gorget_mutex`/`gorget_rwlock` → `_free`): a prefix here with no
     # drop arm there mis-frees; a drop arm there with no prefix here leaks.
+    # `gorget_shared` (round-16 shared carrier) is added here: it has a
+    # `drop_fn_for_type` arm (`gorget_shared` → `gorget_shared_drop`,
+    # refcount release) so the carrier's owning local must be drop-registered
+    # to balance the `Shared__Mutex__T__new` strong-ref it was minted with.
+    # (It is refcounted, not single-owner, but the registration/free
+    # lockstep with drop_fn_for_type is identical: a prefix here needs a drop
+    # arm there.)
     bool is_single_owner_handle = false
     match resource_meta_for(&gmod, inner_tname):
         case Some(rl_meta):
             match rl_meta.method_prefix:
                 case Some(mp):
-                    if mp == "gorget_mutex" or mp == "gorget_rwlock":
+                    if mp == "gorget_mutex" or mp == "gorget_rwlock" or mp == "gorget_shared":
                         is_single_owner_handle = true
                 case None:
                     pass

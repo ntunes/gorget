@@ -1950,13 +1950,28 @@ void scan_expr_for_spawn(SpannedExpr sexpr, Dict[String, bool] &shared_vars, Dic
                                 String prefix = "__shared_token_"
                                 if async_fns.contains(callee_name):
                                     prefix = "__shared_async_"
-                                String wrapper_name = prefix + callee_name
-                                # Emit a stub function
-                                Vector[int] wp = [I64_TYPE]
-                                Vector[GirLocal] wl = [GirLocal(UNIT_TYPE, None, LoOwned(), BoNone(), false), GirLocal(I64_TYPE, None, LoParam(), BoParam(-1), false)]
-                                Vector[BasicBlock] wb = [BasicBlock([], GTReturn(OpConstUnit()))]
-                                gmod.functions.push(GirFunction(wrapper_name, !wp, UNIT_TYPE, !wl, !wb))
-                                emitted.put(callee_name, true)
+                                # round-16 Phase 1: the SYNCHRONOUS-callee
+                                # `__shared_token_` wrapper is now built FOR REAL
+                                # by `build_shared_token_wrapper` (lower_expr's
+                                # ESpawn shared-spawn path) — with the actual
+                                # lock/get-ptr/call/unlock body, not this empty
+                                # `(i64) -> unit` stub. Emitting the stub here too
+                                # produces a DUPLICATE GirFunction (conflicting C
+                                # signatures: void* vs int64_t). So SKIP the stub
+                                # for the sync `__shared_token_` case and let the
+                                # real builder own it. The `__shared_async_`
+                                # (await-splice, Phase 2) path still needs its
+                                # stub until step-4 lands, so keep it.
+                                if prefix == "__shared_token_":
+                                    pass
+                                else:
+                                    String wrapper_name = prefix + callee_name
+                                    # Emit a stub function
+                                    Vector[int] wp = [I64_TYPE]
+                                    Vector[GirLocal] wl = [GirLocal(UNIT_TYPE, None, LoOwned(), BoNone(), false), GirLocal(I64_TYPE, None, LoParam(), BoParam(-1), false)]
+                                    Vector[BasicBlock] wb = [BasicBlock([], GTReturn(OpConstUnit()))]
+                                    gmod.functions.push(GirFunction(wrapper_name, !wp, UNIT_TYPE, !wl, !wb))
+                                    emitted.put(callee_name, true)
                         else:
                             pass
                 case EMethodCall(obj_box, method_name, _, _, _):

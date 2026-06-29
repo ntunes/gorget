@@ -26,7 +26,7 @@ from compiler.data.schema import BuiltinMethodDecl, BuiltinMethodEntry
 from compiler.data.schema import BuiltinRetKind, BrkString, BrkInfer
 from lir_lower import resource_meta_for, is_guard_struct_type, guard_method_prefix, is_opaque_pointer_type
 from lower_loops import lower_for_string, lower_for_range, lower_for_vector, lower_for_dict, lower_for_set, parse_dict_kv_types
-from lower import LowerCtx, ResultPayloadTypes, DictKvNames, ClosureSig, CaptureCollector, FieldBorrowPair, FieldDerefResult, SVarDeclEmission
+from lower import LowerCtx, ResultPayloadTypes, DictKvNames, ClosureSig, CaptureCollector, FieldBorrowPair, FieldDerefResult, SVarDeclEmission, SharedLocalInfo
 from lower import lower_fail, diag_bug, diag_warn, emit, new_block, switch_to, set_terminator
 from lower import add_local, add_local_with, add_local_inheriting, nl_get, nl_put, nl_contains
 from lower import expr_kind, pat_kind, stmt_kind
@@ -504,6 +504,98 @@ String spawn_runtime_c_name(int tid, GirModule &gmod):
         return "void*"
     return nm
 
+# ── Shared-variable carrier model (round-16 Phase 1) ────────────────
+#
+# Mirrors Rust gg's ArcMutex `lower_shared_var_decl` arm
+# (`src/ir/lowering/stmts/mod.rs:1579-1630`) + the read/write facade
+# (`src/ir/lowering/exprs/shared.rs`). A `shared int x = 0` mints a hidden
+# CARRIER local of type `Shared__Mutex__<inner_c>` (a `gorget_shared` handle
+# whose `data` holds a `gorget_mutex` over the inner value) and a facade
+# local bound to the user name. Reads/writes route through the carrier's
+# lock-chain. The mangled type names (`Mutex__c` / `Guard__c` /
+# `Shared__Mutex__c`) are registered as named types so lower_type_defs wires
+# their `type_method_prefix_map` entries (gorget_mutex / gorget_guard /
+# gorget_shared), making every mangled GICall below route to the right
+# runtime symbol via `map_runtime_name` — the SAME path `mutex_basic.gg`
+# (a working snapshot) exercises for `counter.lock()`/`guard.get()`.
+
+# Register the carrier's named types and return the carrier GIR type-id
+# (a Ptr-to-Shared__Mutex__c). inner_c is the inner value's C type name
+# (int64_t / bool / double).
+int register_shared_carrier_type(GirModule &gmod, String inner_c):
+    String mutex_mangled = "Mutex__" + inner_c
+    String guard_mangled = "Guard__" + inner_c
+    String shared_mangled = "Shared__Mutex__" + inner_c
+    # Register all three named types so build_resource_metadata classifies
+    # them and lower_type_defs writes their method-prefix map entries.
+    lookup_or_register_named(&gmod, mutex_mangled)
+    lookup_or_register_named(&gmod, guard_mangled)
+    int shared_tid = lookup_or_register_named(&gmod, shared_mangled)
+    # The carrier VALUE local holds a `Shared__Mutex__c` HANDLE — a pointer
+    # typedef (GorgetShared*). Slot is a Ptr-to-named (a bare value slot
+    # can't hold the handle), matching the Mutex/sync-ctor pattern at
+    # lower_expr.gg:5897.
+    return register_ptr(&gmod, shared_tid)
+
+# Unwrap a Shared__Mutex__c carrier into the inner Mutex handle (a
+# `GorgetMutex*`). Rust gg emits a per-type wrapper `Shared__Mutex__c__get`
+# that does `*(Mutex__c*)gorget_shared_get_ptr(self)` (helpers.rs:251); the
+# self-host has NO per-type wrappers, so we inline the same two steps:
+#   raw = gorget_shared_get_ptr(carrier)   # void* AT the stored mutex pointer
+#   mutex = *(Mutex__c*)raw                 # GIDeref loads the 8-byte handle
+# `gorget_shared_get_ptr` is emitted via GICallExtern (NOT a mangled GICall)
+# so it bypasses the collection-Option-lift gate (`is_collection_void_return`
+# includes gorget_shared_get_ptr — that lift is for `Shared[T].get()`, not
+# the carrier unwrap). Returns the Mutex-handle local.
+int emit_shared_unwrap_mutex(LowerCtx &ctx, GirModule &gmod, SharedLocalInfo info):
+    int mutex_tid = register_ptr(&gmod, lookup_or_register_named(&gmod, info.mutex_mangled))
+    # raw void* AT the stored mutex pointer (a Ptr-to-Mutex-handle).
+    int su_raw_ty = register_ptr(&gmod, lookup_or_register_named(&gmod, info.mutex_mangled))
+    int su_raw = add_local(&ctx, su_raw_ty, None)
+    emit(&ctx, GICallExtern(su_raw, "gorget_shared_get_ptr", [OpCopy(info.hidden_local)]))
+    # mutex = *(Mutex__c*)raw — load the 8-byte handle pointer.
+    int su_mutex = add_local(&ctx, mutex_tid, None)
+    emit(&ctx, GIDeref(su_mutex, su_raw, mutex_tid))
+    return su_mutex
+
+# Emit the lock-chain READ of a shared var's current value, returning a
+# fresh local of the inner type. Mirrors Rust `emit_shared_mutex_lock_get`
+# (`shared.rs:11-39`):
+#   mv = unwrap(carrier)                  # -> Mutex handle (gorget_shared_get_ptr + deref)
+#   g  = Mutex__c__lock(mv)               # -> guard value (gorget_mutex_lock)
+#   gp = &g
+#   val = Guard__c__get(gp)               # -> T (gorget_guard_get + deref)
+#   Guard__c__drop(gp)                    # release (gorget_guard_release)
+int emit_shared_mutex_lock_get(LowerCtx &ctx, GirModule &gmod, SharedLocalInfo info):
+    int guard_tid = lookup_or_register_named(&gmod, info.guard_mangled)
+    # 1. unwrap the carrier → the inner Mutex handle.
+    int sg_mutex = emit_shared_unwrap_mutex(&ctx, &gmod, info)
+    # 2. lock the mutex → a Guard value. Emitted as GICallExtern (mangled) so
+    #    the lir_lower arg-shaping (the SAME path mutex_basic.gg's working
+    #    `counter.lock()`/`guard.get()`/`set()` take) applies — GICall lacks
+    #    the guard_set size-append + the guard_get deref-lift.
+    int sg_guard = add_local(&ctx, guard_tid, None)
+    emit(&ctx, GICallExtern(sg_guard, info.mutex_mangled + "__lock", [OpCopy(sg_mutex)]))
+    # 3. read the guarded value (Guard__c__get borrows &g, routes to
+    #    gorget_guard_get which the arg-shaping derefs once for a scalar).
+    int sg_val = add_local(&ctx, info.inner_type, None)
+    emit(&ctx, GICallExtern(sg_val, info.guard_mangled + "__get", [OpBorrow(sg_guard)]))
+    # 4. release the lock (Guard__c__drop → gorget_guard_release).
+    emit(&ctx, GICallExtern(-1, info.guard_mangled + "__drop", [OpBorrow(sg_guard)]))
+    return sg_val
+
+# Emit the lock-chain WRITE of `value_local` into a shared var. Mirrors Rust
+# `emit_shared_mutex_lock_set` (`shared.rs:42-69`).
+void emit_shared_mutex_lock_set(LowerCtx &ctx, GirModule &gmod, SharedLocalInfo info, int value_local):
+    int guard_tid = lookup_or_register_named(&gmod, info.guard_mangled)
+    int ss_mutex = emit_shared_unwrap_mutex(&ctx, &gmod, info)
+    int ss_guard = add_local(&ctx, guard_tid, None)
+    emit(&ctx, GICallExtern(ss_guard, info.mutex_mangled + "__lock", [OpCopy(ss_mutex)]))
+    # Guard__c__set(&g, value) → gorget_guard_set(&g, &value, sizeof(T)) (the
+    # arg-shaping in lir_lower address-takes the value + appends sizeof).
+    emit(&ctx, GICallExtern(-1, info.guard_mangled + "__set", [OpBorrow(ss_guard), OpCopy(value_local)]))
+    emit(&ctx, GICallExtern(-1, info.guard_mangled + "__drop", [OpBorrow(ss_guard)]))
+
 # Is this param/return type-id a shape the named-fn spawn lowering fully handles?
 # Supported: scalar (< PRIM_COUNT, by-value) OR String OR a runtime collection
 # (Vector/Dict/Set/Deque/Heap → GorgetArray/GorgetMap/GorgetSet, passed by-ptr).
@@ -522,21 +614,41 @@ bool spawn_shape_supported(int tid, GirModule &gmod):
     String rt = collection_runtime_type(nm, &gmod)
     if rt == "GorgetArray" or rt == "GorgetMap" or rt == "GorgetSet":
         return true
-    # KEYSTONE: accept a Channel carrier param — the ONE opaque carrier the
-    # named-fn spawn path supports this slice. This stays a Channel-specific
-    # NAME gate on purpose: the typed predicates both admit carriers the path
-    # does NOT yet support — `is_opaque_pointer_type` would let Mutex / RWLock /
-    # Semaphore through, and `is_refcounted_carrier` (CsRefCounted) would let
-    # RWLock / Shared through (RWLock is CsRefCounted at build_resource_metadata,
-    # and is spawned as a param in async_rwlock / shared_rwlock / stress_rwlock_*).
-    # Admitting them here regresses those fixtures to an `unknown type name`
-    # C-emit failure (the by-void* / clone_params plumbing for them is Slice-3+).
-    # Slice-3 (Shared carrier) generalizes this gate to a typed spawn-supported
-    # flag; until then this narrow allow-list is the correct, load-bearing shape.
-    # (Counted by tests/lints.rs `no_growth_in_self_host_name_prefix_routing`;
-    # the budget bump documents this gate.)
-    if nm.starts_with("Channel__"):
-        return true
+    # Accept a spawn-supported CARRIER param — the Channel carrier (Inc-keystone)
+    # and the Shared__Mutex carrier (round-16 shared-spawn). Both have the
+    # clone_params retain/release + by-void* ctx plumbing wired; the OTHER opaque
+    # carriers (Mutex / RWLock / Semaphore / AtomicInt) do NOT and would regress
+    # to an `unknown type name` C-emit failure (RWLock is spawned in
+    # async_rwlock / shared_rwlock / stress_rwlock_*; AtomicInt in
+    # stress_atomic_hammer; Semaphore in semaphore_basic).
+    #
+    # TYPED gate (Core #2): `spawn_supported_carrier` reads the carrier's
+    # `method_prefix` metadata VALUE (gorget_channel / gorget_shared) — the
+    # SAME typed-value dispatch `drop_fn_for_type` / `register_owning_opaque_local`
+    # use — NOT a Channel/Shared mangled-name prefix test (which would
+    # decide spawn-supportedness from the mangled name). This retires the former
+    # interim Channel-prefix name-gate (lint budget 79→78). It does NOT
+    # over-admit: `is_opaque_pointer_type` (.opaque_handle) lets Mutex/RWLock/
+    # Semaphore through, and `is_refcounted_carrier` (CsRefCounted) lets
+    # AtomicInt/Semaphore/Weak through — matching on the two supported
+    # method_prefix VALUES admits exactly Channel + Shared. (RWLock is now
+    # CsResource, not CsRefCounted — Inc-B a1331b4d reclassified it.)
+    return spawn_supported_carrier(nm, &gmod)
+
+# Typed predicate: is `nm` a CARRIER the named-fn / shared spawn path fully
+# supports (Channel or Shared)? Reads the `method_prefix` metadata VALUE via
+# resource_meta_for — a typed single-source dispatch, NOT a name-prefix test.
+bool spawn_supported_carrier(String nm, GirModule &gmod):
+    match resource_meta_for(&gmod, nm):
+        case Some(rmeta):
+            match rmeta.method_prefix:
+                case Some(mp):
+                    if mp == "gorget_channel" or mp == "gorget_shared":
+                        return true
+                case None:
+                    pass
+        case None:
+            pass
     return false
 
 # Lower a NAMED-function async spawn `spawn f(args)`. Supports scalar+void
@@ -632,6 +744,318 @@ int lower_named_fn_spawn(LowerCtx &ctx, String spawn_fn_name, Vector[SpannedExpr
     int spawn_dst = add_local(&ctx, spawn_task_ty, None)
     emit(&ctx, GICall(spawn_dst, "__gorget_spawn_" + spawn_fn_name, spawn_call_args))
     return spawn_dst
+
+# ── Shared-spawn deferral + token wrapper (round-16 Phase 1) ─────────
+#
+# `spawn worker(&x)` where x is a `shared` var must NOT pass a producer-stack
+# pointer to the worker (a data race / UAF). Instead it passes the refcounted
+# CARRIER (Shared__Mutex__T) by value; the worker, inside a synthesized
+# `__shared_token_<worker>` wrapper, LOCKS the carrier, derives the inner
+# mut-ptr, calls the real worker, then unlocks. Mirrors Rust gg's
+# `build_shared_token_wrapper` (`src/ir/lowering/exprs/spawn.rs:523`) + the
+# spawn-site collection (`exprs/mod.rs:1196-1399`). The carrier is refcount-
+# cloned into the spawn ctx before SUBMIT (clone_params, already wired for
+# Shared__ via is_refcounted_carrier) so the worker owns its own strong ref.
+# This is the SOUNDNESS keystone (Core #8): the worker locks; no stack pointer
+# crosses the thread boundary.
+
+# Build the `__shared_token_<callee>` GIR wrapper. Its params mirror the
+# callee's, EXCEPT each shared-arg slot is the carrier Ptr type. The body
+# (one straight-line block) locks all carriers in ascending decl_order,
+# derives each inner mut-ptr via Guard__c__get_ptr, calls the real callee,
+# then drops the guards in reverse order. Mirrors spawn.rs:534-726.
+void build_shared_token_wrapper(GirModule &gmod, String wrapper_name, String callee_name, Vector[int] callee_param_types, Vector[int] shared_arg_indices, Vector[SharedLocalInfo] shared_arg_infos, int callee_ret_ty):
+    Vector[GirLocal] tw_locals = []
+    Vector[Instruction] tw_insts = []
+    # _0 = return place (UNIT for void callees — the Phase-1 callees are void).
+    tw_locals.push(GirLocal(callee_ret_ty, None, LoOwned(), BoNone(), false))
+    # _1.._N = params. A shared-arg slot becomes the carrier Ptr type; every
+    # other slot keeps the callee's param type.
+    Vector[int] tw_param_types = []
+    int twp = 0
+    while twp < callee_param_types.len():
+        int tw_slot_ty = callee_param_types.get(twp).unwrap()
+        int tw_shared_pos = -1
+        int twsi = 0
+        while twsi < shared_arg_indices.len():
+            if shared_arg_indices.get(twsi).unwrap() == twp:
+                tw_shared_pos = twsi
+            twsi += 1
+        if tw_shared_pos >= 0:
+            tw_slot_ty = shared_arg_infos.get(tw_shared_pos).unwrap().carrier_type
+        tw_param_types.push(tw_slot_ty)
+        tw_locals.push(GirLocal(tw_slot_ty, None, LoParam(), BoParam(-1), false))
+        twp += 1
+    # Local-id allocator: next free id after _0 + params.
+    int tw_next = callee_param_types.len() + 1
+    # Phase 1 — lock-all in ascending decl_order; collect (param_local,
+    # guard_ptr_local) per shared arg, and the inner-ptr operand for the call.
+    # We process shared args in their decl_order; build a parallel list of the
+    # guard locals so Phase 3 can drop them in reverse.
+    Vector[int] tw_guard_locals = []
+    Vector[int] tw_guard_order = []
+    # call_inner_ptr[arg_index] holds the inner mut-ptr local for a shared arg.
+    Dict[int, int] tw_inner_ptr_for_arg = {}
+    # Sort shared args by decl_order (ascending). Small N — insertion order is
+    # usually already ascending, but sort to honor the lock-ordering contract.
+    Vector[int] tw_sorted = []
+    int twso = 0
+    while twso < shared_arg_indices.len():
+        tw_sorted.push(twso)
+        twso += 1
+    # simple selection sort by decl_order
+    int tssi = 0
+    while tssi < tw_sorted.len():
+        int tssj = tssi + 1
+        while tssj < tw_sorted.len():
+            int a_idx = tw_sorted.get(tssi).unwrap()
+            int b_idx = tw_sorted.get(tssj).unwrap()
+            if shared_arg_infos.get(b_idx).unwrap().decl_order < shared_arg_infos.get(a_idx).unwrap().decl_order:
+                tw_sorted.set(tssi, b_idx)
+                tw_sorted.set(tssj, a_idx)
+            tssj += 1
+        tssi += 1
+    int twk = 0
+    while twk < tw_sorted.len():
+        int sh_k = tw_sorted.get(twk).unwrap()
+        SharedLocalInfo sh_info = shared_arg_infos.get(sh_k).unwrap()
+        int sh_arg_idx = shared_arg_indices.get(sh_k).unwrap()
+        int sh_param_local = sh_arg_idx + 1
+        # mutex_ptr = *(Mutex__c*)gorget_shared_get_ptr(carrier_param)
+        int tw_mutex_ptr_ty = register_ptr(&gmod, lookup_or_register_named(&gmod, sh_info.mutex_mangled))
+        int tw_raw = tw_next
+        tw_next += 1
+        tw_locals.push(GirLocal(tw_mutex_ptr_ty, None, LoOwned(), BoNone(), false))
+        tw_insts.push(GICallExtern(tw_raw, "gorget_shared_get_ptr", [OpCopy(sh_param_local)]))
+        int tw_mutex = tw_next
+        tw_next += 1
+        tw_locals.push(GirLocal(tw_mutex_ptr_ty, None, LoOwned(), BoNone(), false))
+        tw_insts.push(GIDeref(tw_mutex, tw_raw, tw_mutex_ptr_ty))
+        # guard = Mutex__c__lock(mutex_ptr)
+        int tw_guard_ty = lookup_or_register_named(&gmod, sh_info.guard_mangled)
+        int tw_guard = tw_next
+        tw_next += 1
+        tw_locals.push(GirLocal(tw_guard_ty, None, LoOwned(), BoNone(), false))
+        tw_insts.push(GICallExtern(tw_guard, sh_info.mutex_mangled + "__lock", [OpCopy(tw_mutex)]))
+        tw_guard_locals.push(tw_guard)
+        tw_guard_order.push(sh_k)
+        # inner_ptr = Guard__c__get_ptr(&guard)  — a MutPtr(inner) the callee
+        # receives as its `&counter` arg.
+        int tw_inner_ptr_ty = register_type(&gmod, GtMutPtr(sh_info.inner_type))
+        int tw_inner_ptr = tw_next
+        tw_next += 1
+        tw_locals.push(GirLocal(tw_inner_ptr_ty, None, LoOwned(), BoNone(), false))
+        tw_insts.push(GICallExtern(tw_inner_ptr, sh_info.guard_mangled + "__get_ptr", [OpBorrow(tw_guard)]))
+        tw_inner_ptr_for_arg.put(sh_arg_idx, tw_inner_ptr)
+        twk += 1
+    # Phase 2 — call the real callee. Build args in parameter order: a shared
+    # slot passes its inner mut-ptr; a non-shared slot passes the param local.
+    Vector[Operand] tw_call_args = []
+    int twc = 0
+    while twc < callee_param_types.len():
+        if tw_inner_ptr_for_arg.contains(twc):
+            tw_call_args.push(OpCopy(tw_inner_ptr_for_arg.get(twc).unwrap()))
+        else:
+            tw_call_args.push(OpCopy(twc + 1))
+        twc += 1
+    if callee_ret_ty == UNIT_TYPE:
+        tw_insts.push(GICall(-1, callee_name, tw_call_args))
+    else:
+        tw_insts.push(GICall(0, callee_name, tw_call_args))
+    # Phase 3 — unlock-all in REVERSE acquisition order.
+    int twg = tw_guard_locals.len() - 1
+    while twg >= 0:
+        int rev_guard = tw_guard_locals.get(twg).unwrap()
+        int rev_k = tw_guard_order.get(twg).unwrap()
+        SharedLocalInfo rev_info = shared_arg_infos.get(rev_k).unwrap()
+        tw_insts.push(GICallExtern(-1, rev_info.guard_mangled + "__drop", [OpBorrow(rev_guard)]))
+        twg -= 1
+    # Assemble the one-block function + Return.
+    Operand tw_ret_op = OpConstUnit()
+    if callee_ret_ty != UNIT_TYPE:
+        tw_ret_op = OpCopy(0)
+    Vector[BasicBlock] tw_blocks = [BasicBlock(!tw_insts, GTReturn(tw_ret_op))]
+    gmod.functions.push(GirFunction(wrapper_name, !tw_param_types, callee_ret_ty, !tw_locals, !tw_blocks))
+
+# Detect + lower a `spawn callee(args)` that passes ≥1 shared mut-borrow.
+# Returns the spawn dst local, or -1 if no shared arg (caller falls back to
+# the normal named-fn spawn / passthrough). Mirrors the spawn-site shared
+# collection at Rust `exprs/mod.rs:1196-1399`.
+int lower_shared_spawn(LowerCtx &ctx, String callee_name, Vector[SpannedExpr] spawn_args, GirModule &gmod):
+    # Collect shared-arg (index, info). A shared arg is `&x` / `!x` / bare `x`
+    # whose identifier is a shared var. Phase-1 fixtures pass `&x`
+    # (EMutableBorrow(EIdentifier(x))).
+    Vector[int] sp_indices = []
+    Vector[SharedLocalInfo] sp_infos = []
+    int spi = 0
+    while spi < spawn_args.len():
+        String sp_ident = ""
+        # `&x` / `!x` is ALWAYS a borrow (the carrier is passed). A BARE
+        # `EIdentifier(x)` is only a shared-spawn arg if the CALLEE's param at
+        # this index is a mut-borrow (`int &val` → GtMutPtr); a by-value param
+        # (`int val`, as in print_val/reader) must instead READ x (lock-get)
+        # and pass the VALUE — NOT the carrier. So a bare ident defers the
+        # decision to the callee-param check below.
+        bool sp_is_explicit_borrow = false
+        match spawn_args.get(spi).unwrap().expr:
+            case EMutableBorrow(sp_inner):
+                match (*sp_inner).expr:
+                    case EIdentifier(sp_n):
+                        sp_ident = sp_n
+                        sp_is_explicit_borrow = true
+                    else:
+                        pass
+            case EMove(sp_inner2):
+                match (*sp_inner2).expr:
+                    case EIdentifier(sp_n2):
+                        sp_ident = sp_n2
+                        sp_is_explicit_borrow = true
+                    else:
+                        pass
+            case EIdentifier(sp_n3):
+                sp_ident = sp_n3
+            else:
+                pass
+        if sp_ident != "" and ctx.shared_locals.contains(sp_ident):
+            bool sp_treat_shared = sp_is_explicit_borrow
+            if not sp_treat_shared:
+                # Bare ident — only a shared-spawn arg when the callee param is
+                # a mut-borrow (GtMutPtr). Otherwise it's a by-value read.
+                Vector[int] sp_pre_ptys = get_fn_param_types(callee_name, &gmod)
+                if spi < sp_pre_ptys.len():
+                    match gmod.type_table.get(sp_pre_ptys.get(spi).unwrap()).unwrap():
+                        case GtMutPtr(_):
+                            sp_treat_shared = true
+                        else:
+                            pass
+            if sp_treat_shared:
+                sp_indices.push(spi)
+                sp_infos.push(ctx.shared_locals.get(sp_ident).unwrap())
+        spi += 1
+    if sp_indices.len() == 0:
+        return -1
+    # The callee must be a void-returning fn this phase (the Phase-1 workers
+    # are `async void`). A non-void shared callee rolls to a later increment.
+    int sp_callee_ret = UNIT_TYPE
+    bool sp_ret_found = false
+    int spf = 0
+    while spf < gmod.functions.len():
+        if gmod.functions.get(spf).unwrap().name == callee_name:
+            sp_callee_ret = gmod.functions.get(spf).unwrap().return_type
+            sp_ret_found = true
+            spf = gmod.functions.len()
+        else:
+            spf += 1
+    if not sp_ret_found and gmod.fn_sigs.contains(callee_name):
+        sp_callee_ret = gmod.fn_sigs.get(callee_name).unwrap()
+    # The callee returns UNIT (void worker) or a SCALAR (the wrapper stores the
+    # callee result in `_0` and returns it via the spawn ctx `result`). A
+    # String/collection/owned return rolls to a later increment.
+    if sp_callee_ret != UNIT_TYPE and not (sp_callee_ret < PRIM_COUNT):
+        return -1
+    Vector[int] sp_callee_ptys = get_fn_param_types(callee_name, &gmod)
+    # Non-shared params must be a supported (scalar) shape — Phase-1 workers
+    # take only the shared `&counter`, but guard generally.
+    int spcheck = 0
+    while spcheck < sp_callee_ptys.len():
+        bool is_shared_slot = false
+        int spck = 0
+        while spck < sp_indices.len():
+            if sp_indices.get(spck).unwrap() == spcheck:
+                is_shared_slot = true
+            spck += 1
+        if not is_shared_slot:
+            int sp_pty = sp_callee_ptys.get(spcheck).unwrap()
+            # The non-shared slot may be a MutPtr (another & param) — out of
+            # Phase-1 scope; only plain scalars are supported alongside shared.
+            if not spawn_shape_supported(sp_pty, &gmod):
+                return -1
+        spcheck += 1
+    # Build the token wrapper.
+    String sp_wrapper = "__shared_token_" + callee_name
+    bool sp_wrap_exists = false
+    for sfr in gmod.spawned_fns:
+        if sfr.fn_name == sp_wrapper:
+            sp_wrap_exists = true
+    if not sp_wrap_exists:
+        build_shared_token_wrapper(&gmod, sp_wrapper, callee_name, sp_callee_ptys.clone(), sp_indices.clone(), sp_infos.clone(), sp_callee_ret)
+        # Register fn_sigs for the wrapper (return type) so downstream
+        # resolution sees it.
+        gmod.fn_sigs.put(sp_wrapper.clone(), sp_callee_ret)
+    # Compute the wrapper's spawn-param C-types (carrier = void* opaque,
+    # non-shared = the callee's runtime C name).
+    Vector[String] sp_wrap_ctys = []
+    int spw = 0
+    while spw < sp_callee_ptys.len():
+        bool spw_is_shared = false
+        int spwk = 0
+        while spwk < sp_indices.len():
+            if sp_indices.get(spwk).unwrap() == spw:
+                spw_is_shared = true
+            spwk += 1
+        if spw_is_shared:
+            # Carrier is opaque → void* in the spawn ctx (clone_params retains it).
+            sp_wrap_ctys.push("void*")
+        else:
+            sp_wrap_ctys.push(spawn_runtime_c_name(sp_callee_ptys.get(spw).unwrap(), &gmod))
+        spw += 1
+    # Wrapper return C-type: "void" for a unit callee, else the scalar runtime
+    # C name. The spawn helper stores the scalar in the ctx `result` and await
+    # reads it back.
+    String sp_ret_c = "void"
+    if sp_callee_ret != UNIT_TYPE:
+        sp_ret_c = spawn_runtime_c_name(sp_callee_ret, &gmod)
+    # Register the spawned wrapper (dedup by name).
+    bool sp_reg_exists = false
+    for sfr2 in gmod.spawned_fns:
+        if sfr2.fn_name == sp_wrapper:
+            sp_reg_exists = true
+    if not sp_reg_exists:
+        gmod.spawned_fns.push(SpawnFnRec(sp_wrapper.clone(), sp_ret_c.clone(), !sp_wrap_ctys))
+    ctx.pending_spawn_fn = sp_wrapper.clone()
+    String sp_task_name = "Task__" + sp_ret_c
+    Vector[String] sp_ttf = []
+    if ctx.task_type_fns.contains(sp_task_name):
+        sp_ttf = ctx.task_type_fns.get(sp_task_name).unwrap()
+    bool sp_ttf_has = false
+    for ttf in sp_ttf:
+        if ttf == sp_wrapper:
+            sp_ttf_has = true
+    if not sp_ttf_has:
+        sp_ttf.push(sp_wrapper.clone())
+    ctx.task_type_fns.put(sp_task_name, !sp_ttf)
+    int sp_task_ty = lookup_or_register_named(&gmod, sp_task_name)
+    # Lower the spawn args, passing the CARRIER for each shared arg (set
+    # shared_pass_raw so a shared identifier resolves to its carrier handle).
+    Vector[Operand] sp_call_args = []
+    bool sp_prev_raw = ctx.shared_pass_raw
+    ctx.shared_pass_raw = true
+    int spa = 0
+    while spa < spawn_args.len():
+        # A shared arg is `&x`; lower the INNER identifier (so pass_raw yields
+        # the carrier handle) rather than the EMutableBorrow wrapper.
+        SpannedExpr sp_arg_expr = spawn_args.get(spa).unwrap()
+        bool spa_is_shared = false
+        int spak = 0
+        while spak < sp_indices.len():
+            if sp_indices.get(spak).unwrap() == spa:
+                spa_is_shared = true
+            spak += 1
+        if spa_is_shared:
+            match sp_arg_expr.expr:
+                case EMutableBorrow(spa_inner):
+                    sp_arg_expr = *spa_inner
+                case EMove(spa_inner2):
+                    sp_arg_expr = *spa_inner2
+                else:
+                    pass
+        int sp_arg_local = lower_expr(&ctx, sp_arg_expr, &gmod)
+        sp_call_args.push(op_consume(&ctx, &gmod, sp_arg_local, CkCallArgBorrow()))
+        spa += 1
+    ctx.shared_pass_raw = sp_prev_raw
+    int sp_dst = add_local(&ctx, sp_task_ty, None)
+    emit(&ctx, GICall(sp_dst, "__gorget_spawn_" + sp_wrapper, sp_call_args))
+    return sp_dst
 
 int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
     # Consume the one-shot suppress flag for THIS expression.
@@ -831,6 +1255,18 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             register_local_for_drop(&ctx, gsdst, gs_tid, &gmod)
             return gsdst
         case EIdentifier(name):
+            # Shared-variable transparent READ (round-16 Phase 1). A read of a
+            # `shared int x` routes through the carrier's lock-chain so it sees
+            # the CURRENT value (not the decl-time snapshot in the facade
+            # local). When `shared_pass_raw` is set (the spawn-of-`&shared`
+            # site), return the raw carrier handle instead — the worker must
+            # receive the carrier, not a locked snapshot. Mirrors Rust gg's
+            # Identifier arm shared dispatch (`exprs/mod.rs:115-139`).
+            if ctx.shared_locals.contains(name):
+                SharedLocalInfo eid_sh = ctx.shared_locals.get(name).unwrap()
+                if ctx.shared_pass_raw:
+                    return eid_sh.hidden_local
+                return emit_shared_mutex_lock_get(&ctx, &gmod, eid_sh)
             if nl_contains(&ctx, name):
                 int eid_lid = nl_get(&ctx, name)
                 # `&`/`!`-param value READ. A `GtMutPtr(inner)`-typed slot
@@ -4304,6 +4740,15 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             # spawn_closure_void/spawn_closure_copy). Mirrors the
                             # ECall EIdentifier closure-vs-fn guard (:1195).
                             if gmod.fn_sigs.contains(spawn_named_fn) and not nl_contains(&ctx, spawn_named_fn):
+                                # Shared-spawn deferral (round-16 Phase 1): a
+                                # `spawn worker(&x)` with x a `shared` var routes
+                                # to the token-wrapper path (pass the carrier, not
+                                # &x; lock inside the worker). Returns -1 when no
+                                # shared arg → fall through to the normal named-fn
+                                # spawn.
+                                int spawn_shared_dst = lower_shared_spawn(&ctx, spawn_named_fn, spawn_args, &gmod)
+                                if spawn_shared_dst >= 0:
+                                    return spawn_shared_dst
                                 # Named-fn spawn (Inc-1). Returns -1 when OUT of
                                 # Inc-1 scope (String/owned return or non-scalar
                                 # param) — fall back to the bare passthrough (keeps
