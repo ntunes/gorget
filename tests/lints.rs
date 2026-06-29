@@ -1511,9 +1511,25 @@ fn snag11_equip_symbol_mangle_site_count() {
 /// The codegen body-suppression + the collection clone/drop routing decisions use the
 /// TYPED `runtime == "GorgetClosure"` (set once by the alias's `type_runtime_map.put`),
 /// adding 0 to this count — NOT a classification dodge.
+/// Bumped 78 → 79 (2026-06-29): the keystone Channel-spawn carrier (Slices 1+2)
+/// added ONE `nm.starts_with("Channel__")` site in `lower_expr.gg`'s
+/// `spawn_shape_supported` — the named-fn async-spawn ALLOW-LIST gate that admits
+/// a Channel carrier param (the one opaque carrier the spawn path supports this
+/// slice). It stays a Channel-specific NAME gate ON PURPOSE: the typed predicates
+/// both OVER-admit — `is_opaque_pointer_type` (.opaque_handle) would let Mutex /
+/// RWLock / Semaphore through, and `is_refcounted_carrier` (.copy_semantics ==
+/// CsRefCounted) would let RWLock / Shared through (RWLock is CsRefCounted, and is
+/// a spawned param in async_rwlock / shared_rwlock / stress_rwlock_*), regressing
+/// those fixtures to an `unknown type name` C-emit failure (their by-void* /
+/// clone_params plumbing is Slice-3+). Same precedent as the Thread 69→70 spawn-gate
+/// bump. The sibling spawn sites were typed in the SAME change and add 0: the
+/// clone_params membership decision (`lir_lower.gg` spawn loop) now reads
+/// `is_refcounted_carrier` (CsRefCounted), and `spawn_runtime_c_name`'s Channel→void*
+/// now reads `is_opaque_pointer_type` (.opaque_handle). Slice-3 generalizes the gate
+/// to a typed spawn-supported flag; drop BUDGET back to 78 when it lands.
 #[test]
 fn no_growth_in_self_host_name_prefix_routing() {
-    const BUDGET: usize = 78;
+    const BUDGET: usize = 79;
 
     // Phase-A classification-routing class only: all MANGLED_PREFIXES EXCEPT
     // the prelude option-like ones (those are the sibling lint's burn-down).

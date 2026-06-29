@@ -2002,6 +2002,33 @@ String emit_thread_helpers(LirModule &m):
 #     return).
 # Gated empty on no spawned fns; deduped per fn_name. The runtime
 # (GorgetTask / scheduler macros) is already linked when spawned_fns>0.
+# KEYSTONE Slice-2: emit a `gorget_channel_release(__ctx->__<name>)` for every
+# refcounted-carrier param the spawn fn RETAINED into the ctx (Slice-1's
+# `gorget_channel_retain`). Called from BOTH ctx-teardown paths (__spawn_drop +
+# __gorget_await) — exactly one runs per ctx, so the release fires once, balancing
+# the one retain. Keyed off the SAME typed `clone_params` set the retain uses (a
+# CloneParam is recorded only for a CsRefCounted carrier — `is_refcounted_carrier`
+# in lir_lower's spawn loop, reading the typed `copy_semantics` flag, NOT a name
+# substring), so this is a typed-set membership test at THIS site. The ctx field
+# name matches the retain target
+# (`__ctx->__<param-name>`); the release symbol mirrors Rust's per-type
+# `Channel__T__drop` → `gorget_channel_release` (c_lir/helpers.rs:241). The
+# self-host emits no per-type wrapper, so it routes straight to the runtime
+# release, exactly as the retain routes straight to `gorget_channel_retain`.
+String emit_spawn_carrier_releases(LirSpawnedFn sf):
+    String out = ""
+    int rci = 0
+    while rci < sf.params.len():
+        SpawnParam rcp = sf.params.get(rci).unwrap()
+        bool rcp_is_clone = false
+        for cp in sf.clone_params:
+            if cp.param_index == rci:
+                rcp_is_clone = true
+        if rcp_is_clone:
+            out = out + "    gorget_channel_release(__ctx->__" + rcp.name + ");\n"
+        rci += 1
+    return out
+
 String emit_spawn_helpers(LirModule &m):
     if m.spawned_fns.len() == 0:
         return ""
@@ -2065,6 +2092,18 @@ String emit_spawn_helpers(LirModule &m):
         out = out + "static void __spawn_drop_" + fn_name + "(void* __ptr) {\n"
         out = out + "    " + ctx_name + "* __ctx = (" + ctx_name + "*)__ptr;\n"
         out = out + "    GORGET_SCHEDULER_WAIT(&__ctx->base);\n"
+        # KEYSTONE Slice-2: balance the spawn-fn `gorget_channel_retain` (Slice-1)
+        # by RELEASING each retained refcounted-carrier param when the spawn ctx is
+        # torn down. The retain gave the spawned thread its own refcount; the ctx
+        # OWNS that refcount, so the ctx teardown releases it — exactly symmetric,
+        # and (unlike a producer-body release) provably never touches a NON-spawned
+        # direct call (`use_channel(ch)` in concurrency_params), which never retains
+        # and would UAF on a body-release. Mirrors Rust gg's net retain/release
+        # balance (Rust releases in the producer body, `Channel__T__drop` →
+        # `gorget_channel_release`; the ctx is joined here via SCHEDULER_WAIT, so
+        # releasing on this thread post-join is equivalent + atomic). Same typed
+        # `clone_params` set the retain keys off — never a name substring.
+        out = out + emit_spawn_carrier_releases(sf)
         out = out + "    pthread_mutex_destroy(&__ctx->base.mtx);\n"
         out = out + "    pthread_cond_destroy(&__ctx->base.cond);\n"
         out = out + "    GORGET_FREE(__ctx, sizeof(" + ctx_name + "));\n"
@@ -2084,9 +2123,24 @@ String emit_spawn_helpers(LirModule &m):
         out = out + "    __ctx->base.run = __spawn_run_" + fn_name + ";\n"
         out = out + "    pthread_mutex_init(&__ctx->base.mtx, NULL);\n"
         out = out + "    pthread_cond_init(&__ctx->base.cond, NULL);\n"
-        for csp in sf.params:
-            # Inc-1: scalar by-value copy (no clone — clone_params is empty).
-            out = out + "    __ctx->__" + csp.name + " = " + csp.name + ";\n"
+        int cspi = 0
+        while cspi < sf.params.len():
+            SpawnParam csp = sf.params.get(cspi).unwrap()
+            # KEYSTONE-PROTOTYPE: refcounted carrier params (clone_params) are
+            # RETAINED when captured into the spawn ctx so the spawned thread
+            # owns its own refcount; non-carrier params are a by-value copy.
+            # Mirrors Rust gg's `{gir}__clone(param)` (emit_types.rs:474). The
+            # self-host emits no per-type clone wrapper, so it routes straight
+            # to the runtime retain (gorget_channel_retain).
+            bool csp_is_clone = false
+            for cp in sf.clone_params:
+                if cp.param_index == cspi:
+                    csp_is_clone = true
+            if csp_is_clone:
+                out = out + "    __ctx->__" + csp.name + " = gorget_channel_retain(" + csp.name + ");\n"
+            else:
+                out = out + "    __ctx->__" + csp.name + " = " + csp.name + ";\n"
+            cspi += 1
         out = out + "    GORGET_SCHEDULER_SUBMIT(&__ctx->base);\n"
         out = out + "    return (" + task_type_name + "){.__task = __ctx, .__drop = __spawn_drop_" + fn_name + "};\n"
         out = out + "}\n"
@@ -2100,6 +2154,12 @@ String emit_spawn_helpers(LirModule &m):
         out = out + "    GORGET_SCHEDULER_WAIT(&__ctx->base);\n"
         if not is_void:
             out = out + "    " + ret_c + " result = __ctx->result;\n"
+        # KEYSTONE Slice-2: the await path is the OTHER ctx-teardown route (await
+        # consumes the Task and frees the ctx; if never awaited, __spawn_drop frees
+        # it). EXACTLY ONE runs per ctx, so the retained-carrier release belongs in
+        # BOTH, symmetric with the spawn-fn retain. (Reads `result` first — the
+        # channel release is independent of the result value.)
+        out = out + emit_spawn_carrier_releases(sf)
         out = out + "    pthread_mutex_destroy(&__ctx->base.mtx);\n"
         out = out + "    pthread_cond_destroy(&__ctx->base.cond);\n"
         out = out + "    GORGET_FREE(__ctx, sizeof(" + ctx_name + "));\n"

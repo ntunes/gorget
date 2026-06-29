@@ -180,6 +180,28 @@ bool is_guard_struct_type(String name, GirModule &gmod):
             return false
     return false
 
+# Phase A typed-metadata read via `resource_meta_for`: is this type a
+# REFCOUNTED carrier (CsRefCounted) — i.e. retain/release-balanced rather
+# than single-owner? Channel / Shared are CsRefCounted (set at the
+# `build_resource_metadata` Channel__/Shared__ arms); Mutex / collections
+# are CsResource (single-owner). The KEYSTONE spawn lowering reads THIS
+# (never a Channel-name prefix test) to decide which spawn-fn params
+# must be retained into the spawn ctx — typed-metadata, not a name
+# substring (Core #2 / layering rule 2). Future-proofs the Slice-3 Shared
+# carrier: it is already CsRefCounted, so it joins clone_params with no
+# new name test.
+bool is_refcounted_carrier(String name, GirModule &gmod):
+    match resource_meta_for(&gmod, name):
+        case Some(rmeta):
+            match rmeta.copy_semantics:
+                case CsRefCounted():
+                    return true
+                else:
+                    return false
+        case None:
+            return false
+    return false
+
 # ── Phase A — typed resource-metadata builder ──────────────────
 # Single source of truth for `is this type a Vector / Dict / Set / Box /
 # opaque handle / ...`. Returns Some(meta) for categorised resource
@@ -5158,6 +5180,25 @@ LirModule lower_gir_to_lir(GirModule &gmod):
             spi += 1
         Vector[int] sp_ref_indices = []
         Vector[CloneParam] sp_clone_params = []
+        # KEYSTONE: re-derive clone_params (refcounted carriers that must be
+        # retained when captured into the spawn ctx) from the producer fn's GIR
+        # param type names. Mirrors Rust gg's clone_params detection
+        # (`src/lir/lower/mod.rs:445-452`, Channel__/Shared__/Weak__). The
+        # membership decision reads the TYPED `CsRefCounted` copy-semantics flag
+        # (`is_refcounted_carrier` → `resource_meta_for` → `.copy_semantics`,
+        # set at the build_resource_metadata Channel arm), NOT a
+        # Channel-name prefix substring — Core #2 / layering rule 2,
+        # resolve-once/write-through (devbook/24). Behavior-identical for the
+        # current corpus (only Channel both passes `spawn_shape_supported` AND is
+        # CsRefCounted) and future-proofs the Slice-3 Shared carrier (already
+        # CsRefCounted, so it joins clone_params with no new name test).
+        Vector[int] sp_gir_ptys = get_fn_param_types(spawn_rec.fn_name, &gmod)
+        int spci = 0
+        while spci < sp_gir_ptys.len():
+            String spc_nm = type_id_to_name(sp_gir_ptys.get(spci).unwrap(), &gmod)
+            if is_refcounted_carrier(spc_nm, &gmod):
+                sp_clone_params.push(CloneParam(spci, spc_nm.clone()))
+            spci += 1
         m.spawned_fns.push(LirSpawnedFn(spawn_rec.fn_name.clone(), !sp_params, spawn_rec.ret_c_type.clone(), !sp_ref_indices, !sp_clone_params))
 
     # Test-runner metadata: copy the ordered GIR test registry (built at
