@@ -16,6 +16,7 @@ from lir import LirModule, LirFunction, LirBlock, LirInst, LirTerm, LirSlot, Lir
 from lir import LirSpawnedFn, SpawnParam, CloneParam
 from lir import SlotProvenance
 from lir import StructField, BlockParam, SwitchCase, FieldDrop, EnumVariantDrop, TypeDropInfo, FieldInit
+from lir import GORGET_MAP_STRUCT_SIZE
 from lir import LT_I8, LT_I16, LT_I32, LT_I64, LT_U8, LT_U16, LT_U32, LT_U64
 from lir import LT_F32, LT_F64, LT_BOOL, LT_PTR, LT_VOID
 from lir import LT_PTR_TO_BASE, LT_STRUCT_BASE
@@ -91,7 +92,11 @@ void register_builtin_structs(LirModule &m, Dict[String, int] &sr):
     int task_id = lir_mod_add_struct(&m, LirStructDef("TaskHandle", task_fields, 0, false, 16, -1))
     sr.put("TaskHandle", task_id)
 
-    # GorgetMap: 23 fields, 184 bytes
+    # GorgetMap: 19 fields, 152 bytes (size from GORGET_MAP_STRUCT_SIZE;
+    # see runtime_preamble.c GorgetMap). The field list below names only the
+    # 13 layout/data fields the lowerer needs for member access; the trailing
+    # 6 function-pointer slots (drop/clone/materialize) are layout-only — the
+    # explicit struct size, not this list, is what backend allocation reads.
     Vector[StructField] map_fields = []
     map_fields.push(StructField("keys", LT_PTR))
     map_fields.push(StructField("cap", LT_I64))
@@ -106,7 +111,7 @@ void register_builtin_structs(LirModule &m, Dict[String, int] &sr):
     map_fields.push(StructField("tombstones", LT_I64))
     map_fields.push(StructField("hash_fn", LT_PTR))
     map_fields.push(StructField("eq_fn", LT_PTR))
-    int map_id = lir_mod_add_struct(&m, LirStructDef("GorgetMap", map_fields, 0, false, 184, -1))
+    int map_id = lir_mod_add_struct(&m, LirStructDef("GorgetMap", map_fields, 0, false, GORGET_MAP_STRUCT_SIZE, -1))
     sr.put("GorgetMap", map_id)
     m.type_runtime_map.put("GorgetMap", "GorgetMap")
 
@@ -125,7 +130,7 @@ void register_builtin_structs(LirModule &m, Dict[String, int] &sr):
     set_fields.push(StructField("tombstones", LT_I64))
     set_fields.push(StructField("hash_fn", LT_PTR))
     set_fields.push(StructField("eq_fn", LT_PTR))
-    int set_id = lir_mod_add_struct(&m, LirStructDef("GorgetSet", set_fields, 0, false, 184, -1))
+    int set_id = lir_mod_add_struct(&m, LirStructDef("GorgetSet", set_fields, 0, false, GORGET_MAP_STRUCT_SIZE, -1))
     sr.put("GorgetSet", set_id)
     m.type_runtime_map.put("GorgetSet", "GorgetSet")
 
@@ -253,7 +258,7 @@ Option[ResourceMetadata] build_resource_metadata(String name):
             CsResource(), CkVector(), BkNotBox(), false, None, None, false))
     if name == "GorgetMap":
         return Some(ResourceMetadata(
-            "GorgetMap", 184, LtStructBase(),
+            "GorgetMap", GORGET_MAP_STRUCT_SIZE, LtStructBase(),
             Some("gorget_map_free"), Some("gorget_map_clone"), None,
             CsResource(), CkDict(), BkNotBox(), false, None, None, false))
     if name == "GorgetSet":
@@ -261,7 +266,7 @@ Option[ResourceMetadata] build_resource_metadata(String name):
         # ness is a property of the user-visible `Set__` type, mirroring Rust
         # src/ir/types.rs:972 GorgetSet→CollectionKind::Set).
         return Some(ResourceMetadata(
-            "GorgetSet", 184, LtStructBase(),
+            "GorgetSet", GORGET_MAP_STRUCT_SIZE, LtStructBase(),
             Some("gorget_set_free"), Some("gorget_set_clone"), None,
             CsResource(), CkHashSet(), BkNotBox(), false, None, None, false))
     if name == "GorgetClosure":
@@ -312,12 +317,12 @@ Option[ResourceMetadata] build_resource_metadata(String name):
     # GorgetDict__/GorgetMap__ are self-host mangled forms (false).
     if name.starts_with("Dict__") or name.starts_with("HashMap__"):
         return Some(ResourceMetadata(
-            "GorgetMap", 184, LtStructBase(),
+            "GorgetMap", GORGET_MAP_STRUCT_SIZE, LtStructBase(),
             Some("gorget_map_free"), Some("gorget_map_clone"), None,
             CsResource(), CkDict(), BkNotBox(), false, None, None, true))
     if name.starts_with("GorgetDict__") or name.starts_with("GorgetMap__"):
         return Some(ResourceMetadata(
-            "GorgetMap", 184, LtStructBase(),
+            "GorgetMap", GORGET_MAP_STRUCT_SIZE, LtStructBase(),
             Some("gorget_map_free"), Some("gorget_map_clone"), None,
             CsResource(), CkDict(), BkNotBox(), false, None, None, false))
 
@@ -329,18 +334,18 @@ Option[ResourceMetadata] build_resource_metadata(String name):
     # never re-probes the prefix. Set__ = ORDERED, HashSet__ = UNORDERED.
     if name.starts_with("Set__"):
         return Some(ResourceMetadata(
-            "GorgetSet", 184, LtStructBase(),
+            "GorgetSet", GORGET_MAP_STRUCT_SIZE, LtStructBase(),
             Some("gorget_set_free"), Some("gorget_set_clone"), None,
             CsResource(), CkOrderedSet(), BkNotBox(), false, None, None, true))
     if name.starts_with("HashSet__"):
         return Some(ResourceMetadata(
-            "GorgetSet", 184, LtStructBase(),
+            "GorgetSet", GORGET_MAP_STRUCT_SIZE, LtStructBase(),
             Some("gorget_set_free"), Some("gorget_set_clone"), None,
             CsResource(), CkHashSet(), BkNotBox(), false, None, None, true))
     # GorgetSet__ is the self-host mangled form (false) → CkHashSet (runtime kind).
     if name.starts_with("GorgetSet__"):
         return Some(ResourceMetadata(
-            "GorgetSet", 184, LtStructBase(),
+            "GorgetSet", GORGET_MAP_STRUCT_SIZE, LtStructBase(),
             Some("gorget_set_free"), Some("gorget_set_clone"), None,
             CsResource(), CkHashSet(), BkNotBox(), false, None, None, false))
 

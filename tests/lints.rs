@@ -3350,3 +3350,94 @@ fn self_host_carrier_ops_walker_is_exhaustive() {
          sub-expression the variant carries (mirror resolve.gg::resolve_expr).",
     );
 }
+
+/// One-source-of-truth ratchet (CLAUDE.md Core invariant #6 / devbook/24 rule 3)
+/// for the GorgetMap / GorgetSet runtime struct size in the self-host lowerer.
+///
+/// The real C `GorgetMap` (`src/backend/c/runtime/runtime_preamble.c`, 19
+/// pointer/size_t fields × 8 = 152 bytes; `GorgetSet` is a typedef alias) and
+/// Rust gg (`src/lir/lower/types.rs`, `GorgetMap | GorgetSet => 152`) both use
+/// **152**. The self-host previously hand-duplicated this size as the literal
+/// `184` across 9 sites in `lir_lower.gg` (2 struct defs + 7 ResourceMetadata
+/// returns). That over-count (the size of an out-of-date 23-field layout)
+/// inflated every enum/union/array layout embedding a Dict/Set, so
+/// `gorget_array_push` read past the stack slot = stack-buffer-overflow on the
+/// xml fixtures. The fix collapsed all 9 sites onto the single
+/// `GORGET_MAP_STRUCT_SIZE` constant in `lir.gg`.
+///
+/// This lint pins three invariants so the divergent literal cannot creep back:
+///   (a) `GORGET_MAP_STRUCT_SIZE` is defined as `152` in `lir.gg`.
+///   (b) Rust gg still agrees (`GorgetMap | GorgetSet => 152` in types.rs).
+///   (c) No raw `184` literal lingers in `lir_lower.gg`, AND every GorgetMap /
+///       GorgetSet `ResourceMetadata`/`LirStructDef` size site reads the named
+///       constant rather than a bare integer (so all 9 stay single-sourced).
+#[test]
+fn self_host_gorget_map_struct_size() {
+    const EXPECTED_SIZE: usize = 152;
+    // ≥9 single-sourced size sites: 2 LirStructDef + 7 ResourceMetadata.
+    const MIN_CONSTANT_USE_SITES: usize = 9;
+
+    let lir = fs::read_to_string("tests/fixtures/self_host_lowerer/lir.gg").unwrap_or_default();
+    let lower =
+        fs::read_to_string("tests/fixtures/self_host_lowerer/lir_lower.gg").unwrap_or_default();
+    let rust = fs::read_to_string("src/lir/lower/types.rs").unwrap_or_default();
+
+    // (a) Constant defined at the expected value in lir.gg.
+    let const_def = format!("const int GORGET_MAP_STRUCT_SIZE = {EXPECTED_SIZE}");
+    assert!(
+        lir.lines().any(|l| l.trim_start().starts_with(&const_def)),
+        "self-host `GORGET_MAP_STRUCT_SIZE` is not defined as `{EXPECTED_SIZE}` in \
+         tests/fixtures/self_host_lowerer/lir.gg. The GorgetMap/GorgetSet runtime \
+         struct is 19 fields × 8 bytes = 152 (runtime_preamble.c). Do NOT change this \
+         to 184 (the stale 23-field over-count that overflowed gorget_array_push on the \
+         xml fixtures) without first changing the actual runtime struct AND Rust gg.",
+    );
+
+    // (b) Rust gg agrees — the cross-compiler source of truth.
+    assert!(
+        rust.contains(&format!("GorgetMap | crate::lir::ResourceKind::GorgetSet => {EXPECTED_SIZE}"))
+            || rust.contains(&format!("\"GorgetMap\" | \"GorgetSet\" => {EXPECTED_SIZE}")),
+        "Rust gg (src/lir/lower/types.rs) no longer maps GorgetMap/GorgetSet to \
+         {EXPECTED_SIZE} bytes. The self-host and Rust struct sizes MUST stay in lock-step \
+         (both follow runtime_preamble.c). If the runtime struct genuinely changed size, \
+         update runtime_preamble.c, Rust types.rs, AND GORGET_MAP_STRUCT_SIZE together.",
+    );
+
+    // (c1) No bare `184` map/set literal smuggled back into the lowerer. Match a
+    // non-comment line that names GorgetMap/GorgetSet AND the digits 184.
+    let strays: Vec<&str> = lower
+        .lines()
+        .filter(|l| {
+            let t = l.trim_start();
+            !t.starts_with('#')
+                && (t.contains("\"GorgetMap\"") || t.contains("\"GorgetSet\""))
+                && t.contains("184")
+        })
+        .collect();
+    assert!(
+        strays.is_empty(),
+        "A raw `184` reappeared at a GorgetMap/GorgetSet size site in lir_lower.gg \
+         (must read `GORGET_MAP_STRUCT_SIZE`, the single source of truth = {EXPECTED_SIZE}):\n  {}",
+        strays.join("\n  "),
+    );
+
+    // (c2) Every GorgetMap/GorgetSet size site reads the named constant.
+    let constant_sites = lower
+        .lines()
+        .filter(|l| {
+            let t = l.trim_start();
+            !t.starts_with('#')
+                && (t.contains("\"GorgetMap\"") || t.contains("\"GorgetSet\""))
+                && t.contains("GORGET_MAP_STRUCT_SIZE")
+        })
+        .count();
+    assert!(
+        constant_sites >= MIN_CONSTANT_USE_SITES,
+        "Expected ≥{MIN_CONSTANT_USE_SITES} GorgetMap/GorgetSet size sites reading \
+         `GORGET_MAP_STRUCT_SIZE` in lir_lower.gg, found {constant_sites}. A size site \
+         was removed or rewritten to a bare literal — every GorgetMap/GorgetSet \
+         LirStructDef and ResourceMetadata MUST read the single-source constant so the \
+         184→152 divergence cannot recur. If you legitimately added/removed a site, \
+         update MIN_CONSTANT_USE_SITES with a one-line justification.",
+    );
+}

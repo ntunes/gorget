@@ -328,6 +328,17 @@ struct LirStructDef:
     int computed_c_size         # -1 if not yet computed
     int computed_c_align        # -1 if not yet computed
 
+# Single source of truth for the GorgetMap / GorgetSet runtime struct size.
+# MUST match the real C struct in `src/backend/c/runtime/runtime_preamble.c`
+# (`typedef struct { ... } GorgetMap;` — 19 pointer/size_t fields × 8 bytes =
+# 152 bytes; `GorgetSet` is a typedef alias) and Rust gg's `src/lir/lower/
+# types.rs` (`GorgetMap | GorgetSet => 152`). Over-counting this size
+# inflates every enum/union/array layout that embeds a Dict/Set and overflows
+# the stack slot in `gorget_array_push` — keep all consumers reading THIS
+# constant (devbook/24 rule 3 "one source of truth"; pinned by
+# `tests/lints.rs::self_host_gorget_map_struct_size`).
+const int GORGET_MAP_STRUCT_SIZE = 152
+
 # ── Globals ─────────────────────────────────────────────────────
 
 # Global initializer kinds.
