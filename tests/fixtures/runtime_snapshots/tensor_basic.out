@@ -1,0 +1,10 @@
+Tensor(shape=[6], [0, 1, 2, 3, 4, 5])
+Tensor(shape=[2,3], [0, 1, 2, 3, 4, 5])
+2
+Tensor(shape=[3], [0, 0, 0])
+Tensor(shape=[3], [1, 1, 1])
+6
+2
+5
+1
+99

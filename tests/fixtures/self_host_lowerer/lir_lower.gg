@@ -4636,14 +4636,29 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
             # documented one name-derived heuristic). We therefore read the
             # field's declared type name and check the borrow-ptr prefix
             # directly — the same accepted residual as `resolve_field_lir_type`.
-            bool fl_field_is_borrow_ptr = false
+            # `fl_field_value_is_ptr` = the field's STORAGE already holds a
+            # pointer value, so `&field` (fl_fptr) is a pointer-to-pointer and
+            # must be LOADed (the else branch), never alias-stored. Two cases:
+            #   • user borrow pointer (`Ref[T]` / `MutRef[T]`) — name-derived
+            #     residual per the `resolve_field_lir_type` `Ref__` guard above.
+            #   • opaque-handle resource (Shared/Mutex/RWLock/Channel/…) — the
+            #     handle value IS a pointer (`GorgetShared*` etc.), so the field
+            #     slot stores a pointer just like a borrow ptr. Keyed off the
+            #     TYPED `resource_meta_for(...).opaque_handle` flag via
+            #     `is_opaque_pointer_type` (lir_lower.gg:164), NOT a `Shared__`
+            #     name match (Core #2). Aggregate resources (Vector/Dict/String)
+            #     have opaque_handle=false → they keep the alias-store `&field`
+            #     path (you DO pass the aggregate's address). This mirrors the
+            #     Rust `field_is_ptr` carve-out at insts.rs:1029-1034 ("load the
+            #     pointer value first").
+            bool fl_field_value_is_ptr = false
             if gmod.type_infos.contains(fl_base_tn):
                 GirTypeInfo fl_base_info = gmod.type_infos.get(fl_base_tn).unwrap()
                 if fl_field >= 0 and fl_field < fl_base_info.fields.len():
                     String fl_field_tn = fl_base_info.fields.get(fl_field).unwrap().type_name
-                    if fl_field_tn.starts_with("Ref__") or fl_field_tn.starts_with("MutRef__"):
-                        fl_field_is_borrow_ptr = true
-            if fl_dst_is_ptr and not fl_field_is_borrow_ptr:
+                    if fl_field_tn.starts_with("Ref__") or fl_field_tn.starts_with("MutRef__") or is_opaque_pointer_type(fl_field_tn, &gmod):
+                        fl_field_value_is_ptr = true
+            if fl_dst_is_ptr and not fl_field_value_is_ptr:
                 # Pointer-alias: store the field address directly as
                 # the dst's pointer value. No byte-copy.
                 lir_push_inst(&f, bb, ISlotStore(fl_dst_slot, fl_fptr, false))
