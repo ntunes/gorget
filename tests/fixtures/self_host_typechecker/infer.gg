@@ -845,28 +845,16 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             return infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, &ctx)
 
         case EDeref(inner):
-            # `*expr` is valid only on a smart pointer (`Box[T]` → `T`). Mirror
-            # Rust src/semantic/typecheck.rs `Expr::Deref`: unwrap `Box[T]`, and
-            # reject any other concretely-resolved operand (a non-Box deref
-            # lowers to `*(int64_t*)(*(void**)&value)` — a garbage pointer
-            # dereference that SEGFAULTs at runtime). Suppress the diagnostic
-            # for still-inferring (RTVar) or already-errored operands to avoid
-            # spurious errors, exactly like Rust's `Var`/`error_id` guards.
-            # See docs/language-reference.md §7.4 (`*` operand: "Pointer/smart
-            # ptr") and AGENTS.md Core invariant #8 (reject UB, don't propagate
-            # garbage). The self-host LOWERER driver now gates on
-            # `has_errors(ctx.diagnostics)` (driver.gg:436 → exit(1)) BEFORE
-            # `lower_module`, so a diagnostic pushed during typecheck DOES halt
-            # the build (snag #11 resolved). ⚠ But this `infer_expr_type` EDeref
-            # arm only runs when `infer_expr_type` is driven on the operand —
-            # i.e. an `auto`-typed init / sub-position — NOT for an
-            # explicitly-typed VarDecl init (`int y = *x`), which the driver
-            # checks via the WALK pass (typecheck.gg walk_expr_closures), and
-            # that pass has no EDeref arm. So the self-host deref reject does NOT
-            # yet fire on the explicitly-typed shape — to be symmetric with Rust
-            # it needs a walk-pass EDeref arm too (see typecheck.gg's walk-pass
-            # EBinaryOp `op == "??"` reject for the working pattern). FILED as a
-            # follow-up.
+            # `*expr` is valid only on a smart pointer (`Box[T]` → `T`). This arm
+            # TYPES the deref (unwrap `Box[T]`); the non-Box REJECT lives in the
+            # EXHAUSTIVE typecheck.gg `check_carrier_ops_expr` EDeref arm (which
+            # visits EVERY `*x` position — `infer_expr_type` is only driven on
+            # `auto` inits + some sub-positions, so a reject HERE would both miss
+            # explicitly-typed inits AND double-fire with the exhaustive pass on
+            # the positions infer DOES reach). One source of truth: type here,
+            # reject there. Returning `error_id` for a non-Box operand keeps
+            # downstream inference sound without emitting a (duplicate) diag.
+            # See docs/language-reference.md §7.4 + AGENTS.md Core invariant #8.
             int deref_inner_type = infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, &ctx)
             int deref_resolved = deref_inner_type
             # Peel a single `RTRef` wrapper (`*(&box)`); the self-host has no
@@ -887,7 +875,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                             # *Box[T] → T
                             return get_int_at(box_args, 0)
                         else:
-                            ctx.diagnostics.push(Diagnostic.error((*inner).span, DkTypeMismatch(), "cannot dereference `*` a non-`Box[T]` value"))
+                            # Non-Box: type as error (the exhaustive pass rejects).
                             return types.error_id
                     case RTVar(_unresolved):
                         # inference incomplete — suppress (mirrors Rust's Var guard)
@@ -895,8 +883,8 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                     case RTError():
                         return deref_inner_type
                     else:
-                        # Any other concretely-resolved type is not deref-able.
-                        ctx.diagnostics.push(Diagnostic.error((*inner).span, DkTypeMismatch(), "cannot dereference `*` a non-`Box[T]` value"))
+                        # Any other concretely-resolved type is not deref-able;
+                        # type as error (the exhaustive pass emits the reject).
                         return types.error_id
             return deref_inner_type
 
@@ -957,14 +945,14 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
         case EDefaultOp(left, right):
             # NOTE: the self-host parser lowers `a ?? b` to EBinaryOp(_, "??", _)
             # (parser.gg:1975 + op_str:822), NOT EDefaultOp — so this arm is
-            # currently UNREACHED. The live `??` typing + the
-            # LHS-must-be-Option/Result REJECT both live on the EBinaryOp path:
-            # the reject is driven from the WALK pass (typecheck.gg
-            # walk_expr_closures_inner's EBinaryOp arm, `op == "??"`), which
-            # visits EVERY `??` (VarDecl init AND return-position) exactly once;
-            # the right-type fallback below kept for the EDefaultOp shape in case
-            # a future front-end produces it. Same walk-pass-only split the
-            # DoubleAwait check uses.
+            # currently UNREACHED. The LHS-must-be-Option/Result REJECT is driven
+            # from the EXHAUSTIVE typecheck.gg `check_carrier_ops_expr` walker
+            # (which visits EVERY `??` position exactly once, at EBinaryOp("??")
+            # AND this EDefaultOp shape), NOT here — `infer_expr_type` is only
+            # driven on `auto` inits + some sub-positions, so a reject here would
+            # both miss explicitly-typed inits AND double-fire with the
+            # exhaustive pass. This arm just types the result (the RHS/unwrapped
+            # type) for the positions infer DOES reach.
             int rt = infer_expr_type(SpannedExpr((*right).expr, (*right).span), scopes, &types, &ctx)
             return rt
 

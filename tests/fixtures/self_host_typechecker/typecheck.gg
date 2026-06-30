@@ -12,6 +12,16 @@ from ast import SpannedExpr, SpannedType, SpannedPattern, Span, Type, Expr, Patt
 from ast import EMethodCall, EBinaryOp, EIs, EClosure, ECall, EBlock, EDo, EAs, EIdentifier, EFString, SelectArm, SORecv, EMatch
 from ast import EFieldAccess, EUnaryOp, EIndex, EIntLiteral
 from ast import SExpr, SVarDecl, SReturn
+# Full Expr/Stmt surface for the exhaustive carrier-op walker (check_carrier_ops_*).
+from ast import ERange, EIf, EImplicitClosure, EArrayLiteral, ETupleLiteral
+from ast import EDictLiteral, EStructLiteral, EDotShorthand, ETry, EMove, EMutableBorrow, EDeref
+from ast import EListComp, ESetComp, EDictComp, EDefaultOp, EAwait, ESpawn, ESpawnBlocking
+from ast import ERethrow, ECatch, EFaultCatch, FaultCatchPattern, FcpBinding, FcpVariant
+from ast import SAssign, SCompoundAssign, SThrow, SBreak, SContinue, SPass, SFor, SWhile
+from ast import SLoop, SMatch, SWith, SAssert, SAssertReturn, SNamedScope, SSelect, SOnError
+from ast import SItem, SSnapshot, SMeta, SMetaFor, SMetaIf, SMetaConst, SMetaForMatch
+from ast import SMetaMatch, SMetaWhile, SOSend
+from ast import EFloatLiteral, EBoolLiteral, EStringLiteral, ECharLiteral, ENoneLiteral, ESelfExpr, EIt
 from ast import TPrimitive
 from ids import NO_DEF, NO_TYPE
 from scope import ScopeTable, DefKind, DefInfo, ScopeKind, SkEquipBlock, SkFunction
@@ -20,7 +30,7 @@ from scope import DkVariable, DkConst, DkStatic, DkGenericParam
 from scope import get_def_at, get_scope_at, Scope
 from types import TypeTable, ResolvedType, ast_type_to_resolved, get_stype_at
 from types import RTFunction, RTVoid, RTPrimitive, RTDefined, RTGeneric
-from types import RTTuple, RTArray, RTSlice, RTError, RTVar, RTNever, get_rtype_at, get_int_at
+from types import RTTuple, RTArray, RTSlice, RTError, RTVar, RTNever, RTRef, get_rtype_at, get_int_at
 from types import RTCallableTrait, RTMutCallableTrait, RTConsumeCallableTrait, RTBoxedCallable
 from resolve import ResolveContext
 from infer import infer_expr_type, infer_closure_return_type
@@ -364,6 +374,347 @@ void check_default_param_ordering(Vector[Param] params, ResolveContext &ctx):
         elif seen_default:
             ctx.diagnostics.push(Diagnostic.error(p.param_type.span, DkControlFlow(), f"required parameter `{p.param_name}` follows a parameter with a default value"))
 
+# ── Carrier-operator reject pass (EXHAUSTIVE; AGENTS.md Core #8 + #4) ──────
+#
+# `lhs ?? rhs` (default operator, parsed as EBinaryOp(_, "??", _)) requires an
+# `Option`/`Result` LHS; `*x` (EDeref) requires a `Box[T]`. On any other carrier
+# type both silently MISCOMPILE (the lowering reinterprets the value's bits as
+# an enum / a garbage pointer — `lower_expr.gg`'s `?? on non-Option` diag_bug
+# marker / a `*(int64_t*)(*(void**)&x)` deref). Rust rejects both at typecheck
+# (src/semantic/typecheck.rs `Expr::DefaultOp` / `Expr::Deref`); these push the
+# self-host TWINS so the driver's diagnostic gate (driver.gg:436 `has_errors` →
+# exit(1) BEFORE `lower_module`) HALTS the build instead of emitting garbage C.
+#
+# CORE #4 — fix the CLASS, not the instance: the reject MUST be driven from a
+# pass that visits EVERY expression position. `walk_expr_closures` is a
+# closure-FINDING pass that recurses into only a handful of parent shapes and
+# `else: pass`es the rest, so a `??`/`*x` nested in EUnaryOp/EIndex/EArrayLiteral/
+# EAs/… ESCAPES it (the v1 walk-pass hole that shipped a one-sided reject). This
+# walker mirrors resolve.gg's exhaustive `resolve_expr` enumeration (every Expr
+# variant + every sub-expression) and is driven ONCE per function body from
+# `type_check_function` AFTER `type_check_stmts` (types assigned), so each `??`/
+# `*x` is checked EXACTLY ONCE with no double-fire. The arm-count lint
+# `carrier_ops_expr_arm_count` (tests/lints.rs) forces every newly-added Expr
+# variant through this walker — the next sub-expression-bearing shape cannot
+# silently re-open the escape hole.
+
+# True iff `type_id` resolves to an `Option`/`Result` carrier — the `??`-accepted
+# set (verified end-to-end: both `Option ?? x` and `Result ?? x` run). The
+# idiom mirrors infer.gg:584-588 + Rust's `is_option_or_result_receiver`.
+bool carrier_op_is_option_or_result(int type_id, ScopeTable &scopes, TypeTable &types):
+    if type_id >= 0 and type_id < types.types.len():
+        ResolvedType rt = get_rtype_at(types.types, type_id)
+        match rt:
+            case RTGeneric(def_id, _targs):
+                DefInfo d = scopes.get_def(def_id)
+                return d.name == "Option" or d.name == "Result"
+            case RTDefined(def_id2):
+                DefInfo d2 = scopes.get_def(def_id2)
+                return d2.name == "Option" or d2.name == "Result"
+            else:
+                return false
+    return false
+
+# True iff `type_id` is a suppression shape — inference incomplete (RTVar) or
+# already errored/divergent (RTError/RTNever). Mirrors Rust's Var/error_id/
+# never_id guard so valid or divergent (`throw`/`return`/`panic`) code never
+# false-positives. NO_TYPE / out-of-range also suppress (inference gave up).
+bool carrier_op_suppress(int type_id, TypeTable &types):
+    if type_id < 0 or type_id >= types.types.len():
+        return true
+    ResolvedType rt = get_rtype_at(types.types, type_id)
+    match rt:
+        case RTVar(_):
+            return true
+        case RTError():
+            return true
+        case RTNever():
+            return true
+        else:
+            return false
+
+# Reject `lhs ?? rhs` when `lhs` is neither Option nor Result (with suppression).
+void check_default_op_lhs(SpannedExpr lhs, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
+    int lhs_type = infer_expr_type(lhs, scopes, &types, &ctx)
+    if carrier_op_suppress(lhs_type, &types):
+        return
+    if not carrier_op_is_option_or_result(lhs_type, &scopes, &types):
+        ctx.diagnostics.push(Diagnostic.error(lhs.span, DkTypeMismatch(), "default operator `??` requires an `Option` or `Result` left-hand side"))
+
+# Reject `*x` when `x` is not a `Box[T]` (with the same suppression). Peels a
+# single RTRef wrapper (`*(&box)`), mirroring infer.gg's EDeref arm.
+void check_deref_operand(SpannedExpr operand, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
+    int inner_type = infer_expr_type(operand, scopes, &types, &ctx)
+    int resolved = inner_type
+    if resolved >= 0 and resolved < types.types.len():
+        ResolvedType wrap = get_rtype_at(types.types, resolved)
+        match wrap:
+            case RTRef(pointee):
+                resolved = pointee
+            else:
+                pass
+    if carrier_op_suppress(resolved, &types):
+        return
+    bool is_box = false
+    if resolved >= 0 and resolved < types.types.len():
+        ResolvedType rt = get_rtype_at(types.types, resolved)
+        match rt:
+            case RTGeneric(box_def, box_args):
+                DefInfo bd = scopes.get_def(box_def)
+                if bd.name == "Box" and box_args.len() == 1:
+                    is_box = true
+            else:
+                pass
+    if not is_box:
+        ctx.diagnostics.push(Diagnostic.error(operand.span, DkTypeMismatch(), "cannot dereference `*` a non-`Box[T]` value"))
+
+# Exhaustive statement walker — visits every expression position in a body.
+void check_carrier_ops_stmts(Vector[Stmt] stmts, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
+    for s in stmts:
+        check_carrier_ops_stmt(s, scope_id, &scopes, &types, &ctx)
+
+void check_carrier_ops_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
+    match s:
+        case SVarDecl(_stype, _name, init_expr, _line, _col, _flags):
+            check_carrier_ops_expr(init_expr, scope_id, &scopes, &types, &ctx)
+        case SAssign(target, value):
+            check_carrier_ops_expr(target, scope_id, &scopes, &types, &ctx)
+            check_carrier_ops_expr(value, scope_id, &scopes, &types, &ctx)
+        case SCompoundAssign(target, _op, value):
+            check_carrier_ops_expr(target, scope_id, &scopes, &types, &ctx)
+            check_carrier_ops_expr(value, scope_id, &scopes, &types, &ctx)
+        case SExpr(sexpr):
+            check_carrier_ops_expr(sexpr, scope_id, &scopes, &types, &ctx)
+        case SReturn(opt_expr):
+            if opt_expr is Some(sexpr):
+                check_carrier_ops_expr(sexpr, scope_id, &scopes, &types, &ctx)
+        case SThrow(sexpr):
+            check_carrier_ops_expr(sexpr, scope_id, &scopes, &types, &ctx)
+        case SBreak(opt_expr):
+            if opt_expr is Some(sexpr):
+                check_carrier_ops_expr(sexpr, scope_id, &scopes, &types, &ctx)
+        case SContinue():
+            pass
+        case SPass():
+            pass
+        case SMeta():
+            pass
+        case SMetaFor(_vars, iter_e, body):
+            check_carrier_ops_expr(iter_e, scope_id, &scopes, &types, &ctx)
+            check_carrier_ops_stmts(body, scope_id, &scopes, &types, &ctx)
+        case SMetaIf(cond, body, else_branches):
+            check_carrier_ops_expr(cond, scope_id, &scopes, &types, &ctx)
+            check_carrier_ops_stmts(body, scope_id, &scopes, &types, &ctx)
+            for eb in else_branches:
+                if eb.condition is Some(c):
+                    check_carrier_ops_expr(c, scope_id, &scopes, &types, &ctx)
+                check_carrier_ops_stmts(eb.body, scope_id, &scopes, &types, &ctx)
+        case SMetaConst(_name, value):
+            check_carrier_ops_expr(value, scope_id, &scopes, &types, &ctx)
+        case SMetaForMatch(_vars, scrut, arms):
+            check_carrier_ops_expr(scrut, scope_id, &scopes, &types, &ctx)
+            for arm in arms:
+                if arm.guard is Some(g):
+                    check_carrier_ops_expr(g, scope_id, &scopes, &types, &ctx)
+                check_carrier_ops_stmts(arm.body, scope_id, &scopes, &types, &ctx)
+        case SMetaMatch(scrut, meta_arms, default_body):
+            check_carrier_ops_expr(scrut, scope_id, &scopes, &types, &ctx)
+            for ma in meta_arms:
+                check_carrier_ops_expr(ma.case_value, scope_id, &scopes, &types, &ctx)
+                check_carrier_ops_stmts(ma.body, scope_id, &scopes, &types, &ctx)
+            check_carrier_ops_stmts(default_body, scope_id, &scopes, &types, &ctx)
+        case SMetaWhile(cond, body):
+            check_carrier_ops_expr(cond, scope_id, &scopes, &types, &ctx)
+            check_carrier_ops_stmts(body, scope_id, &scopes, &types, &ctx)
+        case SFor(_pat, iter_e, body, _flags, else_body):
+            check_carrier_ops_expr(iter_e, scope_id, &scopes, &types, &ctx)
+            check_carrier_ops_stmts(body, scope_id, &scopes, &types, &ctx)
+            check_carrier_ops_stmts(else_body, scope_id, &scopes, &types, &ctx)
+        case SWhile(cond, body, else_body):
+            check_carrier_ops_expr(cond, scope_id, &scopes, &types, &ctx)
+            check_carrier_ops_stmts(body, scope_id, &scopes, &types, &ctx)
+            check_carrier_ops_stmts(else_body, scope_id, &scopes, &types, &ctx)
+        case SLoop(body):
+            check_carrier_ops_stmts(body, scope_id, &scopes, &types, &ctx)
+        case SIf(cond, body, else_branches):
+            check_carrier_ops_expr(cond, scope_id, &scopes, &types, &ctx)
+            check_carrier_ops_stmts(body, scope_id, &scopes, &types, &ctx)
+            for eb in else_branches:
+                if eb.condition is Some(c):
+                    check_carrier_ops_expr(c, scope_id, &scopes, &types, &ctx)
+                check_carrier_ops_stmts(eb.body, scope_id, &scopes, &types, &ctx)
+        case SMatch(scrut, arms):
+            check_carrier_ops_expr(scrut, scope_id, &scopes, &types, &ctx)
+            for arm in arms:
+                if arm.guard is Some(g):
+                    check_carrier_ops_expr(g, scope_id, &scopes, &types, &ctx)
+                check_carrier_ops_stmts(arm.body, scope_id, &scopes, &types, &ctx)
+        case SWith(e, _name, body):
+            check_carrier_ops_expr(e, scope_id, &scopes, &types, &ctx)
+            check_carrier_ops_stmts(body, scope_id, &scopes, &types, &ctx)
+        case SAssert(cond, _msg):
+            check_carrier_ops_expr(cond, scope_id, &scopes, &types, &ctx)
+        case SAssertReturn(cond, _msg):
+            check_carrier_ops_expr(cond, scope_id, &scopes, &types, &ctx)
+        case SNamedScope(_name, body):
+            check_carrier_ops_stmts(body, scope_id, &scopes, &types, &ctx)
+        case SSelect(arms):
+            for sa in arms:
+                match sa.op:
+                    case SORecv(_n, _i, e):
+                        check_carrier_ops_expr(e, scope_id, &scopes, &types, &ctx)
+                    case SOSend(chan, val):
+                        check_carrier_ops_expr(chan, scope_id, &scopes, &types, &ctx)
+                        check_carrier_ops_expr(val, scope_id, &scopes, &types, &ctx)
+                check_carrier_ops_stmts(sa.body, scope_id, &scopes, &types, &ctx)
+        case SOnError(body):
+            check_carrier_ops_stmts(body, scope_id, &scopes, &types, &ctx)
+        case SItem(_item):
+            # Nested item decls (fn/struct/…) are walked via their own
+            # type_check_function entry; no expression here to check.
+            pass
+        case SSnapshot(_name, _kind, e):
+            check_carrier_ops_expr(e, scope_id, &scopes, &types, &ctx)
+
+# Exhaustive expression walker — mirrors resolve.gg's `resolve_expr` enumeration.
+# Visits EVERY sub-expression so a `??`/`*x` cannot escape via an un-recursed
+# parent shape. Fires the carrier-op rejects at EBinaryOp("??") and EDeref.
+void check_carrier_ops_expr(SpannedExpr expr, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
+    match expr.expr:
+        case EIntLiteral(_):
+            pass
+        case EFloatLiteral(_):
+            pass
+        case EBoolLiteral(_):
+            pass
+        case EStringLiteral(_, _):
+            pass
+        case ECharLiteral(_):
+            pass
+        case ENoneLiteral():
+            pass
+        case EIdentifier(_):
+            pass
+        case ESelfExpr():
+            pass
+        case EIt():
+            pass
+        case EBinaryOp(left, op, right):
+            check_carrier_ops_expr(*left, scope_id, &scopes, &types, &ctx)
+            check_carrier_ops_expr(*right, scope_id, &scopes, &types, &ctx)
+            if op == "??":
+                check_default_op_lhs(SpannedExpr((*left).expr, (*left).span), scope_id, &scopes, &types, &ctx)
+        case EUnaryOp(_op, operand):
+            check_carrier_ops_expr(*operand, scope_id, &scopes, &types, &ctx)
+        case ECall(callee, args, _names, _targs):
+            check_carrier_ops_expr(*callee, scope_id, &scopes, &types, &ctx)
+            for a in args:
+                check_carrier_ops_expr(a, scope_id, &scopes, &types, &ctx)
+        case EMethodCall(receiver, _m, args, _names, _targs):
+            check_carrier_ops_expr(*receiver, scope_id, &scopes, &types, &ctx)
+            for a in args:
+                check_carrier_ops_expr(a, scope_id, &scopes, &types, &ctx)
+        case EFieldAccess(object, _field):
+            check_carrier_ops_expr(*object, scope_id, &scopes, &types, &ctx)
+        case EIndex(object, index):
+            check_carrier_ops_expr(*object, scope_id, &scopes, &types, &ctx)
+            check_carrier_ops_expr(*index, scope_id, &scopes, &types, &ctx)
+        case ERange(opt_start, opt_end, _incl):
+            if opt_start is Some(b):
+                check_carrier_ops_expr(*b, scope_id, &scopes, &types, &ctx)
+            if opt_end is Some(b):
+                check_carrier_ops_expr(*b, scope_id, &scopes, &types, &ctx)
+        case EIf(cond, then_body, elif_branches):
+            check_carrier_ops_expr(*cond, scope_id, &scopes, &types, &ctx)
+            check_carrier_ops_stmts(then_body, scope_id, &scopes, &types, &ctx)
+            for br in elif_branches:
+                if br.condition is Some(c):
+                    check_carrier_ops_expr(c, scope_id, &scopes, &types, &ctx)
+                check_carrier_ops_stmts(br.body, scope_id, &scopes, &types, &ctx)
+        case EMatch(scrutinee, arms):
+            check_carrier_ops_expr(*scrutinee, scope_id, &scopes, &types, &ctx)
+            for arm in arms:
+                if arm.guard is Some(g):
+                    check_carrier_ops_expr(g, scope_id, &scopes, &types, &ctx)
+                check_carrier_ops_stmts(arm.body, scope_id, &scopes, &types, &ctx)
+        case EClosure(_params, body):
+            check_carrier_ops_stmts(body, scope_id, &scopes, &types, &ctx)
+        case EImplicitClosure(inner):
+            check_carrier_ops_expr(*inner, scope_id, &scopes, &types, &ctx)
+        case EArrayLiteral(elements):
+            for e in elements:
+                check_carrier_ops_expr(e, scope_id, &scopes, &types, &ctx)
+        case ETupleLiteral(elements):
+            for e in elements:
+                check_carrier_ops_expr(e, scope_id, &scopes, &types, &ctx)
+        case EDictLiteral(keys, values):
+            for (di, k) in keys.enumerate():
+                check_carrier_ops_expr(k, scope_id, &scopes, &types, &ctx)
+                check_carrier_ops_expr(values.get(di).unwrap(), scope_id, &scopes, &types, &ctx)
+        case EStructLiteral(_name, _fields, args):
+            for a in args:
+                check_carrier_ops_expr(a, scope_id, &scopes, &types, &ctx)
+        case EDotShorthand(_variant, args):
+            for a in args:
+                check_carrier_ops_expr(a, scope_id, &scopes, &types, &ctx)
+        case ETry(inner):
+            check_carrier_ops_expr(*inner, scope_id, &scopes, &types, &ctx)
+        case EMove(inner):
+            check_carrier_ops_expr(*inner, scope_id, &scopes, &types, &ctx)
+        case EMutableBorrow(inner):
+            check_carrier_ops_expr(*inner, scope_id, &scopes, &types, &ctx)
+        case EDeref(inner):
+            check_carrier_ops_expr(*inner, scope_id, &scopes, &types, &ctx)
+            check_deref_operand(SpannedExpr((*inner).expr, (*inner).span), scope_id, &scopes, &types, &ctx)
+        case EAs(inner, _target):
+            check_carrier_ops_expr(*inner, scope_id, &scopes, &types, &ctx)
+        case EIs(inner, _neg, _pat):
+            check_carrier_ops_expr(*inner, scope_id, &scopes, &types, &ctx)
+        case EBlock(stmts):
+            check_carrier_ops_stmts(stmts, scope_id, &scopes, &types, &ctx)
+        case EDo(stmts):
+            check_carrier_ops_stmts(stmts, scope_id, &scopes, &types, &ctx)
+        case EListComp(comp_e, _var, iterable, opt_cond):
+            check_carrier_ops_expr(*iterable, scope_id, &scopes, &types, &ctx)
+            check_carrier_ops_expr(*comp_e, scope_id, &scopes, &types, &ctx)
+            if opt_cond is Some(b):
+                check_carrier_ops_expr(*b, scope_id, &scopes, &types, &ctx)
+        case ESetComp(comp_e, _var, iterable, opt_cond):
+            check_carrier_ops_expr(*iterable, scope_id, &scopes, &types, &ctx)
+            check_carrier_ops_expr(*comp_e, scope_id, &scopes, &types, &ctx)
+            if opt_cond is Some(b):
+                check_carrier_ops_expr(*b, scope_id, &scopes, &types, &ctx)
+        case EDictComp(key, value, _var, iterable, opt_cond):
+            check_carrier_ops_expr(*iterable, scope_id, &scopes, &types, &ctx)
+            check_carrier_ops_expr(*key, scope_id, &scopes, &types, &ctx)
+            check_carrier_ops_expr(*value, scope_id, &scopes, &types, &ctx)
+            if opt_cond is Some(b):
+                check_carrier_ops_expr(*b, scope_id, &scopes, &types, &ctx)
+        case EDefaultOp(left, right):
+            # Parser-unreachable (it lowers `??` to EBinaryOp) but kept for
+            # completeness — same reject as the EBinaryOp("??") arm.
+            check_carrier_ops_expr(*left, scope_id, &scopes, &types, &ctx)
+            check_carrier_ops_expr(*right, scope_id, &scopes, &types, &ctx)
+            check_default_op_lhs(SpannedExpr((*left).expr, (*left).span), scope_id, &scopes, &types, &ctx)
+        case EAwait(inner):
+            check_carrier_ops_expr(*inner, scope_id, &scopes, &types, &ctx)
+        case ESpawn(inner):
+            check_carrier_ops_expr(*inner, scope_id, &scopes, &types, &ctx)
+        case ESpawnBlocking(inner):
+            check_carrier_ops_expr(*inner, scope_id, &scopes, &types, &ctx)
+        case ERethrow(e, _eopt, _etype, transform):
+            check_carrier_ops_expr(*e, scope_id, &scopes, &types, &ctx)
+            check_carrier_ops_expr(*transform, scope_id, &scopes, &types, &ctx)
+        case ECatch(e, _name, recovery):
+            check_carrier_ops_expr(*e, scope_id, &scopes, &types, &ctx)
+            check_carrier_ops_expr(*recovery, scope_id, &scopes, &types, &ctx)
+        case EFaultCatch(fc_inner, _fc_pat, fc_handler):
+            check_carrier_ops_expr(*fc_inner, scope_id, &scopes, &types, &ctx)
+            check_carrier_ops_expr(*fc_handler, scope_id, &scopes, &types, &ctx)
+        case EFString(_tmpl, exprs, _specs):
+            for fe in exprs:
+                check_carrier_ops_expr(fe, scope_id, &scopes, &types, &ctx)
+
 void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx,int def_scope):
     # Register the signature first (idempotent — running it twice for
     # IFunction items already pre-passed in type_check_module just
@@ -407,6 +758,13 @@ void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes,
         ctx.current_function_throws = func.throws_type.is_some()
         ctx.in_function_body = true
         type_check_stmts(func.body, body_scope, &scopes, &types, &ctx)
+        # Carrier-operator reject pass (AGENTS.md Core #8 + #4) — driven ONCE
+        # per function body AFTER type_check_stmts (so def types are assigned),
+        # via the EXHAUSTIVE check_carrier_ops_* walker. Rejects `??` on a
+        # non-Option/Result LHS and `*x` on a non-Box operand at EVERY
+        # expression position (the fragmented walk_expr_closures pass missed
+        # nested positions — that was the v1 one-sided-reject hole).
+        check_carrier_ops_stmts(func.body, body_scope, &scopes, &types, &ctx)
         ctx.loop_depth = saved_loop_depth
         ctx.current_function_throws = saved_throws
         ctx.in_function_body = saved_in_fn
@@ -813,54 +1171,14 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
         case EBinaryOp(left, op, right):
             walk_expr_closures(*left, scope_id, &scopes, &types, &ctx)
             walk_expr_closures(*right, scope_id, &scopes, &types, &ctx)
-            # `left ?? right` (the default operator — parsed as an EBinaryOp with
-            # op "??", parser.gg:1975 + op_str:822) unwraps an `Option`/`Result`
-            # LHS (its first variant `Some`/`Ok`), substituting `right` on
-            # `None`/`Error`. A LHS that is neither carrier is ill-formed: the
-            # typecheck used to fall through to the arithmetic "return left type"
-            # path (infer.gg:240) — a silent no-op — and the lowering then assumed
-            # an enum LHS and fell back to a `Some`-channel, emitting C that
-            # reinterprets the LHS bits as an enum (e.g. a `void *` from
-            # `int64_t`), which crashes/exits-1 at runtime. Reject it as a clean
-            # type error so the driver's diagnostic gate (driver.gg:436
-            # `has_errors` → exit(1) BEFORE `lower_module`) HALTS the build with
-            # empty stdout instead of miscompiling. Mirrors Rust
-            # src/semantic/typecheck.rs `Expr::DefaultOp` + the sibling
-            # `UnwrapOnNonOptional`/`DerefNonBox` guard class (AGENTS.md Core
-            # invariant #8 — reject UB, don't propagate garbage).
-            #
-            # Driven from the WALK pass (like DoubleAwait above), not infer.gg's
-            # EBinaryOp case: `infer_expr_type` is only driven on `auto` inits +
-            # some sub-positions, whereas this walk visits EVERY `??` (VarDecl
-            # init AND return-position) exactly once — so the reject fires
-            # reliably and there is no double-fire. `??` accepts BOTH Option and
-            # Result (verified by running `Result ?? x`); the name-check idiom is
-            # verbatim at infer.gg:584-588. Suppress for a LHS still inferring
-            # (RTVar) or already errored/divergent (RTError/RTNever) — exactly
-            # like Rust's Var/error_id/never_id guards — so valid or divergent
-            # (`throw`/`return`/`panic`) code never false-positives.
-            if op == "??":
-                int dop_left_type = infer_expr_type(SpannedExpr((*left).expr, (*left).span), scopes, &types, &ctx)
-                if dop_left_type >= 0 and dop_left_type < types.types.len():
-                    ResolvedType dop_lt = get_rtype_at(types.types, dop_left_type)
-                    match dop_lt:
-                        case RTGeneric(dop_def_id, _dop_args):
-                            DefInfo dop_def = scopes.get_def(dop_def_id)
-                            if dop_def.name == "Option" or dop_def.name == "Result":
-                                pass
-                            else:
-                                ctx.diagnostics.push(Diagnostic.error((*left).span, DkTypeMismatch(), "default operator `??` requires an `Option` or `Result` left-hand side"))
-                        case RTVar(_dop_unresolved):
-                            # inference incomplete — suppress (mirrors Rust's Var guard)
-                            pass
-                        case RTError():
-                            pass
-                        case RTNever():
-                            # divergent LHS (`throw`/`return`/`panic`) — suppress
-                            pass
-                        else:
-                            # Any other concretely-resolved LHS is not an Option/Result.
-                            ctx.diagnostics.push(Diagnostic.error((*left).span, DkTypeMismatch(), "default operator `??` requires an `Option` or `Result` left-hand side"))
+            # NOTE: the `lhs ?? rhs`-on-non-Option/Result REJECT is NOT here.
+            # `walk_expr_closures` is a CLOSURE-FINDING pass that only recurses
+            # into a handful of parent shapes (ECall/EMethodCall/EBinaryOp/EAwait/
+            # EBlock/EDo/EFString/EMatch) and hits `else: pass` for the rest, so a
+            # `??` nested inside EUnaryOp/EIndex/EArrayLiteral/EAs/… ESCAPES it.
+            # The reject is driven from the dedicated EXHAUSTIVE walker
+            # `check_carrier_ops_*` (below), modeled on resolve.gg's `resolve_expr`
+            # enumeration, so EVERY `??` position is covered exactly once.
 
         case EAwait(inner):
             # DoubleAwait — `await await x` is a syntactic mistake. The

@@ -6642,6 +6642,24 @@ fn default_op_non_optional_is_rejected() {
     );
 }
 
+// NESTED-position guard: the `??` reject must fire even when the `??` is buried
+// inside another expression shape (here `-(a ?? 5)` — an `EUnaryOp` operand).
+// The first self-host cut drove the reject from the closure-finding
+// `walk_expr_closures` pass, which only recurses into a handful of parent shapes
+// and `else: pass`es the rest — so a `??` nested in EUnaryOp/EIndex/
+// EArrayLiteral/EAs/… ESCAPED and the self-host silently miscompiled it (a
+// one-sided reject failing the Core #8 reference-grade bar). The reject now
+// rides the EXHAUSTIVE `check_carrier_ops_expr` walker (self_host_typechecker/
+// typecheck.gg), so no position escapes. This test pins the Rust side; the
+// self-host side is pinned by `self_host_driver_rejects_default_op_non_optional_nested`.
+#[test]
+fn default_op_non_optional_nested_is_rejected() {
+    check_gg_fails(
+        "default_op_non_optional_nested_rejected.gg",
+        "default operator `??` requires an `Option` or `Result` left-hand side, but `int` is neither",
+    );
+}
+
 #[test]
 fn default_op_optional_result_runs() {
     // Positive companion: `??` on a genuine `Option` AND a genuine `Result`
@@ -16855,8 +16873,8 @@ fn self_host_driver_rejects_default_op_non_optional() {
         !out.status.success(),
         "self-host driver accepted a Rust-REJECTED program (`int x = a ?? 5` — \
          `??` on a non-Option/Result LHS). The `op == \"??\"` reject in \
-         self_host_typechecker/typecheck.gg's walk-pass EBinaryOp arm was \
-         removed or stopped firing. exit={:?}\nstderr:\n{stderr}",
+         self_host_typechecker/typecheck.gg's exhaustive `check_carrier_ops_expr` \
+         walker was removed or stopped firing. exit={:?}\nstderr:\n{stderr}",
         out.status.code(),
     );
 
@@ -16876,6 +16894,69 @@ fn self_host_driver_rejects_default_op_non_optional() {
         stdout.trim().is_empty(),
         "self-host driver emitted C for a rejected program — the gate must \
          halt BEFORE lowering. stdout bytes={}\nstdout head:\n{}",
+        stdout.len(),
+        &stdout.chars().take(200).collect::<String>(),
+    );
+}
+
+// NESTED-position self-host guard (sibling of
+// `self_host_driver_rejects_default_op_non_optional`): the `??` reject must fire
+// even when the `??` is buried inside another expression shape that the
+// closure-finding `walk_expr_closures` pass did NOT recurse into (`-(a ?? 5)` —
+// an EUnaryOp operand). The v1 self-host reject lived on that incomplete pass
+// and this case ESCAPED — Rust REJECTED it, the self-host wrongly ACCEPTED +
+// emitted C (a one-sided reject failing Core #8). The fix moved the reject to
+// the EXHAUSTIVE `check_carrier_ops_expr` walker (visits EVERY position). Same
+// contract as the sibling: non-zero exit, codespan diagnostic on stderr, NO C
+// on stdout. Parity-neutral — Rust-rejected, excluded from the parity denominator.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_rejects_default_op_non_optional_nested() {
+    // Cached — shared with lowerer_comparison / bootstrap / e2e.
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir
+        .join("tests/fixtures/default_op_non_optional_nested_rejected.gg");
+    assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
+
+    // Invoke the driver exactly as the e2e harness does: `driver F lib --lir-c`.
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "self_host_driver_rejects_default_op_non_optional_nested",
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    // 1. The driver MUST exit non-zero (a `??` nested in EUnaryOp must not escape).
+    assert!(
+        !out.status.success(),
+        "self-host driver accepted a Rust-REJECTED program (`int x = -(a ?? 5)` — \
+         a `??` on a non-Option/Result LHS NESTED inside a unary op). The \
+         exhaustive `check_carrier_ops_expr` walker in \
+         self_host_typechecker/typecheck.gg stopped visiting a nested position — \
+         the one-sided-reject escape hole re-opened. exit={:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+
+    // 2. It MUST render the codespan diagnostic to stderr.
+    assert!(
+        stderr.contains("error")
+            && stderr.contains("default operator `??` requires an `Option` or `Result` left-hand side")
+            && stderr.contains('\u{250c}'),
+        "self-host driver exited non-zero but emitted no codespan diagnostic \
+         for the nested `??`.\nstderr:\n{stderr}",
+    );
+
+    // 3. It MUST NOT emit C (the gate halts BEFORE lower_module).
+    assert!(
+        stdout.trim().is_empty(),
+        "self-host driver emitted C for a rejected program (nested `??`) — the \
+         gate must halt BEFORE lowering. stdout bytes={}\nstdout head:\n{}",
         stdout.len(),
         &stdout.chars().take(200).collect::<String>(),
     );

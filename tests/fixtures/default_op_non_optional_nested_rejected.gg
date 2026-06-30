@@ -1,0 +1,17 @@
+# Negative fixture (NESTED position): `lhs ?? rhs` on a non-Option/Result LHS
+# must be REJECTED even when the `??` is nested inside another expression shape
+# that the (former, incomplete) walk pass did not recurse into. Here the `??` is
+# the operand of a unary negation (`EUnaryOp`) — the v1 self-host reject lived on
+# the closure-finding `walk_expr_closures` pass, which `else: pass`ed EUnaryOp,
+# so this `??` ESCAPED and the self-host silently miscompiled it while Rust
+# rejected it (a one-sided reject that failed the Core #8 reference-grade bar).
+#
+# The reject is now driven from the EXHAUSTIVE `check_carrier_ops_expr` walker
+# (typecheck.gg), which visits EVERY sub-expression position, so a `??` nested in
+# EUnaryOp / EIndex / EArrayLiteral / EAs / … can no longer escape. Both
+# compilers must REJECT this. (AGENTS.md Core invariant #8 — reference-grade,
+# reject UB in BOTH backends; #4 — fix the class, not the instance.)
+void main():
+    int a = 3
+    int x = -(a ?? 5)
+    print(x)

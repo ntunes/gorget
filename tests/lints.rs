@@ -3230,3 +3230,123 @@ fn self_host_embedded_libstd_table_count() {
          Add/remove the matching dict row.",
     );
 }
+
+/// Exhaustive-walker ratchet (AGENTS.md Core invariant #4 "one fix, all
+/// siblings" + #6 "convert a recurring bug class into an executable guard";
+/// devbook/24 sibling-site drift). The self-host carrier-operator reject
+/// (`??`-on-non-Option/Result and `*x`-on-non-Box) is driven from the
+/// EXHAUSTIVE `check_carrier_ops_expr` / `check_carrier_ops_stmt` walker in
+/// `tests/fixtures/self_host_typechecker/typecheck.gg`, modeled on
+/// `resolve.gg`'s `resolve_expr`. Its correctness depends on visiting EVERY
+/// expression (and statement) position — the first cut shipped the reject on
+/// the closure-FINDING `walk_expr_closures` pass, which `else: pass`es most
+/// shapes, so a `??` nested in `EUnaryOp`/`EIndex`/`EArrayLiteral`/`EAs`/…
+/// silently ESCAPED and the self-host miscompiled it (a one-sided reject that
+/// failed the Core #8 reference-grade bar).
+///
+/// This lint pins exhaustiveness STRUCTURALLY: it derives the full `Expr`/`Stmt`
+/// variant set from `ast.gg` and asserts the walker has a `case <Variant>(` arm
+/// for each. A new AST variant that carries a sub-expression but isn't added to
+/// the walker re-opens the escape hole — this fails until the arm is added.
+///
+/// **If this fails:** add the missing `case <Variant>(...)` arm to
+/// `check_carrier_ops_expr` (for `E*`) or `check_carrier_ops_stmt` (for `S*`) in
+/// typecheck.gg, recursing into every sub-expression / body the variant carries
+/// (model it on the same variant's arm in `resolve.gg::resolve_expr`).
+#[test]
+fn self_host_carrier_ops_walker_is_exhaustive() {
+    let ast = fs::read_to_string("tests/fixtures/self_host_typechecker/ast.gg")
+        .expect("self_host_carrier_ops_walker_is_exhaustive: ast.gg not found");
+    let tc = fs::read_to_string("tests/fixtures/self_host_typechecker/typecheck.gg")
+        .expect("self_host_carrier_ops_walker_is_exhaustive: typecheck.gg not found");
+
+    // Parse the variant names from `enum Expr:` / `enum Stmt:` in ast.gg. Each
+    // variant is an indented `EName(...)` / `EName` (or `SName...`) line; the
+    // enum body ends at the first non-indented line.
+    fn variants(src: &str, enum_header: &str, prefix: char) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut in_enum = false;
+        for line in src.lines() {
+            if line.trim_start() == enum_header {
+                in_enum = true;
+                continue;
+            }
+            if in_enum {
+                // Enum body ends at the first line that is NOT blank, NOT a
+                // comment, and NOT indented (a new top-level decl).
+                if line.is_empty() {
+                    continue;
+                }
+                let trimmed = line.trim_start();
+                if trimmed.starts_with('#') {
+                    continue;
+                }
+                if !line.starts_with(' ') && !line.starts_with('\t') {
+                    break;
+                }
+                // Variant name = leading identifier (up to '(' or end).
+                let name: String = trimmed
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                if name.starts_with(prefix) {
+                    out.push(name);
+                }
+            }
+        }
+        out
+    }
+
+    // Restrict the search to the walker function bodies so unrelated `case E…`
+    // arms elsewhere in typecheck.gg don't mask a missing one.
+    fn body_of<'a>(src: &'a str, fn_sig_prefix: &str) -> &'a str {
+        let start = src
+            .find(fn_sig_prefix)
+            .unwrap_or_else(|| panic!("walker fn `{fn_sig_prefix}` not found in typecheck.gg"));
+        let rest = &src[start..];
+        // The body runs until the next top-level `void ` decl after the sig line.
+        let after_sig = rest.find('\n').map(|i| i + 1).unwrap_or(0);
+        let tail = &rest[after_sig..];
+        let end = tail.find("\nvoid ").map(|i| after_sig + i).unwrap_or(rest.len());
+        &rest[..end]
+    }
+
+    let expr_variants = variants(&ast, "enum Expr:", 'E');
+    let stmt_variants = variants(&ast, "enum Stmt:", 'S');
+    assert!(
+        expr_variants.len() >= 40 && stmt_variants.len() >= 25,
+        "carrier-ops lint failed to parse ast.gg variants (got {} Expr, {} Stmt) — \
+         the ast.gg enum shape changed; fix the parser.",
+        expr_variants.len(),
+        stmt_variants.len(),
+    );
+
+    let expr_body = body_of(&tc, "void check_carrier_ops_expr(");
+    let stmt_body = body_of(&tc, "void check_carrier_ops_stmt(");
+
+    let mut missing_expr = Vec::new();
+    for v in &expr_variants {
+        // `case EName(` for payload variants, `case EName()` for nullary.
+        if !expr_body.contains(&format!("case {v}(")) {
+            missing_expr.push(v.clone());
+        }
+    }
+    let mut missing_stmt = Vec::new();
+    for v in &stmt_variants {
+        if !stmt_body.contains(&format!("case {v}(")) {
+            missing_stmt.push(v.clone());
+        }
+    }
+
+    assert!(
+        missing_expr.is_empty() && missing_stmt.is_empty(),
+        "self-host `check_carrier_ops_*` walker is NOT exhaustive — these AST \
+         variants have no arm, so a `??`/`*x` nested inside one would ESCAPE the \
+         carrier-operator reject and the self-host would silently miscompile it \
+         (AGENTS.md Core #8 one-sided-reject regression).\n  \
+         missing Expr arms: {missing_expr:?}\n  missing Stmt arms: {missing_stmt:?}\n\
+         Add the `case <Variant>(...)` arm to check_carrier_ops_expr / \
+         check_carrier_ops_stmt in typecheck.gg, recursing into every \
+         sub-expression the variant carries (mirror resolve.gg::resolve_expr).",
+    );
+}
