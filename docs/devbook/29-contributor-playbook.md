@@ -535,6 +535,33 @@ a fresh reviewer re-deriving from source caught them. And neither pass was the "
 one — pass-2 was a clean SIGN OFF *between* them, which is exactly why you never stop on
 a clean pass: the next fresh re-derivation is what found the segfault.)
 
+### Worked example — round-20: a correct compile-fix unmasks the next-layer bug; fix it recursively, don't ship the unsafe MATCH
+
+A correct fix that makes a previously-CC-FAIL fixture *compile* will expose whatever
+bug sat one layer below the compile error. Round-20 typed the `String()` constructor +
+registered a borrowed-string deref (both correct, reference-grade) — and the 3 `xml_*`
+fixtures went from CC-FAIL to **correct stdout**. But ASan flagged a stack-buffer-overflow
+in `gorget_array_push` of an `__gg_XmlNode` (256-byte stack slot vs a 288-byte array
+elem_size), while the Rust oracle was ASan-clean — a self-host *divergence*, a pre-existing
+struct-size bug (GorgetMap hardcoded at 184 across 9 sites; the real runtime is 152, and
+Rust uses 152) that the CC-FAIL had simply kept unreachable. Two rules fall out:
+
+1. **A stdout-MATCH that's memory-unsafe is NOT a clean parity win** (Core #8). The
+   runtime-diff metric is stdout-only and ASan-blind, so it would happily count the xml
+   fixtures as +3 while they stack-overflow. The right move is neither to ship that
+   inflated unsafe MATCH nor to file-and-move-on — it's to **fix the unmasked bug
+   recursively, in-round** (the output-review *proved* the root by changing 184→152 and
+   re-running ASan-clean; the recursive Inc-C then landed it + collapsed the 9 duplicated
+   constants to one source + a pinning lint). The xml +3 became genuinely clean.
+2. **At a round's close, a `CC-FAIL → WRONG-OUTPUT` bucket-shift in runtime-diff is a
+   REVEAL, not a regression** — but *verify* it: confirm each shifted fixture was CC-FAIL
+   for the exact reason your change fixed (here `json_edge_cases`/`json_pretty` were
+   CC-FAIL on `gorget_str_`, `bool_not_runtime_cmp_abi` on the `gorget_string_push_char`
+   arg type — all three now compile and expose a separate, pre-existing wrong-output).
+   Cross-check the MATCH count never *dropped* (no fixture regressed out of MATCH), then
+   file the revealed bugs as next-round candidates. Don't hand-wave the shift; don't panic
+   over it either.
+
 ## Worktree discipline: agent worktrees nest under main
 
 Agent worktrees live UNDER the main checkout (`/workspace/gorget/.claude/worktrees/agent-*`).
