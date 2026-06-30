@@ -36,7 +36,7 @@ from lower import classify_call_arg, is_consume_kind, op_consume, decide_operand
 from lower import LazyMember, cow_lazy_materialize_family, call_arg_lets_callee_mutate, cow_lazy_join_view_result
 from lower_drops import init_drop_elab, push_drop_scope, emit_scope_drops, pop_drop_scope, pop_drop_scope_no_emit, is_droppable_type, register_local_for_drop, register_lazy_slot_for_drop, register_owning_param, mark_local_moved, restore_moved, union_moved, emit_drops_for_early_exit, flush_drop_queue
 from lower_liveness import LivenessAnalysis, compute_liveness, wire_liveness_into_modes, liveness_instrumentation_diff, update_last_pos_for_inst, update_last_pos_for_term, note_operand_pos, empty_liveness
-from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, index_value_type_name, collection_accumulator_tid, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, is_comparison, map_cmpop, eval_const_int_expr
+from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, local_method_prefix_is, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, index_value_type_name, collection_accumulator_tid, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, is_comparison, map_cmpop, eval_const_int_expr
 
 # ── f-string format-spec application (`{x:.2f}`, `{n:08d}`, `{255:#x}`) ──
 #
@@ -3173,7 +3173,28 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     return ud
                 return recv
             # clone() — return a copy of the receiver
-            if mname == "clone":
+            #
+            # Round-17 Inc-1: a `Shared[T].clone()` is NOT a byte-copy / deep
+            # copy — it is an atomic refcount bump (strong++) over the SAME
+            # `GorgetShared*` handle. OpClone on a raw-ptr Shared slot falls
+            # through to a plain ISlotLoad byte-copy (lir_lower OpClone handler),
+            # which under-counts the strong ref → N drops on rc=1 → heap UAF /
+            # double-free. So route a Shared receiver to the synthesized per-type
+            # `Shared__<T>__clone` wrapper (`return gorget_shared_clone(self)`)
+            # instead, exactly as the explicit `.get()`/`.at()`/`.slen()`
+            # accessors already route to `Shared__<T>__<method>` via the generic
+            # dispatch below. The gate is the TYPED `method_prefix ==
+            # "gorget_shared"` off resource_meta_for (Core #2 — keyed on typed
+            # metadata, NOT a `Shared__` name prefix); when it fires we fall
+            # THROUGH to the generic method-call dispatch, which builds the
+            # `recv_type_name + "__clone"` GICall, passes `self` by value (as the
+            # emitted `.get()` wrapper call proves), records the wrapper request
+            # in map_runtime_name, and types the result as the receiver's Shared
+            # type via infer_method_return_type. Mirrors Rust gg
+            # (src/ir/lowering/exprs/methods.rs:1064 → builder.call("Shared__T__
+            # clone", vec![recv], recv_type)). Every OTHER receiver type keeps the
+            # OpClone deep-copy/refcount semantics below unchanged.
+            if mname == "clone" and not local_method_prefix_is(recv, "gorget_shared", &ctx, &gmod):
                 # Phase D step 3: explicit `.clone()` produces an owned
                 # copy of the receiver. Emit OpClone so downstream layers
                 # (LIR codegen, Phase C validators) know this read is a

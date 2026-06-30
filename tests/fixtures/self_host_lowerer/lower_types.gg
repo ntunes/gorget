@@ -914,6 +914,24 @@ String local_type_name(int local_id, LowerCtx &ctx, GirModule &gmod):
     int tid = ctx.locals.get(local_id).unwrap().type_id
     return type_id_to_base_name(tid, &gmod)
 
+# Typed predicate: does the GIR local's (Ptr/MutPtr-peeled) base type carry the
+# given method_prefix metadata VALUE? Reads `resource_meta_for(...).method_prefix`
+# — a TYPED single-source dispatch (Core #2 / layering rule 2), NOT a `Shared__`/
+# `Channel__` name-prefix test. Used to route `Shared[T].clone()` to the refcount-
+# bump wrapper (method_prefix == "gorget_shared") instead of the byte-copy OpClone.
+bool local_method_prefix_is(int local_id, String want_prefix, LowerCtx &ctx, GirModule &gmod):
+    String base = local_type_name(local_id, &ctx, &gmod)
+    match resource_meta_for(&gmod, base):
+        case Some(rmeta):
+            match rmeta.method_prefix:
+                case Some(p):
+                    return p == want_prefix
+                case None:
+                    return false
+        case None:
+            return false
+    return false
+
 # Unwrap Ptr/MutPtr to reach the underlying named type (for method dispatch
 # on borrow/move params).
 String type_id_to_base_name(int tid, GirModule &gmod):

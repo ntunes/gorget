@@ -453,8 +453,11 @@ struct BoxWrapperReq:
 # for `Shared__int64_t` it is `int64_t`; for `Shared__Vector__int64_t` it is the
 # Vector mangled name `Vector__int64_t` (codegen strips the `Vector__` prefix to
 # get the per-element type for at/set_at). `kind` is the typed method tag
-# (`get`/`at`/`set_at`/`slen`) — the codegen reads it instead of re-deriving the
-# method from the mangled name. Deduped by (type_name, kind) at the write site.
+# (`get`/`at`/`set_at`/`slen`/`clone`) — the codegen reads it instead of
+# re-deriving the method from the mangled name. `clone` (round-17 Inc-1) emits
+# `return gorget_shared_clone(self)` (an atomic strong++, NOT a byte-copy — the
+# byte-copy under-counts the strong ref and double-frees / UAFs at teardown).
+# Deduped by (type_name, kind) at the write site.
 struct SharedWrapperReq:
     String type_name
     String inner_c

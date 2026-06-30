@@ -1674,19 +1674,24 @@ String map_runtime_name(String name, LirModule &m, GirModule &gmod):
                             return "gorget_shared_get"
                         if method == "write":
                             return "gorget_shared_set"
-                        # EXPLICIT Shared[T] accessors (get/at/set_at/slen). There
-                        # is no bare `gorget_shared_<method>` runtime symbol — the
-                        # `return pfx + "_" + method` fallthrough below would emit
-                        # an UNDEFINED symbol (link error). Instead RECORD a typed
-                        # per-type wrapper request (mirrors the Box get/set arm) and
-                        # `return name` UNCHANGED: `name` already IS the full mangled
-                        # `Shared__<T>__<method>` symbol, which emit_shared_method_wrappers
-                        # spells. `pfx_cand` is the full type name (`Shared__int64_t`
-                        # / `Shared__Vector__int64_t`); the inner element C type comes
-                        # from the TYPED coll_elem_type_map (populated in the registrar
-                        # step 0). Scoped to EXACTLY these 4 — read/write above and the
-                        # carrier's get_ptr/new/clone/drop are untouched.
-                        if method == "get" or method == "at" or method == "set_at" or method == "slen":
+                        # EXPLICIT Shared[T] accessors (get/at/set_at/slen/clone).
+                        # There is no bare `gorget_shared_<method>` runtime symbol
+                        # for these — the `return pfx + "_" + method` fallthrough
+                        # below would emit an UNDEFINED symbol (link error). Instead
+                        # RECORD a typed per-type wrapper request (mirrors the Box
+                        # get/set arm) and `return name` UNCHANGED: `name` already IS
+                        # the full mangled `Shared__<T>__<method>` symbol, which
+                        # emit_shared_method_wrappers spells. `pfx_cand` is the full
+                        # type name (`Shared__int64_t` / `Shared__Vector__int64_t`);
+                        # the inner element C type comes from the TYPED
+                        # coll_elem_type_map (populated in the registrar step 0).
+                        # `clone` is the round-17 refcount-bump fix: the wrapper body
+                        # is `return gorget_shared_clone(self)` (atomic strong++),
+                        # NOT a byte-copy — the latter under-counts the strong ref
+                        # and double-frees / UAFs at teardown. The carrier's
+                        # get_ptr/new/drop and the spawn-ctx retain/release symbols
+                        # are untouched.
+                        if method == "get" or method == "at" or method == "set_at" or method == "slen" or method == "clone":
                             record_shared_wrapper_req(&m, pfx_cand, coll_elem_type_for_name(name, &m), method)
                             return name
                     # General alias: drop → free.

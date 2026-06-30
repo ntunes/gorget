@@ -921,6 +921,17 @@ String emit_shared_method_wrappers(LirModule &m):
             out = out + "static inline int64_t " + tn + "__set_at(" + tn + " self, int64_t idx, " + inner2 + " val) { gorget_shared_array_set(self, (size_t)idx, &val, sizeof(" + inner2 + ")); return 0; }\n"
         elif req2.kind == "slen":
             out = out + "static inline int64_t " + tn + "__slen(" + tn + " self) { return gorget_shared_array_len(self); }\n"
+        elif req2.kind == "clone":
+            # Round-17 refcount-bump fix (mirrors Rust emit_shared_wrapper's
+            # "clone" arm, helpers.rs:249). `tn` is the `typedef GorgetShared*
+            # Shared__<T>` from Pass 1, so the wrapper is just an atomic strong++
+            # over the same handle — NO byte-copy. `gorget_shared_clone` (defined
+            # in shared_runtime.c) increments `strong` and returns the SAME
+            # pointer, so the N clones share one allocation and the N drops at
+            # teardown balance the N strong refs (no double-free / UAF). The body
+            # is inner-type-agnostic: clone only touches the refcount, never the
+            # payload, so the same shape serves Shared[int] and Shared[Vector[_]].
+            out = out + "static inline " + tn + " " + tn + "__clone(" + tn + " self) { return gorget_shared_clone(self); }\n"
     if out != "":
         out = out + "\n"
     return out
