@@ -1,0 +1,19 @@
+# Minimal reference-grade exercise of the zero-arg String() constructor:
+# build an owned String with String(), append borrowed-String chunks via
+# .push(...), and print. Pins the round-20 fix that types String() as
+# GorgetString (so buf.push routes to gorget_string_push_char, not
+# int64_t__push) and the borrowed-string-arg *(Str*) deref.
+void main():
+    String buf = String()
+    buf.push("hello")
+    buf.push(", ")
+    buf.push("world")
+    print(buf)
+
+    # push a borrowed-String local (CoW Ptr) — exercises the *(Str*) deref.
+    String name = "Gorget"
+    String greet = String()
+    greet.push("hi ")
+    greet.push(name)
+    greet.push("!")
+    print(greet)

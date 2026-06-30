@@ -1650,6 +1650,18 @@ String map_runtime_name(String name, LirModule &m, GirModule &gmod):
             case "format":
                 return "gorget_string_format"
             else:
+                # Concat-guard (Core #2 / devbook/18:289-301): an EMPTY method
+                # must never emit a bare `gorget_str_` (an undefined ref). Rust
+                # returns None here via `name.strip_prefix("GorgetString__")?`
+                # (calls.rs:396) — the `?` is the guard the concat lacks. An
+                # empty method reaching this point means an upstream caller (a
+                # ctor like `String()` that the GIR failed to type, lost a `__`
+                # separator) — a layering bug to surface loudly, NOT paper over
+                # with a silently-undefined symbol. A real `String.<method>`
+                # (push/len/clone/…) is handled by the cases above and is
+                # unaffected.
+                if method == "":
+                    panic("map_runtime_name: GorgetString-category name `" + name + "` has no method (would emit a bare `gorget_str_` undefined ref). The ctor/route that produced this name must type its result and carry a `__`-separated method — see lir_lower.gg concat-guard + lower_expr.gg String() ctor arm.")
                 return "gorget_str_" + method
 
     # Phase A — simple prefix dispatch: scan type_method_prefix_map for the type
@@ -2487,6 +2499,10 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
         # Surfaced once the io.gg Writer-for-GorgetString impl became reachable
         # via the FIDELITY vtable globals. Mirrors Rust gg's by-pointer ABI.
         if fn_name == "gorget_bytes_to_str":
+            return true
+        # `gorget_string_push_char(GorgetString* s, Str c)` mutates the builder
+        # in place — self (arg 0) is by pointer (the GorgetString receiver).
+        if fn_name == "gorget_string_push_char":
             return true
         # Note: gorget_str_codepoint_count takes Str by value, NOT by pointer.
         # Clone fns (used by emit_payload_read's blocker-2 path for

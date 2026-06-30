@@ -6840,6 +6840,17 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         # Lower the inner arg and pass its type through.
         SpannedExpr inner = args.get(0).unwrap()
         result = lower_expr(&ctx, inner, &gmod)
+    elif (fname == "Str" or fname == "String" or fname == "GorgetString") and args.len() == 0:
+        # Bare `String()` ctor → empty owned GorgetString. Mirror Rust gg
+        # (src/ir/lowering/exprs/mod.rs:1664): emit gorget_string_from_str("")
+        # and type the result GorgetString at the WRITE site so the cascade
+        # (every `buf.push(...)` routing to int64_t__push, the bare `gorget_str_`
+        # undefined ref) never starts. Without this arm a bare `String()` falls
+        # through to the default call lowering and is typed i64.
+        int sc_gs_tid = lookup_or_register_named(&gmod, "GorgetString")
+        int sc_dst = add_local(&ctx, sc_gs_tid, None)
+        emit(&ctx, GICallExtern(sc_dst, "gorget_string_from_str", [OpConstStr("")]))
+        result = sc_dst
     elif fname == "len" and args.len() == 1:
         # Free `len(x)` → dispatch to the runtime fn for the ARG's type,
         # mirroring Rust gg's free-len handler (src/ir/lowering/exprs/

@@ -2385,6 +2385,11 @@ bool runtime_arg_is_str(String name, int arg_idx):
             return true
         if name == "gorget_str_replace" or name == "gorget_str_removeprefix" or name == "gorget_str_removesuffix":
             return true
+        # `gorget_string_push_char(GorgetString* s, Str c)` — arg 1 (the pushed
+        # chunk) is a `Str` by value. A borrowed-String chunk arrives as a Ptr;
+        # paired with runtime_takes_str_by_value above, the *(Str*) deref fires.
+        if name == "gorget_string_push_char":
+            return true
     if arg_idx == 2:
         if name == "gorget_str_replace":
             return true
@@ -2532,6 +2537,15 @@ bool runtime_takes_str_by_value(String name):
     # for-over-String codepoint iteration: takes `Str s` by value but lacks the
     # `gorget_str_` prefix (a Ptr-source coll needs the *(Str*) deref).
     if name == "gorget_utf8_codepoint_len_at":
+        return true
+    # `gorget_string_push_char(GorgetString* s, Str c)` — arg 1 (the chunk) is a
+    # `Str` BY VALUE, but the name is spelled `gorget_string_` (not the
+    # `gorget_str_` prefix above), so the prefix check misses it. A borrowed
+    # String chunk (`*GorgetString`, e.g. `buf.push(nd_tag)` in lib/xtd/xml.gg)
+    # arrives as a Ptr and needs the *(Str*) deref the gating below applies.
+    # Arg 0 (the receiver) stays by-pointer — handled by lir_lower's
+    # needs_ptr_arg, NOT here (this predicate concerns the Str-BY-VALUE chunk).
+    if name == "gorget_string_push_char":
         return true
     return false
 
