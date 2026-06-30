@@ -4789,24 +4789,41 @@ String emit_option_result_combinator(int dst, String name, Vector[int] &args,
                 return "{ if ((*(int32_t*)" + src + ") == 0) { " + some_read + " } else { " + v(dst) + " = ((" + uoe_ret_c + "(*)(void*))((void**)" + closure + ")[0])(((void**)" + closure + ")[1]); } }"
             return ";"
         case "__result_map":
-            # Same as option_map but for Result (tag==0 is Ok)
+            # Same as option_map but for Result (tag==0 is Ok). The Error
+            # passthrough CANNOT be a whole-struct memcpy: `map` changes the Ok
+            # type, so src (Result[T,E]) and dst (Result[U,E]) have different
+            # layouts — the Error_0 field sits at a different offset in each, and
+            # a `memcpy(&dst, src, sizeof(dst))` lands garbage in dst.Error_0
+            # (and over-reads when dst is larger), crashing at drop. Copy the
+            # surviving Error_0 by typed field assignment at the correct offset.
             if dst >= 0:
-                return "{ if ((*(int32_t*)" + src + ") == 0) { *(int32_t*)&" + v(dst) + " = 0; " + src_pay_c + " __pay = *(" + src_pay_c + "*)((char*)" + src + " + 8); ((" + dst_c + "*)&" + v(dst) + ")->Ok_0 = ((" + dst_pay_c + "(*)(void*, " + src_pay_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __pay); } else { memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); } }"
+                return "{ if ((*(int32_t*)" + src + ") == 0) { *(int32_t*)&" + v(dst) + " = 0; " + src_pay_c + " __pay = *(" + src_pay_c + "*)((char*)" + src + " + 8); ((" + dst_c + "*)&" + v(dst) + ")->Ok_0 = ((" + dst_pay_c + "(*)(void*, " + src_pay_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __pay); } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); *(int32_t*)&" + v(dst) + " = 1; ((" + dst_c + "*)&" + v(dst) + ")->Error_0 = ((" + c_type_name(src_ty, &sn) + "*)" + src + ")->Error_0; } }"
             return ";"
         case "__result_map_err":
-            # if tag!=0: dst = Error(fn(error_payload)); else: keep Ok
+            # if tag!=0: dst = Error(fn(error_payload)); else: keep Ok. The Ok
+            # passthrough copies Ok_0 by typed field assignment (not a whole-
+            # struct memcpy): `map_err` changes the Error type, so src/dst differ
+            # in size; a memcpy would over-read past the smaller source. Ok_0 is
+            # at offset 8 in both, but the field-copy is the principled form.
             if dst >= 0:
-                return "{ if ((*(int32_t*)" + src + ") != 0) { *(int32_t*)&" + v(dst) + " = 1; " + src_err_c + " __pay = ((" + c_type_name(src_ty, &sn) + "*)" + src + ")->Error_0; ((" + dst_c + "*)&" + v(dst) + ")->Error_0 = ((" + dst_err_c + "(*)(void*, " + src_err_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __pay); } else { memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); } }"
+                return "{ if ((*(int32_t*)" + src + ") != 0) { *(int32_t*)&" + v(dst) + " = 1; " + src_err_c + " __pay = ((" + c_type_name(src_ty, &sn) + "*)" + src + ")->Error_0; ((" + dst_c + "*)&" + v(dst) + ")->Error_0 = ((" + dst_err_c + "(*)(void*, " + src_err_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __pay); } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); ((" + dst_c + "*)&" + v(dst) + ")->Ok_0 = ((" + c_type_name(src_ty, &sn) + "*)" + src + ")->Ok_0; } }"
             return ";"
         case "__result_and_then":
-            # if tag==0: dst = fn(ok_payload) (fn returns Result); else: keep error
+            # if tag==0: dst = fn(ok_payload) (fn returns Result); else: keep error.
+            # Error passthrough copies Error_0 by typed field assignment, NOT a
+            # whole-struct memcpy: `and_then` changes the Ok type (T->U), so src
+            # and dst have different layouts and the Error_0 offset shifts —
+            # the memcpy form was a latent drop-time crash (same class as map).
             if dst >= 0:
-                return "{ if ((*(int32_t*)" + src + ") == 0) { " + src_pay_c + " __pay = *(" + src_pay_c + "*)((char*)" + src + " + 8); " + v(dst) + " = ((" + dst_c + "(*)(void*, " + src_pay_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __pay); } else { memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); } }"
+                return "{ if ((*(int32_t*)" + src + ") == 0) { " + src_pay_c + " __pay = *(" + src_pay_c + "*)((char*)" + src + " + 8); " + v(dst) + " = ((" + dst_c + "(*)(void*, " + src_pay_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __pay); } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); *(int32_t*)&" + v(dst) + " = 1; ((" + dst_c + "*)&" + v(dst) + ")->Error_0 = ((" + c_type_name(src_ty, &sn) + "*)" + src + ")->Error_0; } }"
             return ";"
         case "__result_or_else":
-            # if tag!=0: dst = fn(error_payload) (fn returns Result); else: keep ok
+            # if tag!=0: dst = fn(error_payload) (fn returns Result); else: keep ok.
+            # Ok passthrough copies Ok_0 by typed field assignment, NOT a whole-
+            # struct memcpy: `or_else` changes the Error type, so src/dst differ
+            # in size and the memcpy would over-read past the smaller source.
             if dst >= 0:
-                return "{ if ((*(int32_t*)" + src + ") != 0) { " + src_err_c + " __pay = ((" + c_type_name(src_ty, &sn) + "*)" + src + ")->Error_0; " + v(dst) + " = ((" + dst_c + "(*)(void*, " + src_err_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __pay); } else { memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); } }"
+                return "{ if ((*(int32_t*)" + src + ") != 0) { " + src_err_c + " __pay = ((" + c_type_name(src_ty, &sn) + "*)" + src + ")->Error_0; " + v(dst) + " = ((" + dst_c + "(*)(void*, " + src_err_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __pay); } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); ((" + dst_c + "*)&" + v(dst) + ")->Ok_0 = ((" + c_type_name(src_ty, &sn) + "*)" + src + ")->Ok_0; } }"
             return ";"
         case "__result_or":
             # alt (arg[1]) is already a POINTER to the alternative Result (the
