@@ -11,7 +11,7 @@ from types import TypeTable, ResolvedType
 from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Terminator, Operand, GirType, GirExtern, GirTypeInfo, GirFieldInfo, GirEnumVariantInfo, LiftedClosure, ClosureCapture, ResourceMetadata, CollectionKind, ConsumeKind, ThreadSpawnRec, SpawnFnRec, SharedLocalInfo, InnerSharedSpawn, PendingSharedAsync
 from gir import BOOL_TYPE, I8_TYPE, I16_TYPE, I32_TYPE, I64_TYPE, U8_TYPE, U16_TYPE, U32_TYPE, U64_TYPE, F32_TYPE, F64_TYPE, UNIT_TYPE, PRIM_COUNT
 from gir import CAP_BY_VALUE, CAP_BY_MUT_REF
-from gir import init_type_table, register_type, lookup_or_register_named, register_ptr
+from gir import init_type_table, register_type, lookup_or_register_named, register_ptr, participates_in_fault, enum_variant_index
 from gir import GirGlobal, GirGlobalField, gir_mod_add_global, GGINIT_FN_REF, GGINIT_STRUCT
 from gir import GGSTATIC_RUNTIME, GGSTATIC_BYTES, static_put_bytes
 from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM, OP_MOD, OP_DIV_OVERFLOW
@@ -6536,6 +6536,89 @@ bool collection_ctor_has_cap_alloc_or_positional(Vector[SpannedExpr] &args, Vect
         return false
     return true
 
+# Cross-frame fault propagation (error-model.md §11, Inc-2.1c/2.1d): emit the
+# caller-side per-category TAG-DISPATCH after a participating callee's GICall.
+# Load the i32 slot's tag VALUE ONCE, then chain a per-category equality branch
+# for ALL THREE categories; `==0` (no fault) falls through to the continuation
+# (where the call RESULT is read — branch-before-read).
+#
+# A single `slot != 0` branch CANNOT distinguish Overflow from DivByZero/Bounds
+# → it would route every fault to ONE entry, constructing the WRONG `Fault`
+# variant (the measured Core-#8 silent miscompile: a deep div0 printed 100 not
+# 200). Tags are the `Fault` discriminants + 1 (0 = "no fault"), read from the
+# typed enum registry — no magic `1`/`2`/`3` literal (devbook/24 rule 2).
+#
+# ⚠ EVERY category is resolved to an ALWAYS-PRESENT destination — the user's
+# catch entry when this scope catches it (handler arg >= 0), ELSE a synthesized
+# RE-PANIC block (handler arg == -1). WITHOUT the re-panic, a category the
+# callee CAN raise but this scope does NOT catch would leave the slot tag
+# unmatched → fall to the continuation → SILENTLY SWALLOWED (the Core-#8
+# miscompile: `fault_deep_mixed_*` would print the sentinel `0` instead of
+# re-panicking). The self-host has no per-scope panic blocks (unlike Rust's
+# FaultScope.div_*_panic/bounds_panic), so the re-panic block is synthesized
+# HERE at the dispatch. Mirrors Rust gg's gate resolving each handler
+# `unwrap_or(panic_block)` (`exprs/calls.rs`) + the GIR→LIR tag-switch
+# (`src/lir/lower/insts.rs`).
+void emit_fault_call_tag_dispatch(LowerCtx &ctx, GirModule &gmod, int slot_local, int ovf_handler, int dz_handler, int bnd_handler):
+    int overflow_tag = enum_variant_index(&gmod, "Fault", "Overflow") + 1
+    int divzero_tag = enum_variant_index(&gmod, "Fault", "DivByZero") + 1
+    int bounds_tag = enum_variant_index(&gmod, "Fault", "Bounds") + 1
+    # Load the slot tag value ONCE.
+    int tag_val = add_local(&ctx, I32_TYPE, None)
+    emit(&ctx, GIAssign(tag_val, OpCopy(slot_local)))
+    # Chain `tag == TAG → dest` per category. Each splits the current block; the
+    # else-side continues to the next test. An uncaught category routes to a
+    # freshly synthesized re-panic block (always-present destination, no swallow).
+    # The continuation block is created BEFORE the dest so an uncaught category's
+    # panic block jumps to it (a dead edge keeping the CFG well-formed — the
+    # `gorget_panic` is noreturn, so the jump is never taken at runtime; mirrors
+    # the assert-panic idiom, lower_stmt.gg:1287).
+    int ovf_flag = add_local(&ctx, BOOL_TYPE, None)
+    emit(&ctx, GICmp(ovf_flag, CMP_EQ, I32_TYPE, OpCopy(tag_val), OpConstI32(overflow_tag)))
+    int ovf_cont_bb = new_block(&ctx)
+    int ovf_dest = ovf_handler
+    if ovf_dest < 0:
+        ovf_dest = emit_fault_repanic_block(&ctx, &gmod, "integer overflow", ovf_cont_bb)
+    set_terminator(&ctx, GTBranch(OpCopy(ovf_flag), ovf_dest, ovf_cont_bb))
+    switch_to(&ctx, ovf_cont_bb)
+
+    int dz_flag = add_local(&ctx, BOOL_TYPE, None)
+    emit(&ctx, GICmp(dz_flag, CMP_EQ, I32_TYPE, OpCopy(tag_val), OpConstI32(divzero_tag)))
+    int dz_cont_bb = new_block(&ctx)
+    int dz_dest = dz_handler
+    if dz_dest < 0:
+        dz_dest = emit_fault_repanic_block(&ctx, &gmod, "division by zero", dz_cont_bb)
+    set_terminator(&ctx, GTBranch(OpCopy(dz_flag), dz_dest, dz_cont_bb))
+    switch_to(&ctx, dz_cont_bb)
+
+    int bnd_flag = add_local(&ctx, BOOL_TYPE, None)
+    emit(&ctx, GICmp(bnd_flag, CMP_EQ, I32_TYPE, OpCopy(tag_val), OpConstI32(bounds_tag)))
+    int bnd_cont_bb = new_block(&ctx)
+    int bnd_dest = bnd_handler
+    if bnd_dest < 0:
+        bnd_dest = emit_fault_repanic_block(&ctx, &gmod, "index out of bounds", bnd_cont_bb)
+    set_terminator(&ctx, GTBranch(OpCopy(bnd_flag), bnd_dest, bnd_cont_bb))
+    switch_to(&ctx, bnd_cont_bb)
+    # Continuation: tag is 0 (no fault) — the result is read by the caller in
+    # this block.
+
+# Synthesize a re-panic block for an uncaught fault category at a cross-frame
+# call site (error-model.md §11, Inc-2.1c/2.1d — the Core-#8 swallow guard).
+# Returns the block id; the block panics with `msg` (`gorget_panic` is
+# noreturn) then jumps to `cont_bb` (a DEAD edge — never taken at runtime —
+# that keeps the CFG well-formed, mirroring the assert-panic idiom
+# lower_stmt.gg:1287). Reached only when the callee raised a category THIS scope
+# does not catch — preserving panic-by-default uniformly. Leaves
+# `ctx.current_block` unchanged (caller stays on the dispatch chain).
+int emit_fault_repanic_block(LowerCtx &ctx, GirModule &gmod, String msg, int cont_bb):
+    int saved_bb = ctx.current_block
+    int panic_bb = new_block(&ctx)
+    switch_to(&ctx, panic_bb)
+    emit(&ctx, GICallExtern(-1, "gorget_panic", [OpConstStr(msg)]))
+    set_terminator(&ctx, GTJump(cont_bb))
+    switch_to(&ctx, saved_bb)
+    return panic_bb
+
 int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[String] &arg_names, Vector[SpannedType] &targs, GirModule &gmod):
     int result = -1
     bool is_print = fname == "print"
@@ -7730,13 +7813,64 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         # `ret_type == UNIT_TYPE`, so it NEVER fires on a ctor call (struct/enum
         # ret_type) or a value-returning call (int/String/…). Drop registration
         # is correctly skipped — there is no owned result to free.
+        # Cross-frame fault propagation (error-model.md §11, Inc-2.1a/2.1c/2.1d):
+        # does the callee PARTICIPATE? If so it has a synthesized trailing
+        # `GtMutPtr(i32)` fault-slot param, so EVERY direct caller MUST pass the
+        # trailing arg (uniform signature, D5). A CATCHING caller (inside ANY
+        # fault scope) allocates a zero-init i32 slot, passes `&slot`, and after
+        # the call dispatches on the slot TAG VALUE to the matching per-category
+        # handler (branch-before-read). A NON-CATCHING caller passes NULL and the
+        # callee's fault arm panics by default. `participating_fault_fns` is empty
+        # for the existing suite + self-host → this block is dead → byte-identical.
+        bool callee_participates = participates_in_fault(&gmod, call_name)
+        bool fault_catching = false
+        int fault_ovf_h = -1
+        int fault_dz_h = -1
+        int fault_bnd_h = -1
+        if callee_participates:
+            match ctx.fault_overflow_handler:
+                case Some(h):
+                    fault_ovf_h = h
+                    fault_catching = true
+                case None:
+                    pass
+            match ctx.fault_divzero_handler:
+                case Some(h):
+                    fault_dz_h = h
+                    fault_catching = true
+                case None:
+                    pass
+            match ctx.fault_bounds_handler:
+                case Some(h):
+                    fault_bnd_h = h
+                    fault_catching = true
+                case None:
+                    pass
+        int fault_slot_local = -1
+        if callee_participates:
+            if fault_catching:
+                # Catching caller: zero-init i32 slot + pass `&slot` (OpBorrow of
+                # an i32 local lowers to `&slot` → int32_t*). The tag-dispatch
+                # below reads its value after the call.
+                fault_slot_local = add_local(&ctx, I32_TYPE, Some("__fault_slot"))
+                emit(&ctx, GIAssign(fault_slot_local, OpConstI32(0)))
+                gir_args.push(OpBorrow(fault_slot_local))
+            else:
+                # Non-catching caller: pass NULL → callee panics by default.
+                gir_args.push(OpConstNull())
         if ret_type == UNIT_TYPE:
             emit(&ctx, GICall(-1, call_name, gir_args))
+            if fault_catching:
+                emit_fault_call_tag_dispatch(&ctx, &gmod, fault_slot_local, fault_ovf_h, fault_dz_h, fault_bnd_h)
             int void_unit = add_local(&ctx, UNIT_TYPE, None)
             emit(&ctx, GIAssign(void_unit, OpConstUnit()))
             return void_unit
         int dst = add_local(&ctx, ret_type, None)
         emit(&ctx, GICall(dst, call_name, gir_args))
+        # Branch-BEFORE-read: the tag-dispatch splits the block on a fault BEFORE
+        # `dst` is consumed, so the sentinel result is never read on a fault path.
+        if fault_catching:
+            emit_fault_call_tag_dispatch(&ctx, &gmod, fault_slot_local, fault_ovf_h, fault_dz_h, fault_bnd_h)
         # FRESH-OWNED-TEMP drop registration (#7-style): a resource/String-
         # returning free-fn/builtin/user call (`int_to_str`/`chr`/`read_file`/
         # `getenv`/`args`/user `String f()`) yields a fresh OWNED value (LoOwned).

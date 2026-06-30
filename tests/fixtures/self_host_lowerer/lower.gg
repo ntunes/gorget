@@ -52,7 +52,7 @@ from lower_stmt import lower_stmt, lower_place_base, lower_field_write, emit_fie
 from lower_match import match_enum_type, match_variant_index, try_lift_option_ref, emit_tag_read, is_deep_clone_fn, resolve_payload_clone_fn, emit_payload_read, emit_payload_read_mode, emit_payload_read_mode_full, match_scrutinee_ptr, lower_pattern_match, lower_ctor_pattern, lookup_ctor_field_type, result_payload_types, emit_on_error_cleanups, lower_throw_stmt, lower_catch_expr, lower_rethrow_expr, maybe_auto_propagate, arms_match_result_or_option, pattern_head_is_result_or_option, lower_match_stmt, lower_match_expr
 from lower_loops import lower_for, lower_for_vector, lower_for_string, parse_dict_kv_types, for_pat_binding_name, lower_for_dict, lower_for_range, lower_for_iterator, bind_tuple_field, bind_tuple_destructure, bind_for_local, local_is_borrow_alias, scrutinee_nonowning, scrutinee_owned_whole_dropped, scrutinee_borrow_into_owning_collection, resolve_elem_type_id, lower_while
 from lower_closures import lower_function, mangle_prim_type, mangle_trait_name, mangle_trait_equip_name, is_builtin_trait, is_iterator_protocol_trait, method_has_self, lower_equip_block, guess_return_type, expr_has_it, closure_ident_module_resolvable, closure_collect_pattern_bindings, closure_expr_has_capture, closure_stmt_has_capture, closure_stmts_have_capture, closure_body_captures, cc_callee_is_free_fn, cc_classify_ident, cc_collect_expr, cc_collect_stmt, cc_collect_stmts, collect_closure_captures, stmts_mutate_any, expr_target_mutates_any, stmt_mutates_any, expr_has_nested_closure, stmt_has_nested_closure, stmts_have_nested_closure, compute_closure_sig, compute_implicit_closure_sig, record_implicit_it_closure, lower_closure_body
-from lower_generics import GenericInstance, ProtoMethInst, proto_method_targ_tid, proto_inst_targ_count, proto_inst_targ_tid, proto_walk_expr, proto_walk_stmts, expand_meta_for_generics, expand_meta_for_stmt, expand_meta_for_expr, discover_generic_calls_expr, discover_generic_calls_stmt, discover_generic_calls_stmts, discover_adapter_chain_expr, discover_adapter_chain_stmts, spanned_type_to_c_name, has_type_variable, compute_mangled_name, setup_type_subs, clear_type_subs, lower_generic_function, lower_generic_equip, spawn_type_base_name, collect_shared_vars, scan_spawn_wrappers, scan_expr_for_spawn, stmts_have_await, emit_named_closure_spawn_expr, emit_named_closure_spawn_stmts, substitute_type, extract_meta_op_suffix, discover_transitive_expr, discover_transitive_stmt, discover_transitive_stmts, discover_mono_method_insts, block_has_delayed_meta, evaluate_delayed_meta_stmts
+from lower_generics import GenericInstance, ProtoMethInst, proto_method_targ_tid, proto_inst_targ_count, proto_inst_targ_tid, proto_walk_expr, proto_walk_stmts, expand_meta_for_generics, expand_meta_for_stmt, expand_meta_for_expr, discover_generic_calls_expr, discover_generic_calls_stmt, discover_generic_calls_stmts, discover_adapter_chain_expr, discover_adapter_chain_stmts, spanned_type_to_c_name, has_type_variable, compute_mangled_name, setup_type_subs, clear_type_subs, lower_generic_function, lower_generic_equip, spawn_type_base_name, collect_shared_vars, scan_spawn_wrappers, scan_expr_for_spawn, stmts_have_await, emit_named_closure_spawn_expr, emit_named_closure_spawn_stmts, substitute_type, extract_meta_op_suffix, discover_transitive_expr, discover_transitive_stmt, discover_transitive_stmts, discover_mono_method_insts, block_has_delayed_meta, evaluate_delayed_meta_stmts, compute_participating_fault_fns
 # Typed builtin-method declaration tables — the single source of truth
 # for the String-view / collection-owning-arg / String-return facts the
 # lowerer used to recognise via raw name-match lists (CLAUDE.md "No name
@@ -2882,7 +2882,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     Dict[String, GirStaticInfo] statics = {}
     Dict[String, ResourceMetadata] resource_metadata = {}
     Dict[int, int] option_ref_payload = {}
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, !const_decls, !bool_const_decls, !string_const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types, !option_ref_payload, [], !enum_variant_parent_idx, false, [], {}, {}, {}, {}, {}, !fn_defaults, [], [], {}, {}, {}, {}, [], SCHED_POOL, [], !async_fns_pre)
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, !const_decls, !bool_const_decls, !string_const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types, !option_ref_payload, [], !enum_variant_parent_idx, false, [], {}, {}, {}, {}, {}, !fn_defaults, [], [], {}, {}, {}, {}, [], SCHED_POOL, [], !async_fns_pre, {})
 
     # R11: extract the `strip-asserts` directive so the SAssert case in
     # lower_stmt can emit a no-op instead of a conditional panic. Mirrors
@@ -2907,6 +2907,17 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         gmod.scheduler_mode = SCHED_INLINE
             else:
                 pass
+
+    # Cross-frame fault propagation (error-model.md §11, Inc-2.1a/2.1c/2.1d):
+    # compute the participating-FREE-FUNCTION set over the AST. Runs HERE —
+    # before any function body is lowered — so `lower_function` (signature +
+    # callee fault-return arm) and `lower_call` (call-site tag-dispatch gate)
+    # can query `participates_in_fault`. Empty for the existing suite +
+    # self-host source (no arith/bounds `catch Fault.X` over a user CALL) →
+    # byte-identical → bootstrap unaffected. Mirrors Rust gg's pre-pass
+    # `compute_participating_fault_fns` (`src/ir/lowering/mod.rs`, after the
+    # fn_sigs prescan, before body lowering).
+    compute_participating_fault_fns(&m, &gmod)
 
     # Pre-scan equip blocks to build the trait-impl registry for the
     # compile-time `implements(T, "Trait")` meta-predicate. Runs HERE — before
