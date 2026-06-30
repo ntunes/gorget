@@ -294,6 +294,20 @@ struct GirFunction:
     int return_type
     Vector[GirLocal] locals
     Vector[BasicBlock] blocks
+    # round-16 Phase-2 (async splice) — typed metadata carried GIR→GIR for the
+    # `__shared_async_<f>` post-pass (Layering rule 2: typed fields, not name-
+    # re-derived downstream). Both default empty; only an async shared-spawn
+    # SOURCE function populates them.
+    #   • with_refresh_pairs — FLATTENED (binding_local, param_local) pairs
+    #     recorded at `with <&param>:` lowering. After each lock-reacquire the
+    #     post-pass re-reads the binding from the freshly-derived facade.
+    #     Mirrors Rust gg's `Function.with_refresh_pairs` (`src/ir/mod.rs:397`).
+    #   • inner_shared_spawns — `spawn inner(&param)` calls inside this fn whose
+    #     `&param` traces back to a shared carrier; the post-pass rewrites them
+    #     to the inner token wrapper + forwards the carrier. Mirrors Rust gg's
+    #     `Function.inner_shared_spawns` (`src/ir/mod.rs:402`).
+    Vector[int] with_refresh_pairs
+    Vector[InnerSharedSpawn] inner_shared_spawns
 
 # ── Extern declaration ───────────────────────────────────
 
@@ -476,6 +490,62 @@ struct SpawnFnRec:
     String fn_name
     String ret_c_type
     Vector[String] param_c_types
+
+# Per-shared-variable carrier model (mirrors Rust gg's `SharedLocalInfo`,
+# `src/ir/lowering/context.rs:41`). A `shared int x = 0` (shared_kind==1,
+# ArcMutex strategy) mints a hidden CARRIER local of type
+# `Shared__Mutex__<inner_c>` (a `gorget_shared` handle whose `data` holds a
+# `gorget_mutex` over the inner value) plus a facade local bound to the user
+# name. Every transparent read/write of `x` routes through the carrier's
+# lock-chain (`Shared__get` → `Mutex__lock` → `Guard__{get,set,drop}`); a
+# `spawn worker(&x)` passes the CARRIER (not `&x`) so the worker owns an
+# independently-retained handle and locks it inside the token wrapper.
+# Keyed in `ctx.shared` by the variable NAME (the self-host resolves
+# identifiers by name, not local-id). `decl_order` is the source-order index
+# (ascending lock order in the spawn token wrapper, descending unlock).
+# Defined here (not lower.gg) so the GIR-level `PendingSharedAsync` post-pass
+# request can carry it without a gir→lower→gir import cycle.
+struct SharedLocalInfo:
+    int facade_local        # the user-named local (inner_type slot)
+    int hidden_local        # the carrier local (Ptr to Shared__Mutex__T)
+    int inner_type          # GIR type-id of the inner value (the user's T)
+    int carrier_type        # GIR type-id of the Shared__Mutex__T carrier (Ptr-typed)
+    String inner_c          # inner C type name (int64_t / bool / double / …)
+    String mutex_mangled    # "Mutex__<inner_c>"
+    String guard_mangled    # "Guard__<inner_c>"
+    String shared_mangled   # "Shared__Mutex__<inner_c>"
+    int decl_order          # source declaration order (lock-ordering key)
+
+# round-16 Phase-2 (async splice): a `spawn inner(&param)` LOWERED INSIDE a
+# function that will become a `__shared_async_<f>` variant — where `param` is
+# a `&`-borrow param of the enclosing fn that traces back to a shared carrier.
+# Recorded on the ENCLOSING GirFunction (`inner_shared_spawns`) at the spawn-
+# site lowering; consumed by the GIR→GIR post-pass (`build_shared_async_wrapper`)
+# to rewrite `__gorget_spawn_<inner>` → `__gorget_spawn___shared_token_<inner>`
+# and forward the CARRIER (not a stack value). Mirrors Rust gg's
+# `InnerSharedSpawn` (`src/ir/mod.rs`) + `InnerSpawnRewrite`
+# (`src/ir/transforms/shared_async.rs:72`). The parallel `shared_arg_*` Vectors
+# are (call-arg index, enclosing-param index) pairs — small N, parallel Vectors
+# per the self-host idiom (no easy tuple storage in fields).
+struct InnerSharedSpawn:
+    String callee_name                  # the inner callee (e.g. "modifier")
+    Vector[int] shared_arg_call_indices # call-arg position of each shared arg
+    Vector[int] shared_arg_param_indices# enclosing-fn param index it maps to (0-based)
+    Vector[int] callee_param_types      # the inner callee's GIR param types
+    int callee_return_type              # the inner callee's return type
+    bool callee_has_awaits              # inner callee has its own yield points?
+
+# round-16 Phase-2 (async splice): a pending request to synthesize the
+# `__shared_async_<source_fn>` variant — recorded at the `spawn <async-callee>(&shared)`
+# site (`lower_shared_spawn`), processed AFTER all functions are lowered by the
+# GIR→GIR post-pass driver (mirrors Rust gg's `PendingSharedVariant`
+# `src/ir/transforms/shared_async.rs:58` + the driver `src/ir/lowering/mod.rs:1547`).
+struct PendingSharedAsync:
+    String source_fn_name               # the async callee already lowered (e.g. "worker")
+    String variant_name                 # "__shared_async_<callee>"
+    Vector[int] shared_arg_indices      # callee param indices that are shared
+    Vector[SharedLocalInfo] shared_arg_infos  # carrier metadata per shared arg
+    int return_type
 
 struct GirModule:
     Vector[GirFunction] functions
@@ -781,6 +851,23 @@ struct GirModule:
     # to SCHED_POOL (0) — the same value the LirModule ctor formerly hardcoded.
     # Appended AT END to avoid shifting positional ctor call sites.
     int scheduler_mode
+    # round-16 Phase-2 (async splice): pending `__shared_async_<callee>` variant
+    # requests, recorded at each `spawn <async-callee>(&shared)` site by
+    # `lower_shared_spawn` and processed AFTER all functions are lowered by the
+    # GIR→GIR post-pass driver (`process_pending_shared_async`, mirrors Rust gg's
+    # `src/ir/lowering/mod.rs:1547-1620` over `pending_shared_variants`). Deduped
+    # by `variant_name` at the write site. Appended AT END to avoid shifting
+    # positional ctor call sites.
+    Vector[PendingSharedAsync] pending_shared_async
+    # round-16 Phase-2 (async splice): function-name → true iff that function's
+    # AST body contains a suspension (`.await()` or a blocking call). Computed by
+    # a pre-pass over `m.items` at the TOP of `lower_module` (before any body is
+    # lowered) so `lower_shared_spawn` — which runs DURING lowering — can pick
+    # `__shared_async_<callee>` (async) vs `__shared_token_<callee>` (sync) for a
+    # shared spawn. Mirrors Rust gg's per-callee `callee_has_awaits`
+    # (`src/ir/lowering/exprs/mod.rs:1247-1250`). Appended AT END to avoid
+    # shifting positional ctor call sites.
+    Dict[String, bool] async_fns
 
 # Per-test metadata mirroring Rust's `TestFnInfo` (`src/ir/mod.rs:30`).
 # `fn_name` is the emitted `__test_N` symbol ("" for a skipped test, which

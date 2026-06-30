@@ -8,7 +8,7 @@ from std.conv import int_to_str, float_to_str
 from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch, EquipBlock, StructDef, EnumDef, EnumVariant, Type, MatchArm, Pattern, SpannedPattern
 from scope import ScopeTable, DefInfo
 from types import TypeTable, ResolvedType
-from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Terminator, Operand, GirType, GirExtern, GirTypeInfo, GirFieldInfo, GirEnumVariantInfo, LiftedClosure, ClosureCapture, ResourceMetadata, CollectionKind, ConsumeKind
+from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Terminator, Operand, GirType, GirExtern, GirTypeInfo, GirFieldInfo, GirEnumVariantInfo, LiftedClosure, ClosureCapture, ResourceMetadata, CollectionKind, ConsumeKind, SharedLocalInfo
 from gir import BOOL_TYPE, I8_TYPE, I16_TYPE, I32_TYPE, I64_TYPE, U8_TYPE, U16_TYPE, U32_TYPE, U64_TYPE, F32_TYPE, F64_TYPE, UNIT_TYPE, PRIM_COUNT
 from gir import CAP_BY_VALUE, CAP_BY_MUT_REF
 from gir import init_type_table, register_type, lookup_or_register_named, register_ptr
@@ -25,9 +25,9 @@ from compiler.data.resources import STRING_BUILTIN_METHODS, COLLECTION_BUILTIN_M
 from compiler.data.schema import BuiltinMethodDecl, BuiltinMethodEntry
 from compiler.data.schema import BuiltinRetKind, BrkString, BrkInfer
 from lir_lower import resource_meta_for
-from lower import LowerCtx, ResultPayloadTypes, DictKvNames, ClosureSig, CaptureCollector, FieldBorrowPair, FieldDerefResult, SVarDeclEmission, SharedLocalInfo
+from lower import LowerCtx, ResultPayloadTypes, DictKvNames, ClosureSig, CaptureCollector, FieldBorrowPair, FieldDerefResult, SVarDeclEmission
 from lower import lower_fail, diag_bug, diag_warn, emit, new_block, switch_to, set_terminator
-from lower import add_local, add_local_with, add_local_inheriting, nl_get, nl_put, nl_contains
+from lower import add_local, add_local_with, add_local_inheriting, nl_get, nl_put, nl_contains, is_mut_borrow_param_local
 from lower import expr_kind, pat_kind, stmt_kind
 from lower import collection_kind_of, collection_kind_eq, int_vec_contains, method_mutates_receiver
 from lower import inherit_borrow_from, set_field_borrow, cow_register_alias, decide_svardecl_emission
@@ -1186,6 +1186,20 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                             pass
                 else:
                     pass
+            # round-16 Phase-2: capture whether `with <name>:` binds a
+            # mutable-borrow PARAM, and the param's local id, BEFORE lowering the
+            # resource + rebinding the name (the `nl_put` below shadows the param
+            # with the with-binding, so a later `nl_get(name)` would no longer
+            # see the param).
+            int wr_param_local = -1
+            match with_resource.expr:
+                case EIdentifier(wr_name):
+                    if nl_contains(&ctx, wr_name):
+                        int wr_cand = nl_get(&ctx, wr_name)
+                        if is_mut_borrow_param_local(&ctx, &gmod, wr_cand):
+                            wr_param_local = wr_cand
+                else:
+                    pass
             int with_val = lower_expr(&ctx, with_resource, &gmod)
             int with_ty = ctx.locals.get(with_val).unwrap().type_id
             int with_local = add_local(&ctx, with_ty, Some(with_name))
@@ -1195,6 +1209,17 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             # the body method calls resolve to `…__bytes_used(0)`.
             emit(&ctx, GIAssign(with_local, op_consume(&ctx, &gmod, with_val, CkAssign())))
             nl_put(&ctx, with_name, with_local)
+            # round-16 Phase-2: record the (binding_local, param_local) refresh
+            # pair captured above. When this function is later transformed into
+            # `__shared_async_<f>` the param becomes the shared carrier; after each
+            # lock-reacquire the post-pass re-reads the binding from the freshly-
+            # derived facade (the freshness contract, book/14-concurrency.md).
+            # This is the ONLY path that makes the `with counter:` block see
+            # `main`'s write across the sleep. Mirrors Rust gg's `with_refresh_pairs`
+            # recording at SWith lowering (`shared_async.rs:239`).
+            if wr_param_local >= 0:
+                ctx.with_refresh_pairs.push(with_local)
+                ctx.with_refresh_pairs.push(wr_param_local)
             # Allocator local is `GtPtr(Named(kind))` — is_droppable_type
             # returns false for Ptr slots, so register_local_for_drop skips
             # it (no double-free; the manual destroy below is sole cleanup).

@@ -8,7 +8,7 @@ from std.conv import int_to_str, float_to_str
 from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch, EquipBlock, StructDef, EnumDef, EnumVariant, Type, MatchArm, Pattern, SpannedPattern, Span
 from scope import ScopeTable, DefInfo
 from types import TypeTable, ResolvedType
-from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Terminator, Operand, GirType, GirExtern, GirTypeInfo, GirFieldInfo, GirEnumVariantInfo, LiftedClosure, ClosureCapture, ResourceMetadata, CollectionKind, ConsumeKind, ThreadSpawnRec, SpawnFnRec
+from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Terminator, Operand, GirType, GirExtern, GirTypeInfo, GirFieldInfo, GirEnumVariantInfo, LiftedClosure, ClosureCapture, ResourceMetadata, CollectionKind, ConsumeKind, ThreadSpawnRec, SpawnFnRec, SharedLocalInfo, InnerSharedSpawn, PendingSharedAsync
 from gir import BOOL_TYPE, I8_TYPE, I16_TYPE, I32_TYPE, I64_TYPE, U8_TYPE, U16_TYPE, U32_TYPE, U64_TYPE, F32_TYPE, F64_TYPE, UNIT_TYPE, PRIM_COUNT
 from gir import CAP_BY_VALUE, CAP_BY_MUT_REF
 from gir import init_type_table, register_type, lookup_or_register_named, register_ptr
@@ -26,7 +26,7 @@ from compiler.data.schema import BuiltinMethodDecl, BuiltinMethodEntry
 from compiler.data.schema import BuiltinRetKind, BrkString, BrkInfer
 from lir_lower import resource_meta_for, is_guard_struct_type, guard_method_prefix, is_opaque_pointer_type
 from lower_loops import lower_for_string, lower_for_range, lower_for_vector, lower_for_dict, lower_for_set, parse_dict_kv_types
-from lower import LowerCtx, ResultPayloadTypes, DictKvNames, ClosureSig, CaptureCollector, FieldBorrowPair, FieldDerefResult, SVarDeclEmission, SharedLocalInfo
+from lower import LowerCtx, ResultPayloadTypes, DictKvNames, ClosureSig, CaptureCollector, FieldBorrowPair, FieldDerefResult, SVarDeclEmission
 from lower import lower_fail, diag_bug, diag_warn, emit, new_block, switch_to, set_terminator
 from lower import add_local, add_local_with, add_local_inheriting, nl_get, nl_put, nl_contains
 from lower import expr_kind, pat_kind, stmt_kind
@@ -875,12 +875,292 @@ void build_shared_token_wrapper(GirModule &gmod, String wrapper_name, String cal
     if callee_ret_ty != UNIT_TYPE:
         tw_ret_op = OpCopy(0)
     Vector[BasicBlock] tw_blocks = [BasicBlock(!tw_insts, GTReturn(tw_ret_op))]
-    gmod.functions.push(GirFunction(wrapper_name, !tw_param_types, callee_ret_ty, !tw_locals, !tw_blocks))
+    gmod.functions.push(GirFunction(wrapper_name, !tw_param_types, callee_ret_ty, !tw_locals, !tw_blocks, [], []))
+
+# ── round-16 Phase-2: the `__shared_async_<callee>` await-splice (GIR→GIR) ──
+#
+# Mirrors Rust gg's `inject_shared_token_management`
+# (`src/ir/transforms/shared_async.rs:106`): take the ALREADY-LOWERED async
+# callee's GIR, clone it, and surgically rewrite it so the shared param is the
+# refcounted carrier and the lock is RELEASED before every suspension and
+# REACQUIRED after — never held across an `await`/`sleep` (Core #8). The
+# self-host emits the SAME lock-chain shape as `build_shared_token_wrapper`
+# (gorget_shared_get_ptr + deref + Mutex__lock + Guard__get_ptr/__drop), NOT the
+# Rust per-type `Shared__get` wrapper (the self-host has none).
+
+# Substitute local id `from_id` → `to_id` inside a single Operand.
+Operand remap_op_local(Operand op, int from_id, int to_id):
+    match op:
+        case OpCopy(l):
+            if l == from_id:
+                return OpCopy(to_id)
+            return op
+        case OpMove(l):
+            if l == from_id:
+                return OpMove(to_id)
+            return op
+        case OpClone(l):
+            if l == from_id:
+                return OpClone(to_id)
+            return op
+        case OpBorrow(l):
+            if l == from_id:
+                return OpBorrow(to_id)
+            return op
+        case OpSizeOf(l):
+            if l == from_id:
+                return OpSizeOf(to_id)
+            return op
+        else:
+            return op
+
+# Substitute one local id inside a single Instruction (all local-carrying
+# fields). Type-id / op-code / field-index ints are LEFT ALONE. Operand-vector
+# instructions (GICall/GICallExtern) remap each arg.
+Instruction remap_inst_local(Instruction inst, int from_id, int to_id):
+    match inst:
+        case GIAssign(dst, v):
+            int nd = dst
+            if dst == from_id:
+                nd = to_id
+            return GIAssign(nd, remap_op_local(v, from_id, to_id))
+        case GIBinOp(dst, opc, ty, lhs, rhs):
+            int nd = dst
+            if dst == from_id:
+                nd = to_id
+            return GIBinOp(nd, opc, ty, remap_op_local(lhs, from_id, to_id), remap_op_local(rhs, from_id, to_id))
+        case GIFaultCheck(dst, fop, ty, lhs, rhs):
+            int nd = dst
+            if dst == from_id:
+                nd = to_id
+            return GIFaultCheck(nd, fop, ty, remap_op_local(lhs, from_id, to_id), remap_op_local(rhs, from_id, to_id))
+        case GIUnOp(dst, opc, ty, operand):
+            int nd = dst
+            if dst == from_id:
+                nd = to_id
+            return GIUnOp(nd, opc, ty, remap_op_local(operand, from_id, to_id))
+        case GICmp(dst, opc, ty, lhs, rhs):
+            int nd = dst
+            if dst == from_id:
+                nd = to_id
+            return GICmp(nd, opc, ty, remap_op_local(lhs, from_id, to_id), remap_op_local(rhs, from_id, to_id))
+        case GICall(dst, name, args):
+            int nd = dst
+            if dst == from_id:
+                nd = to_id
+            Vector[Operand] na = []
+            for a in args:
+                na.push(remap_op_local(a, from_id, to_id))
+            return GICall(nd, name, !na)
+        case GICallExtern(dst, name, args):
+            int nd = dst
+            if dst == from_id:
+                nd = to_id
+            Vector[Operand] na = []
+            for a in args:
+                na.push(remap_op_local(a, from_id, to_id))
+            return GICallExtern(nd, name, !na)
+        case GIDrop(l):
+            if l == from_id:
+                return GIDrop(to_id)
+            return inst
+        case GIDropIfAlive(l):
+            if l == from_id:
+                return GIDropIfAlive(to_id)
+            return inst
+        case GIMoveZero(l):
+            if l == from_id:
+                return GIMoveZero(to_id)
+            return inst
+        case GIDeref(dst, src, ity):
+            int nd = dst
+            if dst == from_id:
+                nd = to_id
+            int ns = src
+            if src == from_id:
+                ns = to_id
+            return GIDeref(nd, ns, ity)
+        case GICast(dst, src, fty, tty):
+            int nd = dst
+            if dst == from_id:
+                nd = to_id
+            int ns = src
+            if src == from_id:
+                ns = to_id
+            return GICast(nd, ns, fty, tty)
+        case GIFieldLoad(dst, base, fidx):
+            int nd = dst
+            if dst == from_id:
+                nd = to_id
+            int nb = base
+            if base == from_id:
+                nb = to_id
+            return GIFieldLoad(nd, nb, fidx)
+        case GIDerefStore(ptr, v, ity):
+            int np = ptr
+            if ptr == from_id:
+                np = to_id
+            return GIDerefStore(np, remap_op_local(v, from_id, to_id), ity)
+        else:
+            return inst
+
+# Substitute one local id inside a Terminator (only GTReturn/GTBranch carry
+# Operands).
+Terminator remap_term_local(Terminator term, int from_id, int to_id):
+    match term:
+        case GTReturn(op):
+            return GTReturn(remap_op_local(op, from_id, to_id))
+        case GTBranch(op, t, f):
+            return GTBranch(remap_op_local(op, from_id, to_id), t, f)
+        else:
+            return term
+
+# Emit the lock-acquire chain for one shared carrier into `out`, re-deriving
+# into the SAME pre-allocated slots (raw/mutex/guard/facade). Used at the entry
+# preamble AND at every reacquire after a suspension. Self-host convention
+# (mirrors emit_shared_unwrap_mutex + emit_shared_mutex_lock_get's get_ptr form):
+#   raw  = gorget_shared_get_ptr(copy carrier_param)   ; *Mutex
+#   mtx  = deref raw                                    ; Mutex handle
+#   grd  = Mutex__c__lock(copy mtx)                     ; Guard
+#   fac  = Guard__c__get_ptr(borrow grd)                ; *mut inner  (→ facade)
+void emit_async_lock_acquire(GirModule &gmod, Vector[Instruction] &out, int carrier_param, SharedLocalInfo info, int raw_local, int mutex_local, int guard_local, int facade_local, int mutex_ptr_ty):
+    out.push(GICallExtern(raw_local, "gorget_shared_get_ptr", [OpCopy(carrier_param)]))
+    out.push(GIDeref(mutex_local, raw_local, mutex_ptr_ty))
+    out.push(GICallExtern(guard_local, info.mutex_mangled + "__lock", [OpCopy(mutex_local)]))
+    out.push(GICallExtern(facade_local, info.guard_mangled + "__get_ptr", [OpBorrow(guard_local)]))
 
 # Detect + lower a `spawn callee(args)` that passes ≥1 shared mut-borrow.
 # Returns the spawn dst local, or -1 if no shared arg (caller falls back to
 # the normal named-fn spawn / passthrough). Mirrors the spawn-site shared
 # collection at Rust `exprs/mod.rs:1196-1399`.
+# round-16 Phase-2: lower a `spawn callee(&param)` INSIDE a function whose
+# `&param` is a mutable-borrow PARAM (traces back to a shared carrier in the
+# enclosing async variant). At THIS lowering the enclosing param is still a
+# `*mut T` (the carrier retype happens in the post-pass), so we emit a REAL
+# `__gorget_spawn_<callee>(value)` + `__gorget_await_<callee>` (matching the
+# untransformed-template `@reader` in the Rust oracle) AND record an
+# `InnerSharedSpawn` so the post-pass rewrites the CLONE to forward the carrier
+# through `__shared_token_<callee>`. Returns the spawn dst, or -1 if no `&param`
+# arg (caller falls through to the normal spawn paths). Mirrors Rust gg's inner-
+# spawn collection (`exprs/mod.rs`) + `InnerSpawnRewrite` (`shared_async.rs:72`).
+int lower_inner_shared_spawn(LowerCtx &ctx, String callee_name, Vector[SpannedExpr] spawn_args, GirModule &gmod):
+    # Collect (call-arg index, enclosing-param index) for each `&param` arg whose
+    # param is a mutable-borrow param of THIS function.
+    Vector[int] iss_call_indices = []
+    Vector[int] iss_param_indices = []
+    int isi = 0
+    while isi < spawn_args.len():
+        String iss_ident = ""
+        match spawn_args.get(isi).unwrap().expr:
+            case EMutableBorrow(iss_inner):
+                match (*iss_inner).expr:
+                    case EIdentifier(iss_n):
+                        iss_ident = iss_n
+                    else:
+                        pass
+            case EIdentifier(iss_n2):
+                iss_ident = iss_n2
+            else:
+                pass
+        if iss_ident != "" and not ctx.shared_locals.contains(iss_ident) and nl_contains(&ctx, iss_ident):
+            int iss_plocal = nl_get(&ctx, iss_ident)
+            if is_mut_borrow_param_local(&ctx, &gmod, iss_plocal):
+                # The enclosing-param index is (param_local - 1) (locals[0] = ret).
+                iss_call_indices.push(isi)
+                iss_param_indices.push(iss_plocal - 1)
+        isi += 1
+    if iss_call_indices.len() == 0:
+        return -1
+    # Callee must be a void-or-scalar-returning fn (the fixture's `modifier` is
+    # `async void`). Resolve its param types + return.
+    Vector[int] iss_ptys = get_fn_param_types(callee_name, &gmod)
+    int iss_ret = UNIT_TYPE
+    bool iss_ret_found = false
+    int isf = 0
+    while isf < gmod.functions.len():
+        if gmod.functions.get(isf).unwrap().name == callee_name:
+            iss_ret = gmod.functions.get(isf).unwrap().return_type
+            iss_ret_found = true
+            isf = gmod.functions.len()
+        else:
+            isf += 1
+    if not iss_ret_found and gmod.fn_sigs.contains(callee_name):
+        iss_ret = gmod.fn_sigs.get(callee_name).unwrap()
+    if iss_ret != UNIT_TYPE and not (iss_ret < PRIM_COUNT):
+        return -1
+    # Record the InnerSharedSpawn on the enclosing function (consumed by the
+    # post-pass). `callee_has_awaits` is the per-callee await-ness — the inner
+    # callee picks `__shared_token_` (sync) vs `__shared_async_` (async).
+    bool iss_callee_async = gmod.async_fns.contains(callee_name)
+    ctx.inner_shared_spawns.push(InnerSharedSpawn(callee_name.clone(), iss_call_indices.clone(), iss_param_indices.clone(), iss_ptys.clone(), iss_ret, iss_callee_async))
+    # Register the (template) `__gorget_spawn_<callee>` helper so the
+    # untransformed enclosing fn links. The shared `&param` arg passes the
+    # DEREF'd inner value (scalar) in the template; the post-pass replaces it
+    # with the carrier (void*) when it rewrites the clone. Param C-types: a
+    # shared slot is the inner scalar's C name (the template passes a value),
+    # others their runtime C name.
+    Vector[String] iss_ctys = []
+    int ispw = 0
+    while ispw < iss_ptys.len():
+        bool ispw_shared = false
+        for ci in iss_call_indices:
+            if ci == ispw:
+                ispw_shared = true
+        if ispw_shared:
+            # The template passes the deref'd inner value — its C name is the
+            # pointee scalar. Peel the MutPtr to the inner type.
+            int iss_inner_ty = peel_ptr_tid(&gmod, iss_ptys.get(ispw).unwrap())
+            iss_ctys.push(spawn_runtime_c_name(iss_inner_ty, &gmod))
+        else:
+            iss_ctys.push(spawn_runtime_c_name(iss_ptys.get(ispw).unwrap(), &gmod))
+        ispw += 1
+    String iss_ret_c = "void"
+    if iss_ret != UNIT_TYPE:
+        iss_ret_c = spawn_runtime_c_name(iss_ret, &gmod)
+    bool iss_spawn_reg = false
+    for sfr_i in gmod.spawned_fns:
+        if sfr_i.fn_name == callee_name:
+            iss_spawn_reg = true
+    if not iss_spawn_reg:
+        gmod.spawned_fns.push(SpawnFnRec(callee_name.clone(), iss_ret_c.clone(), !iss_ctys))
+    ctx.pending_spawn_fn = callee_name.clone()
+    String iss_task_name = "Task__" + iss_ret_c
+    Vector[String] iss_ttf = []
+    if ctx.task_type_fns.contains(iss_task_name):
+        iss_ttf = ctx.task_type_fns.get(iss_task_name).unwrap()
+    bool iss_ttf_has = false
+    for ttf_i in iss_ttf:
+        if ttf_i == callee_name:
+            iss_ttf_has = true
+    if not iss_ttf_has:
+        iss_ttf.push(callee_name.clone())
+    ctx.task_type_fns.put(iss_task_name, !iss_ttf)
+    int iss_task_ty = lookup_or_register_named(&gmod, iss_task_name)
+    # Lower the args: a shared `&param` arg passes the DEREF'd inner value
+    # (template behavior); a non-shared arg lowers normally.
+    Vector[Operand] iss_call_args = []
+    int ispa = 0
+    while ispa < spawn_args.len():
+        SpannedExpr iss_arg = spawn_args.get(ispa).unwrap()
+        bool ispa_shared = false
+        for ci2 in iss_call_indices:
+            if ci2 == ispa:
+                ispa_shared = true
+        if ispa_shared:
+            # `&param` → lower the INNER identifier (a `*mut T` param) and DEREF
+            # to the inner value (matching the Rust template `_3 = copy _1.*`).
+            match iss_arg.expr:
+                case EMutableBorrow(ispa_inner):
+                    iss_arg = *ispa_inner
+                else:
+                    pass
+        int iss_arg_local = lower_expr(&ctx, iss_arg, &gmod)
+        iss_call_args.push(op_consume(&ctx, &gmod, iss_arg_local, CkCallArgBorrow()))
+        ispa += 1
+    int iss_dst = add_local(&ctx, iss_task_ty, None)
+    emit(&ctx, GICall(iss_dst, "__gorget_spawn_" + callee_name, iss_call_args))
+    return iss_dst
+
 int lower_shared_spawn(LowerCtx &ctx, String callee_name, Vector[SpannedExpr] spawn_args, GirModule &gmod):
     # Collect shared-arg (index, info). A shared arg is `&x` / `!x` / bare `x`
     # whose identifier is a shared var. Phase-1 fixtures pass `&x`
@@ -971,14 +1251,37 @@ int lower_shared_spawn(LowerCtx &ctx, String callee_name, Vector[SpannedExpr] sp
             if not spawn_shape_supported(sp_pty, &gmod):
                 return -1
         spcheck += 1
-    # Build the token wrapper.
+    # round-16 Phase-2: pick the wrapper by the callee's AST await-ness
+    # (`gmod.async_fns`, populated by the pre-pass at the top of lower_module).
+    #   • async callee → `__shared_async_<callee>` — a GIR→GIR transform of the
+    #     callee's body, built LATER by the post-pass `build_shared_async_wrapper`.
+    #     We record a `PendingSharedAsync` and do NOT build a body here.
+    #   • sync callee  → `__shared_token_<callee>` — the Phase-1 lock-held wrapper,
+    #     built FOR REAL right here by `build_shared_token_wrapper`.
+    # The SOUNDNESS split (Core #8): the async wrapper releases the lock across
+    # every suspension; the sync one holds it (its callee has no suspension).
+    bool sp_callee_async = gmod.async_fns.contains(callee_name)
     String sp_wrapper = "__shared_token_" + callee_name
+    if sp_callee_async:
+        sp_wrapper = "__shared_async_" + callee_name
     bool sp_wrap_exists = false
     for sfr in gmod.spawned_fns:
         if sfr.fn_name == sp_wrapper:
             sp_wrap_exists = true
     if not sp_wrap_exists:
-        build_shared_token_wrapper(&gmod, sp_wrapper, callee_name, sp_callee_ptys.clone(), sp_indices.clone(), sp_infos.clone(), sp_callee_ret)
+        if sp_callee_async:
+            # Defer the async-variant body to the GIR→GIR post-pass (the callee's
+            # GIR may not even be lowered yet at this spawn site). Dedup by
+            # variant name. Mirrors Rust gg's `PendingSharedVariant` push at the
+            # spawn site (`exprs/mod.rs:1318`).
+            bool sp_pend_exists = false
+            for pend in gmod.pending_shared_async:
+                if pend.variant_name == sp_wrapper:
+                    sp_pend_exists = true
+            if not sp_pend_exists:
+                gmod.pending_shared_async.push(PendingSharedAsync(callee_name.clone(), sp_wrapper.clone(), sp_indices.clone(), sp_infos.clone(), sp_callee_ret))
+        else:
+            build_shared_token_wrapper(&gmod, sp_wrapper, callee_name, sp_callee_ptys.clone(), sp_indices.clone(), sp_infos.clone(), sp_callee_ret)
         # Register fn_sigs for the wrapper (return type) so downstream
         # resolution sees it.
         gmod.fn_sigs.put(sp_wrapper.clone(), sp_callee_ret)
@@ -1056,6 +1359,248 @@ int lower_shared_spawn(LowerCtx &ctx, String callee_name, Vector[SpannedExpr] sp
     int sp_dst = add_local(&ctx, sp_task_ty, None)
     emit(&ctx, GICall(sp_dst, "__gorget_spawn_" + sp_wrapper, sp_call_args))
     return sp_dst
+
+# Is a GIR call func-name a YIELD POINT (suspension)? The lock must be released
+# before it and reacquired after. Mirrors Rust gg's `is_yield_point`
+# (`shared_async.rs:455`): the `__gorget_await_` prefix (the sanctioned
+# runtime-symbol-contract exception — Rust does the same `:459`) OR membership in
+# the blocking-extern set. For these fixtures the verified members are
+# `gorget_reactor_sleep_seconds` (the `from std.time import sleep` extern) and
+# the `__gorget_await_*` prefix. `gorget_reactor_sleep_ms` (std.async.async_sleep)
+# is carried too for completeness; NOT `gorget_async_sleep` (a separate
+# builtin-method path that doesn't apply to extern-bound stdlib sleep).
+bool is_yield_point_fn(String fname):
+    if fname.starts_with("__gorget_await_"):
+        return true
+    if fname == "gorget_reactor_sleep_seconds":
+        return true
+    if fname == "gorget_reactor_sleep_ms":
+        return true
+    return false
+
+# True iff inst is a yield-point call (Call or CallExtern to a yield fn).
+bool inst_is_yield_point(Instruction inst):
+    match inst:
+        case GICall(_, fname, _):
+            return is_yield_point_fn(fname)
+        case GICallExtern(_, fname, _):
+            return is_yield_point_fn(fname)
+        else:
+            return false
+
+# Build the GIR→GIR `__shared_async_<callee>` variant from a PendingSharedAsync
+# request. Clones the already-lowered source function, retypes each shared param
+# to its carrier, splices a lock preamble + release/reacquire-around-suspension
+# + with-refresh + release-before-return, and rewrites inner shared spawns to
+# their token wrappers. Mirrors Rust gg's `inject_shared_token_management`
+# (`shared_async.rs:106`). SINGLE shared arg in scope (the two fixtures) — guard
+# generally but the splice is written for the 1-carrier case.
+void build_shared_async_wrapper(GirModule &gmod, PendingSharedAsync pend):
+    # Locate the source function (already lowered).
+    int src_idx = -1
+    int sfi = 0
+    while sfi < gmod.functions.len():
+        if gmod.functions.get(sfi).unwrap().name == pend.source_fn_name:
+            src_idx = sfi
+            sfi = gmod.functions.len()
+        else:
+            sfi += 1
+    if src_idx < 0:
+        return
+    GirFunction src = gmod.functions.get(src_idx).unwrap()
+    Vector[GirLocal] aw_locals = src.locals.clone()
+    Vector[int] aw_param_types = src.param_types.clone()
+    Vector[BasicBlock] aw_blocks = src.blocks.clone()
+    Vector[int] aw_refresh = src.with_refresh_pairs.clone()
+
+    # This fixture set has exactly ONE shared arg. Resolve its carrier + facade.
+    int sh_idx = pend.shared_arg_indices.get(0).unwrap()
+    SharedLocalInfo sh = pend.shared_arg_infos.get(0).unwrap()
+    int param_local = sh_idx + 1
+
+    # 1. Retype the param slot to the carrier Ptr type (Ptr-to-Shared__Mutex__c).
+    int carrier_ty = register_ptr(&gmod, lookup_or_register_named(&gmod, sh.shared_mangled))
+    GirLocal old_p = aw_locals.get(param_local).unwrap()
+    aw_locals.set(param_local, GirLocal(carrier_ty, old_p.name_hint, LoParam(), BoParam(-1), false))
+    aw_param_types.set(sh_idx, carrier_ty)
+
+    # 2. Allocate the lock-management slots (re-derived into the same slots at
+    #    every reacquire). facade is a `*mut inner` that REPLACES the param in
+    #    the body.
+    int mutex_ptr_ty = register_ptr(&gmod, lookup_or_register_named(&gmod, sh.mutex_mangled))
+    int guard_ty = lookup_or_register_named(&gmod, sh.guard_mangled)
+    int inner_mutptr_ty = register_type(&gmod, GtMutPtr(sh.inner_type))
+    int raw_local = aw_locals.len()
+    aw_locals.push(GirLocal(mutex_ptr_ty, None, LoOwned(), BoNone(), false))
+    int mutex_local = aw_locals.len()
+    aw_locals.push(GirLocal(mutex_ptr_ty, None, LoOwned(), BoNone(), false))
+    int guard_local = aw_locals.len()
+    aw_locals.push(GirLocal(guard_ty, None, LoOwned(), BoNone(), false))
+    int facade_local = aw_locals.len()
+    aw_locals.push(GirLocal(inner_mutptr_ty, Some("__facade"), LoOwned(), BoNone(), false))
+
+    # 3. Remap every body reference of the param local → facade (so `deref _1`
+    #    becomes `deref facade`). Walk all blocks' insts + terminators.
+    int rb = 0
+    while rb < aw_blocks.len():
+        BasicBlock blk = aw_blocks.get(rb).unwrap()
+        Vector[Instruction] rmi = []
+        for inst in blk.insts:
+            rmi.push(remap_inst_local(inst, param_local, facade_local))
+        Terminator rmt = remap_term_local(blk.term, param_local, facade_local)
+        aw_blocks.set(rb, BasicBlock(!rmi, rmt))
+        rb += 1
+
+    # 4. Build with-refresh instructions (re-read each binding from facade after
+    #    reacquire): binding = deref facade. param in the pair was remapped, but
+    #    we deref the facade directly (the facade IS the *mut inner).
+    Vector[Instruction] refresh_insts = []
+    int wri = 0
+    while wri + 1 < aw_refresh.len():
+        int wr_binding = aw_refresh.get(wri).unwrap()
+        int wr_param = aw_refresh.get(wri + 1).unwrap()
+        if wr_param == param_local:
+            refresh_insts.push(GIDeref(wr_binding, facade_local, sh.inner_type))
+        wri += 2
+
+    # 5. Splice each block: entry preamble (block 0 only), release/reacquire
+    #    around yield points, release before Return.
+    int bb = 0
+    while bb < aw_blocks.len():
+        BasicBlock blk2 = aw_blocks.get(bb).unwrap()
+        Vector[Instruction] out = []
+        # Entry preamble on block 0.
+        if bb == 0:
+            emit_async_lock_acquire(&gmod, &out, param_local, sh, raw_local, mutex_local, guard_local, facade_local, mutex_ptr_ty)
+        # Walk insts, splicing release-before / reacquire-after each yield.
+        for inst2 in blk2.insts:
+            if inst_is_yield_point(inst2):
+                # release before
+                out.push(GICallExtern(-1, sh.guard_mangled + "__drop", [OpBorrow(guard_local)]))
+                out.push(inst2)
+                # reacquire after + with-refresh
+                emit_async_lock_acquire(&gmod, &out, param_local, sh, raw_local, mutex_local, guard_local, facade_local, mutex_ptr_ty)
+                for ri in refresh_insts:
+                    out.push(ri)
+            else:
+                out.push(inst2)
+        # Release before a Return terminator.
+        Terminator t2 = blk2.term
+        match t2:
+            case GTReturn(_):
+                out.push(GICallExtern(-1, sh.guard_mangled + "__drop", [OpBorrow(guard_local)]))
+            case GTNone():
+                # An async void body falls off with no explicit return; synthesize
+                # the guard release + a unit return so the lock is freed on exit.
+                out.push(GICallExtern(-1, sh.guard_mangled + "__drop", [OpBorrow(guard_local)]))
+                t2 = GTReturn(OpConstUnit())
+            else:
+                pass
+        aw_blocks.set(bb, BasicBlock(!out, t2))
+        bb += 1
+
+    # 6. Inner shared spawns: rewrite `__gorget_spawn_<inner>` →
+    #    `__gorget_spawn___shared_token_<inner>` (+ await) and forward the carrier
+    #    param local. Also build the inner token wrapper + register its spawn rec.
+    #    The inner shared arg traces to the SAME enclosing carrier (`sh`).
+    for iss in src.inner_shared_spawns:
+        rewrite_inner_shared_spawn(&gmod, &aw_blocks, iss, param_local, sh)
+
+    gmod.functions.push(GirFunction(pend.variant_name.clone(), !aw_param_types, pend.return_type, !aw_locals, !aw_blocks, [], []))
+
+# Rewrite an inner `spawn modifier(&counter)` (already lowered to a real
+# `__gorget_spawn_modifier` / `__gorget_await_modifier` pair in the cloned body)
+# to forward the CARRIER through the inner token wrapper. Builds
+# `__shared_token_<inner>` (the SYNC wrapper — the inner callee has no
+# suspension) + registers its spawn helper. Mirrors Rust gg's `InnerSpawnRewrite`
+# (`shared_async.rs:278-357`) + the post-pass wrapper build.
+void rewrite_inner_shared_spawn(GirModule &gmod, Vector[BasicBlock] &blocks, InnerSharedSpawn iss, int carrier_param_local, SharedLocalInfo encl):
+    String orig_spawn = "__gorget_spawn_" + iss.callee_name
+    String orig_await = "__gorget_await_" + iss.callee_name
+    # The inner callee has no awaits in this fixture set → SYNC token wrapper.
+    String inner_wrap = "__shared_token_" + iss.callee_name
+    if iss.callee_has_awaits:
+        inner_wrap = "__shared_async_" + iss.callee_name
+    String new_spawn = "__gorget_spawn_" + inner_wrap
+    String new_await = "__gorget_await_" + inner_wrap
+
+    # The inner callee's shared arg reuses the ENCLOSING carrier's mangled names
+    # (the same `&counter` thread): build its SharedLocalInfo from `encl`. The
+    # facade/hidden locals are wrapper-relative (-1 — `build_shared_token_wrapper`
+    # only reads the mangled-name + inner_type fields).
+    SharedLocalInfo inner_info = SharedLocalInfo(-1, -1, encl.inner_type, encl.carrier_type, encl.inner_c.clone(), encl.mutex_mangled.clone(), encl.guard_mangled.clone(), encl.shared_mangled.clone(), 0)
+
+    # Build the inner SYNC token wrapper (dedup by name).
+    bool inner_built = false
+    for ifn in gmod.functions:
+        if ifn.name == inner_wrap:
+            inner_built = true
+    if not inner_built:
+        Vector[int] inner_indices = iss.shared_arg_call_indices.clone()
+        Vector[SharedLocalInfo] inner_infos = [inner_info]
+        build_shared_token_wrapper(&gmod, inner_wrap, iss.callee_name, iss.callee_param_types.clone(), inner_indices, inner_infos, iss.callee_return_type)
+        gmod.fn_sigs.put(inner_wrap.clone(), iss.callee_return_type)
+
+    # Register the inner wrapper's spawn helper (carrier param → void*).
+    Vector[String] inner_ctys = []
+    int ici = 0
+    while ici < iss.callee_param_types.len():
+        bool ici_shared = false
+        for sci in iss.shared_arg_call_indices:
+            if sci == ici:
+                ici_shared = true
+        if ici_shared:
+            inner_ctys.push("void*")
+        else:
+            inner_ctys.push(spawn_runtime_c_name(iss.callee_param_types.get(ici).unwrap(), &gmod))
+        ici += 1
+    String inner_ret_c = "void"
+    if iss.callee_return_type != UNIT_TYPE:
+        inner_ret_c = spawn_runtime_c_name(iss.callee_return_type, &gmod)
+    bool inner_spawn_reg = false
+    for sfr3 in gmod.spawned_fns:
+        if sfr3.fn_name == inner_wrap:
+            inner_spawn_reg = true
+    if not inner_spawn_reg:
+        gmod.spawned_fns.push(SpawnFnRec(inner_wrap.clone(), inner_ret_c.clone(), !inner_ctys))
+
+    # Rewrite the spawn/await calls in the cloned body: name + carrier arg.
+    int irb = 0
+    while irb < blocks.len():
+        BasicBlock iblk = blocks.get(irb).unwrap()
+        Vector[Instruction] iout = []
+        for iinst in iblk.insts:
+            match iinst:
+                case GICall(idst, ifname, iargs):
+                    if ifname == orig_spawn:
+                        # Forward the CARRIER param local (not the stack value) for
+                        # each shared arg position.
+                        Vector[Operand] nargs = iargs.clone()
+                        for sci2 in iss.shared_arg_call_indices:
+                            if sci2 < nargs.len():
+                                nargs.set(sci2, OpCopy(carrier_param_local))
+                        iout.push(GICall(idst, new_spawn, !nargs))
+                    elif ifname == orig_await:
+                        iout.push(GICall(idst, new_await, iargs))
+                    else:
+                        iout.push(iinst)
+                case GICallExtern(idst2, ifname2, iargs2):
+                    if ifname2 == orig_await:
+                        iout.push(GICallExtern(idst2, new_await, iargs2))
+                    else:
+                        iout.push(iinst)
+                else:
+                    iout.push(iinst)
+        blocks.set(irb, BasicBlock(!iout, iblk.term))
+        irb += 1
+
+# Run the GIR→GIR async-splice post-pass over all pending requests, AFTER every
+# function is lowered. Mirrors Rust gg's driver (`src/ir/lowering/mod.rs:1547`).
+void process_pending_shared_async(GirModule &gmod):
+    int pi = 0
+    while pi < gmod.pending_shared_async.len():
+        build_shared_async_wrapper(&gmod, gmod.pending_shared_async.get(pi).unwrap())
+        pi += 1
 
 int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
     # Consume the one-shot suppress flag for THIS expression.
@@ -4710,7 +5255,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             Vector[int] sp_wp = []
                             Vector[GirLocal] sp_wl = [GirLocal(UNIT_TYPE, None, LoOwned(), BoNone(), false)]
                             Vector[BasicBlock] sp_wb = [BasicBlock([], GTReturn(OpConstUnit()))]
-                            gmod.functions.push(GirFunction(sp_wrap_name, !sp_wp, UNIT_TYPE, !sp_wl, !sp_wb))
+                            gmod.functions.push(GirFunction(sp_wrap_name, !sp_wp, UNIT_TYPE, !sp_wl, !sp_wb, [], []))
                             # Record the closure (lowerable guard identical to
                             # the EClosure arm) so the post-pass pushes its
                             # __Closure_N__call.
@@ -4749,6 +5294,16 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                                 int spawn_shared_dst = lower_shared_spawn(&ctx, spawn_named_fn, spawn_args, &gmod)
                                 if spawn_shared_dst >= 0:
                                     return spawn_shared_dst
+                                # round-16 Phase-2 inner-shared-spawn: a
+                                # `spawn inner(&param)` where `&param` is a
+                                # mutable-borrow PARAM of THIS function (an async
+                                # variant in waiting). Emits a real spawn/await +
+                                # records the InnerSharedSpawn the post-pass rewrites
+                                # to forward the carrier. Returns -1 when no `&param`
+                                # arg → fall through to the named-fn spawn.
+                                int spawn_inner_dst = lower_inner_shared_spawn(&ctx, spawn_named_fn, spawn_args, &gmod)
+                                if spawn_inner_dst >= 0:
+                                    return spawn_inner_dst
                                 # Named-fn spawn (Inc-1). Returns -1 when OUT of
                                 # Inc-1 scope (String/owned return or non-scalar
                                 # param) — fall back to the bare passthrough (keeps

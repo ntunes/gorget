@@ -8,6 +8,7 @@ from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, Spann
 from scope import ScopeTable, DefInfo
 from types import TypeTable, ResolvedType
 from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Terminator
+from gir import SharedLocalInfo, InnerSharedSpawn, PendingSharedAsync
 from gir import Operand, GirType, GirExtern, GirTypeInfo, GirFieldInfo, GirEnumVariantInfo, LiftedClosure
 from gir import ClosureCapture, CAP_BY_VALUE, CAP_BY_MUT_REF
 from gir import SCHED_POOL, SCHED_THREAD, SCHED_INLINE, SCHED_SINGLE
@@ -46,12 +47,12 @@ from lower_cow import compute_cow_scan, cow_pristine_after, cow_source_root_name
 from lower_drops import init_drop_elab, push_drop_scope, emit_scope_drops, pop_drop_scope, pop_drop_scope_no_emit, is_droppable_type, register_local_for_drop, register_owning_param, mark_local_moved, restore_moved, union_moved, emit_drops_for_early_exit, flush_drop_queue
 from lower_liveness import LivenessAnalysis, compute_liveness, wire_liveness_into_modes, liveness_instrumentation_diff, update_last_pos_for_inst, update_last_pos_for_term, note_operand_pos, empty_liveness
 from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, try_register_sync_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, is_comparison, map_cmpop
-from lower_expr import block_terminated, lower_block_expr, lower_stmt_as_tail_value, lower_if_chain_expr, refine_local_type, lower_expr, lower_expr_inner, apply_container_hint_for_ctor_arg, lower_call
+from lower_expr import block_terminated, lower_block_expr, lower_stmt_as_tail_value, lower_if_chain_expr, refine_local_type, lower_expr, lower_expr_inner, apply_container_hint_for_ctor_arg, lower_call, process_pending_shared_async
 from lower_stmt import lower_stmt, lower_place_base, lower_field_write, emit_field_write_from_local, lower_stmts, lower_if, lower_index_assign
 from lower_match import match_enum_type, match_variant_index, try_lift_option_ref, emit_tag_read, is_deep_clone_fn, resolve_payload_clone_fn, emit_payload_read, emit_payload_read_mode, emit_payload_read_mode_full, match_scrutinee_ptr, lower_pattern_match, lower_ctor_pattern, lookup_ctor_field_type, result_payload_types, emit_on_error_cleanups, lower_throw_stmt, lower_catch_expr, lower_rethrow_expr, maybe_auto_propagate, arms_match_result_or_option, pattern_head_is_result_or_option, lower_match_stmt, lower_match_expr
 from lower_loops import lower_for, lower_for_vector, lower_for_string, parse_dict_kv_types, for_pat_binding_name, lower_for_dict, lower_for_range, lower_for_iterator, bind_tuple_field, bind_tuple_destructure, bind_for_local, local_is_borrow_alias, scrutinee_nonowning, scrutinee_owned_whole_dropped, scrutinee_borrow_into_owning_collection, resolve_elem_type_id, lower_while
 from lower_closures import lower_function, mangle_prim_type, mangle_trait_name, mangle_trait_equip_name, is_builtin_trait, is_iterator_protocol_trait, method_has_self, lower_equip_block, guess_return_type, expr_has_it, closure_ident_module_resolvable, closure_collect_pattern_bindings, closure_expr_has_capture, closure_stmt_has_capture, closure_stmts_have_capture, closure_body_captures, cc_callee_is_free_fn, cc_classify_ident, cc_collect_expr, cc_collect_stmt, cc_collect_stmts, collect_closure_captures, stmts_mutate_any, expr_target_mutates_any, stmt_mutates_any, expr_has_nested_closure, stmt_has_nested_closure, stmts_have_nested_closure, compute_closure_sig, compute_implicit_closure_sig, record_implicit_it_closure, lower_closure_body
-from lower_generics import GenericInstance, ProtoMethInst, proto_method_targ_tid, proto_inst_targ_count, proto_inst_targ_tid, proto_walk_expr, proto_walk_stmts, expand_meta_for_generics, expand_meta_for_stmt, expand_meta_for_expr, discover_generic_calls_expr, discover_generic_calls_stmt, discover_generic_calls_stmts, discover_adapter_chain_expr, discover_adapter_chain_stmts, spanned_type_to_c_name, has_type_variable, compute_mangled_name, setup_type_subs, clear_type_subs, lower_generic_function, lower_generic_equip, spawn_type_base_name, collect_shared_vars, scan_spawn_wrappers, scan_expr_for_spawn, emit_named_closure_spawn_expr, emit_named_closure_spawn_stmts, substitute_type, extract_meta_op_suffix, discover_transitive_expr, discover_transitive_stmt, discover_transitive_stmts, discover_mono_method_insts, block_has_delayed_meta, evaluate_delayed_meta_stmts
+from lower_generics import GenericInstance, ProtoMethInst, proto_method_targ_tid, proto_inst_targ_count, proto_inst_targ_tid, proto_walk_expr, proto_walk_stmts, expand_meta_for_generics, expand_meta_for_stmt, expand_meta_for_expr, discover_generic_calls_expr, discover_generic_calls_stmt, discover_generic_calls_stmts, discover_adapter_chain_expr, discover_adapter_chain_stmts, spanned_type_to_c_name, has_type_variable, compute_mangled_name, setup_type_subs, clear_type_subs, lower_generic_function, lower_generic_equip, spawn_type_base_name, collect_shared_vars, scan_spawn_wrappers, scan_expr_for_spawn, stmts_have_await, emit_named_closure_spawn_expr, emit_named_closure_spawn_stmts, substitute_type, extract_meta_op_suffix, discover_transitive_expr, discover_transitive_stmt, discover_transitive_stmts, discover_mono_method_insts, block_has_delayed_meta, evaluate_delayed_meta_stmts
 # Typed builtin-method declaration tables — the single source of truth
 # for the String-view / collection-owning-arg / String-return facts the
 # lowerer used to recognise via raw name-match lists (CLAUDE.md "No name
@@ -221,29 +222,6 @@ struct LazyMember:
     int slot_type
     String clone_fn
     bool stmt_scoped
-
-# Per-shared-variable carrier model (mirrors Rust gg's `SharedLocalInfo`,
-# `src/ir/lowering/context.rs:41`). A `shared int x = 0` (shared_kind==1,
-# ArcMutex strategy) mints a hidden CARRIER local of type
-# `Shared__Mutex__<inner_c>` (a `gorget_shared` handle whose `data` holds a
-# `gorget_mutex` over the inner value) plus a facade local bound to the user
-# name. Every transparent read/write of `x` routes through the carrier's
-# lock-chain (`Shared__get` → `Mutex__lock` → `Guard__{get,set,drop}`); a
-# `spawn worker(&x)` passes the CARRIER (not `&x`) so the worker owns an
-# independently-retained handle and locks it inside the token wrapper.
-# Keyed in `ctx.shared` by the variable NAME (the self-host resolves
-# identifiers by name, not local-id). `decl_order` is the source-order index
-# (ascending lock order in the spawn token wrapper, descending unlock).
-struct SharedLocalInfo:
-    int facade_local        # the user-named local (inner_type slot)
-    int hidden_local        # the carrier local (Ptr to Shared__Mutex__T)
-    int inner_type          # GIR type-id of the inner value (the user's T)
-    int carrier_type        # GIR type-id of the Shared__Mutex__T carrier (Ptr-typed)
-    String inner_c          # inner C type name (int64_t / bool / double / …)
-    String mutex_mangled    # "Mutex__<inner_c>"
-    String guard_mangled    # "Guard__<inner_c>"
-    String shared_mangled   # "Shared__Mutex__<inner_c>"
-    int decl_order          # source declaration order (lock-ordering key)
 
 struct LowerCtx:
     Vector[GirLocal] locals
@@ -487,6 +465,20 @@ struct LowerCtx:
     # Incremented per shared SVarDecl; the value is the SharedLocalInfo's
     # `decl_order` (ascending lock order in the spawn token wrapper).
     int shared_decl_counter
+    # ── round-16 Phase-2 (async splice) accumulators ─────────────────
+    # FLATTENED (binding_local, param_local) pairs recorded when a `with <&param>:`
+    # binds a value read from a mutable-borrow param of THIS function. The
+    # post-pass that builds `__shared_async_<f>` re-reads each binding from the
+    # freshly-derived facade after every lock-reacquire (the freshness refresh).
+    # Copied into the GirFunction at lower_function exit. Mirrors Rust gg's
+    # `BuilderState.with_refresh_pairs` (`src/ir/builder.rs:17`).
+    Vector[int] with_refresh_pairs
+    # `spawn inner(&param)` calls inside this fn whose `&param` is a mutable-borrow
+    # param (traces back to a shared carrier). Recorded by the inner-shared-spawn
+    # arm of `lower_shared_spawn`; the post-pass rewrites them to the inner token
+    # wrapper + forwards the carrier. Mirrors Rust gg's
+    # `BuilderState.inner_shared_spawns` (`src/ir/builder.rs:19`).
+    Vector[InnerSharedSpawn] inner_shared_spawns
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -736,6 +728,28 @@ int add_local_with(LowerCtx &ctx, int type_id, Option[String] name, LocalOwnersh
     int id = ctx.locals.len()
     ctx.locals.push(GirLocal(type_id, name, ownership, borrow_origin, false))
     return id
+
+# round-16 Phase-2: is `local` a mutable-borrow PARAMETER (`int &counter` →
+# LoParam + GtMutPtr)? Typed predicate (Layering rule 2) — reads the local's
+# ownership tag + GIR type, never a name. Used by the SWith with-refresh
+# recorder to detect a `with <&param>:` block.
+bool is_mut_borrow_param_local(LowerCtx &ctx, GirModule &gmod, int local):
+    if local < 0 or local >= ctx.locals.len():
+        return false
+    GirLocal gl = ctx.locals.get(local).unwrap()
+    bool is_param = false
+    match gl.ownership:
+        case LoParam():
+            is_param = true
+        else:
+            pass
+    if not is_param:
+        return false
+    match gmod.type_table.get(gl.type_id).unwrap():
+        case GtMutPtr(_):
+            return true
+        else:
+            return false
 
 # Phase 3 (2026-05-22) — Class 8 keystone fix.
 #
@@ -2128,7 +2142,7 @@ GirFunction lower_suite_body(String fn_name, Vector[Stmt] body, GirModule &gmod)
     Dict[String, int] _sb_cow_span = {}
     Dict[String, bool] _sb_cow_clo = {}
     # suite setup/teardown bodies are void, non-throws → fn_is_throws=false.
-    LowerCtx sctx = LowerCtx([], [], [], 0, !_sb_named_locals, !_sb_lc_stk, !_sb_lb_stk, "", "", "", false, fn_name.clone(), DropElaborator(!_sb_de_scopes), !_sb_de_queue, -1, !_sb_on_err_blocks, false, !_sb_cow_mut, !_sb_cow_span, !_sb_cow_clo, {}, [], {}, None, None, None, false, {}, {}, "", {}, false, 0)
+    LowerCtx sctx = LowerCtx([], [], [], 0, !_sb_named_locals, !_sb_lc_stk, !_sb_lb_stk, "", "", "", false, fn_name.clone(), DropElaborator(!_sb_de_scopes), !_sb_de_queue, -1, !_sb_on_err_blocks, false, !_sb_cow_mut, !_sb_cow_span, !_sb_cow_clo, {}, [], {}, None, None, None, false, {}, {}, "", {}, false, 0, [], [])
     Vector[Instruction] sinit = []
     sctx.block_insts.push(!sinit)
     sctx.block_terms.push(GTNone())
@@ -2153,7 +2167,7 @@ GirFunction lower_suite_body(String fn_name, Vector[Stmt] body, GirModule &gmod)
         sblocks.push(BasicBlock(sinsts, st))
         sbi += 1
     Vector[int] sparams = []
-    return GirFunction(fn_name.clone(), !sparams, UNIT_TYPE, sctx.locals, !sblocks)
+    return GirFunction(fn_name.clone(), !sparams, UNIT_TYPE, sctx.locals, !sblocks, [], [])
 
 # ── Module lowering ──────────────────────────────────────
 
@@ -2494,6 +2508,12 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     # the parsed default expr for each param (None if none). Keyed identically;
     # registered at EVERY `.put` sibling so the three Dicts stay in lockstep.
     Dict[String, Vector[Option[SpannedExpr]]] fn_defaults = {}
+    # round-16 Phase-2: per-fn await-ness, computed from the AST BEFORE any
+    # function body is lowered, so `lower_shared_spawn` (which runs DURING
+    # lowering) can query it to pick `__shared_async_` vs `__shared_token_`.
+    # Mirrors Rust gg's per-callee `callee_has_awaits` gate at the spawn site
+    # (`exprs/mod.rs:1247-1250, 1298-1307`). Threaded into `gmod.async_fns`.
+    Dict[String, bool] async_fns_pre = {}
     for bp_item in m.items:
         match bp_item:
             case IFunction(fdef):
@@ -2506,7 +2526,9 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                     defaults.push(p.default_value)
                 fn_borrow_params.put(fdef.name.clone(), borrows)
                 fn_move_params.put(fdef.name.clone(), moves)
-                fn_defaults.put(fdef.name, defaults)
+                fn_defaults.put(fdef.name.clone(), defaults)
+                if stmts_have_await(fdef.body):
+                    async_fns_pre.put(fdef.name.clone(), true)
             case IEquip(bp_eqblk):
                 # Equip-method `!`-params must register too, otherwise a
                 # `self.m(!arg)`-shaped call (a bare local passed to a `!T`
@@ -2860,7 +2882,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     Dict[String, GirStaticInfo] statics = {}
     Dict[String, ResourceMetadata] resource_metadata = {}
     Dict[int, int] option_ref_payload = {}
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, !const_decls, !bool_const_decls, !string_const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types, !option_ref_payload, [], !enum_variant_parent_idx, false, [], {}, {}, {}, {}, {}, !fn_defaults, [], [], {}, {}, {}, {}, [], SCHED_POOL)
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, !const_decls, !bool_const_decls, !string_const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types, !option_ref_payload, [], !enum_variant_parent_idx, false, [], {}, {}, {}, {}, {}, !fn_defaults, [], [], {}, {}, {}, {}, [], SCHED_POOL, [], !async_fns_pre)
 
     # R11: extract the `strip-asserts` directive so the SAssert case in
     # lower_stmt can emit a no-op instead of a conditional panic. Mirrors
@@ -4215,7 +4237,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         Dict[String, int] _cow_span3 = {}
                         Dict[String, bool] _cow_clo3 = {}
                         # Test bodies are void, non-throws → fn_is_throws=false.
-                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone(), DropElaborator(!_de_scopes3), !_de_queue3, -1, !_on_err_blocks3, false, !_cow_mut3, !_cow_span3, !_cow_clo3, {}, [], {}, None, None, None, false, {}, {}, "", {}, false, 0)
+                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone(), DropElaborator(!_de_scopes3), !_de_queue3, -1, !_on_err_blocks3, false, !_cow_mut3, !_cow_span3, !_cow_clo3, {}, [], {}, None, None, None, false, {}, {}, "", {}, false, 0, [], [])
                         Vector[Instruction] tinit = []
                         tctx.block_insts.push(!tinit)
                         tctx.block_terms.push(GTNone())
@@ -4241,7 +4263,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                             tblocks.push(BasicBlock(tinsts, tt))
                             tbi += 1
                         Vector[int] tparams = []
-                        gmod.functions.push(GirFunction(test_fn_name, !tparams, UNIT_TYPE, tctx.locals, !tblocks))
+                        gmod.functions.push(GirFunction(test_fn_name, !tparams, UNIT_TYPE, tctx.locals, !tblocks, [], []))
                         # Register the full test metadata for the runner-main
                         # synthesis (mirrors Rust `module.runtime.test_fns`).
                         gmod.test_fns.push(GirTestFn(test_fn_name.clone(), tname.clone(), t_should_panic, t_panic_msg.clone(), false, ""))
@@ -4420,7 +4442,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                             gmod.functions.push(lower_function(tmeth2, &gmod))
                                             int last_idx2 = gmod.functions.len() - 1
                                             GirFunction last_fn2 = gmod.functions.get(last_idx2).unwrap()
-                                            gmod.functions.set(last_idx2, GirFunction(dm_mangled2, last_fn2.param_types, last_fn2.return_type, last_fn2.locals, last_fn2.blocks))
+                                            gmod.functions.set(last_idx2, GirFunction(dm_mangled2, last_fn2.param_types, last_fn2.return_type, last_fn2.locals, last_fn2.blocks, last_fn2.with_refresh_pairs, last_fn2.inner_shared_spawns))
                                 # Emit parent trait default methods (Type__ naming, no prefix)
                                 for pt_name in tdef.parent_traits:
                                     if trait_defs.contains(pt_name):
@@ -4442,7 +4464,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                                     gmod.functions.push(lower_function(pt_meth, &gmod))
                                                     int pt_last = gmod.functions.len() - 1
                                                     GirFunction pt_last_fn = gmod.functions.get(pt_last).unwrap()
-                                                    gmod.functions.set(pt_last, GirFunction(pt_mangled, pt_last_fn.param_types, pt_last_fn.return_type, pt_last_fn.locals, pt_last_fn.blocks))
+                                                    gmod.functions.set(pt_last, GirFunction(pt_mangled, pt_last_fn.param_types, pt_last_fn.return_type, pt_last_fn.locals, pt_last_fn.blocks, pt_last_fn.with_refresh_pairs, pt_last_fn.inner_shared_spawns))
                                                     overridden.put(pt_meth.name.clone(), true)
                                 clear_type_subs(&gmod)
                                 # FIDELITY Phase 4(b) — emit the vtable global
@@ -4529,7 +4551,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                                 gmod.functions.push(lower_function(tmeth, &gmod))
                                                 int last_idx = gmod.functions.len() - 1
                                                 GirFunction last_fn = gmod.functions.get(last_idx).unwrap()
-                                                gmod.functions.set(last_idx, GirFunction(dm_mangled, last_fn.param_types, last_fn.return_type, last_fn.locals, last_fn.blocks))
+                                                gmod.functions.set(last_idx, GirFunction(dm_mangled, last_fn.param_types, last_fn.return_type, last_fn.locals, last_fn.blocks, last_fn.with_refresh_pairs, last_fn.inner_shared_spawns))
                                     clear_type_subs(&gmod)
                             case None:
                                 pass
@@ -4655,7 +4677,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                                 gmod.functions.push(lower_function(gtmeth, &gmod))
                                                 int g_last = gmod.functions.len() - 1
                                                 GirFunction g_last_fn = gmod.functions.get(g_last).unwrap()
-                                                gmod.functions.set(g_last, GirFunction(g_dm_mangled, g_last_fn.param_types, g_last_fn.return_type, g_last_fn.locals, g_last_fn.blocks))
+                                                gmod.functions.set(g_last, GirFunction(g_dm_mangled, g_last_fn.param_types, g_last_fn.return_type, g_last_fn.locals, g_last_fn.blocks, g_last_fn.with_refresh_pairs, g_last_fn.inner_shared_spawns))
                                 clear_type_subs(&gmod)
                         case None:
                             pass
@@ -4692,7 +4714,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                     gmod.functions.push(lower_function(mm_em, &gmod))
                     int mm_li = gmod.functions.len() - 1
                     GirFunction mm_lf = gmod.functions.get(mm_li).unwrap()
-                    gmod.functions.set(mm_li, GirFunction(mm_pmi.mangled_symbol, mm_lf.param_types, mm_lf.return_type, mm_lf.locals, mm_lf.blocks))
+                    gmod.functions.set(mm_li, GirFunction(mm_pmi.mangled_symbol, mm_lf.param_types, mm_lf.return_type, mm_lf.locals, mm_lf.blocks, mm_lf.with_refresh_pairs, mm_lf.inner_shared_spawns))
                     gmod.fn_sigs.put(mm_pmi.mangled_symbol.clone(), mm_lf.return_type)
                     clear_type_subs(&gmod)
 
@@ -4760,7 +4782,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                             gmod.functions.push(lower_function(gm_em, &gmod))
                             int gm_li = gmod.functions.len() - 1
                             GirFunction gm_lf = gmod.functions.get(gm_li).unwrap()
-                            gmod.functions.set(gm_li, GirFunction(gm_pmi.mangled_symbol, gm_lf.param_types, gm_lf.return_type, gm_lf.locals, gm_lf.blocks))
+                            gmod.functions.set(gm_li, GirFunction(gm_pmi.mangled_symbol, gm_lf.param_types, gm_lf.return_type, gm_lf.locals, gm_lf.blocks, gm_lf.with_refresh_pairs, gm_lf.inner_shared_spawns))
                             gmod.fn_sigs.put(gm_pmi.mangled_symbol.clone(), gm_lf.return_type)
                             clear_type_subs(&gmod)
                 case None:
@@ -4832,7 +4854,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                     gmod.functions.push(lower_function(p_tmeth, &gmod))
                                     int p_li = gmod.functions.len() - 1
                                     GirFunction p_lf = gmod.functions.get(p_li).unwrap()
-                                    gmod.functions.set(p_li, GirFunction(pmi.mangled_symbol, p_lf.param_types, p_lf.return_type, p_lf.locals, p_lf.blocks))
+                                    gmod.functions.set(p_li, GirFunction(pmi.mangled_symbol, p_lf.param_types, p_lf.return_type, p_lf.locals, p_lf.blocks, p_lf.with_refresh_pairs, p_lf.inner_shared_spawns))
                                     # Register the return type under the mangled symbol so
                                     # the call-site ret_tid lookup (fn_sigs) resolves to the
                                     # adapter struct, not the I64 fallback.
@@ -4861,7 +4883,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                             gmod.functions.push(lower_function(p_im, &gmod))
                             int p_ili = gmod.functions.len() - 1
                             GirFunction p_ilf = gmod.functions.get(p_ili).unwrap()
-                            gmod.functions.set(p_ili, GirFunction(pmi.mangled_symbol, p_ilf.param_types, p_ilf.return_type, p_ilf.locals, p_ilf.blocks))
+                            gmod.functions.set(p_ili, GirFunction(pmi.mangled_symbol, p_ilf.param_types, p_ilf.return_type, p_ilf.locals, p_ilf.blocks, p_ilf.with_refresh_pairs, p_ilf.inner_shared_spawns))
                             gmod.fn_sigs.put(pmi.mangled_symbol.clone(), p_ilf.return_type)
                             clear_type_subs(&gmod)
 
@@ -4908,7 +4930,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                 stub_locals.push(GirLocal(spt, Some(spn.clone()), LoParam(), BoParam(-1), false))
                 spi = spi + 1
             Vector[BasicBlock] stub_blocks = [BasicBlock([], GTReturn(OpCopy(0)))]
-            gmod.functions.push(GirFunction(d_call_name, !d_abi, d_ret, !stub_locals, !stub_blocks))
+            gmod.functions.push(GirFunction(d_call_name, !d_abi, d_ret, !stub_locals, !stub_blocks, [], []))
         di = di + 1
 
     # Scan for spawn wrappers: shared-token and closure/method spawn
@@ -4919,6 +4941,12 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     Dict[String, bool] shared_vars = {}
     Dict[String, bool] async_fns = {}
     Dict[String, bool] emitted_wrappers = {}
+    # `async_fns` (the per-callee await-ness map) is populated in `gmod.async_fns`
+    # by the pre-pass at the TOP of `lower_module` (BEFORE function bodies are
+    # lowered), so `lower_shared_spawn` can query it DURING lowering. This scan
+    # loop runs AFTER lowering, so its own `async_fns` local would be too late —
+    # the routing decision is already made. It stays empty + the (now no-op)
+    # shared-spawn arm of `scan_expr_for_spawn` no longer reads it.
     for sw_item1 in m.items:
         match sw_item1:
             case IFunction(fdef):
@@ -4958,5 +4986,13 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                 emit_named_closure_spawn_stmts(fdef.body, fdef.name, &emitted_wrappers, &gmod)
             else:
                 pass
+
+    # round-16 Phase-2: the GIR→GIR async-splice post-pass. Runs AFTER every
+    # function is lowered (so each shared-async SOURCE function's GIR is present)
+    # and synthesizes the `__shared_async_<callee>` variants (release/reacquire
+    # spliced around suspensions) + their inner `__shared_token_<inner>` wrappers.
+    # Mirrors Rust gg's driver (`src/ir/lowering/mod.rs:1547-1620` over
+    # `pending_shared_variants`).
+    process_pending_shared_async(&gmod)
 
     return gmod

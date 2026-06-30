@@ -1822,7 +1822,7 @@ void lower_generic_function(FunctionDef fdef, String mangled_name, Vector[String
                 pi += 1
 
     # Override the function name with the mangled name
-    gmod.functions.push(GirFunction(mangled_name, gfn.param_types, gfn.return_type, gfn.locals, gfn.blocks))
+    gmod.functions.push(GirFunction(mangled_name, gfn.param_types, gfn.return_type, gfn.locals, gfn.blocks, gfn.with_refresh_pairs, gfn.inner_shared_spawns))
     clear_type_subs(&gmod)
 
 # Extract type parameter names from equip target's generic args
@@ -1871,6 +1871,129 @@ String spawn_type_base_name(SpannedType ty):
             return n
         else:
             return ""
+
+# ── Body-await detector (round-16 Phase-2 async splice) ──────────────
+#
+# Populate `async_fns[c]=true` iff callee `c`'s BODY contains a SUSPENSION —
+# an `.await()` (EAwait) OR a blocking-call membership (`sleep`, `read_file`,
+# …). This gates the WHICH-wrapper decision: an async callee spawned against a
+# shared var routes to `__shared_async_<c>` (release/reacquire-spliced), a sync
+# one to `__shared_token_<c>` (lock-held wrapper). Mirrors Rust gg's
+# `expr_has_await` / `stmt_has_await` (`src/ir/lowering/context.rs:3722-3804`).
+#
+# ⚠ Load-bearing: the detector MUST count blocking calls, not just `.await()`.
+# `shared_with_spawned_refresh`'s `worker` has NO `.await()` — only `sleep(0.05)`
+# — so it routes async SOLELY via `sleep`'s blocking-call membership. A detector
+# matching only EAwait would leave `worker` SYNC → lock held across the sleep →
+# fixture stays at 0. The `BLOCKING_AST_CALLS` name-set is the documented
+# runtime-symbol-contract exception (it mirrors `BLOCKING_CALL_NAMES`
+# `exprs/mod.rs:28`), NOT a layering violation.
+
+# Is `name` one of the blocking stdlib calls that yield (release locks)?
+# Mirrors Rust `BLOCKING_AST_CALLS` (`src/ir/lowering/context.rs:3717-3720`).
+bool is_blocking_call_name(String name):
+    if name == "sleep":
+        return true
+    if name == "read_file" or name == "write_file" or name == "append_file":
+        return true
+    if name == "readdir":
+        return true
+    if name == "http_get" or name == "http_post" or name == "http_put" or name == "http_delete":
+        return true
+    return false
+
+bool expr_has_await(SpannedExpr sexpr):
+    match sexpr.expr:
+        case EAwait(_):
+            return true
+        case ECall(callee_box, args, _, _):
+            match (*callee_box).expr:
+                case EIdentifier(cname):
+                    if is_blocking_call_name(cname):
+                        return true
+                else:
+                    pass
+            if expr_has_await(*callee_box):
+                return true
+            for a in args:
+                if expr_has_await(a):
+                    return true
+            return false
+        case EMethodCall(recv_box, _, margs, _, _):
+            if expr_has_await(*recv_box):
+                return true
+            for ma in margs:
+                if expr_has_await(ma):
+                    return true
+            return false
+        case EBinaryOp(lhs_box, _, rhs_box):
+            return expr_has_await(*lhs_box) or expr_has_await(*rhs_box)
+        case EUnaryOp(_, operand_box):
+            return expr_has_await(*operand_box)
+        case ESpawn(inner_box):
+            return expr_has_await(*inner_box)
+        case ETupleLiteral(elems):
+            for e in elems:
+                if expr_has_await(e):
+                    return true
+            return false
+        case EIndex(obj_box, idx_box):
+            return expr_has_await(*obj_box) or expr_has_await(*idx_box)
+        case EFieldAccess(obj_box, _):
+            return expr_has_await(*obj_box)
+        else:
+            return false
+
+bool stmt_has_await(Stmt stmt):
+    match stmt:
+        case SExpr(e):
+            return expr_has_await(e)
+        case SVarDecl(_, _, val, _, _, _):
+            return expr_has_await(val)
+        case SAssign(_, val2):
+            return expr_has_await(val2)
+        case SCompoundAssign(_, _, val3):
+            return expr_has_await(val3)
+        case SReturn(opt):
+            match opt:
+                case Some(rexpr):
+                    return expr_has_await(rexpr)
+                case None:
+                    return false
+        case SIf(cond, then_body, branches):
+            if expr_has_await(cond):
+                return true
+            if stmts_have_await(then_body):
+                return true
+            for eb in branches:
+                if stmts_have_await(eb.body):
+                    return true
+            return false
+        case SWhile(wcond, wbody, _):
+            return expr_has_await(wcond) or stmts_have_await(wbody)
+        case SFor(_, iter_expr, fbody, _, _):
+            return expr_has_await(iter_expr) or stmts_have_await(fbody)
+        case SLoop(lbody):
+            return stmts_have_await(lbody)
+        case SMatch(scrut, arms):
+            if expr_has_await(scrut):
+                return true
+            for arm in arms:
+                if stmts_have_await(arm.body):
+                    return true
+            return false
+        case SWith(_, _, wbody2):
+            return stmts_have_await(wbody2)
+        case SNamedScope(_, nbody):
+            return stmts_have_await(nbody)
+        else:
+            return false
+
+bool stmts_have_await(Vector[Stmt] stmts):
+    for s in stmts:
+        if stmt_has_await(s):
+            return true
+    return false
 
 # Collect shared variable names from a list of statements
 void collect_shared_vars(Vector[Stmt] stmts, Dict[String, bool] &shared_vars):
@@ -1946,32 +2069,24 @@ void scan_expr_for_spawn(SpannedExpr sexpr, Dict[String, bool] &shared_vars, Dic
                                     else:
                                         pass
                             if has_shared and not emitted.contains(callee_name):
-                                # Determine prefix: __shared_async_ for async, __shared_token_ otherwise
-                                String prefix = "__shared_token_"
-                                if async_fns.contains(callee_name):
-                                    prefix = "__shared_async_"
-                                # round-16 Phase 1: the SYNCHRONOUS-callee
-                                # `__shared_token_` wrapper is now built FOR REAL
-                                # by `build_shared_token_wrapper` (lower_expr's
-                                # ESpawn shared-spawn path) — with the actual
-                                # lock/get-ptr/call/unlock body, not this empty
-                                # `(i64) -> unit` stub. Emitting the stub here too
-                                # produces a DUPLICATE GirFunction (conflicting C
-                                # signatures: void* vs int64_t). So SKIP the stub
-                                # for the sync `__shared_token_` case and let the
-                                # real builder own it. The `__shared_async_`
-                                # (await-splice, Phase 2) path still needs its
-                                # stub until step-4 lands, so keep it.
-                                if prefix == "__shared_token_":
-                                    pass
-                                else:
-                                    String wrapper_name = prefix + callee_name
-                                    # Emit a stub function
-                                    Vector[int] wp = [I64_TYPE]
-                                    Vector[GirLocal] wl = [GirLocal(UNIT_TYPE, None, LoOwned(), BoNone(), false), GirLocal(I64_TYPE, None, LoParam(), BoParam(-1), false)]
-                                    Vector[BasicBlock] wb = [BasicBlock([], GTReturn(OpConstUnit()))]
-                                    gmod.functions.push(GirFunction(wrapper_name, !wp, UNIT_TYPE, !wl, !wb))
-                                    emitted.put(callee_name, true)
+                                # round-16 Phase 1 + Phase 2: BOTH the sync
+                                # `__shared_token_<callee>` AND the async
+                                # `__shared_async_<callee>` wrappers are now built
+                                # FOR REAL — the sync one by `build_shared_token_wrapper`
+                                # (lower_expr's `lower_shared_spawn`, with the real
+                                # lock/get-ptr/call/unlock body), the async one by the
+                                # GIR→GIR post-pass `build_shared_async_wrapper`
+                                # (release/reacquire-spliced around each suspension).
+                                # Emitting the old `(i64) -> unit` stub here would
+                                # produce a DUPLICATE GirFunction with a conflicting C
+                                # signature (void* carrier vs int64_t). So this scan no
+                                # longer emits a wrapper for the shared-spawn case at
+                                # all — `async_fns` (populated in lower.gg) drives the
+                                # WRAPPER CHOICE inside the real builders, not a stub
+                                # here. (The former `__shared_async_` stub at
+                                # `lower_generics.gg:1968-1974`, a dead `(i64)->unit`
+                                # placeholder, is retired per brief §5-item-1.)
+                                pass
                         else:
                             pass
                 case EMethodCall(obj_box, method_name, _, _, _):
@@ -1987,7 +2102,7 @@ void scan_expr_for_spawn(SpannedExpr sexpr, Dict[String, bool] &shared_vars, Dic
                                         Vector[int] wp = [I64_TYPE]
                                         Vector[GirLocal] wl = [GirLocal(I64_TYPE, None, LoOwned(), BoNone(), false), GirLocal(I64_TYPE, None, LoParam(), BoParam(-1), false)]
                                         Vector[BasicBlock] wb = [BasicBlock([], GTReturn(OpConstUnit()))]
-                                        gmod.functions.push(GirFunction(wrapper_name, !wp, UNIT_TYPE, !wl, !wb))
+                                        gmod.functions.push(GirFunction(wrapper_name, !wp, UNIT_TYPE, !wl, !wb, [], []))
                                 case None:
                                     pass
                         else:
@@ -2030,7 +2145,7 @@ void emit_named_closure_spawn_expr(SpannedExpr sexpr, String fn_name, Dict[Strin
                                     Vector[int] ncwp = []
                                     Vector[GirLocal] ncwl = [GirLocal(UNIT_TYPE, None, LoOwned(), BoNone(), false)]
                                     Vector[BasicBlock] ncwb = [BasicBlock([], GTReturn(OpConstUnit()))]
-                                    gmod.functions.push(GirFunction(wrap, !ncwp, UNIT_TYPE, !ncwl, !ncwb))
+                                    gmod.functions.push(GirFunction(wrap, !ncwp, UNIT_TYPE, !ncwl, !ncwb, [], []))
                         else:
                             pass
                 else:
