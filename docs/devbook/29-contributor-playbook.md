@@ -470,6 +470,38 @@ pass, or a parallel fan-out at v1, would have shipped; only the bootstrap
 fixed-point would have caught the `record_enum_category` omission, and only after
 a full execute cycle.
 
+A three-track round (round-16: an await-splice port, a `Shared[T]`-wrapper
+synthesis, a `??`-on-non-Option reject) sharpened three more edges, each a refinement
+of an existing rule:
+- **A clean pass can be wrong; the next fresh re-derivation catches it.** The
+  wrapper brief's pass-2 returned a SIGN-OFF — on the wrong registrar (it confirmed
+  the fix targeted a *field-only* helper, `:712`, when the fixtures' types flow
+  through the *primary* `lower_type_defs` walk, `:962`). Pass-3, re-deriving from
+  source rather than anchoring on pass-2's green, found it. This is why ≥3 passes is
+  a floor, not "until the first clean one."
+- **Verify a cited site is *live* (reached), not merely *present*.** The reject
+  brief + all three of its reviews confirmed the self-host `infer.gg EDefaultOp` arm
+  *exists* — but the parser lowers `a ?? b` to `EBinaryOp "??"`, so that arm is dead
+  code, and typed-init checks bypass the inference path entirely. Only the executor,
+  by *running* it, found the live site. A reviewer (and orchestrator) checking a
+  cite must confirm the code path actually executes for the case at hand, not just
+  that the symbol is there.
+- **A completeness/reachability probe must exercise *nested* positions, not the
+  happy-path instance.** The reject's first executor put the self-host check in a
+  closure-finding walk that `else: pass`ed most parent shapes, so `??` nested in
+  `EUnaryOp`/`EIndex`/`EArrayLiteral`/`EAs` escaped — yet its negative test (bare
+  `int x = a ?? 5`) passed green. The output-review caught the one-sided reject only
+  by probing nested positions; the fix's review probed *seven more* the executor
+  never listed (tuple/dict/range/struct-arg/return/match-scrutinee/f-string). When a
+  guard is meant to fire "everywhere," the test and the review must both prove
+  "everywhere," not "here." (The robust fix was a single exhaustive walker over every
+  AST variant, guarded by a lint that derives the variant set from `ast.gg` — Core #6.)
+And a fourth, reaffirming "scout yield must be end-to-end": the wrapper scout's
+"+4 floor" was a *link-resolution* estimate (the undefined symbols would now link),
+not a compile-run-diff — the real flip was **+0**, because all eight fixtures were
+gated behind pre-existing frontend bugs the wrappers merely made *reachable*. A
+source-reasoned yield is not a measurement.
+
 The reviewers are neither rubber-stamps nor nitpickers-for-sport: brief each to
 verify load-bearing claims against source with `file:line` and return **SIGN OFF
 or specific cited reservations**, and cross-check their claims yourself — a
