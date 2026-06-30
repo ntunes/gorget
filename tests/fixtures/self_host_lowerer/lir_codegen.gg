@@ -8,7 +8,7 @@
 
 from lir import LirModule, LirFunction, LirBlock, LirInst, LirTerm, LirSlot
 from lir import SlotProvenance
-from lir import LirStructDef, LirExtern, LirGlobal, LirGlobalField, LirSpawnedFn, SpawnParam, CloneParam, LirTestFn, LirBenchFn, LirThreadSpawnedFn, DictGetOrReq, BoxWrapperReq
+from lir import LirStructDef, LirExtern, LirGlobal, LirGlobalField, LirSpawnedFn, SpawnParam, CloneParam, LirTestFn, LirBenchFn, LirThreadSpawnedFn, DictGetOrReq, BoxWrapperReq, SharedWrapperReq
 from lir import StructField, BlockParam, SwitchCase, FieldDrop, EnumVariantDrop, TypeDropInfo, FieldInit
 from lir import LT_I8, LT_I16, LT_I32, LT_I64, LT_U8, LT_U16, LT_U32, LT_U64
 from lir import LT_F32, LT_F64, LT_BOOL, LT_PTR, LT_VOID
@@ -863,6 +863,67 @@ String box_alloc_c_type(String suffix):
         return suffix
     # Struct name — reference as typedef
     return "__gg_" + suffix
+
+# For a `Shared[Vector[T]]` request, the `at`/`set_at` element is the Vector's
+# element T, NOT the `Vector__T` alias itself. The coll_elem_type_map value for
+# `Shared__Vector__int64_t` is the Vector mangled name `Vector__int64_t`; strip
+# the leading Vector mangling (8 chars) by a `.slice()` length-parse to get
+# `int64_t`. This is the parsing analog of Rust's `shared_vector_inner_elem`
+# (helpers.rs:199-206); a length-parse is NOT a name-prefix routing test (the
+# `no_growth_in_self_host_name_prefix_routing` lint counts only the prefix-test
+# form, not `.slice` parses). If the inner is not a Vector alias (defensive),
+# return it unchanged.
+String shared_vector_inner_elem(String inner_c):
+    if inner_c.len() >= 8 and inner_c.slice(0, 8) == "Vector__":
+        return inner_c.slice(8, inner_c.len())
+    return inner_c
+
+# Emit the inline `Shared__<T>__{get,at,set_at,slen}` wrapper functions for every
+# EXPLICIT Shared[T] accessor call site. Mirrors Rust gg's `emit_shared_wrapper`
+# (src/backend/c_lir/helpers.rs:246-272): get reads `*(elem*)gorget_shared_get_ptr(self)`;
+# at/set_at/slen operate on the shared backing buffer via gorget_shared_array_*.
+# There is no bare `gorget_shared_get`/`_at`/`_set_at`/`_slen` runtime symbol —
+# these wrappers ARE the generated dispatch target the LIR shared-method map now
+# returns by name. Each wrapper type also needs a `typedef GorgetShared* Shared__<T>;`
+# (Shared types register NO LIR struct, so emit_mono_typedefs never emits one):
+# emit it once per unique type, deduped, before the bodies.
+#
+# Drains the TYPED monomorphization-request registry (populated upstream at the
+# classified `gorget_shared` get/at/set_at/slen site in map_runtime_name). NO
+# instruction scan, NO name-derived routing — the method is read from the typed
+# `kind` tag; this only SPELLS each request's C symbol (the legitimate emit-boundary
+# spelling). Mirrors emit_box_method_wrappers.
+#
+# NOTE on set_at: Rust's wrapper returns `void` and Rust's LIR allocates no result
+# slot. The self-host's GIR DOES allocate a (dead) result slot for set_at, so the
+# emitted call is `__vN = Shared__<T>__set_at(...)`. The wrapper therefore returns
+# `int64_t` (returning 0) to satisfy that dead assignment; the slot is never read.
+String emit_shared_method_wrappers(LirModule &m):
+    String out = ""
+    # Pass 1: typedefs, deduped by type_name.
+    Dict[String, bool] td_seen = {}
+    for req in m.shared_wrapper_requests:
+        if not td_seen.contains(req.type_name):
+            td_seen.put(req.type_name.clone(), true)
+            out = out + "typedef GorgetShared* " + req.type_name + ";\n"
+    # Pass 2: wrapper bodies (one per request; deduped by (type_name, kind) at the
+    # write site).
+    for req2 in m.shared_wrapper_requests:
+        String tn = req2.type_name
+        if req2.kind == "get":
+            String elem = box_alloc_c_type(req2.inner_c)
+            out = out + "static inline " + elem + " " + tn + "__get(" + tn + " self) { return *(" + elem + "*)gorget_shared_get_ptr(self); }\n"
+        elif req2.kind == "at":
+            String inner = box_alloc_c_type(shared_vector_inner_elem(req2.inner_c))
+            out = out + "static inline " + inner + " " + tn + "__at(" + tn + " self, int64_t idx) { return *(" + inner + "*)gorget_shared_array_get(self, (size_t)idx); }\n"
+        elif req2.kind == "set_at":
+            String inner2 = box_alloc_c_type(shared_vector_inner_elem(req2.inner_c))
+            out = out + "static inline int64_t " + tn + "__set_at(" + tn + " self, int64_t idx, " + inner2 + " val) { gorget_shared_array_set(self, (size_t)idx, &val, sizeof(" + inner2 + ")); return 0; }\n"
+        elif req2.kind == "slen":
+            out = out + "static inline int64_t " + tn + "__slen(" + tn + " self) { return gorget_shared_array_len(self); }\n"
+    if out != "":
+        out = out + "\n"
+    return out
 
 # Emit the inline `Dict__<K>__<V>__get_or(map, key, default)` wrapper functions
 # for every `d.get_or(k, default)` call site. Mirrors Rust gg's
@@ -7627,6 +7688,9 @@ String generate_c(LirModule &m):
     out = out + emit_box_allocators_from_lir(&m)
     # `b.get()`/`b.set(v)` inline wrappers (no `gorget_box_get` runtime symbol).
     out = out + emit_box_method_wrappers(&m)
+    # `s.get()`/`s.at(i)`/`s.set_at(i,v)`/`s.slen()` inline wrappers for explicit
+    # Shared[T] accessors (no bare `gorget_shared_<method>` runtime symbol).
+    out = out + emit_shared_method_wrappers(&m)
 
     out = out + body
     return out

@@ -435,6 +435,31 @@ struct BoxWrapperReq:
     String inner_c
     bool is_set
 
+# A `s.get()` / `s.at(i)` / `s.set_at(i, v)` / `s.slen()` inline-wrapper REQUEST
+# for an EXPLICIT `Shared[T]` accessor. The Shared analogue of BoxWrapperReq: a
+# TYPED monomorphization-request recorded at the CLASSIFIED LIR call-mapping site
+# (map_runtime_name's `gorget_shared` prefix arm, scoped to the 4 explicit
+# methods), consumed by emit_shared_method_wrappers at codegen. There is no bare
+# `gorget_shared_get`/`_at`/`_set_at`/`_slen` runtime symbol — these wrappers ARE
+# the generated dispatch target the LIR shared-method routing returns by name
+# (the `Shared__<T>__<method>` mangled symbol). They delegate to the runtime
+# primitives `gorget_shared_get_ptr` / `gorget_shared_array_{get,set,len}`.
+#
+# Unlike Box (which rebuilds `Box__<inner>` from inner_c), Shared has TWO shapes
+# (`Shared__int64_t` vs `Shared__Vector__int64_t`) that can't be reconstructed
+# from inner_c alone, so the FULL wrapper `type_name` is carried verbatim (the
+# incoming mangled symbol's type prefix). `inner_c` is the resolved element C
+# type (read from the TYPED coll_elem_type_map, NOT parsed from the symbol):
+# for `Shared__int64_t` it is `int64_t`; for `Shared__Vector__int64_t` it is the
+# Vector mangled name `Vector__int64_t` (codegen strips the `Vector__` prefix to
+# get the per-element type for at/set_at). `kind` is the typed method tag
+# (`get`/`at`/`set_at`/`slen`) — the codegen reads it instead of re-deriving the
+# method from the mangled name. Deduped by (type_name, kind) at the write site.
+struct SharedWrapperReq:
+    String type_name
+    String inner_c
+    String kind
+
 # ── Test/Bench Metadata ────────────────────────────────────────
 
 struct LirTestFn:
@@ -556,6 +581,16 @@ struct LirModule:
     # channel (Layering rule 4). Empty for modules with no Box get/set call.
     # Appended AT END to avoid shifting positional ctor call sites.
     Vector[BoxWrapperReq] box_wrapper_requests
+    # `s.get()` / `s.at(i)` / `s.set_at(i, v)` / `s.slen()` inline-wrapper
+    # REQUESTS for EXPLICIT `Shared[T]` accessors — the Shared analogue of
+    # box_wrapper_requests. Populated by map_runtime_name's `gorget_shared`
+    # prefix arm (scoped to the 4 explicit methods), drained by
+    # emit_shared_method_wrappers at codegen. Replaces the bare-undefined
+    # `gorget_shared_<method>` fallthrough with a typed per-type wrapper request
+    # (Layering rule 4, mirrors the Box machinery). Empty for modules with no
+    # explicit Shared accessor call. Appended AT END to avoid shifting positional
+    # ctor call sites.
+    Vector[SharedWrapperReq] shared_wrapper_requests
 
 # ── LirFunction helpers ─────────────────────────────────────────
 
@@ -670,4 +705,5 @@ LirModule new_lir_module(int sched):
     Dict[String, String] ccf = {}
     Vector[DictGetOrReq] dgor = []
     Vector[BoxWrapperReq] bwr = []
-    return LirModule(structs, globals, functions, externs, "", spawned, thread_spawned, tests, benches, false, false, sched, "", false, false, "", 0, false, rec_drop_s, rec_drop_e, drop_coll, type_drops, imported_t, evp, evt, trt, tmpm, cet, ckt, cvt, ccf, dgor, bwr)
+    Vector[SharedWrapperReq] swr = []
+    return LirModule(structs, globals, functions, externs, "", spawned, thread_spawned, tests, benches, false, false, sched, "", false, false, "", 0, false, rec_drop_s, rec_drop_e, drop_coll, type_drops, imported_t, evp, evt, trt, tmpm, cet, ckt, cvt, ccf, dgor, bwr, swr)

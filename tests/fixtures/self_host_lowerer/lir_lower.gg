@@ -12,7 +12,7 @@ from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM, OP_MOD
 from gir import OP_ADD_WRAP, OP_SUB_WRAP, OP_MUL_WRAP
 from gir import OP_BITAND, OP_BITOR, OP_BITXOR, OP_SHL, OP_SHR
 from gir import UNOP_NEG, UNOP_NOT, UNOP_BITNOT
-from lir import LirModule, LirFunction, LirBlock, LirInst, LirTerm, LirSlot, LirStructDef, LirExtern, LirGlobal, LirThreadSpawnedFn, DictGetOrReq, BoxWrapperReq
+from lir import LirModule, LirFunction, LirBlock, LirInst, LirTerm, LirSlot, LirStructDef, LirExtern, LirGlobal, LirThreadSpawnedFn, DictGetOrReq, BoxWrapperReq, SharedWrapperReq
 from lir import LirSpawnedFn, SpawnParam, CloneParam
 from lir import SlotProvenance
 from lir import StructField, BlockParam, SwitchCase, FieldDrop, EnumVariantDrop, TypeDropInfo, FieldInit
@@ -714,6 +714,13 @@ void register_field_type_in_sr(String tname, Dict[String, int] &sr, LirModule &m
         String opm = opaque_ptr_method_prefix(tname, &gmod)
         if opm != "":
             m.type_method_prefix_map.put(tname.clone(), opm)
+            # Mirror the lower_type_defs opaque-handle write-through for a
+            # Shared-typed STRUCT FIELD (e.g. `Tensor.storage: Shared[Vector[T]]`):
+            # record the inner element on coll_elem_type_map so an accessor on a
+            # field-only Shared type still resolves its wrapper request. Gated on
+            # the RESOLVED `opm` (not a name-match). `Shared__` is 8 chars.
+            if opm == "gorget_shared":
+                m.coll_elem_type_map.put(tname.clone(), tname.slice(8, tname.len()))
         return
     if is_guard_struct_type(tname, &gmod):
         Vector[StructField] guard_fields = []
@@ -964,6 +971,28 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
                                 match rmeta.method_prefix:
                                     case Some(opm2):
                                         m.type_method_prefix_map.put(name.clone(), opm2)
+                                        # Write-through (Layering rule 4) for the
+                                        # EXPLICIT Shared[T] accessor wrappers. The
+                                        # opaque-handle arm is the PRIMARY registrar
+                                        # for `Shared__*` locals (build_resource_metadata
+                                        # classifies every Shared as opaque_handle +
+                                        # method_prefix "gorget_shared", so it skips
+                                        # every collection arm and lands HERE). Record
+                                        # the inner type on the typed coll_elem_type_map
+                                        # channel — gated on the RESOLVED `opm2`, not a
+                                        # name-match — so record_shared_wrapper_req can
+                                        # read it via coll_elem_type_for_name (which
+                                        # returned "" before this entry → skipped every
+                                        # wrapper request → undefined `gorget_shared_*`).
+                                        # `Shared__` is 8 chars; the slice yields
+                                        # `Shared__int64_t`→`int64_t` and
+                                        # `Shared__Vector__int64_t`→`Vector__int64_t`.
+                                        # (The Shared__Mutex__c CARRIER also lands here,
+                                        # adding an inert Shared__Mutex__c→Mutex__c entry
+                                        # — harmless: the carrier inlines via GICallExtern
+                                        # and never routes through the wrapper arm.)
+                                        if opm2 == "gorget_shared":
+                                            m.coll_elem_type_map.put(name.clone(), name.slice(8, name.len()))
                                     case None:
                                         pass
                                 dispatched = true
@@ -1645,6 +1674,21 @@ String map_runtime_name(String name, LirModule &m, GirModule &gmod):
                             return "gorget_shared_get"
                         if method == "write":
                             return "gorget_shared_set"
+                        # EXPLICIT Shared[T] accessors (get/at/set_at/slen). There
+                        # is no bare `gorget_shared_<method>` runtime symbol — the
+                        # `return pfx + "_" + method` fallthrough below would emit
+                        # an UNDEFINED symbol (link error). Instead RECORD a typed
+                        # per-type wrapper request (mirrors the Box get/set arm) and
+                        # `return name` UNCHANGED: `name` already IS the full mangled
+                        # `Shared__<T>__<method>` symbol, which emit_shared_method_wrappers
+                        # spells. `pfx_cand` is the full type name (`Shared__int64_t`
+                        # / `Shared__Vector__int64_t`); the inner element C type comes
+                        # from the TYPED coll_elem_type_map (populated in the registrar
+                        # step 0). Scoped to EXACTLY these 4 — read/write above and the
+                        # carrier's get_ptr/new/clone/drop are untouched.
+                        if method == "get" or method == "at" or method == "set_at" or method == "slen":
+                            record_shared_wrapper_req(&m, pfx_cand, coll_elem_type_for_name(name, &m), method)
+                            return name
                     # General alias: drop → free.
                     if method == "drop":
                         method = "free"
@@ -2004,6 +2048,23 @@ void record_box_wrapper_req(LirModule &m, String inner_c, bool is_set):
             return
     m.box_wrapper_requests.push(BoxWrapperReq(inner_c.clone(), is_set))
 
+# Record an EXPLICIT Shared[T] accessor inline-wrapper REQUEST onto the typed
+# shared_wrapper_requests registry, deduped by (type_name, kind). Called from
+# the typed `gorget_shared` get/at/set_at/slen arm in map_runtime_name; the
+# codegen drain (emit_shared_method_wrappers) emits one wrapper per request.
+# `type_name` is the full Shared wrapper type (`Shared__int64_t` /
+# `Shared__Vector__int64_t`); `inner_c` is the resolved element from the typed
+# coll_elem_type_map. A blank `inner_c` (coll_elem_type_for_name miss) is skipped
+# — the bare-symbol fallthrough likewise produced nothing usable (the request
+# carries the elem so the wrapper body never re-derives it from the name).
+void record_shared_wrapper_req(LirModule &m, String type_name, String inner_c, String kind):
+    if inner_c == "":
+        return
+    for r in m.shared_wrapper_requests:
+        if r.type_name == type_name and r.kind == kind:
+            return
+    m.shared_wrapper_requests.push(SharedWrapperReq(type_name.clone(), inner_c.clone(), kind.clone()))
+
 # Return the base constructor fn name for Dict/HashMap/Set/HashSet.
 # "Dict__K__V" → "gorget_dict_new", "HashMap__K__V" → "gorget_map_new",
 # "Set__T" → "gorget_ordered_set_new", "HashSet__T" → "gorget_set_new".
@@ -2212,6 +2273,23 @@ int type_elem_size_in_mod(String elem, Dict[String, int] &sr, LirModule &m):
 int collection_elem_size_in_mod(String name, Dict[String, int] &sr, LirModule &m):
     String cat = type_category_for_name(name, &m)
     if cat == "GorgetMap" or cat == "Ptr":
+        # EXPLICIT Shared[T] ctor (`Shared__int64_t` / `Shared__Vector__int64_t`
+        # / `Shared__Config`): `gorget_shared_new(size, &val)` copies `size` bytes
+        # of the BOXED VALUE T into the shared control block — `size` must be
+        # `sizeof(T)`, NOT a bare 8. The Ptr→8 default truncated a `Shared[Config]`
+        # (16B→8B garbage) and a `Shared[Vector[T]]` (GorgetArray→8B garbage, so
+        # `.slen()`/`.at()` saw len 0). Resolve the boxed element via the TYPED
+        # coll_elem_type_map (populated for Shared in the lower_type_defs registrar)
+        # and size it like a collection element. Mirrors Rust's
+        # `Shared__T__new` wrapper: `gorget_shared_new(sizeof(T), &val)`
+        # (src/backend/c_lir/helpers.rs:248). Gated on the RESOLVED method-prefix
+        # (`gorget_shared`), NOT a name-match. The Shared__Mutex carrier never
+        # reaches here (its `__new` ctor is NOT is_collection_constructor → the
+        # concurrency_elem_size path handles its 8-byte mutex-pointer size).
+        if cat == "Ptr" and m.type_method_prefix_map.get(name).unwrap_or("") == "gorget_shared":
+            String shared_elem = coll_elem_type_for_name(name, &m)
+            if shared_elem != "":
+                return type_elem_size_in_mod(shared_elem, &sr, &m)
         return 8
     String elem = coll_elem_type_for_name(name, &m)
     return type_elem_size_in_mod(elem, &sr, &m)
