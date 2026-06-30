@@ -1,0 +1,31 @@
+# Reference-grade lock-in for round-19: `Result[Dict[K, V], E].unwrap()`.
+#
+# Sibling of result_vec_unwrap.gg for the Dict payload: the mangled receiver
+# `Result__Dict__String__int64_t__GorgetString` likewise contains a `__`
+# INSIDE the Ok payload, so the old first-`__` name-slice produced a bare
+# `Dict` placeholder. The typed `enum_category.ok_type` channel carries the
+# fully-monomorphized `Dict__String__int64_t` tid (a GorgetDict alias), so the
+# Ok_0 slot resolves to the real collection type. stdout must match the Rust
+# oracle byte-for-byte.
+from std.collections import Dict
+
+Result[Dict[String, int], String] build_scores():
+    Dict[String, int] d = Dict[String, int]()
+    d.set("alice", 30)
+    d.set("bob", 25)
+    d.set("carol", 42)
+    return Ok(d)
+
+void main():
+    Dict[String, int] scores = build_scores().unwrap()
+    int size = scores.len()
+    print(f"size={size}")
+    int alice = scores.get("alice").unwrap()
+    print(f"alice={alice}")
+    int bob = scores.get("bob").unwrap()
+    print(f"bob={bob}")
+    int carol = scores.get("carol").unwrap()
+    print(f"carol={carol}")
+    bool has_dave = scores.contains("dave")
+    print(f"has_dave={has_dave}")
+    print("done")

@@ -1,0 +1,36 @@
+# Reference-grade lock-in for round-19: `Option[Vector[T]].unwrap()`.
+#
+# The Option arm of the same `.unwrap()` intercept: the receiver
+# `Option__Vector__Item__GorgetString` carries the second `__` inside the Some
+# payload, so the old name-slice produced a bare `Vector` placeholder. The
+# typed `enum_category.ok_type` channel (used for the Some_0 payload of an
+# Option too) carries the monomorphized `Vector__Item` tid → real GorgetArray
+# alias. This is the OWNING Option-unwrap path (a fresh `Some(v)` value), NOT
+# the Option[Ref] borrow-getter path (`.get().unwrap()` → GtPtr payload), whose
+# carve-out is preserved by the fix. stdout must match the Rust oracle.
+from std.collections import Vector
+
+Option[Vector[int]] maybe_squares(int n):
+    if n <= 0:
+        return None()
+    Vector[int] v = []
+    int i = 1
+    while i <= n:
+        v.push(i * i)
+        i = i + 1
+    return Some(v)
+
+void main():
+    Vector[int] squares = maybe_squares(4).unwrap()
+    print(f"len={squares.len()}")
+    int i = 0
+    while i < squares.len():
+        print(f"sq[{i}]={squares.get(i).unwrap()}")
+        i = i + 1
+
+    # unwrap_or on the None branch returns the default Vector — exercises the
+    # same Some_0 payload typing on the success-slot.
+    Vector[int] empty_default = []
+    Vector[int] none_case = maybe_squares(0).unwrap_or(empty_default)
+    print(f"none_len={none_case.len()}")
+    print("done")

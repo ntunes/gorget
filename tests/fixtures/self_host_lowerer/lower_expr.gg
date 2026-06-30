@@ -3022,6 +3022,20 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 # `recv_type_id` that is a `GtPtr(Option__…)` (projected/borrowed
                 # recv) still classifies correctly.
                 EnumCategory recv_ec = enum_category_of(&gmod, recv_type_id)
+                # The Ok/Some payload TYPE comes from the typed `enum_category`
+                # channel (`recv_ec.ok_type`), recorded at the mint site with the
+                # already-monomorphized payload tid — NEVER re-derived by slicing
+                # the mangled `recv_tn` at a `__` boundary. That slice is
+                # AMBIGUOUS for a compound Ok payload whose own name contains
+                # `__` (`Result__Vector__Item__GorgetString`): the first-`__`
+                # split yields a bare `Vector`, which registers a degenerate
+                # `__gg_Vector` placeholder struct and cc-errors `incompatible
+                # types … '__gg_Vector' from 'GorgetArray'`. CLAUDE.md "No name
+                # matching" / Layering rule 2 — read the typed tid, don't reparse
+                # the name. The `inner_name_str` (used only to recover a SCALAR
+                # inner tid below + as the panic/expect label) is taken from the
+                # typed tid's canonical name so the two never disagree.
+                int channel_ok_tid = recv_ec.ok_type
                 if recv_ec.category == ENUM_CAT_OPTION:
                     variant_name = "Some"
                     inner_name_str = recv_tn.slice(8, recv_tn.len())
@@ -3033,6 +3047,18 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     int split = rest.index_of("__").unwrap_or(-1)
                     if split > 0:
                         inner_name_str = rest.slice(0, split)
+                # Prefer the typed channel's payload name when it carries the
+                # full monomorphized Ok/Some type (`Vector__Item`), overriding
+                # the possibly-truncated name-slice above. Gated on a real named
+                # tid so the `Ref__`/borrow paths (which thread a GtPtr through
+                # `ref_payload_tid` below) are untouched.
+                if channel_ok_tid >= 0 and channel_ok_tid < gmod.type_table.len():
+                    match gmod.type_table.get(channel_ok_tid).unwrap():
+                        case GtNamed(_chan_name):
+                            if _chan_name != "":
+                                inner_name_str = _chan_name
+                        else:
+                            pass
                 int inner_tid = -1
                 if inner_name_str != "":
                     int prim_t = prim_name_to_type(inner_name_str)
@@ -3074,6 +3100,22 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         inner_tid = resolve_field_gir_type(inner_name_str, &gmod)
                     else:
                         inner_tid = lookup_or_register_named(&gmod, inner_name_str)
+                # Typed-channel override: when the mint recorded a non-primitive
+                # named Ok/Some payload (`Vector__Item`, a user struct, a nested
+                # `Result__…`), use that EXACT tid rather than re-registering by
+                # name. Identical to `lookup_or_register_named(inner_name_str)` in
+                # the common case, but it ALSO guarantees the result slot is the
+                # SAME registered tid the enum-category / collection-alias passes
+                # saw (so a `Vector__Item` Ok payload maps to its GorgetArray
+                # alias, not a fresh degenerate placeholder). Skipped for the
+                # `Ref__` borrow payload (handled by `ref_payload_tid` below).
+                if channel_ok_tid >= 0 and channel_ok_tid < gmod.type_table.len() and not inner_name_str.starts_with("Ref__"):
+                    match gmod.type_table.get(channel_ok_tid).unwrap():
+                        case GtNamed(_chan_name2):
+                            if _chan_name2 != "" and _chan_name2 != "Str":
+                                inner_tid = channel_ok_tid
+                        else:
+                            pass
                 # option_ref_borrow Phase 3: override with the typed GtPtr
                 # payload when this is an Option[Ref[T]] — the name-slice above
                 # produced a GtNamed("Ref__T"); we want the real GtPtr(T).

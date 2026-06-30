@@ -1,0 +1,52 @@
+# Reference-grade lock-in for round-19: `Result[Vector[T], E].unwrap()`.
+#
+# The `.unwrap()` intercept in the self-host lowerer (lower_expr.gg) used to
+# re-derive the Ok-payload type by slicing the mangled receiver name
+# `Result__Vector__Item__GorgetString` at the FIRST `__`, yielding a bare
+# `Vector` that registered a degenerate `__gg_Vector { char __pad; }`
+# placeholder → cc error `incompatible types … '__gg_Vector' from
+# 'GorgetArray'`. The fix reads the already-monomorphized payload tid off the
+# typed `enum_category.ok_type` channel instead of reparsing the name, so the
+# Ok_0 slot maps to the SAME registered `Vector__Item` (GorgetArray) alias.
+# This fixture exercises the Vector payload end-to-end; its stdout must match
+# the Rust oracle byte-for-byte.
+from std.collections import Vector
+
+Result[Vector[int], String] build_evens(int n):
+    Vector[int] v = []
+    int i = 0
+    while i < n:
+        v.push(i * 2)
+        i = i + 1
+    return Ok(v)
+
+Result[Vector[String], String] build_labels(int n):
+    Vector[String] v = []
+    int i = 0
+    while i < n:
+        v.push(f"item_{i}")
+        i = i + 1
+    return Ok(v)
+
+void main():
+    # Result[Vector[int], String].unwrap() → use the Vector.
+    Vector[int] evens = build_evens(5).unwrap()
+    print(f"len={evens.len()}")
+    int sum = 0
+    int i = 0
+    while i < evens.len():
+        sum = sum + evens.get(i).unwrap()
+        i = i + 1
+    print(f"sum={sum}")
+    print(f"first={evens.get(0).unwrap()}")
+    print(f"last={evens.get(evens.len() - 1).unwrap()}")
+
+    # Result[Vector[String], String].unwrap() → the COMPOUND payload whose
+    # mangled name carries the second `__` (Vector__Item__GorgetString).
+    Vector[String] labels = build_labels(3).unwrap()
+    print(f"nlabels={labels.len()}")
+    int j = 0
+    while j < labels.len():
+        print(labels.get(j).unwrap())
+        j = j + 1
+    print("done")
