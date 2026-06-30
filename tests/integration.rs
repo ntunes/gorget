@@ -27263,6 +27263,20 @@ falsetrue",
     );
 }
 
+// String.push scalar-overload dispatch: the value's LIR type must pick the
+// typed runtime variant (push_int / push_float / push_bool). A scalar routed to
+// the Str-ABI gorget_string_push_char would be zeroed to `(Str){0}` and vanish.
+// The trailing `push("done")` / push_char fall-through must still carry the Str
+// arg. Mirrors the self-host lowerer dispatch at lir_lower.gg's GICallExtern
+// emit (Rust: src/lir/lower/insts.rs tier-3b).
+#[test]
+fn string_push_scalar_dispatch() {
+    run_gg(
+        "string_push_scalar_dispatch.gg",
+        "42 3.5 true false done",
+    );
+}
+
 #[test]
 fn fstring_move_interp_leak() {
     run_gg(

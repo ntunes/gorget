@@ -2509,6 +2509,16 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
         # in place — self (arg 0) is by pointer (the GorgetString receiver).
         if fn_name == "gorget_string_push_char":
             return true
+        # The `gorget_str_*` String-builder spellings (`push`/`push_line`/
+        # `push_char` fall-throughs from map_runtime_name's `gorget_str_` +
+        # method arm) ALSO take self by pointer (GorgetString receiver). These
+        # are the names BEFORE the scalar-overload redirect at the call-emit
+        # site rewrites them to `gorget_string_push_{int,float,bool}` etc., so
+        # the self-by-ptr decision must key off the pre-redirect name here.
+        # Mirrors Rust gg `src/backend/c_lir/helpers.rs:752` `legacy_self_by_ptr`
+        # (gorget_str_push | gorget_str_push_line | gorget_str_push_char).
+        if fn_name == "gorget_str_push" or fn_name == "gorget_str_push_line" or fn_name == "gorget_str_push_char":
+            return true
         # Note: gorget_str_codepoint_count takes Str by value, NOT by pointer.
         # Clone fns (used by emit_payload_read's blocker-2 path for
         # resource-typed payloads) take the source by `const T*`.
@@ -4078,6 +4088,44 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
             String call_name = func_name
             if mapped != "":
                 call_name = mapped
+            # String.push / push_char / push_line value-type dispatch. The Str-ABI
+            # variants (gorget_string_push_char / gorget_str_push_line) carry a
+            # `Str` arg, so a bool/int/float value must route to the typed runtime
+            # variant or its value gets zeroed to `(Str){0}` at codegen. Mirrors
+            # Rust gg `src/lir/lower/insts.rs:4357-4387` (gorget_str_push tier-3b).
+            if (call_name == "gorget_string_push_char" or call_name == "gorget_str_push_line") and args.len() == 2:
+                bool spd_is_line = call_name == "gorget_str_push_line"
+                int spd_lid = -1
+                match args.get(1).unwrap():
+                    case OpCopy(spl):
+                        spd_lid = spl
+                    case OpMove(spl):
+                        spd_lid = spl
+                    case OpClone(spl):
+                        spd_lid = spl
+                    case OpBorrow(spl):
+                        spd_lid = spl
+                    else:
+                        pass
+                if spd_lid >= 0 and spd_lid < local_to_slot.len():
+                    int spd_slot = local_to_slot.get(spd_lid).unwrap()
+                    if spd_slot >= 0 and spd_slot < f.slots.len():
+                        int spd_ty = f.slots.get(spd_slot).unwrap().ty
+                        if spd_ty == LT_BOOL:
+                            if spd_is_line:
+                                call_name = "gorget_string_push_line_bool"
+                            else:
+                                call_name = "gorget_string_push_bool"
+                        elif spd_ty == LT_F64 or spd_ty == LT_F32:
+                            if spd_is_line:
+                                call_name = "gorget_string_push_line_float"
+                            else:
+                                call_name = "gorget_string_push_float"
+                        elif spd_ty == LT_I8 or spd_ty == LT_I16 or spd_ty == LT_I32 or spd_ty == LT_I64 or spd_ty == LT_U8 or spd_ty == LT_U16 or spd_ty == LT_U32 or spd_ty == LT_U64:
+                            if spd_is_line:
+                                call_name = "gorget_string_push_line_int"
+                            else:
+                                call_name = "gorget_string_push_int"
             # Post-mapping fixups: append extra args for functions that need them.
             if call_name == "gorget_array_contains":
                 int es = extract_elem_size_from_name_in_mod(func_name, &sr, &m)

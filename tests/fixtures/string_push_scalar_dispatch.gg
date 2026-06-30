@@ -1,0 +1,31 @@
+# String.push scalar-overload dispatch.
+#
+# `String.push(x)` must route to the typed runtime variant chosen by the LIR
+# type of the value argument:
+#   bool  → gorget_string_push_bool
+#   int   → gorget_string_push_int
+#   float → gorget_string_push_float
+#   Str   → gorget_string_push_char  (the Str-ABI fall-through)
+#
+# Before the dispatch fix the self-host lowerer routed EVERY `push` to the
+# Str-ABI `gorget_string_push_char`, so a scalar arg got zeroed to `(Str){0}`
+# and silently vanished. Each scalar line below would print the wrong (empty)
+# chunk. The C backend and the self-host lowerer must agree byte-for-byte.
+#
+# (push_line is intentionally NOT exercised here: the self-host frontend still
+# lowers String.push_line with a value-returning destination — a separate gap,
+# see TODO — so it cannot yet round-trip end-to-end in the self-host. The LIR
+# dispatch at lir_lower.gg DOES cover push_line for when that gap is fixed.)
+
+void main():
+    String s = ""
+    s.push(42)
+    s.push(" ")
+    s.push(3.5)
+    s.push(" ")
+    s.push(true)
+    s.push(" ")
+    s.push(false)
+    s.push(" ")
+    s.push("done")
+    print(s)
