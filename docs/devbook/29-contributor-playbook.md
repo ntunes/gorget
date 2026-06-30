@@ -511,6 +511,30 @@ output-review includes the **breadcrumb-check**: no `LANDED`/`FIXED`/`DONE`/`✅
 status entries land in `TODO.md` — completed work belongs in `DONE.md`, and
 `TODO.md` holds pending work only.
 
+### Worked example — round-18: porting commit N of an N+k reference re-introduces the bug commit N+1 fixed
+
+When a brief ports a *sequence* of reference commits, naming the wrong subset is a
+silent-miscompile trap. The round-18 cross-frame-fault brief cited Rust commits
+`a37143a7`+`04a8cf86` as "the CORE single-hop mechanism." Those two are
+**Overflow-only** — their callee writes a fault into the slot and the caller takes a
+single `slot != 0` branch. Brief-review **pass-1** read the *later* commit `d49e3cea`
+(2.1c) and found that exact single-branch design is a **measured Core-#8 silent
+miscompile**: with two fault categories live in one slot, `slot != 0` can't tell
+Overflow from DivByZero, so it constructs the *wrong* `Fault` variant — a deep div0
+printed 100 instead of 200, and "both backends agree on 100" is the wrong answer, not
+a pass. The fix that *later* commit shipped — a per-category **tag-dispatch** — had to
+be folded into the port's CORE, because even the "simple" `_divzero` callee `a/b` also
+overflows on `INT_MIN/-1`, so two tags are live from the very first fixture. **The
+lesson: when porting a multi-commit reference, enumerate the FULL commit chain for the
+feature and read what each *later* commit fixed — a partial port silently re-introduces
+the bug a subsequent commit already solved.** (The same round's pass-3 caught a second
+class: the brief asserted `lower_function` was the *single* signature-build site, but
+`lower_equip_block` inlines a hand-synced second copy — a partial edit would have left
+method callees with a mismatched ABI. Both defects were invisible to a green suite; only
+a fresh reviewer re-deriving from source caught them. And neither pass was the "obvious"
+one — pass-2 was a clean SIGN OFF *between* them, which is exactly why you never stop on
+a clean pass: the next fresh re-derivation is what found the segfault.)
+
 ## Worktree discipline: agent worktrees nest under main
 
 Agent worktrees live UNDER the main checkout (`/workspace/gorget/.claude/worktrees/agent-*`).

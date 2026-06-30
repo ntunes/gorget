@@ -771,6 +771,28 @@ ships with NEW fixtures, all deterministic-stdout:
   drive the branch from the shared LIR per §11.2 so neither emitter is special-cased.
 
 ### 11.8 SELF-HOST parity — scout-verified 2026-06-21 (Rust-first, self-host fast-follow)
+> **UPDATE 2026-06-30 — the self-host fault-catch path has LANDED (the "greenfield /
+> fast-follow" framing below is SUPERSEDED).** The self-host now implements the full
+> Phase-1 fault model end-to-end: (1) **local** fault-catch — `EFaultCatch` AST +
+> grammar, `lower_fault_catch_expr` (`lower_match.gg:1040`) with per-category
+> entry blocks, `Fault.Overflow/DivByZero/Bounds` parse+infer, the Div/Rem split
+> (Inc1 `2a36bc2f`, Bounds in Inc2); (2) **cross-frame** propagation — a `Fault.X`
+> raised in a CALLEE reaches a CALLER's `(call) catch Fault.X:` / binding
+> `catch f: match f` without unwind, via a typed participating-fn analysis
+> (`participating_fault_fns` on `GirModule`, the (a)∩(b) intersection, FREE-FUNCTIONS-ONLY
+> with an executable method-boundary guard), a synthesized trailing `GtMutPtr(i32)`
+> NULL-sentinel slot param, a callee fault-RETURN arm (typed tag `enum_variant_index+1`,
+> branch-before-read), and a caller-side per-category TAG-DISPATCH — round-18 Inc-A
+> `0afb645c`. All 9 `fault_deep_catch*` fixtures MATCH the Rust oracle (incl. the
+> drop/resource variants — the fault-return arm runs `emit_drops_for_early_exit` under
+> the still-pushed Function drop scope), ASan/UBSan-clean, `bootstrap_fixed_point` green
+> (participation empty on self-host source → byte-identical). **Still deferred:** method /
+> equip-method participation (Inc-C — the 2nd hand-synced `param_types`-build site
+> `lower_equip_block` + a method-call-site gate), and indirect/first-class invocation
+> (panic-by-default via the adapter NULL slot — the documented Inc-2.3b boundary).
+> The footgun note (`map_binop` OP_ADD default) below was honored — the new operators
+> route explicitly.
+
 The self-host (`tests/fixtures/self_host_*/`) is in good shape; **the key prerequisite
 is already satisfied** and **Rust-gg Phase-1 alone regresses NO self-host gate.**
 - **✅ Already present (no prerequisite work):** the self-host **already emits CHECKED
