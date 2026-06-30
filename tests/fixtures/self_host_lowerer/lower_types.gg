@@ -2355,6 +2355,37 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
             guard_elem = recv_name.slice(7, recv_name.len())
         if guard_elem != "":
             return resolve_field_gir_type(guard_elem, &gmod)
+        # Shared `.get()` returns the shared VALUE directly (the wrapper
+        # `Shared__<T>__get` reads `*(elem*)gorget_shared_get_ptr(self)`),
+        # NOT an Option — exactly like the Guard arm above, and mirroring
+        # Rust gg's `"get"` arm (methods.rs:1069-1074, `elem_type` not
+        # Option). Without this, `cfg.get()` falls to the collection-getter
+        # path: `collection_element_type` misses on a `Shared__` receiver →
+        # `I64_TYPE`, so `Shared[Config].get()`'s slot is `int64_t` while the
+        # synthesized `Shared__Config__get` returns `__gg_Config` → cc errors
+        # `int64_t = __gg_Config`, and `.max_connections` then resolves on
+        # `int64_t` (`[bug] unknown field`). The DECISION is keyed on the
+        # TYPED `method_prefix == "gorget_shared"` metadata (Core #2 / layering
+        # rule 2), NOT a `Shared__` name match. `build_resource_metadata` maps
+        # ONLY the `Shared__` prefix to `gorget_shared`, so the typed gate alone
+        # guarantees the receiver name is `Shared__<T>` — the inner-element STRIP
+        # (8 chars, `Shared__Config`→`Config`) is then mechanical, mirroring the
+        # wrapper registrar in lir_lower.gg (line ~722, gated on the same resolved
+        # `opm == "gorget_shared"`). `Shared[int].get()` previously worked only by
+        # the I64 default coinciding with `int64_t`; this arm makes it explicit
+        # (still `I64_TYPE`, no regression).
+        if method == "get":
+            match resource_meta_for(&gmod, recv_name):
+                case Some(shared_rmeta):
+                    match shared_rmeta.method_prefix:
+                        case Some(shared_pfx):
+                            if shared_pfx == "gorget_shared":
+                                String shared_elem = recv_name.slice(8, recv_name.len())
+                                return resolve_field_gir_type(shared_elem, &gmod)
+                        case None:
+                            pass
+                case None:
+                    pass
         String elem = collection_element_type(recv_name)
         if elem == "":
             if recv_name.starts_with("Dict__GorgetString__"):
