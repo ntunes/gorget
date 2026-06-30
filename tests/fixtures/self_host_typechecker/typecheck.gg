@@ -20,7 +20,7 @@ from scope import DkVariable, DkConst, DkStatic, DkGenericParam
 from scope import get_def_at, get_scope_at, Scope
 from types import TypeTable, ResolvedType, ast_type_to_resolved, get_stype_at
 from types import RTFunction, RTVoid, RTPrimitive, RTDefined, RTGeneric
-from types import RTTuple, RTArray, RTSlice, RTError, RTVar, get_rtype_at, get_int_at
+from types import RTTuple, RTArray, RTSlice, RTError, RTVar, RTNever, get_rtype_at, get_int_at
 from types import RTCallableTrait, RTMutCallableTrait, RTConsumeCallableTrait, RTBoxedCallable
 from resolve import ResolveContext
 from infer import infer_expr_type, infer_closure_return_type
@@ -813,6 +813,54 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
         case EBinaryOp(left, op, right):
             walk_expr_closures(*left, scope_id, &scopes, &types, &ctx)
             walk_expr_closures(*right, scope_id, &scopes, &types, &ctx)
+            # `left ?? right` (the default operator — parsed as an EBinaryOp with
+            # op "??", parser.gg:1975 + op_str:822) unwraps an `Option`/`Result`
+            # LHS (its first variant `Some`/`Ok`), substituting `right` on
+            # `None`/`Error`. A LHS that is neither carrier is ill-formed: the
+            # typecheck used to fall through to the arithmetic "return left type"
+            # path (infer.gg:240) — a silent no-op — and the lowering then assumed
+            # an enum LHS and fell back to a `Some`-channel, emitting C that
+            # reinterprets the LHS bits as an enum (e.g. a `void *` from
+            # `int64_t`), which crashes/exits-1 at runtime. Reject it as a clean
+            # type error so the driver's diagnostic gate (driver.gg:436
+            # `has_errors` → exit(1) BEFORE `lower_module`) HALTS the build with
+            # empty stdout instead of miscompiling. Mirrors Rust
+            # src/semantic/typecheck.rs `Expr::DefaultOp` + the sibling
+            # `UnwrapOnNonOptional`/`DerefNonBox` guard class (AGENTS.md Core
+            # invariant #8 — reject UB, don't propagate garbage).
+            #
+            # Driven from the WALK pass (like DoubleAwait above), not infer.gg's
+            # EBinaryOp case: `infer_expr_type` is only driven on `auto` inits +
+            # some sub-positions, whereas this walk visits EVERY `??` (VarDecl
+            # init AND return-position) exactly once — so the reject fires
+            # reliably and there is no double-fire. `??` accepts BOTH Option and
+            # Result (verified by running `Result ?? x`); the name-check idiom is
+            # verbatim at infer.gg:584-588. Suppress for a LHS still inferring
+            # (RTVar) or already errored/divergent (RTError/RTNever) — exactly
+            # like Rust's Var/error_id/never_id guards — so valid or divergent
+            # (`throw`/`return`/`panic`) code never false-positives.
+            if op == "??":
+                int dop_left_type = infer_expr_type(SpannedExpr((*left).expr, (*left).span), scopes, &types, &ctx)
+                if dop_left_type >= 0 and dop_left_type < types.types.len():
+                    ResolvedType dop_lt = get_rtype_at(types.types, dop_left_type)
+                    match dop_lt:
+                        case RTGeneric(dop_def_id, _dop_args):
+                            DefInfo dop_def = scopes.get_def(dop_def_id)
+                            if dop_def.name == "Option" or dop_def.name == "Result":
+                                pass
+                            else:
+                                ctx.diagnostics.push(Diagnostic.error((*left).span, DkTypeMismatch(), "default operator `??` requires an `Option` or `Result` left-hand side"))
+                        case RTVar(_dop_unresolved):
+                            # inference incomplete — suppress (mirrors Rust's Var guard)
+                            pass
+                        case RTError():
+                            pass
+                        case RTNever():
+                            # divergent LHS (`throw`/`return`/`panic`) — suppress
+                            pass
+                        else:
+                            # Any other concretely-resolved LHS is not an Option/Result.
+                            ctx.diagnostics.push(Diagnostic.error((*left).span, DkTypeMismatch(), "default operator `??` requires an `Option` or `Result` left-hand side"))
 
         case EAwait(inner):
             # DoubleAwait — `await await x` is a syntactic mistake. The

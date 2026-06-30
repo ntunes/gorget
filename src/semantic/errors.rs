@@ -223,6 +223,19 @@ pub enum SemanticErrorKind {
     /// Surfacing it here makes the failure a clean type error at `gg check`.
     DerefNonBox { type_: String },
 
+    /// `lhs ?? rhs` (default operator) applied to a `lhs` whose type is
+    /// neither `Option` nor `Result`. `??` unwraps the carrier's first
+    /// variant (`Some`/`Ok`) and substitutes `rhs` on `None`/`Error`; on a
+    /// non-carrier type the type checker used to discard the inferred LHS
+    /// type and return the RHS type (a silent no-op), and the IR lowering
+    /// then assumed an enum LHS and fell back to `("Some", lhs_type)` —
+    /// emitting C that reinterprets the LHS bits as an enum (e.g.
+    /// `'void *' from 'int64_t'`), which crashes/exits-1 at runtime.
+    /// Surfacing it here makes the failure a clean type error at `gg check`.
+    /// (Sibling of `UnwrapOnNonOptional`/`DerefNonBox` — same "operator on
+    /// the wrong carrier type" guard class; AGENTS.md Core invariant #8.)
+    DefaultOpNonOptional { type_: String },
+
     /// A method-level generic param couldn't be inferred from the
     /// call's arg types. Emitted by Phase 2c inference (see
     /// `docs/devbook/09-type-checking.md`, method-level generic inference)
@@ -587,6 +600,13 @@ impl std::fmt::Display for SemanticError {
                     f,
                     "cannot dereference `*` a value of type `{type_}` — \
                      `*` requires a `Box[T]`"
+                )
+            }
+            SemanticErrorKind::DefaultOpNonOptional { type_ } => {
+                write!(
+                    f,
+                    "default operator `??` requires an `Option` or `Result` \
+                     left-hand side, but `{type_}` is neither"
                 )
             }
             SemanticErrorKind::MethodGenericInferenceFailed { method, type_, unresolved, reason } => {

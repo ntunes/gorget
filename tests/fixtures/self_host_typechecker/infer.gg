@@ -854,10 +854,19 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             # spurious errors, exactly like Rust's `Var`/`error_id` guards.
             # See docs/language-reference.md §7.4 (`*` operand: "Pointer/smart
             # ptr") and AGENTS.md Core invariant #8 (reject UB, don't propagate
-            # garbage).  ⚠ The self-host LOWERER driver currently ignores
-            # `ctx.diagnostics` (snag #11), so this push makes the typecheck
-            # TWIN symmetric with Rust but does NOT yet halt the self-host build
-            # — full self-host rejection is gated on the snag #11 driver change.
+            # garbage). The self-host LOWERER driver now gates on
+            # `has_errors(ctx.diagnostics)` (driver.gg:436 → exit(1)) BEFORE
+            # `lower_module`, so a diagnostic pushed during typecheck DOES halt
+            # the build (snag #11 resolved). ⚠ But this `infer_expr_type` EDeref
+            # arm only runs when `infer_expr_type` is driven on the operand —
+            # i.e. an `auto`-typed init / sub-position — NOT for an
+            # explicitly-typed VarDecl init (`int y = *x`), which the driver
+            # checks via the WALK pass (typecheck.gg walk_expr_closures), and
+            # that pass has no EDeref arm. So the self-host deref reject does NOT
+            # yet fire on the explicitly-typed shape — to be symmetric with Rust
+            # it needs a walk-pass EDeref arm too (see typecheck.gg's walk-pass
+            # EBinaryOp `op == "??"` reject for the working pattern). FILED as a
+            # follow-up.
             int deref_inner_type = infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, &ctx)
             int deref_resolved = deref_inner_type
             # Peel a single `RTRef` wrapper (`*(&box)`); the self-host has no
@@ -946,7 +955,16 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             return NO_TYPE
 
         case EDefaultOp(left, right):
-            # a ?? b — return type of right (the fallback/unwrapped type)
+            # NOTE: the self-host parser lowers `a ?? b` to EBinaryOp(_, "??", _)
+            # (parser.gg:1975 + op_str:822), NOT EDefaultOp — so this arm is
+            # currently UNREACHED. The live `??` typing + the
+            # LHS-must-be-Option/Result REJECT both live on the EBinaryOp path:
+            # the reject is driven from the WALK pass (typecheck.gg
+            # walk_expr_closures_inner's EBinaryOp arm, `op == "??"`), which
+            # visits EVERY `??` (VarDecl init AND return-position) exactly once;
+            # the right-type fallback below kept for the EDefaultOp shape in case
+            # a future front-end produces it. Same walk-pass-only split the
+            # DoubleAwait check uses.
             int rt = infer_expr_type(SpannedExpr((*right).expr, (*right).span), scopes, &types, &ctx)
             return rt
 

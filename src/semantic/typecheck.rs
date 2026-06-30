@@ -2448,8 +2448,39 @@ impl<'a> TypeChecker<'a> {
             }
 
             Expr::DefaultOp { lhs, rhs } => {
-                let _lhs_type = self.infer_expr(lhs);
+                let lhs_type = self.infer_expr(lhs);
                 let rhs_type = self.infer_expr(rhs);
+                // `lhs ?? rhs` unwraps an `Option`/`Result` LHS (first variant
+                // `Some`/`Ok`), substituting `rhs` on `None`/`Error`. A LHS that
+                // is neither carrier is ill-formed: the type checker used to
+                // discard `lhs_type` and return `rhs_type` (a silent no-op), and
+                // the IR lowering then assumed an enum LHS and fell back to
+                // `("Some", lhs_type)` — emitting C that reinterprets the LHS
+                // bits as an enum (e.g. `'void *' from 'int64_t'`), which
+                // crashes/exits-1 at runtime. Reject it as a clean type error.
+                // Sibling of the `UnwrapOnNonOptional`/`DerefNonBox` guard class
+                // (AGENTS.md Core invariant #8 — reject UB, don't miscompile).
+                // `??` accepts BOTH Option and Result (verified by running
+                // `Result ?? x`), so reuse the SAME `is_option_or_result_receiver`
+                // helper `unwrap` uses. SUPPRESS for an LHS whose inference is
+                // still incomplete (`Var`) or already errored/divergent
+                // (`error_id`/`never_id`) — mirrors the `UnwrapOnNonOptional`
+                // suppression (`:2216-2218`) so we never false-positive on
+                // valid or divergent (`throw`/`return`/`panic`) code.
+                let resolved_lhs = self.resolve_type(lhs_type);
+                if !self.is_option_or_result_receiver(lhs_type)
+                    && !matches!(self.types.get(resolved_lhs), ResolvedType::Var(_))
+                    && resolved_lhs != self.types.error_id
+                    && resolved_lhs != self.types.never_id
+                {
+                    self.error(
+                        SemanticErrorKind::DefaultOpNonOptional {
+                            type_: self.describe_resolved_type(lhs_type),
+                        },
+                        expr.span,
+                    );
+                    return self.types.error_id;
+                }
                 rhs_type // unwrapped type
             }
 

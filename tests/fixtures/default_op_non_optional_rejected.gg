@@ -1,0 +1,18 @@
+# Negative fixture: `lhs ?? rhs` (default operator) on a LHS that is neither
+# `Option` nor `Result` must be REJECTED at `gg check`. `??` unwraps a carrier
+# (`Option`/`Result`) — its first variant `Some`/`Ok` — and substitutes `rhs`
+# on `None`/`Error`. See docs/language-reference.md §7.12 + language-design.md
+# §"Default operator".
+#
+# Before the fix, the type checker discarded the inferred LHS type and returned
+# the RHS type (a silent no-op), `gg check` passed clean, and the IR lowering
+# assumed an enum LHS and fell back to a `Some`-channel — emitting C that
+# reinterprets the `int` LHS bits as an enum (`'void *' from 'int64_t'`), which
+# crashes/exits-1 at runtime (NO stdout). The language MUST reject this program,
+# not miscompile it. (AGENTS.md Core invariant #8: reference-grade is the bar —
+# both backends agreeing on UB/garbage is ≥2 bugs, not parity. Sibling of the
+# `UnwrapOnNonOptional`/`DerefNonBox` "operator on the wrong carrier" rejects.)
+void main():
+    int a = 3
+    int x = a ?? 5
+    print(x)

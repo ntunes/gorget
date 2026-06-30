@@ -6622,6 +6622,36 @@ fn method_resolution_valid_unwrap_still_compiles() {
     run_gg("method_resolution_valid_unwrap.gg", "22\n77\n40\n33");
 }
 
+// `lhs ?? rhs` (default operator) is valid only when `lhs` is an `Option` or a
+// `Result` — `??` unwraps the carrier's first variant (`Some`/`Ok`) and
+// substitutes `rhs` on `None`/`Error`. On any OTHER LHS type the type checker
+// used to discard the inferred LHS type and return the RHS type (a silent
+// no-op); `gg check` passed clean and the IR lowering assumed an enum LHS and
+// fell back to a `Some`-channel — emitting C that reinterprets the LHS bits as
+// an enum (e.g. `'void *' from 'int64_t'`), which crashes/exits-1 at runtime
+// with NO stdout (a silent miscompile, not a clean reject). The language must
+// REJECT the program at check time (AGENTS.md Core invariant #8 — reference-
+// grade, not parity-on-garbage; sibling of the `UnwrapOnNonOptional`/
+// `DerefNonBox` "operator on the wrong carrier" rejects). Excluded from the
+// runtime parity denominator (Rust-rejected); this test asserts the rejection.
+#[test]
+fn default_op_non_optional_is_rejected() {
+    check_gg_fails(
+        "default_op_non_optional_rejected.gg",
+        "default operator `??` requires an `Option` or `Result` left-hand side, but `int` is neither",
+    );
+}
+
+#[test]
+fn default_op_optional_result_runs() {
+    // Positive companion: `??` on a genuine `Option` AND a genuine `Result`
+    // LHS must STILL compile and run after the reject gate. `??` accepts BOTH
+    // carriers — the MANDATORY regression guard against an over-restrictive
+    // predicate (the corpus has no `Result ?? x` fixture). Asserts the unwrap
+    // (Some/Ok) AND the fallback (None/Error) branch of each carrier.
+    run_gg("default_op_optional_result_runs.gg", "42\n5\n99\n7");
+}
+
 #[test]
 fn variable_initialization() {
     // Every variable declaration carries an explicit initializer (Gorget has no
@@ -16768,6 +16798,73 @@ fn self_host_driver_rejects_positional_after_named_method() {
     assert!(
         stderr.contains("error")
             && stderr.contains("positional argument cannot follow named argument")
+            && stderr.contains('\u{250c}'),
+        "self-host driver exited non-zero but emitted no codespan diagnostic \
+         to stderr — the reject path must render, not crash silently.\n\
+         stderr:\n{stderr}",
+    );
+
+    // 3. It MUST NOT emit C (the gate halts BEFORE lower_module).
+    assert!(
+        stdout.trim().is_empty(),
+        "self-host driver emitted C for a rejected program — the gate must \
+         halt BEFORE lowering. stdout bytes={}\nstdout head:\n{}",
+        stdout.len(),
+        &stdout.chars().take(200).collect::<String>(),
+    );
+}
+
+// Invariant #8 sibling of the positional-after-named guards: `lhs ?? rhs`
+// (default operator) on a LHS that is neither `Option` nor `Result` must be
+// REJECTED by the self-host too. Before the fix, the self-host typed `??` via
+// the arithmetic EBinaryOp fallback (returning the LHS type, a silent no-op)
+// and the lowering miscompiled it the same way Rust did — both backends agreed
+// on garbage (the textbook Core #8 case). The fix adds a `op == "??"` reject to
+// self_host_typechecker/typecheck.gg's walk-pass EBinaryOp arm (mirroring Rust
+// src/semantic/typecheck.rs `Expr::DefaultOp`), gated by the driver's
+// `has_errors` diagnostic gate. `??` accepts BOTH Option and Result, so the
+// reject fires ONLY on a non-carrier LHS. Same contract as the sibling guards:
+// non-zero exit, a source-grounded codespan diagnostic on stderr, and NO C on
+// stdout (the gate halts BEFORE lowering). Parity-neutral — Rust-rejected,
+// excluded from the parity denominator.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_rejects_default_op_non_optional() {
+    // Cached — shared with lowerer_comparison / bootstrap / e2e.
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir
+        .join("tests/fixtures/default_op_non_optional_rejected.gg");
+    assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
+
+    // Invoke the driver exactly as the e2e harness does: `driver F lib --lir-c`.
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "self_host_driver_rejects_default_op_non_optional",
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    // 1. The driver MUST exit non-zero (the diagnostic gate's exit(1)).
+    assert!(
+        !out.status.success(),
+        "self-host driver accepted a Rust-REJECTED program (`int x = a ?? 5` — \
+         `??` on a non-Option/Result LHS). The `op == \"??\"` reject in \
+         self_host_typechecker/typecheck.gg's walk-pass EBinaryOp arm was \
+         removed or stopped firing. exit={:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+
+    // 2. It MUST render a codespan diagnostic to stderr (same render path as the
+    //    sibling guards — see self_host_typechecker/diagnostic.gg).
+    assert!(
+        stderr.contains("error")
+            && stderr.contains("default operator `??` requires an `Option` or `Result` left-hand side")
             && stderr.contains('\u{250c}'),
         "self-host driver exited non-zero but emitted no codespan diagnostic \
          to stderr — the reject path must render, not crash silently.\n\

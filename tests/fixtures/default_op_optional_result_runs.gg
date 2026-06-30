@@ -1,0 +1,27 @@
+# Positive companion to default_op_non_optional_rejected.gg: the `??` default
+# operator on a GENUINE `Option` AND a GENUINE `Result` LHS must STILL compile
+# and run after the type-checker reject gate. `??` accepts BOTH carriers
+# (Option and Result) — verified by running `Result ?? x` — so this fixture is
+# the MANDATORY regression guard against an over-restrictive predicate (the
+# corpus has no `Result ?? x` fixture). Asserts the unwrap (Some/Ok) AND the
+# fallback (None/Error) branch of each carrier.
+
+Result[int, String] mk_result(bool ok):
+    if ok:
+        return Ok(99)
+    return Error("nope")
+
+void main():
+    # Option ?? T — Some-branch unwraps, None-branch falls back.
+    Option[int] some_val = Some(42)
+    int a = some_val ?? 5
+    print(a)
+    Option[int] none_val = None
+    int b = none_val ?? 5
+    print(b)
+
+    # Result ?? T — Ok-branch unwraps, Error-branch falls back.
+    int c = mk_result(true) ?? 7
+    print(c)
+    int d = mk_result(false) ?? 7
+    print(d)
