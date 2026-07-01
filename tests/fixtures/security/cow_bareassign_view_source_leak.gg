@@ -1,0 +1,19 @@
+# Round-30 Fix C — view-source shape (src_view).
+#
+# A heap-owned String is bare-assigned to `alias` (the removed Branch A
+# path), then a VIEW is taken of that alias and materialized into a new
+# owned String. Under the old Branch A the SharedHeap tag on `alias`
+# corrupted the ownership/drop bookkeeping for the buffer the view points
+# into; the Branch C CoW alias + view materialization keeps a single
+# owned buffer with correct drop, so the whole chain is ASan-clean.
+
+void main():
+    String a = "view-"
+    String b = "source-owned-payload"
+    String owned = a + b            # heap-owned buffer
+    String alias = owned           # bare-assign (was Branch A)
+    String piece = alias.substring(0, 5)   # view into alias's buffer
+    String kept = piece            # materialize the view to owned
+    print(kept)
+    print(alias)
+    print(owned)

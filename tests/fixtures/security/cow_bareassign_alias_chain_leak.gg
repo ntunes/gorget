@@ -1,0 +1,21 @@
+# Round-30 Fix C — alias-chain shape (adv_aliaschain).
+#
+# A transitive chain of bare-assigns off a single heap-owned String:
+# `String b = a; String c = b; String d = c`, all live to scope exit.
+# Under the old Branch A each hop SharedHeap-tagged + unregistered its
+# source's drop while the backend deep-copied — leaking the intermediate
+# buffers. The Branch C CoW path aliases each hop to the ONE owned buffer
+# (severed only on mutation), so there is exactly one allocation and one
+# drop across the whole chain → ASan-clean.
+
+void main():
+    String x = "chain-"
+    String y = "owned-tail"
+    String owned = x + y       # single heap-owned buffer
+    String b = owned           # hop 1 (was Branch A)
+    String c = b               # hop 2
+    String d = c               # hop 3
+    print(owned)
+    print(b)
+    print(c)
+    print(d)

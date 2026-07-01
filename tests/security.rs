@@ -146,7 +146,33 @@ struct SanitizeOutcome {
     stderr: String,
 }
 
+/// Default run-time `ASAN_OPTIONS`. Leak detection is OFF here — most
+/// security fixtures probe UAF/overflow/traps, not leaks, and LSan noise from
+/// intentionally-abandoned allocations in trap-fixtures would be spurious.
+const ASAN_OPTS_NO_LEAK: &str =
+    "detect_leaks=0:halt_on_error=1:abort_on_error=0:print_summary=1:allocator_may_return_null=1";
+
+/// Leak-detecting run-time `ASAN_OPTIONS`. `detect_leaks=1` makes
+/// LeakSanitizer a hard failure and `exitcode=99` turns any ASan/LSan report
+/// into a nonzero exit — so a leak is caught by BOTH the report scrape and the
+/// exit code. Used by [`security_safe_no_leak`] to guard leak-class bugs that a
+/// `detect_leaks=0` run (or a plain stdout check) cannot see.
+const ASAN_OPTS_LEAK_CHECK: &str =
+    "detect_leaks=1:halt_on_error=1:abort_on_error=0:print_summary=1:allocator_may_return_null=1:exitcode=99";
+
 fn sanitize_build_and_run(fixture_name: &str) -> (SanitizeOutcome, PathBuf) {
+    sanitize_build_and_run_with_opts(fixture_name, ASAN_OPTS_NO_LEAK)
+}
+
+/// Build the fixture with the Rust `gg` under `--sanitize`, then run it with
+/// the caller-supplied `ASAN_OPTIONS`. Factored so the leak-checking guard
+/// ([`security_safe_no_leak`]) shares the exact same build path but flips on
+/// `detect_leaks=1` — the build MUST be the Rust compiler (the class of bug the
+/// leak guard covers is a Rust-side lowering bug, not a self-host one).
+fn sanitize_build_and_run_with_opts(
+    fixture_name: &str,
+    asan_options: &str,
+) -> (SanitizeOutcome, PathBuf) {
     let fp = fixture_path(fixture_name);
     let stem = fp.file_stem().unwrap().to_str().unwrap();
     let dir = fp.parent().unwrap();
@@ -179,10 +205,7 @@ fn sanitize_build_and_run(fixture_name: &str) -> (SanitizeOutcome, PathBuf) {
     // `allocator_may_return_null=1` lets the runtime's own null-check-after-
     // alloc paths run — otherwise ASan pre-aborts on oversized allocations
     // and masks Gorget's cleaner runtime trap.
-    run_cmd.env(
-        "ASAN_OPTIONS",
-        "detect_leaks=0:halt_on_error=1:abort_on_error=0:print_summary=1:allocator_may_return_null=1",
-    );
+    run_cmd.env("ASAN_OPTIONS", asan_options);
     run_cmd.env("UBSAN_OPTIONS", "halt_on_error=1:print_stacktrace=1");
 
     let run = run_with_deadline(&mut run_cmd, fixture_name, test_binary_timeout());
@@ -222,6 +245,53 @@ fn security_safe(name: &str, expected_stdout: &str) {
         Some(0),
         "security_safe({name}): nonzero exit {:?}\nstderr:\n{}",
         out.exit_code,
+        out.stderr
+    );
+    cleanup(&fp);
+}
+
+/// Like [`security_safe`], but runs under `detect_leaks=1` so a memory LEAK is
+/// a hard failure — not just a UAF/overflow/trap. Use for fixtures whose bug
+/// class is stdout-INVISIBLE (a leaked heap buffer produces the correct output
+/// yet leaks): a plain stdout check or a `detect_leaks=0` run passes it, so
+/// only a LeakSanitizer-armed run guards it.
+///
+/// Each fixture MUST have been verified to FAIL (exit 99 / LSan report) at the
+/// pre-fix baseline and PASS post-fix — else it guards nothing (Core #6).
+fn security_safe_no_leak(name: &str, expected_stdout: &str) {
+    let (out, fp) = sanitize_build_and_run_with_opts(name, ASAN_OPTS_LEAK_CHECK);
+    assert!(
+        out.build_ok,
+        "security_safe_no_leak({name}): sanitize build failed\nstderr: {}",
+        out.build_stderr
+    );
+    assert!(out.ran, "security_safe_no_leak({name}): binary did not run");
+    // A leak trips LeakSanitizer → `exitcode=99` + a report on stderr. Guard on
+    // BOTH so neither a stray exit code nor a scrape miss lets a leak through.
+    let has_leak_report = out.stderr.contains("LeakSanitizer")
+        || out.stderr.contains("AddressSanitizer")
+        || out.stderr.contains("detected memory leaks")
+        || out.stderr.contains("ERROR:")
+        || out.stderr.contains("SUMMARY:");
+    assert!(
+        !has_leak_report,
+        "security_safe_no_leak({name}): sanitizer report (leak/UAF) under detect_leaks=1:\n{}",
+        out.stderr
+    );
+    assert_eq!(
+        out.exit_code,
+        Some(0),
+        "security_safe_no_leak({name}): nonzero exit {:?} under detect_leaks=1 \
+         (a leak trips exitcode=99). If this regressed, the CoW bare-assign \
+         owned-String path is re-leaking.\nstderr:\n{}",
+        out.exit_code,
+        out.stderr
+    );
+    assert_eq!(
+        out.stdout.trim(),
+        expected_stdout.trim(),
+        "security_safe_no_leak({name}): stdout mismatch\nExpected:\n{expected_stdout}\nGot:\n{}\nstderr:\n{}",
+        out.stdout,
         out.stderr
     );
     cleanup(&fp);
@@ -1127,5 +1197,73 @@ fn sec_92_static_set_runtime() {
     security_safe(
         "attack_92_static_set_runtime",
         "true\nfalse\ntrue\nfalse\n4",
+    );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Round-30 Fix C — CoW bare-assign owned-String leak guards (Core #6).
+//
+// The removed Branch A of `lower_var_decl_assign_mode` (src/ir/lowering/stmts/
+// mod.rs) `set_shared_heap`'d a `String v = <owned live heap source>` and
+// `unregister`ed the source's drop, while the backend DEEP-copied the source
+// into a second buffer via `gorget_string_copy_cow` — so the source's heap
+// allocation LEAKED. The leaks are stdout-INVISIBLE (the program prints the
+// right bytes and leaks), so only a `detect_leaks=1` run guards them.
+//
+// Each fixture was verified to FAIL at the pre-fix baseline (`a9b034f1`, arm
+// present) under `--sanitize` + `detect_leaks=1` and to PASS post-fix:
+//   owned_string   → LeakSanitizer 23B / 1 alloc  → clean
+//   return_alias   → LeakSanitizer 14B / 1 alloc  → clean
+//   struct_escape  → LeakSanitizer 19B / 1 alloc  → clean
+//   view_source    → LeakSanitizer 32B / 2 allocs → clean
+//   alias_chain    → LeakSanitizer 51B / 3 allocs → clean
+// A future regression that re-adds the SharedHeap+unregister shape re-leaks and
+// trips `exitcode=99` here.
+// ════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn cow_bareassign_owned_string_no_leak() {
+    // `String v = sb` with `sb` a heap-owned String (`a + b`), both live to
+    // scope exit. Baseline leaked sb's 23-byte buffer.
+    security_safe_no_leak(
+        "cow_bareassign_owned_string_leak",
+        "hello, cow-owned world\nhello, cow-owned world",
+    );
+}
+
+#[test]
+fn cow_bareassign_return_alias_no_leak() {
+    // Heap-owned String bare-assigned, then RETURNED (escapes the frame).
+    // Baseline leaked 14 bytes.
+    security_safe_no_leak("cow_bareassign_return_alias_leak", "aaa-bbb-owned");
+}
+
+#[test]
+fn cow_bareassign_struct_escape_no_leak() {
+    // Heap-owned String bare-assigned, then stored into an owned struct field.
+    // Baseline leaked 19 bytes.
+    security_safe_no_leak(
+        "cow_bareassign_struct_escape_leak",
+        "field-escape-owned\nfield-escape-owned",
+    );
+}
+
+#[test]
+fn cow_bareassign_view_source_no_leak() {
+    // Heap-owned String bare-assigned, a view (`.substring`) taken of the alias,
+    // then materialized. Baseline leaked 32 bytes across 2 allocations.
+    security_safe_no_leak(
+        "cow_bareassign_view_source_leak",
+        "view-\nview-source-owned-payload\nview-source-owned-payload",
+    );
+}
+
+#[test]
+fn cow_bareassign_alias_chain_no_leak() {
+    // Transitive alias chain off one heap-owned String, all live to scope exit.
+    // Baseline leaked 51 bytes across 3 allocations (one per hop).
+    security_safe_no_leak(
+        "cow_bareassign_alias_chain_leak",
+        "chain-owned-tail\nchain-owned-tail\nchain-owned-tail\nchain-owned-tail",
     );
 }

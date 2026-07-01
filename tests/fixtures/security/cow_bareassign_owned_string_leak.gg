@@ -1,0 +1,22 @@
+# Round-30 Fix C repro — bare-assign of an OWNED heap String.
+#
+# `String v = sb` where `sb` is a HEAP-owned String (cap>0, from `a + b`)
+# and BOTH `sb` and `v` are live to scope exit. The removed Branch A of
+# lower_var_decl_assign_mode emitted `set_shared_heap` + `Borrow` +
+# `drops.unregister(sb)`, but the backend's `gorget_string_copy_cow`
+# DEEP-copied `sb` into a second independent buffer — so `sb`'s heap
+# allocation leaked (its drop was unregistered, yet nothing shared its
+# buffer). With Branch A removed the assign routes through the principled
+# Branch C CoW Ptr-alias borrow (zero-cost, no second buffer, correct
+# drop) → ASan-clean.
+#
+# NOTE: the source MUST be heap-owned (`a + b`), not a string literal —
+# a literal is cap=0 (static, non-owning) and would not leak.
+
+void main():
+    String a = "hello, "
+    String b = "cow-owned world"
+    String sb = a + b          # heap-owned buffer, cap > 0
+    String v = sb              # Branch A leaked sb's buffer here
+    print(v)
+    print(sb)

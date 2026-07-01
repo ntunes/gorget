@@ -1,0 +1,19 @@
+# Round-30 Fix C — return-alias shape (adv_return).
+#
+# A heap-owned String is bare-assigned to a new local which is then
+# RETURNED (escapes the frame). Under the old Branch A the SharedHeap
+# alias + source drop-unregister mishandled the ownership at the return
+# boundary; the ownership-boundary materialization on the Branch C path
+# clones the alias into an independent owned buffer at the return, so the
+# returned String owns its data and the caller drops exactly one buffer.
+
+String make_alias():
+    String a = "aaa-"
+    String b = "bbb-owned"
+    String owned = a + b       # heap-owned buffer
+    String alias = owned       # bare-assign; escapes via return below
+    return alias
+
+void main():
+    String r = make_alias()
+    print(r)

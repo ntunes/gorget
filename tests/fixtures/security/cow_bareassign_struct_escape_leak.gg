@@ -1,0 +1,21 @@
+# Round-30 Fix C — struct-field-escape shape (adv_struct).
+#
+# A heap-owned String is bare-assigned to a local, which is then stored
+# into a struct field (an ownership-consuming boundary — the struct must
+# OWN the String). Under the old Branch A the SharedHeap alias made the
+# ownership state at the field-init boundary inconsistent (a
+# UAF/double-free/leak class, depending on drop order). The Branch C path
+# materializes an independent owned buffer at the struct-field init, so
+# the struct owns exactly one buffer and drops it exactly once.
+
+struct Holder:
+    String name
+
+void main():
+    String a = "field-"
+    String b = "escape-owned"
+    String owned = a + b       # heap-owned buffer
+    String alias = owned       # bare-assign
+    Holder h = Holder(alias)   # alias escapes into an owned field
+    print(h.name)
+    print(owned)

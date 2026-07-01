@@ -1165,10 +1165,13 @@ fn lower_var_decl(
 /// - `source_live`: is the source's underlying local live AFTER `stmt_span`?
 /// - `source_own`: the source local's typed `LocalOwnership`, if any.
 ///
-/// All seven branches read typed predicates — `is_named_local`
+/// All branches read typed predicates — `is_named_local`
 /// fully retired from this function (D 2026-05-10, F 2026-05-10):
-/// - **A** (Owned + live GorgetString same-type, value-aliasing
-///   `String b = a`) → `Borrow` + `set_shared_heap`.
+/// - **A** (REMOVED, round-30 Fix C) — the old Owned + live
+///   GorgetString same-type arm (`String b = a` → `Borrow` +
+///   `set_shared_heap`) leaked the source buffer; owned-String
+///   same-type sources now route through the principled Branch C
+///   CoW Ptr-alias borrow, which subsumes it.
 /// - **B** (Owned + live non-resource source with cross-type
 ///   `clone_fn`, e.g. Str → GorgetString) → emit clone, `Move`.
 /// - **C** (live resource source, CoW-safe; transitive aliases
@@ -1246,24 +1249,25 @@ fn lower_var_decl_assign_mode(
     let same_type_string =
         rhs_type == owned_string && actual_var_type == owned_string;
 
-    // Branch A — Owned + live GorgetString same-type (value-aliasing
-    // `String b = a` shape). Migrated 2026-05-06: legacy
-    // `is_named_local` proxy replaced with the typed
-    // `source_live && source_own.is_owned()` predicate. Probe history
-    // (2026-05-04) had regressed 10 fixtures across leak_*,
-    // stress_alloc_strings/closures, string_builder*. Root cause:
-    // unnamed function-call temps own GorgetString data; treating
-    // them as borrow sources leaked the allocation. The typed
-    // predicate excludes them (source_live=false for unnamed temps),
-    // routing them to F's Move path.
-    if same_type_string
-        && source_live
-        && source_own.as_ref().map_or(false, |s| s.is_owned())
-    {
-        ctx.drops.unregister(source_place.local);
-        ctx.set_shared_heap(builder, local_id, source_place.local);
-        assign_mode = AssignMode::Borrow;
-    }
+    // Branch A (REMOVED, round-30 Fix C) — the old Owned + live
+    // GorgetString same-type arm (value-aliasing `String b = a`)
+    // emitted `set_shared_heap` + `Borrow` + `drops.unregister(source)`.
+    // That shape was internally inconsistent: the SharedHeap tag made
+    // the destination alias the source's buffer AND unregistered the
+    // source's drop as if the two locals shared one buffer, but the
+    // backend's `gorget_string_copy_cow` DEEP-copied a cap>0 owned
+    // source into a SECOND independent buffer — so the source's buffer
+    // leaked (`String v = sb`, both live to scope exit, leaked sb's
+    // heap allocation under ASan). The `set_shared_heap` was an
+    // optimization crutch for return-clone-elision (commit 3e4379ea),
+    // NOT a correctness primitive. An owned-String same-type source now
+    // falls through to Branch C, the principled CoW Ptr-alias borrow
+    // (zero-cost, severed on mutation via `cow_before_mutation`), which
+    // fully subsumes it and also fixes the pre-existing return-alias,
+    // struct-field-escape, and View-source memory bugs the SharedHeap
+    // model mishandled. Verified ASan-clean, both backends, no
+    // bootstrap/hot-path regression.
+    //
     // Branch B — Owned + live source, non-resource type, cross-type
     // clone_fn (e.g. Str → GorgetString). Migrated 2026-05-06: the
     // legacy `is_named_local` proxy was replaced with the typed
@@ -1273,7 +1277,7 @@ fn lower_var_decl_assign_mode(
     // `clone_fn_for_ptr.is_some()` true and were wrongly routed
     // here; the typed predicate excludes them (`source_live = false`)
     // and they correctly fall through to F's Move path.
-    else if source_live
+    if source_live
         && source_own.as_ref().map_or(false, |s| s.is_owned())
         && !ctx.type_registry.is_resource_type(rhs_type)
         && ctx.clone_fn_for_ptr(rhs_type).is_some()
