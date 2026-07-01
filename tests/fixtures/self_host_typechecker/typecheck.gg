@@ -1207,6 +1207,23 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
             # `{...}` get their params/body typed.
             for fe in exprs:
                 walk_expr_closures(fe, scope_id, &scopes, &types, &ctx)
+                # An Option/Result tag-check interpolation
+                # (`f"{m.get(k).is_none()}"`) is CHAINED after a getter: the
+                # parser shares one span.start across the chain, so the inner
+                # getter's recorded `Option[T]` collides onto the outer
+                # `.is_none()` and the lowerer types the f-string arg slot as
+                # `Option__T` (cc-fail). The `walk` above only infers the
+                # RECEIVER `.get()` (line 1112), never the outer tag-check NODE,
+                # so its bool type is never recorded at its own span.end. Infer
+                # the tag-check node itself so `infer_expr_type`'s tag-check arm
+                # (infer.gg) records bool at the UNIQUE span.end
+                # (`expr_link_types`), which the lowerer reads FIRST. Scoped to
+                # the four tag-check intrinsics — NOT a blanket "infer every
+                # interpolation", which would re-key OTHER interps' types onto
+                # the parser's synthetic f-string-segment span offsets (base
+                # 1<<40 + k*(1<<20), parser.gg:986) and mis-type them.
+                if fstring_interp_is_tag_check(fe):
+                    int _tc_ignore = infer_expr_type(fe, scopes, &types, &ctx)
 
         case EMatch(scrutinee, arms):
             # Match-as-expression: assign pattern binding types and walk arm bodies.
@@ -1429,6 +1446,23 @@ void record_method_targs_in_expr(SpannedExpr sexpr, ScopeTable &scopes, TypeTabl
             record_method_targs_in_expr(*i, &scopes, &types, &ctx)
         else:
             pass
+
+# True iff `fe` is a call to one of the four Option/Result tag-check
+# intrinsics (`is_none`/`is_some`/`is_ok`/`is_error`). This EXACT set is the
+# one source of truth shared with `infer_expr_type`'s tag-check bool arm
+# (infer.gg) and the lowerer's `infer_method_return_type` (lower_types.gg:1888).
+# Used by the EFString arm to infer ONLY the tag-check interpolations — the
+# minimal set that needs its bool type recorded at its own span.end to beat the
+# getter-chain span.start collision — without re-inferring EVERY interpolation
+# (which would mis-key other interps onto the parser's synthetic f-string
+# span offsets).
+bool fstring_interp_is_tag_check(SpannedExpr fe):
+    match fe.expr:
+        case EMethodCall(_, m, _, _, _):
+            return m == "is_none" or m == "is_some" or m == "is_ok" or m == "is_error"
+        else:
+            return false
+    return false
 
 # True iff `sexpr` syntactically contains an EMethodCall anywhere. Cheap
 # structural pre-check so the explicit-typed-binding path only pays for the

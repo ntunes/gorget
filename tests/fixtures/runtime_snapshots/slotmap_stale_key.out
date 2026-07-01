@@ -1,0 +1,7 @@
+got=100
+removed=100
+stale_contains=false
+stale_get_none=true
+new=200
+old_key_still_dead=true
+done

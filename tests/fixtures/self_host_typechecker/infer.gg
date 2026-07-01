@@ -538,6 +538,28 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             # true/false (the int-instead-of-bool symptom).
             if method_name == "is_empty" or method_name == "contains" or method_name == "starts_with" or method_name == "ends_with" or method_name == "is_subset" or method_name == "is_superset" or method_name == "is_disjoint":
                 return types.bool_id
+            # Option/Result tag-check intrinsics return bool (mirrors Rust
+            # typecheck.rs:5851 `is_some`/`is_none` and :5869 `is_ok`/`is_error`
+            # — both `Some(self.types.bool_id)`). This EXACT four-name set is the
+            # one source of truth shared with the lowerer's
+            # `infer_method_return_type` bool arm (lower_types.gg:1888).
+            #
+            # Unlike the sibling `is_empty`/`contains` arm above, these are
+            # typically CHAINED after a getter (`m.get(k).is_none()`): the
+            # parser shares one `span.start` across the whole method chain, so
+            # the inner `.get()`'s recorded `Option[T]` (at `expr_types[span.start]`,
+            # line 492) COLLIDES onto the outer `.is_none()` — the lowerer's
+            # `lookup_expr_gir_type` span.start fallback then types the tag-check
+            # result slot as `Option__T` and cc-fails ("incompatible types …
+            # 'Option__int64_t' from type 'int'"). Record bool at the UNIQUE
+            # `span.end` via `expr_link_types` (checked FIRST for EMethodCall,
+            # lower_types.gg:551) so the tag-check node reads its OWN bool type,
+            # not the collided getter type. Same span.end oracle the lazy-iterator
+            # chain-links use (line 505). Do NOT touch `expr_types[span.start]` —
+            # that entry belongs to the inner getter link.
+            if method_name == "is_some" or method_name == "is_none" or method_name == "is_ok" or method_name == "is_error":
+                types.expr_link_types.put(sexpr.span.end, types.bool_id)
+                return types.bool_id
             # Set-ops `union`/`intersection`/`difference` are RECEIVER-AWARE:
             # on a Set/HashSet they return the receiver's OWN type (mirrors
             # Rust typecheck.rs:5670 — `Some(receiver_type)`). Read the typed

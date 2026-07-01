@@ -1,0 +1,13 @@
+len=3
+a=10
+b=20
+c=30
+b2=99
+removed=10
+len2=2
+a_stale=false
+a_get_none=true
+d=40
+a_still_stale=false
+len3=3
+total=169
