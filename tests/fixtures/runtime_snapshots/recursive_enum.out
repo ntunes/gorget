@@ -1,0 +1,7 @@
+object with 4 keys
+name = Alice
+tags has 2 items
+first = a
+active = true
+null ok
+done

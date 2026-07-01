@@ -1,0 +1,102 @@
+from std.collections import Vector, Dict
+
+# Regression fixture for the bare-user-variant / string-coercion name collision.
+#
+# The self-host lowerer treated a bare 1-arg call to `Str` / `String` /
+# `GorgetString` as an unconditional identity string-coercion. A USER enum whose
+# variant is named `Str` (mirroring the real `Json.Str(String)`) constructed
+# BARE (`Str(s)`, not `Node.Str(s)`) collided with that coercion: the String was
+# passed straight through into the enum-typed slot, so the variant tag was never
+# set — every `Str(_)` decoded as the zero-tag variant (`Empty` here) at runtime.
+#
+# The fix gates the coercion on `enum_variant_parent(name) == ""` (a typed
+# accessor, not a name match on the value) and qualifies a bare user-variant
+# ctor to its `Enum__Variant` form at the call-emit site — mirroring the Rust
+# frontend, which coerces ONLY `name == "String"`. Both the RETURN position and
+# the method-arg VALUE position are exercised. A legitimate `String(x)` identity
+# coercion must still pass through unchanged even though `Str` is a live variant.
+
+enum Node:
+    Empty
+    Str(String)
+    Int(int)
+    List(Vector[Node])
+    Map(Dict[String, Node])
+
+# Bare variant in RETURN position (resolver-qualified path).
+Node wrap_str(String s):
+    return Str(s)
+
+Node wrap_int(int n):
+    return Int(n)
+
+# Identity `String(x)` coercion — must NOT be shadowed by the `Str` variant.
+String passthrough(String s):
+    return String(s)
+
+void main():
+    Node a = wrap_str("hello")
+    match a:
+        case Str(s):
+            print(f"ret-str = {s}")
+        else:
+            print("WRONG: str variant swallowed")
+
+    Node b = wrap_int(7)
+    match b:
+        case Int(n):
+            print(f"ret-int = {n}")
+        else:
+            print("WRONG")
+
+    # Bare variants in method-arg VALUE positions (push / put) — the second
+    # collision site the resolver does not pre-qualify.
+    Vector[Node] items = Vector[Node]()
+    items.push(Str("world"))
+    items.push(Int(42))
+    items.push(Empty())
+
+    Dict[String, Node] obj = Dict[String, Node]()
+    obj.put("greeting", Str("bare-in-put"))
+    obj.put("count", Int(99))
+
+    Node root = Map(obj)
+    Node nested = List(items)
+
+    match nested:
+        case List(xs):
+            match xs.get(0).unwrap():
+                case Str(s):
+                    print(f"push-str = {s}")
+                else:
+                    print("WRONG: pushed str swallowed")
+            match xs.get(1).unwrap():
+                case Int(n):
+                    print(f"push-int = {n}")
+                else:
+                    print("WRONG")
+            match xs.get(2).unwrap():
+                case Empty():
+                    print("push-empty = ok")
+                else:
+                    print("WRONG")
+        else:
+            print("WRONG")
+
+    match root:
+        case Map(d):
+            match d["greeting"]:
+                case Str(s):
+                    print(f"put-str = {s}")
+                else:
+                    print("WRONG: put str swallowed")
+            match d["count"]:
+                case Int(n):
+                    print(f"put-int = {n}")
+                else:
+                    print("WRONG")
+        else:
+            print("WRONG")
+
+    # Identity coercion still works with `Str` a live variant name in scope.
+    print(f"coerce = {passthrough("unchanged")}")

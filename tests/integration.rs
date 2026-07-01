@@ -6829,6 +6829,31 @@ fn recursive_enum() {
     );
 }
 
+// A user enum whose variant is named `Str` (mirroring `Json.Str(String)`),
+// constructed BARE (`Str(s)`), used to collide with the self-host lowerer's
+// `Str`/`String`/`GorgetString` identity string-coercion — the String was
+// swallowed into the enum slot, decoding as the zero-tag variant at runtime.
+// The fix gates the coercion on a typed `enum_variant_parent` accessor and
+// qualifies the bare user variant to its `Enum__Variant` ctor. This fixture
+// exercises both the return position and the method-arg value position, plus a
+// legitimate `String(x)` coercion that must still pass through with `Str` a
+// live variant name in scope. Runtime-parity is enforced separately via the
+// `enum_variant_str_collision.out` snapshot under the self-host net.
+#[test]
+fn enum_variant_str_collision() {
+    run_gg(
+        "enum_variant_str_collision.gg",
+        "ret-str = hello\n\
+         ret-int = 7\n\
+         push-str = world\n\
+         push-int = 42\n\
+         push-empty = ok\n\
+         put-str = bare-in-put\n\
+         put-int = 99\n\
+         coerce = unchanged",
+    );
+}
+
 #[test]
 fn option_box_enum() {
     run_gg(

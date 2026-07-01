@@ -1,0 +1,8 @@
+ret-str = hello
+ret-int = 7
+push-str = world
+push-int = 42
+push-empty = ok
+put-str = bare-in-put
+put-int = 99
+coerce = unchanged

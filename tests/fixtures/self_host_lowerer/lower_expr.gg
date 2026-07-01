@@ -6835,9 +6835,17 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         int panic_unit = add_local(&ctx, UNIT_TYPE, None)
         emit(&ctx, GIAssign(panic_unit, OpConstUnit()))
         result = panic_unit
-    elif (fname == "Str" or fname == "String" or fname == "GorgetString") and args.len() == 1:
+    elif (fname == "Str" or fname == "String" or fname == "GorgetString") and args.len() == 1 and enum_variant_parent(fname, &gmod) == "":
         # Identity coercion: Str(x) / String(x) returns x (already a string).
         # Lower the inner arg and pass its type through.
+        # GATE (Core #2, no name-matching): a user enum may declare a variant
+        # named `Str` (e.g. json.gg's `Json.Str(String)`). A bare `Str(s)` ctor
+        # then collides with this coercion — without the guard the variant
+        # construction is SWALLOWED (the String is passed straight through into
+        # the enum-typed slot, yielding a zero-tag `Null` at runtime). Skip the
+        # coercion when `fname` is a registered enum variant so the call falls
+        # through to the variant-ctor lowering (mirrors the qualified
+        # `Enum.Str(s)` path → `call_extern @Enum__Str`).
         SpannedExpr inner = args.get(0).unwrap()
         result = lower_expr(&ctx, inner, &gmod)
     elif (fname == "Str" or fname == "String" or fname == "GorgetString") and args.len() == 0:
@@ -7875,6 +7883,40 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         # handler (branch-before-read). A NON-CATCHING caller passes NULL and the
         # callee's fault arm panics by default. `participating_fault_fns` is empty
         # for the existing suite + self-host → this block is dead → byte-identical.
+        #
+        # QUALIFY a bare user-enum variant ctor name (Core #2 / layering rule 4:
+        # resolve-once-write-through). A bare `Str(s)` for a USER enum variant
+        # (`Json.Str(String)`) reaches here with `call_name == "Str"` when the
+        # resolver did not qualify it (e.g. a method-call VALUE arg like
+        # `dict.put(k, Str(v))`, unlike a return-position `Str(s)` which the
+        # resolver already rewrites to `Json__Str`). Emitting the bare `Str`
+        # GICall makes LIR `map_runtime_name` mistake it for the runtime
+        # GorgetString category and panic ("`Str` has no method"). Rewrite to the
+        # qualified `Enum__Variant` — the SAME form the qualified `Enum.Str(s)`
+        # path and the resolver-qualified return path emit, which LIR lowers to a
+        # canonical variant IEnumInit. Prelude variants (Ok/Error/Some/None) have
+        # `enum_variant_parent == ""` (Option/Result are absent from type_infos)
+        # so they are untouched; an already-qualified name (`contains("__")`) is
+        # skipped so a monomorphized ctor can't be double-qualified.
+        #
+        # SCOPE (`ret_type == I64_TYPE` gate): fire ONLY when the ret_type block
+        # above FAILED to route the bare variant to its parent enum — i.e. the
+        # name was shadowed by a coercion sibling (`Str`/`String`) and slipped
+        # through as I64. A CONCRETE enum's normally-routed variant already has
+        # the right parent ret_type (non-I64), so it is skipped. Crucially this
+        # excludes a GENERIC enum's variant (`Value(42)` for `Wrapper[int]`),
+        # whose ret_type is the MONOMORPHIZED `Wrapper__int64_t` (non-I64) and
+        # whose `enum_variant_parent` returns the TEMPLATE `Wrapper` — qualifying
+        # to `Wrapper__Value` (dropping `__int64_t`) would mis-name the ctor.
+        if ret_type == I64_TYPE and not call_name.contains("__"):
+            String _ev_parent = enum_variant_parent(call_name, &gmod)
+            if _ev_parent != "" and gmod.type_infos.contains(_ev_parent):
+                call_name = _ev_parent + "__" + call_name
+                # The dst slot must carry the PARENT ENUM type so the LIR
+                # variant-ctor lowering (needs the parent struct id) and the
+                # C-emit aggregate `(Enum){.tag=N,...}` are well-typed. Without
+                # this the 100+-byte enum mis-slots into an 8-byte int temp.
+                ret_type = lookup_or_register_named(&gmod, _ev_parent)
         bool callee_participates = participates_in_fault(&gmod, call_name)
         bool fault_catching = false
         int fault_ovf_h = -1
