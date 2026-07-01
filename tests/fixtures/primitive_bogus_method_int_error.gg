@@ -1,0 +1,6 @@
+# round-31: an unknown method on ANY primitive (here `int`) must be a CLEAN
+# type error at `gg check`, not silently fall through into a bogus runtime
+# symbol. Guards the whole primitive-method-reject class, not just String.
+void main():
+    int n = 5
+    print(n.bogus())

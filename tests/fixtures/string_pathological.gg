@@ -50,7 +50,7 @@ void main():
     String builder = String(16384)
     for i in 0..5000:
         builder.push("x")
-    print(f"builder len: {builder.str().len()}")
+    print(f"builder len: {builder.len()}")
 
     # --- Deeply nested replace ---
     String nested = "((((x))))"

@@ -26,7 +26,7 @@ pub enum AssignMode {
 | `Vector[int] b = a.clone()` | Clone | Deep clone via Cloneable trait, a and b independent |
 | `Vector[int] c = !a` | Move | Transfer ownership, a consumed |
 | `auto d = a` | Borrow | Ptr reference, borrows from a |
-| `String s = owned_string.str()` | Borrow | Ptr preserved, source unregistered from drop |
+| `String s = owned_string` | Borrow | Ptr preserved, source unregistered from drop |
 
 **Key rule:** `Copy` mode is ONLY for trivial types (int, bool, float, simple structs without resource fields). Resource types MUST use Move, Clone, or Borrow. No implicit shallow copies.
 
@@ -175,7 +175,7 @@ When a `Ptr(T)` value (from IndexLoad or borrowed param) is assigned to an expli
 
 ### GorgetString excluded from auto-clone
 
-GorgetStrings have their own provenance-based ownership system (view vs owned). Auto-cloning GorgetStrings would break the `.str()` method chain pattern where a String view borrows from the backing GorgetString.
+GorgetStrings have their own provenance-based ownership system (view vs owned). Auto-cloning GorgetStrings would break the zero-cost borrow pattern where a bare `String v = sb` view borrows from the backing GorgetString (the former `.str()`/`.as_str()` no-op accessors were removed — the borrow is now implicit).
 
 ### Collection elem_drop
 

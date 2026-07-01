@@ -2025,8 +2025,7 @@ An `.await()` expression is a **suspension point** — execution may pause and r
 - **`String` parameters** — the caller is blocked at the direct-await call site, so `String` params and any `String` derived from them remain alive across the suspension.
 
 **What cannot cross an `.await()`:**
-- **`String` derived from a local `String`** — the local variable owns the data; a borrow of it cannot outlive the variable's scope across a suspension point.
-- **`&T` references to local variables** — same reasoning.
+- **`&T` references to local variables** — the local owns the data; an explicit reference to it cannot outlive the variable's scope across a suspension point. (A bare `String s = local` is a copy-on-write borrow that provenance classifies as *owned*, so it crosses freely — it is not a reference.)
 
 ```gorget
 # OK: owned int crosses await
@@ -2052,18 +2051,19 @@ async void process2(String data):
     some_task().await()
     print(slice)           # fine: data (and thus slice) is live
 
-# ERROR: String borrowed from a local variable
+# OK: owned String from a local crosses await
 async void process_local():
     String owned = String("hello")
-    String s = owned.as_str()
+    String s = owned       # zero-cost CoW borrow, classified as owned
     some_task().await()
-    print(s)               # error: s borrows from local `owned`
+    print(s)               # fine: String owns its data across the suspension
 
-# FIX: use the owned String directly
-async void process_fixed():
-    String owned = String("hello")
+# ERROR: an explicit reference to a local cannot cross await
+async void process_ref():
+    Point p = Point(1, 2)
+    Point &r = p
     some_task().await()
-    print(owned)           # fine: String owns its data
+    print(r.x)             # error: `r` borrows local `p` across the suspension
 ```
 
 **`spawn` supports direct function calls and closures.** The compiler checks that all captured variables and arguments are safe to send across threads:
@@ -3202,9 +3202,8 @@ In addition to the read-only methods above, `String` supports these mutation met
 | `push_char(c)` | `String → void` | Append a single character |
 | `push_line(s)` | `String → void` | Append a string followed by a newline |
 | `clear()` | `→ void` | Remove all content (keeps allocated capacity) |
-| `str()` | `→ String` | Return an immutable view (no allocation) |
 
-`String` also inherits all read-only string methods: `contains()`, `starts_with()`, `split()`, `trim()`, etc.
+`String` also inherits all read-only string methods: `contains()`, `starts_with()`, `split()`, `trim()`, etc. A bare `String v = sb` is a zero-cost copy-on-write borrow, so there is no separate view accessor — the former `str()`/`as_str()` no-op accessors were removed.
 
 **`String`** — Character classification and case methods
 

@@ -1,0 +1,10 @@
+# round-31 R2 guard: the removed `.str()` (and any unknown primitive method)
+# must ALSO reject inside an f-string interpolation `f"{...}"`. The f-string
+# path used to `errors.truncate` ALL interpolation errors — silently swallowing
+# genuine method-existence errors (and `.str()` was used MOST inside f-strings).
+# The reject (#1) would be defeated exactly here without the split_off + retain
+# filter (typecheck.rs, #2). If this fixture ever passes `gg check`, the
+# f-string error-swallow regressed.
+void main():
+    String s = "hi"
+    print(f"{s.str()}")

@@ -1,0 +1,5 @@
+# round-31 R2 guard: a bogus method on a primitive inside an f-string
+# interpolation must reject cleanly (see primitive_method_str_removed_fstring_error).
+void main():
+    String s = "hi"
+    print(f"{s.bogus()}")

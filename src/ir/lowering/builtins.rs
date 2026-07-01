@@ -747,8 +747,10 @@ pub static GORGET_STRING_VIEW: BuiltinTypeProtocol = BuiltinTypeProtocol {
         BuiltinMethodDecl { name: "ord", runtime_callee: Some("gorget_str_ord"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_int },
         // View operations → return cap=0 Str borrowing from receiver's buffer.
         // The compiler tracks ViewOf(receiver) and auto-materializes on source mutation.
-        BuiltinMethodDecl { name: "str", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: true, returns_fresh: false, params: no_params, return_type: ret_owned_string },
-        BuiltinMethodDecl { name: "as_str", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: true, returns_fresh: false, params: no_params, return_type: ret_owned_string },
+        // NOTE: the no-op `str`/`as_str` self-view accessors were removed in
+        // round-31 — bare `String v = sb` is already a zero-cost CoW borrow, so
+        // `.str()`/`.as_str()` (which actually deep-copied via
+        // gorget_string_clone_to_owned) were a strictly-worse redundant copy.
         BuiltinMethodDecl { name: "substring", runtime_callee: Some("gorget_str_slice"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: true, returns_fresh: false, params: two_ints, return_type: ret_owned_string },
         BuiltinMethodDecl { name: "slice", runtime_callee: Some("gorget_str_slice"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: true, returns_fresh: false, params: two_ints, return_type: ret_owned_string },
         // byte_slice(start, end) → cap=0 Str view into self's buffer (gorget_str_byte_slice).

@@ -6600,6 +6600,54 @@ fn method_resolution_unwrap_or_on_int_errors() {
     );
 }
 
+// round-31: an unknown method on a primitive receiver (String/int/…) is a
+// CLEAN type error at `gg check`. `.str()`/`.as_str()` were removed as
+// redundant deep-copy self-view accessors (bare `String v = sb` is a
+// zero-cost CoW borrow); before the reject (semantic/typecheck.rs #1) they —
+// and any bogus primitive method — fell through typecheck with no error and
+// the LIR invented a bogus `gorget_str_X` runtime symbol. Both PLAIN and
+// F-STRING contexts must reject (the f-string cases guard the R2
+// error-truncation fix, #2 — `.str()` was used most inside f-strings).
+#[test]
+fn primitive_method_str_removed_errors() {
+    check_gg_fails(
+        "primitive_method_str_removed_error.gg",
+        "no method `str` found on type `String`",
+    );
+}
+
+#[test]
+fn primitive_method_as_str_removed_errors() {
+    check_gg_fails(
+        "primitive_method_as_str_removed_error.gg",
+        "no method `as_str` found on type `String`",
+    );
+}
+
+#[test]
+fn primitive_bogus_method_int_errors() {
+    check_gg_fails(
+        "primitive_bogus_method_int_error.gg",
+        "no method `bogus` found on type `int`",
+    );
+}
+
+#[test]
+fn primitive_method_str_removed_fstring_errors() {
+    check_gg_fails(
+        "primitive_method_str_removed_fstring_error.gg",
+        "no method `str` found on type `String`",
+    );
+}
+
+#[test]
+fn primitive_bogus_method_fstring_errors() {
+    check_gg_fails(
+        "primitive_bogus_method_fstring_error.gg",
+        "no method `bogus` found on type `String`",
+    );
+}
+
 // `*x` (dereference) is valid only on a smart pointer (`Box[T]`). On any
 // other type the type checker used to return the inner type unchanged (a
 // silent no-op); `gg check` passed clean and the IR lowering emitted a

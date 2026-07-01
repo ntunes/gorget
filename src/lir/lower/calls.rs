@@ -394,6 +394,20 @@ pub(super) fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
     // matching the previous starts_with-guard behaviour.
     if family == Some("gorget_str") {
         let method = name.strip_prefix("GorgetString__")?;
+        // Belt-and-suspenders (round-31): `.str()`/`.as_str()` were removed as
+        // redundant deep-copy self-view accessors (bare `String v = sb` is a
+        // zero-cost CoW borrow). The typecheck primitive-method reject
+        // (semantic/typecheck.rs, #1) is the real gate — no `GorgetString__str`
+        // / `GorgetString__as_str` name should ever reach LIR. If one does, a
+        // typecheck-bypass path silently reintroduced the method; refuse to
+        // invent the runtime symbol (`gorget_str_str` doesn't exist → link
+        // error or silent miscompile) and fail loudly instead.
+        assert!(
+            method != "str" && method != "as_str",
+            "LIR: GorgetString__{method} reached runtime-symbol mapping — \
+             `.str()`/`.as_str()` were removed in round-31 and must be \
+             rejected at typecheck; this signals a typecheck-bypass bug",
+        );
         let mapped = format!("gorget_str_{method}");
         // Fixup: these GIR method names don't match runtime function names.
         return Some(match mapped.as_str() {

@@ -1,0 +1,9 @@
+# round-31: `.str()`/`.as_str()` were removed as redundant deep-copy self-view
+# accessors (bare `String v = sb` is already a zero-cost CoW borrow). Calling
+# them — or any unknown method — on a primitive receiver must now be a CLEAN
+# type error at `gg check`. Before the reject (semantic/typecheck.rs #1) this
+# fell through typecheck with no error and the LIR invented a bogus
+# `gorget_str_str` runtime symbol → link error or silent miscompile.
+void main():
+    String s = "hi"
+    print(s.str())

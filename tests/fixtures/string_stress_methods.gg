@@ -82,8 +82,8 @@ void main():
         builder.push(f"{i},")
         i = i + 1
     # Verify it starts and ends correctly
-    print(f"builder starts: {builder.str().starts_with("0,1,2,")}")
-    print(f"builder ends: {builder.str().ends_with("999,")}")
+    print(f"builder starts: {builder.starts_with("0,1,2,")}")
+    print(f"builder ends: {builder.ends_with("999,")}")
 
     # --- Stress: repeat + len ---
     i = 1

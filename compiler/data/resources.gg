@@ -2819,8 +2819,8 @@ public static Vector[BuiltinMethodDecl] STRING_BUILTIN_METHODS = [
     # View only (NOT a fresh String — falls through the return-type path).
     BuiltinMethodDecl("trim_left", true, [], BrkInfer(), false),
     BuiltinMethodDecl("trim_right", true, [], BrkInfer(), false),
-    BuiltinMethodDecl("str", true, [], BrkInfer(), false),
-    BuiltinMethodDecl("as_str", true, [], BrkInfer(), false),
+    # round-31: the no-op `str`/`as_str` self-view accessors were removed —
+    # bare `String v = sb` is already a zero-cost CoW borrow.
     # Fresh String only (NOT a view).
     BuiltinMethodDecl("upper", false, [], BrkString(), false),
     BuiltinMethodDecl("lower", false, [], BrkString(), false),
@@ -3021,8 +3021,7 @@ public static Vector[BuiltinMethodDecl] BUILTIN_METHOD_MUTATES = [
     BuiltinMethodDecl("removesuffix", false, [], BrkInfer(), false),
     BuiltinMethodDecl("trim_left", false, [], BrkInfer(), false),
     BuiltinMethodDecl("trim_right", false, [], BrkInfer(), false),
-    BuiltinMethodDecl("str", false, [], BrkInfer(), false),
-    BuiltinMethodDecl("as_str", false, [], BrkInfer(), false),
+    # round-31: `str`/`as_str` no-op self-view accessors removed (see above).
     BuiltinMethodDecl("upper", false, [], BrkInfer(), false),
     BuiltinMethodDecl("lower", false, [], BrkInfer(), false),
     BuiltinMethodDecl("to_lower", false, [], BrkInfer(), false),

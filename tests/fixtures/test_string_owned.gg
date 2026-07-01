@@ -4,13 +4,13 @@ void main():
     String s = String()
     s.push("hello")
     s.push(" world")
-    print(s.str())
+    print(s)
     print(s.len())
     print(s.is_empty())
 
     # push_char
     s.push_char('!')
-    print(s.str())
+    print(s)
 
     # Empty string checks
     String s2 = String()
@@ -32,7 +32,7 @@ void main():
 
     # Construction with initial value
     String s4 = String("initial")
-    print(s4.str())
+    print(s4)
     print(s4.len())
 
     # Multiple pushes
@@ -40,10 +40,10 @@ void main():
     s5.push("a")
     s5.push("b")
     s5.push("c")
-    print(s5.str())
+    print(s5)
 
     # push empty string
     String s6 = String("base")
     s6.push("")
-    print(s6.str())
+    print(s6)
     print(s6.len())

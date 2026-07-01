@@ -14,7 +14,7 @@ void main():
     print(greeting)
 
     # Auto-coercion: String to String
-    String view = greeting.str()
+    String view = greeting
     print(view)
 
     # String push

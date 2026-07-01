@@ -1183,7 +1183,27 @@ impl<'a> TypeChecker<'a> {
                 for interp in interp_exprs {
                     let _ = self.infer_expr(interp);
                 }
-                self.errors.truncate(saved_err_len);
+                // The old behavior was `self.errors.truncate(saved_err_len)` —
+                // discarding ALL interpolation errors to swallow the
+                // polymorphic-unify noise a bound-to-local `abs(-2.5)` would
+                // otherwise trip. But that also SILENTLY SWALLOWED genuine
+                // method-existence errors inside `f"{...}"` — e.g. `f"{s.str()}"`
+                // or `f"{s.bogus()}"` would pass typecheck even though the same
+                // call rejects outside an f-string (round-31 primitive-method
+                // reject, #1). Instead of truncating, split off the
+                // interpolation errors and RETAIN only the kinds that mean "the
+                // method / unwrap genuinely doesn't exist" (never the
+                // TypeMismatch unify-noise the truncation was there for). This
+                // keeps `f"{abs(x)}"` green while surfacing `f"{s.str()}"`.
+                let interp_errs = self.errors.split_off(saved_err_len);
+                self.errors.extend(interp_errs.into_iter().filter(|e| {
+                    matches!(
+                        e.kind,
+                        SemanticErrorKind::NoMethodFound { .. }
+                            | SemanticErrorKind::MethodGenericInferenceFailed { .. }
+                            | SemanticErrorKind::UnwrapOnNonOptional { .. }
+                    )
+                }));
                 for seg in &s.segments {
                     if let StringSegment::Interpolation(var_name, _) = seg {
                         let def_id_opt = if let Some(scope_id) = self.current_fn_scope {
@@ -2297,6 +2317,54 @@ impl<'a> TypeChecker<'a> {
                                     self.types.error_id
                                 }
                             } else {
+                                // base_name is None → the receiver is a
+                                // primitive (String/int/float/bool/char/...),
+                                // not a Defined/Generic user type. If the
+                                // method resolved through NO avenue above
+                                // (builtin protocol, trait registry/default,
+                                // closure-Option/Result) AND the receiver is a
+                                // concrete primitive, the method genuinely does
+                                // not exist — reject cleanly instead of silently
+                                // yielding error_id (which let the LIR
+                                // `gorget_str_{method}` name-concat fallback
+                                // invent a bogus runtime symbol → ugly C error
+                                // or silent miscompile). round-31.
+                                //
+                                // Auto-derivable methods (clone/debug/display/
+                                // hash) are intrinsic — every type has them, and
+                                // they may be synthesized at IR-lowering time
+                                // without appearing in `builtin_method_type`.
+                                // Exempt them here exactly as the
+                                // `base_name.is_some()` path does above
+                                // (`:2256-2263`). LAYERING NOTE (Core #1/#3):
+                                // `builtin_method_type` (this file) and the IR
+                                // `GORGET_STRING_VIEW` protocol
+                                // (ir/lowering/builtins.rs) are two parallel
+                                // method lists that can drift — the reject here
+                                // consults only the former, so any String method
+                                // present in the IR protocol but absent from
+                                // `builtin_method_type` (slice/upper/lower/ord)
+                                // must be mirrored into the oracle. The stronger
+                                // single-oracle fix has this reject consult the
+                                // IR protocol directly; deferred.
+                                let is_auto_derivable = matches!(
+                                    method.node.as_str(),
+                                    "clone" | "debug" | "display" | "hash"
+                                );
+                                if !is_auto_derivable
+                                    && matches!(
+                                        self.types.get(resolved_receiver),
+                                        ResolvedType::Primitive(_)
+                                    )
+                                {
+                                    self.error(
+                                        SemanticErrorKind::NoMethodFound {
+                                            method: method.node.clone(),
+                                            type_: self.describe_resolved_type(resolved_receiver),
+                                        },
+                                        expr.span,
+                                    );
+                                }
                                 self.types.error_id
                             }
                         }
@@ -5784,7 +5852,7 @@ impl<'a> TypeChecker<'a> {
                         Some(self.types.int_id)
                     }
                 }
-                "len" | "hash" | "count" | "byte_len" => Some(self.types.int_id),
+                "len" | "hash" | "count" | "byte_len" | "ord" => Some(self.types.int_id),
                 "index_of" => {
                     if let Some(option_def_id) = self.scopes.lookup("Option") {
                         Some(self.types.intern_generic(option_def_id, vec![self.types.int_id]))
@@ -5793,12 +5861,18 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
                 "contains" | "starts_with" | "ends_with" | "is_empty" => Some(self.types.bool_id),
-                // View returns — no allocation, return str (Str)
+                // View returns — no allocation, return str (Str).
+                // `slice` mirrors `substring` — an IR-protocol view op
+                // (GORGET_STRING_VIEW) absent from this oracle until round-31.
                 "trim" | "strip" | "lstrip" | "rstrip" | "trim_left" | "trim_right"
-                | "removeprefix" | "removesuffix" | "byte_slice" | "substring"
+                | "removeprefix" | "removesuffix" | "byte_slice" | "substring" | "slice"
                     => Some(self.types.string_id),
-                // Allocating returns — return String (GorgetString)
-                "to_upper" | "to_lower" | "replace" | "repeat" | "join" | "pad_left" | "pad_right"
+                // Allocating returns — return String (GorgetString).
+                // `upper`/`lower` are IR-protocol aliases of to_upper/to_lower;
+                // `clone` is the auto-derivable owned-copy — both absent from
+                // this oracle until round-31 (see the reject-site LAYERING NOTE).
+                "to_upper" | "to_lower" | "upper" | "lower" | "clone"
+                | "replace" | "repeat" | "join" | "pad_left" | "pad_right"
                 | "debug" | "display"
                     => Some(self.types.owned_string_id),
                 "enumerate" => Some(receiver_type),

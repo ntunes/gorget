@@ -1,0 +1,6 @@
+# round-31: `.as_str()` on a String primitive must be a CLEAN type error at
+# `gg check` (removed alongside `.str()` — see primitive_method_str_removed_error).
+void main():
+    String s = "hi"
+    String x = s.as_str()
+    print(x)

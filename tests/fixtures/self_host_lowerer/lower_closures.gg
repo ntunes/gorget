@@ -796,7 +796,7 @@ int guess_return_type(SpannedExpr sexpr, GirModule &gmod, int expected_type):
             if mname == "push" or mname == "set" or mname == "put" or mname == "clear" or mname == "pop" or mname == "sort" or mname == "append" or mname == "insert" or mname == "remove":
                 return UNIT_TYPE
             # Known string-returning methods
-            if mname == "upper" or mname == "lower" or mname == "trim" or mname == "strip" or mname == "replace" or mname == "slice" or mname == "join" or mname == "repeat" or mname == "to_string" or mname == "reverse" or mname == "format" or mname == "as_str" or mname == "display" or mname == "describe" or mname == "to_lower" or mname == "to_upper" or mname == "removeprefix" or mname == "removesuffix" or mname == "center" or mname == "ljust" or mname == "rjust" or mname == "zfill":
+            if mname == "upper" or mname == "lower" or mname == "trim" or mname == "strip" or mname == "replace" or mname == "slice" or mname == "join" or mname == "repeat" or mname == "to_string" or mname == "reverse" or mname == "format" or mname == "display" or mname == "describe" or mname == "to_lower" or mname == "to_upper" or mname == "removeprefix" or mname == "removesuffix" or mname == "center" or mname == "ljust" or mname == "rjust" or mname == "zfill":
                 return STRING_MARKER
             # Known int-returning methods
             if mname == "len" or mname == "find" or mname == "count" or mname == "hash" or mname == "index_of":

@@ -84,7 +84,7 @@ void main():
     builder.push("ASCII:")
     builder.push(f" caf\u{E9}")
     builder.push(f" na\u{EF}ve")
-    print(builder.str())
+    print(builder)
 
     # --- Stress: case conversion on multi-byte in loop ---
     String base = f"caf\u{E9}"

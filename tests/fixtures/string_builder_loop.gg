@@ -15,7 +15,7 @@ void main():
     for v in values:
         csv.push(f"\n{id},{v}")
         id = id + 1
-    print(csv.str())
+    print(csv)
 
     # --- Build JSON-like array ---
     Vector[String] names = Vector[String]()
@@ -32,14 +32,14 @@ void main():
         json.push(f"\"{name}\"")
         i = i + 1
     json.push("]")
-    print(json.str())
+    print(json)
 
     # --- Build with push_line ---
     String lines = String()
     for i in 1..6:
         lines.push_line(f"line {i}")
     # trim trailing newline for clean output
-    String output = lines.str().trim()
+    String output = lines.trim()
     print(output)
 
     # --- Build with push_char ---
@@ -47,7 +47,7 @@ void main():
     String hex_chars = "0123456789abcdef"
     for i in 0..16:
         hex_str.push_char(hex_chars[i])
-    print(hex_str.str())
+    print(hex_str)
 
     # --- Capacity growth ---
     String growing = String(4)
@@ -56,17 +56,17 @@ void main():
     while j < 100:
         growing.push("x")
         j = j + 1
-    print(f"len after 100: {growing.str().len()}")
+    print(f"len after 100: {growing.len()}")
     print(f"cap grew: {growing.capacity() >= 100}")
 
     # --- Clear and reuse ---
     String reusable = String()
     reusable.push("first content")
-    print(reusable.str())
+    print(reusable)
     reusable.clear()
-    print(f"after clear: {reusable.str().is_empty()}")
+    print(f"after clear: {reusable.is_empty()}")
     reusable.push("second content")
-    print(reusable.str())
+    print(reusable)
 
     # --- Build nested structure ---
     String table = String()
@@ -78,7 +78,7 @@ void main():
             table.push(cell)
             table.push("|")
         table.push_char("\n")
-    print(table.str().trim())
+    print(table.trim())
 
     # --- Interleave two strings ---
     String a = "abc"
@@ -87,4 +87,4 @@ void main():
     for i in 0..a.len():
         interleaved.push_char(a[i])
         interleaved.push_char(b[i])
-    print(interleaved.str())
+    print(interleaved)

@@ -90,7 +90,7 @@ String rle_encode(String s):
             current = s[i]
             count = 1
     result.push(f"{count}{current}")
-    return result.str()
+    return result
 
 bool is_rotation(String a, String b):
     if a.len() != b.len():
@@ -142,4 +142,4 @@ String caesar_encrypt(String text, int shift):
                 result.push(chr(shifted))
             else:
                 result.push(ch)
-    return result.str()
+    return result
