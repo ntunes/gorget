@@ -2382,8 +2382,25 @@ equip Parser:
                                     int interp_base = self.next_interp_offset
                                     self.next_interp_offset = interp_base + 1048576
                                     Vector[SpannedToken] sub_tokens = lex_tokenize_with_offset(expr_text, interp_base)
-                                    Parser sub = Parser(sub_tokens, 0, Vector[String](), 0, 1099511627776, Vector[Stmt](), 0, Vector[String]())
+                                    # Seed the sub-parser's synthetic-interp counter from THIS
+                                    # parser's (already-advanced) counter and write its final
+                                    # value back afterward, so the counter is monotonic-shared
+                                    # across the whole parse tree. A NESTED f-string
+                                    # (`f"a {f"b {x}"}"`) consumes interp windows inside the
+                                    # sub-parser; without the write-back the parent's LATER
+                                    # segments would re-use (collide with) those windows, and
+                                    # without threading `self`'s value in the sub-parser would
+                                    # restart at 1<<40 and collide with the parent's earlier
+                                    # windows. This gives Rust's GUARANTEE (globally-disjoint
+                                    # windows — src/parser/mod.rs:73-80) via a shared counter
+                                    # rather than Rust's `base<<20` escalation, which overflows
+                                    # i64 under the self-host's checked arithmetic at nesting
+                                    # depth. Span VALUES differ from Rust for nested f-strings,
+                                    # but uniqueness — the property the resolver/typecheck keys
+                                    # depend on — holds identically.
+                                    Parser sub = Parser(sub_tokens, 0, Vector[String](), 0, self.next_interp_offset, Vector[Stmt](), 0, Vector[String]())
                                     SpannedExpr parsed_expr = sub.parse_expr()
+                                    self.next_interp_offset = sub.next_interp_offset
                                     fexprs.push(parsed_expr)
                                     fspecs.push(spec)
                             fsi = fsi + 1

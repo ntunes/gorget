@@ -1219,9 +1219,18 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
                 # (infer.gg) records bool at the UNIQUE span.end
                 # (`expr_link_types`), which the lowerer reads FIRST. Scoped to
                 # the four tag-check intrinsics — NOT a blanket "infer every
-                # interpolation", which would re-key OTHER interps' types onto
-                # the parser's synthetic f-string-segment span offsets (base
-                # 1<<40 + k*(1<<20), parser.gg:986) and mis-type them.
+                # interpolation". Even with the nested-f-string synthetic-window
+                # collision now fixed (parser.gg — the sub-parser threads the
+                # shared counter), blanket inference STILL regresses two
+                # independent classes (scout-measured 2026-07-01): (a) char
+                # predicates (`c.is_alpha()`) are absent from `infer_expr_type`'s
+                # bool arms → mis-typed; (b) an INLINE chained call in an interp
+                # (`f"{name.trim().len()}"`) — the `.trim()` recursion writes
+                # String at the shared span.start and the outer `.len()` reads it
+                # (cc-fail / garbage pointer). The span.start-collision class is a
+                # DEEPER bug than the nested-window one; retiring the guard needs
+                # every method-return arm to record at span.end AND the lowerer's
+                # span.end oracle to be complete for all chains. Filed in TODO.md.
                 if fstring_interp_is_tag_check(fe):
                     int _tc_ignore = infer_expr_type(fe, scopes, &types, &ctx)
 

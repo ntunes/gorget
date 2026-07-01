@@ -25962,6 +25962,23 @@ ends: true
     );
 }
 
+// Guard for the nested-f-string synthetic-span write-back fix in the self-host
+// parser (self_host_typechecker/parser.gg): the interpolation sub-parser threads
+// the shared `next_interp_offset` counter and writes its final value back, so
+// windows stay globally disjoint. Exercises depth-3 nesting plus a parent
+// segment placed AFTER a nested one (`after={y}`) — the post-nested-window path
+// that a regressed/overflowing write-back would break.
+#[test]
+fn deep_nest_fstring() {
+    run_gg(
+        "deep_nest_fstring.gg",
+        "\
+L1 L2 L3 7
+before=7 mid=inner 10 after=3
+21 done",
+    );
+}
+
 #[test]
 fn string_pathological() {
     run_gg(
