@@ -4075,6 +4075,58 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                             # `void …`. Keyed by the SAME `Box__<Trait>__<method>`
                             # mangling the call site reconstructs from the receiver.
                             gmod.fn_sigs.put("Box__" + vt_mtrait + "__" + vt_slot.name, map_fn_return_type(vt_slot.return_type, &gmod))
+                            # Record the dispatch-thunk's PARAM TYPES off the trait
+                            # method decl (increment 3 — user params), the sibling
+                            # of the RETURN-type registration above. This is the
+                            # single source of truth for `Box__<Trait>__<method>`'s
+                            # argument ABI, read by BOTH:
+                            #   (1) the call site — `get_fn_param_types` falls back
+                            #       to `fn_param_sigs` (lower_types.gg:765) for this
+                            #       non-lowered symbol, and the GICall/GICallExtern
+                            #       arg loop (lir_lower.gg:3888/4216) passes an arg
+                            #       BY POINTER when its param tid `is_ptr_type` →
+                            #       so an aggregate arg (String/Vector/struct) is
+                            #       auto-address-taken (`&__s7`) exactly as Rust's
+                            #       per-arg AddressOf marshalling (insts.rs:2560);
+                            #   (2) the thunk emit — `try_record_trait_dispatch`
+                            #       reads these back to type the thunk signature +
+                            #       fn-ptr cast (lir_lower.gg / lir_codegen.gg).
+                            # Arg 0 is the fat trait-box RECEIVER, registered as a
+                            # `*unit` (void*) Ptr so the call site passes the box
+                            # BY POINTER — mirrors Rust's `void* __p0` trait-obj
+                            # receiver (synth.rs:1265) and lets ONE thunk shape
+                            # serve both a LOCAL fat-struct receiver (address-taken
+                            # → `&box`) and a `Box[Trait]`-param receiver (already a
+                            # `void*`, passed straight through). The Ptr-wrapping of
+                            # the user params MIRRORS lower_equip_block's impl-body
+                            # param loop (lower_closures.gg:583-598) — the SAME rule
+                            # the vtable-slot impl fn was emitted with, so the thunk
+                            # sig, the impl sig, and the call site all agree.
+                            Vector[int] vt_pt_sig = []
+                            Vector[String] vt_pt_names = []
+                            vt_pt_sig.push(register_ptr(&gmod, UNIT_TYPE))
+                            vt_pt_names.push("self")
+                            for vt_p in vt_slot.params:
+                                match vt_p.param_type.ty:
+                                    case TSelf():
+                                        continue
+                                    else:
+                                        pass
+                                int vt_pt = map_ast_type(vt_p.param_type, &gmod)
+                                # Bare aggregate/resource param → Ptr (by-pointer
+                                # ABI, e.g. `String name` → `void*`), matching the
+                                # impl fn's own param lowering.
+                                if vt_p.ownership == 0 and vt_pt >= PRIM_COUNT:
+                                    String vt_ptc = type_to_c_name(vt_p.param_type, &gmod)
+                                    if is_resource_type_name(vt_ptc, &gmod):
+                                        vt_pt = register_ptr(&gmod, vt_pt)
+                                # `&`/`!`-sigil param → MutPtr (by-pointer).
+                                if vt_p.ownership == 1 or vt_p.ownership == 2:
+                                    vt_pt = register_type(&gmod, GtMutPtr(vt_pt))
+                                vt_pt_sig.push(vt_pt)
+                                vt_pt_names.push(vt_p.param_name.clone())
+                            gmod.fn_param_sigs.put("Box__" + vt_mtrait + "__" + vt_slot.name, !vt_pt_sig)
+                            gmod.fn_param_names.put("Box__" + vt_mtrait + "__" + vt_slot.name, !vt_pt_names)
                             vt_slot_idx += 1
                     # Method-less skip (Fold 2): only register when ≥1 instance slot.
                     if vt_ti_fields.len() > 0:

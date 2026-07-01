@@ -2172,8 +2172,25 @@ bool try_record_trait_dispatch(String func_name, int dst_local, LirModule &m, Gi
     if gmod.fn_sigs.contains(func_name):
         td_ret_lir = map_gir_type(gmod.fn_sigs.get(func_name).unwrap(), &gmod, &sr)
     bool td_void = td_ret_lir == LT_VOID
-    Vector[String] td_ptys = []
-    m.trait_dispatch_requests.push(TraitDispatchReq(td_trait.clone(), td_method.clone(), td_slot, td_void, td_ptys, td_ret_lir))
+    # User param LIR types for the thunk signature + fn-ptr cast (increment 3).
+    # Read off the SAME `fn_param_sigs["Box__<Trait>__<method>"]` the `_VTable`
+    # pre-pass registered from the trait method decl (lower.gg — single source
+    # of truth, the param sibling of the `fn_sigs` return-type channel above).
+    # Index 0 is the `void* self` receiver (emitted implicitly by the thunk), so
+    # skip it; indices 1.. are the user params, each already ABI-wrapped
+    # (aggregate → GtPtr, `&`/`!` → GtMutPtr). `map_gir_type` lowers each to its
+    # LIR type — a Ptr wrapper → LT_PTR (`void*`), a scalar → its scalar LIR type
+    # — so the thunk forwards each arg with the PRECISE type the vtable-slot impl
+    # fn declares. A miss (defensive: the pre-pass didn't register this symbol)
+    # leaves `td_ptys` empty → the void/no-param keystone shape, unchanged.
+    Vector[int] td_ptys = []
+    if gmod.fn_param_sigs.contains(func_name):
+        Vector[int] td_psig = gmod.fn_param_sigs.get(func_name).unwrap()
+        int td_pi = 1
+        while td_pi < td_psig.len():
+            td_ptys.push(map_gir_type(td_psig.get(td_pi).unwrap(), &gmod, &sr))
+            td_pi += 1
+    m.trait_dispatch_requests.push(TraitDispatchReq(td_trait.clone(), td_method.clone(), td_slot, td_void, !td_ptys, td_ret_lir))
     return true
 
 # Record an EXPLICIT Shared[T] accessor inline-wrapper REQUEST onto the typed

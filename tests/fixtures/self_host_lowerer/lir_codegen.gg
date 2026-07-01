@@ -888,17 +888,47 @@ String emit_trait_dispatch_thunks(LirModule &m, Vector[String] &sn):
         # Real C return type from the typed LIR return type (LT_VOID → "void",
         # a GorgetString struct id → "Str", LT_I64 → "int64_t", etc.).
         String ret_c = c_type_name(req.ret_lir_ty, &sn)
-        # Fat trait box passed BY VALUE (its C typedef is the real 16-byte
-        # `struct __gg_Box__<Trait> {data, vtable}`). The dispatch:
-        #   vtable = self.vtable ; fnp = ((<retC>(*)(void*))vtable)->slot<idx>
-        #   data   = self.data   ; return fnp(data)
-        String slot_load = "((" + vtable_c + "*)self.vtable)->" + slot
+        # Fat trait box passed BY POINTER (`void* self`), mirroring Rust's synth
+        # trait helper (`src/bir/synth.rs:emit_trait_helper_body:1265`, `void*
+        # __p0`). ONE thunk shape serves BOTH receiver forms: a LOCAL fat-struct
+        # receiver is address-taken at the call site (`&box`, the value-box being
+        # kept out of type_runtime_map so the by-ptr arg path address-takes it)
+        # AND a `Box[Trait]`-PARAM receiver is already a `void*` (passed straight
+        # through) — the by-value keystone shape could not accept the `void*`
+        # param, which is the `serializable`/`deserializable`/`serialize_collections`
+        # CC-FAIL this increment closes.
+        #
+        # Thunk (increment 3, user params):
+        #   <retC> Box__<Trait>__<method>(void* self, <p1c> __p1, ...) {
+        #       return ((<retC>(*)(void*, <p1c>, ...))
+        #                 ((<VTable>*)((<BoxC>*)self)->vtable)->slot<idx>)
+        #              (((<BoxC>*)self)->data, __p1, ...);
+        #   }
+        # The fn-ptr cast carries the PRECISE param types (`req.param_tys`, self
+        # excluded), not Rust's uniform `(void*)`-cast-everything — cleaner and
+        # able to spell a `double`/`float` param the Rust synth thunk can't.
+        String self_box = "((" + box_c + "*)self)"
+        String slot_load = "((" + vtable_c + "*)" + self_box + "->vtable)->" + slot
+        # Build the fn-ptr cast param list + the declared user-param list + the
+        # forwarded arg list from the typed `param_tys`. The vtable-slot fn takes
+        # `void*` data first (the concrete receiver), then the user params.
+        String fnptr_params = "void*"
+        String decl_params = ""
+        String fwd_args = self_box + "->data"
+        int tp_i = 0
+        for pty in req.param_tys:
+            String pc = c_type_name(pty, &sn)
+            String pn = "__p" + int_to_str(tp_i + 1)
+            fnptr_params = fnptr_params + ", " + pc
+            decl_params = decl_params + ", " + pc + " " + pn
+            fwd_args = fwd_args + ", " + pn
+            tp_i += 1
         if req.ret_is_void:
-            String call_c = "((void(*)(void*))" + slot_load + ")(self.data);"
-            out = out + "void " + box_sym + "__" + req.method + "(" + box_c + " self) { " + call_c + " }\n"
+            String call_c = "((void(*)(" + fnptr_params + "))" + slot_load + ")(" + fwd_args + ");"
+            out = out + "void " + box_sym + "__" + req.method + "(void* self" + decl_params + ") { " + call_c + " }\n"
         else:
-            String call_c = "((" + ret_c + "(*)(void*))" + slot_load + ")(self.data)"
-            out = out + ret_c + " " + box_sym + "__" + req.method + "(" + box_c + " self) { return " + call_c + "; }\n"
+            String call_c = "((" + ret_c + "(*)(" + fnptr_params + "))" + slot_load + ")(" + fwd_args + ")"
+            out = out + ret_c + " " + box_sym + "__" + req.method + "(void* self" + decl_params + ") { return " + call_c + "; }\n"
     if out != "":
         out = out + "\n"
     return out

@@ -470,7 +470,13 @@ struct BoxWrapperReq:
 # (`src/bir/synth.rs:emit_trait_helper_body:1265`). `trait_name` is the
 # mangled trait (`Greeter`); `method` the method name (`greet`); `method_idx`
 # the VTable slot; `ret_is_void` picks the return shape; `param_tys` are the
-# user param C types (self excluded). `ret_lir_ty` is the method's REAL LIR
+# user param LIR type ids (self EXCLUDED — the thunk's `void* self` receiver is
+# emitted implicitly), each an aggregate `LT_PTR` (by-pointer, e.g. a `String`
+# param → `void*`) or a scalar (`LT_I64`/`LT_BOOL`/`LT_F64`). Read via
+# `c_type_name` at emit for the thunk's C signature AND the vtable-slot fn-ptr
+# cast, so the thunk forwards each user arg with the PRECISE type the impl fn
+# was emitted with (cleaner than Rust's uniform `(void*)`-cast-everything synth
+# thunk, which can't spell a `double` param). `ret_lir_ty` is the method's REAL LIR
 # return type (LT_VOID / LT_I64 / LT_F64 / LT_BOOL / a GorgetString struct id
 # for a String return, …), threaded from the trait method decl's return_type
 # so the thunk's C signature + the vtable-slot fn-ptr cast + `return` carry the
@@ -483,7 +489,7 @@ struct TraitDispatchReq:
     String method
     int method_idx
     bool ret_is_void
-    Vector[String] param_tys
+    Vector[int] param_tys
     int ret_lir_ty
 
 # A `s.get()` / `s.at(i)` / `s.set_at(i, v)` / `s.slen()` inline-wrapper REQUEST
