@@ -4448,6 +4448,19 @@ fn dict_nested_pattern_noncopy_enum() {
 }
 
 #[test]
+fn generic_short_user_type_arg() {
+    run_gg("generic_short_user_type_arg.gg", "wrap 9\nwrap 42");
+}
+
+#[test]
+fn dict_value_struct_named_v() {
+    run_gg(
+        "dict_value_struct_named_v.gg",
+        "a=7 tag=alpha\nb=42 tag=beta\nlen=2",
+    );
+}
+
+#[test]
 fn throws_call_into_bare_t_error() {
     check_gg_fails(
         "throws_call_into_bare_t_error.gg",

@@ -524,7 +524,13 @@ void discover_adapter_chain_expr(SpannedExpr sexpr, GirModule &gmod, Dict[String
                                 SpannedType inst_ty = resolved_to_spanned_type(link_rtid, gmod.tc_types, gmod.tc_scopes)
                                 match inst_ty.ty:
                                     case TNamed(_, inst_args):
-                                        if inst_args.len() > 0 and not has_type_variable(inst_args):
+                                        # inst_args are RESOLVER-typed (reconstructed
+                                        # from expr_link_types' concrete instance), so
+                                        # the type-variable ctx here is EMPTY — no
+                                        # enclosing template params can appear in a
+                                        # resolved chain-link type.
+                                        Dict[String, bool] adp_empty_ctx = {}
+                                        if inst_args.len() > 0 and not has_type_variable_ctx(inst_args, &adp_empty_ctx):
                                             String mangled = compute_mangled_name(inst_args, base)
                                             if not seen.contains(mangled):
                                                 seen.put(mangled.clone(), true)
@@ -589,7 +595,9 @@ void discover_adapter_chain_stmts(Vector[Stmt] stmts, GirModule &gmod, Dict[Stri
 
 # Expand generic calls inside meta for bodies to the 4 standard types.
 # meta for T in type_variants(...): generates code for int, float, String, bool.
-void expand_meta_for_generics(Vector[Stmt] stmts, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
+# `mf_ctx` holds the SMetaFor header's loop-var names (e.g. {T}) — a targ is
+# a type variable iff it names one of them (never by name-shape guess).
+void expand_meta_for_generics(Vector[Stmt] stmts, Dict[String, bool] &seen, Vector[GenericInstance] &instances, Dict[String, bool] &mf_ctx):
     # Standard column types that type_variants typically expands to.
     # Deliberately excludes 'bool' — variant_payloads() expands to enum payload
     # types (typically int/float/String), not bool.  Adding bool causes spurious
@@ -600,39 +608,39 @@ void expand_meta_for_generics(Vector[Stmt] stmts, Dict[String, bool] &seen, Vect
     std_types.push(SpannedType(TPrimitive("String"), -1))
     # Scan for generic calls with type variable args
     for stmt in stmts:
-        expand_meta_for_stmt(stmt, &seen, &instances, std_types)
+        expand_meta_for_stmt(stmt, &seen, &instances, std_types, &mf_ctx)
 
-void expand_meta_for_stmt(Stmt stmt, Dict[String, bool] &seen, Vector[GenericInstance] &instances, Vector[SpannedType] std_types):
+void expand_meta_for_stmt(Stmt stmt, Dict[String, bool] &seen, Vector[GenericInstance] &instances, Vector[SpannedType] std_types, Dict[String, bool] &mf_ctx):
     match stmt:
         case SVarDecl(_, _, init, _, _, _):
-            expand_meta_for_expr(init, &seen, &instances, std_types)
+            expand_meta_for_expr(init, &seen, &instances, std_types, &mf_ctx)
         case SExpr(expr):
-            expand_meta_for_expr(expr, &seen, &instances, std_types)
+            expand_meta_for_expr(expr, &seen, &instances, std_types, &mf_ctx)
         case SReturn(opt):
             match opt:
                 case Some(expr):
-                    expand_meta_for_expr(expr, &seen, &instances, std_types)
+                    expand_meta_for_expr(expr, &seen, &instances, std_types, &mf_ctx)
                 case None:
                     pass
         case SIf(cond, then_body, branches):
-            expand_meta_for_expr(cond, &seen, &instances, std_types)
+            expand_meta_for_expr(cond, &seen, &instances, std_types, &mf_ctx)
             for ts in then_body:
-                expand_meta_for_stmt(ts, &seen, &instances, std_types)
+                expand_meta_for_stmt(ts, &seen, &instances, std_types, &mf_ctx)
             for eb in branches:
                 for ebs in eb.body:
-                    expand_meta_for_stmt(ebs, &seen, &instances, std_types)
+                    expand_meta_for_stmt(ebs, &seen, &instances, std_types, &mf_ctx)
         case SMatch(scrutinee, arms):
-            expand_meta_for_expr(scrutinee, &seen, &instances, std_types)
+            expand_meta_for_expr(scrutinee, &seen, &instances, std_types, &mf_ctx)
             for arm in arms:
                 for abs in arm.body:
-                    expand_meta_for_stmt(abs, &seen, &instances, std_types)
+                    expand_meta_for_stmt(abs, &seen, &instances, std_types, &mf_ctx)
         else:
             pass
 
-void expand_meta_for_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Vector[GenericInstance] &instances, Vector[SpannedType] std_types):
+void expand_meta_for_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Vector[GenericInstance] &instances, Vector[SpannedType] std_types, Dict[String, bool] &mf_ctx):
     match sexpr.expr:
         case ECall(callee_box, args, _, targs):
-            if targs.len() > 0 and has_type_variable(targs):
+            if targs.len() > 0 and has_type_variable_ctx(targs, &mf_ctx):
                 SpannedExpr callee = *callee_box
                 match callee.expr:
                     case EIdentifier(fname):
@@ -647,7 +655,11 @@ void expand_meta_for_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Vector[Ge
                                 bool is_var = false
                                 match ta.ty:
                                     case TNamed(n, inner):
-                                        if inner.len() == 0 and n.len() <= 2:
+                                        # Substitute exactly the meta-for loop
+                                        # vars — a short-named CONCRETE targ
+                                        # (e.g. a user `struct Id` in
+                                        # `foo[T, Id](...)`) stays as-is.
+                                        if inner.len() == 0 and mf_ctx.contains(n):
                                             is_var = true
                                     else:
                                         pass
@@ -664,19 +676,19 @@ void expand_meta_for_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Vector[Ge
                     else:
                         pass
             for arg in args:
-                expand_meta_for_expr(arg, &seen, &instances, std_types)
+                expand_meta_for_expr(arg, &seen, &instances, std_types, &mf_ctx)
         case EMethodCall(obj, _, margs, _, _):
-            expand_meta_for_expr(*obj, &seen, &instances, std_types)
+            expand_meta_for_expr(*obj, &seen, &instances, std_types, &mf_ctx)
             for ma in margs:
-                expand_meta_for_expr(ma, &seen, &instances, std_types)
+                expand_meta_for_expr(ma, &seen, &instances, std_types, &mf_ctx)
         else:
             pass
 
 # Discover generic call sites in an expression
-void discover_generic_calls_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
+void discover_generic_calls_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Vector[GenericInstance] &instances, Dict[String, bool] &tparams):
     match sexpr.expr:
         case ECall(callee_box, args, _, targs):
-            if targs.len() > 0 and not has_type_variable(targs):
+            if targs.len() > 0 and not has_type_variable_ctx(targs, &tparams):
                 SpannedExpr callee = *callee_box
                 match callee.expr:
                     case EIdentifier(fname):
@@ -689,40 +701,40 @@ void discover_generic_calls_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Ve
                         pass
             # Recurse into call args
             for arg in args:
-                discover_generic_calls_expr(arg, &seen, &instances)
-            discover_generic_calls_expr(*callee_box, &seen, &instances)
+                discover_generic_calls_expr(arg, &seen, &instances, &tparams)
+            discover_generic_calls_expr(*callee_box, &seen, &instances, &tparams)
         case EMethodCall(obj, _, args, _, _):
-            discover_generic_calls_expr(*obj, &seen, &instances)
+            discover_generic_calls_expr(*obj, &seen, &instances, &tparams)
             for arg in args:
-                discover_generic_calls_expr(arg, &seen, &instances)
+                discover_generic_calls_expr(arg, &seen, &instances, &tparams)
         case EBinaryOp(lhs, _, rhs):
-            discover_generic_calls_expr(*lhs, &seen, &instances)
-            discover_generic_calls_expr(*rhs, &seen, &instances)
+            discover_generic_calls_expr(*lhs, &seen, &instances, &tparams)
+            discover_generic_calls_expr(*rhs, &seen, &instances, &tparams)
         case EUnaryOp(_, inner):
-            discover_generic_calls_expr(*inner, &seen, &instances)
+            discover_generic_calls_expr(*inner, &seen, &instances, &tparams)
         case EIf(cond, then_body, branches):
-            discover_generic_calls_expr(*cond, &seen, &instances)
-            discover_generic_calls_stmts(then_body, &seen, &instances)
+            discover_generic_calls_expr(*cond, &seen, &instances, &tparams)
+            discover_generic_calls_stmts(then_body, &seen, &instances, &tparams)
         case EFieldAccess(obj, _):
-            discover_generic_calls_expr(*obj, &seen, &instances)
+            discover_generic_calls_expr(*obj, &seen, &instances, &tparams)
         case EIndex(obj, idx):
-            discover_generic_calls_expr(*obj, &seen, &instances)
-            discover_generic_calls_expr(*idx, &seen, &instances)
+            discover_generic_calls_expr(*obj, &seen, &instances, &tparams)
+            discover_generic_calls_expr(*idx, &seen, &instances, &tparams)
         case EClosure(_, body):
-            discover_generic_calls_stmts(body, &seen, &instances)
+            discover_generic_calls_stmts(body, &seen, &instances, &tparams)
         case EFString(_, fexprs, _):
             for fx in fexprs:
-                discover_generic_calls_expr(fx, &seen, &instances)
+                discover_generic_calls_expr(fx, &seen, &instances, &tparams)
         else:
             pass
 
-void discover_generic_calls_stmt(Stmt stmt, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
+void discover_generic_calls_stmt(Stmt stmt, Dict[String, bool] &seen, Vector[GenericInstance] &instances, Dict[String, bool] &tparams):
     match stmt:
         case SVarDecl(stype, _, init, _, _, _):
             # Also discover type instances from type annotations (e.g., Stack[int] s = ...)
             match stype.ty:
                 case TNamed(tname, targs):
-                    if targs.len() > 0 and not has_type_variable(targs):
+                    if targs.len() > 0 and not has_type_variable_ctx(targs, &tparams):
                         String mangled = compute_mangled_name(targs, tname)
                         if not seen.contains(mangled):
                             seen.put(mangled.clone(), true)
@@ -730,50 +742,52 @@ void discover_generic_calls_stmt(Stmt stmt, Dict[String, bool] &seen, Vector[Gen
                             instances.push(!gi)
                 else:
                     pass
-            discover_generic_calls_expr(init, &seen, &instances)
+            discover_generic_calls_expr(init, &seen, &instances, &tparams)
         case SAssign(target, value):
-            discover_generic_calls_expr(target, &seen, &instances)
-            discover_generic_calls_expr(value, &seen, &instances)
+            discover_generic_calls_expr(target, &seen, &instances, &tparams)
+            discover_generic_calls_expr(value, &seen, &instances, &tparams)
         case SExpr(expr):
-            discover_generic_calls_expr(expr, &seen, &instances)
+            discover_generic_calls_expr(expr, &seen, &instances, &tparams)
         case SReturn(opt_expr):
             match opt_expr:
                 case Some(expr):
-                    discover_generic_calls_expr(expr, &seen, &instances)
+                    discover_generic_calls_expr(expr, &seen, &instances, &tparams)
                 case None:
                     pass
         case SIf(cond, then_body, branches):
-            discover_generic_calls_expr(cond, &seen, &instances)
-            discover_generic_calls_stmts(then_body, &seen, &instances)
+            discover_generic_calls_expr(cond, &seen, &instances, &tparams)
+            discover_generic_calls_stmts(then_body, &seen, &instances, &tparams)
             for eb in branches:
                 match eb.condition:
                     case Some(elif_cond):
-                        discover_generic_calls_expr(elif_cond, &seen, &instances)
+                        discover_generic_calls_expr(elif_cond, &seen, &instances, &tparams)
                     case None:
                         pass
-                discover_generic_calls_stmts(eb.body, &seen, &instances)
+                discover_generic_calls_stmts(eb.body, &seen, &instances, &tparams)
         case SWhile(cond, body, _):
-            discover_generic_calls_expr(cond, &seen, &instances)
-            discover_generic_calls_stmts(body, &seen, &instances)
+            discover_generic_calls_expr(cond, &seen, &instances, &tparams)
+            discover_generic_calls_stmts(body, &seen, &instances, &tparams)
         case SFor(_, iter_expr, body, _, _):
-            discover_generic_calls_expr(iter_expr, &seen, &instances)
-            discover_generic_calls_stmts(body, &seen, &instances)
+            discover_generic_calls_expr(iter_expr, &seen, &instances, &tparams)
+            discover_generic_calls_stmts(body, &seen, &instances, &tparams)
         case SMatch(scrutinee, arms):
-            discover_generic_calls_expr(scrutinee, &seen, &instances)
+            discover_generic_calls_expr(scrutinee, &seen, &instances, &tparams)
             for arm in arms:
-                discover_generic_calls_stmts(arm.body, &seen, &instances)
+                discover_generic_calls_stmts(arm.body, &seen, &instances, &tparams)
         case SMetaFor(mf_vars, mf_iter, meta_body):
             # Meta for type_variants: expand type-variable generic calls
-            # to the 4 standard column types (int, float, String, bool).
-            # The meta for header is lost, so we heuristically expand
-            # any generic call with a type variable arg.
-            expand_meta_for_generics(meta_body, &seen, &instances)
+            # to the standard column types. The header's loop-var names
+            # (mf_vars) are the type-variable context for the body.
+            Dict[String, bool] mf_ctx = {}
+            for mf_var in mf_vars:
+                mf_ctx.put(mf_var.clone(), true)
+            expand_meta_for_generics(meta_body, &seen, &instances, &mf_ctx)
         else:
             pass
 
-void discover_generic_calls_stmts(Vector[Stmt] stmts, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
+void discover_generic_calls_stmts(Vector[Stmt] stmts, Dict[String, bool] &seen, Vector[GenericInstance] &instances, Dict[String, bool] &tparams):
     for stmt in stmts:
-        discover_generic_calls_stmt(stmt, &seen, &instances)
+        discover_generic_calls_stmt(stmt, &seen, &instances, &tparams)
 
 # Lightweight type-to-C-name without GirModule (used during discovery before gmod exists)
 String spanned_type_to_c_name(SpannedType stype):
@@ -810,28 +824,24 @@ String spanned_type_to_c_name(SpannedType stype):
             pass
     return "int64_t"
 
-# Check if any type arg is an unresolved type variable (e.g., T, A, B)
-# rather than a concrete type (e.g., int, String, Vector[int])
-bool has_type_variable(Vector[SpannedType] targs):
+# Context-aware type-variable check — the Rust-mirroring form
+# (src/ir/lowering/generics/mod.rs:296 type_has_generic_param): a bare
+# TNamed with no type args is a type VARIABLE iff its name is one of the
+# ENCLOSING template's declared type params (`tparams`). No name-shape
+# guessing — a user `enum V` or `struct Id` used as a generic arg in a
+# non-generic context is CONCRETE (the retired `name.len() <= 2` heuristic
+# misclassified those, so `Wrap[V]` / `Wrap[Id]` instances were never
+# discovered → never monomorphized → link-fail / zeroed-field miscompile).
+bool has_type_variable_ctx(Vector[SpannedType] targs, Dict[String, bool] &tparams):
     for ta in targs:
         match ta.ty:
             case TNamed(name, inner_targs):
                 if inner_targs.len() == 0:
-                    # Single name with no type args — could be a type variable
-                    # Known concrete types: int, float, bool, void, String
-                    int pt = prim_name_to_type(name)
-                    if pt < 0 and name != "String":
-                        # Not a primitive — check if it looks like a type var
-                        # Type vars are typically short uppercase names
-                        if name.len() <= 2:
-                            return true
-                else:
-                    # Recurse into type args
-                    if has_type_variable(inner_targs):
+                    if tparams.contains(name):
                         return true
-            case TPrimitive(name):
-                # Primitives are always concrete
-                pass
+                else:
+                    if has_type_variable_ctx(inner_targs, &tparams):
+                        return true
             else:
                 pass
     return false
@@ -2564,6 +2574,13 @@ void discover_mono_method_insts_expr(SpannedExpr sexpr, Dict[String, SpannedType
                 match (*recv_box).expr:
                     case EIdentifier(rname):
                         if params_by_name.contains(rname):
+                            # Type-variable ctx = the instantiation's
+                            # substitution keys (the enclosing template's
+                            # params) — a name is "still a type variable"
+                            # iff substitution should have replaced it.
+                            Dict[String, bool] mm_ctx = {}
+                            for mm_ctx_k in type_sub_map.keys():
+                                mm_ctx.put(mm_ctx_k.clone(), true)
                             SpannedType decl_ty = params_by_name.get(rname).unwrap()
                             SpannedType conc_ty = substitute_type(decl_ty, &type_sub_map)
                             String recv_name = ""
@@ -2578,7 +2595,7 @@ void discover_mono_method_insts_expr(SpannedExpr sexpr, Dict[String, SpannedType
                                         # mangled name `Wrapper__int64_t`. Skip if
                                         # any concrete arg is still a type variable
                                         # (deferred to a later mono pass).
-                                        if not has_type_variable(cargs):
+                                        if not has_type_variable_ctx(cargs, &mm_ctx):
                                             recv_name = cn
                                             for ca in cargs:
                                                 recv_name = recv_name + "__" + type_to_c_name(ca, &gmod)
@@ -2592,7 +2609,7 @@ void discover_mono_method_insts_expr(SpannedExpr sexpr, Dict[String, SpannedType
                                 Vector[SpannedType] sub_targs = []
                                 for mt in mtargs:
                                     sub_targs.push(substitute_type(mt, &type_sub_map))
-                                if not has_type_variable(sub_targs):
+                                if not has_type_variable_ctx(sub_targs, &mm_ctx):
                                     String sym = recv_name + "__" + mname
                                     for st in sub_targs:
                                         sym = sym + "__" + type_to_c_name(st, &gmod)
@@ -2656,21 +2673,29 @@ int discover_transitive_expr(SpannedExpr sexpr, Dict[String, SpannedType] &type_
     int added = 0
     match sexpr.expr:
         case ECall(callee_box, args, _, targs):
-            if targs.len() > 0 and has_type_variable(targs):
-                Vector[SpannedType] resolved = []
-                for ta in targs:
-                    resolved.push(substitute_type(ta, &type_sub_map))
-                if not has_type_variable(resolved):
-                    String meta_suffix = extract_meta_op_suffix(args)
-                    match (*callee_box).expr:
-                        case EIdentifier(fname):
-                            String mangled = compute_mangled_name(resolved, fname) + meta_suffix
-                            if not seen.contains(mangled):
-                                seen.put(mangled.clone(), true)
-                                instances.push(GenericInstance(fname, resolved, mangled))
-                                added += 1
-                        else:
-                            pass
+            if targs.len() > 0:
+                # Type-variable ctx = the instantiation's substitution keys
+                # (the enclosing template's params). Calls whose targs are
+                # concrete in this ctx were already registered by the
+                # up-front discover_generic_calls walk.
+                Dict[String, bool] tt_ctx = {}
+                for tt_ctx_k in type_sub_map.keys():
+                    tt_ctx.put(tt_ctx_k.clone(), true)
+                if has_type_variable_ctx(targs, &tt_ctx):
+                    Vector[SpannedType] resolved = []
+                    for ta in targs:
+                        resolved.push(substitute_type(ta, &type_sub_map))
+                    if not has_type_variable_ctx(resolved, &tt_ctx):
+                        String meta_suffix = extract_meta_op_suffix(args)
+                        match (*callee_box).expr:
+                            case EIdentifier(fname):
+                                String mangled = compute_mangled_name(resolved, fname) + meta_suffix
+                                if not seen.contains(mangled):
+                                    seen.put(mangled.clone(), true)
+                                    instances.push(GenericInstance(fname, resolved, mangled))
+                                    added += 1
+                            else:
+                                pass
             for arg in args:
                 added += discover_transitive_expr(arg, &type_sub_map, &seen, &instances)
             added += discover_transitive_expr(*callee_box, &type_sub_map, &seen, &instances)

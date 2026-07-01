@@ -1595,8 +1595,6 @@ bool is_primitive_hashable_key(String key_ty):
         return true
     if key_ty == "GorgetString" or key_ty == "Str" or key_ty == "void":
         return true
-    if key_ty == "T" or key_ty == "K" or key_ty == "V":
-        return true
     if key_ty.contains("__"):
         return true
     return false

@@ -542,7 +542,7 @@ String guard_method_prefix(String name, GirModule &gmod):
 # Generic template / placeholder type names that should not be emitted as real
 # structs in C. These arise from unmonomorphized templates leaking into the
 # type table.
-bool is_generic_placeholder_name(String name):
+bool is_generic_placeholder_name(String name, GirModule &gmod):
     # Mono'd prelude generics (Result__<ok>__E / Option__<inner>) are concrete
     # by construction — built only from RESOLVED return/throws types — even though
     # their fields are synthesized from m.structs (not type_infos keys). The
@@ -552,9 +552,18 @@ bool is_generic_placeholder_name(String name):
     # Single-letter type params: T, E, K, V, U
     if name == "T" or name == "E" or name == "K" or name == "V" or name == "U":
         return true
-    # Template ending in a bare type param suffix: TypedColumn__T, Box__T
-    if name.ends_with("__T") or name.ends_with("__E") or name.ends_with("__K") or name.ends_with("__V"):
-        return true
+    # Template ending in a bare type param suffix: TypedColumn__T, Box__T —
+    # UNLESS the trailing segment names a DECLARED concrete user type. A user
+    # `enum V` / `struct T` is a legal type name, and `Dict__GorgetString__V`
+    # is then a CONCRETE collection mono, not a template leak. The meaning
+    # decision reads the typed decl registry (gmod.type_infos), not the name
+    # shape (round-32 scout: dict_nested_pattern_noncopy_enum CC-FAIL — the
+    # `__V` suffix probe misclassified the mono and Pass 1 never registered
+    # its runtime alias, so Dict__GorgetString__V/__put/__get stayed unmapped).
+    if name.ends_with("__T") or name.ends_with("__E") or name.ends_with("__K") or name.ends_with("__V") or name.ends_with("__U"):
+        String ph_tail = name.slice(name.len() - 1, name.len())
+        if not gmod.type_infos.contains(ph_tail):
+            return true
     # Bare enum variant names (not the Option__X / Result__X parent types)
     if name == "Some" or name == "None" or name == "Ok" or name == "Error" or name == "Err":
         return true
@@ -839,7 +848,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
             case GtNamed(name):
                 if name == "":
                     continue
-                if is_generic_placeholder_name(name) and not gmod.type_infos.contains(name):
+                if is_generic_placeholder_name(name, &gmod) and not gmod.type_infos.contains(name):
                     continue
                 if enum_variant_names.contains(name):
                     continue
@@ -1084,7 +1093,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
     for tname in ti_keys:
         if tname == "":
             continue
-        if is_generic_placeholder_name(tname) and not gmod.type_infos.contains(tname):
+        if is_generic_placeholder_name(tname, &gmod) and not gmod.type_infos.contains(tname):
             continue
         if enum_variant_names.contains(tname):
             continue

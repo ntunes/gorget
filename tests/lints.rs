@@ -3459,3 +3459,94 @@ fn self_host_gorget_map_struct_size() {
          update MIN_CONSTANT_USE_SITES with a one-line justification.",
     );
 }
+
+/// Type-variable NAME-SHAPE heuristic ratchet (CLAUDE.md Core #2 "typed
+/// metadata, never name-matching" + Core #6; round-32 Track D).
+///
+/// The self-host monomorphizer used to decide "is this generic arg a type
+/// VARIABLE?" by name shape (`name.len() <= 2` in the retired
+/// `has_type_variable`, plus an inline copy in `expand_meta_for_expr`), and
+/// `lir_lower.gg`'s placeholder probe + `lir_codegen.gg`'s hashable-key gate
+/// pattern-matched bare `T`/`K`/`V` names. All of these collide with legal
+/// 1-2-letter USER type names (`enum V`, `struct Id`, `struct T`):
+///   - `Wrap[Id]` was never discovered/monomorphized → zeroed-field SILENT
+///     MISCOMPILE (printed `wrap 0` instead of `wrap 9`);
+///   - `Dict__GorgetString__V` was misread as a template leak → runtime
+///     alias never registered → CC-FAIL (dict_nested_pattern_noncopy_enum);
+///   - a user `struct V` Dict key silently lost its custom Hashable/
+///     Equatable bridge (byte-FNV/memcmp fallback = silent divergence).
+///
+/// The typed replacement is `has_type_variable_ctx(targs, &tparams)` —
+/// membership in the enclosing template's DECLARED type params (Rust mirror:
+/// `src/ir/lowering/generics/mod.rs` `type_has_generic_param` +
+/// `current_generic_params`) — and, for the placeholder probe, a typed
+/// `gmod.type_infos` registry read. This lint pins the retired shapes to
+/// zero in the self-host lowering files:
+///   (a) `.len() <= 2` — the heuristic body (catches INLINE copies, like
+///       the old `expand_meta_for_expr` substitution-loop site, which a
+///       signature-only check would miss);
+///   (b) bare `has_type_variable(` — the retired fn (only
+///       `has_type_variable_ctx(` may appear);
+///   (c) `== "T"` / `== "K"` / `== "V"` type-variable-equality in
+///       `lir_codegen.gg` (the hashable-key gate shape — the typed
+///       fn-existence check `hashable_key_fn_names` decides instead).
+#[test]
+fn no_type_variable_name_shape_heuristic() {
+    const FILES: &[&str] = &[
+        "tests/fixtures/self_host_lowerer/lower_generics.gg",
+        "tests/fixtures/self_host_lowerer/lower.gg",
+        "tests/fixtures/self_host_lowerer/lir_lower.gg",
+        "tests/fixtures/self_host_lowerer/lir_codegen.gg",
+    ];
+
+    let mut hits: Vec<String> = Vec::new();
+    for file in FILES {
+        let content = fs::read_to_string(file).unwrap_or_default();
+        assert!(
+            !content.is_empty(),
+            "no_type_variable_name_shape_heuristic: {file} missing or empty — \
+             if the file moved, update FILES."
+        );
+        for (i, line) in content.lines().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with('#') {
+                continue; // .gg comments (the war-story may cite the pattern)
+            }
+            // (a) the len<=2 name-shape heuristic body.
+            if trimmed.contains(".len() <= 2") {
+                hits.push(format!("{file}:{}: {trimmed}", i + 1));
+            }
+            // (b) the retired bare fn (def, import, or call).
+            if trimmed.contains("has_type_variable")
+                && !trimmed.contains("has_type_variable_ctx")
+            {
+                hits.push(format!("{file}:{}: {trimmed}", i + 1));
+            }
+            // (c) T/K/V literal-equality (the hashable-key gate shape).
+            if file.ends_with("lir_codegen.gg")
+                && (trimmed.contains("== \"T\"")
+                    || trimmed.contains("== \"K\"")
+                    || trimmed.contains("== \"V\""))
+            {
+                hits.push(format!("{file}:{}: {trimmed}", i + 1));
+            }
+        }
+    }
+
+    assert!(
+        hits.is_empty(),
+        "Type-variable NAME-SHAPE heuristic reintroduced in the self-host \
+         monomorphizer/codegen ({} hit(s)). \"Is this a type variable?\" must \
+         be answered by TYPED context — `has_type_variable_ctx(targs, \
+         &tparams)` with the enclosing template's declared params (or \
+         `mf_vars` for meta-for, `type_sub_map.keys()` for transitive \
+         walks), or a typed-registry read — NEVER by `name.len() <= 2` / \
+         `== \"T\"` name-shape guessing, which miscompiles user types named \
+         `V`/`Id`/`T` (see docs/devbook/24-layering-discipline.md rule 2). \
+         If a hit is genuinely unrelated to type-variable classification, \
+         rewrite it to not match, or adjust this lint with justification.\n\
+         Hits:\n  {}",
+        hits.len(),
+        hits.join("\n  "),
+    );
+}
