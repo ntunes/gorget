@@ -562,6 +562,42 @@ Rust uses 152) that the CC-FAIL had simply kept unreachable. Two rules fall out:
    file the revealed bugs as next-round candidates. Don't hand-wave the shift; don't panic
    over it either.
 
+### Worked example — round-29: port the INVARIANT, not the mechanism (Rust's `wrapping_shl` traps a checked-arithmetic self-host)
+
+The self-host parser gives each f-string interpolation a synthetic span-offset window from
+a per-`Parser` counter. Rust guarantees globally-disjoint windows — even for *nested*
+f-strings — by seeding each interpolation's sub-parser at `(1<<40).wrapping_add(base << 20)`
+(`src/parser/mod.rs:73-80`): the `base << 20` escalation puts every nesting level
+astronomically above the parent's windows, so nesting can't collide *by construction*, and
+the sub-parser is discarded with no write-back. The self-host had hardcoded the sub-parser's
+counter to `1<<40` (dropping the escalation) → nested interps restarted at `1<<40` and
+collided. The tempting fix is a faithful port of Rust's escalation. **It traps.** The
+self-host uses *checked* arithmetic, and `1<<40 + base·(1<<20)` overflows i64 at nesting
+depth (`base ≈ 1<<60` → `<<20` → `1<<80`); Rust only survives because `wrapping_shl`
+*silently wraps*. Porting the mechanism ports a latent overflow that the reference's UB-via-
+wraparound papers over.
+
+The fix ports the **invariant** (windows are globally disjoint), not the mechanism: a single
+monotonic counter threaded into the sub-parser and **written back** after it parses
+(`self.next_interp_offset = sub.next_interp_offset`). Each interpolation — top-level or
+nested — consumes exactly one `1<<20` stride, monotonically, so windows are disjoint and the
+counter increments linearly (no escalation, no overflow). Two rules fall out:
+
+1. **When the reference relies on wraparound/UB (`wrapping_*`, signed overflow, pointer
+   provenance tricks), a checked/safe self-host CANNOT port it literally — port the property
+   it achieves.** The disjointness invariant is the contract; `base << 20` is just Rust's way
+   of getting it. A different, overflow-safe mechanism that yields the same invariant is
+   *more* reference-grade, not less (document the divergence in-code and cite the invariant).
+2. **A parity-neutral, stdout-unobservable correctness fix still earns its keep** — but be
+   honest about the regression net. Under the round-28 scoped f-string guard this fix changes
+   no fixture's stdout (the collided spans were never read), so no stdout fixture can guard
+   its *behavior*; the guard fixture (`deep_nest_fstring`) instead pins the *failure mode* the
+   naive port would hit (overflow/parse-trap on depth-3 nesting + a post-nested parent
+   segment). Pair it with `self_host_bootstrap_fixed_point` (the self-host parses f-strings in
+   its own source) and file the observable payoff (blanket interpolation inference) as the
+   deferred follow-up. This is the sibling of round-18: there a *partial* commit-chain port
+   re-introduced a fixed bug; here a *faithful* port re-introduces UB the reference hides.
+
 ## Worktree discipline: agent worktrees nest under main
 
 Agent worktrees live UNDER the main checkout (`/workspace/gorget/.claude/worktrees/agent-*`).
