@@ -2132,7 +2132,7 @@ bool box_inner_is_trait(String inner, GirModule &gmod):
 # non-`Box__` name, a name whose middle isn't a registered trait, or a name
 # with no `__`-separated method, is silently a no-op. Returns true iff a
 # request was recorded (so the caller knows a thunk will define this symbol).
-bool try_record_trait_dispatch(String func_name, int dst_local, LirModule &m, GirModule &gmod):
+bool try_record_trait_dispatch(String func_name, int dst_local, LirModule &m, GirModule &gmod, Dict[String, int] &sr):
     if not func_name.starts_with("Box__"):
         return false
     # Parse trait = between `Box__` and the LAST `__`; method = after it.
@@ -2159,13 +2159,21 @@ bool try_record_trait_dispatch(String func_name, int dst_local, LirModule &m, Gi
     for tdr in m.trait_dispatch_requests:
         if tdr.trait_name == td_trait and tdr.method == td_method:
             return true
-    # Return shape: void iff the call has no dst local. The keystone
-    # `void greet(self)` has dst_local < 0. (Non-void return shapes +
-    # user params are the next fixture's concern; param_tys stays empty
-    # for the keystone.)
-    bool td_void = dst_local < 0
+    # Return type: the trait method's REAL LIR return type, read off the
+    # `Box__<Trait>__<method>` fn_sig the `_VTable` pre-pass registered from
+    # the trait method decl's `return_type` (lower.gg ~:4062 — the single
+    # source of truth, the self-host analogue of Rust reading `fn_ret` from
+    # the VTable FnPtr field, `insts.rs:2550`). Absent (defensive: a call
+    # whose trait wasn't pre-pass-registered) → LT_VOID, matching the old
+    # discard-and-return-nothing behaviour. A void method registers UNIT_TYPE
+    # → LT_VOID → the call site already emits NO dst (`ret_tid == UNIT_TYPE`,
+    # lower_expr.gg:3893) so `dst_local < 0` and `ret_lir_ty == LT_VOID` agree.
+    int td_ret_lir = LT_VOID
+    if gmod.fn_sigs.contains(func_name):
+        td_ret_lir = map_gir_type(gmod.fn_sigs.get(func_name).unwrap(), &gmod, &sr)
+    bool td_void = td_ret_lir == LT_VOID
     Vector[String] td_ptys = []
-    m.trait_dispatch_requests.push(TraitDispatchReq(td_trait.clone(), td_method.clone(), td_slot, td_void, td_ptys))
+    m.trait_dispatch_requests.push(TraitDispatchReq(td_trait.clone(), td_method.clone(), td_slot, td_void, td_ptys, td_ret_lir))
     return true
 
 # Record an EXPLICIT Shared[T] accessor inline-wrapper REQUEST onto the typed
@@ -3861,7 +3869,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
             # generic call path below emits the call UNCHANGED (fat trait-box
             # passed by value); this records a request so codegen emits the
             # thunk that DEFINES the symbol. Non-trait-box names no-op.
-            bool _td_recorded = try_record_trait_dispatch(func_name, dst_local, &m, &gmod)
+            bool _td_recorded = try_record_trait_dispatch(func_name, dst_local, &m, &gmod, &sr)
             # Lower call arguments — check function param types for Ptr(T) params.
             # User functions with resource-type bare params receive Ptr(T),
             # so the caller must pass SlotAddr (pointer) instead of SlotLoad (value).
@@ -4100,7 +4108,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                 return bb
             # Trait-object dispatch: record the thunk request (same as GICall
             # arm). The call is emitted UNCHANGED below; codegen emits the thunk.
-            bool _tde_recorded = try_record_trait_dispatch(func_name, dst_local, &m, &gmod)
+            bool _tde_recorded = try_record_trait_dispatch(func_name, dst_local, &m, &gmod, &sr)
             # Function-as-value pseudo-intrinsic: `__fn_addr__<name>` —
             # emitted by `lower_expr`'s EIdentifier arm when the
             # identifier resolves to a known function. Convert into an

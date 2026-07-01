@@ -470,13 +470,21 @@ struct BoxWrapperReq:
 # (`src/bir/synth.rs:emit_trait_helper_body:1265`). `trait_name` is the
 # mangled trait (`Greeter`); `method` the method name (`greet`); `method_idx`
 # the VTable slot; `ret_is_void` picks the return shape; `param_tys` are the
-# user param C types (self excluded). Deduped by (trait_name, method).
+# user param C types (self excluded). `ret_lir_ty` is the method's REAL LIR
+# return type (LT_VOID / LT_I64 / LT_F64 / LT_BOOL / a GorgetString struct id
+# for a String return, …), threaded from the trait method decl's return_type
+# so the thunk's C signature + the vtable-slot fn-ptr cast + `return` carry the
+# concrete type (mirrors Rust `fn_ret = self.map_type(&fn_ret)` read off the
+# VTable FnPtr field, `src/lir/lower/insts.rs:2550`). A non-void thunk that
+# discarded the return (the void-only keystone shape) crashed a String/pointer
+# return via a deref-of-0. Deduped by (trait_name, method).
 struct TraitDispatchReq:
     String trait_name
     String method
     int method_idx
     bool ret_is_void
     Vector[String] param_tys
+    int ret_lir_ty
 
 # A `s.get()` / `s.at(i)` / `s.set_at(i, v)` / `s.slen()` inline-wrapper REQUEST
 # for an EXPLICIT `Shared[T]` accessor. The Shared analogue of BoxWrapperReq: a

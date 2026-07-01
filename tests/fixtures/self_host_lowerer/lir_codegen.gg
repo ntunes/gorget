@@ -864,9 +864,18 @@ String emit_box_method_wrappers(LirModule &m):
 #   }
 # The fat trait box `Box__<Trait>` is passed BY VALUE (its C typedef is the
 # real 16-byte struct `struct __gg_Box__<Trait> {data, vtable}`). NO instruction
-# scan, NO name-derived routing — the slot index + return shape are read from
+# scan, NO name-derived routing — the slot index + return type are read from
 # the typed request; this only SPELLS the C. Mirrors emit_box_method_wrappers.
-String emit_trait_dispatch_thunks(LirModule &m):
+#
+# The thunk's C return type + the vtable-slot fn-ptr cast + `return` all carry
+# the method's REAL return type (`req.ret_lir_ty`, threaded from the trait
+# method decl). A void method emits `void … { call; }` (no `return`); a
+# non-void method emits `<retC> … { return ((<retC>(*)(void*))slot)(data); }`,
+# mirroring Rust's synth thunk which casts the vtable fn-ptr to the real
+# signature and returns the call (`src/bir/synth.rs:emit_trait_helper_body`,
+# `((Str(*)(void*))fnp)(data)` + `return`). The prior void-only shape returned
+# int64_t/0 for EVERY method, so a String/pointer return derefed 0 → crash.
+String emit_trait_dispatch_thunks(LirModule &m, Vector[String] &sn):
     String out = ""
     for req in m.trait_dispatch_requests:
         # `box_sym` is the symbol the CALL site names (`Box__<Trait>__<method>`);
@@ -876,19 +885,20 @@ String emit_trait_dispatch_thunks(LirModule &m):
         String box_c = "__gg_Box__" + req.trait_name
         String vtable_c = "__gg_" + req.trait_name + "_VTable"
         String slot = "slot" + int_to_str(req.method_idx)
+        # Real C return type from the typed LIR return type (LT_VOID → "void",
+        # a GorgetString struct id → "Str", LT_I64 → "int64_t", etc.).
+        String ret_c = c_type_name(req.ret_lir_ty, &sn)
         # Fat trait box passed BY VALUE (its C typedef is the real 16-byte
         # `struct __gg_Box__<Trait> {data, vtable}`). The dispatch:
-        #   vtable = self.vtable ; fnp = ((VTable*)vtable)->slot<idx>
-        #   data   = self.data   ; fnp(data)
-        # KEYSTONE: the void `greet(self)` method's call site is typed to
-        # assign an i64 dummy (the self-host GIR types the trait-method
-        # extern's return as i64), so the thunk returns int64_t and returns 0
-        # after the void indirect call — the dummy result is discarded.
-        # (Return-type accuracy — a void thunk for a void method + non-void
-        # shapes — is the next increment; see the `print_trait_object` fixture.)
-        String fnptr_cast = "void(*)(void*)"
-        String call_c = "((" + fnptr_cast + ")((" + vtable_c + "*)self.vtable)->" + slot + ")(self.data);"
-        out = out + "int64_t " + box_sym + "__" + req.method + "(" + box_c + " self) { " + call_c + " return 0; }\n"
+        #   vtable = self.vtable ; fnp = ((<retC>(*)(void*))vtable)->slot<idx>
+        #   data   = self.data   ; return fnp(data)
+        String slot_load = "((" + vtable_c + "*)self.vtable)->" + slot
+        if req.ret_is_void:
+            String call_c = "((void(*)(void*))" + slot_load + ")(self.data);"
+            out = out + "void " + box_sym + "__" + req.method + "(" + box_c + " self) { " + call_c + " }\n"
+        else:
+            String call_c = "((" + ret_c + "(*)(void*))" + slot_load + ")(self.data)"
+            out = out + ret_c + " " + box_sym + "__" + req.method + "(" + box_c + " self) { return " + call_c + "; }\n"
     if out != "":
         out = out + "\n"
     return out
@@ -3200,6 +3210,21 @@ int infer_inst_type_with_ret(LirInst &inst, LirModule &m, Dict[int, int] &val_ty
                 for tsf_inf in m.thread_spawned_fns:
                     if name == "__gorget_thread_spawn_" + tsf_inf.fn_name:
                         return LT_PTR
+                # `Box__<Trait>__<method>` trait-object dispatch thunk: emitted as
+                # a synthesized C function (not a registered LirExtern), so type
+                # the call result from the TYPED trait_dispatch_requests set — the
+                # same source the thunk signature is emitted from. Mirrors the
+                # thread_spawn precedent above (a synth wrapper typed off its
+                # typed request set, NOT the extern lookup); the self-host analogue
+                # of Rust `emit_call_extern` registering the extern with the
+                # dst type so `infer_call_extern_type` resolves it. WITHOUT this
+                # the name-unknown fall-through defaults to the I64 fallback, and a
+                # non-i64 scalar return (a `float ratio()` double) is truncated to
+                # 0 when the call result flows straight into a consumer (print)
+                # with no intervening ISlotStore for the slot-store override to fix.
+                for tdr_inf in m.trait_dispatch_requests:
+                    if name == "Box__" + tdr_inf.trait_name + "__" + tdr_inf.method:
+                        return tdr_inf.ret_lir_ty
                 # Enum variant constructor: returns parent enum struct.
                 if m.enum_variant_parent.contains(name):
                     String parent = m.enum_variant_parent.get(name).unwrap()
@@ -7773,7 +7798,7 @@ String generate_c(LirModule &m):
     out = out + emit_shared_method_wrappers(&m)
     # `Box__<Trait>__<method>` trait-object dispatch thunks (no user/runtime
     # symbol — the thunk IS the vtable-indirect-call dispatch target).
-    out = out + emit_trait_dispatch_thunks(&m)
+    out = out + emit_trait_dispatch_thunks(&m, &sn)
 
     out = out + body
     return out

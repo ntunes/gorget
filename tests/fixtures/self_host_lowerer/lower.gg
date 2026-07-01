@@ -4059,6 +4059,22 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                             # Record method→slot (single source of truth for the
                             # slot ordering; read by the trait-dispatch intercept).
                             gmod.trait_method_slot.put(vt_mtrait + "__" + vt_slot.name, vt_slot_idx)
+                            # Record the `Box__<Trait>__<method>` dispatch-thunk's
+                            # RETURN TYPE off the trait method decl (single source
+                            # of truth, the self-host analogue of Rust reading
+                            # `fn_ret` from the VTable FnPtr field, insts.rs:2550).
+                            # This is BOTH: (1) the call-site return-type channel —
+                            # `obj.method()` on a Box[Trait] resolves `ret_tid` via
+                            # this fn_sig (lower_expr.gg:3836), so the dst local +
+                            # print format are typed correctly (a String return
+                            # prints `%.*s`, not `%lld`); AND (2) read back at LIR
+                            # dispatch (try_record_trait_dispatch) to type the thunk
+                            # signature + fn-ptr cast. A `void` method registers
+                            # UNIT_TYPE → the call site emits no dst (ret_tid ==
+                            # UNIT_TYPE, lower_expr.gg:3893) and the thunk emits
+                            # `void …`. Keyed by the SAME `Box__<Trait>__<method>`
+                            # mangling the call site reconstructs from the receiver.
+                            gmod.fn_sigs.put("Box__" + vt_mtrait + "__" + vt_slot.name, map_fn_return_type(vt_slot.return_type, &gmod))
                             vt_slot_idx += 1
                     # Method-less skip (Fold 2): only register when ≥1 instance slot.
                     if vt_ti_fields.len() > 0:
