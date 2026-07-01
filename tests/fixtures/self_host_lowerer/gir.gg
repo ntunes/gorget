@@ -885,6 +885,16 @@ struct GirModule:
     # (`src/ir/lowering/fault_participation.rs`). Appended AT END to avoid
     # shifting positional ctor call sites.
     Dict[String, bool] participating_fault_fns
+    # Trait-object dispatch: maps `<MangledTrait>__<method>` → the method's
+    # VTable SLOT INDEX (its 0-based position among the trait's self-methods,
+    # in declaration order). Populated by the `_VTable` struct-typedef pre-pass
+    # (lower.gg ~:4055) at the SAME loop that assigns `slot<idx>` fields — one
+    # source of truth for the slot ordering (Layering rule 3). Read by the
+    # `Box__<Trait>__<method>` trait-dispatch call intercept (lir_lower) to
+    # populate the dispatch-thunk request with the correct vtable slot. Empty
+    # for modules with no user trait. Appended AT END to avoid shifting
+    # positional ctor call sites.
+    Dict[String, int] trait_method_slot
 
 # Per-test metadata mirroring Rust's `TestFnInfo` (`src/ir/mod.rs:30`).
 # `fn_name` is the emitted `__test_N` symbol ("" for a skipped test, which

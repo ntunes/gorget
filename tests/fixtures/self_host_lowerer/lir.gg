@@ -458,6 +458,26 @@ struct BoxWrapperReq:
     String inner_c
     bool is_set
 
+# A `Box__<Trait>__<method>` trait-object DISPATCH thunk REQUEST — the
+# trait-object analogue of BoxWrapperReq. A TYPED monomorphization-request
+# recorded at the CLASSIFIED LIR call-mapping site (map_runtime_name's
+# `Box__<Trait>__<method>` arm, gated on `<Trait>_VTable` being a registered
+# type — the trait-box discriminator), consumed by emit_trait_dispatch_thunks
+# at codegen. There is no `Box__Greeter__greet` runtime/user symbol — the
+# thunk IS the generated dispatch target: it loads `self->vtable`, then
+# `vtable->slot<method_idx>`, then `self->data`, and indirect-calls
+# `fnp(data, args...)`. Mirrors Rust gg's synth trait helper
+# (`src/bir/synth.rs:emit_trait_helper_body:1265`). `trait_name` is the
+# mangled trait (`Greeter`); `method` the method name (`greet`); `method_idx`
+# the VTable slot; `ret_is_void` picks the return shape; `param_tys` are the
+# user param C types (self excluded). Deduped by (trait_name, method).
+struct TraitDispatchReq:
+    String trait_name
+    String method
+    int method_idx
+    bool ret_is_void
+    Vector[String] param_tys
+
 # A `s.get()` / `s.at(i)` / `s.set_at(i, v)` / `s.slen()` inline-wrapper REQUEST
 # for an EXPLICIT `Shared[T]` accessor. The Shared analogue of BoxWrapperReq: a
 # TYPED monomorphization-request recorded at the CLASSIFIED LIR call-mapping site
@@ -607,6 +627,17 @@ struct LirModule:
     # channel (Layering rule 4). Empty for modules with no Box get/set call.
     # Appended AT END to avoid shifting positional ctor call sites.
     Vector[BoxWrapperReq] box_wrapper_requests
+    # `Box__<Trait>__<method>` trait-object dispatch-thunk REQUESTS — the
+    # trait-object analogue of box_wrapper_requests. Populated by
+    # map_runtime_name's `Box__<Trait>__<method>` arm (gated on the
+    # `<Trait>_VTable` registered-type discriminator), drained by
+    # emit_trait_dispatch_thunks at codegen. Each thunk does vtable-index +
+    # indirect-call (mirrors Rust `src/bir/synth.rs:emit_trait_helper_body`).
+    # Empty for modules with no Box[Trait] dispatch. Inserted right after
+    # box_wrapper_requests (before shared_wrapper_requests); the sole
+    # `new_lir_module` ctor call was updated in lockstep, so no positional
+    # ctor site shifted.
+    Vector[TraitDispatchReq] trait_dispatch_requests
     # `s.get()` / `s.at(i)` / `s.set_at(i, v)` / `s.slen()` inline-wrapper
     # REQUESTS for EXPLICIT `Shared[T]` accessors — the Shared analogue of
     # box_wrapper_requests. Populated by map_runtime_name's `gorget_shared`
@@ -731,5 +762,6 @@ LirModule new_lir_module(int sched):
     Dict[String, String] ccf = {}
     Vector[DictGetOrReq] dgor = []
     Vector[BoxWrapperReq] bwr = []
+    Vector[TraitDispatchReq] tdr = []
     Vector[SharedWrapperReq] swr = []
-    return LirModule(structs, globals, functions, externs, "", spawned, thread_spawned, tests, benches, false, false, sched, "", false, false, "", 0, false, rec_drop_s, rec_drop_e, drop_coll, type_drops, imported_t, evp, evt, trt, tmpm, cet, ckt, cvt, ccf, dgor, bwr, swr)
+    return LirModule(structs, globals, functions, externs, "", spawned, thread_spawned, tests, benches, false, false, sched, "", false, false, "", 0, false, rec_drop_s, rec_drop_e, drop_coll, type_drops, imported_t, evp, evt, trt, tmpm, cet, ckt, cvt, ccf, dgor, bwr, tdr, swr)

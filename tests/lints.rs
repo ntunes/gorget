@@ -1535,9 +1535,27 @@ fn snag11_equip_symbol_mangle_site_count() {
 /// `emit_spawn_carrier_releases`) now reads the typed `CloneParam.method_prefix`
 /// VALUE too (gorget_channel_retain/_release vs gorget_shared_clone/_drop) —
 /// adds 0 name-prefix sites.
+/// Bumped 78 → 81 (2026-07-01): the Box[Trait] trait-object-dispatch keystone
+/// (increment 1 of the multi-session track) added THREE `starts_with("Box__")`
+/// parse-guard sites in `lir_lower.gg` — ONE in `try_record_trait_dispatch`
+/// (:2136) and TWO on a single line in `try_emit_trait_obj_construct` (:3373,
+/// `dst_def.name` + `src_def.name`). ALL THREE are the blessed
+/// "extract T from Mangled__T" case, NOT a classification dodge: the SEMANTIC
+/// is-this-a-trait-box decision is a TYPED discriminator in every case —
+/// `gmod.type_infos.contains(<Trait>_VTable)` at :2152 (the trait-box signal,
+/// mirroring Rust `operands.rs:799`) for site 1, and the fat-struct SHAPE check
+/// `dst_def.fields.len()==2 && fields[1].name=="vtable"` at :3371 (set upstream
+/// from the `_VTable` typed channel) for sites 2/3. The `starts_with` is a pure
+/// length-5 guard so `.slice(5, ...)` can strip the mangling — exactly like the
+/// blessed sibling `dia_box_nm.starts_with("Box__")` at :4630 (the 74→75 bump
+/// above). Site 1's callee arrives as a raw `String` from `GICall(int, String,
+/// Vector[Operand])` (gir.gg) — no typed struct behind it, so it is an inherent
+/// "option 2" name-only parse. Sites 2/3 retire alongside the SAME typed
+/// `box_inner_type` LirStructDef field already TODO'd for the :4630 site (the
+/// 74→75 comment) — when that field lands, drop BUDGET by 3 more with :4630.
 #[test]
 fn no_growth_in_self_host_name_prefix_routing() {
-    const BUDGET: usize = 78;
+    const BUDGET: usize = 81;
 
     // Phase-A classification-routing class only: all MANGLED_PREFIXES EXCEPT
     // the prelude option-like ones (those are the sibling lint's burn-down).

@@ -12,7 +12,7 @@ from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM, OP_MOD
 from gir import OP_ADD_WRAP, OP_SUB_WRAP, OP_MUL_WRAP
 from gir import OP_BITAND, OP_BITOR, OP_BITXOR, OP_SHL, OP_SHR
 from gir import UNOP_NEG, UNOP_NOT, UNOP_BITNOT
-from lir import LirModule, LirFunction, LirBlock, LirInst, LirTerm, LirSlot, LirStructDef, LirExtern, LirGlobal, LirThreadSpawnedFn, DictGetOrReq, BoxWrapperReq, SharedWrapperReq
+from lir import LirModule, LirFunction, LirBlock, LirInst, LirTerm, LirSlot, LirStructDef, LirExtern, LirGlobal, LirThreadSpawnedFn, DictGetOrReq, BoxWrapperReq, TraitDispatchReq, SharedWrapperReq
 from lir import LirSpawnedFn, SpawnParam, CloneParam
 from lir import SlotProvenance
 from lir import StructField, BlockParam, SwitchCase, FieldDrop, EnumVariantDrop, TypeDropInfo, FieldInit
@@ -702,11 +702,25 @@ void register_field_type_in_sr(String tname, Dict[String, int] &sr, LirModule &m
         case None:
             pass
     if tname_is_box:
+        # Trait box (inner has a `_VTable`) → FAT {data, vtable} (16), else
+        # value box `{_0}` (8). Sibling of the Pass-1 registrar above.
+        String tib_inner = tname.slice(5, tname.len())
+        bool tib_is_trait = box_inner_is_trait(tib_inner, &gmod)
         Vector[StructField] box_fields = []
-        box_fields.push(StructField("_0", LT_PTR))
+        int tib_sz = 8
+        if tib_is_trait:
+            box_fields.push(StructField("data", LT_PTR))
+            box_fields.push(StructField("vtable", LT_PTR))
+            tib_sz = 16
+        else:
+            box_fields.push(StructField("_0", LT_PTR))
         String box_name_ctor = tname.clone()
-        int box_id = lir_mod_add_struct(&m, LirStructDef(box_name_ctor, box_fields, 0, false, 8, -1))
+        int box_id = lir_mod_add_struct(&m, LirStructDef(box_name_ctor, box_fields, 0, false, tib_sz, -1))
         sr.put(tname, box_id)
+        # Trait box: a REAL emitted struct — keep it OUT of type_runtime_map
+        # (see the Pass-1 registrar's note). Value boxes stay "Box".
+        if tib_is_trait:
+            return
         m.type_runtime_map.put(tname.clone(), "Box")
         # Write-through (sibling of the Pass-1 BkRegularBox arm in
         # lower_type_defs): both Box registrars must populate the typed inner
@@ -951,11 +965,33 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
                                 # CkNotCollection branch: opaque / Box / Guard.
                                 match rmeta.box_kind:
                                     case BkRegularBox():
+                                        # Trait box (`Box__<Trait>`, inner has a
+                                        # `_VTable`) → FAT struct {data, vtable}
+                                        # (16 bytes), NOT the `{_0}` value-box
+                                        # (8). Mirrors Rust gg's TraitObj layout
+                                        # (`<Trait>_TraitObj {data, vtable}`).
+                                        String box_inner = name.slice(5, name.len())
+                                        bool box_is_trait = box_inner_is_trait(box_inner, &gmod)
                                         Vector[StructField] box_fields = []
-                                        box_fields.push(StructField("_0", LT_PTR))
+                                        int box_sz = 8
+                                        if box_is_trait:
+                                            box_fields.push(StructField("data", LT_PTR))
+                                            box_fields.push(StructField("vtable", LT_PTR))
+                                            box_sz = 16
+                                        else:
+                                            box_fields.push(StructField("_0", LT_PTR))
                                         String box_name = name.clone()
-                                        int box_id = lir_mod_add_struct(&m, LirStructDef(box_name, box_fields, 0, false, 8, -1))
+                                        int box_id = lir_mod_add_struct(&m, LirStructDef(box_name, box_fields, 0, false, box_sz, -1))
                                         sr.put(name, box_id)
+                                        # Trait box: a REAL emitted struct
+                                        # (`struct __gg_Box__<Trait> {data, vtable}`),
+                                        # so it must NOT go in type_runtime_map (that
+                                        # would alias it to `typedef void*` in
+                                        # emit_mono_typedefs + skip its struct body in
+                                        # should_skip_struct). Value boxes stay "Box".
+                                        if box_is_trait:
+                                            dispatched = true
+                                            continue
                                         m.type_runtime_map.put(name.clone(), "Box")
                                         # Write-through (Layering rule 4): we are inside the
                                         # TYPED `case BkRegularBox()` arm — rmeta proved this
@@ -2070,6 +2106,67 @@ void record_box_wrapper_req(LirModule &m, String inner_c, bool is_set):
         if r.inner_c == inner_c and r.is_set == is_set:
             return
     m.box_wrapper_requests.push(BoxWrapperReq(inner_c.clone(), is_set))
+
+# True iff `Box__<inner>` is a TRAIT box (the inner names a trait with an
+# emitted vtable) rather than a value box (the inner names a concrete
+# struct/primitive). The discriminator is TYPED, not name-shaped: the
+# `_VTable` struct-typedef pre-pass (lower.gg:4034) registered a
+# `<inner>_VTable` GirTypeInfo for exactly the non-generic, non-derive
+# user traits with ≥1 instance method — so `<inner>_VTable ∈ type_infos`
+# is the trait-box signal. A concrete value box (`Box__Expr`) has no
+# `Expr_VTable`, so this returns false and the value-box path (fat=false)
+# is preserved. Mirrors Rust gg's `try_trait_object_construct` gate on
+# `<Trait>_VTable` existing (`src/lir/lower/operands.rs:799`).
+bool box_inner_is_trait(String inner, GirModule &gmod):
+    if inner == "":
+        return false
+    return gmod.type_infos.contains(inner + "_VTable")
+
+# Record a `Box__<Trait>__<method>` trait-object dispatch-thunk REQUEST onto
+# the typed trait_dispatch_requests registry, deduped by (trait, method). The
+# call `Box__Greeter__greet(self)` is emitted UNCHANGED by the generic
+# call path (the fat trait-box struct is passed by value as `self`); this
+# only ensures the thunk that DEFINES that symbol gets emitted at codegen.
+# Gated on the `<Trait>_VTable` registered-type discriminator (the trait-box
+# signal), NOT a name-shape guess. `func_name` is the mangled callee; a
+# non-`Box__` name, a name whose middle isn't a registered trait, or a name
+# with no `__`-separated method, is silently a no-op. Returns true iff a
+# request was recorded (so the caller knows a thunk will define this symbol).
+bool try_record_trait_dispatch(String func_name, int dst_local, LirModule &m, GirModule &gmod):
+    if not func_name.starts_with("Box__"):
+        return false
+    # Parse trait = between `Box__` and the LAST `__`; method = after it.
+    String td_rest = func_name.slice(5, func_name.len())
+    # Find the last `__` in td_rest.
+    int td_sep = -1
+    int td_i = 0
+    while td_i + 1 < td_rest.byte_len():
+        if td_rest.byte_at(td_i) == 0x5F and td_rest.byte_at(td_i + 1) == 0x5F:
+            td_sep = td_i
+        td_i += 1
+    if td_sep < 0:
+        return false
+    String td_trait = td_rest.slice(0, td_sep)
+    String td_method = td_rest.slice(td_sep + 2, td_rest.len())
+    # Trait-box discriminator: `<Trait>_VTable` must be a registered type.
+    if not gmod.type_infos.contains(td_trait + "_VTable"):
+        return false
+    # Slot index from the typed method→slot channel.
+    int td_slot = gmod.trait_method_slot.get(td_trait + "__" + td_method).unwrap_or(-1)
+    if td_slot < 0:
+        return false
+    # Dedup by (trait, method).
+    for tdr in m.trait_dispatch_requests:
+        if tdr.trait_name == td_trait and tdr.method == td_method:
+            return true
+    # Return shape: void iff the call has no dst local. The keystone
+    # `void greet(self)` has dst_local < 0. (Non-void return shapes +
+    # user params are the next fixture's concern; param_tys stays empty
+    # for the keystone.)
+    bool td_void = dst_local < 0
+    Vector[String] td_ptys = []
+    m.trait_dispatch_requests.push(TraitDispatchReq(td_trait.clone(), td_method.clone(), td_slot, td_void, td_ptys))
+    return true
 
 # Record an EXPLICIT Shared[T] accessor inline-wrapper REQUEST onto the typed
 # shared_wrapper_requests registry, deduped by (type_name, kind). Called from
@@ -3230,11 +3327,76 @@ void emit_box_alloc(int dst_local, Operand box_arg, LirFunction &f, int bb, Vect
         int box_inner_sid = box_inner_ty - LT_STRUCT_BASE
         if box_inner_sid >= 0 and box_inner_sid < m.structs.len():
             String box_inner_name = m.structs.get(box_inner_sid).unwrap().name
+            # Register `Box__<Concrete>` as a VALUE box if absent, so the
+            # box-result temp is typed `Box__<Concrete>` — carrying the
+            # concrete identity forward to the `Box[Trait] ← Box[Concrete]`
+            # assignment (where the trait-object fat struct is built,
+            # mirroring Rust's `try_trait_object_construct` reading the
+            # concrete from the SOURCE type). Value boxes already have this
+            # struct registered; a trait-boxed concrete (English boxed as
+            # Greeter) does not, so mint it here as a plain `{_0: ptr}`.
             int box_sid = sr.get("Box__" + box_inner_name).unwrap_or(-1)
-            if box_sid >= 0:
-                LirSlot old_box_slot = f.slots.get(box_dst_slot).unwrap()
-                f.slots.set(box_dst_slot, LirSlot(LT_STRUCT_BASE + box_sid, old_box_slot.name))
+            if box_sid < 0:
+                Vector[StructField] vb_fields = []
+                vb_fields.push(StructField("_0", LT_PTR))
+                box_sid = lir_mod_add_struct(&m, LirStructDef("Box__" + box_inner_name, vb_fields, 0, false, 8, -1))
+                sr.put("Box__" + box_inner_name, box_sid)
+                m.type_runtime_map.put("Box__" + box_inner_name, "Box")
+                m.coll_elem_type_map.put("Box__" + box_inner_name, box_inner_name.clone())
+            LirSlot old_box_slot = f.slots.get(box_dst_slot).unwrap()
+            f.slots.set(box_dst_slot, LirSlot(LT_STRUCT_BASE + box_sid, old_box_slot.name))
     lir_push_inst(&f, bb, ISlotStore(box_dst_slot, box_dst, false))
+
+# Emit the trait-object FAT struct construction for a `Box[Trait] ← Box[Concrete]`
+# assignment. `dst_slot` is the FAT `Box__<Trait>` slot ({data, vtable}); `src_slot`
+# is the `Box__<Concrete>` value-box slot (holds the data pointer). Reads the
+# concrete from the src struct name, selects `<Trait>_for_<Concrete>_vtable`, and
+# emits `dst = {data = *src, vtable = &vtable_global}`. Mirrors Rust gg's
+# `try_trait_object_construct` (`src/lir/lower/operands.rs:760`). Returns true iff
+# it emitted the construction (dst was a fat trait box + the vtable global exists).
+bool try_emit_trait_obj_construct(int dst_slot, int src_slot, LirFunction &f, int bb, LirModule &m):
+    int dst_ty = f.slots.get(dst_slot).unwrap().ty
+    int src_ty = f.slots.get(src_slot).unwrap().ty
+    if dst_ty < LT_STRUCT_BASE or src_ty < LT_STRUCT_BASE:
+        return false
+    int dst_sid = dst_ty - LT_STRUCT_BASE
+    int src_sid = src_ty - LT_STRUCT_BASE
+    if dst_sid < 0 or dst_sid >= m.structs.len() or src_sid < 0 or src_sid >= m.structs.len():
+        return false
+    LirStructDef dst_def = m.structs.get(dst_sid).unwrap()
+    LirStructDef src_def = m.structs.get(src_sid).unwrap()
+    # dst must be a FAT trait box (2 fields, field[1] == "vtable"); src must be
+    # a `Box__<Concrete>` value box (name-parse the concrete). The fat shape IS
+    # the discriminator (set upstream from the `_VTable` typed channel).
+    if dst_def.fields.len() != 2 or dst_def.fields.get(1).unwrap().name != "vtable":
+        return false
+    if not dst_def.name.starts_with("Box__") or not src_def.name.starts_with("Box__"):
+        return false
+    String toc_trait = dst_def.name.slice(5, dst_def.name.len())
+    String toc_concrete = src_def.name.slice(5, src_def.name.len())
+    # Select the vtable global `<Trait>_for_<Concrete>_vtable`.
+    String toc_vt_name = toc_trait + "_for_" + toc_concrete + "_vtable"
+    int toc_vt_gid = -1
+    for (tgi, tg) in m.globals.enumerate():
+        if tg.name == toc_vt_name:
+            toc_vt_gid = tgi
+    if toc_vt_gid < 0:
+        return false
+    # data (field 0) = *src (the box value = the data pointer).
+    int toc_src_addr = lir_fn_next_value(&f)
+    lir_push_inst(&f, bb, ISlotAddr(toc_src_addr, src_slot))
+    int toc_data = lir_fn_next_value(&f)
+    lir_push_inst(&f, bb, ILoad(toc_data, toc_src_addr, LT_PTR))
+    # vtable (field 1) = &vtable_global.
+    int toc_vt_addr = lir_fn_next_value(&f)
+    lir_push_inst(&f, bb, IGlobalAddr(toc_vt_addr, toc_vt_gid))
+    Vector[FieldInit] toc_fields = []
+    toc_fields.push(FieldInit(0, toc_data))
+    toc_fields.push(FieldInit(1, toc_vt_addr))
+    int toc_target = lir_fn_next_value(&f)
+    lir_push_inst(&f, bb, ISlotAddr(toc_target, dst_slot))
+    lir_push_inst(&f, bb, IStructInit(toc_target, dst_sid, toc_fields))
+    return true
 
 int lower_operand(Operand op, LirFunction &f, int bb, Vector[int] &local_to_slot, LirModule &m):
     match op:
@@ -3513,6 +3675,23 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
             # store / OpBorrow-Ptr dispatch — it fully handles the assign.
             if try_closure_pack(local_id, operand, &f, bb, &local_to_slot, &gir_locals, &func_index, &gmod, &m):
                 return bb
+            # Trait-object construction: `Box[Trait] ← Box[Concrete]`. When the
+            # dst is a FAT trait box and the src is a `Box__<Concrete>` value
+            # box, build the {data, vtable} fat struct instead of a byte-copy.
+            # Mirrors Rust gg's `try_trait_object_construct` (operands.rs:760).
+            int ga_src = -1
+            match operand:
+                case OpCopy(gsl):
+                    ga_src = gsl
+                case OpMove(gsl):
+                    ga_src = gsl
+                else:
+                    pass
+            if ga_src >= 0:
+                int ga_dst_slot = local_to_slot.get(local_id).unwrap()
+                int ga_src_slot = local_to_slot.get(ga_src).unwrap()
+                if try_emit_trait_obj_construct(ga_dst_slot, ga_src_slot, &f, bb, &m):
+                    return bb
             # D.1 (2026-05-22) — OpBorrow + Ptr-typed-dst + value-typed-src
             # dispatch. The canonical alias shape from B.1's Branch C is
             # `GIAssign(dst, OpBorrow(src))` where the GIR layer tags dst
@@ -3678,6 +3857,11 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
             if func_name == "Box" and args.len() == 1 and dst_local >= 0:
                 emit_box_alloc(dst_local, args.get(0).unwrap(), &f, bb, &local_to_slot, &sr, &m)
                 return bb
+            # Trait-object dispatch: `Box__<Trait>__<method>(self, ...)`. The
+            # generic call path below emits the call UNCHANGED (fat trait-box
+            # passed by value); this records a request so codegen emits the
+            # thunk that DEFINES the symbol. Non-trait-box names no-op.
+            bool _td_recorded = try_record_trait_dispatch(func_name, dst_local, &m, &gmod)
             # Lower call arguments — check function param types for Ptr(T) params.
             # User functions with resource-type bare params receive Ptr(T),
             # so the caller must pass SlotAddr (pointer) instead of SlotLoad (value).
@@ -3914,6 +4098,9 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
             # Canonical prelude variants (same as GICall arm).
             if try_lower_prelude_variant(func_name, dst_local, args, &f, bb, &local_to_slot, &m):
                 return bb
+            # Trait-object dispatch: record the thunk request (same as GICall
+            # arm). The call is emitted UNCHANGED below; codegen emits the thunk.
+            bool _tde_recorded = try_record_trait_dispatch(func_name, dst_local, &m, &gmod)
             # Function-as-value pseudo-intrinsic: `__fn_addr__<name>` —
             # emitted by `lower_expr`'s EIdentifier arm when the
             # identifier resolves to a known function. Convert into an

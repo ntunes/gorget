@@ -8,7 +8,7 @@
 
 from lir import LirModule, LirFunction, LirBlock, LirInst, LirTerm, LirSlot
 from lir import SlotProvenance
-from lir import LirStructDef, LirExtern, LirGlobal, LirGlobalField, LirSpawnedFn, SpawnParam, CloneParam, LirTestFn, LirBenchFn, LirThreadSpawnedFn, DictGetOrReq, BoxWrapperReq, SharedWrapperReq
+from lir import LirStructDef, LirExtern, LirGlobal, LirGlobalField, LirSpawnedFn, SpawnParam, CloneParam, LirTestFn, LirBenchFn, LirThreadSpawnedFn, DictGetOrReq, BoxWrapperReq, TraitDispatchReq, SharedWrapperReq
 from lir import StructField, BlockParam, SwitchCase, FieldDrop, EnumVariantDrop, TypeDropInfo, FieldInit
 from lir import LT_I8, LT_I16, LT_I32, LT_I64, LT_U8, LT_U16, LT_U32, LT_U64
 from lir import LT_F32, LT_F64, LT_BOOL, LT_PTR, LT_VOID
@@ -848,6 +848,47 @@ String emit_box_method_wrappers(LirModule &m):
             out = out + "static inline void Box__" + inner + "__set(Box__" + inner + " self, " + elem + " val) { *(" + elem + "*)self = val; }\n"
         else:
             out = out + "static inline " + elem + " Box__" + inner + "__get(Box__" + inner + " self) { return *(" + elem + "*)self; }\n"
+    if out != "":
+        out = out + "\n"
+    return out
+
+# Emit the `Box__<Trait>__<method>` trait-object DISPATCH thunks. Drains the
+# TYPED trait_dispatch_requests registry (populated upstream at the classified
+# `Box__<Trait>__<method>` LIR call site, gated on `<Trait>_VTable`). Each
+# thunk loads `self.vtable`, indexes the method slot, loads `self.data`, and
+# indirect-calls `fnp(data, args...)`. There is no `Box__<Trait>__<method>`
+# runtime/user symbol — this thunk IS the dispatch target the call site names.
+# Mirrors Rust gg's synth trait helper (`src/bir/synth.rs:emit_trait_helper_body`):
+#   void Box__Greeter__greet(__gg_Box__Greeter self) {
+#       ((void(*)(void*))((__gg_Greeter_VTable*)self.vtable)->slot0)(self.data);
+#   }
+# The fat trait box `Box__<Trait>` is passed BY VALUE (its C typedef is the
+# real 16-byte struct `struct __gg_Box__<Trait> {data, vtable}`). NO instruction
+# scan, NO name-derived routing — the slot index + return shape are read from
+# the typed request; this only SPELLS the C. Mirrors emit_box_method_wrappers.
+String emit_trait_dispatch_thunks(LirModule &m):
+    String out = ""
+    for req in m.trait_dispatch_requests:
+        # `box_sym` is the symbol the CALL site names (`Box__<Trait>__<method>`);
+        # `box_c` is the fat struct's C TYPE name (`__gg_Box__<Trait>`, since the
+        # trait box is a real emitted struct, not a `typedef void*` alias).
+        String box_sym = "Box__" + req.trait_name
+        String box_c = "__gg_Box__" + req.trait_name
+        String vtable_c = "__gg_" + req.trait_name + "_VTable"
+        String slot = "slot" + int_to_str(req.method_idx)
+        # Fat trait box passed BY VALUE (its C typedef is the real 16-byte
+        # `struct __gg_Box__<Trait> {data, vtable}`). The dispatch:
+        #   vtable = self.vtable ; fnp = ((VTable*)vtable)->slot<idx>
+        #   data   = self.data   ; fnp(data)
+        # KEYSTONE: the void `greet(self)` method's call site is typed to
+        # assign an i64 dummy (the self-host GIR types the trait-method
+        # extern's return as i64), so the thunk returns int64_t and returns 0
+        # after the void indirect call — the dummy result is discarded.
+        # (Return-type accuracy — a void thunk for a void method + non-void
+        # shapes — is the next increment; see the `print_trait_object` fixture.)
+        String fnptr_cast = "void(*)(void*)"
+        String call_c = "((" + fnptr_cast + ")((" + vtable_c + "*)self.vtable)->" + slot + ")(self.data);"
+        out = out + "int64_t " + box_sym + "__" + req.method + "(" + box_c + " self) { " + call_c + " return 0; }\n"
     if out != "":
         out = out + "\n"
     return out
@@ -7730,6 +7771,9 @@ String generate_c(LirModule &m):
     # `s.get()`/`s.at(i)`/`s.set_at(i,v)`/`s.slen()` inline wrappers for explicit
     # Shared[T] accessors (no bare `gorget_shared_<method>` runtime symbol).
     out = out + emit_shared_method_wrappers(&m)
+    # `Box__<Trait>__<method>` trait-object dispatch thunks (no user/runtime
+    # symbol — the thunk IS the vtable-indirect-call dispatch target).
+    out = out + emit_trait_dispatch_thunks(&m)
 
     out = out + body
     return out
