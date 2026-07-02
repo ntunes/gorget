@@ -25569,6 +25569,71 @@ done",
     );
 }
 
+/// CoW G1 memory-safety gate (round-33 re-review, CLASS fix): a 2-level index +
+/// field-ASSIGN (`m[i][j].field = x`) + same-collection loop push. lower_expr(
+/// m[i][j]) mints TWO transient element handles; the a84e66bb fix untracked only
+/// the outermost, leaving the intermediate dangling → heap-UAF. The whole
+/// projection chain is now untracked. MUST be ASan-clean both backends.
+#[test]
+fn cow_multilevel_index_field_assign() {
+    run_gg(
+        "cow_multilevel_index_field_assign.gg",
+        "\
+7
+X
+1
+orig
+done",
+    );
+}
+
+/// CoW G1 memory-safety gate (round-33): 2-level index + field-ASSIGN under a
+/// FIELD-PATH root (`s.grid[i][j].field = x`), loop mutating `s.grid`. The
+/// intermediate handle is FieldPath("s.grid"); the chain untrack must cover it.
+#[test]
+fn cow_multilevel_fieldpath_root() {
+    run_gg(
+        "cow_multilevel_fieldpath_root.gg",
+        "\
+7
+X
+1
+orig
+done",
+    );
+}
+
+/// CoW G1 memory-safety gate (round-33): a 3-level index + field-ASSIGN
+/// (`m[i][j][k].field = x`) — three transient handles, all untracked.
+#[test]
+fn cow_multilevel_3level_index_field() {
+    run_gg(
+        "cow_multilevel_3level_index_field.gg",
+        "\
+7
+X
+1
+orig
+done",
+    );
+}
+
+/// CoW G1 memory-safety gate (round-33): a TRIPLE plain index-ASSIGN
+/// (`m[i][j][k] = x`, lower_index_assign path) + loop push. Class fix for the
+/// index-assign sibling.
+#[test]
+fn cow_multilevel_triple_index_assign() {
+    run_gg(
+        "cow_multilevel_triple_index_assign.gg",
+        "\
+7
+99
+1
+1
+done",
+    );
+}
+
 #[test]
 fn cow_set_string_clone() {
     run_gg(

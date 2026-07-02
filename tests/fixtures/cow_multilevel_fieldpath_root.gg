@@ -1,0 +1,28 @@
+# CoW G1 memory-safety gate (round-33): a 2-level index + field-ASSIGN under a
+# FIELD-PATH root (`s.grid[i][j].field = x`) with the loop mutating the field
+# collection (`s.grid.push()`). The intermediate handle is tagged FieldPath
+# ("s.grid"); it must be untracked so cow_before_field_mutation doesn't clone a
+# dangling ref after the root struct materializes.
+from std.collections import Vector
+
+struct Res:
+    String name
+
+struct S:
+    Vector[Vector[Res]] grid
+
+void f(S s):
+    s.grid[0][0].name = "X"
+    int i = 0
+    while i < 6:
+        s.grid.push([Res("z")])
+        i = i + 1
+    print(s.grid.len())          # 7
+    print(s.grid[0][0].name)     # X
+
+void main():
+    S a = S([[Res("orig")]])
+    f(a)
+    print(a.grid.len())          # 1  (caller untouched)
+    print(a.grid[0][0].name)     # orig
+    print("done")

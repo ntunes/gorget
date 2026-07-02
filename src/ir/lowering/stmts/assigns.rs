@@ -645,6 +645,16 @@ pub(super) fn lower_field_assign(
     // Fallback: lower_expr on object (may copy intermediate structs)
     // For unique-borrow params (& or !), use the pointer local directly
     // instead of lower_expr which would copy the deref'd value to a temp
+    //
+    // CoW UAF fix (round-33, class fix): snapshot the local range spanned by the
+    // store-target object's projection-chain lowering. A projected object
+    // (`v[i].field = x`, `m[i][j].field = x`) mints a transient
+    // CollectionElement/FieldPath handle for EACH index-load level (`m[i]` → h1,
+    // `m[i][j]` → h2); ALL of them are store-location handles, dead after this
+    // statement, and must be untracked before a later same-collection mutation
+    // reallocates the private copy the G1 root-materialize created — see
+    // `untrack_transient_element_refs_in_range`.
+    let obj_locals_start = builder.locals.len();
     let obj = if let Expr::Identifier(name) = &object.node {
         if let Some((local_id, _)) = ctx.lookup_local(name) {
             if ctx.is_param_borrow_unique(builder, local_id) {
@@ -665,17 +675,16 @@ pub(super) fn lower_field_assign(
     } else {
         lower_expr(ctx, builder, object)
     };
+    let obj_locals_end = builder.locals.len();
     let mut rhs = lower_expr(ctx, builder, value);
     clone_ptr_rhs_if_needed(ctx, builder, &mut rhs, value);
 
-    // CoW UAF fix (round-33): when the object is projected (`v[i].field = x`),
-    // `obj` above is a TRANSIENT index/field-store handle that
-    // `lower_index_access` tagged as a live CollectionElement/FieldPath borrow
-    // into the base. It is the store LOCATION, dead after this statement — not a
-    // live borrow. Untrack it so a later same-collection mutation can't clone a
-    // handle whose buffer it has reallocated (heap-UAF). The store below uses
-    // the Place, not the ownership tag, so this is store-neutral.
-    ctx.untrack_projected_store_target(builder, &obj);
+    // Untrack the WHOLE projection chain's transient element/field-path handles
+    // (not just the outermost operand — that was the a84e66bb gap that left
+    // multi-level `m[i][j].field = x` intermediates dangling → heap-UAF).
+    // Bounded to the object's own lowering range so the RHS's borrows are left
+    // intact. Store-neutral: the store uses the Place, not the ownership tag.
+    ctx.untrack_transient_element_refs_in_range(builder, obj_locals_start, obj_locals_end);
 
     if let Operand::Copy(ref place) | Operand::Move(ref place) = obj {
         let local_idx = place.local.0 as usize;
@@ -926,6 +935,13 @@ pub(super) fn lower_index_assign(
     // When the object is a struct field access (e.g. self.dict_field[key] = val),
     // resolve the field to a Place in-place to avoid copying the Dict struct.
     // This ensures hash table resizes and metadata updates propagate to the original.
+    //
+    // CoW UAF fix (round-33, class fix): snapshot the object's projection-chain
+    // local range. A projected object (`m[i][j] = x`, `m[i][j][k] = x`) lowers
+    // `m[i]` → h1, `m[i][j]` → h2, … — EACH a transient CollectionElement/
+    // FieldPath store-location handle, all dead after this statement. (Sibling
+    // of lower_field_assign; the a84e66bb fix untracked only the outermost.)
+    let obj_locals_start = builder.locals.len();
     let (obj, resolved_field_type) = if let Expr::FieldAccess { object: inner_obj, field } = &object.node {
         if let Some((field_place, field_type)) = try_resolve_field_place(ctx, builder, inner_obj, &field.node) {
             (Operand::Copy(field_place), Some(field_type))
@@ -935,13 +951,12 @@ pub(super) fn lower_index_assign(
     } else {
         (lower_expr(ctx, builder, object), None)
     };
-    // CoW UAF fix (round-33): a projected object (`m[i][j] = x`) lowers `m[i]`
-    // to a TRANSIENT element handle tagged as a live CollectionElement borrow
-    // into the base. It is the store LOCATION, dead after this statement — untrack
-    // it so a later same-collection mutation can't clone a handle whose buffer it
-    // reallocated (heap-UAF). Store-neutral: the `__set` call borrows the Place,
-    // never reads the ownership tag. (Sibling of lower_field_assign.)
-    ctx.untrack_projected_store_target(builder, &obj);
+    let obj_locals_end = builder.locals.len();
+    // Untrack the WHOLE projection chain (not just the outermost operand) so a
+    // later same-collection mutation can't clone a dangling intermediate handle
+    // (heap-UAF at depth >= 2). Store-neutral: the `__set` call borrows the
+    // Place, never reads the ownership tag.
+    ctx.untrack_transient_element_refs_in_range(builder, obj_locals_start, obj_locals_end);
     let idx = lower_expr(ctx, builder, index);
 
     // Determine the receiver type to dispatch correctly.

@@ -2345,48 +2345,58 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
-    /// A projected-store TARGET handle (`v[i].field = x` / `m[i][j] = x` →
-    /// `lower_expr(v[i])` → the `gorget_array_get` element handle that
-    /// `lower_index_access` tags as a live `CollectionElement`/`FieldPath` borrow
-    /// into the base) is TRANSIENT: it exists only to name the store location and
-    /// is DEAD once the assign statement completes — it is NOT a live borrow that
-    /// outlives the statement. Leaving it CoW-tracked lets a later same-collection
-    /// mutation (`v.push()` in a loop) hit `cow_before_mutation` Case 3 ("clone
-    /// each ref into the collection"); the first push reallocates the buffer, so
-    /// the cloned handle dangles → heap-use-after-free (both backends). This is
-    /// harmless without the G1 projected-root materialize (the collection stays a
-    /// bare-param borrow, so the push re-materializes into a NEW buffer and the
-    /// handle keeps pointing into the untouched original) — but once the store
-    /// materializes the root into an owned copy, the handle points into that copy
-    /// and the copy's own realloc frees under it. Reset the handle to Untracked
-    /// after the store so Case 3 cannot find it. Mirrors `restore_locals`, which
-    /// drops the identical `CollectionElement`/`FieldPath` states for scope-local
-    /// handles leaving their scope. No-op unless the operand names an element/
-    /// field-path borrow local (leaves owned/aliased/other operands untouched).
-    pub fn untrack_projected_store_target(
+    /// Untrack EVERY transient element/field-path borrow handle minted in the
+    /// local range `[start, end)` — the handles `lower_expr` creates while
+    /// lowering a PROJECTED store-target object (`v[i].field = x`,
+    /// `m[i][j][k] = x`, `s.grid[i][j].field = x`).
+    ///
+    /// Each such handle is TRANSIENT: it exists only to name the store LOCATION
+    /// and is DEAD once the assign statement completes — NOT a live borrow that
+    /// outlives the statement. `lower_index_access` tags EVERY index-load in a
+    /// multi-level chain as a live `CollectionElement`/`FieldPath` borrow into
+    /// its base (`m[i]` → h1 into `m`; `m[i][j]` → h2 into h1). Leaving ANY of
+    /// them CoW-tracked lets a later same-collection mutation (`m.push()` in a
+    /// loop) hit `cow_before_mutation` Case 3 ("clone each ref into the
+    /// collection"); once the G1 projected-root materialize has replaced the
+    /// collection with a private owned copy, the first push reallocates that
+    /// copy's buffer and the cloned handle dangles → heap-use-after-free (both
+    /// backends). Resetting only the OUTERMOST operand (the pre-a84e66bb fix)
+    /// closed depth-1 but left the INTERMEDIATE handles dangling at depth >= 2;
+    /// this closes the whole class (Core #4) by resetting the ENTIRE chain.
+    ///
+    /// Range-safe: the projected-store branch always lowers a NON-identifier
+    /// object, so every handle minted in `[start, end)` is an anonymous transient
+    /// index-load dst (`add_local(_, None)` — no name hint). The
+    /// `local_name(..).is_none()` guard additionally spares any (hypothetical)
+    /// NAMED binding in range as defense in depth (a named binding always carries
+    /// a name hint). Bounded to the object's OWN lowering range so a later
+    /// `lower_expr(value)` / `lower_expr(index)` borrow is untouched. Mirrors
+    /// `restore_locals`, which drops the identical states for scope-local
+    /// handles. Store-neutral (the store uses the Place, not the ownership tag).
+    pub fn untrack_transient_element_refs_in_range(
         &mut self,
         builder: &mut crate::ir::builder::FunctionBuilder,
-        obj: &Operand,
+        start: usize,
+        end: usize,
     ) {
         use crate::ir::{LocalOwnership, BorrowOrigin};
-        let place = match obj {
-            Operand::Copy(p) | Operand::Move(p) => p,
-            _ => return,
-        };
-        if !place.projections.is_empty() { return; }
-        let idx = place.local.0 as usize;
-        if idx >= builder.locals.len() { return; }
-        let is_transient_elem_ref = matches!(
-            &builder.locals[idx].ownership,
-            LocalOwnership::Borrowed {
-                origin: BorrowOrigin::CollectionElement(_)
-                      | BorrowOrigin::FieldPath(_)
-                      | BorrowOrigin::CowBorrowPending,
-                ..
+        let end = end.min(builder.locals.len());
+        for idx in start..end {
+            let local = crate::ir::types::LocalId(idx as u32);
+            let is_transient = matches!(
+                &builder.locals[idx].ownership,
+                LocalOwnership::Borrowed {
+                    origin: BorrowOrigin::CollectionElement(_)
+                          | BorrowOrigin::FieldPath(_)
+                          | BorrowOrigin::CowBorrowPending,
+                    ..
+                }
+            );
+            // Skip any handle that carries a name hint — an anonymous transient
+            // (the shape lower_index_access mints) never does.
+            if is_transient && builder.local_name(local).is_none() {
+                builder.locals[idx].ownership = LocalOwnership::default();
             }
-        );
-        if is_transient_elem_ref {
-            builder.locals[idx].ownership = LocalOwnership::default();
         }
     }
 

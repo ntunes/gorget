@@ -1,0 +1,26 @@
+# CoW G1 memory-safety gate (round-33 re-review, class fix): a 2-LEVEL index +
+# field-ASSIGN (`m[i][j].field = x`) materializes the bare-param root, then a
+# same-collection push in a loop. lower_expr(m[i][j]) mints TWO transient
+# element handles (m[i]→h1, m[i][j]→h2); resetting only the outermost (h2) left
+# h1 (CollectionElement into the private copy) dangling → heap-UAF at the push.
+# The whole chain must be untracked.
+from std.collections import Vector
+
+struct Res:
+    String name
+
+void f(Vector[Vector[Res]] m):
+    m[0][0].name = "X"
+    int i = 0
+    while i < 6:
+        m.push([Res("z")])
+        i = i + 1
+    print(m.len())               # 7  (1 original + 6 pushed onto the private copy)
+    print(m[0][0].name)          # X
+
+void main():
+    Vector[Vector[Res]] a = [[Res("orig")]]
+    f(a)
+    print(a.len())               # 1  (caller untouched)
+    print(a[0][0].name)          # orig
+    print("done")
