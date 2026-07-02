@@ -1,0 +1,19 @@
+# CoW G1 field-path (commit 2) — a mutating METHOD on `param.field` through a
+# bare parameter materializes the immutable-in-context ROOT struct; the caller's
+# resource field is untouched. RESOURCE field (Vector) so the pre-fix
+# write-through is observable. Pre-fix: prints 3 (push reached the caller).
+from std.collections import Vector
+
+struct Holder:
+    Vector[int] nums
+
+void sneak(Holder h):
+    h.nums.push(99)              # h.nums.push()  (field-path method, bare param)
+
+void main():
+    Holder x = Holder(Vector[int]())
+    x.nums.push(1)
+    x.nums.push(2)
+    sneak(x)
+    print(x.nums.len())         # 2  (caller untouched)
+    print("done")

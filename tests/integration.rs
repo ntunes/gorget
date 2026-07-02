@@ -25467,6 +25467,66 @@ done",
     );
 }
 
+/// CoW G1 field-path (round-33 materialize track, commit 2) — a mutating
+/// METHOD on `param.field` through a bare parameter materializes the
+/// immutable-in-context ROOT struct; the caller's RESOURCE field is untouched.
+/// THE hard gate: pre-fix `h.nums.push(99)` wrote through the caller (printed
+/// 3). The field borrow re-resolves against the rebound root via the relocated
+/// `field_place_info` (exprs/methods.rs).
+#[test]
+fn cow_fieldpath_method_caller_untouched() {
+    run_gg(
+        "cow_fieldpath_method_caller_untouched.gg",
+        "\
+2
+done",
+    );
+}
+
+/// CoW G1 nested field-path ASSIGN (commit 2, pass-2 R2) — `o.inner.field = x`
+/// through a bare parameter with a RESOURCE-CONTAINING intermediate `Inner`
+/// (so `Outer` is shared, not copied, and the write-through manifests). The
+/// projected-root arm must materialize `o` even though the field-path arm also
+/// matches (extract_field_path_string returns Some). Pre-fix printed 99.
+#[test]
+fn cow_fieldpath_nested_assign_caller_untouched() {
+    run_gg(
+        "cow_fieldpath_nested_assign_caller_untouched.gg",
+        "\
+1
+1
+done",
+    );
+}
+
+/// CoW G1 field-path (commit 2): a `&` (mutable-borrow) param write-through is
+/// PRESERVED — the root materialize is a no-op on a unique-borrow root, so the
+/// field-path push reaches the caller's collection (unchanged vs baseline).
+#[test]
+fn cow_fieldpath_mut_writethrough() {
+    run_gg(
+        "cow_fieldpath_mut_writethrough.gg",
+        "\
+3
+done",
+    );
+}
+
+/// CoW G1 field-path double-fire compose (commit 2, pass-1 R3): a field-path
+/// METHOD receiver triggers BOTH the new decide-at-root materialize AND the
+/// existing cow_before_field_mutation — verify they compose (bare materializes
+/// once → caller untouched; `&` writes through). Pre-fix both printed 2.
+#[test]
+fn cow_fieldpath_double_fire() {
+    run_gg(
+        "cow_fieldpath_double_fire.gg",
+        "\
+1
+2
+done",
+    );
+}
+
 #[test]
 fn cow_set_string_clone() {
     run_gg(

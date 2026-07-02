@@ -1,0 +1,26 @@
+# CoW G1 field-path double-fire compose (commit 2, pass-1 R3): a field-path
+# METHOD receiver (`s.field.push(x)`) triggers BOTH the new decide-at-root
+# materialize AND the existing cow_before_field_mutation. Verify they compose:
+# bare `s` materializes once (caller untouched); `&s` writes through (unchanged).
+from std.collections import Vector
+
+struct S:
+    Vector[int] field
+
+void by_val(S s):
+    s.field.push(99)            # bare → materialize root once
+
+void by_ref(S &s):
+    s.field.push(99)            # & → write-through, no materialize
+
+void main():
+    S a = S(Vector[int]())
+    a.field.push(1)
+    by_val(a)
+    print(a.field.len())        # 1  (caller untouched)
+
+    S b = S(Vector[int]())
+    b.field.push(1)
+    by_ref(&b)
+    print(b.field.len())        # 2  (caller sees it)
+    print("done")

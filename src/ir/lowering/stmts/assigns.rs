@@ -597,22 +597,31 @@ pub(super) fn lower_field_assign(
 ) {
     use crate::ir::types::TypeDefKind;
 
-    // CoW: field write mutates the object. Sever aliases before proceeding.
+    // CoW: a field write mutates the object. Materialize the immutable-in-context
+    // ROOT (decide-at-root, Core #1/#4) so the write lands on an owned copy; a
+    // no-op on `&`/owned roots keeps `&`-chain write-through. The subsequent
+    // `try_resolve_field_place` re-resolves against the rebound owned local.
     if let Expr::Identifier(obj_name) = &object.node {
+        // Direct `s.field = x`: the root IS the object.
         if let Some((local_id, _)) = ctx.lookup_local(obj_name) {
             ctx.cow_before_mutation(builder, local_id, object.span);
         }
-    } else if let Some(field_path) = extract_field_path_string(&object.node) {
-        ctx.cow_before_field_mutation(builder, &field_path, object.span);
-    } else if let Some(root_local) =
-        resolve_projection_root_local(ctx, &object.node)
-    {
-        // G1 PROTOTYPE: projected object (`v[0].name = x`) — the store writes
-        // through a pointer into the projection root. Materialize the
-        // immutable-in-context root so the write lands on an owned copy; the
-        // subsequent `try_resolve_field_place` re-resolves against the rebound
-        // owned local. cow_before_mutation is a no-op on unique/owned roots.
-        ctx.cow_before_mutation(builder, root_local, object.span);
+    } else {
+        // Projected object (`v[i].field = x`, `s.inner.field = x`): materialize
+        // the ROOT struct/collection FIRST. `cow_before_field_mutation` alone
+        // (the pre-G1 field-path shape) severs only collection refs INTO the
+        // path, never the root — so `s.inner.field = x` on a bare `s` wrote
+        // through the caller's buffer AND short-circuited the root materialize
+        // (extract_field_path_string returns Some, matching the old field-path
+        // arm before the projected-root arm). Materialize the root, THEN sever
+        // path refs (still needed on the `&`-root no-op path). No double-clone —
+        // the two touch disjoint state (the root local vs the FieldPath refs).
+        if let Some(root_local) = resolve_projection_root_local(ctx, &object.node) {
+            ctx.cow_before_mutation(builder, root_local, object.span);
+        }
+        if let Some(field_path) = extract_field_path_string(&object.node) {
+            ctx.cow_before_field_mutation(builder, &field_path, object.span);
+        }
     }
 
     // Try to resolve the full field projection chain without materializing
@@ -853,19 +862,26 @@ pub(super) fn lower_index_assign(
     index: &Spanned<Expr>,
     value: &Spanned<Expr>,
 ) {
-    // CoW: index write mutates the object. Sever aliases before proceeding.
+    // CoW: an index write mutates the object. Materialize the immutable-in-context
+    // ROOT (decide-at-root, Core #1/#4); a no-op on `&`/owned roots keeps
+    // `&`-chain write-through. Mirrors lower_field_assign — see the rationale
+    // there for the root-first-then-field-path-sever ordering.
     if let Expr::Identifier(obj_name) = &object.node {
+        // Direct `d[k] = x`: the root IS the object.
         if let Some((local_id, _)) = ctx.lookup_local(obj_name) {
             ctx.cow_before_mutation(builder, local_id, object.span);
         }
-    } else if let Some(field_path) = extract_field_path_string(&object.node) {
-        ctx.cow_before_field_mutation(builder, &field_path, object.span);
-    } else if let Some(root_local) =
-        resolve_projection_root_local(ctx, &object.node)
-    {
-        // G1 PROTOTYPE: nested projected object (`m[i][j] = x`) — materialize
-        // the immutable-in-context root before the write (see lower_field_assign).
-        ctx.cow_before_mutation(builder, root_local, object.span);
+    } else {
+        // Projected object (`m[i][j] = x`, `s.inner[k] = x`): materialize the
+        // ROOT collection/struct first, then sever any collection refs INTO the
+        // field path (the latter only fires for a field-path object, and stays
+        // needed on the `&`-root no-op path).
+        if let Some(root_local) = resolve_projection_root_local(ctx, &object.node) {
+            ctx.cow_before_mutation(builder, root_local, object.span);
+        }
+        if let Some(field_path) = extract_field_path_string(&object.node) {
+            ctx.cow_before_field_mutation(builder, &field_path, object.span);
+        }
     }
 
     // When the object is a struct field access (e.g. self.dict_field[key] = val),

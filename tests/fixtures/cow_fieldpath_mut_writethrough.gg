@@ -1,0 +1,19 @@
+# CoW G1 field-path (commit 2): a `&` (mutable-borrow) param write-through is
+# PRESERVED — the root materialize is a no-op on a unique-borrow root, so the
+# field-path push reaches the caller's collection. Clone count unchanged vs
+# baseline for this shape (the & path never materializes).
+from std.collections import Vector
+
+struct Holder:
+    Vector[int] nums
+
+void mutate(Holder &h):
+    h.nums.push(99)
+
+void main():
+    Holder x = Holder(Vector[int]())
+    x.nums.push(1)
+    x.nums.push(2)
+    mutate(&x)
+    print(x.nums.len())         # 3  (caller SEES it)
+    print("done")

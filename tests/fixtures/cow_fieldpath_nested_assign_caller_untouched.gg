@@ -1,0 +1,27 @@
+# CoW G1 nested field-path ASSIGN (commit 2, pass-2 R2) — `o.inner.field = x`
+# through a bare parameter. The intermediate `Inner` is RESOURCE-CONTAINING
+# (`Vector[int] data`), so `Outer` is shared (borrowed, not copied) on the call
+# and the pre-fix write-through reaches the caller (pass-3 R1: a pure-scalar
+# Inner would be copied and pass trivially). Materialize the ROOT `o` first.
+# Pre-fix: prints 99 (assign short-circuited the projected-root arm via the
+# field-path arm and wrote through). Post-fix: 1.
+from std.collections import Vector
+
+struct Inner:
+    int val
+    Vector[int] data
+
+struct Outer:
+    Inner inner
+
+void sneak(Outer o):
+    o.inner.val = 99            # nested field-path assign, bare param
+
+void main():
+    Vector[int] d = Vector[int]()
+    d.push(7)
+    Outer x = Outer(Inner(1, !d))
+    sneak(x)
+    print(x.inner.val)         # 1  (caller untouched)
+    print(x.inner.data.len())  # 1  (resource intermediate intact)
+    print("done")

@@ -479,13 +479,13 @@ pub(super) fn lower_method_call(
         }
     }
 
-    // Before lowering the receiver expression, check if it's a field access that
-    // we may need to borrow in-place (e.g., self.values.push(x) should not copy values).
-    let field_place_info = if let Expr::FieldAccess { object, field } = &receiver.node {
-        try_resolve_field_place(ctx, builder, object, &field.node)
-    } else {
-        None
-    };
+    // `field_place_info` (the in-place field-borrow for `self.values.push(x)`)
+    // is computed AFTER the CoW mutation blocks below — a projected-root
+    // materialize (`h.nums.push()` on a bare `h`) rebinds `h`'s name to a fresh
+    // owned local, and the field borrow must re-resolve against THAT rebound
+    // local (mirrors stmts/assigns.rs:lower_field_assign, which calls
+    // try_resolve_field_place after cow_before_field_mutation). See the
+    // relocated computation just before `field_is_borrow_ptr`.
 
     // Extract field path string for CowBorrow provenance on field-access receivers.
     let field_path_for_cow: Option<String> = extract_field_path_string(&receiver.node);
@@ -1831,20 +1831,29 @@ pub(super) fn lower_method_call(
             .map(|&p| matches!(ctx.type_registry.get(p), Some(GirType::MutPtr(_))))
             .unwrap_or(false);
 
-        // CoW G1 PROTOTYPE: a PROJECTED receiver (`v[0].set_name(x)`,
-        // `v.f.mutate()`) writes through a pointer into the projection root.
-        // Materialize the immutable-in-context root before the call so the
-        // mutation lands on an owned copy, then re-lower the receiver against
-        // the rebound owned local. cow_before_mutation is a no-op on
-        // unique/owned roots, so `&`-chain write-through is preserved.
-        // Only for INDEX-containing projections (`v[i].method()`): pure
-        // field-access chains (`obj.field.method()`) are a valid field path,
-        // already handled by `cow_before_field_mutation` (field_path_for_cow)
-        // below — materializing the whole root struct here would be a
-        // redundant deep clone.
+        // CoW G1 — full lazy copy-on-write, decide-at-root: a PROJECTED
+        // mutating receiver (`v[i].method()`, `obj.field.method()`,
+        // `v[i].inner.method()`) writes through a pointer into the projection
+        // ROOT. Materialize the immutable-in-context root before the call so
+        // the mutation lands on an owned copy; the receiver is then rebuilt
+        // against the rebound owned local (index case: re-lower `recv`;
+        // field-path case: the relocated `field_place_info` below re-resolves
+        // by NAME). cow_before_mutation is a no-op on unique/owned roots
+        // (`&self`/`&` chain, already-owned), so write-through along an
+        // unbroken `&` chain is preserved.
+        //
+        // This fires for BOTH index-projected AND pure field-path receivers
+        // (Core #1/#4 — one uniform trigger on the root's immutability, not a
+        // per-shape provenance tag). The OLD framing — "field-access chains
+        // are already handled by cow_before_field_mutation, materializing the
+        // root here is redundant" — was FALSE: `cow_before_field_mutation`
+        // only materializes collection refs INTO the field path
+        // (context.rs:cow_before_field_mutation), never the ROOT struct, so
+        // the field-path case wrote through the caller's buffer until this
+        // gate was removed. `field_place_info` is recomputed AFTER these CoW
+        // blocks so the field borrow re-resolves against the rebound root.
         if needs_mut
             && !matches!(&receiver.node, Expr::Identifier(_))
-            && field_path_for_cow.is_none()
         {
             if let Some(root_local) = resolve_projection_root_local(ctx, &receiver.node) {
                 // Snapshot the root's name→local binding; cow_before_mutation
@@ -1859,7 +1868,17 @@ pub(super) fn lower_method_call(
                 ctx.cow_before_mutation(builder, root_local, receiver.span);
                 let after = root_name.as_deref()
                     .and_then(|n| ctx.lookup_local(n).map(|(l, _)| l));
-                if before != after {
+                // Re-lower `recv` ONLY for an INDEX-projected receiver
+                // (`v[i].method()`) — there `recv` IS the self-arg the call
+                // uses, and it must re-read the element out of the rebound
+                // owned root. A pure FIELD-PATH receiver (`h.f.method()`,
+                // field_path_for_cow=Some) instead builds its self-arg from the
+                // relocated `field_place_info` below (which re-resolves against
+                // the rebound root by name); re-lowering `recv` here would be a
+                // DEAD field read that still CLONES the resource field — the
+                // spurious +120K self-host clone the index-only prototype
+                // avoided by gating field-path out of this block entirely.
+                if before != after && field_path_for_cow.is_none() {
                     recv = lower_expr(ctx, builder, receiver);
                 }
             }
@@ -1947,6 +1966,23 @@ pub(super) fn lower_method_call(
         if ctx.builtin_returns_view(&type_name, method_name) {
             ctx.materialize_lazy_source_if_needed(builder, &recv, receiver.span);
         }
+
+        // Relocated field-borrow resolution (from the top of this fn). Computed
+        // HERE, after the CoW mutation blocks, so that when a projected-root
+        // materialize above rebound the receiver's root local (`h.nums.push()`
+        // on a bare `h` → `h` is now a fresh owned copy), the field borrow
+        // re-resolves against THAT rebound local via ctx.lookup_local inside
+        // try_resolve_field_place — the field-store lands on the copy, not the
+        // un-materialized original (which would both write through the caller's
+        // buffer AND waste the materialize clone). On an `&`/owned root the
+        // materialize was a no-op, so this resolves to the same place as before
+        // — write-through preserved. Mirrors stmts/assigns.rs:lower_field_assign,
+        // which resolves the field place AFTER cow_before_field_mutation.
+        let field_place_info = if let Expr::FieldAccess { object, field } = &receiver.node {
+            try_resolve_field_place(ctx, builder, object, &field.node)
+        } else {
+            None
+        };
 
         // If receiver is a field access, borrow the field in-place instead of
         // borrowing a copy (which would mutate the copy, not the original).

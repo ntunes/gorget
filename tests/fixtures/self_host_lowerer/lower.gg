@@ -2427,7 +2427,7 @@ bool is_builtin_collection_base(String name):
         return true
     return false
 
-GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String, String] call_redirects, Dict[String, bool] imported_fns):
+GirModule lower_module(Module &m, ScopeTable scopes, TypeTable types, Dict[String, String] call_redirects, Dict[String, bool] imported_fns):
     Vector[GirType] type_table = init_type_table()
 
     # Inject the compiler-internal `Fault` enum (error-model.md §11) as a

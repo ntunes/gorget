@@ -438,7 +438,7 @@ void compile_main():
     if has_errors(ctx.diagnostics):
         report_diagnostics(ctx.diagnostics, source, path)
         exit(1)
-    GirModule gir = lower_module(m, scopes, types, call_redirects, imported_fns)
+    GirModule gir = lower_module(&m, scopes, types, call_redirects, imported_fns)
     _t1 = time_ms()
     if _timing: print("PHASE lower_module(GIR) " + int_to_str(_t1 - _tp) + " ms", file=stderr)
     _tp = _t1
@@ -678,7 +678,7 @@ void run_build_mode(Vector[String] cmd_args, bool do_run):
     if has_errors(ctx.diagnostics):
         report_diagnostics(ctx.diagnostics, source, input_path)
         exit(1)
-    GirModule gir = lower_module(m, scopes, types, call_redirects, imported_fns)
+    GirModule gir = lower_module(&m, scopes, types, call_redirects, imported_fns)
     validate_gir_after("gir-lowering", &gir)
     run_validators(&gir)
     # --emit-gir: dump GIR text and stop before LIR lowering (mirrors the legacy
