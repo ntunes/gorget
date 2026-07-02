@@ -1,0 +1,31 @@
+# CoW G1a nested projection: `m[i][j] = x` (object = m[i], an Index) and
+# `v[i].inner.method()` (receiver = v[i].inner, a FieldAccess rooted at an
+# Index) both walk to the bare-param root and materialize it.
+from std.collections import Vector
+
+struct Res:
+    String name
+
+equip Res:
+    void set_name(&self, String n):
+        self.name = n
+
+struct Wrap:
+    Res inner
+
+void poke_matrix(Vector[Vector[int]] m):
+    m[0][1] = 99                # nested index assign
+
+void poke_field_method(Vector[Wrap] v):
+    v[0].inner.set_name("X")   # field-of-index receiver
+
+void main():
+    Vector[Vector[int]] m = [[1, 2], [3, 4]]
+    poke_matrix(m)
+    print(m[0][1])             # 2  (caller untouched)
+
+    Vector[Wrap] v = Vector[Wrap]()
+    v.push(Wrap(Res("orig")))
+    poke_field_method(v)
+    print(v[0].inner.name)     # orig  (caller untouched)
+    print("done")

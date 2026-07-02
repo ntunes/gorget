@@ -1,0 +1,17 @@
+# CoW G1a per-alias independence: two bare aliases of the same collection;
+# an index-projected write to one materializes ONLY that alias's copy.
+from std.collections import Vector
+
+struct Res:
+    String name
+
+void main():
+    Vector[Res] t = Vector[Res]()
+    t.push(Res("orig"))
+    auto a = t
+    auto b = t
+    a[0].name = "X"              # materializes a's own copy
+    print(a[0].name)            # X
+    print(b[0].name)            # orig
+    print(t[0].name)            # orig
+    print("done")

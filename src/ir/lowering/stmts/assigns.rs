@@ -14,7 +14,7 @@ use super::super::exprs::{
     atomic_type_name_for, emit_atomic_load, emit_atomic_store,
     emit_rwlock_write_get, emit_rwlock_write_set, emit_rwlock_write_finish,
     try_resolve_field_place, materialize_global_field_base, extract_field_path_string,
-    infer_collection_element_type,
+    infer_collection_element_type, resolve_projection_root_local,
 };
 
 /// Lower an assignment.
@@ -604,6 +604,15 @@ pub(super) fn lower_field_assign(
         }
     } else if let Some(field_path) = extract_field_path_string(&object.node) {
         ctx.cow_before_field_mutation(builder, &field_path, object.span);
+    } else if let Some(root_local) =
+        resolve_projection_root_local(ctx, &object.node)
+    {
+        // G1 PROTOTYPE: projected object (`v[0].name = x`) — the store writes
+        // through a pointer into the projection root. Materialize the
+        // immutable-in-context root so the write lands on an owned copy; the
+        // subsequent `try_resolve_field_place` re-resolves against the rebound
+        // owned local. cow_before_mutation is a no-op on unique/owned roots.
+        ctx.cow_before_mutation(builder, root_local, object.span);
     }
 
     // Try to resolve the full field projection chain without materializing
@@ -851,6 +860,12 @@ pub(super) fn lower_index_assign(
         }
     } else if let Some(field_path) = extract_field_path_string(&object.node) {
         ctx.cow_before_field_mutation(builder, &field_path, object.span);
+    } else if let Some(root_local) =
+        resolve_projection_root_local(ctx, &object.node)
+    {
+        // G1 PROTOTYPE: nested projected object (`m[i][j] = x`) — materialize
+        // the immutable-in-context root before the write (see lower_field_assign).
+        ctx.cow_before_mutation(builder, root_local, object.span);
     }
 
     // When the object is a struct field access (e.g. self.dict_field[key] = val),

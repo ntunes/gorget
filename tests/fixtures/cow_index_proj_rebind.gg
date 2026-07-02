@@ -1,0 +1,18 @@
+# CoW G1a local rebind: after an index-projected write materializes the
+# bare param, a later read in the SAME fn sees the copy ("X"); the caller
+# still sees the original.
+from std.collections import Vector
+
+struct Res:
+    String name
+
+void poke(Vector[Res] v):
+    v[0].name = "X"
+    print(v[0].name)            # X  (in-fn reads the materialized copy)
+
+void main():
+    Vector[Res] t = Vector[Res]()
+    t.push(Res("orig"))
+    poke(t)
+    print(t[0].name)            # orig  (caller untouched)
+    print("done")

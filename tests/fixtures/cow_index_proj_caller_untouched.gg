@@ -1,0 +1,37 @@
+# CoW G1a — INDEX-projected mutation through a bare parameter materializes
+# the immutable-in-context root; the caller's collection is untouched.
+# Pre-fix these WROTE THROUGH: field-assign printed "HACKED", method "METHOD".
+from std.collections import Vector
+
+struct Res:
+    String name
+
+equip Res:
+    void set_name(&self, String n):
+        self.name = n
+
+void sneaky_assign(Vector[Res] v):
+    v[0].name = "HACKED"          # v[0].field = x  (object = Index → new arm)
+
+void sneaky_method(Vector[Res] v):
+    v[0].set_name("METHOD")       # v[0].method()  (receiver = Index → new block)
+
+void sneaky_replace(Vector[Res] v):
+    v[0] = Res("REPLACED")        # v[0] = x  (object = Identifier → existing path)
+
+void main():
+    Vector[Res] a = Vector[Res]()
+    a.push(Res("original"))
+    sneaky_assign(a)
+    print(a[0].name)              # original
+
+    Vector[Res] b = Vector[Res]()
+    b.push(Res("original"))
+    sneaky_method(b)
+    print(b[0].name)              # original
+
+    Vector[Res] c = Vector[Res]()
+    c.push(Res("original"))
+    sneaky_replace(c)
+    print(c[0].name)              # original
+    print("done")

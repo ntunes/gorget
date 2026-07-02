@@ -25391,6 +25391,82 @@ done",
     );
 }
 
+/// CoW G1a (round-33 materialize track, commit 1) — INDEX-projected mutation
+/// through an immutable-in-context root materializes the root; the caller's
+/// collection is untouched. `v[0].field = x` (field-assign, object = Index) and
+/// `v[0].method()` (receiver = Index) both walk to the bare-param root via
+/// `resolve_projection_root_local` and route through `cow_before_mutation`.
+/// Pre-fix these WROTE THROUGH the caller's buffer ("HACKED"/"METHOD").
+#[test]
+fn cow_index_proj_caller_untouched() {
+    run_gg(
+        "cow_index_proj_caller_untouched.gg",
+        "\
+original
+original
+original
+done",
+    );
+}
+
+/// CoW G1a per-alias independence: two bare aliases of one collection; an
+/// index-projected write to one materializes ONLY that alias's copy (Case 1 in
+/// cow_before_mutation). Pre-fix all three printed "X" (shared write-through).
+#[test]
+fn cow_index_proj_alias() {
+    run_gg(
+        "cow_index_proj_alias.gg",
+        "\
+X
+orig
+orig
+done",
+    );
+}
+
+/// CoW G1a local rebind: after an index-projected write materializes the bare
+/// param, a later read in the SAME fn sees the copy ("X"); the caller sees the
+/// original. Pre-fix both reads printed "X" (write-through).
+#[test]
+fn cow_index_proj_rebind() {
+    run_gg(
+        "cow_index_proj_rebind.gg",
+        "\
+X
+orig
+done",
+    );
+}
+
+/// CoW G1a: a `&` (mutable-borrow) param write-through is PRESERVED — the
+/// materialize is a no-op on a unique-borrow root, so the index-projected write
+/// reaches the caller's collection through the & chain (unchanged vs baseline).
+#[test]
+fn cow_index_proj_mut_writethrough() {
+    run_gg(
+        "cow_index_proj_mut_writethrough.gg",
+        "\
+VIA_ASSIGN
+VIA_METHOD
+done",
+    );
+}
+
+/// CoW G1a nested projection: `m[i][j] = x` (object = m[i], an Index) and
+/// `v[i].inner.method()` (receiver rooted at an Index) both recurse through
+/// `resolve_projection_root_local` to the bare-param root. Locks the helper's
+/// recursion. Pre-fix `m[0][1]=99` wrote through (printed 99).
+#[test]
+fn cow_nested_projection() {
+    run_gg(
+        "cow_nested_projection.gg",
+        "\
+2
+orig
+done",
+    );
+}
+
 #[test]
 fn cow_set_string_clone() {
     run_gg(

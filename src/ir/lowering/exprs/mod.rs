@@ -2318,6 +2318,26 @@ fn lower_field_access(
 /// Returns `Some("self.data")` for `FieldAccess { SelfExpr, "data" }`,
 /// `Some("game.entities")` for `FieldAccess { Identifier("game"), "entities" }`,
 /// `Some("self.game.entities")` for nested chains.
+/// G1 PROTOTYPE (r33 materialize scout): walk a projection chain
+/// (`v[i]`, `v.f`, `v[i].f[j]`) to its base identifier and return that
+/// local. Returns None when the base is not a simple named local (a call
+/// result, `self`, a static). Used at projected-mutation sites to find the
+/// immutable-in-context root that must materialize before the write.
+pub(super) fn resolve_projection_root_local(
+    ctx: &LoweringContext,
+    expr: &Expr,
+) -> Option<crate::ir::types::LocalId> {
+    match expr {
+        Expr::Identifier(name) => ctx.lookup_local(name).map(|(l, _)| l),
+        Expr::Index { object, .. }
+        | Expr::FieldAccess { object, .. }
+        | Expr::TupleFieldAccess { object, .. } => {
+            resolve_projection_root_local(ctx, &object.node)
+        }
+        _ => None,
+    }
+}
+
 pub(super) fn extract_field_path_string(expr: &Expr) -> Option<String> {
     match expr {
         Expr::FieldAccess { object, field } => {

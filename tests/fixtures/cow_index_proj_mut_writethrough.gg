@@ -1,0 +1,29 @@
+# CoW G1a: a `&` (mutable-borrow) param write-through is PRESERVED — the
+# materialize is a no-op on a unique-borrow root, so the write reaches the
+# caller's collection through the & chain.
+from std.collections import Vector
+
+struct Res:
+    String name
+
+equip Res:
+    void set_name(&self, String n):
+        self.name = n
+
+void mutate_assign(Vector[Res] &v):
+    v[0].name = "VIA_ASSIGN"
+
+void mutate_method(Vector[Res] &v):
+    v[0].set_name("VIA_METHOD")
+
+void main():
+    Vector[Res] a = Vector[Res]()
+    a.push(Res("orig"))
+    mutate_assign(&a)
+    print(a[0].name)            # VIA_ASSIGN  (caller SEES it)
+
+    Vector[Res] b = Vector[Res]()
+    b.push(Res("orig"))
+    mutate_method(&b)
+    print(b[0].name)            # VIA_METHOD  (caller SEES it)
+    print("done")

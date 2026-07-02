@@ -10,7 +10,8 @@ use super::super::context::{LoweringContext, CollectionId, ParamABI};
 use super::{lower_expr, lower_call_arg, maybe_auto_propagate, infer_operand_type_full, register_tuple_type,
             is_resource_type_local, get_or_register_type,
             ensure_box_type_def, ensure_guard_type_def, ensure_shared_type_def, ensure_weak_type_def,
-            index_expr_to_mangle_fragment, try_resolve_field_place, extract_field_path_string};
+            index_expr_to_mangle_fragment, try_resolve_field_place, extract_field_path_string,
+            resolve_projection_root_local};
 
 fn gorget_name_for_type_id(ctx: &LoweringContext, type_id: TypeId) -> String {
     if type_id == ctx.type_mapper.owned_string_type {
@@ -1830,12 +1831,52 @@ pub(super) fn lower_method_call(
             .map(|&p| matches!(ctx.type_registry.get(p), Some(GirType::MutPtr(_))))
             .unwrap_or(false);
 
+        // CoW G1 PROTOTYPE: a PROJECTED receiver (`v[0].set_name(x)`,
+        // `v.f.mutate()`) writes through a pointer into the projection root.
+        // Materialize the immutable-in-context root before the call so the
+        // mutation lands on an owned copy, then re-lower the receiver against
+        // the rebound owned local. cow_before_mutation is a no-op on
+        // unique/owned roots, so `&`-chain write-through is preserved.
+        // Only for INDEX-containing projections (`v[i].method()`): pure
+        // field-access chains (`obj.field.method()`) are a valid field path,
+        // already handled by `cow_before_field_mutation` (field_path_for_cow)
+        // below — materializing the whole root struct here would be a
+        // redundant deep clone.
+        if needs_mut
+            && !matches!(&receiver.node, Expr::Identifier(_))
+            && field_path_for_cow.is_none()
+        {
+            if let Some(root_local) = resolve_projection_root_local(ctx, &receiver.node) {
+                // Snapshot the root's name→local binding; cow_before_mutation
+                // rebinds it to a fresh owned local ONLY when it actually
+                // materializes (bare-param / alias / element root). A
+                // unique-borrow (`&`) or already-owned root is a no-op → no
+                // rebind → we must NOT re-lower (that would gratuitously
+                // re-emit the element read and let Case 3 clone stale temps).
+                let root_name = builder.local_name(root_local).map(|s| s.to_string());
+                let before = root_name.as_deref()
+                    .and_then(|n| ctx.lookup_local(n).map(|(l, _)| l));
+                ctx.cow_before_mutation(builder, root_local, receiver.span);
+                let after = root_name.as_deref()
+                    .and_then(|n| ctx.lookup_local(n).map(|(l, _)| l));
+                if before != after {
+                    recv = lower_expr(ctx, builder, receiver);
+                }
+            }
+        }
+
         // CoW: if receiver is being mutated, sever any alias relationships first.
         // This may materialize a Ptr param → new owned local (Phase 1c),
         // so re-resolve the receiver afterwards.
+        // Gated to NAMED locals: an anonymous element temp (`v[0]` inline)
+        // is handled by the projected-root block above; running
+        // cow_before_mutation on it would emit a wasted element clone whose
+        // rebind can't take (the temp has no name), leaving the call on the
+        // original pointer (the pre-prototype G1-method leak shape).
         if needs_mut {
             if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
-                if place.projections.is_empty() {
+                if place.projections.is_empty()
+                    && builder.local_name(place.local).is_some() {
                     ctx.cow_before_mutation(builder, place.local, receiver.span);
                     // Re-resolve: cow_before_mutation may have redirected the variable
                     // name to a new owned local (Phase 1c param materialization).
