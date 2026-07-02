@@ -1,0 +1,19 @@
+# `String(cap=16)` named-arg ctor — pre-allocates byte capacity on the string
+# builder without inserting content (same `cap=` form as the collection
+# ctors). Plus the positional non-I64-width capacity: EVERY int width routes
+# to `gorget_string_with_capacity` (round-32 widened the int set from
+# I64/I32-only), not the content ctor — before the widening `String(n)` with a
+# uint32 fell through to `gorget_string_from_str(<int>)` and died at the C
+# toolchain with an unintelligible internal error.
+void main():
+    String sb = String(cap=16)
+    sb.push("ab")
+    sb.push("cd")
+    print(sb)
+    print(sb.len())
+    print(sb.capacity() >= 16)
+    uint32 n = 8
+    String s2 = String(n)
+    s2.push("xy")
+    print(s2)
+    print(s2.capacity() >= 8)

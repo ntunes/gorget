@@ -1,0 +1,16 @@
+# round-32: the positional 1-arg `String(x)` ctor accepts exactly two shapes —
+# an integer capacity (`String(256)`, any int width) or String content
+# (`String("hi")`, incl. char literals and f-strings). Anything else
+# (bool/float/struct/…) used to fall through GIR lowering into
+# `gorget_string_from_str(<non-string>)` and die at the C/LLVM toolchain with
+# an unintelligible internal error (cc "incompatible type for argument 1"; a
+# debug-only emit_types.rs ICE). It must be a CLEAN type error at `gg check`;
+# to convert a value to text, use an f-string: f"{x}". (The owner-approved
+# cast-via-construction RFC may later turn `String(T)` into a display
+# conversion.) Named-arg forms `String(cap=16)` / `String(alloc=a)` stay valid
+# — see string_cap_named_arg.gg.
+void main():
+    String s = String(true)
+    String t = String(3.5)
+    print(s)
+    print(t)

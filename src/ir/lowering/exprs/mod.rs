@@ -1651,9 +1651,12 @@ fn lower_struct_literal(
     if name == "String" && args.len() == 1 {
         let arg_op = lower_expr(ctx, builder, &args[0]);
         let owned_type = ctx.type_mapper.owned_string_type;
-        // Check if the arg is an integer (capacity) vs string (content)
+        // Check if the arg is an integer (capacity) vs string (content).
+        // All 8 int widths route to the capacity ctor (shared predicate,
+        // `is_int_type_id`, same routing as the named-arg sibling in
+        // exprs/calls.rs); non-int/non-String args are rejected at typecheck.
         let arg_type = super::exprs::infer_operand_type_full(ctx, &arg_op, builder);
-        let fn_name = if arg_type == I64_TYPE || arg_type == I32_TYPE {
+        let fn_name = if is_int_type_id(arg_type) {
             "gorget_string_with_capacity"
         } else {
             "gorget_string_from_str"

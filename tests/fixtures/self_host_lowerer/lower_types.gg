@@ -1971,6 +1971,18 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
                             pass
                 else:
                     pass
+    # StringBuilder void appends — RECEIVER-AWARE (String only). `s.push_line(x)`
+    # / `s.push_char(c)` are void in-place appends (Rust ref: the String builtin
+    # table's ret_void rows, src/ir/lowering/builtins.rs:735-750; runtime:
+    # `void gorget_string_push_line*` / `gorget_string_push_char`,
+    # runtime_string.c:421/472). They are absent from STRING_BUILTIN_METHODS'
+    # BrkString set, so without this arm they fall through to the I64 default
+    # and mint a bogus i64 dst → cc "void value not ignored". Gated on a String
+    # receiver so a same-named user/collection method is unaffected (`push`/
+    # `clear`/`capacity` are already classified receiver-independent above).
+    if is_string_local(recv, &ctx, &gmod):
+        if method == "push_line" or method == "push_char":
+            return UNIT_TYPE
     # String-returning methods — declared in STRING_BUILTIN_METHODS
     # (compiler/data/resources.gg) with `ret_kind == BrkString`. NOTE the
     # ordering contract: `reverse` is classified UNIT by the earlier arm

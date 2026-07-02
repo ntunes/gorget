@@ -6847,7 +6847,38 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         # through to the variant-ctor lowering (mirrors the qualified
         # `Enum.Str(s)` path → `call_extern @Enum__Str`).
         SpannedExpr inner = args.get(0).unwrap()
-        result = lower_expr(&ctx, inner, &gmod)
+        int sc1_inner = lower_expr(&ctx, inner, &gmod)
+        # Capacity ctor: `String(<int>)` → gorget_string_with_capacity(n),
+        # mirroring Rust gg (src/ir/lowering/exprs/mod.rs:1651-1667): branch on
+        # the arg's TYPED type — an int/uint routes to the capacity allocator
+        # (fresh owned GorgetString), any other type (a String content, incl.
+        # char literals which lower as GorgetString here) identity-coerces.
+        # Without this branch `String(256)` passes the int straight through, so
+        # the binding is typed i64 and the whole method cascade breaks
+        # (`.push()` misroutes → runtime stack-overflow read, `.capacity()`
+        # emits an undefined symbol).
+        int sc1_aty = -1
+        if sc1_inner >= 0 and sc1_inner < ctx.locals.len():
+            sc1_aty = ctx.locals.get(sc1_inner).unwrap().type_id
+        bool sc1_is_int = sc1_aty == I8_TYPE or sc1_aty == I16_TYPE or sc1_aty == I32_TYPE or sc1_aty == I64_TYPE or sc1_aty == U8_TYPE or sc1_aty == U16_TYPE or sc1_aty == U32_TYPE or sc1_aty == U64_TYPE
+        if sc1_is_int:
+            int sc1_gs_tid = lookup_or_register_named(&gmod, "GorgetString")
+            int sc1_dst = add_local(&ctx, sc1_gs_tid, None)
+            emit(&ctx, GICallExtern(sc1_dst, "gorget_string_with_capacity", [OpCopy(sc1_inner)]))
+            # FRESH-OWNED-TEMP drop registration (Core #3, sibling of the
+            # generic GICall tail below): gorget_string_with_capacity
+            # eagerly allocates `cap` bytes (runtime_string.c:400 →
+            # str_alloc_with), so an unconsumed temp would leak. When the
+            # result is instead MOVED into a binding (`String sb =
+            # String(256)`), op_consume emits OpMove → GIMoveZero and the
+            # scope-exit drop of the temp self-suppresses — dropped exactly
+            # once either way. (The `String()` empty-ctor arm below skips
+            # this only because gorget_string_from_str("") is cap=0/static.)
+            # Mirrors Rust's call_extern_tracked (exprs/mod.rs:1664).
+            register_local_for_drop(&ctx, sc1_dst, sc1_gs_tid, &gmod)
+            result = sc1_dst
+        else:
+            result = sc1_inner
     elif (fname == "Str" or fname == "String" or fname == "GorgetString") and args.len() == 0:
         # Bare `String()` ctor → empty owned GorgetString. Mirror Rust gg
         # (src/ir/lowering/exprs/mod.rs:1664): emit gorget_string_from_str("")

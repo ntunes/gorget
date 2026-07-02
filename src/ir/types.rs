@@ -287,6 +287,17 @@ pub const UNIT_TYPE: TypeId = TypeId(11);
 /// Used to distinguish primitives from user-defined types without magic numbers.
 pub const PRIMITIVE_TYPE_COUNT: u32 = 12;
 
+/// True for every fixed-width integer primitive TypeId (int8..int64, uint8..uint64).
+/// Shared predicate for sites that branch on "is this arg an integer?" (e.g. the
+/// `String(n)` capacity-ctor routing in `exprs/mod.rs` + `exprs/calls.rs`) so all
+/// int widths are covered consistently instead of hand-syncing per-site lists.
+pub fn is_int_type_id(type_id: TypeId) -> bool {
+    matches!(
+        type_id,
+        I8_TYPE | I16_TYPE | I32_TYPE | I64_TYPE | U8_TYPE | U16_TYPE | U32_TYPE | U64_TYPE
+    )
+}
+
 /// Registry of all GIR types in a module.
 pub struct TypeRegistry {
     /// All types, indexed by TypeId.

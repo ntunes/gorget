@@ -826,6 +826,67 @@ String emit_box_allocators_from_lir(LirModule &m):
         out = out + "\n"
     return out
 
+# Emit the per-module `gorget_str_*` StringBuilder thin wrappers for every
+# `s.clear()`/`s.push_char()`/`s.push_line()`/`s.capacity()` (and legacy
+# `s.push()`) call site whose name fell through map_runtime_name's
+# GorgetString-category arm (lir_lower.gg:~1706) to a bare `gorget_str_<m>`
+# symbol. These are NOT in the shared runtime preamble — Rust gg synthesizes
+# them per-module too (src/backend/c_lir/emit_types.rs:2566-2611), gated on
+# "called-but-not-in-runtime". We mirror that: scan every ICallExtern name and
+# emit the `static inline` body only for the wrappers actually referenced.
+# Byte-identical to the Rust wrapper bodies. The bodies delegate to preamble
+# symbols (gorget_string_push_char / gorget_string_push_byte) + GorgetString
+# fields (s->len / s->cap / s->data), all present in runtime_string.c. This is
+# the legitimate emit-boundary spelling (the name IS the runtime contract; the
+# ROUTING decision happened upstream in the typed GorgetString-category
+# dispatch). NOTE: no `gorget_str_str` wrapper — `.str()`/`.as_str()` were
+# removed from the language (79c3ee30); the LIR asserts they never reach
+# runtime-symbol mapping (src/lir/lower/calls.rs).
+String emit_str_builder_wrappers(LirModule &m):
+    bool w_push = false
+    bool w_clear = false
+    bool w_push_line = false
+    bool w_capacity = false
+    bool w_push_char = false
+    int fi = 0
+    while fi < m.functions.len():
+        int bi = 0
+        while bi < m.functions.get(fi).unwrap().blocks.len():
+            int ii = 0
+            while ii < m.functions.get(fi).unwrap().blocks.get(bi).unwrap().insts.len():
+                match m.functions.get(fi).unwrap().blocks.get(bi).unwrap().insts.get(ii).unwrap():
+                    case ICallExtern(_, name, _, _, _):
+                        if name == "gorget_str_push":
+                            w_push = true
+                        elif name == "gorget_str_clear":
+                            w_clear = true
+                        elif name == "gorget_str_push_line":
+                            w_push_line = true
+                        elif name == "gorget_str_capacity":
+                            w_capacity = true
+                        elif name == "gorget_str_push_char":
+                            w_push_char = true
+                    else:
+                        pass
+                ii += 1
+            bi += 1
+        fi += 1
+    String out = ""
+    if w_push:
+        out = out + "static inline void gorget_str_push(GorgetString* s, Str chunk) { gorget_string_push_char(s, chunk); }\n"
+    if w_clear:
+        # Reset len to 0 but keep the owned buffer for reuse.
+        out = out + "static inline void gorget_str_clear(GorgetString* s) { s->len = 0; if (s->cap > 0 && s->data) ((char*)s->data)[0] = '\\0'; }\n"
+    if w_push_line:
+        out = out + "static inline void gorget_str_push_line(GorgetString* s, Str chunk) { gorget_string_push_char(s, chunk); gorget_string_push_byte(s, '\\n'); }\n"
+    if w_capacity:
+        out = out + "static inline int64_t gorget_str_capacity(GorgetString* s) { return (int64_t)s->cap; }\n"
+    if w_push_char:
+        out = out + "static inline void gorget_str_push_char(GorgetString* s, Str c) { gorget_string_push_char(s, c); }\n"
+    if out != "":
+        out = out + "\n"
+    return out
+
 # Emit the inline `Box__<inner>__get`/`Box__<inner>__set` wrapper functions for
 # every `b.get()`/`b.set(v)` call site. Mirrors Rust gg's `emit_box_wrapper`
 # (`src/backend/c_lir/helpers.rs:304-315`): get reads `*(elem*)self`, set
@@ -2444,6 +2505,19 @@ int find_fn_by_name(LirModule &m, String name):
 bool runtime_arg_is_str(String name, int arg_idx):
     # Most str functions take Str at position 0.
     if arg_idx == 0:
+        # StringBuilder mutation/capacity thin-wrappers take the receiver by
+        # POINTER (`GorgetString* s`), NOT a Str by value — their bodies
+        # read/write `s->len`/`s->cap`/`s->data` (emit_str_builder_wrappers).
+        # The blanket `gorget_str_` arg-0 = Str-by-value rule below would fire
+        # the `*(Str*)` deref and pass a Str VALUE where the wrapper wants a
+        # pointer (cc: "incompatible type for argument 1"). These names are
+        # self-by-ptr in needs_ptr_arg (lir_lower.gg) + Rust's
+        # `legacy_self_by_ptr` (helpers.rs:752), so exclude them from the
+        # by-value deref here.
+        if name == "gorget_str_clear" or name == "gorget_str_capacity":
+            return false
+        if name == "gorget_str_push" or name == "gorget_str_push_line" or name == "gorget_str_push_char":
+            return false
         if name.starts_with("gorget_str_"):
             return true
         # The `gorget_str_` prefix misses `gorget_utf8_codepoint_len_at`, whose
@@ -2467,7 +2541,11 @@ bool runtime_arg_is_str(String name, int arg_idx):
         # `gorget_string_push_char(GorgetString* s, Str c)` — arg 1 (the pushed
         # chunk) is a `Str` by value. A borrowed-String chunk arrives as a Ptr;
         # paired with runtime_takes_str_by_value above, the *(Str*) deref fires.
+        # The `gorget_str_push{,_line,_char}` thin-wrapper spellings
+        # (emit_str_builder_wrappers) carry the same `Str chunk` at arg 1.
         if name == "gorget_string_push_char":
+            return true
+        if name == "gorget_str_push" or name == "gorget_str_push_line" or name == "gorget_str_push_char":
             return true
     if arg_idx == 2:
         if name == "gorget_str_replace":
@@ -2699,7 +2777,10 @@ int runtime_fn_return_type(String name, LirModule &m):
         return find_struct_type("GorgetString", &m)
     if name == "gorget_str_pad_left" or name == "gorget_str_pad_right":
         return find_struct_type("GorgetString", &m)
-    if name == "gorget_string_new":
+    # `String(<int>)` capacity ctor → gorget_string_with_capacity returns a
+    # fresh owned GorgetString (runtime_string.c:400). Registered alongside
+    # gorget_string_new so the extern decl + dst assignment type correctly.
+    if name == "gorget_string_new" or name == "gorget_string_with_capacity":
         return find_struct_type("GorgetString", &m)
     if name == "gorget_str_from_literal" or name == "gorget_str_from_raw":
         return find_struct_type("GorgetString", &m)
@@ -2734,6 +2815,10 @@ int runtime_fn_return_type(String name, LirModule &m):
     # Ordered-set for-loop iteration scalars (lower_for_set): order_len = logical
     # order-array length, order = slot index at order position i.
     if name == "gorget_map_iter_order_len" or name == "gorget_map_iter_order":
+        return LT_I64
+    # `s.capacity()` → gorget_str_capacity thin-wrapper returns int64
+    # (byte capacity; emit_str_builder_wrappers).
+    if name == "gorget_str_capacity":
         return LT_I64
     if name == "gorget_str_len" or name == "gorget_str_codepoint_count":
         return LT_I64
@@ -2888,6 +2973,26 @@ bool is_void_runtime_fn(String name):
     if name == "gorget_string_free" or name == "gorget_string_materialize_inplace":
         return true
     if name == "gorget_string_clone_inplace":
+        return true
+    # String-builder appends are all `void` (Rust src/lir/runtime.rs:326-365 +
+    # runtime_string.c: every `gorget_string_push*` is `static inline void`).
+    # The scalar-dispatch (lir_lower.gg:~4318) rewrites `push`/`push_line` of
+    # an int/float/bool value to the typed `_int`/`_float`/`_bool` variants;
+    # all are void, so the dst assignment (`__vN = fn(...)`) must be
+    # suppressed — otherwise cc rejects "void value not ignored". Mirrors
+    # Rust's typed `T::Void` on the runtime decl.
+    if name == "gorget_string_push_char" or name == "gorget_string_push_byte":
+        return true
+    if name == "gorget_string_push_int" or name == "gorget_string_push_float" or name == "gorget_string_push_bool":
+        return true
+    if name == "gorget_string_push_line" or name == "gorget_string_push_line_int":
+        return true
+    if name == "gorget_string_push_line_float" or name == "gorget_string_push_line_bool" or name == "gorget_string_push_line_char":
+        return true
+    # The `gorget_str_*` thin-wrapper spellings (emitted per-module, see
+    # emit_str_builder_wrappers) are void too — all but `gorget_str_capacity`,
+    # which returns int64 (typed in runtime_fn_return_type).
+    if name == "gorget_str_push" or name == "gorget_str_push_char" or name == "gorget_str_push_line" or name == "gorget_str_clear":
         return true
     if name == "gorget_init_args" or name == "gorget_print_capture_flush":
         return true
@@ -7824,6 +7929,10 @@ String generate_c(LirModule &m):
     # `s.get()`/`s.at(i)`/`s.set_at(i,v)`/`s.slen()` inline wrappers for explicit
     # Shared[T] accessors (no bare `gorget_shared_<method>` runtime symbol).
     out = out + emit_shared_method_wrappers(&m)
+    # `s.clear()`/`s.push_char()`/`s.push_line()`/`s.capacity()` StringBuilder
+    # thin wrappers (no shared-preamble symbol — Rust gg synthesizes them
+    # per-module too, emit_types.rs:2566-2611).
+    out = out + emit_str_builder_wrappers(&m)
     # `Box__<Trait>__<method>` trait-object dispatch thunks (no user/runtime
     # symbol — the thunk IS the vtable-indirect-call dispatch target).
     out = out + emit_trait_dispatch_thunks(&m, &sn)

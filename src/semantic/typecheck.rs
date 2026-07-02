@@ -1538,6 +1538,52 @@ impl<'a> TypeChecker<'a> {
                                 }
                             }
                         }
+                        // `String(x)` positional 1-arg ctor accepts exactly two
+                        // shapes: String(<int>) — pre-allocate n bytes capacity
+                        // (any int width) — and String(<String>) — content
+                        // (string/char literals, f-strings, identity). Anything
+                        // else (bool/float/struct/...) used to fall through GIR
+                        // lowering into `gorget_string_from_str(<non-string>)`
+                        // and die at the C/LLVM toolchain with an
+                        // unintelligible internal error (cc "incompatible type
+                        // for argument 1"; a debug-only emit_types.rs ICE) — a
+                        // language-level reject belongs here instead (Core #8).
+                        // Named-arg forms (`String(cap=16)`, `String(alloc=a)`)
+                        // are exempt: they're validated by the loop above, so
+                        // gate on `name.is_none()`. The owner-approved
+                        // cast-via-construction RFC (TODO.md) will later turn
+                        // `String(T)` into a display conversion; until then the
+                        // hint points at f-strings.
+                        if cname == "String" && args.len() == 1 && args[0].node.name.is_none() {
+                            let arg_type = self.infer_expr(&args[0].node.value);
+                            let resolved = self.resolve_type(arg_type);
+                            // Unwrap &/! wrappers (`String(!s)` moves a String in).
+                            let inner = match self.types.get(resolved) {
+                                ResolvedType::Ref(t) | ResolvedType::Owned(t) => self.resolve_type(*t),
+                                _ => resolved,
+                            };
+                            let ok = match self.types.get(inner) {
+                                ResolvedType::Primitive(p) => {
+                                    is_integer_type(p)
+                                        || matches!(p, PrimitiveType::StringType | PrimitiveType::CStr)
+                                }
+                                // Error: already diagnosed — don't cascade.
+                                // Never: diverging arg, unreachable anyway.
+                                // Var: unbound inference variable — can't
+                                // classify; never false-positive on it.
+                                ResolvedType::Error | ResolvedType::Never | ResolvedType::Var(_) => true,
+                                _ => false,
+                            };
+                            if !ok {
+                                self.error(
+                                    SemanticErrorKind::TypeMismatch {
+                                        expected: "String(n) with an integer capacity or String(s) with String content — to convert a value to text, use an f-string: f\"{x}\"".to_string(),
+                                        found: self.describe_resolved_type(inner),
+                                    },
+                                    args[0].node.value.span,
+                                );
+                            }
+                        }
                     }
                 }
 

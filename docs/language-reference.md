@@ -3189,6 +3189,17 @@ For byte-level access (useful in parsers and codecs), use `byte_at(i)` (returns 
 
 String literals are validated at compile time by the lexer. Internal string operations (slicing, concatenation, indexing) preserve UTF-8 validity by construction.
 
+**`String`** — Constructors
+
+| Form | Description |
+|---|---|
+| `String()` | New empty string |
+| `String(s)` | New owned string with content `s` — a `String` (string/char literals, f-strings, or a `String` variable) |
+| `String(n)` | New empty string with at least `n` bytes of pre-allocated capacity; `n` may be any integer type |
+| `String(cap=n)` | Named-argument form of the capacity constructor |
+
+Any other argument type is a compile-time error — to convert a value to text, use an f-string: `String(f"{x}")` (or just `f"{x}"`).
+
 **`String`** — Mutation methods
 
 In addition to the read-only methods above, `String` supports these mutation methods:
@@ -3198,9 +3209,9 @@ In addition to the read-only methods above, `String` supports these mutation met
 | `len()` | `→ int` | Number of Unicode codepoints |
 | `is_empty()` | `→ bool` | True if length is zero |
 | `capacity()` | `→ int` | Current allocated capacity in bytes |
-| `push(s)` | `String → void` | Append a string |
+| `push(x)` | `String \| int \| float \| bool → void` | Append a value's text — accepts a `String` (incl. char literals), any integer width, `float`, or `bool` |
 | `push_char(c)` | `String → void` | Append a single character |
-| `push_line(s)` | `String → void` | Append a string followed by a newline |
+| `push_line(x)` | `String \| int \| float \| bool → void` | `push(x)` followed by a newline (same accepted types) |
 | `clear()` | `→ void` | Remove all content (keeps allocated capacity) |
 
 `String` also inherits all read-only string methods: `contains()`, `starts_with()`, `split()`, `trim()`, etc. A bare `String v = sb` is a zero-cost copy-on-write borrow, so there is no separate view accessor — the former `str()`/`as_str()` no-op accessors were removed.

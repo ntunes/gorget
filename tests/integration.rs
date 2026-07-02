@@ -6661,6 +6661,26 @@ fn primitive_bogus_method_fstring_errors() {
     );
 }
 
+// round-32: the positional 1-arg `String(x)` ctor accepts only an integer
+// capacity (any int width) or String content (string/char literals,
+// f-strings, identity). Anything else (bool/float/struct/…) used to fall
+// through GIR lowering into `gorget_string_from_str(<non-string>)` and die at
+// the C/LLVM toolchain with an unintelligible INTERNAL error (cc
+// "incompatible type for argument 1 of 'gorget_string_from_str'"; llc failure
+// under --backend=llvm; a debug-only emit_types.rs debug_assert ICE) — a
+// language-level reject belongs at `gg check` (Core invariant #8). Named-arg
+// forms `String(cap=16)` / `String(alloc=a)` are exempt (see
+// string_cap_named_arg.gg). The owner-approved cast-via-construction RFC may
+// later turn `String(T)` into a display conversion; until then the error
+// hints at f-strings.
+#[test]
+fn string_ctor_arg_errors() {
+    check_gg_fails(
+        "string_ctor_arg_error.gg",
+        "String(n) with an integer capacity or String(s) with String content",
+    );
+}
+
 // `*x` (dereference) is valid only on a smart pointer (`Box[T]`). On any
 // other type the type checker used to return the inner type unchanged (a
 // silent no-op); `gg check` passed clean and the IR lowering emitted a
@@ -10009,6 +10029,25 @@ true false
 true
 z
 ",
+    );
+}
+
+#[test]
+fn string_cap_named_arg() {
+    // `String(cap=16)` named-arg ctor pre-allocates byte capacity without
+    // inserting content (same `cap=` form as the collection ctors), and a
+    // positional non-I64-width capacity (`uint32 n`) routes to
+    // `gorget_string_with_capacity` — round-32 widened the ctor's int set
+    // from I64/I32-only to every int width (shared `is_int_type_id`
+    // predicate, src/ir/types.rs).
+    run_gg(
+        "string_cap_named_arg.gg",
+        "\
+abcd
+4
+true
+xy
+true",
     );
 }
 

@@ -132,23 +132,29 @@ trait-vtable dispatch (`lib/std/hash.gg:42-84`).
 ## 23.4 Capacity constructors
 
 There is no `with_capacity`. Every collection constructor takes an optional
-`cap` named argument: `Vector[int](cap: 1000)`, `Dict[String, int](cap: 64)`,
-`Set[String](cap: 32)`, `String(cap: 256)`. The compiler handles `cap` in
+`cap` named argument: `Vector[int](cap=1000)`, `Dict[String, int](cap=64)`,
+`Set[String](cap=32)`, `String(cap=256)`. (Named arguments use `=`, never
+`:` — the colon form is a parse error.) The compiler handles `cap` in
 two places:
 
 - **Typecheck** validates that `cap` / `alloc` are the only legal named args
   on the builtin constructors (`Vector`, `Dict`, `HashMap`, `Set`, `HashSet`,
-  `Channel`, `String`, allocators). `src/semantic/typecheck.rs:1306-1340`:
+  `Channel`, `String`, allocators). `src/semantic/typecheck.rs:1501-1588`:
   any other named arg is an `UnknownNamedArg` error; `alloc=` is checked to be
   an allocator type, `cap=` is just type-inferred and deferred to lowering.
+  The same block rejects a positional 1-arg `String(x)` whose arg is neither
+  an integer capacity nor String content (round-32, Core #8 — non-string args
+  used to reach `gorget_string_from_str` and die as a cc/llc internal error).
 
-- **GIR lowering** turns `Vector[T](cap: n)` into a `…__new` extern call
-  followed by a `…__reserve` call. `src/ir/lowering/exprs/calls.rs:955-997`:
+- **GIR lowering** turns `Vector[T](cap=n)` into a `…__new` extern call
+  followed by a `…__reserve` call. `src/ir/lowering/exprs/calls.rs:967-1026`:
   it finds the `cap` arg, lowers the fresh-allocation call, takes a mutable
   borrow of the result, and emits `{mangled}__reserve(ptr, cap)`. The `alloc=`
   path does the same inside a `push_allocator`/`pop_allocator` bracket. The
-  `String(capacity)` special case routes to `gorget_string_with_capacity`
-  (`src/ir/lowering/exprs/calls.rs:667-674`).
+  `String(capacity)` special case routes to `gorget_string_with_capacity` for
+  every integer width (shared `is_int_type_id` predicate, `src/ir/types.rs`;
+  the named-arg site is `src/ir/lowering/exprs/calls.rs:675-700`, the
+  positional sibling `src/ir/lowering/exprs/mod.rs:1651-1667`).
 
 ### Collection trait bounds
 

@@ -2650,6 +2650,15 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
         # (gorget_str_push | gorget_str_push_line | gorget_str_push_char).
         if fn_name == "gorget_str_push" or fn_name == "gorget_str_push_line" or fn_name == "gorget_str_push_char":
             return true
+        # StringBuilder reset/capacity thin-wrappers (`s.clear()`/`s.capacity()`
+        # → gorget_str_{clear,capacity}) also take the GorgetString receiver by
+        # pointer — their emitted bodies read/write `s->len`/`s->cap`
+        # (lir_codegen.gg emit_str_builder_wrappers, mirroring Rust gg
+        # emit_types.rs:2566-2611). Same `legacy_self_by_ptr` row (Rust
+        # helpers.rs:752-756). Without this the receiver passes by value and cc
+        # rejects "incompatible type for argument 1".
+        if fn_name == "gorget_str_clear" or fn_name == "gorget_str_capacity":
+            return true
         # Note: gorget_str_codepoint_count takes Str by value, NOT by pointer.
         # Clone fns (used by emit_payload_read's blocker-2 path for
         # resource-typed payloads) take the source by `const T*`.
