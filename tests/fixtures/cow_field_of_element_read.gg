@@ -1,0 +1,40 @@
+# CoW field-of-collection-element read (round-33 DEEP-1 §4a, main path).
+#
+# `String x = coll.get(i).unwrap().name` reads a String field of a
+# collection element. Before the field-of-CoW-element borrow-provenance
+# fix, `lower_field_access` tagged the Ptr(field) load with a plain
+# `BorrowOrigin::Field { base }` where `base` is the unnamed statement
+# temp from `.unwrap()` — a dead end no mutation tracking can route back
+# to — so the var-decl decision fell to an eager `VarDeclFromBorrow`
+# clone PER READ (the top-1 clone site, ~40.8M hits on the self-compile).
+# The `set_field_or_elem_borrow` chokepoint retags the load to borrow out
+# of the SAME collection, so the read is zero-cost AND severs correctly
+# on a source mutation via the propagated collection provenance.
+# Spec: docs/devbook/11-copy-on-write.md.
+# Output must be correct on BOTH backends.
+
+struct Person:
+    String name
+    int age
+
+void main():
+    Vector[Person] people = [Person("Alice", 30), Person("Bob", 25)]
+
+    # field-of-element read (main path)
+    String n0 = people.get(0).unwrap().name
+    print(n0)
+
+    # read the same field again — no clone-per-read, still correct
+    print(people.get(0).unwrap().name)
+    print(people.get(1).unwrap().name)
+
+    # non-String field of the element reads through the same path
+    print(people.get(0).unwrap().age)
+
+    # mutate the source (push may realloc) — `n0` owns its snapshot,
+    # `cow_before_mutation` severs it via the propagated provenance.
+    people.push(Person("Carol", 40))
+    print(n0)
+    print(people.get(2).unwrap().name)
+
+    print("done")

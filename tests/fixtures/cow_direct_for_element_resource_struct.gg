@@ -1,0 +1,30 @@
+# CoW direct for-element bind of a RESOURCE STRUCT (round-33 DEEP-1 §4c).
+#
+# `for x in v: Rec s = x` over `Vector[Rec]` where `Rec` is a resource
+# struct (contains a String). This is the DIRECT-element shape that
+# ACTUALLY flips: the loop element is entered through the
+# `is_recursive_struct` Ptr-borrow block (for_loops.rs:467-470 — gated on
+# `!is_string && is_struct_or_enum && is_resource_type`), so threading the
+# for-element source flips the direct bind `Rec s = x` from an eager
+# `VarDeclFromBorrow` clone to the CollectionRef default-borrow branch.
+#
+# NB a `String` element does NOT flip — it's excluded by `!is_string` and
+# takes the plain-value borrow path — so a String element here would lock
+# in nothing. The element must be a resource STRUCT.
+# Output must be correct on BOTH backends.
+
+struct Rec:
+    String name
+
+void main():
+    Vector[Rec] v = [Rec("one"), Rec("two"), Rec("three")]
+
+    for x in v:
+        Rec s = x
+        print(s.name)
+
+    # source intact after the borrow-only loop
+    print(v.get(0).unwrap().name)
+    print(v.len())
+
+    print("done")

@@ -2508,6 +2508,32 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
+    /// Tag a Ptr-typed field-load result with the RIGHT borrow origin
+    /// (devbook/11 "CoW default: borrow everywhere"). If the base is itself a
+    /// CoW collection-element borrow (`coll.get(i).unwrap().field`, for-element
+    /// `x.field`), the field borrows out of the SAME collection — the element's
+    /// memory is owned by the collection, so the severance/materialization unit
+    /// is the collection, not the (unnamed, statement-scoped) element temp.
+    /// Propagate the collection provenance so the var-decl default-borrow
+    /// branch (`stmts/mod.rs` CollectionRef propagation) and
+    /// `cow_before_mutation` see through the chain; a plain `Field { base }`
+    /// tag here LOSES that provenance (base is an unnamed temp no mutation
+    /// tracking can route back to) and forces an eager VarDeclFromBorrow clone
+    /// per read — the round-33 DEEP-1 top-1 clone site. Non-element bases keep
+    /// the plain Field origin.
+    pub fn set_field_or_elem_borrow(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, local: LocalId, base: LocalId, field: u32) {
+        if self.is_cow_borrow(builder, base) {
+            let source = self.cow_borrow_source(base).cloned()
+                .or_else(|| self.collection_ref_source(builder, base));
+            self.set_cow_borrow(builder, local);
+            if let Some(coll) = source {
+                self.set_cow_borrow_source(local, coll);
+            }
+        } else {
+            self.set_field_borrow(builder, local, base, field);
+        }
+    }
+
     /// If `local` is a `Borrowed { origin: Field { base, field }, .. }`,
     /// return its `(base, field)` tuple. Used at the VarDecl boundary
     /// (Site #1) to propagate Field origin onto typed bindings.

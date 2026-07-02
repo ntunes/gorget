@@ -25114,6 +25114,82 @@ done",
     );
 }
 
+/// CoW field-of-collection-element read (round-33 DEEP-1 §4a, main path).
+/// `String x = coll.get(i).unwrap().name` — the field-load routes through the
+/// `set_field_or_elem_borrow` chokepoint so it borrows out of the collection
+/// instead of eager-cloning per read (the top-1 clone site). Correct output on
+/// both backends; `n0` still severs correctly on the later push.
+#[test]
+fn cow_field_of_element_read() {
+    run_gg(
+        "cow_field_of_element_read.gg",
+        "\
+Alice
+Alice
+Bob
+30
+Alice
+Carol
+done",
+    );
+}
+
+/// CoW field-of-for-element read (round-33 DEEP-1 §4b). `for itm in v:
+/// String x = itm.name` — load-bearing on the for-element source threading:
+/// without the threaded CollectionId the loop element carries no provenance and
+/// the field-load eager-clones per read.
+#[test]
+fn cow_field_of_for_element_read() {
+    run_gg(
+        "cow_field_of_for_element_read.gg",
+        "\
+Alice
+30
+Bob
+25
+Carol
+40
+done",
+    );
+}
+
+/// CoW direct for-element bind of a RESOURCE STRUCT (round-33 DEEP-1 §4c). `for
+/// x in v: Rec s = x` over `Vector[Rec]` (Rec = resource struct) — the DIRECT
+/// element shape that flips from eager-clone to CollectionRef default-borrow
+/// once the for-element source is threaded (a String element would NOT flip —
+/// excluded by `is_recursive_struct` at for_loops.rs:467-470).
+#[test]
+fn cow_direct_for_element_resource_struct() {
+    run_gg(
+        "cow_direct_for_element_resource_struct.gg",
+        "\
+one
+two
+three
+one
+3
+done",
+    );
+}
+
+/// is-pattern on an enum-typed field of a collection ELEMENT (round-33 DEEP-1
+/// §3 bonus). `(v.get(0).unwrap().tag) is Some(inner)` preceded by a read of
+/// the same field. Pre-fix this MISCOMPILED — the is-scrutinee read the wrong
+/// bytes and `Some("hello")` fell through to the else arm (printed "none"). The
+/// borrow-provenance fix makes the enum scrutinee deref correctly and match Some.
+#[test]
+fn enum_field_of_collection_element_is_pattern() {
+    run_gg(
+        "enum_field_of_collection_element_is_pattern.gg",
+        "\
+hello
+some
+hello
+none2
+done",
+    );
+}
+
 /// CoW Dir-A: a `T x = coll.get(i).unwrap()` element-bind is an independent
 /// owned value; mutating `x` in place must NOT touch the source collection
 /// (Case 1b in cow_before_mutation, src/ir/lowering/context.rs). Pre-fix this

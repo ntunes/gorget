@@ -2147,7 +2147,7 @@ fn lower_field_access(
                             let base_local = deref_place.local;
                             let dst = builder.field_load(deref_place, field_idx, result_type);
                             if matches!(ctx.type_registry.get(result_type), Some(GirType::Ptr(_))) {
-                                ctx.set_field_borrow(builder, dst, base_local, field_idx);
+                                ctx.set_field_or_elem_borrow(builder, dst, base_local, field_idx);
                             }
                             return FunctionBuilder::copy(dst);
                         }
@@ -2166,7 +2166,7 @@ fn lower_field_access(
                                         let base_local = deref_place.local;
                                         let dst = builder.field_load(deref_place, i as u32, result_type);
                                         if matches!(ctx.type_registry.get(result_type), Some(GirType::Ptr(_))) {
-                                            ctx.set_field_borrow(builder, dst, base_local, i as u32);
+                                            ctx.set_field_or_elem_borrow(builder, dst, base_local, i as u32);
                                         }
                                         return FunctionBuilder::copy(dst);
                                     }
@@ -2258,7 +2258,7 @@ fn lower_field_access(
                     let base_local = base_place.local;
                     let dst = builder.field_load(base_place.clone(), field_idx, result_type);
                     if matches!(ctx.type_registry.get(result_type), Some(GirType::Ptr(_))) {
-                        ctx.set_field_borrow(builder, dst, base_local, field_idx);
+                        ctx.set_field_or_elem_borrow(builder, dst, base_local, field_idx);
                     }
                     return FunctionBuilder::copy(dst);
                 }
@@ -2302,7 +2302,7 @@ fn lower_field_access(
                     let base_local = base_place.local;
                     let dst = builder.field_load(base_place.clone(), field_idx, result_type);
                     if matches!(ctx.type_registry.get(result_type), Some(GirType::Ptr(_))) {
-                        ctx.set_field_borrow(builder, dst, base_local, field_idx);
+                        ctx.set_field_or_elem_borrow(builder, dst, base_local, field_idx);
                     }
                     return FunctionBuilder::copy(dst);
                 }

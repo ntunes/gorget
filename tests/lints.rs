@@ -748,6 +748,81 @@ fn container_literal_arms_count() {
 }
 
 /// Ratchet (Core #4 "one fix, all siblings" / devbook-24 rule 3 "one source of
+/// truth"): every resource-typed field-load in `lower_field_access`
+/// (`src/ir/lowering/exprs/mod.rs`) must route its borrow tag through the
+/// `set_field_or_elem_borrow` chokepoint — NEVER a bare `set_field_borrow`.
+///
+/// The chokepoint is what retags a field-of-CoW-element load
+/// (`coll.get(i).unwrap().field`, for-element `x.field`) to borrow out of the
+/// SAME collection instead of dead-ending on an unnamed-statement-temp
+/// `BorrowOrigin::Field { base }` — which no mutation tracking can route back
+/// to, so the var-decl decision falls to an eager `VarDeclFromBorrow` clone
+/// PER READ (the round-33 DEEP-1 top-1 clone site, ~40.8M hits). There are
+/// FOUR field-load sites in the fn (two main-path: lookup-field cache + TypeDef
+/// fallback; two Guard[T] auto-deref). The Guard sites are behavioral no-ops
+/// today (their base is a fresh `emit_guard_get_ptr` pointer, never
+/// `is_cow_borrow`), but they route through the chokepoint too so a fifth site
+/// added with a bare `set_field_borrow` can't silently drop provenance and
+/// re-open the clone hole. This lint pins the direct-call count at ZERO.
+///
+/// **Scoping (load-bearing):** ONLY the body of `fn lower_field_access` is
+/// scanned. The tuple-index site (`fn lower_expr_inner`, `exprs/mod.rs:730`)
+/// and the disabled probe (`stmts/mod.rs:873`) are legitimate direct
+/// `set_field_borrow` calls in OTHER functions and MUST NOT trip this — so the
+/// scan slices the fn by brace-depth (precedent: `count_container_literal_arms`
+/// above scopes to `infer_expr`).
+///
+/// **If this fails:** you added a resource-typed field-load site in
+/// `lower_field_access` with a bare `set_field_borrow`. Route it through
+/// `set_field_or_elem_borrow` instead (the CoW field-of-element chokepoint).
+#[test]
+fn lower_field_access_routes_through_field_or_elem_chokepoint() {
+    let content = fs::read_to_string("src/ir/lowering/exprs/mod.rs").unwrap_or_default();
+    let mut in_fn = false;
+    let mut seen_open = false;
+    let mut depth = 0i32;
+    let mut count = 0usize;
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if !in_fn {
+            if trimmed.starts_with("fn lower_field_access(") {
+                in_fn = true;
+                seen_open = false;
+                depth = 0;
+            } else {
+                continue;
+            }
+        }
+        // Count the bare chokepoint bypass on non-comment lines. The
+        // `.set_field_or_elem_borrow(` chokepoint does NOT match this substring
+        // (its infix is `_or_elem_`, so `.set_field_borrow(` never matches it).
+        if !trimmed.starts_with("//") {
+            count += line.matches(".set_field_borrow(").count();
+        }
+        depth += line.matches('{').count() as i32;
+        depth -= line.matches('}').count() as i32;
+        if depth > 0 {
+            seen_open = true;
+        }
+        // The fn body sits at depth >= 1 throughout; depth returns to 0 only at
+        // the fn's closing brace (the multi-line signature keeps depth 0 until
+        // the first `{`, guarded by `seen_open`).
+        if seen_open && depth <= 0 {
+            in_fn = false;
+        }
+    }
+    assert_eq!(
+        count, 0,
+        "Found {count} direct `.set_field_borrow(` call(s) inside `lower_field_access` \
+         (expected 0). Every resource-typed field-load there must route through the \
+         `set_field_or_elem_borrow` chokepoint so a field-of-CoW-element load retags to \
+         the SAME collection's borrow provenance instead of dead-ending on an unnamed \
+         `Field` origin (which forces an eager per-read `VarDeclFromBorrow` clone — the \
+         round-33 DEEP-1 top-1 clone site). Swap the bare call for `set_field_or_elem_borrow`.",
+    );
+}
+
+/// Ratchet (Core #4 "one fix, all siblings" / devbook-24 rule 3 "one source of
 /// truth"): the `throws T … throws E` → `Result[T, E]` return-type synthesis must
 /// live in EXACTLY ONE place — `types::synthesize_throws_result_type`. There are
 /// FOUR throws-signature sites that each need this `Result[T, E]` return type:

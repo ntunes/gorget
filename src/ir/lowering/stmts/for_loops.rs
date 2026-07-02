@@ -142,6 +142,21 @@ pub(super) fn lower_for(
     // Lower the iterable and check its type for string/collection iteration
     let iter_op = lower_expr(ctx, builder, iterable);
     let iter_type = infer_operand_type_full(ctx, &iter_op, builder);
+    // Capture the iterable's identity from the AST (the lowered operand is
+    // often an unnamed borrow/deref tmp for `&`-param iterables): a named
+    // local resolves to `CollectionId::Local`, a field-access chain to
+    // `CollectionId::FieldPath` — mirroring the `.get()` provenance derivation
+    // in exprs/methods.rs. Element-FIELD borrows need this identity for CoW
+    // provenance (threaded into lower_for_array's element tag).
+    let iter_source_coll: Option<crate::ir::lowering::context::CollectionId> =
+        if let Expr::Identifier(name) = &iterable.node {
+            ctx.lookup_local(name)
+                .map(|(lid, _)| crate::ir::lowering::context::CollectionId::Local(lid))
+        } else {
+            super::super::exprs::extract_field_path_string(&iterable.node)
+                .filter(|p| !ctx.is_source_mut_unsafe_at(p, iterable.span.start))
+                .map(crate::ir::lowering::context::CollectionId::FieldPath)
+        };
 
     // §6.8 Stage 5: when iterating a string AND the iterable is Ptr-typed
     // (e.g. a borrowed resource param), preserve iter_op as the Ptr — so
@@ -216,7 +231,7 @@ pub(super) fn lower_for(
         };
         match collection_kind {
             Some(CollectionKind::Array) =>
-                lower_for_array(ctx, builder, &var_name, iter_op, body, else_arm, pattern),
+                lower_for_array(ctx, builder, &var_name, iter_op, body, else_arm, pattern, iter_source_coll),
             Some(CollectionKind::OrderedMap | CollectionKind::Map) =>
                 lower_for_dict(ctx, builder, iter_op, body, else_arm, pattern),
             Some(CollectionKind::OrderedSet | CollectionKind::Set) =>
@@ -402,6 +417,11 @@ fn lower_for_array(
     body: &Block,
     else_arm: Option<&Block>,
     pattern: &Spanned<Pattern>,
+    // The iterable's collection identity, derived by the caller from the AST
+    // (the lowered operand is an unnamed borrow/deref tmp for `&`-params):
+    // element-FIELD borrows need it for CoW provenance (see the
+    // set_cow_borrow_source below).
+    iter_source_coll: Option<crate::ir::lowering::context::CollectionId>,
 ) {
     let (iter_local, iter_type) = init_borrow_iter_local(ctx, builder, iter_op);
 
@@ -479,6 +499,15 @@ fn lower_for_array(
         );
         ctx.register_local(var_name, elem, ptr_type);
         ctx.set_cow_borrow(builder, elem);
+        // Record the source collection so element-FIELD borrows
+        // (`String x = elem.name`, routed through set_field_or_elem_borrow)
+        // carry collection provenance to the var-decl default-borrow branch.
+        // AST-derived identities only — an unnamed iterable temp carries no
+        // identity that downstream mutation tracking could route back to
+        // (same rationale as the methods.rs Option__Ref__ provenance guard).
+        if let Some(src) = iter_source_coll.clone() {
+            ctx.set_cow_borrow_source(elem, src);
+        }
         // Borrow alias — collection owns the data; do NOT register for drop.
         lower_block(ctx, builder, body);
 
@@ -548,6 +577,17 @@ fn lower_for_enumerate(
     // Lower the receiver collection
     let mut iter_op = lower_expr(ctx, builder, receiver);
     let raw_iter_type = infer_operand_type_full(ctx, &iter_op, builder);
+    // Capture the iterable's collection identity from the AST — see the
+    // sibling capture in lower_for (threaded to lower_for_array).
+    let iter_source_coll: Option<crate::ir::lowering::context::CollectionId> =
+        if let Expr::Identifier(name) = &receiver.node {
+            ctx.lookup_local(name)
+                .map(|(lid, _)| crate::ir::lowering::context::CollectionId::Local(lid))
+        } else {
+            super::super::exprs::extract_field_path_string(&receiver.node)
+                .filter(|p| !ctx.is_source_mut_unsafe_at(p, receiver.span.start))
+                .map(crate::ir::lowering::context::CollectionId::FieldPath)
+        };
 
     // Auto-deref Ptr-typed iterables (Snag 2026-05-13). When `receiver`
     // is a borrowed parameter (`Vector[T] xs` → iter_op is
@@ -656,6 +696,11 @@ fn lower_for_enumerate(
             ctx.register_local(elem_name, elem, ptr_type);
         }
         ctx.set_cow_borrow(builder, elem);
+        // Source collection provenance for element-FIELD borrows — see the
+        // plain-array loop sibling above.
+        if let Some(src) = iter_source_coll.clone() {
+            ctx.set_cow_borrow_source(elem, src);
+        }
         // Borrow alias — collection owns the data; do NOT register for drop.
         lower_block(ctx, builder, body);
 

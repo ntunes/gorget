@@ -1,0 +1,25 @@
+# CoW field-of-for-element read (round-33 DEEP-1 §4b).
+#
+# `for itm in v: String x = itm.name` reads a String field of the loop
+# element. This is LOAD-BEARING on the for-element source threading: the
+# loop element `itm` is `set_cow_borrow`-tagged, but before the fix it
+# carried NO collection source, so the field-load `itm.name` (routed
+# through `set_field_or_elem_borrow`) had nothing to propagate and fell
+# to an eager `VarDeclFromBorrow` clone per read. Threading the iterable's
+# AST-derived CollectionId onto the loop element gives the field-load its
+# provenance, so the read borrows out of the collection.
+# Output must be correct on BOTH backends.
+
+struct Person:
+    String name
+    int age
+
+void main():
+    Vector[Person] people = [Person("Alice", 30), Person("Bob", 25), Person("Carol", 40)]
+
+    for itm in people:
+        String nm = itm.name
+        print(nm)
+        print(itm.age)
+
+    print("done")
