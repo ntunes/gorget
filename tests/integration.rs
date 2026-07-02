@@ -6822,6 +6822,20 @@ fn ctor_cap_arg_errors() {
     );
 }
 
+// A String ctor takes at most ONE content/capacity source — one positional
+// arg OR cap=, optionally with alloc=. Multi-source shapes (`String("a","b")`,
+// `String("a", cap=4)`) used to slip past typecheck (only the 1-arg form was
+// validated) and fall past the GIR String intercept into a call to an
+// undefined `String` symbol — unintelligible cc/llc errors. Core #8: a clean
+// type error at `gg check`. Round-33 sibling of string_ctor_arg_errors.
+#[test]
+fn string_ctor_multi_arg_errors() {
+    check_gg_fails(
+        "string_ctor_multi_arg_error.gg",
+        "a single content or capacity argument",
+    );
+}
+
 // `*x` (dereference) is valid only on a smart pointer (`Box[T]`). On any
 // other type the type checker used to return the inner type unchanged (a
 // silent no-op); `gg check` passed clean and the IR lowering emitted a
@@ -12628,6 +12642,29 @@ fn alloc_keyword() {
         "alloc_keyword.gg",
         "\
 len: 2
+used > 0: true
+done",
+    );
+}
+
+// `alloc=` on the String ctors — the one-shot allocator form the docs promise
+// (language-reference §15.3 lists String among the alloc=-accepting ctors).
+// Round-33: the String ctor lowering was named-arg-BLIND — `String(alloc=a)`
+// routed the ARENA VALUE as content into gorget_string_from_str
+// (SIGSEGV / "arena overflow block allocation failed" panic from safe code)
+// and 2-arg forms fell through to an unintelligible cc/llc error. Now lowered
+// under the same push/pop-allocator bracket as the collection ctors; the
+// runtime records the allocator in the Str, so growth reallocs stick to it.
+#[test]
+fn string_alloc_keyword() {
+    run_gg(
+        "string_alloc_keyword.gg",
+        "\
+hello
+abcdefghijklmnop
+grew in arena: true
+world
+hi
 used > 0: true
 done",
     );

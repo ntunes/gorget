@@ -1,0 +1,37 @@
+# `alloc=` on the String constructors — the one-shot allocator form
+# (language-reference §15.3 "Composable allocation"; String is listed among
+# the alloc=-accepting ctors). Before round-33 the String ctor lowering was
+# named-arg-BLIND: `String(alloc=a)` routed the ARENA VALUE as content into
+# `gorget_string_from_str`, reinterpreting the allocator struct as a Str —
+# SIGSEGV (bare arena) or "arena overflow block allocation failed" panic
+# (inside `with`) from safe code — and any 2-arg form (`String(cap=16,
+# alloc=a)`, `String("x", alloc=a)`) fell through to an unintelligible cc/llc
+# error. The ctor now runs under a push/pop-allocator bracket (the SAME
+# mechanism as the collection ctors); the runtime snapshots the allocator
+# into the Str's `alloc` field, so growth reallocs stick to it.
+from std.alloc import Arena
+
+void main():
+    with Arena(4096) as a:
+        # Empty + alloc=: binds the allocator via with_capacity(0) (the
+        # runtime clamps to a 16-byte minimum). from_str("") would return
+        # the shared static empty Str and silently NOT bind.
+        String s = String(alloc=a)
+        s.push("hello")
+        print(s)
+        # cap= + alloc=, then grow past cap: the realloc must come from the
+        # arena (Str.alloc is sticky), not the global allocator.
+        String t = String(cap=4, alloc=a)
+        int before = a.bytes_used()
+        t.push("abcdefghijklmnop")
+        print(t)
+        print(f"grew in arena: {a.bytes_used() > before}")
+        # Content + alloc=.
+        String u = String("world", alloc=a)
+        print(u)
+        # Positional capacity + alloc=.
+        String v = String(8, alloc=a)
+        v.push("hi")
+        print(v)
+        print(f"used > 0: {a.bytes_used() > 0}")
+    print("done")

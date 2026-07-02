@@ -1582,13 +1582,19 @@ impl<'a> TypeChecker<'a> {
                                         ResolvedType::Defined(def_id) => {
                                             matches!(self.scopes.get_def(*def_id).name.as_str(), "Arena" | "TrackingAllocator" | "PoolAllocator" | "TlsfAllocator" | "FixedBufferAllocator" | "FallbackAllocator")
                                         }
+                                        // Error: already diagnosed — don't cascade a
+                                        // second TypeMismatch printing `found Error`.
+                                        // Never/Var: diverging / unbound — can't
+                                        // classify; never false-positive. Same
+                                        // exemption set as the cap= arm above.
+                                        ResolvedType::Error | ResolvedType::Never | ResolvedType::Var(_) => true,
                                         _ => false,
                                     };
                                     if !is_alloc {
                                         self.error(
                                             SemanticErrorKind::TypeMismatch {
                                                 expected: "allocator type (Arena, TrackingAllocator, PoolAllocator, TlsfAllocator, FixedBufferAllocator, or FallbackAllocator)".to_string(),
-                                                found: format!("{:?}", self.types.get(alloc_resolved)),
+                                                found: self.describe_resolved_type(alloc_resolved),
                                             },
                                             arg.node.value.span,
                                         );
@@ -1612,6 +1618,29 @@ impl<'a> TypeChecker<'a> {
                         // cast-via-construction RFC (TODO.md) will later turn
                         // `String(T)` into a display conversion; until then the
                         // hint points at f-strings.
+                        // A String ctor takes at most ONE content/capacity source:
+                        // a single positional arg (content or capacity) OR cap=,
+                        // optionally combined with alloc=. Multi-source shapes
+                        // (`String("a", "b")`, `String("a", cap=4)`) used to slip
+                        // through (only the 1-arg form was validated) and fall
+                        // past the GIR String intercept into a call to an
+                        // undefined `String` symbol — an unintelligible cc/llc
+                        // error. Reject at check time instead (Core #8).
+                        if cname == "String" {
+                            let positional_count = args.iter().filter(|a| a.node.name.is_none()).count();
+                            let cap_count = args.iter().filter(|a| {
+                                a.node.name.as_ref().map_or(false, |n| n.node == "cap")
+                            }).count();
+                            if positional_count + cap_count > 1 {
+                                self.error(
+                                    SemanticErrorKind::TypeMismatch {
+                                        expected: "a single content or capacity argument — String(s), String(n), or String(cap=n), optionally with alloc=".to_string(),
+                                        found: format!("{} content/capacity arguments", positional_count + cap_count),
+                                    },
+                                    expr.span,
+                                );
+                            }
+                        }
                         if cname == "String" && args.len() == 1 && args[0].node.name.is_none() {
                             let arg_type = self.infer_expr(&args[0].node.value);
                             let resolved = self.resolve_type(arg_type);

@@ -670,31 +670,87 @@ pub(super) fn lower_call(
             return FunctionBuilder::copy(dst);
         }
 
-        // String("hello") constructor → gorget_string_from_str
-        // String(capacity) constructor → gorget_string_with_capacity
+        // String constructors — content, capacity, and allocator forms:
+        //   String("hi")  → gorget_string_from_str      String(n) / String(cap=n) → gorget_string_with_capacity
+        //   String(..., alloc=a) → same ctor under a push/pop-allocator bracket —
+        //   the one-shot allocator form, the SAME mechanism as the collection-ctor
+        //   bracket below (language-reference §15.3 "Composable allocation"). The
+        //   runtime ctor snapshots `__gorget_current_alloc` into the Str's `alloc`
+        //   field, so growth reallocs stay in the chosen allocator (sticky).
+        //   Before round-33 this branch was named-arg-BLIND: `String(alloc=a)`
+        //   lowered the Arena value as CONTENT into `gorget_string_from_str`,
+        //   reinterpreting the allocator struct as a Str (SIGSEGV / arena-overflow
+        //   panic from safe code), and any 2-arg form fell through to an
+        //   unintelligible cc/llc error.
         if name == "String" {
-            if args.len() == 1 {
-                let arg_op = lower_expr(ctx, builder, &args[0].node.value);
+            let alloc_arg = args.iter().find(|a| {
+                a.node.name.as_ref().map_or(false, |n| n.node == "alloc")
+            });
+            let cap_arg = args.iter().find(|a| {
+                a.node.name.as_ref().map_or(false, |n| n.node == "cap")
+            });
+            let positional_args: Vec<&Spanned<ast::CallArg>> = args.iter()
+                .filter(|a| a.node.name.is_none())
+                .collect();
+            // Exactly one content source (positional content/capacity OR cap=),
+            // and no named args beyond cap=/alloc= (unknown names + multi-source
+            // shapes are rejected at typecheck; don't intercept them here).
+            let named_accounted =
+                positional_args.len() + args.iter().filter(|a| {
+                    a.node.name.as_ref().map_or(false, |n| n.node == "cap" || n.node == "alloc")
+                }).count();
+            let shape_ok = positional_args.len() + usize::from(cap_arg.is_some()) <= 1
+                && named_accounted == args.len();
+            if shape_ok {
                 let owned_type = ctx.type_mapper.owned_string_type;
-                // All 8 int widths route to the capacity ctor (shared predicate,
-                // `is_int_type_id`, same routing as the positional sibling in
-                // exprs/mod.rs); non-int/non-String args are rejected at typecheck.
-                let arg_type = infer_operand_type_full(ctx, &arg_op, builder);
-                let fn_name = if is_int_type_id(arg_type) {
-                    "gorget_string_with_capacity"
+                // Lower the allocator FIRST and push the bracket so the ctor's
+                // allocation (and the Str's recorded `alloc`) come from it.
+                let bracketed = if let Some(alloc_a) = alloc_arg {
+                    let alloc_op = lower_expr(ctx, builder, &alloc_a.node.value);
+                    builder.push_allocator(alloc_op);
+                    true
                 } else {
-                    "gorget_string_from_str"
+                    false
                 };
-                let dst = ctx.call_extern_tracked(builder, fn_name, vec![arg_op], owned_type);
-                return FunctionBuilder::copy(dst);
-            } else if args.is_empty() {
-                let owned_type = ctx.type_mapper.owned_string_type;
-                let dst = ctx.call_extern_tracked(
-                    builder,
-                    "gorget_string_from_str",
-                    vec![Operand::Constant(Constant::Str(String::new()))],
-                    owned_type,
-                );
+                let dst = if let Some(cap_a) = cap_arg {
+                    let cap_op = lower_expr(ctx, builder, &cap_a.node.value);
+                    ctx.call_extern_tracked(builder, "gorget_string_with_capacity", vec![cap_op], owned_type)
+                } else if let Some(pos) = positional_args.first() {
+                    let arg_op = lower_expr(ctx, builder, &pos.node.value);
+                    // All 8 int widths route to the capacity ctor (shared predicate,
+                    // `is_int_type_id`, same routing as the positional sibling in
+                    // exprs/mod.rs); non-int/non-String args are rejected at typecheck.
+                    let arg_type = infer_operand_type_full(ctx, &arg_op, builder);
+                    let fn_name = if is_int_type_id(arg_type) {
+                        "gorget_string_with_capacity"
+                    } else {
+                        "gorget_string_from_str"
+                    };
+                    ctx.call_extern_tracked(builder, fn_name, vec![arg_op], owned_type)
+                } else if bracketed {
+                    // Empty + alloc=: `gorget_string_from_str("")` returns the
+                    // shared GORGET_EMPTY_STR view, which records NO allocator —
+                    // the one-shot alloc= would silently not bind and growth
+                    // would fall back to the global allocator. Route to
+                    // with_capacity(0) (runtime clamps to a 16-byte minimum) so
+                    // the Str records the allocator and growth sticks to it.
+                    ctx.call_extern_tracked(
+                        builder,
+                        "gorget_string_with_capacity",
+                        vec![Operand::Constant(Constant::I64(0))],
+                        owned_type,
+                    )
+                } else {
+                    ctx.call_extern_tracked(
+                        builder,
+                        "gorget_string_from_str",
+                        vec![Operand::Constant(Constant::Str(String::new()))],
+                        owned_type,
+                    )
+                };
+                if bracketed {
+                    builder.pop_allocator();
+                }
                 return FunctionBuilder::copy(dst);
             }
         }

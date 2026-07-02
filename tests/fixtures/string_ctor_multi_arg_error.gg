@@ -1,0 +1,13 @@
+# round-33: a String ctor takes at most ONE content/capacity source — a
+# single positional arg (content or capacity) OR cap=, optionally combined
+# with alloc=. Multi-source shapes used to slip past typecheck (only the
+# 1-arg positional form was validated) and fall past the GIR String intercept
+# into a call to an undefined `String` symbol — an unintelligible cc error
+# ("incompatible types when assigning to type 'Str' from type 'int64_t'") /
+# llc error ("'%v9' defined with type 'i64' but expected 'ptr'"). Must be a
+# clean type error at `gg check` (Core #8).
+void main():
+    String s = String("a", "b")
+    String t = String("a", cap=4)
+    print(s)
+    print(t)

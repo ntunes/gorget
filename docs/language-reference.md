@@ -4359,7 +4359,7 @@ void main():
 
 **Scoped binding (`with`)**
 
-The `with` statement binds an allocator to a block scope. All allocations inside the block — including those from collections like `Vector`, `List`, and `Dict` — automatically use the bound allocator. On block exit, the allocator is destroyed and all its memory is freed.
+The `with` statement binds an allocator to a block scope. All allocations inside the block — including those from collections like `Vector` and `Dict` — automatically use the bound allocator. On block exit, the allocator is destroyed and all its memory is freed.
 
 ```gorget
 from std.alloc import Arena
@@ -4390,7 +4390,7 @@ void main():
     print(f"used: {pool.used_blocks()}")
 ```
 
-The `alloc=` parameter is accepted by `Vector`, `List`, `Array`, `Dict`, `HashMap`, `Set`, `HashSet`, `Channel`, and `String` constructors.
+The `alloc=` parameter is accepted by `Vector`, `Dict`, `HashMap`, `Set`, `HashSet`, `Channel`, and `String` constructors. On a `String` constructor it composes with the content and capacity forms — `String(alloc=a)`, `String("text", alloc=a)`, `String(cap=n, alloc=a)`, `String(n, alloc=a)` — and the string records the allocator, so growth reallocations stay in it. The bare `String(alloc=a)` form pre-allocates the minimum capacity (16 bytes) from the allocator so the binding takes effect.
 
 **Escape analysis**
 
