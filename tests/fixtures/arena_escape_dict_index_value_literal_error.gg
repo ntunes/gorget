@@ -1,0 +1,15 @@
+# R-A regression guard: `d[k] = v` (index-store sugar) into an OUTER Dict
+# inside `with Arena` is the SAME materializing-ingest class as `d.put(k, v)`
+# — `gorget_map_put` copies the value literal into an owned slot allocated
+# from the arena, which dangles at teardown (ASan-verified heap-UAF). The
+# index-store must share the method form's Ingest classification, so the
+# plain string literal is NOT exempt here. Must reject.
+from std.alloc import Arena
+from std.collections import Dict
+
+void main():
+    Dict[String, String] outer = Dict[String, String]()
+    outer.insert("seed", "v")
+    with Arena(4096) as a:
+        outer["k"] = "hi"
+    print(outer.get("k").unwrap())

@@ -1,0 +1,13 @@
+# #1 sibling: the same clone-if-live UAF via the KEY — `outer[k] = 5` with a
+# bare (non-`!`), still-live, non-Copy outer key `k` into an OUTER Dict inside
+# `with Arena`. The materializing map store copies the key into an
+# arena-allocated slot that dangles at teardown. Rejects, suggesting `!k`.
+from std.alloc import Arena
+from std.collections import Dict
+
+void main():
+    Dict[String, int] outer = Dict[String, int]()
+    String k = String("kk")
+    with Arena(4096) as a:
+        outer[k] = 5
+    print(outer.get("kk").unwrap())

@@ -1,0 +1,15 @@
+# R1 regression guard: a Copy scalar FIELD compound-assign inside `with
+# Arena` (`c.n += 5`, n is int) mutates the field in place — no
+# materialization, nothing escapes. Must be ACCEPTED (was over-rejected
+# when the compound-assign gate passed fallback=None for path targets and
+# treated the unresolved lvalue type as non-Copy).
+from std.alloc import Arena
+
+struct Counter:
+    int n
+
+void main():
+    Counter c = Counter(0)
+    with Arena(4096) as a:
+        c.n += 5
+    print(c.n)

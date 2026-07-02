@@ -12626,6 +12626,160 @@ fn arena_escape_set_add() {
     );
 }
 
+// ── Round-33 arena-escape one-producer rework: `arena_backed_source`
+// classifies every source shape by PROVENANCE (everything materialized
+// under the `with` redirect is arena-backed), consumed by four thin gates
+// (assign incl. field/index destinations, compound-assign, return,
+// element-ingest). One fixture per gate + the §15.3 flagship verbatim. ──
+
+#[test]
+fn arena_escape_assign_fresh_error() {
+    check_gg_fails(
+        "arena_escape_assign_fresh_error.gg",
+        "cannot assign arena-scoped value",
+    );
+}
+
+#[test]
+fn arena_escape_return_fresh_error() {
+    check_gg_fails(
+        "arena_escape_return_fresh_error.gg",
+        "cannot return arena-scoped value",
+    );
+}
+
+#[test]
+fn arena_escape_push_live_outer_error() {
+    check_gg_fails(
+        "arena_escape_push_live_outer_error.gg",
+        "use `!s` to move it into the collection, or clone outside the block",
+    );
+}
+
+#[test]
+fn arena_escape_field_store_error() {
+    check_gg_fails(
+        "arena_escape_field_store_error.gg",
+        "cannot assign arena-scoped value",
+    );
+}
+
+#[test]
+fn arena_escape_compound_assign_error() {
+    check_gg_fails(
+        "arena_escape_compound_assign_error.gg",
+        "cannot assign arena-scoped value",
+    );
+}
+
+// R1 guard: a Copy scalar field/element compound-assign inside `with Arena`
+// mutates in place — nothing materializes, nothing escapes — must be accepted.
+#[test]
+fn arena_compound_assign_copy_field_ok() {
+    run_gg("arena_compound_assign_copy_field_ok.gg", "5");
+}
+
+#[test]
+fn arena_compound_assign_copy_index_ok() {
+    run_gg("arena_compound_assign_copy_index_ok.gg", "11");
+}
+
+// R2 guard: a plain string literal INGESTED into an outer collection inside
+// `with Arena` materializes an owned heap copy through the arena allocator and
+// dangles at teardown (ASan-verified UAF) — must reject, even though the same
+// literal is safe when BOUND (a static view).
+#[test]
+fn arena_escape_push_literal_error() {
+    check_gg_fails(
+        "arena_escape_push_literal_error.gg",
+        "cannot assign arena-scoped value",
+    );
+}
+
+#[test]
+fn arena_escape_set_add_literal_error() {
+    check_gg_fails(
+        "arena_escape_set_add_literal_error.gg",
+        "cannot assign arena-scoped value",
+    );
+}
+
+// R2 control: a literal pushed into an ARENA-SCOPED collection does not escape
+// (buffer + copy die with the arena) — accepted and ASan-clean.
+#[test]
+fn arena_push_literal_scoped_ok() {
+    run_gg("arena_push_literal_scoped_ok.gg", "hi");
+}
+
+// R-A guard: `d[k] = v` index-store into an OUTER map is the same
+// materializing-ingest UAF class as `d.put(k, v)` — both the value literal
+// (`outer["k"]="hi"`) and the KEY literal (`outer["newkey"]=7`, where the int
+// value is Copy) are copied into arena-allocated owned slots and dangle at
+// teardown. The index-store sugar shares the method form's Ingest
+// classification (driven by the typed `CollectionKind.index_store_materializes`).
+#[test]
+fn arena_escape_dict_index_value_literal_error() {
+    check_gg_fails(
+        "arena_escape_dict_index_value_literal_error.gg",
+        "cannot assign arena-scoped value",
+    );
+}
+
+#[test]
+fn arena_escape_dict_index_newkey_error() {
+    check_gg_fails(
+        "arena_escape_dict_index_newkey_error.gg",
+        "cannot assign arena-scoped value",
+    );
+}
+
+// R-A controls: a Vector index-store (`gorget_array_set`, non-materializing)
+// and a literal index-store into an ARENA-SCOPED Dict both stay accepted +
+// ASan-clean — no escape.
+#[test]
+fn arena_vector_index_store_ok() {
+    run_gg("arena_vector_index_store_ok.gg", "hi");
+}
+
+#[test]
+fn arena_dict_index_scoped_ok() {
+    run_gg("arena_dict_index_scoped_ok.gg", "hi");
+}
+
+// #1 guard: the index-store sugar shares the ONE `classify_ingest_escape`
+// producer with the `d.put(k,v)` method form — so `outer[k]=v` with a bare
+// live outer value/key rejects (suggesting `!`) exactly like the method form,
+// and the compound-assign `outer[k]+=v` routes its materialized key through
+// the same helper. `outer[k]=!v` (explicit move) stays accepted + ASan-clean.
+#[test]
+fn arena_escape_index_bare_value_error() {
+    check_gg_fails(
+        "arena_escape_index_bare_value_error.gg",
+        "use `!v` to move it into the collection, or clone outside the block",
+    );
+}
+
+#[test]
+fn arena_escape_index_bare_key_error() {
+    check_gg_fails(
+        "arena_escape_index_bare_key_error.gg",
+        "use `!k` to move it into the collection, or clone outside the block",
+    );
+}
+
+#[test]
+fn arena_escape_compound_index_key_error() {
+    check_gg_fails(
+        "arena_escape_compound_index_key_error.gg",
+        "cannot assign arena-scoped value",
+    );
+}
+
+#[test]
+fn arena_index_move_value_ok() {
+    run_gg("arena_index_move_value_ok.gg", "payload");
+}
+
 #[test]
 fn arena_push_copy_element_ok() {
     run_gg("arena_push_copy_element_ok.gg", "42");

@@ -1,0 +1,10 @@
+# language-reference §15.3 "Escape analysis" FLAGSHIP example, verbatim: a
+# fresh ctor materializes in the arena under the `with` redirect, so
+# assigning it to an outer variable dangles at block exit. Must reject.
+from std.alloc import Arena
+from std.collections import Vector
+
+void main():
+    Vector[int] outer = Vector[int]()
+    with Arena(4096) as a:
+        outer = !Vector[int]()  # error: cannot assign arena-scoped value

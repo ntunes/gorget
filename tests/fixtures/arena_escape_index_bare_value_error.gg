@@ -1,0 +1,15 @@
+# #1 regression guard: an index-store `outer[1] = v` of a bare (non-`!`),
+# still-live, non-Copy OUTER value into an OUTER Dict inside `with Arena` is
+# clone-if-live — the clone lands in the arena and dangles at teardown
+# (ASan-verified heap-UAF). This is the IDENTICAL program as `outer.put(1, v)`
+# (which rejects) — the index-store sugar shares the one ingest producer, so it
+# rejects too, suggesting `!v`. (`outer[1] = !v` is the accepted move form.)
+from std.alloc import Arena
+from std.collections import Dict
+
+void main():
+    Dict[int, String] outer = Dict[int, String]()
+    String v = String("payload")
+    with Arena(4096) as a:
+        outer[1] = v
+    print(outer.get(1).unwrap())

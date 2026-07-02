@@ -1,0 +1,14 @@
+# R-A control: a Vector index-store (`outer[0] = "hi"`) inside `with Arena`
+# lowers to `gorget_array_set`, which writes the value slot DIRECTLY (no
+# elem_materialize, no fresh allocation) — nothing escapes. Array is a
+# non-materializing CollectionKind, so this stays Bind (the literal exemption
+# applies). Must be ACCEPTED and run ASan-clean.
+from std.alloc import Arena
+from std.collections import Vector
+
+void main():
+    Vector[String] outer = Vector[String]()
+    outer.push("seed")
+    with Arena(4096) as a:
+        outer[0] = "hi"
+    print(outer.get(0).unwrap())

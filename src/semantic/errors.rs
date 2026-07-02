@@ -173,6 +173,13 @@ impl std::fmt::Display for SemanticWarning {
 pub enum ArenaEscapeKind {
     Return,
     AssignOuter { target: String },
+    /// Element-ingest (`push`/`insert`/`add`/`send`/...) of a bare LIVE
+    /// outer identifier into an outer-rooted buffer inside the arena block:
+    /// clone-if-live materializes the clone in the arena, so the ingested
+    /// element dangles at block exit. Distinct kind so the fix (`!` move)
+    /// can be suggested — the generic AssignOuter wording would misname the
+    /// live outer value as "arena-scoped".
+    IngestLiveOuter { target: String },
 }
 
 #[derive(Debug, Clone)]
@@ -936,6 +943,9 @@ impl std::fmt::Display for SemanticError {
                     }
                     ArenaEscapeKind::AssignOuter { target } => {
                         write!(f, "cannot assign arena-scoped value `{name}` to outer variable `{target}` — memory will be freed when arena is destroyed")
+                    }
+                    ArenaEscapeKind::IngestLiveOuter { target } => {
+                        write!(f, "cannot insert `{name}` into `{target}` inside an arena block: `{name}` is still live here, so its clone would be arena-allocated and freed when the arena is destroyed — use `!{name}` to move it into the collection, or clone outside the block")
                     }
                 }
             }

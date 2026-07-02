@@ -283,6 +283,11 @@ pub(super) struct BorrowChecker<'a> {
     /// `struct_field_ref_flags`. Used to enforce MutRef exclusivity at
     /// construction time.
     pub(super) struct_field_mut_ref_flags: FxHashMap<DefId, Vec<bool>>,
+    /// Per-struct field NAMES in declaration order (index-aligned with
+    /// `DefInfo.field_types`). Covers ALL structs. Used by the arena-escape
+    /// lvalue-type resolver to recover a named field's value type for a
+    /// `struct.field += …` / `struct.field = …` compound/assign target.
+    pub(super) struct_field_names: FxHashMap<DefId, Vec<String>>,
 
     // ── Lifetime inference state ──
     /// Origin of each reference-typed variable.
@@ -423,6 +428,18 @@ pub(super) enum WithGuardKind {
     Iteration,
 }
 
+/// Consume context for `arena_backed_source` — distinguishes a value that is
+/// BOUND/returned (a plain string literal stays a static view → safe) from
+/// one INGESTED into an owning collection (a literal materializes an owned
+/// heap copy through the arena allocator → escapes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum EscapeCtx {
+    /// Assign-to-outer / return: literal binds as a static view.
+    Bind,
+    /// Element push/put/insert/add/send into an owning collection.
+    Ingest,
+}
+
 impl<'a> BorrowChecker<'a> {
     fn new(
         scopes: &'a ScopeTable,
@@ -435,6 +452,7 @@ impl<'a> BorrowChecker<'a> {
         ref_type_structs: FxHashSet<DefId>,
         struct_field_ref_flags: FxHashMap<DefId, Vec<bool>>,
         struct_field_mut_ref_flags: FxHashMap<DefId, Vec<bool>>,
+        struct_field_names: FxHashMap<DefId, Vec<String>>,
         fn_purity: &'a super::purity::PurityByName,
     ) -> Self {
         Self {
@@ -457,6 +475,7 @@ impl<'a> BorrowChecker<'a> {
             ref_type_structs,
             struct_field_ref_flags,
             struct_field_mut_ref_flags,
+            struct_field_names,
             var_origins: FxHashMap::default(),
             invalidated_origins: FxHashSet::default(),
             index_borrow_sources: FxHashMap::default(),
@@ -545,6 +564,7 @@ pub fn check_module(
     let ref_type_structs = time!("compute_ref_type_structs", compute_ref_type_structs(module, scopes));
     let struct_field_ref_flags = time!("compute_struct_field_ref_flags", compute_struct_field_ref_flags(module, scopes, &ref_type_structs));
     let struct_field_mut_ref_flags = time!("compute_struct_field_mut_ref_flags", compute_struct_field_mut_ref_flags(module, scopes, &ref_type_structs));
+    let struct_field_names = time!("compute_struct_field_names", compute_struct_field_names(module, scopes));
 
     // Pass 5a: compute return_borrows_from for each function
     time!("compute_all_return_borrows", compute_all_return_borrows(module, scopes, types, resolution_map, function_info, &ref_type_structs));
@@ -559,6 +579,7 @@ pub fn check_module(
         expr_types,
         method_resolutions, ref_type_structs, struct_field_ref_flags,
         struct_field_mut_ref_flags,
+        struct_field_names,
         &purity_by_name,
     );
     checker.warn_const = warn_const;

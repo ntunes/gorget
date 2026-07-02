@@ -1,0 +1,16 @@
+# Assign-gate, field destination: storing an arena-scoped value into a
+# field of an outer struct escapes through the field path — the root `h`
+# outlives the arena. Must reject.
+from std.alloc import Arena
+from std.collections import Vector
+
+struct Holder:
+    Vector[int] data
+
+void main():
+    Holder h = Holder(Vector[int]())
+    with Arena(4096) as a:
+        Vector[int] inner = Vector[int]()
+        inner.push(3)
+        h.data = !inner
+    print(h.data.get(0).unwrap())

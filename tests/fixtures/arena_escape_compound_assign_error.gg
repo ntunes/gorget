@@ -1,0 +1,11 @@
+# CompoundAssign-gate: `outer += "-more"` on a non-Copy outer target lowers
+# to a fresh materialization of the combined value; under the `with`
+# redirect it lands in the arena, so the outer String dangles at block
+# exit. Must reject.
+from std.alloc import Arena
+
+void main():
+    String outer = String("base")
+    with Arena(4096) as a:
+        outer += "-more"
+    print(outer)

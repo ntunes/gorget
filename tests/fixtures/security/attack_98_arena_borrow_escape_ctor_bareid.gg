@@ -5,7 +5,7 @@
 # `gorget_arena_destroy` frees the arena at `with`-scope exit — a
 # heap-use-after-free (RUN-confirmed under ASan: READ in gorget_string_free).
 # The bare-id form (and `!arenaStr`) is the same class as the borrow-read form,
-# caught by the same `ctor_arg_arena_escape` predicate ("fix the class").
+# caught by the one producer `arena_backed_source` ("fix the class").
 # `gg check` must REJECT this.
 
 from std.alloc import Arena

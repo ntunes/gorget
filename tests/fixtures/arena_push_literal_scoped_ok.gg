@@ -1,0 +1,12 @@
+# R2 control: pushing a plain string literal into an ARENA-SCOPED collection
+# (the collection itself lives and dies with the arena) does NOT escape — the
+# owned copy and its buffer are freed together at block exit. Must be
+# ACCEPTED and run ASan-clean.
+from std.alloc import Arena
+from std.collections import Vector
+
+void main():
+    with Arena(4096) as a:
+        Vector[String] inner = Vector[String]()
+        inner.push("hi")
+        print(inner.get(0).unwrap())

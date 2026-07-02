@@ -1,0 +1,14 @@
+# Secondary (same class): a compound-assign index-store `outer["newkey"] += 5`
+# on a Dict[String, int] materializes the KEY into an arena-allocated slot even
+# though the int VALUE is Copy. The compound-assign gate routes the key through
+# the SAME ingest producer as `outer["newkey"] = 7`, so it rejects (the Copy
+# value must not hide the escaping key). Must reject.
+from std.alloc import Arena
+from std.collections import Dict
+
+void main():
+    Dict[String, int] outer = Dict[String, int]()
+    outer.insert("existing", 1)
+    with Arena(4096) as a:
+        outer["newkey"] += 5
+    print(outer.get("existing").unwrap())

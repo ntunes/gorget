@@ -1,0 +1,12 @@
+# R-A control: a literal index-store into an ARENA-SCOPED Dict (the Dict
+# itself lives and dies with the arena) does NOT escape — the materialized
+# key/value and the Dict buffer are freed together at block exit. Must be
+# ACCEPTED and run ASan-clean.
+from std.alloc import Arena
+from std.collections import Dict
+
+void main():
+    with Arena(4096) as a:
+        Dict[String, String] inner = Dict[String, String]()
+        inner["k"] = "hi"
+        print(inner.get("k").unwrap())

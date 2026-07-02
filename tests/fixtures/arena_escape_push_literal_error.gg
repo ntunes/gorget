@@ -1,0 +1,13 @@
+# R2 regression guard: pushing a PLAIN STRING LITERAL into an OUTER (non-
+# arena) collection inside `with Arena` is a heap-UAF — the collection owns
+# its element, so the literal materializes an owned heap copy through the
+# arena allocator and dangles at teardown (ASan-verified). The literal is
+# exempt only when BOUND (a static view), not when INGESTED. Must reject.
+from std.alloc import Arena
+from std.collections import Vector
+
+void main():
+    Vector[String] outer = Vector[String]()
+    with Arena(4096) as a:
+        outer.push("hi")
+    print(outer.get(0).unwrap())

@@ -491,13 +491,16 @@ impl<'a> BorrowChecker<'a> {
                 //      element-ingesting owned buffer) → correctly excluded,
                 //   3b. the receiver handle's root OUTLIVES the arena
                 //      (root ∉ arena_scoped_vars),
-                //   4. some arg traces to an arena-scoped source collection
-                //      whose bound element type is non-Copy
-                //      (`arena_escaping_borrow_source` — Copy elements are
-                //      value-copied out, no aliasing).
-                // Reuses the existing ArenaEscape/AssignOuter diagnostic (no new
-                // variant); `.clone()` is NOT suggested — cloning into the
-                // in-scope arena UAFs too.
+                //   4. some arg escapes per the shared ingest producer
+                //      `classify_ingest_escape` — arena-scoped / fresh
+                //      materialization / plain literal (owned-copied into the
+                //      buffer here) → AssignOuter, OR a bare LIVE outer
+                //      non-Copy identifier (clone-if-live lands in the arena)
+                //      → IngestLiveOuter (suggests `!name`; a true move stays
+                //      accepted). This is the SAME helper the index-store
+                //      gates use, so `d.put(k,v)` / `d[k]=v` / `d[k]+=v` are
+                //      behaviorally identical. `.clone()` is NOT suggested —
+                //      cloning into the in-scope arena UAFs too.
                 if self.arena_depth > 0
                     && crate::ir::lowering::builtins::is_mutating_builtin_method(
                         method.node.as_str(),
@@ -508,18 +511,25 @@ impl<'a> BorrowChecker<'a> {
                         if !self.arena_scoped_vars.contains(&recv_root) {
                             let dest_name = self.scopes.get_def(recv_root).name.clone();
                             for arg in args {
-                                if let Some(src_root) =
-                                    self.arena_escaping_borrow_source(&arg.node.value)
-                                {
-                                    self.error(
-                                        SemanticErrorKind::ArenaEscape {
-                                            name: self.scopes.get_def(src_root).name.clone(),
-                                            kind: crate::semantic::errors::ArenaEscapeKind::AssignOuter {
-                                                target: dest_name.clone(),
-                                            },
-                                        },
-                                        arg.node.value.span,
-                                    );
+                                // Route EVERY ingested method arg through the
+                                // shared `classify_ingest_escape` producer so
+                                // `d.put(k, v)` stays behaviorally identical to
+                                // the `d[k] = v` / `d[k] += v` index-store
+                                // ingest positions (Core #4 — one helper, no
+                                // per-position rule drift). The element fallback
+                                // is the bound element type for a borrow-read
+                                // arg (`v.get(0).unwrap()`).
+                                let elem_fallback =
+                                    self.arena_borrowed_element_type(&arg.node.value);
+                                let is_moved =
+                                    arg.node.ownership == Ownership::Move;
+                                if let Some((kind, span)) = self.classify_ingest_escape(
+                                    &arg.node.value,
+                                    elem_fallback,
+                                    is_moved,
+                                    &dest_name,
+                                ) {
+                                    self.error(kind, span);
                                 }
                             }
                         }

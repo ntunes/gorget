@@ -495,8 +495,8 @@ fn sec_96_arena_borrow_escape_ctor_arg() {
 fn sec_98_arena_borrow_escape_ctor_bareid() {
     // N2 subset (b) sibling: the ctor arg is a BARE arena-scoped non-Copy
     // identifier (`Some(arenaStr)` / `!arenaStr`), not a `.get()` borrow-read —
-    // the same UAF class, caught by the same `ctor_arg_arena_escape` predicate.
-    // RUN-confirmed UAF under ASan.
+    // the same UAF class, now caught by the one producer `arena_backed_source`
+    // (the arena-scoped-identifier arm). RUN-confirmed UAF under ASan.
     security_rejected("attack_98_arena_borrow_escape_ctor_bareid", "cannot assign arena-scoped value");
 }
 

@@ -8,7 +8,7 @@ use crate::semantic::ids::DefId;
 use crate::semantic::scope::DefKind;
 use crate::semantic::types::{self as types, ResolvedType};
 
-use super::{BorrowChecker, BorrowOrigin, BorrowCaptureMode, CaptureSet, SharedDerivedInfo, VarState, WithGuardKind, BLOCKING_CALL_NAMES};
+use super::{BorrowChecker, BorrowOrigin, BorrowCaptureMode, CaptureSet, EscapeCtx, SharedDerivedInfo, VarState, WithGuardKind, BLOCKING_CALL_NAMES};
 use super::type_utils::is_ast_type_ref;
 use super::return_borrows::{CapturedRefOriginCollector, CapturedMutationCollector, CaptureSetCollector};
 
@@ -544,122 +544,276 @@ impl<'a> BorrowChecker<'a> {
             .map_or(false, |p| p.collection_kind.is_some() || p.owns_buffered_elements)
     }
 
-    /// Centralized arena-escape source predicate (the "fix the class" core,
-    /// shared by every consume/ingest position: collection `push`/`put`/...,
-    /// Channel `send` / Heap `push`, and constructor/wrapper args at an
-    /// escaping destination).
-    ///
-    /// Returns the arena-scoped collection ROOT def-id when `arg` is a
-    /// borrow-producing read (`v.get(0).unwrap()` / `v[i]` / `v.first()`)
-    /// whose source collection is arena-scoped AND whose bound element type is
-    /// non-Copy — i.e. the precise shape that, when ingested into a buffer that
-    /// outlives the arena, becomes a heap-use-after-free at arena destruction.
-    /// Copy elements (value-copied out, no aliasing) and non-arena sources
-    /// return `None`. Caller is responsible for the destination-escapes test
-    /// (the receiver / target / channel handle outliving the arena).
-    pub(super) fn arena_escaping_borrow_source(
-        &self, arg: &Spanned<Expr>,
-    ) -> Option<DefId> {
-        let (src_root, _) = self.find_collection_source_with_path(arg)?;
-        if !self.arena_scoped_vars.contains(&src_root) {
-            return None;
-        }
-        let elem_non_copy = self
-            .arena_borrowed_element_type(arg)
-            .map_or(false, |elem_tid| {
-                !super::type_utils::is_copy_type(elem_tid, self.types, self.scopes)
-            });
-        if elem_non_copy { Some(src_root) } else { None }
+    /// The builtin `CollectionKind` of the value `expr` denotes (its recorded
+    /// or declared type resolved through `lookup_protocol`), or `None` when
+    /// `expr` isn't a builtin collection. Used by the arena-escape Assign gate
+    /// to decide whether an `Expr::Index` STORE target materializes its
+    /// key/value (map/set put) — an INGEST — or stores a view (array set) — a
+    /// BIND — from the SAME typed fact the runtime store path uses.
+    pub(super) fn collection_kind_of_expr(
+        &self, expr: &Spanned<Expr>,
+    ) -> Option<crate::ir::types::CollectionKind> {
+        let tid = self.lvalue_value_type(expr)?;
+        let base_def = match self.types.get(tid) {
+            ResolvedType::Defined(d) | ResolvedType::Generic(d, _) => *d,
+            _ => return None,
+        };
+        let base_name = &self.scopes.get_def(base_def).name;
+        crate::ir::lowering::builtins::lookup_protocol(base_name)
+            .and_then(|p| p.collection_kind)
     }
 
-    /// Subset (b) of the arena borrow-escape class: a CONSTRUCTOR / wrapper call
-    /// (`Some(...)` / `Ok(...)` / `Error(...)` / a struct or newtype ctor like
-    /// `Wrapper(...)`) whose argument is an arena-escaping source. The
-    /// constructor copies/moves the arena element into the newly built value;
-    /// when that value then flows to an escaping destination (outer binding /
-    /// return), the in-arena element it aliases dangles at arena destruction —
-    /// a heap-use-after-free (RUN-confirmed under ASan).
+    /// ONE PRODUCER for the arena-escape source classification (Core #4 —
+    /// fix the class, not the instance). Only meaningful when
+    /// `arena_depth > 0`; every escape gate (assign-to-outer, return,
+    /// element-ingest into an outer-rooted buffer, compound-assign) calls
+    /// this instead of classifying source shapes locally.
     ///
-    /// Returns `(arena_source_root, arg_span)` for the first escaping arg.
-    /// Recurses through nested constructors (`Some(Wrapper(v.get(0)...))`).
-    /// `Expr::Call` covers `Some`/`Ok`/`Error` (prelude variants), enum variant
-    /// constructors, newtype constructors, and positional struct constructors —
-    /// the callee must resolve to a `Variant`/`Newtype`/`Struct`. The caller
-    /// owns the destination-escapes test (target outliving the arena). A bare
-    /// (unwrapped) RHS — borrow-read or arena identifier — is handled by the
-    /// existing AssignOuter paths in `check_stmt`, not here.
+    /// Classifies whether the VALUE of `expr` is arena-backed — i.e. whether
+    /// its heap bytes are freed when the innermost `with <allocator>` block
+    /// exits. Under the dynamic `with` redirect EVERY allocation in the block
+    /// draws from the block allocator, so the classification is by
+    /// PROVENANCE, not by shape-specific tracing:
     ///
-    /// Two arena-escaping arg shapes are caught (uniformly — same UAF class):
-    ///   - a borrow-producing read of an arena collection
-    ///     (`v.get(0).unwrap()` — `arena_escaping_borrow_source`), and
-    ///   - a bare arena-scoped non-Copy identifier (`Some(arenaStr)`, also via
-    ///     `!arenaStr`) — the ctor copies/moves that arena-allocated value into
-    ///     the built value, which dangles past the arena.
-    pub(super) fn ctor_arg_arena_escape(
-        &self, value: &Spanned<Expr>,
-    ) -> Option<(DefId, Span)> {
-        match &value.node {
-            // `Some(...)` / `Ok(...)` / `Error(...)` (prelude variants), enum
-            // variant constructors, newtype constructors. (A positional struct
-            // constructor `Wrapper(...)` is desugared to `Expr::StructLiteral`
-            // by resolution, handled in the arm below.)
-            Expr::Call { callee, args, .. } => {
-                let is_constructor = self
-                    .resolve_callee_def_id(callee)
-                    .map_or(false, |id| matches!(
-                        self.scopes.get_def(id).kind,
-                        DefKind::Variant | DefKind::Newtype | DefKind::Struct
-                    ));
-                if !is_constructor {
-                    return None;
-                }
-                for arg in args {
-                    if let Some(hit) = self.ctor_single_arg_escape(&arg.node.value) {
-                        return Some(hit);
-                    }
-                }
-                None
+    ///   SAFE   — bare identifier (incl. `!ident`) of a var bound OUTSIDE the
+    ///            arena scope: pure alias/move of outer-backed bytes, no
+    ///            materialization (ASan-verified CLEAN).
+    ///   SAFE   — Copy-typed values (value-copied out, no heap bytes).
+    ///   SAFE   — plain string literals (static storage; ASan-verified CLEAN).
+    ///   ESCAPE — bare identifier of an arena-scoped var (`arena_scoped_vars`).
+    ///   ESCAPE — everything else non-Copy: ctor / function / method calls,
+    ///            f-strings, list/dict/set literals, concatenation,
+    ///            comprehensions … — all materialize under the redirect.
+    ///            This INCLUDES chains rooted in OUTER collections
+    ///            (`src.get(0).unwrap()`, `src.pop().unwrap()`): their
+    ///            transient/clone materializes in the arena (ASan-verified
+    ///            UAF), and element provenance through a mutable collection
+    ///            is statically unknowable anyway.
+    ///
+    /// Returns `(diagnostic_name, span)` of the offending source.
+    /// `fallback_tid` is the DESTINATION type, used for the Copy test when
+    /// the expression's own span has no recorded type (unknown = non-Copy,
+    /// conservative).
+    ///
+    /// `ctx` distinguishes the two consume shapes that treat a PLAIN STRING
+    /// LITERAL differently:
+    ///   - `EscapeCtx::Bind` (assign / return): a literal binds/returns as a
+    ///     static view (`gorget_str_from_literal`, cap==0, no arena
+    ///     allocation) — ASan-verified safe, so exempt it.
+    ///   - `EscapeCtx::Ingest` (element push/put/insert/add/send): the
+    ///     collection must OWN its element, so the literal materializes an
+    ///     owned heap copy through the arena allocator (ASan-verified UAF at
+    ///     arena teardown) — do NOT exempt; treat as arena-backed.
+    /// Every OTHER shape is context-independent.
+    pub(super) fn arena_backed_source(
+        &self,
+        expr: &Spanned<Expr>,
+        fallback_tid: Option<crate::semantic::ids::TypeId>,
+        ctx: EscapeCtx,
+    ) -> Option<(String, Span)> {
+        match &expr.node {
+            Expr::Move { expr: inner } | Expr::MutableBorrow { expr: inner } => {
+                self.arena_backed_source(inner, fallback_tid, ctx)
             }
-            // Positional/named struct constructor — `Wrapper(...)` desugars here.
-            // StructLiteral args are bare `Spanned<Expr>` (no CallArg wrapper).
-            Expr::StructLiteral { args, .. } => {
-                for arg in args {
-                    if let Some(hit) = self.ctor_single_arg_escape(arg) {
-                        return Some(hit);
+            Expr::Identifier(name) => {
+                let did = self.resolution_map.get(&expr.span.start)?;
+                if self.arena_scoped_vars.contains(did) {
+                    Some((name.clone(), expr.span))
+                } else {
+                    None
+                }
+            }
+            // Receiver alias (`self`), never a fresh materialization here;
+            // the return-of-borrowed-receiver case is the return gate's
+            // param rule, not the producer's.
+            Expr::SelfExpr => None,
+            Expr::IntLiteral(_)
+            | Expr::FloatLiteral(_)
+            | Expr::BoolLiteral(_)
+            | Expr::NoneLiteral => None,
+            // Plain string literal: static bytes when BOUND (a static view,
+            // safe), but an owned heap copy when INGESTED into a collection —
+            // decided explicitly per context rather than via the Copy test
+            // (the recorded literal type may be the Copy `str` VIEW, which
+            // would wrongly clear the ingest case). An f-string (has
+            // interpolations) always materializes in the arena, both contexts.
+            Expr::StringLiteral(_, interps) if interps.is_empty() => match ctx {
+                EscapeCtx::Bind => None,
+                EscapeCtx::Ingest => {
+                    Some(("<arena-allocated temporary>".to_string(), expr.span))
+                }
+            },
+            _ => {
+                if self.expr_value_is_copy(expr, fallback_tid) {
+                    None
+                } else {
+                    Some(("<arena-allocated temporary>".to_string(), expr.span))
+                }
+            }
+        }
+    }
+
+    /// The COMPLETE ingest-escape rule set for ONE ingested operand — the
+    /// single producer (Core #4) shared by EVERY ingest position: collection
+    /// `push`/`put`/`insert`/`add`/`send`, and the `c[k] = v` / `c[k] += v`
+    /// index-store KEY & VALUE on a materializing (map/set) collection. Sharing
+    /// this one helper is what makes `d.put(k, v)`, `d[k] = v`, and the
+    /// `d[k] += v` key BEHAVIORALLY IDENTICAL — no per-position ingest rule can
+    /// drift out of sync again (the R-A/#1 class).
+    ///
+    /// Two rules, applied in order (the caller reports the returned error):
+    ///   (1) `arena_backed_source(.., Ingest)` — a plain string literal is NOT
+    ///       exempt in the Ingest context (the collection OWNS its element, so
+    ///       the literal is copied into an arena-allocated slot); an
+    ///       arena-scoped identifier and any fresh non-Copy materialization
+    ///       escape → `AssignOuter`.
+    ///   (2) a bare non-`!`, non-Copy OUTER identifier → `IngestLiveOuter`: at
+    ///       a consume boundary a still-live source is clone-if-live, and under
+    ///       the `with` redirect that clone lands in the arena (ASan-verified
+    ///       UAF). `!ident` moves the outer-backed bytes (ASan-verified safe)
+    ///       and stays accepted — so rule (2) is skipped when `is_moved`.
+    ///
+    /// `is_moved` is the position's move signal: a method-call arg carries it
+    /// as `CallArg.ownership == Move`; an assignment operand carries it as an
+    /// `Expr::Move` wrapper (which also cannot match the bare-`Identifier`
+    /// shape rule (2) tests, so a mis-passed flag can never wrongly fire).
+    pub(super) fn classify_ingest_escape(
+        &self,
+        arg: &Spanned<Expr>,
+        fallback_tid: Option<crate::semantic::ids::TypeId>,
+        is_moved: bool,
+        target_name: &str,
+    ) -> Option<(SemanticErrorKind, Span)> {
+        use crate::semantic::errors::ArenaEscapeKind;
+        // Rule (1): the one producer, in Ingest context (no literal exemption).
+        if let Some((name, span)) =
+            self.arena_backed_source(arg, fallback_tid, EscapeCtx::Ingest)
+        {
+            return Some((
+                SemanticErrorKind::ArenaEscape {
+                    name,
+                    kind: ArenaEscapeKind::AssignOuter {
+                        target: target_name.to_string(),
+                    },
+                },
+                span,
+            ));
+        }
+        // Rule (2): bare non-`!`, non-Copy OUTER identifier (clone-if-live).
+        if !is_moved {
+            if let Expr::Identifier(name) = &arg.node {
+                if let Some(&did) = self.resolution_map.get(&arg.span.start) {
+                    let non_copy = self.scopes.get_def(did).type_id.map_or(false, |t| {
+                        !super::type_utils::is_copy_type(t, self.types, self.scopes)
+                    });
+                    if non_copy {
+                        return Some((
+                            SemanticErrorKind::ArenaEscape {
+                                name: name.clone(),
+                                kind: ArenaEscapeKind::IngestLiveOuter {
+                                    target: target_name.to_string(),
+                                },
+                            },
+                            arg.span,
+                        ));
                     }
                 }
-                None
+            }
+        }
+        None
+    }
+
+    /// Copy test for the value an expression produces: the recorded
+    /// `expr_types` entry (peeled of the borrow-view `Ref` wrapper), falling
+    /// back to the destination type; unknown counts as non-Copy
+    /// (conservative). Buffer-owning handles (Channel/Heap) count as
+    /// non-Copy even though `is_copy_type` treats them as Copy pointers —
+    /// their owned buffer is what dangles.
+    pub(super) fn expr_value_is_copy(
+        &self,
+        expr: &Spanned<Expr>,
+        fallback_tid: Option<crate::semantic::ids::TypeId>,
+    ) -> bool {
+        let tid = self
+            .expr_types
+            .get(&expr.span)
+            .copied()
+            .map(|t| match self.types.get(t) {
+                ResolvedType::Ref(inner) => *inner,
+                _ => t,
+            })
+            .or(fallback_tid);
+        match tid {
+            Some(t) => {
+                super::type_utils::is_copy_type(t, self.types, self.scopes)
+                    && !self.is_buffer_owning_type(t)
+            }
+            None => false,
+        }
+    }
+
+    /// Resolve the VALUE type an lvalue (assign/compound-assign target)
+    /// denotes, so the Copy test can decide whether writing through it can
+    /// arena-escape. The typechecker does NOT record `expr_types` at
+    /// field/tuple/index target spans (its `infer_expr` returns those types
+    /// without inserting them), so we resolve structurally from the object's
+    /// type:
+    ///   - identifier / `self`  → recorded type, else the decl type;
+    ///   - `s.field`            → the struct's `field_types[idx]` via the
+    ///                            index of `field` in `struct_field_names`;
+    ///   - `t.0`                → the tuple element type;
+    ///   - `c[i]`               → the collection element type (Vector[T]/
+    ///                            Set[T]→T, Dict[K,V]→V, array/slice elem).
+    /// Returns `None` when unknown (caller treats unknown as non-Copy —
+    /// conservative, so an unresolved shape still errs toward rejection).
+    pub(super) fn lvalue_value_type(
+        &self, target: &Spanned<Expr>,
+    ) -> Option<crate::semantic::ids::TypeId> {
+        use crate::semantic::types::ResolvedType;
+        match &target.node {
+            Expr::Identifier(_) | Expr::SelfExpr => self
+                .expr_types
+                .get(&target.span)
+                .copied()
+                .or_else(|| {
+                    self.resolution_map
+                        .get(&target.span.start)
+                        .and_then(|&d| self.scopes.get_def(d).type_id)
+                }),
+            Expr::FieldAccess { object, field } => {
+                let obj_tid = self.lvalue_value_type(object)?;
+                let did = match self.types.get(obj_tid) {
+                    ResolvedType::Defined(d) | ResolvedType::Generic(d, _) => *d,
+                    _ => return None,
+                };
+                let idx = self
+                    .struct_field_names
+                    .get(&did)?
+                    .iter()
+                    .position(|n| n == &field.node)?;
+                self.scopes.get_def(did).field_types.as_ref()?.get(idx).copied()
+            }
+            Expr::TupleFieldAccess { object, index } => {
+                let obj_tid = self.lvalue_value_type(object)?;
+                match self.types.get(obj_tid) {
+                    ResolvedType::Tuple(elems) => elems.get(*index).copied(),
+                    _ => None,
+                }
+            }
+            Expr::Index { object, .. } => {
+                let obj_tid = self.lvalue_value_type(object)?;
+                match self.types.get(obj_tid) {
+                    ResolvedType::Generic(_, args) if !args.is_empty() => {
+                        args.last().copied()
+                    }
+                    ResolvedType::Array(elem, _) | ResolvedType::Slice(elem) => {
+                        Some(*elem)
+                    }
+                    _ => None,
+                }
             }
             _ => None,
         }
-    }
-
-    /// One constructor argument: is it an arena-escaping source (borrow-read of
-    /// an arena collection, a bare arena-scoped non-Copy identifier, or `!` of
-    /// one), or a nested constructor wrapping such a source? Shared by both the
-    /// `Expr::Call` and `Expr::StructLiteral` ctor arms of
-    /// `ctor_arg_arena_escape`.
-    fn ctor_single_arg_escape(
-        &self, arg: &Spanned<Expr>,
-    ) -> Option<(DefId, Span)> {
-        // Borrow-producing read of an arena collection (`v.get(0).unwrap()`).
-        if let Some(src_root) = self.arena_escaping_borrow_source(arg) {
-            return Some((src_root, arg.span));
-        }
-        // Bare arena-scoped non-Copy identifier (`Some(arenaStr)`), incl. `!arenaStr`.
-        let id_expr = match &arg.node {
-            Expr::Move { expr: inner } => inner.as_ref(),
-            _ => arg,
-        };
-        if let Expr::Identifier(_) = &id_expr.node {
-            if let Some(&did) = self.resolution_map.get(&id_expr.span.start) {
-                if self.arena_scoped_vars.contains(&did) {
-                    return Some((did, arg.span));
-                }
-            }
-        }
-        // Nested constructor (`Some(Wrapper(v.get(0).unwrap()))`).
-        self.ctor_arg_arena_escape(arg)
     }
 
     /// For a borrow-producing collection-read expression, return the receiver

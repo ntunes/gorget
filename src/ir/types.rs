@@ -164,6 +164,37 @@ pub enum CollectionKind {
     Set,
 }
 
+impl CollectionKind {
+    /// Does this collection's index-store path (`c[k] = v`) COPY its
+    /// argument(s) into a self-owned heap slot?
+    ///
+    /// Map/Set stores lower to `gorget_map_put` → `__gorget_map_materialize_
+    /// key/value` → `str_alloc_copy(…, __gorget_current_alloc)`: the owned
+    /// key AND value are allocated from the CURRENT allocator. Under `with
+    /// Arena` that is the arena, so a materialized non-Copy key/value into an
+    /// OUTER-scoped map dangles at `gorget_arena_destroy` — the same escape
+    /// class as the `put`/`insert`/`add` method forms.
+    ///
+    /// Array stores lower to `gorget_array_set`, which writes the value slot
+    /// DIRECTLY (no `elem_materialize`) — no fresh allocation, nothing
+    /// escapes. (That direct-view store into an owning element slot is a
+    /// separate latent footgun, filed; it is not an arena escape.)
+    ///
+    /// Exhaustive by design (no `_` arm): a new `CollectionKind` MUST make an
+    /// explicit materialize decision here, forcing its index-store position
+    /// through the shared arena-escape Ingest/Bind classification — the
+    /// completeness guard against the next missed store position.
+    pub fn index_store_materializes(self) -> bool {
+        match self {
+            CollectionKind::Array => false,
+            CollectionKind::OrderedMap
+            | CollectionKind::Map
+            | CollectionKind::OrderedSet
+            | CollectionKind::Set => true,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TypeMetadata {
     pub size: Option<u64>,

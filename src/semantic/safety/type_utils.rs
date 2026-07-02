@@ -278,3 +278,27 @@ pub(super) fn compute_struct_field_mut_ref_flags(
     }
     result
 }
+
+/// Per-struct field NAMES in declaration order, keyed by the struct's DefId.
+/// The index of a name here lines up with `DefInfo.field_types` (both walk
+/// `s.fields` in source order), so `field_types[names.position(name)]` recovers
+/// a named field's TypeId. Built for ALL structs (unlike the ref-flag maps,
+/// which cover only `ref_type_structs`) because the arena-escape lvalue-type
+/// resolver needs the field type of any outer struct target. One-source-of-
+/// truth typed metadata; no name-matching.
+pub(super) fn compute_struct_field_names(
+    module: &Module,
+    scopes: &ScopeTable,
+) -> FxHashMap<DefId, Vec<String>> {
+    let mut result = FxHashMap::default();
+    for item in all_spanned_items(&module.items) {
+        if let Item::Struct(s) = &item.node {
+            if let Some(def_id) = scopes.lookup_from_scope(ScopeId(0), &s.name.node) {
+                let names: Vec<String> =
+                    s.fields.iter().map(|f| f.node.name.node.clone()).collect();
+                result.insert(def_id, names);
+            }
+        }
+    }
+    result
+}

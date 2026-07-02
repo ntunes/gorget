@@ -1,0 +1,10 @@
+# R2 sibling: adding a plain string literal into an OUTER Set inside `with
+# Arena` — same owned-heap-copy-into-the-arena UAF as the push case. Reject.
+from std.alloc import Arena
+from std.collections import Set
+
+void main():
+    Set[String] outer = Set[String]()
+    with Arena(4096) as a:
+        outer.add("hi")
+    print(outer.len())

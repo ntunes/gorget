@@ -3737,3 +3737,158 @@ fn clone_warn_hit_pairing() {
          src/ir/lowering/context.rs, found {helper_defs}.",
     );
 }
+
+/// Completeness guard (Core #6) for the arena-escape STORE/INGEST
+/// classification — stops the next missed materializing store position (the
+/// R-B this round's R-A fold was told to prevent).
+///
+/// Every store position that COPIES its argument into an OUTER owning
+/// collection under `with Arena` must route that argument through
+/// `arena_backed_source(.., EscapeCtx::Ingest)`, so a literal / arena-scoped
+/// value materialized into the arena and left dangling at teardown is
+/// rejected. The positions today: the `push`/`put`/`insert`/`add`/`send`
+/// method ingest (`check_expr.rs`) and the `c[k] = v` index-store on a
+/// materializing (map/set) collection, key AND value (`check_stmt.rs`).
+///
+/// Two structural locks:
+///  (a) `CollectionKind::index_store_materializes` stays EXHAUSTIVE (no `_`
+///      arm). A wildcard would silently default a NEW collection kind's
+///      index-store to non-materializing → re-open the R-A Dict UAF for that
+///      kind. (The no-`_` match is compile-enforced; this forbids re-adding
+///      a `_` escape hatch.)
+///  (b) the CollectionKind variant count is pinned: a new variant forces an
+///      explicit materialize decision in (a) AND a review that its
+///      index-store position is gated.
+#[test]
+fn arena_escape_store_classification_completeness() {
+    let types_src = fs::read_to_string("src/ir/types.rs").unwrap_or_default();
+
+    // (a) `index_store_materializes` must have no `_` catch-all arm.
+    let fn_start = types_src
+        .find("fn index_store_materializes(self) -> bool")
+        .expect(
+            "CollectionKind::index_store_materializes not found — the arena-escape \
+             index-store gate (src/semantic/safety/check_stmt.rs) depends on it",
+        );
+    let fn_end = types_src[fn_start..]
+        .find("\n    }")
+        .map(|i| fn_start + i)
+        .unwrap_or(types_src.len());
+    let fn_body = &types_src[fn_start..fn_end];
+    assert!(
+        !fn_body.contains("_ =>") && !fn_body.contains("_ |") && !fn_body.contains("| _"),
+        "CollectionKind::index_store_materializes gained a `_` catch-all arm.\n\n\
+         Keep it EXHAUSTIVE: a wildcard silently defaults a NEW collection kind's \
+         index-store materialize decision, re-opening the arena index-store UAF \
+         (R-A: `outer[k] = v` on an outer map) for that kind. Enumerate every \
+         variant explicitly instead.",
+    );
+
+    // (b) pin the CollectionKind variant count.
+    const EXPECTED_VARIANTS: usize = 5; // Array, OrderedMap, Map, OrderedSet, Set
+    let enum_start = types_src
+        .find("pub enum CollectionKind")
+        .expect("pub enum CollectionKind not found in src/ir/types.rs");
+    let enum_end = types_src[enum_start..]
+        .find('}')
+        .map(|i| enum_start + i)
+        .expect("unterminated CollectionKind enum");
+    let variants = types_src[enum_start..enum_end]
+        .lines()
+        .filter(|l| {
+            let t = l.trim();
+            !t.starts_with("//") && !t.starts_with("pub enum") && t.ends_with(',')
+        })
+        .count();
+    assert_eq!(
+        variants, EXPECTED_VARIANTS,
+        "CollectionKind variant count changed: {variants} vs {EXPECTED_VARIANTS}.\n\n\
+         A new collection kind MUST (1) get an explicit arm in \
+         `CollectionKind::index_store_materializes` — materialize == its `c[k]=v` \
+         store copies its key/value into an owned slot (map/set `put`) — and (2) \
+         have its index-store position routed through the shared arena-escape \
+         Ingest gate in `src/semantic/safety/check_stmt.rs`. Then bump \
+         EXPECTED_VARIANTS.",
+    );
+
+    // (c) BEHAVIORAL-equivalence lock (not just structure): every ingest
+    // position must route through the ONE `classify_ingest_escape` producer,
+    // and NO gate may open-code an `EscapeCtx::Ingest` classification — that is
+    // what keeps `d.put(k,v)`, `d[k]=v`, and `d[k]+=v` applying the SAME rule
+    // set (the #1 drift was exactly one gate implementing only half of it).
+    //
+    // (c1) `EscapeCtx::Ingest` must NOT appear anywhere in the gate files (on a
+    //      non-comment line, in ANY form — single- or multi-line). The
+    //      Ingest-context producer call lives ONLY inside
+    //      `classify_ingest_escape` (helpers.rs). A gate that open-codes
+    //      `arena_backed_source(.., EscapeCtx::Ingest)` omits ingest rule (2)
+    //      and re-opens the #1 drift. (Gates legitimately use `EscapeCtx::Bind`
+    //      — only the Ingest context is forbidden outside the helper.)
+    let mut open_coded_ingest = 0usize;
+    for file in [
+        "src/semantic/safety/check_expr.rs",
+        "src/semantic/safety/check_stmt.rs",
+    ] {
+        let src = fs::read_to_string(file).unwrap_or_default();
+        for line in src.lines() {
+            let t = line.trim_start();
+            if t.starts_with("//") {
+                continue;
+            }
+            open_coded_ingest += line.matches("EscapeCtx::Ingest").count();
+        }
+    }
+    assert_eq!(
+        open_coded_ingest, 0,
+        "An arena-escape gate open-codes `EscapeCtx::Ingest` ({open_coded_ingest} \
+         site(s) in check_expr.rs/check_stmt.rs).\n\n\
+         Ingest positions (push/put/insert/add/send; `c[k]=v` / `c[k]+=v` index \
+         key & value on a materializing collection) MUST call \
+         `self.classify_ingest_escape(..)` — the ONE producer that applies BOTH \
+         ingest rules (arena_backed_source Ingest + bare-live-outer-ident). \
+         Open-coding `arena_backed_source(.., EscapeCtx::Ingest)` in a gate omits \
+         rule (2) and re-opens the #1 clone-into-arena UAF.",
+    );
+
+    // (c2) `classify_ingest_escape` is called from every ingest position.
+    //      Sites: check_expr method-ingest (1); check_stmt plain-assign index
+    //      VALUE (1) + KEY (1); check_stmt compound-assign index KEY (1) = 4.
+    const EXPECTED_CLASSIFY_CALLS: usize = 4;
+    let mut classify_calls = 0usize;
+    for file in [
+        "src/semantic/safety/check_expr.rs",
+        "src/semantic/safety/check_stmt.rs",
+    ] {
+        let src = fs::read_to_string(file).unwrap_or_default();
+        for line in src.lines() {
+            let t = line.trim_start();
+            if t.starts_with("//") {
+                continue;
+            }
+            classify_calls += line.matches("self.classify_ingest_escape(").count();
+        }
+    }
+    assert_eq!(
+        classify_calls, EXPECTED_CLASSIFY_CALLS,
+        "`classify_ingest_escape` call-site count changed: {classify_calls} vs \
+         {EXPECTED_CLASSIFY_CALLS}.\n\n\
+         Ingest positions: method-ingest arg (1); plain-assign index-store VALUE \
+         (1) + KEY (1); compound-assign index-store KEY (1). If you ADDED an \
+         ingest/store position, route it through `classify_ingest_escape` and bump \
+         this. If this DROPPED, a position lost its ingest classification — \
+         restore it.",
+    );
+
+    // (c3) the producer exists exactly once (Core #4 — one helper).
+    let helper_src =
+        fs::read_to_string("src/semantic/safety/helpers.rs").unwrap_or_default();
+    let helper_defs = helper_src
+        .matches("fn classify_ingest_escape(")
+        .count();
+    assert_eq!(
+        helper_defs, 1,
+        "Expected exactly one `classify_ingest_escape` definition in \
+         src/semantic/safety/helpers.rs, found {helper_defs}. The ingest rule set \
+         must have a single producer.",
+    );
+}

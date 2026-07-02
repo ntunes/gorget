@@ -1,0 +1,13 @@
+# #1 control: `outer[1] = !v` — the explicit-move form of the index-store —
+# truly MOVES the outer-backed bytes into the map (no clone into the arena), so
+# it is accepted and runs ASan-clean. This is the accepted counterpart to
+# arena_escape_index_bare_value_error.gg (the bare `outer[1] = v` reject).
+from std.alloc import Arena
+from std.collections import Dict
+
+void main():
+    Dict[int, String] outer = Dict[int, String]()
+    String v = String("payload")
+    with Arena(4096) as a:
+        outer[1] = !v
+    print(outer.get(1).unwrap())

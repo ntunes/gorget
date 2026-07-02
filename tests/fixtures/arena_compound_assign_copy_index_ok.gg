@@ -1,0 +1,13 @@
+# R1 regression guard: a Copy scalar ELEMENT compound-assign inside `with
+# Arena` (`outer[0] += 1`, element is int) mutates the element in place —
+# safe even though the root Vector is non-Copy. Must be ACCEPTED (the gate
+# must Copy-test the ELEMENT type, not the root binding type).
+from std.alloc import Arena
+from std.collections import Vector
+
+void main():
+    Vector[int] outer = Vector[int]()
+    outer.push(10)
+    with Arena(4096) as a:
+        outer[0] += 1
+    print(outer.get(0).unwrap())

@@ -1,0 +1,15 @@
+# Ingest-gate: pushing a bare LIVE outer value into an outer collection
+# inside `with Arena` — clone-if-live materializes the clone in the arena,
+# so the ingested element dangles at block exit. Must reject, with the
+# dedicated hint suggesting `!s` (a true move of outer-backed bytes is safe
+# and stays accepted — see arena probes n5 vs n6).
+from std.alloc import Arena
+from std.collections import Vector
+
+void main():
+    Vector[String] outer = Vector[String]()
+    String s = String("heapstr")
+    with Arena(4096) as a:
+        outer.push(s)
+    print(s)
+    print(outer.get(0).unwrap())

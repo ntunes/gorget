@@ -8,7 +8,7 @@ use crate::semantic::ids::DefId;
 use crate::semantic::scope::DefKind;
 use crate::semantic::types::{self as types};
 
-use super::{BorrowChecker, BorrowOrigin, BorrowCaptureMode, FallibleState, SharedDerivedInfo, WithGuardKind};
+use super::{BorrowChecker, BorrowOrigin, BorrowCaptureMode, EscapeCtx, FallibleState, SharedDerivedInfo, WithGuardKind};
 use super::type_utils::{is_copy_type, is_ast_type_ref, needs_explicit_move};
 
 impl<'a> BorrowChecker<'a> {
@@ -419,82 +419,93 @@ impl<'a> BorrowChecker<'a> {
                     self.check_value_needs_move(value);
                 }
 
-                // Arena escape check: cannot assign arena-scoped value to outer variable
+                // Arena escape check — ONE PRODUCER (`arena_backed_source`)
+                // classifies every source shape (named arena var, fresh
+                // ctor/call/method temp, f-string, literal collection,
+                // concat, borrow chain — ALL materialize under the `with`
+                // redirect). Destination = direct identifier target OR the
+                // root of a field/tuple-field/index path
+                // (`h.data = ...`, `outer[i] = ...`).
                 if self.arena_depth > 0 {
-                    if let Expr::Identifier(target_name) = &target.node {
-                        if let Some(&target_def_id) = self.resolution_map.get(&target.span.start) {
-                            let rhs_def_id = match &value.node {
-                                Expr::Identifier(_) => self.resolution_map.get(&value.span.start).copied(),
-                                Expr::Move { expr: inner } => {
-                                    if let Expr::Identifier(_) = &inner.node {
-                                        self.resolution_map.get(&inner.span.start).copied()
-                                    } else { None }
+                    let dest = match &target.node {
+                        Expr::Identifier(name) => self
+                            .resolution_map
+                            .get(&target.span.start)
+                            .map(|&d| (d, name.clone())),
+                        Expr::FieldAccess { .. }
+                        | Expr::TupleFieldAccess { .. }
+                        | Expr::Index { .. } => {
+                            self.find_root_def_id_with_path(target).map(|(d, _)| {
+                                (d, self.scopes.get_def(d).name.clone())
+                            })
+                        }
+                        _ => None,
+                    };
+                    if let Some((target_def_id, target_name)) = dest {
+                        if !self.arena_scoped_vars.contains(&target_def_id) {
+                            // A `c[k] = v` store into a materializing collection
+                            // (map/set put) COPIES both key and value into a
+                            // self-owned slot allocated from the arena — the
+                            // same INGEST class as `c.put(k, v)`. Array index-
+                            // store (`gorget_array_set`) writes the view
+                            // directly (no copy) → stays a BIND. Decision from
+                            // the typed `CollectionKind`, shared with the
+                            // runtime store path — not the collection's name.
+                            let ingest_index = matches!(&target.node, Expr::Index { object, .. }
+                                if self
+                                    .collection_kind_of_expr(object)
+                                    .map_or(false, |k| k.index_store_materializes()));
+                            // Copy-test fallback = the actual slot written
+                            // (field/element type for a path target), not the
+                            // root binding.
+                            let fallback = self
+                                .lvalue_value_type(target)
+                                .or_else(|| self.scopes.get_def(target_def_id).type_id);
+                            let hit = if ingest_index {
+                                // INGEST position — route the VALUE and (for a
+                                // materializing store) the KEY through the ONE
+                                // shared ingest producer so this stays
+                                // behaviorally identical to `c.put(k, v)`
+                                // (literal rejected; arena-scoped rejected; bare
+                                // live-outer non-Copy → require `!`).
+                                let val_moved =
+                                    matches!(&value.node, Expr::Move { .. });
+                                let mut hit = self.classify_ingest_escape(
+                                    value, fallback, val_moved, &target_name,
+                                );
+                                if hit.is_none() {
+                                    if let Expr::Index { index, .. } = &target.node {
+                                        let key_fallback =
+                                            self.expr_types.get(&index.span).copied();
+                                        let key_moved =
+                                            matches!(&index.node, Expr::Move { .. });
+                                        hit = self.classify_ingest_escape(
+                                            index, key_fallback, key_moved, &target_name,
+                                        );
+                                    }
                                 }
-                                _ => None,
-                            };
-                            if let Some(rhs_id) = rhs_def_id {
-                                if self.arena_scoped_vars.contains(&rhs_id)
-                                    && !self.arena_scoped_vars.contains(&target_def_id)
-                                {
-                                    self.error(
-                                        SemanticErrorKind::ArenaEscape {
-                                            name: self.scopes.get_def(rhs_id).name.clone(),
-                                            kind: ArenaEscapeKind::AssignOuter {
-                                                target: target_name.clone(),
-                                            },
-                                        },
-                                        value.span,
-                                    );
-                                }
-                            } else if !self.arena_scoped_vars.contains(&target_def_id) {
-                                // Borrow-producing RHS (`.get()`/`.unwrap()`/index/field
-                                // chain) escaping to an outer variable. Trace the borrow
-                                // to its root collection; if the root is arena-scoped and
-                                // the BOUND value's type is non-Copy, this aliases into the
-                                // arena buffer and dangles when the arena is destroyed.
-                                if let Some((root, _)) =
-                                    self.find_collection_source_with_path(value)
-                                {
-                                    let bound_is_resource = self.scopes.get_def(target_def_id)
-                                        .type_id
-                                        .map_or(false, |tid| {
-                                            !is_copy_type(tid, self.types, self.scopes)
-                                        });
-                                    if bound_is_resource && self.arena_scoped_vars.contains(&root) {
-                                        self.error(
+                                hit
+                            } else {
+                                // BIND position (identifier / field / tuple /
+                                // non-materializing array index) — rule (1)
+                                // only, literal exempt (a static view); a bare
+                                // outer identifier here is a safe rebind/move,
+                                // NOT an ingest, so rule (2) must not apply.
+                                self.arena_backed_source(value, fallback, EscapeCtx::Bind)
+                                    .map(|(name, span)| {
+                                        (
                                             SemanticErrorKind::ArenaEscape {
-                                                name: self.scopes.get_def(root).name.clone(),
+                                                name,
                                                 kind: ArenaEscapeKind::AssignOuter {
                                                     target: target_name.clone(),
                                                 },
                                             },
-                                            value.span,
-                                        );
-                                    }
-                                }
-                            }
-                            // Subset (b): constructor / wrapper RHS
-                            // (`outer = Some(v.get(0).unwrap())` /
-                            // `outer = Wrapper(...)`) escaping to an outer
-                            // binding. The ctor copies the arena-borrowed element
-                            // into the built value, which then dangles when the
-                            // arena is destroyed. Fires only when the target
-                            // outlives the arena (checked by the enclosing
-                            // `!arena_scoped_vars.contains(target)`).
-                            if !self.arena_scoped_vars.contains(&target_def_id) {
-                                if let Some((src_root, arg_span)) =
-                                    self.ctor_arg_arena_escape(value)
-                                {
-                                    self.error(
-                                        SemanticErrorKind::ArenaEscape {
-                                            name: self.scopes.get_def(src_root).name.clone(),
-                                            kind: ArenaEscapeKind::AssignOuter {
-                                                target: target_name.clone(),
-                                            },
-                                        },
-                                        arg_span,
-                                    );
-                                }
+                                            span,
+                                        )
+                                    })
+                            };
+                            if let Some((kind, span)) = hit {
+                                self.error(kind, span);
                             }
                         }
                     }
@@ -617,6 +628,83 @@ impl<'a> BorrowChecker<'a> {
             }
 
             Stmt::CompoundAssign { target, value, .. } => {
+                // Arena escape check — sibling of the Assign gate. A
+                // non-Copy compound assign (`outer += "-more"`) lowers to a
+                // fresh materialization of the combined value; under the
+                // `with` redirect that lands in the arena, so an
+                // outer-rooted target dangles at block exit (ASan-verified
+                // UAF) regardless of the RHS shape.
+                if self.arena_depth > 0 {
+                    let dest = match &target.node {
+                        Expr::Identifier(name) => self
+                            .resolution_map
+                            .get(&target.span.start)
+                            .map(|&d| (d, name.clone())),
+                        Expr::FieldAccess { .. }
+                        | Expr::TupleFieldAccess { .. }
+                        | Expr::Index { .. } => {
+                            self.find_root_def_id_with_path(target).map(|(d, _)| {
+                                (d, self.scopes.get_def(d).name.clone())
+                            })
+                        }
+                        _ => None,
+                    };
+                    if let Some((target_def_id, target_name)) = dest {
+                        if !self.arena_scoped_vars.contains(&target_def_id) {
+                            // VALUE dimension: `c[k] += v` stores the COMBINED
+                            // temporary (`c[k] op v`), materialized iff the
+                            // TARGET's value type is non-Copy — this is a
+                            // materialize test on the stored temporary, NOT an
+                            // ingest of the `v` operand, so it stays a direct
+                            // Copy-test (which also catches `String += char`,
+                            // where the operand is Copy but the result is not).
+                            // `outer[i] += 1` mutates an int element in place
+                            // (Copy → safe); `c.n += 5` mutates a Copy int
+                            // field. The typechecker records no `expr_types`
+                            // entry at field/tuple/index target spans, so
+                            // resolve the lvalue value type structurally.
+                            let fallback = self.lvalue_value_type(target);
+                            let mut hit = if !self.expr_value_is_copy(target, fallback) {
+                                Some((
+                                    SemanticErrorKind::ArenaEscape {
+                                        name: "<arena-allocated temporary>".to_string(),
+                                        kind: ArenaEscapeKind::AssignOuter {
+                                            target: target_name.clone(),
+                                        },
+                                    },
+                                    value.span,
+                                ))
+                            } else {
+                                None
+                            };
+                            // KEY dimension: a materializing index-store
+                            // (`outer["newkey"] += 5`) copies the KEY into an
+                            // owned arena slot exactly like `d[k] = v` does —
+                            // route it through the SAME `classify_ingest_escape`
+                            // producer so the two spellings agree (the int
+                            // value being Copy must NOT hide the escaping key).
+                            if hit.is_none() {
+                                if let Expr::Index { object, index } = &target.node {
+                                    if self
+                                        .collection_kind_of_expr(object)
+                                        .map_or(false, |k| k.index_store_materializes())
+                                    {
+                                        let key_fallback =
+                                            self.expr_types.get(&index.span).copied();
+                                        let key_moved =
+                                            matches!(&index.node, Expr::Move { .. });
+                                        hit = self.classify_ingest_escape(
+                                            index, key_fallback, key_moved, &target_name,
+                                        );
+                                    }
+                                }
+                            }
+                            if let Some((kind, span)) = hit {
+                                self.error(kind, span);
+                            }
+                        }
+                    }
+                }
                 // Track reassignment for const promotion and `&` param mutation
                 if let Expr::Identifier(_) = &target.node {
                     if let Some(&def_id) = self.resolution_map.get(&target.span.start) {
@@ -695,46 +783,47 @@ impl<'a> BorrowChecker<'a> {
                     self.check_expr(expr);
                     self.in_return_expr = saved_in_return;
 
-                    // Arena escape check: cannot return arena-scoped values
+                    // Arena escape check — ONE PRODUCER (`arena_backed_source`)
+                    // for every returned-source shape. One extra rule the
+                    // producer can't decide alone: a bare borrow-param return
+                    // (`return v` where `v` is a non-`!` param) CLONES at the
+                    // return ownership boundary, and under the redirect that
+                    // clone lands in the arena (ASan-verified UAF). A bare
+                    // LOCAL at `return` always moves (ASan-verified safe), so
+                    // only params are gated here.
                     if self.arena_depth > 0 {
-                        let mut bare_id_fired = false;
-                        if let Expr::Identifier(name) = &expr.node {
-                            if let Some(&def_id) = self.resolution_map.get(&expr.span.start) {
-                                if self.arena_scoped_vars.contains(&def_id) {
-                                    self.error(
-                                        SemanticErrorKind::ArenaEscape {
-                                            name: name.clone(),
-                                            kind: ArenaEscapeKind::Return,
-                                        },
-                                        expr.span,
-                                    );
-                                    bare_id_fired = true;
+                        let param_clone_escape = if let Expr::Identifier(name) = &expr.node {
+                            self.resolution_map.get(&expr.span.start).and_then(|&d| {
+                                let def = self.scopes.get_def(d);
+                                let non_copy = def.type_id.map_or(false, |t| {
+                                    !is_copy_type(t, self.types, self.scopes)
+                                });
+                                if def.is_param
+                                    && def.param_ownership != Some(Ownership::Move)
+                                    && non_copy
+                                {
+                                    Some((name.clone(), expr.span))
+                                } else {
+                                    None
                                 }
-                            }
-                        }
-                        if !bare_id_fired {
-                            // Borrow-producing return (`return v.get(0).unwrap()`/index/
-                            // field chain) escaping the arena scope. Trace the borrow to
-                            // its root collection; if the root is arena-scoped and the
-                            // returned element type is non-Copy, the returned borrow
-                            // dangles once the arena is destroyed at scope exit.
-                            if let Some((root, _)) =
-                                self.find_collection_source_with_path(expr)
-                            {
-                                let ret_is_resource = self.current_return_type_id
-                                    .map_or(false, |tid| {
-                                        !is_copy_type(tid, self.types, self.scopes)
-                                    });
-                                if ret_is_resource && self.arena_scoped_vars.contains(&root) {
-                                    self.error(
-                                        SemanticErrorKind::ArenaEscape {
-                                            name: self.scopes.get_def(root).name.clone(),
-                                            kind: ArenaEscapeKind::Return,
-                                        },
-                                        expr.span,
-                                    );
-                                }
-                            }
+                            })
+                        } else {
+                            None
+                        };
+                        if let Some((name, span)) = param_clone_escape.or_else(|| {
+                            self.arena_backed_source(
+                                expr,
+                                self.current_return_type_id,
+                                EscapeCtx::Bind,
+                            )
+                        }) {
+                            self.error(
+                                SemanticErrorKind::ArenaEscape {
+                                    name,
+                                    kind: ArenaEscapeKind::Return,
+                                },
+                                span,
+                            );
                         }
                     }
 

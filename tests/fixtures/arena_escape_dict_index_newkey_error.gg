@@ -1,0 +1,13 @@
+# R-A sibling: `d["newkey"] = 7` — the VALUE is a Copy int (stored inline,
+# safe), but the KEY "newkey" is a plain string literal that `gorget_map_put`
+# materializes into an owned key allocated from the arena → dangles at
+# teardown (ASan-verified heap-UAF via the KEY, not the value). The
+# materializing index-store gate must check the key too. Must reject.
+from std.alloc import Arena
+from std.collections import Dict
+
+void main():
+    Dict[String, int] outer = Dict[String, int]()
+    with Arena(4096) as a:
+        outer["newkey"] = 7
+    print(outer.get("newkey").unwrap())
