@@ -1,0 +1,56 @@
+from std.thread import Thread, thread_spawn
+
+struct Point:
+    int x
+    int y
+
+Vector[int] squares():
+    Vector[int] v = []
+    int i = 0
+    while i < 5:
+        v.push(i * i)
+        i += 1
+    return v
+
+Vector[String] words():
+    Vector[String] w = []
+    w.push("alpha")
+    w.push("beta")
+    return w
+
+String greeting():
+    return "hello from thread"
+
+Point make_point():
+    return Point(3, 4)
+
+float ratio():
+    return 3.25
+
+bool flag():
+    return true
+
+int answer():
+    return 41
+
+void main():
+    Thread[Vector[int]] tv = thread_spawn(squares)
+    Thread[Vector[String]] tw = thread_spawn(words)
+    Thread[String] tg = thread_spawn(greeting)
+    Thread[Point] tp = thread_spawn(make_point)
+    Thread[float] tf = thread_spawn(ratio)
+    Thread[bool] tb = thread_spawn(flag)
+    Thread[int] ta = thread_spawn(answer)
+    Vector[int] sq = tv.join()
+    for s in sq:
+        print(s)
+    Vector[String] ws = tw.join()
+    for w in ws:
+        print(w)
+    print(tg.join())
+    Point p = tp.join()
+    print(p.x)
+    print(p.y)
+    print(tf.join())
+    print(tb.join())
+    print(ta.join())

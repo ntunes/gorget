@@ -1763,7 +1763,14 @@ pub struct LirBenchFn {
 pub struct ThreadSpawnedFn {
     /// Name of the function to spawn.
     pub fn_name: String,
-    /// C type name for the return type (e.g., "int64_t"), or "void".
+    /// Payload type NAME as baked into the `Thread__{name}` symbols at the
+    /// spawn/join call sites (e.g., "int64_t", "Vector__int64_t", "Point"),
+    /// or "void". Written through from the spawn intrinsic — the emitted
+    /// helper symbols MUST use this name, never a re-derived C type.
+    pub ret_name: String,
+    /// C type name for the return type (e.g., "int64_t", "GorgetArray"), or
+    /// "void". Used ONLY to spell the `_result` field / join return in C
+    /// (user struct/enum names still need the `__gg_` resolution at emit).
     pub ret_c_type: String,
     /// Requested pthread stack size in bytes. 0 = OS default (plain wrapper,
     /// byte-identical to the pre-stack-size emit); non-zero = a pthread_attr-sized wrapper.

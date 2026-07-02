@@ -24,6 +24,20 @@ pub struct TypeMapper {
     pub named_types: FxHashMap<String, TypeId>,
     /// Builtin types registered during `map_ast_type_mut`, pending fn_sigs population.
     pub deferred_builtins: Vec<DeferredBuiltin>,
+    /// Typed payload channel for `Thread[T]` handle types: the name-deduped
+    /// `Thread__{T}` TypeId → T's TypeId (`UNIT_TYPE` for `Thread[void]`).
+    /// Written at every Thread-handle MINT site — the protocol branch of
+    /// `map_ast_type_mut` (annotations / params / fields, where `elem` is in
+    /// hand) and the `thread_spawn` intrinsic (unannotated spawns,
+    /// `exprs/calls.rs`). Read by the join/id method intercept
+    /// (`exprs/methods.rs`) so the join result type comes from typed
+    /// metadata, NOT from slicing the payload name out of the `Thread__`
+    /// prefix and re-deriving a TypeId from it (layering rule 2, "typed
+    /// metadata, never name-matching"). The receiver's type NAME is still
+    /// used to spell the `Thread__{T}__join`/`__id` helper symbols — that is
+    /// the symbol axis, where the name IS the contract with the emitted
+    /// helpers.
+    pub thread_payload_types: FxHashMap<TypeId, TypeId>,
 }
 
 impl TypeMapper {
@@ -54,6 +68,7 @@ impl TypeMapper {
             owned_string_type,
             named_types: FxHashMap::default(),
             deferred_builtins: Vec::new(),
+            thread_payload_types: FxHashMap::default(),
         }
     }
 
@@ -327,6 +342,17 @@ impl TypeMapper {
                         let type_id = self.get_or_register(&mangled, registry, |n| {
                             make_opaque_type_def(n, protocol.copy_semantics, drop_strat)
                         });
+
+                        // Thread[T]: record the typed payload channel at the
+                        // handle's mint site (resolve once, write through —
+                        // `elem` is the payload TypeId resolved above). The
+                        // join/id intercept reads this instead of re-deriving
+                        // the payload from the `Thread__{T}` name suffix.
+                        // Idempotent: the mangled name dedupes to one TypeId,
+                        // so a re-insert writes the same pair.
+                        if base == "Thread" {
+                            self.thread_payload_types.insert(type_id, elem);
+                        }
 
                         // Set protocol-derived metadata on the TypeDef.
                         //

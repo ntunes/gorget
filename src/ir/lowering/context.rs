@@ -113,11 +113,17 @@ pub struct SpawnState {
     pub fn_names: FxHashMap<String, bool>,
     /// Subset of fn_names that should run on the blocking pool instead of M:N executor.
     pub blocking_fn_names: rustc_hash::FxHashSet<String>,
-    /// Accumulated set of thread-spawned fn names: fn_name → (return TypeId, stack_size bytes).
+    /// Accumulated set of thread-spawned fn names: fn_name → (return TypeId,
+    /// payload type NAME as baked into the `Thread__{name}` symbols at the
+    /// spawn/join call sites ("void" for unit), stack_size bytes).
     /// NOT cleared between functions. Used to emit thread spawn/join helpers.
+    /// The name is resolved ONCE here at the intrinsic (the same string the
+    /// call-site symbols use) and written through to the LIR emit so the
+    /// helper definitions can never drift from the call sites (layering
+    /// rule 4, resolve once / write through).
     /// `stack_size` of 0 = OS default (plain pthread_create, byte-identical to the
     /// pre-stack-size wrapper); non-zero = a pthread_attr-sized wrapper. One size per fn.
-    pub thread_fns: FxHashMap<String, (TypeId, i64)>,
+    pub thread_fns: FxHashMap<String, (TypeId, String, i64)>,
     /// Task TypeId → spawned fn_name. Enables await dispatch for tasks stored
     /// in collections (where result_locals doesn't have an entry because the
     /// task local has projections like vector indexing).

@@ -2391,9 +2391,9 @@ fn collect_runtime_metadata(ctx: &LoweringContext, module: &mut Module) {
     }
 
     // Thread-spawned function metadata
-    for (fn_name, (ret_type, stack_size)) in &ctx.spawn.thread_fns {
-        if !module.runtime.thread_spawned_fns.iter().any(|(n, _, _)| n == fn_name) {
-            module.runtime.thread_spawned_fns.push((fn_name.clone(), *ret_type, *stack_size));
+    for (fn_name, (ret_type, ret_name, stack_size)) in &ctx.spawn.thread_fns {
+        if !module.runtime.thread_spawned_fns.iter().any(|(n, _, _, _)| n == fn_name) {
+            module.runtime.thread_spawned_fns.push((fn_name.clone(), *ret_type, ret_name.clone(), *stack_size));
         }
     }
 

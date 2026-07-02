@@ -409,7 +409,19 @@ struct LirSpawnedFn:
 
 struct LirThreadSpawnedFn:
     String fn_name
-    String ret_c_type
+    # SYMBOL-NAME axis: the `Thread__{name}` symbol suffix (e.g. "int64_t",
+    # "Vector__int64_t", "Point"; "void" for a unit fn), copied verbatim
+    # from `ThreadSpawnRec.ret_name` at the GIR→LIR copy. Symbols emitted
+    # from it MUST match the call sites byte-for-byte. The C-spelling axis
+    # (the ctx `_result` field / join return C type) is resolved separately
+    # at emit by `thread_payload_c_type` (lir_codegen). Mirrors Rust gg's
+    # `ThreadSpawnedFn.ret_name`.
+    String ret_name
+    # LIR type of the join payload (LT_VOID for a void fn), mapped from the
+    # typed `ThreadSpawnRec.ret_tid` at the GIR→LIR copy. Read by the
+    # codegen call-extern type inference to type `Thread__T__join` results
+    # (mirrors `TraitDispatchRequest.ret_lir_ty`).
+    int ret_lir_ty
     # Requested pthread stack size in bytes. 0 = OS default (plain wrapper,
     # byte-identical to the pre-stack-size emit); non-zero = a sized wrapper.
     int stack_size

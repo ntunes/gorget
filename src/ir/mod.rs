@@ -99,8 +99,10 @@ pub struct RuntimeFeatures {
     pub has_process: bool,
     /// Thread[T] return C type names (e.g., ["int64_t"] for Thread[int]).
     pub thread_types: Vec<String>,
-    /// Thread-spawned functions: (fn_name, return_type, stack_size bytes; 0 = OS default).
-    pub thread_spawned_fns: Vec<(String, TypeId, i64)>,
+    /// Thread-spawned functions: (fn_name, return_type, payload type name as
+    /// baked into the `Thread__{name}` call-site symbols ("void" for unit),
+    /// stack_size bytes; 0 = OS default).
+    pub thread_spawned_fns: Vec<(String, TypeId, String, i64)>,
 
     // ── Test runner ────────────────────────────────────────────────
     /// Test functions registered for the test runner.

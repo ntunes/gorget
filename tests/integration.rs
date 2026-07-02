@@ -13271,6 +13271,14 @@ fn thread_basic() {
 }
 
 #[test]
+fn thread_compound() {
+    // Thread[T] compound payloads: Vector[int], Vector[String], String,
+    // user struct, float, bool, int — the payload type is carried
+    // spawn→join as typed metadata in BOTH compilers (round-32 Track C).
+    run_gg("thread_compound.gg", "0\n1\n4\n9\n16\nalpha\nbeta\nhello from thread\n3\n4\n3.250000\ntrue\n41");
+}
+
+#[test]
 fn sync_barrier() {
     run_gg("sync_barrier.gg", "barrier passed\nbarrier passed again");
 }

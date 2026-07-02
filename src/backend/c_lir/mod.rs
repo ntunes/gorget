@@ -661,9 +661,9 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
     let thread_generated_names: std::collections::HashSet<String> = {
         let mut s = std::collections::HashSet::new();
         for tsf in &module.thread_spawned_fns {
-            let ret_c = &tsf.ret_c_type;
-            s.insert(format!("Thread__{ret_c}__join"));
-            s.insert(format!("Thread__{ret_c}__id"));
+            let ret_name = &tsf.ret_name;
+            s.insert(format!("Thread__{ret_name}__join"));
+            s.insert(format!("Thread__{ret_name}__id"));
             s.insert(format!("__gorget_thread_spawn_{}", tsf.fn_name));
             s.insert(format!("__gorget_thread_entry_{}", tsf.fn_name));
         }
@@ -888,7 +888,7 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
 
     // Thread spawn/join helpers.
     if !module.thread_spawned_fns.is_empty() && (include_runtime || wrappers_only) {
-        emit_thread_helpers(&mut out, module);
+        emit_thread_helpers(&mut out, module, &struct_names);
     }
 
     // Adapter functions for named functions passed as closures (FuncAddr → void* protocol).

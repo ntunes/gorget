@@ -444,6 +444,11 @@ int resolved_to_gir_type(int rtid, TypeTable types, ScopeTable scopes, GirModule
                 elif type_args.len() >= 2:
                     int ec_err = resolved_to_gir_type(get_int_at(type_args, 1), types, scopes, &gmod)
                     record_enum_category(&gmod, opt_tid, ENUM_CAT_RESULT, ec_ok, ec_err)
+            if di.name == "Thread" and type_args.len() == 1:
+                # Typed thread-payload channel (typechecker-resolved mint
+                # path — sibling of the `map_ast_type` TNamed arm write).
+                int thr_payload = resolved_to_gir_type(get_int_at(type_args, 0), types, scopes, &gmod)
+                record_thread_payload(&gmod, opt_tid, thr_payload)
             return opt_tid
         case RTRef(inner_rtid):
             # option_ref_borrow Phase 1: a `Ref[T]` lowers to `GtPtr(T)` (Rust
@@ -653,6 +658,13 @@ int map_ast_type(SpannedType stype, GirModule &gmod):
                 int mat_rok = map_ast_type(targs.get(0).unwrap(), &gmod)
                 int mat_rerr = map_ast_type(targs.get(1).unwrap(), &gmod)
                 record_enum_category(&gmod, mat_tid, ENUM_CAT_RESULT, mat_rok, mat_rerr)
+            elif name == "Thread" and targs.len() == 1:
+                # Typed thread-payload channel (sibling of the enum-category
+                # records above; AST-annotation mint path). The join/id
+                # intercept in lower_expr reads this instead of re-deriving
+                # the payload tid from the `Thread__` name suffix.
+                int mat_thr_payload = map_ast_type(targs.get(0).unwrap(), &gmod)
+                record_thread_payload(&gmod, mat_tid, mat_thr_payload)
             return mat_tid
         case TFunction(ret_box, fn_params_f, _):
             # Function types as params/fields → Ptr(FnPtr). The C-level ABI for

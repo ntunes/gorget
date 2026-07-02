@@ -2141,22 +2141,47 @@ String emit_adapter_functions(LirModule &m, Vector[String] &sn, Dict[int, bool] 
     return out
 
 # Thread[T] spawn/join wrappers. Byte-identical port of Rust gg's
-# `emit_thread_helpers` (`src/backend/c_lir/emit_types.rs:528-597`):
-# per-unique-ret_c typedefs (the __GorgetThread__T ctx struct + Thread__T
+# `emit_thread_helpers` (`src/backend/c_lir/emit_types.rs`):
+# per-unique-ret_name typedefs (the __GorgetThread__T ctx struct + Thread__T
 # pointer typedef + id/join inline helpers) then per-fn entry + spawn.
 # `stack_size` 0 => plain pthread_create (byte-identical to the pre-stack-size
 # emit); non-zero => a pthread_attr-sized wrapper.
-String emit_thread_helpers(LirModule &m):
+# Resolve a Thread[T] payload's LANGUAGE-level type name (the `Thread__{name}`
+# symbol suffix, e.g. "Vector__int64_t", "Point", "GorgetString", "int64_t")
+# to the C type that spells the `_result` field / join return. Collections and
+# wrapper types route through the typed type_runtime_map (Vector__int64_t →
+# GorgetArray); user structs/enums through the struct-name map (Point →
+# __gg_Point); primitives / already-C names pass through unchanged. Mirrors
+# Rust gg's emit_thread_helpers `resolve_type` (emit_types.rs) — the SYMBOL
+# names stay on the language-level name (they must match the call sites), only
+# the field/return C TYPE is resolved.
+String thread_payload_c_type(String name, LirModule &m, Vector[String] &sn):
+    String rt = mono_wrapper_runtime_type(name, &m)
+    if rt != "":
+        return rt
+    int tp_i = 0
+    while tp_i < m.structs.len():
+        if m.structs.get(tp_i).unwrap().name == name:
+            return sn.get(tp_i).unwrap()
+        tp_i += 1
+    return name
+
+String emit_thread_helpers(LirModule &m, Vector[String] &sn):
     if m.thread_spawned_fns.len() == 0:
         return ""
     String out = "\n/* ── Thread[T] wrappers ── */\n"
 
-    # Per-unique-return-type typedefs + id/join helpers.
+    # Per-unique-return-type typedefs + id/join helpers. The SYMBOL names
+    # (`Thread__{name}` / `__GorgetThread__{name}`) come from the typed
+    # `ret_name` written through from the spawn intrinsic — they must match
+    # the call sites byte-for-byte. The C TYPE of the `_result` field / join
+    # return (`ret_c`) is resolved from that name at THIS emit boundary via
+    # `thread_payload_c_type` (mirrors Rust gg's emit_thread_helpers).
     Vector[String] emitted_thread_types = []
     for tsf in m.thread_spawned_fns:
-        String ret_c = tsf.ret_c_type
-        bool is_void = ret_c == "void"
-        String thread_name = "Thread__" + ret_c
+        String ret_name = tsf.ret_name
+        bool is_void = ret_name == "void"
+        String thread_name = "Thread__" + ret_name
         bool already = false
         for et in emitted_thread_types:
             if et == thread_name:
@@ -2164,7 +2189,8 @@ String emit_thread_helpers(LirModule &m):
         if already:
             continue
         emitted_thread_types.push(thread_name.clone())
-        String ctx_type = "__GorgetThread__" + ret_c
+        String ctx_type = "__GorgetThread__" + ret_name
+        String ret_c = thread_payload_c_type(ret_name, &m, &sn)
         if is_void:
             out = out + "typedef struct { pthread_t _thr; } " + ctx_type + ";\n"
         else:
@@ -2181,10 +2207,10 @@ String emit_thread_helpers(LirModule &m):
     for tsf in m.thread_spawned_fns:
         String fn_name = tsf.fn_name
         String safe_fn_name = c_func_name(fn_name)
-        String ret_c = tsf.ret_c_type
-        bool is_void = ret_c == "void"
-        String thread_name = "Thread__" + ret_c
-        String ctx_type = "__GorgetThread__" + ret_c
+        String ret_name = tsf.ret_name
+        bool is_void = ret_name == "void"
+        String thread_name = "Thread__" + ret_name
+        String ctx_type = "__GorgetThread__" + ret_name
 
         # Thread entry
         out = out + "static void* __gorget_thread_entry_" + fn_name + "(void* __arg) {\n"
@@ -3343,6 +3369,16 @@ int infer_inst_type_with_ret(LirInst &inst, LirModule &m, Dict[int, int] &val_ty
                 for tsf_inf in m.thread_spawned_fns:
                     if name == "__gorget_thread_spawn_" + tsf_inf.fn_name:
                         return LT_PTR
+                    # `Thread__{T}__join` / `__id` — also static inline (no
+                    # registered LirExtern). Type the join result from the
+                    # TYPED `ret_lir_ty` carried on the same request set
+                    # (mirrors TraitDispatchRequest.ret_lir_ty below); the
+                    # I64 name-unknown fallback truncated a
+                    # `Thread[float].join()` result to 0.
+                    if name == "Thread__" + tsf_inf.ret_name + "__join":
+                        return tsf_inf.ret_lir_ty
+                    if name == "Thread__" + tsf_inf.ret_name + "__id":
+                        return LT_I64
                 # `Box__<Trait>__<method>` trait-object dispatch thunk: emitted as
                 # a synthesized C function (not a registered LirExtern), so type
                 # the call result from the TYPED trait_dispatch_requests set — the
@@ -7526,13 +7562,13 @@ String emit_type_drop_fns(LirModule &m, Vector[String] &sn):
 String emit_mono_typedefs(LirModule &m):
     StrBuf buf = sb_new()
     Dict[String, bool] seen = {}
-    # The Thread__{ret_c} types are defined in full by emit_thread_helpers
+    # The Thread__{ret_name} types are defined in full by emit_thread_helpers
     # (the real `typedef __GorgetThread__T* Thread__T;`). Suppress the generic
     # `typedef void* Thread__T;` here so the two don't collide at cc time —
     # Rust gg likewise emits these ONLY in emit_thread_helpers. Keyed off the
     # typed thread_spawned_fns set (not a `Thread__` name substring).
     for tsf_pre in m.thread_spawned_fns:
-        seen.put("Thread__" + tsf_pre.ret_c_type, true)
+        seen.put("Thread__" + tsf_pre.ret_name, true)
     # CoW for-element BORROW scan (no LirStructDef__clone): reads sdef.name only.
     for sdef in m.structs:
         if m.type_runtime_map.contains(sdef.name):
@@ -7818,7 +7854,7 @@ String generate_c(LirModule &m):
     # Thread[T] spawn/join wrappers. Emitted BEFORE adapter functions to
     # match Rust gg's section order (`src/backend/c_lir/mod.rs:882` — thread
     # helpers come after spawn helpers and before adapters).
-    out = out + emit_thread_helpers(&m)
+    out = out + emit_thread_helpers(&m, &sn)
 
     # Adapter functions (FuncAddr → closure protocol)
     Dict[int, bool] fa_targets = collect_func_addr_targets(&m)

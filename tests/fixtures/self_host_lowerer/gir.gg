@@ -460,16 +460,33 @@ struct EnumCategory:
     int err_type
 
 # A thread_spawn(fn[, stack_size]) registration. Mirrors Rust gg's
-# `module.runtime.thread_spawned_fns: Vec<(String, TypeId, i64)>`
-# (`src/ir/mod.rs:103`) — carried as a GIR-level channel from the
+# `module.runtime.thread_spawned_fns: Vec<(String, TypeId, String, i64)>`
+# (`src/ir/mod.rs:99-104`, the 4-tuple: fn_name, return TypeId, payload
+# name, stack_size) — carried as a GIR-level channel from the
 # `thread_spawn` intrinsic in lower_call to the per-fn wrapper emit
-# in lir_codegen. `ret_c_type` is the C return type name ("void" for a
-# unit-returning fn, "int64_t" etc. otherwise); `stack_size` is the
-# requested pthread stack in bytes (0 = OS default = plain wrapper,
-# byte-identical to Rust's pre-stack-size emit). One size per fn.
+# in lir_codegen. `stack_size` is the requested pthread stack in bytes
+# (0 = OS default = plain wrapper, byte-identical to Rust's
+# pre-stack-size emit). One size per fn.
 struct ThreadSpawnRec:
     String fn_name
-    String ret_c_type
+    # SYMBOL-NAME axis: the payload type NAME as baked into the
+    # `Thread__{name}` symbols at the spawn/join call sites (e.g.
+    # "int64_t", "Vector__int64_t", "Point"; "void" for a unit fn). The
+    # emitted helper symbols MUST use this name verbatim. The C TYPE that
+    # spells the ctx `_result` field / join return is the SEPARATE
+    # C-spelling axis, resolved at emit by `thread_payload_c_type`
+    # (lir_codegen) — e.g. Vector__int64_t → GorgetArray, Point →
+    # __gg_Point. Mirrors Rust gg's `ThreadSpawnedFn.ret_name`.
+    String ret_name
+    # Monomorphized GIR type id of the spawned fn's return (UNIT_TYPE for a
+    # void fn). The TYPED payload channel: recorded once at the spawn
+    # intrinsic (which holds the fn_sigs tid already), read by lir_lower to
+    # stamp `LirThreadSpawnedFn.ret_lir_ty` so the codegen's call-extern
+    # type inference resolves `Thread__T__join` results from typed metadata
+    # instead of the I64 name-unknown fallback (which truncated a
+    # `Thread[float].join()` result to 0). Mirrors the d12c6545
+    # `enum_category.ok_type` mint-site pattern.
+    int ret_tid
     int stack_size
 
 # A `spawn fn(args)` registration for a NAMED function (Inc-1: int+void
@@ -895,6 +912,20 @@ struct GirModule:
     # for modules with no user trait. Appended AT END to avoid shifting
     # positional ctor call sites.
     Dict[String, int] trait_method_slot
+    # Typed payload channel for `Thread[T]` handle types: the name-deduped
+    # `Thread__{T}` GIR type id → T's GIR type id (UNIT_TYPE for
+    # `Thread[void]`). Written via `record_thread_payload` at every
+    # Thread-handle MINT site — the `map_ast_type` TNamed arm and the
+    # `resolved_to_gir_type` RTGeneric arm (annotations / params / fields)
+    # plus the `thread_spawn` intrinsic in lower_call (unannotated spawns).
+    # Read via `thread_payload_tid_of` by the join/id method intercept in
+    # lower_expr, so the join result type comes from typed metadata, NOT
+    # from slicing the payload name out of the `Thread__` prefix and
+    # re-deriving a tid from it (CLAUDE.md "No name matching"; Layering
+    # rule 3 — one source of truth, one accessor). Mirrors Rust gg's
+    # `TypeMapper.thread_payload_types` (`src/ir/lowering/types.rs`).
+    # Appended AT END to avoid shifting positional ctor call sites.
+    Dict[int, int] thread_payload_tids
 
 # Per-test metadata mirroring Rust's `TestFnInfo` (`src/ir/mod.rs:30`).
 # `fn_name` is the emitted `__test_N` symbol ("" for a skipped test, which
@@ -1061,6 +1092,34 @@ int option_ref_payload_of(GirModule &gmod, int option_tid):
     int t = peel_ptr_tid(&gmod, option_tid)
     if gmod.option_ref_payload.contains(t):
         return gmod.option_ref_payload.get(t).unwrap()
+    return -1
+
+# Record the typed payload tid for a `Thread__{T}` handle type — the single
+# writer for the `thread_payload_tids` channel (Layering rule 4, resolve
+# once / write through). Called at each MINT site where the payload tid is
+# in hand: the `map_ast_type` TNamed arm + `resolved_to_gir_type` RTGeneric
+# arm (annotations / params / fields) and the `thread_spawn` intrinsic in
+# lower_call (unannotated spawns). `payload_tid` is UNIT_TYPE for
+# `Thread[void]`. First-write-wins (the handle id is name-deduped, so a
+# re-record is identical). Mirrors `record_enum_category`.
+void record_thread_payload(GirModule &gmod, int thread_tid, int payload_tid):
+    if thread_tid < 0:
+        return
+    if gmod.thread_payload_tids.contains(thread_tid):
+        return
+    gmod.thread_payload_tids.put(thread_tid, payload_tid)
+
+# The typed thread-payload accessor: a `Thread__{T}` handle tid → T's tid
+# (UNIT_TYPE for `Thread[void]`), or -1 when the (Ptr/MutPtr-peeled) tid is
+# not a Thread handle. The join/id method intercept in lower_expr dispatches
+# on THIS (typed metadata) instead of a `Thread__` name-prefix test; the
+# receiver's type NAME is used only to spell the `Thread__{T}__join`/`__id`
+# helper symbol (the symbol axis, where the name IS the contract with the
+# emitted helpers). Mirrors `option_ref_payload_of`.
+int thread_payload_tid_of(GirModule &gmod, int thread_tid):
+    int t = peel_ptr_tid(&gmod, thread_tid)
+    if gmod.thread_payload_tids.contains(t):
+        return gmod.thread_payload_tids.get(t).unwrap()
     return -1
 
 # True iff `enum_tid` (Ptr/MutPtr-peeled) was recorded as a mono'd

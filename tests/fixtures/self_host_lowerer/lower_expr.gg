@@ -734,7 +734,7 @@ int lower_named_fn_spawn(LowerCtx &ctx, String spawn_fn_name, Vector[SpannedExpr
     # Register the Task named type (the SAME ret_c string the helpers spell)
     # so emit_mono_typedefs emits a typedef whose name matches the helper
     # symbols. Mirrors the thread arm's `lookup_or_register_named(&gmod,
-    # "Thread__" + ts_ret_c)`.
+    # "Thread__" + ts_ret_name)`.
     int spawn_task_ty = lookup_or_register_named(&gmod, spawn_task_name)
     # Lower the spawn-call args (scalar by-value in Inc-1) and emit the call.
     Vector[Operand] spawn_call_args = []
@@ -3267,37 +3267,37 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 int clone_dst = add_local(&ctx, recv_tid, None)
                 emit(&ctx, GIAssign(clone_dst, OpClone(recv)))
                 return clone_dst
-            # Thread[T] methods — join / id. The receiver is a `Thread__{ret_c}`
+            # Thread[T] methods — join / id. The receiver is a `Thread__{T}`
             # opaque handle with NO registered fn body, so `fn_sigs` has no
             # `Thread__T__join` return type and the generic dispatch would
-            # mis-type the result. Intercept here and derive the return type
-            # from the `Thread__` suffix, mirroring Rust gg's intrinsic
-            # (`src/ir/lowering/exprs/methods.rs:1058-1092`). `__join` returns
-            # the spawned fn's T (void → unit); `__id` returns int64_t.
-            String thr_recv_tn = local_type_name(recv, &ctx, &gmod)
-            if thr_recv_tn.starts_with("Thread__") and (mname == "join" or mname == "id"):
-                String thr_suffix = thr_recv_tn.slice(8, thr_recv_tn.len())
+            # mis-type the result. TYPED dispatch: the receiver is a Thread
+            # handle iff its (Ptr-peeled) tid is in the thread_payload_tids
+            # channel — written at every Thread-handle mint site — and the
+            # join payload tid comes from that same channel, never re-derived
+            # by slicing the payload name out of the `Thread__` prefix
+            # (CLAUDE.md "No name matching"). The receiver's type NAME is
+            # used only to spell the `Thread__{T}__join`/`__id` helper symbol
+            # (the symbol axis). Mirrors Rust gg's intercept
+            # (`src/ir/lowering/exprs/methods.rs`, thread_payload_types).
+            # `__join` returns the payload T (void → unit); `__id` int64_t.
+            int thr_recv_tid = -1
+            if recv >= 0 and recv < ctx.locals.len():
+                thr_recv_tid = ctx.locals.get(recv).unwrap().type_id
+            int thr_payload_tid = thread_payload_tid_of(&gmod, thr_recv_tid)
+            if thr_payload_tid >= 0 and (mname == "join" or mname == "id"):
+                String thr_recv_tn = local_type_name(recv, &ctx, &gmod)
                 String thr_join_fn = thr_recv_tn + "__" + mname
                 if mname == "id":
                     int thr_id_dst = add_local(&ctx, I64_TYPE, None)
                     emit(&ctx, GICall(thr_id_dst, thr_join_fn, [op_consume(&ctx, &gmod, recv, CkCallArgBorrow())]))
                     return thr_id_dst
-                # join: void suffix → unit (no dst); else the suffix's type.
-                if thr_suffix == "void":
+                # join: void payload → unit (no dst); else the payload's tid.
+                if thr_payload_tid == UNIT_TYPE:
                     emit(&ctx, GICall(-1, thr_join_fn, [op_consume(&ctx, &gmod, recv, CkCallArgOwning())]))
                     int thr_void_dst = add_local(&ctx, UNIT_TYPE, None)
                     emit(&ctx, GIAssign(thr_void_dst, OpConstUnit()))
                     return thr_void_dst
-                int thr_ret_tid = I64_TYPE
-                if thr_suffix == "double":
-                    thr_ret_tid = F64_TYPE
-                elif thr_suffix == "bool":
-                    thr_ret_tid = BOOL_TYPE
-                elif thr_suffix == "int32_t":
-                    thr_ret_tid = I32_TYPE
-                elif thr_suffix != "int64_t":
-                    thr_ret_tid = lookup_or_register_named(&gmod, thr_suffix)
-                int thr_join_dst = add_local(&ctx, thr_ret_tid, None)
+                int thr_join_dst = add_local(&ctx, thr_payload_tid, None)
                 emit(&ctx, GICall(thr_join_dst, thr_join_fn, [op_consume(&ctx, &gmod, recv, CkCallArgOwning())]))
                 return thr_join_dst
             # Detect mutating-method-on-field-access pattern *before*
@@ -6948,17 +6948,21 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         int ts_result = -1
         match args.get(0).unwrap().expr:
             case EIdentifier(spawn_fn_name):
-                # Return type of the spawned fn (Thread__{ret_c}). `fn_sigs`
+                # Return type of the spawned fn (Thread__{ret_name}). `fn_sigs`
                 # maps fn name → return type id; default to int64_t if absent.
                 int ts_ret_type = I64_TYPE
                 if gmod.fn_sigs.contains(spawn_fn_name):
                     ts_ret_type = gmod.fn_sigs.get(spawn_fn_name).unwrap()
-                # C return type name — "void" for a unit-returning fn (Rust
-                # special-cases UNIT_TYPE → Thread__void), else the type's C name.
-                String ts_ret_c = "void"
+                # SYMBOL-NAME axis: the payload type NAME baked into the
+                # `Thread__{name}` symbols — "void" for a unit-returning fn
+                # (Rust special-cases UNIT_TYPE → Thread__void), else the
+                # type's language-level name. The C spelling of the ctx
+                # `_result` field is resolved separately at emit
+                # (`thread_payload_c_type`, lir_codegen).
+                String ts_ret_name = "void"
                 if ts_ret_type != UNIT_TYPE:
-                    ts_ret_c = type_id_to_name(ts_ret_type, &gmod)
-                String ts_thread_name = "Thread__" + ts_ret_c
+                    ts_ret_name = type_id_to_name(ts_ret_type, &gmod)
+                String ts_thread_name = "Thread__" + ts_ret_name
                 # stack_size: 0 for the 1-arg form; for the 2-arg form, const-fold
                 # the 2nd arg (a non-foldable value also routes to the plain wrapper).
                 int ts_stack_size = 0
@@ -6974,10 +6978,15 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                     if tsf_rec.fn_name == spawn_fn_name:
                         ts_already = true
                 if not ts_already:
-                    gmod.thread_spawned_fns.push(ThreadSpawnRec(spawn_fn_name.clone(), ts_ret_c.clone(), ts_stack_size))
-                # Register the Thread__{ret_c} named type for the dst local and
-                # emit the spawn call (no args — the wrapper is `(void)`).
+                    gmod.thread_spawned_fns.push(ThreadSpawnRec(spawn_fn_name.clone(), ts_ret_name.clone(), ts_ret_type, ts_stack_size))
+                # Register the Thread__{ret_name} named type for the dst local
+                # and emit the spawn call (no args — the wrapper is `(void)`).
                 int ts_thread_ty = lookup_or_register_named(&gmod, ts_thread_name)
+                # Typed thread-payload channel (sibling of the map_ast_type /
+                # resolved_to_gir_type mint-site writes): an unannotated
+                # `thread_spawn(f).join()` chain mints the handle type HERE,
+                # so this site must record the payload too.
+                record_thread_payload(&gmod, ts_thread_ty, ts_ret_type)
                 int ts_dst = add_local(&ctx, ts_thread_ty, None)
                 Vector[Operand] ts_args = []
                 emit(&ctx, GICall(ts_dst, "__gorget_thread_spawn_" + spawn_fn_name, ts_args))

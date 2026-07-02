@@ -1251,28 +1251,32 @@ pub(super) fn lower_method_call(
     // ReadGuard[T] / WriteGuard[T] — handled by generic dispatch (MutBorrow self_conv)
 
     // Thread[T] methods: join (Move, pass by value), id (pass by value — pointer).
+    //
+    // Typed dispatch: the receiver is a Thread handle iff its (pointer-peeled)
+    // TypeId is in `type_mapper.thread_payload_types` — written at every
+    // Thread-handle mint site (the TypeMapper protocol branch for annotated
+    // types, the `thread_spawn` intrinsic for unannotated spawns). The join
+    // payload TypeId comes from that same map — never re-derived by slicing
+    // the payload name out of the `Thread__` prefix (layering rule 2). The
+    // receiver's registered type NAME is used only to spell the
+    // `Thread__{T}__join` / `__id` helper symbols: that is the symbol axis,
+    // where the name IS the contract with `emit_thread_helpers`.
     {
-        let recv_type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
-        if let Some(ref ttn) = recv_type_name {
-            if ttn.starts_with("Thread__") {
-                let elem_suffix = ttn.strip_prefix("Thread__").unwrap_or("int64_t");
-                let is_void = elem_suffix == "void";
+        let recv_tid = infer_operand_type_full(ctx, &recv, builder);
+        let eff_tid = ctx.pointee_type(recv_tid).unwrap_or(recv_tid);
+        if let Some(&payload_tid) = ctx.type_mapper.thread_payload_types.get(&eff_tid) {
+            if matches!(method_name, "join" | "id") {
+                let ttn = ctx.type_name_for_id(eff_tid)
+                    .expect("Thread handle TypeId in thread_payload_types must be a registered Named type")
+                    .to_string();
                 match method_name {
                     "join" => {
                         let join_fn = format!("{ttn}__join");
-                        if is_void {
+                        if payload_tid == UNIT_TYPE {
                             builder.call_void(&join_fn, vec![recv]);
                             return Operand::Constant(Constant::Unit);
                         } else {
-                            // Map C type name back to TypeId (primitives first, then registry)
-                            let ret_type = match elem_suffix {
-                                "int64_t" => I64_TYPE,
-                                "double"  => F64_TYPE,
-                                "bool"    => BOOL_TYPE,
-                                "int32_t" => I32_TYPE,
-                                _ => ctx.type_mapper.lookup_named(elem_suffix).unwrap_or(I64_TYPE),
-                            };
-                            let dst = builder.call(&join_fn, vec![recv], ret_type);
+                            let dst = builder.call(&join_fn, vec![recv], payload_tid);
                             return FunctionBuilder::copy(dst);
                         }
                     }
@@ -1281,7 +1285,7 @@ pub(super) fn lower_method_call(
                         let dst = builder.call(&id_fn, vec![recv], I64_TYPE);
                         return FunctionBuilder::copy(dst);
                     }
-                    _ => {}
+                    _ => unreachable!(),
                 }
             }
         }

@@ -5622,7 +5622,12 @@ LirModule lower_gir_to_lir(GirModule &gmod):
     # Thread-spawned fn metadata (thread_spawn intrinsic → per-fn wrapper emit).
     # Mirrors Rust gg's GIR→LIR copy (`src/lir/lower/mod.rs:465-471`).
     for tsf_rec in gmod.thread_spawned_fns:
-        m.thread_spawned_fns.push(LirThreadSpawnedFn(tsf_rec.fn_name.clone(), tsf_rec.ret_c_type.clone(), tsf_rec.stack_size))
+        # Map the typed payload tid through the SAME gir→lir type mapping
+        # every fn return uses (one source of truth) — LT_VOID for void.
+        int tsf_ret_lir = LT_VOID
+        if tsf_rec.ret_tid != UNIT_TYPE:
+            tsf_ret_lir = map_gir_type(tsf_rec.ret_tid, &gmod, &sr)
+        m.thread_spawned_fns.push(LirThreadSpawnedFn(tsf_rec.fn_name.clone(), tsf_rec.ret_name.clone(), tsf_ret_lir, tsf_rec.stack_size))
 
     # Async spawn fn metadata (`spawn fn(args)` → per-fn spawn/await helper
     # emit, Inc-1). Sibling of the thread_spawned_fns copy above. Build the

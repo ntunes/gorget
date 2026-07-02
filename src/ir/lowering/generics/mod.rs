@@ -2437,6 +2437,19 @@ fn monomorphize_struct(
     registry.add_type_def(type_def);
     let type_id = registry.insert(GirType::Named(mangled_name.to_string()));
     mapper.named_types.insert(mangled_name.to_string(), type_id);
+
+    // Thread[T]: record the typed payload channel at THIS mint site too.
+    // `Thread` is declared as a `struct Thread[T]: pass` template in
+    // lib/std/thread.gg, so annotated Thread types (locals, params, fields)
+    // are minted by the generics pre-pass — which runs before function
+    // lowering and bypasses the protocol branch in `map_ast_type_mut`.
+    // Sibling of the protocol-branch write (`lowering/types.rs`) and the
+    // thread_spawn-intrinsic write (`exprs/calls.rs`); all three record the
+    // same name-deduped (tid → payload tid) pair.
+    if template.name.node == "Thread" && !type_args.is_empty() {
+        let payload = substitute_and_map_mut(mapper, registry, &type_args[0].node, &subs);
+        mapper.thread_payload_types.insert(type_id, payload);
+    }
 }
 
 /// Monomorphize a generic enum: create a TypeDef with substituted variant field types.

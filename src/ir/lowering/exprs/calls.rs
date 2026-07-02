@@ -936,16 +936,29 @@ pub(super) fn lower_call(
                 let fn_ret_type = ctx.fn_sigs.get(fn_name.as_str())
                     .map(|(_, r)| *r)
                     .unwrap_or(I64_TYPE);
-                let ret_c = ctx.type_name_for_id(fn_ret_type)
-                    .unwrap_or("int64_t")
-                    .to_string();
-                let thread_name = if fn_ret_type == UNIT_TYPE {
-                    "Thread__void".to_string()
+                // Payload name for the `Thread__{name}` symbols. MUST match the
+                // declaration-side mangling of `Thread[T]` (the join call site
+                // derives its symbol from the RECEIVER's type name, which for a
+                // `Thread[float] t = ...` local is the declared `Thread__double`).
+                // `c_type_name_for_id` spells primitives ("double", "bool",
+                // "int32_t", ...) like the mangler; bare `type_name_for_id`
+                // misses primitives and fell back to "int64_t", silently keying
+                // a float payload's helpers on `Thread__int64_t`.
+                let ret_name = if fn_ret_type == UNIT_TYPE {
+                    "void".to_string()
                 } else {
-                    format!("Thread__{ret_c}")
+                    ctx.c_type_name_for_id(fn_ret_type)
                 };
+                let thread_name = format!("Thread__{ret_name}");
                 let thread_type = get_or_register_type(ctx, &thread_name, None);
-                ctx.spawn.thread_fns.entry(fn_name.clone()).or_insert((fn_ret_type, stack_size));
+                // Typed payload channel (sibling of the TypeMapper protocol-
+                // branch write for annotated `Thread[T]` types): an
+                // unannotated `thread_spawn(f).join()` chain mints the handle
+                // type HERE, so this site must record the payload too. Read
+                // by the join/id intercept in `methods.rs`.
+                ctx.type_mapper.thread_payload_types.insert(thread_type, fn_ret_type);
+                ctx.spawn.thread_fns.entry(fn_name.clone())
+                    .or_insert((fn_ret_type, ret_name, stack_size));
                 let spawn_fn = format!("__gorget_thread_spawn_{fn_name}");
                 let dst = builder.call(&spawn_fn, vec![], thread_type);
                 return FunctionBuilder::copy(dst);

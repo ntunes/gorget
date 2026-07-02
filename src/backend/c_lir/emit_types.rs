@@ -545,23 +545,37 @@ pub(super) fn emit_spawn_helpers(out: &mut String, module: &LirModule) {
         }
     }
 }
-pub(super) fn emit_thread_helpers(out: &mut String, module: &LirModule) {
+pub(super) fn emit_thread_helpers(out: &mut String, module: &LirModule, sn: &HashMap<u32, String>) {
     if module.thread_spawned_fns.is_empty() {
         return;
     }
     writeln!(out, "\n/* ── Thread[T] wrappers ── */").unwrap();
 
+    // The SYMBOL names (`Thread__{ret_name}` / `__GorgetThread__{ret_name}`)
+    // come from the typed `ret_name` written through from the spawn intrinsic
+    // — they must match the call sites byte-for-byte. The C TYPE of the
+    // `_result` field / join return comes from `ret_c_type`, resolved through
+    // the struct-name map for user struct/enum payloads (`Point` → `__gg_Point`),
+    // mirroring emit_spawn_helpers' `resolve_type`.
+    let orig_to_c: HashMap<String, String> = module.structs.iter().enumerate()
+        .map(|(i, def)| (def.name.clone(), sn.get(&(i as u32)).cloned().unwrap_or_else(|| format!("__lir_s{i}"))))
+        .collect();
+    let resolve_type = |t: &str| -> String {
+        orig_to_c.get(t).cloned().unwrap_or_else(|| t.to_string())
+    };
+
     // Collect unique return types for Thread__T typedefs
     let mut emitted_thread_types: Vec<String> = Vec::new();
     for tsf in &module.thread_spawned_fns {
-        let ret_c = &tsf.ret_c_type;
-        let is_void = ret_c == "void";
-        let thread_name = format!("Thread__{ret_c}");
+        let ret_name = &tsf.ret_name;
+        let ret_c = resolve_type(&tsf.ret_c_type);
+        let is_void = ret_name == "void";
+        let thread_name = format!("Thread__{ret_name}");
         if emitted_thread_types.contains(&thread_name) {
             continue;
         }
         emitted_thread_types.push(thread_name.clone());
-        let ctx_type = format!("__GorgetThread__{ret_c}");
+        let ctx_type = format!("__GorgetThread__{ret_name}");
         if is_void {
             writeln!(out, "typedef struct {{ pthread_t _thr; }} {ctx_type};").unwrap();
         } else {
@@ -583,10 +597,10 @@ pub(super) fn emit_thread_helpers(out: &mut String, module: &LirModule) {
     for tsf in &module.thread_spawned_fns {
         let fn_name = &tsf.fn_name;
         let safe_fn_name = c_func_name(fn_name);
-        let ret_c = &tsf.ret_c_type;
-        let is_void = ret_c == "void";
-        let thread_name = format!("Thread__{ret_c}");
-        let ctx_type = format!("__GorgetThread__{ret_c}");
+        let ret_name = &tsf.ret_name;
+        let is_void = ret_name == "void";
+        let thread_name = format!("Thread__{ret_name}");
+        let ctx_type = format!("__GorgetThread__{ret_name}");
 
         // Thread entry
         writeln!(out, "static void* __gorget_thread_entry_{fn_name}(void* __arg) {{").unwrap();
