@@ -25700,6 +25700,43 @@ done",
     );
 }
 
+/// CoW G1 memory-safety gate (round-33 re-review 3, the 3rd G1 root-materialize
+/// site `lower_method_call`): a mutating USER `&self` method whose ARG is an
+/// element of the SAME collection the receiver materializes
+/// (`v[0].set_from(v[1])`) + a later `v.push()`. The arg element ref into the
+/// private copy must be untracked (heap-UAF in Res__clone pre-fix). ASan-clean
+/// both backends.
+#[test]
+fn cow_method_arg_same_coll() {
+    run_gg(
+        "cow_method_arg_same_coll.gg",
+        "\
+8
+B
+2
+A
+done",
+    );
+}
+
+/// CoW G1 memory-safety gate (round-33): a BUILT-IN mutating method (`push`)
+/// whose ARG is an element of the same nested collection the receiver
+/// materializes (`m[0].push(m[1][0])`) + a later `m.push()`. The untrack runs
+/// after ensure_owned clones the pushed element (heap-UAF in gorget_array_clone
+/// pre-fix).
+#[test]
+fn cow_method_arg_builtin_push() {
+    run_gg(
+        "cow_method_arg_builtin_push.gg",
+        "\
+8
+2
+2
+1
+done",
+    );
+}
+
 #[test]
 fn cow_set_string_clone() {
     run_gg(

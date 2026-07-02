@@ -3892,3 +3892,111 @@ fn arena_escape_store_classification_completeness() {
          must have a single producer.",
     );
 }
+
+/// Split a Rust source string into `(fn_name, body_text)` for every FREE
+/// function defined at column 0 (optionally `pub`/`pub(super)`/`pub(crate)`).
+/// The body of fn N runs from its `fn` line to the next col-0 `fn` line (or
+/// EOF). Line-based (never brace-matched) so `{`/`}` inside string literals,
+/// `format!` templates, or `char` literals cannot corrupt the boundaries. All
+/// three G1-materialize sites are col-0 free functions, so this is exact for
+/// them; nested fns/closures fold into their enclosing free fn (fine for a
+/// containment scan).
+fn top_level_fn_bodies(content: &str) -> Vec<(String, String)> {
+    let mut starts: Vec<(usize, String)> = Vec::new();
+    let mut offset = 0usize;
+    for line in content.lines() {
+        // col-0 only: no leading whitespace.
+        if line.starts_with(|c: char| !c.is_whitespace()) {
+            let mut rest = line;
+            for pfx in ["pub(crate) ", "pub(super) ", "pub ", ""] {
+                if let Some(stripped) = rest.strip_prefix(pfx) {
+                    rest = stripped;
+                    break;
+                }
+            }
+            if let Some(after_fn) = rest.strip_prefix("fn ") {
+                let name: String = after_fn
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                if !name.is_empty() {
+                    starts.push((offset, name));
+                }
+            }
+        }
+        offset += line.len() + 1; // +1 for the '\n'
+    }
+    let mut out = Vec::new();
+    for k in 0..starts.len() {
+        let s = starts[k].0;
+        let e = starts.get(k + 1).map(|n| n.0).unwrap_or(content.len());
+        out.push((starts[k].1.clone(), content[s..e].to_string()));
+    }
+    out
+}
+
+/// Structural guard (Core #4 "one fix, all siblings" / #6 "convert a recurring
+/// bug class into an executable guard"; devbook/25 §3a): the G1 "materialize a
+/// projected mutation through an immutable root" transform has EXACTLY THREE
+/// call sites — `lower_field_assign`, `lower_index_assign` (stmts/assigns.rs),
+/// and `lower_method_call` (exprs/methods.rs). Each replaces the mutated
+/// collection with a private OWNED COPY and then lowers the store-target's
+/// projection chain AND the RHS / args — every index-load in those mints a
+/// TRANSIENT `CollectionElement`/`FieldPath` handle INTO that copy. If any such
+/// handle stays CoW-tracked, a later same-collection mutation reallocates the
+/// copy and `cow_before_mutation` Case 3 clones freed memory → heap-UAF. The
+/// round-33 fold chain fixed exactly this class one leaked site at a time (the
+/// object chain, then the RHS/index, then the method-call args); this lint
+/// stops the NEXT sibling from drifting.
+///
+/// The shared close is `untrack_transient_element_refs_in_range`. The invariant
+/// pinned here: every fn that performs the G1 materialize — signalled by a
+/// `resolve_projection_root_local(` call — MUST also call
+/// `untrack_transient_element_refs_in_range(`. A 4th projected-materialize site
+/// added without the untrack fails here, forcing it through the shared path.
+///
+/// **If this fails:** you added (or removed) a G1 root-materialize site. If you
+/// added one, span the WHOLE statement's lowering with a
+/// `untrack_transient_element_refs_in_range(builder, start, len)` call (see the
+/// existing three — snapshot `builder.locals.len()` before the receiver/object
+/// lowers, untrack after the args/RHS are consumed). Update `EXPECTED_SITES`
+/// only when the site set genuinely, deliberately changes.
+#[test]
+fn g1_projected_materialize_sites_untrack() {
+    const EXPECTED_SITES: &[&str] =
+        &["lower_field_assign", "lower_index_assign", "lower_method_call"];
+    let files = [
+        "src/ir/lowering/stmts/assigns.rs",
+        "src/ir/lowering/exprs/methods.rs",
+    ];
+    let mut g1_sites: Vec<String> = Vec::new();
+    for file in files {
+        let content = fs::read_to_string(file).unwrap_or_default();
+        for (name, body) in top_level_fn_bodies(&content) {
+            if body.contains("resolve_projection_root_local(") {
+                assert!(
+                    body.contains("untrack_transient_element_refs_in_range("),
+                    "G1 root-materialize site `{name}` ({file}) calls \
+                     `resolve_projection_root_local` — it materializes a projected \
+                     mutation into a private owned copy — but NEVER calls \
+                     `untrack_transient_element_refs_in_range`. The transient \
+                     element/arg handles into that copy dangle on a later \
+                     same-collection mutation (heap-UAF). Untrack the whole \
+                     statement's lowering range (see `lower_field_assign`)."
+                );
+                g1_sites.push(name);
+            }
+        }
+    }
+    g1_sites.sort();
+    let mut expected: Vec<String> =
+        EXPECTED_SITES.iter().map(|s| s.to_string()).collect();
+    expected.sort();
+    assert_eq!(
+        g1_sites, expected,
+        "The set of G1 projected-root-materialize sites changed: {g1_sites:?} vs \
+         expected {expected:?}. Each site MUST route through \
+         `untrack_transient_element_refs_in_range`; update `EXPECTED_SITES` only \
+         when the set genuinely, deliberately changes."
+    );
+}

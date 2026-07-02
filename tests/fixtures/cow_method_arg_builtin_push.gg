@@ -1,0 +1,26 @@
+# CoW G1 memory-safety gate (round-33): a BUILT-IN mutating method (`push`) whose
+# ARG is an element of the SAME (nested) collection the receiver
+# root-materializes (`m[0].push(m[1][0])`) + a later `m.push()`. The arg is
+# consumed by ensure_owned (cloned into m[0]); the untrack runs AFTER that, so
+# the remaining arg handle is a dead read ref. heap-UAF in gorget_array_clone
+# pre-fix.
+from std.collections import Vector
+
+struct Res:
+    String name
+
+void f(Vector[Vector[Res]] m):
+    m[0].push(m[1][0])
+    int i = 0
+    while i < 6:
+        m.push([Res("z")])
+        i = i + 1
+    print(m.len())               # 8
+    print(m[0].len())            # 2  (A + a copy of m[1][0])
+
+void main():
+    Vector[Vector[Res]] a = [[Res("A")], [Res("B")]]
+    f(a)
+    print(a.len())               # 2  (caller untouched)
+    print(a[0].len())            # 1  (caller's m[0] still just [A])
+    print("done")

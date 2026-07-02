@@ -490,6 +490,20 @@ pub(super) fn lower_method_call(
     // Extract field path string for CowBorrow provenance on field-access receivers.
     let field_path_for_cow: Option<String> = extract_field_path_string(&receiver.node);
 
+    // CoW UAF fix (round-33, class fix — the 3rd G1 root-materialize site, after
+    // lower_field_assign / lower_index_assign): snapshot the local range for the
+    // WHOLE method-call statement (receiver chain + args). If the projected-root
+    // materialize below fires, an ARG that is an element of the SAME collection
+    // the receiver root-materializes (`v[0].set_from(v[1])`, `m[0].push(m[1][0])`)
+    // mints a transient CollectionElement/FieldPath ref into the private owned
+    // copy; it dangles on a later same-collection push (cow_before_mutation Case 3
+    // clones freed memory → heap-UAF). The untrack runs at the END (after
+    // `ensure_owned_at_consuming_arg` has cloned the consumed args), guarded by
+    // `did_g1_materialize` so NON-materializing / `&`-correct method calls stay
+    // byte-identical. Mirrors the assign gate.
+    let stmt_locals_start = builder.locals.len();
+    let mut did_g1_materialize = false;
+
     // For pointer params used as method receivers, pass the raw pointer directly.
     // Auto-deref would copy the struct, and mutations to the copy wouldn't propagate back.
     let borrow_param_local = if let Expr::Identifier(name) = &receiver.node {
@@ -1868,6 +1882,14 @@ pub(super) fn lower_method_call(
                 ctx.cow_before_mutation(builder, root_local, receiver.span);
                 let after = root_name.as_deref()
                     .and_then(|n| ctx.lookup_local(n).map(|(l, _)| l));
+                // Record whether the root actually materialized into a private
+                // owned copy — the end-of-statement untrack gate reads this so it
+                // only fires when there IS a private copy for the receiver/arg
+                // element refs to dangle into (non-materializing calls stay
+                // byte-identical).
+                if before != after {
+                    did_g1_materialize = true;
+                }
                 // Re-lower `recv` ONLY for an INDEX-projected receiver
                 // (`v[i].method()`) — there `recv` IS the self-arg the call
                 // uses, and it must re-read the element out of the rebound
@@ -2284,6 +2306,22 @@ pub(super) fn lower_method_call(
             }
         }
         call_args.extend(lowered_method_args.iter().cloned());
+
+        // CoW UAF fix (round-33, class fix — 3rd G1 root-materialize site): if the
+        // receiver root-materialized above, untrack EVERY transient element/field-
+        // path handle minted across this whole method-call statement (receiver
+        // chain + args). Runs HERE, after `ensure_owned_at_consuming_arg` cloned
+        // the consumed args, so every handle left in range is a dead READ ref
+        // (the call below uses the cloned/owned operands, not the tag). An arg
+        // that is an element of the SAME collection the receiver materialized
+        // (`v[0].set_from(v[1])`, `m[0].push(m[1][0])`) would otherwise dangle on
+        // a later same-collection push (Case 3 clones freed memory). Guarded by
+        // `did_g1_materialize` so `&`-correct / non-materializing calls emit
+        // identical IR (byte-identical self-host). `local_name().is_none()` spares
+        // live named borrows. Mirrors lower_field_assign / lower_index_assign.
+        if did_g1_materialize {
+            ctx.untrack_transient_element_refs_in_range(builder, stmt_locals_start, builder.locals.len());
+        }
 
         // Restore previous hints and expected type
         ctx.func_state.closure_param_type_hints = prev_hints;

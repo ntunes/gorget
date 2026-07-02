@@ -1,0 +1,31 @@
+# CoW G1 memory-safety gate (round-33 re-review 3, 3rd materialize site): a
+# mutating USER `&self` method whose ARG is an element of the SAME collection
+# the receiver root-materializes (`v[0].set_from(v[1])`) + a later `v.push()`.
+# The arg `v[1]` mints a transient CollectionElement ref into the private copy;
+# leaving it CoW-tracked dangles it on the push → heap-UAF in Res__clone. The
+# method-call untrack (guarded on the G1 materialize firing) closes it. MUST be
+# ASan-clean on both backends.
+from std.collections import Vector
+
+struct Res:
+    String name
+
+equip Res:
+    void set_from(&self, Res other):
+        self.name = other.name
+
+void f(Vector[Res] v):
+    v[0].set_from(v[1])
+    int i = 0
+    while i < 6:
+        v.push(Res("z"))
+        i = i + 1
+    print(v.len())               # 8  (2 original + 6 pushed onto the private copy)
+    print(v[0].name)             # B  (copied from v[1])
+
+void main():
+    Vector[Res] a = [Res("A"), Res("B")]
+    f(a)
+    print(a.len())               # 2  (caller untouched)
+    print(a[0].name)             # A
+    print("done")
