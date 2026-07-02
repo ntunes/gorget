@@ -15700,7 +15700,7 @@ fn c_emit_comparison() {
     //
     // Bump-on-improvement: when Matched rises, raise the floor in the
     // same commit that lands the improvement so the gain is locked in.
-    const C_EMIT_MATCH_FLOOR: usize = 1115;
+    const C_EMIT_MATCH_FLOOR: usize = 1118;
     if parity_floor_active("c_emit_comparison") {
         assert!(
             matched as usize >= C_EMIT_MATCH_FLOOR,
@@ -19194,13 +19194,15 @@ fn self_host_runtime_diff() {
     //     'timed out after 30s' MATCH→CRASH flips; the round-32 audit log
     //     independently measured 5 such flips on this box).
     //
-    // Floor = 986 − 5 (regenerated MATCH minus measured timeout jitter,
-    // nothing more) = 981.
+    // Floor = 997 − 5 (regenerated MATCH minus measured timeout jitter,
+    // nothing more) = 992. Re-seeded at round-32 close (MATCH 997/1108 on
+    // the full six-track tip; jitter = the 5 timeout-class CRASHes measured
+    // twice that round).
     //
     // Bump-on-improvement: when MATCH rises, raise the floor in the same
     // commit that lands the improvement so the gain is locked in. Do NOT
     // pad the floor beyond measured jitter.
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 981;
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 992;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \

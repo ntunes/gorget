@@ -144,3 +144,22 @@ It reimplements both the GIR resource guards and the LIR structural checks:
 The per-pass dispatcher mirrors Rust's `assert_module_valid(module, after)`: `validate_gir_after` (`:361`) and `validate_lir_after` (`:383`) are no-ops unless `GG_VALIDATE_PASSES` is set (`validate_passes_enabled`, `:351`), and when set they run their layer's validators with a pass-name-tagged failure message. `driver.gg` imports the three entry points (`driver.gg:14`) and calls them as a validate-after-every-pass pipeline: `run_validators(&gir)` after lowering (`:72`), `validate_gir_after` (`:66`), and `validate_lir_after` after GIR→LIR lowering, SSA construction, and drop elaboration (`:80`, `:88`, `:96`).
 
 So the per-pass + `GG_VALIDATE_<NAME>` env-gate pattern this chapter describes *is* exercised in self-host. The one gap is the BIR layer: the self-host has no separate BIR newtype layer (no `bir_*.gg`; the canonical-op expansion helpers are folded into `lir_lower.gg`), so `assert_primitives_only` has no self-host analogue. The GIR and LIR guards are exercised through `c_emit_comparison` and `self_host_bootstrap_fixed_point`.
+
+## The parity floors — the north-star number as an executable gate
+
+Since round 32 the two headline comparison harnesses are no longer
+diagnostic-only: `c_emit_comparison` asserts `Matched >= C_EMIT_MATCH_FLOOR`
+and `self_host_runtime_diff` asserts `MATCH >= RUNTIME_DIFF_MATCH_FLOOR`
+(named consts in `tests/integration.rs`, each with the regeneration command in
+the adjacent comment — bump the floor when a round lands new MATCHes, never
+pad it). The asserts sit at the END of each test fn, after all backlog
+listings print (a floor that fires must not suppress the diagnostics you need
+to debug it), and they gate only where the measurement is meaningful: linux,
+default C backend, `GG_PARITY_FLOOR_OFF=1` as a loud escape hatch, and (for
+the timeout-jitter-sensitive runtime_diff count) release builds only. The
+c_emit floor runs in default CI and is the real regression gate; the
+runtime_diff floor fires on every intentional `GG_RUNTIME_DIFF=1` north-star
+run. The remaining stage comparisons (lexer/parser/resolver/typecheck/lowerer)
+stay diagnostic — regressions there surface downstream through the floored
+c_emit gate; floor them individually only with their own seeded release run
+and red/green proof.

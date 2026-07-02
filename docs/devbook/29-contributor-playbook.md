@@ -616,6 +616,31 @@ status` contamination check. The one-line rule lives in `AGENTS.md` §
 necessary but not sufficient when the worktrees are children of the thing they
 must not touch.**
 
+### The stash race (rule 8) and the killed-agent recovery drill (rule 9)
+
+Round 32 added two more entries to the same family. First, the **stash race**:
+two concurrent scouts each ran `git stash push` around a baseline rebuild —
+but the stash stack is repo-GLOBAL across every worktree, so scout B's `pop`
+grabbed scout C's 14-file thread prototype, and scout C's own `pop` found
+nothing (its entry had been consumed; the work survived only as a dangling
+commit found via reflog). Both scouts noticed, captured the foreign diff to
+`/tmp`, re-stored what they'd taken, and re-verified their own work from the
+dangling commit — full recovery, but only because both agents were paranoid.
+Rule 8: agents never stash; `git diff > /tmp/<name>.patch` + `git apply` has
+identical save/restore semantics with per-agent namespacing for free.
+
+Second, the **killed-agent drill**: a session limit killed five in-flight
+agents mid-round. The one executor that had already committed lost nothing;
+every other agent's work survived only as uncommitted worktree state that the
+orchestrator captured with `git diff` before relaunching. The E2 scout lost 26
+minutes of un-checkpointed prototype; its relaunch was briefed to update
+`/tmp/recover_*.patch` after every meaningful step and later survived a second
+kill with zero loss. Separately, three agents stalled indefinitely because
+their last act was a *backgrounded* long run whose completion handoff got
+lost. Rule 9 is both halves: checkpoint scout prototypes to `/tmp` early and
+often, and run final validation gates as FOREGROUND commands with explicit
+generous timeouts.
+
 ---
 
 ## The playbook in one paragraph
