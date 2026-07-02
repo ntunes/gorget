@@ -444,10 +444,29 @@ Option[ResourceMetadata] build_resource_metadata(String name):
             "Ptr", 8, LtPtr(), None, None, None,
             CsRefCounted(), CkNotCollection(), BkNotBox(), true, None, None, false))
 
+    # Bare atomic handles (round-33 shared(atomic) facade): carry their
+    # runtime method_prefix so (a) the `shared(atomic)` carrier's owning
+    # local passes `register_owning_opaque_local`'s typed prefix gate
+    # (lower_drops.gg) and (b) drop routes through `drop_fn_for_type`'s Ptr
+    # arm (no explicit atomic arm → the by-value `free` fallback, which IS
+    # the correct teardown for a bare malloc'd atomic handle — nothing
+    # nested; `gorget_atomic_int_free(**)` is the by-ADDRESS form and must
+    # NOT be paired with the Ptr arm's by-value SlotLoad).
+    if name == "AtomicInt":
+        return Some(ResourceMetadata(
+            "Ptr", 8, LtPtr(), None, None, None,
+            CsRefCounted(), CkNotCollection(), BkNotBox(), true,
+            Some("gorget_atomic_int"), None, false))
+    if name == "AtomicBool":
+        return Some(ResourceMetadata(
+            "Ptr", 8, LtPtr(), None, None, None,
+            CsRefCounted(), CkNotCollection(), BkNotBox(), true,
+            Some("gorget_atomic_bool"), None, false))
+
     # Bare-name opaque handles (not parameterised). Method-prefix wiring
     # for these went through a different path historically (direct
     # method dispatch on bare names); leave method_prefix=None.
-    if name == "Barrier" or name == "CondVar" or name == "AtomicInt" or name == "AtomicBool" or name == "Process" or name == "Thread" or name == "Semaphore" or name == "WaitGroup" or name == "OnceFlag":
+    if name == "Barrier" or name == "CondVar" or name == "Process" or name == "Thread" or name == "Semaphore" or name == "WaitGroup" or name == "OnceFlag":
         return Some(ResourceMetadata(
             "Ptr", 8, LtPtr(), None, None, None,
             CsRefCounted(), CkNotCollection(), BkNotBox(), true, None, None, false))
@@ -1728,9 +1747,14 @@ String map_runtime_name(String name, LirModule &m, GirModule &gmod):
                 String pfx = m.type_method_prefix_map.get(pfx_cand).unwrap_or("")
                 if pfx != "":
                     String method = extract_method_name(name)
-                    # Guard: drop → gorget_guard_release (suffix differs from method name).
-                    if pfx == "gorget_guard" and method == "drop":
-                        return "gorget_guard_release"
+                    # Guards: drop → <prefix>_release (suffix differs from the
+                    # method name) — for ALL THREE guard variants (mutex Guard,
+                    # rwlock ReadGuard/WriteGuard), one arm for the class
+                    # (Core #4): the runtime spells release, not free, and the
+                    # general drop→free alias below would emit an undefined
+                    # `gorget_read_guard_free`. Mirrors Rust gg calls.rs:457-472.
+                    if (pfx == "gorget_guard" or pfx == "gorget_read_guard" or pfx == "gorget_write_guard") and method == "drop":
+                        return pfx + "_release"
                     # Shared: read → get, write → set aliases.
                     if pfx == "gorget_shared":
                         if method == "read":
@@ -2540,6 +2564,11 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
         if fn_name == "gorget_read_guard_get_ptr" or fn_name == "gorget_write_guard_get_ptr":
             return true
         if fn_name == "gorget_guard_release":
+            return true
+        # Release variants for the RWLock guard family (shared(rwlock) facade
+        # guard drops) — same by-address rule as `gorget_guard_release` above
+        # (`gorget_read_guard_release(gorget_read_guard_t* g)`).
+        if fn_name == "gorget_read_guard_release" or fn_name == "gorget_write_guard_release":
             return true
         # Read-only methods also take self by const pointer
         if fn_name == "gorget_array_safe_get" or fn_name == "gorget_array_len":

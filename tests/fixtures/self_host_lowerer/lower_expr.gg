@@ -11,6 +11,7 @@ from types import TypeTable, ResolvedType
 from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Terminator, Operand, GirType, GirExtern, GirTypeInfo, GirFieldInfo, GirEnumVariantInfo, LiftedClosure, ClosureCapture, ResourceMetadata, CollectionKind, ConsumeKind, ThreadSpawnRec, SpawnFnRec, SharedLocalInfo, InnerSharedSpawn, PendingSharedAsync
 from gir import BOOL_TYPE, I8_TYPE, I16_TYPE, I32_TYPE, I64_TYPE, U8_TYPE, U16_TYPE, U32_TYPE, U64_TYPE, F32_TYPE, F64_TYPE, UNIT_TYPE, PRIM_COUNT
 from gir import CAP_BY_VALUE, CAP_BY_MUT_REF
+from gir import SHK_MUTEX, SHK_RWLOCK, SHK_ATOMIC
 from gir import init_type_table, register_type, lookup_or_register_named, register_ptr, participates_in_fault, enum_variant_index
 from gir import GirGlobal, GirGlobalField, gir_mod_add_global, GGINIT_FN_REF, GGINIT_STRUCT
 from gir import GGSTATIC_RUNTIME, GGSTATIC_BYTES, static_put_bytes
@@ -595,6 +596,151 @@ void emit_shared_mutex_lock_set(LowerCtx &ctx, GirModule &gmod, SharedLocalInfo 
     # arg-shaping in lir_lower address-takes the value + appends sizeof).
     emit(&ctx, GICallExtern(-1, info.guard_mangled + "__set", [OpBorrow(ss_guard), OpCopy(value_local)]))
     emit(&ctx, GICallExtern(-1, info.guard_mangled + "__drop", [OpBorrow(ss_guard)]))
+
+# ── shared(<sync>) override strategies (round-33) ────────────────
+# The rwlock/atomic carriers below mirror Rust gg's ArcRwLock / ArcAtomic
+# arms (`src/ir/lowering/stmts/mod.rs:1450-1578`) and the per-kind
+# read/write emitters (`src/ir/lowering/exprs/shared.rs:86-200`).
+
+# Atomic wrapper type name for an inner GIR type (Rust `atomic_type_name_for`,
+# shared.rs:203). Bool → AtomicBool, every other scalar → AtomicInt.
+String atomic_mangled_for(int inner_ty):
+    if inner_ty == BOOL_TYPE:
+        return "AtomicBool"
+    return "AtomicInt"
+
+# Runtime symbol family for the atomic carrier. The C-emit boundary spells
+# the runtime symbol (layering exception: the name IS the runtime contract);
+# selection is driven by the TYPED inner_type, not a name match.
+String atomic_runtime_prefix(int inner_ty):
+    if inner_ty == BOOL_TYPE:
+        return "gorget_atomic_bool"
+    return "gorget_atomic_int"
+
+# Register the RWLock carrier's named types and return the carrier GIR
+# type-id (a Ptr-to-RWLock__c). Registers BOTH guard types up front —
+# `ReadGuard__c` AND `WriteGuard__c` — whenever the facade is minted,
+# regardless of which accessor user code exercises. This mirrors Rust gg's
+# forced double-registration in the ArcRwLock arm (`stmts/mod.rs:1540-1546`,
+# the R2 lesson): the 16-byte by-value guard returns need their C typedefs
+# in module.structs, or the slot falls back to void* (8B) and the runtime's
+# 16-byte guard write stack-buffer-overflows.
+int register_rwlock_carrier_type(GirModule &gmod, String inner_c):
+    String rw_mangled = "RWLock__" + inner_c
+    lookup_or_register_named(&gmod, "ReadGuard__" + inner_c)
+    lookup_or_register_named(&gmod, "WriteGuard__" + inner_c)
+    int rw_tid = lookup_or_register_named(&gmod, rw_mangled)
+    return register_ptr(&gmod, rw_tid)
+
+# Register the atomic carrier's named type and return the carrier GIR
+# type-id (a Ptr-to-AtomicInt/AtomicBool handle).
+int register_atomic_carrier_type(GirModule &gmod, int inner_ty):
+    int at_tid = lookup_or_register_named(&gmod, atomic_mangled_for(inner_ty))
+    return register_ptr(&gmod, at_tid)
+
+# Emit the guard-chain READ of a shared(rwlock) var, returning a fresh local
+# of the inner type. Mirrors Rust `emit_rwlock_read_get` (shared.rs:112-134):
+#   g   = RWLock__c__read(carrier)      # gorget_rwlock_read → 16-byte guard
+#   val = ReadGuard__c__get(&g)         # gorget_read_guard_get + deref
+#   ReadGuard__c__drop(&g)              # gorget_read_guard_release
+int emit_rwlock_read_get(LowerCtx &ctx, GirModule &gmod, SharedLocalInfo info):
+    String rg_mangled = "ReadGuard__" + info.inner_c
+    int rg_guard_tid = lookup_or_register_named(&gmod, rg_mangled)
+    int rg_guard = add_local(&ctx, rg_guard_tid, None)
+    emit(&ctx, GICallExtern(rg_guard, "RWLock__" + info.inner_c + "__read", [OpCopy(info.hidden_local)]))
+    int rg_val = add_local(&ctx, info.inner_type, None)
+    emit(&ctx, GICallExtern(rg_val, rg_mangled + "__get", [OpBorrow(rg_guard)]))
+    emit(&ctx, GICallExtern(-1, rg_mangled + "__drop", [OpBorrow(rg_guard)]))
+    return rg_val
+
+# Emit the guard-chain WRITE of a shared(rwlock) var. Mirrors Rust
+# `emit_rwlock_write_set` (shared.rs:136-159).
+void emit_rwlock_write_set(LowerCtx &ctx, GirModule &gmod, SharedLocalInfo info, int value_local):
+    String wg_mangled = "WriteGuard__" + info.inner_c
+    int wg_guard_tid = lookup_or_register_named(&gmod, wg_mangled)
+    int wg_guard = add_local(&ctx, wg_guard_tid, None)
+    emit(&ctx, GICallExtern(wg_guard, "RWLock__" + info.inner_c + "__write", [OpCopy(info.hidden_local)]))
+    emit(&ctx, GICallExtern(-1, wg_mangled + "__set", [OpBorrow(wg_guard), OpCopy(value_local)]))
+    emit(&ctx, GICallExtern(-1, wg_mangled + "__drop", [OpBorrow(wg_guard)]))
+
+# Emit the atomic LOAD of a shared(atomic) var (Rust `emit_atomic_load`,
+# shared.rs:86). Direct runtime symbol — same GICallExtern idiom as
+# `gorget_shared_get_ptr` in the carrier unwrap above.
+int emit_atomic_load(LowerCtx &ctx, GirModule &gmod, SharedLocalInfo info):
+    int al_val = add_local(&ctx, info.inner_type, None)
+    emit(&ctx, GICallExtern(al_val, atomic_runtime_prefix(info.inner_type) + "_load", [OpCopy(info.hidden_local)]))
+    return al_val
+
+# Emit the atomic STORE of a shared(atomic) var (Rust `emit_atomic_store`,
+# shared.rs:99).
+void emit_atomic_store(LowerCtx &ctx, GirModule &gmod, SharedLocalInfo info, int value_local):
+    emit(&ctx, GICallExtern(-1, atomic_runtime_prefix(info.inner_type) + "_store", [OpCopy(info.hidden_local), OpCopy(value_local)]))
+
+# Kind-dispatched transparent READ of a shared var's current value. ONE
+# producer for every consumer site (EIdentifier read, `with x:` refresh,
+# compound-assign current-value) — Core #4: new kinds extend HERE, not at
+# each site. Mirrors Rust gg's Identifier-arm dispatch (exprs/mod.rs:115-139).
+int emit_shared_read(LowerCtx &ctx, GirModule &gmod, SharedLocalInfo info):
+    if info.kind == SHK_RWLOCK:
+        return emit_rwlock_read_get(&ctx, &gmod, info)
+    if info.kind == SHK_ATOMIC:
+        return emit_atomic_load(&ctx, &gmod, info)
+    return emit_shared_mutex_lock_get(&ctx, &gmod, info)
+
+# Kind-dispatched transparent WRITE (SAssign site). Mirrors Rust gg's
+# plain-assign dispatch (stmts/assigns.rs:31-56).
+void emit_shared_write(LowerCtx &ctx, GirModule &gmod, SharedLocalInfo info, int value_local):
+    if info.kind == SHK_RWLOCK:
+        emit_rwlock_write_set(&ctx, &gmod, info, value_local)
+        return
+    if info.kind == SHK_ATOMIC:
+        emit_atomic_store(&ctx, &gmod, info, value_local)
+        return
+    emit_shared_mutex_lock_set(&ctx, &gmod, info, value_local)
+
+# Kind-dispatched COMPOUND assign (`x <op>= rhs`). Returns the new-value
+# local (the caller syncs the defensive facade slot from it). Mirrors Rust
+# gg's compound dispatch (stmts/assigns.rs:1015-1105):
+#   Atomic  += / -= → native fetch-add/sub (lock-free); other ops load-op-store.
+#   RwLock  one WRITE lock held across get-op-set (write_get/write_finish).
+#   Mutex   lock-get → op → lock-set (each re-locks; the existing shape).
+int emit_shared_compound(LowerCtx &ctx, GirModule &gmod, SharedLocalInfo info, String op, int rhs_local):
+    if info.kind == SHK_ATOMIC:
+        String at_pfx = atomic_runtime_prefix(info.inner_type)
+        if op == "+=" or op == "-=":
+            String at_fn = at_pfx + "_add"
+            if op == "-=":
+                at_fn = at_pfx + "_sub"
+            # fetch_add/fetch_sub returns the OLD value; the facade wants the
+            # NEW one — re-load after the RMW (matches the read-refresh model;
+            # Rust discards the return entirely, assigns.rs:1052-1060).
+            int at_old = add_local(&ctx, info.inner_type, None)
+            emit(&ctx, GICallExtern(at_old, at_fn, [OpCopy(info.hidden_local), OpCopy(rhs_local)]))
+            return emit_atomic_load(&ctx, &gmod, info)
+        int at_cur = emit_atomic_load(&ctx, &gmod, info)
+        int at_dst = add_local(&ctx, info.inner_type, None)
+        emit_compound_arith(&ctx, op, at_dst, at_cur, rhs_local, info.inner_type, &gmod)
+        emit_atomic_store(&ctx, &gmod, info, at_dst)
+        return at_dst
+    if info.kind == SHK_RWLOCK:
+        # ONE write lock across the read-modify-write (Rust emit_rwlock_
+        # write_get + write_finish, shared.rs:162-200).
+        String cwg_mangled = "WriteGuard__" + info.inner_c
+        int cwg_guard_tid = lookup_or_register_named(&gmod, cwg_mangled)
+        int cwg_guard = add_local(&ctx, cwg_guard_tid, None)
+        emit(&ctx, GICallExtern(cwg_guard, "RWLock__" + info.inner_c + "__write", [OpCopy(info.hidden_local)]))
+        int cwg_cur = add_local(&ctx, info.inner_type, None)
+        emit(&ctx, GICallExtern(cwg_cur, cwg_mangled + "__get", [OpBorrow(cwg_guard)]))
+        int cwg_dst = add_local(&ctx, info.inner_type, None)
+        emit_compound_arith(&ctx, op, cwg_dst, cwg_cur, rhs_local, info.inner_type, &gmod)
+        emit(&ctx, GICallExtern(-1, cwg_mangled + "__set", [OpBorrow(cwg_guard), OpCopy(cwg_dst)]))
+        emit(&ctx, GICallExtern(-1, cwg_mangled + "__drop", [OpBorrow(cwg_guard)]))
+        return cwg_dst
+    int mx_cur = emit_shared_mutex_lock_get(&ctx, &gmod, info)
+    int mx_dst = add_local(&ctx, info.inner_type, None)
+    emit_compound_arith(&ctx, op, mx_dst, mx_cur, rhs_local, info.inner_type, &gmod)
+    emit_shared_mutex_lock_set(&ctx, &gmod, info, mx_dst)
+    return mx_dst
 
 # Is this param/return type-id a shape the named-fn spawn lowering fully handles?
 # Supported: scalar (< PRIM_COUNT, by-value) OR String OR a runtime collection
@@ -1528,7 +1674,7 @@ void rewrite_inner_shared_spawn(GirModule &gmod, Vector[BasicBlock] &blocks, Inn
     # (the same `&counter` thread): build its SharedLocalInfo from `encl`. The
     # facade/hidden locals are wrapper-relative (-1 — `build_shared_token_wrapper`
     # only reads the mangled-name + inner_type fields).
-    SharedLocalInfo inner_info = SharedLocalInfo(-1, -1, encl.inner_type, encl.carrier_type, encl.inner_c.clone(), encl.mutex_mangled.clone(), encl.guard_mangled.clone(), encl.shared_mangled.clone(), 0)
+    SharedLocalInfo inner_info = SharedLocalInfo(-1, -1, encl.inner_type, encl.carrier_type, encl.inner_c.clone(), encl.mutex_mangled.clone(), encl.guard_mangled.clone(), encl.shared_mangled.clone(), 0, SHK_MUTEX)
 
     # Build the inner SYNC token wrapper (dedup by name).
     bool inner_built = false
@@ -1811,7 +1957,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 SharedLocalInfo eid_sh = ctx.shared_locals.get(name).unwrap()
                 if ctx.shared_pass_raw:
                     return eid_sh.hidden_local
-                return emit_shared_mutex_lock_get(&ctx, &gmod, eid_sh)
+                return emit_shared_read(&ctx, &gmod, eid_sh)
             if nl_contains(&ctx, name):
                 int eid_lid = nl_get(&ctx, name)
                 # `&`/`!`-param value READ. A `GtMutPtr(inner)`-typed slot
@@ -5375,6 +5521,33 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                                 int spawn_named_dst = lower_named_fn_spawn(&ctx, spawn_named_fn, spawn_args, &gmod)
                                 if spawn_named_dst >= 0:
                                     return spawn_named_dst
+                            # Bare-passthrough fallback. When an arg is a
+                            # shared OVERRIDE-kind facade (shared(rwlock)/
+                            # shared(atomic)), the callee's param IS the raw
+                            # sync primitive (RWLock[T]/AtomicInt) — pass the
+                            # CARRIER, not a locked/loaded snapshot. Mirrors
+                            # Rust gg's override rule at the spawn site
+                            # ("user overrides pass the raw sync primitive —
+                            # the callee uses it directly", exprs/mod.rs:
+                            # 1205-1209 + the pass_raw else-arm :1392-1397).
+                            # Auto (SHK_MUTEX) facades keep the existing
+                            # value-snapshot passthrough — their callees take
+                            # the plain inner type.
+                            bool sp_stub_raw = false
+                            for sp_stub_arg in spawn_args:
+                                match sp_stub_arg.expr:
+                                    case EIdentifier(sp_stub_n):
+                                        if ctx.shared_locals.contains(sp_stub_n):
+                                            if ctx.shared_locals.get(sp_stub_n).unwrap().kind != SHK_MUTEX:
+                                                sp_stub_raw = true
+                                    else:
+                                        pass
+                            if sp_stub_raw:
+                                bool sp_stub_prev = ctx.shared_pass_raw
+                                ctx.shared_pass_raw = true
+                                int sp_stub_dst = lower_expr(&ctx, *inner_box, &gmod)
+                                ctx.shared_pass_raw = sp_stub_prev
+                                return sp_stub_dst
                             return lower_expr(&ctx, *inner_box, &gmod)
                         else:
                             return lower_expr(&ctx, *inner_box, &gmod)

@@ -398,6 +398,11 @@ void register_owning_opaque_local(LowerCtx &ctx, int local_id, int type_id, GirM
                 case Some(mp):
                     if mp == "gorget_mutex" or mp == "gorget_rwlock" or mp == "gorget_shared":
                         is_single_owner_handle = true
+                    # round-33 shared(atomic) carriers: single-owner bare
+                    # handles; drop routes through drop_fn_for_type's Ptr-arm
+                    # by-value `free` fallback (correct — nothing nested).
+                    if mp == "gorget_atomic_int" or mp == "gorget_atomic_bool":
+                        is_single_owner_handle = true
                 case None:
                     pass
         case None:

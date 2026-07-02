@@ -532,16 +532,29 @@ struct SpawnFnRec:
 # (ascending lock order in the spawn token wrapper, descending unlock).
 # Defined here (not lower.gg) so the GIR-level `PendingSharedAsync` post-pass
 # request can carry it without a gir→lower→gir import cycle.
+# Resolved sync strategy for a shared binding (SharedLocalInfo.kind). The
+# values deliberately REUSE the parser's SVarDecl shared_kind encoding
+# (parser.gg parse_shared_var_decl: 1 = auto, 2 = rwlock, 3 = atomic) so the
+# typed fact threads AST→GIR without a translation table — ONE source of
+# truth (devbook/24 rule 3). Auto resolves to the ArcMutex strategy (the
+# self-host has no CFA; Rust's CFA default for written-and-spawned is
+# ArcMutex too, `src/semantic/mod.rs:573-596`). Mirrors Rust gg's
+# `SharedLocalKind` (`src/ir/lowering/context.rs:56`).
+const int SHK_MUTEX = 1   # `shared T x` (auto) → hidden Shared__Mutex__T carrier
+const int SHK_RWLOCK = 2  # `shared(rwlock) T x` → hidden RWLock__T carrier
+const int SHK_ATOMIC = 3  # `shared(atomic) T x` → hidden AtomicInt/AtomicBool carrier
+
 struct SharedLocalInfo:
     int facade_local        # the user-named local (inner_type slot)
-    int hidden_local        # the carrier local (Ptr to Shared__Mutex__T)
+    int hidden_local        # the carrier local (Ptr to the sync carrier)
     int inner_type          # GIR type-id of the inner value (the user's T)
-    int carrier_type        # GIR type-id of the Shared__Mutex__T carrier (Ptr-typed)
+    int carrier_type        # GIR type-id of the sync carrier (Ptr-typed)
     String inner_c          # inner C type name (int64_t / bool / double / …)
-    String mutex_mangled    # "Mutex__<inner_c>"
-    String guard_mangled    # "Guard__<inner_c>"
-    String shared_mangled   # "Shared__Mutex__<inner_c>"
+    String mutex_mangled    # SHK_MUTEX: "Mutex__<inner_c>"; SHK_RWLOCK: "RWLock__<inner_c>"; SHK_ATOMIC: "AtomicInt"/"AtomicBool"
+    String guard_mangled    # SHK_MUTEX: "Guard__<inner_c>"; SHK_RWLOCK: "ReadGuard__<inner_c>" (write guard derives); SHK_ATOMIC: unused ""
+    String shared_mangled   # SHK_MUTEX: "Shared__Mutex__<inner_c>"; others: unused ""
     int decl_order          # source declaration order (lock-ordering key)
+    int kind                # resolved strategy: SHK_MUTEX / SHK_RWLOCK / SHK_ATOMIC
 
 # round-16 Phase-2 (async splice): a `spawn inner(&param)` LOWERED INSIDE a
 # function that will become a `__shared_async_<f>` variant — where `param` is
