@@ -1,0 +1,24 @@
+# CoW G1 memory-safety gate (round-33): the INDEX-assign sibling — the RHS is a
+# whole element of the same collection (`m[0][0] = m[1][0]`) + `m.push()`. The
+# untrack runs AFTER the setter's ensure_owned clones the stored element, so the
+# remaining RHS handles are dead read refs.
+from std.collections import Vector
+
+struct Res:
+    String name
+
+void f(Vector[Vector[Res]] m):
+    m[0][0] = m[1][0]
+    int i = 0
+    while i < 6:
+        m.push([Res("z")])
+        i = i + 1
+    print(m.len())               # 8
+    print(m[0][0].name)          # B
+
+void main():
+    Vector[Vector[Res]] a = [[Res("A")], [Res("B")]]
+    f(a)
+    print(a.len())               # 2  (caller untouched)
+    print(a[0][0].name)          # A
+    print("done")

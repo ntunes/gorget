@@ -2364,14 +2364,23 @@ impl<'a> LoweringContext<'a> {
     /// closed depth-1 but left the INTERMEDIATE handles dangling at depth >= 2;
     /// this closes the whole class (Core #4) by resetting the ENTIRE chain.
     ///
+    /// The callers pass the range spanning the ENTIRE assign statement — the
+    /// store-target OBJECT chain AND the RHS value / index expression — because
+    /// an RHS/index element-ref into the SAME collection the store
+    /// root-materialized (`v[0].name = v[1].name`, `m[0][0] = m[1][0]`) is minted
+    /// into the private copy too and dangles identically. They untrack only AFTER
+    /// the store's `ensure_owned_at_consuming_arg` (or `clone_ptr_rhs_if_needed`)
+    /// has cloned the stored value, so every element/field-path handle left in
+    /// range is a dead READ ref, safe to reset in BOTH same- and
+    /// different-collection cases.
+    ///
     /// Range-safe: the projected-store branch always lowers a NON-identifier
-    /// object, so every handle minted in `[start, end)` is an anonymous transient
-    /// index-load dst (`add_local(_, None)` — no name hint). The
-    /// `local_name(..).is_none()` guard additionally spares any (hypothetical)
-    /// NAMED binding in range as defense in depth (a named binding always carries
-    /// a name hint). Bounded to the object's OWN lowering range so a later
-    /// `lower_expr(value)` / `lower_expr(index)` borrow is untouched. Mirrors
-    /// `restore_locals`, which drops the identical states for scope-local
+    /// object, so every element/field-path handle minted in `[start, end)` is an
+    /// anonymous transient index-load dst (`add_local(_, None)` — no name hint).
+    /// The `local_name(..).is_none()` guard additionally spares any named binding
+    /// in range as defense in depth (a named binding always carries a name hint —
+    /// e.g. a `T r = coll.get(i)` element bind the surrounding code still reads).
+    /// Mirrors `restore_locals`, which drops the identical states for scope-local
     /// handles. Store-neutral (the store uses the Place, not the ownership tag).
     pub fn untrack_transient_element_refs_in_range(
         &mut self,

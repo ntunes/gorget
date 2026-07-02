@@ -1,0 +1,22 @@
+# CoW G1 memory-safety gate (round-33): nested projected field-ASSIGN whose RHS
+# reads a sibling in the SAME row (`m[0][0].name = m[0][1].name`) + `m.push()`.
+from std.collections import Vector
+
+struct Res:
+    String name
+
+void f(Vector[Vector[Res]] m):
+    m[0][0].name = m[0][1].name
+    int i = 0
+    while i < 6:
+        m.push([Res("z"), Res("w")])
+        i = i + 1
+    print(m.len())               # 7
+    print(m[0][0].name)          # B
+
+void main():
+    Vector[Vector[Res]] a = [[Res("A"), Res("B")]]
+    f(a)
+    print(a.len())               # 1  (caller untouched)
+    print(a[0][0].name)          # A
+    print("done")

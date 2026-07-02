@@ -1,0 +1,23 @@
+# CoW G1 memory-safety gate (round-33): nested projected field-ASSIGN whose RHS
+# reads a DIFFERENT top-level element of the same collection
+# (`m[0][0].name = m[1][0].name`) + `m.push()`.
+from std.collections import Vector
+
+struct Res:
+    String name
+
+void f(Vector[Vector[Res]] m):
+    m[0][0].name = m[1][0].name
+    int i = 0
+    while i < 6:
+        m.push([Res("z")])
+        i = i + 1
+    print(m.len())               # 8
+    print(m[0][0].name)          # second
+
+void main():
+    Vector[Vector[Res]] a = [[Res("first")], [Res("second")]]
+    f(a)
+    print(a.len())               # 2  (caller untouched)
+    print(a[0][0].name)          # first
+    print("done")

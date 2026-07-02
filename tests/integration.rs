@@ -25634,6 +25634,72 @@ done",
     );
 }
 
+/// CoW G1 memory-safety gate (round-33 re-review 2, RHS class): a projected
+/// field-ASSIGN whose RHS reads an element of the SAME collection
+/// (`v[0].name = v[1].name`) + a later `v.push()`. The RHS element handle points
+/// into the private copy the store root-materialized; the untrack range now
+/// spans the whole statement (object + RHS) so it can't dangle. ASan-clean both
+/// backends.
+#[test]
+fn cow_rhs_same_coll_single() {
+    run_gg(
+        "cow_rhs_same_coll_single.gg",
+        "\
+8
+B
+2
+A
+done",
+    );
+}
+
+/// CoW G1 memory-safety gate (round-33): nested projected field-ASSIGN whose RHS
+/// reads a different top-level element of the same collection
+/// (`m[0][0].name = m[1][0].name`) + `m.push()`.
+#[test]
+fn cow_rhs_same_coll_nested() {
+    run_gg(
+        "cow_rhs_same_coll_nested.gg",
+        "\
+8
+second
+2
+first
+done",
+    );
+}
+
+/// CoW G1 memory-safety gate (round-33): nested projected field-ASSIGN whose RHS
+/// reads a sibling in the same row (`m[0][0].name = m[0][1].name`) + `m.push()`.
+#[test]
+fn cow_rhs_self_row() {
+    run_gg(
+        "cow_rhs_self_row.gg",
+        "\
+7
+B
+1
+A
+done",
+    );
+}
+
+/// CoW G1 memory-safety gate (round-33): the INDEX-assign sibling — the RHS is a
+/// whole element of the same collection (`m[0][0] = m[1][0]`) + `m.push()`. The
+/// untrack runs AFTER the setter's ensure_owned clones the stored element.
+#[test]
+fn cow_rhs_index_assign() {
+    run_gg(
+        "cow_rhs_index_assign.gg",
+        "\
+8
+B
+2
+A
+done",
+    );
+}
+
 #[test]
 fn cow_set_string_clone() {
     run_gg(

@@ -1,0 +1,26 @@
+# CoW G1 memory-safety gate (round-33 re-review 2, RHS class): a SINGLE-level
+# projected field-ASSIGN whose RHS reads an element of the SAME collection
+# (`v[0].name = v[1].name`) + a later `v.push()`. The RHS `v[1]` handle points
+# into the private copy the store root-materialized; leaving it CoW-tracked
+# dangles it when the push reallocs → heap-UAF. The untrack range now spans the
+# whole statement (object + RHS). MUST be ASan-clean on both backends.
+from std.collections import Vector
+
+struct Res:
+    String name
+
+void f(Vector[Res] v):
+    v[0].name = v[1].name
+    int i = 0
+    while i < 6:
+        v.push(Res("z"))
+        i = i + 1
+    print(v.len())               # 8  (2 original + 6 pushed onto the private copy)
+    print(v[0].name)             # B  (copied from v[1])
+
+void main():
+    Vector[Res] a = [Res("A"), Res("B")]
+    f(a)
+    print(a.len())               # 2  (caller untouched)
+    print(a[0].name)             # A
+    print("done")

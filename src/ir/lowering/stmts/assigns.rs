@@ -647,14 +647,15 @@ pub(super) fn lower_field_assign(
     // instead of lower_expr which would copy the deref'd value to a temp
     //
     // CoW UAF fix (round-33, class fix): snapshot the local range spanned by the
-    // store-target object's projection-chain lowering. A projected object
-    // (`v[i].field = x`, `m[i][j].field = x`) mints a transient
+    // WHOLE statement's lowering (object projection chain + RHS value). A
+    // projected object (`v[i].field = x`, `m[i][j].field = x`) mints a transient
     // CollectionElement/FieldPath handle for EACH index-load level (`m[i]` → h1,
-    // `m[i][j]` → h2); ALL of them are store-location handles, dead after this
-    // statement, and must be untracked before a later same-collection mutation
-    // reallocates the private copy the G1 root-materialize created — see
-    // `untrack_transient_element_refs_in_range`.
-    let obj_locals_start = builder.locals.len();
+    // `m[i][j]` → h2), AND the RHS may mint element-refs into the SAME collection
+    // (`v[0].name = v[1].name`); ALL are store-adjacent read handles, dead after
+    // this statement. Any that stays CoW-tracked dangles when a later
+    // same-collection mutation reallocates the private copy the G1 root-
+    // materialize created — see `untrack_transient_element_refs_in_range`.
+    let stmt_locals_start = builder.locals.len();
     let obj = if let Expr::Identifier(name) = &object.node {
         if let Some((local_id, _)) = ctx.lookup_local(name) {
             if ctx.is_param_borrow_unique(builder, local_id) {
@@ -675,16 +676,19 @@ pub(super) fn lower_field_assign(
     } else {
         lower_expr(ctx, builder, object)
     };
-    let obj_locals_end = builder.locals.len();
     let mut rhs = lower_expr(ctx, builder, value);
     clone_ptr_rhs_if_needed(ctx, builder, &mut rhs, value);
 
-    // Untrack the WHOLE projection chain's transient element/field-path handles
-    // (not just the outermost operand — that was the a84e66bb gap that left
-    // multi-level `m[i][j].field = x` intermediates dangling → heap-UAF).
-    // Bounded to the object's own lowering range so the RHS's borrows are left
-    // intact. Store-neutral: the store uses the Place, not the ownership tag.
-    ctx.untrack_transient_element_refs_in_range(builder, obj_locals_start, obj_locals_end);
+    // Untrack EVERY transient element/field-path handle minted across the WHOLE
+    // statement (object chain + RHS), not just the object — an RHS element-ref
+    // into the SAME collection this store root-materialized (`v[0].name =
+    // v[1].name` + a later `v.push()`) points into the private owned copy and
+    // dangles when the push reallocs it (Case 3 clones freed memory). Safe now:
+    // `clone_ptr_rhs_if_needed` (ensure_owned) has already captured the stored
+    // value by clone, so every remaining element/field-path handle in range is a
+    // dead READ ref. Bounded to [before-object, here] so nothing beyond this
+    // statement is touched. Store-neutral: the store uses the Place, not the tag.
+    ctx.untrack_transient_element_refs_in_range(builder, stmt_locals_start, builder.locals.len());
 
     if let Operand::Copy(ref place) | Operand::Move(ref place) = obj {
         let local_idx = place.local.0 as usize;
@@ -936,12 +940,15 @@ pub(super) fn lower_index_assign(
     // resolve the field to a Place in-place to avoid copying the Dict struct.
     // This ensures hash table resizes and metadata updates propagate to the original.
     //
-    // CoW UAF fix (round-33, class fix): snapshot the object's projection-chain
-    // local range. A projected object (`m[i][j] = x`, `m[i][j][k] = x`) lowers
-    // `m[i]` → h1, `m[i][j]` → h2, … — EACH a transient CollectionElement/
-    // FieldPath store-location handle, all dead after this statement. (Sibling
-    // of lower_field_assign; the a84e66bb fix untracked only the outermost.)
-    let obj_locals_start = builder.locals.len();
+    // CoW UAF fix (round-33, class fix): snapshot the WHOLE statement's lowering
+    // range (object chain + index + RHS value). A projected object
+    // (`m[i][j] = x`, `m[i][j][k] = x`) lowers `m[i]` → h1, `m[i][j]` → h2, …,
+    // AND the RHS/index may mint element-refs into the SAME collection
+    // (`m[0][0] = m[1][0]`) — EACH a transient CollectionElement/FieldPath handle,
+    // all dead after this statement. The untrack runs at the END (after the
+    // setter's `ensure_owned_at_consuming_arg` has cloned the stored value), so
+    // the remaining handles are dead READ refs. (Sibling of lower_field_assign.)
+    let stmt_locals_start = builder.locals.len();
     let (obj, resolved_field_type) = if let Expr::FieldAccess { object: inner_obj, field } = &object.node {
         if let Some((field_place, field_type)) = try_resolve_field_place(ctx, builder, inner_obj, &field.node) {
             (Operand::Copy(field_place), Some(field_type))
@@ -951,12 +958,6 @@ pub(super) fn lower_index_assign(
     } else {
         (lower_expr(ctx, builder, object), None)
     };
-    let obj_locals_end = builder.locals.len();
-    // Untrack the WHOLE projection chain (not just the outermost operand) so a
-    // later same-collection mutation can't clone a dangling intermediate handle
-    // (heap-UAF at depth >= 2). Store-neutral: the `__set` call borrows the
-    // Place, never reads the ownership tag.
-    ctx.untrack_transient_element_refs_in_range(builder, obj_locals_start, obj_locals_end);
     let idx = lower_expr(ctx, builder, index);
 
     // Determine the receiver type to dispatch correctly.
@@ -1079,6 +1080,9 @@ pub(super) fn lower_index_assign(
                         set_name.clone(),
                         vec![self_ptr, idx, val],
                     );
+                    // Untrack the whole statement's transient read handles before
+                    // returning (see the end-of-fn call for the fall-through paths).
+                    ctx.untrack_transient_element_refs_in_range(builder, stmt_locals_start, builder.locals.len());
                     return;
                 }
             }
@@ -1096,6 +1100,15 @@ pub(super) fn lower_index_assign(
             );
         }
     }
+    // Untrack EVERY transient element/field-path handle minted across the WHOLE
+    // statement (object chain + index + RHS), at the END so the setter's
+    // `ensure_owned_at_consuming_arg` has already cloned the stored value — every
+    // remaining handle in range is a dead READ ref. An RHS/index element-ref into
+    // the SAME collection this store root-materialized (`m[0][0] = m[1][0]` + a
+    // later `m.push()`) would otherwise dangle when the push reallocs the private
+    // copy (Case 3 clones freed memory). Store-neutral: the setter borrowed the
+    // Place, never read the ownership tag.
+    ctx.untrack_transient_element_refs_in_range(builder, stmt_locals_start, builder.locals.len());
 }
 
 /// Lower a compound assignment (e.g., `x += 1`).
