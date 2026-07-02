@@ -24,7 +24,7 @@ from gir import ResourceMetadata
 # non-derive trait impls). Mirrors Rust gg's `emit_vtable_globals`
 # (`src/ir/lowering/traits.rs:985`). GirTypeInfo/GirFieldInfo/
 # lookup_or_register_named are already imported above.
-from gir import GirGlobal, GirGlobalField, gir_mod_add_global, GGINIT_FN_REF, GGINIT_STRUCT
+from gir import GirGlobal, GirGlobalField, gir_mod_add_global, GGINIT_FN_REF, GGINIT_STRUCT, GGINIT_BOX_DROP_REF, GGINIT_ZEROED
 # Scalar-literal statics register as a const-bytes global (GGSTATIC_BYTES)
 # rather than a runtime synth fn — mirrors Rust's `GlobalInit::Bytes`.
 from gir import GGSTATIC_RUNTIME, GGSTATIC_BYTES, static_put_bytes
@@ -4174,6 +4174,18 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                             vt_slot_idx += 1
                     # Method-less skip (Fold 2): only register when ≥1 instance slot.
                     if vt_ti_fields.len() > 0:
+                        # Drop-glue slot: `void (*__drop)(void* data_slot)` —
+                        # points at the concrete impl's `Box__<Concrete>__drop`
+                        # wrapper (payload drop + free + slot null). APPENDED
+                        # LAST so the positional method slots (the typed
+                        # `trait_method_slot` channel above) stay stable; the
+                        # same opaque non-resource "__vtslot" type as the
+                        # method slots (→ LT_PTR / `void*` in C). Populated
+                        # per-impl by the vtable-global emitter (Phase 4(b));
+                        # consumed by the fat trait-box GIDropIfAlive branch
+                        # in lir_lower.gg. Mirrors Rust gg's VTABLE_DROP_FIELD
+                        # append (`src/ir/lowering/traits.rs`).
+                        vt_ti_fields.push(GirFieldInfo("__drop", "__vtslot"))
                         String vt_ti_name = mangle_trait_name(vt_tdef.name) + "_VTable"
                         # (a) GtNamed entry so the struct gets a type id /
                         # `__gg_<Trait>_VTable` c-name; (b) GirTypeInfo so
@@ -4626,6 +4638,25 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                             String impl_fn = mangle_trait_name(tname) + "_for_" + eq_target_sp + "__" + tslot.name
                                             vt_fields.push(GirGlobalField(GGINIT_FN_REF, impl_fn))
                                     if vt_fields.len() > 0:
+                                        # Drop-glue slot (appended LAST, mirroring
+                                        # the `_VTable` TypeDef pre-pass): the
+                                        # concrete impl's `Box__<Concrete>__drop`
+                                        # wrapper, carried as the TYPED concrete
+                                        # name (GGINIT_BOX_DROP_REF) — the C
+                                        # backend spells the symbol and emits the
+                                        # wrapper from this field. A concrete NOT
+                                        # registered as a user struct/enum (e.g.
+                                        # `equip int with Trait` — no `Box__int`
+                                        # box exists; primitive-equip dispatch is
+                                        # broken today in BOTH compilers, filed
+                                        # for typecheck-reject) degrades to a
+                                        # NULL slot (GGINIT_ZEROED), mirroring
+                                        # Rust gg's lookup_named miss branch in
+                                        # `emit_vtable_globals` (traits.rs).
+                                        if gmod.type_infos.contains(eq_target_sp):
+                                            vt_fields.push(GirGlobalField(GGINIT_BOX_DROP_REF, eq_target_sp.clone()))
+                                        else:
+                                            vt_fields.push(GirGlobalField(GGINIT_ZEROED, ""))
                                         String vt_global_name = mangle_trait_name(tname) + "_for_" + eq_target_sp + "_vtable"
                                         int _vt_gid = gir_mod_add_global(&gmod, GirGlobal(vt_global_name, vt_tid, GGINIT_STRUCT, vt_fields, false))
                         case None:

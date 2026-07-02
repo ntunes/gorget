@@ -1,0 +1,39 @@
+# Box[Trait] drop glue: the trait-object DATA box (and the concrete payload's
+# own resources — here a String) must be freed when the Box[Trait] local dies.
+# Regression net for the round-32 fix: vtable `__drop` slot + trait-box drop
+# through it (both compilers previously leaked the data box AND the payload's
+# String on every iteration). Leak-freeness is enforced by the ASan gate
+# (Core invariant #7); stdout is the deterministic functional check.
+from std.collections import Box
+
+trait Speaker:
+    String speak(self)
+
+struct Person:
+    String name
+
+struct Robot:
+    String id
+    int firmware
+
+equip Person with Speaker:
+    String speak(self):
+        return "I am " + self.name
+
+equip Robot with Speaker:
+    String speak(self):
+        return f"{self.id} v{self.firmware}"
+
+void main():
+    # Loop: a fresh Box[Trait] with a String-owning payload is created and
+    # dropped every iteration — the leak class compounds per iteration.
+    int i = 0
+    while i < 3:
+        Box[Speaker] s = Box.new(Person(f"p{i}"))
+        String sline = s.speak()
+        print(sline)
+        Box[Speaker] r = Box.new(Robot(f"bot{i}", 40 + i))
+        String rline = r.speak()
+        print(rline)
+        i = i + 1
+    print("done")

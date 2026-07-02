@@ -440,6 +440,11 @@ impl<'m> Interpreter<'m> {
                 }
             }
             GlobalInit::FnRef(name) => Value::FuncRef(name.clone()),
+            // Vtable drop slot: the wrapper is backend-synthesized (no sim
+            // function exists); the sim's ownership model doesn't run drop
+            // glue, so a named FuncRef placeholder keeps the vtable shape
+            // without ever being dispatched.
+            GlobalInit::BoxDropRef(inner) => Value::FuncRef(format!("Box__{inner}__drop")),
             GlobalInit::Struct { type_name, fields } => {
                 let field_vals = fields.iter()
                     .map(|(_, fi)| self.eval_global_init(fi, type_id))

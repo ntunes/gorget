@@ -1523,7 +1523,7 @@ pub fn lower_module(
     let __pass_t = Instant::now();
     // P2.5: Lower trait equip methods and emit vtable globals
     traits::lower_trait_equip_methods(&mut ctx, &mut module, &trait_info, ast_module);
-    traits::emit_vtable_globals(&mut module, &trait_info, ast_module);
+    traits::emit_vtable_globals(&mut ctx, &mut module, &trait_info, ast_module);
 
     // Lower trait equip blocks with unregistered traits (From, Default, Equatable, etc.)
     traits::lower_unregistered_trait_equip_methods(&mut ctx, &mut module, &trait_info, ast_module);
@@ -4242,12 +4242,13 @@ void main():
         assert!(gir.type_registry.has_type_def("Shape_TraitObj"),
             "Should have Shape_TraitObj TypeDef");
 
-        // Verify VTable struct fields
+        // Verify VTable struct fields (2 method slots + the trailing __drop glue slot)
         let vtable_def = gir.type_registry.get_type_def("Shape_VTable").unwrap();
         if let TypeDefKind::Struct(ref s) = vtable_def.kind {
-            assert_eq!(s.fields.len(), 2, "VTable should have 2 method slots");
+            assert_eq!(s.fields.len(), 3, "VTable should have 2 method slots + __drop");
             assert_eq!(s.fields[0].name, "area");
             assert_eq!(s.fields[1].name, "draw");
+            assert_eq!(s.fields[2].name, traits::VTABLE_DROP_FIELD);
         } else {
             panic!("Expected Struct TypeDef for Shape_VTable");
         }
@@ -4323,14 +4324,21 @@ void main():
         let vg = vtable_global.unwrap();
         if let crate::ir::GlobalInit::Struct { type_name, fields } = &vg.init {
             assert_eq!(type_name, "Shape_VTable");
-            assert_eq!(fields.len(), 2, "VTable should have 2 method entries");
+            assert_eq!(fields.len(), 3, "VTable should have 2 method entries + __drop");
             assert_eq!(fields[0].0, "area");
             assert_eq!(fields[1].0, "draw");
+            assert_eq!(fields[2].0, traits::VTABLE_DROP_FIELD);
             // Verify FnRef entries point to correct functions
             if let crate::ir::GlobalInit::FnRef(fn_name) = &fields[0].1 {
                 assert_eq!(fn_name, "Shape_for_Circle__area");
             } else {
                 panic!("Expected FnRef for area slot");
+            }
+            // The drop slot carries the typed concrete inner name.
+            if let crate::ir::GlobalInit::BoxDropRef(inner) = &fields[2].1 {
+                assert_eq!(inner, "Circle");
+            } else {
+                panic!("Expected BoxDropRef for __drop slot");
             }
         } else {
             panic!("Expected Struct initializer for vtable global");

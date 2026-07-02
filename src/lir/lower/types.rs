@@ -580,6 +580,11 @@ pub(super) fn lower_global_init(init: &ir::GlobalInit, func_index: &std::collect
                 LirGlobalInit::Zeroed
             }
         }
+        // Trait-object vtable drop slot: forward the typed inner-type name.
+        // NOT routed through `FnRef` — the `Box__<inner>__drop` wrapper is
+        // backend-synthesized (no GIR/LIR function), so the FnRef arm would
+        // silently lower it to `Zeroed` (a NULL drop slot).
+        ir::GlobalInit::BoxDropRef(inner) => LirGlobalInit::BoxDropAddr(inner.clone()),
         ir::GlobalInit::Struct { type_name, fields } => {
             // Resolve struct_id from the GIR type_name. Falls back to the
             // target type's struct if the registry doesn't have it yet,

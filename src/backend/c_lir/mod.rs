@@ -757,7 +757,9 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
     let has_func_addrs = |init: &LirGlobalInit| -> bool {
         fn check(init: &LirGlobalInit) -> bool {
             match init {
-                LirGlobalInit::FuncAddr(_) => true,
+                // BoxDropAddr references the `Box__<inner>__drop` wrapper —
+                // forward-declared with the function decls, so defer with them.
+                LirGlobalInit::FuncAddr(_) | LirGlobalInit::BoxDropAddr(_) => true,
                 LirGlobalInit::Struct { fields, .. } => fields.iter().any(check),
                 _ => false,
             }

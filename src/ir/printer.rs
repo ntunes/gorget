@@ -151,6 +151,7 @@ fn print_global_init(out: &mut String, init: &GlobalInit) {
             write!(out, " }}").unwrap();
         }
         GlobalInit::FnRef(name) => write!(out, "@{}", name).unwrap(),
+        GlobalInit::BoxDropRef(inner) => write!(out, "@Box__{}__drop", inner).unwrap(),
         GlobalInit::Bytes(bytes) => write!(out, "bytes[{}]", bytes.len()).unwrap(),
         GlobalInit::Extern { name, args } => {
             write!(out, "extern {name}(").unwrap();

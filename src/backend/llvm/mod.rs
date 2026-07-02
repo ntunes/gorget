@@ -1146,6 +1146,9 @@ fn emit_globals(out: &mut String, module: &LirModule, snames: &HashMap<u32, Stri
                 let fname = &module.functions[fid.0 as usize].name;
                 writeln!(out, "@__lir_g{i} = {linkage} ptr @{fname} ; {}", global.name).unwrap();
             }
+            LirGlobalInit::BoxDropAddr(inner) => {
+                writeln!(out, "@__lir_g{i} = {linkage} ptr @Box__{inner}__drop ; {}", global.name).unwrap();
+            }
             LirGlobalInit::Struct { struct_id, fields } => {
                 let sdef = &module.structs[struct_id.0 as usize];
                 // Use named struct only if field count matches; otherwise anonymous
@@ -1178,6 +1181,13 @@ fn emit_globals(out: &mut String, module: &LirModule, snames: &HashMap<u32, Stri
                         LirGlobalInit::FuncAddr(fid) => {
                             let fname = c_func_name(&module.functions[fid.0 as usize].name);
                             format!("ptr @{fname}")
+                        }
+                        // Trait-object vtable drop slot: the C wrapper glue
+                        // (generate_llvm_wrappers → emit_box_drop_wrappers)
+                        // defines `Box__<inner>__drop`; declared below in
+                        // `emit_box_drop_decls`.
+                        LirGlobalInit::BoxDropAddr(inner) => {
+                            format!("ptr @Box__{inner}__drop")
                         }
                         LirGlobalInit::Bytes(data) if data.len() <= 8 => {
                             // Bytes targeting a float field: use LLVM's hex
@@ -1817,6 +1827,33 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     for key in &bridge_keys {
         writeln!(out, "declare i64 @__gorget_ktable_hash__{key}(ptr)").unwrap();
         writeln!(out, "declare i1 @__gorget_ktable_eq__{key}(ptr, ptr)").unwrap();
+    }
+
+    // Forward-declare the `Box__<inner>__drop` wrappers referenced by
+    // trait-object vtable drop slots (`LirGlobalInit::BoxDropAddr`). Bodies
+    // live in the linked C wrapper glue (`generate_llvm_wrappers` →
+    // `emit_box_drop_wrappers`); LLVM only needs the address-of declaration
+    // for the `ptr @Box__<inner>__drop` vtable field. Skip names already in
+    // `module.externs` so we never double-declare.
+    let mut box_drop_inners: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    fn collect_box_drops(init: &LirGlobalInit, acc: &mut std::collections::BTreeSet<String>) {
+        match init {
+            LirGlobalInit::BoxDropAddr(inner) => { acc.insert(inner.clone()); }
+            LirGlobalInit::Struct { fields, .. } => {
+                for f in fields { collect_box_drops(f, acc); }
+            }
+            _ => {}
+        }
+    }
+    for g in &module.globals {
+        collect_box_drops(&g.init, &mut box_drop_inners);
+    }
+    for inner in &box_drop_inners {
+        let name = format!("Box__{inner}__drop");
+        if module.externs.iter().any(|e| e.name == name) {
+            continue;
+        }
+        writeln!(out, "declare void @{name}(ptr)").unwrap();
     }
 
     writeln!(out).unwrap();

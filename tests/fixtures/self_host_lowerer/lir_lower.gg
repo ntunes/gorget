@@ -54,7 +54,7 @@ void register_builtin_structs(LirModule &m, Dict[String, int] &sr):
     str_fields.push(StructField("cap", LT_I64))
     str_fields.push(StructField("len", LT_I64))
     str_fields.push(StructField("alloc", LT_PTR))
-    int str_id = lir_mod_add_struct(&m, LirStructDef("GorgetString", str_fields, 0, false, 32, -1))
+    int str_id = lir_mod_add_struct(&m, LirStructDef("GorgetString", str_fields, 0, false, 32, -1, false))
     sr.put("GorgetString", str_id)
     sr.put("Str", str_id)
     m.type_runtime_map.put("GorgetString", "GorgetString")
@@ -67,7 +67,7 @@ void register_builtin_structs(LirModule &m, Dict[String, int] &sr):
     arr_fields.push(StructField("cap", LT_I64))
     arr_fields.push(StructField("len", LT_I64))
     arr_fields.push(StructField("elem_size", LT_I64))
-    int arr_id = lir_mod_add_struct(&m, LirStructDef("GorgetArray", arr_fields, 0, false, 64, -1))
+    int arr_id = lir_mod_add_struct(&m, LirStructDef("GorgetArray", arr_fields, 0, false, 64, -1, false))
     sr.put("GorgetArray", arr_id)
     m.type_runtime_map.put("GorgetArray", "GorgetArray")
 
@@ -75,21 +75,21 @@ void register_builtin_structs(LirModule &m, Dict[String, int] &sr):
     Vector[StructField] cls_fields = []
     cls_fields.push(StructField("fn_ptr", LT_PTR))
     cls_fields.push(StructField("env", LT_PTR))
-    int cls_id = lir_mod_add_struct(&m, LirStructDef("GorgetClosure", cls_fields, 0, false, 16, -1))
+    int cls_id = lir_mod_add_struct(&m, LirStructDef("GorgetClosure", cls_fields, 0, false, 16, -1, false))
     sr.put("GorgetClosure", cls_id)
 
     # TraitObj: {data: Ptr, vtable: Ptr}
     Vector[StructField] trait_fields = []
     trait_fields.push(StructField("data", LT_PTR))
     trait_fields.push(StructField("vtable", LT_PTR))
-    int trait_id = lir_mod_add_struct(&m, LirStructDef("TraitObj", trait_fields, 0, false, 16, -1))
+    int trait_id = lir_mod_add_struct(&m, LirStructDef("TraitObj", trait_fields, 0, false, 16, -1, false))
     sr.put("TraitObj", trait_id)
 
     # TaskHandle: {task_ptr: Ptr, drop_fn: Ptr}
     Vector[StructField] task_fields = []
     task_fields.push(StructField("task_ptr", LT_PTR))
     task_fields.push(StructField("drop_fn", LT_PTR))
-    int task_id = lir_mod_add_struct(&m, LirStructDef("TaskHandle", task_fields, 0, false, 16, -1))
+    int task_id = lir_mod_add_struct(&m, LirStructDef("TaskHandle", task_fields, 0, false, 16, -1, false))
     sr.put("TaskHandle", task_id)
 
     # GorgetMap: 19 fields, 152 bytes (size from GORGET_MAP_STRUCT_SIZE;
@@ -111,7 +111,7 @@ void register_builtin_structs(LirModule &m, Dict[String, int] &sr):
     map_fields.push(StructField("tombstones", LT_I64))
     map_fields.push(StructField("hash_fn", LT_PTR))
     map_fields.push(StructField("eq_fn", LT_PTR))
-    int map_id = lir_mod_add_struct(&m, LirStructDef("GorgetMap", map_fields, 0, false, GORGET_MAP_STRUCT_SIZE, -1))
+    int map_id = lir_mod_add_struct(&m, LirStructDef("GorgetMap", map_fields, 0, false, GORGET_MAP_STRUCT_SIZE, -1, false))
     sr.put("GorgetMap", map_id)
     m.type_runtime_map.put("GorgetMap", "GorgetMap")
 
@@ -130,7 +130,7 @@ void register_builtin_structs(LirModule &m, Dict[String, int] &sr):
     set_fields.push(StructField("tombstones", LT_I64))
     set_fields.push(StructField("hash_fn", LT_PTR))
     set_fields.push(StructField("eq_fn", LT_PTR))
-    int set_id = lir_mod_add_struct(&m, LirStructDef("GorgetSet", set_fields, 0, false, GORGET_MAP_STRUCT_SIZE, -1))
+    int set_id = lir_mod_add_struct(&m, LirStructDef("GorgetSet", set_fields, 0, false, GORGET_MAP_STRUCT_SIZE, -1, false))
     sr.put("GorgetSet", set_id)
     m.type_runtime_map.put("GorgetSet", "GorgetSet")
 
@@ -139,7 +139,7 @@ void register_builtin_structs(LirModule &m, Dict[String, int] &sr):
     range_fields.push(StructField("start", LT_I64))
     range_fields.push(StructField("end", LT_I64))
     range_fields.push(StructField("step", LT_I64))
-    int range_id = lir_mod_add_struct(&m, LirStructDef("GorgetRange", range_fields, 0, false, 24, -1))
+    int range_id = lir_mod_add_struct(&m, LirStructDef("GorgetRange", range_fields, 0, false, 24, -1, false))
     sr.put("GorgetRange", range_id)
 
 # ── Type mapping: GIR type ID → LIR type ───────────────────
@@ -724,7 +724,7 @@ void register_field_type_in_sr(String tname, Dict[String, int] &sr, LirModule &m
         else:
             box_fields.push(StructField("_0", LT_PTR))
         String box_name_ctor = tname.clone()
-        int box_id = lir_mod_add_struct(&m, LirStructDef(box_name_ctor, box_fields, 0, false, tib_sz, -1))
+        int box_id = lir_mod_add_struct(&m, LirStructDef(box_name_ctor, box_fields, 0, false, tib_sz, -1, tib_is_trait))
         sr.put(tname, box_id)
         # Trait box: a REAL emitted struct — keep it OUT of type_runtime_map
         # (see the Pass-1 registrar's note). Value boxes stay "Box".
@@ -756,7 +756,7 @@ void register_field_type_in_sr(String tname, Dict[String, int] &sr, LirModule &m
         guard_fields.push(StructField("owner", LT_PTR))
         guard_fields.push(StructField("ptr", LT_PTR))
         String guard_name_ctor = tname.clone()
-        int guard_id = lir_mod_add_struct(&m, LirStructDef(guard_name_ctor, guard_fields, 0, false, 16, -1))
+        int guard_id = lir_mod_add_struct(&m, LirStructDef(guard_name_ctor, guard_fields, 0, false, 16, -1, false))
         sr.put(tname, guard_id)
         m.type_runtime_map.put(tname.clone(), "Guard")
         m.type_method_prefix_map.put(tname.clone(), guard_method_prefix(tname, &gmod))
@@ -990,7 +990,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
                                         else:
                                             box_fields.push(StructField("_0", LT_PTR))
                                         String box_name = name.clone()
-                                        int box_id = lir_mod_add_struct(&m, LirStructDef(box_name, box_fields, 0, false, box_sz, -1))
+                                        int box_id = lir_mod_add_struct(&m, LirStructDef(box_name, box_fields, 0, false, box_sz, -1, box_is_trait))
                                         sr.put(name, box_id)
                                         # Trait box: a REAL emitted struct
                                         # (`struct __gg_Box__<Trait> {data, vtable}`),
@@ -1052,7 +1052,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
                                 guard_fields.push(StructField("owner", LT_PTR))
                                 guard_fields.push(StructField("ptr", LT_PTR))
                                 String guard_name = name.clone()
-                                int guard_id = lir_mod_add_struct(&m, LirStructDef(guard_name, guard_fields, 0, false, 16, -1))
+                                int guard_id = lir_mod_add_struct(&m, LirStructDef(guard_name, guard_fields, 0, false, 16, -1, false))
                                 sr.put(name, guard_id)
                                 m.type_runtime_map.put(name.clone(), "Guard")
                                 match rmeta.method_prefix:
@@ -1081,7 +1081,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
                         # User struct/enum / unknown — placeholder filled in Pass 2.
                         Vector[StructField] empty_fields = []
                         String ph_name = name.clone()
-                        int sid = lir_mod_add_struct(&m, LirStructDef(ph_name, empty_fields, 0, false, -1, -1))
+                        int sid = lir_mod_add_struct(&m, LirStructDef(ph_name, empty_fields, 0, false, -1, -1, false))
                         sr.put(name, sid)
                         if name.starts_with("Task__"):
                             m.type_runtime_map.put(name.clone(), "Task")
@@ -1100,7 +1100,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
         if sr.get(tname).unwrap_or(-1) < 0:
             Vector[StructField] empty_fields = []
             String ph_name = tname.clone()
-            int sid = lir_mod_add_struct(&m, LirStructDef(ph_name, empty_fields, 0, false, -1, -1))
+            int sid = lir_mod_add_struct(&m, LirStructDef(ph_name, empty_fields, 0, false, -1, -1, false))
             sr.put(tname, sid)
 
     # Pass 1c: Register collection types referenced only as field types.
@@ -1189,7 +1189,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
                 computed_size = round_up_to(flat_total, enum_align)
             if computed_size == 0:
                 computed_size = 4
-            LirStructDef new_sdef = LirStructDef(sdef.name, efields, ek, is_union, computed_size, -1)
+            LirStructDef new_sdef = LirStructDef(sdef.name, efields, ek, is_union, computed_size, -1, sdef.is_trait_box)
             m.structs.set(sid, new_sdef)
         else:
             # Struct: map fields + pre-compute byte size (sum of field
@@ -1204,7 +1204,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
             s_total = round_up_to(s_total, s_align)
             if s_total == 0:
                 s_total = 1
-            LirStructDef new_sdef = LirStructDef(sdef.name, sfields, 0, false, s_total, -1)
+            LirStructDef new_sdef = LirStructDef(sdef.name, sfields, 0, false, s_total, -1, sdef.is_trait_box)
             m.structs.set(sid, new_sdef)
 
     # Pass 3: Synthesize fields for monomorphized Option__T / Result__T__E
@@ -1283,7 +1283,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
                 Vector[EnumVariantDrop] opt_vd2 = []
                 opt_vd2.push(EnumVariantDrop(0, "Some", "Some_0", opt_inner_drop, inner.clone()))
                 m.type_drop_fns.put(pname.clone(), TypeDropInfo(pname + "__drop", opt_nofd, "", opt_vd2))
-            LirStructDef opt_sdef = LirStructDef(pname, ofields, 1, false, -1, -1)
+            LirStructDef opt_sdef = LirStructDef(pname, ofields, 1, false, -1, -1, false)
             m.structs.set(psi, opt_sdef)
         elif pec.category == ENUM_CAT_RESULT:
             # Typed channel: payload tids → field LIR types + drop-names, no
@@ -1346,7 +1346,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
                     m.recursive_drop_enums.put(pname.clone(), res_vd)
                     Vector[FieldDrop] res_nofd = []
                     m.type_drop_fns.put(pname.clone(), TypeDropInfo(pname + "__drop", res_nofd, "", res_vd2))
-                LirStructDef res_sdef = LirStructDef(pname, rfields, 2, false, -1, -1)
+                LirStructDef res_sdef = LirStructDef(pname, rfields, 2, false, -1, -1, false)
                 m.structs.set(psi, res_sdef)
         psi += 1
 
@@ -1443,7 +1443,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
                 new_size = 8
             if new_size != rsdef.computed_c_size:
                 changed = true
-                LirStructDef updated = LirStructDef(rsdef.name, rsdef.fields, rsdef.enum_kind, rsdef.is_union_layout, new_size, rsdef.computed_c_align)
+                LirStructDef updated = LirStructDef(rsdef.name, rsdef.fields, rsdef.enum_kind, rsdef.is_union_layout, new_size, rsdef.computed_c_align, rsdef.is_trait_box)
                 m.structs.set(rsi, updated)
             rsi += 1
         guard_iters += 1
@@ -3382,7 +3382,7 @@ void emit_box_alloc(int dst_local, Operand box_arg, LirFunction &f, int bb, Vect
             if box_sid < 0:
                 Vector[StructField] vb_fields = []
                 vb_fields.push(StructField("_0", LT_PTR))
-                box_sid = lir_mod_add_struct(&m, LirStructDef("Box__" + box_inner_name, vb_fields, 0, false, 8, -1))
+                box_sid = lir_mod_add_struct(&m, LirStructDef("Box__" + box_inner_name, vb_fields, 0, false, 8, -1, false))
                 sr.put("Box__" + box_inner_name, box_sid)
                 m.type_runtime_map.put("Box__" + box_inner_name, "Box")
                 m.coll_elem_type_map.put("Box__" + box_inner_name, box_inner_name.clone())
@@ -3408,10 +3408,12 @@ bool try_emit_trait_obj_construct(int dst_slot, int src_slot, LirFunction &f, in
         return false
     LirStructDef dst_def = m.structs.get(dst_sid).unwrap()
     LirStructDef src_def = m.structs.get(src_sid).unwrap()
-    # dst must be a FAT trait box (2 fields, field[1] == "vtable"); src must be
-    # a `Box__<Concrete>` value box (name-parse the concrete). The fat shape IS
-    # the discriminator (set upstream from the `_VTable` typed channel).
-    if dst_def.fields.len() != 2 or dst_def.fields.get(1).unwrap().name != "vtable":
+    # dst must be a FAT trait box; src must be a `Box__<Concrete>` value box
+    # (name-parse the concrete — the `Box__` mangling contract). The typed
+    # `is_trait_box` flag (set once at the two Box registrars off the
+    # `_VTable`-registry probe) IS the discriminator — the former
+    # 2-field/"vtable"-name shape heuristic is retired (devbook/24 rule 2).
+    if not dst_def.is_trait_box:
         return false
     if not dst_def.name.starts_with("Box__") or not src_def.name.starts_with("Box__"):
         return false
@@ -4564,6 +4566,69 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
             # matching Rust's pre-elaboration shape.
             String dia_tn = gir_local_type_name(local_id, &gir_locals, &gmod)
             if dia_tn != "":
+                # ── FAT trait-box drop (`Box[Trait]` local) ──
+                # A fat trait box ({data, vtable}) is deliberately OUT of
+                # type_runtime_map (it's a real emitted struct, not a
+                # `typedef void*` alias), so `drop_fn_for_type` below returns
+                # "" for it and this arm used to emit NOTHING — leaking the
+                # data box AND the concrete payload's own resources on every
+                # scope exit. Drop it through the vtable's `__drop` glue slot
+                # instead: guard on the 16-byte fat struct, load vtable
+                # (field 1), load `__drop`, call it with &data (field 0).
+                # `Box__<Concrete>__drop(void** slot)` drops the payload,
+                # frees the box, and nulls *slot — idempotent under the
+                # surrounding guard. The call is UNCHECKED by design: an
+                # unresolvable concrete (equip-primitive) has a NULL slot in
+                # BOTH compilers (see the lower.gg NULL-degrade note; the
+                # class is already broken at dispatch and filed for
+                # typecheck-reject). Keyed on the TYPED `is_trait_box` flag.
+                # Mirrors Rust gg's trait-box drop path
+                # (`src/lir/lower/drops.rs`).
+                bool dia_tb_handled = false
+                int dia_tb_slot = local_to_slot.get(local_id).unwrap()
+                int dia_tb_ty = f.slots.get(dia_tb_slot).unwrap().ty
+                if dia_tb_ty >= LT_STRUCT_BASE:
+                    int dia_tb_sid = dia_tb_ty - LT_STRUCT_BASE
+                    if dia_tb_sid >= 0 and dia_tb_sid < m.structs.len():
+                        LirStructDef dia_tb_def = m.structs.get(dia_tb_sid).unwrap()
+                        if dia_tb_def.is_trait_box:
+                            # Trait name = post-`Box__` suffix (the mangling
+                            # contract, same slice the two Box registrars
+                            # used); `__drop` index found BY NAME in the
+                            # `_VTable` def (appended LAST, but resolution is
+                            # by-name like Rust's VTABLE_DROP_FIELD search so
+                            # a future append can't silently misindex).
+                            String dia_tb_trait = dia_tb_def.name.slice(5, dia_tb_def.name.len())
+                            int dia_tb_vt_sid = sr.get(dia_tb_trait + "_VTable").unwrap_or(-1)
+                            int dia_tb_drop_idx = -1
+                            if dia_tb_vt_sid >= 0 and dia_tb_vt_sid < m.structs.len():
+                                LirStructDef dia_tb_vt_def = m.structs.get(dia_tb_vt_sid).unwrap()
+                                for (dia_tb_fi, dia_tb_fld) in dia_tb_vt_def.fields.enumerate():
+                                    if dia_tb_fld.name == "__drop":
+                                        dia_tb_drop_idx = dia_tb_fi
+                            if dia_tb_drop_idx >= 0:
+                                int dia_tb_addr = lir_fn_next_value(&f)
+                                lir_push_inst(&f, bb, ISlotAddr(dia_tb_addr, dia_tb_slot))
+                                # Guard stays on `&slot` (ISlotAddr) per
+                                # drop_elab's build_val_to_slot — same rule as
+                                # the value-drop path below.
+                                int dia_tb_size = lir_type_byte_size_in_mod(dia_tb_ty, &m, 0)
+                                lir_push_inst(&f, bb, IDropGuardOpen(dia_tb_size + 1, dia_tb_addr))
+                                int dia_tb_vt_addr = lir_fn_next_value(&f)
+                                lir_push_inst(&f, bb, IFieldPtr(dia_tb_vt_addr, dia_tb_addr, dia_tb_sid, 1))
+                                int dia_tb_vt = lir_fn_next_value(&f)
+                                lir_push_inst(&f, bb, ILoad(dia_tb_vt, dia_tb_vt_addr, LT_PTR))
+                                int dia_tb_dslot_addr = lir_fn_next_value(&f)
+                                lir_push_inst(&f, bb, IFieldPtr(dia_tb_dslot_addr, dia_tb_vt, dia_tb_vt_sid, dia_tb_drop_idx))
+                                int dia_tb_drop_fn = lir_fn_next_value(&f)
+                                lir_push_inst(&f, bb, ILoad(dia_tb_drop_fn, dia_tb_dslot_addr, LT_PTR))
+                                int dia_tb_data_addr = lir_fn_next_value(&f)
+                                lir_push_inst(&f, bb, IFieldPtr(dia_tb_data_addr, dia_tb_addr, dia_tb_sid, 0))
+                                Vector[int] dia_tb_args = []
+                                dia_tb_args.push(dia_tb_data_addr)
+                                lir_push_inst(&f, bb, ICallPtr(-1, dia_tb_drop_fn, dia_tb_args))
+                                lir_push_inst(&f, bb, IDropGuardClose)
+                                dia_tb_handled = true
                 String dia_drop_fn = drop_fn_for_type(dia_tn, &gmod.resource_types, &m.type_runtime_map, &gmod.optionlike_resource_types, &m.drop_collision_types, &m.type_method_prefix_map)
                 # Mono'd Option/Result locals/scrutinees whose payload owns a
                 # resource are NOT in optionlike_resource_types (that dict is
@@ -4575,7 +4640,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                 # resource, so POD-payload Option/Result correctly stay drop-less).
                 if dia_drop_fn == "" and m.type_drop_fns.contains(dia_tn):
                     dia_drop_fn = m.type_drop_fns.get(dia_tn).unwrap().drop_fn_name
-                if dia_drop_fn != "":
+                if dia_drop_fn != "" and not dia_tb_handled:
                     int dia_slot = local_to_slot.get(local_id).unwrap()
                     int dia_slot_ty = f.slots.get(dia_slot).unwrap().ty
                     int dia_size = lir_type_byte_size_in_mod(dia_slot_ty, &m, 0)
@@ -5602,9 +5667,23 @@ LirModule lower_gir_to_lir(GirModule &gmod):
             if f.kind == GGINIT_FN_REF:
                 if func_index.contains(f.fn_name):
                     int fid = func_index.get(f.fn_name).unwrap()
-                    lf.push(LirGlobalField(GINIT_FUNC_ADDR, fid))
+                    lf.push(LirGlobalField(GINIT_FUNC_ADDR, fid, ""))
                 else:
-                    lf.push(LirGlobalField(GINIT_ZEROED, -1))
+                    lf.push(LirGlobalField(GINIT_ZEROED, -1, ""))
+            elif f.kind == GGINIT_BOX_DROP_REF:
+                # Vtable `__drop` glue slot: forward the typed concrete name.
+                # NOT routed through the FN_REF/func_index path — the
+                # `Box__<concrete>__drop` wrapper is backend-synthesized (no
+                # GIR/LIR function), so an FN_REF would miss the index and
+                # silently lower to a NULL slot. Mirrors Rust gg's
+                # `BoxDropRef → BoxDropAddr` arm (`src/lir/lower/types.rs`).
+                lf.push(LirGlobalField(GINIT_BOX_DROP_ADDR, -1, f.fn_name.clone()))
+            else:
+                # Field-count PARITY for any other kind (incl. GGINIT_ZEROED,
+                # the NULL-degrade drop slot for unresolvable concretes): a
+                # skipped field would SHIFT every later vtable slot against
+                # the `_VTable` struct layout. Lower to a NULL slot.
+                lf.push(LirGlobalField(GINIT_ZEROED, -1, ""))
         lir_mod_add_global(&m, LirGlobal(gg_global.name.clone(), g_ty, GINIT_STRUCT, -1, "", gg_global.is_const, lf))
 
     # Lower extern declarations

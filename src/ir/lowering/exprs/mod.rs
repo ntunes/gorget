@@ -4,7 +4,7 @@ mod methods;
 mod operators;
 mod shared;
 pub(crate) mod spawn;
-mod type_reg;
+pub(in crate::ir::lowering) mod type_reg;
 
 pub(in crate::ir::lowering) use calls::*;
 use collections::*;

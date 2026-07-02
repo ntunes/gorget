@@ -1659,6 +1659,13 @@ pub enum LirGlobalInit {
     Bytes(Vec<u8>),
     /// Address of a function.
     FuncAddr(FuncId),
+    /// Address of the backend-synthesized `Box__<inner>__drop` wrapper for
+    /// the carried mangled inner-type name — the trait-object vtable's
+    /// `__drop` slot. Mirrors `ir::GlobalInit::BoxDropRef`. Distinct from
+    /// `FuncAddr` because the wrapper is not an LIR function (the C/LLVM
+    /// backends synthesize it from the typed `StructDef.box_inner_type`
+    /// registry), so no `FuncId` exists for it.
+    BoxDropAddr(String),
     /// Struct aggregate initializer.
     Struct {
         struct_id: StructId,

@@ -73,6 +73,7 @@ fn write_global_init(f: &mut fmt::Formatter<'_>, init: &LirGlobalInit) -> fmt::R
         LirGlobalInit::Zeroed => write!(f, " = zeroed"),
         LirGlobalInit::Bytes(bytes) => write!(f, " = bytes[{}]", bytes.len()),
         LirGlobalInit::FuncAddr(fid) => write!(f, " = {fid}"),
+        LirGlobalInit::BoxDropAddr(inner) => write!(f, " = &Box__{inner}__drop"),
         LirGlobalInit::Extern { name, args } => {
             write!(f, " = extern {name}(")?;
             for (i, arg) in args.iter().enumerate() {

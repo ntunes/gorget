@@ -373,13 +373,23 @@ struct GirStaticInfo:
 const int GGINIT_ZEROED = 0
 const int GGINIT_FN_REF = 1   # scalar &fn (by name)
 const int GGINIT_STRUCT = 2   # struct-of-inits (vtable)
+# Address of the per-concrete-type `Box__<concrete>__drop` wrapper — the
+# trait-object vtable's `__drop` glue slot. Carries the mangled CONCRETE
+# type name in `fn_name` as TYPED metadata (set once at the vtable-global
+# emit in lower.gg); the C backend spells the wrapper symbol at its emit
+# boundary. Distinct from GGINIT_FN_REF because the wrapper is backend-
+# synthesized (no GIR function exists for it, so an FN_REF would fail the
+# func_index lookup and silently lower to a NULL slot). Mirrors Rust gg's
+# `GlobalInit::BoxDropRef` (`src/ir/mod.rs`). ADD-AT-END discipline.
+const int GGINIT_BOX_DROP_REF = 3
 
 # One field of a struct global init. For vtables every field is
-# GGINIT_FN_REF, so a flat representation suffices: a kind + the mangled
-# impl fn name (for FN_REF). Nested structs are not needed for vtables.
+# GGINIT_FN_REF (method slots) or GGINIT_BOX_DROP_REF (the trailing
+# `__drop` glue slot), so a flat representation suffices: a kind + one
+# String payload. Nested structs are not needed for vtables.
 struct GirGlobalField:
-    int kind          # GGINIT_* (only GGINIT_FN_REF used for vtables)
-    String fn_name    # for GGINIT_FN_REF: the mangled impl fn name
+    int kind          # GGINIT_* (FN_REF / BOX_DROP_REF / ZEROED for vtables)
+    String fn_name    # FN_REF: mangled impl fn name; BOX_DROP_REF: mangled concrete type name
 
 struct GirGlobal:
     String name           # e.g. "Serializer_for_JsonSerializer_vtable"

@@ -816,11 +816,24 @@ impl<'a> FuncLowering<'a> {
         // Construct the trait object:
         // field 0 (data) = src value (cast to void*)
         // field 1 (vtable) = &vtable_global
+        //
+        // The construction goes through a fresh TEMP slot + a canonical
+        // `SlotStore` into the destination — NOT direct field stores into the
+        // destination slot. Field stores through `SlotAddr`+`FieldPtr` are
+        // invisible to drop-elaboration's init dataflow (`apply_inst_effect`
+        // in `src/lir/drop_elab.rs` treats `SlotStore` as the slot-init
+        // signal), so writing the dst slot directly left it "Uninitialized"
+        // and its scope-exit `DropIfAlive` was DELETED — leaking the trait
+        // object's data box (16B on dynamic_dispatch, 261B on serializable).
+        // Write-site fix per the layering-discipline debugging heuristic:
+        // emit the shape every downstream pass already understands.
         let dst_slot = self.local_to_slot[dst_idx];
+        let dst_slot_ty = self.lir_func.slots[dst_slot.0 as usize].ty.clone();
+        let tmp_slot = self.lir_func.add_slot(dst_slot_ty, None);
         let dst_base = self.lir_func.next_value();
         self.push_inst(bb, Inst::SlotAddr {
             dst: dst_base,
-            slot: dst_slot,
+            slot: tmp_slot,
         });
 
         // Load src value (Box__Concrete = void*).
@@ -869,6 +882,21 @@ impl<'a> FuncLowering<'a> {
         self.push_inst(bb, Inst::Store {
             ptr: vtable_ptr,
             value: vtable_addr,
+        });
+
+        // Canonical init of the destination: aggregate SlotStore (memcpy of
+        // the 16-byte {data, vtable} temp). This is the write drop-elab's
+        // init dataflow reads, so the destination's scope-exit DropIfAlive
+        // survives elaboration.
+        let tmp_addr = self.lir_func.next_value();
+        self.push_inst(bb, Inst::SlotAddr {
+            dst: tmp_addr,
+            slot: tmp_slot,
+        });
+        self.push_inst(bb, Inst::SlotStore {
+            slot: dst_slot,
+            value: tmp_addr,
+            is_move: true,
         });
 
         true

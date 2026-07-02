@@ -167,12 +167,13 @@ impl<'a> FuncLowering<'a> {
                     });
                 }
                 let slot = self.local_to_slot[local_idx];
-                let slot_ty = self.lir_func.slots[slot.0 as usize].ty.clone();
 
                 // Check if this is a trait-object Box (struct with data+vtable)
-                // vs a regular Box (raw pointer). Trait boxes need free(val.data).
-                // Read from the typed LIR flag set at registration time — no
-                // GIR registry probe needed here.
+                // vs a regular Box (raw pointer). Trait boxes drop through the
+                // vtable's `__drop` slot (the concrete type's
+                // `Box__<Concrete>__drop` wrapper: payload drop + tracked free
+                // + slot null). Read from the typed LIR flag set at
+                // registration time — no GIR registry probe needed here.
                 let is_trait_box = type_name.as_deref()
                     .and_then(|n| self.struct_reg.lookup(n))
                     .and_then(|sid| self.module_structs.get(sid.0 as usize))
@@ -180,10 +181,76 @@ impl<'a> FuncLowering<'a> {
                     .unwrap_or(false);
 
                 if is_trait_box {
-                    // Trait box: free the .data field
                     let addr = self.lower_place_addr(place, bb);
-                    // Find the struct_id for this Box type
-                    if let Some(sid) = self.struct_reg.lookup(type_name.as_deref().unwrap_or("")) {
+                    // The vtable struct + its `__drop` slot index. The trait
+                    // name is the Box mangling's inner (`Box__<Trait>`), same
+                    // contract `try_trait_object_construct` reads.
+                    let vtable_drop = type_name
+                        .as_deref()
+                        .and_then(|n| n.strip_prefix("Box__"))
+                        .and_then(|trait_name| {
+                            let vt_name = format!("{trait_name}_VTable");
+                            let vt_sid = self.struct_reg.lookup(&vt_name)?;
+                            let drop_idx = self
+                                .module_structs
+                                .get(vt_sid.0 as usize)?
+                                .fields
+                                .iter()
+                                .position(|(fname, _)| fname == crate::ir::lowering::traits::VTABLE_DROP_FIELD)?;
+                            Some((vt_sid, drop_idx as u32))
+                        });
+                    // Find the struct_id for this Box type. Both lookups are
+                    // guaranteed by construction: `is_trait_box` was READ off
+                    // the registered struct (so the box lookup can't miss),
+                    // and `register_trait_types` appends the `__drop` slot to
+                    // every `_VTable` unconditionally. A miss here is a
+                    // compiler invariant violation — fail loudly (Core #6
+                    // structural guard) instead of silently emitting the old
+                    // leak-y bare `free(data)` path, which would drop the
+                    // concrete payload's resources on the floor.
+                    let (Some(sid), Some((vt_sid, drop_idx))) = (
+                        self.struct_reg.lookup(type_name.as_deref().unwrap_or("")),
+                        vtable_drop,
+                    ) else {
+                        panic!(
+                            "ICE: trait-box drop for `{}` could not resolve the vtable \
+                             `__drop` glue slot (box struct or `<Trait>_VTable`/`__drop` \
+                             field missing) — register_trait_types must append the drop \
+                             slot to every vtable",
+                            type_name.as_deref().unwrap_or("<unknown>"),
+                        );
+                    };
+                    {
+                        // vtable ptr (field 1) → __drop slot → CallPtr(&data).
+                        // `Box__<Concrete>__drop(void** slot)` takes the ADDRESS
+                        // of the data pointer (drops payload, frees box, nulls
+                        // *slot — idempotent with the surrounding drop guard).
+                        let vt_ptr_addr = self.lir_func.next_value();
+                        self.push_inst(bb, Inst::FieldPtr {
+                            dst: vt_ptr_addr,
+                            base: addr,
+                            struct_id: sid,
+                            field: 1, // vtable is field 1
+                        });
+                        let vt_ptr = self.lir_func.next_value();
+                        self.push_inst(bb, Inst::Load {
+                            dst: vt_ptr,
+                            ptr: vt_ptr_addr,
+                            ty: LirType::Ptr,
+                        });
+                        let drop_fn_addr = self.lir_func.next_value();
+                        self.push_inst(bb, Inst::FieldPtr {
+                            dst: drop_fn_addr,
+                            base: vt_ptr,
+                            struct_id: vt_sid,
+                            field: drop_idx,
+                        });
+                        let drop_fn = self.lir_func.next_value();
+                        self.push_inst(bb, Inst::Load {
+                            dst: drop_fn,
+                            ptr: drop_fn_addr,
+                            ty: LirType::Ptr,
+                        });
                         let data_ptr = self.lir_func.next_value();
                         self.push_inst(bb, Inst::FieldPtr {
                             dst: data_ptr,
@@ -191,29 +258,11 @@ impl<'a> FuncLowering<'a> {
                             struct_id: sid,
                             field: 0, // data is field 0
                         });
-                        let data_val = self.lir_func.next_value();
-                        self.push_inst(bb, Inst::Load {
-                            dst: data_val,
-                            ptr: data_ptr,
-                            ty: LirType::Ptr,
-                        });
-                        self.push_inst(bb, Inst::CallExtern {
+                        self.push_inst(bb, Inst::CallPtr {
                             dst: None,
-                            name: "free".to_string(),
-                            args: vec![data_val],
-                            arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
-                        });
-                    } else {
-                        // Fallback: just free the whole value
-                        let val = self.lir_func.next_value();
-                        self.push_inst(bb, Inst::SlotLoad {
-                            dst: val, slot, ty: slot_ty,
-                        });
-                        self.push_inst(bb, Inst::CallExtern {
-                            dst: None,
-                            name: "free".to_string(),
-                            args: vec![val],
-                            arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
+                            callee: drop_fn,
+                            args: vec![data_ptr],
+                            ret_ty: LirType::Void,
                         });
                     }
                 } else {

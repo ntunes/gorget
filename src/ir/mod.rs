@@ -732,6 +732,13 @@ pub enum GlobalInit {
         fields: Vec<(String, GlobalInit)>,
     },
     FnRef(String),
+    /// Address of the per-concrete-type `Box__<inner>__drop` wrapper — the
+    /// trait-object vtable's `__drop` slot. Carries the mangled concrete
+    /// inner type name as TYPED metadata (set once at `emit_vtable_globals`);
+    /// backends spell the wrapper symbol at their emit boundary. Distinct
+    /// from `FnRef` because the wrapper is backend-synthesized (no GIR
+    /// function exists for it, so a `FnRef` would lower to `Zeroed`).
+    BoxDropRef(String),
     Bytes(Vec<u8>),
     /// Runtime-evaluated extern call. Args are typed so backends don't
     /// reverse-engineer C syntax. Used for module-level globals that

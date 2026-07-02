@@ -1242,6 +1242,14 @@ fn dynamic_dispatch() {
 }
 
 #[test]
+fn box_trait_drop() {
+    run_gg(
+        "box_trait_drop.gg",
+        "I am p0\nbot0 v40\nI am p1\nbot1 v41\nI am p2\nbot2 v42\ndone",
+    );
+}
+
+#[test]
 fn auto_types() {
     run_gg(
         "auto_types.gg",

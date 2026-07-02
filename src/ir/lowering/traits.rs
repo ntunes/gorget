@@ -23,6 +23,12 @@ fn vtable_abis(vtable_method: &VTableMethod) -> Vec<super::context::ParamABI> {
     vtable_method.param_abis.clone()
 }
 
+/// Reserved name of the vtable's drop-glue slot (`void (*__drop)(void*)`).
+/// Appended as the LAST vtable field so method indices stay stable; method
+/// resolution is by-name and can never collide with it (user methods cannot
+/// be named `__drop`).
+pub const VTABLE_DROP_FIELD: &str = "__drop";
+
 /// Information about a trait's vtable layout.
 pub struct TraitVTableInfo {
     /// Name of the VTable struct type (e.g., "Shape_VTable").
@@ -171,13 +177,29 @@ pub fn register_trait_types(
 
             // -- Create VTable struct TypeDef --
             let vtable_type_name = format!("{trait_name}_VTable");
-            let vtable_fields: Vec<StructField> = methods
+            let mut vtable_fields: Vec<StructField> = methods
                 .iter()
                 .map(|m| StructField {
                     name: m.name.clone(),
                     type_id: m.fn_ptr_type_id,
                 })
                 .collect();
+            // Drop-glue slot: `void (*__drop)(void* data_slot)` — points at
+            // the concrete type's `Box__<Concrete>__drop` wrapper (drops the
+            // boxed payload's own resources, then frees the data box and
+            // nulls the slot). APPENDED LAST so positional method indices
+            // (`TraitCall.method_idx`) stay stable; method resolution is
+            // by-name and never matches `__drop`. Populated per-impl by
+            // `emit_vtable_globals`; consumed by the trait-box drop path in
+            // `src/lir/lower/drops.rs`.
+            let drop_fn_ptr_type = ctx.type_registry.insert(GirType::FnPtr {
+                params: vec![mut_void_ptr],
+                return_type: UNIT_TYPE,
+            });
+            vtable_fields.push(StructField {
+                name: VTABLE_DROP_FIELD.to_string(),
+                type_id: drop_fn_ptr_type,
+            });
 
             ctx.type_registry.add_type_def(TypeDef {
                 name: vtable_type_name.clone(),
@@ -977,6 +999,7 @@ fn lower_trait_method_body(
 
 /// Generate vtable global constants for all trait equip blocks.
 pub fn emit_vtable_globals(
+    ctx: &mut LoweringContext,
     module: &mut crate::ir::Module,
     trait_info: &FxHashMap<String, TraitVTableInfo>,
     ast_module: &ast::Module,
@@ -1006,7 +1029,7 @@ pub fn emit_vtable_globals(
                 format!("{trait_name}_for_{type_name}_vtable");
 
             // Build field initializers: each method slot -> FnRef to the impl function
-            let fields: Vec<(String, GlobalInit)> = vtable_info
+            let mut fields: Vec<(String, GlobalInit)> = vtable_info
                 .methods
                 .iter()
                 .map(|vtable_method| {
@@ -1020,6 +1043,37 @@ pub fn emit_vtable_globals(
                     )
                 })
                 .collect();
+
+            // Drop-glue slot (appended LAST, mirroring the VTable TypeDef):
+            // the concrete type's `Box__<Concrete>__drop` wrapper. Register
+            // the `Box__<Concrete>` TypeDef here too, so the C backend's
+            // typed `box_inner_type` discovery emits the wrapper (plus the
+            // matching `__gorget_box_alloc/_free_<Concrete>` helpers) even
+            // for concrete types the program never explicitly boxes — the
+            // vtable global references the symbol unconditionally.
+            if let Some(concrete_tid) = ctx.type_mapper.lookup_named(&type_name) {
+                let box_mangled = format!("Box__{type_name}");
+                if ctx.type_mapper.lookup_named(&box_mangled).is_none() {
+                    let tid = ctx
+                        .type_registry
+                        .insert(GirType::Named(box_mangled.clone()));
+                    ctx.type_mapper.register_named(box_mangled.clone(), tid);
+                }
+                super::exprs::type_reg::ensure_box_type_def(ctx, &box_mangled, concrete_tid);
+                fields.push((
+                    VTABLE_DROP_FIELD.to_string(),
+                    GlobalInit::BoxDropRef(type_name.clone()),
+                ));
+            } else {
+                // Concrete type not resolvable as a named boxable type (e.g.
+                // `equip int with Trait` — no `Box__int` mangling exists, and
+                // trait-object construction from a primitive is unsupported
+                // today: baseline SEGFAULTS on primitive-equip dispatch, see
+                // scout notes). Emit a NULL drop slot rather than referencing
+                // a wrapper symbol that will never be emitted; the drop path
+                // can't be reached for a trait object that can't be built.
+                fields.push((VTABLE_DROP_FIELD.to_string(), GlobalInit::Zeroed));
+            }
 
             module.globals.push(Global {
                 name: vtable_global_name,
@@ -1718,12 +1772,13 @@ mod tests {
             "Should have Shape_TraitObj TypeDef"
         );
 
-        // Verify VTable struct fields
+        // Verify VTable struct fields (2 method slots + trailing __drop glue slot)
         let vtable_def = ctx.type_registry.get_type_def("Shape_VTable").unwrap();
         if let TypeDefKind::Struct(ref s) = vtable_def.kind {
-            assert_eq!(s.fields.len(), 2);
+            assert_eq!(s.fields.len(), 3);
             assert_eq!(s.fields[0].name, "area");
             assert_eq!(s.fields[1].name, "draw");
+            assert_eq!(s.fields[2].name, VTABLE_DROP_FIELD);
         } else {
             panic!("Expected Struct TypeDef for Shape_VTable");
         }

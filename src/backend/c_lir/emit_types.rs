@@ -670,6 +670,10 @@ pub(super) fn emit_global_init(out: &mut String, init: &LirGlobalInit, ty: &LirT
 
 pub(super) fn emit_global_init_value(out: &mut String, init: &LirGlobalInit, ty: &LirType, funcs: &[LirFunction], structs: &[StructDef]) {
     match init {
+        // Pointer-typed zeroed slot (e.g. the NULL-degraded vtable `__drop`
+        // slot for an unresolvable concrete) → spell `NULL`, not a braced
+        // scalar initializer. Aggregates and other scalars keep `{0}`.
+        LirGlobalInit::Zeroed if matches!(ty, LirType::Ptr) => write!(out, "NULL").unwrap(),
         LirGlobalInit::Zeroed => write!(out, "{{0}}").unwrap(),
         LirGlobalInit::Bytes(b) => {
             let is_float = matches!(ty, LirType::F32 | LirType::F64);
@@ -700,6 +704,15 @@ pub(super) fn emit_global_init_value(out: &mut String, init: &LirGlobalInit, ty:
         LirGlobalInit::FuncAddr(fid) => {
             let fname = funcs.get(fid.0 as usize).map(|f| f.name.as_str()).unwrap_or("__unknown_fn");
             write!(out, "(void*)&{fname}").unwrap();
+        }
+        LirGlobalInit::BoxDropAddr(inner) => {
+            // Trait-object vtable drop slot. The `Box__<inner>__drop` wrapper
+            // is emitted by `emit_box_drop_wrappers` (discovered via the typed
+            // `StructDef.box_inner_type` registered at `emit_vtable_globals`)
+            // and forward-declared in `emit_runtime_helpers` ahead of the
+            // globals. Symbol spelling at the C-emit boundary, driven by the
+            // typed inner-type name.
+            write!(out, "(void*)&Box__{inner}__drop").unwrap();
         }
         LirGlobalInit::Struct { struct_id, fields } => {
             write!(out, "{{").unwrap();

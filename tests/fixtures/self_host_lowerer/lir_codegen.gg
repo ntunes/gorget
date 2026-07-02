@@ -18,7 +18,7 @@ from lir import lir_struct_id
 from lir import OVF_TRAP, OVF_WRAP
 from lir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
 from lir import EK_NOT_ENUM, EK_OPTION, EK_RESULT, EK_GENERAL
-from lir import GINIT_ZEROED, GINIT_FUNC_ADDR, GINIT_RUNTIME_CALL, GINIT_STRUCT, GINIT_BYTES
+from lir import GINIT_ZEROED, GINIT_FUNC_ADDR, GINIT_RUNTIME_CALL, GINIT_STRUCT, GINIT_BYTES, GINIT_BOX_DROP_ADDR
 from gir import SCHED_POOL, SCHED_THREAD, SCHED_INLINE, SCHED_SINGLE
 from lir import runtime_fn_returns_cstr
 # Fault-catch checked arithmetic (error-model.md §11): IFaultCheck's `op`
@@ -1244,11 +1244,96 @@ String emit_deferred_globals(LirModule &m, Vector[String] &sn):
                     # Bare (void*)&fn — see header note (NOT __adapt_).
                     String fname = c_func_name(m.functions.get(fld.func_id).unwrap().name)
                     out = out + "(void*)&" + fname
+                elif fld.kind == GINIT_BOX_DROP_ADDR and fld.box_inner != "":
+                    # Vtable `__drop` glue slot: address of the synthesized
+                    # `Box__<concrete>__drop` wrapper (defined by
+                    # emit_box_trait_drop_wrappers; forward-declared ahead of
+                    # this initializer by emit_box_trait_drop_decls). Symbol
+                    # spelling at the C-emit boundary, driven by the typed
+                    # `box_inner` field. Mirrors Rust gg's `BoxDropAddr` emit
+                    # (`src/backend/c_lir/emit_types.rs`).
+                    out = out + "(void*)&Box__" + fld.box_inner + "__drop"
                 else:
                     out = out + "NULL"
                 fi += 1
             out = out + "}; // " + g.name + "\n"
         i += 1
+    return out
+
+# ── Box[Trait] vtable `__drop` wrapper glue ────────────────
+#
+# The trait-object vtable's trailing `__drop` slot points at a
+# backend-synthesized `void Box__<concrete>__drop(void* slot)` wrapper:
+# null-check *slot, drop the concrete payload's own resources, PLAIN
+# `free` the data box (self-host box alloc is bare GORGET_ALLOC — no
+# per-type tracked free helper exists here, unlike Rust gg's
+# `__gorget_box_free_<inner>`), then null *slot (idempotent under the
+# caller's drop guard). The worklist is discovered from the TYPED
+# GINIT_BOX_DROP_ADDR global fields (the self-host has no
+# `__gorget_box_alloc_*` extern / `box_inner_type` channel to scan),
+# deduped + sorted for bootstrap-fixed-point determinism.
+#
+# Two-buffer placement (see generate_c): the FORWARD-DECLS land in `out`
+# BEFORE emit_deferred_globals (the vtable initializer takes the wrapper's
+# address); the DEFINITIONS land in `body` AFTER emit_type_drop_fns, so
+# the inner `<concrete>__drop` symbols are already declared by
+# emit_all_drop_clone_forward_decls. Mirrors Rust gg's fwd-decl+deferral
+# split (`src/backend/c_lir/mod.rs:757-762` + emit_box_drop_wrappers).
+
+Vector[String] collect_box_trait_drop_inners(LirModule &m):
+    Vector[String] inners = []
+    int gi = 0
+    while gi < m.globals.len():
+        LirGlobal g = m.globals.get(gi).unwrap()
+        if g.init_kind == GINIT_STRUCT:
+            int fi = 0
+            while fi < g.struct_fields.len():
+                LirGlobalField fld = g.struct_fields.get(fi).unwrap()
+                if fld.kind == GINIT_BOX_DROP_ADDR and fld.box_inner != "":
+                    bool seen = false
+                    int si = 0
+                    while si < inners.len():
+                        if inners.get(si).unwrap() == fld.box_inner:
+                            seen = true
+                        si += 1
+                    if not seen:
+                        inners.push(fld.box_inner.clone())
+                fi += 1
+        gi += 1
+    sort_strings_in_place(&inners)
+    return inners
+
+String emit_box_trait_drop_decls(LirModule &m):
+    Vector[String] inners = collect_box_trait_drop_inners(&m)
+    String out = ""
+    for decl_inner in inners:
+        out = out + "void Box__" + decl_inner + "__drop(void* slot);\n"
+    if out != "":
+        out = out + "\n"
+    return out
+
+String emit_box_trait_drop_wrappers(LirModule &m):
+    Vector[String] inners = collect_box_trait_drop_inners(&m)
+    String out = ""
+    for wrap_inner in inners:
+        # Inner drop via the codegen-side typed resolvers: the runtime-
+        # category channel (lc_collection_drop_fn — type_runtime_map +
+        # recursive_drop_structs/enums), then the generated-drop registry
+        # (m.type_drop_fns). A POD concrete resolves to "" → box free only.
+        String wrap_drop = lc_collection_drop_fn(wrap_inner, &m)
+        if wrap_drop == "" and m.type_drop_fns.contains(wrap_inner):
+            wrap_drop = m.type_drop_fns.get(wrap_inner).unwrap().drop_fn_name
+        out = out + "void Box__" + wrap_inner + "__drop(void* slot) {\n"
+        out = out + "    void** sp = (void**)slot;\n"
+        out = out + "    void* p = *sp;\n"
+        out = out + "    if (!p) return;\n"
+        if wrap_drop != "":
+            out = out + "    " + wrap_drop + "(p);\n"
+        out = out + "    free(p);\n"
+        out = out + "    *sp = NULL;\n"
+        out = out + "}\n"
+    if out != "":
+        out = out + "\n"
     return out
 
 # ── String literal pooling ─────────────────────────────────
@@ -7839,6 +7924,12 @@ String generate_c(LirModule &m):
     # ctor wiring.
     out = out + emit_hashable_key_bridges(&m)
 
+    # Box[Trait] vtable `__drop` wrapper FORWARD-DECLS — must precede the
+    # deferred vtable globals below (their initializers take
+    # `(void*)&Box__<concrete>__drop`). The definitions land in `body`
+    # after emit_type_drop_fns (see the emitter's header note).
+    out = out + emit_box_trait_drop_decls(&m)
+
     # Deferred globals (FuncAddr-bearing: GINIT_STRUCT vtables + scalar
     # GINIT_FUNC_ADDR). Emitted HERE — after forward-decls + hashable-key
     # bridges, before adapter functions — so the `(void*)&fn` casts
@@ -7877,6 +7968,11 @@ String generate_c(LirModule &m):
     body = body + emit_enum_drops(&m, &sn)
     body = body + emit_enum_clones(&m, &sn)
     body = body + emit_type_drop_fns(&m, &sn)
+    # Box[Trait] vtable `__drop` wrapper DEFINITIONS — after the drop/clone
+    # forward-decls + definitions above so the inner `<concrete>__drop`
+    # symbols the wrappers call are already declared. The matching
+    # forward-decls went into `out` ahead of the deferred vtable globals.
+    body = body + emit_box_trait_drop_wrappers(&m)
     # `d.get_or(k, default)` inline wrappers (no `gorget_map_get_or` runtime
     # symbol). Emitted HERE — AFTER the drop/clone forward declarations and the
     # struct/enum clone definitions, BEFORE the function definitions that call
