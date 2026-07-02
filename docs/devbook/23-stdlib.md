@@ -139,9 +139,13 @@ two places:
 
 - **Typecheck** validates that `cap` / `alloc` are the only legal named args
   on the builtin constructors (`Vector`, `Dict`, `HashMap`, `Set`, `HashSet`,
-  `Channel`, `String`, allocators). `src/semantic/typecheck.rs:1501-1588`:
+  `Channel`, `String`, allocators). `src/semantic/typecheck.rs:1514-1646`:
   any other named arg is an `UnknownNamedArg` error; `alloc=` is checked to be
-  an allocator type, `cap=` is just type-inferred and deferred to lowering.
+  an allocator type, and `cap=` must be an integer of any width
+  (`is_integer_type`, round-33 — a non-int cap used to be silently deferred
+  to lowering, where it ICE'd the backend, died as a cc error, or silently
+  wrong-accepted via C implicit conversion; see
+  `tests/fixtures/ctor_cap_arg_error.gg`).
   The same block rejects a positional 1-arg `String(x)` whose arg is neither
   an integer capacity nor String content (round-32, Core #8 — non-string args
   used to reach `gorget_string_from_str` and die as a cc/llc internal error).

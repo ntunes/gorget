@@ -1522,8 +1522,53 @@ impl<'a> TypeChecker<'a> {
                         for arg in args {
                             if let Some(ref name) = arg.node.name {
                                 if name.node == "cap" {
-                                    // cap= valid on collection constructors — validated at GIR lowering
-                                    self.infer_expr(&arg.node.value);
+                                    // `cap=` takes an integer capacity (any int
+                                    // width) — round-33. Before this reject the
+                                    // value was "type-inferred and deferred to
+                                    // lowering", where a non-int cap either
+                                    // ICE'd the backend (`String(cap=true)`:
+                                    // emit_types.rs GorgetString-ABI panic in
+                                    // debug; llc i1-vs-GorgetString under
+                                    // --backend=llvm), died as an
+                                    // unintelligible cc error
+                                    // (`Vector[int](cap="x")`: incompatible
+                                    // arg 2 of `*__reserve`), or — worst —
+                                    // silently wrong-accepted
+                                    // (`Vector[int](cap=true)` reserved 1 via
+                                    // C implicit conversion while llc rejected
+                                    // the same program; `String(cap="x")`
+                                    // treated the cap as CONTENT). Same
+                                    // reject shape + `is_integer_type`
+                                    // predicate as the positional `String(x)`
+                                    // arm below (Core #4 — one predicate, no
+                                    // parallel list).
+                                    let cap_type = self.infer_expr(&arg.node.value);
+                                    let cap_resolved = self.resolve_type(cap_type);
+                                    // Unwrap &/! wrappers (an int borrowed
+                                    // through a `&` param still names a
+                                    // valid capacity).
+                                    let cap_inner = match self.types.get(cap_resolved) {
+                                        ResolvedType::Ref(t) | ResolvedType::Owned(t) => self.resolve_type(*t),
+                                        _ => cap_resolved,
+                                    };
+                                    let cap_ok = match self.types.get(cap_inner) {
+                                        ResolvedType::Primitive(p) => is_integer_type(p),
+                                        // Error: already diagnosed — don't cascade.
+                                        // Never: diverging arg, unreachable anyway.
+                                        // Var: unbound inference variable —
+                                        // can't classify; never false-positive.
+                                        ResolvedType::Error | ResolvedType::Never | ResolvedType::Var(_) => true,
+                                        _ => false,
+                                    };
+                                    if !cap_ok {
+                                        self.error(
+                                            SemanticErrorKind::TypeMismatch {
+                                                expected: "cap= takes an integer capacity (any int width), e.g. cap=64".to_string(),
+                                                found: self.describe_resolved_type(cap_inner),
+                                            },
+                                            arg.node.value.span,
+                                        );
+                                    }
                                 } else if name.node != "alloc" {
                                     self.error(
                                         SemanticErrorKind::UnknownNamedArg { name: name.node.clone() },

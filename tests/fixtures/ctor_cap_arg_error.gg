@@ -1,0 +1,21 @@
+# round-33: `cap=` on the builtin constructors (Vector / Dict / HashMap / Set /
+# HashSet / Channel / String / allocators) takes an integer capacity — any int
+# width. Before this reject the value was type-inferred and DISCARDED
+# ("deferred to lowering"), where a non-int cap either ICE'd the backend
+# (`String(cap=true)`: emit_types.rs GorgetString-ABI panic in debug; llc
+# i1-vs-GorgetString under --backend=llvm), died as an unintelligible cc error
+# (`Vector[int](cap="x")`: incompatible arg 2 of `*__reserve`), or — worst —
+# silently wrong-accepted (`Vector[int](cap=true)` reserved 1 via C implicit
+# conversion while the LLVM backend rejected the SAME program;
+# `String(cap="x")` treated the cap as CONTENT and printed "x"). It must be a
+# CLEAN type error at `gg check` (Core #8). Valid forms: see
+# string_cap_named_arg.gg / vector_cap_arg.gg.
+void main():
+    String s = String(cap=true)
+    Vector[int] v = Vector[int](cap="x")
+    Dict[String, int] d = Dict[String, int](cap=3.5)
+    Set[int] st = Set[int](cap=2.5)
+    print(s)
+    print(v.len())
+    print(d.len())
+    print(st.len())

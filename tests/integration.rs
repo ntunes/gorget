@@ -6803,6 +6803,25 @@ fn string_ctor_arg_errors() {
     );
 }
 
+// `cap=` on the builtin constructors takes an integer capacity (any int
+// width) — round-33, the named-arg sibling of string_ctor_arg_errors. The
+// value used to be type-inferred and DISCARDED at typecheck ("deferred to
+// lowering"), where a non-int cap either ICE'd the backend
+// (`String(cap=true)`: emit_types.rs GorgetString-ABI panic; llc
+// i1-vs-GorgetString under --backend=llvm), died as an unintelligible cc
+// error (`Vector[int](cap="x")`: incompatible arg 2 of `*__reserve`), or
+// silently wrong-accepted (`Vector[int](cap=true)` reserved 1 via C implicit
+// conversion while the LLVM backend rejected the SAME program;
+// `String(cap="x")` treated the cap as CONTENT). Core #8: a clean type error
+// at `gg check` in all four cases.
+#[test]
+fn ctor_cap_arg_errors() {
+    check_gg_fails(
+        "ctor_cap_arg_error.gg",
+        "cap= takes an integer capacity",
+    );
+}
+
 // `*x` (dereference) is valid only on a smart pointer (`Box[T]`). On any
 // other type the type checker used to return the inner type unchanged (a
 // silent no-op); `gg check` passed clean and the IR lowering emitted a
