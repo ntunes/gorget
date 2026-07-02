@@ -3550,3 +3550,115 @@ fn no_type_variable_name_shape_heuristic() {
         hits.join("\n  "),
     );
 }
+
+/// Pairing guard (Core #4 "one fix, all siblings" / DEEP-1 slice 0 — per-site
+/// clone attribution). Every implicit-clone site must mint its CloneId AND
+/// emit its `--clones=stats` runtime counter bump through the ONE producer
+/// helper `LoweringContext::warn_clone_and_hit`. A bare `warn_implicit_clone`
+/// call is allowed ONLY at the three CONDITIONAL clone sites — where the
+/// clone executes inside a branch, so the paired `emit_clone_site_hit` must
+/// be emitted INSIDE that branch (counting actual clones, not guard
+/// evaluations) — plus the helper's own body:
+///
+///   * `context.rs` — the lazy-string materialization guard (hit inside
+///     `mat_bb`) and the Ptr-vs-value deref arm (hit inside the clone-fn
+///     arm), plus the `warn_clone_and_hit` body itself → 3 warns / 3 hits.
+///   * `stmts/mod.rs` — `try_lift_option_ref` (hit inside the Some-arm
+///     resource path) → 1 warn / 1 hit.
+///
+/// **If this fails because a bare count GREW:** you added an implicit-clone
+/// site that mints a CloneId without its runtime hit — the site would read
+/// "0 hits" in the `[clone-site]` report forever (silent under-attribution;
+/// the 8 `exprs/` sites shipped exactly this hole before slice 0 closed it).
+/// Straight-line site → call `ctx.warn_clone_and_hit(builder, span, ty,
+/// reason)`. Conditional site → keep the bare `warn_implicit_clone`, emit
+/// `emit_clone_site_hit` inside the branch that clones, and add the site to
+/// the allowlist here WITH a comment at the site referencing this lint.
+/// **If it SHRANK** (a conditional site was retired or straightened into the
+/// helper), lower the budget in the same commit.
+#[test]
+fn clone_warn_hit_pairing() {
+    // (file, bare `.warn_implicit_clone(` budget, `.emit_clone_site_hit(` budget)
+    let allowlist: &[(&str, usize, usize)] = &[
+        ("src/ir/lowering/context.rs", 3, 3),
+        ("src/ir/lowering/stmts/mod.rs", 1, 1),
+    ];
+
+    fn count_calls(file: &str, marker: &str) -> usize {
+        let content = fs::read_to_string(file).unwrap_or_default();
+        let mut n = 0usize;
+        for line in content.lines() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") || trimmed.starts_with("///") {
+                continue;
+            }
+            // `.marker(` anchors on the method-call form, excluding the
+            // `pub fn warn_implicit_clone` / `pub fn emit_clone_site_hit`
+            // definition lines.
+            n += line.matches(marker).count();
+        }
+        n
+    }
+
+    for &(file, warn_budget, hit_budget) in allowlist {
+        let warns = count_calls(file, ".warn_implicit_clone(");
+        let hits = count_calls(file, ".emit_clone_site_hit(");
+        assert_eq!(
+            warns, warn_budget,
+            "Bare `.warn_implicit_clone(` count in `{file}` changed: {warns} vs \
+             allowlisted {warn_budget}.\n\n\
+             Every straight-line implicit-clone site must pair its CloneId mint \
+             with its runtime hit via `ctx.warn_clone_and_hit(builder, span, ty, \
+             reason)` — a bare mint reads \"0 hits\" in the [clone-site] report \
+             forever. Only a CONDITIONAL site (clone inside a branch) may split \
+             the pair, with the hit emitted inside the cloning branch; document \
+             it at the site and re-balance this allowlist.",
+        );
+        assert_eq!(
+            hits, hit_budget,
+            "`.emit_clone_site_hit(` count in `{file}` changed: {hits} vs \
+             allowlisted {hit_budget}.\n\n\
+             In-branch hits exist ONLY as the split half of an allowlisted \
+             conditional clone site (plus the `warn_clone_and_hit` helper body). \
+             A stray hit without its paired mint (or vice versa) misattributes \
+             counts. Re-balance the allowlist with a comment at the site.",
+        );
+    }
+
+    // Any file outside the allowlist must route through the helper: zero bare
+    // mints, zero bare hits.
+    let allowed: std::collections::HashSet<&str> =
+        allowlist.iter().map(|&(f, _, _)| f).collect();
+    let mut stray = Vec::new();
+    visit_rs_files(Path::new("src"), &mut |path| {
+        let p = path.to_str().unwrap_or_default();
+        let norm = p.trim_start_matches("./");
+        if allowed.contains(norm) {
+            return;
+        }
+        let warns = count_calls(norm, ".warn_implicit_clone(");
+        let hits = count_calls(norm, ".emit_clone_site_hit(");
+        if warns + hits > 0 {
+            stray.push(format!(
+                "{norm}: .warn_implicit_clone(={warns}, .emit_clone_site_hit(={hits}"
+            ));
+        }
+    });
+    assert!(
+        stray.is_empty(),
+        "Un-paired clone-attribution call(s) outside the allowlist:\n  {}\n\n\
+         Use `ctx.warn_clone_and_hit(builder, span, ty, reason)` (straight-line \
+         sites), or for a genuinely conditional site add it to the allowlist in \
+         `clone_warn_hit_pairing` with the hit emitted inside the cloning branch.",
+        stray.join("\n  "),
+    );
+
+    // The helper itself must exist exactly once (the enumerated class's one
+    // producer — Core #4).
+    let helper_defs = count_calls("src/ir/lowering/context.rs", "pub fn warn_clone_and_hit");
+    assert_eq!(
+        helper_defs, 1,
+        "Expected exactly one `warn_clone_and_hit` definition in \
+         src/ir/lowering/context.rs, found {helper_defs}.",
+    );
+}

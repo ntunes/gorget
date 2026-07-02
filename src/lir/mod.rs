@@ -1838,6 +1838,10 @@ pub struct LirModule {
     /// a `[clone-stats] ...` line to stderr at program exit. Set by the
     /// `--clone-stats` CLI flag on `gg build`/`gg run`.
     pub clone_stats: bool,
+    /// Number of `CloneId`s minted during GIR lowering (dense 0..N). Sizes the
+    /// per-site runtime counter table emitted when `clone_stats` is set. Set
+    /// by the driver alongside `clone_stats`.
+    pub clone_site_count: usize,
     /// Phase A residual #2: name-keyed alias map, populated at LIR lowering
     /// alongside `StructRegistry::register(alias, runtime_sid)`. Lets
     /// downstream consumers (notably `c_lir/helpers.rs::elem_drop_fn_for_c_type`)
@@ -1894,6 +1898,7 @@ impl LirModule {
             type_drop_fns: HashMap::new(),
             target: "native".to_string(),
             clone_stats: false,
+            clone_site_count: 0,
             struct_aliases: HashMap::new(),
             file_infos: Vec::new(),
         }

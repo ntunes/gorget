@@ -19,8 +19,9 @@ static size_t __gorget_peak_rss_kb(void) {
 }
 static void __gorget_clone_stats_report(void) {
     size_t peak_rss_kb = __gorget_peak_rss_kb();
-    fprintf(stderr, "[clone-stats] array_clone=%zu map_clone=%zu set_clone=%zu closure_clone=%zu string_cow=%zu string_cat=%zu box_alloc=%zu array_new=%zu string_new=%zu total_allocs=%zu total_frees=%zu live_bytes=%zu peak_rss_kb=%zu\n",
+    fprintf(stderr, "[clone-stats] array_clone=%zu map_clone=%zu set_clone=%zu string_clone=%zu closure_clone=%zu string_cow=%zu string_cat=%zu box_alloc=%zu array_new=%zu string_new=%zu total_allocs=%zu total_frees=%zu live_bytes=%zu peak_rss_kb=%zu\n",
         __gorget_array_clone_count, __gorget_map_clone_count, __gorget_set_clone_count,
+        __gorget_string_clone_count,
         __gorget_closure_clone_count,
         __gorget_string_cow_count, __gorget_str_cat_count, __gorget_box_alloc_count,
         __gorget_array_new_count, __gorget_string_new_count,

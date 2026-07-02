@@ -660,7 +660,7 @@ fn lower_expr_inner(
                     && ctx.type_registry.is_resource_type(deref_type)
                 {
                     if let Some(clone_fn) = ctx.clone_fn_for_ptr(deref_type) {
-                        ctx.warn_implicit_clone(inner.span, deref_type, crate::ir::ImplicitCloneReason::CoWMaterialization);
+                        ctx.warn_clone_and_hit(builder, inner.span, deref_type, crate::ir::ImplicitCloneReason::CoWMaterialization);
                         let shallow = builder.add_local(deref_type, None);
                         // Phase C: shallow is intentionally non-owning view of
                         // the Box's content (no drop registration). Borrow
@@ -854,7 +854,7 @@ fn lower_expr_inner(
                 // path at `src/ir/lowering/exprs/calls.rs:237-245`.
                 let p = raw_src_place.expect("borrowed source implies place");
                 if let Some(clone_fn) = ctx.clone_fn_for_ptr(lhs_type) {
-                    ctx.warn_implicit_clone(lhs.span, lhs_type, crate::ir::ImplicitCloneReason::CoWMaterialization);
+                    ctx.warn_clone_and_hit(builder, lhs.span, lhs_type, crate::ir::ImplicitCloneReason::CoWMaterialization);
                     let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(p.local)], lhs_type);
                     let lhs_local = builder.add_local(lhs_type, None);
                     builder.assign_mode(
@@ -4173,7 +4173,7 @@ fn clone_multi_use_resource_args(
                         let inner_type = ctx.pointee_type(local_type).unwrap_or(local_type);
                         if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner_type) {
                             if let Some(span) = ast_args.get(i).map(|a| a.span) {
-                                ctx.warn_implicit_clone(span, inner_type, crate::ir::ImplicitCloneReason::ConsumingArg);
+                                ctx.warn_clone_and_hit(builder, span, inner_type, crate::ir::ImplicitCloneReason::ConsumingArg);
                             }
                             let clone_arg = if ctx.pointee_type(local_type).is_some() {
                                 // Already Ptr — use directly

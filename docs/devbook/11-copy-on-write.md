@@ -848,6 +848,54 @@ functions. `GorgetString.push`/`push_line`/`push_char` are StringBuilder appends
 that *read* their argument (copy the bytes into the builder) and are therefore
 **not** consuming positions.
 
+## Observability — `--clones` and per-site attribution
+
+All clone diagnostics live under one default-silent flag (`--clones[=MODE,…]`,
+parsed by `parse_clone_modes` in `src/main.rs`). Four surfaces, one source of
+truth (the `ImplicitCloneWarning` vector minted during GIR lowering):
+
+- **`--clones=sites` / `--clones=verbose`** — the compile-time Clone Report
+  (per-site `file:line:col`, type, reason; `verbose` adds CloneId, size,
+  runtime fn), span-deduplicated for human reading.
+- **`--clones=sites-tsv=PATH`** — the machine-readable static table: EVERY
+  CloneId (no span dedup — monomorphized siblings share a span but have
+  distinct ids) as TSV `id, file, line, col, type, reason, size_bytes,
+  runtime_fn`.
+- **`--clones=stats`** — runtime instrumentation. The aggregate `[clone-stats]`
+  atexit line (always-compiled-in counters in `runtime_preamble.c`, including
+  `string_clone` = calls to `gorget_string_clone_to_owned`; that counter also
+  absorbs runtime-internal per-element clones via
+  `gorget_string_clone_inplace`, so it legitimately exceeds the attributed
+  per-site hits), **plus per-CloneId attribution**: the lowering pairs every
+  `warn_implicit_clone` with a `__gorget_clone_site_hit(<CloneId>)` bump
+  emitted immediately before the clone call — through the single producer
+  helper `LoweringContext::warn_clone_and_hit` (straight-line sites), or
+  split with the hit INSIDE the cloning branch at the three conditional sites
+  (allowlisted in `tests/lints.rs::clone_warn_hit_pairing`). The backend
+  sizes a `static _Atomic` counter table from `LirModule::clone_site_count`
+  (`runtime_clone_sites.c`, emitted only under the flag) and reports
+  `[clone-sites] cap=… distinct=… total_site_hits=…` + the hottest
+  `[clone-site] #id=count` lines at exit (top 50 by default;
+  `GG_CLONE_SITES_TOP=N` on the compiled binary widens, `0` = all — a
+  truncated report says so explicitly, never a silent cap). Join the runtime
+  `#id` counts against the `sites-tsv` id column for the full per-site
+  profile. Flag-off builds emit NONE of this — no hit calls, no table, no
+  symbols. Multi-module builds (shared-lib + exe) each carry their own
+  counter table + hit function — the same per-module pattern as the
+  `RUNTIME_CLONE_STATS` blob; the hit fn is `static` so each module's calls
+  bind to its own correctly-sized table.
+- **Not yet:** `--clones=stats` under `--backend=llvm` is rejected with an
+  explicit error (the LLVM path composes its runtime by hand in
+  `compile_llvm_pipeline` and never runs `emit_runtime_modules`; see the
+  `TODO(llvm-clone-stats)` at the reject site in `src/main.rs`). The
+  compile-time modes work on every backend.
+
+Un-attributed residuals (clone emissions with no CloneId — they appear in
+`[clone-stats]` aggregates but not in `[clone-site]` lines) are tracked in
+`TODO.md`: the LIR-layer clone emissions (`src/lir/lower/insts.rs`,
+`lifts.rs` — no CloneId concept exists at that layer) and the GIR interp-temp
+staging path (`exprs/calls.rs` `AssignMode::Clone`).
+
 ## In the self-host
 
 The self-host lowerer (`tests/fixtures/self_host_lowerer/`; since the

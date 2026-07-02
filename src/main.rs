@@ -355,16 +355,25 @@ fn parse_features(args: &[String]) -> Vec<String> {
 /// under this one flag and are default-silent. `all` is shorthand for
 /// `verbose,stats`. The pre-unification spellings `--show-clones` and
 /// `--clone-stats` are retired (see [`parse_clone_modes`]).
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 struct CloneDiagModes {
     /// Compact compile-time report: file:line:col  type  reason.
     sites: bool,
     /// Compile-time report with size_bytes + runtime_fn columns. Subsumes the
     /// historical `--trace-cow` plan (no separate flag was ever shipped).
     verbose: bool,
-    /// Runtime instrumentation: atexit handler emitting `[clone-stats] …`.
-    /// Aggregate counters today; per-CloneId breakdown is future work.
+    /// Runtime instrumentation: the compiled binary carries per-CloneId
+    /// counters (`__gorget_clone_site_hit` bumps emitted before each implicit
+    /// clone) and an atexit handler emitting the aggregate `[clone-stats] …`
+    /// line plus the per-site `[clone-sites]`/`[clone-site] #id=count` report.
     stats: bool,
+    /// `--clones=sites-tsv=PATH`: dump EVERY CloneId (no span dedup —
+    /// monomorphized siblings share a span but have distinct ids) as TSV
+    /// (id, file, line, col, type, reason, size_bytes, runtime_fn) to PATH.
+    /// This is the static half of the per-site attribution join: `join` the
+    /// TSV's id column against the runtime `[clone-site] #id=count` lines a
+    /// `--clones=stats` binary prints at exit.
+    sites_tsv: Option<PathBuf>,
 }
 
 /// Parse `--clones[=MODE[,MODE…]]`. Recognised modes are `sites`, `verbose`,
@@ -400,8 +409,20 @@ fn parse_clone_modes(args: &[String]) -> Result<CloneDiagModes, String> {
                 "verbose" => modes.verbose = true,
                 "stats" => modes.stats = true,
                 "all" => { modes.verbose = true; modes.stats = true; }
+                "sites-tsv" => return Err(
+                    "--clones=sites-tsv requires a path: --clones=sites-tsv=PATH".to_string()
+                ),
+                tsv if tsv.starts_with("sites-tsv=") => {
+                    let path = &tsv["sites-tsv=".len()..];
+                    if path.is_empty() {
+                        return Err(
+                            "--clones=sites-tsv requires a path: --clones=sites-tsv=PATH".to_string()
+                        );
+                    }
+                    modes.sites_tsv = Some(PathBuf::from(path));
+                }
                 other => return Err(format!(
-                    "Unknown --clones mode '{other}'. Valid modes: sites, verbose, stats, all"
+                    "Unknown --clones mode '{other}'. Valid modes: sites, verbose, stats, sites-tsv=PATH, all"
                 )),
             }
         }
@@ -455,12 +476,13 @@ fn try_build_ir(
     emit_gir: bool,
     emit_lir: bool,
     emit_c_lir: bool,
-    show_clones: bool,
-    clones_verbose: bool,
-    clone_stats: bool,
+    clone_modes: &CloneDiagModes,
     backend_name: &str,
     target: &str,
 ) -> Result<PathBuf, String> {
+    let show_clones = clone_modes.sites || clone_modes.verbose;
+    let clones_verbose = clone_modes.verbose;
+    let clone_stats = clone_modes.stats;
     let mut parser = Parser::new(source);
     let module = parser.parse_module();
 
@@ -510,8 +532,33 @@ fn try_build_ir(
         }
     }
 
-    // Lower AST to GIR
+    // Lower AST to GIR. `--clones=stats` also arms per-clone-site runtime
+    // attribution in the lowering (see LoweringOptions::clone_stats).
+    let mut options = options;
+    options.clone_stats = clone_stats;
     let mut gir_module = gorget::ir::lowering::lower_module(&module, &result, &options);
+
+    // `--clones=sites-tsv=PATH` (per-site attribution join table): dump EVERY
+    // CloneId (no span dedup — monomorphized siblings share a span but have
+    // distinct ids) as TSV: id, file, line, col, type, reason, size_bytes,
+    // runtime_fn. Joined offline against the runtime `[clone-site] #id=count`
+    // lines a `--clones=stats` binary emits at exit (join key: the id column).
+    if let Some(tsv_path) = &clone_modes.sites_tsv {
+        use std::io::Write as _;
+        let reporter = ErrorReporter::new_multi(file_infos.clone());
+        let mut out = String::new();
+        for warn in &gir_module.implicit_clone_warnings {
+            let (file, line, col) = reporter.span_location(warn.span);
+            out.push_str(&format!(
+                "{}\t{}\t{}\t{}\t{}\t{:?}\t{}\t{}\n",
+                warn.id.0, file, line, col, warn.type_name, warn.reason,
+                warn.size_bytes, warn.runtime_fn,
+            ));
+        }
+        if let Err(e) = std::fs::File::create(tsv_path).and_then(|mut f| f.write_all(out.as_bytes())) {
+            eprintln!("warning: failed to write --clones=sites-tsv={}: {e}", tsv_path.display());
+        }
+    }
 
     // Display clone report when `--clones=sites` / `--clones=verbose` (or
     // legacy `--show-clones`) is passed. Both modes consume the same
@@ -759,6 +806,9 @@ fn try_build_ir(
         let mut lir_module = gorget::lir::lower::lower_module(&gir_module);
         lir_module.target = target.to_string();
         lir_module.clone_stats = clone_stats;
+        // Per-site attribution: CloneIds are dense 0..N (one per warning), so
+        // the warning count sizes the runtime counter table.
+        lir_module.clone_site_count = gir_module.implicit_clone_warnings.len();
         lir_module.file_infos = to_lir_file_infos(&file_infos);
         // Tier E §8.2: critical-edge split before SSA construction.
         gorget::lir::split_edges::split_critical_edges_module(&mut lir_module);
@@ -1946,7 +1996,7 @@ fn run_tui() {
                 continue;
             }
             let gg_path_str = gg_path.display().to_string();
-            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false, false, false, false, false, "c-lir", "native") {
+            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false, false, &CloneDiagModes::default(), "c-lir", "native") {
                 Err(e) => {
                     eprintln!("{e}");
                 }
@@ -1982,7 +2032,7 @@ fn run_tui() {
                 continue;
             }
             let gg_path_str = gg_path.display().to_string();
-            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false, false, false, false, false, "c-lir", "native") {
+            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false, false, &CloneDiagModes::default(), "c-lir", "native") {
                 Err(e) => {
                     eprintln!("{e}");
                 }
@@ -2417,12 +2467,19 @@ fn real_main() {
         println!("  --emit-gir              Dump GIR (intermediate representation) to stdout instead of compiling");
         println!("  --emit-lir              Dump LIR (low-level SSA IR) to stdout instead of compiling");
         println!("  --emit-c-lir            Dump C code generated from LIR to stdout");
-        println!("  --clones[=MODE,…]       Clone diagnostics (default: silent). Modes: sites (default), verbose, stats, all");
+        println!("  --clones[=MODE,…]       Clone diagnostics (default: silent). Modes: sites (default), verbose, stats, sites-tsv=PATH, all");
         println!("                          sites:   compile-time report — file:line:col + type + reason");
         println!("                          verbose: sites + id + size_bytes + runtime_fn columns");
-        println!("                          stats:   runtime `[clone-stats]` atexit counter line");
+        println!("                          stats:   runtime atexit report — the aggregate `[clone-stats]` counter line");
+        println!("                                   plus per-clone-site attribution: `[clone-site] #id=count` lines for");
+        println!("                                   the hottest sites (top 50 by default; set GG_CLONE_SITES_TOP=N on");
+        println!("                                   the compiled binary to widen, 0 = all nonzero sites)");
+        println!("                          sites-tsv=PATH: dump the full static CloneId table (id, file, line, col,");
+        println!("                                   type, reason, size_bytes, runtime_fn) as TSV to PATH — join its id");
+        println!("                                   column against the runtime `[clone-site] #id=count` lines");
         println!("                          all:     alias for verbose,stats");
         println!("                          Without --clones, no clone diagnostics are printed.");
+        println!("                          Note: stats is not supported with --backend=llvm yet.");
         println!();
         println!("Targets:");
         println!("  --target native                 Default — build for the host OS with full runtime");
@@ -2483,10 +2540,7 @@ fn real_main() {
             eprintln!("{e}");
             process::exit(1);
         });
-        let show_clones = clone_modes.sites || clone_modes.verbose;
-        let clones_verbose = clone_modes.verbose;
-        let clone_stats = clone_modes.stats;
-        let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, show_clones, clones_verbose, clone_stats, "c-lir", "native")
+        let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, &clone_modes, "c-lir", "native")
             .unwrap_or_else(|e| { eprintln!("{e}"); process::exit(1); });
         let status = Command::new(&exe_path)
             .status()
@@ -2624,8 +2678,28 @@ fn real_main() {
         process::exit(1);
     });
     let show_clones = clone_modes.sites || clone_modes.verbose;
-    let clones_verbose = clone_modes.verbose;
-    let clone_stats = clone_modes.stats;
+    // `--clones=stats` instruments the binary through the C backend's runtime
+    // blob (`emit_runtime_modules`, which the LLVM wrapper path never runs) —
+    // under `--backend=llvm` the counters/atexit report would silently not
+    // exist. Reject the combination honestly instead of no-op'ing.
+    //
+    // TODO(llvm-clone-stats): support `--clones=stats` under `--backend=llvm`.
+    // The real path: the LLVM runtime C blob is hand-composed in
+    // `compile_llvm_pipeline` (this file, `runtime_src` assembly) — it must
+    // (a) append `RUNTIME_CLONE_STATS` +
+    // `render_clone_sites_runtime(clone_site_count)` to that composition,
+    // (b) declare `__gorget_clone_site_hit` in the emitted LLVM IR as an
+    // external function, and (c) survive the strip-static pass there
+    // (`.replace("static ", "")`), which would give the blob's
+    // `__gorget_clone_site_counts[N]` table and hit fn EXTERNAL linkage —
+    // in a shared-lib + exe build both TUs would then bind to ONE table
+    // sized for the wrong module's CloneId range (silent misattribution,
+    // the exact interposition hazard the C path avoids by keeping the hit
+    // fn `static`).
+    if clone_modes.stats && backend_name == "llvm" {
+        eprintln!("--clones=stats is not supported with --backend=llvm yet; drop --clones=stats (compile-time modes like --clones=sites / --clones=verbose / --clones=sites-tsv=PATH still work) or use the default C backend.");
+        process::exit(1);
+    }
     let warn_const = args.iter().any(|a| a == "--warn-const");
     let target = args.iter()
         .position(|a| a == "--target")
@@ -2936,7 +3010,7 @@ fn real_main() {
                     sanitize, scheduler_mode, release,
                     ..Default::default()
                 };
-                let result = try_build_ir(filename, &source, dep_paths, None, None, Some(shared_path), &features, lowering_opts, emit_gir, emit_lir, emit_c_lir, show_clones, clones_verbose, clone_stats, backend_name, target);
+                let result = try_build_ir(filename, &source, dep_paths, None, None, Some(shared_path), &features, lowering_opts, emit_gir, emit_lir, emit_c_lir, &clone_modes, backend_name, target);
                 match result {
                     Ok(p) => if !emit_gir && !emit_lir && !emit_c_lir { println!("Built shared library: {}", p.display()); }
                     Err(e) => {
@@ -2964,7 +3038,7 @@ fn real_main() {
                     sanitize, release,
                     ..Default::default()
                 };
-                let result = try_build_ir(filename, &source, dep_paths, None, shared_output_path.as_deref(), None, &features, lowering_opts, emit_gir, emit_lir, emit_c_lir, show_clones, clones_verbose, clone_stats, backend_name, target);
+                let result = try_build_ir(filename, &source, dep_paths, None, shared_output_path.as_deref(), None, &features, lowering_opts, emit_gir, emit_lir, emit_c_lir, &clone_modes, backend_name, target);
                 match result {
                     Ok(p) => if !emit_gir && !emit_lir && !emit_c_lir { println!("Built: {}", p.display()); }
                     Err(e) => {
@@ -3027,7 +3101,7 @@ fn real_main() {
                 sanitize, scheduler_mode, release,
                 ..Default::default()
             };
-            let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, show_clones, clones_verbose, clone_stats, "c-lir", "native");
+            let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, &clone_modes, "c-lir", "native");
             match result {
                 Ok(exe_path) => {
                     // Forward positional args that appear AFTER the script filename
@@ -3278,7 +3352,7 @@ fn real_main() {
                 sanitize, scheduler_mode,
                 ..Default::default()
             };
-            let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, false, false, false, "c-lir", "native")
+            let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, &CloneDiagModes::default(), "c-lir", "native")
                 .unwrap_or_else(|e| {
                     eprintln!("{e}");
                     process::exit(1);

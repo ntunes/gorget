@@ -91,7 +91,7 @@ These flags work with `build` and `run`:
 | `--emit-gir` | High-level GIR (post-monomorphization, pre-LIR) |
 | `--emit-lir` | Low-level SSA IR |
 | `--emit-c-lir` | Generated C code |
-| `--clones[=MODE]` | Clone diagnostics (default: silent). Modes: `sites` (default), `verbose`, `stats`, `all`. See note below. |
+| `--clones[=MODE]` | Clone diagnostics (default: silent). Modes: `sites` (default), `verbose`, `stats`, `sites-tsv=PATH`, `all`. See note below. |
 | `--show-borrows` | Borrow checker analysis summary |
 
 All clone diagnostics live under `--clones` and are **silent by default**:
@@ -100,7 +100,16 @@ All clone diagnostics live under `--clones` and are **silent by default**:
   site: `file:line:col`, type, reason; covers ownership-boundary clones, CoW
   materializations, closure-handle clones, and the CoW element-mutation case).
 - `--clones=verbose` — `sites` plus clone id, `size_bytes`, and runtime clone fn.
-- `--clones=stats` — the compiled binary prints a `[clone-stats] …` aggregate line at exit.
+- `--clones=stats` — the compiled binary prints a `[clone-stats] …` aggregate line
+  at exit, plus per-clone-site attribution: a `[clone-sites] cap=… distinct=…
+  total_site_hits=…` summary and `[clone-site] #id=count` lines for the hottest
+  sites (top 50 by default; set `GG_CLONE_SITES_TOP=N` in the compiled binary's
+  environment to widen, `0` = all nonzero sites). Not supported with
+  `--backend=llvm` yet (rejected with an error).
+- `--clones=sites-tsv=PATH` — write the full static clone-site table (every clone
+  id, un-deduplicated: `id`, `file`, `line`, `col`, `type`, `reason`,
+  `size_bytes`, `runtime_fn`) as TSV to `PATH`. Join its `id` column against the
+  runtime `[clone-site] #id=count` lines for a per-site runtime profile.
 - `--clones=all` — alias for `verbose,stats`. Modes combine: `--clones=sites,stats`.
 
 The pre-unification spellings `--show-clones` and `--clone-stats` were removed;

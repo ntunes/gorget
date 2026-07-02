@@ -66,7 +66,7 @@ pub(super) fn clone_resource_global_ref(
         Some(f) => f,
         None => return operand,
     };
-    ctx.warn_implicit_clone(span, global_ty, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
+    ctx.warn_clone_and_hit(builder, span, global_ty, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
     // Pass &GLOBAL (GlobalRefPtr) to the clone fn. Clone ABIs are
     // `gorget_string_clone_to_owned(const GorgetString*)`,
     // `gorget_array_clone(const GorgetArray*)`, etc.
@@ -683,7 +683,7 @@ fn lower_var_decl(
                         }
                     } else { false };
                     if should_clone {
-                        ctx.warn_implicit_clone(value.span, gir_type, crate::ir::ImplicitCloneReason::ClosureCapture);
+                        ctx.warn_clone_and_hit(builder, value.span, gir_type, crate::ir::ImplicitCloneReason::ClosureCapture);
                         let cloned = builder.call_extern(
                             "gorget_closure_clone_to_owned",
                             vec![operand.clone()],
@@ -874,7 +874,7 @@ fn lower_var_decl(
                             ctx.drops.unregister(local_id);
                         } else if let Some(clone_fn) = ctx.clone_fn_for_ptr(_inner) {
                             // Owned Ptr source (function return, etc.) → auto-clone
-                            ctx.warn_implicit_clone(value.span, _inner, crate::ir::ImplicitCloneReason::VarDeclFromBorrow);
+                            ctx.warn_clone_and_hit(builder, value.span, _inner, crate::ir::ImplicitCloneReason::VarDeclFromBorrow);
                             let cloned = builder.call(&clone_fn, vec![operand.clone()], _inner);
                             // Tier 2a Phase 2A: clone temp owns a fresh
                             // heap allocation. Tag FreshOwned so the
@@ -1227,7 +1227,8 @@ fn lower_var_decl_assign_mode(
             let Some(clone_fn) = ctx.clone_fn_for_ptr(clone_src_type) else {
                 return AssignMode::Copy;
             };
-            ctx.warn_implicit_clone(
+            ctx.warn_clone_and_hit(
+                builder,
                 value_span,
                 clone_src_type,
                 crate::ir::ImplicitCloneReason::VarDeclFromBorrow,
@@ -1791,7 +1792,7 @@ fn lower_return(
                         if let Some(crate::ir::types::GirType::Ptr(inner)) = ctx.type_registry.get(src_type).cloned() {
                             if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
                                 ctx.record_param_cloned(builder, place.local);
-                                ctx.warn_implicit_clone(expr.span, inner, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
+                                ctx.warn_clone_and_hit(builder, expr.span, inner, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
                                 let cloned = builder.call(
                                     &clone_fn,
                                     vec![operand.clone()],
@@ -1807,7 +1808,7 @@ fn lower_return(
                                     && !ctx.has_string_borrowers(builder, place.local));
                             if !can_skip_clone {
                                 if let Some(clone_fn) = ctx.clone_fn_for_ptr(src_type) {
-                                    ctx.warn_implicit_clone(expr.span, src_type, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
+                                    ctx.warn_clone_and_hit(builder, expr.span, src_type, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
                                     let cloned = builder.call(
                                         &clone_fn,
                                         vec![operand.clone()],
@@ -1863,7 +1864,7 @@ fn lower_return(
                         if rhs_type == ctx.type_mapper.owned_string_type
                             && !can_skip_clone
                         {
-                            ctx.warn_implicit_clone(expr.span, rhs_type, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
+                            ctx.warn_clone_and_hit(builder, expr.span, rhs_type, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
                             let clone_fn = ctx.clone_fn_for_ptr(rhs_type)
                                 .unwrap_or_else(|| "gorget_string_from_str".to_string());
                             let clone_result = builder.call(
@@ -1896,7 +1897,7 @@ fn lower_return(
                                 if !matches!(ctx.type_registry.get(ret_type), Some(GirType::Ptr(_))) {
                                     if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
                                         ctx.record_param_cloned(builder, p.local);
-                                        ctx.warn_implicit_clone(expr.span, inner, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
+                                        ctx.warn_clone_and_hit(builder, expr.span, inner, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
                                         let cloned = builder.call(&clone_fn, vec![operand.clone()], inner);
                                         operand = FunctionBuilder::copy(cloned);
                                     } else if !ctx.type_registry.is_resource_type(inner) {
@@ -3152,7 +3153,11 @@ fn try_lift_option_ref(
     let inner_type = resolve_mangled_type(ctx, inner_name)?;
     let clone_fn = ctx.clone_fn_for_ptr(inner_type);
 
-    ctx.warn_implicit_clone(span, inner_type, crate::ir::ImplicitCloneReason::VarDeclFromBorrow);
+    // CONDITIONAL clone site: bare `warn_implicit_clone` (not the
+    // `warn_clone_and_hit` helper) because the clone only executes on the
+    // Some arm's resource path — the hit is emitted there, below.
+    // Allowlisted in tests/lints.rs::clone_warn_hit_pairing.
+    let cid = ctx.warn_implicit_clone(span, inner_type, crate::ir::ImplicitCloneReason::VarDeclFromBorrow);
 
     // Build: branch on tag; Some → extract+wrap; None → construct None.
     let tag_place = Place {
@@ -3196,6 +3201,8 @@ fn try_lift_option_ref(
         Operand::Copy(Place::local(src_place.local)),
     );
     let owned_payload = if let Some(ref fn_name) = clone_fn {
+        // Attribution: the clone only executes on the Some arm's resource path.
+        ctx.emit_clone_site_hit(builder, cid);
         builder.call(fn_name, vec![FunctionBuilder::copy(ptr_local)], inner_type)
     } else {
         let tmp = builder.add_local(inner_type, None);

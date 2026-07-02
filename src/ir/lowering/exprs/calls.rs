@@ -301,7 +301,7 @@ pub(super) fn lower_call_arg(
                     let local_type = builder.local_type(place.local);
                     if let Some(inner) = ctx.pointee_type(local_type) {
                         if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
-                            ctx.warn_implicit_clone(arg.span, inner, crate::ir::ImplicitCloneReason::MoveParamFromBorrow);
+                            ctx.warn_clone_and_hit(builder, arg.span, inner, crate::ir::ImplicitCloneReason::MoveParamFromBorrow);
                             let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(place.local)], inner);
                             let ptr_type = ctx.register_mut_ptr_type(inner);
                             let dst = builder.add_local(ptr_type, None);
@@ -1652,7 +1652,8 @@ pub(super) fn lower_call(
             if ctx.fn_returns_borrowed.contains(call_name.as_str()) {
                 if let Some(clone_fn) = ctx.clone_fn_for_ptr(ret_type) {
                     ctx.drops.unregister(dst);
-                    ctx.warn_implicit_clone(
+                    ctx.warn_clone_and_hit(
+                        builder,
                         callee.span,
                         ret_type,
                         crate::ir::ImplicitCloneReason::BorrowedExternReturn,

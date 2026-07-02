@@ -1796,7 +1796,7 @@ pub(super) fn lower_method_call(
                 if !is_last_use {
                     let recv_type = builder.local_type(recv_local);
                     if let Some(clone_fn) = ctx.clone_fn_for_ptr(recv_type) {
-                        ctx.warn_implicit_clone(receiver.span, recv_type, crate::ir::ImplicitCloneReason::CallArg);
+                        ctx.warn_clone_and_hit(builder, receiver.span, recv_type, crate::ir::ImplicitCloneReason::CallArg);
                         let ptr_type = ctx.register_ptr_type(recv_type);
                         let ptr_local = builder.add_local(ptr_type, None);
                         builder.emit_borrow(ptr_local, Place::local(recv_local));
@@ -2544,7 +2544,7 @@ pub(super) fn lower_method_call(
             if let Some((ptr_local, inner_type)) = needs_clone {
                 if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner_type) {
                     let span = args.get(value_idx).map(|a| a.span).unwrap_or(receiver.span);
-                    ctx.warn_implicit_clone(span, inner_type, crate::ir::ImplicitCloneReason::ConsumingArg);
+                    ctx.warn_clone_and_hit(builder, span, inner_type, crate::ir::ImplicitCloneReason::ConsumingArg);
                     let cloned = builder.call(&clone_fn,
                         vec![FunctionBuilder::copy(ptr_local)], inner_type);
                     ctx.drops.register_local(cloned, inner_type, &ctx.type_registry);
@@ -3064,7 +3064,7 @@ fn try_lower_option_result_combinator(
         if let Some(clone_fn) = ctx.clone_fn_for_ptr(recv_type) {
             // `args` is non-empty here (guarded above); use the closure arg's
             // span as the diagnostic site for this combinator-receiver clone.
-            ctx.warn_implicit_clone(args[0].span, recv_type, crate::ir::ImplicitCloneReason::CallArg);
+            ctx.warn_clone_and_hit(builder, args[0].span, recv_type, crate::ir::ImplicitCloneReason::CallArg);
             let ptr_type = ctx.register_ptr_type(recv_type);
             let ptr_local = builder.add_local(ptr_type, None);
             builder.emit_borrow(ptr_local, p.clone());

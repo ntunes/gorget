@@ -73,6 +73,12 @@ pub struct LoweringOptions {
     /// program behavior. Default `false` keeps the implicit `-O0` path (no `-g`
     /// unless `--sanitize`).
     pub release: bool,
+    /// `--clones=stats`: emit per-clone-site runtime attribution. Each implicit
+    /// clone site (identified by its `CloneId`) gets a counter bump emitted
+    /// immediately before the clone call; the backend emits the counter table
+    /// + atexit `[clone-site]` report. Zero-cost when false: no instructions
+    /// are emitted at all.
+    pub clone_stats: bool,
 }
 
 /// Lower an AST module + analysis result into a GIR module.
@@ -529,6 +535,7 @@ pub fn lower_module(
     if options.strip_asserts { ctx.strip_asserts = true; }
     if options.no_strip_asserts { ctx.strip_asserts = false; }
     if options.snapshot_mode { ctx.snapshot_mode = true; }
+    if options.clone_stats { ctx.clone_stats = true; }
     if let Some(m) = options.scheduler_mode { ctx.spawn.scheduler_mode = m; }
 
     // Snag #29 follow-up: PI/E/TAU/INT_MAX/INT_MIN auto-injection removed.

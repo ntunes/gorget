@@ -445,6 +445,11 @@ pub struct LoweringContext<'a> {
     /// scheme is intentionally simple (u32 counter, no recycling); deterministic
     /// within a build.
     pub next_clone_id: u32,
+    /// `--clones=stats`: emit a `__gorget_clone_site_hit(<CloneId>)` counter
+    /// bump immediately before each implicit clone call, giving per-site
+    /// runtime attribution (joined offline with the `--clones=verbose` static
+    /// table). False (the default) emits nothing — zero cost when off.
+    pub clone_stats: bool,
     /// Suggestions to pass arguments with `!` (move) for last-use optimization.
     pub move_suggestions: Vec<crate::ir::MoveSuggestion>,
     /// Functions that clone a bare-param at a return/ownership boundary.
@@ -594,6 +599,7 @@ impl<'a> LoweringContext<'a> {
             sentinel_to_option_methods: rustc_hash::FxHashSet::default(),
             implicit_clone_warnings: Vec::new(),
             next_clone_id: 0,
+            clone_stats: false,
             move_suggestions: Vec::new(),
             fn_consumed_params: FxHashMap::default(),
             runtime_callees: FxHashMap::default(),
@@ -906,7 +912,7 @@ impl<'a> LoweringContext<'a> {
         span: crate::span::Span,
         type_id: TypeId,
         reason: crate::ir::ImplicitCloneReason,
-    ) {
+    ) -> crate::ir::types::CloneId {
         let type_name = self.type_registry.type_name(type_id)
             .map(|n| demangle_type_name(&n))
             .unwrap_or_else(|| "unknown".to_string());
@@ -932,6 +938,53 @@ impl<'a> LoweringContext<'a> {
             size_bytes,
             runtime_fn,
         });
+        id
+    }
+
+    /// Per-site runtime attribution for `--clones=stats`: emit a
+    /// `__gorget_clone_site_hit(<id>)` counter bump into the current block,
+    /// immediately before the clone call the caller is about to emit. The
+    /// runtime definition (counter table + atexit `[clone-site]` report) is
+    /// emitted by the C backend when `LirModule::clone_stats` is set. When
+    /// `clone_stats` is off this emits nothing — the instrumented and
+    /// uninstrumented builds are byte-identical.
+    pub fn emit_clone_site_hit(
+        &self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        id: crate::ir::types::CloneId,
+    ) {
+        if !self.clone_stats { return; }
+        builder.call_extern_void(
+            "__gorget_clone_site_hit",
+            vec![Operand::Constant(Constant::I64(id.0 as i64))],
+        );
+    }
+
+    /// Core-invariant #4 producer helper — the ONE way a straight-line
+    /// implicit-clone site mints its diagnostic AND its runtime attribution.
+    /// Pairs `warn_implicit_clone` (CloneId mint + static Clone-Report row)
+    /// with `emit_clone_site_hit` (the `--clones=stats` per-site counter bump,
+    /// emitted into the current block immediately before the clone call the
+    /// caller is about to emit). Returns the minted `CloneId`.
+    ///
+    /// Only the three CONDITIONAL clone sites may call the two halves
+    /// separately — their clone executes inside a branch, so the hit must be
+    /// emitted INSIDE that branch (counting actual clones, not guard
+    /// evaluations): the lazy-string materialization guard and the
+    /// Ptr-vs-value deref arm (both in this file) and the Option[Ref] payload
+    /// lift (`try_lift_option_ref`, `stmts/mod.rs`). Those three are
+    /// allowlisted in `tests/lints.rs::clone_warn_hit_pairing`; any other
+    /// bare `warn_implicit_clone` call fails that lint.
+    pub fn warn_clone_and_hit(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        span: crate::span::Span,
+        type_id: TypeId,
+        reason: crate::ir::ImplicitCloneReason,
+    ) -> crate::ir::types::CloneId {
+        let id = self.warn_implicit_clone(span, type_id, reason);
+        self.emit_clone_site_hit(builder, id);
+        id
     }
 
     /// Record that the current function clones a bare-param at an ownership boundary.
@@ -1429,7 +1482,7 @@ impl<'a> LoweringContext<'a> {
                         if self.type_registry.is_resource_type(inner) {
                             if let Some(clone_fn) = self.clone_fn_for_ptr(inner) {
                                 if let Some(s) = maybe_span {
-                                    self.warn_implicit_clone(s, inner, crate::ir::ImplicitCloneReason::ConsumingArg);
+                                    self.warn_clone_and_hit(builder, s, inner, crate::ir::ImplicitCloneReason::ConsumingArg);
                                 }
                                 let cloned = builder.call(&clone_fn,
                                     vec![crate::ir::builder::FunctionBuilder::copy(local)], inner);
@@ -1489,7 +1542,7 @@ impl<'a> LoweringContext<'a> {
                         if needs_clone {
                             if let Some(clone_fn) = self.clone_fn_for_ptr(local_type) {
                                 if let Some(s) = maybe_span {
-                                    self.warn_implicit_clone(s, local_type, crate::ir::ImplicitCloneReason::ConsumingArg);
+                                    self.warn_clone_and_hit(builder, s, local_type, crate::ir::ImplicitCloneReason::ConsumingArg);
                                 }
                                 let ptr_type = self.register_ptr_type(local_type);
                                 let ptr = builder.add_local(ptr_type, None);
@@ -1971,7 +2024,7 @@ impl<'a> LoweringContext<'a> {
             if let Some(global_ty) = global_type {
                 if self.type_registry.is_resource_type(global_ty) {
                     if let Some(clone_fn) = self.clone_fn_for_ptr(global_ty) {
-                        self.warn_implicit_clone(span, global_ty, reason);
+                        self.warn_clone_and_hit(builder, span, global_ty, reason);
                         // Pass &GLOBAL (GlobalRefPtr) to the clone fn — matches
                         // the `gorget_string_clone_to_owned(const GorgetString*)`
                         // / `gorget_array_clone(const GorgetArray*)` etc. ABIs.
@@ -2009,7 +2062,7 @@ impl<'a> LoweringContext<'a> {
         if let Some(inner) = self.pointee_type(local_type) {
             if let Some(clone_fn) = self.clone_fn_for_ptr(inner) {
                 self.record_param_cloned(builder, local);
-                self.warn_implicit_clone(span, inner, reason);
+                self.warn_clone_and_hit(builder, span, inner, reason);
                 let cloned = builder.call(
                     &clone_fn,
                     vec![crate::ir::builder::FunctionBuilder::copy(local)],
@@ -2073,7 +2126,7 @@ impl<'a> LoweringContext<'a> {
         }
 
         if let Some(clone_fn) = self.clone_fn_for_ptr(local_type) {
-            self.warn_implicit_clone(span, local_type, reason);
+            self.warn_clone_and_hit(builder, span, local_type, reason);
             let cloned = builder.call(
                 &clone_fn,
                 vec![crate::ir::builder::FunctionBuilder::copy(local)],
@@ -2120,7 +2173,7 @@ impl<'a> LoweringContext<'a> {
         // Case 1: Ptr(T) — always clone to materialize.
         if let Some(inner) = self.pointee_type(arg_type) {
             if let Some(clone_fn) = self.clone_fn_for_ptr(inner) {
-                self.warn_implicit_clone(arg_expr.span, inner, reason);
+                self.warn_clone_and_hit(builder, arg_expr.span, inner, reason);
                 let cloned = builder.call(
                     &clone_fn,
                     vec![crate::ir::builder::FunctionBuilder::copy(local)],
@@ -2174,7 +2227,7 @@ impl<'a> LoweringContext<'a> {
         };
         if !needs_clone { return operand; }
         if let Some(clone_fn) = self.clone_fn_for_ptr(arg_type) {
-            self.warn_implicit_clone(arg_expr.span, arg_type, reason);
+            self.warn_clone_and_hit(builder, arg_expr.span, arg_type, reason);
             let cloned = builder.call(
                 &clone_fn,
                 vec![crate::ir::builder::FunctionBuilder::copy(local)],
@@ -2205,7 +2258,7 @@ impl<'a> LoweringContext<'a> {
                         return operand;
                     }
                     if let Some(clone_fn) = self.clone_fn_for_ptr(inner) {
-                        self.warn_implicit_clone(span, inner, crate::ir::ImplicitCloneReason::CallArg);
+                        self.warn_clone_and_hit(builder, span, inner, crate::ir::ImplicitCloneReason::CallArg);
                         let cloned = builder.call(
                             &clone_fn,
                             vec![crate::ir::builder::FunctionBuilder::copy(place.local)],
@@ -2808,7 +2861,10 @@ impl<'a> LoweringContext<'a> {
             Some(f) => f,
             None => return,
         };
-        self.warn_implicit_clone(span, s_type, crate::ir::ImplicitCloneReason::CoWMaterialization);
+        // CONDITIONAL clone site: bare `warn_implicit_clone` (not the
+        // `warn_clone_and_hit` helper) because the hit must be emitted inside
+        // mat_bb below. Allowlisted in tests/lints.rs::clone_warn_hit_pairing.
+        let cid = self.warn_implicit_clone(span, s_type, crate::ir::ImplicitCloneReason::CoWMaterialization);
 
         // if !s_mat goto mat_bb else cont_bb
         let mat_bb = builder.new_block();
@@ -2826,6 +2882,10 @@ impl<'a> LoweringContext<'a> {
 
         // mat_bb: s = clone_to_owned(&s); s_mat = true; goto cont_bb
         builder.switch_to(mat_bb);
+        // Attribution: the clone only executes on the unmaterialized branch,
+        // so the site-hit lives inside mat_bb (counts actual clones, not
+        // guard evaluations).
+        self.emit_clone_site_hit(builder, cid);
         // The clone fn takes `const GorgetString*` — pass `s` by value; the C
         // emit takes its address (same shape as every other clone_to_owned
         // callsite: `gorget_string_clone_to_owned(&__vN)`).
@@ -3295,7 +3355,7 @@ impl<'a> LoweringContext<'a> {
 
         let view_type = builder.local_type(view_local);
         if let Some(clone_fn) = self.clone_fn_for_ptr(view_type) {
-            self.warn_implicit_clone(span, view_type, crate::ir::ImplicitCloneReason::CoWMaterialization);
+            self.warn_clone_and_hit(builder, span, view_type, crate::ir::ImplicitCloneReason::CoWMaterialization);
             let cloned = builder.call(&clone_fn,
                 vec![crate::ir::builder::FunctionBuilder::copy(view_local)], view_type);
             let name_hint = builder.local_name(view_local).map(|s| s.to_string());
@@ -3332,7 +3392,7 @@ impl<'a> LoweringContext<'a> {
             None => return,
         };
         if let Some(clone_fn) = self.clone_fn_for_ptr(inner_type) {
-            self.warn_implicit_clone(span, inner_type, crate::ir::ImplicitCloneReason::CoWMaterialization);
+            self.warn_clone_and_hit(builder, span, inner_type, crate::ir::ImplicitCloneReason::CoWMaterialization);
             let cloned = builder.call(&clone_fn,
                 vec![crate::ir::builder::FunctionBuilder::copy(alias_local)], inner_type);
             let name_hint = builder.local_name(alias_local).map(|s| s.to_string());
@@ -3373,10 +3433,16 @@ impl<'a> LoweringContext<'a> {
         if !has_clone && self.type_registry.is_resource_type(inner_type) {
             return;
         }
-        self.warn_implicit_clone(span, inner_type, crate::ir::ImplicitCloneReason::CoWMaterialization);
+        // CONDITIONAL clone site: bare `warn_implicit_clone` (not the
+        // `warn_clone_and_hit` helper) because only the clone-fn arm below
+        // actually clones. Allowlisted in tests/lints.rs::clone_warn_hit_pairing.
+        let cid = self.warn_implicit_clone(span, inner_type, crate::ir::ImplicitCloneReason::CoWMaterialization);
         let name_hint = builder.local_name(ref_local).map(|s| s.to_string());
         let owned_local = builder.add_local(inner_type, name_hint.as_deref());
         if let Some(clone_fn) = self.clone_fn_for_ptr(inner_type) {
+            // Attribution: hit only on the real clone path — the deref arm
+            // below is a value copy, not a runtime clone.
+            self.emit_clone_site_hit(builder, cid);
             let cloned = builder.call(&clone_fn,
                 vec![crate::ir::builder::FunctionBuilder::copy(ref_local)], inner_type);
             // Phase C: cloned is fresh + dead — Move into owned_local.

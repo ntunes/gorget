@@ -67,6 +67,13 @@ static _Atomic size_t __gorget_string_new_count = 0;
 static _Atomic size_t __gorget_map_clone_count = 0;
 static _Atomic size_t __gorget_set_clone_count = 0;
 static _Atomic size_t __gorget_string_cow_count = 0;
+// Deep string clones via gorget_string_clone_to_owned — the compiler-emitted
+// boundary-clone entry point. Also counts runtime-INTERNAL per-element clones
+// (gorget_string_clone_inplace in the array/map element-clone paths route
+// through clone_to_owned), so this legitimately EXCEEDS the per-site
+// attributed hits from the [clone-site] report. gorget_string_clone (the
+// un-attributed LIR-path entry point) is deliberately NOT counted here.
+static _Atomic size_t __gorget_string_clone_count = 0;
 static _Atomic size_t __gorget_box_alloc_count = 0;
 static _Atomic size_t __gorget_closure_clone_count = 0;
 // Forward declaration — definition is later in the file so that

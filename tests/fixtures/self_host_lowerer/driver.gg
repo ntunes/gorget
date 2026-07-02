@@ -79,6 +79,7 @@ meta String RT_runtime_arena_alloc = embed_file("../../../src/backend/c/runtime/
 meta String RT_runtime_args = embed_file("../../../src/backend/c/runtime/runtime_args.c")
 meta String RT_runtime_array = embed_file("../../../src/backend/c/runtime/runtime_array.c")
 meta String RT_runtime_checked_arith = embed_file("../../../src/backend/c/runtime/runtime_checked_arith.c")
+meta String RT_runtime_clone_sites = embed_file("../../../src/backend/c/runtime/runtime_clone_sites.c")
 meta String RT_runtime_clone_stats = embed_file("../../../src/backend/c/runtime/runtime_clone_stats.c")
 meta String RT_runtime_env = embed_file("../../../src/backend/c/runtime/runtime_env.c")
 meta String RT_runtime_error = embed_file("../../../src/backend/c/runtime/runtime_error.c")
@@ -148,6 +149,7 @@ Dict[String, String] build_embedded_runtime():
     d["runtime_args.c"] = RT_runtime_args
     d["runtime_array.c"] = RT_runtime_array
     d["runtime_checked_arith.c"] = RT_runtime_checked_arith
+    d["runtime_clone_sites.c"] = RT_runtime_clone_sites
     d["runtime_clone_stats.c"] = RT_runtime_clone_stats
     d["runtime_env.c"] = RT_runtime_env
     d["runtime_error.c"] = RT_runtime_error

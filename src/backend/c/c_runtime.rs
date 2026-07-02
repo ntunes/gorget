@@ -37,6 +37,18 @@ pub const RUNTIME_ALLOC_REPORT: &str = include_str!("runtime/runtime_alloc_repor
 /// needed to capture the memory footprint.
 pub const RUNTIME_CLONE_STATS: &str = include_str!("runtime/runtime_clone_stats.c");
 
+/// Per-clone-site attribution template (`--clones=stats`) — counter table +
+/// `__gorget_clone_site_hit` + atexit top-sites report. Templated on the
+/// number of CloneIds minted for the module (`LirModule::clone_site_count`).
+pub const RUNTIME_CLONE_SITES_TEMPLATE: &str = include_str!("runtime/runtime_clone_sites.c");
+
+/// Render the per-clone-site attribution blob for a module with `site_count`
+/// CloneIds. The `+ 1` array padding in the template keeps the C valid when
+/// `site_count == 0`.
+pub fn render_clone_sites_runtime(site_count: usize) -> String {
+    RUNTIME_CLONE_SITES_TEMPLATE.replace("__GORGET_CLONE_SITE_CAP__", &site_count.to_string())
+}
+
 /// Normal panic handler — exits the process.
 pub const PANIC_NORMAL: &str = include_str!("runtime/panic_normal.c");
 

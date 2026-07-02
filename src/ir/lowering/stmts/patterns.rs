@@ -935,7 +935,7 @@ pub fn emit_pattern_bindings(
                             ctx.drops.register_local(dst, field_type, &ctx.type_registry);
                             ctx.set_owned(builder, dst);
                         } else if let Some(clone_fn) = ctx.clone_fn_for_ptr(field_type) {
-                            ctx.warn_implicit_clone(pattern.span, field_type, crate::ir::ImplicitCloneReason::PatternExtraction);
+                            ctx.warn_clone_and_hit(builder, pattern.span, field_type, crate::ir::ImplicitCloneReason::PatternExtraction);
                             let ptr_type = ctx.register_ptr_type(field_type);
                             let ptr = builder.add_local(ptr_type, None);
                             builder.emit_borrow(ptr, Place::local(dst));

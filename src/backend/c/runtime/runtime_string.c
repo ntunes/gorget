@@ -204,6 +204,7 @@ static inline GorgetString gorget_string_clone(const GorgetString* src) {
 // globals lives elsewhere (GIR clone-on-access elides the call entirely
 // when the global is a known literal-view; see `clone_resource_global_ref`).
 static inline GorgetString gorget_string_clone_to_owned(const GorgetString* src) {
+    __gorget_string_clone_count++;
     if (src->len == 0) return GORGET_EMPTY_STR;
     return str_alloc_copy((const char*)src->data, src->len, __gorget_current_alloc);
 }

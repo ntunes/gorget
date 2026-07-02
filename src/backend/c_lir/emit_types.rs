@@ -1986,6 +1986,10 @@ pub(super) fn emit_runtime_modules(out: &mut String, module: &LirModule, _struct
     // Safe to emit alongside the alloc-report: distinct atexit handler, distinct output line.
     if module.clone_stats {
         out.push_str(crate::backend::c::c_runtime::RUNTIME_CLONE_STATS);
+        // Per-site attribution: counter table sized by the module's CloneId
+        // count + `__gorget_clone_site_hit` + atexit `[clone-site]` report.
+        // Must precede function bodies (which call the hit function).
+        out.push_str(&crate::backend::c::c_runtime::render_clone_sites_runtime(module.clone_site_count));
     }
 
     // ── Panic handler ──
